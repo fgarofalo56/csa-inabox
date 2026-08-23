@@ -146,6 +146,19 @@ export type EstatePowerState =
   | 'Scaling'
   | 'Unknown';
 
+/** Runtime companion to `EstatePowerState`, for validating persisted documents. */
+export const ESTATE_POWER_STATES: readonly EstatePowerState[] = [
+  'Online',
+  'Paused',
+  'Pausing',
+  'Resuming',
+  'Stopped',
+  'Starting',
+  'Deallocated',
+  'Scaling',
+  'Unknown',
+] as const;
+
 /**
  * Brand marker — TYPE-ONLY (`declare const`), so it has no runtime existence and
  * is never emitted into the object. That is deliberate on both counts:
@@ -407,11 +420,46 @@ export interface EstatePauseSnapshot {
 /**
  * The outcome of confirming ONE resource after a resume.
  *
- * `unknown` is not an error state and not a success state; it is the honest
- * answer when the ARM read did not establish anything. It is grouped with
- * failure for the estate verdict, and it is reported by its own name.
+ * FOUR members, not three, and the split is load-bearing. Review of PR #3897
+ * found that the previous shape returned `confirmation: 'confirmed-running'`
+ * together with `observedState: 'Paused'` in the legitimate already-paused case,
+ * so any consumer branching on the string — which is the obvious thing for an
+ * orchestrator or a status pill to do — would render a STOPPED resource as
+ * RUNNING. The name now means what it says:
+ *
+ *   `confirmed-running`         ARM reports Online AND that is what was
+ *                               expected. Safe to render as "running".
+ *   `confirmed-restored-paused` The resource was ALREADY paused before Loom
+ *                               touched it and is paused again. A correct
+ *                               resume outcome, but it is NOT running — never
+ *                               render it as such.
+ *   `confirmed-mismatch`        ARM established a state that does not match the
+ *                               pre-pause condition. A real failure.
+ *   `unknown`                   Nothing was established. Not an error state and
+ *                               not a success state; grouped with failure for
+ *                               the estate verdict and reported by its own name.
+ *
+ * Use `isResumeSuccess()` rather than hand-rolling the success set.
  */
-export type ResumeConfirmation = 'confirmed-running' | 'confirmed-not-running' | 'unknown';
+export type ResumeConfirmation =
+  | 'confirmed-running'
+  | 'confirmed-restored-paused'
+  | 'confirmed-mismatch'
+  | 'unknown';
+
+/**
+ * The confirmations that count as a successful resume for ONE resource.
+ * Exported so a consumer cannot drift from `deriveResumeState`'s definition.
+ */
+export const RESUME_SUCCESS_CONFIRMATIONS: readonly ResumeConfirmation[] = [
+  'confirmed-running',
+  'confirmed-restored-paused',
+] as const;
+
+/** True iff this confirmation means the resource reached its expected state. */
+export function isResumeSuccess(c: ResumeConfirmation): boolean {
+  return RESUME_SUCCESS_CONFIRMATIONS.includes(c);
+}
 
 export interface ResumeOutcome {
   resourceId: string;
@@ -455,21 +503,53 @@ export function confirmResume(
     };
   }
 
+  // ── THE UNKNOWN PRE-PAUSE STATE (PR #3897 review BLOCKER) ────────────────
+  // If we never established what this resource was BEFORE the pause, we cannot
+  // establish what "restored" means for it, so nothing here can be a success.
+  //
+  // The previous version tested `!isRunningState(expected.prePausePowerState)`,
+  // and `!isRunningState('Unknown')` is TRUE — so a snapshot whose pre-pause
+  // state was never established fell into the "was already paused, restore it to
+  // paused" branch. Measured consequence: prePausePowerState='Unknown' with ARM
+  // observing 'Stopped' returned confirmed-running, and the estate reported
+  // RUNNING. That is R-CAP-4's forbidden outcome on exactly the scenario R-CAP
+  // exists for: ARM returns a state the mapper does not recognise -> Unknown
+  // recorded -> resume fails with InsufficientResourcesForSubscription -> ARM
+  // reports Stopped -> "RUNNING".
+  //
+  // `capturePrePauseState` and `deserializePauseSnapshot` now both REFUSE an
+  // Unknown pre-pause state, so this branch is unreachable through any
+  // sanctioned path. It stays as defence in depth: a snapshot that reaches here
+  // with Unknown is honestly reported as unknown, never as success.
+  if (expected.prePausePowerState === 'Unknown') {
+    return {
+      resourceId: expected.resourceId,
+      confirmation: 'unknown',
+      observedState: reading.powerState,
+      reason:
+        `The pre-pause power state of ${expected.name} was never established, so whether ARM's `
+        + `current ${reading.powerState} represents a successful resume cannot be determined.`,
+    };
+  }
+
   // A resource that was ALREADY paused before Loom touched it is restored to
-  // paused. Confirming it means confirming it matches its pre-pause state.
-  if (!isRunningState(expected.prePausePowerState)) {
+  // paused — starting it would be wrong. Note this tests isPausedState
+  // POSITIVELY; `!isRunningState(...)` is not the same predicate, because the
+  // transitional and Unknown states satisfy it too.
+  if (isPausedState(expected.prePausePowerState)) {
     return isPausedState(reading.powerState)
       ? {
           resourceId: expected.resourceId,
-          confirmation: 'confirmed-running',
+          confirmation: 'confirmed-restored-paused',
           observedState: reading.powerState,
           reason:
             `${expected.name} was ${expected.prePausePowerState} before the pause and ARM reports `
-            + `${reading.powerState}; it is back to its pre-pause condition.`,
+            + `${reading.powerState}; it is back to its pre-pause condition. It is NOT running, and `
+            + 'was not expected to be.',
         }
       : {
           resourceId: expected.resourceId,
-          confirmation: 'confirmed-not-running',
+          confirmation: 'confirmed-mismatch',
           observedState: reading.powerState,
           reason:
             `${expected.name} was ${expected.prePausePowerState} before the pause but ARM now reports `
@@ -497,7 +577,7 @@ export function confirmResume(
   }
   return {
     resourceId: expected.resourceId,
-    confirmation: 'confirmed-not-running',
+    confirmation: 'confirmed-mismatch',
     observedState: reading.powerState,
     reason:
       `ARM reports ${expected.name} is ${reading.powerState}, not Online. `
@@ -508,9 +588,12 @@ export function confirmResume(
 /**
  * R-CAP-4 — the estate verdict for a completed resume attempt.
  *
- * RUNNING requires EVERY resource to be `confirmed-running`. Anything else —
- * one `confirmed-not-running`, one `unknown`, or an EMPTY outcome list against a
- * non-empty snapshot — is RESUME_FAILED.
+ * RUNNING requires EVERY resource to have reached its EXPECTED state — i.e.
+ * `isResumeSuccess()`, which is `confirmed-running` for a resource that was
+ * running before the pause and `confirmed-restored-paused` for one that was
+ * already stopped. Anything else — a `confirmed-mismatch`, an `unknown`, a
+ * resource with no outcome, or an EMPTY outcome list against a non-empty
+ * snapshot — is RESUME_FAILED.
  *
  * The empty-list case is deliberate and is the same defect class as a gate with
  * a zero population: `outcomes.every(...)` on `[]` is vacuously true, so a
@@ -537,7 +620,7 @@ export function deriveResumeState(
       });
       continue;
     }
-    if (o.confirmation !== 'confirmed-running') unconfirmed.push(o);
+    if (!isResumeSuccess(o.confirmation)) unconfirmed.push(o);
   }
 
   if (expectedIds.length === 0) {
@@ -565,7 +648,9 @@ export function deriveResumeState(
   return {
     state: 'RUNNING',
     unconfirmed: [],
-    reason: `All ${expectedIds.length} resource(s) confirmed running from authoritative ARM reads.`,
+    reason:
+      `All ${expectedIds.length} resource(s) reached their expected pre-pause state, confirmed from `
+      + 'authoritative ARM reads.',
   };
 }
 
@@ -600,6 +685,19 @@ export function capturePrePauseState(args: {
     throw new Error(
       `capturePrePauseState: refusing to snapshot ${args.resourceId} — ownership verdict is `
         + `'${args.ownership.verdict}', not 'loom-owned'. ${args.ownership.reason}`,
+    );
+  }
+  // A snapshot you cannot restore TO is not a snapshot. If ARM returned a state
+  // the mapper does not recognise, recording it would produce a document that
+  // resume cannot evaluate — and, before the #3897 review fix, one that resume
+  // scored as SUCCESS. Fail here, at capture, where the pause has not happened
+  // yet and nothing is lost by stopping.
+  if (args.reading.powerState === 'Unknown') {
+    throw new Error(
+      `capturePrePauseState: refusing to snapshot ${args.resourceId} — ARM did not report a `
+        + `recognised power state (api-version ${args.reading.armApiVersion}, read at `
+        + `${args.reading.readAt}). Pausing a resource whose pre-pause state is unknown would `
+        + 'produce a snapshot that resume cannot restore to, so the pause must not proceed.',
     );
   }
   return {
@@ -649,6 +747,14 @@ export function deserializePauseSnapshot(raw: string | unknown): EstatePauseSnap
   if (typeof version !== 'number') {
     throw new Error('Pause snapshot has no numeric schemaVersion; its shape cannot be established.');
   }
+  // Bounded at BOTH ends. Bounding only the top accepted 0, -1 and 0.5 — none of
+  // which names a shape this build has ever written (#3897 review).
+  if (!Number.isInteger(version) || version < 1) {
+    throw new Error(
+      `Pause snapshot schemaVersion ${version} is not a positive integer, so it names no shape this `
+        + 'build has ever written.',
+    );
+  }
   if (version > ESTATE_PAUSE_SNAPSHOT_SCHEMA_VERSION) {
     throw new Error(
       `Pause snapshot schemaVersion ${version} is newer than this build understands `
@@ -681,6 +787,27 @@ export function deserializePauseSnapshot(raw: string | unknown): EstatePauseSnap
           + `'${String(r.powerStateSource)}'. Only 'arm' is accepted — Resource Graph has been `
           + 'measured reporting a Synapse pool Online AFTER a successful pause action, so a '
           + 'snapshot built from it would restore the wrong state.',
+      );
+    }
+    // The docstring above promises this function refuses what it cannot
+    // establish the meaning of. Before the #3897 review it validated
+    // `resourceId` and `powerStateSource` and then cast, so a document carrying
+    // `prePausePowerState: 'TOTALLY_BOGUS'` was ACCEPTED and flowed straight
+    // into `confirmResume`'s branching. Validating it here is what makes that
+    // sentence true (deploy-integrity.md R7).
+    if (!ESTATE_POWER_STATES.includes(r.prePausePowerState as EstatePowerState)) {
+      throw new Error(
+        `Pause snapshot resource ${String(r.resourceId)} records prePausePowerState `
+          + `'${String(r.prePausePowerState)}', which is not a recognised power state. Resume `
+          + 'cannot determine what restoring it would mean.',
+      );
+    }
+    // Consistent with capturePrePauseState, which refuses to WRITE one of these.
+    if (r.prePausePowerState === 'Unknown') {
+      throw new Error(
+        `Pause snapshot resource ${String(r.resourceId)} records prePausePowerState 'Unknown'. `
+          + 'A snapshot whose pre-pause state was never established cannot be restored to, and '
+          + 'evaluating a resume against it cannot yield a success.',
       );
     }
   }

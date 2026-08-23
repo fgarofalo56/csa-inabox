@@ -76,9 +76,20 @@ export const LOOM_ESTATE_TAG_KEY = 'loom-estate-id';
 
 /**
  * The pre-existing per-item ownership tag (`lib/azure/activator-monitor.ts`
- * exports the same string as LOOM_RULE_TAG_ITEM_ID). A resource stamped as
- * belonging to a Loom ITEM is Loom's, but only counts when the estate tag agrees
- * or is absent — an item id alone does not tell us WHICH estate.
+ * exports the same string as LOOM_RULE_TAG_ITEM_ID; `lib/logic-app/auto-bind.ts`
+ * stamps it).
+ *
+ * IT IS NOT AN OWNERSHIP SIGNAL FOR PAUSE, and deliberately confers nothing on
+ * its own. PR #3897 review measured the reason: a resource carrying only
+ * `loom-item-id` was claimed by estate-A AND by a completely unrelated
+ * estate-B, because a Loom ITEM id does not name which ESTATE the item lives
+ * in. That contradicts the invariant stated on LOOM_ESTATE_TAG_KEY, and
+ * R-SCOPE-3 requires ownership be established POSITIVELY for THIS estate — an
+ * ambiguous claim is not a positive one.
+ *
+ * So it is retained only to be NAMED in exclusion reasons, which is genuinely
+ * useful: "this looks Loom-ish but carries no estate tag" is exactly what an
+ * operator needs to see to go and fix the tagging.
  */
 export const LOOM_ITEM_TAG_KEY = 'loom-item-id';
 
@@ -383,13 +394,18 @@ function tagValue(tags: Readonly<Record<string, string>>, key: string): string |
  *   2. the tag present but naming a DIFFERENT estate  -> not-loom-owned
  *      (another Loom deployment; not ours to stop);
  *   3. the deploy manifest listing the resource id    -> loom-owned;
- *   4. a `loom-item-id` tag with no contradicting estate tag -> loom-owned;
- *   5. tags readable but no evidence                  -> not-loom-owned;
- *   6. tags NOT readable                              -> indeterminate.
+ *   4. tags readable but no estate-scoped evidence    -> not-loom-owned;
+ *   5. tags NOT readable                              -> indeterminate.
  *
- * (5) and (6) are both non-pausable. They are kept distinct because (6) is an
- * error the operator should see, and (5) is the ordinary, correct answer for the
+ * (4) and (5) are both non-pausable. They are kept distinct because (5) is an
+ * error the operator should see, and (4) is the ordinary, correct answer for the
  * blog / Sentinel / Atlas resources that share these subscriptions.
+ *
+ * NOTE: `loom-item-id` alone is NOT a membership source. It names a Loom ITEM,
+ * not a Loom ESTATE, so two estates sharing a subscription would both claim the
+ * same resource — measured in PR #3897 review. A resource carrying only that tag
+ * is reported as not-loom-owned with a reason that names the missing estate tag,
+ * so the fix (stamp `loom-estate-id`) is obvious from the dry run.
  */
 export function resolveOwnership(
   resource: DiscoveredResource,
@@ -397,7 +413,7 @@ export function resolveOwnership(
 ): LoomOwnershipEvidence {
   const { estateId, manifest } = ctx;
 
-  // (6) FAIL-SAFE. Tags could not be read -> we know nothing -> leave it alone.
+  // (5) FAIL-SAFE. Tags could not be read -> we know nothing -> leave it alone.
   // Same contract as csa-loom-shir-idle-stop.yml: never act on uncertainty.
   if (resource.tags == null) {
     return {
@@ -447,29 +463,21 @@ export function resolveOwnership(
     };
   }
 
-  // (4) Ours, by the per-item ownership tag, with no estate tag contradicting it.
+  // (4) Read the tags, found no ESTATE-SCOPED evidence. The correct answer for
+  //     every unrelated resource sharing these subscriptions — and also for a
+  //     resource carrying only `loom-item-id`, which cannot say WHICH estate.
   const itemTag = tagValue(resource.tags, LOOM_ITEM_TAG_KEY);
-  if (itemTag) {
-    return {
-      verdict: 'loom-owned',
-      source: 'ownership-tag',
-      tagKey: LOOM_ITEM_TAG_KEY,
-      tagValue: itemTag,
-      reason:
-        `${resource.name} carries ${LOOM_ITEM_TAG_KEY}='${itemTag}' and no conflicting `
-        + `${LOOM_ESTATE_TAG_KEY} tag, so it belongs to a Loom item in this estate.`,
-    };
-  }
-
-  // (5) Read the tags, found no Loom evidence. The correct answer for every
-  //     unrelated resource sharing these subscriptions.
   return {
     verdict: 'not-loom-owned',
     source: 'none',
-    reason:
-      `${resource.name} carries no ${LOOM_ESTATE_TAG_KEY} or ${LOOM_ITEM_TAG_KEY} tag and is not in `
-      + 'the deploy manifest. Loom ownership was not positively established, so it is left alone. '
-      + 'Note: its resource-group NAME is deliberately not consulted (R-SCOPE-2).',
+    reason: itemTag
+      ? `${resource.name} carries ${LOOM_ITEM_TAG_KEY}='${itemTag}' but no ${LOOM_ESTATE_TAG_KEY} `
+        + `tag, so it cannot be established that it belongs to estate '${estateId}' rather than `
+        + 'another Loom estate in this subscription. It is left alone. Stamp '
+        + `${LOOM_ESTATE_TAG_KEY} to bring it into scope.`
+      : `${resource.name} carries no ${LOOM_ESTATE_TAG_KEY} tag and is not in the deploy manifest. `
+        + 'Loom ownership was not positively established, so it is left alone. '
+        + 'Note: its resource-group NAME is deliberately not consulted (R-SCOPE-2).',
   };
 }
 
@@ -667,15 +675,37 @@ export interface ReverifyResult {
  * different ownership, or the estate re-tagged mid-run. So the tags are read
  * again, from the caller-injected reader, and the ownership decision is REDONE.
  *
- * FAIL-SAFE. If the reader throws, or returns nothing, or the fresh tags no
- * longer establish Loom ownership, `proceed` is false and the resource is left
- * RUNNING. Never the other way around — the SHIR idle-stop contract: on any
- * query error, leave it up.
+ * ── WHY THE MANIFEST IS RE-READ TOO, NOT PASSED IN (#3897 review) ──────────
+ * The first version took the ORIGINAL `manifest` in `ctx` and reused it. That
+ * made re-verification partial and silently defeatable: measured,
+ *
+ *     tags removed + stale manifest -> proceed=true,  source=deploy-manifest
+ *     tags removed, no manifest     -> proceed=false                (control)
+ *
+ * so untagging a resource — which the tests name as "an operator excluding it
+ * deliberately" — stopped working the moment a manifest was in play. `ctx` no
+ * longer ACCEPTS a manifest value; a caller must supply `readManifest`, a
+ * re-reader invoked at act time. Omitting it is a valid, fail-safe choice: it
+ * makes manifest-sourced ownership non-re-verifiable, so the tag becomes
+ * mandatory for the final go/no-go.
+ *
+ * FAIL-SAFE throughout. If either reader throws, or returns nothing, or the
+ * fresh evidence no longer establishes Loom ownership, `proceed` is false and
+ * the resource is left RUNNING. Never the other way around — the SHIR idle-stop
+ * contract: on any query error, leave it up.
  */
 export async function reverifyBeforeAct(
   candidate: PauseCandidate,
   readTags: (resourceId: string) => Promise<Readonly<Record<string, string>> | null>,
-  ctx: { estateId: string; manifest?: DeployManifest },
+  ctx: {
+    estateId: string;
+    /**
+     * Re-reads the deploy manifest AT ACT TIME. Omit it and manifest-sourced
+     * ownership simply cannot be re-verified, so the estate tag is required.
+     * There is deliberately no way to pass a pre-fetched manifest here.
+     */
+    readManifest?: () => Promise<DeployManifest | null>;
+  },
 ): Promise<ReverifyResult> {
   let freshTags: Readonly<Record<string, string>> | null;
   try {
@@ -696,6 +726,26 @@ export async function reverifyBeforeAct(
     };
   }
 
+  let freshManifest: DeployManifest | undefined;
+  if (ctx.readManifest) {
+    try {
+      freshManifest = (await ctx.readManifest()) ?? undefined;
+    } catch (err) {
+      const detail = err instanceof Error ? err.message : String(err);
+      return {
+        proceed: false,
+        reason:
+          `Could not re-read the deploy manifest before acting on ${candidate.resource.name} `
+          + `(${detail}). Leaving it RUNNING — never act on uncertainty.`,
+        ownership: {
+          verdict: 'indeterminate',
+          source: 'none',
+          reason: `Re-reading the deploy manifest failed: ${detail}.`,
+        },
+      };
+    }
+  }
+
   const fresh: DiscoveredResource = {
     ...candidate.resource,
     tags: freshTags,
@@ -703,7 +753,10 @@ export async function reverifyBeforeAct(
       ? { tagsError: 'the tag re-read returned no tags' }
       : { tagsError: undefined }),
   };
-  const ownership = resolveOwnership(fresh, ctx);
+  const ownership = resolveOwnership(fresh, {
+    estateId: ctx.estateId,
+    ...(freshManifest ? { manifest: freshManifest } : {}),
+  });
 
   if (ownership.verdict !== 'loom-owned') {
     return {

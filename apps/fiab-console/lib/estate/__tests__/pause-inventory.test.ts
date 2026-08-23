@@ -318,6 +318,75 @@ describe('fail-safe: uncertainty never becomes pausable', () => {
 });
 
 // ---------------------------------------------------------------------------
+// SHOULD-FIX 3 (#3897 review) — re-verification must be COMPLETE
+// ---------------------------------------------------------------------------
+
+describe('re-verification cannot be defeated by a stale manifest', () => {
+  const manifestOnly = res({
+    name: 'ca-loom-manifest-only',
+    rg: 'rg-anything',
+    type: 'Microsoft.App/containerApps',
+    tags: {},
+  });
+  const manifest: DeployManifest = { estateId: ESTATE, resourceIds: [manifestOnly.resourceId] };
+
+  function manifestCandidate() {
+    const inv = buildPauseInventory([manifestOnly], { scope: SCOPE, manifest });
+    expect(inv.pausable).toHaveLength(1);
+    return inv.pausable[0];
+  }
+
+  it('untagging is honoured when the manifest is re-read and no longer lists it', async () => {
+    // Previously the ORIGINAL manifest was reused and never re-checked, so
+    // "tags removed + stale manifest" yielded proceed=true. The operator's
+    // deliberate exclusion was silently defeated whenever a manifest was in play.
+    const verdict = await reverifyBeforeAct(manifestCandidate(), async () => ({}), {
+      estateId: ESTATE,
+      readManifest: async () => ({ estateId: ESTATE, resourceIds: [] }),
+    });
+    expect(verdict.proceed).toBe(false);
+    expect(verdict.ownership.verdict).toBe('not-loom-owned');
+  });
+
+  it('with NO re-reader supplied, manifest-sourced ownership is not re-verifiable — the tag is required', async () => {
+    const verdict = await reverifyBeforeAct(manifestCandidate(), async () => ({}), {
+      estateId: ESTATE,
+    });
+    expect(verdict.proceed).toBe(false);
+  });
+
+  it('a manifest re-read that still lists it DOES proceed (the control)', async () => {
+    const verdict = await reverifyBeforeAct(manifestCandidate(), async () => ({}), {
+      estateId: ESTATE,
+      readManifest: async () => manifest,
+    });
+    expect(verdict.proceed).toBe(true);
+    expect(verdict.ownership.source).toBe('deploy-manifest');
+  });
+
+  it('a manifest re-reader that THROWS refuses to proceed (fail-safe)', async () => {
+    const verdict = await reverifyBeforeAct(manifestCandidate(), async () => ({}), {
+      estateId: ESTATE,
+      readManifest: async () => {
+        throw new Error('manifest blob returned 503');
+      },
+    });
+    expect(verdict.proceed).toBe(false);
+    expect(verdict.ownership.verdict).toBe('indeterminate');
+    expect(verdict.reason).toMatch(/manifest blob returned 503/);
+    expect(verdict.reason).toMatch(/Leaving it RUNNING/);
+  });
+
+  it('a re-read manifest belonging to ANOTHER estate confers nothing', async () => {
+    const verdict = await reverifyBeforeAct(manifestCandidate(), async () => ({}), {
+      estateId: ESTATE,
+      readManifest: async () => ({ estateId: OTHER_ESTATE, resourceIds: [manifestOnly.resourceId] }),
+    });
+    expect(verdict.proceed).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // R-SCOPE-1 — never scope by subscription
 // ---------------------------------------------------------------------------
 
@@ -393,7 +462,11 @@ describe('ownership resolution', () => {
     expect(resolveOwnership(odd, { estateId: ESTATE }).verdict).toBe('loom-owned');
   });
 
-  it('a per-item tag with no conflicting estate tag is Loom-owned', () => {
+  it('a per-item tag ALONE confers nothing — it cannot name an estate', () => {
+    // #3897 review finding B: previously `loom-item-id` alone was a membership
+    // source, so ONE resource was claimed by TWO unrelated estates. That
+    // contradicted the invariant stated on LOOM_ESTATE_TAG_KEY, and an ambiguous
+    // claim is not the POSITIVE identification R-SCOPE-3 requires.
     const item = res({
       name: 'ca-loom-item',
       rg: 'rg-x',
@@ -401,8 +474,34 @@ describe('ownership resolution', () => {
       tags: { [LOOM_ITEM_TAG_KEY]: 'item-placeholder-0002' },
     });
     const own = resolveOwnership(item, { estateId: ESTATE });
-    expect(own.verdict).toBe('loom-owned');
-    expect(own.tagKey).toBe(LOOM_ITEM_TAG_KEY);
+    expect(own.verdict).toBe('not-loom-owned');
+    // The reason names the missing tag, so the dry run tells the operator the fix.
+    expect(own.reason).toMatch(/no loom-estate-id/);
+    expect(own.reason).toMatch(/Stamp loom-estate-id to bring it into scope/);
+    expect(buildPauseInventory([item], { scope: SCOPE }).pausable).toHaveLength(0);
+  });
+
+  it('the same item-tagged resource is claimed by NEITHER of two estates', () => {
+    // The measured probe from review, now asserted in both directions.
+    const item = res({
+      name: 'ca-loom-item',
+      rg: 'rg-x',
+      type: 'Microsoft.App/containerApps',
+      tags: { [LOOM_ITEM_TAG_KEY]: 'item-placeholder-0002' },
+    });
+    expect(resolveOwnership(item, { estateId: 'estate-A' }).verdict).toBe('not-loom-owned');
+    expect(resolveOwnership(item, { estateId: 'estate-B' }).verdict).toBe('not-loom-owned');
+  });
+
+  it('an estate tag DOES claim it — the control proving the tag is what matters', () => {
+    const item = res({
+      name: 'ca-loom-item',
+      rg: 'rg-x',
+      type: 'Microsoft.App/containerApps',
+      tags: { [LOOM_ESTATE_TAG_KEY]: ESTATE, [LOOM_ITEM_TAG_KEY]: 'item-placeholder-0002' },
+    });
+    expect(resolveOwnership(item, { estateId: ESTATE }).verdict).toBe('loom-owned');
+    expect(resolveOwnership(item, { estateId: 'estate-B' }).verdict).toBe('not-loom-owned');
   });
 
   it('a per-item tag does NOT override another estate\'s estate tag', () => {

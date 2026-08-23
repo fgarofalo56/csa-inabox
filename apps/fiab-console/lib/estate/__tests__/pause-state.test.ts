@@ -15,6 +15,8 @@ import { describe, it, expect } from 'vitest';
 import {
   ESTATE_PAUSE_SNAPSHOT_SCHEMA_VERSION,
   ESTATE_PAUSE_STATES,
+  ESTATE_POWER_STATES,
+  RESUME_SUCCESS_CONFIRMATIONS,
   allowedTransitions,
   armPowerReading,
   assertTransition,
@@ -24,12 +26,14 @@ import {
   deriveResumeState,
   deserializePauseSnapshot,
   isPausedState,
+  isResumeSuccess,
   isRunningState,
   newPauseSnapshot,
   serializePauseSnapshot,
   type ArmPowerReading,
   type EstatePauseSnapshot,
   type EstatePauseState,
+  type EstatePowerState,
   type LoomOwnershipEvidence,
   type PausedResourceSnapshot,
   type ResumeOutcome,
@@ -168,21 +172,22 @@ describe('confirmResume', () => {
     expect(o.confirmation).toBe('confirmed-running');
   });
 
-  it('a NULL reading is UNKNOWN, never confirmed-running', () => {
+  it('a NULL reading is UNKNOWN, never a success', () => {
     const o = confirmResume(pool, null, 'ARM GET timed out after 30s');
     expect(o.confirmation).toBe('unknown');
+    expect(isResumeSuccess(o.confirmation)).toBe(false);
     expect(o.reason).toMatch(/ARM GET timed out/);
     expect(o.reason).toMatch(/NOT established/);
   });
 
-  it('an explicit Unknown power state is UNKNOWN, never confirmed-running', () => {
+  it('an explicit Unknown power state is UNKNOWN, never a success', () => {
     const o = confirmResume(pool, armPowerReading({ resourceId: POOL_ID, powerState: 'Unknown', armApiVersion: '2021-06-01' }));
     expect(o.confirmation).toBe('unknown');
   });
 
   it('a mid-flight Resuming state is NOT a success', () => {
     const o = confirmResume(pool, armPowerReading({ resourceId: POOL_ID, powerState: 'Resuming', armApiVersion: '2021-06-01' }));
-    expect(o.confirmation).toBe('confirmed-not-running');
+    expect(o.confirmation).toBe('confirmed-mismatch');
     expect(o.observedState).toBe('Resuming');
   });
 
@@ -192,17 +197,141 @@ describe('confirmResume', () => {
     expect(o.reason).toMatch(/says nothing about this resource/);
   });
 
-  it('a resource that was ALREADY paused before Loom touched it is restored to paused', () => {
+  it('a resource that was ALREADY paused is restored to paused — and is NOT reported running', () => {
     const alreadyPaused: PausedResourceSnapshot = { ...pool, prePausePowerState: 'Paused' };
-    expect(
-      confirmResume(alreadyPaused, armPowerReading({ resourceId: POOL_ID, powerState: 'Paused', armApiVersion: '2021-06-01' }))
-        .confirmation,
-    ).toBe('confirmed-running');
+    const ok = confirmResume(
+      alreadyPaused,
+      armPowerReading({ resourceId: POOL_ID, powerState: 'Paused', armApiVersion: '2021-06-01' }),
+    );
+    // A correct outcome, but a DISTINCT member: a consumer branching on
+    // 'confirmed-running' must not render this stopped resource as running.
+    expect(ok.confirmation).toBe('confirmed-restored-paused');
+    expect(ok.confirmation).not.toBe('confirmed-running');
+    expect(isResumeSuccess(ok.confirmation)).toBe(true);
+    expect(ok.observedState).toBe('Paused');
+    expect(ok.reason).toMatch(/It is NOT running/);
+
     // ...and starting it would be WRONG, so Online is a mismatch, not a success.
-    expect(
-      confirmResume(alreadyPaused, armPowerReading({ resourceId: POOL_ID, powerState: 'Online', armApiVersion: '2021-06-01' }))
-        .confirmation,
-    ).toBe('confirmed-not-running');
+    const wrong = confirmResume(
+      alreadyPaused,
+      armPowerReading({ resourceId: POOL_ID, powerState: 'Online', armApiVersion: '2021-06-01' }),
+    );
+    expect(wrong.confirmation).toBe('confirmed-mismatch');
+    expect(isResumeSuccess(wrong.confirmation)).toBe(false);
+  });
+
+  it('every non-unknown confirmation that is a success carries a non-Online observedState only for restored-paused', () => {
+    // Guards the rename's whole purpose: 'confirmed-running' must NEVER be
+    // returned alongside an observedState that is not Online.
+    const cases: Array<[EstatePowerState, EstatePowerState]> = [
+      ['Online', 'Online'],
+      ['Online', 'Paused'],
+      ['Online', 'Stopped'],
+      ['Paused', 'Paused'],
+      ['Paused', 'Online'],
+      ['Stopped', 'Deallocated'],
+    ];
+    for (const [pre, observed] of cases) {
+      const snap: PausedResourceSnapshot = { ...pool, prePausePowerState: pre };
+      const o = confirmResume(snap, armPowerReading({ resourceId: POOL_ID, powerState: observed, armApiVersion: '2021-06-01' }));
+      if (o.confirmation === 'confirmed-running') expect(o.observedState).toBe('Online');
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The GCC-High ADX incident this PRP was written around (PR #3897 review BLOCKER)
+// ---------------------------------------------------------------------------
+
+describe('BLOCKER regression: an Unknown pre-pause state can never score as success', () => {
+  const unknownPre: PausedResourceSnapshot = { ...poolSnapshot(), prePausePowerState: 'Unknown' };
+
+  it('prePausePowerState=Unknown + ARM observes Stopped is NOT confirmed-running', () => {
+    // The exact probe from review. Previously: confirmation=confirmed-running,
+    // observedState=Stopped, ESTATE STATE=RUNNING — R-CAP-4's forbidden outcome
+    // on the very scenario R-CAP exists for (resume fails with
+    // InsufficientResourcesForSubscription, ARM reports Stopped).
+    const o = confirmResume(
+      unknownPre,
+      armPowerReading({ resourceId: POOL_ID, powerState: 'Stopped', armApiVersion: '2021-06-01' }),
+    );
+    expect(o.confirmation).not.toBe('confirmed-running');
+    expect(o.confirmation).not.toBe('confirmed-restored-paused');
+    expect(isResumeSuccess(o.confirmation)).toBe(false);
+    expect(o.confirmation).toBe('unknown');
+    expect(o.reason).toMatch(/pre-pause power state .* was never established/);
+  });
+
+  it('and the ESTATE lands in RESUME_FAILED, not RUNNING', () => {
+    const snap = { resources: [unknownPre] };
+    const outcome = confirmResume(
+      unknownPre,
+      armPowerReading({ resourceId: POOL_ID, powerState: 'Stopped', armApiVersion: '2021-06-01' }),
+    );
+    const derived = deriveResumeState(snap, [outcome]);
+    expect(derived.state).toBe('RESUME_FAILED');
+  });
+
+  it('no observed state whatsoever rescues an Unknown pre-pause state', () => {
+    for (const observed of ESTATE_POWER_STATES) {
+      const o = confirmResume(
+        unknownPre,
+        armPowerReading({ resourceId: POOL_ID, powerState: observed, armApiVersion: '2021-06-01' }),
+      );
+      expect(isResumeSuccess(o.confirmation)).toBe(false);
+    }
+  });
+
+  it('the branch is unreachable via capture: an Unknown reading is REFUSED at snapshot time', () => {
+    expect(() =>
+      capturePrePauseState({
+        resourceId: POOL_ID,
+        resourceType: 'Microsoft.Synapse/workspaces/sqlPools',
+        name: 'loompool',
+        resourceGroup: 'rg-csa-loom-dlz-default-centralus',
+        subscriptionId: SUB,
+        reading: armPowerReading({ resourceId: POOL_ID, powerState: 'Unknown', armApiVersion: '2021-06-01' }),
+        ownership: OWNED,
+      }),
+    ).toThrow(/did not report a recognised power state/);
+  });
+
+  it('and unreachable via deserialize: an Unknown pre-pause state is REFUSED on read', () => {
+    const snap = fullSnapshot();
+    const doc = JSON.parse(serializePauseSnapshot(snap));
+    doc.resources[0].prePausePowerState = 'Unknown';
+    expect(() => deserializePauseSnapshot(doc)).toThrow(/cannot be restored to/);
+  });
+
+  it('`!isRunningState` and `isPausedState` are NOT the same predicate — the root cause', () => {
+    // The bug was using the former where the latter was meant. These four states
+    // satisfy `!isRunningState` while NOT being paused; each would have taken
+    // the "restore to paused" branch.
+    for (const s of ['Unknown', 'Resuming', 'Starting', 'Scaling'] as const) {
+      expect(isRunningState(s)).toBe(false);
+      expect(isPausedState(s)).toBe(false);
+    }
+  });
+
+  it('a TRANSITIONAL pre-pause state expects Online, not Paused', () => {
+    // The same predicate bug, on the three states that are not Unknown. A
+    // resource caught mid-start before the pause must come back Online; the old
+    // `!isRunningState` branch would have scored it a success for being Stopped.
+    for (const pre of ['Starting', 'Resuming', 'Scaling'] as const) {
+      const snap: PausedResourceSnapshot = { ...poolSnapshot(), prePausePowerState: pre };
+      const stopped = confirmResume(
+        snap,
+        armPowerReading({ resourceId: POOL_ID, powerState: 'Stopped', armApiVersion: '2021-06-01' }),
+      );
+      expect(stopped.confirmation).toBe('confirmed-mismatch');
+      expect(isResumeSuccess(stopped.confirmation)).toBe(false);
+
+      const online = confirmResume(
+        snap,
+        armPowerReading({ resourceId: POOL_ID, powerState: 'Online', armApiVersion: '2021-06-01' }),
+      );
+      expect(online.confirmation).toBe('confirmed-running');
+    }
   });
 });
 
@@ -231,12 +360,29 @@ describe('deriveResumeState (R-CAP-4)', () => {
     expect(r.reason).toMatch(/an unconfirmed resume is not a successful one/);
   });
 
-  it('a single confirmed-not-running makes the estate RESUME_FAILED', () => {
+  it('a single confirmed-mismatch makes the estate RESUME_FAILED', () => {
     const r = deriveResumeState(snap, [
       ok(POOL_ID),
-      { resourceId: ADX_ID, confirmation: 'confirmed-not-running', observedState: 'Stopped', reason: 'Still stopped.' },
+      { resourceId: ADX_ID, confirmation: 'confirmed-mismatch', observedState: 'Stopped', reason: 'Still stopped.' },
     ]);
     expect(r.state).toBe('RESUME_FAILED');
+  });
+
+  it('confirmed-restored-paused counts as success — a legitimately paused resource does not fail the estate', () => {
+    const r = deriveResumeState(snap, [
+      ok(POOL_ID),
+      { resourceId: ADX_ID, confirmation: 'confirmed-restored-paused', observedState: 'Paused', reason: 'Back to pre-pause.' },
+    ]);
+    expect(r.state).toBe('RUNNING');
+    expect(r.unconfirmed).toHaveLength(0);
+  });
+
+  it('the success set is exactly the two confirmed-at-expected-state members', () => {
+    expect([...RESUME_SUCCESS_CONFIRMATIONS].sort()).toEqual(
+      ['confirmed-restored-paused', 'confirmed-running'].sort(),
+    );
+    expect(isResumeSuccess('confirmed-mismatch')).toBe(false);
+    expect(isResumeSuccess('unknown')).toBe(false);
   });
 
   it('a resource with NO outcome at all is RESUME_FAILED, not silently ignored', () => {
@@ -449,6 +595,19 @@ describe('deserializePauseSnapshot refuses what it cannot establish', () => {
     expect(() => deserializePauseSnapshot(snap)).toThrow(/newer than this build understands/);
   });
 
+  it('bounds the schema version at BOTH ends — 0, -1 and 0.5 are refused', () => {
+    // Previously only the top was bounded, so all three were ACCEPTED (#3897
+    // review). None names a shape this build has ever written.
+    for (const version of [0, -1, 0.5, Number.NaN]) {
+      const snap = { ...fullSnapshot(), schemaVersion: version };
+      expect(() => deserializePauseSnapshot(snap)).toThrow(/not a positive integer/);
+    }
+  });
+
+  it('accepts the current version (the control for the bound above)', () => {
+    expect(() => deserializePauseSnapshot(serializePauseSnapshot(fullSnapshot()))).not.toThrow();
+  });
+
   it('rejects a missing estateId — the scope would be unknown', () => {
     const snap = { ...fullSnapshot(), estateId: '' };
     expect(() => deserializePauseSnapshot(snap)).toThrow(/no estateId/);
@@ -470,6 +629,28 @@ describe('deserializePauseSnapshot refuses what it cannot establish', () => {
     doc.resources[0].powerStateSource = 'resource-graph';
     expect(() => deserializePauseSnapshot(doc)).toThrow(/Only 'arm' is accepted/);
     expect(() => deserializePauseSnapshot(doc)).toThrow(/measured reporting a Synapse pool Online/);
+  });
+
+  it('rejects a prePausePowerState that is not a recognised power state', () => {
+    // The docstring claims this function "rejects — never guesses at — a
+    // document it cannot establish the meaning of". Before the #3897 review it
+    // validated resourceId + powerStateSource and then CAST, so a bogus power
+    // state was accepted and flowed straight into confirmResume's branching.
+    const doc = JSON.parse(serializePauseSnapshot(fullSnapshot()));
+    doc.resources[0].prePausePowerState = 'TOTALLY_BOGUS';
+    expect(() => deserializePauseSnapshot(doc)).toThrow(/not a recognised power state/);
+  });
+
+  it('accepts every legitimate power state except Unknown (the control)', () => {
+    for (const s of ESTATE_POWER_STATES) {
+      const doc = JSON.parse(serializePauseSnapshot(fullSnapshot()));
+      doc.resources[0].prePausePowerState = s;
+      if (s === 'Unknown') {
+        expect(() => deserializePauseSnapshot(doc)).toThrow(/cannot be restored to/);
+      } else {
+        expect(() => deserializePauseSnapshot(doc)).not.toThrow();
+      }
+    }
   });
 
   it('rejects a non-object and malformed JSON', () => {
