@@ -79,8 +79,25 @@ healthy (live marker `e4dcfd72`, stamped 2026-08-23T18:10:20Z). So apps deploy w
 not — **bicep merges in this window are inert**, which is `deploy-integrity.md` R2. Directly gates
 PRs #3923 and #3927, both bicep.
 
-**#3944 jumps ahead of #3912 in the merge order** — R1: a broken deploy path preempts all feature
-work. Under independent review.
+**#3944 MERGED and VERIFIED LIVE — partially.** Run `32666693845` on `main`
+(`whatif-only`, centralus, `allow_existing_hub=true`) completed **SUCCESS with 0 failed
+steps**, and **step 18 — the exact step that failed at 06:49:24Z — now passes.**
+
+**What is NOT verified:** step 21 (`ADX preflight`, the sibling defect) was **not exercised** —
+its condition is `github.event_name == 'schedule' || inputs.run_mode == 'full'`, which a
+`whatif-only` dispatch cannot reach by design. It has **test** coverage (the reviewer's narrow
+ADX-only mutation went RC=1) but no **live** coverage. **#3916 stays OPEN until the scheduled
+run (~06:48Z) proves both steps** — half a receipt is not a receipt (R2).
+
+*A failed run `32662265651` sits in the history and is NOT evidence against #3944:* it failed
+at step 6 on my own misconfigured dispatch, where the topology guard correctly refused to stamp
+a second Console and named the fix (`allow_existing_hub=true`). R6 behaving properly.
+
+**Follow-up #3947:** the recurrence guard #3944 added is keyed to a **spelling** — `[ -z … ]`
+and `[ "${…:-}" = "" ]` both walk past it while its comment claims a third offender must fail.
+
+**#3944 jumped ahead of #3912 in the merge order** — R1: a broken deploy path preempts all
+feature work. Merged 2026-08-23.
 
 **Other deploy paths (measured, most-recent-first):**
 
@@ -107,13 +124,13 @@ work. Under independent review.
 
 | # | Item | Owns | Issue | State |
 |---|---|---|---|---|
-| W1 | Graph substrate | `lib/brain/graph/**`, `lib/brain/types.ts` | #3933 | in flight |
-| W2 | Waste detectors | `lib/brain/detectors/**` | #3933 | in flight |
-| W3 | Cost pipeline | `lib/brain/cost/**` | #3933 | in flight |
-| W4 | Agent layer | `lib/brain/agents/**` | #3933 | in flight |
-| W5 | **Visualizer** | `app/admin/brain/**` | #3933 | in flight |
-| W6 | Security taxonomy | `docs/fiab/brain/security-taxonomy.md` | #3933 | in flight |
-| W7 | Security detectors | `lib/brain/security/**` | #3933 | in flight |
+| W1 | Graph substrate | `lib/brain/graph/**`, `lib/brain/types.ts` | #3933 | **PR #3945** (16 files) |
+| W2 | Waste detectors | `lib/brain/detectors/**` | #3933 | **PR #3952** (38 files) |
+| W3 | Cost pipeline | `lib/brain/cost/**` | #3933 | **PR #3950** (16 files) |
+| W4 | Agent layer | `lib/brain/agents/**` | #3933 | **PR #3949** (34 files) |
+| W5 | **Visualizer** | `app/admin/brain/**` | #3933 | **PR #3951** (42 files) |
+| W6 | Security taxonomy | `docs/fiab/brain/security-taxonomy.md` | #3933 | **PR #3939** |
+| W7 | Security detectors | `lib/brain/security/**` | #3933 | **PR #3946** (29 files) |
 | W8 | **Synapses view** | `app/admin/brain/synapses/**` | **#3934** | blocked on W5 (same directory — §8 conflict) |
 | W9 | **Graph versioning** | `lib/brain/history/**` | **#3935** | not started |
 | W10 | **Scheduler + lifecycle** | workflow, `lib/brain/run/**` | **#3936** | not started |
@@ -124,6 +141,33 @@ Without W9 there is no history, so *"an edge that should not have formed"* is un
 prune recommendations run off a single snapshot — which would recommend deleting a resource
 that is merely mid-deploy. Without W10 the Brain never runs; `lcu-autopilot` is the standing
 proof of that failure mode, having shipped a full read→decide→actuate loop with no scheduler.
+
+**The thesis was AMENDED by its own taxonomy (#3939) — see `loom-brain/PRP.md` §3.8.** Testing
+the reachability idea against this repo's shipped defects returned *substantially right,
+materially incomplete*, and it is **not the highest-value part**. The dominant evasion measured
+here is not adding an unguarded edge — it is **falling outside the population being examined**
+(six instances, invisible in every artifact except a population count). The live proof:
+`check-tid-boundary-chokepoint.mjs` reports **15 candidates, 1 judged, RC=0** while a live
+defect grants real ADLS ACLs, because its discriminant is a regex on *parameter names*.
+
+Two classes fail the thesis outright and need non-graph mechanisms:
+**fail-open** (the edge is present, on-path, consumed — and answers ALLOW on failure; the
+property is verdict totality of a *node*) and **duplicated decision** (11 tenant comparisons
+across 3 files, all present, reachability clean **and correct** — the defect is that two
+*disagree*; a property of a *set*, and currently this repo's most productive defect class).
+
+---
+
+## 4a. CI runner saturation — measured 2026-08-23 ~21:12Z
+
+    completed 38 | queued 15-18 | in_progress 4-5 | pending 2      (24 active)
+
+**The binding constraint moved.** It was the merge treadmill; with ~10 PRs cycling it is now
+**runner capacity**. The P0 verification dispatch sat behind ~17 jobs, most of them triggered by
+my own branch updates — so adding parallel PR work actively delays the thing most worth
+verifying. **Hold branch updates while the queue is deep; read-only review lanes are free and
+should absorb the waiting time instead.**
+
 
 ---
 
