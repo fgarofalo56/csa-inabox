@@ -52,7 +52,7 @@ import {
 } from '@/lib/api/workspaces';
 import { buildTree, countDescendants, type FolderNode, type TreeItemSort } from '@/lib/panes/folders';
 import { ItemEditorChrome } from './item-editor-chrome';
-import { useAutosave, AutosaveIndicator } from './use-autosave';
+import { useAutosave } from './use-autosave';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
 import { useRegisterRibbonCommands } from '@/lib/components/shared/ribbon-commands';
@@ -95,9 +95,12 @@ import {
   STARTER_PY, TTL_LABEL, AML_CI_VM_SIZES,
 } from './notebook-editor/constants';
 import {
-  cellRoutesToSpark, starterCells, decodePy, exportPercentPy, exportIpynbFile,
+  cellRoutesToSpark, decodePy, exportPercentPy, exportIpynbFile,
   isComputeRunning, isCiStopped, looksStreaming,
 } from './notebook-editor/helpers';
+import {
+  CellsHeader, CellsLoading, seedCells, seedCellsFor,
+} from './notebook-editor/cells-hydration';
 import { useWorkspaces, useComputes, useAmlConfigured, useMyCi } from './notebook-editor/hooks';
 import { DriverLogPane } from './notebook-editor/driver-log-pane';
 import {
@@ -147,35 +150,14 @@ export function NotebookEditor({ item, id }: Props) {
   // /api/notebook/<id>/lsp (server-only env: LOOM_PYLSP_ENABLED, boundary, AML).
   const [lspWsUrl, setLspWsUrl] = useState<string | null>(null);
   const [vscodeWeb, setVscodeWeb] = useState<{ enabled: boolean; url: string | null; reason?: string }>({ enabled: false, url: null });
-  // #3539 — an app-installed notebook rendered `starterCells()` (a generic
-  // "# New notebook / Double-click to edit…" placeholder) for the whole window
-  // between `notebookId` resolving and `loadDetail` returning, so the user saw
-  // an empty-looking notebook and concluded the app install had produced
-  // nothing.
-  //
-  // The fix is TWO INDEPENDENT LAYERS, and neither one covers for the other —
-  // an earlier revision of this comment claimed the render gate was "the one
-  // the spec's mutation control breaks", which was measured FALSE: reverting
-  // either layer alone shipped green against the spec as it stood.
-  //
-  //   1. The `cellsFor !== notebookId` render gate further down keeps ANY cell
-  //      list off the screen while hydration is in flight. That is what stops
-  //      the placeholder reaching the screen on a healthy load.
-  //   2. This empty seed keeps fabricated content out of `cells` at all. It
-  //      matters on its own whenever the gate legitimately opens over cells the
-  //      load never replaced — `loadDetail` returns early on `!j.ok` without
-  //      calling `setCells`, and its `finally` sets `cellsFor` regardless, so a
-  //      non-empty seed would present the generic starter notebook as if it
-  //      WERE this notebook's content. It also keeps autosave from arming
-  //      against seed content, since that hook is `enabled: … && cells.length > 0`.
-  //
-  // `__tests__/notebook-installed-content.test.tsx` now guards them as two
-  // separate tests, one per layer. Do not collapse them.
-  const [cells, setCells] = useState<NotebookCell[]>(id === 'new' ? starterCells() : []);
-  // Which notebook `cells` were hydrated from. 'new' for an unsaved notebook,
-  // else the notebook id `loadDetail` last completed for (success OR failure —
-  // a failed load must not leave the spinner up forever).
-  const [cellsFor, setCellsFor] = useState<string | null>(id === 'new' ? 'new' : null);
+  // #3539 — never render the generic "New notebook" starter over a real
+  // bundle. TWO INDEPENDENT LAYERS, neither covering the other, both with the
+  // full rationale + their own tests: `seedCells` (here) and `<CellsLoading/>`
+  // behind the render gate below. See ./notebook-editor/cells-hydration.
+  const [cells, setCells] = useState<NotebookCell[]>(() => seedCells(id));
+  // Which notebook `cells` were hydrated from — the id `loadDetail` last
+  // completed for, on SUCCESS or FAILURE (a failure must not strand the gate).
+  const [cellsFor, setCellsFor] = useState<string | null>(() => seedCellsFor(id));
   const [defaultLang, setDefaultLang] = useState<NotebookCellLang>('pyspark');
   const [activeCellId, setActiveCellId] = useState<string | null>(null);
   const [dirty, setDirty] = useState(false);
@@ -739,10 +721,9 @@ export function NotebookEditor({ item, id }: Props) {
       );
     } catch (e: any) { setDetailErr(e?.message || String(e)); }
     finally {
-      // #3539 — mark the cells in hand as belonging to THIS notebook, on both
-      // the success and the failure path, so the loading state always resolves.
-      // Guarded on `currentNbRef` so a load the user has already navigated away
-      // from cannot un-gate a newer notebook's cells.
+      // #3539 — resolve the gate on BOTH the success and the failure path.
+      // `currentNbRef` so a load the user navigated away from cannot un-gate a
+      // newer notebook's cells.
       if (currentNbRef.current === nbId) setCellsFor(nbId);
     }
   }, []);
@@ -3192,41 +3173,17 @@ export function NotebookEditor({ item, id }: Props) {
             </div>
           )}
 
-          {/* #3539 — hold the cell list until the cells in hand are THIS
-              notebook's. Previously the generic starter placeholder rendered
-              here for the duration of the detail fetch, which reads as "the app
-              install produced an empty notebook". LAYER 1 of the two-layer fix
-              (layer 2 is the empty `cells` seed — see the note at its useState);
-              each is guarded by its own test, because neither covers the other. */}
-          {notebookId && cellsFor !== notebookId && (
-            <div
-              data-notebook-cells-loading
-              style={{
-                display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS,
-                padding: tokens.spacingVerticalXXL, justifyContent: 'center',
-              }}
-            >
-              <Spinner size="tiny" />
-              <Caption1>Loading notebook…</Caption1>
-            </div>
-          )}
+          {/* #3539 LAYER 1 — hold the cell list until the cells in hand are
+              THIS notebook's. Rationale: ./notebook-editor/cells-hydration. */}
+          {notebookId && cellsFor !== notebookId && <CellsLoading />}
 
           {notebookId && cellsFor === notebookId && (
             <>
-              <div style={{ display: 'flex', alignItems: 'center', gap: tokens.spacingVerticalS }}>
-                {dirty && <Badge appearance="outline" color="warning">unsaved</Badge>}
-                <AutosaveIndicator status={autosaveStatus} />
-                <Caption1>{cells.length} cell{cells.length === 1 ? '' : 's'} · default lang <code>{defaultLang}</code></Caption1>
-                <div style={{ flex: 1 }} />
-                <Select size="small" value={defaultLang} onChange={(_, d) => { setDefaultLang(d.value as NotebookCellLang); setDirty(true); }} aria-label="Default cell language">
-                  <option value="pyspark">PySpark (Python)</option>
-                  <option value="spark">Spark (Scala)</option>
-                  <option value="sparksql">Spark SQL</option>
-                  <option value="sparkr">SparkR (R)</option>
-                  <option value="python">Python</option>
-                  <option value="tsql">T-SQL</option>
-                </Select>
-              </div>
+              <CellsHeader
+                dirty={dirty} autosaveStatus={autosaveStatus} cellCount={cells.length}
+                defaultLang={defaultLang}
+                onDefaultLangChange={(lang) => { setDefaultLang(lang); setDirty(true); }}
+              />
               <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS }}>
                 <CellAdder
                   onAddCode={() => insertCell(-1, 'code')}
