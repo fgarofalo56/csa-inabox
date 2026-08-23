@@ -64,7 +64,40 @@ if ($WhatIfPreference) {
 }
 
 Write-Host "=== Bicep Validation Gate ===" -ForegroundColor Cyan
-Write-Host "Repo root: $RepoRoot"
+
+# RESOLVE the root to its canonical provider path before anything else uses it.
+#
+# The exclusions below are matched by stripping this prefix off each file's
+# FullName, and a prefix that does not match the spelling Get-ChildItem returns
+# strips NOTHING - leaving an absolute path, which re-arms #3894 exactly. There
+# are at least three spellings of the same root in normal use:
+#
+#   E:\Repos\...\agent-x     exact case, backslash   - stripped
+#   e:\repos\...\agent-x     lowercase               - stripped (OrdinalIgnoreCase)
+#   E:/Repos/.../agent-x     FORWARD SLASH           - NOT stripped before this
+#
+# The third is not exotic, it is the NATURAL spelling here: an agent inside a
+# worktree running `validate-all.ps1 -RepoRoot "$(pwd)"` from Git Bash produces
+# forward slashes, and Get-ChildItem returns FullName with BACKSLASHES whatever
+# it was given. Measured against the real worktree before this fix:
+#   Population: 0 Bicep file(s) to compile (351 found, 351 excluded)   RC=2
+# i.e. the #3894 defect, in full, through a different spelling. A relative root
+# ('.', 'dev-loop/..') failed the same way.
+#
+# Resolve-Path -> .ProviderPath normalises every one of those to the single
+# spelling the filesystem provider uses, so the prefix compare cannot miss.
+$resolvedRoot = (Resolve-Path -LiteralPath $RepoRoot -ErrorAction SilentlyContinue)
+if (-not $resolvedRoot) {
+    Write-Host "Repo root: $RepoRoot"
+    Write-Host "UNRESOLVABLE ROOT - this gate measured NOTHING. CANNOT VALIDATE." -ForegroundColor Yellow
+    Write-Host "  -RepoRoot does not resolve to a path that exists." -ForegroundColor Yellow
+    Write-Host "  Nothing was walked and nothing was compiled. This is NOT a pass." -ForegroundColor Yellow
+    Write-Host "  Reporting NOT VERIFIED. See #3894." -ForegroundColor Yellow
+    exit 2
+}
+$rootPrefix = $resolvedRoot.ProviderPath.TrimEnd('\', '/')
+
+Write-Host "Repo root: $rootPrefix"
 
 # Check the toolchain BEFORE walking the tree. Without this the gate reports
 # "N file(s) failed validation" for every file it never actually compiled,
@@ -77,26 +110,31 @@ if (-not (Get-Command bicep -ErrorAction SilentlyContinue)) {
     exit 2
 }
 
-# Paths are matched RELATIVE TO $RepoRoot, never as absolute strings. That one
-# detail is the whole of the #3894 worktree fix: the exclusions below describe
-# where a file sits INSIDE the repo, so they must not be evaluated against the
-# path the repo itself happens to live at.
+# Paths are matched RELATIVE TO the resolved root, never as absolute strings.
+# That one detail is the whole of the #3894 worktree fix: the exclusions below
+# describe where a file sits INSIDE the repo, so they must not be evaluated
+# against the path the repo itself happens to live at.
 #
-# Matching the absolute path meant that when $RepoRoot WAS
+# Matching the absolute path meant that when the root WAS
 # .claude/worktrees/agent-*, every file under it carried ".claude\worktrees" in
 # its own FullName, the walk excluded all 351 of them, and the gate exited 2
 # having measured nothing - from the one place every agent in this repo works.
 # A guard that scans an empty set is not passing or failing, it is blind.
-$rootPrefix = $RepoRoot.TrimEnd('\', '/')
+$script:unstrippablePaths = @()
 
 function Get-RelativePath {
     param([string]$FullName)
-    # Case-insensitive: a -RepoRoot supplied with different casing than the
-    # filesystem would otherwise fail to strip, leaving an absolute path and
-    # resurrecting the exact bug above.
     if ($FullName.StartsWith($rootPrefix, [StringComparison]::OrdinalIgnoreCase)) {
         return $FullName.Substring($rootPrefix.Length).TrimStart('\', '/')
     }
+    # Unreachable while $rootPrefix is the RESOLVED provider path of the very
+    # directory we walked - which is why the walk below uses $rootPrefix and not
+    # the raw parameter. It is recorded rather than swallowed because the old
+    # behaviour here was `return $FullName`, and returning an absolute path from
+    # a function whose callers assume a relative one is precisely how #3894
+    # produced a confident verdict over an empty set. If this ever fires, the
+    # gate refuses to report at all.
+    $script:unstrippablePaths += $FullName
     return $FullName
 }
 
@@ -114,13 +152,37 @@ function Get-RelativePath {
 # nothing in front of it.
 $excludePattern = 'node_modules|\.venv|dbt-env|\.claude[\\/]worktrees|(^|[\\/])temp[\\/]'
 
-$allBicepFiles = @(Get-ChildItem -Path $RepoRoot -Filter "*.bicep" -Recurse -File)
-$bicepFiles = @($allBicepFiles | Where-Object { (Get-RelativePath $_.FullName) -notmatch $excludePattern })
-$excludedCount = $allBicepFiles.Count - $bicepFiles.Count
+# Walk $rootPrefix, NOT the raw -RepoRoot: Get-ChildItem echoes the spelling it
+# was given into each FullName, so walking the resolved path is what guarantees
+# the prefix compare in Get-RelativePath can succeed.
+$allBicepFiles = @(Get-ChildItem -Path $rootPrefix -Filter "*.bicep" -Recurse -File)
+
+# Relative path computed ONCE per file, and carried alongside it, so the filter
+# and the per-file log line cannot disagree about what a file is called.
+$candidates = @($allBicepFiles | ForEach-Object {
+    [pscustomobject]@{ File = $_; Rel = (Get-RelativePath $_.FullName) }
+})
+$bicepFiles = @($candidates | Where-Object { $_.Rel -notmatch $excludePattern })
+$excludedCount = $candidates.Count - $bicepFiles.Count
 
 # The POPULATION, on every run, pass or fail. A verdict quoted without the size
 # of the set it was computed over is not a measurement.
 Write-Host "Population: $($bicepFiles.Count) Bicep file(s) to compile ($($allBicepFiles.Count) found, $excludedCount excluded)"
+
+# If ANY path could not be made relative, the exclusion filter saw an absolute
+# path for it and the population above is not trustworthy in either direction.
+# Refuse to report rather than emit a verdict over a set that was filtered by
+# the wrong string.
+if ($script:unstrippablePaths.Count -gt 0) {
+    Write-Host "PREFIX MISMATCH - the population above was filtered on ABSOLUTE paths and is not trustworthy." -ForegroundColor Yellow
+    Write-Host "  Root prefix: $rootPrefix" -ForegroundColor Yellow
+    Write-Host "  $($script:unstrippablePaths.Count) file(s) did not start with it, e.g.:" -ForegroundColor Yellow
+    foreach ($p in ($script:unstrippablePaths | Select-Object -First 3)) {
+        Write-Host "    $p" -ForegroundColor Yellow
+    }
+    Write-Host "  This is the #3894 shape. Reporting NOT VERIFIED, not a pass and not a failure." -ForegroundColor Yellow
+    exit 2
+}
 
 # Zero files is COULD NOT RUN, not a pass - and it gets its OWN message, distinct
 # from the missing-toolchain one, because the two are diagnosed differently.
@@ -132,7 +194,7 @@ Write-Host "Population: $($bicepFiles.Count) Bicep file(s) to compile ($($allBic
 # cases: an empty tree, versus a filter that ate everything.
 if ($bicepFiles.Count -eq 0) {
     Write-Host "ZERO POPULATION - this gate measured NOTHING. CANNOT VALIDATE." -ForegroundColor Yellow
-    Write-Host "  Walked:             $RepoRoot" -ForegroundColor Yellow
+    Write-Host "  Walked:             $rootPrefix" -ForegroundColor Yellow
     Write-Host "  .bicep files found: $($allBicepFiles.Count)" -ForegroundColor Yellow
     Write-Host "  Excluded by filter: $excludedCount" -ForegroundColor Yellow
     Write-Host "  Left to compile:    0" -ForegroundColor Yellow
@@ -163,12 +225,13 @@ $scratchDir = Join-Path ([System.IO.Path]::GetTempPath()) ("loom-validate-bicep-
 New-Item -ItemType Directory -Path $scratchDir -Force | Out-Null
 $scratchOut = Join-Path $scratchDir 'build.json'
 
-foreach ($file in $bicepFiles) {
-    $relativePath = Get-RelativePath $file.FullName
+try {
+foreach ($entry in $bicepFiles) {
+    $relativePath = $entry.Rel
     Write-Host "  Validating: $relativePath" -NoNewline
 
     try {
-        $output = bicep build $file.FullName --outfile $scratchOut 2>&1
+        $output = bicep build $entry.File.FullName --outfile $scratchOut 2>&1
         if ($LASTEXITCODE -eq 0) {
             Write-Host " [PASS]" -ForegroundColor Green
         } else {
@@ -180,10 +243,14 @@ foreach ($file in $bicepFiles) {
         $errors += @{ File = $relativePath; Error = $_.Exception.Message }
     }
 }
-
-# Our own scratch directory, holding only files we created. Nothing in the repo
-# is touched, and no verdict depends on this succeeding.
-Remove-Item $scratchDir -Recurse -Force -ErrorAction SilentlyContinue
+} finally {
+    # finally, not straight-line: a run interrupted mid-compile (Ctrl-C, or the
+    # operator killing a 351-file sweep) otherwise leaks its scratch directory in
+    # %TEMP% forever. Observed during review of #3901 as a stranded
+    # loom-validate-bicep-315dc9142b. Our own directory, holding only files we
+    # created - no verdict depends on this succeeding.
+    Remove-Item $scratchDir -Recurse -Force -ErrorAction SilentlyContinue
+}
 
 Write-Host ""
 if ($errors.Count -gt 0) {

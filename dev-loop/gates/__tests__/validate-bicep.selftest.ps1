@@ -37,10 +37,18 @@
           genuinely measured (population 1). Without the population half, a gate
           that compiled nothing would also leave the file alone.
       N2  the gate writes NOTHING into the tree: the file inventory after the
-          run is byte-for-byte the inventory before it.
+          run is byte-for-byte the inventory before it - asserted only once the
+          population is confirmed non-zero, for the same reason.
       N3a from the PRIMARY root, a nested .claude/worktrees copy is EXCLUDED.
       N3b from INSIDE that same worktree, its files are INCLUDED. (0 before the
           fix - the defect, direct.)
+      N3c the SAME root spelled with FORWARD SLASHES. Join-Path always emits
+          backslashes, so this input has to be built by string surgery - which
+          is why the first fix for #3894 closed only the casing variant of the
+          prefix-strip and this suite could not see the separator variant.
+      N3d a RELATIVE root ('.'), the same failure reached another way.
+      N3e a root that does not EXIST is diagnosed as unresolvable, not silently
+          reported as an empty tree.
       N4  a root with no .bicep at all: exit 2, and the output says ZERO
           POPULATION rather than anything that reads as a pass.
       N5  a broken .bicep: exit 1. Redirecting compiler output to a scratch file
@@ -176,8 +184,18 @@ try {
         Add-Case 'N1 a committed sibling .json survives a MEASURED compile' 'Pass' "population 1, exit 0, sentinel intact"
     }
 
-    if ($before -eq $after) {
-        Add-Case 'N2 the gate writes NOTHING into the tree it judges' 'Pass' 'file inventory + SHA256 identical before and after'
+    # The population precondition is N2's whole claim to being a control. Without
+    # it, "the tree did not change" is trivially true of a gate that compiled
+    # NOTHING - which is exactly the vacuous-pass shape this suite exists to
+    # catch, and exactly what happened when these cases were first run against
+    # the pre-fix gate: every synthetic tree sits under %TEMP%, whose \Temp\
+    # segment that gate's absolute-path filter excluded, so N2 passed over a
+    # population of zero while N1 correctly failed. A control that cannot fail at
+    # zero population is not a control.
+    if (-not $measured) {
+        Add-Case 'N2 the gate writes NOTHING into the tree it judges' 'Fail' "population was not 1, so an unchanged tree proves nothing - the gate may simply have compiled nothing. exit $($n1.ExitCode). Output: $($n1.Output)"
+    } elseif ($before -eq $after) {
+        Add-Case 'N2 the gate writes NOTHING into the tree it judges' 'Pass' 'file inventory + SHA256 identical before and after, over a population of 1'
     } else {
         Add-Case 'N2 the gate writes NOTHING into the tree it judges' 'Fail' "the tree changed across the run.`nBEFORE:`n$before`nAFTER:`n$after"
     }
@@ -216,6 +234,54 @@ try {
         Add-Case 'N3a/N3b each root sees its OWN files and only its own' 'Pass' 'the same file set, walked from two roots, yields the correct population from each'
     } else {
         Add-Case 'N3a/N3b each root sees its OWN files and only its own' 'Fail' 'one half of the pair did not report a population of 1; the exclusion is not being evaluated relative to the root'
+    }
+
+    # =======================================================================
+    # N3c - the SAME root, spelled with FORWARD SLASHES.
+    #
+    # This case exists because the first fix for #3894 closed the casing variant
+    # of the prefix-strip and left the separator variant wide open, and this
+    # suite could not see it: Join-Path ALWAYS emits backslashes, so the harness
+    # was structurally incapable of constructing the failing input. The bad root
+    # has to be built by string surgery, which is why this case looks different
+    # from its neighbours - that difference is the point, not an inconsistency.
+    #
+    # Forward slashes are the NATURAL spelling here, not an exotic one: an agent
+    # inside a worktree running `validate-all.ps1 -RepoRoot "$(pwd)"` from Git
+    # Bash produces exactly this, and against the real worktree it measured
+    # Population: 0 (351 found, 351 excluded), RC=2 - #3894 in full.
+    #
+    # A relative root is the same failure mode reached a different way, so both
+    # spellings are asserted.
+    # =======================================================================
+    $nestedFwd = $nested.Replace('\', '/')
+    $n3c = Invoke-Gate -Root $nestedFwd -WorkingDirectory $nested
+    if ($n3c.ExitCode -eq 0 -and $n3c.Output -match 'Population: 1 Bicep file\(s\) to compile \(1 found, 0 excluded\)') {
+        Add-Case 'N3c the same root spelled with FORWARD SLASHES still measures' 'Pass' 'population 1, exit 0'
+    } elseif ($n3c.Output -match 'ZERO POPULATION') {
+        Add-Case 'N3c the same root spelled with FORWARD SLASHES still measures' 'Fail' 'the root prefix failed to strip on the separator, so every file was filtered as an ABSOLUTE path and excluded. #3894 has regressed through a different spelling of the root.'
+    } else {
+        Add-Case 'N3c the same root spelled with FORWARD SLASHES still measures' 'Fail' "expected exit 0 and 'Population: 1 ... (1 found, 0 excluded)', got exit $($n3c.ExitCode). Output: $($n3c.Output)"
+    }
+
+    # N3d - a RELATIVE root, resolved against the child's working directory.
+    $n3d = Invoke-Gate -Root '.' -WorkingDirectory $nested
+    if ($n3d.ExitCode -eq 0 -and $n3d.Output -match 'Population: 1 Bicep file\(s\) to compile \(1 found, 0 excluded\)') {
+        Add-Case 'N3d a RELATIVE root still measures' 'Pass' 'population 1, exit 0'
+    } else {
+        Add-Case 'N3d a RELATIVE root still measures' 'Fail' "expected exit 0 and 'Population: 1 ... (1 found, 0 excluded)', got exit $($n3d.ExitCode). Output: $($n3d.Output)"
+    }
+
+    # N3e - a root that does not exist is NOT a population verdict.
+    # Without this, the Resolve-Path added for N3c/N3d could throw or silently
+    # produce a null prefix, and the gate would fall through to a ZERO POPULATION
+    # message that misdiagnoses a typo'd root as an empty tree.
+    $missingRoot = Join-Path $tempRoot 'no-such-root-here'
+    $n3e = Invoke-Gate -Root $missingRoot -WorkingDirectory $tempRoot
+    if ($n3e.ExitCode -eq 2 -and $n3e.Output -match 'UNRESOLVABLE ROOT') {
+        Add-Case 'N3e a nonexistent root is diagnosed as UNRESOLVABLE, not as empty' 'Pass' 'exit 2, named distinctly from ZERO POPULATION'
+    } else {
+        Add-Case 'N3e a nonexistent root is diagnosed as UNRESOLVABLE, not as empty' 'Fail' "expected exit 2 and 'UNRESOLVABLE ROOT', got exit $($n3e.ExitCode). Output: $($n3e.Output)"
     }
 
     # =======================================================================
