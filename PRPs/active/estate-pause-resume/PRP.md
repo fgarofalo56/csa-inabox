@@ -10,6 +10,8 @@ stay PAUSED unless actively validating.**
 
 ## 1. The money — what we are actually attacking
 
+*(measured 2026-08-22; costs DERIVED, never billed — see the caveat below)*
+
 Derived Commercial cost, **~$9,400–9,900/month** across **604 resources** in two
 subscriptions (admin-plane + DLZ).
 
@@ -104,14 +106,16 @@ capacity for you. A pause you cannot reverse is not a pause; it is an outage.
 Synapse pools, ADX, Redis, PostgreSQL Flexible, VMs) in the reachable subscriptions:
 
 - **11** are in Loom resource groups (`rg-csa-loom-admin-centralus`, `rg-csa-loom-dlz-default-centralus`)
-- **12** are in **10 unrelated resource groups**: `rg-limitlessdata-blog`, `sentinel-dev-rg`,
-  `atlasdiag-rg`, `rg-atlas-renderix-dev-eastus2`, `rg-forzelite-dev-eastus2`,
-  `rg-ghrunner-nasa-poc`, `rg-sandbox-demo-east2`, `rg-simplechat-dev`, `artemis-poc-rg`,
-  `rg-dlz-aiml-stack-dev`
+- **12** are in **10 unrelated resource groups** carrying non-Loom workloads that this
+  repo neither owns nor documents. They are deliberately not characterised or enumerated
+  here — this is a public repo, and their identity is not load-bearing to the design. The
+  one exception is `rg-dlz-aiml-stack-dev`, named below because it is **mixed** and that
+  fact drives R-SCOPE-2b; it is already documented as such in shipped source
+  (`lib/estate/pause-inventory.ts:27`).
 
-**A subscription-scoped pause would take down the operator's blog, a Sentinel dev estate,
-two Atlas estates, a NASA PoC runner and a SAP HANA sandbox.** This is the single easiest
-way for this feature to cause a serious incident.
+**A subscription-scoped pause would take down unrelated third-party workloads running in
+those groups.** This is the single easiest way for this feature to cause a serious
+incident.
 
 ### R-SCOPE-1 — never scope by subscription
 The pause set is an **explicit inventory**, never "everything in the subscription".
@@ -250,11 +254,23 @@ vanished while paused.
 backing service's compute state via real ARM, already sits in the "Capacity & cost" nav
 group, and has the primitives (`ServiceCard`, `ScalePicker`, `CostPreview`).
 
-> **This is partly a vaporware fix, not a greenfield build.**
-> `apps/fiab-console/app/admin/capacity/page.tsx:441` **already promises this feature in
-> prose** — *"most engines can pause… so idle compute stops billing while data persists"* —
-> and links to `/admin/scaling`, which has **no pause verb**. Under `no-vaporware.md` that
-> is a live violation today.
+> **This is partly a vaporware fix, not a greenfield build — and it is ≥4 sites, not 1.**
+> Measured 2026-08-23, `/admin/scaling` has **zero** pause verbs
+> (`grep -cE "action: *'(pause|stop|suspend)'" app/admin/scaling/page.tsx` → 0), while
+> **both pages W5 owns promise pausing in prose**:
+>
+> | File | pause-prose lines | The load-bearing promises |
+> |---|---:|---|
+> | `app/admin/capacity/page.tsx` | **9** | `:441` *"most engines can pause… so idle compute stops billing while data persists"* (and links to `/admin/scaling`); `:445` *"Use \"Scale & manage\" below to change SKU / pause / resume in place"*; `:515` *"Change SKUs, pause / resume, scale"*; `:519` *"pause or resume it… applied in place via a real Azure REST call, no portal hand-off"*; `:574` a Copilot example reading *"pause the dev SQL pool"* |
+> | `app/admin/scaling/page.tsx` | **6** | `:747` `:750` `:751` (Fabric capacity pause); `:756` `:759` `:760` (Synapse pool *"pause the pool when idle"*) |
+>
+> Under `no-vaporware.md` every line that promises a **Loom** pause control is a live
+> violation today; the lines that merely describe **Azure's** pause semantics are true
+> statements and stay. W5 owns **both** files, so an implementer who fixes only `:441`
+> leaves the rest live **on the page they are editing**. Audit the whole census, not one
+> line — the reproducible set is `grep -niE "paus" app/admin/capacity/page.tsx
+> app/admin/scaling/page.tsx` (15 lines as of 2026-08-23), triaged into *promises Loom
+> must now honour* vs *descriptions of Azure behaviour*.
 
 **Estate state badge** on `/admin/readiness` — per `deploy-integrity.md` R3 that is where
 estate truth belongs, and it is the only page rendering both clouds.
@@ -272,9 +288,27 @@ from `lib/api/route-toolkit.ts`. That file documents why: `enforceCapability` re
 and on 2026-08-07 deleting that one line left **three** route guards still green.
 
 **Destructive-action protection:** there is **no per-route CSRF token** in this repo; the
-established guard is a **typed/echoed confirmation** in the body. Follow
-`admin/scaling/adx/route.ts` (`confirm: '<clusterName>'`) and `admin/updates/apply/route.ts`
-(`confirmTag` → 409 on drift). **HIBERNATE must require a typed confirmation.**
+established guard is a **typed/echoed confirmation** in the body. The two existing
+exemplars are **NOT equivalent, and only one of them is safe to copy** (measured
+2026-08-23):
+
+| Route | Shape | Field omitted entirely |
+|---|---|---|
+| `admin/scaling/adx/route.ts:101` | `(body?.confirm \|\| '').trim() !== cfg.clusterName` | **400 — fails CLOSED** ✅ |
+| `admin/updates/apply/route.ts:281` and `:349` | `if (body.confirmTag && body.confirmTag !== …)` | **proceeds — fails OPEN** ❌ |
+
+`confirmTag` is **optional by design** — the route's own comment at `:261` reads
+`// Optional:`, and its type is `confirmTag?: string` at `:263`. The `&&` short-circuits
+when the field is absent, so the guard is skipped and the mutation runs. That is a
+defensible choice for a *tag-drift* check on a re-roll; it is **not** a confirmation
+gate, and it must never be described as one.
+
+> **MANDATORY for HIBERNATE — use the ADX fail-closed shape, never the `updates/apply`
+> shape.** HIBERNATE **deletes** Azure Firewall, Front Door, Redis, Bastion and VPN
+> Gateway (§9, §10 item 7). A confirmation that an omitted field silently satisfies is
+> equivalent to no confirmation at all. Read the confirmation with a defaulting coercion
+> and compare it to the required literal — `(body?.confirm || '').trim() !== expected`
+> ⇒ reject — so that **absent, empty, and wrong all reject on the same branch.**
 
 **Actuation, Commercial:** direct ARM via the console UAMI (`lib/azure/arm-client.ts`,
 `uamiArmCredential()`). **Every primitive already exists** — `synapse-dev-client.ts:1262/1275`,
@@ -289,10 +323,16 @@ exists because of CodeQL alert #368, where a caller-supplied
 `?workflow=../../../../user/repos` walked out of the workflows path carrying
 `LOOM_GITHUB_ACTIONS_TOKEN`.
 
-**Closest existing precedent to copy wholesale:** `/admin/updates` →
+**Closest existing precedent for the ORCHESTRATION shape:** `/admin/updates` →
 `POST /api/admin/updates/apply`. One admin button, real multi-resource ARM mutation,
-`withDlzAccess` on both GET and POST, a `confirmTag` drift guard returning 409, dual audit,
-and a pipeline-dispatch fallback returning **202 with a `monitorUrl`**. That is the shape.
+`withDlzAccess` on both GET and POST, dual audit, and a pipeline-dispatch fallback
+returning **202 with a `monitorUrl`**. Copy *that* structure.
+
+> **Do NOT copy its confirmation.** Its `confirmTag` guard is fail-open (above), and it
+> guards a re-roll, not a delete. Take the confirmation from
+> `admin/scaling/adx/route.ts:101` instead. "Copy wholesale" was the original wording
+> here and it was wrong — it would have propagated the bypass into the one tier of this
+> feature that destroys resources.
 
 **Audit:** both layers — `auditLogContainer()` (Cosmos) and `emitAuditEvent()`
 (`lib/admin/audit-stream.ts`).
@@ -317,11 +357,20 @@ Boundary discriminator is `lib/azure/cloud-boundary.ts` — `detectLoomCloud()` 
 deliberately; only `LOOM_CLOUD_BOUNDARY` distinguishes them.** Gov workflows authenticate
 with an **SP client secret**, not OIDC (the `id-token: write` present is for cosign).
 
-**Measured reality check on "parity":** GCC-High exists and is rolled daily, but its
+**Measured reality check on "parity" (measured 2026-08-22):** GCC-High exists and is
+rolled daily, but its
 full-deploy lane has failed its last 3 runs. **IL5 has never been deployed — `total_count: 0`,
 not once.** GCC's workflow is disabled at GitHub level. So parity for IL5 currently means
 parity with nothing; do not block Commercial delivery on an estate that does not exist, and
 say so plainly rather than implying coverage.
+
+> **Re-measure before planning against this.** Lane state moves fast: #3880 (merged
+> 2026-08-22T20:06:18Z) and #3888 (merged 2026-08-23T03:21:31Z) both changed the Gov
+> deploy lanes after the reading above — #3888 put the ADX preflight on
+> `deploy-fiab-il5.yml:490`. **Merged is not deployed** (`deploy-integrity.md` R2): IL5
+> still has zero runs, so that preflight is present in the file and unproven on an
+> estate. Current state:
+> `gh run list --workflow deploy-fiab-il5.yml --limit 5 --json conclusion,createdAt`.
 
 ---
 
@@ -374,7 +423,7 @@ declares what it owns; anything not listed is out of bounds and must be routed.
 | **W5** | UI + progress/readiness model | `apps/fiab-console/app/admin/scaling/page.tsx`, `app/admin/capacity/page.tsx`, `app/admin/readiness/**` | `pnpm next build` · **G1 in-browser click-walk** (tsc+vitest are explicitly NOT evidence) | W4 |
 | **W6** | Reconciler ACA job (invariant + idle auto-pause) | `platform/fiab/bicep/modules/admin-plane/estate-pause-reconciler-job.bicep` *(new)*, `apps/loom-estate-reconciler/**` *(new)*, **+ a declared edit window on `modules/admin-plane/main.bicep`** | `make validate-bicep` · compiled-template sync · a test proving a deploy-in-flight makes the reconciler BACK OFF | W2 |
 | **W7** | Gov path — allow-listed dispatch | `apps/fiab-console/lib/setup/deploy-workflows.ts`, `.github/workflows/estate-pause-gov.yml` *(new)* | `actionlint` · a test proving a workflow name NOT in the allowlist is REFUSED (CodeQL #368 regression) | W2 |
-| **W8** | HIBERNATE tier | extends W2/W3 only — **no new file ownership** | typed-confirmation test · delete/redeploy round-trip in a scratch RG | W2, W3, W5 |
+| **W8** | HIBERNATE tier | extends W2/W3 only — **no new file ownership** | typed-confirmation test with **THREE arms — (a) correct value ⇒ proceeds, (b) WRONG value ⇒ rejects, (c) field OMITTED ENTIRELY ⇒ rejects.** Arm (c) is the one that matters: it is the arm `admin/updates/apply` would fail. A suite with only (a)+(b) is NOT sufficient · delete/redeploy round-trip in a scratch RG | W2, W3, W5 |
 
 ### Lanes
 
@@ -426,7 +475,14 @@ A guard that stays green when its subject is mutated is the defect, not the fix.
   (the Synapse 2–3 min lie window).
 - A capacity-failure resume produces `RESUME_FAILED` and a fallback attempt — **never a
   false green**.
-- `/admin/capacity`'s existing prose promise is no longer a `no-vaporware.md` violation.
+- **Every** pause/resume prose promise on **both** W5-owned pages is honoured or removed
+  — `app/admin/capacity/page.tsx` **and** `app/admin/scaling/page.tsx`, not just
+  `capacity:441`. Re-run the census (`grep -niE "paus"` over both files; 15 lines as of
+  2026-08-23), triage each into *a promise Loom must honour* vs *a true description of
+  Azure behaviour*, and record the triage. Satisfying one line and leaving the other
+  fourteen is an explicit non-goal — it is how this DoD would be gamed.
+- **HIBERNATE's typed confirmation rejects an OMITTED field, not merely a wrong one**
+  (§7). A confirmation that `{}` satisfies is not a confirmation.
 
 ## 12. Open items
 

@@ -1,17 +1,37 @@
 # Wave 0 triage verdicts — 2026-08-22
 
 Two triage agents, read-only, measured not assumed. No issue comments posted, no
-issues closed, no files edited by the triage pass (public-repo redaction review
-pending — deviation from master §5 recorded in the completion note).
+issues closed, no files edited by the triage pass.
+
+**Redaction:** the public-repo redaction review is **complete** (2026-08-23). Third-party
+estate characterizations and the non-Loom resource-group names that encoded them have been
+removed from this file and from `PRPs/active/estate-pause-resume/PRP.md`; non-Loom
+resources are referred to generically. A hard scan for GUIDs, ARM resource ids, emails,
+key-shaped strings and IPs is clean.
+
+**As-of dates.** Every measured claim below carries the date it was measured. Sections
+1, 2, 4, 5, 7 and 8 were measured **2026-08-22**; corrections applied on **2026-08-23**
+are marked inline. A measurement without a date is a bug — see §12.
 
 ---
 
 ## 1. Headline corrections to the PRP itself
 
-1. **The master PRP §4 and L0 §4 are factually wrong about #3880.** Both say #3449
-   was "fixed in PR #3880" in the past tense. **PR #3880 is OPEN, not merged**, and
-   `deploy-fiab-gcch` failed again today (run `32567019770`) — its **9th** consecutive
-   failure, not the 6 the PRP states.
+*(measured 2026-08-22; item 1 re-measured and superseded 2026-08-23)*
+
+1. **The master PRP §4 and L0 §4 are factually wrong about #3880 — but not in the way
+   this section originally said.** Both say #3449 was "fixed in PR #3880" in the past
+   tense, and cite **6** daily runs.
+   - **At triage time (2026-08-22, ~19:00Z) #3880 was OPEN**, and `deploy-fiab-gcch`
+     had just failed again (run `32567019770`) — its **9th** consecutive failure, not 6.
+   - **#3880 MERGED at 2026-08-22T20:06:18Z**, about an hour after that measurement and
+     before this file was committed. **The "is OPEN" wording this section originally
+     carried was already stale on arrival** and is corrected here.
+   - What remains wrong in the source documents is the **run count (9, not 6)** and the
+     **tense** — per `deploy-integrity.md` R2 a merge is not a fix. #3449 stays open
+     until a Gov Actions run proves it: **merged, not deployed.**
+   - Superseding measurement: **#3888 merged 2026-08-23T03:21:31Z**, which carried the
+     ADX preflight onto the remaining lanes (see §7 item 3).
 
 2. **Estate moved mid-session, and a second writer is implicated.**
    - 19:00Z estate = `7ab04a9e` (4 behind main)
@@ -20,8 +40,13 @@ pending — deviation from master §5 recorded in the completion note).
      for `afcf3e6b` was still `in_progress`. **So something other than a successful
      roll put `bfd67ed1` on the estate.**
    - `deploy-fiab-commercial.yml` has **0** `concurrency` blocks across 2364 lines
-     (positive control: `jobs:` = 1); `loom-roll-and-validate.yml` has 3. The two
-     writers share no concurrency group.
+     (positive control: `jobs:` = 1). `loom-roll-and-validate.yml` has **exactly 1**
+     (line 162) — *corrected 2026-08-23; this section originally said 3.* The other two
+     hits of the string are **comments**, and one of them reads "This workflow had **NO**
+     concurrency group", i.e. it describes the state BEFORE a fix. Counting comment
+     lines as configuration is the error; the file is unchanged since 2026-08-17, so it
+     was 1 at measurement time too. **The conclusion is unaffected and in fact
+     strengthened: the two writers share no concurrency group.**
    - The marker's `stamp` (18:36Z) **precedes** the roll — so `stamp` ≠ roll time.
      Diffing stamps to infer "what is serving" gives a wrong answer. This is #3676's
      RECENCY-vs-SERVING confusion in a second guise.
@@ -51,6 +76,8 @@ pending — deviation from master §5 recorded in the completion note).
 
 ## 3. Verdict counts
 
+*(measured 2026-08-22)*
+
 | lane | real | stale | already-fixed | UNVERIFIED | not-a-defect |
 |---|---|---|---|---|---|
 | **L0** (62) | 41 | 7 | 1 | 9 | 4 |
@@ -72,6 +99,8 @@ L1 not-a-defect → L8 (3): #3776 #3777 #3354
 ---
 
 ## 4. THE L4 UNBLOCK — L1's declared `app/api/**` ownership list
+
+*(measured 2026-08-22; the Tier 1b importer count re-measured 2026-08-23)*
 
 Master §2 states L4 cannot open until this is published. It is published here.
 
@@ -107,8 +136,21 @@ app/api/items/_lib/item-crud.ts                                 #3501 #3706
 
 L4's charter says it owns "the rest of `app/api/**`". `_lib/item-crud.ts` is under
 `app/api/` but is **not** a `route.ts`, so a literal reading hands it to L4 — while
-two L1 true-security fixes must edit it. **It is imported directly or transitively
-by 173 route files.** L1 owns it explicitly; L4 must be told to keep off it.
+two L1 true-security fixes must edit it. **It is imported DIRECTLY by 271 route files**
+(*re-measured 2026-08-23; this originally said 173*). Transitive ≥ direct ≥ 271.
+L1 owns it explicitly; L4 must be told to keep off it.
+
+> **How the 173 happened, because the same mistake is easy to repeat.** Counting only
+> the path-alias form `from '@/app/api/items/_lib/item-crud'` yields **48**. The other
+> **223** importers use *relative* specifiers (`../../../_lib/item-crud` ×119,
+> `../../_lib/item-crud` ×28, `../../items/_lib/item-crud` ×26, and 7 further shapes).
+> A needle keyed to one **spelling** of the import undercounts a blast radius keyed to
+> the **file**. Reproduce with the path-agnostic form:
+>
+> ```bash
+> grep -rlE "from ['\"][^'\"]*_lib/item-crud['\"]" app --include=route.ts | wc -l   # 271
+> find app/api -name route.ts | wc -l                                              # 1681 (population)
+> ```
 
 ### Tier 3 — L1 explicitly RELEASES these
 
@@ -125,6 +167,10 @@ Verified needing **no** route.ts: #3717 #3740 #3547 #3512 #3525 #2622 #3741 #354
 ---
 
 ## 5. Batches
+
+*(measured 2026-08-22. **Batch A's sequencing is partly consumed:** #3880 merged
+2026-08-22T20:06:18Z and #3888 merged 2026-08-23T03:21:31Z — re-derive the remaining
+Batch A order before starting it, and see §7 item 3.)*
 
 ### L0 — 4 batches
 
@@ -190,6 +236,8 @@ stall silently unless routed.
 
 ## 6. Needs the operator's hands (no agent can do these)
 
+*(measured 2026-08-22)*
+
 - **#3429** — `deploy-copilot-function`, **9 consecutive failures**, last success
   2026-06-10. Root cause is a **secret repoint**, not code: the workflow documents a
   DLZ subscription; the run authenticates to a DMLZ one.
@@ -203,18 +251,38 @@ stall silently unless routed.
 
 ## 7. Recommend filing (not in the 261)
 
-1. **`workspace-access.ts:490` (`listAccessibleWorkspaces`)** — the last unfiled
+*(measured 2026-08-22; items 1 and 3 re-measured 2026-08-23)*
+
+1. **`workspace-access.ts:490` (`listAccessibleWorkspaces`)** — an unfiled
    executable copy of the #3823 shape. `if (callerTid && doc.tid && doc.tid !== callerTid) continue;`
    → a tid-less session gets **no filtering at all**. Feeds `items/by-type:121`,
    `workspaces/route.ts:27`, `running-workloads:47`, `catalog-search.ts:121`. It sits
    in the guard's `NON_AUTHORIZERS` with a reason that is true about it not being an
    authorizer and **silent about whether its filter is sound** — the "allowlist reason
    true of a sibling branch" shape. With #3845 proving a live generator, it is reachable.
-   Measured: truthiness-guarded tid comparisons — live estate 3, current main 2.
+   Measured: truthiness-guarded tid comparisons — **current main 3**, *not the 2 this
+   line originally claimed* (re-measured 2026-08-23).
+
+   > **The count was keyed to a spelling, not to a shape.** A shape-keyed census —
+   > `(\w+)\s*\??\.tid\s*&&\s*\1\s*\??\.tid\s*!==` over **5,693** files under
+   > `lib/`, `app/`, `scripts/` — returns **3 executable**, 2 comment, 3 test:
+   > `lib/auth/workspace-access.ts:335`, `lib/auth/workspace-access.ts:490`, and
+   > **`lib/auth/item-access.ts:177`** (`if (wsDoc?.tid && wsDoc.tid !== tid) return null;`),
+   > which the original spelling-keyed count missed because its receiver is
+   > optional-chained and its comparand is a bare `tid`. **File the third site too.**
+   > The family may extend further to non-`tid` fields of the same shape — an
+   > optional field truthiness-guarding its own equality check. That wider sweep is
+   > **filed separately and is out of scope for this document.**
 2. **`loom-drift-check` is red** (5 consecutive, 3 weeks) — no issue tracks it.
-3. **IL5 carries #3449's defect unmitigated** — `deploy-fiab-il5.yml` is active,
+3. ~~**IL5 carries #3449's defect unmitigated** — `deploy-fiab-il5.yml` is active,
    `adxEnabled = true`, has an `az deployment sub what-if`, **no ADX preflight, zero
-   runs ever.** #3786 covers Commercial only.
+   runs ever.** #3786 covers Commercial only.~~
+   **WITHDRAWN 2026-08-23 — this is now false against the tree.** #3888 (merged
+   2026-08-23T03:21:31Z) added the preflight to the remaining lanes:
+   `deploy-fiab-il5.yml:490` = `- name: ADX preflight — a stopped cluster cannot take
+   its principal assignments (#3883)`. What survives is only the narrower, still-true
+   part: **IL5 has zero runs ever**, so the preflight there is unexercised — present in
+   the file, unproven on an estate. Do not file this as written.
 4. **No CI ratchet catches an ADX-preflight re-inversion** (see §8).
 5. **#2678 §5 and #3110 §5 are the same audience-separation defect** — the sign-in
    MSAL app doubling as the Iceberg catalog audience. Cross-link or two lanes fix it twice.
@@ -222,6 +290,10 @@ stall silently unless routed.
 ---
 
 ## 8. PR #3880 — independent review: APPROVE
+
+*(review measured 2026-08-22, pre-merge. **#3880 MERGED 2026-08-22T20:06:18Z** — the
+"Merge mechanics" paragraph below is retained as the record of the pre-merge state and
+is no longer actionable.)*
 
 Ordering invariant **satisfied**: preflight moved idx 16 → 11; first ADX *read*
 (`what-if`) is idx 12; steps 0–10 dumped and none touch Kusto. Blast radius is a
@@ -246,13 +318,18 @@ and fails identically.** Do not use it to prove the fix.
 -f allow_existing_hub=true -f keep_resources=true` (real non-destructive
 reconcile-in-place, ~30 min ADX start polling), or the free 10:00 UTC cron on 2026-08-23.
 
-**Merge mechanics:** BEHIND by 2 commits, neither touching this PR's files — update is
-mechanically safe. PR body says "Refs #3449", not "Closes" — correct; #3449 stays open
-until a Gov Actions run proves it. Report as **merged, not deployed** until then.
+**Merge mechanics (as of 2026-08-22, pre-merge — superseded):** BEHIND by 2 commits,
+neither touching this PR's files — update is mechanically safe. PR body says "Refs #3449",
+not "Closes" — correct; #3449 stays open until a Gov Actions run proves it.
+**#3880 has since merged (2026-08-22T20:06:18Z). Report as merged, not deployed** — no
+Gov Actions run has yet proven it on an estate.
 
 ---
 
 ## 9. Issue bodies that are factually wrong and need a correction pass
+
+*(measured 2026-08-22 — every count below is a point-in-time reading and MUST be
+re-measured before acting on it)*
 
 - **#3637** documents a workaround the script now **refuses** (`:151` hard-fails when
   `MIN_REMAINING_DAYS >= SECRET_YEARS*365`, default 1). There is currently *no*
@@ -281,8 +358,38 @@ until a Gov Actions run proves it. Report as **merged, not deployed** until then
 
 ## 11. Still UNVERIFIED (18 total) — the shape of what's missing
 
+*(measured 2026-08-22)*
+
 9 L0 + 8 L1 items rest on evidence no read-only agent can obtain: an authenticated
 live-console read, a G1 browser walk, Azure Monitor metrics, or a Gov Actions receipt.
 All four newly-deployed L1 verdicts (#3843 #3834 #3751 #3747) are **marker-level only**
 — and given #3676 (a deploy that silently reverts rolled images) is itself still real
 with a gate that has **never executed**, re-read the marker before acting on them.
+
+## 12. Why every section above carries a date
+
+*(added 2026-08-23, after an independent review)*
+
+Four claims in the first commit of this file were **stale or non-reproducing within
+hours of being written** — #3880's merge state (§1), the IL5 ADX preflight (§7 item 3),
+the `loom-roll-and-validate` concurrency count (§1), and the `item-crud.ts` importer
+count (§4). Only §2 carried an as-of caption, so nothing signalled which of the others
+had a shelf life.
+
+**A triage document is a photograph, not a fact.** The rules for anything added here:
+
+1. **Every measured section carries the date it was measured.** No date ⇒ treat the
+   claim as unverified, not as true.
+2. **A count is reported with the population it was drawn from and the command that
+   produced it**, so the next reader can re-run it rather than trust it. The `173`
+   → `271` correction happened because the original had neither.
+3. **Prefer a shape to a spelling.** The two count errors in this file were both a
+   needle keyed to one *spelling* (`@/`-alias imports; a single `tid` phrasing) of a
+   population defined by a *shape*. Add a positive control — a known-present instance —
+   so a false zero cannot pass as a clean result.
+4. **Distinguish executable lines from comments and tests.** Both the concurrency
+   count (3 → 1) and the tid census (2 → 3) turned on this. One of the miscounted
+   "concurrency blocks" was a comment reading *"This workflow had NO concurrency
+   group"* — i.e. the text asserted the opposite of what counting it implied.
+5. **A merge is not a deploy** (`deploy-integrity.md` R2). Record merge time and
+   estate state as separate facts; "merged, not deployed" is the honest phrase.
