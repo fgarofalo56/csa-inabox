@@ -338,16 +338,26 @@ export interface CorrelationGroup {
  * An operator-readable narrative for one finding.
  *
  * `evidenceBlock` is built ENTIRELY from the finding's own fields and is present
- * on every narrative, including a fully degraded one. `modelProse` is the only
- * part a model wrote. Keeping them separate is what makes the guarantee
+ * on every narrative, including a fully degraded one. `modelProse`, and the
+ * Critic's model challenges under their own `MODEL CHALLENGES (…)` header, are
+ * the parts a model wrote. Keeping them separate is what makes the guarantee
  * checkable: the evidence a reader sees is never something a model produced.
  */
 export interface Narrative {
   readonly findingId: string;
   readonly headline: string;
-  /** `modelProse` (when present) followed by `evidenceBlock`. */
+  /**
+   * `modelProse` (when present), then the model-authored challenge block (when
+   * the Critic consulted a model), then `evidenceBlock` — so the text always
+   * ENDS on measured facts.
+   */
   readonly body: string;
-  /** Deterministic. Always present. Never model-authored. */
+  /**
+   * Deterministic. Always present. Never model-authored.
+   *
+   * This is a load-bearing claim, not a comment: model challenges were moved
+   * OUT of this field on 2026-08-23 precisely so it stays true.
+   */
   readonly evidenceBlock: string;
   /** `null` when the model was unavailable or its reply was rejected. */
   readonly modelProse: string | null;

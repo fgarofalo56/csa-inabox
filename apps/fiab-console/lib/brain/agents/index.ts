@@ -78,6 +78,8 @@ export {
 export {
   evidenceBlock,
   explain,
+  modelChallengeBlock,
+  MODEL_CHALLENGE_HEADER,
   parseNarrative,
   unverifiedNumbers,
   type ExplainerInput,

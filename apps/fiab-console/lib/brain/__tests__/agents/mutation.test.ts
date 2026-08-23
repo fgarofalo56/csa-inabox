@@ -7,9 +7,24 @@
  * — they are recorded here so a reviewer can reproduce them rather than take
  * them on trust.
  *
- * Baseline for every row: `pnpm vitest run lib/brain` → **RC 0, 14 files, 212
- * tests**. Every mutation was reverted and the baseline re-measured at RC 0
- * before the next was applied.
+ * Baseline for every row: `pnpm vitest run lib/brain` → **RC 0, 16 files, 231
+ * tests** (re-measured 2026-08-23). Every mutation was reverted and the baseline
+ * re-measured at RC 0 before the next was applied.
+ *
+ * ── THE RECORDED BASELINE HAD DRIFTED, AND SO HAVE THE COUNTS ──────────────
+ * This header previously read *"14 files, 212 tests"*. That number was measured
+ * before `cost.test.ts` (5 tests) and this file (9 tests) existed, so it stopped
+ * reproducing the moment they landed — and a reviewer who followed the standing
+ * invitation to reproduce measured 16/226 instead, which is exactly the kind of
+ * small false claim this suite exists to catch. It is corrected here rather than
+ * quietly dropped.
+ *
+ * The consequence is that the `tests failed` column below is ALSO historical: it
+ * was measured against the 14/212 baseline and is NOT re-measured per row here.
+ * Where tests have since been added over the same subject, the count moves. M1
+ * was re-measured on 2026-08-23 at **RC 1, 5 tests across 2 files** — the record
+ * says 4; the fifth is `mutation.test.ts`'s own needle check firing correctly.
+ * Treat the RC column as the load-bearing one and the count column as indicative.
  *
  * ┌────┬──────────────────────────────────────────────┬────────┬──────────────┐
  * │ #  │ mutation                                     │ RC     │ tests failed │
@@ -52,6 +67,15 @@
  * against `management.azure.com` inside `critic.ts` turns
  * `no-azure-mutation.test.ts` red. So the scan is not merely running its own
  * synthetic control — it is looking at the directory's actual source.
+ *
+ * **But M7 chose the one shape that was never blind.** `fetch(` was matched by a
+ * call-shaped pattern; three of the scan's other patterns were anchored on the
+ * keyword `from`, and an independent review on 2026-08-23 walked straight past
+ * all three with `await import('node:https')` — a real ARM DELETE inside an
+ * agent, RC 0, whole suite green. A mutation that confirms the guard you already
+ * believe in is worth less than one aimed at the shape you did not try, and this
+ * row is the local example of that. The evasions are now pinned as controls in
+ * `no-azure-mutation.test.ts`.
  *
  * ── A PREDICTION THAT WAS WRONG, KEPT ──────────────────────────────────────
  * Before running M1 I expected the pipeline suite to fail broadly, since

@@ -14,7 +14,15 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import { evidenceBlock, explain, parseNarrative, unverifiedNumbers } from '@/lib/brain/agents';
+import {
+  evidenceBlock,
+  explain,
+  modelChallengeBlock,
+  MODEL_CHALLENGE_HEADER,
+  parseNarrative,
+  unverifiedNumbers,
+  type Critique,
+} from '@/lib/brain/agents';
 import {
   blindFinding,
   costedFinding,
@@ -139,5 +147,89 @@ describe('explainer — degradation', () => {
     const out = await explain({ findings: [] });
     expect(out.population.blind).toBe(true);
     expect(out.result).toEqual([]);
+  });
+});
+
+/**
+ * R7 — the EVIDENCE header must not describe text a model wrote.
+ *
+ * Until 2026-08-23 `evidenceBlock` announced itself as
+ * `EVIDENCE (measured — not model-authored)` and then appended `c.claim`,
+ * verbatim model output, ~25 lines further down. A review demonstrated it with a
+ * marker string: a fabricated challenge rendered inside a block whose header
+ * told the reader it was not model-authored.
+ *
+ * Every assertion below uses a MARKER rather than a real-looking sentence, so a
+ * pass cannot come from the text happening to be absent for some other reason.
+ */
+describe('explainer — model-authored text never lands under the measured header', () => {
+  const MARKER = 'HALLUCINATED-BY-THE-MODEL-a7f31d';
+
+  function critiqueWithChallenge(): Critique {
+    return {
+      findingId: 'f-1',
+      verdict: 'downgraded',
+      deterministic: [
+        {
+          code: 'no-evidence',
+          severity: 'refutes',
+          statement: 'MEASURED-STATEMENT-b4c8 the evidence chain is empty',
+          establishedBy: 'finding.evidence.nodes',
+        },
+      ],
+      modelChallenges: [
+        { claim: `${MARKER} reached via a private link nobody recorded`, wouldRefute: false, checkable: `${MARKER}-CHECK query the private endpoint table` },
+      ],
+      resultingConfidence: 'low',
+      modelConsulted: true,
+    };
+  }
+
+  it('the evidence block contains the MEASURED critic half and NOT the model half', () => {
+    const block = evidenceBlock(makeFinding(), critiqueWithChallenge());
+    // Positive control — the deterministic refutation IS here, so a pass below
+    // cannot come from the critique being ignored wholesale.
+    expect(block).toContain('MEASURED-STATEMENT-b4c8');
+    expect(block).toContain('EVIDENCE (measured — not model-authored)');
+    // The property.
+    expect(block).not.toContain(MARKER);
+    expect(block).not.toContain('challenge     :');
+  });
+
+  it('the model half is rendered under a header that says it is model-authored', () => {
+    const block = modelChallengeBlock(critiqueWithChallenge());
+    expect(block).toContain(MODEL_CHALLENGE_HEADER);
+    expect(MODEL_CHALLENGE_HEADER).toContain('model-authored');
+    expect(block).toContain(MARKER);
+    expect(block).toContain(`${MARKER}-CHECK`);
+  });
+
+  it('is empty when the Critic consulted no model, so no empty header is emitted', () => {
+    expect(modelChallengeBlock(undefined)).toBe('');
+    expect(
+      modelChallengeBlock({ ...critiqueWithChallenge(), modelChallenges: [] }),
+    ).toBe('');
+  });
+
+  it('the body ends on measured evidence, with the model span labelled above it', async () => {
+    const critiques = new Map([['f-1', critiqueWithChallenge()]]);
+    const out = await explain({
+      findings: [makeFinding({ id: 'f-1' })],
+      critiques,
+      client: stubClient({ explainer: { headline: 'H', prose: 'PROSE-MARKER-c9' } }),
+    });
+    const body = out.result[0]!.body;
+    // All three spans are present …
+    expect(body).toContain('PROSE-MARKER-c9');
+    expect(body).toContain(MARKER);
+    expect(body).toContain('EVIDENCE (measured — not model-authored)');
+    // … in this order, and the measured one is LAST.
+    expect(body.indexOf('PROSE-MARKER-c9')).toBeLessThan(body.indexOf(MODEL_CHALLENGE_HEADER));
+    expect(body.indexOf(MODEL_CHALLENGE_HEADER)).toBeLessThan(
+      body.indexOf('EVIDENCE (measured — not model-authored)'),
+    );
+    // The `evidenceBlock` field itself stays free of model text.
+    expect(out.result[0]!.evidenceBlock).not.toContain(MARKER);
+    expect(body.endsWith(out.result[0]!.evidenceBlock)).toBe(true);
   });
 });

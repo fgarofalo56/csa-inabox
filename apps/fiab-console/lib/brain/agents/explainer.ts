@@ -2,16 +2,20 @@
  * LOOM BRAIN — the EXPLAINER. A finding, turned into something an operator reads.
  *
  * ── THE SPLIT THAT MAKES THE OUTPUT TRUSTWORTHY ────────────────────────────
- * A {@link Narrative} has two parts and only one of them is model-authored:
+ * A {@link Narrative} has three parts and only two of them are model-authored:
  *
  *   `evidenceBlock`  built ENTIRELY from the finding's own fields. Present on
  *                    every narrative, including a fully degraded one. A model
  *                    never writes a character of it.
+ *   model challenges the Critic's MODEL half, under its own
+ *                    `MODEL CHALLENGES (…)` header. Verbatim model output, and
+ *                    labelled as such — see {@link modelChallengeBlock}.
  *   `modelProse`     the readable framing. `null` when no model answered.
  *
- * `body` is prose-then-evidence, so what a reader sees always ENDS in facts that
- * were measured. Nothing about the evidence a reader is shown depends on a model
- * having behaved.
+ * `body` is prose-then-challenges-then-evidence, so what a reader sees always
+ * ENDS in facts that were measured, and every model-authored span sits under a
+ * header that says it is model-authored. Nothing about the evidence a reader is
+ * shown depends on a model having behaved.
  *
  * ── THE NUMBER GUARD ───────────────────────────────────────────────────────
  * The cheapest way for readable prose to become a false claim is a number that
@@ -53,6 +57,12 @@ import { usageForCall, usageForFailedCall } from './tokens';
 /**
  * The receipt. Built from the finding alone; never model-authored.
  *
+ * The Critic's DETERMINISTIC refutations appear here because they are measured
+ * from the finding's own fields. Its MODEL challenges do NOT — they are
+ * verbatim model output and are rendered by {@link modelChallengeBlock} under a
+ * header that says so. Until 2026-08-23 they were emitted inside this block,
+ * roughly 25 lines below a header reading "measured — not model-authored".
+ *
  * The population line comes FIRST, before the finding's own claim, because that
  * is the order in which the two should be read: what was examined, then what was
  * concluded. A blind population is called out in capitals on its own line — a
@@ -90,9 +100,6 @@ export function evidenceBlock(f: Finding, critique?: Critique): string {
     for (const r of critique.deterministic) {
       lines.push(`  critic [${r.severity}] ${r.code}: ${r.statement}`);
     }
-    for (const c of critique.modelChallenges) {
-      lines.push(`  challenge     : ${c.claim}${c.checkable ? ` — check: ${c.checkable}` : ''}`);
-    }
     if (!critique.modelConsulted) {
       lines.push('  critic model  : NOT CONSULTED — measured checks only');
     }
@@ -102,6 +109,43 @@ export function evidenceBlock(f: Finding, critique?: Critique): string {
     `  approval      : requiresHumanApproval=${f.remediation.requiresHumanApproval}, ` +
       `mutatesAzure=${f.remediation.mutatesAzure}`,
   );
+  return lines.join('\n');
+}
+
+// ---------------------------------------------------------------------------
+// §The model-authored challenge block
+// ---------------------------------------------------------------------------
+
+/** The header the model-authored section carries. Asserted by the suite. */
+export const MODEL_CHALLENGE_HEADER = 'MODEL CHALLENGES (model-authored, unverified — NOT measured)';
+
+/**
+ * The Critic's MODEL half, rendered under its own header.
+ *
+ * ── WHY THIS IS NOT PART OF {@link evidenceBlock} ──────────────────────────
+ * It was, until an independent review on 2026-08-23 pointed out that the block
+ * announced itself as `EVIDENCE (measured — not model-authored)` and then, ~25
+ * lines later, appended `c.claim` — which is verbatim model output, trimmed and
+ * length-sliced and nothing else. Measured with a marker string, a fabricated
+ * challenge rendered inside the block whose header told the reader it was not
+ * model-authored.
+ *
+ * That is an R7 defect and it lands in exactly the worst place. In a system
+ * whose entire thesis is separating *measured* from *asserted*, the header is
+ * where a reader decides which of the two they are looking at. A
+ * `challenge     :` line prefix does not overturn a blanket parenthetical at
+ * the top of the block.
+ *
+ * The section is emitted BEFORE the evidence block, not after, so the property
+ * this module's header claims — that what a reader sees always ENDS in facts
+ * that were measured — stays true.
+ */
+export function modelChallengeBlock(critique?: Critique): string {
+  if (!critique || critique.modelChallenges.length === 0) return '';
+  const lines: string[] = [MODEL_CHALLENGE_HEADER];
+  for (const c of critique.modelChallenges) {
+    lines.push(`  challenge     : ${c.claim}${c.checkable ? ` — check: ${c.checkable}` : ''}`);
+  }
   return lines.join('\n');
 }
 
@@ -206,7 +250,12 @@ export async function explain(input: ExplainerInput): Promise<AgentResult<readon
   for (const f of input.findings) {
     const critique = input.critiques?.get(f.id);
     const block = evidenceBlock(f, critique);
-    const req = requestFor('explainer', EXPLAINER_SYSTEM, explainerUserPrompt(f, block));
+    const challenges = modelChallengeBlock(critique);
+    // The model is still SHOWN the challenges — they are useful context, and
+    // keeping them in the prompt keeps them inside the number guard's allowlist.
+    // What changed is only that they are labelled as model-authored.
+    const shown = challenges ? `${challenges}\n\n${block}` : block;
+    const req = requestFor('explainer', EXPLAINER_SYSTEM, explainerUserPrompt(f, shown));
     const outcome = await invokeModel(input.client, req);
 
     let prose: string | null = null;
@@ -247,7 +296,7 @@ export async function explain(input: ExplainerInput): Promise<AgentResult<readon
     narratives.push({
       findingId: f.id,
       headline: headline ?? f.title,
-      body: prose ? `${prose}\n\n${block}` : block,
+      body: [prose, challenges, block].filter((s) => Boolean(s)).join('\n\n'),
       evidenceBlock: block,
       modelProse: prose,
       degraded: prose === null,

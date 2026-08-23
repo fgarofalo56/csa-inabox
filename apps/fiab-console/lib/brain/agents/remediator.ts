@@ -26,6 +26,18 @@
  *      thing: a chat completion. There is no ARM client, no `az`, no `fetch` in
  *      this directory. `__tests__/agents/no-azure-mutation.test.ts` scans the
  *      directory's source with an embedded control that proves the scan fires.
+ *
+ *      Read what that scan does and does NOT establish. It covers static AND
+ *      dynamic import forms — the `from` keyword, a dynamic-import call, and a
+ *      CommonJS require call — and it flags a computed specifier positively.
+ *      That breadth dates only from 2026-08-23: before it, three patterns were
+ *      anchored on `from`, and a review walked past all of them with a dynamic
+ *      import of Node's HTTPS module, landing a real ARM DELETE in `critic.ts`
+ *      with the whole suite green. It is a SOURCE scan over a fixed,
+ *      name-asserted file list: it is not a runtime sandbox, and it cannot see
+ *      egress reached through a transitive import of a module OUTSIDE this
+ *      directory. Property 1 (the type pin) and property 2 (the inert value) are
+ *      the load-bearing ones; this is defence in depth.
  *   4. THE SHAPE OF THE FIELD. `proposedChange` is a `string`. Rendering it is
  *      the only thing any consumer can do with it.
  *

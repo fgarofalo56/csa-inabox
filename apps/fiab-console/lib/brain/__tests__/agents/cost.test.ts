@@ -122,16 +122,30 @@ describe('cost — one run at the estate measured volume (23 findings)', () => {
     // These numbers are the deliverable. If an edit to a system prompt or an
     // evidence block moves them, this test is the notification.
     //
-    // Measured 2026-08-23: 38,645 estimated tokens over 70 calls → $0.1891
+    // Measured 2026-08-23: 38,990 estimated tokens over 70 calls → $0.1894
     // DERIVED for the whole estate's unreachable-always-on finding set.
     //
+    // This is the NO-GRAPH arm. Supplying a graph is CHEAPER, not dearer —
+    // measured $0.1827 over 36,736 tokens — because two `indeterminate`
+    // refutations disappear and shorten every downstream prompt.
+    //
     // Read the tier split, because it is the tier CHOICE justifying itself:
-    //   mini      15,502 tok  x $0.001/1K = $0.0155   (~8% of spend, 40% of tokens)
+    //   mini      15,847 tok  x $0.001/1K = $0.0158   (~8% of spend, 41% of tokens)
     //   standard  11,569 tok  x $0.005/1K = $0.0578
     //   strong    11,574 tok  x $0.010/1K = $0.1157   (~61% of spend, 30% of tokens)
     // The strong tier is dominated by the Critic (23 calls) rather than the
     // Correlator (1 call for the whole run) — which is the deliberate place to
     // spend, since the Critic is the agent whose failure would be least visible.
+    //
+    // ── WHY THIS MOVED FROM 32,862 / $0.1891 ─────────────────────────────
+    // The model-authored Critic challenges were split out of the evidence
+    // block under their own `MODEL CHALLENGES (…)` header, because the
+    // evidence header claimed "measured — not model-authored" over text that
+    // was verbatim model output. The header costs 15 estimated tokens
+    // (58 chars at chars/4) on each of the 23 explainer prompts: +345 prompt
+    // tokens, ALL of it in the mini tier, +$0.0003. Every other tier is
+    // byte-identical, which is the check that the split changed the LABEL and
+    // not the content.
     expect({
       calls: report.usage.calls,
       promptTokens: report.usage.promptTokens,
@@ -142,10 +156,10 @@ describe('cost — one run at the estate measured volume (23 findings)', () => {
       strong: report.usage.byTier.strong,
     }).toEqual({
       calls: 70,
-      promptTokens: 32_862,
+      promptTokens: 33_207,
       completionTokens: 5_783,
-      amountUsd: 0.1891,
-      mini: { promptTokens: 13_823, completionTokens: 1_679 },
+      amountUsd: 0.1894,
+      mini: { promptTokens: 14_168, completionTokens: 1_679 },
       standard: { promptTokens: 10_097, completionTokens: 1_472 },
       strong: { promptTokens: 8_942, completionTokens: 2_632 },
     });
@@ -165,7 +179,7 @@ describe('cost — one run at the estate measured volume (23 findings)', () => {
     expect(one.cost.amountUsd).toBeGreaterThan(0);
     // 23 findings cost far less than 23x one finding, because the correlator is
     // one call regardless of volume.
-    expect(one.cost.amountUsd * 23).toBeGreaterThan(0.1891);
+    expect(one.cost.amountUsd * 23).toBeGreaterThan(0.1894);
   });
 
   it('a deterministic-only run at the same volume costs nothing', async () => {
