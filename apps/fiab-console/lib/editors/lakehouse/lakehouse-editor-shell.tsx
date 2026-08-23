@@ -22,6 +22,7 @@ import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'rea
 import { useRouter } from 'next/navigation';
 import { useQuery } from '@tanstack/react-query';
 import { clientFetch } from '@/lib/client-fetch';
+import { trimTrailingSlashes } from '@/lib/util/trim';
 import { useConfirm } from '@/lib/components/confirm-dialog';
 import { getItem, type WorkspaceItem } from '@/lib/api/workspaces';
 import type { LakehouseContent } from '@/lib/apps/content-bundles/types';
@@ -71,6 +72,9 @@ import type {
 import type { LiveCatalogTable } from './types';
 import { LakehouseEditorContext } from './lakehouse-editor-context';
 import type { LakehouseEditorCtx } from './lakehouse-editor-context';
+import {
+  bindingFromItemState, joinPrefix, containerRelativePath, type LakehouseBinding,
+} from './lakehouse-binding';
 import { useLakehousePermissions } from './hooks/use-lakehouse-permissions';
 import { useLakehouseSettings } from './hooks/use-lakehouse-settings';
 import { useLakehouseShortcuts } from './hooks/use-lakehouse-shortcuts';
@@ -135,7 +139,14 @@ export function LakehouseEditor({ item, id }: Props) {
   const [containers, setContainers] = useState<ContainerInfo[] | null>(null);
   const [containerError, setContainerError] = useState<string | null>(null);
   const [activeContainer, setActiveContainer] = useState<string | null>(null);
-  const [openPrefixes, setOpenPrefixes] = useState<Record<string, PathEntry[] | 'loading' | { error: string }>>({});
+  // #3904 — the item's OWN ADLS binding (container + root the provisioner
+  // wrote to). `stateBinding` is the stamped record the editor already holds;
+  // `serverBinding` is what the BFF's resolveLakehouseAbfss answered when the
+  // record was absent. The editor opens on THIS, never on containers[0].
+  const [serverBinding, setServerBinding] = useState<LakehouseBinding | null>(null);
+  const [bindingResolved, setBindingResolved] = useState(false);
+  const resolveStartedRef = useRef(false);
+  const [openPrefixes, setOpenPrefixes] = useState<Record<string, PathEntry[] | 'loading' | { error: string; remediation?: string }>>({});
   const [activePath, setActivePath] = useState<PathEntry | null>(null);
   const [tab, setTab] = useState<string>('files');
   // FLAG0 (n1-lakehouse-interop-tab) — default-ON kill switch for the N1
@@ -218,15 +229,33 @@ export function LakehouseEditor({ item, id }: Props) {
     try {
       const qs = new URLSearchParams({ container, prefix });
       const r = await clientFetch(`/api/lakehouse/paths?${qs.toString()}`);
-      const j = await parseJsonOrError<{ ok: boolean; error?: string; paths?: PathEntry[] }>(r, 'List paths');
+      const j = await parseJsonOrError<{ ok: boolean; error?: string; remediation?: string; paths?: PathEntry[] }>(r, 'List paths');
       setOpenPrefixes((p) => ({
         ...p,
-        [key]: j.ok ? (j.paths as PathEntry[]) : { error: j.error || `HTTP ${r.status}` },
+        // #3904: the BFF now classifies a storage failure and returns a
+        // remediation. Carry it through — the pane shows the fix, not a
+        // RequestId.
+        [key]: j.ok
+          ? (j.paths as PathEntry[])
+          : { error: j.error || `HTTP ${r.status}`, remediation: j.remediation },
       }));
     } catch (e: any) {
       setOpenPrefixes((p) => ({ ...p, [key]: { error: e?.message || String(e) } }));
     }
   }, [cacheKey]);
+
+  // ── The item's own ADLS binding (#3904) ───────────────────────────────────
+  // Resolution order — one decision, one answer (see lakehouse-binding.ts):
+  //   1. the stamped record on the item (what resolveLakehouseAbfss prefers),
+  //   2. otherwise the BFF's own resolveLakehouseAbfss answer,
+  //   3. otherwise none — an unsaved / never-provisioned lakehouse browses the
+  //      container root exactly as it did before.
+  const stateBinding = useMemo(() => bindingFromItemState(itemQ.data), [itemQ.data]);
+  const binding = stateBinding ?? serverBinding;
+  /** The prefix the Files browser treats as "the top" of THIS lakehouse. */
+  const rootPrefix = binding && activeContainer === binding.container ? binding.root : '';
+  /** `<root>/Tables` — where this lakehouse's Delta tables actually live. */
+  const tablesPrefix = joinPrefix(rootPrefix, 'Tables');
 
   // ── Domain hooks ──────────────────────────────────────────────────────────
   const perms = useLakehousePermissions({ activeContainer, confirm });
@@ -234,6 +263,7 @@ export function LakehouseEditor({ item, id }: Props) {
   const sec = useLakehouseSecondary({
     id, isNewItem, activeContainer, shortcutLakehouseId: activeContainer || id,
     schemasEnabled, setSchemasEnabled, loadPaths, confirm, itemQ, maintainTable, tab,
+    tablesPrefix,
   });
   const sc_ = useLakehouseShortcuts({
     shortcutLakehouseId: activeContainer || id,
@@ -287,18 +317,23 @@ export function LakehouseEditor({ item, id }: Props) {
   }, [activeContainer]);
 
   // ── File navigation ───────────────────────────────────────────────────────
+  // Every "no folder selected" path below resolves to the LAKEHOUSE root
+  // (#3904), not the container root — that is the directory this item owns.
   const refreshActive = useCallback(() => {
     if (!activeContainer) return;
-    const prefix = activePath?.isDirectory ? activePath.name : '';
+    const prefix = activePath?.isDirectory ? activePath.name : rootPrefix;
     loadPaths(activeContainer, prefix);
-    loadPaths(activeContainer, '');
-  }, [activeContainer, activePath, loadPaths]);
+    if (prefix !== rootPrefix) loadPaths(activeContainer, rootPrefix);
+  }, [activeContainer, activePath, rootPrefix, loadPaths]);
 
   const goToPrefix = useCallback((prefix: string) => {
     if (!activeContainer) return;
-    setActivePath(prefix ? { name: prefix, isDirectory: true, size: 0 } : null);
-    loadPaths(activeContainer, prefix);
-  }, [activeContainer, loadPaths]);
+    // The lakehouse root is "home" — selecting it clears the active path so the
+    // breadcrumb and listing agree on where the top is.
+    const target = prefix || rootPrefix;
+    setActivePath(target && target !== rootPrefix ? { name: target, isDirectory: true, size: 0 } : null);
+    loadPaths(activeContainer, target);
+  }, [activeContainer, rootPrefix, loadPaths]);
 
   const selectFile = useCallback(async (entry: PathEntry, opts?: { top?: number; format?: string }) => {
     setActivePath(entry); setActionError(null);
@@ -428,7 +463,10 @@ export function LakehouseEditor({ item, id }: Props) {
 
   const uploadItems = useCallback(async (items: UploadItem[]) => {
     if (!activeContainer || !items.length) return;
-    const basePrefix = activePath?.isDirectory ? `${activePath.name.replace(/\/+$/, '')}/` : '';
+    // #3904: with no folder selected, uploads land in the LAKEHOUSE root, not
+    // at the top of the container (which belongs to no single item).
+    const base = activePath?.isDirectory ? activePath.name : rootPrefix;
+    const basePrefix = base ? `${trimTrailingSlashes(base)}/` : '';
     setActionError(null); setActionStatus(null); setUploadQueue({ done: 0, total: items.length });
     let firstError: string | null = null; let okCount = 0;
     for (let i = 0; i < items.length; i++) {
@@ -445,7 +483,7 @@ export function LakehouseEditor({ item, id }: Props) {
       setActionStatus(`Uploaded ${okCount} file${okCount === 1 ? '' : 's'} at ${new Date().toLocaleTimeString()}`);
     }
     refreshActive();
-  }, [activeContainer, activePath, uploadOne, refreshActive]);
+  }, [activeContainer, activePath, rootPrefix, uploadOne, refreshActive]);
 
   const onUploadChange = useCallback(async (ev: React.ChangeEvent<HTMLInputElement>) => {
     const files = Array.from(ev.target.files || []) as File[];
@@ -453,8 +491,8 @@ export function LakehouseEditor({ item, id }: Props) {
     if (!files.length || !activeContainer) return;
     if (files.length === 1) {
       const file = files[0];
-      const prefix = activePath?.isDirectory ? activePath.name : '';
-      const targetPath = prefix ? `${prefix.replace(/\/+$/, '')}/${file.name}` : file.name;
+      const prefix = activePath?.isDirectory ? activePath.name : rootPrefix;
+      const targetPath = prefix ? `${trimTrailingSlashes(prefix)}/${file.name}` : file.name;
       setActionError(null);
       startUpload({
         lakehouseName, container: activeContainer, path: targetPath, file,
@@ -464,7 +502,7 @@ export function LakehouseEditor({ item, id }: Props) {
       return;
     }
     await uploadItems(files.map((f) => ({ relativePath: f.name, file: f })));
-  }, [activeContainer, activePath, startUpload, lakehouseName, uploadItems, refreshActive]);
+  }, [activeContainer, activePath, rootPrefix, startUpload, lakehouseName, uploadItems, refreshActive]);
 
   const onFolderInputChange = useCallback(async (ev: React.ChangeEvent<HTMLInputElement>) => {
     const files = Array.from(ev.target.files || []) as File[];
@@ -499,8 +537,8 @@ export function LakehouseEditor({ item, id }: Props) {
     // eslint-disable-next-line no-alert
     const name = typeof window !== 'undefined' ? window.prompt('New folder name (relative to current path):') : null;
     if (!name) return;
-    const prefix = activePath?.isDirectory ? activePath.name : '';
-    const targetPath = prefix ? `${prefix.replace(/\/+$/, '')}/${name}` : name;
+    const prefix = activePath?.isDirectory ? activePath.name : rootPrefix;
+    const targetPath = prefix ? `${trimTrailingSlashes(prefix)}/${name}` : name;
     setActionError(null); setActionStatus(null);
     try {
       const qs = new URLSearchParams({ container: activeContainer, path: targetPath });
@@ -510,7 +548,7 @@ export function LakehouseEditor({ item, id }: Props) {
       else setActionStatus(`Folder ${targetPath} created at ${new Date().toLocaleTimeString()}`);
     } catch (e: any) { setActionError(e?.message || String(e)); }
     finally { refreshActive(); }
-  }, [activeContainer, activePath, refreshActive]);
+  }, [activeContainer, activePath, rootPrefix, refreshActive]);
 
   const onDelete = useCallback(async (entry: PathEntry) => {
     if (!activeContainer) return;
@@ -586,7 +624,9 @@ export function LakehouseEditor({ item, id }: Props) {
   }, [labelDlgEntry, chosenLabelId, mipLabels, onDownload]);
 
   // ── Effects ───────────────────────────────────────────────────────────────
-  // Container load
+  // Container load. NOTE (#3904): this no longer picks the active container —
+  // `containers[0]` is `bronze` (KNOWN_CONTAINERS order), which is not where a
+  // lakehouse is materialised. The binding effect below picks it.
   useEffect(() => {
     let cancelled = false;
     clientFetch('/api/lakehouse/containers')
@@ -595,18 +635,83 @@ export function LakehouseEditor({ item, id }: Props) {
         if (cancelled) return;
         if (!j.ok) { setContainerError(j.error || 'Failed to list containers'); setContainers([]); return; }
         setContainers(j.containers || []);
-        if ((j.containers || []).length) setActiveContainer(j.containers![0].name);
       })
       .catch((e) => { if (!cancelled) { setContainerError(String(e)); setContainers([]); } });
     return () => { cancelled = true; };
   }, []);
 
-  // Auto-load root listing when active container changes
+  // Bind the editor to the lakehouse's OWN container (#3904). Runs once, as
+  // soon as the container list and the item record have both settled; a user's
+  // later container pick is never overridden.
+  useEffect(() => {
+    if (activeContainer || bindingResolved) return;
+    if (containers === null) return;                       // container list still in flight
+    if (!isNewItem && itemQ.isPending) return;             // item record still in flight
+
+    // 1. Stamped on the item — no round trip.
+    if (stateBinding) {
+      setBindingResolved(true);
+      setActiveContainer(stateBinding.container);
+      return;
+    }
+
+    // 2. Ask the BFF to run resolveLakehouseAbfss (it can see LOOM_*_URL; we
+    //    cannot). One call returns the binding AND its root listing.
+    const workspaceId = itemQ.data?.workspaceId;
+    if (!isNewItem && workspaceId) {
+      // `bindingResolved` is only set when the promise settles, so a re-render
+      // in flight would otherwise fire a second resolve. The ref closes that.
+      if (resolveStartedRef.current) return;
+      resolveStartedRef.current = true;
+      let cancelled = false;
+      const qs = new URLSearchParams({ lakehouseId: id, workspaceId });
+      clientFetch(`/api/lakehouse/paths?${qs.toString()}`)
+        .then((r) => parseJsonOrError<{
+          ok: boolean; error?: string; container?: string | null; root?: string | null;
+          prefix?: string; paths?: PathEntry[];
+        }>(r, 'Resolve lakehouse storage'))
+        .then((j) => {
+          if (cancelled) return;
+          setBindingResolved(true);
+          if (j.ok && j.container) {
+            const resolvedRoot = typeof j.root === 'string' ? j.root : '';
+            setServerBinding({ container: j.container, root: resolvedRoot, source: 'server' });
+            setActiveContainer(j.container);
+            // Prime the cache so the root listing isn't fetched twice.
+            if (Array.isArray(j.paths)) {
+              const key = cacheKey(j.container, typeof j.prefix === 'string' ? j.prefix : resolvedRoot);
+              setOpenPrefixes((p) => (p[key] === undefined ? { ...p, [key]: j.paths as PathEntry[] } : p));
+            }
+            return;
+          }
+          // 3. No binding to be had (honest gate / not provisioned) — browse the
+          //    container root, the pre-#3904 behaviour.
+          if ((containers || []).length) setActiveContainer(containers![0].name);
+        })
+        .catch(() => {
+          if (cancelled) return;
+          setBindingResolved(true);
+          if ((containers || []).length) setActiveContainer(containers![0].name);
+        });
+      return () => { cancelled = true; };
+    }
+
+    // 3. Unsaved / new item — nothing to bind to.
+    setBindingResolved(true);
+    if (containers.length) setActiveContainer(containers[0].name);
+  }, [
+    activeContainer, bindingResolved, containers, isNewItem,
+    itemQ.isPending, itemQ.data?.workspaceId, stateBinding, id, cacheKey,
+  ]);
+
+  // Auto-load the lakehouse's ROOT listing when the active container changes.
+  // Pre-#3904 this listed the CONTAINER root (''), which for a bound lakehouse
+  // is a different directory than the one it owns.
   useEffect(() => {
     if (!activeContainer) return;
-    const key = cacheKey(activeContainer, '');
-    if (openPrefixes[key] === undefined) loadPaths(activeContainer, '');
-  }, [activeContainer, loadPaths, openPrefixes, cacheKey]);
+    const key = cacheKey(activeContainer, rootPrefix);
+    if (openPrefixes[key] === undefined) loadPaths(activeContainer, rootPrefix);
+  }, [activeContainer, rootPrefix, loadPaths, openPrefixes, cacheKey]);
 
   // Resolve schemasEnabled on container change (authoritative from settings doc)
   useEffect(() => {
@@ -671,7 +776,11 @@ export function LakehouseEditor({ item, id }: Props) {
   }, [activeContainer, activePath, lttOpen]);
 
   // ── Derived listings ──────────────────────────────────────────────────────
-  const currentPrefix = useMemo(() => (activePath?.isDirectory ? activePath.name : ''), [activePath]);
+  // "No folder selected" means the LAKEHOUSE root (#3904), not the container root.
+  const currentPrefix = useMemo(
+    () => (activePath?.isDirectory ? activePath.name : rootPrefix),
+    [activePath, rootPrefix],
+  );
   const currentListing = useMemo(() => {
     if (!activeContainer) return null;
     return openPrefixes[cacheKey(activeContainer, currentPrefix)] ?? null;
@@ -732,6 +841,28 @@ export function LakehouseEditor({ item, id }: Props) {
   ]);
 
   // ── Tree renderers ────────────────────────────────────────────────────────
+  /**
+   * Where a container's tree starts. For the container this lakehouse is bound
+   * to, that is the lakehouse's own root (#3904) — a user browsing a DIFFERENT
+   * container still starts at that container's root, which is legitimate.
+   */
+  const treeRootFor = useCallback(
+    (container: string) => (binding && container === binding.container ? binding.root : ''),
+    [binding],
+  );
+
+  /**
+   * Containers to render. The bound container is included even when the live
+   * `listContainers()` probe did not return it (it drops entries on a 6s
+   * timeout) — a transient probe miss must not hide the container this item
+   * actually lives in.
+   */
+  const displayContainers = useMemo<ContainerInfo[]>(() => {
+    const list = containers || [];
+    if (!binding?.container || list.some((c) => c.name === binding.container)) return list;
+    return [{ name: binding.container, url: '' }, ...list];
+  }, [containers, binding]);
+
   function renderTreeChildren(container: string, prefix: string): React.ReactElement {
     const state = openPrefixes[cacheKey(container, prefix)];
     if (state === undefined) return (
@@ -813,6 +944,7 @@ export function LakehouseEditor({ item, id }: Props) {
     id, isNewItem, itemQ, lhContent, bundleFolders, bundleDeltaTables, bundleShortcuts, hasBundle,
     seededTableInfo, lakehouseName, shortcutLakehouseId, isReferenceLakehouse,
     containers, containerError, activeContainer, setActiveContainer,
+    binding, rootPrefix, tablesPrefix,
     openPrefixes, activePath, setActivePath,
     tab, setTab,
     preview, setPreview, previewLoading, setPreviewLoading,
@@ -861,18 +993,18 @@ export function LakehouseEditor({ item, id }: Props) {
             {containerError && (
               <MessageBar intent="error"><MessageBarBody><MessageBarTitle>Cannot list containers</MessageBarTitle>{containerError}</MessageBarBody></MessageBar>
             )}
-            {containers && containers.length === 0 && !containerError && (
+            {containers && containers.length === 0 && !containerError && !displayContainers.length && (
               <Caption1>No containers visible to BFF identity. Confirm LOOM_*_URL env vars + Storage Blob Data Contributor role.</Caption1>
             )}
-            {containers && containers.length > 0 && (
-              <Tree aria-label="Lakehouse containers" defaultOpenItems={containers.map((c) => `c-${c.name}`)}>
-                {containers.map((c) => (
+            {displayContainers.length > 0 && (
+              <Tree aria-label="Lakehouse containers" defaultOpenItems={displayContainers.map((c) => `c-${c.name}`)}>
+                {displayContainers.map((c) => (
                   <TreeItem key={c.name} itemType="branch" value={`c-${c.name}`}
                     onClick={() => { setActiveContainer(c.name); setActivePath(null); }}>
                     <TreeItemLayout iconBefore={<Database20Regular />}>
                       {c.name}{activeContainer === c.name && ' ·'}
                     </TreeItemLayout>
-                    <Tree>{renderTreeChildren(c.name, '')}</Tree>
+                    <Tree>{renderTreeChildren(c.name, treeRootFor(c.name))}</Tree>
                   </TreeItem>
                 ))}
               </Tree>
@@ -892,7 +1024,7 @@ export function LakehouseEditor({ item, id }: Props) {
                     )}
                     {!liveTablesError && liveTables !== null && liveTables.length === 0 && (
                       <TreeItem itemType="leaf" value="live-tables-empty">
-                        <TreeItemLayout iconBefore={<Info20Regular />}>No Delta tables in /{activeContainer}/Tables/ yet</TreeItemLayout>
+                        <TreeItemLayout iconBefore={<Info20Regular />}>No Delta tables in /{activeContainer}/{tablesPrefix}/ yet</TreeItemLayout>
                       </TreeItem>
                     )}
                     {(Object.entries(
@@ -915,7 +1047,7 @@ export function LakehouseEditor({ item, id }: Props) {
                                     <MenuItem icon={<TableSimple20Regular />} onClick={() => setTab('tables')}>Open in Tables tab</MenuItem>
                                     <MenuItem icon={<Copy20Regular />} onClick={() => { void navigator.clipboard?.writeText(t.adlsPath); }}>Copy path</MenuItem>
                                     {typeof t.latestVersion === 'number' && (
-                                      <MenuItem icon={<History20Regular />} onClick={() => sec.openTableHistory(t.adlsPath)}>Table history…</MenuItem>
+                                      <MenuItem icon={<History20Regular />} onClick={() => sec.openTableHistory(containerRelativePath(t.schema || activeContainer, t.adlsPath))}>Table history…</MenuItem>
                                     )}
                                   </MenuList></MenuPopover></Menu>
                                 }

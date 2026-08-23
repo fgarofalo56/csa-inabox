@@ -17,6 +17,7 @@ import type {
   ShortcutTargetType, ShortcutKind, ShortcutRow, SchemaRow,
 } from './types';
 import type { ColStat } from '../components/delta-preview-grid';
+import type { LakehouseBinding } from './lakehouse-binding';
 import type { BlobAccessTier } from '@/lib/components/onelake/tier-dialog';
 import type { ExternalCredsState, SharePointSelection } from '@/lib/components/onelake/shortcut-wizard';
 import type { WorkspaceItem } from '@/lib/api/workspaces';
@@ -44,8 +45,16 @@ export interface LakehouseEditorCtx {
   activeContainer: string | null;
   setActiveContainer: (c: string | null) => void;
 
+  // ---- The item's own ADLS binding (#3904) ----
+  /** Container + root the provisioner actually wrote to; null when unbound. */
+  binding: LakehouseBinding | null;
+  /** Prefix that is "the top" of THIS lakehouse in the active container. `''` when unbound. */
+  rootPrefix: string;
+  /** `<rootPrefix>/Tables` — where this lakehouse's Delta tables live. */
+  tablesPrefix: string;
+
   // ---- File tree ----
-  openPrefixes: Record<string, PathEntry[] | 'loading' | { error: string }>;
+  openPrefixes: Record<string, PathEntry[] | 'loading' | { error: string; remediation?: string }>;
   activePath: PathEntry | null;
   setActivePath: (p: PathEntry | null) => void;
 
@@ -421,7 +430,7 @@ export interface LakehouseEditorCtx {
   previewTable: (relPath: string) => void;
   goToPrefix: (prefix: string) => void;
   currentPrefix: string;
-  currentListing: PathEntry[] | 'loading' | { error: string } | null;
+  currentListing: PathEntry[] | 'loading' | { error: string; remediation?: string } | null;
   openContextMenu: (e: React.MouseEvent, entry: PathEntry) => void;
   openTierDialog: (entry: PathEntry) => void;
   onTierChanged: (entry: PathEntry, newTier: BlobAccessTier) => void;

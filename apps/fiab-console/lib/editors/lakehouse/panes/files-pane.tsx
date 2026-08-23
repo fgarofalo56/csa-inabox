@@ -15,12 +15,13 @@ import {
 import { Fragment } from 'react';
 import { useStyles, formatBytes, leafName, FileGlyph } from '../shared';
 import { useLakehouseCtx } from '../lakehouse-editor-context';
+import { relativeToRoot } from '../lakehouse-binding';
 
 export function FilesPane() {
   const s = useStyles();
   const ctx = useLakehouseCtx();
   const {
-    activeContainer, currentPrefix, goToPrefix, onUploadClick, onFolderUploadClick,
+    activeContainer, currentPrefix, rootPrefix, goToPrefix, onUploadClick, onFolderUploadClick,
     onNewFolder, refreshActive,
     uploading, runningUploads, uploadQueue, isDragOver, setIsDragOver, onDragOver, onDragLeave, onDrop,
     currentListing, activePath, selectFile, openContextMenu, openTierDialog,
@@ -29,6 +30,13 @@ export function FilesPane() {
     fileTiers, lakehouseName,
     setTab, onDownload, onOpenInNotebook, onLoadToTables, openLabelDialog,
   } = ctx;
+
+  // Breadcrumbs (and the empty-state copy) are relative to the LAKEHOUSE root,
+  // not the container root (#3904) — a user browsing this item should not have
+  // to walk `lakehouses/<Name>/…` to understand where they are.
+  const relativePrefix = relativeToRoot(rootPrefix, currentPrefix);
+  const atRoot = !relativePrefix;
+  const displayPath = relativePrefix || (rootPrefix ? `${lakehouseName} (root)` : '');
 
   return (
     <>
@@ -44,28 +52,31 @@ export function FilesPane() {
         {uploading ? `Uploading ${runningUploads.length} file${runningUploads.length === 1 ? '' : 's'} to ${lakehouseName} lakehouse, please wait…` : ''}
       </div>
       <div className={s.toolbar}>
-        {/* Breadcrumb path bar — container root + one clickable segment
-            per folder (Fabric OneLake-explorer parity). Every crumb is
-            a real navigation: it re-lists that prefix via loadPaths. */}
+        {/* Breadcrumb path bar — the lakehouse root + one clickable segment
+            per folder beneath it (Fabric OneLake-explorer parity). Every crumb
+            is a real navigation: it re-lists that prefix via loadPaths. The
+            root crumb is THIS lakehouse's root inside the container (#3904),
+            so "home" is the item's own storage, never the container's top. */}
         <Breadcrumb aria-label="Lakehouse path" size="small" className={s.breadcrumbBar}>
           <BreadcrumbItem>
             <BreadcrumbButton
               icon={<Database20Regular />}
-              onClick={() => goToPrefix('')}
-              current={!currentPrefix}
+              onClick={() => goToPrefix(rootPrefix)}
+              current={atRoot}
               disabled={!activeContainer}
+              title={rootPrefix ? `${activeContainer}/${rootPrefix}` : (activeContainer || undefined)}
             >
               {activeContainer || 'no container'}
             </BreadcrumbButton>
           </BreadcrumbItem>
-          {currentPrefix.split('/').filter(Boolean).map((seg, i, segs) => {
-            const prefixUpTo = segs.slice(0, i + 1).join('/');
+          {relativePrefix.split('/').filter(Boolean).map((seg, i, segs) => {
+            const relUpTo = segs.slice(0, i + 1).join('/');
             const isLast = i === segs.length - 1;
             return (
-              <Fragment key={prefixUpTo}>
+              <Fragment key={relUpTo}>
                 <BreadcrumbDivider />
                 <BreadcrumbItem>
-                  <BreadcrumbButton onClick={() => goToPrefix(prefixUpTo)} current={isLast}>
+                  <BreadcrumbButton onClick={() => goToPrefix(rootPrefix ? `${rootPrefix}/${relUpTo}` : relUpTo)} current={isLast}>
                     {seg}
                   </BreadcrumbButton>
                 </BreadcrumbItem>
@@ -152,14 +163,29 @@ export function FilesPane() {
         </MessageBar>
       )}
       {currentListing === 'loading' && <Spinner size="small" label="Listing paths…" labelPosition="after" />}
-      {currentListing && !Array.isArray(currentListing) && currentListing !== 'loading' && (
-        <MessageBar intent="error">
-          <MessageBarBody>
-            <MessageBarTitle>List failed</MessageBarTitle>
-            {(currentListing as { error: string }).error}
-          </MessageBarBody>
-        </MessageBar>
-      )}
+      {currentListing && !Array.isArray(currentListing) && currentListing !== 'loading' && (() => {
+        // #3904 — the BFF classifies a storage failure and returns a
+        // remediation; a "not created yet" directory is a GUIDED state, not a
+        // red one (ux-baseline.md §6), and no raw SDK RequestId reaches here.
+        const listing = currentListing as { error: string; remediation?: string };
+        const guided = !!listing.remediation && /not exist|Nothing is stored/i.test(listing.error);
+        return (
+          <MessageBar intent={guided ? 'warning' : 'error'}>
+            <MessageBarBody>
+              <MessageBarTitle>{guided ? 'Nothing here yet' : 'List failed'}</MessageBarTitle>
+              {listing.error}
+              {listing.remediation && (
+                <>
+                  {' '}
+                  <span style={{ display: 'block', marginTop: tokens.spacingVerticalXS }}>
+                    {listing.remediation}
+                  </span>
+                </>
+              )}
+            </MessageBarBody>
+          </MessageBar>
+        );
+      })()}
       {Array.isArray(currentListing) && (
         <div
           className={s.tableWrap}
@@ -174,7 +200,7 @@ export function FilesPane() {
         >
           {isDragOver && (
             <div style={{ padding: tokens.spacingVerticalS, textAlign: 'center', color: tokens.colorBrandForeground1, fontWeight: tokens.fontWeightSemibold }}>
-              Drop files or a folder to upload into /{currentPrefix || ''} (folder tree preserved)
+              Drop files or a folder to upload into /{displayPath} (folder tree preserved)
             </div>
           )}
           <Table aria-label="Lakehouse paths" size="small">
@@ -193,7 +219,7 @@ export function FilesPane() {
                   <TableCell colSpan={5}>
                     <div style={{ padding: tokens.spacingVerticalXXL, textAlign: 'center' }}>
                       <Body1 style={{ display: 'block', marginBottom: tokens.spacingVerticalS }}>
-                        No files in <strong>/{currentPrefix || ''}</strong> yet.
+                        No files in <strong>/{displayPath}</strong> yet.
                       </Body1>
                       <Caption1 style={{ display: 'block' }}>
                         Use the toolbar above to <b>Upload file</b> or create a <b>New folder</b>.
