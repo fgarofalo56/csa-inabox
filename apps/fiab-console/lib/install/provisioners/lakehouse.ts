@@ -626,10 +626,17 @@ async function provisionAzureNative(
     return resolveInfraResidual(msg, `Confirm the DLZ ADLS account/container '${container}' exists and grant the Console managed identity (LOOM_UAMI_CLIENT_ID) Storage Blob Data Contributor on it.`, { reason: 'ADLS: could not create the lakehouse root directory.', errorPrefix: 'Create lakehouse root failed: ', link: 'https://learn.microsoft.com/azure/storage/blobs/assign-azure-role-data-access', steps });
   }
 
-  // 2. Folders + delta-table seed CSVs are materialised by the SHARED helper
+  // 2. Folders + delta-table seeds are materialised by the SHARED helper
   //    below (`./_seed-lakehouse-adls`), after the optional Synapse serverless
   //    target is resolved — the per-table view registration hangs off it.
   const externalViews: string[] = [];
+  /**
+   * Table identity → the seed CSV's REAL container-relative path, as reported
+   * by the seeder. Keyed `<schema>.<table>` when schemas are enabled, else
+   * `<table>`. Stamped onto `secondaryIds.seedCsvPaths` so no consumer has to
+   * reconstruct a path from a naming convention. See the hook below.
+   */
+  const seedCsvPaths = new Map<string, string>();
 
   // Synapse serverless target (optional) — only when LOOM_SYNAPSE_WORKSPACE set.
   //
@@ -687,7 +694,29 @@ async function provisionAzureNative(
     expectedSeedTables,
     authGate: seedAuthGate,
   } = await seedLakehouseAdls(container, root, content, steps, async (t) => {
-    // 3. Optionally register a Synapse serverless OPENROWSET external view so
+    // 3a. RECORD the seed CSV's real path, before anything else in this hook.
+    //
+    //     #3904 moved the seed CSV out of `Tables/<name>/<name>.csv` and into
+    //     `Files/_seed/`. Two consumers RE-DERIVE the old location rather than
+    //     reading it — `app/api/apps/[id]/install/route.ts` (which persists the
+    //     result into every auto-bound report's `dataSource` as an
+    //     `OPENROWSET(… FORMAT='CSV')` URL) and `lib/editors/lakehouse/
+    //     lakehouse-editor-shell.tsx`. Both would point at a blob that no
+    //     longer exists. Worse, their two derivations do not even agree with
+    //     each other or with this module: the install route sanitizes a schema
+    //     with `replace(/[^A-Za-z0-9_]/g, '')` while the seeder uses `'_'`.
+    //
+    //     So the path is RECORDED here and stamped into `secondaryIds` below,
+    //     for consumers to read instead of guessing — the same principle #3911
+    //     applied to the lakehouse binding, and the reason that fix works.
+    //
+    //     THIS MUST STAY ABOVE THE `if (!synapse) return` BELOW. Synapse is
+    //     optional and usually absent on the Azure-native path; recording after
+    //     the early return would make the whole fix inert in exactly the
+    //     configuration the demo deploy runs in.
+    if (t.csvPath) seedCsvPaths.set(t.schema ? `${t.schema}.${t.name}` : t.name, t.csvPath);
+
+    // 3b. Optionally register a Synapse serverless OPENROWSET external view so
     //    the seeded table is queryable as `SELECT * FROM lakehouse.<view>`.
     //    The view is created in the dedicated USER database [loom_lakehouse]
     //    (NOT master — serverless rejects CREATE VIEW in master), under a
@@ -783,6 +812,20 @@ async function provisionAzureNative(
     ...(createdFolders.length ? { folders: createdFolders.join(',') } : {}),
     ...(seeded.length ? { seededTables: seeded.join(',') } : {}),
     ...(emptyTables.length ? { emptyTables: emptyTables.join(',') } : {}),
+    // The seed CSVs' REAL paths, recorded rather than re-derivable — a JSON
+    // object mapping `<schema>.<table>` (or `<table>` when schemas are off) to
+    // the container-relative path. Consumers MUST read this instead of
+    // rebuilding a path; see the recording hook above for why.
+    //
+    // JSON, not the `k=v,k=v` shape the sibling keys use, because that encoding
+    // would be AMBIGUOUS here and I checked rather than assumed:
+    // `safeAdlsRelPath` (backing-name.ts) is structural, not charset-based — it
+    // normalises separators and drops `.`/`..`/empty segments and nothing else
+    // — so a `,` or `=` in a table name or display name survives into both the
+    // key and the path. A lakehouse called "Sales, EMEA" is enough to break a
+    // comma-split. (The pre-existing `seededTables` key has that latent flaw;
+    // this change does not add a second one.)
+    ...(seedCsvPaths.size ? { seedCsvPaths: JSON.stringify(Object.fromEntries(seedCsvPaths)) } : {}),
     ...(failedFolders.length ? { failedFolders: failedFolders.join(',') } : {}),
     ...(failedTables.length ? { failedTables: failedTables.join(',') } : {}),
     ...(arityMismatches.length ? { arityMismatchTables: arityMismatches.join(',') } : {}),

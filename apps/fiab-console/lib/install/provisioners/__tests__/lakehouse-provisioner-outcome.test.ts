@@ -51,12 +51,15 @@ const adls = {
   files: [] as string[],
   failWriteOn: null as RegExp | null,
   failDirOn: null as RegExp | null,
+  failDirStatus: 500,
 };
 
 vi.mock('@/lib/azure/adls-client', () => ({
   KNOWN_CONTAINERS: ['bronze', 'silver', 'gold', 'landing', 'csv-imports'],
   createDirectory: vi.fn(async (_c: string, path: string) => {
-    if (adls.failDirOn?.test(path)) throw Object.assign(new Error('dir denied'), { statusCode: 500 });
+    if (adls.failDirOn?.test(path)) {
+      throw Object.assign(new Error('dir denied'), { statusCode: adls.failDirStatus });
+    }
     adls.dirs.push(path);
     return { ok: true };
   }),
@@ -95,6 +98,7 @@ beforeEach(() => {
   adls.files = [];
   adls.failWriteOn = null;
   adls.failDirOn = null;
+  adls.failDirStatus = 500;
   delete process.env.LOOM_SYNAPSE_WORKSPACE;
 });
 
@@ -162,11 +166,112 @@ describe('lakehouse provisioner — the status reflects the outcome', () => {
   });
 
   it('still reports the precise RBAC remediation on a 403, not a bare failure', async () => {
-    (await import('@/lib/azure/adls-client')).createDirectory = vi.fn(async () => {
-      throw Object.assign(new Error('denied'), { statusCode: 403 });
-    }) as any;
+    // Driven through the fake's own switch rather than by reassigning the mocked
+    // module's export: that reassignment is permanent for the rest of the FILE,
+    // so every test declared after it would silently run against a 403 ADLS.
+    adls.failDirOn = /.*/;
+    adls.failDirStatus = 403;
     const r = await lakehouseProvisioner(input({ deltaTables: [TABLE('orders')] }) as any);
     expect(r.status).toBe('remediation');
     expect(r.gate?.remediation).toMatch(/Storage Blob Data Contributor/);
+  });
+});
+
+/**
+ * The seed CSV moved to `Files/_seed/` in #3904. Two consumers RE-DERIVE the old
+ * `Tables/<name>/<name>.csv` location instead of reading it:
+ *
+ *   - `app/api/apps/[id]/install/route.ts` builds the path and persists it into
+ *     every auto-bound report's `dataSource` as an `OPENROWSET(… FORMAT='CSV')`
+ *     URL — so a wrong path is not a transient 404, it is a stored one.
+ *   - `lib/editors/lakehouse/lakehouse-editor-shell.tsx` does the same.
+ *
+ * Their derivations do not even agree with each other: the install route
+ * sanitizes a schema with `replace(/[^A-Za-z0-9_]/g, '')`, the seeder with
+ * `'_'`. Three copies of one rule is why the recorded value exists.
+ *
+ * These tests pin the RECORD, not the consumers (which are a follow-up in files
+ * this work item does not own).
+ *
+ * MUTATION PROOF:
+ *   a) Delete the `seedCsvPaths.set(...)` line in the hook -> RED (all four).
+ *   b) Move that line BELOW the `if (!synapse) return` -> RED:
+ *        "records the seed CSV path when Synapse is NOT configured"
+ *      and GREEN on the with-Synapse test — which is the whole point of (b):
+ *      the inert-in-the-common-case version passes a naive test.
+ */
+describe('lakehouse provisioner — the seed CSV path is RECORDED, not re-derivable', () => {
+  const recorded = (r: any): Record<string, string> => JSON.parse(r.secondaryIds!.seedCsvPaths);
+
+  it('records the seed CSV path when Synapse is NOT configured', async () => {
+    // THE trap. `LOOM_SYNAPSE_WORKSPACE` is unset here (beforeEach) — the usual
+    // Azure-native state and the one the demo deploy runs in. The recording hook
+    // sits above the hook's `if (!synapse) return`, so it still fires.
+    expect(process.env.LOOM_SYNAPSE_WORKSPACE).toBeUndefined();
+    const r = await lakehouseProvisioner(input({ deltaTables: [TABLE('orders'), TABLE('returns')] }) as any);
+
+    expect(r.status).toBe('created');
+    expect(Object.keys(recorded(r)).sort()).toEqual(['orders', 'returns']);
+  });
+
+  it('records it with Synapse configured too — the control for the trap above', async () => {
+    // Without this pair, mutation (b) (recording moved below `if (!synapse)
+    // return`) is invisible: it leaves THIS test green and only the unset case
+    // red. Two arms make the difference observable.
+    process.env.LOOM_SYNAPSE_WORKSPACE = 'syn-test';
+    const r = await lakehouseProvisioner(input({ deltaTables: [TABLE('orders')] }) as any);
+
+    expect(r.status).toBe('created');
+    expect(recorded(r).orders).toMatch(/\/Files\/_seed\/orders\.csv$/);
+    // …and the Synapse view really was registered, so the hook ran to the end.
+    expect(r.secondaryIds?.synapseViews).toBe('lakehouse.orders');
+  });
+
+  it('records a path that a blob ACTUALLY EXISTS at', async () => {
+    // Read-back, not shape-check: the recorded value is compared against what
+    // the ADLS client was really asked to write. A test that only asserted the
+    // key was present would pass on a recorded path that is still a guess.
+    const r = await lakehouseProvisioner(input({ deltaTables: [TABLE('orders')] }) as any);
+    const path = recorded(r).orders;
+
+    expect(adls.files).toContain(path);
+    expect(path).toMatch(/\/Files\/_seed\/orders\.csv$/);
+    expect(path.startsWith(`${r.secondaryIds!.rootPath}/`)).toBe(true);
+  });
+
+  it('the path the two consumers currently re-derive does NOT exist', async () => {
+    // Why the follow-up must consume the recorded value rather than be left
+    // alone. This is the exact string `install/route.ts:562` builds.
+    const r = await lakehouseProvisioner(input({ deltaTables: [TABLE('orders')] }) as any);
+    const derived = `${r.secondaryIds!.rootPath}/Tables/orders/orders.csv`;
+
+    expect(adls.files).not.toContain(derived);
+    expect(recorded(r).orders).not.toBe(derived);
+  });
+
+  it('keys by <schema>.<table> when schemas are enabled, and survives a comma in a name', async () => {
+    // JSON rather than `k=v,k=v`: `safeAdlsRelPath` is structural, not
+    // charset-based, so a comma survives into both key and path. A lakehouse or
+    // table named with one would silently corrupt a comma-split encoding.
+    const r = await lakehouseProvisioner(
+      input({
+        schemasEnabled: true,
+        deltaTables: [
+          { ...TABLE('orders'), schema: 'sales' },
+          { ...TABLE('Sales, EMEA'), schema: 'sales' },
+        ],
+      }) as any,
+    );
+    const map = recorded(r);
+    expect(map['sales.orders']).toMatch(/\/Files\/_seed\/sales\.orders\.csv$/);
+    expect(map['sales.Sales, EMEA']).toContain('Sales, EMEA');
+    expect(adls.files).toContain(map['sales.Sales, EMEA']);
+  });
+
+  it('omits the key entirely when nothing seeded, rather than recording an empty map', async () => {
+    const r = await lakehouseProvisioner(
+      input({ deltaTables: [{ name: 'skeleton', ddl: 'CREATE TABLE skeleton ( id BIGINT )' }] }) as any,
+    );
+    expect(r.secondaryIds?.seedCsvPaths).toBeUndefined();
   });
 });

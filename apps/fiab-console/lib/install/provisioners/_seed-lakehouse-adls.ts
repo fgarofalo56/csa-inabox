@@ -341,6 +341,16 @@ export function buildCsv(columns: string[], rows: any[][]): string {
  * keeps the Parquet physical type and the Delta schema in exact agreement, and
  * it avoids an epoch-conversion class of bug in the one place we cannot verify
  * against live storage from here. Disclosed rather than silent.
+ *
+ * EVERY column is emitted `nullable: true` (Parquet OPTIONAL), including ones
+ * the DDL declares `NOT NULL`. That is deliberate: 6 of the 45 bundled tables
+ * ship sample rows SHORTER than their DDL, and the missing values are trailing,
+ * so those columns are written as NULL. Emitting `nullable: false` over a column
+ * that genuinely holds nulls would produce a Delta table whose schema lies about
+ * its own contents — and fabricating a value (an epoch timestamp, an empty
+ * string) to satisfy the constraint would be worse still, because a fabricated
+ * value is indistinguishable from real data downstream. A NULL is legible as
+ * "absent". The mismatch is reported per-table in `arityMismatches`.
  */
 export type DeltaColumnType = 'string' | 'long' | 'double' | 'boolean';
 
