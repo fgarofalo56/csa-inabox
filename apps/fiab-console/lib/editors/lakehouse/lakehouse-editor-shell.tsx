@@ -67,18 +67,17 @@ import {
   useStyles, leafName, collectEntries, formatCell, parseJsonOrError, FileGlyph,
 } from './shared';
 import type {
-  ContainerInfo, PathEntry, ReferenceLakehouse, PreviewResponse, UploadItem, MipLabelOption,
+  PathEntry, ReferenceLakehouse, PreviewResponse, UploadItem, MipLabelOption,
 } from './shared';
 import type { LiveCatalogTable } from './types';
 import { LakehouseEditorContext } from './lakehouse-editor-context';
 import type { LakehouseEditorCtx } from './lakehouse-editor-context';
-import {
-  bindingFromItemState, joinPrefix, containerRelativePath, type LakehouseBinding,
-} from './lakehouse-binding';
+import { containerRelativePath } from './lakehouse-binding';
 import { useLakehousePermissions } from './hooks/use-lakehouse-permissions';
 import { useLakehouseSettings } from './hooks/use-lakehouse-settings';
 import { useLakehouseShortcuts } from './hooks/use-lakehouse-shortcuts';
 import { useLakehouseSecondary } from './hooks/use-lakehouse-secondary';
+import { useLakehouseBinding } from './hooks/use-lakehouse-binding';
 // ── Panes ────────────────────────────────────────────────────────────────────
 import { FilesPane } from './panes/files-pane';
 import { TablesPane } from './panes/tables-pane';
@@ -136,16 +135,7 @@ export function LakehouseEditor({ item, id }: Props) {
   }, [itemQ.data, bundleDeltaTables, lhContent]);
 
   // ── Core state ────────────────────────────────────────────────────────────
-  const [containers, setContainers] = useState<ContainerInfo[] | null>(null);
-  const [containerError, setContainerError] = useState<string | null>(null);
   const [activeContainer, setActiveContainer] = useState<string | null>(null);
-  // #3904 — the item's OWN ADLS binding (container + root the provisioner
-  // wrote to). `stateBinding` is the stamped record the editor already holds;
-  // `serverBinding` is what the BFF's resolveLakehouseAbfss answered when the
-  // record was absent. The editor opens on THIS, never on containers[0].
-  const [serverBinding, setServerBinding] = useState<LakehouseBinding | null>(null);
-  const [bindingResolved, setBindingResolved] = useState(false);
-  const resolveStartedRef = useRef(false);
   const [openPrefixes, setOpenPrefixes] = useState<Record<string, PathEntry[] | 'loading' | { error: string; remediation?: string }>>({});
   const [activePath, setActivePath] = useState<PathEntry | null>(null);
   const [tab, setTab] = useState<string>('files');
@@ -245,17 +235,14 @@ export function LakehouseEditor({ item, id }: Props) {
   }, [cacheKey]);
 
   // ── The item's own ADLS binding (#3904) ───────────────────────────────────
-  // Resolution order — one decision, one answer (see lakehouse-binding.ts):
-  //   1. the stamped record on the item (what resolveLakehouseAbfss prefers),
-  //   2. otherwise the BFF's own resolveLakehouseAbfss answer,
-  //   3. otherwise none — an unsaved / never-provisioned lakehouse browses the
-  //      container root exactly as it did before.
-  const stateBinding = useMemo(() => bindingFromItemState(itemQ.data), [itemQ.data]);
-  const binding = stateBinding ?? serverBinding;
-  /** The prefix the Files browser treats as "the top" of THIS lakehouse. */
-  const rootPrefix = binding && activeContainer === binding.container ? binding.root : '';
-  /** `<root>/Tables` — where this lakehouse's Delta tables actually live. */
-  const tablesPrefix = joinPrefix(rootPrefix, 'Tables');
+  // Which container + root this lakehouse actually owns, and therefore what
+  // the Files browser opens on. One decision, one answer — see
+  // hooks/use-lakehouse-binding.ts and lakehouse-binding.ts.
+  const {
+    containers, containerError, binding, rootPrefix, tablesPrefix, treeRootFor, displayContainers,
+  } = useLakehouseBinding({
+    id, isNewItem, itemQ, activeContainer, setActiveContainer, setOpenPrefixes, cacheKey,
+  });
 
   // ── Domain hooks ──────────────────────────────────────────────────────────
   const perms = useLakehousePermissions({ activeContainer, confirm });
@@ -624,86 +611,6 @@ export function LakehouseEditor({ item, id }: Props) {
   }, [labelDlgEntry, chosenLabelId, mipLabels, onDownload]);
 
   // ── Effects ───────────────────────────────────────────────────────────────
-  // Container load. NOTE (#3904): this no longer picks the active container —
-  // `containers[0]` is `bronze` (KNOWN_CONTAINERS order), which is not where a
-  // lakehouse is materialised. The binding effect below picks it.
-  useEffect(() => {
-    let cancelled = false;
-    clientFetch('/api/lakehouse/containers')
-      .then((r) => parseJsonOrError<{ ok: boolean; error?: string; containers?: ContainerInfo[] }>(r, 'List containers'))
-      .then((j) => {
-        if (cancelled) return;
-        if (!j.ok) { setContainerError(j.error || 'Failed to list containers'); setContainers([]); return; }
-        setContainers(j.containers || []);
-      })
-      .catch((e) => { if (!cancelled) { setContainerError(String(e)); setContainers([]); } });
-    return () => { cancelled = true; };
-  }, []);
-
-  // Bind the editor to the lakehouse's OWN container (#3904). Runs once, as
-  // soon as the container list and the item record have both settled; a user's
-  // later container pick is never overridden.
-  useEffect(() => {
-    if (activeContainer || bindingResolved) return;
-    if (containers === null) return;                       // container list still in flight
-    if (!isNewItem && itemQ.isPending) return;             // item record still in flight
-
-    // 1. Stamped on the item — no round trip.
-    if (stateBinding) {
-      setBindingResolved(true);
-      setActiveContainer(stateBinding.container);
-      return;
-    }
-
-    // 2. Ask the BFF to run resolveLakehouseAbfss (it can see LOOM_*_URL; we
-    //    cannot). One call returns the binding AND its root listing.
-    const workspaceId = itemQ.data?.workspaceId;
-    if (!isNewItem && workspaceId) {
-      // `bindingResolved` is only set when the promise settles, so a re-render
-      // in flight would otherwise fire a second resolve. The ref closes that.
-      if (resolveStartedRef.current) return;
-      resolveStartedRef.current = true;
-      let cancelled = false;
-      const qs = new URLSearchParams({ lakehouseId: id, workspaceId });
-      clientFetch(`/api/lakehouse/paths?${qs.toString()}`)
-        .then((r) => parseJsonOrError<{
-          ok: boolean; error?: string; container?: string | null; root?: string | null;
-          prefix?: string; paths?: PathEntry[];
-        }>(r, 'Resolve lakehouse storage'))
-        .then((j) => {
-          if (cancelled) return;
-          setBindingResolved(true);
-          if (j.ok && j.container) {
-            const resolvedRoot = typeof j.root === 'string' ? j.root : '';
-            setServerBinding({ container: j.container, root: resolvedRoot, source: 'server' });
-            setActiveContainer(j.container);
-            // Prime the cache so the root listing isn't fetched twice.
-            if (Array.isArray(j.paths)) {
-              const key = cacheKey(j.container, typeof j.prefix === 'string' ? j.prefix : resolvedRoot);
-              setOpenPrefixes((p) => (p[key] === undefined ? { ...p, [key]: j.paths as PathEntry[] } : p));
-            }
-            return;
-          }
-          // 3. No binding to be had (honest gate / not provisioned) — browse the
-          //    container root, the pre-#3904 behaviour.
-          if ((containers || []).length) setActiveContainer(containers![0].name);
-        })
-        .catch(() => {
-          if (cancelled) return;
-          setBindingResolved(true);
-          if ((containers || []).length) setActiveContainer(containers![0].name);
-        });
-      return () => { cancelled = true; };
-    }
-
-    // 3. Unsaved / new item — nothing to bind to.
-    setBindingResolved(true);
-    if (containers.length) setActiveContainer(containers[0].name);
-  }, [
-    activeContainer, bindingResolved, containers, isNewItem,
-    itemQ.isPending, itemQ.data?.workspaceId, stateBinding, id, cacheKey,
-  ]);
-
   // Auto-load the lakehouse's ROOT listing when the active container changes.
   // Pre-#3904 this listed the CONTAINER root (''), which for a bound lakehouse
   // is a different directory than the one it owns.
@@ -841,27 +748,6 @@ export function LakehouseEditor({ item, id }: Props) {
   ]);
 
   // ── Tree renderers ────────────────────────────────────────────────────────
-  /**
-   * Where a container's tree starts. For the container this lakehouse is bound
-   * to, that is the lakehouse's own root (#3904) — a user browsing a DIFFERENT
-   * container still starts at that container's root, which is legitimate.
-   */
-  const treeRootFor = useCallback(
-    (container: string) => (binding && container === binding.container ? binding.root : ''),
-    [binding],
-  );
-
-  /**
-   * Containers to render. The bound container is included even when the live
-   * `listContainers()` probe did not return it (it drops entries on a 6s
-   * timeout) — a transient probe miss must not hide the container this item
-   * actually lives in.
-   */
-  const displayContainers = useMemo<ContainerInfo[]>(() => {
-    const list = containers || [];
-    if (!binding?.container || list.some((c) => c.name === binding.container)) return list;
-    return [{ name: binding.container, url: '' }, ...list];
-  }, [containers, binding]);
 
   function renderTreeChildren(container: string, prefix: string): React.ReactElement {
     const state = openPrefixes[cacheKey(container, prefix)];
