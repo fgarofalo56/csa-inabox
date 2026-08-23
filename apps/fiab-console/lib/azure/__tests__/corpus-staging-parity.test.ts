@@ -73,10 +73,23 @@ function stagedDestinations(stagerText: string): string[] {
 }
 
 /**
- * The corpus roots the walker reads, as paths RELATIVE to the bundled corpus
- * dir. Taken from the BUNDLED branch of `detectRoots()` — that is the branch
- * that runs in the production image, and therefore the one the stager has to
- * satisfy.
+ * EVERY corpus root the walker reads, as paths RELATIVE to the bundled corpus
+ * dir, DERIVED from the returned object rather than hand-listed.
+ *
+ * ── Why derived, after the first version was blind (review, 2026-08-23) ─────
+ *
+ * v1 listed the five fields it knew about and asserted `walker.length === 5`.
+ * That made the guard blind to THE EXACT RECURRENCE IT EXISTS TO PREVENT: add
+ * a SIXTH root to `RepoRoots` and forget the stager — the #3881 shape — and the
+ * hand-list simply never mentions it, the length check still sees 5, and the
+ * test passes (measured: RC=0, 4 passed, with an unstaged `PRPs/drafts` root
+ * live in `detectRoots()`). It also silently omitted `adrRoot`, harmless today
+ * only because the staged `docs` tree happens to cover it.
+ *
+ * `Object.entries` means a new field is in scope the moment it is added, so the
+ * walker side is now genuinely derived like the stager side already was. The
+ * only hand-maintained fact left is which roots are KNOWN to be unstaged, and
+ * that is asserted exactly (below), not filtered.
  */
 function walkerBundledRoots(): string[] {
   const cwd = process.cwd();
@@ -87,21 +100,35 @@ function walkerBundledRoots(): string[] {
     const bundled = path.join(tmp, 'copilot-corpus');
     fs.mkdirSync(path.join(bundled, 'docs'), { recursive: true });
     process.chdir(tmp);
-    const roots = detectRoots();
+    const roots = detectRoots() as unknown as Record<string, string>;
     const rel = (p: string) => path.relative(bundled, p).replace(/\\/g, '/');
     expect(rel(roots.repoRoot)).toBe('');
-    return [
-      rel(roots.docsRoot),
-      rel(roots.prpRoot),
-      rel(roots.prpActiveRoot),
-      rel(roots.prpArchiveRoot),
-      rel(roots.consoleLibRoot),
-    ];
+    return Object.entries(roots)
+      .filter(([key]) => key !== 'repoRoot')
+      .map(([key, value]) => {
+        // A root that is not a string is a malformed RepoRoots, not something
+        // to coerce — say so rather than throwing a bare TypeError out of
+        // path.relative(), which is how the removed-root case used to fail.
+        expect(
+          typeof value,
+          `detectRoots().${key} is ${typeof value}, expected a string path`,
+        ).toBe('string');
+        return rel(value);
+      });
   } finally {
     process.chdir(cwd);
     fs.rmSync(tmp, { recursive: true, force: true });
   }
 }
+
+/**
+ * Roots that MUST exist on `RepoRoots`. Removing one from `detectRoots()` drops
+ * it from the derived list above, which would otherwise make this guard quietly
+ * measure less — the removal would look like "nothing unstaged". Asserted by
+ * name so that case fails with a guided message instead of a TypeError.
+ */
+const REQUIRED_WALKER_ROOTS = ['docs', 'PRPs/active', 'PRPs/archive', 'PRPs/completed/csa-loom-pillar'];
+
 
 /**
  * KNOWN, PRE-EXISTING GAP — asserted EXACTLY, not skipped.
@@ -142,9 +169,19 @@ describe('corpus walker roots vs. image staging', () => {
     const staged = stagedDestinations(stagerText);
     const walker = walkerBundledRoots();
 
-    // Control: the probe must actually have produced roots.
-    expect(walker.length).toBe(5);
-    expect(walker).toContain('PRPs/archive');
+    // Control: the probe produced roots at all, and the roots this guard is
+    // ABOUT are still present. Asserted by NAME, not by count — a count check
+    // passes happily when a root is added, which is the #3881 shape.
+    expect(walker.length).toBeGreaterThan(0);
+    for (const required of REQUIRED_WALKER_ROOTS) {
+      expect(
+        walker,
+        `detectRoots() no longer declares a root for '${required}'. If that was ` +
+          'deliberate, remove it from REQUIRED_WALKER_ROOTS here and from SOURCES ' +
+          `in ${STAGER_REL} in the same PR — otherwise this guard silently stops ` +
+          'checking the thing it exists for.',
+      ).toContain(required);
+    }
 
     // A walker root is covered when the stager copies it or an ancestor of it.
     const covered = (r: string) =>
@@ -155,9 +192,9 @@ describe('corpus walker roots vs. image staging', () => {
       uncovered,
       'the set of corpus roots that detectRoots() reads but the stager never copies has ' +
         'CHANGED. In the production image an unstaged root resolves to a missing directory ' +
-        'and walks NOTHING. If you added a root, add it to SOURCES in ' +
-        `${STAGER_REL}; if you fixed the known gap, remove it from KNOWN_UNSTAGED_ROOTS. ` +
-        `Found: [${uncovered.join(', ')}]`,
+        'and walks NOTHING, so the feature looks shipped and is inert. If you added a root, ' +
+        `add it to SOURCES in ${STAGER_REL}; if you fixed the known gap, remove it from ` +
+        `KNOWN_UNSTAGED_ROOTS. Found: [${uncovered.join(', ')}]`,
     ).toEqual([...KNOWN_UNSTAGED_ROOTS].sort());
   });
 

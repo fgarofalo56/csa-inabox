@@ -99,8 +99,9 @@ import {
   buildCorpus,
 } from '../loom-docs-index';
 
-import { ARCHIVED_BANNER } from '../loom-docs-corpus';
+import { SUPERSEDED_NOTICE, isSupersededPath } from '../loom-docs-corpus';
 import { MAX_CHUNK } from '../docs-chunker';
+import { tokenize } from '../docs-ranker';
 
 import { extractProposedChange, PROPOSED_CHANGE_KEY } from '../../copilot/proposed-change';
 
@@ -454,37 +455,53 @@ describe('loom-docs-index', () => {
     expect(archivedFiles.size).toBeGreaterThan(40);
   }, 60_000);
 
-  it('archived PRP chunks are marked superseded; current ones are not', async () => {
-    // Per the operator standard for this restoration: the Copilot may retrieve
-    // superseded design history, but must never present it as current. The
-    // corpus had no notion of document status, and a new DocChunk FIELD could
-    // not supply one — `loom-docs-index` spreads the whole chunk into the AI
-    // Search indexing action against a fixed INDEX_DEFINITION field list, so an
-    // unknown property fails the upload batch (Cosmos, being schemaless, would
-    // have accepted it — i.e. the field would work on one backend and break the
-    // other). The marker therefore lives in `content`, which both backends
-    // carry verbatim and which is the text the model actually reads.
+  it('archived PRP chunks are identifiable by path and carry NO injected boilerplate', async () => {
+    // The Copilot may retrieve superseded design history but must never present
+    // it as current. The FIRST version of this change stamped a notice into
+    // indexed `content`, which inverted the goal: `tokenize()` reduced it to
+    // ["archived","superseded","design","history","current","plan","see",
+    // "prps","active","current","work"] — no stopwords among them and
+    // "current" TWICE — so a 5% slice of the corpus took 90-100% of the top-10
+    // for any query sharing a notice word, and archived docs became the top
+    // match for "current". It also cut IDF corpus-wide (df "current"
+    // 1944 -> 4092). Marking now happens at prompt/citation assembly, keyed off
+    // `path`, which is retrievable on both backends.
+    //
+    // This test is the regression fence for that: it asserts the corpus is
+    // marked by PATH and that NO ranking-visible text is injected.
     const chunks = await buildCorpus();
 
-    const archived = chunks.filter((c) => c.path.startsWith('PRPs/archive/'));
-    const current = chunks.filter(
-      (c) => c.kind === 'prp' && !c.path.startsWith('PRPs/archive/'),
-    );
-
+    const archived = chunks.filter((c) => isSupersededPath(c.path));
+    const current = chunks.filter((c) => c.kind === 'prp' && !isSupersededPath(c.path));
     expect(archived.length).toBeGreaterThan(0);
     expect(current.length).toBeGreaterThan(0);
 
-    // EVERY archived chunk carries the marker — not just the first one.
-    expect(archived.every((c) => c.content.startsWith(ARCHIVED_BANNER))).toBe(true);
-    // NO current chunk does. Without this half the assertion above would still
-    // pass if the banner were stamped onto everything indiscriminately.
-    expect(current.some((c) => c.content.includes(ARCHIVED_BANNER))).toBe(false);
+    // 1. The notice must never reach indexed content — on ANY chunk, not just
+    //    archived ones (a blanket stamp would poison the whole corpus).
+    expect(chunks.some((c) => c.content.includes(SUPERSEDED_NOTICE))).toBe(false);
 
-    // The banner must not push a chunk past the size invariant the rest of the
-    // corpus holds to — the body budget is reduced by exactly the banner length.
-    for (const c of archived) {
-      expect(c.content.length).toBeLessThanOrEqual(MAX_CHUNK);
-    }
+    // 2. Stronger, and independent of the exact wording: no token from the
+    //    notice may be injected into archived chunks. If someone re-adds a
+    //    reworded banner this still fires, because the failure mode is
+    //    tokens-in-content, not one literal string.
+    const noticeTokens = new Set(tokenize(SUPERSEDED_NOTICE));
+    expect(noticeTokens.size).toBeGreaterThan(0); // control: tokenizer works
+    const injected = archived.filter((c) => {
+      const head = tokenize(c.content.slice(0, SUPERSEDED_NOTICE.length + 8));
+      // Every leading token appearing in the notice AND the chunk starting with
+      // notice-shaped text is the signature of a prepended banner.
+      return head.length > 0 && head.every((t) => noticeTokens.has(t));
+    });
+    expect(
+      injected.map((c) => c.path).slice(0, 3),
+      'archived chunks appear to start with injected notice text — that is the ' +
+        'BM25-poisoning regression; mark superseded docs at prompt assembly via ' +
+        'isSupersededPath(), never in DocChunk.content',
+    ).toEqual([]);
+
+    // 3. Archived chunks stay within the ordinary chunk-size invariant (no
+    //    special budget is needed once nothing is prepended).
+    for (const c of archived) expect(c.content.length).toBeLessThanOrEqual(MAX_CHUNK);
   }, 60_000);
 
   it('reindex (Cosmos fallback) persists chunks and warns about missing AI Search', async () => {

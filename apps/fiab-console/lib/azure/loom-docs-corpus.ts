@@ -245,59 +245,68 @@ export interface SourceFileRef {
   abs: string;
   rel: string;
   kind: DocChunk['kind'];
-  /**
-   * This file is SUPERSEDED design history (it came from `PRPs/archive/`).
-   * Required, not optional, so a new md source cannot be added to the walk
-   * without deciding which side of the line it falls on.
-   */
-  superseded: boolean;
 }
 
 /**
- * Prefix stamped onto every chunk walked from `PRPs/archive/`.
+ * The path prefix that marks SUPERSEDED design history.
  *
- * ── Why the marker lives in `content` and NOT in a new `DocChunk` field ──────
- *
- * The corpus had NO notion of document status before this: `DocChunk` carries
- * `kind` ('docs' | 'repo' | 'prp' | 'adr'), which says what KIND of source a
- * chunk came from, never whether it is still true. Adding a `status` field is
- * the obvious move and it is the WRONG one here, for a measured reason:
- *
- *   `loom-docs-index.ts` uploads to Azure AI Search by SPREADING the whole
- *   chunk into the indexing action (`{'@search.action':'mergeOrUpload', ...c}`),
- *   and `INDEX_DEFINITION` there declares a FIXED field list with no `status`.
- *   AI Search rejects unknown fields, so a new property would fail the upload
- *   batch. Cosmos (`items.upsert(chunk)`) is schemaless and would have accepted
- *   it — so the field would work on one backend and break the other, which is
- *   worse than not having it. Making it a real field therefore requires an
- *   `INDEX_DEFINITION` + `select` change in `loom-docs-index.ts`, a file this
- *   change does not own.
- *
- * Putting the marker in `content` is the smallest change that is correct on
- * BOTH backends and needs no schema migration — and it is strictly stronger for
- * the actual goal, because `content` is the text the model reads. A filterable
- * field lets a caller exclude superseded docs; this makes the document itself
- * say it is superseded, so a chunk that reaches the prompt by ANY retrieval
- * path (AI Search, Cosmos, BM25 re-rank) carries its own disclaimer.
- *
- * Kept short and stable — `chunkMarkdown` is given a budget reduced by exactly
- * this length so the `content.length <= MAX_CHUNK` invariant still holds.
+ * `path` is a retrievable field on BOTH backends (an AI Search
+ * `INDEX_DEFINITION` field and a Cosmos document property), so it is the one
+ * signal a chunk carries no matter which retrieval path produced it — which
+ * makes it the right key for marking a document superseded at PROMPT/CITATION
+ * assembly time.
  */
-export const ARCHIVED_BANNER =
-  '[ARCHIVED / SUPERSEDED design history — not the current plan. See PRPs/active/ for current work.]\n\n';
+export const SUPERSEDED_PATH_PREFIX = 'PRPs/archive/';
+
+/** True when a chunk's repo-relative `path` is superseded design history. */
+export function isSupersededPath(chunkPath: string): boolean {
+  return chunkPath.startsWith(SUPERSEDED_PATH_PREFIX);
+}
 
 /**
- * Chunk-size budget for a source file.
+ * The notice to render ALONGSIDE a superseded chunk — at prompt/citation
+ * assembly, keyed off {@link isSupersededPath}. Exported so the wording has one
+ * home instead of being retyped at each call site.
  *
- * An archived chunk is `ARCHIVED_BANNER + body`, so its BODY budget is reduced
- * by exactly the banner length. Without this the banner would push archived
- * chunks past `MAX_CHUNK` and quietly break the invariant that every chunk fits
- * what the indexers expect — the kind of thing that passes a spot check and
- * fails on the one full-size section in the tree.
+ * ── DO NOT PUT THIS IN `DocChunk.content`. IT WAS, AND IT INVERTED THE GOAL ──
+ *
+ * The first version of this change prepended the notice to indexed `content`,
+ * reasoning that `content` is what the model reads and is carried verbatim by
+ * both backends. Both halves of that are true and the conclusion was still
+ * wrong, because `content` is not only READ — it is SCORED and SEARCHED.
+ *
+ * Measured on the staged production corpus (49,481 chunks, archived = 5.10%):
+ *
+ *   query                                   archived in top-10
+ *                                           WITH notice   WITHOUT
+ *   "what is the current plan"                 10/10         1/10
+ *   "what is the active plan for deployment"    9/10         0/10
+ *   "design history"                           10/10         1/10
+ *   "current work in progress"                  6/10         0/10
+ *   "how do I create a lakehouse" (control)     0/10         0/10
+ *
+ * `tokenize()` reduces the notice to
+ * ["archived","superseded","design","history","current","plan","see","prps",
+ * "active","current","work"] — none of them in `RANKER_STOPWORDS`, and
+ * "current" TWICE, giving tf=2 in every archived chunk. So a 5% slice of the
+ * corpus took 90-100% of the top-10 whenever a query shared a notice word, and
+ * the text meant to say "this is NOT the current plan" made archived documents
+ * the top match for "current". It degraded IDF corpus-wide too (df "current"
+ * 1944 -> 4092, ~-23% IDF; "plan" -27%, "active" -29%, "work" -32%), which
+ * hurts queries that should hit ACTIVE docs.
+ *
+ * Stripping it only before BM25 would NOT have been enough: `content` is
+ * `searchable: true` with the `standard.lucene` analyzer in
+ * `loom-docs-index.INDEX_DEFINITION`, so AI Search's own full-text query would
+ * still match the notice and poison the CANDIDATE WINDOW before any re-rank ran.
+ *
+ * This is exactly the pathology #3084 recorded for `docs/fiab/parity-gap/**`:
+ * numerous documents sharing boilerplate that matches almost any question do
+ * not merely add noise, they DISPLACE real answers.
  */
-function chunkBudget(ref: Pick<SourceFileRef, 'superseded'>): number {
-  return ref.superseded ? MAX_CHUNK - ARCHIVED_BANNER.length : MAX_CHUNK;
-}
+export const SUPERSEDED_NOTICE =
+  'ARCHIVED / SUPERSEDED design history — not the current plan. See PRPs/active/ for current work.';
+
 
 /**
  * Enumerate every source file the corpus indexes — markdown docs + repo source
@@ -309,22 +318,23 @@ export function enumerateSourceFiles(roots: RepoRoots): SourceFileRef[] {
   const refs: SourceFileRef[] = [];
   const seen = new Set<string>();
   const rel = (file: string) => path.relative(roots.repoRoot, file).replace(/\\/g, '/');
-  const mdSources: Array<{ root: string; kind: DocChunk['kind']; superseded?: boolean }> = [
+  const mdSources: Array<{ root: string; kind: DocChunk['kind'] }> = [
     { root: path.join(roots.docsRoot, 'fiab'), kind: 'docs' },
     { root: roots.docsRoot, kind: 'docs' },
     { root: roots.prpRoot, kind: 'prp' },
     { root: roots.prpActiveRoot, kind: 'prp' },
     // Superseded PRP units. Walked LAST so that if a path were ever reachable
-    // from both an active and an archived root, `seen` keeps the ACTIVE copy
-    // and the document is never marked superseded while it is still current.
-    { root: roots.prpArchiveRoot, kind: 'prp', superseded: true },
+    // from both an active and an archived root, `seen` keeps the ACTIVE copy.
+    // Whether a file is superseded is derived from its path at read time
+    // (`isSupersededPath`), never stored — one source of truth.
+    { root: roots.prpArchiveRoot, kind: 'prp' },
     { root: roots.adrRoot, kind: 'adr' },
   ];
   for (const src of mdSources) {
     for (const file of walkMarkdown(src.root)) {
       if (seen.has(file)) continue;
       seen.add(file);
-      refs.push({ abs: file, rel: rel(file), kind: src.kind, superseded: src.superseded === true });
+      refs.push({ abs: file, rel: rel(file), kind: src.kind });
     }
   }
   const repoFiles = [
@@ -335,7 +345,7 @@ export function enumerateSourceFiles(roots: RepoRoots): SourceFileRef[] {
   for (const file of repoFiles) {
     if (seen.has(file)) continue;
     seen.add(file);
-    refs.push({ abs: file, rel: rel(file), kind: 'repo', superseded: false });
+    refs.push({ abs: file, rel: rel(file), kind: 'repo' });
   }
   return refs;
 }
@@ -385,7 +395,7 @@ export function collectSources(): CollectedCorpus {
       continue;
     }
 
-    const blocks = chunkMarkdown(raw, chunkBudget(ref));
+    const blocks = chunkMarkdown(raw);
     if (blocks.length === 0) continue;
     blocks.forEach((b, idx) => {
       chunks.push({
@@ -393,7 +403,11 @@ export function collectSources(): CollectedCorpus {
         kind: ref.kind,
         path: ref.rel,
         heading: b.heading,
-        content: ref.superseded ? ARCHIVED_BANNER + b.content : b.content,
+        // NOTHING is prepended here. A superseded chunk is identified by its
+        // `path` (see isSupersededPath) and marked at prompt/citation assembly.
+        // Stamping the notice into indexed content made archived docs the top
+        // hit for "current" — see the SUPERSEDED_NOTICE note.
+        content: b.content,
         url: docsUrlForPath(ref.rel),
         touchedAt,
       });
@@ -493,12 +507,7 @@ export function localCorpusStats(): Bm25CorpusStats | null {
         if (summary) acc.add({ content: summary });
         continue;
       }
-      for (const b of chunkMarkdown(raw, chunkBudget(ref))) {
-        acc.add({
-          heading: b.heading,
-          content: ref.superseded ? ARCHIVED_BANNER + b.content : b.content,
-        });
-      }
+      for (const b of chunkMarkdown(raw)) acc.add({ heading: b.heading, content: b.content });
     }
     const stats = acc.finish();
     // A corpus that produced no chunks is not statistics — it is an empty
