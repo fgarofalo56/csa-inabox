@@ -44,6 +44,34 @@ resource cae 'Microsoft.App/managedEnvironments@2025-02-02-preview' = if (contai
   location: location
   tags: complianceTags
   properties: {
+    // WORKLOAD PROFILES — the D8 profile is DECLARED but reserves NOTHING at idle.
+    //
+    // `minimumCount` on a Dedicated profile is a FLOOR, not a ceiling: ACA keeps
+    // that many D8 nodes (8 vCPU / 32 GiB) provisioned and BILLING whether or not
+    // anything is scheduled on them, and a non-Consumption profile also puts the
+    // environment on the Dedicated plan's separate per-hour management charge.
+    // `minimumCount: 1` therefore reserved a node unconditionally, on every
+    // estate, from the moment the environment came up.
+    //
+    // MEASURED (2026-08-22, Commercial estate): all 29 Container Apps and all 17
+    // ACA Jobs run on `Consumption`. ZERO workloads are assigned to D8. The repo
+    // agrees — the ONLY consumer of a profile name is app-deployments.bicep:
+    //     workloadProfileName: contains(app, 'workloadProfile') ? app.workloadProfile : 'Consumption'
+    // and NO entry of the `apps[]` array in admin-plane/main.bicep sets
+    // `workloadProfile`, in any params file, for any boundary. No ACA Job declares
+    // `workloadProfileName` at all. So the floor was holding a node open for a
+    // workload set that is, and always has been, empty. There was no comment
+    // giving a rationale for the 1 — it is not honouring a documented constraint.
+    //
+    // WHY THE PROFILE STAYS DECLARED rather than being removed: the Console's
+    // Admin -> Capacity & compute -> Scaling surface offers D8 as a live choice
+    // (`ACA_WORKLOAD_PROFILES` in lib/azure/container-apps-arm-client.ts, and the
+    // POST /api/admin/scaling/container-apps route validates against it). An app
+    // can only be PATCHed onto a profile the ENVIRONMENT declares, so deleting
+    // this entry would turn a working control into a 400 — the vaporware shape
+    // no-vaporware.md forbids. `minimumCount: 0` keeps scale-out fully available
+    // (ACA provisions a D8 node on demand the moment an app is assigned, up to
+    // maximumCount) while reserving nothing when nothing is assigned.
     workloadProfiles: [
       {
         name: 'Consumption'
@@ -52,7 +80,7 @@ resource cae 'Microsoft.App/managedEnvironments@2025-02-02-preview' = if (contai
       {
         name: 'D8'
         workloadProfileType: 'D8'
-        minimumCount: 1
+        minimumCount: 0
         maximumCount: 10
       }
     ]
