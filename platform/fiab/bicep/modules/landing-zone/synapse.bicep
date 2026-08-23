@@ -114,8 +114,12 @@ param dedicatedPoolSku string = 'DW100c'
 @description('Collation for the Dedicated pool.')
 param dedicatedPoolCollation string = 'SQL_Latin1_General_CP1_CI_AS'
 
-@description('Provision the Dedicated pool paused on creation (recommended — Loom resumes on demand from the editor).')
-param dedicatedPoolStartPaused bool = true
+// REMOVED 2026-08-22: `param dedicatedPoolStartPaused bool = true`, described as
+// "Provision the Dedicated pool paused on creation (recommended — Loom resumes on
+// demand from the editor)". It was declared here and referenced NOWHERE — not by
+// the `dedicatedPool` resource below, not by any caller, not by any .bicepparam.
+// It read as a working, on-by-default cost control and did nothing; a pool created
+// through this module came up Online and billing. See the note on `dedicatedPool`.
 
 @description('Dedicated pool backup storage redundancy. Some subscriptions block GRS via policy (Azure SQL Database Block Geo-redundant Backup Storage); LRS works everywhere.')
 @allowed(['LRS', 'ZRS', 'GRS'])
@@ -224,6 +228,33 @@ resource sparkPoolDiag 'Microsoft.Insights/diagnosticSettings@2021-05-01-preview
 
 // =====================================================================
 // Dedicated SQL pool (v2.0)
+//
+// COST + THE "START PAUSED" QUESTION (2026-08-22).
+// A DW100c pool bills per hour for as long as its status is `Online`; paused it
+// costs storage only. There is deliberately NO create-time paused state set
+// here, because the sqlPools PUT body has none — pausing is a separate ACTION on
+// an already-created resource, `POST .../sqlPools/{name}/pause`. Both callers in
+// this repo prove that shape: the Logic App in `synapse-auto-pause.bicep` and
+// `pauseDedicatedPool()` in apps/fiab-console/lib/azure/synapse-dev-client.ts.
+// A template cannot express it; only an action can perform it.
+//
+// So a freshly created pool IS Online and billing, and the ONLY thing that pauses
+// it is `synapse-auto-pause.bicep`, which main.bicep invokes at line ~427 of this
+// directory's main.bicep.
+//
+// !! THAT MECHANISM DOES NOT REACH ANY SHIPPED ESTATE. Measured 2026-08-22: no
+// Logic App matching `autopause`/`auto-pause` exists tenant-wide, while 14 other
+// Loom Logic Apps do. The cause is NOT this module and NOT a stale compiled
+// template — it is that `platform/fiab/bicep/main.bicep` gates the whole landing
+// zone on
+//     var deployLandingZones = effectiveTopology != 'tenant'
+// and EVERY shipped params file (commercial, commercial-full, gcc, gcc-high, il5)
+// pins `topology = 'tenant'`, so `useSingleDlz` and `useMultiDlz` are both false
+// and this file is never instantiated. `synapse-auto-pause.bicep` is the only
+// Logic App under modules/landing-zone/ — which is exactly why it is the only one
+// missing. Fixing that gate is out of this module's reach; it needs the
+// admin-plane-scoped treatment `consoleCosmos` / `uatResultsStore` / the Weave PG
+// server (#3371/#3372) already use to survive the tenant topology.
 // =====================================================================
 
 resource dedicatedPool 'Microsoft.Synapse/workspaces/sqlPools@2021-06-01' = if (deployDedicatedPool) {
