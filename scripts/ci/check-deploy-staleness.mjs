@@ -140,6 +140,13 @@ export const WATCHED = [
       'scripts/csa-loom/ensure-vpn-dns-resolver.sh',
       'scripts/csa-loom/fix-synapse-spark-storage-access.sh',
       'scripts/csa-loom/grant-console-rbac.sh',
+      // #3374 — the bootstrap now INVOKES this script instead of carrying a
+      // second, byte-divergent copy of the same five Graph app-role grants
+      // inline. Two implementations of one grant list is a drift generator: add
+      // a sixth role to the script and the inline copy silently keeps granting
+      // five. Now that the workflow executes it, it is a deploy source of this
+      // lane and check-deploy-paths-coverage requires this line.
+      'scripts/csa-loom/grant-graph-approles.sh',
       'scripts/csa-loom/grant-identity-graph-approles.sh',
       'scripts/csa-loom/grant-purview-datamap-role.sh',
       'scripts/csa-loom/grant-purview-uc-role.sh',
@@ -149,9 +156,11 @@ export const WATCHED = [
       'scripts/csa-loom/resolve-msal-client-id.sh',
       // #3143 — every DLZ-scoped coordinate the bootstrap uses (subscription,
       // resource group, Synapse + Databricks workspace names) now comes from
-      // this resolver instead of from an assumed `single` domain. Listed by
-      // hand: extractDeploySources() recognises `bash X.sh` and not
-      // `node X.mjs`, so this one is invisible to the coverage guard.
+      // this resolver instead of from an assumed `single` domain. It was listed
+      // BY HAND because extractDeploySources() recognised `bash X.sh` and not
+      // `node X.mjs`, so it was invisible to the coverage guard; since #3787 the
+      // extractor knows the `node` shape and this line is now MECHANICALLY
+      // enforced rather than remembered.
       'scripts/csa-loom/resolve-dlz-coordinates.mjs',
       'scripts/csa-loom/grant-synapse-rbac-invnet-job.sh',
       'scripts/csa-loom/grant-uami-graph-roles.sh',
@@ -236,6 +245,16 @@ export const WATCHED = [
       'apps/fiab-console/Dockerfile.uat',
       'apps/fiab-console/e2e/**',
       'scripts/csa-loom/deploy-loom-uat-job.sh',
+      // #3787 — this lane writes LOOM_AUTOMATION_OID into the DEPLOYED job's env
+      // YAML, and this script is what produces that value (repo var → carried
+      // value from the live job → refuse). It is not a run-shaping helper: the
+      // value it resolves is baked into the Container App Job, and a wrong one is
+      // an automation identity the console will never accept as tenant admin, so
+      // the UAT suite signs in as nobody and the roll gate grades a dead session.
+      // Newly VISIBLE to check-deploy-paths-coverage now that it understands
+      // `node <path>.mjs`; it was undeclared here purely because nothing could see
+      // it.
+      'scripts/ci/resolve-automation-oid.mjs',
     ],
     maxDays: 14,
   },
@@ -246,6 +265,10 @@ export const WATCHED = [
       '.github/workflows/deploy-loom-verify.yml',
       'scripts/csa-loom/loom-verify.js',
       'scripts/csa-loom/deploy-loom-verify-job.sh',
+      // #3787 — same shape as the deploy-loom-uat entry above: the resolved OID
+      // is written into the deployed job's env, so this script decides which
+      // identity the production verifier authenticates as.
+      'scripts/ci/resolve-automation-oid.mjs',
     ],
     maxDays: 14,
   },
@@ -369,6 +392,69 @@ export const WATCHED = [
       // through a shared helper. Editing it changes whether the lane can
       // authenticate at all.
       'scripts/ci/acr-login-retry.sh',
+      // ── #3787: the `node <path>.mjs` sources this lane has always executed ──
+      // Every one of these was invisible to check-deploy-paths-coverage, because
+      // its extractor knew `bash X.sh` and not `node X.mjs`. They are NOT a new
+      // dependency — the workflow has been running them — they were simply
+      // undeclared, so a commit to any of them could never register as drift on
+      // the ONLY lane that applies main.bicep to Commercial.
+      //
+      // Each is here because it DECIDES SOMETHING THE APPLY DOES, not because it
+      // is executed. The three node sources on this lane that do NOT are named
+      // CI_PLUMBING in the coverage guard instead — deploy-retry.mjs and
+      // deploy-classify.mjs (they shape how a FAILING run behaves, not what a
+      // successful one deploys) and preflight-policy-restrictions.mjs (invoked
+      // `--advisory`; it prints which policies govern the scope and cannot refuse
+      // the apply). Each of those loans states the boundary it does not cross.
+      //
+      //   deploy-fiab-guard.mjs        decides deploy_apps_enabled + deploy_sub —
+      //                                the deploy's most consequential outputs.
+      //   reconcile-resolve.mjs        decides the reconcile REGION and upgrades
+      //                                deployAppsEnabled after pinning appImageTags.
+      //   reconcile-policy.mjs         the scheduled reconcile's decision logic,
+      //                                including the teardown invariant.
+      //   deploy-input-safety.mjs      REFUSES inputs that would tear down or
+      //                                mis-target the estate.
+      //   bootstrap-admin-principal.mjs REFUSES a bootstrap tenant-admin binding
+      //                                that matches no human.
+      //   assert-lake-binding.mjs      REFUSES an apply that would DELETE the live
+      //                                lake env vars (#3701).
+      //   probe-lake-grant-rights.mjs  decides whether the cross-sub lake grant
+      //                                pass is armed at all.
+      //   preflight-brownfield-adopt.mjs emits existingVpnGatewayName /
+      //                                apimGatewayDnsLinkName — template PARAMS.
+      //   preflight-private-dns-links.mjs adopt-or-fail on the hub VNet's zone
+      //                                links; it can stop the apply.
+      'scripts/ci/deploy-fiab-guard.mjs',
+      'scripts/ci/reconcile-resolve.mjs',
+      'scripts/ci/reconcile-policy.mjs',
+      'scripts/ci/deploy-input-safety.mjs',
+      'scripts/ci/bootstrap-admin-principal.mjs',
+      'scripts/ci/assert-lake-binding.mjs',
+      'scripts/csa-loom/probe-lake-grant-rights.mjs',
+      'scripts/csa-loom/preflight-brownfield-adopt.mjs',
+      'scripts/csa-loom/preflight-private-dns-links.mjs',
+      // ── #3786 (routed from PR #3888) — the estate preflights come to COMMERCIAL
+      // #3786 is the finding that Commercial carries the same latent stopped-ADX
+      // and DNS-immutability exposure that broke GCC-High for nine consecutive
+      // runs. PR #3888 ports the three GCC-High controls onto this lane, and they
+      // are the same class already watched there: one MUTATES the estate (starts a
+      // stopped ADX cluster), one decides `dnsResolverInboundStaticIp` — a value
+      // ARM treats as IMMUTABLE — and one REFUSES an apply that would move a live
+      // Container App onto a tag nobody asked for.
+      //
+      // WORTH RECORDING: the routed patch that surfaced #3888's other new sources
+      // did not mention this lane at all, and the guard could not have prompted
+      // anyone — all three are `node`-invoked, so the pre-#3787 extractor saw NONE
+      // of them and reported no GAP for Commercial. Two independent misses of the
+      // same blind spot, in one change.
+      'scripts/ci/ensure-adx-cluster-running.mjs',
+      'scripts/ci/resolve-dns-inbound-allocation.mjs',
+      'scripts/ci/assert-no-silent-image-tag-revert.mjs',
+      // The shared absence rule the two preflights import. Hand-listed for the
+      // same reason as on the sovereign lanes: an imported module is invisible to
+      // every execution shape, #3787 included.
+      'scripts/ci/_arm-absence.mjs',
     ],
     maxDays: 7,
   },
@@ -431,7 +517,10 @@ export const WATCHED = [
   //   * scripts/ci/deploy-retry.mjs and scripts/ci/deploy-classify.mjs. They
   //     shape how a failing run behaves, not what a successful run deploys, and
   //     deploy-fiab-commercial.yml — which executes both — does not list them
-  //     either. One rule, three lanes.
+  //     either. One rule, three lanes. Since #3787 that position is no longer
+  //     prose in this comment: both are named CI_PLUMBING entries in
+  //     check-deploy-paths-coverage.mjs, each carrying the boundary the loan does
+  //     NOT cross, so the reasoning is asserted rather than restated.
   {
     workflow: 'deploy-fiab-gcch.yml',
     why: 'The ONLY workflow that applies platform/fiab/bicep/main.bicep to the GCC-High (Azure Government) estate — every env var, role grant and module the sovereign Console depends on reaches production through this path and no other. Databricks Unity Catalog has no Gov endpoint, so this is also the lane that adopts and re-points the loom-unity catalog that IS the sovereign catalog story (cloud-parity.md). Stale, failing or disabled here means merged bicep is inert in the boundary that can least afford it. This row is the "did the deploy lane RUN" half of the sovereign signal; the ESTATES probe of the Gov console\'s live /build-marker.txt is the "did it LAND" half (#3730). Neither implies the other: a lane can succeed having deployed nothing, and an estate can be current because someone rolled it by hand.',
@@ -471,18 +560,23 @@ export const WATCHED = [
       // whether. The other MUTATES the estate (it starts a stopped ADX cluster)
       // before the apply.
       //
-      // HAND-LISTED BECAUSE THE COVERAGE GUARD CANNOT SEE THEM. Measured with the
-      // repo's own extractDeploySources() over this workflow: 8 sources detected,
-      // neither of these among them. Its shapes are `.sh`, `-f/--template-file`,
-      // `--file <dockerfile>`, an `az acr build` context line, and `--definition
-      // "@path"` — `node <path>.mjs` is not one of them, so
-      // check-deploy-paths-coverage passes VACUOUSLY here rather than catching
-      // the omission. Without these two lines, someone could widen
-      // ABSENCE_CODES so an RBAC denial reads as greenfield, merge it, and the
-      // watchdog would report no GCC-High drift. Teaching the extractor the
-      // `node <path>.mjs` shape is the general fix and is tracked in #3787 —
-      // it would newly require 24 sources across the watched deploy workflows to
-      // be declared, which is its own change, not a rider on this one.
+      // THEY WERE HAND-LISTED BECAUSE THE COVERAGE GUARD COULD NOT SEE THEM — AND
+      // THAT IS NO LONGER TRUE (#3787, fixed). The note that stood here read:
+      //
+      //     "Measured with the repo's own extractDeploySources() over this
+      //      workflow: 8 sources detected, neither of these among them. Its
+      //      shapes are `.sh`, `-f/--template-file`, `--file <dockerfile>`, an
+      //      `az acr build` context line, and `--definition "@path"` — `node
+      //      <path>.mjs` is not one of them, so check-deploy-paths-coverage
+      //      passes VACUOUSLY here rather than catching the omission."
+      //
+      // It was accurate when written and it is the reason the omission could
+      // exist. extractDeploySources() now recognises `node <path>.(mjs|cjs|js)`,
+      // so these two are DETECTED and the coverage guard would fail if either
+      // were dropped from this list. The hazard the note described — someone
+      // widening ABSENCE_CODES so an RBAC denial reads as greenfield, with the
+      // watchdog reporting no GCC-High drift — is now mechanically closed rather
+      // than closed by whoever remembered to add a line here.
       'scripts/ci/resolve-dns-inbound-allocation.mjs',
       'scripts/ci/ensure-adx-cluster-running.mjs',
       // The shared rule BOTH of the above import to tell "definitely absent"
@@ -511,6 +605,41 @@ export const WATCHED = [
       // before they were wired.
       'scripts/csa-loom/resolve-internal-token.sh',
       'scripts/csa-loom/resolve-msal-client-id.sh',
+      // #3787 — the two image-tag decisions on this lane, newly VISIBLE now that
+      // the coverage guard understands `node <path>.mjs`. Both are the same class
+      // as the preflights above: they decide WHAT reaches the sovereign estate.
+      //   adopt-image-tags.mjs  resolves every appImageTags entry FROM THE RUNNING
+      //                         estate and exports it into $GITHUB_ENV, so it is
+      //                         literally the source of the tags this apply writes.
+      //   assert-no-silent-image-tag-revert.mjs  REFUSES an apply that would move a
+      //                         live Container App onto a tag nobody asked for.
+      //                         Weakening it re-opens #3161: a full Gov deploy that
+      //                         succeeds while flattening SHA-pinned apps to v0.1.
+      'scripts/ci/adopt-image-tags.mjs',
+      'scripts/ci/assert-no-silent-image-tag-revert.mjs',
+      // ── #3380 (routed from PR #3888) — brownfield adopt discovery ──────────
+      // The Batch A change ports adopt-discovery into the sovereign lanes, which
+      // gives this entry three new deploy sources. They are listed HERE, ahead of
+      // that merge, because the file they belong in is owned by this lane and a
+      // shared-file edit has to be sequenced, never parallelised.
+      //
+      // These are deploy sources in the strongest sense: discover-dlz-adopt-plan
+      // composes LOOM_ADOPT_JSON, which gcc-high.bicepparam reads at bicep-COMPILE
+      // time, so it decides parameter VALUES that reach the estate — including
+      // loomStorageAccount, whose emptiness does not leave the running console
+      // alone but REMOVES seven LOOM_*_URL env vars from it (#3701).
+      // resolve-dlz-coordinates supplies the coordinates that discovery runs
+      // against, and reconcile-policy decides which image tag the apply writes.
+      //
+      // MEASURED, and worth recording because only ONE of the three was visible:
+      // check-deploy-paths-coverage flagged discover-dlz-adopt-plan.sh and said
+      // NOTHING about the two `.mjs` files — the #3787 blindness this same PR
+      // fixes. Fixing only what went red would have left two deploy-critical
+      // scripts silently unwatched, which is the vacuous-pass class the guard
+      // exists to catch, one rung down.
+      'scripts/csa-loom/discover-dlz-adopt-plan.sh',
+      'scripts/csa-loom/resolve-dlz-coordinates.mjs',
+      'scripts/ci/reconcile-policy.mjs',
     ],
     maxDays: 7,
   },
@@ -540,8 +669,131 @@ export const WATCHED = [
       // it should be — exactly the drift this watchdog exists to catch.
       'scripts/csa-loom/apply-acr-compliance-tags.sh',
       'scripts/csa-loom/resolve-internal-token.sh',
+      // ── #3380 / #3449 (routed from PR #3888) ──────────────────────────────
+      // Same adopt-discovery pair as the gcch entry above, for the same reason.
+      'scripts/csa-loom/discover-dlz-adopt-plan.sh',
+      'scripts/csa-loom/resolve-dlz-coordinates.mjs',
+      // The ADX preflight MUTATES the estate (it starts a stopped cluster) and
+      // gates whether the apply proceeds at all — the #3449 defect, ported to
+      // this lane so GCC does not carry it unmitigated (cloud-parity.md).
+      'scripts/ci/ensure-adx-cluster-running.mjs',
+      // The shared rule it imports to tell "definitely absent" from "I could not
+      // read it". HAND-LISTED, and the distinction matters: it is `import`ed, not
+      // `node`-invoked, so it is NOT a mechanically-detected source even with the
+      // #3787 fix in place. (The routed patch listed it as a #3787 blind spot;
+      // measured, it is a different and narrower gap — an imported module, which
+      // no execution shape can see.) Editing it changes the preflight's verdict
+      // on both lanes at once, which is exactly why it is watched beside them
+      // rather than trusted to ride along — the same argument the gcch entry
+      // already makes for this file.
+      'scripts/ci/_arm-absence.mjs',
     ],
     maxDays: 7,
+  },
+  // ── IL5: THE LANE NOTHING WAS WATCHING ───────────────────────────────────
+  // Found while routing PR #3888's new deploy sources: adding a source to
+  // deploy-fiab-il5.yml produced NO gap from check-deploy-paths-coverage. Not
+  // because IL5 was covered — because IL5 WAS NOT IN THIS TABLE AT ALL. Fifteen
+  // entries, and the DoD boundary was not one of them, so for that estate
+  // "everything is fine" and "nothing is looking" produced identical output.
+  //
+  // Same shape, and the same argument, as the note above the two sovereign
+  // reconciles: on 2026-08-11 this file printed thirteen rows and not one
+  // sovereign lane while GCC-High had failed six times that day. GCC-High and GCC
+  // were added then; IL5 was missed, and it is the boundary with the least margin
+  // (cloud-parity.md: a capability that works in Commercial and not in a
+  // sovereign boundary is INCOMPLETE, not "Commercial-first"). Every other
+  // IL5-aware control in this repo already enumerates it —
+  // check-tenant-admin-binding.mjs, check-appimagetags-coverage.mjs,
+  // check-teardown-not-on-schedule.mjs, roll-plan.mjs,
+  // __tests__/bicepparam-env-reaches-deploy.test.mjs — so the omission was
+  // inconsistency with an established convention, not a design choice.
+  //
+  // WHY THIS ENTRY AND ITS `run-name:` LANDED IN ONE COMMIT. They are a single
+  // atomic change split across two lanes' files, and either half alone reddens
+  // main. Registering IL5 while the workflow had no run-name fails the
+  // DRY_RUN_MARKER contract (a default `whatif-only` dispatch succeeds having
+  // applied nothing, and would clear a drift it did not close). Adding the
+  // run-name while IL5 stays unregistered expires the completeness suite's
+  // exclusion predicate and fails THAT. Ordering cannot fix a deadlock, so
+  // .github/workflows/deploy-fiab-il5.yml was transferred to this lane for that
+  // ONE line, under the OMNIBUS master's §6 cross-lane procedure. The line is
+  // byte-identical to the one authored on #3888 (transplanted, not retyped — it
+  // carries an em dash, and this repo has an incident where such a needle
+  // silently stopped matching after a cp1252 round-trip).
+  //
+  // THIS ROW READS "NEVER RUN" FROM ITS FIRST DAY, AND THAT IS THE POINT.
+  // deploy-integrity.md R3: a deploy path that has never run is the LOUDEST case
+  // of drift, never a silent pass. Same rationale that registered
+  // loom-dataplane-roll.yml and deploy-fiab-gcc.yml (`disabled_manually`). It
+  // blocks no pull request: deploy-staleness.yml is schedule + dispatch and its
+  // own header states it is deliberately not a required check.
+  //
+  // WHY maxDays: 30 AND NOT 7. The other three reconciles are SCHEDULED DAILY, so
+  // 7 days is not a lag tolerance there — it is the assertion that the cron ran.
+  // IL5 has NO cron at all (workflow_dispatch only) and sits behind an
+  // `il5-deploy` environment approval, so a 7-day bound would assert a cadence
+  // this lane has never claimed to have. The row fails today on NEVER RUN, which
+  // is the true statement; maxDays only governs once a first real run exists.
+  //
+  // THE PATHS ARE THE UNION OF TWO TREE STATES, deliberately. Measured: IL5
+  // executes 11 sources on this branch and 15 once #3888 lands. main has to be
+  // green after EACH merge, so the four #3888 introduces are declared here now —
+  // they are inert until that PR lands and correct the moment it does.
+  {
+    workflow: 'deploy-fiab-il5.yml',
+    why: 'The ONLY workflow that applies platform/fiab/bicep/main.bicep to the DoD IL5 estate, and it was in no watchdog anywhere: not this table, and therefore not the report an operator reads. It has NEVER run. It also carries an `az deployment sub what-if` with adxEnabled=true and, before #3888, no ADX preflight — the identical #3449 shape that failed GCC-High nine consecutive times — so the boundary with the least margin was the one carrying a known unmitigated defect with nothing measuring it (cloud-parity.md).',
+    paths: [
+      '.github/workflows/deploy-fiab-il5.yml',
+      'platform/fiab/bicep/main.bicep',
+      'platform/fiab/bicep/modules/admin-plane/**',
+      // `--parameters` / `--param-file` are not detected deploy shapes, so the
+      // param file is hand-listed — the same reason gcc-high.bicepparam and
+      // gcc.bicepparam are. It decides what the apply deploys into IL5.
+      'platform/fiab/bicep/params/il5.bicepparam',
+      // The orchestration this lane's `full` mode delegates to wholesale.
+      'scripts/csa-loom/redeploy-gov.sh',
+      // The image preflights. On a lane that ADOPTS live federal Container Apps
+      // and re-points them at a tag, refusing is the SAFE outcome, so a change
+      // that flips any of these from refusing to applying changes what reaches
+      // the estate.
+      'scripts/ci/assert-acr-image-tags.sh',
+      'scripts/ci/adopt-image-tags.mjs',
+      'scripts/ci/assert-no-silent-image-tag-revert.mjs',
+      // The ONLY thing that tags the registry (#3714) — it cannot be declared in
+      // bicep without erasing the firewall-lease mutex mid-apply.
+      'scripts/csa-loom/apply-acr-compliance-tags.sh',
+      // The two adoption resolvers: if either starts returning nothing, the apply
+      // re-mints the internal trust token or blanks sovereign sign-in.
+      'scripts/csa-loom/resolve-internal-token.sh',
+      'scripts/csa-loom/resolve-msal-client-id.sh',
+      // ── Introduced by PR #3888, declared ahead of it (see the note above) ──
+      // The ADX preflight MUTATES the estate (it starts a stopped cluster) and
+      // gates whether the apply proceeds — #3449, ported so IL5 does not carry it
+      // unmitigated. reconcile-policy decides which image tag the apply writes.
+      // discover-dlz-adopt-plan composes LOOM_ADOPT_JSON, which il5.bicepparam
+      // reads at bicep-COMPILE time, so it decides parameter VALUES that reach the
+      // estate; resolve-dlz-coordinates supplies what discovery runs against.
+      'scripts/ci/ensure-adx-cluster-running.mjs',
+      'scripts/ci/reconcile-policy.mjs',
+      'scripts/csa-loom/discover-dlz-adopt-plan.sh',
+      'scripts/csa-loom/resolve-dlz-coordinates.mjs',
+      // THE IMPORT EDGE. `_arm-absence.mjs` is the shared rule
+      // ensure-adx-cluster-running.mjs imports to tell "definitely absent" from
+      // "I could not read it". It is `import`ed and NEVER argv, so NO execution
+      // shape can see it — not the `.sh` matcher, not the `node` matcher #3787
+      // added. That makes hand-listing it permanent rather than a stopgap, and it
+      // is the one class a coverage guard keyed on execution can never close.
+      // Widening an execution matcher to try would be the wrong fix twice over.
+      'scripts/ci/_arm-absence.mjs',
+      // DELIBERATELY ABSENT, and named so the omission is a decision rather than
+      // an oversight: deploy-classify.mjs, deploy-retry.mjs and
+      // gov-verify-evidence.sh are CI_PLUMBING (see check-deploy-paths-coverage),
+      // and so, transitively, are deploy-retry's own imports _azure-redact.mjs and
+      // deploy-arm-errors.mjs — a module imported by something that cannot change
+      // the estate cannot change it either.
+    ],
+    maxDays: 30,
   },
   // ── The APP-IMAGE path (the second silently-broken lane) ─────────────────
   // no-vaporware.md names the canonical from-scratch Commercial path as THREE
@@ -626,6 +878,19 @@ export const WATCHED = [
       // deployed estate — a bug here leaves a Container App unable to pull its
       // image. That is the opposite of "cannot change the estate".
       'scripts/csa-loom/_grant-role-if-absent.sh',
+      // #3787 — two more decisions on this lane that `node <path>.mjs` blindness
+      // had kept undeclared.
+      //   deploy-image-roles.mjs  decides WHICH images may block the roll. It is
+      //       the fix for a hand-maintained 17-name array whose comment asserted
+      //       something false about what the roll job actually rolls; weakening
+      //       it lets an UNSIGNED image reach the estate, which is precisely what
+      //       the SC1 verify-before-roll gate exists to stop.
+      //   resolve-image-preflight-refs.mjs  decides WHICH tags the ACR preflight
+      //       proves. Already watched on deploy-fiab-commercial.yml for exactly
+      //       this reason (see that entry); this lane runs the same preflight and
+      //       simply had no way to declare it.
+      'scripts/ci/deploy-image-roles.mjs',
+      'scripts/ci/resolve-image-preflight-refs.mjs',
     ],
     maxDays: 21,
   },
