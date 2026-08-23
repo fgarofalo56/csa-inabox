@@ -65,13 +65,22 @@ vi.mock('@/lib/azure/kv-secrets-client', () => ({
   deleteShortcutSecret: vi.fn(async () => {}),
   shortcutKeyVaultConfigGate: vi.fn(() => null),
 }));
-vi.mock('@/lib/azure/shortcut-engines', () => ({
-  pickTablesEngine: vi.fn(() => 'synapse'),
-  createTablesShortcut: vi.fn(async () => ({ engine: 'synapse', engineObject: 'loom_lakehouse.shortcuts.sc_x' })),
-  dropShortcutObject: vi.fn(async () => {}),
-  dropExternalBinding: vi.fn(async () => {}),
-  bindExternalSource: vi.fn(async () => ({ readUri: 's3://b/p', ucExternalLocation: 'loc' })),
-}));
+vi.mock('@/lib/azure/shortcut-engines', async () => {
+  // `createTablesShortcut` delegates to the REAL implementation so the derived
+  // positive control below mints its engine object through production code
+  // (`synapseObject`/`synapseQualified`) instead of a hand-typed string. Only
+  // its Azure egress is mocked — `@/lib/azure/synapse-sql-client`, below.
+  const actual = await vi.importActual<typeof import('@/lib/azure/shortcut-engines')>(
+    '@/lib/azure/shortcut-engines',
+  );
+  return {
+    pickTablesEngine: vi.fn(() => 'synapse'),
+    createTablesShortcut: vi.fn(actual.createTablesShortcut),
+    dropShortcutObject: vi.fn(async () => {}),
+    dropExternalBinding: vi.fn(async () => {}),
+    bindExternalSource: vi.fn(async () => ({ readUri: 's3://b/p', ucExternalLocation: 'loc' })),
+  };
+});
 vi.mock('@/lib/azure/synapse-sql-client', () => ({
   serverlessTarget: vi.fn((db: string) => ({ db })),
   executeQuery: vi.fn(async () => ({ columns: [], rows: [], rowCount: 0 })),
@@ -212,5 +221,108 @@ describe('#3611 — engineObject may not carry SQL into DROP', () => {
 
     expect(res.status).toBe(200);
     expect(executeQuery).toHaveBeenCalled();
+  });
+});
+
+/**
+ * The positive controls above are HAND-TYPED (`…sc_abc12345`, `…sc_ok`), and a
+ * hand-typed fixture models the CODE the author had in mind rather than the
+ * SYSTEM. That gap shipped a real defect: the first version of this guard
+ * required every dot-part to begin with `[A-Za-z_]`, while the object Loom
+ * actually mints is `synapseQualified(synapseObject(`${uuid.slice(0,8)}_${name}`))`
+ * — whose last part begins with a UUID's first hex character, a DIGIT 10 times
+ * in 16. Measured over 10,000 mints: 6,178 of 10,000 legitimately-created
+ * shortcuts were refused, so `POST action=query` returned a 400 telling the
+ * user their object "is not a name Loom created" (false), and DELETE silently
+ * skipped `dropShortcutObject`, orphaning the Synapse view forever.
+ *
+ * Every case below therefore DERIVES its object from the real mint path: it
+ * drives a create through the route with the real `createTablesShortcut`, and
+ * asserts against whatever that produced. Nothing here is typed by hand, so a
+ * future narrowing of `ENGINE_OBJECT_RE` cannot pass by matching a fixture the
+ * author also wrote.
+ *
+ * `crypto.randomUUID` is pinned per case so both head classes — digit-leading
+ * and letter-leading — are covered DETERMINISTICALLY. Left random, this control
+ * would pass ~38% of the time on the broken guard, which is a flaky test, i.e.
+ * another guard that cannot be trusted to fail.
+ */
+describe('#3611 — the allow-set is DERIVED from the mint, not hand-typed', () => {
+  /** Create a Tables shortcut through the route with `id` pinned; return the minted object. */
+  async function mintViaRoute(uuid: string): Promise<{ id: string; engineObject: string }> {
+    const spy = vi.spyOn(globalThis.crypto, 'randomUUID').mockReturnValue(uuid as ReturnType<Crypto['randomUUID']>);
+    try {
+      const res = await POST(postReq({
+        kind: 'tables', sourceType: 'internal', displayName: 'MyShortcut',
+        container: 'bronze', path: 'sales',
+      }));
+      const body = await res.json();
+      // A gate/error here means the mint never ran — fail loudly rather than
+      // silently asserting on `undefined` (a control with no population).
+      expect(body.shortcut?.engineObject, `create did not mint: ${JSON.stringify(body).slice(0, 300)}`)
+        .toBeTruthy();
+      return { id: uuid, engineObject: body.shortcut.engineObject as string };
+    } finally {
+      spy.mockRestore();
+    }
+  }
+
+  // 10/16 of UUIDs begin with a digit — this is the majority case in production.
+  const DIGIT_HEAD = '4f0278c7-1111-4222-8333-444455556666';
+  const ALPHA_HEAD = 'af0278c7-1111-4222-8333-444455556666';
+
+  it('mints an object whose last part begins with a DIGIT (the 62.5% case)', async () => {
+    const { engineObject } = await mintViaRoute(DIGIT_HEAD);
+    // Pin the shape so this control keeps its meaning if the mint is refactored:
+    // if the object stops being digit-headed, this case is no longer the one the
+    // guard used to refuse and the test says so instead of passing vacuously.
+    expect(engineObject).toBe('loom_lakehouse.shortcuts.4f0278c7_MyShortcut');
+  });
+
+  it('DOES drop a digit-headed object that Loom itself minted', async () => {
+    const { id, engineObject } = await mintViaRoute(DIGIT_HEAD);
+
+    await DELETE(delReq(`workspaceId=ws1&id=${id}`));
+
+    expect(dropShortcutObject).toHaveBeenCalledWith({ engine: 'synapse', engineObject });
+  });
+
+  it('DOES query a digit-headed object that Loom itself minted', async () => {
+    const { id, engineObject } = await mintViaRoute(DIGIT_HEAD);
+    (executeQuery as any).mockClear();
+
+    const res = await POST(postReq({ action: 'query', id }));
+
+    expect(await res.json()).not.toMatchObject({ code: 'invalid_engine_object' });
+    expect(res.status).toBe(200);
+    expect(executeQuery).toHaveBeenCalled();
+    expect(String((executeQuery as any).mock.calls[0][1])).toContain(engineObject);
+  });
+
+  it('DOES drop a letter-headed object that Loom itself minted', async () => {
+    const { id, engineObject } = await mintViaRoute(ALPHA_HEAD);
+
+    await DELETE(delReq(`workspaceId=ws1&id=${id}`));
+
+    expect(dropShortcutObject).toHaveBeenCalledWith({ engine: 'synapse', engineObject });
+  });
+
+  it('still refuses injection when the object is digit-headed (widening the head class widened NOTHING else)', async () => {
+    // The fix that makes the four cases above pass is a single character class
+    // (`[A-Za-z0-9_]` in the head position). This case proves that relaxation
+    // did not become a hole: a digit-headed payload carrying a separator is
+    // still refused, so the head class is the only thing that moved.
+    // Two rows, because DELETE removes the row the query case needs.
+    const injected = 'loom_lakehouse.shortcuts.4f0278c7_x; DROP DATABASE loom--';
+    seedShortcut('scD1', { kind: 'tables', engine: 'synapse', engineObject: injected });
+    seedShortcut('scD2', { kind: 'tables', engine: 'synapse', engineObject: injected });
+
+    await DELETE(delReq('workspaceId=ws1&id=scD1'));
+    const res = await POST(postReq({ action: 'query', id: 'scD2' }));
+
+    expect(dropShortcutObject).not.toHaveBeenCalled();
+    expect(res.status).toBe(400);
+    expect(await res.json()).toMatchObject({ code: 'invalid_engine_object' });
+    expect(executeQuery).not.toHaveBeenCalled();
   });
 });

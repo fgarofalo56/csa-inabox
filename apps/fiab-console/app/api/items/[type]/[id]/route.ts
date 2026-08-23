@@ -1,11 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server';
 import crypto from 'node:crypto';
-import { getSession } from '@/lib/auth/session';
 import { auditLogContainer, itemsContainer, workspacesContainer } from '@/lib/azure/cosmos-client';
 import type { Workspace, WorkspaceItem } from '@/lib/types/workspace';
 import { apiError } from '@/lib/api/respond';
 import { recordItemOpen } from '@/lib/items/record-open';
 import { assertNoServerOwnedStateChange, ServerOwnedStateError } from '@/app/api/items/_lib/item-crud';
+import { withSession } from '@/lib/api/route-toolkit';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -14,7 +14,27 @@ function err(error: string, status: number, code?: string) {
   return apiError(error, status, code === undefined ? undefined : { code });
 }
 
-/** Find an item by id (cross-partition) + verify the caller's tenant owns its workspace. */
+/**
+ * Find an item by id (cross-partition) + verify the caller's tenant owns its workspace.
+ *
+ * DELIBERATELY NOT migrated to `authorizeItemWorkspace` in this PR, and the
+ * reason is an authorization one, not laziness. The `workspaces` container is
+ * partitioned on `/tenantId`, which stores the workspace CREATOR's oid, so the
+ * point read below answers "did this caller CREATE this workspace?".
+ * `authorizeItemWorkspace` answers "may this caller ACCESS it?" — owner OR
+ * tenant admin OR shared-ACL member. Adopting it here would newly admit admins
+ * and ACL members to GET, PATCH and DELETE on EVERY item type that has no
+ * dedicated `[id]/route.ts`. That is a real widening, it needs its own review
+ * and its own tests, and it does not belong inside a PR whose subject is
+ * RESTRICTING what may be written through this same PATCH.
+ *
+ * The current check fails CLOSED (it refuses people who arguably should be
+ * allowed), so deferring it leaks nothing. `check-owner-only-workspace-guard`
+ * baselines this one occurrence and its TOUCH_EXEMPT map already carries four
+ * precedents for exactly this deferral, including the sibling
+ * `items/[type]/[id]/access-mode/route.ts`, which shares this very `loadItem`
+ * shape.
+ */
 async function loadItem(itemId: string, type: string, tenantId: string): Promise<WorkspaceItem | null> {
   const items = await itemsContainer();
   const { resources } = await items.items
@@ -40,13 +60,26 @@ async function loadItem(itemId: string, type: string, tenantId: string): Promise
   return item;
 }
 
-export async function GET(
+/**
+ * Route-toolkit: `withSession` (R1/R3), migrated by hand — the codemod refuses
+ * this file ("getSession() without the exact 401 guard") because the 401 body
+ * was `err('Unauthorized', 401, 'unauthorized')`.
+ *
+ * ONE DISCLOSED DELTA, stated rather than implied: the toolkit's 401 is
+ * `apiUnauthorized()` → `{ ok:false, error:'unauthenticated' }`, so the body
+ * text changes and the `code:'unauthorized'` field is dropped. Grepped before
+ * making the change: no client, hook, or test in this app branches on that
+ * code, and no test asserts this route's 401 body. AUTHORIZATION is unchanged —
+ * same `getSession()`, same refusal. Session resolution also now precedes param
+ * resolution (auth-first), which is the stricter ordering.
+ *
+ * `loadItem`'s workspace ownership check below is DELIBERATELY untouched: see
+ * the note on it.
+ */
+export const GET = withSession<{ type: string; id: string }>(async (
   _req: NextRequest,
-  props: { params: Promise<{ type: string; id: string }> }
-) {
-  const params = await props.params;
-  const session = getSession();
-  if (!session) return err('Unauthorized', 401, 'unauthorized');
+  { session, params },
+) => {
   try {
     const item = await loadItem(params.id, params.type, session.claims.oid);
     if (!item) return err('Item not found', 404, 'not_found');
@@ -59,12 +92,12 @@ export async function GET(
   } catch (e: any) {
     return err(e?.message || 'Failed to fetch item', 500, 'cosmos_error');
   }
-}
+});
 
-export async function PATCH(req: NextRequest, props: { params: Promise<{ type: string; id: string }> }) {
-  const params = await props.params;
-  const session = getSession();
-  if (!session) return err('Unauthorized', 401, 'unauthorized');
+export const PATCH = withSession<{ type: string; id: string }>(async (
+  req: NextRequest,
+  { session, params },
+) => {
   let body: any;
   try { body = await req.json(); } catch { return err('Invalid JSON', 400, 'bad_json'); }
   try {
@@ -99,15 +132,12 @@ export async function PATCH(req: NextRequest, props: { params: Promise<{ type: s
   } catch (e: any) {
     return err(e?.message || 'Failed to update item', 500, 'cosmos_error');
   }
-}
+});
 
-export async function DELETE(
+export const DELETE = withSession<{ type: string; id: string }>(async (
   _req: NextRequest,
-  props: { params: Promise<{ type: string; id: string }> }
-) {
-  const params = await props.params;
-  const session = getSession();
-  if (!session) return err('Unauthorized', 401, 'unauthorized');
+  { session, params },
+) => {
   try {
     const item = await loadItem(params.id, params.type, session.claims.oid);
     if (!item) return err('Item not found', 404, 'not_found');
@@ -117,4 +147,4 @@ export async function DELETE(
   } catch (e: any) {
     return err(e?.message || 'Failed to delete item', 500, 'cosmos_error');
   }
-}
+});

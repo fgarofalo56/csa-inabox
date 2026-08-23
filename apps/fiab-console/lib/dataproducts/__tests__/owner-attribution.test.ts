@@ -148,6 +148,16 @@ describe('#3501 — every doc-building call site is converted', () => {
       const text = readFileSync(f, 'utf8');
       // CRLF-safe: match the CALL, not a whole line — a needle written against
       // LF would match zero times here and read exactly like a passing test.
+      //
+      // KNOWN BOUND, stated so it is not mistaken for total coverage: this keys
+      // on the LITERAL `session.claims.oid` appearing between the call's parens.
+      // A regression laundered through an intermediate binding —
+      // `const oid = session.claims.oid; … docForDataProduct(oid, …)` — passes
+      // this guard. It catches the shape #3501 actually shipped (the caller oid
+      // inlined at the call site, 11 times), not every possible reintroduction.
+      // Closing that would need the argument to be checked against an allow-set
+      // of resolver expressions rather than a deny-string; until then, treat a
+      // green here as "the inlined shape is gone", not "attribution is proven".
       for (const m of text.matchAll(/docForDataProduct\(\s*[^)]*\)/g)) {
         callSites += 1;
         if (m[0].includes('session.claims.oid')) {

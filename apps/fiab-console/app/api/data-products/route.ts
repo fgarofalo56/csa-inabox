@@ -37,7 +37,6 @@
  *       https://learn.microsoft.com/purview/data-gov-api-rest-data-plane
  */
 import { NextRequest, NextResponse } from 'next/server';
-import { getSession } from '@/lib/auth/session';
 import {
   createOwnedItem,
   listOwnedItems,
@@ -55,6 +54,7 @@ import {
 import { sanitizeContract } from '@/lib/dataproducts/contract';
 import { resolveLifecycleState, setLifecycleState } from '@/lib/dataproducts/lifecycle';
 import { apiServerError } from '@/lib/api/respond';
+import { withSession } from '@/lib/api/route-toolkit';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -185,9 +185,7 @@ async function tryRegisterPurview(opts: {
   }
 }
 
-export async function GET(req: NextRequest) {
-  const session = getSession();
-  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+export const GET = withSession(async (req: NextRequest, { session }) => {
 
   // Duplicate-name lookup mode (F4 edit/create dialog): /api/data-products?name=<n>&excludeId=<id>.
   // NON-BLOCKING warning source — returns the existing product that shares the
@@ -239,11 +237,9 @@ export async function GET(req: NextRequest) {
   } catch (e: any) {
     return apiServerError(e);
   }
-}
+});
 
-export async function POST(req: NextRequest) {
-  const session = getSession();
-  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+export const POST = withSession(async (req: NextRequest, { session }) => {
 
   let body: any;
   try { body = await req.json(); } catch { return NextResponse.json({ ok: false, error: 'Invalid JSON' }, { status: 400 }); }
@@ -384,4 +380,4 @@ export async function POST(req: NextRequest) {
     },
     { status: 201 },
   );
-}
+});

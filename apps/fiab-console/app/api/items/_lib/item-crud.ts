@@ -146,8 +146,18 @@ function stableStringify(v: unknown, depth = 0): string {
 
 /**
  * Collect, by KEY NAME, the set of values a state tree carries for every
- * server-owned key — at any depth, inside arrays included. Keyed by name rather
- * than by path so moving an entry within an array is not mistaken for a change.
+ * server-owned key — to a BOUNDED depth of {@link MAX_STATE_DEPTH} (12), inside
+ * arrays included. Keyed by name rather than by path so moving an entry within
+ * an array is not mistaken for a change.
+ *
+ * The bound is not "any depth": a server-owned key nested deeper than 12 is not
+ * collected. That is not reachable as an escape today — no consumer of item
+ * state reads one of these keys deeper than 3 — and planting a value below the
+ * bound and lifting it later does not work either, because `currentState` is
+ * scanned with the SAME bound, so the deep plant is invisible on both sides and
+ * the lift is compared against a bucket that does not contain it. Deepening the
+ * tree that a real consumer reads would change that; the bound and the consumer
+ * depth have to move together.
  */
 function collectServerOwned(node: unknown, out: Map<string, Set<string>>, depth = 0): void {
   if (depth > MAX_STATE_DEPTH || node === null || typeof node !== 'object') return;

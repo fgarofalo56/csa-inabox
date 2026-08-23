@@ -113,13 +113,20 @@ function mayDeleteShortcutSecret(name: unknown): name is string {
  * that was arbitrary SQL execution and arbitrary table reads, not merely the
  * loss of the object the shortcut owns.
  *
- * Loom mints `<db>.<schema>.<name>` from `sc_<id8>` / `<id8>_<displayName>`, so
- * a strict 2- or 3-part identifier check accepts everything the platform
- * creates and rejects every separator SQL needs to mean anything else (space,
- * `;`, `'`, `-`, `/`, `(`, `[`). Legacy rows predating the namespacing still
- * match: they are plain identifiers too.
+ * Loom mints `<db>.<schema>.<name>` where the leaf comes from
+ * `${id.slice(0,8)}_${displayName}` with `id` a UUID — so the leaf begins with a
+ * hex character and is DIGIT-headed 10 times in 16. A head class of
+ * `[A-Za-z_]` therefore refused ~62.5% of the objects the platform itself
+ * creates (measured: 6,178 of 10,000 mints), 400-ing `action=query` and
+ * silently skipping the DROP on delete, which orphaned the Synapse view. The
+ * head class is `[A-Za-z0-9_]` for that reason.
+ *
+ * Allowing a digit head weakens nothing: what makes SQL mean something other
+ * than an object name is a SEPARATOR — space, `;`, `'`, `-`, `/`, `(`, `[` —
+ * and the body class excludes every one of those in either version. Legacy rows
+ * predating the namespacing still match: they are plain identifiers too.
  */
-const ENGINE_OBJECT_RE = /^[A-Za-z_][A-Za-z0-9_$]*(\.[A-Za-z_][A-Za-z0-9_$]*){1,2}$/;
+const ENGINE_OBJECT_RE = /^[A-Za-z0-9_][A-Za-z0-9_$]*(\.[A-Za-z0-9_][A-Za-z0-9_$]*){1,2}$/;
 function isSafeEngineObject(v: unknown): v is string {
   return typeof v === 'string' && v.length <= 260 && ENGINE_OBJECT_RE.test(v);
 }
@@ -413,8 +420,13 @@ export async function POST(req: NextRequest) {
       // caller state. Anything outside the shape Loom mints is refused before
       // it reaches the engine, so this cannot become an arbitrary-SQL surface.
       if (!isSafeEngineObject(stt.engineObject)) {
+        // R7 — say only what was established. The check proves the stored name
+        // is NOT in the shape Loom mints; it does not establish who wrote it,
+        // so it must not claim "Loom did not create this".
         return err(
-          "This shortcut's engine object is not a name Loom created. Recreate the shortcut (kind=tables) to re-register it.",
+          "This shortcut's stored engine object is not in the form Loom registers " +
+          '(`database.schema.object`), so it is refused before it reaches the SQL ' +
+          'engine. Recreate the shortcut (kind=tables) to re-register it.',
           400, { code: 'invalid_engine_object' },
         );
       }
@@ -575,8 +587,11 @@ export async function DELETE(req: NextRequest) {
       const { resource } = await items.item(id, workspaceId).read<WorkspaceItem>();
       const st = (resource?.state as any) || {};
       // #3611 — `engineObject` is interpolated into DROP; only drop what Loom
-      // could have minted. A value outside that shape was never a real engine
-      // object, so refusing to drop it loses nothing and closes the injection.
+      // could have minted. Refusing a value outside that shape is a TRADE, not
+      // a free win: a name the engine really holds but that fails this check is
+      // orphaned in the engine, which is why the check must accept the full
+      // minted space (see ENGINE_OBJECT_RE — the head class is digit-inclusive
+      // precisely because that trade was being made against 62.5% of real rows).
       if (st.engine && st.engine !== 'none' && isSafeEngineObject(st.engineObject)) {
         await dropShortcutObject({ engine: st.engine, engineObject: st.engineObject }).catch(() => { /* already-dropped/missing must not block */ });
         if ((st.sourceType === 's3' || st.sourceType === 'gcs') && st.engine === 'databricks') {
