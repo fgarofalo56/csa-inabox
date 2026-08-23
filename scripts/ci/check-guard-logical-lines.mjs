@@ -151,13 +151,19 @@ const RELATIVE_MJS_IMPORT =
   /(?:^|\n)\s*(?:import[\s\S]{0,300}?from|export[\s\S]{0,300}?from|import)\s*['"`](\.\.?\/[^'"`]+\.mjs)['"`]/g;
 
 /**
- * Helper modules that are subjects in their own right: every `scripts/ci/_*.mjs`,
- * PLUS every non-`check-` `.mjs` in this directory that a `check-*.mjs` imports.
- * Returns sorted basenames.
+ * Helper modules that are subjects in their own right, SPLIT BY WHICH HALF OF
+ * THE UNION FOUND THEM:
+ *   `glob`     — every `scripts/ci/_*.mjs`;
+ *   `imported` — every non-`check-` `.mjs` in this directory that a `check-*.mjs`
+ *                imports.
+ * The split is exposed, not internal, because the docblock above argues both
+ * halves are load-bearing and that argument needs an assertion behind it
+ * (see `assertUnionHalvesContribute`). Returns sorted basenames.
  */
-export function helperModules(dir = HERE, guards = null) {
+export function helperModuleHalves(dir = HERE, guards = null) {
   const names = readdirSync(dir).filter((f) => f.endsWith('.mjs'));
-  const subjects = new Set(names.filter((f) => f.startsWith('_')));
+  const glob = new Set(names.filter((f) => f.startsWith('_')));
+  const imported = new Set();
   const guardList = guards ?? names.filter((f) => f.startsWith('check-')).sort();
   for (const g of guardList) {
     let src;
@@ -172,10 +178,68 @@ export function helperModules(dir = HERE, guards = null) {
       if (base.includes('/') || base.startsWith('..')) continue;
       if (base.startsWith('check-')) continue; // already a subject
       if (!names.includes(base)) continue;     // import does not resolve here
-      subjects.add(base);
+      imported.add(base);
     }
   }
-  return [...subjects].sort();
+  return { glob: [...glob].sort(), imported: [...imported].sort() };
+}
+
+/**
+ * Helper modules that are subjects in their own right: every `scripts/ci/_*.mjs`,
+ * PLUS every non-`check-` `.mjs` in this directory that a `check-*.mjs` imports.
+ * Returns sorted basenames.
+ */
+export function helperModules(dir = HERE, guards = null) {
+  const { glob, imported } = helperModuleHalves(dir, guards);
+  return [...new Set([...glob, ...imported])].sort();
+}
+
+/**
+ * POPULATION FLOOR for the UNION (independent review of #3928).
+ *
+ * The docblock above argues at length that neither half is sufficient alone —
+ * "renaming a helper is a one-character bypass of a glob-only rule" — but
+ * NOTHING enforced it. Measured: neutering the import-following half dropped
+ * the subject set 143 → 140 (15 → 12 helpers) at RC=0; neutering the glob half
+ * dropped it to 139 (11 helpers), also RC=0. Half the argument's premise could
+ * be deleted in silence.
+ *
+ * So both halves must contribute something the other does not. These floors are
+ * an assertion about the DIRECTORY, not about a desired number: if the last
+ * non-`_` helper genuinely disappears, that is a real change in the tree and the
+ * remedy is to say so here — never to lower the floor to match a reading.
+ */
+function assertUnionHalvesContribute(halves) {
+  const globOnly = halves.glob.filter((f) => !halves.imported.includes(f));
+  const importOnly = halves.imported.filter((f) => !halves.glob.includes(f));
+  const bad = [];
+  if (!importOnly.length) {
+    bad.push(
+      'the IMPORT-FOLLOWING half now contributes NOTHING the `_*.mjs` glob does not already reach. '
+      + 'A helper without a `_` prefix would then be invisible, which is the one-character bypass the '
+      + 'subject-discovery note above exists to close (#3438).',
+    );
+  }
+  if (!globOnly.length) {
+    bad.push(
+      'the `_*.mjs` GLOB half now contributes NOTHING import-following does not already reach. A '
+      + '`_`-module that no guard imports YET would then never have been judged when one adopts it.',
+    );
+  }
+  if (bad.length) {
+    process.stderr.write('::error::guard-logical-lines: the subject UNION has collapsed to one half.\n');
+    for (const b of bad) process.stderr.write(`   - ${b}\n`);
+    process.stderr.write(
+      `   glob half: ${halves.glob.length} (${globOnly.length} unique) | `
+      + `import half: ${halves.imported.length} (${importOnly.length} unique)\n`,
+    );
+    process.exit(1);
+  }
+  console.log(
+    `guard-logical-lines subject union: glob ${halves.glob.length} (${globOnly.length} reached ONLY by the `
+    + `glob) + imports ${halves.imported.length} (${importOnly.length} reached ONLY by import-following) — `
+    + 'both halves contribute, so neither can be removed in silence',
+  );
 }
 
 
@@ -257,7 +321,8 @@ function main() {
     .filter((f) => f.startsWith('check-') && f.endsWith('.mjs'))
     .sort();
   // #3438 — helper modules are subjects too. See SUBJECT DISCOVERY above.
-  const helpers = helperModules(HERE, guards);
+  const halves = helperModuleHalves(HERE, guards);
+  const helpers = [...new Set([...halves.glob, ...halves.imported])].sort();
   const subjects = [...guards, ...helpers];
 
   const buckets = { adopted: [], declared: [], unclassified: [], 'out-of-scope': [] };
@@ -281,6 +346,7 @@ function main() {
     );
     process.exit(1);
   }
+  assertUnionHalvesContribute(halves);
   const inScope = buckets.adopted.length + buckets.declared.length + buckets.unclassified.length;
   if (inScope === 0) {
     console.error(

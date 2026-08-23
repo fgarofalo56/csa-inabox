@@ -427,13 +427,35 @@ export function imperativeFiles(root = REPO_ROOT, roots = IMPERATIVE_ROOTS) {
  * A create that only appears inside an `echo`/annotation is a REFERENCE, not an
  * execution — the same distinction check-deploy-script-reachability.mjs draws,
  * and for the same reason: a naive grep scores the string as a hit.
+ *
+ * The first version scanned the WHOLE prefix for `(^|[;&|]\s*)(echo|printf)\s`,
+ * which meant an `echo` ANYWHERE before the create disqualified it. The
+ * independent review of #3928 demonstrated the consequence:
+ *
+ *     echo "$N" && az role assignment create …
+ *
+ * is an echo AND a genuine execution, and it fell out of the population
+ * entirely — invisible to the judge, so `probeGates` never even saw it. So the
+ * question is now asked about the command the create ACTUALLY sits in:
+ *
+ *   1. is the create inside a quoted string? then it is an argument to whatever
+ *      command opened that quote (`echo "run: az … create"`) — a reference;
+ *   2. otherwise, does the command SEGMENT it sits in — everything after the
+ *      last `;` `&&` `||` `|` `(` `{` `then` `do` `else` — itself start with
+ *      `echo`/`printf`? then it is an unquoted reference.
+ *
+ * Anything else executes.
  */
 export function isExecuted(text) {
   const at = text.indexOf(CREATE_TOKEN);
   if (at < 0) return false;
-  const before = text.slice(0, at);
   if (/^\s*#/.test(text)) return false;
-  return !/(^|[;&|]\s*)(echo|printf)\s/.test(before) && !/::(error|warning|notice)/.test(before);
+  const before = text.slice(0, at);
+  if (/::(error|warning|notice)/.test(before)) return false;
+  const unescaped = (ch) => (before.match(new RegExp(`(?<!\\\\)${ch}`, 'g')) || []).length;
+  if (unescaped('"') % 2 === 1 || unescaped("'") % 2 === 1) return false;
+  const segment = before.split(/(?:&&|\|\||[;|]|\bthen\b|\bdo\b|\belse\b|\{|\()/).pop();
+  return !/^\s*(?:echo|printf)\s/.test(segment);
 }
 
 /** `ACRPULL_ROLE=7f951dda-…` / `ROLE="7f951dda-…"` within the same file. */
@@ -468,8 +490,83 @@ export function probeResultVar(text) {
 }
 
 /**
+ * A construct only opens a CONDITION when it stands in COMMAND POSITION — the
+ * start of a command, not the middle of a word or the inside of a quoted
+ * string. Without this, `echo "[[ $N ]] observed"` reads as a bracket test.
+ */
+const COMMAND_POSITION = /(?:^|[;&|(){}!]|\b(?:then|do|else|if|elif|while|until)\b)\s*$/;
+
+/**
+ * `inclusive:false` means the region ENDS where the closing token BEGINS, so
+ * that token is left in the gap the caller inspects (`test X && cmd` must leave
+ * the `&&` visible as the hand-off).
+ */
+const CONDITION_CONSTRUCTS = [
+  { open: /\[\[/g, close: /\]\]/g, inclusive: true },
+  { open: /\[/g, close: /(?:^|\s)\]/g, inclusive: true },
+  { open: /\(\(/g, close: /\)\)/g, inclusive: true },
+  { open: /\btest\b/g, close: /(?:&&|\|\||;)/g, inclusive: false },
+  { open: /\b(?:if|elif|while|until)\b/g, close: /(?:;|\s)\s*(?:then|do)\b/g, inclusive: false },
+  { open: /\bcase\b/g, close: /\bin\b/g, inclusive: true },
+];
+
+/**
+ * The CONDITION regions of one logical shell line — the substrings whose EXIT
+ * STATUS can actually branch execution.
+ *
+ * This distinction is the entire fix. The first version of `probeGates` tested
+ * `/(^|\s|;)(if|elif)\s|\[\[?\s|&&|\|\|/` against the WHOLE line, so a bare
+ * `&&`/`||` anywhere on it counted as a branch. The independent review of
+ * PR #3928 demonstrated three bypasses through this guard's own entry points —
+ * each `gated: true`, each an unconditional create:
+ *
+ *     az role assignment create … --description "seen $N" || true
+ *     echo "$N" && az role assignment create …
+ *     az role assignment create … || echo "had $N"
+ *
+ * `|| true` after a create is the most-recorded anti-pattern in this repo and
+ * `deploy-integrity.md` names it explicitly, so it is the shape most likely to
+ * appear next. Four more of the same class were found while fixing it. All
+ * seven are pinned in `D3_CONTROLS`.
+ *
+ * @returns {{start:number, end:number, text:string}[]} regions, in order.
+ */
+export function conditionRegions(text) {
+  const regions = [];
+  for (const { open, close, inclusive } of CONDITION_CONSTRUCTS) {
+    open.lastIndex = 0;
+    let m = open.exec(text);
+    while (m !== null) {
+      const start = m.index;
+      if (COMMAND_POSITION.test(text.slice(0, start))) {
+        close.lastIndex = start + m[0].length;
+        const c = close.exec(text);
+        const end = c ? (inclusive ? c.index + c[0].length : c.index) : text.length;
+        regions.push({ start, end, text: text.slice(start, end) });
+      }
+      m = open.exec(text);
+    }
+  }
+  return regions.sort((a, b) => a.start - b.start);
+}
+
+const BLOCK_OPEN = /(?:^|[;&|(){}]|\s)(?:if|case|do)\b/g;
+const BLOCK_CLOSE = /(?:^|[;&|(){}]|\s)(?:fi|esac|done)\b/g;
+const EARLY_EXIT = /(?:^|[;&|(){}]|\s)(?:exit|return|continue|break)\b/;
+
+/**
+ * Net block-nesting change of one logical line. A conditional that opens AND
+ * closes on its own line — `if true; then echo "$N"; fi` — controls nothing
+ * that follows it, so it cannot be the gate for a create three lines later.
+ */
+export function blockDelta(text) {
+  const count = (re) => (text.match(re) || []).length;
+  return count(BLOCK_OPEN) - count(BLOCK_CLOSE);
+}
+
+/**
  * Is the create at `logical[i]` genuinely GATED on a probe, or merely PRECEDED
- * by one? (#3464 finding 3.)
+ * by one? (#3464 finding 3, hardened after the review of #3928.)
  *
  * The original test was `…some((p) => p.text.includes('az role assignment list'))`
  * — i.e. probe PRESENCE. The independent review of PR #3454 DEMONSTRATED the
@@ -480,17 +577,30 @@ export function probeResultVar(text) {
  * matters here because an unconditional create is exactly what mints the
  * competing random v4 name.
  *
- * So gating now requires all three:
+ * Gating requires all three:
  *   1. a probe in the preceding window;
  *   2. the probe's answer CAPTURED into a variable (an uncaptured probe is a
  *      no-op whose output goes nowhere);
- *   3. a conditional between the probe and the create — or on the create's own
- *      logical line — that READS that variable.
+ *   3. a genuine CONDITION (see `conditionRegions`) that READS that variable and
+ *      actually controls the create:
+ *        (a) on the create's OWN logical line, the condition must END BEFORE the
+ *            create and the ONLY thing between them may be the hand-off that
+ *            gives it execution — `&&`, `||`, or `then`. So
+ *            `[ "$N" = 0 ] && az … create` gates; `az … create … || true` does
+ *            not, and neither does `[ "$N" = 0 ]; az … create`, where the test's
+ *            exit status is discarded by the `;`.
+ *        (b) on a PRECEDING line, the condition must additionally either leave a
+ *            block open (`if …; then`, with the create inside it) or take an
+ *            early exit on the other branch (`[ "$N" != 0 ] || return`).
  *
- * STATED LIMIT (R7): this still does not verify the probe targets the SAME
- * (assignee, scope, role) triple as the create it guards. That needs the shell
- * variables resolved across the file and is not established by this read, so it
- * is not claimed. It is reported by `--list` as residue instead.
+ * STATED LIMITS (R7), neither of which this read establishes and neither of
+ * which is claimed:
+ *   - it does not verify the probe targets the SAME (assignee, scope, role)
+ *     triple as the create it guards. That needs the shell variables resolved
+ *     across the file; it is reported by `--list` as residue instead.
+ *   - for (b) it verifies the conditional leaves a block OPEN, not that the
+ *     create sits inside THAT block rather than a sibling `else` arm. Full
+ *     block scoping is a parse, not a line read.
  */
 export function probeGates(logical, i) {
   const start = Math.max(0, i - PROBE_WINDOW);
@@ -509,15 +619,33 @@ export function probeGates(logical, i) {
   }
   const readsVar = (text) =>
     vars.some((v) => new RegExp(`\\$\\{?${v}\\b`).test(text));
-  const CONDITIONAL = /(^|\s|;)(if|elif)\s|\[\[?\s|&&|\|\|/;
-  const candidates = [...window.slice(probeIdx + 1), logical[i]];
-  for (const l of candidates) {
-    if (CONDITIONAL.test(l.text) && readsVar(l.text)) return { gated: true };
+
+  // (a) the create's OWN logical line. ORDERING is enforced by the gap test
+  //     itself, not by a separate comparison: a condition that ends AFTER the
+  //     create yields `slice(end, createIdx) === ''`, and HANDOFF requires an
+  //     actual `&&`/`||`/`then`, so an empty gap is rejected. (An explicit
+  //     `if (r.end > createIdx) continue;` sat here and could not change any
+  //     verdict — a line that cannot move the answer is a decoration, so it is
+  //     gone and the property is pinned by a control instead.)
+  const own = logical[i].text;
+  const createIdx = own.indexOf(CREATE_TOKEN);
+  const HANDOFF = /^\s*(?:&&|\|\||;?\s*then)\s*(?:\{\s*)?$/;
+  for (const r of conditionRegions(own)) {
+    if (!readsVar(r.text)) continue;
+    if (HANDOFF.test(own.slice(r.end, createIdx))) return { gated: true };
   }
+
+  // (b) a PRECEDING line, between the probe and the create.
+  for (const l of window.slice(probeIdx + 1)) {
+    if (!conditionRegions(l.text).some((r) => readsVar(r.text))) continue;
+    if (blockDelta(l.text) > 0 || EARLY_EXIT.test(l.text)) return { gated: true };
+  }
+
   return {
     gated: false,
-    why: 'a probe runs and its answer is captured, but no conditional between it and the create READS that '
-      + 'variable — the create is unconditional. `if true; then` above a probe is the demonstrated bypass',
+    why: 'a probe runs and its answer is captured, but no CONDITION that reads that variable actually controls '
+      + 'the create — the create is unconditional. `if true; then` above it, and `create … || true` on its own '
+      + 'line, are the demonstrated bypasses',
   };
 }
 
@@ -590,6 +718,8 @@ export function findImperativeCollisions(records, root = REPO_ROOT, roots = IMPE
 
 const CONTROL_ROLE = '7f951dda-4ed3-4680-a7ca-43fe172d538d'; // AcrPull
 const CONTROL_RECORDS = [{ roleKey: CONTROL_ROLE, file: 'control.bicep', nameLine: 1 }];
+const PROBE_CONTROL_LINE =
+  `N=$(az role assignment list --assignee-object-id "$PID" --scope "$ACR_ID" --role ${CONTROL_ROLE} --query "length(@)" -o tsv)`;
 
 export const D3_CONTROLS = [
   {
@@ -643,6 +773,150 @@ export const D3_CONTROLS = [
     ],
     expectFindings: 0,
     expectPopulation: 0,
+  },
+
+  // ── the "mention is not a branch" class ──────────────────────────────────
+  //
+  // Every case below scored `gated: true` (or fell out of the POPULATION) on
+  // the first version of this fix. The first three are the independent review
+  // of PR #3928, reproduced here verbatim; the rest were found while fixing
+  // them, by asking what ELSE satisfies "the line has a `&&`/`||` and mentions
+  // $N". They are pinned because a fix without a control regresses the moment
+  // someone refactors — the recorded shape in this repo is a narrow fix that
+  // stops exactly at the cases the reviewer happened to name.
+  {
+    why: 'BYPASS 1/3 (review of #3928): `create … --description "seen $N" || true` — `|| true` is not a branch',
+    lines: [
+      PROBE_CONTROL_LINE,
+      `az role assignment create --assignee-object-id "$PID" --role ${CONTROL_ROLE} --scope "$ACR_ID" --description "seen $N" || true`,
+    ],
+    expectFindings: 1,
+  },
+  {
+    why: 'BYPASS 2/3 (review of #3928): `echo "$N" && az … create` — an echo AND an execution, not a reference',
+    lines: [
+      PROBE_CONTROL_LINE,
+      `echo "$N" && az role assignment create --assignee-object-id "$PID" --role ${CONTROL_ROLE} --scope "$ACR_ID"`,
+    ],
+    expectFindings: 1,
+    expectPopulation: 1,
+  },
+  {
+    why: 'BYPASS 3/3 (review of #3928): `create … || echo "had $N"` — the create ran FIRST',
+    lines: [
+      PROBE_CONTROL_LINE,
+      `az role assignment create --assignee-object-id "$PID" --role ${CONTROL_ROLE} --scope "$ACR_ID" || echo "had $N"`,
+    ],
+    expectFindings: 1,
+  },
+  {
+    why: 'an INTERVENING `echo "count=$N" && echo ok` is not a branch either',
+    lines: [
+      PROBE_CONTROL_LINE,
+      'echo "count=$N" && echo ok',
+      `az role assignment create --assignee-object-id "$PID" --role ${CONTROL_ROLE} --scope "$ACR_ID"`,
+    ],
+    expectFindings: 1,
+  },
+  {
+    why: 'an INTERVENING `if true; then echo "$N"; fi` reads $N OUTSIDE the condition, so it gates nothing',
+    lines: [
+      PROBE_CONTROL_LINE,
+      'if true; then echo "$N"; fi',
+      `az role assignment create --assignee-object-id "$PID" --role ${CONTROL_ROLE} --scope "$ACR_ID"`,
+    ],
+    expectFindings: 1,
+  },
+  {
+    why: 'an INTERVENING `if [ "$N" = "0" ]; then :; fi` opens AND closes — nothing after it is inside the block',
+    lines: [
+      PROBE_CONTROL_LINE,
+      'if [ "$N" = "0" ]; then :; fi',
+      `az role assignment create --assignee-object-id "$PID" --role ${CONTROL_ROLE} --scope "$ACR_ID"`,
+    ],
+    expectFindings: 1,
+  },
+  {
+    why: 'a bracket inside a QUOTED STRING (`echo "[[ $N ]] observed"`) is not a test',
+    lines: [
+      PROBE_CONTROL_LINE,
+      'echo "[[ $N ]] observed"',
+      `az role assignment create --assignee-object-id "$PID" --role ${CONTROL_ROLE} --scope "$ACR_ID"`,
+    ],
+    expectFindings: 1,
+  },
+  {
+    why: 'a DISCARDED test — `[ "$N" = "0" ]; az … create` — the `;` throws the exit status away',
+    lines: [
+      PROBE_CONTROL_LINE,
+      `[ "$N" = "0" ]; az role assignment create --assignee-object-id "$PID" --role ${CONTROL_ROLE} --scope "$ACR_ID"`,
+    ],
+    expectFindings: 1,
+  },
+  {
+    // Pins ORDERING. The create ran BEFORE this condition was evaluated, so the
+    // condition cannot be its gate. Fails the moment HANDOFF is loosened to
+    // accept the empty gap an out-of-order region produces.
+    why: 'a condition AFTER the create — `az … create && [ "$N" = "0" ]` — cannot gate it',
+    lines: [
+      PROBE_CONTROL_LINE,
+      `az role assignment create --assignee-object-id "$PID" --role ${CONTROL_ROLE} --scope "$ACR_ID" && [ "$N" = "0" ]`,
+    ],
+    expectFindings: 1,
+  },
+  {
+    // Pins COMMAND POSITION. `test` here is a word in a log message, not the
+    // shell builtin; only a construct in command position opens a condition.
+    why: 'the WORD `test` in a log line — `echo run test $N && az … create` — is not the `test` BUILTIN',
+    lines: [
+      PROBE_CONTROL_LINE,
+      `echo run test $N && az role assignment create --assignee-object-id "$PID" --role ${CONTROL_ROLE} --scope "$ACR_ID"`,
+    ],
+    expectFindings: 1,
+  },
+
+  // ── and the genuine gates that must NOT start failing (no over-tightening) ─
+  {
+    why: 'POSITIVE: a one-line `[ "$N" = "0" ] && az … create` IS a gate',
+    lines: [
+      PROBE_CONTROL_LINE,
+      `[ "$N" = "0" ] && az role assignment create --assignee-object-id "$PID" --role ${CONTROL_ROLE} --scope "$ACR_ID"`,
+    ],
+    expectFindings: 0,
+    expectPopulation: 1,
+  },
+  {
+    why: 'POSITIVE: a one-line `[ "$N" != "0" ] || az … create` IS a gate',
+    lines: [
+      PROBE_CONTROL_LINE,
+      `[ "$N" != "0" ] || az role assignment create --assignee-object-id "$PID" --role ${CONTROL_ROLE} --scope "$ACR_ID"`,
+    ],
+    expectFindings: 0,
+  },
+  {
+    why: 'POSITIVE: a one-line `if [[ "$N" -eq 0 ]]; then az … create …; fi` IS a gate',
+    lines: [
+      PROBE_CONTROL_LINE,
+      `if [[ "$N" -eq 0 ]]; then az role assignment create --assignee-object-id "$PID" --role ${CONTROL_ROLE} --scope "$ACR_ID"; fi`,
+    ],
+    expectFindings: 0,
+  },
+  {
+    why: 'POSITIVE: `test "$N" = "0" && az … create` IS a gate',
+    lines: [
+      PROBE_CONTROL_LINE,
+      `test "$N" = "0" && az role assignment create --assignee-object-id "$PID" --role ${CONTROL_ROLE} --scope "$ACR_ID"`,
+    ],
+    expectFindings: 0,
+  },
+  {
+    why: 'POSITIVE: an early-exit gate `[ "$N" != "0" ] && return 0` above the create IS a gate',
+    lines: [
+      PROBE_CONTROL_LINE,
+      '[ "$N" != "0" ] && return 0',
+      `az role assignment create --assignee-object-id "$PID" --role ${CONTROL_ROLE} --scope "$ACR_ID"`,
+    ],
+    expectFindings: 0,
   },
 ];
 

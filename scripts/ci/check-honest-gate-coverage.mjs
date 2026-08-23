@@ -94,7 +94,7 @@ const ENV_VAR = /\bLOOM_[A-Z0-9_]+\b/;
  * WHAT THIS COSTS, measured before it landed rather than estimated:
  *
  *     literal-only rule ............ 63 file(s) /  74 bar(s)
- *     + interpolated `missing` ..... 113 file(s) / 133 bar(s)   (+50 / +59)
+ *     + interpolated `missing` ..... 113 file(s) / 134 bar(s)   (+50 / +60)
  *
  * A sample of the newly-visible bars was read by hand — publish-as-api-dialog,
  * batch-pool-editor, connection-details, cosmos-metrics, data-contract-designer,

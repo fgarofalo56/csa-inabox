@@ -2984,6 +2984,52 @@ const PREFIX_PREMISE_PROBE = {
   handler: 'POST',
 };
 
+/**
+ * The ALLOWLIST_PREFIXES entries CHECK 3B can actually reach — the ones whose
+ * class reason claims a read-only/scan/discovery posture. Every other prefix is
+ * outside the check by construction, so this, not 35, is its population.
+ */
+export function readOnlyClaimingPrefixes() {
+  return ALLOWLIST_PREFIXES.filter(([, reason]) => READ_ONLY_CLAIM_RE.test(reasonClaim(reason)));
+}
+
+/**
+ * POPULATION FLOOR for CHECK 3B (independent review of #3928).
+ *
+ * CHECK 3B reaches 2 of the 35 class prefixes — `app/api/setup/` and
+ * `app/api/copilot/`; the other 33 say "navigator", which is deliberately
+ * outside the vocabulary. Live findings are 0, and the sensitivity probe above
+ * anchors `setup/` ONLY. Measured: deleting the two words "read-only" from the
+ * `copilot/` reason left the guard at RC=0 with every probe still printing
+ * "passed" — half the check's population removed, in silence.
+ *
+ * A guard over a shrinking population is the failure this repo has recorded
+ * more than any other, so the population is asserted rather than assumed. This
+ * is NOT a licence to raise the number to match a future reading: if a prefix
+ * legitimately stops claiming a read-only posture, the fix is to re-point the
+ * probe (see PREFIX_PREMISE_PROBE) — never to lower the floor.
+ */
+const CHECK_3B_PREFIX_FLOOR = 2;
+
+function assertPrefixPremisePopulation() {
+  const claiming = readOnlyClaimingPrefixes();
+  if (claiming.length < CHECK_3B_PREFIX_FLOOR) {
+    console.error(
+      `\n[route-guards] FAIL — CHECK 3B's population fell to ${claiming.length} `
+      + `read-only-claiming class prefix(es); the floor is ${CHECK_3B_PREFIX_FLOOR}. A check that reaches `
+      + 'nothing reports 0 findings and means nothing by it. Re-point the probe at a prefix that still '
+      + 'claims the posture; do NOT lower this floor.',
+    );
+    for (const [p, reason] of ALLOWLIST_PREFIXES) console.error(`  - ${p} :: ${reason}`);
+    process.exit(1);
+  }
+  console.log(
+    `[route-guards] CHECK 3B population: ${claiming.length} read-only-claiming class prefix(es) of `
+    + `${ALLOWLIST_PREFIXES.length} (floor ${CHECK_3B_PREFIX_FLOOR}) — `
+    + claiming.map(([p]) => p).join(', '),
+  );
+}
+
 function assertPrefixPremiseTestIsSensitive() {
   const bad = [];
   const p = PREFIX_PREMISE_PROBE;
@@ -3134,6 +3180,7 @@ function main() {
   // premise test re-keys itself the moment a sibling adopts an owner check.
   const scopedTypes = itemTypesWithOwnedIdSiblings(uniqueFiles);
   assertPremiseTestIsSensitive(scopedTypes);
+  assertPrefixPremisePopulation();
   assertPrefixPremiseTestIsSensitive();
   let scanned = 0;
   let allowlistedHits = 0;
