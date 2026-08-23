@@ -74,14 +74,29 @@ const ESTATE = 'loom:estate-a';
 const SUB = 'sub-a';
 const POOL_ID = `/subscriptions/${SUB}/resourceGroups/rg-dlz-aiml-stack-dev/providers/Microsoft.Synapse/workspaces/syn-ws/sqlPools/pool1`;
 const ADX_ID = `/subscriptions/${SUB}/resourceGroups/rg-shared-mixed-dev/providers/Microsoft.Kusto/clusters/adx-loom-shared`;
+const AAS_ID = `/subscriptions/${SUB}/resourceGroups/rg-shared-mixed-dev/providers/Microsoft.AnalysisServices/servers/aas-loom`;
+const VMSS_ID = `/subscriptions/${SUB}/resourceGroups/rg-shared-mixed-dev/providers/Microsoft.Compute/virtualMachineScaleSets/vmss-shir`;
+
+/**
+ * The four ids in the order the deploy resolves them. Indexed so a case can ask
+ * for an estate of ANY cardinality — see the arming-gate cardinality case, which
+ * exists because coverage pinned to a single fixture size cannot see a
+ * weakening conditioned on a DIFFERENT size.
+ */
+const ALL_IDS = [POOL_ID, ADX_ID, AAS_ID, VMSS_ID];
+
+function typeOf(resourceId: string): string {
+  if (resourceId.includes('/sqlPools/')) return 'microsoft.synapse/workspaces/sqlpools';
+  if (resourceId.includes('/clusters/')) return 'microsoft.kusto/clusters';
+  if (resourceId.includes('/servers/')) return 'microsoft.analysisservices/servers';
+  return 'microsoft.compute/virtualmachinescalesets';
+}
 
 /** The deploy manifest the console's env would produce on the live estate. */
 function manifestFixture(ids: string[] = [POOL_ID, ADX_ID]) {
   const entries = ids.map((resourceId) => ({
     resourceId,
-    resourceType: resourceId.includes('/sqlPools/')
-      ? 'microsoft.synapse/workspaces/sqlpools'
-      : 'microsoft.kusto/clusters',
+    resourceType: typeOf(resourceId),
     name: resourceId.split('/').pop()!,
     resourceGroup: resourceId.split('/resourceGroups/')[1].split('/')[0],
     subscriptionId: SUB,
@@ -593,6 +608,47 @@ describe('POST /api/admin/estate/pause', () => {
     expect(j.population.armed).toBe(false);
     expect(j.population.namedByDeploy).toBe(2);
     expect(j.population.examined).toBe(2);
+  });
+
+  /**
+   * ── WHY THIS LOOPS (independent review, 2026-08-23) ────────────────────────
+   * Every other arming-gate case above runs against ONE fixture, of ONE size:
+   * two resources. A reviewer mutated the gate to
+   *
+   *     if (manifestGated && plan.inventory.pausable.length !== N)
+   *
+   * and found that N=2 was caught while **N=1 and N=3 both survived a full
+   * green run**. N=3 is the cardinality of the LIVE estate — the deploy names
+   * four resources but LOOM_PURVIEW_SHIR_VMSS_NAME is set EMPTY, so only the
+   * Synapse pool, the ADX cluster and the AAS server resolve. So the suite
+   * could not see a weakening that takes effect on precisely the estate this
+   * feature would run against, and nowhere else.
+   *
+   * Pinning coverage to a fixture size is the defect, not the specific number.
+   * This case therefore asserts the refusal at EVERY cardinality the manifest
+   * can produce, so no `length !== N` can hide in an untested size.
+   */
+  it('NOT ARMED: the gate holds at EVERY estate cardinality, including the live estate\'s 3', async () => {
+    for (let n = 1; n <= ALL_IDS.length; n++) {
+      const ids = ALL_IDS.slice(0, n);
+      resolveDeployManifest.mockReturnValue(unarmedManifestFixture(ids));
+      const fake = fakeActuator();
+      createArmActuator.mockResolvedValue(fake.actuator);
+      const { POST } = await import('../pause/route');
+      const res = await POST(
+        post({ confirm: ESTATE, confirmToken: previewToken(ids) }),
+        { params: Promise.resolve({}) } as never,
+      );
+      const j = await res.json();
+      expect(res.status, `cardinality ${n}`).toBe(409);
+      expect(j.notArmed, `cardinality ${n}`).toBe(true);
+      expect(j.namedByDeploy, `cardinality ${n}`).toBe(n);
+      // The refusal is not a side effect of an empty scope: ownership DID
+      // resolve for all n, and still nothing was touched.
+      expect(j.preview.wouldPause, `cardinality ${n}`).toHaveLength(n);
+      expect(fake.touched, `cardinality ${n}`).toEqual([]);
+      expect(savePauseSnapshot).not.toHaveBeenCalled();
+    }
   });
 
   it('409s with the population statement when NOTHING is in scope', async () => {    resolveDeployManifest.mockReturnValue({ manifest: { estateId: ESTATE, resourceIds: [] }, entries: [], unresolved: [] });

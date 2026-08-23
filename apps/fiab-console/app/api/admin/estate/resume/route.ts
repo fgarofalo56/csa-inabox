@@ -47,6 +47,7 @@ import type { NextRequest } from 'next/server';
 import { withTenantAdmin } from '@/lib/api/route-toolkit';
 import { apiOk, apiError, apiConflict, apiHonestError } from '@/lib/api/respond';
 import { auditLogContainer } from '@/lib/azure/cosmos-client';
+import { randomId } from '@/lib/util/random-id';
 import { emitAuditEvent } from '@/lib/admin/audit-stream';
 import { tenantScopeId } from '@/lib/auth/session';
 import {
@@ -67,7 +68,7 @@ async function audit(tenantId: string, who: string, kind: string, fields: Record
   try {
     const c = await auditLogContainer();
     await c.items.create({
-      id: `audit-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      id: randomId('audit', 8),
       itemId: 'loom-estate-pause',
       tenantId,
       who,

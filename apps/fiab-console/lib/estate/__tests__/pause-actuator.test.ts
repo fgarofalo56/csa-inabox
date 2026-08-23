@@ -55,6 +55,32 @@ vi.mock('@/lib/azure/kusto-arm-client', () => ({
   startKustoCluster: () => startKustoCluster(),
 }));
 
+/**
+ * The CONFIRM path's clients. `dedicatedTarget()` and `listDatabases()` are the
+ * probe-side twins of `pausePool()` — zero-argument, env-deriving — so they
+ * throw here for exactly the same reason: reaching for them means the probe
+ * asked a DIFFERENT resource than the one whose ownership was verified.
+ */
+const synapseExecuteQuery = vi.fn();
+const dedicatedTarget = vi.fn(() => {
+  throw new Error('dedicatedTarget() was called — it re-derives its target from process.env');
+});
+vi.mock('@/lib/azure/synapse-sql-client', () => ({
+  executeQuery: (...a: unknown[]) => synapseExecuteQuery(...a),
+  dedicatedTarget: () => dedicatedTarget(),
+  getSynapseSqlSuffix: () => 'sql.azuresynapse.net',
+}));
+const kustoExecuteQuery = vi.fn();
+vi.mock('@/lib/azure/kusto-client', () => ({
+  executeQuery: (...a: unknown[]) => kustoExecuteQuery(...a),
+}));
+const listDatabases = vi.fn(() => {
+  throw new Error('listDatabases() was called — it re-derives its target from process.env');
+});
+vi.mock('@/lib/azure/aas-server-client', () => ({
+  listDatabases: () => listDatabases(),
+}));
+
 import {
   assertActuationTarget,
   createArmActuator,
@@ -131,9 +157,25 @@ function urls(): string[] {
 
 beforeEach(() => {
   vi.clearAllMocks();
-  armGet.mockResolvedValue({ tags: {}, properties: { state: 'Running' }, sku: { name: 'DW100c', capacity: 100 } });
+  // Keyed on the URL so the ADX probe's two reads (the cluster, then its
+  // databases) can return different bodies while every other caller keeps the
+  // power-read shape it had.
+  armGet.mockImplementation(async (url: unknown) => {
+    if (/\/databases\?/.test(String(url))) {
+      // ARM names a child database `{clusterName}/{databaseName}` — the probe
+      // must strip that prefix rather than pass it through as a database name.
+      return { value: [{ name: 'adx-verified/loomdb' }] };
+    }
+    return {
+      tags: {},
+      properties: { state: 'Running', uri: 'https://adx-verified.eastus2.kusto.windows.net' },
+      sku: { name: 'DW100c', capacity: 100 },
+    };
+  });
   armPost.mockResolvedValue({});
   armPatch.mockResolvedValue({});
+  synapseExecuteQuery.mockResolvedValue({ rows: [{ loom_pause_probe: 1 }] });
+  kustoExecuteQuery.mockResolvedValue({ rows: [[1]] });
   // The env deliberately names DIFFERENT resources than the fixtures, so any
   // env-derived target is immediately visible as a mismatch.
   process.env.LOOM_SUBSCRIPTION_ID = 'sub-FROM-ENV';
@@ -248,6 +290,176 @@ describe('assertActuationTarget — fail closed on anything it cannot establish'
     expect(r.error).toMatch(/recorded type/);
     expect(armPost).not.toHaveBeenCalled();
     expect(armPatch).not.toHaveBeenCalled();
+  });
+
+  /**
+   * ── WHY THIS LOOPS OVER THE DECLARED TYPE (review, 2026-08-23) ─────────────
+   * The case above only ever declares ONE type, so a reviewer's mutation that
+   * skipped `assertActuationTarget` for a SINGLE type (VMSS) survived a full
+   * green run: per-type INVOCATION was untested even though the check itself
+   * was.
+   *
+   * Each pair below declares a different type against an id of some OTHER type,
+   * so every branch of both switches is entered with a target that must be
+   * refused. A skip keyed to any one type now fails.
+   */
+  const wrongPairs = [
+    { declared: types.pool, id: ids.adx, label: 'pool-declared / adx id' },
+    { declared: types.adx, id: ids.aas, label: 'adx-declared / aas id' },
+    { declared: types.aas, id: ids.vmss, label: 'aas-declared / vmss id' },
+    { declared: types.vmss, id: ids.pool, label: 'vmss-declared / pool id' },
+  ];
+
+  it('PAUSE refuses a mismatched target for EVERY declared type', async () => {
+    const actuator = await createArmActuator();
+    for (const { declared, id, label } of wrongPairs) {
+      const bad = candidateFor('pool');
+      const r = await actuator.pause({
+        ...bad,
+        resource: { ...bad.resource, resourceId: id, resourceType: declared },
+      });
+      expect(r.ok, label).toBe(false);
+      expect(r.error, label).toMatch(/recorded type/);
+    }
+    // Nothing was mutated, for any of them.
+    expect(armPost).not.toHaveBeenCalled();
+    expect(armPatch).not.toHaveBeenCalled();
+  });
+
+  it('RESUME refuses a mismatched target for EVERY declared type', async () => {
+    const actuator = await createArmActuator();
+    for (const { declared, id, label } of wrongPairs) {
+      const r = await actuator.resume(entryFor('pool', { resourceId: id, resourceType: declared }));
+      expect(r.ok, label).toBe(false);
+      expect(r.error, label).toMatch(/recorded type/);
+    }
+    expect(armPost).not.toHaveBeenCalled();
+    expect(armPatch).not.toHaveBeenCalled();
+  });
+});
+
+// ===========================================================================
+// THE CONFIRM PATH — probeServable (review round 2, 2026-08-23)
+// ===========================================================================
+
+/**
+ * `createArmActuator()` returns FIVE verbs. The first fix rewired four of them
+ * to address `resourceId` and left `probeServable` using its `entry` argument
+ * only for `entry.name` in message strings — the original defect, verbatim, on
+ * the confirm path. A reviewer proved the gap by gutting the whole function to
+ * `servable:true` and watching the full 258-test suite stay GREEN.
+ *
+ * These cases are per-verb and per-type, so a regression in ONE branch cannot
+ * hide behind the other two.
+ */
+describe('probeServable — the CONFIRM path addresses the VERIFIED id too', () => {
+  it('SYNAPSE probes the workspace+pool named by the ID, not the env-named pool', async () => {
+    const actuator = await createArmActuator();
+    const r = await actuator.probeServable(entryFor('pool'));
+    expect(r.probed).toBe(true);
+    expect(r.servable).toBe(true);
+    // A gutted probe never calls the client at all, so this indexing is itself
+    // the guard against "always return servable:true".
+    const target = synapseExecuteQuery.mock.calls[0][0] as { server: string; database: string };
+    expect(target.server).toBe('ws-verified.sql.azuresynapse.net');
+    expect(target.database).toBe('pool-verified');
+    expect(JSON.stringify(target)).not.toContain('FROM-ENV');
+    expect(dedicatedTarget).not.toHaveBeenCalled();
+  });
+
+  it('ADX probes the cluster ID\'s OWN endpoint and OWN database', async () => {
+    const actuator = await createArmActuator();
+    const r = await actuator.probeServable(entryFor('adx'));
+    expect(r.probed).toBe(true);
+    expect(r.servable).toBe(true);
+    const [db, kql, opts] = kustoExecuteQuery.mock.calls[0] as [string, string, { clusterUri: string }];
+    // `adx-verified/loomdb` -> `loomdb`: the ARM child-name prefix is stripped,
+    // never passed through as a database name.
+    expect(db).toBe('loomdb');
+    expect(kql).toContain('print');
+    expect(opts.clusterUri).toBe('https://adx-verified.eastus2.kusto.windows.net');
+    // kusto-client's module-level fallback is a HARD-CODED cluster and region.
+    // Reaching it would probe a completely different cluster.
+    expect(opts.clusterUri).not.toContain('adx-csa-loom-shared');
+    // Every ARM read the probe made addressed the verified id.
+    expect(armGet.mock.calls.length).toBeGreaterThan(0);
+    for (const c of armGet.mock.calls) expect(String(c[0])).toContain(ids.adx);
+  });
+
+  it('AAS probes its OWN resource id, never the env-pinned server', async () => {
+    const actuator = await createArmActuator();
+    const r = await actuator.probeServable(entryFor('aas'));
+    expect(r.probed).toBe(true);
+    expect(r.servable).toBe(true);
+    expect(listDatabases).not.toHaveBeenCalled();
+    expect(armGet).toHaveBeenCalledWith(expect.stringContaining(`${ids.aas}/databases?`));
+    for (const c of armGet.mock.calls) expect(String(c[0])).not.toContain('FROM-ENV');
+    // R7 — the old string claimed "over XMLA" for what is an ARM control-plane
+    // read. It must not claim a transport it did not use.
+    expect(r.detail).not.toMatch(/XMLA/i);
+  });
+
+  it('reads NO env var to decide WHAT to probe — the id is the only input', async () => {
+    // The removed `LOOM_KUSTO_DATABASE` was emitted by no bicep module and was
+    // absent from the live console, so its branch was the DEFAULT on the real
+    // estate: servable:false -> confirmation 'unknown' -> RESUME_FAILED for a
+    // cluster that had resumed perfectly.
+    // Indexed rather than spelled as `process.env.LOOM_*` on purpose: the
+    // env-sync guard's read-detector is /process\.env\.(LOOM_[A-Z0-9_]+)/, so
+    // naming them literally here would re-register LOOM_KUSTO_DATABASE as a
+    // console READ and re-fail the very guard this change was made to satisfy.
+    for (const k of ['LOOM_KUSTO_DATABASE', 'LOOM_AAS_SERVER_NAME', 'LOOM_AAS_REGION']) {
+      delete process.env[k];
+    }
+    const actuator = await createArmActuator();
+    for (const kind of ['pool', 'adx', 'aas'] as const) {
+      const r = await actuator.probeServable(entryFor(kind));
+      expect(r.probed, kind).toBe(true);
+      expect(r.servable, kind).toBe(true);
+    }
+  });
+
+  it('a probe whose id and recorded TYPE disagree is refused, and asks NOTHING', async () => {
+    const actuator = await createArmActuator();
+    const r = await actuator.probeServable(entryFor('pool', { resourceType: types.adx }));
+    expect(r.servable).toBe(false);
+    // `probed:false` — no request was issued, so nothing was established. This
+    // must NOT read as "we asked and it said no".
+    expect(r.probed).toBe(false);
+    expect(r.detail).toMatch(/recorded type/);
+    expect(synapseExecuteQuery).not.toHaveBeenCalled();
+    expect(kustoExecuteQuery).not.toHaveBeenCalled();
+  });
+
+  it('an ADX cluster with no databases is honestly UNPROBED, never a fallback db', async () => {
+    armGet.mockImplementation(async (url: unknown) =>
+      (/\/databases\?/.test(String(url))
+        ? { value: [] }
+        : { properties: { state: 'Running', uri: 'https://adx-verified.eastus2.kusto.windows.net' } }));
+    const actuator = await createArmActuator();
+    const r = await actuator.probeServable(entryFor('adx'));
+    expect(r.probed).toBe(false);
+    expect(r.servable).toBe(false);
+    expect(r.detail).toMatch(/no databases/i);
+    // The critical part: it did NOT fall back to kusto-client's DEFAULT_DB.
+    expect(kustoExecuteQuery).not.toHaveBeenCalled();
+  });
+
+  it('a failed round-trip is probed:true + servable:false — distinct from unprobed', async () => {
+    synapseExecuteQuery.mockRejectedValueOnce(new Error('Login timeout expired'));
+    const actuator = await createArmActuator();
+    const r = await actuator.probeServable(entryFor('pool'));
+    expect(r.probed).toBe(true);
+    expect(r.servable).toBe(false);
+    expect(r.detail).toContain('Login timeout expired');
+  });
+
+  it('a type with no probe wired reports UNPROBED, never a fabricated servable', async () => {
+    const actuator = await createArmActuator();
+    const r = await actuator.probeServable(entryFor('vmss'));
+    expect(r.probed).toBe(false);
+    expect(r.servable).toBe(false);
+    expect(r.detail).toMatch(/NOT\s+established/i);
   });
 });
 

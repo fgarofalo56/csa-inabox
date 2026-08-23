@@ -567,6 +567,56 @@ describe('R-CAP-4 — an unconfirmed resume is RESUME_FAILED, NEVER RUNNING', ()
     expect(started.dispatches.find((d) => d.resourceId === MIXED_LOOM.resourceId)?.status).toBe('skipped');
   });
 
+  /**
+   * ── THE PAUSE/RESUME ASYMMETRY (independent review, 2026-08-23) ────────────
+   * `reverifyBeforeAct` had exactly ONE call site — inside `startPause`.
+   * `startResume` iterated `snapshot.resources` and called `actuator.resume`
+   * guarded only by the STRUCTURAL `assertActuationTarget`, which establishes
+   * that an id is well-formed and self-consistent, NOT that it is ours. A grep
+   * for a test asserting resume refuses a foreign entry returned zero.
+   *
+   * Resume deliberately does not re-read live tags — that is the recovery
+   * direction, and a tag changed while the estate was down would strand a paused
+   * resource permanently. It re-asserts the snapshot's OWN recorded verdict,
+   * which `capturePrePauseState` guarantees for every legitimately written
+   * entry, so nothing recoverable is ever refused.
+   */
+  it('RESUME refuses a snapshot entry that is not recorded loom-owned, and touches NOTHING', async () => {
+    // EVERY non-`loom-owned` member of the OwnershipVerdict union, not just one.
+    // A first draft of this case used a single made-up verdict, and a mutation
+    // that inverted the guard into an allowlist (`=== 'not-loom-owned'`) then
+    // SURVIVED a full green run while still resuming an `indeterminate` entry.
+    // Enumerating the union is what makes the guard's polarity testable.
+    for (const verdict of ['not-loom-owned', 'indeterminate'] as const) {
+      const snap = await pausedSnapshot();
+      const foreign: EstatePauseSnapshot = {
+        ...snap,
+        resources: snap.resources.map((r) => ({
+          ...r,
+          ownership: { verdict, source: 'none' as const, reason: 'tampered snapshot document' },
+        })),
+      };
+      const rec = recorder();
+      const started = await startResume(foreign, rec.actuator, { now: '2026-08-23T00:10:00.000Z' });
+      expect(rec.touched, verdict).toEqual([]);
+      expect(started.dispatches.length, verdict).toBeGreaterThan(0);
+      for (const d of started.dispatches) {
+        expect(d.status, verdict).toBe('skipped');
+        expect(d.detail, verdict).toMatch(/not 'loom-owned'/);
+      }
+    }
+  });
+
+  it('RESUME still dispatches normally for a properly loom-owned snapshot', async () => {
+    // The control: the guard above must refuse the tampered entry WITHOUT
+    // refusing the ordinary one, or it would simply be a broken resume.
+    const snap = await pausedSnapshot();
+    const rec = recorder();
+    const started = await startResume(snap, rec.actuator, { now: '2026-08-23T00:10:00.000Z' });
+    expect(rec.touched.length).toBeGreaterThan(0);
+    expect(started.dispatches.some((d) => d.status === 'dispatched')).toBe(true);
+  });
+
   it('RESUME_FAILED cannot be laundered into RUNNING by a state write', async () => {
     const snap = await pausedSnapshot();
     const started = await startResume(snap, recorder().actuator, { now: '2026-08-23T00:10:00.000Z' });
