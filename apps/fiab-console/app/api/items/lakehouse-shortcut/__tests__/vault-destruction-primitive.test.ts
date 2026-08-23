@@ -79,6 +79,9 @@ vi.mock('@/lib/azure/shortcut-engines', async () => {
     dropShortcutObject: vi.fn(async () => {}),
     dropExternalBinding: vi.fn(async () => {}),
     bindExternalSource: vi.fn(async () => ({ readUri: 's3://b/p', ucExternalLocation: 'loc' })),
+    // The name-space POLICY is the thing under test, so it comes from the real
+    // module — mocking it would make every assertion below a test of the mock.
+    isMintedEngineObject: actual.isMintedEngineObject,
   };
 });
 vi.mock('@/lib/azure/synapse-sql-client', () => ({
@@ -103,6 +106,11 @@ const postReq = (body: any) => ({
 
 function seedShortcut(id: string, state: Record<string, unknown>) {
   store.set(id, { id, workspaceId: 'ws1', itemType: 'lakehouse-shortcut', displayName: 'sc', state });
+}
+
+/** Seed a row of a DIFFERENT item type carrying the same state shape. */
+function seedOtherType(id: string, itemType: string, state: Record<string, unknown>) {
+  store.set(id, { id, workspaceId: 'ws1', itemType, displayName: 'agent', state });
 }
 
 beforeEach(() => {
@@ -324,5 +332,216 @@ describe('#3611 — the allow-set is DERIVED from the mint, not hand-typed', () 
     expect(res.status).toBe(400);
     expect(await res.json()).toMatchObject({ code: 'invalid_engine_object' });
     expect(executeQuery).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * #3611 (review round 2) — SEPARATOR-FREE objects OUTSIDE the minted name-space.
+ *
+ * The first revision of this guard tested only "is this a well-formed 1–3 part
+ * identifier". Every payload below is a perfectly well-formed identifier with no
+ * separator to escape, so all of them PASSED it — while `dropShortcutObject`
+ * reads its target DATABASE out of `parts[0]` and both sinks run as the Console
+ * UAMI, a Synapse SQL admin. Escaping was never the whole problem; WHICH OBJECT
+ * is, and only a name-space check answers that.
+ *
+ * These are the cases that separate a name-space check from an identifier
+ * check. An identifier-shaped guard is GREEN on every one of them.
+ */
+describe('#3611 — engineObject must be inside the name-space Loom registers into', () => {
+  const OUTSIDE = [
+    // A system catalog view on the built-in database: SELECT here enumerates
+    // every SQL login the endpoint can see.
+    ['master.sys.sql_logins', 'a system catalog on the built-in database'],
+    // Someone else's database entirely — `parts[0]` picks the target DB.
+    ['finance_db.dbo.payroll', "another database's table"],
+    // The RIGHT database, the WRONG schema: this is the case a check anchored
+    // only on the database prefix would still admit.
+    ['loom_lakehouse.dbo.someone_elses_view', 'the minted DB but a foreign schema'],
+    // The right database AND a schema that merely CONTAINS the minted one.
+    ['loom_lakehouse.shortcuts_evil.v', 'a schema that only looks like `shortcuts`'],
+    // A 2-part legacy-shaped name in a foreign schema.
+    ['dbo.audit', 'a foreign 2-part object'],
+  ] as const;
+
+  for (const [obj, why] of OUTSIDE) {
+    it(`does NOT drop ${why} (${obj})`, async () => {
+      seedShortcut('n1', { kind: 'tables', engine: 'synapse', engineObject: obj });
+
+      await DELETE(delReq('workspaceId=ws1&id=n1'));
+
+      expect(dropShortcutObject).not.toHaveBeenCalled();
+    });
+
+    it(`does NOT query ${why} (${obj})`, async () => {
+      seedShortcut('n2', { kind: 'tables', engine: 'synapse', engineObject: obj });
+
+      const res = await POST(postReq({ action: 'query', id: 'n2' }));
+
+      expect(res.status).toBe(400);
+      expect(await res.json()).toMatchObject({ code: 'invalid_engine_object' });
+      expect(executeQuery).not.toHaveBeenCalled();
+    });
+  }
+
+  it('DOES accept the Databricks minted name-space (loom.<schema>.<table>)', async () => {
+    // Positive control for the OTHER engine: without it, a guard that simply
+    // refused everything non-Synapse would pass every case above.
+    seedShortcut('n3', { kind: 'tables', engine: 'databricks', engineObject: 'loom.sc_abc12345.mytable' });
+
+    await DELETE(delReq('workspaceId=ws1&id=n3'));
+
+    expect(dropShortcutObject).toHaveBeenCalledWith({
+      engine: 'databricks', engineObject: 'loom.sc_abc12345.mytable',
+    });
+  });
+
+  it('does NOT accept a foreign Databricks catalog (unity.finance.payroll)', async () => {
+    seedShortcut('n4', { kind: 'tables', engine: 'databricks', engineObject: 'unity.finance.payroll' });
+
+    await DELETE(delReq('workspaceId=ws1&id=n4'));
+
+    expect(dropShortcutObject).not.toHaveBeenCalled();
+  });
+
+  it('does NOT let a Databricks-shaped name reach the SYNAPSE arm', async () => {
+    // Cross-engine: `loom.x.y` is minted-looking, but not by the engine named on
+    // the row. Passing the engine makes the check strictly tighter, and this is
+    // the case that proves the engine argument is actually consulted.
+    seedShortcut('n5', { kind: 'tables', engine: 'synapse', engineObject: 'loom.dbo.payroll' });
+
+    await DELETE(delReq('workspaceId=ws1&id=n5'));
+
+    expect(dropShortcutObject).not.toHaveBeenCalled();
+  });
+
+  it('honours LOOM_SERVERLESS_DB — the name-space follows the deployment, not a literal', async () => {
+    // The minted database is `process.env.LOOM_SERVERLESS_DB || 'loom_lakehouse'`.
+    // A guard that hard-codes `loom_lakehouse` would refuse every real object in
+    // a deployment that overrides it — the same class of defect as the head-class
+    // bug this file already records, so it gets its own control.
+    process.env.LOOM_SERVERLESS_DB = 'custom_lh';
+    try {
+      seedShortcut('n6', { kind: 'tables', engine: 'synapse', engineObject: 'custom_lh.shortcuts.sc_x' });
+      seedShortcut('n7', { kind: 'tables', engine: 'synapse', engineObject: 'loom_lakehouse.shortcuts.sc_x' });
+
+      await DELETE(delReq('workspaceId=ws1&id=n6'));
+      expect(dropShortcutObject).toHaveBeenCalledWith({
+        engine: 'synapse', engineObject: 'custom_lh.shortcuts.sc_x',
+      });
+
+      // ...and the DEFAULT name is no longer in the name-space once overridden.
+      (dropShortcutObject as any).mockClear();
+      await DELETE(delReq('workspaceId=ws1&id=n7'));
+      expect(dropShortcutObject).not.toHaveBeenCalled();
+    } finally {
+      delete process.env.LOOM_SERVERLESS_DB;
+    }
+  });
+});
+
+/**
+ * #3611 (review round 2) — the DELETE row read had NO itemType check.
+ *
+ * `authorizeItemWorkspace` takes an `itemType` argument but does not consult it
+ * when `workspaceId` is supplied: it authorizes the WORKSPACE. The `action=query`
+ * path re-checked `row.itemType` after its point read; DELETE did not. So an id
+ * belonging to an item of a DIFFERENT type, in a workspace the caller may write,
+ * was read here and its `state` fed to the vault-delete and DROP sinks — and
+ * `createOwnedItem` passes `state` through wholesale, so that state bag is
+ * caller-authored on item types that use it.
+ *
+ * `data-agent` is the concrete instance: `app/api/items/data-agent/route.ts`
+ * passes `body.state` straight into `createOwnedItem`.
+ */
+describe('#3611 — DELETE only ever acts on a lakehouse-shortcut row', () => {
+  it('refuses an id belonging to another item type, and touches NOTHING', async () => {
+    seedOtherType('ag1', 'data-agent', {
+      engine: 'synapse', engineObject: 'finance_db.dbo.revenue_view',
+      secretRef: 'loom-shortcut-anything',
+    });
+
+    const res = await DELETE(delReq('workspaceId=ws1&id=ag1'));
+
+    expect(res.status).toBe(404);
+    expect(dropShortcutObject).not.toHaveBeenCalled();
+    expect(deleteShortcutSecret).not.toHaveBeenCalled();
+    // ...and the foreign row is NOT deleted through this route either. A type
+    // check that deleted the row anyway would have swapped one defect (a DROP)
+    // for another (cross-type deletion).
+    expect(store.has('ag1')).toBe(true);
+  });
+
+  it('refuses even when the state would have passed BOTH name-space guards', async () => {
+    // The engineObject and secretRef here are inside the minted name-spaces, so
+    // neither value-level guard fires. Only the TYPE check can refuse this, which
+    // is what makes it a distinct control rather than a duplicate of the two above.
+    seedOtherType('ag2', 'data-agent', {
+      engine: 'synapse', engineObject: 'loom_lakehouse.shortcuts.4f0278c7_x',
+      secretRef: 'loom-shortcut-4f0278c7',
+    });
+
+    const res = await DELETE(delReq('workspaceId=ws1&id=ag2'));
+
+    expect(res.status).toBe(404);
+    expect(dropShortcutObject).not.toHaveBeenCalled();
+    expect(deleteShortcutSecret).not.toHaveBeenCalled();
+    expect(store.has('ag2')).toBe(true);
+  });
+
+  it('still deletes a real shortcut (the type check has a non-empty allow-set)', async () => {
+    seedShortcut('ok1', { sourceType: 's3', secretRef: 'loom-shortcut-ok1' });
+
+    const res = await DELETE(delReq('workspaceId=ws1&id=ok1'));
+
+    expect(res.status).toBe(200);
+    expect(store.has('ok1')).toBe(false);
+    expect(deleteShortcutSecret).toHaveBeenCalledWith('loom-shortcut-ok1');
+  });
+
+  it('stays idempotent for an id that does not exist at all', async () => {
+    const res = await DELETE(delReq('workspaceId=ws1&id=nope'));
+
+    expect(res.status).toBe(200);
+  });
+});
+
+/**
+ * #3611 (review round 2) — the secret guard must be an ALLOW-list.
+ *
+ * The five original cases (`loom-msal-client-secret`, `loom-conn-…`,
+ * `session-secret` refused; `loom-shortcut-…`, `loom-sc-…` allowed) are all
+ * satisfied by a three-pattern DENY-list, so they cannot tell an allow-list from
+ * its inversion. The two names below are refused ONLY by an allow-list: neither
+ * is a platform-reserved name and neither matches any plausible deny pattern,
+ * yet both belong to OTHER features' minted name-spaces.
+ */
+describe('#3611 — the secret guard is an allow-list, not a deny-list', () => {
+  const FOREIGN_MINTED = [
+    // `loom-app-git-<id8>` — the Loom App git credential name-space, named in
+    // this PR's own threat table (kv-secret-purpose.ts MINTED_NAMESPACES).
+    'loom-app-git-abc12345',
+    // A plausible future/adjacent Loom name that no deny pattern covers.
+    'loom-dbx-pat',
+    // Another feature's minted space, exact prefix from MINTED_NAMESPACES.
+    'loom-git-ws1-pat',
+  ];
+
+  for (const name of FOREIGN_MINTED) {
+    it(`refuses "${name}" — outside loom-sc-/loom-shortcut-, so a deny-list would MISS it`, async () => {
+      seedShortcut('s1', { sourceType: 's3', secretRef: name });
+
+      await DELETE(delReq('workspaceId=ws1&id=s1'));
+
+      expect(deleteShortcutSecret).not.toHaveBeenCalled();
+    });
+  }
+
+  it('refuses a name that merely CONTAINS the minted prefix rather than starting with it', async () => {
+    seedShortcut('s2', { sourceType: 's3', secretRef: 'evil-loom-shortcut-x' });
+
+    await DELETE(delReq('workspaceId=ws1&id=s2'));
+
+    expect(deleteShortcutSecret).not.toHaveBeenCalled();
   });
 });

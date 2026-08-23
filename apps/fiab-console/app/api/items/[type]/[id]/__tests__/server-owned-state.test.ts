@@ -202,3 +202,89 @@ describe('#3611 — the generic PATCH may not write server-owned state', () => {
     expect(store.get('i3').displayName).toBe('Renamed');
   });
 });
+
+/**
+ * #3611 (review round 2) — EVERY key in the deny-list, not just the reported one.
+ *
+ * The list has six entries. The cases above exercise three of them (`secretRef`,
+ * `secretName`, `_recycled`) plus `__proto__`. The population for the other
+ * three was ZERO, so deleting `'engineObject'`, `'patSecretRef'` or
+ * `'keyVaultSecret'` from `SERVER_OWNED_STATE_KEYS` left the whole suite green —
+ * a narrowly-scoped removal that no test could see. One case per key, keyed by
+ * the key name, closes that: the population is now 6 of 6.
+ *
+ * Each asserts the write DID NOT HAPPEN (`lastReplaced` null / the stored value
+ * unchanged), not merely that the status was 400 — a guard that 400s after
+ * persisting would still leave the sink armed.
+ */
+describe('#3611 — every server-owned key is enforced, not only the reported one', () => {
+  const CASES: Array<{ key: string; itemType: string; current: any; attacker: any; read: (s: any) => unknown }> = [
+    {
+      // Reaches `DROP VIEW ${obj}` / `SELECT TOP n * FROM ${obj}` as the Console
+      // UAMI. Deleting this key from the list restored the original #3611 write
+      // path exactly, and nothing failed.
+      key: 'engineObject',
+      itemType: 'lakehouse-shortcut',
+      current: { kind: 'tables', engine: 'synapse', engineObject: 'loom_lakehouse.shortcuts.sc_a' },
+      attacker: { kind: 'tables', engine: 'synapse', engineObject: 'finance_db.dbo.payroll' },
+      read: (s) => s.engineObject,
+    },
+    {
+      // A git PAT secret name. NOTE, stated rather than implied: the item-state
+      // deny-list covers `patSecretRef` HELD IN ITEM STATE. It does NOT cover
+      // `app/api/workspaces/[id]/scm/route.ts`, which reads `patSecretRef` from
+      // the WORKSPACES container — a different document that never passes
+      // through this guard. This case pins the half that is covered.
+      key: 'patSecretRef',
+      itemType: 'loom-app-runtime',
+      current: { appRuntime: { git: { patSecretRef: 'loom-git-ws1-pat' } } },
+      attacker: { appRuntime: { git: { patSecretRef: PLATFORM_SECRET } } },
+      read: (s) => s.appRuntime.git.patSecretRef,
+    },
+    {
+      // `ShortcutCredentialRef.keyVaultSecret` — what `bindExternalSource`
+      // resolves to mint a UC storage credential / Synapse scoped credential.
+      key: 'keyVaultSecret',
+      itemType: 'lakehouse-shortcut',
+      current: { credentialRef: { kind: 'awsKeys', keyVaultSecret: 'loom-sc-abc' } },
+      attacker: { credentialRef: { kind: 'awsKeys', keyVaultSecret: PLATFORM_SECRET } },
+      read: (s) => s.credentialRef.keyVaultSecret,
+    },
+  ];
+
+  for (const c of CASES) {
+    it(`refuses to CHANGE state.${c.key}`, async () => {
+      seed(`k-${c.key}`, c.itemType, c.current);
+
+      const res = await patch(c.itemType, `k-${c.key}`, { state: c.attacker });
+
+      expect(res.status).toBe(400);
+      expect(lastReplaced).toBeNull();
+      expect(c.read(store.get(`k-${c.key}`).state)).toEqual(c.read(c.current));
+    });
+
+    it(`refuses to INTRODUCE state.${c.key} where the item had none`, async () => {
+      // The cheaper attack: an item that never carried the key at all. A guard
+      // comparing only "did the existing value change" would pass this.
+      seed(`n-${c.key}`, c.itemType, { unrelated: true });
+
+      const res = await patch(c.itemType, `n-${c.key}`, { state: c.attacker });
+
+      expect(res.status).toBe(400);
+      expect(lastReplaced).toBeNull();
+    });
+
+    it(`ALLOWS an unchanged round-trip of state.${c.key}`, async () => {
+      // The matching positive control, per key. Without it, "refuse everything
+      // named ${c.key}" would satisfy both cases above and break every editor
+      // that saves the item back.
+      seed(`r-${c.key}`, c.itemType, c.current);
+
+      const res = await patch(c.itemType, `r-${c.key}`, {
+        state: JSON.parse(JSON.stringify(c.current)),
+      });
+
+      expect(res.status).toBe(200);
+    });
+  }
+});

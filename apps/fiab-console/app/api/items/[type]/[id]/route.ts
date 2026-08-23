@@ -30,10 +30,16 @@ function err(error: string, status: number, code?: string) {
  *
  * The current check fails CLOSED (it refuses people who arguably should be
  * allowed), so deferring it leaks nothing. `check-owner-only-workspace-guard`
- * baselines this one occurrence and its TOUCH_EXEMPT map already carries four
- * precedents for exactly this deferral, including the sibling
+ * baselines this one occurrence, and because this PR MODIFIES this file its
+ * boy-scout rule fires — so the deferral is recorded as an explicit
+ * `TOUCH_EXEMPT` entry in `scripts/ci/check-owner-only-workspace-guard.mjs`,
+ * alongside the seven precedents already there (counted, not estimated: the map
+ * holds 8 keys including this one; the closest precedent is the sibling
  * `items/[type]/[id]/access-mode/route.ts`, which shares this very `loadItem`
- * shape.
+ * shape). The baseline itself is NOT regenerated: the count is unchanged at 66
+ * across 57 keys, because this PR does not touch the baselined lines — of its
+ * 93 changed lines in this file, zero match either of that guard's detector
+ * predicates.
  */
 async function loadItem(itemId: string, type: string, tenantId: string): Promise<WorkspaceItem | null> {
   const items = await itemsContainer();

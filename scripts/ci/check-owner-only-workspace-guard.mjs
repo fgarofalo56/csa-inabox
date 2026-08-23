@@ -207,6 +207,31 @@ const TOUCH_EXEMPT = new Map([
   // parameter, step 6's body, and the new `tenantUnconfirmedDenial` helper.
   ['apps/fiab-console/lib/auth/workspace-access.ts',
    '#3823: narrows the step-6 tenant-admin bypass (a correction in this guard’s direction). The baselined occurrence is step 1, the OWNER FAST PATH of the canonical ladder itself — and `authorizeWorkspace`, the prescribed migration target, is implemented by calling this very function, so there is nothing to migrate to.'],
+  // #3611 touched this route to (a) add `assertNoServerOwnedStateChange` to the
+  // PATCH body — the SECOND enforcement point of a write-side deny-list — and
+  // (b) migrate GET/PATCH/DELETE onto the `withSession` route-toolkit wrapper.
+  // Both are RESTRICTIONS; neither adds an ownership decision.
+  //
+  // THE SINGLE BASELINED OCCURRENCE IS NOT IN THIS PR'S DIFF. Measured, not
+  // assumed: of the 93 changed lines in this file, ZERO match either of this
+  // guard's own two predicates (`workspacesContainer()` / `ws.item(` for the
+  // point read, `tenantId ===` / `tenantId !==` for the ownership compare).
+  // Stated by FUNCTION rather than by line number, for the reason the item-crud
+  // entry above records: it is the pair `await ws.item(item.workspaceId,
+  // tenantId).read<Workspace>()` + `resource.tenantId !== tenantId` inside
+  // `loadItem`, and this PR adds a DOCBLOCK above that function without
+  // changing a line of its body.
+  //
+  // Migrating it WIDENS access, which is why it is an exemption and not a fix:
+  // `loadItem` backs GET, PATCH and DELETE for EVERY item type that has no
+  // dedicated `[id]/route.ts`, and `authorizeItemWorkspace` would newly admit
+  // tenant admins and shared-ACL members to all three verbs across all of them.
+  // The current check fails CLOSED, so deferring it leaks nothing. That is a
+  // real authorization change needing its own review and its own tests — not a
+  // drive-by inside a PR whose subject is RESTRICTING what may be written
+  // through this same PATCH.
+  ['apps/fiab-console/app/api/items/[type]/[id]/route.ts',
+   "#3611: adds the write-side server-owned-state guard to PATCH + a withSession migration, both RESTRICTIONS. loadItem's baselined owner-only point read is untouched (0 of 93 changed lines match either detector predicate), and migrating it would WIDEN GET/PATCH/DELETE to admins + ACL members for every item type with no dedicated route — separate PR"],
 ]);
 
 /** Owner-partition point read: `.item(<x>, <oid-ish>)` on a workspaces handle. */
