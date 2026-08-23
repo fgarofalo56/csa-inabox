@@ -153,12 +153,24 @@ export function NotebookEditor({ item, id }: Props) {
   // an empty-looking notebook and concluded the app install had produced
   // nothing.
   //
-  // The VISIBLE fix is the `cellsFor !== notebookId` render gate further down —
-  // that is what stops the placeholder reaching the screen, and it is the one
-  // the spec's mutation control breaks. Seeding an EXISTING item with no cells
-  // is defence in depth for a second, non-visual reason: the autosave hook is
-  // `enabled: … && cells.length > 0`, so an empty seed also keeps autosave from
-  // arming against seed content during hydration.
+  // The fix is TWO INDEPENDENT LAYERS, and neither one covers for the other —
+  // an earlier revision of this comment claimed the render gate was "the one
+  // the spec's mutation control breaks", which was measured FALSE: reverting
+  // either layer alone shipped green against the spec as it stood.
+  //
+  //   1. The `cellsFor !== notebookId` render gate further down keeps ANY cell
+  //      list off the screen while hydration is in flight. That is what stops
+  //      the placeholder reaching the screen on a healthy load.
+  //   2. This empty seed keeps fabricated content out of `cells` at all. It
+  //      matters on its own whenever the gate legitimately opens over cells the
+  //      load never replaced — `loadDetail` returns early on `!j.ok` without
+  //      calling `setCells`, and its `finally` sets `cellsFor` regardless, so a
+  //      non-empty seed would present the generic starter notebook as if it
+  //      WERE this notebook's content. It also keeps autosave from arming
+  //      against seed content, since that hook is `enabled: … && cells.length > 0`.
+  //
+  // `__tests__/notebook-installed-content.test.tsx` now guards them as two
+  // separate tests, one per layer. Do not collapse them.
   const [cells, setCells] = useState<NotebookCell[]>(id === 'new' ? starterCells() : []);
   // Which notebook `cells` were hydrated from. 'new' for an unsaved notebook,
   // else the notebook id `loadDetail` last completed for (success OR failure —
@@ -3183,7 +3195,9 @@ export function NotebookEditor({ item, id }: Props) {
           {/* #3539 — hold the cell list until the cells in hand are THIS
               notebook's. Previously the generic starter placeholder rendered
               here for the duration of the detail fetch, which reads as "the app
-              install produced an empty notebook". */}
+              install produced an empty notebook". LAYER 1 of the two-layer fix
+              (layer 2 is the empty `cells` seed — see the note at its useState);
+              each is guarded by its own test, because neither covers the other. */}
           {notebookId && cellsFor !== notebookId && (
             <div
               data-notebook-cells-loading

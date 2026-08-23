@@ -30,6 +30,18 @@
  * below maps it to the ADF resource name, and everything ADF-facing uses that.
  * Believing the id WAS the name is what broke every open (#3567).
  *
+ * FIVE call sites carry that name, not one, and they are NOT all mount-time:
+ * the two GETs above fire on mount, the PUT fires when the user clicks Save in
+ * <MappingDataFlowDesigner/> (which builds the URL from the `name` PROP this
+ * editor hands it), the POST fires from `startDebugPreview`, and
+ * <DataflowDebugPanel/> takes the same name for
+ * `POST /api/items/mapping-dataflow/{name}/debug/{session,preview,schema,stats}`
+ * — routes that validate the segment against the SAME `DATAFLOW_NAME_RE` and
+ * answer `400 invalid data flow name` for a GUID. Any new name-bearing call
+ * site must take `flowName`, and must be added to `SITES` in
+ * `__tests__/mapping-dataflow-item-binding.test.tsx`, which drives each of them
+ * and fails if one stops firing.
+ *
  * `new` opens a fresh, unsaved flow; the user names the first transformation
  * and Saves, which PUTs the named flow.
  */
