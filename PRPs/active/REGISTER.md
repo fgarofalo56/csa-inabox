@@ -15,7 +15,7 @@ the binding constraint (see §4).
 
 | Rank | What | Why it sits here |
 |---|---|---|
-| **P0** | **#3916 — infra deploy path failing** | `deploy-integrity.md` R1 makes a broken deploy path preempt all feature work. Bicep merges may be landing **inert**. |
+| **P0** | **#3916 — infra deploy path deterministically broken** · fix in **#3944** | `deploy-integrity.md` R1: a broken deploy path preempts all feature work. Root cause established — a same-day regression from #3888. Bicep merges **are** landing inert. |
 | **P1** | Security PRs #3890, #3900 | Live auth defects. Both `CONFLICTING` — they need a rebase before anything else can happen. |
 | **P2** | Remediation wave (5 PRs under review) | Already built, already green; only review + treadmill stand between them and landing. |
 | **P3** | Loom Brain #3933 (W1–W11) | New capability, high operator value, but not above a broken deploy or a live auth hole. |
@@ -27,37 +27,60 @@ merge (the close-parser is negation-blind — *"Does not close #N"* closes #N).
 
 ---
 
-## 1. P0 — the infra deploy path (#3916)
+## 1. P0 — the infra deploy path (#3916) · fix in **PR #3944**
 
-**Measured:** `deploy-fiab-commercial` (scheduled daily) — `failure` 08-23, `success` 08-22,
-`success` 08-21, `failure` 08-20, `success` 08-19. **Intermittent, not hard-down.**
+**Root cause ESTABLISHED, with a counterfactual: a same-day regression from #3888**
+(`631c9850`, merged 2026-08-23T03:21:31Z). **Deterministic, not intermittent — main stays broken
+and the next scheduled run fails identically until #3944 lands.**
 
-**Failing step:** *"Resolve the hub DNS resolver's IMMUTABLE IP allocation method (#3786)"*
+**What happened:** #3888 ported a step written for the **operator-dispatch** shape onto the
+**scheduled reconcile** lane. On `schedule` there are no inputs, so `deploy_sub` is empty **by
+design** — and `scripts/ci/deploy-fiab-guard.mjs:18` documents exactly that:
 
-**The true error** (the `##[error]` line — the `ESC[36;1m` lines above it are echoed script
-source, not execution):
+    deploy_sub    subscription the deploy targets ('' = the login sub)
 
-    No target subscription, so the live DNS resolver inbound endpoint cannot be
-    located. It comes from the topology guard's deploy_sub output; it is empty.
+The same doc block contrasts it with the bicep bools, which are *"NEVER the empty string"*. The
+ported step added a **fatal check** on empty rather than resolving the login subscription.
+`resolve-dns-inbound-allocation.mjs` builds a literal `/subscriptions/${subscription}/…` ARM id, so
+it genuinely cannot inherit the login sub — but the answer was to resolve it, not to abort.
 
-**Upstream cause:** `resolve-dlz-coordinates` exited **UNREADABLE (3)** — the Resource Graph
-query itself failed, so whether this estate has a landing zone is **UNKNOWN, not "no"**. The
-guard then correctly refused rather than deploying an empty adopt plan that would strip lake
-env vars off the console. *The guard behaved correctly; its input was unavailable.*
+**The counterfactual, measured by fetching the workflow at each run's own SHA:**
 
-**Likely root cause:** the deploy identity cannot read Resource Graph across all this
-estate's subscriptions (Reader at the DLZ subscription is the named usual gap), **or**
-Resource Graph throttled. The alternating pass/fail pattern points at throttling; the
-permission gap would fail every time. **Not yet established — do not report either as the
-cause until measured** (R7).
+    2ea8252ef  (08-22 PASS)  "Resolve the hub DNS resolver" = 0
+    043c1aa3a  (08-20 FAIL)  "Resolve the hub DNS resolver" = 0
+    779b36294  (08-23 FAIL)  "Resolve the hub DNS resolver" = 1
 
-**Why it is P0 despite the estate looking healthy:** the app roll chain is separate and
-working (live marker `e4dcfd72`, stamped 2026-08-23T18:10:20Z). So **apps deploy and infra
-may not.** Any bicep merge in this window is potentially inert — which is precisely
-`deploy-integrity.md` R2's "merged is not done".
+### My first analysis was wrong on three counts — recorded so the error is not repeated
 
-**Directly gated by this:** PR #3923 (bicep) and PR #3927 (bicep/Gov lanes). Merging them
-while this is broken produces a merge, not a deploy.
+1. **"Intermittent" — refuted.** The 08-20 and 08-23 failures are **unrelated defects** with
+   different failing steps (25 vs 18) and different job step counts. The failing step **did not
+   exist** in the earlier run. 08-20 was a separate ARM leaf failure. Two failures on different
+   dates are not one intermittent defect until you confirm **they share a failing step**.
+2. **The `::warning::` I quoted was ECHOED SOURCE, not emitted.** Measured: **3** echoed,
+   **0** emitted — all inside an unexecuted `dlz-attach` branch. Step 15 actually printed
+   *success*, resolving a landing zone 0.5 s before the failure. **This refuted both candidate
+   causes** (throttle, missing Reader): the Resource Graph query succeeded in the same run.
+   Echoed source lists **every** branch, including unexecuted ones, so it reads as a catalogue of
+   pre-written failure modes. Real annotations are `##[...]`; grep **for** those.
+3. **"A guard passing on an empty required output is a defect" — does not apply here.** Empty is
+   the documented contract value, the passing 08-22 run had the identical empty value, and every
+   other consumer honours it (`if [ -n "${DEPLOY_SUB:-}" ]`, line 973). The new step invented a
+   requirement the contract never made.
+
+**A real secondary defect, different from the one I named:** step 18's comment asserts it decides
+*"never from `inputs.` in an `if:`"* — but `CSA_LOOM_TOPOLOGY` **is** `inputs.topology`, so its
+`dlz-attach` early-exit is unreachable on the daily trigger, and stays unreachable even for a
+genuine dlz-attach estate. Step 10 has the same shape. The guard resolves topology internally but
+**never emits it as an output**, so no consumer can read the resolved value. Contributing:
+`resolve-dns-inbound-allocation.mjs` shipped with **no test file**.
+
+**Why it is P0 even though the estate looks healthy:** the **app** roll chain is separate and
+healthy (live marker `e4dcfd72`, stamped 2026-08-23T18:10:20Z). So apps deploy while infra does
+not — **bicep merges in this window are inert**, which is `deploy-integrity.md` R2. Directly gates
+PRs #3923 and #3927, both bicep.
+
+**#3944 jumps ahead of #3912 in the merge order** — R1: a broken deploy path preempts all feature
+work. Under independent review.
 
 **Other deploy paths (measured, most-recent-first):**
 
@@ -66,6 +89,7 @@ while this is broken produces a merge, not a deploy.
     loom-roll-and-validate        running,  success, success     <- healthy
     build-fiab-images-acr-tasks   success,  success, success     <- healthy
     csa-loom-post-deploy-bootstrap success, success, failure     <- healthy
+
 
 ---
 
