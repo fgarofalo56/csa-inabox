@@ -109,6 +109,77 @@ export function classify(src) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// SUBJECT DISCOVERY (#3438) — the meta-guard's own blind spot.
+// ─────────────────────────────────────────────────────────────────────────────
+//
+// This guard used to enumerate `check-*.mjs` and nothing else. But a guard is
+// free to factor its line-splitting into a helper module, and several do — and
+// once the split lives in a helper, BOTH the helper and every consumer classify
+// `out-of-scope` and this meta-guard passes regardless of what the scanner does.
+// That is the very shape it exists to prevent, one level up: a check whose
+// population silently excludes the thing that matters, reporting clean.
+//
+// MEASURED when this was closed, and the numbers are the argument for doing BOTH
+// halves rather than either:
+//
+//   check-*.mjs guards ................................. 128
+//   helpers reached by FOLLOWING relative imports ....... 11
+//   helpers matched by the `_*.mjs` glob ................ 12
+//   reached ONLY by the glob (imported by no guard) ..... 4   _arm-absence,
+//                                                             _azure-redact,
+//                                                             _route-auth-scope,
+//                                                             _route-backends
+//   reached ONLY by import-following (NO `_` prefix) .... 3   deploy-image-roles,
+//                                                             reconcile-policy,
+//                                                             roll-plan
+//   UNION ............................................... 15, of which ONE was
+//                                                             `unclassified`
+//                                                             (_workflow-yaml)
+//
+// The glob alone is the fix the issue proposed as "cheaper, and probably
+// sufficient". It is not sufficient: three helper modules in this directory
+// carry no `_` prefix, so renaming a helper is a one-character bypass of a
+// glob-only rule. Import-following alone is not sufficient either — four
+// `_`-modules are imported by no `check-*.mjs` today (tests and each other), so
+// a guard could adopt one tomorrow and it would never have been judged.
+//
+// So: the subject set is the UNION, and the population is REPORTED on every run
+// rather than left silent, per the issue's option 3.
+
+/** Relative `.mjs` imports/exports, resolved against scripts/ci. */
+const RELATIVE_MJS_IMPORT =
+  /(?:^|\n)\s*(?:import[\s\S]{0,300}?from|export[\s\S]{0,300}?from|import)\s*['"`](\.\.?\/[^'"`]+\.mjs)['"`]/g;
+
+/**
+ * Helper modules that are subjects in their own right: every `scripts/ci/_*.mjs`,
+ * PLUS every non-`check-` `.mjs` in this directory that a `check-*.mjs` imports.
+ * Returns sorted basenames.
+ */
+export function helperModules(dir = HERE, guards = null) {
+  const names = readdirSync(dir).filter((f) => f.endsWith('.mjs'));
+  const subjects = new Set(names.filter((f) => f.startsWith('_')));
+  const guardList = guards ?? names.filter((f) => f.startsWith('check-')).sort();
+  for (const g of guardList) {
+    let src;
+    try { src = readFileSync(join(dir, g), 'utf8'); } catch { continue; }
+    RELATIVE_MJS_IMPORT.lastIndex = 0;
+    let m;
+    while ((m = RELATIVE_MJS_IMPORT.exec(src))) {
+      const spec = m[1];
+      // One level, inside this directory only. `../x.mjs` and `./sub/x.mjs`
+      // resolve outside the guard directory and are not this rule's subjects.
+      const base = spec.replace(/^\.\//, '');
+      if (base.includes('/') || base.startsWith('..')) continue;
+      if (base.startsWith('check-')) continue; // already a subject
+      if (!names.includes(base)) continue;     // import does not resolve here
+      subjects.add(base);
+    }
+  }
+  return [...subjects].sort();
+}
+
+
+// ─────────────────────────────────────────────────────────────────────────────
 // EMBEDDED CONTROL — proven on every run, before the repo is judged.
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -185,9 +256,12 @@ function main() {
   const guards = readdirSync(HERE)
     .filter((f) => f.startsWith('check-') && f.endsWith('.mjs'))
     .sort();
+  // #3438 — helper modules are subjects too. See SUBJECT DISCOVERY above.
+  const helpers = helperModules(HERE, guards);
+  const subjects = [...guards, ...helpers];
 
   const buckets = { adopted: [], declared: [], unclassified: [], 'out-of-scope': [] };
-  for (const f of guards) {
+  for (const f of subjects) {
     buckets[classify(readFileSync(join(HERE, f), 'utf8'))].push(f);
   }
 
@@ -195,12 +269,24 @@ function main() {
     console.error('::error::guard-logical-lines: discovered ZERO check-*.mjs guards. Refusing to report a pass.');
     process.exit(1);
   }
+  // The helper population may not fall to zero either. This directory carries
+  // `_logical-lines.mjs` itself, so a zero here means the glob AND the
+  // import-follow both drifted — and a subject set that has stopped including
+  // the escape hatch is exactly the state #3438 recorded.
+  if (helpers.length === 0) {
+    console.error(
+      '::error::guard-logical-lines: discovered ZERO helper modules. scripts/ci carries `_logical-lines.mjs` ' +
+        'and a dozen siblings, so zero means subject discovery has drifted — and a guard that factors its ' +
+        'scanner into a helper would then be invisible again (#3438). Refusing to report a pass.',
+    );
+    process.exit(1);
+  }
   const inScope = buckets.adopted.length + buckets.declared.length + buckets.unclassified.length;
   if (inScope === 0) {
     console.error(
-      `::error::guard-logical-lines: ${guards.length} guard(s) discovered and NOT ONE reads shell or YAML bodies ` +
-        'line by line. This directory is full of them, so zero means the classifier has drifted off the code. ' +
-        'Refusing to report a pass on an empty population.',
+      `::error::guard-logical-lines: ${subjects.length} subject(s) discovered and NOT ONE reads shell or YAML ` +
+        'bodies line by line. This directory is full of them, so zero means the classifier has drifted off the ' +
+        'code. Refusing to report a pass on an empty population.',
     );
     process.exit(1);
   }
@@ -223,11 +309,15 @@ function main() {
   }
 
   console.log(
-    `guard-logical-lines OK — ${guards.length} guard(s): ${buckets.adopted.length} read logical lines, ` +
+    `guard-logical-lines OK — ${subjects.length} subject(s) (${guards.length} check-*.mjs + ${helpers.length} ` +
+      `helper module(s)): ${buckets.adopted.length} read logical lines, ` +
       `${buckets.declared.length} declare PHYSICAL-LINES-OK with a reason, ` +
       `${buckets['out-of-scope'].length} do not judge shell/YAML bodies line by line; ` +
       `${controlCount} embedded control fixture(s) proved the classifier still separates them.`,
   );
+  // Named, not silent (#3438 option 3): "out-of-scope" for a helper module used
+  // to be an unstated exclusion, which is how the escape hatch stayed open.
+  console.log(`guard-logical-lines helper subjects: ${helpers.join(', ')}`);
 }
 
 if (resolve(process.argv[1] || '') === resolve(fileURLToPath(import.meta.url))) main();

@@ -458,15 +458,84 @@ export function resolveRoleArg(text, vars) {
 }
 
 /**
- * @returns {{findings: object[], population: number, unresolved: object[]}}
- *   `population` is every EXECUTED create found, resolvable or not — the number
- *   that must not silently fall to zero.
+ * The shell variable a probe captures its answer into:
+ * `N=$(az role assignment list … --query "length(@)" -o tsv)`.
+ * A probe whose result is never captured cannot gate anything.
+ */
+export function probeResultVar(text) {
+  const m = /(?:^|\s|\(|;)([A-Za-z_][A-Za-z0-9_]*)=\$\([^)]*az role assignment list/.exec(text);
+  return m ? m[1] : null;
+}
+
+/**
+ * Is the create at `logical[i]` genuinely GATED on a probe, or merely PRECEDED
+ * by one? (#3464 finding 3.)
+ *
+ * The original test was `…some((p) => p.text.includes('az role assignment list'))`
+ * — i.e. probe PRESENCE. The independent review of PR #3454 DEMONSTRATED the
+ * bypass rather than inferring it: replace `if [ "$EXISTING" = "0" ]; then` with
+ * `if true; then`, leaving the probe sitting right above an unconditional
+ * create, and the guard still reported OK. That is the recorded
+ * `guard_signals_presence_not_enforcement` shape, and it is the one that
+ * matters here because an unconditional create is exactly what mints the
+ * competing random v4 name.
+ *
+ * So gating now requires all three:
+ *   1. a probe in the preceding window;
+ *   2. the probe's answer CAPTURED into a variable (an uncaptured probe is a
+ *      no-op whose output goes nowhere);
+ *   3. a conditional between the probe and the create — or on the create's own
+ *      logical line — that READS that variable.
+ *
+ * STATED LIMIT (R7): this still does not verify the probe targets the SAME
+ * (assignee, scope, role) triple as the create it guards. That needs the shell
+ * variables resolved across the file and is not established by this read, so it
+ * is not claimed. It is reported by `--list` as residue instead.
+ */
+export function probeGates(logical, i) {
+  const start = Math.max(0, i - PROBE_WINDOW);
+  const window = logical.slice(start, i);
+  let probeIdx = -1;
+  const vars = [];
+  for (let k = 0; k < window.length; k += 1) {
+    if (!window[k].text.includes(PROBE_TOKEN)) continue;
+    if (probeIdx < 0) probeIdx = k;
+    const v = probeResultVar(window[k].text);
+    if (v) vars.push(v);
+  }
+  if (probeIdx < 0) return { gated: false, why: 'no `az role assignment list` probe in the preceding window' };
+  if (!vars.length) {
+    return { gated: false, why: 'a probe runs but its answer is never captured into a variable, so nothing can branch on it' };
+  }
+  const readsVar = (text) =>
+    vars.some((v) => new RegExp(`\\$\\{?${v}\\b`).test(text));
+  const CONDITIONAL = /(^|\s|;)(if|elif)\s|\[\[?\s|&&|\|\|/;
+  const candidates = [...window.slice(probeIdx + 1), logical[i]];
+  for (const l of candidates) {
+    if (CONDITIONAL.test(l.text) && readsVar(l.text)) return { gated: true };
+  }
+  return {
+    gated: false,
+    why: 'a probe runs and its answer is captured, but no conditional between it and the create READS that '
+      + 'variable — the create is unconditional. `if true; then` above a probe is the demonstrated bypass',
+  };
+}
+
+/**
+ * @returns {{findings: object[], population: number, judged: number, resolved: number, unresolved: object[]}}
+ *   `population` is every EXECUTED create found, resolvable or not.
+ *   `resolved`   is those whose `--role` resolved to a role-definition GUID.
+ *   `judged`     is those D3 actually RULES ON — resolved AND also granted by
+ *                the bicep. This is the number the guard's verdict is about, and
+ *                the one that was never reported (#3464 finding 2).
  */
 export function findImperativeCollisions(records, root = REPO_ROOT, roots = IMPERATIVE_ROOTS) {
   const bicepRoles = new Set(records.map((r) => r.roleKey).filter((k) => k && GUID_RE.test(k)));
   const findings = [];
   const unresolved = [];
   let population = 0;
+  let resolved = 0;
+  let judged = 0;
 
   for (const abs of imperativeFiles(root, roots)) {
     const rel = path.relative(root, abs).split(path.sep).join('/');
@@ -483,28 +552,123 @@ export function findImperativeCollisions(records, root = REPO_ROOT, roots = IMPE
         unresolved.push({ file: rel, line: l.line });
         continue;
       }
+      resolved += 1;
       if (!bicepRoles.has(role)) continue;
+      judged += 1;
 
-      const probed = logical
-        .slice(Math.max(0, i - PROBE_WINDOW), i)
-        .some((p) => p.text.includes(PROBE_TOKEN));
-      if (probed) continue;
+      const gate = probeGates(logical, i);
+      if (gate.gated) continue;
 
       findings.push({
         check: 'D3',
         file: rel,
         line: l.line,
         detail:
-          `\`az role assignment create --role ${role}\` runs with no \`az role assignment list\` probe in the ` +
-          `preceding ${PROBE_WINDOW} logical lines, and the bicep ALSO grants that role definition. The CLI mints ` +
-          'a RANDOM v4 name for the (scope, principalId, roleDefinitionId) triple while the template computes a ' +
-          'deterministic v5 one, and ARM enforces uniqueness on the TRIPLE — so whichever writer lands first ' +
-          'blocks the other on EVERY future run (measured: deploy-fiab-commercial 31780698652, #3439). Probe ' +
-          'first and create only on an established absence.',
+          `\`az role assignment create --role ${role}\` is not gated on an \`az role assignment list\` probe ` +
+          `within the preceding ${PROBE_WINDOW} logical lines (${gate.why}), and the bicep ALSO grants that ` +
+          'role definition. The CLI mints a RANDOM v4 name for the (scope, principalId, roleDefinitionId) ' +
+          'triple while the template computes a deterministic v5 one, and ARM enforces uniqueness on the ' +
+          'TRIPLE — so whichever writer lands first blocks the other on EVERY future run (measured: ' +
+          'deploy-fiab-commercial 31780698652, #3439). Probe first and create only on an established absence.',
       });
     }
   }
-  return { findings, population, unresolved };
+  return { findings, population, resolved, judged, unresolved };
+}
+
+// ── D3's EMBEDDED CONTROL, in the BINARY (#3464 finding 4) ───────────────────
+//
+// PR #3454's body claimed "D3 runs a synthetic unprobed create that MUST be
+// flagged". The binary carried only the population floors; the synthetic
+// control lived in the test file. That is an accuracy nit plus a convention gap
+// — five sibling guards (check-curl-httpcode-fallback, check-empty-claim-read-
+// evidence, check-gov-image-producer-parity, check-guard-import-side-effects,
+// check-azd-provision-param-binding) run theirs IN-PROCESS before judging the
+// tree — and here it is more than a convention, because D3's JUDGED population
+// is currently ZERO (see the driver below). With nothing judged, the controls
+// are the only evidence the judge path works at all.
+
+const CONTROL_ROLE = '7f951dda-4ed3-4680-a7ca-43fe172d538d'; // AcrPull
+const CONTROL_RECORDS = [{ roleKey: CONTROL_ROLE, file: 'control.bicep', nameLine: 1 }];
+
+export const D3_CONTROLS = [
+  {
+    why: 'an UNPROBED create over a bicep-granted role IS flagged',
+    lines: [
+      `az role assignment create --assignee-object-id "$PID" --role ${CONTROL_ROLE} --scope "$ACR_ID"`,
+    ],
+    expectFindings: 1,
+  },
+  {
+    why: 'the SAME create, genuinely gated on a captured probe, is NOT flagged',
+    lines: [
+      `N=$(az role assignment list --assignee-object-id "$PID" --scope "$ACR_ID" --role ${CONTROL_ROLE} --query "length(@)" -o tsv)`,
+      'if [ "$N" = "0" ]; then',
+      `  az role assignment create --assignee-object-id "$PID" --role ${CONTROL_ROLE} --scope "$ACR_ID"`,
+      'fi',
+    ],
+    expectFindings: 0,
+  },
+  {
+    // #3464 finding 3, as a control. The probe is present and captured, but the
+    // branch does not read it — the demonstrated bypass. Presence is not gating.
+    why: 'a probe above an UNCONDITIONAL create (`if true`) is still flagged — presence is not gating',
+    lines: [
+      `N=$(az role assignment list --assignee-object-id "$PID" --scope "$ACR_ID" --role ${CONTROL_ROLE} --query "length(@)" -o tsv)`,
+      'if true; then',
+      `  az role assignment create --assignee-object-id "$PID" --role ${CONTROL_ROLE} --scope "$ACR_ID"`,
+      'fi',
+    ],
+    expectFindings: 1,
+  },
+  {
+    why: 'a probe whose answer is never captured cannot gate anything',
+    lines: [
+      `az role assignment list --assignee-object-id "$PID" --scope "$ACR_ID" --role ${CONTROL_ROLE} -o tsv`,
+      `az role assignment create --assignee-object-id "$PID" --role ${CONTROL_ROLE} --scope "$ACR_ID"`,
+    ],
+    expectFindings: 1,
+  },
+  {
+    why: 'a role the bicep does NOT grant cannot collide, so it is not flagged',
+    lines: [
+      'az role assignment create --assignee-object-id "$PID" --role 00000000-0000-0000-0000-000000000001 --scope "$X"',
+    ],
+    expectFindings: 0,
+  },
+  {
+    why: 'a create quoted inside an echo is a REFERENCE, not an execution',
+    lines: [
+      `echo "run: az role assignment create --role ${CONTROL_ROLE}"`,
+    ],
+    expectFindings: 0,
+    expectPopulation: 0,
+  },
+];
+
+/** Runs the controls against the classifier in memory. Returns failures. */
+export function runD3Controls() {
+  const failures = [];
+  for (const c of D3_CONTROLS) {
+    const logical = c.lines.map((text, idx) => ({ text, line: idx + 1 }));
+    const findings = [];
+    let population = 0;
+    for (let i = 0; i < logical.length; i += 1) {
+      if (!isExecuted(logical[i].text)) continue;
+      population += 1;
+      const role = resolveRoleArg(logical[i].text, shellGuidVars(logical));
+      if (!role || role !== CONTROL_ROLE) continue;
+      if (probeGates(logical, i).gated) continue;
+      findings.push(i);
+    }
+    if (findings.length !== c.expectFindings) {
+      failures.push(`expected ${c.expectFindings} finding(s), got ${findings.length} — ${c.why}`);
+    }
+    if (c.expectPopulation !== undefined && population !== c.expectPopulation) {
+      failures.push(`expected population ${c.expectPopulation}, got ${population} — ${c.why}`);
+    }
+  }
+  return failures;
 }
 
 // ── driver ───────────────────────────────────────────────────────────────────
@@ -527,6 +691,20 @@ const isMain =
   process.argv[1] && path.resolve(process.argv[1]) === path.resolve(fileURLToPath(import.meta.url));
 
 if (isMain) {
+  // The controls run IN-PROCESS, BEFORE the tree is judged (#3464 finding 4).
+  // This is load-bearing rather than decorative here: D3's JUDGED population is
+  // currently ZERO, so without these the guard would have no evidence at all
+  // that its judge path still works.
+  const controlFailures = runD3Controls();
+  if (controlFailures.length > 0) {
+    process.stderr.write(
+      `check-role-assignment-determinism: the D3 EMBEDDED CONTROL failed (${controlFailures.length}). The ` +
+        'classifier no longer behaves as documented, so any verdict about this tree would be meaningless.\n',
+    );
+    for (const f of controlFailures) process.stderr.write(`   - ${f}\n`);
+    process.exit(1);
+  }
+
   const { records, imperative, findings } = scan();
   if (records.length === 0) {
     process.stderr.write(
@@ -574,9 +752,51 @@ if (isMain) {
     );
     process.exit(1);
   }
+
+  // ── THE VERDICT, STATED HONESTLY (#3464, deploy-integrity.md R7) ──────────
+  //
+  // This line used to read "… 34 imperative create(s) checked for the same
+  // collision against the CLI (D3)". Measured on main 2026-08-23:
+  //
+  //     enumerated (executed creates) .. 34
+  //     resolved   (--role -> a GUID) ..  3
+  //     JUDGED     (…and bicep grants it) 0
+  //
+  // So it CHECKED ZERO and said thirty-four. An error or status message must
+  // not state as fact something it did not establish, and a count of what a
+  // guard ENUMERATED reported as a count of what it JUDGED is exactly that.
+  // #3464 filed this as "population 34, unresolved ~32 -> only ~4 judged"; it
+  // has since degraded to zero, so the sentence was not merely imprecise, it
+  // was describing work that is not happening.
+  //
+  // Why the number is zero, and why that is NOT fixed here: 31 of the 34 sites
+  // pass `--role` as a DISPLAY NAME ("Storage Blob Data Contributor", "Reader")
+  // or an unresolvable variable, and the 3 that do resolve name roles the bicep
+  // does not grant. Widening resolution — reading role GUIDs out of a workflow's
+  // YAML `env:` mapping, which is #3464 finding 1 — makes exactly ONE more site
+  // judgeable, `gov-provision-streaming-migrate.yml:330`, and that site is an
+  // UNGATED create with `2>/dev/null || true`. So the widening and the fix are
+  // inseparable, and the file is owned by the deploy lane. Routed, not silently
+  // widened, and not silently left unsaid.
+  const judgedNote =
+    imperative.judged === 0
+      ? 'and D3 JUDGED NONE of them — see the note in this file and #3464; the D3 controls above are '
+        + 'therefore the only live evidence its judge path works'
+      : `and D3 JUDGED ${imperative.judged} of them (the rest name a role the bicep does not grant, or a `
+        + '--role this guard cannot resolve and therefore refuses to rule on)';
   process.stdout.write(
     `check-role-assignment-determinism: OK — ${records.length} role assignment(s); every name is a ` +
       'deterministic guid(…) and no two declarations collide on one ARM triple. ' +
-      `${imperative.population} imperative create(s) checked for the same collision against the CLI (D3).\n`,
+      `D3 ENUMERATED ${imperative.population} imperative create(s), RESOLVED ${imperative.resolved}, ` +
+      `${judgedNote}. ${D3_CONTROLS.length} embedded control(s) passed in-process before the tree was judged.\n`,
   );
+  if (imperative.judged === 0) {
+    process.stdout.write(
+      '::warning::check-role-assignment-determinism: D3 judged ZERO of ' +
+        `${imperative.population} executed \`az role assignment create\` calls. Its clean verdict is about ` +
+        'an EMPTY set. Closing this needs role-name resolution widened (#3464 finding 1) together with the ' +
+        'ungated create it exposes in .github/workflows/gov-provision-streaming-migrate.yml — one change, ' +
+        'owned by the deploy lane.\n',
+    );
+  }
 }
