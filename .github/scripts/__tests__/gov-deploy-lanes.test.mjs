@@ -50,6 +50,9 @@ import fs from 'node:fs';
 import path from 'node:path';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
+// The REAL classifier the notifier gates on. Imported rather than restated so
+// GENUINE_FAILURE_LITERALS below can be checked against it instead of trusted.
+import { classifyOutcome } from '../../../scripts/ci/run-outcome.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(HERE, '..', '..', '..');
@@ -223,10 +226,41 @@ export function envEntries(text, indent) {
 export const NOTIFIER_CREDENTIAL_VALUE =
   /^\$\{\{.*(?:secrets\.[A-Za-z_][A-Za-z0-9_]*|github\.token).*\}\}$/;
 
+/**
+ * A YAML scalar reduced to the value the RUNNER sees: trailing comment dropped,
+ * one MATCHED pair of surrounding quotes removed.
+ *
+ * WHY THIS IS NOT COSMETIC (review round 2, F8). `GH_TOKEN: "${{ secrets.GITHUB_TOKEN }}"`
+ * is valid YAML, is an ordinary house style, and binds the credential exactly as
+ * the unquoted spelling does. Tested RAW it fails `NOTIFIER_CREDENTIAL_VALUE`,
+ * which anchors on `${{`, and the ratchet then reports that step as having NO
+ * credential bound. That message is FALSE (deploy-integrity.md R7) — the token IS
+ * bound — and a guard that goes red on a legitimate re-quote is the pressure that
+ * gets guards deleted instead of fixed. Measured 2026-08-23: adding the quotes to
+ * loom-dataplane-roll took this suite to RC=1, 11 tests / 10 pass / 1 fail.
+ *
+ * Only a MATCHED pair is stripped, and the trailing-comment scan starts AFTER the
+ * last `}}`, so a `#` inside an expression is never mistaken for a comment. An
+ * unpaired or over-eager strip would corrupt the value and manufacture a
+ * different false verdict, which is the same defect pointing the other way.
+ */
+export function scalarValue(raw) {
+  let v = String(raw ?? '').trim();
+  const close = v.lastIndexOf('}}');
+  const hash = v.indexOf(' #', close >= 0 ? close : 0);
+  if (hash >= 0) v = v.slice(0, hash).trim();
+  if (v.length >= 2 && (v[0] === '"' || v[0] === "'") && v[v.length - 1] === v[0]) {
+    v = v.slice(1, -1).trim();
+  }
+  return v;
+}
+
 /** True when an env entry list binds a credential the notifier can read. */
 export function bindsNotifierCredential(entries) {
   return entries.some(
-    ([k, v]) => (k === 'GH_TOKEN' || k === 'GITHUB_TOKEN') && NOTIFIER_CREDENTIAL_VALUE.test(v),
+    ([k, v]) =>
+      (k === 'GH_TOKEN' || k === 'GITHUB_TOKEN') &&
+      NOTIFIER_CREDENTIAL_VALUE.test(scalarValue(v)),
   );
 }
 
@@ -307,21 +341,137 @@ export function hasNonEmptyResult(text) {
   return resultArgs(text).some((v) => v.trim() !== '');
 }
 
+/** Blank, or a bare shell variable that expands to nothing when unset. */
+function isSubstantiveValue(v) {
+  const t = String(v).trim();
+  return t !== '' && !/^\$\{?[A-Za-z_]/.test(t);
+}
+
 /**
- * True when SOME `--result` carries a value that can actually BE an outcome.
+ * True when SOME `--result` is neither blank nor a bare SHELL variable.
  *
- * Stricter than `hasNonEmptyResult`, and separate from it so the #3844
- * self-defence assertions keep testing the predicate they were written for.
- * The extra rejection is a bare SHELL variable — `--result "$RESULT"`,
- * `--result ${RESULT}` — which is a non-blank string in the YAML and expands to
- * nothing at runtime when the variable is unset, landing on exactly the
- * shouldFile('') -> {file:false, category:'pending'} path an empty literal
- * does. An Actions `${{ ... }}` expression is NOT a shell variable and is
- * accepted: `${{ job.status }}` is resolved by the runner before the shell
- * sees it.
+ * THIS IS THE WEAK PREDICATE AND IT IS NOT THE RATCHET'S GATE.
+ * `resultIsRealOutcome` below is. It is retained because the regression pins
+ * further down document the two shapes it was written for — `--result ""` and
+ * `--result "$RESULT"`, both of which reach
+ * shouldFile('') -> {file:false, category:'pending'} and file nothing — and
+ * because it yields a more precise message for those two than the vocabulary
+ * check does.
+ *
+ * WHAT IT LETS THROUGH, MEASURED (review round 2, F5). `--result success` and
+ * `--result "${{ steps.<typo>.outcome }}"` are both non-blank and neither is a
+ * shell variable, and BOTH reach the identical dead end:
+ * shouldFile('success') is {file:false, category:'success'} and a nonexistent
+ * step id resolves to '' before the shell ever sees it, giving
+ * {file:false, category:'pending'}. deploy-notify-failure.mjs then emits a
+ * `::notice::` and RETURNS — exit 0, nothing filed, which is #3844 verbatim.
+ * Five of the six callers accepted both at RC=0 with 11 tests / 11 pass / 0 fail.
+ *
+ * The sentence this docstring used to carry — "an Actions `${{ }}` expression is
+ * NOT a shell variable and is accepted: `${{ job.status }}` is resolved by the
+ * runner before the shell sees it" — was true of its one example and false as the
+ * general rule it was serving as. Resolution by the runner does not imply a
+ * NON-EMPTY resolution, and that generalisation is precisely what produced the
+ * gap (deploy-integrity.md R7 applies to prose, not only to error strings).
  */
 export function hasSubstantiveResult(text) {
-  return resultArgs(text).some((v) => v.trim() !== '' && !/^\$\{?[A-Za-z_]/.test(v.trim()));
+  return resultArgs(text).some((v) => isSubstantiveValue(v));
+}
+
+/**
+ * The literals `classifyOutcome` treats as a GENUINE failure. Mirrors
+ * GENUINE_FAILURE in scripts/ci/run-outcome.mjs (line 99). Everything else —
+ * `success`, `cancelled`, `skipped`, `neutral` — is a non-failure there, so the
+ * filer logs and files NOTHING.
+ */
+export const GENUINE_FAILURE_LITERALS = new Set(['failure', 'timed_out', 'startup_failure']);
+
+/**
+ * The `${{ }}` operand shapes that carry a REAL GitHub outcome. Anything outside
+ * this set either is not an outcome at all (`env.*`, `inputs.*`,
+ * `steps.*.outputs.*`) or cannot become one.
+ */
+const OUTCOME_OPERAND = [
+  /^job\.status$/,
+  /^needs\.([A-Za-z_][\w-]*)\.result$/,
+  /^steps\.([A-Za-z_][\w-]*)\.(?:outcome|conclusion)$/,
+  /^github\.event\.workflow_run\.conclusion$/,
+];
+
+/**
+ * True when ONE `--result` value can actually carry a genuine failure.
+ *
+ * KEYED TO THE SAFE VOCABULARY, NOT TO A LIST OF UNSAFE SPELLINGS. The
+ * predicate this replaces enumerated the last offender's two shapes (blank, bare
+ * shell variable) and left every neighbour open — the repo's recorded
+ * "guard keyed to the unsafe pattern" class. A value is accepted only if it is
+ * a literal in `GENUINE_FAILURE_LITERALS` or an expression built from
+ * `OUTCOME_OPERAND` shapes; everything else is rejected by construction, so a
+ * shape nobody has thought of yet fails CLOSED.
+ *
+ * THE STEP/JOB ID IS CHECKED AGAINST THE FILE, not just matched for shape.
+ * `${{ steps.nope.outcome }}` has the right shape and resolves to the empty
+ * string, which is the pending dead end. `ids` is therefore REQUIRED and this
+ * THROWS without it: a default parameter here would be a guard that switches
+ * itself off at exactly the call site that forgot to populate it.
+ */
+export function resultIsRealOutcome(value, ids) {
+  if (!ids || !Array.isArray(ids.stepIds) || !Array.isArray(ids.jobIds)) {
+    throw new TypeError(
+      'resultIsRealOutcome requires {stepIds, jobIds} from the calling workflow. A ' +
+        'default would accept `${{ steps.<typo>.outcome }}`, which resolves to "" at ' +
+        'runtime and files nothing — the guard would turn itself off exactly where ' +
+        'it is needed.',
+    );
+  }
+  const v = scalarValue(value);
+  if (!isSubstantiveValue(v)) return false;
+
+  const expr = /^\$\{\{(.*)\}\}$/s.exec(v);
+  if (!expr) return GENUINE_FAILURE_LITERALS.has(v);
+
+  const operands = expr[1].split('||').map((s) => s.trim());
+  if (operands.some((o) => o === '')) return false;
+  return operands.every((o) => {
+    const lit = /^'([^']*)'$|^"([^"]*)"$/.exec(o);
+    if (lit) return GENUINE_FAILURE_LITERALS.has(lit[1] ?? lit[2]);
+    for (const re of OUTCOME_OPERAND) {
+      const m = re.exec(o);
+      if (!m) continue;
+      if (re.source.startsWith('^needs')) return ids.jobIds.includes(m[1]);
+      if (re.source.startsWith('^steps')) return ids.stepIds.includes(m[1]);
+      return true;
+    }
+    return false;
+  });
+}
+
+/**
+ * True when EVERY `--result` in the text is a real outcome, and there is at
+ * least one.
+ *
+ * `.every()`, NOT `.some()` (review round 2, F6). A `.some()` gate is satisfied
+ * by ONE good invocation, so a second invocation in the same step carrying
+ * `--result ""` is laundered by its compliant neighbour. The per-file
+ * `inSites === inFile` assertion below catches an invocation the step splitter
+ * MISSES; an invocation it SEES was never judged on its own. Measured
+ * 2026-08-23: a second `--result ""` invocation inside the same parsed step kept
+ * this suite at RC=0, 11/11/0, and the sibling at 38/38/0.
+ */
+export function everyResultIsRealOutcome(text, ids) {
+  const values = resultArgs(text);
+  if (values.length === 0) return false;
+  return values.every((v) => resultIsRealOutcome(v, ids));
+}
+
+/**
+ * The step `id:`s and job names a workflow declares — the population the
+ * `needs.*` / `steps.*` id checks resolve against.
+ */
+export function declaredIds(src) {
+  const code = stripComments(src);
+  const stepIds = [...code.matchAll(/^[ \t]+id:[ \t]*(\S+)[ \t]*$/gm)].map((m) => scalarValue(m[1]));
+  return { stepIds, jobIds: splitJobs(src).map((j) => j.name) };
 }
 
 /**
@@ -730,7 +880,11 @@ test('#3844 FAMILY RATCHET — every notifier caller binds a credential AND pass
       inFile,
       `${f} contains ${inFile} invocation(s) of ${NOTIFIER_SCRIPT} but only ${inSites} landed inside a parsed step — the remainder are UNCHECKED by every assertion below`,
     );
-    for (const s of found) sites.push({ file: f, ...s });
+    // The id population the `needs.*` / `steps.*` checks resolve against, taken
+    // from the SAME file as the call site. Attached per site rather than passed
+    // as a default so the check cannot silently degrade to shape-matching.
+    const ids = declaredIds(src);
+    for (const s of found) sites.push({ file: f, ids, ...s });
   }
 
   // Measured 2026-08-23: six call sites across six workflows —
@@ -743,11 +897,38 @@ test('#3844 FAMILY RATCHET — every notifier caller binds a credential AND pass
     `expected >=6 deploy-notify-failure call sites, found ${sites.length} — the matcher drifted, it is not that the callers vanished`,
   );
 
-  const noCredential = sites.filter((s) => s.credentialScope === null).map((s) => `${s.file} :: ${s.step}`);
+  // ONE expression, used for the REAL population and for a control population,
+  // so the reporting path itself is exercised rather than assumed. See the
+  // longer note on `unboundIn` below for why a compliant population makes the
+  // obvious assertion vacuous.
+  const unboundIn = (population) =>
+    population
+      .map((s) => ({ where: `${s.file} :: ${s.step}`, ok: s.credentialScope !== null }))
+      .filter((v) => !v.ok)
+      .map((v) => v.where);
+  const auditCredentials = (population) => ({
+    n: population.length,
+    bad: unboundIn(population),
+    controlBad: unboundIn(population.map((s) => ({ ...s, credentialScope: null }))),
+  });
+  const credAudit = auditCredentials(sites);
+  const noCredential = credAudit.bad;
   assert.deepEqual(
     noCredential,
     [],
     'a deploy-notify-failure caller has no GH_TOKEN/GITHUB_TOKEN bound at step, job or workflow scope. GITHUB_TOKEN is NOT ambient in Actions, so the filer exits 2 and the failed deploy is recorded nowhere (#3844). Add `env:\\n  GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}` to the step',
+  );
+  // EMBEDDED CONTROL — the same expression over a population where EVERY site is
+  // unbound must report EVERY site. Without it the assertion above is satisfied
+  // by an expression that reports nothing at all, because the real population is
+  // fully compliant: `[] === []` holds whether the judgement works or not.
+  // Measured 2026-08-23: a filter excusing one named file kept this suite at
+  // RC=0, 11/11/0 against a conservation-sum check, because 6 ok + 0 bad still
+  // summed to 6. Counting the verdicts is NOT enough when none of them is bad.
+  assert.equal(
+    credAudit.controlBad.length,
+    sites.length,
+    `the credential judgement reported ${credAudit.controlBad.length} of ${sites.length} sites when EVERY site was made unbound (it audited ${credAudit.n}). A site the control cannot surface is one this ratchet cannot fail on — the assertion above is passing over it, not clearing it`,
   );
 
   const emptyResult = sites.filter((s) => !hasSubstantiveResult(s.text)).map((s) => `${s.file} :: ${s.step}`);
@@ -755,6 +936,72 @@ test('#3844 FAMILY RATCHET — every notifier caller binds a credential AND pass
     emptyResult,
     [],
     "a deploy-notify-failure caller passes --result with a value that cannot be an outcome (blank, or a bare shell variable that expands to nothing when unset). The script's own hasArg('result') is satisfied by it and shouldFile('') then returns {file:false, category:'pending'}, so the lane posts nothing — presence of the flag is not the property, the VALUE is (#3844/#3368)",
+  );
+
+  // AND THE VALUE MUST BE IN classifyOutcome'S VOCABULARY, judged PER INVOCATION.
+  // The assertion above enumerates the last offender's two spellings and leaves
+  // every neighbour open. Measured 2026-08-23 on the merged head: `--result
+  // success` and `--result "${{ steps.<typo>.outcome }}"` each kept this suite at
+  // RC=0, 11 tests / 11 pass / 0 fail on FIVE of the six callers — only
+  // gov-console-roll was protected, by its own exact deepEqual above. Both reach
+  // shouldFile() -> file:false, so the lane reverts and files NOTHING: #3844
+  // verbatim, with the suite green. `.every()` rather than `.some()` because a
+  // second invocation in the same step was otherwise laundered by its compliant
+  // neighbour.
+  const idPopulations = sites.filter((s) => s.ids.stepIds.length + s.ids.jobIds.length === 0);
+  assert.deepEqual(
+    idPopulations.map((s) => s.file),
+    [],
+    'a caller workflow yielded NO step ids and NO job names, so the needs.*/steps.* id checks below would resolve against an empty set and reject every expression — or, had they been written the other way, accept every one. Either way the guard would not be measuring what it claims',
+  );
+  // ONE expression, applied to the REAL population and then to a control
+  // population, because the real one is fully compliant and therefore cannot
+  // distinguish a working judgement from one that reports nothing.
+  const badIn = (population) =>
+    population
+      .map((s) => ({
+        where: `${s.file} :: ${s.step} :: ${JSON.stringify(resultArgs(s.text))}`,
+        ok: everyResultIsRealOutcome(s.text, s.ids),
+      }))
+      .filter((v) => !v.ok)
+      .map((v) => v.where);
+  // The control population is derived from the SAME argument, so an excuse
+  // applied at the CALL SITE (`auditResults(sites.filter(...))`) shrinks the
+  // control too and is caught by the `=== sites.length` comparison below.
+  const auditResults = (population) => ({
+    n: population.length,
+    bad: badIn(population),
+    controlBad: badIn(
+      population.map((s) => ({
+        ...s,
+        text: s.text.replace(/--result(\s+)("[^"]*"|'[^']*'|\S+)/g, '--result$1success'),
+      })),
+    ),
+  });
+  const audit = auditResults(sites);
+  const badResult = audit.bad;
+  assert.deepEqual(
+    badResult,
+    [],
+    'a deploy-notify-failure caller passes a --result that cannot carry a genuine failure. Accepted values are a literal in {failure, timed_out, startup_failure} or an expression over job.status / needs.<job>.result / steps.<id>.outcome|conclusion / github.event.workflow_run.conclusion, with the job or step id DECLARED in that same file. A non-failure literal (success, cancelled, skipped) and an expression that resolves empty (a typo\u2019d step id, env.*, inputs.*, steps.*.outputs.*) both make shouldFile() return file:false, so deploy-notify-failure.mjs emits a ::notice:: and exits 0 having filed nothing (#3844/#3368)',
+  );
+
+  // EMBEDDED CONTROL, PER SITE. Every real site is compliant, so `badResult` is
+  // the empty list whether the judgement works or not — an excuse filter keyed to
+  // a filename, or an `|| s.file === ...` inside the verdict, is INVISIBLE to the
+  // assertion above and survived a conservation-sum check at RC=0, 11/11/0
+  // (measured 2026-08-23). Re-running the SAME expression over the same six
+  // sites, each with its --result rewritten to the non-failure literal `success`,
+  // is the only form that fails when one site has been quietly excused: the
+  // control must name all six, so a filter that drops one leaves five.
+  assert.ok(
+    sites.every((s) => resultArgs(s.text.replace(/--result(\s+)("[^"]*"|'[^']*'|\S+)/g, '--result$1success')).every((v) => v === 'success')),
+    'the control rewrite does not actually replace every --result value, so the control below would be re-testing the production text rather than a known-bad one',
+  );
+  assert.equal(
+    audit.controlBad.length,
+    sites.length,
+    `the --result judgement reported ${audit.controlBad.length} of ${sites.length} sites when EVERY site was rewritten to the non-failure literal \`success\` (it audited ${audit.n}). A site the control cannot surface is a site this ratchet cannot fail on: ${JSON.stringify(audit.controlBad)}`,
   );
 });
 
@@ -858,6 +1105,94 @@ test('#3844 FAMILY SELF-DEFENCE — the credential predicate fires on the verbat
   assert.equal(hasSubstantiveResult('--result "   "'), false, 'and a whitespace-only one');
   assert.equal(hasSubstantiveResult('--result "$RESULT"'), false, 'a bare shell variable must be rejected — unset, it expands to nothing and the filer posts nothing');
   assert.equal(hasSubstantiveResult('--result ${RESULT}'), false, 'and so must its braced spelling');
+
+  // ── The VOCABULARY gate (review round 2, F5). Every shape below was measured
+  // on the merged head at RC=0 with 11/11 green before this predicate existed.
+  const IDS = { stepIds: ['roll', 'health'], jobIds: ['resolve', 'roll'] };
+  assert.equal(resultIsRealOutcome('${{ job.status }}', IDS), true, 'job.status is the canonical outcome expression and must be accepted');
+  assert.equal(resultIsRealOutcome('failure', IDS), true, 'the literal `failure` is a genuine failure in classifyOutcome and must be accepted');
+  assert.equal(resultIsRealOutcome('timed_out', IDS), true, 'and so is timed_out');
+  assert.equal(resultIsRealOutcome('startup_failure', IDS), true, 'and startup_failure');
+  assert.equal(resultIsRealOutcome('${{ needs.resolve.result }}', IDS), true, 'a needs.<job>.result naming a DECLARED job must be accepted');
+  assert.equal(resultIsRealOutcome('${{ steps.roll.outcome }}', IDS), true, 'and a steps.<id>.outcome naming a DECLARED step');
+  assert.equal(resultIsRealOutcome('${{ github.event.workflow_run.conclusion }}', IDS), true, 'and the workflow_run conclusion, which is how a workflow_run lane reads its upstream');
+
+  // N1/N3/N5 — a literal NON-FAILURE outcome. shouldFile('success') is
+  // {file:false, category:'success'}: the filer logs and files nothing.
+  assert.equal(resultIsRealOutcome('success', IDS), false, 'the literal `success` must be REJECTED — shouldFile(\'success\') is {file:false}, so the lane files nothing while every guard stays green (#3844)');
+  assert.equal(resultIsRealOutcome('cancelled', IDS), false, 'and `cancelled`, which classifyOutcome calls no-verdict');
+  assert.equal(resultIsRealOutcome('skipped', IDS), false, 'and `skipped`');
+
+  // N2 — right FAMILY, wrong member: `.outputs.` is not an outcome.
+  assert.equal(resultIsRealOutcome('${{ steps.roll.outputs.status }}', IDS), false, 'steps.<id>.outputs.* is NOT an outcome — it resolves to whatever the step set, or to empty, and empty is the pending dead end');
+  assert.equal(resultIsRealOutcome('${{ env.MISSING }}', IDS), false, 'an env expression is not an outcome and resolves empty when unset');
+  assert.equal(resultIsRealOutcome('${{ inputs.result }}', IDS), false, 'and inputs.* is empty on a workflow_run trigger, which has no inputs');
+
+  // N4 — right SHAPE, id that does not exist in the file. This is the one a
+  // shape-only check cannot catch, and a typo is the likeliest way in.
+  assert.equal(resultIsRealOutcome('${{ steps.nope.outcome }}', IDS), false, 'a steps.<id>.outcome whose id is NOT declared in the file resolves to the empty string — shape alone is not the property, the id has to exist');
+  assert.equal(resultIsRealOutcome('${{ needs.nope.result }}', IDS), false, 'and likewise an undeclared job in needs.<job>.result');
+
+  // A `||` chain is judged operand by operand, so one good operand cannot carry
+  // a bad one.
+  assert.equal(resultIsRealOutcome("${{ needs.resolve.result || 'failure' }}", IDS), true, 'a fallback chain whose every operand is an outcome or a genuine-failure literal must be accepted');
+  assert.equal(resultIsRealOutcome("${{ needs.resolve.result || 'success' }}", IDS), false, 'but a chain that can fall back to `success` must NOT — the fallback is the branch that files nothing');
+  assert.equal(resultIsRealOutcome('${{ job.status || env.X }}', IDS), false, 'and neither may a chain fall back to a non-outcome');
+
+  // F8 — a quoted credential/value is the SAME value. Re-quoting must not
+  // change a verdict in either direction.
+  assert.equal(resultIsRealOutcome('"${{ job.status }}"', IDS), true, 'a double-quoted outcome expression is the same value and must be accepted');
+  assert.equal(scalarValue('"${{ secrets.GITHUB_TOKEN }}"'), '${{ secrets.GITHUB_TOKEN }}', 'a matched double-quote pair must be normalised away — the runner never sees those quotes');
+  assert.equal(scalarValue("'${{ github.token }}'"), '${{ github.token }}', 'and a matched single-quote pair');
+  assert.equal(scalarValue('${{ secrets.X }} # note'), '${{ secrets.X }}', 'a trailing YAML comment must be dropped');
+  assert.equal(scalarValue("${{ secrets.A || 'x #y' }}"), "${{ secrets.A || 'x #y' }}", 'but a # INSIDE the expression is not a comment and must survive — an over-eager strip would manufacture the opposite false verdict');
+  assert.equal(bindsNotifierCredential([['GH_TOKEN', '"${{ secrets.GITHUB_TOKEN }}"']]), true, 'a QUOTED credential binds the token exactly as the unquoted spelling does; reporting it unbound is a false claim (R7)');
+  assert.equal(bindsNotifierCredential([['GH_TOKEN', '""']]), false, 'while a quoted EMPTY string still binds nothing');
+  assert.equal(bindsNotifierCredential([['GH_TOKEN', '"" # ${{ secrets.GITHUB_TOKEN }}']]), false, 'and the canonical value parked in a trailing comment must not launder an empty one');
+
+  // F6 — EVERY invocation is judged, not merely one of them.
+  const two = '--result "${{ job.status }}" --failure-json f.json\n--result ""';
+  assert.equal(hasSubstantiveResult(two), true, 'the weak SOME-predicate is satisfied by the good invocation alone — this is the laundering it cannot see');
+  assert.equal(everyResultIsRealOutcome(two, IDS), false, 'so the ratchet uses the EVERY-predicate: a second invocation carrying --result "" must fail even beside a compliant one');
+  assert.equal(everyResultIsRealOutcome('--result "${{ job.status }}"', IDS), true, 'a single compliant invocation must still pass');
+  assert.equal(everyResultIsRealOutcome('--failure-json f.json', IDS), false, 'and a step with NO --result at all must fail rather than vacuously pass');
+
+  // AT THE PRODUCTION CARDINALITY. Every one of the six real call sites carries
+  // EXACTLY ONE --result, so a bypass conditioned on that count
+  // (`if (values.length === 1) return true`) would satisfy every OTHER assertion
+  // in this block — the two-invocation fixture has length 2 and the no-result
+  // fixture length 0 — while reopening all five callers. These two pins are the
+  // ones that can only be satisfied by actually evaluating the value.
+  assert.equal(everyResultIsRealOutcome('--result success', IDS), false, 'ONE invocation carrying a non-failure literal must fail — this is the production cardinality, and a count-conditioned bypass would walk through every other pin here');
+  assert.equal(everyResultIsRealOutcome('--result "${{ steps.nope.outcome }}"', IDS), false, 'and ONE invocation whose step id does not exist');
+
+  // THE LITERAL SET IS A MIRROR OF run-outcome.mjs, SO IT IS VERIFIED AGAINST IT
+  // rather than trusted. A hand-copied vocabulary drifts silently the moment the
+  // classifier gains or loses a member, and a stale mirror is a guard keyed to a
+  // spelling — the exact class this predicate was rewritten to escape.
+  const MIRROR_PROBES = ['failure', 'timed_out', 'startup_failure', 'success', 'cancelled', 'skipped', 'neutral', 'stale', 'action_required', 'queued', 'in_progress', ''];
+  // The probe list is itself a population, and a population that reaches zero
+  // makes the loop below green and blind. Measured 2026-08-23: emptying it kept
+  // this suite at RC=0, 11/11/0.
+  assert.equal(MIRROR_PROBES.length, 12, 'the classifyOutcome mirror probe list changed size; a shortened list makes the loop below vacuous, and an empty one makes it green over no comparison at all');
+  assert.ok(MIRROR_PROBES.some((p) => GENUINE_FAILURE_LITERALS.has(p)) && MIRROR_PROBES.some((p) => !GENUINE_FAILURE_LITERALS.has(p)), 'the probe list must contain BOTH a genuine failure and a non-failure, or the comparison below cannot discriminate');
+  for (const probe of MIRROR_PROBES) {
+    assert.equal(
+      GENUINE_FAILURE_LITERALS.has(probe),
+      classifyOutcome(probe).genuineFailure,
+      `GENUINE_FAILURE_LITERALS disagrees with classifyOutcome() about "${probe}". This set is a MIRROR of GENUINE_FAILURE in scripts/ci/run-outcome.mjs; when it drifts, this guard accepts a --result the filer will refuse to act on, or rejects one it would have filed`,
+    );
+  }
+
+  // THE ID POPULATION IS REQUIRED, not defaulted. A default here would be a
+  // guard that switches itself off at whichever call site forgot to pass it.
+  assert.throws(() => resultIsRealOutcome('${{ job.status }}'), /requires \{stepIds, jobIds\}/, 'omitting the id population must THROW, not quietly degrade to shape-matching');
+  assert.throws(() => resultIsRealOutcome('${{ job.status }}', {}), /requires \{stepIds, jobIds\}/, 'and so must an options object missing them');
+
+  // declaredIds must actually find the ids it resolves against, on a REAL file.
+  const dpIds = declaredIds(readWorkflow('loom-dataplane-roll.yml'));
+  assert.ok(dpIds.stepIds.includes('roll'), `declaredIds found no 'roll' step in loom-dataplane-roll.yml (${dpIds.stepIds.length} ids parsed) — the id checks above would reject every steps.* expression and this guard would be measuring the parser, not the lane`);
+  assert.ok(dpIds.jobIds.includes('roll'), `declaredIds found no 'roll' JOB in loom-dataplane-roll.yml (${JSON.stringify(dpIds.jobIds)}) — the needs.* checks would reject every declared job`);
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
