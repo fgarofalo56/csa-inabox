@@ -1507,8 +1507,18 @@ export function computeInert() {
   //
   // BLAST RADIUS, MEASURED before the swap so this is a hardening and not a
   // mass break: 435 console env expressions, 125 empty-default params, old
-  // oracle 1,274 names, new oracle 137. Vars flagged before the allowlist:
-  // 11 with the old oracle, 11 with the new, NEWLY flagged by the new = 0.
+  // oracle 1,274 names, new oracle 137. Vars flagged, old oracle vs new:
+  // 45 vs 45 before the allowlist; 34 vs 34 after the allowlist and before
+  // the ratchets; 0 vs 0 after both. NEWLY flagged by the new oracle = 0 at
+  // EVERY stage — that is the load-bearing fact: the swap changes WHICH
+  // question is asked, not the answer this tree gives today.
+  //
+  // R7 — an earlier revision of this comment cited "11 with the old oracle,
+  // 11 with the new" for the pre-allowlist stage. That figure reproduces at
+  // no stage. 11 is the ALLOWLIST DELTA (45 - 34), not a flagged count; it
+  // is named here so it is not re-derived and "corrected" back. Re-measure
+  // by running the loop below with the isAllowlisted() and ratchet skips
+  // disabled, once per oracle — never from memory.
   const args = collectAdminPlaneArgs();
   const passed = new Set([...args].filter(([, v]) => !isAlwaysEmptyLiteral(v)).map(([k]) => k));
   // FAIL CLOSED. If the argument-list parser drifts, `passed` collapses and
