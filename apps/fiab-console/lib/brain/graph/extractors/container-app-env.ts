@@ -198,7 +198,7 @@ export function extractFromContainerAppEnv(
     population: makePopulation({
       subject: 'edges',
       nodes: [],
-      edges: [],
+      edges,
       scope:
         `${apps.length} container app(s); ${entriesExamined} env entr(ies) examined` +
         `${apps.some((a) => a.onlyNames) ? ' (name-filtered)' : ''}; ` +

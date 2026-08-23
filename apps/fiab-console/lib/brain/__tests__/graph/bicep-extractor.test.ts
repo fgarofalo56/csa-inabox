@@ -160,10 +160,52 @@ describe('extractFromBicep — multi-line entries and honesty about limits', () 
     expect(r.population.subject).toBe('edges');
   });
 
+  it('reports the COST of the env-var-shape filter, not just its survivors', () => {
+    // `nameEntriesSeen` counts only what survived the SCREAMING_SNAKE filter,
+    // so on its own the scope string cannot distinguish "this file had 2 env
+    // vars" from "this file had 2 env vars and 4 other `name:` entries I threw
+    // away". On the real 187-file tree that gap is 941 of 1,833 entries (51.3%)
+    // — over half of what the extractor looked at, reported nowhere.
+    const r = run(
+      [
+        "        name: 'admin-plane'",
+        "        env: [",
+        "            { name: 'LOOM_BROKER_URL', value: '' }",
+        "            { name: 'rg-csa-loom-hub', value: 'x' }",
+        "            { name: 'loomDirectLake', value: 'y' }",
+        "        ]",
+      ].join('\n'),
+    );
+    // One kept…
+    expect(r.population.scope).toMatch(/1 env-var-shaped `name:` entries examined/);
+    // …and THREE rejected, each named in a way a bicep author really writes.
+    expect(r.population.scope).toMatch(/\(3 `name:` entr\(ies\) REJECTED as not env-var-shaped\)/);
+    // Embedded control: the rejects are genuinely absent from the edges, so the
+    // count above is reporting a real filter rather than decorating a no-op.
+    expect(r.edges.map((e) => e.evidence.symbol)).toEqual(['LOOM_BROKER_URL']);
+  });
+
   it('an EMPTY file is BLIND, not clean', () => {
     const r = run('');
     expect(r.edges).toHaveLength(0);
     // P3 — zero edges over zero input establishes nothing.
     expect(r.population.blind).toBe(true);
+  });
+
+  it('a file that DID emit edges is NOT blind, and counts them by provenance', () => {
+    // The counterpart the blind-on-empty assertion needs to mean anything.
+    // Without it, `blind` could be — and was — hardcoded true by passing an
+    // empty array to makePopulation, so the test above passed over ANY input
+    // and `byProvenance` stayed all-zero however many edges were emitted.
+    // `byProvenance.<p> === 0` is the vacuous-truth signal detector authors are
+    // told to read; it has to reflect what this extractor actually produced.
+    const r = run(ENV_BLOCK_LINES.join('\n'));
+    expect(r.edges).toHaveLength(3);
+    expect(r.population.blind).toBe(false);
+    expect(r.population.edgesExamined).toBe(r.edges.length);
+    expect(r.population.byProvenance.declared).toBe(3);
+    // …and provenance does not bleed: this extractor emits `declared` only.
+    expect(r.population.byProvenance.configured).toBe(0);
+    expect(r.population.byProvenance.imports).toBe(0);
   });
 });
