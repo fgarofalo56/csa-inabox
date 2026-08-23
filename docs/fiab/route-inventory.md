@@ -2515,7 +2515,7 @@ silently downgrading the route.
 
 ## Backend signals (derived)
 
-439 module(s) ORIGINATE a backend label — the derivation read an
+440 module(s) ORIGINATE a backend label — the derivation read an
 Azure identifier out of them. Every other route/module below inherits through the
 call graph. Nothing in this section is a Loom module name someone typed: the
 modules are derived, and only the Microsoft-owned identifier vocabulary is seeded.
@@ -3013,6 +3013,7 @@ caps the NUMBER of cuts at three; it does not bound what one cut can hide.
 | `apps/fiab-console/lib/azure/workspace-grants.ts` | Azure RBAC, Azure Storage, Cosmos, Event Hubs |
 | `apps/fiab-console/lib/azure/workspace-identity-client.ts` | Azure RBAC, Managed Identity |
 | `apps/fiab-console/lib/azure/workspace-roles-client.ts` | Azure RBAC, Fabric |
+| `apps/fiab-console/lib/brain/detectors/cost-model.ts` | Retail Prices API |
 | `apps/fiab-console/lib/catalog/item-types/azure-ai-foundry.ts` | AML |
 | `apps/fiab-console/lib/catalog/item-types/azure-sql-database.ts` | Azure SQL |
 | `apps/fiab-console/lib/catalog/item-types/data-engineering.ts` | Batch |
