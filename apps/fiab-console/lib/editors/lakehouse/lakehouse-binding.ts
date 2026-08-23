@@ -38,6 +38,20 @@ export interface LakehouseBinding {
 /** `abfss://<container>@<account>.dfs.<suffix>/<root>` — same shape lakehouse-abfss.ts parses. */
 const ABFSS_RE = /^abfss:\/\/([^@]+)@[^/]+\/(.*)$/i;
 
+/**
+ * The DLZ containers a binding may name — a verbatim mirror of
+ * `KNOWN_CONTAINERS` in lib/azure/adls-client.ts, which cannot be imported here
+ * (it pulls the credential chain into the client bundle). Kept honest by
+ * `lakehouse-binding.test.ts`, which imports the real one and asserts equality,
+ * so a container added there and not here fails a test rather than silently
+ * diverging.
+ */
+const CLIENT_KNOWN_CONTAINERS = ['bronze', 'silver', 'gold', 'landing', 'csv-imports'] as const;
+
+export function isClientKnownContainer(name: string): boolean {
+  return (CLIENT_KNOWN_CONTAINERS as readonly string[]).includes(name);
+}
+
 function str(v: unknown): string {
   return typeof v === 'string' ? v.trim() : '';
 }
@@ -48,6 +62,14 @@ function str(v: unknown): string {
  * Mirrors `resolveLakehouseAbfss` steps 1 → 2 EXACTLY:
  *   1. `secondaryIds.adlsRoot` — the full abfss URI the provisioner built.
  *   2. `secondaryIds.{container, rootPath}` — the container + root it recorded.
+ *
+ * Both are gated on the container being one the DLZ (and therefore
+ * `/api/lakehouse/paths`) actually serves, which is the resolver's own step-2
+ * condition. Without that gate a lakehouse on an external storage account
+ * (the resolver's step 2b) would resolve here to a container the paths route
+ * rejects, and the editor would land on a raw "unknown container" instead of
+ * asking the server — which CAN resolve it. Unreachable today; the resolver
+ * anticipates it, so this does too.
  *
  * Returns null when neither is stamped. It deliberately does NOT implement the
  * resolver's step-3 convention fallback: that one reads `LOOM_*_URL` env, which
@@ -64,7 +86,7 @@ export function bindingFromItemState(item: unknown): LakehouseBinding | null {
   if (stamped.toLowerCase().startsWith('abfss://')) {
     const m = ABFSS_RE.exec(stamped);
     const container = m?.[1] ?? '';
-    if (container) {
+    if (container && isClientKnownContainer(container)) {
       return { container, root: trimSlashes(m?.[2] ?? ''), source: 'adlsRoot' };
     }
   }
@@ -72,7 +94,7 @@ export function bindingFromItemState(item: unknown): LakehouseBinding | null {
   // 2. Recorded container + root.
   const container = str(sec.container);
   const rootPath = str(sec.rootPath);
-  if (container && rootPath) {
+  if (container && rootPath && isClientKnownContainer(container)) {
     return { container, root: trimSlashes(rootPath), source: 'secondaryIds' };
   }
 

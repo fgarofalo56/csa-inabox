@@ -67,12 +67,13 @@ import {
   useStyles, leafName, collectEntries, formatCell, parseJsonOrError, FileGlyph,
 } from './shared';
 import type {
-  PathEntry, ReferenceLakehouse, PreviewResponse, UploadItem, MipLabelOption,
+  PathEntry, ListingError, ReferenceLakehouse, PreviewResponse, UploadItem, MipLabelOption,
 } from './shared';
 import type { LiveCatalogTable } from './types';
 import { LakehouseEditorContext } from './lakehouse-editor-context';
 import type { LakehouseEditorCtx } from './lakehouse-editor-context';
 import { containerRelativePath } from './lakehouse-binding';
+import { RefTreeChildren } from './ref-tree-children';
 import { useLakehousePermissions } from './hooks/use-lakehouse-permissions';
 import { useLakehouseSettings } from './hooks/use-lakehouse-settings';
 import { useLakehouseShortcuts } from './hooks/use-lakehouse-shortcuts';
@@ -136,7 +137,7 @@ export function LakehouseEditor({ item, id }: Props) {
 
   // ── Core state ────────────────────────────────────────────────────────────
   const [activeContainer, setActiveContainer] = useState<string | null>(null);
-  const [openPrefixes, setOpenPrefixes] = useState<Record<string, PathEntry[] | 'loading' | { error: string; remediation?: string }>>({});
+  const [openPrefixes, setOpenPrefixes] = useState<Record<string, PathEntry[] | 'loading' | ListingError>>({});
   const [activePath, setActivePath] = useState<PathEntry | null>(null);
   const [tab, setTab] = useState<string>('files');
   // FLAG0 (n1-lakehouse-interop-tab) — default-ON kill switch for the N1
@@ -219,15 +220,15 @@ export function LakehouseEditor({ item, id }: Props) {
     try {
       const qs = new URLSearchParams({ container, prefix });
       const r = await clientFetch(`/api/lakehouse/paths?${qs.toString()}`);
-      const j = await parseJsonOrError<{ ok: boolean; error?: string; remediation?: string; paths?: PathEntry[] }>(r, 'List paths');
+      const j = await parseJsonOrError<{ ok: boolean; paths?: PathEntry[] } & Partial<ListingError>>(r, 'List paths');
       setOpenPrefixes((p) => ({
         ...p,
-        // #3904: the BFF now classifies a storage failure and returns a
-        // remediation. Carry it through — the pane shows the fix, not a
-        // RequestId.
+        // #3904: the BFF CLASSIFIES the failure (`kind`) and returns a
+        // remediation. Carry both through untouched — the pane branches on the
+        // class, never on the wording, and no RequestId reaches here.
         [key]: j.ok
           ? (j.paths as PathEntry[])
-          : { error: j.error || `HTTP ${r.status}`, remediation: j.remediation },
+          : { error: j.error || `HTTP ${r.status}`, remediation: j.remediation, code: j.code, kind: j.kind },
       }));
     } catch (e: any) {
       setOpenPrefixes((p) => ({ ...p, [key]: { error: e?.message || String(e) } }));
@@ -279,11 +280,17 @@ export function LakehouseEditor({ item, id }: Props) {
       );
       const j = await parseJsonOrError<{ ok: boolean; tables?: LiveCatalogTable[]; gate?: string; error?: string }>(r, 'List tables');
       if (!j.ok) throw new Error(j.error || `HTTP ${r.status}`);
-      setLiveTables(j.tables || []);
+      // #3904 — strip the container ONCE, here, so no downstream call site can
+      // forget. `adlsPath` is `<container>/<root>/Tables/<name>`; the preview
+      // and history routes take a container + a CONTAINER-RELATIVE path, so
+      // passing it through asked for `landing/landing/lakehouses/…`.
+      setLiveTables((j.tables || []).map((t) => ({
+        ...t, relPath: containerRelativePath(t.schema || activeContainer, t.adlsPath),
+      })));
       setLiveTablesGate(j.gate || null);
     } catch (e: any) { setLiveTablesError(e?.message || String(e)); }
     finally { setLiveTablesLoading(false); }
-  }, [id, itemQ.data?.workspaceId]);
+  }, [id, itemQ.data?.workspaceId, activeContainer]);
 
   useEffect(() => {
     if (tab === 'tables' && activeContainer) loadLiveTables();
@@ -763,7 +770,12 @@ export function LakehouseEditor({ item, id }: Props) {
     );
     if (!Array.isArray(state)) return (
       <TreeItem itemType="leaf" value={`${container}-${prefix}-err`}>
-        <TreeItemLayout>Error: {state.error}</TreeItemLayout>
+        {/* The tree is the FIRST thing on screen in the #3904 scenario, so it
+            carries the same classification + remediation the pane does — a bare
+            "Error: <text>" was the operator's whole experience of the defect. */}
+        <TreeItemLayout title={state.remediation || state.error}>
+          {state.kind === 'not-found' ? 'Nothing here yet' : 'Error'}: {state.error}
+        </TreeItemLayout>
       </TreeItem>
     );
     if (state.length === 0) return (
@@ -782,42 +794,6 @@ export function LakehouseEditor({ item, id }: Props) {
         ) : (
           <TreeItem key={`${container}-${entry.name}`} itemType="leaf" value={`${container}-${entry.name}`}
             onClick={() => selectFile(entry)} onContextMenu={(e) => openContextMenu(e, entry)}>
-            <TreeItemLayout iconBefore={<FileGlyph name={entry.name} isDirectory={false} />}>{leafName(entry.name)}</TreeItemLayout>
-          </TreeItem>
-        ))}
-      </>
-    );
-  }
-
-  function renderRefTreeChildren(ref: { id: string; displayName: string; containers: string[]; account?: string; reachable?: boolean }, container: string, prefix: string): React.ReactElement {
-    const key = `ref::${ref.id}::${container}::${prefix}`;
-    const state = sec.refOpenPrefixes[key];
-    const base = `ref-${ref.id}-${container}-${prefix}`;
-    if (state === undefined) return (
-      <TreeItem itemType="leaf" value={`${base}-unloaded`} onClick={() => sec.loadRefPaths(ref.id, container, prefix)}>
-        <TreeItemLayout>Click to load…</TreeItemLayout>
-      </TreeItem>
-    );
-    if (state === 'loading') return (
-      <TreeItem itemType="leaf" value={`${base}-loading`}><TreeItemLayout><Spinner size="tiny" /> Loading…</TreeItemLayout></TreeItem>
-    );
-    if (!Array.isArray(state)) return (
-      <TreeItem itemType="leaf" value={`${base}-err`}><TreeItemLayout><Caption1>Error: {state.error}</Caption1></TreeItemLayout></TreeItem>
-    );
-    if (state.length === 0) return (
-      <TreeItem itemType="leaf" value={`${base}-empty`}><TreeItemLayout><Caption1>(empty)</Caption1></TreeItemLayout></TreeItem>
-    );
-    return (
-      <>
-        {state.map((entry) => entry.isDirectory ? (
-          <TreeItem key={`ref-${ref.id}-${entry.name}`} itemType="branch" value={`ref-${ref.id}-${entry.name}`}
-            onClick={() => sec.selectRefFile(ref as any, container, entry)}>
-            <TreeItemLayout iconBefore={<FileGlyph name={entry.name} isDirectory />}>{leafName(entry.name)}</TreeItemLayout>
-            <Tree>{renderRefTreeChildren(ref, container, entry.name)}</Tree>
-          </TreeItem>
-        ) : (
-          <TreeItem key={`ref-${ref.id}-${entry.name}`} itemType="leaf" value={`ref-${ref.id}-${entry.name}`}
-            onClick={() => sec.selectRefFile(ref as any, container, entry)}>
             <TreeItemLayout iconBefore={<FileGlyph name={entry.name} isDirectory={false} />}>{leafName(entry.name)}</TreeItemLayout>
           </TreeItem>
         ))}
@@ -933,7 +909,7 @@ export function LakehouseEditor({ item, id }: Props) {
                                     <MenuItem icon={<TableSimple20Regular />} onClick={() => setTab('tables')}>Open in Tables tab</MenuItem>
                                     <MenuItem icon={<Copy20Regular />} onClick={() => { void navigator.clipboard?.writeText(t.adlsPath); }}>Copy path</MenuItem>
                                     {typeof t.latestVersion === 'number' && (
-                                      <MenuItem icon={<History20Regular />} onClick={() => sec.openTableHistory(containerRelativePath(t.schema || activeContainer, t.adlsPath))}>Table history…</MenuItem>
+                                      <MenuItem icon={<History20Regular />} onClick={() => sec.openTableHistory(t.relPath ?? '')}>Table history…</MenuItem>
                                     )}
                                   </MenuList></MenuPopover></Menu>
                                 }
@@ -1014,7 +990,9 @@ export function LakehouseEditor({ item, id }: Props) {
                       {ref.containers.map((c) => (
                         <TreeItem key={`refc-${ref.id}-${c}`} itemType="branch" value={`refc-${ref.id}-${c}`} onClick={() => sec.loadRefPaths(ref.id, c, '')}>
                           <TreeItemLayout iconBefore={<Database20Regular />}>{c}</TreeItemLayout>
-                          <Tree>{renderRefTreeChildren(ref, c, '')}</Tree>
+                          <Tree><RefTreeChildren ref_={ref} container={c} prefix=""
+                            openPrefixes={sec.refOpenPrefixes} loadRefPaths={sec.loadRefPaths}
+                            selectRefFile={sec.selectRefFile} /></Tree>
                         </TreeItem>
                       ))}
                     </Tree>

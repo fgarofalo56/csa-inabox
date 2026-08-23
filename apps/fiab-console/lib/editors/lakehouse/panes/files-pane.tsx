@@ -14,6 +14,7 @@ import {
 } from '@fluentui/react-icons';
 import { Fragment } from 'react';
 import { useStyles, formatBytes, leafName, FileGlyph } from '../shared';
+import type { ListingError } from '../shared';
 import { useLakehouseCtx } from '../lakehouse-editor-context';
 import { relativeToRoot } from '../lakehouse-binding';
 
@@ -164,23 +165,24 @@ export function FilesPane() {
       )}
       {currentListing === 'loading' && <Spinner size="small" label="Listing paths…" labelPosition="after" />}
       {currentListing && !Array.isArray(currentListing) && currentListing !== 'loading' && (() => {
-        // #3904 — the BFF classifies a storage failure and returns a
-        // remediation; a "not created yet" directory is a GUIDED state, not a
-        // red one (ux-baseline.md §6), and no raw SDK RequestId reaches here.
-        const listing = currentListing as { error: string; remediation?: string };
-        const guided = !!listing.remediation && /not exist|Nothing is stored/i.test(listing.error);
+        // #3904 — the BFF classified this failure and returned a remediation.
+        // Branch on its `kind` token, NOT on the wording of `error`: re-deriving
+        // the class here would be a second method for one decision, and the
+        // regex form of this shipped with a bug — a container or prefix
+        // containing "not exist" turned a 403 into a friendly warning. A
+        // directory that isn't there yet is a GUIDED state (ux-baseline.md §6);
+        // a permission failure stays red. No raw SDK RequestId reaches here.
+        const listing = currentListing as ListingError;
+        const guided = listing.kind === 'not-found';
         return (
           <MessageBar intent={guided ? 'warning' : 'error'}>
             <MessageBarBody>
               <MessageBarTitle>{guided ? 'Nothing here yet' : 'List failed'}</MessageBarTitle>
               {listing.error}
               {listing.remediation && (
-                <>
-                  {' '}
-                  <span style={{ display: 'block', marginTop: tokens.spacingVerticalXS }}>
-                    {listing.remediation}
-                  </span>
-                </>
+                <span style={{ display: 'block', marginTop: tokens.spacingVerticalXS }}>
+                  {listing.remediation}
+                </span>
               )}
             </MessageBarBody>
           </MessageBar>

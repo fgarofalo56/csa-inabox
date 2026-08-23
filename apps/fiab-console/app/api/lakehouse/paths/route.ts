@@ -75,15 +75,47 @@ function errCode(e: unknown): string {
   return typeof detail === 'string' ? detail : '';
 }
 
+/** An Azure Storage error code as the service documents it: a short PascalCase token. */
+const CODE_SHAPE = /^[A-Za-z][A-Za-z0-9]{0,63}$/;
+
+/**
+ * Bound what leaves through `code`.
+ *
+ * `code` is the ONE field on the failure payload sourced from the SDK, so it is
+ * the one remaining way SDK text could reach a browser. `e.code` and
+ * `e.details.errorCode` are typed `string` and nothing guarantees they are the
+ * short token the service documents — a provider that stuffed
+ * `"PathNotFound RequestId:<guid> Time:<ts>"` in there would have walked
+ * straight past every `not.toContain('RequestId')` assertion in the suite,
+ * because those all use clean codes. Known code, else documented shape, else a
+ * generic token. Defensive, not observed — and it makes the PR's claim ("nothing
+ * from the SDK reaches the client") true of the code rather than merely likely.
+ */
+function safeCode(raw: string, fallback: string): string {
+  if (!raw) return fallback;
+  if (NOT_FOUND_CODES.has(raw) || DENIED_CODES.has(raw)) return raw;
+  return CODE_SHAPE.test(raw) ? raw : fallback;
+}
+
 /**
  * Translate a storage listing failure into an honest, user-actionable payload.
  *
  * NOTHING from the SDK message reaches the client — that string carries the
  * RequestId/Time pair that used to surface in the UI, and it asserts causes we
  * did not establish. Only the classification, the path we asked for, and (for a
- * classified case) the fix are returned. The `code` is a short stable token
- * (`PathNotFound`), which is safe and useful.
+ * classified case) the fix are returned. `code` is the SDK's short token,
+ * bounded by `safeCode`.
+ *
+ * `kind` is the CLASSIFICATION ITSELF, decided here and here only. The UI needs
+ * to know whether a failure is "this directory isn't there yet" (a guided state)
+ * or a real error, and the first cut of this fix made it re-derive that by
+ * regex-matching the English message — a second method for one decision, which
+ * is the exact defect #3904 is about, plus a bug: a container or prefix
+ * containing the words "not exist" flipped a 403 into a friendly warning. The
+ * server states the class; the client reads it.
  */
+export type ListFailureKind = 'not-found' | 'denied' | 'unknown';
+
 export function classifyListFailure(
   e: unknown,
   container: string,
@@ -98,7 +130,8 @@ export function classifyListFailure(
       status: 404,
       body: {
         ok: false,
-        code: code || 'PathNotFound',
+        kind: 'not-found' satisfies ListFailureKind,
+        code: safeCode(code, 'PathNotFound'),
         container,
         prefix,
         error: `Nothing is stored at ${where} yet.`,
@@ -116,7 +149,8 @@ export function classifyListFailure(
       status: 403,
       body: {
         ok: false,
-        code: code || 'AuthorizationFailure',
+        kind: 'denied' satisfies ListFailureKind,
+        code: safeCode(code, 'AuthorizationFailure'),
         container,
         prefix,
         error: `Loom is not authorized to list ${where}.`,
@@ -132,7 +166,8 @@ export function classifyListFailure(
     status: 502,
     body: {
       ok: false,
-      code: code || 'storage_list_failed',
+      kind: 'unknown' satisfies ListFailureKind,
+      code: safeCode(code, 'storage_list_failed'),
       container,
       prefix,
       error: `Azure Storage could not list ${where}${status ? ` (HTTP ${status})` : ''}.`,

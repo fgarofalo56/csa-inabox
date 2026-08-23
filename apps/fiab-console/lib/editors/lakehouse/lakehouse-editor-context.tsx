@@ -10,7 +10,7 @@
  */
 
 import { createContext, useContext } from 'react';
-import type { PathEntry, ContainerInfo, ReferenceLakehouse, RefSelection, PreviewResponse, HistoryRow, MipLabelOption, UploadItem } from './shared';
+import type { PathEntry, ContainerInfo, ListingError, ReferenceLakehouse, RefSelection, PreviewResponse, HistoryRow, MipLabelOption, UploadItem } from './shared';
 import type {
   PermAssignment, PermRole, PermsTab, SqlGrant, SqlTableRef, SqlColRef, RlsPolicy, ResolvedPrincipal,
   LakehouseSettings, IcebergEndpoint, DaAgentRow, LiveCatalogTable,
@@ -54,7 +54,7 @@ export interface LakehouseEditorCtx {
   tablesPrefix: string;
 
   // ---- File tree ----
-  openPrefixes: Record<string, PathEntry[] | 'loading' | { error: string; remediation?: string }>;
+  openPrefixes: Record<string, PathEntry[] | 'loading' | ListingError>;
   activePath: PathEntry | null;
   setActivePath: (p: PathEntry | null) => void;
 
@@ -430,7 +430,7 @@ export interface LakehouseEditorCtx {
   previewTable: (relPath: string) => void;
   goToPrefix: (prefix: string) => void;
   currentPrefix: string;
-  currentListing: PathEntry[] | 'loading' | { error: string; remediation?: string } | null;
+  currentListing: PathEntry[] | 'loading' | ListingError | null;
   openContextMenu: (e: React.MouseEvent, entry: PathEntry) => void;
   openTierDialog: (entry: PathEntry) => void;
   onTierChanged: (entry: PathEntry, newTier: BlobAccessTier) => void;

@@ -113,11 +113,60 @@ describe('storage-failure translation', () => {
       expect(serialized).toContain('landing/lakehouses/Foo');
     }
   });
+
+  it('a RequestId smuggled through `code` is dropped, not forwarded', () => {
+    // `code` is the ONE field sourced from the SDK, so it is the one remaining
+    // way SDK text could reach a browser. `e.code` and `e.details.errorCode` are
+    // typed `string` and nothing guarantees the short token the service
+    // documents. Every other RequestId assertion in this file uses a CLEAN code,
+    // so none of them can see this — which is exactly why it is asserted here.
+    const dirty = 'PathNotFound RequestId:11111111-2222-3333-4444-555555555555 Time:2026-08-23';
+
+    const viaCode = classifyListFailure(restError(404, dirty), 'landing', 'lakehouses/Foo');
+    expect(JSON.stringify(viaCode.body)).not.toContain('RequestId');
+    expect(viaCode.body.code).toBe('PathNotFound');   // the generic fallback token
+
+    // Same hole, other accessor: RestError puts it on details.errorCode too.
+    const viaDetails = classifyListFailure(
+      Object.assign(new Error('x'), { statusCode: 403, details: { errorCode: dirty } }),
+      'gold', 'Tables',
+    );
+    expect(JSON.stringify(viaDetails.body)).not.toContain('RequestId');
+    expect(viaDetails.body.code).toBe('AuthorizationFailure');
+
+    // A well-formed code is still passed through untouched — the bound is a
+    // shape check, not a blanket redaction that would cost real diagnosis.
+    const clean = classifyListFailure(restError(404, 'FilesystemNotFound'), 'landing', '');
+    expect(clean.body.code).toBe('FilesystemNotFound');
+  });
+
+  it('states the CLASS as a token the UI can branch on, not as prose', () => {
+    // The pane must not have to regex the English message to know whether this
+    // is "not there yet" (guided) or a real error — that is a second method for
+    // one decision, and it mis-fires on a path containing "not exist".
+    expect(classifyListFailure(restError(404, 'PathNotFound'), 'landing', 'p').body.kind)
+      .toBe('not-found');
+    expect(classifyListFailure(restError(403, 'AuthorizationPermissionMismatch'), 'landing', 'p').body.kind)
+      .toBe('denied');
+    expect(classifyListFailure(restError(500, 'Whatever'), 'landing', 'p').body.kind)
+      .toBe('unknown');
+    // A DENIED failure whose text happens to contain "not exist" is still denied.
+    const trap = classifyListFailure(restError(403, 'AuthorizationFailure'), 'landing', 'does not exist');
+    expect(trap.body.kind).toBe('denied');
+    expect(trap.status).toBe(403);
+  });
 });
 
 describe('item-bound resolution', () => {
   it('resolves the lakehouse root and echoes the binding back to the client', async () => {
-    (resolveItemAccessByOid as any).mockResolvedValue({ item: { id: 'lh-1', workspaceId: 'ws-1' } });
+    // THE TWO WORKSPACE IDS DIFFER ON PURPOSE. The route must resolve against
+    // the workspace the ITEM actually lives in (the authorization result), not
+    // the one the caller typed. With both set to 'ws-1' — as this fixture
+    // originally had them — swapping `access.item.workspaceId` for
+    // `sp.get('workspaceId')` left the suite green, i.e. the spec could not
+    // discriminate between the safe and the unsafe input. Test where the two
+    // inputs can actually differ.
+    (resolveItemAccessByOid as any).mockResolvedValue({ item: { id: 'lh-1', workspaceId: 'ws-owning' } });
     (resolveLakehouseAbfss as any).mockResolvedValue({
       abfss: 'abfss://landing@acct.dfs.core.windows.net/lakehouses/Foo',
       container: 'landing',
@@ -125,11 +174,14 @@ describe('item-bound resolution', () => {
     });
     (listPaths as any).mockResolvedValue([{ name: 'lakehouses/Foo/Tables', isDirectory: true, size: 0 }]);
 
-    const res = await GET(req('lakehouseId=lh-1&workspaceId=ws-1'), undefined as any);
+    const res = await GET(req('lakehouseId=lh-1&workspaceId=ws-caller-supplied'), undefined as any);
     const body = await res.json();
 
     expect(res.status).toBe(200);
     expect(body).toMatchObject({ ok: true, container: 'landing', root: 'lakehouses/Foo', prefix: 'lakehouses/Foo' });
+    // Resolved against the item's OWN partition, never the caller's parameter.
+    expect(resolveLakehouseAbfss).toHaveBeenCalledWith('lh-1', 'ws-owning');
+    expect(resolveLakehouseAbfss).not.toHaveBeenCalledWith('lh-1', 'ws-caller-supplied');
     // It listed the LAKEHOUSE root, not the container root.
     expect(listPaths).toHaveBeenCalledWith('landing', 'lakehouses/Foo', 200);
   });

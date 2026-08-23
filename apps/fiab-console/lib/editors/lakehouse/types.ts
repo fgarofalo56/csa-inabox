@@ -92,6 +92,17 @@ export interface DaAgentRow { id: string; displayName: string; state?: { sources
 // ---- Live Catalog ----
 export interface LiveCatalogTable {
   schema: string; name: string; adlsPath: string; bulkUrl: string;
+  /**
+   * `adlsPath` with its leading `<container>/` removed (#3904).
+   *
+   * `scanLakehouseTables` returns `adlsPath` as `<container>/<root>/Tables/<name>`,
+   * while `/api/lakehouse/{preview,history}` take a container PLUS a
+   * container-relative path — so handing them `adlsPath` asked for
+   * `landing/landing/lakehouses/…`. Derived ONCE, where the catalog response is
+   * read, so no call site has to remember to strip it. Populated by the editor,
+   * never by the BFF; `adlsPath` stays intact for display and Copy path.
+   */
+  relPath?: string;
   format: 'delta' | 'parquet' | 'unknown';
   status: 'ok' | 'empty' | 'broken';
   latestVersion: number | null;

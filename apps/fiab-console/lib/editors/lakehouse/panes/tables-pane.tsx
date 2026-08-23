@@ -14,7 +14,6 @@ import {
 import { GuidedEmptyState } from '@/lib/components/shared/guided-empty-state';
 import { useStyles, formatBytes, leafName } from '../shared';
 import { useLakehouseCtx } from '../lakehouse-editor-context';
-import { containerRelativePath } from '../lakehouse-binding';
 import type { LiveCatalogTable } from '../types';
 import type { PathEntry } from '../shared';
 
@@ -350,8 +349,19 @@ export function TablesPane() {
                                 disabled={t.format !== 'delta'}
                                 icon={<Eye20Regular />}
                                 title={t.format !== 'delta' ? 'Preview available for Delta tables' : 'Sample 1,000 rows'}
-                                onClick={() => previewTable(containerRelativePath(t.schema || activeContainer, t.adlsPath))}>
+                                onClick={() => previewTable(t.relPath ?? '')}>
                                 Preview
+                              </Button>
+                              {/* Time travel was reachable ONLY through the
+                                  explorer tree's hover menu here, while the
+                                  schema-enabled branch below has had a row
+                                  button all along. Same action, same row. */}
+                              <Button size="small" appearance="outline"
+                                icon={<History20Regular />}
+                                disabled={typeof t.latestVersion !== 'number'}
+                                title={typeof t.latestVersion !== 'number' ? 'No Delta commit log to time-travel' : 'Delta version history'}
+                                onClick={() => openTableHistory(t.relPath ?? '')}>
+                                History
                               </Button>
                               <Button size="small" appearance="outline"
                                 disabled={t.format !== 'delta'}

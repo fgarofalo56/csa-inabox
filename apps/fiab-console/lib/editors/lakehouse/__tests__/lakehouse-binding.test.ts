@@ -9,8 +9,9 @@
  */
 import { describe, it, expect } from 'vitest';
 import {
-  bindingFromItemState, joinPrefix, relativeToRoot, containerRelativePath,
+  bindingFromItemState, joinPrefix, relativeToRoot, containerRelativePath, isClientKnownContainer,
 } from '../lakehouse-binding';
+import { KNOWN_CONTAINERS } from '@/lib/azure/adls-client';
 
 const item = (secondaryIds: Record<string, unknown>) => ({
   id: 'lh-1',
@@ -59,6 +60,38 @@ describe('bindingFromItemState', () => {
       container: 'bronze',
       rootPath: 'lakehouses/Y',
     }))).toEqual({ container: 'bronze', root: 'lakehouses/Y', source: 'secondaryIds' });
+  });
+
+  it('defers to the SERVER for a container the DLZ does not serve', () => {
+    // `resolveLakehouseAbfss` step 2 is gated on isKnownContainer, and its step
+    // 2b handles a lakehouse on an external storage account. Resolving such a
+    // container here would send the editor to `/api/lakehouse/paths?container=…`,
+    // which rejects it — a raw "unknown container" instead of the server's
+    // answer. Returning null routes it to the server, which CAN resolve it.
+    expect(bindingFromItemState(item({
+      container: 'customer-owned', rootPath: 'lakehouses/Z',
+    }))).toBeNull();
+    expect(bindingFromItemState(item({
+      adlsRoot: 'abfss://customer-owned@theiraccount.dfs.core.windows.net/lakehouses/Z',
+    }))).toBeNull();
+  });
+});
+
+describe('isClientKnownContainer — drift guard', () => {
+  it('mirrors adls-client KNOWN_CONTAINERS exactly', () => {
+    // The client bundle cannot import adls-client (it pulls in the credential
+    // chain), so the container list is duplicated in lakehouse-binding.ts. This
+    // spec runs in node, CAN import the real one, and fails the moment the two
+    // disagree — so a container added to the DLZ and not mirrored here is a red
+    // test rather than a lakehouse the editor silently refuses to bind.
+    for (const c of KNOWN_CONTAINERS) {
+      expect(isClientKnownContainer(c), `${c} is served by the DLZ but unknown to the editor`).toBe(true);
+    }
+    // …and nothing beyond it. Enumerated rather than compared as a set so the
+    // failure names the offender.
+    for (const c of ['customer-owned', 'onelake', '', 'Bronze']) {
+      expect(isClientKnownContainer(c), `${c} is not a DLZ container`).toBe(false);
+    }
   });
 });
 

@@ -26,12 +26,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { clientFetch } from '@/lib/client-fetch';
 import { parseJsonOrError } from '../shared';
-import type { ContainerInfo, PathEntry } from '../shared';
+import type { ContainerInfo, ListingError, PathEntry } from '../shared';
 import type { WorkspaceItem } from '@/lib/api/workspaces';
 import type { UseQueryResult } from '@tanstack/react-query';
 import { bindingFromItemState, joinPrefix, type LakehouseBinding } from '../lakehouse-binding';
 
-type PrefixCache = Record<string, PathEntry[] | 'loading' | { error: string; remediation?: string }>;
+type PrefixCache = Record<string, PathEntry[] | 'loading' | ListingError>;
 
 interface Params {
   id: string;
