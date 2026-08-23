@@ -222,11 +222,40 @@ export function pickTablesEngine(): ShortcutEngine | null {
 }
 
 /**
- * The ONE schema Synapse shortcut views are created in. Named rather than
- * repeated so `synapseObject` (the mint) and `isMintedEngineObject` (the guard)
+ * The schema `synapseObject` (this module's mint) creates shortcut views in.
+ * Named rather than repeated so the mint and `isMintedEngineObject` (the guard)
  * cannot drift: a change here moves both at once.
  */
 const SYNAPSE_SHORTCUT_SCHEMA = 'shortcuts';
+
+/**
+ * EVERY schema, inside this deployment's own serverless DB, that Loom mints
+ * shortcut engine objects into — the guard's Synapse allow-set.
+ *
+ * There is more than one mint, and the guard is only correct if it knows about
+ * all of them. Enumerated, with the site that produces each:
+ *
+ *   `shortcuts`  `synapseObject()` in THIS file — the lakehouse-shortcut route's
+ *                Tables registration (`registerTablesObject`).
+ *   `lakehouse`  `lib/install/provisioners/lakehouse.ts` — the content-install
+ *                path mints `lakehouse.<leaf>` for repo-dataset shortcuts and
+ *                creates that schema itself
+ *                (`IF SCHEMA_ID('lakehouse') IS NULL EXEC('CREATE SCHEMA lakehouse')`).
+ *
+ * WHY THIS LIST AND NOT A WILDCARD. Both entries are LITERAL schema names in
+ * Loom's own `serverlessDb()`. The caller never picks the database and never
+ * picks the schema, so widening from one literal to two literals does not let
+ * item state select an object outside the space Loom itself creates. A wildcard
+ * `<db>.<anything>.<obj>` would: `dbo`, `sys` and `information_schema` all live
+ * in the same database, and admitting them is exactly the #3611 hole.
+ *
+ * A NEW MINT MUST BE ADDED HERE. Omitting one does not fail safe — it makes the
+ * guard refuse an object Loom really created, which orphans that object at the
+ * DROP sink and flips the shortcut to `error` at the test sink. That is the
+ * failure this constant exists to prevent: `lakehouse.<leaf>` was minted by the
+ * provisioner and refused by the guard until it was added here.
+ */
+const SYNAPSE_MINTED_SCHEMAS: readonly string[] = [SYNAPSE_SHORTCUT_SCHEMA, 'lakehouse'];
 
 /** The ONE Unity Catalog catalog Databricks shortcut tables are created in. */
 const UC_CATALOG = 'loom';
@@ -251,9 +280,22 @@ function synapseObject(name: string): string {
  * the SECURITY guard depend on whether the env var happened to be set before
  * this module was first imported. Same reasoning, and same shape, as
  * `kv-secret-purpose.ts:envConfiguredSecretNames`.
+ *
+ * SANITIZED with the same expression the leaf mint uses, for one reason: the
+ * guard requires every part of an engine object to match `/^[A-Za-z0-9_]+$/`,
+ * and this value becomes `parts[0]` of every 3-part Synapse mint. An operator
+ * value that is not a bare identifier (`loom-lakehouse`, `Loom.Lakehouse`,
+ * `loom lakehouse`) would otherwise mint names the guard refuses — refusing
+ * 100% of this deployment's own objects while looking configured. Sanitizing in
+ * ONE place keeps `synapseQualified` (mint), `ensureServerlessDb` (CREATE
+ * DATABASE), `dropShortcutObject` (the 2-part fallback DB) and the guard on the
+ * same string by construction, so they cannot disagree about what the DB is
+ * called.
  */
 function serverlessDb(): string {
-  return (process.env.LOOM_SERVERLESS_DB || '').trim() || 'loom_lakehouse';
+  const raw = (process.env.LOOM_SERVERLESS_DB || '').trim();
+  if (!raw) return 'loom_lakehouse';
+  return raw.replace(/[^a-z0-9_]+/gi, '_') || 'loom_lakehouse';
 }
 
 /** 3-part `<db>.schema.object` so the view is queryable cross-database. */
@@ -279,9 +321,12 @@ async function ensureServerlessDb(): Promise<void> {
  * objects? This is the predicate every sink that interpolates the value into SQL
  * must pass it through.
  *
- * It lives HERE, beside the three functions that mint the name, so the allow-set
- * and the mint cannot drift apart. The minted shapes are, verbatim from those
- * functions:
+ * It lives HERE, beside `synapseObject` / `synapseQualified` / `ucObject`, so
+ * that those mints and the allow-set move together. It is NOT true that every
+ * mint is in this file: `lib/install/provisioners/lakehouse.ts` mints
+ * `lakehouse.<leaf>` on the content-install path. `SYNAPSE_MINTED_SCHEMAS`
+ * above is the enumeration of record, and a mint added anywhere in the codebase
+ * has to be added to it. The shapes accepted today:
  *
  *   synapse      `synapseQualified(synapseObject(name))`
  *                = `<serverlessDb()>.shortcuts.<leaf>` — the database is this
@@ -289,13 +334,22 @@ async function ensureServerlessDb(): Promise<void> {
  *                  `loom_lakehouse`); the schema is the LITERAL `shortcuts`;
  *                  `<leaf>` is `name.replace(/[^a-z0-9_]+/gi,'_')`, so
  *                  `[A-Za-z0-9_]+` and nothing else.
- *   synapse      a 2-part `shortcuts.<leaf>` row predating the cross-database
- *   (legacy)     qualification. `dropShortcutObject` still handles that arity
- *                  explicitly (it substitutes the serverless DB), so refusing it
- *                  here would orphan those views rather than protect anything.
+ *   synapse      `lakehouse.<leaf>` from the install provisioner, which creates
+ *   (install)      the `lakehouse` schema itself in the same serverless DB.
+ *   synapse      a 2-part row predating the cross-database qualification.
+ *   (legacy)     `dropShortcutObject` still handles that arity explicitly (it
+ *                  substitutes the serverless DB), so refusing it here would
+ *                  orphan those views rather than protect anything.
  *   databricks   `ucObject(lakehouseId, name)` = `loom.<schema>.<table>` — the
  *                  catalog is the LITERAL `loom`; both remaining parts are
  *                  `.replace(/[^a-z0-9_]+/gi,'_').toLowerCase()`.
+ *
+ * KNOWN BOUND, stated because a green test here does not establish it away: on
+ * the Databricks arm only `parts[0]` is constrained, so any `loom.<x>.<y>` is
+ * accepted — including `loom.information_schema.tables`. The schema part is
+ * derived from a caller-independent lakehouse id at mint time, so constraining
+ * it needs that id at the sink, which these functions do not receive. Tracked
+ * as a follow-up, not closed here.
  *
  * WHY A NAME-SPACE CHECK AND NOT AN IDENTIFIER CHECK. The previous revision of
  * this guard tested only "is this a well-formed 1–3 part identifier", and the
@@ -325,9 +379,10 @@ export function isMintedEngineObject(v: unknown, engine?: ShortcutEngine | 'none
   const wantDatabricks = !engine || engine === 'databricks';
 
   if (wantSynapse) {
-    // 3-part `<serverlessDb()>.shortcuts.<leaf>`, or legacy 2-part `shortcuts.<leaf>`.
-    if (parts.length === 3 && parts[0] === serverlessDb() && parts[1] === SYNAPSE_SHORTCUT_SCHEMA) return true;
-    if (parts.length === 2 && parts[0] === SYNAPSE_SHORTCUT_SCHEMA) return true;
+    // 3-part `<serverlessDb()>.<minted schema>.<leaf>`, or a legacy/provisioner
+    // 2-part `<minted schema>.<leaf>` that resolves to the same DB.
+    if (parts.length === 3 && parts[0] === serverlessDb() && SYNAPSE_MINTED_SCHEMAS.includes(parts[1])) return true;
+    if (parts.length === 2 && SYNAPSE_MINTED_SCHEMAS.includes(parts[0])) return true;
   }
   if (wantDatabricks) {
     // 3-part `loom.<schema>.<table>`, lower-cased by ucObject.
@@ -351,7 +406,8 @@ export class EngineObjectNamespaceError extends Error {
   constructor(public readonly engineObject: string) {
     super(
       `"${engineObject}" is outside the name-space Loom registers shortcut engine objects into ` +
-        `(\`${serverlessDb()}.${SYNAPSE_SHORTCUT_SCHEMA}.<name>\` on Synapse, \`${UC_CATALOG}.<schema>.<table>\` on ` +
+        `(\`${serverlessDb()}.{${SYNAPSE_MINTED_SCHEMAS.join('|')}}.<name>\` on Synapse, ` +
+        `\`${UC_CATALOG}.<schema>.<table>\` on ` +
         'Databricks), so it is refused before it reaches the query engine. Recreate the shortcut ' +
         '(kind=tables) to re-register it.',
     );

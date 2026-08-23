@@ -105,17 +105,19 @@ function mayDeleteShortcutSecret(name: unknown): name is string {
 /**
  * #3611 — may this route interpolate `state.engineObject` into SQL?
  *
- * Delegates to `isMintedEngineObject`, which lives beside the three functions
- * that MINT the name (`synapseObject` / `synapseQualified` / `ucObject`) so the
- * allow-set and the mint cannot drift. There is exactly ONE definition of the
- * policy in the codebase; this is a re-export for readability at the call sites
- * below, not a second copy.
+ * Delegates to `isMintedEngineObject`, which lives beside this module's mints
+ * (`synapseObject` / `synapseQualified` / `ucObject`) and carries the
+ * enumeration of every minted schema (`SYNAPSE_MINTED_SCHEMAS`). There is
+ * exactly ONE definition of the policy in the codebase; this is a re-export for
+ * readability at the call sites below, not a second copy.
  *
  * WHAT THIS ESTABLISHES, precisely: that the stored name is inside the
  * name-space Loom registers shortcut engine objects into — `<LOOM_SERVERLESS_DB
- * (default loom_lakehouse)>.shortcuts.<leaf>` on Synapse (or a legacy 2-part
- * `shortcuts.<leaf>`), `loom.<schema>.<table>` on Databricks. It does NOT
- * establish who wrote the value, or that Loom created the underlying object.
+ * (default loom_lakehouse)>.<shortcuts|lakehouse>.<leaf>` on Synapse (or the
+ * 2-part form of the same), `loom.<schema>.<table>` on Databricks. It does NOT
+ * establish who wrote the value, or that Loom created the underlying object,
+ * and it is an ENUMERATION — a mint that is not listed there is refused, which
+ * is why the DELETE path reports a refusal instead of passing over it.
  *
  * THE PREVIOUS REVISION OF THIS CHECK WAS WEAKER THAN ITS COMMENT CLAIMED. It
  * tested only "well-formed 1–3 part identifier" while asserting it was "the
@@ -601,13 +603,14 @@ export async function DELETE(req: NextRequest) {
     if (!row) return NextResponse.json({ ok: true });
     if (row.itemType !== 'lakehouse-shortcut') return err('shortcut not found', 404);
 
-    // Best-effort side effects: drop the engine object + delete its KV secret.
-    // The engine object (Synapse view / UC table) is dropped — NEVER the
-    // underlying source bytes (matches UC/Fabric semantics). A failure here must
-    // not strand the user's own pointer, so it is swallowed; a REFUSAL by one of
-    // the name-space guards is swallowed by the same catch, which is correct —
-    // the refusal means the side effect must not happen, not that the delete
-    // must fail.
+    // Side effects: drop the engine object + delete its KV secret. The engine
+    // object (Synapse view / UC table) is dropped — NEVER the underlying source
+    // bytes (matches UC/Fabric semantics). A failure here must not strand the
+    // user's own pointer, so the pointer delete still happens; but per
+    // deploy-integrity R7 the RESPONSE must not report a side effect that did
+    // not occur. `engineObjectDropped` carries what actually happened.
+    let engineObjectDropped: boolean | undefined;
+    let engineObjectNote: string | undefined;
     try {
       const st = (row.state as any) || {};
       // #3611 — `engineObject` is interpolated into DROP and, on the Synapse
@@ -616,13 +619,37 @@ export async function DELETE(req: NextRequest) {
       // that fails this check is orphaned in the engine rather than dropped.
       // That trade is deliberate — an orphaned view costs catalog metadata,
       // whereas dropping an object this surface never registered destroys
-      // someone else's data. The check accepts the FULL minted space (see
-      // `isMintedEngineObject`: digit-headed leaves and legacy 2-part rows
-      // included), so the trade is not being made against Loom's own objects.
-      if (st.engine && st.engine !== 'none' && isSafeEngineObject(st.engineObject, st.engine)) {
-        await dropShortcutObject({ engine: st.engine, engineObject: st.engineObject }).catch(() => { /* already-dropped/missing must not block */ });
-        if ((st.sourceType === 's3' || st.sourceType === 'gcs') && st.engine === 'databricks') {
-          await dropExternalBinding(`sc_${id.slice(0, 8)}`, `${id.slice(0, 8)}_${row.displayName || ''}`).catch(() => { /* best-effort */ });
+      // someone else's data.
+      //
+      // The allow-set is `SYNAPSE_MINTED_SCHEMAS` + the UC catalog, NOT "every
+      // object Loom could have made": it is an enumeration, and an unlisted mint
+      // is refused. That is why a refusal is REPORTED below rather than passed
+      // over in silence — a wrong entry in that list shows up here as a visible
+      // orphan instead of a silent one. (`lakehouse.<leaf>`, minted by the
+      // install provisioner, was exactly that miss.)
+      if (st.engine && st.engine !== 'none' && st.engineObject) {
+        if (isSafeEngineObject(st.engineObject, st.engine)) {
+          try {
+            await dropShortcutObject({ engine: st.engine, engineObject: st.engineObject });
+            engineObjectDropped = true;
+          } catch {
+            // Already-dropped/missing/transient must not block the pointer
+            // delete — but it is not a success either, so say so.
+            engineObjectDropped = false;
+            engineObjectNote =
+              'The pointer was deleted. Dropping the engine object did not complete, so it may still ' +
+              'exist in the query engine; re-running the delete is safe and will retry it.';
+          }
+          if ((st.sourceType === 's3' || st.sourceType === 'gcs') && st.engine === 'databricks') {
+            await dropExternalBinding(`sc_${id.slice(0, 8)}`, `${id.slice(0, 8)}_${row.displayName || ''}`).catch(() => { /* best-effort */ });
+          }
+        } else {
+          // R7 — state only what was established: the stored name is outside the
+          // enumerated name-space. That does NOT establish who wrote it.
+          engineObjectDropped = false;
+          engineObjectNote =
+            "The pointer was deleted. Its stored engine object is outside the name-space Loom registers " +
+            'shortcut engine objects into, so it was NOT dropped and is left in place in the query engine.';
         }
       }
       // #3611 — only ever delete a secret inside the shortcut name-space. A
@@ -631,7 +658,11 @@ export async function DELETE(req: NextRequest) {
       if (mayDeleteShortcutSecret(st.secretRef)) await deleteShortcutSecret(st.secretRef);
     } catch { /* proceed to delete the pointer regardless */ }
     await items.item(id, workspaceId).delete();
-    return NextResponse.json({ ok: true });
+    return NextResponse.json(
+      engineObjectDropped === false
+        ? { ok: true, engineObjectDropped: false, engineObjectNote }
+        : { ok: true },
+    );
   } catch (e: any) {
     if (e?.code === 404) return NextResponse.json({ ok: true });
     return err(sanitize(e), 500);

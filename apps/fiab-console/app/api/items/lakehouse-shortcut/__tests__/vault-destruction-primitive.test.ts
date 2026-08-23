@@ -545,3 +545,88 @@ describe('#3611 — the secret guard is an allow-list, not a deny-list', () => {
     expect(deleteShortcutSecret).not.toHaveBeenCalled();
   });
 });
+
+/**
+ * #3611 (review round 3) — DELETE must not report a side effect that did not
+ * happen (deploy-integrity R7).
+ *
+ * The refusal path is REAL, not hypothetical: the allow-set is an enumeration,
+ * and until this round it omitted the install provisioner's `lakehouse.<leaf>`
+ * mint. Every content-installed shortcut therefore hit the else-branch — the
+ * Synapse view was left behind and the response was a bare `{ok:true}`. An
+ * orphan the caller is told about is a cost; an orphan the caller is told did
+ * not happen is a lie, and it is what makes a wrong allow-set entry invisible.
+ *
+ * The pointer delete itself stays unconditional either way — stranding a user's
+ * own row because a side effect failed would be the worse outcome.
+ */
+describe('#3611 — DELETE reports whether the engine object was actually dropped', () => {
+  it('says nothing extra when the drop SUCCEEDED', async () => {
+    seedShortcut('h1', { kind: 'tables', engine: 'synapse', engineObject: 'loom_lakehouse.shortcuts.sc_ok' });
+
+    const res = await DELETE(delReq('workspaceId=ws1&id=h1'));
+    const body = await res.json();
+
+    expect(dropShortcutObject).toHaveBeenCalled();
+    expect(body.ok).toBe(true);
+    // Absent, not `true` — a caller reading only `ok` must not be handed a
+    // field that only ever appears on the sad path.
+    expect(body).not.toHaveProperty('engineObjectDropped');
+    expect(store.has('h1')).toBe(false);
+  });
+
+  it('reports engineObjectDropped:false when the guard REFUSED the name', async () => {
+    seedShortcut('h2', { kind: 'tables', engine: 'synapse', engineObject: 'finance_db.dbo.payroll' });
+
+    const res = await DELETE(delReq('workspaceId=ws1&id=h2'));
+    const body = await res.json();
+
+    expect(dropShortcutObject).not.toHaveBeenCalled();
+    expect(body.ok).toBe(true);
+    expect(body.engineObjectDropped).toBe(false);
+    expect(String(body.engineObjectNote)).toContain('was NOT dropped');
+    // The pointer is still gone — the refusal must not strand the user's row.
+    expect(store.has('h2')).toBe(false);
+  });
+
+  it('reports engineObjectDropped:false when the drop THREW', async () => {
+    // A distinct branch from the refusal: the name was admitted and the sink was
+    // reached, but the engine call failed. Both must be reported, and an earlier
+    // revision reported neither.
+    (dropShortcutObject as any).mockRejectedValueOnce(new Error('engine unreachable'));
+    seedShortcut('h3', { kind: 'tables', engine: 'synapse', engineObject: 'loom_lakehouse.shortcuts.sc_ok' });
+
+    const res = await DELETE(delReq('workspaceId=ws1&id=h3'));
+    const body = await res.json();
+
+    expect(dropShortcutObject).toHaveBeenCalled();
+    expect(body.ok).toBe(true);
+    expect(body.engineObjectDropped).toBe(false);
+    expect(String(body.engineObjectNote)).toContain('did not complete');
+    expect(store.has('h3')).toBe(false);
+  });
+
+  it('says nothing extra for a Files shortcut, which has no engine object at all', async () => {
+    seedShortcut('h4', { kind: 'files', sourceType: 'internal' });
+
+    const res = await DELETE(delReq('workspaceId=ws1&id=h4'));
+    const body = await res.json();
+
+    expect(dropShortcutObject).not.toHaveBeenCalled();
+    expect(body.ok).toBe(true);
+    // "Nothing to drop" is NOT "the drop failed".
+    expect(body).not.toHaveProperty('engineObjectDropped');
+  });
+
+  it('the provisioner mint now takes the SUCCESS branch (this was the live orphan)', async () => {
+    seedShortcut('h5', { kind: 'tables', engine: 'synapse', engineObject: 'lakehouse.shortcut_nyc_taxi' });
+
+    const res = await DELETE(delReq('workspaceId=ws1&id=h5'));
+    const body = await res.json();
+
+    expect(dropShortcutObject).toHaveBeenCalledWith({
+      engine: 'synapse', engineObject: 'lakehouse.shortcut_nyc_taxi',
+    });
+    expect(body).not.toHaveProperty('engineObjectDropped');
+  });
+});

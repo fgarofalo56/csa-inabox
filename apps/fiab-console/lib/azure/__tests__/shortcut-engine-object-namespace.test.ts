@@ -5,25 +5,38 @@
  * pins the ROUTE. It mocks `@/lib/azure/shortcut-engines`, so it cannot say
  * anything about the functions that actually build the SQL. This file pins those.
  *
- * WHY IT HAS TO EXIST SEPARATELY — counted, not estimated. `engineObject` is
- * interpolated into SQL at EIGHT places:
+ * WHY IT HAS TO EXIST SEPARATELY — counted with
+ * `rg -n "\b(dropShortcutObject|testEngineObject)\(" apps/fiab-console`, then the
+ * two non-helper sinks added by hand. `engineObject` reaches SQL from TEN caller
+ * sites:
  *
  *   dropShortcutObject (4 callers)
- *     app/api/items/lakehouse-shortcut/route.ts:623
+ *     app/api/items/lakehouse-shortcut/route.ts
  *     app/api/items/[type]/[id]/shortcuts/[name]/route.ts:54
  *     app/api/items/[type]/[id]/shortcuts/[name]/route.ts:125
  *     app/api/lakehouse/shortcuts/route.ts:346
- *   testEngineObject (3 callers)
+ *   testEngineObject (4 callers)
  *     app/api/lakehouse/shortcuts/test/route.ts:93, :113, :161
- *   and the inline `SELECT TOP n * FROM ${obj}` in the lakehouse-shortcut
- *     POST action=query path.
+ *     lib/azure/shortcut-client.ts:204        ← the one an earlier revision of
+ *                                               this docblock missed while
+ *                                               asserting the list was complete
+ *   the inline `SELECT TOP n * FROM ${obj}` in the lakehouse-shortcut
+ *     POST action=query path
+ *   lib/foundry/ontology-resolver.ts:190 — `buildSqlSelect(engineObject, …)`
  *
- * The ROUTE-level `isSafeEngineObject` covers exactly TWO of those eight (the
- * DELETE call and the query). Putting the assertion inside the two helpers
- * covers the other seven — and covers a ninth call site added later without
- * anyone remembering to. Each one builds `DROP VIEW` / `DROP TABLE` /
- * `SELECT TOP 1 * FROM` / `SELECT * FROM … LIMIT 1` and runs it as the Console
- * UAMI, a Synapse SQL admin.
+ * Coverage of those ten, stated as it actually is:
+ *   - 8 go through `dropShortcutObject` / `testEngineObject`, which call
+ *     `assertMintedEngineObject` INTERNALLY. That is what this file pins, and it
+ *     is why a ninth caller of either helper is covered the day it is written.
+ *   - 1 (the inline query) is covered by the ROUTE-level `isSafeEngineObject`.
+ *   - 1 (`ontology-resolver.ts:190`) is NOT covered by either. It validates only
+ *     against a shape regex (`SQL_REF_RE` in lib/foundry/ontology-binding.ts),
+ *     which is the same identifier-shaped check this guard replaced — so
+ *     `master.sys.sql_logins` passes it. Different item type, same primitive.
+ *     Open, tracked as a follow-up; do not read this file as covering it.
+ *
+ * Each covered site builds `DROP VIEW` / `DROP TABLE` / `SELECT TOP 1 * FROM` /
+ * `SELECT * FROM … LIMIT 1` and runs it as the Console UAMI, a Synapse SQL admin.
  *
  * Every case here drives the REAL `dropShortcutObject` / `testEngineObject`.
  * Only the Azure egress (`executeQuery`, `executeStatement`) is mocked, so the
@@ -73,6 +86,12 @@ const INSIDE_NAMESPACE: Array<[string, 'synapse' | 'databricks']> = [
   ['loom_lakehouse.shortcuts.sc_abc12345', 'synapse'],
   ['loom_lakehouse.shortcuts.4f0278c7_MyShortcut', 'synapse'], // digit-headed leaf
   ['shortcuts.legacy_two_part', 'synapse'],                     // pre-qualification row
+  // The install provisioner's mint (lib/install/provisioners/lakehouse.ts):
+  // `lakehouse.<leaf>`, in a schema that path CREATEs itself. Refusing these
+  // orphaned every content-installed shortcut view at the DROP sink and flipped
+  // the shortcut to status='error' at the test sink.
+  ['lakehouse.shortcut_nyc_taxi', 'synapse'],
+  ['loom_lakehouse.lakehouse.shortcut_sales', 'synapse'],
   ['loom.sc_abc12345.mytable', 'databricks'],
 ];
 
@@ -228,5 +247,104 @@ describe('#3611 — isMintedEngineObject, the one definition of the policy', () 
     // than passing the engine, which is why the callers all pass it.
     expect(isMintedEngineObject('loom.dbo.payroll')).toBe(true);
     expect(isMintedEngineObject('loom_lakehouse.shortcuts.x')).toBe(true);
+  });
+});
+
+/**
+ * The allow-set is an ENUMERATION of mints (`SYNAPSE_MINTED_SCHEMAS`), and the
+ * failure mode of an enumeration is a MISSING entry — which does not fail safe.
+ * It refuses an object Loom itself created, orphaning it at the DROP sink and
+ * flipping the shortcut to `error` at the test sink. `lakehouse.<leaf>` was that
+ * miss. These pin the second entry AND pin that adding it widened nothing else.
+ */
+describe('#3611 — the provisioner mint `lakehouse.<leaf>` is inside the name-space', () => {
+  // Leaves as the provisioner actually builds them:
+  //   `shortcut_${safeRelPath(name)}`.replace(/[^A-Za-z0-9_]/g, '_')
+  const PROVISIONER_LEAVES = ['shortcut_sales', 'shortcut_nyc_taxi', 'shortcut_Contoso_Retail', 'shortcut_orders_2024'];
+
+  for (const leaf of PROVISIONER_LEAVES) {
+    it(`accepts 2-part "lakehouse.${leaf}" and DROPs it in the serverless DB`, async () => {
+      expect(isMintedEngineObject(`lakehouse.${leaf}`, 'synapse')).toBe(true);
+
+      await dropShortcutObject({ engine: 'synapse', engineObject: `lakehouse.${leaf}` });
+      expect(executeQuery).toHaveBeenCalledTimes(1);
+      const [target, sql] = (executeQuery as any).mock.calls[0];
+      // A 2-part name substitutes the serverless DB — assert WHICH database,
+      // because "which database" was half the original defect.
+      expect(target).toEqual({ db: 'loom_lakehouse' });
+      expect(String(sql)).toContain(`DROP VIEW lakehouse.${leaf}`);
+    });
+  }
+
+  it('accepts the 3-part qualification of the same schema', () => {
+    expect(isMintedEngineObject('loom_lakehouse.lakehouse.shortcut_sales', 'synapse')).toBe(true);
+  });
+
+  it('admitting `lakehouse` opened NO other schema in the same database', () => {
+    // The whole risk of widening a literal allow-set is that it widens past the
+    // literal. Every one of these lives in the SAME database the mint uses.
+    for (const schema of ['dbo', 'sys', 'information_schema', 'guest', 'shortcuts_evil', 'lakehouse_evil', 'Lakehouse']) {
+      expect(isMintedEngineObject(`loom_lakehouse.${schema}.v`, 'synapse'), `3-part ${schema}`).toBe(false);
+      expect(isMintedEngineObject(`${schema}.v`, 'synapse'), `2-part ${schema}`).toBe(false);
+    }
+    // ...and it did not widen the arity or the character class either.
+    expect(isMintedEngineObject('lakehouse.v; DROP DATABASE loom--', 'synapse')).toBe(false);
+    expect(isMintedEngineObject('lakehouse.a.b.c', 'synapse')).toBe(false);
+    expect(isMintedEngineObject('other_db.lakehouse.v', 'synapse')).toBe(false);
+  });
+});
+
+/**
+ * NEW-4 — `LOOM_SERVERLESS_DB` is operator-supplied and nothing else validates
+ * it. The guard requires every part to match `/^[A-Za-z0-9_]+$/` and this value
+ * becomes `parts[0]` of every 3-part mint, so an unsanitized non-identifier
+ * value made the mint produce names the guard refused — refusing 100% of the
+ * deployment's own objects while looking configured.
+ */
+describe('#3611 — a non-identifier LOOM_SERVERLESS_DB cannot desync mint and guard', () => {
+  for (const raw of ['loom-lakehouse', 'Loom.Lakehouse', 'loom lakehouse', 'loom$lakehouse']) {
+    it(`sanitizes ${JSON.stringify(raw)} so the minted object is still accepted`, async () => {
+      process.env.LOOM_SERVERLESS_DB = raw;
+      try {
+        const sanitized = raw.replace(/[^a-z0-9_]+/gi, '_');
+        // The guard follows the SANITIZED database name...
+        expect(isMintedEngineObject(`${sanitized}.shortcuts.sc_x`, 'synapse')).toBe(true);
+        // ...and the raw value is not silently also accepted.
+        expect(isMintedEngineObject(`${raw}.shortcuts.sc_x`, 'synapse')).toBe(false);
+
+        // The SINK agrees with the guard — this is the property that matters:
+        // the DROP runs against the same database name the guard admitted.
+        await dropShortcutObject({ engine: 'synapse', engineObject: `${sanitized}.shortcuts.sc_x` });
+        expect((executeQuery as any).mock.calls[0][0]).toEqual({ db: sanitized });
+      } finally {
+        delete process.env.LOOM_SERVERLESS_DB;
+      }
+    });
+  }
+
+  it('never yields an EMPTY database name, which would refuse everything', () => {
+    // An empty `parts[0]` is unmatchable, so it would refuse 100% of this
+    // deployment's own objects. Two distinct paths have to be checked, because
+    // only ONE of them reaches the `|| 'loom_lakehouse'` fallback:
+    //   - all-whitespace trims to '' and DOES hit the fallback;
+    //   - all-separator does NOT — `[^a-z0-9_]+` collapses the run to '_',
+    //     which is itself a legal identifier. (Written the other way round
+    //     first, and this assertion is what caught it.)
+    const cases: Array<[string, string]> = [
+      ['---', '_'],
+      ['...', '_'],
+      ['   ', 'loom_lakehouse'], // trims to empty → fallback
+      ['   spaced   ', 'spaced'], // trim happens BEFORE the replace
+      ['_', '_'],
+    ];
+    for (const [raw, expected] of cases) {
+      process.env.LOOM_SERVERLESS_DB = raw;
+      try {
+        expect(expected).toMatch(/^[A-Za-z0-9_]+$/);
+        expect(isMintedEngineObject(`${expected}.shortcuts.sc_x`, 'synapse'), `${JSON.stringify(raw)} → ${expected}`).toBe(true);
+      } finally {
+        delete process.env.LOOM_SERVERLESS_DB;
+      }
+    }
   });
 });
