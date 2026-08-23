@@ -453,43 +453,160 @@ export async function listMetastoresFromWorkspace(host: string): Promise<UCMetas
   }));
 }
 
+/** Error `name`s that are, on their own, proof a request was attempted and the
+ *  TRANSPORT failed. `FetchTimeoutError` is our own (fetch-with-timeout.ts);
+ *  `AbortError` / `TimeoutError` are what an aborted `fetch` surfaces. */
+const TRANSPORT_ERROR_NAMES = new Set(['FetchTimeoutError', 'AbortError', 'TimeoutError']);
+
+/** Network errno / undici codes. Node's `fetch` reports these on `err.cause.code`
+ *  and stringifies them into the message when a client re-wraps. Anchored on the
+ *  CODE TOKENS rather than on prose so a reworded message cannot silently turn a
+ *  transport failure into "cause not established" (or the reverse). */
+const TRANSPORT_CODE_RE =
+  /\b(?:ECONNREFUSED|ECONNRESET|ENOTFOUND|EAI_AGAIN|EHOSTUNREACH|ENETUNREACH|ETIMEDOUT|EPIPE|EPROTO|UND_ERR_(?:CONNECT_TIMEOUT|HEADERS_TIMEOUT|SOCKET)|CERT_[A-Z_]+|DEPTH_ZERO_SELF_SIGNED_CERT|UNABLE_TO_VERIFY_LEAF_SIGNATURE)\b/;
+
+/** Prose fallbacks for the shapes that carry no `cause` and no errno token —
+ *  Node's bare `TypeError: fetch failed`, and our own timeout wording. */
+const TRANSPORT_PROSE_RE = /\bfetch failed\b|\baborted due to timeout\b|\btimed out after\b/i;
+
+/**
+ * POSITIVE evidence that the transport failed, or `null` when nothing
+ * establishes it. Returns the evidence itself so the caller can NAME it — the
+ * whole point of R7 is that the message says what it knows AND how.
+ *
+ * Deliberately NOT "the error had no status field": that is the inference that
+ * turned an honest config gate into a networking red herring.
+ */
+function transportFailureEvidence(err: {
+  name?: string;
+  message?: string;
+  cause?: { code?: string } | null;
+} | null): string | null {
+  const name = err?.name;
+  if (name === 'FetchTimeoutError') return 'timed out';
+  if (name && TRANSPORT_ERROR_NAMES.has(name)) return 'aborted before a response arrived';
+  const code = typeof err?.cause?.code === 'string' ? err.cause.code : '';
+  if (code && TRANSPORT_CODE_RE.test(code)) return code;
+  const msg = err?.message ?? '';
+  const m = TRANSPORT_CODE_RE.exec(msg);
+  if (m) return m[0];
+  if (TRANSPORT_PROSE_RE.test(msg)) return 'transport failure';
+  return null;
+}
+
 /**
  * Describe a per-workspace federation failure using ONLY what the code
  * established (#3841 / deploy-integrity R7).
  *
- * The previous copy hard-coded the word "unreachable" into every row — for a
- * 403, a 404, a 501 honest gate and a JSON parse failure alike — while
- * interpolating `e.status` right beside it, so a denial rendered as
- * "(workspace X unreachable: 403 …)". That is self-contradictory: an HTTP
+ * THE ORIGINAL DEFECT. The first copy hard-coded the word "unreachable" into
+ * every row — for a 403, a 404, a 501 honest gate and a JSON parse failure
+ * alike — while interpolating `e.status` right beside it, so a denial rendered
+ * as "(workspace X unreachable: 403 …)". That is self-contradictory: an HTTP
  * status IS proof the server was reached and answered. In Gov, where Databricks
  * Unity Catalog does not exist and Loom Unity IS the catalog story
  * (cloud-parity.md), that false claim pointed the next investigator at
  * networking while the container was Healthy with a connected replica.
  *
- * "unreachable" is now reserved for the ONE case that actually earns it: a
- * throw carrying no HTTP status at all (DNS failure, ECONNREFUSED, TLS abort,
- * client-side timeout) — i.e. we never got an answer.
+ * THE SECOND DEFECT — why this function is shaped the way it is now. The first
+ * fix classified purely on the PRESENCE of a number, which silently asserted two
+ * things this code had never established:
  *
- * The underlying `e.message` is ALWAYS preserved verbatim. Callers regex it —
- * `app/api/catalog/metastores/route.ts` tests /account.?admin/i on this string
- * to raise the account-admin gate — so dropping it would silently disable that
- * gate.
+ *   1. that whatever produced the status was THE WORKSPACE. It may not be.
+ *      `ossUcAuthHeader()` runs INSIDE `ucFetch`'s try, so a
+ *      `UcTokenExchangeError` propagates here from uc-token-exchange.ts — and
+ *      two of its throw sites (non-JSON body; body carrying no `access_token`)
+ *      sit AFTER `if (!res.ok)`, so they carry a **2xx** status belonging to the
+ *      TOKEN-EXCHANGE endpoint. That rendered as "(workspace X responded 200 —
+ *      rejected the request)". The workspace rejected nothing; it was never
+ *      asked.
+ *   2. that the ABSENCE of a status meant the network failed. It may mean no
+ *      request was ever attempted. `OssUcAuthNotConfiguredError` carries a
+ *      `hint` and NO `status`, so an honest config gate — the default `entra`
+ *      posture with LOOM_UNITY_CLIENT_ID / _AUDIENCE / _TOKEN unset — rendered
+ *      as "unreachable — no HTTP response", pointing at networking again while
+ *      discarding the `bicepModule` / `followUp` that would have fixed it.
+ *
+ * Both replacements were MORE misleading than the string they replaced: the
+ * original was self-contradictory and therefore self-flagging, while these were
+ * confident, plausible and false. Raising a sentence's assertiveness without
+ * establishing its provenance is the R7 failure, not a fix for it.
+ *
+ * SO: classify by PROVENANCE first and status second. Every arm states only what
+ * its own evidence supports; "unreachable" now requires POSITIVE evidence of a
+ * transport failure (our own `FetchTimeoutError`, an abort, or a network errno)
+ * instead of being the fallback for "no number found"; and a status outside the
+ * error classes is never reported as a rejection. When nothing establishes a
+ * cause the copy says exactly that — R7: if the code does not know, the message
+ * says it does not know.
+ *
+ * The underlying `e.message` is preserved verbatim in EVERY arm. Callers regex
+ * it — `app/api/catalog/metastores/route.ts` tests /account.?admin/i on this
+ * string to raise the account-admin gate — so dropping it in any one arm would
+ * silently disable that gate for that arm only.
  */
 export function describeWorkspaceFailure(host: string, e: unknown): string {
-  const err = e as { status?: number; message?: string; name?: string } | null;
-  const status = Number(err?.status ?? 0);
+  const err = e as {
+    status?: number | string;
+    statusCode?: number | string;
+    response?: { status?: number | string } | null;
+    message?: string;
+    name?: string;
+    cause?: { code?: string } | null;
+    hint?: { missingEnvVar?: string; bicepModule?: string; followUp?: string } | null;
+  } | null;
   const msg = err?.message ?? 'error';
-  if (!Number.isFinite(status) || status <= 0) {
-    // No status: the request never produced an HTTP response.
-    return `(workspace ${host} unreachable — no HTTP response: ${msg})`;
+
+  // ARM 1 — a CONFIG GATE (`OssUcAuthNotConfiguredError` / `OssUcNotConfiguredError`).
+  // Thrown before anything left the process: neither a rejection nor a fact
+  // about reachability. Carry the remediation through rather than discarding it
+  // — the operator needs the bicep module, not a networking hunt.
+  const hint = err?.hint;
+  if (hint && typeof hint.missingEnvVar === 'string' && hint.missingEnvVar) {
+    const remedy = [
+      hint.bicepModule ? `deploy ${hint.bicepModule}` : '',
+      hint.followUp || '',
+    ].filter(Boolean).join('; ');
+    return `(workspace ${host} not configured — no request was attempted: ${msg}${remedy ? `; ${remedy}` : ''})`;
   }
-  const verb =
-    status === 401 || status === 403 ? 'denied access'
-      : status === 404 ? 'answered 404 (path or metastore not found)'
-        : status === 501 ? 'reported an unsupported operation'
-          : status >= 500 ? 'returned a server error'
-            : 'rejected the request';
-  return `(workspace ${host} responded ${status} — ${verb}: ${msg})`;
+
+  // Whose fact is the status below? A token-exchange failure is a fact about the
+  // EXCHANGE endpoint and must never be attributed to the workspace.
+  const fromExchange = err?.name === 'UcTokenExchangeError';
+  const subject = fromExchange
+    ? `the Loom Unity token-exchange endpoint for workspace ${host}`
+    : `workspace ${host}`;
+
+  // Read the status from whichever property carries it. Azure SDK `RestError`
+  // uses `statusCode`, some wrappers keep the whole `response`. Reading only
+  // `.status` made those shapes indistinguishable from "no response at all".
+  const raw = err?.status ?? err?.statusCode ?? err?.response?.status;
+  const status = Number(raw ?? 0);
+  const answered = Number.isFinite(status) && status > 0;
+
+  if (answered) {
+    if (fromExchange) {
+      const verb =
+        status < 400 ? `answered ${status} with a response the exchange could not use`
+          : status === 401 || status === 403 ? `refused the token exchange with ${status}`
+            : `failed the token exchange with ${status}`;
+      return `(${subject} ${verb}: ${msg})`;
+    }
+    const verb =
+      status === 401 || status === 403 ? 'denied access'
+        : status === 404 ? 'answered 404 (path or metastore not found)'
+          : status === 501 ? 'reported an unsupported operation'
+            : status >= 500 ? 'returned a server error'
+              : status >= 400 ? 'rejected the request'
+                // 1xx/2xx/3xx: the response was NOT an error, so the failure was
+                // raised after it. Calling this "rejected" invents a refusal.
+                : 'a non-error status, so the failure was raised after the response';
+    return `(workspace ${host} responded ${status} — ${verb}: ${msg})`;
+  }
+
+  // No status. "unreachable" is claimed ONLY on positive transport evidence.
+  const evidence = transportFailureEvidence(err);
+  if (evidence) return `(${subject} unreachable — no HTTP response (${evidence}): ${msg})`;
+  return `(${subject} failed before any HTTP response was recorded — cause not established: ${msg})`;
 }
 
 /** Federated metastore list across every workspace the console knows about.
