@@ -6,7 +6,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.45.15.27210",
-      "templateHash": "15426621788508523274"
+      "templateHash": "15953008146256069085"
     }
   },
   "definitions": {
@@ -2564,7 +2564,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.45.15.27210",
-              "templateHash": "2999580219018374575"
+              "templateHash": "10558044425782929168"
             }
           },
           "definitions": {
@@ -8952,7 +8952,7 @@
                     "_generator": {
                       "name": "bicep",
                       "version": "0.45.15.27210",
-                      "templateHash": "17174405934064581003"
+                      "templateHash": "11557966085795411378"
                     }
                   },
                   "parameters": {
@@ -9041,7 +9041,7 @@
                           {
                             "name": "D8",
                             "workloadProfileType": "D8",
-                            "minimumCount": 1,
+                            "minimumCount": 0,
                             "maximumCount": 10
                           }
                         ],
@@ -29969,7 +29969,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.45.15.27210",
-              "templateHash": "10661877972815013237"
+              "templateHash": "6577116829689710073"
             }
           },
           "functions": [
@@ -32090,7 +32090,7 @@
                     "_generator": {
                       "name": "bicep",
                       "version": "0.45.15.27210",
-                      "templateHash": "2391223304340972030"
+                      "templateHash": "3559648073538760848"
                     }
                   },
                   "parameters": {
@@ -32297,13 +32297,6 @@
                       "defaultValue": "SQL_Latin1_General_CP1_CI_AS",
                       "metadata": {
                         "description": "Collation for the Dedicated pool."
-                      }
-                    },
-                    "dedicatedPoolStartPaused": {
-                      "type": "bool",
-                      "defaultValue": true,
-                      "metadata": {
-                        "description": "Provision the Dedicated pool paused on creation (recommended — Loom resumes on demand from the editor)."
                       }
                     },
                     "dedicatedPoolStorageRedundancy": {
@@ -39325,7 +39318,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.45.15.27210",
-              "templateHash": "10661877972815013237"
+              "templateHash": "6577116829689710073"
             }
           },
           "functions": [
@@ -41446,7 +41439,7 @@
                     "_generator": {
                       "name": "bicep",
                       "version": "0.45.15.27210",
-                      "templateHash": "2391223304340972030"
+                      "templateHash": "3559648073538760848"
                     }
                   },
                   "parameters": {
@@ -41653,13 +41646,6 @@
                       "defaultValue": "SQL_Latin1_General_CP1_CI_AS",
                       "metadata": {
                         "description": "Collation for the Dedicated pool."
-                      }
-                    },
-                    "dedicatedPoolStartPaused": {
-                      "type": "bool",
-                      "defaultValue": true,
-                      "metadata": {
-                        "description": "Provision the Dedicated pool paused on creation (recommended — Loom resumes on demand from the editor)."
                       }
                     },
                     "dedicatedPoolStorageRedundancy": {
@@ -48968,7 +48954,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.45.15.27210",
-              "templateHash": "10661877972815013237"
+              "templateHash": "6577116829689710073"
             }
           },
           "functions": [
@@ -51089,7 +51075,7 @@
                     "_generator": {
                       "name": "bicep",
                       "version": "0.45.15.27210",
-                      "templateHash": "2391223304340972030"
+                      "templateHash": "3559648073538760848"
                     }
                   },
                   "parameters": {
@@ -51296,13 +51282,6 @@
                       "defaultValue": "SQL_Latin1_General_CP1_CI_AS",
                       "metadata": {
                         "description": "Collation for the Dedicated pool."
-                      }
-                    },
-                    "dedicatedPoolStartPaused": {
-                      "type": "bool",
-                      "defaultValue": true,
-                      "metadata": {
-                        "description": "Provision the Dedicated pool paused on creation (recommended — Loom resumes on demand from the editor)."
                       }
                     },
                     "dedicatedPoolStorageRedundancy": {

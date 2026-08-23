@@ -3,11 +3,34 @@
 #
 # The loom-console image is built with `apps/fiab-console` as the build context,
 # but the Copilot corpus lives at repo-root `docs/` + `PRPs/completed/csa-loom-pillar/` +
-# `PRPs/active/` — OUTSIDE that context. Without this step those files are never
+# `PRPs/active/` + `PRPs/archive/` — OUTSIDE that context. Without this step those
+# files are never
 # packaged into the image, so lib/azure/loom-docs-index.ts walks an empty FS and
 # the `loom-docs` AI Search index stays empty ("No corpus chunks discovered").
 # Run this BEFORE `az acr build` (CI does this in full-app-deploy-commercial.yml;
 # the local roll recipe runs it too). Markdown-only to keep the image lean.
+#
+# ── THIS LIST MUST MATCH `detectRoots()` (2026-08-22) ───────────────────────
+#
+# `SOURCES` below and the roots declared in
+# `apps/fiab-console/lib/azure/loom-docs-corpus.ts` are TWO HAND-MAINTAINED
+# LISTS DESCRIBING ONE THING, and they have already drifted once. The omnibus
+# consolidation (57fa48f6 / #3881) moved 22 PRP units into `PRPs/archive/`; the
+# walker gained an archive root, and had this file not gained the matching
+# source the production image would have shipped a root that resolves to a
+# MISSING DIRECTORY — `walkMarkdown` returns [] and the fix looks applied while
+# the live Copilot sees nothing. That is strictly worse than the original bug,
+# because it looks fixed.
+#
+# The equality is asserted by
+# `apps/fiab-console/lib/azure/__tests__/corpus-staging-parity.test.ts`, which
+# fails if a walker root has no staged source or vice versa. Add a root there
+# and here in the SAME PR.
+#
+# (Note the neighbouring guard `scripts/ci/check-console-corpus-staged.mjs`
+# answers a DIFFERENT question — whether each console-building workflow invokes
+# this script at all. It has nothing to say about which roots the script copies,
+# which is why that drift went unnoticed.)
 #
 # WS-G1 (2026-07-22): INCREMENTAL. Previously this did a full `rm -rf` + tar
 # re-copy of all ~2453 md every run. Now it batch-content-hashes every source md
@@ -22,15 +45,18 @@ DEST="$ROOT/apps/fiab-console/copilot-corpus"
 MANIFEST="$DEST/.corpus-manifest.json"
 HASHES="$DEST/.corpus-hashes.tsv"   # flat "<relpath>\t<sha>" for fast diffing
 
-mkdir -p "$DEST/docs" "$DEST/PRPs/completed/csa-loom-pillar" "$DEST/PRPs/active"
+mkdir -p "$DEST/docs" "$DEST/PRPs/completed/csa-loom-pillar" "$DEST/PRPs/active" "$DEST/PRPs/archive"
 
 SHA_CMD="sha256sum"; command -v sha256sum >/dev/null 2>&1 || SHA_CMD="shasum -a 256"
 
 # Sources → staged subdir. Markdown-only, recursive.
+# Every entry here must have a matching root in `detectRoots()` — see the note
+# at the top of this file.
 SOURCES="
 $ROOT/docs|docs
 $ROOT/PRPs/completed/csa-loom-pillar|PRPs/completed/csa-loom-pillar
 $ROOT/PRPs/active|PRPs/active
+$ROOT/PRPs/archive|PRPs/archive
 "
 
 # ── INTERNAL WORKING MATERIAL IS NOT PRODUCT DOCUMENTATION (#3084) ──────────
