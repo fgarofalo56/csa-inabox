@@ -11,6 +11,30 @@ name: deploy-fiab-il5
 # Manual approval gate (il5-deploy environment protection) since this deploys
 # into an IL5 Gov subscription.
 
+# The `Teardown -> redeploy -> smoke` step below is gated `if: inputs.run_mode ==
+# 'full'`, and run_mode DEFAULTS to whatif-only — so the DEFAULT dispatch of this
+# workflow SUCCEEDS having applied nothing to IL5.
+#
+# check-deploy-staleness.mjs clears a WATCHED entry's drift on its newest
+# SUCCESSFUL run, and until this line existed the workflow had no `run-name` at
+# all: every run — apply or not — was titled "deploy-fiab-il5", so ONE default
+# dispatch would have silenced an IL5 deploy gap it did not close. That is the
+# "green on nothing" shape the watchdog exists to catch, and it is why this line
+# has to land BEFORE the IL5 WATCHED entry rather than with it.
+#
+# The marker string is DRY_RUN_MARKER ('DRY RUN') in check-deploy-staleness.mjs,
+# which filters those runs out of the last-success search.
+#
+# WHY THE `workflow_dispatch` TEST IS STILL CORRECT ON A LANE WITH NO CRON. The
+# sibling lanes carry the same expression because a `schedule` run provisions and
+# must therefore NOT be marked. This workflow has no `schedule:` trigger at all,
+# so `github.event_name` is always `workflow_dispatch` here and the left-hand
+# clause is always true — the marker is decided purely by run_mode, which is the
+# intended behaviour. The clause is kept rather than simplified so the four lanes
+# share one auditable literal; it is stated here rather than left to imply that
+# this lane has a cron it does not have (deploy-integrity R7).
+run-name: deploy-fiab-il5${{ (github.event_name == 'workflow_dispatch' && inputs.run_mode != 'full') && ' — DRY RUN (whatif-only, applies nothing)' || '' }}
+
 on:
   workflow_dispatch:
     inputs:
@@ -296,6 +320,194 @@ jobs:
             --param-file platform/fiab/bicep/params/il5.bicepparam \
             --rg "rg-csa-loom-admin-${AZURE_LOCATION}"
 
+      # ── ADOPT THE DATA LANDING ZONE (#3380) ────────────────────────────────
+      #
+      # CLOUD PARITY, MEASURED. params/il5.bicepparam:63 reads
+      #   param adopt = union(legacyAdoptFromEnv, json(readEnvironmentVariable('LOOM_ADOPT_JSON', '{}')))
+      # exactly as commercial.bicepparam does — so the CONSUMER has always been
+      # here. The PRODUCER was not: `discover-dlz-adopt-plan` / `LOOM_ADOPT_JSON`
+      # appeared 11 times in deploy-fiab-commercial.yml and ZERO times in this
+      # lane, in deploy-fiab-gcch and in deploy-fiab-gcc. Brownfield adoption and
+      # the cross-subscription grant pass were therefore Commercial-only BY
+      # CONSTRUCTION: every sovereign deploy resolved `{}` and behaved as if the
+      # estate owned nothing, whatever it actually owned. cloud-parity.md calls
+      # that INCOMPLETE, and deploy-integrity.md R5 makes brownfield a
+      # first-class path in BOTH clouds, not a Commercial convenience.
+      #
+      # WHAT AN EMPTY PLAN COSTS. main.bicep composes `loomStorageAccount` from
+      # the adopt plan, and the console env array in modules/admin-plane/main.bicep
+      # is CONDITIONAL on that string (`!empty(loomStorageAccount) ? [ … ] : []`).
+      # An empty binding does not leave the lake variables alone — it REMOVES
+      # LOOM_BRONZE_URL, LOOM_SILVER_URL, LOOM_GOLD_URL, LOOM_LANDING_URL,
+      # LOOM_CSV_IMPORTS_URL, LOOM_SAMPLE_ADLS and LOOM_RECYCLE_RETENTION_DAYS
+      # from a running console (#3701). On a boundary with no Databricks Unity
+      # Catalog to fall back to, that is the whole lake story.
+      #
+      # MUST PRECEDE THE WHAT-IF. `readEnvironmentVariable` resolves at BICEP
+      # COMPILE time — i.e. inside `az deployment sub what-if` / `create`, not
+      # when this step runs. Exporting it afterwards is a no-op, and a preview
+      # that resolves a different adopt plan than the apply is a lying preview
+      # (deploy-integrity R7).
+      #
+      # THE EXIT CODE IS CLASSIFIED, NEVER SWALLOWED (R6/R7). resolve-dlz-
+      # coordinates.mjs states the contract this port keeps intact: 0 resolved /
+      # 1 not-found / 2 usage / 3 unreadable / 4 ambiguous. A single `|| echo`
+      # that collapses all four non-zero codes into one sentence ASSERTS a
+      # measurement the script did not make — the defect #3701/#3703 removed from
+      # the Commercial lane. UNKNOWN (3) and AMBIGUOUS (4) refuse rather than
+      # compose an empty plan; only a MEASURED not-found continues.
+      #
+      # $AZURE_LOCATION is a workflow-level literal on this lane (usgovvirginia),
+      # not a value measured from the estate, so the empty-region trap that made
+      # the Commercial nightly discover against `--region ""` cannot occur here.
+      # The guard below is kept anyway, because a silent empty region is exactly
+      # what produced "adopting: (none)" on every scheduled Commercial run.
+      - name: Adopt the DLZ (discover what the estate already owns — #3380)
+        id: dlz_adopt
+        env:
+          ADMIN_SUB: ${{ secrets.AZURE_GOV_SUBSCRIPTION_ID }}
+        run: |
+          set -euo pipefail
+          REGION="${AZURE_LOCATION:-}"
+          if [ -z "$REGION" ]; then
+            echo "::error::[dlz-adopt] No region is available: \$AZURE_LOCATION is empty. Refusing rather than discovering against no region — that is what silently produced 'adopting: (none)' on the Commercial lane and stripped the lake env vars off the console (#3701)."
+            exit 1
+          fi
+          if [ -z "${ADMIN_SUB:-}" ]; then
+            echo "::error::[dlz-adopt] No admin subscription: the AZURE_GOV_SUBSCRIPTION_ID repository secret is empty, so Resource Graph cannot be scoped and NOTHING would be established about this estate. Refusing rather than composing an empty adopt plan."
+            exit 1
+          fi
+          RESOLVED="$RUNNER_TEMP/dlz-coords.env"; : > "$RESOLVED"
+          RC=0
+          node scripts/csa-loom/resolve-dlz-coordinates.mjs \
+            --region "$REGION" \
+            --admin-subscription "$ADMIN_SUB" \
+            --github-env "$RESOLVED" || RC=$?
+          case "$RC" in
+            0)
+              echo "[dlz-adopt] resolver RESOLVED a landing zone for region '$REGION'."
+              ;;
+            1)
+              # EXIT 1 IS ALSO NODE'S CODE FOR AN UNCAUGHT THROW, so the code
+              # alone cannot tell "Resource Graph was read and nothing matched"
+              # from "this script died before measuring anything". Require the
+              # positive DLZ_STATUS marker the resolver writes on every MEASURED
+              # path rather than inferring a measurement from an exit code.
+              if grep -q '^DLZ_STATUS=not-found$' "$RESOLVED"; then
+                echo "::notice::[dlz-adopt] resolver read Azure Resource Graph SUCCESSFULLY and no landing zone matched region '$REGION'. Continuing without adoption — that is the correct greenfield answer, and it is a measurement, not a fallback."
+              else
+                echo "::error::[dlz-adopt] resolve-dlz-coordinates exited 1 but did NOT write 'DLZ_STATUS=not-found'. Exit 1 is also node's code for an uncaught throw or a module-load failure, so nothing here establishes that the estate was read. Refusing rather than reporting a greenfield negative nobody measured (#3701/#3703)."
+                exit 1
+              fi
+              ;;
+            2)
+              echo "::error::[dlz-adopt] resolve-dlz-coordinates exited USAGE (2): this workflow passed it invalid arguments (region='$REGION'). NOTHING was established about the estate. Refusing — continuing would compose an EMPTY adopt plan, and an empty plan does not skip the lake binding, it DELETES the seven LOOM_*_URL/LOOM_SAMPLE_ADLS env vars from the running console (#3701)."
+              exit 1
+              ;;
+            3)
+              if [ "${CSA_LOOM_TOPOLOGY:-}" = "dlz-attach" ]; then
+                echo "::warning::[dlz-adopt] resolve-dlz-coordinates exited UNREADABLE (3): the Azure Resource Graph query FAILED, so whether this estate has a landing zone is UNKNOWN. Continuing ONLY because topology=dlz-attach deploys no admin plane (main.bicep:1114), so no console env variable can be removed by an empty adopt plan. Discovery still measured nothing — check that the Gov deploy identity can read Resource Graph across this estate's subscriptions."
+              else
+                echo "::error::[dlz-adopt] resolve-dlz-coordinates exited UNREADABLE (3): the Azure Resource Graph query FAILED, so whether this estate has a landing zone is UNKNOWN — it is NOT 'no'. Refusing rather than deploying an empty adopt plan that would strip the lake env vars off the console. Check that the Gov deploy identity can read Resource Graph across this estate's subscriptions (Reader at the DLZ subscription is the usual gap)."
+                exit 1
+              fi
+              ;;
+            4)
+              if [ "${CSA_LOOM_TOPOLOGY:-}" = "dlz-attach" ]; then
+                echo "::warning::[dlz-adopt] resolve-dlz-coordinates exited AMBIGUOUS (4): more than one landing zone matches region '$REGION' and none was chosen. Continuing ONLY because topology=dlz-attach deploys no admin plane, so nothing can be stripped."
+              else
+                echo "::error::[dlz-adopt] resolve-dlz-coordinates exited AMBIGUOUS (4): more than one landing zone matches region '$REGION' and this deploy wires exactly one, so NOTHING was chosen. Failing closed. Name the intended DLZ explicitly, or remove the duplicate resource group."
+                exit 1
+              fi
+              ;;
+            *)
+              echo "::error::[dlz-adopt] resolve-dlz-coordinates exited with the undocumented code $RC. Its contract is 0 resolved / 1 not-found / 2 usage / 3 unreadable / 4 ambiguous, so nothing it printed can be read as a verdict about this estate. Refusing."
+              exit 1
+              ;;
+          esac
+          DLZ_SUB="$(grep '^DLZ_SUB=' "$RESOLVED" | tail -1 | cut -d= -f2- || true)"
+          DLZ_RG="$(grep  '^DLZ_RG='  "$RESOLVED" | tail -1 | cut -d= -f2- || true)"
+          [ -n "${DLZ_SUB:-}" ] && echo "::add-mask::$DLZ_SUB"
+
+          PLAN='{}'
+          if [ -n "${DLZ_SUB:-}" ] && [ -n "${DLZ_RG:-}" ]; then
+            PLAN="$(bash scripts/csa-loom/discover-dlz-adopt-plan.sh \
+                      --dlz-subscription "$DLZ_SUB" --dlz-rg "$DLZ_RG")"
+          fi
+
+          # An EXPLICIT plan always wins over a discovered one — the operator
+          # said what to adopt, and discovery must not override a deliberate
+          # decision. Discovery only fills keys nobody chose.
+          if [ -n "${LOOM_ADOPT_JSON:-}" ] && [ "${LOOM_ADOPT_JSON}" != "{}" ]; then
+            PLAN="$(PLAN="$PLAN" EXPLICIT="$LOOM_ADOPT_JSON" python -c 'import json,os; d=json.loads(os.environ["PLAN"]); d.update(json.loads(os.environ["EXPLICIT"])); print(json.dumps(d,separators=(",",":")))')"
+            echo "::notice::[dlz-adopt] merged discovery UNDER the explicitly supplied LOOM_ADOPT_JSON (explicit wins)."
+          fi
+
+          echo "LOOM_ADOPT_JSON=$PLAN" >> "$GITHUB_ENV"
+          KEYS="$(PLAN="$PLAN" python -c 'import json,os; print(",".join(sorted(json.loads(os.environ["PLAN"]))) or "(none)")')"
+          echo "::notice::[dlz-adopt] adopting: $KEYS"
+          echo "adopted=$KEYS" >> "$GITHUB_OUTPUT"
+
+      # ── ADX MUST BE RUNNING BEFORE WHAT-IF **AND** THE APPLY (#3883, #3449) ──
+      # admin-plane/adx-cluster.bicep declares two
+      # `Microsoft.Kusto/clusters/principalAssignments` children (the Console
+      # UAMI's AllDatabasesAdmin and the Activator's AllDatabasesViewer). Those
+      # are ADX DATA-plane roles, so the Kusto RP must reach the engine to write
+      # them — and on a STOPPED cluster it cannot:
+      #
+      #   ClusterNotValidForPrincipals on '<cluster>/console-uami-alldatabasesadmin':
+      #   [BadRequest] Cluster is in state 'Stopped', cannot retrieve list of principals
+      #
+      # THIS LANE CARRIES #3449 UNMITIGATED. Measured on this tree:
+      # params/il5.bicepparam:366 sets `param adxEnabled = true`, this workflow
+      # runs `az deployment sub what-if`, adx-cluster.bicep sets
+      # `enableAutoStop: true` unconditionally (L124) — and there was no ADX
+      # preflight anywhere in the file. deploy-fiab-il5 has NEVER RUN, so this is
+      # a CODE-IDENTITY fix rather than a measured-failure fix, and it is stated
+      # as such: the defect is the same defect in the same template, and leaving
+      # it would mean enabling this lane onto a deploy path already known to fail
+      # the moment its cluster idles. Per cloud-parity.md a fix on one boundary
+      # only is INCOMPLETE rather than done.
+      #
+      # ORDERING IS THE ENTIRE CONTENT OF #3449. `az deployment sub what-if`
+      # EVALUATES those principalAssignment leaves, so it hits
+      # ClusterNotValidForPrincipals and exits 1 BEFORE any step that merely
+      # precedes the apply. #3779 shipped this remediation for GCC-High placed
+      # just above `Provision`, and deploy-fiab-gcch still failed 6/6 daily
+      # scheduled runs with the script present and wired the whole time, because
+      # the what-if sat six steps above it (#3880). A preflight must precede the
+      # first step that READS the resource, not the first that WRITES it.
+      #
+      # THE TRIGGER CONDITION DIFFERS FROM GCC-HIGH'S, DELIBERATELY. That lane
+      # reads `github.event_name == 'schedule' || inputs.run_mode == 'full'`
+      # because it has a cron; this lane is workflow_dispatch-ONLY (no `schedule:`
+      # key above), so `schedule` can never be true here and the clause would be
+      # dead weight that implies a trigger this workflow does not have. The
+      # PROPERTY is preserved exactly: it runs on the same trigger as the apply,
+      # so a whatif-only DRY RUN never mutates the estate. Same stated residual as
+      # GCC-High — a dry run against a stopped cluster still fails what-if, which
+      # is the correct trade because starting a cluster is a mutation.
+      - name: ADX preflight — a stopped cluster cannot take its principal assignments (#3883)
+        if: inputs.run_mode == 'full'
+        env:
+          AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_GOV_SUBSCRIPTION_ID }}
+        run: |
+          set -euo pipefail
+          # dlz-attach deploys no admin plane, so it declares no principal
+          # assignments on the hub cluster and has nothing to start.
+          if [ "${CSA_LOOM_TOPOLOGY:-}" = "dlz-attach" ]; then
+            echo "::notice::topology=dlz-attach deploys no admin-plane ADX cluster; nothing to start."
+            exit 0
+          fi
+          DEPLOY_SUB="${CSA_LOOM_TARGET_SUBSCRIPTION:-$AZURE_SUBSCRIPTION_ID}"
+          if [ -z "$DEPLOY_SUB" ]; then
+            echo "::error::No target subscription, so the estate's ADX cluster cannot be located. It comes from the AZURE_GOV_SUBSCRIPTION_ID repository secret; it is empty."
+            exit 1
+          fi
+          node scripts/ci/ensure-adx-cluster-running.mjs \
+            --subscription "$DEPLOY_SUB" \
+            --rg "rg-csa-loom-admin-${AZURE_LOCATION}"
+
       # #3161 round 2 — THE PREVIEW MUST RESOLVE THE SAME TAGS AS THE APPLY.
       # `whatif-only` is this lane's DEFAULT run_mode, so this step's output IS
       # the artifact an operator reads before approving a full run, and it
@@ -445,6 +657,92 @@ jobs:
           node scripts/ci/assert-no-silent-image-tag-revert.mjs \
             --param-file platform/fiab/bicep/params/il5.bicepparam \
             --rg "rg-csa-loom-admin-${AZURE_LOCATION}"
+
+      # ── RE-PIN TO WHAT IS RUNNING RIGHT NOW (#3683, the #3676 re-pin half) ──
+      #
+      # CLOUD PARITY, MEASURED. `pin-refresh` appeared 5 times in
+      # deploy-fiab-commercial.yml and ZERO times in this lane and in
+      # deploy-fiab-gcch. #3676 is a RACE, and the race is not Commercial-only:
+      # `Adopt the image tags…` reads the estate near the TOP of this job, the
+      # apply happens many minutes later, and any console/data-plane roll that
+      # lands in between leaves this deploy about to write a tag that was current
+      # when it was measured and is stale by the time ARM sees it. Re-reading
+      # immediately before the apply narrows that window to seconds.
+      #
+      # IT REACHES THE APPLY WITHOUT TOUCHING ANY ARGUMENT LIST. pin-refresh
+      # writes `LOOM_<APP>_TAG=<running>` to $GITHUB_ENV, and
+      # params/il5.bicepparam resolves `readEnvironmentVariable('LOOM_*_TAG', …)`
+      # at BICEP-COMPILE time — i.e. inside `az deployment sub create`, which is
+      # also true through scripts/csa-loom/redeploy-gov.sh on the reconcile path,
+      # since the env is inherited by the child process. That is what makes a
+      # late re-pin possible at all.
+      #
+      # ONLY PINNED KEYS ARE EMITTED. A key with nothing running is left to the
+      # param file's own default on purpose — there is no running image to
+      # preserve and inventing one would be a guess. `vanished` is reported as a
+      # notice, not a refusal: writing the tag an app is no longer running
+      # CREATES it, which is not a revert.
+      #
+      # UNREADABLE IS NOT EMPTY. stdout and stderr are captured SEPARATELY and
+      # neither is discarded: `2>&1` would splice az's warnings into the JSON and
+      # `2>/dev/null` is what once turned a permission denial into an empty
+      # string and then into a false claim (R7). A failed list is handed to
+      # `--read-error` so the policy decides, rather than being read as "no apps
+      # are running".
+      #
+      # IT IS THE LAST STEP BEFORE THE APPLY, AND THAT IS AN INVARIANT, NOT A
+      # PREFERENCE. roll-race.test.mjs asserts ADJACENCY on the Commercial lane —
+      # `Re-pin appImageTags…` must be the step IMMEDIATELY before the apply,
+      # because "a measurement is only as fresh as the last thing that happens
+      # before it is used". The revert gate above therefore sits ABOVE this step
+      # rather than between it and the apply: the gate does its own
+      # `az containerapp list` and registry reads, and its duration would be added
+      # straight onto the staleness of this pin. The ACR lease step caused exactly
+      # that defect on Commercial once, with a bounded wait of EIGHT MINUTES.
+      #
+      # The gate's verdict survives this step. pin-refresh only ever moves a tag
+      # TOWARD what is currently running, so it cannot manufacture the one state
+      # the gate refuses (a param-file DEFAULT about to overwrite a live app
+      # running something else) — it can only make the write more conservative.
+      #
+      # SCOPED TO THE RECONCILE PATH, like the gate below it. With
+      # keep_resources=false this lane TEARS THE ESTATE DOWN before redeploying,
+      # so nothing is running to re-pin to and a stale pin cannot be written over
+      # a live app.
+      - name: Re-pin appImageTags to the RUNNING images (narrows the roll race — #3683)
+        id: repin
+        if: inputs.run_mode == 'full' && inputs.keep_resources && inputs.topology != 'dlz-attach'
+        run: |
+          set -uo pipefail
+          RG="rg-csa-loom-admin-${AZURE_LOCATION}"
+          CONTAINERS="$RUNNER_TEMP/repin-containers.json"
+          LIST_ERR="$RUNNER_TEMP/repin-list.err"
+          : > "$LIST_ERR"
+
+          # Truncation uses parameter expansion, never `| head -c`. GitHub runs
+          # `run:` under `bash -e` and `pipefail` is set above, so `cmd | head -c N`
+          # kills `cmd` with SIGPIPE on any input longer than N and takes the whole
+          # STEP down — a guard that aborts on the error path it exists to report
+          # is a guard that never reports.
+          trim400() { local s; s="$(tr '\n' ' ' < "$1")"; printf '%s' "${s:0:400}"; }
+
+          set +e
+          az containerapp list -g "$RG" \
+            --query '[].{name:name, image:properties.template.containers[0].image}' \
+            -o json > "$CONTAINERS" 2> "$LIST_ERR"
+          LIST_RC=$?
+          set -e
+          if [ $LIST_RC -ne 0 ]; then
+            node scripts/ci/reconcile-policy.mjs pin-refresh \
+              --deploy-apps-enabled true \
+              --read-error "az containerapp list exited ${LIST_RC}: $(trim400 "$LIST_ERR")"
+            exit $?
+          fi
+          if [ -s "$LIST_ERR" ]; then
+            echo "::warning::pin-refresh: az wrote to stderr while SUCCEEDING; recording it rather than hiding it: $(trim400 "$LIST_ERR")"
+          fi
+          node scripts/ci/reconcile-policy.mjs pin-refresh \
+            --deploy-apps-enabled true --containers "$CONTAINERS"
 
       - name: Teardown -> redeploy -> smoke (full mode only)
         # `id` added by #3714 so the ACR compliance-tag step below can gate on

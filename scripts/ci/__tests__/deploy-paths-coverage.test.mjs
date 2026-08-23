@@ -30,7 +30,9 @@
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { readFileSync, writeFileSync, rmSync, existsSync } from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import {
   extractDeploySources,
   isCovered,
@@ -41,6 +43,8 @@ import {
 } from '../check-deploy-paths-coverage.mjs';
 import { WATCHED } from '../check-deploy-staleness.mjs';
 
+const CI_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+
 // ---------------------------------------------------------------------------
 // extractDeploySources — only real execution counts, never a mention
 // ---------------------------------------------------------------------------
@@ -48,6 +52,131 @@ import { WATCHED } from '../check-deploy-staleness.mjs';
 test('detects a shell script that is actually executed', () => {
   const src = extractDeploySources('        run: bash scripts/csa-loom/seed-governance.sh --rg x\n');
   assert.equal(src.get('scripts/csa-loom/seed-governance.sh'), 'script');
+});
+
+// ---------------------------------------------------------------------------
+// #3787 — the `node <path>` shape the extractor was structurally blind to
+// ---------------------------------------------------------------------------
+
+test('detects a node-invoked deploy script (#3787 — the shape that passed VACUOUSLY)', () => {
+  // Before this shape existed, `node scripts/ci/deploy-retry.mjs` yielded ZERO
+  // sources while `-f X.bicep` and `bash X.sh` on the same corpus yielded two.
+  // Measured across the 15 watched workflows: 34 node-invoked deploy sources
+  // were invisible, including the script that decides deploy_apps_enabled and
+  // both GCC-High estate preflights.
+  const src = extractDeploySources('          node scripts/ci/deploy-fiab-guard.mjs\n');
+  assert.equal(src.get('scripts/ci/deploy-fiab-guard.mjs'), 'node');
+});
+
+test('the node shape survives an interpreter flag, a quote and a $GITHUB_WORKSPACE prefix', () => {
+  // Real call sites in this repo carry all three.
+  assert.equal(
+    extractDeploySources('          node --experimental-vm-modules scripts/ci/roll-plan.mjs\n')
+      .get('scripts/ci/roll-plan.mjs'),
+    'node',
+  );
+  assert.equal(
+    extractDeploySources('          node "$GITHUB_WORKSPACE/scripts/ci/adopt-image-tags.mjs" --json\n')
+      .get('scripts/ci/adopt-image-tags.mjs'),
+    'node',
+  );
+  assert.equal(
+    extractDeploySources('          node ./scripts/csa-loom/resolve-dlz-coordinates.mjs\n')
+      .get('scripts/csa-loom/resolve-dlz-coordinates.mjs'),
+    'node',
+  );
+  // .cjs and .js are the same shape, and scripts/csa-loom/loom-verify.js is a
+  // real deploy source of this repo — restricting the class to .mjs would have
+  // re-created the blind spot one extension over.
+  assert.equal(
+    extractDeploySources('          node scripts/csa-loom/loom-verify.js\n').get('scripts/csa-loom/loom-verify.js'),
+    'node',
+  );
+});
+
+test('CONTROL: a MENTIONED node script is NOT a deploy source', () => {
+  // Same discipline as the .sh shape: being permissive here re-admits the #2816
+  // false positive, where a warning string counted as a deploy path.
+  assert.equal(extractDeploySources('          # node scripts/ci/deploy-retry.mjs is the retry primitive\n').size, 0);
+  assert.equal(extractDeploySources('          echo "run node scripts/ci/deploy-retry.mjs to retry"\n').size, 0);
+  assert.equal(extractDeploySources('          echo "::warning::node scripts/ci/deploy-retry.mjs failed"\n').size, 0);
+  assert.equal(extractDeploySources(' * `node scripts/ci/deploy-retry.mjs` — the retry primitive\n').size, 0);
+});
+
+test('CONTROL: `node -e` and a node path outside the source roots are NOT deploy sources', () => {
+  // `node -e '<program>'` has no repo path to watch, and a single-dash flag must
+  // not be swallowed by the optional --flag run.
+  assert.equal(extractDeploySources("          node -e 'console.log(1)'\n").size, 0);
+  assert.equal(extractDeploySources('          node /usr/local/lib/whatever.mjs\n').size, 0);
+  // A bare word ending in .mjs that is not preceded by `node` is nobody's
+  // execution — it must not be picked up by the `.sh`-style bare scan.
+  assert.equal(extractDeploySources('          FILE=scripts/ci/deploy-retry.mjs\n').size, 0);
+});
+
+test('THE TWO-ARM CONTROL: the OLD extractor passes VACUOUSLY where the NEW one fails', async () => {
+  // The mutation is the defect itself: delete the node matcher and re-ask the
+  // same question. A guard whose verdict does not MOVE under the mutation it
+  // exists to catch is not watching (the "mutation that does not move the
+  // verdict" class).
+  const guard = path.join(CI_DIR, 'check-deploy-paths-coverage.mjs');
+  const original = readFileSync(guard, 'utf8');
+  const nl = original.includes('\r\n') ? '\r\n' : '\n';
+  const lines = original.split(nl);
+
+  // Strip the loop body of the node matcher — keyed on the `add(m[1], 'node')`
+  // call, which is the thing that must exist, not on any comment around it.
+  const at = lines.findIndex((l) => /^\s*add\(m\[1\], 'node'\);\s*$/.test(l));
+  assert.ok(at >= 0, "the mutation did not apply — no `add(m[1], 'node')` call found, so this control proves NOTHING");
+  lines[at] = '      // MUTATED BY THE CONTROL — node sources dropped on the floor';
+
+  // The copy sits beside the original so its relative import of
+  // ./check-deploy-staleness.mjs still resolves.
+  const mutant = path.join(CI_DIR, 'check-deploy-paths-coverage.__control__.mjs');
+  writeFileSync(mutant, lines.join(nl));
+  try {
+    const old = await import(pathToFileURL(mutant).href);
+
+    // ONE fixture, both arms. A watched entry that executes a node deploy source
+    // and does not declare it.
+    const fixture = {
+      workflow: 'w.yml',
+      paths: ['.github/workflows/w.yml'],
+      text: '        run: node scripts/ci/deploy-fiab-guard.mjs\n',
+      plumbing: {},
+    };
+
+    const nowRow = classifyEntry(fixture);
+    const oldRow = old.classifyEntry(fixture);
+
+    assert.equal(oldRow.checked, 0, 'the OLD extractor should see NOTHING here — that is the bug');
+    assert.equal(decide([oldRow]).code, 0, 'the OLD guard passed on an undeclared deploy source (VACUOUS)');
+
+    assert.equal(nowRow.checked, 1, 'the NEW extractor must SEE the node invocation');
+    assert.deepEqual(nowRow.uncovered, [{ path: 'scripts/ci/deploy-fiab-guard.mjs', how: 'node' }]);
+    assert.equal(decide([nowRow]).code, 1, 'the NEW guard must FAIL on an undeclared node deploy source');
+  } finally {
+    rmSync(mutant, { force: true });
+  }
+
+  assert.equal(readFileSync(guard, 'utf8'), original, 'the real guard must be untouched by this control');
+});
+
+test('POPULATION: the node shape is not decoration — it matches real watched workflows', () => {
+  // A guard with a zero population proves nothing. This asserts the new shape
+  // actually fires across the tree, and names the count, so a future refactor
+  // that silently stops matching (a renamed capture group, a tightened class)
+  // goes red instead of going quiet.
+  let nodeSources = 0;
+  const lanes = new Set();
+  for (const entry of WATCHED) {
+    const wf = `.github/workflows/${entry.workflow}`;
+    if (!existsSync(wf)) continue;
+    for (const how of extractDeploySources(readFileSync(wf, 'utf8')).values()) {
+      if (how === 'node') { nodeSources += 1; lanes.add(entry.workflow); }
+    }
+  }
+  assert.ok(nodeSources >= 30, `only ${nodeSources} node deploy source(s) detected across the watched lanes — 34 were measured when #3787 landed, so the matcher has stopped matching`);
+  assert.ok(lanes.size >= 8, `only ${lanes.size} lane(s) carry a node deploy source — 9 were measured when #3787 landed`);
 });
 
 test('detects a bicep template applied with -f', () => {
