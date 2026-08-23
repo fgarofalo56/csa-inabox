@@ -3,14 +3,10 @@
 import { clientFetch } from '@/lib/client-fetch';
 import { useEffect, useState } from 'react';
 import {
-  Body1, Caption1, Button, MessageBar, MessageBarBody,
-  Input, makeStyles, tokens,
+  Body1, Caption1, Button, MessageBar, MessageBarBody, Input, makeStyles, tokens,
 } from '@fluentui/react-components';
 import {
-  DataPie24Regular, DatabasePerson24Regular, Flash24Regular,
-  Database24Regular, Server24Regular, Search24Regular,
-  PlugConnected24Regular, DatabaseSearch24Regular, Box24Regular,
-  BrainCircuit24Regular,
+  DataPie24Regular, DatabasePerson24Regular, Flash24Regular, Database24Regular, Server24Regular, Search24Regular, PlugConnected24Regular, DatabaseSearch24Regular, Box24Regular, BrainCircuit24Regular,
 } from '@fluentui/react-icons';
 import { AdminShell } from '@/lib/components/admin-shell';
 import { SignInRequired } from '@/lib/components/sign-in-required';
@@ -19,6 +15,8 @@ import { ScalePicker } from '@/lib/components/admin-scaling/scale-picker';
 import { CostPreview } from '@/lib/components/admin-scaling/cost-preview';
 import { LoomDataTable, type LoomColumn } from '@/lib/components/ui/loom-data-table';
 import { SectionExplainer, LearnPopover } from '@/lib/components/ui/learn-popover';
+import { EstatePowerPanel } from '@/lib/components/admin-scaling/estate-power-panel';
+import { jsonGet } from '@/lib/components/admin-scaling/json-get';
 
 /**
  * /admin/scaling — Scale-by-SKU dropdowns for every scalable Loom backing
@@ -113,6 +111,89 @@ const useStyles = makeStyles({
   },
   statusError: { display: 'block', marginTop: tokens.spacingVerticalS, color: tokens.colorPaletteRedForeground1, overflowWrap: 'anywhere', wordBreak: 'break-word' },
   statusOk: { display: 'block', marginTop: tokens.spacingVerticalS, color: tokens.colorPaletteGreenForeground1, overflowWrap: 'anywhere', wordBreak: 'break-word' },
+
+  // --- Estate power (pause / resume) ---------------------------------------
+  // Same card chrome as ServiceCard (left accent + elevation + large radius) so
+  // the panel reads as part of this page rather than as a bolted-on banner.
+  powerCard: {
+    position: 'relative',
+    overflow: 'hidden',
+    border: `1px solid ${tokens.colorNeutralStroke2}`,
+    borderRadius: tokens.borderRadiusXLarge,
+    padding: tokens.spacingVerticalL,
+    paddingInlineStart: `calc(${tokens.spacingVerticalL} + 4px)`,
+    display: 'flex',
+    flexDirection: 'column',
+    gap: tokens.spacingVerticalM,
+    backgroundColor: tokens.colorNeutralBackground1,
+    boxShadow: tokens.shadow4,
+    transition: 'box-shadow 120ms ease',
+    marginBottom: tokens.spacingVerticalL,
+    width: '100%',
+    minWidth: 0,
+    maxWidth: '1180px',
+    ':hover': { boxShadow: tokens.shadow16 },
+  },
+  powerAccent: { position: 'absolute', insetInlineStart: 0, insetBlockStart: 0, insetBlockEnd: 0, width: '4px' },
+  powerHeader: {
+    display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start',
+    gap: tokens.spacingHorizontalM, flexWrap: 'wrap',
+  },
+  powerTitleWrap: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS, minWidth: 0 },
+  powerIcon: {
+    width: '40px', height: '40px', borderRadius: tokens.borderRadiusMedium, flexShrink: 0,
+    display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+    color: tokens.colorNeutralForegroundOnBrand,
+  },
+  powerTitle: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXXS, minWidth: 0 },
+  // Every badge row wraps and truncates — overlap at any width is a defect.
+  badgeRow: {
+    display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'center',
+    flexWrap: 'wrap', minWidth: 0,
+  },
+  // The tag census row. Same wrap/truncate discipline; these labels are long,
+  // so it gets its own top margin inside the MessageBar rather than an inline
+  // style literal.
+  censusRow: {
+    display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'center',
+    flexWrap: 'wrap', minWidth: 0,
+    marginTop: tokens.spacingVerticalS,
+    marginBottom: tokens.spacingVerticalS,
+  },
+  powerActions: { display: 'flex', gap: tokens.spacingHorizontalM, alignItems: 'center', flexWrap: 'wrap', minWidth: 0 },
+  powerSub: { color: tokens.colorNeutralForeground3, overflowWrap: 'anywhere', minWidth: 0 },
+  powerSection: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS, minWidth: 0 },
+  powerDivider: { borderTop: `1px solid ${tokens.colorNeutralStroke2}`, paddingTop: tokens.spacingVerticalM },
+  progressRow: {
+    display: 'grid',
+    gridTemplateColumns: 'minmax(0, 1fr) minmax(0, 2fr)',
+    gap: tokens.spacingHorizontalM,
+    alignItems: 'center',
+    minWidth: 0,
+  },
+  progressLabel: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXXS, minWidth: 0 },
+  progressDetail: { color: tokens.colorNeutralForeground3, overflowWrap: 'anywhere', minWidth: 0 },
+  confirmInput: { width: '100%', marginTop: tokens.spacingVerticalS },
+  dialogList: {
+    marginTop: tokens.spacingVerticalS, marginBottom: 0,
+    paddingLeft: tokens.spacingHorizontalXL,
+    display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS,
+  },
+  mono: { fontFamily: tokens.fontFamilyMonospace, overflowWrap: 'anywhere' },
+  remediation: {
+    borderLeft: `3px solid ${tokens.colorPaletteRedBorderActive}`,
+    paddingLeft: tokens.spacingHorizontalM,
+    display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXXS,
+    minWidth: 0,
+  },
+  // Same shape as `remediation`, neutral accent — for informational rows that
+  // are NOT failures (resources deliberately held out of the pause tier).
+  remediationNeutral: {
+    borderLeft: `3px solid ${tokens.colorNeutralStroke1}`,
+    paddingLeft: tokens.spacingHorizontalM,
+    display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXXS,
+    minWidth: 0,
+  },
 });
 
 async function jsonPost(url: string, body: unknown): Promise<any> {
@@ -122,19 +203,9 @@ async function jsonPost(url: string, body: unknown): Promise<any> {
   return j;
 }
 
-async function jsonGet(url: string): Promise<any> {
-  // 12s timeout so a hung backend route can't leave a panel spinning forever.
-  const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), 12000);
-  try {
-    const r = await clientFetch(url, { signal: ctrl.signal, cache: 'no-store' });
-    return await r.json().catch(() => ({}));
-  } catch (e: any) {
-    return { ok: false, error: e?.name === 'AbortError' ? `Timed out loading ${url}` : (e?.message || String(e)) };
-  } finally {
-    clearTimeout(timer);
-  }
-}
+// `jsonGet` now lives in ./json-get so the extracted EstatePowerPanel and this
+// page share ONE implementation rather than two copies that can drift.
+
 
 export default function ScalingPage() {
   const styles = useStyles();
@@ -730,6 +801,14 @@ export default function ScalingPage() {
 
   return (
     <AdminShell sectionTitle="Scale by SKU">
+      {/*
+        ESTATE POWER first, deliberately. Every card below scales a service;
+        this one turns the estate off and on, which is the higher-order action
+        and the one the operator asked for by name. /admin/capacity already
+        promises it in prose and links here.
+      */}
+      <EstatePowerPanel styles={styles} />
+
       <Body1 className={styles.intro}>
         Scale every backing service from inside Loom. Each card hits a real
         Azure REST endpoint via the BFF — no portal hand-offs. Cost previews
