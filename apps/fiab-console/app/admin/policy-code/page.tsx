@@ -27,7 +27,7 @@ import { EmptyState } from '@/lib/components/empty-state';
 import { SplitPane } from '@/lib/components/shared/split-pane';
 import { IdentityPicker } from '@/lib/components/ui/identity-picker';
 import {
-  POLICY_BACKENDS, BACKEND_LABELS, POLICY_ACTIONS,
+  POLICY_BACKENDS, BACKEND_LABELS, POLICY_ACTIONS, backendsInSet,
   type PolicyBackend, type PolicyCodeSet, type PolicyStatement, type PolicyAction,
 } from '@/lib/governance/policy-code/dsl';
 import type { CompiledArtifact } from '@/lib/governance/policy-code/compilers/types';
@@ -177,7 +177,24 @@ export default function AdminPolicyCodePage() {
     setDirty(true);
   };
 
-  const backendsUsed = useMemo(() => data?.compiledBackends || [], [data]);
+  /**
+   * #3752 — this read `data?.compiledBackends`, i.e. the backends the SERVER
+   * compiled for the LAST SAVED set. "Load sample" only calls setSet(), so the
+   * left pane rendered 3 statements whose resources visibly name 5 backends
+   * while this badge, inches away, said "compiles to 0 backend(s)" and every
+   * backend tab said the set produces no ops. Both halves were describing
+   * different policy sets and neither said so.
+   *
+   * `backendsInSet` is the SAME function the BFF uses for its own `backends`
+   * field (app/api/admin/policy-code/route.ts:53) — reusing it, rather than
+   * re-deriving, keeps the badge and the server's answer identical by
+   * construction, including the marking→purview implication a hand-rolled
+   * union over `resources[].backend` would miss.
+   */
+  const backendsUsed = useMemo(
+    () => (set ? backendsInSet(set) : data?.compiledBackends || []),
+    [set, data],
+  );
 
   return (
     <AdminShell
@@ -288,7 +305,11 @@ export default function AdminPolicyCodePage() {
                 <Tab value="reconcile">Reconcile</Tab>
                 {POLICY_BACKENDS.map((b) => (
                   <Tab key={b} value={b}>
-                    {b}{artifactFor(b)?.applicable ? ` (${artifactFor(b)!.ops.length})` : ''}
+                    {/* #3752 — the op count describes the COMPILED (saved) set.
+                        While the editor is dirty it is a number about a
+                        different policy set than the one on screen, so it is
+                        withheld rather than annotated. */}
+                    {b}{!dirty && artifactFor(b)?.applicable ? ` (${artifactFor(b)!.ops.length})` : ''}
                   </Tab>
                 ))}
               </TabList>
@@ -296,7 +317,13 @@ export default function AdminPolicyCodePage() {
               {tab === 'reconcile' ? (
                 <ReconcilePanel receipt={receipt} styles={s} />
               ) : (
-                <BackendPanel artifact={artifactFor(tab as PolicyBackend)} styles={s} backend={tab as PolicyBackend} />
+                <BackendPanel
+                  artifact={artifactFor(tab as PolicyBackend)}
+                  styles={s}
+                  backend={tab as PolicyBackend}
+                  stale={dirty}
+                  targeted={backendsUsed.includes(tab as PolicyBackend)}
+                />
               )}
             </div>
           </SplitPane>
@@ -316,7 +343,32 @@ export default function AdminPolicyCodePage() {
 }
 
 // ── Compiled-artifact panel ──────────────────────────────────────────────────
-function BackendPanel({ artifact, styles, backend }: { artifact?: CompiledArtifact; styles: any; backend: PolicyBackend }) {
+function BackendPanel({ artifact, styles, backend, stale, targeted }: {
+  artifact?: CompiledArtifact; styles: any; backend: PolicyBackend;
+  /** #3752 — true when the authored set has unsaved edits, so `artifact`
+   *  describes the LAST SAVED set and not what the left pane is showing. */
+  stale?: boolean;
+  /** #3752 — true when the AUTHORED set has a resource naming this backend. */
+  targeted?: boolean;
+}) {
+  // #3752 — while the set is dirty the compiled artifacts are for a different
+  // (saved) revision. Rendering "This policy set produces no statements for
+  // this backend" here stated something FALSE about the set on screen: after
+  // "Load sample" the sample plainly targets this backend and the tab still
+  // said it produced nothing. Say which set the pane is describing instead.
+  if (stale) {
+    return (
+      <EmptyState
+        icon={<DocumentBulletList16Regular />}
+        title={targeted ? `${BACKEND_LABELS[backend]} — not compiled yet` : `${BACKEND_LABELS[backend]} — nothing authored`}
+        body={
+          targeted
+            ? 'The set on the left targets this backend, but these edits are unsaved so nothing has been compiled for them yet. Save the set to compile and see the exact ops.'
+            : 'No statement in the unsaved set names a resource on this backend. Add one, or save to recompile.'
+        }
+      />
+    );
+  }
   if (!artifact || !artifact.applicable) {
     return (
       <EmptyState
