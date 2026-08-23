@@ -286,6 +286,53 @@ describe('completeness — a partial read never reports as whole', () => {
     expect(read.completenessDetail).toContain('99 data row(s) and 2 were parsed');
   });
 
+  // POPULATION NOTE — this block exists because the case above was, on its own,
+  // the ENTIRE population of the row-count cross-check, at a delta of 97.
+  // (The `dataRowCount: 4` case in the missing-partition test never reaches this
+  // branch: the name check has already set `incomplete`, and the cross-check is
+  // guarded by `completeness === 'complete'`.) Measured 2026-08-23: relaxing the
+  // check to `Math.abs(declared - parsed) > 1` — i.e. tolerating an off-by-one —
+  // passed all 136 tests, RC=0. A blob truncated mid-record loses EXACTLY ONE
+  // row, so delta 1 is the PRODUCTION cardinality of the partial read this
+  // defence is named for, and it was the one delta never exercised.
+  //
+  // Parametrised rather than adding a single case, so the population is stated
+  // and a future narrowing has to delete visible rows to shrink it.
+  const PARSED_ROWS = 2;
+  it.each([
+    [1, 'one row FEWER than parsed — a manifest written before a late record'],
+    [3, 'one row MORE than parsed — a blob TRUNCATED MID-RECORD (production shape)'],
+    [4, 'two rows more'],
+    [99, 'far more'],
+  ])(
+    'declared %i vs 2 parsed is INCOMPLETE (%s)',
+    (declared, _why) => {
+      const manifest = JSON.stringify({
+        dataRowCount: declared,
+        blobs: [{ blobName: 'loom-brain/part_0_0001.csv' }],
+        runInfo: { endDate: '2026-08-22T23:59:59Z' },
+      });
+      const read = eaRun({ manifest });
+      expect(read.completeness).toBe('incomplete');
+      expect(read.completenessDetail).toContain(
+        `${declared} data row(s) and ${PARSED_ROWS} were parsed`,
+      );
+      expect(read.completenessDetail).toContain('PARTIAL read');
+    },
+  );
+
+  it('declared === parsed is the ONLY count that stays complete', () => {
+    // The control for the block above: without this, a mutation that made the
+    // cross-check always fire would look identical to a correct one.
+    const manifest = JSON.stringify({
+      dataRowCount: PARSED_ROWS,
+      blobs: [{ blobName: 'loom-brain/part_0_0001.csv' }],
+      runInfo: { endDate: '2026-08-22T23:59:59Z' },
+    });
+    const read = eaRun({ manifest });
+    expect(read.completeness).toBe('complete');
+  });
+
   it("an UNPARSEABLE manifest degrades to 'unknown' and does not abort the read", () => {
     const read = eaRun({ manifest: '{not json' });
     expect(read.completeness).toBe('unknown');

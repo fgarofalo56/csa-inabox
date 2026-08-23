@@ -624,15 +624,23 @@ export function readCostExport(input: CostExportInput): CostExportRead {
 
   const figures = new Map<NodeId, BilledFigure>();
   for (const [id, acc] of byResource) {
-    figures.set(
-      id,
-      billedCost(
+    // `source` is PINNED, not asserted — same reason as `./derived.ts`.
+    // `billedCost` returns the widened `CostFigure` from `../types.ts`, another
+    // lane's file, so `as BilledFigure` promised a label it never inspected.
+    // This is the channel that MATTERS: `attributeCost` renders anything in
+    // `byResource` through the billed path, so a mislabelled figure here is a
+    // derived number presented as a bill. Pinning makes the assignment checked
+    // against `Map<NodeId, BilledFigure>` — flip this literal and `next build`
+    // fails here rather than in a test `tsconfig.build.json` never compiles.
+    figures.set(id, {
+      ...billedCost(
         acc.usd,
         `${basisPrefix}; ${acc.rows} row(s) summed for this resource. ` +
           'Billed AS OF the export run — a daily export is not a live feed (first data ~24h after creation).',
         asOf ?? ASOF_NOT_ESTABLISHED,
-      ) as BilledFigure,
-    );
+      ),
+      source: 'billed' as const,
+    });
   }
 
   return {

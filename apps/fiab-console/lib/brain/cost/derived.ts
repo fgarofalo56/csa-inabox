@@ -220,20 +220,40 @@ export function deriveContainerAppCost(
     kind: 'band',
     card,
     alwaysOnReplicaSeconds,
-    lower: derivedCost(
-      lowerUsd,
-      `LOWER bound: ${shape}, all seconds at the IDLE rate ` +
-        `(${card.vcpuIdleUsdPerSecond}/vCPU-s, ${card.memoryIdleUsdPerGibSecond}/GiB-s). ` +
-        `The active/idle split is NOT MEASURED — no telemetry extractor exists yet. ${provenance}`,
-      asOf,
-    ) as DerivedFigure,
-    upper: derivedCost(
-      upperUsd,
-      `UPPER bound: ${shape}, all seconds at the ACTIVE rate ` +
-        `(${card.vcpuActiveUsdPerSecond}/vCPU-s, ${card.memoryActiveUsdPerGibSecond}/GiB-s). ` +
-        `The active/idle split is NOT MEASURED — no telemetry extractor exists yet. ${provenance}`,
-      asOf,
-    ) as DerivedFigure,
+    // The `source` label is PINNED here, not asserted. `derivedCost` lives in
+    // `../types.ts` — the graph-substrate lane's file, not this one — and
+    // returns the WIDENED `CostFigure`, so `as DerivedFigure` was an UNCHECKED
+    // assertion: it promised a label it never inspected. Measured 2026-08-23 on
+    // the combined tree, flipping that constructor's literal to `'billed'`
+    // compiled clean (`tsc -p tsconfig.build.json` RC=0, 0 errors) and this very
+    // band then rendered as `$23.65 (billed, LOWER bound: …)` — a list-rate
+    // estimate in the exact visual form of a bill, which is the one outcome this
+    // module exists to make impossible (PRP §3.4, R7).
+    //
+    // Pinning turns the assertion into a CHECKED assignment against
+    // `DerivedCostBand.lower: DerivedFigure`. Flip either literal below and
+    // `next build` fails here — the guard is now visible to the build, not only
+    // to `__tests__`, which `tsconfig.build.json` excludes.
+    lower: {
+      ...derivedCost(
+        lowerUsd,
+        `LOWER bound: ${shape}, all seconds at the IDLE rate ` +
+          `(${card.vcpuIdleUsdPerSecond}/vCPU-s, ${card.memoryIdleUsdPerGibSecond}/GiB-s). ` +
+          `The active/idle split is NOT MEASURED — no telemetry extractor exists yet. ${provenance}`,
+        asOf,
+      ),
+      source: 'derived' as const,
+    },
+    upper: {
+      ...derivedCost(
+        upperUsd,
+        `UPPER bound: ${shape}, all seconds at the ACTIVE rate ` +
+          `(${card.vcpuActiveUsdPerSecond}/vCPU-s, ${card.memoryActiveUsdPerGibSecond}/GiB-s). ` +
+          `The active/idle split is NOT MEASURED — no telemetry extractor exists yet. ${provenance}`,
+        asOf,
+      ),
+      source: 'derived' as const,
+    },
   };
 }
 
