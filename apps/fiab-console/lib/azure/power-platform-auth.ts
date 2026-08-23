@@ -261,7 +261,18 @@ export async function powerPlatformFetch(
  * change, and nothing told them they had gone the wrong way.
  *
  * The SP half is derived from {@link ppSpPrincipalForScope}, i.e. from the same
- * expression the transport mints with — so it cannot drift from reality.
+ * expression the transport mints with — so the HELPER cannot disagree with the
+ * transport for a given scope.
+ *
+ * That is NOT the whole invariant, and reading it as such is how the second
+ * call site shipped unguarded. This function is only as truthful as the `scope`
+ * its CALLER hands it: pass a control-plane literal on a Dataverse call and the
+ * copy names the Console UAMI again — #3688's exact defect, with every
+ * helper-level test still green. So each call site must pass the scope it
+ * actually issued the request under, and is pinned doing so, against the
+ * credential observed on the wire, in
+ * `__tests__/power-platform-auth-principal.test.ts` ("the CALL SITES carry the
+ * principal, not just the helper").
  */
 export function ppAuthHint(triedUser: boolean, scope: string): string {
   const principal = ppSpPrincipalForScope(scope);

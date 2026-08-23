@@ -17,8 +17,11 @@
  *
  * TEST SHAPE. The obvious narrow fix is to special-case 403 and leave every
  * other status saying "unreachable". These tests therefore assert across the
- * WHOLE status class — 401/403/404/500/501 — plus the one case that genuinely
- * earns the word: a throw carrying no HTTP status at all.
+ * WHOLE answered-status class — 401/403/404/429/500/501/503 — plus the one case
+ * that genuinely earns the word: a throw carrying no HTTP status at all. The
+ * count is pinned so that population cannot shrink silently; 429 and 503 were
+ * added after a review showed the original {401,403,404,500,501} left a hole at
+ * exactly the status a real Databricks rate-limit produces.
  *
  * They also pin an OUT-OF-LANE CONSUMER CONTRACT: `app/api/catalog/metastores/
  * route.ts` regex-tests this very string with /account.?admin/i to raise the
@@ -53,10 +56,18 @@ afterEach(() => { global.fetch = realFetch; vi.restoreAllMocks(); });
 
 describe('#3841 — "unreachable" is reserved for an actual absence of response', () => {
   it('does NOT say unreachable for ANY status the server answered with', () => {
-    // POPULATION: five distinct answered statuses, all asserted. A fix that
-    // special-cases only 403 fails four of these.
-    const answered = [401, 403, 404, 500, 501];
-    expect(answered).toHaveLength(5);
+    // POPULATION: seven distinct answered statuses, all asserted, with the count
+    // pinned so the set cannot shrink silently — a guard over a shrunken
+    // population is green and blind.
+    //
+    // 429 and 503 are here because a reviewer put 429 BACK into the
+    // "unreachable" branch and this suite stayed green at RC=0: the original
+    // {401,403,404,500,501} left a hole exactly where a real Databricks
+    // rate-limit lands, and a rate-limit is the loudest possible proof that the
+    // server was reached and answered.
+    const answered = [401, 403, 404, 429, 500, 501, 503];
+    expect(answered).toHaveLength(7);
+    expect(new Set(answered).size).toBe(7);
 
     for (const status of answered) {
       const out = describeWorkspaceFailure(HOST, { status, message: 'denied by policy' });
@@ -66,6 +77,17 @@ describe('#3841 — "unreachable" is reserved for an actual absence of response'
       // The underlying message is always preserved verbatim.
       expect(out, `status ${status}`).toContain('denied by policy');
     }
+  });
+
+  it('a 429 rate-limit is a REJECTION, not an absence of response', () => {
+    // Called out on its own because it is the case the original population
+    // missed, and because it is the one where "unreachable" is most obviously
+    // false: the workspace answered, and it answered "slow down".
+    const out = describeWorkspaceFailure(HOST, { status: 429, message: 'Too Many Requests' });
+    expect(out).not.toMatch(/unreachable/i);
+    expect(out).not.toMatch(/no HTTP response/i);
+    expect(out).toContain('429');
+    expect(out).toMatch(/rejected the request/i);
   });
 
   it('DOES say unreachable when there is no HTTP status — the one true case', () => {

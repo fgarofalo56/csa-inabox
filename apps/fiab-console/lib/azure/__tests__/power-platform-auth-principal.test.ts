@@ -30,6 +30,25 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 
 const UAMI_TOKEN = 'token-from-managed-identity';
 const DATAVERSE_SP_TOKEN = 'token-from-client-secret-credential';
+const USER_TOKEN = 'user-delegated-token';
+
+/**
+ * Mutable knobs the hoisted mock factories read. These exist for the CALL-SITE
+ * block at the bottom of this file: the isolation tests pin `ppAuthHint` /
+ * `ppSpPrincipalForScope` hard, but a helper is only as good as its wiring, and
+ * an independent review broke BOTH consumers with the entire 7-suite Power
+ * Platform set (206 tests) staying green. See that block's header.
+ */
+const h = vi.hoisted(() => ({
+  /** oid of the signed-in user; '' → no session, so SP-only (triedUser=false). */
+  oid: '' as string,
+  /** Queued responses for the outbound calls, consumed in order. */
+  responses: [] as Array<{ status: number; body?: unknown }>,
+  /** Authorization header of every outbound call, in order. */
+  auths: [] as string[],
+  /** URL of every outbound call, in order. */
+  urls: [] as string[],
+}));
 
 // Two DISTINGUISHABLE credential classes. This is what lets a test tell which
 // credential the transport really selected, rather than trusting a label.
@@ -53,6 +72,45 @@ vi.mock('@/lib/azure/aca-managed-identity', () => ({
   },
 }));
 
+// LEAF stubs — the ambient session and the MSAL confidential client the REAL
+// `lib/auth/obo` acquires through. obo itself is deliberately NOT mocked: the
+// delegated-token path exercised at the call sites below is the production one,
+// so this file does not re-implement the subject it is testing.
+vi.mock('@/lib/auth/session', () => ({
+  getSession: () => (h.oid ? { claims: { oid: h.oid } } : null),
+}));
+vi.mock('@/lib/auth/msal', () => ({
+  getMsalClient: () => ({
+    getTokenCache: () => ({
+      getAllAccounts: async () => [{ homeAccountId: `${h.oid}.tid`, localAccountId: h.oid }],
+    }),
+    acquireTokenSilent: async () => ({
+      accessToken: USER_TOKEN, expiresOn: new Date(Date.now() + 3_600_000),
+    }),
+  }),
+  pbiOboScopes: () => [],
+}));
+
+// The transport BOTH call sites reach. Recording the bearer actually put on the
+// wire is what lets a case assert the hint against the credential that really
+// minted the token, rather than against a label.
+vi.mock('@/lib/azure/fetch-with-timeout', () => ({
+  fetchWithTimeout: async (url: string, init?: RequestInit) => {
+    const headers = (init?.headers || {}) as Record<string, string>;
+    h.auths.push(headers.authorization || headers.Authorization || '');
+    h.urls.push(String(url));
+    const next = h.responses.shift() ?? { status: 200, body: {} };
+    return new Response(JSON.stringify(next.body ?? {}), {
+      status: next.status,
+      headers: { 'content-type': 'application/json' },
+    });
+  },
+  FetchTimeoutError: class extends Error {},
+  DEFAULT_SERVER_FETCH_TIMEOUT_MS: 30_000,
+  LLM_FETCH_TIMEOUT_MS: 120_000,
+  withDeadline: async <T,>(p: Promise<T>) => p,
+}));
+
 const DATAVERSE_SCOPE = 'https://contoso.crm.dynamics.com/.default';
 const DATAVERSE_SCOPE_NUMBERED = 'https://contoso.crm4.dynamics.com/.default';
 const CONTROL_PLANE_SCOPE = 'https://api.bap.microsoft.com/.default';
@@ -63,6 +121,21 @@ const TOKEN_OPTS = { tokenError: (m: string) => new Error(m) };
  *  grant the wrong application. It must not appear on a Dataverse path. */
 const OLD_WRONG_DIRECTIVE =
   'Confirm the Console UAMI SP is added to the "Service principals can use Power Platform APIs" allow';
+
+/**
+ * The inline hint `bapCallWithHeaders` carried before #3688 — SP-only advice,
+ * emitted verbatim even when the SIGNED-IN USER was the identity refused first.
+ *
+ * Recorded here because it is also a lesson about assertions: this string
+ * contains the words "Power Platform" THREE times, so an
+ * `expect.stringContaining('Power Platform')` sitting directly on the fixed
+ * line could not tell it from the post-fix copy — and did not, when a reviewer
+ * reverted the fix underneath it.
+ */
+const OLD_INLINE_BAP_HINT =
+  'Confirm the Console UAMI SP is added to the "Service principals can use Power Platform APIs" allow group '
+  + 'in Power Platform admin centre, and that it holds the Power Platform Administrator role required to '
+  + 'create/edit/delete environments.';
 
 const SAVED = { ...process.env };
 beforeEach(() => {
@@ -75,7 +148,15 @@ beforeEach(() => {
   delete process.env.AZURE_CLIENT_ID;
   delete process.env.AZURE_CLIENT_SECRET;
   delete process.env.AZURE_TENANT_ID;
+  delete process.env.LOOM_POWERPLATFORM_USER_PASSTHROUGH;
+  delete process.env.LOOM_BAP_BASE;
+  delete process.env.LOOM_CLOUD;
+  delete process.env.AZURE_CLOUD;
   process.env.LOOM_UAMI_CLIENT_ID = 'uami-1';
+  h.oid = '';
+  h.responses = [];
+  h.auths = [];
+  h.urls = [];
 });
 afterEach(() => { process.env = { ...SAVED }; vi.restoreAllMocks(); });
 
@@ -204,5 +285,138 @@ describe('#3688 — the hint names the right application, on every path', () => 
     }
     // …and only when a user token was actually attempted.
     expect(ppAuthHint(false, CONTROL_PLANE_SCOPE)).not.toContain('Both identities were refused');
+  });
+});
+
+/**
+ * CALL-SITE COVERAGE — the two consumers that make this fix reach an operator.
+ *
+ * WHY THIS BLOCK EXISTS, in the reviewer's own measurements. The isolation
+ * tests above pin `ppAuthHint` / `ppSpPrincipalForScope` hard — their
+ * narrow-bypass killer is genuine — but NEITHER consumer was covered, and both
+ * were broken with the whole 7-suite Power Platform set (206 tests) at RC=0:
+ *
+ *  - hard-coding `ppCall`'s scope argument to a control-plane literal made
+ *    every Dataverse denial name "the Console UAMI SP" again — verbatim #3688's
+ *    defect, at the PRIMARY site. It is production-reachable, not dead:
+ *    `listSolutions` / `listTables` feed a Dataverse scope from
+ *    `dataverseBase(envId)` straight into `ppCall`.
+ *  - reverting `bapCallWithHeaders` to `const { res }` plus its inline UAMI-only
+ *    string restored an SP-only assertion on a denial that refused the USER
+ *    first. A test DID sit on that exact line, but asserted
+ *    `stringContaining('Power Platform')` — which the pre-fix string satisfies
+ *    three times over.
+ *
+ * Every case below is pinned to the credential ACTUALLY on the wire, so the
+ * remediation copy cannot drift from the transport at the call site either —
+ * the same anti-drift shape the isolation block uses on the helper.
+ */
+describe('#3688 — the CALL SITES carry the principal, not just the helper', () => {
+  const DATAVERSE_URL = 'https://contoso.crm.dynamics.com/api/data/v9.2/solutions';
+
+  it('ppCall on a Dataverse scope: the Dataverse SP is on the wire AND named in the hint', async () => {
+    withDataverseSp();
+    const { ppCall } = await import('../powerplatform-client');
+    h.responses = [{ status: 403, body: { error: { message: 'PERMISSION_DENIED' } } }];
+
+    const err: any = await ppCall(DATAVERSE_URL, DATAVERSE_SCOPE).catch((e) => e);
+
+    expect(err.status).toBe(403);
+    // POPULATION + ANTI-DRIFT: exactly one outbound call, and it carried the
+    // Dataverse SP's distinguishable token — so the copy below is being checked
+    // against the credential that really minted, not against an empty array.
+    expect(h.auths).toEqual([`Bearer ${DATAVERSE_SP_TOKEN}`]);
+
+    // THE REGRESSION. Hard-code this call site's scope argument and the hint
+    // reverts to the Console UAMI copy, failing all three of these.
+    expect(err.hint).toContain('LOOM_DATAVERSE_CLIENT_ID');
+    expect(err.hint).toMatch(/NOT the Console UAMI/);
+    expect(err.hint).not.toContain('LOOM_UAMI_CLIENT_ID');
+    expect(err.hint).not.toContain(OLD_WRONG_DIRECTIVE);
+  });
+
+  it('ppCall on a Dataverse scope with NO Dataverse SP: says granting the UAMI cannot help', async () => {
+    // The third principal state, at the call site. The wire carries the UAMI
+    // token, which Microsoft accepts as an Application User under no grant — so
+    // the copy must say so rather than ask for one.
+    const { ppCall } = await import('../powerplatform-client');
+    h.responses = [{ status: 403, body: { error: { message: 'PERMISSION_DENIED' } } }];
+
+    const err: any = await ppCall(DATAVERSE_URL, DATAVERSE_SCOPE).catch((e) => e);
+
+    expect(h.auths).toEqual([`Bearer ${UAMI_TOKEN}`]);
+    expect(err.hint).toMatch(/No Dataverse service principal is configured/);
+    expect(err.hint).toMatch(/Granting the UAMI will not help/);
+    expect(err.hint).not.toContain(OLD_WRONG_DIRECTIVE);
+  });
+
+  it('PRODUCTION PATH: listTables → dataverseBase → ppCall keeps the Dataverse principal', async () => {
+    // Proves the wiring is reachable from a real consumer, not only from a
+    // hand-built ppCall: the BAP environment lookup answers first (control
+    // plane, UAMI), then the Dataverse metadata call is denied.
+    withDataverseSp();
+    const { listTables } = await import('../powerplatform-client');
+    h.responses = [
+      {
+        status: 200,
+        body: {
+          name: 'env-1',
+          properties: {
+            displayName: 'HQ',
+            linkedEnvironmentMetadata: { instanceUrl: 'https://contoso.crm.dynamics.com/' },
+          },
+        },
+      },
+      { status: 403, body: { error: { message: 'PERMISSION_DENIED' } } },
+    ];
+
+    const err: any = await listTables('env-1').catch((e) => e);
+
+    // Two calls, two DIFFERENT principals — the whole point of #3688.
+    expect(h.auths).toEqual([`Bearer ${UAMI_TOKEN}`, `Bearer ${DATAVERSE_SP_TOKEN}`]);
+    expect(h.urls[1]).toContain('contoso.crm.dynamics.com');
+    expect(err.status).toBe(403);
+    expect(err.hint).toContain('LOOM_DATAVERSE_CLIENT_ID');
+    expect(err.hint).not.toContain('LOOM_UAMI_CLIENT_ID');
+  });
+
+  it('BAP lifecycle (bapCallWithHeaders): reports BOTH identities when the user was tried first', async () => {
+    h.oid = 'user-oid-1';
+    const { createEnvironment } = await import('../powerplatform-client');
+    h.responses = [
+      { status: 403, body: {} },
+      { status: 403, body: { error: { message: 'still denied' } } },
+    ];
+
+    const err: any = await createEnvironment({
+      displayName: 'X', environmentSku: 'Sandbox', location: 'unitedstates',
+    }).catch((e) => e);
+
+    // The signed-in user was refused, then the SP: `triedUser` is the
+    // discriminator, and DISCARDING it (as this call site used to) asserts an
+    // SP-only denial the code never established — deploy-integrity R7.
+    expect(h.auths).toEqual([`Bearer ${USER_TOKEN}`, `Bearer ${UAMI_TOKEN}`]);
+    expect(err.status).toBe(403);
+    expect(err.hint).toContain('Both identities were refused');
+    expect(err.hint).toContain('LOOM_UAMI_CLIENT_ID');
+    expect(err.hint).toContain('New-PowerAppManagementApp');
+    expect(err.hint).not.toContain(OLD_INLINE_BAP_HINT);
+    expect(err.hint).not.toContain(OLD_WRONG_DIRECTIVE);
+  });
+
+  it('BAP lifecycle: does NOT claim the user was refused when no user token existed', async () => {
+    // The other half of the discriminator. A hint hard-coded to "both" would
+    // pass the case above and fail here, so the pair proves `triedUser` is
+    // actually read at this call site rather than merely present.
+    const { deleteEnvironment } = await import('../powerplatform-client');
+    h.responses = [{ status: 403, body: { error: { message: 'denied' } } }];
+
+    const err: any = await deleteEnvironment('Env-Y').catch((e) => e);
+
+    expect(h.auths).toEqual([`Bearer ${UAMI_TOKEN}`]);
+    expect(err.status).toBe(403);
+    expect(err.hint).not.toContain('Both identities were refused');
+    expect(err.hint).toContain('LOOM_UAMI_CLIENT_ID');
+    expect(err.hint).not.toContain(OLD_INLINE_BAP_HINT);
   });
 });

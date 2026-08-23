@@ -248,8 +248,14 @@ export interface StreamingSqlResult {
  * together and the browser aborted at the very moment this code would have
  * produced its diagnosis. The operator therefore got the generic client-side
  * timeout string for EVERY connect failure and never saw which phase failed or
- * against which host (#3546). A connect budget must fit strictly inside the
- * caller's budget or the server can never win the race and explain itself.
+ * against which host (#3546).
+ *
+ * "Strictly below" is NOT the invariant — 19_999 is strictly below and leaves
+ * the server one millisecond to classify, serialize and return the failure,
+ * which re-creates the defect exactly. The enforced property (see
+ * `__tests__/risingwave-connect-phase.test.ts`) is a MARGIN: this budget may
+ * consume at most HALF of CLIENT_FETCH_TIMEOUT_MS, and must be at least 3_000ms
+ * so it does not flap on a cold handshake.
  *
  * 8s is a full TCP + Postgres startup handshake against an in-VNet internal
  * ingress many times over; it does NOT cap the statement, which keeps its own

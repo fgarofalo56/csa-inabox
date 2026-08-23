@@ -159,6 +159,12 @@ export async function ppCall<T = any>(url: string, scope: string, opts: CallOpts
       // discriminator stayed green because nothing called it).
       // `scope` is passed so the SP half of the sentence names the principal that
       // really minted the token (#3688) — Dataverse calls are NOT the UAMI.
+      // Hard-coding a literal here (or reusing a control-plane scope) silently
+      // restores the old wrong copy on every Dataverse denial, and NO
+      // helper-level test can see it. Pinned at this call site — against the
+      // bearer actually on the wire — by
+      // __tests__/power-platform-auth-principal.test.ts, "the CALL SITES carry
+      // the principal, not just the helper".
       void identity;
       hint = ppAuthHint(triedUser, scope);
     }
@@ -419,6 +425,15 @@ async function bapCallWithHeaders<T = any>(
   // to go fix the SP grant (deploy-integrity R7): the message asserted an
   // SP-only denial the code had not established. Same defect the comment in
   // ppCall describes; bapCallWithHeaders never got the fix.
+  //
+  // It then shipped a second time with no call-site guard: the ONE test that
+  // sits on this path asserted `stringContaining('Power Platform')`, and the
+  // pre-fix inline string contains those words three times, so reverting this
+  // block byte-for-byte left the suite green. Both halves of the discriminator
+  // are now pinned in __tests__/power-platform-auth-principal.test.ts (user
+  // refused first -> "Both identities were refused"; no user token -> not), and
+  // __tests__/powerplatform-lifecycle.test.ts asserts substrings unique to the
+  // shared helper's copy.
   const { res, triedUser } = await ppFetch(full, bapScope(), {
     method,
     headers: {

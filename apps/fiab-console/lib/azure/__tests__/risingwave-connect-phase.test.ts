@@ -70,7 +70,7 @@ const timeoutErr = () => Object.assign(new Error('timeout expired'), { code: und
 const refusedErr = () => Object.assign(new Error('connect ECONNREFUSED 10.0.0.4:4566'), { code: 'ECONNREFUSED' });
 
 describe('#3546 — the connect budget must fit INSIDE the client budget', () => {
-  it('passes a connectionTimeoutMillis strictly below CLIENT_FETCH_TIMEOUT_MS', async () => {
+  it('leaves the caller a real margin — not merely a connectionTimeoutMillis one ms under the ceiling', async () => {
     const { CLIENT_FETCH_TIMEOUT_MS } = await import('../../client-fetch');
     const { RISINGWAVE_CONNECT_TIMEOUT_MS, runStreamingQuery } = await import('../risingwave-client');
     await runStreamingQuery('SELECT 1');
@@ -80,10 +80,21 @@ describe('#3546 — the connect budget must fit INSIDE the client budget', () =>
     expect(h.configs).toHaveLength(1);
 
     // THE REGRESSION. These two were EQUAL (20_000 === 20_000), which is why
-    // the server could never win the race and explain itself. Strict `<` is the
-    // property; the literal is secondary.
+    // the server could never win the race and explain itself.
     expect(h.configs[0].connectionTimeoutMillis).toBe(RISINGWAVE_CONNECT_TIMEOUT_MS);
     expect(RISINGWAVE_CONNECT_TIMEOUT_MS).toBeLessThan(CLIENT_FETCH_TIMEOUT_MS);
+
+    // A BARE `<` IS NOT THE PROPERTY. A reviewer set this to 19_999 — one
+    // millisecond inside the client ceiling — and the suite stayed green at
+    // RC=0 while functionally re-creating #3546: the server still has no time
+    // to build and return its diagnosis before the browser aborts. The real
+    // property is a MARGIN. The connect budget may consume at most HALF the
+    // caller's budget, leaving the other half for the failure to be classified,
+    // serialized and returned through the BFF.
+    expect(RISINGWAVE_CONNECT_TIMEOUT_MS).toBeLessThanOrEqual(CLIENT_FETCH_TIMEOUT_MS / 2);
+    // …and a floor, so the margin cannot be "won" by shrinking the connect
+    // budget to something that flaps on a cold in-VNet TCP + Postgres handshake.
+    expect(RISINGWAVE_CONNECT_TIMEOUT_MS).toBeGreaterThanOrEqual(3_000);
   });
 
   it('does NOT shrink the statement budget while bounding the connect budget', async () => {
