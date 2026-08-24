@@ -109,7 +109,7 @@ jobs:
       # exit-code 0 deliberately: this step's job is coverage, not the verdict —
       # the CRITICAL gate below is what decides the check.
       - name: Trivy filesystem scan — full report (coverage evidence)
-        uses: aquasecurity/trivy-action@57a97c7e7821a5776cebc9bb87c984fa69cba8f1 # 0.35.0
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # 0.36.0
         with:
           scan-type: fs
           scan-ref: requirements/
@@ -144,7 +144,7 @@ jobs:
 
       # Fail the job on CRITICAL.
       - name: Trivy filesystem scan — fail on CRITICAL
-        uses: aquasecurity/trivy-action@57a97c7e7821a5776cebc9bb87c984fa69cba8f1 # 0.35.0
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # 0.36.0
         with:
           scan-type: fs
           scan-ref: requirements/
@@ -158,7 +158,7 @@ jobs:
       # for the PR-comment step.
       - name: Trivy filesystem scan — HIGH (SARIF)
         if: always()
-        uses: aquasecurity/trivy-action@57a97c7e7821a5776cebc9bb87c984fa69cba8f1 # 0.35.0
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # 0.36.0
         with:
           scan-type: fs
           scan-ref: requirements/
@@ -178,7 +178,7 @@ jobs:
 
       - name: Trivy filesystem scan — JSON (for PR comment)
         if: github.event_name == 'pull_request'
-        uses: aquasecurity/trivy-action@57a97c7e7821a5776cebc9bb87c984fa69cba8f1 # 0.35.0
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # 0.36.0
         with:
           scan-type: fs
           scan-ref: requirements/
@@ -330,7 +330,7 @@ jobs:
           cache-to: type=gha,mode=max
 
       - name: Trivy image scan — fail on CRITICAL
-        uses: aquasecurity/trivy-action@57a97c7e7821a5776cebc9bb87c984fa69cba8f1 # 0.35.0
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # 0.36.0
         with:
           image-ref: csa/${{ matrix.component }}:trivy-${{ github.sha }}
           severity: CRITICAL
@@ -340,7 +340,7 @@ jobs:
 
       - name: Trivy image scan — HIGH+CRITICAL (SARIF)
         if: always()
-        uses: aquasecurity/trivy-action@57a97c7e7821a5776cebc9bb87c984fa69cba8f1 # 0.35.0
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # 0.36.0
         with:
           image-ref: csa/${{ matrix.component }}:trivy-${{ github.sha }}
           severity: HIGH,CRITICAL
@@ -369,7 +369,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
 
       - name: Trivy config scan
-        uses: aquasecurity/trivy-action@57a97c7e7821a5776cebc9bb87c984fa69cba8f1 # 0.35.0
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # 0.36.0
         with:
           scan-type: config
           scan-ref: portal/kubernetes/
