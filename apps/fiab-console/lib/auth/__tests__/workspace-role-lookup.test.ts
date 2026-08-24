@@ -289,20 +289,22 @@ describe('resolveWorkspaceRole — the tid boundary is DELEGATED and FAILS CLOSE
   });
 });
 
-describe('the DELEGATED path\'s step-4 residual — pinned, not asserted away', () => {
-  // WHY THIS SPEC EXISTS. The fail-closed positive match above governs the
-  // SECOND (workspace-permissions) path only. On the FIRST path the boundary is
-  // `resolveWorkspaceAccessByOid` step 4, which is still TRUTHINESS-GUARDED — so
-  // a legacy `tid`-less doc plus any `workspace-roles` ACL row resolves, this
-  // function returns the document, and `role-assignments/route.ts` then grants a
-  // TENANT ADMIN full member management on a workspace whose tenancy was never
-  // established.
+describe('the DELEGATED path\'s step-4 residual — CLOSED by #3840, and pinned closed', () => {
+  // WHAT THIS BLOCK USED TO SAY, AND WHY IT CHANGED.
   //
-  // It is pinned rather than fixed because closing it means tightening step 4
-  // itself, which is the resolver's decision and reaches ~270 call sites. An
-  // UNTESTED residual is one nobody notices widening; this is the spec that
-  // fails if it does.
-  it('a tid-less doc + an ACL row still resolves the document (step 4 decides nothing)', async () => {
+  // #3840 shipped this block asserting the residual AS THE CURRENT BEHAVIOUR: a
+  // legacy tid-less doc plus any `workspace-roles` ACL row resolved, this
+  // function returned the document, and `role-assignments/route.ts` then granted
+  // a TENANT ADMIN full member management on a workspace whose tenancy was never
+  // established. It was pinned rather than fixed because closing it meant
+  // tightening `resolveWorkspaceAccessByOid` step 4 itself — "the resolver's
+  // decision", reaching ~270 call sites.
+  //
+  // That is exactly what this change does, so the pin INVERTS. The specs below
+  // are the same two scenarios with the opposite expectation; keeping them (and
+  // their names) rather than deleting them is what makes the closure auditable
+  // against the commit that recorded the hole.
+  it('a tid-less doc + an ACL row is now REFUSED (step 4 requires a positive match)', async () => {
     const { tid: _dropped, ...legacy } = WS_DOC as Record<string, unknown>;
     world.doc = legacy;
     world.aclRole = 'Viewer';
@@ -311,14 +313,13 @@ describe('the DELEGATED path\'s step-4 residual — pinned, not asserted away', 
       WS_ID,
       session(MEMBER_OID, MEMBER_UPN, FOREIGN_TID),
     );
-    // The RESIDUAL, stated as what the code does today.
-    expect(workspace).not.toBeNull();
-    // It still grants NO per-workspace role of its own — the exposure is the
-    // ROUTE's `role || isTenantAdmin(s)` ladder acting on this document.
+    // The document is withheld, so the ROUTE's `role || isTenantAdmin(s)` ladder
+    // has nothing to act on — which is where the escalation actually happened.
+    expect(workspace).toBeNull();
     expect(role).toBeNull();
   });
 
-  it('…but with NO ACL row the same caller is refused — the residual needs a real grant', async () => {
+  it('…and with NO ACL row the same caller is still refused (unchanged)', async () => {
     const { tid: _dropped, ...legacy } = WS_DOC as Record<string, unknown>;
     world.doc = legacy;
     world.aclRole = null;
@@ -327,8 +328,18 @@ describe('the DELEGATED path\'s step-4 residual — pinned, not asserted away', 
       WS_ID,
       session(MEMBER_OID, MEMBER_UPN, FOREIGN_TID),
     );
-    // This is what #3840 closed: before it, the bare `readWorkspaceById` result
-    // was enough and no grant was needed at all.
     expect(workspace).toBeNull();
+  });
+
+  it('CONTROL: a STAMPED doc + an ACL row still resolves — the closure is a narrowing', async () => {
+    // Without this, both specs above pass on a resolver that refuses everything.
+    world.doc = WS_DOC;
+    world.aclRole = 'Viewer';
+    world.tenantAdmin = true;
+    const { workspace } = await resolveWorkspaceRole(
+      WS_ID,
+      session(MEMBER_OID, MEMBER_UPN, HOME_TID),
+    );
+    expect(workspace).not.toBeNull();
   });
 });

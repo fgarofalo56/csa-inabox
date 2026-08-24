@@ -51,7 +51,15 @@ export async function GET() {
     );
   }
   try {
-    const { workspaces, degraded, degradedReasons } = await listAllWorkspacesAdmin();
+    // #3826 — SCOPE THE FAN-OUT TO THE CALLER'S OWN ENTRA TENANT. `isTenantAdmin`
+    // above establishes that the caller is AN admin; it never establishes WHICH
+    // tenant they administer, and the underlying query is a cross-partition
+    // `SELECT *` over an account that can hold more than one. `s.claims.tid` and
+    // NOT `tenantScopeId(s)`: the latter falls back to the caller's `oid` when
+    // the tid claim is absent, which would silently scope this to a value that
+    // is not a tenant id at all.
+    const { workspaces, degraded, degradedReasons, legacyUnstampedExcluded, legacyRemediation } =
+      await listAllWorkspacesAdmin({ callerTid: s.claims.tid });
     return NextResponse.json({
       ok: true,
       total: workspaces.length,
@@ -60,6 +68,9 @@ export async function GET() {
       // back to defaults, say so — the UI can flag "counts may be stale / store
       // unreachable" instead of showing 0 as if it were the truth.
       ...(degraded ? { degraded: true, degradedReasons } : {}),
+      // #3826: a legacy estate must not read as a SHORTER inventory with no
+      // explanation. Excluded records are reported with their remediation.
+      ...(legacyUnstampedExcluded ? { legacyUnstampedExcluded, legacyRemediation } : {}),
     });
   } catch (e: any) {
     return apiServerError(e);

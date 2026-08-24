@@ -17,10 +17,11 @@
  * boundary). See no-fabric-dependency.md + no-vaporware.md.
  */
 
-import { NextRequest, NextResponse } from 'next/server';
-import { getSession, type SessionPayload } from '@/lib/auth/session';
+import { NextResponse } from 'next/server';
+import { type SessionPayload } from '@/lib/auth/session';
+import { withSession } from '@/lib/api/route-toolkit';
 import { pdpCheck } from '@/lib/auth/pdp/enforce';
-import { isTenantAdmin } from '@/lib/auth/feature-gate';
+import { authorizeItemWorkspace } from '@/lib/auth/workspace-guard';
 import { loadOwnedItem } from '../../../_lib/item-crud';
 import { isGovCloud } from '@/lib/azure/cloud-endpoints';
 import { uamiArmCredential } from '@/lib/azure/arm-credential';
@@ -70,21 +71,109 @@ function aclBackendEnabled(): boolean {
   return process.env.LOOM_ONELAKE_SECURITY_ACL === 'true';
 }
 
+/** THE ONE refusal wording and the ONE way to build it. Every denial on this
+ *  route — foreign tenant, unconfirmable tenancy, no such item, no role held —
+ *  returns exactly this, so none of them can be told apart. */
+const NOT_FOUND = 'item not found';
+const notFound = () => NextResponse.json({ ok: false, error: NOT_FOUND }, { status: 404 });
+
 /**
  * OWNERSHIP gate — these handlers read role definitions and grant/revoke REAL
  * ADLS Gen2 POSIX ACLs on the shared DLZ storage, so a bare session + the
- * default-off PDP shadow gate is NOT sufficient authorization. The caller must
- * own the item (same loadOwnedItem check as the sibling endorsement/share
- * routes) or be a tenant admin; otherwise 404 (don't leak item existence).
+ * default-off PDP shadow gate is NOT sufficient authorization.
+ *
+ * ── #3855 / #3833 — THIS GATE USED TO OPEN BEFORE IT READ ANYTHING ───────────
+ *
+ * Until this change its first line was
+ *
+ *     if (isTenantAdmin(session)) return null;   // null == AUTHORIZED
+ *
+ * ahead of every Cosmos read, over an `itemId` and an `itemType` the CALLER
+ * supplies in the URL. Nothing below it ran for an admin: not the item lookup,
+ * not the workspace resolution, not the tenant comparison. So a tenant admin in
+ * tenant A holding a lakehouse GUID from tenant B reached POST / PUT / DELETE on
+ * this route, and those handlers do not read metadata — they call
+ * `applyRoleAcls` / `revokeRoleAcls`, which write REAL ADLS Gen2 POSIX ACLs onto
+ * the Delta folders of the OTHER TENANT'S LAKE, naming arbitrary Entra object
+ * ids as members. That is a cross-tenant WRITE, and it is the reason this was
+ * taken first in the #3833 family.
+ *
+ * THE FAMILY, AND WHY A LOCAL PATCH WOULD HAVE BEEN THE WRONG FIX. #3833 has the
+ * same admin-open shape in four places; the two that DESTROY were repaired first
+ * (`workspaces/bulk-delete` in #3836 — a cascade delete; `lib/auth/workspace-guard`
+ * in #3830). Every one of them was repaired the SAME way, and it is not "add a
+ * tid check here": path proliferation is how this family reached seven sites.
+ * The private path is DELETED. The tenant decision has one implementation —
+ * `resolveWorkspaceAccessByOid` (`lib/auth/workspace-access.ts`) — whose step 6
+ * admits a tenant admin ONLY on a POSITIVE tenant match (`callerTid && wsDoc.tid
+ * && equal`, #3823/#3824), never on a mere non-contradiction. Both canonical
+ * helpers below reach that one resolver:
+ *
+ *   1. `authorizeItemWorkspace` — the 85-importer item-scoped authorizer. It
+ *      resolves the item's OWNING workspace (cross-partition, so a foreign-tenant
+ *      item is still FOUND and still judged) and delegates.
+ *   2. `loadOwnedItem` — re-resolves the item through the same ladder and is what
+ *      proves the item EXISTS at all. `authorizeItemWorkspace` deliberately
+ *      returns null (allow) when no item of that type carries the id, because
+ *      then there is no other tenant's resource to gate; on THIS route that state
+ *      must still 404, or a POST would mint ACLs for an item that does not exist.
+ *
+ * EVERY REFUSAL IS FLATTENED TO ONE 404, AND THAT COSTS SOMETHING WORTH NAMING.
+ * `authorizeItemWorkspace` returns `workspaceDenialResponse(diag) ?? <404>`, and
+ * that first arm is a **409 `tenant_unconfirmed` carrying the resolved
+ * `workspaceId`** (`lib/auth/workspace-denial.ts`) whenever the workspace doc
+ * records no `tid` or the session carries no `tid` claim. On a workspace-OPEN
+ * surface that 409 is right — it is R7-honest and it names a remediation the
+ * operator can act on. HERE IT IS AN ORACLE. The caller supplies the `itemId`;
+ * a 409 tells them "that GUID names a real item, and it lives in workspace
+ * <GUID>", while a nonexistent id 404s — so the two are distinguishable, in
+ * exactly the tid-less state #3845 proves has a live generator. This route
+ * GRANTS ADLS ACLS, so the oracle outweighs the diagnostic, and every refusal
+ * returns the identical flat 404 body.
+ *
+ * WHAT THAT GIVES UP, stated rather than implied: an admin blocked by an
+ * unstamped workspace doc gets no in-band remediation from THIS route. It is not
+ * lost — `resolveWorkspaceAccessByOid` logs the refusal with its cause and
+ * remediation server-side (`[workspace-access] tenant-admin grant REFUSED`), and
+ * the same 409 is still rendered by the workspace-open surfaces, which are reads
+ * rather than mutations and take a workspace id the caller is entitled to name.
+ *
+ * NOT A WIDENING FOR ANYONE. Both calls are WRITE-scoped (`allowReadRoles` is not
+ * passed, on the GET too), which is exactly what `loadOwnedItem` already required
+ * of every non-admin caller before this change. A Viewer 404s on GET today and
+ * 404s on GET after. What changed is only that an ADMIN is now judged by the same
+ * ladder as everyone else.
+ *
+ * 404, NOT 403, AND BEFORE THE QUERY. A 403 would confirm that the caller-supplied
+ * id names a real item in some tenant — a COUNT is an ORACLE when the caller picks
+ * the scope. A foreign-tenant id, an unconfirmable-tenancy id and a nonexistent id
+ * all return the identical body here.
+ *
+ * THE NARROWING, STATED RATHER THAN IMPLIED. A tenant admin who neither owns the
+ * item nor holds a workspace ACL role on it is now REFUSED when the workspace doc
+ * carries no `tid` (created before rel-T11) or the session carries no `tid` claim
+ * (`UserClaims.tid` is optional by design; `lib/auth/pat.ts` mints PATs without
+ * one). That is the same trade every other consolidated site takes; the remedy is
+ * `node scripts/csa-loom/backfill-workspace-tid.mjs` (dry-run by default,
+ * `--apply` to write). Owners and ACL members are untouched — they never depended
+ * on the admin bypass. The number of such docs on the live estate is UNMEASURED.
  */
 async function assertItemAccess(
   session: SessionPayload,
   itemId: string,
   itemType: string,
 ): Promise<NextResponse | null> {
-  if (isTenantAdmin(session)) return null;
-  const owned = await loadOwnedItem(itemId, itemType, session.claims.oid);
-  if (!owned) return NextResponse.json({ ok: false, error: 'item not found' }, { status: 404 });
+  const denied = await authorizeItemWorkspace(session, {
+    itemId,
+    itemType,
+    notFound: NOT_FOUND,
+  });
+  // Deliberately NOT `return denied` — see the docblock. Any refusal, including
+  // the 409 `tenant_unconfirmed` that carries a workspaceId, collapses to the one
+  // body, so a caller-supplied id cannot be probed for existence.
+  if (denied) return notFound();
+  const owned = await loadOwnedItem(itemId, itemType, session.claims.oid, { session });
+  if (!owned) return notFound();
   return null;
 }
 
@@ -232,10 +321,28 @@ async function syncToFabric(
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-export async function GET(_req: NextRequest, props: { params: Promise<{ type: string; id: string }> }) {
-  const params = await props.params;
-  const session = getSession();
-  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+// ROUTE-TOOLKIT MIGRATION (boy-scout rule, `scripts/ci/check-route-toolkit.mjs`).
+//
+// The hand-rolled `getSession()` prologue is what that ratchet exists to delete —
+// a per-route auth preamble is exactly the surface this route's own #3855 defect
+// grew on. `withSession` is a BEHAVIOUR-PRESERVING swap here and that is
+// checkable rather than asserted: its refusal is `apiUnauthorized()` =
+// `apiError('unauthenticated', 401)` = `{ ok:false, error:'unauthenticated' }`
+// at 401, byte-identical to the four hand-rolled lines it replaces. It also
+// wraps each handler in the same try/catch → `apiServerError` discipline; every
+// inner try/catch below is untouched, so the modelled failure paths still
+// produce their own status codes and only a genuinely unexpected throw changes
+// from an unhandled rejection to a safe 500.
+//
+// `withWorkspaceOwner` is deliberately NOT used: it binds ONE literal itemType,
+// and this route serves three through a `[type]` segment. The authorization it
+// would perform is what `assertItemAccess` does above, for whichever type the
+// segment names.
+const params$ = <P>(ctx: { params: P }) => ctx.params;
+
+export const GET = withSession<{ type: string; id: string }>(async (_req, ctx) => {
+  const params = params$(ctx);
+  const { session } = ctx;
   const itemType = parseItemType(params.type);
   if (!itemType) return NextResponse.json({ ok: false, error: `unsupported item type: ${params.type}` }, { status: 400 });
 
@@ -275,12 +382,11 @@ export async function GET(_req: NextRequest, props: { params: Promise<{ type: st
   } catch (e: any) {
     return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: e?.status || 502 });
   }
-}
+});
 
-export async function POST(req: NextRequest, props: { params: Promise<{ type: string; id: string }> }) {
-  const params = await props.params;
-  const session = getSession();
-  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+export const POST = withSession<{ type: string; id: string }>(async (req, ctx) => {
+  const params = params$(ctx);
+  const { session } = ctx;
   const itemType = parseItemType(params.type);
   if (!itemType) return NextResponse.json({ ok: false, error: `unsupported item type: ${params.type}` }, { status: 400 });
   const deniedPost = await assertItemAccess(session, params.id, params.type);
@@ -351,17 +457,16 @@ export async function POST(req: NextRequest, props: { params: Promise<{ type: st
   } catch (e: any) {
     return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: e?.status || 502 });
   }
-}
+});
 
-export async function PUT(req: NextRequest, props: { params: Promise<{ type: string; id: string }> }) {
-  // Update shares the POST handler (upsert + re-apply).
-  return POST(req, props);
-}
+/** Update shares the POST handler (upsert + re-apply), wrapper included — so the
+ *  session prologue and the two authorization gates run exactly once, on the
+ *  same path, rather than in a second copy that could drift from it. */
+export const PUT = POST;
 
-export async function DELETE(req: NextRequest, props: { params: Promise<{ type: string; id: string }> }) {
-  const params = await props.params;
-  const session = getSession();
-  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+export const DELETE = withSession<{ type: string; id: string }>(async (req, ctx) => {
+  const params = params$(ctx);
+  const { session } = ctx;
   const itemType = parseItemType(params.type);
   if (!itemType) return NextResponse.json({ ok: false, error: `unsupported item type: ${params.type}` }, { status: 400 });
   const deniedDel = await assertItemAccess(session, params.id, params.type);
@@ -387,4 +492,4 @@ export async function DELETE(req: NextRequest, props: { params: Promise<{ type: 
   } catch (e: any) {
     return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: e?.status || 502 });
   }
-}
+});

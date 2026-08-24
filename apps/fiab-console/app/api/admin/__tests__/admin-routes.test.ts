@@ -341,13 +341,27 @@ describe('/api/admin/users', () => {
 // workspaces
 // --------------------------------------------------------------------------
 describe('/api/admin/workspaces', () => {
+  // #3826 — THE INVENTORY IS NOW TENANT-SCOPED. It used to issue
+  // `SELECT * FROM c` with no tenant predicate, so it enumerated every tenant in
+  // the Cosmos account and the route's `isTenantAdmin` gate did not narrow it by
+  // one row (that gate establishes the caller is AN admin, never WHICH tenant
+  // they administer). The session therefore has to carry a `tid` now, and the
+  // fixture documents have to be stamped with it — which is the point, not
+  // fixture bookkeeping: an unstamped record belongs to no confirmable tenant.
+  const ADMIN_TID = '11111111-1111-1111-1111-111111111111';
+
   it('GET returns TENANT-WIDE inventory (cross-partition) with live item counts + owners', async () => {
+    getSessionMock.mockReturnValue({
+      claims: { oid: 'tenant-oid', upn: 'admin@contoso.com', tid: ADMIN_TID },
+      exp: Date.now() / 1000 + 3600,
+    } as any);
     let wsQuery: any = null;
     containers.workspaces._setQuery((q) => {
-      wsQuery = q;
+      if (/COUNT\(1\)/.test(q?.query ?? '')) return [0];
+      wsQuery = q; // the SCAN, not the unstamped-count follow-up
       return [
-        { id: 'ws1', tenantId: 'alice-oid', name: 'Sales', createdBy: 'alice@contoso.com', capacity: 'F8', domain: 'finance', state: 'Active', createdAt: '2026-04-01T00:00:00Z', updatedAt: '2026-05-01T00:00:00Z' },
-        { id: 'ws2', tenantId: 'bob-oid', name: 'Ops', createdBy: 'bob@contoso.com', state: 'Suspended', createdAt: '2026-04-02T00:00:00Z', updatedAt: '2026-05-02T00:00:00Z' },
+        { id: 'ws1', tenantId: 'alice-oid', tid: ADMIN_TID, name: 'Sales', createdBy: 'alice@contoso.com', capacity: 'F8', domain: 'finance', state: 'Active', createdAt: '2026-04-01T00:00:00Z', updatedAt: '2026-05-01T00:00:00Z' },
+        { id: 'ws2', tenantId: 'bob-oid', tid: ADMIN_TID, name: 'Ops', createdBy: 'bob@contoso.com', state: 'Suspended', createdAt: '2026-04-02T00:00:00Z', updatedAt: '2026-05-02T00:00:00Z' },
       ];
     });
     // Batch GROUP BY shape: { workspaceId, n, lastActivity }.
@@ -371,9 +385,38 @@ describe('/api/admin/workspaces', () => {
     const ws2 = j.workspaces.find((w: any) => w.id === 'ws2');
     expect(ws2.itemCount).toBe(0); // no item rows → falls back to 0, not a stub
     expect(ws2.state).toBe('Suspended');
-    // Cross-partition: the workspace scan must NOT filter by tenantId.
+    // STILL CROSS-PARTITION, NOW TENANT-SCOPED — the two are independent and
+    // both matter. `tenantId` holds the CREATING USER'S OID, so filtering on it
+    // would collapse the inventory to the admin's own workspaces (the defect
+    // this route was built to fix). `c.tid` is the ENTRA TENANT, which is what
+    // #3826 scopes by. Asserting both keeps either regression visible.
     expect(wsQuery.query).toMatch(/SELECT \* FROM c/);
     expect(wsQuery.query).not.toMatch(/tenantId/);
+    expect(wsQuery.query).toMatch(/WHERE\s+c\.tid\s*=\s*@tid/);
+    expect(wsQuery.parameters).toEqual([{ name: '@tid', value: ADMIN_TID }]);
+  });
+
+  it('GET fails CLOSED when the admin session carries no tid (#3826)', async () => {
+    // No tenant to scope by means no positive match is possible, so the route
+    // returns an EMPTY inventory with a named reason rather than running the
+    // scan unscoped across every tenant in the account.
+    getSessionMock.mockReturnValue({
+      claims: { oid: 'tenant-oid', upn: 'admin@contoso.com' },
+      exp: Date.now() / 1000 + 3600,
+    } as any);
+    let scanRan = false;
+    containers.workspaces._setQuery(() => {
+      scanRan = true;
+      return [{ id: 'ws1', tenantId: 'alice-oid', name: 'Sales' }];
+    });
+    const { GET } = await import('@/app/api/admin/workspaces/route');
+    const j = await (await GET()).json();
+    expect(j.ok).toBe(true);
+    expect(j.total).toBe(0);
+    expect(j.degraded).toBe(true);
+    expect(j.degradedReasons).toEqual(['tenant-scope-unconfirmed']);
+    // Not "filtered to nothing" — NOT QUERIED AT ALL.
+    expect(scanRan).toBe(false);
   });
 
   it('GET 403 when the caller is not a tenant admin', async () => {
