@@ -350,6 +350,12 @@ export function TokenBudgetPanel() {
       {editing && (
         <BudgetDialog
           row={editing === 'new' ? null : editing}
+          // #3742 — the agents a budget can meaningfully cap are the ones the
+          // attribution ledger has actually seen. They are already in `rows`;
+          // the dialog no longer makes the operator remember their ids.
+          knownAgents={data.rows
+            .filter((r) => r.scope === 'agent')
+            .map((r) => ({ id: r.scopeId, label: r.label || r.scopeId }))}
           onClose={() => setEditing(null)}
           onDone={(msg) => { setNote(msg); setError(null); qc.invalidateQueries({ queryKey: ['llmops-budgets'] }); }}
           onError={(msg) => setError(msg)}
@@ -359,9 +365,11 @@ export function TokenBudgetPanel() {
   );
 }
 
+interface ScopeOption { id: string; label: string }
+
 function BudgetDialog({
-  row, onClose, onDone, onError,
-}: { row: DashboardRow | null; onClose: () => void; onDone: (msg: string) => void; onError: (msg: string) => void }) {
+  row, knownAgents, onClose, onDone, onError,
+}: { row: DashboardRow | null; knownAgents: ScopeOption[]; onClose: () => void; onDone: (msg: string) => void; onError: (msg: string) => void }) {
   const styles = useStyles();
   const [scope, setScope] = useState<BudgetScope>(row?.scope ?? 'workspace');
   const [scopeId, setScopeId] = useState(row?.scopeId ?? '');
@@ -369,6 +377,47 @@ function BudgetDialog({
   const [period, setPeriod] = useState<BudgetPeriod>(row?.budget?.period ?? 'monthly');
   const [limitTokens, setLimitTokens] = useState(String(row?.budget?.limitTokens ?? 1_000_000));
   const [enabled, setEnabled] = useState(row?.budget?.enabled ?? true);
+
+  /**
+   * #3742 — "Scope id" was a bare <Input>. Creating a budget meant hand-typing
+   * a workspace GUID from memory; one wrong character produced a budget that is
+   * saved, enabled, listed as active and can NEVER match a usage row, because
+   * enforcement joins on the exact scope id. It fails silently and looks fine.
+   * Per loom-no-freeform-config and auto-bind-by-default §"no user-performed
+   * plumbing", the platform knows these ids and now offers them.
+   */
+  const wsQ = useQuery({
+    queryKey: ['budget-scope-workspaces'],
+    queryFn: async (): Promise<ScopeOption[]> => {
+      const r = await clientFetch('/api/workspaces');
+      const d: unknown = await r.json();
+      const raw = Array.isArray(d) ? d : ((d as { workspaces?: unknown[] })?.workspaces || []);
+      return (raw as Record<string, string>[])
+        // `/api/workspaces` returns `Workspace[]`, whose display field is
+        // `name` (lib/types/workspace.ts) — so `w.name` is the operand that
+        // actually runs here, and `w.id` is the tail for a nameless doc.
+        // `displayName` is a defensive alias only: this route does not emit it
+        // today, so a test fixture that supplies it exercises none of the live
+        // path and would let `w.name` be deleted with every assertion green.
+        .map((w) => ({ id: w.id, label: w.displayName || w.name || w.id }))
+        .filter((w) => !!w.id);
+    },
+    // Editing an existing budget cannot change its scope id, so do not spend a
+    // round-trip resolving a list the dialog will render disabled.
+    enabled: !row,
+  });
+
+  const options: ScopeOption[] = scope === 'workspace' ? (wsQ.data ?? []) : knownAgents;
+  const optionsLoading = scope === 'workspace' && wsQ.isLoading;
+  const optionsError = scope === 'workspace' && wsQ.isError
+    ? ((wsQ.error as Error)?.message || 'Could not list workspaces.')
+    : null;
+  // The honest fallback, exactly as EntraGroupPicker documents it: a picker that
+  // cannot populate must not become a dead end (auto-bind-by-default forbids
+  // "no items found" + a disabled control). A typed id is allowed ONLY when the
+  // real list is unavailable or genuinely empty — never as the default path.
+  const mustTypeId = !row && !optionsLoading && (!!optionsError || options.length === 0);
+  const selectedLabel = options.find((o) => o.id === scopeId)?.label ?? scopeId;
 
   const save = useMutation({
     mutationFn: async () => {
@@ -393,13 +442,54 @@ function BudgetDialog({
             <div className={styles.form}>
               <Field label="Scope" hint="A workspace budget caps everything spent in that workspace; an agent budget caps one agent across workspaces.">
                 <Dropdown value={scope} selectedOptions={[scope]} disabled={!!row}
-                  onOptionSelect={(_, d) => setScope(String(d.optionValue) as BudgetScope)}>
+                  onOptionSelect={(_, d) => {
+                    const next = String(d.optionValue) as BudgetScope;
+                    // Switching scope invalidates the chosen id — a workspace id
+                    // is never a valid agent id. Clearing it stops a budget from
+                    // being saved against the other scope's identifier.
+                    if (next !== scope) { setScope(next); setScopeId(''); }
+                  }}>
                   <Option value="workspace">workspace</Option>
                   <Option value="agent">agent</Option>
                 </Dropdown>
               </Field>
-              <Field label="Scope id">
-                <Input value={scopeId} disabled={!!row} onChange={(_, d) => setScopeId(d.value)} />
+              <Field
+                label={scope === 'workspace' ? 'Workspace' : 'Agent'}
+                hint={
+                  mustTypeId
+                    ? (optionsError
+                      ? `${optionsError} Enter the ${scope} id directly — it must match the id the attribution ledger records, exactly.`
+                      : `No ${scope === 'workspace' ? 'workspace is available' : 'agent has been attributed any spend yet'}. Enter the id directly — it must match the id the attribution ledger records, exactly.`)
+                    : 'Enforcement joins on this exact id, so it is picked, never typed.'
+                }
+                validationState={optionsError ? 'warning' : 'none'}
+              >
+                {mustTypeId || row ? (
+                  <Input value={scopeId} disabled={!!row} onChange={(_, d) => setScopeId(d.value)} />
+                ) : (
+                  /* Kept MOUNTED across loading — a Dropdown swapped for a
+                     Spinner is the shape that produced the click-dead pickers
+                     in #3632/#3528. Loading is a placeholder + disabled state on
+                     the control itself. */
+                  <Dropdown
+                    value={selectedLabel}
+                    selectedOptions={scopeId ? [scopeId] : []}
+                    disabled={optionsLoading}
+                    placeholder={optionsLoading ? `Loading ${scope}s…` : `Select a ${scope}`}
+                    onOptionSelect={(_, d) => {
+                      const id = String(d.optionValue ?? '');
+                      setScopeId(id);
+                      // Carry the friendly name across so the attribution table
+                      // shows a name, not the raw id, for the new budget.
+                      const picked = options.find((o) => o.id === id);
+                      if (picked && !label.trim()) setLabel(picked.label);
+                    }}
+                  >
+                    {options.map((o) => (
+                      <Option key={o.id} value={o.id} text={o.label}>{o.label}</Option>
+                    ))}
+                  </Dropdown>
+                )}
               </Field>
               <Field label="Label"><Input value={label} onChange={(_, d) => setLabel(d.value)} /></Field>
               <Field label="Period">

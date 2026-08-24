@@ -9,9 +9,13 @@
  * Backed by the Content Safety data-plane (:addOrUpdateBlocklistItems /
  * :removeBlocklistItems / blocklistItems, api-version 2024-09-01). Max 100 items
  * per add call, max 128 chars per term, 10,000 terms total across all lists.
+ *
+ * Route-toolkit: the `withSession` wrapper [R3] — see ../../route.ts for the 401-equivalence note.
+ * #3578: transport failures are diagnosed by _lib/transport-error.ts, not relayed
+ * verbatim as undici's bare "fetch failed".
  */
 import { NextRequest, NextResponse } from 'next/server';
-import { getSession } from '@/lib/auth/session';
+import { withSession } from '@/lib/api/route-toolkit';
 import {
   listBlocklistItems,
   addBlocklistItems,
@@ -20,30 +24,29 @@ import {
   NotDeployedError,
   type AddBlocklistItemInput,
 } from '@/lib/azure/foundry-client';
+import { diagnoseTransportFailure, transportErrorResponse } from '../../_lib/transport-error';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
 function err(e: any) {
   if (e instanceof NotDeployedError) return NextResponse.json({ ok: false, error: e.message, hint: e.hint, notDeployed: true }, { status: 503 });
+  const transport = diagnoseTransportFailure(e);
+  if (transport) return transportErrorResponse(transport);
   const status = e instanceof FoundryError ? e.status : 502;
   return NextResponse.json({ ok: false, error: e?.message || String(e), body: e?.body }, { status });
 }
 
-export async function GET(req: NextRequest) {
-  const session = getSession();
-  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+export const GET = withSession(async (req: NextRequest) => {
   try {
     const name = req.nextUrl.searchParams.get('name')?.trim();
     if (!name) return NextResponse.json({ ok: false, error: 'name required' }, { status: 400 });
     const items = await listBlocklistItems(name);
     return NextResponse.json({ ok: true, items });
   } catch (e: any) { return err(e); }
-}
+});
 
-export async function POST(req: NextRequest) {
-  const session = getSession();
-  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+export const POST = withSession(async (req: NextRequest) => {
   try {
     const name = req.nextUrl.searchParams.get('name')?.trim();
     if (!name) return NextResponse.json({ ok: false, error: 'name required' }, { status: 400 });
@@ -62,11 +65,9 @@ export async function POST(req: NextRequest) {
     const added = await addBlocklistItems(name, items);
     return NextResponse.json({ ok: true, items: added });
   } catch (e: any) { return err(e); }
-}
+});
 
-export async function DELETE(req: NextRequest) {
-  const session = getSession();
-  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+export const DELETE = withSession(async (req: NextRequest) => {
   try {
     const name = req.nextUrl.searchParams.get('name')?.trim();
     if (!name) return NextResponse.json({ ok: false, error: 'name required' }, { status: 400 });
@@ -75,4 +76,4 @@ export async function DELETE(req: NextRequest) {
     await removeBlocklistItems(name, ids);
     return NextResponse.json({ ok: true, removed: ids });
   } catch (e: any) { return err(e); }
-}
+});

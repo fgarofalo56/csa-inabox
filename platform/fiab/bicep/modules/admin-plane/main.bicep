@@ -4716,6 +4716,36 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             // here via /admin/env-config; LOOM_BROKER_REDIS is
             // <hband-redis-host>:6380 from hband-shared.
             //
+            // WHY THESE TWO ARE NOT WIRED THE WAY LOOM_DIRECTLAKE_URL NOW IS —
+            // measured for #3370, because "deployed out-of-band" reads like the
+            // operator merely has to run something, and that is NOT the blocker.
+            // THE IMAGES HAVE NO PRODUCER. Measured on this tree:
+            //
+            //   apps/loom-onelake/          EXISTS (8 files)
+            //   apps/loom-capacity-broker/  EXISTS (17 files)
+            //   build entries in .github/workflows for either image → 0
+            //     (build-fiab-images-acr-tasks.yml's APPS matrix carries 13 apps
+            //      and includes loom-directlake; it includes NEITHER of these.
+            //      The only two workflow mentions of `loom-onelake` anywhere are
+            //      prose comments about test coverage in fiab-console-ci.yml and
+            //      loom-guardrails.yml — not build steps.)
+            //
+            // So the app source and the bicep module both exist while nothing
+            // ever pushes an image. Turning these on today would create Container
+            // Apps referencing `<acr>/loom-onelake:<tag>` and
+            // `<acr>/loom-capacity-broker:<tag>` that cannot be pulled, failing
+            // every revision with MANIFEST_UNKNOWN — the identical trap
+            // params/gcc.bicepparam documents for deployAppsEnabled (#3078).
+            // auto-bind-by-default.md §5 wants the value PRODUCED BY THE DEPLOY,
+            // and that remains the target; the prerequisite is an image lane for
+            // these two apps, which is tracked by #3370 and is not in this
+            // change (it needs .github/workflows/**, owned elsewhere).
+            //
+            // NOTE compute/hband-shared.bicep has ZERO module invocations
+            // repo-wide, so the shared Redis + UAMIs it declares are unreachable
+            // too — same class as #3893. Wiring the URLs without it would also
+            // leave LOOM_BROKER_REDIS with no ledger to point at.
+            //
             // LOOM_DIRECTLAKE_URL IS NO LONGER ONE OF THEM (#3291). It was, and
             // that was the bug: the value was hard-coded '' here while the BFF's
             // 503 told the operator to deploy a bicep module no orchestrator
