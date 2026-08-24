@@ -95,6 +95,22 @@ const ARM_DEAD = 'const stmt = masked.slice(a, b);';
 /** The #3877-f2 per-pin clause CASE 1 requires to be present in the NOTE. */
 const ONCONSOLIDATION_MARKER = 'READ THIS FIRST';
 
+// ── CASE 4 fixtures: the sections-1..4 tenant-comparison test (#3900) ────────
+// The section is exercised in-process by ten embedded control arms inside the
+// guard. CASE 4 is the END-TO-END pair for the two that matter most, applied to
+// the real resolver on disk rather than to a synthetic string, because the
+// defect it pins was a FALSE POSITIVE against a real file: the test was keyed to
+// a proximity window (a refusal within 80 characters of the comparison) and
+// #3900's refusal is 2007 characters below its comparison — separated by a long
+// comment and a nested diagnostic — and unconditional. The guard failed correct
+// code and reported the cause as "DISCARDED", which it had not measured.
+const RESOLVER = 'apps/fiab-console/lib/auth/workspace-access.ts';
+const RESOLVER_CMP = 'if (callerTid && wsDoc.tid && wsDoc.tid !== callerTid) return null;';
+/** The message the section emits. CASE 4 asserts on THIS, not on the exit code:
+ *  any edit to this function also moves its NON_AUTHORIZER_BODY_PINS digest, so
+ *  both arms exit non-zero for that separate (and correct) reason. */
+const RESOLVER_CMP_FAILURE = 'no longer makes a REFUSING tenant comparison';
+
 const problems = [];
 const read = (p) => readFileSync(p, 'utf8');
 
@@ -135,6 +151,16 @@ function measureConsolidation(guardSrc, siteSrc, importLine = VALUE_IMPORT) {
 
 const guardBefore = read(GUARD);
 const siteBefore = read(SITE);
+const resolverBefore = read(RESOLVER);
+const RESOLVER_EOL = resolverBefore.includes('\r\n') ? '\r\n' : '\n';
+
+/** Replace the resolver's boundary statement, run the guard, report whether the
+ *  sections-1..4 comparison failure fired. Restoration is the caller's job. */
+function measureResolver(replacement) {
+  writeFileSync(RESOLVER, resolverBefore.replace(RESOLVER_CMP, replacement));
+  const { code, out } = runGuard();
+  return { code, cmpFailure: out.includes(RESOLVER_CMP_FAILURE) };
+}
 
 /**
  * Restore on the way out, however we leave. `finally` covers a thrown error; a
@@ -149,8 +175,9 @@ function restoreTree() {
   try {
     writeFileSync(GUARD, guardBefore);
     writeFileSync(SITE, siteBefore);
+    writeFileSync(RESOLVER, resolverBefore);
   } catch (e) {
-    console.error(`[selftest] RESTORE THREW — run: git checkout -- ${GUARD} ${SITE}`, e);
+    console.error(`[selftest] RESTORE THREW — run: git checkout -- ${GUARD} ${SITE} ${RESOLVER}`, e);
   }
 }
 for (const sig of ['SIGINT', 'SIGTERM', 'SIGHUP']) {
@@ -171,6 +198,7 @@ for (const [label, hay, needle] of [
   ['site comparison', siteBefore, OLD_CMP],
   ['guard region pin', guardBefore, OLD_CMP],
   ['guard arm call site', guardBefore, ARM_LIVE],
+  ['resolver boundary statement', resolverBefore, RESOLVER_CMP],
 ]) {
   if (!hay.includes(needle)) {
     console.error(`[selftest] SETUP FAILED — ${label} not found: ${JSON.stringify(needle.slice(0, 70))}`);
@@ -248,13 +276,67 @@ try {
         'specifier test is not reading the import kind at all.',
     );
   }
+
+  // ── CASE 4: DISTANCE is not the property — control-flow POSITION is (#3900) ─
+  // A matched pair, both applied to the real resolver. They differ in exactly
+  // the dimension the old window could not see: 4a's refusal is far away and
+  // UNCONDITIONAL, 4b's is close and NESTED under a further condition. Under the
+  // 80-character window 4a failed (the false positive that blocked #3900) and 4b
+  // passed (a partial boundary blessed). If either arm ever flips, the section
+  // has been re-keyed to distance again.
+  const distant = measureResolver(
+    'if (callerTid && wsDoc.tid && wsDoc.tid !== callerTid) {' + RESOLVER_EOL +
+    '    // A refusal, not an absence. Everything between this comment and the' + RESOLVER_EOL +
+    '    // return exists to explain and record WHY, which is what a reviewer is' + RESOLVER_EOL +
+    '    // supposed to do here, and it is exactly what a proximity window' + RESOLVER_EOL +
+    '    // punishes. The refusal below is unconditional: it is a statement of' + RESOLVER_EOL +
+    '    // this block, not of the diagnostic inside it.' + RESOLVER_EOL +
+    '    const cause = Boolean(callerTid) && Boolean(wsDoc.tid);' + RESOLVER_EOL +
+    '    if (cause) {' + RESOLVER_EOL +
+    '      console.warn("[workspace-access] REFUSED at the tid boundary");' + RESOLVER_EOL +
+    '    }' + RESOLVER_EOL +
+    '    return null;' + RESOLVER_EOL +
+    '  }',
+  );
+  writeFileSync(RESOLVER, resolverBefore);
+
+  const nested = measureResolver(
+    'if (callerTid && wsDoc.tid && wsDoc.tid !== callerTid) {' + RESOLVER_EOL +
+    '    if (opts.tenantAdmin) return null;' + RESOLVER_EOL +
+    '  }',
+  );
+  writeFileSync(RESOLVER, resolverBefore);
+
+  console.log('CASE 4 — DISTANCE vs POSITION (the #3900 false positive, and its mirror)');
+  console.log(`    4a refusal +530 chars / +10 lines, UNCONDITIONAL — comparison failure   ${distant.cmpFailure}   (expected false)`);
+  console.log(`    4b refusal +53 chars but NESTED                  — comparison failure   ${nested.cmpFailure}   (expected true)`);
+  if (distant.cmpFailure) {
+    problems.push(
+      'CASE 4a: the sections-1..4 test FAILED a refusal that is unconditional but far from its ' +
+        'comparison. That is the #3900 false positive restored — the guard going red because the ' +
+        'code got more explanatory, and (R7) asserting "DISCARDED" about a verdict it never ' +
+        'measured. Key the test to control-flow position, never to a character budget: a budget ' +
+        'is also unstable across checkouts, since core.autocrlf makes the same source measure ' +
+        'longer on Windows than in CI.',
+    );
+  }
+  if (!nested.cmpFailure) {
+    problems.push(
+      'CASE 4b: the sections-1..4 test PASSED a boundary whose only refusal is nested under a ' +
+        'further condition — every caller for whom that inner condition is false crosses the ' +
+        'tenant boundary. Without this arm CASE 4a proves nothing: a test that simply stopped ' +
+        'asking for a refusal would satisfy 4a too ' +
+        '(`csa_loom_mutation_that_does_not_move_the_verdict`).',
+    );
+  }
 } finally {
   writeFileSync(GUARD, guardBefore);
   writeFileSync(SITE, siteBefore);
+  writeFileSync(RESOLVER, resolverBefore);
 }
 
 // Restoration is VERIFIED, not assumed — this script edits tracked files.
-for (const [p, want] of [[GUARD, guardBefore], [SITE, siteBefore]]) {
+for (const [p, want] of [[GUARD, guardBefore], [SITE, siteBefore], [RESOLVER, resolverBefore]]) {
   if (read(p) !== want) problems.push(`RESTORE FAILED for ${p} — the working tree is DIRTY. Restore it from git before continuing.`);
 }
 

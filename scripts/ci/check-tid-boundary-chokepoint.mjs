@@ -1217,9 +1217,42 @@ for (const fn of ['resolveWorkspaceAccessByOid', 'listAccessibleWorkspaces']) {
  * that has stopped discriminating. The old one asserted PRESENCE and position:
  * `void (wsDoc.tid !== callerTid);` satisfied it, and so would
  * `void sameTenantConfirmed(a, b);`. This one additionally requires the
- * comparison to be in a REFUSING position — a `return null` within the same
- * statement window — so a decision whose ANSWER IS DISCARDED no longer counts.
- * Both arms are pinned by the embedded control below, in both directions.
+ * comparison to be in a REFUSING position — so a decision whose ANSWER IS
+ * DISCARDED no longer counts. Both arms are pinned by the embedded control
+ * below, in both directions.
+ *
+ * ── ROUND 3, #3900 CROSS-LANE AGAIN: THE FIRST RE-KEY WAS KEYED TO DISTANCE ──
+ *
+ * "In a refusing position" was first spelled as a PROXIMITY WINDOW:
+ *
+ *     /(?:wsDoc\.tid !== callerTid|sameTenantConfirmed\()[\s\S]{0,80}?return null/
+ *
+ * — the refusal had to be within 80 characters of the comparison. #3900 ran
+ * that version against its own tree and got RC=1 with the message asserting the
+ * verdict was "DISCARDED". It was not. MEASURED here on #3900's blob, over the
+ * same masked body this section reads: the comparison is at body offset 2741 and
+ * the nearest `return null` is at +2007 chars / +34 lines — the window was ~25x
+ * too small — and that refusal is UNCONDITIONAL, a top-level statement of the
+ * block the comparison controls, sitting after a 1.3KB comment and a nested
+ * `if (cause)` diagnostic. So the guard failed CORRECT code, and (R7) its
+ * message stated a cause it had not established: it had measured DISTANCE and
+ * reported DISCARD.
+ *
+ * A character budget is the wrong property twice over. It fails any refusal a
+ * reviewer chose to explain, and it is not even stable across checkouts: this
+ * repo is `core.autocrlf=true`, so the identical source measures ~34 characters
+ * LONGER on a Windows working tree than in CI, and a threshold guard can pass in
+ * one and fail in the other with no diff between them.
+ *
+ * IT IS NOW KEYED TO CONTROL-FLOW POSITION, WHICH IS THE PROPERTY THAT WAS
+ * ALWAYS MEANT: the comparison must sit in the TEST of an `if (...)`, and one of
+ * the OWN top-level statements of the branch that test controls must be
+ * `return null`. Distance is irrelevant; nesting is not. That is strictly
+ * stronger than the window in both directions — the window ACCEPTED
+ * `if (!same(a,b)) { if (cause) return null; }`, a refusal that fires for only
+ * some callers, purely because it was +60 characters away (arm H), and it
+ * REFUSED #3900's unconditional one because it was +2007 away (arm G). Both are
+ * now pinned as embedded control arms.
  *
  * KNOWN LIMIT, stated rather than implied: this is still a TEXTUAL layer over
  * masked source. It establishes that a refusing tenant comparison exists and
@@ -1229,36 +1262,147 @@ for (const fn of ['resolveWorkspaceAccessByOid', 'listAccessibleWorkspaces']) {
  * the backstop for that, exactly as `TID_COMPARISON_PINS`' own reason says of
  * itself ("read a green section 10 as 'no unreviewed COPY', never as 'the
  * comparison is correct'").
+ *
+ * THE SHAPE THAT LIMIT LETS THROUGH, MEASURED, so nobody has to rediscover it:
+ * a carve-out INSIDE the predicate —
+ *
+ *     if (callerTid && wsDoc.tid && wsDoc.tid !== callerTid && !opts.tenantAdmin) return null;
+ *
+ * — still reads as a refusing boundary here, because it IS one, for everyone
+ * except the population it exempts. The old window did not see it either; this
+ * is an unchanged limit, not a new one. On this tree it is caught, but by
+ * `NON_AUTHORIZER_BODY_PINS` (the function's digest moves, so the exemption
+ * demands re-review) — which is a RE-REVIEW TRIGGER, not a semantic verdict, and
+ * it stops applying the moment someone re-derives the digest. Treat "green here"
+ * as "no boundary was deleted", never as "the boundary admits the right people".
  */
-const RESOLVER_TENANT_COMPARISON =
-  /(?:wsDoc\.tid\s*!==\s*callerTid|sameTenantConfirmed\s*\()[\s\S]{0,80}?return\s+null/;
+const TENANT_COMPARISON =
+  /wsDoc\.tid\s*!==\s*callerTid|sameTenantConfirmed\s*\(/g;
 
-/** The same match WITHOUT the refusal requirement — used only to tell the two
- *  failure modes apart, so the message can say which one actually happened. */
-const RESOLVER_TENANT_COMPARISON_PRESENCE =
-  /wsDoc\.tid\s*!==\s*callerTid|sameTenantConfirmed\s*\(/;
+/**
+ * The `(`…`)` of the `if` test that ENCLOSES `at`, or null when `at` is not in
+ * one. Walks left to the first unmatched `(` — so a comparison nested inside
+ * further calls (`if (a(b) && !same(c, d))`) still resolves to the `if` — then
+ * requires the token immediately before it to be the `if` keyword. `void (…)`,
+ * `while (…)` and a bare parenthesised expression therefore do NOT qualify.
+ */
+function enclosingIfTest(body, at) {
+  let depth = 0;
+  let open = -1;
+  for (let i = at - 1; i >= 0; i -= 1) {
+    const c = body[i];
+    if (c === ')') { depth += 1; continue; }
+    if (c === '(') {
+      if (depth === 0) { open = i; break; }
+      depth -= 1;
+    }
+  }
+  if (open === -1) return null;
+  if (!/(?:^|[^\w$.])if\s*$/.test(body.slice(0, open))) return null;
+  let d = 0;
+  for (let i = open; i < body.length; i += 1) {
+    if (body[i] === '(') d += 1;
+    else if (body[i] === ')') { d -= 1; if (d === 0) return { open, end: i + 1 }; }
+  }
+  return null;
+}
+
+/** The branch a test controls: the INNER text of its block, or the single
+ *  statement that follows it when it is braceless. */
+function consequentAfter(body, end) {
+  let i = end;
+  while (i < body.length && /\s/.test(body[i])) i += 1;
+  if (i >= body.length) return null;
+  if (body[i] === '{') {
+    let d = 0;
+    for (let j = i; j < body.length; j += 1) {
+      if (body[j] === '{') d += 1;
+      else if (body[j] === '}') { d -= 1; if (d === 0) return body.slice(i + 1, j); }
+    }
+    return null;
+  }
+  let d = 0;
+  for (let j = i; j < body.length; j += 1) {
+    const c = body[j];
+    if (c === '(' || c === '[' || c === '{') d += 1;
+    else if (c === ')' || c === ']' || c === '}') d -= 1;
+    else if (c === ';' && d === 0) return body.slice(i, j);
+  }
+  return body.slice(i);
+}
+
+/**
+ * Does `text` refuse at its OWN top statement level — is one of its depth-zero
+ * statements itself `return null`?
+ *
+ * The nesting question is the whole point. `if (cause) return null;` inside the
+ * branch refuses only the callers for which `cause` holds and falls through for
+ * everyone else; that is a partial boundary, and it is exactly what the old
+ * 80-character window could not tell apart from an unconditional one.
+ */
+function refusesAtTopLevel(text) {
+  let d = 0;
+  let start = 0;
+  const statements = [];
+  for (let i = 0; i < text.length; i += 1) {
+    const c = text[i];
+    if (c === '(' || c === '[' || c === '{') { d += 1; continue; }
+    if (c === ')' || c === ']') { d -= 1; continue; }
+    if (c === '}') {
+      d -= 1;
+      if (d === 0) { statements.push(text.slice(start, i + 1)); start = i + 1; }
+      continue;
+    }
+    if (c === ';' && d === 0) { statements.push(text.slice(start, i)); start = i + 1; }
+  }
+  statements.push(text.slice(start));
+  return statements.some((s) => /^\s*return\s+null\b/.test(s));
+}
+
+/**
+ * `{ kind: 'ok' | 'discarded' | 'absent', at }` for a masked function body.
+ * `at` is the offset of the FIRST comparison that actually refuses (for the
+ * ordering assertions below), or of the first one found when none does.
+ */
+function refusingTenantComparison(body) {
+  TENANT_COMPARISON.lastIndex = 0;
+  let m;
+  let first = -1;
+  while ((m = TENANT_COMPARISON.exec(body)) !== null) {
+    if (first === -1) first = m.index;
+    const test = enclosingIfTest(body, m.index);
+    if (!test) continue;
+    const branch = consequentAfter(body, test.end);
+    if (branch !== null && refusesAtTopLevel(branch)) return { kind: 'ok', at: m.index };
+  }
+  return { kind: first === -1 ? 'absent' : 'discarded', at: first };
+}
 
 const resolverBody = functionBody(access, 'resolveWorkspaceAccessByOid');
 if (!resolverBody) {
   fail(`${ACCESS_FILE}: could not read the body of resolveWorkspaceAccessByOid.`);
 } else {
   const tidAt = resolverBody.indexOf('effectiveCallerTid(');
-  const compareAt = resolverBody.search(RESOLVER_TENANT_COMPARISON);
+  const verdict = refusingTenantComparison(resolverBody);
+  const compareAt = verdict.kind === 'ok' ? verdict.at : -1;
   const aclAt = resolverBody.indexOf('resolveEffectiveRole(');
   const adminAt = resolverBody.indexOf('opts.tenantAdmin');
   if (tidAt === -1 || compareAt === -1) {
-    const present = RESOLVER_TENANT_COMPARISON_PRESENCE.test(resolverBody);
     fail(
       `${ACCESS_FILE}: resolveWorkspaceAccessByOid no longer makes a REFUSING tenant comparison ` +
         `against effectiveCallerTid() — the boundary is gone. ` +
         (tidAt === -1 ? '`effectiveCallerTid(` is absent. ' : '') +
-        (present
-          ? 'A tenant comparison IS present but nothing refuses on it within the statement — ' +
-            'its answer is DISCARDED, which is presence-read-as-enforcement and not a boundary. '
+        (verdict.kind === 'discarded'
+          ? 'A tenant comparison IS present, but it does not sit in the test of an `if` whose ' +
+            'branch refuses at its own top level — so either its answer is discarded, or the ' +
+            'refusal is nested under a FURTHER condition and therefore fires for only some ' +
+            'callers. Distance is not the test and never should have been (see the round-3 note ' +
+            'above): a refusal 2000 characters below its comparison is fine, a `return null` 20 ' +
+            'characters below it but under an inner `if` is not. '
           : 'No tenant comparison of either sanctioned spelling was found. ') +
         'Either spelling is accepted — the truthiness-guarded `wsDoc.tid !== callerTid` or, ' +
         'preferably, `sameTenantConfirmed(...)` (#3900 consolidates onto the latter) — but it ' +
-        'must be followed by a refusal.',
+        'must decide an `if` that refuses.',
     );
   } else {
     if (aclAt !== -1 && compareAt > aclAt) {
@@ -1272,8 +1416,15 @@ if (!resolverBody) {
 
 // ── EMBEDDED CONTROL for the re-keyed comparison (#3900) ────────────────────
 // A guard that accepts two spellings must be shown to still REFUSE the states it
-// exists to catch, or the re-key is just a widening. Six arms, run against the
-// same regex the section above uses.
+// exists to catch, or the re-key is just a widening. Ten arms, run through the
+// SAME `refusingTenantComparison` the section above calls, on source put through
+// the SAME `mask()` the tree scan uses — so a comment between a comparison and
+// its refusal is blanked here exactly as it is there.
+//
+// G and H are the round-3 arms and they are a matched pair: G is #3900's real
+// shape, which the 80-character window REFUSED, and H is a partial refusal the
+// window ACCEPTED. Neither can be satisfied by tuning a number, which is the
+// point — if either arm is ever restored to a distance test, both go red.
 const RESOLVER_COMPARISON_PROBES = [
   ['A the CURRENT truthiness spelling', true,
     'if (callerTid && wsDoc.tid && wsDoc.tid !== callerTid) return null;'],
@@ -1287,15 +1438,52 @@ const RESOLVER_COMPARISON_PROBES = [
     'void (wsDoc.tid !== callerTid);\n  const role = await resolveEffectiveRole(oid, workspaceId, {});'],
   ['F consolidated, refusing across a line break', true,
     'if (!sameTenantConfirmed(callerTid, wsDoc.tid)) {\n    return null;\n  }'],
+  // G — #3900's ACTUAL shape, abridged: a long comment plus a nested diagnostic
+  // between the comparison and an unconditional refusal. The window read this as
+  // "DISCARDED" and failed correct code. MEASURED on this arm: the refusal is
+  // +825 chars / +15 lines below the comparison (in #3900's real function, which
+  // this abridges, it is +2007 / +34). Either way it is far past 80.
+  ['G refusal +825 chars / +15 lines below the comparison, but UNCONDITIONAL (#3900)', true,
+    'if (!sameTenantConfirmed(callerTid, wsDoc.tid)) {\n' +
+    '    // A refusal, not an absence — and the two causes are NOT the same event.\n' +
+    '    // The diagnostic below is scoped to tenant admins because `tenant_unconfirmed`\n' +
+    '    // is an existence statement about a caller-supplied id; everyone else gets a\n' +
+    '    // silent null, which the routes render as 404. The operator still sees the\n' +
+    '    // cause, because the server-side warn is unconditional.\n' +
+    '    const cause = tenantUnconfirmedCause(callerTid, wsDoc.tid);\n' +
+    '    if (cause) {\n' +
+    '      const denial = tenantUnconfirmedDenial(workspaceId, callerTid, wsDoc.tid);\n' +
+    '      if (diag && opts.tenantAdmin) diag.denial = denial;\n' +
+    '      console.warn("[workspace-access] REFUSED at the tid boundary", {\n' +
+    '        workspaceId: logSafe(workspaceId),\n' +
+    '        remediation: denial.remediation,\n' +
+    '      });\n' +
+    '    }\n' +
+    '    return null;\n' +
+    '  }'],
+  // H — the mirror image, and the arm that proves this is not a widening: the
+  // ONLY refusal is nested under a further condition, so a caller for whom
+  // `cause` is false falls THROUGH to the grant. MEASURED: +60 chars away, so
+  // the 80-character window ACCEPTED it.
+  ['H the only refusal nested under a FURTHER condition (+60 chars — the window took it)', false,
+    'if (!sameTenantConfirmed(callerTid, wsDoc.tid)) {\n    if (cause) return null;\n  }\n' +
+    '  const role = await resolveEffectiveRole(oid, workspaceId, {});'],
+  ['I the comparison decides an `if` that only LOGS, and refuses later on something else', false,
+    'if (!sameTenantConfirmed(callerTid, wsDoc.tid)) {\n    console.warn("unconfirmed");\n  }\n' +
+    '  const role = await resolveEffectiveRole(oid, workspaceId, {});\n  if (!role) return null;'],
+  ['J the comparison decides an `if` that GRANTS instead of refusing', false,
+    "if (!sameTenantConfirmed(callerTid, wsDoc.tid)) return { workspace: wsDoc, role: 'admin', via: 'admin', canWrite: true };"],
 ];
 let resolverProbesPassed = 0;
-for (const [label, shouldMatch, src] of RESOLVER_COMPARISON_PROBES) {
-  if (RESOLVER_TENANT_COMPARISON.test(src) === shouldMatch) { resolverProbesPassed += 1; continue; }
+for (const [label, shouldRefuseCaller, src] of RESOLVER_COMPARISON_PROBES) {
+  const got = refusingTenantComparison(mask(src)).kind === 'ok';
+  if (got === shouldRefuseCaller) { resolverProbesPassed += 1; continue; }
   fail(
     `RESOLVER COMPARISON CONTROL ${label} — expected the section-1..4 tenant-comparison test to ` +
-      `${shouldMatch ? 'MATCH' : 'REFUSE'} it and it did not. Arms C/D/E are what stop the #3900 ` +
-      're-key being a widening: a removed boundary, and a boundary whose answer is thrown away, ' +
-      'must both still read as "the boundary is gone".',
+      `read this as ${shouldRefuseCaller ? 'A REFUSING BOUNDARY' : 'NOT a boundary'} and it did ` +
+      'not. C/D/E are what stop the #3900 re-key being a widening (a removed boundary, and a ' +
+      'boundary whose answer is thrown away, must both read as "the boundary is gone"); G/H are ' +
+      'what stop it being re-keyed to DISTANCE again, in both directions at once.',
   );
 }
 
@@ -4182,6 +4370,13 @@ console.log(`[tid-boundary-chokepoint]   8j admin-verdict-free routes: ${adminVe
             `checked, ${adminVerdictFreeProbesPassed}/${ADMIN_VERDICT_FREE_PROBES.length} embedded ` +
             "controls passed (R1 is review's exact ternary bypass, which defeated 8h, route-guards " +
             'and vitest simultaneously)');
+// PRINTED, not merely counted. `resolverProbesPassed` was computed and then read
+// by nothing — a control whose result never reaches stdout is one nobody can
+// check on a green build, which is the same defect the UNRESOLVED census above
+// was fixed for.
+console.log(`[tid-boundary-chokepoint]   sections 1-4 tenant-comparison controls passed: ` +
+            `${resolverProbesPassed}/${RESOLVER_COMPARISON_PROBES.length} — the boundary is read by ` +
+            'CONTROL-FLOW POSITION, not by distance; G/H pin both directions of that (#3900)');
 
 // QUALIFIED BY WHAT PRODUCED IT, like every other count here. This is a SYNTACTIC
 // scan over masked source keyed on OPERAND NAMES, so it counts the comparisons it
