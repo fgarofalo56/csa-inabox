@@ -90,26 +90,122 @@ export interface AdminWorkspacesResult {
   workspaces: WorkspaceAdminRecord[];
   degraded: boolean;
   degradedReasons: string[];
+  /**
+   * #3826 — how many workspace records were EXCLUDED because they record no
+   * `tid` and therefore cannot be positively matched to any tenant. Surfaced so
+   * a legacy estate cannot silently read as a SHORTER inventory: 0 counts and a
+   * missing row look identical otherwise, which is the exact failure this
+   * module's `degraded` flag already exists to prevent (rel-T108).
+   */
+  legacyUnstampedExcluded: number;
+  /** The remediation for a non-zero {@link legacyUnstampedExcluded}. */
+  legacyRemediation?: string;
 }
 
 /**
- * Enumerate EVERY workspace in the tenant with live item counts, last-activity,
- * and resolved owners. Cross-partition Cosmos reads only.
+ * The tenant this inventory is scoped to. REQUIRED, and an object rather than a
+ * bare string, for the same reason `WorkspaceAccessOpts` is
+ * (`lib/auth/workspace-access.ts`): a tenant-wide fan-out must not be
+ * scope-able by OMISSION, and adding a call site that forgets the scope has to
+ * be a COMPILE ERROR rather than a silent cross-tenant read.
+ *
+ * `callerTid` is `session.claims.tid` — NOT `tenantScopeId(session)`, which
+ * falls back to the caller's `oid` when the tid claim is absent and so cannot
+ * be told apart from a real tenant id by looking at it.
+ */
+export interface AdminWorkspaceScope {
+  /** The caller's Entra tenant id. `undefined` is accepted and FAILS CLOSED. */
+  callerTid: string | undefined;
+}
+
+/**
+ * Enumerate every workspace IN THE CALLER'S TENANT with live item counts,
+ * last-activity, and resolved owners. Cross-partition Cosmos reads only.
+ *
+ * #3826 — THIS USED TO BE `SELECT * FROM c` WITH NO TENANT PREDICATE. The
+ * `workspaces` container is partitioned on `/tenantId`, which in this codebase
+ * holds the CREATING USER'S OID, not an Entra tenant — so the fan-out that makes
+ * the admin inventory work at all also crossed every tenant in the account. The
+ * `isTenantAdmin` gate on the route in front of it does not narrow the result:
+ * it establishes that the caller is AN admin, never WHICH tenant they administer.
+ * Two consumers took the unfiltered set — the `/admin/workspaces` inventory
+ * (names, owners, domains, storage account ids) and
+ * `lib/azure/workspace-chargeback.ts`, which additionally ALLOCATED one tenant's
+ * real Cost Management dollars across another tenant's workspaces.
+ *
+ * THE SCOPE IS APPLIED IN THE QUERY, not by filtering afterwards, so a row from
+ * another tenant is never materialised, never enriched, and never counted. A
+ * caller with no `tid` gets an EMPTY inventory and a named reason: with no
+ * caller tenant there is no positive match to make, and per
+ * `lib/auth/tenant-boundary.ts` an unconfirmed tenancy is a refusal, never a
+ * fall-through.
  *
  * The primary workspace scan is authoritative — it THROWS on failure (the route
  * genericizes it via apiServerError). The two enrichment sub-queries are
  * best-effort: a failure degrades their fields to defaults AND is surfaced via
  * the returned `degraded` flag so a store blip can't silently read as "empty".
  */
-export async function listAllWorkspacesAdmin(): Promise<AdminWorkspacesResult> {
+export async function listAllWorkspacesAdmin(scope: AdminWorkspaceScope): Promise<AdminWorkspacesResult> {
   const wsC = await workspacesContainer();
 
-  // 1) Every workspace, all partitions (no partitionKey option = cross-partition fan-out).
+  // A tenant scope we could not establish is a REFUSAL, not an unfiltered read.
+  if (!scope.callerTid) {
+    return {
+      workspaces: [],
+      degraded: true,
+      degradedReasons: ['tenant-scope-unconfirmed'],
+      legacyUnstampedExcluded: 0,
+      legacyRemediation:
+        'Your sign-in session carries no Entra tenant (`tid`) claim, so Loom cannot scope the ' +
+        'tenant-wide workspace inventory to your tenant and will not run it unscoped. Sign out ' +
+        'and sign in again to mint a session that carries `tid`. If you are calling with the ' +
+        'CLI, re-run `loom auth login` — service-principal sessions minted before the #3845 ' +
+        'fix carry no tenant.',
+    };
+  }
+
+  // 1) Every workspace IN THIS TENANT, all partitions (no partitionKey option =
+  //    cross-partition fan-out, now bounded by a tenant predicate).
+  //    Case-sensitivity note: Entra tids are GUIDs and Cosmos `=` is
+  //    case-sensitive, so this predicate is marginally STRICTER than
+  //    `sameTenantConfirmed`'s normalised compare. Stricter is the safe
+  //    direction for a scope — it can withhold a row, never admit a foreign one.
   const { resources: docs } = await wsC.items
-    .query<RawWorkspaceDoc>({ query: 'SELECT * FROM c' })
+    .query<RawWorkspaceDoc>({
+      query: 'SELECT * FROM c WHERE c.tid = @tid',
+      parameters: [{ name: '@tid', value: scope.callerTid }],
+    })
     .fetchAll();
 
-  if (docs.length === 0) return { workspaces: [], degraded: false, degradedReasons: [] };
+  // How many records exist that NO tenant can claim, so a legacy estate does not
+  // silently read as a shorter list. Best-effort and admin-gated; a failure here
+  // must not fail the inventory.
+  let legacyUnstampedExcluded = 0;
+  try {
+    const { resources: legacy } = await wsC.items
+      .query<{ n: number }>({ query: 'SELECT VALUE COUNT(1) FROM c WHERE NOT IS_DEFINED(c.tid)' })
+      .fetchAll();
+    legacyUnstampedExcluded = Number(legacy?.[0] ?? 0) || 0;
+  } catch {
+    legacyUnstampedExcluded = 0;
+  }
+  const legacyRemediation = legacyUnstampedExcluded
+    ? `${legacyUnstampedExcluded} workspace record(s) record no Entra tenant (workspaces created ` +
+      'before rel-T11 were not stamped) and are therefore excluded from every tenant-scoped ' +
+      'inventory — Loom will not show a record it cannot positively attribute to your tenant. ' +
+      'Run `node scripts/csa-loom/backfill-workspace-tid.mjs` to see what it would change (it is ' +
+      'DRY-RUN by default), then re-run it with `--apply`.'
+    : undefined;
+
+  if (docs.length === 0) {
+    return {
+      workspaces: [],
+      degraded: false,
+      degradedReasons: [],
+      legacyUnstampedExcluded,
+      ...(legacyRemediation ? { legacyRemediation } : {}),
+    };
+  }
 
   const ids = docs.map((w) => w.id);
   const inParams = ids.map((id, i) => ({ name: `@w${i}`, value: id }));
@@ -189,7 +285,13 @@ export async function listAllWorkspacesAdmin(): Promise<AdminWorkspacesResult> {
     };
   });
 
-  return { workspaces, degraded: degradedReasons.length > 0, degradedReasons };
+  return {
+    workspaces,
+    degraded: degradedReasons.length > 0,
+    degradedReasons,
+    legacyUnstampedExcluded,
+    ...(legacyRemediation ? { legacyRemediation } : {}),
+  };
 }
 
 /**
@@ -202,10 +304,22 @@ export async function listAllWorkspacesAdmin(): Promise<AdminWorkspacesResult> {
  * with NO `{ partitionKey }` option fans the read out across all partitions and
  * returns the one matching doc (ids are unique account-wide in this container).
  *
- * SECURITY: this bypasses partition isolation, so it must ONLY be called AFTER a
- * tenant-admin check — see `resolveAdminWorkspace` in lib/auth/workspace-guard.ts,
- * which is the single caller that gates it. The Console UAMI's account-scoped
- * "Cosmos DB Built-in Data Contributor" role already authorises the fan-out.
+ * SECURITY: this bypasses partition isolation AND carries no tenant predicate,
+ * so it must ONLY be called AFTER a tenant-admin check AND with its result
+ * subjected to the tenant boundary — see `resolveAdminWorkspace` in
+ * lib/auth/workspace-guard.ts, which does both.
+ *
+ * #3826 — AN EARLIER VERSION OF THIS PARAGRAPH SAID `resolveAdminWorkspace` IS
+ * "the single caller that gates it". THAT WAS FALSE, and a doc claim the code
+ * did not establish is the R7 defect this repo tracks by name. Measured on this
+ * tree there are TWO executable callers: `resolveAdminWorkspace`, and
+ * `getPbiWorkspaceMapping` (`lib/azure/powerbi-workspace-mapping.ts:68`), which
+ * takes no session and applies no tenant boundary of its own. Its one caller
+ * (`app/api/items/report/[id]/publish/route.ts:120`) passes an already-authorized
+ * `item.workspaceId`, so it is not currently reachable with an attacker-chosen
+ * id — but that is a property of ITS CALLER, not of this function, and it is
+ * exactly the assumption the sentence above got wrong once already. Tracked for
+ * the owner of that module; do NOT read this note as a clearance.
  *
  * Mirrors {@link listAllWorkspacesAdmin}'s query style + error handling. Returns
  * `null` when no workspace has that id.

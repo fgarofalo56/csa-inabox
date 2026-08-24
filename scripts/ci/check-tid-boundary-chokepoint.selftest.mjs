@@ -105,7 +105,62 @@ const ONCONSOLIDATION_MARKER = 'READ THIS FIRST';
 // comment and a nested diagnostic — and unconditional. The guard failed correct
 // code and reported the cause as "DISCARDED", which it had not measured.
 const RESOLVER = 'apps/fiab-console/lib/auth/workspace-access.ts';
-const RESOLVER_CMP = 'if (callerTid && wsDoc.tid && wsDoc.tid !== callerTid) return null;';
+/**
+ * THE BOUNDARY STATEMENT IS NO LONGER ONE LINE, SO THIS ANCHOR IS BRACE-MATCHED
+ * RATHER THAN QUOTED. #3900 consolidated the comparison onto
+ * `sameTenantConfirmed(...)`, and the refusal now sits at the top level of a
+ * ~35-line block, below a long comment and a nested diagnostic — which is
+ * precisely the shape CASE 4a exists to protect. Pinning that block as a literal
+ * would mean quoting every one of those comment lines, so any reword of a COMMENT
+ * would break this control.
+ *
+ * AND BREAKING IT MEANS `exit 2 — SETUP FAILED`, WHICH IS WORSE THAN A FAILING
+ * CASE, NOT MILDER: the harness stops before CASE 1, so nothing is measured at
+ * all while the job still goes red. The previous literal did exactly that the
+ * moment #3900 removed the line it quoted. Anchor on the opening `if` — the one
+ * thing the section under test actually keys on — and take the rest structurally.
+ */
+const RESOLVER_CMP_OPEN = 'if (!sameTenantConfirmed(callerTid, wsDoc.tid)) {';
+
+/**
+ * The whole `if (…) { … }` statement that `open` begins, comment- and
+ * string-aware so that a `}` inside a comment or inside a log string cannot
+ * close it early. Returns null when the anchor is absent or the braces never
+ * balance; the caller reports both as SETUP FAILED rather than quietly
+ * measuring a truncated block.
+ */
+function braceMatchedStatement(src, open) {
+  const start = src.indexOf(open);
+  if (start === -1) return null;
+  let i = start + open.length; // just past the `{` that `open` ends with
+  let depth = 1;
+  while (i < src.length && depth > 0) {
+    const c = src[i];
+    const n = src[i + 1];
+    if (c === '/' && n === '/') {
+      const e = src.indexOf('\n', i);
+      if (e === -1) return null;
+      i = e + 1;
+      continue;
+    }
+    if (c === '/' && n === '*') {
+      const e = src.indexOf('*/', i + 2);
+      if (e === -1) return null;
+      i = e + 2;
+      continue;
+    }
+    if (c === '"' || c === "'" || c === '`') {
+      i += 1;
+      while (i < src.length && src[i] !== c) i += src[i] === '\\' ? 2 : 1;
+      i += 1;
+      continue;
+    }
+    if (c === '{') depth += 1;
+    else if (c === '}') depth -= 1;
+    i += 1;
+  }
+  return depth === 0 ? src.slice(start, i) : null;
+}
 /** The message the section emits. CASE 4 asserts on THIS, not on the exit code:
  *  any edit to this function also moves its NON_AUTHORIZER_BODY_PINS digest, so
  *  both arms exit non-zero for that separate (and correct) reason. */
@@ -153,6 +208,8 @@ const guardBefore = read(GUARD);
 const siteBefore = read(SITE);
 const resolverBefore = read(RESOLVER);
 const RESOLVER_EOL = resolverBefore.includes('\r\n') ? '\r\n' : '\n';
+/** Read out of the tree rather than quoted — see RESOLVER_CMP_OPEN above. */
+const RESOLVER_CMP = braceMatchedStatement(resolverBefore, RESOLVER_CMP_OPEN);
 
 /** Replace the resolver's boundary statement, run the guard, report whether the
  *  sections-1..4 comparison failure fired. Restoration is the caller's job. */
@@ -193,12 +250,32 @@ process.on('uncaughtException', (e) => {
   process.exit(1);
 });
 
+// THE RESOLVER ANCHOR IS CHECKED SEPARATELY FROM THE LITERAL NEEDLES BELOW,
+// because it is COMPUTED and can be null, and `String.prototype.includes(null)`
+// coerces to a search for the text "null" — which this resolver contains, so a
+// missing anchor would have PASSED that loop and left CASE 4 mutating nothing.
+// Uniqueness is asserted too: `measureResolver` substitutes with
+// `String.replace`, which rewrites only the FIRST occurrence.
+{
+  const hits = RESOLVER_CMP === null ? 0 : resolverBefore.split(RESOLVER_CMP).length - 1;
+  if (RESOLVER_CMP === null || hits !== 1) {
+    const why =
+      RESOLVER_CMP === null
+        ? 'not found, or its braces never balanced'
+        : `matched ${hits}x, expected exactly 1`;
+    console.error(
+      `[selftest] SETUP FAILED — resolver boundary statement ${why}: ${JSON.stringify(RESOLVER_CMP_OPEN)}`,
+    );
+    console.error('[selftest] This self-test anchors on that exact opening; re-point it as part of whatever moved it.');
+    process.exit(2);
+  }
+}
+
 for (const [label, hay, needle] of [
   ['site import anchor', siteBefore, IMPORT_ANCHOR],
   ['site comparison', siteBefore, OLD_CMP],
   ['guard region pin', guardBefore, OLD_CMP],
   ['guard arm call site', guardBefore, ARM_LIVE],
-  ['resolver boundary statement', resolverBefore, RESOLVER_CMP],
 ]) {
   if (!hay.includes(needle)) {
     console.error(`[selftest] SETUP FAILED — ${label} not found: ${JSON.stringify(needle.slice(0, 70))}`);

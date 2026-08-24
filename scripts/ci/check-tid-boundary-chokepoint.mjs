@@ -611,9 +611,9 @@ const NON_AUTHORIZERS = new Map([
  * function that was re-classified).
  */
 const NON_AUTHORIZER_BODY_PINS = new Map([
-  ['lib/auth/workspace-access.ts:resolveWorkspaceAccessByOid', '877e72d79bee'],
+  ['lib/auth/workspace-access.ts:resolveWorkspaceAccessByOid', '02d8dc48dbe9'],
   ['lib/auth/workspace-access.ts:readWorkspaceById', '6edbb8025c67'],
-  ['lib/auth/workspace-access.ts:listAccessibleWorkspaces', 'f2608ec63cc6'],
+  ['lib/auth/workspace-access.ts:listAccessibleWorkspaces', '6b7f66ea5819'],
   ['lib/auth/workspace-access.ts:ambientAccessOptsFor', '2068414aa6c6'],
   ['lib/auth/workspace-denial.ts:workspaceDenialResponse', '174876032ce1'],
   ['lib/auth/feature-gate.ts:requireTenantAdmin', 'a142fcaad130'],
@@ -4009,16 +4009,21 @@ const TID_COMPARISON_PINS = new Map([
     'lib/auth/workspace-access.ts',
     {
       reason:
-        'THE CANONICAL RESOLVER. Step 4 (the shared ACL boundary) and step 6 (the admin-open ' +
-        'bypass, which #3823 tightened to require a POSITIVE match) plus the same step-4 ' +
-        'filter applied per document by `listAccessibleWorkspaces`. Sections 1-4 of this ' +
-        'guard govern these three lines directly — their ORDER relative to the ACL and admin ' +
-        'steps is asserted there — so they are pinned here as the SET that may exist, not as ' +
-        'an exemption from checking.',
+        'THE CANONICAL RESOLVER — AND AFTER #3900 THIS PIN HOLDS ONE LINE, NOT THREE. Step 4 ' +
+        '(the shared ACL boundary) and the same step-4 filter applied per document by ' +
+        '`listAccessibleWorkspaces` were CONSOLIDATED onto `sameTenantConfirmed(...)`, which ' +
+        'carries no operator and is therefore invisible to this section BY DESIGN (see the ' +
+        'tenant-boundary reason above: a CALL is the blessed form). Their two entries were ' +
+        'deleted here in the same commit, which is exactly what this section NOTE asked for ' +
+        'once per expression. WHAT REMAINS IS STEP 6, the admin-open bypass #3823 tightened ' +
+        'to require a POSITIVE match, still spelled out because it is a SECOND and NARROWER ' +
+        'test layered on top of step 4 rather than a copy of it. Sections 1-4 of this guard ' +
+        'govern that line directly — its ORDER relative to the ACL and admin steps is ' +
+        'asserted there — so it is pinned here as the SET that may exist, not as an ' +
+        'exemption from checking. Re-adding either deleted spelling to this file is a red ' +
+        'build until someone re-pins it, which is the property this entry exists to hold.',
       exprs: [
-        'wsDoc.tid !== callerTid',
         'wsDoc.tid === callerTid',
-        'doc.tid !== callerTid',
       ],
     },
   ],

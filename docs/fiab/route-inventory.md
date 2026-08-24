@@ -15,8 +15,8 @@ verdict is DERIVED, not name-matched — see "How the owner column is decided".
 | --- | ---: |
 | Total routes | 1686 |
 | Public (no session) | 58 |
-| Session-only | 646 |
-| Owner-scoped | 677 |
+| Session-only | 648 |
+| Owner-scoped | 675 |
 | Admin | 305 |
 | Unknown (generator fails) | 0 |
 | Gated (backend config) | 496 |
@@ -2150,7 +2150,7 @@ dispatch is invisible to it. Full limits: `scripts/ci/_route-backends.mjs`.
 
 | Route | Methods | Auth scope | Gated | Backends |
 | --- | --- | --- | :---: | --- |
-| `running-workloads/route.ts` | GET | owner-scoped |  | ADF, ARM, Cosmos, Resource Graph |
+| `running-workloads/route.ts` | GET | session-only |  | ADF, ARM, Cosmos, Resource Graph |
 
 ## runtime-flags
 
@@ -2411,11 +2411,11 @@ dispatch is invisible to it. Full limits: `scripts/ci/_route-backends.mjs`.
 | `workspaces/[id]/time-branches/[branchId]/route.ts` | DELETE | admin |  | Cosmos, Microsoft Graph |
 | `workspaces/[id]/time-branches/route.ts` | GET POST | admin |  | Cosmos, Microsoft Graph |
 | `workspaces/bulk-delete/route.ts` | GET POST | admin |  | ADF, ADLS, ADX, AI Search, AML, ARM, Azure Monitor, Azure SQL, Azure Storage, Cosmos, Event Hubs, IoT Hub, Managed Identity, Microsoft Graph, PostgreSQL, Purview, Resource Graph, Service Bus, Stream Analytics, Synapse, Synapse SQL |
-| `workspaces/route.ts` | GET POST | owner-scoped |  | ADX, AI Search, ARM, Azure Monitor, Azure RBAC, Azure Storage, Cosmos, Event Hubs, Fabric, Managed Identity, Purview, Resource Graph |
+| `workspaces/route.ts` | GET POST | session-only |  | ADX, AI Search, ARM, Azure Monitor, Azure RBAC, Azure Storage, Cosmos, Event Hubs, Fabric, Managed Identity, Purview, Resource Graph |
 
 ## Authorization resolvers (derived)
 
-179 function(s) across 80 module(s) reach an owner / workspace-ACL
+178 function(s) across 80 module(s) reach an owner / workspace-ACL
 decision. Derived by `scripts/ci/_route-auth-scope.mjs` from the seeds above —
 nothing here is hand-maintained. A change to this list in a diff means the
 authorization surface moved.
@@ -2460,7 +2460,7 @@ authorization surface moved.
 | `apps/fiab-console/lib/assets/materialize.ts` | `materializeActivationSync`, `materializeAsset`, `materializeTransform` |
 | `apps/fiab-console/lib/auth/item-access.ts` | `resolveItemAccessByOid` |
 | `apps/fiab-console/lib/auth/pat.ts` | `revokePatToken` |
-| `apps/fiab-console/lib/auth/workspace-access.ts` | `ambientAccessOptsFor`, `ambientCallerTid`, `effectiveCallerTid`, `listAccessibleWorkspaces`, `resolveWorkspaceAccessByOid` |
+| `apps/fiab-console/lib/auth/workspace-access.ts` | `ambientAccessOptsFor`, `ambientCallerTid`, `effectiveCallerTid`, `resolveWorkspaceAccessByOid` |
 | `apps/fiab-console/lib/auth/workspace-guard.ts` | `authorizeItemWorkspace`, `authorizeWorkspace`, `requireWorkspace`, `resolveAdminWorkspace` |
 | `apps/fiab-console/lib/auth/workspace-list-access.ts` | `authorizeWorkspaceList` |
 | `apps/fiab-console/lib/auth/workspace-role.ts` | `resolveWorkspaceRole` |
