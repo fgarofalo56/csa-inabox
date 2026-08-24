@@ -3,8 +3,17 @@
  *
  * ── WHY THE ARTIFACT IS A STATIC IMPORT AND NOT A FILE READ ──────────────
  *
- * The obvious implementation is `fs.readFileSync(process.env.LOOM_SECURITY_GRAPH_PATH)`.
- * It was rejected for three reasons, in increasing order of importance:
+ * The obvious implementation is a `fs.readFileSync` of a path handed over in an
+ * environment variable. It was rejected for three reasons, in increasing order
+ * of importance:
+ *
+ * (The env var is deliberately not NAMED anywhere in this file. `check-env-sync.mjs`
+ * scans console source for `LOOM_*` tokens and requires each to be emitted by
+ * bicep, and it does not strip comments — so merely DISCUSSING a rejected env var
+ * fails the build. Measured on PR #4022: naming it here cost four guardrail steps.
+ * That is the same "a lexical scan cannot tell prose from code" problem this very
+ * package solves with `blankNonCode` in source-facts.ts, which is why it is worth
+ * recording rather than silently working around.)
  *
  *   1. Next.js file tracing decides what ships in the standalone output. A JSON
  *      file read through a runtime-computed path is not traced, so it would be
