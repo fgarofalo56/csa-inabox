@@ -699,7 +699,38 @@ export const NAME_PATTERNS = [
   },
   { id: 'secret-ref', re: /\bkey\s*vault\b|\bsecret\s*(?:scope|key|name|uri|identifier)\b|\bsecretName\b/i, why: 'a secret-store coordinate' },
   { id: 'entra-id', re: /\b(?:subscription|tenant|client|principal|object|application)\s*id\b|\b(?:tenantId|clientId|principalId|objectId|subscriptionId)\b/i, why: 'an Entra / ARM identifier' },
-  { id: 'storage-loc', re: /\bstorage\s*(?:account|location|root|path|container|url|uri)\b|\bmount\s*(?:point|path)\b|\bcontainer\s*name\b/i, why: 'a storage location' },
+  {
+    // #3594 — this pattern used to REQUIRE the literal token `storage`:
+    //
+    //   /\bstorage\s*(?:account|location|root|path|container|url|uri)\b|…/i
+    //
+    // so a field whose label names the SERVICE rather than the generic noun
+    // carried no NAME evidence at all. Measured against the real classifier (by
+    // running analyze() on each probe, not by reading the regex):
+    //
+    //   FLAGS    <Field label="Storage location">   <Input value={x} … /></Field>
+    //   no flag  <Field label="ADLS Gen2 location"> <Input value={y} … /></Field>
+    //   no flag  <Field label="ADLS subpath">       <Input value={z} … /></Field>
+    //
+    // Same ask, same class, same consequence for the user — one counted, two not.
+    // And this codebase labels fields by SERVICE as a matter of routine ("ADLS
+    // Gen2 location", "OneLake path", "Lakehouse path"), so the generic-noun
+    // spelling was biased away from the population the guard exists to catch.
+    //
+    // Worse, an invisible site cannot even be recorded as an ACCEPTED exception:
+    // applyAccepted() is keyed to the CLASSIFIED population and rejects an entry
+    // whose file has zero classified sites. So the only available record was a
+    // code comment — uncounted and never re-validated. Making the sites visible
+    // is what lets them be tracked at all.
+    //
+    // The population is EXPECTED to rise. That is correct behaviour, exactly as
+    // when #3579 closed the `disabled={expr}` blind spot (2,298 -> 2,350 sites,
+    // 243 -> 246 classified); the newly-visible sites are then fixed or
+    // explicitly ACCEPTED. Pinned by the three probes above in CONTROLS.
+    id: 'storage-loc',
+    re: /\b(?:storage|adls|onelake|lakehouse|blob|datalake|data\s*lake)\s*(?:gen2\s*)?(?:account|location|root|path|sub\s*path|container|url|uri)\b|\bmount\s*(?:point|path)\b|\bcontainer\s*name\b/i,
+    why: 'a storage location',
+  },
 ];
 
 /**
@@ -1018,15 +1049,44 @@ function hasTruthyProp(tagCode, name) {
  * pipeline expression fields, the identity/group pickers, the Copilot tool
  * catalogue, uc-governance-pane, domain-settings-pane). The report described it
  * as also covering `disabled={loading}` and `disabled={busy}`; it does NOT —
- * the regex needs the LITERAL word `disabled` after the brace, so only the
- * self-named idiom could ever trip it. Stating that precisely matters, because
- * "31 sites lost to any expression-valued disabled" and "26 lost to
- * `disabled={disabled}` specifically" imply different fixes.
+ * the regex needs the literal word `disabled` SOMEWHERE INSIDE the braces, so
+ * any expression MENTIONING it trips the skip. Measured against the old regex:
  *
- * `readOnly` had the IDENTICAL hole via `hasTruthyProp` and measured ZERO
- * occurrences today — a latent sibling, fixed in the same pass rather than left
- * for whoever writes the first `readOnly={readOnly}`. Enumerating the siblings
- * of a defect mechanically is the lesson of #3529 / the seventh-consumer class.
+ *     disabled={disabled}            -> true      disabled={loading}  -> false
+ *     disabled={disabled || busy}    -> true      disabled={busy}     -> false
+ *     disabled={busy || disabled}    -> true
+ *
+ * Stating that precisely matters, because "31 sites lost to any
+ * expression-valued disabled" and "26 lost to an expression mentioning
+ * `disabled`" imply different fixes. (An earlier revision of this comment said
+ * "only the SELF-NAMED idiom could ever trip it" — narrower than the truth, as
+ * rows 2 and 3 show: the bare identifier matches at any whitespace or brace
+ * boundary inside the expression. Corrected under #3598; the population is
+ * unchanged and the corrected count of 26 stands.)
+ *
+ * `readOnly` had the IDENTICAL hole via `hasTruthyProp`, and it was NOT latent:
+ *
+ *     git grep -c "readOnly={readOnly}" -- apps/fiab-console
+ *     -> 16 occurrences across 7 files (.tsx only)
+ *
+ * An earlier revision of this comment asserted it "measured ZERO occurrences
+ * today — a latent sibling … for whoever writes the first `readOnly={readOnly}`".
+ * That was false, and it contradicted this file's own table twenty lines above:
+ * closing the `readOnly` hole moved 2,325 -> 2,350 sites and 245 -> 246
+ * classified, a delta that is arithmetically impossible against zero occurrences.
+ * The table was right; the prose was wrong. It matters because a future reader
+ * deciding whether the `readOnly` branch is load-bearing would have read "ZERO"
+ * and concluded it is dead code — and because an unchecked premise reaching a
+ * code comment inside the guard whose entire purpose is to stop unchecked
+ * premises being reported as measurements is the defect class this file's own
+ * header preaches against. Corrected under #3598, and now pinned by the five
+ * `#3598 —` entries in CONTROLS below (which assert the BEHAVIOUR: a
+ * conditionally read-only or disabled control still counts, a bare one does
+ * not) plus the tree-count assertion in
+ * `scripts/ci/__tests__/no-freeform.test.mjs`, so neither the prose nor the
+ * branch can rot back silently.
+ * Enumerating the siblings of a defect mechanically is the lesson of #3529 /
+ * the seventh-consumer class.
  */
 export function attrSkeleton(tagCode) {
   let flat = String(tagCode);
@@ -1519,6 +1579,57 @@ export const CONTROLS = [
     name: 'JSX LEXER — an intra-word apostrophe in JSX text is prose, not a string opener that blanks the label after it',
     src: "<Caption1>don't type this</Caption1><Field label=\"Cluster URI\"><Input value={v} onChange={f} /></Field>",
     expect: true,
+  },
+
+  // ── #3594 — storage-loc must not need the generic noun `storage` ────────
+  // The first of these already flagged before #3594; the rest did not, and they
+  // are the same ask in this codebase's own vocabulary. Kept as controls so the
+  // widening cannot silently regress back to the generic-noun spelling.
+  { name: '#3594 — "Storage location" flags (it always did)', src: '<Field label="Storage location"><Input value={x} onChange={f} /></Field>', expect: true },
+  { name: '#3594 — "ADLS Gen2 location" flags (it did NOT before)', src: '<Field label="ADLS Gen2 location"><Input value={shortcutLocation} onChange={f} /></Field>', expect: true },
+  { name: '#3594 — "ADLS subpath" flags (it did NOT before)', src: '<Field label="ADLS subpath"><Input value={shortcutSubpath} onChange={f} /></Field>', expect: true },
+  { name: '#3594 — "OneLake path" flags', src: '<Field label="OneLake path"><Input value={p} onChange={f} /></Field>', expect: true },
+  { name: '#3594 — "Lakehouse path" flags', src: '<Field label="Lakehouse path"><Input value={p} onChange={f} /></Field>', expect: true },
+  // …and the OTHER direction. A widening is only safe if it did not simply
+  // start matching the word "storage" anywhere: a SKU/tier field names the
+  // service without asking for an address.
+  { name: '#3594 — "Storage tier" must NOT flag (widening did not become "any mention of storage")', src: '<Field label="Storage tier"><Input value={t} onChange={f} /></Field>', expect: false },
+  { name: '#3594 — "Display name" must NOT flag', src: '<Field label="Display name"><Input value={n} onChange={f} /></Field>', expect: false },
+
+  // ── #3598 — the `readOnly` branch is LOAD-BEARING, not dead code ────────
+  // A comment in this file used to assert `readOnly={readOnly}` "measured ZERO
+  // occurrences today". There are 16, across 7 files. These controls pin the
+  // BEHAVIOUR the corrected prose describes, so the claim cannot rot back:
+  // a CONDITIONALLY read-only control is one the user can type into, and must
+  // still be classified; only a PERMANENTLY read-only one is a receipt.
+  {
+    name: '#3598 — readOnly={readOnly} is CONDITIONAL: the user can type, so the site still counts',
+    src: '<Field label="Cluster URI"><Input readOnly={readOnly} value={v} onChange={f} /></Field>',
+    expect: true,
+  },
+  {
+    name: '#3598 — readOnly={false} is editable and must count',
+    src: '<Field label="Cluster URI"><Input readOnly={false} value={v} onChange={f} /></Field>',
+    expect: true,
+  },
+  // The corrected characterisation of the `disabled` hole: the old regex needed
+  // the literal word SOMEWHERE INSIDE the braces, so ANY expression mentioning
+  // it suppressed the site — not only the self-named idiom. Both shapes must
+  // now be classified.
+  {
+    name: '#3598 — disabled={disabled} is conditional and must count',
+    src: '<Field label="Cluster URI"><Input disabled={disabled} value={v} onChange={f} /></Field>',
+    expect: true,
+  },
+  {
+    name: '#3598 — disabled={busy || disabled} must count too (the old regex suppressed this as well)',
+    src: '<Field label="Cluster URI"><Input disabled={busy || disabled} value={v} onChange={f} /></Field>',
+    expect: true,
+  },
+  {
+    name: '#3598 — a BARE `disabled` is still permanently off and must NOT count',
+    src: '<Field label="Cluster URI"><Input disabled value={v} /></Field>',
+    expect: false,
   },
 
   // ── the WEAK-tier suppression, both directions ─────────────────────────

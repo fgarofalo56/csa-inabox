@@ -606,3 +606,83 @@ test('the measured population is real: hundreds of sites, and not everything is 
   // direction: `<Input>` for a display name is correct and there are thousands.
   assert.ok(total < sites / 4, `${total}/${sites} sites flagged — the classifier is no longer discriminating`);
 });
+
+// ── 11. #3598 — the prose in the guard must not out-live the measurement ────
+//
+// A comment in check-no-freeform.mjs asserted that `readOnly={readOnly}`
+// "measured ZERO occurrences today — a latent sibling … for whoever writes the
+// first `readOnly={readOnly}`". There were sixteen, and the file's own table
+// twenty lines above proved it (closing the hole moved 245 -> 246 classified,
+// which is impossible against zero). An unchecked premise had reached a code
+// comment inside the guard whose entire purpose is to stop unchecked premises
+// being reported as measurements.
+//
+// This walks the WORKING TREE, not git history: a test that reads ambient
+// history asserts nothing on the depth-1 checkout CI uses, and `git grep` on
+// this repo also has to fight CRLF. Filesystem walk, exact string, no shell.
+
+/** Every tracked-ish .tsx under the console, from disk. */
+function consoleTsxFiles() {
+  const root = path.join(REPO_ROOT, 'apps', 'fiab-console');
+  const out = [];
+  const walk = (d) => {
+    let entries;
+    try { entries = fs.readdirSync(d, { withFileTypes: true }); } catch { return; }
+    for (const e of entries) {
+      const p = path.join(d, e.name);
+      if (e.isDirectory()) {
+        // `.next/standalone` is stale build output — a COPY of lib/, which would
+        // double every count here.
+        if (['node_modules', '.next', '.turbo', 'dist'].includes(e.name)) continue;
+        walk(p);
+      } else if (e.name.endsWith('.tsx')) out.push(p);
+    }
+  };
+  walk(root);
+  return out;
+}
+
+test('#3598 — `readOnly={readOnly}` is NOT latent: the branch that handles it is load-bearing', () => {
+  const NEEDLE = 'readOnly={readOnly}';
+  let occurrences = 0;
+  const files = new Set();
+  for (const f of consoleTsxFiles()) {
+    const n = fs.readFileSync(f, 'utf8').split(NEEDLE).length - 1;
+    if (n > 0) { occurrences += n; files.add(path.relative(REPO_ROOT, f)); }
+  }
+  // Deliberately NOT `=== 16`. Pinning the exact count would make an unrelated
+  // console PR fail this test for no reason, and a brittle control is one that
+  // gets deleted. The CLAIM being pinned is "zero", so ">0" is what falsifies it.
+  assert.ok(
+    occurrences > 0,
+    'the guard\'s comment once claimed readOnly={readOnly} had ZERO occurrences; if that is now true, '
+      + 'delete the readOnly branch AND this test together, deliberately — do not let the prose drift back.',
+  );
+  assert.ok(files.size > 0);
+});
+
+test('#3598 — a CONDITIONALLY read-only / disabled control is still an ask; only a bare one is a receipt', () => {
+  // The behavioural half of the same correction. `isPermanentlyOff` is the
+  // function that used to read the identifier INSIDE the braces as the
+  // attribute itself, so a control the user can type into was dropped before
+  // classification.
+  const cases = [
+    ['<Input readOnly={readOnly} value={v} onChange={f} />', 'readOnly', false],
+    ['<Input readOnly={false} value={v} onChange={f} />', 'readOnly', false],
+    ['<Input readOnly value={v} />', 'readOnly', true],
+    ['<Input readOnly={true} value={v} />', 'readOnly', true],
+    ['<Input disabled={disabled} value={v} onChange={f} />', 'disabled', false],
+    // The corrected characterisation (#3598): the old regex needed the literal
+    // word somewhere inside the braces, so ANY expression mentioning it was
+    // suppressed — not only the self-named idiom.
+    ['<Input disabled={busy || disabled} value={v} onChange={f} />', 'disabled', false],
+    ['<Input disabled value={v} />', 'disabled', true],
+  ];
+  for (const [tag, name, expected] of cases) {
+    assert.equal(
+      isPermanentlyOff(attrSkeleton(tag), tag, name),
+      expected,
+      `${tag} — expected isPermanentlyOff(${name}) === ${expected}`,
+    );
+  }
+});

@@ -127,8 +127,11 @@ name: Loom data-plane roll (unity / iceberg / trino)
 # never read as a pass to anything downstream.
 # ─────────────────────────────────────────────────────────────────────────────
 
+# `inputs.*` is the EMPTY STRING on any non-dispatch event, so the old form
+# rendered "Roll  →  on " for every automatic run. The fallbacks below are the
+# SAME values the resolve step derives, kept in step with it deliberately.
 run-name: >-
-  Roll ${{ inputs.apps }} → ${{ inputs.tag }} on ${{ inputs.boundary }}${{ inputs.pin_deploy_tag && ' (+pin :v0.1)' || '' }}
+  Roll ${{ inputs.apps || 'all' }} → ${{ inputs.tag || github.event.workflow_run.head_sha }} on ${{ inputs.boundary || 'commercial' }}
 
 on:
   workflow_dispatch:
@@ -172,18 +175,74 @@ on:
         required: false
         default: true
 
+  # ── #3346 — THE MISSING HALF OF THIS LANE ────────────────────────────────
+  #
+  # Measured 2026-08-23 on this file, before this block existed:
+  #     grep -n "^on:|^  workflow_dispatch:|^  schedule:|^  push:|^  workflow_run:"
+  #       133:on:
+  #       134:  workflow_dispatch:
+  #       175:permissions:
+  # i.e. the ONLY trigger was a human. And measured on the run history:
+  #     gh run list --workflow loom-dataplane-roll.yml --limit 10
+  #       31318082412 success 2026-08-09T14:18:04Z
+  #       31317934409 failure 2026-08-09T14:14:45Z
+  #       31317805700 failure 2026-08-09T14:11:42Z
+  # Three runs, all on one afternoon two weeks ago. So the header above is
+  # right that these three apps had no roll path — and then this lane, the fix
+  # for that, was itself only reachable by hand. A rebuilt loom-unity /
+  # iceberg-catalog / loom-trino image has landed on the estate exactly never
+  # since. deploy-integrity R3: a path that has never run is the LOUDEST case
+  # of drift, not a silent pass.
+  #
+  # THE PRODUCER IS build-fiab-images-acr-tasks, NOT full-app-deploy-commercial.
+  # Both build these images, but full-app-deploy-commercial is itself
+  # `workflow_dispatch:` only — chaining to it would inherit the defect. The
+  # ACR-tasks lane fires on `push` to main for apps/loom-unity/**,
+  # apps/loom-trino/** (and the fiab-* glob), and its push path builds the FULL
+  # 13-app matrix, stamping `<name>:${{ github.sha }}` on every one. So a push
+  # run always produces exactly the tag this lane needs.
+  #
+  # This is the SAME chain loom-roll-and-validate.yml:121-124 already uses to
+  # roll the Commercial console off that producer. The console has had it since
+  # #3159; the data-plane trio was simply left out.
+  #
+  # STATED GAP: the job gate below requires the producer run to have been a
+  # `push`. A human DISPATCH of the producer can build a narrowed app list
+  # (`apps: loom-console`), in which case the unity/trino SHA tags would not
+  # exist and this lane would fail its own preflight and file a P0 for a
+  # non-defect. A human who dispatches the producer can dispatch this lane.
+  workflow_run:
+    workflows: ['build-fiab-images-acr-tasks']
+    types: [completed]
+    branches: [main]
+
 permissions:
   contents: read
   # deploy-notify-failure.mjs files/updates ONE issue per workflow on failure.
   issues: write
 
 concurrency:
-  group: loom-dataplane-roll-${{ inputs.boundary }}
+  # `inputs.boundary` is EMPTY on a workflow_run, so this key would have been
+  # the literal "loom-dataplane-roll-" — a group that serializes automatic runs
+  # against each other but NOT against a dispatched commercial roll, which is
+  # the collision that actually matters (two `az containerapp update` calls on
+  # one app return ContainerAppOperationInProgress). The fallback is the same
+  # 'commercial' the resolve step derives, so both paths land in one group.
+  group: loom-dataplane-roll-${{ inputs.boundary || 'commercial' }}
   cancel-in-progress: false
 
 jobs:
   roll:
-    name: Roll ${{ inputs.apps }} on ${{ inputs.boundary }}
+    name: Roll ${{ inputs.apps || 'all' }} on ${{ inputs.boundary || 'commercial' }}
+    # A `completed` producer run includes failure, cancelled and skipped. Rolling
+    # the estate onto a tag whose build did NOT succeed is the exact shape
+    # #3368 filed a false P0 over, so the conclusion is asserted POSITIVELY
+    # (== 'success'), never as != something. The `event == 'push'` half is the
+    # stated gap documented on the trigger above.
+    if: >-
+      github.event_name != 'workflow_run'
+      || (github.event.workflow_run.conclusion == 'success'
+          && github.event.workflow_run.event == 'push')
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
@@ -196,41 +255,103 @@ jobs:
 
       # ── 1. Pure input validation. No Azure, no network: a bad input should
       #       cost nothing and say precisely what is wrong.
-      - name: Validate inputs
+      # ── 1. Resolve, THEN validate. No Azure, no network: a bad input should
+      #       cost nothing and say precisely what is wrong.
+      #
+      #  #3346 — EVERY `inputs.*` BELOW USED TO BE READ DIRECTLY, AND THAT IS
+      #  WHY ADDING A TRIGGER IS NOT A ONE-LINE CHANGE. On any non-dispatch
+      #  event every one of them is the EMPTY STRING, and a dispatch `default:`
+      #  does NOT apply. Left alone, the first automatic run would have:
+      #    - failed this step on the empty-tag check (the benign outcome), and
+      #    - taken the GOV login branch, because `inputs.boundary` = "" is not
+      #      equal to "commercial", so `if: inputs.boundary != 'commercial'`
+      #      is TRUE — an automatic Commercial trigger would have authenticated
+      #      against the sovereign boundary and set `az cloud` to Gov.
+      #  That second one is the dangerous half, and it is invisible until it
+      #  runs. It is the same class as the schedule-path input defect that
+      #  froze deploy-fiab-commercial's nightly reconcile, and the `lastgood`
+      #  defect gov-console-roll.yml documents on its own rollback target.
+      #
+      #  So this step is now the ONE place the four knobs are decided, it
+      #  publishes them as step OUTPUTS, and every `if:` below reads the output
+      #  rather than the raw input. The validation is unchanged and still runs
+      #  on the resolved values — the automatic path is held to the same checks
+      #  as a dispatch, not exempted from them.
+      - name: Resolve + validate inputs
+        id: resolve
         env:
           IN_TAG: ${{ inputs.tag }}
           IN_APPS: ${{ inputs.apps }}
           IN_BOUNDARY: ${{ inputs.boundary }}
+          IN_PIN: ${{ inputs.pin_deploy_tag }}
+          EVENT_NAME: ${{ github.event_name }}
+          PRODUCER_SHA: ${{ github.event.workflow_run.head_sha }}
+          PRODUCER_RUN: ${{ github.event.workflow_run.id }}
         run: |
           set -euo pipefail
           TAG="$(printf '%s' "$IN_TAG" | tr -d '[:space:]')"
+          BOUNDARY_IN="$(printf '%s' "$IN_BOUNDARY" | tr -d '[:space:]')"
+          APPS_IN="${IN_APPS:-}"
+          PIN="${IN_PIN:-}"
+
+          if [ "$EVENT_NAME" = "workflow_run" ]; then
+            # The producer stamped `<name>:<github.sha>` on every image in its
+            # push matrix, and workflow_run.head_sha IS that commit. Rolling to
+            # the immutable SHA rather than to a mutable tag is what makes the
+            # verification downstream mean anything.
+            TAG="$PRODUCER_SHA"
+            BOUNDARY_IN=commercial
+            APPS_IN=all
+            # Gov cannot reach this path (the producer is the Commercial ACR),
+            # so the pin is not the load-bearing durability mechanism here. It
+            # is still ON, matching the dispatch default, so :v0.1 tracks what
+            # the estate was actually verified running.
+            PIN=true
+            echo "::notice::Automatic roll: producer run $PRODUCER_RUN built commit $PRODUCER_SHA. boundary=commercial apps=all pin=true."
+          fi
+
           if [ -z "$TAG" ]; then
-            echo "::error::The 'tag' input is empty. Refusing to roll: an empty tag would resolve to a malformed image reference, and roll-plan.mjs throws rather than emit one."
+            echo "::error::No tag to roll. On a dispatch that means the 'tag' input was empty; on an automatic run it means github.event.workflow_run.head_sha was empty, which should be impossible and is a real finding. Refusing to roll: an empty tag would resolve to a malformed image reference, and roll-plan.mjs throws rather than emit one."
             exit 1
           fi
           if ! printf '%s' "$TAG" | grep -Eq '^[A-Za-z0-9._-]+$'; then
             echo "::error::tag '$TAG' is not a legal OCI tag (letters, digits, '.', '_', '-')."
             exit 1
           fi
-          case "$IN_BOUNDARY" in
+          case "$BOUNDARY_IN" in
             commercial|gcc-high|il5) : ;;
             *)
-              echo "::error::boundary '$IN_BOUNDARY' is not supported by this workflow. GCC deploys zero Container Apps, so it has nothing to roll."
+              echo "::error::boundary '$BOUNDARY_IN' is not supported by this workflow. GCC deploys zero Container Apps, so it has nothing to roll."
               exit 1
               ;;
           esac
+          case "$PIN" in
+            true|false) : ;;
+            "") PIN=false ;;
+            *)
+              echo "::error::pin_deploy_tag resolved to '$PIN', which is neither true nor false. Refusing to guess: guessing false would silently drop the ONLY durability mechanism Gov has."
+              exit 1
+              ;;
+          esac
+          APPS="${APPS_IN:-all}"
           {
             echo "TAG=$TAG"
-            echo "APPS=${IN_APPS:-all}"
-            echo "BOUNDARY=$IN_BOUNDARY"
+            echo "APPS=$APPS"
+            echo "BOUNDARY=$BOUNDARY_IN"
           } >> "$GITHUB_ENV"
-          echo "::notice::boundary=$IN_BOUNDARY apps=${IN_APPS:-all} tag=$TAG"
+          {
+            echo "tag=$TAG"
+            echo "apps=$APPS"
+            echo "boundary=$BOUNDARY_IN"
+            echo "pin=$PIN"
+          } >> "$GITHUB_OUTPUT"
+          echo "::notice::boundary=$BOUNDARY_IN apps=$APPS tag=$TAG pin=$PIN (event=$EVENT_NAME)"
 
       # ── 2. Login. Two mutually exclusive steps; the Gov one carries the full
       #       endpoint set because the default (Commercial) endpoints do not
       #       resolve inside a sovereign boundary.
       - name: Azure login (Commercial)
-        if: inputs.boundary == 'commercial'
+        if: steps.resolve.outputs.boundary == 'commercial'
         uses: azure/login@v2
         with:
           creds: |
@@ -242,7 +363,7 @@ jobs:
             }
 
       - name: Azure login (Gov)
-        if: inputs.boundary != 'commercial'
+        if: steps.resolve.outputs.boundary != 'commercial'
         uses: Azure/login@v2
         with:
           creds: |
@@ -260,7 +381,7 @@ jobs:
           environment: AzureUSGovernment
 
       - name: Set Azure cloud to Gov
-        if: inputs.boundary != 'commercial'
+        if: steps.resolve.outputs.boundary != 'commercial'
         run: az cloud set --name AzureUSGovernment
 
       # ── 3. Estate coordinates.
@@ -648,7 +769,7 @@ jobs:
       #  opposite of what this is for.
       - name: Pin the verified digest onto :v0.1 (deploy durability)
         id: pin
-        if: inputs.pin_deploy_tag && steps.preflight.outputs.digests_complete == 'true'
+        if: steps.resolve.outputs.pin == 'true' && steps.preflight.outputs.digests_complete == 'true'
         run: |
           set -uo pipefail
           if [ "$TAG" = "v0.1" ]; then
@@ -715,7 +836,7 @@ jobs:
 
       - name: Durability NOT established (state it plainly)
         if: >-
-          success() && (!inputs.pin_deploy_tag || steps.preflight.outputs.digests_complete != 'true')
+          success() && (steps.resolve.outputs.pin != 'true' || steps.preflight.outputs.digests_complete != 'true')
         run: |
           set -euo pipefail
           if [ "$BOUNDARY" = "commercial" ]; then

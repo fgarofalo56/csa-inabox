@@ -46,6 +46,8 @@ import {
   shellGuidVars,
   inventory,
   scan,
+  D3_CONTROLS,
+  runD3Controls,
   BICEP_ROOT,
 } from '../check-role-assignment-determinism.mjs';
 
@@ -391,4 +393,26 @@ test('D3 scans the real tree, and its POPULATION is non-trivial', () => {
     [],
     `the real tree must be clean by D3:\n${findings.map((f) => `${f.file}:${f.line}`).join('\n')}`,
   );
+});
+
+test('the D3 CONTROL SET still carries the "mention is not a branch" bypasses', () => {
+  // The independent review of PR #3928 demonstrated three bypasses of
+  // probeGates through this guard's own entry points, and four more of the
+  // same class were found while fixing it. They are pinned as controls; this
+  // test pins the CONTROL SET itself, because a control set that quietly
+  // shrinks is a guard judging an empty population — the failure mode this
+  // repo has recorded more often than any other.
+  assert.deepEqual(runD3Controls(), [], 'the in-process D3 controls must all pass');
+  assert.ok(
+    D3_CONTROLS.length >= 21,
+    `D3_CONTROLS dropped to ${D3_CONTROLS.length}; the bypass class was pinned at 21`,
+  );
+  const whys = D3_CONTROLS.map((c) => c.why).join('\n');
+  for (const shape of ['BYPASS 1/3', 'BYPASS 2/3', 'BYPASS 3/3']) {
+    assert.ok(whys.includes(shape), `the review's ${shape} control is gone`);
+  }
+  // The set must be able to discriminate in BOTH directions: one that only
+  // ever expects zero findings cannot tell a working judge from a dead one.
+  assert.ok(D3_CONTROLS.some((c) => c.expectFindings === 1), 'no positive control');
+  assert.ok(D3_CONTROLS.some((c) => c.expectFindings === 0), 'no negative control');
 });
