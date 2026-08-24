@@ -33,6 +33,49 @@
  * WHY THIS IS P2 AND NOT P1: the discovery posture is deliberate and documented
  * (`data-products/[id]` GET carries the same one), and `id` is a Cosmos GUID, so
  * this route is not an enumeration surface on its own.
+ *
+ * ── #3580 — THE ALLOWLIST ENTRY IS DELETED, NOT REWORDED ─────────────────────
+ *
+ * The authorization half above landed first, and it left a residual that the
+ * fix's own wording papered over. `check-route-guards.mjs` carried an ALLOWLIST
+ * entry for this route whose original reason was "read-only input/output/
+ * management ports of A DISCOVERABLE data product … resolves ONLY upstream
+ * contract summaries". Both clauses were false of the code, and only the FIRST
+ * was repaired: this route still returns the WHOLE ports model, every `ref`
+ * included — `abfss://` container paths, Synapse `schema.table` names, ADX
+ * database names. That is an infrastructure ADDRESS, not a contract summary, and
+ * the docblock above says so in its own words.
+ *
+ * The entry was then REWRITTEN to describe the authorization posture instead of
+ * the payload. That is this repo's documented failure mode — an allowlist reason
+ * that is true of a SIBLING branch of the same claim survives review precisely
+ * because it reads as true. So the entry is GONE rather than reworded a second
+ * time, and the two facts it was standing in for are recorded here instead:
+ *
+ *   1. IT WAS NOT LOAD-BEARING, and that is measured rather than asserted: with
+ *      the entry deleted `check-route-guards.mjs` still exits 0 on this route
+ *      (violations: 0). What it is NOT is "the route passes on its own
+ *      `authorizeWorkspace` call" — that sentence was in the guard file and it
+ *      was never measured. Stripping one token at a time and re-running says:
+ *      dropping the `authorizeWorkspace` call leaves RC=0; dropping
+ *      `session.claims.tid` as well is what turns it RED and names this route.
+ *      So the token that satisfies CHECK 2 here is a WEAK IDENTITY SIGNAL, and
+ *      the real authorization this file performs is invisible to that checker —
+ *      its own documented presence-vs-enforcement weakness, tracked there across
+ *      ~210 routes, not something this change closes. The entry still excused
+ *      nothing; it just was not the strong guard that was claimed.
+ *   2. THE FULL `ref` IS RETURNED ON PURPOSE, to the two populations the code
+ *      admits and to nobody else: a caller authorized on the OWNING WORKSPACE,
+ *      and — for a `published`/`deprecated` product only — a caller POSITIVELY
+ *      CONFIRMED to be in the product's own Entra tenant. Narrowing it was
+ *      considered and rejected here: the address IS the deliverable of a
+ *      published data product under the Purview-Unified-Catalog discovery model
+ *      this route implements, DP-9 breaking-change propagation resolves upstream
+ *      dependencies through it, and `__tests__/route.test.ts` pins the
+ *      disclosure to exactly those two populations. Changing the in-tenant
+ *      discovery contract is a product decision, not a security patch, and
+ *      making it silently inside a security fix is how the original wrong
+ *      sentence got written.
  */
 
 import { NextRequest, NextResponse } from 'next/server';
@@ -113,10 +156,20 @@ async function workspaceTid(workspaceId: string | undefined): Promise<string | n
     // is still worth a tri-state — tid | null-not-recorded | error-deny — but
     // `callerMayDiscover` now asks `sameTenantConfirmed`, for which BOTH values
     // are a refusal. A Cosmos outage therefore fails closed here rather than
-    // making the tenant test pass. The sibling case at workspace-guard.ts:141 —
-    // `(await workspaceIdOfItem(...)) || ''` putting an item row with a BLANK
-    // workspaceId on the permissive branch — is unrelated to this file and
-    // still tracked.
+    // making the tenant test pass. The sibling case lives INSIDE
+    // `authorizeItemWorkspace` (`lib/auth/workspace-guard.ts`) — the
+    // `workspaceId = (await workspaceIdOfItem(...)) || ''` assignment, which
+    // puts an item row with a BLANK workspaceId on the permissive branch. It is
+    // unrelated to this file and still tracked.
+    //
+    // #3877-f3 — THAT CITATION USED TO READ `workspace-guard.ts:141`, WHICH IS
+    // THE WRONG LINE AND THE WRONG KIND OF THING. `:141` is the DEFINITION of
+    // `workspaceIdOfItem` (a lookup that decides nothing); the assignment being
+    // described is its CALL SITE at `:246`, 105 lines further down and inside a
+    // different function. A reader following the old pointer landed on a query
+    // and could not see the permissive branch at all. It is named by SYMBOL here
+    // rather than re-pinned to `:246`, because a line number in a comment rots
+    // silently and a function name does not.
     return null;
   }
 }

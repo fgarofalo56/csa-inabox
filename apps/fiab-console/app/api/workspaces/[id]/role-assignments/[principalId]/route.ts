@@ -24,6 +24,20 @@ export const DELETE = withSession<{ id: string; principalId: string }>(async (_r
   try {
     const { workspace, role } = await resolveWorkspaceRole(id, s);
     if (!workspace) return NextResponse.json({ ok: false, error: 'workspace not found' }, { status: 404 });
+    // #3826 — THE DESTRUCTIVE HALF OF THE SAME LADDER, and why this file is
+    // fixed in the same commit as its sibling: this handler REMOVES a member and
+    // revokes their mirrored Azure RBAC assignment, so the blast radius is a real
+    // de-provisioning rather than a Cosmos row. `isTenantAdmin(s)` is a
+    // claims-only check that never looks at the workspace; before #3840 that let
+    // it fire on a record whose tenancy Loom had never established.
+    //
+    // The fix is UPSTREAM, at the one chokepoint: `resolveWorkspaceRole`
+    // delegates to `resolveWorkspaceAccessByOid`, whose step 4 now requires a
+    // POSITIVE tenant match. A non-null `workspace` above therefore means the
+    // caller owns it or its tenancy was CONFIRMED. Deliberately NOT re-derived
+    // here — see the long note in `../route.ts`, which records the local helper
+    // this draft first added and the guard failure that correctly rejected it as
+    // a fifth private copy of the tenant decision.
     if (role !== 'admin' && !isTenantAdmin(s)) {
       return NextResponse.json(
         { ok: false, error: 'Only the workspace owner, an Admin, or a tenant admin can remove members.', role },

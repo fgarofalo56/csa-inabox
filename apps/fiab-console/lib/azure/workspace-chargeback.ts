@@ -33,6 +33,37 @@ import {
 import { listAllWorkspacesAdmin } from '@/lib/clients/workspaces-client';
 import { queryWorkspaceLcu } from '@/lib/azure/cost-attribution';
 
+/**
+ * The CURRENT REQUEST's own Entra tenant id, or `undefined` off-request.
+ *
+ * #3826 — this report needs a TENANT SCOPE for the workspace inventory, and its
+ * caller supplies only `tenantId`, which is `tenantScopeId(session)` and falls
+ * back to the caller's `oid` when the tid claim is absent — so it cannot be told
+ * apart from a real tenant id by looking at it, and must not be used as one.
+ *
+ * THIS IS A CLAIM READ, NOT A TENANT DECISION, and the distinction is the whole
+ * reason it is allowed to live here. It compares nothing, authorizes nothing and
+ * grants nothing; it reads one field off the server-minted session cookie the
+ * route already read. The DECISION — whether that tenant matches a record's —
+ * stays in `lib/auth/tenant-boundary.ts`, and the scoping is done by the Cosmos
+ * predicate in `listAllWorkspacesAdmin`. An earlier draft exported this from
+ * `lib/auth/workspace-access.ts` instead; the chokepoint guard correctly
+ * derived it as an unclassified authorizer candidate in the authz module and
+ * failed the build, which is the guard working as designed.
+ *
+ * Never throws: `getSession()` reaches for `next/headers`, which throws outside
+ * a request scope (jobs, scripts, tests). Off-request the answer is `undefined`
+ * and the inventory FAILS CLOSED, surfacing the whole spend as unallocated.
+ */
+async function ambientRequestTid(): Promise<string | undefined> {
+  try {
+    const { getSession } = await import('@/lib/auth/session');
+    return getSession()?.claims.tid;
+  } catch {
+    return undefined;
+  }
+}
+
 /** How a workspace row's allocated cost was derived (surfaced in the UI badge). */
 export type AllocationBasis = 'usage' | 'items' | 'even';
 
@@ -155,16 +186,38 @@ export async function getWorkspaceChargeback(opts: {
   timeframe?: CostTimeframe;
   domainNames?: Record<string, string>;
   usageWindowDays?: number;
+  /**
+   * #3826 — the caller's Entra tenant id, used to SCOPE the workspace
+   * inventory. Distinct from `tenantId`, which callers fill with
+   * `tenantScopeId(session)` — that helper falls back to the caller's `oid`
+   * when the tid claim is absent, so it cannot be used as a tenant predicate.
+   * Omitted, it is recovered from the ambient request session.
+   */
+  callerTid?: string;
 }): Promise<WorkspaceChargebackModel> {
   const timeframe: CostTimeframe = opts.timeframe || 'MonthToDate';
   const usageWindowDays = Math.max(1, Math.min(90, opts.usageWindowDays ?? 30));
 
   const domainModel = await getDomainChargeback({ timeframe, domainNames: opts.domainNames });
 
+  // #3826 — THE WORKSPACE INVENTORY IS NOW TENANT-SCOPED. It used to be an
+  // unfiltered cross-partition `SELECT * FROM c`, so this report allocated ONE
+  // tenant's real Cost Management dollars across ANOTHER tenant's workspaces —
+  // disclosing their ids and names in the rows, and silently understating every
+  // in-tenant workspace's share by diluting the denominator. The tenant comes
+  // from the caller's `tid` claim, recovered from the ambient request session
+  // when the caller did not thread one through.
+  //
+  // FAILS CLOSED, and the failure is VISIBLE rather than silent: with no
+  // confirmable tenant the inventory is empty, so every domain's real spend
+  // lands in `unallocatedCost` — the module's existing honest channel for
+  // "real money we could not attribute" — instead of being quietly reallocated.
+  const callerTid = opts.callerTid ?? (await ambientRequestTid());
+
   // Workspace inventory + usage are best-effort — a blip degrades allocation
   // (fewer rows / item-weighting) but must not fail the report.
   const [{ workspaces }, usageByWs] = await Promise.all([
-    listAllWorkspacesAdmin().catch(() => ({ workspaces: [] as Awaited<ReturnType<typeof listAllWorkspacesAdmin>>['workspaces'] })),
+    listAllWorkspacesAdmin({ callerTid }).catch(() => ({ workspaces: [] as Awaited<ReturnType<typeof listAllWorkspacesAdmin>>['workspaces'] })),
     queryWorkspaceLcu(opts.tenantId, usageWindowDays).catch(() => ({} as Record<string, number>)),
   ]);
 

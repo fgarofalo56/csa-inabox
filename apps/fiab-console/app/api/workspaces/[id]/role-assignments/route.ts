@@ -42,6 +42,40 @@ export const dynamic = 'force-dynamic';
 const PRINCIPAL_TYPES: PrincipalType[] = ['User', 'Group', 'ServicePrincipal'];
 
 /**
+ * WHY THE `isTenantAdmin` ARM OF THIS LADDER IS SAFE, AND WHERE THAT IS DECIDED.
+ *
+ * #3826 — every handler in this file (and its `[principalId]` sibling) runs the
+ * ladder `role === 'admin' || isTenantAdmin(s) || owningDomainAdmin`. The middle
+ * arm has NO stored grant behind it: `isTenantAdmin` reads
+ * `LOOM_TENANT_ADMIN_OID` / `_GROUP_ID` and never looks at the workspace, so it
+ * establishes that the caller is AN admin and never WHICH tenant they
+ * administer. Before #3840 that meant a workspace whose tenancy Loom had never
+ * established could reach this ladder and be handed full member add/remove.
+ *
+ * IT IS CLOSED UPSTREAM, NOT HERE, AND THAT IS DELIBERATE. `resolveWorkspaceRole`
+ * delegates to `resolveWorkspaceAccessByOid`, whose step 4 now requires a
+ * POSITIVE tenant match (`sameTenantConfirmed`). So a non-null `workspace` below
+ * already means one of exactly two things: the caller OWNS it (step 1, a
+ * point-read into the caller's own partition, which cannot return another
+ * tenant's record), or its tenancy was positively CONFIRMED against the
+ * caller's. There is no third way to obtain a document here.
+ *
+ * A FIRST DRAFT OF THIS CHANGE ADDED A LOCAL `tenantAdminMayActHere()` HELPER
+ * that re-derived the tenant match at this route as defence in depth. That was
+ * wrong, and the repo's own guard is what said so —
+ * `scripts/ci/check-tid-boundary-chokepoint.mjs` failed it with "#3825 …
+ * grants access on isTenantAdmin ALONE in a workspace-scoped function … route
+ * the decision through resolveWorkspaceAccessByOid". It was right. A
+ * route-local tenant decision is a FIFTH copy of a comparison whose four
+ * predecessors are #3823, #3825, #3840 and #3843 — the exact defect this change
+ * exists to delete — and "mine is correct today" is what each of those four also
+ * believed. Defence in depth assembled out of duplicated security logic is not
+ * depth; it is one more thing that can drift out of agreement with the others.
+ * The depth here is that the chokepoint is SINGLE, enforced by CI, and pinned by
+ * specs on both sides of it.
+ */
+
+/**
  * D2: a DOMAIN ADMIN of the domain that owns this workspace may manage its
  * members (full control of their domain's workspaces), in addition to the
  * workspace owner / workspace Admin / tenant admin. Returns false (never throws)
@@ -72,7 +106,9 @@ export const GET = withSession<{ id: string }>(async (_req: NextRequest, { sessi
     const { workspace, role } = await resolveWorkspaceRole(id, s);
     if (!workspace) return NextResponse.json({ ok: false, error: 'workspace not found' }, { status: 404 });
     // Tenant admins (admin-plane "Workspace access") and DOMAIN ADMINS of the
-    // owning domain may read any workspace's roster even with no per-workspace role.
+    // owning domain may read any workspace's roster even with no per-workspace
+    // role. #3826: reaching this line already means the tenancy was CONFIRMED or
+    // the caller owns it — see the block comment above PRINCIPAL_TYPES.
     const tenantAdmin = isTenantAdmin(s);
     const owningDomainAdmin = !role && !tenantAdmin ? await callerIsOwningDomainAdmin(s, workspace) : false;
     if (!role && !tenantAdmin && !owningDomainAdmin) return NextResponse.json({ ok: false, error: 'no access to this workspace' }, { status: 403 });
@@ -96,6 +132,9 @@ export const POST = withSession<{ id: string }>(async (req: NextRequest, { sessi
   try {
     const { workspace, role } = await resolveWorkspaceRole(id, s);
     if (!workspace) return NextResponse.json({ ok: false, error: 'workspace not found' }, { status: 404 });
+    // #3826 — the WRITE side of the ladder. A non-null `workspace` above already
+    // carries a CONFIRMED tenancy (resolver step 4) or is owned by the caller, so
+    // the tenant-admin arm can no longer fire on an unconfirmed record.
     if (role !== 'admin' && !isTenantAdmin(s) && !(await callerIsOwningDomainAdmin(s, workspace))) {
       return NextResponse.json(
         { ok: false, error: 'Only the workspace owner, an Admin, a domain admin of the owning domain, or a tenant admin can add members.', role },
