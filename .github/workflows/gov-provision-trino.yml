@@ -243,7 +243,7 @@ jobs:
       # ── SC1: Gov now gets the SAME gate Commercial has ──────────────────────
       - name: Supply-chain — Trivy gate on loom-trino (fail on CRITICAL)
         if: ${{ inputs.apply == 'true' && !inputs.skip_supply_chain }}
-        uses: aquasecurity/trivy-action@57a97c7e7821a5776cebc9bb87c984fa69cba8f1 # 0.35.0
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # 0.36.0
         with:
           image-ref: ${{ env.ACR_LOGIN }}/loom-trino:${{ env.SHA }}
           severity: CRITICAL
@@ -255,7 +255,7 @@ jobs:
 
       - name: Supply-chain — Trivy gate on loom-uat (fail on CRITICAL)
         if: ${{ inputs.apply == 'true' && inputs.build_uat == 'true' && !inputs.skip_supply_chain }}
-        uses: aquasecurity/trivy-action@57a97c7e7821a5776cebc9bb87c984fa69cba8f1 # 0.35.0
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # 0.36.0
         with:
           image-ref: ${{ env.ACR_LOGIN }}/loom-uat:${{ env.SHA }}
           severity: CRITICAL

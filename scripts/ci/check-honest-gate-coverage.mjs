@@ -71,6 +71,49 @@ const ROOTS = ['lib/editors', 'lib/components', 'app', 'lib/apps'];
 const ENV_VAR = /\bLOOM_[A-Z0-9_]+\b/;
 
 /**
+ * ...and the same gate with its variable name INTERPOLATED (#3708).
+ *
+ * THE BLIND SPOT, measured. `ENV_VAR` above matches a LITERAL spelling. A
+ * remediation bar that renders `{gate.missing}` — a value fetched at runtime —
+ * carries no literal, so it was structurally invisible to this ratchet. In
+ * PR #3692 a bespoke `intent="warning"` MessageBar replaced the shared
+ * `HonestGate` in `lib/editors/phase4/user-data-function-editor.tsx` and this
+ * guard reported **74/74, unchanged**, on every commit. A human reviewer caught
+ * it; CI could not. `lib/components/shared/keyvault-secret-picker.tsx` already
+ * documented the same hole in its own comment, so it had been observed at least
+ * twice and never closed.
+ *
+ * WHY IT WAS THE WRONG WAY ROUND. A guard that can only see the literal
+ * spelling of a remediation reliably misses the bars that are most DYNAMIC —
+ * and dynamic bars are the ones most likely to be hand-rolled rather than
+ * routed through the registry. The population it scanned was biased away from
+ * the population it exists to catch, and "74/74" read as "no new bespoke bars"
+ * when the true statement was "no new bespoke bars THAT NAME THEIR ENV VAR AS A
+ * STRING LITERAL".
+ *
+ * WHAT THIS COSTS, measured before it landed rather than estimated:
+ *
+ *     literal-only rule ............ 63 file(s) /  74 bar(s)
+ *     + interpolated `missing` ..... 113 file(s) / 134 bar(s)   (+50 / +60)
+ *
+ * A sample of the newly-visible bars was read by hand — publish-as-api-dialog,
+ * batch-pool-editor, connection-details, cosmos-metrics, data-contract-designer,
+ * predict-wizard, synonyms-editor, warehouse-monitoring — and every one is a
+ * bare remediation telling the operator to set a value, with the variable
+ * interpolated. Zero false positives in that sample. The rise is the detector's
+ * new REACH, not new debt.
+ *
+ * WHY THIS SIGNAL AND NOT A BROADER ONE. The issue also proposed "intent=warning
+ * with no MessageBarActions" as a candidate. Measured: that pulls in **+218 bars
+ * across +161 files**, i.e. roughly every warning bar in the console including
+ * pure runtime-state notices. It would make the ratchet a list of everything and
+ * therefore a signal about nothing. `missing` is the property name the gate
+ * loaders actually return, so it keys on the SHAPE of a remediation rather than
+ * on the styling of a bar.
+ */
+const MISSING_INTERPOLATION = /\{[^{}]*\bmissing\b[^{}]*\}|\.missing\b/;
+
+/**
  * ...but naming a variable is not sufficient: a bar may mention one while
  * reporting a runtime condition ("per-user Compute Instance limit reached",
  * "connection list is partial", "failover is one-way"). A G2 gate is a bar that
@@ -190,9 +233,15 @@ export function scanSource(fileName, text) {
   for (const el of messageBarElements(text)) {
     const intent = intentOf(el.attrs);
     if (intent !== 'warning' && intent !== 'error') continue;
+    if (!REMEDIATION.test(el.text)) continue;
+    // A G2 gate names the value to set — EITHER as a literal, OR by
+    // interpolating it at runtime (#3708). The second half is the one the
+    // ratchet was blind to for its whole life.
     const m = el.text.match(ENV_VAR);
-    if (m && REMEDIATION.test(el.text)) {
+    if (m) {
       bareGates.push({ line: lineOf(text, el.index), envVar: m[0] });
+    } else if (MISSING_INTERPOLATION.test(el.text)) {
+      bareGates.push({ line: lineOf(text, el.index), envVar: '(interpolated)' });
     }
   }
   // A file that mounts HonestGate has an in-product Fix-it path; its remaining
@@ -205,11 +254,21 @@ export function scanRepo() {
   const files = [];
   for (const r of ROOTS) walk(path.join(APP_DIR, r), files);
   const found = new Map();
+  let barsSeen = 0;
   for (const full of files) {
     const rel = path.relative(APP_DIR, full).replace(/\\/g, '/');
-    const { bareGates } = scanSource(full, fs.readFileSync(full, 'utf-8'));
+    const text = fs.readFileSync(full, 'utf-8');
+    barsSeen += messageBarElements(text).length;
+    const { bareGates } = scanSource(full, text);
     if (bareGates.length) found.set(rel, bareGates.length);
   }
+  // POPULATION, carried out of the scan so main() can refuse a verdict from a
+  // scanner that reached nothing. `found.size === 0` is a legitimate end-state
+  // (every bar migrated to HonestGate); `filesScanned === 0` or `barsSeen === 0`
+  // never is, and the two are indistinguishable in the output otherwise
+  // (guard_with_zero_population_needs_embedded_control).
+  found.filesScanned = files.length;
+  found.barsSeen = barsSeen;
   return found;
 }
 
@@ -271,6 +330,49 @@ function selftest() {
     export function E() { return (
       <MessageBar intent="warning"><MessageBarBody>Something went wrong.</MessageBarBody></MessageBar>); }`;
   ok('a bar with no env var is ignored', scanSource('e.tsx', noVar).bareGates.length === 0);
+
+  // --- #3708: the INTERPOLATED remediation ---
+  //
+  // THE FIXTURE THE ISSUE ASKED FOR, and the reason it asked: without it this
+  // hole reopens the moment someone tightens the regex, because the guard has
+  // now demonstrated TWICE that it cannot self-detect this blind spot.
+  const interpolated = `
+    export function E() { return (
+      <MessageBar intent="warning"><MessageBarBody>
+        <MessageBarTitle>Azure API Management is not configured in this deployment</MessageBarTitle>
+        {gate.missing && <>Missing env var: <code>{gate.missing}</code>. </>}
+      </MessageBarBody></MessageBar>); }`;
+  ok('#3708 — a bar whose missing-var is INTERPOLATED is counted (this is the bar that read 74/74)',
+    scanSource('f.tsx', interpolated).bareGates.length === 1);
+  ok('#3708 — …and it is recorded as interpolated, not as a fabricated literal',
+    scanSource('f.tsx', interpolated).bareGates[0]?.envVar === '(interpolated)');
+
+  const interpolatedShorthand = `
+    export function E() { return (
+      <MessageBar intent="warning"><MessageBarBody>
+        <MessageBarTitle>Engine not configured</MessageBarTitle>
+        Set <code>{missing}</code> on the console container app.
+      </MessageBarBody></MessageBar>); }`;
+  ok('#3708 — the bare `{missing}` spelling counts too, not only `x.missing`',
+    scanSource('g.tsx', interpolatedShorthand).bareGates.length === 1);
+
+  const interpolatedWithGate = interpolated
+    .replace('export function E() { return (', 'export function E() { return (<><HonestGate gateId="svc-apim" surface="X" />')
+    .replace('</MessageBar>);', '</MessageBar></>);');
+  ok('#3708 — the SAME interpolated bar stops counting once HonestGate is mounted',
+    scanSource('h.tsx', interpolatedWithGate).bareGates.length === 0);
+
+  // The other direction: widening must not have turned every warning bar into a
+  // gate. A runtime-state bar that happens to say "missing" in prose, with no
+  // interpolation and no remediation imperative, is not a G2 gate.
+  const runtimeMissingProse = `
+    export function E() { return (
+      <MessageBar intent="warning"><MessageBarBody>
+        <MessageBarTitle>3 rows were skipped</MessageBarTitle>
+        Some columns were missing from the source file.
+      </MessageBarBody></MessageBar>); }`;
+  ok('#3708 — prose containing the WORD "missing" with no interpolation is NOT a gate',
+    scanSource('i.tsx', runtimeMissingProse).bareGates.length === 0);
 
   // --- ratchet decision, BOTH directions ---
   const base = { 'x.tsx': 1, 'y.tsx': 2 };
@@ -338,6 +440,13 @@ const baseTotal = Object.values(baseline).reduce((a, b) => a + b, 0);
 const liveTotal = [...found.values()].reduce((a, b) => a + b, 0);
 console.log(`[honest-gate-coverage] baseline: ${Object.keys(baseline).length} file(s) / ${baseTotal} bare gate(s)`);
 console.log(`[honest-gate-coverage] live:     ${found.size} file(s) / ${liveTotal} bare gate(s)`);
+console.log(`[honest-gate-coverage] population: ${found.filesScanned} .tsx scanned / ${found.barsSeen} <MessageBar> element(s) reached`);
+if (!found.filesScanned || !found.barsSeen) {
+  console.log('::error::[honest-gate-coverage] the scanner reached ZERO files or ZERO MessageBar elements.');
+  console.log('::error::The console has hundreds of both, so this is drift, not a clean tree — and it is');
+  console.log('::error::indistinguishable from one in the counts above. Refusing to report a verdict.');
+  process.exit(1);
+}
 
 let failed = false;
 

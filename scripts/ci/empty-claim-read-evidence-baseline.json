@@ -35,7 +35,6 @@
     "apps/fiab-console/lib/components/admin/finops-cockpit-pane.tsx#unguarded": 2,
     "apps/fiab-console/lib/components/admin/lcu-autopilot-pane.tsx#unguarded": 2,
     "apps/fiab-console/lib/components/admin/parity-autopilot-panel.tsx#unguarded": 2,
-    "apps/fiab-console/lib/components/admin/perf-recommendations-card.tsx#unguarded": 1,
     "apps/fiab-console/lib/components/admin/prompt-registry-panel.tsx#unguarded": 1,
     "apps/fiab-console/lib/components/admin/rum-panel.tsx#unguarded": 1,
     "apps/fiab-console/lib/components/admin/search-quality-panel.tsx#unguarded": 1,
