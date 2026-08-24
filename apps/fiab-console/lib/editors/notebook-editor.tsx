@@ -52,7 +52,7 @@ import {
 } from '@/lib/api/workspaces';
 import { buildTree, countDescendants, type FolderNode, type TreeItemSort } from '@/lib/panes/folders';
 import { ItemEditorChrome } from './item-editor-chrome';
-import { useAutosave, AutosaveIndicator } from './use-autosave';
+import { useAutosave } from './use-autosave';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
 import { useRegisterRibbonCommands } from '@/lib/components/shared/ribbon-commands';
@@ -95,9 +95,12 @@ import {
   STARTER_PY, TTL_LABEL, AML_CI_VM_SIZES,
 } from './notebook-editor/constants';
 import {
-  cellRoutesToSpark, starterCells, decodePy, exportPercentPy, exportIpynbFile,
+  cellRoutesToSpark, decodePy, exportPercentPy, exportIpynbFile,
   isComputeRunning, isCiStopped, looksStreaming,
 } from './notebook-editor/helpers';
+import {
+  CellsHeader, CellsLoading, seedCells, seedCellsFor,
+} from './notebook-editor/cells-hydration';
 import { useWorkspaces, useComputes, useAmlConfigured, useMyCi } from './notebook-editor/hooks';
 import { DriverLogPane } from './notebook-editor/driver-log-pane';
 import {
@@ -147,7 +150,14 @@ export function NotebookEditor({ item, id }: Props) {
   // /api/notebook/<id>/lsp (server-only env: LOOM_PYLSP_ENABLED, boundary, AML).
   const [lspWsUrl, setLspWsUrl] = useState<string | null>(null);
   const [vscodeWeb, setVscodeWeb] = useState<{ enabled: boolean; url: string | null; reason?: string }>({ enabled: false, url: null });
-  const [cells, setCells] = useState<NotebookCell[]>(starterCells());
+  // #3539 — never render the generic "New notebook" starter over a real
+  // bundle. TWO INDEPENDENT LAYERS, neither covering the other, both with the
+  // full rationale + their own tests: `seedCells` (here) and `<CellsLoading/>`
+  // behind the render gate below. See ./notebook-editor/cells-hydration.
+  const [cells, setCells] = useState<NotebookCell[]>(() => seedCells(id));
+  // Which notebook `cells` were hydrated from — the id `loadDetail` last
+  // completed for, on SUCCESS or FAILURE (a failure must not strand the gate).
+  const [cellsFor, setCellsFor] = useState<string | null>(() => seedCellsFor(id));
   const [defaultLang, setDefaultLang] = useState<NotebookCellLang>('pyspark');
   const [activeCellId, setActiveCellId] = useState<string | null>(null);
   const [dirty, setDirty] = useState(false);
@@ -710,6 +720,12 @@ export function NotebookEditor({ item, id }: Props) {
           : null,
       );
     } catch (e: any) { setDetailErr(e?.message || String(e)); }
+    finally {
+      // #3539 — resolve the gate on BOTH the success and the failure path.
+      // `currentNbRef` so a load the user navigated away from cannot un-gate a
+      // newer notebook's cells.
+      if (currentNbRef.current === nbId) setCellsFor(nbId);
+    }
   }, []);
 
   const loadJobs = useCallback(async (wsId: string, nbId: string) => {
@@ -3157,22 +3173,17 @@ export function NotebookEditor({ item, id }: Props) {
             </div>
           )}
 
-          {notebookId && (
+          {/* #3539 LAYER 1 — hold the cell list until the cells in hand are
+              THIS notebook's. Rationale: ./notebook-editor/cells-hydration. */}
+          {notebookId && cellsFor !== notebookId && <CellsLoading />}
+
+          {notebookId && cellsFor === notebookId && (
             <>
-              <div style={{ display: 'flex', alignItems: 'center', gap: tokens.spacingVerticalS }}>
-                {dirty && <Badge appearance="outline" color="warning">unsaved</Badge>}
-                <AutosaveIndicator status={autosaveStatus} />
-                <Caption1>{cells.length} cell{cells.length === 1 ? '' : 's'} · default lang <code>{defaultLang}</code></Caption1>
-                <div style={{ flex: 1 }} />
-                <Select size="small" value={defaultLang} onChange={(_, d) => { setDefaultLang(d.value as NotebookCellLang); setDirty(true); }} aria-label="Default cell language">
-                  <option value="pyspark">PySpark (Python)</option>
-                  <option value="spark">Spark (Scala)</option>
-                  <option value="sparksql">Spark SQL</option>
-                  <option value="sparkr">SparkR (R)</option>
-                  <option value="python">Python</option>
-                  <option value="tsql">T-SQL</option>
-                </Select>
-              </div>
+              <CellsHeader
+                dirty={dirty} autosaveStatus={autosaveStatus} cellCount={cells.length}
+                defaultLang={defaultLang}
+                onDefaultLangChange={(lang) => { setDefaultLang(lang); setDirty(true); }}
+              />
               <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS }}>
                 <CellAdder
                   onAddCode={() => insertCell(-1, 'code')}

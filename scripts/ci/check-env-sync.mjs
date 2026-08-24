@@ -974,8 +974,16 @@ export function collectEmptyDefaultParams(src) {
 
 /**
  * Param names that SOME bicep file passes as a module argument (`foo: …`).
- * Scanned across the whole tree, excluding the declaring file itself, because a
- * param is only alive if a CALLER supplies it.
+ * Scanned across the whole tree, excluding the declaring file itself.
+ *
+ * NO LONGER THE ALIVENESS ORACLE (PR #3923 review). It was, and the claim in
+ * this docstring — "a param is only alive if a CALLER supplies it" — was not
+ * what it measured. It matches `^\s{2,}name\s*:\s*\S` in EVERY .bicep file, so
+ * it returns 1,274 names against the 137 arguments the one real caller supplies
+ * to admin-plane/main.bicep, and it never looks at the value. computeInert()
+ * now uses collectAdminPlaneArgs(). This is retained as a coarse tree-wide
+ * measurement and for callers outside this file; do not reintroduce it as an
+ * aliveness test without reading the note above computeInert().
  */
 export function collectPassedParamNames(excludeFile) {
   const passed = new Set();
@@ -1000,6 +1008,200 @@ export function isAlwaysEmptyLiteral(expr) {
 /** True when `expr` is a bare identifier (a param/var reference, nothing else). */
 export function isBareIdentifier(expr) {
   return /^[A-Za-z_][A-Za-z0-9_]*$/.test(String(expr).trim());
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// THE CALLER'S ACTUAL ARGUMENT LIST — value, not merely name (PR #3923 review)
+//
+// `collectPassedParamNames()` above answers "is this param alive?" by looking
+// for `<name>:` ANYWHERE under platform/fiab/bicep except the declaring file.
+// Measured on this tree it returns a bag of 1,274 names, while the number of
+// arguments the ONE real caller actually supplies to admin-plane/main.bicep is
+// 137. Two consequences, both load-bearing:
+//
+//   1. It cannot tell a caller's argument from an unrelated key that happens to
+//      share a spelling in one of ~350 other .bicep files.
+//   2. It never inspects the VALUE. `loomCloudTier: boundary`,
+//      `loomCloudTier: 'IL5'` and `loomCloudTier: ''` are indistinguishable to
+//      it — so the #3433 fix could be reverted to its exact pre-fix behaviour
+//      (`''`) with this guard, check-deploy-template-sync and the full 14-test
+//      node:test suite ALL green. That was demonstrated in review, not
+//      hypothesised.
+//
+// The functions below read the argument list itself: the params block of a
+// named `module` invocation, parsed depth-aware so a nested object's keys do
+// not masquerade as top-level arguments, and the compiled ARM artifact's own
+// nested-deployment parameters. They FAIL CLOSED — a rename that makes the
+// module invocation unfindable throws rather than silently measuring an empty
+// set, which is the failure mode this repository keeps re-finding.
+// ══════════════════════════════════════════════════════════════════════════════
+
+/**
+ * The ONE orchestrator that invokes `modules/admin-plane/main.bicep`. Verified:
+ * `grep -rn "admin-plane/main.bicep" platform/fiab/bicep --include=*.bicep`
+ * returns a single `module` statement (main.bicep:1162); every other hit is
+ * prose inside a comment or an @description.
+ */
+const ROOT_ORCHESTRATOR = path.join(BICEP_ROOT, 'main.bicep');
+
+/**
+ * The COMPILED artifact that actually deploys: it is COPY'd into the console
+ * image and submitted INLINE to ARM. check-deploy-template-sync.mjs proves it
+ * matches its bicep; nothing proved it carried the right VALUES.
+ */
+const COMPILED_TEMPLATE = path.join(CONSOLE_ROOT, 'deploy-templates', 'main.json');
+
+/**
+ * The balanced `{ … }` params block of `module <symbol> …` in `src`.
+ *
+ * Throws when the module cannot be located unambiguously. A guard that returns
+ * '' here would report every argument as missing — or, worse, report nothing as
+ * mismatched — on a harmless rename.
+ *
+ * @param {string} src raw bicep source (comments are stripped internally)
+ * @param {string} moduleSymbol e.g. 'adminPlane'
+ * @returns {string} the params block INCLUDING its braces
+ */
+export function sliceModuleParamsBlock(src, moduleSymbol) {
+  const clean = stripBicepDocs(src);
+  const decl = new RegExp(String.raw`^module\s+${moduleSymbol}\s`, 'gm');
+  const hits = [...clean.matchAll(decl)];
+  if (hits.length !== 1) {
+    throw new Error(
+      `check-env-sync: expected exactly ONE \`module ${moduleSymbol}\` declaration, found ` +
+        `${hits.length}. The orchestrator was renamed or duplicated; fix ` +
+        'sliceModuleParamsBlock() rather than letting the binding assertions measure nothing.',
+    );
+  }
+  const open = clean.indexOf('{', hits[0].index);
+  const body = open < 0 ? '' : balancedSlice(clean, open, '{', '}');
+  if (!body) {
+    throw new Error(`check-env-sync: \`module ${moduleSymbol}\` has no balanced body.`);
+  }
+  const pIdx = body.indexOf('params:');
+  if (pIdx < 0) {
+    throw new Error(`check-env-sync: \`module ${moduleSymbol}\` has no \`params:\` block.`);
+  }
+  const pOpen = body.indexOf('{', pIdx);
+  const params = pOpen < 0 ? '' : balancedSlice(body, pOpen, '{', '}');
+  if (!params) {
+    throw new Error(`check-env-sync: \`module ${moduleSymbol}\` params block is not balanced.`);
+  }
+  return params;
+}
+
+/**
+ * TOP-LEVEL `key: expression` pairs of a bicep object literal, depth-aware and
+ * string-aware. Keys inside a nested object/array/parenthesised expression are
+ * deliberately NOT returned: a `byoExisting: { loomCloudTier: … }` nested key
+ * must not be able to satisfy an assertion about a top-level argument.
+ *
+ * Exported so the embedded control can drive it with synthetic input whose
+ * answers are known — the classifier must be provably able to FAIL.
+ *
+ * @param {string} block a `{ … }` object literal, braces included
+ * @returns {Map<string, string>} key -> raw value expression, trimmed
+ */
+export function parseModuleParamExprs(block) {
+  const inner = String(block).trim().slice(1, -1);
+  const out = new Map();
+  let i = 0;
+  let depth = 0;
+  while (i < inner.length) {
+    const c = inner[i];
+    if (c === "'") {
+      let j = i + 1;
+      while (j < inner.length && inner[j] !== "'" && inner[j] !== '\n') {
+        if (inner[j] === BACKSLASH) j++;
+        j++;
+      }
+      i = j + 1;
+      continue;
+    }
+    if (c === '{' || c === '[' || c === '(') {
+      depth++;
+      i++;
+      continue;
+    }
+    if (c === '}' || c === ']' || c === ')') {
+      depth--;
+      i++;
+      continue;
+    }
+    if (depth === 0) {
+      const m = /^([A-Za-z_][A-Za-z0-9_]*)\s*:/.exec(inner.slice(i));
+      // Only accept an identifier that BEGINS a line (ignoring indentation).
+      const lineStart = inner.lastIndexOf('\n', i - 1) + 1;
+      if (m && inner.slice(lineStart, i).trim() === '') {
+        let j = i + m[0].length;
+        let d2 = 0;
+        while (j < inner.length) {
+          const ch = inner[j];
+          if (ch === "'") {
+            let k = j + 1;
+            while (k < inner.length && inner[k] !== "'" && inner[k] !== '\n') {
+              if (inner[k] === BACKSLASH) k++;
+              k++;
+            }
+            j = k + 1;
+            continue;
+          }
+          if (ch === '{' || ch === '[' || ch === '(') d2++;
+          else if (ch === '}' || ch === ']' || ch === ')') d2--;
+          else if (ch === '\n' && d2 <= 0) break;
+          j++;
+        }
+        out.set(m[1], inner.slice(i + m[0].length, j).trim());
+        i = j;
+        continue;
+      }
+    }
+    i++;
+  }
+  return out;
+}
+
+/** The 137 arguments main.bicep actually supplies to the admin-plane module. */
+export function collectAdminPlaneArgs() {
+  return parseModuleParamExprs(
+    sliceModuleParamsBlock(fs.readFileSync(ROOT_ORCHESTRATOR, 'utf8'), 'adminPlane'),
+  );
+}
+
+/**
+ * Every `Microsoft.Resources/deployments` in a compiled ARM template that
+ * supplies `paramName`, with the value expression it supplies.
+ *
+ * Structural (JSON.parse + walk), not textual: `[parameters('boundary')]`
+ * occurs 33 times in the shipped main.json, so a substring test proves nothing
+ * about THIS parameter.
+ *
+ * @param {string} templateText raw main.json
+ * @param {string} paramName e.g. 'loomCloudTier'
+ * @returns {{name: unknown, value: unknown}[]}
+ */
+export function compiledNestedParamRefs(templateText, paramName) {
+  const root = JSON.parse(templateText);
+  const hits = [];
+  const seen = new Set();
+  const visit = (node) => {
+    if (!node || typeof node !== 'object') return;
+    if (seen.has(node)) return;
+    seen.add(node);
+    if (Array.isArray(node)) {
+      for (const v of node) visit(v);
+      return;
+    }
+    const params = node.type === 'Microsoft.Resources/deployments' && node.properties
+      ? node.properties.parameters
+      : null;
+    if (params && Object.prototype.hasOwnProperty.call(params, paramName)) {
+      hits.push({ name: node.name, value: params[paramName] });
+    }
+    for (const v of Object.values(node)) visit(v);
+  };
+  visit(root);
+  return hits;
 }
 
 /**
@@ -1035,8 +1237,10 @@ export const KNOWN_INERT = new Map([
  * This is deliberately a SEPARATE set from {@link KNOWN_INERT}. Every name in
  * KNOWN_INERT carries a reason someone established. These carry only the
  * measurement, and saying so is the point: deploy-integrity.md R7 forbids
- * asserting a cause that was not established, and writing 31 confident
- * rationales I had not verified would have been exactly that.
+ * asserting a cause that was not established, and writing a confident rationale
+ * for each of the 31 baseline names without having verified them would have been
+ * exactly that. (31 is the 2026-08-14 baseline, not the current size — see the
+ * SHRINK LOG below; the set is 30 as of 2026-08-22.)
  *
  * WHAT IS ACTUALLY KNOWN ABOUT ALL OF THEM: each is bound to an admin-plane
  * `param … string = ''` that NO caller anywhere under platform/fiab/bicep ever
@@ -1048,10 +1252,43 @@ export const KNOWN_INERT = new Map([
  * DevOps organisation (LOOM_SQL_GIT_ADO_ORG), their GitHub host, their MLflow
  * tracking URI — and auto-bind-by-default.md §5 is about infra prerequisites the
  * PLATFORM could deploy, not about external coordinates. Others look genuinely
- * derivable and are probably defects; LOOM_CLOUD_TIER is the clearest, because
- * domains-client.ts:536 uses it to block the Fabric Admin API on IL5 (not
- * FedRAMP IL5 approved) and an always-empty value means that compliance gate has
- * never engaged on any deploy. It is filed separately rather than fixed blind.
+ * derivable and are probably defects, and are filed separately rather than
+ * fixed blind.
+ *
+ * SHRINK LOG — 2026-08-22, LOOM_CLOUD_TIER (#3433, PR #3923). It was the
+ * clearest derivable one: domains-client.ts:536 uses it to block the Fabric
+ * Admin API on IL5 (not FedRAMP IL5 approved), and the always-empty value meant
+ * that compliance gate had never engaged on any deploy. main.bicep now passes
+ * `loomCloudTier: boundary` to the admin-plane module, so the entry is DELETED
+ * here rather than reworded. Deleting it is NECESSARY, because while the name
+ * sat in this set computeInert()'s `if (UNTRIAGED_INERT.has(name)) continue;`
+ * skipped it — a SKIP, not an assertion — so REMOVING the new wiring and
+ * leaving the entry in place still exited 0. Measured, four arms (needles
+ * asserted to match exactly once; note main.bicep is LF and this file is CRLF,
+ * so the needles differ):
+ *   wiring PRESENT + entry PRESENT  -> RC=0  passes
+ *   wiring REMOVED + entry PRESENT  -> RC=0  GUARD BLIND (the narrow revert)
+ *   wiring REMOVED + entry REMOVED  -> RC=1  classifier is fine
+ *   wiring PRESENT + entry REMOVED  -> RC=0  deleting the entry costs nothing
+ * A fix that leaves its own allowlist entry behind ships with its guard
+ * suppressed; that is why the rule below is not a formality.
+ *
+ * CORRECTED 2026-08-23 (PR #3923 review, deploy-integrity.md R7). The wording
+ * above previously read "Deleting it is what restores this layer's teeth."
+ * That overclaimed, and the review proved it by measurement: deletion restores
+ * exactly ONE tooth — total removal of the `loomCloudTier: boundary` line.
+ * Three NARROWER reverts still exited 0 against the deletion alone:
+ *   `loomCloudTier: 'IL5'`   -> RC=0   (right on IL5, mislabels four boundaries)
+ *   `loomCloudTier: ''`      -> RC=0   (the ORIGINAL #3433 defect, restored)
+ *   `loomCloudTier: ''` + a regenerated main.json -> RC=0 on env-sync AND on
+ *       check-deploy-template-sync, because that guard byte-compares the
+ *       compiled artifact against a fresh compile and is a CONSISTENCY check,
+ *       structurally unable to see a semantic regression.
+ * The reason deletion cannot catch those: computeInert()'s aliveness oracle
+ * asks only whether the NAME `loomCloudTier` appears as `name:` somewhere under
+ * platform/fiab/bicep — it never inspects the VALUE. See TRIAGED_INERT_BINDINGS
+ * below, which is the assertion that closes all three, and the precise-oracle
+ * change in computeInert() that closes the `''` shape for every env var.
  *
  * This set may only SHRINK. Triaging one means deleting it here and either
  * fixing the emission or moving it to KNOWN_INERT with a real reason.
@@ -1060,7 +1297,6 @@ export const UNTRIAGED_INERT = new Set([
   'LOOM_ADO_HOST',
   'LOOM_ASA_TEST_WRITE_URI',
   'LOOM_BAP_BASE',
-  'LOOM_CLOUD_TIER',
   'LOOM_COPILOT_STUDIO_ENVIRONMENT_ID',
   'LOOM_DATABRICKS_LINEAGE_WAREHOUSE_ID',
   'LOOM_DATABRICKS_SQL_WAREHOUSE_ID',
@@ -1091,6 +1327,169 @@ export const UNTRIAGED_INERT = new Set([
 ]);
 
 /**
+ * TRIAGED BINDINGS — the other half of the shrink ratchet above.
+ *
+ * WHY THIS EXISTS. Deleting a name from {@link UNTRIAGED_INERT} is how a fix is
+ * recorded, but deletion asserts only that the classifier no longer flags the
+ * name, and the classifier only ever asked whether the param is PASSED. So the
+ * ratchet's own shrink log could stay honest while the fix behind it was
+ * reverted to something narrower than "deleted": measured in review on
+ * PR #3923, `loomCloudTier: 'IL5'`, `loomCloudTier: ''`, and `loomCloudTier: ''`
+ * plus a regenerated main.json ALL exited 0 on env-sync, and the last of those
+ * also exited 0 on check-deploy-template-sync — i.e. the exact pre-fix defect
+ * shipped with a fully green board.
+ *
+ * Every entry here pins the VALUE EXPRESSION the fix installed, in both places
+ * it has to survive: the caller's argument list in platform/fiab/bicep/main.bicep
+ * and the compiled ARM artifact that actually deploys. Four independent teeth
+ * per entry — see computeTriagedBindings():
+ *
+ *   T1  the name is in NEITHER ratchet (it has genuinely been triaged out)
+ *   T2  admin-plane still emits `{ name: '<ENV>', value: <param> }`
+ *   T3  main.bicep's `module adminPlane` params pass `<param>: <rootExpr>` —
+ *       the value expression EXACTLY, so '' / a literal / a decoy elsewhere in
+ *       the tree all fail
+ *   T4  the compiled main.json's admin-plane nested deployment supplies
+ *       `<param>` with EXACTLY <compiledValue>
+ *
+ * ADDING AN ENTRY IS PART OF TRIAGING A NAME, not optional bookkeeping: a
+ * derivable var whose entry is deleted from UNTRIAGED_INERT with no binding
+ * pinned here is a fix with no regression protection at all.
+ *
+ * THE LIMIT OF THIS MECHANISM, stated rather than papered over. Every one of
+ * T1..T4 is defeated by deleting the ENTRY at the same time as reverting the
+ * wiring: with no entry there is nothing to assert, and `loomCloudTier: 'IL5'`
+ * would then pass layer 3 too (a non-empty literal is not always-empty).
+ * {@link TRIAGED_BINDINGS_FLOOR} is the answer available without git history —
+ * a ratchet that may only GROW, so removing an entry additionally requires
+ * lowering the floor.
+ *
+ * MEASURED, three arms, 2026-08-23 (needles asserted MATCHES=1 on each file;
+ * this file is CRLF and main.bicep is LF, so the needles differ):
+ *   delete the entry                                        -> RC=1  caught
+ *   delete the entry + revert to `loomCloudTier: 'IL5'`     -> RC=1  caught
+ *   delete the entry + revert + lower the floor to 0        -> RC=0  SURVIVES
+ *
+ * The third arm is a real, disclosed bypass. It costs three coordinated edits,
+ * one of which is lowering a constant this comment calls grow-only, so it is
+ * visible in review — but the guard does not stop it. Closing it needs git
+ * history, and the only lane that could read it (guardrails, fetch-depth: 0)
+ * is not the lane the node:test suite runs in (depth 1), so a history check
+ * here would be green in one place and throwing in another. A disclosed limit
+ * is better than an undisclosed flake.
+ *
+ * @type {Map<string, {issue: string, param: string, rootExpr: string, compiledValue: string, why: string}>}
+ */
+export const TRIAGED_INERT_BINDINGS = new Map([
+  [
+    'LOOM_CLOUD_TIER',
+    {
+      issue: '#3433 (PR #3923)',
+      param: 'loomCloudTier',
+      rootExpr: 'boundary',
+      compiledValue: "[parameters('boundary')]",
+      why:
+        'The cloud AUTHORIZATION tier five console paths compare against, one of which ' +
+        '(lib/azure/domains-client.ts) uses it to skip the Fabric Admin API on IL5 because ' +
+        'that API is not FedRAMP IL5 approved. It must be the `boundary` PARAMETER ' +
+        "REFERENCE, not a literal: `boundary` is @allowed(['Commercial','GCC','GCC-High'," +
+        "'IL5']) so ARM itself constrains the value, and il5.bicepparam sets 'IL5'. A " +
+        "hard-coded 'IL5' would satisfy IL5 and mislabel the other four boundaries; '' is " +
+        'the original defect. This is a compliance control, so both are regressions.',
+    },
+  ],
+]);
+
+/**
+ * GROW-ONLY floor for {@link TRIAGED_INERT_BINDINGS}. Raise it whenever an
+ * entry is added. Lowering it is how an entry is legitimately retired, and it
+ * must be a deliberate, reviewed line in the same diff — never a silent side
+ * effect of deleting the entry.
+ */
+export const TRIAGED_BINDINGS_FLOOR = 1;
+
+/**
+ * PARAMS-FILE ENV BRIDGES — every boundary reads every spelling (#3446).
+ *
+ * WHY THIS IS SEPARATE FROM THE LOOM_* CHECKS ABOVE. It is the same defect
+ * class — an env var name that NOTHING reads — measured on the operator's side
+ * of the wire rather than the console's. Loom's own producers advertise three
+ * different names for the Azure Maps BYO account, and until PR #3923 the
+ * .bicepparam files read exactly one of them, so an operator who set either of
+ * the other two got silence.
+ *
+ * WHY IT IS NOT IN check-adoption-catalog-sync.mjs. That script's A10 check
+ * compares the catalog's legacyEnv names against commercial-full.bicepparam
+ * ONLY. Review demonstrated the consequence: reverting the bridge in
+ * il5.bicepparam ALONE left check-adoption-catalog-sync at RC=0, check-env-sync
+ * at RC=0 and `az bicep build-params` at 0 errors. A sovereign boundary could
+ * lose the bridge with a fully green board — a cloud-parity.md exposure, since
+ * the boundary that loses it is exactly the one whose operators cannot fall
+ * back to a Commercial-only path.
+ *
+ * The population is DERIVED (every *.bicepparam under params/ that declares
+ * `param adopt =`), never a hard-coded list, so a new boundary file is covered
+ * the day it lands rather than the day someone remembers to add it here.
+ *
+ * WHAT THIS REGISTRY DOES **NOT** COVER, stated so its silence is not read as a
+ * clean bill of health. Maps is one member of a family. Re-measured on this
+ * tree on 2026-08-23 (extractor carried a positive control — the params files
+ * DO read EXISTING_AZURE_MAPS_ACCOUNT — so the zeros below are real zeros and
+ * not a fail-open regex):
+ *
+ *   params files READ 48 distinct EXISTING_* names via readEnvironmentVariable
+ *   lib/setup/scan-services.ts        36 advertised,  0 unread  (this PR closed it)
+ *   lib/deploy/adoption-catalog.ts    40 advertised,  0 unread
+ *   app/api/setup/discover-services/route.ts
+ *                                     48 advertised, 12 unread
+ *   scripts/csa-loom/scan-and-deploy.sh
+ *                                     43 advertised,  9 unread
+ *
+ * The 12/9 are EXISTING_{STORAGE,POSTGRES,KEYVAULT[,FIREWALL]} × {name,_RG,_SUB}.
+ * Two different situations inside that list, and the distinction matters:
+ *   * keyvault / firewall are `allowExisting: false` in the catalog, so those
+ *     names are DEAD, not mis-wired — a lint issue, not a brownfield defect.
+ *   * storage and postgres are the real siblings of Maps.
+ *     discover-services/route.ts:108-109 promises the operator "reuse an
+ *     existing HNS account if you have one" and "Reuse an existing flexible
+ *     server to skip provisioning" and emits EXISTING_STORAGE / EXISTING_POSTGRES,
+ *     which NO params file reads. adoption-catalog.ts explicitly contradicts it
+ *     for postgres (`cls: 'create-only'`, "no Console binding env exists… so it
+ *     is locked rather than silently ignored"), and the discover route offers
+ *     the choice anyway — where it IS silently ignored. That is a
+ *     deploy-integrity.md R5 / auto-bind-by-default defect.
+ *
+ * They are NOT added to PARAMS_ENV_BRIDGES because doing so would turn this
+ * guard red for a defect that lives in files this change does not own
+ * (app/api/setup/**, scripts/csa-loom/**) — a gate whose only effect is to
+ * block unrelated work is not a fix. The route is: either the params files gain
+ * a storage/postgres bridge, or the promise text is corrected to match
+ * adoption-catalog.ts. Whichever lands, add the entry HERE in the same diff.
+ *
+ * @type {{id: string, issue: string, adoptKey: string, consoleParam?: string,
+ *         roles: Record<'name'|'rg'|'sub', string[]>}[]}
+ */
+export const PARAMS_ENV_BRIDGES = [
+  {
+    id: 'maps',
+    issue: '#3446 (PR #3923)',
+    adoptKey: 'maps',
+    // The param that binds an adopted account into the Console env. Only some
+    // params files declare it; where it IS declared it must read the bridge.
+    consoleParam: 'loomAzureMapsAccount',
+    roles: {
+      // lib/deploy/adoption-catalog.ts (canonical) | lib/setup/scan-services.ts
+      // | app/api/setup/discover-services/route.ts + scripts/csa-loom/scan-and-deploy.sh
+      name: ['EXISTING_AZURE_MAPS_ACCOUNT', 'EXISTING_AZURE_MAPS', 'EXISTING_MAPS'],
+      // The third spelling diverges on rg/sub too, which is why bridging only
+      // the account name would still bind an adopted account to the wrong RG.
+      rg: ['EXISTING_AZURE_MAPS_RG', 'EXISTING_MAPS_RG'],
+      sub: ['EXISTING_AZURE_MAPS_SUB', 'EXISTING_MAPS_SUB'],
+    },
+  },
+];
+
+/**
  * Vars delivered to the console whose value is always empty and which are not
  * already ratcheted in {@link KNOWN_INERT}.
  */
@@ -1098,7 +1497,42 @@ export function computeInert() {
   const exprs = collectConsoleEnvExpressions();
   const adminSrc = fs.readFileSync(CONSOLE_APP_FILE, 'utf8');
   const emptyDefaults = collectEmptyDefaultParams(adminSrc);
-  const passed = collectPassedParamNames(CONSOLE_APP_FILE);
+  // PRECISE ALIVENESS ORACLE (PR #3923 review). The old oracle was
+  // collectPassedParamNames(CONSOLE_APP_FILE) — a 1,274-name bag of every
+  // `key:` in every other .bicep file. It answered "does this spelling occur
+  // anywhere", which is not the question. The question is what the ONE caller
+  // supplies, and whether that value can ever be non-empty: an argument passed
+  // as '' is exactly as dead as an argument never passed, and the old oracle
+  // called it alive.
+  //
+  // BLAST RADIUS, MEASURED before the swap so this is a hardening and not a
+  // mass break: 435 console env expressions, 125 empty-default params, old
+  // oracle 1,274 names, new oracle 137. Vars flagged, old oracle vs new:
+  // 45 vs 45 before the allowlist; 34 vs 34 after the allowlist and before
+  // the ratchets; 0 vs 0 after both. NEWLY flagged by the new oracle = 0 at
+  // EVERY stage — that is the load-bearing fact: the swap changes WHICH
+  // question is asked, not the answer this tree gives today.
+  //
+  // R7 — an earlier revision of this comment cited "11 with the old oracle,
+  // 11 with the new" for the pre-allowlist stage. That figure reproduces at
+  // no stage. 11 is the ALLOWLIST DELTA (45 - 34), not a flagged count; it
+  // is named here so it is not re-derived and "corrected" back. Re-measure
+  // by running the loop below with the isAllowlisted() and ratchet skips
+  // disabled, once per oracle — never from memory.
+  const args = collectAdminPlaneArgs();
+  const passed = new Set([...args].filter(([, v]) => !isAlwaysEmptyLiteral(v)).map(([k]) => k));
+  // FAIL CLOSED. If the argument-list parser drifts, `passed` collapses and
+  // every empty-default param looks dead — a loud false failure is acceptable,
+  // a silent one is not, so assert the population and two arguments that are
+  // structurally guaranteed to be there (the module cannot deploy without them).
+  if (args.size < 100 || !passed.has('location') || !passed.has('boundary')) {
+    throw new Error(
+      `check-env-sync: parsed only ${args.size} arguments to \`module adminPlane\` ` +
+        `(location=${passed.has('location')}, boundary=${passed.has('boundary')}). ` +
+        'parseModuleParamExprs() has drifted off the params block; fix it rather than ' +
+        'letting the always-empty layer classify against an empty oracle.',
+    );
+  }
 
   const inert = [];
   for (const [name, expr] of [...exprs].sort((a, b) => a[0].localeCompare(b[0]))) {
@@ -1115,7 +1549,16 @@ export function computeInert() {
     if (isAlwaysEmptyLiteral(expr)) {
       why = `hard-coded empty value (${expr})`;
     } else if (isBareIdentifier(expr) && emptyDefaults.has(expr) && !passed.has(expr)) {
-      why = `bound to param '${expr}', which defaults to '' and no caller ever passes`;
+      // R7 — say only what was established. These are two DIFFERENT facts and
+      // the message used to assert the first for both: an argument passed as ''
+      // is dead, but "no caller ever passes" would be false about it, and a
+      // false cause is what sends the next reader to the wrong file.
+      why = args.has(expr)
+        ? `bound to param '${expr}', which defaults to '' and whose only caller ` +
+          `(platform/fiab/bicep/main.bicep \`module adminPlane\`) passes it as ${args.get(expr)} ` +
+          '— an argument that can only ever be empty, which is as dead as passing nothing'
+        : `bound to param '${expr}', which defaults to '' and which the only caller ` +
+          '(platform/fiab/bicep/main.bicep `module adminPlane`) does not pass at all';
     }
     if (!why) continue;
     if (KNOWN_INERT.has(name)) continue;
@@ -1174,6 +1617,410 @@ export function runInertControl() {
   ];
   for (const n of MUST_FLAG) if (!verdict(n)) failures.push(`classifier FAILED to flag ${n}`);
   for (const n of MUST_NOT_FLAG) if (verdict(n)) failures.push(`classifier WRONGLY flagged ${n}`);
+  return failures;
+}
+
+// ── LAYER 4: the triaged binding must still carry its VALUE ─────────────────
+
+/**
+ * T1..T4 for every entry in {@link TRIAGED_INERT_BINDINGS}.
+ *
+ * @returns {{failures: string[], checked: number, args: Map<string,string>}}
+ */
+export function computeTriagedBindings() {
+  const failures = [];
+  const exprs = collectConsoleEnvExpressions();
+  const args = collectAdminPlaneArgs();
+  const compiledText = fs.readFileSync(COMPILED_TEMPLATE, 'utf8');
+
+  for (const [envName, spec] of TRIAGED_INERT_BINDINGS) {
+    const tag = `${envName} (${spec.issue})`;
+
+    // T1 — genuinely triaged out of both ratchets.
+    if (KNOWN_INERT.has(envName)) {
+      failures.push(`${tag}: re-added to KNOWN_INERT. A triaged binding is not inert debt.`);
+    }
+    if (UNTRIAGED_INERT.has(envName)) {
+      failures.push(
+        `${tag}: re-added to UNTRIAGED_INERT, which makes computeInert() SKIP it. ` +
+          'Remove the entry or remove this binding; both cannot be true.',
+      );
+    }
+
+    // T2 — the console is still fed from that param.
+    const emitted = exprs.get(envName);
+    if (emitted === undefined) {
+      failures.push(
+        `${tag}: no \`{ name: '${envName}', … }\` entry on the loom-console app any more. ` +
+          'The env var stopped being delivered; the binding below cannot reach the console.',
+      );
+    } else if (emitted === null) {
+      failures.push(`${tag}: now delivered via secretRef, not \`value: ${spec.param}\`.`);
+    } else if (emitted !== spec.param) {
+      failures.push(
+        `${tag}: admin-plane emits it as \`${emitted}\`, expected the param \`${spec.param}\`. ` +
+          'Re-pointing the emission bypasses the value assertion below.',
+      );
+    }
+
+    // T3 — the caller's argument is the EXPRESSION the fix installed.
+    const actual = args.get(spec.param);
+    if (actual === undefined) {
+      failures.push(
+        `${tag}: platform/fiab/bicep/main.bicep no longer passes \`${spec.param}\` to ` +
+          '`module adminPlane`. That is the original defect: the param falls back to its ' +
+          "`= ''` default on every boundary.",
+      );
+    } else if (actual !== spec.rootExpr) {
+      failures.push(
+        `${tag}: main.bicep passes \`${spec.param}: ${actual}\`, expected exactly ` +
+          `\`${spec.param}: ${spec.rootExpr}\`. ${spec.why}`,
+      );
+    }
+
+    // T4 — the artifact that actually deploys carries the same value.
+    let refs;
+    try {
+      refs = compiledNestedParamRefs(compiledText, spec.param);
+    } catch (e) {
+      failures.push(`${tag}: could not parse ${path.relative(REPO_ROOT, COMPILED_TEMPLATE)}: ${e.message}`);
+      continue;
+    }
+    if (refs.length !== 1) {
+      failures.push(
+        `${tag}: the compiled ARM template supplies \`${spec.param}\` to ${refs.length} nested ` +
+          'deployments, expected exactly 1 (the admin-plane deployment). Regenerate ' +
+          'apps/fiab-console/deploy-templates/main.json from platform/fiab/bicep/main.bicep.',
+      );
+      continue;
+    }
+    const got = refs[0].value;
+    const want = { value: spec.compiledValue };
+    if (JSON.stringify(got) !== JSON.stringify(want)) {
+      failures.push(
+        `${tag}: the COMPILED ARM template that actually deploys supplies ` +
+          `\`${spec.param}\` as ${JSON.stringify(got)}, expected ${JSON.stringify(want)}. ` +
+          'check-deploy-template-sync byte-compares this artifact against a fresh compile, ' +
+          'so regenerating it after a source regression keeps THAT guard green — this is ' +
+          'the check that does not.',
+      );
+    }
+  }
+  return { failures, checked: TRIAGED_INERT_BINDINGS.size, args };
+}
+
+/**
+ * EMBEDDED CONTROL for layer 4. Drives the real extractors over synthetic input
+ * whose answers are known, including the three narrow reverts review actually
+ * ran and the decoy-in-another-module shape. A guard whose population is one
+ * entry must still be provably able to fail.
+ *
+ * @returns {string[]} failure descriptions; empty means the control held
+ */
+export function runTriagedBindingControl() {
+  const failures = [];
+  const mkSrc = (adminValue, decoy) => `param boundary string
+module other 'modules/other.bicep' = {
+  name: 'other'
+  params: {
+    ${decoy}
+  }
+}
+module adminPlane 'modules/admin-plane/main.bicep' = if (deployAdminPlane) {
+  name: 'admin-plane'
+  params: {
+    location: location
+    boundary: boundary
+    // a comment mentioning loomCloudTier: boundary must NOT count
+    loomCloudTier: ${adminValue}
+    byoExisting: {
+      loomCloudTier: 'nested-decoy'
+      swaResourceGroup: ''
+    }
+    lastKey: someVar
+  }
+}
+`;
+
+  const read = (adminValue, decoy = 'unrelated: 1') =>
+    parseModuleParamExprs(sliceModuleParamsBlock(mkSrc(adminValue, decoy), 'adminPlane'));
+
+  // The correct shape.
+  const good = read('boundary');
+  if (good.get('loomCloudTier') !== 'boundary') {
+    failures.push(`extractor read loomCloudTier as ${JSON.stringify(good.get('loomCloudTier'))}, expected 'boundary'`);
+  }
+  if (good.get('lastKey') !== 'someVar') {
+    failures.push('extractor lost the last key of the params block');
+  }
+  if (!good.has('byoExisting')) failures.push('extractor lost a nested-object argument');
+  // location, boundary, loomCloudTier, byoExisting, lastKey — and NOT the
+  // nested byoExisting.loomCloudTier / byoExisting.swaResourceGroup.
+  if (good.size !== 5) {
+    failures.push(`extractor returned ${good.size} top-level arguments in the fixture, expected 5`);
+  }
+
+  // The three narrow reverts review proved the deletion-only guard could not see.
+  for (const [label, value] of [
+    ["literal 'IL5'", "'IL5'"],
+    ['empty literal', "''"],
+    ['a different param', 'loomAzureCloud'],
+  ]) {
+    const got = read(value).get('loomCloudTier');
+    if (got === 'boundary') failures.push(`extractor could not distinguish ${label} from the boundary reference`);
+    if (got !== value) failures.push(`extractor read ${label} as ${JSON.stringify(got)}`);
+  }
+
+  // A decoy in a DIFFERENT module must not satisfy the assertion, and the
+  // nested `byoExisting.loomCloudTier` must not surface as a top-level argument.
+  const withDecoy = read("''", 'loomCloudTier: boundary');
+  if (withDecoy.get('loomCloudTier') !== "''") {
+    failures.push('a `loomCloudTier` argument in another module leaked into the adminPlane view');
+  }
+
+  // The slicer must FAIL CLOSED rather than return an empty set on a rename.
+  let threw = false;
+  try {
+    sliceModuleParamsBlock(mkSrc('boundary', 'unrelated: 1'), 'noSuchModule');
+  } catch {
+    threw = true;
+  }
+  if (!threw) failures.push('sliceModuleParamsBlock did not throw on a missing module declaration');
+
+  // The compiled-template reader must be structural, not textual.
+  const FAKE_TEMPLATE = JSON.stringify({
+    resources: [
+      { type: 'Microsoft.Resources/deployments', name: 'unrelated', properties: { parameters: { other: { value: "[parameters('boundary')]" } } } },
+      { type: 'Microsoft.Resources/deployments', name: 'admin-plane', properties: { parameters: { loomCloudTier: { value: "[parameters('boundary')]" } } } },
+    ],
+  });
+  const hits = compiledNestedParamRefs(FAKE_TEMPLATE, 'loomCloudTier');
+  if (hits.length !== 1 || hits[0].name !== 'admin-plane') {
+    failures.push(`compiledNestedParamRefs found ${hits.length} hits in the control template, expected 1 named admin-plane`);
+  }
+  if (JSON.stringify(hits[0] && hits[0].value) !== JSON.stringify({ value: "[parameters('boundary')]" })) {
+    failures.push('compiledNestedParamRefs did not return the value expression verbatim');
+  }
+  const REVERTED = JSON.stringify({
+    resources: [
+      { type: 'Microsoft.Resources/deployments', name: 'admin-plane', properties: { parameters: { loomCloudTier: { value: '' } } } },
+    ],
+  });
+  const revertedHits = compiledNestedParamRefs(REVERTED, 'loomCloudTier');
+  if (revertedHits.length !== 1) {
+    failures.push(`compiledNestedParamRefs found ${revertedHits.length} hits in the reverted control template, expected 1`);
+  }
+  if (JSON.stringify(revertedHits[0] && revertedHits[0].value) === JSON.stringify({ value: "[parameters('boundary')]" })) {
+    failures.push('compiledNestedParamRefs reported the boundary reference for a template that carries an empty string');
+  }
+  if (compiledNestedParamRefs(FAKE_TEMPLATE, 'noSuchParam').length !== 0) {
+    failures.push('compiledNestedParamRefs matched a parameter the template does not supply');
+  }
+  return failures;
+}
+
+// ── LAYER 5: every boundary's params file reads every BYO spelling ──────────
+
+/** The .bicepparam files that declare `param adopt =` — the derived population. */
+export function collectAdoptParamsFiles() {
+  const dir = path.join(BICEP_ROOT, 'params');
+  return fs
+    .readdirSync(dir)
+    .filter((f) => f.endsWith('.bicepparam'))
+    .sort()
+    .map((f) => ({ file: f, src: stripBicepDocs(fs.readFileSync(path.join(dir, f), 'utf8')) }))
+    .filter(({ src }) => /^param\s+adopt\s*=/m.test(src));
+}
+
+/**
+ * The text of a `var <id> = …` declaration, from its own line to the next
+ * top-level declaration. Bicep has no terminator, so the boundary is the next
+ * line that STARTS a declaration.
+ *
+ * @returns {string|null} null when the identifier is not declared in `src`
+ */
+export function sliceVarDeclaration(src, id) {
+  const start = new RegExp(String.raw`^var\s+${id}\s*=`, 'm').exec(src);
+  if (!start) return null;
+  const rest = src.slice(start.index + start[0].length);
+  const next = /^(?:var|param|using|import|func|metadata|type|output|@)\b/m.exec(rest);
+  return rest.slice(0, next ? next.index : rest.length);
+}
+
+/**
+ * Every accepted BYO spelling is READ, in every boundary's params file, and the
+ * adopt entry is actually FED BY the bridge rather than by one spelling direct.
+ *
+ * @returns {{failures: string[], files: number, bridges: number}}
+ */
+export function computeParamsEnvBridges() {
+  const files = collectAdoptParamsFiles();
+  const failures = [];
+  for (const { file, src } of files) {
+    for (const bridge of PARAMS_ENV_BRIDGES) {
+      failures.push(...checkOneBridge(file, src, bridge));
+    }
+  }
+  return { failures, files: files.length, bridges: PARAMS_ENV_BRIDGES.length };
+}
+
+/**
+ * Pure checker, exported so the control can drive it with synthetic sources.
+ *
+ * @param {string} file display name
+ * @param {string} src COMMENT-STRIPPED bicepparam source. Stripping is not
+ *   cosmetic: every one of these files carries a prose block that names all
+ *   three Maps spellings, so a presence test over raw source is fail-open.
+ * @param {{id: string, adoptKey: string, consoleParam?: string, roles: Record<string,string[]>}} bridge
+ * @returns {string[]}
+ */
+export function checkOneBridge(file, src, bridge) {
+  const out = [];
+  const tag = `${file} [${bridge.id}]`;
+
+  // The adopt entry itself. `name`/`rg`/`sub` must be BARE IDENTIFIERS: if they
+  // are readEnvironmentVariable() calls the bridge vars can sit fully intact
+  // above and still be dead, which is a green board over the original defect.
+  const entry = new RegExp(
+    String.raw`empty\(\s*([A-Za-z_][A-Za-z0-9_]*)\s*\)\s*\?\s*\{\s*\}\s*:\s*\{\s*` +
+      String.raw`${bridge.adoptKey}\s*:\s*\{[^{}]*target\s*:\s*\{\s*` +
+      String.raw`name\s*:\s*([^,]+?)\s*,\s*rg\s*:\s*([^,]+?)\s*,\s*sub\s*:\s*([^,}]+?)\s*\}`,
+  ).exec(src);
+  if (!entry) {
+    out.push(
+      `${tag}: no \`empty(<var>) ? {} : { ${bridge.adoptKey}: { … target: { name, rg, sub } } }\` ` +
+        'adopt entry found. The BYO bridge is gone, malformed, or the adopt key was renamed.',
+    );
+    return out;
+  }
+  const [, guardId, nameExpr, rgExpr, subExpr] = entry;
+  const byRole = { name: nameExpr, rg: rgExpr, sub: subExpr };
+  if (guardId !== nameExpr.trim()) {
+    out.push(`${tag}: guarded on \`empty(${guardId})\` but binds name from \`${nameExpr.trim()}\`.`);
+  }
+  for (const [role, expr] of Object.entries(byRole)) {
+    const id = expr.trim();
+    if (!isBareIdentifier(id)) {
+      out.push(
+        `${tag}: adopt target.${role} is \`${id}\`, not a bridge variable. Reading a single ` +
+          'spelling inline is the pre-#3446 defect: the other spellings become inert while ' +
+          'their declarations still sit in the file, so a name-presence check stays green.',
+      );
+      continue;
+    }
+    const decl = sliceVarDeclaration(src, id);
+    if (decl === null) {
+      out.push(`${tag}: adopt target.${role} references \`${id}\`, which this file does not declare.`);
+      continue;
+    }
+    for (const spelling of bridge.roles[role]) {
+      if (!decl.includes(`readEnvironmentVariable('${spelling}'`)) {
+        out.push(
+          `${tag}: \`${id}\` (target.${role}) never reads \`${spelling}\`. An operator who sets ` +
+            'that spelling — which one of Loom\'s own producers advertises — is silently ignored ' +
+            `on this boundary. ${bridge.issue}`,
+        );
+      }
+    }
+  }
+
+  // Where the file also binds the adopted resource into a Console param, that
+  // param must read the bridge too — otherwise the adopt map is bridged and the
+  // env binding is not, on that one boundary.
+  if (bridge.consoleParam) {
+    const p = new RegExp(String.raw`^param\s+${bridge.consoleParam}\s*=\s*(.+)$`, 'm').exec(src);
+    if (p) {
+      const rhs = p[1].trim();
+      if (rhs !== nameExpr.trim()) {
+        out.push(
+          `${tag}: \`param ${bridge.consoleParam} = ${rhs}\`, expected the bridge variable ` +
+            `\`${nameExpr.trim()}\` the adopt entry uses. Otherwise the adopt map honours every ` +
+            'spelling while the Console env binding honours one.',
+        );
+      }
+    }
+  }
+  return out;
+}
+
+/**
+ * EMBEDDED CONTROL for layer 5. The bad arms are the exact shapes review
+ * demonstrated or that a narrow revert would produce.
+ *
+ * @returns {string[]} failure descriptions; empty means the control held
+ */
+export function runParamsBridgeControl() {
+  const failures = [];
+  const BRIDGE = PARAMS_ENV_BRIDGES.find((b) => b.id === 'maps');
+  if (!BRIDGE) return ['the maps bridge spec is missing from PARAMS_ENV_BRIDGES'];
+
+  const good = `using '../main.bicep'
+var mapsAdoptName = !empty(readEnvironmentVariable('EXISTING_AZURE_MAPS_ACCOUNT', ''))
+  ? readEnvironmentVariable('EXISTING_AZURE_MAPS_ACCOUNT', '')
+  : (!empty(readEnvironmentVariable('EXISTING_AZURE_MAPS', ''))
+      ? readEnvironmentVariable('EXISTING_AZURE_MAPS', '')
+      : readEnvironmentVariable('EXISTING_MAPS', ''))
+var mapsAdoptRg = !empty(readEnvironmentVariable('EXISTING_AZURE_MAPS_RG', ''))
+  ? readEnvironmentVariable('EXISTING_AZURE_MAPS_RG', '')
+  : readEnvironmentVariable('EXISTING_MAPS_RG', '')
+var mapsAdoptSub = !empty(readEnvironmentVariable('EXISTING_AZURE_MAPS_SUB', ''))
+  ? readEnvironmentVariable('EXISTING_AZURE_MAPS_SUB', '')
+  : readEnvironmentVariable('EXISTING_MAPS_SUB', '')
+var legacyAdoptFromEnv = union(
+  empty(mapsAdoptName) ? {} : { maps: { mode: 'adopt', target: { name: mapsAdoptName, rg: mapsAdoptRg, sub: mapsAdoptSub } } }
+)
+param adopt = legacyAdoptFromEnv
+param loomAzureMapsAccount = mapsAdoptName
+`;
+
+  const cases = [
+    ['GOOD full bridge', good, 0],
+    [
+      'NARROW: one spelling dropped from the sub var only',
+      good.replace(
+        "  : readEnvironmentVariable('EXISTING_MAPS_SUB', '')",
+        "  : readEnvironmentVariable('EXISTING_AZURE_MAPS_SUB', '')",
+      ),
+      1,
+    ],
+    [
+      'NARROW: adopt entry reads one spelling inline while the vars stay intact',
+      good.replace(
+        'empty(mapsAdoptName) ? {} : { maps: { mode: \'adopt\', target: { name: mapsAdoptName, rg: mapsAdoptRg, sub: mapsAdoptSub } } }',
+        "empty(readEnvironmentVariable('EXISTING_AZURE_MAPS_ACCOUNT', '')) ? {} : { maps: { mode: 'adopt', target: { name: readEnvironmentVariable('EXISTING_AZURE_MAPS_ACCOUNT', ''), rg: readEnvironmentVariable('EXISTING_AZURE_MAPS_RG', ''), sub: readEnvironmentVariable('EXISTING_AZURE_MAPS_SUB', '') } } }",
+      ),
+      1,
+    ],
+    [
+      'NARROW: the Console param reverts while the adopt map stays bridged',
+      good.replace(
+        'param loomAzureMapsAccount = mapsAdoptName',
+        "param loomAzureMapsAccount = readEnvironmentVariable('EXISTING_AZURE_MAPS_ACCOUNT', '')",
+      ),
+      1,
+    ],
+    ['BROAD: the whole adopt entry removed', good.replace(/empty\(mapsAdoptName\)[^\n]*\n/, ''), 1],
+  ];
+
+  for (const [label, src, minFailures] of cases) {
+    const got = checkOneBridge('control.bicepparam', src, BRIDGE);
+    if (minFailures === 0 && got.length !== 0) {
+      failures.push(`control "${label}" should be clean but reported: ${got.join(' | ')}`);
+    }
+    if (minFailures > 0 && got.length < minFailures) {
+      failures.push(`control "${label}" should have been flagged and was not`);
+    }
+  }
+
+  // sliceVarDeclaration must stop at the next declaration — otherwise every var
+  // "contains" every spelling in the file and the role check is fail-open.
+  const rgDecl = sliceVarDeclaration(good, 'mapsAdoptRg');
+  if (rgDecl === null || rgDecl.includes('EXISTING_MAPS_SUB')) {
+    failures.push('sliceVarDeclaration ran past the end of the declaration (role checks would be fail-open)');
+  }
+  if (sliceVarDeclaration(good, 'noSuchVar') !== null) {
+    failures.push('sliceVarDeclaration returned a slice for a variable that is not declared');
+  }
   return failures;
 }
 
@@ -1305,6 +2152,75 @@ function main() {
     console.error('resource and emit the var from its output (see the loomDirectLake /');
     console.error('weavePg wiring in admin-plane/main.bicep for the two worked examples).');
     console.error('Adding a name to KNOWN_INERT is NOT a fix; that set is a shrinking ratchet.');
+    process.exit(1);
+  }
+
+  // #3433/#3446 — LAYERS 4 AND 5. Layer 3 asks whether a delivered var can only
+  // ever be ''. These two ask whether the fixes that ANSWERED that question are
+  // still in force with their values intact. Both controls run FIRST and
+  // unconditionally, for the same reason the layer-3 control does.
+  const bindingControl = runTriagedBindingControl();
+  const bridgeControl = runParamsBridgeControl();
+  if (bindingControl.length || bridgeControl.length) {
+    console.error(
+      '\n::error::check-env-sync LAYER-4/5 CONTROL FAILED — the binding extractors no longer ' +
+        'behave on inputs with known answers, so their verdict on the real tree is worthless. ' +
+        'Fix them; do not let this check pass on a broken matcher.',
+    );
+    for (const f of [...bindingControl, ...bridgeControl]) console.error(`  - ${f}`);
+    process.exit(1);
+  }
+
+  const { failures: bindingFailures, checked: bindingCount, args: adminPlaneArgs } =
+    computeTriagedBindings();
+  console.log(`[env-sync] arguments passed to \`module adminPlane\`: ${adminPlaneArgs.size}`);
+  console.log(`[env-sync] triaged bindings asserted (value, not presence): ${bindingCount}`);
+  // SELF-CHECK / GROW-ONLY RATCHET. Emptying or shrinking the registry is the
+  // one move that defeats every assertion below at once, so it fails here
+  // rather than passing quietly on nothing.
+  if (bindingCount < TRIAGED_BINDINGS_FLOOR) {
+    console.error(
+      `::error::check-env-sync TRIAGED_INERT_BINDINGS holds ${bindingCount} entries but the ` +
+        `grow-only floor is ${TRIAGED_BINDINGS_FLOOR}. An entry was removed. If that is ` +
+        'genuinely intended, lower TRIAGED_BINDINGS_FLOOR in the same diff and say why; ' +
+        'do not let the value assertions pass on an empty registry.',
+    );
+    process.exit(1);
+  }
+  if (bindingFailures.length) {
+    console.error('\n[env-sync] FAIL — a var that was TRIAGED OUT of the always-empty ratchet no');
+    console.error('longer carries the binding that triaged it. Deleting the ratchet entry proves');
+    console.error('only that the name is passed; these assertions pin the VALUE, in the source');
+    console.error('AND in the compiled ARM artifact that actually deploys:');
+    for (const f of bindingFailures) console.error(`  - ${f}`);
+    console.error('\nFix: restore the binding. If the value genuinely has to change, change it in');
+    console.error('TRIAGED_INERT_BINDINGS in the same diff, with the reason — never silently.');
+    process.exit(1);
+  }
+
+  const { failures: bridgeFailures, files: bridgeFiles, bridges } = computeParamsEnvBridges();
+  console.log(`[env-sync] params files carrying \`param adopt =\`: ${bridgeFiles}`);
+  console.log(`[env-sync] BYO env bridges asserted per file: ${bridges}`);
+  // SELF-CHECK: same fail-closed reasoning as the two above. A derived
+  // population that collapses to zero is a guard that passes on nothing.
+  if (bridgeFiles === 0 || bridges === 0) {
+    console.error(
+      `::error::check-env-sync resolved ${bridgeFiles} params files and ${bridges} bridges. ` +
+        'The BYO-bridge layer is measuring nothing — either params/ moved or ' +
+        'PARAMS_ENV_BRIDGES was emptied. Fix it; do not let this check pass on an empty set.',
+    );
+    process.exit(1);
+  }
+  if (bridgeFailures.length) {
+    console.error('\n[env-sync] FAIL — a boundary\'s params file does not read every BYO env-var');
+    console.error('spelling Loom\'s own producers advertise, or its adopt entry bypasses the');
+    console.error('bridge. An operator on that boundary sets the variable and is silently');
+    console.error('ignored — and because check-adoption-catalog-sync compares only against');
+    console.error('commercial-full.bicepparam, nothing else in CI can see it:');
+    for (const f of bridgeFailures) console.error(`  - ${f}`);
+    console.error('\nFix: restore the bridge in the named file. cloud-parity.md — the same');
+    console.error('capability on every boundary — makes a per-boundary revert a defect, not');
+    console.error('a Commercial-first tradeoff.');
     process.exit(1);
   }
 

@@ -16,6 +16,18 @@ lane may edit ONLY these paths:
 
 - `apps/fiab-console/app/api/** (EXCLUDING L1's declared authz list and the one cosmos-items route owned by L3)`
 
+> **L1's exclusion list is PUBLISHED — `triage/WAVE0-verdicts-2026-08-22.md` §4.**
+> This lane was gated on it; it is no longer. Before editing anything under
+> `app/api/**`, check that file. Two traps it records:
+>
+> 1. **Tier 1b — `app/api/items/_lib/item-crud.ts` belongs to L1, not to this lane.**
+>    It sits under `app/api/` but is **not** a `route.ts`, so the literal reading of the
+>    ownership line above hands it here. It does not come here. **271 route files import
+>    it directly** (measured 2026-08-23), so an edit made in this lane has a blast radius
+>    far larger than the file suggests, and two L1 true-security fixes need it.
+> 2. **Tier 3 lists files L1 explicitly RELEASES** — some to this lane (#3588's two git
+>    routes), others to L3/L5. Take only what is released to L4.
+
 It must NOT touch (another lane owns them, and a shared-file edit must be sequenced,
 never parallelised):
 

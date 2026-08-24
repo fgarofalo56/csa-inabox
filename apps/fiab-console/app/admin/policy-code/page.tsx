@@ -27,7 +27,7 @@ import { EmptyState } from '@/lib/components/empty-state';
 import { SplitPane } from '@/lib/components/shared/split-pane';
 import { IdentityPicker } from '@/lib/components/ui/identity-picker';
 import {
-  POLICY_BACKENDS, BACKEND_LABELS, POLICY_ACTIONS,
+  POLICY_BACKENDS, BACKEND_LABELS, POLICY_ACTIONS, backendsInSet,
   type PolicyBackend, type PolicyCodeSet, type PolicyStatement, type PolicyAction,
 } from '@/lib/governance/policy-code/dsl';
 import type { CompiledArtifact } from '@/lib/governance/policy-code/compilers/types';
@@ -177,7 +177,40 @@ export default function AdminPolicyCodePage() {
     setDirty(true);
   };
 
-  const backendsUsed = useMemo(() => data?.compiledBackends || [], [data]);
+  /**
+   * #3752 — the backends the AUTHORED set on the left TARGETS. `backendsInSet`
+   * is the SAME function the BFF uses for its own `backends` field
+   * (app/api/admin/policy-code/route.ts:53) — reusing it, rather than
+   * re-deriving, keeps this identical to the server's answer by construction,
+   * including the marking→purview implication a hand-rolled union over
+   * `resources[].backend` would miss.
+   */
+  const backendsTargeted = useMemo(() => (set ? backendsInSet(set) : []), [set]);
+
+  /**
+   * #3752 — the badge that sits inches from the statement list. It read
+   * `data?.compiledBackends`, i.e. what the SERVER compiled for the LAST SAVED
+   * set: "Load sample" only calls setSet(), so the left pane rendered 3
+   * statements whose resources visibly name 5 backends while this badge said
+   * "compiles to 0 backend(s)" and every backend tab said the set produces no
+   * ops. Both halves described different policy sets and neither said so.
+   *
+   * The gate is SYMMETRIC with the one on the tab op-counts below, and it has
+   * to be. TARGETED and COMPILED are not the same set — `backendsInSet` adds
+   * `purview` for any statement carrying a `condition.marking` (dsl.ts:246)
+   * while `compilePurview` SKIPS that statement when it names no purview
+   * resource (compilers/purview.ts:35-40), so targeted can strictly exceed
+   * compiled. Deriving this badge from `backendsInSet` in EVERY state — the
+   * first cut of this fix — therefore re-created the same contradiction one
+   * state over: on a clean, saved set the badge counted purview while the
+   * purview tab said the set produced nothing for it.
+   *
+   * So: dirty → describe what the on-screen set TARGETS (compilation has not
+   * run for these edits, and the wording says "targets", never "compiles to").
+   * Clean → describe what the server actually COMPILED, which is what the tabs
+   * are showing.
+   */
+  const backendsUsed = dirty ? backendsTargeted : (data?.compiledBackends || []);
 
   return (
     <AdminShell
@@ -242,8 +275,14 @@ export default function AdminPolicyCodePage() {
               <div className={s.meta}>
                 <Badge appearance="tint" color="brand">{set.statements.length} statement(s)</Badge>
                 {backendsUsed.map((b) => <Badge key={b} appearance="outline">{b}</Badge>)}
-                <Badge appearance="tint" color={backendsUsed.length >= 4 ? 'success' : 'informative'}>
-                  compiles to {backendsUsed.length} backend(s)
+                {/* #3752 — the verb has to match what the number is counting.
+                    While dirty this is what the on-screen set TARGETS (nothing
+                    has been compiled for these edits); clean, it is what the
+                    server COMPILED, which is what the tabs are showing. The
+                    "≥4 backends" success colour is a claim about compilation,
+                    so it is only reachable from the compiled reading. */}
+                <Badge appearance="tint" color={!dirty && backendsUsed.length >= 4 ? 'success' : 'informative'}>
+                  {dirty ? 'targets' : 'compiles to'} {backendsUsed.length} backend(s)
                 </Badge>
               </div>
               {set.statements.length === 0 ? (
@@ -288,7 +327,11 @@ export default function AdminPolicyCodePage() {
                 <Tab value="reconcile">Reconcile</Tab>
                 {POLICY_BACKENDS.map((b) => (
                   <Tab key={b} value={b}>
-                    {b}{artifactFor(b)?.applicable ? ` (${artifactFor(b)!.ops.length})` : ''}
+                    {/* #3752 — the op count describes the COMPILED (saved) set.
+                        While the editor is dirty it is a number about a
+                        different policy set than the one on screen, so it is
+                        withheld rather than annotated. */}
+                    {b}{!dirty && artifactFor(b)?.applicable ? ` (${artifactFor(b)!.ops.length})` : ''}
                   </Tab>
                 ))}
               </TabList>
@@ -296,7 +339,13 @@ export default function AdminPolicyCodePage() {
               {tab === 'reconcile' ? (
                 <ReconcilePanel receipt={receipt} styles={s} />
               ) : (
-                <BackendPanel artifact={artifactFor(tab as PolicyBackend)} styles={s} backend={tab as PolicyBackend} />
+                <BackendPanel
+                  artifact={artifactFor(tab as PolicyBackend)}
+                  styles={s}
+                  backend={tab as PolicyBackend}
+                  stale={dirty}
+                  targeted={backendsTargeted.includes(tab as PolicyBackend)}
+                />
               )}
             </div>
           </SplitPane>
@@ -316,13 +365,52 @@ export default function AdminPolicyCodePage() {
 }
 
 // ── Compiled-artifact panel ──────────────────────────────────────────────────
-function BackendPanel({ artifact, styles, backend }: { artifact?: CompiledArtifact; styles: any; backend: PolicyBackend }) {
-  if (!artifact || !artifact.applicable) {
+function BackendPanel({ artifact, styles, backend, stale, targeted }: {
+  artifact?: CompiledArtifact; styles: any; backend: PolicyBackend;
+  /** #3752 — true when the authored set has unsaved edits, so `artifact`
+   *  describes the LAST SAVED set and not what the left pane is showing. */
+  stale?: boolean;
+  /** #3752 — true when the AUTHORED set targets this backend, i.e. it is in
+   *  `backendsInSet(set)`. NOT the same as "the server compiled ops for it":
+   *  a `condition.marking` with no purview resource targets purview and
+   *  compiles to nothing (dsl.ts:246 vs compilers/purview.ts:35-40). */
+  targeted?: boolean;
+}) {
+  // #3752 — while the set is dirty the compiled artifacts are for a different
+  // (saved) revision. Rendering "This policy set produces no statements for
+  // this backend" here stated something FALSE about the set on screen: after
+  // "Load sample" the sample plainly targets this backend and the tab still
+  // said it produced nothing. Say which set the pane is describing instead.
+  if (stale) {
     return (
       <EmptyState
         icon={<DocumentBulletList16Regular />}
-        title={`No ${BACKEND_LABELS[backend]} ops`}
-        body="This policy set produces no statements for this backend. Add a resource targeting it."
+        title={targeted ? `${BACKEND_LABELS[backend]} — not compiled yet` : `${BACKEND_LABELS[backend]} — nothing authored`}
+        body={
+          targeted
+            ? 'The set on the left targets this backend, but these edits are unsaved so nothing has been compiled for them yet. Save the set to compile and see the exact ops.'
+            : 'No statement in the unsaved set names a resource on this backend. Add one, or save to recompile.'
+        }
+      />
+    );
+  }
+  if (!artifact || !artifact.applicable) {
+    // #3752 (review follow-up) — the saved set CAN target a backend that
+    // compiled nothing; the badge counts compiled backends, so this pane is
+    // the only place that gap is visible. The compiler already recorded why
+    // (`artifact.warnings`), and the branch below only renders warnings for
+    // APPLICABLE artifacts — so on exactly the case that needs the reason,
+    // the reason was being dropped. Say it here.
+    const reason = targeted && artifact?.warnings?.length ? ` ${artifact.warnings.join(' • ')}` : '';
+    return (
+      <EmptyState
+        icon={<DocumentBulletList16Regular />}
+        title={targeted ? `No ${BACKEND_LABELS[backend]} ops — targeted, nothing compiled` : `No ${BACKEND_LABELS[backend]} ops`}
+        body={
+          targeted
+            ? `The saved set targets this backend, but the compiler produced no ops for it, so it is not counted in "compiles to".${reason}`
+            : 'This policy set produces no statements for this backend. Add a resource targeting it.'
+        }
       />
     );
   }
