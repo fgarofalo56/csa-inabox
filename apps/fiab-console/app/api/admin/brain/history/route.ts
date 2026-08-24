@@ -83,6 +83,11 @@ export const revalidate = 0;
  * answer "what changed since last time?" would cost RU for data the answer does
  * not use. The consecutive-unreachable window is capped to this too, and the
  * cap is REPORTED in the population rather than silently applied.
+ *
+ * It does NOT bound `?base=`. A caller may diff against any RETAINED version;
+ * one outside this window is fetched by a single point read (see `GET`). A read
+ * bound that silently became a correctness bound produced a 400 asserting a
+ * retained version did not exist — deploy-integrity R7.
  */
 const READ_WINDOW = 8;
 
@@ -117,9 +122,9 @@ function intOrDefault(raw: string | null, fallback: number, min: number, max: nu
  *
  * Each of these is a DIFFERENT state, and none of them is "no changes":
  * a version that failed verification (the diff was refused, deliberately), a
- * base id that is not retained (refusing beats reporting the whole estate as
- * new), a graph too large for one atomic document, and a deployment with no
- * Cosmos endpoint.
+ * base id that could not be resolved even after the point read (refusing beats
+ * reporting the whole estate as new), a graph too large for one atomic document,
+ * and a deployment with no Cosmos endpoint.
  */
 function honestly(e: unknown) {
   if (e instanceof GraphVersionIntegrityError) {
@@ -132,7 +137,13 @@ function honestly(e: unknown) {
     );
   }
   if (e instanceof UnknownBaseVersionError) {
-    return apiError('unknown_base_version', 400, { detail: e.message, available: e.available });
+    // `retainedCount` is the STORE's count, not the loaded window's — the body
+    // must not repeat the claim the message no longer makes.
+    return apiError('unknown_base_version', 400, {
+      detail: e.message,
+      available: e.available,
+      retainedCount: e.retainedCount,
+    });
   }
   if (e instanceof GraphVersionTooLargeError) {
     return apiHonestError(e, 507, e.message);
@@ -156,8 +167,9 @@ function honestly(e: unknown) {
  * GET — read the retained history and answer "what changed?".
  *
  * Query parameters:
- *   `base`        a retained version id to diff the head against. Defaults to
- *                 the version immediately before the head.
+ *   `base`        ANY retained version id to diff the head against — the read
+ *                 window does not bound it. Defaults to the version immediately
+ *                 before the head.
  *   `consecutive` depth for the safe-prune predicate (>= 2). Default 3.
  */
 export const GET = withTenantAdmin(async (req: NextRequest) => {
@@ -226,18 +238,68 @@ export const GET = withTenantAdmin(async (req: NextRequest) => {
 
     const head = history.versions[history.versions.length - 1];
     const baseParam = params.get('base');
-    const since = baseParam !== null ? edgesAddedSince(history, baseParam) : edgesAddedSincePrevious(history);
+
+    // `?base=` ADDRESSES THE FULL RETAINED SET, not the read window.
+    //
+    // READ_WINDOW bounds the RU cost of the DEFAULT question ("what changed
+    // since last time?"). Letting it also bound which base is ADDRESSABLE
+    // produced a 400 reading "no retained graph version has id '<id>' … 8
+    // version(s) are retained" for a version that WAS retained, out of 12 — two
+    // facts the code never established (deploy-integrity R7), and both of them
+    // false. The window is invisible to the caller, so it cannot even be worked
+    // around.
+    //
+    // An out-of-window base costs ONE point read on its id, not a 50-version
+    // load. The versions BETWEEN it and the window are deliberately not loaded:
+    // `edgesAddedSince` is a pairwise comparison of the two endpoints, so they
+    // would be paid for and unused. The note below states that rather than
+    // implying a contiguous scan.
+    let baseHistory = history;
+    let resolvedOutsideWindow = false;
+    if (baseParam !== null && !history.versions.some((v) => v.id === baseParam)) {
+      if (!summaries.some((v) => v.id === baseParam)) {
+        // ESTABLISHED, not inferred: `listSummaries` covers every retained
+        // version, so absence from it really is "not retained" — and the count
+        // quoted is the retained one. This is the only place that claim can
+        // honestly be made; the window-scoped query below cannot make it.
+        return apiError('unknown_base_version', 400, {
+          detail:
+            `no graph version with id '${baseParam}' is retained for this estate. ` +
+            `${summaries.length} version(s) are retained (oldest '${summaries[0].id}', newest ` +
+            `'${summaries[summaries.length - 1].id}'). REFUSING to answer: treating an unknown ` +
+            'base as an empty graph would report every edge in the estate as new.',
+          available: summaries.map((v) => v.id),
+          retainedCount: summaries.length,
+        });
+      }
+      const older = await s.load(estateId, baseParam);
+      if (older !== null) {
+        baseHistory = buildHistory(estateId, [older, ...loaded], summaries.length);
+        resolvedOutsideWindow = baseHistory.versions.some((v) => v.id === baseParam);
+      }
+      // `older === null` (deleted between the list and the read) or a version
+      // whose format the head no longer shares both fall through to
+      // `edgesAddedSince`, which refuses and says it could not COMPARE — never
+      // that the version does not exist.
+    }
+
+    const since =
+      baseParam !== null ? edgesAddedSince(baseHistory, baseParam) : edgesAddedSincePrevious(history);
     // `edgesAddedSincePrevious` is null only below two versions, handled above.
     if (since === null) return apiServerError(new Error('unreachable: history shorter than 2'));
 
-    const base = history.versions.find((v) => v.id === since.sinceVersionId);
+    const base = baseHistory.versions.find((v) => v.id === since.sinceVersionId);
     if (base === undefined) return apiServerError(new Error('unreachable: base not in window'));
 
     const diff = diffVersions(base, head, {
       versionsRetained: summaries.length,
-      versionsIgnoredByFormat: history.ignoredByFormat,
+      versionsIgnoredByFormat: baseHistory.ignoredByFormat,
     });
 
+    // Deliberately `history`, NOT `baseHistory`: "unreachable for n CONSECUTIVE
+    // versions" is only true over a contiguous run. An out-of-window base makes
+    // `baseHistory` non-contiguous, and feeding that to a predicate whose output
+    // is a deletion proposal would let a gap masquerade as a streak.
     const consecutive = intOrDefault(params.get('consecutive'), DEFAULT_CONSECUTIVE, 2, READ_WINDOW);
     const unreachable = nodeUnreachableForConsecutiveVersions(history, consecutive);
 
@@ -266,11 +328,18 @@ export const GET = withTenantAdmin(async (req: NextRequest) => {
       retention,
       population: diff.population,
       readWindow: READ_WINDOW,
+      baseResolvedOutsideReadWindow: resolvedOutsideWindow,
       note:
-        summaries.length > READ_WINDOW
+        (summaries.length > READ_WINDOW
           ? `${summaries.length} versions are retained; the newest ${READ_WINDOW} were loaded ` +
             'with content. Version metadata is complete; the queries above range over the window.'
-          : 'every retained version was loaded with content.',
+          : 'every retained version was loaded with content.') +
+        (resolvedOutsideWindow
+          ? ` The requested base '${base.id}' is retained but sits OUTSIDE that window, so it ` +
+            'was loaded by id. The diff is a pairwise comparison of base and head; the versions ' +
+            'between them were not loaded, and the consecutive-unreachable query above ranges ' +
+            'over the contiguous window only.'
+          : ''),
     });
   } catch (e) {
     return honestly(e);

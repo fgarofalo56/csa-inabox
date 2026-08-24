@@ -100,7 +100,7 @@ vi.mock('@/app/api/admin/brain/_lib/arg-collect', async () => {
 import { GET, POST } from '@/app/api/admin/brain/history/route';
 import { getSession } from '@/lib/auth/session';
 import { requireTenantAdmin } from '@/lib/auth/feature-gate';
-import { BASELINE, ESTATE, versionFrom, type EstateSpec } from './fixtures';
+import { BASELINE, ESTATE, nodeIdOf, versionFrom, type EstateSpec } from './fixtures';
 
 const ADMIN = {
   claims: { oid: 'oid-1', upn: 'admin@example.test', tid: 'tid-1', name: 'Admin' },
@@ -112,8 +112,18 @@ function adminOnly403() {
   return NextResponse.json({ ok: false, error: 'admin_only' }, { status: 403 });
 }
 
-function req(search = '') {
-  return { nextUrl: new URL(`http://x/api/admin/brain/history${search}`) } as never;
+/**
+ * THE REQUEST FIXTURE CARRIES ITS VERB.
+ *
+ * It did not, and that omission had teeth: with `method` absent, a mutation
+ * making `withTenantAdmin` skip the gate when `req.method === 'POST'` passed
+ * this whole suite RC=0 — an authorization bypass, escaped, because
+ * `undefined === 'POST'` is false in every spec. Hard-coding `'POST'` would
+ * only move the blind spot to a GET-keyed bypass, so each verb's specs send
+ * their own verb and both bypass shapes are now reachable.
+ */
+function req(search = '', method: 'GET' | 'POST' = 'GET') {
+  return { method, nextUrl: new URL(`http://x/api/admin/brain/history${search}`) } as never;
 }
 const ctx = { params: Promise.resolve({}) } as never;
 
@@ -165,14 +175,14 @@ describe('GET — the REAL withTenantAdmin', () => {
 describe('POST — the REAL withTenantAdmin', () => {
   it('401s with no session, and never pulls the estate', async () => {
     asMock(getSession).mockReturnValue(null);
-    const res = await POST(req(), ctx);
+    const res = await POST(req('', 'POST'), ctx);
     expect(res.status).toBe(401);
     expect(H.collectCalls).toBe(0);
   });
 
   it('403s for a signed-in NON-admin, and writes nothing — THE MUTATION TARGET', async () => {
     asMock(requireTenantAdmin).mockReturnValue(adminOnly403());
-    const res = await POST(req(), ctx);
+    const res = await POST(req('', 'POST'), ctx);
     expect(res.status).toBe(403);
     // An unauthorized caller must not be able to drive a Resource Graph pull,
     // nor append to the estate's history.
@@ -181,7 +191,7 @@ describe('POST — the REAL withTenantAdmin', () => {
   });
 
   it('captures for a tenant admin — the positive control', async () => {
-    const res = await POST(req(), ctx);
+    const res = await POST(req('', 'POST'), ctx);
     expect(res.status).toBe(200);
     const body = (await res.json()) as { ok: boolean; status: string; mutatedAzure: boolean };
     expect(body.ok).toBe(true);
@@ -191,8 +201,8 @@ describe('POST — the REAL withTenantAdmin', () => {
   });
 
   it('a second identical capture writes nothing', async () => {
-    await POST(req(), ctx);
-    const res = await POST(req(), ctx);
+    await POST(req('', 'POST'), ctx);
+    const res = await POST(req('', 'POST'), ctx);
     const body = (await res.json()) as { status: string; unchangedReason: string };
     expect(body.status).toBe('unchanged');
     expect(body.unchangedReason).toBe('identical-digest');
@@ -219,7 +229,7 @@ describe('honest empty states — none of them is "no changes"', () => {
   });
 
   it('ONE retained version is also blind, not clean', async () => {
-    await POST(req(), ctx);
+    await POST(req('', 'POST'), ctx);
     const res = await GET(req(), ctx);
     const body = (await res.json()) as {
       population: { blind: boolean; versionsExamined: number };
@@ -302,5 +312,114 @@ describe('fail closed — the route refuses rather than reporting a catastrophe'
     const body = (await res.json()) as { error: string; available: string[] };
     expect(body.error).toBe('unknown_base_version');
     expect(body.available).toContain(older.id);
+  });
+});
+
+/**
+ * ── THE READ WINDOW IS A COST BOUND, NOT A CORRECTNESS BOUND ───────────────
+ *
+ * `READ_WINDOW` is 8; retention keeps up to 50. Every other spec in this file
+ * builds at most 3 versions, so the whole region past the window was untested —
+ * and in it, `?base=<a retained id>` returned 400 `unknown_base_version` whose
+ * message asserted TWO things the code had not established: that no retained
+ * version had that id (it did) and that 8 were retained (12 were). The
+ * response's own `versions` array listed all 12 ids at the same time.
+ *
+ * These specs build MORE versions than the window and ask for a base outside
+ * it, which is the only way to reach that region at all.
+ */
+describe('a base OUTSIDE the read window — deploy-integrity R7', () => {
+  const RETAINED = 12; // > READ_WINDOW (8), < the retention ceiling (50)
+
+  /** Twelve genuinely different estates, one per day, oldest first. */
+  function twelve() {
+    return Array.from({ length: RETAINED }, (_, i) => {
+      const spec: EstateSpec = {
+        ...BASELINE,
+        apps: [
+          ...BASELINE.apps,
+          ...Array.from({ length: i }, (_, k) => ({ name: `loom-w${k + 1}`, minReplicas: 1 })),
+        ],
+      };
+      // 2026-08-01T09:00Z + i days. Distinct instants -> distinct version ids.
+      const day = String(i + 1).padStart(2, '0');
+      return versionFrom(spec, `2026-08-${day}T09:00:00.000Z`);
+    });
+  }
+
+  async function seed() {
+    const versions = twelve();
+    for (const v of versions) await H.store!.append(v);
+    return versions;
+  }
+
+  it('resolves a RETAINED base the window never loaded, instead of calling it unknown', async () => {
+    const versions = await seed();
+    const oldest = versions[0];
+    const head = versions[versions.length - 1];
+
+    // The premise, asserted rather than assumed: the default read reports all
+    // 12 as retained while loading only the newest 8.
+    const def = await GET(req(), ctx);
+    expect(def.status).toBe(200);
+    const defBody = (await def.json()) as {
+      versions: { id: string }[];
+      readWindow: number;
+      newNodes: unknown[];
+    };
+    expect(defBody.versions.map((v) => v.id)).toContain(oldest.id);
+    expect(defBody.versions).toHaveLength(RETAINED);
+    expect(defBody.readWindow).toBeLessThan(RETAINED);
+
+    const res = await GET(req(`?base=${encodeURIComponent(oldest.id)}`), ctx);
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      base: { id: string };
+      head: { id: string };
+      newNodes: { id: string }[];
+      baseResolvedOutsideReadWindow: boolean;
+      population: { versionsRetained: number; blind: boolean };
+      note: string;
+    };
+    expect(body.base.id).toBe(oldest.id);
+    expect(body.head.id).toBe(head.id);
+    expect(body.baseResolvedOutsideReadWindow).toBe(true);
+    // The retained count is the STORE's, never the window's.
+    expect(body.population.versionsRetained).toBe(RETAINED);
+    expect(body.population.blind).toBe(false);
+    // The answer really did reach back: every app added since the oldest
+    // version is new relative to it — strictly more than the default question,
+    // which only reaches the start of the window.
+    expect(body.newNodes.length).toBe(RETAINED - 1);
+    expect(body.newNodes.length).toBeGreaterThan(defBody.newNodes.length);
+    // The control from the fixtures: wired and untouched in every version, so
+    // it must never appear as new no matter how far back the base is.
+    expect(body.newNodes.map((n) => n.id)).not.toContain(nodeIdOf('loom-direct-lake'));
+    // The out-of-window read is DISCLOSED, not silent.
+    expect(body.note).toContain('OUTSIDE that window');
+  });
+
+  it('a base id that is genuinely not retained is still refused — with the RETAINED count', async () => {
+    const versions = await seed();
+
+    const res = await GET(req('?base=not-a-version'), ctx);
+    expect(res.status).toBe(400);
+    const body = (await res.json()) as {
+      error: string;
+      detail: string;
+      available: string[];
+      retainedCount: number;
+    };
+    expect(body.error).toBe('unknown_base_version');
+    expect(body.retainedCount).toBe(RETAINED);
+    expect(body.available).toHaveLength(RETAINED);
+    expect(body.detail).toContain(`${RETAINED} version(s) are retained`);
+    // The window size must never be quoted as the retained count — the exact
+    // false claim this describe block exists for.
+    expect(body.detail).not.toContain('8 version(s) are retained');
+    expect(body.detail).toContain('REFUSING');
+    // Fail closed: no diff is fabricated from an unresolvable base.
+    expect((body as unknown as { diff?: unknown }).diff).toBeUndefined();
+    expect(versions).toHaveLength(RETAINED);
   });
 });

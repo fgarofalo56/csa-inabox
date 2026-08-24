@@ -132,6 +132,51 @@ describe('edgesAddedSince', () => {
     );
   });
 
+  /**
+   * ── R7: THE REFUSAL STATES ONLY WHAT IT ESTABLISHED ──────────────────────
+   *
+   * This function sees a WINDOW. The read path loads the newest 8 of up to 50
+   * retained versions, so "not in what I was given" and "not retained" are
+   * different findings. The message used to make the second claim in both
+   * cases, and to quote the WINDOW size as the retained count — measured
+   * against 12 retained versions it said "no retained graph version has id X …
+   * 8 version(s) are retained" with the id sitting in the store and 12 of them
+   * retained. Two assertions, neither established, both false.
+   */
+  it('over a WINDOW it refuses to claim the id is unretained, and quotes the RETAINED count', () => {
+    // 3 loaded, 12 retained — the shape the read path actually has.
+    const windowed = buildHistory(ESTATE, [v1, v2, v3], 12);
+    let threw: unknown = null;
+    try {
+      edgesAddedSince(windowed, 'a-version-outside-the-window');
+    } catch (e) {
+      threw = e;
+    }
+    expect(threw).toBeInstanceOf(UnknownBaseVersionError);
+    const err = threw as UnknownBaseVersionError;
+    expect(err.retainedCount).toBe(12);
+    expect(err.message).toContain('12 version(s) are retained');
+    // The window size must not be reported as the retained count.
+    expect(err.message).not.toContain('3 version(s) are retained');
+    // And no claim about a set this call never looked at.
+    expect(err.message).toContain('does NOT establish that the id is unretained');
+    expect(err.message).not.toContain('no retained version has that id');
+    expect(err.message).toContain('REFUSING');
+  });
+
+  it('CAN say the id is unretained when the whole retained set was loaded', () => {
+    let threw: unknown = null;
+    try {
+      edgesAddedSince(history(), 'no-such-version');
+    } catch (e) {
+      threw = e;
+    }
+    const err = threw as UnknownBaseVersionError;
+    expect(err.retainedCount).toBe(3);
+    expect(err.message).toContain('Every retained version was loaded');
+    expect(err.message).toContain('no retained version has that id');
+  });
+
   it('base === head returns nothing AND says it is blind', () => {
     const r = edgesAddedSince(history(), v3.id);
     expect(r.added).toEqual([]);

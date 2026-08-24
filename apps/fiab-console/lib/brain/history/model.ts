@@ -421,24 +421,61 @@ export class GraphVersionTooLargeError extends Error {
 }
 
 /**
- * `edgesAddedSince(history, id)` was given an id the history does not hold.
+ * `edgesAddedSince(history, id)` was given an id the loaded history does not
+ * hold.
  *
  * FAILS CLOSED. The tempting fallback — treat an unknown base as empty — reports
  * the ENTIRE graph as newly added, which is the worst possible answer for a
  * query whose consumer highlights new edges as a risk surface.
+ *
+ * ── THE MESSAGE ASSERTS ONLY WHAT THE CALLER ESTABLISHED (R7) ──────────────
+ * This error is raised from a WINDOW of loaded versions, which may be smaller
+ * than the retained set. It therefore knows two different things depending on
+ * the window:
+ *
+ *   every retained version was loaded  ->  the id is genuinely not retained.
+ *   a bounded window was loaded        ->  the id is not COMPARABLE here, and
+ *                                          whether it is retained is UNKNOWN.
+ *
+ * The previous wording said "no retained graph version has id X … N version(s)
+ * are retained" in BOTH cases, where `N` was the window size. Measured against
+ * 12 retained versions with a window of 8, that message asserted two facts the
+ * code had not established, and both were false: the id WAS retained, and the
+ * retained count was 12, not 8. `deploy-integrity.md` R7 exactly.
+ * `retainedCount` is now carried so the message can tell the two states apart —
+ * and say so when it does not know.
  */
 export class UnknownBaseVersionError extends Error {
   readonly requested: string;
+  /** Ids the raising query could actually compare against (the loaded window). */
   readonly available: readonly string[];
-  constructor(requested: string, available: readonly string[]) {
+  /** Versions the STORE holds for this estate. May exceed `available.length`. */
+  readonly retainedCount: number;
+  constructor(
+    requested: string,
+    available: readonly string[],
+    context?: { readonly retainedCount?: number },
+  ) {
+    // Defaulting to the window size preserves the two-argument call, and in that
+    // form the window IS the whole population, so the "complete" branch below is
+    // the truthful one.
+    const retained = Math.max(context?.retainedCount ?? available.length, available.length);
+    const complete = retained === available.length;
     super(
-      `no retained graph version has id '${requested}'. REFUSING to answer: ` +
-        'treating an unknown base as an empty graph would report every edge in the ' +
-        `estate as new. ${available.length} version(s) are retained` +
-        (available.length > 0 ? ` (oldest '${available[0]}').` : '.'),
+      `graph version '${requested}' is not among the ${available.length} version(s) loaded for ` +
+        `comparison; ${retained} version(s) are retained for this estate. ` +
+        (complete
+          ? 'Every retained version was loaded, so no retained version has that id. '
+          : `${retained - available.length} retained version(s) were NOT loaded, so this does ` +
+            'NOT establish that the id is unretained — only that it is not comparable from ' +
+            'what was loaded. ') +
+        'REFUSING to answer: treating an unknown base as an empty graph would report every ' +
+        'edge in the estate as new.' +
+        (available.length > 0 ? ` Oldest comparable: '${available[0]}'.` : ''),
     );
     this.name = 'UnknownBaseVersionError';
     this.requested = requested;
     this.available = available;
+    this.retainedCount = retained;
   }
 }

@@ -115,7 +115,12 @@ removals and looks exactly like a catastrophic outage.
   truncation produces the message that names it.
 - An unknown `base` version id → **refused**. Treating it as an empty graph would
   report every edge in the estate as newly added, to a consumer whose job is to
-  highlight new edges as a risk surface.
+  highlight new edges as a risk surface. The refusal states only what it
+  established (deploy-integrity R7): the route checks the id against the
+  **complete** retained list, so "no graph version with that id is retained" is a
+  fact it can assert; the window-scoped query underneath cannot, and says
+  instead that the id is not among the versions it loaded — with the **retained**
+  count, never the window size.
 
 ---
 
@@ -197,8 +202,18 @@ predates this module. The deploy is the primary path.
 observation: a read endpoint that appends is one a prefetch or a retry silently
 drives, and the resulting history records the polling schedule.
 
-Query parameters: `base` (a retained version id), `consecutive` (prune depth,
-`>= 2`, default 3).
+Query parameters: `base` (**any** retained version id), `consecutive` (prune
+depth, `>= 2`, default 3).
+
+The read path loads the newest **8** versions with content — an RU bound on the
+default question ("what changed since last time?"), since retention keeps up to
+50. That bound does **not** restrict `base`: a retained version outside the
+window is fetched by a single point read on its id, and the response says so
+(`baseResolvedOutsideReadWindow`, plus a note that the versions *between* base
+and head were not loaded, so the diff is a pairwise comparison of the two
+endpoints). The `consecutive` prune predicate deliberately keeps ranging over
+the **contiguous** window only — a gap must never be able to masquerade as a
+streak in something whose output is a deletion proposal.
 
 `POST /api/admin/brain/history` — capture. Writes only on a semantic change;
 returns `status: 'unchanged'` with the reason otherwise.
@@ -215,7 +230,7 @@ controls stayed green.
 
 | | Status |
 |---|---|
-| Unit / property tests | **PASS** — 99 tests over the history layer, plus 13 mutation arms, each proven to turn a spec RED |
+| Unit / property tests | **PASS** — 103 tests over the history layer, plus 13 mutation arms, each proven to turn a spec RED |
 | `tsc -p tsconfig.build.json` | **PASS**, 0 errors |
 | `az bicep build` (both modules) | **PASS**, no new diagnostics |
 | Commercial (MAC) | **NOT DEPLOYED, NOT VERIFIED.** No Cosmos write has been executed against a real account |

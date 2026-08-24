@@ -44,6 +44,13 @@
  * the estate as newly added, to a consumer whose job is to highlight new edges
  * as a risk surface.
  *
+ * The throw carries `history.retainedCount`, because this function sees a
+ * WINDOW and not the store: "not in the window" and "not retained" are
+ * different findings, and only the caller's retained count can tell them apart.
+ * Reporting the window size as the retained count — and "no retained version
+ * has this id" when 4 unloaded versions could hold it — is the R7 violation
+ * this parameter exists to prevent.
+ *
  * PURE. No I/O, no clock: `spanMs` is computed from the versions' own
  * timestamps, so the answer is reproducible from stored data alone.
  */
@@ -151,9 +158,11 @@ export interface EdgesAddedSinceResult {
 /**
  * Every edge present in the newest version and absent from `sinceVersionId`.
  *
- * THROWS {@link UnknownBaseVersionError} when the id is not retained — see the
- * header. Also throws {@link import('./model').GraphVersionIntegrityError} when
- * either version fails verification, via `diffVersions`.
+ * THROWS {@link UnknownBaseVersionError} when the id is not in THIS history's
+ * loaded versions — which is not the same statement as "not retained", and the
+ * error says which of the two it established. Also throws
+ * {@link import('./model').GraphVersionIntegrityError} when either version fails
+ * verification, via `diffVersions`.
  */
 export function edgesAddedSince(
   history: GraphHistory,
@@ -161,13 +170,19 @@ export function edgesAddedSince(
 ): EdgesAddedSinceResult {
   const versions = history.versions;
   if (versions.length === 0) {
-    throw new UnknownBaseVersionError(sinceVersionId, []);
+    throw new UnknownBaseVersionError(sinceVersionId, [], {
+      retainedCount: history.retainedCount,
+    });
   }
   const baseIndex = versions.findIndex((v) => v.id === sinceVersionId);
   if (baseIndex < 0) {
+    // The RETAINED count, never the window size. A window of 8 over 12 retained
+    // versions must not report "8 version(s) are retained", and must not claim
+    // the id is unretained when 4 versions it never looked at could hold it.
     throw new UnknownBaseVersionError(
       sinceVersionId,
       versions.map((v) => v.id),
+      { retainedCount: history.retainedCount },
     );
   }
   const base = versions[baseIndex];
