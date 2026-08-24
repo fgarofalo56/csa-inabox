@@ -279,7 +279,7 @@ jobs:
 
       - name: File / update dedup issue on failure
         if: failure() && steps.run.outputs.status != 'NotDeployed'
-        uses: actions/github-script@v7
+        uses: actions/github-script@v9
         env:
           # Values reach the script through the ENVIRONMENT, never through
           # `${{ }}` interpolated into the JS source. Two reasons, both of them
@@ -340,7 +340,7 @@ jobs:
 
       - name: Auto-close stale synthetic-monitor issues on success
         if: success() && steps.run.outputs.status == 'Succeeded'
-        uses: actions/github-script@v7
+        uses: actions/github-script@v9
         with:
           script: |
             const open = await github.rest.issues.listForRepo({
