@@ -204,13 +204,14 @@ export function detectFailOpen(graph: SecurityGraph): DetectorResult {
 
   const population: Population = {
     detectorId: C5_DETECTOR_ID,
+    declaredKinds: ['verdict-totality'],
     candidates: nodes.map((n) => n.id),
     judged,
     unjudged: [],
     emptyIsExpected: false,
   };
 
-  return detectorResult(findings, population);
+  return detectorResult(findings, population, graph);
 }
 
 export const c5Spec: SecurityDetectorSpec = {

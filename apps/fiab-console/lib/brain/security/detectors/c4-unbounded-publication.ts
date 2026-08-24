@@ -218,13 +218,14 @@ export function detectUnboundedPublication(graph: SecurityGraph): DetectorResult
 
   const population: Population = {
     detectorId: C4_DETECTOR_ID,
+    declaredKinds: ['publication'],
     candidates: nodes.map((n) => n.id),
     judged,
     unjudged,
     emptyIsExpected: false,
   };
 
-  return detectorResult(findings, population);
+  return detectorResult(findings, population, graph);
 }
 
 export const c4Spec: SecurityDetectorSpec = {

@@ -41,6 +41,17 @@
  *      `POP-population-integrity`, so a consumer reading only findings — never
  *      the population — still sees them. That is deliberate: the whole class of
  *      failure above is "the consumer read the verdict and not the population".
+ *   4. `detectorResult()` RECOMPUTES the population from the graph, over the
+ *      kinds the detector declares, by a traversal that does NOT call
+ *      `candidatesOfKind` — and throws when the two disagree. Points 1-3 all
+ *      compare `judged` against `candidates`, and both of those descend from the
+ *      array `candidatesOfKind` returns, so none of them can see a narrowing
+ *      applied while that array is being BUILT. Measured during review
+ *      2026-08-23: three such narrowings, each gated one node above the largest
+ *      fixture, passed the full suite at `100 passed (100)` and reported
+ *      `ratio: 1.0` / `incompleteDetectors: []` while a live C1 defect vanished
+ *      from the findings. Point 4 is the answer to that, and it is the only one
+ *      of the four whose denominator is independent of the numerator.
  *
  * ── WHY THE RETURN TYPE DEVIATES FROM `graph -> Finding[]` ────────────────
  *
@@ -54,7 +65,7 @@
  * nothing so a waste detector can adopt it without importing anything security.
  */
 
-import type { Finding, SecurityGraph, SecurityNode } from './substrate';
+import type { Finding, SecurityGraph, SecurityNode, SecurityNodeKind } from './substrate';
 
 /**
  * What a detector examined.
@@ -72,6 +83,26 @@ import type { Finding, SecurityGraph, SecurityNode } from './substrate';
  */
 export interface Population {
   readonly detectorId: string;
+  /**
+   * The node kinds this detector's CLASS covers.
+   *
+   * This is the DENOMINATOR's source, and it is declared by the detector rather
+   * than derived from the nodes it selected — deliberately, because a
+   * denominator derived from the same filter as the numerator cannot disagree
+   * with it. `detectorResult()` recomputes the population from the graph over
+   * these kinds, by a different traversal than {@link candidatesOfKind}, and
+   * refuses a `candidates` array that does not match.
+   *
+   * Measured reason this field exists (review of this PR, 2026-08-23): three
+   * separate narrowing mutations injected INTO `candidatesOfKind` and gated on
+   * `graph.nodes.length > 13` — one node above the largest fixture — passed the
+   * entire suite at `100 passed (100)` and reported `ratio: 1.0`,
+   * `incompleteDetectors: []`, `unjudged: 0`, while a live C1 defect vanished
+   * from the findings. `candidates` and `judged` were both derived from the same
+   * filtered array, so they agreed by construction. Their agreement confirmed
+   * the METHOD, not the population.
+   */
+  readonly declaredKinds: readonly SecurityNodeKind[];
   /** Every node the detector's CLASS applies to. */
   readonly candidates: readonly string[];
   /** The subset actually evaluated. Equal to `candidates` in a compliant detector. */
@@ -111,18 +142,115 @@ export interface SecurityDetectorSpec {
 }
 
 /**
+ * An INDEPENDENT census of the graph's nodes, by kind.
+ *
+ * The word that matters is "independent". This does NOT call
+ * {@link candidatesOfKind} and does not use `Array.prototype.filter` — it walks
+ * `graph.nodes` once by index and accumulates. That is not stylistic: a census
+ * that shares a traversal with the thing it is auditing moves WITH its subject,
+ * so a mutation injected into the subject appears in the census too and the two
+ * still agree. Two counts sharing a method confirm the method, not the number.
+ *
+ * `kindById` is carried alongside the counts so a candidate can be checked for
+ * EXISTENCE and for CLASS MEMBERSHIP, not merely counted. Counting alone is
+ * defeated by padding — return the same node twice and the length still matches.
+ */
+export interface KindCensus {
+  /** kind -> how many nodes of that kind the graph actually holds. */
+  readonly countsByKind: ReadonlyMap<SecurityNodeKind, number>;
+  /** node id -> its kind, for every node in the graph. */
+  readonly kindById: ReadonlyMap<string, SecurityNodeKind>;
+}
+
+export function nodeKindCensus(graph: SecurityGraph): KindCensus {
+  const countsByKind = new Map<SecurityNodeKind, number>();
+  const kindById = new Map<string, SecurityNodeKind>();
+  for (let i = 0; i < graph.nodes.length; i += 1) {
+    const node = graph.nodes[i];
+    countsByKind.set(node.kind, (countsByKind.get(node.kind) ?? 0) + 1);
+    kindById.set(node.id, node.kind);
+  }
+  return { countsByKind, kindById };
+}
+
+/**
+ * Refuse a `candidates` array that disagrees with the graph.
+ *
+ * Three failures, each of which a length-only comparison misses:
+ *
+ *   1. DUPLICATES — the same node returned N times pads the count back up to the
+ *      census while the distinct set is narrower.
+ *   2. FOREIGN or MISCLASSIFIED ids — a candidate that is not in the graph, or
+ *      is of a kind the detector did not declare, means the denominator is not
+ *      describing the class it claims to.
+ *   3. NARROWING — the distinct, in-class candidate count is below what the
+ *      graph holds for the declared kinds. This is the case a
+ *      `judged`-vs-`candidates` comparison provably cannot see.
+ */
+function assertCandidatesMatchCensus(population: Population, graph: SecurityGraph): void {
+  const { countsByKind, kindById } = nodeKindCensus(graph);
+  const declared = new Set(population.declaredKinds);
+
+  const distinct = new Set(population.candidates);
+  if (distinct.size !== population.candidates.length) {
+    throw new Error(
+      `[${population.detectorId}] incoherent population: candidates contains ` +
+        `${population.candidates.length - distinct.size} duplicate id(s). A padded candidate ` +
+        'list restores the count while narrowing the set actually examined.',
+    );
+  }
+
+  const foreign: string[] = [];
+  for (const id of distinct) {
+    const kind = kindById.get(id);
+    if (kind === undefined || !declared.has(kind)) foreign.push(id);
+  }
+  if (foreign.length > 0) {
+    throw new Error(
+      `[${population.detectorId}] incoherent population: ${foreign.length} candidate(s) are ` +
+        `absent from the graph or outside the declared kinds ` +
+        `[${population.declaredKinds.join(', ')}] (${foreign.slice(0, 5).join(', ')}).`,
+    );
+  }
+
+  let expected = 0;
+  for (const kind of declared) expected += countsByKind.get(kind) ?? 0;
+
+  if (distinct.size !== expected) {
+    throw new Error(
+      `[${population.detectorId}] SILENT NARROWING: the graph holds ${expected} node(s) of ` +
+        `kind [${population.declaredKinds.join(', ')}] but the detector enumerated ` +
+        `${distinct.size} as candidates. A narrowing applied while BUILDING the candidate set ` +
+        'is invisible to judged/candidates — both descend from the narrowed array, so they ' +
+        'agree at ratio 1.0 while the sweep is blind. Narrow via `unjudged`, where it is ' +
+        'reported, or widen the candidate set.',
+    );
+  }
+}
+
+/**
  * Build a `DetectorResult`, enforcing the population contract.
  *
  * Throws on an incoherent population (judged outside candidates) because that is
  * a defect in the DETECTOR, not a finding about the graph, and shipping a
  * verdict from a broken population model is how RC=0 gets believed.
  *
+ * Also throws when `candidates` disagrees with an independently recomputed
+ * census over `population.declaredKinds`. That check is what makes the promise
+ * on {@link candidatesOfKind} true rather than merely stated: a narrowing
+ * applied while PRODUCING candidates — as opposed to while producing `judged` —
+ * is invisible to `judged`/`candidates` comparison, because both sides descend
+ * from the narrowed array. The census does not.
+ *
  * Appends `POP-population-integrity` findings for the two silent states.
  */
 export function detectorResult(
   findings: readonly Finding[],
   population: Population,
+  graph: SecurityGraph,
 ): DetectorResult {
+  assertCandidatesMatchCensus(population, graph);
+
   const candidateSet = new Set(population.candidates);
   const strays = population.judged.filter((id) => !candidateSet.has(id));
   if (strays.length > 0) {
@@ -242,11 +370,43 @@ export function populationCoverage(population: Population): {
 /**
  * Select the class's candidates from a graph.
  *
- * Every detector calls this — and NOTHING ELSE — to build `candidates`, so a
- * narrowing filter can only ever be applied when producing `unjudged`, where it
- * is visible. That is the structural answer to the parameter-name filter at
- * `check-tid-boundary-chokepoint.mjs:2662`: a detector CAN still narrow, but it
- * cannot narrow SILENTLY.
+ * Every detector calls this — and NOTHING ELSE — to build `candidates`.
+ *
+ * ── WHAT THIS FUNCTION DOES NOT GUARANTEE, MEASURED ───────────────────────
+ *
+ * A previous revision of this docstring claimed that because every detector
+ * routes through here, "a narrowing filter can only ever be applied when
+ * producing `unjudged`, where it is visible … a detector CAN still narrow, but
+ * it cannot narrow SILENTLY." That was FALSE, and it was falsified against this
+ * exact code during review on 2026-08-23. Three mutations injected INTO this
+ * function, each gated on `graph.nodes.length > 13` (one node above the largest
+ * fixture, so no test graph reaches the branch):
+ *
+ *   - keep only the first node of each kind
+ *   - re-apply the `check-tid-boundary-chokepoint.mjs:2662` parameter-name
+ *     filter at CANDIDATE level, authorizers only
+ *   - drop one authorizer by a substring of its label
+ *
+ * All three passed the whole suite at `100 passed (100)`, and on a 14-node graph
+ * carrying one live C1 defect the sweep reported `ratio: 1.0`,
+ * `incompleteDetectors: []`, `unjudged: 0` and ZERO security findings. The
+ * defect disappeared and the contract called the result perfect. The reason is
+ * structural: `candidates` and `judged` both descend from THIS array, so they
+ * cannot disagree about it. Their agreement confirms the method, not the
+ * population. It is `check-tid-boundary-chokepoint.mjs`'s own 15-candidates /
+ * 1-judged failure moved one step upstream, where it logs 1 / 1 instead.
+ *
+ * ── WHAT ACTUALLY ENFORCES THE PROMISE ────────────────────────────────────
+ *
+ * Not this function. {@link detectorResult} recomputes the population from the
+ * graph over `Population.declaredKinds`, using {@link nodeKindCensus} — a
+ * different traversal that does not call this function — and throws when the
+ * two disagree. So the guarantee is: a detector cannot narrow silently BECAUSE
+ * AN INDEPENDENT COUNT IS TAKEN, not because narrowing has nowhere else to go.
+ * `security/__tests__/population.test.ts` exercises that check with the same
+ * cardinality-gated shape that defeated the old claim, and
+ * `mutation/mutations.mjs` carries it as `hollow-candidates-of-kind-narrow` so
+ * the limit is re-measured rather than re-asserted.
  */
 export function candidatesOfKind(
   graph: SecurityGraph,

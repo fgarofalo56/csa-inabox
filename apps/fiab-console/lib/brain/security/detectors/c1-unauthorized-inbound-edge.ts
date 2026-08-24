@@ -41,10 +41,26 @@
  *    at `:2655-2661`. Disclosure is not enforcement.
  *
  *    So `AuthorizerFacet.params` exists here for EVIDENCE ONLY and no predicate
- *    below reads it. `__tests__/security/c1-population.test.ts` asserts a
- *    `(session, itemId, itemType)` authorizer is JUDGED, and the hollow-control
- *    arm of the mutation harness re-introduces the param filter to prove that
- *    assertion actually watches.
+ *    below reads it. `__tests__/security/c1-unauthorized-inbound-edge.test.ts`
+ *    asserts a `(session, itemId, itemType)` authorizer is JUDGED — the spec
+ *    named "JUDGES an authorizer whose parameters carry no workspace-shaped
+ *    name".
+ *
+ *    Which mutation arm proves that assertion watches, stated as measured and
+ *    not as assumed. A previous revision of this header credited
+ *    `hollow-c1-predicate-param-filter`. That is the WRONG arm and the claim was
+ *    inverted: measured during review 2026-08-23, that arm yields
+ *    `4 failed | 6 passed` with all three POPULATION specs — including the one
+ *    above — reported GREEN. It re-applies the filter inside the PREDICATE,
+ *    where the node is still enumerated and still counted as judged, so the
+ *    population assertions cannot move.
+ *
+ *    The arm that actually moves them is `hollow-c1-loop-skip`, which drops the
+ *    node before `judged.push`. And neither arm reaches a narrowing applied
+ *    while the CANDIDATE list is built — that one is covered by
+ *    `hollow-candidates-of-kind-narrow` plus the census cross-check in
+ *    `population.ts`, added after this same review measured three such
+ *    narrowings passing the entire suite at ratio 1.0.
  *
  * 2. A LITERAL SCOPING NEVER EXEMPTS AND NEVER REDUCES SEVERITY.
  *
@@ -256,13 +272,14 @@ export function detectUnauthorizedInboundEdge(graph: SecurityGraph): DetectorRes
 
   const population: Population = {
     detectorId: C1_DETECTOR_ID,
+    declaredKinds: ['authorizer'],
     candidates: nodes.map((n) => n.id),
     judged,
     unjudged: [],
     emptyIsExpected: false,
   };
 
-  return detectorResult(findings, population);
+  return detectorResult(findings, population, graph);
 }
 
 export const c1Spec: SecurityDetectorSpec = {

@@ -199,13 +199,14 @@ export function detectAggregateOracle(graph: SecurityGraph): DetectorResult {
 
   const population: Population = {
     detectorId: C2_DETECTOR_ID,
+    declaredKinds: ['scoped-handler'],
     candidates: nodes.map((n) => n.id),
     judged,
     unjudged: [],
     emptyIsExpected: false,
   };
 
-  return detectorResult(findings, population);
+  return detectorResult(findings, population, graph);
 }
 
 export const c2Spec: SecurityDetectorSpec = {

@@ -86,6 +86,110 @@ describe('recommend-only', () => {
     expect(() => assertInertRemediation(f)).toThrow(/must be literally true/);
   });
 
+  // -------------------------------------------------------------------------
+  // DEPTH. The four specs above all sit at the TOP level of `remediation`, and
+  // the previous implementation was a single `Object.entries` pass — so it
+  // passed all of them while accepting every shape below. Measured during
+  // review 2026-08-23 with the top-level arm as the positive control:
+  //
+  //   remediation.apply = fn                         -> REJECTED (control)
+  //   remediation.plan = { apply: fn }                -> ACCEPTED (escaped)
+  //   remediation.proposedCommands = [{ apply: fn }]  -> ACCEPTED (escaped)
+  //
+  // Neither escape was a live exploit — a function does not survive the
+  // Cosmos/queue/JSON.parse crossing this module backstops — but the docstring
+  // claimed "any function-valued property whatsoever", which was false.
+  // -------------------------------------------------------------------------
+
+  function withRemediation(remediation: unknown): Finding {
+    return inertFinding({ remediation: remediation as Finding['remediation'] });
+  }
+
+  const BASE = {
+    summary: 's',
+    proposedCommands: [] as unknown[],
+    proposedPatchDescription: null,
+    requiresHumanApproval: true,
+  };
+
+  it('REJECTS a function nested one level down', () => {
+    expect(() =>
+      // eslint-disable-next-line @typescript-eslint/no-empty-function
+      assertInertRemediation(withRemediation({ ...BASE, plan: { apply: () => {} } })),
+    ).toThrow(/remediation\.plan\.apply/);
+  });
+
+  it('REJECTS a function nested inside an array element', () => {
+    expect(() =>
+      assertInertRemediation(
+        // eslint-disable-next-line @typescript-eslint/no-empty-function
+        withRemediation({ ...BASE, proposedCommands: [{ apply: () => {} }] }),
+      ),
+    ).toThrow(/remediation\.proposedCommands\[0\]\.apply/);
+  });
+
+  it('REJECTS a deeply buried function under a non-actuator key name', () => {
+    // Proves the depth walk is keyed to the SHAPE, not to the key spelling —
+    // no name on this path is in ACTUATOR_KEYS.
+    expect(() =>
+      assertInertRemediation(
+        // eslint-disable-next-line @typescript-eslint/no-empty-function
+        withRemediation({ ...BASE, notes: { detail: [{ helper: () => {} }] } }),
+      ),
+    ).toThrow(/is a function/);
+  });
+
+  it('REJECTS an accessor property, where the callable hides in the descriptor', () => {
+    const remediation = { ...BASE };
+    Object.defineProperty(remediation, 'summary', {
+      get: () => 'computed',
+      enumerable: true,
+      configurable: true,
+    });
+    expect(() => assertInertRemediation(withRemediation(remediation))).toThrow(
+      /is an accessor property/,
+    );
+  });
+
+  it('REJECTS a class instance, whose callables live on the prototype', () => {
+    // `Reflect.ownKeys` does not walk the prototype chain, so an own-key scan
+    // of this object finds nothing executable while `.apply()` is callable.
+    class Remediation {
+      summary = 's';
+      proposedCommands: unknown[] = [];
+      proposedPatchDescription = null;
+      requiresHumanApproval = true as const;
+      apply() {
+        /* would execute */
+      }
+    }
+    expect(() => assertInertRemediation(withRemediation(new Remediation()))).toThrow(
+      /not a plain object or array/,
+    );
+  });
+
+  it('REJECTS a reference cycle, which cannot survive serialisation', () => {
+    const remediation: Record<string, unknown> = { ...BASE };
+    remediation.self = remediation;
+    expect(() => assertInertRemediation(withRemediation(remediation))).toThrow(
+      /closes a reference cycle/,
+    );
+  });
+
+  it('still ACCEPTS the real drafted shape, nested strings and all', () => {
+    // The over-rejection control. Depth checking is worthless if it also
+    // refuses the documents detectors actually emit.
+    expect(() =>
+      assertInertRemediation(
+        withRemediation({
+          ...BASE,
+          proposedCommands: ['az deployment sub create ...', 'gh run list --limit 3'],
+          proposedPatchDescription: 'add the tenant comparison to the shared resolver',
+        }),
+      ),
+    ).not.toThrow();
+  });
+
   it('every finding a real detector produces is inert', () => {
     const graph = graphOf([
       c1PositiveItemScoped(),

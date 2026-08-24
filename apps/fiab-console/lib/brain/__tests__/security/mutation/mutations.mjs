@@ -60,8 +60,29 @@ export const C1_DETECTOR = join(
   'c1-unauthorized-inbound-edge.ts',
 );
 
+export const POPULATION_MODULE = join(
+  CONSOLE_ROOT,
+  'lib',
+  'brain',
+  'security',
+  'population.ts',
+);
+
+export const RECOMMEND_ONLY_MODULE = join(
+  CONSOLE_ROOT,
+  'lib',
+  'brain',
+  'security',
+  'recommend-only.ts',
+);
+
 const BASELINE_SPEC = 'lib/brain/__tests__/security/baseline-clean.test.ts';
 const C1_SPEC = 'lib/brain/__tests__/security/c1-unauthorized-inbound-edge.test.ts';
+const POPULATION_SPEC = 'lib/brain/__tests__/security/population.test.ts';
+const REGISTRY_SPEC = 'lib/brain/__tests__/security/registry.test.ts';
+
+/** The single line every detector's candidate set is built from. */
+const CANDIDATES_RETURN = '  return graph.nodes.filter((n) => n.kind === kind);';
 
 /**
  * @typedef {{ file: string, needle: string, replacement: string }} Substitution
@@ -421,6 +442,100 @@ export const MUTATIONS = [
         replacement:
           "  if (!/\\bworkspace(Id|_id)?\\b/i.test(facet.params.join(','))) return findings; " +
           'for (const path of facet.allowPaths) {',
+      },
+    ],
+  },
+  // ── THE CANDIDATE-LEVEL ARMS — the bypass that escaped review ─────────
+  //
+  // Added 2026-08-23 after an independent review defeated the population
+  // contract without touching a detector. All three below were MEASURED as
+  // ESCAPED against the previous revision: mutated RC=0, `100 passed (100)`,
+  // `ratio: 1.0`, `incompleteDetectors: []`, `unjudged: 0` — while a live C1
+  // defect disappeared from the findings of a 14-node graph.
+  //
+  // Each is gated on `graph.nodes.length > 13`, one node above the largest
+  // fixture at the time, which is exactly what made them invisible: every test
+  // graph stayed under the gate, so only a real estate would cross it. The
+  // `census` block in population.test.ts is deliberately built on 14 nodes so
+  // these arms are now INSIDE the tested range. If a future edit shrinks that
+  // block back below the gate, these three arms go ESCAPED again and say so.
+  //
+  // Why `judged`/`candidates` cannot see them: both descend from the array
+  // this function returns, so they agree by construction. Only the independent
+  // census in `detectorResult()` has a denominator that does not move.
+  {
+    id: 'hollow-candidates-first-of-kind',
+    taxonomyClass: 'POP',
+    arm: 'hollow',
+    what:
+      'candidatesOfKind keeps only the FIRST node of each kind, gated above fixture ' +
+      'cardinality (review arm A2 — measured ESCAPED before the census cross-check)',
+    spec: POPULATION_SPEC,
+    substitutions: [
+      {
+        file: POPULATION_MODULE,
+        needle: CANDIDATES_RETURN,
+        replacement:
+          '  const all = graph.nodes.filter((n) => n.kind === kind); ' +
+          'return graph.nodes.length > 13 ? all.slice(0, 1) : all;',
+      },
+    ],
+  },
+  {
+    id: 'hollow-candidates-param-filter',
+    taxonomyClass: 'POP',
+    arm: 'hollow',
+    what:
+      "check-tid-boundary-chokepoint.mjs:2662's parameter-name filter re-applied at " +
+      'CANDIDATE level (review arm A3 — the same filter as hollow-c1-predicate-param-filter, ' +
+      'one step upstream, where judged/candidates provably cannot see it)',
+    spec: POPULATION_SPEC,
+    substitutions: [
+      {
+        file: POPULATION_MODULE,
+        needle: CANDIDATES_RETURN,
+        replacement:
+          '  const all = graph.nodes.filter((n) => n.kind === kind); ' +
+          "if (graph.nodes.length > 13 && kind === 'authorizer') return all.filter((n) => " +
+          "/\\bworkspace(Id|_id)?\\b/i.test(((n.facet as { params?: readonly string[] })" +
+          ".params ?? []).join(','))); return all;",
+      },
+    ],
+  },
+  {
+    id: 'hollow-candidates-drop-one',
+    taxonomyClass: 'POP',
+    arm: 'hollow',
+    what:
+      'drop exactly ONE node from the candidate set, gated above fixture cardinality ' +
+      '(review arm A4 — the sharpest form: 13 of 14 still judged, ratio still 1.0)',
+    spec: POPULATION_SPEC,
+    substitutions: [
+      {
+        file: POPULATION_MODULE,
+        needle: CANDIDATES_RETURN,
+        replacement:
+          '  const all = graph.nodes.filter((n) => n.kind === kind); ' +
+          "return graph.nodes.length > 13 ? all.filter((n) => !n.id.endsWith('n7')) : all;",
+      },
+    ],
+  },
+  {
+    id: 'hollow-recommend-only-shallow',
+    taxonomyClass: 'POP',
+    arm: 'hollow',
+    what:
+      'revert assertInertRemediation to a ONE-LEVEL walk — the exact previous implementation, ' +
+      'whose docstring claimed it caught "any function-valued property whatsoever" while a ' +
+      'nested `plan.apply` and an array element `proposedCommands[0].apply` both passed',
+    spec: REGISTRY_SPEC,
+    substitutions: [
+      {
+        file: RECOMMEND_ONLY_MODULE,
+        needle: '    walkInert(descriptor.value, childPath, findingId, seen);',
+        replacement:
+          "    if (typeof descriptor.value === 'function') " +
+          'walkInert(descriptor.value, childPath, findingId, seen);',
       },
     ],
   },

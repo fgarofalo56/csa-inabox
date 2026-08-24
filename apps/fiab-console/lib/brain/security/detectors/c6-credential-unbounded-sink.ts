@@ -178,13 +178,14 @@ export function detectCredentialUnboundedSink(graph: SecurityGraph): DetectorRes
 
   const population: Population = {
     detectorId: C6_DETECTOR_ID,
+    declaredKinds: ['credential-egress'],
     candidates: nodes.map((n) => n.id),
     judged,
     unjudged: [],
     emptyIsExpected: false,
   };
 
-  return detectorResult(findings, population);
+  return detectorResult(findings, population, graph);
 }
 
 export const c6Spec: SecurityDetectorSpec = {

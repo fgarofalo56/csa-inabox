@@ -123,11 +123,13 @@ export {
   candidatesOfKind,
   detectorResult,
   findingsOf,
+  nodeKindCensus,
   populationCoverage,
   securityFindingsOf,
 } from './population';
 export type {
   DetectorResult,
+  KindCensus,
   Population,
   SecurityDetector,
   SecurityDetectorSpec,

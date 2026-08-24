@@ -157,13 +157,14 @@ export function detectHumanExecutedCommand(graph: SecurityGraph): DetectorResult
 
   const population: Population = {
     detectorId: C8_DETECTOR_ID,
+    declaredKinds: ['emitted-command'],
     candidates: nodes.map((n) => n.id),
     judged,
     unjudged: [],
     emptyIsExpected: false,
   };
 
-  return detectorResult(findings, population);
+  return detectorResult(findings, population, graph);
 }
 
 export const c8Spec: SecurityDetectorSpec = {
