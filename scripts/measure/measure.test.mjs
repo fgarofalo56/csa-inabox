@@ -69,9 +69,18 @@ test('R2: the status reported is the SUBJECT\'s, not a wrapper\'s', () => {
 });
 
 test('R1: a command that cannot launch THROWS (never a silent zero)', () => {
+  // Assert the PROPERTY, not the wording. The two platforms reach this from
+  // different directions and say different things, both correct:
+  //   win32 — the PATH scan finds nothing        -> "could not resolve"
+  //   linux — spawn is attempted and ENOENTs     -> "failed to launch"
+  // The first version of this test pinned /could not resolve/ and passed on
+  // Windows while failing in Linux CI. A guard keyed to a spelling is exactly
+  // what this directory exists to stop shipping.
   assert.throws(
     () => run('definitely-not-a-real-binary-xyz', ['--version']),
-    (e) => e instanceof MeasurementError && /could not resolve/.test(e.message),
+    (e) => e instanceof MeasurementError
+        && /could not resolve|failed to launch|does not exist/.test(e.message)
+        && /definitely-not-a-real-binary-xyz/.test(e.message + JSON.stringify(e.detail ?? {})),
   );
 });
 
