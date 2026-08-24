@@ -115,7 +115,28 @@ export async function POST(req: NextRequest) {
       const p = decodeJwtPayload(result.accessToken);
       const oid = (p.oid as string) || (p.sub as string) || clientId;
       const name = (p.app_displayname as string) || `service-principal:${clientId}`;
-      const claims: UserClaims = { oid, name, upn: clientId, email: undefined };
+      // #3845 — STAMP THE ENTRA TENANT, exactly as the device-code branch below
+      // does. This branch used to mint `{ oid, name, upn, email }` with NO `tid`
+      // while `tenantId` was in scope three lines up, which made this route the
+      // LIVE GENERATOR of tid-less sessions: every consumer of the tenant
+      // boundary (`resolveWorkspaceAccessByOid` step 4 / step 6,
+      // `listAccessibleWorkspaces`, `resolveWorkspaceRole`) treats an absent
+      // caller `tid` as `unconfirmed`, so a session minted here could never be
+      // POSITIVELY matched to a tenant — and under the pre-#3840 truthiness
+      // guard it was not FILTERED either, it simply fell through. Fixing the
+      // consumers without fixing this would leave the generator refilling them.
+      //
+      // THE TOKEN'S OWN `tid` IS PREFERRED over the request's `tenantId`,
+      // because it is what Entra asserted about the principal that actually
+      // authenticated rather than what the caller asked for. `tenantId` is the
+      // documented fallback and is not forgeable in a way that matters here:
+      // the client-credentials grant above only succeeds if the caller genuinely
+      // holds that SP's secret in that tenant. `undefined` remains reachable
+      // (a token with neither) and stays an HONEST absence — `UserClaims.tid`
+      // is optional by design, and per `tenant-boundary.ts` an absent tid is
+      // `unconfirmed`, which is a refusal, never a grant.
+      const tid = (p.tid as string) || tenantId || undefined;
+      const claims: UserClaims = { oid, tid, name, upn: clientId, email: undefined };
       const exp = sessionExp();
       const cookie = encodeSessionCookie({ claims, exp });
       return NextResponse.json(

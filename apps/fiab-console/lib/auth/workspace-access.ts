@@ -21,31 +21,40 @@
  *      a one-env-flip kill switch).
  *   3. Resolve the workspace doc cross-partition (the caller is not its owner,
  *      so it is in a different partition). Missing → no access.
- *   4. tid BOUNDARY — when the caller's Entra tenant id (`callerTid`) is known
- *      AND the workspace doc records its owning `tid` (written going forward),
- *      they MUST match. This blocks any cross-tenant read. Legacy workspace docs
- *      predate the `tid` field; for those the explicit ACL grant below is itself
- *      the tenant boundary (a foreign principal can only get a workspace-role
- *      row if a workspace admin in the owning tenant explicitly added their oid,
- *      and the sharing UI's principal search is tenant-scoped).
+ *   4. tid BOUNDARY — the workspace must be POSITIVELY CONFIRMED to be in the
+ *      caller's own Entra tenant (`sameTenantConfirmed`, the one implementation
+ *      of this comparison — `lib/auth/tenant-boundary.ts`). An absent tid on
+ *      EITHER side is `unconfirmed`, and unconfirmed is a REFUSAL, not a
+ *      fall-through. This blocks any cross-tenant read and, since #3840, any
+ *      unconfirmed one.
  *
- *      #3823 — THAT LAST SENTENCE IS ONLY TRUE OF THE ACL PATH. Step 4 is
- *      truthiness-guarded on BOTH sides, so it decides NOTHING whenever either
- *      tid is absent — and step 6 (the admin-open bypass) has no ACL grant
- *      underneath it to serve as the boundary. `accessOptsFor*` sets
- *      `tenantAdmin: isTenantAdmin(session)`, so on any admin-reachable route
- *      step 6 was true for every caller and step 4 was the only thing in front
- *      of it. Both absences are DOCUMENTED, SUPPORTED states — a workspace doc
- *      created before rel-T11 carries no `tid` (`lib/types/workspace.ts`; the
+ *      #3840 — WHAT THIS REPLACED, AND WHY IT HAD TO GO. Step 4 used to read
+ *      `if (callerTid && wsDoc.tid && wsDoc.tid !== callerTid) return null`,
+ *      truthiness-guarded on BOTH sides, so it decided NOTHING whenever either
+ *      tid was absent. The comment that used to sit here argued the ACL grant
+ *      below was itself the tenant boundary for legacy docs — "a foreign
+ *      principal can only get a workspace-role row if a workspace admin in the
+ *      owning tenant explicitly added their oid". That is an argument about how
+ *      rows are USUALLY created, not an invariant the code enforces, and it
+ *      says nothing at all about step 6, which has no grant underneath it.
+ *
+ *      #3845 IS WHY THIS WAS NOT THEORETICAL. Both absences are documented,
+ *      supported states — a workspace doc created before rel-T11 carries no
+ *      `tid` (`lib/types/workspace.ts`; the
  *      `scripts/csa-loom/backfill-workspace-tid.mjs` backfill is manual and
  *      dry-run-by-default), and `UserClaims.tid` is optional by design
- *      (`lib/auth/msal.ts`, "so sessions minted before rel-T11 still decode";
- *      `lib/auth/pat.ts` propagates an optional `createdByTid`). So a tenant
- *      admin whose own tid was missing, or who opened a tid-less workspace, was
- *      granted `role:'Admin', canWrite:true` on a workspace whose tenant Loom
- *      had never established. Step 6 now requires a POSITIVE match — see there.
+ *      (`lib/auth/msal.ts`, `lib/auth/pat.ts`) — but the caller-side absence
+ *      also had a LIVE GENERATOR: the CLI's service-principal login minted
+ *      EVERY session with no `tid` while its device-code sibling stamped one.
+ *      So the population of tid-less callers was not a shrinking legacy tail,
+ *      it was being refilled on every CI login. Fixing this boundary without
+ *      fixing that generator would have left it refilling; fixing the generator
+ *      without fixing this boundary would have left every pre-existing session
+ *      exploitable. They land together.
  *
- *      #2703 — step 4 USED TO BE OPT-IN. `opts` was optional and `callerTid` was
+ *      #2703 — step 4 USED TO BE OPT-IN, which is a different failure of the
+ *      same boundary and is why it is recorded here rather than in a changelog.
+ *      `opts` was optional and `callerTid` was
  *      an optional field on it, so EVERY call site that did not hand the resolver
  *      a session silently skipped the boundary: the four `item-crud` calls that
  *      back `loadOwnedItem` / `listOwnedItems` / `listAllOwnedItems` (the Copilot
@@ -63,8 +72,12 @@
  *            behalf of a different principal can never borrow the wrong tenant.
  *            That turns the boundary ON for every session-backed request through
  *            the session-less helpers, with no change at their 263 call sites.
+ *
  *   5. ACL — `resolveEffectiveRole` returns the caller's highest workspace role
  *      via direct + (nested) group membership. Non-null → access at that role.
+ *   6. ADMIN-OPEN bypass — a tenant admin may open a workspace they neither own
+ *      nor hold a role on. Requires the same positive match (#3823), which
+ *      step 4 now guarantees before this line is reached.
  *
  * WRITE vs READ: `canWrite` is true only for Owner/Admin/Member (the roles that
  * map to Azure RBAC Contributor). Contributor/Viewer are read-only. Callers that
@@ -76,6 +89,7 @@ import { resolveEffectiveRole } from '@/lib/azure/workspace-roles-client';
 import type { WorkspaceRoleName } from '@/lib/azure/workspace-role-model';
 import type { Workspace } from '@/lib/types/workspace';
 import { logSafe } from '@/lib/util/log-safe';
+import { sameTenantConfirmed, tenantUnconfirmedCause } from './tenant-boundary';
 
 /**
  * Master switch for the multi-user ACL read path. Default ON. Flip to `off` to
@@ -153,7 +167,22 @@ export type WorkspaceAccessOpts =
       skipTidBoundaryReason?: never;
     }
   | {
-      /** Explicit, reviewed opt-out — this call site genuinely has no caller tenant. */
+      /**
+       * Explicit, reviewed opt-out — this call site genuinely has no caller
+       * tenant.
+       *
+       * #3840 — IT NO LONGER GRANTS ANYTHING ON THE SHARED-READ PATH. It
+       * suppresses the ambient-session recovery, so no caller tid is available,
+       * so `sameTenantConfirmed` cannot be true and step 4 REFUSES. Under the
+       * old truthiness-guarded boundary this fell THROUGH to the ACL and admin
+       * grants, which is precisely the shape #3823/#3840 exist to delete: "I
+       * have no caller tenant" must not also mean "grant as if I did". Nothing
+       * regresses today — `SKIP_ALLOWLIST` in
+       * `scripts/ci/check-tid-boundary-chokepoint.mjs` is EMPTY, so there is no
+       * production caller, and adding one is already a security review. Read
+       * this arm as "do not go looking for an ambient tenant", NOT as "skip the
+       * boundary".
+       */
       skipTidBoundary: true;
       /** WHY there is no caller tenant here. Required so the opt-out is justified in code. */
       skipTidBoundaryReason: string;
@@ -328,11 +357,72 @@ export async function resolveWorkspaceAccessByOid(
   const wsDoc = await readWorkspaceById(workspaceId);
   if (!wsDoc) return null;
 
-  // 4) tid boundary — reject a cross-tenant read when both sides record a tid.
+  // 4) tid boundary — a POSITIVE tenant match, not merely a non-contradiction.
   // The caller tid is the one the call site passed, or (when it had no session
   // to pass) the ambient request session's, for the SAME principal (#2703).
+  //
+  // #3840 — THIS USED TO BE `callerTid && wsDoc.tid && wsDoc.tid !== callerTid`,
+  // the truthiness-guarded shape this whole module's header condemns. It is a
+  // NON-CONTRADICTION test: it decides NOTHING when either side is absent and
+  // falls through to step 5 (the ACL) and step 6 (the admin bypass). Both
+  // absences are documented, supported states, and #3845 proved the caller-side
+  // one had a LIVE GENERATOR — `app/api/auth/cli-session/route.ts` minted every
+  // service-principal session with no `tid` at all, while its device-code
+  // sibling stamped one. So a tid-less session plus ANY `workspace-roles` row
+  // resolved here as `via:'acl'` on a workspace whose tenancy Loom had never
+  // established, and `role-assignments/route.ts` then granted a tenant admin
+  // full member management on it (#3826). Step 6 was tightened by #3823; this
+  // is the same tightening applied to the shared boundary that guards BOTH the
+  // ACL path and the admin path.
+  //
+  // THE COMPARISON IS NOT WRITTEN HERE. `sameTenantConfirmed` is the one
+  // implementation (`lib/auth/tenant-boundary.ts`); a fifth private copy is
+  // exactly what produced #3823, #3825, #3840 and #3843.
+  //
+  // `skipTidBoundary` NOW FAILS CLOSED, and that is a deliberate, stated change.
+  // It suppresses the ambient-session recovery, so the caller tid is absent, so
+  // no positive match is possible and this refuses. Under the old truthiness
+  // shape it fell THROUGH instead. Nothing regresses today — the guard's
+  // SKIP_ALLOWLIST is empty and adding an entry is already a security review —
+  // and the new reading is the consistent one: "I have no caller tenant" cannot
+  // also mean "grant as if I did". See {@link WorkspaceAccessOpts}.
   const callerTid = await effectiveCallerTid(oid, opts);
-  if (callerTid && wsDoc.tid && wsDoc.tid !== callerTid) return null;
+  if (!sameTenantConfirmed(callerTid, wsDoc.tid)) {
+    // A refusal, not an absence — and the two causes are NOT the same event.
+    // `tenantUnconfirmedCause` is non-null ONLY for `unconfirmed`; a positively
+    // measured DIFFERENT tenant returns null here and is reported by the caller
+    // in its own words, never by leaking which other tenant owns the record.
+    // No operator is written on either side: the discrimination is a CALL into
+    // the shared module, so this cannot drift from the verdict above it.
+    //
+    // THE DIAGNOSTIC IS SCOPED TO TENANT ADMINS, AND THAT IS A DISCLOSURE
+    // BOUNDARY, NOT A STYLE CHOICE. `tenant_unconfirmed` is a statement that a
+    // workspace with this id EXISTS and is unstamped; to a caller with no claim
+    // on it that is an existence oracle over a caller-supplied id. Step 6 has
+    // always recorded its denial only on the admin path for this reason, and
+    // `bulk-delete/__tests__/bulk-delete-tenant-boundary.test.ts` ("never leaks
+    // tenant_unconfirmed to a NON-admin") pins it. An earlier draft of this
+    // change recorded the denial for EVERY caller and that spec failed it —
+    // a real regression, caught by an existing test rather than by review.
+    // Everyone else gets a silent `null`, which the routes render as 404.
+    // The operator still sees the cause: the server-side warn is unconditional.
+    const cause = tenantUnconfirmedCause(callerTid, wsDoc.tid);
+    if (cause) {
+      const denial = tenantUnconfirmedDenial(workspaceId, callerTid, wsDoc.tid);
+      if (diag && opts.tenantAdmin) diag.denial = denial;
+      console.warn(
+        '[workspace-access] access REFUSED at the tid boundary — workspace tenancy unconfirmed (#3840).',
+        {
+          workspaceId: logSafe(workspaceId),
+          callerTidPresent: Boolean(callerTid),
+          workspaceTidPresent: Boolean(wsDoc.tid),
+          tenantAdmin: Boolean(opts.tenantAdmin),
+          remediation: denial.remediation,
+        },
+      );
+    }
+    return null;
+  }
 
   // 5) ACL — highest workspace role via direct + (nested) group membership.
   const role = await resolveEffectiveRole(oid, workspaceId, { userGroupIds: opts.groups });
@@ -354,6 +444,17 @@ export async function resolveWorkspaceAccessByOid(
   // `tid`, and a pre-rel-T11 session (or PAT) with no `tid` claim. Both are
   // reachable today. The admin bypass therefore fires ONLY when Loom can show
   // the workspace is in the admin's OWN tenant.
+  // #3840 — SINCE STEP 4 NOW REQUIRES A POSITIVE MATCH, THIS CHECK IS REDUNDANT
+  // BY CONSTRUCTION: reaching this line already means `sameTenantConfirmed` was
+  // true, so the condition below cannot be false and the refusal branch under it
+  // is currently unreachable. It is KEPT, deliberately, as a fail-closed
+  // backstop — this is the single grant in the resolver that manufactures
+  // `role:'Admin', canWrite:true` out of a flag rather than out of a stored
+  // grant, and #3823 is what it looks like when the only thing in front of it
+  // stops deciding. If step 4 is ever loosened again, this line is what keeps
+  // the admin bypass shut, and its `else` becomes live again rather than the
+  // bypass becoming silent. Retained also because it is pinned by expression
+  // text in `scripts/ci/check-tid-boundary-chokepoint.mjs`.
   if (opts.tenantAdmin) {
     if (callerTid && wsDoc.tid && wsDoc.tid === callerTid) {
       return { workspace: wsDoc, role: 'Admin', via: 'admin', canWrite: true };
@@ -487,7 +588,19 @@ export async function listAccessibleWorkspaces(
   for (const id of sharedIds) {
     const doc = await readWorkspaceById(id);
     if (!doc) continue;
-    if (callerTid && doc.tid && doc.tid !== callerTid) continue; // tid boundary
+    // #3885 — THE SAME POSITIVE MATCH AS STEP 4, and for the same reason. This
+    // was the LAST executable copy of the truthiness-guarded shape in the
+    // console (`callerTid && doc.tid && doc.tid !== callerTid`), and it is the
+    // worst-behaved of the family: the resolver's copy narrowed a decision, but
+    // this one FILTERS A SET, so a tid-less caller was not handed a wider
+    // answer — they were handed NO FILTERING AT ALL, i.e. every workspace any
+    // `workspace-roles` row named them on, across every tenant. It fed
+    // `app/api/items/by-type`, `app/api/workspaces`, `running-workloads` and
+    // `lib/catalog-search.ts`. It sat in the chokepoint guard's NON_AUTHORIZERS
+    // with a reason that is TRUE about this function not being an authorizer
+    // and SILENT about whether its filter is sound — the exemption reason that
+    // is true of a sibling property, which is why nothing flagged it.
+    if (!sameTenantConfirmed(callerTid, doc.tid)) continue; // tid boundary
     shared.push(doc);
   }
   return [...owned, ...shared];
