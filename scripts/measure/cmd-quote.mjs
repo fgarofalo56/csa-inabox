@@ -31,6 +31,19 @@ export class CmdQuoteError extends Error {
  * reliable command-line escape (`%%` only works in a batch file). Running a
  * command different from the one requested is the exact class of silent
  * wrongness this directory exists to prevent, so this fails closed.
+ *
+ * Refuses CR and LF for the identical reason, measured rather than assumed. A
+ * newline TERMINATES the cmd.exe command line: everything after it -- including
+ * every subsequent argument -- is silently dropped, and the process still exits
+ * 0. Sending `["resources\n| where type =~ 'x'", "NEXT"]` had the child receive
+ * exactly `["resources"]`. A multi-line KQL query passed to `az graph query -q`
+ * would therefore run a SHORTER, DIFFERENT query and return a confident wrong
+ * answer. (A bare CR is worse in a quieter way: `a\rb` arrives as `ab`.)
+ *
+ * To be precise about the risk: this is not command injection. The truncated
+ * remainder is discarded, never executed -- `& echo INJECTED` and friends all
+ * stay literal. It is a FIDELITY failure, which for a measurement harness is
+ * the more dangerous of the two.
  */
 export function quoteForCmd(arg) {
   const s = String(arg);
@@ -41,11 +54,27 @@ export function quoteForCmd(arg) {
       { arg: s },
     );
   }
+  if (/[\r\n]/.test(s)) {
+    throw new CmdQuoteError(
+      'argument contains a newline, which TERMINATES a cmd.exe command line: everything ' +
+      `after it (including later arguments) is dropped and the call still exits 0: ${s.slice(0, 60)}. ` +
+      'Refusing rather than running a truncated command and reporting its result.',
+      { arg: s },
+    );
+  }
   if (s === '') return '""';
   // Inside double quotes everything is literal except % (refused above) and ",
   // which cmd takes as doubled. Outside quotes these metacharacters are live,
   // so their presence is what triggers quoting.
-  return /[\s"^&|<>()]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+  if (!/[\s"^&|<>()]/.test(s)) return s;
+  // Trailing backslashes must be DOUBLED before the closing quote. CommandLineToArgvW
+  // reads `\"` as an escaped literal quote, so `C:\my dir\` would emit
+  // `"C:\my dir\"` -- the closing quote is consumed, quoting never ends, and the
+  // following arguments are spliced into this one. Measured: `["C:\my dir\",
+  // "--query", "SECRET"]` arrived as the single token `C:\my dir" --query SECRET`.
+  // Node's own windowsQuoteArg does this; the hand-rolled version did not.
+  const escaped = s.replace(/"/g, '""').replace(/(\\+)$/, '$1$1');
+  return `"${escaped}"`;
 }
 
 /** Join a resolved binary and its arguments into one quoted cmd.exe line. */

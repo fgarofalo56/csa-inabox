@@ -46,11 +46,23 @@ for (const pr of targets) {
     console.log(`${pr.padStart(6)}  ${String(view.mergeable).padEnd(13)} CHECKS-UNKNOWN: ${String(e.message).slice(0, 46)}`);
     continue;
   }
-  const ok = view.mergeable === 'MERGEABLE' && runs.red === 0 && runs.pending === 0 && !closes;
+  // `cancelled` is deliberately its own column in checkRuns because it is
+  // UNKNOWN, not a verdict -- and a readiness gate that ignores it reads
+  // [cancelled, cancelled, success] as red=0 pending=0 and prints READY, when in
+  // fact two checks produced no answer at all. It must block, not be re-run
+  // silently and not be counted as a failure. `state === 'CLEAN'` is the same
+  // requirement the drain loop uses: GitHub's own verdict on branch protection.
+  const ok = view.mergeable === 'MERGEABLE'
+    && view.mergeStateStatus === 'CLEAN'
+    && runs.red === 0
+    && runs.pending === 0
+    && runs.cancelled === 0
+    && !closes;
   if (ok) ready.push(pr);
   console.log(
     `${pr.padStart(6)}  ${String(view.mergeable).padEnd(13)} ` +
     `${`${runs.total}/${runs.red}/${runs.pending}`.padEnd(12)} ` +
+    `${runs.cancelled ? `cx=${runs.cancelled} ` : ''}${String(view.mergeStateStatus)} ` +
     `[${closes}] ${ok ? '<< READY' : ''}`,
   );
 }

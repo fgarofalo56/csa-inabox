@@ -13,6 +13,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   run, runJson, metricTotal, checkRuns, measureWithControl,
+  parseMetricSeries, parseCheckRuns, parseHollowness, canonicalBinary,
   UNKNOWN, MeasurementError, SELF_NODE,
 } from './measure.mjs';
 
@@ -91,8 +92,13 @@ test('BYPASS: a path whose BASENAME is allowlisted is REFUSED', () => {
   //
   // Validating a PROJECTION of the input and then using the ORIGINAL is the
   // shape; the fix is that nothing derived from `bin` can become the executable.
+  //
+  // NB: the first fixture deliberately does NOT live under /tmp. It is never
+  // written -- it is asserted to be REFUSED -- but check-temp-artifact-safety
+  // matches the literal, not the intent, and a required check does not care
+  // that a string is only ever an argument to assert.throws().
   for (const evil of [
-    '/tmp/evil/gh.cmd',
+    '/opt/evil/gh.cmd',
     'C:\\evil\\gh.cmd',
     './az',
     '../../node',
@@ -118,6 +124,22 @@ test('BYPASS: the rejection reason is "it is a path", not "it does not exist"', 
     (e) => e instanceof MeasurementError && /paths are not accepted/.test(e.message),
     'an EXISTING path must be refused too, or the guard is just an existence check',
   );
+});
+
+test('TAINT: canonicalBinary returns the TABLE literal, never the caller string', () => {
+  // The headline invariant of the whole rewrite. Every other bypass test asserts
+  // that bad input is REFUSED -- none of them notices if an ACCEPTED input is
+  // passed straight through, because a refusal happens either way. So
+  // `return ALLOWED_BINARIES[key]` could become `return bin` and the entire
+  // suite stayed green. That is the one line the security fix exists to protect.
+  //
+  // Identity is not enough here: 'gh' === 'gh' whichever branch runs. The test
+  // has to use an input that DIFFERS from its canonical form, so the only way to
+  // pass is to have actually gone through the table.
+  assert.equal(canonicalBinary('GH'), 'gh');
+  assert.equal(canonicalBinary('Az'), 'az');
+  assert.equal(canonicalBinary('GIT'), 'git');
+  assert.notEqual(canonicalBinary('GH'), 'GH', 'the caller string must not survive');
 });
 
 test('BYPASS: inherited Object properties are not allowlist entries', () => {
@@ -226,6 +248,11 @@ test('R5: a non-zero subject still passes through', () => {
 });
 
 // ---------------------------------------------------------------- metricTotal
+// These exercise `parseMetricSeries` -- the REAL parsing half of metricTotal,
+// exported for exactly this reason. An earlier version of this file carried a
+// local copy instead, and the copy drifted: it read `p?.total` only, so the
+// aggregation branch below had never once been executed. A test asserting
+// against its own reimplementation tests the reimplementation.
 test('metricTotal: no series / no timeseries / no datapoints => UNKNOWN, never 0', () => {
   // Shapes an az metrics response takes when the query effectively found nothing.
   const shapes = [
@@ -236,56 +263,130 @@ test('metricTotal: no series / no timeseries / no datapoints => UNKNOWN, never 0
     { value: [{ timeseries: [{ data: [{ total: null }] }] }] },
   ];
   for (const s of shapes) {
-    const got = pickMetric(s);
+    const got = parseMetricSeries(s);
     assert.equal(got, UNKNOWN, `shape ${JSON.stringify(s)} must be UNKNOWN`);
   }
 });
 
 test('metricTotal POSITIVE CONTROL: a real datapoint sums (the parser works)', () => {
-  const got = pickMetric({ value: [{ timeseries: [{ data: [{ total: 2000 }, { total: 766 }] }] }] });
+  const got = parseMetricSeries({ value: [{ timeseries: [{ data: [{ total: 2000 }, { total: 766 }] }] }] });
   assert.equal(got, 2766);
 });
 
-// Pure re-implementation of metricTotal's parsing half, so the shape logic is
-// testable without spawning az. Kept byte-aligned with measure.mjs on purpose;
-// if they drift, the two POSITIVE CONTROLS above are what catch it.
-function pickMetric(d) {
-  const series = d?.value;
-  if (!Array.isArray(series) || series.length === 0) return UNKNOWN;
-  const ts = series[0]?.timeseries;
-  if (!Array.isArray(ts) || ts.length === 0) return UNKNOWN;
-  const pts = ts[0]?.data;
-  if (!Array.isArray(pts) || pts.length === 0) return UNKNOWN;
-  const have = pts.map((p) => p?.total).filter((v) => v !== null && v !== undefined);
-  if (have.length === 0) return UNKNOWN;
-  return have.reduce((a, b) => a + Number(b), 0);
-}
+test('metricTotal: a NON-Total aggregation reads its own key (the drifted branch)', () => {
+  // The copy this replaced returned UNKNOWN here, because it only ever looked
+  // at `p.total`. Production keys off the aggregation name. Every caller that
+  // passes aggregation:'Average' was reading UNKNOWN-vs-42 untested.
+  const d = { value: [{ timeseries: [{ data: [{ average: 12 }, { average: 30 }] }] }] };
+  assert.equal(parseMetricSeries(d, 'Average'), 42);
+  // ...and with the default aggregation the same payload has no `total` key,
+  // so it is honestly UNKNOWN rather than silently 0.
+  assert.equal(parseMetricSeries(d), UNKNOWN);
+});
+
+test('metricTotal: `total` remains the fallback when the aggregation key is absent', () => {
+  const d = { value: [{ timeseries: [{ data: [{ total: 7 }] }] }] };
+  assert.equal(parseMetricSeries(d, 'Maximum'), 7);
+});
 
 // ---------------------------------------------------------------- checkRuns
+// Against the REAL `parseCheckRuns`. The copy this replaced folded `cancelled`
+// INTO `red` -- asserting the opposite convention from the code it covered --
+// and had no truncation refusal at all, which is the important one.
 test('checkRuns: zero runs THROWS instead of reporting 0/0/0', () => {
   // The twenty-PR incident: a 403 produced 0/0/0 across the board.
-  assert.throws(() => parseRuns({ check_runs: [] }), /ZERO runs/);
-  assert.throws(() => parseRuns({}), /no check_runs array/);
+  assert.throws(() => parseCheckRuns([{ check_runs: [] }]), /ZERO runs/);
+  assert.throws(() => parseCheckRuns([{}]), /no check_runs array/);
 });
 
 test('checkRuns POSITIVE CONTROL: real runs are counted correctly', () => {
-  const r = parseRuns({
+  const r = parseCheckRuns([{
     check_runs: [
       { status: 'completed', conclusion: 'success' },
       { status: 'completed', conclusion: 'failure' },
       { status: 'in_progress', conclusion: null },
     ],
-  });
-  assert.deepEqual(r, { total: 3, red: 1, pending: 1 });
+  }]);
+  assert.equal(r.total, 3);
+  assert.equal(r.red, 1);
+  assert.equal(r.pending, 1);
 });
 
-function parseRuns(d) {
-  const runs = d?.check_runs;
-  if (!Array.isArray(runs)) throw new MeasurementError('check-runs response has no check_runs array — UNKNOWN, not zero');
-  if (runs.length === 0) throw new MeasurementError('check-runs returned ZERO runs.');
-  return {
-    total: runs.length,
-    red: runs.filter((r) => ['failure', 'timed_out', 'cancelled'].includes(r.conclusion)).length,
-    pending: runs.filter((r) => r.status !== 'completed').length,
-  };
-}
+test('checkRuns: `cancelled` is its OWN count, never folded into red', () => {
+  // cancelled == UNKNOWN, not a failure. Folding it into `red` makes a re-runnable
+  // check look like a real failure; ignoring it entirely (drain-status did this)
+  // makes an all-cancelled PR read as READY. It needs its own column.
+  const r = parseCheckRuns([{
+    check_runs: [
+      { status: 'completed', conclusion: 'cancelled' },
+      { status: 'completed', conclusion: 'cancelled' },
+      { status: 'completed', conclusion: 'success' },
+    ],
+  }]);
+  assert.equal(r.red, 0, 'cancelled must NOT count as red');
+  assert.equal(r.cancelled, 2);
+  assert.equal(r.pending, 0);
+});
+
+test('checkRuns: a SHORT read against a declared total is REFUSED, not reported', () => {
+  // The saturated-page incident: 100 of 137 fetched, and the missing vitest
+  // check on page 2 read as "no vitest check on this SHA".
+  assert.throws(
+    () => parseCheckRuns([{ total_count: 137, check_runs: [{ status: 'completed', conclusion: 'success' }] }]),
+    /TRUNCATED: fetched 1 of 137/,
+  );
+});
+
+test('checkRuns POSITIVE CONTROL: a COMPLETE multi-page read is accepted', () => {
+  // Proves the truncation guard is not simply refusing everything.
+  const page = (n, c) => ({ total_count: 3, check_runs: Array.from({ length: n }, () => ({ status: 'completed', conclusion: c })) });
+  const r = parseCheckRuns([page(2, 'success'), page(1, 'failure')]);
+  assert.equal(r.total, 3);
+  assert.equal(r.red, 1);
+  assert.equal(r.declaredTotal, 3);
+});
+
+test('checkRuns: a page with no array THROWS even when earlier pages were fine', () => {
+  assert.throws(
+    () => parseCheckRuns([{ total_count: 5, check_runs: [{ status: 'completed', conclusion: 'success' }] }, { message: 'Not Found' }]),
+    /no check_runs array/,
+  );
+});
+
+// ------------------------------------------------------------ hollowness
+test('hollowness: a green job whose every substantive step SKIPPED is hollow', () => {
+  // The live case: `vitest (node 20)` reported success with "Run vitest" skipped,
+  // because the diff touched no console files. Branch protection accepted it.
+  const r = parseHollowness({
+    conclusion: 'success',
+    steps: [
+      { name: 'Set up job', conclusion: 'success' },
+      { name: 'Run actions/checkout@v4', conclusion: 'success' },
+      { name: 'Install deps', conclusion: 'skipped' },
+      { name: 'Run vitest', conclusion: 'skipped' },
+      { name: 'Complete job', conclusion: 'success' },
+    ],
+  });
+  assert.equal(r.hollow, true);
+  assert.equal(r.ran, 0);
+  assert.equal(r.skipped, 2);
+});
+
+test('hollowness POSITIVE CONTROL: a job that actually ran is NOT hollow', () => {
+  // Without this, `hollow: false` would satisfy the test above's sibling and the
+  // whole check could be hard-wired to one answer.
+  const r = parseHollowness({
+    conclusion: 'success',
+    steps: [
+      { name: 'Set up job', conclusion: 'success' },
+      { name: 'Run vitest', conclusion: 'success' },
+    ],
+  });
+  assert.equal(r.hollow, false);
+  assert.equal(r.ran, 1);
+});
+
+test('hollowness: a job with NO steps is UNKNOWN — it throws rather than guessing', () => {
+  assert.throws(() => parseHollowness({ conclusion: 'success', steps: [] }), /no steps/);
+  assert.throws(() => parseHollowness({}), /no steps/);
+});

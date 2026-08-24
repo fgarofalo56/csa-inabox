@@ -110,7 +110,7 @@ const ALLOWED_NAMES = Object.keys(ALLOWED_BINARIES).sort().join(', ');
  * null-prototype table also means `'constructor'` and `'__proto__'` are refused
  * like any other unknown name instead of inheriting a truthy hit.
  */
-function canonicalBinary(bin) {
+export function canonicalBinary(bin) {
   if (typeof bin !== 'string') {
     throw new MeasurementError(`binary must be a bare allowed name (allowed: ${ALLOWED_NAMES})`, { bin: String(bin) });
   }
@@ -337,12 +337,21 @@ export function measureWithControl({ label, subject, control, controlLabel = 'co
 }
 
 /**
- * Sum an Azure Monitor metric. Returns UNKNOWN (never 0) when there is no
- * series / no timeseries / no datapoint carrying a value (R4).
+ * The parsing half of `metricTotal`, split out so it is testable WITHOUT
+ * spawning `az`.
+ *
+ * This used to be duplicated as a copy inside measure.test.mjs, and the copy
+ * drifted: it read `p?.total` only, while this reads
+ * `p?.[aggregation.toLowerCase()] ?? p?.total`. The consequence was that the
+ * non-Total aggregation branch had never once been executed by a test --
+ * `{average:12},{average:30}` with aggregation 'Average' returns 42 here and
+ * returned UNKNOWN in the copy. A test that asserts against its own
+ * reimplementation is testing the reimplementation.
+ *
+ * Returns UNKNOWN (never 0) when there is no series / no timeseries / no
+ * datapoint carrying a value (R4).
  */
-export function metricTotal(resourceId, metric, startIso, { aggregation = 'Total', interval = 'P1D' } = {}) {
-  const d = az(['monitor', 'metrics', 'list', '--resource', resourceId, '--metric', metric,
-    '--aggregation', aggregation, '--interval', interval, '--start-time', startIso]);
+export function parseMetricSeries(d, aggregation = 'Total') {
   const series = d?.value;
   if (!Array.isArray(series) || series.length === 0) return UNKNOWN;
   const ts = series[0]?.timeseries;
@@ -352,6 +361,16 @@ export function metricTotal(resourceId, metric, startIso, { aggregation = 'Total
   const have = pts.map((p) => p?.[aggregation.toLowerCase()] ?? p?.total).filter((v) => v !== null && v !== undefined);
   if (have.length === 0) return UNKNOWN;
   return have.reduce((a, b) => a + Number(b), 0);
+}
+
+/**
+ * Sum an Azure Monitor metric. Returns UNKNOWN (never 0) when there is no
+ * series / no timeseries / no datapoint carrying a value (R4).
+ */
+export function metricTotal(resourceId, metric, startIso, { aggregation = 'Total', interval = 'P1D' } = {}) {
+  const d = az(['monitor', 'metrics', 'list', '--resource', resourceId, '--metric', metric,
+    '--aggregation', aggregation, '--interval', interval, '--start-time', startIso]);
+  return parseMetricSeries(d, aggregation);
 }
 
 /**
@@ -368,11 +387,10 @@ export function metricTotal(resourceId, metric, startIso, { aggregation = 'Total
  * reports the fact and leaves the judgement to the caller, which is the only
  * honest split.
  */
-export function checkRunHollowness(repo, jobId) {
-  const job = gh(['api', `repos/${repo}/actions/jobs/${jobId}`]);
+export function parseHollowness(job, ctx = {}) {
   const steps = job?.steps;
   if (!Array.isArray(steps) || steps.length === 0) {
-    throw new MeasurementError('job has no steps — UNKNOWN, not hollow and not sound', { repo, jobId });
+    throw new MeasurementError('job has no steps — UNKNOWN, not hollow and not sound', ctx);
   }
   // Setup/teardown steps are noise; they run even when everything real is skipped.
   const NOISE = /^(Set up job|Complete job|Post |Run actions\/checkout|Checkout)/i;
@@ -388,36 +406,41 @@ export function checkRunHollowness(repo, jobId) {
   };
 }
 
+export function checkRunHollowness(repo, jobId) {
+  return parseHollowness(gh(['api', `repos/${repo}/actions/jobs/${jobId}`]), { repo, jobId });
+}
+
 /** Extract the job id from a check-run's details_url, or null. */
 export function jobIdFromUrl(url) {
   const m = String(url || '').match(/\/job\/(\d+)/);
   return m ? m[1] : null;
 }
 /**
- * Check-run counts for a commit. Throws on 403/404 rather than yielding 0/0/0,
- * and PAGINATES — a `per_page=100` read that returns exactly 100 is SATURATED,
- * not complete. Reading a truncated page as the whole set produced a confident
- * "no vitest check on this SHA" for a commit that had one on page 2.
+ * The parsing half of `checkRuns`, split out so every refusal is testable
+ * WITHOUT hitting the API. Takes the raw page responses in fetch order.
+ *
+ * This was previously duplicated in measure.test.mjs, and that copy folded
+ * `cancelled` INTO `red` while this keeps them separate -- so the test asserted
+ * the opposite convention from the code it claimed to cover. It also had no
+ * truncation refusal at all, which is the single most important thing here.
  */
-export function checkRuns(repo, sha) {
+export function parseCheckRuns(pages, ctx = {}) {
   const all = [];
   let total = null;
-  for (let page = 1; page <= 20; page++) {
-    const d = gh(['api', `repos/${repo}/commits/${sha}/check-runs?per_page=100&page=${page}`]);
-    const runs = d?.check_runs;
+  for (let i = 0; i < pages.length; i++) {
+    const runs = pages[i]?.check_runs;
     if (!Array.isArray(runs)) {
-      throw new MeasurementError('check-runs response has no check_runs array — UNKNOWN, not zero', { repo, sha, page });
+      throw new MeasurementError('check-runs response has no check_runs array — UNKNOWN, not zero', { ...ctx, page: i + 1 });
     }
-    if (total === null) total = d.total_count;
+    if (total === null && pages[i].total_count !== undefined) total = pages[i].total_count;
     all.push(...runs);
-    if (runs.length < 100 || all.length >= (total ?? Infinity)) break;
   }
 
   if (all.length === 0) {
     throw new MeasurementError(
       'check-runs returned ZERO runs. A PR with no checks is possible but rare; ' +
       'far more often this is a 403 or a wrong SHA. Verify before treating it as a verdict.',
-      { repo, sha },
+      ctx,
     );
   }
   // A short read against a known total is a partial answer, not a verdict.
@@ -425,7 +448,7 @@ export function checkRuns(repo, sha) {
     throw new MeasurementError(
       `check-runs TRUNCATED: fetched ${all.length} of ${total}. Refusing to report counts ` +
       'from a partial page — that is how a missing check reads as an absent one.',
-      { repo, sha, fetched: all.length, total },
+      { ...ctx, fetched: all.length, total },
     );
   }
 
@@ -437,4 +460,26 @@ export function checkRuns(repo, sha) {
     pending: all.filter((r) => r.status !== 'completed').length,
     runs: all,
   };
+}
+
+/**
+ * Check-run counts for a commit. Throws on 403/404 rather than yielding 0/0/0,
+ * and PAGINATES — a `per_page=100` read that returns exactly 100 is SATURATED,
+ * not complete. Reading a truncated page as the whole set produced a confident
+ * "no vitest check on this SHA" for a commit that had one on page 2.
+ */
+export function checkRuns(repo, sha) {
+  const pages = [];
+  let fetched = 0;
+  let total = null;
+  for (let page = 1; page <= 20; page++) {
+    const d = gh(['api', `repos/${repo}/commits/${sha}/check-runs?per_page=100&page=${page}`]);
+    pages.push(d);
+    const runs = Array.isArray(d?.check_runs) ? d.check_runs : null;
+    if (runs === null) break;                       // parseCheckRuns raises on this
+    if (total === null && d.total_count !== undefined) total = d.total_count;
+    fetched += runs.length;
+    if (runs.length < 100 || fetched >= (total ?? Infinity)) break;
+  }
+  return parseCheckRuns(pages, { repo, sha });
 }

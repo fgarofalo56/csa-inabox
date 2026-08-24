@@ -108,11 +108,27 @@ const RULES = [
       // script that ALSO ran `gh pr list` on a later line was denied, because
       // the binary test looked at the entire string. The redirect belonged to
       // `ps`, which is not a measurement.
+      //
+      // Matched by SHAPE -- stderr going somewhere unreadable -- not by one
+      // spelling. An earlier version tested `2>/dev/null` alone, so `&>/dev/null`
+      // (which discards BOTH streams and is strictly worse), the canonical
+      // `>/dev/null 2>&1`, `2>>/dev/null`, and `2>&-` all sailed through. A guard
+      // keyed to a spelling is one keystroke from useless.
       const MEASUREMENT = /\b(az|gh|kubectl|terraform|curl)\b/;
+      // ORDER MATTERS. `>/dev/null 2>&1` also matches the plain-stdout branch at
+      // the same start position, and alternation is leftmost-first -- so if the
+      // plain form came first this would be classified stdout-only and skipped.
+      // The combined form has to be tried before its own prefix.
+      const DISCARD = /(?:>\s*\/dev\/null\s+2>\s*&\s*1|2>\s*&\s*-|\d*&?>>?\s*\/dev\/null|&>>?\s*\/dev\/null)/;
       for (const line of raw.split(/\r?\n/)) {
-        if (!/2>\s*\/dev\/null/.test(line)) continue;
+        const idx = line.search(DISCARD);
+        if (idx < 0) continue;
+        // A plain `>/dev/null` discards only stdout, which is often deliberate
+        // and harmless. It is a finding only when stderr goes with it.
+        const matched = line.slice(idx).match(DISCARD)?.[0] ?? '';
+        const stdoutOnly = /^>>?\s*\/dev\/null$/.test(matched.trim());
+        if (stdoutOnly) continue;
         // Within the line, look only at the command segment that owns the redirect.
-        const idx = line.search(/2>\s*\/dev\/null/);
         const before = line.slice(0, idx);
         const segment = before.split(/[;&|]{1,2}/).pop() || before;
         if (MEASUREMENT.test(segment)) return line.trim().slice(0, 90);
@@ -120,7 +136,7 @@ const RULES = [
       return null;
     },
     message: (hit) =>
-      `\`2>/dev/null\` on a measurement discards the reason it failed.\n` +
+      `discarding stderr on a measurement throws away the reason it failed.\n` +
       `  offending: ${hit}\n` +
       `  FIX: send stderr to a file and read it on failure:  cmd > out 2>err ; RC=$?\n` +
       `  Precedent: a discarded stderr turned "I could not reach the registry" into\n` +
@@ -130,17 +146,21 @@ const RULES = [
 
 import { readFileSync } from 'node:fs';
 
+/**
+ * Read the hook payload from fd 0.
+ *
+ * Returns `{ raw, readFailed }` rather than a bare string, because the two
+ * empty cases are NOT the same and the caller has to tell them apart. An
+ * earlier version returned '' for both and the caller could not distinguish
+ * "no payload" from "could not read the payload"; it allowed either way, while
+ * a comment claimed the fail-open had been fixed. It had not.
+ */
 function readStdin() {
-  // fd 0, read whole. NOTE: `require()` is unavailable in an ESM module — an
-  // earlier version used it, threw, and the catch below silently returned ''.
-  // The hook then saw no command and ALLOWED everything: a guard that fails
-  // open is the exact defect this file exists to prevent, so the failure is
-  // reported rather than swallowed.
   try {
-    return readFileSync(0, 'utf8');
+    return { raw: readFileSync(0, 'utf8'), readFailed: false };
   } catch (e) {
     process.stderr.write(`measurement-guard: could not read stdin: ${e.message}\n`);
-    return '';
+    return { raw: '', readFailed: true };
   }
 }
 
@@ -148,7 +168,22 @@ export function evaluate(command) {
   const findings = [];
   for (const rule of RULES) {
     let hit = null;
-    try { hit = rule.test(command); } catch { hit = null; }
+    try {
+      hit = rule.test(command);
+    } catch (e) {
+      // A rule that CRASHES has not passed -- it produced no verdict. Reporting
+      // it as a finding is the only honest option: swallowing the throw makes a
+      // broken rule indistinguishable from a satisfied one, which is precisely
+      // the "gate that cannot fail" shape this file exists to prevent.
+      findings.push({
+        id: `${rule.id}-ERRORED`,
+        message:
+          `the '${rule.id}' rule threw while evaluating this command: ${e.message}\n` +
+          `  This is NOT a pass. The rule produced no verdict, so the command is\n` +
+          `  refused rather than allowed on an unevaluated guard. Fix the rule.`,
+      });
+      continue;
+    }
     if (hit) findings.push({ id: rule.id, message: rule.message(hit) });
   }
   return findings;
@@ -156,11 +191,40 @@ export function evaluate(command) {
 
 // CLI / hook mode (skipped when imported by the self-test)
 if (import.meta.url === `file://${process.argv[1]?.replace(/\\/g, '/')}` || process.argv[2] === '--hook') {
-  const raw = readStdin();
-  let payload = {};
-  try { payload = JSON.parse(raw || '{}'); } catch { payload = {}; }
+  const { raw, readFailed } = readStdin();
+
+  let findings;
+  if (readFailed) {
+    // No payload reached us, so there is no command to judge. Denying here would
+    // block every Bash call on a harness fault, which is worse than the guard
+    // being absent -- so this allows, but says so on stderr where it is visible.
+    // Stated plainly because the previous version claimed otherwise: THIS PATH
+    // FAILS OPEN, deliberately, and it is the only one that does.
+    process.stderr.write('measurement-guard: no payload readable — ALLOWING unjudged\n');
+    process.exit(0);
+  }
+
+  let payload = null;
+  try {
+    payload = JSON.parse(raw || '{}');
+  } catch (e) {
+    // Input arrived but is malformed. That is an anomaly, not an empty case, and
+    // guessing `{}` turns it into a silent allow. Refuse.
+    process.stdout.write(JSON.stringify({
+      hookSpecificOutput: {
+        hookEventName: 'PreToolUse',
+        permissionDecision: 'deny',
+        permissionDecisionReason:
+          `measurement-guard received an unparseable payload (${e.message}).\n` +
+          `Refusing rather than allowing a command it could not read. This is a\n` +
+          `harness fault, not a problem with your command — re-run it.`,
+      },
+    }));
+    process.exit(0);
+  }
+
   const command = payload?.tool_input?.command ?? '';
-  const findings = command ? evaluate(command) : [];
+  findings = command ? evaluate(command) : [];
 
   if (findings.length === 0) {
     process.exit(0); // allow

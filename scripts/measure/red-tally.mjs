@@ -7,7 +7,7 @@
  * verdict. Flattening the two makes a docs-only PR look broken when its check
  * was merely pre-empted, and sends you hunting a defect that does not exist.
  */
-import { gh } from './measure.mjs';
+import { gh, checkRuns } from './measure.mjs';
 
 const REPO = 'fgarofalo56/csa-inabox';
 const sleep = (ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
@@ -18,8 +18,12 @@ for (const pr of process.argv.slice(2)) {
   sleep(1200);
   try {
     const v = gh(['pr', 'view', pr, '--json', 'headRefOid']);
-    const d = gh(['api', `repos/${REPO}/commits/${v.headRefOid}/check-runs?per_page=100`]);
-    const runs = d.check_runs || [];
+    // Via checkRuns, NOT a raw single-page read. This file previously did its own
+    // `per_page=100` fetch with `d.check_runs || []`, which is both of the things
+    // this directory exists to prevent, in one line: an unpaginated read reports a
+    // saturated page as the whole set, and `|| []` turns a missing array into a
+    // confident `FAILED=0 CANCELLED=0`. checkRuns refuses both.
+    const runs = checkRuns(REPO, v.headRefOid).runs;
     const failed = runs.filter((r) => ['failure', 'timed_out'].includes(r.conclusion)).map((r) => r.name);
     const cancelled = runs.filter((r) => r.conclusion === 'cancelled').map((r) => r.name);
     console.log(

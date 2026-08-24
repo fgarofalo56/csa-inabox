@@ -60,3 +60,51 @@ test('needsCmdWrapper: only a batch shim is wrapped', () => {
   // A .cmd name on a non-Windows platform is just a file, not a shim.
   assert.equal(needsCmdWrapper('/usr/bin/az.cmd', 'linux'), false);
 });
+
+// --------------------------------------------------- argument FIDELITY
+// Both of these were measured end-to-end against a real .cmd shim on PATH that
+// dumped its parsed argv. Neither is command injection -- every metacharacter
+// payload tried (`& echo`, `| echo`, `^&`, `>`, quote-breakout) stayed literal,
+// and a truncated remainder is DROPPED rather than executed. They are fidelity
+// failures, which in a measurement harness is the worse of the two: the call
+// succeeds, exits 0, and answers a different question than the one asked.
+
+test('quoteForCmd: a NEWLINE is REFUSED — it truncates the whole command line', () => {
+  // Measured: ["resources\n| where type =~ 'x'", "NEXT"] reached the child as
+  // exactly ["resources"], rc=0, no error. A multi-line KQL query would have
+  // silently run a shorter, different query and returned a confident answer.
+  assert.throws(
+    () => quoteForCmd("resources\n| where type =~ 'x'"),
+    (e) => e instanceof CmdQuoteError && /TERMINATES a cmd\.exe command line/.test(e.message),
+  );
+  assert.throws(() => quoteForCmd('a\r\nb'), (e) => e instanceof CmdQuoteError);
+  // A bare CR is quieter and just as wrong: measured, `a\rb` arrived as `ab`.
+  assert.throws(() => quoteForCmd('a\rb'), (e) => e instanceof CmdQuoteError);
+});
+
+test('quoteForCmd CONTROL: ordinary whitespace is still quoted, not refused', () => {
+  // Without this the newline guard could be widened to all whitespace and the
+  // suite would not notice -- tabs and spaces must keep working.
+  assert.equal(quoteForCmd('a b'), '"a b"');
+  assert.equal(quoteForCmd('a\tb'), '"a\tb"');
+});
+
+test('quoteForCmd: a TRAILING BACKSLASH is doubled so it cannot escape the closing quote', () => {
+  // CommandLineToArgvW reads `\"` as an escaped literal quote. Measured before
+  // the fix: ["C:\my dir\", "--query", "SECRET"] arrived as the SINGLE token
+  // `C:\my dir" --query SECRET` -- the closing quote was consumed and the
+  // following arguments were spliced in. Node's own windowsQuoteArg doubles
+  // them; this did not.
+  assert.equal(quoteForCmd('C:\\my dir\\'), '"C:\\my dir\\\\"');
+  assert.equal(quoteForCmd('C:\\my dir\\\\'), '"C:\\my dir\\\\\\\\"');
+  // CONTROL: a backslash NOT at the end is untouched — doubling everywhere
+  // would corrupt every ordinary Windows path.
+  assert.equal(quoteForCmd('C:\\my dir\\file'), '"C:\\my dir\\file"');
+});
+
+test('buildCmdLine: a spliced trailing-backslash path cannot swallow later args', () => {
+  const line = buildCmdLine('az.cmd', ['C:\\my dir\\', '--query', 'value']);
+  // The argument boundary must survive: --query is its own token, not part of
+  // the path argument.
+  assert.ok(/"C:\\my dir\\\\" --query value$/.test(line), `boundary lost: ${line}`);
+});

@@ -11,6 +11,17 @@
  *   - NEVER merges with a real failure, anything pending, or a closing reference.
  *   - Treats `cancelled` as UNKNOWN and RE-RUNS it, rather than as a verdict.
  *   - Waits for `mergeable` to settle instead of reading UNKNOWN as "no".
+ *   - REQUIRES mergeStateStatus === 'CLEAN' and merges WITHOUT `--admin`.
+ *     This is the whole safety model, so it is worth stating why: `--admin`
+ *     bypasses branch protection, which means a loop using it has to re-derive
+ *     every protection rule by hand -- up-to-date-ness, required reviews, and
+ *     the PRESENCE of each required context. Getting any one of those wrong
+ *     merges something GitHub was refusing. An earlier version of this file got
+ *     all three wrong: it gated on "no red checks" alone, and a check that was
+ *     never created is neither red nor pending, so a missing required context
+ *     read as READY. `CLEAN` is GitHub's own answer to all of it, computed
+ *     server-side. Once it is CLEAN a plain merge succeeds, so `--admin` is not
+ *     merely unsafe here -- it is unnecessary.
  *   - AUDITS closed issues after every merge and HALTS on any unexpected change
  *     (the close parser is negation-blind: a close-keyword next to an issue
  *     number closes it even inside a sentence that means the opposite).
@@ -37,7 +48,7 @@ const log = (...a) => console.log(new Date().toISOString().slice(11, 19), ...a);
 
 function openPRs() {
   const prs = gh(['pr', 'list', '--state', 'open', '--limit', '60', '--json',
-    'number,title,mergeable,headRefOid,closingIssuesReferences,isDraft']);
+    'number,title,mergeable,mergeStateStatus,headRefOid,closingIssuesReferences,isDraft']);
   return prs.filter((p) => !p.isDraft);
 }
 
@@ -46,14 +57,24 @@ function closedIssues() {
     .map((i) => i.number).join(',');
 }
 
-/** Poll until GitHub finishes recomputing mergeability. UNKNOWN is not a verdict. */
+/**
+ * Poll until GitHub finishes recomputing mergeability. UNKNOWN is not a verdict.
+ *
+ * Returns BOTH fields. `mergeable` only answers "would this apply without a
+ * conflict"; `mergeStateStatus` is the one that knows about branch protection.
+ * A PR can sit at MERGEABLE + BLOCKED indefinitely -- that pair means "no
+ * conflicts, and GitHub is refusing anyway". Reading only the first is how the
+ * earlier version of this loop decided a blocked PR was ready.
+ */
 function settle(pr) {
   for (let i = 0; i < 8; i++) {
-    const v = gh(['pr', 'view', String(pr), '--json', 'mergeable']);
-    if (v.mergeable && v.mergeable !== 'UNKNOWN') return v.mergeable;
+    const v = gh(['pr', 'view', String(pr), '--json', 'mergeable,mergeStateStatus']);
+    if (v.mergeable && v.mergeable !== 'UNKNOWN' && v.mergeStateStatus && v.mergeStateStatus !== 'UNKNOWN') {
+      return { mergeable: v.mergeable, state: v.mergeStateStatus };
+    }
     sleep(15000);
   }
-  return 'UNKNOWN';
+  return { mergeable: 'UNKNOWN', state: 'UNKNOWN' };
 }
 
 let merged = 0, rerun = 0, halted = null;
@@ -112,9 +133,16 @@ for (let round = 1; round <= ROUNDS && !halted; round++) {
       continue;
     }
 
-    const m = settle(p.number);
-    if (m !== 'MERGEABLE') {
-      log(`  #${p.number} mergeable=${m} — skip`);
+    const { mergeable, state } = settle(p.number);
+    if (mergeable !== 'MERGEABLE') {
+      log(`  #${p.number} mergeable=${mergeable} — skip`);
+      continue;
+    }
+    // BLOCKED is the common one: required review missing, or a required context
+    // absent. BEHIND means not up to date with the base. Both are states an
+    // `--admin` merge would have steamrolled; neither is ours to override.
+    if (state !== 'CLEAN') {
+      log(`  #${p.number} mergeStateStatus=${state} (not CLEAN) — GitHub is refusing this; skip`);
       continue;
     }
 
@@ -128,11 +156,14 @@ for (let round = 1; round <= ROUNDS && !halted; round++) {
       }
     } catch { /* hollowness is advisory */ }
 
-    log(`  #${p.number} READY (${c.total} checks, 0 red, 0 pending) — ${APPLY ? 'MERGING' : 'would merge'}`);
+    log(`  #${p.number} READY (${c.total} checks, 0 red, 0 pending, state=CLEAN) — ${APPLY ? 'MERGING' : 'would merge'}`);
     if (!APPLY) { didSomething = true; continue; }
 
     try {
-      run('gh', ['pr', 'merge', String(p.number), '--squash', '--admin']);
+      // No `--admin`. CLEAN means branch protection is already satisfied, so a
+      // plain merge succeeds; if it does NOT succeed, that refusal is a signal
+      // worth surfacing rather than a flag worth adding.
+      run('gh', ['pr', 'merge', String(p.number), '--squash']);
       merged++; didSomething = true;
       sleep(10000);
       const now = closedIssues();

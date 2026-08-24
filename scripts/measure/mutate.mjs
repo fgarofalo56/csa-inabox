@@ -89,6 +89,67 @@ const ARMS = [
     find: `  return bin === SELF_NODE ? \`node (\${process.execPath})\` : String(bin);`,
     repl: `  return bin;`,
   },
+
+  // ---------------------------------------------------------------------------
+  // Arms below were added after an independent review measured that the six
+  // above ALL target run/runJson/measureWithControl/canonicalBinary -- so they
+  // proved those six things and nothing else. Fifteen independently-written arms
+  // were run against the suite as it then stood and ELEVEN survived: every
+  // fake-zero refusal in the two functions that actually talk to Azure and
+  // GitHub could be deleted with the suite still green. The cause was that the
+  // suite asserted against local re-implementations of those parsers rather than
+  // importing them, and the copies had already drifted from production in both
+  // directions. The parsers are now exported and these arms hold them shut.
+  // ---------------------------------------------------------------------------
+  {
+    // THE headline invariant of this whole module. The fix's entire claim is that
+    // the spawned string originates in the source file rather than the caller;
+    // returning `bin` puts the caller back in control of it. Not exploitable in
+    // isolation (the value must already lowercase to an allowlist key), but this
+    // is the one line the security rewrite exists to protect and nothing pinned it.
+    name: 'TAINT: canonicalBinary returns the CALLER string instead of the table literal',
+    find: `return ALLOWED_BINARIES[key];`,
+    repl: `return bin;`,
+  },
+  {
+    // The saturated-page incident in one line: 100 of 137 read as the whole set,
+    // and a vitest check on page 2 became "no vitest check on this SHA".
+    name: 'checkRuns TRUNCATION refusal removed (a partial page reported as the total)',
+    find: `if (total !== null && all.length < total) {`,
+    repl: `if (false) {`,
+  },
+  {
+    // The twenty-PR incident: a 403 yields an empty array, and 0/0/0 reads as
+    // "all green" on every PR at once.
+    name: 'checkRuns ZERO-runs refusal removed (a 403 becomes 0/0/0)',
+    find: `if (all.length === 0) {`,
+    repl: `if (false) {`,
+  },
+  {
+    // cancelled == UNKNOWN. Folding it into red makes a re-runnable check look
+    // like a hard failure; the inverse (drain-status ignoring it) made an
+    // all-cancelled PR read READY. It has to stay its own column.
+    name: 'checkRuns folds CANCELLED into red (an UNKNOWN reported as a failure)',
+    find: `red: all.filter((r) => ['failure', 'timed_out'].includes(r.conclusion)).length,`,
+    repl: `red: all.filter((r) => ['failure', 'timed_out', 'cancelled'].includes(r.conclusion)).length,`,
+  },
+  {
+    name: 'metricTotal: no series returns 0 instead of UNKNOWN (the fake zero)',
+    find: `if (!Array.isArray(series) || series.length === 0) return UNKNOWN;`,
+    repl: `if (!Array.isArray(series) || series.length === 0) return 0;`,
+  },
+  {
+    name: 'metricTotal: no datapoints returns 0 instead of UNKNOWN (the fake zero)',
+    find: `if (!Array.isArray(pts) || pts.length === 0) return UNKNOWN;`,
+    repl: `if (!Array.isArray(pts) || pts.length === 0) return 0;`,
+  },
+  {
+    // A hollow green is how a required check passes having executed nothing.
+    // Hard-wiring the verdict to false makes the detector unable to ever say so.
+    name: 'hollowness hard-wired to false (a green that ran nothing reads as sound)',
+    find: `hollow: substantive.length > 0 && ran.length === 0,`,
+    repl: `hollow: false,`,
+  },
 ];
 
 // Baseline MUST be green, or no arm below means anything.

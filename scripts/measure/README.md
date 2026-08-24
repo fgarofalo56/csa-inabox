@@ -73,11 +73,15 @@ enough that it shipped **broken**, and the tests did not catch it because they a
 | `shell:true` with args | Node **DEP0190**: args are concatenated, not escaped, so a value with a space silently changes the command |
 
 The working form is `cmd.exe /d /s /c` with a hand-quoted command line and
-`windowsVerbatimArguments`. `quoteForCmd` and `spawnPlan` are exported and unit-tested precisely
-so this path has coverage that does not depend on `az` being installed.
+`windowsVerbatimArguments`. The quoting lives in `cmd-quote.mjs` — a pure module with no
+process execution — so this path has coverage that does not depend on `az` being installed,
+or on running Windows at all. `spawnPlan` is deliberately **not** exported: exporting it made
+the parameter an external taint source and was itself a defect.
 
 ```bash
-node --test scripts/measure/measure.test.mjs scripts/measure/measurement-guard.test.mjs
+node --test scripts/measure/measure.test.mjs \
+             scripts/measure/cmd-quote.test.mjs \
+             scripts/measure/measurement-guard.test.mjs
 node scripts/measure/mutate.mjs      # every arm must report CAUGHT
 ```
 
@@ -88,26 +92,47 @@ that **denies** Bash commands carrying the three shapes above, naming the fix in
 denies rather than warns because the entire failure mode is that the wrong answer looks fine —
 a warning in a tool result is easy to skim past.
 
-Detection is deliberately narrow, and the suite's **negative** cases carry equal weight: a false
-denial is the pressure that gets a guard deleted.
+Note the scope: wiring it in `.claude/settings.json` means it runs on **every** Bash call for
+anyone who clones this repo, not only its author. That is intentional — the failure modes it
+catches are repo-wide — but it is an operational change, not a personal preference.
+
+Detection matches by **shape**, not by spelling. An earlier version tested the literal
+`2>/dev/null` and nothing else, so `&>/dev/null` (which discards both streams and is strictly
+worse), the canonical `>/dev/null 2>&1`, `2>>/dev/null`, and `2>&-` all passed. A guard keyed to
+one spelling is one keystroke from useless. The suite's **negative** cases carry equal weight —
+a plain `>/dev/null`, which silences stdout while leaving stderr readable, must stay allowed;
+a false denial is the pressure that gets a guard deleted.
 
 It earned its keep within two minutes of being wired: it blocked a `2>/dev/null` on a `gh api`
 call, and the un-discarded stderr then revealed an HTTP 403 that would otherwise have looked like
 an empty file.
 
-## Two things this module learned about itself
+## What this module learned about itself
 
-- Its own self-test **caught a real bug on first run** — `resolveExe` searched `PATH` and never
-  handled an absolute path, so a binary that plainly existed reported "could not resolve".
+- Its own self-test **caught a real bug on first run** — an early `resolveExe` searched `PATH`
+  and never handled an absolute path, so a binary that plainly existed reported "could not
+  resolve". That function no longer exists: the allowlist rewrite removed path handling
+  entirely, which is a better answer than fixing the resolution.
 - The hook's first version used `require()` inside an ESM module. It threw, a `catch` swallowed
   it, and the hook **silently allowed everything**. The unit tests passed, because they call
-  `evaluate()` directly; only an end-to-end run through the real stdin path caught it. A guard
-  that fails open is the exact defect this directory exists to prevent, so that path now reports
-  the failure instead of swallowing it.
+  `evaluate()` directly; only an end-to-end run through the real stdin path caught it.
+- **Fail-open is now split by case, and one case still fails open on purpose.** An unreadable
+  fd 0 means no command arrived, so there is nothing to judge — that path allows, and says so
+  loudly on stderr, because denying every Bash call on a harness fault is worse than the guard
+  being absent. A payload that arrives but does not parse is a different thing: that is an
+  anomaly, and it now **denies**. A rule that throws mid-evaluation also denies — a crashing
+  rule produced no verdict, and treating that as a pass is the gate-that-cannot-fail shape.
+- **Six of its arms proved six things and nothing else.** An independent review wrote fifteen
+  fresh mutation arms and eleven survived: every fake-zero refusal in `checkRuns` and
+  `metricTotal` could be deleted with the suite still green, because the tests asserted against
+  local *re-implementations* of those parsers rather than importing them — and the copies had
+  already drifted from production in both directions. The parsers are now exported
+  (`parseMetricSeries`, `parseCheckRuns`, `parseHollowness`, `canonicalBinary`) and tested
+  directly, with arms holding each one shut.
 
 ## Discovery
 
-Both suites are named `*.test.mjs` and live under `scripts/` so that
+All three suites are named `*.test.mjs` and live under `scripts/` so that
 `scripts/ci/check-node-test-suites.mjs` — the tree-wide `node:test` discovery that runs inside the
 **required** `guardrails` check — actually executes them.
 

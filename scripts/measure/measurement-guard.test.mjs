@@ -120,6 +120,52 @@ test('POSITIVE: a piped gh call with the redirect on gh is caught', () => {
   assert.ok(has(`gh pr list --json number 2>/dev/null | head -3`, 'discarded-stderr'));
 });
 
+// ------------------------------------------- stderr discarding, by SHAPE
+// The rule used to test the literal `2>/dev/null` and nothing else, so every
+// other way of throwing stderr away -- including strictly worse ones -- passed.
+// These pin the shape rather than the spelling.
+test('POSITIVE: &>/dev/null is blocked (it discards BOTH streams — strictly worse)', () => {
+  assert.ok(has(`az account show &>/dev/null`, 'discarded-stderr'));
+});
+
+test('POSITIVE: the canonical >/dev/null 2>&1 is blocked', () => {
+  assert.ok(has(`az account show >/dev/null 2>&1`, 'discarded-stderr'));
+});
+
+test('POSITIVE: appending stderr to /dev/null is blocked', () => {
+  assert.ok(has(`gh pr list 2>>/dev/null`, 'discarded-stderr'));
+});
+
+test('POSITIVE: closing stderr outright (2>&-) is blocked', () => {
+  assert.ok(has(`az group list 2>&-`, 'discarded-stderr'));
+});
+
+test('NEGATIVE: discarding only STDOUT is allowed — stderr still readable', () => {
+  // This is the control that keeps the shape match from widening into "any
+  // /dev/null is a finding". Silencing stdout while keeping stderr is a normal,
+  // correct thing to do and must not be denied.
+  assert.equal(has(`az account show >/dev/null`, 'discarded-stderr'), false);
+});
+
+test('NEGATIVE: a non-measurement discarding stderr is still allowed', () => {
+  assert.equal(has(`ps -ef 2>/dev/null | grep node`, 'discarded-stderr'), false);
+});
+
+// ------------------------------------------------------- rule-level failure
+test('a rule that THROWS becomes a finding — it is not silently a pass', () => {
+  // A crashing rule produced no verdict. Swallowing the throw made a broken rule
+  // indistinguishable from a satisfied one, which is the gate-that-cannot-fail
+  // shape. Verified through the real evaluate(), by handing it input that is not
+  // a string so `raw.split` throws inside every rule.
+  const findings = evaluate({ not: 'a string' });
+  assert.ok(findings.length > 0, 'a throwing rule must not read as a pass');
+  assert.ok(
+    findings.every((f) => /-ERRORED$/.test(f.id)),
+    `expected only ERRORED findings, got ${findings.map((f) => f.id).join(', ')}`,
+  );
+  assert.ok(/NOT a pass/.test(findings[0].message));
+});
+
 // ------------------------------------------------------------ suite integrity
 test('CONTROL: a plainly fine command produces NO findings at all', () => {
   assert.deepEqual(evaluate(`git status --porcelain`), []);
