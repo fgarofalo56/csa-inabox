@@ -47,6 +47,25 @@ test('NEGATIVE: `||` is not a pipe', () => {
   assert.equal(has(`test -f x || echo missing\nRC=$?`, 'rc-after-pipe'), false);
 });
 
+test('NEGATIVE: a `|` inside a --jq STRING is not a shell pipe (real false positive)', () => {
+  // This exact command was denied by the first version of the guard. The pipe
+  // belongs to the jq expression, not the shell. A guard that blocks correct
+  // commands is the pressure that gets it deleted.
+  const cmd = `gh api "repos/o/r/commits/$SHA/check-runs" --jq '[.check_runs[] | {n:.name,c:.conclusion}]' > out.json 2>err.txt\nRC=$?`;
+  assert.equal(has(cmd, 'rc-after-pipe'), false, 'a jq pipe must not be read as a shell pipeline');
+});
+
+test('NEGATIVE: a `|` inside a double-quoted awk/sed program is not a shell pipe', () => {
+  const cmd = `awk "/a|b/ {print}" file.txt > out.txt 2>err.txt\nRC=$?`;
+  assert.equal(has(cmd, 'rc-after-pipe'), false);
+});
+
+test('POSITIVE CONTROL for quote-masking: a REAL pipe outside quotes is still caught', () => {
+  // Guards the fix above: masking must not blind the rule to genuine pipelines.
+  const cmd = `gh api "repos/o/r/x" --jq '.a[] | .b' | tr -d '\\r' > out.txt\nRC=$?`;
+  assert.ok(has(cmd, 'rc-after-pipe'), 'a real shell pipe after a quoted jq must still be caught');
+});
+
 // ------------------------------------------------------------ msys-arm-id
 test('POSITIVE: an ARM id passed to az without MSYS_NO_PATHCONV is blocked', () => {
   const cmd = `az monitor metrics list --resource /subscriptions/aaaaaaaa-0000-0000-0000-000000000000/resourceGroups/rg/providers/Microsoft.App/containerApps/app --metric Requests`;

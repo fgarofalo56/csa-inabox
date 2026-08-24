@@ -27,23 +27,52 @@
  *    a guard deleted, so each rule requires several co-occurring signals.
  */
 
+/**
+ * Blank out quoted spans so a `|` inside a string argument is not mistaken for
+ * a shell pipeline. Real false positive: `gh api ... --jq '.x[] | select(...)'`
+ * was denied because of the jq pipe. Quote-awareness is not optional here — a
+ * guard that blocks correct commands is the pressure that gets it deleted.
+ * Length is preserved so any offsets/offending-text stay meaningful.
+ */
+function maskQuoted(s) {
+  let out = '';
+  let quote = null;
+  for (let i = 0; i < s.length; i++) {
+    const c = s[i];
+    if (quote) {
+      if (c === '\\' && quote === '"') { out += '__'; i++; continue; }
+      if (c === quote) { quote = null; out += c; continue; }
+      out += c === '\n' ? '\n' : '_';
+      continue;
+    }
+    if (c === '"' || c === "'") { quote = c; out += c; continue; }
+    out += c;
+  }
+  return out;
+}
+
 const RULES = [
   {
     id: 'rc-after-pipe',
     // `... | ... ; RC=$?`  or a pipeline line followed by a line capturing $?
-    test: (cmd) => {
+    test: (raw) => {
+      const cmd = maskQuoted(raw);
       const lines = cmd.split(/\r?\n/);
+      const rawLines = raw.split(/\r?\n/);
       for (let i = 0; i < lines.length; i++) {
         const line = lines[i];
         // same-line:  foo | bar; RC=$?
-        if (/\|[^|]*;\s*\w+=\$\?/.test(line)) return line.trim();
+        if (/\|[^|]*;\s*\w+=\$\?/.test(line)) return rawLines[i].trim();
         // next-line:  foo | bar
         //             RC=$?
         const pipeline = /\|/.test(line) && !/\|\|/.test(line) && !/^\s*#/.test(line);
         const next = (lines[i + 1] || '').trim();
-        if (pipeline && /^\w+=\$\?/.test(next)) return `${line.trim()}  ⏎  ${next}`;
+        const rawNext = (rawLines[i + 1] || '').trim();
+        if (pipeline && /^\w+=\$\?/.test(next)) return `${rawLines[i].trim()}  ⏎  ${rawNext}`;
         // assignment from a pipeline, then $?:  R=$(a | b)\n RC=$?
-        if (/=\$\([^)]*\|[^)]*\)/.test(line) && /^\w+=\$\?/.test(next)) return `${line.trim()}  ⏎  ${next}`;
+        if (/=\$\([^)]*\|[^)]*\)/.test(line) && /^\w+=\$\?/.test(next)) {
+          return `${rawLines[i].trim()}  ⏎  ${rawNext}`;
+        }
       }
       return null;
     },
