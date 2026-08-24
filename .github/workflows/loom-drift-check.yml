@@ -236,7 +236,7 @@ jobs:
 
       - name: File / update dedup drift issue
         if: failure()
-        uses: actions/github-script@v7
+        uses: actions/github-script@v9
         with:
           script: |
             const cloud = 'Commercial';
@@ -340,7 +340,7 @@ jobs:
 
       - name: Auto-close stale drift issues on a clean run
         if: success() && steps.whatif.outputs.status == 'Clean'
-        uses: actions/github-script@v7
+        uses: actions/github-script@v9
         with:
           script: |
             const open = await github.rest.issues.listForRepo({
@@ -523,7 +523,7 @@ jobs:
 
       - name: File / update dedup drift issue
         if: failure()
-        uses: actions/github-script@v7
+        uses: actions/github-script@v9
         with:
           script: |
             const cloud = 'Gov (GCC-High)';
@@ -632,7 +632,7 @@ jobs:
 
       - name: Auto-close stale drift issues on a clean run
         if: success() && steps.whatif.outputs.status == 'Clean'
-        uses: actions/github-script@v7
+        uses: actions/github-script@v9
         with:
           script: |
             const open = await github.rest.issues.listForRepo({
