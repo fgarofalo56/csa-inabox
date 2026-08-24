@@ -54,6 +54,45 @@
  */
 
 /**
+ * ── THE STATUS-TOKEN ANCHOR, DEFINED ONCE ───────────────────────────────────
+ *
+ * A bare HTTP status in an ARM message is only meaningful as a STANDALONE
+ * token. `\b` does not express that, because `\b` treats `-` as a boundary — so
+ * `\b503\b` matches inside a resource group named `rg-loom-503`.
+ *
+ * WHY THIS IS A SHARED FRAGMENT AND NOT THREE REGEX LITERALS (#4013 review).
+ * The first fix anchored ONE of the three alternations. TRANSIENT got the
+ * anchor; `DENIED`'s `\b40[13]\b` and `NOT_FOUND`'s `\b404\b` kept the old
+ * form — and because that same commit promoted DENIED to first, it made the
+ * defect WORSE, not better. Measured on the exact 2026-08-24 stderr:
+ *
+ *   (GatewayTimeout) over an RG named `rg-loom-403`   -> denied    (was transient)
+ *   (GatewayTimeout) over an RG named `rg-404-archive`-> notfound  (was transient)
+ *   (InsufficientResources…) on a cluster `adx-401`   -> denied    (was capacity)
+ *
+ * The first of those prints "This one IS a permission problem, and az named it:
+ * grant Reader …" — the original defect restored verbatim and more emphatic,
+ * with the R6 retry lost as well, because `denied` is not retryable.
+ *
+ * Three literals meant three chances to half-fix and three to half-revert. One
+ * fragment means the anchor is either right everywhere or wrong everywhere, and
+ * a test that pins it pins all three.
+ *
+ * BOTH HALVES ARE LOAD-BEARING, and each is pinned by its own fixture:
+ *   - drop the LOOKBEHIND and a trailing token reopens: `rg-loom-503`
+ *   - drop the LOOKAHEAD  and a leading token reopens:  `503117`, `503Error`
+ * (The earlier fixtures — `rg-loom-503-hub`, `-503a-` — are blocked by EITHER
+ * anchor alone, so they could not discriminate a half-revert and the comment
+ * claiming "both halves matter" was not established by them.)
+ */
+export const STATUS_TOKEN_LOOKBEHIND = '(?<![\\w-])';
+export const STATUS_TOKEN_LOOKAHEAD = '(?![\\w-])';
+
+/** A status-shaped alternation that only matches as a standalone token. */
+export const statusToken = (alternation) =>
+  `${STATUS_TOKEN_LOOKBEHIND}(?:${alternation})${STATUS_TOKEN_LOOKAHEAD}`;
+
+/**
  * Signals that mean "try again", not "the answer is no".
  *
  * `timed? ?out` matches `Timeout` (t-i-m + e + no `d` + no space + o-u-t), so
@@ -61,29 +100,44 @@
  * explicitly anyway, because a classifier that only works by accident is one
  * reword away from not working.
  *
- * THE NUMERIC ALTERNATION IS ANCHORED (#4013 review, F1). It used to be
- * `\b(429|500|502|503|504)\b`, and `\b` treats `-` as a boundary — so a REAL
- * denial over a resource group named `rg-loom-503` matched TRANSIENT, and
- * because TRANSIENT was tested before DENIED the step then told the operator
- * "not the deploy identity" about an `AuthorizationFailed`. That is R7 with the
- * sign flipped, and on that one input the hardcoded message this file replaced
- * was RIGHT. Latent on today's hub names, reachable on the customer-named
- * brownfield resource groups `deploy-integrity.md` R5 makes first-class.
- *
- * `(?<![\w-])…(?![\w-])` requires the status to be a standalone token, so
- * `502 Bad Gateway`, `(503)` and `status code: 429` still match while
- * `rg-loom-503`, `weave-503-x` and a GUID segment like `-503a-` do not.
+ * `502 Bad Gateway`, `(503)` and `status code: 429` still match; `rg-loom-503`,
+ * `weave-503-x` and a GUID segment like `-503a-` do not.
  */
-export const TRANSIENT =
-  /(?<![\w-])(429|500|502|503|504)(?![\w-])|too many requests|timed? ?out|temporarily unavailable|connection (reset|aborted)|ServiceUnavailable|GatewayTimeout|RequestTimeout|SubscriptionRequestsThrottled|TooManyRequests/i;
+export const TRANSIENT = new RegExp(
+  [
+    statusToken('429|500|502|503|504'),
+    'too many requests',
+    'timed? ?out',
+    'temporarily unavailable',
+    'connection (reset|aborted)',
+    'ServiceUnavailable',
+    'GatewayTimeout',
+    'RequestTimeout',
+    'SubscriptionRequestsThrottled',
+    'TooManyRequests',
+  ].join('|'),
+  'i',
+);
 
 /**
  * Signals that the CALLER was refused. This is an UNKNOWN answer about the
  * resource, never a negative one — the distinction `_arm-absence.mjs` exists to
  * protect.
  */
-export const DENIED =
-  /AuthorizationFailed|LinkedAuthorizationFailed|Authorization_RequestDenied|Insufficient privileges|does not have authorization|\b40[13]\b|Forbidden|Unauthorized|AADSTS/i;
+export const DENIED = new RegExp(
+  [
+    'AuthorizationFailed',
+    'LinkedAuthorizationFailed',
+    'Authorization_RequestDenied',
+    'Insufficient privileges',
+    'does not have authorization',
+    statusToken('40[13]'),
+    'Forbidden',
+    'Unauthorized',
+    'AADSTS',
+  ].join('|'),
+  'i',
+);
 
 /**
  * Signals that the platform cannot satisfy the request at this SKU / region /
@@ -96,7 +150,18 @@ export const CAPACITY =
   /InsufficientResourcesForSubscription|SkuNotAvailable|AllocationFailed|QuotaExceeded|there are no available resources/i;
 
 /** Signals the resource genuinely is not there. Mirrors `_arm-absence.mjs`. */
-export const NOT_FOUND = /ResourceNotFound|ResourceGroupNotFound|ParentResourceNotFound|SubscriptionNotFound|could not be found|was not found|\b404\b/i;
+export const NOT_FOUND = new RegExp(
+  [
+    'ResourceNotFound',
+    'ResourceGroupNotFound',
+    'ParentResourceNotFound',
+    'SubscriptionNotFound',
+    'could not be found',
+    'was not found',
+    statusToken('404'),
+  ].join('|'),
+  'i',
+);
 
 /**
  * PURE. Classify an `az` failure into one of the things it can mean.

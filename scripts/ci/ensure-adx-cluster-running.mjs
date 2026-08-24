@@ -245,6 +245,28 @@ export function classifyClusterState(state) {
 }
 
 /**
+ * PURE. Real elapsed seconds between two timestamps.
+ *
+ * Extracted rather than inlined so the wall-clock rule has a unit test instead
+ * of only an end-to-end observation, and so a future edit that goes back to
+ * accumulating a constant has to delete a named function to do it.
+ *
+ * Clamped at 0: a non-monotonic clock (NTP step, a VM resuming) must never
+ * hand `evaluatePoll` a NEGATIVE elapsed, which would read as "no time has
+ * passed" and make the budget unreachable — the "budget that cannot be
+ * exceeded" shape this file already warns about for --timeout-seconds.
+ *
+ * @param {number} startedAtMs Date.now() when the poll began
+ * @param {number} nowMs       Date.now() at the moment of the check
+ * @returns {number} whole seconds, never negative
+ */
+export function elapsedSecondsSince(startedAtMs, nowMs) {
+  const deltaMs = Number(nowMs) - Number(startedAtMs);
+  if (!Number.isFinite(deltaMs) || deltaMs < 0) return 0;
+  return Math.floor(deltaMs / 1000);
+}
+
+/**
  * PURE. Turn a poll history into a verdict.
  * @param {{state: string|null, elapsedSeconds: number, budgetSeconds: number}} p
  * @returns {{done: boolean, ok: boolean, reason: string}}
@@ -481,7 +503,22 @@ function main() {
     // invoke-action` returning is NOT evidence the engine is up, and reporting
     // success on an unverified outcome is the thing deploy-integrity.md R6
     // forbids most explicitly.
-    let elapsed = 0;
+    // WALL CLOCK, not an accumulator (#4013 review, #4023). This used to be
+    // `elapsed += POLL_INTERVAL_SECONDS`, which counted ONLY the poll sleeps —
+    // so the retry sleeps a failing readState can add (up to 50s each) were
+    // never charged. Two consequences, and the second is the one that matters
+    // in a PR about error truth:
+    //
+    //   1. the ceiling: worst case ran to ~92 min against a stated 1800s budget,
+    //      inside a job whose timeout-minutes is 90 — so at the ceiling GitHub
+    //      killed the job before fail() could classify anything.
+    //   2. the FIGURE IS QUOTED IN THE ERROR. After 370s of real waiting the
+    //      message read "still 'Starting' after 120s (budget 120s)" — an error
+    //      asserting an elapsed time it had not measured. That is R7, in the
+    //      exact class this file exists to close.
+    //
+    // Date.now() closes both at once.
+    const startedAtMs = Date.now();
     for (;;) {
       const poll = readState(id);
       if (!poll.ok) {
@@ -492,7 +529,11 @@ function main() {
           poll.stderr,
         );
       }
-      const step = evaluatePoll({ state: poll.state, elapsedSeconds: elapsed, budgetSeconds });
+      const step = evaluatePoll({
+        state: poll.state,
+        elapsedSeconds: elapsedSecondsSince(startedAtMs, Date.now()),
+        budgetSeconds,
+      });
       if (step.done && step.ok) {
         console.log(`[adx-preflight] ${name}: ${step.reason}`);
         break;
@@ -506,15 +547,6 @@ function main() {
       }
       console.log(`[adx-preflight] ${name}: ${step.reason} — waiting ${POLL_INTERVAL_SECONDS}s.`);
       sleepSeconds(POLL_INTERVAL_SECONDS);
-      // KNOWN CEILING REGRESSION, tracked in #4023 rather than left silent.
-      // This counts only the poll sleeps, so the retry sleeps a failing
-      // readState can now add (up to 50s per poll) are NOT charged to the
-      // budget: the worst case moves from 60x30s=30min to 60x80s=~80min against
-      // a stated 1800s, inside a job whose timeout-minutes is 90. It still fails
-      // closed, but at the ceiling the JOB times out instead of this step
-      // classifying — which is the opposite of R6. The fix is to derive elapsed
-      // from Date.now(); it is deliberately not bundled into the P0 truth fix.
-      elapsed += POLL_INTERVAL_SECONDS;
     }
   }
 }

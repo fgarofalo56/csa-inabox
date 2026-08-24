@@ -78,10 +78,18 @@ import {
   evaluatePoll,
   azWithRetry,
   nextRetryDelaySeconds,
+  elapsedSecondsSince,
   TRANSIENT_BACKOFF_SECONDS,
+  POLL_INTERVAL_SECONDS,
   DEFAULT_TIMEOUT_SECONDS,
 } from '../ensure-adx-cluster-running.mjs';
-import { classifyAzFailure, isRetryable, remediationFor } from '../_az-failure-class.mjs';
+import {
+  classifyAzFailure,
+  isRetryable,
+  remediationFor,
+  STATUS_TOKEN_LOOKBEHIND,
+  STATUS_TOKEN_LOOKAHEAD,
+} from '../_az-failure-class.mjs';
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
 
@@ -90,6 +98,18 @@ const okRead = (config) => ({
   stdout: JSON.stringify({ properties: { ipConfigurations: [config] } }),
   stderr: '',
 });
+
+/**
+ * Source with comments removed.
+ *
+ * Every source-shape control in this file must scan CODE. Two of them were
+ * first written against raw source and went red on a CORRECT tree, because the
+ * docblocks explaining each fix QUOTE the defective form they replaced
+ * (`elapsed += POLL_INTERVAL_SECONDS`, `\b40[13]\b`). A guard that fires on
+ * prose is a guard that gets weakened or deleted, and it would have pushed the
+ * next author to stop documenting the reason for the fix.
+ */
+const codeOnly = (src) => src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
 
 // ── 1. DNS inbound endpoint addressing ──────────────────────────────────────
 
@@ -424,12 +444,73 @@ test('F1: a DENIAL whose scope contains a status-shaped token is denied, NOT tra
 });
 
 test('F1: the numeric transient signals are ANCHORED to standalone tokens', () => {
-  // Both halves matter. If the anchor is dropped, the first two become
-  // transient; if the alternation is deleted outright, the last two stop being.
+  // Both halves matter, and each is DISCRIMINATED by its own fixture below —
+  // these two are blocked by either anchor alone, so they pin the anchor's
+  // existence but not which half.
   assert.notEqual(classifyAzFailure('ERROR: (Conflict) on resource rg-loom-503-hub'), 'transient');
   assert.notEqual(classifyAzFailure('ERROR: (Conflict) guid 0000-503a-0000'), 'transient');
   assert.equal(classifyAzFailure('ERROR: 502 Bad Gateway'), 'transient');
   assert.equal(classifyAzFailure('ERROR: status code: 429'), 'transient');
+});
+
+test('the LOOKBEHIND half is load-bearing: a TRAILING status token is not transient', () => {
+  // Discriminates a lookbehind-only revert. `rg-loom-503` ends with the token,
+  // so the lookahead does not block it — only the lookbehind does. Measured:
+  // with the lookbehind removed this input matches TRANSIENT again.
+  assert.notEqual(classifyAzFailure("ERROR: (Conflict) over scope 'rg-loom-503'"), 'transient');
+  assert.equal(STATUS_TOKEN_LOOKBEHIND, '(?<![\\w-])');
+});
+
+test('the LOOKAHEAD half is load-bearing: a LEADING status token is not transient', () => {
+  // Discriminates a lookahead-only revert. `503117` / `503Error` START with the
+  // token, so the lookbehind does not block them — only the lookahead does.
+  assert.notEqual(classifyAzFailure('ERROR: (Conflict) correlation 503117 failed'), 'transient');
+  assert.notEqual(classifyAzFailure('ERROR: (Conflict) code 503Error raised'), 'transient');
+  assert.equal(STATUS_TOKEN_LOOKAHEAD, '(?![\\w-])');
+});
+
+test('the SIBLING alternations are anchored too — all three, not just TRANSIENT', () => {
+  // THE ROUND-2 ASK. The first fix anchored TRANSIENT and left DENIED's 40[13]
+  // and NOT_FOUND's 404 on `\b` — and promoting DENIED to first made it worse
+  // than round 1, not better. Measured before this fix, on the exact 2026-08-24
+  // stderr: `rg-loom-403` -> denied, `rg-404-archive` -> notfound,
+  // `adx-401` -> denied. The first printed "This one IS a permission problem,
+  // and az named it: grant Reader" — the original defect restored, and the R6
+  // retry lost with it because `denied` is not retryable.
+  const gt = 'ERROR: (GatewayTimeout) GatewayTimeout';
+  assert.equal(classifyAzFailure(`${gt} over scope '/resourceGroups/rg-loom-403/'`), 'transient');
+  assert.equal(classifyAzFailure(`${gt} over scope '/resourceGroups/rg-401-x/'`), 'transient');
+  assert.equal(classifyAzFailure(`${gt} over scope '/resourceGroups/rg-404-archive/'`), 'transient');
+  assert.equal(
+    classifyAzFailure("ERROR: (InsufficientResourcesForSubscription) there are no available resources on 'adx-401'"),
+    'capacity',
+  );
+
+  // …and the real status codes must still classify, or the anchor has simply
+  // deleted the alternation rather than constrained it.
+  assert.equal(classifyAzFailure('ERROR: The remote server returned 403 Forbidden'), 'denied');
+  assert.equal(classifyAzFailure('ERROR: HTTP 404 - the resource path does not exist'), 'notfound');
+});
+
+test('CONTROL: all three alternations build from the ONE shared anchor', () => {
+  // Three regex literals meant three chances to half-fix and three to
+  // half-revert; that is exactly how round 1 shipped one anchored and two not.
+  // A shared fragment makes the anchor right everywhere or wrong everywhere.
+  const src = fs.readFileSync(path.join(REPO_ROOT, 'scripts/ci/_az-failure-class.mjs'), 'utf8');
+  const code = codeOnly(src);
+  const uses = code.match(/statusToken\(/g) ?? [];
+  // EXACTLY three: TRANSIENT (429|500|502|503|504), DENIED (40[13]),
+  // NOT_FOUND (404). CAPACITY carries no status numbers, so it must NOT gain
+  // one silently — an equality here catches both a dropped call site and a
+  // fourth one nobody reviewed.
+  assert.equal(uses.length, 3, `statusToken() must build all three status alternations, saw ${uses.length}`);
+  // No alternation may go back to a hand-rolled \b around a status number.
+  // Scanned on CODE: the docblock above deliberately quotes `\b40[13]\b` and
+  // `\b404\b` as the forms that were wrong.
+  assert.doesNotMatch(code, /\\b4\d\[?\d/, 'a status alternation is back on \\b — use statusToken()');
+  assert.doesNotMatch(code, /\\b\(?429\|/, 'the transient alternation is back on \\b — use statusToken()');
+  // POPULATION: the stripper must not have eaten the module.
+  assert.match(code, /export const TRANSIENT/, 'the comment stripper ate the source — no population');
 });
 
 test('alpha: SKU exhaustion worded "temporarily unavailable" is CAPACITY, not transient', () => {
@@ -523,6 +604,69 @@ test('the backoff schedule is FINITE — the budget can actually be exceeded', (
   assert.equal(nextRetryDelaySeconds(9999), null);
   assert.equal(nextRetryDelaySeconds(-1), null);
   assert.equal(nextRetryDelaySeconds(0), TRANSIENT_BACKOFF_SECONDS[0]);
+});
+
+// ── 5c. THE POLL BUDGET IS A WALL CLOCK, AND THE ERROR QUOTES IT ────────────
+
+test('elapsed is REAL time, so retry sleeps are charged to the budget', () => {
+  // The accumulator counted only the 30s poll sleeps. A poll whose readState
+  // burned 50s of retry sleep and then succeeded advanced `elapsed` by 30 —
+  // so the budget under-counted by the entire retry time.
+  const t0 = 1_000_000;
+  assert.equal(elapsedSecondsSince(t0, t0 + 80_000), 80, 'a poll (30s) plus its retries (50s) is 80s, not 30s');
+  assert.equal(elapsedSecondsSince(t0, t0), 0);
+  assert.equal(elapsedSecondsSince(t0, t0 + 1_500), 1, 'whole seconds, floored');
+});
+
+test('a non-monotonic clock cannot make the budget unreachable', () => {
+  // NTP step / VM resume. A negative elapsed would read as "no time has passed"
+  // and the budget could never be exceeded — the exact shape this file already
+  // guards against for a NaN --timeout-seconds.
+  const t0 = 1_000_000;
+  assert.equal(elapsedSecondsSince(t0, t0 - 500_000), 0);
+  assert.equal(elapsedSecondsSince(t0, Number.NaN), 0);
+  assert.equal(elapsedSecondsSince(Number.NaN, t0), 0);
+});
+
+test('R7: the elapsed figure the error QUOTES is the figure that was measured', () => {
+  // This is why the wall clock belongs in this PR rather than only in #4023.
+  // The budget-exhausted message interpolates `elapsedSeconds` verbatim:
+  //   "still 'Starting' after 120s (budget 120s)"
+  // Under the accumulator, 370s of real waiting printed "after 120s" — an error
+  // asserting a figure it had not measured, which is the exact class this PR
+  // exists to close. Feed evaluatePoll the REAL elapsed and the text is true.
+  const startedAtMs = 1_000_000;
+  const realElapsed = elapsedSecondsSince(startedAtMs, startedAtMs + 370_000);
+  const v = evaluatePoll({ state: 'Starting', elapsedSeconds: realElapsed, budgetSeconds: 120 });
+  assert.equal(v.done, true);
+  assert.equal(v.ok, false);
+  assert.match(v.reason, /after 370s/, `the message must quote real elapsed time, got: ${v.reason}`);
+  assert.doesNotMatch(v.reason, /after 120s/);
+});
+
+test('CONTROL: the poll loop derives elapsed from the clock, not an accumulator', () => {
+  // Keyed to the shape. Re-adding `elapsed += POLL_INTERVAL_SECONDS` restores
+  // both the false figure and the ~92-min ceiling, and every assertion above
+  // would stay green because they test the helper rather than the loop.
+  //
+  // COMMENTS ARE STRIPPED FIRST. The first version of this control matched the
+  // explanatory comment that QUOTES the old accumulator and went red on a
+  // correct tree — a guard that fires on prose is a guard that gets deleted or
+  // watered down. It must read code.
+  const src = fs.readFileSync(path.join(REPO_ROOT, 'scripts/ci/ensure-adx-cluster-running.mjs'), 'utf8');
+  const shell = src.split('// ── I/O shell')[1] ?? '';
+  const code = codeOnly(shell);
+
+  assert.doesNotMatch(code, /elapsed\s*\+=/, 'the poll budget is back on an accumulator');
+  assert.match(code, /elapsedSecondsSince\(startedAtMs, Date\.now\(\)\)/, 'the poll loop must read the clock');
+
+  // POPULATION, two ways: the comment-stripper must not have eaten the loop,
+  // and the interval constant must still drive the SLEEP. Without these a
+  // stripper bug would leave an empty string that trivially satisfies the
+  // doesNotMatch above.
+  assert.ok(code.includes('for (;;)'), 'the poll loop vanished — this control has no population');
+  assert.equal(typeof POLL_INTERVAL_SECONDS, 'number');
+  assert.match(code, /sleepSeconds\(POLL_INTERVAL_SECONDS\)/);
 });
 
 test('CONTROL: the preflight emits no failure STATISTIC in an error string', () => {
