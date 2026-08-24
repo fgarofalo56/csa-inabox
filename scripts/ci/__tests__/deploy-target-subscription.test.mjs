@@ -284,12 +284,30 @@ test('CLEAN — the guard emits the RESOLVED topology, not inputs.topology', () 
  * byte-identical afterwards: a suite that rewrites a deploy script in place can
  * leave the tree dirty if it dies mid-test.
  *
- * `needle` MUST match exactly once. These files are CRLF, and a needle written
- * with LF matches ZERO times — which reads exactly like a passing mutation test
- * while proving nothing.
+ * `needle` MUST match exactly once. A needle that matches ZERO times reads
+ * exactly like a passing mutation control while proving nothing, which is what
+ * makes the assertion below load-bearing rather than defensive.
+ *
+ * LINE ENDINGS — measured 2026-08-24, because the previous version of this
+ * comment guessed the direction BACKWARDS and shipped three controls that
+ * matched nothing on CI. It claimed "these files are CRLF, and a needle written
+ * with LF matches ZERO times". The inverse is true: every target here is ALL-LF
+ * in the repository (`.gitattributes` has `*.mjs text`, normalize-on-commit), so
+ * a CRLF-baked needle matches zero times on the Linux runner while passing on a
+ * Windows checkout where core.autocrlf renders the working tree CRLF.
+ *
+ * So do not encode a guess either way: every harness here searches a
+ * LF-NORMALIZED copy and every needle is written with plain \n. The restore
+ * assertion still compares the RAW bytes, so an in-place rewrite is still
+ * caught.
+ *
+ * If you need to check a file's endings, count the byte — `tr -cd '\r' | wc -c`
+ * or `od -c`. `grep -c $'\r$'` is not usable for this: in Git Bash it reported
+ * 440 of 440 lines CRLF for a file containing zero 0x0D bytes.
  */
 function withMutatedGuard(needle, replacement, fn) {
-  const original = fs.readFileSync(SCRIPT, 'utf8');
+  const raw = fs.readFileSync(SCRIPT, 'utf8');
+  const original = raw.replace(/\r\n/g, '\n');
   const hits = original.split(needle).length - 1;
   assert.equal(hits, 1, `the mutation needle matched ${hits} times, not once — this control proves NOTHING`);
   const mutant = path.join(REPO, 'scripts', 'ci', `deploy-fiab-guard.__control_${Math.random().toString(36).slice(2)}__.mjs`);
@@ -298,7 +316,7 @@ function withMutatedGuard(needle, replacement, fn) {
     return fn(mutant);
   } finally {
     fs.rmSync(mutant, { force: true });
-    assert.equal(fs.readFileSync(SCRIPT, 'utf8'), original, 'the real guard must be untouched by this control');
+    assert.equal(fs.readFileSync(SCRIPT, 'utf8'), raw, 'the real guard must be untouched by this control');
   }
 }
 
@@ -372,7 +390,8 @@ test('CLEAN — the un-mutated guard refuses on EVERY reachable topology', () =>
  * byte-identical afterwards.
  */
 async function withMutatedPolicy(needle, replacement, fn) {
-  const original = fs.readFileSync(POLICY, 'utf8');
+  const raw = fs.readFileSync(POLICY, 'utf8');
+  const original = raw.replace(/\r\n/g, '\n');
   const hits = original.split(needle).length - 1;
   assert.equal(hits, 1, `the mutation needle matched ${hits} times, not once — this control proves NOTHING`);
   const mutant = path.join(REPO, 'scripts', 'ci', `deploy-trigger-policy.__control_${Math.random().toString(36).slice(2)}__.mjs`);
@@ -381,25 +400,29 @@ async function withMutatedPolicy(needle, replacement, fn) {
     return await fn(await import(pathToFileURL(mutant).href));
   } finally {
     fs.rmSync(mutant, { force: true });
-    assert.equal(fs.readFileSync(POLICY, 'utf8'), original, 'the real policy must be untouched by this control');
+    assert.equal(fs.readFileSync(POLICY, 'utf8'), raw, 'the real policy must be untouched by this control');
   }
 }
 
-/** The precedence block of resolveTargetSubscription, and the same two halves swapped. */
+/**
+ * The precedence block of resolveTargetSubscription, and the same two halves
+ * swapped. Joined with \n, not \r\n — see the line-endings note on
+ * {@link withMutatedGuard}; the harness normalizes before searching.
+ */
 const PRECEDENCE_INPUT_FIRST = [
   '  const override = String(subscriptionOverride).trim();',
   "  if (override) return { targetSub: override, source: 'subscription_input' };",
   '',
   '  const login = String(loginSubscription).trim();',
   "  if (login) return { targetSub: login, source: 'login' };",
-].join('\r\n');
+].join('\n');
 const PRECEDENCE_LOGIN_FIRST = [
   '  const login = String(loginSubscription).trim();',
   "  if (login) return { targetSub: login, source: 'login' };",
   '',
   '  const override = String(subscriptionOverride).trim();',
   "  if (override) return { targetSub: override, source: 'subscription_input' };",
-].join('\r\n');
+].join('\n');
 
 test('CONTROL (F2) — swapping override/login precedence is CAUGHT, and by nothing else', async () => {
   await withMutatedPolicy(PRECEDENCE_INPUT_FIRST, PRECEDENCE_LOGIN_FIRST, async (mod) => {
@@ -582,13 +605,14 @@ function findDeploySubOffenders(src) {
  * caught rather than tolerated.
  */
 function withMutatedWorkflow(needle, replacement, fn) {
-  const original = fs.readFileSync(WORKFLOW, 'utf8');
+  const raw = fs.readFileSync(WORKFLOW, 'utf8');
+  const original = raw.replace(/\r\n/g, '\n');
   const hits = original.split(needle).length - 1;
   assert.equal(hits, 1, `the mutation needle matched ${hits} times, not once — this control proves NOTHING`);
   try {
     return fn(original.replace(needle, replacement));
   } finally {
-    assert.equal(fs.readFileSync(WORKFLOW, 'utf8'), original, 'the real workflow must be untouched by this control');
+    assert.equal(fs.readFileSync(WORKFLOW, 'utf8'), raw, 'the real workflow must be untouched by this control');
   }
 }
 
@@ -596,8 +620,8 @@ function withMutatedWorkflow(needle, replacement, fn) {
  * Injection anchors — one step per bound name, each verified unique above.
  * `ADMIN_SUB_ANCHOR` sits in the ONLY step the previous filter could not see.
  */
-const DEPLOY_SUB_ANCHOR = '          echo "Registering providers on sub $(az account show --query id -o tsv)…"\r\n';
-const ADMIN_SUB_ANCHOR = '          INPUT_DLZ_SUBSCRIPTION=""; INPUT_DLZ_DOMAIN=""\r\n';
+const DEPLOY_SUB_ANCHOR = '          echo "Registering providers on sub $(az account show --query id -o tsv)…"\n';
+const ADMIN_SUB_ANCHOR = '          INPUT_DLZ_SUBSCRIPTION=""; INPUT_DLZ_DOMAIN=""\n';
 
 /**
  * One entry per bash emptiness idiom, each a THIRD offending sibling added to a
@@ -611,24 +635,24 @@ const ADMIN_SUB_ANCHOR = '          INPUT_DLZ_SUBSCRIPTION=""; INPUT_DLZ_DOMAIN=
  */
 const OFFENDING_IDIOMS = [
   ['#3888 original spelling', DEPLOY_SUB_ANCHOR,
-    'if [ -z "${DEPLOY_SUB:-}" ]; then\r\n            echo "::error::no sub"\r\n            exit 1\r\n          fi\r\n'],
+    'if [ -z "${DEPLOY_SUB:-}" ]; then\n            echo "::error::no sub"\n            exit 1\n          fi\n'],
   ['[ -z "$V" ], no :- expansion', DEPLOY_SUB_ANCHOR,
-    'if [ -z "$DEPLOY_SUB" ]; then\r\n            exit 1\r\n          fi\r\n'],
+    'if [ -z "$DEPLOY_SUB" ]; then\n            exit 1\n          fi\n'],
   ['[[ -z ]] bashism, one line', DEPLOY_SUB_ANCHOR,
-    'if [[ -z "${DEPLOY_SUB:-}" ]]; then exit 1; fi\r\n'],
+    'if [[ -z "${DEPLOY_SUB:-}" ]]; then exit 1; fi\n'],
   ['test -z, no brackets', DEPLOY_SUB_ANCHOR,
-    'test -z "$DEPLOY_SUB" && exit 1\r\n'],
+    'test -z "$DEPLOY_SUB" && exit 1\n'],
   ['string comparison against ""', DEPLOY_SUB_ANCHOR,
-    'if [ "${DEPLOY_SUB:-}" = "" ]; then\r\n            exit 1\r\n          fi\r\n'],
+    'if [ "${DEPLOY_SUB:-}" = "" ]; then\n            exit 1\n          fi\n'],
   ['the portable x-prefix idiom', DEPLOY_SUB_ANCHOR,
-    'if [ x"$DEPLOY_SUB" = x ]; then\r\n            exit 1\r\n          fi\r\n'],
+    'if [ x"$DEPLOY_SUB" = x ]; then\n            exit 1\n          fi\n'],
   ['laundered through a plain alias', DEPLOY_SUB_ANCHOR,
-    'SUB="$DEPLOY_SUB"\r\n          if [ -z "$SUB" ]; then\r\n            exit 1\r\n          fi\r\n'],
+    'SUB="$DEPLOY_SUB"\n          if [ -z "$SUB" ]; then\n            exit 1\n          fi\n'],
   // The blind spot, not merely an unmatched spelling: this step binds the same
   // output to ADMIN_SUB, so the old filter's consumer population (16 of the 17
   // binding sites) did not contain it at all.
   ['on the ADMIN_SUB-bound step', ADMIN_SUB_ANCHOR,
-    'if [ -z "${ADMIN_SUB:-}" ]; then\r\n            exit 1\r\n          fi\r\n'],
+    'if [ -z "${ADMIN_SUB:-}" ]; then\n            exit 1\n          fi\n'],
 ];
 
 test('POPULATION — the deploy_sub binding sites are enumerated EXACTLY', () => {
@@ -698,9 +722,9 @@ test('CONTROL (NEGATIVE) — an emptiness test with NO hard fail is NOT an offen
   // even that failed. The filter this replaced flagged the first one.
   const benign = [
     ['supplies a default instead of failing',
-      'if [ -z "${DEPLOY_SUB:-}" ]; then DEPLOY_SUB=$(az account show --query id -o tsv); fi\r\n'],
+      'if [ -z "${DEPLOY_SUB:-}" ]; then DEPLOY_SUB=$(az account show --query id -o tsv); fi\n'],
     ['fails only after a non-empty fallback also failed',
-      'if [ -z "${DEPLOY_SUB:-$(az account show --query id -o tsv)}" ]; then exit 1; fi\r\n'],
+      'if [ -z "${DEPLOY_SUB:-$(az account show --query id -o tsv)}" ]; then exit 1; fi\n'],
   ];
   for (const [label, injected] of benign) {
     const found = withMutatedWorkflow(
