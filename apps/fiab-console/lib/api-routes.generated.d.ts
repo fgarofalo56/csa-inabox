@@ -1,6 +1,6 @@
 /**
  * GENERATED — do not edit by hand. TYPE-ONLY (no runtime import is emitted).
- * Source: apps/fiab-console/app/api/**\/route.ts   (1684 routes)
+ * Source: apps/fiab-console/app/api/**\/route.ts   (1686 routes)
  * Regenerate: node scripts/ci/generate-client-route-map.mjs
  * Drift gate:  node scripts/ci/generate-client-route-map.mjs --check
  *
@@ -51,6 +51,8 @@ export type StaticApiRoute =
   | '/api/admin/azure-resources'
   | '/api/admin/batch-labeling'
   | '/api/admin/bootstrap-catalogs'
+  | '/api/admin/brain/graph'
+  | '/api/admin/brain/proposals'
   | '/api/admin/capacity/chargeback'
   | '/api/admin/capacity/cost'
   | '/api/admin/capacity/guardrails'

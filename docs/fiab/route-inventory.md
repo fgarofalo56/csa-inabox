@@ -13,11 +13,11 @@ verdict is DERIVED, not name-matched — see "How the owner column is decided".
 
 | Metric | Count |
 | --- | ---: |
-| Total routes | 1684 |
+| Total routes | 1686 |
 | Public (no session) | 58 |
 | Session-only | 646 |
 | Owner-scoped | 676 |
-| Admin | 304 |
+| Admin | 306 |
 | Unknown (generator fails) | 0 |
 | Gated (backend config) | 496 |
 | Areas | 122 |
@@ -204,6 +204,8 @@ dispatch is invisible to it. Full limits: `scripts/ci/_route-backends.mjs`.
 | `admin/azure-resources/route.ts` | GET | admin | ● | ARM |
 | `admin/batch-labeling/route.ts` | GET POST | admin |  | Cosmos, Fabric, Microsoft Graph, Power BI, Purview |
 | `admin/bootstrap-catalogs/route.ts` | POST | admin |  | AI Search, Cosmos |
+| `admin/brain/graph/route.ts` | GET | admin |  | ARM, Container Apps, Resource Graph, Retail Prices API |
+| `admin/brain/proposals/route.ts` | POST | admin |  | Azure Monitor, Cosmos |
 | `admin/capacity/chargeback/route.ts` | GET | admin |  | ARM, Azure Cache for Redis, Cosmos, Cost Management |
 | `admin/capacity/cost/route.ts` | GET | admin |  | ARM, Azure Cache for Redis, Cosmos, Cost Management, Microsoft Graph |
 | `admin/capacity/guardrails/route.ts` | GET PUT | admin |  | Azure Monitor, Cosmos |
@@ -2518,7 +2520,7 @@ silently downgrading the route.
 
 ## Backend signals (derived)
 
-440 module(s) ORIGINATE a backend label — the derivation read an
+444 module(s) ORIGINATE a backend label — the derivation read an
 Azure identifier out of them. Every other route/module below inherits through the
 call graph. Nothing in this section is a Loom module name someone typed: the
 modules are derived, and only the Microsoft-owned identifier vocabulary is seeded.
@@ -2757,6 +2759,10 @@ caps the NUMBER of cuts at three; it does not bound what one cut can hide.
 | `apps/fiab-console/app/admin/scaling/page.tsx` | AML |
 | `apps/fiab-console/app/api/adf/factories/create/route.ts` | ADF |
 | `apps/fiab-console/app/api/admin/audit-logs/route.ts` | Cosmos |
+| `apps/fiab-console/app/api/admin/brain/_lib/arg-collect.ts` | Container Apps, Resource Graph |
+| `apps/fiab-console/app/api/admin/brain/_lib/cost-model.ts` | Retail Prices API |
+| `apps/fiab-console/app/api/admin/brain/_lib/detect.ts` | Container Apps |
+| `apps/fiab-console/app/api/admin/brain/_lib/wire-bindings.ts` | Container Apps |
 | `apps/fiab-console/app/api/admin/deploy-plan/cost-estimate/route.ts` | Retail Prices API |
 | `apps/fiab-console/app/api/admin/domains/images/route.ts` | ADLS |
 | `apps/fiab-console/app/api/admin/gates/[id]/options/route.ts` | Azure AI Services |

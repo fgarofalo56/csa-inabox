@@ -120,6 +120,24 @@ const ALLOWLIST = new Set([
   'LOOM_DATABRICKS_UC_STORAGE_ROOT', // opt-in managed-location base (abfss://…) for domain→UC-catalog sync when the metastore has no default storage_root; unset = send no storage_root (metastores with a default root work as-is)
   'LOOM_ITEM_VERSION_CAP',          // opt-in tuning knob for the per-item version-history retention cap (W6); unset default = 50 in code (lib/versions/item-version-store.ts)
   'LOOM_DAB_APP_NAME',              // opt-in override for the shared DAB preview Container App name (apply-to-runtime route #19); unset = derived from the LOOM_DAB_PREVIEW_URL host's first FQDN label
+  // ---- Estate identity: DERIVED, and deliberately not a deploy dependency ----
+  // `LOOM_ESTATE_ID` names THIS install, and both readers derive a working
+  // answer without it:
+  //   • lib/estate/pause-orchestrator.ts `resolveEstateId()` SYNTHESIZES it
+  //     deterministically from LOOM_SUBSCRIPTION_ID + the admin RG (both bicep-
+  //     emitted), so the pause manifest resolves whether or not it is set.
+  //   • app/api/admin/brain/graph/route.ts OMITS the ownership scope when it is
+  //     unset, which widens the match to any non-empty `loom-estate-id` tag and
+  //     reports `ownership.blind` either way. No gate, no remediation message,
+  //     no "set LOOM_X" ask reaches the user — so this is not the day-one gate
+  //     auto-bind-by-default.md forbids.
+  // Emitting it from bicep would be premature, not diligent: it is matched
+  // against the `loom-estate-id` RESOURCE TAG, and per the census recorded in
+  // lib/brain/graph/extractors/resource-graph.ts ZERO live resources carry that
+  // tag today. Setting the env half without the tag half would narrow ownership
+  // to a key nothing matches. The real fix is deploy-side tag stamping, tracked
+  // separately; when that lands, this entry comes out with it.
+  'LOOM_ESTATE_ID',
   // ---- #3730 cross-cloud estate drift: per-estate endpoint OVERRIDES ----
   // Optional overrides of the estate registry (apps/fiab-console/lib/admin/
   // estate-fleet.ts and scripts/ci/_estate-registry.mjs, which share these four
