@@ -121,7 +121,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
 
       - name: Initialize CodeQL
-        uses: github/codeql-action/init@5595ccaf912efad79be6eef63a5619ff05969be3 # v4.37.6
+        uses: github/codeql-action/init@db488ddef3bf6cb639b32c2e9a7c0a7ea8271d28 # v4.37.8
         with:
           languages: ${{ matrix.language }}
           queries: security-extended
@@ -150,7 +150,7 @@ jobs:
                   id: js/http-to-file-access
 
       - name: Autobuild
-        uses: github/codeql-action/autobuild@5595ccaf912efad79be6eef63a5619ff05969be3 # v4.37.6
+        uses: github/codeql-action/autobuild@db488ddef3bf6cb639b32c2e9a7c0a7ea8271d28 # v4.37.8
 
       # The timeout lives on the STEP, not only the job. A job-level timeout
       # CANCELS the job: conclusion `cancelled`, no chance to report, and grey in
@@ -159,7 +159,7 @@ jobs:
       - name: Perform CodeQL Analysis
         id: analyze
         timeout-minutes: ${{ matrix.analysisTimeout }}
-        uses: github/codeql-action/analyze@5595ccaf912efad79be6eef63a5619ff05969be3 # v4.37.6
+        uses: github/codeql-action/analyze@db488ddef3bf6cb639b32c2e9a7c0a7ea8271d28 # v4.37.8
         with:
           category: "/language:${{ matrix.language }}"
 
