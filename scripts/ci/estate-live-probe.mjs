@@ -42,8 +42,7 @@
  */
 
 import { spawnSync } from 'node:child_process';
-import { existsSync, appendFileSync } from 'node:fs';
-import path from 'node:path';
+import { appendFileSync } from 'node:fs';
 
 /**
  * States produced by the pause mandate itself (native ADX stop/start).
@@ -125,65 +124,35 @@ export function classify(clusters) {
 class ProbeError extends Error {}
 
 /**
- * Resolve `az` and build a spawn plan. On Windows `az` is a .cmd shim, and the
- * three obvious ways to launch one all fail in ways that look like a real
- * result (EINVAL under shell:false; a forward-slash path returns rc=1 and reads
- * as a genuine verdict; shell:true concatenates args unescaped per DEP0190).
- * A batch shim therefore goes through cmd.exe with a hand-quoted, verbatim
- * command line. See scripts/measure/measure.mjs for the long form.
+ * Run az and parse JSON. Throws on anything that is not a clean parse.
  *
- * The PATH scan below DISCARDS the path it finds and returns only a boolean.
- * Returning it — and spawning it — put `process.env.PATH` on a dataflow path
- * into `spawnSync`'s executable argument, which is CodeQL's
- * `js/indirect-command-line-injection` (CWE-078) and a TRUE positive: resolving
- * an executable out of an environment variable is exactly the shape that query
- * exists to find. It also stopped the query terminating inside its 600s budget,
- * which uploads a `codeql-failed-run.sarif` and FREEZES the repo's JS/TS alert
- * list (see .github/workflows/codeql.yml and the 2026-08-03 outage).
+ * `az` is spawned directly: a string literal, an argv array, no shell, and
+ * nothing derived from the environment anywhere on the path to the executable.
  *
- * A boolean cannot carry taint, and both surviving launch paths resolve the
- * binary themselves — libuv directly, cmd.exe via PATHEXT — which is more
- * faithful than this four-extension guess was.
+ * There is deliberately NO Windows .cmd wrapper here. Every job in
+ * bicep-whatif.yml -- the only workflow that runs this file -- is
+ * `runs-on: ubuntu-latest`, so a cmd.exe branch was dead code in the only
+ * place this script ever executes.
+ *
+ * It was not free dead code. It built its command line by spreading argv
+ * through a higher-order `.map()`, joining it, and concatenating the result
+ * into a `cmd.exe /d /s /c "<line>"` string with the interpreter read from
+ * `process.env.ComSpec` -- and that construct is the one suspect present on
+ * both branches where `js/indirect-command-line-injection` stopped terminating
+ * inside its 600s budget. A CodeQL query that does not terminate uploads a
+ * `codeql-failed-run.sarif` (0 rules / 0 results); GitHub records it, correctly
+ * declines to retire alerts from it, and the repo's JS/TS alert list FREEZES at
+ * the last real scan while still reading as current. That silent freeze, not
+ * the red check, is the harm.
+ *
+ * If this ever genuinely needs to launch a Windows .cmd shim, the launcher in
+ * scripts/measure/measure.mjs owns that problem. Do not re-grow a second copy
+ * of it here.
  */
-function needsWrapper(bin) {
-  if (process.platform !== 'win32') return false;
-  for (const dir of (process.env.PATH || '').split(path.delimiter)) {
-    if (!dir) continue;
-    for (const ext of ['.cmd', '.exe', '.bat', '']) {
-      const found = path.join(dir, bin + ext);
-      if (existsSync(found)) return /\.(cmd|bat)$/i.test(found);
-    }
-  }
-  throw new ProbeError(`could not resolve '${bin}' on PATH`);
-}
-
-function spawnPlan(bin, args) {
-  // Hard-coded, not a parameter: this script launches exactly one program.
-  if (bin !== 'az') throw new ProbeError(`refusing to launch '${bin}'; this probe runs az only`);
-  if (!needsWrapper(bin)) return { cmd: bin, argv: args, opts: {} };
-  const q = (a) => {
-    // cmd.exe expands %VAR% even inside double quotes, with no reliable
-    // escape. Running a DIFFERENT command than the one requested is worse
-    // than not running one, so refuse rather than guess.
-    if (a.includes('%')) throw new ProbeError(`argument would expand in cmd.exe: ${a}`);
-    return /[\s"|&<>^]/.test(a) || a === '' ? `"${a.replace(/"/g, '""')}"` : a;
-  };
-  // Pin the interpreter: a redirected ComSpec would choose the program that
-  // runs every command this probe issues.
-  const comspec = process.env.ComSpec || '';
-  return {
-    cmd: /(^|[\\/])cmd\.exe$/i.test(comspec) ? comspec : 'cmd.exe',
-    argv: ['/d', '/s', '/c', `"${[bin, ...args].map(q).join(' ')}"`],
-    opts: { windowsVerbatimArguments: true },
-  };
-}
-
-/** Run az and parse JSON. Throws on anything that is not a clean parse. */
 function azJson(args) {
-  const plan = spawnPlan('az', args);
-  const res = spawnSync(plan.cmd, plan.argv, {
+  const res = spawnSync('az', args, {
     encoding: 'utf8', timeout: 120000, maxBuffer: 32 * 1024 * 1024,
-    shell: false, windowsHide: true, ...plan.opts,
+    shell: false, windowsHide: true,
   });
   if (res.error) throw new ProbeError(`az failed to launch: ${res.error.message}`);
   if (res.status === null) throw new ProbeError('az did not exit normally (timeout or signal)');
