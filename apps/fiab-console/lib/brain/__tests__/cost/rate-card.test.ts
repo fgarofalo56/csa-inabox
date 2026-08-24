@@ -5,7 +5,7 @@
  *
  * ── WHY THE REGION KEY IS THE SUBJECT OF THIS FILE ─────────────────────────
  * The first version of this module carried correct rates and a wrong lookup: a
- * single Commercial card (centralus) reachable through 37 region PREFIXES. Every
+ * single Commercial card (centralus) reachable through 38 region PREFIXES. Every
  * rate in it was re-read from the retail API and matched byte-for-byte, and the
  * module still under-reported, because a table of right numbers handed to the
  * wrong region is a wrong answer that looks exactly like a right one.
@@ -18,24 +18,33 @@
  * price hierarchy.
  *
  * ── THE POPULATION CHECK FOR THIS LAYER ────────────────────────────────────
- * Four shapes, all here. Every key must BE its card's region, so the key and
+ * Five shapes, all here. Every key must BE its card's region, so the key and
  * the provenance string cannot drift apart; both `RateCloud` names must be
  * represented, because a table missing a cloud makes every lookup for it
  * return null — correct behaviour, but silently zero coverage, which is the
- * "green and blind" shape one level down; the table must hold at least the 61
- * regions the census found; and ALL THREE Gov regions must be present, because
- * the cloud check alone is satisfied by usgovvirginia on its own — and
- * usgovtexas was in fact missing while this suite was green.
+ * "green and blind" shape one level down; the table must hold EXACTLY the 61
+ * regions the census found, not merely at least 61; every one of the 12 tiers
+ * must carry its own four measured numbers; and ALL THREE Gov regions must be
+ * present, because the cloud check alone is satisfied by usgovvirginia on its
+ * own — and usgovtexas was in fact missing while this suite was green.
  *
  * ── WHAT "ABSENT" MEANS AFTER THE CENSUS ───────────────────────────────────
  * The 2026-08-24 census read every Container Apps Consumption meter the public
- * retail API publishes: 61 regions publish all four, in 12 distinct price
- * tiers, and ZERO publish only some. There is therefore no "meters not read
- * yet" class any more. A region absent from the table is a region Azure does
- * not publish a price for — usdod*, Azure China — and null is the TRUE answer
- * for it rather than a gap to be apologised for. The blocks below assert both
- * halves, because either one alone can be satisfied by a broken lookup: what
- * is priced resolves to its OWN card, and what is unpriced resolves to nothing.
+ * retail API publishes: 764 items spanning 62 `armRegionName` values, of which
+ * 61 publish the four STANDARD meters, in 12 distinct price tiers, and ZERO
+ * publish only some of the four. There is therefore no "meters not read yet"
+ * class any more. A region absent from the table is a region Azure publishes no
+ * STANDARD Consumption rate for, and null is the TRUE answer for it rather than
+ * a gap to be apologised for.
+ *
+ * "No STANDARD rate" is not "no rate". The 62nd region, `taiwannorth`, publishes
+ * exactly one Container Apps Consumption meter — `Hybrid vCPU Usage`, per
+ * vCPU-HOUR — and no Standard ones, so it is correctly absent from a table whose
+ * every field is a per-second Standard rate. Saying "Azure publishes nothing for
+ * it" would be false, and the source module carried that false form until it was
+ * reviewed. The blocks below assert both halves of the partition, because either
+ * one alone can be satisfied by a broken lookup: what is priced resolves to its
+ * OWN card, and what is unpriced resolves to nothing.
  *
  * ── AND WHY GOV STAYS SEPARATE ─────────────────────────────────────────────
  * `cloud-parity.md`: the same capability ships to every boundary. Here that
@@ -55,6 +64,255 @@ import {
   type ContainerAppsRateCard,
   type RateCloud,
 } from '../../cost/rate-card';
+
+/**
+ * THE TWELVE MEASURED TIERS, written out here as LITERAL NUMBERS.
+ *
+ * These are not read back from the module. That is the whole point: every other
+ * assertion in this file compares the table against itself — a key against its
+ * own card's region, a lookup against the object it returned, one export against
+ * another — and NONE of them can tell whether a rate is the one Azure publishes.
+ * A reviewer measured exactly that hole: collapsing `RATES_45` (norwaywest,
+ * uaecentral) or `RATES_55` (brazilsoutheast, the +129% tier) onto the centralus
+ * numbers left this suite 32/32 GREEN. Eight of the twelve tiers had no value
+ * assertion anywhere, which re-admits the precise defect this module exists to
+ * prevent: a region quoted at somebody else's price, confidently.
+ *
+ * So the numbers below are a SECOND, INDEPENDENT copy of the census, and the
+ * assertions cross them against the module. Both have to be wrong the same way
+ * for a wrong price to pass.
+ *
+ * Source: GET https://prices.azure.com/api/retail/prices
+ *   ?$filter=serviceName eq 'Azure Container Apps' and type eq 'Consumption'
+ * — 764 items, one page, 62 distinct `armRegionName`, read 2026-08-24. 61 of the
+ * 62 publish the four Standard meters; the 62nd is `taiwannorth`, which
+ * publishes only `Hybrid vCPU Usage` and is therefore not in any tier.
+ *
+ * `idleAndMemory` is one number because in every tier the vCPU-idle,
+ * memory-active and memory-idle rates are equal — a measured property of
+ * today's list, not a modelling shortcut. The assertions still check all four
+ * fields separately, so the day Azure diverges them this constant is what
+ * fails, not the data model.
+ */
+const MEASURED_TIERS: ReadonlyArray<{
+  readonly vcpuActive: number;
+  readonly idleAndMemory: number;
+  readonly cloud: RateCloud;
+  readonly regions: readonly string[];
+}> = [
+  {
+    vcpuActive: 0.000024,
+    idleAndMemory: 0.000003,
+    cloud: 'commercial',
+    regions: [
+      'brazilsouth',
+      'centralindia',
+      'centralus',
+      'eastasia',
+      'eastus',
+      'eastus2',
+      'francecentral',
+      'francesouth',
+      'germanywestcentral',
+      'japaneast',
+      'japanwest',
+      'jioindiacentral',
+      'jioindiawest',
+      'koreacentral',
+      'northcentralus',
+      'northeurope',
+      'norwayeast',
+      'polandcentral',
+      'southafricanorth',
+      'southcentralus',
+      'southindia',
+      'swedencentral',
+      'switzerlandnorth',
+      'uaenorth',
+      'westindia',
+      'westus',
+      'westus3',
+    ],
+  },
+  { vcpuActive: 0.000026, idleAndMemory: 0.000003, cloud: 'commercial', regions: ['mexicocentral'] },
+  {
+    vcpuActive: 0.000028,
+    idleAndMemory: 0.000004,
+    cloud: 'commercial',
+    regions: ['indonesiacentral', 'malaysiawest'],
+  },
+  { vcpuActive: 0.000029, idleAndMemory: 0.000004, cloud: 'commercial', regions: ['westcentralus'] },
+  {
+    vcpuActive: 0.00003,
+    idleAndMemory: 0.000004,
+    cloud: 'usgov',
+    regions: ['usgovarizona', 'usgovtexas', 'usgovvirginia'],
+  },
+  {
+    vcpuActive: 0.000031,
+    idleAndMemory: 0.000004,
+    cloud: 'commercial',
+    regions: ['austriaeast', 'belgiumcentral'],
+  },
+  {
+    vcpuActive: 0.000034,
+    idleAndMemory: 0.000004,
+    cloud: 'commercial',
+    regions: [
+      'australiacentral',
+      'australiacentral2',
+      'australiaeast',
+      'australiasoutheast',
+      'canadacentral',
+      'canadaeast',
+      'chilecentral',
+      'germanynorth',
+      'israelcentral',
+      'italynorth',
+      'koreasouth',
+      'qatarcentral',
+      'southeastasia',
+      'spaincentral',
+      'switzerlandwest',
+      'uksouth',
+      'ukwest',
+      'westeurope',
+      'westus2',
+    ],
+  },
+  {
+    vcpuActive: 0.000036,
+    idleAndMemory: 0.000005,
+    cloud: 'commercial',
+    regions: ['newzealandnorth'],
+  },
+  { vcpuActive: 0.000044, idleAndMemory: 0.000005, cloud: 'commercial', regions: ['swedensouth'] },
+  {
+    vcpuActive: 0.000045,
+    idleAndMemory: 0.000006,
+    cloud: 'commercial',
+    regions: ['norwaywest', 'uaecentral'],
+  },
+  {
+    vcpuActive: 0.000046,
+    idleAndMemory: 0.000006,
+    cloud: 'commercial',
+    regions: ['southafricawest'],
+  },
+  {
+    vcpuActive: 0.000055,
+    idleAndMemory: 0.000007,
+    cloud: 'commercial',
+    regions: ['brazilsoutheast'],
+  },
+];
+
+describe('every tier carries its OWN measured numbers — the value guard', () => {
+  it('prices each of the 61 regions at the four rates the census read for it', () => {
+    // The assertion that catches a tier collapsed onto a cheaper one. It is a
+    // per-REGION check rather than a per-tier one so the failure message names
+    // the region a customer would have been misquoted for, and it asserts all
+    // four fields rather than only vCPU-active, because an idle rate quietly
+    // moved to a neighbour's changes the LOWER bound — the one `derived.ts`
+    // labels "defensible floor".
+    for (const tier of MEASURED_TIERS) {
+      for (const region of tier.regions) {
+        const card = rateCardFor(region);
+        expect([region, card === null]).toEqual([region, false]);
+        expect([
+          region,
+          card?.vcpuActiveUsdPerSecond,
+          card?.vcpuIdleUsdPerSecond,
+          card?.memoryActiveUsdPerGibSecond,
+          card?.memoryIdleUsdPerGibSecond,
+          card?.cloud,
+        ]).toEqual([
+          region,
+          tier.vcpuActive,
+          tier.idleAndMemory,
+          tier.idleAndMemory,
+          tier.idleAndMemory,
+          tier.cloud,
+        ]);
+      }
+    }
+  });
+
+  it('holds EXACTLY the census population — no row added, none dropped', () => {
+    // `>= 61` counts rows without checking WHICH, so it is satisfied by a table
+    // that dropped brazilsoutheast and gained a fabricated one. Adding
+    // `taiwannorth: card('commercial', 'taiwannorth', RATES_34)` — a region
+    // Azure publishes no Standard rate for at all — passed this suite before
+    // this assertion existed.
+    //
+    // Set equality against the tier table is what makes the population exact,
+    // and it is deliberately strict in BOTH directions: a genuinely new Azure
+    // region is admitted here only together with the four rates that were read
+    // for it, which is the same discipline the module's own §CAVEATS 2 asks of
+    // a maintainer.
+    const inTiers = MEASURED_TIERS.flatMap((t) => t.regions).sort();
+    expect(inTiers.length).toBe(new Set(inTiers).size); // no region in two tiers
+    expect(Object.keys(BUILT_IN_RATE_CARDS).sort()).toEqual(inTiers);
+    expect(inTiers.length).toBe(61);
+  });
+
+  it('the tier table itself holds 12 DISTINCT rate sets — the guard on the guard', () => {
+    // Without this, the cheapest way to make the block above pass against a
+    // collapsed module is to collapse the expectations too. Twelve distinct
+    // signatures, spanning centralus's 0.000024 to brazilsoutheast's 0.000055,
+    // is the census's own shape; flattening any two of them fails here.
+    const signatures = MEASURED_TIERS.map((t) => `${t.vcpuActive}|${t.idleAndMemory}`);
+    expect(new Set(signatures).size).toBe(12);
+    const actives = MEASURED_TIERS.map((t) => t.vcpuActive);
+    expect(Math.min(...actives)).toBe(CONTAINER_APPS_RATES_COMMERCIAL.vcpuActiveUsdPerSecond);
+    expect(Math.max(...actives) / Math.min(...actives)).toBeCloseTo(2.29, 2);
+  });
+});
+
+describe('the identity-pinned exports agree with their tier-mates', () => {
+  // The module's own docblock on BUILT_IN_RATE_CARDS says a reducer "would let
+  // the two identity-pinned entries below silently disagree with their group" —
+  // and until now nothing watched that. Every control on the named exports was a
+  // reference-identity or null check against the SAME object, so it was
+  // tautological on value: pointing CONTAINER_APPS_RATES_USGOV at RATES_31, so
+  // that usgovvirginia priced 3% above usgovarizona and usgovtexas, left this
+  // file 32/32 GREEN.
+  //
+  // These read the tier-mates back OUT of the table by name, so the assertion is
+  // about two different entries agreeing — which is the property the docblock
+  // promises and the one a hand-edited literal breaks.
+  function ratesOf(card: ContainerAppsRateCard | null): readonly number[] {
+    if (card === null) throw new Error('tier-mate missing from the table');
+    return [
+      card.vcpuActiveUsdPerSecond,
+      card.vcpuIdleUsdPerSecond,
+      card.memoryActiveUsdPerGibSecond,
+      card.memoryIdleUsdPerGibSecond,
+    ];
+  }
+
+  it('the Gov export prices identically to usgovarizona and usgovtexas', () => {
+    const virginia = ratesOf(CONTAINER_APPS_RATES_USGOV);
+    expect(['usgovarizona', ratesOf(rateCardFor('usgovarizona'))]).toEqual([
+      'usgovarizona',
+      virginia,
+    ]);
+    expect(['usgovtexas', ratesOf(rateCardFor('usgovtexas'))]).toEqual(['usgovtexas', virginia]);
+    // CONTROL — the comparison can tell rate sets APART. Without it, a `ratesOf`
+    // that returned a constant would satisfy both lines above.
+    expect(ratesOf(rateCardFor('newzealandnorth'))).not.toEqual(virginia);
+  });
+
+  it('the Commercial export prices identically to its RATES_24 tier-mates', () => {
+    const centralus = ratesOf(CONTAINER_APPS_RATES_COMMERCIAL);
+    for (const mate of ['eastus', 'eastus2', 'westus', 'westus3', 'northeurope', 'japaneast']) {
+      expect([mate, ratesOf(rateCardFor(mate))]).toEqual([mate, centralus]);
+    }
+    // CONTROL — westus2 is NOT in this tier and must not compare equal, which is
+    // the same fact the prefix defect turned on.
+    expect(ratesOf(rateCardFor('westus2'))).not.toEqual(centralus);
+  });
+});
 
 describe('the cards are populated and measured', () => {
   it('every KEY is the region of the card filed under it — key and provenance cannot drift', () => {
@@ -82,9 +340,14 @@ describe('the cards are populated and measured', () => {
     //
     // The floor is the census count, not `> 1`: the 2026-08-24 read found 61
     // regions publishing all four Container Apps Consumption meters, and the
-    // table carries one card each. Azure adding a region may raise this number
-    // — a LOWER one means rows were dropped, which is exactly the silent
-    // regression a `> 1` floor would have waved through.
+    // table carries one card each. A LOWER number means rows were dropped,
+    // which is exactly the silent regression a `> 1` floor would have waved
+    // through.
+    //
+    // A floor alone is NOT the population contract, because it counts rows
+    // without checking which — see "holds EXACTLY the census population" above,
+    // which pins the identities. This one stays because it is the assertion the
+    // vacuity argument actually needs, and it is independent of the tier table.
     expect(Object.keys(BUILT_IN_RATE_CARDS).length).toBeGreaterThanOrEqual(61);
   });
 
@@ -283,25 +546,49 @@ describe('the key is the EXACT region — a prefix is not a price', () => {
     // The counterpart to the block above, and the reason `rateCardFor` may
     // return null at all. These are not regions whose meters merely have not
     // been read yet — the 2026-08-24 census read every Container Apps
-    // Consumption meter the retail API publishes and found none for any of
-    // them. Absent is the TRUE answer here, and it stays true only because the
-    // lookup is keyed to the exact region: each of these has a priced
-    // neighbour whose card a prefix or fuzzy match would happily hand over.
+    // Consumption meter the retail API publishes and found no STANDARD meter
+    // for any of them. Absent is the TRUE answer for every entry here.
+    //
+    // The list is in three GROUPS on purpose, because they probe different
+    // failure modes and an earlier version of this comment claimed one property
+    // for all of them that was only true of some.
+    //
+    // 1. Real boundaries with a priced neighbour a loose lookup would reach
+    //    for. `usdod*` is the sharp case: the prefix classifier this module
+    //    replaced literally did hand them `usgovvirginia`'s card.
+    // 2. `atlantis` is the opposite case and belongs here for the opposite
+    //    reason — there is NO neighbour to approximate it from, and null must
+    //    still be the answer. It pins the plain unknown-string path, not the
+    //    approximation path. Saying it "has a priced neighbour" would be false.
+    // 3. The STRICT-EXTENSION half, and the one with teeth. `westus4`,
+    //    `eastus9` and `usgovvirginia2` are not Azure regions, but each strictly
+    //    EXTENDS a key that IS in the table. Re-adding a prefix fallback —
+    //    `found ?? BUILT_IN_RATE_CARDS[keys.filter((k) => r.startsWith(k))[0]]`
+    //    — left this whole suite green before these three existed, because no
+    //    probe anywhere reached past the end of a real key. The day Azure ships
+    //    a `westus4`, that fallback prices it off `westus` silently, and 42% low
+    //    if it lands in the westus2 tier.
     const UNPRICED = [
       'usdodeast', // usgov* is priced; usdod* is not.
       'usdodcentral',
       'chinanorth3', // No china* region appears in the global retail list.
       'chinaeast2',
-      'atlantis', // Not a region at all.
+      'atlantis', // Not a region, and nothing nearby to be approximated FROM.
+      'westus4', // Not a region — and strictly extends 'westus'.
+      'eastus9', // Not a region — and strictly extends 'eastus'.
+      'usgovvirginia2', // Not a region — and strictly extends 'usgovvirginia'.
     ];
     for (const region of UNPRICED) {
       expect([region, rateCardFor(region)]).toEqual([region, null]);
       expect([region, cloudForRegion(region)]).toEqual([region, null]);
     }
     // CONTROL — the near neighbours these could have been approximated FROM
-    // are all present, so the five nulls are a fact about those five regions
-    // and not a lookup that has quietly stopped answering.
-    for (const region of ['usgovvirginia', 'usgovtexas', 'eastus']) {
+    // are all present, so the nulls are a fact about those regions and not a
+    // lookup that has quietly stopped answering. The three prefix-extenders
+    // make this control load-bearing rather than decorative: each of `westus`,
+    // `eastus` and `usgovvirginia` answers, and the string one character longer
+    // does not.
+    for (const region of ['usgovvirginia', 'usgovtexas', 'eastus', 'westus']) {
       expect([region, rateCardFor(region)?.region ?? null]).toEqual([region, region]);
     }
   });

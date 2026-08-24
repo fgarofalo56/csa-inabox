@@ -26,19 +26,29 @@
  * rates here are measured rather than assumed — but see §CAVEATS.
  *
  * Every card therefore carries the SAME `asOf`, and that is a statement of fact
- * rather than a convenience: they were all read in one response. The first two
- * cards (centralus, usgovvirginia) were originally read a day earlier, on
- * 2026-08-23; the census re-read both and matched all eight rates and eight
- * meter ids byte-for-byte, so 2026-08-24 is true of every card in the table and
- * no card is dated earlier than it was actually confirmed.
+ * rather than a convenience: they were all read in one response. The table this
+ * one replaces held TEN cards — centralus, eastus, eastus2, westus, westus3,
+ * northeurope, japaneast, newzealandnorth, usgovvirginia, usgovarizona — and
+ * ALL TEN were dated 2026-08-23, not merely the two the module exports by name.
+ * The census re-read all ten and every one of their forty rates matched, as did
+ * the eight meter ids the two named exports document below. So 2026-08-24 is
+ * true of every card in the table, and no card is dated earlier than it was
+ * actually confirmed.
  *
  * ── WHY THE TABLE IS KEYED BY EXACT REGION, NOT BY CLOUD ───────────────────
  * Until 2026-08-24 this module held ONE Commercial card (centralus) plus a list
- * of 37 region PREFIXES that every Commercial region resolved through. The
- * rates on the card were right; the CLASSIFIER was the defect. The census turns
- * up 12 distinct price tiers across 61 regions, and the prefix list flattened
- * every one of them onto the cheapest: 19 regions understated by 42%, New
- * Zealand by 50%, and Brazil Southeast by 129%.
+ * of 38 region PREFIXES that every Commercial region resolved through. The
+ * rates on the card were right; the CLASSIFIER was the defect.
+ *
+ * The census turns up 12 distinct price tiers across 61 priced regions, 58 of
+ * them Commercial. Replaying the 38 prefixes against those 58: 55 matched a
+ * prefix and were handed the centralus card, and 30 of those 55 are priced
+ * ABOVE it — 19 understated by 42%, New Zealand by 50%, Brazil Southeast by
+ * 129%. The other three, `belgiumcentral`, `jioindiacentral` and
+ * `jioindiawest`, matched no prefix at all and correctly returned null. So the
+ * flattening was 55 of 58, not all 58 — which matters only because the three it
+ * missed are the three it got RIGHT, by accident, and a claim of "every region"
+ * would be a claim nobody had measured.
  *
  * Measured against the prefix version: a `newzealandnorth` app at minReplicas 2,
  * 0.5 vCPU, 1 GiB was quoted LOWER $23.65 / UPPER $78.84, where the New Zealand
@@ -60,11 +70,13 @@
  * else's card.
  *
  * ── THE CENSUS ─────────────────────────────────────────────────────────────
- * 764 Consumption items, one response. 61 regions publish the four "Standard *
- * Usage" meters, in 12 distinct price tiers. Every one of the 61 publishes ALL
- * FOUR — the count of regions publishing a partial set is ZERO. There was no
+ * 764 Consumption items, one response, spanning 62 distinct `armRegionName`
+ * values. 61 of the 62 publish the four "Standard * Usage" meters, in 12
+ * distinct price tiers. Every one of those 61 publishes ALL FOUR — the count of
+ * regions publishing SOME BUT NOT ALL of the four is ZERO. There was no
  * "vCPU-active is known but the other three are not" population to exclude; the
- * meters ship together or not at all.
+ * Standard meters ship together or not at all. The 62nd region is `taiwannorth`,
+ * and it is the subject of the "what absent means" note further down.
  *
  *   µUSD/vCPU-s   idle & memory   n   regions
  *   24            3               27  brazilsouth centralindia centralus
@@ -100,18 +112,42 @@
  * carries four independent fields, because the day Azure diverges them this
  * comment is what will be wrong, not the data model.
  *
- * The table below is therefore the WHOLE published population, not a slice of
- * it. A region absent from it is a region that publishes no Container Apps
- * Consumption meter, and the two cases of that are worth naming.
+ * ── WHAT "ABSENT FROM THE TABLE" ACTUALLY MEANS ────────────────────────────
+ * The table below is the whole population this card shape can price. A region
+ * absent from it is a region that publishes no STANDARD Container Apps
+ * Consumption meter — which is NOT the same as publishing nothing, and that
+ * distinction is the entire point of this section. Three cases, and they are
+ * three different facts.
  *
- * `usdodeast` and `usdodcentral` are the ones that matter, because the old
+ * `usdodeast` and `usdodcentral` are the ones that mattered, because the old
  * `usdod` prefix branch priced them anyway. The census confirms the exclusion
- * is honest and not an oversight: usdod returns ZERO Container Apps Consumption
- * meters — not a partial set, none. Pricing those regions from `usgovvirginia`
- * was not a nearby-region estimate; it was a price minted for a boundary where
- * the service is not publicly priced at all.
+ * is honest and not an oversight: usdod returns ZERO Container Apps meters of
+ * any kind — not a partial set, not a different SKU, none. Pricing those
+ * regions from `usgovvirginia` was not a nearby-region estimate; it was a price
+ * minted for a boundary where the service is not publicly priced at all.
  *
- * China and every other unlisted region return `null` on the same principle.
+ * Azure China is the same shape: no `china*` region appears anywhere in the
+ * global retail list, for Container Apps or otherwise.
+ *
+ * `taiwannorth` is the case that makes the word STANDARD load-bearing, and the
+ * reason this section is not one sentence. Taiwan North IS in the retail list —
+ * it is the 62nd `armRegionName` — and it DOES publish a Container Apps
+ * Consumption meter. Exactly one: `Hybrid vCPU Usage`, productName 'Azure
+ * Container Apps', skuName 'Hybrid', unit "1 Hour", $0.234, meter id
+ * e5dc595c-a693-548d-94e0-4dacb54ba98d. No Standard meters, no Dedicated ones,
+ * no Dynamic Sessions.
+ *
+ * A per-vCPU-HOUR meter is not something this card shape can multiply: every
+ * field on {@link ContainerAppsRateCard} is a per-SECOND Standard rate, and
+ * nothing here has established what the Hybrid plan meters against, so nothing
+ * here will guess. `null` is therefore still the correct answer for a Standard
+ * Consumption app in Taiwan North — but the REASON is "Azure publishes no
+ * Standard rate here", not "Azure publishes nothing here". The unqualified
+ * version of that sentence, which this file carried until it was reviewed,
+ * would send a maintainer to the retail API, show them a Taiwan North row, and
+ * let them conclude this table had dropped one. A stale comment is another copy
+ * of a false claim — which is the thesis of the change that introduced it.
+ *
  * `cloud-parity.md` says the same capability ships to every boundary; here that
  * means the derived path WORKS in Gov — all three Gov regions carry cards, not
  * two — not that it invents a Gov number, and not that it quotes a Commercial
@@ -144,11 +180,11 @@
  * 1. LIST rates. Any EA/MCA negotiated discount, credit, reservation or savings
  *    plan on the operator's agreement makes the real bill LOWER. A derived
  *    figure is therefore an upper-ish bound on list terms, not a forecast.
- * 2. The table is the published population as of `asOf`, not a fixed truth.
- *    Azure adds regions, and a region added after that date will be absent for
- *    the ordinary reason that it did not exist to be read. The fix is always to
- *    re-read the URL above and add the card, never to reach for a neighbour's —
- *    the 12 tiers below are exactly why a neighbour is not a proxy.
+ * 2. The table is the STANDARD-priced population as of `asOf`, not a fixed
+ *    truth. Azure adds regions, and a region added after that date will be
+ *    absent for the ordinary reason that it did not exist to be read. The fix is
+ *    always to re-read the URL above and add the card, never to reach for a
+ *    neighbour's — the 12 tiers below are exactly why a neighbour is not a proxy.
  * 3. Consumption ("Standard") workload profile only. A Dedicated profile bills
  *    per vCPU-HOUR against reserved capacity, which is a different model
  *    entirely — `./derived.ts` declines rather than mis-applying this card.
@@ -385,8 +421,11 @@ const RATES_55: MeasuredRates = {
 };
 
 /**
- * Commercial (centralus) — measured 2026-08-23. The region the Loom Commercial
- * estate runs in, and the historical default.
+ * Commercial (centralus) — measured 2026-08-23, re-read 2026-08-24 in the
+ * census, from the SAME public endpoint; 2026-08-24 is the date the card below
+ * carries, and the reconciliation is here rather than 360 lines away in
+ * §PROVENANCE because this is where a reader arrives from `derived.test.ts`.
+ * The region the Loom Commercial estate runs in, and the historical default.
  *
  * Meter ids, for anyone re-checking a single rate:
  *   231e4822-3df5-5135-9bf7-f5bb98528b0a  Standard vCPU Active Usage
@@ -422,20 +461,27 @@ export const CONTAINER_APPS_RATES_USGOV: ContainerAppsRateCard = card(
 );
 
 /**
- * Every region the retail API publishes Container Apps Consumption rates for,
- * keyed by EXACT lowercase ARM region. 61 of them, grouped by tier.
+ * Every region the retail API publishes STANDARD Container Apps Consumption
+ * rates for, keyed by EXACT lowercase ARM region. 61 of them, grouped by tier.
  *
  * Exported as a record rather than a lookup function alone so a caller can
  * enumerate what IS known — the population of the rate layer — instead of
  * discovering gaps one failed lookup at a time. Everything not listed here
- * resolves to `null`, and what is not listed is what Azure does not publish:
- * usdod*, Azure China, and any region added after the read date in
- * `RATES_READ_ON`. See §THE CENSUS.
+ * resolves to `null`, and what is not listed is what Azure publishes no
+ * STANDARD Consumption rate for. That is three distinct populations, not one:
+ * usdod* and Azure China, which publish no Container Apps meter at ALL;
+ * `taiwannorth`, which publishes a Container Apps Consumption meter but only
+ * the Hybrid one; and any region added after the read date in `RATES_READ_ON`.
+ * Do not compress those into "Azure does not publish it" — taiwannorth is a
+ * counterexample to that sentence and this comment used to contain it. See
+ * §WHAT "ABSENT FROM THE TABLE" ACTUALLY MEANS.
  *
  * Written out one region per line rather than generated from the tier groups.
  * A reducer would be shorter and would hide the thing worth seeing — that
  * westus2 is NOT in the same tier as westus — and it would let the two
- * identity-pinned entries below silently disagree with their group.
+ * identity-pinned entries below silently disagree with their group. That last
+ * risk is now watched rather than merely warned about: see the tier-value and
+ * identity-pinned-export blocks in `__tests__/cost/rate-card.test.ts`.
  */
 export const BUILT_IN_RATE_CARDS: Readonly<Record<string, ContainerAppsRateCard>> = {
   // ---- 0.000024 / 0.000003 — 27 Commercial regions, the cheapest tier. ----
