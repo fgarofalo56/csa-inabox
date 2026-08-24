@@ -246,24 +246,87 @@ export function metricTotal(resourceId, metric, startIso, { aggregation = 'Total
   return have.reduce((a, b) => a + Number(b), 0);
 }
 
-/** Check-run counts for a commit. Throws on 403/404 rather than yielding 0/0/0. */
-export function checkRuns(repo, sha) {
-  const d = gh(['api', `repos/${repo}/commits/${sha}/check-runs?per_page=100`]);
-  const runs = d?.check_runs;
-  if (!Array.isArray(runs)) {
-    throw new MeasurementError('check-runs response has no check_runs array — UNKNOWN, not zero', { repo, sha });
+/**
+ * Was a green check-run HOLLOW — did it report success having executed nothing?
+ *
+ * A required check that skips every substantive step still reports `success`,
+ * and branch protection accepts it. Observed on `main`: `vitest (node 20)` came
+ * back green with steps 4-8 skipped, including "Run vitest", because the last
+ * merge touched no console files. A live test failure sat behind that green.
+ *
+ * Returns `{ hollow, ran, skipped, skippedNames }`. Note that hollowness is NOT
+ * automatically a defect — a skip can be genuinely path-appropriate for the diff
+ * being tested. It is a defect when the green is then read as coverage. This
+ * reports the fact and leaves the judgement to the caller, which is the only
+ * honest split.
+ */
+export function checkRunHollowness(repo, jobId) {
+  const job = gh(['api', `repos/${repo}/actions/jobs/${jobId}`]);
+  const steps = job?.steps;
+  if (!Array.isArray(steps) || steps.length === 0) {
+    throw new MeasurementError('job has no steps — UNKNOWN, not hollow and not sound', { repo, jobId });
   }
-  const total = runs.length;
-  if (total === 0) {
+  // Setup/teardown steps are noise; they run even when everything real is skipped.
+  const NOISE = /^(Set up job|Complete job|Post |Run actions\/checkout|Checkout)/i;
+  const substantive = steps.filter((s) => !NOISE.test(s.name));
+  const skipped = substantive.filter((s) => s.conclusion === 'skipped');
+  const ran = substantive.filter((s) => s.conclusion !== 'skipped');
+  return {
+    hollow: substantive.length > 0 && ran.length === 0,
+    ran: ran.length,
+    skipped: skipped.length,
+    skippedNames: skipped.map((s) => s.name),
+    conclusion: job.conclusion,
+  };
+}
+
+/** Extract the job id from a check-run's details_url, or null. */
+export function jobIdFromUrl(url) {
+  const m = String(url || '').match(/\/job\/(\d+)/);
+  return m ? m[1] : null;
+}
+/**
+ * Check-run counts for a commit. Throws on 403/404 rather than yielding 0/0/0,
+ * and PAGINATES — a `per_page=100` read that returns exactly 100 is SATURATED,
+ * not complete. Reading a truncated page as the whole set produced a confident
+ * "no vitest check on this SHA" for a commit that had one on page 2.
+ */
+export function checkRuns(repo, sha) {
+  const all = [];
+  let total = null;
+  for (let page = 1; page <= 20; page++) {
+    const d = gh(['api', `repos/${repo}/commits/${sha}/check-runs?per_page=100&page=${page}`]);
+    const runs = d?.check_runs;
+    if (!Array.isArray(runs)) {
+      throw new MeasurementError('check-runs response has no check_runs array — UNKNOWN, not zero', { repo, sha, page });
+    }
+    if (total === null) total = d.total_count;
+    all.push(...runs);
+    if (runs.length < 100 || all.length >= (total ?? Infinity)) break;
+  }
+
+  if (all.length === 0) {
     throw new MeasurementError(
       'check-runs returned ZERO runs. A PR with no checks is possible but rare; ' +
       'far more often this is a 403 or a wrong SHA. Verify before treating it as a verdict.',
       { repo, sha },
     );
   }
+  // A short read against a known total is a partial answer, not a verdict.
+  if (total !== null && all.length < total) {
+    throw new MeasurementError(
+      `check-runs TRUNCATED: fetched ${all.length} of ${total}. Refusing to report counts ` +
+      'from a partial page — that is how a missing check reads as an absent one.',
+      { repo, sha, fetched: all.length, total },
+    );
+  }
+
   return {
-    total,
-    red: runs.filter((r) => ['failure', 'timed_out', 'cancelled'].includes(r.conclusion)).length,
-    pending: runs.filter((r) => r.status !== 'completed').length,
+    total: all.length,
+    declaredTotal: total,
+    red: all.filter((r) => ['failure', 'timed_out'].includes(r.conclusion)).length,
+    cancelled: all.filter((r) => r.conclusion === 'cancelled').length,
+    pending: all.filter((r) => r.status !== 'completed').length,
+    runs: all,
   };
 }

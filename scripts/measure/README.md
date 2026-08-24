@@ -29,6 +29,8 @@ Discipline does not fix this; a type does.
 | **R3** | **No shell**, so no MSYS path mangling. ARM ids pass through untouched. |
 | **R4** | `null` / missing / unparseable is **`UNKNOWN`**, a distinct state from `0`. |
 | **R5** | A **zero is refused** unless a positive control proves the query path works. |
+| **R6** | A **saturated page is not a complete set.** `checkRuns` paginates and refuses to report counts from a short read against a known `total_count`. |
+| **R7** | A **green check may have executed nothing.** `checkRunHollowness` answers that separately from the conclusion. |
 
 R5 is the load-bearing one. `measureWithControl` will not return a number at all if the control
 is zero, `UNKNOWN`, or throws:
