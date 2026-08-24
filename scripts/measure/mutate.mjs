@@ -46,9 +46,12 @@ const ARMS = [
     repl: `if (false) {`,
   },
   {
-    name: 'R1 non-zero exit no longer throws',
-    find: `if (res.status !== 0 && !allowNonZero) {`,
-    repl: `if (false) {`,
+    // R1's throw now lives after the retry loop, so the arm targets the EARLY
+    // RETURN instead: making it unconditional means a non-zero exit yields a
+    // value and never reaches the throw.
+    name: 'R1 non-zero exit no longer throws (early-return made unconditional)',
+    find: `    if (res.status === 0 || allowNonZero) {`,
+    repl: `    if (true) {`,
   },
   {
     name: 'R4 empty stdout returns {} instead of throwing',

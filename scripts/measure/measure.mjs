@@ -70,36 +70,65 @@ function resolveExe(bin) {
 }
 
 /**
+ * A GitHub SECONDARY rate limit is a transient refusal, not a verdict and not a
+ * quota exhaustion — it is refused BEFORE metering, so `core.used` stays ~flat
+ * (observed: used=10/5000 while every request 403'd). Distinguishing it matters:
+ * treating it as a real answer is how twenty PRs got reported at `0/0/0`.
+ *
+ * Retry is bounded and FAILS CLOSED — on exhaustion it throws like any other
+ * failure. A retry that cannot fail would just relocate the lie.
+ */
+function isSecondaryRateLimit(stderr) {
+  return /rate limit|secondary rate|abuse detection/i.test(stderr || '');
+}
+
+/**
  * Run a command and return its OWN exit status (R2), with no shell (R3).
  * Throws on non-zero: a failed command must not yield a value (R1).
  */
-export function run(bin, args, { allowNonZero = false, timeoutMs = 600000 } = {}) {
+export function run(bin, args, { allowNonZero = false, timeoutMs = 600000, retries = 0, onRetry = null } = {}) {
   const { file } = resolveExe(bin);
-  const res = spawnSync(file, args, {
-    encoding: 'utf8',
-    timeout: timeoutMs,
-    maxBuffer: 64 * 1024 * 1024,
-    shell: false,
-    windowsHide: true,
-  });
+  let last = null;
+  let lastStatus = null;
 
-  if (res.error) {
-    throw new MeasurementError(`${bin} failed to launch: ${res.error.message}`, { bin, args });
-  }
-  // status === null means killed by signal/timeout -- NOT a zero result.
-  if (res.status === null) {
-    throw new MeasurementError(`${bin} did not exit normally (timeout or signal)`, {
-      bin, signal: res.signal,
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    const res = spawnSync(file, args, {
+      encoding: 'utf8',
+      timeout: timeoutMs,
+      maxBuffer: 64 * 1024 * 1024,
+      shell: false,
+      windowsHide: true,
     });
+
+    if (res.error) {
+      throw new MeasurementError(`${bin} failed to launch: ${res.error.message}`, { bin, args });
+    }
+    // status === null means killed by signal/timeout -- NOT a zero result.
+    if (res.status === null) {
+      throw new MeasurementError(`${bin} did not exit normally (timeout or signal)`, {
+        bin, signal: res.signal,
+      });
+    }
+    if (res.status === 0 || allowNonZero) {
+      return { rc: res.status, stdout: res.stdout ?? '', stderr: res.stderr ?? '' };
+    }
+
+    last = (res.stderr || '').trim();
+    lastStatus = res.status;
+    if (attempt < retries && isSecondaryRateLimit(last)) {
+      const waitMs = 30000 * (attempt + 1); // progressive, like the limit itself
+      if (onRetry) onRetry(attempt + 1, waitMs, last);
+      // Block synchronously; callers are scripts, not servers.
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, waitMs);
+      continue;
+    }
+    break;
   }
-  if (res.status !== 0 && !allowNonZero) {
-    const err = (res.stderr || '').trim();
-    throw new MeasurementError(
-      `${bin} exited ${res.status}: ${err.slice(0, 400) || '<no stderr>'}`,
-      { bin, args, status: res.status, stderr: err },
-    );
-  }
-  return { rc: res.status, stdout: res.stdout ?? '', stderr: res.stderr ?? '' };
+
+  throw new MeasurementError(
+    `${bin} exited ${lastStatus}: ${last?.slice(0, 400) || '<no stderr>'}`,
+    { bin, args, status: lastStatus, stderr: last, rateLimited: isSecondaryRateLimit(last) },
+  );
 }
 
 /** Run and parse JSON. Unparseable output is an error, never an empty object (R1/R4). */
@@ -117,7 +146,14 @@ export function runJson(bin, args, opts) {
 }
 
 export const az = (args, opts) => runJson('az', [...args, '-o', 'json'], opts);
-export const gh = (args, opts) => runJson('gh', args, opts);
+/** gh reads default to retrying a SECONDARY rate limit — it is transient, not a verdict. */
+export const gh = (args, opts = {}) => runJson('gh', args, {
+  retries: 4,
+  onRetry: (n, ms, err) => process.stderr.write(
+    `  [measure] secondary rate limit (attempt ${n}); waiting ${ms / 1000}s — this is NOT a verdict\n`,
+  ),
+  ...opts,
+});
 
 /**
  * The core guard (R5): report a numeric measurement ONLY when a positive
