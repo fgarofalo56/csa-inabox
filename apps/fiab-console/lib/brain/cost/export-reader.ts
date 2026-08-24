@@ -29,6 +29,15 @@
  *    result carries {@link Completeness}. WITHOUT a manifest the answer is
  *    `'unknown'` — never `'complete'`.
  *
+ *    The blob comparison is by WHOLE container-relative path and as a MULTISET.
+ *    Both of those are corrections. Comparing LAST SEGMENTS let one run's
+ *    `part_0_0001.csv` stand in for another's — every run's first partition is
+ *    named that — and comparing as a SET let the same blob be supplied twice and
+ *    counted once. Either read `'complete'` over a DOUBLED total wearing the
+ *    `billed` label. `dataRowCount` catches both when a manifest carries one,
+ *    but that field is OPTIONAL, so the name check has to carry its own weight
+ *    rather than leaning on a field Azure is not obliged to write.
+ *
  * 2. WRONG COLUMN. The cost column is named differently per agreement:
  *    `BilledCost` (FOCUS), `CostInBillingCurrency` (EA/MCA current),
  *    `Cost`/`PreTaxCost` (legacy EA). A reader hard-coded to one of them
@@ -36,6 +45,13 @@
  *    failure. So the header is matched against ordered candidate lists, and the
  *    columns actually matched are REPORTED in {@link CostExportRead.columns}.
  *    No match for the cost column means the read is blind, not empty.
+ *
+ *    A candidate list is only as honest as its entries, and the failure it
+ *    produces is worse than binding nothing: `PaygCost*` is the PAY-AS-YOU-GO
+ *    LIST price, the number before any negotiated rate, and it was in the
+ *    USD-cost list. Binding it emitted a list-rate ESTIMATE as `source:
+ *    'billed'`. An entry here must be the amount actually BILLED, in USD, or it
+ *    does not belong.
  *
  * 3. WRONG CURRENCY. Every figure in the Brain is `amountUsd`. An export whose
  *    `BillingCurrency` is EUR carries EUR in `CostInBillingCurrency`, and
@@ -72,7 +88,19 @@ import { makeReadPopulation, type ReadPopulation } from './population';
 
 /** One partition blob of an export run, already fetched. */
 export interface ExportPartition {
-  /** Blob name as it appears in the container. Compared against the manifest. */
+  /**
+   * The blob's name as it appears in the container — container-relative and
+   * WHOLE, e.g. `loom-brain/20260801-20260831/<runId>/part_0_0001.csv`, not
+   * `part_0_0001.csv`.
+   *
+   * It is compared against the manifest's `blobs[]` by the entire path, because
+   * `part_0_0001.csv` is the last segment of the first partition of EVERY run,
+   * so a last-segment comparison lets one run's partition stand in for
+   * another's. A name that does not match a manifest entry is reported as
+   * supplied-but-not-listed and the run reads `'incomplete'` — the safe
+   * direction, since the alternative is quoting a total as whole over blobs
+   * that were never actually checked against the manifest.
+   */
   readonly blobName: string;
   /** The partition's CSV text, header row included. */
   readonly csv: string;
@@ -282,8 +310,27 @@ const CANDIDATES = {
   resourceId: ['ResourceId', 'InstanceId', 'instanceId', 'resourceid'],
   /** Billing-currency cost. */
   cost: ['BilledCost', 'CostInBillingCurrency', 'PreTaxCost', 'Cost', 'costInBillingCurrency'],
-  /** Explicitly-USD cost. Preferred whenever present. */
-  usdCost: ['x_BilledCostInUsd', 'x_EffectiveCostInUsd', 'CostInUsd', 'PaygCostInUSD'],
+  /**
+   * Explicitly-USD cost. Preferred whenever present — so every entry here has to
+   * be the amount ACTUALLY BILLED, expressed in USD, and nothing else.
+   *
+   * `PaygCostInUSD` was in this list and has been REMOVED. `PaygCost*` is the
+   * PAY-AS-YOU-GO LIST price: the number before any negotiated rate. Because
+   * `usdCost` wins over `cost` unconditionally, a header carrying both bound the
+   * list price and this module emitted it as `source: 'billed'` — measured on
+   * `ResourceId,CostInBillingCurrency,PaygCostInUsd,BillingCurrency` over a row
+   * reading `10.00 / 100.00 / USD`, the read returned amount=100 source=billed.
+   * A 10x overstatement in the exact visual form of a bill.
+   *
+   * It arrived through COLUMN BINDING, which is why no guard caught it: the
+   * figure `./figure.ts` constructs is a genuinely billed one, over the wrong
+   * number, so every type-level defence there is bypassed by construction rather
+   * than defeated. The only thing that had ever prevented it was ORDER —
+   * `CostInUsd` sits earlier and wins on the real MCA/EA header — and order is
+   * not a guard. A list price may only ever produce a DERIVED figure, and this
+   * module produces nothing but billed ones, so it has no home here at all.
+   */
+  usdCost: ['x_BilledCostInUsd', 'x_EffectiveCostInUsd', 'CostInUsd'],
   currency: ['BillingCurrency', 'BillingCurrencyCode', 'Currency', 'currency'],
   date: ['ChargePeriodStart', 'Date', 'UsageDateTime', 'date'],
 } as const;
@@ -391,11 +438,31 @@ export function parseManifest(json: string): ManifestFacts {
   };
 }
 
-/** Blob names are full paths in the manifest; compare on the last segment. */
-function basename(p: string): string {
-  const s = p.replace(/\\/g, '/');
-  const i = s.lastIndexOf('/');
-  return (i >= 0 ? s.slice(i + 1) : s).toLowerCase();
+/**
+ * Normalise a blob name for comparison — the WHOLE container-relative path, not
+ * its last segment.
+ *
+ * This was a `basename()`, and comparing basenames is how a DOUBLE COUNT reads
+ * as `'complete'`. Cost Management writes every partition as
+ * `<export>/<dateRange>/<runId>/part_0_0001.csv`, so `part_0_0001.csv` is the
+ * last segment of the first partition of EVERY run. A manifest listing one blob,
+ * handed that run's partition PLUS the same-named partition from a different
+ * run, therefore saw one name it recognised, nothing missing and nothing extra,
+ * and reported a doubled total as a whole, billed one. The `dataRowCount`
+ * cross-check below catches that when the manifest carries a row count — but
+ * that field is OPTIONAL, so the entire partial-read defence rested on a field
+ * Azure is not obliged to write.
+ *
+ * Case and separators ARE folded, deliberately. Blob names are case-sensitive in
+ * storage, but a manifest and a container listing can disagree on the casing of
+ * the export-name segment, and a caller that joined with `\` is naming the same
+ * blob — while a FALSE `'incomplete'` is its own untrue claim under R7. Neither
+ * folding can make a DIFFERENT blob count as a supplied one, which is the
+ * property that actually matters here; two partitions of one run whose paths
+ * differ only in case is not a shape Cost Management produces.
+ */
+function relativeBlobPath(p: string): string {
+  return p.trim().replace(/\\/g, '/').replace(/^\/+/, '').toLowerCase();
 }
 
 // ---------------------------------------------------------------------------
@@ -440,20 +507,48 @@ export function readCostExport(input: CostExportInput): CostExportRead {
   } else if (!manifestFacts?.blobNames) {
     completenessDetail = `manifest '${input.manifest.blobName}' carries no blobs[] list — completeness cannot be established.`;
   } else {
-    const supplied = new Set(input.partitions.map((p) => basename(p.blobName)));
-    const missing = manifestFacts.blobNames.filter((n) => !supplied.has(basename(n)));
-    const extra = input.partitions
-      .map((p) => p.blobName)
-      .filter((n) => !manifestFacts.blobNames!.some((m) => basename(m) === basename(n)));
+    // A MULTISET, not a set, and keyed on the WHOLE path.
+    //
+    // A set answers "was this name seen?", and the same blob supplied twice is
+    // seen once — so a run whose total is doubled by a duplicated partition
+    // matches cleanly and reports `'complete'`. Consuming ONE manifest entry per
+    // supplied partition means the second copy has nothing left to match and
+    // lands in `extra`, where it is named.
+    //
+    // Counting alone is not enough either: a same-named partition from a
+    // DIFFERENT run gives the right COUNT with the wrong MEMBER. That is why
+    // both directions are computed by identity rather than compared by length.
+    const manifestBlobNames = manifestFacts.blobNames;
+    const unmatched = new Map<string, string[]>();
+    for (const name of manifestBlobNames) {
+      const key = relativeBlobPath(name);
+      const bucket = unmatched.get(key);
+      if (bucket) bucket.push(name);
+      else unmatched.set(key, [name]);
+    }
+    const extra: string[] = [];
+    for (const p of input.partitions) {
+      const bucket = unmatched.get(relativeBlobPath(p.blobName));
+      if (bucket && bucket.length > 0) bucket.shift();
+      else extra.push(p.blobName);
+    }
+    const missing: string[] = [];
+    for (const bucket of unmatched.values()) {
+      for (const name of bucket) missing.push(name);
+    }
     if (missing.length === 0 && extra.length === 0) {
       completeness = 'complete';
-      completenessDetail = `all ${manifestFacts.blobNames.length} manifest partition(s) supplied.`;
+      completenessDetail = `all ${manifestBlobNames.length} manifest partition(s) supplied.`;
     } else {
       completeness = 'incomplete';
+      // The names are printed WHOLE. Truncating them to a last segment is what
+      // made two different runs' partitions look like the same file, and it
+      // would make this very message unable to show the reader the difference it
+      // just found.
       completenessDetail =
-        `manifest lists ${manifestFacts.blobNames.length} partition(s); ` +
-        `${missing.length} MISSING${missing.length ? ` (${missing.slice(0, 5).map(basename).join(', ')})` : ''}` +
-        `${extra.length ? `, ${extra.length} supplied but not listed (${extra.slice(0, 5).map(basename).join(', ')})` : ''}. ` +
+        `manifest lists ${manifestBlobNames.length} partition(s); ` +
+        `${missing.length} MISSING${missing.length ? ` (${missing.slice(0, 5).join(', ')})` : ''}` +
+        `${extra.length ? `, ${extra.length} supplied but not listed (${extra.slice(0, 5).join(', ')})` : ''}. ` +
         'Any total here is a PARTIAL read.';
     }
   }
@@ -623,8 +718,11 @@ export function readCostExport(input: CostExportInput): CostExportRead {
     }
   }
 
-  // Row-count cross-check against the manifest. A name-level match can still
-  // hide a truncated blob, so the row count is compared when it is available.
+  // Row-count cross-check against the manifest. Even an exact, whole-path,
+  // multiset name match can hide a TRUNCATED blob — the right files, one of them
+  // short — so the declared row count is compared when it is available. It is an
+  // OPTIONAL field, which is why the name check above had to be made strict in
+  // its own right rather than left leaning on this one.
   if (
     completeness === 'complete' &&
     manifestFacts?.dataRowCount !== null &&
