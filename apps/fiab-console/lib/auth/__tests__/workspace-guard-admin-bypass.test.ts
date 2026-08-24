@@ -355,12 +355,26 @@ describe('#3825 resolveAdminWorkspace — same delegation, admin plane still adm
   });
 
   it('an ADMIN who also holds an ACL role still resolves (no new refusal)', async () => {
-    world.ws = foreignWs(undefined); // tid-less: the ACL grant is the boundary here
+    // #3840 — FIXTURE CHANGED, CLAIM UNCHANGED. This used to run on a tid-less
+    // doc with the comment "the ACL grant is the boundary here". That argument
+    // died with #3840: step 4 now requires a POSITIVE match, so an unstamped
+    // workspace is refused whether or not an ACL row exists. The claim this
+    // spec is named for — an admin holding an ACL role is not newly refused —
+    // is proved on a CONFIRMED tenancy, which is where it is meaningful.
+    world.ws = foreignWs(HOME_TENANT);
     world.aclRole = 'Member';
     actAs(ADMIN_OID, HOME_TENANT);
     const r: any = await resolveAdminWorkspace(WS_ID);
     expect(r.resp).toBeUndefined();
     expect(r.via).toBe('admin');
+  });
+
+  it('#3840 — the same ADMIN + ACL role is REFUSED on an UNSTAMPED workspace', async () => {
+    world.ws = foreignWs(undefined);
+    world.aclRole = 'Member';
+    actAs(ADMIN_OID, HOME_TENANT);
+    const r: any = await resolveAdminWorkspace(WS_ID);
+    expect(r.resp).toBeDefined();
   });
 });
 
@@ -430,27 +444,86 @@ describe('#3825 REGRESSION GUARDS — owner and ACL never depended on the tenant
     expect(resolverConsulted).toBe(0);
   });
 
-  it("via:'acl' — a shared Member WRITES with NO tid on either side", async () => {
+  // #3840 — THE FOUR SPECS BELOW WERE INVERTED, NOT DELETED. They previously
+  // asserted that the ACL path resolves with NO tid on either side, which was
+  // the deliberate #3823-era statement that tightening the ADMIN bypass had not
+  // disturbed the ACL. Step 4 — the boundary BOTH paths share — now requires a
+  // positive match, so an unstamped workspace (or an unstamped session) is a
+  // refusal on the ACL path too. Each keeps a CONFIRMED-tenancy control beside
+  // it so the suite still distinguishes "correctly narrowed" from "denies
+  // everything", which a bare inversion could not.
+
+  it("via:'acl' — a shared Member is now REFUSED with NO tid on either side", async () => {
     world.ws = foreignWs(undefined);
     world.aclRole = 'Member';
     const s = actAs(PLAIN_OID, undefined);
+    expect(await authorizeWorkspace(s, WS_ID)).not.toBeNull();
+  });
+
+  it("CONTROL: via:'acl' — a shared Member still WRITES when the tenancy is CONFIRMED", async () => {
+    world.ws = foreignWs(HOME_TENANT);
+    world.aclRole = 'Member';
+    const s = actAs(PLAIN_OID, HOME_TENANT);
     expect(await authorizeWorkspace(s, WS_ID)).toBeNull();
   });
 
-  it("via:'acl' — a shared Viewer READS with NO tid, and still cannot WRITE", async () => {
+  it("via:'acl' — a shared Viewer is now REFUSED with NO tid, for READ as well as WRITE", async () => {
     world.ws = foreignWs(undefined);
     world.aclRole = 'Viewer';
     let s = actAs(PLAIN_OID, undefined);
-    expect(await authorizeWorkspace(s, WS_ID, { allowReadRoles: true })).toBeNull();
+    expect(await authorizeWorkspace(s, WS_ID, { allowReadRoles: true })).not.toBeNull();
     s = actAs(PLAIN_OID, undefined);
+    const denied = await authorizeWorkspace(s, WS_ID);
+    // 404, AND THE CODE IS THE POINT. A NON-ADMIN gets the plain not-found:
+    // `tenant_unconfirmed` states that a workspace with this id EXISTS and is
+    // unstamped, which over a caller-supplied id is an existence oracle for
+    // anyone with no claim on it. The resolver records that denial only on the
+    // tenant-admin path (`workspace-access.ts` step 4), which is the same
+    // scoping step 6 has always had and which
+    // `bulk-delete/__tests__/bulk-delete-tenant-boundary.test.ts` pins.
+    // An earlier draft of #3840 recorded it for EVERY caller; that regression
+    // was caught by the bulk-delete spec, and THIS line is its second pin.
+    expect(denied!.status).toBe(404);
+  });
+
+  it('CONTROL: a tenant ADMIN gets the honest 409, not the opaque 404 (R7)', async () => {
+    // The other half of the disclosure boundary. An admin already knows the
+    // tenant's inventory, so withholding the cause buys nothing and costs them
+    // the remediation. `workspace-denial.ts` states outright that a 404 here
+    // would be FALSE — the workspace was read, it exists, and what could not be
+    // established is its tenancy. Without this control, the spec above is
+    // satisfied by the denial channel being dead everywhere.
+    world.ws = foreignWs(undefined);
+    world.aclRole = 'Viewer';
+    const s = actAs(ADMIN_OID, HOME_TENANT);
+    const denied = await authorizeWorkspace(s, WS_ID);
+    expect(denied!.status).toBe(409);
+  });
+
+  it("CONTROL: via:'acl' — a shared Viewer still READS, and still cannot WRITE, when CONFIRMED", async () => {
+    world.ws = foreignWs(HOME_TENANT);
+    world.aclRole = 'Viewer';
+    let s = actAs(PLAIN_OID, HOME_TENANT);
+    expect(await authorizeWorkspace(s, WS_ID, { allowReadRoles: true })).toBeNull();
+    s = actAs(PLAIN_OID, HOME_TENANT);
     const denied = await authorizeWorkspace(s, WS_ID);
     expect(denied!.status).toBe(404);
   });
 
-  it("via:'acl' — a Member reaches an ITEM route with NO tid (authorizeItemWorkspace)", async () => {
+  it("via:'acl' — a Member is now REFUSED on an ITEM route with NO tid (authorizeItemWorkspace)", async () => {
     world.ws = foreignWs(undefined);
     world.aclRole = 'Member';
     const s = actAs(PLAIN_OID, undefined);
+    const denied = await authorizeItemWorkspace(s, {
+      itemId: ITEM_ID, itemType: ITEM_TYPE, notFound: ROUTE_NOT_FOUND,
+    });
+    expect(denied).not.toBeNull();
+  });
+
+  it("CONTROL: via:'acl' — a Member still reaches the ITEM route when the tenancy is CONFIRMED", async () => {
+    world.ws = foreignWs(HOME_TENANT);
+    world.aclRole = 'Member';
+    const s = actAs(PLAIN_OID, HOME_TENANT);
     const denied = await authorizeItemWorkspace(s, {
       itemId: ITEM_ID, itemType: ITEM_TYPE, notFound: ROUTE_NOT_FOUND,
     });
@@ -459,8 +532,10 @@ describe('#3825 REGRESSION GUARDS — owner and ACL never depended on the tenant
 
   it("via:'acl' still WINS over the admin bypass for an admin who is also a Viewer", async () => {
     // Unchanged resolver semantics: a read-only explicit grant is not silently
-    // upgraded, and the admin is not denied their real grant on a READ.
-    world.ws = foreignWs(undefined);
+    // upgraded, and the admin is not denied their real grant on a READ. Proved
+    // on a CONFIRMED tenancy — on an unstamped doc step 4 now refuses first, so
+    // the old fixture could no longer reach the precedence question at all.
+    world.ws = foreignWs(HOME_TENANT);
     world.aclRole = 'Viewer';
     const s = actAs(ADMIN_OID, HOME_TENANT);
     expect(await authorizeWorkspace(s, WS_ID, { allowReadRoles: true })).toBeNull();
@@ -524,10 +599,21 @@ describe('#3825 authorizeWorkspaceList — the LIST authorizer delegates too', (
     expect(await authorizeWorkspaceList(s, WS_ID)).toBeNull();
   });
 
-  it("REGRESSION: via:'acl' — a shared Viewer still LISTS with NO tid on either side", async () => {
+  it("REGRESSION: via:'acl' — a shared Viewer is now REFUSED from LISTING with NO tid on either side", async () => {
+    // #3840 — inverted. The LIST authorizer delegates to the same step 4, so it
+    // narrows in lock-step. This is the surface where the old leniency was
+    // widest: `listAccessibleWorkspaces` FILTERS A SET (see #3885), so an
+    // undecidable comparison returned the unfiltered set rather than one extra row.
     world.ws = foreignWs(undefined);
     world.aclRole = 'Viewer';
     const s = actAs(PLAIN_OID, undefined);
+    expect(await authorizeWorkspaceList(s, WS_ID)).toBeNull();
+  });
+
+  it("CONTROL: via:'acl' — a shared Viewer still LISTS when the tenancy is CONFIRMED", async () => {
+    world.ws = foreignWs(HOME_TENANT);
+    world.aclRole = 'Viewer';
+    const s = actAs(PLAIN_OID, HOME_TENANT);
     const access = await authorizeWorkspaceList(s, WS_ID);
     expect(access).not.toBeNull();
     expect(access!.role).toBe('Viewer');

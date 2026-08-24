@@ -231,34 +231,53 @@ should absorb the waiting time instead.**
 
 ---
 
-## 4. Open PRs — 23 total (9 dependabot, 14 substantive)
+## 4. Merge drain — LIVE STATE (2026-08-23, end of session)
 
-**The treadmill is the constraint.** `main` is `strict` with 15 required contexts and the
-console vitest suite runs ~34 minutes, so **every merge invalidates every other open PR**.
-14 substantive PRs ≈ 14 sequential cycles ≈ 8 hours of wall-clock CI, no matter the order.
-This is why dependabot batches last.
+**16 merged this session.** Open: **18** (9 substantive · 9 dependabot).
 
-| PR | What | Needs |
-|---|---|---|
-| #3890 | security: tenant-admin bypass wrote ADLS ACLs | **CONFLICTING** — rebase |
-| #3900 | auth: tid-less session generator + consumers | **CONFLICTING** — rebase |
-| #3898 | docs: pause/resume design + Wave 0 triage | review (running) |
-| #3912 | ci: test-isolation race reddening unrelated PRs | review (running) — **merge early, it unblocks others** |
-| #3923 | bicep: `LOOM_CLOUD_TIER` never passed; Maps BYO read 1 of 3 spellings | review (running) — **gated by P0** |
-| #3925 | items: user-writable state reached a Key Vault delete | review (running) |
-| #3927 | deploy: three Gov/data-plane lanes wired in name only | review (running) — **gated by P0** |
-| #3924 | dataplane: three R7 error messages asserted unestablished causes | rebase + review |
-| #3928 | ci: seven guards that could not see their own subject | rebase + review |
-| #3929 | console-api: a pasted setup command took unescaped input | rebase + review |
-| #3930 | console: seven admin surfaces asserted what the page contradicted | rebase + review |
-| #3931 | editors: mapping-dataflow sent its Cosmos GUID as the wrong id | rebase + review |
-| #3932 | **estate Pause/Resume button** | agent actively working — do not review mid-push |
-| #3863 | release 0.101.0 | hold until the wave lands |
+    #3926 parity docs        #3944 P0 deploy fix      #3939 security taxonomy
+    #3938 Brain PRP+register #3953 merge strategy     #3898 pause PRP + triage
+    #3932 Pause/Resume button#3945 Brain SUBSTRATE    #3925 engine-object guard
+    #3912 test-isolation race#3927 Gov/data-plane     #3929 pasted-command escaping
+    #3930 admin surfaces     #3923 LOOM_CLOUD_TIER    #3928 seven blind guards
+    #3931 mapping-dataflow id
 
-**Merged this session:** #3926 (parity docs) — central claim verified against source
-(`MIRROR_SOURCES` = exactly 11 entries, 11th routes external). Close-audit clean.
+### What remains
 
----
+| PR | State |
+|---|---|
+| #3863 release 0.101.0 | **LAST by design** — its changelog derives from everything merged before it |
+| #3890 · #3900 security | in the unblock lane; #3890's earlier lane returned EMPTY and did no work |
+| #3924 dataplane R7 | extraction lane — blocked only by the monolith-creep ratchet, not a finding |
+| #3946 #3949 #3950 #3951 #3952 Brain | in the unblock lane (conflict resolution + two still red) |
+| 9 dependabot | last. **#3873 (github-script 7→9) and #3874 (upload-artifact 4→7) are MAJOR bumps to workflows that gate all CI** — review, never batch |
+
+### What actually unblocked this
+
+Rounds 1 and 2 both returned CHANGES REQUIRED on every remediation PR, **with real findings each
+time**. That is the reviews working, but it does not terminate: *"a future sibling could evade this
+guard"* always justifies another round. Round 3 asked a different question —
+
+> **If this merges today, is anything WORSE than before?**
+
+No ⇒ the finding is guard-strength and becomes an issue. Yes, or unsure ⇒ it blocks. Six PRs
+landed on that basis, with their residual gaps captured as #3954–#3965, #3967.
+
+### Two mechanical lessons from driving the merges
+
+1. **`--admin` bypasses both the review requirement AND the up-to-date requirement**, so the
+   ~34-min treadmill is not the binding constraint. What matters is **file-disjointness between
+   consecutive merges**.
+2. **GitHub recomputes `mergeable` after every merge**, returning `UNKNOWN` for a minute or two.
+   A driver that reads `UNKNOWN` as a verdict skips every remaining PR — observed exactly once
+   here. **Poll until it settles**; never treat `UNKNOWN` as "not mergeable".
+
+### A file-identity measurement EXPIRES
+
+The merge order rested on four Brain PRs carrying byte-identical substrate files (blob
+`b805bdf322a6`). True when measured — and then #3945's own review round **changed those files**,
+so merging it flipped all four siblings to `CONFLICTING`. **Re-verify blob identity immediately
+before merging, not when the plan is written.**
 
 ## 5. Agent lanes in flight — where output lands
 

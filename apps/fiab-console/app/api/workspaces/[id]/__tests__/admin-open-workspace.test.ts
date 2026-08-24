@@ -230,11 +230,32 @@ describe('GET /api/workspaces/[id] — tenant admin can open every workspace', (
     expect(j.accessRole).toBe('Owner');
   });
 
-  it("keeps the ACL path (via:'acl') with NO tid anywhere", async () => {
-    // Regression guard: an explicit share is itself the tenant boundary and is
-    // untouched by #3823.
+  it("the ACL path (via:'acl') is now REFUSED with NO tid anywhere (#3840)", async () => {
+    // INVERTED, DELIBERATELY. This spec used to read "an explicit share is
+    // itself the tenant boundary and is untouched by #3823". #3840 retires that
+    // argument: it is a claim about how `workspace-roles` rows are usually
+    // CREATED, not an invariant the read path enforces, and step 4 — the
+    // boundary the ACL path and the admin path SHARE — now requires a POSITIVE
+    // tenant match. An unstamped workspace belongs to no confirmable tenant, so
+    // it is refused whether or not a share exists.
+    //
+    // REMEDIATION, because this is a real behaviour change for legacy estates:
+    // `node scripts/csa-loom/backfill-workspace-tid.mjs` stamps the tenant onto
+    // pre-rel-T11 records and the share resolves again — see the CONTROL below.
     seedWorkspace('wsShared', 'alice-oid', { name: 'Shared' });
     getSessionMock.mockReturnValue({ claims: { oid: 'bob-oid', upn: 'bob@contoso.com' }, exp: Date.now() / 1000 + 3600 } as any);
+    isTenantAdminMock.mockReturnValue(false);
+    resolveEffectiveRoleMock.mockResolvedValue('Member' as any);
+    const { GET } = await import('@/app/api/workspaces/[id]/route');
+    const r = await GET(reqObj(), props('wsShared'));
+    expect(r.status).toBe(404);
+  });
+
+  it("CONTROL: the same share still opens (via:'acl') once BOTH sides carry the tenant", async () => {
+    // Without this the spec above is satisfied by the route refusing everything,
+    // and the change would be indistinguishable from having broken sharing.
+    seedWorkspace('wsShared', 'alice-oid', { name: 'Shared', tid: HOME_TID });
+    getSessionMock.mockReturnValue({ claims: { oid: 'bob-oid', upn: 'bob@contoso.com', tid: HOME_TID }, exp: Date.now() / 1000 + 3600 } as any);
     isTenantAdminMock.mockReturnValue(false);
     resolveEffectiveRoleMock.mockResolvedValue('Member' as any);
     const { GET } = await import('@/app/api/workspaces/[id]/route');
