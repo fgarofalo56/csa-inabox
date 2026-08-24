@@ -25,11 +25,13 @@ import {
   DERIVED_MARKER,
   isBilled,
   isDerived,
+  PARTIAL_ROLLUP_MARKER,
   renderBilled,
   renderCost,
   renderDerived,
   renderRollup,
   rollup,
+  UNESTABLISHED_COVERAGE_MARKER,
   type BilledFigure,
   type DerivedFigure,
 } from '../../cost/figure';
@@ -155,5 +157,90 @@ describe('rollup keeps billed and derived apart (D3)', () => {
     expect(rendered).toContain('DERIVED estimate');
     expect(rendered).toContain('38.40');
     expect(rendered).toContain('41.99');
+  });
+});
+
+/**
+ * COVERAGE — a second, independent question from billed-versus-derived.
+ *
+ * `dominantSource` says what KIND of number this is. It says nothing about
+ * whether the number is ALL of it, and a total can be entirely billed, entirely
+ * honestly labelled, and still be a fraction of the bill. Measured on
+ * `../../cost/attribute` before this existed: a read that module had ALREADY
+ * classified `'incomplete'` rendered as `"$10.00 billed across 1 resource(s)"`
+ * — the signal sat on the result object and never reached the string an
+ * operator reads, which is the only place it changes a decision.
+ */
+describe('a rollup carries COVERAGE, and a partial read renders as partial', () => {
+  it('defaults to unknown — silence about coverage is not a claim of completeness', () => {
+    const r = rollup([BILLED]);
+    expect(r.completeness).toBe('unknown');
+    expect(r.completenessDetail).toContain('NOT established');
+  });
+
+  it('an unqualified rollup does NOT render as a bare billed total', () => {
+    const rendered: string = renderRollup(rollup([BILLED]));
+    expect(rendered).toContain(UNESTABLISHED_COVERAGE_MARKER);
+    expect(rendered).not.toBe('$38.40 billed across 1 resource(s)');
+  });
+
+  it('a PARTIAL rollup names the gap and keeps the number', () => {
+    const rendered: string = renderRollup(
+      rollup([BILLED], { completeness: 'partial', detail: '1 of 2 manifest partitions was read' }),
+    );
+    expect(rendered).toContain(PARTIAL_ROLLUP_MARKER);
+    expect(rendered).toContain('1 of 2 manifest partitions was read');
+    // Qualified, not hidden: suppressing the figure would trade one useless
+    // answer for another. The reader needs the number AND its caveat.
+    expect(rendered).toContain('$38.40');
+    expect(rendered).not.toBe('$38.40 billed across 1 resource(s)');
+  });
+
+  it('the marker precedes the dollars — a caveat after the number arrives too late', () => {
+    const rendered: string = renderRollup(
+      rollup([BILLED], { completeness: 'partial', detail: 'one partition unread' }),
+    );
+    expect(rendered.indexOf(PARTIAL_ROLLUP_MARKER)).toBeLessThan(rendered.indexOf('38.40'));
+  });
+
+  it('a partial MIXED rollup still shows both subtotals under the marker', () => {
+    // The marker qualifies the rollup; it must not swallow half of it.
+    const rendered: string = renderRollup(
+      rollup([BILLED, DERIVED], { completeness: 'partial', detail: 'one partition unread' }),
+    );
+    expect(rendered).toContain(PARTIAL_ROLLUP_MARKER);
+    expect(rendered).toContain('38.40');
+    expect(rendered).toContain('41.99');
+    expect(rendered).toContain('DERIVED estimate');
+  });
+
+  it('ONLY a complete rollup renders bare — the marker is conditional, not decoration', () => {
+    // The control arm. Without it, a fix that prefixed the marker
+    // unconditionally would pass every assertion above.
+    const rendered: string = renderRollup(
+      rollup([BILLED], { completeness: 'complete', detail: 'all 2 manifest partitions read' }),
+    );
+    expect(rendered).toBe('$38.40 billed across 1 resource(s)');
+    expect(rendered).not.toContain(PARTIAL_ROLLUP_MARKER);
+    expect(rendered).not.toContain(UNESTABLISHED_COVERAGE_MARKER);
+  });
+
+  it('completeness is on the rollup itself, not only inside the rendered string', () => {
+    // A surface that formats its own summary must read the signal from a field,
+    // never by pattern-matching prose back out of renderRollup's output.
+    const r = rollup([BILLED, DERIVED], {
+      completeness: 'partial',
+      detail: 'one partition unread',
+    });
+    expect(r.completeness).toBe('partial');
+    expect(r.completenessDetail).toBe('one partition unread');
+  });
+
+  it('a blind rollup still says nothing was measured, whatever coverage claims', () => {
+    // "Complete over zero figures" is still zero figures. The blind wording is
+    // the strongest statement available and coverage must not soften it.
+    const rendered = renderRollup(rollup([], { completeness: 'complete', detail: 'all read' }));
+    expect(rendered).toContain('NOT $0.00');
+    expect(rendered).toContain('0 examined');
   });
 });

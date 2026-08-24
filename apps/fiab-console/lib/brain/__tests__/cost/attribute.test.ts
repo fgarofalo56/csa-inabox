@@ -18,10 +18,16 @@
 
 import { describe, expect, it } from 'vitest';
 import { buildGraph, makePopulation } from '../../graph/graph';
-import type { BrainNode, ExtractionResult } from '../../types';
+import { codeModuleNodeId } from '../../graph/node-id';
+import type { BrainNode, CodeModuleNode, ExtractionResult } from '../../types';
 import { attributeCost, attributionFor } from '../../cost/attribute';
 import { readCostExport } from '../../cost/export-reader';
-import { BILLED_MARKER, DERIVED_MARKER } from '../../cost/figure';
+import {
+  BILLED_MARKER,
+  DERIVED_MARKER,
+  PARTIAL_ROLLUP_MARKER,
+  renderRollup,
+} from '../../cost/figure';
 import { CONTAINER_APPS_RATES_USGOV } from '../../cost/rate-card';
 import { BROKER_SCALE, SCALE_TO_ZERO, containerAppArmId, containerAppNode, SUB_A } from './fixtures';
 
@@ -224,6 +230,58 @@ describe('an INCOMPLETE export is passed through, never quoted as whole', () => 
     expect(result.degradeReason).toContain("completeness is 'incomplete'");
     expect(result.degradeReason).toContain('may double-count');
   });
+
+  // ── The rollup must be partial too, and say so in the rendered string ────
+  // Only `broker` is in scope below, and `broker` HAS a row in the partition
+  // that WAS read. So every count is billed, `derivedCount` is 0, and nothing
+  // in the numbers hints that a partition went unread. That is the exact shape
+  // that rendered as `$31.00 billed across 1 resource(s)` — a flat billed total
+  // over a read this module had already classified partial.
+
+  it('classifies the rollup partial when the read behind it is partial', () => {
+    const result = attributeCost(graphOf([broker]), { bound: 'upper', export: partial });
+    expect(result.billedCount).toBe(1);
+    expect(result.derivedCount).toBe(0);
+    expect(result.exportCompleteness).toBe('incomplete');
+    expect(result.rollup.completeness).toBe('partial');
+    // The detail carries WHICH partition, so the gap is actionable rather than
+    // merely announced.
+    expect(result.rollup.completenessDetail).toContain('p2.csv');
+  });
+
+  it('and the rendered rollup is NOT a flat billed total', () => {
+    const rendered: string = renderRollup(
+      attributeCost(graphOf([broker]), { bound: 'upper', export: partial }).rollup,
+    );
+    expect(rendered).not.toBe('$31.00 billed across 1 resource(s)');
+    expect(rendered).toContain(PARTIAL_ROLLUP_MARKER);
+    // Qualified, not suppressed — the reader still needs the number.
+    expect(rendered).toContain('$31.00');
+  });
+
+  it('R7 — with nothing derived, the reason claims NO fall-through to an estimate', () => {
+    // The old single string asserted "resources … fell through to a derived
+    // estimate, which may double-count" with `derivedCount === 0` behind it.
+    // Nothing fell through. That named a cause the code never established, and
+    // it would send a reader hunting for double-counted estimates that do not
+    // exist.
+    const result = attributeCost(graphOf([broker]), { bound: 'upper', export: partial });
+    expect(result.derivedCount).toBe(0);
+    expect(result.degradeReason).toContain("completeness is 'incomplete'");
+    expect(result.degradeReason).toContain('none was estimated');
+    expect(result.degradeReason).not.toContain('fell through');
+    expect(result.degradeReason).not.toContain('derived estimate');
+    expect(result.degradeReason).not.toContain('double-count');
+  });
+
+  it('and it DOES claim the fall-through, with a count, when one happened', () => {
+    // The control arm. A "fix" that simply deleted the clause would pass the
+    // test above and fail this one.
+    const result = attributeCost(graphOf([broker, console_]), { bound: 'upper', export: partial });
+    expect(result.derivedCount).toBe(1);
+    expect(result.degradeReason).toContain('1 resource(s) had no row');
+    expect(result.degradeReason).toContain('fell through to a derived estimate');
+  });
 });
 
 describe('population (PRP §3.2) — three counts, three meanings', () => {
@@ -297,5 +355,69 @@ describe('a scale-to-zero app is priced at a MEASURED zero, and stays labelled',
     // Distinguishable from the unpriceable case: this one IS an attribution.
     expect(result.unpricedCount).toBe(0);
     expect(result.resourcePopulation.blind).toBe(false);
+  });
+});
+
+/**
+ * `unpricedCount` used to be `skipped.filter((s) => !s.subject.includes(
+ * 'non-azure-resource')).length`, and `subject` on a per-resource skip is a
+ * canonical ARM id — data the CUSTOMER names. Container App names are
+ * free-form, so a resource called `non-azure-resource-sync` fell out of the
+ * count while still sitting in `skipped`: the worst pairing, because the number
+ * said nothing was wrong and the list said otherwise.
+ */
+describe('unpricedCount discriminates on a typed flag, not on the subject text', () => {
+  const trap = containerAppNode({ name: 'non-azure-resource-sync' });
+
+  it('the trap subject really does contain the old discriminator', () => {
+    // Guards the test itself. Rename the app and everything below would pass
+    // for the wrong reason, proving nothing about the discriminator.
+    expect(String(trap.id)).toContain('non-azure-resource');
+  });
+
+  it('counts it as an unpriced resource despite the substring', () => {
+    const result = attributeCost(graphOf([trap]), { bound: 'lower' });
+    expect(result.attributions).toHaveLength(0);
+    expect(result.skipped).toHaveLength(1);
+    expect(result.unpricedCount).toBe(1);
+    // And the "would have rendered $0.00" state is still visible.
+    expect(result.resourcePopulation.blind).toBe(true);
+  });
+
+  it('still excludes the aggregate non-Azure note — the flag, not the length', () => {
+    // The control arm. `unpricedCount = skipped.length` would satisfy the test
+    // above and fail here: two skips, exactly one unpriced RESOURCE.
+    const code: CodeModuleNode = {
+      id: codeModuleNodeId('apps/fiab-console/lib/brain/cost/attribute.ts'),
+      kind: 'code-module',
+      displayName: 'attribute.ts',
+      source: 'source-imports',
+      path: 'apps/fiab-console/lib/brain/cost/attribute.ts',
+    };
+    const result = attributeCost(graphOf([trap, code]), {
+      bound: 'lower',
+      filter: { describe: 'every node, Azure resource or not' },
+    });
+    expect(result.skipped).toHaveLength(2);
+    expect(result.unpricedCount).toBe(1);
+  });
+
+  it('an unpriced resource makes the rollup partial — those dollars are missing', () => {
+    // A resource in scope that could not be priced contributes NOTHING to the
+    // subtotals, which is a coverage gap regardless of the export.
+    const result = attributeCost(graphOf([broker, trap]), { bound: 'lower' });
+    expect(result.unpricedCount).toBe(1);
+    expect(result.rollup.completeness).toBe('partial');
+    expect(result.rollup.completenessDetail).toContain('could not be priced at all');
+    expect(renderRollup(result.rollup)).toContain(PARTIAL_ROLLUP_MARKER);
+  });
+
+  it('with everything priced and no export, coverage is complete — not a false alarm', () => {
+    // The other control. Marking every rollup partial would satisfy the test
+    // above and destroy the signal.
+    const result = attributeCost(graphOf([broker, console_]), { bound: 'lower' });
+    expect(result.unpricedCount).toBe(0);
+    expect(result.rollup.completeness).toBe('complete');
+    expect(renderRollup(result.rollup)).not.toContain(PARTIAL_ROLLUP_MARKER);
   });
 });

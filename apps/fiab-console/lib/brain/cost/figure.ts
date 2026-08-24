@@ -201,6 +201,53 @@ export function isDerived(figure: CostFigure): figure is DerivedFigure {
 // ---------------------------------------------------------------------------
 
 /**
+ * Whether a rollup covers EVERY dollar in the scope it claims to summarise.
+ *
+ * This is a DIFFERENT question from billed-versus-derived, and it is kept in
+ * its own field for that reason. `dominantSource` answers "what KIND of number
+ * is this"; this answers "is this ALL of it". A total can be entirely billed,
+ * carry the billed wording honestly, and still be a fraction of the bill —
+ * which is exactly the state a partially-read export produces.
+ *
+ * `'unknown'` is a first-class answer and the DEFAULT, mirroring
+ * `./export-reader`'s `Completeness` and for the same reason: a caller that
+ * says nothing about coverage has established nothing about it, and reading
+ * `'complete'` out of that silence is how a partial read acquires a confident
+ * total (R7).
+ */
+export type RollupCompleteness = 'complete' | 'partial' | 'unknown';
+
+/**
+ * P-COST-4 — `RollupCompleteness` has EXACTLY the three members.
+ *
+ * {@link renderRollup} has a rendering rule for each: `'complete'` renders
+ * bare, `'partial'` takes {@link PARTIAL_ROLLUP_MARKER}, and anything else
+ * takes {@link UNESTABLISHED_COVERAGE_MARKER}. A fourth member would land in
+ * that last branch and be labelled "not established" whatever it actually
+ * meant — a WRONG label rather than a missing one, which is the worse of the
+ * two. Add a member and `next build` fails here, where the rendering rule is.
+ */
+type _RollupCompletenessIsExactlyThree = Assert<
+  [RollupCompleteness] extends ['complete' | 'partial' | 'unknown']
+    ? ['complete' | 'partial' | 'unknown'] extends [RollupCompleteness]
+      ? true
+      : false
+    : false
+>;
+
+/**
+ * What the CALLER established about coverage, handed to {@link rollup}.
+ *
+ * `detail` is required alongside `completeness` — including for `'complete'`.
+ * A claim that a total is whole is precisely the claim that needs its basis
+ * stated, so there is no way to assert completeness without saying why.
+ */
+export interface RollupCoverage {
+  readonly completeness: RollupCompleteness;
+  readonly detail: string;
+}
+
+/**
  * The result of summing a mixed set of figures.
  *
  * Summing billed and derived dollars into one number produces a figure that is
@@ -221,6 +268,22 @@ export interface CostRollup {
   readonly dominantSource: CostSource;
   /** True iff no figures went in at all. An empty rollup establishes nothing. */
   readonly blind: boolean;
+  /**
+   * Whether every dollar in scope is IN these subtotals. See
+   * {@link RollupCompleteness}.
+   *
+   * Carried on the rollup, not only in {@link renderRollup}'s output, because a
+   * surface that formats its own summary must be able to read the signal
+   * without parsing prose back out of a rendered string.
+   */
+  readonly completeness: RollupCompleteness;
+  /**
+   * Why {@link completeness} is what it is. ALWAYS populated, including on
+   * `'complete'` — the same discipline `./export-reader`'s `completenessDetail`
+   * carries: a coverage claim with no stated basis is an assertion, not
+   * evidence.
+   */
+  readonly completenessDetail: string;
 }
 
 /**
@@ -229,8 +292,12 @@ export interface CostRollup {
  * Returns the two subtotals separately. There is deliberately no `totalUsd`:
  * the one number a caller would reach for is the one that cannot be honestly
  * labelled, so it is not offered. Render with {@link renderRollup}.
+ *
+ * `coverage` is how the caller states whether these figures are ALL the figures
+ * in scope — see {@link RollupCoverage}. Omitting it does NOT mean complete; it
+ * means the question was never asked, and the rollup says so.
  */
-export function rollup(figures: readonly CostFigure[]): CostRollup {
+export function rollup(figures: readonly CostFigure[], coverage?: RollupCoverage): CostRollup {
   let billedUsd = 0;
   let derivedUsd = 0;
   let billedCount = 0;
@@ -251,8 +318,33 @@ export function rollup(figures: readonly CostFigure[]): CostRollup {
     derivedCount,
     dominantSource: derivedCount === 0 && billedCount > 0 ? 'billed' : 'derived',
     blind: figures.length === 0,
+    completeness: coverage?.completeness ?? 'unknown',
+    completenessDetail:
+      coverage?.detail ??
+      'the caller stated nothing about coverage, so whether these figures are every figure ' +
+        'in scope was NOT established.',
   };
 }
+
+/**
+ * The marker a rollup carries when the caller ESTABLISHED that dollars are
+ * missing from it — a partially-read export, or resources in scope that could
+ * not be priced at all.
+ *
+ * Exported for the same reason {@link DERIVED_MARKER} is: a surface searching
+ * for the condition should match a constant, not re-spell the sentence.
+ */
+export const PARTIAL_ROLLUP_MARKER = 'PARTIAL — dollars are MISSING from this total';
+
+/**
+ * The marker a rollup carries when coverage was never established either way.
+ *
+ * Distinct from {@link PARTIAL_ROLLUP_MARKER} on purpose: "I know something is
+ * missing" and "I do not know whether anything is missing" are different
+ * statements, and collapsing the second into the first would over-claim a gap
+ * as surely as collapsing it into `'complete'` would hide one.
+ */
+export const UNESTABLISHED_COVERAGE_MARKER = 'COVERAGE NOT ESTABLISHED';
 
 /**
  * Render a rollup. Always names BOTH subtotals and their counts, so a reader
@@ -260,6 +352,13 @@ export function rollup(figures: readonly CostFigure[]): CostRollup {
  * "no figures" rather than as `$0.00` — zero dollars measured and zero dollars
  * KNOWN are different statements, and the second one is what an empty set
  * supports (R7).
+ *
+ * Anything short of `completeness: 'complete'` is prefixed with a marker, and
+ * the marker goes BEFORE the dollars deliberately. Measured on this module: a
+ * read this program had already classified partial rendered as
+ * `"$10.00 billed across 1 resource(s)"` — a flat billed total whose only
+ * defect was invisible. A caveat printed after the figure is read after the
+ * figure, and by then the figure has landed.
  */
 export function renderRollup(r: CostRollup): LabelledCost {
   if (r.blind) {
@@ -274,7 +373,11 @@ export function renderRollup(r: CostRollup): LabelledCost {
       `$${r.derivedUsd.toFixed(2)} DERIVED estimate — not a bill; ${r.derivedCount} resource(s)`,
     );
   }
-  return parts.join(' + ') as LabelledCost;
+  const body = parts.join(' + ');
+  if (r.completeness === 'complete') return body as LabelledCost;
+  const marker =
+    r.completeness === 'partial' ? PARTIAL_ROLLUP_MARKER : UNESTABLISHED_COVERAGE_MARKER;
+  return `${marker} (${r.completenessDetail}): ${body}` as LabelledCost;
 }
 
 // ---------------------------------------------------------------------------
@@ -288,4 +391,5 @@ export type CostFigureInvariants = [
   _BilledIsNotDerived,
   _CostSourceIsExactlyTwo,
   _BareStringIsNotLabelled,
+  _RollupCompletenessIsExactlyThree,
 ];
