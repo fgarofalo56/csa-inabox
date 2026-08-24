@@ -121,11 +121,31 @@ function kvRef(store: string, secretName: string): AdfSecret {
  * accidentally read one. Exported for the tests, which assert the exact
  * typeProperties the ADF connector documents.
  */
+/**
+ * Normalise a Snowflake account identifier.
+ *
+ * Operators reliably paste the full sign-in URL. The ADF connector wants the
+ * organization-account form (`myorg-account123`) and fails opaquely on anything
+ * else, so the URL wrapping is stripped here rather than left to produce a
+ * confusing run-time error. Exported so the normalisation is testable on its own
+ * — inline, it could be deleted with the whole suite still green.
+ */
+export function normalizeSnowflakeAccount(raw: string | undefined | null): string {
+  return String(raw ?? '')
+    .trim()
+    .replace(/^[a-z]+:\/\//i, '')
+    .replace(/\/.*$/, '')
+    .replace(/\.snowflakecomputing\.com$/i, '')
+    .trim();
+}
+
 export function buildSnowflakeLinkedService(
+
   conn: Pick<LoomConnection, 'host' | 'database' | 'warehouse' | 'role' | 'username' | 'authMethod' | 'name'>,
   credential: AdfSecret | null,
 ): AdfLinkedService['properties'] {
-  const account = (conn.host || '').replace(/^https?:\/\//i, '').replace(/\.snowflakecomputing\.com\/?$/i, '').trim();
+  const account = normalizeSnowflakeAccount(conn.host);
+
   const keyPair = conn.authMethod === 'key-pair';
   const typeProperties: Record<string, unknown> = {
     accountIdentifier: account,
@@ -316,22 +336,67 @@ export interface SnowflakeTable {
  * retries without it and reports every table as non-Iceberg rather than failing
  * the whole enumeration.
  */
-export function snowflakeTablesQuery(database: string, withIceberg = true): string {
-  // The database name is a Snowflake identifier, not a value — it cannot be
-  // parameterized. Reject anything that is not a bare identifier so no
-  // punctuation can escape the FROM clause.
-  const db = String(database || '').trim();
+/**
+ * Prove a Snowflake DATABASE NAME is a bare identifier, or throw.
+ *
+ * SECURITY: the database name is interpolated into the FROM clause of the
+ * enumeration query. A Snowflake identifier cannot be parameterized — there is
+ * no bind placeholder for `<db>.INFORMATION_SCHEMA.TABLES` — so the only defence
+ * is proving the value is an identifier BEFORE it reaches the string. The
+ * allowlist is deliberately positive (match the whole of a legal identifier)
+ * rather than a denylist of punctuation: a denylist has to anticipate every
+ * escape, and Snowflake accepts quoted identifiers, unicode, and `;`-separated
+ * statements.
+ *
+ * Extracted and exported so it can be tested directly with hostile input. It
+ * previously lived inline inside `snowflakeTablesQuery`, where deleting it still
+ * left the whole suite green — an injection guard nothing exercises is not a
+ * guard.
+ */
+export function assertSnowflakeIdentifier(database: string): string {
+  const db = String(database ?? '').trim();
   if (!/^[A-Za-z_][A-Za-z0-9_$]*$/.test(db)) {
     throw new Error(
-      `"${db}" is not a valid Snowflake database identifier. Use a bare name such as SALES_DB (no quotes, dots, or spaces).`,
+      `"${db}" is not a valid Snowflake database identifier. Use a bare name such as SALES_DB (no quotes, dots, spaces, or semicolons).`,
     );
   }
+  return db;
+}
+
+export function snowflakeTablesQuery(database: string, withIceberg = true): string {
+  const db = assertSnowflakeIdentifier(database);
   const icebergCol = withIceberg ? ', IS_ICEBERG' : '';
   return (
     `SELECT TABLE_SCHEMA, TABLE_NAME${icebergCol} FROM ${db}.INFORMATION_SCHEMA.TABLES ` +
     "WHERE TABLE_TYPE IN ('BASE TABLE','VIEW') AND TABLE_SCHEMA <> 'INFORMATION_SCHEMA' " +
     'ORDER BY TABLE_SCHEMA, TABLE_NAME'
   );
+}
+
+
+/**
+ * Count the schemas the connection's role can actually SEE in the database.
+ *
+ * The discriminator for the zero-tables case (see the CountSchemas activity).
+ * Uses the same identifier validation as the table query — the database name is
+ * an identifier, not a bindable value, so it must be proven safe here too.
+ */
+export function snowflakeSchemaCountQuery(database: string): string {
+  const db = assertSnowflakeIdentifier(database);
+  return (
+    `SELECT COUNT(*) AS VISIBLE_SCHEMAS FROM ${db}.INFORMATION_SCHEMA.SCHEMATA ` +
+    "WHERE SCHEMA_NAME <> 'INFORMATION_SCHEMA'"
+  );
+}
+
+/** Read VISIBLE_SCHEMAS out of the probe's first row. Null when unreadable. */
+export function parseSchemaCount(firstRow: unknown): number | null {
+  if (!firstRow || typeof firstRow !== 'object') return null;
+  const rec = firstRow as Record<string, unknown>;
+  const key = Object.keys(rec).find((k) => k.toLowerCase() === 'visible_schemas');
+  if (key === undefined) return null;
+  const n = Number(rec[key]);
+  return Number.isFinite(n) ? n : null;
 }
 
 /** Map a Lookup activity's raw output rows to typed tables. Case-insensitive keys. */
@@ -376,7 +441,8 @@ export async function listSnowflakeTables(
   tenantId: string,
   connectionId: string | undefined,
   database: string,
-): Promise<{ tables: SnowflakeTable[]; icebergKnown: boolean } | { gate: SnowflakeBindGate }> {
+): Promise<{ tables: SnowflakeTable[]; icebergKnown: boolean; visibleSchemas: number | null } | { gate: SnowflakeBindGate }> {
+
   const adfGate = adfCdcConfigGate();
   if (adfGate) {
     return {
@@ -432,7 +498,27 @@ export async function listSnowflakeTables(
               // The whole result set, not just the first row — this IS the list.
               firstRowOnly: false,
             },
+          }, {
+            // VISIBILITY PROBE. INFORMATION_SCHEMA.TABLES is privilege-filtered:
+            // a role with USAGE on the database but no grants on its schemas
+            // gets ZERO ROWS, not an error. Reported bare, that is
+            // indistinguishable from an empty database and sends the operator
+            // to look at the wrong thing. Counting the schemas the same role can
+            // see discriminates the two, in the SAME run (one more activity, not
+            // one more pipeline), so an empty result can say which it was
+            // instead of asserting a cause it never established
+            // (deploy-integrity.md R7).
+            name: 'CountSchemas',
+            type: 'Lookup',
+            dependsOn: [],
+            policy: { timeout: '0.00:05:00', retry: 0 },
+            typeProperties: {
+              source: { type: kind.source, query: snowflakeSchemaCountQuery(database) },
+              dataset: { referenceName: dsName, type: 'DatasetReference' },
+              firstRowOnly: true,
+            },
           }],
+
         },
       } as never);
 
@@ -465,8 +551,19 @@ export async function listSnowflakeTables(
       const acts = await listActivityRuns(runId);
       const lookup = acts.find((a) => a.activityName === 'ListTables');
       const rows = (lookup?.output as { value?: unknown } | undefined)?.value;
+      const tables = parseSnowflakeTableRows(rows);
 
-      return { tables: parseSnowflakeTableRows(rows), icebergKnown: withIceberg };
+      // Zero tables is ambiguous — resolve it with the visibility probe rather
+      // than reporting "empty database" as though it were established.
+      let visibleSchemas: number | null = null;
+      const schemaAct = acts.find((a) => a.activityName === 'CountSchemas');
+      if (schemaAct) {
+        const out = schemaAct.output as { firstRow?: Record<string, unknown> } | undefined;
+        visibleSchemas = parseSchemaCount(out?.firstRow);
+      }
+
+      return { tables, icebergKnown: withIceberg, visibleSchemas };
+
     } catch (e: any) {
       const msg = e?.message || String(e);
       if (withIceberg && /IS_ICEBERG|invalid identifier/i.test(msg)) continue;

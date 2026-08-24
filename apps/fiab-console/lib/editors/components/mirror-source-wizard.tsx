@@ -74,19 +74,47 @@ const GATEWAY_SOURCES = new Set(['Oracle']);
 /**
  * Ongoing-replication mode — a fixed allowlist (loom-no-freeform-config) carried
  * into mirroring.json `source.typeProperties.syncMode` and consumed by the engine.
+ *
+ * The LABELS are per-source-family, because the same mode id means genuinely
+ * different things per backend and a control must not promise what its backend
+ * does not do (`no-vaporware.md`). On the SQL/PG/Cosmos engines `incremental`
+ * really is "only the rows that changed" — Change Tracking, a monotonic
+ * watermark, or the Cosmos `_ts` feed. On the ADF Copy engine (Snowflake) it is
+ * a scheduled **full reload**: the ADF Snowflake connector exposes no CDC
+ * source, so every run is a delete-then-copy. Labelling that "changed rows since
+ * last sync" — while the note directly below it said "full refresh" — put a
+ * contradiction on one screen with the misleading half selected by DEFAULT.
  */
-const SYNC_MODE_OPTIONS: { id: 'incremental' | 'snapshot' | 'continuous'; name: string }[] = [
-  { id: 'incremental', name: 'Incremental (changed rows since last sync)' },
-  { id: 'snapshot', name: 'Snapshot (full reload every run)' },
-  { id: 'continuous', name: 'Continuous (ADF CDC / scheduled copy when configured)' },
-];
+const SYNC_MODE_IDS = ['incremental', 'snapshot', 'continuous'] as const;
+type SyncModeId = (typeof SYNC_MODE_IDS)[number];
+
+/** Sources whose ongoing sync is an ADF Copy full reload, not row-level CDC. */
+const FULL_RELOAD_SOURCES = new Set(['Snowflake', 'GoogleBigQuery', 'Oracle']);
+
+export function syncModeOptions(sourceType: string): { id: SyncModeId; name: string }[] {
+
+  if (FULL_RELOAD_SOURCES.has(sourceType)) {
+    return [
+      { id: 'incremental', name: 'Scheduled refresh (full reload on a schedule)' },
+      { id: 'snapshot', name: 'Snapshot (one full load, no schedule)' },
+      { id: 'continuous', name: 'Continuous (full reload every 15 minutes)' },
+    ];
+  }
+  return [
+    { id: 'incremental', name: 'Incremental (changed rows since last sync)' },
+    { id: 'snapshot', name: 'Snapshot (full reload every run)' },
+    { id: 'continuous', name: 'Continuous (ADF CDC / scheduled copy when configured)' },
+  ];
+}
+
 
 /**
  * Per-source plain-English description of HOW ongoing sync works for that source
  * — so the operator sees the real engine path, not a generic label. Grounds the
  * sync-mode control in the actual Azure-native backend.
  */
-const SOURCE_SYNC_NOTE: Record<string, string> = {
+export const SOURCE_SYNC_NOTE: Record<string, string> = {
+
   AzureSqlDatabase: 'SQL Change Tracking drives incremental deltas; set the ADF CDC env vars for continuous Delta CDC.',
   AzureSqlMI: 'SQL Change Tracking drives incremental deltas; set the ADF CDC env vars for continuous Delta CDC.',
   SqlServer2025: 'SQL Change Tracking drives incremental deltas; set the ADF CDC env vars for continuous Delta CDC.',
@@ -245,6 +273,10 @@ export function MirrorSourceWizard(props: MirrorSourceWizardProps) {
   // connection" from a Snowflake mirror opens ON Snowflake rather than making
   // the user find it (auto-bind-by-default: no user-performed plumbing).
   const connLockType = srcDef.connTypes.length === 1 ? srcDef.connTypes[0] : undefined;
+
+  // Mode labels follow the SOURCE's real backend — see syncModeOptions.
+  const syncModes = useMemo(() => syncModeOptions(createSrc), [createSrc]);
+
 
   // How many discovered tables are Snowflake-managed Iceberg — null when the
   // source has not been enumerated yet. Drives the Iceberg card's live count so
@@ -671,10 +703,12 @@ export function MirrorSourceWizard(props: MirrorSourceWizardProps) {
                     <Field label="Sync mode"
                       hint={SOURCE_SYNC_NOTE[createSrc] || 'How ongoing changes are replicated after the initial load.'}>
                       <Dropdown
-                        value={SYNC_MODE_OPTIONS.find((o) => o.id === syncMode)?.name || ''}
+                        value={syncModes.find((o) => o.id === syncMode)?.name || ''}
+
                         selectedOptions={[syncMode]}
                         onOptionSelect={(_, d) => { if (d.optionValue) setSyncMode(d.optionValue as typeof syncMode); }}>
-                        {SYNC_MODE_OPTIONS.map((o) => (
+                        {syncModes.map((o) => (
+
                           <Option key={o.id} value={o.id} text={o.name}>{o.name}</Option>
                         ))}
                       </Dropdown>
@@ -788,7 +822,8 @@ export function MirrorSourceWizard(props: MirrorSourceWizardProps) {
                     </>
                   )}
                   <span className={s.sumKey}>Tables</span><span>{selTables.size > 0 ? `${selTables.size} selected` : 'all discovered'}</span>
-                  <span className={s.sumKey}>Sync mode</span><span>{SYNC_MODE_OPTIONS.find((o) => o.id === syncMode)?.name || syncMode}</span>
+                  <span className={s.sumKey}>Sync mode</span><span>{syncModes.find((o) => o.id === syncMode)?.name || syncMode}</span>
+
                   {createSrc === 'Snowflake' && (<><span className={s.sumKey}>Iceberg</span><span>{includeIceberg ? 'Iceberg tables included' : 'standard tables only'}</span></>)}
                   <span className={s.sumKey}>Target</span><span>ADLS Bronze Delta</span>
                 </div>

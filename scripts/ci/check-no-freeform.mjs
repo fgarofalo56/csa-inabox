@@ -2122,6 +2122,35 @@ export const ACCEPTED = [
       'is why the sibling Dropdown offers "inline JSON" as the alternative rather than a picker.',
   },
   {
+    file: 'apps/fiab-console/lib/components/connections/connection-builder.tsx',
+    sites: 4,
+    kind: 'byo',
+    ref: 'auto-bind-by-default.md §Allowed',
+    why:
+      'The dialog that creates a Loom Connection to a data source. All four sites are credentials or ' +
+      'identifiers on a system Loom does not own, which is the class this file\'s own doc-comment names ' +
+      'first: "a customer\'s Snowflake account". :453 (Textarea) and :463 (password Input) are ONE field ' +
+      'rendered two ways — a Snowflake password or SQL login, versus a PEM private key / Google ' +
+      'service-account JSON, which a single-line password box mangles. Nothing could enumerate either: ' +
+      'they are minted in the customer\'s Snowflake / Oracle / BigQuery tenant, and until one is supplied ' +
+      'Loom holds no credential for the source at all, so no discovery call is even possible. This is ' +
+      'already the compliant storage shape and matches loom-app-runtime-editor.tsx above: the value is ' +
+      'POSTed once, createConnection() writes it to Key Vault via putKeyVaultSecret(), Cosmos keeps only ' +
+      'the secretRef (a NAME), and it is never rendered back — in edit mode the field is blank with ' +
+      '"(secret stored — leave blank to keep)" and a hint that names Key Vault. The ADF linked service ' +
+      'Loom auto-binds then references that secret BY NAME, so the value never leaves the vault. ' +
+      ':437/:438 are the Entra tenant + application ids of a service principal the CUSTOMER registered ' +
+      'for their own source — the same pair, for the same reason, that git-integration.tsx is accepted ' +
+      'for, and cross-tenant by construction (a Loom connection may address a source outside the ' +
+      'deployment\'s directory, and per cloud-parity.md a GCC-High deployment reaching a commercial ' +
+      'source definitionally is). SEPARATELY AND HONESTLY: those two ids are persisted by ' +
+      'connections-store.ts and read by NOTHING that mints a token — connection-auth.ts states outright ' +
+      'that "service-principal / account-key are not TDS logins" and falls back to the Console UAMI. ' +
+      'That is the identical finding git-integration.tsx recorded as #3588, and it is a no-vaporware ' +
+      'question about whether the service-principal option works at all, NOT a no-freeform one — which ' +
+      'is why the fields were measured and reported rather than quietly deleted to clear a gate.',
+  },
+  {
     file: 'apps/fiab-console/lib/editors/loom-app-runtime-editor.tsx',
     sites: 1,
     kind: 'byo',
