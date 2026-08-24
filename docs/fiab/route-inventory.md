@@ -13,11 +13,11 @@ verdict is DERIVED, not name-matched — see "How the owner column is decided".
 
 | Metric | Count |
 | --- | ---: |
-| Total routes | 1686 |
+| Total routes | 1687 |
 | Public (no session) | 58 |
 | Session-only | 648 |
 | Owner-scoped | 675 |
-| Admin | 305 |
+| Admin | 306 |
 | Unknown (generator fails) | 0 |
 | Gated (backend config) | 496 |
 | Areas | 122 |
@@ -206,6 +206,7 @@ dispatch is invisible to it. Full limits: `scripts/ci/_route-backends.mjs`.
 | `admin/bootstrap-catalogs/route.ts` | POST | admin |  | AI Search, Cosmos |
 | `admin/brain/graph/route.ts` | GET | admin |  | ARM, Container Apps, Resource Graph, Retail Prices API |
 | `admin/brain/proposals/route.ts` | POST | admin |  | Azure Monitor, Cosmos |
+| `admin/brain/synapses/route.ts` | GET | admin |  | — |
 | `admin/capacity/chargeback/route.ts` | GET | admin |  | ARM, Azure Cache for Redis, Cosmos, Cost Management |
 | `admin/capacity/cost/route.ts` | GET | admin |  | ARM, Azure Cache for Redis, Cosmos, Cost Management, Microsoft Graph |
 | `admin/capacity/guardrails/route.ts` | GET PUT | admin |  | Azure Monitor, Cosmos |
