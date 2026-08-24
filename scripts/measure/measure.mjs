@@ -32,6 +32,7 @@
 import { spawnSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import path from 'node:path';
+import { buildCmdLine, needsCmdWrapper, CmdQuoteError } from './cmd-quote.mjs';
 
 /** UNKNOWN is a value you cannot accidentally treat as a number (R4). */
 export const UNKNOWN = Symbol('UNKNOWN');
@@ -59,33 +60,14 @@ export class MeasurementError extends Error {
  * So a batch shim goes through `cmd.exe /d /s /c` with a hand-quoted command
  * line and `windowsVerbatimArguments`, which preserves argument fidelity. The
  * outer quote pair is required — cmd strips it, leaving the inner quoting intact.
+ *
+ * The quoting itself lives in `./cmd-quote.mjs`: it is pure, so it is testable
+ * without spawning anything, and keeping it out of the module that owns the
+ * `spawnSync` sink is what lets CodeQL's IndirectCommandInjection query
+ * terminate here.
  */
-export function quoteForCmd(arg) {
-  const s = String(arg);
-  // `cmd.exe` expands %VAR% even INSIDE double quotes, and there is no reliable
-  // command-line escape for it (`%%` only works inside a batch file). So an
-  // argument carrying `%` is REFUSED rather than silently substituted — the
-  // fail-closed choice, consistent with R1: never yield a value you cannot
-  // vouch for. Found while investigating why CodeQL's IndirectCommandInjection
-  // query singled this path out.
-  if (s.includes('%')) {
-    throw new MeasurementError(
-      `argument contains '%', which cmd.exe would expand as a variable: ${s.slice(0, 60)}. ` +
-      'Refusing rather than running a command different from the one requested.',
-      { arg: s },
-    );
-  }
-  if (s === '') return '""';
-  return /[\s"^&|<>()]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
-}
-
 function resolveExe(bin) {
-  const wrap = (file) => {
-    if (process.platform === 'win32' && /\.(cmd|bat)$/i.test(file)) {
-      return { file, batch: true };
-    }
-    return { file, batch: false };
-  };
+  const wrap = (file) => ({ file, batch: needsCmdWrapper(file) });
 
   // An explicit path (absolute, or containing a separator) is used as given.
   // Without this, a full path like `C:\Program Files\nodejs\node.exe` is not
@@ -108,14 +90,21 @@ function resolveExe(bin) {
   throw new MeasurementError(`could not resolve '${bin}' on PATH`, { bin });
 }
 
-/** Build the spawn triple for a resolved binary, batch shim or not. Exported for testing. */
-export function spawnPlan(bin, args) {
+/**
+ * Build the spawn triple for a resolved binary, batch shim or not.
+ *
+ * NOT exported. An exported function's parameters are an external taint source
+ * to a static analyser, and exporting this one — solely so a unit test could
+ * reach the .cmd branch without az installed — was enough to stop CodeQL's
+ * IndirectCommandInjection query terminating inside its 600s budget. The pure
+ * half now lives in cmd-quote.mjs and is tested directly there instead.
+ */
+function spawnPlan(bin, args) {
   const { file, batch } = resolveExe(bin);
   if (!batch) return { cmd: file, argv: args, opts: {} };
-  const line = [file.replace(/\//g, '\\'), ...args].map(quoteForCmd).join(' ');
   return {
     cmd: process.env.ComSpec || 'cmd.exe',
-    argv: ['/d', '/s', '/c', `"${line}"`],
+    argv: ['/d', '/s', '/c', `"${buildCmdLine(file, args)}"`],
     opts: { windowsVerbatimArguments: true },
   };
 }
@@ -138,7 +127,17 @@ function isSecondaryRateLimit(stderr) {
  * Throws on non-zero: a failed command must not yield a value (R1).
  */
 export function run(bin, args, { allowNonZero = false, timeoutMs = 600000, retries = 0, onRetry = null } = {}) {
-  const plan = spawnPlan(bin, args);
+  let plan;
+  try {
+    plan = spawnPlan(bin, args);
+  } catch (e) {
+    // A refused argument is still a refusal to produce a value (R1); callers
+    // only ever have to catch MeasurementError.
+    if (e instanceof CmdQuoteError) {
+      throw new MeasurementError(`${bin} cannot be launched safely: ${e.message}`, { bin, args, cause: e });
+    }
+    throw e;
+  }
   let last = null;
   let lastStatus = null;
 

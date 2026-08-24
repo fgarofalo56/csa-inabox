@@ -13,48 +13,15 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   run, runJson, metricTotal, checkRuns, measureWithControl,
-  quoteForCmd, spawnPlan, UNKNOWN, MeasurementError,
+  UNKNOWN, MeasurementError,
 } from './measure.mjs';
 
 const NODE = process.execPath;
 
-// ------------------------------------------------- .cmd launch (the gap that shipped broken)
-// `az` and `gh` are .cmd shims on Windows and were the library's ENTIRE reason
-// to exist — yet every other test here spawns node.exe, so the batch path was
-// never exercised and shipped throwing EINVAL. These tests are pure, so they
-// run everywhere.
-test('quoteForCmd: values needing quotes get them; plain values do not', () => {
-  assert.equal(quoteForCmd('plain'), 'plain');
-  assert.equal(quoteForCmd(''), '""');
-  assert.equal(quoteForCmd('has space'), '"has space"');
-  assert.equal(quoteForCmd('a|b'), '"a|b"');
-  assert.equal(quoteForCmd('say "hi"'), '"say ""hi"""', 'inner quotes must be doubled for cmd');
-});
-
-test('quoteForCmd: a % argument is REFUSED, not silently expanded', () => {
-  // cmd.exe expands %VAR% even inside double quotes and there is no reliable
-  // command-line escape. Running a command different from the one requested is
-  // exactly the class of silent wrongness this module exists to prevent.
-  assert.throws(() => quoteForCmd('%PATH%'), (e) => /cmd\.exe would expand/.test(e.message));
-  assert.throws(() => quoteForCmd('name-%-mid'), (e) => e instanceof MeasurementError);
-  // CONTROL: a value WITHOUT % still passes, so the rule is not blanket-refusing.
-  assert.equal(quoteForCmd('100%-free-name'.replace('%', '')), '100-free-name');
-});
-
-test('spawnPlan: a .cmd is routed through cmd.exe with an outer-quoted line', { skip: process.platform !== 'win32' }, () => {
-  const plan = spawnPlan(NODE, ['-e', 'x']); // .exe -> direct
-  assert.equal(plan.argv[0], '-e', 'a real .exe must NOT be wrapped');
-  assert.ok(!plan.opts.windowsVerbatimArguments);
-});
-
-test('spawnPlan: an argument containing spaces survives quoting', () => {
-  // The DEP0190 hazard: with shell:true Node concatenates args unescaped, so a
-  // value with a space silently changes the command. Verbatim + explicit
-  // quoting is what preserves it.
-  const line = ['C:\\p\\az.cmd', 'graph', 'query', '-q', "resources | where name =~ 'a b'"]
-    .map(quoteForCmd).join(' ');
-  assert.ok(line.includes(`"resources | where name =~ 'a b'"`), 'the KQL argument must stay one token');
-});
+// NOTE: the .cmd launch path — the quoting, the batch-shim decision, the ARM-id
+// passthrough — is tested in cmd-quote.test.mjs, against the pure module. It is
+// not reachable from here: every test below spawns node.exe, which is exactly
+// why that branch shipped broken once.
 
 // ---------------------------------------------------------------- R1 / R2
 test('POSITIVE CONTROL: a succeeding command returns its output (suite is not vacuous)', () => {
