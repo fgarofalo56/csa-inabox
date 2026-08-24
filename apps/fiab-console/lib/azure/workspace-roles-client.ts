@@ -29,7 +29,7 @@
  * No mocks. No stubs. All non-Cosmos calls hit ARM / Graph / (opt-in) Fabric.
  */
 
-import { fetchWithTimeout } from '@/lib/azure/fetch-with-timeout';
+import { fetchWithTimeout, DEFAULT_SERVER_FETCH_TIMEOUT_MS } from '@/lib/azure/fetch-with-timeout';
 import {
   ChainedTokenCredential,
   DefaultAzureCredential,
@@ -39,7 +39,7 @@ import { AcaManagedIdentityCredential } from '@/lib/azure/aca-managed-identity';
 import crypto from 'node:crypto';
 import { armBase, armScope, graphBase, graphScope } from './cloud-endpoints';
 import { workspaceRolesContainer } from './cosmos-client';
-import { PagingBudget, PAGE_DEADLINE } from './paging-budget';
+import { PagingBudget, PAGE_DEADLINE, defaultPagingBudgetMs } from './paging-budget';
 import { logSafe, logSafeError } from '@/lib/util/log-safe';
 import {
   ROLE_TO_RBAC,
@@ -424,13 +424,29 @@ export async function removeWorkspaceRole(
 }
 
 /**
+ * Wall-clock ceiling for the WHOLE group walk in {@link resolveEffectiveRole} —
+ * not per probe. The default is the single-request ceiling, which is the
+ * property worth being able to state: however many groups a workspace grants
+ * to, resolving all of them can never out-live ONE Graph call. Override with
+ * `LOOM_GRAPH_GROUP_WALK_BUDGET_MS`, read PER WALK (as `paging-budget` reads
+ * its own knobs) so raising it takes effect on the next request rather than on
+ * the next container restart.
+ */
+function graphGroupWalkBudgetMs(): number {
+  const n = Number(process.env.LOOM_GRAPH_GROUP_WALK_BUDGET_MS);
+  return Number.isFinite(n) && n > 0 ? n : DEFAULT_SERVER_FETCH_TIMEOUT_MS;
+}
+
+/**
  * Resolve the HIGHEST effective workspace role for `userId`, considering both
  * direct assignments and (transitive / nested) group membership via Microsoft
  * Graph. Returns null when the user inherits no role.
  *
  * `userGroupIds` (when the caller already has the user's transitive group set,
  * e.g. from token claims) short-circuits the per-group Graph calls. Otherwise
- * each group assignment is checked with Graph `groups/{id}/transitiveMembers`.
+ * each group assignment is checked with Graph `groups/{id}/transitiveMembers`,
+ * under ONE walk-wide budget shared by every probe — see
+ * {@link graphGroupWalkBudgetMs}.
  */
 export async function resolveEffectiveRole(
   userId: string,
@@ -467,11 +483,48 @@ export async function resolveEffectiveRole(
     // Graph unavailable — return whatever direct match we have rather than throw.
     return pickHighestRole(inherited);
   }
+
+  // #3834 §3 — BOUND THE WALK, NOT ONLY EACH PROBE. This loop used to have no
+  // aggregate ceiling. Each probe IS bounded (a 30s point-read, then a 15s
+  // PagingBudget on the paged fallback), so N group assignments cost N x ~45s —
+  // and not one of the 13 admin-plane route files that reach here declares
+  // `export const maxDuration`, so nothing above it caps that either. ONE budget
+  // now spans the whole loop, and its remaining wall clock is handed down into
+  // each probe so a single slow group cannot spend the walk's clock un-noticed.
+  //
+  // A GROUP WE NEVER VISITED CONTRIBUTES NOTHING — the same fail-closed posture
+  // `unknown` already has. So a truncated walk can refuse a genuine member; that
+  // is the correct direction for an authorization check, and `warnIfTruncated`
+  // names the deadline so the refusal is diagnosable as a deadline rather than
+  // read as "not a member" (#3381).
+  //
+  // maxPages is pinned to the assignment count so the WALL CLOCK is the only
+  // ceiling here: the shared 50-page default would otherwise stop probing on a
+  // workspace with more than 50 group grants even when every probe was fast.
+  const walk = new PagingBudget(`graph group walk ${workspaceId}`, {
+    maxPages: groupAssignments.length,
+    budgetMs: graphGroupWalkBudgetMs(),
+  });
+  // REQUEST-SCOPED, and deliberately not a module-level cache: this is an
+  // authorization path, where a cached positive outlives the membership that
+  // justified it. Keyed on the PAIR, so two rows naming the same group cost one
+  // probe while two different groups still cost two.
+  const probed = new Map<string, GraphMembership>();
   for (const a of groupAssignments) {
+    const key = `${userId}|${a.principalId}`;
+    let membership = probed.get(key);
+    if (membership === undefined) {
+      // Claim the walk's next slot only when a real Graph call is needed — a
+      // memo hit costs no wall clock and must not consume the ceiling.
+      if (!walk.claimPage()) break;
+      membership = await graphUserInGroup(token, a.principalId, userId, walk);
+      probed.set(key, membership);
+    }
     // 'unknown' (Graph unreachable) contributes nothing — same fail-closed
     // posture as before, when this read a bare `false`.
-    if ((await graphUserInGroup(token, a.principalId, userId)) === 'member') inherited.push(a.role);
+    if (membership === 'member') inherited.push(a.role);
   }
+  walk.warnIfTruncated(probed.size);
   return pickHighestRole(inherited);
 }
 
@@ -575,15 +628,25 @@ async function readJsonBody(res: Response): Promise<any | typeof NOT_JSON> {
  * therefore the only one that means anything: does the returned object identify
  * the user we asked about? Anything else (not JSON, no `id`, a DIFFERENT `id`)
  * is a non-answer and resolves `unknown`, which contributes no role.
+ *
+ * `walk`, when supplied, is the WALK-WIDE budget shared by every group probe in
+ * one {@link resolveEffectiveRole} call (#3834 §3). Its remaining wall clock
+ * bounds both the point-read and the paged fallback, so N groups cost the walk's
+ * ceiling in total rather than N times a per-probe one.
  */
-async function graphUserInGroup(token: string, groupId: string, userId: string): Promise<GraphMembership> {
+async function graphUserInGroup(
+  token: string,
+  groupId: string,
+  userId: string,
+  walk?: PagingBudget,
+): Promise<GraphMembership> {
   // Microsoft Graph: members/{id} existence check across the transitive closure.
   const url = `${graphBase()}/groups/${groupId}/transitiveMembers/${userId}?$select=id`;
   try {
     const res = await fetchWithTimeout(url, {
       headers: { authorization: `Bearer ${token}`, accept: 'application/json', ConsistencyLevel: 'eventual' },
       cache: 'no-store',
-    });
+    }, walk?.remainingMs());
     if (res.ok) {
       // 2xx IS NOT AN ANSWER ON ITS OWN — it must be the directory object for
       // the user we asked about. A body that is not JSON, carries no `id`, or
@@ -606,9 +669,29 @@ async function graphUserInGroup(token: string, groupId: string, userId: string):
       // check exists for is preserved either way.
     } else if (res.status === 404) {
       return 'not-member';
+    } else if (res.status === 429) {
+      // #3834 §3 — A THROTTLE IS A NON-ANSWER, AND FALLING THROUGH MADE IT
+      // WORSE. Every non-404 used to drop into the paged enumeration, which
+      // throttles too: measured `graphCalls=2` for one throttled probe, so these
+      // routes AMPLIFIED a throttle instead of backing off, and no `Retry-After`
+      // was honoured anywhere. Graph's `Retry-After` is the directory saying how
+      // long it will keep answering this way, so a second ask inside the same
+      // request cannot help. Answer `unknown` — it contributes no role — and put
+      // the interval in the log so the back-off is diagnosable rather than
+      // invisible. 429 ONLY: a 403/405 is the case the fallback exists for (the
+      // point-read by id not permitted on the resource type), and aborting on
+      // those would deny genuine members.
+      const retryAfter = res.headers?.get?.('retry-after') ?? null;
+      console.warn(
+        '[graph-membership] UNKNOWN (not a measured negative): transitiveMembers point-read at ' +
+          `${logSafe(graphBase(), 120)} was THROTTLED (HTTP 429` +
+          `${retryAfter ? `, Retry-After: ${logSafe(String(retryAfter), 32)}` : ', no Retry-After header'})` +
+          ' — NOT falling through to the paged enumeration, which would be throttled too',
+      );
+      return 'unknown';
     }
-    // On 4xx/5xx other than 404, and on an ambiguous 2xx, fall back to paged
-    // enumeration once.
+    // On 4xx/5xx other than 404 and 429, and on an ambiguous 2xx, fall back to
+    // paged enumeration once.
   } catch (e: unknown) {
     // COULD NOT ASK — transport failure. Naming the host makes a
     // wrong-national-cloud call (the #3381 defect) diagnosable from one log
@@ -626,7 +709,10 @@ async function graphUserInGroup(token: string, groupId: string, userId: string):
   // BOUNDED by a PagingBudget (#2557/#2582): the old `guard < 50` capped pages
   // only, and 50 Graph pages x the 30s per-request ceiling is 25 minutes of
   // unbounded await on the authorization path. `runPage` hands each page the
-  // walk's remaining wall clock and absorbs the resulting abort.
+  // walk's remaining wall clock and absorbs the resulting abort. When a
+  // walk-wide budget is in play the enumeration takes the SMALLER of the two
+  // ceilings, so the fallback for one group cannot spend the whole group walk's
+  // clock (#3834 §3).
   //
   // TRUNCATION IS DELIBERATELY FAIL-CLOSED HERE, and that is the one place the
   // "truncate, keep the rows" reflex must not become "assume the answer". This
@@ -636,50 +722,71 @@ async function graphUserInGroup(token: string, groupId: string, userId: string):
   // exactly the previous behaviour — and `warnIfTruncated` logs the honest
   // cause so the deadline is diagnosable as a deadline, not read as "not a
   // member". The tri-state is what makes those two sayably different (#3381).
-  const budget = new PagingBudget(`graph transitiveMembers ${groupId}`);
+  const budget = new PagingBudget(
+    `graph transitiveMembers ${groupId}`,
+    walk ? { budgetMs: Math.min(defaultPagingBudgetMs(), walk.remainingMs()) } : {},
+  );
   let next: string =
     `${graphBase()}/groups/${groupId}/transitiveMembers?$select=id&$top=999&$count=true`;
   let scanned = 0;
-  while (budget.claimPage()) {
-    const res = await budget.runPage((timeoutMs) => fetchWithTimeout(next, {
-      headers: { authorization: `Bearer ${token}`, accept: 'application/json', ConsistencyLevel: 'eventual' },
-      cache: 'no-store',
-    }, timeoutMs));
-    if (res === PAGE_DEADLINE) break; // wall clock spent mid-fetch
-    if (!res.ok) {
-      // Graph answered, but not with an enumeration — we measured NOTHING.
-      console.warn(
-        `[graph-membership] UNKNOWN (not a measured negative): transitiveMembers enumeration at ${logSafe(graphBase(), 120)} returned HTTP ${Number(res.status)}`,
-      );
-      return 'unknown';
+  // #3834 §2 residual — A TRANSPORT FAILURE HERE USED TO ESCAPE THE FUNCTION.
+  // The point-read above has had a catch since #3381; this loop sat OUTSIDE it,
+  // and `PagingBudget.runPage` rethrows everything that is not its own deadline
+  // (`paging-budget.ts` 233-241). So an ECONNRESET / DNS failure / non-our-own
+  // timeout on the FALLBACK propagated past `resolveEffectiveRole`, past
+  // `resolveWorkspaceAccessByOid`, and out of `authorizeWorkspace` as an
+  // uncaught throw into 99 route entry points. It denied by crashing, which is
+  // safe-ish, but it is an opaque 500 rather than the membership answer this
+  // function's contract promises — and `deploy-integrity.md` R6 wants a
+  // classified outcome, not a stack trace. Same tri-state answer as every other
+  // could-not-ask: `unknown`.
+  try {
+    while (budget.claimPage()) {
+      const res = await budget.runPage((timeoutMs) => fetchWithTimeout(next, {
+        headers: { authorization: `Bearer ${token}`, accept: 'application/json', ConsistencyLevel: 'eventual' },
+        cache: 'no-store',
+      }, timeoutMs));
+      if (res === PAGE_DEADLINE) break; // wall clock spent mid-fetch
+      if (!res.ok) {
+        // Graph answered, but not with an enumeration — we measured NOTHING.
+        console.warn(
+          `[graph-membership] UNKNOWN (not a measured negative): transitiveMembers enumeration at ${logSafe(graphBase(), 120)} returned HTTP ${Number(res.status)}`,
+        );
+        return 'unknown';
+      }
+      const json: any = await readJsonBody(res);
+      // #3834 — A MALFORMED PAGE IS A NON-ANSWER, NOT AN EXCEPTION. `res.json()`
+      // used to be awaited raw here, so a 200 carrying HTML threw a `SyntaxError`
+      // out of this function; and `json?.value` was iterated with `for…of`, so a
+      // body whose `value` is not an array threw a `TypeError`. Both escaped past
+      // every caller as a 500 rather than resolving the membership question, and
+      // both are the SAME proxy / WAF / captive-portal condition as the point-read
+      // above. Answer `unknown` — it contributes no role and it is sayable.
+      const page = json !== NOT_JSON && Array.isArray(json?.value) ? (json.value as any[]) : null;
+      if (page === null) {
+        console.warn(
+          '[graph-membership] UNKNOWN (not a measured negative): transitiveMembers enumeration at ' +
+            `${logSafe(graphBase(), 120)} answered HTTP ${Number(res.status)} with ` +
+            `${json === NOT_JSON ? 'a body that is not JSON' : 'no `value` array'} — ` +
+            'something in front of Graph may be answering instead of Graph',
+        );
+        return 'unknown';
+      }
+      for (const m of page) {
+        scanned += 1;
+        if (typeof m?.id === 'string' && m.id.toLowerCase() === userId.toLowerCase()) return 'member';
+      }
+      if (!json?.['@odata.nextLink']) {
+        // Finished cleanly with no match — this IS a measured negative.
+        return 'not-member';
+      }
+      next = json['@odata.nextLink'];
     }
-    const json: any = await readJsonBody(res);
-    // #3834 — A MALFORMED PAGE IS A NON-ANSWER, NOT AN EXCEPTION. `res.json()`
-    // used to be awaited raw here, so a 200 carrying HTML threw a `SyntaxError`
-    // out of this function; and `json?.value` was iterated with `for…of`, so a
-    // body whose `value` is not an array threw a `TypeError`. Both escaped past
-    // every caller as a 500 rather than resolving the membership question, and
-    // both are the SAME proxy / WAF / captive-portal condition as the point-read
-    // above. Answer `unknown` — it contributes no role and it is sayable.
-    const page = json !== NOT_JSON && Array.isArray(json?.value) ? (json.value as any[]) : null;
-    if (page === null) {
-      console.warn(
-        '[graph-membership] UNKNOWN (not a measured negative): transitiveMembers enumeration at ' +
-          `${logSafe(graphBase(), 120)} answered HTTP ${Number(res.status)} with ` +
-          `${json === NOT_JSON ? 'a body that is not JSON' : 'no `value` array'} — ` +
-          'something in front of Graph may be answering instead of Graph',
-      );
-      return 'unknown';
-    }
-    for (const m of page) {
-      scanned += 1;
-      if (typeof m?.id === 'string' && m.id.toLowerCase() === userId.toLowerCase()) return 'member';
-    }
-    if (!json?.['@odata.nextLink']) {
-      // Finished cleanly with no match — this IS a measured negative.
-      return 'not-member';
-    }
-    next = json['@odata.nextLink'];
+  } catch (e: unknown) {
+    console.warn(
+      `[graph-membership] UNKNOWN (not a measured negative): transitiveMembers enumeration at ${logSafe(graphBase(), 120)} failed — ${logSafeError(e)}`,
+    );
+    return 'unknown';
   }
   // Loop exited without finishing: either the page budget ran out or the wall
   // clock did. Either way we never saw the whole closure, so this is UNKNOWN.

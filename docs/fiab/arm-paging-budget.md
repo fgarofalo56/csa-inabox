@@ -167,11 +167,29 @@ Two call sites needed more than a budget:
 
 - **`workspace-roles-client.graphUserInGroup` is deliberately fail-closed.**
   It is an authorization check, so "truncate and keep the rows" must not become
-  "assume the answer": returning `true` off a list we never finished reading
+  "assume the answer": returning a positive off a list we never finished reading
   would grant a role from a membership we never saw. A truncated walk therefore
-  answers `false` — the same posture the function already had for a Graph error
-  — and `warnIfTruncated` logs the honest cause so the deadline is diagnosable
-  rather than silently mis-denying.
+  answers **`'unknown'`** — the tri-state #3381 added, which
+  `userIsTransitiveGroupMember` collapses to `false`, so the posture is the one
+  the function always had while the CAUSE is now sayable. (This section
+  originally said it answers `false`; that was true when it was written and is
+  no longer, because the return type is a `GraphMembership`, not a boolean.)
+  `warnIfTruncated` logs the honest cause so the deadline is diagnosable rather
+  than silently mis-denying.
+
+  **A SECOND BUDGET LAYER SITS ABOVE IT (#3834).** One `PagingBudget` per
+  enumeration bounds ONE group probe; `resolveEffectiveRole` walks EVERY group
+  assignment on the workspace, sequentially, and had no ceiling of its own — so
+  N groups cost N x (a 30s point-read + a 15s enumeration), on 13 admin-plane
+  routes that declare no `maxDuration`. That loop now runs under its own
+  walk-wide `PagingBudget`: `maxPages` pinned to the assignment count so the
+  wall clock is the only ceiling, `budgetMs` defaulting to
+  `DEFAULT_SERVER_FETCH_TIMEOUT_MS` (override with
+  `LOOM_GRAPH_GROUP_WALK_BUDGET_MS`), and each probe handed
+  `walk.remainingMs()` — which the per-group enumeration then takes the MINIMUM
+  of against its own 15s, so one slow group cannot spend the whole walk. A group
+  the clock never reached contributes no role, which is fail-closed in the same
+  direction as `'unknown'`.
 - **`api/azure/connectables` used to report a deadline as a missing role.** Its
   only empty-handed answer was `code:'no_access'`, whose message tells the
   operator to admin-consent the app registration and grant the UAMI Reader at

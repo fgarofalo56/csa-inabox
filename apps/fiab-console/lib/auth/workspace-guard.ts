@@ -400,61 +400,75 @@ export async function requireWorkspace(
  * the session supplied no `groups` claim (per #3175 that claim is frequently
  * absent, so this path is genuinely reachable).
  *
- *   NEVER ADMITTED, measured per cause. The MECHANISM is not uniform, and the
- *   earlier wording here — "a Graph token failure, a transport failure, a
+ *   NEVER ADMITTED, measured per cause. The MECHANISM is not uniform, and an
+ *   earlier revision here — "a Graph token failure, a transport failure, a
  *   timeout, a 429, a 5xx, and a truncated membership walk all resolve to
- *   `'unknown'`" — was wrong for two of those six. What the code actually does:
- *     - a DIRECT-PROBE transport failure, the 30s per-request timeout, and a
+ *   `'unknown'`" — was wrong for two of those six. Branches are named rather
+ *   than cited by line number, because the line numbers this list used to carry
+ *   went stale the first time the file was touched. What the code does:
+ *     - a DIRECT-PROBE transport failure, the per-request timeout, and a
  *       truncated membership walk each answer `'unknown'`, which contributes no
- *       role (`workspace-roles-client.ts` 548-558, 584, 602-ish);
- *     - a 429/5xx on the direct probe falls THROUGH to paged enumeration, and a
- *       non-ok enumeration page answers `'unknown'` likewise (585-591);
+ *       role (`graphUserInGroup`'s point-read catch; its `budget.truncatedBy`
+ *       return);
+ *     - a 429 on the direct probe answers `'unknown'` AND STOPS THERE. It used
+ *       to fall THROUGH into the paged enumeration, which throttles too —
+ *       measured `graphCalls=2` for one throttled probe, so these routes
+ *       amplified a throttle instead of backing off, and no `Retry-After` was
+ *       honoured anywhere. #3834 made the abort 429-only (a 403/5xx must still
+ *       fall through — that is what the enumeration fallback exists for) and put
+ *       the `Retry-After` interval in the log line;
+ *     - a 5xx or other non-404 on the direct probe still falls through to the
+ *       paged enumeration, and a non-ok enumeration page answers `'unknown'`;
+ *     - a TRANSPORT failure DURING the paged fallback now answers `'unknown'`
+ *       too. It used to ESCAPE: the enumeration loop sat OUTSIDE
+ *       `graphUserInGroup`'s try/catch and `PagingBudget.runPage` rethrows
+ *       everything that is not its own deadline, so an ECONNRESET on the
+ *       fallback propagated out of this function as an uncaught throw — a deny
+ *       by crashing, and an opaque 500 rather than the classified outcome
+ *       `deploy-integrity.md` R6 wants. #3834 gave that loop its own catch;
  *     - a GRAPH TOKEN failure never reaches `graphUserInGroup` at all.
- *       `resolveEffectiveRole` catches it and returns `pickHighestRole(inherited)`
- *       (462-469), where `inherited` holds only the DIRECT (non-group)
- *       assignments — so no group role is granted and the refusal still holds,
- *       but it holds for a different reason than `'unknown'`;
- *     - a TRANSPORT failure DURING the paged fallback does not answer at all.
- *       The enumeration loop sits OUTSIDE `graphUserInGroup`'s try/catch and
- *       `PagingBudget.runPage` rethrows everything that is not its own deadline
- *       (`paging-budget.ts` 233-241), so it propagates out of this function as
- *       an exception. Reachable on exactly the 429/5xx path named above.
- *   In every one of those the caller is REFUSED or the request FAILS — never
- *   admitted. THAT is the property being asserted here; the uniform `'unknown'`
- *   mechanism the earlier sentence asserted is not one the code has, and per
- *   `deploy-integrity.md` R7 a message must not state as fact something it did
- *   not establish.
+ *       `resolveEffectiveRole` catches it and returns `pickHighestRole(inherited)`,
+ *       where `inherited` holds only the DIRECT (non-group) assignments — so no
+ *       group role is granted and the refusal still holds, but it holds for a
+ *       different reason than `'unknown'`.
+ *   In every one of those the caller is REFUSED — never admitted. THAT is the
+ *   property being asserted here; the uniform `'unknown'` mechanism the earlier
+ *   sentence asserted is not one the code has, and per `deploy-integrity.md` R7
+ *   a message must not state as fact something it did not establish.
  *
- *   NOT FAIL-CLOSED — residuals, all in `lib/azure/workspace-roles-client.ts`
- *   and therefore outside this file, tracked as **#3834**:
- *     - `graphUserInGroup` reads a BARE `res.ok` as membership without inspecting
- *       the body, so any 2xx from something sitting in front of Graph (a proxy,
- *       a WAF, a captive portal, a wrong-national-cloud host — the #3381
- *       condition) GRANTS the group's role and silently defeats the
- *       `tenant_unconfirmed` refusal this function exists to produce;
- *     - a malformed enumeration page throws out of this function instead of
- *       answering: an unhandled `TypeError` when `@odata` `value` is not
- *       iterable, and an unhandled `SyntaxError` from `res.json()` when the body
- *       is not JSON at all — the SAME proxy/WAF/captive-portal condition as the
- *       first residual, which is why it is listed with it rather than as a
- *       theoretical case.
- *   None is a regression of this change — before it, a tenant admin was ALLOWED
- *   unconditionally, so every measured mode is at least as tight as it was.
+ *   THE TWO FAIL-OPEN RESIDUALS THIS COMMENT USED TO LIST ARE CLOSED, both in
+ *   `lib/azure/workspace-roles-client.ts` and both #3834: `graphUserInGroup`
+ *   reading a BARE `res.ok` as membership without inspecting the body, and a
+ *   malformed enumeration page throwing a `TypeError`/`SyntaxError` out of this
+ *   function instead of answering. Both were fixed in #3859 — a 2xx must now
+ *   return the directoryObject identifying the principal we asked about, and a
+ *   page whose `value` is not an array (or whose body is not JSON at all)
+ *   resolves `'unknown'`. Noted rather than deleted because the condition behind
+ *   them — something in FRONT of Graph answering 2xx, the #3381 shape — is the
+ *   one a sovereign boundary is most exposed to.
  *
- * BOUNDED PER REQUEST, NOT IN AGGREGATE. Nothing on this path caches
- * (`cache: 'no-store'`, no memo layer), so every request pays it in full. A
- * single membership probe is capped at 30s and its paged fallback at a
- * `PagingBudget` of 15s / 50 pages — but `resolveEffectiveRole` walks the GROUP
- * assignments SEQUENTIALLY with no walk-wide ceiling, so the worst case is
- * `N_groups x ~45s` WITH NO ROUTE CEILING ABOVE IT: not one of the 13 route
- * files that call this function declares `export const maxDuration`, while 69
- * other console routes do. The earlier wording here named "a route
- * `maxDuration` of 60" — a bound the code does not establish, and it
- * UNDERSTATED the exposure rather than overstating it, which is the direction
- * `deploy-integrity.md` R7 exists to catch. A 429 makes that worse rather than
- * better: a non-404 4xx falls THROUGH into the enumeration (which throttles
- * too), doubling the Graph calls, and no `Retry-After` is honoured — so these
- * 13 routes amplify a throttle instead of backing off. Also #3834.
+ * BOUNDED PER REQUEST, AND NOW IN AGGREGATE (#3834). Nothing on this path caches
+ * (`cache: 'no-store'`; the only memo is request-scoped, because a module-level
+ * one on an authorization path outlives the membership that justified it), so
+ * every request pays the walk in full. A single probe is capped at the
+ * per-request fetch ceiling and its paged fallback at a `PagingBudget` of 15s /
+ * 50 pages. What was missing was the ceiling ABOVE those: `resolveEffectiveRole`
+ * walked the GROUP assignments SEQUENTIALLY with no walk-wide clock, so the
+ * worst case was `N_groups x ~45s` WITH NO ROUTE CEILING ABOVE IT — not one of
+ * the 13 route files that call this function declares `export const
+ * maxDuration`, while 69 other console routes do. (An earlier revision here
+ * named "a route `maxDuration` of 60", a bound the code does not establish; it
+ * UNDERSTATED the exposure, which is the direction `deploy-integrity.md` R7
+ * exists to catch, and that statement about the 13 route files remains true
+ * today.) The loop now runs under ONE `PagingBudget` whose default ceiling is
+ * the single-request ceiling — so however many groups a workspace grants to,
+ * resolving all of them can never out-live one Graph call — with each probe
+ * handed the walk's REMAINING clock rather than a fresh one, and the paged
+ * fallback taking the smaller of its own budget and that remainder. Override
+ * with `LOOM_GRAPH_GROUP_WALK_BUDGET_MS`. A group the walk never reached
+ * contributes no role: fail-closed in the same direction as `'unknown'`, and
+ * `warnIfTruncated` names the deadline so a refusal caused by the clock is
+ * diagnosable as one rather than read as "not a member".
  *
  * Callers that must additionally restrict to admins ONLY (e.g. the networking
  * gate, or a destructive admin DELETE) check `isTenantAdmin(session)` themselves

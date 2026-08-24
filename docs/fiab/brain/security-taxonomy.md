@@ -656,8 +656,9 @@ permissive one.
 
 ### 6.2 Real instances
 
-**(a) Fail-open on a Graph 2xx.** `workspace-guard.ts:428-440` records, as a
-disclosed residual tracked by issue **#3834** (OPEN):
+**(a) Fail-open on a Graph 2xx — FIXED, kept because the shape is the lesson.**
+Until `bfd67ed1` (#3859, the first half of issue **#3834**),
+`workspace-guard.ts` disclosed this as a live residual:
 
 > `graphUserInGroup` reads a BARE `res.ok` as membership without inspecting the
 > body, so any 2xx from something sitting in front of Graph (a proxy, a WAF, a
@@ -665,10 +666,22 @@ disclosed residual tracked by issue **#3834** (OPEN):
 > silently defeats the `tenant_unconfirmed` refusal this function exists to
 > produce.
 
-#3834's title states it precisely: *fail-OPEN in 2 of 9 measured Graph failure
-modes*. Note the shape — the other 7 modes answer `'unknown'` and refuse
+The point-read now requires the returned directoryObject to identify the
+principal that was asked about; anything else is `'unknown'`, which contributes
+no role. The remainder of #3834 closed the walk's other non-answers — an
+enumeration transport failure resolves `'unknown'` instead of throwing out of
+the authorization boundary, a 429 aborts instead of falling through into a
+second throttled call, and the sequential group loop runs under one walk-wide
+clock (`LOOM_GRAPH_GROUP_WALK_BUDGET_MS`, defaulting to the single-request
+ceiling).
+
+#3834's title stated it precisely: *fail-OPEN in 2 of 9 measured Graph failure
+modes*. Note the shape — the other 7 modes answered `'unknown'` and refused
 correctly. **The class is not "this code fails open"; it is "this code's UNKNOWN
-handling is non-uniform across 9 paths and 2 of them invert."**
+handling is non-uniform across 9 paths and 2 of them invert."** The instance is
+written in the past tense rather than deleted, for the reason §6.4 gives below:
+adopting a fix must not remove the evidence that the fix was needed, and
+restating a closed finding as live would itself be a C5.
 
 **(b) Fail-open at the shell.** `deploy-integrity.md` R7 exists because of a
 measured incident: a `2>/dev/null` converted a permission denial into an empty

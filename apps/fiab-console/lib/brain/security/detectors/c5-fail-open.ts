@@ -12,18 +12,30 @@
  *
  * ── THE MEASURED INSTANCES ───────────────────────────────────────────────
  *
- * (a) FAIL-OPEN ON A GRAPH 2xx. `lib/auth/workspace-guard.ts:428-440` records it
- *     as a disclosed residual tracked by #3834 (OPEN): `graphUserInGroup` reads a
- *     BARE `res.ok` as membership without inspecting the body, so any 2xx from
+ * (a) FAIL-OPEN ON A GRAPH 2xx — FIXED; kept because the SHAPE is the lesson.
+ *     Until `bfd67ed1` (#3859, the first half of #3834), `graphUserInGroup` read
+ *     a BARE `res.ok` as membership without inspecting the body, so any 2xx from
  *     something sitting in front of Graph — a proxy, a WAF, a captive portal, a
- *     wrong-national-cloud host — GRANTS the group's role and silently defeats the
- *     `tenant_unconfirmed` refusal the function exists to produce.
+ *     wrong-national-cloud host — GRANTED the group's role and silently defeated
+ *     the `tenant_unconfirmed` refusal the function exists to produce.
+ *     `lib/auth/workspace-guard.ts` disclosed it as a residual for as long as it
+ *     was open. The point-read now requires the returned directoryObject to
+ *     identify the principal that was asked about, and the rest of #3834 closed
+ *     the walk's other non-answers: an enumeration transport failure resolves
+ *     `'unknown'` instead of throwing out of the authorization boundary, a 429
+ *     aborts instead of falling through into a second throttled call, and the
+ *     group loop runs under one walk-wide clock.
+ *
+ *     STATED IN THE PAST TENSE RATHER THAN DELETED. This detector's granularity
+ *     was derived from this instance, and per the rule quoted below, adoption of
+ *     a fix must not erase the evidence that the fix was needed. Restating it as
+ *     live would be its own C5 — asserting as fact something no longer measured.
  *
  *     NOTE THE SHAPE, because it decides the detector's granularity: the other 7
- *     modes answer `'unknown'` and refuse correctly. The class is NOT "this code
- *     fails open". It is "THIS CODE'S UNKNOWN HANDLING IS NON-UNIFORM ACROSS 9
- *     PATHS AND 2 OF THEM INVERT". A detector that samples one failure path — or
- *     that merely asserts "there is a catch" — passes. So the predicate is
+ *     modes answered `'unknown'` and refused correctly. The class is NOT "this
+ *     code fails open". It is "THIS CODE'S UNKNOWN HANDLING IS NON-UNIFORM ACROSS
+ *     9 PATHS AND 2 OF THEM INVERT". A detector that samples one failure path —
+ *     or that merely asserts "there is a catch" — passes. So the predicate is
  *     PER-MODE and the finding count reflects the inverted modes.
  *
  * (b) FAIL-OPEN AT THE SHELL. `deploy-integrity.md` R7 exists because a
@@ -106,7 +118,7 @@ export function detectFailOpen(graph: SecurityGraph): DetectorResult {
               `${inverted.length} answer ALLOW and ` +
               `${facet.failureModes.filter((m) => m.verdict === 'deny').length} answer DENY.`,
             'NARROW: the correct modes are the majority. A detector that samples one failure ' +
-              'path, or that asserts only "there is a catch", reports this node clean. #3834 is ' +
+              'path, or that asserts only "there is a catch", reports this node clean. #3834 was ' +
               'exactly this shape — fail-OPEN in 2 of 9 measured Graph failure modes.',
             'An UNKNOWN reported as a definite answer is the class; the default being permissive ' +
               'is what makes it a security finding rather than a correctness one.',
