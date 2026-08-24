@@ -134,6 +134,11 @@ permissions:
   # SC1: keyless cosign signing exchanges the Actions OIDC token for a
   # short-lived Fulcio certificate.
   id-token: write
+  # #3844 — deploy-notify-failure.mjs files/updates ONE issue per workflow when
+  # this lane fails. Without `issues: write` the notifier at the foot of this
+  # file would 403 and the roll would stay exactly as silent as it was measured
+  # to be: `grep -c "issues: *write"` returned 0 on this file on 2026-08-22.
+  issues: write
 
 # SERIALIZE ROLLS AGAINST THE SAME GOV CONTAINER APP.
 #
@@ -481,7 +486,7 @@ jobs:
 
       - name: Supply-chain — Trivy gate (fail on CRITICAL CVEs)
         if: ${{ !inputs.skip_supply_chain }}
-        uses: aquasecurity/trivy-action@57a97c7e7821a5776cebc9bb87c984fa69cba8f1 # 0.35.0
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # 0.36.0
         with:
           image-ref: ${{ env.ACR_LOGIN }}/loom-console:${{ env.SHA }}
           severity: CRITICAL
@@ -721,3 +726,50 @@ jobs:
           fi
           echo "::error::Revision $NEWREV never reached Healthy within ~12 minutes (last state read: ${H:-<unread>}, successful probes: $READS/24). NOT rolling back automatically on a timeout — an inconclusive health read is not evidence the new revision is bad, and traffic stays on the previous revision until this one goes Healthy. If the estate is degraded, roll back deliberately: $ROLLBACK_ADVICE."
           exit 1
+
+      # ── #3844 — A FAILED GOV ROLL MUST LEAVE A RECORD SOMEONE RECEIVES ──────
+      #
+      # Measured on this file at 2026-08-22, BEFORE this step existed:
+      #     grep -c "issues: *write"        gov-console-roll.yml  ->  0
+      #     grep -c "if: *failure()"        gov-console-roll.yml  ->  0
+      #     grep -c "deploy-notify-failure" gov-console-roll.yml  ->  0
+      #
+      # The failure mode this closes is NOT a broken estate — it is a SILENT
+      # REVERT. This lane fires on every console-touching merge, and when the
+      # new revision comes up Unhealthy the step above rolls Gov BACK to the
+      # image it was already running and exits 1. So the estate stays up, the
+      # run goes red in a tab nobody watches, and `main` carries a fix Gov is
+      # not running — deploy-integrity R3 ("the estate must never silently trail
+      # main"), produced by the very step whose job is to rescue it.
+      #
+      # NO --failure-json, deliberately. This lane builds with a bare
+      # `az acr build`, not deploy-retry.mjs, so no classified artifact is ever
+      # written. Pointing the notifier at a path that does not exist would be
+      # worse than passing none: it reads as "a classification was attempted".
+      # With the flag absent the body says, in those words, that no
+      # classification was captured — R7, state what is known and nothing more.
+      #
+      # --result is MANDATORY at this chokepoint (#3368). `if: failure()` is
+      # already the correct predicate, but the flag is what stops a CANCELLED
+      # run from manufacturing a P0.
+      #
+      # `env: GH_TOKEN` is EQUALLY mandatory and is the half that is easy to
+      # lose: GITHUB_TOKEN is NOT ambient in an Actions job, so without these
+      # two lines deploy-notify-failure.mjs takes its `!token` branch, prints
+      # "Refusing to run" and exits 2 — the invocation is intact, every
+      # structural check is green, and the lane files NOTHING. That is #3844
+      # with the guard on. `issues: write` above is inert without it.
+      #
+      # Two ratchets enumerate the callers mechanically so neither property can
+      # quietly drift:
+      #   .github/scripts/__tests__/deploy-notify-failure.test.mjs   --result PRESENT
+      #   .github/scripts/__tests__/gov-deploy-lanes.test.mjs        the credential,
+      #                                                              and --result's VALUE
+      - name: Notify on failure (#3844)
+        if: failure()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          node .github/scripts/deploy-notify-failure.mjs \
+            --workflow gov-console-roll --result "${{ job.status }}"

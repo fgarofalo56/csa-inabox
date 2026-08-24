@@ -34,6 +34,44 @@ using '../main.bicep'
 // (main.bicep's provision<Service> vars). Previously several services - Purview,
 // Maps, Foundry, Synapse, Databricks, ADF - rebound the Console env to the
 // existing resource while STILL deploying a duplicate beside it.
+// ── #3446 — Azure Maps BYO/adopt env names, ALL THREE SPELLINGS ──────────────
+// Loom's own producers disagree about what the Maps reuse env vars are called,
+// and until this change the .bicepparam files read exactly ONE of the three, so
+// setting either of the other two was silently inert. Measured on this tree:
+//
+//   apps/fiab-console/lib/deploy/adoption-catalog.ts:508
+//       legacyEnv { name: 'EXISTING_AZURE_MAPS_ACCOUNT', rg: 'EXISTING_AZURE_MAPS_RG',
+//                   sub: 'EXISTING_AZURE_MAPS_SUB' }            ← what params read
+//   apps/fiab-console/lib/setup/scan-services.ts:205
+//       envName: 'EXISTING_AZURE_MAPS'  (rg/sub DO match)        ← Setup Wizard scan
+//   apps/fiab-console/app/api/setup/discover-services/route.ts:101
+//       { name: 'EXISTING_MAPS', rg: 'EXISTING_MAPS_RG', sub: 'EXISTING_MAPS_SUB' }
+//   scripts/csa-loom/scan-and-deploy.sh:186   (same EXISTING_MAPS triple)
+//
+// So the drift is not one variable: the third spelling diverges on rg and sub
+// TOO, which is why bridging only the name would still bind an adopted account
+// to the wrong resource group. All three are accepted here, name/rg/sub each.
+//
+// PARAMS-SIDE bridge on purpose: making the producers agree means editing
+// scan-services.ts / discover-services/route.ts, which this change does not own.
+// Accepting every spelling is strictly additive — no operator who set the
+// canonical EXISTING_AZURE_MAPS_ACCOUNT sees any change — and it keeps the
+// canonical literals present so check-adoption-catalog-sync.mjs's A10 check
+// (catalog legacyEnv names must still be read by commercial-full.bicepparam)
+// keeps passing. Precedence is canonical-first, so a tree that sets two
+// spellings resolves deterministically rather than by union() ordering.
+var mapsAdoptName = !empty(readEnvironmentVariable('EXISTING_AZURE_MAPS_ACCOUNT', ''))
+  ? readEnvironmentVariable('EXISTING_AZURE_MAPS_ACCOUNT', '')
+  : (!empty(readEnvironmentVariable('EXISTING_AZURE_MAPS', ''))
+      ? readEnvironmentVariable('EXISTING_AZURE_MAPS', '')
+      : readEnvironmentVariable('EXISTING_MAPS', ''))
+var mapsAdoptRg = !empty(readEnvironmentVariable('EXISTING_AZURE_MAPS_RG', ''))
+  ? readEnvironmentVariable('EXISTING_AZURE_MAPS_RG', '')
+  : readEnvironmentVariable('EXISTING_MAPS_RG', '')
+var mapsAdoptSub = !empty(readEnvironmentVariable('EXISTING_AZURE_MAPS_SUB', ''))
+  ? readEnvironmentVariable('EXISTING_AZURE_MAPS_SUB', '')
+  : readEnvironmentVariable('EXISTING_MAPS_SUB', '')
+
 var legacyAdoptFromEnv = union(
   empty(readEnvironmentVariable('EXISTING_AI_SEARCH_SERVICE', '')) ? {} : { aisearch: { mode: 'adopt', target: { name: readEnvironmentVariable('EXISTING_AI_SEARCH_SERVICE', ''), rg: readEnvironmentVariable('EXISTING_AI_SEARCH_RG', ''), sub: readEnvironmentVariable('EXISTING_AI_SEARCH_SUB', '') } } },
   empty(readEnvironmentVariable('EXISTING_APIM', '')) ? {} : { apim: { mode: 'adopt', target: { name: readEnvironmentVariable('EXISTING_APIM', ''), rg: readEnvironmentVariable('EXISTING_APIM_RG', ''), sub: readEnvironmentVariable('EXISTING_APIM_SUB', '') } } },
@@ -46,7 +84,7 @@ var legacyAdoptFromEnv = union(
   empty(readEnvironmentVariable('EXISTING_ASA_JOB', '')) ? {} : { streamanalytics: { mode: 'adopt', target: { name: readEnvironmentVariable('EXISTING_ASA_JOB', ''), rg: readEnvironmentVariable('EXISTING_ASA_RG', ''), sub: readEnvironmentVariable('EXISTING_ASA_SUB', '') } } },
   empty(readEnvironmentVariable('EXISTING_DATABRICKS', '')) ? {} : { databricks: { mode: 'adopt', target: { name: readEnvironmentVariable('EXISTING_DATABRICKS', ''), rg: readEnvironmentVariable('EXISTING_DATABRICKS_RG', ''), sub: readEnvironmentVariable('EXISTING_DATABRICKS_SUB', '') }, extra: { hostname: readEnvironmentVariable('EXISTING_DATABRICKS_HOSTNAME', '') } } },
   empty(readEnvironmentVariable('EXISTING_ADF', '')) ? {} : { adf: { mode: 'adopt', target: { name: readEnvironmentVariable('EXISTING_ADF', ''), rg: readEnvironmentVariable('EXISTING_ADF_RG', ''), sub: readEnvironmentVariable('EXISTING_ADF_SUB', '') } } },
-  empty(readEnvironmentVariable('EXISTING_AZURE_MAPS_ACCOUNT', '')) ? {} : { maps: { mode: 'adopt', target: { name: readEnvironmentVariable('EXISTING_AZURE_MAPS_ACCOUNT', ''), rg: readEnvironmentVariable('EXISTING_AZURE_MAPS_RG', ''), sub: readEnvironmentVariable('EXISTING_AZURE_MAPS_SUB', '') } } },
+  empty(mapsAdoptName) ? {} : { maps: { mode: 'adopt', target: { name: mapsAdoptName, rg: mapsAdoptRg, sub: mapsAdoptSub } } },
   empty(readEnvironmentVariable('EXISTING_AML_WORKSPACE', '')) ? {} : { aml: { mode: 'adopt', target: { name: readEnvironmentVariable('EXISTING_AML_WORKSPACE', ''), rg: readEnvironmentVariable('EXISTING_AML_RG', ''), sub: readEnvironmentVariable('EXISTING_AML_SUB', '') } } }
 )
 param adopt = union(legacyAdoptFromEnv, json(readEnvironmentVariable('LOOM_ADOPT_JSON', '{}')))
@@ -141,7 +179,7 @@ param powerBiSku = 'P1'   // P-SKU only; F-SKU NOT in GCC
 // Azure Maps — Gen2 account deploys by default in GCC (azure-maps.bicep gates
 // on boundary == Commercial || GCC). Set EXISTING_AZURE_MAPS_ACCOUNT to bring
 // your own; leave unset to provision a fresh account + bind the env automatically.
-param loomAzureMapsAccount = readEnvironmentVariable('EXISTING_AZURE_MAPS_ACCOUNT', '')
+param loomAzureMapsAccount = mapsAdoptName
 
 // Network
 param hubVnetCidr = '10.0.0.0/16'

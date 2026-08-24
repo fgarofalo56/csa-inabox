@@ -329,6 +329,154 @@ jobs:
             --file azure-functions/copilot-evaluator/Dockerfile \
             .
 
+      # ── #3416 — MAKE AN ACR-SIDE BUILD FAILURE SELF-DIAGNOSING (R6) ─────────
+      #
+      # Measured, run 32595754052 (2026-08-22, apply=true, the only apply run
+      # this lane has ever had). The evaluator build failed and the ENTIRE
+      # captured stderr was:
+      #
+      #   ERROR: The run with ID <id> finished with unsuccessful status
+      #   RunStatus.FAILED. Show run logs by az acr task logs -r <acr> --run-id <id>
+      #
+      # followed by
+      #
+      #   Could not classify this failure in az acr build (loom-copilot-evaluator).
+      #   No cause is asserted ... This is a gap in the CSA Loom failure taxonomy.
+      #
+      # The taxonomy gap is real but it is the SECOND defect. The first is that
+      # `--no-logs` means the build output never left the registry: the runner
+      # saw only a pointer to a log it did not fetch, so there was nothing to
+      # classify. Adding a taxonomy signal for "RunStatus.FAILED" would classify
+      # the POINTER, not the failure — every such build would still need a human
+      # inside the boundary to run the command az itself printed.
+      #
+      # Measured across the whole tree (123 workflows), 2026-08-23, re-counted
+      # after a review found the earlier figure in this comment was wrong:
+      #   `az acr task logs`      invoked in 1 workflow — THIS one, and only
+      #                           because of this step. It was 0 before it.
+      #   `az acr build --no-logs` in 9 workflows, counting only live YAML.
+      #                           A naive grep that does not strip comments says
+      #                           12: console-bluegreen-roll.yml,
+      #                           gov-console-roll.yml and loom-guardrails.yml
+      #                           only MENTION the flag in prose, and one of
+      #                           those mentions is the sentence saying the
+      #                           opt-out is gone. 9 is the number that means
+      #                           anything; 12 is the artefact of the grep.
+      # (This comment previously said 11, which is neither figure and was
+      # measured by nothing — deploy-integrity R7: a comment asserting a number
+      # it did not establish is the same defect as an error message doing it.
+      # The list of 9 is pinned mechanically in
+      # .github/scripts/__tests__/gov-deploy-lanes.test.mjs.)
+      # So this is a class, not an instance, and this step is the first member.
+      #
+      # POSITION IS LOAD-BEARING: this sits BEFORE the lease release, so the
+      # registry data plane is still open to this runner when the log is
+      # fetched. Moved below the release and it would be fetching through a
+      # re-locked firewall.
+      #
+      # NOT A GATE, AND SAID SO PLAINLY. The job is already failing when this
+      # runs; its product is EVIDENCE, not a verdict, so it does not add a
+      # second red step for an unreadable log. What it must never do is stay
+      # quiet — every branch below ends in a ::warning:: or ::error:: naming
+      # exactly what could not be established. There is no `2>/dev/null`, no
+      # `|| true` and no `continue-on-error` anywhere in it: each RC is captured
+      # on the line immediately after its command and then acted on.
+      #
+      # REDACTED BEFORE IT IS PRINTED. This repo is public and an Actions log is
+      # a publication surface. The ACR log is fetched to a file and printed only
+      # through scripts/ci/_azure-redact.mjs. If the redactor cannot be loaded
+      # the log is NOT printed — failing closed on publication is the only safe
+      # direction, and the path is named so an operator inside the boundary can
+      # still read it.
+      - name: Diagnose a failed ACR build — fetch the task run log (#3416)
+        if: failure()
+        env:
+          ART: ${{ github.workspace }}/deploy-failure.json
+        run: |
+          set -uo pipefail
+
+          # ACR REACHES THIS STEP ONLY VIA $GITHUB_ENV, AND ONLY IF WE GOT THAT
+          # FAR. It is written by "Resolve boundary coordinates (RG / ACR / tags)".
+          # This step is `if: failure()`, so it also runs when the failure was
+          # "Azure Gov Login", "Set Azure cloud to Gov", or that resolve step
+          # itself — in every one of those cases ACR is UNSET. Under `set -u` a
+          # bare "$ACR" aborts the step on `ACR: unbound variable` before any
+          # branch can speak, which would silently contradict the contract stated
+          # above (every branch ends in a ::warning:: naming what could not be
+          # established). Measured: `env -u ACR bash` on this shape exits 1 at the
+          # first reference and prints nothing after it.
+          # The default-empty expansion is the same idiom the lease-release step
+          # below already uses.
+          ACR="${ACR:-}"
+          if [ -z "$ACR" ]; then
+            echo "::warning::No registry name is set on this runner, so this run failed at or before 'Resolve boundary coordinates (RG / ACR / tags)' — i.e. before any ACR build was attempted. There is no task log to fetch and none is claimed to exist. This says WHERE the run stopped, not anything about an image build: the cause is in the failing step above."
+            exit 0
+          fi
+
+          RUN_IDS=""
+
+          # 1. The authoritative source. deploy-retry.mjs writes the child
+          #    command s full stderr to a file and names that file in the
+          #    artifact as .stderrPath, on exactly the path taken here (the
+          #    write happens in the `if (!decision.retry)` branch, before the
+          #    unclassified-exit). az prints the run id inside its own error.
+          if [ -f "$ART" ]; then
+            STDERR_PATH=$(jq -r ".stderrPath // empty" "$ART")
+            RC=$?
+            if [ "$RC" != "0" ]; then
+              echo "::warning::Could not read $ART with jq (exit $RC). That is a statement about THIS file, not about the build. Falling back to the registry run list below."
+              STDERR_PATH=""
+            fi
+            if [ -n "$STDERR_PATH" ] && [ -f "$STDERR_PATH" ]; then
+              RUN_IDS=$(grep -oE "run with ID .[A-Za-z0-9_-]+" "$STDERR_PATH" | grep -oE "[A-Za-z0-9_-]+$" | sort -u | tr "\n" " ")
+              if [ -z "$RUN_IDS" ]; then
+                echo "::warning::The captured stderr exists but names no ACR run id, so this build did not fail inside an ACR task run — it failed before one was queued (auth, firewall, context upload). The stderr is already printed in full by the build step above; nothing further to fetch."
+              fi
+            elif [ -n "$STDERR_PATH" ]; then
+              echo "::warning::The artifact names a captured-stderr file that is not present on this runner. No run id could be extracted; falling back to the registry run list below."
+            fi
+          else
+            echo "::warning::No $ART on this runner, so the failure did not come through deploy-retry.mjs. Falling back to the registry run list below."
+          fi
+
+          # 2. Fallback. The registry knows its own recent failures. This does
+          #    NOT assert which of them is ours — saying so is the whole point
+          #    (R7): a run listed here may belong to another lane sharing this
+          #    registry.
+          if [ -z "$RUN_IDS" ]; then
+            echo "::notice::Listing the registry own recent FAILED task runs. This lane does NOT claim any of these is the build that just failed — it is a starting point, not an identification."
+            az acr task list-runs -r "$ACR" --run-status Failed --top 5 -o table
+            RC=$?
+            if [ "$RC" != "0" ]; then
+              echo "::error::Could not list failed task runs on $ACR (az exit $RC, output above). The build failure therefore remains undiagnosed from inside this run — read it manually with: az acr task logs -r $ACR --run-id <id>"
+            fi
+            exit 0
+          fi
+
+          echo "::notice::Fetching the ACR task log for run id(s): $RUN_IDS"
+          for ID in $RUN_IDS; do
+            LOG="${RUNNER_TEMP:-/tmp}/acr-task-$ID.log"
+            az acr task logs -r "$ACR" --run-id "$ID" > "$LOG"
+            RC=$?
+            if [ "$RC" != "0" ]; then
+              echo "::error::az acr task logs -r $ACR --run-id $ID exited $RC, so the build output could NOT be retrieved from inside the boundary. This is not evidence about the build; it is evidence the log fetch failed. Retry it manually on a Gov-authenticated host."
+              continue
+            fi
+            if [ ! -s "$LOG" ]; then
+              echo "::warning::The ACR task log for run $ID came back EMPTY. The registry answered, so this is not a fetch failure — the task produced no log, which usually means it never started (agent pool, quota, or a rejected context)."
+              continue
+            fi
+            echo "───── ACR task log: run $ID (redacted) ─────"
+            node -e "const fs=require('fs');import('./scripts/ci/_azure-redact.mjs').then(m=>process.stdout.write(m.redact(fs.readFileSync(process.argv[1],'utf8')))).catch(e=>{console.error(String(e&&e.message||e));process.exit(9);});" "$LOG"
+            RC=$?
+            if [ "$RC" != "0" ]; then
+              echo "::error::The ACR task log for run $ID was fetched but the redactor could not be loaded (exit $RC), so it is deliberately NOT printed — this repository is public and an unredacted Azure log is a publication surface. It is on this runner at $LOG; re-read it with: az acr task logs -r $ACR --run-id $ID"
+              continue
+            fi
+            echo "──────────────────────────────────────────"
+            echo "::notice::The lines above are the ACTUAL build failure for $ID. If the taxonomy still could not classify it, add the signal to apps/fiab-console/lib/deploy/failure-taxonomy.json using them."
+          done
+
       - name: Release the ACR firewall lease (always)
         if: always()
         # C24 (#3088): NO `|| true`. `release` VERIFIES the registry is back to

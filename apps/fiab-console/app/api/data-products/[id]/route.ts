@@ -85,7 +85,7 @@ import {
 import { deleteOwnedItem, loadOwnedItem as loadOwnedItemByType } from '../../items/_lib/item-crud';
 import { evaluateContractGate, resolveContractTable } from '@/lib/dataproducts/contract-gate';
 import { readCertificationDq } from '@/lib/dataproducts/certification-dq';
-import { resolveOwnerTenantId } from '@/lib/dataproducts/owner-tenant';
+import { resolveOwnerTenantId, resolveDataProductDocTenant } from '@/lib/dataproducts/owner-tenant';
 import type { DataContract } from '@/lib/dataproducts/contract';
 import {
   deleteDataProductBestEffort,
@@ -810,7 +810,12 @@ export const PATCH = withSession<{ id: string }>(async (req: NextRequest, { sess
       // actually completes within the request — a floating promise after the
       // response isn't reliably run on the serverless/container runtime, which is
       // why products never indexed. Best-effort: never fails the request.
-      try { await upsertDataProductDoc(docForDataProduct(saved, session.claims.oid)); } catch { /* index is derived */ }
+      try {
+        // #3501 — the OWNER's tenant, not the caller's: this field is the
+        // mandatory marketplace search filter (see owner-tenant.ts).
+        const ownerTid = await resolveDataProductDocTenant(saved);
+        if (ownerTid) await upsertDataProductDoc(docForDataProduct(saved, ownerTid));
+      } catch { /* index is derived */ }
       return NextResponse.json(
         {
           ok: true,

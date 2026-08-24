@@ -119,8 +119,36 @@ resource pgAdmin 'Microsoft.DBforPostgreSQL/flexibleServers/administrators@2024-
 // bootstrap polls getServer until state == 'Ready' before CREATE EXTENSION.
 // dependsOn pgAdmin: the Entra-admin write is an AAD control-plane op that fails
 // if the server is mid-restart/updating (AadAuthOperationCannotBePerformedWhenServer
-// IsNotAccessible, hit on the dlz-attach provision). Setting the admin BEFORE this
-// restart-triggering config guarantees the server is Ready when the admin is set.
+// IsNotAccessible, hit on the dlz-attach provision). Ordering the admin write
+// BEFORE this restart-triggering config is therefore NECESSARY.
+//
+// IT IS NOT SUFFICIENT, AND THIS COMMENT USED TO CLAIM IT WAS (#3839,
+// deploy-integrity.md R7). The previous wording ended "…guarantees the server is
+// Ready when the admin is set." That word was false, and it cost an
+// investigation: it sent a reader hunting for an ordering bug that was already
+// handled correctly here.
+//
+// THE DISPROOF, stated only as far as it is established: GitHub Actions run
+// 32341450273 (`deploy-fiab-commercial`, 2026-08-20T06:52:39Z, conclusion
+// FAILURE) hit AadAuthOperationCannotBePerformedWhenServerIsNotAccessible on a
+// `psql-loom-weave-default-…` server that Resource Graph independently reported
+// as Ready — i.e. with this ordering already in force. So the ordering REDUCES
+// the window; it does not eliminate it, and on an idempotent RE-APPLY (as
+// opposed to a first provision) it demonstrably did not.
+//
+// WHAT HELD THE SERVER non-Entra-operable during that reconcile is NOT KNOWN and
+// is deliberately NOT asserted here — the ARM activity log for that resource
+// around 06:55Z would settle it and has not been read. #3839 records three
+// unmeasured hypotheses; the leading one is that the idempotent re-apply
+// re-issues this `shared_preload_libraries` write when the value is ALREADY
+// correct, re-triggering a restart that a first-deploy ordering never contends
+// with. Unmeasured is recorded as unmeasured (R7).
+//
+// MITIGATION STATUS: #3827 added a retry taxonomy for this exact class and is
+// deployed, but as of #3839 it is UNEXERCISED — the following scheduled run went
+// green without encountering the condition (0 occurrences, 0 retries), so its
+// ~2-3 minute budget (`--max-attempts 4 --backoff 45`) is unproven. If it proves
+// too short, widen the BUDGET, never the matcher.
 resource cfgPreload 'Microsoft.DBforPostgreSQL/flexibleServers/configurations@2024-08-01' = {
   parent: pg
   name: 'shared_preload_libraries'

@@ -16,8 +16,8 @@ verdict is DERIVED, not name-matched — see "How the owner column is decided".
 | Total routes | 1684 |
 | Public (no session) | 58 |
 | Session-only | 648 |
-| Owner-scoped | 674 |
-| Admin | 304 |
+| Owner-scoped | 675 |
+| Admin | 303 |
 | Unknown (generator fails) | 0 |
 | Gated (backend config) | 496 |
 | Areas | 122 |
@@ -1123,7 +1123,7 @@ dispatch is invisible to it. Full limits: `scripts/ci/_route-backends.mjs`.
 | `items/[type]/[id]/permissions/route.ts` | GET POST DELETE | owner-scoped |  | ADLS, ARM, Azure RBAC, Azure Storage, Cosmos, Fabric, Managed Identity, Microsoft Graph, Purview, Resource Graph |
 | `items/[type]/[id]/route.ts` | GET PATCH DELETE | owner-scoped |  | Cosmos |
 | `items/[type]/[id]/security-roles/preview-as/route.ts` | POST | admin |  | ADLS, ARM, Azure SQL, Cosmos, Managed Identity, Microsoft Graph, Synapse SQL |
-| `items/[type]/[id]/security-roles/route.ts` | GET POST PUT DELETE | admin |  | ADLS, ARM, Azure Storage, Cosmos, Fabric, Managed Identity, Microsoft Graph |
+| `items/[type]/[id]/security-roles/route.ts` | GET POST PUT DELETE | owner-scoped |  | ADLS, ARM, Azure Storage, Cosmos, Fabric, Managed Identity, Microsoft Graph |
 | `items/[type]/[id]/security/route.ts` | GET POST | owner-scoped | ● | Azure Monitor, Cosmos, Microsoft Graph |
 | `items/[type]/[id]/sensitivity-label/route.ts` | GET PUT PATCH DELETE | owner-scoped | ● | ADLS, ADX, ARM, Azure RBAC, Azure SQL, Azure Storage, Cosmos, Fabric, Managed Identity, Microsoft Graph, Purview, Resource Graph, Synapse, Synapse SQL |
 | `items/[type]/[id]/sensitivity/route.ts` | GET PUT | owner-scoped | ● | Cosmos, Purview |
@@ -2518,7 +2518,7 @@ silently downgrading the route.
 
 ## Backend signals (derived)
 
-440 module(s) ORIGINATE a backend label — the derivation read an
+441 module(s) ORIGINATE a backend label — the derivation read an
 Azure identifier out of them. Every other route/module below inherits through the
 call graph. Nothing in this section is a Loom module name someone typed: the
 modules are derived, and only the Microsoft-owned identifier vocabulary is seeded.
@@ -3016,6 +3016,7 @@ caps the NUMBER of cuts at three; it does not bound what one cut can hide.
 | `apps/fiab-console/lib/azure/workspace-grants.ts` | Azure RBAC, Azure Storage, Cosmos, Event Hubs |
 | `apps/fiab-console/lib/azure/workspace-identity-client.ts` | Azure RBAC, Managed Identity |
 | `apps/fiab-console/lib/azure/workspace-roles-client.ts` | Azure RBAC, Fabric |
+| `apps/fiab-console/lib/brain/detectors/cost-model.ts` | Retail Prices API |
 | `apps/fiab-console/lib/catalog/item-types/azure-ai-foundry.ts` | AML |
 | `apps/fiab-console/lib/catalog/item-types/azure-sql-database.ts` | Azure SQL |
 | `apps/fiab-console/lib/catalog/item-types/data-engineering.ts` | Batch |

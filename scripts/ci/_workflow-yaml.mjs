@@ -192,7 +192,18 @@ function parseSequence(lines, i, indent) {
   return { value: seq, next: k };
 }
 
-/** Parse a workflow file's text into the block structure described above. */
+/**
+ * Parse a workflow file's text into the block structure described above.
+ *
+ * PHYSICAL-LINES-OK: YAML block structure IS a physical-line property — a node's
+ * parent is decided by its indentation column, and folding a trailing `\` would
+ * join two differently-indented lines and corrupt the parse. This module never
+ * judges a shell command: `run: |` bodies are captured RAW and handed to the
+ * caller unparsed (see SCOPE above), so the backslash-continuation problem
+ * `_logical-lines.mjs` solves belongs to whoever reads that body, not here.
+ * check-guard-logical-lines.mjs did not see this file at all until #3438 widened
+ * its subject set past `check-*.mjs`; this line is the decision it then asked for.
+ */
 export function parseWorkflow(text) {
   const lines = text.split(/\r?\n/);
   const { value } = parseMapping(lines, 0, 0);

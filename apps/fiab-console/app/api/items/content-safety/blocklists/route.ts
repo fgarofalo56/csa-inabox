@@ -9,9 +9,13 @@
  * Backed by the Azure AI Content Safety data-plane
  * (/contentsafety/text/blocklists, api-version 2024-09-01). When the endpoint
  * env var is unset the client throws NotDeployedError → honest 503 gate.
+ *
+ * Route-toolkit: the `withSession` wrapper [R3] — see ../route.ts for the 401-equivalence note.
+ * #3578: transport failures are diagnosed by _lib/transport-error.ts, not relayed
+ * verbatim as undici's bare "fetch failed".
  */
 import { NextRequest, NextResponse } from 'next/server';
-import { getSession } from '@/lib/auth/session';
+import { withSession } from '@/lib/api/route-toolkit';
 import {
   listBlocklists,
   upsertBlocklist,
@@ -19,28 +23,27 @@ import {
   FoundryError,
   NotDeployedError,
 } from '@/lib/azure/foundry-client';
+import { diagnoseTransportFailure, transportErrorResponse } from '../_lib/transport-error';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
 function err(e: any) {
   if (e instanceof NotDeployedError) return NextResponse.json({ ok: false, error: e.message, hint: e.hint, notDeployed: true }, { status: 503 });
+  const transport = diagnoseTransportFailure(e);
+  if (transport) return transportErrorResponse(transport);
   const status = e instanceof FoundryError ? e.status : 502;
   return NextResponse.json({ ok: false, error: e?.message || String(e), body: e?.body }, { status });
 }
 
-export async function GET() {
-  const session = getSession();
-  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+export const GET = withSession(async () => {
   try {
     const blocklists = await listBlocklists();
     return NextResponse.json({ ok: true, blocklists });
   } catch (e: any) { return err(e); }
-}
+});
 
-export async function POST(req: NextRequest) {
-  const session = getSession();
-  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+export const POST = withSession(async (req: NextRequest) => {
   try {
     const body = await req.json();
     const name = String(body?.name || '').trim();
@@ -52,15 +55,13 @@ export async function POST(req: NextRequest) {
     const blocklist = await upsertBlocklist(name, body.description ? String(body.description) : undefined);
     return NextResponse.json({ ok: true, blocklist });
   } catch (e: any) { return err(e); }
-}
+});
 
-export async function DELETE(req: NextRequest) {
-  const session = getSession();
-  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+export const DELETE = withSession(async (req: NextRequest) => {
   try {
     const name = req.nextUrl.searchParams.get('name')?.trim();
     if (!name) return NextResponse.json({ ok: false, error: 'name required' }, { status: 400 });
     await deleteBlocklist(name);
     return NextResponse.json({ ok: true, deleted: name });
   } catch (e: any) { return err(e); }
-}
+});

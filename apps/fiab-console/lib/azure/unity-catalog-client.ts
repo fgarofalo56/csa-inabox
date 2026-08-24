@@ -64,10 +64,15 @@ import {
 import {
   buildCreateTableFormatDdl, type UcTableFormatSpec,
 } from '@/lib/sql/uc-table-format-builders';
+import { describeWorkspaceFailure } from '@/lib/azure/unity-workspace-failure';
 
 // Re-export the tag-pair type so API routes can import it from this client
 // module (the canonical UC surface) rather than reaching into the SQL builders.
 export type { UcTagPair } from '@/lib/sql/uc-security-builders';
+
+// Re-exported so this client stays the canonical import surface for the R7
+// workspace-failure classifier; it is defined in the sibling module above.
+export { describeWorkspaceFailure } from '@/lib/azure/unity-workspace-failure';
 
 const DBX_SCOPE = '2ff814a6-3304-4ab8-85cb-cd0e6f879c1d/.default';
 
@@ -472,7 +477,7 @@ export async function listAllMetastores(): Promise<UCMetastore[]> {
       // 500. The id is namespaced with ERROR_ so callers can branch.
       seen.set(`ERROR_${host}`, {
         metastore_id: `ERROR_${host}`,
-        name: `(workspace ${host} unreachable: ${e?.status ?? '?'} ${e?.message ?? 'error'})`,
+        name: describeWorkspaceFailure(host, e),
         workspace_hostname: host,
       });
     }

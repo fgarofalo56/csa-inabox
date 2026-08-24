@@ -165,16 +165,40 @@ test('202 but never fresh → poll TIMEOUT → exit 1', async () => {
   );
 });
 
+/**
+ * "Fails fast" is a claim about how many times it POLLED, not about how many
+ * milliseconds elapsed (#3760). This assertion used to read
+ *
+ *     assert.ok(Date.now() - started < 6000, 'must break on the failure, …');
+ *
+ * which is a wall-clock PROXY for that claim. The proxy correlates on an idle
+ * machine and stops correlating under load — measured on one tree: 1755 ms
+ * idle, 4066 ms at 8-way parallelism, 7908 ms under the tree-wide runner, i.e.
+ * OVER the 6000 ms budget. Not a Windows artifact; a slow GitHub runner trips
+ * it identically, and CI has simply been lucky. Three separate reviewers hit it
+ * on three branches in one night and each correctly dismissed it as a flake —
+ * which is the real cost, because a REAL failure in this file would now be
+ * dismissed the same way.
+ *
+ * The behavioural measurement was already plumbed and thrown away: `withServer`
+ * passes `() => ({ posts, gets })` as `run()`'s second argument (see :65) and
+ * this case declared `async (url) => {…}`, never binding it. Counting the polls
+ * is immune to machine load AND strictly stronger — the old assertion passed if
+ * the script polled twice quickly, which is exactly the regression it exists to
+ * catch.
+ *
+ * MUTATION-PROOF (load-bearing): make the script keep polling past a
+ * `job.state: failed` and `gets` climbs to the cap, so this goes RED.
+ */
 test('202 then job.state failed → exit 1 (fails fast, no waiting out the cap)', async () => {
   await withServer(
     () => ACCEPTED,
     () => ({ status: 200, body: pollBody({ freshness: 'stale', job: 'failed' }) }),
-    async (url) => {
-      const started = Date.now();
+    async (url, counts) => {
       const res = await runScript(url);
       assert.equal(res.status, 1, res.stdout + res.stderr);
       assert.match(res.stdout, /NOT refreshed/i);
-      assert.ok(Date.now() - started < 6000, 'must break on the failure, not poll to the cap');
+      assert.equal(counts().gets, 1, 'must break on the failure, not poll to the cap');
     },
   );
 });
