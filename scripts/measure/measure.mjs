@@ -62,28 +62,63 @@ export class MeasurementError extends Error {
  * outer quote pair is required — cmd strips it, leaving the inner quoting intact.
  *
  * The quoting itself lives in `./cmd-quote.mjs`: it is pure, so it is testable
- * without spawning anything, and keeping it out of the module that owns the
- * `spawnSync` sink is what lets CodeQL's IndirectCommandInjection query
- * terminate here.
+ * without spawning anything.
  */
-function resolveExe(bin) {
-  const wrap = (file) => ({ file, batch: needsCmdWrapper(file) });
 
+/**
+ * The only binaries this toolkit is allowed to launch, by basename without
+ * extension. Every call site passes a string LITERAL (`'gh'`, `'az'`), so this
+ * costs nothing behaviourally — it exists so that a `bin` which ever becomes
+ * argv- or env-derived is refused at the door instead of reaching a spawn.
+ */
+const ALLOWED_BINARIES = new Set(['gh', 'az', 'git', 'node', 'npm', 'pnpm', 'pwsh']);
+
+function assertAllowed(bin) {
+  const base = path.basename(String(bin)).replace(/\.(cmd|bat|exe|com)$/i, '').toLowerCase();
+  if (!ALLOWED_BINARIES.has(base)) {
+    throw new MeasurementError(
+      `'${bin}' is not an allowed binary (allowed: ${[...ALLOWED_BINARIES].sort().join(', ')})`,
+      { bin },
+    );
+  }
+}
+
+/**
+ * Decide whether `bin` needs the cmd.exe wrapper — and return ONLY that boolean.
+ *
+ * The PATH scan deliberately DISCARDS the path it finds. An earlier version
+ * returned it and spawned it, which put `process.env.PATH` on a dataflow path
+ * into `spawnSync`'s executable argument. That is CodeQL's
+ * `js/indirect-command-line-injection` (CWE-078), and it is a TRUE positive:
+ * resolving an executable out of an environment variable is the shape the query
+ * exists to find. It also stopped the query terminating inside its 600s budget,
+ * which on main uploads a `codeql-failed-run.sarif` and FREEZES the whole JS/TS
+ * alert list (see .github/workflows/codeql.yml, and the 2026-08-03 outage).
+ *
+ * Returning a boolean severs the flow at a type that cannot carry taint, and it
+ * is the better code regardless: both remaining launch paths resolve the binary
+ * themselves — libuv for a direct spawn, cmd.exe (via PATHEXT) for a shim — and
+ * both are more faithful than this four-extension guess ever was.
+ */
+function needsWrapper(bin) {
   // An explicit path (absolute, or containing a separator) is used as given.
   // Without this, a full path like `C:\Program Files\nodejs\node.exe` is not
   // found by a PATH scan and reports "could not resolve" for a binary that
   // plainly exists — caught by this module's own self-test on first run.
   if (path.isAbsolute(bin) || bin.includes('/') || bin.includes('\\')) {
-    if (existsSync(bin)) return wrap(bin);
-    throw new MeasurementError(`'${bin}' is an explicit path but does not exist`, { bin });
+    if (!existsSync(bin)) {
+      throw new MeasurementError(`'${bin}' is an explicit path but does not exist`, { bin });
+    }
+    return needsCmdWrapper(bin);
   }
-  if (process.platform !== 'win32') return { file: bin, batch: false };
-  const exts = ['.cmd', '.exe', '.bat', ''];
+  if (process.platform !== 'win32') return false;
   for (const dir of (process.env.PATH || '').split(path.delimiter)) {
     if (!dir) continue;
-    for (const ext of exts) {
-      const p = path.join(dir, bin + ext);
-      if (existsSync(p)) return wrap(p);
+    for (const ext of ['.cmd', '.exe', '.bat', '']) {
+      // `found` is consumed for its EXTENSION and then dropped. It must never
+      // be returned, spawned, or interpolated — see the note above.
+      const found = path.join(dir, bin + ext);
+      if (existsSync(found)) return needsCmdWrapper(found);
     }
   }
   // Not found on PATH. Fail loudly rather than guessing.
@@ -91,20 +126,27 @@ function resolveExe(bin) {
 }
 
 /**
- * Build the spawn triple for a resolved binary, batch shim or not.
+ * Build the spawn triple. `bin` reaches the spawn exactly as the caller wrote
+ * it; nothing derived from the environment does.
  *
  * NOT exported. An exported function's parameters are an external taint source
  * to a static analyser, and exporting this one — solely so a unit test could
- * reach the .cmd branch without az installed — was enough to stop CodeQL's
- * IndirectCommandInjection query terminating inside its 600s budget. The pure
- * half now lives in cmd-quote.mjs and is tested directly there instead.
+ * reach the .cmd branch without az installed — was itself enough to stop the
+ * same query terminating. The pure half lives in cmd-quote.mjs and is tested
+ * directly there instead.
  */
 function spawnPlan(bin, args) {
-  const { file, batch } = resolveExe(bin);
-  if (!batch) return { cmd: file, argv: args, opts: {} };
+  assertAllowed(bin);
+  if (!needsWrapper(bin)) return { cmd: bin, argv: args, opts: {} };
+  // Pin the interpreter. ComSpec is honoured only when it actually names
+  // cmd.exe: a redirected ComSpec would otherwise choose the program that runs
+  // every command this toolkit issues, which is a far larger grant than the
+  // convenience is worth.
+  const comspec = process.env.ComSpec || '';
+  const interpreter = /(^|[\\/])cmd\.exe$/i.test(comspec) ? comspec : 'cmd.exe';
   return {
-    cmd: process.env.ComSpec || 'cmd.exe',
-    argv: ['/d', '/s', '/c', `"${buildCmdLine(file, args)}"`],
+    cmd: interpreter,
+    argv: ['/d', '/s', '/c', `"${buildCmdLine(bin, args)}"`],
     opts: { windowsVerbatimArguments: true },
   };
 }

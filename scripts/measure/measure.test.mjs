@@ -11,6 +11,7 @@
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import path from 'node:path';
 import {
   run, runJson, metricTotal, checkRuns, measureWithControl,
   UNKNOWN, MeasurementError,
@@ -46,18 +47,48 @@ test('R2: the status reported is the SUBJECT\'s, not a wrapper\'s', () => {
 });
 
 test('R1: a command that cannot launch THROWS (never a silent zero)', () => {
-  // Assert the PROPERTY, not the wording. The two platforms reach this from
-  // different directions and say different things, both correct:
-  //   win32 — the PATH scan finds nothing        -> "could not resolve"
-  //   linux — spawn is attempted and ENOENTs     -> "failed to launch"
+  // Assert the PROPERTY, not the wording. Three platforms/paths reach this from
+  // different directions and say different things, all correct:
+  //   any   — the basename is not on the allowlist -> "not an allowed binary"
+  //   win32 — the PATH scan finds nothing          -> "could not resolve"
+  //   linux — spawn is attempted and ENOENTs       -> "failed to launch"
   // The first version of this test pinned /could not resolve/ and passed on
   // Windows while failing in Linux CI. A guard keyed to a spelling is exactly
   // what this directory exists to stop shipping.
   assert.throws(
     () => run('definitely-not-a-real-binary-xyz', ['--version']),
     (e) => e instanceof MeasurementError
-        && /could not resolve|failed to launch|does not exist/.test(e.message)
+        && /not an allowed binary|could not resolve|failed to launch|does not exist/.test(e.message)
         && /definitely-not-a-real-binary-xyz/.test(e.message + JSON.stringify(e.detail ?? {})),
+  );
+});
+
+test('the allowlist refuses an unknown binary BEFORE any resolution or spawn', () => {
+  // The allowlist is the door: `bin` is a string literal at every call site
+  // today, and this keeps it that way if one ever becomes argv- or env-derived.
+  assert.throws(
+    () => run('curl', ['--version']),
+    (e) => e instanceof MeasurementError && /not an allowed binary/.test(e.message),
+  );
+});
+
+test('POSITIVE CONTROL: the allowlist is not refusing EVERYTHING', () => {
+  // Without this, the test above would still pass if assertAllowed threw
+  // unconditionally — a guard with a 100% refusal rate blocks nothing useful
+  // and would take the whole toolkit down silently.
+  const r = run(NODE, ['-e', 'process.stdout.write("ok")']);
+  assert.equal(r.stdout, 'ok', 'an allowlisted basename (node.exe -> node) must pass');
+});
+
+test('an allowlisted BASENAME does not wave through a path that does not exist', () => {
+  // Resolution still runs after the allowlist. This is the coverage the
+  // allowlist would otherwise have short-circuited away: `spawnPlan` must not
+  // hand `spawnSync` a file it never confirmed. Cross-platform — the explicit-
+  // path branch is taken on win32 and POSIX alike.
+  const bogus = path.join(path.sep, 'definitely', 'not', 'here', path.basename(NODE));
+  assert.throws(
+    () => run(bogus, ['--version']),
+    (e) => e instanceof MeasurementError && /does not exist/.test(e.message),
   );
 });
 
