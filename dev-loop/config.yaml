@@ -14,25 +14,45 @@ validation_gates:
     required: true
     timeout_seconds: 300
 
-  # The triggers below MIRROR validate-python.ps1's $pythonDirs, because that
-  # is the population the gate actually lints. It was ["*.py"] - all 762
-  # tracked .py files - against a check population of 207, so a change under
-  # portal, tests, apps, azure-functions, cli, sdk or examples selected the
-  # gate, was never examined by it, and the suite reported a measured PASS.
-  # Same defect shape as the typescript entry below. `governance/**/*.py` has
-  # zero population today (the directory is absent) and is listed so that
-  # creating it opens neither half of the hole. Python outside these
-  # directories is NOT covered by `make validate`; it stays with test.yml,
-  # validate.yml and sdk-contract.yml. See #3811.
+  # These triggers are the same set validate-all.ps1's Gate 2 matches, and the
+  # authority for both is SCOPE_DIRS in scripts/ci/python_lint_scope.py:
+  #     python scripts/ci/python_lint_scope.py --print-trigger-globs
+  # emits exactly this list. The gate asserts the orchestrator's copy against
+  # that authority on every run (-TriggerGlobs) and fails on any difference.
+  #
+  # They are written in validate-all.ps1's dialect - PowerShell `-like`, where a
+  # single `*` matches across `/`, so `scripts/*.py` covers
+  # scripts/data/download-noaa.py. They previously read `scripts/**/*.py`, which
+  # is a DIFFERENT dialect: under `-like` that pattern requires a literal `/`
+  # after `scripts/` and would not match `scripts/foo.py` at all. This file is
+  # decorative (nothing reads it; validate-all.ps1 carries its own copy and only
+  # the gate NAMES are drift-checked), but two lists asserted to mirror each
+  # other must at least be written in the same language.
+  #
+  # It was ["*.py"] - all 762 tracked .py - against a much smaller check
+  # population, so a change under portal, tests, apps, azure-functions, cli, sdk
+  # or examples selected the gate, was never examined by it, and the suite
+  # reported a measured PASS. Same defect shape as the typescript entry below.
+  # `governance/*` and `dev-loop/*` have zero population today and are listed so
+  # that populating either opens neither half of the hole. `.ipynb` is here
+  # because ruff lints notebooks and six tracked ones are in the population.
+  # Python outside these directories is NOT covered by `make validate`; it stays
+  # with test.yml, validate.yml and sdk-contract.yml. See #3811.
   python:
     script: "gates/validate-python.ps1"
     triggers:
-      - "scripts/**/*.py"
-      - "domains/**/*.py"
-      - "tools/**/*.py"
-      - "governance/**/*.py"
-      - "dev-loop/**/*.py"
-      - "csa_platform/**/*.py"
+      - "csa_platform/*.ipynb"
+      - "csa_platform/*.py"
+      - "dev-loop/*.ipynb"
+      - "dev-loop/*.py"
+      - "domains/*.ipynb"
+      - "domains/*.py"
+      - "governance/*.ipynb"
+      - "governance/*.py"
+      - "scripts/*.ipynb"
+      - "scripts/*.py"
+      - "tools/*.ipynb"
+      - "tools/*.py"
     required: true
     timeout_seconds: 120
 

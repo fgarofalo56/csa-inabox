@@ -62,6 +62,28 @@
          -> exit 3, and specifically NOT 0. portal is outside what the gate
             lints, so it must select nothing. The population arm: it is what
             makes widening the CHECK without narrowing the TRIGGER insufficient.
+      N  validate-all, a GITIGNORED but TRACKED .py inside the gate's own scope
+         -> NOT exit 0. .gitignore hides such a file from ruff's directory walk
+            while the trigger, which reads the index, still fires for it. Nine
+            real files were in exactly that state carrying 216 findings, and the
+            suite reported a measured PASS over them. L and M could not see it,
+            because both sides agreed on the DIRECTORY and disagreed on the
+            FILES inside it.
+      O  validate-all.ps1's $pyTriggerGlobs, read out of its own AST, must be
+         exactly the population scripts/ci/python_lint_scope.py lints.
+         Keyed to the set equality, not to any directory name: widening or
+         narrowing that array reds this case whatever directory was involved.
+      P  CONTROL for O: the same assertion, handed a trigger widened by
+         tests/*.py + azure-functions/*.py, must FAIL.
+      Q  CONTROL for O: the same assertion, handed a trigger with
+         csa_platform/*.py removed, must FAIL.
+      R  CONTROL for the OTHER half: O/P/Q prove the two glob lists agree; R
+         proves that every file those globs select is a file ruff actually
+         OPENS. Two arms over one throwaway repo differing by a single
+         pyproject `extend-exclude` line - the clean arm must pass, the excluded
+         arm must fail naming the unopened file. .gitignore:34 defeated exactly
+         this assertion for nine real files while both lists agreed on
+         `scripts/`.
 
     A and B together are the load-bearing pair. If both return the same code,
     this script fails - because a verdict that does not move between "measured
@@ -72,6 +94,14 @@
     reverting only validate-all.ps1's Gate 2 trigger reds M and leaves L green.
     Neither is satisfiable by the other's fix, which is the only reason running
     both is worth anything.
+
+    O/P/Q are the third, and they exist because L and M were not enough. An
+    independent review defeated them by widening Gate 2's trigger to tests/*.py
+    + azure-functions/*.py - 76 tracked files back inside the manufactured
+    positive - and this script still reported 14/14, RC=0. Cases keyed to
+    directory names are defeated by the next directory. O is keyed to the
+    invariant; P and Q are its embedded control, and a green O means nothing
+    unless both of them fail.
 #>
 
 [CmdletBinding(SupportsShouldProcess)]
@@ -356,6 +386,201 @@ try {
             Add-Case 'M  a portal-only .py change does NOT select the gate' 'Pass' 'skipped, and the suite exited 3 NOT VERIFIED rather than green'
         } else {
             Add-Case 'M  a portal-only .py change does NOT select the gate' 'Fail' "expected exit 3 NOT VERIFIED, got exit $($m.ExitCode)"
+        }
+
+        # --- Case N: a GITIGNORED but TRACKED .py inside the gate's own scope. ---
+        #
+        # The regression test for what L and M could not see. L and M pinned the
+        # two directory NAMES; an independent review then measured that the
+        # trigger and the check still disagreed by nine files, because the two
+        # sides were computed by different methods - the trigger from git's
+        # tracked-file view, the check from ruff's directory WALK. .gitignore:34
+        # in the real repo is `data/`, ruff respects gitignore, and so
+        # scripts/data/ - nine tracked files, 216 findings, 10 of them F401 -
+        # was inside the trigger and invisible to the check.
+        #
+        # This is that repo in miniature: .gitignore = `data/`, one clean
+        # scripts/keep.py so the check population is non-empty and passes, and
+        # one dirty scripts/data/bad.py force-added so it is TRACKED while
+        # remaining gitignored - exactly the real files' state. The reviewer ran
+        # this shape against the fixed gate and measured exit 0, "=== PYTHON
+        # LINT PASSED ===", "All gates passed! (1 gate(s) measured.)" over a file
+        # with findings it had never opened.
+        #
+        # The assertion is the PROPERTY, not the mechanism: whatever ruff, the
+        # gate or .gitignore do, a dirty .py that SELECTS this gate must not
+        # produce a green suite. Exit 1 (fired and read it) is right; exit 3
+        # (did not fire) would be honest but is not what should happen here,
+        # because scripts/ IS in the population. Exit 0 is the defect. See #3811.
+        Invoke-SynthGit @('checkout', '-q', 'main')
+        Invoke-SynthGit @('checkout', '-q', '-b', 'gitignored-in-scope')
+        New-Item -ItemType Directory -Path (Join-Path $synthRepo 'scripts/data') -Force | Out-Null
+        Set-Content -Path (Join-Path $synthRepo '.gitignore') -Value @('data/') -Encoding ASCII
+        Set-Content -Path (Join-Path $synthRepo 'scripts/keep.py') -Value @('VALUE = 1') -Encoding ASCII
+        Set-Content -Path (Join-Path $synthRepo 'scripts/data/bad.py') -Value $badLines -Encoding ASCII
+        Invoke-SynthGit @('add', '-A')
+        # -f because the file IS gitignored. That is the whole point: the real
+        # nine are tracked and gitignored simultaneously, and a check that walks
+        # directories cannot see them while a trigger that reads the index can.
+        Invoke-SynthGit @('add', '-f', 'scripts/data/bad.py')
+        Invoke-SynthGit @('commit', '-q', '-m', 'add a gitignored-but-tracked python file with unused imports')
+
+        $n = Invoke-Child -ScriptPath $validateAll -Arguments @('-RepoRoot', $synthRepo) -WorkingDirectory $synthRepo
+        if ($n.Output -match 'NONE of them could run' -or $n.Output -match 'CANNOT VALIDATE') {
+            Add-Case 'N  a gitignored-but-TRACKED .py in scope cannot yield a green' 'NotRun' "the Python gate could not run here; exit $($n.ExitCode)"
+        } elseif ($n.ExitCode -eq 0) {
+            Add-Case 'N  a gitignored-but-TRACKED .py in scope cannot yield a green' 'Fail' 'exit 0. The gate fired for a tracked .py that .gitignore hid from ruff and reported a PASS over it - #3811 verbatim.'
+        } elseif ($n.ExitCode -eq 1 -and $n.Output -match 'Python \(required\): \[FAIL\]') {
+            Add-Case 'N  a gitignored-but-TRACKED .py in scope cannot yield a green' 'Pass' "exit $($n.ExitCode); the gate opened it despite .gitignore"
+        } else {
+            Add-Case 'N  a gitignored-but-TRACKED .py in scope cannot yield a green' 'Fail' "expected exit 1 with Python [FAIL] over a file .gitignore hides from ruff, got exit $($n.ExitCode)"
+        }
+    }
+
+    # =======================================================================
+    # Cases O, P, Q - the TRIGGER/CHECK invariant itself, with its control.
+    #
+    # L, M and N are behavioural: they place a file somewhere and read the
+    # suite's verdict. That catches the directories they happen to name and
+    # nothing else - the same review that found N also widened Gate 2's trigger
+    # to tests/*.py + azure-functions/*.py, reopening the manufactured positive
+    # for 76 tracked files, and the self-test still reported 14/14 RC=0. A guard
+    # keyed to two directory spellings is defeated by the third directory.
+    #
+    # These three are keyed to the INVARIANT instead: the glob list
+    # validate-all.ps1 fires on must be exactly the population
+    # scripts/ci/python_lint_scope.py lints. O reads that array out of
+    # validate-all.ps1's own AST - not a copy of it here - and asserts it
+    # against the module. Any widening or narrowing of it reds O, whatever
+    # directory was involved and whether or not any test file lives there.
+    #
+    # P and Q are the EMBEDDED CONTROL. A guard whose population can be empty,
+    # or whose assertion is vacuous, passes silently forever; these two feed the
+    # assertion a deliberately wrong list in each direction and REQUIRE it to
+    # fail. If P or Q passes-as-green, O's green means nothing.
+    # =======================================================================
+    # Resolved here rather than reused from the git-dependent block above:
+    # if the synthetic repo could not be built, $validateAll was never assigned,
+    # and a guard that silently NotRuns because of an unrelated failure is the
+    # shape this whole script exists to catch.
+    $validateAllPath = Join-Path $gatesDir 'validate-all.ps1'
+    $scopeModule = Join-Path $RepoRoot 'scripts/ci/python_lint_scope.py'
+    $pythonExe = $null
+    foreach ($candidate in @('python', 'python3')) {
+        $found = Get-Command $candidate -ErrorAction SilentlyContinue
+        if ($found) { $pythonExe = $found.Source; break }
+    }
+
+    function Invoke-ScopeAssert {
+        param([string[]]$Globs)
+        $argv = @($scopeModule, '--repo-root', $RepoRoot, '--assert-only', '--assert-trigger-globs') + $Globs
+        $global:LASTEXITCODE = $null
+        $out = & $pythonExe @argv 2>&1
+        return [pscustomobject]@{ ExitCode = $global:LASTEXITCODE; Output = ($out -join "`n") }
+    }
+
+    if (-not $pythonExe -or -not (Test-Path $scopeModule)) {
+        Add-Case 'O/P/Q trigger-check invariant' 'NotRun' "python or scripts/ci/python_lint_scope.py unavailable under $RepoRoot"
+    } else {
+        # Read validate-all.ps1's ACTUAL trigger array out of its AST. Grepping
+        # for the directory names would only prove this script and that one
+        # contain the same strings; the AST gives the literal list the
+        # orchestrator will pass to ShouldRunGate, so an edit there moves this
+        # verdict even if the edit is a directory nobody has thought of.
+        $tokens = $null
+        $errors = $null
+        $ast = [System.Management.Automation.Language.Parser]::ParseFile($validateAllPath, [ref]$tokens, [ref]$errors)
+        $assign = $ast.FindAll({
+                param($node)
+                $node -is [System.Management.Automation.Language.AssignmentStatementAst] -and
+                $node.Left -is [System.Management.Automation.Language.VariableExpressionAst] -and
+                $node.Left.VariablePath.UserPath -eq 'pyTriggerGlobs'
+            }, $true)
+
+        if ($errors.Count -gt 0 -or $assign.Count -ne 1) {
+            Add-Case 'O  validate-all''s Gate 2 trigger IS the linted population' 'Fail' "could not read exactly one `$pyTriggerGlobs assignment out of validate-all.ps1 (found $($assign.Count), parse errors $($errors.Count)) - the invariant is unprovable, which is not a pass"
+        } else {
+            $liveGlobs = @($assign[0].Right.FindAll({
+                        param($node)
+                        $node -is [System.Management.Automation.Language.StringConstantExpressionAst]
+                    }, $true) | ForEach-Object { $_.Value })
+
+            $o = Invoke-ScopeAssert -Globs $liveGlobs
+            if ($o.ExitCode -eq 0) {
+                Add-Case 'O  validate-all''s Gate 2 trigger IS the linted population' 'Pass' "$($liveGlobs.Count) glob(s) read from validate-all.ps1's AST, all matched"
+            } else {
+                Add-Case 'O  validate-all''s Gate 2 trigger IS the linted population' 'Fail' "exit $($o.ExitCode). The orchestrator fires for a different set than the gate lints: $($o.Output)"
+            }
+
+            # P - widening. This is the mutation the review used to defeat the
+            # previous guard: tests/*.py + azure-functions/*.py in the trigger
+            # and not in the check, 76 tracked files back inside the
+            # manufactured positive.
+            $widened = @($liveGlobs) + @('tests/*.py', 'azure-functions/*.py')
+            $p = Invoke-ScopeAssert -Globs $widened
+            if ($p.ExitCode -ne 0 -and $p.Output -match 'trigger-only') {
+                Add-Case 'P  CONTROL: widening the trigger alone is REJECTED' 'Pass' "exit $($p.ExitCode), and it named the trigger-only globs"
+            } else {
+                Add-Case 'P  CONTROL: widening the trigger alone is REJECTED' 'Fail' "a trigger widened by tests/*.py + azure-functions/*.py was ACCEPTED (exit $($p.ExitCode)). Case O's pass proves nothing while this one does not fail."
+            }
+
+            # Q - the other direction. A check wider than the trigger is a
+            # coverage hole rather than a manufactured positive, but it is still
+            # the two halves disagreeing, and a guard that only watches one
+            # direction is half a guard.
+            $narrowed = @($liveGlobs | Where-Object { $_ -ne 'csa_platform/*.py' })
+            $q = Invoke-ScopeAssert -Globs $narrowed
+            if ($q.ExitCode -ne 0 -and $q.Output -match 'check-only') {
+                Add-Case 'Q  CONTROL: narrowing the trigger alone is REJECTED' 'Pass' "exit $($q.ExitCode), and it named the check-only globs"
+            } else {
+                Add-Case 'Q  CONTROL: narrowing the trigger alone is REJECTED' 'Fail' "a trigger with csa_platform/*.py removed was ACCEPTED (exit $($q.ExitCode)) - the invariant is not being checked in this direction."
+            }
+        }
+
+        # --- Case R: the POPULATION CONTRACT's own control. ---
+        #
+        # O/P/Q prove the two GLOB LISTS agree. R proves the other half: that
+        # every file those globs select is a file ruff actually OPENS. That is
+        # the assertion .gitignore:34 defeated - the lists agreed on `scripts/`
+        # while ruff silently declined nine files inside it - and an assertion
+        # nobody has watched fail is an assertion nobody knows is running.
+        #
+        # gitignore is no longer the mechanism (explicit paths beat it), so the
+        # control uses the one that survives: pyproject's `extend-exclude`,
+        # honoured even for explicit paths because the module passes
+        # --force-exclude. Two arms over the same throwaway repo, differing by
+        # that one config line. If the FAIL arm passes, assert_population is
+        # decoration and case N's green is luck.
+        $controlRoot = Join-Path $tempRoot 'population-contract'
+        $armResults = @{}
+        foreach ($arm in @('clean', 'excluded')) {
+            $armRepo = Join-Path $controlRoot $arm
+            New-Item -ItemType Directory -Path (Join-Path $armRepo 'scripts/sub') -Force | Out-Null
+            $pyproject = @('[tool.ruff]', 'target-version = "py310"')
+            if ($arm -eq 'excluded') { $pyproject += 'extend-exclude = ["scripts/sub"]' }
+            Set-Content -Path (Join-Path $armRepo 'pyproject.toml') -Value $pyproject -Encoding ASCII
+            Set-Content -Path (Join-Path $armRepo 'scripts/keep.py') -Value @('VALUE = 1') -Encoding ASCII
+            Set-Content -Path (Join-Path $armRepo 'scripts/sub/hidden.py') -Value @('VALUE = 2') -Encoding ASCII
+            foreach ($g in @(
+                    @('init', '-b', 'main', '-q'),
+                    @('config', 'user.email', 'gate-selftest@localhost'),
+                    @('config', 'user.name', 'Gate Self Test'),
+                    @('config', 'commit.gpgsign', 'false'),
+                    @('add', '-A'),
+                    @('commit', '-q', '-m', 'seed'))) {
+                & git -C $armRepo @g 2>&1 | Out-Null
+            }
+            $global:LASTEXITCODE = $null
+            $out = & $pythonExe @($scopeModule, '--repo-root', $armRepo) 2>&1
+            $armResults[$arm] = [pscustomobject]@{ ExitCode = $global:LASTEXITCODE; Output = ($out -join "`n") }
+        }
+
+        if ($armResults['clean'].ExitCode -ne 0) {
+            Add-Case 'R  CONTROL: the population contract FIRES on an unopened file' 'NotRun' "the clean arm did not pass (exit $($armResults['clean'].ExitCode)), so the failing arm proves nothing: $($armResults['clean'].Output)"
+        } elseif ($armResults['excluded'].ExitCode -ne 0 -and $armResults['excluded'].Output -match 'POPULATION CONTRACT BROKEN' -and $armResults['excluded'].Output -match 'hidden\.py') {
+            Add-Case 'R  CONTROL: the population contract FIRES on an unopened file' 'Pass' "clean arm exit 0, excluded arm exit $($armResults['excluded'].ExitCode) naming the unopened file"
+        } else {
+            Add-Case 'R  CONTROL: the population contract FIRES on an unopened file' 'Fail' "a tracked file ruff refuses to open was ACCEPTED (exit $($armResults['excluded'].ExitCode)). assert_population is not watching."
         }
     }
 

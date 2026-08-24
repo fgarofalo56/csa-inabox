@@ -5,45 +5,69 @@
 .DESCRIPTION
     Exit codes:
       0 - ruff reported no findings
-      1 - ruff reported findings
-      2 - COULD NOT RUN (ruff unavailable, or no Python directories present).
+      1 - ruff reported findings, or the population contract is broken
+      2 - COULD NOT RUN (python, git or ruff unavailable; empty population).
 
-    SCOPE: this gate lints scripts, domains, tools, governance, dev-loop and
-    csa_platform under pyproject.toml's rule set - 207 of the repo's 762
-    tracked .py files. That is the SAME population and the SAME rules CI
-    already enforces (`ruff check domains/ scripts/ csa_platform/ tools/` in
-    test.yml:219 and validate.yml:267), plus dev-loop and governance, which
-    hold no tracked .py today.
+    SCOPE, AND WHY IT IS NOT DEFINED HERE. The population this gate lints is
+    declared once, in scripts/ci/python_lint_scope.py, and BOTH halves of the
+    gate derive from it: this script lints it, and validate-all.ps1's Gate 2
+    trigger is asserted against it on every run via -TriggerGlobs. There is no
+    edit that widens one side without the other.
 
-    It got there from 37 files and a weakened rule set. csa_platform - 170
-    files, the core platform package - was linted by CI on every push and by
-    NOTHING in `make validate`, while the orchestrator's trigger fired this
-    gate for any *.py anywhere. So a csa_platform-only change selected the
-    gate, was never examined by it, and the suite printed "All gates passed!".
-    A trigger wider than the check population does not merely leave a gap; it
-    manufactures a positive. Both sides are now the same list, and
-    validate-all.ps1's Gate 2 trigger is commented to keep them that way.
+    That indirection is the fix, not decoration. #3811 was filed because the
+    trigger fired for all 762 tracked .py while the check read a small fraction
+    of them. Narrowing the trigger to six directories closed most of it and left
+    NINE files behind, because the two sides were still computed by two
+    different methods:
 
-    The command line no longer carries `--select E,F,W --ignore E501`, which
-    overrode the 22 rule families pyproject.toml selects. Measured free:
-    `ruff check scripts domains tools csa_platform dev-loop` under the
-    pyproject rules is RC=0 on the tree as it stands.
+      TRIGGER  = git's view      - tracked files under those directories
+      CHECK    = ruff's view     - files ruff finds by WALKING those directories
 
-    STILL NOT COVERED: the other 555 tracked .py files - examples (189),
-    apps (180), portal (58), tests (56), azure-functions (20), cli (18),
-    sdk (16) and the stragglers. `make lint` already spans portal and
-    examples and is RED there: 758 findings under the pyproject rules, 196
-    even under the old weak ones. That is a debt-paydown project, not this
-    gate's to absorb - absorbing it would red every unrelated change over
-    debt this gate did not create. Those trees are gated by test.yml /
-    validate.yml / sdk-contract.yml, not by `make validate`, and a .py change
-    confined to them selects NO gate and exits 3 NOT VERIFIED rather than a
-    green it did not earn. See #3811.
+    .gitignore:34 contains `data/`, ruff respects gitignore, and so ruff's walk
+    skipped scripts/data/ entirely. Measured on this tree:
+
+      ruff check scripts domains tools csa_platform dev-loop            -> RC=0
+      ruff check scripts domains tools csa_platform dev-loop \
+        --no-respect-gitignore                                          -> RC=1,
+                                                                    216 errors
+
+    Nine tracked files, 216 findings, 10 of them F401 unused-import, in the
+    gate's own headline directory, reported as a PASS. The gate fired for a
+    change to one of them and then read a different, clean set of files.
+
+    So this script no longer names directories on a ruff command line. The
+    module hands ruff EXPLICIT tracked paths - which ruff opens regardless of
+    gitignore - and asserts, every run, that ruff actually opened every one of
+    them. The 216 are held per file by a ratchet (#3990) and printed on every
+    run; they can no longer grow, and they can no longer hide.
+
+    The command line carries no `--select E,F,W --ignore E501`. That override
+    replaced the 22 rule families pyproject.toml selects with three, so the gate
+    and CI graded the same files differently and `make validate` was the more
+    lenient of the two. .github/workflows/test.yml and validate.yml now call the
+    same module, so the two populations cannot disagree again either.
+
+    STILL NOT COVERED: tracked .py outside those directories - examples, apps,
+    portal, tests, azure-functions, cli, sdk. `make lint` already spans portal
+    and examples and is RED there (758 findings under the pyproject rules), so
+    absorbing them here would red every unrelated change over debt this gate did
+    not create. Those trees are gated by test.yml / validate.yml /
+    sdk-contract.yml, and a .py change confined to them selects NO gate and
+    exits 3 NOT VERIFIED rather than a green it did not earn. The live counts
+    are printed by every run of this gate - read those, not a number in a
+    comment. See #3811.
 #>
 
 [CmdletBinding(SupportsShouldProcess)]
 param(
-    [string]$RepoRoot
+    [string]$RepoRoot,
+
+    # The globs validate-all.ps1 matched to SELECT this gate. Supplied, they are
+    # asserted to describe exactly the population below; a mismatch in either
+    # direction is a hard failure. Omitted (a bare `make validate-python`), the
+    # population contract is still enforced - only the orchestrator-side half of
+    # the pair is unprovable, and that is stated rather than assumed.
+    [string[]]$TriggerGlobs
 )
 
 # Resolved in the BODY, not in the param default: under Windows PowerShell 5.1
@@ -55,8 +79,9 @@ param(
 # that one combination breaks. `&`, dot-sourcing, -Command, every pwsh 7 mode,
 # and a bare param() without [CmdletBinding()] all populate it correctly.
 # Resolving in the BODY works in all of them. See #3811.
+$toolRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 if (-not $RepoRoot) {
-    $RepoRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
+    $RepoRoot = $toolRoot
 }
 
 # -WhatIf is HONOURED, not merely tolerated. apps/copilot/tools/readonly.py:551-559
@@ -72,13 +97,38 @@ if (-not $RepoRoot) {
 # A dry run measures NOTHING, so it exits 2 (COULD NOT RUN) rather than 0.
 if ($WhatIfPreference) {
     Write-Host "=== Python Validation Gate (-WhatIf) ===" -ForegroundColor Cyan
-    Write-Host "  Would install ruff if absent, then lint the gate's scoped"
-    Write-Host "  directories under: $RepoRoot"
+    Write-Host "  Would install ruff if absent, then lint every tracked .py/.ipynb under"
+    Write-Host "  the directories declared in scripts/ci/python_lint_scope.py, within: $RepoRoot"
     Write-Host "  Nothing was linted and nothing was measured. This is NOT a pass." -ForegroundColor Yellow
     exit 2
 }
 
 Write-Host "=== Python Validation Gate ===" -ForegroundColor Cyan
+
+# The scope module is TOOLING, so it is resolved against this script's own
+# checkout - NOT against -RepoRoot, which is the SUBJECT being linted and may be
+# a synthetic repo built by gate-selftest.ps1 that contains no scripts/ at all.
+$scopeScript = Join-Path $toolRoot "scripts/ci/python_lint_scope.py"
+if (-not (Test-Path $scopeScript)) {
+    Write-Host "scripts/ci/python_lint_scope.py not found under $toolRoot - CANNOT VALIDATE." -ForegroundColor Yellow
+    Write-Host "  It defines the population this gate lints; without it the scope is UNKNOWN." -ForegroundColor Yellow
+    Write-Host "  Reporting NOT VERIFIED, not a pass." -ForegroundColor Yellow
+    exit 2
+}
+
+# `python` first: on this estate `python3` resolves to the Microsoft Store shim,
+# which exits 9009 with a "Python was not found" banner rather than running
+# anything. `python3` is still tried second for Linux CI hosts and containers.
+$pythonExe = $null
+foreach ($candidate in @('python', 'python3')) {
+    $found = Get-Command $candidate -ErrorAction SilentlyContinue
+    if ($found) { $pythonExe = $found.Source; break }
+}
+if (-not $pythonExe) {
+    Write-Host "python not found - CANNOT VALIDATE." -ForegroundColor Yellow
+    Write-Host "  Reporting NOT VERIFIED, not a pass." -ForegroundColor Yellow
+    exit 2
+}
 
 # Check if ruff is available
 $ruffPath = Get-Command ruff -ErrorAction SilentlyContinue
@@ -100,37 +150,45 @@ if (-not $ruffPath) {
 }
 
 Write-Host "Running ruff lint on Python files..."
-# THIS LIST IS HALF OF A PAIR. validate-all.ps1's Gate 2 trigger is the other
-# half, and the two must stay identical: a directory here but not there is a
-# coverage hole, a directory there but not here manufactures a PASS over a file
-# nothing examined. `governance` is absent from the tree and Test-Path drops it;
-# it stays listed on both sides so creating it does not silently open either
-# hole. See #3811.
-$pythonDirs = @(@("scripts", "domains", "tools", "governance", "dev-loop", "csa_platform") |
-    ForEach-Object { Join-Path $RepoRoot $_ } |
-    Where-Object { Test-Path $_ })
 
-if ($pythonDirs.Count -eq 0) {
-    Write-Host "No Python directories found - CANNOT VALIDATE." -ForegroundColor Yellow
-    Write-Host "  Reporting NOT VERIFIED, not a pass." -ForegroundColor Yellow
-    exit 2
+$scopeArgs = @($scopeScript, '--repo-root', $RepoRoot)
+if ($PSBoundParameters.ContainsKey('TriggerGlobs')) {
+    # Even an EMPTY -TriggerGlobs is asserted: an empty trigger against a
+    # non-empty check is a coverage hole, and passing @() must red rather than
+    # skip the assertion. Hence ContainsKey, not a truthiness test.
+    $scopeArgs += '--assert-trigger-globs'
+    $scopeArgs += @($TriggerGlobs)
+} else {
+    Write-Host "  (invoked without -TriggerGlobs: the population contract is checked," -ForegroundColor DarkGray
+    Write-Host "   the orchestrator's trigger is not. validate-all.ps1 supplies it.)" -ForegroundColor DarkGray
 }
 
 try {
-    # No `--select E,F,W --ignore E501`. That override replaced the 22 rule
-    # families pyproject.toml selects with three, so the gate and CI graded the
-    # same files differently and `make validate` was the more lenient of the
-    # two. Dropping it was measured free: RC=0 over every directory above.
-    ruff check $pythonDirs
+    $global:LASTEXITCODE = $null
+    & $pythonExe @scopeArgs
+    $scopeExit = $global:LASTEXITCODE
 } catch {
-    Write-Host "ruff could not be executed - CANNOT VALIDATE." -ForegroundColor Yellow
+    Write-Host "python_lint_scope.py could not be executed - CANNOT VALIDATE." -ForegroundColor Yellow
     Write-Host "  $($_.Exception.Message)" -ForegroundColor Yellow
     exit 2
 }
 
-if ($LASTEXITCODE -eq 0) {
+# $null means the process never launched, which is NOT a pass and NOT a
+# failure - it is the third outcome. Collapsing it into either is the defect
+# GateStatus in validate-all.ps1 exists to prevent.
+if ($null -eq $scopeExit) {
+    Write-Host "python_lint_scope.py did not report an exit code - CANNOT VALIDATE." -ForegroundColor Yellow
+    Write-Host "  Reporting NOT VERIFIED, not a pass." -ForegroundColor Yellow
+    exit 2
+}
+
+if ($scopeExit -eq 0) {
     Write-Host "=== PYTHON LINT PASSED ===" -ForegroundColor Green
     exit 0
+} elseif ($scopeExit -eq 2) {
+    Write-Host "=== PYTHON LINT COULD NOT RUN ===" -ForegroundColor Yellow
+    Write-Host "  Reporting NOT VERIFIED, not a pass." -ForegroundColor Yellow
+    exit 2
 } else {
     Write-Host "=== PYTHON LINT FAILED ===" -ForegroundColor Red
     exit 1

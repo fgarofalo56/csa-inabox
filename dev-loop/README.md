@@ -58,37 +58,89 @@ Located in `dev-loop/gates/`:
 | Gate | Script | Runs When |
 |------|--------|-----------|
 | Bicep Lint | `validate-bicep.ps1` | Any `.bicep` file changed |
-| Python Lint | `validate-python.ps1` | `.py` under `scripts/`, `domains/`, `tools/`, `csa_platform/`, `dev-loop/`, `governance/` |
+| Python Lint | `validate-python.ps1` | A tracked `.py`/`.ipynb` under `csa_platform/`, `dev-loop/`, `domains/`, `governance/`, `scripts/`, `tools/` changed |
 | dbt Compile | `validate-dbt.ps1` | Any dbt model changed |
 | Deployment | `validate-deployment.ps1` | Infrastructure changes |
 | TypeScript | `validate-typescript.ps1` | Console `.ts`/`.tsx` that `tsconfig.build.json` compiles |
 | All Gates | `validate-all.ps1` | Always (orchestrator) |
 | Self-test | `gate-selftest.ps1` | On demand (`make validate-gates`) |
 
-### What the Python gate does NOT cover
+### What the Python gate covers, and what it does NOT
 
-`validate-python.ps1` runs `ruff check` under **pyproject.toml's** rule set over
-`scripts/`, `domains/`, `tools/`, `governance/`, `dev-loop/` and `csa_platform/`
-— **207 of the repo's 762 tracked `.py` files**. That is the population CI
-already enforces (`ruff check domains/ scripts/ csa_platform/ tools/` in
-`test.yml` and `validate.yml`) plus `dev-loop` and `governance`, which hold no
-tracked `.py` today.
+The population is declared in **one** place, `scripts/ci/python_lint_scope.py`,
+and everything else derives from it — `validate-python.ps1` lints it,
+`validate-all.ps1`'s Gate 2 trigger is asserted against it on every run, and
+`test.yml` / `validate.yml` call the same module so CI and `make validate`
+cannot grade different files again.
 
-The gate's trigger mirrors that list exactly. It used to be `*.py`, i.e. all 762
-— so a change under `portal/`, `tests/`, `apps/`, `azure-functions/`, `cli/`,
-`sdk/` or `examples/` selected the gate, the gate linted 207 unrelated files,
-and the suite printed `All gates passed!` over a change it had never examined.
-`csa_platform/` (170 files, the core platform package) was the sharpest case:
-linted by CI on every push and by nothing in `make validate`. Both halves are
-now the same list.
+The definition, not a snapshot count: **every tracked `.py` and `.ipynb` under
+`csa_platform/`, `dev-loop/`, `domains/`, `governance/`, `scripts/` and
+`tools/`.** To see the live numbers, run the gate — it prints them — or:
 
-The deliberate consequence: **a `.py` change confined to those other trees
-selects no gate and `make validate` reports NOT VERIFIED (exit 3)**, not a green
-it did not earn. Those trees stay with `test.yml`, `validate.yml` and
+```bash
+python scripts/ci/python_lint_scope.py --print-scope | wc -l
+python scripts/ci/python_lint_scope.py --print-trigger-globs
+```
+
+> Earlier revisions of this section, of the gate header and of `validate-all.ps1`
+> all asserted a hardcoded **207**. It was wrong: ruff was opening **198** `.py`
+> (plus 6 `.ipynb`). The nine-file gap is described below. A count in prose that
+> nothing re-measures is the class of claim #3811 exists to kill, so the counts
+> now come from the tool.
+
+#### The gap that made "207" false
+
+Two populations computed by two methods will eventually disagree:
+
+* the **trigger** was git's view — tracked files under those directories;
+* the **check** was ruff's view — files ruff found by *walking* those directories.
+
+`.gitignore:34` contains `data/` and ruff respects gitignore, so ruff's walk
+skipped `scripts/data/` entirely. Nine tracked files there carry **216** ruff
+findings including 10 `F401`:
+
+```
+ruff check scripts domains tools csa_platform dev-loop                      -> RC=0
+ruff check scripts domains tools csa_platform dev-loop --no-respect-gitignore
+                                                       -> RC=1, 216 errors
+```
+
+The gate fired for a change to one of those files and then reported PASS having
+read a different, clean set. So the gate no longer names directories on a ruff
+command line. `python_lint_scope.py` hands ruff **explicit tracked paths** —
+which ruff opens regardless of gitignore — and asserts every run that ruff
+actually opened every one of them. That assertion is keyed to the observable
+property, so the next `.gitignore` line or `extend-exclude` entry cannot quietly
+subtract from the check side; it reds the gate and names the files.
+
+Two side-effects worth knowing:
+
+* untracked build junk under those trees (`.venv/`, `__pycache__/`, `site/`) is
+  now excluded *because it is untracked*, which the directory walk only got
+  right by accident of gitignore;
+* `dev-loop/` is itself gitignored (`.gitignore:377`, 14 files force-added), so
+  under the walk its check side could never have been non-empty — the first
+  tracked `.py` added there would have been triggered and structurally
+  unreadable. Under `git ls-files` + explicit paths it is readable.
+
+#### The ratcheted debt
+
+Those 216 findings are **not** fixed here. They are frozen per file at an exact
+count in `RATCHET`, printed on every run, and enforced in both directions — a
+finding added is a regression, a finding removed means the number has stopped
+being true and the gate tells you what to write instead. A file absent from
+`RATCHET` is held at zero, so the debt cannot grow by file count either. Paydown
+is #3990; done is `RATCHET == {}`.
+
+#### Still not covered
+
+Tracked `.py` outside those six directories — `examples/`, `apps/`, `portal/`,
+`tests/`, `azure-functions/`, `cli/`, `sdk/`. **A `.py` change confined to those
+trees selects no gate and `make validate` reports NOT VERIFIED (exit 3)**, not a
+green it did not earn; they stay with `test.yml`, `validate.yml` and
 `sdk-contract.yml`. Widening this gate to `make lint`'s scope was measured and
 deferred: `portal/` + `examples/` carry **758** findings under the pyproject
-rules (196 even under the weaker `--select E,F,W --ignore E501` this gate used
-to pass on its command line) — debt-paydown work, not this gate's to absorb.
+rules — debt-paydown work, not this gate's to absorb.
 
 ### What the TypeScript gate does NOT cover
 

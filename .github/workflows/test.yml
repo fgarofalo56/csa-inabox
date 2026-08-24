@@ -215,8 +215,21 @@ jobs:
 
       - name: Lint with ruff
         if: steps.relevant.outputs.run == 'true'
+        # NOT `ruff check domains/ scripts/ csa_platform/ tools/`. That form asks
+        # ruff to WALK those directories, and ruff respects .gitignore, whose
+        # line 34 is `data/` - so it silently skipped the nine tracked
+        # scripts/data/*.py files carrying 216 findings (10 of them F401).
+        # Measured: adding --no-respect-gitignore to the old command flipped it
+        # from RC=0 to RC=1 with exactly 216 errors. This lane was blind in the
+        # same way `make validate` was, so those findings were enforced by
+        # nothing, anywhere.
+        #
+        # python_lint_scope.py passes ruff EXPLICIT tracked paths instead, and
+        # asserts every run that ruff opened all of them. It is the SAME module
+        # dev-loop/gates/validate-python.ps1 runs, so CI and `make validate` can
+        # no longer grade different files. See #3811; debt ratchet in #3990.
         run: |
-          ruff check domains/ scripts/ csa_platform/ tools/ --output-format github
+          python scripts/ci/python_lint_scope.py --output-format github
 
       - name: Security scan with Bandit
         if: steps.relevant.outputs.run == 'true'
