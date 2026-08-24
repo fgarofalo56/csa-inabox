@@ -13,6 +13,11 @@ name: gov-bff-verify
 # probe exercises the full session → BFF → Azure backend path. Fails when a
 # route reports a config gate for a backend this repo has wired (UC/Purview).
 #
+# Each probe is scoped to ITS OWN subsystem's response fields (#3842): these
+# routes return several backends' state in one envelope, and a single
+# cross-cutting matcher could — and did — fail a probe for a finding belonging
+# to a different backend than its label names. See the probe table below.
+#
 # ── NOW RUNS AFTER EVERY GOV ROLL (#3730) ──────────────────────────────────
 # Same reasoning as gov-gates.yml: Commercial's roll validates what it shipped in
 # the same run, Gov's verification lanes existed but nothing triggered them — this
@@ -225,18 +230,102 @@ jobs:
           const iv = crypto.randomBytes(12), c = crypto.createCipheriv('aes-256-gcm', K, iv);
           const e = Buffer.concat([c.update(Buffer.from(JSON.stringify(p))), c.final()]);
           const cookie = 'loom_session=' + Buffer.concat([iv, c.getAuthTag(), e]).toString('base64url');
+          // ── PER-PROBE SUBSYSTEM SCOPING (#3842) ───────────────────────────
+          // Each probe declares the TOP-LEVEL response keys it owns. `gates` are
+          // GRADED — the predicate returns the finding's classification string,
+          // or false. `info` keys are carried by the same envelope but belong to
+          // a DIFFERENT subsystem, or are data rather than a verdict.
+          //
+          // A top-level key in NEITHER list FAILS THE PROBE. Scoping by
+          // inclusion alone is how a scoped check goes blind the day a route
+          // grows a new gate field, so this one fails closed and demands the key
+          // be classified here.
+          //
+          // The single cross-cutting regex this replaces was
+          //   /"gate"\s*:\s*(true|\{)|not configured|Set LOOM_(UNITY_URL|PURVIEW_ACCOUNT)/i
+          // and it was wrong three ways, each MEASURED against the routes' real
+          // response bodies rather than inferred:
+          //
+          //  1. OVER-BROAD. /api/catalog/metastores carries Unity AND Purview
+          //     AND OneLake AND Cosmos AND ARM fields in one envelope. That
+          //     route emits `purviewError: 'LOOM_PURVIEW_ACCOUNT not configured'`
+          //     when Purview is unwired — which matched `not configured` and
+          //     failed the probe LABELLED "unity-catalog", for a PURVIEW env
+          //     var. Latent today only because Purview IS configured in Gov.
+          //  2. INVERTED. `"gate"` cannot match `"gated"` — the closing quote
+          //     falls after the `d`. Against purview-status's two real shapes
+          //     the regex returns FALSE for the REAL gate (configured:false +
+          //     gated:true — Purview is provisioned but the Console UAMI lacks
+          //     a Data Map data-plane role on the root collection) and TRUE for
+          //     the benign "set LOOM_PURVIEW_ACCOUNT" hint. The probe was blind
+          //     to the one class it exists to catch, and fired on the other.
+          //  3. VACUOUS. /api/governance/catalog emits no gate marker on ANY
+          //     path, so that probe's gate assertion had ZERO population.
+          //
+          // `gate(why)` fires on presence; `gateNonEmpty(why)` on a non-empty
+          // array (an empty `unityWorkspaceErrors` is not a finding).
+          const gate = (why) => (v) => (v === undefined || v === null ? false : why);
+          const gateNonEmpty = (why) => (v) => (Array.isArray(v) ? v.length > 0 : v !== undefined && v !== null) && why;
           const probes = [
-            ['/api/catalog/metastores', 'unity-catalog (OSS loom-unity)'],
-            ['/api/governance/catalog', 'purview governance catalog'],
-            ['/api/admin/domains/purview-status', 'purview wiring status'],
+            {
+              path: '/api/catalog/metastores',
+              label: 'unity-catalog (OSS loom-unity)',
+              gates: {
+                unityError: gate('unity catalog error'),
+                unityHint: gate('unity catalog NOT CONFIGURED (missing hostnames env)'),
+                unityWorkspaceErrors: gateNonEmpty('one or more Unity workspaces failed to list'),
+                accountAdminGate: gate('UC not enabled / metastore not listable (account-admin gate)'),
+                accountMetastoresError: gate('UC account-plane metastore read failed'),
+              },
+              // Owned by another subsystem, or data rather than a verdict:
+              // purview* is the purview-status probe's, onelake* is OneLake's,
+              // registrations/degraded/warning are Cosmos', discover* is ARM's.
+              // accountApiHint is the Databricks ACCOUNT API — a Commercial-only
+              // convenience the route itself says registration and catalog
+              // listing work without, and which Gov's OSS Unity has no account
+              // for, so it is present there BY DESIGN.
+              info: [
+                'ok', 'unity', 'unityHosts', 'registrations', 'degraded', 'warning',
+                'accountApiConfigured', 'accountMetastores', 'accountApiHint',
+                'discoverableWorkspaces', 'discoveryError', 'onelake', 'onelakeError',
+                'purview', 'purviewError',
+              ],
+            },
+            {
+              path: '/api/governance/catalog',
+              label: 'purview governance catalog',
+              // This route emits NO gate marker on any path — hence defect 3
+              // above. Its real contract is 2xx + `ok:true`; `error` appears
+              // only on the 500 the status ladder already owns. `source:'cosmos'`
+              // is the honest AI-Search-absent fallback, NOT a gate, so it is
+              // printed and not failed. The fail-closed rule below is what gives
+              // this probe teeth the day the route does grow a gate field.
+              gates: { error: gate('route returned an error envelope on a 2xx') },
+              info: ['ok', 'total', 'assets', 'facets', 'workspaces', 'source', 'code'],
+            },
+            {
+              path: '/api/admin/domains/purview-status',
+              label: 'purview wiring status',
+              // The gate here is NESTED, which is why a top-level key scan alone
+              // cannot grade this route. Both non-configured states are findings
+              // on an estate whose deploy wires Purview — but each is now
+              // reported AS THE ONE IT IS. The old message called the env-unset
+              // case "still gated" while the payload said `gated:false`, and
+              // stayed silent on the case that actually says `gated:true`
+              // (deploy-integrity.md R7: an error must not assert what it has
+              // not established).
+              gates: {
+                purview: (v) => {
+                  if (!v || typeof v !== 'object') return 'purview status missing from the envelope';
+                  if (v.configured === true) return false;
+                  return v.gated === true
+                    ? 'purview.gated=true — provisioned, but the Console UAMI lacks a Purview Data Map data-plane role on the ROOT collection'
+                    : 'purview.configured=false — the Purview mirror is not wired (LOOM_PURVIEW_ACCOUNT unset, or the account was unreachable)';
+                },
+              },
+              info: ['ok', 'error'],
+            },
           ];
-          // The gated verdict and the evidence printed for it now come from the
-          // SAME exec, so a failure can no longer show a window that does not
-          // contain the match it is reporting (#3842). This is structural rather
-          // than "print more": the evidence is sliced around hit.index, so the
-          // verdict and its proof cannot drift apart again no matter how long the
-          // body grows or where in it the gate marker lands.
-          const GATED = /"gate"\s*:\s*(true|\{)|not configured|Set LOOM_(UNITY_URL|PURVIEW_ACCOUNT)/i;
           // This job holds Gov secrets and prints response bytes to TWO distinct
           // publication surfaces on a PUBLIC repo — the run log and `::error::`
           // annotations. Redact before either sees the body. GUIDs cover
@@ -249,30 +338,82 @@ jobs:
           // Collapse ALL whitespace, not just \n: a body carrying tabs or CRLF
           // rendered ragged and could push the match off the visible line.
           const flat = (s) => redact(s).replace(/\s+/g, ' ');
-          const around = (s, i, n) => {
-            const a = Math.max(0, i - n), b = Math.min(s.length, i + n);
+          const excerpt = (s, i, back, fwd) => {
+            const a = Math.max(0, i - back), b = Math.min(s.length, i + fwd);
             return (a > 0 ? '...' : '') + flat(s.slice(a, b)) + (b < s.length ? '...' : '');
+          };
+          // The verdict and the evidence printed for it come from the SAME
+          // lookup, so a failure can no longer show a window that does not
+          // contain what it is reporting (#3842/#3854). Structural, not "print
+          // more": the excerpt is ANCHORED at the owning field's real offset and
+          // runs FORWARD through its value, so the verdict and its proof cannot
+          // drift apart again however long the body grows or wherever in it the
+          // deciding field lands. Asymmetric on purpose — a centred window
+          // spends half its budget on the bytes BEFORE the field, which are by
+          // definition not what decided. Truncation is marked, never silent.
+          // A failed locate says so; it never reports offset 0, which would read
+          // as "at the very start of the body".
+          const evidence = (t, key) => {
+            const i = t.indexOf(JSON.stringify(key));
+            return i < 0
+              ? `field ${JSON.stringify(key)} (offset unknown — the key is not literally present in the raw body): ${flat(t.slice(0, 280))}`
+              : `field ${JSON.stringify(key)} at offset ${i} of ${t.length}: ${excerpt(t, i, 40, 660)}`;
           };
           (async () => {
             let bad = 0;
-            for (const [path, label] of probes) {
+            for (const { path, label, gates, info } of probes) {
               try {
                 const r = await fetch(B + path, { headers: { cookie } });
                 const t = await r.text();
                 console.log(`\n=== ${label} — GET ${path} -> ${r.status}\n${flat(t.slice(0, 260))}`);
-                const hit = GATED.exec(t);
-                if (r.status >= 500) { console.log(`::error::${label}: HTTP ${r.status}`); bad++; }
-                else if (hit) { console.log(`::error::${label}: still gated — matched ${JSON.stringify(redact(hit[0]))} at offset ${hit.index} of ${t.length}: ${around(t, hit.index, 140)}`); bad++; }
-                else if (r.status === 401) { console.log(`::error::${label}: 401 — minted session rejected`); bad++; }
-                // ANY non-2xx is a failure. The ladder above only caught >=500
+                // STATUS FIRST. A 401/403/5xx body is an error page, not a
+                // subsystem verdict, and grading one as a gate is how a probe
+                // reports the wrong cause (deploy-integrity.md R7).
+                //
+                // ANY non-2xx is a failure. The ladder once caught only >=500
                 // and 401, so a 403 / 404 / 3xx fell through to the `OK` arm and
                 // printed `::notice:: OK (404)` — a probe reporting success over
                 // a dead endpoint, which is the one thing this job exists to
-                // catch. `r.ok` is 200-299, so this arm closes the whole gap.
-                else if (!r.ok) { console.log(`::error::${label}: HTTP ${r.status} — expected 2xx`); bad++; }
+                // catch. `r.ok` is 200-299, so that arm closes the whole gap.
+                if (r.status >= 500) { console.log(`::error::${label}: HTTP ${r.status}`); bad++; continue; }
+                if (r.status === 401) { console.log(`::error::${label}: 401 — minted session rejected`); bad++; continue; }
+                if (!r.ok) { console.log(`::error::${label}: HTTP ${r.status} — expected 2xx`); bad++; continue; }
+                let body;
+                try { body = JSON.parse(t); } catch { body = undefined; }
+                if (!body || typeof body !== 'object' || Array.isArray(body)) {
+                  console.log(`::error::${label}: 2xx body is not a JSON object — cannot be scoped, so it is NOT assumed clean: ${flat(t.slice(0, 280))}`);
+                  bad++; continue;
+                }
+                const findings = [];
+                for (const k of Object.keys(body)) {
+                  if (Object.prototype.hasOwnProperty.call(gates, k)) {
+                    const why = gates[k](body[k]);
+                    if (why) findings.push(`${label}: GATED — ${why}: ${evidence(t, k)}`);
+                  } else if (!info.includes(k)) {
+                    // FAIL CLOSED. An unclassified key is an UNKNOWN, and an
+                    // unknown reported as a pass is how a scoped check quietly
+                    // stops watching. Classify it in this probe's `gates`/`info`.
+                    findings.push(`${label}: UNCLASSIFIED top-level key ${JSON.stringify(redact(k))} — add it to this probe's gates (a real gate) or info (another subsystem's / data): ${evidence(t, k)}`);
+                  }
+                }
+                if (findings.length) { for (const f of findings) console.log(`::error::${f}`); bad++; }
                 else console.log(`::notice::${label}: OK (${r.status})`);
               } catch (x) { console.log(`::error::${label}: ${redact(x.message)}`); bad++; }
             }
-            process.exit(bad ? 1 : 0);
+            // Set the code and let the loop drain instead of `process.exit()`.
+            // Two reasons, one of them not cosmetic:
+            //   • This job's entire product is `::error::` lines on a PIPE, and
+            //     node documents process.exit() as able to truncate stdout
+            //     writes that have not flushed — i.e. it can drop the very
+            //     annotation the run exists to emit.
+            //   • On Windows, process.exit() after a fetch aborts the process
+            //     with a libuv assertion (`UV_HANDLE_CLOSING`, src/win/async.c)
+            //     and a 0xC0000409 code, so the exit code could not be measured
+            //     at all by the control suite that grades this step.
+            // The watchdog is unref'd: it cannot hold the process open, and it
+            // only fires if something ELSE does — in which case the run still
+            // ends with the verdict it computed rather than hanging to timeout.
+            process.exitCode = bad ? 1 : 0;
+            setTimeout(() => process.exit(bad ? 1 : 0), 30000).unref();
           })();
           EOF
