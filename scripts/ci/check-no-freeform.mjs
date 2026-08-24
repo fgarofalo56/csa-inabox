@@ -2151,6 +2151,31 @@ export const ACCEPTED = [
       'is why the fields were measured and reported rather than quietly deleted to clear a gate.',
   },
   {
+    file: 'apps/fiab-console/lib/editors/components/mirror-source-wizard.tsx',
+    sites: 2,
+    kind: 'byo',
+    ref: 'auto-bind-by-default.md §Allowed',
+    why:
+      'The address of the SOURCE a mirror replicates FROM — a system in the customer\'s estate, by ' +
+      'definition not one Loom provisions. :636 is an Oracle listener host reached through an on-prem ' +
+      'data gateway; nothing in Azure can enumerate a customer\'s on-prem Oracle. :675 is the generic ' +
+      'server/database pair, which also serves SQL Server 2016-2022, SQL Server 2025 and open mirroring ' +
+      '— on-prem and cross-tenant sources with no ARG projection. ' +
+      'THE ENUMERABLE CASE IS ALREADY A PICKER, which is the same reason workspace-egress-pane.tsx is ' +
+      'accepted below: step 2 of this wizard is a connection Dropdown plus "New connection", and ' +
+      'add-existing-wizard.tsx fills that list from GET /api/azure/connectables — a real Azure Resource ' +
+      'Graph discovery run with the USER\'s delegated token. When a connection is bound BOTH inputs go ' +
+      '`disabled` and take their value from it (`disabled={!!pickedConn?.host}`), so the platform has ' +
+      'already done the binding and the free-text is only reachable on the path where no discovery call ' +
+      'could have answered. ' +
+      'REJECTED ALTERNATIVE, stated rather than skipped: deleting the free-text and REQUIRING a ' +
+      'connection would clear both sites, and until #4024 gave Snowflake / BigQuery / Oracle a real ' +
+      'ConnectionType it was not even possible. It is still wrong — connection-auth.ts deliberately ' +
+      'supports a mirror with NO connectionId, authenticating as the Console UAMI, and removing the ' +
+      'field would delete that working path. Breaking a capability to clear a lint counter is a worse ' +
+      'outcome than this entry.',
+  },
+  {
     file: 'apps/fiab-console/lib/editors/loom-app-runtime-editor.tsx',
     sites: 1,
     kind: 'byo',

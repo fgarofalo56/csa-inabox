@@ -89,6 +89,8 @@ row is the tracked gap, not a silent omission.
 | Sync mode — incremental | ✅ | `ScheduleTrigger` at `LOOM_MIRROR_COPY_CADENCE` (default 1h) |
 | Sync mode — continuous | ✅ | `TumblingWindowTrigger`, 15-minute floor, `maxConcurrency: 1` |
 | Replicate to Bronze | ✅ | delete-then-copy → Parquet in ADLS Bronze |
+| Report run outcome | ❌ **#4025** | reports `Running` on submit without polling — see below |
+
 
 ### Honest limitation, stated in-product
 
@@ -125,6 +127,56 @@ the single-sub and multi-sub DLZ topologies.
 Remaining honest gates (things the platform genuinely cannot do for the user):
 the connection itself must exist and must carry account / database / warehouse /
 user, since only the operator knows those values.
+
+**The Key Vault grant must be confirmed at deploy time.** The new
+`adf-keyvault-rbac.bicep` module takes its branch in none of the checked-in
+param files — the same gating as the pre-existing sibling `aoai-spark-rbac` it
+was modelled on, so this is not new drift, but it does mean the grant is not
+proven by any param file in the repo. The credential path has **no fallback**
+when it is missing: the linked service upsert still succeeds and the copy then
+fails at run time with a Key Vault authorization error, which per **#4025** Loom
+currently reports as `Running`.
+
+
+---
+
+## Live-failure modes an operator must know about
+
+Three things fail at run time in ways the UI does not currently make obvious.
+They are listed here because each one looks like a different problem than it is.
+
+### 1. `CREATE STAGE` is required, and its absence is not a permissions error you will recognise
+
+The ADF Copy activity creates an external stage with a SAS URI to unload from
+Snowflake. The connection's role therefore needs `CREATE STAGE` on the schema in
+addition to `USAGE` on the database/schema and `SELECT` on the tables. Without
+it the copy fails *after* enumeration has already succeeded, so the table list
+looks healthy.
+
+### 2. `INFORMATION_SCHEMA.TABLES` is privilege-filtered — zero rows, not an error
+
+A role with no grants gets an **empty result set**, not a failure. Reported
+bare, "no tables found" is indistinguishable from an empty database and sends
+you to look at the wrong thing.
+
+Loom now discriminates these: the enumeration pipeline carries a second
+`CountSchemas` Lookup in the *same* run, and the gate message distinguishes
+"the role cannot see ANY schema in this database — this is a grants problem"
+from "no tables across the N schemas the role can see". When the probe itself
+cannot be read the count is `null` and the message says the ambiguity is
+unresolved rather than asserting either cause (`deploy-integrity.md` R7).
+
+### 3. Loom reports `Running` without polling — watch the ADF monitor, not the badge
+
+`runMirrorAdfCopy` returns `ok: true, status: 'Running'` immediately after
+submitting the pipeline. Every run-time failure — Key Vault authorization, a
+missing `CREATE STAGE`, a suspended warehouse, an unreachable source — surfaces
+in Loom as **success**, with the per-table grid showing `replicated` and
+`rows: 0`.
+
+This predates the connection work and is tracked in **#4025**. Until it is
+fixed, validate a mirror by looking at the ADF monitor (the pipeline name is in
+the run note), not the Loom status badge.
 
 ---
 

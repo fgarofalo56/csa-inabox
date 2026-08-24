@@ -16,8 +16,9 @@
  * corrected one — every declared connType must be a REAL ConnectionType.
  */
 import { describe, it, expect } from 'vitest';
-import { MIRROR_SOURCES } from '../mirror-source-wizard';
+import { MIRROR_SOURCES, SOURCE_SYNC_NOTE, syncModeOptions } from '../mirror-source-wizard';
 import { CONNECTION_TYPES } from '@/lib/azure/connectable-types';
+
 
 describe('MIRROR_SOURCES', () => {
   it('includes Google BigQuery and Oracle source cards', () => {
@@ -55,4 +56,44 @@ describe('MIRROR_SOURCES', () => {
     expect(new Set(ids).size).toBe(ids.length);
   });
 });
+
+/**
+ * The ADF Copy backend must not claim change capture it does not have.
+ *
+ * An independent mutation test (M10) replaced the honest Snowflake note with a
+ * CDC claim and NOTHING went red. Separately, the mode dropdown labelled the
+ * DEFAULT option "Incremental (changed rows since last sync)" while the note
+ * directly below it said "delete-then-copy full refresh" — a contradiction on
+ * one screen, with the misleading half pre-selected.
+ */
+describe('sync-mode honesty on the ADF Copy backend', () => {
+  it('the Snowflake note states full refresh, never row-level CDC', () => {
+    const note = SOURCE_SYNC_NOTE.Snowflake;
+    expect(note, 'the Snowflake sync note went missing').toBeTruthy();
+    expect(note).toMatch(/full refresh|delete-then-copy/i);
+    expect(note).not.toMatch(/\bchange data capture\b/i);
+    expect(note).not.toMatch(/changed rows since last sync/i);
+  });
+
+  it('Snowflake mode LABELS promise a full reload, not changed rows', () => {
+    const labels = syncModeOptions('Snowflake').map((o) => o.name).join(' | ');
+    expect(labels).not.toMatch(/changed rows since last sync/i);
+    expect(labels).toMatch(/full reload/i);
+  });
+
+  it('but the SQL family KEEPS its changed-rows label, which is true there', () => {
+    // The fix must not flatten every source to the weakest claim: SQL Change
+    // Tracking genuinely does ship only the rows that changed.
+    const labels = syncModeOptions('AzureSqlDatabase').map((o) => o.name).join(' | ');
+    expect(labels).toMatch(/changed rows since last sync/i);
+  });
+
+  it('offers the same three mode ids for every source', () => {
+    for (const src of ['Snowflake', 'AzureSqlDatabase', 'CosmosDb', 'Oracle']) {
+      expect(syncModeOptions(src).map((o) => o.id).sort())
+        .toEqual(['continuous', 'incremental', 'snapshot']);
+    }
+  });
+});
+
 

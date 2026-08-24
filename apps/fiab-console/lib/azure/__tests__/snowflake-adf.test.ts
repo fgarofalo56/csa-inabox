@@ -230,44 +230,10 @@ describe('snowflakeLinkedServiceName / adfSafeName', () => {
 });
 
 // ── M10: the honesty of the sync-mode note ─────────────────────────────────
-describe('the ADF Copy backend does not claim CDC it does not have', () => {
-  it('the wizard note for Snowflake states full refresh, never row-level CDC', async () => {
-    const { SOURCE_SYNC_NOTE } = await import('@/lib/editors/components/mirror-source-wizard');
-    const note = SOURCE_SYNC_NOTE.Snowflake;
-    expect(note, 'the Snowflake sync note went missing').toBeTruthy();
-    // It must say what actually happens...
-    expect(note).toMatch(/full refresh|delete-then-copy/i);
-    // ...and must NOT claim change capture the connector cannot do. M10
-    // replaced this note with a CDC claim and nothing went red.
-    expect(note).not.toMatch(/\bchange data capture\b/i);
-    expect(note).not.toMatch(/changed rows since last sync/i);
-  });
+// Those assertions live in lib/editors/components/__tests__/mirror-sources.test.ts,
+// beside the module they read. Importing the 'use client' wizard from THIS
+// node-environment file pulls the whole Fluent tree and times out when the
+// suites run together (it passed alone, which is exactly the kind of
+// green-in-isolation result that is not worth trusting).
 
-  it('Snowflake sync-mode LABELS promise a full reload, not changed rows', async () => {
-    // The label and the note render on the same screen, and `incremental` is
-    // the DEFAULT — a label promising CDC while the note says full refresh put
-    // a contradiction in front of the operator, with the misleading half
-    // pre-selected.
-    const { syncModeOptions } = await import('@/lib/editors/components/mirror-source-wizard');
-    const labels = syncModeOptions('Snowflake').map((o) => o.name).join(' | ');
-    expect(labels).not.toMatch(/changed rows since last sync/i);
-    expect(labels).toMatch(/full reload/i);
-  });
-
-  it('but the SQL family keeps its changed-rows label, which IS true there', async () => {
-    // The fix must not flatten every source into the weakest claim: SQL Change
-    // Tracking genuinely does ship only changed rows.
-    const { syncModeOptions } = await import('@/lib/editors/components/mirror-source-wizard');
-    const labels = syncModeOptions('AzureSqlDatabase').map((o) => o.name).join(' | ');
-    expect(labels).toMatch(/changed rows since last sync/i);
-  });
-
-  it('offers the same three mode ids for every source', async () => {
-    const { syncModeOptions } = await import('@/lib/editors/components/mirror-source-wizard');
-    for (const src of ['Snowflake', 'AzureSqlDatabase', 'CosmosDb']) {
-      expect(syncModeOptions(src).map((o) => o.id).sort())
-        .toEqual(['continuous', 'incremental', 'snapshot']);
-    }
-  });
-});
 
