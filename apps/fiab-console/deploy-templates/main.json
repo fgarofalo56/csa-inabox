@@ -6,7 +6,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.45.15.27210",
-      "templateHash": "16359908288920049242"
+      "templateHash": "15196403460049225819"
     }
   },
   "definitions": {
@@ -2567,7 +2567,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.45.15.27210",
-              "templateHash": "10558044425782929168"
+              "templateHash": "1700301455880519544"
             }
           },
           "definitions": {
@@ -8354,7 +8354,7 @@
                     "_generator": {
                       "name": "bicep",
                       "version": "0.45.15.27210",
-                      "templateHash": "7533638847779847389"
+                      "templateHash": "11494709521373135079"
                     }
                   },
                   "parameters": {
@@ -8572,6 +8572,30 @@
                             ],
                             "kind": "Hash"
                           },
+                          "indexingPolicy": {
+                            "indexingMode": "consistent",
+                            "automatic": true
+                          }
+                        }
+                      },
+                      "dependsOn": [
+                        "[resourceId('Microsoft.DocumentDB/databaseAccounts/sqlDatabases', parameters('accountName'), variables('loomDatabase'))]"
+                      ]
+                    },
+                    {
+                      "type": "Microsoft.DocumentDB/databaseAccounts/sqlDatabases/containers",
+                      "apiVersion": "2024-12-01-preview",
+                      "name": "[format('{0}/{1}/{2}', parameters('accountName'), variables('loomDatabase'), 'brain-findings')]",
+                      "properties": {
+                        "resource": {
+                          "id": "brain-findings",
+                          "partitionKey": {
+                            "paths": [
+                              "/estateId"
+                            ],
+                            "kind": "Hash"
+                          },
+                          "defaultTtl": -1,
                           "indexingPolicy": {
                             "indexingMode": "consistent",
                             "automatic": true
@@ -29972,7 +29996,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.45.15.27210",
-              "templateHash": "6577116829689710073"
+              "templateHash": "7022885744199301986"
             }
           },
           "functions": [
@@ -35789,7 +35813,7 @@
                     "_generator": {
                       "name": "bicep",
                       "version": "0.45.15.27210",
-                      "templateHash": "3872715568817084662"
+                      "templateHash": "6576898978741040463"
                     }
                   },
                   "parameters": {
@@ -36170,6 +36194,11 @@
                       {
                         "name": "migration-copy-jobs",
                         "partitionKey": "/tenantId"
+                      },
+                      {
+                        "name": "brain-findings",
+                        "partitionKey": "/estateId",
+                        "ttl": -1
                       }
                     ]
                   },
@@ -39321,7 +39350,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.45.15.27210",
-              "templateHash": "6577116829689710073"
+              "templateHash": "7022885744199301986"
             }
           },
           "functions": [
@@ -45138,7 +45167,7 @@
                     "_generator": {
                       "name": "bicep",
                       "version": "0.45.15.27210",
-                      "templateHash": "3872715568817084662"
+                      "templateHash": "6576898978741040463"
                     }
                   },
                   "parameters": {
@@ -45519,6 +45548,11 @@
                       {
                         "name": "migration-copy-jobs",
                         "partitionKey": "/tenantId"
+                      },
+                      {
+                        "name": "brain-findings",
+                        "partitionKey": "/estateId",
+                        "ttl": -1
                       }
                     ]
                   },
@@ -48957,7 +48991,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.45.15.27210",
-              "templateHash": "6577116829689710073"
+              "templateHash": "7022885744199301986"
             }
           },
           "functions": [
@@ -54774,7 +54808,7 @@
                     "_generator": {
                       "name": "bicep",
                       "version": "0.45.15.27210",
-                      "templateHash": "3872715568817084662"
+                      "templateHash": "6576898978741040463"
                     }
                   },
                   "parameters": {
@@ -55155,6 +55189,11 @@
                       {
                         "name": "migration-copy-jobs",
                         "partitionKey": "/tenantId"
+                      },
+                      {
+                        "name": "brain-findings",
+                        "partitionKey": "/estateId",
+                        "ttl": -1
                       }
                     ]
                   },
