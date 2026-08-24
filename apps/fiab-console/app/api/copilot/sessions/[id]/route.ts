@@ -37,7 +37,13 @@ export const GET = withSession<{ id: string }>(async (_req: Request, { session: 
     const doc = await getCopilotSession(id);
     if (!doc) return NextResponse.json({ ok: false, error: 'not found' }, { status: 404 });
     const userOid = auth.claims.oid || auth.claims.upn || auth.claims.email || 'unknown';
-    if (doc.userOid && doc.userOid !== userOid) {
+    // POSITIVE ownership match (#3943): an absent `doc.userOid` is a REFUSAL,
+    // not a pass. `doc.userOid && doc.userOid !== userOid` short-circuited to a
+    // pass on any doc missing the field, handing one user another's transcript.
+    // Nothing legitimate is stranded: `listSessions` already selects on
+    // `c.userOid = @u`, so an ownerless doc is invisible in the rail regardless.
+    const isOwner = !!doc.userOid && doc.userOid === userOid;
+    if (!isOwner) {
       return NextResponse.json({ ok: false, error: 'forbidden' }, { status: 403 });
     }
     return NextResponse.json({ ok: true, session: doc });
@@ -58,8 +64,9 @@ export const DELETE = withSession<{ id: string }>(async (_req: Request, { sessio
       .catch(() => ({ resource: null }));
     // Already gone → idempotent success.
     if (!existing.resource) return new Response(null, { status: 204 });
-    // Ownership check: never let one user delete another's session.
-    if (existing.resource.userOid && existing.resource.userOid !== userOid) {
+    // Ownership check: never let one user delete another's session. POSITIVE
+    // match (#3943) — an absent `userOid` is refused, not waved through.
+    if (!existing.resource.userOid || existing.resource.userOid !== userOid) {
       return NextResponse.json({ ok: false, error: 'forbidden' }, { status: 403 });
     }
     await c.item(id, id).delete();

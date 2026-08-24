@@ -3256,6 +3256,31 @@ const ADMIN_SHAPE_UNSCOPED = new Map([
       'workspace; the workspace decision still runs separately wherever one is in play.',
   ],
   [
+    'app/api/marketplace/products/[id]/certify/route.ts:POST',
+    'NARROWS, WITH ONE HONEST AMENDMENT TO THAT LABEL — read the function before reusing this ' +
+      'wording elsewhere. Outside the net because it is a route handler: after the route-toolkit ' +
+      'migration its parameters are `_req: NextRequest, { session, params }`, so no parameter ' +
+      'names a workspace or an item. STRUCTURE, as observed: `getProduct(tenantScopeId(session), ' +
+      'id)` runs FIRST and is a Cosmos POINT READ whose partition key IS the tenant ' +
+      '(`marketplace`, PK /tenantId — cosmos-client.ts:878), so the record is tenant-bounded ' +
+      'before the flag is consulted, and a product in another partition 404s rather than ' +
+      'reaching the decision. The `isTenantAdmin` test is then written as a REFUSAL (`!isOwner && ' +
+      '!(isTenantAdmin(session) && sameTenantConfirmed(...)) -> 403`); `grants` is true here only ' +
+      "because the negated shape's fall-through return is an ALLOW by this file's value model. " +
+      'THE AMENDMENT: the flag adds no CROSS-TENANT reach — it is conjoined with ' +
+      '`sameTenantConfirmed(session.claims.tid, product.tenantId)`, the one implementation of the ' +
+      'comparison, which is a positive match that fails closed on `unconfirmed` — but it DOES add ' +
+      'intra-tenant reach (an admin may re-certify a product they do not own). That widening is ' +
+      'deliberate: it is the escape hatch that keeps an orphaned row recoverable, and #2703 is ' +
+      'about the tenant boundary, not about ownership. Stated rather than rounded into "adds no ' +
+      'reach", which would claim more than was observed. WHY THE CONJUNCT IS LOAD-BEARING AND NOT ' +
+      'BELT-AND-BRACES: the partition key came from `tenantScopeId`, which is `tid || oid`, so a ' +
+      'session with no `tid` claim (supported by design — msal.ts / pat.ts) silently scoped the ' +
+      'admin grant to a PRINCIPAL rather than a tenant and never compared tenancies at all. ' +
+      'Added by the #3943 follow-on; the route keeps `isTenantAdmin` inline in the `if` on ' +
+      'purpose so 8h can still see this decision.',
+  ],
+  [
     'app/api/workspaces/[id]/folders/route.ts:assertWorkspaceAccess',
     'UNRESOLVED — A FINDING, NOT A CLEARANCE, AND THE REASON THIS CENSUS IS NOT A FORMALITY. ' +
       'After the owner point-read fails it runs `if (isTenantAdmin(session)) return ' +
