@@ -46,3 +46,33 @@ export async function resolveOwnerTenantId(workspaceId: string | undefined | nul
     return null;
   }
 }
+
+/**
+ * The tenant a data-product's MARKETPLACE DOC must be stamped with (#3501).
+ *
+ * WHY THIS IS NOT COSMETIC ATTRIBUTION. `docForDataProduct(item, tenantId)`
+ * writes `tenantId` onto the `loom-data-products` AI Search document, and
+ * `searchDataProducts` ALWAYS injects `tenantId eq '<caller oid>'` as a
+ * mandatory, non-overridable filter (lib/azure/loom-data-products-search.ts).
+ * So that field is not a label — it is the discovery boundary.
+ *
+ * MEASURED on this tree: of the 11 call sites that build a data-product doc, 10
+ * passed `session.claims.oid` — the CALLER — across 6 route files, and only
+ * `item-crud.ts:150` used its `tenantId` parameter (which every caller in turn
+ * populates from `session.claims.oid`, so it was the same value by a different
+ * name). The consequence is that whoever LAST WROTE a product re-homed it: a
+ * shared-workspace collaborator pressing Publish, Certify, Deprecate or a
+ * health action rewrote `doc.tenantId` to THEIR oid, which simultaneously
+ * removed the product from the owner's marketplace search and surfaced it in
+ * the collaborator's. `loadOwnedItem`/`updateOwnedItem` gate on workspace WRITE
+ * access, which a collaborator satisfies — so this needed no privilege at all.
+ *
+ * Returns null when ownership cannot be established. Null is "unknown", NEVER
+ * "the caller" — the caller's oid is precisely the wrong answer, and falling
+ * back to it is the defect. Callers skip the mirror instead; the index is
+ * derived and the next owner-side save re-projects it (deploy-integrity R7:
+ * do not assert what you did not establish).
+ */
+export async function resolveDataProductDocTenant(item: { workspaceId?: string | null } | null | undefined): Promise<string | null> {
+  return resolveOwnerTenantId(item?.workspaceId);
+}
