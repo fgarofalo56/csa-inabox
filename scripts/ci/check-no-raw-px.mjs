@@ -40,6 +40,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { execSync } from 'node:child_process';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { maskJsx } from './check-no-freeform.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(__dirname, '..', '..');
@@ -105,13 +106,87 @@ function styleRegions(src) {
 }
 
 function countViolations(src) {
+  // #3601 — MASK COMMENTS AND STRING BODIES FIRST. `styleRegions` used to run
+  // over the RAW file, so PROSE DESCRIBING a style object counted as one: a
+  // comment reading `/** Replaced an inline style={{ padding: 8 }} … */` was
+  // scored as a raw-px violation. Measured: that exact string yields ONE
+  // `style={{` opener under the region regex. It bit in #3595, where a comment
+  // written to EXPLAIN a px fix became the only violation in the file — and the
+  // failure is confusing in a specific way, because the fix and the regression
+  // look identical in the diff. Same family as
+  // `csa_loom_shellcheck_comment_aborts_analysis`: a scanner that cannot tell
+  // code from prose ABOUT code eventually fires on its own documentation, and
+  // this guard's remediation text actively encourages writing that prose.
+  //
+  // `maskJsx` (check-no-freeform.mjs) is reused rather than re-derived: it is
+  // length- and newline-preserving, so every offset below still indexes the true
+  // source, and it already carries the three JSX rules a TypeScript-only lexer
+  // gets wrong (`/>` and `</` never open a regex; an intra-word apostrophe is
+  // not a string). Importing it is side-effect free — that module fences its
+  // CLI on `process.argv[1].endsWith('check-no-freeform.mjs')`.
+  //
+  // The mask must not merely stop the false positive: PROSE_CONTROLS below
+  // proves it also does not suppress a REAL site, including one on a line AFTER
+  // the prose.
+  const masked = maskJsx(src);
   let n = 0;
-  for (const [s, e] of styleRegions(src)) {
-    const region = src.slice(s, e);
+  for (const [s, e] of styleRegions(masked)) {
+    const region = masked.slice(s, e);
     PROP_RE.lastIndex = 0;
     while (PROP_RE.exec(region)) n++;
   }
   return n;
+}
+
+/**
+ * EMBEDDED CONTROL (#3601). Runs BEFORE the tree is judged, because a mask that
+ * has stopped scanning produces the SAME zero as a clean tree
+ * (`guard_with_zero_population_needs_embedded_control`). Three of these are the
+ * prose cases check-no-freeform's own control set already pins; the fourth and
+ * fifth are the direction that matters more — the mask must not become a way to
+ * hide a violation.
+ */
+export const PROSE_CONTROLS = [
+  {
+    why: 'prose in a // comment must not create a violation',
+    src: '// we removed style={{ gap: 12 }} here in favour of a token\nexport const X = 1;\n',
+    expect: 0,
+  },
+  {
+    why: 'prose in a block comment must not create a violation',
+    src: '/** Replaced an inline style={{ padding: 8 }} with tokens.spacingVerticalS. */\nexport const Y = 2;\n',
+    expect: 0,
+  },
+  {
+    why: 'prose mentioning the pattern must not hide a REAL site on a LATER line',
+    src: '// we removed style={{ gap: 12 }} here\nconst a = <div style={{ padding: 8 }} />;\n',
+    expect: 1,
+  },
+  {
+    why: 'a REAL inline-style violation is still counted (the mask did not just stop scanning)',
+    src: 'const a = <div style={{ gap: 12, marginTop: 4 }} />;\n',
+    expect: 2,
+  },
+  {
+    why: 'a REAL violation on the SAME line as a trailing comment is still counted',
+    src: 'const a = <div style={{ padding: 8 }} />; // was style={{ padding: 16 }}\n',
+    expect: 1,
+  },
+  {
+    why: 'a CSSProperties object is still in scope',
+    src: 'const s: React.CSSProperties = { fontSize: 22 };\n',
+    expect: 1,
+  },
+];
+
+/** Runs the controls. Returns failure descriptions (empty = healthy). */
+export function runProseControls() {
+  const failures = [];
+  for (const c of PROSE_CONTROLS) {
+    const got = countViolations(c.src);
+    if (got !== c.expect) failures.push(`expected ${c.expect}, got ${got} — ${c.why}`);
+  }
+  return failures;
 }
 
 function listFiles() {
@@ -159,13 +234,17 @@ function rel(f) {
 
 function scan() {
   const counts = {};
+  let filesScanned = 0;
+  let regions = 0;
   for (const f of listFiles()) {
     let src;
     try { src = fs.readFileSync(f, 'utf8'); } catch { continue; }
+    filesScanned += 1;
+    regions += styleRegions(maskJsx(src)).length;
     const n = countViolations(src);
     if (n > 0) counts[rel(f)] = n;
   }
-  return counts;
+  return { counts, filesScanned, regions };
 }
 
 // __BASELINE_START__  (regenerate with --update-baseline)
@@ -194,7 +273,22 @@ const BASELINE = {};
 // __BASELINE_END__
 
 function main() {
-  const counts = scan();
+  // The controls run BEFORE the tree is judged. A comment mask that has drifted
+  // and blanks too much produces an empty result indistinguishable from a clean
+  // tree, so a verdict from a scanner that has stopped scanning is not a verdict.
+  const controlFailures = runProseControls();
+  if (controlFailures.length) {
+    console.error('::error::[no-raw-px] EMBEDDED CONTROL failed — the comment mask no longer behaves as');
+    console.error('::error::documented, so any verdict about the console would be meaningless.');
+    for (const f of controlFailures) console.error(`  - ${f}`);
+    process.exit(1);
+  }
+  if (process.argv.includes('--self-test')) {
+    console.log(`[no-raw-px] self-test OK — ${PROSE_CONTROLS.length} control fixture(s) behaved as documented.`);
+    process.exit(0);
+  }
+
+  const { counts, filesScanned, regions } = scan();
   if (process.argv.includes('--update-baseline')) {
     const ordered = Object.keys(counts).sort().reduce((o, k) => { o[k] = counts[k]; return o; }, {});
     const total = Object.values(counts).reduce((a, b) => a + b, 0);
@@ -211,6 +305,19 @@ function main() {
   const totalNow = Object.values(counts).reduce((a, b) => a + b, 0);
   const totalBase = Object.values(BASELINE).reduce((a, b) => a + b, 0);
   console.log(`[no-raw-px] scanned lib/editors + lib/panes + lib/components + app/**/page.tsx`);
+  // POPULATION, printed every run (#3601). A comment mask that drifts and blanks
+  // too much yields the same `current: 0` as a clean tree, so the number of
+  // style regions the scanner actually reached is the only way to tell "no
+  // violations" from "no scanning". Measured on main when the mask landed:
+  // 920 files / 6942 regions (6954 unmasked — the 12-region delta across 8 files
+  // IS the prose that used to be miscounted as code).
+  console.log(`[no-raw-px] population: ${filesScanned} file(s) / ${regions} inline-style region(s) reached`);
+  if (!USING_FIXTURE_ROOT && regions === 0) {
+    console.error('::error::[no-raw-px] reached ZERO inline-style regions across the console. This tree is full');
+    console.error('::error::of them, so zero means the scanner (or the comment mask) has drifted off the code.');
+    console.error('::error::Refusing to report a pass on an empty population.');
+    process.exit(1);
+  }
   console.log(`[no-raw-px] grandfathered baseline: ${totalBase} raw-px inline-style values across ${Object.keys(BASELINE).length} files`);
   console.log(`[no-raw-px] current: ${totalNow} across ${Object.keys(counts).length} files`);
   if (regressions.length) {
