@@ -1,0 +1,331 @@
+name: loom-brain-scan
+
+# LOOM BRAIN W10 — the SCHEDULER (#3936, PRP `PRPs/active/loom-brain/PRP.md`).
+#
+# A Brain nobody runs finds nothing. W1-W9 built a graph, six detectors, a
+# security layer and a version history; this is the loop that runs them. The
+# cautionary instance is already in this repo: `lcu-autopilot` implements
+# read -> decide -> actuate -> audit and has NO scheduler, so it has never
+# produced a finding in anger.
+#
+# ── RECOMMEND-ONLY, AND STRUCTURALLY SO ─────────────────────────────────────
+# Two Azure verbs are reachable from the scan:
+#   POST {arm}/providers/Microsoft.ResourceGraph/resources   (a query)
+#   GET  {arm}{resourceId}?api-version=...                   (a read)
+# Nothing here can create, scale, start, stop or delete anything. PRP §1
+# decision 1, and the measured reason is blast radius: of the 13 Container App
+# environments visible across these subscriptions, ONE is Loom's.
+#
+# ── THE HARD PROBLEM THIS LANE HAD TO SOLVE: THE ESTATE IS PAUSED ───────────
+# Standing operator mandate: the Commercial and Gov estates are kept PAUSED
+# unless actively validating. A naive scheduled scan therefore fails RED every
+# cycle with "could not reach Azure", the operator learns to ignore the lane,
+# and the lane becomes decorative — which is exactly the silently-broken path
+# `deploy-integrity.md` R1 forbids.
+#
+# The forbidden cure is a config flag that skips the run: a boolean that
+# disables a job is a gate that cannot fail. So the scan produces THREE
+# verdicts, each derived from an ACTUAL ARM READ (never from a setting):
+#
+#   exit 0  OK      — reached ARM, something is Online. Graph built, detectors
+#                     run, a graph version written, findings reconciled.
+#   exit 0  PAUSED  — reached ARM, and EVERY in-scope resource is definitively
+#                     stopped. Neutral: nothing was scanned, so not green;
+#                     nothing is broken, so not red. Observed per-resource
+#                     states are printed.
+#   exit 2  UNREACHABLE — auth/network/ARM error, zero in-scope resources, or a
+#                     power state that could not be established. RED.
+#   exit 3  POPULATION REGRESSION — the estate WAS scanned and the SCAN got
+#                     worse than last run (PRP §5: a shrinking judged count is a
+#                     P0). RED on its own axis.
+#   exit 1  a defect in the scan itself.
+#
+# PAUSED exiting 0 means a green check does NOT imply a scan happened, so the
+# verdict is carried in three places a green check cannot hide: the first line
+# of the log, the step-summary headline, and the `verdict` job output.
+#
+# ── NO RESULT IS EVER DISCARDED ─────────────────────────────────────────────
+# There is no `continue-on-error`, no `|| true` and no `2>/dev/null` in this
+# file. Where a step needs stderr it is written to a file under `temp/` and
+# `cat`-ed. `deploy-integrity.md` forbids result-discarding, and a `2>/dev/null`
+# once turned a permission denial into "the tag does not exist" here and sent
+# two investigations down the wrong path.
+#
+# NOTE ON `set -e`: GitHub's default shell is `bash -e`. `set -uo pipefail` does
+# NOT clear it, so a failing command aborts the step BEFORE any RC check can
+# classify it. Every step below that classifies an exit code turns -e OFF first
+# (`set +e`) and captures `RC=$?` on the LINE IMMEDIATELY AFTER the command,
+# never after a pipe (a pipe yields the LAST command's status, not the
+# subject's).
+#
+# ── CLOUD PARITY (`cloud-parity.md`) ────────────────────────────────────────
+# Two jobs, one per boundary, identical steps. The ARM host and token audience
+# come from `lib/azure/cloud-endpoints` keyed on `LOOM_CLOUD`, never from a
+# literal. Gov cannot be driven from a workstation — there is no local Gov `az`
+# context — so the Gov receipt can only ever come from a run of this workflow.
+# See docs/fiab/brain/scheduler.md for which boundaries have actually produced
+# one.
+
+on:
+  schedule:
+    # 04:11 UTC daily. Deliberately NOT minute 0 or 30: the whole GitHub fleet
+    # lands there and a scheduled run can be delayed by many minutes, which for
+    # a lane whose verdict depends on whether an estate is running at that
+    # instant is a real source of noise.
+    - cron: '11 4 * * *'
+  workflow_dispatch:
+    inputs:
+      cloud:
+        description: 'Which boundary to scan.'
+        type: choice
+        default: both
+        options:
+          - both
+          - commercial
+          - gov
+
+permissions:
+  contents: read
+
+concurrency:
+  group: loom-brain-scan
+  cancel-in-progress: false
+
+jobs:
+  commercial:
+    name: Brain scan — Commercial
+    if: github.event_name == 'schedule' || inputs.cloud == 'both' || inputs.cloud == 'commercial'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    outputs:
+      verdict: ${{ steps.scan.outputs.verdict }}
+      regressions: ${{ steps.scan.outputs.regressions }}
+      population_regression: ${{ steps.scan.outputs.population_regression }}
+    env:
+      LOOM_CLOUD: Commercial
+      LOOM_ESTATE_ID: loom-commercial-centralus
+      LOOM_BRAIN_RESOURCE_GROUPS: rg-csa-loom-admin-centralus
+      ADMIN_RG: rg-csa-loom-admin-centralus
+      CONSOLE_APP: loom-console
+      AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+      AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+      AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+      AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Azure login (Commercial)
+        uses: Azure/login@v2
+        with:
+          creds: |
+            {
+              "clientId": "${{ secrets.AZURE_CLIENT_ID }}",
+              "clientSecret": "${{ secrets.AZURE_CLIENT_SECRET }}",
+              "tenantId": "${{ secrets.AZURE_TENANT_ID }}",
+              "subscriptionId": "${{ secrets.AZURE_SUBSCRIPTION_ID }}"
+            }
+
+      - name: Install console dependencies
+        working-directory: apps/fiab-console
+        run: |
+          corepack enable
+          CI=true pnpm install --frozen-lockfile
+
+      - name: Build the scan CLI
+        working-directory: apps/fiab-console
+        run: |
+          # `tsconfig.cli.json` deliberately declares NO `paths` mapping: tsc
+          # resolves the console's `@/*` alias for typechecking but does NOT
+          # rewrite it on emit, so an alias import would compile here and then
+          # fail at 04:11 UTC with a module-not-found that reads like a broken
+          # install. Omitting `paths` makes that a compile error instead.
+          node_modules/.bin/tsc -p lib/brain/run/tsconfig.cli.json
+          test -f temp/brain-scan-build/lib/brain/run/cli.js
+
+      - name: Resolve the estate Cosmos endpoint
+        working-directory: apps/fiab-console
+        run: |
+          # DEPLOYED, NOT REQUESTED (auto-bind-by-default.md §5). The endpoint is
+          # emitted onto the console app by the platform bicep, so the lane reads
+          # it from the estate rather than asking an operator to set a variable.
+          # This is a CONTROL-plane read and works whether or not the app is
+          # running, which matters: the console is one of the things that may be
+          # stopped when the estate is paused.
+          set +e -uo pipefail
+          mkdir -p ../../temp
+          ENDPOINT=$(az containerapp show -n "$CONSOLE_APP" -g "$ADMIN_RG" \
+            --query "properties.template.containers[0].env[?name=='LOOM_COSMOS_ENDPOINT'].value | [0]" \
+            -o tsv 2>../../temp/cosmos-endpoint.err)
+          RC=$?
+          if [ $RC -ne 0 ]; then
+            echo "::error::could not read LOOM_COSMOS_ENDPOINT from $CONSOLE_APP in $ADMIN_RG (az exit $RC). The findings backlog has nowhere to persist, so the scan is NOT being run — it would report findings it could not store, and the next run would then re-report every one of them as new."
+            cat ../../temp/cosmos-endpoint.err
+            exit 1
+          fi
+          if [ -z "${ENDPOINT:-}" ]; then
+            echo "::error::az succeeded but $CONSOLE_APP in $ADMIN_RG carries no LOOM_COSMOS_ENDPOINT env entry. That is a mis-deployed console, not a missing setting: the platform bicep emits this value for every boundary."
+            exit 1
+          fi
+          # The endpoint is an account HOST, not a credential. It is masked
+          # anyway: this repo is public and a workflow log is a publication
+          # surface.
+          echo "::add-mask::$ENDPOINT"
+          echo "LOOM_COSMOS_ENDPOINT=$ENDPOINT" >> "$GITHUB_ENV"
+          echo "resolved the estate Cosmos endpoint from the console app (value masked)."
+
+      - name: Run the Brain scan
+        id: scan
+        working-directory: apps/fiab-console
+        env:
+          LOOM_BRAIN_RUN_ID: ${{ github.run_id }}-${{ github.run_attempt }}-commercial
+        run: |
+          # -e OFF so the RC below classifies the outcome instead of the step
+          # dying before it can. RC is captured on the LINE IMMEDIATELY AFTER the
+          # command — never after a pipe, which would yield the pipe's status.
+          set +e -uo pipefail
+          mkdir -p ../../temp
+          node temp/brain-scan-build/lib/brain/run/cli.js 2>../../temp/brain-scan.err
+          RC=$?
+          echo "--- stderr (verbatim, nothing discarded) ---"
+          cat ../../temp/brain-scan.err
+          echo "--- scan exit code: $RC ---"
+          case "$RC" in
+            0)
+              echo "Scan completed. See the step summary for the verdict — a green check does NOT mean the estate was scanned; a PAUSED estate also exits 0."
+              exit 0
+              ;;
+            2)
+              echo "::error::UNREACHABLE — the scan could not establish anything about the Commercial estate. NO graph was built, NO detector ran and NO finding state was changed. The verdict message above states exactly what was established; a run that REACHED Azure and found nothing says so and does NOT claim a connectivity failure."
+              exit 1
+              ;;
+            3)
+              echo "::error::POPULATION REGRESSION — the Commercial estate was reached and scanned, and the SCAN examined materially less than it did last run. PRP §5 treats a shrinking judged count as a P0: a detector that stops looking reports the same clean result as a detector that looked and found nothing."
+              exit 1
+              ;;
+            *)
+              echo "::error::The Brain scan failed with exit $RC — a defect in the scan itself, not a verdict about the estate. The stderr above is the whole failure."
+              exit 1
+              ;;
+          esac
+
+  gov:
+    name: Brain scan — Azure Government
+    if: github.event_name == 'schedule' || inputs.cloud == 'both' || inputs.cloud == 'gov'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    outputs:
+      verdict: ${{ steps.scan.outputs.verdict }}
+      regressions: ${{ steps.scan.outputs.regressions }}
+      population_regression: ${{ steps.scan.outputs.population_regression }}
+    env:
+      LOOM_CLOUD: GCC-High
+      LOOM_CLOUD_BOUNDARY: gcc-high
+      LOOM_ESTATE_ID: loom-gov-usgovvirginia
+      LOOM_BRAIN_RESOURCE_GROUPS: rg-csa-loom-admin-usgovvirginia
+      ADMIN_RG: rg-csa-loom-admin-usgovvirginia
+      CONSOLE_APP: loom-console
+      AZURE_CLIENT_ID: ${{ secrets.AZURE_GOV_CLIENT_ID }}
+      AZURE_CLIENT_SECRET: ${{ secrets.AZURE_GOV_CLIENT_SECRET }}
+      AZURE_TENANT_ID: ${{ secrets.AZURE_GOV_TENANT_ID }}
+      AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_GOV_SUBSCRIPTION_ID }}
+      # DefaultAzureCredential must mint tokens against the SOVEREIGN authority.
+      # Without this the run authenticates to Commercial and every Gov ARM call
+      # returns 401 — which the probe would correctly classify as `auth`, and
+      # which would be a completely misleading answer.
+      AZURE_AUTHORITY_HOST: https://login.microsoftonline.us
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Azure login (Gov)
+        uses: Azure/login@v2
+        with:
+          creds: |
+            {
+              "clientId": "${{ secrets.AZURE_GOV_CLIENT_ID }}",
+              "clientSecret": "${{ secrets.AZURE_GOV_CLIENT_SECRET }}",
+              "tenantId": "${{ secrets.AZURE_GOV_TENANT_ID }}",
+              "subscriptionId": "${{ secrets.AZURE_GOV_SUBSCRIPTION_ID }}",
+              "activeDirectoryEndpointUrl": "https://login.microsoftonline.us",
+              "resourceManagerEndpointUrl": "https://management.usgovcloudapi.net/",
+              "sqlManagementEndpointUrl": "https://management.core.usgovcloudapi.net:8443/",
+              "galleryEndpointUrl": "https://gallery.usgovcloudapi.net/",
+              "managementEndpointUrl": "https://management.core.usgovcloudapi.net/"
+            }
+          environment: AzureUSGovernment
+
+      - name: Set Azure cloud to Gov
+        run: az cloud set --name AzureUSGovernment
+
+      - name: Install console dependencies
+        working-directory: apps/fiab-console
+        run: |
+          corepack enable
+          CI=true pnpm install --frozen-lockfile
+
+      - name: Build the scan CLI
+        working-directory: apps/fiab-console
+        run: |
+          node_modules/.bin/tsc -p lib/brain/run/tsconfig.cli.json
+          test -f temp/brain-scan-build/lib/brain/run/cli.js
+
+      - name: Resolve the estate Cosmos endpoint
+        working-directory: apps/fiab-console
+        run: |
+          set +e -uo pipefail
+          mkdir -p ../../temp
+          ENDPOINT=$(az containerapp show -n "$CONSOLE_APP" -g "$ADMIN_RG" \
+            --query "properties.template.containers[0].env[?name=='LOOM_COSMOS_ENDPOINT'].value | [0]" \
+            -o tsv 2>../../temp/cosmos-endpoint.err)
+          RC=$?
+          if [ $RC -ne 0 ]; then
+            echo "::error::could not read LOOM_COSMOS_ENDPOINT from $CONSOLE_APP in $ADMIN_RG (az exit $RC). The findings backlog has nowhere to persist, so the scan is NOT being run."
+            cat ../../temp/cosmos-endpoint.err
+            exit 1
+          fi
+          if [ -z "${ENDPOINT:-}" ]; then
+            echo "::error::az succeeded but $CONSOLE_APP in $ADMIN_RG carries no LOOM_COSMOS_ENDPOINT env entry. That is a mis-deployed console, not a missing setting."
+            exit 1
+          fi
+          echo "::add-mask::$ENDPOINT"
+          echo "LOOM_COSMOS_ENDPOINT=$ENDPOINT" >> "$GITHUB_ENV"
+          echo "resolved the estate Cosmos endpoint from the console app (value masked)."
+
+      - name: Run the Brain scan
+        id: scan
+        working-directory: apps/fiab-console
+        env:
+          LOOM_BRAIN_RUN_ID: ${{ github.run_id }}-${{ github.run_attempt }}-gov
+        run: |
+          set +e -uo pipefail
+          mkdir -p ../../temp
+          node temp/brain-scan-build/lib/brain/run/cli.js 2>../../temp/brain-scan.err
+          RC=$?
+          echo "--- stderr (verbatim, nothing discarded) ---"
+          cat ../../temp/brain-scan.err
+          echo "--- scan exit code: $RC ---"
+          case "$RC" in
+            0)
+              echo "Scan completed. See the step summary for the verdict — a green check does NOT mean the estate was scanned; a PAUSED estate also exits 0."
+              exit 0
+              ;;
+            2)
+              echo "::error::UNREACHABLE — the scan could not establish anything about the Gov estate. NO graph was built, NO detector ran and NO finding state was changed."
+              exit 1
+              ;;
+            3)
+              echo "::error::POPULATION REGRESSION — the Gov estate was reached and scanned, and the SCAN examined materially less than it did last run (PRP §5 P0)."
+              exit 1
+              ;;
+            *)
+              echo "::error::The Brain scan failed with exit $RC — a defect in the scan itself, not a verdict about the estate."
+              exit 1
+              ;;
+          esac

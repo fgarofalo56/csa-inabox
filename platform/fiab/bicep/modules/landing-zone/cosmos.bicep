@@ -469,6 +469,33 @@ var loomContainers = [
   // partition. createIfNotExists in cosmos-client.ts ensure() remains the hotfix
   // fallback. No TTL — a migration copy record is durable evidence.
   { name: 'migration-copy-jobs',   partitionKey: '/tenantId' }
+  // W10 (#3936) — Loom Brain FINDINGS + SCAN RUNS. Two document kinds in one
+  // container, discriminated by `docType`:
+  //   'finding'   one doc per detector+subject fingerprint, carrying its
+  //               lifecycle state (new -> acknowledged -> accepted -> fixed,
+  //               and the fifth state that matters most, REGRESSED).
+  //   'scan-run'  one doc per scheduled run: the verdict, the counts, and the
+  //               per-detector examined counts the NEXT run compares against.
+  //
+  // PK /estateId, NOT /tenantId: the Brain's findings are a property of the
+  // deployed ESTATE, not of a tenant inside it, and every reconcile reads one
+  // estate's whole backlog -> single physical partition. Same key as
+  // brain-graph-versions, for the same reason.
+  //
+  // ttl: -1 IS THE LOAD-BEARING SETTING, and it is the OPPOSITE of the choice
+  // brain-graph-versions makes. -1 turns TTL ON with NO blanket expiry; each
+  // doc opts in with its own `ttl` (the same pattern loom-transform-plans and
+  // canvas-presence use). FINDING docs carry NO ttl and must never be given
+  // one: a `fixed` finding is the ONLY thing that makes its next occurrence a
+  // REGRESSION rather than a new finding, so expiring one silently downgrades
+  // the loudest signal this lane produces to the quietest, with nothing in any
+  // log to show for it. SCAN-RUN docs carry ttl 7776000 (90 days) — operational
+  // telemetry, and losing an old one costs nothing.
+  //
+  // createIfNotExists in lib/brain/run/cosmos-finding-store.ts remains the
+  // hotfix fallback for an account that predates this row; the deploy is the
+  // primary path (auto-bind-by-default.md §5).
+  { name: 'brain-findings',        partitionKey: '/estateId', ttl: -1 }
 ]
 
 resource loomDb 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases@2024-12-01-preview' = {

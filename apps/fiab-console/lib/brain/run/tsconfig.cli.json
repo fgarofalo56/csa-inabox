@@ -1,0 +1,57 @@
+{
+  // LOOM BRAIN W10 — the CLI build (#3936).
+  //
+  // The scheduled scan runs OUTSIDE the console image: it is a plain Node
+  // process launched by `.github/workflows/loom-brain-scan.yml`, because the
+  // console Container App is itself one of the things that may be STOPPED when
+  // the estate is paused. A scheduler that could only run inside the thing it
+  // monitors cannot report that the thing is down.
+  //
+  // ── WHY THERE IS NO `paths` MAPPING HERE, DELIBERATELY ────────────────────
+  // The console's tsconfig maps `@/*`. `tsc` RESOLVES that mapping for
+  // typechecking but does NOT rewrite the specifier on emit, so a compiled
+  // `require('@/lib/x')` fails at runtime with a module-not-found that looks
+  // like a broken install. Omitting `paths` makes an alias import a COMPILE
+  // error in this config instead — the failure lands at build time, in CI, with
+  // the offending file named, rather than at 04:11 UTC in a scheduled run.
+  //
+  // Everything the CLI reaches (`lib/brain/**`, `lib/estate/pause-state`,
+  // `lib/azure/cloud-endpoints` + `cloud-boundary` + `cloud-endpoints-graph`,
+  // `app/api/admin/brain/_lib/wire-bindings`) is alias-free by construction and
+  // `../__tests__/cli-buildable.test.ts` asserts that so the property cannot
+  // rot silently.
+  //
+  // ── COMMONJS ON PURPOSE ───────────────────────────────────────────────────
+  // `apps/fiab-console/package.json` has no `"type": "module"`, so emitted `.js`
+  // is CJS and Node resolves the extensionless relative imports the source uses.
+  // An ESM emit would need every specifier rewritten with a `.js` suffix.
+  //
+  // Strictness matches the console's own tsconfig: `strict: true` is not
+  // optional here, because `lib/brain/types.ts` and `lib/estate/pause-state.ts`
+  // carry build-checked type assertions that only hold under strict mode.
+  //
+  // ── WHY outDir SITS UNDER apps/fiab-console AND NOT AT THE REPO ROOT ──────
+  // Node resolves `@azure/cosmos` and `@azure/identity` by walking UP from the
+  // emitted file. The console is a standalone pnpm package, so those live in
+  // `apps/fiab-console/node_modules` and NOT at the repo root. Emitting to
+  // `<repo>/temp` produced `Cannot find module '@azure/cosmos'` on the first
+  // smoke run — measured, not theorised. `apps/fiab-console/temp/**` is covered
+  // by the root `.gitignore` `temp/` rule and by this project's own
+  // `tsconfig.build.json` exclude list.
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["ES2022"],
+    "module": "commonjs",
+    "moduleResolution": "node10",
+    "strict": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "resolveJsonModule": true,
+    "sourceMap": true,
+    "noEmit": false,
+    "declaration": false,
+    "rootDir": "../../..",
+    "outDir": "../../../temp/brain-scan-build"
+  },
+  "files": ["./cli.ts"]
+}

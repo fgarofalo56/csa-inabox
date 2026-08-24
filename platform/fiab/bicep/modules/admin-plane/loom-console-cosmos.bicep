@@ -172,6 +172,62 @@ resource loomDbContainers 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/co
   }
 }]
 
+// ---------------------------------------------------------------------------
+// W10 (#3936) — Loom Brain FINDINGS + SCAN RUNS.
+//
+// Declared as its own resource rather than as a row in `loomContainers` because
+// it is the only container here that needs a `defaultTtl`, and the loop above
+// emits none. It is also partitioned by ESTATE rather than by tenant: the
+// Brain's findings are a property of the deployed estate, not of a tenant
+// inside it, and every reconcile reads one estate's whole backlog, so that key
+// makes it a single physical partition.
+//
+// Two document kinds share the container, discriminated by `docType`:
+//   'finding'   one doc per detector+subject fingerprint with its lifecycle
+//               state — new -> acknowledged -> accepted -> fixed, plus the
+//               fifth state that matters most, REGRESSED.
+//   'scan-run'  one doc per scheduled run: the verdict, the counts, and the
+//               per-detector examined counts the NEXT run compares against so a
+//               shrinking population is visible (PRP §5 treats that as a P0).
+//
+// ── defaultTtl: -1 IS THE LOAD-BEARING SETTING ─────────────────────────────
+// It is the OPPOSITE of the choice `brainGraphVersions` makes, and deliberately
+// so. -1 turns TTL ON with NO blanket expiry; each document opts in with its
+// own `ttl`.
+//
+//   FINDING docs carry NO ttl, and must never be given one. A `fixed` finding
+//   is the ONLY thing that makes its next occurrence a REGRESSION rather than a
+//   new finding. Expire it and the loudest signal this lane produces is
+//   silently downgraded to the quietest — by a retention policy, with nothing
+//   in any log to show for it.
+//
+//   SCAN-RUN docs carry ttl 7776000 (90 days). Operational telemetry; losing an
+//   old one costs nothing.
+//
+// DEPLOYED, NOT REQUESTED (auto-bind-by-default.md §5). The scan's
+// `CosmosFindingStore` also createIfNotExists's this container with the same
+// partition key and the same TTL, which is the sanctioned idempotent fallback
+// for an estate whose Cosmos account predates this module — but the deploy is
+// the primary path, so nothing is ever asked of an operator.
+//
+// CLOUD PARITY — this module is invoked from admin-plane/main.bicep for every
+// boundary, so the container exists in Commercial and in Gov alike. The scan
+// reaches it through `LOOM_COSMOS_ENDPOINT`, which the deploy emits onto the
+// console app and `.github/workflows/loom-brain-scan.yml` reads from there, so
+// no host literal appears in the workflow either.
+resource brainFindings 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/containers@2024-12-01-preview' = {
+  parent: loomDb
+  name: 'brain-findings'
+  properties: {
+    resource: {
+      id: 'brain-findings'
+      partitionKey: { paths: ['/estateId'], kind: 'Hash' }
+      defaultTtl: -1
+      indexingPolicy: { indexingMode: 'consistent', automatic: true }
+    }
+  }
+}
+
 resource pe 'Microsoft.Network/privateEndpoints@2024-05-01' = {
   name: 'pe-${accountName}'
   location: location
