@@ -43,16 +43,31 @@ adversarial loop — for CI, docs, and UI.* A third review round on any item sto
 
 ## 2. Why Wave 0 blocks
 
+> **Wave 0 has RUN. Read `triage/WAVE0-verdicts-2026-08-22.md` before planning any
+> lane.** It re-measures both blocking lanes and supersedes several counts in this
+> document. Corrections that change planning: `deploy-fiab-gcch` had failed **9**
+> consecutive runs, not 6; `deploy-copilot-function` **9**, not 6; **PR #3880 merged
+> 2026-08-22T20:06:18Z** and **#3888 merged 2026-08-23T03:21:31Z** — both *merged, not
+> deployed* (`deploy-integrity.md` R2), so #3449 stays open until a Gov Actions run
+> proves it. **L1 is materially mis-scoped: 27 of its 48 items are not security
+> defects.** L0 carries **7 stale** + **1 already-fixed**; L1 **1 stale** +
+> **6 already-fixed**.
+
 **L0 blocks because a repo that cannot deploy is a repo whose merges do not exist**
 (`deploy-integrity.md` R1). This is not hypothetical today: `deploy-fiab-gcch` has failed
-6/6 daily scheduled runs, and `deploy-copilot-function` 6/6 — both root-caused
-2026-08-22 (#3449 ordering defect, fix in PR #3880; #3429 a misaimed subscription secret
-needing an operator repoint). Work merged while those are red is work the operator cannot
-see.
+9/9 daily scheduled runs, and `deploy-copilot-function` 9/9 — both root-caused
+2026-08-22 (#3449 ordering defect, fix in PR #3880, since merged; #3429 a misaimed
+subscription secret needing an operator repoint). Work merged while those are red is work
+the operator cannot see.
 
 **L1 blocks because it decides what other lanes may touch.** L1 owns `lib/auth/**` and an
-explicitly declared list of `app/api/**/route.ts` files. L4 cannot safely open until that
-list is published in L1's ledger, or the two lanes will collide on the same routes.
+explicitly declared list of `app/api/**/route.ts` files.
+
+> **L4 IS UNBLOCKED.** That list was published by the Wave 0 triage pass on 2026-08-22 —
+> **`triage/WAVE0-verdicts-2026-08-22.md` §4** — with Tier 1 (19 route files L1 owns),
+> Tier 1b (`app/api/items/_lib/item-crud.ts`, which a literal reading of L4's charter
+> would wrongly hand to L4), and Tier 3 (files L1 releases). L4 may open against that
+> list. **L4 must not touch Tier 1 or Tier 1b.**
 
 Everything else runs concurrently.
 
