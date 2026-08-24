@@ -131,38 +131,51 @@ class ProbeError extends Error {}
  * as a genuine verdict; shell:true concatenates args unescaped per DEP0190).
  * A batch shim therefore goes through cmd.exe with a hand-quoted, verbatim
  * command line. See scripts/measure/measure.mjs for the long form.
+ *
+ * The PATH scan below DISCARDS the path it finds and returns only a boolean.
+ * Returning it — and spawning it — put `process.env.PATH` on a dataflow path
+ * into `spawnSync`'s executable argument, which is CodeQL's
+ * `js/indirect-command-line-injection` (CWE-078) and a TRUE positive: resolving
+ * an executable out of an environment variable is exactly the shape that query
+ * exists to find. It also stopped the query terminating inside its 600s budget,
+ * which uploads a `codeql-failed-run.sarif` and FREEZES the repo's JS/TS alert
+ * list (see .github/workflows/codeql.yml and the 2026-08-03 outage).
+ *
+ * A boolean cannot carry taint, and both surviving launch paths resolve the
+ * binary themselves — libuv directly, cmd.exe via PATHEXT — which is more
+ * faithful than this four-extension guess was.
  */
-function spawnPlan(bin, args) {
-  let file = bin;
-  if (process.platform === 'win32') {
-    let found = null;
-    for (const dir of (process.env.PATH || '').split(path.delimiter)) {
-      if (!dir) continue;
-      for (const ext of ['.cmd', '.exe', '.bat', '']) {
-        const p = path.join(dir, bin + ext);
-        if (existsSync(p)) { found = p; break; }
-      }
-      if (found) break;
-    }
-    if (!found) throw new ProbeError(`could not resolve '${bin}' on PATH`);
-    file = found;
-    if (/\.(cmd|bat)$/i.test(file)) {
-      const q = (a) => {
-        // cmd.exe expands %VAR% even inside double quotes, with no reliable
-        // escape. Running a DIFFERENT command than the one requested is worse
-        // than not running one, so refuse rather than guess.
-        if (a.includes('%')) throw new ProbeError(`argument would expand in cmd.exe: ${a}`);
-        return /[\s"|&<>^]/.test(a) || a === '' ? `"${a.replace(/"/g, '""')}"` : a;
-      };
-      const line = [file.replace(/\//g, '\\'), ...args].map(q).join(' ');
-      return {
-        cmd: process.env.ComSpec || 'cmd.exe',
-        argv: ['/d', '/s', '/c', `"${line}"`],
-        opts: { windowsVerbatimArguments: true },
-      };
+function needsWrapper(bin) {
+  if (process.platform !== 'win32') return false;
+  for (const dir of (process.env.PATH || '').split(path.delimiter)) {
+    if (!dir) continue;
+    for (const ext of ['.cmd', '.exe', '.bat', '']) {
+      const found = path.join(dir, bin + ext);
+      if (existsSync(found)) return /\.(cmd|bat)$/i.test(found);
     }
   }
-  return { cmd: file, argv: args, opts: {} };
+  throw new ProbeError(`could not resolve '${bin}' on PATH`);
+}
+
+function spawnPlan(bin, args) {
+  // Hard-coded, not a parameter: this script launches exactly one program.
+  if (bin !== 'az') throw new ProbeError(`refusing to launch '${bin}'; this probe runs az only`);
+  if (!needsWrapper(bin)) return { cmd: bin, argv: args, opts: {} };
+  const q = (a) => {
+    // cmd.exe expands %VAR% even inside double quotes, with no reliable
+    // escape. Running a DIFFERENT command than the one requested is worse
+    // than not running one, so refuse rather than guess.
+    if (a.includes('%')) throw new ProbeError(`argument would expand in cmd.exe: ${a}`);
+    return /[\s"|&<>^]/.test(a) || a === '' ? `"${a.replace(/"/g, '""')}"` : a;
+  };
+  // Pin the interpreter: a redirected ComSpec would choose the program that
+  // runs every command this probe issues.
+  const comspec = process.env.ComSpec || '';
+  return {
+    cmd: /(^|[\\/])cmd\.exe$/i.test(comspec) ? comspec : 'cmd.exe',
+    argv: ['/d', '/s', '/c', `"${[bin, ...args].map(q).join(' ')}"`],
+    opts: { windowsVerbatimArguments: true },
+  };
 }
 
 /** Run az and parse JSON. Throws on anything that is not a clean parse. */
