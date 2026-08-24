@@ -21,7 +21,15 @@ lane may edit ONLY these paths:
 - `scripts/ci/check-owner-only-workspace-guard.mjs`
 - `scripts/ci/check-tenant-singleton-scope.mjs`
 - `scripts/ci/_route-auth-scope.mjs`
-- `an EXPLICIT, ledger-declared list of app/api/**/route.ts files (see §4)`
+- `an EXPLICIT, ledger-declared list of app/api/**/route.ts files — PUBLISHED, see `triage/WAVE0-verdicts-2026-08-22.md` §4`
+
+> **The route list is in `triage/WAVE0-verdicts-2026-08-22.md` §4, not in this file.**
+> This line previously read "(see §4)", which pointed at **§4 of *this* document —
+> titled "Landmines", containing no list at all.** The Wave 0 triage pass published the
+> list and thereby unblocked lane L4; it enumerates **Tier 1** (19 route files L1 owns),
+> **Tier 1b** (`app/api/items/_lib/item-crud.ts` — not a `route.ts`, so a literal reading
+> of L4's charter would hand it to L4; **271** route files import it directly), and
+> **Tier 3** (files L1 explicitly releases to L3/L4/L5).
 
 It must NOT touch (another lane owns them, and a shared-file edit must be sequenced,
 never parallelised):
@@ -48,7 +56,8 @@ These are measured, not theoretical. Each one has already cost this repo real ti
 - MUTATE THE GUARD, NOT THE CODE. Seven prior gate-fix PRs shipped defeatable guards; none passed first review.
 - The NARROW bypass is the evasion that works: scope a mutation to one itemType/cursor/page and it passes RC=0 plus a 259-test suite. Invent a mutation the author did NOT try.
 - A guard with zero population proves nothing — check the POPULATION, not the verdict.
-- The admin bypass is a FAMILY with two greppable shapes: `isTenantAdmin(session)) return null` and unfiltered `loadWorkspaceAdmin`. Grep BOTH before any authz fix.
+- The admin bypass is a FAMILY with **THREE** greppable shapes — grep ALL THREE before any authz fix, and **assume a fourth**: (1) `isTenantAdmin(session)) return null`; (2) an unfiltered `loadWorkspaceAdmin`; (3) **a COERCED TRUTHY READ — `return !!(await readWorkspaceById(id));` (#3891, `app/api/workspaces/[id]/folders/route.ts:35`)**, where "the workspace exists" is coerced into "you may access it" for 4 verbs, with no tid filter. Shape (3) is the one a two-shape audit MISSED while it was live. **Key any guard to the SHAPE, never to a spelling list** — the same error produced two undercounts in the Wave 0 triage (`item-crud` importers 173→271, tid comparisons 2→3).
+- **Read `triage/WAVE0-verdicts-2026-08-22.md` before starting this lane.** It re-measures L1 and materially changes its scope: **27 of the 48 items are not security defects**, only ~12 are true-security items L1 must fix, and **4 of those touch files L1 does not own** (§3). It also publishes this lane's route-ownership list (§4), groups the work into 3 batches + 1 blocked (§5), and records **6 already-fixed** and **1 stale** issue.
 - A COUNT is an ORACLE when the caller picks the scope — 404-not-403 before the query.
 - This lane's 48 items include security-ADJACENT matches (token/redact/oid keywords). Triage into true-security vs adjacent in the first sprint; adjacent items may drop to normal rigor with that decision recorded.
 
@@ -75,10 +84,14 @@ These are measured, not theoretical. Each one has already cost this repo real ti
 - No guard introduced by this lane passes when its subject is mutated.
 - The lane's own landmine list in §4 has been extended with anything new it learned.
 
-## 7. Issue inventory (48)
+## 7. Issue inventory (49)
+
+*(48 at authoring; **#3891 added 2026-08-23** — it was open and unlisted, and it is the
+third shape of the admin bypass named in §4.)*
 
 | # | title | labels |
 |---|---|---|
+| #3891 | SECURITY: a THIRD spelling of the tenant-admin bypass — workspaces/[id]/folders/route.ts:35 coerces an unfiltered cross-partition read into the authz decision for 4 verbs | bug |
 | #3877 | check-tid-boundary-chokepoint: section 10's stale-pin arm blesses four states it cannot verify |  |
 | #3876 | ci: the publication-surface checker has 4 measured enumerator bypasses (follow-up to #3835) |  |
 | #3861 | converge-role-assignment: per-site redaction, and a raw e.message reaching the public run log via an inherited | security |
