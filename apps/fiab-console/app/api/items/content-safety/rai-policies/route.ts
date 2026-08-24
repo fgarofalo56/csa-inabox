@@ -10,9 +10,14 @@
  * 2024-10-01). Every severity threshold is a REAL persisted policy value — no
  * fabricated thresholds (issue #1410 / no-vaporware.md). When no model-hosting
  * account is configured the client throws CsNotConfiguredError → honest 503 gate.
+ *
+ * Route-toolkit: the `withSession` wrapper [R3] — see ../route.ts for the 401-equivalence note.
+ * #3578: transport failures are diagnosed by _lib/transport-error.ts, not relayed
+ * verbatim as undici's bare "fetch failed". This route talks to ARM rather than
+ * the data plane, but the failure mode and the honesty requirement are identical.
  */
 import { NextRequest, NextResponse } from 'next/server';
-import { getSession } from '@/lib/auth/session';
+import { withSession } from '@/lib/api/route-toolkit';
 import {
   listRaiPolicies,
   upsertRaiPolicy,
@@ -22,28 +27,27 @@ import {
   type RaiContentFilter,
   type RaiCustomBlocklist,
 } from '@/lib/azure/foundry-cs-client';
+import { diagnoseTransportFailure, transportErrorResponse } from '../_lib/transport-error';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
 function err(e: any) {
   if (e instanceof CsNotConfiguredError) return NextResponse.json({ ok: false, error: e.message, hint: e.hint, notDeployed: true }, { status: 503 });
+  const transport = diagnoseTransportFailure(e);
+  if (transport) return transportErrorResponse(transport);
   const status = e instanceof CsError ? e.status : 502;
   return NextResponse.json({ ok: false, error: e?.message || String(e), body: e?.body }, { status });
 }
 
-export async function GET() {
-  const session = getSession();
-  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+export const GET = withSession(async () => {
   try {
     const { account, policies } = await listRaiPolicies();
     return NextResponse.json({ ok: true, account: { name: account.name, location: account.location, kind: account.kind }, policies });
   } catch (e: any) { return err(e); }
-}
+});
 
-export async function POST(req: NextRequest) {
-  const session = getSession();
-  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+export const POST = withSession(async (req: NextRequest) => {
   try {
     const body = await req.json();
     const name = String(body?.name || '').trim();
@@ -74,15 +78,13 @@ export async function POST(req: NextRequest) {
     });
     return NextResponse.json({ ok: true, policy });
   } catch (e: any) { return err(e); }
-}
+});
 
-export async function DELETE(req: NextRequest) {
-  const session = getSession();
-  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+export const DELETE = withSession(async (req: NextRequest) => {
   try {
     const name = req.nextUrl.searchParams.get('name')?.trim();
     if (!name) return NextResponse.json({ ok: false, error: 'name required' }, { status: 400 });
     await deleteRaiPolicy(name);
     return NextResponse.json({ ok: true, deleted: name });
   } catch (e: any) { return err(e); }
-}
+});
