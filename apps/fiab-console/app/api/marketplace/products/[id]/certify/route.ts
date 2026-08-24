@@ -10,6 +10,7 @@
  */
 import { NextRequest } from 'next/server';
 import { getSession, tenantScopeId } from '@/lib/auth/session';
+import { isTenantAdmin } from '@/lib/auth/feature-gate';
 import { apiOk, apiUnauthorized, apiForbidden, apiNotFound, apiServerError } from '@/lib/api/respond';
 import { getProduct, upsertProduct } from '@/lib/marketplace/product-store';
 import { runCertification } from '@/lib/marketplace/certification';
@@ -26,9 +27,17 @@ export async function POST(_req: NextRequest, ctx: { params: Promise<{ id: strin
 
     const product = await getProduct(tenantId, id);
     if (!product) return apiNotFound('product not found');
-    // Only the owner (or a tenant admin) re-certifies.
-    if (product.ownerOid && product.ownerOid !== session.claims.oid) {
-      return apiForbidden('only the product owner can re-certify');
+    // Only the owner — or a tenant admin — re-certifies. POSITIVE ownership
+    // match, never a mere non-contradiction (#3943): `ownerOid` is optional, so
+    // `product.ownerOid && product.ownerOid !== oid` short-circuited to a PASS on
+    // every unowned product (seeded / imported / created before the field), and
+    // certifying flips draft → published below — i.e. any tenant user could
+    // publish someone else's draft. An absent owner is now a REFUSAL, and the
+    // tenant-admin branch the comment always promised is the escape hatch that
+    // keeps genuinely orphaned rows recoverable (an admin can adopt + certify).
+    const isOwner = !!product.ownerOid && product.ownerOid === session.claims.oid;
+    if (!isOwner && !isTenantAdmin(session)) {
+      return apiForbidden('only the product owner or a tenant admin can re-certify');
     }
 
     const cert = runCertification(product.productKind);

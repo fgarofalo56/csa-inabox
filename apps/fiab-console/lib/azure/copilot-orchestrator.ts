@@ -2825,7 +2825,11 @@ export async function updateSessionMeta(
   const existing = await c.item(sessionId, sessionId).read<any>().catch(() => ({ resource: null }));
   if (!existing.resource) throw new Error('not_found');
   const doc = existing.resource;
-  if (doc.userOid && doc.userOid !== userOid) throw new Error('forbidden');
+  // POSITIVE ownership match (#3943): a doc with no `userOid` is refused rather
+  // than waved through by a short-circuiting `doc.userOid && ...`. Every writer
+  // to this container stamps `userOid`, and `listSessions` selects on it, so an
+  // ownerless doc is already unreachable through the UI.
+  if (!doc.userOid || doc.userOid !== userOid) throw new Error('forbidden');
   if (typeof patch.title === 'string') doc.title = patch.title.slice(0, 200);
   if (typeof patch.pinned === 'boolean') doc.pinned = patch.pinned;
   doc.updatedAt = new Date().toISOString();

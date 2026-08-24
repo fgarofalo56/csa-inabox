@@ -40,7 +40,10 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string 
       const c = await copilotSessionsContainer();
       const { resource } = await c.item(convId, sid(agentId, convId)).read<any>();
       if (!resource) return NextResponse.json({ ok: false, error: 'not found' }, { status: 404 });
-      if (resource.userOid && resource.userOid !== userOid) return NextResponse.json({ ok: false, error: 'forbidden' }, { status: 403 });
+      // POSITIVE ownership match (#3943): an absent `userOid` is refused, not
+      // short-circuited into a pass. The list query below already requires
+      // `c.userOid = @u`, so an ownerless conversation was never listable.
+      if (!resource.userOid || resource.userOid !== userOid) return NextResponse.json({ ok: false, error: 'forbidden' }, { status: 403 });
       return NextResponse.json({ ok: true, conversation: { id: resource.id, title: resource.title, messages: resource.messages, updatedAt: resource.updatedAt } });
     } catch (e: any) {
       if (e?.code === 404) return NextResponse.json({ ok: false, error: 'not found' }, { status: 404 });
@@ -99,9 +102,12 @@ export async function DELETE(req: NextRequest, ctx: { params: Promise<{ id: stri
   if (!convId) return NextResponse.json({ ok: false, error: 'conversationId required' }, { status: 400 });
   try {
     const c = await copilotSessionsContainer();
-    // Verify ownership before delete (partition key = sessionId).
+    // Verify ownership before delete (partition key = sessionId). POSITIVE match
+    // (#3943): an existing doc with no `userOid` is refused, not deleted by
+    // whoever asks. A MISSING doc stays idempotent — the delete below 404s and
+    // the catch returns { ok: true }, which is the pre-existing contract.
     const { resource } = await c.item(convId, sid(agentId, convId)).read<any>();
-    if (resource && resource.userOid && resource.userOid !== userOf(s)) {
+    if (resource && (!resource.userOid || resource.userOid !== userOf(s))) {
       return NextResponse.json({ ok: false, error: 'forbidden' }, { status: 403 });
     }
     await c.item(convId, sid(agentId, convId)).delete();
