@@ -16,6 +16,12 @@
  *
  * Emitted outputs:
  *   deploy_sub            subscription the deploy targets ('' = the login sub)
+ *   topology              resolved topology ('' -> 'tenant'); never the raw
+ *                         input, which is empty on every `schedule` event
+ *   target_sub            literal subscription id this deploy lands in; NEVER
+ *                         empty on a proceed -- the guard refuses instead
+ *                         (#3916). Distinct from deploy_sub, whose '' is
+ *                         meaningful.
  *   purview_enabled, azure_maps_enabled, firewall_enabled,
  *   deploy_apps_enabled, skip_role_grants, front_door_enabled
  *                         resolved bicep bools -- NEVER the empty string, which
