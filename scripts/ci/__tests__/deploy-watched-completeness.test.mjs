@@ -366,8 +366,15 @@ test('ATOMICITY: IL5 is registered AND its run-name carries the marker — neith
 // ── THE IMPORT EDGE, KEYED TO THE SHAPE RATHER THAN THE NAME (#3786) ────────
 
 /**
- * Relative `import`s a module declares, resolved to repo-relative paths.
- * Only static `from '…'` specifiers — a dynamic import cannot be resolved
+ * Relative module specifiers a module declares, resolved to repo-relative paths.
+ *
+ * Covers `import … from '…'`, `export … from '…'` and bare `import '…'`, in
+ * BOTH quote styles. The first version matched single quotes only — review
+ * added a real, loadable module with a DOUBLE-quoted specifier and the guard
+ * stayed green, i.e. the check written to replace one keyed to a spelling was
+ * itself keyed to a narrower spelling.
+ *
+ * Static specifiers only. A dynamic `import(expr)` cannot be resolved
  * statically, and pretending otherwise would be a guard that measures nothing.
  */
 function relativeImportsOf(repoRelFile) {
@@ -375,9 +382,10 @@ function relativeImportsOf(repoRelFile) {
   if (!existsSync(abs)) return [];
   const src = readFileSync(abs, 'utf8');
   const out = [];
-  for (const m of src.matchAll(/from\s+'(\.[^']+)'/g)) {
+  const specifier = /(?:\bfrom\s*|\bimport\s*)(['"])(\.[^'"]+)\1/g;
+  for (const m of src.matchAll(specifier)) {
     const resolved = path
-      .relative(REPO, path.resolve(path.dirname(abs), m[1]))
+      .relative(REPO, path.resolve(path.dirname(abs), m[2]))
       .split(path.sep)
       .join('/');
     out.push(resolved);
@@ -450,4 +458,14 @@ test('EVERY module a watched deploy script IMPORTS is itself watched', () => {
   // The baseline must SHRINK, never linger past its usefulness.
   const stale = KNOWN_UNWATCHED_EDGES.filter((k) => !misses.includes(k));
   assert.deepEqual(stale, [], `these baseline entries are FIXED — delete them:\n${stale.join('\n')}`);
+
+  // …and it must not GROW. Without this the ratchet only turns one way in
+  // principle: review grew the array by four entries in a single edit and every
+  // gate stayed green, because the enforcement was entirely in the shrink half.
+  // The cited precedent (check-platform-runs-it-not-you.mjs) has the same gap;
+  // matching prior art is not a reason to inherit the hole.
+  assert.ok(
+    KNOWN_UNWATCHED_EDGES.length <= 5,
+    `the debt baseline grew to ${KNOWN_UNWATCHED_EDGES.length}; it is a ratchet, so watch the new edge instead of listing it`,
+  );
 });

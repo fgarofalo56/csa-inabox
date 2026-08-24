@@ -60,9 +60,22 @@
  * `GatewayTimeout` is covered by the shared idiom — but the ARM codes are listed
  * explicitly anyway, because a classifier that only works by accident is one
  * reword away from not working.
+ *
+ * THE NUMERIC ALTERNATION IS ANCHORED (#4013 review, F1). It used to be
+ * `\b(429|500|502|503|504)\b`, and `\b` treats `-` as a boundary — so a REAL
+ * denial over a resource group named `rg-loom-503` matched TRANSIENT, and
+ * because TRANSIENT was tested before DENIED the step then told the operator
+ * "not the deploy identity" about an `AuthorizationFailed`. That is R7 with the
+ * sign flipped, and on that one input the hardcoded message this file replaced
+ * was RIGHT. Latent on today's hub names, reachable on the customer-named
+ * brownfield resource groups `deploy-integrity.md` R5 makes first-class.
+ *
+ * `(?<![\w-])…(?![\w-])` requires the status to be a standalone token, so
+ * `502 Bad Gateway`, `(503)` and `status code: 429` still match while
+ * `rg-loom-503`, `weave-503-x` and a GUID segment like `-503a-` do not.
  */
 export const TRANSIENT =
-  /\b(429|500|502|503|504)\b|too many requests|timed? ?out|temporarily unavailable|connection (reset|aborted)|ServiceUnavailable|GatewayTimeout|RequestTimeout|SubscriptionRequestsThrottled|TooManyRequests/i;
+  /(?<![\w-])(429|500|502|503|504)(?![\w-])|too many requests|timed? ?out|temporarily unavailable|connection (reset|aborted)|ServiceUnavailable|GatewayTimeout|RequestTimeout|SubscriptionRequestsThrottled|TooManyRequests/i;
 
 /**
  * Signals that the CALLER was refused. This is an UNKNOWN answer about the
@@ -88,25 +101,39 @@ export const NOT_FOUND = /ResourceNotFound|ResourceGroupNotFound|ParentResourceN
 /**
  * PURE. Classify an `az` failure into one of the things it can mean.
  *
- * ORDER IS LOAD-BEARING. CAPACITY is tested BEFORE TRANSIENT because some SKU
- * exhaustion messages are worded "temporarily unavailable", which TRANSIENT
- * matches — and retrying a region that is out of capacity for 90s produces a
- * misleading "transient, gave up" story instead of the real one. DENIED is
- * tested before NOT_FOUND for the reason `_arm-absence.mjs` documents: a denial
- * that mentions a resource name must never be read as absence.
+ * ORDER IS LOAD-BEARING, and it is ordered by how DEFINITE each signal is: an
+ * explicit ARM error code beats a phrase that can appear incidentally anywhere
+ * in a long message (a status-shaped number, "temporarily unavailable", "could
+ * not be found"). Every one of these orderings has a discriminating fixture in
+ * estate-preflight.test.mjs — an ordering that is load-bearing and untested is
+ * the same defect class as the hardcoded remediation this file exists to end,
+ * and all three escaped a mutation before those fixtures were added.
  *
- * `unknown` is deliberately its own outcome. Reporting an unclassified failure
- * as any of the named causes is the R7 violation this file exists to end.
+ *  1. DENIED   — a refusal is NEVER resolved by a retry, and it is the one class
+ *                where getting it wrong tells the operator the opposite of the
+ *                truth. `LinkedAuthorizationFailed … could not be found` is a
+ *                denial, not an absence (that input flips if NOT_FOUND wins).
+ *  2. CAPACITY — explicit codes. `SkuNotAvailable … temporarily unavailable` is
+ *                capacity, not transient (that input flips if TRANSIENT wins),
+ *                and retrying a region that is out of capacity for 50s produces
+ *                a misleading "transient, gave up" story instead of the real one.
+ *  3. NOT_FOUND— explicit ARM absence codes.
+ *  4. TRANSIENT— last, because it is the class whose signals are most easily
+ *                produced incidentally by surrounding text.
+ *
+ * `unknown` is deliberately its own outcome, and an EMPTY stderr must reach it:
+ * a failure that said nothing establishes nothing. Reporting an unclassified
+ * failure as any of the named causes is the R7 violation this file exists to end.
  *
  * @param {string} stderr raw stderr from a FAILED `az` invocation
  * @returns {'capacity'|'transient'|'denied'|'notfound'|'unknown'}
  */
 export function classifyAzFailure(stderr) {
   const s = String(stderr ?? '');
-  if (CAPACITY.test(s)) return 'capacity';
-  if (TRANSIENT.test(s)) return 'transient';
   if (DENIED.test(s)) return 'denied';
+  if (CAPACITY.test(s)) return 'capacity';
   if (NOT_FOUND.test(s)) return 'notfound';
+  if (TRANSIENT.test(s)) return 'transient';
   return 'unknown';
 }
 
@@ -131,10 +158,12 @@ export function remediationFor(kind, scopeId, attempts = 0) {
   switch (kind) {
     case 'transient':
       return (
-        `az reported a TRANSIENT failure and it did not clear after ${attempts} attempt(s). ` +
-        'Nothing is wrong with the configuration that this step can see — ARM simply did not complete ' +
-        'the call. Re-run this workflow. If it repeats across runs, the Azure service health of the ' +
-        'Kusto RP in this region is the thing to check, not the deploy identity.'
+        `az did not complete the call in ${attempts} attempt(s), and the last failure carried a ` +
+        'transient signal (the raw error below is what it said). Re-run this workflow. ' +
+        'THE LIMIT OF WHAT THIS ESTABLISHES: the call did not complete. This step did not test ' +
+        "the deploy identity's permissions, the SKU's capacity, or the resource's existence, so " +
+        'none of those is ruled out — if a re-run fails the same way, read the raw error rather ' +
+        'than assuming the cause is Azure-side.'
       );
     case 'denied':
       return (

@@ -54,9 +54,13 @@
  *
  * ── ROUND 2 (#3786): A TRANSIENT ARM BLIP TOOK THE WHOLE DEPLOY DOWN ────────
  *
- * Every `az` call here used to be single-shot, and every failure message
- * hard-coded a PERMISSIONS remediation regardless of what az actually said.
- * Both halves were wrong, and both were measured on 2026-08-24:
+ * Every `az` call here used to be single-shot, and the az-driven failure messages
+ * led with a PERMISSIONS remediation regardless of what az actually said.
+ * MEASURED in the base: 8 `fail()` call sites in the I/O shell, of which 4 are
+ * az-failure-driven; the enumeration site was already conditional (the #3754
+ * fix), two led with permissions unconditionally, and the poll site offered no
+ * remediation at all. Both halves were wrong, and both were measured on
+ * 2026-08-24:
  *
  *   deploy-fiab-commercial run 32700023215 — the per-cluster read returned
  *   `(GatewayTimeout)`. A transient ARM failure, retryable, nothing to fix. The
@@ -76,12 +80,26 @@
  * remediation is derived from the classified cause rather than assumed (R7).
  *
  * The step's old error text also asserted that this leaf "has failed every
- * GCC-High deploy since 2026-08-15". MEASURED at step level across 30 gcch runs
- * and 25 commercial runs, that is FALSE — see the PR for the table. The gcch
- * failures from 08-15 to 08-18 were `Provision (with full Gov dispatch)` and
- * from 08-19 to 08-22 were `Bicep what-if`; this leaf first failed anything on
- * 2026-08-22T20:06Z. A failure history asserted in a string, never re-measured,
- * is the same class of defect as a cause asserted in a string.
+ * GCC-High deploy since 2026-08-15". That sentence is REMOVED — but NOT because
+ * it was false. MEASURED at the ARM leaf across the 8 gcch runs from 2026-08-15
+ * to 2026-08-22T10:12Z, `ClusterNotValidForPrincipals … Cluster is in state
+ * 'Stopped'` is present as real timestamped run output in 8 of 8 (zero of those
+ * hits are echoed script). On the reading this file's own header supplies at the
+ * top, the sentence was TRUE for that whole window.
+ *
+ * It is removed because a failure STATISTIC embedded in an error string rots.
+ * It cannot be re-measured by the code that prints it, it silently ages (this
+ * leaf stopped failing gcch after 2026-08-22, so the sentence was already
+ * describing a closed window), and a stale count in a live error misdirects the
+ * next investigation. The run history belongs in the run history, where it can
+ * be re-measured; the error's job is to say what THIS invocation established.
+ *
+ * A NOTE ON MEASURING IT, because the first attempt got this wrong: the failing
+ * WORKFLOW STEP and the failing ARM LEAF are different things. Step-level, those
+ * same 8 runs died at `Provision (with full Gov dispatch)` (08-15..08-18) and
+ * `Bicep what-if` (08-19..08-22) — this preflight step did not exist on the lane
+ * for most of that window. Both measurements are correct; they answer different
+ * questions, and a step-level count does not refute a leaf-level claim.
  *
  * Usage:
  *   node scripts/ci/ensure-adx-cluster-running.mjs \
@@ -488,6 +506,14 @@ function main() {
       }
       console.log(`[adx-preflight] ${name}: ${step.reason} — waiting ${POLL_INTERVAL_SECONDS}s.`);
       sleepSeconds(POLL_INTERVAL_SECONDS);
+      // KNOWN CEILING REGRESSION, tracked in #4023 rather than left silent.
+      // This counts only the poll sleeps, so the retry sleeps a failing
+      // readState can now add (up to 50s per poll) are NOT charged to the
+      // budget: the worst case moves from 60x30s=30min to 60x80s=~80min against
+      // a stated 1800s, inside a job whose timeout-minutes is 90. It still fails
+      // closed, but at the ceiling the JOB times out instead of this step
+      // classifying — which is the opposite of R6. The fix is to derive elapsed
+      // from Date.now(); it is deliberately not bundled into the P0 truth fix.
       elapsed += POLL_INTERVAL_SECONDS;
     }
   }
