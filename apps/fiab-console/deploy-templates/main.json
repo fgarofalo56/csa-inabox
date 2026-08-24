@@ -6,7 +6,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.45.15.27210",
-      "templateHash": "15953008146256069085"
+      "templateHash": "16359908288920049242"
     }
   },
   "definitions": {
@@ -2150,6 +2150,9 @@
             "value": "[parameters('location')]"
           },
           "boundary": {
+            "value": "[parameters('boundary')]"
+          },
+          "loomCloudTier": {
             "value": "[parameters('boundary')]"
           },
           "loomAzureCloud": {

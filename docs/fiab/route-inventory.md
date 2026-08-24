@@ -13,11 +13,11 @@ verdict is DERIVED, not name-matched — see "How the owner column is decided".
 
 | Metric | Count |
 | --- | ---: |
-| Total routes | 1681 |
+| Total routes | 1684 |
 | Public (no session) | 58 |
 | Session-only | 646 |
 | Owner-scoped | 677 |
-| Admin | 300 |
+| Admin | 303 |
 | Unknown (generator fails) | 0 |
 | Gated (backend config) | 496 |
 | Areas | 122 |
@@ -248,6 +248,9 @@ dispatch is invisible to it. Full limits: `scripts/ci/_route-backends.mjs`.
 | `admin/dspm-ai/route.ts` | GET | admin | ● | Cosmos, Log Analytics, Microsoft Graph |
 | `admin/embed-codes/route.ts` | GET POST DELETE | admin | ● | ADLS, ARM, Azure Storage, Cosmos, Managed Identity |
 | `admin/env-config/route.ts` | GET PUT | admin |  | ADLS, AKS, ARM, Azure Monitor, Container Apps, Cosmos, Microsoft Graph |
+| `admin/estate/pause/route.ts` | POST | admin |  | AAS, ADX, ARM, Azure Monitor, Azure SQL, Compute, Cosmos, Managed Identity, Synapse, Synapse SQL |
+| `admin/estate/resume/route.ts` | POST | admin |  | ARM, Azure Monitor, Azure SQL, Cosmos, Managed Identity, Synapse SQL |
+| `admin/estate/state/route.ts` | GET | admin |  | AAS, ADX, ARM, Azure SQL, Compute, Cosmos, Managed Identity, Synapse, Synapse SQL |
 | `admin/feedback-forwarding/route.ts` | GET PUT | admin |  | Cosmos |
 | `admin/finops/anomalies/route.ts` | GET PUT DELETE | admin |  | ARM, Azure Cache for Redis, Azure Monitor, Cosmos, Cost Management |
 | `admin/finops/breakdown/route.ts` | GET | admin |  | ARM, Azure Cache for Redis, Cosmos, Cost Management |
@@ -2515,7 +2518,7 @@ silently downgrading the route.
 
 ## Backend signals (derived)
 
-439 module(s) ORIGINATE a backend label — the derivation read an
+440 module(s) ORIGINATE a backend label — the derivation read an
 Azure identifier out of them. Every other route/module below inherits through the
 call graph. Nothing in this section is a Loom module name someone typed: the
 modules are derived, and only the Microsoft-owned identifier vocabulary is seeded.
@@ -3148,6 +3151,7 @@ caps the NUMBER of cuts at three; it does not bound what one cut can hide.
 | `apps/fiab-console/lib/editors/synapse-spark-editor.tsx` | ADLS |
 | `apps/fiab-console/lib/editors/tapestry-editor.tsx` | Azure Maps |
 | `apps/fiab-console/lib/editors/unified-sql-database-editor.tsx` | Azure Networking, Azure SQL, PostgreSQL |
+| `apps/fiab-console/lib/estate/pause-orchestrator.ts` | AAS, ADX, Compute, Synapse |
 | `apps/fiab-console/lib/gates/registry/azure-services.ts` | Cost Management |
 | `apps/fiab-console/lib/gates/registry/data-plane.ts` | Azure RBAC |
 | `apps/fiab-console/lib/gates/registry/types.ts` | AAS, ADF, ADX, AI Search, AML, APIM, Azure AI Services, Azure Maps, Azure SQL, Azure Storage, Batch, Container Apps, Cosmos, Databricks, Event Hubs, Key Vault, Log Analytics, PostgreSQL, Purview, Service Bus, Synapse |

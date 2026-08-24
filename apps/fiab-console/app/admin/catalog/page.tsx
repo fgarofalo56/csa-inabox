@@ -59,7 +59,7 @@ import {
 } from '@fluentui/react-components';
 import {
   ArrowSync20Regular, Copy20Regular, DatabaseLink20Regular, Layer20Regular,
-  CheckmarkCircle20Filled, PlugConnected20Regular, ShieldKeyhole20Regular, Search20Regular,
+  CheckmarkCircle20Filled, ErrorCircle20Filled, PlugConnected20Regular, ShieldKeyhole20Regular, Search20Regular,
 } from '@fluentui/react-icons';
 import { AdminShell } from '@/lib/components/admin-shell';
 import { TileGrid } from '@/lib/components/ui/tile-grid';
@@ -421,8 +421,19 @@ export default function AdminCatalogPage() {
           <div className={s.head}>
             <PlugConnected20Regular />
             <Subtitle2>Iceberg REST Catalog endpoint</Subtitle2>
+            {/* #3673/#3746 — this badge used to read ONLY `catalog.configured`,
+                so a catalog that is CONFIGURED but UNREACHABLE rendered a green
+                ✓ Live directly above the red "Catalog unreachable — HTTP 403"
+                MessageBar. `configured` means "a URL is set", which is a fact
+                about config, not about reachability; the badge claimed the
+                latter. Federation/security triage reads this badge first, so the
+                contradiction pointed investigations away from the real 403. */}
             {q.data?.catalog.configured ? (
-              <Badge appearance="filled" color="success" icon={<CheckmarkCircle20Filled />}>Live</Badge>
+              q.data.catalog.error ? (
+                <Badge appearance="filled" color="danger" icon={<ErrorCircle20Filled />}>Unreachable</Badge>
+              ) : (
+                <Badge appearance="filled" color="success" icon={<CheckmarkCircle20Filled />}>Live</Badge>
+              )
             ) : (
               <Badge appearance="tint" color="informative">Direct-metadata mode</Badge>
             )}

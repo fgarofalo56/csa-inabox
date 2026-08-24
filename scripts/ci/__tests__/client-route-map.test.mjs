@@ -17,6 +17,12 @@
  *   - drop the Extract<> clause              -> the query-suffix test goes RED
  *   - remove stripComments() from the guard  -> the self-documentation test RED
  *   - drop the backtick-overlap skip         -> the template test goes RED
+ *   - `--check` never reports STALE          -> the drift-gate test goes RED
+ *   - `--check` stops watching only the .d.ts -> the drift-gate test goes RED
+ *   - a SINGLE violation stops failing       -> the planted-route test RED
+ *   - classifyPath fails open on EITHER of its two `unknown` returns -> RED
+ *     (the template-branch one at :115 was NOT covered before; mutating it
+ *      alone left this suite at RC=0, pass=15, fail=0)
  *
  * Run: node --test scripts/ci/__tests__/client-route-map.test.mjs
  */
@@ -36,10 +42,152 @@ import {
 } from '../check-known-client-routes.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
+const CI_DIR = path.resolve(HERE, '..');
 const REPO_ROOT = path.resolve(HERE, '..', '..', '..');
 const CONSOLE_ROOT = path.join(REPO_ROOT, 'apps', 'fiab-console');
 const GEN = path.resolve(HERE, '..', 'generate-client-route-map.mjs');
 const GUARD = path.resolve(HERE, '..', 'check-known-client-routes.mjs');
+
+// ── fail-closed proofs run against a FIXTURE, never against the tracked tree ─
+
+/**
+ * Is `target` inside the repo tree?
+ *
+ * `path.relative()`, not `startsWith(REPO_ROOT + path.sep)`: a prefix test is
+ * case-SENSITIVE and NTFS is not, so a lower-cased in-tree path slips straight
+ * through one. Duplicated (small, pure) in the two sibling suites that write
+ * mutant copies rather than shared through a new module, because a non-suite
+ * `.mjs` in this directory has its own conventions to satisfy.
+ */
+function insideRepo(target) {
+  const canon = (p) => {
+    try { return fs.realpathSync.native(p); } catch { return path.resolve(p); }
+  };
+  const abs = path.resolve(target);
+  const canonAbs = path.join(canon(path.dirname(abs)), path.basename(abs));
+  const rel = path.relative(canon(REPO_ROOT), canonAbs);
+  return rel !== '' && rel !== '..' && !rel.startsWith(`..${path.sep}`) && !path.isAbsolute(rel);
+}
+
+/**
+ * mkdtemp under the system temp root, having first proved it is out of tree.
+ *
+ * The join stays INSIDE the mkdtempSync call: check-temp-artifact-safety.mjs
+ * reads line by line, so a hoisted `path.join(os.tmpdir(), …)` reads to it as a
+ * constant shared-temp path with no mkdtemp.
+ */
+function scratch(prefixName) {
+  const outOfTree = (prefix) => {
+    assert.ok(!insideRepo(`${prefix}probe`), `the scratch root ${prefix} is inside the repo tree`);
+    return prefix;
+  };
+  return fs.mkdtempSync(outOfTree(path.join(os.tmpdir(), prefixName)));
+}
+
+/**
+ * Copy a `scripts/ci` script to a temp directory with its repo-anchored
+ * constants REDIRECTED at a fixture console root.
+ *
+ * ── WHY THIS EXISTS (the #3459 / #3892 class, quiet variant) ───────────────
+ * The two fail-closed proofs below used to EDIT A TRACKED FILE IN PLACE for
+ * the duration of a spawn and restore it in `t.after()` —
+ * `apps/fiab-console/lib/api-routes.generated.d.ts` and
+ * `apps/fiab-console/lib/client-fetch.ts`. Both sit under a SCAN_ROOT of
+ * `scripts/ci/check-role-guid-consistency.mjs`; `lib` is not in its SKIP_DIR
+ * and neither filename matches its SKIP_FILE; and the two suites are
+ * co-scheduled in the same `node --test` invocation. Measured with a
+ * concurrent reader while this suite ran, three runs of the pre-rewrite
+ * version:
+ *
+ *     api-routes.generated.d.ts   145-247 of 5565-6233 raced reads NOT the
+ *                                 committed content (2.6-4.0%), 0 errors
+ *     client-fetch.ts             2559-2601 of the same (41.1-46.7%), 0 errors
+ *
+ * ZERO errors is the whole point. The sibling suite's ENOENT/EPERM tolerance
+ * never fires, nothing is recorded as vanished, and the scanner silently
+ * harvests mutated content. That is the QUIET form of the defect #3912 fixed
+ * loudly for the two transient `.__control__.mjs` writers — and quiet is
+ * worse, because nothing goes red. After this rewrite, over 3326 raced reads:
+ * 0 deviations on both files.
+ *
+ * The comment that used to sit on the second test said: "There is no
+ * create/delete window here, so no such race is possible." The first clause is
+ * true and the second does not follow — no ENOENT window is not no race. R7.
+ *
+ * ── WHY A REDIRECTED COPY RATHER THAN AN IN-PROCESS CALL ───────────────────
+ * `check-known-client-routes.mjs` exports `scan(root, mapPath)` and would take
+ * a fixture root directly, but calling it drops what these proofs are actually
+ * about: the process EXIT CODE and the stderr wording, both of which live in
+ * `main()`. So the script is copied and only its root constants move.
+ *
+ * Every rewrite asserts it matched EXACTLY ONCE, so a constant that is renamed
+ * or moved fails loudly here instead of yielding a copy that silently still
+ * points at the real tree — which would put these proofs straight back on the
+ * tracked files they were moved off, with no red anywhere.
+ *
+ * `__dirname` is redirected at the REAL `scripts/ci` on purpose:
+ * check-known-client-routes.mjs imports its sibling generator through it to
+ * decide between "the map is stale" and "the route does not exist", and a copy
+ * that could not resolve that import would take a different reporting branch
+ * than the shipped script takes.
+ */
+function redirectedScript(scriptName, consoleRoot) {
+  let out = fs.readFileSync(path.join(CI_DIR, scriptName), 'utf8');
+  const rewrites = [
+    ['const __dirname = path.dirname(fileURLToPath(import.meta.url));',
+      `const __dirname = ${JSON.stringify(CI_DIR)};`],
+    ["const CONSOLE_ROOT = path.join(REPO_ROOT, 'apps', 'fiab-console');",
+      `const CONSOLE_ROOT = ${JSON.stringify(consoleRoot)};`],
+  ];
+  for (const [find, repl] of rewrites) {
+    const n = out.split(find).length - 1;
+    assert.equal(
+      n, 1,
+      `redirecting ${scriptName}: expected exactly ONE occurrence of \`${find}\`, found ${n}. The constant `
+        + 'moved or was renamed, and a copy that still points at the real tree would put this proof back on '
+        + 'the tracked files it was moved off.',
+    );
+    out = out.split(find).join(repl);
+  }
+  // Same discipline as the two sibling suites: a relative specifier left in the
+  // copy would resolve against the TEMP directory and die with
+  // ERR_MODULE_NOT_FOUND instead of measuring anything.
+  assert.doesNotMatch(
+    out, /\b(?:from|import)\s*\(?\s*['"]\.{1,2}\//,
+    `${scriptName} now has a relative import; rewrite it to an absolute file: URL before copying, or the `
+      + 'copy will fail to load rather than fail closed.',
+  );
+  const dir = scratch('loom-route-script-');
+  const file = path.join(dir, scriptName);
+  fs.writeFileSync(file, out);
+  return { dir, file };
+}
+
+/**
+ * A minimal console tree: `app/api/**\/route.ts` + an empty `lib/`.
+ *
+ * `count` static routes plus two dynamic ones — main() refuses to write a map
+ * of fewer than 100 routes (fail-closed on a broken discovery), so a fixture
+ * below that floor would prove the wrong thing, and renderDts() emits separate
+ * static and dynamic unions, so a fixture with no dynamic route would exercise
+ * only half of it.
+ */
+function consoleFixture(count = 120) {
+  const root = scratch('loom-route-fixture-');
+  const api = path.join(root, 'app', 'api');
+  fs.mkdirSync(path.join(root, 'lib'), { recursive: true });
+  for (let i = 0; i < count; i += 1) {
+    const dir = path.join(api, 'loom', `probe${String(i).padStart(3, '0')}`);
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, 'route.ts'), 'export const GET = () => new Response();\n');
+  }
+  for (const dyn of [['items', '[type]'], ['delta-sharing', '[...path]']]) {
+    const dir = path.join(api, ...dyn);
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, 'route.ts'), 'export const GET = () => new Response();\n');
+  }
+  return root;
+}
 
 // ── generator: filesystem → URL pattern ──────────────────────────────────────
 
@@ -93,30 +241,84 @@ test('the generated artifacts are in sync with app/api (--check drift gate)', ()
   assert.equal(r.status, 0, `route map is stale — run: node scripts/ci/generate-client-route-map.mjs\n${r.stdout}${r.stderr}`);
 });
 
-test('the drift gate FAILS when the generated map is stale', (t) => {
-  const dts = path.join(CONSOLE_ROOT, 'lib', 'api-routes.generated.d.ts');
-  const original = fs.readFileSync(dts, 'utf8');
-  t.after(() => fs.writeFileSync(dts, original));
+test('the drift gate FAILS when the generated map is stale', () => {
+  // Against a FIXTURE console tree, not the tracked one. See redirectedScript()
+  // for the measured reason: this test used to rewrite
+  // apps/fiab-console/lib/api-routes.generated.d.ts in place while a sibling
+  // suite was reading that same tree, and 2.6-4.0% of a concurrent reader's
+  // raced reads saw content that is not what is committed — with ZERO errors,
+  // so nothing went red anywhere.
+  const fixture = consoleFixture();
+  const gen = redirectedScript('generate-client-route-map.mjs', fixture);
+  try {
+    const run = (...args) => spawnSync(process.execPath, [gen.file, ...args], { cwd: REPO_ROOT, encoding: 'utf8' });
 
-  // `\r?\n`, never a bare `\n`. The generated file is committed with LF but
-  // git checks it out CRLF on Windows (`core.autocrlf`), so an LF-only needle
-  // matched NOTHING: `replace` returned the input unchanged, the file was
-  // rewritten byte-identical, and this test then demanded the gate fail at a
-  // staleness that had never been introduced. The gate was right; the proof
-  // was broken — `--check` normalises line endings before comparing (`norm`),
-  // which is exactly why the drift gate itself stayed green on the same tree.
-  const mutated = original.replace(/ {2}\| '\/api\/loom\/workspaces'\r?\n/, '');
+    // 1. Generate the fixture's artifacts.
+    let r = run();
+    assert.equal(r.status, 0, `the generator failed on the fixture:\n${r.stdout}${r.stderr}`);
+    const dts = path.join(fixture, 'lib', 'api-routes.generated.d.ts');
 
-  // The mutation must be CONFIRMED, not assumed. A mutation-based proof whose
-  // mutation silently no-ops is the "gate that measures nothing" shape: every
-  // assertion below would still run, against an unmodified file. This line is
-  // what makes the decay loud instead of platform-dependent.
-  assert.notEqual(mutated, original, 'the staleness mutation did not land — this proof would assert nothing');
-  fs.writeFileSync(dts, mutated);
+    //    READ it — do not existsSync() it and write it later.
+    //
+    //    `existsSync(dts)` here plus `writeFileSync(dts, …)` below is a
+    //    check-then-use on one path across two spawns: CodeQL js/file-system-race
+    //    (alert 982, high, on this PR's merge ref), and a HONEST one rather than
+    //    a false positive to dismiss. This suite exists because a sibling suite
+    //    raced a file between a listing and a read; asserting a path exists and
+    //    then acting on it two subprocesses later is that same shape one level
+    //    down, in the file whose header argues the point. Dismissing the alert
+    //    would have been the cheaper move and the wrong one.
+    //
+    //    The read is its own existence proof and carries the same information:
+    //    a generator still pointed at the real tree wrote nothing here, so this
+    //    throws ENOENT — the exact condition the assertion reported — with no
+    //    window between establishing the fact and relying on it. `--check` does
+    //    not write (it process.exit()s at generate-client-route-map.mjs:248,
+    //    before the two writeFileSync calls at :263-264), so reading BEFORE the
+    //    positive control below sees the same bytes step 3 mutates.
+    let original;
+    try {
+      original = fs.readFileSync(dts, 'utf8');
+    } catch (err) {
+      assert.fail(
+        'the generator wrote nothing into the fixture — it is still pointed at the real tree '
+          + `(${err.code} reading ${dts})`,
+      );
+    }
 
-  const r = spawnSync(process.execPath, [GEN, '--check'], { cwd: REPO_ROOT, encoding: 'utf8' });
-  assert.equal(r.status, 1, 'a stale map must fail the drift gate');
-  assert.match(r.stderr, /STALE/);
+    // 2. POSITIVE CONTROL, which the in-place version of this test never had:
+    //    --check must be GREEN on what it just wrote. Without it, step 3's red
+    //    could equally mean "the fixture never matched in the first place".
+    r = run('--check');
+    assert.equal(r.status, 0, `--check must pass on a freshly generated map:\n${r.stdout}${r.stderr}`);
+
+    // 3. Now make it stale.
+    //
+    //    `\r?\n`, never a bare `\n`. The generated file is committed with LF but
+    //    git checks it out CRLF on Windows (`core.autocrlf`), so an LF-only
+    //    needle matched NOTHING: `replace` returned the input unchanged, the
+    //    file was rewritten byte-identical, and this test then demanded the gate
+    //    fail at a staleness that had never been introduced. The gate was right;
+    //    the proof was broken — `--check` normalises line endings before
+    //    comparing (`norm`), which is exactly why the drift gate itself stayed
+    //    green on the same tree.
+    const mutated = original.replace(/ {2}\| '\/api\/loom\/probe050'\r?\n/, '');
+
+    //    The mutation must be CONFIRMED, not assumed. A mutation-based proof
+    //    whose mutation silently no-ops is the "gate that measures nothing"
+    //    shape: every assertion below would still run, against an unmodified
+    //    file. This line is what makes the decay loud instead of
+    //    platform-dependent.
+    assert.notEqual(mutated, original, 'the staleness mutation did not land — this proof would assert nothing');
+    fs.writeFileSync(dts, mutated);
+
+    r = run('--check');
+    assert.equal(r.status, 1, `a stale map must fail the drift gate\n${r.stdout}${r.stderr}`);
+    assert.match(r.stderr, /STALE/);
+  } finally {
+    fs.rmSync(gen.dir, { recursive: true, force: true });
+    fs.rmSync(fixture, { recursive: true, force: true });
+  }
 });
 
 // ── R17 guard ────────────────────────────────────────────────────────────────
@@ -132,6 +334,12 @@ test('classifyPath: exact routes ok, typos unknown, computed skipped', () => {
   assert.equal(classifyPath('https://example.com/api/x', false, map, pre), 'skip');
   // A template prefix that is a proper static prefix of a real route.
   assert.equal(classifyPath('/api/items/', true, map, pre), 'ok');
+  // …and one that is NOT. Added because the TEMPLATE branch's `unknown` return
+  // is a separate line from the non-template one (`check-known-client-routes
+  // .mjs:115` vs `:101`), and nothing here covered it: mutating ONLY line 115
+  // to `return 'ok'` left this suite at RC=0, pass=15, fail=0. A template call
+  // naming a route prefix that exists nowhere was silently accepted.
+  assert.equal(classifyPath('/api/nope/nope/', true, map, pre), 'unknown', 'a template prefix matching no route is unknown');
 });
 
 test('extractCallPaths does NOT double-read a backtick template as a plain literal', () => {
@@ -169,26 +377,53 @@ test('the R17 guard passes on the real tree and is NOT vacuous', () => {
   assert.ok(Number(m[1]) > 1000, `guard checked only ${m?.[1]} paths — discovery is probably broken`);
 });
 
-test('the R17 guard FAILS on a planted bad route (fail-closed)', (t) => {
-  // Edited IN PLACE rather than created-then-deleted. A probe file that appears
-  // and vanishes races every other guard that enumerates the tree and then reads
-  // each hit — `check-insecure-randomness.mjs` died with ENOENT exactly that way
-  // when a sibling suite in this directory used a create/delete probe, reddening
-  // a guard that had no stake in the change. There is no create/delete window
-  // here, so no such race is possible.
+test('the R17 guard FAILS on a planted bad route (fail-closed)', () => {
+  // Against a FIXTURE console tree, not the tracked one.
   //
-  // `lib/client-fetch.ts` is deliberately chosen: it IS in this guard's scope
-  // (lib/**), but it is NOT in the scope of no-bare-client-fetch or no-raw-px
-  // (lib/editors | lib/panes | lib/components + app page.tsx), so the transient
-  // bogus `fetch(...)` cannot make either of those fail if they run concurrently.
-  const victim = path.join(CONSOLE_ROOT, 'lib', 'client-fetch.ts');
-  const original = fs.readFileSync(victim, 'utf8');
-  t.after(() => fs.writeFileSync(victim, original));
+  // This test used to append a probe to `apps/fiab-console/lib/client-fetch.ts`
+  // in place for the duration of the spawn. Its comment argued that was safe
+  // because "there is no create/delete window here, so no such race is
+  // possible" — the first clause is true, the second does not follow, and
+  // measured, 41.1-46.7% of a concurrent reader's raced reads across three runs
+  // saw content that is not what is committed, with ZERO errors. No ENOENT
+  // window is not no race; it is a race that cannot be detected. See
+  // redirectedScript().
+  //
+  // The fixture's map is the REAL generated map, copied in: the guard must
+  // resolve against the same route universe the shipped one does, or "this
+  // route does not exist" would be true of the fixture rather than of the repo.
+  const fixture = consoleFixture(0);
+  const guard = redirectedScript('check-known-client-routes.mjs', fixture);
+  const probe = path.join(fixture, 'lib', 'probe.ts');
+  const good = "export const __ok = () => fetch('/api/loom/workspaces');\n";
+  const bad = "export const __probe = () => fetch('/api/this/route/does/not/exist');\n";
+  try {
+    fs.copyFileSync(
+      path.join(CONSOLE_ROOT, 'lib', 'api-routes.generated.json'),
+      path.join(fixture, 'lib', 'api-routes.generated.json'),
+    );
+    const run = () => spawnSync(process.execPath, [guard.file], { cwd: REPO_ROOT, encoding: 'utf8' });
 
-  fs.writeFileSync(victim, `${original}\nexport const __probe = () => fetch('/api/this/route/does/not/exist');\n`);
-  const r = spawnSync(process.execPath, [GUARD], { cwd: REPO_ROOT, encoding: 'utf8' });
-  assert.equal(r.status, 1, `guard must reject an unknown route\n${r.stdout}${r.stderr}`);
-  assert.match(r.stderr, /this\/route\/does\/not\/exist/);
+    // POSITIVE CONTROL first. The guard also exits 1 when it checked ZERO call
+    // paths, so a red on the planted route alone would not distinguish "it
+    // caught the bad route" from "the fixture was unreadable".
+    fs.writeFileSync(probe, good);
+    let r = run();
+    assert.equal(r.status, 0, `a clean fixture must PASS, or the red below proves nothing:\n${r.stdout}${r.stderr}`);
+    assert.match(r.stdout, /checked 1 client call paths/, r.stdout);
+
+    fs.writeFileSync(probe, good + bad);
+    r = run();
+    assert.equal(r.status, 1, `guard must reject an unknown route\n${r.stdout}${r.stderr}`);
+    assert.match(r.stderr, /this\/route\/does\/not\/exist/);
+    // The #3158 wording split: this route is absent from BOTH the map and the
+    // tree, so it must be reported as a route that does not exist — not as a
+    // stale map. Pinning the branch, not merely the substring.
+    assert.match(r.stderr, /name a BFF route that does not exist/, r.stderr);
+  } finally {
+    fs.rmSync(guard.dir, { recursive: true, force: true });
+    fs.rmSync(fixture, { recursive: true, force: true });
+  }
 });
 
 test('the R17 guard fails closed when the generated map is missing', () => {

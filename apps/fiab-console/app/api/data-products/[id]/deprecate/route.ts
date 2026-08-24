@@ -14,13 +14,14 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
-import { getSession } from '@/lib/auth/session';
 import { loadOwnedItem, updateOwnedItem, jerr } from '@/app/api/items/_lib/item-crud';
 import { upsertDataProductDoc, docForDataProduct } from '@/lib/azure/loom-data-products-search';
+import { resolveDataProductDocTenant } from '@/lib/dataproducts/owner-tenant';
 import { setLifecycleState, resolveLifecycleState } from '@/lib/dataproducts/lifecycle';
 import type { DeprecationRecord } from '@/lib/dataproducts/versioning';
 import { emitLoomEvent } from '@/lib/events/webhook-emitter';
 import { apiServerError } from '@/lib/api/respond';
+import { withSession } from '@/lib/api/route-toolkit';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -28,10 +29,17 @@ export const dynamic = 'force-dynamic';
 const ITEM_TYPE = 'data-product';
 const NOTICE_DAYS = [30, 60, 90];
 
-export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
-  const session = getSession();
-  if (!session) return jerr('unauthenticated', 401);
-  const { id } = await ctx.params;
+// Route-toolkit: `withSession` (R1/R3). Migrated by hand because the codemod's
+// AST allowlist only recognizes `apiUnauthorized()` / the literal envelope as
+// the 401 body, and this route spelled it `jerr('unauthenticated', 401)`. That
+// is the SAME value: `jerr(e, s)` → `apiError(e, s)`, and `apiUnauthorized()` is
+// defined as `apiError('unauthenticated', 401)` — byte-identical response.
+// `withWorkspaceOwner` is deliberately NOT used: its 404 is `apiNotFound()`
+// ("not found"), while this route returns "data-product item not found", so
+// adopting it would change a response body. The owner check stays inline and
+// unchanged.
+export const POST = withSession<{ id: string }>(async (req: NextRequest, { session, params }) => {
+  const { id } = params;
 
   const body = await req.json().catch(() => ({}));
   const action = String(body?.action || 'deprecate');
@@ -85,7 +93,11 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
         });
       } catch { /* notification is best-effort */ }
     }
-    try { await upsertDataProductDoc(docForDataProduct(updated, session.claims.oid)); } catch { /* derived */ }
+    try {
+      // #3501 — the OWNER's tenant, not the caller's (see owner-tenant.ts).
+      const ownerTid = await resolveDataProductDocTenant(updated);
+      if (ownerTid) await upsertDataProductDoc(docForDataProduct(updated, ownerTid));
+    } catch { /* derived */ }
 
     return NextResponse.json({
       ok: true,
@@ -95,4 +107,4 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
   } catch (e: any) {
     return apiServerError(e);
   }
-}
+});
