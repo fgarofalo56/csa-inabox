@@ -16,8 +16,8 @@ verdict is DERIVED, not name-matched — see "How the owner column is decided".
 | Total routes | 1686 |
 | Public (no session) | 58 |
 | Session-only | 647 |
-| Owner-scoped | 676 |
-| Admin | 305 |
+| Owner-scoped | 675 |
+| Admin | 306 |
 | Unknown (generator fails) | 0 |
 | Gated (backend config) | 496 |
 | Areas | 122 |
@@ -1235,7 +1235,7 @@ dispatch is invisible to it. Full limits: `scripts/ci/_route-backends.mjs`.
 | `items/azure-sql-database/[id]/firewall/route.ts` | GET POST DELETE | owner-scoped |  | ARM, Azure SQL, Cosmos, Microsoft Graph, PostgreSQL |
 | `items/azure-sql-database/[id]/get-data/route.ts` | POST | owner-scoped | ● | ADF, ARM, Azure SQL, Cosmos, Microsoft Graph, PostgreSQL, Resource Graph |
 | `items/azure-sql-database/[id]/maintenance-configs/route.ts` | GET | session-only |  | ARM, Azure Maintenance, Azure SQL |
-| `items/azure-sql-database/[id]/mirroring/route.ts` | POST | owner-scoped |  | ADF, ADLS, ARM, Azure Monitor, Azure SQL, Azure Storage, Cosmos, Managed Identity, Microsoft Graph, PostgreSQL, Resource Graph |
+| `items/azure-sql-database/[id]/mirroring/route.ts` | POST | owner-scoped |  | ADF, ADLS, ARM, Azure Monitor, Azure SQL, Azure Storage, Cosmos, Key Vault, Managed Identity, Microsoft Graph, PostgreSQL, Resource Graph |
 | `items/azure-sql-database/[id]/performance/route.ts` | POST | owner-scoped |  | Azure SQL, Cosmos, Microsoft Graph, PostgreSQL |
 | `items/azure-sql-database/[id]/principal-search/route.ts` | GET | session-only |  | Microsoft Graph |
 | `items/azure-sql-database/[id]/queries/route.ts` | GET POST DELETE | owner-scoped |  | Cosmos, Microsoft Graph |
@@ -1930,7 +1930,7 @@ dispatch is invisible to it. Full limits: `scripts/ci/_route-backends.mjs`.
 | `marketplace/catalog/route.ts` | GET | session-only |  | APIM, ARM |
 | `marketplace/gate/route.ts` | GET | session-only |  | — |
 | `marketplace/mini-app/route.ts` | POST | owner-scoped |  | ADF, ADLS, ADX, AI Search, APIM, ARM, Azure SQL, Azure Storage, Compute, Cosmos, Microsoft Graph, PostgreSQL, Purview, Resource Graph, Synapse |
-| `marketplace/products/[id]/certify/route.ts` | POST | owner-scoped |  | ADX, Azure Monitor, Azure Networking, Container Apps, Cosmos, Cost Management, Log Analytics |
+| `marketplace/products/[id]/certify/route.ts` | POST | admin |  | ADX, Azure Monitor, Azure Networking, Container Apps, Cosmos, Cost Management, Log Analytics |
 | `marketplace/products/[id]/route.ts` | GET | session-only |  | Cosmos |
 | `marketplace/products/[id]/subscribe/route.ts` | POST | session-only |  | Cosmos |
 | `marketplace/products/route.ts` | GET POST | session-only |  | ADX, Azure Monitor, Azure Networking, Container Apps, Cosmos, Cost Management, Log Analytics |
@@ -2415,7 +2415,7 @@ dispatch is invisible to it. Full limits: `scripts/ci/_route-backends.mjs`.
 
 ## Authorization resolvers (derived)
 
-181 function(s) across 81 module(s) reach an owner / workspace-ACL
+184 function(s) across 83 module(s) reach an owner / workspace-ACL
 decision. Derived by `scripts/ci/_route-auth-scope.mjs` from the seeds above —
 nothing here is hand-maintained. A change to this list in a diff means the
 authorization surface moved.
@@ -2479,6 +2479,8 @@ authorization surface moved.
 | `apps/fiab-console/lib/azure/kusto-client.ts` | `loadKustoItem` |
 | `apps/fiab-console/lib/azure/linguistic-schema.ts` | `readSynonyms`, `writeSynonyms` |
 | `apps/fiab-console/lib/azure/mcp-config-store.ts` | `getMcpServer`, `updateMcpServerTestResult` |
+| `apps/fiab-console/lib/azure/mirror-adf-copy.ts` | `runMirrorAdfCopy` |
+| `apps/fiab-console/lib/azure/mirror-engine.ts` | `restartMirrorSnapshot`, `runMirrorSnapshot` |
 | `apps/fiab-console/lib/azure/model-binding.ts` | `loadModelItem`, `persistModelBinding`, `resolveModelBinding` |
 | `apps/fiab-console/lib/azure/model-serving-item.ts` | `loadServingItem`, `persistServingItem`, `resolveServingItem` |
 | `apps/fiab-console/lib/azure/pipeline-binding.ts` | `loadPipelineItem`, `persistBinding`, `resolveBinding` |

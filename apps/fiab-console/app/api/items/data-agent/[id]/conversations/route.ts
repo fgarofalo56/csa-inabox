@@ -13,9 +13,10 @@
  * store the Copilot uses. Scoped to the caller (userOid) + agent.
  */
 import { NextRequest, NextResponse } from 'next/server';
-import { getSession } from '@/lib/auth/session';
+import type { SessionPayload } from '@/lib/auth/session';
 import { copilotSessionsContainer } from '@/lib/azure/cosmos-client';
 import { randomUUID } from 'node:crypto';
+import { withSession } from '@/lib/api/route-toolkit';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -23,14 +24,15 @@ export const dynamic = 'force-dynamic';
 const KIND = 'data-agent-conversation';
 const sid = (agentId: string, convId: string) => `da:${agentId}:${convId}`;
 
-function userOf(s: ReturnType<typeof getSession>): string {
-  return (s!.claims.oid || s!.claims.upn || s!.claims.email || 'unknown') as string;
+// `withSession` has already established the session, so this takes a non-null
+// `SessionPayload` — the `ReturnType<typeof getSession>` + `s!` pair the
+// hand-rolled prologue needed is gone with it.
+function userOf(s: SessionPayload): string {
+  return (s.claims.oid || s.claims.upn || s.claims.email || 'unknown') as string;
 }
 
-export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
-  const s = getSession();
-  if (!s) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
-  const { id: agentId } = await ctx.params;
+export const GET = withSession<{ id: string }>(async (req: NextRequest, { session: s, params }) => {
+  const { id: agentId } = params;
   const userOid = userOf(s);
   // ?conversationId= → return the full conversation (messages) so the editor
   // can resume it. Ownership-checked.
@@ -40,7 +42,10 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string 
       const c = await copilotSessionsContainer();
       const { resource } = await c.item(convId, sid(agentId, convId)).read<any>();
       if (!resource) return NextResponse.json({ ok: false, error: 'not found' }, { status: 404 });
-      if (resource.userOid && resource.userOid !== userOid) return NextResponse.json({ ok: false, error: 'forbidden' }, { status: 403 });
+      // POSITIVE ownership match (#3943): an absent `userOid` is refused, not
+      // short-circuited into a pass. The list query below already requires
+      // `c.userOid = @u`, so an ownerless conversation was never listable.
+      if (!resource.userOid || resource.userOid !== userOid) return NextResponse.json({ ok: false, error: 'forbidden' }, { status: 403 });
       return NextResponse.json({ ok: true, conversation: { id: resource.id, title: resource.title, messages: resource.messages, updatedAt: resource.updatedAt } });
     } catch (e: any) {
       if (e?.code === 404) return NextResponse.json({ ok: false, error: 'not found' }, { status: 404 });
@@ -57,12 +62,10 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string 
   } catch (e: any) {
     return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 502 });
   }
-}
+});
 
-export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
-  const s = getSession();
-  if (!s) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
-  const { id: agentId } = await ctx.params;
+export const POST = withSession<{ id: string }>(async (req: NextRequest, { session: s, params }) => {
+  const { id: agentId } = params;
   const userOid = userOf(s);
   const body = await req.json().catch(() => ({} as any));
   const messages = Array.isArray(body?.messages) ? body.messages : [];
@@ -89,19 +92,20 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
   } catch (e: any) {
     return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 502 });
   }
-}
+});
 
-export async function DELETE(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
-  const s = getSession();
-  if (!s) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
-  const { id: agentId } = await ctx.params;
+export const DELETE = withSession<{ id: string }>(async (req: NextRequest, { session: s, params }) => {
+  const { id: agentId } = params;
   const convId = req.nextUrl.searchParams.get('conversationId');
   if (!convId) return NextResponse.json({ ok: false, error: 'conversationId required' }, { status: 400 });
   try {
     const c = await copilotSessionsContainer();
-    // Verify ownership before delete (partition key = sessionId).
+    // Verify ownership before delete (partition key = sessionId). POSITIVE match
+    // (#3943): an existing doc with no `userOid` is refused, not deleted by
+    // whoever asks. A MISSING doc stays idempotent — the delete below 404s and
+    // the catch returns { ok: true }, which is the pre-existing contract.
     const { resource } = await c.item(convId, sid(agentId, convId)).read<any>();
-    if (resource && resource.userOid && resource.userOid !== userOf(s)) {
+    if (resource && (!resource.userOid || resource.userOid !== userOf(s))) {
       return NextResponse.json({ ok: false, error: 'forbidden' }, { status: 403 });
     }
     await c.item(convId, sid(agentId, convId)).delete();
@@ -110,4 +114,4 @@ export async function DELETE(req: NextRequest, ctx: { params: Promise<{ id: stri
     if (e?.code === 404) return NextResponse.json({ ok: true });
     return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 502 });
   }
-}
+});
