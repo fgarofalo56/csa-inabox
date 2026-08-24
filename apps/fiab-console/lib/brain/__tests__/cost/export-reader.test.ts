@@ -229,6 +229,44 @@ describe('currency — no conversion, and no mislabelling', () => {
     expect(read.skipped[0].reason).toContain('not a finite number');
   });
 
+  // The test above passes with the blank-cell bug present, which is why this one
+  // exists separately rather than as another value in its table. `Number('n/a')`
+  // is NaN and gets caught; `Number('')` is 0 and `Number.isFinite(0)` is TRUE,
+  // so a blank sails past the finite check. Azure exports do emit blank cost
+  // cells (adjustment and purchase lines, notably).
+  //
+  // THIS TEST WAS OBSERVED FAILING BEFORE THE GUARD WAS WRITTEN. A test that has
+  // never been seen red is indistinguishable from a test that agrees with
+  // whatever the code does, and this repo has shipped several of those, so the
+  // before/after was measured rather than assumed. Run against this file's tree
+  // at 80c79211 with the guard absent:
+  //
+  //   baseline, file unmodified ....... 53 passed (53)   <- the harness runs
+  //   this test, guard absent ......... AssertionError: expected 1 to be +0
+  //                                     at export-reader.test.ts, byResource.size
+  //   this test, guard present ........ 54 passed (54)
+  //
+  // And the shape of what it caught, printed from the unguarded reader:
+  //
+  //   size=1  attributed=1  skipped=0
+  //   amountUsd=0  source="billed"
+  //   $0.00 (billed, Cost Management export 'blank', ... 1 row(s) summed ...)
+  //
+  // A BILLED claim of zero over a value that was never read -- the one state
+  // this module's header says must not exist -- and `rowsSkipped=0`, so the
+  // population report does not surface the blindness either.
+  it('an EMPTY cost cell is NOT MEASURED, not $0.00', () => {
+    const csv = [
+      'Date,ResourceId,CostInBillingCurrency,BillingCurrencyCode',
+      `2026-08-22,${BROKER_ARM},,USD`,
+    ].join('\n');
+    const read = readCostExport({ exportName: 'blank', partitions: [{ blobName: 'p.csv', csv }] });
+    expect(read.byResource.size).toBe(0);
+    expect(read.rowsAttributed).toBe(0);
+    expect(read.rowsSkipped).toBe(1);
+    expect(read.skipped[0].reason).toContain('EMPTY');
+  });
+
   it('a row with no resource id is recorded as unattributable, not dropped silently', () => {
     const csv = [
       'Date,ResourceId,CostInBillingCurrency,BillingCurrencyCode',

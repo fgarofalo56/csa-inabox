@@ -572,6 +572,28 @@ export function readCostExport(input: CostExportInput): CostExportRead {
         }
       }
 
+      // An EMPTY cost cell is NOT $0.00, and the finite check below CANNOT
+      // catch it: `Number('')` is 0 and `Number.isFinite(0)` is true, so a blank
+      // sails through and is attributed as a genuine billed zero. Measured on
+      // this file before this guard existed — a row with a resource id and an
+      // empty cost cell produced `byResource.size=1, rowsAttributed=1,
+      // rowsSkipped=0`, rendering as `$0.00 (billed, …)`. That is the strongest
+      // label this module has, over a value that was never read, and with
+      // `rowsSkipped=0` the population report says nothing was skipped, so the
+      // blindness does not even surface. Azure exports do emit blank cost cells
+      // (adjustment and purchase lines, notably).
+      //
+      // Checked BEFORE coercion, because after `Number()` a blank and a real
+      // '0' are the same value and the distinction is unrecoverable.
+      if (usdText === undefined || usdText === '') {
+        note(
+          `${partition.blobName}#${r}`,
+          `cost cell is EMPTY (${currencyNote}) — that is NOT MEASURED, not $0.00; ` +
+            'refusing to attribute a blank as a zero charge',
+        );
+        continue;
+      }
+
       const usd = Number(usdText);
       if (!Number.isFinite(usd)) {
         note(`${partition.blobName}#${r}`, `cost value '${usdText}' is not a finite number`);
