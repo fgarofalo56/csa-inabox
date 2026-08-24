@@ -23,6 +23,11 @@
  * follow-up, not a silent stub.
  */
 import { executeParameterized, executeParameterizedWithAuth, enableMirroring, type MirroringConfig, type SqlExplicitAuth } from './azure-sql-client';
+// The Snowflake backend: auto-binds its ADF linked service from the mirror's
+// Loom Connection and enumerates the source through the same runtime that
+// replicates it, so the table list can never disagree with what Copy can read.
+import { resolveSnowflakeLinkedService, snowflakeDatasetKind, listSnowflakeTables } from './snowflake-adf';
+
 import { listTables, listTablesWithAuth, sqlConfigGate } from './sql-objects-client';
 import { uploadFile, pathToHttpsUrl, getAccountName, listPaths, resolveAbfssRoot, type PathEntry } from './adls-client';
 import { submitSparkBatchJob, type SparkBatchRequest } from './synapse-dev-client';
@@ -105,8 +110,25 @@ export interface MirrorSource {
    * Snowflake-only (Fabric Build 2026 parity): also enumerate + replicate
    * Snowflake-managed Apache Iceberg tables, not just standard tables. Ignored
    * for non-Snowflake sources.
+   *
+   * This is LOAD-BEARING on the ADF Copy path: when no explicit table subset is
+   * pinned, the engine enumerates the source through ADF and filters on
+   * `INFORMATION_SCHEMA.TABLES.IS_ICEBERG`, so the toggle decides what actually
+   * replicates. (It was previously declared here and plumbed through five routes
+   * without a single read in the engine — the checkbox changed nothing.)
    */
   includeIcebergTables?: boolean;
+  /**
+   * The Loom Connection bound to this mirror. A non-secret id, NOT a credential:
+   * it is how the ADF Snowflake linked service is auto-bound at Start (the
+   * credential itself stays in Key Vault). Stamped by `withSourceAuth()` in
+   * `@/lib/azure/connection-auth` so every Start path carries it — a per-route
+   * copy is exactly how the credential plumbing half-landed the first time.
+   */
+  connectionId?: string;
+  /** Tenant scope for resolving `connectionId`. Non-secret. Stamped alongside it. */
+  tenantId?: string;
+
   /**
    * How ongoing replication behaves (fixed allowlist; carried from the wizard's
    * mirroring.json, loom-no-freeform-config):
@@ -879,19 +901,33 @@ export async function runMirrorAdfCdc(
 //   https://learn.microsoft.com/azure/data-factory/connector-azure-data-lake-storage
 // ============================================================
 
-/** Snowflake source linked service to bind (dedicated var, else the shared one). */
+/**
+ * Snowflake source linked service to bind.
+ *
+ * An operator MAY pin their own with `LOOM_MIRROR_SNOWFLAKE_LINKED_SERVICE`
+ * (brownfield estates have hand-tuned linked services with private endpoints we
+ * must not clobber). When they have not, the platform builds one from the
+ * mirror's Loom connection — see `snowflake-adf.resolveSnowflakeLinkedService`.
+ * The env var is an OVERRIDE, never a prerequisite: requiring it was an
+ * `auto-bind-by-default.md` §5 violation, since Loom holds every value the
+ * linked service needs.
+ */
 function mirrorSnowflakeLinkedService(): string | null {
   const v = process.env.LOOM_MIRROR_SNOWFLAKE_LINKED_SERVICE || process.env.LOOM_MIRROR_SOURCE_LINKED_SERVICE;
   return v && v.trim() ? v.trim() : null;
 }
 
-/** Is the opt-in ADF Copy path fully configured (factory + Snowflake LS + ADLS LS)? */
+/**
+ * Is the ADF Copy path usable? The factory + the ADLS sink are genuine infra
+ * prerequisites (deployed by bicep). The SOURCE linked service is no longer one
+ * — it is auto-bound from the connection at Start.
+ */
 function adfCopyConfigured(): boolean {
   return !!process.env.LOOM_ADF_NAME
     && !adfCdcConfigGate()
-    && !!mirrorSnowflakeLinkedService()
     && !!mirrorAdlsLinkedService();
 }
+
 
 /** ADF Copy pipeline name — stable + safe ([A-Za-z0-9_], first char a letter). */
 function adfCopyName(mirrorId: string): string {
@@ -911,6 +947,47 @@ function copyRecurrence(cadence: string): { frequency: string; interval: number 
 }
 
 /**
+ * What each sync mode ACTUALLY produces on the ADF Copy runtime.
+ *
+ * The three modes have to be observably different or the selector is decoration.
+ * On this backend they are three different sets of ADF artifacts:
+ *
+ *   snapshot    → the pipeline runs ONCE. No trigger is registered at all.
+ *   incremental → a ScheduleTrigger at the deployment cadence
+ *                 (LOOM_MIRROR_COPY_CADENCE, default 1h).
+ *   continuous  → a TumblingWindowTrigger at the 15-minute floor with
+ *                 maxConcurrency 1, so windows queue rather than overlap.
+ *
+ * HONESTY NOTE (deploy-integrity.md R7): on this backend `incremental` means
+ * "re-copied on a schedule", not row-level change capture — the ADF Snowflake
+ * connector has no CDC source, so each run is a delete-then-copy full refresh.
+ * Snowflake CHANGES/stream-based row-level deltas are a disclosed follow-up, and
+ * the wizard's per-source note says exactly this rather than implying more.
+ */
+export type CopyTriggerPlan =
+  | { kind: 'none'; reason: string }
+  | { kind: 'schedule'; cadence: string; recurrence: { frequency: string; interval: number } }
+  | { kind: 'tumbling'; cadence: string; recurrence: { frequency: string; interval: number } };
+
+export function planCopyTrigger(
+  syncMode: MirrorSource['syncMode'],
+  cadence: string,
+): CopyTriggerPlan {
+  if (syncMode === 'snapshot') {
+    return { kind: 'none', reason: 'One-time full load (sync mode: snapshot); no ongoing trigger was registered.' };
+  }
+  if (syncMode === 'continuous') {
+    return { kind: 'tumbling', cadence: '15min', recurrence: { frequency: 'Minute', interval: 15 } };
+  }
+  const recurrence = copyRecurrence(cadence);
+  if (!recurrence) {
+    return { kind: 'none', reason: `One-time full load (LOOM_MIRROR_COPY_CADENCE=${cadence} means on-demand); no ongoing trigger was registered.` };
+  }
+  return { kind: 'schedule', cadence, recurrence };
+}
+
+
+/**
  * Provision + run an ADF Copy pipeline that lands each selected table as Parquet
  * in ADLS Bronze (delete-then-copy full refresh), and — unless syncMode is
  * 'snapshot' — register a schedule trigger that re-runs the copy on a cadence
@@ -922,54 +999,106 @@ function copyRecurrence(cadence: string): { frequency: string; interval: number 
 export async function runMirrorAdfCopy(
   mirrorId: string, workspaceId: string, src: MirrorSource, tableSpecs: MirrorTableSpec[], note: string,
 ): Promise<MirrorRunResult> {
-  const sourceLs = mirrorSnowflakeLinkedService();
   const adlsLs = mirrorAdlsLinkedService();
   const adfGate = adfCdcConfigGate();
-  if (adfGate || !sourceLs || !adlsLs) {
+  if (adfGate || !adlsLs) {
     return {
       ok: false, status: 'Gated', backend: 'azure-native-cdc', engine: 'adf-copy', tables: [],
       gate: {
-        missing: adfGate?.missing || 'LOOM_MIRROR_SNOWFLAKE_LINKED_SERVICE / LOOM_MIRROR_ADLS_LINKED_SERVICE',
+        missing: adfGate?.missing || 'LOOM_MIRROR_ADLS_LINKED_SERVICE',
         message:
-          'Snowflake mirroring runs on an ADF Copy runtime (no Microsoft Fabric): set LOOM_ADF_NAME for the ' +
-          'env-pinned factory, LOOM_MIRROR_SNOWFLAKE_LINKED_SERVICE to a Snowflake linked service (credential in ' +
-          'Key Vault), and LOOM_MIRROR_ADLS_LINKED_SERVICE to the AzureBlobFS linked service pointing at the DLZ ' +
-          'ADLS account. Then Start.',
+          'Snowflake mirroring runs on an ADF Copy runtime (no Microsoft Fabric). This deployment is missing the ' +
+          'factory or the ADLS sink linked service, both of which platform/fiab/bicep deploys: ' +
+          `${adfGate?.missing || 'LOOM_MIRROR_ADLS_LINKED_SERVICE'}. The Snowflake source linked service is NOT a ` +
+          "prerequisite — Loom builds it from the mirror's connection.",
       },
       note,
     };
   }
-  if (!tableSpecs.length) {
+
+  // ── Auto-bind the Snowflake linked service (auto-bind-by-default.md §5) ────
+  // Built from the mirror's Loom Connection, named after it, and re-upserted on
+  // every Start so a linked service deleted or edited out-of-band self-heals.
+  const bound = await resolveSnowflakeLinkedService(src.tenantId || '', src.connectionId);
+  if ('gate' in bound) {
     return {
       ok: false, status: 'Gated', backend: 'azure-native-cdc', engine: 'adf-copy', tables: [],
-      gate: { missing: 'tables', message: 'Select at least one Snowflake table to mirror, or load the source tables in the wizard.' },
+      gate: { missing: bound.gate.missing, message: bound.gate.message },
       note,
     };
   }
+  const sourceLs = bound.binding.linkedServiceName;
+  // A pinned linked service may be the LEGACY V1 connector; read its type rather
+  // than assuming, because a V2 dataset on a V1 linked service is rejected.
+  const kind = await snowflakeDatasetKind(sourceLs);
+
+  // ── Resolve WHICH tables replicate, and honour the Iceberg toggle ──────────
+  // No explicit subset means "mirror everything", which on this backend requires
+  // a real enumeration — a Copy pipeline needs a dataset per table. This is also
+  // where `includeIcebergTables` becomes load-bearing: Snowflake-managed Iceberg
+  // tables are excluded unless the mirror asked for them.
+  let specs = tableSpecs;
+  let tableNote = '';
+  if (!specs.length) {
+    const listed = await listSnowflakeTables(src.tenantId || '', src.connectionId, src.database);
+    if ('gate' in listed) {
+      return {
+        ok: false, status: 'Gated', backend: 'azure-native-cdc', engine: 'adf-copy', tables: [],
+        gate: { missing: listed.gate.missing, message: listed.gate.message },
+        note,
+      };
+    }
+    const all = listed.tables;
+    const kept = src.includeIcebergTables ? all : all.filter((t) => !t.isIceberg);
+    const dropped = all.length - kept.length;
+    specs = kept.slice(0, MAX_TABLES).map((t) => ({ schema: t.schema, table: t.table }));
+    if (!listed.icebergKnown) {
+      tableNote = ` Enumerated ${all.length} tables (this Snowflake edition does not expose IS_ICEBERG, so no table could be classified as Iceberg).`;
+    } else if (src.includeIcebergTables) {
+      const ice = all.filter((t) => t.isIceberg).length;
+      tableNote = ` Enumerated ${all.length} tables, including ${ice} Snowflake-managed Iceberg table${ice === 1 ? '' : 's'}.`;
+    } else {
+      tableNote = ` Enumerated ${all.length} tables${dropped ? `; excluded ${dropped} Snowflake-managed Iceberg table${dropped === 1 ? '' : 's'} (turn on "Include Iceberg tables" to mirror them)` : ''}.`;
+    }
+  }
+  if (!specs.length) {
+    return {
+      ok: false, status: 'Gated', backend: 'azure-native-cdc', engine: 'adf-copy', tables: [],
+      gate: {
+        missing: 'tables',
+        message: src.includeIcebergTables
+          ? `No tables were found in Snowflake database ${src.database}. Check the connection's role has USAGE on it.`
+          : `No non-Iceberg tables were found in Snowflake database ${src.database}. If its tables are Snowflake-managed Iceberg tables, turn on "Include Iceberg tables" on the mirror.`,
+      },
+      note,
+    };
+  }
+  const tableSpecsResolved = specs;
+
 
   const pipelineName = adfCopyName(mirrorId);
   const basePath = `mirrors/${workspaceId}/${mirrorId}`;
   const cadence = (process.env.LOOM_MIRROR_COPY_CADENCE || '1h').trim();
-  const ongoing = src.syncMode !== 'snapshot';
-  const recurrence = ongoing ? copyRecurrence(cadence) : null;
+  const triggerPlan = planCopyTrigger(src.syncMode, cadence);
 
   // One source dataset + one Parquet sink dataset + a delete-then-copy activity
   // pair per selected table. Datasets named off the pipeline + table (safe).
   const activities: unknown[] = [];
   try {
-    for (const t of tableSpecs) {
+    for (const t of tableSpecsResolved) {
       const srcDs = adfSafeName(`${pipelineName}_s_${t.schema}_${t.table}`);
       const sinkDs = adfSafeName(`${pipelineName}_k_${t.schema}_${t.table}`);
       const folderPath = `${basePath}/${t.schema}.${t.table}`;
       await upsertDataset(srcDs, {
         name: srcDs,
         properties: {
-          type: 'SnowflakeTable',
+          type: kind.dataset,
           linkedServiceName: { referenceName: sourceLs, type: 'LinkedServiceReference' },
           schema: [],
           typeProperties: { schema: t.schema, table: t.table },
         },
       } as any);
+
       await upsertDataset(sinkDs, {
         name: sinkDs,
         properties: {
@@ -1001,7 +1130,8 @@ export async function runMirrorAdfCopy(
         inputs: [{ referenceName: srcDs, type: 'DatasetReference' }],
         outputs: [{ referenceName: sinkDs, type: 'DatasetReference' }],
         typeProperties: {
-          source: { type: 'SnowflakeSource', exportSettings: { type: 'SnowflakeExportCopyCommand' } },
+          source: { type: kind.source, exportSettings: { type: 'SnowflakeExportCopyCommand' } },
+
           sink: { type: 'ParquetSink', storeSettings: { type: 'AzureBlobFSWriteSettings' } },
           enableStaging: false,
         },
@@ -1031,34 +1161,66 @@ export async function runMirrorAdfCopy(
     };
   }
 
-  // Register + start the schedule trigger for ongoing refresh (best-effort; a
-  // trigger failure does not fail the initial load — disclosed in the note).
+  // Register + start the ongoing trigger. Which trigger — and whether there is
+  // one at all — is what makes the three sync modes observably different in the
+  // factory (see planCopyTrigger). Best-effort: a trigger failure does not fail
+  // the initial load, and the reason is stated rather than swallowed.
   let triggerNote = '';
-  if (recurrence) {
-    const triggerName = adfSafeName(`${pipelineName}_trg`);
-    try {
-      await upsertTrigger(triggerName, {
-        name: triggerName,
-        properties: {
-          type: 'ScheduleTrigger',
-          pipelines: [{ pipelineReference: { referenceName: pipelineName, type: 'PipelineReference' } }],
-          typeProperties: { recurrence: { ...recurrence, startTime: new Date().toISOString(), timeZone: 'UTC' } },
-        },
-      } as any);
-      await startTrigger(triggerName);
-      triggerNote = ` Ongoing refresh every ${cadence} via schedule trigger ${triggerName}.`;
-    } catch (e: any) {
-      triggerNote = ` Initial load ran; the ongoing schedule trigger could not be started (${e?.message || String(e)}) — re-run Start or grant the Console UAMI Data Factory Contributor.`;
-    }
+  if (triggerPlan.kind === 'none') {
+    triggerNote = ` ${triggerPlan.reason}`;
   } else {
-    triggerNote = ' One-time full load (syncMode=snapshot); no ongoing schedule trigger.';
+    const triggerName = adfSafeName(`${pipelineName}_trg`);
+    const startTime = new Date().toISOString();
+    try {
+      if (triggerPlan.kind === 'tumbling') {
+        // Continuous → a tumbling window at the 15-minute floor. maxConcurrency 1
+        // makes windows queue instead of overlapping, so a slow full refresh can
+        // never stack copies on top of each other.
+        await upsertTrigger(triggerName, {
+          name: triggerName,
+          properties: {
+            type: 'TumblingWindowTrigger',
+            pipeline: { pipelineReference: { referenceName: pipelineName, type: 'PipelineReference' } },
+            typeProperties: {
+              frequency: triggerPlan.recurrence.frequency,
+              interval: triggerPlan.recurrence.interval,
+              startTime,
+              maxConcurrency: 1,
+              retryPolicy: { count: 2, intervalInSeconds: 60 },
+            },
+          },
+        } as any);
+      } else {
+        await upsertTrigger(triggerName, {
+          name: triggerName,
+          properties: {
+            type: 'ScheduleTrigger',
+            pipelines: [{ pipelineReference: { referenceName: pipelineName, type: 'PipelineReference' } }],
+            typeProperties: { recurrence: { ...triggerPlan.recurrence, startTime, timeZone: 'UTC' } },
+          },
+        } as any);
+      }
+      await startTrigger(triggerName);
+      triggerNote = triggerPlan.kind === 'tumbling'
+        ? ` Continuous sync: tumbling-window trigger ${triggerName} every ${triggerPlan.cadence} (max 1 concurrent window).`
+        : ` Incremental sync: schedule trigger ${triggerName} re-copies every ${triggerPlan.cadence}.`;
+    } catch (e: any) {
+      triggerNote = ` Initial load ran; the ongoing ${triggerPlan.kind === 'tumbling' ? 'tumbling-window' : 'schedule'} trigger could not be started (${e?.message || String(e)}) — re-run Start or grant the Console UAMI Data Factory Contributor.`;
+    }
   }
 
+  const credNote = bound.binding.credential === 'key-vault-reference'
+    ? ' Credential read by the factory from Key Vault by reference (never copied into the linked service).'
+    : bound.binding.credential === 'inline-secure-string'
+      ? ' Credential stored in the linked service as an encrypted SecureString (no Key Vault linked service is bound in this deployment).'
+      : '';
   const adfNote =
     'Azure-native mirror via ADF Copy runtime (no Microsoft Fabric): each selected Snowflake table is ' +
-    `delete-then-copied as Parquet into ADLS Bronze. Pipeline: ${pipelineName}.${triggerNote}`;
+    `delete-then-copied as Parquet into ADLS Bronze. Pipeline: ${pipelineName}. ` +
+    `Snowflake linked service: ${sourceLs}.${credNote}${tableNote}${triggerNote}`;
   const lastSync = new Date().toISOString();
-  const tables: MirrorTableResult[] = tableSpecs.map((t) => {
+  const tables: MirrorTableResult[] = tableSpecsResolved.map((t) => {
+
     const folderUrl = pathToHttpsUrl(BRONZE, `${basePath}/${t.schema}.${t.table}/`);
     const openrowset = `SELECT TOP 100 * FROM OPENROWSET(BULK '${folderUrl}', FORMAT = 'PARQUET') AS rows`;
     return {
@@ -1125,16 +1287,17 @@ export async function runMirrorSnapshot(
       return {
         ok: false, status: 'Gated', backend: 'azure-native-cdc', engine: 'adf-copy', tables: [],
         gate: {
-          missing: process.env.LOOM_ADF_NAME ? 'LOOM_MIRROR_SNOWFLAKE_LINKED_SERVICE / LOOM_MIRROR_ADLS_LINKED_SERVICE' : 'LOOM_ADF_NAME',
+          missing: process.env.LOOM_ADF_NAME ? 'LOOM_MIRROR_ADLS_LINKED_SERVICE' : 'LOOM_ADF_NAME',
           message:
-            'Snowflake mirroring runs on an ADF Copy runtime (no Microsoft Fabric): set LOOM_ADF_NAME for the ' +
-            'env-pinned factory, LOOM_MIRROR_SNOWFLAKE_LINKED_SERVICE to a Snowflake linked service (credential in ' +
-            'Key Vault), and LOOM_MIRROR_ADLS_LINKED_SERVICE to the AzureBlobFS linked service pointing at the DLZ ' +
-            'ADLS account. Then Start.',
+            'Snowflake mirroring runs on an ADF Copy runtime (no Microsoft Fabric). This deployment is missing ' +
+            `${process.env.LOOM_ADF_NAME ? 'the ADLS sink linked service (LOOM_MIRROR_ADLS_LINKED_SERVICE)' : 'the factory (LOOM_ADF_NAME)'}` +
+            ', which platform/fiab/bicep deploys. The Snowflake source linked service is NOT a prerequisite — ' +
+            "Loom builds it from the mirror's connection.",
         },
         note,
       };
     }
+
     if (!bronzeConfigured()) {
       return {
         ok: false, status: 'Gated', backend: 'azure-native-cdc', engine: 'adf-copy', tables: [],

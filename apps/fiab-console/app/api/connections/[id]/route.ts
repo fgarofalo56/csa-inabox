@@ -67,7 +67,19 @@ export async function PATCH(
     const spnTenantId = body?.spnTenantId !== undefined ? (String(body.spnTenantId).trim() || undefined) : existing.spnTenantId;
     const spnClientId = body?.spnClientId !== undefined ? (String(body.spnClientId).trim() || undefined) : existing.spnClientId;
     const description = body?.description !== undefined ? (String(body.description).trim() || undefined) : existing.description;
+    // Non-secret source coordinates for the non-Azure connectors. Same
+    // supplied-only merge rule: an absent key keeps the stored value, an
+    // explicit empty string clears it.
+    const pick = (k: keyof typeof body, cur: string | undefined) =>
+      body?.[k] !== undefined ? (String(body[k]).trim() || undefined) : cur;
+    const warehouse = pick('warehouse', existing.warehouse);
+    const role = pick('role', existing.role);
+    const schema = pick('schema', existing.schema);
+    const projectId = pick('projectId', existing.projectId);
+    const serviceName = pick('serviceName', existing.serviceName);
+    const gateway = pick('gateway', existing.gateway);
     const authMethod: AuthMethod = body?.authMethod ?? existing.authMethod;
+
 
     if (!name) return NextResponse.json({ ok: false, error: 'name is required' }, { status: 400 });
 
@@ -104,7 +116,14 @@ export async function PATCH(
       username,
       spnTenantId,
       spnClientId,
+      warehouse,
+      role,
+      schema,
+      projectId,
+      serviceName,
+      gateway,
       description,
+
       secretRef,
       updatedAt: now,
     };

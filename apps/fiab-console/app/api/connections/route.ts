@@ -14,13 +14,17 @@ import {
   listConnections, createConnection, deleteConnection, authNeedsSecret,
   type ConnectionType, type AuthMethod,
 } from '@/lib/azure/connections-store';
+// Derived from the exhaustive label Records — never a hand-listed duplicate,
+// which is how Snowflake stayed un-creatable after it reached the union.
+import { CONNECTION_TYPES, AUTH_METHODS } from '@/lib/azure/connectable-types';
 import { apiError, apiServerError } from '@/lib/api/respond';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-const TYPES: ConnectionType[] = ['azure-sql', 'synapse-dedicated', 'synapse-serverless', 'databricks-sql', 'postgres', 'storage-adls', 'cosmos', 'generic-sql', 'adx', 'event-hub', 'service-bus', 'key-vault'];
-const METHODS: AuthMethod[] = ['entra-mi', 'sql-password', 'connection-string', 'account-key', 'service-principal'];
+const TYPES: ConnectionType[] = CONNECTION_TYPES;
+const METHODS: AuthMethod[] = AUTH_METHODS;
+
 
 export async function GET() {
   const session = getSession();
@@ -50,7 +54,13 @@ export async function POST(req: NextRequest) {
       name, type, authMethod,
       host: body?.host, database: body?.database, username: body?.username,
       spnTenantId: body?.spnTenantId, spnClientId: body?.spnClientId,
+      // Snowflake (warehouse/role/schema), BigQuery (projectId) and Oracle
+      // (serviceName/gateway) coordinates — all NON-SECRET, all persisted so the
+      // ADF linked service can be built from the connection alone.
+      warehouse: body?.warehouse, role: body?.role, schema: body?.schema,
+      projectId: body?.projectId, serviceName: body?.serviceName, gateway: body?.gateway,
       description: body?.description, secret: body?.secret,
+
       armResourceId: body?.armResourceId, subscriptionId: body?.subscriptionId,
       resourceGroup: body?.resourceGroup, location: body?.location,
       origin: body?.origin === 'existing' ? 'existing' : undefined,

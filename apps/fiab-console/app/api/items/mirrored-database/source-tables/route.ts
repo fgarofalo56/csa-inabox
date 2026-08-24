@@ -14,7 +14,8 @@ import { getSession } from '@/lib/auth/session';
 import { listTables } from '@/lib/azure/sql-objects-client';
 import { listPostgresTables } from '@/lib/azure/postgres-flex-client';
 import { listContainers } from '@/lib/azure/cosmos-account-client';
-import { MIRROR_SQL_FAMILY, MIRROR_PG_FAMILY, MIRROR_COSMOS_FAMILY } from '@/lib/azure/mirror-engine';
+import { MIRROR_SQL_FAMILY, MIRROR_PG_FAMILY, MIRROR_COSMOS_FAMILY, MIRROR_ADF_COPY_FAMILY } from '@/lib/azure/mirror-engine';
+import { listSnowflakeTables } from '@/lib/azure/snowflake-adf';
 import { apiServerError } from '@/lib/api/respond';
 
 export const runtime = 'nodejs';
@@ -27,11 +28,12 @@ export async function POST(req: NextRequest) {
   const sourceType = String(body?.sourceType || '').trim();
   const server = String(body?.server || '').trim();
   const database = String(body?.database || '').trim();
+  const connectionId = body?.connectionId ? String(body.connectionId).trim() : undefined;
 
   if (!database) return NextResponse.json({ ok: false, error: 'database is required' }, { status: 400 });
 
   try {
-    let tables: Array<{ schema: string; table: string }> = [];
+    let tables: Array<{ schema: string; table: string; isIceberg?: boolean }> = [];
     if (MIRROR_SQL_FAMILY.has(sourceType)) {
       if (!server) return NextResponse.json({ ok: false, error: 'server is required for SQL sources' }, { status: 400 });
       tables = (await listTables(server, database)).map((t) => ({ schema: t.schema, table: t.name }));
@@ -40,6 +42,22 @@ export async function POST(req: NextRequest) {
       tables = await listPostgresTables(server, database);
     } else if (MIRROR_COSMOS_FAMILY.has(sourceType)) {
       tables = (await listContainers(database)).map((c: any) => ({ schema: 'cosmos', table: c.name || c.id }));
+    } else if (MIRROR_ADF_COPY_FAMILY.has(sourceType)) {
+      // Snowflake. Enumerated through the SAME ADF runtime that will replicate
+      // it, using the auto-bound linked service, so "Load tables" and Start can
+      // never disagree about what is readable. IS_ICEBERG rides along so the
+      // wizard can label (and the engine can filter) Snowflake-managed Iceberg
+      // tables. Previously Snowflake fell through to the generic branch and
+      // returned "can't be enumerated here", while Start refused to run without
+      // a table list -- a closed loop with no way out of it.
+      const listed = await listSnowflakeTables(s.claims.oid, connectionId, database);
+      if ('gate' in listed) {
+        return NextResponse.json({ ok: false, gate: true, error: listed.gate.message }, { status: 200 });
+      }
+      const sf = listed.tables
+        .map((t) => ({ schema: t.schema, table: t.table, isIceberg: t.isIceberg }))
+        .sort((a, b) => `${a.schema}.${a.table}`.localeCompare(`${b.schema}.${b.table}`));
+      return NextResponse.json({ ok: true, tables: sf, icebergKnown: listed.icebergKnown });
     } else if (sourceType === 'GoogleBigQuery') {
       return NextResponse.json(
         { ok: false, gate: true, error: 'BigQuery datasets are enumerated by the Azure-native copy (ADF Google BigQuery V2 connector) at run time. Leave the table list empty to mirror every table in the dataset, or list them as schema.table (schema = dataset).' },
