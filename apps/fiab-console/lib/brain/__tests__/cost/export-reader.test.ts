@@ -9,10 +9,20 @@
  *                  total — this repo's most repeated failure. Completeness is
  *                  `'unknown'` without a manifest and `'incomplete'` when the
  *                  manifest names a blob that was not supplied or a row count
- *                  that does not match.
+ *                  that does not match. The blob comparison is by WHOLE
+ *                  container-relative path and as a MULTISET, because the
+ *                  wrong-DIRECTION failure is just as real: matching last
+ *                  segments let one run's `part_0_0001.csv` stand in for
+ *                  another's, and matching as a set let the same blob be
+ *                  supplied twice and counted once. Both read `'complete'`
+ *                  over a DOUBLED total.
  *   WRONG COLUMN   `BilledCost` / `CostInBillingCurrency` / `Cost` are the same
  *                  role under three agreements. A reader hard-coded to one
- *                  returns ZERO for the others — silent, total, plausible.
+ *                  returns ZERO for the others — silent, total, plausible. And
+ *                  the harder version of the same fault: binding the right ROLE
+ *                  to the wrong NUMBER. `PaygCost*` is the pay-as-you-go LIST
+ *                  price and was PREFERRED over the billed column, so the
+ *                  reader emitted a list-rate estimate labelled `billed`.
  *   WRONG CURRENCY every Brain figure is `amountUsd`. Copying a EUR amount into
  *                  it mislabels the unit and looks completely normal.
  *   NAIVE SPLIT    the `Tags` column is quoted and contains commas.
@@ -49,13 +59,25 @@ const EA_CSV = [
   `2026-08-22,${CONSOLE_ARM},loom-console,"{""env"":""prod"",""tier"":""ui""}",40.00,USD,Microsoft.App`,
 ].join('\r\n');
 
+/**
+ * The blob's container-relative path, spelled IDENTICALLY on both sides.
+ *
+ * This fixture used to supply `part_0_0001.csv` against a manifest listing
+ * `loom-brain/part_0_0001.csv`, and it passed — because the reader compared last
+ * segments. That leniency is precisely the defect being fixed, so the fixture is
+ * brought up to the real shape rather than the matcher kept loose to preserve
+ * it: `ExportPartition.blobName` is documented as the whole container-relative
+ * name, which is what a container listing returns and what the manifest carries.
+ */
+const EA_PART = 'loom-brain/part_0_0001.csv';
+
 const EA_MANIFEST = JSON.stringify({
   manifestVersion: '2023-08-01',
   blobCount: 1,
   dataRowCount: 2,
   exportConfig: { exportName: 'loom-brain-daily', type: 'ActualCost' },
   runInfo: { executionType: 'Scheduled', endDate: '2026-08-22T23:59:59Z' },
-  blobs: [{ blobName: 'loom-brain/part_0_0001.csv', dataRowCount: 2 }],
+  blobs: [{ blobName: EA_PART, dataRowCount: 2 }],
 });
 
 function eaRun(overrides?: { manifest?: string; partitions?: { blobName: string; csv: string }[] }) {
@@ -65,7 +87,7 @@ function eaRun(overrides?: { manifest?: string; partitions?: { blobName: string;
       overrides?.manifest === undefined
         ? { blobName: 'loom-brain/manifest.json', json: EA_MANIFEST }
         : { blobName: 'loom-brain/manifest.json', json: overrides.manifest },
-    partitions: overrides?.partitions ?? [{ blobName: 'part_0_0001.csv', csv: EA_CSV }],
+    partitions: overrides?.partitions ?? [{ blobName: EA_PART, csv: EA_CSV }],
   });
 }
 
@@ -165,6 +187,88 @@ describe('column binding across agreements — no schema is silently zero', () =
     expect(schemaOf(bindColumns(['ResourceId', 'CostInBillingCurrency']))).toBe('ea-mca');
     expect(schemaOf(bindColumns(['InstanceId', 'PreTaxCost']))).toBe('legacy-ea');
     expect(schemaOf(bindColumns(['Nope']))).toBe('unrecognized');
+  });
+
+  // ── A LIST PRICE IS NOT A BILL ────────────────────────────────────────────
+  // `PaygCost*` is the pay-as-you-go LIST cost — the number BEFORE any
+  // negotiated rate — and it was an entry in the USD-cost candidate list, which
+  // is preferred over the billing-currency column unconditionally. On the header
+  // below the export says 10.00 and the reader emitted 100.00, labelled
+  // `source: 'billed'`: a 10x overstatement in the exact visual form of a bill.
+  //
+  // It got there through COLUMN BINDING, which is why nothing caught it. The
+  // figure `figure.ts` builds is a genuinely billed one over the wrong number,
+  // so every type-level guard there is bypassed by construction rather than
+  // defeated — there is no cast to refuse and no label to check.
+  //
+  // Reachability, stated rather than overclaimed: on the current MCA/EA header
+  // `CostInUsd` is also present and wins on ORDER, so a real Microsoft export
+  // could not have triggered it today. Ordering was the only thing standing in
+  // the way, and ordering is not a guard.
+  it('does NOT bind a pay-as-you-go LIST price as the billed USD cost', () => {
+    const csv = [
+      'Date,ResourceId,CostInBillingCurrency,PaygCostInUsd,BillingCurrency',
+      `2026-08-22,${BROKER_ARM},10.00,100.00,USD`,
+    ].join('\n');
+    const read = readCostExport({ exportName: 'payg', partitions: [{ blobName: 'p.csv', csv }] });
+    expect(read.columns.usdCost).toBeNull();
+    expect(read.columns.cost).toBe('CostInBillingCurrency');
+    // The BILLED number, not the list number. This is the assertion the defect
+    // failed at 100.00.
+    expect(read.byResource.get(BROKER_ID)?.amountUsd).toBeCloseTo(10.0, 6);
+    expect(read.byResource.get(BROKER_ID)?.source).toBe('billed');
+    expect(read.currencyResolution).not.toMatch(/payg/i);
+  });
+
+  it('a header whose ONLY cost-shaped column is a PAYG list price yields NO billed figure', () => {
+    // The honest answer to "I have a list price and nothing else" is BLIND — not
+    // a billed figure, and not $0.00. The rows are still counted, so
+    // "nothing could be attributed" stays distinguishable from "nothing was
+    // examined", which is the whole point of the population report.
+    const csv = [
+      'Date,ResourceId,PaygCostInUSD,BillingCurrency',
+      `2026-08-22,${BROKER_ARM},100.00,USD`,
+    ].join('\n');
+    const read = readCostExport({
+      exportName: 'payg-only',
+      partitions: [{ blobName: 'p.csv', csv }],
+    });
+    expect(read.byResource.size).toBe(0);
+    expect(read.schema).toBe('unrecognized');
+    expect(read.population.examined).toBe(1);
+    expect(read.rowsSkipped).toBe(1);
+    expect(read.skipped.find((s) => s.subject === 'p.csv')?.reason ?? '').toContain(
+      'no cost column',
+    );
+  });
+
+  it('NO payg spelling is a cost candidate — asserted over the whole LIST, not one name', () => {
+    // POPULATION, not an example. The no-cost-column message ENUMERATES every
+    // entry in both cost candidate lists, so this asserts over the list itself:
+    // re-adding `PaygCostInUSD`, `PaygCostInUsd` or any sibling puts it into this
+    // string and turns this red, where a test naming one spelling would only
+    // catch that one.
+    const csv = ['ResourceId,Alpha', `${BROKER_ARM},1`].join('\n');
+    const read = readCostExport({
+      exportName: 'candidates',
+      partitions: [{ blobName: 'p.csv', csv }],
+    });
+    const detail = read.skipped.find((s) => s.subject === 'p.csv')?.reason ?? '';
+    expect(detail).not.toMatch(/payg/i);
+    // The control. Without these, a message that simply stopped naming its
+    // candidates would satisfy the assertion above in silence.
+    expect(detail).toContain('x_BilledCostInUsd');
+    expect(detail).toContain('CostInBillingCurrency');
+  });
+
+  it('a legitimate USD column beside a PAYG one binds the legitimate one', () => {
+    // The real MCA/EA shape: both columns present. `CostInUsd` binds and the list
+    // price is not a candidate at all — so the answer no longer depends on which
+    // of the two happens to sit earlier in the list.
+    expect(bindColumns(['ResourceId', 'CostInUsd', 'PaygCostInUsd', 'BillingCurrency']).usdCost).toBe(
+      'CostInUsd',
+    );
+    expect(bindColumns(['ResourceId', 'PaygCostInUsd']).usdCost).toBeNull();
   });
 });
 
@@ -289,7 +393,7 @@ describe('completeness — a partial read never reports as whole', () => {
   it("NO manifest reports 'unknown', never 'complete'", () => {
     const read = readCostExport({
       exportName: 'loom-brain-daily',
-      partitions: [{ blobName: 'part_0_0001.csv', csv: EA_CSV }],
+      partitions: [{ blobName: EA_PART, csv: EA_CSV }],
     });
     expect(read.completeness).toBe('unknown');
     expect(read.completenessDetail).toContain('UNKNOWN fraction');
@@ -388,8 +492,8 @@ describe('completeness — a partial read never reports as whole', () => {
   it('an extra partition not listed in the manifest is also incomplete-worthy', () => {
     const read = eaRun({
       partitions: [
-        { blobName: 'part_0_0001.csv', csv: EA_CSV },
-        { blobName: 'part_0_9999.csv', csv: EA_CSV },
+        { blobName: EA_PART, csv: EA_CSV },
+        { blobName: 'loom-brain/part_0_9999.csv', csv: EA_CSV },
       ],
     });
     expect(read.completeness).toBe('incomplete');
@@ -398,6 +502,121 @@ describe('completeness — a partial read never reports as whole', () => {
 
   it('completenessDetail is populated even on the happy path — a verdict never travels alone', () => {
     expect(eaRun().completenessDetail.length).toBeGreaterThan(0);
+  });
+});
+
+// ── PARTITION IDENTITY ──────────────────────────────────────────────────────
+// Matching partitions on their LAST SEGMENT is how a DOUBLE COUNT reads as
+// whole. Cost Management writes `<export>/<dateRange>/<runId>/part_0_0001.csv`,
+// so `part_0_0001.csv` is the last segment of the FIRST partition of every run
+// that has ever been written — the least distinguishing string in the file
+// layout, used as the identity.
+//
+// THE MUTATION THIS BLOCK EXISTS TO KILL. Twelve arms were run against the
+// 142-test suite, on the PREVIOUS (last-segment, set-based) matcher, with both
+// controls working. Eleven died; one survived:
+//
+//   M7   missing = supplied.size >= manifest.length ? [] : <original>
+//                                                     rc=0  142 passed SURVIVED
+//   M7b  the name normaliser returns a constant            (BROAD)      killed
+//   M7c  drop the `extra.length === 0` term                (BROAD)      killed
+//
+// Degrading the name check to a bare COUNT comparison passed everything, while
+// both broad forms went red instantly — the narrow-bypass shape exactly. A test
+// that checks only counts REPRODUCES that hole, so every case below is RIGHT
+// COUNT, WRONG MEMBER and asserts on the NAMES the verdict carries.
+describe('partition identity — the right NUMBER of blobs is not the right blobs', () => {
+  const RUN_A = 'loom-brain/20260801-20260831/run-aaaa/part_0_0001.csv';
+  const RUN_B = 'loom-brain/20260801-20260831/run-bbbb/part_0_0001.csv';
+
+  /**
+   * A manifest naming ONE blob and carrying NO `dataRowCount`.
+   *
+   * The omission is the point. `dataRowCount` is an OPTIONAL manifest field, and
+   * while it is present the row cross-check catches these cases on its own —
+   * which is exactly how the name comparison came to be untested in the first
+   * place. Without it the name check is the only thing standing.
+   */
+  function oneBlobManifest(blobName: string): string {
+    return JSON.stringify({
+      blobs: [{ blobName }],
+      runInfo: { endDate: '2026-08-22T23:59:59Z' },
+    });
+  }
+
+  /** Every case here reads the SAME one-blob manifest; only the partitions vary. */
+  function runWith(partitions: { blobName: string; csv: string }[]) {
+    return readCostExport({
+      exportName: 'loom-brain-daily',
+      manifest: { blobName: 'loom-brain/manifest.json', json: oneBlobManifest(RUN_A) },
+      partitions,
+    });
+  }
+
+  it('RIGHT COUNT, WRONG MEMBER: a same-named partition from ANOTHER run is not a match', () => {
+    const read = runWith([{ blobName: RUN_B, csv: EA_CSV }]);
+    expect(read.completeness).toBe('incomplete');
+    // One listed, one supplied. A count comparison sees nothing wrong here, so
+    // the two assertions below are the ones it cannot satisfy: the run that was
+    // NOT supplied and the run that was are both named.
+    expect(read.completenessDetail).toContain('1 MISSING');
+    expect(read.completenessDetail).toContain('run-aaaa');
+    expect(read.completenessDetail).toContain('supplied but not listed');
+    expect(read.completenessDetail).toContain('run-bbbb');
+  });
+
+  it("a second run's partition ALONGSIDE the right one doubles the total and says so", () => {
+    // The production shape. The manifest names one blob; the caller hands over
+    // that blob plus a same-last-segment blob from a different run. Under
+    // last-segment matching this reported `'complete'` over a doubled total
+    // wearing the strongest label this module has.
+    const read = runWith([
+      { blobName: RUN_A, csv: EA_CSV },
+      { blobName: RUN_B, csv: EA_CSV },
+    ]);
+    expect(read.completeness).toBe('incomplete');
+    expect(read.completenessDetail).toContain('supplied but not listed');
+    expect(read.completenessDetail).toContain('run-bbbb');
+    // The double count is real — 12.34 counted twice — and the figure now
+    // carries the incompleteness, so the number can never be quoted as whole.
+    expect(read.byResource.get(BROKER_ID)?.amountUsd).toBeCloseTo(24.68, 6);
+    expect(read.byResource.get(BROKER_ID)?.basis).toContain('completeness=incomplete');
+  });
+
+  it('the SAME partition supplied TWICE is extra, because the match is a MULTISET', () => {
+    // A set answers "was this name seen?" and a name supplied twice is seen
+    // once — so a duplicated blob doubles the total and still matches cleanly.
+    // Matching consumes one manifest entry per supplied partition, so the second
+    // copy has nothing left to match. This case is invisible to a set and to a
+    // count alike; only the multiset registers it.
+    const read = runWith([
+      { blobName: RUN_A, csv: EA_CSV },
+      { blobName: RUN_A, csv: EA_CSV },
+    ]);
+    expect(read.completeness).toBe('incomplete');
+    expect(read.completenessDetail).toContain('1 supplied but not listed');
+    expect(read.byResource.get(BROKER_ID)?.amountUsd).toBeCloseTo(24.68, 6);
+  });
+
+  it('identical WHOLE paths on both sides is what reads complete — the control', () => {
+    // Without this, a matcher that answered `'incomplete'` unconditionally would
+    // pass every case above.
+    const read = runWith([{ blobName: RUN_A, csv: EA_CSV }]);
+    expect(read.completeness).toBe('complete');
+    expect(read.byResource.get(BROKER_ID)?.amountUsd).toBeCloseTo(12.34, 6);
+  });
+
+  it('casing, separator and leading-slash drift still match — pinned as DELIBERATE', () => {
+    // Folded on purpose, and recorded here so a later reader does not tighten it
+    // silently and start reporting whole runs as partial. A manifest and a
+    // container listing can disagree on the casing of the export-name segment,
+    // and a caller that joined with `\` is naming the same blob — while a FALSE
+    // `'incomplete'` is its own untrue claim. None of these foldings can make a
+    // DIFFERENT blob count as a supplied one, which is the property the cases
+    // above are actually about.
+    const drifted = '\\LOOM-BRAIN\\20260801-20260831\\RUN-AAAA\\part_0_0001.CSV';
+    const read = runWith([{ blobName: drifted, csv: EA_CSV }]);
+    expect(read.completeness).toBe('complete');
   });
 });
 
