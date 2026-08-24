@@ -255,7 +255,29 @@ copilot-evals = [
 copilot = [
     # CSA Copilot (CSA-0008) Phases 0-1 — corpus indexer + grounded Q&A.
     # Agent framework (approved via AQ-0003).
-    "pydantic-ai>=1.0.0,<3.0.0",
+    # Floor raised to 1.106.0 for GHSA advisories affecting >=1.56.0,<1.99.0,
+    # >=1.56.0,<1.102.0 and >=1.65.0,<1.106.0 — 1.106.0 is the lowest version
+    # that clears all three.
+    #
+    # Ceiling NARROWED from <3.0.0 to <2.0.0 deliberately. pydantic-ai 2.x is a
+    # live major line (2.33.0 published); adopting it is its own reviewable
+    # change and does not belong inside a security floor raise. That is a scope
+    # boundary, not a claim about what 2.x would pull — nothing here measured
+    # 2.x's resolution.
+    #
+    # What this bump DID pull, read from the lock's own `# via` annotations
+    # (requirements/locks/copilot/requirements.txt):
+    #   anthropic 0.96.0 -> 1.0.0   via pydantic-ai-slim 1.106.0
+    #     -> httpx2 2.3.0 -> httpcore2 2.3.0 -> truststore 0.10.4
+    #        (httpx 2.x ships under NEW distribution names, so it coexists with
+    #         the existing httpx 0.28.1 / httpcore 1.0.9 rather than replacing
+    #         them)
+    #   fastmcp 3.2.4 -> 3.4.7      via pydantic-ai-slim (+ new fastmcp-slim)
+    #   xai-sdk 1.11.0 -> 1.19.0    via pydantic-ai-slim
+    # anthropic 1.0.0 therefore arrives from INSIDE this ceiling — do not read
+    # <2.0.0 as having held it back. google-genai stays at 1.73.1 and openai was
+    # already 2.32.0 (pinned directly by this file), neither moved by this bump.
+    "pydantic-ai>=1.106.0,<2.0.0",
     # Settings + model typing (already on the platform extra but listed
     # here so `pip install -e .[copilot]` is self-contained).
     "pydantic>=2.7.0,<3.0.0",

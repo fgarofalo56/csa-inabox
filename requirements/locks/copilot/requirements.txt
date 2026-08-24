@@ -151,9 +151,9 @@ annotated-types==0.7.0 \
     --hash=sha256:1f02e8b43a8fbbc3f3e0d4f0f4bfc8131bcb4eebe8849b8e5c773f3a1c582a53 \
     --hash=sha256:aff07c09a53a08bc8cfccb9c85b05f1aa9a2a6f23728d790723543408344ce89
     # via pydantic
-anthropic==0.96.0 \
-    --hash=sha256:9a6e335a354602a521cd9e777e92bfd46ba6e115bf9bbfe6135311e8fb2015b2 \
-    --hash=sha256:9de947b737f39452f68aa520f1c2239d44119c9b73b0fb6d4e6ca80f00279ee6
+anthropic==1.0.0 \
+    --hash=sha256:32dd52e9e1d774393b27182f451398ba4262287a4d0eab30887f89f1481b3ae4 \
+    --hash=sha256:42be3c97604af7252c5898413aee076ace6c46e9bca0d0d90ceb77c7d3719027
     # via pydantic-ai-slim
 anyio==4.13.0 \
     --hash=sha256:08b310f9e24a9594186fd75b4f73f4a4152069e3853f1ed8bfbf58369f4ad708 \
@@ -163,6 +163,7 @@ anyio==4.13.0 \
     #   google-genai
     #   groq
     #   httpx
+    #   httpx2
     #   mcp
     #   openai
     #   py-key-value-aio
@@ -185,7 +186,7 @@ attrs==26.1.0 \
 authlib==1.7.1 \
     --hash=sha256:8470f4aa6b5590ac41bd81d6e6ee12448ce36a0da0af19bbed69fb53fb4e8ad9 \
     --hash=sha256:8c09b0f9d080c823e594b52316af70f79a1fa4eed64d0363a076233c04ef063a
-    # via fastmcp
+    # via fastmcp-slim
 azure-common==1.1.28 \
     --hash=sha256:4ac0cd3214e36b6a1b6a442686722a5d8cc449603aa833f3f0f40bda836704a3 \
     --hash=sha256:5c12d3dcf4ec20599ca6b0d3e09e86e146353d443e7fcc050c9a19c1f9df20ad
@@ -544,12 +545,11 @@ cryptography==50.0.0 \
 cyclopts==4.10.2 \
     --hash=sha256:a1f2d6f8f7afac9456b48f75a40b36658778ddc9c6d406b520d017ae32c990fe \
     --hash=sha256:d7b950457ef2563596d56331f80cbbbf86a2772535fb8b315c4f03bc7e6127f1
-    # via fastmcp
+    # via fastmcp-slim
 distro==1.9.0 \
     --hash=sha256:2fa77c6fd8940f116ee1d6b94a2f90b13b5ea8d019b98bc8bafdcabcdd9bdbed \
     --hash=sha256:7bffd925d65168f85027d8da9af6bddab658135b840670a223589bc0c8ef02b2
     # via
-    #   anthropic
     #   google-genai
     #   groq
     #   openai
@@ -578,7 +578,7 @@ eval-type-backport==0.3.1 \
 exceptiongroup==1.3.1 \
     --hash=sha256:8b412432c6055b0b7d14c310000ae93352ed6754f70fa8f7c34141f91c4e3219 \
     --hash=sha256:a7a39a3bd276781e98394987d3a5701d0c4edffb633bb7a5144577f82c773598
-    # via fastmcp
+    # via fastmcp-slim
 executing==2.2.1 \
     --hash=sha256:3632cc370565f6648cc328b32435bd120a1e4ebb20c77e3fdde9a13cd1e533c4 \
     --hash=sha256:760643d3452b4d777d295bb167ccc74c64a81df23fb5e08eff250c425a4b2017
@@ -635,10 +635,16 @@ fastavro==1.12.1 \
     --hash=sha256:eaa7ab3769beadcebb60f0539054c7755f63bd9cf7666e2c15e615ab605f89a8 \
     --hash=sha256:ed924233272719b5d5a6a0b4d80ef3345fc7e84fc7a382b6232192a9112d38a6
     # via cohere
-fastmcp==3.2.4 \
-    --hash=sha256:083ecb75b44a4169e7fc0f632f94b781bdb0ff877c6b35b9877cbb566fd4d4d1 \
-    --hash=sha256:e6c9c429171041455e47ab94bb3f83c4657622a0ec28922f6940053959bd58a9
+fastmcp==3.4.7 \
+    --hash=sha256:43117aca886f5ee2f6a569bba91cef02b59c339aad04ba29950ff18d251c822a \
+    --hash=sha256:e4e7698cb4af5bc667b1901685261fa2f3526dc73d243a461fca42500c8dbe56
     # via pydantic-ai-slim
+fastmcp-slim==3.4.7 \
+    --hash=sha256:06b32a358320a7dc2b2ee040ba89ea55ddc20763dff2949f384f7974b13b5d8f \
+    --hash=sha256:6c931a0089705f3f2935428ef9b2bc74ad94140adc64aab84d116d103e694b3a
+    # via
+    #   fastmcp
+    #   pydantic-ai-slim
 filelock==3.29.0 \
     --hash=sha256:69974355e960702e789734cb4871f884ea6fe50bd8404051a3530bc07809cf90 \
     --hash=sha256:96f5f6344709aa1572bbf631c640e4ebeeb519e08da902c39a001882f30ac258
@@ -806,7 +812,7 @@ griffelib==2.0.2 \
     --hash=sha256:3cf20b3bc470e83763ffbf236e0076b1211bac1bc67de13daf494640f2de707e \
     --hash=sha256:925c857658fb1ba40c0772c37acbc2ab650bd794d9c1b9726922e36ea4117ea1
     # via
-    #   fastmcp
+    #   fastmcp-slim
     #   pydantic-ai-slim
 groq==1.2.0 \
     --hash=sha256:1002060a743b27c8f86765e1bc9749c98498e961d9fe2e4902bf7804a71c3c84 \
@@ -882,6 +888,7 @@ h11==0.16.0 \
     --hash=sha256:63cf8bbe7522de3bf65932fda1d9c2772064ffb3dae62d55932da54b31cb6c86
     # via
     #   httpcore
+    #   httpcore2
     #   uvicorn
 hf-xet==1.4.3 \
     --hash=sha256:0392c79b7cf48418cd61478c1a925246cf10639f4cd9d94368d8ca1e8df9ea07 \
@@ -909,11 +916,17 @@ hf-xet==1.4.3 \
     --hash=sha256:d972fbe95ddc0d3c0fc49b31a8a69f47db35c1e3699bf316421705741aab6653 \
     --hash=sha256:e23717ce4186b265f69afa66e6f0069fe7efbf331546f5c313d00e123dc84583 \
     --hash=sha256:fc360b70c815bf340ed56c7b8c63aacf11762a4b099b2fe2c9bd6d6068668c08
-    # via huggingface-hub
+    # via
+    #   huggingface-hub
+    #   pydantic-ai-slim
 httpcore==1.0.9 \
     --hash=sha256:2d400746a40668fc9dec9810239072b40b4484b640a8c38fd654a024c7a1bf55 \
     --hash=sha256:6e34463af53fd2ab5d807f399a9b45ea31c3dfa2276f15a2c3f00afff6e176e8
     # via httpx
+httpcore2==2.3.0 \
+    --hash=sha256:07327e251560960eea8e969d92d4c6a325feb13cca39e25340731336c3baf924 \
+    --hash=sha256:477e9e334f74e5240dcac002e890580f36a57d40ff0fb14cc9655731d23b8415
+    # via httpx2
 httptools==0.7.1 \
     --hash=sha256:04c6c0e6c5fb0739c5b8a9eb046d298650a0ff38cf42537fc372b28dc7e4472c \
     --hash=sha256:0d92b10dbf0b3da4823cde6a96d18e6ae358a9daa741c71448975f6a2c339cad \
@@ -963,9 +976,8 @@ httpx==0.28.1 \
     --hash=sha256:75e98c5f16b0f35b567856f597f06ff2270a374470a5c2392242528e3e3e42fc \
     --hash=sha256:d909fcccc110f8c7faf814ca82a9a4d816bc5a6dbfea25d6591d6985b8ba59ad
     # via
-    #   anthropic
     #   cohere
-    #   fastmcp
+    #   fastmcp-slim
     #   genai-prices
     #   google-genai
     #   groq
@@ -979,6 +991,10 @@ httpx-sse==0.4.3 \
     --hash=sha256:0ac1c9fe3c0afad2e0ebb25a934a59f4c7823b60792691f779fad2c5568830fc \
     --hash=sha256:9b1ed0127459a66014aec3c56bebd93da3c1bc8bb6618c8082039a44889a755d
     # via mcp
+httpx2==2.3.0 \
+    --hash=sha256:227e7c41d95a76d4077a52640564132777215fc3394e07b66a3116c33d668fa9 \
+    --hash=sha256:6f393663bdf6dbe7fe90118e3eb5b2bd024a675cae0390ac08cec9198812d8b7
+    # via anthropic
 huggingface-hub==1.11.0 \
     --hash=sha256:15fb3713c7f9cdff7b808a94fd91664f661ab142796bb48c9cd9493e8d166278 \
     --hash=sha256:42a6de0afbfeb5e022222d36398f029679db4eb4778801aafda32257ae9131ab
@@ -992,6 +1008,7 @@ idna==3.15 \
     #   anyio
     #   email-validator
     #   httpx
+    #   httpx2
     #   requests
     #   yarl
 importlib-metadata==8.7.1 \
@@ -1150,7 +1167,9 @@ jmespath==1.1.0 \
 joserfc==1.6.8 \
     --hash=sha256:22fb31a69094a5e6f44632002a9df2c30c941fc6c8ce1b037e92c03de954cf9f \
     --hash=sha256:878620c553a6ebdd76ccdc356782fee3f735f21a356d079a546b42a4670ace5f
-    # via authlib
+    # via
+    #   authlib
+    #   fastmcp-slim
 jsonpath-python==1.1.5 \
     --hash=sha256:a60315404d70a65e76c9a782c84e50600480221d94a58af47b7b4d437351cb4b \
     --hash=sha256:ceea2efd9e56add09330a2c9631ea3d55297b9619348c1055e5bfb9cb0b8c538
@@ -1158,7 +1177,7 @@ jsonpath-python==1.1.5 \
 jsonref==1.1.0 \
     --hash=sha256:32fe8e1d85af0fdefbebce950af85590b22b60f9e95443176adbde4e1ecea552 \
     --hash=sha256:590dc7773df6c21cbf948b5dac07a72a251db28b0238ceecce0a2abfa8ec30a9
-    # via fastmcp
+    # via fastmcp-slim
 jsonschema==4.26.0 \
     --hash=sha256:0c26707e2efad8aa1bfc5b7ce170f3fccc2e4918ff85989ba9ffa9facb2be326 \
     --hash=sha256:d489f15263b8d200f8387e64b4c3a75f06629559fb73deb8fdfb525f2dab50ce
@@ -1168,7 +1187,7 @@ jsonschema==4.26.0 \
 jsonschema-path==0.4.5 \
     --hash=sha256:7d77a2c3f3ec569a40efe5c5f942c44c1af2a6f96fe0866794c9ef5b8f87fd65 \
     --hash=sha256:c6cd7d577ae290c7defd4f4029e86fdb248ca1bd41a07557795b3c95e5144918
-    # via fastmcp
+    # via fastmcp-slim
 jsonschema-specifications==2025.9.1 \
     --hash=sha256:98802fee3a11ee76ecaca44429fda8a41bff98b00a0f2838151b113f210cc6fe \
     --hash=sha256:b540987f239e745613c7a9176f3edb72b832a4ac465cf02712288397832b5e8d
@@ -1287,8 +1306,7 @@ mcp==1.28.1 \
     --hash=sha256:d51e36a5f5644faea4f85ea649bfffa6bc6c26770d42798ad6a3de3d2ba69683
     # via
     #   csa-inabox (pyproject.toml)
-    #   fastmcp
-    #   pydantic-ai-slim
+    #   fastmcp-slim
 mdurl==0.1.2 \
     --hash=sha256:84008a41e51615a49fc9966191ff91509e3c40b939176e643fd50a5c2196b8f8 \
     --hash=sha256:bb413d29f5eea38f31dd4754dd7377d4465116fb207585f97bf925588687c1ba
@@ -1476,13 +1494,13 @@ openai==2.32.0 \
 openapi-pydantic==0.5.1 \
     --hash=sha256:a3a09ef4586f5bd760a8df7f43028b60cafb6d9f61de2acba9574766255ab146 \
     --hash=sha256:ff6835af6bde7a459fb93eb93bb92b8749b754fc6e51b2f1590a19dc3005ee0d
-    # via fastmcp
+    # via fastmcp-slim
 opentelemetry-api==1.39.1 \
     --hash=sha256:2edd8463432a7f8443edce90972169b195e7d6a05500cd29e6d13898187c9950 \
     --hash=sha256:fbde8c80e1b937a2c61f20347e91c0c18a1940cecf012d62e65a7caf08967c9c
     # via
     #   csa-inabox (pyproject.toml)
-    #   fastmcp
+    #   fastmcp-slim
     #   mistralai
     #   opentelemetry-exporter-otlp-proto-grpc
     #   opentelemetry-exporter-otlp-proto-http
@@ -1553,7 +1571,7 @@ packaging==25.0 \
     --hash=sha256:29572ef2b1f17581046b3a2227d5c611fb25ec70ca1ba8554b24b0e69331a484 \
     --hash=sha256:d443872c98d677bf60f6a1f2f8c1cb748e8fe762d2bf9d3148b5599295b0fc4f
     # via
-    #   fastmcp
+    #   fastmcp-slim
     #   huggingface-hub
     #   opentelemetry-instrumentation
     #   xai-sdk
@@ -1564,7 +1582,7 @@ pathable==0.5.0 \
 platformdirs==4.9.6 \
     --hash=sha256:3bfa75b0ad0db84096ae777218481852c0ebc6c727b3168c1b9e0118e458cf0a \
     --hash=sha256:e61adb1d5e5cb3441b4b7710bea7e4c12250ca49439228cc1021c00dcfac0917
-    # via fastmcp
+    # via fastmcp-slim
 prompt-toolkit==3.0.52 \
     --hash=sha256:28cde192929c8e7321de85de1ddbe736f1375148b02f2e17edd840042b1be855 \
     --hash=sha256:9aac639a3bbd33284347de5ad8d68ecc044b91a762dc39b7c21095fcd6a19955
@@ -1715,7 +1733,7 @@ protobuf==6.33.6 \
 py-key-value-aio==0.4.4 \
     --hash=sha256:18e17564ecae61b987f909fc2cd41ee2012c84b4b1dcb8c055cf8b4bc1bf3f5d \
     --hash=sha256:e3012e6243ed7cc09bb05457bd4d03b1ba5c2b1ca8700096b3927db79ffbbe55
-    # via fastmcp
+    # via fastmcp-slim
 pyasn1==0.6.4 \
     --hash=sha256:9c447d8431c947fe4c8febc4ed9e760bc29011a5b01e5c74b67025bd9fb8ce81 \
     --hash=sha256:deda9277cfd454080ec40b207fb6df82206a3a2688735233cdcd8d3d565f088b
@@ -1737,7 +1755,7 @@ pydantic==2.13.3 \
     #   cohere
     #   csa-inabox (pyproject.toml)
     #   fastapi
-    #   fastmcp
+    #   fastmcp-slim
     #   genai-prices
     #   google-genai
     #   groq
@@ -1751,13 +1769,13 @@ pydantic==2.13.3 \
     #   pydantic-handlebars
     #   pydantic-settings
     #   xai-sdk
-pydantic-ai==1.84.1 \
-    --hash=sha256:a9b579ddc5eb1ec83e828330687d28eb3115fb38f1392e8ddb0917b78eec53f6 \
-    --hash=sha256:cf29955253e1a299db9781d220f7b74a8c33e29df91edd492287f8024baa6eb6
+pydantic-ai==1.106.0 \
+    --hash=sha256:c8c93979acab85b087dc3499e40249d5de4333f2212eb792c52a6c05c2448d69 \
+    --hash=sha256:fb2b4bba143f924f2272926428ed173e456b00e0e5b3b125d7fd757f11b21fee
     # via csa-inabox (pyproject.toml)
-pydantic-ai-slim==1.84.1 \
-    --hash=sha256:d608ec966f85ec449097237449c2564c5ad76ae577f0178e159f136149678ee7 \
-    --hash=sha256:e8ebafbe1c7a6546436f1d8d1f46a1e5d24c498e6f3e921699372447a0fb535d
+pydantic-ai-slim==1.106.0 \
+    --hash=sha256:0dd7a99ea3fa89b490098406c2240ba7d75c327eea094c3fd057dd7aa9f3d163 \
+    --hash=sha256:e265598c8ee0e903ebb02d0494bb232be4cc8aa463ba1a55aa743cf34135dacf
     # via
     #   pydantic-ai
     #   pydantic-evals
@@ -1885,13 +1903,13 @@ pydantic-core==2.46.3 \
     # via
     #   cohere
     #   pydantic
-pydantic-evals==1.84.1 \
-    --hash=sha256:1233b5b4f44568163f89af3b5b5a1396511db9d2960320523bd85d8513b58aed \
-    --hash=sha256:53fdc7b181bc264cf63bd1519a58318ec00971af4d0b42a6d1c0c818b4464d3e
+pydantic-evals==1.106.0 \
+    --hash=sha256:7994f8bebfac5e482fe62e5a5434b2e5f94118ca8bd766628635b84835118a78 \
+    --hash=sha256:ec870c2e93e2a34aea83468a7d7c21cba3e9dacf62f145eef2229d9fd71b2cac
     # via pydantic-ai-slim
-pydantic-graph==1.84.1 \
-    --hash=sha256:7e0ec17e3b8edb58e35843a01f541715b03922c870ac89457a82a66c1266af3a \
-    --hash=sha256:e7a91fc72bdbe5fc234de10ccdf3fe4ae17d3bbf8ccac95076574822734149f6
+pydantic-graph==1.106.0 \
+    --hash=sha256:55afa33df4f699ed5c1185f81b6a06e2161958f1aa0c20742b2dae5745e84cce \
+    --hash=sha256:e6bb61aef0fdb49185a81142d311f94fc3315329345471d12cab85ab5845221f
     # via pydantic-ai-slim
 pydantic-handlebars==0.1.0 \
     --hash=sha256:1931c54946add1b5e3796c9bf6a005ed7662cef0109bb05c352f0b3d031a1260 \
@@ -1902,6 +1920,7 @@ pydantic-settings==2.14.2 \
     --hash=sha256:c19dd64b19097f1de80184f0cc7b0272a13ae6e170cbf240a3e27e381ed14a5f
     # via
     #   csa-inabox (pyproject.toml)
+    #   fastmcp-slim
     #   mcp
 pygments==2.20.0 \
     --hash=sha256:6757cd03768053ff99f3039c1a36d6c0aa0b263438fcab17520b30a303a82b5f \
@@ -1917,7 +1936,7 @@ pyperclip==1.11.0 \
     --hash=sha256:244035963e4428530d9e3a6101a1ef97209c6825edab1567beac148ccc1db1b6 \
     --hash=sha256:299403e9ff44581cb9ba2ffeed69c7aa96a008622ad0c46cb575ca75b5b84273
     # via
-    #   fastmcp
+    #   fastmcp-slim
     #   pydantic-ai-slim
 python-dateutil==2.9.0.post0 \
     --hash=sha256:37dd54208da7e1cd875388217d5e00ebd4179249f90fb72437e91a35459a0ad3 \
@@ -1929,13 +1948,15 @@ python-dotenv==1.2.2 \
     --hash=sha256:1d8214789a24de455a8b8bd8ae6fe3c6b69a5e3d64aa8a8e5d68e694bbcb285a \
     --hash=sha256:2c371a91fbd7ba082c2c1dc1f8bf89ca22564a087c2c287cd9b662adde799cf3
     # via
-    #   fastmcp
+    #   fastmcp-slim
     #   pydantic-settings
     #   uvicorn
 python-multipart==0.0.31 \
     --hash=sha256:8408153d68a9773291fc1da39a8b85a50044bddbabd2dd72e9229776b7b15e28 \
     --hash=sha256:fc631183bb13e56db3158a4909908dfb2e23565286744e798241e63750e5d680
-    # via mcp
+    # via
+    #   fastmcp-slim
+    #   mcp
 pyyaml==6.0.3 \
     --hash=sha256:00c4bdeba853cc34e7dd471f16b4114f4162dc03e6b7afcc2128711f0eca823c \
     --hash=sha256:0150219816b6a1fa26fb4699fb7daa9caf09eb1999f3b70fb6e786805e80375a \
@@ -2012,7 +2033,7 @@ pyyaml==6.0.3 \
     --hash=sha256:fc09d0aa354569bc501d4e787133afc08552722d3ab34836a80547331bb5d4a0
     # via
     #   csa-inabox (pyproject.toml)
-    #   fastmcp
+    #   fastmcp-slim
     #   huggingface-hub
     #   jsonschema-path
     #   pydantic-ai-slim
@@ -2159,7 +2180,7 @@ rich==15.0.0 \
     --hash=sha256:edd07a4824c6b40189fb7ac9bc4c52536e9780fbbfbddf6f1e2502c31b068c36
     # via
     #   cyclopts
-    #   fastmcp
+    #   fastmcp-slim
     #   logfire
     #   pydantic-ai-slim
     #   pydantic-evals
@@ -2323,6 +2344,7 @@ starlette==1.3.1 \
     --hash=sha256:c7372aae11c3c3f26a42df7bd626cec2f47d03483d261d369516a615a53714c6
     # via
     #   fastapi
+    #   fastmcp-slim
     #   mcp
     #   pydantic-ai-slim
 structlog==25.5.0 \
@@ -2434,6 +2456,12 @@ tqdm==4.67.3 \
     # via
     #   huggingface-hub
     #   openai
+truststore==0.10.4 \
+    --hash=sha256:9d91bd436463ad5e4ee4aba766628dd6cd7010cf3e2461756b3303710eebc301 \
+    --hash=sha256:adaeaecf1cbb5f4de3b1959b42d41f6fab57b2b1666adb59e89cb0b53361d981
+    # via
+    #   httpcore2
+    #   httpx2
 typer==0.24.1 \
     --hash=sha256:112c1f0ce578bfb4cab9ffdabc68f031416ebcc216536611ba21f04e9aa84c9e \
     --hash=sha256:e39b4732d65fbdcde189ae76cf7cd48aeae72919dea1fdfc16593be016256b45
@@ -2450,6 +2478,7 @@ typing-extensions==4.15.0 \
     --hash=sha256:0cea48d173cc12fa28ecabc3b837ea3cf6f38c6d1136f85cbaaf598984861466 \
     --hash=sha256:f0fa19c6845758ab08074a0cfa8b7aecb71c999ca73d62883bc25cc018c4e548
     # via
+    #   aiohttp
     #   aiosignal
     #   anthropic
     #   anyio
@@ -2460,6 +2489,7 @@ typing-extensions==4.15.0 \
     #   cohere
     #   exceptiongroup
     #   fastapi
+    #   fastmcp-slim
     #   google-genai
     #   groq
     #   grpcio
@@ -2480,6 +2510,7 @@ typing-extensions==4.15.0 \
     #   starlette
     #   temporalio
     #   typing-inspection
+    #   xai-sdk
 typing-inspection==0.4.2 \
     --hash=sha256:4ed1cacbdc298c220f1bd249ed5287caa16f34d44ef4e9c3d0cbad5b521545e7 \
     --hash=sha256:ba561c48a67c5958007083d386c3295464928b01faa735ab8547c5692e87f464
@@ -2494,7 +2525,7 @@ typing-inspection==0.4.2 \
 uncalled-for==0.3.1 \
     --hash=sha256:074cdc92da8356278f93d0ded6f2a66dd883dbecaf9bc89437646ee2289cc200 \
     --hash=sha256:5e412ac6708f04b56bef5867b5dcf6690ebce4eb7316058d9c50787492bb4bca
-    # via fastmcp
+    # via fastmcp-slim
 urllib3==2.7.0 \
     --hash=sha256:231e0ec3b63ceb14667c67be60f2f2c40a518cb38b03af60abc813da26505f4c \
     --hash=sha256:9fb4c81ebbb1ce9531cce37674bbc6f1360472bc18ca9a553ede278ef7276897
@@ -2507,7 +2538,7 @@ uvicorn==0.45.0 \
     --hash=sha256:3fe650df136c5bd2b9b06efc5980636344a2fbb840e9ddd86437d53144fa335d
     # via
     #   csa-inabox (pyproject.toml)
-    #   fastmcp
+    #   fastmcp-slim
     #   mcp
 uvloop==0.22.1 \
     --hash=sha256:017bd46f9e7b78e81606329d07141d3da446f8798c6baeec124260e22c262772 \
@@ -2671,7 +2702,7 @@ watchfiles==1.1.1 \
     --hash=sha256:f8979280bdafff686ba5e4d8f97840f929a87ed9cdf133cbbd42f7766774d2aa \
     --hash=sha256:f9a2ae5c91cecc9edd47e041a930490c31c3afb1f5e6d71de3dc671bfaca02bf
     # via
-    #   fastmcp
+    #   fastmcp-slim
     #   uvicorn
 wcwidth==0.6.0 \
     --hash=sha256:1a3a1e510b553315f8e146c54764f4fb6264ffad731b3d78088cdb1478ffbdad \
@@ -2740,7 +2771,7 @@ websockets==16.0 \
     --hash=sha256:f4a32d1bd841d4bcbffdcb3d2ce50c09c3909fbead375ab28d0181af89fd04da \
     --hash=sha256:fd3cb4adb94a2a6e2b7c0d8d05cb94e6f1c81a0cf9dc2694fb65c7e8d94c42e4
     # via
-    #   fastmcp
+    #   fastmcp-slim
     #   google-genai
     #   uvicorn
 wrapt==1.17.3 \
@@ -2828,9 +2859,9 @@ wrapt==1.17.3 \
     # via
     #   opentelemetry-instrumentation
     #   opentelemetry-instrumentation-httpx
-xai-sdk==1.11.0 \
-    --hash=sha256:ca87a830d310fb8e06fba44fb2a8c5cdf0d9f716b61126eddd51b7f416a63932 \
-    --hash=sha256:fe58ce6d8f8115ae8bd57ded57bcd847d0bb7cb28bb7b236abefd4626df1ed8d
+xai-sdk==1.19.0 \
+    --hash=sha256:4af1a629ad9304d0b05fa052d84ce77b7b61242a6d59d5936b692fec95fb52c1 \
+    --hash=sha256:65733bfb83826b10872b8c8af58003104cbd33ce69f0fdfc0d52bb670de7b0e7
     # via pydantic-ai-slim
 yarl==1.23.0 \
     --hash=sha256:03214408cfa590df47728b84c679ae4ef00be2428e11630277be0727eba2d7cc \
