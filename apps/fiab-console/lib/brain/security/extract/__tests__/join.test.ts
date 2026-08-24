@@ -16,13 +16,26 @@ import { codeModuleNodeId } from '../../../graph/node-id';
 import type { SecurityNode } from '../../substrate';
 import { assertJoinCoversGraph, buildJoin, codeModuleJoinKey, pathOfNodeId } from '../join';
 
+/**
+ * A path table covering everything `node-id.ts` normalises.
+ *
+ * The `scripts/**` entries are DELIBERATELY FICTIONAL filenames. Canonicalization
+ * and join bucketing are decided from the path SHAPE and never from whether the
+ * file exists, so a real name buys nothing — and it costs something real:
+ * `__tests__/spec-imported-scripts-have-no-shebang.test.ts` treats any quoted
+ * `scripts/**.mjs` literal inside a spec as an IMPORT of that script, and both
+ * `deploy-retry.mjs` and `check-route-guards.mjs` carry a `#!` line. Naming them
+ * here pulled two long-standing, correct scripts into that guard's population
+ * and failed the vitest suite (measured on PR #4022). The guard is right in its
+ * own terms; a fixture should not be what drags a file into it.
+ */
 const PATHS = [
   'apps/fiab-console/app/api/x/route.ts',
   'apps\\fiab-console\\app\\api\\x\\route.ts',
   'Apps/Fiab-Console/App/Api/X/Route.ts',
   './apps/fiab-console/lib/api/route-toolkit.ts',
-  'scripts/ci/check-route-guards.mjs/',
-  'scripts/ci/deploy-retry.mjs',
+  'scripts/ci/example-guard.mjs/',
+  'scripts/ci/example-retry.mjs',
 ];
 
 describe('codeModuleJoinKey is byte-identical to the real codeModuleNodeId', () => {
@@ -75,7 +88,7 @@ describe('buildJoin', () => {
   });
 
   it('leaves a CI script UNJOINED, with a reason that explains why', () => {
-    const join = buildJoin([node('sec:publication:scripts/ci/deploy-retry.mjs#module')]);
+    const join = buildJoin([node('sec:publication:scripts/ci/example-retry.mjs#module')]);
     expect(join.painted).toHaveLength(0);
     expect(join.unjoined).toHaveLength(1);
     // Not "unknown" — the reason must say a CI script has no estate presence.
