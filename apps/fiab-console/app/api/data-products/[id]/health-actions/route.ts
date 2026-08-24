@@ -34,6 +34,7 @@ import {
   measureCertificationDq, dqMeasurementPatch,
 } from '@/lib/dataproducts/certification-dq';
 import { upsertDataProductDoc, docForDataProduct } from '@/lib/azure/loom-data-products-search';
+import { resolveDataProductDocTenant } from '@/lib/dataproducts/owner-tenant';
 import { apiServerError } from '@/lib/api/respond';
 import { withSession } from '@/lib/api/route-toolkit';
 
@@ -99,7 +100,11 @@ export const POST = withSession<{ id: string }>(async (req: NextRequest, { sessi
         state: { ...state, ...patch },
       });
       if (updated) {
-        try { await upsertDataProductDoc(docForDataProduct(updated, session.claims.oid)); } catch { /* derived */ }
+        try {
+          // #3501 — the OWNER's tenant, not the caller's (see owner-tenant.ts).
+          const ownerTid = await resolveDataProductDocTenant(updated);
+          if (ownerTid) await upsertDataProductDoc(docForDataProduct(updated, ownerTid));
+        } catch { /* derived */ }
       }
       const score = dq.dqResult;
       const measured = dq.dqGate

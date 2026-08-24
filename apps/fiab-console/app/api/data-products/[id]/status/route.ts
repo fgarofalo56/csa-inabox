@@ -34,7 +34,6 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
-import { getSession } from '@/lib/auth/session';
 import { tenantSettingsContainer } from '@/lib/azure/cosmos-client';
 import {
   updateDataProductStatus,
@@ -43,11 +42,13 @@ import {
 } from '@/lib/azure/purview-client';
 import { loadOwnedItem, updateOwnedItem, jerr } from '@/app/api/items/_lib/item-crud';
 import { upsertDataProductDoc, docForDataProduct } from '@/lib/azure/loom-data-products-search';
+import { resolveDataProductDocTenant } from '@/lib/dataproducts/owner-tenant';
 import { setLifecycleState, type LifecycleState } from '@/lib/dataproducts/lifecycle';
 import { diffContracts, parseSemver } from '@/lib/dataproducts/versioning';
 import { evaluateContractGate, resolveContractTable } from '@/lib/dataproducts/contract-gate';
 import type { DataContract } from '@/lib/dataproducts/contract';
 import { apiServerError } from '@/lib/api/respond';
+import { withSession } from '@/lib/api/route-toolkit';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -174,11 +175,15 @@ async function checkPublishPreconditions(
   return null;
 }
 
-export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
-  const session = getSession();
-  if (!session) return jerr('unauthenticated', 401);
-
-  const id = (await ctx.params).id;
+// Route-toolkit: `withSession` (R1/R3). Migrated by hand — the codemod's AST
+// allowlist only accepts `apiUnauthorized()` / the literal envelope as the 401
+// body, and this route spelled it `jerr('unauthenticated', 401)`, which is the
+// SAME value (`jerr` → `apiError`; `apiUnauthorized()` IS
+// `apiError('unauthenticated', 401)`). `withWorkspaceOwner` is deliberately not
+// used: its 404 body is "not found", this route's is "data-product item not
+// found", so it would change a response. The owner check stays inline.
+export const POST = withSession<{ id: string }>(async (req: NextRequest, { session, params }) => {
+  const id = params.id;
   const body = await req.json().catch(() => ({}));
   const status = String(body?.status || '').toUpperCase() as LifecycleStatus;
   if (!VALID.includes(status)) {
@@ -259,7 +264,12 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
     // ribbon Publish makes the product discoverable (and Unpublish/Expire removes
     // it from consumer search). AWAITED so it completes within the request;
     // best-effort — the index is derived and never fails the lifecycle write.
-    try { await upsertDataProductDoc(docForDataProduct(updated, session.claims.oid)); } catch { /* index is derived */ }
+    try {
+      // #3501 — the OWNER's tenant, not the caller's: this field is the
+      // mandatory marketplace search filter (see owner-tenant.ts).
+      const ownerTid = await resolveDataProductDocTenant(updated);
+      if (ownerTid) await upsertDataProductDoc(docForDataProduct(updated, ownerTid));
+    } catch { /* index is derived */ }
 
     return NextResponse.json({
       ok: true,
@@ -273,4 +283,4 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
   } catch (e: any) {
     return apiServerError(e);
   }
-}
+});
