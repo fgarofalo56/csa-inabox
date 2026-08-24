@@ -61,8 +61,22 @@ export class MeasurementError extends Error {
  * outer quote pair is required — cmd strips it, leaving the inner quoting intact.
  */
 export function quoteForCmd(arg) {
-  if (arg === '') return '""';
-  return /[\s"^&|<>()]/.test(arg) ? `"${String(arg).replace(/"/g, '""')}"` : arg;
+  const s = String(arg);
+  // `cmd.exe` expands %VAR% even INSIDE double quotes, and there is no reliable
+  // command-line escape for it (`%%` only works inside a batch file). So an
+  // argument carrying `%` is REFUSED rather than silently substituted — the
+  // fail-closed choice, consistent with R1: never yield a value you cannot
+  // vouch for. Found while investigating why CodeQL's IndirectCommandInjection
+  // query singled this path out.
+  if (s.includes('%')) {
+    throw new MeasurementError(
+      `argument contains '%', which cmd.exe would expand as a variable: ${s.slice(0, 60)}. ` +
+      'Refusing rather than running a command different from the one requested.',
+      { arg: s },
+    );
+  }
+  if (s === '') return '""';
+  return /[\s"^&|<>()]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
 }
 
 function resolveExe(bin) {

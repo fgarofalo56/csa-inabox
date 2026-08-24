@@ -31,6 +31,16 @@ test('quoteForCmd: values needing quotes get them; plain values do not', () => {
   assert.equal(quoteForCmd('say "hi"'), '"say ""hi"""', 'inner quotes must be doubled for cmd');
 });
 
+test('quoteForCmd: a % argument is REFUSED, not silently expanded', () => {
+  // cmd.exe expands %VAR% even inside double quotes and there is no reliable
+  // command-line escape. Running a command different from the one requested is
+  // exactly the class of silent wrongness this module exists to prevent.
+  assert.throws(() => quoteForCmd('%PATH%'), (e) => /cmd\.exe would expand/.test(e.message));
+  assert.throws(() => quoteForCmd('name-%-mid'), (e) => e instanceof MeasurementError);
+  // CONTROL: a value WITHOUT % still passes, so the rule is not blanket-refusing.
+  assert.equal(quoteForCmd('100%-free-name'.replace('%', '')), '100-free-name');
+});
+
 test('spawnPlan: a .cmd is routed through cmd.exe with an outer-quoted line', { skip: process.platform !== 'win32' }, () => {
   const plan = spawnPlan(NODE, ['-e', 'x']); // .exe -> direct
   assert.equal(plan.argv[0], '-e', 'a real .exe must NOT be wrapped');
