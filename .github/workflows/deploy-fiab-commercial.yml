@@ -960,25 +960,47 @@ jobs:
       # #3022 removed.
       - name: Resolve the hub DNS resolver's IMMUTABLE IP allocation method (#3786)
         env:
-          DEPLOY_SUB: ${{ steps.topology_guard.outputs.deploy_sub }}
+          # #3916 — `target_sub`, NOT `deploy_sub`. The two answer different
+          # questions and this step needs the second one. `deploy_sub` answers
+          # "should I pass --subscription?" and its documented empty value means
+          # "inherit the login subscription" — legitimate, and the value on EVERY
+          # scheduled run, because it derives from `inputs.subscription` and a
+          # schedule carries no inputs. This step composes a literal ARM resource
+          # id (`/subscriptions/<id>/...`), which cannot inherit anything, so it
+          # read the documented empty string and hard-failed the P0 deploy path
+          # ~3h after #3888 landed. `target_sub` is the guard's RESOLVED literal
+          # and is never empty on a proceed.
+          TARGET_SUB: ${{ steps.topology_guard.outputs.target_sub }}
+          # The guard's RESOLVED topology ('' -> 'tenant'), not `inputs.topology`.
+          RESOLVED_TOPOLOGY: ${{ steps.topology_guard.outputs.topology }}
         run: |
           set -euo pipefail
           # dlz-attach stamps a landing zone into a DIFFERENT subscription and
           # deploys no admin plane (main.bicep:1114), so there is no hub resolver
-          # inbound endpoint to converge on. Decided in BASH from the resolved
-          # topology env, never from `inputs.` in an `if:` — a `schedule` event
-          # carries no inputs, and deciding a run-shape question by reading one
-          # is precisely the defect #2881 removed from this family of workflows.
-          if [ "${CSA_LOOM_TOPOLOGY:-}" = "dlz-attach" ]; then
+          # inbound endpoint to converge on.
+          #
+          # #3916 — this reads the guard's RESOLVED topology. It previously read
+          # $CSA_LOOM_TOPOLOGY under a comment claiming the branch was decided
+          # "from the resolved topology env, never from `inputs.` in an `if:`".
+          # That variable IS `inputs.topology || ''`, so on a `schedule` — the
+          # trigger that runs daily — it was the empty string and this branch was
+          # UNREACHABLE. The comment described the defect #2881 removed while the
+          # code committed it.
+          if [ "${RESOLVED_TOPOLOGY:-}" = "dlz-attach" ]; then
             echo "::notice::topology=dlz-attach deploys no admin plane, so there is no hub DNS resolver inbound endpoint to converge on."
             exit 0
           fi
-          if [ -z "${DEPLOY_SUB:-}" ]; then
-            echo "::error::No target subscription, so the live DNS resolver inbound endpoint cannot be located. It comes from the topology guard's deploy_sub output; it is empty."
+          # Defence in depth. The guard now REFUSES the run rather than emitting
+          # an empty target_sub, so this should be unreachable — kept because an
+          # unreachable check costs nothing and a step that builds an ARM id out
+          # of an empty string produces a 404 naming a resource that looks
+          # plausible in the log (R7). Retained deliberately, not by oversight.
+          if [ -z "${TARGET_SUB:-}" ]; then
+            echo "::error::No target subscription, so the live DNS resolver inbound endpoint cannot be located. It comes from the topology guard's target_sub output, which the guard refuses to leave empty — so reaching this means the guard's own fail-closed did not run."
             exit 1
           fi
           node scripts/ci/resolve-dns-inbound-allocation.mjs \
-            --subscription "$DEPLOY_SUB" \
+            --subscription "$TARGET_SUB" \
             --rg "rg-csa-loom-admin-${AZURE_LOCATION}" \
             --location "$AZURE_LOCATION"
 
@@ -1376,21 +1398,31 @@ jobs:
       - name: ADX preflight — a stopped cluster cannot take its principal assignments (#3786)
         if: github.event_name == 'schedule' || inputs.run_mode == 'full'
         env:
-          DEPLOY_SUB: ${{ steps.topology_guard.outputs.deploy_sub }}
+          # #3916 — the SIBLING of the DNS-resolver defect above, landed by the
+          # same PR (#3888) with the same shape. It never surfaced only because
+          # the run died at the earlier step; on the scheduled lane this one is
+          # reachable (`github.event_name == 'schedule'`) and would have failed
+          # identically the moment the first was fixed alone. See that step for
+          # why target_sub is the right output and deploy_sub is not.
+          TARGET_SUB: ${{ steps.topology_guard.outputs.target_sub }}
+          RESOLVED_TOPOLOGY: ${{ steps.topology_guard.outputs.topology }}
         run: |
           set -euo pipefail
           # dlz-attach deploys no admin plane, so it declares no principal
-          # assignments on the hub cluster and has nothing to start.
-          if [ "${CSA_LOOM_TOPOLOGY:-}" = "dlz-attach" ]; then
+          # assignments on the hub cluster and has nothing to start. Reads the
+          # guard's RESOLVED topology — $CSA_LOOM_TOPOLOGY is `inputs.topology`
+          # and is empty on the scheduled trigger, so this branch was dead there.
+          if [ "${RESOLVED_TOPOLOGY:-}" = "dlz-attach" ]; then
             echo "::notice::topology=dlz-attach deploys no admin-plane ADX cluster; nothing to start."
             exit 0
           fi
-          if [ -z "${DEPLOY_SUB:-}" ]; then
-            echo "::error::No target subscription, so the estate's ADX cluster cannot be located. It comes from the topology guard's deploy_sub output; it is empty."
+          # Defence in depth — the guard fails closed rather than emitting empty.
+          if [ -z "${TARGET_SUB:-}" ]; then
+            echo "::error::No target subscription, so the estate's ADX cluster cannot be located. It comes from the topology guard's target_sub output, which the guard refuses to leave empty — so reaching this means the guard's own fail-closed did not run."
             exit 1
           fi
           node scripts/ci/ensure-adx-cluster-running.mjs \
-            --subscription "$DEPLOY_SUB" \
+            --subscription "$TARGET_SUB" \
             --rg "rg-csa-loom-admin-${AZURE_LOCATION}"
 
       - name: Bicep what-if (preview)
