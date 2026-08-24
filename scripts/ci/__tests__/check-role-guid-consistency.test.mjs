@@ -15,6 +15,7 @@
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -35,6 +36,7 @@ import {
   repoShapeFaults,
   scan,
   scanFiles,
+  SCAN_ROOTS,
   REPO_ROOT,
 } from '../check-role-guid-consistency.mjs';
 
@@ -49,6 +51,250 @@ function run(source, file = 'fixture.ts') {
   return { ...evaluate(pairs), pairs, unparsed };
 }
 const checks = (r, id) => r.findings.filter((f) => f.check === id);
+
+// ── the repo scan: a directory listing is a SNAPSHOT ─────────────────────────
+
+/**
+ * How many vanished-file events ONE repo scan may absorb before this suite
+ * calls it churn rather than a race. "A couple" — the expected value is ZERO.
+ */
+const VANISH_BUDGET = 2;
+/** Every path that was listed by scanFiles() and gone by the time it was read. */
+const vanished = [];
+
+/**
+ * The control-artifact FAMILY.
+ *
+ * `__control`, NOT `__control__`. That single missing pair of underscores is why
+ * this PR's own receipt — "0 `__control__` mentions in three full runs" — was
+ * structurally incapable of seeing the writer that is still live:
+ * `deploy-target-subscription.test.mjs` names its copy
+ * `deploy-fiab-guard.__control_${Math.random().toString(36).slice(2)}__.mjs`,
+ * and `'…__control_a8cubozkz6q__.mjs'.includes('__control__')` is FALSE. A
+ * verification that cannot match the thing it is verifying reports a clean run
+ * over a defect. Key on the family; never on one spelling of it.
+ */
+const CONTROL_FAMILY = /__control/;
+
+/**
+ * Transient in-tree artifacts a KNOWN suite writes, declared by exact basename
+ * shape and attributed to the writer.
+ *
+ * This list is an ADMISSION, not an allowance to grow. Every entry is a suite
+ * that still writes into a tree this scan walks, i.e. still the #3459/#3892
+ * class. It exists so that a vanish from a NEW writer fails immediately instead
+ * of being absorbed by VANISH_BUDGET, which the entry below already saturates:
+ * that suite has 2 call sites per run and the budget is 2, so today there is
+ * ZERO headroom for anything else before the budget assertion trips.
+ *
+ * Known rot risk, stated: nothing here forces an entry to be REMOVED once its
+ * writer is fixed. A stale entry silently re-widens the tolerance. Delete the
+ * entry in the same PR that fixes the writer.
+ */
+const DECLARED_TRANSIENT = [
+  {
+    re: /^deploy-fiab-guard\.__control_[a-z0-9]+__\.mjs$/i,
+    by: 'scripts/ci/__tests__/deploy-target-subscription.test.mjs:262 (pre-existing on main; NOT fixed by #3912)',
+  },
+];
+
+/**
+ * Vanished paths that look like a test control artifact and are NOT declared.
+ *
+ * Pure, so it can be driven by fixtures — on a clean run `vanished` is empty and
+ * the assertion that uses this has population ZERO, which is the failure this
+ * repo keeps rediscovering. Entries arrive as `${path} (${CODE})`, so the code
+ * suffix is stripped before the basename is taken.
+ */
+function undeclaredControlArtifacts(paths) {
+  const out = [];
+  for (const entry of paths) {
+    const base = entry.replace(/\s+\([A-Z]+\)$/, '').replace(/^.*[\\/]/, '');
+    if (!CONTROL_FAMILY.test(base)) continue;
+    if (DECLARED_TRANSIENT.some((d) => d.re.test(base))) continue;
+    out.push(entry);
+  }
+  return out;
+}
+
+/**
+ * scan() the real repo, tolerating a file that disappeared between the
+ * directory listing and the read.
+ *
+ * ── WHY THIS IS NEEDED ─────────────────────────────────────────────────────
+ * scanFiles() lists a tree and inventory() then opens what it listed. Those are
+ * two moments, and anything can happen in between — an editor's atomic-rename
+ * save, a build cleaning an output, a git operation, or (the case that actually
+ * bit) a CONCURRENT SUITE in this same `node --test` invocation writing a
+ * temporary file into `scripts/ci` and deleting it again. Measured on PR #3892
+ * (run 32613872830), a bicep-only change:
+ *
+ *   not ok 278 - the repo is clean — every resolved binding carries its documented id
+ *     error: "ENOENT: no such file or directory, open
+ *             '…/scripts/ci/deploy-fiab-guard.__control__.mjs'"
+ *
+ * The two harnesses that wrote those files now write them to a temp directory
+ * instead, which removes THAT cause. This removes the CLASS: a snapshot is a
+ * snapshot regardless of who invalidates it, and an unrelated PR going red on a
+ * file that was never in its diff is the failure worth preventing.
+ *
+ * ── WHY IT RETRIES THE SCAN RATHER THAN SKIPPING THE FILE ──────────────────
+ * Skipping the unreadable file and continuing is the obvious fix and it is the
+ * WRONG one here: a skip silently shrinks the population, which is the
+ * zero-population failure this repo keeps rediscovering. Re-running scan()
+ * cannot do that — the retry re-LISTS the tree, the transient file is no longer
+ * in the listing, and the assertions run against a COMPLETE scan. The tolerance
+ * costs a rescan, not a measurement.
+ *
+ * DO NOT ARGUE THAT THE POPULATION FLOORS WOULD CATCH A SKIP. An earlier
+ * revision of this comment said a skip "subtracts from exactly the number those
+ * floors watch", implying `pairs >= 100` / `resolved >= 80` were the safety
+ * net. MEASURED, by dropping one scan root at a time (#3912):
+ *
+ *     dropped root          pairs / resolved   verdict
+ *     (none)                    342 / 155       pass
+ *     platform/fiab/bicep       157 /  74       TRIPS
+ *     apps/fiab-console         269 / 115       pass
+ *     scripts                   290 / 130       pass
+ *     .github                   310 / 146       pass
+ *
+ * You have to lose the BICEP tree — 185 of 342 bindings — before the floors say
+ * anything. A partial scan that dropped the whole `scripts` root, i.e. the root
+ * this race actually happens in, passes at 290/130 with `vanished` reporting 0.
+ * The floors are ~3.4x looser than that sentence claimed, and stating a
+ * stronger property than was tested is the R7 error this guard exists to catch.
+ *
+ * So the "retry, never skip" decision does NOT rest on this paragraph. It rests
+ * on assertions below — and it is worth being exact about what each one can and
+ * cannot see, because an earlier revision of this comment named only the first
+ * and closed with "Prose is not a guard; that assertion is." That sentence was
+ * true only of the WHOLE-ROOT mutation its author had defined, and "retry,
+ * never skip" is a PER-FILE property. Measured, running that per-root assertion
+ * IN ISOLATION so no other test can mask it: dropping only `scripts/ci` — 27
+ * bindings, and the directory this race actually happens in — left it at RC=0,
+ * pass=1, fail=0, because `scripts/csa-loom`'s 25 bindings keep
+ * `some(startsWith('scripts/'))` true. So did dropping the single file those 27
+ * come from. Only the whole `scripts` root moved it (RC=1). Restating a
+ * stronger property than was tested is the R7 error this guard exists to catch,
+ * and it had been made in the paragraph lecturing about it.
+ *
+ * What actually enforces the decision, at the granularity each one has:
+ *
+ *   - `the real repo yields a substantial, resolvable population` asserts every
+ *     SCAN ROOT contributed. Granularity: WHOLE ROOT. It trips on a dropped
+ *     `scripts`; it does NOT trip on a dropped `scripts/ci`.
+ *   - `every file that CAN contribute a binding DID` closes that gap at PER-FILE
+ *     granularity, by re-composing scanFiles() and harvest() here and comparing
+ *     the resulting file sets against the scan's. Dropping any file that yields
+ *     a pair, an unparsed entry or a near-miss trips it — including the single
+ *     file all 27 `scripts/ci` bindings come from. It is NOT sensitive to
+ *     dropping a file that yields none of the three; that file cannot change
+ *     the verdict, and the oracle re-derives from the tree each run, so it
+ *     starts being covered the moment it gains a binding.
+ *   - Neither can see a `scanFiles()` that quietly stops listing a subtree,
+ *     because BOTH derive their expectation from scanFiles(). That leg is the
+ *     pinned listing sentinels in the same test: narrower — four named files —
+ *     but genuinely independent of the listing under test.
+ *
+ * The tolerance is bounded and DISCLOSED either way: every vanished path is
+ * recorded, the count is reported and asserted small by the test below, and a
+ * fourth event stops retrying and rethrows with the whole list attached rather
+ * than looping on a tree that is genuinely being churned.
+ *
+ * Memoised because all three repo-anchored tests want the same measurement and
+ * one scan takes ~5s: one scan is cheaper AND is one third of the exposure.
+ */
+let scanned = null;
+function scanRepo() {
+  if (scanned) return scanned;
+  scanned = scanTolerantly(() => scan(), vanished, VANISH_BUDGET, SCAN_ROOTS);
+  return scanned;
+}
+
+/**
+ * The vanish-tolerant retry loop itself, PARAMETERISED over its scan function,
+ * its record sink, its budget and the root names it reports.
+ *
+ * ── WHY IT IS A PARAMETER RATHER THAN A CLOSURE ────────────────────────────
+ * In a clean run NOTHING vanishes, so every shipped assertion about this
+ * machinery reads `0 <= 2` and cannot move. Measured, running the disclosure
+ * test IN ISOLATION so no other test can mask it, three separate mutations OF
+ * THE MACHINERY all left it at RC=0, pass=1, fail=0:
+ *
+ *     deleting the recorder            (sink.push(...) -> no-op)       RC=0
+ *     deleting the tolerance           (catch -> always rethrow)       RC=0
+ *     VANISH_BUDGET = Infinity         (what the failure text forbids) RC=0
+ *
+ * The verdict did not move for any of them, and that silence WAS the finding.
+ * The author had exercised all four regions by hand with an external churner,
+ * but nothing automated shipped — `guard_with_zero_population_needs_embedded
+ * _control` verbatim.
+ *
+ * `EMBEDDED CONTROL — the vanish tolerance ...` below fabricates vanish events
+ * and calls THIS function, so it exercises the shipped loop rather than a copy
+ * of it. A control over a copy proves only that the copy works.
+ */
+function scanTolerantly(scanFn, sink, budget, roots) {
+  for (;;) {
+    try {
+      return scanFn();
+    } catch (err) {
+      // ENOENT and EPERM are BOTH produced by THIS race. Anything else —
+      // EACCES, EISDIR, a malformed read — is a real fault and must not be
+      // retried into silence.
+      //
+      // WHAT IS ESTABLISHED (measurements in #3912). On a Windows workstation,
+      // when ANOTHER PROCESS is creating and deleting names in a scanned
+      // directory, a raced read returns EPERM at a substantial rate: ~3,400
+      // EPERM across ~85,000 raced reads — 1.5% under heavy churn, 12% under
+      // light churn — with zero EBUSY anywhere. This branch is genuinely
+      // reachable, and deleting it reintroduces an unhandled crash.
+      //
+      // WHAT IS NOT ESTABLISHED: WHY Windows returns EPERM here rather than
+      // ENOENT. The obvious hypothesis is delete-pending — unlink with another
+      // handle still open leaves the entry listed, and an open inside that
+      // window fails ERROR_DELETE_PENDING. That hypothesis was TESTED AND
+      // FALSIFIED: the textbook delete-pending setup, cross-process, returned
+      // ENOENT 92,506 times out of 92,506. Also ruled out — the create/truncate
+      // window and interference from the security stack (create-only churn,
+      // no deletes: 17,608 raced reads over ~73,000 writes, zero errors); and
+      // single-process unlink→open (41,184 raced reads, 100% ENOENT), which is
+      // why the first attempt to reproduce this saw nothing. Cross-process is
+      // the variable that matters; the kernel-level cause is unknown.
+      //
+      // An earlier revision of this comment asserted delete-pending AS the
+      // cause and said POSIX-semantics delete made EPERM unreachable. Both were
+      // wrong, and the second is the dangerous kind of wrong — it argues for
+      // narrowing this catch back to ENOENT-only. R7: if the code does not
+      // know, it says it does not know.
+      //
+      // Do not narrow it back because "CI is green": loom-guardrails.yml:68 is
+      // `runs-on: ubuntu-latest`, where unlink→open is always ENOENT, so an
+      // ENOENT-only catch reads correct forever in CI and rethrows unhandled on
+      // the Windows workstation every agent in this repo actually works on.
+      //
+      // And do not narrow it back because you ran the suite under churn and saw
+      // only ENOENT. THIS FUNCTION IS A TERRIBLE INSTRUMENT FOR THAT QUESTION:
+      // the first error aborts the scan, so one run samples ~1-3 raced reads
+      // against the ~85,000 the rate above was measured over. At 1.5-12%,
+      // seeing no EPERM in a handful of samples is the expected outcome and
+      // establishes nothing. Measure it with a dedicated harness or not at all.
+      if (err?.code !== 'ENOENT' && err?.code !== 'EPERM') throw err;
+      // The code is recorded next to the path because the two codes are not the
+      // same event and this suite cannot tell which occurred from the path
+      // alone. The record says what was seen; it does not name a cause.
+      sink.push(`${err.path ?? '<unnamed>'} (${err.code})`);
+      if (sink.length > budget + 1) {
+        err.message = `${err.message}\n  ${sink.length} file(s) went unreadable between the directory `
+          + `listing and the read across as many rescans, so this is not a one-off race — something is `
+          + `writing into a scanned tree (${roots.join(', ')}) while the tests run. Each error code is `
+          + `recorded below; this does NOT establish why Windows returns one rather than the other:`
+          + `\n    ${sink.join('\n    ')}`;
+        throw err;
+      }
+    }
+  }
+}
 
 // ── the reference table and the embedded controls ───────────────────────────
 
@@ -580,7 +826,7 @@ test('test files are out of scope — their GUIDs are fixtures, not grants', () 
 
 test('the guard does not harvest its own reference table', () => {
   const self = 'scripts/ci/check-role-guid-consistency.mjs';
-  const { pairs } = scan();
+  const { pairs } = scanRepo();
   assert.equal(pairs.filter((p) => p.file === self).length, 0);
 });
 
@@ -588,16 +834,445 @@ test('the real repo yields a substantial, resolvable population', () => {
   // The floors in main() are `> 0`; this asserts the tree is genuinely being
   // read, so a matcher that silently degrades to a handful of hits is visible
   // here even while the binary floor still passes.
-  const { pairs, resolved } = scan();
+  const { pairs, resolved } = scanRepo();
   assert.ok(pairs.length >= 100, `only ${pairs.length} bindings harvested`);
   assert.ok(resolved >= 80, `only ${resolved} bindings resolved`);
+
+  // EVERY SCAN ROOT MUST CONTRIBUTE — this is what actually enforces
+  // scanRepo()'s "retry, never skip" decision, and it is here because the two
+  // floors above DO NOT. Measured by dropping one root at a time (#3912):
+  //
+  //     dropped root          pairs / resolved   the floors above say
+  //     (none)                    342 / 155       pass
+  //     platform/fiab/bicep       157 /  74       TRIPS
+  //     apps/fiab-console         269 / 115       pass
+  //     scripts                   290 / 130       pass   <- where the race is
+  //     .github                   310 / 146       pass
+  //
+  // So a scanRepo() mutated to give up quietly and return a PARTIAL scan —
+  // drop the affected root, never record it in `vanished` — passes 4/4 with
+  // `vanished` reporting 0, at 290/130, with the entire `scripts` tree missing.
+  // Per-root contributions are 185 / 73 / 52 / 32, so none of these is a
+  // zero-population assertion.
+  //
+  // Keyed on `${root}/` and not a bare prefix: `startsWith('scripts')` would
+  // also accept a hypothetical `scripts-other/`, the sibling-directory trap
+  // this repo already pays for elsewhere.
+  for (const root of SCAN_ROOTS) {
+    assert.ok(
+      pairs.some((p) => p.file.startsWith(`${root}/`)),
+      `no bindings harvested from ${root} — the scan is PARTIAL, not clean. The totals above can still pass `
+        + 'with a whole root missing, so this is the assertion that catches it. Something dropped a scan root: '
+        + 'do NOT delete this check, find what stopped reading that tree.',
+    );
+  }
 });
 
 test('the repo is clean — every resolved binding carries its documented id', () => {
   // The baseline half of the mutation proof, pinned so a regression is a test
   // failure and not just a red CI step somebody reruns.
-  const { findings } = scan();
+  const { findings } = scanRepo();
   assert.deepEqual(findings.map((f) => `${f.check} ${f.file}:${f.line}`), []);
+});
+
+test('the repo scan absorbed at most a couple of vanished files, and names them', (t) => {
+  // The disclosure half of scanRepo()'s ENOENT tolerance. Without this, "the
+  // listing can go stale" would be an unbounded, silent licence — and a
+  // scanner that swallows every read error is the zero-population failure this
+  // repo keeps rediscovering, wearing a different hat.
+  //
+  // Declared AFTER the three tests above so it reports on their scan (node:test
+  // runs a file's top-level tests in declaration order); the call is here too
+  // so this still measures something when run with --test-name-pattern.
+  scanRepo();
+  t.diagnostic(
+    `files that went unreadable between the directory listing and the read: ${vanished.length}`
+      + (vanished.length > 0 ? ` — ${vanished.join(', ')}` : ''),
+  );
+  assert.ok(
+    vanished.length <= VANISH_BUDGET,
+    `${vanished.length} file(s) went unreadable mid-scan, over a budget of ${VANISH_BUDGET}. The EXPECTED `
+      + 'value is ZERO. Two of the three suites that wrote a transient `*.__control__.mjs` into scripts/ci now '
+      + 'write it to a temp directory; the third — deploy-target-subscription.test.mjs — still does not, and '
+      + 'its 2 events/run already saturate this budget. More than that means something ELSE is writing into a '
+      + 'scanned tree — fix that, do NOT raise the budget:'
+      + `\n    ${vanished.join('\n    ')}`,
+  );
+
+  // The budget alone would absorb a NEW writer's first two events per run in
+  // silence, which is exactly what it is doing for the declared one. This
+  // separates the two: an artifact that looks like a test control and is not
+  // attributed to a known writer fails on the FIRST event, at any budget.
+  assert.deepEqual(
+    undeclaredControlArtifacts(vanished),
+    [],
+    'a file matching the test-control artifact family vanished mid-scan and is NOT attributed to a declared '
+      + 'writer — a new suite is writing a transient copy into a tree this scan walks. That is the #3459/#3892 '
+      + 'class. Route its copy through a temp directory (see writeMutantOutsideTheTree in '
+      + 'deploy-fiab-guard.test.mjs); do NOT add it to DECLARED_TRANSIENT to make this green.',
+  );
+});
+
+test('EMBEDDED CONTROL — the control-artifact classifier sees the randomised family', () => {
+  // POPULATION. On a clean run `vanished` is EMPTY, so the assertion above reads
+  // `[] deepEqual []` forever and neither CONTROL_FAMILY nor DECLARED_TRANSIENT
+  // is ever evaluated. These fixtures are its population: 4 undeclared, 3
+  // declared-or-ignored.
+  const undeclared = [
+    "scripts/ci/deploy-fiab-guard.__control__.mjs (ENOENT)",
+    'scripts/ci/check-deploy-paths-coverage.__control__.mjs (EPERM)',
+    'scripts/ci/some-new-guard.__control_zzz__.mjs (ENOENT)',
+    // Windows separators, because that is what a real event carries here.
+    'E:\\repo\\scripts\\ci\\another.__control__.mjs (ENOENT)',
+  ];
+  assert.deepEqual(undeclaredControlArtifacts(undeclared), undeclared, 'every undeclared control artifact must be reported');
+
+  // The declared one, in the randomised spelling that defeated the receipt grep.
+  assert.deepEqual(
+    undeclaredControlArtifacts(['scripts/ci/deploy-fiab-guard.__control_a8cubozkz6q__.mjs (ENOENT)']),
+    [],
+    'the DECLARED writer must be absorbed here and left to the budget assertion',
+  );
+  // …and the literal-`__control__` grep that could not see it, pinned as the
+  // negative result it is, so nobody re-derives that receipt.
+  assert.equal(
+    'deploy-fiab-guard.__control_a8cubozkz6q__.mjs'.includes('__control__'),
+    false,
+    'this is why the family pattern is `__control` — a receipt grepping `__control__` is blind to the live writer',
+  );
+
+  // Ordinary vanishes — an atomic-rename save, a build output — are NOT this
+  // class and must stay with the budget rather than failing on sight.
+  assert.deepEqual(
+    undeclaredControlArtifacts(['apps/fiab-console/lib/x.ts (ENOENT)', 'scripts/ci/.tmp-1234 (ENOENT)']),
+    [],
+    'a non-control vanish must not be escalated',
+  );
+});
+
+test('every file that CAN contribute a binding DID — per FILE, not per root', (t) => {
+  const { pairs, unparsed, unharvested } = scanRepo();
+  const listed = scanFiles();
+  const rel = (abs) => path.relative(REPO_ROOT, abs).split(path.sep).join('/');
+  const listedRel = new Set(listed.map(rel));
+
+  // ── LEG 1 — the LISTING, pinned by name. ───────────────────────────────────
+  // This test and the per-root assertion above both derive their expectation
+  // FROM scanFiles(), so a scanFiles() that quietly stopped descending into a
+  // subtree would shrink expectation and result together and neither would
+  // notice. These four are the leg that does not share that method: one tracked
+  // file per SCAN_ROOT, NAMED rather than derived. Four files wide, not 4863 —
+  // narrow on purpose, and honestly narrow.
+  //
+  // EXACTLY what the scripts/ci entry does and does not buy, corrected: it
+  // catches a walk that stops DESCENDING into scripts/ci. It does NOT catch
+  // "drop only scripts/ci", which an earlier revision of this comment claimed
+  // it did — `deploy-fiab-guard.mjs` yields ZERO bindings, so pinning it as
+  // listed says nothing about whether the directory was harvested. LEG 4 is the
+  // assertion that covers that, and LEG 3 covers the extension filter these
+  // four cannot span (.bicep/.ts/.mjs/.yml only — no .tsx, no .sh).
+  const SENTINELS = [
+    'platform/fiab/bicep/main.bicep',
+    'apps/fiab-console/lib/client-fetch.ts',
+    'scripts/ci/deploy-fiab-guard.mjs',
+    '.github/workflows/loom-guardrails.yml',
+  ];
+  for (const s of SENTINELS) {
+    assert.ok(
+      listedRel.has(s),
+      `scanFiles() no longer lists ${s}. Either the scan stopped descending into that tree — which is the `
+        + 'defect this sentinel exists to catch — or the file moved, in which case repoint the sentinel at '
+        + 'another tracked file under the same root. Do NOT simply delete it.',
+    );
+  }
+  assert.ok(listed.length >= 1000, `scanFiles() listed only ${listed.length} files — the walk is not reaching the tree`);
+
+  // ── LEG 2 — per-FILE completeness of the HARVEST. ──────────────────────────
+  // inventory() is scanFiles() + harvest() composed in a loop. This re-composes
+  // the SAME two exported primitives here and compares the two file sets.
+  //
+  // WHAT THIS ESTABLISHES: that no file which yields harvest output was dropped
+  // from, or discarded by, that composition — at PER-FILE granularity. Measured
+  // with the per-root assertion run in isolation, it stays green (RC=0, pass=1,
+  // fail=0) while all 27 of `scripts/ci`'s bindings go missing, because
+  // `scripts/csa-loom`'s 25 keep `some(startsWith('scripts/'))` true. Dropping
+  // the ONE file those 27 come from trips this test (RC=1, pass=62, fail=1).
+  //
+  // WHAT IT DOES NOT ESTABLISH, precisely: (1) anything about scanFiles()
+  // itself, which both sides share — agreement between two counts that share a
+  // method confirms the METHOD, and that gap is LEG 1's and LEG 3's;
+  // (2) the skipping of a file that yields NO harvest output at all.
+  //
+  // RE-MEASURED THIS SESSION, because the two numbers that used to be in this
+  // paragraph were both wrong and one of them was wrong in the direction that
+  // flatters the oracle. Of the 4863 listed files, **172** carry a binding — not
+  // the 158 stated here before, which is also what CI itself prints one line
+  // below (`the scan attributed 172`), so the claim was contradicted by the
+  // diagnostic immediately underneath it. And `scripts/ci` has **TWO**
+  // contributors, not "exactly ONE": check-docs-hygiene.mjs (27 pairs AND 1
+  // near-miss — the near-miss was uncounted too) and check-module-existing-
+  // scope.mjs (0 pairs, 3 near-misses). Near-misses are `unharvested`, which
+  // this oracle's expectation set counts, so calling them nothing was wrong
+  // twice over.
+  //
+  // The residual gap is real and unchanged: dropping e.g. deploy-fiab-guard.mjs
+  // — 0 pairs, 0 unparsed, 0 near-misses — moves nothing here and this test
+  // stays green. That is deliberate rather than overlooked: a file that yields
+  // none of the three cannot change the guard's verdict, and if a later edit
+  // gives it one, this oracle re-derives from the tree on every run and will
+  // require it from that moment on.
+  const SELF = 'scripts/ci/check-role-guid-consistency.mjs';
+  assert.ok(listedRel.has(SELF), `${SELF} is not in the listing, so the exemption below is stale and hides a file`);
+
+  const expected = new Set();
+  for (const abs of listed) {
+    const r = rel(abs);
+    // inventory() skips ITSELF — harvesting the reference table would compare
+    // CANONICAL against itself and could never fail. That is the ONLY permitted
+    // listed-but-not-harvested file, and it is named here so a SECOND exemption
+    // added to the guard surfaces as a failure rather than widening this hole.
+    if (r === SELF) continue;
+    const h = harvest(fs.readFileSync(abs, 'utf8'), r);
+    // All THREE outputs, not just pairs: `unparsed` and `unharvested` are read
+    // by main() and a dropped file could hide one of those just as easily.
+    if (h.pairs.length + h.unparsed.length + h.unharvested.length > 0) expected.add(r);
+  }
+  const got = new Set([...pairs, ...unparsed, ...unharvested].map((p) => p.file));
+  t.diagnostic(`listed ${listed.length} files; ${expected.size} of them yield harvest output; the scan attributed ${got.size}`);
+
+  // The oracle's own population, as a number: an independent pass that silently
+  // found nothing would AGREE with a scan that found nothing, which is the
+  // zero-population failure wearing yet another hat.
+  assert.ok(
+    expected.size >= 20,
+    `the independent pass found bindings in only ${expected.size} file(s) — the ORACLE is broken, so its `
+      + 'agreement with the scan establishes nothing',
+  );
+
+  // ONE RESIDUAL SENSITIVITY, stated rather than hidden: the two sides read the
+  // tree at two different MOMENTS (scan() first, this pass second). A file that
+  // is transiently rewritten in between, by a suite co-scheduled in the same
+  // `node --test` invocation, could therefore disagree with itself.
+  //
+  // THE CENSUS, re-measured this session, because the one that used to be here
+  // named a single file and named the wrong one. There are at least THREE
+  // suites under `scripts/ci/__tests__` that still write into a SCAN_ROOT:
+  //
+  //   deploy-target-subscription.test.mjs:262  CREATE+DELETE in `scripts/ci` —
+  //     `deploy-fiab-guard.__control_${Math.random()…}__.mjs`, 2 call sites per
+  //     run. This is the SAME artifact family, the same directory and the same
+  //     create-then-delete-in-`finally` shape that #3912 exists to remove, and
+  //     it is the only one of the three that can produce an ENOENT here. It is
+  //     PRE-EXISTING on main and is NOT fixed by #3912 — see the routing note
+  //     in the PR. Its randomised name is also why a receipt grepping for the
+  //     literal `__control__` cannot see it: `…__control_a8cu…__.mjs` does not
+  //     contain `__control__`. GREP FOR `__control`, NOT `__control__`.
+  //   guard-import-side-effects.test.mjs      IN-PLACE rewrite of
+  //     `scripts/ci/check-azd-provision-param-binding.mjs`, restored in
+  //     `finally`. No create/delete window, so no ENOENT — the QUIET variant.
+  //     Inert for this oracle today: that file yields no pair, no unparsed entry
+  //     and no near-miss, so a torn read of it cannot move either set.
+  //   external-origin-urls.test.mjs           IN-PLACE rewrite of three tracked
+  //     routes under `apps/fiab-console/app/api`. Also quiet, also inert today —
+  //     verified: all three yield pairs=0 unparsed=0 nearmiss=0.
+  //
+  // That census is a STATIC LOWER BOUND and is labelled as one: it was taken by
+  // reading the 110 suites in this directory for a write whose target resolves
+  // into a scanned root, and 2 of the first 3 candidates turned out to be writes
+  // into an mkdtemp fixture that merely CONTAINS a `scripts/ci` path segment. A
+  // dynamically-computed target would evade it entirely. Do not read "three" as
+  // "all".
+  //
+  // If this assertion ever fires naming a file nobody touched, look at the FIRST
+  // entry above: it is the same class #3912 fixed, not a partial scan.
+  const missing = [...expected].filter((f) => !got.has(f)).sort();
+  const extra = [...got].filter((f) => !expected.has(f)).sort();
+  assert.deepEqual(
+    missing,
+    [],
+    'these files carry a harvestable binding and were listed by scanFiles(), but contributed NOTHING to the '
+      + 'scan — the scan is PARTIAL. The per-root assertion cannot see this; that is why this one exists.',
+  );
+  assert.deepEqual(
+    extra,
+    [],
+    'the scan harvested bindings from files an independent scanFiles()+harvest() pass does not attribute to '
+      + 'it — the two disagree about WHICH files were read, so at least one of them is wrong.',
+  );
+
+  // ── LEG 3 — the LISTING's EXTENSION coverage. ─────────────────────────────
+  // scanFiles() filters on `SCAN_EXT.test(name) && !SKIP_FILE.test(name)`,
+  // INSIDE the predicate. That is the blind spot LEG 1 and LEG 2 share and it
+  // is not theoretical — measured on this tree, narrowing SCAN_EXT by a single
+  // extension left the suite at RC=0, 63/63:
+  //
+  //     dropped ext   listed        contributors   suite
+  //     (none)        4863          172            63/63
+  //     tsx           3813 (-1050)  163            63/63  <- invisible
+  //     sh            4718 (-145)   162            63/63  <- invisible
+  //
+  // It is invisible on every other leg by construction: LEG 1's four sentinels
+  // are .bicep/.ts/.mjs/.yml so none of them is the dropped extension; the
+  // `listed >= 1000` floor has ~3800 of headroom; the per-root `some()` survives
+  // because each root keeps another extension; and LEG 2's two sides BOTH derive
+  // from scanFiles(), so expectation and result shrink together — the
+  // "agreement is not independence" failure named three paragraphs up and then
+  // walked into.
+  //
+  // Floors, not exact counts, so ordinary churn does not fight the tree; each is
+  // ~2/3 of today's population, and each is a NUMBER so none of these is a
+  // zero-population assertion. cjs (0 files), js (1) and yaml (8) are in
+  // SCAN_EXT too and are deliberately absent: a floor on a population that small
+  // is noise, and saying so is more honest than pinning `>= 1`.
+  const EXT_FLOORS = { ts: 2000, tsx: 700, mjs: 150, bicep: 120, sh: 90, yml: 90 };
+  const byExt = new Map();
+  for (const abs of listed) {
+    const e = path.extname(abs).slice(1).toLowerCase();
+    byExt.set(e, (byExt.get(e) ?? 0) + 1);
+  }
+  t.diagnostic(`listing by extension: ${[...byExt].sort((a, b) => b[1] - a[1]).map(([e, n]) => `${e}=${n}`).join(' ')}`);
+  for (const [ext, floor] of Object.entries(EXT_FLOORS)) {
+    assert.ok(
+      (byExt.get(ext) ?? 0) >= floor,
+      `scanFiles() listed only ${byExt.get(ext) ?? 0} .${ext} file(s), under a floor of ${floor}. Either the `
+        + 'walk stopped reaching that tree or SCAN_EXT stopped accepting that extension — narrowing SCAN_EXT is '
+        + 'invisible to every other leg of this test, which is why this floor exists. Do NOT lower it to match; '
+        + 'find what stopped being listed.',
+    );
+  }
+
+  // ── LEG 4 — the RACE DIRECTORY still contributes bindings. ────────────────
+  // The other half of the in-predicate blind spot: SKIP_FILE. Measured, adding
+  // ONE token to it (`/(\.test\.|\.spec\.|docs-hygiene)/`) dropped every one of
+  // `scripts/ci`'s 27 pairs and left the suite at RC=0, 63/63, with LEG 2's
+  // oracle reading `expected=171 got=171` — both sides moved together.
+  //
+  // Nothing above catches it. The per-root `some()` is keyed on `scripts/`, and
+  // `scripts/csa-loom`'s 25 pairs keep it true with all of `scripts/ci` gone.
+  // LEG 1 pins `scripts/ci/deploy-fiab-guard.mjs` as LISTED — but that file
+  // yields ZERO bindings, so listing it establishes nothing about whether the
+  // directory was HARVESTED. The comment on LEG 1 claimed this sentinel covered
+  // "drop only scripts/ci"; it does not, and this is the assertion that does.
+  //
+  // `scripts/ci` specifically, and not merely "some directory": it is the
+  // directory the #3892 race happens in, so a scan that silently stops
+  // harvesting it is the failure mode with the most reason to occur here.
+  const ciPairs = pairs.filter((p) => p.file.startsWith('scripts/ci/'));
+  const ciContributors = new Set([...pairs, ...unparsed, ...unharvested]
+    .map((p) => p.file).filter((f) => f.startsWith('scripts/ci/')));
+  t.diagnostic(`scripts/ci: ${ciPairs.length} pair(s) from ${ciContributors.size} contributing file(s)`);
+  assert.ok(
+    ciPairs.length >= 20,
+    `only ${ciPairs.length} binding(s) harvested from scripts/ci, under a floor of 20 (there are 27 today, all `
+      + 'from check-docs-hygiene.mjs). A filter INSIDE scanFiles() — SKIP_FILE or SCAN_EXT — can delete this '
+      + 'whole directory while every other assertion in this file stays green. If check-docs-hygiene.mjs '
+      + 'legitimately lost its bindings, repoint this floor at whatever now carries them; do NOT delete it.',
+  );
+});
+
+// ── the vanish tolerance: an EMBEDDED CONTROL, because its population is ZERO ─
+
+test('EMBEDDED CONTROL — the vanish tolerance records, retries, bounds, and rethrows', () => {
+  // POPULATION. On a clean run `vanished` is EMPTY, so the disclosure assertion
+  // above reads `0 <= 2` forever and every branch of scanTolerantly() past the
+  // first `return` is unexecuted. Measured with the disclosure test run in
+  // isolation, three mutations OF THAT MACHINERY all left it at RC=0, pass=1,
+  // fail=0 — deleting the
+  // recorder, deleting the tolerance so the catch always rethrows, and setting
+  // the budget to Infinity. The verdict did not move for any of them. These
+  // fabricated events are the population that makes them move.
+  const raced = (code, p) => Object.assign(new Error(`${code}: fake, open '${p}'`), { code, path: p });
+
+  // (a) ENOENT is ABSORBED, the whole scan is RE-RUN, and the event is RECORDED.
+  {
+    const sink = [];
+    let calls = 0;
+    const out = scanTolerantly(() => {
+      calls += 1;
+      if (calls === 1) throw raced('ENOENT', 'scripts/ci/a.mjs');
+      return 'COMPLETE SCAN';
+    }, sink, 2, ['scripts']);
+    assert.equal(out, 'COMPLETE SCAN');
+    assert.equal(calls, 2, 'the tolerance must RETRY the whole scan — skipping the file would shrink the population');
+    assert.deepEqual(sink, ['scripts/ci/a.mjs (ENOENT)'], 'the vanished path AND its code must be recorded');
+  }
+
+  // (b) EPERM is the OTHER half of the catch and is exercised SEPARATELY, so a
+  //     tolerance — or a recorder — narrowed to ENOENT-only goes red HERE. It
+  //     would not go red in CI otherwise: loom-guardrails.yml runs
+  //     ubuntu-latest, where unlink->open is always ENOENT, so an ENOENT-only
+  //     catch reads correct forever there and rethrows unhandled on the Windows
+  //     workstation. That asymmetry is the whole reason the catch takes two.
+  {
+    const sink = [];
+    let calls = 0;
+    const out = scanTolerantly(() => {
+      calls += 1;
+      if (calls === 1) throw raced('EPERM', 'scripts/ci/b.mjs');
+      return 'COMPLETE SCAN';
+    }, sink, 2, ['scripts']);
+    assert.equal(out, 'COMPLETE SCAN');
+    assert.equal(calls, 2, 'EPERM must be retried exactly as ENOENT is');
+    assert.deepEqual(sink, ['scripts/ci/b.mjs (EPERM)'], 'an EPERM event must be recorded, and recorded AS EPERM');
+  }
+
+  // (c) any OTHER code is a real fault: NOT retried into silence, NOT recorded
+  //     as a vanish, and not relabelled as one.
+  {
+    const sink = [];
+    let calls = 0;
+    let thrown = null;
+    try {
+      scanTolerantly(() => { calls += 1; throw raced('EACCES', 'scripts/ci/c.mjs'); }, sink, 2, ['scripts']);
+    } catch (e) { thrown = e; }
+    assert.ok(thrown, 'a non-race error must propagate');
+    assert.equal(thrown.code, 'EACCES');
+    assert.equal(calls, 1, 'a non-race error must NOT be retried');
+    assert.deepEqual(sink, [], 'a non-race error must NOT be recorded as a vanished file');
+  }
+
+  // (d) past the budget it STOPS retrying and rethrows, naming every path and
+  //     the roots. The threshold is pinned as a NUMBER: with a budget of 2 the
+  //     FOURTH event is the one that throws, so loosening `> budget + 1` fails
+  //     here rather than quietly turning the bound into a suggestion.
+  {
+    const sink = [];
+    let calls = 0;
+    let thrown = null;
+    try {
+      scanTolerantly(() => {
+        calls += 1;
+        throw raced('ENOENT', `scripts/ci/d${calls}.mjs`);
+      }, sink, 2, ['scripts', '.github']);
+    } catch (e) { thrown = e; }
+    assert.ok(thrown, 'a tree that keeps churning must eventually rethrow, not loop');
+    assert.equal(calls, 4, 'with a budget of 2, three events are absorbed and the FOURTH rethrows');
+    assert.equal(sink.length, 4);
+    assert.match(thrown.message, /4 file\(s\) went unreadable/);
+    assert.match(thrown.message, /scripts, \.github/, 'the message must name the roots that were being scanned');
+    for (const n of [1, 2, 3, 4]) {
+      assert.match(thrown.message, new RegExp(`d${n}\\.mjs`), `the rethrow must list every path, including d${n}`);
+    }
+    // R7 — the message says what was SEEN and explicitly declines to name a
+    // cause for the code. Pinned so a future edit cannot quietly upgrade an
+    // observation into a diagnosis.
+    assert.match(thrown.message, /does NOT establish why/);
+  }
+});
+
+test('the vanish budget is a small FINITE number', () => {
+  // `VANISH_BUDGET = Infinity` makes the disclosure assertion read
+  // `0 <= Infinity` and makes scanTolerantly() retry forever on a tree that is
+  // genuinely being churned. Measured with the disclosure test run in
+  // isolation, that mutation left it at RC=0, pass=1, fail=0 — its own failure
+  // text says "do NOT raise the budget", and nothing enforced it. Prose is not
+  // a guard.
+  assert.ok(
+    Number.isInteger(VANISH_BUDGET) && VANISH_BUDGET >= 0 && VANISH_BUDGET <= 3,
+    `VANISH_BUDGET is ${VANISH_BUDGET}. It must be a small finite integer (0-3). Raising it does not fix a `
+      + 'churning tree, it hides one — and Infinity turns the retry loop into a hang. Find what is writing '
+      + 'into a scanned tree instead.',
+  );
 });
 
 test('every embedded control has a name and both halves are exercised somewhere', () => {

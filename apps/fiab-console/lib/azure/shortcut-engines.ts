@@ -221,10 +221,49 @@ export function pickTablesEngine(): ShortcutEngine | null {
   return null;
 }
 
+/**
+ * The schema `synapseObject` (this module's mint) creates shortcut views in.
+ * Named rather than repeated so the mint and `isMintedEngineObject` (the guard)
+ * cannot drift: a change here moves both at once.
+ */
+const SYNAPSE_SHORTCUT_SCHEMA = 'shortcuts';
+
+/**
+ * EVERY schema, inside this deployment's own serverless DB, that Loom mints
+ * shortcut engine objects into — the guard's Synapse allow-set.
+ *
+ * There is more than one mint, and the guard is only correct if it knows about
+ * all of them. Enumerated, with the site that produces each:
+ *
+ *   `shortcuts`  `synapseObject()` in THIS file — the lakehouse-shortcut route's
+ *                Tables registration (`registerTablesObject`).
+ *   `lakehouse`  `lib/install/provisioners/lakehouse.ts` — the content-install
+ *                path mints `lakehouse.<leaf>` for repo-dataset shortcuts and
+ *                creates that schema itself
+ *                (`IF SCHEMA_ID('lakehouse') IS NULL EXEC('CREATE SCHEMA lakehouse')`).
+ *
+ * WHY THIS LIST AND NOT A WILDCARD. Both entries are LITERAL schema names in
+ * Loom's own `serverlessDb()`. The caller never picks the database and never
+ * picks the schema, so widening from one literal to two literals does not let
+ * item state select an object outside the space Loom itself creates. A wildcard
+ * `<db>.<anything>.<obj>` would: `dbo`, `sys` and `information_schema` all live
+ * in the same database, and admitting them is exactly the #3611 hole.
+ *
+ * A NEW MINT MUST BE ADDED HERE. Omitting one does not fail safe — it makes the
+ * guard refuse an object Loom really created, which orphans that object at the
+ * DROP sink and flips the shortcut to `error` at the test sink. That is the
+ * failure this constant exists to prevent: `lakehouse.<leaf>` was minted by the
+ * provisioner and refused by the guard until it was added here.
+ */
+const SYNAPSE_MINTED_SCHEMAS: readonly string[] = [SYNAPSE_SHORTCUT_SCHEMA, 'lakehouse'];
+
+/** The ONE Unity Catalog catalog Databricks shortcut tables are created in. */
+const UC_CATALOG = 'loom';
+
 /** Synapse Serverless external-table / view object name (2-part: schema.object). */
 function synapseObject(name: string): string {
   const safe = name.replace(/[^a-z0-9_]+/gi, '_');
-  return `shortcuts.${safe}`;
+  return `${SYNAPSE_SHORTCUT_SCHEMA}.${safe}`;
 }
 
 /**
@@ -235,12 +274,33 @@ function synapseObject(name: string): string {
  * not supported in master database") — they must live in a user DB. The view
  * is referenced cross-database with a 3-part name from any context (master
  * included), which serverless supports. Overridable for non-default deployments.
+ *
+ * Read LIVE rather than captured at module load. `isMintedEngineObject` derives
+ * the allowed name-space from this value, so a module-load snapshot would make
+ * the SECURITY guard depend on whether the env var happened to be set before
+ * this module was first imported. Same reasoning, and same shape, as
+ * `kv-secret-purpose.ts:envConfiguredSecretNames`.
+ *
+ * SANITIZED with the same expression the leaf mint uses, for one reason: the
+ * guard requires every part of an engine object to match `/^[A-Za-z0-9_]+$/`,
+ * and this value becomes `parts[0]` of every 3-part Synapse mint. An operator
+ * value that is not a bare identifier (`loom-lakehouse`, `Loom.Lakehouse`,
+ * `loom lakehouse`) would otherwise mint names the guard refuses — refusing
+ * 100% of this deployment's own objects while looking configured. Sanitizing in
+ * ONE place keeps `synapseQualified` (mint), `ensureServerlessDb` (CREATE
+ * DATABASE), `dropShortcutObject` (the 2-part fallback DB) and the guard on the
+ * same string by construction, so they cannot disagree about what the DB is
+ * called.
  */
-const SERVERLESS_DB = process.env.LOOM_SERVERLESS_DB || 'loom_lakehouse';
+function serverlessDb(): string {
+  const raw = (process.env.LOOM_SERVERLESS_DB || '').trim();
+  if (!raw) return 'loom_lakehouse';
+  return raw.replace(/[^a-z0-9_]+/gi, '_') || 'loom_lakehouse';
+}
 
 /** 3-part `<db>.schema.object` so the view is queryable cross-database. */
 function synapseQualified(twoPartObj: string): string {
-  return `${SERVERLESS_DB}.${twoPartObj}`;
+  return `${serverlessDb()}.${twoPartObj}`;
 }
 
 // CREATE DATABASE is idempotent + cheap once created; cache within the module.
@@ -251,14 +311,120 @@ async function ensureServerlessDb(): Promise<void> {
   if (serverlessDbEnsured) return;
   await executeQuery(
     serverlessTarget('master'),
-    `IF NOT EXISTS (SELECT 1 FROM sys.databases WHERE name = '${SERVERLESS_DB}') EXEC('CREATE DATABASE [${SERVERLESS_DB}]');`,
+    `IF NOT EXISTS (SELECT 1 FROM sys.databases WHERE name = '${serverlessDb()}') EXEC('CREATE DATABASE [${serverlessDb()}]');`,
   );
   serverlessDbEnsured = true;
 }
 
+/**
+ * #3611 — is `engineObject` inside the NAME-SPACE Loom mints for shortcut engine
+ * objects? This is the predicate every sink that interpolates the value into SQL
+ * must pass it through.
+ *
+ * It lives HERE, beside `synapseObject` / `synapseQualified` / `ucObject`, so
+ * that those mints and the allow-set move together. It is NOT true that every
+ * mint is in this file: `lib/install/provisioners/lakehouse.ts` mints
+ * `lakehouse.<leaf>` on the content-install path. `SYNAPSE_MINTED_SCHEMAS`
+ * above is the enumeration of record, and a mint added anywhere in the codebase
+ * has to be added to it. The shapes accepted today:
+ *
+ *   synapse      `synapseQualified(synapseObject(name))`
+ *                = `<serverlessDb()>.shortcuts.<leaf>` — the database is this
+ *                  deployment's own `LOOM_SERVERLESS_DB` (default
+ *                  `loom_lakehouse`); the schema is the LITERAL `shortcuts`;
+ *                  `<leaf>` is `name.replace(/[^a-z0-9_]+/gi,'_')`, so
+ *                  `[A-Za-z0-9_]+` and nothing else.
+ *   synapse      `lakehouse.<leaf>` from the install provisioner, which creates
+ *   (install)      the `lakehouse` schema itself in the same serverless DB.
+ *   synapse      a 2-part row predating the cross-database qualification.
+ *   (legacy)     `dropShortcutObject` still handles that arity explicitly (it
+ *                  substitutes the serverless DB), so refusing it here would
+ *                  orphan those views rather than protect anything.
+ *   databricks   `ucObject(lakehouseId, name)` = `loom.<schema>.<table>` — the
+ *                  catalog is the LITERAL `loom`; both remaining parts are
+ *                  `.replace(/[^a-z0-9_]+/gi,'_').toLowerCase()`.
+ *
+ * KNOWN BOUND, stated because a green test here does not establish it away: on
+ * the Databricks arm only `parts[0]` is constrained, so any `loom.<x>.<y>` is
+ * accepted — including `loom.information_schema.tables`. The schema part is
+ * derived from a caller-independent lakehouse id at mint time, so constraining
+ * it needs that id at the sink, which these functions do not receive. Tracked
+ * in #3960 (with the missing item-id scoping, which has the same cause), not
+ * closed here.
+ *
+ * WHY A NAME-SPACE CHECK AND NOT AN IDENTIFIER CHECK. The previous revision of
+ * this guard tested only "is this a well-formed 1–3 part identifier", and the
+ * comment above it claimed that was "the shape registerTablesObject MINTS". It
+ * was not: `master.sys.sql_logins`, `finance_db.dbo.payroll` and
+ * `loom_lakehouse.dbo.someone_elses_view` are all well-formed identifiers, all
+ * passed, and `dropShortcutObject` lets the caller pick the DATABASE from
+ * `parts[0]`. Since `engineObject` is item state and item state is caller-
+ * writable at create time, that admitted a DROP VIEW / DROP TABLE and a SELECT
+ * against objects this surface never created, executed as the Console UAMI —
+ * a Synapse SQL admin. Escaping the separators was never the whole problem;
+ * WHICH OBJECT is the problem, and only the name-space answers that.
+ *
+ * `engine` is optional: when it is not known (a row whose `engine` was dropped),
+ * a value inside EITHER engine's name-space is accepted, because either is a
+ * name this platform could have minted. Passing the engine is strictly tighter.
+ */
+export function isMintedEngineObject(v: unknown, engine?: ShortcutEngine | 'none' | string): v is string {
+  if (typeof v !== 'string' || v.length === 0 || v.length > 260) return false;
+  const parts = v.split('.');
+  if (parts.length < 2 || parts.length > 3) return false;
+  // Every part must be a bare identifier — this is necessary but NOT sufficient,
+  // and on its own it is the check that shipped the hole described above.
+  if (!parts.every((p) => /^[A-Za-z0-9_]+$/.test(p))) return false;
+
+  const wantSynapse = !engine || engine === 'synapse';
+  const wantDatabricks = !engine || engine === 'databricks';
+
+  if (wantSynapse) {
+    // 3-part `<serverlessDb()>.<minted schema>.<leaf>`, or a legacy/provisioner
+    // 2-part `<minted schema>.<leaf>` that resolves to the same DB.
+    if (parts.length === 3 && parts[0] === serverlessDb() && SYNAPSE_MINTED_SCHEMAS.includes(parts[1])) return true;
+    if (parts.length === 2 && SYNAPSE_MINTED_SCHEMAS.includes(parts[0])) return true;
+  }
+  if (wantDatabricks) {
+    // 3-part `loom.<schema>.<table>`, lower-cased by ucObject.
+    if (parts.length === 3 && parts[0] === UC_CATALOG) return true;
+  }
+  return false;
+}
+
+/**
+ * Refuse an `engineObject` outside the minted name-space before it is
+ * interpolated into SQL. Throws rather than returning, so a sink cannot forget
+ * to branch on a boolean.
+ *
+ * The message states only what the check ESTABLISHED — that the name is outside
+ * the name-space this platform mints into. It does NOT claim Loom did not create
+ * the object, or that the caller wrote the value: neither is knowable here.
+ */
+export class EngineObjectNamespaceError extends Error {
+  status = 400;
+  code = 'invalid_engine_object';
+  constructor(public readonly engineObject: string) {
+    super(
+      `"${engineObject}" is outside the name-space Loom registers shortcut engine objects into ` +
+        `(\`${serverlessDb()}.{${SYNAPSE_MINTED_SCHEMAS.join('|')}}.<name>\` on Synapse, ` +
+        `\`${UC_CATALOG}.<schema>.<table>\` on ` +
+        'Databricks), so it is refused before it reaches the query engine. Recreate the shortcut ' +
+        '(kind=tables) to re-register it.',
+    );
+    this.name = 'EngineObjectNamespaceError';
+  }
+}
+
+export function assertMintedEngineObject(v: unknown, engine?: ShortcutEngine | 'none' | string): asserts v is string {
+  if (!isMintedEngineObject(v, engine)) {
+    throw new EngineObjectNamespaceError(typeof v === 'string' ? v : String(v));
+  }
+}
+
 /** Databricks UC fully-qualified table for a shortcut. */
 function ucObject(lakehouseId: string, name: string): string {
-  const cat = 'loom';
+  const cat = UC_CATALOG;
   const sch = lakehouseId.replace(/[^a-z0-9_]+/gi, '_').toLowerCase() || 'shortcuts';
   const tbl = name.replace(/[^a-z0-9_]+/gi, '_').toLowerCase();
   return `${cat}.${sch}.${tbl}`;
@@ -435,7 +601,7 @@ export async function createTablesShortcut(args: {
       `EXEC('CREATE VIEW ${obj} AS SELECT * FROM OPENROWSET(BULK ''${key}'', ` +
       `DATA_SOURCE = ''${dsName}'', FORMAT = ''${fmt}''${csvOpts}) AS r');`;
     await ensureServerlessDb();
-    await executeQuery(serverlessTarget(SERVERLESS_DB), ddl);
+    await executeQuery(serverlessTarget(serverlessDb()), ddl);
     return { engine: 'synapse', engineObject: synapseQualified(obj) };
   }
 
@@ -468,7 +634,7 @@ export async function createTablesShortcut(args: {
         `EXEC('CREATE VIEW ${obj} AS SELECT * FROM OPENROWSET(BULK ''${key}'', ` +
         `DATA_SOURCE = ''${args.external.synapseDataSource}'', FORMAT = ''${fmt}''${csvOpts}) AS r');`;
       await ensureServerlessDb();
-      await executeQuery(serverlessTarget(SERVERLESS_DB), ddl);
+      await executeQuery(serverlessTarget(serverlessDb()), ddl);
       return { engine, engineObject: synapseQualified(obj) };
     }
 
@@ -485,7 +651,7 @@ export async function createTablesShortcut(args: {
       `IF OBJECT_ID('${obj}','V') IS NOT NULL DROP VIEW ${obj};\n` +
       `EXEC('CREATE VIEW ${obj} AS SELECT * FROM OPENROWSET(BULK ''${bulkUrl}'', FORMAT = ''${fmt}''${csvOpts}) AS r');`;
     await ensureServerlessDb();
-    await executeQuery(serverlessTarget(SERVERLESS_DB), ddl);
+    await executeQuery(serverlessTarget(serverlessDb()), ddl);
     return { engine, engineObject: synapseQualified(obj) };
   }
 
@@ -514,17 +680,27 @@ export async function createTablesShortcut(args: {
   return { engine, engineObject: obj };
 }
 
-/** Drop the engine object backing a Tables shortcut. Never deletes source bytes. */
+/**
+ * Drop the engine object backing a Tables shortcut. Never deletes source bytes.
+ *
+ * #3611 — `engineObject` is interpolated into `DROP VIEW`/`DROP TABLE` and runs
+ * as the Console UAMI (a Synapse SQL admin / a UC-privileged Databricks
+ * principal), and on the Synapse arm the caller also picks the DATABASE via
+ * `parts[0]`. The name-space assertion is HERE rather than only at the callers
+ * because it must hold for every one of them: this function has five call sites
+ * across four routes, and a sixth added later inherits the guard for free.
+ */
 export async function dropShortcutObject(args: {
   engine?: ShortcutEngine;
   engineObject?: string;
 }): Promise<void> {
   if (!args.engine || args.engine === 'none' || !args.engineObject) return;
+  assertMintedEngineObject(args.engineObject, args.engine);
   if (args.engine === 'synapse') {
     // engineObject is `<db>.schema.object`; DROP VIEW can't take a cross-db
     // 3-part name, so connect to the owning DB and drop the 2-part name there.
     const parts = args.engineObject.split('.');
-    const db = parts.length === 3 ? parts[0] : SERVERLESS_DB;
+    const db = parts.length === 3 ? parts[0] : serverlessDb();
     const obj = parts.length === 3 ? `${parts[1]}.${parts[2]}` : args.engineObject;
     await executeQuery(
       serverlessTarget(db),
@@ -542,8 +718,15 @@ export async function dropShortcutObject(args: {
 /**
  * Prove a Tables engine object is readable with a real SELECT TOP 1. Throws the
  * raw engine error on failure (the Test route maps it to a status='error').
+ *
+ * #3611 — same sink class as `dropShortcutObject`: `engineObject` is
+ * interpolated into `SELECT TOP 1 * FROM …` / `SELECT * FROM … LIMIT 1` and
+ * executed as the Console UAMI, so an object outside the minted name-space is
+ * an arbitrary READ of anything that principal can see. Refused here, before
+ * the string is built.
  */
 export async function testEngineObject(engine: ShortcutEngine, engineObject: string): Promise<void> {
+  assertMintedEngineObject(engineObject, engine);
   if (engine === 'synapse') {
     await executeQuery(serverlessTarget('master'), `SELECT TOP 1 * FROM ${engineObject};`);
     return;
@@ -958,7 +1141,7 @@ export async function bindExternalSource(args: {
       `CREATE EXTERNAL DATA SOURCE ${dsName} ` +
       `WITH (LOCATION = '${obj.prefix}', CREDENTIAL = ${cred});`;
     await ensureServerlessDb();
-    await executeQuery(serverlessTarget(SERVERLESS_DB), ddl);
+    await executeQuery(serverlessTarget(serverlessDb()), ddl);
     return { readUri: targetUri, synapse: { dataSource: dsName, scopedCredential: cred } };
   }
 

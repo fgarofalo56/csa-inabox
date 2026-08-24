@@ -37,7 +37,6 @@
  *       https://learn.microsoft.com/purview/data-gov-api-rest-data-plane
  */
 import { NextRequest, NextResponse } from 'next/server';
-import { getSession } from '@/lib/auth/session';
 import {
   createOwnedItem,
   listOwnedItems,
@@ -46,6 +45,7 @@ import {
 import { uamiArmCredential } from '@/lib/azure/arm-credential';
 import { purviewBaseSync } from '@/lib/azure/purview-endpoints';
 import { PUBLISH_STATUSES, type PublishStatus, upsertDataProductDoc, docForDataProduct } from '@/lib/azure/loom-data-products-search';
+import { resolveDataProductDocTenant } from '@/lib/dataproducts/owner-tenant';
 import {
   DATA_PRODUCT_DESCRIPTION_MAX,
   DATA_PRODUCT_AUDIENCE_VALUES,
@@ -54,6 +54,7 @@ import {
 import { sanitizeContract } from '@/lib/dataproducts/contract';
 import { resolveLifecycleState, setLifecycleState } from '@/lib/dataproducts/lifecycle';
 import { apiServerError } from '@/lib/api/respond';
+import { withSession } from '@/lib/api/route-toolkit';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -184,9 +185,7 @@ async function tryRegisterPurview(opts: {
   }
 }
 
-export async function GET(req: NextRequest) {
-  const session = getSession();
-  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+export const GET = withSession(async (req: NextRequest, { session }) => {
 
   // Duplicate-name lookup mode (F4 edit/create dialog): /api/data-products?name=<n>&excludeId=<id>.
   // NON-BLOCKING warning source — returns the existing product that shares the
@@ -238,11 +237,9 @@ export async function GET(req: NextRequest) {
   } catch (e: any) {
     return apiServerError(e);
   }
-}
+});
 
-export async function POST(req: NextRequest) {
-  const session = getSession();
-  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+export const POST = withSession(async (req: NextRequest, { session }) => {
 
   let body: any;
   try { body = await req.json(); } catch { return NextResponse.json({ ok: false, error: 'Invalid JSON' }, { status: 400 }); }
@@ -272,7 +269,13 @@ export async function POST(req: NextRequest) {
       // AWAIT the discovery-index mirror so it completes within the request
       // (createOwnedItem fires it fire-and-forget, which isn't reliably run on
       // the serverless/container runtime → products never indexed). Best-effort.
-      try { await upsertDataProductDoc(docForDataProduct(res.item!, session.claims.oid)); } catch { /* index is derived */ }
+      try {
+        // #3501 — stamp the OWNER's tenant, never the caller's: this field is
+        // the mandatory marketplace search filter, so the caller's oid would
+        // re-home the product. Unknown owner → skip rather than mis-file it.
+        const ownerTid = await resolveDataProductDocTenant(res.item!);
+        if (ownerTid) await upsertDataProductDoc(docForDataProduct(res.item!, ownerTid));
+      } catch { /* index is derived */ }
       return NextResponse.json({ ok: true, product: res.item });
     } catch (e: any) {
       return apiServerError(e);
@@ -377,4 +380,4 @@ export async function POST(req: NextRequest) {
     },
     { status: 201 },
   );
-}
+});

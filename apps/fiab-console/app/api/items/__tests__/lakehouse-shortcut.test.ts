@@ -61,6 +61,21 @@ vi.mock('@/lib/azure/shortcut-engines', () => ({
   dropShortcutObject: vi.fn(async () => {}),
   dropExternalBinding: vi.fn(async () => {}),
   bindExternalSource: vi.fn(async () => ({ readUri: 's3://b/p', ucExternalLocation: 'loc', synapse: { dataSource: 'ds' } })),
+  // #3611 — the route guards `state.engineObject` before interpolating it into
+  // SQL. This factory REPLACES the whole module, so every symbol the route
+  // imports has to be listed here or it is `undefined` at call time: omitting
+  // this one made the query path return ok:false and made the DELETE path
+  // swallow a TypeError and skip `dropShortcutObject` entirely.
+  //
+  // It returns true unconditionally ON PURPOSE. This suite pins the ROUTE's
+  // wiring (does DELETE reach the drop sink, does query build the SELECT), not
+  // the name-space POLICY, and the fixtures above are all genuinely-minted
+  // names. Read a green here as "the route called the sink", never as "the
+  // guard is correct" — the policy is pinned against the real implementation in
+  // `lib/azure/__tests__/shortcut-engine-object-namespace.test.ts`, and the
+  // route's refusal behaviour in
+  // `app/api/items/lakehouse-shortcut/__tests__/vault-destruction-primitive.test.ts`.
+  isMintedEngineObject: vi.fn(() => true),
 }));
 vi.mock('@/lib/azure/synapse-sql-client', () => ({
   serverlessTarget: vi.fn((db: string) => ({ db })),
