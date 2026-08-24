@@ -1465,12 +1465,21 @@ const NOW_GUARDED = new Set([
   // nothing cross-subscription survives — but within the estate Layer 1 is a
   // FLOOR, not a BOUND, exactly as recorded for the round-3 routes above.
   //
-  // AND THE FLOOR IS SELF-SERVICE. `createOwnedItem` (`_lib/item-crud.ts:423`)
+  // AND THE FLOOR IS SELF-SERVICE. `createOwnedItem` (`_lib/item-crud.ts`)
   // lets any session holder create a qualifying item in a workspace they own, so
   // graduating these three moves the reachable population from "any
   // authenticated session" to "any authenticated session, plus one POST". Worth
   // stating in the file that RECORDS the graduation, so nobody reads a
   // NOW_GUARDED entry as a bigger reduction than it is.
+  //
+  // #3877-f3 (same class, this file's four instances). All four of these
+  // citations used to read `_lib/item-crud.ts:423`. `:423` is the docblock of
+  // `listOwnedItems`; `createOwnedItem` is at `:552`, 129 lines further down —
+  // so every reader following the pointer landed on a LIST helper while reading
+  // a sentence about a CREATE. They are cited by SYMBOL now, in this file and in
+  // `check-tid-boundary-chokepoint.mjs`, because a line number in a comment rots
+  // silently on the next edit to the file it points at and a function name does
+  // not.
   //
   // A STATE-ANCHORED BINDING WOULD NOT CLOSE IT EITHER, and the repo already
   // knows why: `_lib/databricks-resource-binding.ts:12-27` records that `PATCH
@@ -1564,7 +1573,7 @@ const NOW_GUARDED = new Set([
   // LOOM_SUBSCRIPTION_ID / LOOM_SYNAPSE_WORKSPACE), so nothing
   // cross-subscription survives — but within the estate LAYER 1 IS A FLOOR, NOT
   // A BOUND, AND THE FLOOR IS SELF-SERVICE: `createOwnedItem`
-  // (`_lib/item-crud.ts:423`) lets any session holder create a qualifying item
+  // (`_lib/item-crud.ts`) lets any session holder create a qualifying item
   // in a workspace they own, so this moves the reachable population from "any
   // authenticated session" to "any authenticated session, plus one POST". On
   // `delete` that residual is the sharpest in the set, because the effect is
@@ -1611,7 +1620,7 @@ const NOW_GUARDED = new Set([
   // `PATCH /api/cosmos-items/[type]/[id]` replaces `state` WHOLESALE from the
   // request body, so the caller would write the value the bound reads. LAYER 1
   // IS A FLOOR, NOT A BOUND, AND THE FLOOR IS SELF-SERVICE — `createOwnedItem`
-  // (`_lib/item-crud.ts:423`) lets any session holder create a qualifying item,
+  // (`_lib/item-crud.ts`) lets any session holder create a qualifying item,
   // moving the reachable population from "any authenticated session" to "any
   // authenticated session, plus one POST". The real bound is tracked in #3669
   // and is deliberately not improvised inside a security fix.
@@ -1683,7 +1692,7 @@ const NOW_GUARDED = new Set([
   // binding exists and a state-anchored one cannot work
   // (`_lib/databricks-resource-binding.ts:12-27` — `PATCH /api/cosmos-items/
   // [type]/[id]` replaces `state` WHOLESALE from the request body). With
-  // `createOwnedItem` self-service (`_lib/item-crud.ts:423`) this moves the
+  // `createOwnedItem` self-service (`_lib/item-crud.ts`) this moves the
   // reachable population from "any authenticated session" to "any authenticated
   // session, plus one POST". The real bound is #3669.
   'apps/fiab-console/app/api/items/databricks-sql-warehouse/[id]/cancel/route.ts',
@@ -1837,18 +1846,42 @@ for (const [p, reason] of [
   ['apps/fiab-console/app/api/data-products/import/template/route.ts', 'imports a data product from a shared template definition; no per-tenant Cosmos read'],
   ['apps/fiab-console/app/api/data-products/[id]/policies/route.ts', 'consumer-discovery: returns the owner\'s Access-policy purposes for the Request-access dialog (documented cross-tenant read, read-only, non-sensitive)'],
   ['apps/fiab-console/app/api/data-products/[id]/preview/route.ts', 'consumer-discovery: read-only 25-row preview of a discoverable data product (documented, mirrors GET /api/data-products/[id])'],
-  // GHSA-hf73-rp4q-66pf addendum. The previous reason for this entry —
-  // "read-only input/output/management ports of A DISCOVERABLE data product …
-  // resolves ONLY upstream contract summaries" — was not true of the code: the
-  // route established nothing about discoverability (no lifecycle filter, no
-  // tid, no workspace scope), and a port `ref` is an infrastructure ADDRESS
-  // (abfss:// path / Synapse schema.table / ADX database), not a contract
-  // summary. It now enforces the sentence it was excused on, so it passes on its
-  // own `authorizeWorkspace` call and this entry is no longer load-bearing —
-  // kept, with the corrected wording, so the next reader does not inherit the
-  // old premise. The residual (a legacy workspace doc with no recorded `tid`
-  // cannot be tenant-tested) is documented in the route, not hidden here.
-  ['apps/fiab-console/app/api/data-products/[id]/ports/route.ts', 'consumer-discovery: ports are returned only to a caller authorized on the owning workspace, or for a published/deprecated product in the caller\'s own Entra tenant; the upstream `ref` resolution runs the same test and is non-distinguishing on failure'],
+  // #3580 — THE `data-products/[id]/ports` ENTRY IS DELETED, NOT REWORDED.
+  //
+  // It read "read-only input/output/management ports of A DISCOVERABLE data
+  // product … resolves ONLY upstream contract summaries" (GHSA-hf73-rp4q-66pf).
+  // Both clauses were false of the code: the route established nothing about
+  // discoverability, and a port `ref` is an infrastructure ADDRESS (abfss://
+  // path / Synapse schema.table / ADX database), not a contract summary.
+  //
+  // The authorization clause was then fixed in the ROUTE and the entry was
+  // REWRITTEN to describe the new posture. That is the failure mode this repo
+  // has already paid for twice: an allowlist reason that is TRUE OF A SIBLING
+  // BRANCH of the original claim survives review because it reads as true, while
+  // the half that was never fixed (the payload still carries every `ref`) quietly
+  // stops being anybody's finding. Rewording is how such an entry survives; the
+  // remedy is to delete it and let the route pass on its own guard.
+  //
+  // MEASURED, not assumed: with this entry gone `check-route-guards.mjs` still
+  // exits 0 (violations: 0, contradicted: 0), so the entry excused nothing.
+  //
+  // AND THE REASON IT EXCUSED NOTHING IS NOT THE ONE THE OLD COMMENT GAVE. That
+  // comment said the route "passes on its own `authorizeWorkspace` call". It does
+  // not. Measured by stripping one token at a time from the route and re-running
+  // this file:
+  //
+  //   drop the `authorizeWorkspace` call         RC=0   violations: 0
+  //   ... and `session.claims.tid` as well       RC=1   violations: 1, route NAMED
+  //   ... and `getSession()` as well             RC=0   (leaves the scanned set)
+  //
+  // So the token satisfying CHECK 2 for this route is `claims.tid` — a member of
+  // WEAK_IDENTITY_SIGNALS — and the real `authorizeWorkspace` call is invisible to
+  // the presence test. That is this file's own documented weakness (see the
+  // `databricks-sql-warehouse/[id]/query` note above: a BILLING RECORD satisfied
+  // the ownership test), and forcing `strong` globally is the ~210-route program
+  // named there, not a change to make here. It is written down because the
+  // previous comment stated as fact something nobody had measured, which is the
+  // same defect one level up from the allowlist reason it was correcting.
   ['apps/fiab-console/app/api/governance/classifications/system/route.ts', 'read-only deployment-wide system classification catalog (static)'],
   ['apps/fiab-console/app/api/governance/dlp/schemas/route.ts', 'read-only DLP schema listing over the shared warehouse'],
   ['apps/fiab-console/app/api/governance/purview/status/route.ts', 'read-only deployment-wide Purview status'],

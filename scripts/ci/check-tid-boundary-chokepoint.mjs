@@ -286,6 +286,7 @@
  * Usage: node scripts/ci/check-tid-boundary-chokepoint.mjs
  */
 import { readFileSync, readdirSync, statSync } from 'node:fs';
+import { createHash } from 'node:crypto';
 import { join } from 'node:path';
 
 const CONSOLE_ROOT = 'apps/fiab-console';
@@ -419,6 +420,19 @@ const REQUIRED_AUTHORIZERS = new Map([
  * covered by DEFAULT and an exemption is a review. That polarity is the whole
  * point: the previous `AUTHORIZERS` table was opt-IN, and `authorizeWorkspaceList`
  * sat outside it taking the bare #3825 bypass at exit 0 (N10).
+ *
+ * #3850 — AN ENTRY HERE IS KEYED ON A NAME, AND A NAME IS NOT A FUNCTION. Every
+ * other pin in this file is CONTENT-PINNED: PROLOGUE_PINS holds the normalised
+ * prologue TEXT (because N7 forged an ALLOW's input while its condition string
+ * stayed byte-identical), POST_DELEGATION_PINS holds the condition, and
+ * TID_COMPARISON_PINS holds the expression. These 22 held nothing —
+ * `grep -c 'createHash\|sha256\|contentHash'` over this file returned zero — so
+ * `lib/auth/pat.ts:isPatSession`, exempted as "a one-line predicate on the
+ * session shape … No workspace, no document, no access decision", could be
+ * rewritten into a workspace authorizer under that same sentence and section 8
+ * would `continue` past it on line one. That is the shape of every other defect
+ * in this family: the reason stays true-sounding while the code underneath it
+ * moves. {@link NON_AUTHORIZER_BODY_PINS} is the content half.
  */
 const NON_AUTHORIZERS = new Map([
   [
@@ -560,6 +574,133 @@ const NON_AUTHORIZERS = new Map([
       'pinned in POST_DELEGATION_PINS.',
   ],
 ]);
+
+/**
+ * THE CONTENT HALF OF EVERY {@link NON_AUTHORIZERS} EXEMPTION (#3850).
+ *
+ * `<key> -> <12 hex chars of sha256>` over the EXEMPTED FUNCTION'S OWN TEXT, so
+ * an entry clears the function that was reviewed and not merely the NAME that was
+ * reviewed. Rewriting an exempted body — adding a workspace read, an admin grant,
+ * a cross-partition query — moves the digest and turns the build RED, which is
+ * exactly what the reason strings above could never do on their own.
+ *
+ * WHAT GOES INTO THE DIGEST, and why each choice is the one that makes it mean
+ * something:
+ *   - the RAW function text from its declaration through the closing brace, so
+ *     the PARAMETER LIST and the RETURN TYPE are in scope too (both of them
+ *     change what section 8 does with the function, and 8a's tier/trigger
+ *     selection reads both);
+ *   - COMMENTS REMOVED. A docblock edit is not a behaviour change, and a pin
+ *     that churns on prose is a pin people delete;
+ *   - STRING LITERALS KEPT — this is the difference between `stripComments` here
+ *     and `mask`, and it is deliberate. `multiUserAclEnabled` IS an env-var name
+ *     (`LOOM_MULTIUSER_ACL`) and `isTenantAdmin` IS two of them; a mutation that
+ *     only swaps a literal is invisible to every masked scan in this file, so the
+ *     one pin that CAN see it should;
+ *   - whitespace normalised, so a reflow or a prettier run does not churn it.
+ *
+ * REGENERATING ONE IS A SECURITY REVIEW, NOT A CHORE. The failure prints the
+ * observed digest so it can be pasted, and that convenience is exactly the risk:
+ * pasting it asserts you read the new body and it is still not an authorizer. If
+ * you did not, do not paste it. There is deliberately NO `--update-pins` flag —
+ * a baseline with a refresh button is a baseline that gets refreshed.
+ *
+ * COMPLETENESS IS ENFORCED IN BOTH DIRECTIONS below: a NON_AUTHORIZERS key with
+ * no digest here is a red build (so the pin cannot be half-adopted), and a digest
+ * with no exemption is a red build (so a stale one cannot sit here clearing a
+ * function that was re-classified).
+ */
+const NON_AUTHORIZER_BODY_PINS = new Map([
+  ['lib/auth/workspace-access.ts:resolveWorkspaceAccessByOid', '02d8dc48dbe9'],
+  ['lib/auth/workspace-access.ts:readWorkspaceById', '6edbb8025c67'],
+  ['lib/auth/workspace-access.ts:listAccessibleWorkspaces', '6b7f66ea5819'],
+  ['lib/auth/workspace-access.ts:ambientAccessOptsFor', '2068414aa6c6'],
+  ['lib/auth/workspace-denial.ts:workspaceDenialResponse', '174876032ce1'],
+  ['lib/auth/feature-gate.ts:requireTenantAdmin', 'a142fcaad130'],
+  ['lib/auth/feature-gate.ts:enforceCapability', '3bf4e9b55806'],
+  ['lib/auth/feature-gate.ts:isTenantAdmin', '150938bad034'],
+  ['lib/auth/feature-gate.ts:checkCapability', 'dfcb5d1dbb8d'],
+  ['lib/auth/feature-catalog.ts:capabilityIdForItemType', '5464653183fe'],
+  ['lib/auth/domain-role.ts:isTenantAdminTier', 'c11fb15031ec'],
+  ['lib/auth/domain-role.ts:resolveDomainTier', 'fc460f8a64d6'],
+  ['lib/auth/domain-role.ts:canAssignWorkspaceToDomain', '71eb2254dcf2'],
+  ['lib/auth/domain-role.ts:administeredDomainIds', 'e5b0c08c7e39'],
+  ['lib/auth/domain-role.ts:canAccessDlzPanes', 'b5eb9dbacc67'],
+  ['lib/auth/pat.ts:isPatSession', '5fae2dc8f9dc'],
+  ['lib/auth/pat.ts:patCannotMint', '3cf77ee1555d'],
+  ['lib/auth/pat.ts:patCanAdmin', 'fdbef8e554cd'],
+  ['lib/auth/workspace-access.ts:multiUserAclEnabled', '41affeeb3c60'],
+  ['lib/auth/workspace-access.ts:roleCanWrite', '401eaa352833'],
+  ['lib/auth/workspace-role.ts:canEditWorkspaceConfig', '32d46f5427f6'],
+  ['lib/auth/item-access.ts:itemGrantConfersWrite', 'ac7d95476d2b'],
+]);
+
+/**
+ * Blank out COMMENTS ONLY, preserving byte offsets and newlines and leaving
+ * string, template and regex literals fully intact.
+ *
+ * The sibling of {@link mask}, and the one place in this file that needs the
+ * OTHER half of it. `mask` blanks comments AND literal interiors because every
+ * scan built on it reasons about CODE STRUCTURE, where a literal is noise. A
+ * content pin reasons about the whole function, where a literal is the payload —
+ * an env-var name, a role id, a container name. The two share the regex-literal
+ * detection (`startsRegexLiteral`) so a `//` inside `/^https?:\/\//` is not read
+ * as a comment here either; that exact confusion is what silently dropped 136
+ * declarations from round 4's finder.
+ */
+function stripComments(src) {
+  const out = src.split('');
+  const blank = (from, to) => {
+    for (let k = from; k < to && k < out.length; k++) if (out[k] !== '\n') out[k] = ' ';
+  };
+  let i = 0;
+  while (i < src.length) {
+    const two = src.slice(i, i + 2);
+    if (two === '//') {
+      const end = src.indexOf('\n', i);
+      blank(i, end === -1 ? src.length : end);
+      i = end === -1 ? src.length : end;
+    } else if (two === '/*') {
+      const end = src.indexOf('*/', i + 2);
+      const stop = end === -1 ? src.length : end + 2;
+      blank(i, stop);
+      i = stop;
+    } else if (src[i] === '"' || src[i] === "'" || src[i] === '`') {
+      const q = src[i];
+      let j = i + 1;
+      while (j < src.length) {
+        if (src[j] === '\\') { j += 2; continue; }
+        if (src[j] === q) break;
+        j += 1;
+      }
+      i = j + 1; // kept verbatim — this is the whole point of the function
+    } else if (src[i] === '/' && startsRegexLiteral(out, i)) {
+      let j = i + 1;
+      let inClass = false;
+      let closed = -1;
+      for (; j < src.length; j += 1) {
+        const c = src[j];
+        if (c === '\\') { j += 1; continue; }
+        if (c === '\n') break;
+        if (inClass) { if (c === ']') inClass = false; continue; }
+        if (c === '[') { inClass = true; continue; }
+        if (c === '/') { closed = j; break; }
+      }
+      if (closed === -1) { i += 1; continue; }
+      i = closed + 1; // kept verbatim
+    } else {
+      i += 1;
+    }
+  }
+  return out.join('');
+}
+
+/** The #3850 content pin for one exempted function: 12 hex of sha256 over its
+ *  comment-free, whitespace-normalised RAW text (declaration through `}`). */
+function nonAuthorizerDigest(rawSrc, fn) {
+  const text = norm(stripComments(rawSrc.slice(fn.declAt, fn.bodyEnd)));
+  return createHash('sha256').update(text, 'utf8').digest('hex').slice(0, 12);
+}
 
 /**
  * PRE-DELEGATION ALLOWS, pinned by POSITION rather than by condition text.
@@ -1050,16 +1191,219 @@ for (const fn of ['resolveWorkspaceAccessByOid', 'listAccessibleWorkspaces']) {
   }
 }
 
+/**
+ * WHERE THE RESOLVER MAKES THE TENANT DECISION — by either sanctioned spelling.
+ *
+ * ── #3900 CROSS-LANE: THIS WAS KEYED TO THE UNSAFE PATTERN ──────────────────
+ *
+ * It read, hard-coded:
+ *
+ *     const compareAt = resolverBody.search(/wsDoc\.tid\s*!==\s*callerTid/);
+ *
+ * i.e. it required the resolver to carry the TRUTHINESS-GUARDED comparison —
+ * the exact shape this whole guard exists to delete. Consolidating step 4 onto
+ * `sameTenantConfirmed` therefore made sections 1-4 report "the boundary is
+ * gone" and exit 1: THE GUARD GOES RED BECAUSE THE CODE GOT SAFER. That is the
+ * `csa_loom_guard_keyed_to_the_unsafe_pattern` shape, one level up, inside the
+ * guard that polices it — and it blocks #3900.
+ *
+ * Isolated by measurement rather than reasoning (reported by #3900, re-run
+ * here): clean `main` RC=0 · consolidating `:490` alone RC=0 (section 10's SF3
+ * arm blesses it correctly) · consolidating `:335` RC=1, with ONLY this regex
+ * firing.
+ *
+ * IT IS NOT WIDENED, IT IS RE-KEYED — AND IT IS STRICTER THAN WHAT IT REPLACES.
+ * A regex that accepts both spellings and asks nothing else would be a guard
+ * that has stopped discriminating. The old one asserted PRESENCE and position:
+ * `void (wsDoc.tid !== callerTid);` satisfied it, and so would
+ * `void sameTenantConfirmed(a, b);`. This one additionally requires the
+ * comparison to be in a REFUSING position — so a decision whose ANSWER IS
+ * DISCARDED no longer counts. Both arms are pinned by the embedded control
+ * below, in both directions.
+ *
+ * ── ROUND 3, #3900 CROSS-LANE AGAIN: THE FIRST RE-KEY WAS KEYED TO DISTANCE ──
+ *
+ * "In a refusing position" was first spelled as a PROXIMITY WINDOW:
+ *
+ *     /(?:wsDoc\.tid !== callerTid|sameTenantConfirmed\()[\s\S]{0,80}?return null/
+ *
+ * — the refusal had to be within 80 characters of the comparison. #3900 ran
+ * that version against its own tree and got RC=1 with the message asserting the
+ * verdict was "DISCARDED". It was not. MEASURED here on #3900's blob, over the
+ * same masked body this section reads: the comparison is at body offset 2741 and
+ * the nearest `return null` is at +2007 chars / +34 lines — the window was ~25x
+ * too small — and that refusal is UNCONDITIONAL, a top-level statement of the
+ * block the comparison controls, sitting after a 1.3KB comment and a nested
+ * `if (cause)` diagnostic. So the guard failed CORRECT code, and (R7) its
+ * message stated a cause it had not established: it had measured DISTANCE and
+ * reported DISCARD.
+ *
+ * A character budget is the wrong property twice over. It fails any refusal a
+ * reviewer chose to explain, and it is not even stable across checkouts: this
+ * repo is `core.autocrlf=true`, so the identical source measures ~34 characters
+ * LONGER on a Windows working tree than in CI, and a threshold guard can pass in
+ * one and fail in the other with no diff between them.
+ *
+ * IT IS NOW KEYED TO CONTROL-FLOW POSITION, WHICH IS THE PROPERTY THAT WAS
+ * ALWAYS MEANT: the comparison must sit in the TEST of an `if (...)`, and one of
+ * the OWN top-level statements of the branch that test controls must be
+ * `return null`. Distance is irrelevant; nesting is not. That is strictly
+ * stronger than the window in both directions — the window ACCEPTED
+ * `if (!same(a,b)) { if (cause) return null; }`, a refusal that fires for only
+ * some callers, purely because it was +60 characters away (arm H), and it
+ * REFUSED #3900's unconditional one because it was +2007 away (arm G). Both are
+ * now pinned as embedded control arms.
+ *
+ * KNOWN LIMIT, stated rather than implied: this is still a TEXTUAL layer over
+ * masked source. It establishes that a refusing tenant comparison exists and
+ * that it precedes the ACL grant and the admin bypass — the ORDER properties
+ * sections 1-4 are for. It does NOT establish that the comparison is correct;
+ * `__tests__/workspace-access-admin-tid.test.ts` and section 8's ALLOW model are
+ * the backstop for that, exactly as `TID_COMPARISON_PINS`' own reason says of
+ * itself ("read a green section 10 as 'no unreviewed COPY', never as 'the
+ * comparison is correct'").
+ *
+ * THE SHAPE THAT LIMIT LETS THROUGH, MEASURED, so nobody has to rediscover it:
+ * a carve-out INSIDE the predicate —
+ *
+ *     if (callerTid && wsDoc.tid && wsDoc.tid !== callerTid && !opts.tenantAdmin) return null;
+ *
+ * — still reads as a refusing boundary here, because it IS one, for everyone
+ * except the population it exempts. The old window did not see it either; this
+ * is an unchanged limit, not a new one. On this tree it is caught, but by
+ * `NON_AUTHORIZER_BODY_PINS` (the function's digest moves, so the exemption
+ * demands re-review) — which is a RE-REVIEW TRIGGER, not a semantic verdict, and
+ * it stops applying the moment someone re-derives the digest. Treat "green here"
+ * as "no boundary was deleted", never as "the boundary admits the right people".
+ */
+const TENANT_COMPARISON =
+  /wsDoc\.tid\s*!==\s*callerTid|sameTenantConfirmed\s*\(/g;
+
+/**
+ * The `(`…`)` of the `if` test that ENCLOSES `at`, or null when `at` is not in
+ * one. Walks left to the first unmatched `(` — so a comparison nested inside
+ * further calls (`if (a(b) && !same(c, d))`) still resolves to the `if` — then
+ * requires the token immediately before it to be the `if` keyword. `void (…)`,
+ * `while (…)` and a bare parenthesised expression therefore do NOT qualify.
+ */
+function enclosingIfTest(body, at) {
+  let depth = 0;
+  let open = -1;
+  for (let i = at - 1; i >= 0; i -= 1) {
+    const c = body[i];
+    if (c === ')') { depth += 1; continue; }
+    if (c === '(') {
+      if (depth === 0) { open = i; break; }
+      depth -= 1;
+    }
+  }
+  if (open === -1) return null;
+  if (!/(?:^|[^\w$.])if\s*$/.test(body.slice(0, open))) return null;
+  let d = 0;
+  for (let i = open; i < body.length; i += 1) {
+    if (body[i] === '(') d += 1;
+    else if (body[i] === ')') { d -= 1; if (d === 0) return { open, end: i + 1 }; }
+  }
+  return null;
+}
+
+/** The branch a test controls: the INNER text of its block, or the single
+ *  statement that follows it when it is braceless. */
+function consequentAfter(body, end) {
+  let i = end;
+  while (i < body.length && /\s/.test(body[i])) i += 1;
+  if (i >= body.length) return null;
+  if (body[i] === '{') {
+    let d = 0;
+    for (let j = i; j < body.length; j += 1) {
+      if (body[j] === '{') d += 1;
+      else if (body[j] === '}') { d -= 1; if (d === 0) return body.slice(i + 1, j); }
+    }
+    return null;
+  }
+  let d = 0;
+  for (let j = i; j < body.length; j += 1) {
+    const c = body[j];
+    if (c === '(' || c === '[' || c === '{') d += 1;
+    else if (c === ')' || c === ']' || c === '}') d -= 1;
+    else if (c === ';' && d === 0) return body.slice(i, j);
+  }
+  return body.slice(i);
+}
+
+/**
+ * Does `text` refuse at its OWN top statement level — is one of its depth-zero
+ * statements itself `return null`?
+ *
+ * The nesting question is the whole point. `if (cause) return null;` inside the
+ * branch refuses only the callers for which `cause` holds and falls through for
+ * everyone else; that is a partial boundary, and it is exactly what the old
+ * 80-character window could not tell apart from an unconditional one.
+ */
+function refusesAtTopLevel(text) {
+  let d = 0;
+  let start = 0;
+  const statements = [];
+  for (let i = 0; i < text.length; i += 1) {
+    const c = text[i];
+    if (c === '(' || c === '[' || c === '{') { d += 1; continue; }
+    if (c === ')' || c === ']') { d -= 1; continue; }
+    if (c === '}') {
+      d -= 1;
+      if (d === 0) { statements.push(text.slice(start, i + 1)); start = i + 1; }
+      continue;
+    }
+    if (c === ';' && d === 0) { statements.push(text.slice(start, i)); start = i + 1; }
+  }
+  statements.push(text.slice(start));
+  return statements.some((s) => /^\s*return\s+null\b/.test(s));
+}
+
+/**
+ * `{ kind: 'ok' | 'discarded' | 'absent', at }` for a masked function body.
+ * `at` is the offset of the FIRST comparison that actually refuses (for the
+ * ordering assertions below), or of the first one found when none does.
+ */
+function refusingTenantComparison(body) {
+  TENANT_COMPARISON.lastIndex = 0;
+  let m;
+  let first = -1;
+  while ((m = TENANT_COMPARISON.exec(body)) !== null) {
+    if (first === -1) first = m.index;
+    const test = enclosingIfTest(body, m.index);
+    if (!test) continue;
+    const branch = consequentAfter(body, test.end);
+    if (branch !== null && refusesAtTopLevel(branch)) return { kind: 'ok', at: m.index };
+  }
+  return { kind: first === -1 ? 'absent' : 'discarded', at: first };
+}
+
 const resolverBody = functionBody(access, 'resolveWorkspaceAccessByOid');
 if (!resolverBody) {
   fail(`${ACCESS_FILE}: could not read the body of resolveWorkspaceAccessByOid.`);
 } else {
   const tidAt = resolverBody.indexOf('effectiveCallerTid(');
-  const compareAt = resolverBody.search(/wsDoc\.tid\s*!==\s*callerTid/);
+  const verdict = refusingTenantComparison(resolverBody);
+  const compareAt = verdict.kind === 'ok' ? verdict.at : -1;
   const aclAt = resolverBody.indexOf('resolveEffectiveRole(');
   const adminAt = resolverBody.indexOf('opts.tenantAdmin');
   if (tidAt === -1 || compareAt === -1) {
-    fail(`${ACCESS_FILE}: resolveWorkspaceAccessByOid no longer compares the workspace tid against effectiveCallerTid() — the boundary is gone.`);
+    fail(
+      `${ACCESS_FILE}: resolveWorkspaceAccessByOid no longer makes a REFUSING tenant comparison ` +
+        `against effectiveCallerTid() — the boundary is gone. ` +
+        (tidAt === -1 ? '`effectiveCallerTid(` is absent. ' : '') +
+        (verdict.kind === 'discarded'
+          ? 'A tenant comparison IS present, but it does not sit in the test of an `if` whose ' +
+            'branch refuses at its own top level — so either its answer is discarded, or the ' +
+            'refusal is nested under a FURTHER condition and therefore fires for only some ' +
+            'callers. Distance is not the test and never should have been (see the round-3 note ' +
+            'above): a refusal 2000 characters below its comparison is fine, a `return null` 20 ' +
+            'characters below it but under an inner `if` is not. '
+          : 'No tenant comparison of either sanctioned spelling was found. ') +
+        'Either spelling is accepted — the truthiness-guarded `wsDoc.tid !== callerTid` or, ' +
+        'preferably, `sameTenantConfirmed(...)` (#3900 consolidates onto the latter) — but it ' +
+        'must decide an `if` that refuses.',
+    );
   } else {
     if (aclAt !== -1 && compareAt > aclAt) {
       fail(`${ACCESS_FILE}: the tid boundary runs AFTER the ACL grant — a cross-tenant caller would already hold a role by then.`);
@@ -1069,6 +1413,80 @@ if (!resolverBody) {
     }
   }
 }
+
+// ── EMBEDDED CONTROL for the re-keyed comparison (#3900) ────────────────────
+// A guard that accepts two spellings must be shown to still REFUSE the states it
+// exists to catch, or the re-key is just a widening. Ten arms, run through the
+// SAME `refusingTenantComparison` the section above calls, on source put through
+// the SAME `mask()` the tree scan uses — so a comment between a comparison and
+// its refusal is blanked here exactly as it is there.
+//
+// G and H are the round-3 arms and they are a matched pair: G is #3900's real
+// shape, which the 80-character window REFUSED, and H is a partial refusal the
+// window ACCEPTED. Neither can be satisfied by tuning a number, which is the
+// point — if either arm is ever restored to a distance test, both go red.
+const RESOLVER_COMPARISON_PROBES = [
+  ['A the CURRENT truthiness spelling', true,
+    'if (callerTid && wsDoc.tid && wsDoc.tid !== callerTid) return null;'],
+  ['B the CONSOLIDATED spelling (#3900)', true,
+    'if (!sameTenantConfirmed(callerTid, wsDoc.tid)) return null;'],
+  ['C the boundary REMOVED entirely', false,
+    'const role = await resolveEffectiveRole(oid, workspaceId, {});'],
+  ['D the comparison present but its ANSWER DISCARDED', false,
+    'void sameTenantConfirmed(callerTid, wsDoc.tid);\n  const role = await resolveEffectiveRole(oid, workspaceId, {});'],
+  ['E the truthiness comparison with its answer DISCARDED', false,
+    'void (wsDoc.tid !== callerTid);\n  const role = await resolveEffectiveRole(oid, workspaceId, {});'],
+  ['F consolidated, refusing across a line break', true,
+    'if (!sameTenantConfirmed(callerTid, wsDoc.tid)) {\n    return null;\n  }'],
+  // G — #3900's ACTUAL shape, abridged: a long comment plus a nested diagnostic
+  // between the comparison and an unconditional refusal. The window read this as
+  // "DISCARDED" and failed correct code. MEASURED on this arm: the refusal is
+  // +825 chars / +15 lines below the comparison (in #3900's real function, which
+  // this abridges, it is +2007 / +34). Either way it is far past 80.
+  ['G refusal +825 chars / +15 lines below the comparison, but UNCONDITIONAL (#3900)', true,
+    'if (!sameTenantConfirmed(callerTid, wsDoc.tid)) {\n' +
+    '    // A refusal, not an absence — and the two causes are NOT the same event.\n' +
+    '    // The diagnostic below is scoped to tenant admins because `tenant_unconfirmed`\n' +
+    '    // is an existence statement about a caller-supplied id; everyone else gets a\n' +
+    '    // silent null, which the routes render as 404. The operator still sees the\n' +
+    '    // cause, because the server-side warn is unconditional.\n' +
+    '    const cause = tenantUnconfirmedCause(callerTid, wsDoc.tid);\n' +
+    '    if (cause) {\n' +
+    '      const denial = tenantUnconfirmedDenial(workspaceId, callerTid, wsDoc.tid);\n' +
+    '      if (diag && opts.tenantAdmin) diag.denial = denial;\n' +
+    '      console.warn("[workspace-access] REFUSED at the tid boundary", {\n' +
+    '        workspaceId: logSafe(workspaceId),\n' +
+    '        remediation: denial.remediation,\n' +
+    '      });\n' +
+    '    }\n' +
+    '    return null;\n' +
+    '  }'],
+  // H — the mirror image, and the arm that proves this is not a widening: the
+  // ONLY refusal is nested under a further condition, so a caller for whom
+  // `cause` is false falls THROUGH to the grant. MEASURED: +60 chars away, so
+  // the 80-character window ACCEPTED it.
+  ['H the only refusal nested under a FURTHER condition (+60 chars — the window took it)', false,
+    'if (!sameTenantConfirmed(callerTid, wsDoc.tid)) {\n    if (cause) return null;\n  }\n' +
+    '  const role = await resolveEffectiveRole(oid, workspaceId, {});'],
+  ['I the comparison decides an `if` that only LOGS, and refuses later on something else', false,
+    'if (!sameTenantConfirmed(callerTid, wsDoc.tid)) {\n    console.warn("unconfirmed");\n  }\n' +
+    '  const role = await resolveEffectiveRole(oid, workspaceId, {});\n  if (!role) return null;'],
+  ['J the comparison decides an `if` that GRANTS instead of refusing', false,
+    "if (!sameTenantConfirmed(callerTid, wsDoc.tid)) return { workspace: wsDoc, role: 'admin', via: 'admin', canWrite: true };"],
+];
+let resolverProbesPassed = 0;
+for (const [label, shouldRefuseCaller, src] of RESOLVER_COMPARISON_PROBES) {
+  const got = refusingTenantComparison(mask(src)).kind === 'ok';
+  if (got === shouldRefuseCaller) { resolverProbesPassed += 1; continue; }
+  fail(
+    `RESOLVER COMPARISON CONTROL ${label} — expected the section-1..4 tenant-comparison test to ` +
+      `read this as ${shouldRefuseCaller ? 'A REFUSING BOUNDARY' : 'NOT a boundary'} and it did ` +
+      'not. C/D/E are what stop the #3900 re-key being a widening (a removed boundary, and a ' +
+      'boundary whose answer is thrown away, must both read as "the boundary is gone"); G/H are ' +
+      'what stop it being re-keyed to DISTANCE again, in both directions at once.',
+  );
+}
+
 
 const effBody = functionBody(access, 'effectiveCallerTid');
 if (!effBody) {
@@ -2165,6 +2583,7 @@ function denyPinFor(delegate) {
 }
 
 const usedNonAuthorizers = new Set();
+const nonAuthorizerPinsUsed = new Set();
 const usedProloguePins = new Set();
 const usedPostPins = new Set();
 const authorizerNames = [];
@@ -2172,7 +2591,32 @@ const checkedKeys = new Set();
 
 for (const c of candidates) {
   const key = `${c.rel}:${c.fn.name}`;
-  if (NON_AUTHORIZERS.has(key)) { usedNonAuthorizers.add(key); continue; }
+  if (NON_AUTHORIZERS.has(key)) {
+    usedNonAuthorizers.add(key);
+    // #3850 — the exemption clears the FUNCTION THAT WAS REVIEWED, not the name.
+    const pinned = NON_AUTHORIZER_BODY_PINS.get(key);
+    const actual = nonAuthorizerDigest(readFileSync(c.file, 'utf8'), c.fn);
+    nonAuthorizerPinsUsed.add(key);
+    if (pinned === undefined) {
+      fail(
+        `NON_AUTHORIZERS entry \`${key}\` has NO body pin. Every exemption here is ` +
+          'content-pinned (#3850) so it cannot outlive the body it was written about — a ' +
+          'reason string stays true-sounding while the code under it moves, which is this ' +
+          `family's whole shape. Add \`['${key}', '${actual}'],\` to NON_AUTHORIZER_BODY_PINS ` +
+          'after reading the function and confirming it is still not an authorizer.',
+      );
+    } else if (pinned !== actual) {
+      fail(
+        `NON_AUTHORIZERS entry \`${key}\` is pinned to body \`${pinned}\` but the function now ` +
+          `digests to \`${actual}\`. The exemption was written about a DIFFERENT body than the ` +
+          'one on disk. Re-read it: does the reason above still describe what the function does, ' +
+          'and is it still not deciding workspace access? Only then update the pin, in the same ' +
+          'commit as the change that moved it, and say so in the PR. Section 8 `continue`s past ' +
+          'this function entirely, so a wrong answer here is not caught anywhere else.',
+      );
+    }
+    continue;
+  }
   authorizerNames.push(`${c.fn.name}[${c.trigger}]`);
   checkedKeys.add(key);
 
@@ -2659,14 +3103,59 @@ if (!rawBody) {
 //         outside 8h, exactly as N6c was outside the old section 8. (The count was
 //         14 in round 4 and moved to 15 because an UNANNOTATED `return null` is no
 //         longer assumed to be a refusal — see `allowIsNullFor`.)
-const ADMIN_GRANT_SCOPE = /\bworkspace(Id|_id)?\b/i;
-let adminShapeFunctions = 0;
-let adminShapeWorkspaceScoped = 0;
-for (const file of files) {
-  const rel = file.slice(CONSOLE_ROOT.length + 1);
-  const src = readFileSync(file, 'utf8');
-  if (!ISADMIN.test(src)) continue;
-  const masked = mask(src);
+// ── 8h SCOPE NET — #3877, AND THE BYPASS IT WAS BLIND TO ────────────────────
+//
+// This was `/\bworkspace(Id|_id)?\b/i`, tested against `fn.params`, and that ONE
+// regex is why #3855 shipped and stayed. The bypass sat at
+// `app/api/items/[type]/[id]/security-roles/route.ts` in
+//
+//     async function assertItemAccess(session, itemId, itemType) {
+//       if (isTenantAdmin(session)) return null;      // null == AUTHORIZED
+//
+// — the exact shape 8h exists to find, on a route whose POST/PUT/DELETE write
+// REAL ADLS Gen2 POSIX ACLs. Its parameters are `session, itemId, itemType`.
+// There is no `workspace` token anywhere in them, so the loop `continue`d one
+// line before it would have judged it, and the guard printed OK.
+//
+// MEASURED ON THE TREE THAT CARRIED THE BYPASS: 15 functions had the
+// admin-grants-alone shape and the scope net admitted ONE (`resolveAdminWorkspace`,
+// which then hit the `lib/auth/` skip below and was judged by 8a-8e instead). So
+// section 8h's effective population was ZERO — it was green because it looked at
+// nothing, which is the failure mode this file names as its worst
+// (`csa_loom_mutation_that_does_not_move_the_verdict`).
+//
+// THE NET IS NOW {@link WORKSPACE_PARAM} — the SAME constant 8a's tier-2
+// signature trigger uses. One definition, so the "which signatures are in scope"
+// question cannot be answered two ways in one file and drift apart later.
+// MEASURED, both directions: widening it admits exactly ONE further function on
+// this tree — `assertItemAccess`, the #3855 bypass — and no other, so it is a
+// targeted repair rather than a blanket that would need new exemptions.
+//
+// WHAT IT STILL DOES NOT SEE, NAMED RATHER THAN ROUNDED TO ZERO. It is a
+// PARAMETER-NAME net, so a function that takes the workspace id as `id` is
+// outside it — the limit the round-4 note below already stated, and the reason
+// `ADMIN_SHAPE_UNSCOPED` exists: every admin-shape function the net does NOT
+// admit is enumerated there with a reason, so the blind set is a reviewed,
+// ratcheted list instead of a silence. Widening the net to a bare `\bid\b`
+// was measured and rejected: it admits the four `props: { params: Promise<{ id:
+// string }> }` handlers whose `isTenantAdmin` gate NARROWS after
+// `resolveAdminWorkspace` has already resolved the workspace, i.e. four wrong
+// accusations, which is how a guard gets weakened later.
+const ADMIN_GRANT_SCOPE = WORKSPACE_PARAM;
+
+/**
+ * The admin-grants-alone verdict for ONE module, as `{ name, params, declAt }`
+ * per function whose OWN body grants on an `isTenantAdmin`-bearing condition.
+ *
+ * EXTRACTED SO THE EMBEDDED CONTROL BELOW RUNS THE REAL PIPELINE. A probe that
+ * re-implements the judgement proves the probe works; this one is the same code
+ * the tree scan calls, so narrowing the trigger, the value classifier or the
+ * path-condition model turns the control RED. The SCOPE net is deliberately NOT
+ * applied here — it is applied by each caller — so the control can measure the
+ * net's effect as a separate observation rather than folding it in.
+ */
+function adminShapeFunctionsIn(masked) {
+  const hits = [];
   for (const fn of declaredFunctions(masked)) {
     // Does THIS function grant on the admin flag? (Not "does this file".)
     const grants = bodyReturns(fn).some((r) => {
@@ -2679,9 +3168,142 @@ for (const file of files) {
         (br) => classifyValue(br.value, null, null, allowIsNull) === 'allow',
       );
     });
-    if (!grants) continue;
+    if (grants) hits.push(fn);
+  }
+  return hits;
+}
+
+/**
+ * EVERY admin-shape function OUTSIDE `lib/auth/**` that the scope net does NOT
+ * admit — i.e. the exact set section 8h cannot judge. Keyed `rel:name`.
+ *
+ * THIS IS A CENSUS, NOT AN EXEMPTION, and the difference is the whole point.
+ * `NON_AUTHORIZERS` says "this is not an authorizer, here is why"; an entry here
+ * says only "8h's parameter-name net does not reach this, and here is what was
+ * observed when a human read it". Nothing in this list is cleared by being in
+ * it. What the list BUYS is that the blind set cannot GROW in silence: a new
+ * unscoped admin-shape function anywhere under `app/` or `lib/` (bar `lib/auth`,
+ * which 8a-8e own) is a RED build naming the function, and a departed one is a
+ * red build too, on the same stale-pin convention as every other pin here.
+ *
+ * The three verdicts used below, and what each one is claiming:
+ *   NARROWS      the `isTenantAdmin` test REFUSES rather than grants, and it sits
+ *                AFTER a call that already resolved and tenant-bounded the
+ *                resource. The admin flag adds no reach. (`grants` is true here
+ *                only because the negated shape's fall-through return is an
+ *                ALLOW by this file's value model.)
+ *   ORG-WIDE     no workspace and no item is in play at all, so there is no
+ *                tenant for the flag to cross. Same reasoning as
+ *                `feature-gate.ts:requireTenantAdmin` in NON_AUTHORIZERS.
+ *   UNRESOLVED   a finding, stated as one. Being listed here is what makes it
+ *                visible on every run; it is NOT a clearance and must not be
+ *                read as one.
+ */
+const ADMIN_SHAPE_UNSCOPED = new Map([
+  [
+    'app/api/admin/workspaces/[id]/folders/route.ts:guard',
+    'ORG-WIDE (function scope). `guard()` takes NO parameters: it returns a 401, a 403, or the ' +
+      'session, and resolves no workspace. Whether its CALLERS scope the route `[id]` is a ' +
+      'property of those handlers, not of this function, and is outside 8h\'s per-function model ' +
+      'either way — `check-route-guards.mjs` is what covers the handlers.',
+  ],
+  [
+    'app/api/admin/workspaces/[id]/task-flows/route.ts:guard',
+    'ORG-WIDE (function scope). Identical shape to the `folders` guard above — no parameters, no ' +
+      'workspace resolution, admin-or-403 only.',
+  ],
+  [
+    'app/api/admin/workspaces/[id]/task-flows/[flowId]/route.ts:guard',
+    'ORG-WIDE (function scope). Identical shape to the two guards above.',
+  ],
+  [
+    'app/api/admin/workspaces/[id]/identity/route.ts:GET',
+    'NARROWS. `resolveAdminWorkspace(id)` runs FIRST and is the tenant-bounded resolution (it is ' +
+      'in REQUIRED_AUTHORIZERS and is checked by 8a-8e); the `isTenantAdmin` test that follows ' +
+      'REFUSES a non-admin owner with 403 `admin_only`. The flag subtracts reach here, it does ' +
+      'not add any.',
+  ],
+  [
+    'app/api/admin/workspaces/[id]/identity/route.ts:POST',
+    'NARROWS. Same two-step as the GET above: `resolveAdminWorkspace` then a 403 for a non-admin.',
+  ],
+  [
+    'app/api/admin/workspaces/[id]/route.ts:DELETE',
+    'NARROWS. `resolveAdminWorkspace(params.id)` first, then a 403 for a non-admin owner — the ' +
+      'destructive tenant-wide delete is admin-only ON TOP OF the resolved workspace, never ' +
+      'instead of resolving one.',
+  ],
+  [
+    'app/api/admin/workspaces/[id]/networking/_gate.ts:authorizeNetworking',
+    'NARROWS. `resolveAdminWorkspace(id)` first, then a 403 for a non-admin owner, because shared ' +
+      'landing-zone networking is admin-only. Same two-step as the three above.',
+  ],
+  [
+    'app/api/governance/govern/copilot/route.ts:POST',
+    'ORG-WIDE. `!isTenantAdmin -> 403`, then an AOAI chat stream against the DEPLOYMENT\'s Foundry ' +
+      'target. No workspace id, no item id, no Cosmos partition — there is no tenant boundary for ' +
+      'the flag to cross.',
+  ],
+  [
+    'app/api/governance/govern/trigger-scan/route.ts:adminGate',
+    'ORG-WIDE. `!isTenantAdmin -> 403` and nothing else; the route it gates triggers a scan on the ' +
+      'DEPLOYMENT\'s Purview account. Same class as `feature-gate.ts:requireTenantAdmin`.',
+  ],
+  [
+    'lib/access/approval-authority.ts:resolveApprovalAuthority',
+    'ORG-WIDE. Resolves whether the caller may review ACCESS REQUESTS at all (tenant-admin, a ' +
+      'delegated capability, or a named approver). Its subject is the approval surface, not a ' +
+      'workspace; the workspace decision still runs separately wherever one is in play.',
+  ],
+  [
+    'app/api/workspaces/[id]/folders/route.ts:assertWorkspaceAccess',
+    'UNRESOLVED — A FINDING, NOT A CLEARANCE, AND THE REASON THIS CENSUS IS NOT A FORMALITY. ' +
+      'After the owner point-read fails it runs `if (isTenantAdmin(session)) return ' +
+      '!!(await readWorkspaceById(id));`. `readWorkspaceById` is a raw cross-partition document ' +
+      'read with NO tenant predicate — its own NON_AUTHORIZERS reason in this file says so, and ' +
+      'says the RESOLVER is what subjects the result to the tid comparison. Nothing subjects it ' +
+      'here. So a tenant admin in tenant A appears to reach GET/POST/PATCH/DELETE on the folder ' +
+      'tree of a workspace in tenant B. It is a #3833-family member in a THIRD spelling: neither ' +
+      '`isTenantAdmin(session)) return null` nor an unfiltered `loadWorkspaceAdmin`, which is why ' +
+      'the two-shape grep that closed the other members did not surface it. It is also outside ' +
+      'the scope net for the same reason #3855 was — its parameter is called `id`. NOT fixed in ' +
+      'the change that added this entry: `app/api/workspaces/**` belongs to another lane and a ' +
+      'cross-lane edit is how two agents corrupt one file. Routed, not silently carried.',
+  ],
+]);
+
+let adminShapeFunctions = 0;
+let adminShapeWorkspaceScoped = 0;
+const adminShapeUnscopedSeen = new Set();
+for (const file of files) {
+  const rel = file.slice(CONSOLE_ROOT.length + 1);
+  const src = readFileSync(file, 'utf8');
+  if (!ISADMIN.test(src)) continue;
+  const masked = mask(src);
+  for (const fn of adminShapeFunctionsIn(masked)) {
     adminShapeFunctions += 1;
-    if (!ADMIN_GRANT_SCOPE.test(fn.params)) continue; // not a workspace-scoped decision
+    const line = masked.slice(0, fn.declAt).split('\n').length;
+    if (!ADMIN_GRANT_SCOPE.test(fn.params)) {
+      // NOT "not a workspace-scoped decision" — that is what this line used to
+      // claim, and it was false of `assertItemAccess` (#3877). All this branch
+      // establishes is that the parameter-name net did not reach the function.
+      if (rel.startsWith('lib/auth/')) continue; // 8a-8e judge these by module
+      const key = `${rel}:${fn.name}`;
+      adminShapeUnscopedSeen.add(key);
+      if (!ADMIN_SHAPE_UNSCOPED.has(key)) {
+        fail(
+          `${rel}:${line}: ${fn.name}() grants access on an isTenantAdmin-bearing condition, and ` +
+            "8h's scope net does NOT reach it (its parameters are " +
+            `\`${norm(fn.params).slice(0, 70)}\`). That is the #3877 state exactly: the guard ` +
+            'would print OK over it. Either give the decision a workspace/item-named parameter so ' +
+            '8h judges it, route it through resolveWorkspaceAccessByOid, or add it to ' +
+            'ADMIN_SHAPE_UNSCOPED in this guard WITH what a reviewer actually observed in the ' +
+            'function — NARROWS / ORG-WIDE / UNRESOLVED. An entry there clears nothing; it only ' +
+            'stops the blind set growing in silence.',
+        );
+      }
+      continue;
+    }
     adminShapeWorkspaceScoped += 1;
     // `lib/auth/**` is covered PRECISELY by 8a-8e, which model the delegated
     // verdict; 8h's coarse model cannot and would report a false positive.
@@ -2691,7 +3313,6 @@ for (const file of files) {
     // sits ahead of the resolver). Removing the skip therefore buys nothing and
     // costs one wrong accusation.
     if (rel.startsWith('lib/auth/')) continue;
-    const line = masked.slice(0, fn.declAt).split('\n').length;
     fail(
       `${rel}:${line}: ${fn.name}() grants access on isTenantAdmin ALONE in a ` +
         'workspace-scoped function (#3825). A tenant admin must still be shown to be in ' +
@@ -2699,6 +3320,429 @@ for (const file of files) {
     );
   }
 }
+for (const k of [...ADMIN_SHAPE_UNSCOPED.keys()].filter((x) => !adminShapeUnscopedSeen.has(x))) {
+  fail(
+    `ADMIN_SHAPE_UNSCOPED entry \`${k}\` matches no admin-shape function. Either it was fixed ` +
+      '(delete the entry and say so), or 8h stopped SEEING it — which is the failure mode the ' +
+      'census exists to catch, and is how #3855 stayed invisible for as long as it did. ' +
+      're-review before deleting.',
+  );
+}
+
+// ── 8h EMBEDDED CONTROL — the section must fire on the shape it missed ───────
+//
+// A GUARD WITH AN EMPTY POPULATION IS GREEN AND BLIND, AND THAT IS NOT A
+// HYPOTHETICAL HERE: it is what section 8h WAS. Repairing the scope net fixed
+// the instance; it did not give the section a subject, because the repair also
+// fixed the only function the widened net admits. On the tree that ships this
+// change 8h's judged population is ZERO AGAIN — for the good reason this time —
+// so `adminShapeWorkspaceScoped: 0` and `violations: 0` are exactly what a
+// re-broken net would also print.
+//
+// These probes are the discriminator. Each is a synthetic module fed to the SAME
+// `adminShapeFunctionsIn` + `ADMIN_GRANT_SCOPE` the tree scan uses, so:
+//   - narrowing ADMIN_GRANT_SCOPE back to `/\bworkspace(Id|_id)?\b/i` turns
+//     probe 1 RED (it is the #3855 signature, verbatim);
+//   - weakening the trigger, the value classifier or the path-condition model
+//     turns probes 1-4 RED;
+//   - and probe 5 is the OTHER error direction — the REPAIRED shape, which must
+//     NOT be flagged, so a net or a trigger widened until everything matches is
+//     caught too.
+//
+// PROBE 4 IS THE NARROW ONE, AND IT IS THE ONE THAT MATTERS. The evasion that
+// works in this repo is not the broad rewrite, it is the bypass scoped to a
+// single itemType — `workspace-guard.ts:219` records exactly that shape
+// (`if (opts.itemType === 'lakehouse' && isTenantAdmin(session)) return null;`)
+// as measured escape N7. A section that catches only the unconditional form
+// catches only the mistake nobody makes twice.
+const ADMIN_SHAPE_PROBES = [
+  {
+    label: 'P1 the #3855 bypass verbatim (params `session, itemId, itemType`)',
+    fn: 'assertItemAccess',
+    flagged: true,
+    src: `import { isTenantAdmin } from '@/lib/auth/feature-gate';
+async function assertItemAccess(session: SessionPayload, itemId: string, itemType: string): Promise<NextResponse | null> {
+  if (isTenantAdmin(session)) return null;
+  const owned = await loadOwnedItem(itemId, itemType, session.claims.oid);
+  if (!owned) return NextResponse.json({ ok: false }, { status: 404 });
+  return null;
+}`,
+  },
+  {
+    label: 'P2 the same bypass on a workspace-named parameter (the pre-#3877 net)',
+    fn: 'assertWorkspace',
+    flagged: true,
+    src: `import { isTenantAdmin } from '@/lib/auth/feature-gate';
+async function assertWorkspace(session: SessionPayload, workspaceId: string): Promise<NextResponse | null> {
+  if (isTenantAdmin(session)) return null;
+  return NextResponse.json({ ok: false }, { status: 404 });
+}`,
+  },
+  {
+    label: 'P3 the bypass granting `undefined` rather than `null`',
+    fn: 'assertItemAccess',
+    flagged: true,
+    src: `import { isTenantAdmin } from '@/lib/auth/feature-gate';
+async function assertItemAccess(session: SessionPayload, itemId: string): Promise<NextResponse | undefined> {
+  if (isTenantAdmin(session)) return undefined;
+  return NextResponse.json({ ok: false }, { status: 404 });
+}`,
+  },
+  {
+    label: 'P4 THE NARROW BYPASS — scoped to ONE itemType (measured escape N7)',
+    fn: 'assertItemAccess',
+    flagged: true,
+    src: `import { isTenantAdmin } from '@/lib/auth/feature-gate';
+async function assertItemAccess(session: SessionPayload, itemId: string, itemType: string): Promise<NextResponse | null> {
+  if (itemType === 'lakehouse' && isTenantAdmin(session)) return null;
+  const owned = await loadOwnedItem(itemId, itemType, session.claims.oid);
+  if (!owned) return NextResponse.json({ ok: false }, { status: 404 });
+  return null;
+}`,
+  },
+  {
+    label: 'P5 CONTROL — the REPAIRED shape must NOT be flagged',
+    fn: 'assertItemAccess',
+    flagged: false,
+    src: `async function assertItemAccess(session: SessionPayload, itemId: string, itemType: string): Promise<NextResponse | null> {
+  const denied = await authorizeItemWorkspace(session, { itemId, itemType, notFound: 'x' });
+  if (denied) return denied;
+  const owned = await loadOwnedItem(itemId, itemType, session.claims.oid, { session });
+  if (!owned) return NextResponse.json({ ok: false }, { status: 404 });
+  return null;
+}`,
+  },
+  {
+    label: 'P6 the GENEROSITY of the model — a NARROWING admin test is counted TOO',
+    fn: 'assertItemAccess',
+    flagged: true,
+    src: `import { isTenantAdmin } from '@/lib/auth/feature-gate';
+async function assertItemAccess(session: SessionPayload, itemId: string): Promise<NextResponse | null> {
+  const resolved = await resolveAdminWorkspace(itemId);
+  if (resolved.resp) return resolved.resp;
+  if (!isTenantAdmin(session)) return NextResponse.json({ ok: false }, { status: 403 });
+  return null;
+}`,
+  },
+];
+// P6 IS NOT A TYPO, AND IT WAS WRITTEN THE OTHER WAY FIRST. It began as
+// `flagged: false` — "a narrowing admin test must NOT be flagged" — on the
+// assumption that a gate which REFUSES on `!isTenantAdmin` could not read as a
+// grant. Running it said otherwise, and the assumption was the wrong one: the
+// fall-through `return null` sits under the path condition `!isTenantAdmin(...)`,
+// that text satisfies `ISADMIN`, and `null` is an ALLOW for a
+// `NextResponse | null` return. So the model counts the narrowing shape as well
+// as the granting one.
+//
+// That is DELIBERATE GENEROSITY, of the same kind `VERDICT_RETURN` documents: a
+// false positive costs one census line, a false negative costs a bypass nobody
+// looks at. It is also load-bearing HERE — four of the eleven ADMIN_SHAPE_UNSCOPED
+// entries are NARROWS entries that exist only because of it. Teaching the model
+// to skip a negated test would silently shrink the population by four and turn
+// those four into stale-pin failures, which is the same "the derivation went
+// blind" motion 8i exists to catch. Pinning the generosity as a probe is what
+// stops that being done as a quiet cleanup.
+
+let adminProbesPassed = 0;
+for (const p of ADMIN_SHAPE_PROBES) {
+  const masked = mask(p.src);
+  const hit = adminShapeFunctionsIn(masked).find((f) => f.name === p.fn);
+  const judged = Boolean(hit) && ADMIN_GRANT_SCOPE.test(hit.params);
+  if (judged === p.flagged) {
+    adminProbesPassed += 1;
+    continue;
+  }
+  fail(
+    `8h EMBEDDED CONTROL ${p.label} — expected 8h to ${p.flagged ? 'FLAG' : 'PASS'} it and it did ` +
+      `NOT (shape matched: ${Boolean(hit)}; scope net matched: ${hit ? ADMIN_GRANT_SCOPE.test(hit.params) : 'n/a'}). ` +
+      'Section 8h judges ZERO functions on the current tree, so `violations: 0` there says ' +
+      'nothing on its own — these probes are the only thing standing between "8h is watching" ' +
+      'and "8h looks at an empty set", which is what #3877 was. Fix the section, never the probe.',
+  );
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// 8j: ADMIN-VERDICT-FREE ROUTES — keyed to the SAFE state, not to a spelling
+// ════════════════════════════════════════════════════════════════════════════
+//
+// WHY THIS EXISTS, AND IT IS NOT A THEORY. Independent review of the #3855 fix
+// applied ONE mutation to the repaired route and put all three defenses back to
+// green over a live cross-tenant ACL DELETION:
+//
+//     const deniedDel = (isTenantAdmin(session) && params.type === 'mirrored-database')
+//       ? null : await assertItemAccess(session, params.id, params.type);
+//
+// Measured: chokepoint RC=0, route-guards RC=0, vitest RC=0 (12 passed). Two
+// independent holes lined up.
+//
+//   1. 8h MODELS AN ADMIN GRANT IN THE AUTHORIZER, NOT IN THE HANDLER. The
+//      bypass is a TERNARY assigned to a local, so `isTenantAdmin` never appears
+//      in the PATH CONDITION of any `return`, and `adminShapeFunctionsIn` does
+//      not see it at all. Even if it did, the handler's params are `(req, ctx)`
+//      — outside the scope net for the same reason #3855 was.
+//   2. THE SPEC'S MULTI-ITEMTYPE LOOP EXERCISED POST ONLY. GET and DELETE were
+//      pinned for `lakehouse` alone, so a bypass narrowed to
+//      `mirrored-database` on DELETE passed a 12-test suite. One itemType in one
+//      verb was the entire margin. (Fixed in the spec; this section is the
+//      structural half, because the next narrow spelling will be a different
+//      one.)
+//
+// SO THIS SECTION DOES NOT CHASE SPELLINGS. Enumerating shapes is how a guard
+// gets keyed to the UNSAFE pattern and goes green on the next rewrite — the
+// ternary above is precisely that lesson. The rule here is the SAFE state:
+//
+//     a route in ADMIN_VERDICT_FREE_ROUTES may not REFERENCE the admin verdict
+//     AT ALL — not the `isTenantAdmin` token, and not the two env vars
+//     `isTenantAdmin` is derived from.
+//
+// A ternary, a `||`, a `??`, an `as any` cast, an aliased import
+// (`import { isTenantAdmin as isAdmin }`), a re-export — every one of them still
+// carries the token. The env-var arm additionally closes the measured
+// re-derivation variant this file names elsewhere
+// (`session.claims.oid === process.env.LOOM_TENANT_ADMIN_OID`), which carries no
+// token at all.
+//
+// THE SECOND ARM IS A POSITIVE REQUIREMENT, because "no admin token" is also
+// true of a route with NO AUTHORIZATION WHATSOEVER. Every exported HTTP handler
+// with a body must reference the file's own gate. An alias export
+// (`export const PUT = POST;`) has no callable body and is skipped — it inherits
+// the gate of what it aliases, which is the point of writing it that way.
+//
+// THE COST, stated: any future need for a genuine tenant-admin decision in one
+// of these files is a red build that must be argued for and removed from this
+// set with a reason. That is intended. These routes delegate the whole tenant
+// question to `resolveWorkspaceAccessByOid`; an admin verdict computed locally
+// is the defect, in whatever spelling.
+const ADMIN_VERDICT_FREE_ROUTES = new Map([
+  [
+    'app/api/items/[type]/[id]/security-roles/route.ts',
+    {
+      gate: 'assertItemAccess',
+      why:
+        '#3855 — POST/PUT/DELETE here grant and revoke REAL ADLS Gen2 POSIX ACLs on the DLZ lake ' +
+        'over a caller-supplied itemId, so an admin verdict computed IN THIS FILE is a ' +
+        'cross-tenant WRITE in whatever spelling it is written. The whole tenant decision ' +
+        'belongs to `assertItemAccess` -> authorizeItemWorkspace / loadOwnedItem -> ' +
+        'resolveWorkspaceAccessByOid, whose step 6 requires a POSITIVE tenant match.',
+    },
+  ],
+]);
+
+/** The HTTP method exports a Next.js route file may declare. */
+const HTTP_HANDLERS = new Set(['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'HEAD', 'OPTIONS']);
+
+/** The admin verdict, by TOKEN or by the env vars it is derived from. */
+const ADMIN_VERDICT_REFERENCE = /\bisTenantAdmin\b|\bLOOM_TENANT_ADMIN_(?:OID|GROUP_ID)\b/;
+
+/**
+ * Judge ONE admin-verdict-free route. Returns the list of failure strings, so
+ * the tree scan and the embedded control below run the SAME code — a probe that
+ * re-implements the rule proves only that the probe works.
+ */
+function adminVerdictFreeViolations(rel, src, spec) {
+  const out = [];
+  const masked = mask(src);
+  // The token scan runs on MASKED source: a docblock explaining the rule (this
+  // route has a long one) must not trip it, and neither must a string literal.
+  const m = ADMIN_VERDICT_REFERENCE.exec(masked);
+  if (m) {
+    const line = masked.slice(0, m.index).split('\n').length;
+    out.push(
+      `${rel}:${line}: this route references the admin verdict (\`${m[0]}\`), and it is in ` +
+        'ADMIN_VERDICT_FREE_ROUTES precisely because it may not. ' +
+        spec.why +
+        ' This rule is keyed to the SAFE state on purpose: review put all three guards back to ' +
+        'green with a ternary narrowed to ONE itemType on ONE verb, so enumerating unsafe ' +
+        'shapes does not work. If a genuine tenant-admin decision is now needed here, remove ' +
+        'the entry WITH the argument for it — do not rename around this.',
+    );
+  }
+  for (const fn of declaredFunctions(masked)) {
+    if (!HTTP_HANDLERS.has(fn.name)) continue;
+    const line = masked.slice(0, fn.declAt).split('\n').length;
+    if (!fn.body.includes(`${spec.gate}(`)) {
+      out.push(
+        `${rel}:${line}: exported handler ${fn.name}() does not call \`${spec.gate}(\`. ` +
+          '"No admin token" is also true of a route with no authorization at all, so this arm is ' +
+          'what stops the rule above being satisfied by DELETING the gate.',
+      );
+      continue;
+    }
+    // ── THIRD ARM: the gate must be called UNCONDITIONALLY and its answer ACTED ON.
+    // Arms 1-2 are jointly satisfied by code that CALLS the gate and then ignores
+    // it, and by code that makes the call the else-branch of a non-admin-flavoured
+    // condition. Both were MEASURED to pass arms 1+2 AND check-route-guards:
+    //
+    //   const deniedDel = await assertItemAccess(...);
+    //   if (false && deniedDel) return deniedDel;              // answer discarded
+    //
+    //   const deniedDel = (session.claims.groups?.includes('x') && p.type === 'y')
+    //     ? null : await assertItemAccess(...);                // no token, no env var
+    //
+    // route-guards does not cover either, because the gate it watches for
+    // consumption is `authorizeItemWorkspace` — which IS consumed, one frame
+    // deeper, inside assertItemAccess. The local wrapper is the blind spot.
+    //
+    // Like arms 1-2 this is keyed to the SAFE state rather than to a list of bad
+    // spellings: the only accepted shape is an unconditional `const x = await
+    // gate(...)` followed by `if (x) return x;`. Any ternary, `&&`, `||`, `??`,
+    // or dropped return fails it without the guard needing to recognise the
+    // particular dodge — including one nobody has thought of yet.
+    const assigned = new RegExp(
+      `(?:const|let)\\s+([A-Za-z_$][\\w$]*)\\s*=\\s*await\\s+${spec.gate}\\s*\\(`,
+    ).exec(fn.body);
+    if (!assigned) {
+      out.push(
+        `${rel}:${line}: exported handler ${fn.name}() calls \`${spec.gate}(\` but not as an ` +
+          `unconditional \`const <name> = await ${spec.gate}(...)\`. A gate reached only through a ` +
+          'ternary / `&&` / `||` is skipped for whichever callers the condition selects, which is ' +
+          'exactly how a bypass narrowed to one itemType on one verb stayed green. Call it ' +
+          'unconditionally; if some caller genuinely must skip it, that argument belongs in ' +
+          'ADMIN_VERDICT_FREE_ROUTES, not in a conditional here.',
+      );
+      continue;
+    }
+    const v = assigned[1];
+    if (!new RegExp(`if\\s*\\(\\s*${v}\\s*\\)\\s*return\\s+${v}\\s*;`).test(fn.body)) {
+      out.push(
+        `${rel}:${line}: exported handler ${fn.name}() calls \`${spec.gate}(\` into \`${v}\` but ` +
+          `does not act on it with \`if (${v}) return ${v};\`. A gate whose answer is DISCARDED is ` +
+          'indistinguishable from no gate at all, and satisfies the "must call the gate" arm above ' +
+          'while granting exactly what that arm exists to refuse.',
+      );
+    }
+  }
+  return out;
+}
+
+let adminVerdictFreeChecked = 0;
+for (const [rel, spec] of ADMIN_VERDICT_FREE_ROUTES) {
+  let src;
+  try {
+    src = readFileSync(`${CONSOLE_ROOT}/${rel}`, 'utf8');
+  } catch {
+    fail(
+      `ADMIN_VERDICT_FREE_ROUTES entry \`${rel}\` names a file that does not exist. If the route ` +
+        'moved, move the entry with it in the same commit; if it was deleted, say so in the PR. ' +
+        'A pin that silently matches nothing is the #3877 failure mode.',
+    );
+    continue;
+  }
+  adminVerdictFreeChecked += 1;
+  for (const v of adminVerdictFreeViolations(rel, src, spec)) fail(v);
+}
+
+// ── 8j EMBEDDED CONTROL — review's exact bypass, and three narrower spellings ──
+// Arm 1 is the mutation that defeated all three defenses, character for
+// character. If this section is ever weakened, that is the arm that says so.
+const ADMIN_VERDICT_FREE_PROBES = [
+  {
+    label: "R1 review's exact bypass — ternary, ONE itemType, DELETE only",
+    violates: true,
+    src: `import { isTenantAdmin } from '@/lib/auth/feature-gate';
+export const DELETE = withSession(async (req, ctx) => {
+  const params = ctx.params;
+  const deniedDel = (isTenantAdmin(session) && params.type === 'mirrored-database')
+    ? null : await assertItemAccess(session, params.id, params.type);
+  if (deniedDel) return deniedDel;
+  return NextResponse.json({ ok: true });
+});`,
+  },
+  {
+    label: 'R2 the same, via an ALIASED import (the rename evasion)',
+    violates: true,
+    src: `import { isTenantAdmin as isAdmin } from '@/lib/auth/feature-gate';
+export const DELETE = withSession(async (req, ctx) => {
+  const deniedDel = isAdmin(session) ? null : await assertItemAccess(session, ctx.params.id, ctx.params.type);
+  if (deniedDel) return deniedDel;
+  return NextResponse.json({ ok: true });
+});`,
+  },
+  {
+    label: 'R3 the env-oid re-derivation, which carries NO isTenantAdmin token',
+    violates: true,
+    src: `export const DELETE = withSession(async (req, ctx) => {
+  if (session.claims.oid === process.env.LOOM_TENANT_ADMIN_OID) return NextResponse.json({ ok: true });
+  const deniedDel = await assertItemAccess(session, ctx.params.id, ctx.params.type);
+  if (deniedDel) return deniedDel;
+  return NextResponse.json({ ok: true });
+});`,
+  },
+  {
+    label: 'R4 the gate DELETED outright (no admin token anywhere)',
+    violates: true,
+    src: `export const DELETE = withSession(async (req, ctx) => {
+  return NextResponse.json({ ok: true });
+});`,
+  },
+  {
+    label: 'R5 CONTROL — the repaired shape, plus an alias export',
+    violates: false,
+    src: `export const POST = withSession(async (req, ctx) => {
+  const denied = await assertItemAccess(session, ctx.params.id, ctx.params.type);
+  if (denied) return denied;
+  return NextResponse.json({ ok: true });
+});
+export const PUT = POST;
+export const DELETE = withSession(async (req, ctx) => {
+  const deniedDel = await assertItemAccess(session, ctx.params.id, ctx.params.type);
+  if (deniedDel) return deniedDel;
+  return NextResponse.json({ ok: true });
+});`,
+  },
+  {
+    label: 'R6 CONTROL — the rule is not tripped by the word in a COMMENT',
+    violates: false,
+    src: `// The old code read \`if (isTenantAdmin(session)) return null;\` — see #3855.
+export const DELETE = withSession(async (req, ctx) => {
+  const deniedDel = await assertItemAccess(session, ctx.params.id, ctx.params.type);
+  if (deniedDel) return deniedDel;
+  return NextResponse.json({ ok: true });
+});`,
+  },
+  // R7/R8 were both MEASURED to pass arms 1+2 and check-route-guards before the
+  // third arm existed — i.e. two guards green over a live cross-tenant ACL
+  // deletion, which is the same failure R1 records. They are the controls for
+  // the third arm; if either stops firing, that arm has gone decorative.
+  {
+    label: 'R7 the gate is CALLED but its answer is DISCARDED (arms 1+2 both satisfied)',
+    violates: true,
+    src: `export const DELETE = withSession(async (req, ctx) => {
+  const deniedDel = await assertItemAccess(session, ctx.params.id, ctx.params.type);
+  if (false && deniedDel) return deniedDel;
+  return NextResponse.json({ ok: true });
+});`,
+  },
+  {
+    label: 'R8 admin re-derived from the GROUPS claim — no token, no env var, gate present',
+    violates: true,
+    src: `export const DELETE = withSession(async (req, ctx) => {
+  const deniedDel = (session.claims.groups?.includes('platform-operators') && ctx.params.type === 'mirrored-database')
+    ? null : await assertItemAccess(session, ctx.params.id, ctx.params.type);
+  if (deniedDel) return deniedDel;
+  return NextResponse.json({ ok: true });
+});`,
+  },
+];
+
+let adminVerdictFreeProbesPassed = 0;
+for (const p of ADMIN_VERDICT_FREE_PROBES) {
+  const hits = adminVerdictFreeViolations('probe.ts', p.src, {
+    gate: 'assertItemAccess',
+    why: '(probe)',
+  });
+  if (hits.length > 0 === p.violates) {
+    adminVerdictFreeProbesPassed += 1;
+    continue;
+  }
+  fail(
+    `8j EMBEDDED CONTROL ${p.label} — expected ${p.violates ? 'a VIOLATION' : 'NO violation'} and ` +
+      `got ${hits.length}. Arm R1 is the bypass that put the chokepoint, route-guards AND vitest ` +
+      'all back to green over a live cross-tenant ACL deletion; if it stops firing, this section ' +
+      'is decorative. Fix the section, never the probe.',
+  );
+}
+
 
 // ════════════════════════════════════════════════════════════════════════════
 // 10: NO PRIVATE COPY OF THE TENANT COMPARISON (#3843 / #3840 / #3834)
@@ -2965,16 +4009,21 @@ const TID_COMPARISON_PINS = new Map([
     'lib/auth/workspace-access.ts',
     {
       reason:
-        'THE CANONICAL RESOLVER. Step 4 (the shared ACL boundary) and step 6 (the admin-open ' +
-        'bypass, which #3823 tightened to require a POSITIVE match) plus the same step-4 ' +
-        'filter applied per document by `listAccessibleWorkspaces`. Sections 1-4 of this ' +
-        'guard govern these three lines directly — their ORDER relative to the ACL and admin ' +
-        'steps is asserted there — so they are pinned here as the SET that may exist, not as ' +
-        'an exemption from checking.',
+        'THE CANONICAL RESOLVER — AND AFTER #3900 THIS PIN HOLDS ONE LINE, NOT THREE. Step 4 ' +
+        '(the shared ACL boundary) and the same step-4 filter applied per document by ' +
+        '`listAccessibleWorkspaces` were CONSOLIDATED onto `sameTenantConfirmed(...)`, which ' +
+        'carries no operator and is therefore invisible to this section BY DESIGN (see the ' +
+        'tenant-boundary reason above: a CALL is the blessed form). Their two entries were ' +
+        'deleted here in the same commit, which is exactly what this section NOTE asked for ' +
+        'once per expression. WHAT REMAINS IS STEP 6, the admin-open bypass #3823 tightened ' +
+        'to require a POSITIVE match, still spelled out because it is a SECOND and NARROWER ' +
+        'test layered on top of step 4 rather than a copy of it. Sections 1-4 of this guard ' +
+        'govern that line directly — its ORDER relative to the ACL and admin steps is ' +
+        'asserted there — so it is pinned here as the SET that may exist, not as an ' +
+        'exemption from checking. Re-adding either deleted spelling to this file is a red ' +
+        'build until someone re-pins it, which is the property this entry exists to hold.',
       exprs: [
-        'wsDoc.tid !== callerTid',
         'wsDoc.tid === callerTid',
-        'doc.tid !== callerTid',
       ],
     },
   ],
@@ -2993,6 +4042,17 @@ const TID_COMPARISON_PINS = new Map([
         'call — a residual, not a clearance. It is ALSO pinned by POSITION in ' +
         'POST_DELEGATION_PINS above (`region`), which is what makes DELETING it a red build; ' +
         'this entry is what makes ADDING a second comparison to that file one.',
+      // #3877-f2 — WITHOUT THIS, THE CONSOLIDATION NOTE CONTRADICTED THE REASON
+      // DIRECTLY ABOVE IT. Consolidating THIS site is not a rename: it swaps a
+      // deliberately LENIENT boundary for a POSITIVE one and narrows access.
+      onConsolidation:
+        'this site\'s comparison was LENIENT ON PURPOSE (see the reason above), so consolidating ' +
+        'it onto `sameTenantConfirmed` is a BEHAVIOUR CHANGE, not a rename: the item grant is ' +
+        'now refused whenever the caller session or the workspace doc carries no `tid`, which ' +
+        'are both live supported states. It is also pinned by POSITION in POST_DELEGATION_PINS ' +
+        '(`region`) — that pin quotes the comparison text and MUST be re-pinned in the same ' +
+        'commit or the build stays red for a second, unrelated-looking reason. Treat this as the ' +
+        'security review the reason calls for, not as a maintenance delete.',
       exprs: ['wsDoc.tid !== tid'],
     },
   ],
@@ -3053,9 +4113,9 @@ for (const file of files) {
   }
 }
 /**
- * Does this module IMPORT the shared comparison? A pinned expression that has
- * disappeared from a file which now imports `tenant-boundary` is the INTENDED
- * end state — the site consolidated — not a deleted boundary.
+ * Does this module IMPORT the shared comparison, AS A VALUE? A pinned expression
+ * that has disappeared from a file which now imports `tenant-boundary` is the
+ * INTENDED end state — the site consolidated — not a deleted boundary.
  *
  * SHOULD-FIX 3. Without this arm the stale-pin rule made the correct fix a RED
  * build and then told the author not to fix it: applying exactly the
@@ -3083,18 +4143,63 @@ for (const file of files) {
  *
  * Restricting to `importRanges` is what keeps the raw read honest — a
  * commented-out or string-mentioned specifier is outside every import range, so
- * it still cannot satisfy this. THE NEGATIVE CONTROL THAT PROVES THIS ARM FIRES
- * IS `scripts/ci/check-tid-boundary-chokepoint.selftest.mjs`, and its absence is
+ * it still cannot satisfy this.
+ *
+ * ── #3877-f1, TWO REPAIRS ────────────────────────────────────────────────────
+ *
+ * 1. IT TOOK `(masked, raw)`, AND NOTHING MADE THE SECOND ARGUMENT RAW. The
+ *    entire defect above was one call site passing the wrong thing, and the
+ *    repaired version left that call site free to pass it again — the arity WAS
+ *    the hazard. `check-tid-boundary-chokepoint.selftest.mjs` pinned the call's
+ *    exact text, which detects the regression but does not prevent it, and a pin
+ *    on a formatted expression breaks on a reflow. THE MASK IS NOW COMPUTED
+ *    INSIDE, from the one raw string this function takes, so "pass masked source
+ *    where raw was meant" is no longer expressible. The selftest's CASE 2 pins
+ *    the mechanism INSIDE this function instead of the shape of its call.
+ *
+ * 2. A TYPE-ONLY IMPORT USED TO BLESS A REMOVAL. The regex matched any import
+ *    whose specifier ended in `tenant-boundary`, and `import type { TenantMatch }
+ *    from './tenant-boundary';` satisfied it. A type-only import is ERASED at
+ *    compile time: it brings no comparison into the module and cannot be the
+ *    consolidation this arm exists to recognise, so it made "delete the boundary,
+ *    add a type import" a green build with an approving NOTE. All three spellings
+ *    are refused now — a leading `import type`, an all-`{ type X }` specifier
+ *    list, and a bindingless side-effect `import './tenant-boundary';`, which
+ *    likewise brings nothing in. A list with at least ONE value specifier still
+ *    blesses, so `import { sameTenantConfirmed, type TenantMatch } from …` — the
+ *    ordinary spelling of the real fix — is unaffected.
+ *
+ * THE NEGATIVE CONTROL THAT PROVES THIS ARM FIRES IS
+ * `scripts/ci/check-tid-boundary-chokepoint.selftest.mjs`, and its absence is
  * precisely what let the dead version ship: it consolidates a pinned site for
- * real and asserts the NOTE, then reintroduces the dead arm and asserts the
- * control NOTICES. Run it whenever this function changes.
+ * real and asserts the NOTE, reintroduces the dead arm and asserts the control
+ * NOTICES, and (round 2) consolidates with a TYPE-ONLY import and asserts that
+ * the arm REFUSES. Run it whenever this function changes.
  */
-function importsTenantBoundary(masked, raw) {
-  return importRanges(masked).some(([a, b]) =>
-    /['"](?:@\/lib\/auth\/tenant-boundary|\.{1,2}(?:\/[\w.-]+)*\/?tenant-boundary)['"]/.test(
-      raw.slice(a, b),
-    ),
-  );
+const TENANT_BOUNDARY_SPECIFIER =
+  /['"](?:@\/lib\/auth\/tenant-boundary|\.{1,2}(?:\/[\w.-]+)*\/?tenant-boundary)['"]/;
+
+function importsTenantBoundary(raw) {
+  const masked = mask(raw);
+  return importRanges(masked).some(([a, b]) => {
+    const stmt = raw.slice(a, b);
+    if (!TENANT_BOUNDARY_SPECIFIER.test(stmt)) return false;
+    // `import type { … } from '…'` — erased at compile time, so it consolidates
+    // nothing. Same for `export type { … } from '…'`, which `importRanges` also
+    // spans.
+    if (/^\s*(?:import|export)\s+type\b/.test(stmt)) return false;
+    const braces = /\{([\s\S]*?)\}/.exec(stmt);
+    if (braces) {
+      const specs = braces[1].split(',').map((x) => x.trim()).filter(Boolean);
+      // An empty list (`import {} from '…'`) binds nothing; a list every member
+      // of which is `type X` is erased in full. Either way, no comparison
+      // arrived in this module.
+      return specs.length > 0 && !specs.every((s) => /^type\s/.test(s));
+    }
+    // No specifier list: a default or namespace binding is a value import and
+    // does consolidate; a bare `import './tenant-boundary';` binds nothing.
+    return /^\s*(?:import|export)\s+[^'"\s]/.test(stmt);
+  });
 }
 
 for (const [rel, pin] of TID_COMPARISON_PINS) {
@@ -3103,26 +4208,47 @@ for (const [rel, pin] of TID_COMPARISON_PINS) {
     const file = `${CONSOLE_ROOT}/${rel}`;
     let consolidated = false;
     try {
-      const rawSrc = readFileSync(file, 'utf8');
-      consolidated = importsTenantBoundary(mask(rawSrc), rawSrc);
+      consolidated = importsTenantBoundary(readFileSync(file, 'utf8'));
     } catch {
       consolidated = false; // the file is gone — that is not a consolidation
     }
     if (consolidated) {
+      // #3877-f2 — THIS NOTE USED TO BE A SINGLE TEMPLATE FOR EVERY PIN, AND FOR
+      // ONE OF THEM IT SAID THE OPPOSITE OF THAT PIN'S OWN REASON. It read, of
+      // any file: "That is the intended end state; DELETE its
+      // TID_COMPARISON_PINS entry in the same commit."
+      //
+      // For `lib/auth/workspace-access.ts` and `lib/auth/tenant-boundary.ts`
+      // that is right. For `lib/auth/item-access.ts` it is not, and the
+      // contradiction is inside this file: that pin's reason says its lenient
+      // boundary is deliberate, that tightening it "is the item-access owner's
+      // call — a residual, not a clearance", and that it is ALSO pinned by
+      // POSITION in POST_DELEGATION_PINS, "which is what makes DELETING it a red
+      // build". Consolidating it is therefore not a no-op rename onto a shared
+      // helper: `sameTenantConfirmed` is a POSITIVE match, so it CHANGES the
+      // access outcome for every caller whose session or workspace doc carries
+      // no `tid`, and the POST_DELEGATION region pin must move in the same
+      // commit. A NOTE congratulating the author and telling them to delete the
+      // entry would have walked them straight past both facts.
+      //
+      // A pin may now carry `onConsolidation`, and the templated sentence is
+      // what a pin gets when it has nothing more specific to say.
       console.log(
         `[tid-boundary-chokepoint] NOTE — \`${rel}\` no longer carries \`${norm(e)}\` and now ` +
-          'imports the shared comparison (`lib/auth/tenant-boundary.ts`). That is the intended ' +
-          'end state; DELETE its TID_COMPARISON_PINS entry in the same commit and say so in the ' +
-          'PR body.',
+          'imports the shared comparison (`lib/auth/tenant-boundary.ts`) as a VALUE. That is the ' +
+          'intended end state; DELETE its TID_COMPARISON_PINS entry in the same commit and say so ' +
+          'in the PR body.' +
+          (pin.onConsolidation ? `\n        READ THIS FIRST — ${pin.onConsolidation}` : ''),
       );
       continue;
     }
     fail(
       `TID_COMPARISON_PINS entry \`${rel}\` pins \`${norm(e)}\`, which no longer appears, and ` +
-        'that file does NOT import `lib/auth/tenant-boundary`. So the comparison was REMOVED ' +
-        'rather than consolidated — removing the boundary is the change to re-review, not the ' +
-        'pin — or this scanner stopped seeing it, which is the failure mode the pin exists to ' +
-        'catch. Do not delete the entry to make the build green.',
+        'that file does NOT import `lib/auth/tenant-boundary` as a VALUE (a `import type { … }` ' +
+        'is erased at compile time and consolidates nothing — #3877-f1). So the comparison was ' +
+        'REMOVED rather than consolidated — removing the boundary is the change to re-review, ' +
+        'not the pin — or this scanner stopped seeing it, which is the failure mode the pin ' +
+        'exists to catch. Do not delete the entry to make the build green.',
     );
   }
 }
@@ -3157,6 +4283,18 @@ for (const k of [...NON_AUTHORIZERS.keys()].filter((x) => !usedNonAuthorizers.ha
     `NON_AUTHORIZERS entry \`${k}\` matches no derived candidate. The function was renamed, ` +
       'removed, or its return type changed so it is no longer seen as a verdict — re-review ' +
       'it rather than leaving an exemption that would clear a DIFFERENT function later.',
+  );
+}
+// #3850, the other direction: a body pin that clears nothing. Either it is stale
+// (the exemption went away and the pin was left behind, where it would silently
+// pre-clear a function re-added under the same key later), or the derivation
+// stopped producing the candidate — the 8i failure mode, one level down.
+for (const k of [...NON_AUTHORIZER_BODY_PINS.keys()].filter((x) => !nonAuthorizerPinsUsed.has(x))) {
+  fail(
+    `NON_AUTHORIZER_BODY_PINS entry \`${k}\` was never consulted — there is no NON_AUTHORIZERS ` +
+      'exemption using it on this run. A content pin with nothing to pin is either a leftover ' +
+      '(delete it in the same commit as the exemption) or a sign the candidate derivation no ' +
+      'longer reaches that function, which is the failure this pin exists to make loud.',
   );
 }
 for (const k of [...PROLOGUE_PINS.keys()].filter((x) => !usedProloguePins.has(x))) {
@@ -3202,9 +4340,49 @@ console.log(`[tid-boundary-chokepoint] authorizers DERIVED from ${AUTHZ_DIR}: ` 
             `non-authorizer(s); pins in use: ${usedProloguePins.size} prologue, ` +
             `${usedPostPins.size} post-delegation (#3825)`);
 console.log(`[tid-boundary-chokepoint]   checked: ${authorizerNames.join(', ')}`);
+// QUALIFIED BY WHAT PRODUCED IT (#3877). The middle number is 8h's ENTIRE JUDGED
+// POPULATION, and until this change the line printed it as if a low value were a
+// clean bill of health: it read 1 on the tree that carried #3855, and that 1 was
+// `resolveAdminWorkspace`, which the `lib/auth/` skip then hands to 8a-8e. So
+// section 8h judged NOTHING and said OK. The line now names the blind set too,
+// and the probe count is what makes a zero-population run mean anything at all.
 console.log(`[tid-boundary-chokepoint] repo-wide admin-shape scan: ${adminShapeFunctions} ` +
             `function(s) whose OWN body grants on an isTenantAdmin-bearing condition, of ` +
-            `which ${adminShapeWorkspaceScoped} are workspace-scoped by signature (#3825)`);
+            `which ${adminShapeWorkspaceScoped} are workspace/item-scoped by signature and so ` +
+            `JUDGED by 8h (#3825); ${adminShapeUnscopedSeen.size} outside lib/auth are NOT ` +
+            `reached by the scope net and are pinned in ADMIN_SHAPE_UNSCOPED — a census, not a ` +
+            `clearance (#3877)`);
+console.log(`[tid-boundary-chokepoint]   8h embedded controls passed: ${adminProbesPassed}/` +
+            `${ADMIN_SHAPE_PROBES.length} — each runs the REAL judgement on a synthetic module, ` +
+            'so a re-narrowed scope net goes RED even while the tree scan judges zero functions');
+// THE UNRESOLVED ENTRIES ARE PRINTED, NOT MERELY COMMENTED. Review measured that
+// the previous run's stdout contained neither `folders` nor `UNRESOLVED` — only
+// the aggregate "11 outside lib/auth" — while the PR body claimed the finding was
+// "named on every CI run". It was a source comment at the census, which nobody
+// reads on a green build. An aggregate count is exactly the kind of number this
+// file elsewhere refuses to let stand unqualified, so the ones that are FINDINGS
+// are named here every run, green or red.
+const adminShapeUnresolved = [...ADMIN_SHAPE_UNSCOPED]
+  .filter(([, reason]) => /^UNRESOLVED\b/.test(reason))
+  .map(([k]) => k);
+console.log(`[tid-boundary-chokepoint]   of those ${adminShapeUnscopedSeen.size}, ` +
+            `${adminShapeUnresolved.length} are recorded UNRESOLVED — a FINDING, not a clearance, ` +
+            'and not fixed by this guard:');
+for (const k of adminShapeUnresolved) {
+  console.log(`[tid-boundary-chokepoint]     UNRESOLVED  ${k}`);
+}
+console.log(`[tid-boundary-chokepoint]   8j admin-verdict-free routes: ${adminVerdictFreeChecked} ` +
+            `checked, ${adminVerdictFreeProbesPassed}/${ADMIN_VERDICT_FREE_PROBES.length} embedded ` +
+            "controls passed (R1 is review's exact ternary bypass, which defeated 8h, route-guards " +
+            'and vitest simultaneously)');
+// PRINTED, not merely counted. `resolverProbesPassed` was computed and then read
+// by nothing — a control whose result never reaches stdout is one nobody can
+// check on a green build, which is the same defect the UNRESOLVED census above
+// was fixed for.
+console.log(`[tid-boundary-chokepoint]   sections 1-4 tenant-comparison controls passed: ` +
+            `${resolverProbesPassed}/${RESOLVER_COMPARISON_PROBES.length} — the boundary is read by ` +
+            'CONTROL-FLOW POSITION, not by distance; G/H pin both directions of that (#3900)');
+
 // QUALIFIED BY WHAT PRODUCED IT, like every other count here. This is a SYNTACTIC
 // scan over masked source keyed on OPERAND NAMES, so it counts the comparisons it
 // can see and asserts nothing about the ones it cannot — the weak-tier evasion and
