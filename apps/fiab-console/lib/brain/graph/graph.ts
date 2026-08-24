@@ -62,7 +62,21 @@ function zeroProvenanceCounts(): Record<EdgeProvenance, number> {
   return r;
 }
 
-function countByProvenance(edges: readonly BrainEdge[]): Record<EdgeProvenance, number> {
+/**
+ * The minimum an edge must carry to be counted into a {@link Population}.
+ *
+ * Deliberately STRUCTURAL rather than `BrainEdge`. Extractors report their
+ * population over {@link PendingEdge}s — edges whose target has not been
+ * resolved yet — and `PendingEdge` is not assignable to `BrainEdge`. Requiring
+ * the resolved type here is what forced every extractor to pass `edges: []`,
+ * which pinned `blind` to `true` and `byProvenance` to all zeros no matter what
+ * the extractor actually emitted. A population that cannot count its own
+ * subject is precisely the failure P3 exists to prevent, so the parameter is
+ * widened to the one field the count needs.
+ */
+export type ProvenanceBearing = { readonly provenance: EdgeProvenance };
+
+function countByProvenance(edges: readonly ProvenanceBearing[]): Record<EdgeProvenance, number> {
   const r = zeroProvenanceCounts();
   for (const e of edges) r[e.provenance] += 1;
   return r;
@@ -71,11 +85,15 @@ function countByProvenance(edges: readonly BrainEdge[]): Record<EdgeProvenance, 
 /**
  * Build a {@link Population}. `blind` is DERIVED from `subject`, never passed
  * in, so a caller cannot hand-wave an empty set into a confident answer.
+ *
+ * CALLERS: `edges` must be the edges you actually ranged over. Passing `[]` to
+ * satisfy the type is what made every edge-subject population permanently blind
+ * — see {@link ProvenanceBearing}.
  */
 export function makePopulation(args: {
   subject: 'nodes' | 'edges';
   nodes: readonly BrainNode[];
-  edges: readonly BrainEdge[];
+  edges: readonly ProvenanceBearing[];
   scope: string;
 }): Population {
   const examined = args.nodes.length;
@@ -674,7 +692,14 @@ export function alwaysOnNodes(
     result,
     population: makePopulation({
       subject: 'nodes',
-      nodes: candidates,
+      // `azure`, NOT `candidates`. The subject of this query is the
+      // azure-resource nodes, so that is the set `blind` must be computed
+      // against. Reporting `candidates` here made a graph with bicep/source
+      // nodes but ZERO azure-resource nodes answer "no always-on resources, and
+      // I am not blind" — a false clean in the query that names the billing,
+      // and reachable any time the Resource Graph pull returns nothing (auth
+      // expiry, wrong subscription, throttling).
+      nodes: azure,
       edges: graph.edges,
       scope:
         `${azure.length} azure-resource node(s)` +

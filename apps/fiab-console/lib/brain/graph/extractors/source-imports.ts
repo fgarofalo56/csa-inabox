@@ -194,7 +194,7 @@ export function extractFromSourceImports(
     population: makePopulation({
       subject: 'edges',
       nodes,
-      edges: [],
+      edges,
       scope:
         `${modules.length} module(s); ${specifiersSeen} import specifier(s) examined; ` +
         `${edges.length} imports edge(s) emitted; ${skipped.length} skipped (bare/alias specifiers)`,
