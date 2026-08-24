@@ -213,9 +213,16 @@ const TOUCH_EXEMPT = new Map([
   // Both are RESTRICTIONS; neither adds an ownership decision.
   //
   // THE SINGLE BASELINED OCCURRENCE IS NOT IN THIS PR'S DIFF. Measured, not
-  // assumed: of the 93 changed lines in this file, ZERO match either of this
-  // guard's own two predicates (`workspacesContainer()` / `ws.item(` for the
-  // point read, `tenantId ===` / `tenantId !==` for the ownership compare).
+  // assumed: of the 97 changed lines in this file (75 added / 22 removed),
+  // ZERO match either of this guard's own two predicates (`POINT_READ_RE`,
+  // `.item(<x>, <oid-ish>)`, for the point read; `OWNER_CMP_RE`,
+  // `.tenantId [!=]==`, for the ownership compare).
+  //
+  // The count is from `gh pr diff 3925`, NOT a local three-dot diff: ancestry
+  // commands are not trustworthy on a shallow checkout, and an earlier revision
+  // of this comment said 93 on that basis. The zero is a LIVE negative, not a
+  // dead predicate — both REs still match exactly 1 line each in this same file
+  // as it stands, so they are demonstrably capable of firing on this source.
   // Stated by FUNCTION rather than by line number, for the reason the item-crud
   // entry above records: it is the pair `await ws.item(item.workspaceId,
   // tenantId).read<Workspace>()` + `resource.tenantId !== tenantId` inside
@@ -231,7 +238,7 @@ const TOUCH_EXEMPT = new Map([
   // drive-by inside a PR whose subject is RESTRICTING what may be written
   // through this same PATCH.
   ['apps/fiab-console/app/api/items/[type]/[id]/route.ts',
-   "#3611: adds the write-side server-owned-state guard to PATCH + a withSession migration, both RESTRICTIONS. loadItem's baselined owner-only point read is untouched (0 of 93 changed lines match either detector predicate), and migrating it would WIDEN GET/PATCH/DELETE to admins + ACL members for every item type with no dedicated route — separate PR"],
+   "#3611: adds the write-side server-owned-state guard to PATCH + a withSession migration, both RESTRICTIONS. loadItem's baselined owner-only point read is untouched (0 of 97 changed lines match either detector predicate, and both predicates still match 1 line each elsewhere in the file — a live negative, not a dead check), and migrating it would WIDEN GET/PATCH/DELETE to admins + ACL members for every item type with no dedicated route — separate PR"],
 ]);
 
 /** Owner-partition point read: `.item(<x>, <oid-ish>)` on a workspaces handle. */
