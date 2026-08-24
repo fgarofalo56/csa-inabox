@@ -1,6 +1,6 @@
 {
   "__generated": "node scripts/ci/generate-client-route-map.mjs — do not edit by hand",
-  "count": 1684,
+  "count": 1686,
   "patterns": [
     "/api/a2a",
     "/api/a2a/agent-cards",
@@ -55,6 +55,8 @@
     "/api/admin/azure-resources",
     "/api/admin/batch-labeling",
     "/api/admin/bootstrap-catalogs",
+    "/api/admin/brain/graph",
+    "/api/admin/brain/proposals",
     "/api/admin/capacity/chargeback",
     "/api/admin/capacity/cost",
     "/api/admin/capacity/guardrails",
@@ -1741,6 +1743,8 @@
     "^/api/admin/azure-resources/?$",
     "^/api/admin/batch-labeling/?$",
     "^/api/admin/bootstrap-catalogs/?$",
+    "^/api/admin/brain/graph/?$",
+    "^/api/admin/brain/proposals/?$",
     "^/api/admin/capacity/chargeback/?$",
     "^/api/admin/capacity/cost/?$",
     "^/api/admin/capacity/guardrails/?$",
