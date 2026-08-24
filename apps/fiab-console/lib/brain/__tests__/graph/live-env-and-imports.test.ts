@@ -159,6 +159,28 @@ describe('extractFromContainerAppEnv', () => {
   it('EMPTY input is BLIND', () => {
     expect(extractFromContainerAppEnv([]).population.blind).toBe(true);
   });
+
+  it('an app that DID yield edges is NOT blind, and counts them as `configured`', () => {
+    // Counterpart to the blind-on-empty case above: that assertion is vacuous
+    // unless `blind` can also be false. It could not be — the extractor passed
+    // an empty array to makePopulation, pinning `blind` true and `byProvenance`
+    // all-zero regardless of what it emitted.
+    const r = extractFromContainerAppEnv([
+      {
+        appResourceId: CONSOLE_ARM,
+        env: [
+          { name: 'LOOM_BROKER_URL', value: '' },
+          { name: 'FEATURE_ON', value: 'true' },
+        ],
+      },
+    ]);
+    expect(r.edges).toHaveLength(1);
+    expect(r.population.blind).toBe(false);
+    expect(r.population.edgesExamined).toBe(1);
+    expect(r.population.byProvenance.configured).toBe(1);
+    // This extractor reads a LIVE deployment, so it never emits `declared`.
+    expect(r.population.byProvenance.declared).toBe(0);
+  });
 });
 
 describe('extractFromSourceImports', () => {
@@ -235,5 +257,18 @@ describe('extractFromSourceImports', () => {
 
   it('EMPTY input is BLIND', () => {
     expect(extractFromSourceImports([]).population.blind).toBe(true);
+  });
+
+  it('modules that DID yield edges are NOT blind, and count them as `imports`', () => {
+    const r = extractFromSourceImports([
+      { path: A, text: "import { x } from './b';\n" },
+      { path: B, text: 'export const x = 1;\n' },
+    ]);
+    expect(r.edges).toHaveLength(1);
+    expect(r.population.blind).toBe(false);
+    expect(r.population.edgesExamined).toBe(1);
+    expect(r.population.byProvenance.imports).toBe(1);
+    expect(r.population.byProvenance.declared).toBe(0);
+    expect(r.population.byProvenance.configured).toBe(0);
   });
 });

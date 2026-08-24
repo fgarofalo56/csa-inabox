@@ -180,20 +180,53 @@ describe('the graph substrate is PURE — it has no client to mutate with', () =
 });
 
 describe('the mutation receipt — what the empty-wire branch is load-bearing for', () => {
-  it('the assertions that die under the mutation are SEPARATE from the verdict', () => {
-    // Documented as an executable statement rather than a comment: the evidence
-    // assertions live in their own `it` blocks, so the mutation (which removes
-    // the receipt while leaving the verdict intact) turns a test red instead of
-    // being absorbed into a passing one.
+  /** Each evidence assertion, and the spec file it must live in as its OWN `it`. */
+  const EVIDENCE_TESTS: readonly { readonly file: string; readonly name: string }[] = [
+    {
+      file: 'capacity-broker.acceptance.test.ts',
+      name: 'THE EVIDENCE CHAIN survives: the main.bicep line, the symbol, and the empty-string value',
+    },
+    { file: 'bicep-extractor.test.ts', name: "emits a DANGLING edge for `value: ''` — it is not dropped" },
+    {
+      file: 'bicep-extractor.test.ts',
+      name: 'preserves the raw value verbatim, so the receipt shows the empty string',
+    },
+  ];
+
+  /** An `it(` whose title is exactly `name`, in either quote style. */
+  function itBlockCount(source: string, name: string): number {
+    let n = 0;
+    for (const q of ['"', "'"]) {
+      if (name.includes(q)) continue; // this title cannot be written in that quote
+      n += source.split(`it(${q}${name}${q}`).length - 1;
+    }
+    return n;
+  }
+
+  it('every evidence assertion still lives in its OWN `it`, in the file that names it', () => {
+    // THIS ASSERTION USED TO RANGE OVER A LOCAL LITERAL ARRAY — `length > 0`
+    // and uniqueness of an array declared three lines above. It passed with the
+    // real names, with fabricated names, and with `['x']`, so it could not fail
+    // and proved nothing. It now reads the actual spec files.
     //
-    // If someone later folds the evidence expectations INTO the reachability
-    // test, the mutation stops being detectable. This is the reminder.
-    const evidenceTestNames = [
-      'THE EVIDENCE CHAIN survives: the main.bicep line, the symbol, and the empty-string value',
-      "emits a DANGLING edge for `value: ''` — it is not dropped",
-      'preserves the raw value verbatim, so the receipt shows the empty string',
-    ];
-    expect(evidenceTestNames.length).toBeGreaterThan(0);
-    expect(new Set(evidenceTestNames).size).toBe(evidenceTestNames.length);
+    // The regression it guards, verbatim from the comment it replaces: if
+    // someone folds these evidence expectations INTO the reachability test, the
+    // empty-wire mutation stops being detectable as a separate red test.
+    for (const t of EVIDENCE_TESTS) {
+      const source = readFileSync(join(__dirname, t.file), 'utf8');
+      expect(source.length, `${t.file} was not read`).toBeGreaterThan(0);
+      expect(itBlockCount(source, t.name), `${t.file}: no own \`it\` titled "${t.name}"`).toBe(1);
+    }
+  });
+
+  it('CONTROL: the `it`-block matcher can return zero, so the check above can fail', () => {
+    // Population + falsifiability for the assertion above. Without this, a
+    // matcher that counted every string in the file would report 1 for anything
+    // and the guard would be back to proving nothing.
+    const real = readFileSync(join(__dirname, 'bicep-extractor.test.ts'), 'utf8');
+    expect(itBlockCount(real, 'a test title that is deliberately not present anywhere')).toBe(0);
+    // …and it must not match a name that appears only as prose, never as an `it`.
+    expect(real).toContain('the empty wire'); // present as a describe/comment…
+    expect(itBlockCount(real, 'the empty wire')).toBe(0); // …but not as its own `it`
   });
 });

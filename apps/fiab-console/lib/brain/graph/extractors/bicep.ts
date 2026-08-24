@@ -203,6 +203,7 @@ export function extractFromBicep(files: readonly BicepFileInput[]): ExtractionRe
   const edges: PendingEdge[] = [];
   const skipped: SkippedSubject[] = [];
   let nameEntriesSeen = 0;
+  let nameEntriesRejected = 0;
 
   for (const file of files) {
     nodes.push({
@@ -228,9 +229,25 @@ export function extractFromBicep(files: readonly BicepFileInput[]): ExtractionRe
 
       // Only env-var-shaped names. A bicep `name:` property is used for dozens
       // of things (resource names, module names, probe names); treating them all
-      // as env wires would flood the graph with edges that mean nothing. The
-      // filter is reported below so its cost is visible, not hidden.
-      if (!/^[A-Z][A-Z0-9_]*$/.test(envName)) continue;
+      // as env wires would flood the graph with edges that mean nothing.
+      //
+      // The filter's COST is counted and reported in the scope string. It was
+      // not: `nameEntriesSeen` was incremented AFTER this `continue`, so the
+      // scope reported only the survivors while the comment here claimed the
+      // cost was visible. Measured on the real 187-file bicep tree, that hid
+      // more than it showed — 1,833 `name:` entries matched, 892 kept, 941
+      // (51.3%) rejected and reported nowhere.
+      //
+      // KNOWN LIMIT, deliberately not a `skipped` entry: a legitimately-named
+      // env var outside SCREAMING_SNAKE (`Loom_Broker_Url`, `loomBrokerUrl`) is
+      // rejected here and appears only in this aggregate count, not as a named
+      // subject. Every rejection observed on the real tree is a resource or
+      // module name, so per-subject records would be ~941 rows of noise — but
+      // the aggregate makes the trade visible instead of silent.
+      if (!/^[A-Z][A-Z0-9_]*$/.test(envName)) {
+        nameEntriesRejected += 1;
+        continue;
+      }
       nameEntriesSeen += 1;
 
       const lineNumber = i + 1;
@@ -302,9 +319,10 @@ export function extractFromBicep(files: readonly BicepFileInput[]): ExtractionRe
     population: makePopulation({
       subject: 'edges',
       nodes,
-      edges: [],
+      edges,
       scope:
-        `${files.length} bicep file(s); ${nameEntriesSeen} env-var-shaped \`name:\` entries examined; ` +
+        `${files.length} bicep file(s); ${nameEntriesSeen} env-var-shaped \`name:\` entries examined ` +
+        `(${nameEntriesRejected} \`name:\` entr(ies) REJECTED as not env-var-shaped); ` +
         `${edges.length} declared edge(s) emitted (${edges.filter((e) => e.emptyValue).length} EMPTY); ` +
         `${skipped.length} skipped`,
     }),

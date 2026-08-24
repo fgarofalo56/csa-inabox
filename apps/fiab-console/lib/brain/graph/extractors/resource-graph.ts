@@ -317,7 +317,7 @@ export function extractFromResourceGraph(
     population: makePopulation({
       subject: 'nodes',
       nodes,
-      edges: [],
+      edges,
       scope:
         `${rows.length} Resource Graph row(s) in; ${nodes.length} node(s) out, ` +
         `${edges.length} owns edge(s), ${skipped.length} skipped`,
