@@ -3,5 +3,19 @@
   "permissions": {
     "allow": [],
     "deny": []
+  },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "^Bash$",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/measurement-guard.mjs\" --hook",
+            "timeout": 10
+          }
+        ]
+      }
+    ]
   }
 }
