@@ -56,6 +56,7 @@ import { readFileSync, readdirSync, existsSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { WATCHED, DRY_RUN_MARKER } from '../check-deploy-staleness.mjs';
+import { CI_PLUMBING } from '../check-deploy-paths-coverage.mjs';
 
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
 const WF_DIR = path.join(REPO, '.github', 'workflows');
@@ -360,4 +361,93 @@ test('ATOMICITY: IL5 is registered AND its run-name carries the marker — neith
     entry.paths.includes('scripts/ci/_arm-absence.mjs'),
     'the IL5 entry does not watch _arm-absence.mjs — an IMPORTED module no execution shape can ever detect',
   );
+});
+
+// ── THE IMPORT EDGE, KEYED TO THE SHAPE RATHER THAN THE NAME (#3786) ────────
+
+/**
+ * Relative `import`s a module declares, resolved to repo-relative paths.
+ * Only static `from '…'` specifiers — a dynamic import cannot be resolved
+ * statically, and pretending otherwise would be a guard that measures nothing.
+ */
+function relativeImportsOf(repoRelFile) {
+  const abs = path.join(REPO, repoRelFile);
+  if (!existsSync(abs)) return [];
+  const src = readFileSync(abs, 'utf8');
+  const out = [];
+  for (const m of src.matchAll(/from\s+'(\.[^']+)'/g)) {
+    const resolved = path
+      .relative(REPO, path.resolve(path.dirname(abs), m[1]))
+      .split(path.sep)
+      .join('/');
+    out.push(resolved);
+  }
+  return out;
+}
+
+test('EVERY module a watched deploy script IMPORTS is itself watched', () => {
+  // WHY THIS REPLACES THE HARD-CODED CHECK ABOVE. That one names
+  // `_arm-absence.mjs` literally, so it is keyed to a SPELLING: when #3786 added
+  // a SECOND imported module (`_az-failure-class.mjs`, which decides whether the
+  // ADX preflight retries or fails the deploy) every existing assertion stayed
+  // green while the new file was unwatched. This repo's dominant defect is a
+  // guard that stops watching, and "keyed to the unsafe pattern" is how it
+  // happens — so this asserts the SHAPE: an imported module is invisible to
+  // every execution-based coverage guard, therefore it must be listed wherever
+  // its importer is listed. Transitive, so a chain cannot hide one either.
+  //
+  // CI_PLUMBING is honoured rather than re-litigated. It is the repo's existing,
+  // reasoned answer to "this file cannot change what reaches Azure", and a
+  // second opinion about that in this file is precisely the twin-classifier
+  // drift the preflights were just refactored to avoid.
+  //
+  // BASELINE, not a mute. These edges predate this test and belong to lanes this
+  // change does not touch; each is REAL and tracked (#3786 PR body). The
+  // assertion is that the set does not GROW — the ratchet shape
+  // check-platform-runs-it-not-you.mjs uses. An entry that stops being a miss
+  // must be DELETED from this list, which is what stops it rotting into a mute.
+  const KNOWN_UNWATCHED_EDGES = [
+    'deploy-loom-uat.yml: scripts/ci/resolve-automation-oid.mjs imports scripts/ci/_azure-redact.mjs',
+    'deploy-loom-verify.yml: scripts/ci/resolve-automation-oid.mjs imports scripts/ci/_azure-redact.mjs',
+    'deploy-fiab-commercial.yml: scripts/ci/deploy-fiab-guard.mjs imports scripts/ci/deploy-trigger-policy.mjs',
+    'deploy-fiab-commercial.yml: scripts/ci/bootstrap-admin-principal.mjs imports scripts/ci/_azure-redact.mjs',
+    'full-app-deploy-commercial.yml: scripts/ci/resolve-image-preflight-refs.mjs imports scripts/ci/reconcile-policy.mjs',
+  ];
+
+  const misses = [];
+  let edges = 0;
+
+  for (const entry of WATCHED) {
+    const watched = new Set(entry.paths ?? []);
+    const seen = new Set();
+    const queue = [...(entry.paths ?? [])].filter((p) => p.startsWith('scripts/') && p.endsWith('.mjs'));
+
+    while (queue.length) {
+      const file = queue.shift();
+      if (seen.has(file)) continue;
+      seen.add(file);
+      for (const imported of relativeImportsOf(file)) {
+        if (!imported.startsWith('scripts/')) continue;
+        queue.push(imported);
+        if (Object.prototype.hasOwnProperty.call(CI_PLUMBING, imported)) continue;
+        edges += 1;
+        if (!watched.has(imported)) {
+          misses.push(`${entry.workflow}: ${file} imports ${imported}`);
+        }
+      }
+    }
+  }
+
+  // POPULATION. A resolver that silently found nothing would make this test
+  // vacuous — the "guard with zero population" shape. The edges it must see
+  // include ensure-adx-cluster-running -> _arm-absence and -> _az-failure-class,
+  // on four lanes each.
+  assert.ok(edges >= 8, `the import resolver found only ${edges} edges — it is not reading the imports`);
+
+  const unexpected = misses.filter((m) => !KNOWN_UNWATCHED_EDGES.includes(m));
+  assert.deepEqual(unexpected, [], `NEW unwatched import edge(s):\n${unexpected.join('\n')}`);
+
+  // The baseline must SHRINK, never linger past its usefulness.
+  const stale = KNOWN_UNWATCHED_EDGES.filter((k) => !misses.includes(k));
+  assert.deepEqual(stale, [], `these baseline entries are FIXED — delete them:\n${stale.join('\n')}`);
 });

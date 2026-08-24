@@ -52,6 +52,37 @@
  *           unreadable control plane, or a start that did not reach Running
  *           inside the budget. Never "assume it came up".
  *
+ * ── ROUND 2 (#3786): A TRANSIENT ARM BLIP TOOK THE WHOLE DEPLOY DOWN ────────
+ *
+ * Every `az` call here used to be single-shot, and every failure message
+ * hard-coded a PERMISSIONS remediation regardless of what az actually said.
+ * Both halves were wrong, and both were measured on 2026-08-24:
+ *
+ *   deploy-fiab-commercial run 32700023215 — the per-cluster read returned
+ *   `(GatewayTimeout)`. A transient ARM failure, retryable, nothing to fix. The
+ *   step reported "grant the deploy service principal Reader (or Azure Kusto
+ *   Contributor)" — refuted by the run's own log, which shows the SAME identity
+ *   enumerating Microsoft.Kusto/clusters in that RG one call earlier, and by the
+ *   scope's inherited Owner/Contributor/Reader assignments. Re-running the exact
+ *   call by hand afterwards returned `Stopped`, rc=0, empty stderr.
+ *
+ *   deploy-fiab-gcch run 32716865363 — the READ SUCCEEDED (`state=Stopped`) and
+ *   the START was rejected with `(InsufficientResourcesForSubscription)`. That is
+ *   CAPACITY: no retry and no role grant resolves it. The step led with the
+ *   service principal's permissions there too.
+ *
+ * So: reads and starts now retry what `_az-failure-class.mjs` classifies as
+ * transient, with bounded backoff, and FAIL CLOSED on exhaustion (R6). Every
+ * remediation is derived from the classified cause rather than assumed (R7).
+ *
+ * The step's old error text also asserted that this leaf "has failed every
+ * GCC-High deploy since 2026-08-15". MEASURED at step level across 30 gcch runs
+ * and 25 commercial runs, that is FALSE — see the PR for the table. The gcch
+ * failures from 08-15 to 08-18 were `Provision (with full Gov dispatch)` and
+ * from 08-19 to 08-22 were `Bicep what-if`; this leaf first failed anything on
+ * 2026-08-22T20:06Z. A failure history asserted in a string, never re-measured,
+ * is the same class of defect as a cause asserted in a string.
+ *
  * Usage:
  *   node scripts/ci/ensure-adx-cluster-running.mjs \
  *     --subscription <sub-id> --rg rg-csa-loom-admin-<loc> [--timeout-seconds 1800]
@@ -61,6 +92,7 @@
 
 import { execFileSync } from 'node:child_process';
 import { definiteAbsenceCode } from './_arm-absence.mjs';
+import { classifyAzFailure, isRetryable, remediationFor } from './_az-failure-class.mjs';
 
 export const KUSTO_API_VERSION = '2024-04-13';
 
@@ -240,6 +272,70 @@ function az(args) {
   }
 }
 
+/**
+ * Backoff schedule for a TRANSIENT az failure. Length defines the retry count:
+ * 1 initial attempt + one retry per entry, so 4 attempts over ~50s of waiting.
+ *
+ * Bounded on purpose. deploy-integrity.md R6 asks for retry of what is genuinely
+ * transient AND a fail-closed on exhaustion — "a retry that cannot fail is
+ * forbidden". A schedule expressed as a finite array cannot become unbounded by
+ * arithmetic the way a `while (Date.now() < deadline)` loop can.
+ */
+export const TRANSIENT_BACKOFF_SECONDS = [5, 15, 30];
+
+/**
+ * PURE. How long to wait before attempt N+1, or null when the budget is spent.
+ *
+ * Exported so the exhaustion boundary is unit-testable without burning 50s of
+ * real sleep, and so a future edit that makes the schedule infinite fails a
+ * test rather than hanging a deploy.
+ *
+ * @param {number} attemptIndex 0-based index of the attempt that just FAILED
+ * @returns {number|null} seconds to sleep, or null to stop retrying
+ */
+export function nextRetryDelaySeconds(attemptIndex) {
+  if (!Number.isInteger(attemptIndex) || attemptIndex < 0) return null;
+  return attemptIndex < TRANSIENT_BACKOFF_SECONDS.length ? TRANSIENT_BACKOFF_SECONDS[attemptIndex] : null;
+}
+
+/**
+ * Run an `az` call, retrying ONLY what `_az-failure-class.mjs` calls transient.
+ *
+ * Returns the LAST attempt's result plus what was learned about it, so a caller
+ * can build a message from the established cause instead of a hypothesis. A
+ * `denied`, `capacity`, `notfound` or `unknown` failure returns immediately —
+ * retrying a refusal just delays the truth by 50 seconds.
+ *
+ * @param {string[]} args
+ * @param {{runner?: Function, sleep?: Function, label?: string}} [io] seams for tests
+ * @returns {{ok: boolean, stdout: string, stderr: string, kind: string|null, attempts: number}}
+ */
+export function azWithRetry(args, io = {}) {
+  const runner = io.runner ?? az;
+  const sleep = io.sleep ?? sleepSeconds;
+  const label = io.label ?? 'az';
+  let attempts = 0;
+  for (;;) {
+    const res = runner(args);
+    attempts += 1;
+    if (res.ok) return { ...res, kind: null, attempts };
+
+    const kind = classifyAzFailure(res.stderr);
+    if (!isRetryable(kind)) return { ...res, kind, attempts };
+
+    const delay = nextRetryDelaySeconds(attempts - 1);
+    if (delay == null) {
+      // FAIL CLOSED. The budget is spent and the call never succeeded, so the
+      // outcome is UNCONFIRMED and this hands that back rather than proceeding.
+      return { ...res, kind, attempts };
+    }
+    console.log(
+      `[adx-preflight] ${label}: transient az failure (attempt ${attempts}) — retrying in ${delay}s.`,
+    );
+    sleep(delay);
+  }
+}
+
 function fail(message, stderr) {
   console.log(`::error::${message}`);
   if (stderr) {
@@ -254,10 +350,13 @@ function sleepSeconds(seconds) {
 }
 
 function readState(id) {
-  const res = az(['resource', 'show', '--ids', id, '--api-version', KUSTO_API_VERSION, '--query', 'properties.state', '-o', 'tsv']);
-  if (!res.ok) return { ok: false, state: null, stderr: res.stderr };
+  const res = azWithRetry(
+    ['resource', 'show', '--ids', id, '--api-version', KUSTO_API_VERSION, '--query', 'properties.state', '-o', 'tsv'],
+    { label: `read state of ${id.split('/').pop()}` },
+  );
+  if (!res.ok) return { ok: false, state: null, stderr: res.stderr, kind: res.kind, attempts: res.attempts };
   // `az -o tsv` carries a trailing CR on some agents; strip it before comparing.
-  return { ok: true, state: res.stdout.replace(/\r/g, '').trim(), stderr: '' };
+  return { ok: true, state: res.stdout.replace(/\r/g, '').trim(), stderr: '', kind: null, attempts: res.attempts };
 }
 
 function main() {
@@ -280,21 +379,29 @@ function main() {
     );
   }
 
-  const listed = az([
-    'resource', 'list',
-    '--subscription', args.subscription,
-    '-g', args.rg,
-    '--resource-type', 'Microsoft.Kusto/clusters',
-    '--query', '[].id',
-    '-o', 'json',
-  ]);
+  const listed = azWithRetry(
+    [
+      'resource', 'list',
+      '--subscription', args.subscription,
+      '-g', args.rg,
+      '--resource-type', 'Microsoft.Kusto/clusters',
+      '--query', '[].id',
+      '-o', 'json',
+    ],
+    { label: `enumerate Microsoft.Kusto/clusters in ${args.rg}` },
+  );
   const enumeration = classifyClusterListRead(listed);
 
   if (enumeration.decision === 'refuse') {
+    // The classifier has already decided this is not a definite absence. Whether
+    // it is a denial, capacity, a transient blip that outlived its budget, or
+    // something with no name yet is what `kind` carries — and it is the only
+    // thing this message is allowed to assert.
+    const kind = listed.ok ? 'unknown' : classifyAzFailure(listed.stderr);
     fail(
-      `Could NOT enumerate Microsoft.Kusto/clusters in ${args.rg} — ${enumeration.reason} ` +
-        'REMEDIATION: the raw az stderr below is the only established cause. If it names an authorization ' +
-        `failure, the deploy service principal needs Reader on ${args.rg}.`,
+      `Could NOT enumerate Microsoft.Kusto/clusters in ${args.rg} after ${listed.attempts} attempt(s) — ` +
+        `${enumeration.reason} az classified this as: ${kind}. ` +
+        `REMEDIATION: ${remediationFor(kind, args.rg, listed.attempts)}`,
       listed.stderr,
     );
   }
@@ -314,10 +421,10 @@ function main() {
     const first = readState(id);
     if (!first.ok) {
       fail(
-        `Could NOT read the state of ADX cluster '${name}', so whether the deploy's principal assignments can be ` +
-          'written is UNKNOWN. This is the exact leaf that has failed every GCC-High deploy since 2026-08-15, so ' +
-          'it is not something to proceed past on an unread value (#3754). ' +
-          `REMEDIATION: grant the deploy service principal Reader (or Azure Kusto Contributor) on ${id}.`,
+        `Could NOT read the state of ADX cluster '${name}' after ${first.attempts} attempt(s), so whether the ` +
+          "deploy's principal assignments can be written is UNKNOWN. It is not something to proceed past on an " +
+          `unread value (#3754). az classified this as: ${first.kind}. ` +
+          `REMEDIATION: ${remediationFor(first.kind, id, first.attempts)}`,
         first.stderr,
       );
     }
@@ -336,18 +443,16 @@ function main() {
     }
 
     if (verdict.action === 'start') {
-      const started = az([
-        'resource', 'invoke-action',
-        '--ids', id,
-        '--action', 'start',
-        '--api-version', KUSTO_API_VERSION,
-      ]);
+      const started = azWithRetry(
+        ['resource', 'invoke-action', '--ids', id, '--action', 'start', '--api-version', KUSTO_API_VERSION],
+        { label: `start ${name}` },
+      );
       if (!started.ok) {
         fail(
-          `The start of ADX cluster '${name}' was REJECTED, so the deploy's principal assignments would still fail ` +
-            'with ClusterNotValidForPrincipals. No cause is asserted beyond what az reported below. ' +
-            `REMEDIATION: the deploy service principal needs Microsoft.Kusto/clusters/start/action on ${id} ` +
-            '(Contributor or Azure Kusto Contributor); if the role is present, the raw error below is the real cause.',
+          `The start of ADX cluster '${name}' was REJECTED after ${started.attempts} attempt(s), so the deploy's ` +
+            'principal assignments would still fail with ClusterNotValidForPrincipals. ' +
+            `az classified this as: ${started.kind}. ` +
+            `REMEDIATION: ${remediationFor(started.kind, id, started.attempts)}`,
           started.stderr,
         );
       }
@@ -363,8 +468,9 @@ function main() {
       const poll = readState(id);
       if (!poll.ok) {
         fail(
-          `Lost the ability to read ADX cluster '${name}' while waiting for it to start, so its state is UNKNOWN ` +
-            'and this step will NOT report that the cluster came up.',
+          `Lost the ability to read ADX cluster '${name}' while waiting for it to start (${poll.attempts} ` +
+            'attempt(s)), so its state is UNKNOWN and this step will NOT report that the cluster came up. ' +
+            `az classified this as: ${poll.kind}. REMEDIATION: ${remediationFor(poll.kind, id, poll.attempts)}`,
           poll.stderr,
         );
       }

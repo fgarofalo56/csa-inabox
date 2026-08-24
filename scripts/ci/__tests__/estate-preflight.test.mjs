@@ -76,8 +76,12 @@ import {
   classifyClusterState,
   classifyClusterListRead,
   evaluatePoll,
+  azWithRetry,
+  nextRetryDelaySeconds,
+  TRANSIENT_BACKOFF_SECONDS,
   DEFAULT_TIMEOUT_SECONDS,
 } from '../ensure-adx-cluster-running.mjs';
+import { classifyAzFailure, isRetryable, remediationFor } from '../_az-failure-class.mjs';
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
 
@@ -341,4 +345,153 @@ test('CONTROL: the bicep resource keys BOTH branches off the SAME parameter', ()
   );
   assert.match(network, /empty\(dnsResolverInboundStaticIp\)/);
   assert.match(network, /privateIpAddress: dnsResolverInboundStaticIp/);
+});
+
+// ── 5. az FAILURE CLASSIFICATION + BOUNDED RETRY (#3786 round 2) ────────────
+//
+// Both fixtures below are VERBATIM stderr from the runs that broke the deploy
+// on 2026-08-24. They are the point of this section: before this change every
+// one of them produced the same message — "grant the deploy service principal
+// Reader" — and only one of the classes is even about permissions.
+
+/** deploy-fiab-commercial run 32700023215, step "ADX preflight". */
+const MEASURED_COMMERCIAL_STDERR = [
+  'ERROR: (GatewayTimeout) GatewayTimeout',
+  'Code: GatewayTimeout',
+  'Message: GatewayTimeout',
+].join('\n');
+
+/** deploy-fiab-gcch run 32716865363, same step, DIFFERENT cause. */
+const MEASURED_GCCH_STDERR = [
+  'ERROR: (InsufficientResourcesForSubscription) [BadRequest] Currently there are no available resources to start the cluster with current SKU. Please choose different SKU',
+  'Code: InsufficientResourcesForSubscription',
+].join('\n');
+
+test('the MEASURED Commercial failure is TRANSIENT — not a permission problem', () => {
+  assert.equal(classifyAzFailure(MEASURED_COMMERCIAL_STDERR), 'transient');
+  assert.equal(isRetryable('transient'), true);
+});
+
+test('the MEASURED GCC-High failure is CAPACITY — not transient, not permissions', () => {
+  assert.equal(classifyAzFailure(MEASURED_GCCH_STDERR), 'capacity');
+  // Retrying a region that is out of SKU capacity just delays the real answer.
+  assert.equal(isRetryable('capacity'), false);
+});
+
+test('neither measured failure produces a "grant Reader" remediation', () => {
+  // THE REGRESSION THIS PINS. The old code emitted the permissions remediation
+  // unconditionally, for exactly these two inputs.
+  for (const stderr of [MEASURED_COMMERCIAL_STDERR, MEASURED_GCCH_STDERR]) {
+    const text = remediationFor(classifyAzFailure(stderr), '/subscriptions/x/clusters/c');
+    assert.doesNotMatch(text, /grant .*Reader|needs Reader/i, `misdiagnosed: ${stderr.split('\n')[0]}`);
+  }
+});
+
+test('a REAL denial still gets the permission remediation — the classifier is not just "never blame RBAC"', () => {
+  // COUNTERFACTUAL. Without this, deleting the DENIED branch entirely would
+  // leave every test above green: "never say permissions" would satisfy them.
+  const denial = 'ERROR: (AuthorizationFailed) The client does not have authorization to perform action';
+  assert.equal(classifyAzFailure(denial), 'denied');
+  assert.match(remediationFor('denied', '/subscriptions/x/clusters/c'), /Reader|Kusto Contributor/);
+});
+
+test('an unrecognised failure asserts NO cause at all', () => {
+  assert.equal(classifyAzFailure('ERROR: something nobody has seen before'), 'unknown');
+  const text = remediationFor('unknown', '/scope');
+  assert.match(text, /NO cause is asserted/);
+  assert.doesNotMatch(text, /grant|permission problem/i);
+});
+
+test('a transient failure that CLEARS is retried and then succeeds', () => {
+  let calls = 0;
+  const slept = [];
+  const res = azWithRetry(['resource', 'show'], {
+    runner: () => {
+      calls += 1;
+      return calls < 3
+        ? { ok: false, stdout: '', stderr: MEASURED_COMMERCIAL_STDERR }
+        : { ok: true, stdout: 'Stopped\n', stderr: '' };
+    },
+    sleep: (s) => slept.push(s),
+  });
+  assert.equal(res.ok, true);
+  assert.equal(res.attempts, 3);
+  assert.equal(res.stdout.trim(), 'Stopped');
+  assert.deepEqual(slept, [5, 15], 'must back off between attempts, not hammer ARM');
+});
+
+test('FAIL CLOSED: a transient failure that NEVER clears exhausts the budget and still FAILS', () => {
+  // deploy-integrity.md R6 — "a retry that cannot fail is forbidden". This is
+  // the mutation that matters: if the retry ever masked a real outage by
+  // returning ok, the preflight would have stopped watching.
+  const slept = [];
+  const res = azWithRetry(['resource', 'show'], {
+    runner: () => ({ ok: false, stdout: '', stderr: MEASURED_COMMERCIAL_STDERR }),
+    sleep: (s) => slept.push(s),
+  });
+  assert.equal(res.ok, false, 'an unresolved transient failure must NOT be reported as success');
+  assert.equal(res.kind, 'transient');
+  assert.equal(res.attempts, TRANSIENT_BACKOFF_SECONDS.length + 1);
+  assert.deepEqual(slept, TRANSIENT_BACKOFF_SECONDS, 'the schedule is the whole budget');
+});
+
+test('a NON-retryable failure returns immediately — no 50s spent on a refusal', () => {
+  let calls = 0;
+  const res = azWithRetry(['resource', 'invoke-action'], {
+    runner: () => {
+      calls += 1;
+      return { ok: false, stdout: '', stderr: MEASURED_GCCH_STDERR };
+    },
+    sleep: () => assert.fail('a capacity refusal must not be slept on'),
+  });
+  assert.equal(res.ok, false);
+  assert.equal(res.kind, 'capacity');
+  assert.equal(calls, 1);
+});
+
+test('the backoff schedule is FINITE — the budget can actually be exceeded', () => {
+  // The sibling defect this file already documents for --timeout-seconds: a
+  // budget that can never be exceeded is a budget that is not enforced.
+  assert.equal(nextRetryDelaySeconds(TRANSIENT_BACKOFF_SECONDS.length), null);
+  assert.equal(nextRetryDelaySeconds(9999), null);
+  assert.equal(nextRetryDelaySeconds(-1), null);
+  assert.equal(nextRetryDelaySeconds(0), TRANSIENT_BACKOFF_SECONDS[0]);
+});
+
+test('CONTROL: the preflight no longer asserts an UNVERIFIED failure history', () => {
+  // MEASURED at step level across 30 gcch runs and 25 commercial runs: the
+  // claim "has failed every GCC-High deploy since 2026-08-15" was false — the
+  // gcch failures in that window were `Provision (with full Gov dispatch)` and
+  // `Bicep what-if`, and this leaf first failed anything on 2026-08-22T20:06Z.
+  // A failure history asserted in a string and never re-measured rots exactly
+  // like a cause asserted in a string.
+  const src = fs.readFileSync(path.join(REPO_ROOT, 'scripts/ci/ensure-adx-cluster-running.mjs'), 'utf8');
+  const emitted = src.split('// ── I/O shell')[1] ?? '';
+  assert.doesNotMatch(emitted, /has failed every GCC-High deploy since/);
+});
+
+test('CONTROL: no emitted remediation hard-codes a permissions cause', () => {
+  // The R7 shape, keyed to the SHAPE rather than a spelling: any `fail(` message
+  // in the I/O shell that names Reader/Contributor directly is asserting a cause
+  // the call site did not establish. The permission wording now lives in ONE
+  // place — remediationFor's `denied` branch — reachable only when az said so.
+  const src = fs.readFileSync(path.join(REPO_ROOT, 'scripts/ci/ensure-adx-cluster-running.mjs'), 'utf8');
+  const shell = src.split('// ── I/O shell')[1] ?? '';
+  assert.ok(shell.length > 0, 'the I/O shell marker must exist for this control to have a population');
+  assert.doesNotMatch(shell, /needs Reader|grant the deploy service principal|needs Microsoft\.Kusto\/clusters\/start\/action/);
+});
+
+test('CONTROL: every az call in the preflight goes through the retry wrapper', () => {
+  // The adoption gap in miniature: adding a fourth `az([...])` call later would
+  // reintroduce the single-shot exposure that a GatewayTimeout turned into a
+  // failed deploy, and every other test here would stay green.
+  const src = fs.readFileSync(path.join(REPO_ROOT, 'scripts/ci/ensure-adx-cluster-running.mjs'), 'utf8');
+  const shell = src.split('// ── I/O shell')[1] ?? '';
+  const bare = shell.match(/(?<!WithRetry)\baz\(\[/g) ?? [];
+  assert.deepEqual(bare, [], 'every az invocation must be azWithRetry so transient failures are retried');
+});
+
+test('CONTROL: the shared az-failure classifier is actually imported', () => {
+  const src = fs.readFileSync(path.join(REPO_ROOT, 'scripts/ci/ensure-adx-cluster-running.mjs'), 'utf8');
+  assert.match(src, /from '\.\/_az-failure-class\.mjs'/);
 });
