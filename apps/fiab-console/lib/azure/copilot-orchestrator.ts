@@ -2810,11 +2810,10 @@ export async function getSession(sessionId: string): Promise<any | null> {
 }
 
 /**
- * Update mutable session metadata (rename / pin) on the Cosmos session doc.
- * Real read-modify-write against `copilot-sessions` (PK /sessionId) with an
- * ownership check — never lets one user mutate another's session. Returns the
- * patched fields the UI cares about. Throws `not_found` / `forbidden` for the
- * route to map to 404 / 403.
+ * Update session metadata (rename / pin) — a real read-modify-write on
+ * `copilot-sessions` (PK /sessionId) behind a POSITIVE ownership match (#3943):
+ * an unset `doc.userOid` is REFUSED, not short-circuited into a pass (every
+ * writer stamps it; `listSessions` selects on it). Throws not_found/forbidden.
  */
 export async function updateSessionMeta(
   sessionId: string,
@@ -2825,7 +2824,7 @@ export async function updateSessionMeta(
   const existing = await c.item(sessionId, sessionId).read<any>().catch(() => ({ resource: null }));
   if (!existing.resource) throw new Error('not_found');
   const doc = existing.resource;
-  if (doc.userOid && doc.userOid !== userOid) throw new Error('forbidden');
+  if (!doc.userOid || doc.userOid !== userOid) throw new Error('forbidden');
   if (typeof patch.title === 'string') doc.title = patch.title.slice(0, 200);
   if (typeof patch.pinned === 'boolean') doc.pinned = patch.pinned;
   doc.updatedAt = new Date().toISOString();
