@@ -205,7 +205,7 @@ jobs:
 
       - name: Upload SARIF
         if: always()
-        uses: github/codeql-action/upload-sarif@d97b3428e8eebbb1810cf454d6397886d136b4ba # v3
+        uses: github/codeql-action/upload-sarif@486fec2a3ea2626afcd8c7e9208b4f515078dd7e # v3
         with:
           sarif_file: results.sarif
         continue-on-error: true  # Gracefully skip if code scanning is not enabled
