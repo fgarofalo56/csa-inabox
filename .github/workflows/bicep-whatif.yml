@@ -228,12 +228,127 @@ jobs:
   # the Container Apps are excluded (changeType Ignore) — the lane
   # covers the INFRA estate. Runbook: docs/fiab/runbooks/bicep-drift.md
   # ------------------------------------------------------------------
+  # ------------------------------------------------------------------
+  # Is the estate actually LIVE, or is it paused?
+  #
+  # Under the estate pause/resume mandate the ADX cluster is stopped
+  # between validation runs, and ARM what-if then cannot enumerate
+  # Microsoft.Kusto/clusters/principalAssignments:
+  #   ClusterNotValidForPrincipals - Cluster is in state 'Stopped'
+  # The lane used to render that as a red DRIFT verdict on every bicep
+  # PR. It is not drift; it is an unmeasured comparison, and a lane that
+  # is permanently red for environmental reasons trains everyone to
+  # ignore it — strictly worse than reporting UNKNOWN.
+  #
+  # This is a separate JOB rather than a step on purpose: only a
+  # job-level `if:` can yield `skipped`. A step-level condition leaves
+  # the job GREEN, which would claim a clean comparison that never ran.
+  # Skipped (grey) is natively neither a false green nor a false red.
+  #
+  # Suppression requires POSITIVE evidence of a pause state. Every
+  # uncertain outcome — az failed, zero clusters, state unreadable —
+  # returns paused=false so the what-if still runs. See
+  # scripts/ci/estate-live-probe.mjs and its tests for why each of those
+  # is a fall-through and not a skip.
+  # ------------------------------------------------------------------
+  estate-probe:
+    name: Probe live estate (paused?)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    needs: [detect-changes]
+    if: needs.detect-changes.outputs.fiab_changed == 'true'
+    outputs:
+      paused: ${{ steps.probe.outputs.paused }}
+      reason: ${{ steps.probe.outputs.reason }}
+      detail: ${{ steps.probe.outputs.detail }}
+    steps:
+      - name: Check Commercial estate secrets are configured
+        id: precheck
+        env:
+          C: ${{ secrets.AZURE_CLIENT_ID }}
+          S: ${{ secrets.AZURE_CLIENT_SECRET }}
+          T: ${{ secrets.AZURE_TENANT_ID }}
+          U: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+        run: |
+          if [[ -z "$C" || -z "$S" || -z "$T" || -z "$U" ]]; then
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::AZURE_* secrets not configured (fork PR?) — cannot probe the estate. Leaving paused unset, so the what-if below decides for itself."
+          else
+            echo "configured=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Checkout
+        if: steps.precheck.outputs.configured == 'true'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
+
+      - name: Azure Login (Commercial)
+        if: steps.precheck.outputs.configured == 'true'
+        uses: azure/login@d19a4f1b3c068b799dff7574ac265b0144f415fe # v2
+        with:
+          creds: |
+            {
+              "clientId": "${{ secrets.AZURE_CLIENT_ID }}",
+              "clientSecret": "${{ secrets.AZURE_CLIENT_SECRET }}",
+              "tenantId": "${{ secrets.AZURE_TENANT_ID }}",
+              "subscriptionId": "${{ secrets.AZURE_SUBSCRIPTION_ID }}"
+            }
+
+      - name: Probe ADX cluster state
+        if: steps.precheck.outputs.configured == 'true'
+        id: probe
+        # Exits 0 on every path by design: a probe that cannot answer must
+        # neither fail the build nor suppress the comparison.
+        run: node scripts/ci/estate-live-probe.mjs
+
+      - name: Explain the skip on the PR
+        if: steps.probe.outputs.paused == 'true' && github.event.pull_request.number
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        env:
+          DETAIL: ${{ steps.probe.outputs.detail }}
+        with:
+          script: |
+            const MARKER = '<!-- loom:estate-paused-whatif -->';
+            const body = [
+              MARKER,
+              '### What-If vs live estate: **UNMEASURED** (not clean)',
+              '',
+              'The live Commercial estate is currently **paused**, so ARM `what-if` cannot',
+              'enumerate `Microsoft.Kusto/clusters/principalAssignments`. The drift comparison',
+              'was **skipped**, not passed — this PR has *not* been checked against the estate.',
+              '',
+              '```',
+              process.env.DETAIL,
+              '```',
+              '',
+              'The `Validate Bicep` jobs above still compiled every template. To get a real',
+              'drift verdict, resume the estate and re-run this workflow.',
+            ].join('\n');
+            const { owner, repo } = context.repo;
+            const issue_number = context.payload.pull_request.number;
+            const existing = (await github.rest.issues.listComments({ owner, repo, issue_number }))
+              .data.find((c) => c.body?.includes(MARKER));
+            if (existing) {
+              await github.rest.issues.updateComment({ owner, repo, comment_id: existing.id, body });
+            } else {
+              await github.rest.issues.createComment({ owner, repo, issue_number, body });
+            }
+
   whatif-fiab:
     name: What-If (FIAB vs live Commercial estate)
     runs-on: ubuntu-latest
     timeout-minutes: 60
-    needs: [detect-changes, bicep-build]
-    if: needs.detect-changes.outputs.fiab_changed == 'true'
+    needs: [detect-changes, bicep-build, estate-probe]
+    # `always()` is load-bearing, and the two conditions it forces us to
+    # restate are the ones `needs:` would otherwise imply. Without it, an
+    # estate-probe job that dies for an unrelated reason (runner fault,
+    # checkout failure) would SKIP this comparison silently — a probe
+    # crash must never suppress the check it guards. With it, a missing
+    # `paused` output is '' and the what-if runs.
+    if: >-
+      always()
+      && needs.detect-changes.outputs.fiab_changed == 'true'
+      && needs.bicep-build.result == 'success'
+      && needs.estate-probe.outputs.paused != 'true'
     env:
       FIAB_LOCATION: centralus
       FIAB_VANITY_DOMAIN: csa-loom.limitlessdata.ai
