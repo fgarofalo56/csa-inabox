@@ -36,6 +36,7 @@ import {
   Checkmark16Regular, Dismiss16Regular, Copy16Regular, Shield20Regular,
 } from '@fluentui/react-icons';
 import { AzureBackedField } from '@/lib/components/azure/azure-backed-field';
+import { BlobContainerPicker } from '@/lib/components/storage/blob-container-picker';
 
 const useStyles = makeStyles({
   panel: { display: 'flex', flexDirection: 'column', gap: '12px', minWidth: '0', marginTop: '12px' },
@@ -249,9 +250,26 @@ function CaptureTab({ hub, onSaved }: { hub: string; onSaved?: () => void }) {
               />
               <Caption1 className={s.hint}>Blob Storage or ADLS Gen2. Capture writes Avro blobs into the container below.</Caption1>
               <div className={s.row}>
-                <Field label="Blob container" required className={s.grow}>
-                  <Input value={container} onChange={(_, v) => setContainer(v.value)} placeholder="captures" />
-                </Field>
+                {/*
+                  The container is PICKED from the ones that exist in the chosen
+                  account, not typed. Both halves of this destination are now
+                  discovery-backed — the account through Resource Graph, the
+                  container through /api/storage/[account]/containers — which is
+                  what auto-bind-by-default.md §5 and loom_no_freeform_config
+                  ask for. It was a bare <Input placeholder="captures"> until
+                  #3928 widened check-no-freeform's `storage-loc` pattern enough
+                  to name it.
+                */}
+                <div className={s.grow}>
+                  <BlobContainerPicker
+                    account={storageId}
+                    value={container}
+                    onChange={setContainer}
+                    label="Blob container"
+                    surface="Event Hubs capture"
+                    required
+                  />
+                </div>
                 <Field label="Destination">
                   <Dropdown value={destination === 'DataLake' ? 'Azure Data Lake Storage Gen2' : 'Azure Blob Storage'} selectedOptions={[destination]} onOptionSelect={(_, d) => setDestination((d.optionValue as 'BlockBlob' | 'DataLake') || 'BlockBlob')}>
                     <Option value="BlockBlob" text="Azure Blob Storage">Azure Blob Storage</Option>
