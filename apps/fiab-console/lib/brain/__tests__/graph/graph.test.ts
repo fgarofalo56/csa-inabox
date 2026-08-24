@@ -19,11 +19,14 @@ import {
   alwaysOnNodes,
   azureResourceNodeId,
   buildGraph,
+  codeModuleNodeId,
   danglingEdges,
   hasInboundOnly,
   nodesWithNoInboundEdge,
   scaleUnknownCount,
   type AzureResourceNode,
+  type BrainNode,
+  type CodeModuleNode,
   type EdgeProvenance,
   type ExtractionResult,
   type NodeId,
@@ -53,7 +56,18 @@ function appNode(name: string, scale?: ScaleFacts, fqdn?: string): AzureResource
   };
 }
 
-function extraction(nodes: AzureResourceNode[], edges: PendingEdge[]): ExtractionResult {
+/** A non-azure-resource node, for asserting that a query reports its SUBJECT. */
+function codeNode(path: string): CodeModuleNode {
+  return {
+    id: codeModuleNodeId(path),
+    kind: 'code-module',
+    displayName: path,
+    source: 'source-imports',
+    path,
+  };
+}
+
+function extraction(nodes: BrainNode[], edges: PendingEdge[]): ExtractionResult {
   return {
     source: 'resource-graph',
     nodes,
@@ -258,6 +272,66 @@ describe('alwaysOnNodes — absent scale is NOT MEASURED, never zero', () => {
     // caller can tell "measured at 0" from "never measured".
     expect(scaleUnknownCount(graph)).toBe(1);
     expect(alwaysOnNodes(graph).population.scope).toMatch(/1 had NO scale facts/);
+  });
+
+  it('is BLIND over a graph with ZERO azure-resource nodes, however many other nodes exist', () => {
+    // THE REGRESSION THIS PINS. The population must be computed against the
+    // SUBJECT — the azure-resource nodes — not against the pre-filter candidate
+    // list. Reporting the candidates made this answer "no always-on resources,
+    // and I am not blind" over a graph that contains no Azure resources at all.
+    //
+    // That is not an exotic input. Whenever the Resource Graph pull returns
+    // nothing (auth expiry, wrong subscription, throttling) the graph still
+    // carries its bicep and source nodes, and this is the query that names the
+    // billing. A false clean here is the exact green-and-blind failure P3 exists
+    // to make impossible.
+    const nonAzure = buildGraph([
+      extraction(
+        [codeNode('apps/fiab-console/lib/brain/a.ts'), codeNode('apps/fiab-console/lib/brain/b.ts')],
+        [],
+      ),
+    ]);
+    expect(nonAzure.nodes).toHaveLength(2); // the graph is NOT empty…
+    const q = alwaysOnNodes(nonAzure);
+    expect(q.result).toHaveLength(0);
+    expect(q.population.examined).toBe(0); // …but the SUBJECT set is
+    expect(q.population.blind).toBe(true);
+    // The prose and the machine-readable field must agree. They did not.
+    expect(q.population.scope).toMatch(/^0 azure-resource node\(s\)/);
+  });
+
+  it('a filter that selects only NON-azure nodes is BLIND, not clean', () => {
+    // The same defect reached through the FILTER rather than through the node
+    // kinds, and deliberately built so the two sets can DIFFER: the filter
+    // matches two nodes, so `candidates` is non-empty while `azure` is empty.
+    //
+    // A first version of this test filtered on a resourceType present nowhere in
+    // the graph. That cannot discriminate — it drives BOTH sets to zero, so it
+    // passed just as happily with the defect restored. Measured: the mutation
+    // `nodes: filter ? candidates : azure` SURVIVED it at 110/110.
+    const mixed = buildGraph([
+      extraction(
+        [
+          appNode('always-on', { minReplicas: 2, source: 'resource-graph' }),
+          codeNode('apps/fiab-console/lib/brain/a.ts'),
+          codeNode('apps/fiab-console/lib/brain/b.ts'),
+        ],
+        [],
+      ),
+    ]);
+    // Embedded control: the filter really does match something, so `examined: 0`
+    // below is "no azure resources in scope", never "the filter matched nothing".
+    expect(mixed.nodes.filter((n) => n.kind === 'code-module')).toHaveLength(2);
+
+    const q = alwaysOnNodes(mixed, { kind: 'code-module', describe: 'code modules' });
+    expect(q.result).toHaveLength(0);
+    expect(q.population.examined).toBe(0);
+    expect(q.population.blind).toBe(true);
+
+    // …and the same graph unfiltered IS measured, so blindness is a property of
+    // the scope rather than of the graph.
+    expect(alwaysOnNodes(mixed).population.examined).toBe(1);
+    expect(alwaysOnNodes(mixed).population.blind).toBe(false);
   });
 });
 

@@ -217,6 +217,22 @@ describe('rows that cannot become nodes are REPORTED, not dropped', () => {
     const r = extractFromResourceGraph([]);
     expect(r.population.blind).toBe(true);
   });
+
+  it('the population counts the `owns` edges it emitted, rather than reporting zero', () => {
+    // This extractor's `blind` was always right (its subject is nodes), but its
+    // `byProvenance` was all-zero regardless of emission, because it too passed
+    // an empty array to makePopulation. `byProvenance` is documented as present
+    // on EVERY population precisely so a caller cannot read an undifferentiated
+    // total — a count that is structurally zero defeats that.
+    const r = extractFromResourceGraph([
+      row({ name: 'loom-console', rg: 'rg-loom', tags: { [LOOM_ESTATE_TAG_KEY]: ESTATE } }),
+    ]);
+    expect(r.edges.length).toBeGreaterThan(0);
+    expect(r.population.blind).toBe(false);
+    expect(r.population.edgesExamined).toBe(r.edges.length);
+    expect(r.population.byProvenance.owns).toBe(r.edges.length);
+    expect(r.population.byProvenance.configured).toBe(0);
+  });
 });
 
 describe('the owns edge resolves against the built graph', () => {
