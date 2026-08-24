@@ -875,7 +875,7 @@ jobs:
 
       - name: Notify on failure
         if: failure()
-        uses: actions/github-script@v7
+        uses: actions/github-script@v9
         env:
           # Parameterized: set the repo/org variable FIAB_GOV_DEPLOY_TRACKING_ISSUE
           # to an OPEN tracking issue. Previously hard-coded to #279 ("CSA Loom — v1
