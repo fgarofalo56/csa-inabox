@@ -407,14 +407,52 @@ if (ShouldRunGate @("*.bicep", "*.bicepparam", "deploy/bicep/*")) {
 }
 
 # Gate 2: Python
+#
+# THE TRIGGER IS SCOPED TO WHAT THE GATE ACTUALLY LINTS.
+#
+# It was @("*.py", "scripts/*", "domains/*") - every Python file in the repo,
+# plus every file of any kind under two directories. validate-python.ps1 lints
+# six directories and nothing else. Measured over `git ls-files "*.py"`: the old
+# trigger matched 762 of 762, while the check population is 207 (scripts 25,
+# domains 12, csa_platform 170, and tools / dev-loop / governance 0 - tools and
+# dev-loop carry no tracked .py, governance does not exist).
+#
+# So the other 555 - examples 189, apps 180, portal 58, tests 56,
+# azure-functions 20, cli 18, sdk 16, and the stragglers - each SELECTED this
+# gate and were then never examined by it. The gate linted 207 unrelated files,
+# exited 0, and this orchestrator printed "All gates passed! (1 gate(s)
+# measured.)" over a change it had not looked at. That is #3506's shape, the
+# same one the TypeScript block below records, and it is worse than a gap:
+# a gap is silent, this manufactures a positive.
+#
+# csa_platform is the sharpest case and is now fixed on the CHECK side too -
+# 170 files, the core platform package, linted by CI on every push and by
+# nothing in `make validate`.
+#
+# The globs below mirror validate-python.ps1's $pythonDirs one for one, and
+# both sides carry a comment saying so. `governance/*.py` has zero population
+# today (the directory is absent, and Test-Path drops it on the check side);
+# it is listed anyway so that creating governance/ opens neither half of the
+# hole. Widening $pythonDirs without widening this list reopens the defect.
+#
+# The consequence is deliberate: a .py change confined to portal, tests, apps,
+# azure-functions, cli, sdk or examples now selects NO gate, and the suite
+# exits 3 NOT VERIFIED instead of printing a green it did not earn. Those trees
+# are linted by test.yml / validate.yml / sdk-contract.yml, not by
+# `make validate` - stated here, in the gate's own header, and in
+# dev-loop/README.md rather than left implicit. Pointing this gate at
+# `make lint`'s wider scope was measured and rejected for now: portal + examples
+# carry 758 findings under pyproject.toml's rules (196 even under the old
+# `--select E,F,W --ignore E501`), which would red every unrelated change over
+# debt this gate did not create. Tracked as a follow-up. See #3811.
 $invokedGates += 'python'
-if (ShouldRunGate @("*.py", "scripts/*", "domains/*")) {
+if (ShouldRunGate @("scripts/*.py", "domains/*.py", "tools/*.py", "governance/*.py", "dev-loop/*.py", "csa_platform/*.py")) {
     Write-Host "Running: Python validation..." -ForegroundColor White
     $global:LASTEXITCODE = $null   # $global: - see note on Gate 1
     & (Join-Path $gatesDir "validate-python.ps1") -RepoRoot $RepoRoot
     $results += @{ Gate = "Python"; Status = (GateStatus $global:LASTEXITCODE) }
 } else {
-    Write-Host "Skipping: Python (no .py files changed)" -ForegroundColor DarkGray
+    Write-Host "Skipping: Python (no .py changed in a directory validate-python.ps1 lints)" -ForegroundColor DarkGray
 }
 
 # Gate 3: dbt
@@ -650,6 +688,9 @@ switch ($verdict.Verdict) {
         }
         Write-Host "  Console TypeScript beyond the typecheck (next build, eslint, vitest) is" -ForegroundColor Yellow
         Write-Host "  gated by fiab-console-ci, not by this script." -ForegroundColor Yellow
+        Write-Host "  Python outside scripts/domains/tools/csa_platform/dev-loop (portal, tests," -ForegroundColor Yellow
+        Write-Host "  apps, azure-functions, cli, sdk, examples) is gated by test.yml / validate.yml /" -ForegroundColor Yellow
+        Write-Host "  sdk-contract.yml, not by this script." -ForegroundColor Yellow
         if ($driftFound) {
             Write-Host "  The gate registry also disagrees with this orchestrator - see the drift report above." -ForegroundColor Yellow
         }

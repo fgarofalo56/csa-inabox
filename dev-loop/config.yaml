@@ -14,9 +14,25 @@ validation_gates:
     required: true
     timeout_seconds: 300
 
+  # The triggers below MIRROR validate-python.ps1's $pythonDirs, because that
+  # is the population the gate actually lints. It was ["*.py"] - all 762
+  # tracked .py files - against a check population of 207, so a change under
+  # portal, tests, apps, azure-functions, cli, sdk or examples selected the
+  # gate, was never examined by it, and the suite reported a measured PASS.
+  # Same defect shape as the typescript entry below. `governance/**/*.py` has
+  # zero population today (the directory is absent) and is listed so that
+  # creating it opens neither half of the hole. Python outside these
+  # directories is NOT covered by `make validate`; it stays with test.yml,
+  # validate.yml and sdk-contract.yml. See #3811.
   python:
     script: "gates/validate-python.ps1"
-    triggers: ["*.py"]
+    triggers:
+      - "scripts/**/*.py"
+      - "domains/**/*.py"
+      - "tools/**/*.py"
+      - "governance/**/*.py"
+      - "dev-loop/**/*.py"
+      - "csa_platform/**/*.py"
     required: true
     timeout_seconds: 120
 

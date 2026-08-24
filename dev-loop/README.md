@@ -58,12 +58,37 @@ Located in `dev-loop/gates/`:
 | Gate | Script | Runs When |
 |------|--------|-----------|
 | Bicep Lint | `validate-bicep.ps1` | Any `.bicep` file changed |
-| Python Lint | `validate-python.ps1` | Any `.py` file changed |
+| Python Lint | `validate-python.ps1` | `.py` under `scripts/`, `domains/`, `tools/`, `csa_platform/`, `dev-loop/`, `governance/` |
 | dbt Compile | `validate-dbt.ps1` | Any dbt model changed |
 | Deployment | `validate-deployment.ps1` | Infrastructure changes |
 | TypeScript | `validate-typescript.ps1` | Console `.ts`/`.tsx` that `tsconfig.build.json` compiles |
 | All Gates | `validate-all.ps1` | Always (orchestrator) |
 | Self-test | `gate-selftest.ps1` | On demand (`make validate-gates`) |
+
+### What the Python gate does NOT cover
+
+`validate-python.ps1` runs `ruff check` under **pyproject.toml's** rule set over
+`scripts/`, `domains/`, `tools/`, `governance/`, `dev-loop/` and `csa_platform/`
+— **207 of the repo's 762 tracked `.py` files**. That is the population CI
+already enforces (`ruff check domains/ scripts/ csa_platform/ tools/` in
+`test.yml` and `validate.yml`) plus `dev-loop` and `governance`, which hold no
+tracked `.py` today.
+
+The gate's trigger mirrors that list exactly. It used to be `*.py`, i.e. all 762
+— so a change under `portal/`, `tests/`, `apps/`, `azure-functions/`, `cli/`,
+`sdk/` or `examples/` selected the gate, the gate linted 207 unrelated files,
+and the suite printed `All gates passed!` over a change it had never examined.
+`csa_platform/` (170 files, the core platform package) was the sharpest case:
+linted by CI on every push and by nothing in `make validate`. Both halves are
+now the same list.
+
+The deliberate consequence: **a `.py` change confined to those other trees
+selects no gate and `make validate` reports NOT VERIFIED (exit 3)**, not a green
+it did not earn. Those trees stay with `test.yml`, `validate.yml` and
+`sdk-contract.yml`. Widening this gate to `make lint`'s scope was measured and
+deferred: `portal/` + `examples/` carry **758** findings under the pyproject
+rules (196 even under the weaker `--select E,F,W --ignore E501` this gate used
+to pass on its command line) — debt-paydown work, not this gate's to absorb.
 
 ### What the TypeScript gate does NOT cover
 

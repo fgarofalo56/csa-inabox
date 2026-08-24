@@ -53,10 +53,25 @@
          bare `$LASTEXITCODE = $null` shadows the automatic variable and
          launders every gate into NotRun. It fails SAFE, so only a case that
          expects a real FAIL can see it.
+      L  validate-all, a change under csa_platform with unused imports
+         -> exit 1. The Python gate's TRIGGER used to be `*.py` while its CHECK
+            was five directories that did not include csa_platform, so this
+            change selected the gate, was never read by it, and the suite
+            printed "All gates passed!". The positive arm.
+      M  validate-all, a change under portal ONLY
+         -> exit 3, and specifically NOT 0. portal is outside what the gate
+            lints, so it must select nothing. The population arm: it is what
+            makes widening the CHECK without narrowing the TRIGGER insufficient.
 
     A and B together are the load-bearing pair. If both return the same code,
     this script fails - because a verdict that does not move between "measured
     nothing" and "measured something and it passed" is not a verdict.
+
+    L and M are the second such pair, for the Python gate's scope. Reverting
+    only validate-python.ps1's $pythonDirs line reds L and leaves M green;
+    reverting only validate-all.ps1's Gate 2 trigger reds M and leaves L green.
+    Neither is satisfiable by the other's fix, which is the only reason running
+    both is worth anything.
 #>
 
 [CmdletBinding(SupportsShouldProcess)]
@@ -267,6 +282,80 @@ try {
             Add-Case 'H  a TEST-only console change does NOT select the gate' 'Fail' "gate correctly skipped, but the suite still exited 0 - a test-only change must not be green"
         } else {
             Add-Case 'H  a TEST-only console change does NOT select the gate' 'Pass' "skipped, and the suite exited $($h.ExitCode) rather than green"
+        }
+
+        # --- Case L: a csa_platform .py must be LINTED, not merely fired at. ---
+        #
+        # The positive arm of the Python gate's trigger/check pair. bad.py
+        # carries two unused imports - F401, inside the three rule families the
+        # gate's old `--select E,F,W` already covered, so this arm proves the
+        # SCOPE moved and is not smuggling in new rules to manufacture a red.
+        #
+        # The empty `scripts` directory beside it reproduces the real tree's
+        # shape, and is the whole reason the pre-fix behaviour was a green
+        # rather than an honest NOT VERIFIED: the gate's check population was
+        # non-empty and CLEAN, so it exited 0 having read nothing of what
+        # changed. It is created on disk and never committed - git tracks files,
+        # not directories - so it cannot enter the diff or select the gate.
+        #
+        # Measured against the code before this fix: exit 0, "Python
+        # (required): [PASS]", "All gates passed! (1 gate(s) measured.)" over a
+        # file the gate never opened. After: exit 1, "=== PYTHON LINT FAILED
+        # ===". Reverting only validate-python.ps1's $pythonDirs line reds this
+        # case and leaves M green. See #3811.
+        Invoke-SynthGit @('checkout', '-q', 'main')
+        Invoke-SynthGit @('checkout', '-q', '-b', 'csa-platform-lint')
+        New-Item -ItemType Directory -Path (Join-Path $synthRepo 'scripts') -Force | Out-Null
+        New-Item -ItemType Directory -Path (Join-Path $synthRepo 'csa_platform/gov') -Force | Out-Null
+        $badLines = @('import os', 'import sys', 'x = 1')
+        Set-Content -Path (Join-Path $synthRepo 'csa_platform/gov/bad.py') -Value $badLines -Encoding ASCII
+        Invoke-SynthGit @('add', '-A')
+        Invoke-SynthGit @('commit', '-q', '-m', 'add a csa_platform file with unused imports')
+
+        $l = Invoke-Child -ScriptPath $validateAll -Arguments @('-RepoRoot', $synthRepo) -WorkingDirectory $synthRepo
+        if ($l.Output -notmatch 'Running: Python validation') {
+            Add-Case 'L  a csa_platform .py is LINTED, not just triggered on' 'Fail' "the Python gate was not selected for a csa_platform change; exit $($l.ExitCode)"
+        } elseif ($l.ExitCode -eq 1 -and $l.Output -match 'Python \(required\): \[FAIL\]') {
+            Add-Case 'L  a csa_platform .py is LINTED, not just triggered on' 'Pass' "exit $($l.ExitCode)"
+        } elseif ($l.Output -match 'NONE of them could run' -or $l.Output -match 'CANNOT VALIDATE') {
+            # ruff absent on this host. Honest NOT RUN, never a silent pass.
+            Add-Case 'L  a csa_platform .py is LINTED, not just triggered on' 'NotRun' 'the Python gate could not run here (ruff unavailable); the check population is not provable on this host'
+        } else {
+            Add-Case 'L  a csa_platform .py is LINTED, not just triggered on' 'Fail' "expected exit 1 with Python [FAIL] over 2 unused imports, got exit $($l.ExitCode). The gate fired for csa_platform and did not examine it."
+        }
+
+        # --- Case M: the trigger must NOT exceed what the gate lints. ---
+        #
+        # The population arm. portal/ is not in validate-python.ps1's
+        # $pythonDirs, so a portal-only .py change must select NO gate and the
+        # suite must say NOT VERIFIED - never green. Before the trigger was
+        # narrowed, `*.py` matched this file, the gate ran over the clean
+        # `scripts` directory beside it, and the suite printed "All gates
+        # passed!" having read nothing of what changed. 555 of the repo's 762
+        # tracked .py files sat in that gap.
+        #
+        # This is what stops the lazy half-fix: widening $pythonDirs alone
+        # leaves M red, narrowing the trigger alone leaves L red. It also blocks
+        # the other shortcut - pointing the gate at portal/ and examples/ -
+        # because that turns this exit 3 into an exit 1 over 758 pre-existing
+        # findings the gate did not create. See #3811 / #3506.
+        Invoke-SynthGit @('checkout', '-q', 'main')
+        Invoke-SynthGit @('checkout', '-q', '-b', 'portal-only')
+        New-Item -ItemType Directory -Path (Join-Path $synthRepo 'scripts') -Force | Out-Null
+        New-Item -ItemType Directory -Path (Join-Path $synthRepo 'portal/api') -Force | Out-Null
+        Set-Content -Path (Join-Path $synthRepo 'portal/api/bad.py') -Value $badLines -Encoding ASCII
+        Invoke-SynthGit @('add', '-A')
+        Invoke-SynthGit @('commit', '-q', '-m', 'add a portal file with unused imports')
+
+        $m = Invoke-Child -ScriptPath $validateAll -Arguments @('-RepoRoot', $synthRepo) -WorkingDirectory $synthRepo
+        if ($m.Output -match 'Running: Python validation') {
+            Add-Case 'M  a portal-only .py change does NOT select the gate' 'Fail' "the gate fired for a directory validate-python.ps1 does not lint - trigger exceeds check population; exit $($m.ExitCode)"
+        } elseif ($m.ExitCode -eq 0) {
+            Add-Case 'M  a portal-only .py change does NOT select the gate' 'Fail' 'gate correctly skipped, but the suite still exited 0 - an unexamined .py change must not be green'
+        } elseif ($m.ExitCode -eq 3) {
+            Add-Case 'M  a portal-only .py change does NOT select the gate' 'Pass' 'skipped, and the suite exited 3 NOT VERIFIED rather than green'
+        } else {
+            Add-Case 'M  a portal-only .py change does NOT select the gate' 'Fail' "expected exit 3 NOT VERIFIED, got exit $($m.ExitCode)"
         }
     }
 
