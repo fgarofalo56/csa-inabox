@@ -208,7 +208,7 @@ jobs:
 
       - name: Upload full what-if JSON
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: whatif-drift-commercial-${{ github.run_id }}
           path: |
@@ -497,7 +497,7 @@ jobs:
 
       - name: Upload full what-if JSON
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: whatif-drift-gov-${{ github.run_id }}
           path: |
