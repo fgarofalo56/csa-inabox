@@ -143,10 +143,22 @@ describe('getEnvironmentLifecycleOperation', () => {
 });
 
 describe('error handling', () => {
-  it('surfaces a 403 from the BAP create with an actionable hint', async () => {
+  it('surfaces a 403 from the BAP create with the SHARED helper\'s remediation copy', async () => {
     captureFetch(() => ({ status: 403, body: { error: { message: 'forbidden' } } }));
     const { createEnvironment } = await import('../powerplatform-client');
-    await expect(createEnvironment({ displayName: 'X', environmentSku: 'Sandbox', location: 'asia' }))
-      .rejects.toMatchObject({ status: 403, hint: expect.stringContaining('Power Platform') });
+    const err: any = await createEnvironment({ displayName: 'X', environmentSku: 'Sandbox', location: 'asia' })
+      .catch((e) => e);
+
+    expect(err.status).toBe(403);
+    // NOT `stringContaining('Power Platform')`, which is what this line used to
+    // assert. The PRE-#3688 inline string it sits directly on contains the words
+    // "Power Platform" THREE times, so that assertion could not discriminate the
+    // broken copy from the fixed one — a reviewer reverted `bapCallWithHeaders`
+    // to its byte-exact pre-fix state underneath this test and it stayed green.
+    // These two substrings appear ONLY in the shared `ppAuthHint` copy.
+    expect(err.hint).toContain('LOOM_UAMI_CLIENT_ID');
+    expect(err.hint).toContain('New-PowerAppManagementApp');
+    // …and the pre-fix directive must not come back.
+    expect(err.hint).not.toContain('Confirm the Console UAMI SP is added to');
   });
 });
