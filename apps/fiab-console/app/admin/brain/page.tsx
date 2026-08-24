@@ -25,6 +25,7 @@ export default function AdminBrainPage() {
           'That is a question only reachability answers — a health check clears these services.',
         tips: [
           'Red, dashed edges are wires that exist and point at nothing — the evidence that something tried to connect a service and shipped a broken value.',
+          'The Synapses tab paints the same graph with four layers: what to prune, what is risky, which paths carry real traffic, and what formed since the last version. A layer that could not be evaluated says so instead of showing a zero.',
           'The Brain recommends and never acts. Approving a recommendation records your decision; the change itself is a repository edit you make.',
           'Read the Coverage tab before reading a clean result as a clean estate: a detector whose data was never collected also reports zero findings, and it says so there.',
           'Cost figures are DERIVED — measured SKU multiplied by a published retail rate — never a bill.',

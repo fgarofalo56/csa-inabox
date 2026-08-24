@@ -26,6 +26,15 @@
  * ── G3: RESIZABLE ──────────────────────────────────────────────────────────
  * Wrapped in `ResizableCanvasRegion` with a persisted `storageKey`, per
  * `ux-baseline.md` G3 — a fixed-height canvas is a listed defect.
+ *
+ * ── ONE CANVAS, TWO LAYERS (#3934) ─────────────────────────────────────────
+ * The optional `overlay` prop paints the SYNAPSE layers — prune, risk, hot, new
+ * — over this same graph. It is a prop rather than a second component because
+ * the operator's framing for the synapse view is waste and risk "in the same
+ * picture as the wiring": a sibling canvas would be a second picture, and it
+ * would drift from this one in layout, zoom and interaction the first time
+ * either was touched. With no overlay every line here behaves exactly as it did
+ * before the layer existed.
  */
 
 import * as React from 'react';
@@ -54,6 +63,13 @@ import {
   STATE_LABEL,
   type NodeVisualState,
 } from './model';
+import {
+  SYNAPSE_EDGE_LABEL,
+  SYNAPSE_NODE_LABEL,
+  type SynapseEdgeLayer,
+  type SynapseNodeLayer,
+  type SynapseOverlay,
+} from './synapse-model';
 
 const useStyles = makeStyles({
   wrap: { display: 'flex', flexDirection: 'column', minHeight: 0, height: '100%' },
@@ -90,6 +106,20 @@ export interface BrainCanvasProps {
   readonly findingCountByNodeId: ReadonlyMap<string, number>;
   readonly selectedId: string | null;
   readonly onSelect: (id: string | null) => void;
+  /**
+   * The SYNAPSE overlay (#3934). When present, node and edge appearance comes
+   * from the overlay's marks and the legend switches to the synapse layers.
+   *
+   * Optional rather than a separate canvas component on purpose. The operator's
+   * framing for the synapse view is "waste and risk in the SAME PICTURE as the
+   * wiring"; a second canvas would be a second picture, and it would immediately
+   * start drifting from this one in layout, interaction and zoom behaviour.
+   */
+  readonly overlay?: SynapseOverlay;
+  /** Test/observability hook so the canvas region is addressable per tab. */
+  readonly testId?: string;
+  /** Distinct persisted size per tab — two views of one graph size independently. */
+  readonly resizeStorageKey?: string;
 }
 
 function buildFlow(props: BrainCanvasProps): { nodes: Node[]; edges: Edge[] } {
@@ -99,11 +129,13 @@ function buildFlow(props: BrainCanvasProps): { nodes: Node[]; edges: Edge[] } {
 
   const flowNodes: Node[] = props.nodes.map((n) => {
     const p = positions.get(n.id);
+    const synapse = props.overlay?.nodeMarks.get(n.id);
     const data: BrainNodeData = {
       node: n,
       coverageConfigured: props.coverageConfigured,
       findingCount: props.findingCountByNodeId.get(n.id) ?? 0,
       derivedCostUsd: props.costByNodeId.get(n.id) ?? null,
+      ...(synapse ? { synapse } : {}),
     };
     return {
       id: n.id,
@@ -122,6 +154,15 @@ selected: props.selectedId === n.id,
 
   for (const e of props.edges) {
     const v = edgeVisual(e);
+    // The overlay's mark, when the synapse layer is active. It carries the same
+    // four channels (`stroke`, `width`, `dash`, `animated`) plus its own label,
+    // so the branch below is a substitution rather than a second code path.
+    const syn = props.overlay?.edgeMarks.get(e.id);
+    const stroke = syn ? syn.stroke : v.stroke;
+    const strokeWidth = syn ? syn.width : v.width;
+    const label = syn ? (syn.label ?? v.label) : v.label;
+    const animated = syn ? syn.animated : false;
+
     if (e.resolution === 'dangling') {
       // Give the wire somewhere to land so it can be SEEN. One terminus per
       // dangling edge, placed beside its source.
@@ -140,11 +181,15 @@ selected: props.selectedId === n.id,
         id: e.id,
         source: e.from,
         target: tid,
-        animated: false,
-        label: v.label ?? undefined,
-        labelStyle: { fill: 'var(--loom-accent-red)', fontSize: 10 },
-        style: { stroke: v.stroke, strokeWidth: v.width, strokeDasharray: '6 4' },
-        data: { provenance: e.provenance, resolution: e.resolution },
+        animated,
+        label: label ?? undefined,
+        labelStyle: { fill: stroke, fontSize: 10 },
+        style: { stroke, strokeWidth, strokeDasharray: syn?.dash ?? '6 4' },
+        data: {
+          provenance: e.provenance,
+          resolution: e.resolution,
+          ...(syn ? { synapseLayer: syn.layer } : {}),
+        },
       });
       continue;
     }
@@ -153,9 +198,18 @@ selected: props.selectedId === n.id,
       id: e.id,
       source: e.from,
       target: e.to,
-      animated: false,
-      style: { stroke: v.stroke, strokeWidth: v.width },
-      data: { provenance: e.provenance, resolution: e.resolution },
+      animated,
+      ...(label ? { label } : {}),
+      style: {
+        stroke,
+        strokeWidth,
+        ...(syn?.dash ? { strokeDasharray: syn.dash } : {}),
+      },
+      data: {
+        provenance: e.provenance,
+        resolution: e.resolution,
+        ...(syn ? { synapseLayer: syn.layer } : {}),
+      },
     });
   }
 
@@ -183,6 +237,30 @@ function CanvasInner(props: BrainCanvasProps) {
     return m;
   }, [props.nodes, props.coverageConfigured]);
 
+  // ── the synapse legend ───────────────────────────────────────────────────
+  // Built from the marks that are ACTUALLY on screen, not from the full enum. A
+  // legend listing seven layers over a canvas showing two teaches the operator
+  // that five are absent, which is a claim the legend has no business making.
+  const synapseNodeLegend = React.useMemo(() => {
+    if (!props.overlay) return [];
+    const m = new Map<SynapseNodeLayer, string>();
+    for (const n of props.nodes) {
+      const mark = props.overlay.nodeMarks.get(n.id);
+      if (mark && !m.has(mark.layer)) m.set(mark.layer, mark.accent);
+    }
+    return [...m.entries()];
+  }, [props.overlay, props.nodes]);
+
+  const synapseEdgeLegend = React.useMemo(() => {
+    if (!props.overlay) return [];
+    const m = new Map<SynapseEdgeLayer, { stroke: string; dash: string | null }>();
+    for (const e of props.edges) {
+      const mark = props.overlay.edgeMarks.get(e.id);
+      if (mark && !m.has(mark.layer)) m.set(mark.layer, { stroke: mark.stroke, dash: mark.dash });
+    }
+    return [...m.entries()];
+  }, [props.overlay, props.edges]);
+
   return (
     <ReactFlow
       nodes={nodes}
@@ -195,30 +273,53 @@ function CanvasInner(props: BrainCanvasProps) {
       onMove={(_, vp) => setZoom(vp.zoom)}
       onNodeClick={(_, n) => props.onSelect(n.type === 'dangling' ? null : n.id)}
       onPaneClick={() => props.onSelect(null)}
-      aria-label="Loom estate graph"
+      aria-label={props.overlay ? 'Loom estate synapse graph' : 'Loom estate graph'}
     >
       <Background variant={BackgroundVariant.Dots} gap={16} size={1} />
       <MiniMap pannable zoomable ariaLabel="Graph minimap" />
       <Panel position="top-left">
-        <div className={s.legend} role="group" aria-label="Legend">
-          {[...statesPresent].map((st) => (
-            <span key={st} className={s.swatch} data-legend-state={st}>
-              <span
-                className={s.dot}
-                style={{ backgroundColor: stateAccent.get(st) ?? tokens.colorNeutralStroke1 }}
-              />
-              <Caption1>{STATE_LABEL[st]}</Caption1>
+        {props.overlay ? (
+          <div className={s.legend} role="group" aria-label="Synapse legend" data-testid="synapse-legend">
+            {synapseNodeLegend.map(([layer, accent]) => (
+              <span key={layer} className={s.swatch} data-legend-synapse-node={layer}>
+                <span className={s.dot} style={{ backgroundColor: accent }} />
+                <Caption1>{SYNAPSE_NODE_LABEL[layer]}</Caption1>
+              </span>
+            ))}
+            {synapseEdgeLegend.map(([layer, style]) => (
+              <span key={layer} className={s.swatch} data-legend-synapse-edge={layer}>
+                <span
+                  className={s.solid}
+                  style={{
+                    borderTopColor: style.stroke,
+                    borderTopStyle: style.dash ? 'dashed' : 'solid',
+                  }}
+                />
+                <Caption1>{SYNAPSE_EDGE_LABEL[layer]}</Caption1>
+              </span>
+            ))}
+          </div>
+        ) : (
+          <div className={s.legend} role="group" aria-label="Legend">
+            {[...statesPresent].map((st) => (
+              <span key={st} className={s.swatch} data-legend-state={st}>
+                <span
+                  className={s.dot}
+                  style={{ backgroundColor: stateAccent.get(st) ?? tokens.colorNeutralStroke1 }}
+                />
+                <Caption1>{STATE_LABEL[st]}</Caption1>
+              </span>
+            ))}
+            <span className={s.swatch}>
+              <span className={s.solid} />
+              <Caption1>resolved wire</Caption1>
             </span>
-          ))}
-          <span className={s.swatch}>
-            <span className={s.solid} />
-            <Caption1>resolved wire</Caption1>
-          </span>
-          <span className={s.swatch} data-legend-edge="dangling">
-            <span className={s.dash} />
-            <Caption1>dangling wire (points at nothing)</Caption1>
-          </span>
-        </div>
+            <span className={s.swatch} data-legend-edge="dangling">
+              <span className={s.dash} />
+              <Caption1>dangling wire (points at nothing)</Caption1>
+            </span>
+          </div>
+        )}
       </Panel>
       <Panel position="top-right">
         <div className={s.colHead}>
@@ -245,9 +346,9 @@ function CanvasInner(props: BrainCanvasProps) {
 export function BrainCanvas(props: BrainCanvasProps) {
   const s = useStyles();
   return (
-    <div className={s.wrap} data-testid="brain-canvas">
+    <div className={s.wrap} data-testid={props.testId ?? 'brain-canvas'}>
       <ResizableCanvasRegion
-        storageKey="brain-visualizer"
+        storageKey={props.resizeStorageKey ?? 'brain-visualizer'}
         defaultPx={520}
         minPx={280}
         fill

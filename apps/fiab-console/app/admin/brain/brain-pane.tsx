@@ -3,11 +3,17 @@
 /**
  * LOOM BRAIN VISUALIZER — the surface.
  *
- * Fetches ONE snapshot and renders it three ways: the graph, the details of the
- * selected node, and the recommendations. All three read the same object, which
- * is the mechanism behind PRP §3.6's "the picture and the analysis cannot
- * disagree" — see the doc-block in `app/api/admin/brain/_lib/wire.ts` for why
- * that is architecture rather than a promise.
+ * Fetches ONE snapshot and renders it four ways: the graph, the SYNAPSE layers
+ * over that same graph, the details of the selected node, and the
+ * recommendations. All four read the same object, which is the mechanism behind
+ * PRP §3.6's "the picture and the analysis cannot disagree" — see the doc-block
+ * in `app/api/admin/brain/_lib/wire.ts` for why that is architecture rather than
+ * a promise.
+ *
+ * The Synapses tab additionally loads `/api/admin/brain/synapses`, and that IS a
+ * second payload. It is allowed because it describes a different subject — a
+ * graph of the SOURCE, not of the estate — so the two cannot go stale against
+ * each other. `synapse-view.tsx` argues it in full.
  *
  * ── LAYOUT ─────────────────────────────────────────────────────────────────
  * Graph and details sit in a `SplitPane` with a persisted `sizingKey`, per
@@ -52,6 +58,7 @@ import { BrainCanvas } from './brain-canvas';
 import { CoveragePanel } from './coverage-panel';
 import { NodeDetails } from './node-details';
 import { Recommendations } from './recommendations';
+import { SynapseView } from './synapse-view';
 import {
   applyFilters,
   costByNode,
@@ -96,16 +103,18 @@ export interface BrainPaneProps {
    */
   readonly initialSnapshot?: BrainSnapshot;
   readonly submitDecision?: React.ComponentProps<typeof Recommendations>['submitDecision'];
+  /** Test seam for the Synapses tab's own (separate) payload. Same reasoning. */
+  readonly loadSynapseLayers?: React.ComponentProps<typeof SynapseView>['loadLayers'];
 }
 
-export function BrainPane({ initialSnapshot, submitDecision }: BrainPaneProps) {
+export function BrainPane({ initialSnapshot, submitDecision, loadSynapseLayers }: BrainPaneProps) {
   const s = useStyles();
   const [state, setState] = React.useState<LoadState>(
     initialSnapshot ? { phase: 'ready', snapshot: initialSnapshot } : { phase: 'loading' },
   );
   const [filters, setFilters] = React.useState<BrainFilters>(DEFAULT_FILTERS);
   const [selectedId, setSelectedId] = React.useState<string | null>(null);
-  const [tab, setTab] = React.useState<'graph' | 'recommendations' | 'coverage'>('graph');
+  const [tab, setTab] = React.useState<'graph' | 'synapses' | 'recommendations' | 'coverage'>('graph');
 
   const load = React.useCallback(async () => {
     setState({ phase: 'loading' });
@@ -176,6 +185,7 @@ export function BrainPane({ initialSnapshot, submitDecision }: BrainPaneProps) {
       onRefresh={() => void load()}
       styles={s}
       {...(submitDecision ? { submitDecision } : {})}
+      {...(loadSynapseLayers ? { loadSynapseLayers } : {})}
     />
   );
 }
@@ -191,17 +201,19 @@ function ReadySurface({
   onRefresh,
   styles: s,
   submitDecision,
+  loadSynapseLayers,
 }: {
   snapshot: BrainSnapshot;
   filters: BrainFilters;
   setFilters: React.Dispatch<React.SetStateAction<BrainFilters>>;
   selectedId: string | null;
   setSelectedId: (id: string | null) => void;
-  tab: 'graph' | 'recommendations' | 'coverage';
-  setTab: (t: 'graph' | 'recommendations' | 'coverage') => void;
+  tab: 'graph' | 'synapses' | 'recommendations' | 'coverage';
+  setTab: (t: 'graph' | 'synapses' | 'recommendations' | 'coverage') => void;
   onRefresh: () => void;
   styles: ReturnType<typeof useStyles>;
   submitDecision?: React.ComponentProps<typeof Recommendations>['submitDecision'];
+  loadSynapseLayers?: React.ComponentProps<typeof SynapseView>['loadLayers'];
 }) {
   const view = React.useMemo(() => applyFilters(snapshot, filters), [snapshot, filters]);
   const costs = React.useMemo(() => costByNode(snapshot.findings), [snapshot.findings]);
@@ -336,6 +348,7 @@ function ReadySurface({
 
       <TabList selectedValue={tab} onTabSelect={(_, d) => setTab(d.value as typeof tab)}>
         <Tab value="graph">Graph</Tab>
+        <Tab value="synapses">Synapses</Tab>
         <Tab value="recommendations">Recommendations ({snapshot.findings.length})</Tab>
         <Tab value="coverage">Coverage &amp; populations</Tab>
       </TabList>
@@ -368,6 +381,19 @@ function ReadySurface({
             )}
           </div>
         </SplitPane>
+      )}
+
+      {tab === 'synapses' && (
+        <SynapseView
+          snapshot={snapshot}
+          nodes={view.nodes}
+          edges={view.edges}
+          costByNodeId={costs}
+          findingCountByNodeId={findingCounts}
+          selectedId={selectedId}
+          onSelect={setSelectedId}
+          {...(loadSynapseLayers ? { loadLayers: loadSynapseLayers } : {})}
+        />
       )}
 
       {tab === 'recommendations' && (
