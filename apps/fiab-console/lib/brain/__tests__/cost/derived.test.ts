@@ -213,6 +213,41 @@ describe('every refusal is a SKIP WITH A REASON, never $0.00', () => {
     expect(out.reason).toContain('a bare number is rejected rather than guessed');
   });
 
+  it('a MILLI memory quantity is skipped, and the reason says milli is not mega', () => {
+    const out = deriveContainerAppCost(
+      containerAppNode({
+        name: 'x',
+        location: 'centralus',
+        scale: { minReplicas: 2, cpu: 0.5, memory: '512m', source: 'resource-graph' },
+      }),
+    );
+    // Under the previous case-insensitive match this parsed as 512 MiB and
+    // produced a confident band at 0.5 GiB per replica. The true reading is
+    // 0.512 bytes. There is no magnitude check downstream that would have
+    // caught either the wrong number or the absurd one, so the refusal has to
+    // happen at the parse — and it has to SAY milli, or the author is left to
+    // spot a one-letter case difference on their own.
+    expect(isBand(out)).toBe(false);
+    if (isBand(out)) throw new Error('unreachable');
+    expect(out.reason).toContain("'512m'");
+    expect(out.reason).toContain('MILLI');
+    expect(out.reason).toContain('0.512 bytes');
+    expect(out.reason).toContain("'512Mi'");
+  });
+
+  it('the milli explanation appears ONLY for a milli quantity', () => {
+    const out = deriveContainerAppCost(
+      containerAppNode({
+        name: 'x',
+        location: 'centralus',
+        scale: { minReplicas: 1, cpu: 0.5, memory: 'lots', source: 'resource-graph' },
+      }),
+    );
+    if (isBand(out)) throw new Error('unreachable');
+    expect(out.reason).toContain('could not be parsed as GiB');
+    expect(out.reason).not.toContain('MILLI');
+  });
+
   it('a non-Container-App resource is declined, not mis-priced with this card', () => {
     const node = containerAppNode({ name: 'x', location: 'centralus', scale: BROKER_SCALE });
     const other = { ...node, resourceType: 'Microsoft.Storage/storageAccounts' };
@@ -260,7 +295,6 @@ describe('parseMemoryGib', () => {
     expect(parseMemoryGib('2Gi')).toBe(2);
     expect(parseMemoryGib('512Mi')).toBeCloseTo(0.5, 9);
     expect(parseMemoryGib(' 1Gi ')).toBe(1);
-    expect(parseMemoryGib('1gi')).toBe(1);
   });
 
   it('returns null rather than guessing', () => {
@@ -270,6 +304,121 @@ describe('parseMemoryGib', () => {
     expect(parseMemoryGib('lots')).toBeNull();
     expect(parseMemoryGib('-1Gi')).toBeNull();
     expect(parseMemoryGib('1GB')).toBeNull();
+  });
+});
+
+/**
+ * The suffix is Kubernetes quantity notation, where CASE IS MEANING.
+ *
+ * This block exists because the parser used to match the suffix with `/i` and
+ * lower-case it before the lookup, which folded milli `m` into mega `M`: '512m'
+ * — 0.512 BYTES — was priced as 512 MiB. That is a factor of 1,048,576,000 on
+ * the memory term, and the memory term is two thirds of the founding example's
+ * lower bound (15.768 of 23.652). Nothing upstream stopped a milli quantity
+ * from arriving; ACA merely happens to author 'Gi', which makes the absence of
+ * an incident luck rather than a guard.
+ *
+ * Every expectation below is an EXACT value, not a range. `toBeCloseTo` cannot
+ * tell a 1024-based conversion from a 1000-based one at the small end, and that
+ * distinction is the other half of this fix — a decimal 'G' is 1e9 bytes, not
+ * 2^30, and reading it as the latter overstates the term by 7.4%.
+ */
+describe('parseMemoryGib — the suffix set, matched exactly', () => {
+  it('binary (IEC) suffixes are powers of 1024', () => {
+    // 1024 / 2^30 ; 512 x 2^20 / 2^30 ; 2^30 / 2^30 ; 2^40 / 2^30
+    expect(parseMemoryGib('1Ki')).toBe(9.5367431640625e-7);
+    expect(parseMemoryGib('512Mi')).toBe(0.5);
+    expect(parseMemoryGib('1Gi')).toBe(1);
+    expect(parseMemoryGib('1Ti')).toBe(1024);
+  });
+
+  it('decimal (SI) suffixes are powers of 1000, NOT 1024', () => {
+    // 1e3 / 2^30 ; 1e6 / 2^30 ; 512e6 / 2^30 ; 1e9 / 2^30 ; 1e12 / 2^30
+    expect(parseMemoryGib('1k')).toBe(9.313225746154785e-7);
+    expect(parseMemoryGib('1M')).toBe(0.0009313225746154785);
+    expect(parseMemoryGib('512M')).toBe(0.476837158203125);
+    expect(parseMemoryGib('1G')).toBe(0.9313225746154785);
+    expect(parseMemoryGib('1T')).toBe(931.3225746154785);
+  });
+
+  it('the binary spelling of a letter is larger than the decimal one', () => {
+    const decimal = parseMemoryGib('512M');
+    const binary = parseMemoryGib('512Mi');
+    if (decimal === null || binary === null) throw new Error('both spellings must parse');
+    expect(binary).toBeGreaterThan(decimal);
+    // 2^20 / 1e6 — the whole reason the two bases are kept apart.
+    expect(binary / decimal).toBeCloseTo(1.048576, 12);
+  });
+
+  it("MILLI 'm' is REFUSED — one thousandth of a byte is never mega", () => {
+    expect(parseMemoryGib('512m')).toBeNull();
+    expect(parseMemoryGib('1m')).toBeNull();
+    expect(parseMemoryGib('0.5m')).toBeNull();
+    expect(parseMemoryGib('512 m')).toBeNull();
+    // Same digits, one letter of difference, three different outcomes. Before
+    // the fix '512m', '512M' and '512Mi' all returned exactly 0.5 GiB.
+    expect(parseMemoryGib('512M')).toBe(0.476837158203125);
+    expect(parseMemoryGib('512Mi')).toBe(0.5);
+  });
+
+  it('an unrecognised or wrongly-cased suffix is declined, not folded', () => {
+    // 'gi' parsed as 1 GiB before this fix, under the case-insensitive match.
+    // It is not a suffix in this notation, and the tolerance that accepted it
+    // is the same tolerance that turned milli into mega — so it goes too.
+    // Declining costs a skip with a reason; accepting costs a wrong number that
+    // looks exactly like a right one.
+    expect(parseMemoryGib('1gi')).toBeNull();
+    expect(parseMemoryGib('1MI')).toBeNull();
+    expect(parseMemoryGib('1g')).toBeNull();
+    // The decimal kilo is lower-case 'k'. A bare 'K' is not a suffix, and is
+    // not assumed to mean either 'k' or 'Ki'.
+    expect(parseMemoryGib('1K')).toBeNull();
+    expect(parseMemoryGib('1t')).toBeNull();
+    expect(parseMemoryGib('1Q')).toBeNull();
+    expect(parseMemoryGib('1 quibble')).toBeNull();
+  });
+});
+
+/**
+ * The unit reaches the arithmetic. A parser test alone would not prove that —
+ * `parseMemoryGib` could be right and its result still be discarded, or the
+ * caller could re-derive the conversion itself. So the same two spellings are
+ * priced end to end.
+ *
+ * Hand-computed from `./rate-card.ts` rather than from the implementation's
+ * expression:
+ *   always-on replica-seconds       = 2 x 2_628_000                = 5_256_000
+ *   vCPU-seconds                    = 5_256_000 x 0.5              = 2_628_000
+ *   GiB-seconds, '512Mi' (0.5 GiB)  = 5_256_000 x 0.5              = 2_628_000
+ *   GiB-seconds, '512M'  (512e6 B)  = 5_256_000 x 0.476837158203125
+ *                                                   = 2_506_256.103515625
+ *   lower('512Mi') = 2_628_000 x 0.000003 + 2_628_000 x 0.000003         = 15.768
+ *   lower('512M')  = 2_628_000 x 0.000003 + 2_506_256.103515625 x 0.000003
+ *                                                        = 15.402768310546875
+ */
+describe('binary vs decimal memory reaches the priced figure', () => {
+  const priced = (memory: string) =>
+    deriveContainerAppCost(
+      containerAppNode({
+        name: 'x',
+        location: 'centralus',
+        scale: { minReplicas: 2, cpu: 0.5, memory, source: 'resource-graph' },
+      }),
+    );
+
+  it("'512M' prices below '512Mi', because 1e6 bytes is less than 2^20", () => {
+    const binary = priced('512Mi');
+    const decimal = priced('512M');
+    if (!isBand(binary) || !isBand(decimal)) throw new Error('both spellings must price');
+    expect(binary.lower.amountUsd).toBeCloseTo(15.768, 9);
+    expect(decimal.lower.amountUsd).toBeCloseTo(15.402768310546875, 9);
+    expect(decimal.lower.amountUsd).toBeLessThan(binary.lower.amountUsd);
+  });
+
+  it('the basis echoes the GiB the unit actually meant, not the digits authored', () => {
+    const decimal = priced('512M');
+    if (!isBand(decimal)) throw new Error('expected a band');
+    expect(decimal.lower.basis).toContain('0.476837158203125 GiB');
   });
 });
 
