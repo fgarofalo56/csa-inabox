@@ -102,6 +102,24 @@ test('NEGATIVE: redirecting stderr to a FILE is allowed', () => {
   assert.equal(has(`az account show > acct.json 2>acct.err`, 'discarded-stderr'), false);
 });
 
+test('NEGATIVE: 2>/dev/null on a NON-measurement, in a script that also runs gh (real false positive)', () => {
+  // The redirect belongs to `ps`; `gh` appears on a later line. The first
+  // version tested the whole command string for a measurement binary and denied
+  // this. Scope must follow the redirect, not the buffer.
+  const cmd = `echo "alive: $(ps -ef 2>/dev/null | grep -c '[o]vernight')"\ngh pr list --state open --json number`;
+  assert.equal(has(cmd, 'discarded-stderr'), false, 'a redirect on ps must not be attributed to gh');
+});
+
+test('POSITIVE CONTROL for segment-scoping: the redirect ON the gh call is still caught', () => {
+  // Guards the fix above — narrowing must not blind the rule to the real case.
+  const cmd = `echo hi\ngh api repos/o/r/commits/x/check-runs 2>/dev/null`;
+  assert.ok(has(cmd, 'discarded-stderr'), 'a redirect on gh itself must still be caught');
+});
+
+test('POSITIVE: a piped gh call with the redirect on gh is caught', () => {
+  assert.ok(has(`gh pr list --json number 2>/dev/null | head -3`, 'discarded-stderr'));
+});
+
 // ------------------------------------------------------------ suite integrity
 test('CONTROL: a plainly fine command produces NO findings at all', () => {
   assert.deepEqual(evaluate(`git status --porcelain`), []);

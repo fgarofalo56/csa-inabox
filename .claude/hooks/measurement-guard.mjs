@@ -102,12 +102,22 @@ const RULES = [
   },
   {
     id: 'discarded-stderr',
-    test: (cmd) => {
-      if (!/2>\s*\/dev\/null/.test(cmd)) return null;
-      // only flag when it is attached to a measurement/deploy command
-      if (!/\b(az|gh|kubectl|curl|terraform)\b/.test(cmd)) return null;
-      const m = cmd.match(/[^\n]*2>\s*\/dev\/null[^\n]*/);
-      return m ? m[0].trim().slice(0, 90) : '2>/dev/null';
+    test: (raw) => {
+      // Scope the check to the SEGMENT carrying the redirect, not the whole
+      // command. Real false positive: `ps -ef 2>/dev/null | grep ...` in a
+      // script that ALSO ran `gh pr list` on a later line was denied, because
+      // the binary test looked at the entire string. The redirect belonged to
+      // `ps`, which is not a measurement.
+      const MEASUREMENT = /\b(az|gh|kubectl|terraform|curl)\b/;
+      for (const line of raw.split(/\r?\n/)) {
+        if (!/2>\s*\/dev\/null/.test(line)) continue;
+        // Within the line, look only at the command segment that owns the redirect.
+        const idx = line.search(/2>\s*\/dev\/null/);
+        const before = line.slice(0, idx);
+        const segment = before.split(/[;&|]{1,2}/).pop() || before;
+        if (MEASUREMENT.test(segment)) return line.trim().slice(0, 90);
+      }
+      return null;
     },
     message: (hit) =>
       `\`2>/dev/null\` on a measurement discards the reason it failed.\n` +
