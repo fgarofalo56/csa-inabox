@@ -438,6 +438,61 @@ function graphGroupWalkBudgetMs(): number {
 }
 
 /**
+ * The group walk's OWN truncation diagnostic — deliberately NOT
+ * {@link PagingBudget.warnIfTruncated} (deploy-integrity R7).
+ *
+ * THE DEFECT THIS REPLACES. `warnIfTruncated` hardcodes
+ * `LOOM_ARM_PAGING_BUDGET_MS` into its text, but this budget is not built from
+ * that knob at all — {@link graphGroupWalkBudgetMs} reads
+ * `LOOM_GRAPH_GROUP_WALK_BUDGET_MS`. MEASURED A/B: with
+ * `LOOM_ARM_PAGING_BUDGET_MS=600000` the walk STILL truncated at 30000ms after
+ * 3 of 6 groups; only `LOOM_GRAPH_GROUP_WALK_BUDGET_MS=600000` probed all six.
+ * So the ONE diagnostic for the ONE new failure mode the aggregate ceiling
+ * introduces routed the investigation to a knob that provably does nothing —
+ * the same shape as the 2026-08-05 roll that reported "the tag does not exist"
+ * when the truth was "I could not reach the registry".
+ *
+ * IT WAS ALSO WRONG ABOUT THE CONSEQUENCE. "returning N row(s), the list may be
+ * incomplete" describes a picker showing a short list — the case `PagingBudget`
+ * was written for. What happens HERE is that an AUTHORIZATION decision is made
+ * on a PARTIAL group set: every group grant we never reached contributes no
+ * role, so a genuine member of an unprobed group is REFUSED. The operator sees
+ * an unexplained 403 or a silently under-granted role, and (because
+ * `groupAssignments` arrives from Cosmos in arbitrary order) sees it for a
+ * different admin each time. Nobody chasing that 403 would have connected it to
+ * a line about a short list.
+ */
+function warnIfWalkTruncated(walk: PagingBudget, probedGroups: number, totalGroups: number): void {
+  const by = walk.truncatedBy;
+  if (!by) return; // silence means every group grant was actually resolved
+  const unprobed = Math.max(0, totalGroups - probedGroups);
+  // Name ONLY the knob that actually moves this ceiling. `walk.maxPages` is
+  // pinned to the group count rather than to an operator knob, so a `pages`
+  // truncation here is a defect in the walk, not something to reconfigure.
+  const remedy =
+    by === 'time'
+      ? `Raise LOOM_GRAPH_GROUP_WALK_BUDGET_MS (currently ${walk.budgetMs}ms; read per walk, so ` +
+        'no restart is needed) if this workspace legitimately grants to more groups than Graph ' +
+        'can answer for inside that window.'
+      : `This is the walk's page cap, pinned to the workspace's distinct group count ` +
+        `(${walk.maxPages}) rather than to an operator knob — reaching it is a defect in the ` +
+        'walk itself and no configuration change will help.';
+  // `walk.label` is sanitized at PagingBudget's logSafe chokepoint, so the
+  // workspace id interpolated into it cannot forge a second log record. The
+  // `[paging-budget]` tag rides along on purpose: this IS a PagingBudget
+  // deadline, and that is the tag an operator greps for across every bounded
+  // walk in the console. `[graph-group-walk]` narrows it to this one.
+  console.warn(
+    `[graph-group-walk] [paging-budget] INCOMPLETE GROUP SET (not a measured negative): ` +
+      `${walk.label} stopped by its ${by} ceiling after probing ${probedGroups} of ` +
+      `${totalGroups} group(s) in ${walk.elapsedMs()}ms — ${unprobed} group grant(s) were ` +
+      'NEVER PROBED and therefore contributed NO role. The role this call returns was decided ' +
+      'on a PARTIAL group set: a genuine member of an unprobed group is REFUSED, so expect an ' +
+      `unexplained 403 or a missing/under-granted role rather than a short list. ${remedy}`,
+  );
+}
+
+/**
  * Resolve the HIGHEST effective workspace role for `userId`, considering both
  * direct assignments and (transitive / nested) group membership via Microsoft
  * Graph. Returns null when the user inherits no role.
@@ -494,9 +549,10 @@ export async function resolveEffectiveRole(
   //
   // A GROUP WE NEVER VISITED CONTRIBUTES NOTHING — the same fail-closed posture
   // `unknown` already has. So a truncated walk can refuse a genuine member; that
-  // is the correct direction for an authorization check, and `warnIfTruncated`
-  // names the deadline so the refusal is diagnosable as a deadline rather than
-  // read as "not a member" (#3381).
+  // is the correct direction for an authorization check, and
+  // {@link warnIfWalkTruncated} names the deadline AND the refusal it causes, so
+  // the outcome is diagnosable as a deadline rather than read as "not a member"
+  // (#3381).
   //
   // maxPages is pinned to the assignment count so the WALL CLOCK is the only
   // ceiling here: the shared 50-page default would otherwise stop probing on a
@@ -505,6 +561,11 @@ export async function resolveEffectiveRole(
     maxPages: groupAssignments.length,
     budgetMs: graphGroupWalkBudgetMs(),
   });
+  // The DENOMINATOR the truncation line reports. Rows are memoized per group, so
+  // "how many group grants did we resolve" is a count of DISTINCT groups, not of
+  // rows — reporting rows would overstate the gap on a workspace that names the
+  // same group twice.
+  const distinctGroups = new Set(groupAssignments.map((a) => a.principalId)).size;
   // REQUEST-SCOPED, and deliberately not a module-level cache: this is an
   // authorization path, where a cached positive outlives the membership that
   // justified it. Keyed on the PAIR, so two rows naming the same group cost one
@@ -524,7 +585,7 @@ export async function resolveEffectiveRole(
     // posture as before, when this read a bare `false`.
     if (membership === 'member') inherited.push(a.role);
   }
-  walk.warnIfTruncated(probed.size);
+  warnIfWalkTruncated(walk, probed.size, distinctGroups);
   return pickHighestRole(inherited);
 }
 
@@ -719,9 +780,10 @@ async function graphUserInGroup(
   // is an AUTHORIZATION check: returning true on a partial list would grant a
   // role from a membership we never actually saw. So a truncated walk answers
   // `unknown` — which `userIsTransitiveGroupMember` collapses to `false`,
-  // exactly the previous behaviour — and `warnIfTruncated` logs the honest
-  // cause so the deadline is diagnosable as a deadline, not read as "not a
-  // member". The tri-state is what makes those two sayably different (#3381).
+  // exactly the previous behaviour — and the warn below logs the honest cause,
+  // naming whichever of the two ceilings actually bound, so the deadline is
+  // diagnosable as a deadline rather than read as "not a member". The tri-state
+  // is what makes those two sayably different (#3381).
   const budget = new PagingBudget(
     `graph transitiveMembers ${groupId}`,
     walk ? { budgetMs: Math.min(defaultPagingBudgetMs(), walk.remainingMs()) } : {},
@@ -790,7 +852,38 @@ async function graphUserInGroup(
   }
   // Loop exited without finishing: either the page budget ran out or the wall
   // clock did. Either way we never saw the whole closure, so this is UNKNOWN.
-  budget.warnIfTruncated(scanned);
+  //
+  // NOT `budget.warnIfTruncated` (deploy-integrity R7), for the same reason as
+  // the walk-level line above: that text hardcodes `LOOM_ARM_PAGING_BUDGET_MS`,
+  // but when a walk is in play this budget is the MINIMUM of that knob and the
+  // walk's remaining clock — so on a clamped probe the ARM knob is precisely the
+  // knob that will NOT help. Name the ceiling that actually bound, and name the
+  // consequence as the authorization refusal it is rather than as a short list.
+  if (budget.truncatedBy) {
+    const armCeilingMs = defaultPagingBudgetMs();
+    const remedy =
+      budget.truncatedBy === 'pages'
+        ? `Raise LOOM_ARM_PAGING_MAX_PAGES (cap: ${budget.maxPages} pages).`
+        : budget.budgetMs < armCeilingMs
+          ? `This probe's ${budget.budgetMs}ms ceiling is the enclosing group walk's REMAINING ` +
+            `clock, which is tighter than the ${armCeilingMs}ms ARM paging ceiling — raise ` +
+            'LOOM_GRAPH_GROUP_WALK_BUDGET_MS.'
+          : `Raise LOOM_ARM_PAGING_BUDGET_MS (currently ${armCeilingMs}ms).`;
+    // `budget.label` is sanitized at PagingBudget's logSafe chokepoint. BOTH
+    // taxonomies are carried deliberately: this event is a `[paging-budget]`
+    // deadline (what an operator greps for across every paged walk in the
+    // console, and what `paging-budget-residual.test.ts` asserts) AND a
+    // `[graph-membership] UNKNOWN (not a measured negative)` (the vocabulary
+    // every other non-answer in this module already uses). Dropping either
+    // would make one of the two greps silently miss this line.
+    console.warn(
+      '[graph-membership] UNKNOWN (not a measured negative): [paging-budget] ' +
+        `${budget.label} stopped by its ${budget.truncatedBy} ceiling after ` +
+        `${budget.pagesFetched} page(s) / ${budget.elapsedMs()}ms with ${scanned} member(s) ` +
+        'scanned — the closure was never fully read, so this group contributes NO role and a ' +
+        `genuine member is REFUSED (an unexplained 403), not measured as a non-member. ${remedy}`,
+    );
+  }
   return budget.truncatedBy ? 'unknown' : 'not-member';
 }
 

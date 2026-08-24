@@ -320,7 +320,22 @@ describe('a throttled point-read ABORTS instead of amplifying (#3834 §3)', () =
 
 describe('the group walk is bounded IN AGGREGATE, not only per probe (#3834 §3)', () => {
   const FOUR = ['g-a', 'g-b', 'g-c', 'g-d'];
-  const WALK_MS = 30_000;
+  const SIX = ['g-a', 'g-b', 'g-c', 'g-d', 'g-e', 'g-f'];
+
+  /**
+   * The walk ceiling these tests configure.
+   *
+   * IT MUST NOT BE 30_000. The first version of this suite used exactly the
+   * mocked `DEFAULT_SERVER_FETCH_TIMEOUT_MS` above, which is the value
+   * `graphGroupWalkBudgetMs()` falls back to when the knob is unset — so the
+   * knob arm and the no-knob arm produced identical behaviour and a
+   * `graphGroupWalkBudgetMs()` that IGNORED `LOOM_GRAPH_GROUP_WALK_BUDGET_MS`
+   * entirely still passed every test here. Any value that is not the fallback
+   * separates them; 24_000 is chosen so that with an 8_000ms probe exactly
+   * three of the four groups fit, while the 30_000 fallback fits all four.
+   */
+  const WALK_MS = 24_000;
+  const PROBE_MS = 8_000;
   let previousKnob: string | undefined;
 
   beforeEach(() => {
@@ -335,23 +350,47 @@ describe('the group walk is bounded IN AGGREGATE, not only per probe (#3834 §3)
     vi.useRealTimers();
   });
 
-  it('stops claiming groups once the walk-wide clock is spent', async () => {
-    // Only `Date` is faked — the module under test reads the clock through
-    // `PagingBudget`, and faking timers wholesale would also intercept the test
-    // runner's own. Each probe burns 12s of the 30s walk, so three fit and the
-    // fourth must never be attempted.
+  /**
+   * Run ONE walk over `groups` where every Graph probe answers a measured
+   * negative and costs `costMs` of the walk's wall clock.
+   *
+   * Only `Date` is faked — the module under test reads the clock through
+   * `PagingBudget`, and faking timers wholesale would also intercept the test
+   * runner's own. Returns what the walk OBSERVABLY did: how many probes it
+   * made, the per-probe `timeoutMs` it handed down, and everything it logged.
+   */
+  async function walkRun(groups: string[], costMs: number) {
+    setGroupAssignments(groups.map((principalId) => ({ principalId, role: 'Admin' })));
+    fetchWithTimeout.mockReset();
+    (console.warn as any).mockClear();
     let now = Date.UTC(2026, 7, 24);
     vi.useFakeTimers({ toFake: ['Date'] });
     vi.setSystemTime(now);
     fetchWithTimeout.mockImplementation(async () => {
-      now += 12_000;
+      now += costMs;
       vi.setSystemTime(now);
       return res(404, { error: {} }); // a measured negative — exactly one call per group
     });
+    try {
+      const role = await resolveEffectiveRole(USER, WS);
+      return {
+        role,
+        probes: fetchWithTimeout.mock.calls.length,
+        timeouts: fetchWithTimeout.mock.calls.map((c: any[]) => c[2]),
+        warn: warnings(),
+      };
+    } finally {
+      vi.useRealTimers();
+    }
+  }
 
-    await expect(resolveEffectiveRole(USER, WS)).resolves.toBeNull();
-    expect(fetchWithTimeout.mock.calls.length).toBeLessThan(FOUR.length);
-    expect(fetchWithTimeout).toHaveBeenCalledTimes(3);
+  it('stops claiming groups once the walk-wide clock is spent', async () => {
+    // Each probe burns 8s of the 24s walk, so three fit and the fourth must
+    // never be attempted.
+    const r = await walkRun(FOUR, PROBE_MS);
+    expect(r.role).toBeNull();
+    expect(r.probes).toBeLessThan(FOUR.length);
+    expect(r.probes).toBe(3);
   });
 
   // CONTROL — the ceiling must not be "deny everything". Only the LAST group
@@ -365,6 +404,303 @@ describe('the group walk is bounded IN AGGREGATE, not only per probe (#3834 §3)
       .mockResolvedValueOnce(res(200, { id: USER }));
     expect(await resolveEffectiveRole(USER, WS)).toBe('Admin');
     expect(fetchWithTimeout).toHaveBeenCalledTimes(FOUR.length);
+  });
+
+  /**
+   * N1 — EACH PROBE GETS THE WALK'S REMAINING CLOCK, NOT A FRESH ONE.
+   *
+   * The point-read is dispatched as `fetchWithTimeout(url, init, walk?.remainingMs())`.
+   * Deleting that third argument left every test above green while silently
+   * degrading the worst case from ~30s to 30s + 30s + 15s, because a probe with
+   * `timeoutMs === undefined` falls back to the 30s single-request ceiling and
+   * can therefore out-live the walk that is supposed to contain it. The
+   * observable property is the argument itself: a number, shrinking as the
+   * walk's clock is spent, never repeating.
+   */
+  it('hands each probe the walk REMAINING clock, not a fresh per-probe ceiling', async () => {
+    const r = await walkRun(FOUR, PROBE_MS);
+    for (const t of r.timeouts) expect(typeof t).toBe('number');
+    // strictly decreasing — a fresh ceiling per probe would be constant
+    expect(r.timeouts).toEqual([...r.timeouts].sort((a: number, b: number) => b - a));
+    expect(new Set(r.timeouts).size).toBe(r.timeouts.length);
+    // and never more than what is actually left of the walk
+    expect(r.timeouts).toEqual([WALK_MS, WALK_MS - PROBE_MS, WALK_MS - 2 * PROBE_MS]);
+  });
+
+  /**
+   * N2 — THE ADVERTISED KNOB IS ACTUALLY READ.
+   *
+   * `LOOM_GRAPH_GROUP_WALK_BUDGET_MS` is documented in `workspace-guard.ts`,
+   * `docs/fiab/arm-paging-budget.md` and `docs/fiab/brain/security-taxonomy.md`.
+   * A `graphGroupWalkBudgetMs()` that ignored `process.env` completely and
+   * always returned the fallback passed the whole suite, because the suite set
+   * the knob to the fallback's own value. This is the A/B that separates them:
+   * set vs unset must produce DIFFERENT behaviour.
+   */
+  it('honours LOOM_GRAPH_GROUP_WALK_BUDGET_MS — a lower knob stops the walk sooner', async () => {
+    // 12s probes: the 24_000 knob fits two, the 30_000 fallback fits three.
+    process.env.LOOM_GRAPH_GROUP_WALK_BUDGET_MS = String(WALK_MS);
+    const knobbed = await walkRun(FOUR, 12_000);
+    delete process.env.LOOM_GRAPH_GROUP_WALK_BUDGET_MS;
+    const fallback = await walkRun(FOUR, 12_000);
+    expect(knobbed.probes).toBe(2);
+    expect(fallback.probes).toBe(3);
+    expect(knobbed.probes).toBeLessThan(fallback.probes);
+    // and the ceiling handed to the first probe is the knob itself
+    expect(knobbed.timeouts[0]).toBe(WALK_MS);
+    expect(fallback.timeouts[0]).toBe(30_000); // DEFAULT_SERVER_FETCH_TIMEOUT_MS
+  });
+
+  it('ignores a non-positive or non-numeric knob and uses the single-request ceiling', async () => {
+    for (const bad of ['0', '-1', 'soon', '']) {
+      process.env.LOOM_GRAPH_GROUP_WALK_BUDGET_MS = bad;
+      const r = await walkRun(FOUR, 12_000);
+      expect(r.timeouts[0], `knob=${JSON.stringify(bad)}`).toBe(30_000);
+      expect(r.probes, `knob=${JSON.stringify(bad)}`).toBe(3);
+    }
+  });
+
+  /**
+   * F1 — THE TRUNCATION LINE MUST NAME A KNOB THAT ACTUALLY MOVES THIS CEILING.
+   *
+   * This walk used to report itself through `PagingBudget.warnIfTruncated`,
+   * which hardcodes `LOOM_ARM_PAGING_BUDGET_MS` — a knob this budget never
+   * reads. MEASURED before the fix: `LOOM_ARM_PAGING_BUDGET_MS=600000` still
+   * truncated at 30000ms after 3 of 6 groups. The one diagnostic for the one
+   * new failure mode the aggregate ceiling introduces pointed at a no-op, which
+   * is the deploy-integrity R7 shape exactly.
+   *
+   * Keyed to the PROPERTY, not to a spelling: extract every `LOOM_*` token the
+   * walk logged, then RE-RUN the identical scenario with each of them raised.
+   * A named knob that does not stop the truncation fails the test — whatever it
+   * is called, including one nobody thought to blocklist.
+   */
+  it('names a knob that ACTUALLY moves this ceiling — raising it must stop the truncation (R7)', async () => {
+    process.env.LOOM_GRAPH_GROUP_WALK_BUDGET_MS = String(WALK_MS);
+    const base = await walkRun(SIX, PROBE_MS);
+    expect(base.probes).toBe(3); // it genuinely truncated: 3 of 6
+    expect(base.probes).toBeLessThan(SIX.length);
+
+    const knobs = [...new Set(base.warn.match(/LOOM_[A-Z0-9_]+/g) ?? [])];
+    expect(knobs, 'a truncated walk must name the knob to raise').not.toHaveLength(0);
+
+    for (const knob of knobs) {
+      const previous = process.env[knob];
+      process.env[knob] = String(WALK_MS * 20);
+      try {
+        const raised = await walkRun(SIX, PROBE_MS);
+        expect(
+          raised.probes,
+          `the truncation line tells the operator to raise ${knob}, but raising it to ` +
+            `${WALK_MS * 20}ms still probed only ${raised.probes} of ${SIX.length} groups`,
+        ).toBe(SIX.length);
+      } finally {
+        if (previous === undefined) delete process.env[knob];
+        else process.env[knob] = previous;
+      }
+    }
+  });
+
+  /**
+   * F1, second half — the CONSEQUENCE has to be the one that actually happens.
+   *
+   * The borrowed text said "returning N row(s), the list may be incomplete",
+   * which describes a picker showing a short list. What actually happens is an
+   * authorization decision taken on a partial group set: a genuine member of an
+   * unprobed group is refused. Nobody chasing an unexplained 403 would have
+   * connected the borrowed line to it.
+   */
+  it('states the consequence as an AUTHORIZATION refusal, not a truncated list (R7)', async () => {
+    process.env.LOOM_GRAPH_GROUP_WALK_BUDGET_MS = String(WALK_MS);
+    const base = await walkRun(SIX, PROBE_MS);
+    // the accounting an operator needs, computed from the run rather than
+    // asserted as prose: how many of the workspace's group grants were resolved
+    expect(base.warn).toContain(`${base.probes} of ${SIX.length} group(s)`);
+    expect(base.warn).toContain(`${SIX.length - base.probes} group grant(s) were NEVER PROBED`);
+    expect(base.warn).toMatch(/REFUSED/);
+    expect(base.warn).toMatch(/403/);
+    // both log taxonomies stay greppable: the umbrella `[paging-budget]` tag
+    // every bounded walk in the console shares, and the walk-specific one
+    expect(base.warn).toContain('[paging-budget]');
+    expect(base.warn).toContain('[graph-group-walk]');
+    // neither half of the borrowed line may come back
+    expect(base.warn).not.toContain('the list may be incomplete');
+    expect(base.warn).not.toContain('LOOM_ARM_PAGING_BUDGET_MS');
+  });
+
+  // CONTROL — silence means "every group grant was resolved". A warn that fired
+  // unconditionally would satisfy every assertion above.
+  it('says NOTHING when the walk resolved every group', async () => {
+    process.env.LOOM_GRAPH_GROUP_WALK_BUDGET_MS = String(WALK_MS);
+    const r = await walkRun(SIX, 1_000); // 6 x 1s fits inside 24s
+    expect(r.probes).toBe(SIX.length);
+    expect(r.warn).toBe('');
+  });
+});
+
+/**
+ * N3 — A PROBE'S PAGED FALLBACK CANNOT OUTLIVE THE WALK THAT CONTAINS IT.
+ *
+ * The enumeration budget is
+ * `Math.min(defaultPagingBudgetMs(), walk.remainingMs())`. Replacing that with
+ * a bare `{}` — i.e. always the ARM paging ceiling, ignoring the walk — left
+ * the whole suite green, so the "takes the smaller of the two ceilings" claim
+ * was unguarded and one slow group's fallback could spend clock the walk had
+ * already promised to the groups behind it.
+ *
+ * The observable is the `timeoutMs` the enumeration page fetch is handed. Both
+ * directions are pinned, because a test for only one of them is satisfied by
+ * "always the walk's remaining" just as easily as by the minimum.
+ */
+describe("a probe's paged fallback takes the SMALLER of the two ceilings (#3834 §3)", () => {
+  const ARM_KNOB = 'LOOM_ARM_PAGING_BUDGET_MS';
+  const WALK_KNOB = 'LOOM_GRAPH_GROUP_WALK_BUDGET_MS';
+  let savedArm: string | undefined;
+  let savedWalk: string | undefined;
+
+  beforeEach(() => {
+    savedArm = process.env[ARM_KNOB];
+    savedWalk = process.env[WALK_KNOB];
+  });
+
+  afterEach(() => {
+    if (savedArm === undefined) delete process.env[ARM_KNOB];
+    else process.env[ARM_KNOB] = savedArm;
+    if (savedWalk === undefined) delete process.env[WALK_KNOB];
+    else process.env[WALK_KNOB] = savedWalk;
+    vi.useRealTimers();
+  });
+
+  /**
+   * ONE group whose point-read answers 403 — the case the paged fallback exists
+   * for — after burning `pointReadCostMs` of the walk's clock, then ONE clean
+   * enumeration page. Returns the `timeoutMs` the ENUMERATION fetch was handed.
+   */
+  async function enumerationTimeout(pointReadCostMs: number): Promise<number> {
+    setGroupAssignments([{ principalId: 'g-a', role: 'Admin' }]);
+    fetchWithTimeout.mockReset();
+    let now = Date.UTC(2026, 7, 24);
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(now);
+    let call = 0;
+    fetchWithTimeout.mockImplementation(async () => {
+      call += 1;
+      if (call === 1) {
+        now += pointReadCostMs;
+        vi.setSystemTime(now);
+        return res(403, { error: { code: 'Authorization_RequestDenied' } });
+      }
+      return res(200, { value: [{ id: 'someone-else' }] }); // clean page, no match
+    });
+    try {
+      await resolveEffectiveRole(USER, WS);
+    } finally {
+      vi.useRealTimers();
+    }
+    expect(fetchWithTimeout).toHaveBeenCalledTimes(2);
+    return fetchWithTimeout.mock.calls[1][2];
+  }
+
+  it("uses the WALK's remaining clock when the walk is the tighter ceiling", async () => {
+    process.env[ARM_KNOB] = '15000';
+    process.env[WALK_KNOB] = '20000';
+    // the point-read burnt 12s of the 20s walk, leaving 8s — tighter than 15s
+    expect(await enumerationTimeout(12_000)).toBe(8_000);
+  });
+
+  it('uses LOOM_ARM_PAGING_BUDGET_MS when THAT is the tighter ceiling', async () => {
+    process.env[ARM_KNOB] = '6000';
+    process.env[WALK_KNOB] = '60000';
+    // the walk has 60s left, so the 6s paging ceiling is what must bind
+    expect(await enumerationTimeout(0)).toBe(6_000);
+  });
+
+  /**
+   * ONE group whose point-read 403s after `pointReadCostMs`, then an
+   * enumeration whose FIRST page costs `pageCostMs` and advertises an
+   * `@odata.nextLink`. The SECOND page — reached only if the budget allows one —
+   * carries the user. So a ceiling too tight truncates and answers `unknown`
+   * (no role); a ceiling wide enough reaches page 2 and grants.
+   */
+  async function enumerationRun(pointReadCostMs: number, pageCostMs: number) {
+    setGroupAssignments([{ principalId: 'g-a', role: 'Admin' }]);
+    fetchWithTimeout.mockReset();
+    (console.warn as any).mockClear();
+    let now = Date.UTC(2026, 7, 24);
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(now);
+    let call = 0;
+    fetchWithTimeout.mockImplementation(async () => {
+      call += 1;
+      if (call === 1) {
+        now += pointReadCostMs;
+        vi.setSystemTime(now);
+        return res(403, { error: { code: 'Authorization_RequestDenied' } });
+      }
+      now += pageCostMs;
+      vi.setSystemTime(now);
+      if (call === 2) {
+        return res(200, {
+          value: [{ id: 'other' }],
+          '@odata.nextLink': 'https://graph.microsoft.com/v1.0/next-page',
+        });
+      }
+      return res(200, { value: [{ id: USER }] }); // page 2 carries the user
+    });
+    try {
+      const role = await resolveEffectiveRole(USER, WS);
+      return { role, pages: fetchWithTimeout.mock.calls.length - 1, warn: warnings() };
+    } finally {
+      vi.useRealTimers();
+    }
+  }
+
+  /**
+   * The SAME R7 defect lived on this budget's own truncation line, and it is
+   * introduced by the very `Math.min` above: `PagingBudget.warnIfTruncated` can
+   * only ever name `LOOM_ARM_PAGING_BUDGET_MS`, so whenever the WALK is the
+   * tighter of the two ceilings the operator is told to raise the one knob that
+   * cannot move it.
+   *
+   * Keyed to the property, and run in BOTH directions so the message cannot
+   * pass by always blaming the walk: extract every `LOOM_*` token the probe
+   * logged, raise each one, and require that the enumeration then completes and
+   * grants. The second scenario is the control — there the ARM knob genuinely
+   * IS the binding ceiling and naming it is correct.
+   */
+  it('the enumeration truncation names a knob that ACTUALLY moves ITS ceiling (R7)', async () => {
+    const scenarios = [
+      { name: "the walk's remaining clock binds", arm: '15000', walk: '20000', pointRead: 12_000, page: 8_000 },
+      { name: 'the ARM paging ceiling binds', arm: '6000', walk: '60000', pointRead: 0, page: 6_000 },
+    ];
+    for (const s of scenarios) {
+      process.env[ARM_KNOB] = s.arm;
+      process.env[WALK_KNOB] = s.walk;
+      const base = await enumerationRun(s.pointRead, s.page);
+      expect(base.role, `${s.name}: the probe must have truncated`).toBeNull();
+      expect(base.warn, `${s.name}`).toContain('[graph-membership] UNKNOWN (not a measured negative)');
+      // the umbrella tag `paging-budget-residual.test.ts` greps for must survive
+      expect(base.warn, `${s.name}`).toContain('[paging-budget]');
+      expect(base.warn, `${s.name}`).toMatch(/REFUSED/);
+
+      const knobs = [...new Set(base.warn.match(/LOOM_[A-Z0-9_]+/g) ?? [])];
+      expect(knobs, `${s.name}: a truncated probe must name the knob to raise`).not.toHaveLength(0);
+      for (const knob of knobs) {
+        const previous = process.env[knob];
+        process.env[knob] = '600000';
+        try {
+          const raised = await enumerationRun(s.pointRead, s.page);
+          expect(
+            raised.role,
+            `${s.name}: the truncation line tells the operator to raise ${knob}, but raising it ` +
+              `to 600000ms still answered unknown after ${raised.pages} enumeration page(s)`,
+          ).toBe('Admin');
+        } finally {
+          if (previous === undefined) delete process.env[knob];
+          else process.env[knob] = previous;
+        }
+      }
+    }
   });
 });
 
