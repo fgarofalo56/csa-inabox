@@ -14,10 +14,16 @@
 //
 // ── NOT WIRED INTO THE ORCHESTRATOR, DELIBERATELY ──────────────────────────
 // This module is NOT invoked from `admin-plane/main.bicep`. That file is owned
-// by another lane and sits at 238 of the 256 ARM parameter ceiling
+// by another lane and sits at 239 of the 256 ARM parameter ceiling
 // (`csa_loom_build_gate_bicep_param_cap`), so adding six invocations there is a
 // change that lane must make, not this one. The invocation is documented below
 // and is a single line.
+//
+// 239 is measured, not remembered: `grep -c '^param '
+// platform/fiab/bicep/modules/admin-plane/main.bicep` returns 239 on
+// origin/main AND on this branch. An earlier revision of this header said 238,
+// a number copied out of the #3291 allowlist note, which measured a DIFFERENT
+// tree at a different time. 17 of headroom, not 18.
 //
 // ── LATENCY: THIS IS A DAILY DROP, NOT A LIVE FEED ─────────────────────────
 // A daily export runs once a day and its FIRST data lands roughly 24 hours
@@ -58,16 +64,60 @@
 // management.usgovcloudapi.net, and the same template applies there.
 //
 // WHAT IS NOT VERIFIED, stated rather than implied: this module has NOT been
-// deployed to Azure Government, and the Gov ARM plane's acceptance of the
-// `2023-08-01` API version was not checked — this workstation authenticates to
-// a different tenant and never runs `az` against Gov. Verify from an
-// in-boundary GitHub Actions runner before claiming Gov parity:
+// deployed to ANY cloud. Not Azure Government, and not Commercial either.
+// Nothing in this file has run against a live estate and no export has ever
+// been provisioned from it. The only thing established locally is that it
+// COMPILES — `az bicep build --file <this file>`, RC=0, Bicep CLI 0.45.15.
+// An earlier revision scoped this paragraph to Gov alone, which IMPLIED
+// Commercial had been verified; it had not. `deploy-integrity.md` R4 verifies
+// each boundary independently, so neither cloud inherits the other's receipt,
+// and there is no receipt for either.
+//
+// Gov carries one ADDITIONAL unchecked item on top of that: whether the Gov ARM
+// plane accepts the `2023-08-01` API version. It was not checked, because this
+// workstation authenticates to a different tenant and never runs `az` against
+// Gov. Check it from an in-boundary GitHub Actions runner before claiming Gov
+// parity:
 //
 //   az provider show -n Microsoft.CostManagement \
 //     --query "resourceTypes[?resourceType=='exports'].apiVersions" -o tsv
 //
 // If `2023-08-01` is absent there, pin an older version listed by that call.
 // The API version must be a literal in Bicep, so it cannot be parameterised.
+//
+// ── `location` IS THE IDENTITY'S LOCATION, AND ITS VALUE IS UNVALIDATED ────
+// Learn's generated reference for `Microsoft.CostManagement/exports@2023-08-01`
+// documents `location` as "The location of the Export's managed identity. Only
+// required when utilizing managed identity." This module DOES declare a
+// system-assigned identity, so the field applies to it — it is NOT the region
+// of the exported data, which has no region.
+//
+// What is NOT established is whether `'global'`, the value this module sends,
+// is accepted for that identity. Learn gives the field's MEANING and its type
+// (`string`) but enumerates no allowed values; the only official sample on that
+// page — the AzAPI Terraform one — declares neither `identity` nor `location`,
+// so it demonstrates no value either; and a Learn code-sample search turned up
+// no Cost Management export that sets both. So this is recorded as UNKNOWN,
+// not as correct and not as broken, and it is exposed as the
+// `identityLocation` parameter so a deployment can correct it without a code
+// change. The first real deployment settles it. Nothing short of that will.
+//
+// ── TWO MORE DATASET FIELDS THAT THE 2023-08-01 SCHEMA MAY NOT ACCEPT ──────
+// Recorded here because they are the same class of risk — untested against a
+// live plane — and because a reader should not infer from silence that they
+// were checked. Measured against Learn's generated reference for 2023-08-01:
+//   * `ExportDefinition.type` is listed as 'ActualCost' | 'AmortizedCost' |
+//     'Usage'. **'FocusCost' is NOT in that list**, yet `exportType` below
+//     offers it. FocusCost appears in the 2023-07-01-preview schema.
+//   * `ExportDatasetConfiguration` for 2023-08-01 lists only `columns`.
+//     **`dataVersion` is NOT a member**, yet the `datasetConfiguration` var
+//     below emits it. `dataVersion` also appears only in 2023-07-01-preview.
+// Neither has been sent to ARM, so neither is asserted to fail — Learn's
+// generated tables are the evidence, not a rejection anyone has observed. The
+// defaults (`ActualCost`, empty `dataVersion`) avoid both fields entirely, so
+// the default path is unaffected. Settle these with the same first deployment
+// that settles `identityLocation`; if the API rejects them, the fix is the
+// preview api-version, which is a separate decision from this module's shape.
 //
 // ── RECOMMEND-ONLY (PRP §1 decision 1) ─────────────────────────────────────
 // This module CREATES a read-only reporting artifact. It does not scale, stop
@@ -106,14 +156,48 @@ param exportType string = 'ActualCost'
 @description('Dataset schema version. Only meaningful for FocusCost (e.g. \'1.0\'). Leave empty for ActualCost / AmortizedCost so no configuration block is emitted.')
 param dataVersion string = ''
 
-@description('First day the schedule may run. MUST be in the future or Cost Management rejects the export, so the default is tomorrow rather than a hard-coded date that goes stale and fails a redeploy months later.')
-param scheduleStartUtc string = dateTimeAdd(utcNow('yyyy-MM-ddT00:00:00Z'), 'P1D', 'yyyy-MM-ddT00:00:00Z')
+// ── WHY THE SCHEDULE WINDOW DEFAULTS TO EMPTY AND NOT TO A DATE ────────────
+// These two used to default to `dateTimeAdd(utcNow(...), 'P1D' / 'P10Y', ...)`.
+// That is the rotator shape (`csa_loom_bicep_newguid_is_a_rotator`): `utcNow()`
+// re-evaluates on EVERY deployment that does not pass the parameter, so the
+// recurrencePeriod moved each time, the export registered as CHANGED on every
+// redeploy, and a what-if over this module could never come back clean.
+//
+// That rotator was ALSO cited as reason (3) in this module's orphan-allowlist
+// entry (`scripts/ci/check-bicep-sync.mjs`) for keeping it out of the
+// orchestrator — the module was being held unwired to avoid drift the module
+// itself was manufacturing. THE FIX FOR A ROTATOR IS TO STOP ROTATING, NOT TO
+// STAY UNWIRED. Reason (3) is now obsolete and that entry's text needs the
+// matching correction; it lives in a file this lane does not own, so it is
+// tracked alongside the wire-vs-out-of-band decision in #3965. Reasons (1)
+// one-billing-scope-per-export and (2) BCP139 on the cross-RG blob grant are
+// structural, unaffected by this change, and still stand on their own.
+//
+// Empty is a real default rather than a punt. `recurrencePeriod` is OPTIONAL on
+// `ExportSchedule` in the 2023-08-01 schema — Learn marks `definition` and
+// `deliveryInfo` `(required)` and does NOT mark `recurrencePeriod` — so leaving
+// both empty emits a daily schedule with no window at all, and a property that
+// is never sent cannot drift. A hard-coded literal was rejected for the
+// opposite failure: it does not rotate, but Learn also says of this block "The
+// start date must be in future", so a literal goes stale and starts FAILING
+// redeploys once its date passes. Empty has neither failure mode.
+//
+// Both shapes are UNEXERCISED against a live plane — see the WHAT IS NOT
+// VERIFIED block in the header. What changed here is drift behaviour, which is
+// determined by the template and is therefore checkable without a deployment;
+// acceptance is not, and is not claimed.
 
-@description('Last day the schedule may run. Default is ten years out; Cost Management requires an end date after the start date.')
-param scheduleEndUtc string = dateTimeAdd(utcNow('yyyy-MM-ddT00:00:00Z'), 'P10Y', 'yyyy-MM-ddT00:00:00Z')
+@description('OPTIONAL start of a bounded recurrence window, UTC (e.g. \'2026-09-01T00:00:00Z\'). EMPTY — the default — omits recurrencePeriod entirely and the export simply recurs daily. When set it MUST be in the future, per Learn on ExportSchedule.recurrencePeriod, and it MUST be a stable value: passing a freshly computed date on each deploy re-introduces the rotator this default exists to remove.')
+param scheduleStartUtc string = ''
+
+@description('OPTIONAL end of the bounded recurrence window, UTC. Read only when scheduleStartUtc is set, and must be later than it. Empty emits a window with a start and no end, which the 2023-08-01 schema allows: ExportRecurrencePeriod.from is required, .to is not.')
+param scheduleEndUtc string = ''
 
 @description('Set false to provision the export in a paused state (schedule status Inactive) without deleting it. Honours the estate pause/resume mandate: a paused estate should not be generating daily exports it will not read.')
 param scheduleActive bool = true
+
+@description('Location recorded for the export\'s SYSTEM-ASSIGNED IDENTITY — NOT a region for the exported data, which has none. Parameterised because the correct value here is UNVALIDATED (see the header): it is exposed so a deployment can correct it without a code change. Default preserves the value this module has always sent.')
+param identityLocation string = 'global'
 
 // ---------------------------------------------------------------------------
 // Derived
@@ -133,6 +217,19 @@ var datasetConfiguration = empty(dataVersion) ? {} : {
   }
 }
 
+// recurrencePeriod is emitted ONLY when a bounded window was actually asked
+// for. Same union()-an-empty-object shape as datasetConfiguration above, and
+// for the same reason: a key present with an unusable value is worse than a key
+// that is absent, and `from: ''` is not a date. Both branches are object
+// literals, so nothing here depends on whether ARM's if() short-circuits.
+var recurrencePeriodBlock = empty(scheduleStartUtc) ? {} : {
+  recurrencePeriod: union({
+    from: scheduleStartUtc
+  }, empty(scheduleEndUtc) ? {} : {
+    to: scheduleEndUtc
+  })
+}
+
 // ---------------------------------------------------------------------------
 // The export
 // ---------------------------------------------------------------------------
@@ -148,7 +245,7 @@ resource costExport 'Microsoft.CostManagement/exports@2023-08-01' = {
   identity: {
     type: 'SystemAssigned'
   }
-  location: 'global'
+  location: identityLocation
   properties: {
     format: 'Csv'
     partitionData: true
@@ -166,14 +263,10 @@ resource costExport 'Microsoft.CostManagement/exports@2023-08-01' = {
         rootFolderPath: rootFolderPath
       }
     }
-    schedule: {
+    schedule: union({
       status: scheduleActive ? 'Active' : 'Inactive'
       recurrence: 'Daily'
-      recurrencePeriod: {
-        from: scheduleStartUtc
-        to: scheduleEndUtc
-      }
-    }
+    }, recurrencePeriodBlock)
   }
 }
 
@@ -234,5 +327,17 @@ output exportPrincipalId string = costExport.identity.principalId
 @description('The blob-write grant this module cannot declare inline (BCP139 - see the note above). Ready to run as-is.')
 output blobWriteGrantCommand string = 'az role assignment create --assignee-object-id ${costExport.identity.principalId} --assignee-principal-type ServicePrincipal --role ${storageBlobDataContributorRoleId} --scope ${storageAccountResourceId}'
 
-@description('First data is expected roughly 24 hours after the first scheduled run. Until then the Brain cost layer reports DERIVED figures, labelled as estimates - it does NOT report $0.00.')
-output firstDataExpectedUtc string = dateTimeAdd(scheduleStartUtc, 'P1D', 'yyyy-MM-ddTHH:mm:ssZ')
+@description('The recurrence-window start this deployment set, or EMPTY when no bounded window was requested (the default) and the export therefore recurs daily with no recurrencePeriod. EMPTY here means "no window was configured" — it is not a date, and a caller must not render it as one.')
+output scheduleStartUtcOut string = scheduleStartUtc
+
+// `firstDataExpectedUtc` was here. REMOVED with the rotator, for two reasons.
+// (1) It computed `dateTimeAdd(scheduleStartUtc, 'P1D', ...)`, which has no
+// defined result now that the default start is empty. (2) It asserted a precise
+// delivery timestamp that Microsoft does not promise — the documented shape is
+// "roughly 24 hours" after the first run, and up to 48 hours on a brand-new
+// subscription — so it stated as fact something this template never
+// established (deploy-integrity.md R7). The latency itself is not lost: it is
+// described in the LATENCY block in the header, and the Brain surfaces it at
+// read time from `CostExportRead.asOf` rather than from a predicted date.
+// Nothing consumed the output — `git grep firstDataExpectedUtc` returned this
+// file and nothing else — so no caller breaks.
