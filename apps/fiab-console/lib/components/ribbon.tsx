@@ -211,7 +211,14 @@ export function Ribbon({ tabs, defaultTabId, commandSearch }: Props) {
                             appearance="subtle"
                             size="small"
                             disabled={disabled}
-                            title={disabled ? (rest.title as string | undefined) : undefined}
+                            // #3673 (same discard, mirrored): this read
+                            //   title={disabled ? rest.title : undefined}
+                            // which threw the tooltip away on an ENABLED
+                            // dropdown — the exact inverse of the plain-button
+                            // branch. A `title` is an explanation the caller
+                            // wrote; neither branch gets to decide it only
+                            // applies in one state.
+                            title={rest.title}
                             icon={<ChevronDown16Regular />}
                             iconPosition="after"
                           >
@@ -257,7 +264,17 @@ export function Ribbon({ tabs, defaultTabId, commandSearch }: Props) {
                       size="small"
                       onClick={onClick}
                       disabled={dead || disabled}
-                      title={dead ? `${label} — not wired in this editor` : undefined}
+                      // #3673 — this branch used to read
+                      //   title={dead ? `${label} — not wired…` : undefined}
+                      // so an action that set `disabled: true` AND supplied a
+                      // `title` explaining WHY got `undefined`: `dead` is false
+                      // whenever `disabled` is true, and the author's own
+                      // explanation was discarded. Every editor that grays a
+                      // button out lost its tooltip. Author-supplied `title`
+                      // now always wins; the "not wired" string stays as the
+                      // fallback for the honest-dead case. Same precedence the
+                      // MenuItem branch below already used (`mi.title ?? …`).
+                      title={rest.title ?? (dead ? `${label} — not wired in this editor` : undefined)}
                       icon={rest.icon}
                     >
                       {label}
