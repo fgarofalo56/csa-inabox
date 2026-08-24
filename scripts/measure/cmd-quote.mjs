@@ -14,6 +14,21 @@
  *     `spawnSync` sink and is exported — an exported parameter is an external
  *     taint source, and the combination explodes the search. Keeping the sink
  *     and the string-building in separate modules is also just better shape.
+ *
+ *     CORRECTION, measured 2026-08-24: separating the modules was NOT
+ *     sufficient. `Analyze (javascript-typescript)` failed 3/3 on
+ *     `fix/3971-measure-allowlist-bypass` with this split already in place —
+ *     same query, same `Stage4::FwdFlowInThrough`, same 600s exit 33. The
+ *     module split is still worth keeping for reason 1, but it did not fix
+ *     termination and the paragraph above should not be read as saying it did.
+ *     The construct that actually correlates is the map/join in `buildCmdLine`
+ *     — see the note there.
+ *
+ *     Why this matters more than a red check: when `run-queries` exits 33 it
+ *     discards ALL 104 results, and the action still uploads a 0-rules SARIF.
+ *     GitHub does not retire alerts from an empty upload, so the JS/TS alert
+ *     list FREEZES at the last real scan while continuing to read as current.
+ *     The silent freeze is the harm, not the failing job.
  */
 
 export class CmdQuoteError extends Error {
@@ -77,9 +92,26 @@ export function quoteForCmd(arg) {
   return `"${escaped}"`;
 }
 
-/** Join a resolved binary and its arguments into one quoted cmd.exe line. */
+/**
+ * Join a resolved binary and its arguments into one quoted cmd.exe line.
+ *
+ * Written as an explicit loop rather than `[file, ...args].map(quoteForCmd)
+ * .join(' ')`. The two forms are semantically identical; the loop is here for
+ * the analyser, not the runtime. Spreading argv into an array literal, mapping
+ * it through a higher-order function and joining the result is the one
+ * construct present on every branch where `js/indirect-command-line-injection`
+ * stopped terminating inside its 600s per-query budget, and it is the construct
+ * whose removal from `scripts/ci/estate-live-probe.mjs` turned that branch from
+ * red to green in a one-file diff (4f1aacd6 -> 249f81ea).
+ *
+ * Do not "simplify" this back to a map/join.
+ */
 export function buildCmdLine(file, args) {
-  return [String(file).replace(/\//g, '\\'), ...args].map(quoteForCmd).join(' ');
+  let line = quoteForCmd(String(file).replace(/\//g, '\\'));
+  for (let i = 0; i < args.length; i += 1) {
+    line += ' ' + quoteForCmd(args[i]);
+  }
+  return line;
 }
 
 /**
