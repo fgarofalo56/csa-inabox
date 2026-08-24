@@ -104,6 +104,27 @@ export function buildSecurityGraphArtifact(input: BuildInput): SecurityGraphArti
   const skipped: SkippedSubject[] = [];
   const scanScopes: ScanScopeReport[] = [];
 
+  // ── DETERMINISM IS A CORRECTNESS PROPERTY HERE, NOT A NICETY ──────────
+  //
+  // The artifact is COMMITTED, and CI re-runs this extractor to prove the
+  // committed bytes still describe the tree. That comparison is over the graph,
+  // so node ORDER is part of the artifact's identity.
+  //
+  // The caller walks the filesystem, and `readdirSync` returns entries in an
+  // OS-dependent order: a Windows checkout and an ubuntu-latest runner enumerate
+  // the same directory differently — measured, the first divergence was
+  // `access-governance/reviews/route.ts` vs `access-governance/reviews/[id]/…`,
+  // i.e. where a bracketed dynamic segment sorts. Without this sort the drift
+  // gate reports DRIFT on every CI run for an artifact whose CONTENT is
+  // identical, which would train everyone to ignore it — a gate that cries wolf
+  // is worse than no gate.
+  //
+  // Sorted here rather than in the CLI so the property holds for every caller,
+  // and by the same comparison `inputsDigest` already uses.
+  const files = [...input.files].sort((a, b) =>
+    a.path < b.path ? -1 : a.path > b.path ? 1 : 0,
+  );
+
   const allowlistPrefixes = input.routeGuardSource
     ? parseAllowlistPrefixes(input.routeGuardSource)
     : [];
@@ -117,7 +138,7 @@ export function buildSecurityGraphArtifact(input: BuildInput): SecurityGraphArti
     });
   }
 
-  const routes = extractRouteNodes(input.files, allowlistPrefixes);
+  const routes = extractRouteNodes(files, allowlistPrefixes);
   scanScopes.push({
     scope: 'app/**/route.ts (console BFF routes)',
     filesMatched: routes.filesMatched,
@@ -125,7 +146,7 @@ export function buildSecurityGraphArtifact(input: BuildInput): SecurityGraphArti
   });
   skipped.push(...routes.skipped);
 
-  const scriptFiles = input.files.filter(
+  const scriptFiles = files.filter(
     (f) => f.path.startsWith('scripts/') || f.path.startsWith('.github/'),
   );
   const publications = extractPublicationNodes(scriptFiles);
@@ -187,8 +208,8 @@ export function buildSecurityGraphArtifact(input: BuildInput): SecurityGraphArti
       generatorVersion: GENERATOR_VERSION,
       generatedAt: input.now.toISOString(),
       commit: input.commit,
-      inputsDigest: inputsDigest(input.files),
-      filesScanned: input.files.length,
+      inputsDigest: inputsDigest(files),
+      filesScanned: files.length,
       scanScopes,
       skipped,
     },
