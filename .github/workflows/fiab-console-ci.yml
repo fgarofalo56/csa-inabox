@@ -546,3 +546,44 @@ jobs:
           node-version: '20'
       - name: 'Discover and run every node:test suite'
         run: node scripts/ci/check-node-test-suites.mjs
+
+  # ── THE SECURITY GRAPH IS A BUILD ARTIFACT, SO ITS FRESHNESS IS A GATE ────
+  #
+  # `apps/fiab-console/lib/brain/security/**` is nine detectors over a
+  # `SecurityGraph` whose facts are about SOURCE. The deployed console reads
+  # Azure Resource Graph and has no checkout of the repo it was built from, so
+  # the graph is extracted at build time and COMMITTED, then imported statically
+  # into the image (which is also what makes it cloud-neutral — no endpoint, no
+  # env var, no per-boundary path).
+  #
+  # A committed artifact can go stale, and a stale security graph rendered as a
+  # current verdict is the exact "UNKNOWN reported as a NEGATIVE" defect this
+  # repo has shipped before. At RUNTIME the console cannot recompute anything —
+  # there is no checkout — so it can only fall back to an age check. THIS job is
+  # the real backstop: it re-runs the extractor and fails if the committed
+  # artifact does not match the tree.
+  #
+  # The comparison is over the GRAPH AND JOIN, not the inputs digest. Measured
+  # 2026-08-24: fixing the generic-call matcher moved the node count 905 -> 908
+  # with a BYTE-IDENTICAL digest, so a digest-only check would have called a
+  # stale artifact current. Extractor drift and input drift both have to fail.
+  #
+  # No `continue-on-error`, no `|| true`, no `2>/dev/null`: a drift gate whose
+  # result can be discarded is not a gate.
+  security-graph-artifact:
+    name: 'brain security graph — committed artifact matches the tree'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
+      - name: Use Node.js 20
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '20'
+      - name: Install pnpm
+        run: npm install -g pnpm@9
+      - name: Install console dependencies (the extractor compiles with tsc)
+        run: pnpm install --no-frozen-lockfile
+        working-directory: apps/fiab-console
+      - name: 'Re-extract and refuse drift'
+        run: node scripts/brain/extract-security-graph.mjs --check
