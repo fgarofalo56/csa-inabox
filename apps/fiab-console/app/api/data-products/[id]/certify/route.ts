@@ -35,6 +35,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { auditLogContainer } from '@/lib/azure/cosmos-client';
 import { loadOwnedItem, updateOwnedItem, jerr } from '@/app/api/items/_lib/item-crud';
 import { upsertDataProductDoc, docForDataProduct } from '@/lib/azure/loom-data-products-search';
+import { resolveDataProductDocTenant } from '@/lib/dataproducts/owner-tenant';
 import {
   evaluateCertification, deriveCertificationState, gatherCertInputs,
   type CertificationRecord,
@@ -93,7 +94,11 @@ export const POST = withSession<{ id: string }>(async (req: NextRequest, { sessi
       });
       if (!updated) return jerr('Cosmos write failed', 500);
       void writeAudit(id, `data-product-${action}d`, session.claims.oid, session.claims.upn);
-      try { await upsertDataProductDoc(docForDataProduct(updated, session.claims.oid)); } catch { /* derived */ }
+      try {
+        // #3501 — the OWNER's tenant, not the caller's (see owner-tenant.ts).
+        const ownerTid = await resolveDataProductDocTenant(updated);
+        if (ownerTid) await upsertDataProductDoc(docForDataProduct(updated, ownerTid));
+      } catch { /* derived */ }
       return NextResponse.json({ ok: true, endorsed });
     }
 
@@ -123,7 +128,11 @@ export const POST = withSession<{ id: string }>(async (req: NextRequest, { sessi
       void writeAudit(id, 'data-product-dq-measured', session.claims.oid, session.claims.upn,
         `score=${dq.dqScore ?? 'null'} rules=${dq.dqResult?.passingRules ?? 0}/${dq.dqResult?.ruleCount ?? 0} state=${patch.certificationState}`);
       // Re-project discovery so the pill and the tab cannot disagree.
-      try { await upsertDataProductDoc(docForDataProduct(updated, session.claims.oid)); } catch { /* derived */ }
+      try {
+        // #3501 — the OWNER's tenant, not the caller's (see owner-tenant.ts).
+        const ownerTid = await resolveDataProductDocTenant(updated);
+        if (ownerTid) await upsertDataProductDoc(docForDataProduct(updated, ownerTid));
+      } catch { /* derived */ }
       return NextResponse.json({
         ok: true,
         certification: { state: patch.certificationState, score: evaluation.score },
@@ -162,7 +171,11 @@ export const POST = withSession<{ id: string }>(async (req: NextRequest, { sessi
       });
       if (!updated) return jerr('Cosmos write failed', 500);
       void writeAudit(id, 'data-product-cert-revoked', session.claims.oid, session.claims.upn);
-      try { await upsertDataProductDoc(docForDataProduct(updated, session.claims.oid)); } catch { /* derived */ }
+      try {
+        // #3501 — the OWNER's tenant, not the caller's (see owner-tenant.ts).
+        const ownerTid = await resolveDataProductDocTenant(updated);
+        if (ownerTid) await upsertDataProductDoc(docForDataProduct(updated, ownerTid));
+      } catch { /* derived */ }
       return NextResponse.json({ ok: true, certification: record });
     }
 
@@ -220,7 +233,11 @@ export const POST = withSession<{ id: string }>(async (req: NextRequest, { sessi
     if (!updated) return jerr('Cosmos write to record certification failed', 500);
     void writeAudit(id, 'data-product-certified', session.claims.oid, session.claims.upn,
       `score=${evaluation.score}`);
-    try { await upsertDataProductDoc(docForDataProduct(updated, session.claims.oid)); } catch { /* derived */ }
+    try {
+      // #3501 — the OWNER's tenant, not the caller's (see owner-tenant.ts).
+      const ownerTid = await resolveDataProductDocTenant(updated);
+      if (ownerTid) await upsertDataProductDoc(docForDataProduct(updated, ownerTid));
+    } catch { /* derived */ }
 
     return NextResponse.json({ ok: true, certification: record, checks: evaluation.checks });
   } catch (e: any) {

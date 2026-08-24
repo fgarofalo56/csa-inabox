@@ -207,11 +207,38 @@ export function PerfRecommendationsCard() {
       {loading ? (
         <Spinner label="Measuring live signals…" />
       ) : !recs || recs.length === 0 ? (
-        <EmptyState
-          icon={<CheckmarkCircle20Regular />}
-          title="No recommendations — everything is inside its bars"
-          body="Every measured signal (pool miss rate, cache hit-rate, queue depth, SLO burn, benchmark p95) is currently within target. Cards appear here the moment a real signal breaches its threshold."
-        />
+        /* #3733 (a) — `load()` never calls setRecs on failure, so `recs` stayed
+           null and the "everything is inside its bars" EmptyState rendered
+           DIRECTLY UNDER the red error bar above. A derivation that did not run
+           establishes nothing about the estate's performance; the error bar is
+           the whole truth in that state.
+
+           The `err` test is INSIDE the empty branch on purpose. `err` is also
+           set by apply() — a 403 sets "Tenant admin required to apply
+           performance changes." while real cards are on screen. Testing `err`
+           one level up would blank a populated, correct list because an apply
+           was denied, trading this defect for a worse one. */
+        err ? null : (
+          <EmptyState
+            icon={<CheckmarkCircle20Regular />}
+            /* #3733 (b) — the old copy ("No recommendations — everything is
+               inside its bars" / "Every measured signal … is currently within
+               target") asserted something this card cannot know and that the
+               rest of the page routinely contradicts. `deriveRecommendations`
+               emits a card ONLY when a breach ALSO has a remedy left inside its
+               admin bound: rule 7 requires
+               `cache.ttlMs < bounds['cache-ttl'].max*1000` and rule 11 requires
+               `nextIdx <= bounds['warehouse-scale'].max`. At the bound, a real
+               breach — cache hit-rate 9% against a 60% target, warehouse p95
+               5.40s against a 1.00s bar — yields zero cards and the operator
+               was told everything was fine. Zero cards means "nothing left to
+               auto-apply", not "nothing is wrong", and that is now what it
+               says. */
+            title="No actionable recommendations"
+            body="Nothing here can be auto-applied right now. That is not the same as everything being within target: a signal that HAS breached still produces no card when the only remedy left would exceed its admin bound (for example a cache TTL or DWU tier already at its ceiling). Check the measured signals on this page — and the Auto-adjust bounds — before reading this as healthy."
+            primaryAction={{ label: 'Review auto-adjust bounds', href: '/admin/performance#auto-adjust' }}
+          />
+        )
       ) : (
         <div className={styles.list}>
           {recs.map((rec) => {

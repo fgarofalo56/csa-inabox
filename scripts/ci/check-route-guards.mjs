@@ -1859,6 +1859,45 @@ for (const [p, reason] of [
   ['apps/fiab-console/app/api/marketplace/subscriptions/[sid]/route.ts', 'APIM subscription detail over the deployment APIM gateway via Console UAMI (shared backend)'],
   ['apps/fiab-console/app/api/marketplace/subscriptions/[sid]/keys/route.ts', 'APIM subscription keys over the deployment APIM gateway via Console UAMI (shared backend)'],
   ['apps/fiab-console/app/api/marketplace/subscriptions/[sid]/keys/regenerate/route.ts', 'APIM subscription key regenerate over the deployment APIM gateway via Console UAMI (shared backend)'],
+
+  // ── #3607 — SPLITTING `app/api/setup/` ──────────────────────────────────
+  //
+  // The class prefix reads "A: first-run setup/scan over ARM (subscription/
+  // topology discovery) via Console UAMI". Twelve routes depend on it for their
+  // clean verdict, and it is TRUE of most of them. It is not true of these
+  // three, which inherited it silently — and inheriting a reason that does not
+  // describe you is the state CHECK 3B now catches (for the POST) and the state
+  // #3572 fixed by narrowing `app/api/storage/`.
+  //
+  // Each gets a reason that is true of IT, so it is individually justified and
+  // individually re-testable. None of this changes what the routes do or what
+  // authorization they carry: they were already excused, by a sentence that was
+  // wrong. The security posture is identical; the RECORD is now accurate.
+
+  // Caught mechanically by CHECK 3B: the class reason says "scan", this is a
+  // POST. Read: the verb carries a `{ boundary, targets[] }` body, and the
+  // handler's only outbound call is the READ-ONLY ARM Compute usages GET
+  // (`…/Microsoft.Compute/locations/{loc}/usages`) via the Console UAMI with
+  // Reader. It mutates nothing.
+  //
+  // STATED, NOT SETTLED (R7): the target subscription ids come from the CALLER
+  // and are read with the CONSOLE's identity, so a caller can learn whether a
+  // subscription id exists and what its vCPU usage is. Whether that is an
+  // acceptable oracle is an authorization question about the setup wizard, not
+  // something this entry establishes — it is routed to the lane that owns
+  // app/api/setup/**, and is recorded here rather than papered over.
+  ['apps/fiab-console/app/api/setup/quota-preflight/route.ts', 'a POST that MUTATES NOTHING: the verb carries a { boundary, targets[] } list in the body and the handler only reads the ARM Compute usages API (Reader) via the Console UAMI. NOT covered by the class reason\'s "scan over ARM" wording, which describes a GET; the caller-supplied-subscription oracle question is recorded in check-route-guards.mjs and routed, not resolved here'],
+
+  // The class reason says "over ARM … via Console UAMI". This route does not
+  // touch ARM: it calls `https://api.github.com/repos/{owner}/{repo}/actions/
+  // workflows/{file}/runs` with `LOOM_GITHUB_ACTIONS_TOKEN`. A reason naming
+  // the wrong backend cannot be re-tested against the code, which is the whole
+  // point of recording one.
+  ['apps/fiab-console/app/api/setup/workflow-run-status/route.ts', 'read-only poll of the deployment repo\'s GitHub Actions run status via api.github.com with LOOM_GITHUB_ACTIONS_TOKEN — a deployment-wide CI status read, NOT an ARM call and NOT the Console UAMI, so the app/api/setup/ class reason does not describe it'],
+
+  // Same: not ARM. A server-to-server proxy to the orchestrator over the
+  // CAE-internal ingress with `Bearer LOOM_INTERNAL_TOKEN`.
+  ['apps/fiab-console/app/api/setup/deploy-status/route.ts', 'read-only proxy to the deployment orchestrator over the CAE-internal ingress with Bearer LOOM_INTERNAL_TOKEN — deployment-wide status, NOT an ARM call via the Console UAMI, so the app/api/setup/ class reason does not describe it'],
 ]) {
   // A HAND-WRITTEN REASON OVERRIDES THE CLASS DEFAULT. This used to be
   // `if (!ALLOWLIST.has(p))`, which meant a reason written here for a route the
@@ -2357,6 +2396,86 @@ function falsifiedSharedBackendPremise(r, src, gaps, scopedTypes) {
   return gaps.filter((h) => ROUTE_PARAM_USE_RE.test(texts.get(h) || ''));
 }
 
+// ── CHECK 3B — the PREFIX premise (#3607) ────────────────────────────────────
+//
+// THE GAP CHECK 3 LEFT OPEN. `falsifiedSharedBackendPremise` above returns `[]`
+// before doing any work unless the route matches `ITEM_TYPE_DIR_RE`. So the
+// mechanical premise re-test — the whole answer to GHSA-hf73-rp4q-66pf, "an
+// allowlist entry is a claim about the code, so test it rather than trust it" —
+// covered PER-ROUTE item entries and left CLASS PREFIXES entirely untested.
+//
+// That is the exact shape of the GHSA-fj7j-qq8g-hqj8 incident: the vulnerable
+// route sat under a blanket class prefix and this checker reported
+// `violations: 0` throughout. A class prefix is a BROADER claim than a
+// per-route reason — it asserts something about every route under it, including
+// routes written years after the reason was — so it needed MORE re-testing, and
+// got none.
+//
+// WHAT IS MECHANICALLY ESTABLISHABLE, and what is not (R7 — this file does not
+// assert what it cannot show). A reason is prose; most of it cannot be checked
+// against code. But a reason that claims a READ-ONLY or DISCOVERY posture makes
+// a falsifiable claim about the HTTP verbs underneath it, and that one can be
+// tested exactly: if a load-bearing route under the prefix exposes an unguarded
+// MUTATING handler, the prefix's stated reason is not true of it. Nothing here
+// claims the route is exploitable — it claims the RECORDED REASON does not
+// describe it, which is the thing an allowlist entry is supposed to do.
+//
+// The remedy is never to widen the prefix. It is either to narrow the prefix,
+// or to give the route its own per-route reason that IS true of it — the same
+// remedy CHECK 3 already prescribes, and the same one #3572 applied when
+// `app/api/storage/` was narrowed to `app/api/storage/accounts/`.
+
+const MUTATING_HANDLERS = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
+
+/**
+ * A prefix reason that claims a read-only / discovery posture.
+ *
+ * DELIBERATELY NARROW, and narrowed once already against a measurement. The
+ * first cut also matched `metadata` and searched the WHOLE reason string, and it
+ * returned 8 findings — but three of them were `app/api/loom/`, whose reason
+ * says "discovery" only inside a trailing NOTE about ONE sub-route
+ * (model-serving/endpoints), and four were `app/api/catalog/`, whose "federated
+ * catalog metadata" describes the DATA rather than claiming the prefix is
+ * read-only. Neither is a contradiction, and a checker that reports one it
+ * cannot substantiate is how a checker gets switched off (R7).
+ *
+ * So: only the reason's LEADING CLAUSE is the class claim — everything before
+ * the first em-dash, parenthetical aside or `NOTE`, which is where these entries
+ * state their posture — and `metadata` is not in the vocabulary. `navigator` is
+ * not either: a navigator over a shared Azure backend legitimately creates and
+ * updates objects in that backend.
+ */
+const READ_ONLY_CLAIM_RE = /\bread-only\b|\bscan\b|\bdiscovery\b/i;
+
+/** The part of a reason that states the class claim, before any aside. */
+function reasonClaim(reason) {
+  return String(reason).split(/—|\bNOTE\b/)[0];
+}
+
+/** The ALLOWLIST_PREFIXES entry excusing `r`, or null. */
+function matchingPrefix(r) {
+  for (const entry of ALLOWLIST_PREFIXES) if (r.startsWith(entry[0])) return entry;
+  return null;
+}
+
+/**
+ * @returns {{prefix:string, reason:string, verbs:string[]}|null} — non-null when
+ * the prefix's recorded reason claims a read-only/discovery posture and the
+ * route is load-bearing on it with an unguarded mutating handler.
+ */
+function falsifiedPrefixPremise(r, gaps) {
+  // A hand-written per-route reason overrides the class default — the route has
+  // then been individually justified and the class claim is not what excuses it.
+  if (ALLOWLIST.has(r)) return null;
+  const entry = matchingPrefix(r);
+  if (!entry) return null;
+  const [prefix, reason] = entry;
+  if (!READ_ONLY_CLAIM_RE.test(reasonClaim(reason))) return null;
+  const verbs = gaps.filter((h) => MUTATING_HANDLERS.has(h));
+  if (!verbs.length) return null;
+  return { prefix, reason, verbs };
+}
+
 
 
 /** How many returned-value gate CALLS a file makes (comment/string-stripped, so
@@ -2839,6 +2958,139 @@ const PREMISE_PROBE = {
   to: '  if (denied) return denied;',
 };
 
+/**
+ * SENSITIVITY PROBE FOR CHECK 3B (#3607) — same contract as the CHECK 3 probe
+ * above, and for the same reason: CHECK 3B now reports 0, and a zero from a
+ * check that has stopped checking is worth nothing.
+ *
+ * It reproduces the PRE-#3607 state in memory: take a route that is genuinely
+ * under a read-only-claiming class prefix and genuinely exposes an unguarded
+ * mutating handler, remove the per-route reason that was written for it, and
+ * assert BOTH halves of the finding —
+ *
+ *   1. `isAllowed` still returns TRUE (the prefix excuses it), so CHECK 2 stays
+ *      GREEN on it. If CHECK 2 caught it, the probe would not be reproducing
+ *      the shape that made this class survive.
+ *   2. `falsifiedPrefixPremise` FIRES on the mutating verb.
+ *
+ * An anchor that no longer matches is a FAILURE, never a skip. If
+ * `quota-preflight` is ever graduated to a real guard, or the `app/api/setup/`
+ * reason stops claiming a scan/discovery posture, this probe must be re-pointed
+ * at another prefix/route pair that still reproduces the shape — not deleted.
+ */
+const PREFIX_PREMISE_PROBE = {
+  route: 'apps/fiab-console/app/api/setup/quota-preflight/route.ts',
+  prefix: 'apps/fiab-console/app/api/setup/',
+  handler: 'POST',
+};
+
+/**
+ * The ALLOWLIST_PREFIXES entries CHECK 3B can actually reach — the ones whose
+ * class reason claims a read-only/scan/discovery posture. Every other prefix is
+ * outside the check by construction, so this, not 35, is its population.
+ */
+export function readOnlyClaimingPrefixes() {
+  return ALLOWLIST_PREFIXES.filter(([, reason]) => READ_ONLY_CLAIM_RE.test(reasonClaim(reason)));
+}
+
+/**
+ * POPULATION FLOOR for CHECK 3B (independent review of #3928).
+ *
+ * CHECK 3B reaches 2 of the 35 class prefixes — `app/api/setup/` and
+ * `app/api/copilot/`; the other 33 say "navigator", which is deliberately
+ * outside the vocabulary. Live findings are 0, and the sensitivity probe above
+ * anchors `setup/` ONLY. Measured: deleting the two words "read-only" from the
+ * `copilot/` reason left the guard at RC=0 with every probe still printing
+ * "passed" — half the check's population removed, in silence.
+ *
+ * A guard over a shrinking population is the failure this repo has recorded
+ * more than any other, so the population is asserted rather than assumed. This
+ * is NOT a licence to raise the number to match a future reading: if a prefix
+ * legitimately stops claiming a read-only posture, the fix is to re-point the
+ * probe (see PREFIX_PREMISE_PROBE) — never to lower the floor.
+ */
+const CHECK_3B_PREFIX_FLOOR = 2;
+
+function assertPrefixPremisePopulation() {
+  const claiming = readOnlyClaimingPrefixes();
+  if (claiming.length < CHECK_3B_PREFIX_FLOOR) {
+    console.error(
+      `\n[route-guards] FAIL — CHECK 3B's population fell to ${claiming.length} `
+      + `read-only-claiming class prefix(es); the floor is ${CHECK_3B_PREFIX_FLOOR}. A check that reaches `
+      + 'nothing reports 0 findings and means nothing by it. Re-point the probe at a prefix that still '
+      + 'claims the posture; do NOT lower this floor.',
+    );
+    for (const [p, reason] of ALLOWLIST_PREFIXES) console.error(`  - ${p} :: ${reason}`);
+    process.exit(1);
+  }
+  console.log(
+    `[route-guards] CHECK 3B population: ${claiming.length} read-only-claiming class prefix(es) of `
+    + `${ALLOWLIST_PREFIXES.length} (floor ${CHECK_3B_PREFIX_FLOOR}) — `
+    + claiming.map(([p]) => p).join(', '),
+  );
+}
+
+function assertPrefixPremiseTestIsSensitive() {
+  const bad = [];
+  const p = PREFIX_PREMISE_PROBE;
+  const full = path.join(REPO_ROOT, p.route);
+  const entry = ALLOWLIST_PREFIXES.find((e) => e[0] === p.prefix);
+  if (!fs.existsSync(full)) {
+    bad.push(`prefix-premise probe: target ${p.route} no longer exists. Re-point it; do NOT delete it.`);
+  } else if (!entry) {
+    bad.push(
+      `prefix-premise probe: the class prefix ${p.prefix} is gone from ALLOWLIST_PREFIXES, so the probe `
+      + 'can no longer reproduce an inherited class reason. Re-point it at another prefix.',
+    );
+  } else if (!READ_ONLY_CLAIM_RE.test(reasonClaim(entry[1]))) {
+    bad.push(
+      `prefix-premise probe: ${p.prefix}'s reason no longer claims a read-only/scan/discovery posture, `
+      + 'so CHECK 3B cannot be exercised through it. Re-point the probe at a prefix that does.',
+    );
+  } else {
+    const src = stripImportStatements(stripCommentsAndStrings(fs.readFileSync(full, 'utf8')));
+    const gaps = unguardedHandlers(src, NOW_GUARDED.has(p.route), STRONG_SIGNAL_EXEMPT.get(p.route));
+    if (!gaps.includes(p.handler)) {
+      bad.push(
+        `prefix-premise probe: ${p.handler} in ${p.route} is no longer an unguarded handler `
+        + `(flagged: ${gaps.length ? gaps.join(', ') : 'nothing'}), so CHECK 3B has nothing to fire on here. `
+        + 'If the route grew a real guard that is good news — re-point the probe at another mutating '
+        + 'route under a read-only-claiming prefix.',
+      );
+    } else {
+      // Remove the per-route reason written for it in #3607, putting it back
+      // under the bare class prefix — the state every one of these routes was in.
+      const priorEntry = ALLOWLIST.get(p.route);
+      ALLOWLIST.delete(p.route);
+      const allowed = isAllowed(p.route, gaps);
+      const falsified = falsifiedPrefixPremise(p.route, gaps);
+      if (priorEntry === undefined) ALLOWLIST.delete(p.route);
+      else ALLOWLIST.set(p.route, priorEntry);
+
+      if (!allowed) {
+        bad.push(
+          'prefix-premise probe: with its per-route reason removed the route was NOT excused by the '
+          + 'class prefix, so this probe no longer reproduces the shape CHECK 3B exists for '
+          + '(CHECK 2 would have caught it anyway).',
+        );
+      } else if (!falsified || !falsified.verbs.includes(p.handler)) {
+        bad.push(
+          `prefix-premise probe: ${p.route} inherited a class reason claiming a scan/discovery posture, `
+          + `exposes an unguarded ${p.handler}, the prefix excused it, and CHECK 3B STILL PASSED it. `
+          + 'That is the exact state every class prefix was in before #3607 — including the one the '
+          + 'GHSA-fj7j-qq8g-hqj8 route sat under while this file reported violations: 0.',
+        );
+      }
+    }
+  }
+  if (bad.length) {
+    console.error('\n[route-guards] FAIL — CHECK 3B cannot demonstrate that it fires:');
+    for (const b of bad) console.error(`  - ${b}`);
+    process.exit(1);
+  }
+  console.log('[route-guards] prefix-premise probe passed: a mutating route under a read-only class prefix is caught by CHECK 3B (CHECK 2 stays green on it)');
+}
+
 function assertPremiseTestIsSensitive(scopedTypes) {
   const bad = [];
   const full = path.join(REPO_ROOT, PREMISE_PROBE.route);
@@ -2922,11 +3174,14 @@ function main() {
   const discarded = [];
   // CHECK 3 — an allowlist entry whose PREMISE is false (GHSA-hf73-rp4q-66pf).
   const falsePremises = [];
+  const falsePrefixPremises = [];
   // Item types whose `[id]` is PROVABLY an ownable Loom item, because some route
   // under that type already resolves it as one. Derived from the tree so the
   // premise test re-keys itself the moment a sibling adopts an owner check.
   const scopedTypes = itemTypesWithOwnedIdSiblings(uniqueFiles);
   assertPremiseTestIsSensitive(scopedTypes);
+  assertPrefixPremisePopulation();
+  assertPrefixPremiseTestIsSensitive();
   let scanned = 0;
   let allowlistedHits = 0;
   let gateCalls = 0;
@@ -2989,6 +3244,10 @@ function main() {
       // handler pass), so its premise is re-tested rather than trusted.
       const falsified = falsifiedSharedBackendPremise(r, src, gaps, scopedTypes);
       if (falsified.length) falsePremises.push(`${r}  [${falsified.join(', ')}]`);
+      // CHECK 3B (#3607) — the same treatment for a CLASS PREFIX, which until
+      // now was the one kind of allowlist entry never premise-tested at all.
+      const pf = falsifiedPrefixPremise(r, gaps);
+      if (pf) falsePrefixPremises.push({ route: r, ...pf });
       continue; // intentional shared/session/self route
     }
     violations.push(`${r}  [${gaps.join(', ')}]`);
@@ -2999,9 +3258,37 @@ function main() {
   console.log(`[route-guards] returned-value gate calls checked for consumption: ${gateCalls} (${RETURNED_VALUE_GATES.join(', ')})`);
   console.log(`[route-guards] gates whose answer is DISCARDED: ${discarded.length}`);
   console.log(`[route-guards] shared-backend allowlist entries whose OWNERSHIP premise is CONTRADICTED by a sibling: ${falsePremises.length}`);
+  console.log(`[route-guards] CLASS-PREFIX entries whose read-only/discovery premise is CONTRADICTED by a mutating handler: ${falsePrefixPremises.length}`);
   console.log(`[route-guards] violations: ${violations.length}`);
 
   let failed = false;
+
+  if (falsePrefixPremises.length) {
+    failed = true;
+    console.error('\n[route-guards] FAIL — these routes are excused ONLY by a CLASS PREFIX whose recorded');
+    console.error('reason claims a read-only / scan / discovery posture, and they expose an UNGUARDED');
+    console.error('MUTATING handler. A class prefix asserts something about every route beneath it,');
+    console.error('including routes written long after the reason was — so it is a BROADER claim than a');
+    console.error('per-route reason and needs more re-testing, not less. Until #3607 it got none:');
+    console.error('CHECK 3 returned early on anything outside `items/<type>/[id]/`, which is exactly how');
+    console.error('the GHSA-fj7j-qq8g-hqj8 route sat under a blanket prefix while this file reported');
+    console.error('`violations: 0`.');
+    for (const p of falsePrefixPremises) {
+      console.error(`  - ${p.route}  [${p.verbs.join(', ')}]`);
+      console.error(`      prefix: ${p.prefix}`);
+      console.error(`      reason: ${p.reason.slice(0, 150)}`);
+    }
+    console.error('\nThis does NOT claim the route is exploitable. It claims the RECORDED REASON does not');
+    console.error('describe it, which is the one job an allowlist entry has.');
+    console.error('\nFix, in order of preference:');
+    console.error('  1. NARROW the prefix so the mutating route is no longer covered by it, and let the');
+    console.error('     route pass on its own guard (what #3572 did to `app/api/storage/`); or');
+    console.error('  2. give the route its OWN per-route reason in the ALLOWLIST map that is TRUE of a');
+    console.error('     mutating handler — then it is individually justified and individually re-testable; or');
+    console.error('  3. thread a real authorization check and move it to NOW_GUARDED.');
+    console.error('  Do NOT widen the class reason to cover the mutation. A reason that has been stretched');
+    console.error('  to fit its members has stopped being a claim about the code.');
+  }
 
   if (falsePremises.length) {
     failed = true;

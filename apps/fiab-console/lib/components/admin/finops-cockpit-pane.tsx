@@ -315,6 +315,13 @@ export function FinopsCockpitPane() {
               <div className={styles.pane}>
                 <Caption1 className={styles.tileLabel}>Live feed — detected against the real daily series</Caption1>
                 {anomaliesQ.isLoading ? <Spinner size="tiny" /> :
+                  /* #3739 — the QueryErrorBar above already says the read did not
+                     complete ("An empty feed below would be misleading"). Falling
+                     through to the EmptyState made this pane assert, two lines
+                     under its own disclaimer, that every scope's spend is within
+                     range — a claim a 504 never established (deploy-integrity R7).
+                     Matches the forecast/breakdown panels, which already do this. */
+                  readState(anomaliesQ).isError ? null :
                   feed.length ? (
                     <div className={styles.scroll}>
                       <Table size="small" aria-label="Anomaly feed">
@@ -384,6 +391,12 @@ export function FinopsCockpitPane() {
             reassurance="Existing budgets are unchanged — they could not be listed." />
           {budgetsQ.data?.gate && <GateBar gate={budgetsQ.data.gate} />}
           {budgetsQ.isLoading ? <Spinner label="Loading budgets…" /> :
+            /* #3739 — same defect as the anomaly feed: a failed list read fell
+               through to "No budgets yet", which is a statement about the
+               customer's Azure Consumption budgets that the read never made.
+               The QueryErrorBar above carries the truth ("Existing budgets are
+               unchanged — they could not be listed"). */
+            readState(budgetsQ).isError ? null :
             budgets.length ? (
               <div className={styles.scroll}>
                 <Table aria-label="Budgets">

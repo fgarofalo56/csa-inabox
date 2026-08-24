@@ -30,7 +30,8 @@
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync, writeFileSync, rmSync, existsSync } from 'node:fs';
+import { readFileSync, writeFileSync, rmSync, existsSync, mkdtempSync, realpathSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import {
@@ -44,6 +45,7 @@ import {
 import { WATCHED } from '../check-deploy-staleness.mjs';
 
 const CI_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+const REPO_ROOT = path.resolve(CI_DIR, '..', '..');
 
 // ---------------------------------------------------------------------------
 // extractDeploySources — only real execution counts, never a mention
@@ -113,6 +115,315 @@ test('CONTROL: `node -e` and a node path outside the source roots are NOT deploy
   assert.equal(extractDeploySources('          FILE=scripts/ci/deploy-retry.mjs\n').size, 0);
 });
 
+/**
+ * `from './x'` / `import './x'` / `import('./x')` — every RELATIVE specifier.
+ * Deliberately not keyed to the one import this guard has today: a second one
+ * added later must be rewritten too, or the mutant would resolve it against the
+ * temp directory and die with ERR_MODULE_NOT_FOUND instead of measuring.
+ */
+const REL_SPECIFIER = /\b(from|import)(\s*\(?\s*)(['"])(\.{1,2}\/[^'"]+)\3/g;
+
+/**
+ * The self-location family: constructs whose value depends on WHERE the module
+ * being executed sits, or on what path it was invoked by.
+ *
+ * Keyed to SHAPES, not to a list of spellings. The list it replaces was
+ * `/import\.meta\.url|__dirname/`, and `import.meta.dirname` matched NEITHER
+ * alternative. Measured, with that old pattern restored and the two-arm control
+ * run in isolation: a subject given `const SELF_DIR = import.meta.dirname;` left
+ * it at RC=0, pass=1, fail=0 — fully blind.
+ *
+ * And the blindness was harmful here, not cosmetic: a location-derived flag
+ * added to check-deploy-paths-coverage.mjs via `import.meta.dirname` made the
+ * two arms of the control below differ by LOCATION with NO mutation applied —
+ * in-tree returned one uncovered row, the temp copy returned none — which is
+ * precisely the confound this assertion exists to prevent.
+ *
+ * ── WHY `process.argv[1]` IS IN HERE, AND WHAT THAT COST TO LEARN ──────────
+ * An earlier revision of this comment claimed the pattern covered "every way an
+ * ES module can derive a path from its OWN location". It did not, and the claim
+ * was the R7 error this file exists to catch. `process.argv[1]` is the entry
+ * path — self-location by another name, and the DOMINANT idiom in this
+ * directory: measured this session, 109 files under `scripts/ci` contain it
+ * against 6 containing `import.meta.dirname`/`.filename`. Worse, the SUBJECT OF
+ * THIS VERY CONTROL is one of the 109 (see SELF_LOCATION_ALLOWED below), so the
+ * old assertion was green over a live counterexample, which is the strongest
+ * possible statement that it was not watching.
+ *
+ * NOT keyed to `.dirname(process.argv[1])` or any other narrower combination:
+ * the whole point of the miss above is that a shape list written from the uses
+ * one happens to have seen is the thing that goes blind.
+ */
+const LOCATION_DERIVED = /import\.meta|__dirname|__filename|process\.argv\s*\[\s*1\s*\]/;
+
+/**
+ * Every CODE line of `source` that carries a self-location construct.
+ *
+ * Line-scoped, and whole-line comments are dropped, because a comment cannot
+ * execute — `deploy-fiab-guard.mjs:92` MENTIONS `process.argv[1]` inside a block
+ * comment, and a whole-file `match()` cannot tell that from a live read.
+ *
+ * Deliberately a line heuristic and not a parser. It errs STRICT in the one
+ * direction that matters: a trailing `// …` on a line that also carries code is
+ * still reported, because that line is code.
+ */
+function selfLocationHits(source) {
+  const hits = [];
+  for (const line of source.split(/\r?\n/)) {
+    if (/^\s*(?:\/\/|\/\*|\*)/.test(line)) continue;
+    if (LOCATION_DERIVED.test(line)) hits.push(line.trim());
+  }
+  return hits;
+}
+
+/**
+ * The ONE self-location read check-deploy-paths-coverage.mjs genuinely makes,
+ * declared by its exact source text rather than tolerated by a loosened pattern.
+ *
+ * WHY IT IS SAFE, stated as the thing that must stay true rather than as a
+ * hope: it is a BASENAME comparison, not a directory derivation, and the mutant
+ * is written under the subject's real basename (asserted in
+ * writeMutantOutsideTheTree). So `endsWith(...)` returns the same answer for
+ * both arms wherever the file sits. It is also inert for this control's
+ * invocation mode — the mutant is `import()`ed, so `process.argv[1]` is the
+ * node:test runner either way and `invokedDirectly` is false in both arms —
+ * but that second reason is NOT the one being relied on, because an arm that
+ * later switches to a spawn would silently lose it.
+ *
+ * Pinned as exact text, so ANY edit to that line — including one that turns the
+ * basename test into a `path.dirname()` — drops out of the allowance and turns
+ * the assertion red rather than being waved through by a substring match.
+ */
+const SELF_LOCATION_ALLOWED = [
+  "const invokedDirectly = process.argv[1] && process.argv[1].endsWith('check-deploy-paths-coverage.mjs');",
+];
+
+/**
+ * Is `target` inside the repo tree?
+ *
+ * `path.relative()`, NOT `startsWith(path.resolve(REPO_ROOT) + path.sep)`,
+ * which is what this used to be. A prefix test compares strings
+ * CASE-SENSITIVELY and NTFS is case-INSENSITIVE, so `…\scripts\ci` and
+ * `…\SCRIPTS\CI` name the same directory while only one of them trips the
+ * prefix. Measured with the OLD prefix test restored and a poller sampling
+ * `scripts/ci` every 3ms: `mkdtempSync(CI_DIR.toLowerCase())` left the two-arm
+ * control at RC=0, pass=1, fail=0 while the poller OBSERVED
+ * `loom-guard-control-XXXXXX/check-deploy-paths-coverage.__control__.mjs`
+ * inside `scripts/ci` — a green run that put the artifact back in the scanned
+ * tree.
+ * `path.win32.relative()` lower-cases both sides before comparing, so it sees
+ * through that; the POSIX build is unaffected because there the two names
+ * really are different directories.
+ *
+ * realpathSync.native() first, so a junction or symlink whose target is inside
+ * the tree is resolved rather than taken at face value. It throws on a path
+ * that does not exist yet, so only the DIRECTORY is canonicalised and the
+ * basename is rejoined — canonicalising the full path directly would silently
+ * fall back to the uncanonicalised string for every not-yet-written file, i.e.
+ * for every call this function actually gets.
+ */
+function insideRepo(target) {
+  const canon = (p) => {
+    try { return realpathSync.native(p); } catch { return path.resolve(p); }
+  };
+  const abs = path.resolve(target);
+  const canonAbs = path.join(canon(path.dirname(abs)), path.basename(abs));
+  const rel = path.relative(canon(REPO_ROOT), canonAbs);
+  return rel !== '' && rel !== '..' && !rel.startsWith(`..${path.sep}`) && !path.isAbsolute(rel);
+}
+
+/**
+ * Assert `prefix` names a location OUTSIDE the repo tree, then return it.
+ *
+ * Wrapped around the mkdtemp argument rather than checked on the following
+ * line so the check runs BEFORE anything is created: a prefix pointed back at
+ * the tree then never creates a directory there at all. The assertion this
+ * replaces sat AFTER mkdtempSync, so it could only complain about a directory
+ * it had already made — and because it threw before `dir` was returned, the
+ * caller's `finally` never ran and a FIRING guard stranded the very artifact
+ * it exists to keep out of the tree.
+ *
+ * Inline for a second reason: check-temp-artifact-safety.mjs reads LINE BY
+ * LINE, so hoisting the `path.join(tmpdir(), …)` onto its own line reads to
+ * that guard as a constant shared-temp path with no mkdtemp. Keeping the join
+ * inside the mkdtempSync call keeps both guards honest.
+ */
+function outOfTree(prefix) {
+  assert.ok(
+    !insideRepo(`${prefix}probe`),
+    `the scratch root for the mutated copy is inside the repo tree (${prefix}) — a concurrent suite walks `
+      + 'scripts/ci and opens what it lists, so anything transient in there is a race',
+  );
+  return prefix;
+}
+
+test('EMBEDDED CONTROL — the location-independence pattern sees every spelling', () => {
+  // POPULATION. On a clean tree the assertion in the two-arm control below
+  // compares selfLocationHits() against a ONE-entry allowance, so it can only
+  // move if that one line changes and proves almost nothing about what the
+  // pattern can SEE. These fixtures are its population: 8 positive shapes, 5
+  // negatives, 3 comment-placement cases.
+  for (const shape of [
+    "const SELF_DIR = new URL('.', import.meta.url).pathname;",
+    'const SELF_DIR = import.meta.dirname;',
+    'const SELF_FILE = import.meta.filename;',
+    "const SIB = import.meta.resolve('./x.mjs');",
+    "const d = require('path').dirname(__filename);",
+    'const here = __dirname;',
+    // The spelling the old pattern was blind to, in the two forms this
+    // directory actually writes it.
+    "const invoked = process.argv[1] && process.argv[1].endsWith('x.mjs');",
+    'const selfDir = path.dirname(process.argv [ 1 ]);',
+  ]) {
+    assert.deepEqual(selfLocationHits(shape), [shape], `the pattern is blind to: ${shape}`);
+  }
+  for (const safe of [
+    'const root = process.cwd();',
+    "const p = path.resolve('a', 'b');",
+    'const importantMetadata = 1;',
+    "const flag = process.argv.includes('--check');",
+    'const rest = process.argv[2];',
+  ]) {
+    assert.deepEqual(selfLocationHits(safe), [], `the pattern over-matches: ${safe}`);
+  }
+
+  // Comment placement, both directions — this is the half that can silently
+  // turn the whole assertion into a no-op if the line filter is widened.
+  assert.deepEqual(selfLocationHits(' * that mis-resolves `process.argv[1]` would break it'), [],
+    'a whole-line block comment must NOT be reported — that is deploy-fiab-guard.mjs:92');
+  assert.deepEqual(selfLocationHits('// const here = __dirname;'), [],
+    'a whole-line // comment must NOT be reported');
+  assert.deepEqual(selfLocationHits('const here = __dirname; // still code'), ['const here = __dirname; // still code'],
+    'a CODE line with a trailing comment must still be reported — the filter must not read it as a comment line');
+
+  // The allowance must stay a BASENAME test. If someone rewrites that line into
+  // a directory derivation, the exact-text pin below drops it out of the
+  // allowance — but pin the property here too, so the reason the allowance
+  // exists is asserted rather than merely written down above it.
+  assert.equal(SELF_LOCATION_ALLOWED.length, 1, 'the allowance is meant to hold exactly one declared line');
+  assert.match(SELF_LOCATION_ALLOWED[0], /\.endsWith\(/, 'the allowed read must be a basename comparison');
+  assert.doesNotMatch(
+    SELF_LOCATION_ALLOWED[0],
+    /dirname|resolve|join|relative/,
+    'the allowed read must NOT build a directory from argv[1] — that would differ between the arms',
+  );
+});
+
+test('EMBEDDED CONTROL — the containment check is not fooled by case or a sibling prefix', () => {
+  // POPULATION. writeMutantOutsideTheTree() calls insideRepo() exactly once per
+  // run and, on a clean run, always gets `false` — so that call site can never
+  // exercise the true branch and proves nothing on its own. These fixtures are
+  // the population; three of them are the shapes that defeated the startsWith()
+  // this replaced.
+  assert.equal(insideRepo(path.join(CI_DIR, 'x.__control__.mjs')), true, 'an in-tree path must be seen');
+  // The system temp root itself, with no constructed child: a `path.join` onto
+  // `tmpdir()` on this line would read to check-temp-artifact-safety.mjs as a
+  // constant shared-temp artifact path, and this predicate never creates or
+  // writes anything. Non-existent paths are covered by the two cases below.
+  assert.equal(insideRepo(tmpdir()), false, 'the system temp root must be allowed');
+
+  // The sibling-directory trap: `startsWith(REPO_ROOT)` without a separator
+  // accepts `<repo>-other`, which is a different tree. This suite already pays
+  // for that exact trap in isCovered() — see the sibling-directory test below.
+  assert.equal(insideRepo(`${REPO_ROOT}-other${path.sep}x.mjs`), false, 'a sibling of the repo is not inside it');
+
+  // The case dodge. Whether the lower-cased path is the SAME directory is a
+  // property of the filesystem, so it is PROBED rather than assumed: on NTFS it
+  // is the same directory and containment must hold; on a case-sensitive
+  // filesystem it is genuinely a different path and `false` is the correct
+  // answer, not a miss. Probing also stays correct if the repo is checked out
+  // at an already-lower-case path, where the two arms collapse.
+  const loweredDir = CI_DIR.toLowerCase();
+  const sameDirWhenLowered = existsSync(loweredDir);
+  assert.equal(
+    insideRepo(path.join(loweredDir, 'x.__control__.mjs')),
+    sameDirWhenLowered,
+    'a case-folded in-tree path must be judged by whether the filesystem treats it as the same directory — '
+      + 'this is the exact dodge that put a *.__control__.mjs back into scripts/ci on a green run',
+  );
+});
+
+/**
+ * Write a mutated copy of a `scripts/ci` guard OUTSIDE the repo tree.
+ *
+ * ── WHY OUT OF TREE ────────────────────────────────────────────────────────
+ * The copy used to be written to
+ * `scripts/ci/check-deploy-paths-coverage.__control__.mjs` — i.e. INSIDE a
+ * directory another suite in the same `node --test` invocation walks.
+ * check-role-guid-consistency's scan() lists `scripts/ci` and then opens what
+ * it listed; node:test runs suites concurrently; so the listing could name this
+ * transient file and the open could land after the `finally` below had already
+ * removed it, reddening PRs that touch no JavaScript at all (#3892, run
+ * 32613872830). Reproduced locally at 1 run in 20. It is the #3459 class: a
+ * suite transiently writing where other tooling reads.
+ *
+ * A unique per-run NAME would NOT have fixed it — the scanner would still list
+ * the file and it would still vanish before the read. The cause is the
+ * LOCATION, so the copy leaves the scanned tree entirely.
+ *
+ * ── WHY THAT IS SAFE FOR THIS SUBJECT (measured, not assumed) ──────────────
+ * check-deploy-paths-coverage.mjs derives no path from its own location: no
+ * `import.meta.url`, no `__dirname`. It does read `process.cwd()`, and that is
+ * precisely why moving the FILE changes nothing — the mutant is `import()`ed
+ * in-process, so cwd is this run's cwd either way, and classifyEntry() judges
+ * the `text` it is handed rather than anything it reads from disk. Its only
+ * location dependency is the relative specifier `./check-deploy-staleness.mjs`,
+ * rewritten below to an absolute `file:` URL of the REAL sibling — so both arms
+ * see the same WATCHED list and differ by exactly the mutation. The two-arm
+ * test re-establishes the location-independence property on every run.
+ *
+ * A second, quieter benefit: the ESM loader caches by resolved URL, so the old
+ * fixed path could only ever be imported once per process. A fresh mkdtemp path
+ * per run removes that trap for anyone adding a second mutant here.
+ */
+function writeMutantOutsideTheTree(text, basename) {
+  // The mutant carries the subject's REAL basename. mkdtemp already guarantees
+  // a fresh directory, so the old `*.__control__.mjs` rename bought nothing and
+  // cost fidelity — and here it costs it MEASURABLY: the subject's own
+  // `invokedDirectly` line (SELF_LOCATION_ALLOWED) tests
+  // `process.argv[1].endsWith('check-deploy-paths-coverage.mjs')`, which a
+  // renamed mutant would answer differently from the shipped file the moment
+  // this arm switched from import() to a spawn. Pinned rather than left to the
+  // call site, because the call site is exactly where a helpful-looking
+  // `.__control__` suffix comes back.
+  assert.equal(
+    basename,
+    'check-deploy-paths-coverage.mjs',
+    `the mutant must be written under the subject's real basename, not ${basename}`,
+  );
+  const rewritten = text.replace(REL_SPECIFIER, (_m, kw, gap, q, spec) => {
+    const abs = path.resolve(CI_DIR, spec);
+    assert.ok(existsSync(abs), `the control rewrote \`${spec}\` to ${abs}, which does not exist`);
+    return `${kw}${gap}${q}${pathToFileURL(abs).href}${q}`;
+  });
+  assert.doesNotMatch(
+    rewritten,
+    new RegExp(REL_SPECIFIER.source),
+    'a relative import survived the rewrite, so the mutant would resolve it against the TEMP directory and '
+      + 'this arm would fail to load instead of measuring anything',
+  );
+
+  // mkdtempSync, not a fixed name: a predictable path in a world-writable root
+  // can be pre-created or symlinked by another local user, which is exactly
+  // what check-temp-artifact-safety.mjs flags. outOfTree() asserts the prefix
+  // is out of tree BEFORE mkdtemp creates anything.
+  const dir = mkdtempSync(outOfTree(path.join(tmpdir(), 'loom-guard-control-')));
+  const file = path.join(dir, basename);
+  // Re-checked on the path that was actually created. mkdtempSync could land
+  // somewhere the prefix did not name — a TMPDIR that is a junction into the
+  // tree is the realistic case, and insideRepo() resolves it. Cleaned up BEFORE
+  // failing, so this path cannot strand anything either.
+  if (insideRepo(file)) {
+    rmSync(dir, { recursive: true, force: true });
+    assert.fail(
+      `the mutated copy must not be written inside the repo tree (${file}) — a concurrent suite walks `
+        + 'scripts/ci and opens what it lists, so anything transient in there is a race',
+    );
+  }
+  writeFileSync(file, rewritten);
+  return { dir, file };
+}
+
 test('THE TWO-ARM CONTROL: the OLD extractor passes VACUOUSLY where the NEW one fails', async () => {
   // The mutation is the defect itself: delete the node matcher and re-ask the
   // same question. A guard whose verdict does not MOVE under the mutation it
@@ -120,6 +431,26 @@ test('THE TWO-ARM CONTROL: the OLD extractor passes VACUOUSLY where the NEW one 
   // verdict" class).
   const guard = path.join(CI_DIR, 'check-deploy-paths-coverage.mjs');
   const original = readFileSync(guard, 'utf8');
+
+  // The mutant is loaded from a temp directory (see writeMutantOutsideTheTree),
+  // so anything this guard derived from its OWN location would differ between
+  // the arms for a reason that is not the mutation. `process.cwd()` is not in
+  // this set on purpose: an in-process import does not change cwd.
+  //
+  // This is an EQUALITY against a declared allowance, not a doesNotMatch: the
+  // subject genuinely makes one self-location read, and the honest handling is
+  // to name it and say why it is safe (SELF_LOCATION_ALLOWED) rather than to
+  // choose a pattern that cannot see it. A SECOND read, or an edit to that one
+  // line, fails here.
+  assert.deepEqual(
+    selfLocationHits(original),
+    SELF_LOCATION_ALLOWED,
+    'check-deploy-paths-coverage.mjs now derives a path from its own location beyond the one declared, safe '
+      + 'basename read, so a copy loaded from a temp directory is no longer the same subject and this control '
+      + 'would be measuring something else. Give the copy the same root (see check-licenses-cannot-run.test.mjs) '
+      + '— do NOT move it back into scripts/ci, which a concurrent suite scans.',
+  );
+
   const nl = original.includes('\r\n') ? '\r\n' : '\n';
   const lines = original.split(nl);
 
@@ -129,12 +460,9 @@ test('THE TWO-ARM CONTROL: the OLD extractor passes VACUOUSLY where the NEW one 
   assert.ok(at >= 0, "the mutation did not apply — no `add(m[1], 'node')` call found, so this control proves NOTHING");
   lines[at] = '      // MUTATED BY THE CONTROL — node sources dropped on the floor';
 
-  // The copy sits beside the original so its relative import of
-  // ./check-deploy-staleness.mjs still resolves.
-  const mutant = path.join(CI_DIR, 'check-deploy-paths-coverage.__control__.mjs');
-  writeFileSync(mutant, lines.join(nl));
+  const { dir, file } = writeMutantOutsideTheTree(lines.join(nl), 'check-deploy-paths-coverage.mjs');
   try {
-    const old = await import(pathToFileURL(mutant).href);
+    const old = await import(pathToFileURL(file).href);
 
     // ONE fixture, both arms. A watched entry that executes a node deploy source
     // and does not declare it.
@@ -155,7 +483,9 @@ test('THE TWO-ARM CONTROL: the OLD extractor passes VACUOUSLY where the NEW one 
     assert.deepEqual(nowRow.uncovered, [{ path: 'scripts/ci/deploy-fiab-guard.mjs', how: 'node' }]);
     assert.equal(decide([nowRow]).code, 1, 'the NEW guard must FAIL on an undeclared node deploy source');
   } finally {
-    rmSync(mutant, { force: true });
+    // try/finally, and a whole directory rather than one file: a crash between
+    // mkdtemp and here must not be able to strand an artifact.
+    rmSync(dir, { recursive: true, force: true });
   }
 
   assert.equal(readFileSync(guard, 'utf8'), original, 'the real guard must be untouched by this control');
