@@ -214,19 +214,70 @@ and the run still reported a cheerful `ok` with "0 findings". Every count moved.
 The **verdict** did not. An operator reading that summary sees a clean estate.
 
 So each run persists its per-detector examined counts, and the next run
-compares. A detector that **went blind**, **disappeared**, or **shrank** past a
-20% tolerance makes the run exit 3.
+compares. A detector that **went blind**, **disappeared**, **shrank** past a 20%
+tolerance, or sits more than 20% **below its own high-water mark** makes the run
+exit 3.
 
 Finding *counts* are never compared — fewer findings is the outcome the whole
 system exists to produce, and treating it as an incident would make the lane
 punish success. What is compared is what the detectors **looked at**.
 
-A genuine estate shrink will fire this once. That is the fail-safe direction: a
-loud, self-clearing false positive costs one look, and the next run compares
-against the new smaller number and passes.
+### The basis is the last run that SCANNED, not the last run
 
-With no previous run there is **no basis**, which is reported as "no basis"
-rather than as "no regression" — different facts, and only one is reassuring.
+PAUSED and UNREACHABLE runs persist `detectorPopulations: null`. Taking the basis
+from "the last run" therefore meant **one paused night erased the baseline** —
+measured, `OK → PAUSED → went-blind OK` gave `populationRegression: null,
+exit 0`, where the same sequence without the paused night gave exit 3.
+
+Under the standing estate-pause mandate PAUSED is the **normal** operating mode,
+so the comparator this lane exists to provide would have been switched off almost
+always. `FindingStore.lastScannedRun` is the basis, and the digest reports how
+many runs back it is so a comparison spanning eleven nights says so.
+
+With no previous *scanned* run there is **no basis**, which is reported as "no
+basis" rather than as "no regression" — different facts, and only one is
+reassuring.
+
+### The high-water mark is the anti-ratchet
+
+Comparing only against the previous run makes the comparator a **ratchet**: it
+asks "worse than yesterday?", and a slow erosion answers "no" every night.
+Measured at 19% per run:
+
+```
+1000 → 810 → 656 → 531 → 430 → 348 → 281 → 227 → 183 → 148 → 119 → 96 → 77
+```
+
+Twelve runs, 92.3% of the population gone, **zero** regressions reported. And a
+single large drop was red for exactly one run and green on an immediate re-run
+with nothing about the estate changed — the P0 was clearable by pressing "Re-run
+jobs".
+
+Each detector therefore carries `maxExamined`, and a run more than 20% below it
+is red even when no single step crossed the tolerance. The 20% figure was never
+the problem; the missing mark was.
+
+The mark **decays after 30 days** so a deliberate, permanent downsizing does not
+pin the lane red forever — a gate that can never go green is its own failure
+mode.
+
+### Composition at constant size
+
+`DetectorPopulationSnapshot` is a count with no identity, so swapping every
+subject while holding `examined` constant is invisible to the comparator. That
+matters here specifically because the graph pull is deliberately unscoped: ARG
+returns every container app the run identity can read (63 measured, 29 of them
+Loom's), so non-Loom growth can mask Loom's disappearance one for one.
+
+Each scanning run therefore records `graphSubjectsDigest` — a sorted digest of
+the graph's node-id set — and a change is reported in the run notes. Sorted
+before hashing, because ARG does not promise a stable row order and hashing
+as-emitted would report composition change on every run.
+
+**Honest limit:** this digests the **graph's** node set, not each detector's
+examined subset. A detector's subject list is not on `DetectorResult` —
+`Population` exposes a count only — so per-detector composition needs a change in
+`lib/brain/detectors`, which this lane does not own.
 
 ---
 
@@ -287,20 +338,28 @@ node lib/brain/run/__tests__/mutation/run-arms.mjs
 node lib/brain/run/__tests__/mutation/run-arms.mjs regression-reported-as-new
 ```
 
-Fourteen arms, each removing one property the lane claims. The runner refuses to
-start against a red baseline or a baseline that executed fewer than 100 tests (a
-green sweep over an unexecuted suite scores every arm as CAUGHT for the wrong
+Twenty-five arms, each removing one property the lane claims. The runner refuses
+to start against a red baseline or a baseline that executed fewer than 215 tests
+(a green sweep over an unexecuted suite scores every arm as CAUGHT for the wrong
 reason — that is #3783). A `NEEDLE-MISSED` outcome is reported separately from
 both CAUGHT and SURVIVED, because a needle that does not match is a silent no-op
 that reads exactly like a catch — measured in this repo where CRLF line endings
-made an entire sweep report a perfect score having changed nothing.
+made an entire sweep report a perfect score having changed nothing. Needles are
+matched against an LF-normalised copy and the original endings restored, so the
+runner is immune to the checkout it is run from.
 
-One arm is **expected to survive** and that expectation is written down rather
-than discovered: `narrow-regression-bypass-uncovered` scopes the
-regression-defeating edit to a detector no test exercises for regression. This
-repo measures that the narrow form of a bypass is the one that actually works,
-so the blind spot is recorded, and it is why the runtime guard exists in
-addition to the tests.
+**There are currently no declared survivors.** There was one:
+`narrow-regression-bypass-uncovered` scoped the regression-defeating edit to a
+detector no test exercised, and it survived because the runtime guard only
+inspected records whose state was `new`. The reviewer of #4014 found the sibling
+that broke the compensation argument — route the recurrence to `acknowledged`
+instead and nothing fires at all. Both are now caught, because the guard asserts
+the **transition** (any fingerprint with a prior `fixed` record that recurs must
+appear in `digest.regressions`) rather than the destination state.
+
+`expect: 'survives'` remains available for the next honest blind spot. The
+operating rule is unchanged: when an arm survives, write it down and say why,
+rather than dropping it from the set.
 
 ---
 
@@ -345,7 +404,9 @@ a workflow and its environment does not come from a container app.
 
 | Variable | Required | Meaning |
 |---|---|---|
-| `LOOM_ESTATE_ID` | yes | Cosmos partition key. No default — a defaulted estate id writes one estate's findings into another's partition. |
+| `LOOM_ESTATE_ID` | no | Cosmos partition key. When unset it is DERIVED from `LOOM_SUBSCRIPTION_ID` + `LOOM_ADMIN_RG` as `loom:<sub8>:<rg>` — the same algorithm `lib/estate/pause-orchestrator.ts#resolveEstateId` uses, so the console and this lane agree by construction. No bicep module emits it, so a literal in the workflow would disagree with whatever the console resolves and write findings into a partition nothing reads. |
+| `LOOM_SUBSCRIPTION_ID` · `LOOM_ADMIN_RG` | yes (unless the above is set) | The deploy facts the estate id is derived from. |
+| `LOOM_UAMI_CLIENT_ID` | on the ACA runner | The console UAMI. Selects the identity that already holds Cosmos Data Contributor. Absent = the managed-identity leg is not added at all, so there is no failed IMDS probe before the fallback. |
 | `LOOM_BRAIN_RUN_ID` | yes | Stamped on every transition and on the run record. |
 | `LOOM_BRAIN_RESOURCE_GROUPS` | yes | Comma-separated. The power-probe scope. No default — see "The scan scope" above. |
 | `LOOM_BRAIN_SUBSCRIPTIONS` | no | Comma-separated. Omitted = every readable subscription. |
@@ -370,15 +431,46 @@ only ever come from a run of this workflow.
 
 | | Executed | Evidence |
 |---|---|---|
-| Unit + property suite | yes | `vitest run lib/brain/run` |
-| Mutation sweep (14 arms) | yes | `run-arms.mjs` |
+| Unit + property suite | yes | `vitest run lib/brain/run` — 240 tests |
+| Mutation sweep (25 arms) | yes | `run-arms.mjs`, all as declared |
 | Compiled CLI runs end to end | yes | plain Node, Commercial ARM |
 | ARG discovery + per-resource ARM `GET` | yes, **Commercial only** | 63 discovered, 63 read |
 | Full scan: graph + detectors + counts | yes, **Commercial only**, in-memory ports | 105 nodes, 18 edges, 8 findings |
 | `UNREACHABLE` (network / auth / null token) | yes, **Commercial only** | three live arms |
+| **Cosmos reachable from a hosted runner** | **NO — measured 403** | see below |
 | `PAUSED` against a genuinely paused estate | **no** — proven by fixture only | the Commercial estate read 63/63 `Online` |
 | Any Cosmos write | **no** | nothing has been persisted in either boundary |
+| The workflow itself, on either runner | **no** | it has never run |
 | Azure Government, anything | **no** | requires a run of this workflow |
+
+### Why the jobs run on `[self-hosted, loom-aca]`
+
+**Measured 2026-08-24 from outside the VNet** — a workstation sits in the same
+network position as a GitHub-hosted runner:
+
+```
+GET https://<loom cosmos account>/   ->  HTTP 403
+{"code":"Forbidden","message":"Request originated from IP <redacted> through
+ public internet. This is blocked by your Cosmos DB account firewall settings."}
+```
+
+Both cosmos modules set `publicNetworkAccess: 'Disabled'` with
+`networkAclBypass: 'AzureServices'` and a private endpoint. `recordRun` fires on
+**every** path — including PAUSED and UNREACHABLE — so on `ubuntu-latest` every
+single run would die before persisting anything, in **both** clouds.
+
+`[self-hosted, loom-aca]` is the scale-to-zero ACA Job runner
+(`gh-runner-job.bicep`), which is inside the hub VNet **and runs as the console
+UAMI** (`identity: consoleUamiId`). That identity already holds the Cosmos
+built-in Data Contributor role via `cosmosDataRole` in both modules, so this lane
+needs **no new `sqlRoleAssignment`** and puts no object id in a public
+repository. The workflow reads `LOOM_UAMI_CLIENT_ID` off the console app so the
+credential chain selects it explicitly.
+
+**The Gov runner label `loom-aca-gov` is UNVERIFIED.** No such runner has been
+observed registered. If none exists the Gov job will sit queued rather than fail
+— which is its own silent state, and it is named here rather than left to be
+discovered.
 
 ---
 

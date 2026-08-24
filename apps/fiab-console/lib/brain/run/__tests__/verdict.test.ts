@@ -20,6 +20,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   COULD_NOT_REACH,
+  assertMessageMatchesReason,
   classifyEstate,
   countByState,
   reasonForFailures,
@@ -192,5 +193,115 @@ describe('countByState', () => {
     expect(c.Paused).toBe(1);
     expect(c.Unknown).toBe(0);
     expect(Object.keys(c)).toHaveLength(9);
+  });
+});
+
+/**
+ * G8 — the R7 runtime assertion itself had no coverage.
+ *
+ * Both branches of `assertMessageMatchesReason` could be replaced with
+ * `if (false)` and the suite stayed green: every test asserted the MESSAGES, so
+ * the function whose whole justification is "the defense against a later edit
+ * that unifies every red message under one phrase" was undefended. These
+ * construct a mismatched verdict in each direction and expect a throw.
+ */
+describe('assertMessageMatchesReason — the R7 guard itself', () => {
+  const base = {
+    at: '2026-08-24T04:11:00.000Z',
+    cloud: CLOUD,
+    estateId: ESTATE,
+    scope: 'synthetic',
+    byState: countByState([]),
+    readings: [],
+  } as const;
+
+  it('THROWS when a reach failure does NOT say "could not reach"', () => {
+    expect(() =>
+      assertMessageMatchesReason({
+        ...base,
+        kind: 'unreachable',
+        reason: 'network-failed',
+        failures: [NETWORK_FAILURE],
+        message: 'something went wrong',
+      }),
+    ).toThrow(/is a REACH failure but its message does not contain/);
+  });
+
+  it('THROWS when a REACHED verdict claims it could not reach', () => {
+    // The 2026-08-05 shape: a permission denial printed as a connectivity
+    // failure. This is the branch that stops "unify every red message" landing.
+    expect(() =>
+      assertMessageMatchesReason({
+        ...base,
+        kind: 'unreachable',
+        reason: 'no-resources-observed',
+        failures: [],
+        message: `${COULD_NOT_REACH} anything at all`,
+      }),
+    ).toThrow(/REACHED Azure but its message claims/);
+  });
+
+  it('THROWS when a PAUSED verdict claims it could not reach', () => {
+    expect(() =>
+      assertMessageMatchesReason({
+        ...base,
+        kind: 'paused',
+        observed: [],
+        message: `${COULD_NOT_REACH} the estate`,
+      }),
+    ).toThrow(/REACHED Azure but its message claims/);
+  });
+
+  it('THROWS when an OK verdict claims it could not reach', () => {
+    expect(() =>
+      assertMessageMatchesReason({
+        ...base,
+        kind: 'ok',
+        running: 1,
+        notRunning: 0,
+        indeterminate: 0,
+        message: `${COULD_NOT_REACH} — but everything is fine`,
+      }),
+    ).toThrow(/REACHED Azure but its message claims/);
+  });
+
+  it('CONTROL: a correctly-phrased reach failure passes through unchanged', () => {
+    const v = {
+      ...base,
+      kind: 'unreachable',
+      reason: 'auth-failed',
+      failures: [AUTH_FAILURE],
+      message: `${COULD_NOT_REACH} Azure`,
+    } as const;
+    expect(assertMessageMatchesReason(v)).toBe(v);
+  });
+
+  it('CONTROL: a correctly-phrased REACHED verdict passes through unchanged', () => {
+    const v = {
+      ...base,
+      kind: 'unreachable',
+      reason: 'state-indeterminate',
+      failures: [],
+      message: 'reached Azure and could not establish the state',
+    } as const;
+    expect(assertMessageMatchesReason(v)).toBe(v);
+  });
+});
+
+describe('the zero-rows remediation names the scope that actually decides it', () => {
+  it('names LOOM_BRAIN_RESOURCE_GROUPS first', () => {
+    // R6 wants the SPECIFIC remediation. The resource-group scope is now the
+    // actual scoping mechanism and a wrong group name produces exactly this
+    // verdict — but the shipped text pointed at "the deployment tag", which is
+    // no longer used for scoping at all.
+    const v = classifyEstate(
+      { readings: [], failures: [], discovered: 0, scope: 'zero rows (synthetic)' },
+      CTX,
+    );
+    expect(v.message).toContain('LOOM_BRAIN_RESOURCE_GROUPS');
+    expect(v.message).toContain('RESOURCE-GROUP scope');
+    expect(v.message).toContain('Reader assignment');
+    // and it no longer sends the operator at a tag that scopes nothing
+    expect(v.message).not.toContain('deployment tag');
   });
 });

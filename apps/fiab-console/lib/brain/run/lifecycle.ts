@@ -522,21 +522,83 @@ export function reconcile(args: ReconcileArgs): ReconcileResult {
     notes,
   };
 
-  return { records: assertNoRegressionReportedAsNew(next, priorByFingerprint), digest };
+  assertNoRegressionReportedAsNew(next, priorByFingerprint);
+  assertRecurrenceAfterFixIsReported({
+    occurrences,
+    priorByFingerprint,
+    records: next,
+    digest,
+  });
+
+  return { records: next, digest };
 }
 
 /**
- * P-REG, re-checked at runtime.
+ * P-REG, THE LOAD-BEARING FORM: assert the TRANSITION, not the destination.
  *
- * The types already make it uncompilable and the control flow already makes it
- * unreachable. This exists because both of those are properties of the code as
- * WRITTEN, and the realistic regression is an edit that looks like a
- * simplification — collapsing the prior-record lookup, or "resetting" a record
- * on a schema bump. If any record comes out `new` while a prior record with a
- * HISTORY existed, this throws rather than persisting the lie.
+ * ── WHY THIS REPLACED THE STATE-ONLY CHECK (review of #4014) ──────────────
+ * The original guard only inspected records whose state was `new`. That defends
+ * exactly one laundering route, and the reviewer found the others in one try:
+ * route a recurrence to `acknowledged` instead, scope it to a detector no test
+ * exercises, and everything stayed green — the guard never fired, the digest
+ * counted it under `stillOpen` ("unchanged, not listed"), and nothing printed.
+ * The BROAD form of that same edit was caught; the narrow one was silent, which
+ * is the evasion shape this repo has measured as the one that actually works.
  *
- * `new -> new` is the one legal case: a finding first seen last run and still
- * present this run stays `new` (it has not been acknowledged, accepted or
+ * Worse, that escape broke the argument used to justify the declared blind spot
+ * in `__tests__/mutation/mutations.mjs` — "the runtime guard exists in addition
+ * to the tests" only holds if the runtime guard covers more than one route.
+ *
+ * So the property is now stated the way it is actually meant: **a fingerprint
+ * whose prior record was `fixed` and which the detectors reported again this run
+ * MUST appear in `digest.regressions`.** Whatever state anyone writes it as,
+ * whatever detector it belongs to. There is no destination that satisfies this
+ * except the right one.
+ */
+export function assertRecurrenceAfterFixIsReported(args: {
+  readonly occurrences: readonly FindingOccurrence[];
+  readonly priorByFingerprint: ReadonlyMap<FindingFingerprint, FindingRecord>;
+  readonly records: readonly FindingRecord[];
+  readonly digest: RunDigest;
+}): void {
+  const reported = new Set(args.digest.regressions.map((r) => r.fingerprint));
+  const byFingerprint = new Map(args.records.map((r) => [r.fingerprint, r]));
+
+  for (const occ of args.occurrences) {
+    const prior = args.priorByFingerprint.get(occ.fingerprint);
+    if (prior === undefined || prior.state !== 'fixed') continue;
+
+    // A record on an older schema is deliberately left untouched and is NOT a
+    // reconciled recurrence — `reconcile` reports it under `notEvaluated`
+    // instead, and re-minting it is the thing that would destroy the history.
+    if (prior.schemaVersion !== FINDING_SCHEMA_VERSION) continue;
+
+    const now = byFingerprint.get(occ.fingerprint);
+    if (reported.has(occ.fingerprint) && now?.state === 'regressed') continue;
+
+    throw new Error(
+      `finding '${occ.fingerprint}' (detector '${prior.detector}') was FIXED at ` +
+        `${prior.fixedAt} and the detectors reported it again this run, but it was ` +
+        `reconciled to state '${now?.state ?? '<dropped>'}' and ` +
+        `${reported.has(occ.fingerprint) ? 'is' : 'is NOT'} in the run digest's regression ` +
+        'list. A recurrence after a repair is a REGRESSION — the single most valuable signal ' +
+        'this lane produces — and it must be reported as one whatever state it is written ' +
+        'as. Reporting it as `new` resets its history; reporting it as `acknowledged` or ' +
+        '`accepted` buries it in the still-open count where nothing prints it.',
+    );
+  }
+}
+
+/**
+ * P-REG, the narrower companion: a record with a HISTORY is never `new`.
+ *
+ * Kept alongside {@link assertRecurrenceAfterFixIsReported} because it catches a
+ * different edit — a lifecycle RESET (an acknowledgement or an acceptance thrown
+ * away by re-minting the record) that is not a recurrence-after-fix at all and
+ * so is invisible to the transition guard.
+ *
+ * `new -> new` is the one legal carry-forward: a finding first seen last run and
+ * still present this run stays `new` (it has not been acknowledged, accepted or
  * fixed), and its `firstSeenRunId` keeps it out of `digest.newFindings`. Every
  * other prior state carries a human decision or a repair, and resetting one to
  * `new` destroys it.

@@ -117,7 +117,8 @@ describe('the CLI dependency closure', () => {
     const stripped = raw.replace(/^\s*\/\/.*$/gm, '');
     const config = JSON.parse(stripped) as {
       compilerOptions: Record<string, unknown>;
-      files: string[];
+      include?: string[];
+      files?: string[];
     };
     expect(config.compilerOptions.paths).toBeUndefined();
     // CommonJS, because the console package has no `"type": "module"` and the
@@ -126,6 +127,10 @@ describe('the CLI dependency closure', () => {
     // strict, because lib/brain/types.ts and lib/estate/pause-state.ts carry
     // build-checked type assertions that only hold under strict mode.
     expect(config.compilerOptions.strict).toBe(true);
-    expect(config.files).toEqual(['./cli.ts']);
+    // `include`, NOT `files`. `files` follows STATIC imports only, which left
+    // the runtime-resolved history module out of the emit closure entirely —
+    // see `history-wiring.test.ts` for the full account.
+    expect(config.files).toBeUndefined();
+    expect(config.include).toContain('./cli.ts');
   });
 });

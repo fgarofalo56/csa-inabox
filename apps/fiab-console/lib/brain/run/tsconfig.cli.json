@@ -53,5 +53,24 @@
     "rootDir": "../../..",
     "outDir": "../../../temp/brain-scan-build"
   },
-  "files": ["./cli.ts"]
+  // ── `include`, NOT `files` — THIS SHIPPED WRONG (review of #4014) ─────────
+  //
+  // `files: ["./cli.ts"]` makes tsc's emit closure follow STATIC imports only.
+  // Both history specifiers are assembled at RUNTIME precisely so tsc cannot
+  // resolve them while #3935 is unmerged — so the history module was never
+  // emitted at all. Measured: 34 emitted .js files, none under
+  // `lib/brain/history/`. The OK path would have failed at 04:11 UTC with a
+  // module-not-found, before AND after #3935 lands, and no gate could see it.
+  //
+  // `include` fixes it and is self-healing: the glob below matches zero files
+  // today (W9 is not on this branch) and picks up `lib/brain/history/**` the
+  // moment it lands, with no second edit. A config whose globs match zero files
+  // in TOTAL is an error, but `./cli.ts` always matches, so the history glob
+  // being empty is fine.
+  //
+  // `__tests__/history-wiring.test.ts` asserts this include covers the history
+  // directory, and resolves both runtime specifiers against a stub tree — so
+  // neither half of that defect can return silently.
+  "include": ["./cli.ts", "../history/**/*.ts"],
+  "exclude": ["**/__tests__/**", "**/*.test.ts"]
 }

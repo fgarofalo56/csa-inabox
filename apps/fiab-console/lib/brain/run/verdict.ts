@@ -176,8 +176,11 @@ export function classifyEstate(probe: ProbeResult, ctx: ClassifyContext): ScanVe
         `in-scope resources for estate '${ctx.estateId}' over ${probe.scope}. This run is ` +
         'RED rather than clean because a verdict over an empty population establishes ' +
         'nothing: "the estate holds no Loom resources" and "this identity cannot see ' +
-        'them" are indistinguishable from here. Check the estate id, the deployment ' +
-        "tag, and the run identity's Reader assignment on the target subscription(s).",
+        'them" are indistinguishable from here. Remediation, most likely first: check the ' +
+        'RESOURCE-GROUP scope (LOOM_BRAIN_RESOURCE_GROUPS) — it is the actual scoping ' +
+        'mechanism and a wrong group name yields exactly this result; then the run ' +
+        "identity's Reader assignment on the target subscription(s); then the subscription " +
+        'scope (LOOM_BRAIN_SUBSCRIPTIONS) if it is set.',
     };
     return assertMessageMatchesReason(verdict);
   }
@@ -261,8 +264,14 @@ export function classifyEstate(probe: ProbeResult, ctx: ClassifyContext): ScanVe
  * under one phrase for consistency, which would restore exactly the 2026-08-05
  * defect where "I could not reach the registry" was printed as "the tag does not
  * exist".
+ *
+ * EXPORTED so it can be tested DIRECTLY (review of #4014). Both branches
+ * survived mutation because every test asserted the MESSAGES rather than the
+ * assertion — so the defense that this file's header explicitly relies on had no
+ * coverage of its own. `__tests__/verdict.test.ts` now constructs a mismatched
+ * verdict in each direction and expects a throw.
  */
-function assertMessageMatchesReason(v: ScanVerdict): ScanVerdict {
+export function assertMessageMatchesReason(v: ScanVerdict): ScanVerdict {
   const says = v.message.includes(COULD_NOT_REACH);
   const mustSay = v.kind === 'unreachable' && isReachFailure(v.reason);
   if (mustSay && !says) {

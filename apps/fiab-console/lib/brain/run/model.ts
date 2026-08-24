@@ -711,6 +711,22 @@ export interface DetectorPopulationSnapshot {
   readonly examined: number;
   readonly blind: boolean;
   readonly findings: number;
+  /**
+   * The largest `examined` this detector has reached within the decay window.
+   *
+   * THE ANTI-RATCHET. Without it the comparator only ever asks "worse than
+   * yesterday?", which a slow erosion answers "no" every single night.
+   * MEASURED in review: 19% per run for twelve runs takes 1000 -> 77 — 92.3% of
+   * the population gone — with ZERO regressions reported, because no single step
+   * crossed the tolerance. And a large single drop was red for exactly one run,
+   * then green on an immediate re-run with nothing about the estate changed: the
+   * P0 could be cleared by pressing "Re-run jobs".
+   *
+   * Carried forward run to run, so it survives a run that did not scan.
+   */
+  readonly maxExamined: number;
+  /** ISO-8601 of the run that set {@link maxExamined}. Drives the decay window. */
+  readonly maxExaminedAt: string;
 }
 
 /** How a detector's examined set got worse. Each needs a different response. */
@@ -720,7 +736,13 @@ export type PopulationRegressionKind =
   /** It ran last run and did not run at all this run. */
   | 'disappeared'
   /** Its examined set shrank past {@link POPULATION_SHRINK_TOLERANCE}. */
-  | 'shrank';
+  | 'shrank'
+  /**
+   * It is below its own HIGH-WATER MARK by more than the tolerance, even though
+   * no single run crossed it. The anti-ratchet — see
+   * {@link DetectorPopulationSnapshot.maxExamined}.
+   */
+  | 'below-high-water';
 
 export interface DetectorPopulationRegression {
   readonly detector: string;
@@ -729,6 +751,9 @@ export interface DetectorPopulationRegression {
   readonly examined: number;
   readonly previouslyBlind: boolean;
   readonly blind: boolean;
+  /** The high-water mark this was compared against, and when it was set. */
+  readonly highWater: number;
+  readonly highWaterAt: string;
 }
 
 /**
@@ -755,6 +780,15 @@ export interface DetectorPopulationRegression {
 export interface PopulationRegression {
   readonly detectors: readonly DetectorPopulationRegression[];
   readonly previousRunId: string;
+  /**
+   * How many runs back the basis is.
+   *
+   * `1` is the previous run. Larger means intervening runs did not SCAN — under
+   * the standing estate-pause mandate that is normal, and an operator reading a
+   * comparison against a basis eleven nights old needs to be told so rather than
+   * left to assume it was last night's.
+   */
+  readonly basisAgeRuns: number;
   readonly message: string;
 }
 
@@ -765,8 +799,29 @@ export interface PopulationRegression {
  * a job retired) and well below the shapes that matter — a filter that switches
  * off, an extractor that stops running, a scope that narrows. A `went-blind`
  * transition ignores this entirely: 0 is always a regression from non-zero.
+ *
+ * PINNED ABSOLUTELY BY TEST. `__tests__/population.test.ts` asserts the literal
+ * `0.2`, and the over-tolerance fixtures use absolute numbers rather than
+ * arithmetic on this constant. A fixture derived from the constant it guards
+ * moves with the code — measured in review, where widening
+ * {@link MAX_SUPPRESSION_DAYS} by one token changed nothing because its fixture
+ * was built from `MAX_SUPPRESSION_DAYS + 1`.
  */
 export const POPULATION_SHRINK_TOLERANCE = 0.2;
+
+/**
+ * How long a high-water mark stays authoritative.
+ *
+ * A genuine, permanent estate shrink must not pin the comparator to a number
+ * that will never be reached again — that would be a gate that can never go
+ * green, which is its own failure mode. After this many days without being
+ * matched, the mark decays to the current value and the ratchet re-bases.
+ *
+ * 30 days is long enough that a slow erosion (the measured 19%/run case takes
+ * twelve runs, i.e. twelve days) is caught well inside the window, and short
+ * enough that a deliberate downsizing clears within a month.
+ */
+export const HIGH_WATER_DECAY_DAYS = 30;
 
 /** One scheduled run, persisted so a lane that stops running is visible. */
 export interface ScanRunRecord {
@@ -790,6 +845,24 @@ export interface ScanRunRecord {
    * Without it the comparison has no basis and the P0 signal cannot exist.
    */
   readonly detectorPopulations: readonly DetectorPopulationSnapshot[] | null;
+  /**
+   * A stable digest of the GRAPH's node-id set for this run. `null` on the two
+   * non-scanning paths.
+   *
+   * WHY A COUNT IS NOT ENOUGH. `DetectorPopulationSnapshot` carries a count with
+   * no identity, so swapping every subject while holding `examined` constant is
+   * invisible to the comparator — measured in review. That matters here
+   * specifically because the graph pull is deliberately UNSCOPED: ARG returns
+   * every container app the identity can read (63 measured, of which 29 are
+   * Loom's), so non-Loom growth can mask Loom's disappearance one for one.
+   *
+   * HONEST LIMIT, stated rather than implied: this digests the GRAPH's node set,
+   * NOT each detector's examined subset. A detector's own subject list is not on
+   * `DetectorResult` — `Population` exposes a count only — so per-detector
+   * composition needs a change in `lib/brain/detectors`, which this lane does
+   * not own. This catches composition change at the graph level and says so.
+   */
+  readonly graphSubjectsDigest: string | null;
   readonly observed: readonly ObservedResourceState[];
   readonly notes: readonly string[];
   /**

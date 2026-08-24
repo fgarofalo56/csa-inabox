@@ -104,6 +104,29 @@ export class LazyW9GraphHistoryWriter implements GraphHistoryWriter {
 }
 
 /**
+ * The specifier for W9's Cosmos-backed history store.
+ *
+ * ── ONE LEVEL, NOT TWO. THIS SHIPPED WRONG (review of #4014) ──────────────
+ * From the EMITTED `lib/brain/run/cli.js`, `../history/cosmos-store` resolves to
+ * `lib/brain/history/cosmos-store`. The first version used `../../` — copied
+ * from `azure/history-writer.ts`, which sits one directory DEEPER and therefore
+ * correctly needs two levels — and resolved to `lib/history/cosmos-store`, which
+ * does not exist. Measured against a stub tree mirroring the emit layout:
+ *
+ *     ../../history/cosmos-store  ->  MODULE_NOT_FOUND
+ *     ../history/cosmos-store     ->  resolves
+ *
+ * Nothing caught it: no test referenced this function, `cli-buildable.test.ts`
+ * walks STATIC import specifiers and cannot follow a runtime-assembled one, and
+ * the live Commercial receipt was taken with the history writer swapped for the
+ * in-memory one. Three gates, none with this path in its population.
+ *
+ * Exported so `__tests__/history-wiring.test.ts` resolves THIS value rather than
+ * a copy of it — a test that restates the specifier is a test of its own copy.
+ */
+export const HISTORY_STORE_SPECIFIER = ['..', 'history', 'cosmos-store'].join('/');
+
+/**
  * W9's Cosmos-backed history store.
  *
  * Resolved at runtime for the same reason as W9's module itself (#3935 is in
@@ -115,7 +138,7 @@ export class LazyW9GraphHistoryWriter implements GraphHistoryWriter {
 export async function makeHistoryStore(
   importer: (spec: string) => Promise<unknown> = (spec) => import(/* @vite-ignore */ spec),
 ): Promise<unknown> {
-  const spec = ['..', '..', 'history', 'cosmos-store'].join('/');
+  const spec = HISTORY_STORE_SPECIFIER;
   const mod = (await importer(spec)) as Record<string, unknown>;
   const Klass = mod.CosmosGraphHistoryStore;
   if (typeof Klass === 'function') return new (Klass as new () => unknown)();
@@ -129,8 +152,110 @@ export async function makeHistoryStore(
   );
 }
 
+/**
+ * The estate id, derived the SAME way the console derives it.
+ *
+ * ── WHY THIS IS NOT A LITERAL IN THE WORKFLOW (review of #4014, S4) ───────
+ * `LOOM_ESTATE_ID` is emitted by NO bicep module — grepping `platform/fiab/bicep`
+ * for it returns zero matches — and `lib/estate/pause-orchestrator.ts`'s
+ * `resolveEstateId()` SYNTHESIZES `loom:<sub8>:<rg>` when it is unset. So a
+ * literal typed into the workflow would disagree with whatever the console
+ * resolves, and this lane's findings (and the graph versions it writes with the
+ * same id) would land in a Cosmos partition nothing else reads.
+ * `auto-bind-by-default.md` §5: the value must be produced by the deploy, not
+ * typed in.
+ *
+ * This is a deliberate DUPLICATE of `resolveEstateId()`'s algorithm rather than
+ * an import, because importing `pause-orchestrator` would drag
+ * `pause-actuator` + `capacity-preflight` into the CLI's alias-free emit
+ * closure. `__tests__/estate-id.test.ts` imports BOTH and asserts they agree
+ * across a matrix of inputs, so the duplication cannot drift silently.
+ */
+export function resolveScanEstateId(env: NodeJS.ProcessEnv = process.env): string {
+  const explicit = (env.LOOM_ESTATE_ID || '').trim();
+  if (explicit) return explicit;
+  const sub = (env.LOOM_SUBSCRIPTION_ID || '').trim();
+  const rg = (env.LOOM_ADMIN_RG || env.LOOM_ACA_RG || env.LOOM_DLZ_RG || '').trim();
+  if (sub && rg) return `loom:${sub.slice(0, 8)}:${rg}`;
+  return 'loom:unbound';
+}
+
+/** Everything `main()` needs that is not an Azure client. Injected so it is testable. */
+export interface CliIo {
+  readonly stdout: (text: string) => void;
+  readonly appendFile: (path: string, text: string) => void;
+  readonly env: NodeJS.ProcessEnv;
+}
+
+const NODE_IO: CliIo = {
+  stdout: (t) => process.stdout.write(t),
+  appendFile: (p, t) => appendFileSync(p, t, 'utf8'),
+  env: process.env,
+};
+
+/**
+ * Run a scan, report it everywhere, and return the process exit code.
+ *
+ * ── WHY THIS IS SEPARATE FROM `main()` (review of #4014, G1) ──────────────
+ * `main()` builds real Azure clients, so no test could reach the exit mapping it
+ * used — and the reviewer's `cli-exit-from-verdict-only` arm proved it:
+ * replacing `exitCodeForOutcome(outcome)` with the narrow verdict-only mapping
+ * made a POPULATION REGRESSION exit 0 while the workflow printed "Scan
+ * completed", and the whole 116-test suite stayed green. That is the SAME
+ * regression already fixed inside `scan.ts`, one layer up, undefended, because
+ * the composition root was outside every test's population.
+ *
+ * Splitting the deps from the wiring puts the process's own mapping under test.
+ */
+export async function runAndReport(
+  deps: Parameters<typeof runBrainScan>[0],
+  io: CliIo = NODE_IO,
+): Promise<number> {
+  const outcome = await runBrainScan({
+    ...deps,
+    // The verdict reaches the log BEFORE anything is persisted. A Cosmos failure
+    // after this point still fails the run — it just cannot hide what the run
+    // had already established about the estate.
+    onVerdict: (v) => io.stdout(`${renderVerdictHeadline(v)}\n`),
+  });
+
+  io.stdout(`${renderRunReport(outcome)}\n`);
+
+  const summaryPath = io.env.GITHUB_STEP_SUMMARY;
+  if (summaryPath) io.appendFile(summaryPath, `${renderStepSummary(outcome)}\n`);
+
+  const outputPath = io.env.GITHUB_OUTPUT;
+  if (outputPath) {
+    io.appendFile(
+      outputPath,
+      [
+        `verdict=${outcome.verdict.kind}`,
+        `population_regression=${outcome.populationRegression === null ? 'false' : 'true'}`,
+        `regressions=${outcome.counts?.regressions ?? 0}`,
+        `new_findings=${outcome.counts?.new ?? 0}`,
+        `findings_produced=${outcome.counts?.findingsProduced ?? 0}`,
+        `detectors_blind=${outcome.counts?.detectorsBlind ?? 0}`,
+        `graph_version=${outcome.graphVersion?.versionId ?? ''}`,
+        '',
+      ].join('\n'),
+    );
+  }
+
+  return exitCodeForOutcome(outcome);
+}
+
 export async function main(): Promise<number> {
-  const estateId = required('LOOM_ESTATE_ID');
+  const estateId = resolveScanEstateId();
+  if (estateId === 'loom:unbound') {
+    throw new Error(
+      'the estate id could not be established. Set LOOM_SUBSCRIPTION_ID and LOOM_ADMIN_RG (the ' +
+        'workflow reads both from the deploy), or LOOM_ESTATE_ID explicitly. The scan refuses ' +
+        "to guess: a wrong estate id writes this estate's findings into another's Cosmos " +
+        'partition, and writes graph versions nothing else reads. This is the same derivation ' +
+        'lib/estate/pause-orchestrator.ts#resolveEstateId uses, so the console and this lane ' +
+        'agree by construction.',
+    );
+  }
   const runId = required('LOOM_BRAIN_RUN_ID');
   // The POWER-PROBE scope. Required, never defaulted.
   //
@@ -158,7 +283,12 @@ export async function main(): Promise<number> {
 
   const { ChainedTokenCredential, DefaultAzureCredential, ManagedIdentityCredential } =
     await import('@azure/identity');
-  const uamiClientId = process.env.LOOM_UAMI_CLIENT_ID;
+  // The UAMI leg is added ONLY when a client id is present. On the in-VNet ACA
+  // runner that is the console UAMI — the identity that already holds Cosmos
+  // Data Contributor on the account, which is why this lane needs no new role
+  // assignment. Off the runner the leg is absent rather than present-and-failing,
+  // so there is no IMDS probe to time out before the fallback (review of #4014).
+  const uamiClientId = (process.env.LOOM_UAMI_CLIENT_ID || '').trim();
   const chain = uamiClientId ? [new ManagedIdentityCredential({ clientId: uamiClientId })] : [];
   const credential = new ChainedTokenCredential(...chain, new DefaultAzureCredential());
   const getToken = async (s: string): Promise<string | null> => {
@@ -169,7 +299,7 @@ export async function main(): Promise<number> {
   const fetchImpl = globalThis.fetch as unknown as FetchLike;
   const scoped = subscriptions ? { subscriptions } : {};
 
-  const outcome = await runBrainScan({
+  return runAndReport({
     estateId,
     cloud,
     runId,
@@ -197,36 +327,21 @@ export async function main(): Promise<number> {
     history: new LazyW9GraphHistoryWriter(),
     findings: new CosmosFindingStore(),
     source: `workflow:loom-brain-scan:${runId}`,
-    // The verdict reaches the log BEFORE anything is persisted. A Cosmos failure
-    // after this point still fails the run — it just cannot hide what the run
-    // had already established about the estate.
-    onVerdict: (v) => process.stdout.write(`${renderVerdictHeadline(v)}\n`),
   });
+}
 
-  process.stdout.write(`${renderRunReport(outcome)}\n`);
-
-  const summaryPath = process.env.GITHUB_STEP_SUMMARY;
-  if (summaryPath) appendFileSync(summaryPath, `${renderStepSummary(outcome)}\n`, 'utf8');
-
-  const outputPath = process.env.GITHUB_OUTPUT;
-  if (outputPath) {
-    appendFileSync(
-      outputPath,
-      [
-        `verdict=${outcome.verdict.kind}`,
-        `population_regression=${outcome.populationRegression === null ? 'false' : 'true'}`,
-        `regressions=${outcome.counts?.regressions ?? 0}`,
-        `new_findings=${outcome.counts?.new ?? 0}`,
-        `findings_produced=${outcome.counts?.findingsProduced ?? 0}`,
-        `detectors_blind=${outcome.counts?.detectorsBlind ?? 0}`,
-        `graph_version=${outcome.graphVersion?.versionId ?? ''}`,
-        '',
-      ].join('\n'),
-      'utf8',
-    );
-  }
-
-  return exitCodeForOutcome(outcome);
+/**
+ * Was this module run directly?
+ *
+ * Exported and pure so the predicate itself is testable. It is NOT the only
+ * defense against the scan silently not running — the workflow asserts the
+ * `verdict` job output is non-empty, which catches ANY silent no-op rather than
+ * just this one. The reviewer's `cli-entrypoint-never-fires` arm showed why that
+ * second layer is needed: neutering this predicate made `node cli.js` exit 0
+ * having produced nothing at all, while the workflow printed "Scan completed."
+ */
+export function isDirectInvocation(argv1: string | undefined): boolean {
+  return typeof argv1 === 'string' && /brain[\\/]run[\\/]cli\.(js|ts)$/.test(argv1);
 }
 
 /**
@@ -249,8 +364,7 @@ export async function main(): Promise<number> {
  *   3. It makes the module importable by a test with no setup at all.
  */
 /* c8 ignore start — exercised by the workflow, not by vitest. */
-const invokedDirectly =
-  typeof process.argv[1] === 'string' && /brain[\\/]run[\\/]cli\.(js|ts)$/.test(process.argv[1]);
+const invokedDirectly = isDirectInvocation(process.argv[1]);
 
 if (invokedDirectly) {
   main()

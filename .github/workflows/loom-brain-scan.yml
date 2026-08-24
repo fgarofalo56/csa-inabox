@@ -58,6 +58,31 @@ name: loom-brain-scan
 # never after a pipe (a pipe yields the LAST command's status, not the
 # subject's).
 #
+# ── WHY THIS RUNS ON THE IN-VNET ACA RUNNER, NOT ubuntu-latest ─────────────
+# MEASURED 2026-08-24, from outside the VNet (a workstation is in exactly the
+# same network position as a GitHub-hosted runner):
+#
+#   GET https://<loom cosmos account>/  ->  HTTP 403
+#   {"code":"Forbidden","message":"Request originated from IP <redacted> through
+#    public internet. This is blocked by your Cosmos DB account firewall
+#    settings."}
+#
+# Both cosmos modules set `publicNetworkAccess: 'Disabled'` with
+# `networkAclBypass: 'AzureServices'` and a private endpoint, and a hosted runner
+# is neither in the VNet nor an Azure first-party service. `recordRun` fires on
+# EVERY path — including PAUSED and UNREACHABLE — so on a hosted runner every
+# single run would die before it could persist anything.
+#
+# `[self-hosted, loom-aca]` is the scale-to-zero ACA Job runner
+# (`platform/fiab/bicep/modules/admin-plane/gh-runner-job.bicep`), which is
+# INSIDE the hub VNet and — this is the part that matters twice — runs AS THE
+# CONSOLE UAMI (`identity: consoleUamiId`). That identity already holds the
+# Cosmos built-in Data Contributor role via `cosmosDataRole` in both modules, so
+# this lane needs NO new `sqlRoleAssignment` and no new object id in a public
+# repository. `LOOM_UAMI_CLIENT_ID` selects it explicitly in the credential
+# chain; when it is absent the managed-identity leg is not added at all, so there
+# is no failed IMDS probe before the fallback.
+#
 # ── CLOUD PARITY (`cloud-parity.md`) ────────────────────────────────────────
 # Two jobs, one per boundary, identical steps. The ARM host and token audience
 # come from `lib/azure/cloud-endpoints` keyed on `LOOM_CLOUD`, never from a
@@ -95,7 +120,7 @@ jobs:
   commercial:
     name: Brain scan — Commercial
     if: github.event_name == 'schedule' || inputs.cloud == 'both' || inputs.cloud == 'commercial'
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, loom-aca]
     timeout-minutes: 30
     outputs:
       verdict: ${{ steps.scan.outputs.verdict }}
@@ -103,7 +128,15 @@ jobs:
       population_regression: ${{ steps.scan.outputs.population_regression }}
     env:
       LOOM_CLOUD: Commercial
-      LOOM_ESTATE_ID: loom-commercial-centralus
+      # NOT a literal estate id. `LOOM_ESTATE_ID` is emitted by no bicep module,
+      # and lib/estate/pause-orchestrator.ts#resolveEstateId SYNTHESIZES
+      # `loom:<sub8>:<rg>` when it is unset — so a literal here would disagree
+      # with whatever the console resolves and this lane's findings would land in
+      # a Cosmos partition nothing else reads. The CLI derives it from these two
+      # values using the same algorithm, and `__tests__/estate-id.test.ts`
+      # asserts the two implementations agree.
+      LOOM_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+      LOOM_ADMIN_RG: rg-csa-loom-admin-centralus
       LOOM_BRAIN_RESOURCE_GROUPS: rg-csa-loom-admin-centralus
       ADMIN_RG: rg-csa-loom-admin-centralus
       CONSOLE_APP: loom-console
@@ -146,13 +179,13 @@ jobs:
           node_modules/.bin/tsc -p lib/brain/run/tsconfig.cli.json
           test -f temp/brain-scan-build/lib/brain/run/cli.js
 
-      - name: Resolve the estate Cosmos endpoint
+      - name: Resolve the estate Cosmos endpoint and the console UAMI
         working-directory: apps/fiab-console
         run: |
-          # DEPLOYED, NOT REQUESTED (auto-bind-by-default.md §5). The endpoint is
+          # DEPLOYED, NOT REQUESTED (auto-bind-by-default.md §5). Both values are
           # emitted onto the console app by the platform bicep, so the lane reads
-          # it from the estate rather than asking an operator to set a variable.
-          # This is a CONTROL-plane read and works whether or not the app is
+          # them from the estate rather than asking an operator to set variables.
+          # These are CONTROL-plane reads and work whether or not the app is
           # running, which matters: the console is one of the things that may be
           # stopped when the estate is paused.
           set +e -uo pipefail
@@ -175,7 +208,33 @@ jobs:
           # surface.
           echo "::add-mask::$ENDPOINT"
           echo "LOOM_COSMOS_ENDPOINT=$ENDPOINT" >> "$GITHUB_ENV"
-          echo "resolved the estate Cosmos endpoint from the console app (value masked)."
+
+          # The console UAMI's client id. This runner runs AS that identity
+          # (gh-runner-job.bicep `identity: consoleUamiId`), and that identity
+          # already holds Cosmos Data Contributor on the account — which is why
+          # this lane needs no new role assignment. Naming it explicitly makes
+          # the credential chain select it rather than guessing.
+          UAMI=$(az containerapp show -n "$CONSOLE_APP" -g "$ADMIN_RG" \
+            --query "properties.template.containers[0].env[?name=='LOOM_UAMI_CLIENT_ID'].value | [0]" \
+            -o tsv 2>../../temp/uami.err)
+          URC=$?
+          if [ $URC -ne 0 ]; then
+            echo "::error::could not read LOOM_UAMI_CLIENT_ID from $CONSOLE_APP in $ADMIN_RG (az exit $URC)."
+            cat ../../temp/uami.err
+            exit 1
+          fi
+          if [ -z "${UAMI:-}" ]; then
+            # NOT fatal, and the message says exactly why rather than asserting a
+            # cause: without it the credential chain simply omits the
+            # managed-identity leg and falls back to the SP, which can read ARM
+            # but cannot reach a private Cosmos account. The scan will then fail
+            # LOUDLY on the Cosmos call rather than silently here.
+            echo "::warning::$CONSOLE_APP carries no LOOM_UAMI_CLIENT_ID. The credential chain will fall back to the service principal, which holds no Cosmos data-plane role — expect the scan to fail on the first Cosmos call, with that as the reason."
+          else
+            echo "::add-mask::$UAMI"
+            echo "LOOM_UAMI_CLIENT_ID=$UAMI" >> "$GITHUB_ENV"
+          fi
+          echo "resolved the estate Cosmos endpoint and the console UAMI (values masked)."
 
       - name: Run the Brain scan
         id: scan
@@ -212,10 +271,53 @@ jobs:
               ;;
           esac
 
+      # ── THE GUARD AGAINST GREEN-OVER-NOTHING (review of #4014, G2) ────────
+      #
+      # A mutation arm neutered the CLI's direct-invocation predicate: `node
+      # cli.js` then exited 0 having produced NO output, NO verdict, NO step
+      # summary and NO job output — and this workflow printed "Scan completed."
+      # and passed. Green over literally nothing, which is the precise failure
+      # #3936 exists to prevent.
+      #
+      # The job DECLARED `outputs.verdict` but nothing consumed it and no step
+      # failed on it being empty, so the claimed "three places a green check
+      # cannot hide the verdict" was two in practice. This is the third, and it
+      # catches ANY silent no-op rather than only that one arm: if the scan did
+      # not run, or ran and wrote nothing, or wrote something unrecognised, this
+      # fails.
+      - name: Assert the scan actually produced a verdict
+        if: always() && steps.scan.conclusion != 'skipped'
+        env:
+          VERDICT: ${{ steps.scan.outputs.verdict }}
+        run: |
+          set +e -uo pipefail
+          if [ -z "${VERDICT:-}" ]; then
+            echo "::error::The scan step produced an EMPTY verdict output. The scan either did not run, or ran and wrote nothing to \$GITHUB_OUTPUT. Either way NOTHING was established about the estate, and a passing job here would be green over nothing — the exact failure this lane exists to prevent. Check the scan log above: a real run always prints a 'LOOM BRAIN SCAN — VERDICT:' headline before it does anything else."
+            exit 1
+          fi
+          case "$VERDICT" in
+            ok|paused|unreachable)
+              echo "verdict output present and recognised: $VERDICT"
+              ;;
+            *)
+              echo "::error::The scan produced an UNRECOGNISED verdict '$VERDICT'. Expected one of ok|paused|unreachable. Refusing to pass on a value this workflow cannot interpret."
+              exit 1
+              ;;
+          esac
+
   gov:
     name: Brain scan — Azure Government
     if: github.event_name == 'schedule' || inputs.cloud == 'both' || inputs.cloud == 'gov'
-    runs-on: ubuntu-latest
+    # The Gov in-boundary equivalent of the Commercial runner. #3936 states Gov
+    # "needs an in-boundary Actions runner", and the Cosmos posture makes that
+    # true of BOTH clouds, not only Gov: the Gov account is private-endpoint-only
+    # exactly as the Commercial one is.
+    #
+    # DECLARED UNVERIFIED: no `loom-aca-gov` runner has been observed registered.
+    # If none exists this job will sit queued rather than fail, which is its own
+    # silent state — `docs/fiab/brain/scheduler.md` records that as the open Gov
+    # item, and the Gov row of the receipt table stays "not verified".
+    runs-on: [self-hosted, loom-aca-gov]
     timeout-minutes: 30
     outputs:
       verdict: ${{ steps.scan.outputs.verdict }}
@@ -224,7 +326,9 @@ jobs:
     env:
       LOOM_CLOUD: GCC-High
       LOOM_CLOUD_BOUNDARY: gcc-high
-      LOOM_ESTATE_ID: loom-gov-usgovvirginia
+      # Derived, not typed in — see the Commercial job's note.
+      LOOM_SUBSCRIPTION_ID: ${{ secrets.AZURE_GOV_SUBSCRIPTION_ID }}
+      LOOM_ADMIN_RG: rg-csa-loom-admin-usgovvirginia
       LOOM_BRAIN_RESOURCE_GROUPS: rg-csa-loom-admin-usgovvirginia
       ADMIN_RG: rg-csa-loom-admin-usgovvirginia
       CONSOLE_APP: loom-console
@@ -276,7 +380,7 @@ jobs:
           node_modules/.bin/tsc -p lib/brain/run/tsconfig.cli.json
           test -f temp/brain-scan-build/lib/brain/run/cli.js
 
-      - name: Resolve the estate Cosmos endpoint
+      - name: Resolve the estate Cosmos endpoint and the console UAMI
         working-directory: apps/fiab-console
         run: |
           set +e -uo pipefail
@@ -296,7 +400,23 @@ jobs:
           fi
           echo "::add-mask::$ENDPOINT"
           echo "LOOM_COSMOS_ENDPOINT=$ENDPOINT" >> "$GITHUB_ENV"
-          echo "resolved the estate Cosmos endpoint from the console app (value masked)."
+
+          UAMI=$(az containerapp show -n "$CONSOLE_APP" -g "$ADMIN_RG" \
+            --query "properties.template.containers[0].env[?name=='LOOM_UAMI_CLIENT_ID'].value | [0]" \
+            -o tsv 2>../../temp/uami.err)
+          URC=$?
+          if [ $URC -ne 0 ]; then
+            echo "::error::could not read LOOM_UAMI_CLIENT_ID from $CONSOLE_APP in $ADMIN_RG (az exit $URC)."
+            cat ../../temp/uami.err
+            exit 1
+          fi
+          if [ -z "${UAMI:-}" ]; then
+            echo "::warning::$CONSOLE_APP carries no LOOM_UAMI_CLIENT_ID. The credential chain will fall back to the service principal, which holds no Cosmos data-plane role — expect the scan to fail on the first Cosmos call, with that as the reason."
+          else
+            echo "::add-mask::$UAMI"
+            echo "LOOM_UAMI_CLIENT_ID=$UAMI" >> "$GITHUB_ENV"
+          fi
+          echo "resolved the estate Cosmos endpoint and the console UAMI (values masked)."
 
       - name: Run the Brain scan
         id: scan
@@ -326,6 +446,27 @@ jobs:
               ;;
             *)
               echo "::error::The Brain scan failed with exit $RC — a defect in the scan itself, not a verdict about the estate."
+              exit 1
+              ;;
+          esac
+
+      # The Gov half of the green-over-nothing guard. See the Commercial job.
+      - name: Assert the scan actually produced a verdict
+        if: always() && steps.scan.conclusion != 'skipped'
+        env:
+          VERDICT: ${{ steps.scan.outputs.verdict }}
+        run: |
+          set +e -uo pipefail
+          if [ -z "${VERDICT:-}" ]; then
+            echo "::error::The scan step produced an EMPTY verdict output. The scan either did not run, or ran and wrote nothing to \$GITHUB_OUTPUT. Either way NOTHING was established about the Gov estate, and a passing job here would be green over nothing."
+            exit 1
+          fi
+          case "$VERDICT" in
+            ok|paused|unreachable)
+              echo "verdict output present and recognised: $VERDICT"
+              ;;
+            *)
+              echo "::error::The scan produced an UNRECOGNISED verdict '$VERDICT'. Expected one of ok|paused|unreachable."
               exit 1
               ;;
           esac

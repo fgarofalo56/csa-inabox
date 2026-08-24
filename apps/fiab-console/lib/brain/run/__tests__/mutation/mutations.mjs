@@ -15,10 +15,14 @@
  *   narrow-regression-bypass-covered    scoped to a detector the tests exercise
  *   narrow-regression-bypass-uncovered  scoped to a detector they do not
  *
- * The second is expected to SURVIVE, and that expectation is written down here
- * rather than discovered later. It is the honest measure of this suite's blind
- * spot, and it is why the runtime guard `assertNoRegressionReportedAsNew` exists
- * in addition to the tests.
+ * The second was a DECLARED BLIND SPOT — expected to survive, written down
+ * rather than discovered — and it no longer is. The G3 fix from the review of
+ * #4014 (assert the TRANSITION, not the destination state) closed it, and the
+ * arm is now `expect: 'caught'`. There are currently NO declared survivors, and
+ * `expect: 'survives'` remains available for the next honest one.
+ *
+ * The lesson that produced it is still the operating one: when an arm survives,
+ * write it down and say why, rather than dropping it from the set.
  *
  * ── CRLF ───────────────────────────────────────────────────────────────────
  * A needle that does not match is a silent no-op that reads as "the mutation was
@@ -60,9 +64,14 @@ export const MUTATIONS = [
     file: 'lib/brain/run/lifecycle.ts',
     why:
       "The same bypass scoped to a detector NO test exercises for regression ('config-drift'). " +
-      'EXPECTED TO SURVIVE. Recorded rather than hidden: it is the measured blind spot of this ' +
-      'suite, and the reason the runtime guard exists in addition to the tests.',
-    expect: 'survives',
+      'THIS WAS A DECLARED BLIND SPOT AND IS NO LONGER ONE. It survived while the runtime ' +
+      'guard only inspected records whose state was `new` and every test named its own ' +
+      'detector. The G3 fix — asserting the TRANSITION (any fingerprint with a prior `fixed` ' +
+      'record that recurs must appear in digest.regressions) rather than the destination ' +
+      'state — closed it, because the guard now ranges over the occurrences instead of over ' +
+      'one state. Kept, and flipped to `caught`: the arm that found the gap is the one most ' +
+      'worth re-running.',
+    expect: 'caught',
     find: "    if (prior.state === 'fixed') {",
     replace: "    if (prior.state === 'fixed' && prior.detector !== 'config-drift') {",
   },
@@ -188,4 +197,167 @@ export const MUTATIONS = [
     find: "  if (verdict.kind !== 'ok') {",
     replace: "  if (verdict.kind === 'unreachable') {",
   },
+
+  // ── ARMS FROM THE INDEPENDENT REVIEW OF #4014 ────────────────────────────
+  //
+  // All five SURVIVED on first measurement. Each is kept here permanently: the
+  // arm that found a gap is the arm most worth re-running, because the gap it
+  // found is the shape the next edit will take. The reviewer's framing was
+  // right and is worth restating — the escapes were not in the logic the
+  // original 14 arms covered, they were in the SEAMS: the composition root, the
+  // real store, and the runtime module wiring.
+
+  {
+    id: 'cli-exit-from-verdict-only',
+    file: 'lib/brain/run/cli.ts',
+    why:
+      "REVIEW ARM 4. The exact regression `unreachable-exits-zero` caught inside scan.ts, one " +
+      'layer up in the composition root — which no test imported. `main()` is the only ' +
+      'mapping the PROCESS uses, so a narrow verdict-only mapping here makes a POPULATION ' +
+      'REGRESSION exit 0 and the workflow print "Scan completed."',
+    expect: 'caught',
+    find: '  return exitCodeForOutcome(outcome);',
+    replace: "  return outcome.verdict.kind === 'unreachable' ? 2 : 0;",
+  },
+  {
+    id: 'cli-entrypoint-never-fires',
+    file: 'lib/brain/run/cli.ts',
+    why:
+      'REVIEW ARM 5. Neuter the direct-invocation predicate and `node cli.js` exits 0 having ' +
+      'produced no output, no verdict, no job output and no step summary — while the workflow ' +
+      'prints "Scan completed." GREEN OVER LITERALLY NOTHING, which is the precise failure ' +
+      '#3936 exists to prevent.',
+    expect: 'caught',
+    find: "  return typeof argv1 === 'string' &&",
+    replace: "  return false && typeof argv1 === 'string' &&",
+  },  {
+    id: 'regression-laundered-as-acknowledged-narrow',
+    file: 'lib/brain/run/lifecycle.ts',
+    why:
+      'REVIEW ARM 6, and the one that broke the compensation argument. Route a recurrence to ' +
+      '`acknowledged` instead of `new`, scoped to a detector no test exercises. The runtime ' +
+      'guard never fires because it only inspected records whose state is `new`; the digest ' +
+      'counts it under stillOpen; nothing prints. The BROAD form below is caught, so this is ' +
+      'the narrow shape this repo measures as the evasion that actually works.',
+    expect: 'caught',
+    find: "    if (prior.state === 'fixed') {\n      // ── THE REGRESSION.",
+    replace:
+      "    if (prior.state === 'fixed' && prior.detector === 'config-drift') {\n" +
+      '      next.push({\n' +
+      '        ...carried,\n' +
+      "        state: 'acknowledged',\n" +
+      "        acknowledgedBy: 'auto',\n" +
+      '        acknowledgedAt: at,\n' +
+      '        regressionCount: prior.regressionCount,\n' +
+      '      });\n' +
+      '      stillOpen += 1;\n' +
+      '      continue;\n' +
+      '    }\n' +
+      "    if (prior.state === 'fixed') {\n      // ── THE REGRESSION.",
+  },
+  {
+    id: 'regression-laundered-as-acknowledged-broad',
+    file: 'lib/brain/run/lifecycle.ts',
+    why:
+      'REVIEW ARM 7 — the BROAD control for the arm above. Route EVERY recurrence to ' +
+      '`acknowledged`. Without this pair the narrow arm proves nothing: a suite that caught ' +
+      'only the broad form would look identical to one that caught both.',
+    expect: 'caught',
+    find: "    if (prior.state === 'fixed') {\n      // ── THE REGRESSION.",
+    replace:
+      "    if (prior.state === 'fixed') {\n" +
+      '      next.push({\n' +
+      '        ...carried,\n' +
+      "        state: 'acknowledged',\n" +
+      "        acknowledgedBy: 'auto',\n" +
+      '        acknowledgedAt: at,\n' +
+      '        regressionCount: prior.regressionCount,\n' +
+      '      });\n' +
+      '      stillOpen += 1;\n' +
+      '      continue;\n' +
+      '    }\n' +
+      "    if (false) {\n      // ── THE REGRESSION.",
+  },
+  {
+    id: 'suppression-ceiling-removed',
+    file: 'lib/brain/run/model.ts',
+    why:
+      'REVIEW ARM 8. A suppression that never expires, in ONE TOKEN — because the over-long ' +
+      'fixture was built FROM the constant (`MAX_SUPPRESSION_DAYS + 1`), so the guard moved ' +
+      'with the code it guards. The direct answer to "can you make a suppression that never ' +
+      'expires?" was yes.',
+    expect: 'caught',
+    find: 'export const MAX_SUPPRESSION_DAYS = 180;',
+    replace: 'export const MAX_SUPPRESSION_DAYS = 3650000;',
+  },
+  {
+    id: 'report-drops-not-evaluated',
+    file: 'lib/brain/run/report.ts',
+    why:
+      'REVIEW ARM 9. Deletes the NOT EVALUATED section from the log report and the step ' +
+      'summary. That section is the ONLY place a blind detector\'s frozen backlog surfaces to ' +
+      'the operator, and no test asserted it.',
+    expect: 'caught',
+    find: '  if (d.notEvaluated.length > 0) {',
+    replace: '  if (false) {',
+  },
+  {
+    id: 'r7-reached-may-claim-unreachable',
+    file: 'lib/brain/run/verdict.ts',
+    why:
+      'REVIEW ARM 10. Neuters the half of the R7 runtime assertion that stops a verdict which ' +
+      'REACHED Azure from claiming it could not. That function is explicitly justified as the ' +
+      'defense against "a later edit that unifies every red message under one phrase" — and ' +
+      'the defense itself had no coverage.',
+    expect: 'caught',
+    find: '  if (!mustSay && says) {',
+    replace: '  if (false) {',
+  },
+  {
+    id: 'r7-reachfailure-need-not-say',
+    file: 'lib/brain/run/verdict.ts',
+    why:
+      'REVIEW ARM 11. The other half: a genuine reach failure no longer has to say "could not ' +
+      'reach".',
+    expect: 'caught',
+    find: '  if (mustSay && !says) {',
+    replace: '  if (false) {',
+  },
+  {
+    id: 'history-store-specifier-one-level-too-high',
+    file: 'lib/brain/run/cli.ts',
+    why:
+      'S1(b) as a permanent arm. From `lib/brain/run/cli.js` the store specifier must be ' +
+      '`../history/cosmos-store`; `../../history/cosmos-store` resolves to `lib/history/` and ' +
+      'MODULE_NOT_FOUNDs. This shipped, and three gates missed it because none had the ' +
+      'runtime-assembled specifier in its population.',
+    expect: 'caught',
+    find: "export const HISTORY_STORE_SPECIFIER = ['..', 'history', 'cosmos-store'].join('/');",
+    replace:
+      "export const HISTORY_STORE_SPECIFIER = ['..', '..', 'history', 'cosmos-store'].join('/');",
+  },
+  {
+    id: 'population-basis-from-any-run',
+    file: 'lib/brain/run/scan.ts',
+    why:
+      'S3 as a permanent arm. Take the population basis from the last run of ANY verdict ' +
+      'rather than the last run that actually SCANNED. One PAUSED night then erases the ' +
+      'baseline — and under the standing estate-pause mandate PAUSED is the normal operating ' +
+      'mode, so the P0 comparator would be switched off almost always.',
+    expect: 'caught',
+    find: '  const previousRun = await deps.findings.lastScannedRun(deps.estateId);',
+    replace: '  const previousRun = await deps.findings.lastRun(deps.estateId);',
+  },
+  {
+    id: 'high-water-mark-ignored',
+    file: 'lib/brain/run/population.ts',
+    why:
+      'G4 as a permanent arm. Without a high-water mark the comparator is a RATCHET: 19% per ' +
+      'run for 12 runs loses 92.3% of the population with zero regressions reported, and a ' +
+      'single large drop is red for exactly one run — clearable by pressing "Re-run jobs".',
+    expect: 'caught',
+    find: '    const highWater = prior.maxExamined;',
+    replace: '    const highWater = 0;',
+  },
 ];
+

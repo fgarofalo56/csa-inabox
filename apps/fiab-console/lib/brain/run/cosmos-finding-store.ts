@@ -62,6 +62,9 @@ export const BRAIN_FINDINGS_PARTITION_KEY = '/estateId';
  */
 export const BRAIN_FINDINGS_DEFAULT_TTL = -1;
 
+/** How far back {@link CosmosFindingStore.scannedRunAgeRuns} will look. */
+export const RUN_AGE_SCAN_LIMIT = 200;
+
 /**
  * Raised when the deployment has no Cosmos endpoint.
  *
@@ -106,10 +109,26 @@ export function fingerprintFromDocumentId(id: string): string {
   return Buffer.from(id.slice(2), 'base64url').toString('utf8');
 }
 
+/**
+ * The credential chain.
+ *
+ * The managed-identity leg is added ONLY when a client id is present. On the
+ * in-VNet ACA runner that is the console UAMI — the identity that already holds
+ * Cosmos Data Contributor on this account, which is why this lane needs no new
+ * `sqlRoleAssignment`. Off that runner the leg is ABSENT rather than
+ * present-and-failing: an unconditional `ManagedIdentityCredential` costs a
+ * failed IMDS probe on every container access before the fallback (review of
+ * #4014).
+ *
+ * `AZURE_CLIENT_ID` is deliberately NOT consulted here. In Actions that variable
+ * is the service-principal's app id, and handing it to a managed-identity
+ * credential asks IMDS for an identity that is not attached to anything.
+ */
 function credential(): TokenCredential {
-  const clientId = process.env.LOOM_UAMI_CLIENT_ID || process.env.AZURE_CLIENT_ID;
-  const chain: ManagedIdentityCredential[] = [];
-  if (clientId) chain.push(new ManagedIdentityCredential({ clientId }));
+  const clientId = (process.env.LOOM_UAMI_CLIENT_ID || '').trim();
+  const chain: ManagedIdentityCredential[] = clientId
+    ? [new ManagedIdentityCredential({ clientId })]
+    : [];
   return new ChainedTokenCredential(...chain, new DefaultAzureCredential());
 }
 
@@ -213,17 +232,35 @@ export class CosmosFindingStore implements FindingStore {
   }
 
   /**
-   * The most recent run for this estate.
+   * The most recent run for this estate, WHATEVER its verdict.
    *
-   * Ordered by `startedAt` DESC. `null` means NO BASIS — the population
-   * comparator renders that as "cannot tell", never as "no regression".
+   * Ordered by `startedAt` DESC. NOT the population basis — see
+   * {@link lastScannedRun}.
    */
   async lastRun(estateId: string): Promise<ScanRunRecord | null> {
+    const runs = await this.recentRuns(estateId, 1);
+    return runs[0] ?? null;
+  }
+
+  /**
+   * The most recent run that actually SCANNED.
+   *
+   * `IS_DEFINED` + `NOT IS_NULL` because a PAUSED or UNREACHABLE run persists
+   * `detectorPopulations: null`, and taking the basis from one of those erases
+   * the baseline — measured in review as a blocker, since the standing
+   * estate-pause mandate makes PAUSED the normal operating mode.
+   *
+   * The filter is in the QUERY rather than applied to a page of results, so a
+   * long stretch of paused nights cannot push the last real scan off the end of
+   * whatever page size a caller happened to pick.
+   */
+  async lastScannedRun(estateId: string): Promise<ScanRunRecord | null> {
     const container = await this.getContainer();
     const { resources } = await container.items
       .query<ScanRunRecord>({
         query:
           'SELECT TOP 1 * FROM c WHERE c.estateId = @estateId AND c.docType = @docType ' +
+          'AND IS_DEFINED(c.detectorPopulations) AND NOT IS_NULL(c.detectorPopulations) ' +
           'ORDER BY c.startedAt DESC',
         parameters: [
           { name: '@estateId', value: estateId },
@@ -232,5 +269,40 @@ export class CosmosFindingStore implements FindingStore {
       })
       .fetchAll();
     return resources[0] ?? null;
+  }
+
+  /**
+   * How many runs back the last SCANNED run is, counting itself as 1.
+   *
+   * Bounded: it reads at most {@link RUN_AGE_SCAN_LIMIT} recent runs. If the
+   * last real scan is further back than that, the age is reported as that limit
+   * rather than as an unbounded query — the number is for the operator's
+   * context, and paying for an unbounded scan to refine "more than 200 runs ago"
+   * would be spending RU to make a message marginally more precise.
+   */
+  async scannedRunAgeRuns(estateId: string): Promise<number> {
+    const runs = await this.recentRuns(estateId, RUN_AGE_SCAN_LIMIT);
+    for (let i = 0; i < runs.length; i += 1) {
+      if (runs[i].detectorPopulations !== null && runs[i].detectorPopulations !== undefined) {
+        return i + 1;
+      }
+    }
+    return runs.length === 0 ? 0 : RUN_AGE_SCAN_LIMIT;
+  }
+
+  private async recentRuns(estateId: string, top: number): Promise<ScanRunRecord[]> {
+    const container = await this.getContainer();
+    const { resources } = await container.items
+      .query<ScanRunRecord>({
+        query:
+          `SELECT TOP ${top} * FROM c WHERE c.estateId = @estateId AND c.docType = @docType ` +
+          'ORDER BY c.startedAt DESC',
+        parameters: [
+          { name: '@estateId', value: estateId },
+          { name: '@docType', value: 'scan-run' },
+        ],
+      })
+      .fetchAll();
+    return resources;
   }
 }

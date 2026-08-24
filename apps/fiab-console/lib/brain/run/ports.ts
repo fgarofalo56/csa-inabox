@@ -162,15 +162,37 @@ export interface FindingStore {
   put(records: readonly FindingRecord[]): Promise<void>;
   recordRun(run: ScanRunRecord): Promise<void>;
   /**
-   * The most recent run for this estate, or `null` when there has never been
-   * one.
+   * The most recent run for this estate, WHATEVER its verdict.
    *
-   * `null` is NO BASIS, not "no regression". The population comparator uses
-   * this: without a previous run's numbers, "this detector examined 0" and
-   * "this detector has always examined 0" are indistinguishable, and only the
-   * first is an incident.
+   * Used for operator-facing "when did this lane last run at all?" questions.
+   * It is deliberately NOT the population basis — see {@link lastScannedRun}.
    */
   lastRun(estateId: string): Promise<ScanRunRecord | null>;
+  /**
+   * The most recent run that actually SCANNED — i.e. whose
+   * `detectorPopulations` is non-null. `null` when there has never been one.
+   *
+   * THIS IS THE POPULATION BASIS, and the distinction is a blocker-grade one
+   * (review of #4014). PAUSED and UNREACHABLE runs persist a null population, so
+   * taking the basis from `lastRun` means ONE PAUSED NIGHT ERASES THE BASELINE:
+   * measured `OK -> PAUSED -> went-blind OK` gave `populationRegression: null,
+   * exit 0`, where the same sequence without the paused night gave exit 3.
+   *
+   * Under the standing estate-pause mandate that is not an edge case — PAUSED is
+   * the NORMAL operating mode — so the P0 comparator this lane exists to provide
+   * would have been switched off almost always.
+   *
+   * `null` is NO BASIS, not "no regression". The caller renders that distinction
+   * rather than hiding it behind a green tick.
+   */
+  lastScannedRun(estateId: string): Promise<ScanRunRecord | null>;
+  /**
+   * How many runs back {@link lastScannedRun} is, counting itself as 1.
+   *
+   * Reported so an operator reading a comparison against a basis eleven nights
+   * old is told so, rather than left to assume it was last night's.
+   */
+  scannedRunAgeRuns(estateId: string): Promise<number>;
 }
 
 /** An in-memory store. A real implementation of the contract, not a stub. */
@@ -203,6 +225,25 @@ export class InMemoryFindingStore implements FindingStore {
       if (this.runs[i].estateId === estateId) return this.runs[i];
     }
     return null;
+  }
+
+  async lastScannedRun(estateId: string): Promise<ScanRunRecord | null> {
+    for (let i = this.runs.length - 1; i >= 0; i -= 1) {
+      const r = this.runs[i];
+      if (r.estateId === estateId && r.detectorPopulations !== null) return r;
+    }
+    return null;
+  }
+
+  async scannedRunAgeRuns(estateId: string): Promise<number> {
+    let age = 0;
+    for (let i = this.runs.length - 1; i >= 0; i -= 1) {
+      const r = this.runs[i];
+      if (r.estateId !== estateId) continue;
+      age += 1;
+      if (r.detectorPopulations !== null) return age;
+    }
+    return 0;
   }
 }
 

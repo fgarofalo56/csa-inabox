@@ -22,8 +22,23 @@
  * reads exactly like "the mutation was caught" — measured in this repo as
  * `csa_loom_crlf_makes_mutation_needles_silently_noop`, where CRLF line endings
  * made every needle miss and a whole mutation sweep reported a perfect score
- * having changed nothing. So the runner asserts the file CHANGED and treats a
- * miss as its own loud outcome.
+ * having changed nothing.
+ *
+ * ── LINE ENDINGS ARE NORMALISED BEFORE MATCHING (review of #4014) ─────────
+ * Reporting NEEDLE-MISSED loudly is necessary and not sufficient: it turns a
+ * silent no-op into a loud one, but the sweep still cannot run. `.gitattributes`
+ * does not pin `*.mjs` or `lib/brain/**`, so this file and its subjects are LF
+ * in the repository and CRLF in a fresh Windows checkout — the reviewer of #4014
+ * measured CRLF where this working tree had LF, and both observations were
+ * correct. So matching happens against an LF-normalised copy and the original
+ * ending style is restored on write. The runner is then immune to the checkout
+ * it happens to be run from, which is stronger than pinning one file.
+ *
+ * ── NO RAW ESC BYTES (review of #4014) ────────────────────────────────────
+ * The ANSI strip below builds its escape with `String.fromCharCode(27)`. A raw
+ * 0x1b byte in a source file makes `gh pr diff` refuse to print the whole PR —
+ * measured on #4014 — and in a public repository a literal terminal-control byte
+ * is a terminal-injection shape. Never embed one.
  *
  * ── EXIT CODE ─────────────────────────────────────────────────────────────
  * 0 only when every arm landed on its DECLARED expectation. An unexpected
@@ -39,6 +54,9 @@ import { MUTATIONS } from './mutations.mjs';
 const HERE = dirname(fileURLToPath(import.meta.url));
 const CONSOLE_ROOT = resolve(HERE, '..', '..', '..', '..', '..');
 
+const ESC = String.fromCharCode(27);
+const ANSI = new RegExp(`${ESC}\\[[0-9;]*m`, 'g');
+
 /** Run the suite. Returns the RAW exit code — never a boolean. */
 function runSuite() {
   try {
@@ -53,8 +71,8 @@ function runSuite() {
       { cwd: CONSOLE_ROOT, stdio: 'pipe', encoding: 'utf8', env: { ...process.env, CI: '1' } },
     );
     // The SUCCESS output is captured too, not discarded. A green run that
-    // executed ZERO tests is #3783 — a required check reporting success over an
-    // UNEXECUTED suite — and it is invisible if only failure output is read.
+    // executed ZERO tests is #3783 — a required check reporting success having
+    // run nothing — and it is invisible if only failure output is read.
     return { code: 0, output: stdout ?? '' };
   } catch (err) {
     // NOT a swallow: the code and the output are both carried forward and
@@ -69,7 +87,7 @@ function runSuite() {
 
 function summarize(output) {
   const m = output.match(/Tests\s+(.+)$/m);
-  return m ? m[1].replace(/\[[0-9;]*m/g, '').trim() : '(no test summary line)';
+  return m ? m[1].replace(ANSI, '').trim() : '(no test summary line)';
 }
 
 /**
@@ -84,8 +102,23 @@ function executedCount(output) {
   return m === null ? null : Number(m[1]);
 }
 
-/** The floor the baseline must clear. Raise it as the suite grows. */
-const MIN_BASELINE_TESTS = 100;
+/**
+ * The floor the baseline must clear.
+ *
+ * Measured 240 at the time of writing; set ~10% below so ordinary churn does not
+ * trip it while a suite that silently stopped executing does. RAISE this as the
+ * suite grows — never lower it.
+ */
+const MIN_BASELINE_TESTS = 215;
+
+/** Apply an edit against an LF-normalised view, restoring the original endings. */
+function applyMutation(original, find, replace) {
+  const wasCrlf = original.includes('\r\n');
+  const lf = wasCrlf ? original.split('\r\n').join('\n') : original;
+  const mutatedLf = lf.replace(find, replace);
+  if (mutatedLf === lf) return null;
+  return wasCrlf ? mutatedLf.split('\n').join('\r\n') : mutatedLf;
+}
 
 const only = process.argv[2];
 const arms = only ? MUTATIONS.filter((a) => a.id === only) : MUTATIONS;
@@ -127,8 +160,8 @@ for (const arm of arms) {
   let rc = null;
   let tests = '';
   try {
-    const mutated = original.replace(arm.find, arm.replace);
-    if (mutated === original) {
+    const mutated = applyMutation(original, arm.find, arm.replace);
+    if (mutated === null) {
       outcome = 'NEEDLE-MISSED';
     } else {
       writeFileSync(path, mutated, 'utf8');

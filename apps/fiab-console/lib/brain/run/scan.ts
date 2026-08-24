@@ -38,7 +38,7 @@ import { runDetectors, type DetectorRun } from '../detectors';
 import type { Detector } from '../types';
 import { classifyEstate, observedStates } from './verdict';
 import { reconcile, toOccurrences } from './lifecycle';
-import { detectPopulationRegression, snapshotPopulations } from './population';
+import { detectPopulationRegression, digestOfIds, snapshotPopulations } from './population';
 import {
   RUN_RECORD_TTL_SECONDS,
   FINDING_SCHEMA_VERSION,
@@ -205,6 +205,7 @@ export async function runBrainScan(deps: ScanDeps): Promise<ScanOutcome> {
       graphVersionId: null,
       counts: null,
       detectorPopulations: null,
+      graphSubjectsDigest: null,
       observed: observedStates(verdict.readings),
       notes: [
         verdict.kind === 'paused'
@@ -233,11 +234,14 @@ export async function runBrainScan(deps: ScanDeps): Promise<ScanOutcome> {
 
   // ── the OK path ──────────────────────────────────────────────────────────
   //
-  // The PREVIOUS run record is read BEFORE anything is written, because the
-  // population comparison needs the state of the world as of the last scan. A
-  // read after `recordRun` would compare this run against itself and could never
-  // report a regression.
-  const previousRun = await deps.findings.lastRun(deps.estateId);
+  // The basis is the last run that actually SCANNED, never merely the last run.
+  // PAUSED and UNREACHABLE runs persist a null population, so `lastRun` would
+  // let ONE PAUSED NIGHT erase the baseline — and under the standing
+  // estate-pause mandate PAUSED is the normal operating mode, which would switch
+  // this comparator off almost always. Read BEFORE anything is written, so the
+  // comparison cannot end up being against this run itself.
+  const previousRun = await deps.findings.lastScannedRun(deps.estateId);
+  const basisAgeRuns = await deps.findings.scannedRunAgeRuns(deps.estateId);
 
   const source = await deps.graphSource.build();
   notes.push(...source.notes);
@@ -295,17 +299,45 @@ export async function runBrainScan(deps: ScanDeps): Promise<ScanOutcome> {
     blind: blindDetectors.size,
   });
 
-  // PRP §5 — a shrinking judged count is a P0. Computed against the PREVIOUS
-  // run's numbers, which were read before anything was written this run.
-  const detectorPopulations = snapshotPopulations(detectorRun.results);
-  const populationRegression = detectPopulationRegression(previousRun, detectorPopulations);
+  // PRP §5 — a shrinking judged count is a P0. Compared against the last run
+  // that actually SCANNED, and against each detector's own high-water mark so a
+  // slow erosion cannot walk the population down one tolerable step at a time.
+  const detectorPopulations = snapshotPopulations(detectorRun.results, {
+    previous: previousRun?.detectorPopulations ?? null,
+    at,
+  });
+  const populationRegression = detectPopulationRegression(previousRun, detectorPopulations, {
+    basisAgeRuns,
+  });
+  // Composition at constant size. See ScanRunRecord.graphSubjectsDigest for what
+  // this does and does not cover.
+  const graphSubjectsDigest = digestOfIds(source.graph.nodes.map((n) => n.id));
+
   if (populationRegression !== null) notes.push(populationRegression.message);
   else if (previousRun === null || previousRun.detectorPopulations === null) {
     notes.push(
-      'population comparison: NO BASIS. There is no previous run record with per-detector ' +
-        'counts for this estate, so this run cannot tell "the detectors are looking at ' +
-        'everything" from "the detectors have always looked at nothing". The next run can.',
+      'population comparison: NO BASIS. No previous run for this estate carries per-detector ' +
+        'counts, so this run cannot tell "the detectors are looking at everything" from "the ' +
+        'detectors have always looked at nothing". A PAUSED or UNREACHABLE run does not ' +
+        'provide a basis; the next run that actually scans will.',
     );
+  } else if (basisAgeRuns > 1) {
+    notes.push(
+      `population comparison: basis is run '${previousRun.runId}', ${basisAgeRuns} runs back — ` +
+        'the runs in between did not scan (paused or unreachable), so this comparison spans ' +
+        'more wall clock than one night.',
+    );
+  }
+  if (previousRun !== null && previousRun.graphSubjectsDigest !== null) {
+    if (previousRun.graphSubjectsDigest !== graphSubjectsDigest) {
+      notes.push(
+        `graph composition CHANGED since run '${previousRun.runId}' (subject digest ` +
+          `${previousRun.graphSubjectsDigest} -> ${graphSubjectsDigest}) at ` +
+          `${source.graph.nodes.length} node(s). A count alone cannot see this: swapping every ` +
+          'subject while holding the count constant is invisible, and the graph pull is ' +
+          'deliberately unscoped, so non-Loom growth can mask Loom disappearance one for one.',
+      );
+    }
   }
 
   const runRecord: ScanRunRecord = {
@@ -322,6 +354,7 @@ export async function runBrainScan(deps: ScanDeps): Promise<ScanOutcome> {
     graphVersionId: graphVersion.versionId,
     counts,
     detectorPopulations,
+    graphSubjectsDigest,
     observed: observedStates(verdict.readings),
     notes: [...notes, ...digest.notes],
     ttl: RUN_RECORD_TTL_SECONDS,

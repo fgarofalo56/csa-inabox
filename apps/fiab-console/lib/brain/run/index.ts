@@ -21,6 +21,7 @@
 export {
   FINDING_SCHEMA_VERSION,
   FINDING_STATES,
+  HIGH_WATER_DECAY_DAYS,
   MAX_SUPPRESSION_DAYS,
   POPULATION_SHRINK_TOLERANCE,
   REACH_FAILURE_REASONS,
@@ -61,6 +62,7 @@ export {
 
 export {
   COULD_NOT_REACH,
+  assertMessageMatchesReason,
   classifyEstate,
   countByState,
   observedStates,
@@ -72,6 +74,7 @@ export {
   acceptFinding,
   acknowledgeFinding,
   assertNoRegressionReportedAsNew,
+  assertRecurrenceAfterFixIsReported,
   reconcile,
   suppressionExpired,
   toOccurrences,
@@ -96,6 +99,8 @@ export {
 
 export {
   detectPopulationRegression,
+  digestOfIds,
+  fnv1a64,
   snapshotPopulations,
 } from './population';
 

@@ -58,8 +58,19 @@ export class HistoryModuleUnavailableError extends Error {
       `the Brain scan could not load the graph-history module ('${HISTORY_MODULE_SPECIFIER}'): ` +
         `${detail} REFUSING to continue. A scan that writes findings with no graph version ` +
         'has no "before", so "an edge that should not have formed" becomes unanswerable and ' +
-        'a prune recommendation would rest on a single snapshot. Remediation: land #3935 ' +
-        '(W9 graph history), or run the scan with an explicit GraphHistoryWriter.',
+        'a prune recommendation would rest on a single snapshot.\n' +
+        'This message states ONLY what was established: the specifier above did not resolve. ' +
+        'It does NOT name a cause, because there are at least two and the code cannot tell ' +
+        'them apart from here (deploy-integrity.md R7). Check both:\n' +
+        '  1. IS THE MODULE IN THE TREE? `lib/brain/history/` arrives with #3935 (W9). If ' +
+        '     that has not merged, it is absent.\n' +
+        '  2. IS IT IN THE COMPILED OUTPUT? `lib/brain/run/tsconfig.cli.json` emits a closure ' +
+        '     over STATIC imports, and this specifier is assembled at runtime so tsc cannot ' +
+        '     see it. Its `include` must cover `lib/brain/history/**`, and the emitted tree ' +
+        '     must actually contain `lib/brain/history/index.js`. An earlier revision of this ' +
+        '     lane told the operator to "land #3935" as the fix; that was a cause the code had ' +
+        '     not established, and it would have sent the next investigation to the wrong PR ' +
+        '     while the real defect sat in the emit closure.',
     );
     this.name = 'HistoryModuleUnavailableError';
   }

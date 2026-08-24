@@ -296,5 +296,13 @@ export function renderStepSummary(outcome: ScanOutcome): string {
       '```',
     );
   }
+  // `outcome.notes` — NOT just `digest.notes`. The step summary is the surface
+  // the operator actually reads, and the run-level notes are where "population
+  // comparison: NO BASIS", the basis age, the graph-composition change and the
+  // graph-version receipt live. Rendering only the digest's notes here left all
+  // of those visible in the log and invisible in the summary (review of #4014).
+  if (outcome.notes.length > 0) {
+    out.push('', '### Run notes', '', ...outcome.notes.map((n) => `- ${n}`));
+  }
   return out.join('\n');
 }

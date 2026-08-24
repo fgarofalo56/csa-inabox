@@ -25,15 +25,39 @@ import {
   acceptFinding,
   acknowledgeFinding,
   assertNoRegressionReportedAsNew,
+  assertRecurrenceAfterFixIsReported,
   reconcile,
   suppressionExpired,
   toOccurrences,
 } from '../lifecycle';
-import { MAX_SUPPRESSION_DAYS, type FindingFingerprint, type FindingRecord } from '../model';
+import {
+  MAX_SUPPRESSION_DAYS,
+  type FindingFingerprint,
+  type FindingRecord,
+  type RunDigest,
+} from '../model';
 import { ESTATE, finding, record } from './fixtures';
 
 const T0 = '2026-08-01T00:00:00.000Z';
 const T1 = '2026-08-24T04:11:00.000Z';
+
+/** An empty digest, for testing the guard in isolation from `reconcile`. */
+function emptyDigest(): RunDigest {
+  return {
+    runId: 'run-1',
+    estateId: ESTATE,
+    at: T1,
+    newFindings: [],
+    regressions: [],
+    fixed: [],
+    suppressionsExpired: [],
+    stillOpen: 0,
+    suppressed: 0,
+    notEvaluated: [],
+    evaluatedDetectors: [],
+    notes: [],
+  };
+}
 
 const ALL = new Set(['unreachable-service', 'dangling-wire']);
 
@@ -189,6 +213,137 @@ describe('lifecycle — THE REGRESSION', () => {
   });
 });
 
+/**
+ * G3 — the guard asserts the TRANSITION, not the destination state.
+ *
+ * The state-only guard defended exactly one laundering route. The reviewer found
+ * another in one try: route a recurrence to `acknowledged`, scope it to a
+ * detector no test exercises, and the whole suite stayed green — the guard never
+ * fired (it only inspected `new` records), the digest counted it under
+ * `stillOpen` ("unchanged, not listed"), and nothing printed. The BROAD form of
+ * the same edit WAS caught, which is the narrow-bypass shape this repo measures
+ * as the one that actually works.
+ *
+ * That escape also broke the argument used to justify the declared blind spot in
+ * `mutation/mutations.mjs`: "the runtime guard exists in addition to the tests"
+ * only holds if the runtime guard covers more than one route.
+ */
+describe('lifecycle — a recurrence after a fix is reported, WHATEVER state it is written as', () => {
+  const prior = () =>
+    record({
+      detector: 'config-drift',
+      subject: '/x',
+      state: 'fixed',
+      fixedAt: T0,
+      fixedByRunId: 'run-0',
+    });
+
+  it('the normal path satisfies the guard', () => {
+    const { digest } = run({
+      previous: [prior()],
+      findings: [finding({ detector: 'config-drift', subject: '/x' })],
+      evaluated: new Set(['config-drift']),
+    });
+    expect(digest.regressions).toHaveLength(1);
+  });
+
+  it('THROWS when a recurrence is laundered to `acknowledged`', () => {
+    // Constructed directly, because `reconcile` no longer has a route that
+    // produces it — which is exactly the point. The guard must reject the shape
+    // whatever produced it, so a future edit that reintroduces the route fails
+    // at runtime and not merely in review.
+    const fp = 'config-drift#/x' as FindingFingerprint;
+    const laundered = record({ detector: 'config-drift', subject: '/x', state: 'acknowledged' });
+    expect(() =>
+      assertRecurrenceAfterFixIsReported({
+        occurrences: toOccurrences([finding({ detector: 'config-drift', subject: '/x' })]),
+        priorByFingerprint: new Map([[fp, prior()]]),
+        records: [laundered],
+        digest: emptyDigest(),
+      }),
+    ).toThrow(/was FIXED at .* and the detectors reported it again/);
+  });
+
+  it('THROWS when a recurrence is laundered to `accepted`', () => {
+    const fp = 'config-drift#/x' as FindingFingerprint;
+    const buried = record({ detector: 'config-drift', subject: '/x', state: 'accepted' });
+    expect(() =>
+      assertRecurrenceAfterFixIsReported({
+        occurrences: toOccurrences([finding({ detector: 'config-drift', subject: '/x' })]),
+        priorByFingerprint: new Map([[fp, prior()]]),
+        records: [buried],
+        digest: emptyDigest(),
+      }),
+    ).toThrow(/buries it in the still-open count/);
+  });
+
+  it('THROWS when the record says `regressed` but the DIGEST omits it', () => {
+    // Both halves matter. A record nobody prints is a signal nobody sees.
+    const fp = 'config-drift#/x' as FindingFingerprint;
+    const regressed = record({
+      detector: 'config-drift',
+      subject: '/x',
+      state: 'regressed',
+      regressionCount: 1,
+    });
+    expect(() =>
+      assertRecurrenceAfterFixIsReported({
+        occurrences: toOccurrences([finding({ detector: 'config-drift', subject: '/x' })]),
+        priorByFingerprint: new Map([[fp, prior()]]),
+        records: [regressed],
+        digest: emptyDigest(),
+      }),
+    ).toThrow(/is NOT in the run digest/);
+  });
+
+  it('CONTROL: a finding with NO prior fixed record is not subject to the guard', () => {
+    expect(() =>
+      assertRecurrenceAfterFixIsReported({
+        occurrences: toOccurrences([finding({ detector: 'config-drift', subject: '/x' })]),
+        priorByFingerprint: new Map(),
+        records: [record({ detector: 'config-drift', subject: '/x', state: 'new' })],
+        digest: emptyDigest(),
+      }),
+    ).not.toThrow();
+  });
+
+  it('CONTROL: a fixed record that did NOT recur is not subject to the guard', () => {
+    const fp = 'config-drift#/x' as FindingFingerprint;
+    expect(() =>
+      assertRecurrenceAfterFixIsReported({
+        occurrences: [],
+        priorByFingerprint: new Map([[fp, prior()]]),
+        records: [prior()],
+        digest: emptyDigest(),
+      }),
+    ).not.toThrow();
+  });
+
+  it('a schema-mismatched prior is exempt — reconcile reports it as notEvaluated', () => {
+    const fp = 'config-drift#/x' as FindingFingerprint;
+    const old = { ...prior(), schemaVersion: 0 } as FindingRecord;
+    expect(() =>
+      assertRecurrenceAfterFixIsReported({
+        occurrences: toOccurrences([finding({ detector: 'config-drift', subject: '/x' })]),
+        priorByFingerprint: new Map([[fp, old]]),
+        records: [old],
+        digest: emptyDigest(),
+      }),
+    ).not.toThrow();
+  });
+
+  it('the guard is wired INTO reconcile, not merely exported', () => {
+    // A guard nothing calls is a comment. `reconcile` runs it on every pass.
+    const { digest, records } = run({
+      previous: [prior()],
+      findings: [finding({ detector: 'config-drift', subject: '/x' })],
+      evaluated: new Set(['config-drift']),
+    });
+    expect(records[0].state).toBe('regressed');
+    expect(digest.regressions.map((r) => r.fingerprint)).toContain('config-drift#/x');
+  });
+});
+
 describe('lifecycle — fixed, and ABSENCE IS NOT A FIX', () => {
   it('a finding the detector no longer reports is FIXED', () => {
     const prior = record({ detector: 'unreachable-service', subject: '/broker', state: 'new' });
@@ -289,10 +444,55 @@ describe('lifecycle — acceptance requires a reason AND an owner', () => {
   });
 
   it('REJECTS a suppression longer than the ceiling', () => {
-    const far = new Date(Date.parse(T0) + (MAX_SUPPRESSION_DAYS + 1) * 86_400_000).toISOString();
-    expect(() => acceptFinding(base, { reason: 'r', owner: 'o', at: T0, expiresAt: far })).toThrow(
-      /deleted detector wearing a reason/,
-    );
+    // ABSOLUTE DATES, not `MAX_SUPPRESSION_DAYS + 1` (review of #4014, G6).
+    //
+    // The original fixture was built FROM the constant, so the guard moved with
+    // the code it guarded: widening `MAX_SUPPRESSION_DAYS` from 180 to 3,650,000
+    // in ONE TOKEN changed nothing and the whole 116-test suite stayed green.
+    // That is the direct answer to "can you make a suppression that never
+    // expires?" — and it was yes.
+    //
+    // T0 is 2026-08-01; this is 2027-08-01, i.e. 365 days.
+    expect(() =>
+      acceptFinding(base, {
+        reason: 'r',
+        owner: 'o',
+        at: T0,
+        expiresAt: '2027-08-01T00:00:00.000Z',
+      }),
+    ).toThrow(/deleted detector wearing a reason/);
+  });
+
+  it('the ceiling is pinned ABSOLUTELY at 180 days', () => {
+    // Widening the constant must fail HERE, loudly, rather than silently
+    // relaxing every fixture derived from it.
+    expect(MAX_SUPPRESSION_DAYS).toBe(180);
+  });
+
+  it('CONTROL: an absolute expiry just INSIDE the ceiling is accepted', () => {
+    // Without this, a ceiling of zero would pass the rejection test above and
+    // the pair would prove nothing about where the boundary actually is.
+    // T0 + 179 days = 2027-01-27.
+    expect(() =>
+      acceptFinding(base, {
+        reason: 'r',
+        owner: 'o',
+        at: T0,
+        expiresAt: '2027-01-27T00:00:00.000Z',
+      }),
+    ).not.toThrow();
+  });
+
+  it('CONTROL: an absolute expiry just OUTSIDE the ceiling is rejected', () => {
+    // T0 + 181 days = 2027-01-29.
+    expect(() =>
+      acceptFinding(base, {
+        reason: 'r',
+        owner: 'o',
+        at: T0,
+        expiresAt: '2027-01-29T00:00:00.000Z',
+      }),
+    ).toThrow(/deleted detector wearing a reason/);
   });
 
   it('carries regressionCount through acceptance — accepting does not erase history', () => {

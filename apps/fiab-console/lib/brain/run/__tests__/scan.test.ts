@@ -371,3 +371,143 @@ describe('runBrainScan — THE MUTATION ACCEPTANCE (#3936)', () => {
     expect(exitCodeForOutcome(broken)).toBe(3);
   });
 });
+
+/**
+ * S3 — ONE PAUSED NIGHT MUST NOT ERASE THE POPULATION BASELINE.
+ *
+ * Measured by the reviewer: `OK -> PAUSED -> went-blind OK` gave
+ * `populationRegression: null, exit 0`, while the identical sequence WITHOUT the
+ * paused night gave exit 3. Cause: the basis came from `lastRun`, which returns
+ * the most recent run of ANY verdict, and PAUSED/UNREACHABLE runs persist
+ * `detectorPopulations: null`.
+ *
+ * Under the standing estate-pause mandate PAUSED is not an edge case — it is the
+ * NORMAL operating mode — so the P0 comparator this lane exists to provide was
+ * switched off almost always. The basis now comes from `lastScannedRun`.
+ */
+describe('runBrainScan — a PAUSED night does not erase the baseline (S3)', () => {
+  async function sequence(middle: 'paused' | 'unreachable' | 'none') {
+    const store = new InMemoryFindingStore();
+    const history = new InMemoryGraphHistoryWriter();
+
+    // run 1 — a real scan. This is the basis.
+    await runBrainScan(deps({ findings: store, history, runId: 'run-1' }));
+
+    // run 2 — the interruption.
+    if (middle === 'paused') {
+      await runBrainScan(
+        deps({
+          findings: store,
+          history,
+          runId: 'run-2',
+          probe: new StubProbe(probeOf(pausedReadings())),
+        }),
+      );
+    } else if (middle === 'unreachable') {
+      await runBrainScan(
+        deps({
+          findings: store,
+          history,
+          runId: 'run-2',
+          probe: new StubProbe(probeOf([], [AUTH_FAILURE])),
+        }),
+      );
+    }
+
+    // run 3 — a scan whose detectors went blind.
+    return runBrainScan(
+      deps({
+        findings: store,
+        history,
+        runId: 'run-3',
+        graphSource: new StaticGraphSource(buildEdgelessGraph(), ['configured', 'owns'], []),
+      }),
+    );
+  }
+
+  it('CONTROL: with no interruption, the shrink is caught (exit 3)', async () => {
+    const outcome = await sequence('none');
+    expect(outcome.populationRegression).not.toBeNull();
+    expect(exitCodeForOutcome(outcome)).toBe(3);
+  });
+
+  it('a PAUSED night in between STILL catches the shrink', async () => {
+    const outcome = await sequence('paused');
+    expect(outcome.populationRegression).not.toBeNull();
+    expect(exitCodeForOutcome(outcome)).toBe(3);
+  });
+
+  it('an UNREACHABLE night in between STILL catches the shrink', async () => {
+    const outcome = await sequence('unreachable');
+    expect(outcome.populationRegression).not.toBeNull();
+    expect(exitCodeForOutcome(outcome)).toBe(3);
+  });
+
+  it('reports how many runs back the basis is when nights were skipped', async () => {
+    // run-1 scanned, run-2 was paused, run-3 is scanning now. At the moment
+    // run-3 asks, the store holds run-1 and run-2 — run-3 has not been recorded
+    // yet — so the basis is 2 runs back, counting the paused night.
+    const outcome = await sequence('paused');
+    expect(outcome.populationRegression?.basisAgeRuns).toBe(2);
+    expect(outcome.populationRegression?.message).toContain('2 runs back');
+    expect(outcome.populationRegression?.message).toContain('did not scan');
+  });
+
+  it('CONTROL: with no skipped night the message does not claim a stale basis', async () => {
+    const outcome = await sequence('none');
+    expect(outcome.populationRegression?.basisAgeRuns).toBe(1);
+    expect(outcome.populationRegression?.message).not.toContain('runs back');
+  });
+
+  it('a PAUSED run does NOT become the basis for the next run', async () => {
+    const store = new InMemoryFindingStore();
+    const history = new InMemoryGraphHistoryWriter();
+    await runBrainScan(deps({ findings: store, history, runId: 'run-1' }));
+    await runBrainScan(
+      deps({
+        findings: store,
+        history,
+        runId: 'run-2',
+        probe: new StubProbe(probeOf(pausedReadings())),
+      }),
+    );
+    expect((await store.lastRun(ESTATE))?.runId).toBe('run-2');
+    expect((await store.lastScannedRun(ESTATE))?.runId).toBe('run-1');
+    expect(await store.scannedRunAgeRuns(ESTATE)).toBe(2);
+  });
+});
+
+describe('runBrainScan — graph composition at constant size (G5)', () => {
+  it('records a subjects digest on every scanning run', async () => {
+    const outcome = await runBrainScan(deps());
+    expect(outcome.runRecord.graphSubjectsDigest).toMatch(/^[0-9a-f]{16}$/);
+  });
+
+  it('is null on the non-scanning paths', async () => {
+    const paused = await runBrainScan(deps({ probe: new StubProbe(probeOf(pausedReadings())) }));
+    expect(paused.runRecord.graphSubjectsDigest).toBeNull();
+  });
+
+  it('a CHANGED graph composition is reported in the notes', async () => {
+    const store = new InMemoryFindingStore();
+    const history = new InMemoryGraphHistoryWriter();
+    await runBrainScan(deps({ findings: store, history, runId: 'run-1' }));
+    const second = await runBrainScan(
+      deps({
+        findings: store,
+        history,
+        runId: 'run-2',
+        graphSource: new StaticGraphSource(buildEdgelessGraph(), ['configured', 'owns'], []),
+      }),
+    );
+    expect(second.notes.join('\n')).toContain('graph composition CHANGED');
+  });
+
+  it('CONTROL: an UNCHANGED composition says nothing', async () => {
+    const store = new InMemoryFindingStore();
+    const history = new InMemoryGraphHistoryWriter();
+    await runBrainScan(deps({ findings: store, history, runId: 'run-1' }));
+    const second = await runBrainScan(deps({ findings: store, history, runId: 'run-2' }));
+    expect(second.notes.join('\n')).not.toContain('graph composition CHANGED');
+  });
+});

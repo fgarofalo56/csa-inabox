@@ -20,6 +20,7 @@ import {
   CLOUD,
   ESTATE,
   StubProbe,
+  blindDetector,
   buildFixtureGraph,
   finding,
   pausedReadings,
@@ -164,5 +165,69 @@ describe('renderStepSummary', () => {
     const outcome = await runWithARegression();
     const md = renderStepSummary(outcome);
     expect(md).toContain('| **regressions** | **1** |');
+  });
+
+  it('renders the RUN notes, not just the digest notes', async () => {
+    // The step summary is the surface the operator reads. "population
+    // comparison: NO BASIS", the basis age, the graph-composition change and the
+    // graph-version receipt all live on `outcome.notes`, and rendering only
+    // `digest.notes` left every one of them visible in the log and invisible
+    // here (review of #4014).
+    const outcome = await runBrainScan(baseDeps());
+    const md = renderStepSummary(outcome);
+    expect(md).toContain('### Run notes');
+    expect(md).toContain('population comparison: NO BASIS');
+    expect(md).toContain('graph version');
+  });
+});
+
+/**
+ * G7 — a whole report category could be deleted silently.
+ *
+ * `if (d.notEvaluated.length > 0)` -> `if (false)` removed the NOT EVALUATED
+ * section from BOTH renderers with zero test failures. That section is the only
+ * place a blind detector's frozen backlog surfaces to the operator: the findings
+ * are not fixed, they are not listed as open, and without this section they are
+ * a bare count.
+ */
+describe('the NOT EVALUATED section', () => {
+  async function runWithABlindDetector() {
+    const store = new InMemoryFindingStore();
+    await store.put([record({ detector: 'blind-one', subject: '/frozen', state: 'new' })]);
+    return runBrainScan(
+      baseDeps({
+        findings: store,
+        detectors: [
+          blindDetector('blind-one'),
+          stubDetector('stub', [finding({ detector: 'stub', subject: '/live' })]),
+        ],
+      }),
+    );
+  }
+
+  it('appears in the LOG report, naming the record and the reason', async () => {
+    const outcome = await runWithABlindDetector();
+    const text = renderRunReport(outcome);
+    expect(text).toContain('NOT EVALUATED');
+    expect(text).toContain('blind-one');
+    expect(text).toContain('not evidence of repair');
+  });
+
+  it('appears in the STEP SUMMARY too', async () => {
+    const outcome = await runWithABlindDetector();
+    expect(renderStepSummary(outcome)).toContain('NOT EVALUATED');
+  });
+
+  it('CONTROL: it is ABSENT when nothing went unevaluated', async () => {
+    // Without this, a renderer that printed the header unconditionally would
+    // pass the two assertions above and prove nothing.
+    const outcome = await runBrainScan(baseDeps());
+    expect(outcome.counts?.notEvaluated).toBe(0);
+    expect(renderRunReport(outcome)).not.toContain('NOT EVALUATED');
+  });
+
+  it('the count is reported even when the section is absent', async () => {
+    const outcome = await runBrainScan(baseDeps());
+    expect(renderCounts(outcome)).toContain('not evaluated');
   });
 });
