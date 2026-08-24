@@ -16,8 +16,8 @@ verdict is DERIVED, not name-matched — see "How the owner column is decided".
 | Total routes | 1686 |
 | Public (no session) | 58 |
 | Session-only | 648 |
-| Owner-scoped | 675 |
-| Admin | 305 |
+| Owner-scoped | 674 |
+| Admin | 306 |
 | Unknown (generator fails) | 0 |
 | Gated (backend config) | 496 |
 | Areas | 122 |
@@ -1930,7 +1930,7 @@ dispatch is invisible to it. Full limits: `scripts/ci/_route-backends.mjs`.
 | `marketplace/catalog/route.ts` | GET | session-only |  | APIM, ARM |
 | `marketplace/gate/route.ts` | GET | session-only |  | — |
 | `marketplace/mini-app/route.ts` | POST | owner-scoped |  | ADF, ADLS, ADX, AI Search, APIM, ARM, Azure SQL, Azure Storage, Compute, Cosmos, Microsoft Graph, PostgreSQL, Purview, Resource Graph, Synapse |
-| `marketplace/products/[id]/certify/route.ts` | POST | owner-scoped |  | ADX, Azure Monitor, Azure Networking, Container Apps, Cosmos, Cost Management, Log Analytics |
+| `marketplace/products/[id]/certify/route.ts` | POST | admin |  | ADX, Azure Monitor, Azure Networking, Container Apps, Cosmos, Cost Management, Log Analytics |
 | `marketplace/products/[id]/route.ts` | GET | session-only |  | Cosmos |
 | `marketplace/products/[id]/subscribe/route.ts` | POST | session-only |  | Cosmos |
 | `marketplace/products/route.ts` | GET POST | session-only |  | ADX, Azure Monitor, Azure Networking, Container Apps, Cosmos, Cost Management, Log Analytics |
