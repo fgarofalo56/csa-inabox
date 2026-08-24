@@ -48,6 +48,7 @@ import { ResizableCanvasRegion } from '@/lib/components/canvas/resizable-canvas'
 import { SplitPane } from '@/lib/components/shared/split-pane';
 import { accentTint, CanvasRightRail } from '@/lib/components/canvas/canvas-node-kit';
 import { ItemEditorChrome } from './item-editor-chrome';
+import { AzureResourcePicker } from '@/lib/components/azure/azure-resource-picker';
 import { DetailsPanel, type DetailsSection } from '@/lib/components/shared/details-panel';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
@@ -97,6 +98,31 @@ function useWorkspaces() {
 
 interface Props { item: FabricItemType; id: string }
 
+/**
+ * Split an ARM resource id into the coordinates the mount API wants (#3514).
+ *
+ * WHY THE PICKER'S OWN FIELDS ARE NOT ENOUGH. `AzureResourcePicker` deliberately
+ * returns ONLY `id` from its manual-entry escape hatch — `commitManual()` leaves
+ * `name`, `subscriptionId` and `resourceGroup` empty rather than fabricating
+ * them, and it says so in a comment. That hatch is exactly what renders when
+ * Resource Graph discovery is denied, which per `cloud-parity.md` is a routine
+ * state in Azure Government where the Loom UAMI often lacks tenant-root Reader.
+ * So a consumer that reads only `r.resourceGroup` gets an empty string on the
+ * one path the hatch exists to serve, its submit button never enables, and the
+ * surface becomes the "dead end" `auto-bind-by-default.md` explicitly forbids.
+ *
+ * Deriving them from the id is parsing, not guessing: an ARM id has one shape,
+ * and every field below is read out of it positionally. Returns null when the
+ * string is not an ARM id of this provider, so a malformed paste fails loudly
+ * instead of mounting the wrong factory.
+ */
+export function armFactoryCoords(armId: string): { subscriptionId: string; resourceGroup: string; name: string } | null {
+  const m = /^\/subscriptions\/([^/]+)\/resourceGroups\/([^/]+)\/providers\/Microsoft\.DataFactory\/factories\/([^/]+)\/?$/i
+    .exec((armId || '').trim());
+  if (!m) return null;
+  return { subscriptionId: m[1], resourceGroup: m[2], name: m[3] };
+}
+
 export function MountedAdfEditor({ item, id }: Props) {
   const s = useStyles();
   const ws = useWorkspaces();
@@ -118,6 +144,10 @@ export function MountedAdfEditor({ item, id }: Props) {
   const [cSub, setCSub] = useState('');
   const [cRg, setCRg] = useState('');
   const [cFactory, setCFactory] = useState('');
+  // The ARM id of the factory chosen in the picker (#3514). It is the picker's
+  // controlled value; cSub / cRg / cFactory are derived from the selection so
+  // nothing is hand-typed.
+  const [cFactoryId, setCFactoryId] = useState('');
   const [cBusy, setCBusy] = useState(false);
   const [cErr, setCErr] = useState<string | null>(null);
 
@@ -187,7 +217,7 @@ export function MountedAdfEditor({ item, id }: Props) {
       });
       const j = await r.json();
       if (!j.ok) { setCErr(j.error || 'create failed'); return; }
-      setCreateOpen(false); setCName(''); setCSub(''); setCRg(''); setCFactory('');
+      setCreateOpen(false); setCName(''); setCSub(''); setCRg(''); setCFactory(''); setCFactoryId('');
       await loadList(workspaceId);
       if (j.mount?.id) setMountId(j.mount.id);
     } finally { setCBusy(false); }
@@ -315,9 +345,51 @@ export function MountedAdfEditor({ item, id }: Props) {
                       <DialogTitle>Mount an existing Azure Data Factory</DialogTitle>
                       <DialogContent>
                         <Field label="Display name" required><Input value={cName} onChange={(_, d) => setCName(d.value)} /></Field>
-                        <Field label="Subscription id" required><Input value={cSub} onChange={(_, d) => setCSub(d.value)} placeholder="00000000-0000-0000-0000-000000000000" /></Field>
-                        <Field label="Resource group" required><Input value={cRg} onChange={(_, d) => setCRg(d.value)} placeholder="rg-data" /></Field>
-                        <Field label="Factory name" required><Input value={cFactory} onChange={(_, d) => setCFactory(d.value)} placeholder="adf-prod" /></Field>
+                        {/* #3514 — mounting an existing factory USED to demand
+                            a hand-typed subscription GUID, resource group and
+                            factory name: three chances to mistype an address
+                            the platform can enumerate, which is exactly the
+                            shape `auto-bind-by-default.md` and the
+                            no-freeform-config rule forbid. One cross-subscription
+                            picker (Azure Resource Graph, the caller's own RBAC)
+                            now supplies all three from the chosen factory, and
+                            fills an empty Display name with the factory's own
+                            name so the Loom item and the Azure object match
+                            (auto-bind §2). */}
+                        <AzureResourcePicker
+                          type="Microsoft.DataFactory/factories"
+                          matchBy="id"
+                          label="Data Factory"
+                          placeholder="Select a Data Factory (across all subscriptions)"
+                          surface="Mount an existing Azure Data Factory"
+                          value={cFactoryId}
+                          onChange={(r) => {
+                            setCFactoryId(r?.id || '');
+                            // A discovered row carries all three fields. A
+                            // MANUALLY entered ARM id carries only `id`, so the
+                            // coordinates are parsed out of it — without this
+                            // the Mount button could never enable on the
+                            // discovery-denied path (see armFactoryCoords).
+                            const parsed = r?.id ? armFactoryCoords(r.id) : null;
+                            const sub = r?.subscriptionId || parsed?.subscriptionId || '';
+                            const rg = r?.resourceGroup || parsed?.resourceGroup || '';
+                            const factory = r?.name || parsed?.name || '';
+                            setCSub(sub);
+                            setCRg(rg);
+                            setCFactory(factory);
+                            if (factory) setCName((cur) => (cur.trim() ? cur : factory));
+                            setCErr(
+                              r?.id && !factory
+                                ? 'That does not look like a Data Factory resource id. Expected /subscriptions/<sub>/resourceGroups/<rg>/providers/Microsoft.DataFactory/factories/<name>.'
+                                : null,
+                            );
+                          }}
+                        />
+                        {cSub && cRg && cFactory && (
+                          <Caption1 data-mount-target>
+                            Mounting <strong>{cFactory}</strong> in resource group <strong>{cRg}</strong>.
+                          </Caption1>
+                        )}
                         {cErr && <MessageBar intent="error"><MessageBarBody className={s.errBody}>{cErr}</MessageBarBody></MessageBar>}
                         <MessageBar intent="info">
                           <MessageBarBody>
