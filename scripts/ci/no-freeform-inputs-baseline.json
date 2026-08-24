@@ -21,7 +21,6 @@
     "apps/fiab-console/lib/components/cosmos/cosmos-policy-editors.tsx": 1,
     "apps/fiab-console/lib/components/dbt/dbt-model-graph.tsx": 2,
     "apps/fiab-console/lib/components/deployment/deployment-pipelines-pane.tsx": 2,
-    "apps/fiab-console/lib/components/eventhubs/eventhubs-namespace-editor.tsx": 1,
     "apps/fiab-console/lib/components/eventstream/visual-designer.tsx": 5,
     "apps/fiab-console/lib/components/notebook/environment-panel.tsx": 1,
     "apps/fiab-console/lib/components/onelake/shortcut-wizard.tsx": 6,
