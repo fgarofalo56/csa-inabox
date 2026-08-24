@@ -54,6 +54,7 @@ measureWithControl({
 | `measure.test.mjs` | Proves each rule fires. Carries positive controls so it cannot pass vacuously. |
 | `measurement-guard.test.mjs` | Tests the PreToolUse hook (see below). |
 | `mutate.mjs` | Breaks each guard and asserts the suite goes RED. **Not** named `*.test.mjs` on purpose — it rewrites files, so CI must not discover it as a suite. |
+| `drain-status.mjs` | Worked example: PR merge-readiness. A failed read prints `QUERY-FAILED` **with the reason** and exits non-zero, so it cannot be quoted as a state. The bash version it replaced reported `0/0/0` for twenty PRs during an HTTP 403. |
 
 ```bash
 node --test scripts/measure/measure.test.mjs scripts/measure/measurement-guard.test.mjs
