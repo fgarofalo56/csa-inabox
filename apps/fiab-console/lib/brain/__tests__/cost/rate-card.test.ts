@@ -18,16 +18,29 @@
  * price hierarchy.
  *
  * ── THE POPULATION CHECK FOR THIS LAYER ────────────────────────────────────
- * Two shapes, both here. Every key must BE its card's region, so the key and
- * the provenance string cannot drift apart; and both clouds `RateCloud` names
- * must be represented, because a table missing a cloud makes every lookup for
- * it return null — correct behaviour, but silently zero coverage, which is the
- * "green and blind" shape one level down.
+ * Four shapes, all here. Every key must BE its card's region, so the key and
+ * the provenance string cannot drift apart; both `RateCloud` names must be
+ * represented, because a table missing a cloud makes every lookup for it
+ * return null — correct behaviour, but silently zero coverage, which is the
+ * "green and blind" shape one level down; the table must hold at least the 61
+ * regions the census found; and ALL THREE Gov regions must be present, because
+ * the cloud check alone is satisfied by usgovvirginia on its own — and
+ * usgovtexas was in fact missing while this suite was green.
+ *
+ * ── WHAT "ABSENT" MEANS AFTER THE CENSUS ───────────────────────────────────
+ * The 2026-08-24 census read every Container Apps Consumption meter the public
+ * retail API publishes: 61 regions publish all four, in 12 distinct price
+ * tiers, and ZERO publish only some. There is therefore no "meters not read
+ * yet" class any more. A region absent from the table is a region Azure does
+ * not publish a price for — usdod*, Azure China — and null is the TRUE answer
+ * for it rather than a gap to be apologised for. The blocks below assert both
+ * halves, because either one alone can be satisfied by a broken lookup: what
+ * is priced resolves to its OWN card, and what is unpriced resolves to nothing.
  *
  * ── AND WHY GOV STAYS SEPARATE ─────────────────────────────────────────────
  * `cloud-parity.md`: the same capability ships to every boundary. Here that
  * means the derived path WORKS in Gov — not that it prices Gov at Commercial
- * rates. Measured 2026-08-23 from the public retail API, every Gov meter is
+ * rates. Measured 2026-08-23 and re-read in the census, every Gov meter is
  * 25–33% above its Commercial counterpart.
  */
 
@@ -66,7 +79,26 @@ describe('the cards are populated and measured', () => {
     // Every per-card assertion in this file iterates the table. An empty table
     // makes all of them vacuously true, which is the failure mode that reads
     // most like a clean bill of health.
-    expect(Object.keys(BUILT_IN_RATE_CARDS).length).toBeGreaterThan(1);
+    //
+    // The floor is the census count, not `> 1`: the 2026-08-24 read found 61
+    // regions publishing all four Container Apps Consumption meters, and the
+    // table carries one card each. Azure adding a region may raise this number
+    // — a LOWER one means rows were dropped, which is exactly the silent
+    // regression a `> 1` floor would have waved through.
+    expect(Object.keys(BUILT_IN_RATE_CARDS).length).toBeGreaterThanOrEqual(61);
+  });
+
+  it('carries EVERY Azure Government region, not just the one the exports name', () => {
+    // `cloud-parity.md`: same capability, every boundary. usgovtexas was absent
+    // from the first version of this table while its two siblings were present,
+    // so a Gov estate in Texas priced at null — no band, no gate, just a
+    // missing number — and nothing here failed, because the cloud-coverage
+    // check above is satisfied by usgovvirginia on its own.
+    const gov = Object.values(BUILT_IN_RATE_CARDS)
+      .filter((c) => c.cloud === 'usgov')
+      .map((c) => c.region)
+      .sort();
+    expect(gov).toEqual(['usgovarizona', 'usgovtexas', 'usgovvirginia']);
   });
 
   it('every rate is a positive finite USD number — no zero placeholders', () => {
@@ -136,25 +168,43 @@ describe('Gov is priced ABOVE Commercial — why the card carries its cloud', ()
 describe('the key is the EXACT region — a prefix is not a price', () => {
   it('westus2 does NOT resolve through westus, which is a different price', () => {
     // The defect in one line. `'westus'` as a PREFIX matches all three, and
-    // westus2 publishes vCPU-active 0.000034 against centralus's 0.000024 —
-    // 42% higher. Two of the three priced correctly and the middle one did
-    // not, which is why spot-checking the prefix list would never have found
-    // it: the sample that fails is the one nobody thinks to draw.
-    expect(rateCardFor('westus')?.region).toBe('westus');
-    expect(rateCardFor('westus3')?.region).toBe('westus3');
-    expect(rateCardFor('westus2')).toBeNull();
+    // westus2 publishes vCPU-active 0.000034 against westus's 0.000024 — 42%
+    // higher. Two of the three priced correctly and the middle one did not,
+    // which is why spot-checking the prefix list would never have found it:
+    // the sample that fails is the one nobody thinks to draw.
+    //
+    // All three now carry their OWN card, which makes this sharper than the
+    // null it used to assert. The lookup ANSWERS for westus2, and it answers
+    // with a different number than it gives westus. No prefix table can
+    // express that, whatever you populate it with.
+    const westus = rateCardFor('westus');
+    const westus2 = rateCardFor('westus2');
+    const westus3 = rateCardFor('westus3');
+    expect([westus?.region, westus2?.region, westus3?.region]).toEqual([
+      'westus',
+      'westus2',
+      'westus3',
+    ]);
+    // `?? Infinity` fails closed: a null westus2 cannot satisfy this.
+    expect(westus2?.vcpuActiveUsdPerSecond ?? -Infinity).toBeGreaterThan(
+      westus?.vcpuActiveUsdPerSecond ?? Infinity,
+    );
+    // …and westus3, which the same prefix also swallows, matches westus. Both
+    // halves matter: one shows the prefix over-reaching, the other shows it is
+    // not simply that every region differs.
+    expect(westus3?.vcpuActiveUsdPerSecond).toBe(westus?.vcpuActiveUsdPerSecond);
   });
 
   it('a region priced ABOVE centralus is NEVER handed the centralus card', () => {
-    // These eight publish vCPU-active 0.000034, +42% on centralus. Today none
-    // is in the table — their other three meters have not been read, and a
-    // card is all four rates or it is not a card — so each returns null.
+    // These eight publish vCPU-active 0.000034, +42% on centralus. Each now
+    // has its own card carrying that number, so the block asserts the positive
+    // form: the lookup answers, and it answers 0.000034 rather than handing
+    // back centralus's 0.000024.
     //
-    // The assertion is written to hold BOTH ways on purpose: if a future read
-    // adds one of these with its own rates it still passes, and if anything
-    // ever re-admits them at the centralus rate it fails. What it will not do
-    // is pass vacuously, which a `if (card) { … }` loop over eight nulls
-    // would.
+    // It was written when all eight returned null and it passed then too —
+    // deliberately, so that admitting them to the table could not quietly turn
+    // it vacuous. What it still catches is the original defect: any change
+    // that re-admits one of these AT the centralus rate.
     const PRICED_ABOVE_CENTRALUS = [
       'westus2',
       'westeurope',
@@ -171,6 +221,13 @@ describe('the key is the EXACT region — a prefix is not a price', () => {
         region,
         CONTAINER_APPS_RATES_COMMERCIAL.vcpuActiveUsdPerSecond,
       ]);
+      // …and NOT by being absent, which is the other way to satisfy a `not`.
+      // Without this line the loop above would pass against a lookup that had
+      // stopped answering entirely.
+      expect([region, found?.region ?? null]).toEqual([region, region]);
+      expect(found?.vcpuActiveUsdPerSecond ?? -Infinity).toBeGreaterThan(
+        CONTAINER_APPS_RATES_COMMERCIAL.vcpuActiveUsdPerSecond,
+      );
     }
     // CONTROL — the same lookup DOES return the centralus rate for a region
     // that genuinely has it. Without this the eight assertions above would
@@ -201,6 +258,9 @@ describe('the key is the EXACT region — a prefix is not a price', () => {
       'chinanorth3',
       'atlantis',
     ];
+    // The three the census found no published meter for. Naming them makes the
+    // partition exact instead of "at least one answered".
+    const NULL_PROBES = ['usdodeast', 'chinanorth3', 'atlantis'];
     let cardsReturned = 0;
     for (const region of PROBES) {
       const found = rateCardFor(region);
@@ -210,30 +270,49 @@ describe('the key is the EXACT region — a prefix is not a price', () => {
     }
     // CONTROL — the loop above skips nulls, so without this it would pass just
     // as happily against a `rateCardFor` that returned null for every probe.
-    expect(cardsReturned).toBeGreaterThan(0);
+    // `toBe` on the exact count, not `toBeGreaterThan(0)`: it pins WHICH probes
+    // are allowed to be null, so silently dropping a priced region from the
+    // table fails here as well as in the population check.
+    expect(cardsReturned).toBe(PROBES.length - NULL_PROBES.length);
+    for (const region of NULL_PROBES) {
+      expect([region, rateCardFor(region)]).toEqual([region, null]);
+    }
   });
 
-  it('and today all eight are honestly absent, not quietly approximated', () => {
-    for (const region of [
-      'westus2',
-      'westeurope',
-      'australiaeast',
-      'uksouth',
-      'canadacentral',
-      'southeastasia',
-      'italynorth',
-      'spaincentral',
-    ]) {
+  it('a region with NO published price is honestly absent, not quietly approximated', () => {
+    // The counterpart to the block above, and the reason `rateCardFor` may
+    // return null at all. These are not regions whose meters merely have not
+    // been read yet — the 2026-08-24 census read every Container Apps
+    // Consumption meter the retail API publishes and found none for any of
+    // them. Absent is the TRUE answer here, and it stays true only because the
+    // lookup is keyed to the exact region: each of these has a priced
+    // neighbour whose card a prefix or fuzzy match would happily hand over.
+    const UNPRICED = [
+      'usdodeast', // usgov* is priced; usdod* is not.
+      'usdodcentral',
+      'chinanorth3', // No china* region appears in the global retail list.
+      'chinaeast2',
+      'atlantis', // Not a region at all.
+    ];
+    for (const region of UNPRICED) {
       expect([region, rateCardFor(region)]).toEqual([region, null]);
       expect([region, cloudForRegion(region)]).toEqual([region, null]);
+    }
+    // CONTROL — the near neighbours these could have been approximated FROM
+    // are all present, so the five nulls are a fact about those five regions
+    // and not a lookup that has quietly stopped answering.
+    for (const region of ['usgovvirginia', 'usgovtexas', 'eastus']) {
+      expect([region, rateCardFor(region)?.region ?? null]).toEqual([region, region]);
     }
   });
 
   it('usdodeast and usdodcentral return NULL — there is no published price at all', () => {
     // Not a nearby-region approximation problem. A retail query for either
-    // returns ZERO Container Apps Consumption meters, so the old `usdod`
-    // prefix branch was not estimating from usgovvirginia — it was minting a
-    // price for a boundary where the service is not publicly priced.
+    // returns ZERO Container Apps Consumption meters — re-confirmed by the
+    // 2026-08-24 census, which read the whole published list and found no
+    // usdod* region in it — so the old `usdod` prefix branch was not
+    // estimating from usgovvirginia. It was minting a price for a boundary
+    // where the service is not publicly priced at all.
     expect(rateCardFor('usdodeast')).toBeNull();
     expect(rateCardFor('usdodcentral')).toBeNull();
     expect(cloudForRegion('usdodeast')).toBeNull();
@@ -329,14 +408,18 @@ describe('cloudForRegion classifies ONLY what it can actually price', () => {
     ['newzealandnorth', 'commercial'],
     ['usgovvirginia', 'usgov'],
     ['usgovarizona', 'usgov'],
+    ['usgovtexas', 'usgov'],
     // Azure hands the display spelling back from several portal-facing APIs.
     ['US Gov Virginia', 'usgov'],
     ['  CentralUS  ', 'commercial'],
-    // Published ABOVE centralus; all four meters not yet read, so no card.
-    ['westus2', null],
-    ['westeurope', null],
-    ['uksouth', null],
-    ['italynorth', null],
+    // Priced 42% ABOVE centralus, and each now carries its own card. They are
+    // here because a RIGHT cloud read off the WRONG card is still a wrong
+    // price — the classifier answering 'commercial' was never the same thing
+    // as the lookup answering correctly.
+    ['westus2', 'commercial'],
+    ['westeurope', 'commercial'],
+    ['uksouth', 'commercial'],
+    ['italynorth', 'commercial'],
     // No published Container Apps Consumption meters in the boundary at all.
     ['usdodeast', null],
     ['usdodcentral', null],
@@ -360,14 +443,13 @@ describe('cloudForRegion classifies ONLY what it can actually price', () => {
 
   it('returns NULL for an unknown region rather than defaulting to Commercial', () => {
     // The defaulting version of this function is the bug: it prices a
-    // sovereign, unread or mistyped region at Commercial rates and returns a
-    // confident number. Note that 'westeurope' now sits in this class rather
-    // than in the Commercial one — it is a real Commercial region, and it is
-    // 42% more expensive than the card that used to answer for it, so an
-    // answer of 'commercial' here was never the same thing as a right answer.
+    // sovereign or mistyped region at Commercial rates and returns a confident
+    // number. `cloudForRegion` is DERIVED from `rateCardFor`, so it can only
+    // answer for a region the table can actually price — which is what keeps
+    // the classifier and the price table from ever disagreeing.
     expect(cloudForRegion('atlantis')).toBeNull();
     expect(cloudForRegion('chinanorth3')).toBeNull();
-    expect(cloudForRegion('westeurope')).toBeNull();
+    expect(cloudForRegion('usdodeast')).toBeNull();
   });
 
   it('returns NULL for absent and empty input', () => {

@@ -9,41 +9,36 @@
  * unrenderable as a bill.
  *
  * ── PROVENANCE OF THE NUMBERS BELOW ────────────────────────────────────────
- * Read 2026-08-23 from the Azure Retail Prices API, which is public and
- * unauthenticated:
+ * Read from the Azure Retail Prices API, which is public and unauthenticated:
  *
  *   GET https://prices.azure.com/api/retail/prices
- *       ?$filter=serviceName eq 'Azure Container Apps'
- *               and armRegionName eq '<region>'
+ *       ?$filter=serviceName eq 'Azure Container Apps' and type eq 'Consumption'
  *
- * Every card below was read from the SAME public endpoint. In particular the
- * Gov cards did NOT come from an authenticated Gov call: this workstation
- * authenticates to a different tenant and never runs `az` against Azure
- * Government (see the Gov access rule). `prices.azure.com` serves
- * `armRegionName eq 'usgovvirginia'` to anonymous callers, so the Gov rates
- * here are measured rather than assumed — but see §CAVEATS.
+ * Note what that query does NOT carry: an `armRegionName` filter. The whole
+ * Container Apps Consumption price list comes back in ONE response — 764 items,
+ * `pages=1`, no `NextPageLink` — so a complete global census costs a single
+ * HTTP GET, and every region below was read in the same request as every other.
  *
- * One honest imprecision: the two original cards (centralus, usgovvirginia)
- * were read on 2026-08-23, and the multi-region sweep that produced the rest
- * was measured a day later, in the review of PR #3950, which also re-read all
- * eight original rates and eight meter ids and matched them byte-for-byte.
- * Every card carries the single `asOf` below rather than a per-card date,
- * because a retail list rate does not move on a one-day boundary and a second
- * date would imply a precision the sweep did not record. If that day matters
- * for a given estimate, re-read the URL above — that is what `asOf` is for.
+ * That endpoint is also how the Gov cards were read. They did NOT come from an
+ * authenticated Gov call: this workstation authenticates to a different tenant
+ * and never runs `az` against Azure Government (see the Gov access rule).
+ * `prices.azure.com` serves the `usgov*` meters to anonymous callers, so the Gov
+ * rates here are measured rather than assumed — but see §CAVEATS.
+ *
+ * Every card therefore carries the SAME `asOf`, and that is a statement of fact
+ * rather than a convenience: they were all read in one response. The first two
+ * cards (centralus, usgovvirginia) were originally read a day earlier, on
+ * 2026-08-23; the census re-read both and matched all eight rates and eight
+ * meter ids byte-for-byte, so 2026-08-24 is true of every card in the table and
+ * no card is dated earlier than it was actually confirmed.
  *
  * ── WHY THE TABLE IS KEYED BY EXACT REGION, NOT BY CLOUD ───────────────────
  * Until 2026-08-24 this module held ONE Commercial card (centralus) plus a list
  * of 37 region PREFIXES that every Commercial region resolved through. The
- * rates on the card were right; the CLASSIFIER was the defect. Re-reading the
- * retail API across a sample of 30 Commercial regions turned up regions that
- * price ABOVE centralus, and the prefix list admitted every one of them:
- *
- *   region                                        vCPU active   vs centralus
- *   westus2, westeurope, australiaeast, uksouth,
- *   canadacentral, southeastasia, italynorth,
- *   spaincentral                                  0.000034      +42%
- *   newzealandnorth                               0.000036      +50% (idle +67%)
+ * rates on the card were right; the CLASSIFIER was the defect. The census turns
+ * up 12 distinct price tiers across 61 regions, and the prefix list flattened
+ * every one of them onto the cheapest: 19 regions understated by 42%, New
+ * Zealand by 50%, and Brazil Southeast by 129%.
  *
  * Measured against the prefix version: a `newzealandnorth` app at minReplicas 2,
  * 0.5 vCPU, 1 GiB was quoted LOWER $23.65 / UPPER $78.84, where the New Zealand
@@ -51,10 +46,11 @@
  * truth and looked exactly as confident as a correct one — which is the whole
  * failure mode, not a rounding complaint.
  *
- * Note that `westus2` diverges while `westus` and `westus3` do not. That is why
- * a PREFIX cannot be the key: `'westus'` matches all three and they are not the
- * same price. Azure region names are not a price hierarchy, and treating them
- * as one is how a table of correct numbers produces wrong answers.
+ * Note that `westus2` prices at 0.000034 while `westus` and `westus3` price at
+ * 0.000024. That is why a PREFIX cannot be the key: `'westus'` matches all three
+ * and they are not the same price. Azure region names are not a price hierarchy,
+ * and treating them as one is how a table of correct numbers produces wrong
+ * answers.
  *
  * So the key is the exact lowercase ARM region, and a region that is NOT in the
  * table produces NO card and therefore NO figure. That is the same shape
@@ -63,24 +59,63 @@
  * a sovereign region Loom has not priced lands on `null`, never on somebody
  * else's card.
  *
- * ── WHAT IS DELIBERATELY ABSENT, AND WHY ───────────────────────────────────
- * The +42% group above is NOT in the table. Its vCPU-active rate is known but
- * its idle and memory rates are not, and a card is all four rates or it is not
- * a card (see {@link ContainerAppsRateCard}). Half a card completed by
- * interpolating the missing half would be the same confident guess this
- * re-keying exists to remove, so those regions return `null` until all four
- * meters have been read.
+ * ── THE CENSUS ─────────────────────────────────────────────────────────────
+ * 764 Consumption items, one response. 61 regions publish the four "Standard *
+ * Usage" meters, in 12 distinct price tiers. Every one of the 61 publishes ALL
+ * FOUR — the count of regions publishing a partial set is ZERO. There was no
+ * "vCPU-active is known but the other three are not" population to exclude; the
+ * meters ship together or not at all.
  *
- * `usdodeast` and `usdodcentral` are absent for a stronger reason: a retail
- * query for either returns ZERO Container Apps Consumption meters. There is no
- * published price to approximate. Pricing them from `usgovvirginia` — which the
- * old `usdod` prefix branch did — was not a nearby-region estimate; it was a
- * price minted for a boundary where the service is not publicly priced at all.
+ *   µUSD/vCPU-s   idle & memory   n   regions
+ *   24            3               27  brazilsouth centralindia centralus
+ *                                     eastasia eastus eastus2 francecentral
+ *                                     francesouth germanywestcentral japaneast
+ *                                     japanwest jioindiacentral jioindiawest
+ *                                     koreacentral northcentralus northeurope
+ *                                     norwayeast polandcentral southafricanorth
+ *                                     southcentralus southindia swedencentral
+ *                                     switzerlandnorth uaenorth westindia
+ *                                     westus westus3
+ *   26            3               1   mexicocentral
+ *   28            4               2   indonesiacentral malaysiawest
+ *   29            4               1   westcentralus
+ *   30            4               3   usgovarizona usgovtexas usgovvirginia
+ *   31            4               2   austriaeast belgiumcentral
+ *   34            4               19  australiacentral australiacentral2
+ *                                     australiaeast australiasoutheast
+ *                                     canadacentral canadaeast chilecentral
+ *                                     germanynorth israelcentral italynorth
+ *                                     koreasouth qatarcentral southeastasia
+ *                                     spaincentral switzerlandwest uksouth
+ *                                     ukwest westeurope westus2
+ *   36            5               1   newzealandnorth
+ *   44            5               1   swedensouth
+ *   45            6               2   norwaywest uaecentral
+ *   46            6               1   southafricawest
+ *   55            7               1   brazilsoutheast
  *
- * China and every other region not listed below return `null` on the same
- * principle. `cloud-parity.md` says the same capability ships to every
- * boundary; here that means the derived path WORKS in Gov — not that it invents
- * a Gov number, and not that it quotes a Commercial one in its place.
+ * "idle & memory" is one column because in every tier the vCPU-idle, memory-
+ * active and memory-idle rates are the same number. That is a fact about the
+ * published list, not a simplification applied to it — the table below still
+ * carries four independent fields, because the day Azure diverges them this
+ * comment is what will be wrong, not the data model.
+ *
+ * The table below is therefore the WHOLE published population, not a slice of
+ * it. A region absent from it is a region that publishes no Container Apps
+ * Consumption meter, and the two cases of that are worth naming.
+ *
+ * `usdodeast` and `usdodcentral` are the ones that matter, because the old
+ * `usdod` prefix branch priced them anyway. The census confirms the exclusion
+ * is honest and not an oversight: usdod returns ZERO Container Apps Consumption
+ * meters — not a partial set, none. Pricing those regions from `usgovvirginia`
+ * was not a nearby-region estimate; it was a price minted for a boundary where
+ * the service is not publicly priced at all.
+ *
+ * China and every other unlisted region return `null` on the same principle.
+ * `cloud-parity.md` says the same capability ships to every boundary; here that
+ * means the derived path WORKS in Gov — all three Gov regions carry cards, not
+ * two — not that it invents a Gov number, and not that it quotes a Commercial
+ * one in its place.
  *
  * ── GOV IS NOT COMMERCIAL, AND THE GAP IS MATERIAL ─────────────────────────
  * The reason the table carries a `cloud` on every card, and the reason a Gov
@@ -109,10 +144,11 @@
  * 1. LIST rates. Any EA/MCA negotiated discount, credit, reservation or savings
  *    plan on the operator's agreement makes the real bill LOWER. A derived
  *    figure is therefore an upper-ish bound on list terms, not a forecast.
- * 2. The table is a SAMPLE, not a census. It holds the regions that were
- *    actually read; Azure has far more. A region's absence means nobody
- *    measured it — not that Loom does not support it — and the fix is to read
- *    the URL above and add the card, never to reach for a neighbour's.
+ * 2. The table is the published population as of `asOf`, not a fixed truth.
+ *    Azure adds regions, and a region added after that date will be absent for
+ *    the ordinary reason that it did not exist to be read. The fix is always to
+ *    re-read the URL above and add the card, never to reach for a neighbour's —
+ *    the 12 tiers below are exactly why a neighbour is not a proxy.
  * 3. Consumption ("Standard") workload profile only. A Dedicated profile bills
  *    per vCPU-HOUR against reserved capacity, which is a different model
  *    entirely — `./derived.ts` declines rather than mis-applying this card.
@@ -148,9 +184,10 @@ export type RateCloud = 'commercial' | 'usgov';
  *
  * All four rates are required. There is no partial card: a card missing the
  * idle rates could only produce a single-point estimate presented as a band,
- * which is the shape this whole module exists to avoid. It is also why a region
- * whose vCPU-active rate is published but whose other three are unread stays
- * OUT of {@link BUILT_IN_RATE_CARDS} rather than being completed by inference.
+ * which is the shape this whole module exists to avoid. The census says that
+ * requirement costs nothing — all 61 priced regions publish all four meters —
+ * so this is a type-level guarantee that no future half-read can quietly
+ * bypass, not a filter that excluded anybody.
  */
 export interface ContainerAppsRateCard {
   readonly cloud: RateCloud;
@@ -176,7 +213,7 @@ export interface ContainerAppsRateCard {
 }
 
 /** The date every rate below was read from the retail API. */
-export const RATES_READ_ON = '2026-08-23';
+export const RATES_READ_ON = '2026-08-24';
 
 const RETAIL_API = 'https://prices.azure.com/api/retail/prices';
 
@@ -194,7 +231,12 @@ interface MeasuredRates {
  * The `source` string is generated rather than hand-written per card because it
  * is the re-run instruction: a card whose `source` names a DIFFERENT region
  * than the rates were read for is worse than no provenance at all, and hand
- * copy-paste across ten cards is exactly how that happens.
+ * copy-paste across 61 cards is exactly how that happens.
+ *
+ * Note the generated string narrows to ONE region, while the read that produced
+ * every number below was the single unfiltered census in the header. Both
+ * queries return the same four meters for that region; the narrow one is in the
+ * `basis` because a reader checking one figure wants four rows back, not 764.
  */
 function card(cloud: RateCloud, region: string, rates: MeasuredRates): ContainerAppsRateCard {
   return {
@@ -210,45 +252,136 @@ function card(cloud: RateCloud, region: string, rates: MeasuredRates): Container
   };
 }
 
-/**
- * The rates shared by the Commercial regions measured at the centralus price.
+/*
+ * ---------------------------------------------------------------------------
+ * The twelve measured tiers.
  *
- * Named once and referenced per region, so that a region later found to have
- * diverged is corrected by giving it its OWN literal — not by silently editing
- * a number the other six regions also depend on.
+ * Named for the tier's vCPU-active rate in millionths of a USD per vCPU-second
+ * — `RATES_34` is 0.000034 — because that is the census's own key column, so a
+ * tier here can be matched against the table in §THE CENSUS by reading its name.
+ *
+ * Named per TIER rather than per region because 61 regions share 12 sets of
+ * numbers: a literal per region would be 61 objects of which 49 are duplicates,
+ * which is the shape that invites a half-finished edit. A region later found to
+ * have diverged from its tier is corrected by giving it its OWN literal and
+ * moving it out of the tier's row in §THE CENSUS — never by editing a tier the
+ * other members still depend on.
+ *
+ * In every tier the vCPU-idle, memory-active and memory-idle rates are equal.
+ * That is a measured property of today's published list, NOT a law and not a
+ * modelling shortcut, so each is still written out separately. The day Azure
+ * prices idle memory apart from idle vCPU, only the numbers change here.
+ * ---------------------------------------------------------------------------
  */
-const CENTRALUS_RATES: MeasuredRates = {
+
+/** 27 regions, the largest tier and the cheapest — includes centralus. */
+const RATES_24: MeasuredRates = {
   vcpuActive: 0.000024,
   vcpuIdle: 0.000003,
   memoryActive: 0.000003,
   memoryIdle: 0.000003,
 };
 
-/** The rates measured for both Azure Government regions. */
-const USGOV_RATES: MeasuredRates = {
-  vcpuActive: 0.00003,
+/** 1 region: mexicocentral. */
+const RATES_26: MeasuredRates = {
+  vcpuActive: 0.000026,
+  vcpuIdle: 0.000003,
+  memoryActive: 0.000003,
+  memoryIdle: 0.000003,
+};
+
+/** 2 regions: indonesiacentral, malaysiawest. */
+const RATES_28: MeasuredRates = {
+  vcpuActive: 0.000028,
+  vcpuIdle: 0.000004,
+  memoryActive: 0.000004,
+  memoryIdle: 0.000004,
+};
+
+/** 1 region: westcentralus. */
+const RATES_29: MeasuredRates = {
+  vcpuActive: 0.000029,
   vcpuIdle: 0.000004,
   memoryActive: 0.000004,
   memoryIdle: 0.000004,
 };
 
 /**
- * newzealandnorth — the region that exposed the prefix defect. Commercial, and
- * NOT at centralus rates: vCPU active +50%, every idle/memory meter +67%.
- *
- * Recorded as four numbers because a card is four numbers. The vCPU pair is the
- * published pair. The two memory meters were pinned by the same measurement's
- * worked example — a 2 × 0.5 vCPU / 1 GiB app prices at LOWER $39.42 / UPPER
- * $120.89 in this region, and against the vCPU pair 0.000005/GiB-s is the only
- * value that satisfies both bounds. That is a solve over measured outputs, not
- * an interpolation from a neighbouring region, which is why this card is
- * allowed in the table and the +42% group is not.
+ * All three Azure Government regions, and only those three. The single tier
+ * that is not Commercial — see §GOV IS NOT COMMERCIAL for the deltas.
  */
-const NEWZEALANDNORTH_RATES: MeasuredRates = {
+const RATES_30: MeasuredRates = {
+  vcpuActive: 0.00003,
+  vcpuIdle: 0.000004,
+  memoryActive: 0.000004,
+  memoryIdle: 0.000004,
+};
+
+/** 2 regions: austriaeast, belgiumcentral. */
+const RATES_31: MeasuredRates = {
+  vcpuActive: 0.000031,
+  vcpuIdle: 0.000004,
+  memoryActive: 0.000004,
+  memoryIdle: 0.000004,
+};
+
+/**
+ * 19 regions — the second-largest tier, and the one that makes a prefix key
+ * indefensible: westus2 is here while westus and westus3 are in RATES_24.
+ */
+const RATES_34: MeasuredRates = {
+  vcpuActive: 0.000034,
+  vcpuIdle: 0.000004,
+  memoryActive: 0.000004,
+  memoryIdle: 0.000004,
+};
+
+/**
+ * 1 region: newzealandnorth — the region that exposed the prefix defect.
+ * Commercial, and +50% / +67% against RATES_24.
+ *
+ * Corroborated independently of the census: a 2 × 0.5 vCPU / 1 GiB app prices
+ * at LOWER $39.42 / UPPER $120.89 in this region, and against the published
+ * vCPU pair 0.000005/GiB-s is the only value satisfying both bounds. The census
+ * read and that solve-over-measured-outputs agree to the digit.
+ */
+const RATES_36: MeasuredRates = {
   vcpuActive: 0.000036,
   vcpuIdle: 0.000005,
   memoryActive: 0.000005,
   memoryIdle: 0.000005,
+};
+
+/** 1 region: swedensouth. */
+const RATES_44: MeasuredRates = {
+  vcpuActive: 0.000044,
+  vcpuIdle: 0.000005,
+  memoryActive: 0.000005,
+  memoryIdle: 0.000005,
+};
+
+/** 2 regions: norwaywest, uaecentral. */
+const RATES_45: MeasuredRates = {
+  vcpuActive: 0.000045,
+  vcpuIdle: 0.000006,
+  memoryActive: 0.000006,
+  memoryIdle: 0.000006,
+};
+
+/** 1 region: southafricawest. */
+const RATES_46: MeasuredRates = {
+  vcpuActive: 0.000046,
+  vcpuIdle: 0.000006,
+  memoryActive: 0.000006,
+  memoryIdle: 0.000006,
+};
+
+/** 1 region: brazilsoutheast — the most expensive published tier, +129%. */
+const RATES_55: MeasuredRates = {
+  vcpuActive: 0.000055,
+  vcpuIdle: 0.000007,
+  memoryActive: 0.000007,
+  memoryIdle: 0.000007,
 };
 
 /**
@@ -268,13 +401,13 @@ const NEWZEALANDNORTH_RATES: MeasuredRates = {
 export const CONTAINER_APPS_RATES_COMMERCIAL: ContainerAppsRateCard = card(
   'commercial',
   'centralus',
-  CENTRALUS_RATES,
+  RATES_24,
 );
 
 /**
- * Azure Government (usgovvirginia) — measured 2026-08-23 from the SAME public
- * endpoint. Every rate is higher than its Commercial counterpart; see the
- * header table.
+ * Azure Government (usgovvirginia) — measured 2026-08-23, re-read 2026-08-24 in
+ * the census, from the SAME public endpoint. Every rate is higher than its
+ * Commercial counterpart; see the header table.
  *
  * Meter ids:
  *   8ed515c6-c391-5243-a56d-0b84db16d235  Standard vCPU Active Usage
@@ -285,32 +418,110 @@ export const CONTAINER_APPS_RATES_COMMERCIAL: ContainerAppsRateCard = card(
 export const CONTAINER_APPS_RATES_USGOV: ContainerAppsRateCard = card(
   'usgov',
   'usgovvirginia',
-  USGOV_RATES,
+  RATES_30,
 );
 
 /**
- * The cards this build ships with, keyed by EXACT lowercase ARM region.
+ * Every region the retail API publishes Container Apps Consumption rates for,
+ * keyed by EXACT lowercase ARM region. 61 of them, grouped by tier.
  *
  * Exported as a record rather than a lookup function alone so a caller can
  * enumerate what IS known — the population of the rate layer — instead of
- * discovering gaps one failed lookup at a time. Ten regions is a small
- * population and it is meant to look small: see §CAVEATS 2. Everything not
- * listed here resolves to `null`.
+ * discovering gaps one failed lookup at a time. Everything not listed here
+ * resolves to `null`, and what is not listed is what Azure does not publish:
+ * usdod*, Azure China, and any region added after the read date in
+ * `RATES_READ_ON`. See §THE CENSUS.
+ *
+ * Written out one region per line rather than generated from the tier groups.
+ * A reducer would be shorter and would hide the thing worth seeing — that
+ * westus2 is NOT in the same tier as westus — and it would let the two
+ * identity-pinned entries below silently disagree with their group.
  */
 export const BUILT_IN_RATE_CARDS: Readonly<Record<string, ContainerAppsRateCard>> = {
-  // Commercial, measured equal to centralus.
+  // ---- 0.000024 / 0.000003 — 27 Commercial regions, the cheapest tier. ----
+  brazilsouth: card('commercial', 'brazilsouth', RATES_24),
+  centralindia: card('commercial', 'centralindia', RATES_24),
   centralus: CONTAINER_APPS_RATES_COMMERCIAL,
-  eastus: card('commercial', 'eastus', CENTRALUS_RATES),
-  eastus2: card('commercial', 'eastus2', CENTRALUS_RATES),
-  westus: card('commercial', 'westus', CENTRALUS_RATES),
-  westus3: card('commercial', 'westus3', CENTRALUS_RATES),
-  northeurope: card('commercial', 'northeurope', CENTRALUS_RATES),
-  japaneast: card('commercial', 'japaneast', CENTRALUS_RATES),
-  // Commercial, measured ABOVE centralus. Its own card, on purpose.
-  newzealandnorth: card('commercial', 'newzealandnorth', NEWZEALANDNORTH_RATES),
-  // Azure Government.
+  eastasia: card('commercial', 'eastasia', RATES_24),
+  eastus: card('commercial', 'eastus', RATES_24),
+  eastus2: card('commercial', 'eastus2', RATES_24),
+  francecentral: card('commercial', 'francecentral', RATES_24),
+  francesouth: card('commercial', 'francesouth', RATES_24),
+  germanywestcentral: card('commercial', 'germanywestcentral', RATES_24),
+  japaneast: card('commercial', 'japaneast', RATES_24),
+  japanwest: card('commercial', 'japanwest', RATES_24),
+  jioindiacentral: card('commercial', 'jioindiacentral', RATES_24),
+  jioindiawest: card('commercial', 'jioindiawest', RATES_24),
+  koreacentral: card('commercial', 'koreacentral', RATES_24),
+  northcentralus: card('commercial', 'northcentralus', RATES_24),
+  northeurope: card('commercial', 'northeurope', RATES_24),
+  norwayeast: card('commercial', 'norwayeast', RATES_24),
+  polandcentral: card('commercial', 'polandcentral', RATES_24),
+  southafricanorth: card('commercial', 'southafricanorth', RATES_24),
+  southcentralus: card('commercial', 'southcentralus', RATES_24),
+  southindia: card('commercial', 'southindia', RATES_24),
+  swedencentral: card('commercial', 'swedencentral', RATES_24),
+  switzerlandnorth: card('commercial', 'switzerlandnorth', RATES_24),
+  uaenorth: card('commercial', 'uaenorth', RATES_24),
+  westindia: card('commercial', 'westindia', RATES_24),
+  westus: card('commercial', 'westus', RATES_24),
+  westus3: card('commercial', 'westus3', RATES_24),
+
+  // ---- 0.000026 / 0.000003 ----
+  mexicocentral: card('commercial', 'mexicocentral', RATES_26),
+
+  // ---- 0.000028 / 0.000004 ----
+  indonesiacentral: card('commercial', 'indonesiacentral', RATES_28),
+  malaysiawest: card('commercial', 'malaysiawest', RATES_28),
+
+  // ---- 0.000029 / 0.000004 — westcentralus, alone, and not with westus. ----
+  westcentralus: card('commercial', 'westcentralus', RATES_29),
+
+  // ---- 0.00003 / 0.000004 — Azure Government, all three regions. ----
+  usgovarizona: card('usgov', 'usgovarizona', RATES_30),
+  usgovtexas: card('usgov', 'usgovtexas', RATES_30),
   usgovvirginia: CONTAINER_APPS_RATES_USGOV,
-  usgovarizona: card('usgov', 'usgovarizona', USGOV_RATES),
+
+  // ---- 0.000031 / 0.000004 ----
+  austriaeast: card('commercial', 'austriaeast', RATES_31),
+  belgiumcentral: card('commercial', 'belgiumcentral', RATES_31),
+
+  // ---- 0.000034 / 0.000004 — 19 regions, +42% over RATES_24. ----
+  australiacentral: card('commercial', 'australiacentral', RATES_34),
+  australiacentral2: card('commercial', 'australiacentral2', RATES_34),
+  australiaeast: card('commercial', 'australiaeast', RATES_34),
+  australiasoutheast: card('commercial', 'australiasoutheast', RATES_34),
+  canadacentral: card('commercial', 'canadacentral', RATES_34),
+  canadaeast: card('commercial', 'canadaeast', RATES_34),
+  chilecentral: card('commercial', 'chilecentral', RATES_34),
+  germanynorth: card('commercial', 'germanynorth', RATES_34),
+  israelcentral: card('commercial', 'israelcentral', RATES_34),
+  italynorth: card('commercial', 'italynorth', RATES_34),
+  koreasouth: card('commercial', 'koreasouth', RATES_34),
+  qatarcentral: card('commercial', 'qatarcentral', RATES_34),
+  southeastasia: card('commercial', 'southeastasia', RATES_34),
+  spaincentral: card('commercial', 'spaincentral', RATES_34),
+  switzerlandwest: card('commercial', 'switzerlandwest', RATES_34),
+  uksouth: card('commercial', 'uksouth', RATES_34),
+  ukwest: card('commercial', 'ukwest', RATES_34),
+  westeurope: card('commercial', 'westeurope', RATES_34),
+  westus2: card('commercial', 'westus2', RATES_34),
+
+  // ---- 0.000036 / 0.000005 — the region that exposed the prefix defect. ----
+  newzealandnorth: card('commercial', 'newzealandnorth', RATES_36),
+
+  // ---- 0.000044 / 0.000005 — swedensouth, not with swedencentral. ----
+  swedensouth: card('commercial', 'swedensouth', RATES_44),
+
+  // ---- 0.000045 / 0.000006 ----
+  norwaywest: card('commercial', 'norwaywest', RATES_45),
+  uaecentral: card('commercial', 'uaecentral', RATES_45),
+
+  // ---- 0.000046 / 0.000006 ----
+  southafricawest: card('commercial', 'southafricawest', RATES_46),
+
+  // ---- 0.000055 / 0.000007 — the most expensive published tier. ----
+  brazilsoutheast: card('commercial', 'brazilsoutheast', RATES_55),
 };
 
 /**
