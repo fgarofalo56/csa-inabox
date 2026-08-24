@@ -55,6 +55,24 @@ measureWithControl({
 | `measurement-guard.test.mjs` | Tests the PreToolUse hook (see below). |
 | `mutate.mjs` | Breaks each guard and asserts the suite goes RED. **Not** named `*.test.mjs` on purpose — it rewrites files, so CI must not discover it as a suite. |
 | `drain-status.mjs` | Worked example: PR merge-readiness. A failed read prints `QUERY-FAILED` **with the reason** and exits non-zero, so it cannot be quoted as a state. The bash version it replaced reported `0/0/0` for twenty PRs during an HTTP 403. |
+| `red-tally.mjs` | Names the red checks across PRs to expose a shared cause. Reports `cancelled` **separately** from `failed` — a cancelled check did not finish, so it is UNKNOWN, not a verdict. Flattening them made a one-file docs PR look broken. |
+| `estate-resume.mjs` | Undoes the 2026-08-23 Commercial pause. `--dry-run` by default; `--apply` to act. Scope is a **fixed list**, never discovered — only 1 of the 13 Container App environments in these subscriptions is Loom's. Every action verifies its own outcome and it is idempotent. |
+
+## Launching `az` / `gh` on Windows — three ways to get a fake result
+
+The library exists for `az` and `gh`, which are `.cmd` shims. Getting them launched is fiddly
+enough that it shipped **broken**, and the tests did not catch it because they all spawn
+`node.exe`:
+
+| approach | what happens |
+|---|---|
+| `shell:false` on a `.cmd` | Node ≥ 20 throws **EINVAL** (CVE-2024-27980 mitigation) |
+| `shell:true` with a **forward-slash** path | fails to launch and **still returns rc=1** — reads as a genuine non-zero verdict |
+| `shell:true` with args | Node **DEP0190**: args are concatenated, not escaped, so a value with a space silently changes the command |
+
+The working form is `cmd.exe /d /s /c` with a hand-quoted command line and
+`windowsVerbatimArguments`. `quoteForCmd` and `spawnPlan` are exported and unit-tested precisely
+so this path has coverage that does not depend on `az` being installed.
 
 ```bash
 node --test scripts/measure/measure.test.mjs scripts/measure/measurement-guard.test.mjs

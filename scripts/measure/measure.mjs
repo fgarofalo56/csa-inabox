@@ -44,29 +44,66 @@ export class MeasurementError extends Error {
   }
 }
 
-/** Windows ships `az`/`gh` as .cmd shims; resolve them so we never need a shell (R3). */
+/**
+ * Windows ships `az`/`gh` as .cmd shims. Getting these launched correctly is
+ * fiddly enough to be worth spelling out, because two of the three obvious
+ * approaches fail in ways that LOOK like a real result:
+ *
+ *   - `shell:false` on a .cmd  -> Node >= 20 throws EINVAL (CVE-2024-27980).
+ *   - `shell:true` with a FORWARD-SLASH path -> fails to launch and still
+ *     returns rc=1, which reads as a genuine non-zero verdict.
+ *   - `shell:true` with args   -> Node deprecates it (DEP0190): args are
+ *     concatenated, not escaped, so a value containing a space or a quote
+ *     silently changes the command.
+ *
+ * So a batch shim goes through `cmd.exe /d /s /c` with a hand-quoted command
+ * line and `windowsVerbatimArguments`, which preserves argument fidelity. The
+ * outer quote pair is required — cmd strips it, leaving the inner quoting intact.
+ */
+export function quoteForCmd(arg) {
+  if (arg === '') return '""';
+  return /[\s"^&|<>()]/.test(arg) ? `"${String(arg).replace(/"/g, '""')}"` : arg;
+}
+
 function resolveExe(bin) {
+  const wrap = (file) => {
+    if (process.platform === 'win32' && /\.(cmd|bat)$/i.test(file)) {
+      return { file, batch: true };
+    }
+    return { file, batch: false };
+  };
+
   // An explicit path (absolute, or containing a separator) is used as given.
   // Without this, a full path like `C:\Program Files\nodejs\node.exe` is not
   // found by a PATH scan and reports "could not resolve" for a binary that
   // plainly exists — caught by this module's own self-test on first run.
   if (path.isAbsolute(bin) || bin.includes('/') || bin.includes('\\')) {
-    if (existsSync(bin)) return { file: bin, shell: false };
+    if (existsSync(bin)) return wrap(bin);
     throw new MeasurementError(`'${bin}' is an explicit path but does not exist`, { bin });
   }
-  if (process.platform !== 'win32') return { file: bin, shell: false };
+  if (process.platform !== 'win32') return { file: bin, batch: false };
   const exts = ['.cmd', '.exe', '.bat', ''];
   for (const dir of (process.env.PATH || '').split(path.delimiter)) {
     if (!dir) continue;
     for (const ext of exts) {
       const p = path.join(dir, bin + ext);
-      if (existsSync(p)) return { file: p, shell: false };
+      if (existsSync(p)) return wrap(p);
     }
   }
-  // Not found on PATH. Fail loudly rather than falling back to a shell,
-  // because `spawnSync(shell:true)` with a forward-slash .CMD returns rc=1
-  // WITHOUT running anything -- a false "caught" that looks like a real result.
+  // Not found on PATH. Fail loudly rather than guessing.
   throw new MeasurementError(`could not resolve '${bin}' on PATH`, { bin });
+}
+
+/** Build the spawn triple for a resolved binary, batch shim or not. Exported for testing. */
+export function spawnPlan(bin, args) {
+  const { file, batch } = resolveExe(bin);
+  if (!batch) return { cmd: file, argv: args, opts: {} };
+  const line = [file.replace(/\//g, '\\'), ...args].map(quoteForCmd).join(' ');
+  return {
+    cmd: process.env.ComSpec || 'cmd.exe',
+    argv: ['/d', '/s', '/c', `"${line}"`],
+    opts: { windowsVerbatimArguments: true },
+  };
 }
 
 /**
@@ -87,17 +124,18 @@ function isSecondaryRateLimit(stderr) {
  * Throws on non-zero: a failed command must not yield a value (R1).
  */
 export function run(bin, args, { allowNonZero = false, timeoutMs = 600000, retries = 0, onRetry = null } = {}) {
-  const { file } = resolveExe(bin);
+  const plan = spawnPlan(bin, args);
   let last = null;
   let lastStatus = null;
 
   for (let attempt = 0; attempt <= retries; attempt++) {
-    const res = spawnSync(file, args, {
+    const res = spawnSync(plan.cmd, plan.argv, {
       encoding: 'utf8',
       timeout: timeoutMs,
       maxBuffer: 64 * 1024 * 1024,
       shell: false,
       windowsHide: true,
+      ...plan.opts,
     });
 
     if (res.error) {
