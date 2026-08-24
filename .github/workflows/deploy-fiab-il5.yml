@@ -540,7 +540,7 @@ jobs:
             --out "$RUNNER_TEMP/gov-verify-receipt-il5-${{ github.run_id }}.txt" || true
 
       - name: Upload IL5 verification receipt
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: gov-verify-receipt-il5-${{ github.run_id }}
           path: ${{ runner.temp }}/gov-verify-receipt-il5-${{ github.run_id }}.txt
@@ -875,7 +875,7 @@ jobs:
 
       - name: Notify on failure
         if: failure()
-        uses: actions/github-script@v7
+        uses: actions/github-script@v9
         env:
           # Parameterized: set the repo/org variable FIAB_GOV_DEPLOY_TRACKING_ISSUE
           # to an OPEN tracking issue. Previously hard-coded to #279 ("CSA Loom — v1
