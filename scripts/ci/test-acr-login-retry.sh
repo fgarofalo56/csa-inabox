@@ -54,6 +54,15 @@ TRANSIENT_MSG='WARNING: Unable to get AAD authorization tokens with message: CON
 # Deliberately contains none of the transient tokens (no 403/503/504/throttling).
 PERMANENT_MSG="ERROR: The registry 'nope' could not be resolved: the resource with that name does not exist in this subscription."
 
+# The Docker-daemon IP-denial shape (loom-roll-and-validate run 32819789544,
+# 2026-08-25). Until that run this suite had exactly ONE transient fixture - the
+# AAD shape above - so it proved the retry MECHANICS exhaustively and the
+# CLASSIFICATION SET not at all. Single-fixture cardinality is why the gap
+# shipped: `az acr login` routed through the Docker daemon, whose refusal text
+# shares no needle with the AAD client's, and the loop called it permanent.
+# The IP here is TEST-NET-3 (RFC 5737) - never a real runner address.
+IPDENY_MSG='WARNING: Error response from daemon: Get "https://x.azurecr.io/v2/": denied: {"errors":[{"code":"DENIED","message":"client with IP '"'"'203.0.113.9'"'"' is not allowed access. Refer https://aka.ms/acr/firewall to grant access."}]}  ERROR: Login failed.'
+
 PASS=0
 FAIL=0
 
@@ -86,6 +95,13 @@ run_case "succeeds on first attempt"                1  "$TRANSIENT_MSG" 0 1  --a
 run_case "retries a transient, then succeeds"       3  "$TRANSIENT_MSG" 0 3  --attempts 5 --backoff 0
 run_case "exhausts the budget and fails CLOSED"     "" "$TRANSIENT_MSG" 1 5  --attempts 5 --backoff 0
 run_case "non-transient exits on attempt 1"         "" "$PERMANENT_MSG" 1 1  --attempts 5 --backoff 0
+
+# --- the classification set, not just the mechanics ------------------------
+# Removing `is not allowed access` from TRANSIENT turns both of these red:
+# the first gets rc=1/calls=1 instead of rc=0/calls=3. That is the mutation
+# the single-fixture suite could not make.
+run_case "IP denial (docker shape) is TRANSIENT"    3  "$IPDENY_MSG" 0 3  --attempts 5 --backoff 0
+run_case "IP denial still fails CLOSED on budget"   "" "$IPDENY_MSG" 1 5  --attempts 5 --backoff 0
 
 # --- the defaults, measured through the loop (the #3383 regression guard) ---
 run_case "DEFAULT attempts is 12 (not 6)"           "" "$TRANSIENT_MSG" 1 12 --backoff 0
