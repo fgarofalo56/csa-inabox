@@ -76,8 +76,20 @@ import {
   classifyClusterState,
   classifyClusterListRead,
   evaluatePoll,
+  azWithRetry,
+  nextRetryDelaySeconds,
+  elapsedSecondsSince,
+  TRANSIENT_BACKOFF_SECONDS,
+  POLL_INTERVAL_SECONDS,
   DEFAULT_TIMEOUT_SECONDS,
 } from '../ensure-adx-cluster-running.mjs';
+import {
+  classifyAzFailure,
+  isRetryable,
+  remediationFor,
+  STATUS_TOKEN_LOOKBEHIND,
+  STATUS_TOKEN_LOOKAHEAD,
+} from '../_az-failure-class.mjs';
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
 
@@ -86,6 +98,18 @@ const okRead = (config) => ({
   stdout: JSON.stringify({ properties: { ipConfigurations: [config] } }),
   stderr: '',
 });
+
+/**
+ * Source with comments removed.
+ *
+ * Every source-shape control in this file must scan CODE. Two of them were
+ * first written against raw source and went red on a CORRECT tree, because the
+ * docblocks explaining each fix QUOTE the defective form they replaced
+ * (`elapsed += POLL_INTERVAL_SECONDS`, `\b40[13]\b`). A guard that fires on
+ * prose is a guard that gets weakened or deleted, and it would have pushed the
+ * next author to stop documenting the reason for the fix.
+ */
+const codeOnly = (src) => src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
 
 // ── 1. DNS inbound endpoint addressing ──────────────────────────────────────
 
@@ -341,4 +365,369 @@ test('CONTROL: the bicep resource keys BOTH branches off the SAME parameter', ()
   );
   assert.match(network, /empty\(dnsResolverInboundStaticIp\)/);
   assert.match(network, /privateIpAddress: dnsResolverInboundStaticIp/);
+});
+
+// ── 5. az FAILURE CLASSIFICATION + BOUNDED RETRY (#3786 round 2) ────────────
+//
+// Both fixtures below are VERBATIM stderr from the runs that broke the deploy
+// on 2026-08-24. They are the point of this section: before this change every
+// one of them produced the same message — "grant the deploy service principal
+// Reader" — and only one of the classes is even about permissions.
+
+/** deploy-fiab-commercial run 32700023215, step "ADX preflight". */
+const MEASURED_COMMERCIAL_STDERR = [
+  'ERROR: (GatewayTimeout) GatewayTimeout',
+  'Code: GatewayTimeout',
+  'Message: GatewayTimeout',
+].join('\n');
+
+/** deploy-fiab-gcch run 32716865363, same step, DIFFERENT cause. */
+const MEASURED_GCCH_STDERR = [
+  'ERROR: (InsufficientResourcesForSubscription) [BadRequest] Currently there are no available resources to start the cluster with current SKU. Please choose different SKU',
+  'Code: InsufficientResourcesForSubscription',
+].join('\n');
+
+test('the MEASURED Commercial failure is TRANSIENT — not a permission problem', () => {
+  assert.equal(classifyAzFailure(MEASURED_COMMERCIAL_STDERR), 'transient');
+  assert.equal(isRetryable('transient'), true);
+});
+
+test('the MEASURED GCC-High failure is CAPACITY — not transient, not permissions', () => {
+  assert.equal(classifyAzFailure(MEASURED_GCCH_STDERR), 'capacity');
+  // Retrying a region that is out of SKU capacity just delays the real answer.
+  assert.equal(isRetryable('capacity'), false);
+});
+
+test('neither measured failure produces a "grant Reader" remediation', () => {
+  // THE REGRESSION THIS PINS. The old code emitted the permissions remediation
+  // unconditionally, for exactly these two inputs.
+  for (const stderr of [MEASURED_COMMERCIAL_STDERR, MEASURED_GCCH_STDERR]) {
+    const text = remediationFor(classifyAzFailure(stderr), '/subscriptions/x/clusters/c');
+    assert.doesNotMatch(text, /grant .*Reader|needs Reader/i, `misdiagnosed: ${stderr.split('\n')[0]}`);
+  }
+});
+
+test('a REAL denial still gets the permission remediation — the classifier is not just "never blame RBAC"', () => {
+  // COUNTERFACTUAL. Without this, deleting the DENIED branch entirely would
+  // leave every test above green: "never say permissions" would satisfy them.
+  const denial = 'ERROR: (AuthorizationFailed) The client does not have authorization to perform action';
+  assert.equal(classifyAzFailure(denial), 'denied');
+  assert.match(remediationFor('denied', '/subscriptions/x/clusters/c'), /Reader|Kusto Contributor/);
+});
+
+test('an unrecognised failure asserts NO cause at all', () => {
+  assert.equal(classifyAzFailure('ERROR: something nobody has seen before'), 'unknown');
+  const text = remediationFor('unknown', '/scope');
+  assert.match(text, /NO cause is asserted/);
+  assert.doesNotMatch(text, /grant|permission problem/i);
+});
+
+// ── 5b. THE ORDERING IS LOAD-BEARING, SO IT GETS DISCRIMINATING FIXTURES ────
+//
+// Added after review of #4013. Every one of the three orderings below was
+// documented as load-bearing and NONE had a control: inverting each one left
+// the whole suite green (measured RC=0 for all three). The fixtures here are
+// chosen so that they FLIP when the order flips — a fixture that classifies the
+// same either way tests nothing about order.
+
+test('F1: a DENIAL whose scope contains a status-shaped token is denied, NOT transient', () => {
+  // THE SHIPS-A-DEFECT CASE. `\b(429|500|502|503|504)\b` treats `-` as a word
+  // boundary, so `rg-loom-503` made a real AuthorizationFailed classify as
+  // transient — and the transient remediation then affirmatively denied the
+  // true cause. On this input the hardcoded message this file replaced was
+  // RIGHT, which made the fix a regression for this one input class. Latent on
+  // today's hub names; reachable on customer-named brownfield RGs (R5).
+  const denial =
+    "ERROR: (AuthorizationFailed) refused over scope '/subscriptions/x/resourceGroups/rg-loom-503/'";
+  assert.equal(classifyAzFailure(denial), 'denied');
+  assert.match(remediationFor('denied', '/scope'), /Reader|Kusto Contributor/);
+});
+
+test('F1: the numeric transient signals are ANCHORED to standalone tokens', () => {
+  // Both halves matter, and each is DISCRIMINATED by its own fixture below —
+  // these two are blocked by either anchor alone, so they pin the anchor's
+  // existence but not which half.
+  assert.notEqual(classifyAzFailure('ERROR: (Conflict) on resource rg-loom-503-hub'), 'transient');
+  assert.notEqual(classifyAzFailure('ERROR: (Conflict) guid 0000-503a-0000'), 'transient');
+  assert.equal(classifyAzFailure('ERROR: 502 Bad Gateway'), 'transient');
+  assert.equal(classifyAzFailure('ERROR: status code: 429'), 'transient');
+});
+
+test('the LOOKBEHIND half is load-bearing: a TRAILING status token is not transient', () => {
+  // Discriminates a lookbehind-only revert. `rg-loom-503` ends with the token,
+  // so the lookahead does not block it — only the lookbehind does. Measured:
+  // with the lookbehind removed this input matches TRANSIENT again.
+  assert.notEqual(classifyAzFailure("ERROR: (Conflict) over scope 'rg-loom-503'"), 'transient');
+  assert.equal(STATUS_TOKEN_LOOKBEHIND, '(?<![\\w-])');
+});
+
+test('the LOOKAHEAD half is load-bearing: a LEADING status token is not transient', () => {
+  // Discriminates a lookahead-only revert. `503117` / `503Error` START with the
+  // token, so the lookbehind does not block them — only the lookahead does.
+  assert.notEqual(classifyAzFailure('ERROR: (Conflict) correlation 503117 failed'), 'transient');
+  assert.notEqual(classifyAzFailure('ERROR: (Conflict) code 503Error raised'), 'transient');
+  assert.equal(STATUS_TOKEN_LOOKAHEAD, '(?![\\w-])');
+});
+
+test('the SIBLING alternations are anchored too — all three, not just TRANSIENT', () => {
+  // THE ROUND-2 ASK. The first fix anchored TRANSIENT and left DENIED's 40[13]
+  // and NOT_FOUND's 404 on `\b` — and promoting DENIED to first made it worse
+  // than round 1, not better. Measured before this fix, on the exact 2026-08-24
+  // stderr: `rg-loom-403` -> denied, `rg-404-archive` -> notfound,
+  // `adx-401` -> denied. The first printed "This one IS a permission problem,
+  // and az named it: grant Reader" — the original defect restored, and the R6
+  // retry lost with it because `denied` is not retryable.
+  const gt = 'ERROR: (GatewayTimeout) GatewayTimeout';
+  assert.equal(classifyAzFailure(`${gt} over scope '/resourceGroups/rg-loom-403/'`), 'transient');
+  assert.equal(classifyAzFailure(`${gt} over scope '/resourceGroups/rg-401-x/'`), 'transient');
+  assert.equal(classifyAzFailure(`${gt} over scope '/resourceGroups/rg-404-archive/'`), 'transient');
+  assert.equal(
+    classifyAzFailure("ERROR: (InsufficientResourcesForSubscription) there are no available resources on 'adx-401'"),
+    'capacity',
+  );
+
+  // …and the real status codes must still classify, or the anchor has simply
+  // deleted the alternation rather than constrained it.
+  assert.equal(classifyAzFailure('ERROR: The remote server returned 403 Forbidden'), 'denied');
+  assert.equal(classifyAzFailure('ERROR: HTTP 404 - the resource path does not exist'), 'notfound');
+});
+
+test('CONTROL: all three alternations build from the ONE shared anchor', () => {
+  // Three regex literals meant three chances to half-fix and three to
+  // half-revert; that is exactly how round 1 shipped one anchored and two not.
+  // A shared fragment makes the anchor right everywhere or wrong everywhere.
+  const src = fs.readFileSync(path.join(REPO_ROOT, 'scripts/ci/_az-failure-class.mjs'), 'utf8');
+  const code = codeOnly(src);
+  const uses = code.match(/statusToken\(/g) ?? [];
+  // EXACTLY three: TRANSIENT (429|500|502|503|504), DENIED (40[13]),
+  // NOT_FOUND (404). CAPACITY carries no status numbers, so it must NOT gain
+  // one silently — an equality here catches both a dropped call site and a
+  // fourth one nobody reviewed.
+  assert.equal(uses.length, 3, `statusToken() must build all three status alternations, saw ${uses.length}`);
+  // No alternation may go back to a hand-rolled \b around a status number.
+  // Scanned on CODE: the docblock above deliberately quotes `\b40[13]\b` and
+  // `\b404\b` as the forms that were wrong.
+  assert.doesNotMatch(code, /\\b4\d\[?\d/, 'a status alternation is back on \\b — use statusToken()');
+  assert.doesNotMatch(code, /\\b\(?429\|/, 'the transient alternation is back on \\b — use statusToken()');
+  // POPULATION: the stripper must not have eaten the module.
+  assert.match(code, /export const TRANSIENT/, 'the comment stripper ate the source — no population');
+});
+
+test('alpha: SKU exhaustion worded "temporarily unavailable" is CAPACITY, not transient', () => {
+  // Flips to `transient` the moment TRANSIENT is tested before CAPACITY, which
+  // would retry a region that is out of capacity and then report the wrong cause.
+  assert.equal(
+    classifyAzFailure('ERROR: (SkuNotAvailable) The requested SKU is temporarily unavailable in this region.'),
+    'capacity',
+  );
+});
+
+test('delta: a denial worded "could not be found" is DENIED, not notfound', () => {
+  // Flips to `notfound` the moment NOT_FOUND is tested before DENIED — and the
+  // notfound remediation says "ARM reports the target does not exist", turning
+  // "I was refused" into "it is not there". That is the exact confusion
+  // _arm-absence.mjs exists to prevent, one layer up.
+  const denial =
+    'ERROR: (LinkedAuthorizationFailed) the linked subscription could not be found or the client does not have access.';
+  assert.equal(classifyAzFailure(denial), 'denied');
+});
+
+test('gamma: an EMPTY stderr is UNKNOWN — a failure that said nothing establishes nothing', () => {
+  // Escaped a mutation that classified empty stderr as `denied`. az can fail
+  // with an empty stderr for real (spawnSync ENOENT), so this is reachable.
+  for (const empty of ['', '   \n  ', null, undefined]) {
+    assert.equal(classifyAzFailure(empty), 'unknown', `empty-ish stderr must be unknown: ${JSON.stringify(empty)}`);
+  }
+});
+
+test('the transient remediation states its LIMIT and makes no negative claim', () => {
+  // It used to say "Nothing is wrong with the configuration" and "not the deploy
+  // identity" — two negative claims the code never tested. R7 applies to a
+  // confident exoneration exactly as it applies to a confident accusation.
+  const text = remediationFor('transient', '/scope', 4);
+  assert.doesNotMatch(text, /not the deploy identity|Nothing is wrong/i);
+  assert.match(text, /did not complete/i);
+  assert.match(text, /did not test/i);
+});
+
+test('a transient failure that CLEARS is retried and then succeeds', () => {
+  let calls = 0;
+  const slept = [];
+  const res = azWithRetry(['resource', 'show'], {
+    runner: () => {
+      calls += 1;
+      return calls < 3
+        ? { ok: false, stdout: '', stderr: MEASURED_COMMERCIAL_STDERR }
+        : { ok: true, stdout: 'Stopped\n', stderr: '' };
+    },
+    sleep: (s) => slept.push(s),
+  });
+  assert.equal(res.ok, true);
+  assert.equal(res.attempts, 3);
+  assert.equal(res.stdout.trim(), 'Stopped');
+  assert.deepEqual(slept, [5, 15], 'must back off between attempts, not hammer ARM');
+});
+
+test('FAIL CLOSED: a transient failure that NEVER clears exhausts the budget and still FAILS', () => {
+  // deploy-integrity.md R6 — "a retry that cannot fail is forbidden". This is
+  // the mutation that matters: if the retry ever masked a real outage by
+  // returning ok, the preflight would have stopped watching.
+  const slept = [];
+  const res = azWithRetry(['resource', 'show'], {
+    runner: () => ({ ok: false, stdout: '', stderr: MEASURED_COMMERCIAL_STDERR }),
+    sleep: (s) => slept.push(s),
+  });
+  assert.equal(res.ok, false, 'an unresolved transient failure must NOT be reported as success');
+  assert.equal(res.kind, 'transient');
+  assert.equal(res.attempts, TRANSIENT_BACKOFF_SECONDS.length + 1);
+  assert.deepEqual(slept, TRANSIENT_BACKOFF_SECONDS, 'the schedule is the whole budget');
+});
+
+test('a NON-retryable failure returns immediately — no 50s spent on a refusal', () => {
+  let calls = 0;
+  const res = azWithRetry(['resource', 'invoke-action'], {
+    runner: () => {
+      calls += 1;
+      return { ok: false, stdout: '', stderr: MEASURED_GCCH_STDERR };
+    },
+    sleep: () => assert.fail('a capacity refusal must not be slept on'),
+  });
+  assert.equal(res.ok, false);
+  assert.equal(res.kind, 'capacity');
+  assert.equal(calls, 1);
+});
+
+test('the backoff schedule is FINITE — the budget can actually be exceeded', () => {
+  // The sibling defect this file already documents for --timeout-seconds: a
+  // budget that can never be exceeded is a budget that is not enforced.
+  assert.equal(nextRetryDelaySeconds(TRANSIENT_BACKOFF_SECONDS.length), null);
+  assert.equal(nextRetryDelaySeconds(9999), null);
+  assert.equal(nextRetryDelaySeconds(-1), null);
+  assert.equal(nextRetryDelaySeconds(0), TRANSIENT_BACKOFF_SECONDS[0]);
+});
+
+// ── 5c. THE POLL BUDGET IS A WALL CLOCK, AND THE ERROR QUOTES IT ────────────
+
+test('elapsed is REAL time, so retry sleeps are charged to the budget', () => {
+  // The accumulator counted only the 30s poll sleeps. A poll whose readState
+  // burned 50s of retry sleep and then succeeded advanced `elapsed` by 30 —
+  // so the budget under-counted by the entire retry time.
+  const t0 = 1_000_000;
+  assert.equal(elapsedSecondsSince(t0, t0 + 80_000), 80, 'a poll (30s) plus its retries (50s) is 80s, not 30s');
+  assert.equal(elapsedSecondsSince(t0, t0), 0);
+  assert.equal(elapsedSecondsSince(t0, t0 + 1_500), 1, 'whole seconds, floored');
+});
+
+test('a non-monotonic clock cannot make the budget unreachable', () => {
+  // NTP step / VM resume. A negative elapsed would read as "no time has passed"
+  // and the budget could never be exceeded — the exact shape this file already
+  // guards against for a NaN --timeout-seconds.
+  const t0 = 1_000_000;
+  assert.equal(elapsedSecondsSince(t0, t0 - 500_000), 0);
+  assert.equal(elapsedSecondsSince(t0, Number.NaN), 0);
+  assert.equal(elapsedSecondsSince(Number.NaN, t0), 0);
+});
+
+test('R7: the elapsed figure the error QUOTES is the figure that was measured', () => {
+  // This is why the wall clock belongs in this PR rather than only in #4023.
+  // The budget-exhausted message interpolates `elapsedSeconds` verbatim:
+  //   "still 'Starting' after 120s (budget 120s)"
+  // Under the accumulator, 370s of real waiting printed "after 120s" — an error
+  // asserting a figure it had not measured, which is the exact class this PR
+  // exists to close. Feed evaluatePoll the REAL elapsed and the text is true.
+  const startedAtMs = 1_000_000;
+  const realElapsed = elapsedSecondsSince(startedAtMs, startedAtMs + 370_000);
+  const v = evaluatePoll({ state: 'Starting', elapsedSeconds: realElapsed, budgetSeconds: 120 });
+  assert.equal(v.done, true);
+  assert.equal(v.ok, false);
+  assert.match(v.reason, /after 370s/, `the message must quote real elapsed time, got: ${v.reason}`);
+  assert.doesNotMatch(v.reason, /after 120s/);
+});
+
+test('CONTROL: the poll loop derives elapsed from the clock, not an accumulator', () => {
+  // Keyed to the shape. Re-adding `elapsed += POLL_INTERVAL_SECONDS` restores
+  // both the false figure and the ~92-min ceiling, and every assertion above
+  // would stay green because they test the helper rather than the loop.
+  //
+  // COMMENTS ARE STRIPPED FIRST. The first version of this control matched the
+  // explanatory comment that QUOTES the old accumulator and went red on a
+  // correct tree — a guard that fires on prose is a guard that gets deleted or
+  // watered down. It must read code.
+  const src = fs.readFileSync(path.join(REPO_ROOT, 'scripts/ci/ensure-adx-cluster-running.mjs'), 'utf8');
+  const shell = src.split('// ── I/O shell')[1] ?? '';
+  const code = codeOnly(shell);
+
+  assert.doesNotMatch(code, /elapsed\s*\+=/, 'the poll budget is back on an accumulator');
+  assert.match(code, /elapsedSecondsSince\(startedAtMs, Date\.now\(\)\)/, 'the poll loop must read the clock');
+
+  // POPULATION, two ways: the comment-stripper must not have eaten the loop,
+  // and the interval constant must still drive the SLEEP. Without these a
+  // stripper bug would leave an empty string that trivially satisfies the
+  // doesNotMatch above.
+  assert.ok(code.includes('for (;;)'), 'the poll loop vanished — this control has no population');
+  assert.equal(typeof POLL_INTERVAL_SECONDS, 'number');
+  assert.match(code, /sleepSeconds\(POLL_INTERVAL_SECONDS\)/);
+});
+
+test('CONTROL: the preflight emits no failure STATISTIC in an error string', () => {
+  // NOT "because the claim was false" — it was TRUE. Measured at the ARM leaf,
+  // `ClusterNotValidForPrincipals … Cluster is in state 'Stopped'` appears as
+  // real timestamped output in 8 of the 8 gcch runs from 2026-08-15 to
+  // 2026-08-22T10:12Z. The first version of this control cited a step-level
+  // measurement to refute a leaf-level claim, which is a category error.
+  //
+  // The reason a statistic does not belong in an emitted error is that it rots:
+  // the code that prints it cannot re-measure it, and this one was already
+  // describing a closed window by the time it shipped. Keyed to the SHAPE — any
+  // "every/all N … since <date>" style history — not to the one sentence, so
+  // the next such claim is caught too.
+  const src = fs.readFileSync(path.join(REPO_ROOT, 'scripts/ci/ensure-adx-cluster-running.mjs'), 'utf8');
+  const emitted = src.split('// ── I/O shell')[1] ?? '';
+  assert.ok(emitted.length > 0, 'the I/O shell marker must exist for this control to have a population');
+  assert.doesNotMatch(emitted, /has failed every|every .* deploy since|all \d+ .* since/i);
+});
+
+test('CONTROL: no emitted remediation hard-codes a permissions cause', () => {
+  // Keyed to the SHAPE, not a spelling. The first version matched three literal
+  // strings, and review drove a mutation straight past it: a new `fail()` saying
+  // "REMEDIATION: assign the Contributor role to the deployment identity at this
+  // scope" left every gate green while reintroducing the exact defect this PR
+  // exists to close.
+  //
+  // The rule now: the I/O shell may not name a ROLE at all. Every permission
+  // sentence lives in exactly one place — remediationFor's `denied` branch —
+  // which is reachable only when az actually said `AuthorizationFailed`.
+  // Measured on the fixed source: zero occurrences of any of these in the shell.
+  const src = fs.readFileSync(path.join(REPO_ROOT, 'scripts/ci/ensure-adx-cluster-running.mjs'), 'utf8');
+  const shell = src.split('// ── I/O shell')[1] ?? '';
+  assert.ok(shell.length > 0, 'the I/O shell marker must exist for this control to have a population');
+  const roleTokens = shell.match(/\b(Reader|Contributor|Owner|RBAC|roleAssignment|role assignment)\b/gi) ?? [];
+  assert.deepEqual(
+    roleTokens,
+    [],
+    `the I/O shell names a role directly (${roleTokens.join(', ')}) — permission wording must come from remediationFor`,
+  );
+});
+
+test('CONTROL: every az call in the preflight goes through the retry wrapper', () => {
+  // Also re-keyed. The first version matched `az([` specifically, so
+  // `const probeArgs = [...]; az(probeArgs);` reintroduced the single-shot
+  // exposure with the suite green. This matches ANY `az(` call other than the
+  // function's own definition — argument shape is irrelevant.
+  const src = fs.readFileSync(path.join(REPO_ROOT, 'scripts/ci/ensure-adx-cluster-running.mjs'), 'utf8');
+  const shell = src.split('// ── I/O shell')[1] ?? '';
+  const calls = shell.match(/(?<!function )\baz\(/g) ?? [];
+  assert.deepEqual(
+    calls,
+    [],
+    `${calls.length} direct az(...) call(s) in the I/O shell — every invocation must be azWithRetry so transient failures are retried`,
+  );
+  // POPULATION: the definition must still be there, or the matcher above is
+  // scanning a section that no longer contains any az call at all.
+  assert.match(shell, /function az\(args\)/, 'the az() definition vanished — this control has no population');
+});
+
+test('CONTROL: the shared az-failure classifier is actually imported', () => {
+  const src = fs.readFileSync(path.join(REPO_ROOT, 'scripts/ci/ensure-adx-cluster-running.mjs'), 'utf8');
+  assert.match(src, /from '\.\/_az-failure-class\.mjs'/);
 });

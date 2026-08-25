@@ -23,7 +23,8 @@ import { clientFetch } from '@/lib/client-fetch';
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
-  Subtitle2, Body1, Caption1, Button, Input, Field, Dropdown, Option, OptionGroup, Divider, Checkbox,
+  Subtitle2, Body1, Caption1, Badge, Button, Input, Field, Dropdown, Option, OptionGroup, Divider, Checkbox,
+
   Table, TableBody, TableRow, TableCell, TableHeader, TableHeaderCell, Spinner,
   MessageBar, MessageBarBody, MessageBarTitle,
   Dialog, DialogSurface, DialogTitle, DialogBody, DialogContent, DialogActions,
@@ -39,7 +40,8 @@ import { ConnectionBuilder, type ConnectionView } from '@/lib/components/connect
 import { TileGrid } from '@/lib/components/ui/tile-grid';
 import { useSharedEditorStyles } from '../shared-styles';
 
-export interface MirrorTableSpec { schema: string; table: string }
+export interface MirrorTableSpec { schema: string; table: string; isIceberg?: boolean }
+
 
 /**
  * Mirroring source types → display name, an accent color, and the Loom
@@ -50,9 +52,10 @@ export const MIRROR_SOURCES: { id: string; name: string; accent: string; connTyp
   { id: 'AzureSqlMI', name: 'Azure SQL Managed Instance', accent: '#0063b1', connTypes: ['azure-sql', 'generic-sql'] },
   { id: 'AzurePostgreSql', name: 'Azure Database for PostgreSQL', accent: '#336791', connTypes: ['postgres'] },
   { id: 'CosmosDb', name: 'Azure Cosmos DB', accent: '#3999c6', connTypes: ['cosmos'] },
-  { id: 'Snowflake', name: 'Snowflake', accent: '#29b5e8', connTypes: ['generic-sql', 'connection-string' as string] },
-  { id: 'GoogleBigQuery', name: 'Google BigQuery', accent: '#4285f4', connTypes: ['generic-sql', 'connection-string' as string] },
-  { id: 'Oracle', name: 'Oracle Database', accent: '#c74634', connTypes: ['generic-sql', 'connection-string' as string] },
+  { id: 'Snowflake', name: 'Snowflake', accent: '#29b5e8', connTypes: ['snowflake'] },
+  { id: 'GoogleBigQuery', name: 'Google BigQuery', accent: '#4285f4', connTypes: ['bigquery'] },
+  { id: 'Oracle', name: 'Oracle Database', accent: '#c74634', connTypes: ['oracle', 'generic-sql'] },
+
   { id: 'SqlServer2025', name: 'SQL Server 2025', accent: '#a4262c', connTypes: ['generic-sql'] },
   { id: 'MSSQL', name: 'SQL Server 2016-2022', accent: '#a4262c', connTypes: ['generic-sql'] },
   { id: 'GenericMirror', name: 'Open mirroring', accent: '#5c2d91', connTypes: ['azure-sql', 'postgres', 'cosmos', 'storage-adls', 'generic-sql'] },
@@ -71,26 +74,55 @@ const GATEWAY_SOURCES = new Set(['Oracle']);
 /**
  * Ongoing-replication mode — a fixed allowlist (loom-no-freeform-config) carried
  * into mirroring.json `source.typeProperties.syncMode` and consumed by the engine.
+ *
+ * The LABELS are per-source-family, because the same mode id means genuinely
+ * different things per backend and a control must not promise what its backend
+ * does not do (`no-vaporware.md`). On the SQL/PG/Cosmos engines `incremental`
+ * really is "only the rows that changed" — Change Tracking, a monotonic
+ * watermark, or the Cosmos `_ts` feed. On the ADF Copy engine (Snowflake) it is
+ * a scheduled **full reload**: the ADF Snowflake connector exposes no CDC
+ * source, so every run is a delete-then-copy. Labelling that "changed rows since
+ * last sync" — while the note directly below it said "full refresh" — put a
+ * contradiction on one screen with the misleading half selected by DEFAULT.
  */
-const SYNC_MODE_OPTIONS: { id: 'incremental' | 'snapshot' | 'continuous'; name: string }[] = [
-  { id: 'incremental', name: 'Incremental (changed rows since last sync)' },
-  { id: 'snapshot', name: 'Snapshot (full reload every run)' },
-  { id: 'continuous', name: 'Continuous (ADF CDC / scheduled copy when configured)' },
-];
+const SYNC_MODE_IDS = ['incremental', 'snapshot', 'continuous'] as const;
+type SyncModeId = (typeof SYNC_MODE_IDS)[number];
+
+/** Sources whose ongoing sync is an ADF Copy full reload, not row-level CDC. */
+const FULL_RELOAD_SOURCES = new Set(['Snowflake', 'GoogleBigQuery', 'Oracle']);
+
+export function syncModeOptions(sourceType: string): { id: SyncModeId; name: string }[] {
+
+  if (FULL_RELOAD_SOURCES.has(sourceType)) {
+    return [
+      { id: 'incremental', name: 'Scheduled refresh (full reload on a schedule)' },
+      { id: 'snapshot', name: 'Snapshot (one full load, no schedule)' },
+      { id: 'continuous', name: 'Continuous (full reload every 15 minutes)' },
+    ];
+  }
+  return [
+    { id: 'incremental', name: 'Incremental (changed rows since last sync)' },
+    { id: 'snapshot', name: 'Snapshot (full reload every run)' },
+    { id: 'continuous', name: 'Continuous (ADF CDC / scheduled copy when configured)' },
+  ];
+}
+
 
 /**
  * Per-source plain-English description of HOW ongoing sync works for that source
  * — so the operator sees the real engine path, not a generic label. Grounds the
  * sync-mode control in the actual Azure-native backend.
  */
-const SOURCE_SYNC_NOTE: Record<string, string> = {
+export const SOURCE_SYNC_NOTE: Record<string, string> = {
+
   AzureSqlDatabase: 'SQL Change Tracking drives incremental deltas; set the ADF CDC env vars for continuous Delta CDC.',
   AzureSqlMI: 'SQL Change Tracking drives incremental deltas; set the ADF CDC env vars for continuous Delta CDC.',
   SqlServer2025: 'SQL Change Tracking drives incremental deltas; set the ADF CDC env vars for continuous Delta CDC.',
   MSSQL: 'SQL Change Tracking drives incremental deltas; set the ADF CDC env vars for continuous Delta CDC.',
   AzurePostgreSql: 'Watermark-incremental on a monotonic column (updated-at timestamp / serial id). Insert/update fidelity; deletes are a disclosed follow-up.',
   CosmosDb: 'Change-feed `_ts`-watermark incremental — each run reads only documents changed since the last sync.',
-  Snowflake: 'ADF Copy runtime — delete-then-copy full refresh into Bronze Parquet, on a schedule trigger when continuous/incremental.',
+  Snowflake: 'ADF Copy runtime. Snapshot = one full load, no trigger. Incremental = re-copied on the deployment cadence via a schedule trigger. Continuous = a 15-minute tumbling window (max 1 concurrent). Every run is a delete-then-copy full refresh — the ADF Snowflake connector has no CDC source.',
+
   GoogleBigQuery: 'ADF Copy backend (Google BigQuery V2 connector → Bronze) once the ADF linked services are configured.',
   Oracle: 'ADF Copy backend through the on-prem data gateway → Bronze once the ADF linked services are configured.',
   GenericMirror: 'Open mirroring — your producer pushes Parquet to the landing zone; a Spark job merges it into managed Delta.',
@@ -139,7 +171,15 @@ const useLocalStyles = makeStyles({
     borderLeft: `4px solid ${tokens.colorBrandStroke1}`, backgroundColor: tokens.colorNeutralBackground2,
   },
   syncBody: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXXS, flexGrow: 1, minWidth: 0 },
+  // Badge rows wrap and truncate — ux-baseline.md: a badge row that overlaps at
+  // any width is a defect, so the name shrinks and the badge never collides.
+  tableCellRow: {
+    display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalXS,
+    flexWrap: 'wrap', minWidth: 0,
+  },
+  tableCellName: { minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
 });
+
 
 function useStyles() {
   const shared = useSharedEditorStyles();
@@ -225,6 +265,40 @@ export function MirrorSourceWizard(props: MirrorSourceWizardProps) {
   // and dropped from the Start/verify gate (audit ui-gap: mirroring / Cosmos
   // start gate — gate on database only).
   const isCosmos = createSrc === 'CosmosDb';
+  // Snowflake addresses its source with an account identifier + warehouse +
+  // role, all of which live on the Snowflake connection — so the generic
+  // "Server / host" labels would be wrong here.
+  const isSnowflake = createSrc === 'Snowflake';
+  // Pre-select the connection type when the source has exactly one, so "New
+  // connection" from a Snowflake mirror opens ON Snowflake rather than making
+  // the user find it (auto-bind-by-default: no user-performed plumbing).
+  const connLockType = srcDef.connTypes.length === 1 ? srcDef.connTypes[0] : undefined;
+
+  // Mode labels follow the SOURCE's real backend — see syncModeOptions.
+  const syncModes = useMemo(() => syncModeOptions(createSrc), [createSrc]);
+
+
+  // How many discovered tables are Snowflake-managed Iceberg — null when the
+  // source has not been enumerated yet. Drives the Iceberg card's live count so
+  // the toggle states a real fact about THIS database, not a generic promise.
+  const icebergCount = useMemo(
+    () => (availTables ? availTables.filter((t) => t.isIceberg).length : null),
+    [availTables],
+  );
+
+  /**
+   * The tables offered for selection. When "Include Iceberg tables" is off,
+   * Snowflake-managed Iceberg tables are withheld — matching exactly what the
+   * engine will replicate, so the wizard can never offer a table the mirror
+   * would then skip.
+   */
+  const visibleTables = useMemo(() => {
+    if (!availTables) return null;
+    if (createSrc !== 'Snowflake' || includeIceberg) return availTables;
+    return availTables.filter((t) => !t.isIceberg);
+  }, [availTables, createSrc, includeIceberg]);
+
+
 
   // Selecting a source resets its connection + source-specific fields so the
   // next step starts clean. Shared by click and keyboard (Enter/Space).
@@ -313,7 +387,10 @@ export function MirrorSourceWizard(props: MirrorSourceWizardProps) {
         ? await clientFetch(`/api/items/mirrored-database/${encodeURIComponent(mirrorId)}/tables?workspaceId=${encodeURIComponent(workspaceId)}`)
         : await clientFetch('/api/items/mirrored-database/source-tables', {
             method: 'POST', headers: { 'content-type': 'application/json' },
-            body: JSON.stringify({ sourceType: createSrc, server: effServer, database: effDb }),
+            // connectionId lets the Snowflake enumerator build (or reuse) the
+            // mirror's own ADF linked service, so pre-create "Load tables"
+            // reads the source with the SAME credential Start will use.
+            body: JSON.stringify({ sourceType: createSrc, server: effServer, database: effDb, connectionId: connId || undefined }),
           });
       const j = await r.json();
       if (!j.ok) { setTablesMsg(j.error || 'Could not list tables.'); setAvailTables([]); return; }
@@ -321,7 +398,8 @@ export function MirrorSourceWizard(props: MirrorSourceWizardProps) {
       if (!(j.tables || []).length) setTablesMsg('No tables found.');
     } catch (e: any) { setTablesMsg(e?.message || String(e)); setAvailTables([]); }
     finally { setTablesLoading(false); }
-  }, [createSrc, effServer, effDb, isBigQuery, isOracle, mirrorId, workspaceId]);
+  }, [createSrc, effServer, effDb, isBigQuery, isOracle, mirrorId, workspaceId, connId]);
+
 
   const runVerify = useCallback(async () => {
     if ((!effServer && !isCosmos) || !effDb) { setVerify({ status: 'err', msg: isBigQuery ? 'Enter the GCP project and dataset first.' : isOracle ? 'Enter the host and service name first.' : isCosmos ? 'Enter the database first.' : 'Enter the server and database first.' }); return; }
@@ -394,7 +472,11 @@ export function MirrorSourceWizard(props: MirrorSourceWizardProps) {
         gateway: isOracle ? (gateway.trim() || undefined) : undefined,
         syncUser: isOracle ? (syncUser.trim() || undefined) : undefined,
         connectionId: connId || undefined,
-        tables: (availTables || []).filter((t) => selTables.has(tkey(t))),
+        // Only tables the wizard actually OFFERED can be submitted. With
+        // "Include Iceberg tables" off, an Iceberg table selected before the
+        // toggle flipped must not silently ride along into the mirror.
+        tables: (visibleTables || []).filter((t) => selTables.has(tkey(t))).map((t) => ({ schema: t.schema, table: t.table })),
+
         includeIcebergTables: wantIceberg,
         syncMode,
       };
@@ -414,7 +496,8 @@ export function MirrorSourceWizard(props: MirrorSourceWizardProps) {
         onCreated(newId || '', createName.trim());
       }
     } finally { setCreateBusy(false); }
-  }, [workspaceId, createName, createSrc, effServer, effDb, connId, includeIceberg, syncMode, editing, mirrorId, availTables, selTables, isBigQuery, isOracle, projectId, serviceName, gateway, syncUser, onCreated, onUpdated]);
+  }, [workspaceId, createName, createSrc, effServer, effDb, connId, includeIceberg, syncMode, editing, mirrorId, visibleTables, selTables, isBigQuery, isOracle, projectId, serviceName, gateway, syncUser, onCreated, onUpdated]);
+
 
   return (
     <>
@@ -574,6 +657,18 @@ export function MirrorSourceWizard(props: MirrorSourceWizardProps) {
                       <Input value={createDb} onChange={(_, d) => { setCreateDb(d.value); setVerify({ status: 'idle' }); }} placeholder="prod" disabled={!!pickedConn?.database} />
                     </Field>
                   </div>
+                ) : isSnowflake ? (
+                  // Snowflake: the account identifier + database come from the
+                  // Snowflake connection (as do warehouse and role), so the
+                  // fields are labelled for that connector rather than SQL.
+                  <div style={{ display: 'flex', gap: tokens.spacingHorizontalM, marginTop: tokens.spacingVerticalL }}>
+                    <Field label="Account identifier" required hint="e.g. myorg-account123 — taken from the connection." style={{ flex: 1 }}>
+                      <Input value={createServer} onChange={(_, d) => { setCreateServer(d.value); setVerify({ status: 'idle' }); }} placeholder="myorg-account123" disabled={!!pickedConn?.host} />
+                    </Field>
+                    <Field label="Database" required hint="The Snowflake database to mirror." style={{ flex: 1 }}>
+                      <Input value={createDb} onChange={(_, d) => { setCreateDb(d.value); setVerify({ status: 'idle' }); }} placeholder="SALES_DB" disabled={!!pickedConn?.database} />
+                    </Field>
+                  </div>
                 ) : (
                   <div style={{ display: 'flex', gap: tokens.spacingHorizontalM, marginTop: tokens.spacingVerticalL }}>
                     <Field label="Server / host" style={{ flex: 1 }}>
@@ -608,10 +703,12 @@ export function MirrorSourceWizard(props: MirrorSourceWizardProps) {
                     <Field label="Sync mode"
                       hint={SOURCE_SYNC_NOTE[createSrc] || 'How ongoing changes are replicated after the initial load.'}>
                       <Dropdown
-                        value={SYNC_MODE_OPTIONS.find((o) => o.id === syncMode)?.name || ''}
+                        value={syncModes.find((o) => o.id === syncMode)?.name || ''}
+
                         selectedOptions={[syncMode]}
                         onOptionSelect={(_, d) => { if (d.optionValue) setSyncMode(d.optionValue as typeof syncMode); }}>
-                        {SYNC_MODE_OPTIONS.map((o) => (
+                        {syncModes.map((o) => (
+
                           <Option key={o.id} value={o.id} text={o.name}>{o.name}</Option>
                         ))}
                       </Dropdown>
@@ -631,6 +728,14 @@ export function MirrorSourceWizard(props: MirrorSourceWizardProps) {
                         Also mirror Snowflake-managed Apache Iceberg tables, not just standard tables. The engine reads each
                         Iceberg table&apos;s metadata from Snowflake and lands it as Bronze Delta.
                       </Caption1>
+                      {icebergCount !== null && (
+                        <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
+                          {icebergCount === 0
+                            ? 'No Iceberg tables were found in this database.'
+                            : `${icebergCount} of ${(availTables || []).length} discovered tables ${icebergCount === 1 ? 'is' : 'are'} Snowflake-managed Iceberg.`}
+                        </Caption1>
+                      )}
+
                     </div>
                   </div>
                 )}
@@ -638,10 +743,10 @@ export function MirrorSourceWizard(props: MirrorSourceWizardProps) {
                   <Button size="small" appearance="outline" icon={<ArrowSync20Regular />} disabled={tablesLoading} onClick={loadSourceTables}>
                     {tablesLoading ? 'Loading…' : 'Load tables'}
                   </Button>
-                  {availTables && availTables.length > 0 && (
+                  {visibleTables && visibleTables.length > 0 && (
                     <>
-                      <Caption1>{selTables.size} of {availTables.length} selected</Caption1>
-                      <Button size="small" appearance="subtle" onClick={() => setSelTables(new Set(availTables.map(tkey)))}>All</Button>
+                      <Caption1>{selTables.size} of {visibleTables.length} selected</Caption1>
+                      <Button size="small" appearance="subtle" onClick={() => setSelTables(new Set(visibleTables.map(tkey)))}>All</Button>
                       <Button size="small" appearance="subtle" onClick={() => setSelTables(new Set())}>None</Button>
                     </>
                   )}
@@ -650,28 +755,33 @@ export function MirrorSourceWizard(props: MirrorSourceWizardProps) {
                   <div className={s.tableLoading}><Spinner size="tiny" label="Discovering tables…" labelPosition="after" /></div>
                 )}
                 {!tablesLoading && tablesMsg && <Caption1 style={{ display: 'block', marginTop: tokens.spacingVerticalS, color: tokens.colorNeutralForeground3 }}>{tablesMsg}</Caption1>}
-                {!tablesLoading && availTables && availTables.length > 0 && (
+                {!tablesLoading && visibleTables && visibleTables.length > 0 && (
                   <div className={s.tableWrap} style={{ maxHeight: 180, marginTop: tokens.spacingVerticalS }}>
                     <Table size="small" aria-label="Source tables">
                       <TableHeader>
                         <TableRow>
                           <TableHeaderCell style={{ width: 36 }}>
                             <Checkbox aria-label="Select all tables"
-                              checked={selTables.size === availTables.length ? true : selTables.size === 0 ? false : 'mixed'}
-                              onChange={(_, d) => setSelTables(d.checked ? new Set(availTables.map(tkey)) : new Set())} />
+                              checked={selTables.size === visibleTables.length ? true : selTables.size === 0 ? false : 'mixed'}
+                              onChange={(_, d) => setSelTables(d.checked ? new Set(visibleTables.map(tkey)) : new Set())} />
                           </TableHeaderCell>
                           <TableHeaderCell>Schema.table</TableHeaderCell>
                         </TableRow>
                       </TableHeader>
                       <TableBody>
-                        {availTables.map((t) => {
+                        {visibleTables.map((t) => {
                           const k = tkey(t);
                           return (
                             <TableRow key={k} appearance={selTables.has(k) ? 'brand' : 'none'}>
                               <TableCell style={{ width: 36 }}>
                                 <Checkbox checked={selTables.has(k)} aria-label={`Mirror ${k}`} onChange={(_, d) => setSelTables((prev) => { const n = new Set(prev); if (d.checked) n.add(k); else n.delete(k); return n; })} />
                               </TableCell>
-                              <TableCell className={s.cell}>{t.schema}.{t.table}</TableCell>
+                              <TableCell className={s.cell}>
+                                <span className={s.tableCellRow}>
+                                  <span className={s.tableCellName}>{t.schema}.{t.table}</span>
+                                  {t.isIceberg && <Badge appearance="tint" color="informative" size="small">Iceberg</Badge>}
+                                </span>
+                              </TableCell>
                             </TableRow>
                           );
                         })}
@@ -679,6 +789,7 @@ export function MirrorSourceWizard(props: MirrorSourceWizardProps) {
                     </Table>
                   </div>
                 )}
+
               </div>
 
               <Divider />
@@ -711,7 +822,8 @@ export function MirrorSourceWizard(props: MirrorSourceWizardProps) {
                     </>
                   )}
                   <span className={s.sumKey}>Tables</span><span>{selTables.size > 0 ? `${selTables.size} selected` : 'all discovered'}</span>
-                  <span className={s.sumKey}>Sync mode</span><span>{SYNC_MODE_OPTIONS.find((o) => o.id === syncMode)?.name || syncMode}</span>
+                  <span className={s.sumKey}>Sync mode</span><span>{syncModes.find((o) => o.id === syncMode)?.name || syncMode}</span>
+
                   {createSrc === 'Snowflake' && (<><span className={s.sumKey}>Iceberg</span><span>{includeIceberg ? 'Iceberg tables included' : 'standard tables only'}</span></>)}
                   <span className={s.sumKey}>Target</span><span>ADLS Bronze Delta</span>
                 </div>
@@ -732,7 +844,9 @@ export function MirrorSourceWizard(props: MirrorSourceWizardProps) {
       </DialogSurface>
     </Dialog>
       <ConnectionBuilder open={connBuilderOpen} onClose={() => setConnBuilderOpen(false)}
+        lockType={connLockType}
         onCreated={(c) => { setConnections((prev) => [...prev.filter((x) => x.id !== c.id), c]); setConnId(c.id); }} />
+
       {pickedConn && (
         <ConnectionBuilder
           open={editConnOpen}

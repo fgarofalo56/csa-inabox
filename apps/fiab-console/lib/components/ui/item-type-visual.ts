@@ -26,6 +26,7 @@ import type { FluentIcon } from '@fluentui/react-icons';
 import {
   // Data engineering / lakehouse
   Notebook24Regular, Database24Regular, Box24Regular, CodeBlock24Regular,
+  WeatherSnowflake24Regular,
   // Data factory
   Flow24Regular, ArrowSwap24Regular, ArrowDownload24Regular,
   Link24Regular, BranchFork24Regular, CloudFlow24Regular,
@@ -341,7 +342,17 @@ const REGISTRY: Record<string, Entry> = {
   'event-hub':         { icon: Pulse24Regular,          family: 'rti',      label: 'Event Hubs' },
   'service-bus':       { icon: Channel24Regular,        family: 'rti',      label: 'Service Bus' },
   'key-vault':         { icon: LockClosed24Regular,     family: 'api',      label: 'Key Vault' },
+
+  // ── Non-Azure mirrorable sources (Snowflake / BigQuery / Oracle / MySQL) ──
+  // Every source the mirrored-database wizard offers needs a creatable
+  // connection, and every connection type needs a glyph so the source-type
+  // picker reads as the same product as its Azure siblings (web3-ui.md).
+  'snowflake':         { icon: WeatherSnowflake24Regular, family: 'database', label: 'Snowflake' },
+  'bigquery':          { icon: Database24Regular,       family: 'database', label: 'Google BigQuery' },
+  'oracle':            { icon: Database24Regular,       family: 'database', label: 'Oracle Database' },
+  'mysql':             { icon: Database24Regular,       family: 'database', label: 'MySQL' },
 };
+
 
 /** Derive a Title Case label from a slug ("kql-database" → "Kql Database"). */
 function labelFromSlug(slug: string): string {

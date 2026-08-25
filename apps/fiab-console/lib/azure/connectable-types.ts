@@ -34,6 +34,8 @@ export const CONNECTABLE_ARM_TYPES: ConnectableArmType[] = [
   { armType: 'microsoft.sql/servers/databases',           connType: 'azure-sql',          label: 'Azure SQL Database' },
   { armType: 'microsoft.dbforpostgresql/flexibleservers', connType: 'postgres',           label: 'PostgreSQL Flexible Server' },
   { armType: 'microsoft.dbforpostgresql/servers',         connType: 'postgres',           label: 'PostgreSQL Server' },
+  { armType: 'microsoft.dbformysql/flexibleservers',      connType: 'mysql',              label: 'MySQL Flexible Server' },
+
   { armType: 'microsoft.storage/storageaccounts',         connType: 'storage-adls',       label: 'Storage / ADLS Gen2' },
   { armType: 'microsoft.documentdb/databaseaccounts',     connType: 'cosmos',             label: 'Cosmos DB' },
   { armType: 'microsoft.synapse/workspaces',              connType: 'synapse-serverless', label: 'Synapse Workspace' },
@@ -63,6 +65,10 @@ export const CONN_TYPE_LABEL: Record<ConnectionType, string> = {
   'event-hub': 'Event Hubs',
   'service-bus': 'Service Bus',
   'key-vault': 'Key Vault',
+  'snowflake': 'Snowflake',
+  'bigquery': 'Google BigQuery',
+  'oracle': 'Oracle Database',
+  'mysql': 'MySQL',
 };
 
 /**
@@ -82,7 +88,12 @@ export const CONN_TILE_SLUG: Record<ConnectionType, string> = {
   'event-hub': 'event-hub',
   'service-bus': 'service-bus',
   'key-vault': 'key-vault',
+  'snowflake': 'snowflake',
+  'bigquery': 'bigquery',
+  'oracle': 'oracle',
+  'mysql': 'mysql',
 };
+
 
 /**
  * Strip scheme / trailing slash / `:443` from an ARG-projected endpoint so the
@@ -123,6 +134,19 @@ export const CONN_TYPE_AUTH_OPTIONS: Record<ConnectionType, AuthMethod[]> = {
   'service-bus':        ['entra-mi', 'connection-string'],
   // Key Vault: MI only — no credential type makes sense for a KV reference.
   'key-vault':          ['entra-mi'],
+  // ── Non-Azure mirrorable sources ────────────────────────────────────────
+  // Snowflake: Basic (user + password) is the default; KeyPair (PEM private
+  // key) is the headless/service path. Both map onto the ADF SnowflakeV2
+  // linked service's `authenticationType`. Entra MI cannot log in to Snowflake,
+  // so it is deliberately ABSENT rather than offered and broken.
+  'snowflake':          ['sql-password', 'key-pair'],
+  // BigQuery authenticates with a Google service-account key (JSON blob).
+  'bigquery':           ['connection-string'],
+  // Oracle: a database user + password, reached through a self-hosted IR.
+  'oracle':             ['sql-password', 'connection-string'],
+  // MySQL (Azure Database for MySQL): native user + password; Entra auth exists
+  // on flexible server, so MI is offered second.
+  'mysql':              ['sql-password', 'entra-mi'],
 };
 
 /** Human label for each AuthMethod (used in the wizard dropdown). */
@@ -132,7 +156,26 @@ export const AUTH_METHOD_LABEL: Record<AuthMethod, string> = {
   'connection-string':'Connection string',
   'account-key':      'Account key',
   'service-principal':'Service principal',
+  'key-pair':         'Key pair (PEM private key)',
 };
+
+/**
+ * The canonical request allowlists for `type` / `authMethod`.
+ *
+ * DERIVED, never hand-listed. Three API routes (`/api/connections`,
+ * `/api/connections/[id]`, `/api/connections/test`) used to each carry their own
+ * literal copy of the type list. That is why Snowflake could be added to the
+ * union and the wizard and still be rejected at the boundary: a hand-maintained
+ * duplicate only stays in sync while somebody remembers it.
+ *
+ * `CONN_TYPE_LABEL` and `AUTH_METHOD_LABEL` are exhaustive `Record<Union, …>`s,
+ * so the compiler forces a label for every new member and the allowlist widens
+ * automatically. Adding a connection type can no longer half-land.
+ */
+export const CONNECTION_TYPES = Object.keys(CONN_TYPE_LABEL) as ConnectionType[];
+export const AUTH_METHODS = Object.keys(AUTH_METHOD_LABEL) as AuthMethod[];
+
+
 
 /** Shape returned by GET /api/azure/connectables for one discovered resource. */
 export interface ConnectableResource {

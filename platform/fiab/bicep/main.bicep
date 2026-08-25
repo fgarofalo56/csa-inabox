@@ -1944,6 +1944,22 @@ module singleDlzAoaiSparkRbac 'modules/admin-plane/aoai-spark-rbac.bicep' = if (
   }
 }
 
+// Mirrored-database auto-bind (Snowflake): grant the DLZ Data Factory's MI
+// "Key Vault Secrets User" on the admin-plane Loom Key Vault, so the linked
+// service the Console auto-binds can dereference the Loom Connection secret
+// instead of embedding it. Same orchestrator shape as the AOAI/Spark grant
+// above and for the same reason: the vault is deployed by the admin plane
+// (before the DLZ), so the factory principal only exists at this point.
+module singleDlzAdfKeyVaultRbac 'modules/admin-plane/adf-keyvault-rbac.bicep' = if (useSingleDlz && deployAdminPlane) {
+  name: 'dlz-single-adf-keyvault-rbac'
+  scope: resourceGroup(adminPlaneRgName)
+  params: {
+    keyVaultName: last(split(adminPlane!.outputs.keyVaultId, '/'))
+    dataFactoryPrincipalId: singleDlz!.outputs.adfFactoryPrincipalId
+    skipRoleGrants: skipRoleGrants
+  }
+}
+
 // Multi-sub: per-DLZ in separate subs
 
 // NOTE: caller is responsible for creating the per-DLZ RGs in the
@@ -2024,7 +2040,22 @@ module dlzAccessPolicyRbac 'modules/admin-plane/access-policy-rbac.bicep' = [for
   }
 }]
 
-// APPS-W2 (Loom Apps "Resources" tab) — constrained RBAC-Administrator for the
+// Mirrored-database auto-bind (Snowflake), multi-sub: each DLZ has its own
+// factory, and every one of them needs to read Loom Connection secrets from the
+// SHARED admin-plane vault. Scoped to the admin-plane RG (where the vault is),
+// one assignment per DLZ factory principal. Same grant as the single-sub module
+// above — a capability that worked in single-sub and silently no-opped here
+// would be exactly the parity gap `cloud-parity.md` calls incomplete.
+module dlzAdfKeyVaultRbac 'modules/admin-plane/adf-keyvault-rbac.bicep' = [for (subId, i) in dlzSubscriptionIds: if (useMultiDlz && deployAdminPlane) {
+  name: 'dlz-${i}-adf-keyvault-rbac'
+  scope: resourceGroup(adminPlaneRgName)
+  params: {
+    keyVaultName: last(split(adminPlane!.outputs.keyVaultId, '/'))
+    dataFactoryPrincipalId: dlz[i]!.outputs.adfFactoryPrincipalId
+    skipRoleGrants: skipRoleGrants
+  }
+}]
+
 // Console UAMI at the Admin Plane RG + each DLZ RG, so one-click resource
 // attaches can assign the apps UAMI its data-plane roles (see the module
 // header for the exact allowed-role ABAC constraint). Shipped imperatively

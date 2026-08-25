@@ -47,13 +47,14 @@ describe('MirrorSourceWizard — Snowflake Iceberg option', () => {
     fireEvent.click(screen.getByText('Snowflake'));
     await waitFor(() => expect(screen.getByText(/Include Iceberg tables/i)).toBeInTheDocument());
 
-    // Fill required fields.
+    // Fill required fields. Snowflake is addressed by ACCOUNT IDENTIFIER, not a
+    // SQL server FQDN, so the field is labelled and placeheld for that.
     const inputs = document.querySelectorAll('input');
-    // Server, Database, then Name (the order they render in the DOM).
-    fireEvent.change(screen.getByPlaceholderText('server.database.windows.net'), { target: { value: 'acct.snowflakecomputing.com' } });
-    fireEvent.change(screen.getByPlaceholderText('prod'), { target: { value: 'SALES_DB' } });
+    fireEvent.change(screen.getByPlaceholderText('myorg-account123'), { target: { value: 'myorg-acct123' } });
+    fireEvent.change(screen.getByPlaceholderText('SALES_DB'), { target: { value: 'SALES_DB' } });
     fireEvent.change(screen.getByPlaceholderText('prod-sales-mirror'), { target: { value: 'snow-mirror' } });
     expect(inputs.length).toBeGreaterThan(0);
+
 
     // Check Iceberg.
     fireEvent.click(screen.getByLabelText(/Include Iceberg tables/i));
