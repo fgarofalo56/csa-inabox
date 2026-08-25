@@ -100,7 +100,32 @@ if [ -z "$ACR" ]; then
 fi
 
 # Transient in the window right after an ACR firewall open, or under throttling.
-TRANSIENT='CONNECTIVITY_REFRESH_TOKEN_ERROR|Response code: 403|try running .az login. again|TooManyRequests|temporarily unavailable|Connection aborted|connection reset|ServiceUnavailable|GatewayTimeout|504|503'
+#
+# THE IP-DENIAL SHAPE (loom-roll-and-validate run 32819789544, 2026-08-25 - a P0
+# roll failure that froze the Commercial estate mid-roll). `az acr login` shells
+# out to the Docker daemon when one is present, and the daemon reports a firewall
+# refusal in ITS words, not the AAD client's:
+#
+#   [acr-dataplane-ready] READY after 1 attempt(s) - HTTP 401 ...   <- probe: open
+#   WARNING: Error response from daemon: Get "https://<acr>/v2/": denied:
+#     {"errors":[{"code":"DENIED","message":"client with IP '<ip>' is not allowed
+#      access. Refer https://aka.ms/acr/firewall to grant access."}]}
+#   ERROR: Login failed.
+#
+# That text contains NO `Response code: 403` and none of the other needles below,
+# so the set classified the CANONICAL post-open propagation failure as permanent
+# and exited on attempt 1 - the precise outcome this script exists to prevent.
+#
+# `is not allowed access` is the right needle, and it is narrow: ACR's NETWORK
+# RULE engine emits it and nothing else does. An RBAC denial says "was denied.
+# Response code: 403" instead - acr-dataplane-ready.sh measured both sides of
+# that discrimination on 2026-08-11 and records it in its own header.
+#
+# COST OF BEING WRONG. If the lease genuinely never opened the registry, this now
+# takes ~165s to say so instead of ~0s. That is the SAME trade #3383 already made
+# deliberately for a true RBAC denial: a slow true answer beats a fast false one,
+# and the exhaustion message names both possibilities rather than asserting one.
+TRANSIENT='CONNECTIVITY_REFRESH_TOKEN_ERROR|Response code: 403|is not allowed access|try running .az login. again|TooManyRequests|temporarily unavailable|Connection aborted|connection reset|ServiceUnavailable|GatewayTimeout|504|503'
 
 LAST=""
 # Report the time this actually took, not ATTEMPTS*BACKOFF — the loop never
