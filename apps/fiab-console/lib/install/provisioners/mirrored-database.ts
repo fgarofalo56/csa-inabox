@@ -123,11 +123,11 @@ async function provisionAdfCdc(input: any, steps: string[]): Promise<ProvisionRe
     steps.push(`Linked service '${srcLs}' → ${server}/${database} (factory MI auth).`);
 
     // 2. Sink linked service — ADLS Gen2 via the factory's managed identity.
-    //    The DFS host comes from `dfsUrl()`, never a literal: a hard-coded
-    //    `dfs.core.windows.net` here bound every GCC-High / IL5 / DoD mirror to a
-    //    Commercial hostname that does not resolve in those boundaries, so the
-    //    Copy activity failed at run time on an estate whose lake was fine
-    //    (cloud-parity.md).
+    //    The DFS host comes from `dfsUrl()` (cloud-endpoints.ts), never a
+    //    literal. This line used to hard-code the Commercial DFS host, so every
+    //    GCC-High / IL5 / DoD mirror bound to a hostname that does not resolve in
+    //    those boundaries and the Copy activity failed at run time on an estate
+    //    whose lake was fine (cloud-parity.md).
     await upsertLinkedService(sinkLs, {
       name: sinkLs,
       properties: {
