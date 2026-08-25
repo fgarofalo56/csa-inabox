@@ -30,6 +30,7 @@ import {
   runPipeline,
 } from '@/lib/azure/adf-client';
 import { resolveAbfssRoot } from '@/lib/azure/adls-client';
+import { dfsUrl } from '@/lib/azure/cloud-endpoints';
 import {
   listMirroredDatabases,
   createMirroredDatabase,
@@ -122,14 +123,19 @@ async function provisionAdfCdc(input: any, steps: string[]): Promise<ProvisionRe
     steps.push(`Linked service '${srcLs}' → ${server}/${database} (factory MI auth).`);
 
     // 2. Sink linked service — ADLS Gen2 via the factory's managed identity.
+    // The DFS host is per-cloud (dfsUrl → cloud-endpoints.ts). A hard-coded
+    // Commercial host here writes a dead sink into a SOVEREIGN factory: ADF
+    // accepts the linked service, so the provision reports green and the copy
+    // has nowhere to land (#4063).
+    const sinkUrl = dfsUrl(adlsAccount);
     await upsertLinkedService(sinkLs, {
       name: sinkLs,
       properties: {
         type: 'AzureBlobFS',
-        typeProperties: { url: `https://${adlsAccount}.dfs.core.windows.net` },
+        typeProperties: { url: sinkUrl },
       },
     } as any);
-    steps.push(`Linked service '${sinkLs}' → ${adlsAccount}.dfs.core.windows.net (factory MI auth).`);
+    steps.push(`Linked service '${sinkLs}' → ${sinkUrl} (factory MI auth).`);
 
     // 3. One source+sink dataset + copy activity per mounted table.
     const useTables = tables.length ? tables : ['dbo.*'];
@@ -231,9 +237,9 @@ async function provisionAdfCdc(input: any, steps: string[]): Promise<ProvisionRe
     // synapse-serverless-sql-pool over it. The mirror engine lands each table's
     // CSV under `mirrors/<workspaceId>/<mirrorId>/<schema>.<table>/`, so the
     // mirror root is `<bronze>/mirrors/<workspaceId>/<mirrorId>`. resolveAbfssRoot
-    // derives the DFS host from LOOM_BRONZE_URL → sovereign-cloud-correct
-    // (dfs.core.windows.net vs dfs.core.usgovcloudapi.net) with no hard-coded
-    // domain. Null (LOOM_BRONZE_URL unset) simply skips pairing — honest, no gate.
+    // derives the DFS host from LOOM_BRONZE_URL → sovereign-cloud-correct with
+    // no hard-coded domain: dfs.core.windows.net vs dfs.core.usgovcloudapi.net.  cloud-endpoint-literal-ok: per-cloud truth table, not a wired-in host
+    // Null (LOOM_BRONZE_URL unset) simply skips pairing — honest, no gate.
     const mirrorRoot = resolveAbfssRoot('bronze', `mirrors/${input.workspaceId}/${input.cosmosItemId}`);
     if (mirrorRoot) secondaryIds.adlsRoot = mirrorRoot;
     return { status: 'created', resourceId: pipelineName, secondaryIds, steps };

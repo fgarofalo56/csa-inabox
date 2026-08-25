@@ -17,16 +17,33 @@
  * SCOPE — SOURCE files only, under:
  *     apps/fiab-console/lib/azure/**   apps/fiab-console/app/api/**
  *     apps/fiab-console/lib/auth/**    apps/fiab-console/lib/admin/**
- *     apps/fiab-console/lib/apps/**
+ *     apps/fiab-console/lib/apps/**    apps/fiab-console/lib/install/**
  *
- *   THE LAST THREE WERE ADDED BY #3381, AND THE OMISSION IS WHY THAT BUG
- *   SURVIVED. `lib/auth/msal.ts:381` held a two-branch Graph-host switch with
+ *   `lib/auth`, `lib/admin` and `lib/apps` WERE ADDED BY #3381, AND THE
+ *   OMISSION IS WHY THAT BUG SURVIVED. `lib/auth/msal.ts:381` held a two-branch
+ *   Graph-host switch with
  *   no DoD case — a wired-in `graph.microsoft.com` on the fallback branch, the
  *   exact literal this guard forbids — and the guard never saw it, because
  *   `lib/auth` was not in SCOPE_DIRS. Same for `lib/admin/secret-health.ts` and
  *   the Graph host baked into `lib/apps/content-bundles/`. A guard that reads
  *   as "every straggler literal must migrate" while scanning two of the five
  *   directories that hold them is the presence-not-enforcement shape.
+ *
+ *   `lib/install` WAS ADDED BY #4063, FOR THE SAME REASON A SECOND TIME. Every
+ *   item-type provisioner builds its data-plane URL there, and the directory
+ *   held SEVEN live Commercial literals — including two `fetchWithTimeout`
+ *   calls in `provisioners/ai-search.ts` and a Commercial ADLS hostname written
+ *   into an ADF linked service by `provisioners/mirrored-database.ts:129`. That
+ *   last one is the quiet direction: ADF accepts the linked service, so a
+ *   sovereign provision reports GREEN with a dead sink. The call sites were
+ *   converted to `dfsUrl()` / `searchEndpointBase()` / `searchAadScope()` /
+ *   `kustoClusterUri()` FIRST, then scope widened — so the ratchet count did
+ *   not rise for any file that had a live literal.
+ *
+ *   SCOPE_DIRS is an ALLOWLIST, which means every console directory not named
+ *   here is unguarded — that shape has now produced two live defects (#3381,
+ *   #4063). Inverting it to a denylist over `apps/fiab-console/**` is tracked
+ *   separately; it is a larger blast radius than either fix.
  *
  *   Adding scope GROWS the ratchet baseline once (grandfathering what is
  *   already there); it does not fix those literals, it makes them visible and
@@ -78,9 +95,10 @@ const APP_ROOT = path.join(REPO_ROOT, 'apps', 'fiab-console');
 const BASELINE_FILE = path.join(__dirname, 'cloud-endpoint-literals-baseline.json');
 
 // Every console directory that builds an Azure/Graph URL. `lib/auth`,
-// `lib/admin` and `lib/apps` were added by #3381 — see the SCOPE note above for
-// why their absence was the mechanism, not an oversight of degree.
-const SCOPE_DIRS = ['lib/azure', 'app/api', 'lib/auth', 'lib/admin', 'lib/apps'];
+// `lib/admin` and `lib/apps` were added by #3381; `lib/install` by #4063 —
+// see the SCOPE note above for why their absence was the mechanism, not an
+// oversight of degree.
+const SCOPE_DIRS = ['lib/azure', 'app/api', 'lib/auth', 'lib/admin', 'lib/apps', 'lib/install'];
 
 // Commercial host suffixes that must flow through cloud-endpoints.ts instead.
 const FORBIDDEN_LITERALS = [
@@ -125,34 +143,42 @@ const FILE_ALLOWLIST = new Set([
 
 const isTestFile = (rel) => /(^|\/)__tests__\//.test(rel) || /\.(test|spec)\.tsx?$/.test(rel);
 
-/** Source files (repo-relative POSIX) in scope. */
-function listSourceFiles() {
+/**
+ * Source files (repo-relative POSIX) in scope.
+ *
+ * `appRoot` / `relPrefix` are a TEST SEAM (#4063) so the self-test can drive
+ * the real SCOPE_DIRS + git-ls-files + exclusion logic over a throwaway repo
+ * instead of mutating a tracked file on disk — `node --test` runs the guardrail
+ * suite's files in PARALLEL, so an in-tree mutation would race every sibling
+ * test that scans the console. Production callers pass nothing.
+ */
+function listSourceFiles({ appRoot = APP_ROOT, relPrefix = 'apps/fiab-console' } = {}) {
   const files = [];
   for (const dir of SCOPE_DIRS) {
     let out;
     try {
       // NB: double quotes — single quotes are not quoting chars in cmd.exe.
-      out = execSync(`git ls-files "${dir}"`, { cwd: APP_ROOT, encoding: 'utf8' });
+      out = execSync(`git ls-files "${dir}"`, { cwd: appRoot, encoding: 'utf8' });
     } catch {
       continue;
     }
     for (const f of out.split('\n').map((s) => s.trim()).filter(Boolean)) {
       if (!/\.(ts|tsx)$/.test(f)) continue;
       if (isTestFile(f)) continue;
-      files.push(`apps/fiab-console/${f}`);
+      files.push(`${relPrefix}/${f}`);
     }
   }
   return files;
 }
 
 /** Measure current forbidden-literal counts → { repoRelPath: count }. */
-export function scanLiterals() {
+export function scanLiterals({ appRoot = APP_ROOT, repoRoot = REPO_ROOT, relPrefix = 'apps/fiab-console' } = {}) {
   const current = {};
-  for (const rel of listSourceFiles()) {
+  for (const rel of listSourceFiles({ appRoot, relPrefix })) {
     if (FILE_ALLOWLIST.has(rel)) continue;
     let src;
     try {
-      src = fs.readFileSync(path.join(REPO_ROOT, rel), 'utf8');
+      src = fs.readFileSync(path.join(repoRoot, rel), 'utf8');
     } catch {
       continue;
     }

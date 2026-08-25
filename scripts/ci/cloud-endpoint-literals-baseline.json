@@ -31,7 +31,6 @@
     "apps/fiab-console/lib/admin/env-checks/ai-copilot.ts": 1,
     "apps/fiab-console/lib/admin/env-checks/azure-services.ts": 3,
     "apps/fiab-console/lib/admin/env-checks/core.ts": 5,
-    "apps/fiab-console/lib/admin/health-probes.ts": 1,
     "apps/fiab-console/lib/admin/secret-health.ts": 1,
     "apps/fiab-console/lib/admin/self-audit.ts": 1,
     "apps/fiab-console/lib/apps/app-resources.ts": 1,
@@ -125,6 +124,8 @@
     "apps/fiab-console/lib/azure/storage-discovery.ts": 2,
     "apps/fiab-console/lib/azure/synapse-sql-client.ts": 1,
     "apps/fiab-console/lib/azure/trigger-param-resolver.ts": 2,
-    "apps/fiab-console/lib/azure/unified-domain-mapper.ts": 1
+    "apps/fiab-console/lib/azure/unified-domain-mapper.ts": 1,
+    "apps/fiab-console/lib/install/provisioners/synapse-serverless-sql-pool.ts": 1,
+    "apps/fiab-console/lib/install/provisioners/types.ts": 1
   }
 }

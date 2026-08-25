@@ -23,6 +23,7 @@
  *   https://learn.microsoft.com/azure/data-factory/quickstart-create-data-factory-rest-api#create-pipeline-run
  *   https://learn.microsoft.com/azure/synapse-analytics/monitoring/how-to-monitor-pipeline-runs
  */
+import { dfsUrl } from '@/lib/azure/cloud-endpoints';
 
 /** Minimal status shape both clients return from a run-history query. */
 export interface DevPipelineRunStatus {
@@ -245,7 +246,11 @@ export function normalizePipelineContent(rawContent: any): { content: any; datab
 
 /** Best-effort ADLS Gen2 endpoint for the stub linked service — derived from
  * the DLZ container env vars. A placeholder still commits (Synapse validates
- * reference existence, not connectivity, at PUT time). */
+ * reference existence, not connectivity, at PUT time).
+ *
+ * Both fallbacks build their host through `dfsUrl()` so the stub carries the
+ * ACTIVE cloud's DFS suffix — a wired-in Commercial host lands a Commercial
+ * URL in a sovereign factory's linked service (#4063). */
 function adlsStubUrl(): string {
   for (const k of ['LOOM_LANDING_URL', 'LOOM_BRONZE_URL', 'LOOM_SILVER_URL', 'LOOM_GOLD_URL']) {
     const v = process.env[k];
@@ -253,8 +258,8 @@ function adlsStubUrl(): string {
     if (m) return `https://${m[1]}`;
   }
   const acct = process.env.LOOM_ADLS_ACCOUNT;
-  if (acct) return `https://${acct}.dfs.core.windows.net`;
-  return 'https://loomdlzstub.dfs.core.windows.net';
+  if (acct) return dfsUrl(acct);
+  return dfsUrl('loomdlzstub');
 }
 
 /** Does an existing ADF/Synapse artifact carry Loom's auto-provision marker?
