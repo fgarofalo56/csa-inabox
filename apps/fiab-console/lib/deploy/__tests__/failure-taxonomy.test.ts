@@ -14,7 +14,7 @@
  * isPlatformRemediable) that CI never calls.
  */
 
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import corpus from '../__fixtures__/failure-corpus.json';
 import taxonomy from '../failure-taxonomy.json';
@@ -288,6 +288,120 @@ describe('#3817 — a transient PostgreSQL Entra-admin window (run 32341450273)'
     const denied = classifyDeployFailure(
       "ERROR: (AuthorizationFailed) The client does not have authorization to perform action " +
         "'Microsoft.DBforPostgreSQL/flexibleServers/administrators/write' over scope",
+    );
+    expect(denied.class).toBe('permission');
+    expect(denied.retryable).toBe(false);
+  });
+});
+
+describe('#4066 — a transient AAS concurrency window (run 32806407520)', () => {
+  // The console-facing half. The Node suite pins the table, the matcher, the
+  // precedence and the drill-down; this pins what the OPERATOR is shown, and it
+  // carries its own mutation control so it cannot pass with the needle removed.
+  //
+  // A RETRYABLE entry is the dangerous direction to get wrong: an over-broad
+  // `transient` turns a hard failure into a SLOW hard failure. So the
+  // discrimination cases below matter more than the happy path.
+
+  const SIGNAL = 'transient.aas-server-being-updated';
+
+  /** Exactly what classifyLeaves()/renderLeaves() build, verbatim from the run. */
+  const REAL_LEAF =
+    "BadRequest: The server 'aasloomk6mvh5sm6z7do' is currently being updated. " +
+    "Please try again later. [Microsoft.AnalysisServices/servers 'aasloomk6mvh5sm6z7do']";
+
+  it('classifies the real leaf as transient and retryable, with bounded attempts', () => {
+    const d = classifyDeployFailure(REAL_LEAF);
+    expect(d.class).toBe('transient');
+    expect(d.signalId).toBe(SIGNAL);
+    expect(d.retryable).toBe(true);
+    // Bounded, always: retryable is never unbounded (R6).
+    expect(d.defaultMaxAttempts).toBeGreaterThan(0);
+    expect(d.exitCode).not.toBe(0);
+  });
+
+  it('MUTATION CONTROL — removing the needle flips the same input back to unknown', async () => {
+    // Without this the test above would pass against a table that never had the
+    // signal, which is the shape of a control that measures nothing
+    // (csa_loom_mutation_that_does_not_move_the_verdict).
+    const mutated = JSON.parse(JSON.stringify(taxonomy)) as typeof taxonomy & {
+      signals: { id: string }[];
+    };
+    const before = mutated.signals.length;
+    mutated.signals = mutated.signals.filter((s) => s.id !== SIGNAL);
+    expect(mutated.signals.length).toBe(before - 1); // the mutation really removed something
+
+    vi.resetModules();
+    vi.doMock('../failure-taxonomy.json', () => ({ default: mutated }));
+    const { classifyDeployFailure: mutatedClassify } = await import('../failure-taxonomy');
+    try {
+      const d = mutatedClassify(REAL_LEAF);
+      expect(d.class).toBe('unknown');
+      expect(d.signalId).toBeNull();
+      expect(d.retryable).toBe(false);
+    } finally {
+      vi.doUnmock('../failure-taxonomy.json');
+      vi.resetModules();
+    }
+  });
+
+  it('R7 — the diagnosis carries BOTH matched strings, and the line each was on', () => {
+    const d = classifyDeployFailure(REAL_LEAF);
+    expect(d.evidence.map((e) => e.signal).sort()).toEqual([
+      'analysisservices',
+      'is currently being updated',
+    ]);
+    for (const e of d.evidence) {
+      expect(REAL_LEAF.toLowerCase()).toContain(e.signal);
+      expect(e.line).toContain('aasloomk6mvh5sm6z7do');
+    }
+  });
+
+  it('is a failure the PLATFORM absorbs, not one the operator is told to fix', () => {
+    const d = classifyDeployFailure(REAL_LEAF);
+    expect(isPlatformRemediable(d)).toBe(true);
+    const msg = renderDiagnosis(d, { step: 'az deployment sub create' });
+    expect(msg).toMatch(/is currently being updated/);
+    // R7 — the message must DISCLOSE that it read no server state, and hand
+    // back the exact command to establish it, rather than letting the reader
+    // infer from a retryable class that the server is fine. Deleting either
+    // half of the disclosure turns this red.
+    expect(msg).toMatch(/WHAT THIS SIGNAL DOES NOT ESTABLISH/);
+    expect(msg).toMatch(/it reads no server state/);
+    expect(msg).toMatch(/az resource show --resource-type Microsoft\.AnalysisServices\/servers/);
+    // And it must not tell the operator to silence the very stderr that would
+    // distinguish an unreadable answer from a wedged server (R7).
+    expect(msg).toMatch(/do NOT add 2>\/dev\/null/);
+  });
+
+  it("the allOf has teeth — the same wording on another RP still fails closed", () => {
+    // A resource can sit in provisioningState=Updating INDEFINITELY, so this
+    // signal is deliberately bounded to the RP it was measured on. `unknown` is
+    // the correct answer everywhere else: it fails closed rather than burning a
+    // retry budget on a condition nobody has observed there.
+    const d = classifyDeployFailure(
+      "BadRequest: The cluster 'kustoloom' is currently being updated. Please try again later. " +
+        "[Microsoft.Kusto/clusters 'kustoloom']",
+    );
+    expect(d.class).toBe('unknown');
+    expect(d.retryable).toBe(false);
+  });
+
+  it("'please try again later' is not a matcher — a permanent AAS failure stays permanent", () => {
+    // Azure attaches that phrase to transient, capacity AND quota messages
+    // alike. If it were ever a matcher, THIS is what it would swallow.
+    const sku = classifyDeployFailure(
+      "SkuNotAvailable: The requested SKU 'S1' is not available in location 'centralus'. " +
+        "Please try again later. [Microsoft.AnalysisServices/servers 'aasloomk6mvh5sm6z7do']",
+    );
+    expect(sku.class).toBe('quota');
+    expect(sku.retryable).toBe(false);
+
+    // And precedence still resolves toward fail-fast when both are present.
+    const denied = classifyDeployFailure(
+      "AuthorizationFailed: The client does not have authorization to perform action " +
+        "'Microsoft.AnalysisServices/servers/write'. The server is currently being updated. " +
+        "[Microsoft.AnalysisServices/servers 'aasloomk6mvh5sm6z7do']",
     );
     expect(denied.class).toBe('permission');
     expect(denied.retryable).toBe(false);

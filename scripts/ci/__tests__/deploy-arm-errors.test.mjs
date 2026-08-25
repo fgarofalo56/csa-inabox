@@ -32,7 +32,7 @@ import {
   formatStdout,
   formatStderr,
 } from '../deploy-arm-errors.mjs';
-import { classify } from '../deploy-classify.mjs';
+import { classify, classifyLeaves, TAXONOMY } from '../deploy-classify.mjs';
 import {
   streamWrites,
   stripComments,
@@ -528,4 +528,253 @@ test('ACCEPTANCE — a usage refusal redacts the argv it echoes back', () => {
   assert.equal(badFlag.status, EXIT.USAGE);
   assert.match(badFlag.stderr, /unknown argument/, 'the refusal did not run');
   assert.doesNotMatch(badFlag.stderr, GUID_RE, 'an unknown-argument refusal published argv unredacted (#3829 round 5)');
+});
+
+// ── #4066 — THE AAS CONCURRENCY WINDOW, AND THE DRILL-DOWN THAT HIDES IT ──────
+//
+// deploy-fiab-commercial run 32806407520 (2026-08-25T03:46Z, sha 4d4fd0b9)
+// aborted the infra apply on the `aas-server` leaf. Read from ARM rather than
+// from the log, the cause is textbook transient:
+//
+//   BadRequest: The server 'aasloomk6mvh5sm6z7do' is currently being updated.
+//               Please try again later.
+//
+// No taxonomy signal matched that wording, so it classified `unknown` and
+// failed closed PARTWAY through — after every leaf ordered before `aas-server`
+// had already applied. Failing closed on unknown is correct (R7); the missing
+// needle is the defect (R6: retry what is genuinely transient).
+//
+// A RETRYABLE entry is the dangerous direction to get wrong — an over-broad
+// `transient` converts a hard failure into a SLOW hard failure, burning the
+// budget and then reporting "failed after N attempts" without naming the cause.
+// So the DISCRIMINATION tests below are the load-bearing ones, not the happy
+// path: they pin that the allOf has teeth and that precedence still holds.
+//
+// AND THE SECOND FINDING, measured while implementing the first: on run
+// 32806407520 AND on the follow-up dispatch 32857825445 (2026-08-25T14:51Z,
+// which the issue expected to clear) the classifier NEVER SAW that message.
+// Both runs emitted, verbatim and identically:
+//
+//   not retrying: 2 ARM leaf(s) could not be classified
+//     (RootActivityId on 'aasloomk6mvh5sm6z7do' → unknown;
+//      Param1 on 'aasloomk6mvh5sm6z7do' → unknown)
+//   2 ARM leaf failure(s), EACH WITH ITS OWN CLASS:
+//     RootActivityId→unknown: <guid> | Param1→unknown: aasloomk6mvh5sm6z7do
+//
+// errorLeaves() descends unconditionally into `details[]`, and the Analysis
+// Services RP puts DIAGNOSTIC KEY/VALUE PAIRS there rather than sub-errors — so
+// the parent, which is the only thing carrying the cause, is discarded. The
+// taxonomy needle is therefore NECESSARY BUT NOT SUFFICIENT, and saying so is
+// the point of the last block in this section: it is written to go RED the day
+// the drill-down is fixed, so the gap cannot be silently closed or forgotten.
+
+const AAS_SIGNAL_4066 = 'transient.aas-server-being-updated';
+
+/** The leaf as ARM reports it, verbatim from run 32806407520. */
+const AAS_LEAF_4066 = {
+  code: 'BadRequest',
+  message: "The server 'aasloomk6mvh5sm6z7do' is currently being updated. Please try again later.",
+  resourceType: 'Microsoft.AnalysisServices/servers',
+  resourceName: 'aasloomk6mvh5sm6z7do',
+};
+
+/**
+ * The AAS error as it arrives inside `statusMessage.error` — the parent carries
+ * the cause and `details[]` carries diagnostics, NOT sub-errors.
+ */
+const AAS_ARM_ERROR_4066 = {
+  code: 'BadRequest',
+  message: "The server 'aasloomk6mvh5sm6z7do' is currently being updated. Please try again later.",
+  details: [
+    { code: 'RootActivityId', message: SYNTHETIC_OID },
+    { code: 'Param1', message: 'aasloomk6mvh5sm6z7do' },
+  ],
+};
+
+/** The taxonomy with ONLY the #4066 signal removed. The mutation control. */
+function taxonomyWithout(signalId) {
+  const t = JSON.parse(JSON.stringify(TAXONOMY));
+  const before = t.signals.length;
+  t.signals = t.signals.filter((s) => s.id !== signalId);
+  assert.equal(t.signals.length, before - 1, `the mutation removed nothing — "${signalId}" was not in the table`);
+  return t;
+}
+
+test('#4066 population — the taxonomy on disk carries the signal, with its provenance', () => {
+  const onDisk = JSON.parse(fs.readFileSync(path.resolve(import.meta.dirname, '..', '..', '..', 'apps', 'fiab-console', 'lib', 'deploy', 'failure-taxonomy.json'), 'utf8'));
+  assert.ok(
+    Array.isArray(onDisk.signals) && onDisk.signals.length >= 38,
+    `the taxonomy declares ${onDisk.signals?.length} signals; 38 were present when the #4066 signal ` +
+      'landed. A shrinking table is a deletion to justify, never a pass.',
+  );
+  const sig = onDisk.signals.find((s) => s.id === AAS_SIGNAL_4066);
+  assert.ok(sig, `the taxonomy no longer declares "${AAS_SIGNAL_4066}" — the AAS concurrency window would ` +
+    'again abort the whole infra apply on attempt 1.');
+
+  assert.equal(sig.class, 'transient');
+  assert.deepEqual(
+    sig.anyOf,
+    ['is currently being updated'],
+    'the anyOf of the #4066 signal changed. It matches the string that names the CONDITION. Widening it ' +
+      "to 'please try again later' would be the signals[34] hazard: Azure attaches that phrase as " +
+      'boilerplate to transient, capacity AND quota messages alike, so a RETRYABLE signal keyed to it ' +
+      'would swallow failures retrying cannot fix.',
+  );
+  assert.deepEqual(
+    sig.allOf,
+    ['analysisservices'],
+    'the allOf of the #4066 signal changed. It is what bounds this entry to the resource provider the ' +
+      'wording was actually observed on — a resource can sit in provisioningState=Updating INDEFINITELY, ' +
+      'and a wedged resource is not a window. Dropping it makes this retryable signal fire for every RP ' +
+      'nobody has measured.',
+  );
+  assert.ok(
+    /32806407520/.test(sig.observed ?? ''),
+    'the #4066 signal must cite the run it was observed on — provenance is the only thing separating an ' +
+      'observed signal from a guessed one.',
+  );
+  // classPrecedence puts `transient` LAST, which is what makes this entry unable
+  // to shadow a quota or permission classification. Pinned, because the whole
+  // safety argument above rests on it.
+  assert.equal(
+    onDisk.classPrecedence.indexOf('transient'),
+    onDisk.classPrecedence.length - 1,
+    '`transient` is no longer last in classPrecedence — every retryable signal, this one included, can ' +
+      'now outrank a permanent class.',
+  );
+});
+
+test('#4066 MUTATION PROOF — the verbatim leaf classifies transient, and WITHOUT the needle it does not', () => {
+  // The production shape: classifyLeaves() appends `[<type> '<name>']`, which is
+  // what makes the allOf on "analysisservices" reachable at all.
+  const [{ diagnosis }] = classifyLeaves([AAS_LEAF_4066]);
+  assert.equal(diagnosis.class, 'transient');
+  assert.equal(diagnosis.signalId, AAS_SIGNAL_4066);
+  assert.equal(diagnosis.retryable, true);
+  assert.equal(diagnosis.remediationKind, 'platform-will-fix');
+
+  // R7 — the evidence is taken from THIS leaf and both matchers really fired.
+  const signals = diagnosis.evidence.map((e) => e.signal).sort();
+  assert.deepEqual(signals, ['analysisservices', 'is currently being updated']);
+  for (const e of diagnosis.evidence) {
+    assert.ok(e.line.length > 0, `evidence for "${e.signal}" quotes no line`);
+  }
+
+  // THE CONTROL. A test that passes with and without the fix is worthless.
+  const [{ diagnosis: without }] = classifyLeaves([AAS_LEAF_4066], taxonomyWithout(AAS_SIGNAL_4066));
+  assert.equal(without.class, 'unknown', 'removing the needle did NOT move the verdict — this test measures nothing');
+  assert.equal(without.signalId, null);
+  assert.equal(without.retryable, false);
+});
+
+test('#4066 TEETH — the allOf is real: the same wording on another RP still fails closed', () => {
+  const [{ diagnosis }] = classifyLeaves([
+    {
+      code: 'BadRequest',
+      message: "The cluster 'kustoloom' is currently being updated. Please try again later.",
+      resourceType: 'Microsoft.Kusto/clusters',
+      resourceName: 'kustoloom',
+    },
+  ]);
+  assert.equal(
+    diagnosis.class,
+    'unknown',
+    'the #4066 signal fired for a resource provider it was never observed on. `unknown` is the correct ' +
+      'answer for a condition nobody has measured there — it fails closed instead of burning a budget.',
+  );
+});
+
+test('#4066 DISCRIMINATION — a genuinely permanent AAS failure never reaches this signal', () => {
+  // (a) The same politeness suffix, a permanent cause. If "please try again
+  //     later" were ever a matcher, THIS is what it would swallow.
+  const [{ diagnosis: sku }] = classifyLeaves([
+    {
+      code: 'SkuNotAvailable',
+      message: "The requested SKU 'S1' is not available in location 'centralus'. Please try again later.",
+      resourceType: 'Microsoft.AnalysisServices/servers',
+      resourceName: 'aasloomk6mvh5sm6z7do',
+    },
+  ]);
+  assert.equal(sku.class, 'quota', 'an AAS SKU refusal was classified as something other than quota');
+  assert.equal(sku.retryable, false);
+
+  // (b) Precedence: an RBAC denial that ALSO carries the transient wording stays
+  //     permission, because classPrecedence resolves ties toward fail-fast.
+  const [{ diagnosis: denied }] = classifyLeaves([
+    {
+      code: 'AuthorizationFailed',
+      message:
+        "The client does not have authorization to perform action " +
+        "'Microsoft.AnalysisServices/servers/write'. The server is currently being updated.",
+      resourceType: 'Microsoft.AnalysisServices/servers',
+      resourceName: 'aasloomk6mvh5sm6z7do',
+    },
+  ]);
+  assert.equal(denied.class, 'permission', 'a permission denial was shadowed by the retryable #4066 signal');
+  assert.equal(denied.retryable, false);
+});
+
+test('#4066 SECOND DEFECT, PINNED — errorLeaves() discards the AAS parent, so the needle never sees the message', () => {
+  // This is a CHARACTERIZATION of the measured defect, deliberately written so
+  // it goes RED when the drill-down is fixed. It is not an endorsement.
+
+  // 1. The parent — the only thing carrying the cause — IS classifiable now.
+  const [{ diagnosis: parent }] = classifyLeaves([AAS_LEAF_4066]);
+  assert.equal(parent.signalId, AAS_SIGNAL_4066, 'non-degenerate: the taxonomy is not what is missing');
+
+  // 2. errorLeaves() throws it away and returns the RP's diagnostic pairs.
+  const leaves = errorLeaves(AAS_ARM_ERROR_4066);
+  assert.deepEqual(
+    leaves.map((l) => l.code),
+    ['RootActivityId', 'Param1'],
+    'errorLeaves() no longer returns the AAS diagnostic pairs. If it now returns the BadRequest parent, ' +
+      'THE DRILL-DOWN HAS BEEN FIXED — delete this test, and update the "MEASURED, AND DELIBERATELY NOT ' +
+      'CLAIMED AS FIXED" paragraph in the #4066 taxonomy entry, which asserts the opposite.',
+  );
+  assert.ok(
+    leaves.every((l) => !/currently being updated/i.test(l.message)),
+    'a leaf now carries the parent message — see the message above.',
+  );
+
+  // 3. Which is why both runs classified unknown and exited 17, WITH the needle
+  //    present. Verbatim from run 32806407520 and run 32857825445.
+  const diagnoses = classifyLeaves(leaves);
+  assert.deepEqual(
+    diagnoses.map((d) => d.diagnosis.class),
+    ['unknown', 'unknown'],
+    'the classes of the drilled AAS leaves changed — re-read both run logs before touching this.',
+  );
+
+  // 4. And the operator-facing render never shows the cause either.
+  const ops = [
+    {
+      operationId: 'DEADBEEF',
+      properties: {
+        provisioningState: 'Failed',
+        statusCode: 'BadRequest',
+        targetResource: {
+          id: '/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-csa-loom-admin-centralus/providers/Microsoft.AnalysisServices/servers/aasloomk6mvh5sm6z7do',
+          resourceType: 'Microsoft.AnalysisServices/servers',
+          resourceName: 'aasloomk6mvh5sm6z7do',
+        },
+        statusMessage: { error: AAS_ARM_ERROR_4066 },
+      },
+    },
+  ];
+  const r = collectArmLeafErrors({
+    name: 'csa-loom-ci-32806407520',
+    scope: 'sub',
+    run: () => ({ status: 0, stdout: JSON.stringify(ops), stderr: '' }),
+  });
+  assert.equal(r.status, STATUS.FOUND);
+  const rendered = renderLeaves(r);
+  assert.match(rendered, /RootActivityId/, 'non-degenerate: the render really carried the drilled leaves');
+  assert.doesNotMatch(
+    rendered,
+    /currently being updated/i,
+    'the render now shows the AAS cause — the drill-down has been fixed; see the message on the ' +
+      'errorLeaves assertion above.',
+  );
+  // Same conclusion through the whole-blob path, not only per-leaf.
+  assert.equal(classify(rendered).class, 'unknown');
 });
