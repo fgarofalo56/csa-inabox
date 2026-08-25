@@ -24,11 +24,41 @@
 #     Access to registry '…' was denied. Response code: 403.
 #     ERROR: Unable to authenticate using AAD or admin login credentials.
 #
-# The probe's verdict was CORRECT and the two failures are not a contradiction:
-# `/v2/` answering 401 means the request reached the auth layer, which is exactly
-# what it claims. The token exchange is a different surface and was still 403ing
-# ~38 seconds after the open. gov-console-roll succeeded in the same window on the
-# same day, which is the signature of a transient, not a permission defect.
+# Those two runs failed on the AAD token exchange — `CONNECTIVITY_REFRESH_TOKEN_ERROR`,
+# then `Response code: 403` — which is a genuinely different call from the anonymous
+# `GET /v2/` the probe makes, and gov-console-roll succeeded in the same window on
+# the same day, which is the signature of a transient rather than a permission
+# defect. So the RETRY this script adds was, and remains, the right response.
+#
+# WHAT WAS WRONG HERE, AND IS NOW STRUCK (#4067, 2026-08-25).
+#
+# This block used to generalise from those two runs to the claim that a
+# READY-then-denied pair is "not a contradiction" because "the token exchange is a
+# different surface". That reasoning does not hold, and it was the stated reason
+# the probe itself was left alone. Three runs denied on the SAME surface, the same
+# path, ~2s after the probe reported READY:
+#
+#   31564296050  deploy-loom-sharing     READY 04:48:12.008 -> denied 04:48:13.821
+#   32248671357  loom-roll-and-validate  READY 11:46:35.621 -> denied 11:46:37.254
+#   32819789544  loom-roll-and-validate  READY 07:13:27.818 -> denied 07:13:29.912
+#
+# Every one of those denials reads `Get "https://<acr>/v2/": denied: … client with
+# IP '<ip>' is not allowed access` — the exact URL the probe had just polled, from
+# the same runner. 32248671357 is the cleanest: that job held the firewall lease
+# exclusively, with no contention and no re-lock until 11:46:40. A denial on
+# `/v2/` seconds after a 401 on `/v2/` is not two surfaces disagreeing; it is one
+# surface whose firewall rule had not finished propagating across frontends.
+#
+# The real defect was that the probe treated ONE sample as an observation. It now
+# requires 3 consecutive fresh-connection samples spaced >=2s, any 403 resetting
+# the count (scripts/ci/acr-dataplane-ready.sh). Note that this changed its READY
+# line: the `READY after 1 attempt(s) — HTTP 401 …` text quoted above and below is
+# a historical log excerpt, not a string the script emits any more.
+#
+# None of that weakens the case for retrying here. Propagation is asynchronous,
+# so even N consecutive answers cannot promise the next call will be allowed —
+# which is precisely why a denial must be ridden out rather than trusted as a
+# permanent verdict.
 #
 # WHAT IS RETRIED, AND WHAT IS NOT. Only signals that are genuinely transient in
 # this window. A registry that does not exist, or a principal with no role, fails
