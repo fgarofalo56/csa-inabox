@@ -73,6 +73,29 @@ describe('no source type is chosen for the operator', () => {
     await waitFor(() => expect(screen.getByText(/Connection & authentication/i)).toBeInTheDocument());
     expect(screen.getByRole('button', { name: /Create mirror/i })).toBeInTheDocument();
   });
+
+  it('a STORED mirror with no source type recorded is not defaulted to Azure SQL either', async () => {
+    // The edit path had its own `|| 'AzureSqlDatabase'` fallback. An unknown
+    // stored source type is an unknown: guessing Azure SQL for it is the same
+    // mistake as guessing it for a brand-new mirror.
+    installFetchMock({ '/api/connections': () => ({ ok: true, connections: [] }) });
+    render(
+      <MirrorSourceWizard
+        open
+        editing
+        workspaceId="ws-1"
+        mirrorId="m-legacy"
+        initialSrc={{ sourceType: '', database: 'appdb', displayName: 'legacy-mirror' }}
+        onClose={() => {}}
+        onCreated={() => {}}
+        onUpdated={() => {}}
+      />,
+    );
+    await waitFor(() => expect(screen.getByText(/Choose a source/i)).toBeInTheDocument());
+    expect(screen.getByText(/Pick a source to continue/i)).toBeInTheDocument();
+    expect(screen.queryByText(/Connection & authentication/i)).toBeNull();
+    expect(screen.queryByPlaceholderText('server.database.windows.net')).toBeNull();
+  });
 });
 
 describe('a connection with exactly one home moves the source type to it', () => {
