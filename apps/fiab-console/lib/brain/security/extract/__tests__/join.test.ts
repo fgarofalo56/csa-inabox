@@ -14,7 +14,14 @@
 import { describe, expect, it } from 'vitest';
 import { codeModuleNodeId } from '../../../graph/node-id';
 import type { SecurityNode } from '../../substrate';
-import { assertJoinCoversGraph, buildJoin, codeModuleJoinKey, pathOfNodeId } from '../join';
+import {
+  assertJoinCoversGraph,
+  buildJoin,
+  codeModuleJoinKey,
+  NO_ESTATE_PRESENCE,
+  pathOfNodeId,
+} from '../join';
+import { extractedArtifact } from '../runtime';
 
 /**
  * A path table covering everything `node-id.ts` normalises.
@@ -127,5 +134,43 @@ describe('assertJoinCoversGraph refuses an incoherent join', () => {
   it('THROWS when a joined id is absent from the graph', () => {
     const join = buildJoin(nodes);
     expect(() => assertJoinCoversGraph(join, [nodes[0]])).toThrow(/absent from the graph/);
+  });
+});
+
+/**
+ * NO DEAD ENTRY IN THE NO-ESTATE TABLE.
+ *
+ * `.github/workflows/` sat in `NO_ESTATE_PRESENCE` for the life of this PR and
+ * could never match, because nothing under `.github/` was ever walked. To anyone
+ * auditing the join it read as coverage of a scope the extractor did not have —
+ * the same overstatement as the scope string it shipped alongside.
+ *
+ * A prefix that matches nothing in the COMMITTED artifact is therefore a red
+ * test: either scan the root, or do not claim a reason for it.
+ */
+describe('every NO_ESTATE_PRESENCE prefix is live on the committed artifact', () => {
+  const artifact = extractedArtifact()!;
+
+  it('has a committed artifact to measure', () => {
+    expect(artifact).not.toBeNull();
+    expect(artifact.join.unjoined.length).toBeGreaterThan(0);
+  });
+
+  for (const [prefix] of NO_ESTATE_PRESENCE) {
+    it(`'${prefix}' matches at least one unjoined node`, () => {
+      const hits = artifact.join.unjoined.filter((u) =>
+        u.codeModuleId.startsWith(`code:${prefix}`),
+      );
+      expect(hits.length).toBeGreaterThan(0);
+    });
+  }
+
+  it('does NOT match a prefix that is genuinely absent (control)', () => {
+    // Proves the assertions above are watching the PREFIX rather than merely the
+    // bucket being non-empty.
+    const hits = artifact.join.unjoined.filter((u) =>
+      u.codeModuleId.startsWith('code:no/such/root/'),
+    );
+    expect(hits).toEqual([]);
   });
 });

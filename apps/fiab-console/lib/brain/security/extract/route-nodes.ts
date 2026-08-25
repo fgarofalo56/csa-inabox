@@ -77,10 +77,16 @@ import {
   type SinkHit,
 } from './sinks';
 import { classifyConsumption, consumingWrappersIn } from './consumption';
+import { assertEveryCandidateJudged } from './population-contract';
 
 export interface RouteExtraction {
   readonly nodes: readonly SecurityNode[];
   readonly skipped: readonly SkippedSubject[];
+  /**
+   * Route modules that ENTERED the population — and, because
+   * {@link assertEveryCandidateJudged} runs before this is returned, every one of
+   * them also received a verdict. It is a judged count, not merely a seen count.
+   */
   readonly filesMatched: number;
 }
 
@@ -204,12 +210,24 @@ export function extractRouteNodes(
 ): RouteExtraction {
   const nodes: SecurityNode[] = [];
   const skipped: SkippedSubject[] = [];
-  let filesMatched = 0;
+
+  // THE POPULATION, AND THE VERDICT LEDGER. See `population-contract.ts`:
+  // `candidates` is appended the moment a file is IN scope, `judged` only once a
+  // verdict has actually been produced for it. A `continue` injected anywhere
+  // between the two — the loop-level narrowing that removed 44% of this graph
+  // with every gate green on 2026-08-24 — leaves the file in `candidates` and
+  // out of `judged`, and the assertion below throws.
+  const candidates: string[] = [];
+  const judged: string[] = [];
 
   for (const file of files) {
     const routePath = routePathOf(file.path);
+    // NOT a skip: a module that is not an `app/**/route.ts` was never in this
+    // extractor's population at all. That boundary is cross-checked against an
+    // independent census in `build.ts`, because a narrowing applied HERE would
+    // shrink `candidates` and `judged` together and balance.
     if (routePath === null) continue;
-    filesMatched += 1;
+    candidates.push(file.path);
 
     const blanked = blankNonCode(file.text);
     const handlers = findExportedHandlers(blanked);
@@ -218,11 +236,16 @@ export function extractRouteNodes(
       skipped.push({
         subject: file.path,
         reason:
-          'no exported HTTP handler recognised (`export const GET = …` / `export async function ' +
-          'GET(…)`). The module is a route by path but its export shape is not one this ' +
-          'extractor reads, so NO authorizer or verdict-call node is emitted for it — recorded ' +
-          'rather than dropped so the gap is countable.',
+          'no exported HTTP handler was recognised in the blanked source — either the export ' +
+          'shape is not one this extractor reads (`export const GET = …` / `export async ' +
+          'function GET(…)`), or the module\'s comment/string structure is unterminated and the ' +
+          'lexer blanked the handler along with it. Which of the two is NOT established here, ' +
+          'so neither is asserted. No authorizer or verdict-call node is emitted for it — ' +
+          'recorded rather than dropped so the gap is countable.',
       });
+      // A recorded skip IS a verdict: the file is accounted for in `meta.skipped`
+      // where a reader can count it.
+      judged.push(file.path);
       continue;
     }
 
@@ -250,9 +273,13 @@ export function extractRouteNodes(
 
       emitVerdictCalls({ nodes, file, routePath, handler, sinks, sinkKinds, allowlisted });
     }
+
+    judged.push(file.path);
   }
 
-  return { nodes, skipped, filesMatched };
+  assertEveryCandidateJudged('extractRouteNodes', candidates, judged);
+
+  return { nodes, skipped, filesMatched: candidates.length };
 }
 
 interface AuthorizerArgs {

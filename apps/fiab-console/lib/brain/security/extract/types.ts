@@ -110,6 +110,35 @@ export interface ScanScopeReport {
 }
 
 /**
+ * A file the caller SAW under a scanned root and did NOT hand to the extractor,
+ * because its language is not one the extractor reads.
+ *
+ * This exists because of a measured defect. Until 2026-08-24 the artifact
+ * declared its publication scope as `scripts/**, .github/**` while the CLI
+ * walked only `scripts/`: the `.github/` arm of the filter in `build.ts` and the
+ * `.github/workflows/` entry in `join.ts` were both DEAD, and the committed
+ * artifact carried 0 `.github` nodes and 0 `skipped` entries mentioning it.
+ * `.github/scripts/deploy-notify-failure.mjs` — a failure notifier, i.e. exactly
+ * the publication surface C4 exists to find — sat silently outside a population
+ * the artifact's own scope report claimed to cover.
+ *
+ * `.github/**` is scanned for real now. What remains genuinely unread is
+ * everything that is not JavaScript/TypeScript: a workflow YAML `run:` block, a
+ * shell script, a Python script. Those publish to the same public Actions log,
+ * so the narrowing is REPORTED with counts rather than left to be inferred from
+ * a scope string. Per {@link SkippedSubject}: a gap that is recorded is a gap
+ * that can be closed.
+ */
+export interface UnmodeledSurface {
+  /** The scanned root, e.g. `.github/`. */
+  readonly root: string;
+  /** How many files under it were seen and not read. */
+  readonly fileCount: number;
+  /** The extensions involved, sorted, e.g. `['sh', 'yml']`. */
+  readonly extensions: readonly string[];
+}
+
+/**
  * A subject the extractor saw and deliberately did not model.
  *
  * Mirrors `ExtractionResult.skipped` on the waste side. A gap that is recorded

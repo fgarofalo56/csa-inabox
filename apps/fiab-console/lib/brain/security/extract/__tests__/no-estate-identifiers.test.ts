@@ -1,14 +1,20 @@
 /**
- * CONTRACTS THE ARTIFACT MUST HOLD — publication safety, cloud neutrality, and
- * the coupling between what this extractor NAMES and what C1 RECOGNISES.
+ * CONTRACTS THE ARTIFACT MUST HOLD — publication safety, cloud neutrality, the
+ * coupling between what this extractor NAMES and what C1 RECOGNISES, and the
+ * truth of the SCOPE it declares.
  *
- * All three are asserted rather than stated, because each is a claim made in a
- * docblock elsewhere in this package and a docblock does not fail a build.
+ * All of them are asserted rather than stated, because each is a claim made in a
+ * docblock elsewhere in this package and a docblock does not fail a build. The
+ * scope-truth and allowlist blocks were added on 2026-08-24 after review
+ * measured two of those claims to be false in the shipped bytes.
  */
 
+import { readdirSync } from 'node:fs';
+import { join, relative, resolve, sep } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { runSecuritySweep } from '../../index';
-import type { SecurityGraph, SecurityNode } from '../../substrate';
+import type { SecurityGraph, SecurityNode, VerdictCallFacet } from '../../substrate';
+import { pathOfNodeId } from '../join';
 import { extractedArtifact } from '../runtime';
 
 const artifact = extractedArtifact()!;
@@ -156,5 +162,184 @@ describe('the artifact records what it did NOT measure', () => {
     for (const s of artifact.meta.skipped.slice(0, 50)) {
       expect(s.reason.length).toBeGreaterThan(30);
     }
+  });
+});
+
+/**
+ * THE SCOPE STRING IS A CLAIM IN PUBLISHED BYTES, SO IT IS MEASURED.
+ *
+ * Until 2026-08-24 `meta.scanScopes` declared `scripts/**, .github/**` while the
+ * CLI walked `scripts/` alone: 0 `.github` nodes, 0 `skipped` entries naming it,
+ * and `.github/scripts/deploy-notify-failure.mjs` — a failure NOTIFIER, i.e.
+ * exactly the publication surface C4 exists to find — outside the population the
+ * artifact said it covered. `build.ts` now derives the label from the roots it
+ * partitions on and throws on a root that matched nothing, but that is a
+ * property of the PRODUCER; these assert it on the bytes that ship.
+ */
+describe('every scan scope the artifact DECLARES is a scope it actually SCANNED', () => {
+  const publicationScope = artifact.meta.scanScopes.find((s) =>
+    s.scope.includes('CI publication surfaces'),
+  );
+
+  it('declares a publication scope at all', () => {
+    expect(publicationScope).toBeDefined();
+  });
+
+  it('emitted at least one node from EVERY root the scope string names', () => {
+    const roots = [...publicationScope!.scope.matchAll(/([^\s,()]+)\/\*\*/g)].map((m) => `${m[1]}/`);
+    // Two roots today (`.github/`, `scripts/`). A single-root parse would make
+    // the loop below vacuous, so the count is pinned as a non-degeneracy control.
+    expect(roots.length).toBeGreaterThan(1);
+    for (const root of roots) {
+      const fromRoot = artifact.graph.nodes.filter((n) => pathOfNodeId(n.id)?.startsWith(root));
+      expect(fromRoot.length).toBeGreaterThan(0);
+    }
+  });
+
+  it('scans `.github/**` FOR REAL — the root whose declaration was a false claim', () => {
+    const gh = artifact.graph.nodes.filter((n) => pathOfNodeId(n.id)?.startsWith('.github/'));
+    expect(gh.length).toBeGreaterThan(0);
+    // The specific miss the review named: a failure notifier, five sink-shaped
+    // lines, permanently publishing to a public issue and a public run log.
+    expect(gh.some((n) => n.id.includes('.github/scripts/deploy-notify-failure.mjs'))).toBe(true);
+  });
+
+  it('declares, with a COUNT, what it saw under a scanned root and could not read', () => {
+    // A narrowed scope is fine. An undeclared one is the defect. Workflow YAML
+    // `run:` blocks and `.sh` steps publish into the same public Actions log and
+    // this extractor lexes neither.
+    const unread = artifact.meta.skipped.filter((s) => s.reason.includes('were seen and NOT read'));
+    expect(unread.length).toBeGreaterThan(0);
+    for (const s of unread) expect(s.reason).toMatch(/\d+ file\(s\)/);
+    expect(unread.some((s) => s.subject.startsWith('.github/'))).toBe(true);
+  });
+
+  it('joins every `.github` node through a LIVE no-estate-presence reason', () => {
+    // The `.github/workflows/` entry in `join.ts` was dead for the same reason
+    // the scope string was false. It must now resolve for real, not fall through
+    // to the "no deployable unit is declared" default.
+    const gh = artifact.join.unjoined.filter((u) => u.codeModuleId.startsWith('code:.github/'));
+    expect(gh.length).toBeGreaterThan(0);
+    for (const u of gh) {
+      expect(u.reason).toContain('GitHub Actions surface');
+      expect(u.reason).not.toContain('no deployable unit is declared');
+    }
+  });
+});
+
+/**
+ * THE ALLOWLIST ARM, PINNED IN BOTH DIRECTIONS.
+ *
+ * `parseAllowlistPrefixes` returns `[]` for a present-but-unparseable guard
+ * source as readily as for one that declares nothing. Measured 2026-08-24: an
+ * upstream rename took `allowlisted: true` from 23 to 0 with the node count, the
+ * skipped count and the digest all identical and the suite green.
+ *
+ * `build.ts` now writes a ledger entry for the empty parse. These two assert the
+ * live state on the shipped bytes, so the transition is loud whichever way it
+ * happens: the count going to zero reddens the first, and the ledger entry
+ * appearing reddens the second.
+ */
+describe('the ALLOWLIST_PREFIXES arm is LIVE on this tree', () => {
+  it('marks real routes allowlisted — a zero here UNDERSTATES C3', () => {
+    const allowlisted = artifact.graph.nodes.filter(
+      (n) => n.kind === 'verdict-call' && (n.facet as VerdictCallFacet).allowlisted,
+    );
+    expect(allowlisted.length).toBeGreaterThan(0);
+  });
+
+  it('carries NO allowlist-parse gap in the ledger, because the parse succeeded', () => {
+    expect(artifact.meta.skipped.filter((s) => s.subject.includes('ALLOWLIST_PREFIXES'))).toEqual(
+      [],
+    );
+  });
+});
+
+/**
+ * THE INERT C4 ARM, PINNED SO ITS TRANSITION IS LOUD.
+ *
+ * `carriesSensitive` matches ZERO non-spawn sinks on this corpus, so every C4
+ * finding comes from the spawn-stdio arm and the expression arm's correctness is
+ * unexercised by real data. `build.ts` records that in `meta.skipped` — but a
+ * recorded fact that nothing ASSERTS disappears silently the day the arm goes
+ * live. This makes both directions of that transition red.
+ */
+describe('the C4 expression arm reports its own inertness', () => {
+  it('carries the inert-arm entry while the arm matches nothing', () => {
+    const inert = artifact.meta.skipped.filter((s) => s.subject.includes('C4 expression arm'));
+    expect(inert).toHaveLength(1);
+    expect(inert[0].reason).toContain('INERT');
+  });
+});
+
+/**
+ * THE INDEPENDENT DENOMINATOR, ON THE REQUIRED LANE.
+ *
+ * `build.ts` already refuses a walk whose examined count disagrees with an
+ * independent census — but that runs in the GENERATOR, and the generator runs in
+ * `brain security graph — committed artifact matches the tree`, which is NOT one
+ * of `main`'s 15 required contexts. `vitest (node 20)` IS required.
+ *
+ * So the same census is recomputed here, from the filesystem, and asserted
+ * against the COMMITTED bytes. A narrowed artifact — including one produced by
+ * hand rather than by the generator — reddens a required check instead of only a
+ * skippable one. The previous assertion on these fields was
+ * `toBeGreaterThan(0)`, which a 44%-narrowed `1492` satisfied.
+ *
+ * This does not add a regeneration burden that did not already exist: the drift
+ * gate compares the whole graph, so any change to a scanned file already
+ * requires re-running the generator.
+ */
+describe('the committed scan scopes match a census taken from the filesystem', () => {
+  const REPO_ROOT = resolve(__dirname, '..', '..', '..', '..', '..', '..', '..');
+
+  /** Count files under `dir` matching `match`, skipping what the CLI skips. */
+  function countFiles(dir: string, match: (relPath: string) => boolean): number {
+    let entries: ReturnType<typeof readdirSync>;
+    try {
+      entries = readdirSync(dir, { withFileTypes: true });
+    } catch (e) {
+      if ((e as NodeJS.ErrnoException).code === 'ENOENT') return 0;
+      throw e;
+    }
+    let n = 0;
+    for (const entry of entries) {
+      const full = join(dir, entry.name);
+      if (entry.isDirectory()) {
+        if (entry.name === 'node_modules' || entry.name === '.next' || entry.name === '.git') continue;
+        n += countFiles(full, match);
+        continue;
+      }
+      if (match(relative(REPO_ROOT, full).split(sep).join('/'))) n += 1;
+    }
+    return n;
+  }
+
+  const scopeNamed = (fragment: string) =>
+    artifact.meta.scanScopes.find((s) => s.scope.includes(fragment))!;
+
+  it('resolved the repo root (control — a wrong root would make every count 0)', () => {
+    expect(countFiles(join(REPO_ROOT, 'scripts'), (p) => p.endsWith('.mjs'))).toBeGreaterThan(0);
+  });
+
+  it('scanned every `app/**/route.ts` module in the tree', () => {
+    const census = countFiles(join(REPO_ROOT, 'apps', 'fiab-console', 'app'), (p) =>
+      /\/route\.tsx?$/.test(p),
+    );
+    expect(census).toBeGreaterThan(0);
+    expect(scopeNamed('console BFF routes').filesMatched).toBe(census);
+  });
+
+  it('scanned every JavaScript module under EVERY declared publication root', () => {
+    const publication = scopeNamed('CI publication surfaces');
+    const roots = [...publication.scope.matchAll(/([^\s,()]+)\/\*\*/g)].map((m) => m[1]);
+    expect(roots.length).toBeGreaterThan(1);
+
+    let census = 0;
+    for (const root of roots) {
+      census += countFiles(join(REPO_ROOT, root), (p) => /\.(?:mjs|cjs|js)$/.test(p));
+    }
+    expect(census).toBeGreaterThan(0);
+    expect(publication.filesMatched).toBe(census);
   });
 });

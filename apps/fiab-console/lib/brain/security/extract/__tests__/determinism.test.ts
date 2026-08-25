@@ -72,6 +72,11 @@ process.stderr.write(String(process.env.SOME_TOKEN));`,
 function build(files: readonly SourceFile[]) {
   return buildSecurityGraphArtifact({
     files,
+    // Declared because the artifact's scope string is DERIVED from this, not
+    // written beside it — see `build.ts`. The fixture only carries `scripts/`
+    // publication files, and a root that matched nothing throws, so naming
+    // `.github/` here would (correctly) fail.
+    publicationRoots: ['scripts/'],
     routeGuardSource: null,
     commit: null,
     now: NOW,

@@ -74,17 +74,26 @@ export const DEPLOYABLE_UNITS: readonly (readonly [string, string])[] = [
  * These are not gaps to be closed later — they are correct answers. A guard
  * script executes on a GitHub-hosted runner; there is no Azure resource it could
  * be painted onto.
+ *
+ * EVERY PREFIX HERE MUST BE LIVE. Until 2026-08-24 this table carried a
+ * `.github/workflows/` entry that could never match, because nothing under
+ * `.github/` was ever walked — dead code that read, to anyone auditing the join,
+ * as coverage of a scope the extractor did not have. `__tests__/join.test.ts`
+ * now asserts each prefix matches at least one node in the committed artifact,
+ * so an entry added ahead of its scan goes red instead of implying reach.
  */
-const NO_ESTATE_PRESENCE: readonly (readonly [string, string])[] = [
+export const NO_ESTATE_PRESENCE: readonly (readonly [string, string])[] = [
   [
     'scripts/ci/',
     'CI guard script — executes on a GitHub Actions runner, not in any deployed Azure resource. ' +
       'Painting it onto a Container App would assert an edge that does not exist.',
   ],
   [
-    '.github/workflows/',
-    'GitHub Actions workflow — same reason: it runs in Actions, and has no Azure estate presence ' +
-      'to be painted onto.',
+    '.github/',
+    'GitHub Actions surface — a workflow, or a script a workflow invokes. It runs in Actions and ' +
+      'has no Azure estate presence to be painted onto. Its publication sinks reach the PUBLIC ' +
+      'run log and the issues API, which is why the module is extracted even though it joins to ' +
+      'nothing.',
   ],
   [
     'scripts/',

@@ -65,10 +65,16 @@
 import type { PublicationAccessPath, PublicationFacet, PublicationSink, PublicationSurface, SecurityNode } from '../substrate';
 import type { SkippedSubject, SourceFile } from './types';
 import { balancedEnd, blankComments, blankNonCode, lineAt, securityNodeId } from './source-facts';
+import { assertEveryCandidateJudged } from './population-contract';
 
 export interface PublicationExtraction {
   readonly nodes: readonly SecurityNode[];
   readonly skipped: readonly SkippedSubject[];
+  /**
+   * Modules that ENTERED the population — and, because
+   * {@link assertEveryCandidateJudged} runs before this is returned, every one of
+   * them also received a verdict (a node, or the explicit "no sinks" answer).
+   */
   readonly filesMatched: number;
   /**
    * Sink counts, so the INERTNESS of an arm is countable rather than invisible.
@@ -159,11 +165,19 @@ function carriesSensitive(argsText: string): boolean {
 export function extractPublicationNodes(files: readonly SourceFile[]): PublicationExtraction {
   const nodes: SecurityNode[] = [];
   const skipped: SkippedSubject[] = [];
-  let filesMatched = 0;
+
+  // The same verdict ledger the route walk carries — see `population-contract.ts`.
+  // A `continue` injected below the extension filter drops the module out of
+  // `judged` and the assertion at the end throws, rather than silently shrinking
+  // the publication population while `filesScanned` and `inputsDigest` hold still.
+  const candidates: string[] = [];
+  const judged: string[] = [];
 
   for (const file of files) {
+    // NOT a skip: a `.sh` / `.yml` / `.py` module was never in this extractor's
+    // population. That narrowing is REPORTED, with counts, by `build.ts`.
     if (!/\.(?:mjs|cjs|js|ts)$/.test(file.path)) continue;
-    filesMatched += 1;
+    candidates.push(file.path);
 
     const blanked = blankNonCode(file.text);
     // Comments blanked, STRINGS PRESERVED — required for the two sink shapes
@@ -199,7 +213,12 @@ export function extractPublicationNodes(files: readonly SourceFile[]): Publicati
     sinks.push(...aliasSinks(blanked));
     sinks.push(...inheritedFdSinks(stringsKept));
 
-    if (sinks.length === 0) continue;
+    if (sinks.length === 0) {
+      // "This module publishes nothing" IS the verdict, established by running
+      // every access pattern over it. Judged, not skipped.
+      judged.push(file.path);
+      continue;
+    }
 
     const declared = parseDeclaredSinkCount(file.text);
     if (declared === null) {
@@ -227,12 +246,16 @@ export function extractPublicationNodes(files: readonly SourceFile[]): Publicati
       label: file.path,
       facet,
     });
+
+    judged.push(file.path);
   }
+
+  assertEveryCandidateJudged('extractPublicationNodes', candidates, judged);
 
   return {
     nodes,
     skipped,
-    filesMatched,
+    filesMatched: candidates.length,
     sinkCounts: countSinks(nodes),
   };
 }

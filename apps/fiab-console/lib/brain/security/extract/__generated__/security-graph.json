@@ -16186,6 +16186,72 @@
           }
         },
         {
+          "id": "sec:publication:.github/scripts/__tests__/deploy-notify-failure.test.mjs#module",
+          "kind": "publication",
+          "provenance": "declared",
+          "label": ".github/scripts/__tests__/deploy-notify-failure.test.mjs",
+          "facet": {
+            "kind": "publication",
+            "module": ".github/scripts/__tests__/deploy-notify-failure.test.mjs",
+            "declaredSinkCount": 2,
+            "sinks": [
+              {
+                "id": "inherited-fd:spawn-stdio:729",
+                "surface": "inherited-fd",
+                "accessPath": "spawn-stdio",
+                "wholeExpressionBounded": false,
+                "boundary": null,
+                "unredactedByDesign": false,
+                "carriesSensitive": true,
+                "childProvenRedacting": null
+              },
+              {
+                "id": "inherited-fd:spawn-stdio:730",
+                "surface": "inherited-fd",
+                "accessPath": "spawn-stdio",
+                "wholeExpressionBounded": false,
+                "boundary": null,
+                "unredactedByDesign": false,
+                "carriesSensitive": true,
+                "childProvenRedacting": null
+              }
+            ]
+          }
+        },
+        {
+          "id": "sec:publication:.github/scripts/deploy-notify-failure.mjs#module",
+          "kind": "publication",
+          "provenance": "declared",
+          "label": ".github/scripts/deploy-notify-failure.mjs",
+          "facet": {
+            "kind": "publication",
+            "module": ".github/scripts/deploy-notify-failure.mjs",
+            "declaredSinkCount": 2,
+            "sinks": [
+              {
+                "id": "stdout:member:432",
+                "surface": "stdout",
+                "accessPath": "member",
+                "wholeExpressionBounded": false,
+                "boundary": null,
+                "unredactedByDesign": false,
+                "carriesSensitive": false,
+                "childProvenRedacting": null
+              },
+              {
+                "id": "stderr:member:436",
+                "surface": "stderr",
+                "accessPath": "member",
+                "wholeExpressionBounded": false,
+                "boundary": null,
+                "unredactedByDesign": false,
+                "carriesSensitive": false,
+                "childProvenRedacting": null
+              }
+            ]
+          }
+        },
+        {
           "id": "sec:publication:scripts/brain/extract-security-graph.mjs#module",
           "kind": "publication",
           "provenance": "declared",
@@ -16196,7 +16262,7 @@
             "declaredSinkCount": 15,
             "sinks": [
               {
-                "id": "console:member:145",
+                "id": "console:member:177",
                 "surface": "console",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -16206,7 +16272,7 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "console:member:157",
+                "id": "console:member:189",
                 "surface": "console",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -16216,7 +16282,7 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "console:member:181",
+                "id": "console:member:215",
                 "surface": "console",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -16226,7 +16292,7 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "console:member:195",
+                "id": "console:member:229",
                 "surface": "console",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -16236,7 +16302,7 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "console:member:212",
+                "id": "console:member:246",
                 "surface": "console",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -16246,7 +16312,7 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "console:member:220",
+                "id": "console:member:254",
                 "surface": "console",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -16256,7 +16322,7 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "console:member:231",
+                "id": "console:member:265",
                 "surface": "console",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -16266,7 +16332,7 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "console:member:233",
+                "id": "console:member:267",
                 "surface": "console",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -16276,7 +16342,7 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "console:member:235",
+                "id": "console:member:269",
                 "surface": "console",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -16286,7 +16352,7 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "console:member:236",
+                "id": "console:member:270",
                 "surface": "console",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -16296,7 +16362,7 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "console:member:237",
+                "id": "console:member:271",
                 "surface": "console",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -16306,7 +16372,7 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "console:member:238",
+                "id": "console:member:272",
                 "surface": "console",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -16316,7 +16382,7 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "console:member:239",
+                "id": "console:member:273",
                 "surface": "console",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -16326,7 +16392,7 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "console:member:240",
+                "id": "console:member:274",
                 "surface": "console",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -45585,6 +45651,16 @@
       ],
       "unjoined": [
         {
+          "nodeId": "sec:publication:.github/scripts/__tests__/deploy-notify-failure.test.mjs#module",
+          "codeModuleId": "code:.github/scripts/__tests__/deploy-notify-failure.test.mjs",
+          "reason": "GitHub Actions surface — a workflow, or a script a workflow invokes. It runs in Actions and has no Azure estate presence to be painted onto. Its publication sinks reach the PUBLIC run log and the issues API, which is why the module is extracted even though it joins to nothing."
+        },
+        {
+          "nodeId": "sec:publication:.github/scripts/deploy-notify-failure.mjs#module",
+          "codeModuleId": "code:.github/scripts/deploy-notify-failure.mjs",
+          "reason": "GitHub Actions surface — a workflow, or a script a workflow invokes. It runs in Actions and has no Azure estate presence to be painted onto. Its publication sinks reach the PUBLIC run log and the issues API, which is why the module is extracted even though it joins to nothing."
+        },
+        {
           "nodeId": "sec:publication:scripts/brain/extract-security-graph.mjs#module",
           "codeModuleId": "code:scripts/brain/extract-security-graph.mjs",
           "reason": "repository tooling — run by a developer or by CI, never by a deployed Loom service."
@@ -46628,10 +46704,10 @@
     },
     "meta": {
       "generatorVersion": 1,
-      "generatedAt": "2026-08-24T21:40:14.932Z",
-      "commit": "6751faf01d92b3fb6b74658bf32f9bbe76df7c2b",
-      "inputsDigest": "4cb40cd4b109d5f5",
-      "filesScanned": 2041,
+      "generatedAt": "2026-08-25T01:03:34.099Z",
+      "commit": "fe2d830eebf243795836a742ade4411e307c67c9",
+      "inputsDigest": "230525d9cbcd1c8f",
+      "filesScanned": 2044,
       "scanScopes": [
         {
           "scope": "app/**/route.ts (console BFF routes)",
@@ -46639,147 +46715,155 @@
           "nodesEmitted": 701
         },
         {
-          "scope": "scripts/**, .github/** (CI publication surfaces)",
-          "filesMatched": 349,
-          "nodesEmitted": 208
+          "scope": ".github/**, scripts/** (CI publication surfaces)",
+          "filesMatched": 352,
+          "nodesEmitted": 210
         }
       ],
       "skipped": [
         {
           "subject": "apps/fiab-console/app/api/dq/rules/route.ts",
-          "reason": "no exported HTTP handler recognised (`export const GET = …` / `export async function GET(…)`). The module is a route by path but its export shape is not one this extractor reads, so NO authorizer or verdict-call node is emitted for it — recorded rather than dropped so the gap is countable."
+          "reason": "no exported HTTP handler was recognised in the blanked source — either the export shape is not one this extractor reads (`export const GET = …` / `export async function GET(…)`), or the module's comment/string structure is unterminated and the lexer blanked the handler along with it. Which of the two is NOT established here, so neither is asserted. No authorizer or verdict-call node is emitted for it — recorded rather than dropped so the gap is countable."
         },
         {
           "subject": "apps/fiab-console/app/api/items/aip-logic/[id]/route.ts",
-          "reason": "no exported HTTP handler recognised (`export const GET = …` / `export async function GET(…)`). The module is a route by path but its export shape is not one this extractor reads, so NO authorizer or verdict-call node is emitted for it — recorded rather than dropped so the gap is countable."
+          "reason": "no exported HTTP handler was recognised in the blanked source — either the export shape is not one this extractor reads (`export const GET = …` / `export async function GET(…)`), or the module's comment/string structure is unterminated and the lexer blanked the handler along with it. Which of the two is NOT established here, so neither is asserted. No authorizer or verdict-call node is emitted for it — recorded rather than dropped so the gap is countable."
         },
         {
           "subject": "apps/fiab-console/app/api/items/aip-logic/route.ts",
-          "reason": "no exported HTTP handler recognised (`export const GET = …` / `export async function GET(…)`). The module is a route by path but its export shape is not one this extractor reads, so NO authorizer or verdict-call node is emitted for it — recorded rather than dropped so the gap is countable."
+          "reason": "no exported HTTP handler was recognised in the blanked source — either the export shape is not one this extractor reads (`export const GET = …` / `export async function GET(…)`), or the module's comment/string structure is unterminated and the lexer blanked the handler along with it. Which of the two is NOT established here, so neither is asserted. No authorizer or verdict-call node is emitted for it — recorded rather than dropped so the gap is countable."
         },
         {
           "subject": "apps/fiab-console/app/api/items/automl/[id]/assist/route.ts",
-          "reason": "no exported HTTP handler recognised (`export const GET = …` / `export async function GET(…)`). The module is a route by path but its export shape is not one this extractor reads, so NO authorizer or verdict-call node is emitted for it — recorded rather than dropped so the gap is countable."
+          "reason": "no exported HTTP handler was recognised in the blanked source — either the export shape is not one this extractor reads (`export const GET = …` / `export async function GET(…)`), or the module's comment/string structure is unterminated and the lexer blanked the handler along with it. Which of the two is NOT established here, so neither is asserted. No authorizer or verdict-call node is emitted for it — recorded rather than dropped so the gap is countable."
         },
         {
           "subject": "apps/fiab-console/app/api/items/cypher-graph/[id]/assist/route.ts",
-          "reason": "no exported HTTP handler recognised (`export const GET = …` / `export async function GET(…)`). The module is a route by path but its export shape is not one this extractor reads, so NO authorizer or verdict-call node is emitted for it — recorded rather than dropped so the gap is countable."
+          "reason": "no exported HTTP handler was recognised in the blanked source — either the export shape is not one this extractor reads (`export const GET = …` / `export async function GET(…)`), or the module's comment/string structure is unterminated and the lexer blanked the handler along with it. Which of the two is NOT established here, so neither is asserted. No authorizer or verdict-call node is emitted for it — recorded rather than dropped so the gap is countable."
         },
         {
           "subject": "apps/fiab-console/app/api/items/eventstream/[id]/assist/route.ts",
-          "reason": "no exported HTTP handler recognised (`export const GET = …` / `export async function GET(…)`). The module is a route by path but its export shape is not one this extractor reads, so NO authorizer or verdict-call node is emitted for it — recorded rather than dropped so the gap is countable."
+          "reason": "no exported HTTP handler was recognised in the blanked source — either the export shape is not one this extractor reads (`export const GET = …` / `export async function GET(…)`), or the module's comment/string structure is unterminated and the lexer blanked the handler along with it. Which of the two is NOT established here, so neither is asserted. No authorizer or verdict-call node is emitted for it — recorded rather than dropped so the gap is countable."
         },
         {
           "subject": "apps/fiab-console/app/api/items/gql-graph/[id]/assist/route.ts",
-          "reason": "no exported HTTP handler recognised (`export const GET = …` / `export async function GET(…)`). The module is a route by path but its export shape is not one this extractor reads, so NO authorizer or verdict-call node is emitted for it — recorded rather than dropped so the gap is countable."
+          "reason": "no exported HTTP handler was recognised in the blanked source — either the export shape is not one this extractor reads (`export const GET = …` / `export async function GET(…)`), or the module's comment/string structure is unterminated and the lexer blanked the handler along with it. Which of the two is NOT established here, so neither is asserted. No authorizer or verdict-call node is emitted for it — recorded rather than dropped so the gap is countable."
         },
         {
           "subject": "apps/fiab-console/app/api/items/health-check/[id]/route.ts",
-          "reason": "no exported HTTP handler recognised (`export const GET = …` / `export async function GET(…)`). The module is a route by path but its export shape is not one this extractor reads, so NO authorizer or verdict-call node is emitted for it — recorded rather than dropped so the gap is countable."
+          "reason": "no exported HTTP handler was recognised in the blanked source — either the export shape is not one this extractor reads (`export const GET = …` / `export async function GET(…)`), or the module's comment/string structure is unterminated and the lexer blanked the handler along with it. Which of the two is NOT established here, so neither is asserted. No authorizer or verdict-call node is emitted for it — recorded rather than dropped so the gap is countable."
         },
         {
           "subject": "apps/fiab-console/app/api/items/health-check/route.ts",
-          "reason": "no exported HTTP handler recognised (`export const GET = …` / `export async function GET(…)`). The module is a route by path but its export shape is not one this extractor reads, so NO authorizer or verdict-call node is emitted for it — recorded rather than dropped so the gap is countable."
+          "reason": "no exported HTTP handler was recognised in the blanked source — either the export shape is not one this extractor reads (`export const GET = …` / `export async function GET(…)`), or the module's comment/string structure is unterminated and the lexer blanked the handler along with it. Which of the two is NOT established here, so neither is asserted. No authorizer or verdict-call node is emitted for it — recorded rather than dropped so the gap is countable."
         },
         {
           "subject": "apps/fiab-console/app/api/items/integration-runtime/route.ts",
-          "reason": "no exported HTTP handler recognised (`export const GET = …` / `export async function GET(…)`). The module is a route by path but its export shape is not one this extractor reads, so NO authorizer or verdict-call node is emitted for it — recorded rather than dropped so the gap is countable."
+          "reason": "no exported HTTP handler was recognised in the blanked source — either the export shape is not one this extractor reads (`export const GET = …` / `export async function GET(…)`), or the module's comment/string structure is unterminated and the lexer blanked the handler along with it. Which of the two is NOT established here, so neither is asserted. No authorizer or verdict-call node is emitted for it — recorded rather than dropped so the gap is countable."
         },
         {
           "subject": "apps/fiab-console/app/api/items/lakehouse/[id]/assist/route.ts",
-          "reason": "no exported HTTP handler recognised (`export const GET = …` / `export async function GET(…)`). The module is a route by path but its export shape is not one this extractor reads, so NO authorizer or verdict-call node is emitted for it — recorded rather than dropped so the gap is countable."
+          "reason": "no exported HTTP handler was recognised in the blanked source — either the export shape is not one this extractor reads (`export const GET = …` / `export async function GET(…)`), or the module's comment/string structure is unterminated and the lexer blanked the handler along with it. Which of the two is NOT established here, so neither is asserted. No authorizer or verdict-call node is emitted for it — recorded rather than dropped so the gap is countable."
         },
         {
           "subject": "apps/fiab-console/app/api/items/linked-service/route.ts",
-          "reason": "no exported HTTP handler recognised (`export const GET = …` / `export async function GET(…)`). The module is a route by path but its export shape is not one this extractor reads, so NO authorizer or verdict-call node is emitted for it — recorded rather than dropped so the gap is countable."
+          "reason": "no exported HTTP handler was recognised in the blanked source — either the export shape is not one this extractor reads (`export const GET = …` / `export async function GET(…)`), or the module's comment/string structure is unterminated and the lexer blanked the handler along with it. Which of the two is NOT established here, so neither is asserted. No authorizer or verdict-call node is emitted for it — recorded rather than dropped so the gap is countable."
         },
         {
           "subject": "apps/fiab-console/app/api/items/loom-app-runtime/[id]/assist/route.ts",
-          "reason": "no exported HTTP handler recognised (`export const GET = …` / `export async function GET(…)`). The module is a route by path but its export shape is not one this extractor reads, so NO authorizer or verdict-call node is emitted for it — recorded rather than dropped so the gap is countable."
+          "reason": "no exported HTTP handler was recognised in the blanked source — either the export shape is not one this extractor reads (`export const GET = …` / `export async function GET(…)`), or the module's comment/string structure is unterminated and the lexer blanked the handler along with it. Which of the two is NOT established here, so neither is asserted. No authorizer or verdict-call node is emitted for it — recorded rather than dropped so the gap is countable."
         },
         {
           "subject": "apps/fiab-console/app/api/items/loom-app/[id]/route.ts",
-          "reason": "no exported HTTP handler recognised (`export const GET = …` / `export async function GET(…)`). The module is a route by path but its export shape is not one this extractor reads, so NO authorizer or verdict-call node is emitted for it — recorded rather than dropped so the gap is countable."
+          "reason": "no exported HTTP handler was recognised in the blanked source — either the export shape is not one this extractor reads (`export const GET = …` / `export async function GET(…)`), or the module's comment/string structure is unterminated and the lexer blanked the handler along with it. Which of the two is NOT established here, so neither is asserted. No authorizer or verdict-call node is emitted for it — recorded rather than dropped so the gap is countable."
         },
         {
           "subject": "apps/fiab-console/app/api/items/materialized-lake-view/[id]/assist/route.ts",
-          "reason": "no exported HTTP handler recognised (`export const GET = …` / `export async function GET(…)`). The module is a route by path but its export shape is not one this extractor reads, so NO authorizer or verdict-call node is emitted for it — recorded rather than dropped so the gap is countable."
+          "reason": "no exported HTTP handler was recognised in the blanked source — either the export shape is not one this extractor reads (`export const GET = …` / `export async function GET(…)`), or the module's comment/string structure is unterminated and the lexer blanked the handler along with it. Which of the two is NOT established here, so neither is asserted. No authorizer or verdict-call node is emitted for it — recorded rather than dropped so the gap is countable."
         },
         {
           "subject": "apps/fiab-console/app/api/items/mirrored-database/[id]/assist/route.ts",
-          "reason": "no exported HTTP handler recognised (`export const GET = …` / `export async function GET(…)`). The module is a route by path but its export shape is not one this extractor reads, so NO authorizer or verdict-call node is emitted for it — recorded rather than dropped so the gap is countable."
+          "reason": "no exported HTTP handler was recognised in the blanked source — either the export shape is not one this extractor reads (`export const GET = …` / `export async function GET(…)`), or the module's comment/string structure is unterminated and the lexer blanked the handler along with it. Which of the two is NOT established here, so neither is asserted. No authorizer or verdict-call node is emitted for it — recorded rather than dropped so the gap is countable."
         },
         {
           "subject": "apps/fiab-console/app/api/items/ml-experiment/[id]/assist/route.ts",
-          "reason": "no exported HTTP handler recognised (`export const GET = …` / `export async function GET(…)`). The module is a route by path but its export shape is not one this extractor reads, so NO authorizer or verdict-call node is emitted for it — recorded rather than dropped so the gap is countable."
+          "reason": "no exported HTTP handler was recognised in the blanked source — either the export shape is not one this extractor reads (`export const GET = …` / `export async function GET(…)`), or the module's comment/string structure is unterminated and the lexer blanked the handler along with it. Which of the two is NOT established here, so neither is asserted. No authorizer or verdict-call node is emitted for it — recorded rather than dropped so the gap is countable."
         },
         {
           "subject": "apps/fiab-console/app/api/items/ontology-sdk/[id]/route.ts",
-          "reason": "no exported HTTP handler recognised (`export const GET = …` / `export async function GET(…)`). The module is a route by path but its export shape is not one this extractor reads, so NO authorizer or verdict-call node is emitted for it — recorded rather than dropped so the gap is countable."
+          "reason": "no exported HTTP handler was recognised in the blanked source — either the export shape is not one this extractor reads (`export const GET = …` / `export async function GET(…)`), or the module's comment/string structure is unterminated and the lexer blanked the handler along with it. Which of the two is NOT established here, so neither is asserted. No authorizer or verdict-call node is emitted for it — recorded rather than dropped so the gap is countable."
         },
         {
           "subject": "apps/fiab-console/app/api/items/ontology-sdk/route.ts",
-          "reason": "no exported HTTP handler recognised (`export const GET = …` / `export async function GET(…)`). The module is a route by path but its export shape is not one this extractor reads, so NO authorizer or verdict-call node is emitted for it — recorded rather than dropped so the gap is countable."
+          "reason": "no exported HTTP handler was recognised in the blanked source — either the export shape is not one this extractor reads (`export const GET = …` / `export async function GET(…)`), or the module's comment/string structure is unterminated and the lexer blanked the handler along with it. Which of the two is NOT established here, so neither is asserted. No authorizer or verdict-call node is emitted for it — recorded rather than dropped so the gap is countable."
         },
         {
           "subject": "apps/fiab-console/app/api/items/ontology/[id]/audit-export/route.ts",
-          "reason": "no exported HTTP handler recognised (`export const GET = …` / `export async function GET(…)`). The module is a route by path but its export shape is not one this extractor reads, so NO authorizer or verdict-call node is emitted for it — recorded rather than dropped so the gap is countable."
+          "reason": "no exported HTTP handler was recognised in the blanked source — either the export shape is not one this extractor reads (`export const GET = …` / `export async function GET(…)`), or the module's comment/string structure is unterminated and the lexer blanked the handler along with it. Which of the two is NOT established here, so neither is asserted. No authorizer or verdict-call node is emitted for it — recorded rather than dropped so the gap is countable."
         },
         {
           "subject": "apps/fiab-console/app/api/items/release-environment/[id]/route.ts",
-          "reason": "no exported HTTP handler recognised (`export const GET = …` / `export async function GET(…)`). The module is a route by path but its export shape is not one this extractor reads, so NO authorizer or verdict-call node is emitted for it — recorded rather than dropped so the gap is countable."
+          "reason": "no exported HTTP handler was recognised in the blanked source — either the export shape is not one this extractor reads (`export const GET = …` / `export async function GET(…)`), or the module's comment/string structure is unterminated and the lexer blanked the handler along with it. Which of the two is NOT established here, so neither is asserted. No authorizer or verdict-call node is emitted for it — recorded rather than dropped so the gap is countable."
         },
         {
           "subject": "apps/fiab-console/app/api/items/release-environment/route.ts",
-          "reason": "no exported HTTP handler recognised (`export const GET = …` / `export async function GET(…)`). The module is a route by path but its export shape is not one this extractor reads, so NO authorizer or verdict-call node is emitted for it — recorded rather than dropped so the gap is countable."
+          "reason": "no exported HTTP handler was recognised in the blanked source — either the export shape is not one this extractor reads (`export const GET = …` / `export async function GET(…)`), or the module's comment/string structure is unterminated and the lexer blanked the handler along with it. Which of the two is NOT established here, so neither is asserted. No authorizer or verdict-call node is emitted for it — recorded rather than dropped so the gap is countable."
         },
         {
           "subject": "apps/fiab-console/app/api/items/report/[id]/visual-data/route.ts",
-          "reason": "no exported HTTP handler recognised (`export const GET = …` / `export async function GET(…)`). The module is a route by path but its export shape is not one this extractor reads, so NO authorizer or verdict-call node is emitted for it — recorded rather than dropped so the gap is countable."
+          "reason": "no exported HTTP handler was recognised in the blanked source — either the export shape is not one this extractor reads (`export const GET = …` / `export async function GET(…)`), or the module's comment/string structure is unterminated and the lexer blanked the handler along with it. Which of the two is NOT established here, so neither is asserted. No authorizer or verdict-call node is emitted for it — recorded rather than dropped so the gap is countable."
         },
         {
           "subject": "apps/fiab-console/app/api/items/slate-app/[id]/route.ts",
-          "reason": "no exported HTTP handler recognised (`export const GET = …` / `export async function GET(…)`). The module is a route by path but its export shape is not one this extractor reads, so NO authorizer or verdict-call node is emitted for it — recorded rather than dropped so the gap is countable."
+          "reason": "no exported HTTP handler was recognised in the blanked source — either the export shape is not one this extractor reads (`export const GET = …` / `export async function GET(…)`), or the module's comment/string structure is unterminated and the lexer blanked the handler along with it. Which of the two is NOT established here, so neither is asserted. No authorizer or verdict-call node is emitted for it — recorded rather than dropped so the gap is countable."
         },
         {
           "subject": "apps/fiab-console/app/api/items/slate-app/route.ts",
-          "reason": "no exported HTTP handler recognised (`export const GET = …` / `export async function GET(…)`). The module is a route by path but its export shape is not one this extractor reads, so NO authorizer or verdict-call node is emitted for it — recorded rather than dropped so the gap is countable."
+          "reason": "no exported HTTP handler was recognised in the blanked source — either the export shape is not one this extractor reads (`export const GET = …` / `export async function GET(…)`), or the module's comment/string structure is unterminated and the lexer blanked the handler along with it. Which of the two is NOT established here, so neither is asserted. No authorizer or verdict-call node is emitted for it — recorded rather than dropped so the gap is countable."
         },
         {
           "subject": "apps/fiab-console/app/api/items/sql-analytics-endpoint/[id]/objects/route.ts",
-          "reason": "no exported HTTP handler recognised (`export const GET = …` / `export async function GET(…)`). The module is a route by path but its export shape is not one this extractor reads, so NO authorizer or verdict-call node is emitted for it — recorded rather than dropped so the gap is countable."
+          "reason": "no exported HTTP handler was recognised in the blanked source — either the export shape is not one this extractor reads (`export const GET = …` / `export async function GET(…)`), or the module's comment/string structure is unterminated and the lexer blanked the handler along with it. Which of the two is NOT established here, so neither is asserted. No authorizer or verdict-call node is emitted for it — recorded rather than dropped so the gap is countable."
         },
         {
           "subject": "apps/fiab-console/app/api/items/sql-analytics-endpoint/[id]/query/route.ts",
-          "reason": "no exported HTTP handler recognised (`export const GET = …` / `export async function GET(…)`). The module is a route by path but its export shape is not one this extractor reads, so NO authorizer or verdict-call node is emitted for it — recorded rather than dropped so the gap is countable."
+          "reason": "no exported HTTP handler was recognised in the blanked source — either the export shape is not one this extractor reads (`export const GET = …` / `export async function GET(…)`), or the module's comment/string structure is unterminated and the lexer blanked the handler along with it. Which of the two is NOT established here, so neither is asserted. No authorizer or verdict-call node is emitted for it — recorded rather than dropped so the gap is countable."
         },
         {
           "subject": "apps/fiab-console/app/api/items/sql-analytics-endpoint/[id]/schema/route.ts",
-          "reason": "no exported HTTP handler recognised (`export const GET = …` / `export async function GET(…)`). The module is a route by path but its export shape is not one this extractor reads, so NO authorizer or verdict-call node is emitted for it — recorded rather than dropped so the gap is countable."
+          "reason": "no exported HTTP handler was recognised in the blanked source — either the export shape is not one this extractor reads (`export const GET = …` / `export async function GET(…)`), or the module's comment/string structure is unterminated and the lexer blanked the handler along with it. Which of the two is NOT established here, so neither is asserted. No authorizer or verdict-call node is emitted for it — recorded rather than dropped so the gap is countable."
         },
         {
           "subject": "apps/fiab-console/app/api/items/stream-analytics-job/[name]/assist/route.ts",
-          "reason": "no exported HTTP handler recognised (`export const GET = …` / `export async function GET(…)`). The module is a route by path but its export shape is not one this extractor reads, so NO authorizer or verdict-call node is emitted for it — recorded rather than dropped so the gap is countable."
+          "reason": "no exported HTTP handler was recognised in the blanked source — either the export shape is not one this extractor reads (`export const GET = …` / `export async function GET(…)`), or the module's comment/string structure is unterminated and the lexer blanked the handler along with it. Which of the two is NOT established here, so neither is asserted. No authorizer or verdict-call node is emitted for it — recorded rather than dropped so the gap is countable."
         },
         {
           "subject": "apps/fiab-console/app/api/items/synapse-dedicated-sql-pool/[id]/model/route.ts",
-          "reason": "no exported HTTP handler recognised (`export const GET = …` / `export async function GET(…)`). The module is a route by path but its export shape is not one this extractor reads, so NO authorizer or verdict-call node is emitted for it — recorded rather than dropped so the gap is countable."
+          "reason": "no exported HTTP handler was recognised in the blanked source — either the export shape is not one this extractor reads (`export const GET = …` / `export async function GET(…)`), or the module's comment/string structure is unterminated and the lexer blanked the handler along with it. Which of the two is NOT established here, so neither is asserted. No authorizer or verdict-call node is emitted for it — recorded rather than dropped so the gap is countable."
         },
         {
           "subject": "apps/fiab-console/app/api/items/warehouse/[id]/model/route.ts",
-          "reason": "no exported HTTP handler recognised (`export const GET = …` / `export async function GET(…)`). The module is a route by path but its export shape is not one this extractor reads, so NO authorizer or verdict-call node is emitted for it — recorded rather than dropped so the gap is countable."
+          "reason": "no exported HTTP handler was recognised in the blanked source — either the export shape is not one this extractor reads (`export const GET = …` / `export async function GET(…)`), or the module's comment/string structure is unterminated and the lexer blanked the handler along with it. Which of the two is NOT established here, so neither is asserted. No authorizer or verdict-call node is emitted for it — recorded rather than dropped so the gap is countable."
         },
         {
           "subject": "apps/fiab-console/app/api/items/workshop-app/[id]/route.ts",
-          "reason": "no exported HTTP handler recognised (`export const GET = …` / `export async function GET(…)`). The module is a route by path but its export shape is not one this extractor reads, so NO authorizer or verdict-call node is emitted for it — recorded rather than dropped so the gap is countable."
+          "reason": "no exported HTTP handler was recognised in the blanked source — either the export shape is not one this extractor reads (`export const GET = …` / `export async function GET(…)`), or the module's comment/string structure is unterminated and the lexer blanked the handler along with it. Which of the two is NOT established here, so neither is asserted. No authorizer or verdict-call node is emitted for it — recorded rather than dropped so the gap is countable."
         },
         {
           "subject": "apps/fiab-console/app/api/items/workshop-app/route.ts",
-          "reason": "no exported HTTP handler recognised (`export const GET = …` / `export async function GET(…)`). The module is a route by path but its export shape is not one this extractor reads, so NO authorizer or verdict-call node is emitted for it — recorded rather than dropped so the gap is countable."
+          "reason": "no exported HTTP handler was recognised in the blanked source — either the export shape is not one this extractor reads (`export const GET = …` / `export async function GET(…)`), or the module's comment/string structure is unterminated and the lexer blanked the handler along with it. Which of the two is NOT established here, so neither is asserted. No authorizer or verdict-call node is emitted for it — recorded rather than dropped so the gap is countable."
         },
         {
           "subject": "apps/fiab-console/app/api/real-time-hub/sources/route.ts",
-          "reason": "no exported HTTP handler recognised (`export const GET = …` / `export async function GET(…)`). The module is a route by path but its export shape is not one this extractor reads, so NO authorizer or verdict-call node is emitted for it — recorded rather than dropped so the gap is countable."
+          "reason": "no exported HTTP handler was recognised in the blanked source — either the export shape is not one this extractor reads (`export const GET = …` / `export async function GET(…)`), or the module's comment/string structure is unterminated and the lexer blanked the handler along with it. Which of the two is NOT established here, so neither is asserted. No authorizer or verdict-call node is emitted for it — recorded rather than dropped so the gap is countable."
+        },
+        {
+          "subject": ".github/scripts/__tests__/deploy-notify-failure.test.mjs",
+          "reason": "module declares no PUBLICATION-SINKS marker, so C4's declared-count drift check is INERT for it (declaredSinkCount is set to the observed 2). Recorded so the inertness is countable rather than invisible — a check that cannot fail must not be mistaken for a check that passed."
+        },
+        {
+          "subject": ".github/scripts/deploy-notify-failure.mjs",
+          "reason": "module declares no PUBLICATION-SINKS marker, so C4's declared-count drift check is INERT for it (declaredSinkCount is set to the observed 2). Recorded so the inertness is countable rather than invisible — a check that cannot fail must not be mistaken for a check that passed."
         },
         {
           "subject": "scripts/brain/extract-security-graph.mjs",
@@ -47614,8 +47698,16 @@
           "reason": "module declares no PUBLICATION-SINKS marker, so C4's declared-count drift check is INERT for it (declaredSinkCount is set to the observed 5). Recorded so the inertness is countable rather than invisible — a check that cannot fail must not be mistaken for a check that passed."
         },
         {
+          "subject": "scripts/** (*.ps1, *.py, *.sh, *.yaml)",
+          "reason": "177 file(s) under a SCANNED root were seen and NOT read: this extractor lexes JavaScript/TypeScript only, so a workflow YAML `run:` block, a shell step or a Python script is outside the examined population even though it publishes to the same PUBLIC Actions log. C4 output therefore says nothing about these files. Recorded with a count so the narrowing is countable rather than inferred from a scope string — which is how the `.github/**` gap survived until 2026-08-24."
+        },
+        {
+          "subject": ".github/** (*.py, *.sh, *.yaml, *.yml)",
+          "reason": "141 file(s) under a SCANNED root were seen and NOT read: this extractor lexes JavaScript/TypeScript only, so a workflow YAML `run:` block, a shell step or a Python script is outside the examined population even though it publishes to the same PUBLIC Actions log. C4 output therefore says nothing about these files. Recorded with a count so the narrowing is countable rather than inferred from a scope string — which is how the `.github/**` gap survived until 2026-08-24."
+        },
+        {
           "subject": "C4 expression arm (carriesSensitive)",
-          "reason": "matched 0 of 2182 non-spawn publication sink(s), so every C4 finding on this tree comes from the spawn-stdio arm. The expression arm is INERT here and its correctness is therefore unexercised by the real corpus — C4 output is not evidence that no unbounded sensitive write exists."
+          "reason": "matched 0 of 2184 non-spawn publication sink(s), so every C4 finding on this tree comes from the spawn-stdio arm. The expression arm is INERT here and its correctness is therefore unexercised by the real corpus — C4 output is not evidence that no unbounded sensitive write exists."
         }
       ]
     }

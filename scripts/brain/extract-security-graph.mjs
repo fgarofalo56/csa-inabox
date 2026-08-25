@@ -131,10 +131,42 @@ function main() {
     path.join(CONSOLE_DIR, 'app'),
     (rel) => /\/route\.tsx?$/.test(rel),
   );
-  const scriptFiles = walk(
-    path.join(REPO_ROOT, 'scripts'),
-    (rel) => /\.(?:mjs|cjs|js)$/.test(rel),
-  );
+
+  // ── THE PUBLICATION SCOPE, WALKED AND DECLARED FROM ONE PLACE ──────────
+  //
+  // These roots are passed into `buildSecurityGraphArtifact`, which derives BOTH
+  // the file partition and the scope string the artifact reports from them. They
+  // used to be a hand-written literal here and a second hand-written literal in
+  // build.ts, and the two disagreed: the artifact declared `scripts/**,
+  // .github/**` while this walk covered `scripts/` alone. Measured on the
+  // committed bytes — 0 `.github` nodes, 0 `skipped` entries naming it — and
+  // `.github/scripts/deploy-notify-failure.mjs`, a FAILURE NOTIFIER whose whole
+  // job is publishing to a public issue and a public run log, sat outside a
+  // population the artifact claimed to cover.
+  const PUBLICATION_ROOTS = ['scripts', '.github'];
+  /** What this extractor can lex. */
+  const PUBLICATION_INCLUDE = /\.(?:mjs|cjs|js)$/;
+  /**
+   * Publication-capable languages under the SAME roots that this extractor
+   * cannot lex. Counted rather than ignored: a workflow `run:` block and a `.sh`
+   * step echo into the same PUBLIC Actions log a `console.log` does, so the
+   * narrowing is reported into `meta.skipped` with a real number.
+   */
+  const PUBLICATION_UNMODELED = /\.(?:sh|ps1|psm1|py|yml|yaml)$/;
+
+  const scriptFiles = [];
+  const unmodeledPublicationSurfaces = [];
+  for (const root of PUBLICATION_ROOTS) {
+    const absRoot = path.join(REPO_ROOT, root);
+    scriptFiles.push(...walk(absRoot, (rel) => PUBLICATION_INCLUDE.test(rel)));
+
+    const unread = walk(absRoot, (rel) => PUBLICATION_UNMODELED.test(rel));
+    unmodeledPublicationSurfaces.push({
+      root: `${root}/`,
+      fileCount: unread.length,
+      extensions: [...new Set(unread.map((f) => path.extname(f)))].sort(),
+    });
+  }
 
   const files = [...routeFiles, ...scriptFiles].map((absolute) => ({
     path: repoRelative(absolute),
@@ -167,6 +199,8 @@ function main() {
     const mod = require_(entry);
     artifact = mod.buildSecurityGraphArtifact({
       files,
+      publicationRoots: PUBLICATION_ROOTS.map((r) => `${r}/`),
+      unmodeledPublicationSurfaces,
       routeGuardSource,
       commit: currentCommit(),
       now: new Date(),
