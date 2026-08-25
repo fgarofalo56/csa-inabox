@@ -458,6 +458,26 @@
         "signalId": "transient.postgres-entra-admin-server-not-accessible",
         "retryable": true
       }
+    },
+    {
+      "name": "transient — Analysis Services server mid-update, verbatim leaf as it renders AFTER the annotation fix",
+      "source": "deploy-fiab-commercial run 32806407520, 2026-08-25T04:09:13Z (workflow_dispatch run_mode=full, sha 4d4fd0b9), centralus — the leaf that classified unknown and exited the run 17 (#3948)",
+      "input": "BadRequest: The server '<aas-server>' is currently being updated. Please try again later. [Microsoft.AnalysisServices/servers '<aas-server>']",
+      "expect": {
+        "class": "transient",
+        "signalId": "transient.resource-mid-update",
+        "retryable": true
+      }
+    },
+    {
+      "name": "unknown — the SAME failure as the classifier actually received it, before the annotation fix",
+      "source": "deploy-fiab-commercial run 32806407520 — the two details[] annotations deploy-arm-errors.mjs used to emit INSTEAD of the parent message. Kept as a permanent control: this input carries no cause, so it must stay unclassifiable no matter how many signals are added. If a future entry ever makes THIS classify, that entry is matching on a correlation id.",
+      "input": "ARM leaf failures (2) drilled from the failed deployment operations:\n  RootActivityId: <guid> [Microsoft.AnalysisServices/servers '<aas-server>']\n  Param1: <aas-server> [Microsoft.AnalysisServices/servers '<aas-server>']",
+      "expect": {
+        "class": "unknown",
+        "signalId": null,
+        "retryable": false
+      }
     }
   ]
 }
