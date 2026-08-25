@@ -80,6 +80,32 @@ EH="$(q eventhubs namespace list --subscription "$DLZ_SUB" -g "$DLZ_RG" --query 
 SYN="$(q synapse workspace list --subscription "$DLZ_SUB" -g "$DLZ_RG" --query "[0].name" -o tsv)"
 DBX_N="$(q databricks workspace list --subscription "$DLZ_SUB" -g "$DLZ_RG" --query "[0].name" -o tsv)"
 DBX_H="$(q databricks workspace list --subscription "$DLZ_SUB" -g "$DLZ_RG" --query "[0].workspaceUrl" -o tsv)"
+# Azure Data Factory. Read through `az resource list` rather than `az datafactory
+# list` on purpose: `datafactory` is an az EXTENSION, and a lookup that needs one
+# installed would silently return nothing on a runner that lacks it — the same
+# unknown-reported-as-absent shape the header refuses.
+#
+# WHY THIS ENTRY WAS MISSING, AND WHAT IT COST (auto-bind-by-default.md §5).
+# The four lookups above adopt the DLZ's lake, Event Hubs, Synapse and
+# Databricks. The factory sits in the SAME resource group and was not adopted.
+# Measured ON THIS TREE (not on any live estate — this note asserts only what the
+# code establishes): with `adopt.adf` absent, main.bicep's `existingAdfFactory`
+# is '' and admin-plane/main.bicep falls through to
+#   effAdfName = deAdfEnabled ? loomAdfName : ''    // 'adf-loom-default-<region>'
+#   effAdfRg   = loomAdfRg || loomDlzRg             // the ADMIN rg on tenant
+#   byoAdfSub  = subscription().subscriptionId      // the ADMIN sub
+# On a `topology='tenant'` estate no landing zone is deployed by that run, so
+# those three coordinates name a factory this deployment did not create, in a
+# resource group and subscription it is not in. Two consequences:
+#   1. LOOM_ADF_NAME / _RG / _SUB address the wrong place on any estate whose
+#      factory lives in a separately-deployed landing zone;
+#   2. main.bicep cannot grant that factory ANYTHING, because it does not know
+#      which factory it is — so `adf-keyvault-rbac.bicep` (the Key Vault Secrets
+#      User grant every Snowflake mirror needs to read its credential) had no
+#      reachable call site on any shipped boundary at all.
+# Adopting the factory here is what makes `main.bicep`'s `adoptedAdfKeyVaultRbac`
+# reachable with the checked-in param files.
+ADF="$(q resource list --subscription "$DLZ_SUB" -g "$DLZ_RG" --resource-type Microsoft.DataFactory/factories --query "[0].name" -o tsv)"
 
 entries=""
 add() { # add <key> <name> [extraJson]
@@ -96,6 +122,7 @@ add "storage-adls" "$SA"
 add "eventhubs"    "$EH"
 add "synapse"      "$SYN"
 add "databricks"   "$DBX_N" "${DBX_H:+{\"hostname\":\"$DBX_H\"}}"
+add "adf"          "$ADF"
 
 if [ -z "$entries" ]; then
   echo "[discover-dlz-adopt] DLZ RG exists but held none of the adoptable services — empty plan" >&2

@@ -6,7 +6,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.45.15.27210",
-      "templateHash": "12135459452810963538"
+      "templateHash": "8432769573036966857"
     }
   },
   "definitions": {
@@ -1874,14 +1874,14 @@
       "type": "string",
       "defaultValue": "",
       "metadata": {
-        "description": "Opt-in ADF CDC/Copy mirroring — pre-existing ADF AzureBlobFS linked service pointing at the DLZ ADLS account (Delta/Parquet sink). Empty = built-in snapshot engine."
+        "description": "BROWNFIELD OVERRIDE, not a prerequisite. Name of an EXISTING ADF AzureBlobFS linked service to sink mirrors through. Empty (the default, and what every shipped estate has) makes Loom auto-create `loom_mirror_sink_adls` from LOOM_BRONZE_URL with factory managed-identity auth — see apps/fiab-console/lib/azure/mirror-adf-shared.ts. Set it only to keep a hand-tuned linked service (managed private endpoint / different account) that Loom must not clobber. Requiring it was an auto-bind-by-default.md §5 violation: the platform holds every value it needs."
       }
     },
     "loomMirrorSnowflakeLinkedService": {
       "type": "string",
       "defaultValue": "",
       "metadata": {
-        "description": "Opt-in ADF Copy mirroring — pre-existing ADF Snowflake linked service (credential in Key Vault). Empty = falls back to loomMirrorSourceLinkedService. Snowflake → ADF Copy → ADLS Bronze Parquet, NO Fabric."
+        "description": "BROWNFIELD OVERRIDE, not a prerequisite. Name of an EXISTING ADF Snowflake linked service (credential in Key Vault). Empty (the default) makes Loom build the SnowflakeV2 linked service from the mirror's Loom Connection — see apps/fiab-console/lib/azure/snowflake-adf.ts. Snowflake → ADF Copy → ADLS Bronze Parquet, NO Fabric."
       }
     },
     "loomMirrorCopyCadence": {
@@ -2097,6 +2097,7 @@
     "effHubSubscriptionId": "[if(not(empty(parameters('hubAdminSubscriptionId'))), parameters('hubAdminSubscriptionId'), if(not(empty(string(coalesce(tryGet(parameters('hubCoordinates'), 'adminPlaneSubId'), '')))), string(parameters('hubCoordinates').adminPlaneSubId), parameters('adminPlaneSubId')))]",
     "dlzAttachHasHubVnet": "[or(not(empty(parameters('hubVnetId'))), not(empty(string(coalesce(tryGet(parameters('hubCoordinates'), 'hubVnetId'), '')))))]",
     "dlzAttachHasHubConsoleUami": "[or(not(empty(parameters('hubConsoleUamiId'))), not(empty(string(coalesce(tryGet(parameters('hubCoordinates'), 'consoleUamiResourceId'), '')))))]",
+    "dlzAttachHasHubKeyVault": "[or(not(empty(parameters('hubKeyVaultId'))), not(empty(string(coalesce(tryGet(parameters('hubCoordinates'), 'keyVaultId'), '')))))]",
     "topologyManifestDlzsSingle": [
       {
         "domainName": "default",
@@ -2567,7 +2568,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.45.15.27210",
-              "templateHash": "7804253897519056899"
+              "templateHash": "16101637744424557012"
             }
           },
           "definitions": {
@@ -3882,14 +3883,14 @@
               "type": "string",
               "defaultValue": "",
               "metadata": {
-                "description": "Opt-in ADF CDC mirroring — name of the pre-existing ADF AzureBlobFS linked service pointing at the DLZ ADLS account (the Delta sink). Empty = mirrored databases use the built-in CSV snapshot engine."
+                "description": "BROWNFIELD OVERRIDE, not a prerequisite. Name of an EXISTING ADF AzureBlobFS linked service to sink mirrors through. Empty (the default, and what every shipped estate has) makes Loom auto-create `loom_mirror_sink_adls` from LOOM_BRONZE_URL with factory managed-identity auth — see apps/fiab-console/lib/azure/mirror-adf-shared.ts. Set it only to keep a hand-tuned linked service (managed private endpoint / different account) that Loom must not clobber."
               }
             },
             "loomMirrorSnowflakeLinkedService": {
               "type": "string",
               "defaultValue": "",
               "metadata": {
-                "description": "Opt-in ADF Copy mirroring — name of the pre-existing ADF Snowflake linked service (credential in Key Vault). Empty = falls back to loomMirrorSourceLinkedService. Snowflake mirrors via an ADF Copy pipeline → ADLS Bronze Parquet, NO Fabric."
+                "description": "BROWNFIELD OVERRIDE, not a prerequisite. Name of an EXISTING ADF Snowflake linked service (credential in Key Vault). Empty (the default) makes Loom build the SnowflakeV2 linked service from the mirror's Loom Connection — see apps/fiab-console/lib/azure/snowflake-adf.ts. Snowflake mirrors via an ADF Copy pipeline → ADLS Bronze Parquet, NO Fabric."
               }
             },
             "loomMirrorCopyCadence": {
@@ -39210,7 +39211,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.45.15.27210",
-              "templateHash": "773117795510875895"
+              "templateHash": "9218771381481782380"
             }
           },
           "parameters": {
@@ -39224,7 +39225,28 @@
               "type": "string",
               "defaultValue": "",
               "metadata": {
-                "description": "Data Factory SYSTEM-ASSIGNED identity principalId — landing-zone/adf.bicep output `factoryPrincipalId`. Empty skips the grant (no factory deployed in this estate)."
+                "description": "Data Factory SYSTEM-ASSIGNED identity principalId — landing-zone/adf.bicep output `factoryPrincipalId`. Supply this when THIS deployment created the factory. Empty falls back to resolving the principal from `dataFactoryName`/`dataFactoryRg`/`dataFactorySub`; empty with no name either skips the grant (no factory in this estate)."
+              }
+            },
+            "dataFactoryName": {
+              "type": "string",
+              "defaultValue": "",
+              "metadata": {
+                "description": "Name of an EXISTING Data Factory whose system-assigned principal should be resolved and granted — the adopted/attached factory the Console is bound to (LOOM_ADF_NAME). Ignored when `dataFactoryPrincipalId` is supplied. Empty + empty principalId = no grant."
+              }
+            },
+            "dataFactoryRg": {
+              "type": "string",
+              "defaultValue": "",
+              "metadata": {
+                "description": "Resource group holding `dataFactoryName`. Empty = this module's own resource group."
+              }
+            },
+            "dataFactorySub": {
+              "type": "string",
+              "defaultValue": "",
+              "metadata": {
+                "description": "Subscription holding `dataFactoryName`. Empty = the deployment subscription. The factory routinely lives in a DIFFERENT subscription from the vault, which is why this is a first-class input rather than an assumption."
               }
             },
             "skipRoleGrants": {
@@ -39237,7 +39259,11 @@
           },
           "variables": {
             "keyVaultSecretsUser": "4633458b-17de-408a-b874-0445c86b69e6",
-            "grantActive": "[and(and(not(empty(parameters('keyVaultName'))), not(empty(parameters('dataFactoryPrincipalId')))), not(parameters('skipRoleGrants')))]"
+            "effAdfRg": "[if(not(empty(parameters('dataFactoryRg'))), parameters('dataFactoryRg'), resourceGroup().name)]",
+            "effAdfSub": "[if(not(empty(parameters('dataFactorySub'))), parameters('dataFactorySub'), subscription().subscriptionId)]",
+            "resolveFromFactory": "[and(empty(parameters('dataFactoryPrincipalId')), not(empty(parameters('dataFactoryName'))))]",
+            "grantActive": "[and(and(not(empty(parameters('keyVaultName'))), or(not(empty(parameters('dataFactoryPrincipalId'))), variables('resolveFromFactory'))), not(parameters('skipRoleGrants')))]",
+            "assignmentSeed": "[if(not(empty(parameters('dataFactoryPrincipalId'))), parameters('dataFactoryPrincipalId'), format('{0}/{1}/{2}', variables('effAdfSub'), variables('effAdfRg'), parameters('dataFactoryName')))]"
           },
           "resources": [
             {
@@ -39245,10 +39271,10 @@
               "type": "Microsoft.Authorization/roleAssignments",
               "apiVersion": "2022-04-01",
               "scope": "[resourceId('Microsoft.KeyVault/vaults', parameters('keyVaultName'))]",
-              "name": "[guid(resourceGroup().id, parameters('keyVaultName'), parameters('dataFactoryPrincipalId'), variables('keyVaultSecretsUser'))]",
+              "name": "[guid(resourceGroup().id, parameters('keyVaultName'), variables('assignmentSeed'), variables('keyVaultSecretsUser'))]",
               "properties": {
                 "roleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', variables('keyVaultSecretsUser'))]",
-                "principalId": "[parameters('dataFactoryPrincipalId')]",
+                "principalId": "[if(not(empty(parameters('dataFactoryPrincipalId'))), parameters('dataFactoryPrincipalId'), if(variables('resolveFromFactory'), reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', variables('effAdfSub'), variables('effAdfRg')), 'Microsoft.DataFactory/factories', parameters('dataFactoryName')), '2018-06-01', 'full').identity.principalId, ''))]",
                 "principalType": "ServicePrincipal",
                 "description": "Data Factory MI: read Loom Connection secrets BY REFERENCE for auto-bound mirroring linked services (Snowflake password / private key)."
               }
@@ -39261,6 +39287,13 @@
                 "description": "True when the grant was actually made — false when skipped for a missing factory, missing vault, or skipRoleGrants."
               },
               "value": "[variables('grantActive')]"
+            },
+            "resolvedFromFactory": {
+              "type": "bool",
+              "metadata": {
+                "description": "True when the principal was resolved from the factory's coordinates rather than handed in — i.e. an adopted/attached factory that this deployment did not mint. The RoleAssignmentExists hazard in this module's header applies to exactly this case."
+              },
+              "value": "[variables('resolveFromFactory')]"
             }
           }
         }
@@ -39268,6 +39301,132 @@
       "dependsOn": [
         "adminPlane",
         "singleDlz"
+      ]
+    },
+    "adoptedAdfKeyVaultRbac": {
+      "condition": "[and(variables('deployAdminPlane'), not(empty(variables('existingAdfFactory'))))]",
+      "type": "Microsoft.Resources/deployments",
+      "apiVersion": "2025-04-01",
+      "name": "adopted-adf-keyvault-rbac",
+      "resourceGroup": "[variables('adminPlaneRgName')]",
+      "properties": {
+        "expressionEvaluationOptions": {
+          "scope": "inner"
+        },
+        "mode": "Incremental",
+        "parameters": {
+          "keyVaultName": {
+            "value": "[last(split(reference('adminPlane').outputs.keyVaultId.value, '/'))]"
+          },
+          "dataFactoryName": {
+            "value": "[variables('existingAdfFactory')]"
+          },
+          "dataFactoryRg": {
+            "value": "[variables('existingAdfRg')]"
+          },
+          "dataFactorySub": {
+            "value": "[variables('existingAdfSub')]"
+          },
+          "skipRoleGrants": {
+            "value": "[parameters('skipRoleGrants')]"
+          }
+        },
+        "template": {
+          "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+          "contentVersion": "1.0.0.0",
+          "metadata": {
+            "_generator": {
+              "name": "bicep",
+              "version": "0.45.15.27210",
+              "templateHash": "9218771381481782380"
+            }
+          },
+          "parameters": {
+            "keyVaultName": {
+              "type": "string",
+              "metadata": {
+                "description": "Name of the Loom Key Vault in this resource group (holds Loom Connection secrets). Empty skips the grant."
+              }
+            },
+            "dataFactoryPrincipalId": {
+              "type": "string",
+              "defaultValue": "",
+              "metadata": {
+                "description": "Data Factory SYSTEM-ASSIGNED identity principalId — landing-zone/adf.bicep output `factoryPrincipalId`. Supply this when THIS deployment created the factory. Empty falls back to resolving the principal from `dataFactoryName`/`dataFactoryRg`/`dataFactorySub`; empty with no name either skips the grant (no factory in this estate)."
+              }
+            },
+            "dataFactoryName": {
+              "type": "string",
+              "defaultValue": "",
+              "metadata": {
+                "description": "Name of an EXISTING Data Factory whose system-assigned principal should be resolved and granted — the adopted/attached factory the Console is bound to (LOOM_ADF_NAME). Ignored when `dataFactoryPrincipalId` is supplied. Empty + empty principalId = no grant."
+              }
+            },
+            "dataFactoryRg": {
+              "type": "string",
+              "defaultValue": "",
+              "metadata": {
+                "description": "Resource group holding `dataFactoryName`. Empty = this module's own resource group."
+              }
+            },
+            "dataFactorySub": {
+              "type": "string",
+              "defaultValue": "",
+              "metadata": {
+                "description": "Subscription holding `dataFactoryName`. Empty = the deployment subscription. The factory routinely lives in a DIFFERENT subscription from the vault, which is why this is a first-class input rather than an assumption."
+              }
+            },
+            "skipRoleGrants": {
+              "type": "bool",
+              "defaultValue": false,
+              "metadata": {
+                "description": "When true, skip the grant (re-deploy where RBAC already exists, or the deployer lacks User Access Administrator)."
+              }
+            }
+          },
+          "variables": {
+            "keyVaultSecretsUser": "4633458b-17de-408a-b874-0445c86b69e6",
+            "effAdfRg": "[if(not(empty(parameters('dataFactoryRg'))), parameters('dataFactoryRg'), resourceGroup().name)]",
+            "effAdfSub": "[if(not(empty(parameters('dataFactorySub'))), parameters('dataFactorySub'), subscription().subscriptionId)]",
+            "resolveFromFactory": "[and(empty(parameters('dataFactoryPrincipalId')), not(empty(parameters('dataFactoryName'))))]",
+            "grantActive": "[and(and(not(empty(parameters('keyVaultName'))), or(not(empty(parameters('dataFactoryPrincipalId'))), variables('resolveFromFactory'))), not(parameters('skipRoleGrants')))]",
+            "assignmentSeed": "[if(not(empty(parameters('dataFactoryPrincipalId'))), parameters('dataFactoryPrincipalId'), format('{0}/{1}/{2}', variables('effAdfSub'), variables('effAdfRg'), parameters('dataFactoryName')))]"
+          },
+          "resources": [
+            {
+              "condition": "[variables('grantActive')]",
+              "type": "Microsoft.Authorization/roleAssignments",
+              "apiVersion": "2022-04-01",
+              "scope": "[resourceId('Microsoft.KeyVault/vaults', parameters('keyVaultName'))]",
+              "name": "[guid(resourceGroup().id, parameters('keyVaultName'), variables('assignmentSeed'), variables('keyVaultSecretsUser'))]",
+              "properties": {
+                "roleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', variables('keyVaultSecretsUser'))]",
+                "principalId": "[if(not(empty(parameters('dataFactoryPrincipalId'))), parameters('dataFactoryPrincipalId'), if(variables('resolveFromFactory'), reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', variables('effAdfSub'), variables('effAdfRg')), 'Microsoft.DataFactory/factories', parameters('dataFactoryName')), '2018-06-01', 'full').identity.principalId, ''))]",
+                "principalType": "ServicePrincipal",
+                "description": "Data Factory MI: read Loom Connection secrets BY REFERENCE for auto-bound mirroring linked services (Snowflake password / private key)."
+              }
+            }
+          ],
+          "outputs": {
+            "granted": {
+              "type": "bool",
+              "metadata": {
+                "description": "True when the grant was actually made — false when skipped for a missing factory, missing vault, or skipRoleGrants."
+              },
+              "value": "[variables('grantActive')]"
+            },
+            "resolvedFromFactory": {
+              "type": "bool",
+              "metadata": {
+                "description": "True when the principal was resolved from the factory's coordinates rather than handed in — i.e. an adopted/attached factory that this deployment did not mint. The RoleAssignmentExists hazard in this module's header applies to exactly this case."
+              },
+              "value": "[variables('resolveFromFactory')]"
+            }
+          }
+        }
+      },
+      "dependsOn": [
+        "adminPlane"
       ]
     },
     "dlz": {
@@ -48562,7 +48721,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.45.15.27210",
-              "templateHash": "773117795510875895"
+              "templateHash": "9218771381481782380"
             }
           },
           "parameters": {
@@ -48576,7 +48735,28 @@
               "type": "string",
               "defaultValue": "",
               "metadata": {
-                "description": "Data Factory SYSTEM-ASSIGNED identity principalId — landing-zone/adf.bicep output `factoryPrincipalId`. Empty skips the grant (no factory deployed in this estate)."
+                "description": "Data Factory SYSTEM-ASSIGNED identity principalId — landing-zone/adf.bicep output `factoryPrincipalId`. Supply this when THIS deployment created the factory. Empty falls back to resolving the principal from `dataFactoryName`/`dataFactoryRg`/`dataFactorySub`; empty with no name either skips the grant (no factory in this estate)."
+              }
+            },
+            "dataFactoryName": {
+              "type": "string",
+              "defaultValue": "",
+              "metadata": {
+                "description": "Name of an EXISTING Data Factory whose system-assigned principal should be resolved and granted — the adopted/attached factory the Console is bound to (LOOM_ADF_NAME). Ignored when `dataFactoryPrincipalId` is supplied. Empty + empty principalId = no grant."
+              }
+            },
+            "dataFactoryRg": {
+              "type": "string",
+              "defaultValue": "",
+              "metadata": {
+                "description": "Resource group holding `dataFactoryName`. Empty = this module's own resource group."
+              }
+            },
+            "dataFactorySub": {
+              "type": "string",
+              "defaultValue": "",
+              "metadata": {
+                "description": "Subscription holding `dataFactoryName`. Empty = the deployment subscription. The factory routinely lives in a DIFFERENT subscription from the vault, which is why this is a first-class input rather than an assumption."
               }
             },
             "skipRoleGrants": {
@@ -48589,7 +48769,11 @@
           },
           "variables": {
             "keyVaultSecretsUser": "4633458b-17de-408a-b874-0445c86b69e6",
-            "grantActive": "[and(and(not(empty(parameters('keyVaultName'))), not(empty(parameters('dataFactoryPrincipalId')))), not(parameters('skipRoleGrants')))]"
+            "effAdfRg": "[if(not(empty(parameters('dataFactoryRg'))), parameters('dataFactoryRg'), resourceGroup().name)]",
+            "effAdfSub": "[if(not(empty(parameters('dataFactorySub'))), parameters('dataFactorySub'), subscription().subscriptionId)]",
+            "resolveFromFactory": "[and(empty(parameters('dataFactoryPrincipalId')), not(empty(parameters('dataFactoryName'))))]",
+            "grantActive": "[and(and(not(empty(parameters('keyVaultName'))), or(not(empty(parameters('dataFactoryPrincipalId'))), variables('resolveFromFactory'))), not(parameters('skipRoleGrants')))]",
+            "assignmentSeed": "[if(not(empty(parameters('dataFactoryPrincipalId'))), parameters('dataFactoryPrincipalId'), format('{0}/{1}/{2}', variables('effAdfSub'), variables('effAdfRg'), parameters('dataFactoryName')))]"
           },
           "resources": [
             {
@@ -48597,10 +48781,10 @@
               "type": "Microsoft.Authorization/roleAssignments",
               "apiVersion": "2022-04-01",
               "scope": "[resourceId('Microsoft.KeyVault/vaults', parameters('keyVaultName'))]",
-              "name": "[guid(resourceGroup().id, parameters('keyVaultName'), parameters('dataFactoryPrincipalId'), variables('keyVaultSecretsUser'))]",
+              "name": "[guid(resourceGroup().id, parameters('keyVaultName'), variables('assignmentSeed'), variables('keyVaultSecretsUser'))]",
               "properties": {
                 "roleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', variables('keyVaultSecretsUser'))]",
-                "principalId": "[parameters('dataFactoryPrincipalId')]",
+                "principalId": "[if(not(empty(parameters('dataFactoryPrincipalId'))), parameters('dataFactoryPrincipalId'), if(variables('resolveFromFactory'), reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', variables('effAdfSub'), variables('effAdfRg')), 'Microsoft.DataFactory/factories', parameters('dataFactoryName')), '2018-06-01', 'full').identity.principalId, ''))]",
                 "principalType": "ServicePrincipal",
                 "description": "Data Factory MI: read Loom Connection secrets BY REFERENCE for auto-bound mirroring linked services (Snowflake password / private key)."
               }
@@ -48613,6 +48797,13 @@
                 "description": "True when the grant was actually made — false when skipped for a missing factory, missing vault, or skipRoleGrants."
               },
               "value": "[variables('grantActive')]"
+            },
+            "resolvedFromFactory": {
+              "type": "bool",
+              "metadata": {
+                "description": "True when the principal was resolved from the factory's coordinates rather than handed in — i.e. an adopted/attached factory that this deployment did not mint. The RoleAssignmentExists hazard in this module's header applies to exactly this case."
+              },
+              "value": "[variables('resolveFromFactory')]"
             }
           }
         }
@@ -59267,6 +59458,127 @@
       "dependsOn": [
         "dlzAttach",
         "dlzAttachS3Gateway"
+      ]
+    },
+    "dlzAttachAdfKeyVaultRbac": {
+      "condition": "[and(and(equals(parameters('topology'), 'dlz-attach'), variables('dlzAttachHasHubKeyVault')), not(parameters('skipRoleGrants')))]",
+      "type": "Microsoft.Resources/deployments",
+      "apiVersion": "2025-04-01",
+      "name": "[format('dlz-attach-adf-keyvault-rbac-{0}', parameters('attachDomainName'))]",
+      "subscriptionId": "[variables('effHubSubscriptionId')]",
+      "resourceGroup": "[variables('adminPlaneRgName')]",
+      "properties": {
+        "expressionEvaluationOptions": {
+          "scope": "inner"
+        },
+        "mode": "Incremental",
+        "parameters": {
+          "keyVaultName": {
+            "value": "[last(split(variables('effHubKeyVaultId'), '/'))]"
+          },
+          "dataFactoryPrincipalId": {
+            "value": "[reference('dlzAttach').outputs.adfFactoryPrincipalId.value]"
+          },
+          "skipRoleGrants": {
+            "value": "[parameters('skipRoleGrants')]"
+          }
+        },
+        "template": {
+          "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+          "contentVersion": "1.0.0.0",
+          "metadata": {
+            "_generator": {
+              "name": "bicep",
+              "version": "0.45.15.27210",
+              "templateHash": "9218771381481782380"
+            }
+          },
+          "parameters": {
+            "keyVaultName": {
+              "type": "string",
+              "metadata": {
+                "description": "Name of the Loom Key Vault in this resource group (holds Loom Connection secrets). Empty skips the grant."
+              }
+            },
+            "dataFactoryPrincipalId": {
+              "type": "string",
+              "defaultValue": "",
+              "metadata": {
+                "description": "Data Factory SYSTEM-ASSIGNED identity principalId — landing-zone/adf.bicep output `factoryPrincipalId`. Supply this when THIS deployment created the factory. Empty falls back to resolving the principal from `dataFactoryName`/`dataFactoryRg`/`dataFactorySub`; empty with no name either skips the grant (no factory in this estate)."
+              }
+            },
+            "dataFactoryName": {
+              "type": "string",
+              "defaultValue": "",
+              "metadata": {
+                "description": "Name of an EXISTING Data Factory whose system-assigned principal should be resolved and granted — the adopted/attached factory the Console is bound to (LOOM_ADF_NAME). Ignored when `dataFactoryPrincipalId` is supplied. Empty + empty principalId = no grant."
+              }
+            },
+            "dataFactoryRg": {
+              "type": "string",
+              "defaultValue": "",
+              "metadata": {
+                "description": "Resource group holding `dataFactoryName`. Empty = this module's own resource group."
+              }
+            },
+            "dataFactorySub": {
+              "type": "string",
+              "defaultValue": "",
+              "metadata": {
+                "description": "Subscription holding `dataFactoryName`. Empty = the deployment subscription. The factory routinely lives in a DIFFERENT subscription from the vault, which is why this is a first-class input rather than an assumption."
+              }
+            },
+            "skipRoleGrants": {
+              "type": "bool",
+              "defaultValue": false,
+              "metadata": {
+                "description": "When true, skip the grant (re-deploy where RBAC already exists, or the deployer lacks User Access Administrator)."
+              }
+            }
+          },
+          "variables": {
+            "keyVaultSecretsUser": "4633458b-17de-408a-b874-0445c86b69e6",
+            "effAdfRg": "[if(not(empty(parameters('dataFactoryRg'))), parameters('dataFactoryRg'), resourceGroup().name)]",
+            "effAdfSub": "[if(not(empty(parameters('dataFactorySub'))), parameters('dataFactorySub'), subscription().subscriptionId)]",
+            "resolveFromFactory": "[and(empty(parameters('dataFactoryPrincipalId')), not(empty(parameters('dataFactoryName'))))]",
+            "grantActive": "[and(and(not(empty(parameters('keyVaultName'))), or(not(empty(parameters('dataFactoryPrincipalId'))), variables('resolveFromFactory'))), not(parameters('skipRoleGrants')))]",
+            "assignmentSeed": "[if(not(empty(parameters('dataFactoryPrincipalId'))), parameters('dataFactoryPrincipalId'), format('{0}/{1}/{2}', variables('effAdfSub'), variables('effAdfRg'), parameters('dataFactoryName')))]"
+          },
+          "resources": [
+            {
+              "condition": "[variables('grantActive')]",
+              "type": "Microsoft.Authorization/roleAssignments",
+              "apiVersion": "2022-04-01",
+              "scope": "[resourceId('Microsoft.KeyVault/vaults', parameters('keyVaultName'))]",
+              "name": "[guid(resourceGroup().id, parameters('keyVaultName'), variables('assignmentSeed'), variables('keyVaultSecretsUser'))]",
+              "properties": {
+                "roleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', variables('keyVaultSecretsUser'))]",
+                "principalId": "[if(not(empty(parameters('dataFactoryPrincipalId'))), parameters('dataFactoryPrincipalId'), if(variables('resolveFromFactory'), reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', variables('effAdfSub'), variables('effAdfRg')), 'Microsoft.DataFactory/factories', parameters('dataFactoryName')), '2018-06-01', 'full').identity.principalId, ''))]",
+                "principalType": "ServicePrincipal",
+                "description": "Data Factory MI: read Loom Connection secrets BY REFERENCE for auto-bound mirroring linked services (Snowflake password / private key)."
+              }
+            }
+          ],
+          "outputs": {
+            "granted": {
+              "type": "bool",
+              "metadata": {
+                "description": "True when the grant was actually made — false when skipped for a missing factory, missing vault, or skipRoleGrants."
+              },
+              "value": "[variables('grantActive')]"
+            },
+            "resolvedFromFactory": {
+              "type": "bool",
+              "metadata": {
+                "description": "True when the principal was resolved from the factory's coordinates rather than handed in — i.e. an adopted/attached factory that this deployment did not mint. The RoleAssignmentExists hazard in this module's header applies to exactly this case."
+              },
+              "value": "[variables('resolveFromFactory')]"
+            }
+          }
+        }
+      },
+      "dependsOn": [
+        "dlzAttach"
       ]
     },
     "dpPostgres": {

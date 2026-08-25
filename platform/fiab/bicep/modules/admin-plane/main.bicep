@@ -1552,10 +1552,10 @@ param loomAdfRg string = ''
 @description('Opt-in ADF CDC mirroring — name of the pre-existing ADF linked service for the relational SOURCE (Azure SQL / SQL Server / PostgreSQL). Empty = mirrored databases use the built-in CSV snapshot engine (still Azure-native, no Fabric).')
 param loomMirrorSourceLinkedService string = ''
 
-@description('Opt-in ADF CDC mirroring — name of the pre-existing ADF AzureBlobFS linked service pointing at the DLZ ADLS account (the Delta sink). Empty = mirrored databases use the built-in CSV snapshot engine.')
+@description('BROWNFIELD OVERRIDE, not a prerequisite. Name of an EXISTING ADF AzureBlobFS linked service to sink mirrors through. Empty (the default, and what every shipped estate has) makes Loom auto-create `loom_mirror_sink_adls` from LOOM_BRONZE_URL with factory managed-identity auth — see apps/fiab-console/lib/azure/mirror-adf-shared.ts. Set it only to keep a hand-tuned linked service (managed private endpoint / different account) that Loom must not clobber.')
 param loomMirrorAdlsLinkedService string = ''
 
-@description('Opt-in ADF Copy mirroring — name of the pre-existing ADF Snowflake linked service (credential in Key Vault). Empty = falls back to loomMirrorSourceLinkedService. Snowflake mirrors via an ADF Copy pipeline → ADLS Bronze Parquet, NO Fabric.')
+@description('BROWNFIELD OVERRIDE, not a prerequisite. Name of an EXISTING ADF Snowflake linked service (credential in Key Vault). Empty (the default) makes Loom build the SnowflakeV2 linked service from the mirror\'s Loom Connection — see apps/fiab-console/lib/azure/snowflake-adf.ts. Snowflake mirrors via an ADF Copy pipeline → ADLS Bronze Parquet, NO Fabric.')
 param loomMirrorSnowflakeLinkedService string = ''
 
 @description('Refresh cadence for the ADF Copy backend schedule trigger (Snowflake): 15min | 1h | 4h | daily | on-demand. Default 1h.')
@@ -4310,10 +4310,21 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             { name: 'LOOM_AAS_ENDPOINT', value: effectiveAasEndpoint }
             { name: 'LOOM_AAS_MODEL', value: effectiveAasModel }
             { name: 'LOOM_AAS_DATABASE', value: effectiveAasDatabase }
-            // Opt-in ADF CDC mirroring (no-Fabric Delta sink). When BOTH are set
-            // and LOOM_ADF_NAME is present, a mirrored-database Start provisions a
-            // real ADF ChangeDataCapture resource → ADLS Bronze Delta. Unset = the
-            // built-in CSV snapshot engine runs (still Azure-native, no Fabric).
+            // Mirroring linked-service bindings. Only ONE of these is a genuine
+            // prerequisite, and only for the ADF CDC engine:
+            //   LOOM_MIRROR_SOURCE_LINKED_SERVICE — an arbitrary relational
+            //     connector (SQL Server via a SHIR, Oracle via the on-prem
+            //     gateway, BigQuery with a service-account key). Its credentials
+            //     and network path are the operator's, so Loom cannot build it.
+            //     Unset = the built-in snapshot engine runs (still Azure-native).
+            //   LOOM_MIRROR_ADLS_LINKED_SERVICE — an OVERRIDE. Unset (every
+            //     shipped estate) = Loom auto-creates `loom_mirror_sink_adls`
+            //     from LOOM_BRONZE_URL with factory-MI auth.
+            //   LOOM_MIRROR_SNOWFLAKE_LINKED_SERVICE — an OVERRIDE. Unset = Loom
+            //     builds the SnowflakeV2 linked service from the mirror's Loom
+            //     Connection (snowflake-adf.ensureSnowflakeBinding).
+            // Both overrides exist for brownfield estates with hand-tuned linked
+            // services Loom must not clobber; neither is required to mirror.
             { name: 'LOOM_MIRROR_SOURCE_LINKED_SERVICE', value: loomMirrorSourceLinkedService }
             { name: 'LOOM_MIRROR_ADLS_LINKED_SERVICE', value: loomMirrorAdlsLinkedService }
             { name: 'LOOM_MIRROR_SNOWFLAKE_LINKED_SERVICE', value: loomMirrorSnowflakeLinkedService }

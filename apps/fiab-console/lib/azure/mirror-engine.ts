@@ -30,7 +30,7 @@ import { resolveSnowflakeLinkedService, snowflakeDatasetKind, listSnowflakeTable
 // The ADF Copy runtime (Snowflake) lives in its own module — see the header
 // there for why the edge is one-way. Shared primitives come from the leaf.
 import { runMirrorAdfCopy, adfCopyConfigured } from './mirror-adf-copy';
-import { BRONZE, MAX_TABLES, adfSafeName, mirrorAdlsLinkedService } from './mirror-adf-shared';
+import { BRONZE, MAX_TABLES, adfSafeName, ensureMirrorAdlsLinkedService } from './mirror-adf-shared';
 export { runMirrorAdfCopy, planCopyTrigger, type CopyTriggerPlan } from './mirror-adf-copy';
 
 
@@ -746,12 +746,21 @@ function mirrorSourceLinkedService(): string | null {
   return v && v.trim() ? v.trim() : null;
 }
 
-/** Is the opt-in ADF CDC path fully configured (factory + both linked services)? */
+/**
+ * Is the opt-in ADF CDC path fully configured?
+ *
+ * The factory plus the SOURCE linked service. The source is a genuine operator
+ * input — an arbitrary relational connector (SQL Server via a SHIR, Oracle
+ * through the on-prem gateway, BigQuery with a service-account key) whose
+ * credentials and network path only the operator has. The ADLS SINK is NOT: it is
+ * this deployment's own Bronze account, and it is auto-created at Start (see
+ * `ensureMirrorAdlsLinkedService`), so `LOOM_MIRROR_ADLS_LINKED_SERVICE` no
+ * longer participates in the decision.
+ */
 function adfCdcConfigured(): boolean {
   return !!process.env.LOOM_ADF_NAME
     && !adfCdcConfigGate()
-    && !!mirrorSourceLinkedService()
-    && !!mirrorAdlsLinkedService();
+    && !!mirrorSourceLinkedService();
 }
 
 /**
@@ -778,29 +787,41 @@ function adfCdcName(mirrorId: string): string {
  * Provision + start an ADF ChangeDataCapture resource that does an initial full
  * load followed by continuous CDC from the relational source into ADLS Bronze in
  * **Delta** format. Returns a MirrorRunResult carrying the CDC resource name (the
- * ADF run-id receipt) and per-table Delta landing paths. The two linked services
- * (relational source + AzureBlobFS) are pre-existing ADF linked services bound by
- * env var. Real ARM calls (upsertAdfCdc + startAdfCdc); failures surface verbatim.
+ * ADF run-id receipt) and per-table Delta landing paths. The SOURCE linked service
+ * is an operator input (an arbitrary relational connector); the AzureBlobFS SINK
+ * is auto-bound from this deployment's Bronze account. Real ARM calls
+ * (upsertAdfCdc + startAdfCdc); failures surface verbatim.
  */
 export async function runMirrorAdfCdc(
   mirrorId: string, workspaceId: string, src: MirrorSource, tableSpecs: MirrorTableSpec[], note: string,
 ): Promise<MirrorRunResult> {
   const sourceLs = mirrorSourceLinkedService();
-  const adlsLs = mirrorAdlsLinkedService();
   const adfGate = adfCdcConfigGate();
-  if (adfGate || !sourceLs || !adlsLs) {
+  if (adfGate || !sourceLs) {
     return {
       ok: false, status: 'Gated', backend: 'azure-native-cdc', engine: 'adf-cdc', tables: [],
       gate: {
-        missing: adfGate?.missing || 'LOOM_MIRROR_SOURCE_LINKED_SERVICE / LOOM_MIRROR_ADLS_LINKED_SERVICE',
+        missing: adfGate?.missing || 'LOOM_MIRROR_SOURCE_LINKED_SERVICE',
         message:
-          'ADF CDC mirroring needs the env-pinned factory plus two pre-existing ADF linked services: ' +
-          'set LOOM_MIRROR_SOURCE_LINKED_SERVICE to the relational source linked service and ' +
-          'LOOM_MIRROR_ADLS_LINKED_SERVICE to the AzureBlobFS linked service pointing at the DLZ ADLS account.',
+          'ADF CDC mirroring needs the env-pinned factory plus a source linked service Loom cannot build for you: ' +
+          'set LOOM_MIRROR_SOURCE_LINKED_SERVICE to the relational source linked service (its credentials and ' +
+          'network path are yours, not the platform\'s). The ADLS Bronze sink is NOT a prerequisite — Loom binds ' +
+          'it from this deployment\'s own lake.',
       },
       note,
     };
   }
+  // The Bronze sink, auto-created (auto-bind-by-default.md §5) and re-upserted
+  // every Start so an out-of-band delete self-heals (§3).
+  const sink = await ensureMirrorAdlsLinkedService();
+  if ('gate' in sink) {
+    return {
+      ok: false, status: 'Gated', backend: 'azure-native-cdc', engine: 'adf-cdc', tables: [],
+      gate: { missing: sink.gate.missing, message: sink.gate.message },
+      note,
+    };
+  }
+  const adlsLs = sink.linkedServiceName;
   if (!tableSpecs.length) {
     return {
       ok: false, status: 'Gated', backend: 'azure-native-cdc', engine: 'adf-cdc', tables: [],
@@ -940,12 +961,12 @@ export async function runMirrorSnapshot(
       return {
         ok: false, status: 'Gated', backend: 'azure-native-cdc', engine: 'adf-copy', tables: [],
         gate: {
-          missing: process.env.LOOM_ADF_NAME ? 'LOOM_MIRROR_ADLS_LINKED_SERVICE' : 'LOOM_ADF_NAME',
+          missing: 'LOOM_ADF_NAME',
           message:
-            'Snowflake mirroring runs on an ADF Copy runtime (no Microsoft Fabric). This deployment is missing ' +
-            `${process.env.LOOM_ADF_NAME ? 'the ADLS sink linked service (LOOM_MIRROR_ADLS_LINKED_SERVICE)' : 'the factory (LOOM_ADF_NAME)'}` +
-            ', which platform/fiab/bicep deploys. The Snowflake source linked service is NOT a prerequisite — ' +
-            "Loom builds it from the mirror's connection.",
+            'Snowflake mirroring runs on an ADF Copy runtime (no Microsoft Fabric). This deployment has no Data ' +
+            'Factory bound (LOOM_ADF_NAME), which platform/fiab/bicep deploys. Neither linked service is a ' +
+            "prerequisite — Loom builds the Snowflake source from the mirror's connection and the ADLS sink from " +
+            'this deployment’s Bronze account.',
         },
         note,
       };
@@ -975,14 +996,14 @@ export async function runMirrorSnapshot(
       message =
         'BigQuery mirrors via the Azure-native ADF copy backend (Google BigQuery V2 connector → ADLS Bronze). ' +
         'Configure the ADF CDC env vars (LOOM_ADF_NAME + LOOM_MIRROR_SOURCE_LINKED_SERVICE pointing at a ' +
-        'GoogleBigQueryV2 linked service holding the service-account key, + LOOM_MIRROR_ADLS_LINKED_SERVICE), ' +
-        'then Start. No Microsoft Fabric required.';
+        'GoogleBigQueryV2 linked service holding the service-account key), then Start. The ADLS Bronze sink is ' +
+        'bound for you. No Microsoft Fabric required.';
     } else if (src.sourceType === 'Oracle') {
       message =
         'Oracle mirrors via the Azure-native ADF copy backend (Oracle connector through the on-prem data ' +
         'gateway / self-hosted IR → ADLS Bronze). Configure the ADF CDC env vars (LOOM_ADF_NAME + ' +
         'LOOM_MIRROR_SOURCE_LINKED_SERVICE pointing at an Oracle linked service bound to the gateway with the ' +
-        'sync-user credential, + LOOM_MIRROR_ADLS_LINKED_SERVICE), then Start. No Microsoft Fabric required.';
+        'sync-user credential), then Start. The ADLS Bronze sink is bound for you. No Microsoft Fabric required.';
     }
     return {
       ok: false, status: 'Gated', backend: 'azure-native-cdc', tables: [],

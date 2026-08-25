@@ -15,7 +15,7 @@ import {
   adfCdcConfigGate, upsertDataset, upsertPipeline, runPipeline, upsertTrigger, startTrigger,
 } from './adf-client';
 import { pathToHttpsUrl } from './adls-client';
-import { BRONZE, MAX_TABLES, adfSafeName, mirrorAdlsLinkedService } from './mirror-adf-shared';
+import { BRONZE, MAX_TABLES, adfSafeName, ensureMirrorAdlsLinkedService } from './mirror-adf-shared';
 // The Snowflake backend: auto-binds its ADF linked service from the mirror's
 // Loom Connection and enumerates the source through the same runtime that
 // replicates it, so the table list can never disagree with what Copy can read.
@@ -51,14 +51,24 @@ function mirrorSnowflakeLinkedService(): string | null {
 }
 
 /**
- * Is the ADF Copy path usable? The factory + the ADLS sink are genuine infra
- * prerequisites (deployed by bicep). The SOURCE linked service is no longer one
- * — it is auto-bound from the connection at Start.
+ * Is the ADF Copy path usable?
+ *
+ * The FACTORY is the only genuine infra prerequisite (bicep deploys it). Neither
+ * linked service is one any more: the SOURCE is auto-bound from the mirror's
+ * connection (`snowflake-adf.resolveSnowflakeLinkedService`) and the ADLS SINK is
+ * auto-created from `LOOM_BRONZE_URL`
+ * (`mirror-adf-shared.ensureMirrorAdlsLinkedService`). This used to also require
+ * `LOOM_MIRROR_ADLS_LINKED_SERVICE`, which no shipped deployment sets — so the
+ * Snowflake path was gated shut on every estate by a value the platform could
+ * compose itself (auto-bind-by-default.md §5).
+ *
+ * The Bronze binding is checked by the caller (`mirror-engine`'s
+ * `bronzeConfigured()`), and again inside the sink ensure, so a lake-less
+ * deployment still gets one honest gate naming LOOM_BRONZE_URL.
  */
 export function adfCopyConfigured(): boolean {
   return !!process.env.LOOM_ADF_NAME
-    && !adfCdcConfigGate()
-    && !!mirrorAdlsLinkedService();
+    && !adfCdcConfigGate();
 }
 
 
@@ -126,28 +136,43 @@ export function planCopyTrigger(
  * 'snapshot' — register a schedule trigger that re-runs the copy on a cadence
  * (LOOM_MIRROR_COPY_CADENCE, default '1h'). Returns a MirrorRunResult carrying the
  * pipeline name (the ADF run-id receipt) + per-table Parquet landing paths. The
- * Snowflake source + AzureBlobFS sink are pre-existing ADF linked services bound
- * by env var. Real ARM calls; failures surface verbatim (no fake success).
+ * Snowflake source and the AzureBlobFS sink are BOTH auto-bound — the source from
+ * the mirror's Loom Connection, the sink from the deployment's Bronze account —
+ * so neither is an env var the operator has to discover. Real ARM calls; failures
+ * surface verbatim (no fake success).
  */
 export async function runMirrorAdfCopy(
   mirrorId: string, workspaceId: string, src: MirrorSource, tableSpecs: MirrorTableSpec[], note: string,
 ): Promise<MirrorRunResult> {
-  const adlsLs = mirrorAdlsLinkedService();
   const adfGate = adfCdcConfigGate();
-  if (adfGate || !adlsLs) {
+  if (adfGate) {
     return {
       ok: false, status: 'Gated', backend: 'azure-native-cdc', engine: 'adf-copy', tables: [],
       gate: {
-        missing: adfGate?.missing || 'LOOM_MIRROR_ADLS_LINKED_SERVICE',
+        missing: adfGate.missing,
         message:
-          'Snowflake mirroring runs on an ADF Copy runtime (no Microsoft Fabric). This deployment is missing the ' +
-          'factory or the ADLS sink linked service, both of which platform/fiab/bicep deploys: ' +
-          `${adfGate?.missing || 'LOOM_MIRROR_ADLS_LINKED_SERVICE'}. The Snowflake source linked service is NOT a ` +
-          "prerequisite — Loom builds it from the mirror's connection.",
+          'Snowflake mirroring runs on an ADF Copy runtime (no Microsoft Fabric). This deployment has no Data ' +
+          `Factory bound: ${adfGate.missing}. platform/fiab/bicep deploys it. Neither linked service is a ` +
+          "prerequisite — Loom builds the Snowflake source from the mirror's connection and the ADLS sink from " +
+          'the deployment’s Bronze account.',
       },
       note,
     };
   }
+
+  // ── Auto-bind the ADLS Bronze sink (auto-bind-by-default.md §5) ────────────
+  // Created here rather than demanded via LOOM_MIRROR_ADLS_LINKED_SERVICE, which
+  // no shipped deployment sets. Re-upserted every Start, so a sink deleted
+  // out-of-band self-heals (§3). An operator-pinned name still wins.
+  const sink = await ensureMirrorAdlsLinkedService();
+  if ('gate' in sink) {
+    return {
+      ok: false, status: 'Gated', backend: 'azure-native-cdc', engine: 'adf-copy', tables: [],
+      gate: { missing: sink.gate.missing, message: sink.gate.message },
+      note,
+    };
+  }
+  const adlsLs = sink.linkedServiceName;
 
   // ── Auto-bind the Snowflake linked service (auto-bind-by-default.md §5) ────
   // Built from the mirror's Loom Connection, named after it, and re-upserted on
@@ -365,7 +390,9 @@ export async function runMirrorAdfCopy(
   const adfNote =
     'Azure-native mirror via ADF Copy runtime (no Microsoft Fabric): each selected Snowflake table is ' +
     `delete-then-copied as Parquet into ADLS Bronze. Pipeline: ${pipelineName}. ` +
-    `Snowflake linked service: ${sourceLs}.${credNote}${tableNote}${triggerNote}`;
+    `Snowflake linked service: ${sourceLs}. ADLS sink linked service: ${adlsLs}` +
+    `${sink.pinned ? ' (pinned by LOOM_MIRROR_ADLS_LINKED_SERVICE)' : ' (auto-bound by Loom)'}.` +
+    `${credNote}${tableNote}${triggerNote}`;
   const lastSync = new Date().toISOString();
   const tables: MirrorTableResult[] = tableSpecsResolved.map((t) => {
 
