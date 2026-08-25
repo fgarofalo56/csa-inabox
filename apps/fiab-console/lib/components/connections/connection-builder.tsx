@@ -448,7 +448,12 @@ export function ConnectionBuilder({
                     : 'Stored in Key Vault — never saved in plaintext.'}>
                   {/* A PEM private key and a service-account JSON are multi-line
                       artifacts — a single-line password box mangles them. Both
-                      go to Key Vault by the same POST as every other secret. */}
+                      go to Key Vault by the same POST as every other secret.
+                      The placeholders below are deliberately prose, NOT sample
+                      artifacts: a literal PEM header, or a service-account JSON
+                      fragment carrying its quoted `type` field, gets bundled
+                      into .next and trips the image secret scan as a CRITICAL
+                      finding on every build (#4043). Keep them as instructions. */}
                   {authMethod === 'key-pair' || (type === 'bigquery' && authMethod === 'connection-string') ? (
                     <Textarea
                       resize="vertical"
@@ -456,7 +461,7 @@ export function ConnectionBuilder({
                       value={secret}
                       placeholder={isEdit && editConnection?.hasSecret
                         ? '(secret stored — leave blank to keep)'
-                        : authMethod === 'key-pair' ? '-----BEGIN PRIVATE KEY-----' : '{ "type": "service_account", … }'}
+                        : authMethod === 'key-pair' ? 'Paste the PEM private key' : 'Paste the full service-account JSON key file'}
                       onChange={(_, d) => setSecret(d.value)}
                     />
                   ) : (
