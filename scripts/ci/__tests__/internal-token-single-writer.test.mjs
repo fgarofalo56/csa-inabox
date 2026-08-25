@@ -443,3 +443,106 @@ test('enclosingBlock bounds the scan to the step, not the whole workflow', () =>
   assert.equal(end, lines.length);
   assert.deepEqual(checkResolverInvocation('deploy.yml', lines.join('\n')).failures, []);
 });
+
+/* ── Round 2: bypasses found by a SECOND independent review ────────────────
+ *
+ * The first cut of R3 called itself shape-keyed and was defeated four ways.
+ * These are the ways the SECOND reviewer defeated the fix for those four — the
+ * enumeration had simply stopped at braces, and `exec` was pinned to line-start.
+ * Every case below was measured GREEN through the real guard CLI, and measured
+ * in bash 5.3.15 to genuinely swallow the workflow command.
+ */
+
+for (const [label, open, close] of [
+  ['a for/done loop', 'for i in 1; do', 'done >/dev/null'],
+  ['an if/fi block', 'if true; then', 'fi >/dev/null'],
+  ['a case/esac piped', 'case x in x)', 'esac | tee /tmp/t'],
+  ['a while/done loop', 'while false; do', 'done | cat'],
+  ['done with an explicit fd', 'for i in 1; do', 'done 1>/dev/null'],
+  ['done closing a descriptor', 'for i in 1; do', 'done >&-'],
+  ['done redirecting to a var path', 'for i in 1; do', 'done > "$OUT"'],
+]) {
+  test(`ROUND2 MUTATION: ${label} swallows the mask → red`, () => {
+    const src = `
+      - name: Adopt
+        run: |
+          ${open}
+            bash scripts/csa-loom/resolve-internal-token.sh --github-env
+          ${close}
+`;
+    const r = checkResolverInvocation('deploy-fiab-commercial.yml', src);
+    assert.equal(r.invocations, 1, 'the invocation must still be COUNTED');
+    assert.ok(r.failures.length >= 1, `${label} must not pass`);
+  });
+}
+
+for (const [label, before] of [
+  ['after a semicolon', 'set -e; exec >/dev/null'],
+  ['after &&', 'true && exec >/dev/null'],
+  ['with an explicit fd', 'set -e; exec 1>/dev/null'],
+  ['inside a then-branch', 'if true; then exec >/dev/null; fi'],
+]) {
+  test(`ROUND2 MUTATION: exec ${label} → red`, () => {
+    // The first fix anchored exec on ^\s*, so anything sharing its line hid it.
+    const src = `
+      - name: Adopt
+        run: |
+          ${before}
+          bash scripts/csa-loom/resolve-internal-token.sh --github-env
+`;
+    const r = checkResolverInvocation('deploy-fiab-commercial.yml', src);
+    assert.ok(r.failures.length >= 1, `exec ${label} must not pass`);
+  });
+}
+
+test('ROUND2 FALSE POSITIVE: a `>` inside a quoted argument is not a redirect', () => {
+  // `--query "a > b"` on the same logical line turned the whole line red. A
+  // guard that cries wolf gets ignored, which costs more than the case it
+  // was protecting.
+  const r = checkResolverInvocation(
+    'x.yml',
+    lane('bash scripts/csa-loom/resolve-internal-token.sh --github-env && az x --query "a > b"'),
+  );
+  assert.deepEqual(r.failures, [], 'a quoted > must not be read as an operator');
+  assert.equal(r.invocations, 1);
+});
+
+test('ROUND2 FALSE POSITIVE: an unrelated `exec >` AFTER the invocation does not flag it', () => {
+  // In a plain .sh, enclosingBlock has no `run:` to anchor on and returns the
+  // whole file. An exec that runs LATER cannot have rebound fd 1 EARLIER.
+  const src = [
+    'bash scripts/csa-loom/resolve-internal-token.sh --github-env',
+    'exec >/dev/null',
+    'echo hi',
+  ].join('\n');
+  assert.deepEqual(checkResolverInvocation('x.sh', src).failures, []);
+});
+
+test('ROUND2: but an `exec >` BEFORE it in the same .sh still goes red', () => {
+  // The control for the case above — the fix must not have simply stopped
+  // scanning. A bound that silences both directions is not a bound.
+  const src = [
+    'exec >/dev/null',
+    'bash scripts/csa-loom/resolve-internal-token.sh --github-env',
+  ].join('\n');
+  assert.ok(checkResolverInvocation('x.sh', src).failures.length >= 1);
+});
+
+test('ROUND2: stripInlineComment survives a backslash-escaped quote', () => {
+  // `a "x\"y" # z` flipped the quote parity, the comment survived, and the mode
+  // was then read out of PROSE — partially resurrecting the defect this
+  // function exists to close.
+  assert.equal(stripInlineComment('a "x\\"y" # z'), 'a "x\\"y" ');
+  // An unterminated quote means the parity is unknowable; keep the whole line
+  // rather than guess, because wrongly stripping could hide a real flag.
+  assert.equal(stripInlineComment("a don't # z"), "a don't # z");
+});
+
+test('ROUND2 MUTATION: an escaped quote cannot launder the mode out of a comment', () => {
+  const r = checkResolverInvocation(
+    'x.yml',
+    lane('bash scripts/csa-loom/resolve-internal-token.sh "x\\"y" # --github-env'),
+  );
+  assert.ok(r.failures.length >= 1, 'the real mode is the default --export, which prints the token');
+  assert.match(r.failures.join('\n'), /PRINTS THE TOKEN/);
+});

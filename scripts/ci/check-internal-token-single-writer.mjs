@@ -28,23 +28,29 @@
  *      repo. The stderr `log()` lines survived the same redirect, so the log
  *      looked healthy the whole time.
  *
- *      R3 is keyed to the SHAPE, not to the spelling `> /dev/null`: a stdout
- *      redirect anywhere on the invocation's logical line (`>`, `>>`, `1>`,
- *      `&>`, `>&`, `> "$F"`, and with or without surrounding whitespace), a
- *      pipe, a mask-swallowing `$( )`, and a block-level `exec >` / `} >` /
- *      `) |` are all the same defect. The resolver is matched by BASENAME, so a
- *      relative or variable-built path cannot hide an invocation.
+ *      R3 keys on the SHAPE of the redirect rather than on the spelling
+ *      `> /dev/null`: a stdout redirect anywhere on the invocation's logical
+ *      line (`>`, `>>`, `1>`, `&>`, `>&`, `> "$F"`, with or without surrounding
+ *      whitespace), a pipe, a mask-swallowing `$( )`, an `exec >` before it,
+ *      and a redirect on the line that CLOSES its block (`}`, `)`, `done`,
+ *      `fi`, `esac`). The resolver is matched by BASENAME, so a relative path
+ *      or a `"$DIR/…"` prefix does not hide it.
  *
  *      `2>` is deliberately NOT flagged — moving stderr does not touch the
  *      mask.
  *
  *      STATED LIMITS, because a guard that overstates its reach is how the
- *      original defect survived review: R3 reasons about text, not about a
- *      shell. A redirect built at runtime (`bash "$SCRIPT" $REDIR`), an `exec`
- *      in a sourced file, or a wrapper that rebinds fd 1 in another process are
- *      all outside what it can see. The script's own fail-closed check is the
- *      second layer, and it detects `/dev/null` and regular files only — not a
- *      pipe, not a `$( )`, not a closed descriptor.
+ *      original defect survived review — and because the first cut of R3 DID
+ *      overstate, and was defeated four ways on the real lane files. R3 reasons
+ *      about text, not about a shell. Outside its reach:
+ *        - a redirect built at runtime (`R=">/dev/null"; bash script.sh $R`)
+ *        - an `exec` in a sourced file
+ *        - a path SPLICED across variables, where no single line carries the
+ *          basename (`N=resolve-internal; bash "$D/$N-token.sh"`)
+ *        - any wrapper that rebinds fd 1 in another process
+ *      The script's own fail-closed check is the second layer, and it detects
+ *      `/dev/null` and regular files on Linux only — not a pipe, not a `$( )`,
+ *      not a closed descriptor.
  *
  * ── WHY A STATIC GUARD AT ALL ────────────────────────────────────────────────
  * The live drift guard (loom-internal-token-drift.yml) catches divergence AFTER
@@ -221,17 +227,52 @@ export const STDOUT_REDIRECT = /(?<![02-9])>/;
 export const PIPE = /(?<!\|)\|(?!\|)/;
 
 /**
- * Shell redirections that move stdout for a WHOLE BLOCK rather than for one
- * command, and therefore never appear on the invocation's own logical line.
+ * Redirections that move stdout for a WHOLE BLOCK rather than for one command,
+ * split by the DIRECTION they must be scanned in — scanning both ways with one
+ * pattern is what produced a false positive on an unrelated later `exec`.
  *
- *   exec >/dev/null            — rebinds fd 1 for the rest of the script
- *   { … } >/dev/null           — the redirect rides the closing brace
- *   ( … ) | tee                — likewise for a subshell
+ * EXEC_REDIRECT rebinds fd 1 for everything AFTER it, so it only matters when it
+ * appears BEFORE the invocation. It is not anchored to line-start: `set -e; exec
+ * >/dev/null` and `true && exec >/dev/null` both swallow the mask, and both were
+ * invisible to a `^\s*exec` match.
  *
- * Each of these silently swallows the mask of an invocation that looks pristine
- * in isolation, which is why the per-line test alone was not enough.
+ * CLOSER_REDIRECT rides the line that CLOSES a compound command, so it only
+ * matters AFTER the invocation. The closers are not just `}` and `)`: measured
+ * in bash 5.3.15, `done`, `fi` and `esac` swallow the workflow command exactly
+ * the same way, and an enumeration that stopped at braces was the identical
+ * shape of blindness it was written to fix.
  */
-export const BLOCK_REDIRECT = /^\s*(?:exec\s+(?:[1&]\s*)?>|[})]\s*(?:[1&]?>|\|(?!\|)))/;
+export const EXEC_REDIRECT = /(?:^|[;&|]|\bthen\b|\bdo\b|\belse\b)\s*exec\s+(?:[1&]\s*)?>/;
+export const CLOSER_REDIRECT = /^\s*(?:[})]|done|fi|esac)\s*(?:[1&]?>|\|(?!\|))/;
+
+/**
+ * Blank out quoted spans so a `>` or `|` INSIDE an argument is not read as a
+ * redirect. `--query "a > b"` on the same logical line as an invocation used to
+ * turn the whole line red. A guard that cries wolf gets ignored, which costs
+ * more than the case it was protecting.
+ *
+ * Length is preserved so any index computed against the original still lines up.
+ *
+ * @param {string} text
+ * @returns {string}
+ */
+export function blankQuotedSpans(text) {
+  let out = '';
+  let quote = null;
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (quote) {
+      out += c === quote ? c : ' ';
+      if (c === quote) quote = null;
+    } else if (c === '"' || c === "'") {
+      quote = c;
+      out += c;
+    } else {
+      out += c;
+    }
+  }
+  return out;
+}
 
 /**
  * Strip an inline `#` comment so a comment cannot decide the verdict.
@@ -242,24 +283,36 @@ export const BLOCK_REDIRECT = /^\s*(?:exec\s+(?:[1&]\s*)?>|[})]\s*(?:[1&]?>|\|(?
  * PROSE outranked the one actually passed. That is a one-comment bypass of the
  * guard, on the single shape that prints the token straight into the log.
  *
- * Quoting is respected so a `#` inside a string is not treated as a comment.
+ * Quoting is respected so a `#` inside a string is not treated as a comment —
+ * and a BACKSLASH-ESCAPED quote no longer flips the parity, which is how
+ * `a "x\"y" # z` kept its comment and partially resurrected the defect above.
+ * An UNTERMINATED quote means the parity is unknowable, and the safe answer is
+ * "there is no comment here": keeping the whole line cannot hide a flag, while
+ * wrongly stripping one could.
  *
  * @param {string} text
  * @returns {string} text with any unquoted `#` tail removed
  */
 export function stripInlineComment(text) {
   let quote = null;
+  let cut = -1;
   for (let i = 0; i < text.length; i++) {
     const c = text[i];
+    if (c === '\\') {
+      i += 1; // the next character is literal, whatever it is
+      continue;
+    }
     if (quote) {
       if (c === quote) quote = null;
     } else if (c === '"' || c === "'") {
       quote = c;
     } else if (c === '#' && (i === 0 || /\s/.test(text[i - 1]))) {
-      return text.slice(0, i);
+      cut = i;
+      break;
     }
   }
-  return text;
+  if (quote !== null) return text; // unterminated quote — do not trust the parity
+  return cut >= 0 ? text.slice(0, cut) : text;
 }
 
 /**
@@ -294,15 +347,17 @@ export function classifyResolverInvocation(text) {
   // Redirects and pipes are tested across the WHOLE line, not just the tail.
   // `>/dev/null bash …resolve-internal-token.sh --github-env` is valid bash
   // (verified) and puts the redirect entirely to the LEFT of the invocation,
-  // where a tail-only test cannot see it.
+  // where a tail-only test cannot see it. Quoted spans are blanked first so a
+  // `>` inside an argument is not mistaken for an operator.
+  const bare = blankQuotedSpans(code)
   return {
     mode,
     // An unclosed `$(` or backtick to our left means our stdout is being
     // CAPTURED by the caller's shell rather than reaching the runner.
     captured: /\$\([^)]*$/.test(head) || /`[^`]*$/.test(head),
     evaled: /\beval\b/.test(head),
-    redirected: STDOUT_REDIRECT.test(code),
-    piped: PIPE.test(code),
+    redirected: STDOUT_REDIRECT.test(bare),
+    piped: PIPE.test(bare),
   };
 }
 
@@ -371,20 +426,38 @@ export function checkResolverInvocation(name, src) {
     }
 
     // A redirect on the ENCLOSING block never appears on the invocation's own
-    // line, and swallows the mask just as completely.
+    // line, and swallows the mask just as completely. The two directions are
+    // scanned separately: an `exec` only matters BEFORE the invocation, a
+    // closing-keyword redirect only AFTER. Scanning both ways for both shapes
+    // is what made an unrelated later `exec >` in a plain .sh flag a clean
+    // invocation.
     const [bs, be] = enclosingBlock(physical, line - 1);
-    let blockRedirected = false;
-    for (let i = bs; i < be && !blockRedirected; i++) {
+    const inv0 = line - 1;
+    const indent = (physical[inv0] || '').match(/^\s*/)[0].length;
+    let blockHit = null;
+
+    for (let i = bs; i < inv0 && !blockHit; i++) {
       if (isCommentLine(physical[i])) continue;
-      if (!BLOCK_REDIRECT.test(stripInlineComment(physical[i]))) continue;
-      blockRedirected = true;
+      const t = blankQuotedSpans(stripInlineComment(physical[i]));
+      if (EXEC_REDIRECT.test(t)) blockHit = i;
+    }
+    // Forward: stop after the first line dedented past the invocation — that is
+    // the closer of the block it sits in. Going further reaches siblings.
+    for (let i = inv0 + 1; i < be && !blockHit; i++) {
+      if (isCommentLine(physical[i])) continue;
+      const t = blankQuotedSpans(stripInlineComment(physical[i]));
+      if (CLOSER_REDIRECT.test(t)) blockHit = i;
+      if ((physical[i].match(/^\s*/)[0].length) < indent && physical[i].trim() !== '') break;
+    }
+
+    if (blockHit !== null) {
       failures.push(
-        `${at} sits in a block whose stdout is redirected at ${name}:${i + 1} ` +
-          `(\`${physical[i].trim()}\`). The invocation itself looks clean, which is exactly why this ` +
+        `${at} sits in a block whose stdout is redirected at ${name}:${blockHit + 1} ` +
+          `(\`${physical[blockHit].trim()}\`). The invocation itself looks clean, which is exactly why this ` +
           `has to be checked separately. ${R3_WHY}`,
       );
+      continue;
     }
-    if (blockRedirected) continue;
 
     if (inv.mode === '--github-env' && inv.captured) {
       failures.push(

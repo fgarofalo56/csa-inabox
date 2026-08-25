@@ -154,19 +154,28 @@ require_github_env() {
   fi
   # Fail CLOSED on the exact regression this mode exists to prevent.
   #
-  # LINUX ONLY, and gated on /proc rather than on a uname string. Measured on
-  # MSYS/Git Bash this test is wrong in BOTH directions: an untouched console
-  # stats as a regular file (false POSITIVE, which would break a Windows
-  # runner), and a `>/dev/null` presents fd 1 as a pipe (false NEGATIVE). Every
-  # deploy lane runs on ubuntu-latest, where `/dev/stdout -> /proc/self/fd/1`
-  # gives the semantics this reasons about.
+  # LINUX ONLY, gated on `uname`. An earlier revision gated on `[ -d /proc ]` and
+  # claimed that made it "Linux only" — /proc EXISTS on MSYS/Git Bash, so that
+  # gate excluded nothing and the comment asserted a mechanism that was not in
+  # effect. Measured matrix, verdict written on fd 3 so the probe cannot
+  # contaminate the descriptor it is measuring:
   #
-  # WHAT IT DOES NOT CATCH, stated rather than implied: a pipe, a `$( )`
-  # capture, a named FIFO, or a closed descriptor. Those are indistinguishable
-  # here from the runner's own pipe. The static guard R3 is what covers them;
-  # this is the second layer, not the only one.
+  #                       Linux (the runner)   MSYS / Git Bash
+  #   fd1 = pipe          clean                clean
+  #   fd1 = /dev/null     CAUGHT               clean   <- false NEGATIVE
+  #   fd1 = regular file  CAUGHT               CAUGHT
+  #   fd1 = >> file       CAUGHT               CAUGHT
+  #
+  # So on MSYS the check silently fails to catch the case it exists for. The
+  # console/tty direction could not be measured here (no /dev/tty available) and
+  # is NOT asserted either way. All four deploy lanes run on ubuntu-latest.
+  #
+  # WHAT IT DOES NOT CATCH ON ANY PLATFORM, stated rather than implied: a pipe,
+  # a `$( )` capture, a named FIFO, or a closed descriptor. Those are
+  # indistinguishable here from the runner's own pipe. The static guard R3 is
+  # what covers them; this is the second layer, not the only one.
   [ -n "${GITHUB_ACTIONS:-}" ] || return 0
-  [ -d /proc ] || return 0
+  [ "$(uname -s 2>/dev/null)" = "Linux" ] || return 0
   [ -e /dev/stdout ] || return 0
   local how=''
   if [ /dev/stdout -ef /dev/null ]; then

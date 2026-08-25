@@ -125,17 +125,18 @@ self-hosted runner, in Commercial and in Gov, with no extra hop.
 >   that no caller has any reason to redirect this mode.
 > * The script **fails closed** if its own stdout is `/dev/null` or a regular
 >   file. Measured limits, stated rather than implied: it does **not** detect a
->   pipe, a `$( )` capture, a named FIFO, or a closed descriptor — and under Git
->   Bash it is wrong in *both* directions (a plain console reads as a regular
->   file; a `>/dev/null` reads as clean). All four lanes run on `ubuntu-latest`,
->   where it is correct.
+>   pipe, a `$( )` capture, a named FIFO, or a closed descriptor. It is gated on
+>   `uname -s = Linux`, because measurement showed MSYS/Git Bash returns `clean`
+>   for a `>/dev/null` — a silent false negative. (The console/tty direction was
+>   not measurable and is not asserted.) All four lanes run on `ubuntu-latest`,
+>   where the matrix is correct in every case.
 > * `scripts/ci/check-internal-token-single-writer.mjs` **R3** refuses the shape
 >   at review time — a stdout redirect anywhere on the invocation's logical line,
->   a pipe, a mask-swallowing `$( )`, and a block-level `exec >` / `} >` / `) |`
->   — across `.github/**` and `scripts/**/*.sh`, matching the resolver by
->   basename so a relative or variable-built path cannot hide. It reasons about
->   text, not about a shell: a redirect assembled at runtime is outside its
->   reach.
+>   a pipe, a mask-swallowing `$( )`, an `exec >` before it, and a redirect on
+>   the line that CLOSES its block (`}`, `)`, `done`, `fi`, `esac`) — across
+>   `.github/**` and `scripts/**/*.sh`, matching the resolver by basename. It
+>   reasons about text, not about a shell: a redirect assembled at runtime, or a
+>   path spliced across several variables, is outside its reach.
 >
 > `--export` is the shell mode and **prints the token by design**; that is the
 > `eval` contract. Use it only as `eval "$(… --export)"`, never in a workflow
