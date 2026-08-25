@@ -18,6 +18,13 @@ const upsertPipeline = vi.fn(async (n: string) => ({ name: n }));
 const runPipeline = vi.fn(async () => ({ runId: 'run-1' }));
 const upsertTrigger = vi.fn(async (n: string) => ({ name: n }));
 const startTrigger = vi.fn(async () => {});
+const upsertLinkedService = vi.fn(async (n: string) => ({ name: n, properties: { type: 'SnowflakeV2' } }));
+const getLinkedService = vi.fn(async (n: string) => ({ name: n, properties: { type: 'SnowflakeV2' } }));
+const getPipelineRun = vi.fn(async () => ({ runId: 'run-1', pipelineName: 'p', status: 'Succeeded' as const }));
+// The Lookup that enumerates Snowflake. Tests override `.value` per case.
+const listActivityRuns = vi.fn(async () => ([
+  { activityRunId: 'a', activityName: 'ListTables', activityType: 'Lookup', output: { value: [] as unknown[] } },
+]));
 
 vi.mock('../adf-client', () => ({
   upsertAdfCdc: (...a: any[]) => upsertAdfCdc(...a),
@@ -27,6 +34,10 @@ vi.mock('../adf-client', () => ({
   runPipeline: (...a: any[]) => runPipeline(...a),
   upsertTrigger: (...a: any[]) => upsertTrigger(...a),
   startTrigger: (...a: any[]) => startTrigger(...a),
+  upsertLinkedService: (...a: any[]) => upsertLinkedService(...a),
+  getLinkedService: (...a: any[]) => getLinkedService(...a),
+  getPipelineRun: (...a: any[]) => getPipelineRun(...a),
+  listActivityRuns: (...a: any[]) => listActivityRuns(...a),
   listPipelineRuns: vi.fn(async () => []),
   adfConfigGate: () => null,
   adfCdcConfigGate: () =>
@@ -34,6 +45,23 @@ vi.mock('../adf-client', () => ({
       ? null
       : { missing: 'LOOM_ADF_NAME' },
 }));
+
+// The Snowflake connection the mirror binds. `secretRef` is a NAME, never a
+// value — the tests assert the linked service references it rather than
+// carrying a credential.
+const SNOW_CONN = {
+  id: 'conn-1234abcd', tenantId: 't1', name: 'demo snowflake', type: 'snowflake' as const,
+  authMethod: 'sql-password' as const, host: 'myorg-acct123', database: 'ANALYTICS',
+  warehouse: 'COMPUTE_WH', role: 'LOOM_RO', username: 'LOOM_SVC', secretRef: 'loom-conn-1234abcd',
+  createdAt: '', updatedAt: '',
+};
+const loadConnection = vi.fn(async () => SNOW_CONN as any);
+vi.mock('../connections-store', () => ({ loadConnection: (...a: any[]) => loadConnection(...a) }));
+vi.mock('../kv-secrets-client', () => ({
+  vaultUrl: () => 'https://kv-loom.vault.azure.net',
+  getKeyVaultSecretValue: vi.fn(async () => { throw new Error('tests must never resolve a secret value'); }),
+}));
+
 const uploadFile = vi.fn(async () => {});
 vi.mock('../adls-client', () => ({
   getAccountName: () => 'acct',
@@ -66,19 +94,22 @@ vi.mock('../cosmos-account-client', () => ({ listContainers: vi.fn(async () => [
 
 import { runMirrorAdfCopy, runMirrorSnapshot } from '../mirror-engine';
 
-const SNOW = { sourceType: 'Snowflake', server: 'acct.snowflakecomputing.com', database: 'ANALYTICS' };
+const SNOW = {
+  sourceType: 'Snowflake', server: 'myorg-acct123', database: 'ANALYTICS',
+  tenantId: 't1', connectionId: 'conn-1234abcd',
+};
 const TABLES = [{ schema: 'PUBLIC', table: 'ORDERS' }];
 
 describe('runMirrorAdfCopy (Snowflake)', () => {
   const saved = { ...process.env };
   beforeEach(() => {
-    for (const f of [upsertDataset, upsertPipeline, runPipeline, upsertTrigger, startTrigger]) f.mockClear();
+    for (const f of [upsertDataset, upsertPipeline, runPipeline, upsertTrigger, startTrigger, upsertLinkedService, getLinkedService, listActivityRuns, loadConnection]) f.mockClear();
     process.env.LOOM_ADF_NAME = 'adf-loom';
     process.env.LOOM_SUBSCRIPTION_ID = 'sub';
     process.env.LOOM_DLZ_RG = 'rg';
-    process.env.LOOM_MIRROR_SNOWFLAKE_LINKED_SERVICE = 'ls-snow';
     process.env.LOOM_MIRROR_ADLS_LINKED_SERVICE = 'ls-adls';
     process.env.LOOM_BRONZE_URL = 'https://acct.dfs.core.windows.net/bronze';
+    delete process.env.LOOM_MIRROR_SNOWFLAKE_LINKED_SERVICE;
     delete process.env.LOOM_MIRROR_COPY_CADENCE;
   });
   afterEach(() => { process.env = { ...saved }; });
@@ -96,7 +127,8 @@ describe('runMirrorAdfCopy (Snowflake)', () => {
     const acts = pipeSpec.properties.activities;
     expect(acts.map((a: any) => a.type)).toEqual(['Delete', 'Copy']);
     expect(acts[1].dependsOn[0].dependencyConditions).toEqual(['Succeeded']);
-    expect(acts[1].typeProperties.source.type).toBe('SnowflakeSource');
+    // The CURRENT connector, not the retired V1 one.
+    expect(acts[1].typeProperties.source.type).toBe('SnowflakeV2Source');
     expect(acts[1].typeProperties.sink.type).toBe('ParquetSink');
     // Initial load fired + ongoing schedule trigger started (default incremental).
     expect(runPipeline).toHaveBeenCalledTimes(1);
@@ -109,28 +141,164 @@ describe('runMirrorAdfCopy (Snowflake)', () => {
     expect(r.tables[0].openrowset).toContain("FORMAT = 'PARQUET'");
   });
 
+  it('AUTO-BINDS the Snowflake linked service from the connection — no env var needed', async () => {
+    // The whole point of the change: LOOM_MIRROR_SNOWFLAKE_LINKED_SERVICE is
+    // unset (see beforeEach) and the mirror still starts, because Loom builds
+    // the linked service itself (auto-bind-by-default.md §5).
+    const r = await runMirrorAdfCopy('abcd1234-ef', 'ws1', SNOW, TABLES, 'note');
+    expect(r.ok).toBe(true);
+
+    const snowLs = upsertLinkedService.mock.calls.find(
+      ([, spec]: any[]) => spec?.properties?.type === 'SnowflakeV2',
+    ) as any[];
+    expect(snowLs).toBeTruthy();
+    const tp = snowLs[1].properties.typeProperties;
+    // Every coordinate the ADF Snowflake connector documents as required.
+    expect(tp.accountIdentifier).toBe('myorg-acct123');
+    expect(tp.database).toBe('ANALYTICS');
+    expect(tp.warehouse).toBe('COMPUTE_WH');
+    expect(tp.user).toBe('LOOM_SVC');
+    expect(tp.role).toBe('LOOM_RO');
+    expect(tp.authenticationType).toBe('Basic');
+    // The credential is a Key Vault REFERENCE — a secret NAME, never a value.
+    expect(tp.password.type).toBe('AzureKeyVaultSecret');
+    expect(tp.password.secretName).toBe('loom-conn-1234abcd');
+    expect(JSON.stringify(snowLs[1])).not.toContain('SecureString');
+    // A Key Vault linked service was auto-bound for it to reference.
+    expect(upsertLinkedService.mock.calls.some(
+      ([, spec]: any[]) => spec?.properties?.type === 'AzureKeyVault',
+    )).toBe(true);
+    // The linked service is named after the Loom connection, not a random id.
+    expect(snowLs[0]).toContain('demo_snowflake');
+    expect(r.note).toContain(snowLs[0]);
+  });
+
+  it('key-pair auth maps onto privateKey, not password', async () => {
+    loadConnection.mockResolvedValueOnce({ ...SNOW_CONN, authMethod: 'key-pair' } as any);
+    await runMirrorAdfCopy('abcd1234-ef', 'ws1', SNOW, TABLES, 'note');
+    const snowLs = upsertLinkedService.mock.calls.find(
+      ([, spec]: any[]) => spec?.properties?.type === 'SnowflakeV2',
+    ) as any[];
+    const tp = snowLs[1].properties.typeProperties;
+    expect(tp.authenticationType).toBe('KeyPair');
+    expect(tp.privateKey.type).toBe('AzureKeyVaultSecret');
+    expect(tp.password).toBeUndefined();
+  });
+
+  it('honours an operator-pinned linked service instead of auto-binding', async () => {
+    // Brownfield estates hand-tune linked services (private endpoints, SHIRs).
+    // The env var must still win, and Loom must not clobber it.
+    process.env.LOOM_MIRROR_SNOWFLAKE_LINKED_SERVICE = 'ls-snow-handmade';
+    const r = await runMirrorAdfCopy('abcd1234-ef', 'ws1', SNOW, TABLES, 'note');
+    expect(r.ok).toBe(true);
+    expect(upsertLinkedService.mock.calls.some(
+      ([, spec]: any[]) => spec?.properties?.type === 'SnowflakeV2',
+    )).toBe(false);
+    const [, dsSpec] = upsertDataset.mock.calls[0] as any[];
+    expect(dsSpec.properties.linkedServiceName.referenceName).toBe('ls-snow-handmade');
+  });
+
+  it('a LEGACY V1 pinned linked service gets V1 dataset + source types', async () => {
+    // A SnowflakeV2Table on a V1 linked service is rejected by ADF, so the type
+    // is READ from the factory rather than assumed.
+    process.env.LOOM_MIRROR_SNOWFLAKE_LINKED_SERVICE = 'ls-snow-v1';
+    getLinkedService.mockResolvedValueOnce({ name: 'ls-snow-v1', properties: { type: 'Snowflake' } } as any);
+    await runMirrorAdfCopy('abcd1234-ef', 'ws1', SNOW, TABLES, 'note');
+    const [, dsSpec] = upsertDataset.mock.calls[0] as any[];
+    expect(dsSpec.properties.type).toBe('SnowflakeTable');
+    const [, pipeSpec] = upsertPipeline.mock.calls[0] as any[];
+    expect(pipeSpec.properties.activities[1].typeProperties.source.type).toBe('SnowflakeSource');
+  });
+
   it('syncMode=snapshot does a one-time load with NO schedule trigger', async () => {
-    const r = await runMirrorAdfCopy('id2', 'ws', { ...SNOW, syncMode: 'snapshot' }, TABLES, 'note');
+    const r = await runMirrorAdfCopy('id2', 'ws', { ...SNOW, syncMode: 'snapshot' as const }, TABLES, 'note');
     expect(r.ok).toBe(true);
     expect(runPipeline).toHaveBeenCalledTimes(1);
     expect(upsertTrigger).not.toHaveBeenCalled();
     expect(startTrigger).not.toHaveBeenCalled();
   });
 
-  it('gates honestly when the Snowflake linked service is unset', async () => {
-    delete process.env.LOOM_MIRROR_SNOWFLAKE_LINKED_SERVICE;
+  it('syncMode=continuous registers a 15-minute TUMBLING WINDOW, not a schedule', async () => {
+    // The three modes must be observably DIFFERENT in the factory, or the
+    // selector is decoration (no-vaporware.md).
+    const r = await runMirrorAdfCopy('id4', 'ws', { ...SNOW, syncMode: 'continuous' as const }, TABLES, 'note');
+    expect(r.ok).toBe(true);
+    const [, trgSpec] = upsertTrigger.mock.calls[0] as any[];
+    expect(trgSpec.properties.type).toBe('TumblingWindowTrigger');
+    expect(trgSpec.properties.typeProperties.frequency).toBe('Minute');
+    expect(trgSpec.properties.typeProperties.interval).toBe(15);
+    expect(trgSpec.properties.typeProperties.maxConcurrency).toBe(1);
+  });
+
+  it('gates honestly when the ADLS sink linked service is unset', async () => {
+    delete process.env.LOOM_MIRROR_ADLS_LINKED_SERVICE;
     const r = await runMirrorAdfCopy('id', 'ws', SNOW, TABLES, 'note');
     expect(r.ok).toBe(false);
     expect(r.status).toBe('Gated');
     expect(upsertPipeline).not.toHaveBeenCalled();
-    expect(r.gate?.message).toContain('LOOM_MIRROR_SNOWFLAKE_LINKED_SERVICE');
+    expect(r.gate?.message).toContain('LOOM_MIRROR_ADLS_LINKED_SERVICE');
+    // ...and it must NOT tell the operator to go make a Snowflake linked
+    // service, which is the thing Loom now does for them.
+    expect(r.gate?.message).not.toContain('set LOOM_MIRROR_SNOWFLAKE_LINKED_SERVICE');
   });
 
-  it('gates when no tables are selected', async () => {
-    const r = await runMirrorAdfCopy('id', 'ws', SNOW, [], 'note');
+  it('gates with a NAMED connection problem when the mirror has no connection', async () => {
+    const r = await runMirrorAdfCopy('id', 'ws', { ...SNOW, connectionId: undefined }, TABLES, 'note');
     expect(r.ok).toBe(false);
-    expect(r.gate?.missing).toBe('tables');
+    expect(r.gate?.missing).toBe('connectionId');
     expect(upsertPipeline).not.toHaveBeenCalled();
+  });
+
+  it('gates when the bound connection is not a Snowflake connection', async () => {
+    // The old wizard pointed Snowflake at `generic-sql`, which cannot carry an
+    // account identifier or warehouse. Say so instead of failing at run time.
+    loadConnection.mockResolvedValueOnce({ ...SNOW_CONN, type: 'generic-sql' } as any);
+    const r = await runMirrorAdfCopy('id', 'ws', SNOW, TABLES, 'note');
+    expect(r.ok).toBe(false);
+    expect(r.gate?.missing).toBe('snowflake-connection');
+    expect(r.gate?.message).toContain('generic-sql');
+  });
+
+  it('gates naming the exact missing Snowflake coordinate', async () => {
+    loadConnection.mockResolvedValueOnce({ ...SNOW_CONN, warehouse: undefined } as any);
+    const r = await runMirrorAdfCopy('id', 'ws', SNOW, TABLES, 'note');
+    expect(r.ok).toBe(false);
+    expect(r.gate?.missing).toContain('warehouse');
+  });
+
+  it('with NO table subset it enumerates the source and EXCLUDES Iceberg tables by default', async () => {
+    listActivityRuns.mockResolvedValueOnce([{
+      activityRunId: 'a', activityName: 'ListTables', activityType: 'Lookup',
+      output: {
+        value: [
+          { TABLE_SCHEMA: 'PUBLIC', TABLE_NAME: 'ORDERS', IS_ICEBERG: 'NO' },
+          { TABLE_SCHEMA: 'PUBLIC', TABLE_NAME: 'ICE_EVENTS', IS_ICEBERG: 'YES' },
+        ],
+      },
+    }] as any);
+    const r = await runMirrorAdfCopy('id5', 'ws', SNOW, [], 'note');
+    expect(r.ok).toBe(true);
+    expect(r.tables.map((t) => t.table)).toEqual(['ORDERS']);
+    expect(r.note).toContain('excluded 1 Snowflake-managed Iceberg table');
+  });
+
+  it('includeIcebergTables=true MIRRORS the Iceberg tables too', async () => {
+    // The toggle was declared on MirrorSource and plumbed through five routes
+    // while the engine never read it. This asserts it actually decides what
+    // replicates.
+    listActivityRuns.mockResolvedValueOnce([{
+      activityRunId: 'a', activityName: 'ListTables', activityType: 'Lookup',
+      output: {
+        value: [
+          { TABLE_SCHEMA: 'PUBLIC', TABLE_NAME: 'ORDERS', IS_ICEBERG: 'NO' },
+          { TABLE_SCHEMA: 'PUBLIC', TABLE_NAME: 'ICE_EVENTS', IS_ICEBERG: 'YES' },
+        ],
+      },
+    }] as any);
+    const r = await runMirrorAdfCopy('id6', 'ws', { ...SNOW, includeIcebergTables: true }, [], 'note');
+    expect(r.ok).toBe(true);
+    expect(r.tables.map((t) => t.table).sort()).toEqual(['ICE_EVENTS', 'ORDERS']);
+    expect(r.note).toContain('including 1 Snowflake-managed Iceberg table');
   });
 
   it('surfaces ADF pipeline authoring errors verbatim (no fake success)', async () => {
@@ -144,11 +312,11 @@ describe('runMirrorAdfCopy (Snowflake)', () => {
   it('Snowflake routes through runMirrorSnapshot into the Copy engine', async () => {
     const r = await runMirrorSnapshot('mid', 'ws', { ...SNOW, tables: TABLES });
     expect(r.engine).toBe('adf-copy');
-    expect(upsertPipeline).toHaveBeenCalledTimes(1);
     // Never touches the CDC resource.
     expect(upsertAdfCdc).not.toHaveBeenCalled();
   });
 });
+
 
 describe('PostgreSQL is never routed through the ADF CDC resource', () => {
   const saved = { ...process.env };

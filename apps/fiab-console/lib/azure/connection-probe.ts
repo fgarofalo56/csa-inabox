@@ -156,7 +156,37 @@ export async function probeConnection(input: ProbeInput): Promise<ProbeResult> {
   }
 
   // ── HTTPS-reachable hosts (Event Hubs / Service Bus / Key Vault / Cosmos) ────
+  // ── Snowflake ──────────────────────────────────────────────────────────────
+  // The account identifier (`myorg-account123`) resolves to a real host,
+  // `<accountIdentifier>.snowflakecomputing.com`. A DNS + TLS round-trip against
+  // it is a genuine check of the single field Snowflake connections most often
+  // get wrong, so it is worth doing rather than deferring everything to bind
+  // time. It proves REACHABILITY only — the login itself is exercised by the
+  // ADF linked service, and this message says so rather than implying more
+  // than it established (deploy-integrity.md R7).
+  if (type === 'snowflake') {
+    if (!host) return needHost();
+    const account = stripScheme(host).replace(/\.snowflakecomputing\.com$/i, '');
+    if (/[^A-Za-z0-9_.-]/.test(account)) {
+      return {
+        ok: false, status: 400,
+        error: `"${account}" is not a valid Snowflake account identifier.`,
+        hint: 'Use the organization-account form, e.g. myorg-account123 — not the full https://….snowflakecomputing.com URL.',
+      };
+    }
+    try {
+      const res = await fetchWithTimeout(
+        `https://${account}.snowflakecomputing.com`, { method: 'GET', redirect: 'manual' }, 8_000,
+      );
+      return {
+        ok: true, reachable: true,
+        detail: `Snowflake account "${account}" resolves and is reachable over the network (HTTP ${res.status}). The login, warehouse, and role are validated by the ADF Snowflake linked service when the mirror starts.`,
+      };
+    } catch (e) { return classifyReachError(e, redact, 'Snowflake account'); }
+  }
+
   if (HTTP_REACHABLE.has(type)) {
+
     if (!host) return needHost();
     try {
       const res = await fetchWithTimeout(toHttpsUrl(host), { method: 'GET', redirect: 'manual' }, 8_000);
