@@ -65,6 +65,27 @@ const SELF = 'apps/fiab-console/lib/auth/workspace-guard.ts';
  * modify a baselined file without migrating it. Keep SHORT.
  */
 const TOUCH_EXEMPT = new Map([
+  // #4031 touched this route ONLY to add the mirrored-database source-type /
+  // connection compatibility refusal to the create POST body, so a mirror can no
+  // longer be CREATED typed Azure SQL with a Snowflake connection bound — the
+  // binding that made the BFF read a Snowflake account identifier over TDS
+  // against a hostname the platform constructed. `git diff origin/main` on this
+  // file is that refusal block and nothing else; the owner-only `loadWs()` this
+  // baseline counts is UNTOUCHED.
+  //
+  // Migrating it WIDENS who may create a mirrored database in a workspace
+  // (owner-only point-read → the authorizeWorkspace ladder, which admits tenant
+  // admins and shared members). That is a security-surface change; #4031 wrote
+  // it, review caught that it was riding untested inside a P0 hotfix, and it was
+  // REVERTED back out and split to its own issue with a required per-role test.
+  // Same shape, and the same reason, as the `apps/[id]/install/route.ts` entry
+  // below — a deliberate access change belongs in its own PR.
+  //
+  // Falsifiable: `gh issue view 4059` is the split-out work, and its definition
+  // of done is the migration this exemption defers. DELETE THIS ENTRY when 4059
+  // lands — it is scoped to that one issue, not to the file forever.
+  ['apps/fiab-console/app/api/items/mirrored-database/route.ts',
+   '#4031: mirror source-type refusal added to POST body only; migrating the workspace gate WIDENS who may create — split to #4059'],
   // #3549/#3551 touched this route ONLY inside Phase-1 item creation, to backfill
   // the bundle definition onto a name-matched EXISTING item that carries none.
   // It reads and replaces THAT ITEM through the already-resolved `items`
