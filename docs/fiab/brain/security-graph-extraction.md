@@ -177,6 +177,15 @@ context — and not only the drift gate, which is not one.
 
 Coverage: `judged 911 / candidates 911`, ratio `1.0`, no incomplete detectors.
 
+**That ratio is population-weighted, not class-weighted, and the distinction is
+load-bearing.** `index.ts` gates `incomplete` on `candidates > 0 && ratio < 1`,
+so a zero-candidate detector can never be incomplete — the sweep reports `1.0`
+while **6 of the 9 classes measured nothing**. Class coverage is **3 of 9 kinds
+extracted**. The six POP findings carry that truth to the wire (which is the
+mitigation that matters, and it is asserted by an exact-count test), but a reader
+quoting the ratio alone would be quoting the wrong number. #3992's surface should
+render class coverage next to it.
+
 Two of the 16 C4 findings are the `.github` root's, both on
 `.github/scripts/__tests__/deploy-notify-failure.test.mjs`. They are the same
 shape as 6 of the pre-existing 14 (a `stdio: [… 'inherit' …]` literal inside a
