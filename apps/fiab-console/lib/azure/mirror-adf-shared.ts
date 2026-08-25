@@ -64,11 +64,14 @@ export function mirrorAdlsLinkedService(): string | null {
  * The DFS endpoint of the deployment's Bronze account, or null when the lake is
  * not wired.
  *
- * Sovereign-cloud correct by construction: the suffix comes from `dfsSuffix()`
- * (`dfs.core.windows.net` in Commercial/GCC, `dfs.core.usgovcloudapi.net` in
- * GCC-High/IL5/DoD), never a literal. `getAccountName()` throws when no
- * `LOOM_{BRONZE,SILVER,GOLD,LANDING}_URL` is configured, so it is guarded the
- * same way `mirror-engine.bronzeConfigured()` guards it.
+ * Sovereign-cloud correct by construction: the suffix comes from `dfsSuffix()`,
+ * which resolves the Commercial/GCC host in one boundary and the US-Government
+ * host in GCC-High / IL5 / DoD. No literal appears here — a hard-coded
+ * Commercial host is the exact defect this repo ratchets against, and it is what
+ * made every SQL mirror in a sovereign boundary bind to a hostname that does not
+ * resolve there. `getAccountName()` throws when no `LOOM_{BRONZE,SILVER,GOLD,
+ * LANDING}_URL` is configured, so it is guarded the same way
+ * `mirror-engine.bronzeConfigured()` guards it.
  */
 export function mirrorAdlsSinkUrl(): string | null {
   if (!process.env.LOOM_BRONZE_URL) return null;

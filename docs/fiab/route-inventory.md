@@ -2524,7 +2524,7 @@ silently downgrading the route.
 
 ## Backend signals (derived)
 
-446 module(s) ORIGINATE a backend label — the derivation read an
+445 module(s) ORIGINATE a backend label — the derivation read an
 Azure identifier out of them. Every other route/module below inherits through the
 call graph. Nothing in this section is a Loom module name someone typed: the
 modules are derived, and only the Microsoft-owned identifier vocabulary is seeded.
@@ -3177,7 +3177,6 @@ caps the NUMBER of cuts at three; it does not bound what one cut can hide.
 | `apps/fiab-console/lib/install/provisioners/kql-db.ts` | ADX |
 | `apps/fiab-console/lib/install/provisioners/lakehouse.ts` | Azure Storage, Fabric |
 | `apps/fiab-console/lib/install/provisioners/logic-app.ts` | Logic Apps |
-| `apps/fiab-console/lib/install/provisioners/mirrored-database.ts` | ADLS |
 | `apps/fiab-console/lib/install/provisioners/mirrored-databricks.ts` | Databricks |
 | `apps/fiab-console/lib/install/provisioners/notebook.ts` | Synapse |
 | `apps/fiab-console/lib/install/provisioners/prompt-flow.ts` | AML |
