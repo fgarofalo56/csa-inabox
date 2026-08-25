@@ -263,8 +263,19 @@ jobs:
         run: pip install ruff
 
       - name: Lint Python files
+        # NOT `ruff check domains/ scripts/ csa_platform/ tools/`. That form asks
+        # ruff to WALK those directories, and ruff respects .gitignore, whose
+        # line 34 is `data/` - so it silently skipped the nine tracked
+        # scripts/data/*.py files carrying 216 findings (10 of them F401).
+        # Measured: adding --no-respect-gitignore to the old command flipped it
+        # from RC=0 to RC=1 with exactly 216 errors.
+        #
+        # python_lint_scope.py passes ruff EXPLICIT tracked paths instead, and
+        # asserts every run that ruff opened all of them. It is the SAME module
+        # dev-loop/gates/validate-python.ps1 and test.yml run, so the three can
+        # no longer grade different files. See #3811; debt ratchet in #3990.
         run: |
-          ruff check domains/ scripts/ csa_platform/ tools/
+          python scripts/ci/python_lint_scope.py
 
   # -------------------------------------------------------------------------
   # Repository Hygiene Check

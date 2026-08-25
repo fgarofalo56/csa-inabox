@@ -9,32 +9,32 @@
  * vault + role to grant (no-vaporware.md).
  */
 import { NextRequest, NextResponse } from 'next/server';
-import { getSession } from '@/lib/auth/session';
 import {
   listConnections, createConnection, deleteConnection, authNeedsSecret,
   type ConnectionType, type AuthMethod,
 } from '@/lib/azure/connections-store';
+// Derived from the exhaustive label Records — never a hand-listed duplicate,
+// which is how Snowflake stayed un-creatable after it reached the union.
+import { CONNECTION_TYPES, AUTH_METHODS } from '@/lib/azure/connectable-types';
 import { apiError, apiServerError } from '@/lib/api/respond';
+import { withSession } from '@/lib/api/route-toolkit';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-const TYPES: ConnectionType[] = ['azure-sql', 'synapse-dedicated', 'synapse-serverless', 'databricks-sql', 'postgres', 'storage-adls', 'cosmos', 'generic-sql', 'adx', 'event-hub', 'service-bus', 'key-vault'];
-const METHODS: AuthMethod[] = ['entra-mi', 'sql-password', 'connection-string', 'account-key', 'service-principal'];
+const TYPES: ConnectionType[] = CONNECTION_TYPES;
+const METHODS: AuthMethod[] = AUTH_METHODS;
 
-export async function GET() {
-  const session = getSession();
-  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+
+export const GET = withSession(async (_req, { session }) => {
   try {
     return NextResponse.json({ ok: true, connections: await listConnections(session) });
   } catch (e: any) {
     return apiServerError(e);
   }
-}
+});
 
-export async function POST(req: NextRequest) {
-  const session = getSession();
-  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+export const POST = withSession(async (req: NextRequest, { session }) => {
   const body = await req.json().catch(() => ({} as any));
   const name = String(body?.name || '').trim();
   const type = body?.type as ConnectionType;
@@ -50,7 +50,13 @@ export async function POST(req: NextRequest) {
       name, type, authMethod,
       host: body?.host, database: body?.database, username: body?.username,
       spnTenantId: body?.spnTenantId, spnClientId: body?.spnClientId,
+      // Snowflake (warehouse/role/schema), BigQuery (projectId) and Oracle
+      // (serviceName/gateway) coordinates — all NON-SECRET, all persisted so the
+      // ADF linked service can be built from the connection alone.
+      warehouse: body?.warehouse, role: body?.role, schema: body?.schema,
+      projectId: body?.projectId, serviceName: body?.serviceName, gateway: body?.gateway,
       description: body?.description, secret: body?.secret,
+
       armResourceId: body?.armResourceId, subscriptionId: body?.subscriptionId,
       resourceGroup: body?.resourceGroup, location: body?.location,
       origin: body?.origin === 'existing' ? 'existing' : undefined,
@@ -60,11 +66,9 @@ export async function POST(req: NextRequest) {
     const status = e?.status || 500;
     return NextResponse.json({ ok: false, error: e?.message || String(e), missing: e?.missing }, { status });
   }
-}
+});
 
-export async function DELETE(req: NextRequest) {
-  const session = getSession();
-  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+export const DELETE = withSession(async (req: NextRequest, { session }) => {
   const id = req.nextUrl.searchParams.get('id');
   if (!id) return NextResponse.json({ ok: false, error: 'id required' }, { status: 400 });
   try {
@@ -75,4 +79,4 @@ export async function DELETE(req: NextRequest) {
     if (e?.status === 409) return apiError(e.message, 409, { dependents: e.dependents });
     return apiServerError(e);
   }
-}
+});

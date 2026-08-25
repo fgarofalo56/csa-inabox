@@ -469,6 +469,29 @@ var loomContainers = [
   // partition. createIfNotExists in cosmos-client.ts ensure() remains the hotfix
   // fallback. No TTL — a migration copy record is durable evidence.
   { name: 'migration-copy-jobs',   partitionKey: '/tenantId' }
+  // W9 (#3935) — Loom Brain GRAPH HISTORY. One doc per immutable, timestamped
+  // graph version, written ONLY when the estate graph semantically changed
+  // (`captureGraphVersion` content-addresses the projection and refuses to
+  // store a duplicate), so this grows with real estate churn rather than with
+  // the polling rate. It is the "before" that makes "an edge that should not
+  // have formed" a detectable event and makes a prune recommendation safe —
+  // a node unreachable across N consecutive versions, not in one snapshot.
+  //
+  // PK /estateId, NOT /tenantId: the Brain's graph is a property of the
+  // deployed ESTATE, not of a tenant inside it, and every history read is
+  // scoped to one estate → single physical partition.
+  //
+  // RETENTION, both halves, and they must stay in step with
+  // apps/fiab-console/lib/brain/history/retention.ts:
+  //   ttl 7776000 = 90 days — the BACKSTOP, for an estate that stops being
+  //     captured (count-based pruning only runs when something writes).
+  //   50 versions per estate — the PRIMARY bound, enforced on the write path
+  //     in captureGraphVersion, which returns the ids it deleted.
+  // A version is one ATOMIC document; a capture whose document would exceed
+  // 1.6 MB fails with a named remediation rather than truncating or chunking,
+  // because a half-written diff base reports mass deletion and reads as an
+  // outage. createIfNotExists in the store remains the hotfix fallback.
+  { name: 'brain-graph-versions',  partitionKey: '/estateId', ttl: 7776000 }
   // W10 (#3936) — Loom Brain FINDINGS + SCAN RUNS. Two document kinds in one
   // container, discriminated by `docType`:
   //   'finding'   one doc per detector+subject fingerprint, carrying its

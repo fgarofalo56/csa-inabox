@@ -22,14 +22,25 @@ export type ConnectionType =
   | 'azure-sql' | 'synapse-dedicated' | 'synapse-serverless' | 'databricks-sql'
   | 'postgres' | 'storage-adls' | 'cosmos' | 'generic-sql'
   | 'adx'
-  | 'event-hub' | 'service-bus' | 'key-vault';
+  | 'event-hub' | 'service-bus' | 'key-vault'
+  // ── Non-Azure mirrorable sources ────────────────────────────────────────
+  // Every source the mirrored-database wizard offers must have a creatable
+  // connection of its OWN shape. Before these existed the Snowflake / BigQuery
+  // / Oracle cards routed you to "New connection" and the source-type dropdown
+  // held Azure services only — a dead-end bind (auto-bind-by-default.md).
+  // Snowflake carries account/warehouse/role rather than a SQL server FQDN, so
+  // it cannot be faked with 'generic-sql'.
+  | 'snowflake' | 'bigquery' | 'oracle' | 'mysql';
+
 
 export type AuthMethod =
   | 'entra-mi'          // the Console managed identity (no secret)
   | 'sql-password'      // SQL/PG username + password (password → KV)
   | 'connection-string' // full connection string → KV
   | 'account-key'       // storage account key → KV
-  | 'service-principal';// Entra SPN: tenantId + clientId + clientSecret (secret → KV)
+  | 'service-principal' // Entra SPN: tenantId + clientId + clientSecret (secret → KV)
+  | 'key-pair';         // Snowflake KeyPair: user + PEM private key (key → KV)
+
 
 export interface LoomConnection {
   id: string;
@@ -43,6 +54,27 @@ export interface LoomConnection {
   username?: string;
   spnTenantId?: string;
   spnClientId?: string;
+  /**
+   * Snowflake: the default virtual warehouse for the session, the role to
+   * assume, and the default schema. All three are NON-SECRET and map 1:1 onto
+   * the ADF `SnowflakeV2` linked service typeProperties of the same name
+   * (https://learn.microsoft.com/azure/data-factory/connector-snowflake).
+   * `host` carries the Snowflake **accountIdentifier** (e.g. `myorg-account123`),
+   * which is the coordinate that reaches the source for that connector.
+   */
+  warehouse?: string;
+  role?: string;
+  schema?: string;
+  /** Google BigQuery: the GCP project that owns the dataset (`database` = dataset). */
+  projectId?: string;
+  /** Oracle: TNS service name / SID — the connectable "database" surrogate. */
+  serviceName?: string;
+  /**
+   * Oracle / on-prem sources: the self-hosted integration runtime (on-prem data
+   * gateway) that can reach the source. Bound as the linked service `connectVia`.
+   */
+  gateway?: string;
+
   /** KV secret name holding the password / connection string / key / SPN secret. */
   secretRef?: string;
   /**
@@ -80,7 +112,16 @@ export interface CreateConnectionInput {
   username?: string;
   spnTenantId?: string;
   spnClientId?: string;
+  /** Snowflake non-secret coordinates (see LoomConnection). */
+  warehouse?: string;
+  role?: string;
+  schema?: string;
+  /** BigQuery project / Oracle service name + gateway (see LoomConnection). */
+  projectId?: string;
+  serviceName?: string;
+  gateway?: string;
   description?: string;
+
   /** Non-secret Azure provenance for "Add existing" imports (ARG-discovered). */
   armResourceId?: string;
   subscriptionId?: string;
@@ -93,8 +134,10 @@ export interface CreateConnectionInput {
 
 /** Does this auth method require a secret in Key Vault? */
 export function authNeedsSecret(m: AuthMethod): boolean {
-  return m === 'sql-password' || m === 'connection-string' || m === 'account-key' || m === 'service-principal';
+  return m === 'sql-password' || m === 'connection-string' || m === 'account-key'
+    || m === 'service-principal' || m === 'key-pair';
 }
+
 
 export async function listConnections(session: SessionPayload): Promise<LoomConnectionView[]> {
   const c = await connectionsContainer();
@@ -131,7 +174,14 @@ export async function createConnection(session: SessionPayload, input: CreateCon
     username: input.username?.trim() || undefined,
     spnTenantId: input.spnTenantId?.trim() || undefined,
     spnClientId: input.spnClientId?.trim() || undefined,
+    warehouse: input.warehouse?.trim() || undefined,
+    role: input.role?.trim() || undefined,
+    schema: input.schema?.trim() || undefined,
+    projectId: input.projectId?.trim() || undefined,
+    serviceName: input.serviceName?.trim() || undefined,
+    gateway: input.gateway?.trim() || undefined,
     description: input.description?.trim() || undefined,
+
     armResourceId: input.armResourceId?.trim() || undefined,
     subscriptionId: input.subscriptionId?.trim() || undefined,
     resourceGroup: input.resourceGroup?.trim() || undefined,

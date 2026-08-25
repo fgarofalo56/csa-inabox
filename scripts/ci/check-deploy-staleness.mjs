@@ -455,6 +455,10 @@ export const WATCHED = [
       // same reason as on the sovereign lanes: an imported module is invisible to
       // every execution shape, #3787 included.
       'scripts/ci/_arm-absence.mjs',
+      // Same import edge, second module (#3786): the shared az-failure classifier
+      // that decides whether a failed read is transient (retry), denied, capacity
+      // or unknown. It gates whether the preflight retries or fails the deploy.
+      'scripts/ci/_az-failure-class.mjs',
     ],
     maxDays: 7,
   },
@@ -584,6 +588,10 @@ export const WATCHED = [
       // which is the point of sharing it — and the reason it has to be watched
       // alongside them rather than trusted to ride along.
       'scripts/ci/_arm-absence.mjs',
+      // Same import edge, second module (#3786): the shared az-failure classifier
+      // that decides whether a failed read is transient (retry), denied, capacity
+      // or unknown. It gates whether the preflight retries or fails the deploy.
+      'scripts/ci/_az-failure-class.mjs',
       // #3203 — Front Door answers 504 while the ACA private-endpoint connection
       // is Pending, so this decides whether the deployed sovereign estate is
       // reachable at all.
@@ -687,6 +695,10 @@ export const WATCHED = [
       // rather than trusted to ride along — the same argument the gcch entry
       // already makes for this file.
       'scripts/ci/_arm-absence.mjs',
+      // Same import edge, second module (#3786): the shared az-failure classifier
+      // that decides whether a failed read is transient (retry), denied, capacity
+      // or unknown. It gates whether the preflight retries or fails the deploy.
+      'scripts/ci/_az-failure-class.mjs',
     ],
     maxDays: 7,
   },
@@ -786,6 +798,10 @@ export const WATCHED = [
       // is the one class a coverage guard keyed on execution can never close.
       // Widening an execution matcher to try would be the wrong fix twice over.
       'scripts/ci/_arm-absence.mjs',
+      // Same import edge, second module (#3786): the shared az-failure classifier
+      // that decides whether a failed read is transient (retry), denied, capacity
+      // or unknown. It gates whether the preflight retries or fails the deploy.
+      'scripts/ci/_az-failure-class.mjs',
       // DELIBERATELY ABSENT, and named so the omission is a decision rather than
       // an oversight: deploy-classify.mjs, deploy-retry.mjs and
       // gov-verify-evidence.sh are CI_PLUMBING (see check-deploy-paths-coverage),

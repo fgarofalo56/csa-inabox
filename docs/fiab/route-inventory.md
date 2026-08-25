@@ -13,11 +13,11 @@ verdict is DERIVED, not name-matched — see "How the owner column is decided".
 
 | Metric | Count |
 | --- | ---: |
-| Total routes | 1686 |
+| Total routes | 1687 |
 | Public (no session) | 58 |
-| Session-only | 648 |
+| Session-only | 647 |
 | Owner-scoped | 675 |
-| Admin | 305 |
+| Admin | 307 |
 | Unknown (generator fails) | 0 |
 | Gated (backend config) | 496 |
 | Areas | 122 |
@@ -205,6 +205,7 @@ dispatch is invisible to it. Full limits: `scripts/ci/_route-backends.mjs`.
 | `admin/batch-labeling/route.ts` | GET POST | admin |  | Cosmos, Fabric, Microsoft Graph, Power BI, Purview |
 | `admin/bootstrap-catalogs/route.ts` | POST | admin |  | AI Search, Cosmos |
 | `admin/brain/graph/route.ts` | GET | admin |  | ARM, Container Apps, Resource Graph, Retail Prices API |
+| `admin/brain/history/route.ts` | GET POST | admin |  | ARM, Container Apps, Resource Graph |
 | `admin/brain/proposals/route.ts` | POST | admin |  | Azure Monitor, Cosmos |
 | `admin/capacity/chargeback/route.ts` | GET | admin |  | ARM, Azure Cache for Redis, Cosmos, Cost Management |
 | `admin/capacity/cost/route.ts` | GET | admin |  | ARM, Azure Cache for Redis, Cosmos, Cost Management, Microsoft Graph |
@@ -1235,7 +1236,7 @@ dispatch is invisible to it. Full limits: `scripts/ci/_route-backends.mjs`.
 | `items/azure-sql-database/[id]/firewall/route.ts` | GET POST DELETE | owner-scoped |  | ARM, Azure SQL, Cosmos, Microsoft Graph, PostgreSQL |
 | `items/azure-sql-database/[id]/get-data/route.ts` | POST | owner-scoped | ● | ADF, ARM, Azure SQL, Cosmos, Microsoft Graph, PostgreSQL, Resource Graph |
 | `items/azure-sql-database/[id]/maintenance-configs/route.ts` | GET | session-only |  | ARM, Azure Maintenance, Azure SQL |
-| `items/azure-sql-database/[id]/mirroring/route.ts` | POST | owner-scoped |  | ADF, ADLS, ARM, Azure Monitor, Azure SQL, Azure Storage, Cosmos, Managed Identity, Microsoft Graph, PostgreSQL, Resource Graph |
+| `items/azure-sql-database/[id]/mirroring/route.ts` | POST | owner-scoped |  | ADF, ADLS, ARM, Azure Monitor, Azure SQL, Azure Storage, Cosmos, Key Vault, Managed Identity, Microsoft Graph, PostgreSQL, Resource Graph |
 | `items/azure-sql-database/[id]/performance/route.ts` | POST | owner-scoped |  | Azure SQL, Cosmos, Microsoft Graph, PostgreSQL |
 | `items/azure-sql-database/[id]/principal-search/route.ts` | GET | session-only |  | Microsoft Graph |
 | `items/azure-sql-database/[id]/queries/route.ts` | GET POST DELETE | owner-scoped |  | Cosmos, Microsoft Graph |
@@ -1561,9 +1562,9 @@ dispatch is invisible to it. Full limits: `scripts/ci/_route-backends.mjs`.
 | `items/mirrored-database/[id]/sources/route.ts` | GET POST | owner-scoped |  | Cosmos, Microsoft Graph |
 | `items/mirrored-database/[id]/sql-endpoint/route.ts` | GET | owner-scoped |  | Azure SQL, Cosmos, Microsoft Graph, Synapse SQL |
 | `items/mirrored-database/[id]/state/route.ts` | POST | owner-scoped |  | ADF, ADLS, ARM, Azure Monitor, Azure SQL, Azure Storage, Cosmos, Key Vault, Managed Identity, Microsoft Graph, PostgreSQL, Resource Graph |
-| `items/mirrored-database/[id]/tables/route.ts` | GET | owner-scoped |  | ARM, Azure SQL, Cosmos, Key Vault, Microsoft Graph, PostgreSQL |
+| `items/mirrored-database/[id]/tables/route.ts` | GET | owner-scoped |  | ADF, ARM, Azure SQL, Cosmos, Key Vault, Microsoft Graph, PostgreSQL, Resource Graph |
 | `items/mirrored-database/route.ts` | GET POST | owner-scoped |  | Cosmos |
-| `items/mirrored-database/source-tables/route.ts` | POST | session-only |  | ARM, Azure SQL, Cosmos, PostgreSQL |
+| `items/mirrored-database/source-tables/route.ts` | POST | owner-scoped |  | ADF, ARM, Azure SQL, Cosmos, Key Vault, PostgreSQL, Resource Graph |
 | `items/mirrored-database/verify/route.ts` | POST | session-only | ● | Azure SQL |
 | `items/mirrored-databricks/[id]/catalog/route.ts` | GET | owner-scoped |  | Azure Monitor, Cosmos, Databricks, Microsoft Graph |
 | `items/mirrored-databricks/[id]/route.ts` | GET PATCH DELETE | owner-scoped |  | Cosmos, Microsoft Graph |
@@ -1930,7 +1931,7 @@ dispatch is invisible to it. Full limits: `scripts/ci/_route-backends.mjs`.
 | `marketplace/catalog/route.ts` | GET | session-only |  | APIM, ARM |
 | `marketplace/gate/route.ts` | GET | session-only |  | — |
 | `marketplace/mini-app/route.ts` | POST | owner-scoped |  | ADF, ADLS, ADX, AI Search, APIM, ARM, Azure SQL, Azure Storage, Compute, Cosmos, Microsoft Graph, PostgreSQL, Purview, Resource Graph, Synapse |
-| `marketplace/products/[id]/certify/route.ts` | POST | owner-scoped |  | ADX, Azure Monitor, Azure Networking, Container Apps, Cosmos, Cost Management, Log Analytics |
+| `marketplace/products/[id]/certify/route.ts` | POST | admin |  | ADX, Azure Monitor, Azure Networking, Container Apps, Cosmos, Cost Management, Log Analytics |
 | `marketplace/products/[id]/route.ts` | GET | session-only |  | Cosmos |
 | `marketplace/products/[id]/subscribe/route.ts` | POST | session-only |  | Cosmos |
 | `marketplace/products/route.ts` | GET POST | session-only |  | ADX, Azure Monitor, Azure Networking, Container Apps, Cosmos, Cost Management, Log Analytics |
@@ -2415,7 +2416,7 @@ dispatch is invisible to it. Full limits: `scripts/ci/_route-backends.mjs`.
 
 ## Authorization resolvers (derived)
 
-178 function(s) across 80 module(s) reach an owner / workspace-ACL
+184 function(s) across 83 module(s) reach an owner / workspace-ACL
 decision. Derived by `scripts/ci/_route-auth-scope.mjs` from the seeds above —
 nothing here is hand-maintained. A change to this list in a diff means the
 authorization surface moved.
@@ -2479,6 +2480,8 @@ authorization surface moved.
 | `apps/fiab-console/lib/azure/kusto-client.ts` | `loadKustoItem` |
 | `apps/fiab-console/lib/azure/linguistic-schema.ts` | `readSynonyms`, `writeSynonyms` |
 | `apps/fiab-console/lib/azure/mcp-config-store.ts` | `getMcpServer`, `updateMcpServerTestResult` |
+| `apps/fiab-console/lib/azure/mirror-adf-copy.ts` | `runMirrorAdfCopy` |
+| `apps/fiab-console/lib/azure/mirror-engine.ts` | `restartMirrorSnapshot`, `runMirrorSnapshot` |
 | `apps/fiab-console/lib/azure/model-binding.ts` | `loadModelItem`, `persistModelBinding`, `resolveModelBinding` |
 | `apps/fiab-console/lib/azure/model-serving-item.ts` | `loadServingItem`, `persistServingItem`, `resolveServingItem` |
 | `apps/fiab-console/lib/azure/pipeline-binding.ts` | `loadPipelineItem`, `persistBinding`, `resolveBinding` |
@@ -2486,6 +2489,7 @@ authorization surface moved.
 | `apps/fiab-console/lib/azure/report-export-label.ts` | `applySensitivityStamp` |
 | `apps/fiab-console/lib/azure/report-model-resolver.ts` | `buildConnectionExecutor`, `resolveReportModel`, `resolveSemanticModel` |
 | `apps/fiab-console/lib/azure/search-binding.ts` | `loadSearchItem`, `persistSearchBinding`, `resolveSearchBinding` |
+| `apps/fiab-console/lib/azure/snowflake-adf.ts` | `ensureSnowflakeBinding`, `listSnowflakeTables`, `resolveSnowflakeLinkedService` |
 | `apps/fiab-console/lib/azure/tabular-eval-client.ts` | `getModelItem`, `listMeasures`, `listModels`, `listTables`, `warmSemanticModel` |
 | `apps/fiab-console/lib/azure/workspace-grants.ts` | `evaluateCosmosGrant` |
 | `apps/fiab-console/lib/clients/embed-codes-client.ts` | `revokeEmbedCode` |
@@ -2520,7 +2524,7 @@ silently downgrading the route.
 
 ## Backend signals (derived)
 
-448 module(s) ORIGINATE a backend label — the derivation read an
+449 module(s) ORIGINATE a backend label — the derivation read an
 Azure identifier out of them. Every other route/module below inherits through the
 call graph. Nothing in this section is a Loom module name someone typed: the
 modules are derived, and only the Microsoft-owned identifier vocabulary is seeded.
@@ -3023,6 +3027,7 @@ caps the NUMBER of cuts at three; it does not bound what one cut can hide.
 | `apps/fiab-console/lib/azure/workspace-identity-client.ts` | Azure RBAC, Managed Identity |
 | `apps/fiab-console/lib/azure/workspace-roles-client.ts` | Azure RBAC, Fabric |
 | `apps/fiab-console/lib/brain/detectors/cost-model.ts` | Retail Prices API |
+| `apps/fiab-console/lib/brain/history/cosmos-store.ts` | Cosmos |
 | `apps/fiab-console/lib/brain/run/azure/arg-graph-source.ts` | Container Apps, Resource Graph |
 | `apps/fiab-console/lib/brain/run/azure/arm-probe.ts` | Resource Graph |
 | `apps/fiab-console/lib/brain/run/cosmos-finding-store.ts` | Cosmos |

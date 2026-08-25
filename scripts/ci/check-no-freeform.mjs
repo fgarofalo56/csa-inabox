@@ -2122,6 +2122,60 @@ export const ACCEPTED = [
       'is why the sibling Dropdown offers "inline JSON" as the alternative rather than a picker.',
   },
   {
+    file: 'apps/fiab-console/lib/components/connections/connection-builder.tsx',
+    sites: 4,
+    kind: 'byo',
+    ref: 'auto-bind-by-default.md §Allowed',
+    why:
+      'The dialog that creates a Loom Connection to a data source. All four sites are credentials or ' +
+      'identifiers on a system Loom does not own, which is the class this file\'s own doc-comment names ' +
+      'first: "a customer\'s Snowflake account". :453 (Textarea) and :463 (password Input) are ONE field ' +
+      'rendered two ways — a Snowflake password or SQL login, versus a PEM private key / Google ' +
+      'service-account JSON, which a single-line password box mangles. Nothing could enumerate either: ' +
+      'they are minted in the customer\'s Snowflake / Oracle / BigQuery tenant, and until one is supplied ' +
+      'Loom holds no credential for the source at all, so no discovery call is even possible. This is ' +
+      'already the compliant storage shape and matches loom-app-runtime-editor.tsx above: the value is ' +
+      'POSTed once, createConnection() writes it to Key Vault via putKeyVaultSecret(), Cosmos keeps only ' +
+      'the secretRef (a NAME), and it is never rendered back — in edit mode the field is blank with ' +
+      '"(secret stored — leave blank to keep)" and a hint that names Key Vault. The ADF linked service ' +
+      'Loom auto-binds then references that secret BY NAME, so the value never leaves the vault. ' +
+      ':437/:438 are the Entra tenant + application ids of a service principal the CUSTOMER registered ' +
+      'for their own source — the same pair, for the same reason, that git-integration.tsx is accepted ' +
+      'for, and cross-tenant by construction (a Loom connection may address a source outside the ' +
+      'deployment\'s directory, and per cloud-parity.md a GCC-High deployment reaching a commercial ' +
+      'source definitionally is). SEPARATELY AND HONESTLY: those two ids are persisted by ' +
+      'connections-store.ts and read by NOTHING that mints a token — connection-auth.ts states outright ' +
+      'that "service-principal / account-key are not TDS logins" and falls back to the Console UAMI. ' +
+      'That is the identical finding git-integration.tsx recorded as #3588, and it is a no-vaporware ' +
+      'question about whether the service-principal option works at all, NOT a no-freeform one — which ' +
+      'is why the fields were measured and reported rather than quietly deleted to clear a gate.',
+  },
+  {
+    file: 'apps/fiab-console/lib/editors/components/mirror-source-wizard.tsx',
+    sites: 2,
+    kind: 'byo',
+    ref: 'auto-bind-by-default.md §Allowed',
+    why:
+      'The address of the SOURCE a mirror replicates FROM — a system in the customer\'s estate, by ' +
+      'definition not one Loom provisions. :636 is an Oracle listener host reached through an on-prem ' +
+      'data gateway; nothing in Azure can enumerate a customer\'s on-prem Oracle. :675 is the generic ' +
+      'server/database pair, which also serves SQL Server 2016-2022, SQL Server 2025 and open mirroring ' +
+      '— on-prem and cross-tenant sources with no ARG projection. ' +
+      'THE ENUMERABLE CASE IS ALREADY A PICKER, which is the same reason workspace-egress-pane.tsx is ' +
+      'accepted below: step 2 of this wizard is a connection Dropdown plus "New connection", and ' +
+      'add-existing-wizard.tsx fills that list from GET /api/azure/connectables — a real Azure Resource ' +
+      'Graph discovery run with the USER\'s delegated token. When a connection is bound BOTH inputs go ' +
+      '`disabled` and take their value from it (`disabled={!!pickedConn?.host}`), so the platform has ' +
+      'already done the binding and the free-text is only reachable on the path where no discovery call ' +
+      'could have answered. ' +
+      'REJECTED ALTERNATIVE, stated rather than skipped: deleting the free-text and REQUIRING a ' +
+      'connection would clear both sites, and until #4024 gave Snowflake / BigQuery / Oracle a real ' +
+      'ConnectionType it was not even possible. It is still wrong — connection-auth.ts deliberately ' +
+      'supports a mirror with NO connectionId, authenticating as the Console UAMI, and removing the ' +
+      'field would delete that working path. Breaking a capability to clear a lint counter is a worse ' +
+      'outcome than this entry.',
+  },
+  {
     file: 'apps/fiab-console/lib/editors/loom-app-runtime-editor.tsx',
     sites: 1,
     kind: 'byo',

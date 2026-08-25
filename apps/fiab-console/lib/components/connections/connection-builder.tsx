@@ -13,12 +13,13 @@ import { clientFetch } from '@/lib/client-fetch';
  * existing stored secret unchanged.
  */
 
-import { useState, useCallback, useEffect } from 'react';
+import { useState, useCallback, useEffect, useMemo } from 'react';
 import {
   Dialog, DialogSurface, DialogBody, DialogTitle, DialogContent, DialogActions,
-  Field, Input, Dropdown, Option, Button, MessageBar, MessageBarBody,
+  Field, Input, Textarea, Dropdown, Option, OptionGroup, Button, MessageBar, MessageBarBody,
   Caption1, Spinner, makeStyles, tokens,
 } from '@fluentui/react-components';
+
 import {
   DatabasePlugConnected20Regular, Key20Regular, ShieldKeyhole20Regular, Edit20Regular,
 } from '@fluentui/react-icons';
@@ -29,25 +30,55 @@ export interface ConnectionView {
   id: string; name: string; type: string; authMethod: string; hasSecret: boolean;
   host?: string; database?: string; username?: string;
   spnTenantId?: string; spnClientId?: string; description?: string;
+  /** Snowflake non-secret coordinates (warehouse / role / default schema). */
+  warehouse?: string; role?: string; schema?: string;
+  /** BigQuery project id · Oracle service name + on-prem gateway (SHIR). */
+  projectId?: string; serviceName?: string; gateway?: string;
 }
 
-const TYPES: { value: string; label: string }[] = [
-  { value: 'azure-sql', label: 'Azure SQL Database' },
-  { value: 'synapse-dedicated', label: 'Synapse — Dedicated SQL pool' },
-  { value: 'synapse-serverless', label: 'Synapse — Serverless SQL' },
-  { value: 'databricks-sql', label: 'Databricks SQL' },
-  { value: 'postgres', label: 'PostgreSQL' },
-  { value: 'storage-adls', label: 'ADLS Gen2 / Storage' },
-  { value: 'cosmos', label: 'Azure Cosmos DB' },
-  { value: 'adx', label: 'Azure Data Explorer (Kusto)' },
-  { value: 'event-hub', label: 'Event Hubs' },
-  { value: 'service-bus', label: 'Service Bus' },
-  { value: 'key-vault', label: 'Key Vault' },
-  { value: 'generic-sql', label: 'Generic SQL Server' },
+/**
+ * Every creatable source type, grouped so the picker reads like the Azure /
+ * Fabric "new connection" galleries: Azure services first, then the non-Azure
+ * databases Loom can mirror.
+ *
+ * WHY THE NON-AZURE GROUP EXISTS: the mirrored-database wizard has always
+ * offered Snowflake, Google BigQuery and Oracle source cards, but this list held
+ * Azure services ONLY — so "New connection" from a Snowflake mirror could not
+ * produce a Snowflake connection. That is the dead-end bind
+ * `auto-bind-by-default.md` forbids: a surface that demands a connection and
+ * offers no way to create the one it needs. Every source in MIRROR_SOURCES now
+ * has a creatable connection of its own shape.
+ */
+const TYPES: { value: string; label: string; group: 'azure' | 'other' }[] = [
+  { value: 'azure-sql', label: 'Azure SQL Database', group: 'azure' },
+  { value: 'synapse-dedicated', label: 'Synapse — Dedicated SQL pool', group: 'azure' },
+  { value: 'synapse-serverless', label: 'Synapse — Serverless SQL', group: 'azure' },
+  { value: 'databricks-sql', label: 'Databricks SQL', group: 'azure' },
+  { value: 'postgres', label: 'PostgreSQL', group: 'azure' },
+  { value: 'mysql', label: 'MySQL', group: 'azure' },
+  { value: 'storage-adls', label: 'ADLS Gen2 / Storage', group: 'azure' },
+  { value: 'cosmos', label: 'Azure Cosmos DB', group: 'azure' },
+  { value: 'adx', label: 'Azure Data Explorer (Kusto)', group: 'azure' },
+  { value: 'event-hub', label: 'Event Hubs', group: 'azure' },
+  { value: 'service-bus', label: 'Service Bus', group: 'azure' },
+  { value: 'key-vault', label: 'Key Vault', group: 'azure' },
+  { value: 'generic-sql', label: 'Generic SQL Server', group: 'azure' },
+  { value: 'snowflake', label: 'Snowflake', group: 'other' },
+  { value: 'bigquery', label: 'Google BigQuery', group: 'other' },
+  { value: 'oracle', label: 'Oracle Database', group: 'other' },
 ];
+
+const GROUP_LABEL: Record<'azure' | 'other', string> = {
+  azure: 'Azure services',
+  other: 'Other databases',
+};
+
 
 /** Types whose connection target is an account/namespace/vault host, not a SQL server + database. */
 const HOSTLESS_DB_TYPES = new Set(['storage-adls', 'event-hub', 'service-bus', 'key-vault']);
+
+/** Snowflake carries account/warehouse/role instead of a bare server + database. */
+const SNOWFLAKE = 'snowflake';
 
 function hostLabel(type: string): string {
   switch (type) {
@@ -55,6 +86,9 @@ function hostLabel(type: string): string {
     case 'event-hub': case 'service-bus': return 'Namespace / host';
     case 'key-vault': return 'Vault / host';
     case 'adx': return 'Cluster URI';
+    case SNOWFLAKE: return 'Account identifier';
+    case 'bigquery': return 'GCP project id';
+    case 'oracle': return 'Host (and :port if not 1521)';
     default: return 'Server / host';
   }
 }
@@ -65,7 +99,28 @@ function hostPlaceholder(type: string): string {
     case 'service-bus': return 'mybus.servicebus.windows.net';
     case 'key-vault': return 'myvault.vault.azure.net';
     case 'adx': return 'https://mycluster.eastus.kusto.windows.net';
+    case SNOWFLAKE: return 'myorg-account123';
+    case 'bigquery': return 'my-gcp-project';
+    case 'oracle': return 'oracle.contoso.com:1521';
+    case 'mysql': return 'myserver.mysql.database.azure.com';
     default: return 'myserver.database.windows.net';
+  }
+}
+/** The per-type hint under the host field — grounded in the connector's own docs. */
+function hostHint(type: string): string | undefined {
+  switch (type) {
+    case SNOWFLAKE:
+      return 'The Snowflake account with its organization, exactly as the ADF SnowflakeV2 connector wants it — e.g. myorg-account123 (not the full .snowflakecomputing.com URL).';
+    case 'bigquery': return 'The Google Cloud project that owns the dataset.';
+    case 'oracle': return 'The Oracle listener host, reached through the on-prem data gateway below.';
+    default: return undefined;
+  }
+}
+function databaseLabel(type: string): string {
+  switch (type) {
+    case 'bigquery': return 'Dataset';
+    case SNOWFLAKE: return 'Database';
+    default: return 'Database';
   }
 }
 
@@ -75,7 +130,32 @@ const METHODS: { value: string; label: string; hint: string }[] = [
   { value: 'connection-string', label: 'Connection string', hint: 'The full connection string is stored in Key Vault.' },
   { value: 'account-key', label: 'Account key', hint: 'Storage account key is stored in Key Vault.' },
   { value: 'service-principal', label: 'Service principal (Entra app)', hint: 'Client secret is stored in Key Vault.' },
+  { value: 'key-pair', label: 'Key pair (PEM private key)', hint: 'The PEM private key is stored in Key Vault. Snowflake KeyPair authentication.' },
 ];
+
+/**
+ * Auth methods offered per source type. A method a source cannot actually use
+ * is not shown — offering Entra MI for Snowflake would produce a connection
+ * that can never log in, which is worse than an absent option. Types absent
+ * from this map keep the full list (the Azure services, which all accept the
+ * historical set).
+ */
+const TYPE_AUTH_METHODS: Record<string, string[]> = {
+  snowflake: ['sql-password', 'key-pair'],
+  bigquery: ['connection-string'],
+  oracle: ['sql-password', 'connection-string'],
+  mysql: ['sql-password', 'entra-mi'],
+};
+
+/** Per-type override for the secret field's label, so it names the real artifact. */
+function secretLabelFor(type: string, authMethod: string): string {
+  if (authMethod === 'key-pair') return 'Private key (PEM)';
+  if (type === 'bigquery' && authMethod === 'connection-string') return 'Service-account key (JSON)';
+  return authMethod === 'connection-string' ? 'Connection string'
+    : authMethod === 'account-key' ? 'Account key'
+    : authMethod === 'service-principal' ? 'Client secret' : 'Password';
+}
+
 
 const useStyles = makeStyles({
   body: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, minWidth: '460px' },
@@ -106,7 +186,15 @@ export function ConnectionBuilder({
   const [username, setUsername] = useState('');
   const [spnTenantId, setSpnTenantId] = useState('');
   const [spnClientId, setSpnClientId] = useState('');
+  // Snowflake non-secret coordinates (ADF SnowflakeV2 typeProperties).
+  const [warehouse, setWarehouse] = useState('');
+  const [role, setRole] = useState('');
+  const [schema, setSchema] = useState('');
+  // Oracle: TNS service name + the self-hosted IR that reaches the source.
+  const [serviceName, setServiceName] = useState('');
+  const [gateway, setGateway] = useState('');
   const [secret, setSecret] = useState('');
+
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   // "Test connection" state — a real reachability probe via POST /api/connections/test.
@@ -126,25 +214,58 @@ export function ConnectionBuilder({
       setUsername(editConnection.username || '');
       setSpnTenantId(editConnection.spnTenantId || '');
       setSpnClientId(editConnection.spnClientId || '');
+      setWarehouse(editConnection.warehouse || '');
+      setRole(editConnection.role || '');
+      setSchema(editConnection.schema || '');
+      setServiceName(editConnection.serviceName || '');
+      setGateway(editConnection.gateway || '');
       setSecret('');
       setErr(null);
     } else {
       setName(''); setType(lockType || 'azure-sql'); setAuthMethod('entra-mi');
       setHost(''); setDatabase(''); setUsername(''); setSpnTenantId(''); setSpnClientId('');
+      setWarehouse(''); setRole(''); setSchema(''); setServiceName(''); setGateway('');
       setSecret(''); setErr(null);
     }
   }, [open, editConnection, lockType]);
 
-  const needsSecret = ['sql-password', 'connection-string', 'account-key', 'service-principal'].includes(authMethod);
-  const secretLabel = authMethod === 'connection-string' ? 'Connection string'
-    : authMethod === 'account-key' ? 'Account key'
-    : authMethod === 'service-principal' ? 'Client secret' : 'Password';
+
+  const needsSecret = ['sql-password', 'connection-string', 'account-key', 'service-principal', 'key-pair'].includes(authMethod);
+  const secretLabel = secretLabelFor(type, authMethod);
+
+  // Methods this source type can actually use. Snowflake/BigQuery/Oracle each
+  // accept a narrower set than the Azure services, and an option that could
+  // never authenticate is not offered (no-vaporware.md).
+  const methodsForType = useMemo(
+    () => (TYPE_AUTH_METHODS[type] ? METHODS.filter((m) => TYPE_AUTH_METHODS[type].includes(m.value)) : METHODS),
+    [type],
+  );
+
+  // Changing the source type must never leave a stale, unusable auth method
+  // selected — snap to the first method the new type supports. Create mode only:
+  // in edit mode the type is locked, so the stored method stays authoritative.
+  useEffect(() => {
+    if (isEdit) return;
+    if (!methodsForType.some((m) => m.value === authMethod)) {
+      setAuthMethod(methodsForType[0]?.value || 'entra-mi');
+    }
+  }, [methodsForType, authMethod, isEdit]);
+
+  const isSnowflake = type === SNOWFLAKE;
+  const isOracle = type === 'oracle';
+
 
   // In create mode, secret is required. In edit mode it is optional (blank = keep existing).
   const secretRequired = needsSecret && !isEdit;
   // Every source type except a bare connection string reaches a host/namespace/
-  // account — require it (matches Azure/Fabric, which block save without a server).
-  const hostRequired = authMethod !== 'connection-string';
+  // account — require it (matches Azure/Fabric, which block save without a
+  // server). BigQuery is the exception to the exception: it authenticates with a
+  // service-account JSON *and* still needs the GCP project id to address data.
+  const hostRequired = authMethod !== 'connection-string' || type === 'bigquery';
+  // Snowflake's ADF connector requires accountIdentifier + database + warehouse;
+  // a connection missing any of the three cannot produce a valid linked service,
+  // so the dialog blocks save rather than storing one that fails at run time.
+  const snowflakeReady = !isSnowflake || (!!host.trim() && !!database.trim() && !!warehouse.trim());
 
   // A stale "Test" result must never linger after the coordinates change — clear
   // it whenever any probed field changes so the badge always reflects the form.
@@ -160,6 +281,7 @@ export function ConnectionBuilder({
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
           type, authMethod, host, database, username,
+          warehouse, role, schema, serviceName, gateway,
           secret: needsSecret && secret ? secret : undefined,
           id: isEdit ? editConnection?.id : undefined,
         }),
@@ -170,7 +292,8 @@ export function ConnectionBuilder({
     } catch (e: any) {
       setTestError({ error: e?.message || String(e) });
     } finally { setTesting(false); }
-  }, [type, authMethod, host, database, username, secret, needsSecret, isEdit, editConnection]);
+  }, [type, authMethod, host, database, username, warehouse, role, schema, serviceName, gateway, secret, needsSecret, isEdit, editConnection]);
+
 
   const canTest = !testing && !busy && !(hostRequired && !host.trim())
     && !(secretRequired && !secret);
@@ -180,7 +303,11 @@ export function ConnectionBuilder({
     try {
       if (isEdit && editConnection) {
         // PATCH — only send fields that changed; never send an empty secret (would wipe KV).
-        const body: Record<string, unknown> = { name, host, database, username, spnTenantId, spnClientId, authMethod };
+        const body: Record<string, unknown> = {
+          name, host, database, username, spnTenantId, spnClientId, authMethod,
+          warehouse, role, schema, serviceName, gateway,
+        };
+
         if (needsSecret && secret) body.secret = secret;
         const r = await clientFetch(`/api/connections/${encodeURIComponent(editConnection.id)}`, {
           method: 'PATCH', headers: { 'content-type': 'application/json' },
@@ -194,7 +321,12 @@ export function ConnectionBuilder({
         // POST — create new connection.
         const r = await clientFetch('/api/connections', {
           method: 'POST', headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({ name, type, authMethod, host, database, username, spnTenantId, spnClientId, secret: needsSecret ? secret : undefined }),
+          body: JSON.stringify({
+            name, type, authMethod, host, database, username, spnTenantId, spnClientId,
+            warehouse, role, schema, serviceName, gateway,
+            secret: needsSecret ? secret : undefined,
+          }),
+
         });
         const j = await r.json();
         if (!r.ok || !j.ok) { setErr(j?.error || `HTTP ${r.status}`); return; }
@@ -203,7 +335,8 @@ export function ConnectionBuilder({
       }
     } catch (e: any) { setErr(e?.message || String(e)); }
     finally { setBusy(false); }
-  }, [isEdit, editConnection, name, type, authMethod, host, database, username, spnTenantId, spnClientId, secret, needsSecret, onCreated, onSaved, onClose]);
+  }, [isEdit, editConnection, name, type, authMethod, host, database, username, spnTenantId, spnClientId, warehouse, role, schema, serviceName, gateway, secret, needsSecret, onCreated, onSaved, onClose]);
+
 
   const typeLabel = TYPES.find((t) => t.value === type)?.label || type;
   const methodObj = METHODS.find((m) => m.value === authMethod);
@@ -226,37 +359,79 @@ export function ConnectionBuilder({
               <Field label="Source type" required>
                 <Dropdown value={typeLabel} selectedOptions={[type]} disabled={!!lockType || isEdit}
                   onOptionSelect={(_, d) => setType(d.optionValue || 'azure-sql')}>
-                  {TYPES.map((t) => {
-                    const TypeIcon = itemVisual(CONN_TILE_SLUG[t.value as keyof typeof CONN_TILE_SLUG] ?? t.value).icon;
+                  {(['azure', 'other'] as const).map((g) => {
+                    const inGroup = TYPES.filter((t) => t.group === g);
+                    if (!inGroup.length) return null;
                     return (
-                      <Option key={t.value} value={t.value} text={t.label}><TypeIcon /> {t.label}</Option>
+                      <OptionGroup key={g} label={GROUP_LABEL[g]}>
+                        {inGroup.map((t) => {
+                          const TypeIcon = itemVisual(CONN_TILE_SLUG[t.value as keyof typeof CONN_TILE_SLUG] ?? t.value).icon;
+                          return (
+                            <Option key={t.value} value={t.value} text={t.label}><TypeIcon /> {t.label}</Option>
+                          );
+                        })}
+                      </OptionGroup>
                     );
                   })}
                 </Dropdown>
               </Field>
               <Field label="Authentication" required hint={methodObj?.hint}>
                 <Dropdown value={methodObj?.label || ''} selectedOptions={[authMethod]}
-                  onOptionSelect={(_, d) => setAuthMethod(d.optionValue || 'entra-mi')}>
-                  {METHODS.map((m) => <Option key={m.value} value={m.value}>{m.label}</Option>)}
+                  onOptionSelect={(_, d) => setAuthMethod(d.optionValue || methodsForType[0]?.value || 'entra-mi')}>
+                  {methodsForType.map((m) => <Option key={m.value} value={m.value}>{m.label}</Option>)}
                 </Dropdown>
               </Field>
 
-              {authMethod !== 'connection-string' && (
+
+              {(authMethod !== 'connection-string' || hostRequired) && (
                 <>
-                  <Field label={hostLabel(type)} required={hostRequired}>
+                  <Field label={hostLabel(type)} required={hostRequired} hint={hostHint(type)}>
                     <Input value={host} placeholder={hostPlaceholder(type)} onChange={(_, d) => setHost(d.value)} />
                   </Field>
                   {!HOSTLESS_DB_TYPES.has(type) && (
-                    <Field label="Database">
-                      <Input value={database} placeholder="mydb" onChange={(_, d) => setDatabase(d.value)} />
+                    <Field label={databaseLabel(type)} required={isSnowflake}>
+                      <Input value={database} placeholder={type === 'bigquery' ? 'analytics' : 'mydb'} onChange={(_, d) => setDatabase(d.value)} />
                     </Field>
                   )}
                 </>
               )}
 
-              {authMethod === 'sql-password' && (
-                <Field label="Username"><Input value={username} onChange={(_, d) => setUsername(d.value)} /></Field>
+              {/* Snowflake — the ADF SnowflakeV2 connector's own coordinates.
+                  Warehouse is required (it is the compute the session runs on);
+                  role and schema are optional session defaults. */}
+              {isSnowflake && (
+                <>
+                  <Field label="Warehouse" required hint="The virtual warehouse the mirroring session runs on.">
+                    <Input value={warehouse} placeholder="COMPUTE_WH" onChange={(_, d) => setWarehouse(d.value)} />
+                  </Field>
+                  <Field label="Role" hint="Optional — the Snowflake role to assume. Needs USAGE on the database and SELECT on the tables to mirror.">
+                    <Input value={role} placeholder="ACCOUNTADMIN" onChange={(_, d) => setRole(d.value)} />
+                  </Field>
+                  <Field label="Schema" hint="Optional — the default schema for the session.">
+                    <Input value={schema} placeholder="PUBLIC" onChange={(_, d) => setSchema(d.value)} />
+                  </Field>
+                </>
               )}
+
+              {/* Oracle reaches its source through an on-prem data gateway. */}
+              {isOracle && (
+                <>
+                  <Field label="Service name / SID" hint="The TNS service name (e.g. ORCLPDB1).">
+                    <Input value={serviceName} placeholder="ORCLPDB1" onChange={(_, d) => setServiceName(d.value)} />
+                  </Field>
+                  <Field label="On-prem data gateway (SHIR)" hint="The self-hosted integration runtime that can reach this Oracle listener.">
+                    <Input value={gateway} placeholder="loom-onprem-ir" onChange={(_, d) => setGateway(d.value)} />
+                  </Field>
+                </>
+              )}
+
+              {(authMethod === 'sql-password' || authMethod === 'key-pair') && (
+                <Field label="Username" required={isSnowflake}
+                  hint={isSnowflake ? 'The Snowflake login name the mirror connects as.' : undefined}>
+                  <Input value={username} onChange={(_, d) => setUsername(d.value)} />
+                </Field>
+              )}
+
               {authMethod === 'service-principal' && (
                 <>
                   <Field label="Directory (tenant) id"><Input value={spnTenantId} onChange={(_, d) => setSpnTenantId(d.value)} /></Field>
@@ -271,15 +446,31 @@ export function ConnectionBuilder({
                   hint={isEdit
                     ? 'Leave blank to keep the stored secret unchanged. Enter a new value to rotate it in Key Vault.'
                     : 'Stored in Key Vault — never saved in plaintext.'}>
-                  <Input
-                    type="password"
-                    contentBefore={<Key20Regular />}
-                    value={secret}
-                    placeholder={isEdit && editConnection?.hasSecret ? '(secret stored — leave blank to keep)' : undefined}
-                    onChange={(_, d) => setSecret(d.value)}
-                  />
+                  {/* A PEM private key and a service-account JSON are multi-line
+                      artifacts — a single-line password box mangles them. Both
+                      go to Key Vault by the same POST as every other secret. */}
+                  {authMethod === 'key-pair' || (type === 'bigquery' && authMethod === 'connection-string') ? (
+                    <Textarea
+                      resize="vertical"
+                      rows={4}
+                      value={secret}
+                      placeholder={isEdit && editConnection?.hasSecret
+                        ? '(secret stored — leave blank to keep)'
+                        : authMethod === 'key-pair' ? '-----BEGIN PRIVATE KEY-----' : '{ "type": "service_account", … }'}
+                      onChange={(_, d) => setSecret(d.value)}
+                    />
+                  ) : (
+                    <Input
+                      type="password"
+                      contentBefore={<Key20Regular />}
+                      value={secret}
+                      placeholder={isEdit && editConnection?.hasSecret ? '(secret stored — leave blank to keep)' : undefined}
+                      onChange={(_, d) => setSecret(d.value)}
+                    />
+                  )}
                 </Field>
               )}
+
               {authMethod === 'entra-mi' && (
                 <Caption1 className={s.methodHint}>
                   <ShieldKeyhole20Regular style={{ verticalAlign: 'middle', marginRight: tokens.spacingHorizontalXS }} />
@@ -315,7 +506,8 @@ export function ConnectionBuilder({
             <Button
               appearance="primary"
               icon={isEdit ? <Edit20Regular /> : <Key20Regular />}
-              disabled={busy || !name.trim() || (secretRequired && !secret) || (hostRequired && !host.trim())}
+              disabled={busy || !name.trim() || (secretRequired && !secret) || (hostRequired && !host.trim()) || !snowflakeReady}
+
               onClick={submit}>
               {busy ? 'Saving…' : (isEdit ? 'Save changes' : 'Create connection')}
             </Button>
