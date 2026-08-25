@@ -139,6 +139,27 @@ jobs:
           # empty string — and the issue body then asserted the second. That is
           # the UNKNOWN-reported-as-NEGATIVE class; the cause is now measured, not
           # guessed. Still best-effort: this never fails the step.
+          #
+          # WHAT THE VERDICT IS ALLOWED TO KNOW (#4065).
+          #
+          # These four variables ARE the verdict's evidence set, and they are
+          # initialised to `not-attempted` on purpose: until a query has run,
+          # the honest state is "we have not looked", never "there is nothing
+          # there". Each block below moves its own state to exactly one of
+          # row/rows | zero-rows | query-failed, and scripts/ci/
+          # synthetic-monitor-verdict.mjs refuses to convert any of the three
+          # non-data states into a claim about the journeys.
+          #
+          # The log text travels by FILE, never by shell string: a Playwright
+          # error line carrying a backtick or `${` has already killed a step in
+          # this workflow once (see the github-script note below).
+          UAT_STATE=not-attempted
+          UAT_FILE=$(mktemp)
+          UAT_RC=0
+          J_STATE=not-attempted
+          J_FILE=$(mktemp)
+          J_RC=0
+
           LA_ERR=$(mktemp)
           WS=$(az monitor log-analytics workspace list -g "$RG_NAME" \
             --query "[?starts_with(name, 'law-csa-loom-')]|[0].customerId" -o tsv 2>"$LA_ERR" | tr -d '\r' || echo "")
@@ -163,14 +184,19 @@ jobs:
             QRC=$?
             set -e
             RESULT=$(printf '%s' "$RAW" | tr -d '\r')
+            UAT_RC=$QRC
             if [[ -n "$RESULT" ]]; then
+              UAT_STATE=row
+              printf '%s' "$RESULT" > "$UAT_FILE"
               echo "::notice::$RESULT"
               echo "loom-synthetic-monitor: $RESULT" >> "$GITHUB_STEP_SUMMARY"
               echo "uat_result=$RESULT" >> "$GITHUB_OUTPUT"
             elif [[ $QRC -ne 0 ]]; then
+              UAT_STATE=query-failed
               echo "::warning::The UAT_RESULT query FAILED (rc=$QRC) — so 'no result' here is unknown, not negative. az stderr:"
               sed 's/^/  /' "$QERR" >&2 || true
             else
+              UAT_STATE=zero-rows
               echo "::notice::No UAT_RESULT row yet for $JOB_NAME (query succeeded, zero rows — ingestion typically lags a few minutes)."
             fi
           fi
@@ -194,7 +220,10 @@ jobs:
             JRC=$?
             set -e
             JOURNEYS=$(printf '%s' "$JRAW" | tr -d '\r')
+            J_RC=$JRC
             if [[ -n "$JOURNEYS" ]]; then
+              J_STATE=rows
+              printf '%s\n' "$JOURNEYS" > "$J_FILE"
               echo "::group::Per-journey console lines (last 2h)"
               echo "$JOURNEYS"
               echo "::endgroup::"
@@ -216,16 +245,54 @@ jobs:
               # wrong in a way a terminal will not show you.
               echo "journey_lines=$(printf '%s' "$JOURNEYS" | awk '{ printf "%s%s", (NR>1 ? " | " : ""), $0 }' | cut -c1-800)" >> "$GITHUB_OUTPUT"
             elif [[ $JRC -ne 0 ]]; then
+              J_STATE=query-failed
               echo "::warning::The per-journey log query FAILED (rc=$JRC) — 'no journey lines' below is unknown, not negative."
               sed 's/^/  /' "$JERR" >&2 || true
             else
+              J_STATE=zero-rows
               echo "::notice::No 'synthetic J' console lines in the last 2h (query succeeded, zero rows)."
             fi
           fi
 
-          if [[ "$STATUS" != "Succeeded" ]]; then
-            echo "::error::Synthetic journeys FAILED (status=$STATUS, execution $EXEC) — realFails>0 (the runner exits non-zero only on real code/login failures; honest infra gates exit 0). Inspect ContainerAppConsoleLogs_CL (ContainerAppName_s=='$JOB_NAME') for the failing journey + the Journeys tab on /admin/health."
-            exit 1
+          # THE VERDICT (#4065) — say what was MEASURED, not what was guessed.
+          #
+          # This block used to close every non-Succeeded run with
+          #   "Synthetic journeys FAILED (…) — realFails>0 … Inspect
+          #    ContainerAppConsoleLogs_CL … + the Journeys tab on /admin/health"
+          # and it printed exactly that on 25 consecutive runs in which BOTH
+          # queries above returned ZERO ROWS — a count nothing had measured, and
+          # a remediation pointing at two surfaces that were empty by
+          # construction (the executions died in ~65s having emitted nothing).
+          # That is deploy-integrity R7 and the UNKNOWN-reported-as-NEGATIVE
+          # class, in a file that already gets the distinction right two branches
+          # up ("'no journey lines' below is unknown, not negative").
+          #
+          # The decision now lives in a pure, unit-tested module so the branch
+          # that separates UNKNOWN from a real failure cannot be quietly removed:
+          # scripts/ci/__tests__/synthetic-monitor-verdict.test.mjs mutates the
+          # evidence test and asserts the zero-rows verdict FLIPS.
+          #
+          # Exit status is unchanged: UNKNOWN still fails the run. An unattended
+          # monitor that cannot see its subject must not report green — it just
+          # must not name a cause either.
+          set +e
+          node scripts/ci/synthetic-monitor-verdict.mjs \
+            --status "$STATUS" \
+            --execution "$EXEC" \
+            --job "$JOB_NAME" \
+            --resource-group "$RG_NAME" \
+            --uat-state "$UAT_STATE" --uat-file "$UAT_FILE" --uat-rc "$UAT_RC" \
+            --journeys-state "$J_STATE" --journeys-file "$J_FILE" --journeys-rc "$J_RC"
+          VRC=$?
+          set -e
+          if [[ $VRC -ne 0 ]]; then
+            # The detailed, honest ::error:: annotation is emitted by the module
+            # itself (log text never round-trips through a shell string). This
+            # line exists so the step's teeth stay visible to
+            # scripts/ci/check-annotation-teeth.mjs and so the failure is not
+            # a bare exit code.
+            echo "::error::loom-synthetic-monitor: run NOT green (execution $EXEC ended $STATUS). Read the [synthetic-monitor] verdict block immediately above — it states what was measured and what remains unknown."
+            exit "$VRC"
           fi
 
       # THE EDGE, WHICH NOTHING ELSE WATCHES.
@@ -294,6 +361,13 @@ jobs:
           SYNTH_EXEC: ${{ steps.run.outputs.execution }}
           SYNTH_UAT: ${{ steps.run.outputs.uat_result }}
           SYNTH_JOURNEYS: ${{ steps.run.outputs.journey_lines }}
+          # #4065 — the issue body carried the same over-claim the step did
+          # ("a failure here is a REAL code or sign-in-path failure") and the
+          # same wrong-place triage list. Both now come from the verdict module,
+          # which only names a cause it measured.
+          SYNTH_VERDICT: ${{ steps.run.outputs.verdict }}
+          SYNTH_VERDICT_MESSAGE: ${{ steps.run.outputs.verdict_message }}
+          SYNTH_REMEDIATION: ${{ steps.run.outputs.verdict_remediation }}
         with:
           script: |
             // NOTE: `exec`, `github`, `context`, `core`, `glob`, `io`, `fetch`,
@@ -309,16 +383,46 @@ jobs:
             const execName = process.env.SYNTH_EXEC || '<unknown>';
             const uat = process.env.SYNTH_UAT || '(no UAT_RESULT was retrieved — either Log Analytics ingestion lagged or the query itself failed; the poll step logs which. Check the container logs.)';
             const journeys = process.env.SYNTH_JOURNEYS || '(none retrieved — see the poll step, which distinguishes a failed query from zero rows)';
+            // #4065 — the verdict, and the triage list, now come from
+            // scripts/ci/synthetic-monitor-verdict.mjs. The old body asserted
+            // "a failure here is a REAL code or sign-in-path failure" on every
+            // failure, including 25 in a row where nothing about the journeys
+            // had been measured, and sent the reader to two empty surfaces.
+            const verdict = process.env.SYNTH_VERDICT || 'unknown';
+            const verdictMessage = process.env.SYNTH_VERDICT_MESSAGE
+              || '(the verdict step did not report — treat the journeys’ outcome as UNKNOWN, not as a failure of any particular journey)';
+            const remediation = process.env.SYNTH_REMEDIATION || '';
+            // Three distinct things can put this workflow in `failure()`, and
+            // the old body called all of them "journeys failing" — including
+            // the case where the journeys were GREEN and the vanity-domain
+            // edge-health step is what went red. Naming the wrong subsystem is
+            // the same defect as naming the wrong cause.
+            const journeysGreen = verdict === 'succeeded';
+            const realFailure = verdict === 'journeys-failed';
+            const unknown = !journeysGreen && !realFailure;
+            const headline = journeysGreen
+              ? 'The synthetic journeys were **GREEN**. This run went red in a LATER step — the vanity-domain edge-health check. Triage the EDGE (Front Door route binding / served certificate), not the journeys.'
+              : unknown
+                ? 'The execution did not succeed. What the journeys did is **UNKNOWN** — read the verdict line before triaging.'
+                : 'The runner reported REAL journey failure(s) (honest infra gates never fail the run).';
             const body = [
               `Run: ${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`,
               ``,
               `Severity: **P1** (page band — O1 alert convention, docs/fiab/runbooks/on-call.md)`,
               `Execution: \`${execName}\` → **${status}**`,
-              `Summary: \`${uat}\``,
+              `Verdict: **${verdict}** — ${headline}`,
+              ``,
+              verdictMessage,
+              ``,
+              `Summary line: \`${uat}\``,
               `Journey lines: \`${journeys}\``,
               ``,
-              `The six synthetic journeys (J1 MSAL login / J2 create-item / J3 editor / J4 query / J5 marketplace / J6 git-promotion) run in-VNet every 15 min; a failure here is a REAL code or sign-in-path failure (honest infra gates never fail the run).`,
-              `Triage + ack: on-call runbook docs/fiab/runbooks/on-call.md · Journeys tab on /admin/health · runbook docs/fiab/runbooks/synthetic-journeys.md · Log Analytics ContainerAppConsoleLogs_CL (ContainerAppName_s=='loom-synthetic-monitor').`,
+              remediation
+                ? [`Where to look (from the verdict — this is where the evidence actually is):`, '```', remediation.split(' ;; ').join('\n'), '```'].join('\n')
+                : `Where to look: the poll step's verdict block on the run above.`,
+              ``,
+              `The six synthetic journeys (J1 MSAL login / J2 create-item / J3 editor / J4 query / J5 marketplace / J6 git-promotion) run in-VNet on a ~15 min trigger.`,
+              `Triage + ack: on-call runbook docs/fiab/runbooks/on-call.md · runbook docs/fiab/runbooks/synthetic-journeys.md.`,
             ].join('\n');
             const existing = await github.rest.issues.listForRepo({
               owner: context.repo.owner, repo: context.repo.repo,
@@ -328,12 +432,19 @@ jobs:
               await github.rest.issues.createComment({
                 owner: context.repo.owner, repo: context.repo.repo,
                 issue_number: existing.data[0].number,
-                body: `Synthetic journeys failing again.\n\n${body}`,
+                body: `${journeysGreen ? 'Synthetic monitor NOT green again — the EDGE check, not the journeys.' : unknown ? 'Synthetic monitor NOT green again (journeys UNKNOWN).' : 'Synthetic journeys failing again.'}\n\n${body}`,
               });
             } else {
               await github.rest.issues.create({
                 owner: context.repo.owner, repo: context.repo.repo,
-                title: `synthetic-monitor: journeys failing (${status})`,
+                // The TITLE is a publication surface too, and it carried the
+                // same over-claim as the body. It now states only what the
+                // verdict established.
+                title: journeysGreen
+                  ? `synthetic-monitor: vanity-domain edge check FAILED (journeys green)`
+                  : unknown
+                    ? `synthetic-monitor: execution ${status} — journeys UNKNOWN`
+                    : `synthetic-monitor: journeys failing (${status})`,
                 body, labels: ['csa-loom', 'synthetic-monitor'],
               });
             }
