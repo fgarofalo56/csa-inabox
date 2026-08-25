@@ -52,10 +52,21 @@
 #
 # Every one of those denials was `Get "https://<acr>/v2/": denied: … client with
 # IP '<ip>' is not allowed access` — the exact path this probe hits, from the
-# same runner. 32248671357 is the cleanest: that job held the firewall lease
-# exclusively, with no contention and no re-lock until 11:46:40.
+# same runner. What each run establishes is NOT the same, and this comment does
+# not pretend otherwise (deploy-integrity.md R7):
 #
-# The mechanism is documented, not inferred: "Configure public IP network rules"
+#   31564296050, 32248671357 — the clean propagation cases. 32248671357 is the
+#     strongest: that job held the firewall lease EXCLUSIVELY, no contention and
+#     no re-lock until 11:46:40, so nothing closed the registry between the 401
+#     and the denial. Consecutive sampling is aimed at exactly this shape.
+#   32819789544 — held NO lease (`ACR_LEASE_STATE: none`); it rode another run's
+#     open window. A concurrent RE-LOCK by the lease holder is an equally
+#     consistent explanation for that denial, and re-sampling cannot fix that
+#     one. It is listed because the timing matches, not as evidence of the
+#     propagation mechanism.
+#
+# The mechanism behind the first two is documented, not inferred: "Configure
+# public IP network rules"
 # (learn.microsoft.com/azure/container-registry/container-registry-access-selected-networks)
 # says twice to "wait a few minutes for the rule to take effect". Propagation is
 # ASYNCHRONOUS and PER-FRONTEND. One sample tells you what ONE frontend served
@@ -63,11 +74,28 @@
 #
 # So the probe now requires CONSECUTIVE_REQUIRED positive samples, each from a
 # fresh curl process (new connection, new DNS resolution — no keep-alive reuse),
-# spaced SAMPLE_INTERVAL apart, and ANY 403 resets the streak to zero. Do not
-# lower --consecutive-samples below 3 or --sample-interval-seconds below 2 in a
-# caller: that re-arms #4067, and scripts/ci/test-acr-dataplane-ready.sh measures
-# the DEFAULTS through the sampling loop (by counting probe requests and elapsed
-# time) rather than grepping for the literals, so lowering them here fails a test.
+# spaced SAMPLE_INTERVAL apart. ANY non-positive sample resets the streak to
+# zero — a 403, a connect/DNS failure, or any other status. "Three consecutive
+# answers" means three, not "three ignoring the 500 in the middle".
+#
+# THE FLOOR IS ENFORCED, NOT MERELY DEFAULTED (review of #4067, 2026-08-25).
+#
+# 3 samples spaced 2s is a MINIMUM, not a default a caller may dial away. The
+# first version of this fix pinned those numbers only as defaults, and a caller
+# passing `--consecutive-samples 1` or `--sample-interval-seconds 0` restored the
+# exact pre-#4067 single-sample behaviour with the whole suite still green. A
+# safety property that any caller can switch off is not a guard — it is a default.
+#
+# Values below the floor are now REJECTED (exit 3) unless the caller ALSO passes
+# `--unsafe-sampling-below-4067-floor "<reason>"`. That flag is deliberately ugly
+# and greppable: one `grep -rn unsafe-sampling-below-4067-floor` over
+# .github/workflows and scripts finds every weakening in the repo, the reason is
+# mandatory and non-empty, and the run log carries a `::warning::` naming #4067
+# and the reason. scripts/ci/test-acr-dataplane-ready.sh proves both halves —
+# that the DEFAULTS still take >= 3 samples >= 2s apart (measured through the
+# sampling loop by counting the probe's own requests and reading the argument it
+# hands `sleep`, not by grepping this file for the literals), AND that a bare
+# caller override below the floor is REFUSED with exit 3.
 #
 # WHAT THIS STILL CANNOT PROVE. N consecutive answers are evidence that the rule
 # has reached the frontends this runner reached, in that window — not a guarantee
@@ -83,12 +111,14 @@
 # USAGE
 #   bash scripts/ci/acr-dataplane-ready.sh --acr <acrName> [--timeout-seconds 180]
 #        [--interval-seconds 10] [--sample-interval-seconds 2] [--consecutive-samples 3]
+#        [--unsafe-sampling-below-4067-floor "<reason>"]
 #
 # Exit codes:
 #   0  data plane answered (401/200) on N consecutive samples — ready
 #   1  never sustained N consecutive answers before the budget ran out
 #   2  never got an HTTP response at all (DNS/connect) within the budget
-#   3  usage / could not determine the cloud's registry suffix
+#   3  usage / sampling below the #4067 floor without the opt-out / could not
+#      determine the cloud's registry suffix
 # -----------------------------------------------------------------------------
 set -uo pipefail
 
@@ -97,15 +127,37 @@ BUDGET=180
 INTERVAL=10
 SAMPLE_INTERVAL=2
 CONSECUTIVE_REQUIRED=3
+UNSAFE_REASON=""
+
+# The #4067 floor. Below these, the probe is measuring what a single request
+# measured, which is what the incident was. See the header block.
+FLOOR_CONSECUTIVE=3
+FLOOR_SAMPLE_INTERVAL=2
+
+# A value-taking flag passed as the LAST argument would leave `shift 2` unable to
+# shift (bash returns non-zero and shifts NOTHING with `set -u` but no `set -e`),
+# spinning this parser forever. A CI job that hangs is worse than one that fails,
+# so every value-taking flag checks it has a value first.
+need_val() {
+  if [ "$1" -lt 2 ]; then
+    echo "::error::acr-dataplane-ready: $2 requires a value." >&2
+    exit 3
+  fi
+}
 
 while [ $# -gt 0 ]; do
   case "$1" in
-    --acr) ACR="${2:-}"; shift 2 ;;
-    --timeout-seconds) BUDGET="${2:-180}"; shift 2 ;;
-    --interval-seconds) INTERVAL="${2:-10}"; shift 2 ;;
-    --sample-interval-seconds) SAMPLE_INTERVAL="${2:-2}"; shift 2 ;;
-    --consecutive-samples) CONSECUTIVE_REQUIRED="${2:-3}"; shift 2 ;;
-    -h|--help) sed -n '1,95p' "$0"; exit 0 ;;
+    --acr) need_val $# "$1"; ACR="$2"; shift 2 ;;
+    --timeout-seconds) need_val $# "$1"; BUDGET="$2"; shift 2 ;;
+    --interval-seconds) need_val $# "$1"; INTERVAL="$2"; shift 2 ;;
+    --sample-interval-seconds) need_val $# "$1"; SAMPLE_INTERVAL="$2"; shift 2 ;;
+    --consecutive-samples) need_val $# "$1"; CONSECUTIVE_REQUIRED="$2"; shift 2 ;;
+    --unsafe-sampling-below-4067-floor) need_val $# "$1"; UNSAFE_REASON="$2"; shift 2 ;;
+    # Print the header block and stop at the first line of code. A hard-coded
+    # line number drifts the moment the header is edited — the first version of
+    # this said `1,95p` while the header ended at 92, so `--help` printed three
+    # lines of executable script.
+    -h|--help) awk 'NR > 1 && $0 !~ /^#/ { exit } { print }' "$0"; exit 0 ;;
     *) echo "acr-dataplane-ready: unknown argument '$1'" >&2; exit 3 ;;
   esac
 done
@@ -129,6 +181,28 @@ done
 if [ "$CONSECUTIVE_REQUIRED" -lt 1 ]; then
   echo "::error::acr-dataplane-ready: --consecutive-samples must be >= 1, got '${CONSECUTIVE_REQUIRED}'." >&2
   exit 3
+fi
+
+# THE #4067 FLOOR. Enforced here rather than left to the defaults, because a
+# safety property a caller can dial away is not a property. `--consecutive-samples 1`
+# and `--sample-interval-seconds 0` each restore the exact single-sample behaviour
+# the incident was about, so they are REFUSED unless the caller states a reason
+# through a flag that is trivial to grep for across every workflow and script.
+BELOW_FLOOR=""
+if [ "$CONSECUTIVE_REQUIRED" -lt "$FLOOR_CONSECUTIVE" ]; then
+  BELOW_FLOOR="--consecutive-samples ${CONSECUTIVE_REQUIRED} (floor ${FLOOR_CONSECUTIVE})"
+fi
+if [ "$SAMPLE_INTERVAL" -lt "$FLOOR_SAMPLE_INTERVAL" ]; then
+  BELOW_FLOOR="${BELOW_FLOOR}${BELOW_FLOOR:+, }--sample-interval-seconds ${SAMPLE_INTERVAL} (floor ${FLOOR_SAMPLE_INTERVAL})"
+fi
+if [ -n "$BELOW_FLOOR" ] && [ -z "$UNSAFE_REASON" ]; then
+  echo "::error::acr-dataplane-ready: REFUSING a sampling configuration below the #4067 floor: ${BELOW_FLOOR}. One sample, or samples with no spacing, is what run 31564296050 / 32248671357 reported READY ~2s before the same URL denied them by IP. If you genuinely need this, pass --unsafe-sampling-below-4067-floor \"<why>\" so the weakening is greppable and the reason lands in the run log." >&2
+  exit 3
+fi
+if [ -n "$BELOW_FLOOR" ]; then
+  echo "::warning::acr-dataplane-ready: sampling BELOW the #4067 floor by explicit opt-out — ${BELOW_FLOOR}. Reason given: ${UNSAFE_REASON}. This weakens the guard that exists because a single 401 was falsified ~2s later on the same URL; a READY from this run is worth less than a READY from the defaults."
+elif [ -n "$UNSAFE_REASON" ]; then
+  echo "::warning::acr-dataplane-ready: --unsafe-sampling-below-4067-floor was passed (\"${UNSAFE_REASON}\") but nothing is below the floor (${CONSECUTIVE_REQUIRED} samples spaced ${SAMPLE_INTERVAL}s). Drop the flag so it does not sit in a caller waiting to hide a future weakening."
 fi
 
 # Suffix from the ACTIVE CLOUD, never a literal — Gov registries are .azurecr.us

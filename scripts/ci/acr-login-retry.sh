@@ -44,16 +44,31 @@
 #
 # Every one of those denials reads `Get "https://<acr>/v2/": denied: … client with
 # IP '<ip>' is not allowed access` — the exact URL the probe had just polled, from
-# the same runner. 32248671357 is the cleanest: that job held the firewall lease
-# exclusively, with no contention and no re-lock until 11:46:40. A denial on
-# `/v2/` seconds after a 401 on `/v2/` is not two surfaces disagreeing; it is one
-# surface whose firewall rule had not finished propagating across frontends.
+# the same runner. What they establish is NOT the same for all three, and stating
+# one mechanism for all three would be the same over-general claim this block was
+# rewritten to strike (deploy-integrity.md R7):
+#
+#   31564296050 and 32248671357 support the propagation reading. 32248671357 is
+#     the strongest: it held the firewall lease EXCLUSIVELY — no contention, no
+#     re-lock until 11:46:40 — so nothing closed the registry between the 401 and
+#     the denial. A denial on `/v2/` seconds after a 401 on `/v2/` in THAT job is
+#     not two surfaces disagreeing; it is one surface whose firewall rule had not
+#     finished propagating across frontends.
+#   32819789544 does NOT support it. #4067's own "Caveat on (A)" records that this
+#     job held no lease (`ACR_LEASE_STATE: none`) and rode another run's open
+#     window, so a concurrent RE-LOCK by the lease holder is an equally consistent
+#     explanation — and re-sampling cannot fix that one. If you hit an ACR denial
+#     in a no-lease job, look for a concurrent re-lock BEFORE concluding
+#     propagation; the probe's consecutive sampling does not address it.
 #
 # The real defect was that the probe treated ONE sample as an observation. It now
-# requires 3 consecutive fresh-connection samples spaced >=2s, any 403 resetting
-# the count (scripts/ci/acr-dataplane-ready.sh). Note that this changed its READY
-# line: the `READY after 1 attempt(s) — HTTP 401 …` text quoted above and below is
-# a historical log excerpt, not a string the script emits any more.
+# requires 3 consecutive fresh-connection samples spaced >=2s, with any 403, any
+# connect failure and any other status resetting the count, and that floor is
+# ENFORCED rather than merely defaulted — dropping below it needs
+# `--unsafe-sampling-below-4067-floor "<reason>"`
+# (scripts/ci/acr-dataplane-ready.sh). Note that this changed its READY line: the
+# `READY after 1 attempt(s) — HTTP 401 …` text quoted above and below is a
+# historical log excerpt, not a string the script emits any more.
 #
 # None of that weakens the case for retrying here. Propagation is asynchronous,
 # so even N consecutive answers cannot promise the next call will be allowed —

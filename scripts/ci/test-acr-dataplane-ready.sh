@@ -14,18 +14,31 @@
 # defect was a probe that exited READY on ONE sample, and a stub that can only
 # answer one fixed code forever cannot tell a 1-sample probe from a 3-sample one.
 #
-# THE TWO MUTATIONS THAT MATTER
+# THE MUTATIONS THAT MATTER
 #
 # 1. #4067 — the probe exited READY on the FIRST 401 and claimed "the registry is
 #    evaluating auth, not blocking by IP". Three runs (31564296050, 32248671357,
-#    32819789544) falsified that ~2s later with an IP denial on the SAME
-#    `GET /v2/` URL. Cases 7-10 below. Case 7 measures the DEFAULTS through the
-#    sampling loop — it counts the probe's actual requests, and reads the pause
-#    the probe hands to `sleep` off a PATH stub — rather than grepping the script
-#    for `3` and `2`, so lowering either default back down fails a test instead
-#    of quietly re-arming the incident.
+#    32819789544) denied the same URL ~2s later. Cases 7-10 below. Case 7 measures
+#    the DEFAULTS through the sampling loop — it counts the probe's actual
+#    requests, and reads the pause the probe hands to `sleep` off a PATH stub —
+#    rather than grepping the script for `3` and `2`, so lowering either default
+#    back down fails a test instead of quietly re-arming the incident.
 #
-# 2. The first draft wrote `CODE="$(curl … || echo 000)"`, and because curl PRINTS
+# 2. THE CALLER BYPASS. Pinning the numbers as DEFAULTS was not enough: a caller
+#    passing `--consecutive-samples 1` or `--sample-interval-seconds 0` restored
+#    the exact pre-#4067 behaviour with every case here still green. Cases 11b-11e
+#    assert the floor is ENFORCED — the weakening is refused with exit 3, the only
+#    way through is an explicit reason-carrying opt-out, and a run that takes it
+#    says so loudly in the log.
+#
+# 3. THE STREAK RESETS. Three code paths reset the streak (403, no-response, and
+#    any other status) and each one is on the critical path of a VERDICT, not just
+#    of a log line: cases 8b, 8c and 8d each drive a sample stream where the
+#    difference between resetting and not resetting is 6 samples versus 4. Case 8's
+#    "streak reset to 0" assertion was measured GREEN against a mutation that
+#    deleted the reset and left the echo, which is why 8b-8d exist.
+#
+# 4. The first draft wrote `CODE="$(curl … || echo 000)"`, and because curl PRINTS
 #    `000` on a connect failure and ALSO exits non-zero, the fallback concatenated
 #    to `000000`. That fell past the `000` branch and reported a DNS failure as
 #    "still refusing this runner" — the exact UNKNOWN-as-NEGATIVE bug the probe
@@ -145,24 +158,36 @@ SLEEP
 }
 remove_sleep_recorder() { rm -f "$STUB_DIR/sleep"; }
 
-# Fast sampling config for the cases that are NOT measuring the defaults.
+# Fast sampling config for the cases that are NOT measuring the defaults. The
+# spacing is 2s — the #4067 floor — because anything lower is now REFUSED by the
+# probe (exit 3) rather than silently accepted. Case 11b proves that refusal; the
+# helpers must not route around it with the opt-out flag, or every case below
+# would be running on a weakened probe.
 run() {
   reset_samples
   PATH="$STUB_DIR:$PATH" bash "$PROBE" --acr testacr \
     --timeout-seconds "${1:-8}" --interval-seconds 2 \
-    --sample-interval-seconds 1 --consecutive-samples 3 2>&1
+    --sample-interval-seconds 2 --consecutive-samples 3 2>&1
 }
 # Same, but with the pauses stubbed out. Cases that assert on a SEQUENCE and a
-# VERDICT (not on timing) use this: it makes them deterministic instead of a race
-# between the probe's budget and however long a process spawn takes on the host.
-# Measured on the dev box under load, a single sample costs ~5s of spawn time, so
-# a wall-clock budget that comfortably fits 3 samples in CI fits 2 here.
+# VERDICT (not on timing) use this.
+#
+# THE BUDGET IS DELIBERATELY LARGE. Stubbing `sleep` removes the probe's pauses
+# but NOT the cost of the ~4 processes each sample spawns (mktemp, the curl stub,
+# head, rm), and that cost is what the wall-clock budget is actually spent on
+# here. Measured on this Windows box under concurrent load, a 6-sample case burnt
+# up to 16s of a 30s budget, and two 6-sample cases were observed failing at 5
+# samples while the same probes run alone gave 6/6 in 12 of 12 iterations. A
+# control that can go red on CORRECT code is the control that gets loosened next
+# time, so the budget is 120s: the sleeps are stubbed, so a large budget costs no
+# wall time on the happy path, and every case here reaches a verdict in <= 6
+# samples.
 run_nosleep() {
   install_sleep_recorder
   reset_samples
   PATH="$STUB_DIR:$PATH" bash "$PROBE" --acr testacr \
-    --timeout-seconds "${1:-8}" --interval-seconds 2 \
-    --sample-interval-seconds 1 --consecutive-samples 3 2>&1
+    --timeout-seconds "${1:-120}" --interval-seconds 2 \
+    --sample-interval-seconds 2 --consecutive-samples 3 2>&1
   local rc=$?
   remove_sleep_recorder
   return $rc
@@ -177,7 +202,7 @@ run_defaults() {
 echo "== acr-dataplane-ready self-test =="
 
 # 1. 401 throughout => the registry is evaluating auth => READY.
-OUT="$(STUB_CODE=401 STUB_BODY='{"errors":[{"code":"UNAUTHORIZED"}]}' run_nosleep 60)"; RC=$?
+OUT="$(STUB_CODE=401 STUB_BODY='{"errors":[{"code":"UNAUTHORIZED"}]}' run_nosleep 120)"; RC=$?
 [ $RC -eq 0 ] && pass "401 UNAUTHORIZED => ready (exit 0)" || fail "401 should be ready, got exit $RC: $OUT"
 
 # 1b. R7: the READY line must not claim the registry "is not blocking by IP".
@@ -194,7 +219,7 @@ else
 fi
 
 # 2. 200 (anonymous pull enabled) => also reachable.
-OUT="$(STUB_CODE=200 STUB_BODY='{}' run_nosleep 60)"; RC=$?
+OUT="$(STUB_CODE=200 STUB_BODY='{}' run_nosleep 120)"; RC=$?
 [ $RC -eq 0 ] && pass "200 => ready (exit 0)" || fail "200 should be ready, got exit $RC: $OUT"
 
 # 3. 403 DENIED for the whole budget => NOT ready, exit 1.
@@ -274,7 +299,7 @@ echo "$OUT" | grep -q "consecutive" && pass "READY reports the consecutive-sampl
 #    WITHOUT the reset: 1, (403 ignored) 1, 2, 3 -> READY on sample 4. A `>= 4`
 #    threshold therefore passes either way — it was measured GREEN against a
 #    mutation that deleted `STREAK=0` from the 403 branch. See 8b.
-OUT="$(STUB_CODES='401 403 401 401' run_nosleep 30)"; RC=$?
+OUT="$(STUB_CODES='401 403 401 401' run_nosleep 120)"; RC=$?
 CALLS="$(samples)"
 if [ "$CALLS" -ge 5 ]; then
   pass "401,403,401,401: kept sampling past the first 401 and past the 403 (${CALLS} samples)"
@@ -309,7 +334,7 @@ fi
 #       with the reset:    1, 2, reset, 1, 2, 3 -> READY on sample 6
 #       without the reset: 1, 2, (ignored), 3   -> READY on sample 4
 #     Six versus four. No message is consulted.
-OUT="$(STUB_CODES='401 401 403 401' run_nosleep 30)"; RC=$?
+OUT="$(STUB_CODES='401 401 403 401' run_nosleep 120)"; RC=$?
 CALLS="$(samples)"
 if [ "$CALLS" -ge 6 ]; then
   pass "401,401,403,401: the 403 discarded the 2-sample streak (${CALLS} samples, 6 required)"
@@ -326,12 +351,38 @@ fi
 #     Stream: 401 401 000 401 401 401… (trailing entry repeats).
 #       with the reset:    1, 2, reset, 1, 2, 3 -> READY on sample 6
 #       without the reset: 1, 2, (ignored), 3   -> READY on sample 4
-OUT="$(STUB_CODES='401 401 000 401' run_nosleep 30)"; RC=$?
+OUT="$(STUB_CODES='401 401 000 401' run_nosleep 120)"; RC=$?
 CALLS="$(samples)"
 if [ "$CALLS" -ge 6 ]; then
   pass "401,401,000,401: the connect failure discarded the 2-sample streak (${CALLS} samples, 6 required)"
 else
   fail "401,401,000,401: READY after only ${CALLS} samples — a no-response sample did NOT reset the streak, so an UNKNOWN is being counted toward readiness"
+fi
+
+# 8d. THE THIRD RESET BRANCH — the `*)` catch-all (acr-dataplane-ready.sh's
+#     "not a readiness signal" arm), which 8b and 8c did not cover. Deleting
+#     `STREAK=0` from it passed the ENTIRE suite, measured 2026-08-25 on the
+#     first version of this file: 28/28 ok, RC=0, run alone to exclude load. A
+#     429/500/503 mid-run would then be silently counted inside a verdict that
+#     says "3 consecutive answers", and nothing in CI would notice.
+#
+#     Stream: 401 401 500 401 401 401… (trailing entry repeats).
+#       with the reset:    1, 2, reset, 1, 2, 3 -> READY on sample 6
+#       without the reset: 1, 2, (ignored), 3   -> READY on sample 4
+#     The 500 needs no stub change: the curl stub synthesises `{}` for any code
+#     that is not 401/403, which is exactly what a real 5xx body is not required
+#     to be for this assertion to hold. No message is consulted.
+OUT="$(STUB_CODES='401 401 500 401' run_nosleep 120)"; RC=$?
+CALLS="$(samples)"
+if [ "$CALLS" -ge 6 ]; then
+  pass "401,401,500,401: the 500 discarded the 2-sample streak (${CALLS} samples, 6 required)"
+else
+  fail "401,401,500,401: READY after only ${CALLS} samples — a non-readiness status did NOT reset the streak, so a 5xx mid-run is being counted toward readiness"
+fi
+if echo "$OUT" | grep -qi "not a readiness signal"; then
+  pass "401,401,500,401: the 500 was named as not a readiness signal"
+else
+  fail "401,401,500,401: the 500 was not reported as a non-readiness status: $OUT"
 fi
 
 # 9. HARD NEGATIVE. One 401 then 403 forever. The old probe exited 0 on sample 1;
@@ -368,6 +419,69 @@ OUT="$(PATH="$STUB_DIR:$PATH" bash "$PROBE" --acr testacr --consecutive-samples 
 [ $RC -eq 3 ] && pass "--consecutive-samples 0 => exit 3 (rejected, not coerced)" || fail "--consecutive-samples 0 should exit 3, got $RC: $OUT"
 OUT="$(PATH="$STUB_DIR:$PATH" bash "$PROBE" --acr testacr --sample-interval-seconds abc 2>&1)"; RC=$?
 [ $RC -eq 3 ] && pass "--sample-interval-seconds abc => exit 3 (rejected)" || fail "non-numeric sample interval should exit 3, got $RC: $OUT"
+
+# ---------------------------------------------------------------------------
+# 11b-11e. THE FLOOR. The first version of this fix pinned 3-samples-at-2s as
+# DEFAULTS only, and case 7 measured the defaults — so a CALLER could restore the
+# exact pre-#4067 behaviour and the whole suite stayed green. Measured against
+# that version with these stubs: `--consecutive-samples 1` exited 0 after exactly
+# ONE sample with a READY line reading "on 1 consecutive fresh-connection samples
+# over 0s", and `--sample-interval-seconds 0` took 3 back-to-back samples with no
+# spacing. That is this repo's documented narrow-bypass shape: a safety property
+# living in a default that any caller can dial away is not a guard.
+#
+# These cases assert the WEAKENING IS REFUSED, and that the ONLY way through is
+# an explicit, greppable, reason-carrying opt-out. They deliberately do NOT read
+# the probe's source — each one runs the probe and asserts the exit code, so
+# deleting the floor check makes them red rather than making them stale.
+# ---------------------------------------------------------------------------
+
+# 11b. The single-sample restoration is REFUSED.
+OUT="$(STUB_CODE=401 PATH="$STUB_DIR:$PATH" bash "$PROBE" --acr testacr --consecutive-samples 1 2>&1)"; RC=$?
+[ $RC -eq 3 ] && pass "--consecutive-samples 1 => exit 3 (the pre-#4067 behaviour is refused, not defaulted away)" || fail "--consecutive-samples 1 should be REFUSED with exit 3, got $RC — a caller can restore the #4067 defect: $OUT"
+if echo "$OUT" | grep -q "4067"; then
+  pass "the refusal names #4067"
+else
+  fail "the refusal does not name the incident it is protecting: $OUT"
+fi
+if echo "$OUT" | grep -q -- "--unsafe-sampling-below-4067-floor"; then
+  pass "the refusal names the explicit opt-out flag"
+else
+  fail "the refusal does not tell the caller how to opt out explicitly: $OUT"
+fi
+
+# 11c. Removing the SPACING is refused on the same terms — 3 back-to-back samples
+#      all land inside the 1.63-2.09s window in which the three cited runs were
+#      falsified, so unspaced samples measure what one sample measured.
+OUT="$(STUB_CODE=401 PATH="$STUB_DIR:$PATH" bash "$PROBE" --acr testacr --sample-interval-seconds 0 2>&1)"; RC=$?
+[ $RC -eq 3 ] && pass "--sample-interval-seconds 0 => exit 3 (unspaced samples are refused)" || fail "--sample-interval-seconds 0 should be REFUSED with exit 3, got $RC: $OUT"
+
+# 11d. The opt-out with an EMPTY reason is still a refusal. A bare flag would be
+#      exactly as easy to slip into a workflow as the raw override was.
+OUT="$(STUB_CODE=401 PATH="$STUB_DIR:$PATH" bash "$PROBE" --acr testacr --consecutive-samples 1 --unsafe-sampling-below-4067-floor "" 2>&1)"; RC=$?
+[ $RC -eq 3 ] && pass "opt-out with an empty reason => still exit 3" || fail "an opt-out with no reason should still be refused, got $RC: $OUT"
+
+# 11e. The opt-out with a REASON is honoured — and is LOUD. This is the positive
+#      half: the floor is an enforced default with a documented escape, not a
+#      hard-coded constant that would send someone editing the script instead.
+install_sleep_recorder
+reset_samples
+OUT="$(STUB_CODE=401 PATH="$STUB_DIR:$PATH" bash "$PROBE" --acr testacr --timeout-seconds 60 \
+  --consecutive-samples 1 --unsafe-sampling-below-4067-floor "self-test: proving the opt-out is the only way through" 2>&1)"; RC=$?
+CALLS="$(samples)"
+remove_sleep_recorder
+[ $RC -eq 0 ] && pass "opt-out with a reason => the override is honoured (exit 0)" || fail "an explicit reasoned opt-out should be honoured, got $RC: $OUT"
+[ "$CALLS" -eq 1 ] && pass "opt-out actually took 1 sample (the override is real, not cosmetic)" || fail "opt-out took ${CALLS} samples, expected 1 — the flag is not doing what it says"
+if echo "$OUT" | grep -q "::warning::"; then
+  pass "the opt-out emits a ::warning:: into the run log"
+else
+  fail "a weakened run must be loud in the log, not silent: $OUT"
+fi
+if echo "$OUT" | grep -q "self-test: proving the opt-out is the only way through"; then
+  pass "the warning carries the caller's stated reason"
+else
+  fail "the warning does not carry the reason the caller gave: $OUT"
+fi
 
 # 6. Suffix must come from the cloud, never a literal — an az that cannot answer
 #    must make the probe refuse rather than guess. Last, because it swaps the az
