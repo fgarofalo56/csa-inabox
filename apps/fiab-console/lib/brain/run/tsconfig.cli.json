@@ -71,6 +71,29 @@
   // `__tests__/history-wiring.test.ts` asserts this include covers the history
   // directory, and resolves both runtime specifiers against a stub tree — so
   // neither half of that defect can return silently.
+  //
+  // ── AND IT IS CURRENTLY RED, ON PURPOSE (#4040) ──────────────────────────
+  // W9 landed and the glob works, but W9's `lib/brain/history/cosmos-store.ts`
+  // imports `@/lib/azure/aca-managed-identity` — the head of a chain that runs
+  // through fetch-with-timeout, fault-injection, audit-stream and the whole
+  // console event subsystem. This config CANNOT emit that, and it says so at
+  // build time with the file named. DO NOT "fix" it by removing this include or
+  // by adding a `paths` mapping: both convert a loud CI failure into a silent
+  // 04:11 UTC MODULE_NOT_FOUND, which is the failure mode the whole comment
+  // above exists to prevent. #4040 carries the three real options.
   "include": ["./cli.ts", "../history/**/*.ts"],
-  "exclude": ["**/__tests__/**", "**/*.test.ts"]
+  // ── THE EXCLUDE MUST REACH WHEREVER THE INCLUDE DOES (#3993 merge) ────────
+  // `exclude` globs are resolved relative to THIS directory, so `**/__tests__/**`
+  // covers `lib/brain/run/**` and nothing above it. The moment W9 landed, the
+  // `../history/**/*.ts` include swept in `lib/brain/history/__tests__/`, whose
+  // route test imports `@/lib/auth/session` and `@/app/api/...` — five compile
+  // errors in a config that forbids aliases, from files that are not part of the
+  // CLI at all. An include that reaches outside this directory needs an exclude
+  // that reaches with it.
+  "exclude": [
+    "**/__tests__/**",
+    "**/*.test.ts",
+    "../history/**/__tests__/**",
+    "../history/**/*.test.ts"
+  ]
 }

@@ -142,39 +142,26 @@ jobs:
   # A preflight demanding a runner already be online would fail on the healthy
   # path. 20 minutes is far outside a cold start and far inside the 24-hour
   # silent ceiling.
+  #
+  # ── THE SCRIPT LIVES IN scripts/ci SO IT CAN BE TESTED (review of #4014) ──
+  # The inline version exited 0 on the FIRST `gh api` failure, so one 403 made
+  # the watchdog silently absent while the run stayed green; and it printed
+  # "still QUEUED" when it had seen ZERO jobs, which is false. Both are R7
+  # violations inside an R7 guard, and both are the kind only EXECUTION finds.
+  # `scripts/ci/test-brain-scan-queue-watchdog.sh` runs the forced-failure arm
+  # and its transient-failure control with `gh`/`jq`/`sleep` stubbed.
   queue-watchdog:
     name: Queue watchdog
     runs-on: ubuntu-latest
     timeout-minutes: 25
     steps:
+      - uses: actions/checkout@v7
+
       - name: Fail if a scan job is still queued after the budget
         env:
           GH_TOKEN: ${{ github.token }}
           BUDGET_MINUTES: '20'
-        run: |
-          set +e -uo pipefail
-          mkdir -p temp
-          DEADLINE=$(( $(date +%s) + BUDGET_MINUTES * 60 ))
-          while [ "$(date +%s)" -lt "$DEADLINE" ]; do
-            gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/jobs" \
-              --paginate > temp/jobs.json 2>temp/jobs.err
-            RC=$?
-            if [ $RC -ne 0 ]; then
-              echo "::warning::could not read this run's job list (gh exit $RC). The watchdog CANNOT establish whether the scan jobs started, so it claims neither answer and stops watching."
-              cat temp/jobs.err
-              exit 0
-            fi
-            QUEUED=$(jq '[.jobs[] | select(.name | startswith("Brain scan")) | select(.status == "queued")] | length' temp/jobs.json)
-            TOTAL=$(jq '[.jobs[] | select(.name | startswith("Brain scan"))] | length' temp/jobs.json)
-            echo "scan jobs: ${TOTAL}, still queued: ${QUEUED}"
-            if [ "$TOTAL" -gt 0 ] && [ "$QUEUED" -eq 0 ]; then
-              echo "every scan job has left the queue."
-              exit 0
-            fi
-            sleep 30
-          done
-          echo "::error::A Brain scan job was still QUEUED after ${BUDGET_MINUTES} minutes. Nothing has been established about the estate and nothing will be until a runner picks it up — a queued job is neither red nor green, which is the silent-absence failure this lane must never have. Most likely cause: no runner is serving the label the job targets. 'loom-aca' is declared in .github/actionlint.yaml and served by the scale-to-zero gh-aca-runner ACA Job; check that it is running."
-          exit 1
+        run: bash scripts/ci/brain-scan-queue-watchdog.sh
 
   commercial:
     name: Brain scan — Commercial
@@ -366,7 +353,28 @@ jobs:
 
   gov:
     name: Brain scan — Azure Government
-    if: github.event_name == 'schedule' || inputs.cloud == 'both' || inputs.cloud == 'gov'
+    # ── DISPATCH-ONLY, NOT NIGHTLY (#4051, review of #4014) ────────────────
+    #
+    # `github.event_name == 'schedule'` was here and has been REMOVED. It made
+    # this job red every night by construction (see the runner note below), and
+    # a permanently red sibling makes a GENUINE Commercial population regression
+    # indistinguishable at the run level — the run is red either way, so the one
+    # signal PRP §5 calls the most valuable thing this system produces gets
+    # buried under a known-red job within a week of nobody looking. That is the
+    # "gate that always fails" shape `lib/brain/run/model.ts` refuses in its own
+    # header, and this lane had become its twin.
+    #
+    # Nothing is hidden by this. The job still exists, still carries its full
+    # preflight, and is still one `workflow_dispatch` away — and per the standing
+    # Gov-access rule a Gov receipt can ONLY come from a GitHub Actions run,
+    # never from local `az`, so dispatch is the same mechanism it always was.
+    # What changes is that a red Commercial run now means COMMERCIAL is red.
+    #
+    # #4051 tracks the in-boundary Gov runner that closes this, and states
+    # plainly that until it lands Gov has NO nightly Brain coverage. Restore
+    # `github.event_name == 'schedule' ||` below on the same commit that points
+    # `runs-on` at the Gov runner label — not before, or the nightly red is back.
+    if: github.event_name == 'workflow_dispatch' && (inputs.cloud == 'both' || inputs.cloud == 'gov')
     # ── THERE IS NO GOV IN-BOUNDARY RUNNER. MEASURED, NOT ASSUMED. ──────────
     #
     # An earlier revision of this lane targeted `[self-hosted, loom-aca-gov]`.
@@ -386,9 +394,11 @@ jobs:
     # The preflight below establishes that by measurement and fails with that
     # specific reason, rather than letting the run die later inside `recordRun`
     # with a stack trace. Under `cloud-parity.md` a Gov gap must be "a tracked
-    # defect with an owner and a date — never a silent state": a nightly red
-    # naming its own remediation is that tracked state. Making it green would be
-    # a false claim.
+    # defect with an owner and a date — never a silent state": #4051 is that
+    # tracked state, and it is where the owner and the date belong. A NIGHTLY
+    # red was not — it was an untracked one that also drowned the Commercial
+    # signal, which is why the schedule trigger came off above. Making this
+    # green would be a false claim; running it nightly was a costly one.
     runs-on: ubuntu-latest
     timeout-minutes: 30
     outputs:

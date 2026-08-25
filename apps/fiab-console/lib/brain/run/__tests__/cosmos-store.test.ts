@@ -208,7 +208,18 @@ describe('CosmosFindingStore.lastScannedRun — S3', () => {
   const scanned = runDoc({
     runId: 'scan-1',
     startedAt: '2026-08-20T00:00:00.000Z',
-    populations: [{ detector: 'd', examined: 33, blind: false, findings: 0, maxExamined: 33, maxExaminedAt: '2026-08-20T00:00:00.000Z' }],
+    populations: [
+      {
+        detector: 'd',
+        examined: 33,
+        blind: false,
+        findings: 0,
+        maxExamined: 33,
+        maxExaminedAt: '2026-08-20T00:00:00.000Z',
+        reportedStepAt: null,
+        decayRebases: 0,
+      },
+    ],
   });
   const paused1 = runDoc({ runId: 'p1', startedAt: '2026-08-21T00:00:00.000Z', populations: null });
   const paused2 = runDoc({ runId: 'p2', startedAt: '2026-08-22T00:00:00.000Z', populations: null });

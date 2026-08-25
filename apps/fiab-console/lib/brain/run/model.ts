@@ -727,6 +727,25 @@ export interface DetectorPopulationSnapshot {
   readonly maxExamined: number;
   /** ISO-8601 of the run that set {@link maxExamined}. Drives the decay window. */
   readonly maxExaminedAt: string;
+  /**
+   * ISO-8601 of the last step this comparator actually REPORTED for this
+   * detector — a `shrank` or a `went-blind`. `null` if it never has.
+   *
+   * THIS IS WHAT MAKES THE DECAY SAFE. See {@link HIGH_WATER_DECAY_FLOOR}: a
+   * mark whose drop was announced may re-base freely, because the operator saw
+   * it; a mark whose drop was never announced may only re-base by a bounded
+   * amount, because nothing else ever told anyone it happened.
+   */
+  readonly reportedStepAt: string | null;
+  /**
+   * How many times in a row the mark has re-based DOWNWARD.
+   *
+   * Reported, not merely counted. Measured in review: twelve consecutive
+   * downward re-bases removed 92.3% of a population and the operator was shown
+   * nothing at all, because a re-base wrote a new baseline and left no trace.
+   * Zero on any run that set a new maximum.
+   */
+  readonly decayRebases: number;
 }
 
 /** How a detector's examined set got worse. Each needs a different response. */
@@ -754,6 +773,14 @@ export interface DetectorPopulationRegression {
   /** The high-water mark this was compared against, and when it was set. */
   readonly highWater: number;
   readonly highWaterAt: string;
+  /**
+   * Consecutive downward re-bases of that mark, carried from the snapshot.
+   *
+   * Surfaced in the message because a re-base used to be entirely invisible: it
+   * wrote a new baseline and left the operator a number with no history behind
+   * it. Twelve of them removed 92.3% of a population in review.
+   */
+  readonly decayRebases: number;
 }
 
 /**
@@ -810,18 +837,70 @@ export interface PopulationRegression {
 export const POPULATION_SHRINK_TOLERANCE = 0.2;
 
 /**
- * How long a high-water mark stays authoritative.
+ * How long a high-water mark stays authoritative before it may re-base.
  *
  * A genuine, permanent estate shrink must not pin the comparator to a number
  * that will never be reached again — that would be a gate that can never go
  * green, which is its own failure mode. After this many days without being
- * matched, the mark decays to the current value and the ratchet re-bases.
+ * matched, the mark re-bases — by {@link HIGH_WATER_DECAY_FLOOR} at most, unless
+ * the drop was already REPORTED, in which case it re-bases all the way.
  *
- * 30 days is long enough that a slow erosion (the measured 19%/run case takes
- * twelve runs, i.e. twelve days) is caught well inside the window, and short
- * enough that a deliberate downsizing clears within a month.
+ * 30 days is long enough that a slow erosion is caught well inside the window,
+ * and short enough that a deliberate downsizing clears within a month.
  */
 export const HIGH_WATER_DECAY_DAYS = 30;
+
+/**
+ * The MOST a high-water mark may re-base downward in one decay window when the
+ * drop that caused it was never reported.
+ *
+ * ── WHY THIS CONSTANT EXISTS (review of #4014, second pass) ────────────────
+ * The first version re-based the mark to TODAY'S value once the window elapsed.
+ * That turns each hold into a laundering step: drop 19% (inside the 20% step
+ * tolerance, so silent), wait 31 days, and the reduction becomes the new
+ * baseline. MEASURED end-to-end through `snapshotPopulations` +
+ * `detectPopulationRegression`, twelve cycles of exactly that:
+ *
+ *     d31=810 d62=656 d93=531 d124=430 d155=348 d186=282
+ *     d217=228 d248=185 d279=150 d310=122 d341=99 d372=80
+ *     regressions fired: 0 over 372 days — 92% of the population gone
+ *
+ * The anti-ratchet itself is sound; the CONTROL is that the identical 19%
+ * erosion at DAILY cadence fires 11 times out of 12. Only the re-basing rule was
+ * wrong.
+ *
+ * ── WHY NOT `max(examined, prevMark * 0.8)` ────────────────────────────────
+ * That was the suggested repair and it is a NO-OP against the very sequence it
+ * was meant to fix, because 0.8 IS {@link POPULATION_SHRINK_TOLERANCE}'s floor
+ * and the erosion is calibrated just inside it: 0.81 x mark is above 0.80 x mark
+ * at every single cycle, so `max` returns `examined` twelve times out of twelve
+ * and nothing changes. Verified numerically before this constant was chosen. The
+ * repair has to be a rate SMALLER than the step tolerance, or it cannot bind.
+ *
+ * ── WHAT 0.9 MEANS, STATED PLAINLY ─────────────────────────────────────────
+ * THE DECAY RATE IS THE MAXIMUM SILENTLY-PERMITTED CONTRACTION RATE. That is not
+ * a tuning knob, it is the definition: an erosion that tracks the mark's decay
+ * exactly is, by construction, indistinguishable from an estate that is honestly
+ * getting smaller. So the contract is explicit — an examined set may contract by
+ * up to 10% per 30-day window without comment; faster than that, with no step
+ * ever crossing the tolerance, is reported. Measured against this constant:
+ *
+ *     19% / 31d  ->  fires at cycle 2
+ *     12% / 31d  ->  fires at cycle 6
+ *     10% / 31d  ->  never fires   (exactly the permitted rate)
+ *      5% / 31d  ->  never fires
+ *
+ * ── AND WHY A REPORTED DROP IS EXEMPT ──────────────────────────────────────
+ * A drop bigger than {@link POPULATION_SHRINK_TOLERANCE} already fired `shrank`
+ * that night. The operator SAW it. Bounding its re-base would keep the lane red
+ * for months over a downsizing that was announced the day it happened, breaking
+ * the "clears within a month" promise above for no signal in return. So
+ * {@link DetectorPopulationSnapshot.reportedStepAt} exempts it. The erosion this
+ * constant exists for cannot use that exemption without first paying for a RED
+ * RUN, which is precisely the visibility it was engineered to avoid.
+ */
+export const HIGH_WATER_DECAY_FLOOR = 0.9;
+
 
 /** One scheduled run, persisted so a lane that stops running is visible. */
 export interface ScanRunRecord {

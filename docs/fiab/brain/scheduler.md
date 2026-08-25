@@ -261,6 +261,79 @@ The mark **decays after 30 days** so a deliberate, permanent downsizing does not
 pin the lane red forever — a gate that can never go green is its own failure
 mode.
 
+### …and the decay re-opened it, on a longer clock (#4014 review, second pass)
+
+Re-basing the mark to **today's value** once the window elapsed turned every hold
+into a laundering step. Measured end to end through the real
+`snapshotPopulations` + `detectPopulationRegression` — drop 19% (inside the 20%
+step tolerance, so silent), hold 31 days, repeat:
+
+```
+d31=810 d62=656 d93=531 d124=430 d155=348 d186=282
+d217=228 d248=185 d279=150 d310=122 d341=99  d372=80
+regressions fired: 0 over 372 days
+```
+
+92% of the population gone, in silence, again. The **mechanism** was never the
+problem: the identical 19% erosion at *daily* cadence fires 11 times out of 12,
+before and after the fix. Only the re-basing rule was wrong.
+
+The old test for this sequence could not have caught it — it advanced the mark by
+hand and never called `snapshotPopulations`, so the decay was outside its
+population entirely. A fixture modelling the code.
+
+**Why `max(examined, prevMark * 0.8)` is not the repair.** It was the obvious
+suggestion and it is a **no-op against the very sequence it was meant to fix**:
+`0.8` is exactly `1 - POPULATION_SHRINK_TOLERANCE`, and the erosion is calibrated
+just inside that, so `0.81 × mark` is above `0.80 × mark` at every one of the
+twelve cycles and `max` returns `examined` every time. The repair has to be a
+rate *smaller* than the step tolerance or it cannot bind. (An executable
+demonstration of this is kept in `population.test.ts`, so the argument does not
+have to be re-derived.)
+
+**What ships instead.** `HIGH_WATER_DECAY_FLOOR = 0.9`: a mark may re-base
+downward by at most 10% per 30-day window when the drop that caused it was never
+reported — plus an exemption when it *was*. And the decay rate is stated for what
+it is:
+
+> **The decay rate IS the maximum silently-permitted contraction rate.** That is
+> not a tuning knob, it is the definition: an erosion that tracks the mark's decay
+> exactly is, by construction, indistinguishable from an estate that is honestly
+> getting smaller.
+
+So the contract is explicit — an examined set may contract up to 10% per 30-day
+window without comment; faster than that, with no step ever crossing the
+tolerance, is reported:
+
+| contraction | verdict |
+|---|---|
+| 19% / 31d | fires at cycle 2 |
+| 12% / 31d | fires at cycle 6 |
+| 10% / 31d | never fires (exactly the permitted rate) |
+| 5% / 31d | never fires |
+| flat | never fires |
+
+**The exemption, and why it exists.** A drop bigger than the 20% tolerance
+already fired `shrank` the night it happened — the operator *saw* it. Bounding
+its re-base would keep the lane red for months over a downsizing that was
+announced on day one, breaking the "clears within a month" promise for no signal
+in return. So `DetectorPopulationSnapshot.reportedStepAt` records the last step
+this comparator actually reported, and a re-base newer than the mark re-bases
+freely. An erosion cannot use that exemption without first paying for a **red
+run**, which is precisely the visibility it was engineered to avoid.
+
+Both sides share one predicate (`stepWasReported`) so the comparator and the
+snapshot cannot drift apart — the drift would be silent in exactly the direction
+that matters.
+
+Finally, a downward re-base used to leave **no trace at all**: it wrote a new
+baseline and handed the operator a number with no history behind it.
+`decayRebases` counts consecutive downward re-bases and the regression message
+says so out loud.
+
+`__tests__/mutation/mutations.mjs` carries `high-water-rebase-unbounded`, which
+restores the pre-fix rule verbatim as a permanent arm.
+
 ### Composition at constant size
 
 `DetectorPopulationSnapshot` is a count with no identity, so swapping every
@@ -314,6 +387,11 @@ a document and one silently leaves the backlog.
 GitHub fleet lands there and a scheduled run can be delayed by many minutes,
 which for a lane whose verdict depends on whether an estate is running at that
 instant is a real source of noise.
+
+**The schedule runs COMMERCIAL ONLY.** The Gov job is dispatch-only — see
+"There is NO Gov in-boundary runner" below and issue #4051. Until that runner
+exists, **Gov has no nightly Brain coverage**, and that is stated here rather
+than implied by a red square on the run list.
 
 ### On demand
 
@@ -484,13 +562,38 @@ runs and never complains is the precise failure `#3936` exists to prevent.
 So the Gov job runs where every other Gov job runs, and a **preflight probes the
 Gov Cosmos account before the scan** and fails with the specific cause and the
 specific remediation rather than dying later inside `recordRun` with a stack
-trace. Under `cloud-parity.md` a Gov gap must be "a tracked defect with an owner
-and a date — never a silent state": a nightly red naming its own remediation is
-that tracked state. **Making it green would be a false claim.**
+trace. **Making it green would be a false claim.**
+
+But it was also on the nightly `schedule:`, and that was its own defect. A job
+that is red every night by construction makes a **genuine Commercial population
+regression indistinguishable at the run level** — the run is red either way, so
+the one signal PRP §5 calls the most valuable thing this system produces gets
+buried under a known-red sibling within a week of nobody looking. That is the
+"gate that always fails" shape `lib/brain/run/model.ts` refuses in its own
+header.
+
+So as of the #4014 review the Gov job is **dispatch-only**:
+
+```yaml
+if: github.event_name == 'workflow_dispatch' && (inputs.cloud == 'both' || inputs.cloud == 'gov')
+```
+
+Nothing is hidden. The job still exists, still carries its full preflight, and is
+still one `gh workflow run … -f cloud=gov` away — and per the standing Gov-access
+rule a Gov receipt can ONLY come from a GitHub Actions run, never from local
+`az`, so dispatch is the same mechanism it always was. What changes is that a red
+Commercial run now means Commercial is red.
+
+Under `cloud-parity.md` a Gov gap must be "a tracked defect with an owner and a
+date — never a silent state". **#4051 is that tracked state**, and it is where
+the owner and the date belong; a nightly red was an untracked one that also
+drowned the Commercial signal.
 
 Closing it needs a Gov equivalent of the `gh-aca-runner` ACA Job inside the Gov
 hub VNet, its label declared in `.github/actionlint.yaml`, and the job pointed at
-it. That is infrastructure work outside this lane.
+it. That is infrastructure work outside this lane. Restore
+`github.event_name == 'schedule' ||` to the job's `if:` on the **same commit**
+that repoints `runs-on` — not before, or the nightly red is back.
 
 ### The queue-time watchdog
 
@@ -507,6 +610,30 @@ It measures whether the job **started**, not whether a runner exists: listing
 self-hosted runners needs `administration: read`, which `GITHUB_TOKEN` cannot be
 granted, whereas reading this run's jobs needs `actions: read`, which it can. The
 observable that can actually be established is the one that is checked.
+
+It lives in `scripts/ci/brain-scan-queue-watchdog.sh` rather than inline in the
+workflow, because the inline version could not be tested and got two things wrong
+that only execution reveals:
+
+1. **A `gh api` failure exited 0 on the FIRST iteration**, with only a warning.
+   One 403 or one blip and the watchdog was silently absent for that run while
+   the run itself stayed green. **Exiting 0 is a claim** — per `R7` a guard that
+   could not measure must not publish a clean verdict. It now retries
+   (`MAX_API_FAILURES`, default 5 consecutive) and then **fails closed**.
+2. **`TOTAL == 0` printed "a Brain scan job was still QUEUED"**, which is false.
+   Zero jobs is not a queued job, and the two have different causes and different
+   fixes: a runner that never picked the job up, versus a job `name:` that no
+   longer matches the filter — i.e. a watchdog watching nothing, which would
+   report green forever. Each now gets its own true message. An R7 violation
+   inside an R7 guard.
+
+`scripts/ci/test-brain-scan-queue-watchdog.sh` proves both with `gh`, `jq` and
+`sleep` stubbed and counted — no network, no token, no wall-clock waiting — and
+runs in `loom-guardrails.yml`. Measured against the pre-fix script: the
+forced-failure arm returned **RC=0** and the zero-jobs arm **wrongly said "still
+QUEUED"**; both move now (RC=1, and the correct message). The transient-failure
+control still passes in both, so the fix is a repair rather than a blanket
+tightening that would fail every healthy run.
 
 ### Markdown encoding in the step summary
 
@@ -528,8 +655,38 @@ Two structural fixes, not "also escape the backslash":
    in the table.
 
 Entities do not decode inside a code span, so nothing entity-encoded is wrapped
-in backticks. `__tests__/markdown-encoding.test.ts` carries a 15-payload hostile
-corpus and a control that shows the original one-liner failing it.
+in backticks.
+
+**Block-level was not the whole threat (#4014 review, second pass).** The first
+version of `mdParagraph` neutralised *nothing*: it collapsed newlines and argued
+that every block-level construct must begin at the start of a line. That is true
+and beside the point — `[text](url)` and `![alt](url)` are **inline** and need no
+line start, and `mdParagraph` is applied to `v.message`, which embeds
+`ProbeFailure.detail`. Measured end to end in the rendered summary:
+
+| | before | after |
+|---|---|---|
+| `link-live` | **true** | false |
+| `img-live` | **true** | false |
+
+A live link in a scan summary is a phishing surface with the Brain's authority
+behind it; a live image is an unauthenticated outbound GET from whoever opens the
+run — a read receipt on the alert. `mdTableCell` had the identical gap: its
+corpus tested forged *rows* and *headings*, so an inline link in a cell was never
+exercised. Both now share one encoder (`mdInline`), because two copies would
+drift silently in the direction that matters.
+
+`*`, `_` and `~` are deliberately left alone — emphasis is cosmetic and cannot
+carry a destination. **Honest limit, asserted rather than hidden:** a bare
+`https://…` still autolinks. It cannot be encoded away without mangling the URL
+text, which would destroy the verbatim failure R7 preserves, and it is materially
+weaker — an autolink's visible text *is* its destination, so it cannot lie about
+where it goes. `[click here](evil)` can, and that is what is now dead.
+
+`__tests__/markdown-encoding.test.ts` carries the hostile corpus (now including
+the inline shapes), a control that shows the original newline-only implementation
+failing them, a decode round-trip proving no evidence is lost, and a drift check
+that `mdTableCell` and `mdParagraph` agree on every payload.
 
 ### The query scope is validated, not escaped
 

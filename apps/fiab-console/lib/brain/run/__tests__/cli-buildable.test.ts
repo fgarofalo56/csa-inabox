@@ -25,14 +25,53 @@
  * `lib/azure/cloud-endpoints` (alias-free) and NOT `lib/azure/aca-managed-identity`
  * (which pulls in `fetch-with-timeout`). That is a real constraint on what this
  * lane may import, and it is invisible without this check.
+ *
+ * ── THE WALKER WAS BLIND TO THE ONE MODULE THAT BROKE (#3993 merge) ───────
+ * Seeding only `cli.ts` follows STATIC imports, and the two history specifiers
+ * are assembled at RUNTIME (`HISTORY_MODULE_SPECIFIER`,
+ * `HISTORY_STORE_SPECIFIER`) precisely so tsc could not resolve them while W9
+ * was unmerged. So `lib/brain/history/**` was never in this walk — and when W9
+ * landed it brought TWO aliases into the emit closure:
+ *
+ *     lib/brain/history/cosmos-store.ts -> @/lib/azure/aca-managed-identity
+ *     lib/azure/fetch-with-timeout.ts   -> @/lib/resilience/fault-injection
+ *
+ * …and this test stayed green over both. `history-wiring.test.ts` caught them
+ * because it actually compiles the config, but the guard whose entire job is the
+ * alias closure reported clean. The seeds below are therefore derived from the
+ * exported specifiers rather than hard-coded, so a future runtime-resolved
+ * import cannot fall outside the population the same way.
+ *
+ * THIS TEST IS NOW RED, AND THAT IS THE POINT (#4040). The two hits above are a
+ * real defect: the CLI cannot emit W9's console-shaped Cosmos store, so the
+ * scheduled scan has nowhere to write a graph version. Resolving it is a design
+ * call between three options, all costed in #4040. Do NOT restore this guard to
+ * green by narrowing the seeds — that returns it to reporting clean over a lane
+ * that cannot run.
  */
 
 import { existsSync, readFileSync } from 'node:fs';
 import { dirname, join, relative, resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { HISTORY_MODULE_SPECIFIER } from '../azure/history-writer';
+import { HISTORY_STORE_SPECIFIER } from '../cli';
 
 const CONSOLE_ROOT = resolve(__dirname, '..', '..', '..', '..');
 const ENTRY = join(CONSOLE_ROOT, 'lib', 'brain', 'run', 'cli.ts');
+
+/**
+ * The RUNTIME-RESOLVED seeds, derived from the specifiers the code actually
+ * uses rather than restated here.
+ *
+ * `HISTORY_MODULE_SPECIFIER` is relative to the EMITTED
+ * `lib/brain/run/azure/history-writer.js`; `HISTORY_STORE_SPECIFIER` to the
+ * emitted `lib/brain/run/cli.js`. Both are resolved from their emitting source
+ * file's directory, which is the same relative position in the source tree.
+ */
+const RUNTIME_SEEDS: readonly (readonly [from: string, spec: string])[] = [
+  [join(CONSOLE_ROOT, 'lib', 'brain', 'run', 'azure', 'history-writer.ts'), HISTORY_MODULE_SPECIFIER],
+  [ENTRY, HISTORY_STORE_SPECIFIER],
+];
 
 const IMPORT_RE = /(?:^|\n)\s*(?:import|export)\s+(?:[\s\S]*?)\s+from\s+'([^']+)'/g;
 const BARE_IMPORT_RE = /(?:^|\n)\s*import\s+'([^']+)'/g;
@@ -56,11 +95,25 @@ function resolveRelative(fromFile: string, spec: string): string | null {
 }
 
 /** Walk the CLI's transitive import graph over first-party source. */
-function walk(): { files: string[]; aliasHits: string[] } {
+function walk(): { files: string[]; aliasHits: string[]; seeds: string[] } {
   const seen = new Set<string>();
-  const queue = [ENTRY];
   const aliasHits: string[] = [];
+  const seeds: string[] = [ENTRY];
 
+  // The runtime-resolved history modules are part of the emit closure and are
+  // reached by NO static import, so they have to be seeded explicitly. A seed
+  // that does not resolve is reported, not skipped: a silently-dropped seed
+  // returns the walk to exactly the blind spot this exists to close.
+  for (const [from, spec] of RUNTIME_SEEDS) {
+    const resolved = resolveRelative(from, spec);
+    if (resolved === null) {
+      aliasHits.push(`UNRESOLVED RUNTIME SEED: ${relative(CONSOLE_ROOT, from)} -> ${spec}`);
+      continue;
+    }
+    seeds.push(resolved);
+  }
+
+  const queue = [...seeds];
   while (queue.length > 0) {
     const file = queue.pop() as string;
     if (seen.has(file)) continue;
@@ -78,11 +131,11 @@ function walk(): { files: string[]; aliasHits: string[] } {
       if (next !== null) queue.push(next);
     }
   }
-  return { files: [...seen], aliasHits };
+  return { files: [...seen], aliasHits, seeds };
 }
 
 describe('the CLI dependency closure', () => {
-  const { files, aliasHits } = walk();
+  const { files, aliasHits, seeds } = walk();
 
   it('has a NON-EMPTY population to examine', () => {
     // A walker that resolved nothing would report zero alias hits and look
@@ -92,6 +145,18 @@ describe('the CLI dependency closure', () => {
     expect(files.some((f) => f.includes('cloud-endpoints'))).toBe(true);
     expect(files.some((f) => f.includes('wire-bindings'))).toBe(true);
     expect(files.some((f) => f.includes(join('brain', 'graph')))).toBe(true);
+  });
+
+  it('THE POPULATION INCLUDES THE RUNTIME-RESOLVED HISTORY MODULES', () => {
+    // Not an extra assertion — the correction. Both history specifiers resolved,
+    // and the modules they reach are IN the walk. Without this the closure
+    // reported clean while carrying two aliases (see the header).
+    expect(seeds).toHaveLength(1 + RUNTIME_SEEDS.length);
+    expect(files.some((f) => f.includes(join('brain', 'history', 'index')))).toBe(true);
+    expect(files.some((f) => f.includes(join('brain', 'history', 'cosmos-store')))).toBe(true);
+    // NOT `aca-managed-identity` / `fetch-with-timeout`: the walk stops AT an
+    // alias and reports it rather than following it, so the modules on the far
+    // side are deliberately absent from `files`. They show up in `aliasHits`.
   });
 
   it('contains NO `@/` alias import anywhere in the transitive closure', () => {

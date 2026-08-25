@@ -359,5 +359,21 @@ export const MUTATIONS = [
     find: '    const highWater = prior.maxExamined;',
     replace: '    const highWater = 0;',
   },
+  {
+    id: 'high-water-rebase-unbounded',
+    file: 'lib/brain/run/population.ts',
+    why:
+      'The SECOND-pass review finding, as a permanent arm. This restores the exact pre-fix ' +
+      're-basing rule — the decayed mark takes TODAY\'S value unconditionally. Measured end to ' +
+      'end through snapshotPopulations + detectPopulationRegression: drop 19% (inside the 20% ' +
+      'step tolerance, so silent), hold 31 days, repeat twelve times, and 1000 -> 80 fires ZERO ' +
+      'regressions over 372 days, because each hold launders the reduction into the new ' +
+      'baseline. The anti-ratchet above is intact throughout — the identical erosion at DAILY ' +
+      'cadence fires 11 of 12 — so this arm is invisible to every check that does not drive the ' +
+      'DECAY.',
+    expect: 'caught',
+    find: '      maxExamined: announcedSinceMark ? examined : bounded,',
+    replace: '      maxExamined: examined,',
+  },
 ];
 

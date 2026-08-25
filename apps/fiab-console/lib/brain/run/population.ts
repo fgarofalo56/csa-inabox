@@ -36,7 +36,12 @@
  *
  * The mark DECAYS ({@link HIGH_WATER_DECAY_DAYS}) so a deliberate, permanent
  * downsizing does not pin the lane red forever — a gate that can never go green
- * is its own failure mode.
+ * is its own failure mode. But the decay is BOUNDED
+ * ({@link HIGH_WATER_DECAY_FLOOR}), because the unbounded version re-opened the
+ * ratchet on a longer clock: drop 19%, hold 31 days, repeat, and twelve cycles
+ * removed 92% of the population with ZERO regressions reported. See that
+ * constant for the measurement, for why `max(examined, prevMark * 0.8)` is a
+ * no-op against it, and for what the bound means.
  *
  * ── WHAT IT DOES NOT DO ────────────────────────────────────────────────────
  * It does not compare finding COUNTS. Fewer findings is the outcome the whole
@@ -51,6 +56,7 @@
 
 import {
   HIGH_WATER_DECAY_DAYS,
+  HIGH_WATER_DECAY_FLOOR,
   POPULATION_SHRINK_TOLERANCE,
   type DetectorPopulationRegression,
   type DetectorPopulationSnapshot,
@@ -94,6 +100,30 @@ export function digestOfIds(ids: readonly string[]): string {
   return fnv1a64([...ids].sort().join('\n'));
 }
 
+/**
+ * Did the step from `prior` to `cur` cross a threshold this comparator REPORTS?
+ *
+ * SHARED BY BOTH SIDES ON PURPOSE. `detectPopulationRegression` uses it to
+ * decide what to report; `snapshotPopulations` uses it to decide whether a later
+ * decay may re-base freely. Two copies of this predicate would drift, and the
+ * drift would be silent in exactly the direction that matters: a step the
+ * comparator called red but the snapshot called silent would bound a mark that
+ * had already been announced (a lane pinned red for months over a downsizing the
+ * operator saw), and the reverse would hand the erosion a free re-base.
+ *
+ * `disappeared` is deliberately NOT here: it is a property of the detector being
+ * absent from THIS run, so there is no snapshot to carry the flag on.
+ */
+export function stepWasReported(
+  prior: { readonly examined: number; readonly blind: boolean },
+  cur: { readonly examined: number; readonly blind: boolean },
+): boolean {
+  // went-blind — zero is always a regression from non-zero, tolerance or not.
+  if (!prior.blind && cur.blind) return true;
+  // shrank — a step past the tolerance.
+  return prior.examined > 0 && cur.examined < prior.examined * (1 - POPULATION_SHRINK_TOLERANCE);
+}
+
 /** Project a detector pass to the shape the next run compares against. */
 export function snapshotPopulations(
   results: readonly {
@@ -113,42 +143,80 @@ export function snapshotPopulations(
   return results.map((r) => {
     const prior = priorByDetector.get(r.detector);
     const examined = r.population.examined;
+    const blind = r.population.blind;
+    const findings = r.findings.length;
 
     // No history: this run IS the mark.
     if (prior === undefined) {
       return {
         detector: r.detector,
         examined,
-        blind: r.population.blind,
-        findings: r.findings.length,
+        blind,
+        findings,
         maxExamined: examined,
         maxExaminedAt: args.at,
+        reportedStepAt: null,
+        decayRebases: 0,
       };
     }
 
-    // A new maximum always wins and re-stamps the clock.
+    // Whether THIS step was announced, carried forward if it was not. Read
+    // defensively: a snapshot persisted before this field existed has neither.
+    const reportedStepAt = stepWasReported(prior, { examined, blind })
+      ? args.at
+      : (prior.reportedStepAt ?? null);
+
+    // A new maximum always wins, re-stamps the clock, and ends the re-base run.
     if (examined >= prior.maxExamined) {
       return {
         detector: r.detector,
         examined,
-        blind: r.population.blind,
-        findings: r.findings.length,
+        blind,
+        findings,
         maxExamined: examined,
         maxExaminedAt: args.at,
+        reportedStepAt,
+        decayRebases: 0,
       };
     }
 
-    // Below the mark. Keep it until it decays, then re-base to today so a
-    // permanent downsizing cannot pin the lane red forever.
+    // Below the mark. Keep it until the window elapses.
     const markAgeMs = nowMs - Date.parse(prior.maxExaminedAt);
     const decayed = Number.isFinite(markAgeMs) && markAgeMs > HIGH_WATER_DECAY_DAYS * MS_PER_DAY;
+    if (!decayed) {
+      return {
+        detector: r.detector,
+        examined,
+        blind,
+        findings,
+        maxExamined: prior.maxExamined,
+        maxExaminedAt: prior.maxExaminedAt,
+        reportedStepAt,
+        decayRebases: prior.decayRebases ?? 0,
+      };
+    }
+
+    // ── THE RE-BASE, AND THE BOUND ON IT ───────────────────────────────────
+    // Re-basing to TODAY'S value is what re-opened the ratchet: it launders each
+    // held reduction into the new baseline, and twelve holds removed 92% of the
+    // population in silence. So a re-base is free ONLY if the drop that caused
+    // it was already REPORTED — `shrank` or `went-blind`, which cost a red run
+    // the night it happened. Otherwise the mark may fall by at most
+    // HIGH_WATER_DECAY_FLOOR, which IS the maximum contraction rate this lane
+    // permits without comment. See the constant.
+    const announcedSinceMark =
+      reportedStepAt !== null && Date.parse(reportedStepAt) > Date.parse(prior.maxExaminedAt);
+    const bounded = Math.max(examined, Math.floor(prior.maxExamined * HIGH_WATER_DECAY_FLOOR));
+
     return {
       detector: r.detector,
       examined,
-      blind: r.population.blind,
-      findings: r.findings.length,
-      maxExamined: decayed ? examined : prior.maxExamined,
-      maxExaminedAt: decayed ? args.at : prior.maxExaminedAt,
+      blind,
+      findings,
+      maxExamined: announcedSinceMark ? examined : bounded,
+      maxExaminedAt: args.at,
+      reportedStepAt,
+      decayRebases: (prior.decayRebases ?? 0) + 1,
     };
   });
 }
@@ -195,13 +263,14 @@ export function detectPopulationRegression(
         blind: true,
         highWater,
         highWaterAt,
+        decayRebases: prior.decayRebases ?? 0,
       });
       continue;
     }
 
     if (!prior.blind && cur.blind) {
       // Green and blind. Zero is always a regression from non-zero, whatever
-      // the tolerance says.
+      // the tolerance says. (Same predicate `stepWasReported` uses — see there.)
       regressions.push({
         detector,
         kind: 'went-blind',
@@ -211,6 +280,7 @@ export function detectPopulationRegression(
         blind: true,
         highWater,
         highWaterAt,
+        decayRebases: cur.decayRebases ?? 0,
       });
       continue;
     }
@@ -227,6 +297,7 @@ export function detectPopulationRegression(
         blind: cur.blind,
         highWater,
         highWaterAt,
+        decayRebases: cur.decayRebases ?? 0,
       });
       continue;
     }
@@ -243,6 +314,7 @@ export function detectPopulationRegression(
         blind: cur.blind,
         highWater,
         highWaterAt,
+        decayRebases: cur.decayRebases ?? 0,
       });
     }
   }
@@ -251,20 +323,26 @@ export function detectPopulationRegression(
 
   const pct = Math.round(POPULATION_SHRINK_TOLERANCE * 100);
   const lines = regressions.map((r) => {
+    // A downward re-base used to leave NO trace: it wrote a new baseline and the
+    // operator saw a number with no history behind it. Say it out loud.
+    const rebases =
+      r.decayRebases > 0
+        ? ` Its mark has re-based DOWNWARD ${r.decayRebases} time(s) in a row.`
+        : '';
     switch (r.kind) {
       case 'went-blind':
         return `${r.detector}: examined ${r.previousExamined} last scan and is BLIND now (0). It ` +
-          'is green and it is looking at nothing.';
+          'is green and it is looking at nothing.' + rebases;
       case 'disappeared':
         return `${r.detector}: ran last scan (examined ${r.previousExamined}) and did not run at ` +
-          'all this run. Its whole finding class stopped being produced.';
+          'all this run. Its whole finding class stopped being produced.' + rebases;
       case 'shrank':
         return `${r.detector}: examined ${r.previousExamined} -> ${r.examined}, a drop past the ` +
-          `${pct}% tolerance.`;
+          `${pct}% tolerance.` + rebases;
       case 'below-high-water':
         return `${r.detector}: examined ${r.examined}, more than ${pct}% below its high-water ` +
           `mark of ${r.highWater} (set ${r.highWaterAt}) — no single run crossed the tolerance, ` +
-          'which is exactly what a slow erosion looks like.';
+          'which is exactly what a slow erosion looks like.' + rebases;
     }
   });
 
@@ -286,7 +364,10 @@ export function detectPopulationRegression(
       'worse. ' +
       lines.join(' | ') +
       ' A step-over-step drop clears on the next run once the smaller number is the basis; a ' +
-      `high-water finding clears only when the population recovers, or after ` +
-      `${HIGH_WATER_DECAY_DAYS} days if the shrink is permanent.`,
+      'high-water finding clears when the population recovers, or as the mark re-bases after ' +
+      `${HIGH_WATER_DECAY_DAYS} days — by no more than ` +
+      `${Math.round((1 - HIGH_WATER_DECAY_FLOOR) * 100)}% per window unless the drop was already ` +
+      'reported, because an unbounded re-base is how a held reduction launders itself into the ' +
+      'baseline.',
   };
 }

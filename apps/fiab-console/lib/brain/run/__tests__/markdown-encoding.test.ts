@@ -92,8 +92,31 @@ const PAYLOADS: readonly { readonly name: string; readonly value: string }[] = [
   { name: 'an HTML entity that must not be double-encoded', value: '&amp; &#124;' },
   { name: 'raw HTML', value: '<img src=x onerror=alert(1)>' },
   { name: 'a backtick code span', value: 'a `code` b' },
+  // ── INLINE constructs (review of #4014, second pass) ──────────────────────
+  // The original corpus was entirely BLOCK-level — forged rows, forged headings,
+  // fences. `mdParagraph` neutralised nothing and passed every one of them,
+  // because collapsing newlines genuinely does kill block-level constructs. An
+  // inline link needs no line start, and none of the payloads above contained
+  // one. link-live=true / img-live=true, measured in the rendered summary.
+  {
+    name: 'AN INLINE LINK — needs no line start, so newline-collapsing misses it',
+    value: '[click here for the report](https://evil.example/steal)',
+  },
+  {
+    name: 'AN INLINE IMAGE — an unauthenticated outbound GET from whoever opens the run',
+    value: '![](https://evil.example/pixel.gif)',
+  },
+  {
+    name: 'a reference-style link definition',
+    value: 'see [the report][r]\n\n[r]: https://evil.example/steal',
+  },
+  { name: 'an angle autolink', value: '<https://evil.example/steal>' },
+  { name: 'an inline link hidden mid-sentence', value: 'ARM said [ok](https://evil.example) and' },
   { name: 'everything at once', value: 'a\\|b\n## H\n```\n<b>&amp;</b>|end' },
 ];
+
+/** Every character that can OPEN a markdown construct, block or inline. */
+const STRUCTURAL = /[\\|<>`[\]()\r\n]/;
 
 describe('mdTableCell — the cell cannot be broken out of', () => {
   it.each(PAYLOADS.map((p) => [p.name, p.value] as const))(
@@ -143,7 +166,7 @@ describe('mdTableCell — the cell cannot be broken out of', () => {
   });
 });
 
-describe('mdParagraph — no line-leading construct can be injected', () => {
+describe('mdParagraph — no construct can be injected, BLOCK or INLINE', () => {
   it.each(PAYLOADS.map((p) => [p.name, p.value] as const))(
     'collapses every line break: %s',
     (_name, value) => {
@@ -151,10 +174,101 @@ describe('mdParagraph — no line-leading construct can be injected', () => {
     },
   );
 
+  it.each(PAYLOADS.map((p) => [p.name, p.value] as const))(
+    'leaves NO structural character raw: %s',
+    (_name, value) => {
+      // The assertion the original suite was missing. Newline-collapsing alone
+      // satisfied every block-level payload and left `[`, `]`, `(`, `)` — and so
+      // an inline link — completely untouched.
+      expect(mdParagraph(value)).not.toMatch(STRUCTURAL);
+    },
+  );
+
   it('a heading payload cannot start a line, so it cannot be a heading', () => {
     const out = mdParagraph('ok\n## INJECTED HEADING');
     expect(out).toBe('ok ## INJECTED HEADING');
     expect(out.split('\n')).toHaveLength(1);
+  });
+
+  it('AN INLINE LINK IS DEAD — the measured defect', () => {
+    // Before: `mdParagraph` returned this verbatim and the summary rendered a
+    // live link with the Brain's authority behind it.
+    const out = mdParagraph('[click here for the report](https://evil.example/steal)');
+    expect(out).not.toMatch(/\[[^\]]*\]\([^)]*\)/);
+    expect(out).toBe(
+      '&#91;click here for the report&#93;&#40;https://evil.example/steal&#41;',
+    );
+  });
+
+  it('AN INLINE IMAGE IS DEAD — no unauthenticated outbound GET', () => {
+    const out = mdParagraph('![](https://evil.example/pixel.gif)');
+    expect(out).not.toMatch(/!\[[^\]]*\]\([^)]*\)/);
+  });
+
+  it('CONTROL: the ORIGINAL newline-only implementation fails the inline payloads', () => {
+    // Without this the suite cannot tell the fix from the bug. This is the
+    // shipped code, reproduced, and it must be shown to be broken.
+    const original = (s: string) => s.replace(/\r\n|\r|\n/g, ' ').trim();
+    const inlineLink = '[click here for the report](https://evil.example/steal)';
+    expect(original(inlineLink)).toMatch(/\[[^\]]*\]\([^)]*\)/);
+    expect(mdParagraph(inlineLink)).not.toMatch(/\[[^\]]*\]\([^)]*\)/);
+    // And it passed the ENTIRE original block-level corpus, which is why the
+    // gap survived a review that tried a forged row and a forged heading.
+    const blockOnly = PAYLOADS.filter((p) => !p.name.startsWith('A'));
+    expect(blockOnly.every((p) => !/[\r\n]/.test(original(p.value)))).toBe(true);
+  });
+
+  it('EVIDENCE IS NOT LOST — the entities decode back to the original text', () => {
+    // An encoder that dropped the payload would pass every assertion above and
+    // destroy the verbatim failure R7 exists to preserve.
+    const raw = 'ARM said [ok](https://evil.example) & <b>failed</b> | 500';
+    const decoded = mdParagraph(raw)
+      .replace(/&#(\d+);/g, (_m, d: string) => String.fromCharCode(Number(d)))
+      .replace(/&lt;/g, '<')
+      .replace(/&gt;/g, '>')
+      .replace(/&amp;/g, '&');
+    expect(decoded).toBe(raw);
+  });
+
+  it('an ampersand is encoded FIRST here too, so output is not double-encoded', () => {
+    expect(mdParagraph('&')).toBe('&amp;');
+    expect(mdParagraph('&[')).toBe('&amp;&#91;');
+  });
+
+  it('emphasis is deliberately LEFT ALONE — cosmetic, and cannot carry a destination', () => {
+    expect(mdParagraph('a *b* _c_ ~d~')).toBe('a *b* _c_ ~d~');
+  });
+
+  it('HONEST LIMIT, STATED: a bare URL still autolinks', () => {
+    // Not encodable without mangling the URL, which would destroy the evidence.
+    // Materially weaker: an autolink's visible text IS its destination, so it
+    // cannot lie about where it goes. This asserts the limit rather than hiding
+    // it, so a future reader does not mistake it for an oversight.
+    expect(mdParagraph('see https://evil.example/steal')).toBe('see https://evil.example/steal');
+  });
+});
+
+describe('mdTableCell — the SAME inline gap, closed by the SAME encoder', () => {
+  it.each(PAYLOADS.map((p) => [p.name, p.value] as const))(
+    'leaves NO structural character raw: %s',
+    (_name, value) => {
+      // The cell corpus tested forged ROWS and HEADINGS, so an inline link in a
+      // cell was never exercised and was equally live. One shared encoder now
+      // serves both, because two copies of this would drift.
+      expect(mdTableCell(value)).not.toMatch(STRUCTURAL);
+    },
+  );
+
+  it('an inline link in a CELL is dead', () => {
+    expect(mdTableCell('[a](b)')).not.toMatch(/\[[^\]]*\]\([^)]*\)/);
+  });
+
+  it('mdTableCell and mdParagraph agree on every payload but the trim', () => {
+    // The drift check. If they ever diverge, one of them is weaker and nothing
+    // else in this file would say which.
+    for (const { value } of PAYLOADS) {
+      expect(mdTableCell(value).trim()).toBe(mdParagraph(value));
+    }
   });
 });
 
@@ -236,6 +350,35 @@ describe('renderStepSummary — end to end with a hostile probe failure', () => 
   it('a forged heading does NOT appear as a heading in the INTERPRETED document', async () => {
     const md = outsideFences(await summaryFor(hostile('ok\n## INJECTED HEADING')));
     expect(md).not.toMatch(/^## INJECTED HEADING$/m);
+  });
+
+  it('THE MEASURED DEFECT: no LIVE LINK survives into the interpreted document', async () => {
+    // Measured before the fix, through this exact path: link-live=true.
+    // `v.message` embeds `ProbeFailure.detail` verbatim, `mdParagraph` renders it,
+    // and `mdParagraph` neutralised nothing at all.
+    const md = outsideFences(
+      await summaryFor(hostile('[click here for the report](https://evil.example/steal)')),
+    );
+    expect(md).not.toMatch(/\[click here for the report\]\(https:\/\/evil\.example\/steal\)/);
+    // And no inline link of ANY shape, so the assertion is not keyed to this
+    // one spelling — a guard keyed to the unsafe SPELLING is not a guard.
+    expect(md).not.toMatch(/\[[^\]\n]*\]\([^)\n]*\)/);
+  });
+
+  it('THE MEASURED DEFECT: no LIVE IMAGE survives — no outbound GET on open', async () => {
+    // img-live=true before the fix. An image in a run summary is an
+    // unauthenticated GET from whoever opens it: a read receipt on the alert.
+    const md = outsideFences(await summaryFor(hostile('![](https://evil.example/pixel.gif)')));
+    expect(md).not.toMatch(/!\[[^\]\n]*\]\([^)\n]*\)/);
+  });
+
+  it('the payload is still PRESENT, entity-encoded — evidence, not deletion', async () => {
+    const md = outsideFences(
+      await summaryFor(hostile('[click here for the report](https://evil.example/steal)')),
+    );
+    expect(md).toContain('click here for the report');
+    expect(md).toContain('evil.example/steal');
+    expect(md).toContain('&#91;');
   });
 
   it('the unbounded fields are still PRESENT — encoding must not lose evidence', async () => {

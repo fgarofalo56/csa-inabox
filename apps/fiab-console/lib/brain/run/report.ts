@@ -236,10 +236,49 @@ export function renderRunReport(outcome: ScanOutcome): string {
  *
  * Note that entities do NOT decode inside a code span, so nothing
  * entity-encoded is wrapped in backticks — that would render the raw entity.
+ *
+ * ── BLOCK-LEVEL IS NOT THE WHOLE THREAT (review of #4014, second pass) ─────
+ * The first version of `mdParagraph` neutralised NOTHING. It collapsed newlines
+ * and reasoned that "every block-level markdown construct must begin at the
+ * start of a line", which is true and is beside the point: `[text](url)` and
+ * `![alt](url)` are INLINE. They need no line start, and `mdParagraph` is applied
+ * to `v.message`, which embeds `ProbeFailure.detail` — a verbatim ARM response
+ * body, i.e. exactly the attacker-influenced text the comment above flags.
+ * MEASURED end to end in the rendered summary before the fix:
+ *
+ *     link-live=true  img-live=true
+ *
+ * A live link in a scan summary is a phishing surface with the Brain's authority
+ * behind it; a live image is an unauthenticated outbound GET from whoever opens
+ * the run, which leaks the reader's IP and is how a "did anyone look at this
+ * alert?" beacon works. `mdTableCell` had the same gap — its corpus tested forged
+ * ROWS and HEADINGS, so an inline link in a cell was never exercised.
+ *
+ * Both now share ONE encoder ({@link mdInline}). Two copies would drift, and the
+ * drift would be silent in the direction that matters.
+ *
+ * ── THE HONEST LIMIT: GFM EXTENDED AUTOLINKS ──────────────────────────────
+ * A bare `https://host/path` (or `www.host`) still autolinks. That cannot be
+ * encoded away without mangling the URL text, which would destroy the verbatim
+ * failure R7 exists to preserve. It is a materially weaker shape and the
+ * difference is the point: an autolink's visible text IS its destination, so it
+ * cannot LIE about where it goes. `[click here](evil)` can, and that is what is
+ * now dead.
  */
 
-/** ASCII-punctuation entities. Order matters: `&` first, then `\`. */
-export function mdTableCell(text: string): string {
+/**
+ * Entity-encode every character that can open a markdown construct, BLOCK or
+ * INLINE. Order matters: `&` first, or the encoder double-encodes its own output.
+ *
+ * Entities decode in rendered markdown, so `(` still READS as `(` — nothing is
+ * lost from the evidence, only its power to become structure.
+ *
+ * `*`, `_` and `~` are deliberately NOT encoded: emphasis and strikethrough are
+ * cosmetic and cannot carry a destination, and encoding them would litter
+ * ordinary Azure resource names. `!` is not encoded either — it is necessary only
+ * in company with `[`, and `[` is dead.
+ */
+function mdInline(text: string): string {
   return text
     .replace(/&/g, '&amp;')
     .replace(/\\/g, '&#92;')
@@ -247,20 +286,37 @@ export function mdTableCell(text: string): string {
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;')
     .replace(/`/g, '&#96;')
-    // A newline ends the ROW. This is not cosmetic.
-    .replace(/\r\n|\r|\n/g, ' ');
+    // The inline-link and inline-image quartet. `[` alone is sufficient to kill
+    // both; all four are encoded so a reader of this list does not have to
+    // reconstruct that argument to be sure.
+    .replace(/\[/g, '&#91;')
+    .replace(/\]/g, '&#93;')
+    .replace(/\(/g, '&#40;')
+    .replace(/\)/g, '&#41;');
+}
+
+/** ASCII-punctuation entities. Order matters: `&` first, then `\`. */
+export function mdTableCell(text: string): string {
+  return (
+    mdInline(text)
+      // A newline ends the ROW. This is not cosmetic.
+      .replace(/\r\n|\r|\n/g, ' ')
+  );
 }
 
 /**
- * A single-line paragraph.
+ * A single-line paragraph with every construct neutralised.
  *
- * Collapsing newlines is the whole defence: every block-level markdown
- * construct that could inject structure — a heading, a list item, a blockquote,
- * a fence, a table — must begin at the START OF A LINE. With no line breaks in
- * the text there is no such position to occupy.
+ * Collapsing newlines kills the BLOCK-level constructs — a heading, a list item,
+ * a blockquote, a fence, a table row all have to begin at the start of a line,
+ * and with no line breaks there is no such position. That is necessary and it is
+ * NOT sufficient: see the note above on inline links and images, which was
+ * measured live in the rendered summary. {@link mdInline} handles those.
  */
 export function mdParagraph(text: string): string {
-  return text.replace(/\r\n|\r|\n/g, ' ').trim();
+  return mdInline(text)
+    .replace(/\r\n|\r|\n/g, ' ')
+    .trim();
 }
 
 /**

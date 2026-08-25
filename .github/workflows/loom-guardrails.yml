@@ -800,6 +800,15 @@ jobs:
       - name: acr-digest resolver self-test (fails closed — #2980)
         if: ${{ !cancelled() }}
         run: bash scripts/ci/test-resolve-acr-digest.sh
+      # Same shape, same lesson, one lane over. The Brain scan's queue watchdog
+      # exited 0 on its OWN `gh api` failure, so one 403 made it silently absent
+      # while the run stayed green — and it printed "still QUEUED" having seen
+      # ZERO jobs. Both are R7 violations inside an R7 guard. MEASURED against
+      # the pre-fix script: the forced-failure arm returned RC=0, and it wrongly
+      # said "still QUEUED" on the zero-jobs arm; both move now.
+      - name: brain-scan queue watchdog self-test (fails closed — #3936/#4014)
+        if: ${{ !cancelled() }}
+        run: bash scripts/ci/test-brain-scan-queue-watchdog.sh
       - name: route-inventory (route taxonomy drift gate — WS-D D3)
         if: ${{ !cancelled() }}
         run: node scripts/ci/generate-route-inventory.mjs --check
