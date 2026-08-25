@@ -147,15 +147,21 @@ export async function withSourceAuth<T extends { sourceType: string }>(
   tenantId: string,
   src: T,
   connectionId?: string,
-): Promise<{ src: T & { auth?: SqlExplicitAuth; pgAuth?: PgExplicitAuth }; descriptor: ConnectionAuthDescriptor }> {
-  if (!connectionId) return { src, descriptor: UAMI_AUTH };
+): Promise<{ src: T & { auth?: SqlExplicitAuth; pgAuth?: PgExplicitAuth; connectionId?: string; tenantId?: string }; descriptor: ConnectionAuthDescriptor }> {
+  // Stamp the NON-SECRET binding coordinates on every source, always. Sources
+  // whose runtime authenticates itself (Snowflake via ADF) never get an `auth`
+  // object, but they still need to know WHICH connection to build their linked
+  // service from — and that must be true on both Start paths, not just one.
+  const stamped = { ...src, connectionId, tenantId } as T & { connectionId?: string; tenantId?: string };
+  if (!connectionId) return { src: stamped, descriptor: UAMI_AUTH };
   if (PG_SOURCE_TYPES.has(src.sourceType)) {
     const { auth, descriptor } = await resolvePgAuthDescribed(tenantId, connectionId);
-    return { src: { ...src, pgAuth: auth }, descriptor };
+    return { src: { ...stamped, pgAuth: auth }, descriptor };
   }
   const { auth, descriptor } = await resolveSqlAuthDescribed(tenantId, connectionId);
-  return { src: { ...src, auth }, descriptor };
+  return { src: { ...stamped, auth }, descriptor };
 }
+
 
 /**
  * PostgreSQL mirror source types. Duplicated as a literal rather than imported

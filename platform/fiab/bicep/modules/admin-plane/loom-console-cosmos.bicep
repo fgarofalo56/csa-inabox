@@ -172,6 +172,45 @@ resource loomDbContainers 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/co
   }
 }]
 
+// ---------------------------------------------------------------------------
+// W9 (#3935) — Loom Brain GRAPH HISTORY.
+//
+// Declared as its own resource rather than as a row in `loomContainers` because
+// it is the only container here with a TTL, and the loop above emits none. It is
+// also the only one partitioned by ESTATE rather than by tenant: the Brain's
+// graph is a property of the deployed estate, not of a tenant inside it.
+//
+// DEPLOYED, NOT REQUESTED (auto-bind-by-default.md §5). The console's
+// `CosmosGraphHistoryStore` also createIfNotExists's this container with the same
+// partition key and the same TTL, which is the sanctioned idempotent fallback for
+// an estate whose Cosmos account predates this module — but the deploy is the
+// primary path, so nothing is ever asked of an operator.
+//
+// RETENTION — the cost bound, stated here and in
+// `apps/fiab-console/lib/brain/history/retention.ts`, which must stay in step:
+//   defaultTtl 7776000s = 90 days. This is the BACKSTOP, for an estate that
+//   stops being captured; count-based pruning only runs when something writes.
+//   The primary bound is 50 versions per estate, enforced on every write in
+//   `captureGraphVersion`. A version is written only when the graph SEMANTICALLY
+//   changed, so 50 is 50 real estate changes, not 50 polls.
+//
+// CLOUD PARITY — this module is invoked from admin-plane/main.bicep for every
+// boundary, so the container exists in Commercial and in Gov alike. The console
+// reaches it through `LOOM_COSMOS_ENDPOINT`, which the deploy emits, so no host
+// literal appears in the app.
+resource brainGraphVersions 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/containers@2024-12-01-preview' = {
+  parent: loomDb
+  name: 'brain-graph-versions'
+  properties: {
+    resource: {
+      id: 'brain-graph-versions'
+      partitionKey: { paths: ['/estateId'], kind: 'Hash' }
+      defaultTtl: 7776000
+      indexingPolicy: { indexingMode: 'consistent', automatic: true }
+    }
+  }
+}
+
 resource pe 'Microsoft.Network/privateEndpoints@2024-05-01' = {
   name: 'pe-${accountName}'
   location: location
