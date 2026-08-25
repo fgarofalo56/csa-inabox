@@ -200,6 +200,83 @@ export function renderRunReport(outcome: ScanOutcome): string {
   ].join('\n');
 }
 
+/**
+ * ── ENCODING FOR THE STEP-SUMMARY SINK ─────────────────────────────────────
+ *
+ * The sink is GITHUB-FLAVORED MARKDOWN written to `$GITHUB_STEP_SUMMARY`, and
+ * the text reaching it is ATTACKER-INFLUENCED: `ProbeFailure.detail` is a
+ * verbatim ARM response body, and resource ids and detector subjects are Azure
+ * resource names and tag values.
+ *
+ * The first version hand-rolled `detail.replace(/\|/g, '\\|')`, which CodeQL
+ * flagged as `js/incomplete-sanitization` (HIGH) and which was genuinely broken:
+ *
+ *     input  a\|b
+ *     step 1 the `|` becomes `\|`            ->  a\  \|  b
+ *     result a\\|b
+ *     GFM    `\\` is an ESCAPED BACKSLASH, so the `|` after it is UNESCAPED
+ *            and splits the cell. Table structure breaks.
+ *
+ * It also did nothing about NEWLINES, and a newline ends the table ROW, not
+ * merely the cell — an ARM error body is routinely multi-line, so the table
+ * broke on ordinary input too.
+ *
+ * The fix is NOT "also escape backslash". Two structural changes:
+ *
+ *  1. ENTITY-ENCODE INSTEAD OF BACKSLASH-ESCAPE. There is then no escape
+ *     character to re-escape, so the incomplete-escaping class cannot recur by
+ *     construction. `&` is encoded FIRST, or the encoder would double-encode
+ *     its own output.
+ *
+ *  2. PUT UNBOUNDED TEXT WHERE ESCAPING IS NOT NEEDED AT ALL. The ARM id and
+ *     the response body move OUT of the table into a FENCED BLOCK, whose fence
+ *     is computed to be longer than the longest backtick run in the content
+ *     (the CommonMark rule). Nothing inside a fence is interpreted, so there is
+ *     nothing to escape. Only union-typed and numeric fields stay in the table.
+ *
+ * Note that entities do NOT decode inside a code span, so nothing
+ * entity-encoded is wrapped in backticks — that would render the raw entity.
+ */
+
+/** ASCII-punctuation entities. Order matters: `&` first, then `\`. */
+export function mdTableCell(text: string): string {
+  return text
+    .replace(/&/g, '&amp;')
+    .replace(/\\/g, '&#92;')
+    .replace(/\|/g, '&#124;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/`/g, '&#96;')
+    // A newline ends the ROW. This is not cosmetic.
+    .replace(/\r\n|\r|\n/g, ' ');
+}
+
+/**
+ * A single-line paragraph.
+ *
+ * Collapsing newlines is the whole defence: every block-level markdown
+ * construct that could inject structure — a heading, a list item, a blockquote,
+ * a fence, a table — must begin at the START OF A LINE. With no line breaks in
+ * the text there is no such position to occupy.
+ */
+export function mdParagraph(text: string): string {
+  return text.replace(/\r\n|\r|\n/g, ' ').trim();
+}
+
+/**
+ * A fenced block whose fence cannot be closed early by the content.
+ *
+ * CommonMark: a fenced block ends at a fence of AT LEAST the opening length, so
+ * an opening fence longer than any backtick run in the content cannot be closed
+ * from inside it. Nothing else needs escaping, which is the point of choosing
+ * this sink for unbounded text.
+ */
+export function mdFence(text: string, info = ''): string[] {
+  const runs = [...text.matchAll(/`+/g)].map((m) => m[0].length);
+  const fence = '`'.repeat(Math.max(3, (runs.length > 0 ? Math.max(...runs) : 0) + 1));
+  return [`${fence}${info}`, text.replace(/\r\n|\r/g, '\n'), fence];
+}
+
 /** Markdown for `$GITHUB_STEP_SUMMARY`. Same content, same ordering. */
 export function renderStepSummary(outcome: ScanOutcome): string {
   const v = outcome.verdict;
@@ -217,20 +294,28 @@ export function renderStepSummary(outcome: ScanOutcome): string {
     '',
     `| | |`,
     `|---|---|`,
-    `| estate | \`${v.estateId}\` |`,
-    `| cloud | \`${v.cloud}\` |`,
-    `| run | \`${outcome.runRecord.runId}\` |`,
-    `| at | \`${v.at}\` |`,
-    `| scope | ${v.scope} |`,
+    `| estate | ${mdTableCell(v.estateId)} |`,
+    `| cloud | ${mdTableCell(v.cloud)} |`,
+    `| run | ${mdTableCell(outcome.runRecord.runId)} |`,
+    `| at | ${mdTableCell(v.at)} |`,
+    `| scope | ${mdTableCell(v.scope)} |`,
     '',
-    v.message,
+    // The verdict message EMBEDS `ProbeFailure.detail` verbatim, so it is
+    // attacker-influenced even though this lane composed the sentence around it.
+    mdParagraph(v.message),
     '',
   ];
 
   if (v.kind === 'paused') {
     out.push('### Observed resource states', '', '| state | resource | api-version |', '|---|---|---|');
     for (const o of v.observed) {
-      out.push(`| \`${o.powerState}\` | \`${o.resourceId}\` | \`${o.armApiVersion}\` |`);
+      // `powerState` and `armApiVersion` are constrained, but `resourceId` is an
+      // Azure resource name. Encoded, and NOT wrapped in backticks — entities do
+      // not decode inside a code span.
+      out.push(
+        `| ${mdTableCell(o.powerState)} | ${mdTableCell(o.resourceId)} | ` +
+          `${mdTableCell(o.armApiVersion)} |`,
+      );
     }
     out.push(
       '',
@@ -243,13 +328,21 @@ export function renderStepSummary(outcome: ScanOutcome): string {
 
   if (v.kind === 'unreachable') {
     if (v.failures.length > 0) {
-      out.push('### Probe failures', '', '| stage | target | class | http | detail |', '|---|---|---|---|---|');
-      for (const f of v.failures) {
+      // Only the CONSTRAINED fields are tabulated: `stage` and `classification`
+      // are string-union types and `httpStatus` is a number or null. The ARM id
+      // and the response body are unbounded attacker-influenced text and go into
+      // a fenced block, where nothing is interpreted and nothing needs escaping.
+      out.push('### Probe failures', '', '| # | stage | class | http |', '|---|---|---|---|');
+      v.failures.forEach((f, i) => {
         out.push(
-          `| ${f.stage} | \`${f.target}\` | ${f.classification} | ` +
-            `${f.httpStatus === null ? '_none_' : f.httpStatus} | ${f.detail.replace(/\|/g, '\\|')} |`,
+          `| ${i + 1} | ${mdTableCell(f.stage)} | ${mdTableCell(f.classification)} | ` +
+            `${f.httpStatus === null ? '_none_' : f.httpStatus} |`,
         );
-      }
+      });
+      out.push('', 'Target and detail, verbatim:', '');
+      v.failures.forEach((f, i) => {
+        out.push(...mdFence(`[${i + 1}] ${f.target}\n${f.detail}`));
+      });
     }
     out.push('', 'No graph was built, no detector ran, and no finding state was changed.');
     return out.join('\n');
@@ -261,12 +354,14 @@ export function renderStepSummary(outcome: ScanOutcome): string {
     out.push(
       '### :rotating_light: Population regression',
       '',
-      outcome.populationRegression.message,
+      mdParagraph(outcome.populationRegression.message),
       '',
       '| detector | kind | examined before | examined now |',
       '|---|---|---|---|',
       ...outcome.populationRegression.detectors.map(
-        (r) => `| \`${r.detector}\` | ${r.kind} | ${r.previousExamined} | ${r.examined} |`,
+        (r) =>
+          `| ${mdTableCell(r.detector)} | ${mdTableCell(r.kind)} | ${r.previousExamined} | ` +
+          `${r.examined} |`,
       ),
       '',
     );
@@ -287,13 +382,14 @@ export function renderStepSummary(outcome: ScanOutcome): string {
       `| findings produced | ${c.findingsProduced} |`,
       `| detectors run / blind | ${c.detectorsRun} / ${c.detectorsBlind} |`,
       `| graph nodes / edges | ${c.nodes} / ${c.edges} |`,
-      `| graph version | \`${outcome.graphVersion?.versionId ?? 'none'}\` (${outcome.graphVersion?.status ?? 'n/a'}) |`,
+      `| graph version | ${mdTableCell(outcome.graphVersion?.versionId ?? 'none')} ` +
+        `(${mdTableCell(outcome.graphVersion?.status ?? 'n/a')}) |`,
       '',
       '### Changed since the last run',
       '',
-      '```',
-      ...renderDigestSections(d),
-      '```',
+      // The digest carries finding titles and ARM ids. A fence whose length is
+      // computed from the content cannot be closed early from inside it.
+      ...mdFence(renderDigestSections(d).join('\n')),
     );
   }
   // `outcome.notes` — NOT just `digest.notes`. The step summary is the surface
@@ -302,7 +398,7 @@ export function renderStepSummary(outcome: ScanOutcome): string {
   // graph-version receipt live. Rendering only the digest's notes here left all
   // of those visible in the log and invisible in the summary (review of #4014).
   if (outcome.notes.length > 0) {
-    out.push('', '### Run notes', '', ...outcome.notes.map((n) => `- ${n}`));
+    out.push('', '### Run notes', '', ...outcome.notes.map((n) => `- ${mdParagraph(n)}`));
   }
   return out.join('\n');
 }

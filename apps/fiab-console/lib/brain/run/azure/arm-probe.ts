@@ -205,6 +205,71 @@ function httpFailure(
   };
 }
 
+/**
+ * A value that could not be safely placed in a Kusto query literal.
+ *
+ * THROWN, never escaped-and-continued. See {@link assertKustoLiteralSafe}.
+ */
+export class UnsafeQueryScopeError extends Error {
+  constructor(kind: string, value: string, why: string) {
+    super(
+      `refusing to build the discovery query: the ${kind} ${JSON.stringify(value)} ${why}. ` +
+        'This value is REJECTED rather than escaped. The Azure Resource Graph REST API has no ' +
+        'parameter binding — `QueryRequest` carries only a query string — so a literal is the ' +
+        'only construction available, and hand-rolled quote-doubling next to the query is the ' +
+        'exact pattern `scripts/ci/check-sql-quoting.mjs` exists to prevent. Every value this ' +
+        'query interpolates has a documented, RESTRICTIVE character set, so validating is both ' +
+        'available and strictly stronger than escaping: an input that cannot contain a quote ' +
+        'cannot break out of one.',
+    );
+    this.name = 'UnsafeQueryScopeError';
+  }
+}
+
+/**
+ * ARM resource-group names: letters, digits, `_`, `-`, `.`, `(`, `)`, and
+ * Unicode word characters; 1–90 chars; may not end in `.`.
+ *
+ * Deliberately NARROWER than the ARM rule (ASCII only): this lane's scope comes
+ * from a workflow env var naming Loom's own admin-plane groups, and a Unicode
+ * homoglyph in that position would be a finding in itself.
+ */
+const RESOURCE_GROUP_NAME = /^[A-Za-z0-9_()\-.]{1,90}$/;
+
+/**
+ * The `loom-estate-id` tag VALUE.
+ *
+ * Azure tag values permit almost anything, so unlike a resource-group name this
+ * one is not constrained by the platform — it is constrained HERE, to the shape
+ * the deploy actually stamps. A tag value outside it is refused rather than
+ * escaped, which keeps every interpolated value provably quote-free.
+ */
+const ESTATE_TAG_VALUE = /^[A-Za-z0-9_:\-.]{1,128}$/;
+
+/**
+ * Prove a value cannot terminate a Kusto string literal.
+ *
+ * Rejects on the pattern AND, independently, on the presence of a quote or a
+ * backslash — belt and braces, so a future widening of the pattern cannot
+ * silently re-admit the character that matters. The second check is not
+ * redundant defence-in-depth theatre; it is the assertion that survives an edit
+ * to the first.
+ */
+export function assertKustoLiteralSafe(kind: string, value: string, pattern: RegExp): string {
+  if (!pattern.test(value)) {
+    throw new UnsafeQueryScopeError(kind, value, `does not match ${String(pattern)}`);
+  }
+  if (/['"\\\r\n]/.test(value)) {
+    throw new UnsafeQueryScopeError(
+      kind,
+      value,
+      'contains a quote, a backslash or a newline even though it matched the allowed pattern — ' +
+        'the pattern has been widened and no longer guarantees what this check assumes',
+    );
+  }
+  return value;
+}
+
 /** Build the discovery query. Exported so a finding can cite what it ranged over. */
 export function discoveryQuery(opts?: {
   readonly estateTag?: string;
@@ -216,22 +281,21 @@ export function discoveryQuery(opts?: {
     // Tag comparison is case-sensitive on the VALUE in ARG, and the deploy
     // stamps it verbatim, so it is compared verbatim rather than normalized —
     // a normalizing comparison here would silently widen ownership.
-    lines.push(`| where tags['loom-estate-id'] == '${quote(opts.estateTag)}'`);
+    const tag = assertKustoLiteralSafe('estate tag', opts.estateTag, ESTATE_TAG_VALUE);
+    lines.push(`| where tags['loom-estate-id'] == '${tag}'`);
   }
   if (opts?.resourceGroups !== undefined && opts.resourceGroups.length > 0) {
     // `in~` is the case-INSENSITIVE membership operator. ARM resource-group
     // names are case-insensitive and Azure returns them in inconsistent casing,
     // so a case-sensitive comparison here would silently drop resources and
     // shrink the examined population.
-    const list = opts.resourceGroups.map((g) => `'${quote(g)}'`).join(', ');
+    const list = opts.resourceGroups
+      .map((g) => `'${assertKustoLiteralSafe('resource group', g, RESOURCE_GROUP_NAME)}'`)
+      .join(', ');
     lines.push(`| where resourceGroup in~ (${list})`);
   }
   lines.push('| project id, type', '| order by id asc');
   return lines.join('\n');
-}
-
-function quote(v: string): string {
-  return v.replace(/'/g, "''");
 }
 
 /**

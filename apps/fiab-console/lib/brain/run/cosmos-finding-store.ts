@@ -40,12 +40,7 @@
 
 import { Buffer } from 'node:buffer';
 import { CosmosClient, type Container } from '@azure/cosmos';
-import {
-  ChainedTokenCredential,
-  DefaultAzureCredential,
-  ManagedIdentityCredential,
-  type TokenCredential,
-} from '@azure/identity';
+import { DefaultAzureCredential, type TokenCredential } from '@azure/identity';
 import type { FindingRecord, ScanRunRecord } from './model';
 import type { FindingStore } from './ports';
 
@@ -110,26 +105,42 @@ export function fingerprintFromDocumentId(id: string): string {
 }
 
 /**
- * The credential chain.
+ * The credential.
  *
- * The managed-identity leg is added ONLY when a client id is present. On the
- * in-VNet ACA runner that is the console UAMI — the identity that already holds
- * Cosmos Data Contributor on this account, which is why this lane needs no new
- * `sqlRoleAssignment`. Off that runner the leg is ABSENT rather than
- * present-and-failing: an unconditional `ManagedIdentityCredential` costs a
- * failed IMDS probe on every container access before the fallback (review of
- * #4014).
+ * ── WHY THIS IS NOT A HAND-ROLLED CHAIN (ws-credential-adoption) ──────────
+ * `scripts/ci/check-workspace-credential-adoption.mjs` is a shrink-only ratchet
+ * on `new ChainedTokenCredential(`, and the first version of this lane added two
+ * — taking the repo from 130 to 131 and failing the gate. The gate's stated
+ * remedy is the per-workspace factory, or `uamiArmCredential()` for admin/ARM
+ * clients.
  *
- * `AZURE_CLIENT_ID` is deliberately NOT consulted here. In Actions that variable
- * is the service-principal's app id, and handing it to a managed-identity
- * credential asks IMDS for an identity that is not attached to anything.
+ * NEITHER IS AVAILABLE HERE, and the reason is structural rather than a
+ * preference: `lib/azure/arm-credential.ts` imports
+ * `@/lib/azure/aca-managed-identity`, which imports `./fetch-with-timeout`,
+ * which imports `@/lib/resilience/fault-injection`. This module is inside the
+ * CLI's emit closure, and `tsconfig.cli.json` declares NO `paths` mapping on
+ * purpose — tsc resolves `@/` for typechecking but does not rewrite it on emit,
+ * so an alias anywhere in that closure compiles and then dies at 04:11 UTC with
+ * `Cannot find module '@/lib/...'`. Adopting the factory would trade a lint gate
+ * for a runtime failure.
+ *
+ * So the chain is not hand-rolled AT ALL — it is the SDK's own.
+ * `DefaultAzureCredential` already composes Environment -> WorkloadIdentity ->
+ * ManagedIdentity -> AzureCLI, and `managedIdentityClientId` selects WHICH
+ * managed identity, which is precisely what the two-leg chain was written to do.
+ * One documented constructor replaces a bespoke composition — the same
+ * centralisation argument the gate itself makes.
+ *
+ * On the in-VNet ACA runner the selected identity is the console UAMI, which
+ * already holds Cosmos Data Contributor on this account.
+ *
+ * `AZURE_CLIENT_ID` is deliberately NOT consulted: in Actions that is the
+ * service principal's app id, and handing it to a managed-identity credential
+ * asks IMDS for an identity that is not attached to anything.
  */
 function credential(): TokenCredential {
   const clientId = (process.env.LOOM_UAMI_CLIENT_ID || '').trim();
-  const chain: ManagedIdentityCredential[] = clientId
-    ? [new ManagedIdentityCredential({ clientId })]
-    : [];
-  return new ChainedTokenCredential(...chain, new DefaultAzureCredential());
+  return new DefaultAzureCredential(clientId ? { managedIdentityClientId: clientId } : {});
 }
 
 let _client: CosmosClient | null = null;
@@ -291,13 +302,25 @@ export class CosmosFindingStore implements FindingStore {
   }
 
   private async recentRuns(estateId: string, top: number): Promise<ScanRunRecord[]> {
+    // `TOP @n` is PARAMETERISED, not interpolated. Cosmos SQL supports a
+    // parameter in TOP, so there is no reason to build this by concatenation —
+    // and `top` reaching a query string at all is the shape
+    // `scripts/ci/check-sql-quoting.mjs` exists to keep out of the codebase,
+    // even when the value is a local constant today.
+    if (!Number.isSafeInteger(top) || top < 1) {
+      throw new RangeError(
+        `recentRuns: top must be a positive safe integer (got ${String(top)}). Refusing to ` +
+          'issue a query whose bound cannot be established.',
+      );
+    }
     const container = await this.getContainer();
     const { resources } = await container.items
       .query<ScanRunRecord>({
         query:
-          `SELECT TOP ${top} * FROM c WHERE c.estateId = @estateId AND c.docType = @docType ` +
+          'SELECT TOP @top * FROM c WHERE c.estateId = @estateId AND c.docType = @docType ' +
           'ORDER BY c.startedAt DESC',
         parameters: [
+          { name: '@top', value: top },
           { name: '@estateId', value: estateId },
           { name: '@docType', value: 'scan-run' },
         ],

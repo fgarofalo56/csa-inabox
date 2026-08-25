@@ -24,6 +24,8 @@ import {
   ArmEstateProbe,
   POWER_READERS,
   SCOPED_TYPES,
+  UnsafeQueryScopeError,
+  assertKustoLiteralSafe,
   containerAppState,
   discoveryQuery,
   type FetchLike,
@@ -213,8 +215,6 @@ describe('ArmEstateProbe — the query and the reader table are ONE decision', (
     expect(discoveryQuery({ estateTag: 'my-estate' })).toContain(
       "tags['loom-estate-id'] == 'my-estate'",
     );
-    // A quote in the value is escaped rather than terminating the literal.
-    expect(discoveryQuery({ estateTag: "o'brien" })).toContain("== 'o''brien'");
   });
 
   it('the resource-group filter uses the CASE-INSENSITIVE membership operator', () => {
@@ -245,6 +245,119 @@ describe('ArmEstateProbe — the query and the reader table are ONE decision', (
     expect(result.scope).toContain('ALL tags');
     expect(result.scope).toContain('in ALL resource groups');
     expect(result.scope).toContain('across every readable subscription');
+  });
+});
+
+/**
+ * THE QUERY SCOPE IS VALIDATED, NOT ESCAPED (`check-sql-quoting`).
+ *
+ * The first version hand-rolled a quote-DOUBLING replace next to the query —
+ * the exact pattern that guard exists to keep out of the codebase, and the same
+ * defect class as the CodeQL finding in `report.ts`: local escaping that looks
+ * right and is not centrally reviewed. (The literal is not reproduced here: the
+ * guard scans comments too, and it is right to — a copy in a comment is how the
+ * next author learns the pattern.)
+ *
+ * The Azure Resource Graph REST API has NO parameter binding (`QueryRequest`
+ * carries only a query string), so a literal is the only construction
+ * available. But every value this query interpolates has a documented,
+ * restrictive character set — so it is VALIDATED and REFUSED, which is strictly
+ * stronger than escaping: an input that cannot contain a quote cannot break out
+ * of one.
+ */
+describe('discoveryQuery — validated scope, no hand-rolled quoting', () => {
+  /** Hostile in ANY position. Length limits differ, so they are separate. */
+  const HOSTILE = [
+    "o'brien",
+    "x' or '1'=='1",
+    "rg'; Resources | project id //",
+    'a\\b',
+    'a"b',
+    'a\nb',
+    'a\rb',
+    'a|b',
+  ];
+
+  it.each(HOSTILE)('REFUSES a hostile resource group: %j', (value) => {
+    expect(() => discoveryQuery({ resourceGroups: [value] })).toThrow(UnsafeQueryScopeError);
+  });
+
+  it.each(HOSTILE)('REFUSES a hostile estate tag: %j', (value) => {
+    expect(() => discoveryQuery({ estateTag: value })).toThrow(UnsafeQueryScopeError);
+  });
+
+  it('REFUSES an over-long value in each position, at ITS OWN limit', () => {
+    // The limits differ — 90 for an ARM resource-group name, 128 for the tag
+    // value — so a single shared fixture would silently only exercise one of
+    // them. Absolute numbers, not arithmetic on the constants they guard.
+    expect(() => discoveryQuery({ resourceGroups: ['x'.repeat(91)] })).toThrow(
+      UnsafeQueryScopeError,
+    );
+    expect(() => discoveryQuery({ resourceGroups: ['x'.repeat(90)] })).not.toThrow();
+    expect(() => discoveryQuery({ estateTag: 'x'.repeat(129) })).toThrow(UnsafeQueryScopeError);
+    expect(() => discoveryQuery({ estateTag: 'x'.repeat(128) })).not.toThrow();
+  });
+
+  it('a refused value NEVER reaches the query text', () => {
+    // The property that matters. A "validate then continue anyway" bug would
+    // still throw somewhere and still emit the value.
+    let query = '';
+    try {
+      query = discoveryQuery({ resourceGroups: ["rg'; drop //"] });
+    } catch {
+      // expected
+    }
+    expect(query).toBe('');
+  });
+
+  it('CONTROL: the real resource-group names are ACCEPTED', () => {
+    // Without this the validator could reject everything and pass every test
+    // above while breaking the lane completely.
+    for (const rg of [
+      'rg-csa-loom-admin-centralus',
+      'rg-csa-loom-admin-usgovvirginia',
+      'rg_with_underscores',
+      'rg.with.dots',
+      'rg(with-parens)',
+    ]) {
+      expect(() => discoveryQuery({ resourceGroups: [rg] })).not.toThrow();
+      expect(discoveryQuery({ resourceGroups: [rg] })).toContain(`'${rg}'`);
+    }
+  });
+
+  it('CONTROL: the derived estate id shape is ACCEPTED', () => {
+    // `loom:<sub8>:<rg>` — what resolveScanEstateId produces.
+    const id = 'loom:abcdef01:rg-csa-loom-admin-centralus';
+    expect(() => discoveryQuery({ estateTag: id })).not.toThrow();
+    expect(discoveryQuery({ estateTag: id })).toContain(`'${id}'`);
+  });
+
+  it('the emitted query contains no doubled quote — nothing is being escaped', () => {
+    const q = discoveryQuery({
+      estateTag: 'loom:abcdef01:rg-x',
+      resourceGroups: ['rg-a', 'rg-b'],
+    });
+    expect(q).not.toContain("''");
+  });
+
+  it('the belt-and-braces check fires if the PATTERN is ever widened', () => {
+    // The second assertion inside assertKustoLiteralSafe is not defence-in-depth
+    // theatre — it is the check that survives an edit to the first one. Proven
+    // by handing it a deliberately over-permissive pattern.
+    expect(() => assertKustoLiteralSafe('thing', "a'b", /^.*$/)).toThrow(
+      /no longer guarantees what this check assumes/,
+    );
+  });
+
+  it('the refusal message says WHY escaping was not the answer', () => {
+    let message = '';
+    try {
+      discoveryQuery({ resourceGroups: ["o'brien"] });
+    } catch (err) {
+      message = err instanceof Error ? err.message : String(err);
+    }
+    expect(message).toContain('REJECTED rather than escaped');
+    expect(message).toContain('no parameter binding');
   });
 });
 

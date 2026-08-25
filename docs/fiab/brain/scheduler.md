@@ -339,7 +339,7 @@ node lib/brain/run/__tests__/mutation/run-arms.mjs regression-reported-as-new
 ```
 
 Twenty-five arms, each removing one property the lane claims. The runner refuses
-to start against a red baseline or a baseline that executed fewer than 215 tests
+to start against a red baseline or a baseline that executed fewer than 300 tests
 (a green sweep over an unexecuted suite scores every arm as CAUGHT for the wrong
 reason — that is #3783). A `NEEDLE-MISSED` outcome is reported separately from
 both CAUGHT and SURVIVED, because a needle that does not match is a silent no-op
@@ -431,7 +431,7 @@ only ever come from a run of this workflow.
 
 | | Executed | Evidence |
 |---|---|---|
-| Unit + property suite | yes | `vitest run lib/brain/run` — 240 tests |
+| Unit + property suite | yes | `vitest run lib/brain/run` — 336 tests |
 | Mutation sweep (25 arms) | yes | `run-arms.mjs`, all as declared |
 | Compiled CLI runs end to end | yes | plain Node, Commercial ARM |
 | ARG discovery + per-resource ARM `GET` | yes, **Commercial only** | 63 discovered, 63 read |
@@ -443,7 +443,7 @@ only ever come from a run of this workflow.
 | The workflow itself, on either runner | **no** | it has never run |
 | Azure Government, anything | **no** | requires a run of this workflow |
 
-### Why the jobs run on `[self-hosted, loom-aca]`
+### Why the Commercial job runs on `[self-hosted, loom-aca]`
 
 **Measured 2026-08-24 from outside the VNet** — a workstation sits in the same
 network position as a GitHub-hosted runner:
@@ -459,18 +459,91 @@ Both cosmos modules set `publicNetworkAccess: 'Disabled'` with
 **every** path — including PAUSED and UNREACHABLE — so on `ubuntu-latest` every
 single run would die before persisting anything, in **both** clouds.
 
-`[self-hosted, loom-aca]` is the scale-to-zero ACA Job runner
-(`gh-runner-job.bicep`), which is inside the hub VNet **and runs as the console
+`loom-aca` is real: it is declared in `.github/actionlint.yaml` and used by 11
+workflows including `deploy-fiab-commercial.yml`. It is the scale-to-zero ACA Job
+runner (`gh-runner-job.bicep`), inside the hub VNet **and running as the console
 UAMI** (`identity: consoleUamiId`). That identity already holds the Cosmos
 built-in Data Contributor role via `cosmosDataRole` in both modules, so this lane
 needs **no new `sqlRoleAssignment`** and puts no object id in a public
 repository. The workflow reads `LOOM_UAMI_CLIENT_ID` off the console app so the
 credential chain selects it explicitly.
 
-**The Gov runner label `loom-aca-gov` is UNVERIFIED.** No such runner has been
-observed registered. If none exists the Gov job will sit queued rather than fail
-— which is its own silent state, and it is named here rather than left to be
-discovered.
+### There is NO Gov in-boundary runner — and the Gov job says so out loud
+
+An earlier revision of this lane targeted `[self-hosted, loom-aca-gov]`. **That
+label was invented.** Measured:
+
+- `.github/actionlint.yaml` declares exactly one self-hosted label, `loom-aca`.
+- actionlint says so directly: `label "loom-aca-gov" is unknown`.
+- Every one of the ~25 `gov-*.yml` workflows in this repo runs `ubuntu-latest`.
+
+Targeting a label nothing serves would have made the Gov job **queue** — up to
+GitHub's 24-hour ceiling, showing as neither red nor green. A lane that never
+runs and never complains is the precise failure `#3936` exists to prevent.
+
+So the Gov job runs where every other Gov job runs, and a **preflight probes the
+Gov Cosmos account before the scan** and fails with the specific cause and the
+specific remediation rather than dying later inside `recordRun` with a stack
+trace. Under `cloud-parity.md` a Gov gap must be "a tracked defect with an owner
+and a date — never a silent state": a nightly red naming its own remediation is
+that tracked state. **Making it green would be a false claim.**
+
+Closing it needs a Gov equivalent of the `gh-aca-runner` ACA Job inside the Gov
+hub VNet, its label declared in `.github/actionlint.yaml`, and the job pointed at
+it. That is infrastructure work outside this lane.
+
+### The queue-time watchdog
+
+`timeout-minutes` bounds a job's **execution**, not its time in the queue. So a
+separate `queue-watchdog` job runs on a GitHub-hosted runner, polls this run's
+own jobs, and fails if a scan job is still queued after 20 minutes.
+
+The budget is 20 minutes rather than 2 because `loom-aca` scales **from zero**
+when a job queues — brief queueing is its designed behaviour, and a preflight
+demanding a runner already be online would fail on the healthy path. 20 minutes
+is far outside a cold start and far inside the 24-hour silent ceiling.
+
+It measures whether the job **started**, not whether a runner exists: listing
+self-hosted runners needs `administration: read`, which `GITHUB_TOKEN` cannot be
+granted, whereas reading this run's jobs needs `actions: read`, which it can. The
+observable that can actually be established is the one that is checked.
+
+### Markdown encoding in the step summary
+
+`ProbeFailure.detail` is a verbatim ARM response body, and resource ids and
+detector subjects are Azure resource names and tag values — so text reaching the
+step summary is **attacker-influenced**. CodeQL flagged the first version's
+`detail.replace(/\|/g, '\\|')` as `js/incomplete-sanitization` (HIGH), correctly:
+a backslash immediately before a pipe produced `\\|`, which GFM reads as an
+escaped backslash followed by an **unescaped** pipe, breaking the table. It also
+ignored newlines, which end the table *row*.
+
+Two structural fixes, not "also escape the backslash":
+
+1. **Entity-encode instead of backslash-escape**, so there is no escape character
+   to re-escape and the class cannot recur. `&` is encoded first.
+2. **Put unbounded text where escaping is not needed** — the ARM id and the
+   response body go into a fenced block whose fence is computed longer than the
+   longest backtick run in the content. Only union-typed and numeric fields stay
+   in the table.
+
+Entities do not decode inside a code span, so nothing entity-encoded is wrapped
+in backticks. `__tests__/markdown-encoding.test.ts` carries a 15-payload hostile
+corpus and a control that shows the original one-liner failing it.
+
+### The query scope is validated, not escaped
+
+The Azure Resource Graph REST API has **no parameter binding** — `QueryRequest`
+carries only a query string — so a literal is the only construction available.
+The first version hand-rolled quote-doubling next to the query, which
+`check-sql-quoting` correctly rejects.
+
+Every value the query interpolates has a documented, restrictive character set,
+so values are **validated and refused** rather than escaped: an input that cannot
+contain a quote cannot break out of one. A resource-group name is checked against
+the ARM naming rule (ASCII-only, narrower than ARM's own, because a Unicode
+homoglyph in this position would be a finding in itself); the estate tag is
+checked against the shape the deploy stamps.
 
 ---
 

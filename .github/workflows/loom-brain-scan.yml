@@ -111,12 +111,71 @@ on:
 
 permissions:
   contents: read
+  # `actions: read` is what `gh api .../actions/runs/<id>/jobs` needs. It is a
+  # GRANTABLE permission; listing self-hosted RUNNERS needs `administration:
+  # read`, which GITHUB_TOKEN cannot be given — so the watchdog below measures
+  # whether the job STARTED rather than whether a runner exists. That is the
+  # observable that actually matters and the one this token can establish.
+  actions: read
 
 concurrency:
   group: loom-brain-scan
   cancel-in-progress: false
 
 jobs:
+  # ── QUEUE-TIME WATCHDOG ────────────────────────────────────────────────────
+  #
+  # `timeout-minutes` bounds a job's EXECUTION, not the time it spends waiting
+  # for a runner. A job targeting a label no runner serves therefore sits QUEUED
+  # — up to GitHub's 24-hour ceiling — showing as neither red nor green. A lane
+  # that never runs and never goes red is the exact failure mode #3936 exists to
+  # prevent, and the `lcu-autopilot` precedent it cites.
+  #
+  # This job runs on a GitHub-hosted runner (always available), polls this run's
+  # own jobs, and FAILS if a scan job is still queued past the budget. It does
+  # not cancel anything: a late scan that eventually runs is still worth having,
+  # and the red run is the signal.
+  #
+  # WHY THE BUDGET IS 20 MINUTES AND NOT 2: `loom-aca` is a KEDA-scaled ACA Job
+  # that scales FROM ZERO when a job queues — brief queueing is its normal,
+  # designed behaviour (`loom-aca-runner-smoke.yml` exists to prove that path).
+  # A preflight demanding a runner already be online would fail on the healthy
+  # path. 20 minutes is far outside a cold start and far inside the 24-hour
+  # silent ceiling.
+  queue-watchdog:
+    name: Queue watchdog
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Fail if a scan job is still queued after the budget
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BUDGET_MINUTES: '20'
+        run: |
+          set +e -uo pipefail
+          mkdir -p temp
+          DEADLINE=$(( $(date +%s) + BUDGET_MINUTES * 60 ))
+          while [ "$(date +%s)" -lt "$DEADLINE" ]; do
+            gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/jobs" \
+              --paginate > temp/jobs.json 2>temp/jobs.err
+            RC=$?
+            if [ $RC -ne 0 ]; then
+              echo "::warning::could not read this run's job list (gh exit $RC). The watchdog CANNOT establish whether the scan jobs started, so it claims neither answer and stops watching."
+              cat temp/jobs.err
+              exit 0
+            fi
+            QUEUED=$(jq '[.jobs[] | select(.name | startswith("Brain scan")) | select(.status == "queued")] | length' temp/jobs.json)
+            TOTAL=$(jq '[.jobs[] | select(.name | startswith("Brain scan"))] | length' temp/jobs.json)
+            echo "scan jobs: ${TOTAL}, still queued: ${QUEUED}"
+            if [ "$TOTAL" -gt 0 ] && [ "$QUEUED" -eq 0 ]; then
+              echo "every scan job has left the queue."
+              exit 0
+            fi
+            sleep 30
+          done
+          echo "::error::A Brain scan job was still QUEUED after ${BUDGET_MINUTES} minutes. Nothing has been established about the estate and nothing will be until a runner picks it up — a queued job is neither red nor green, which is the silent-absence failure this lane must never have. Most likely cause: no runner is serving the label the job targets. 'loom-aca' is declared in .github/actionlint.yaml and served by the scale-to-zero gh-aca-runner ACA Job; check that it is running."
+          exit 1
+
   commercial:
     name: Brain scan — Commercial
     if: github.event_name == 'schedule' || inputs.cloud == 'both' || inputs.cloud == 'commercial'
@@ -308,16 +367,29 @@ jobs:
   gov:
     name: Brain scan — Azure Government
     if: github.event_name == 'schedule' || inputs.cloud == 'both' || inputs.cloud == 'gov'
-    # The Gov in-boundary equivalent of the Commercial runner. #3936 states Gov
-    # "needs an in-boundary Actions runner", and the Cosmos posture makes that
-    # true of BOTH clouds, not only Gov: the Gov account is private-endpoint-only
-    # exactly as the Commercial one is.
+    # ── THERE IS NO GOV IN-BOUNDARY RUNNER. MEASURED, NOT ASSUMED. ──────────
     #
-    # DECLARED UNVERIFIED: no `loom-aca-gov` runner has been observed registered.
-    # If none exists this job will sit queued rather than fail, which is its own
-    # silent state — `docs/fiab/brain/scheduler.md` records that as the open Gov
-    # item, and the Gov row of the receipt table stays "not verified".
-    runs-on: [self-hosted, loom-aca-gov]
+    # An earlier revision of this lane targeted `[self-hosted, loom-aca-gov]`.
+    # That label was INVENTED. `.github/actionlint.yaml` declares exactly one
+    # self-hosted label — `loom-aca` — and every one of the ~25 `gov-*.yml`
+    # workflows in this repo runs on `ubuntu-latest`. actionlint said so
+    # directly: `label "loom-aca-gov" is unknown`.
+    #
+    # Targeting it would have made the Gov job QUEUE forever: neither red nor
+    # green, a lane that never runs and never complains — the precise failure
+    # #3936 exists to prevent. So the label is gone and the job runs where every
+    # other Gov job runs.
+    #
+    # THE CONSEQUENCE IS HONEST AND IT IS RED: the Gov Cosmos account is
+    # `publicNetworkAccess: 'Disabled'` behind a private endpoint, exactly as
+    # the Commercial one is, so a hosted runner CANNOT persist a run record.
+    # The preflight below establishes that by measurement and fails with that
+    # specific reason, rather than letting the run die later inside `recordRun`
+    # with a stack trace. Under `cloud-parity.md` a Gov gap must be "a tracked
+    # defect with an owner and a date — never a silent state": a nightly red
+    # naming its own remediation is that tracked state. Making it green would be
+    # a false claim.
+    runs-on: ubuntu-latest
     timeout-minutes: 30
     outputs:
       verdict: ${{ steps.scan.outputs.verdict }}
@@ -417,6 +489,40 @@ jobs:
             echo "LOOM_UAMI_CLIENT_ID=$UAMI" >> "$GITHUB_ENV"
           fi
           echo "resolved the estate Cosmos endpoint and the console UAMI (values masked)."
+
+      # ── THE KNOWN GOV GAP, ESTABLISHED BY MEASUREMENT ────────────────────
+      #
+      # This runner is on the public internet and the Gov Cosmos account is
+      # private-endpoint-only. Rather than let the scan die two steps later
+      # inside `recordRun` with a Cosmos stack trace, probe the account HERE and
+      # fail with the actual cause and the actual remediation (deploy-integrity
+      # R6). The probe requests a NON-EXISTENT database path: any HTTP answer at
+      # all proves reachability, so no Cosmos data is read and no permission
+      # beyond network access is exercised.
+      #
+      # R7: three outcomes, and it asserts nothing it did not observe.
+      - name: Can this runner reach the Gov Cosmos account?
+        run: |
+          set +e -uo pipefail
+          mkdir -p ../../temp
+          HOST=$(printf '%s' "$LOOM_COSMOS_ENDPOINT" | sed -E 's#^https?://##; s#/.*$##')
+          CODE=$(curl -sS --max-time 20 -o ../../temp/cosmos-probe.out \
+            -w '%{http_code}' "https://${HOST}/dbs/__loom_brain_reachability_probe__" \
+            2>../../temp/cosmos-probe.err)
+          CRC=$?
+          echo "curl exit: ${CRC}, http status: ${CODE:-<none>}"
+          if [ $CRC -ne 0 ]; then
+            echo "::error::could not reach the Gov Cosmos account from this runner (curl exit ${CRC}). NOTHING was scanned. The transport failure below is all that was established — no further cause is claimed."
+            cat ../../temp/cosmos-probe.err
+            exit 1
+          fi
+          if grep -q 'through public internet' ../../temp/cosmos-probe.out; then
+            echo "::error::KNOWN GOV GAP, CONFIRMED THIS RUN. The Gov Cosmos account refused this runner with its public-internet firewall message (HTTP ${CODE}). The account is publicNetworkAccess=Disabled behind a private endpoint, and every gov-*.yml workflow in this repo runs on ubuntu-latest because there is NO Gov in-boundary runner — .github/actionlint.yaml declares only 'loom-aca', which serves Commercial. The scan can reach ARM and classify a verdict, but CANNOT persist a run record or a finding. Remediation: stand up a Gov equivalent of the gh-aca-runner ACA Job (platform/fiab/bicep/modules/admin-plane/gh-runner-job.bicep) inside the Gov hub VNet, declare its label in .github/actionlint.yaml, and point this job at it. Failing here rather than mid-run so the reason is the first thing in the log."
+            head -c 400 ../../temp/cosmos-probe.out; echo
+            exit 1
+          fi
+          echo "the Gov Cosmos account answered HTTP ${CODE} — reachable from this runner. Proceeding."
+        working-directory: apps/fiab-console
 
       - name: Run the Brain scan
         id: scan

@@ -281,16 +281,21 @@ export async function main(): Promise<number> {
   const scope = armScope();
   const subscriptions = optionalList('LOOM_BRAIN_SUBSCRIPTIONS');
 
-  const { ChainedTokenCredential, DefaultAzureCredential, ManagedIdentityCredential } =
-    await import('@azure/identity');
-  // The UAMI leg is added ONLY when a client id is present. On the in-VNet ACA
-  // runner that is the console UAMI — the identity that already holds Cosmos
-  // Data Contributor on the account, which is why this lane needs no new role
-  // assignment. Off the runner the leg is absent rather than present-and-failing,
-  // so there is no IMDS probe to time out before the fallback (review of #4014).
+  const { DefaultAzureCredential } = await import('@azure/identity');
+  // The SDK's OWN chain, not a hand-rolled one. See the long note on
+  // `credential()` in ./cosmos-finding-store.ts: the credential factory that
+  // `check-workspace-credential-adoption` points at is alias-bound
+  // (`arm-credential` -> `@/lib/azure/aca-managed-identity` ->
+  // `./fetch-with-timeout` -> `@/lib/resilience/fault-injection`), and this file
+  // is the CLI's emit closure, which must stay alias-free or the compiled
+  // artifact dies at runtime. `DefaultAzureCredential` already composes
+  // Environment -> WorkloadIdentity -> ManagedIdentity -> AzureCLI, and
+  // `managedIdentityClientId` selects WHICH managed identity — exactly what the
+  // two-leg chain was written to do, in one documented constructor.
   const uamiClientId = (process.env.LOOM_UAMI_CLIENT_ID || '').trim();
-  const chain = uamiClientId ? [new ManagedIdentityCredential({ clientId: uamiClientId })] : [];
-  const credential = new ChainedTokenCredential(...chain, new DefaultAzureCredential());
+  const credential = new DefaultAzureCredential(
+    uamiClientId ? { managedIdentityClientId: uamiClientId } : {},
+  );
   const getToken = async (s: string): Promise<string | null> => {
     const token = await credential.getToken(s);
     return token?.token ?? null;

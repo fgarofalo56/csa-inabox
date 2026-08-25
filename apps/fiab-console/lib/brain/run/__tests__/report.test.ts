@@ -136,7 +136,9 @@ describe('renderStepSummary', () => {
     const md = renderStepSummary(paused);
     expect(md.startsWith('## Loom Brain scan — PAUSED')).toBe(true);
     expect(md).toContain('NOTHING was scanned');
-    expect(md).toContain('| `Stopped` |');
+    // Not backticked: entities do not decode inside a code span, so nothing
+    // entity-encoded may be wrapped in one (see markdown-encoding.test.ts).
+    expect(md).toContain('| Stopped |');
   });
 
   it('an UNREACHABLE summary carries the probe failures verbatim', async () => {

@@ -109,7 +109,7 @@ function executedCount(output) {
  * trip it while a suite that silently stopped executing does. RAISE this as the
  * suite grows — never lower it.
  */
-const MIN_BASELINE_TESTS = 215;
+const MIN_BASELINE_TESTS = 300;
 
 /** Apply an edit against an LF-normalised view, restoring the original endings. */
 function applyMutation(original, find, replace) {
