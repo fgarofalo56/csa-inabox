@@ -31,6 +31,10 @@ import { resolveSnowflakeLinkedService, snowflakeDatasetKind, listSnowflakeTable
 // there for why the edge is one-way. Shared primitives come from the leaf.
 import { runMirrorAdfCopy, adfCopyConfigured } from './mirror-adf-copy';
 import { BRONZE, MAX_TABLES, adfSafeName, mirrorAdlsLinkedService } from './mirror-adf-shared';
+// Source-type ↔ connection-type compatibility. Shared with the wizard so the
+// picker and this refusal cannot drift; see that module's header for the
+// incident it closes.
+import { describeMirrorConnMismatch } from './mirror-source-compat';
 export { runMirrorAdfCopy, planCopyTrigger, type CopyTriggerPlan } from './mirror-adf-copy';
 
 
@@ -132,6 +136,16 @@ export interface MirrorSource {
   connectionId?: string;
   /** Tenant scope for resolving `connectionId`. Non-secret. Stamped alongside it. */
   tenantId?: string;
+  /**
+   * The bound connection's TYPE ('snowflake' | 'azure-sql' | …), stamped by
+   * `withSourceAuth()`. Non-secret. Compared against `sourceType` before ANY
+   * source is dialled, so a mirror typed Azure SQL with a Snowflake connection
+   * is refused with a true message instead of being read down the TDS path —
+   * which appended the Azure SQL host suffix to a Snowflake account identifier
+   * and reported the resulting DNS failure as though the user had supplied that
+   * hostname. Absent = not established; never treated as a mismatch (R7).
+   */
+  connType?: string;
 
   /**
    * How ongoing replication behaves (fixed allowlist; carried from the wizard's
@@ -924,6 +938,29 @@ export async function runMirrorSnapshot(
       : isCosmos ? ', with ongoing `_ts`-watermark incremental sync'
         : ' and the source change feed is enabled (CDC)') +
     '. Query it from Synapse Serverless SQL, a Loom notebook, or attach it to a lakehouse via Weave.';
+
+  // SOURCE TYPE vs BOUND CONNECTION — refused here, ahead of EVERY family branch,
+  // because each of them dials something: the ADF Copy branch below builds a
+  // linked service, the SQL branch runs change-feed DDL and a TDS catalog read.
+  // Only from this position is the message's claim that nothing was contacted
+  // actually true (deploy-integrity.md R7).
+  //
+  // The defect this closes: a mirror left on the wizard's hardcoded
+  // `AzureSqlDatabase` default while a Snowflake connection was bound took the
+  // TDS branch, and `azure-sql-client` appended the Azure SQL host suffix to the
+  // Snowflake ACCOUNT IDENTIFIER. The operator was shown a DNS failure for a
+  // hostname Loom had constructed, and opened their Snowflake firewall chasing a
+  // network problem that did not exist.
+  {
+    const mismatch = describeMirrorConnMismatch({ sourceType: src.sourceType, connType: src.connType });
+    if (mismatch) {
+      return {
+        ok: false, status: 'Gated', backend: 'azure-native-cdc', tables: [],
+        gate: { missing: 'matching source type', message: mismatch.message },
+        note,
+      };
+    }
+  }
 
   // Snowflake → ADF Copy runtime (no Microsoft Fabric). Routed before the
   // engineCanSnapshot gate because the built-in TDS/PG/Cosmos engine cannot read

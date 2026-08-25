@@ -15,6 +15,8 @@ import { listPostgresTables } from '@/lib/azure/postgres-flex-client';
 import { listContainers } from '@/lib/azure/cosmos-account-client';
 import { MIRROR_SQL_FAMILY, MIRROR_PG_FAMILY, MIRROR_COSMOS_FAMILY, MIRROR_ADF_COPY_FAMILY } from '@/lib/azure/mirror-engine';
 import { listSnowflakeTables } from '@/lib/azure/snowflake-adf';
+import { resolveConnectionType } from '@/lib/azure/connection-auth';
+import { describeMirrorConnMismatch } from '@/lib/azure/mirror-source-compat';
 import { apiServerError } from '@/lib/api/respond';
 import { withSession } from '@/lib/api/route-toolkit';
 
@@ -31,6 +33,16 @@ export const POST = withSession(async (req: NextRequest, { session: s }) => {
   if (!database) return NextResponse.json({ ok: false, error: 'database is required' }, { status: 400 });
 
   try {
+    // Refuse a source-type/connection mismatch BEFORE the family dispatch below,
+    // which is what decides whether we speak TDS, the pg wire protocol, or ADF.
+    // Dispatching on `sourceType` alone is how a Snowflake account identifier
+    // reached the Azure SQL client, which appended the Azure SQL host suffix and
+    // surfaced the resulting DNS failure as though the user had typed that host.
+    {
+      const connType = await resolveConnectionType(s.claims.oid, connectionId);
+      const mismatch = describeMirrorConnMismatch({ sourceType, connType });
+      if (mismatch) return NextResponse.json({ ok: false, gate: true, error: mismatch.message }, { status: 200 });
+    }
     let tables: Array<{ schema: string; table: string; isIceberg?: boolean }> = [];
     if (MIRROR_SQL_FAMILY.has(sourceType)) {
       if (!server) return NextResponse.json({ ok: false, error: 'server is required for SQL sources' }, { status: 400 });
