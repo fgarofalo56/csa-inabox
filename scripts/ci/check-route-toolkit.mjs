@@ -64,6 +64,25 @@ const TOOLKIT_RE = /\bwith(?:Session|WorkspaceOwner|BackendGate|TenantAdmin|DlzA
 // reason (e.g. a prologue the codemod legitimately can't transform yet). Keep
 // this SHORT — prefer running the codemod.
 const TOUCH_EXEMPT = new Map([
+  // Snowflake mirror mis-typing fix: this route was touched ONLY to add the
+  // source-type/connection compatibility refusal to the create POST body, so a
+  // mirror can no longer be CREATED typed Azure SQL with a Snowflake connection
+  // bound (which made the BFF read a Snowflake account identifier over TDS
+  // against a hostname the platform constructed). The auth prologue is
+  // UNTOUCHED — the added block sits after it, inside the try.
+  //
+  // THE CODEMOD REFUSES THIS FILE, which is what this escape hatch is for. Its
+  // `is401Unauthorized` accepts `apiUnauthorized()` or a NextResponse 401 only;
+  // this route guards with `apiError('unauthenticated', 401)`, so the prologue
+  // is not recognised. Falsifiable in one command:
+  //   node scripts/codemods/migrate-route-toolkit.mjs --file=app/api/items/mirrored-database/route.ts
+  //   → SKIPPED (GET: getSession() without the exact 401 guard)
+  //   → SKIPPED (POST: getSession() without the exact 401 guard)
+  // Normalising the guard to `apiUnauthorized()` would unblock the codemod, but
+  // that is an auth-prologue rewrite of a create route and does not belong in a
+  // P0 hotfix for a live operator-blocking defect. Tracked as follow-up.
+  ['apps/fiab-console/app/api/items/mirrored-database/route.ts',
+   'mirror source-type refusal added to POST body only; codemod SKIPS this file (apiError-shaped 401 prologue)'],
   // #3549/#3551 touched this route ONLY inside Phase-1 item creation, to backfill
   // the bundle definition onto a name-matched EXISTING item that has none. The
   // dedup path pushed `status:'existed'` and wrote nothing while still handing
