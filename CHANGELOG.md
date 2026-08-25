@@ -25,6 +25,14 @@ This file is maintained automatically by
 [Conventional Commits](https://www.conventionalcommits.org/). See
 [RELEASE.md](RELEASE.md) for the release process.
 
+## [0.101.1](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.101.0...csa-inabox-v0.101.1) (2026-08-25)
+
+
+### Bug Fixes
+
+* **ci:** a firewall IP denial arrives in the Docker daemon's words, and acr-login-retry had no needle for it (P0 roll freeze) ([#4052](https://github.com/fgarofalo56/csa-inabox/issues/4052)) ([23754ef](https://github.com/fgarofalo56/csa-inabox/commit/23754ef6ead30ad765f5f1e7252eab68da78890a))
+* **console:** a form placeholder shipped a secret-scanner literal into every build ([#4044](https://github.com/fgarofalo56/csa-inabox/issues/4044)) ([7dfcb21](https://github.com/fgarofalo56/csa-inabox/commit/7dfcb21372d97fe81c71699868ee6827193cffe8)), closes [#4043](https://github.com/fgarofalo56/csa-inabox/issues/4043)
+
 ## [0.101.0](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.100.0...csa-inabox-v0.101.0) (2026-08-25)
 
 
