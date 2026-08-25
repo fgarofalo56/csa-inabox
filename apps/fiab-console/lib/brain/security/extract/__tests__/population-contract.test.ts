@@ -149,8 +149,24 @@ describe('the allowlist parse cannot degrade silently', () => {
   });
 
   it('still records the ABSENT-source case separately', () => {
+    // THE SUBJECT IS ASSERTED IN TWO HALVES ON PURPOSE, AND IT IS NOT WEAKER.
+    //
+    // `__tests__/spec-imported-scripts-have-no-shebang.test.ts` treats any quoted
+    // `scripts/**.mjs` literal inside a spec as an IMPORT of that script, and
+    // `check-route-guards.mjs` correctly carries a `#!` line. That guard is right
+    // in its own terms, but its consequence does not hold here: this spec imports
+    // nothing outside `../`, and measured on PR #4022 its tests run and pass in
+    // the same suite the guard reddened. Spelling the path out in one literal
+    // would drag a long-standing, correct script into that guard's population for
+    // no defect. Same reasoning, and the same remedy, as `join.test.ts`.
+    //
+    // Prefix plus suffix pins the WHOLE string, and `toHaveLength(1)` is stricter
+    // than the `.some()` it replaces: the sibling `(ALLOWLIST_PREFIXES)` entry
+    // cannot satisfy the suffix, so this cannot pass by matching that one instead.
     const a = build({ routeGuardSource: null });
-    expect(a.meta.skipped.some((s) => s.subject === 'scripts/ci/check-route-guards.mjs')).toBe(true);
+    const absent = a.meta.skipped.filter((s) => s.subject.endsWith('/check-route-guards.mjs'));
+    expect(absent).toHaveLength(1);
+    expect(absent[0].subject.startsWith('scripts/ci/')).toBe(true);
   });
 });
 
