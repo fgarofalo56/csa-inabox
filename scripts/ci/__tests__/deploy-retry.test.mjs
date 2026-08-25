@@ -1327,6 +1327,48 @@ test('D6: an empty leaf set refuses to decide rather than inventing a verdict', 
   assert.match(d.reason, /no ARM leaves/);
 });
 
+// ── #3948: the AAS envelope, from ARM shape to retry decision ────────────────
+// Run 32806407520 exited 17 on "2 ARM leaf(s) could not be classified
+// (RootActivityId → unknown; Param1 → unknown)". Both halves of that are pinned
+// here: the leaves the OLD walk produced still fail closed, and the ONE leaf the
+// fixed walk produces is retried. This is the last link in the chain — the
+// drill-down and the taxonomy are only worth anything if the decision moves.
+
+const LEAF_AAS_MID_UPDATE = {
+  code: 'BadRequest',
+  message: "The server '<aas-server>' is currently being updated. Please try again later.",
+  resourceType: 'Microsoft.AnalysisServices/servers',
+  resourceName: '<aas-server>',
+};
+const LEAVES_AAS_ANNOTATIONS_ONLY = [
+  { code: 'RootActivityId', message: '<guid>', resourceType: 'Microsoft.AnalysisServices/servers', resourceName: '<aas-server>' },
+  { code: 'Param1', message: '<aas-server>', resourceType: 'Microsoft.AnalysisServices/servers', resourceName: '<aas-server>' },
+];
+
+test('#3948: the AAS mid-update leaf IS retried (the run failed closed on attempt 1)', () => {
+  const d = decideRetryForLeaves({ ...leafBudget, leafDiagnoses: classifyLeaves([LEAF_AAS_MID_UPDATE]) });
+  assert.equal(d.retry, true, 'a lone transient mid-update leaf must be retried');
+});
+
+test('#3948: the annotations the OLD walk emitted still fail closed', () => {
+  // The control. Adding the taxonomy signal must NOT make a correlation id and
+  // a format argument look like a diagnosis — the fix has to be the WALK.
+  const d = decideRetryForLeaves({ ...leafBudget, leafDiagnoses: classifyLeaves(LEAVES_AAS_ANNOTATIONS_ONLY) });
+  assert.equal(d.retry, false);
+  assert.match(d.reason, /could not be classified/);
+  assert.match(d.reason, /RootActivityId/);
+  assert.match(d.reason, /Param1/);
+});
+
+test('#3948: a mid-update leaf beside a deterministic one is still NOT retried', () => {
+  const d = decideRetryForLeaves({
+    ...leafBudget,
+    leafDiagnoses: classifyLeaves([LEAF_AAS_MID_UPDATE, LEAF_DEFECT]),
+  });
+  assert.equal(d.retry, false, 'a deterministic leaf makes the whole re-deploy futile');
+  assert.match(d.reason, /InvalidTemplate.*defect/);
+});
+
 test('D6: a capacity leaf elevates the backoff base to the taxonomy 300s; non-retryable leaves do not', () => {
   const cap = classifyLeaves([LEAF_CAPACITY]);
   assert.equal(effectiveBackoffBase(45, cap), TAXONOMY.classes.capacity.defaultBackoffSeconds);
