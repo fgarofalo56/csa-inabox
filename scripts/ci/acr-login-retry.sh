@@ -116,10 +116,21 @@ fi
 # so the set classified the CANONICAL post-open propagation failure as permanent
 # and exited on attempt 1 - the precise outcome this script exists to prevent.
 #
-# `is not allowed access` is the right needle, and it is narrow: ACR's NETWORK
-# RULE engine emits it and nothing else does. An RBAC denial says "was denied.
-# Response code: 403" instead - acr-dataplane-ready.sh measured both sides of
-# that discrimination on 2026-08-11 and records it in its own header.
+# `is not allowed access` is the right needle. It is emitted by ACR's NETWORK
+# RULE path; acr-dataplane-ready.sh:33-36 measured it on 2026-08-11, but what it
+# measured was firewall-CLOSED (403 DENIED ... is not allowed access) vs
+# firewall-OPEN (401 UNAUTHORIZED), with an anonymous `curl GET /v2/`. A probe
+# with no principal cannot produce an RBAC denial, so that measurement does NOT
+# establish that an RBAC denial never carries this phrase. Do not cite it for
+# that.
+#
+# It does not need to. The narrowness claim is NOT load-bearing here: the
+# canonical RBAC denial ("Access to registry 'x' was denied. Response code:
+# 403.") already matches `Response code: 403` in the set below, so it is
+# ALREADY retried today, pre-this-change. Even if `is not allowed access` did
+# appear in some RBAC wording, this needle changes nothing about how that case
+# is classified. The behaviour this line adds is confined to the daemon-worded
+# firewall refusal above, which matched nothing at all.
 #
 # COST OF BEING WRONG. If the lease genuinely never opened the registry, this now
 # takes ~165s to say so instead of ~0s. That is the SAME trade #3383 already made
@@ -150,5 +161,5 @@ for i in $(seq 1 "$ATTEMPTS"); do
   fi
 done
 
-echo "::error::acr-login-retry: could NOT authenticate to '${ACR}' after ${ATTEMPTS} attempts over ${SECONDS}s (budget ${ATTEMPTS}x${BACKOFF}s). Every attempt failed with a transient-looking auth error, so this is either a token-exchange window far longer than expected or a permission problem wearing a transient's clothes. LAST ERROR: $(printf '%s' "$LAST" | tr -d '\r' | tr '\n' ' ' | cut -c1-400)" >&2
+echo "::error::acr-login-retry: could NOT authenticate to '${ACR}' after ${ATTEMPTS} attempts over ${SECONDS}s (budget ${ATTEMPTS}x${BACKOFF}s). Every attempt failed with a transient-looking auth error, so this is either a token-exchange window far longer than expected, a registry whose network rules never admitted this runner (the firewall lease may have been erased mid-run - see #3676), or a permission problem wearing a transient's clothes. LAST ERROR: $(printf '%s' "$LAST" | tr -d '\r' | tr '\n' ' ' | cut -c1-400)" >&2
 exit 1

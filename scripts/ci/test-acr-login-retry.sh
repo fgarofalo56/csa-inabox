@@ -63,6 +63,16 @@ PERMANENT_MSG="ERROR: The registry 'nope' could not be resolved: the resource wi
 # The IP here is TEST-NET-3 (RFC 5737) - never a real runner address.
 IPDENY_MSG='WARNING: Error response from daemon: Get "https://x.azurecr.io/v2/": denied: {"errors":[{"code":"DENIED","message":"client with IP '"'"'203.0.113.9'"'"' is not allowed access. Refer https://aka.ms/acr/firewall to grant access."}]}  ERROR: Login failed.'
 
+# The NEGATIVE control for the same needle: ACR's repo-permission denial. It is
+# also daemon-worded, also says `denied:`, also ends `ERROR: Login failed.` -
+# and it must stay PERMANENT, because no amount of retrying grants a role.
+# Without this fixture the two IP-denial cases pin only the needle's PRESENCE:
+# replacing `is not allowed access` with `denied`, `DENIED`, `daemon` or
+# `Login failed` keeps the whole suite green while making the script retry
+# essentially every docker-path failure for the full budget. This case goes red
+# under all four.
+PERMDENY_MSG='WARNING: Error response from daemon: Get "https://x.azurecr.io/v2/": denied: requested access to the resource is denied  ERROR: Login failed.'
+
 PASS=0
 FAIL=0
 
@@ -102,6 +112,7 @@ run_case "non-transient exits on attempt 1"         "" "$PERMANENT_MSG" 1 1  --a
 # the single-fixture suite could not make.
 run_case "IP denial (docker shape) is TRANSIENT"    3  "$IPDENY_MSG" 0 3  --attempts 5 --backoff 0
 run_case "IP denial still fails CLOSED on budget"   "" "$IPDENY_MSG" 1 5  --attempts 5 --backoff 0
+run_case "repo-permission denial stays PERMANENT"   "" "$PERMDENY_MSG" 1 1  --attempts 5 --backoff 0
 
 # --- the defaults, measured through the loop (the #3383 regression guard) ---
 run_case "DEFAULT attempts is 12 (not 6)"           "" "$TRANSIENT_MSG" 1 12 --backoff 0
