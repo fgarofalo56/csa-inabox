@@ -53,9 +53,12 @@ measureWithControl({
 | File | Purpose |
 |---|---|
 | `measure.mjs` | The library. `run`, `runJson`, `az`, `gh`, `metricTotal`, `checkRuns`, `measureWithControl`, `UNKNOWN`. |
+| `cmd-quote.mjs` | Pure quoting for a `cmd.exe` command line. No process execution, so it is testable without spawning anything — and keeping it out of the module holding the `spawnSync` sink is deliberate (see the note in the file). |
 | `measure.test.mjs` | Proves each rule fires. Carries positive controls so it cannot pass vacuously. |
+| `cmd-quote.test.mjs` | The quoting rules: what gets quoted, what is REFUSED (`%`, CR/LF), and the trailing-backslash doubling that stops a path swallowing later arguments. |
 | `measurement-guard.test.mjs` | Tests the PreToolUse hook (see below). |
-| `mutate.mjs` | Breaks each guard and asserts the suite goes RED. **Not** named `*.test.mjs` on purpose — it rewrites files, so CI must not discover it as a suite. |
+| `__tests__/measure-injection.test.mjs` | The executable half of the CodeQL alert 983 triage (`js/indirect-command-line-injection`). Runs the injection matrix through the real code path, pins the allowlist-returns-its-own-literal property (#3985), and carries three `SHAPE:` assertions for properties no behavioural test can see. **Read its header before trusting it: 4 of its 14 tests are win32-only and SKIP on every CI lane this repo has.** The `__tests__/` location is the one thing here that breaks the flat `*.test.mjs` convention — it was mandated by the lane brief that added the file, not chosen. Discovery does not care (see below). |
+| `mutate.mjs` | Breaks each guard and asserts the suite goes RED. **Not** named `*.test.mjs` on purpose — it rewrites files, so CI must not discover it as a suite. Its `SUITE` is `measure.test.mjs` only; the injection suite's arms are recorded in that file's header and were run by hand. |
 | `drain-status.mjs` | Worked example: PR merge-readiness. A failed read prints `QUERY-FAILED` **with the reason** and exits non-zero, so it cannot be quoted as a state. The bash version it replaced reported `0/0/0` for twenty PRs during an HTTP 403. |
 | `red-tally.mjs` | Names the red checks across PRs to expose a shared cause. Reports `cancelled` **separately** from `failed` — a cancelled check did not finish, so it is UNKNOWN, not a verdict. Flattening them made a one-file docs PR look broken. |
 | `estate-resume.mjs` | Undoes the 2026-08-23 Commercial pause. `--dry-run` by default; `--apply` to act. Scope is a **fixed list**, never discovered — only 1 of the 13 Container App environments in these subscriptions is Loom's. Every action verifies its own outcome and it is idempotent. |
@@ -78,12 +81,22 @@ process execution — so this path has coverage that does not depend on `az` bei
 or on running Windows at all. `spawnPlan` is deliberately **not** exported: exporting it made
 the parameter an external taint source and was itself a defect.
 
+The outer quote pair around the command line is **structurally pinned** by
+`SHAPE: the cmd.exe command line keeps its outer quote pair`. Be precise about what that
+buys: it holds the documented structure in place, it does **not** prove cmd.exe misbehaves
+without it. Nothing in this repo measures that, because nothing in this repo runs on Windows.
+
 ```bash
 node --test scripts/measure/measure.test.mjs \
              scripts/measure/cmd-quote.test.mjs \
-             scripts/measure/measurement-guard.test.mjs
+             scripts/measure/measurement-guard.test.mjs \
+             scripts/measure/__tests__/measure-injection.test.mjs
 node scripts/measure/mutate.mjs      # every arm must report CAUGHT
 ```
+
+On Windows that is 85 tests, 0 skipped. On a Linux CI runner it is 81, with the four
+win32-only cmd.exe tests skipped — see the injection suite's header for exactly which
+properties survive that and which do not.
 
 ## The hook
 
@@ -132,11 +145,21 @@ an empty file.
 
 ## Discovery
 
-All three suites are named `*.test.mjs` and live under `scripts/` so that
+All four suites are named `*.test.mjs` and live under `scripts/` so that
 `scripts/ci/check-node-test-suites.mjs` — the tree-wide `node:test` discovery that runs inside the
-**required** `guardrails` check — actually executes them.
+**required** `guardrails` check — actually executes them. Discovery is a filesystem walk keyed to
+the FILENAME, so `__tests__/measure-injection.test.mjs` is picked up exactly like its flat
+siblings; the nested directory costs nothing and needs no wiring line. Verified with
+`node scripts/ci/check-node-test-suites.mjs --list`.
 
 This was measured, not assumed. The original names (`selftest.mjs`, and one file under
 `.claude/hooks/`) matched **neither** `TEST_FILE_RE` (`/\.test\.(mjs|cjs|js)$/`, which needs a
 literal dot before `test`) **nor** the walker, since `.claude` is in `SKIP_DIRS`. They would have
 rotted unrun — the same failure mode as a dispatch-only runbook nobody dispatches.
+
+**Discovered is not the same as executed.** Every lane that runs these suites is
+`ubuntu-latest` — `runs-on: windows` appears in zero workflows in this repo — so any test
+guarded by a win32 check is discovered, reported, and skipped. The injection suite has four
+of those. Closing that gap needs a `windows-latest` job; until one exists, its cmd.exe
+evidence is local-only and its header says so.
+

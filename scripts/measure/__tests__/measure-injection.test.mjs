@@ -1,7 +1,9 @@
 #!/usr/bin/env node
 /**
  * measure-injection.test.mjs — the executable half of the CodeQL alert 983
- * triage (`js/indirect-command-line-injection`, CWE-078, measure.mjs:239).
+ * triage (`js/indirect-command-line-injection`, CWE-078; the sink is the
+ * `spawnSync` in `run()`, at measure.mjs:239 as of d9618dfd1e — the line moves
+ * with every edit to the comment above it, so read the marker, not the number).
  *
  * WHY THIS SUITE EXISTS
  *
@@ -13,36 +15,86 @@
  *
  *   So every load-bearing sentence in that triage is an assertion here.
  *
+ * WHAT ACTUALLY RUNS IN CI, AND WHAT DOES NOT
+ *
+ *   This file is discovered and executed by scripts/ci/check-node-test-suites.mjs
+ *   from the REQUIRED `guardrails` check — verified with `--list` (136 suites,
+ *   this one among them), so no runner wiring is needed. But `runs-on: windows`
+ *   appears in ZERO workflows in this repo (206 ubuntu-latest, 9 self-hosted
+ *   Linux), so the four `{ skip: notWin }` tests — the cmd.exe wrapper matrix,
+ *   the only branch with a shell — NEVER execute on any lane.
+ *
+ *   MEASURED with `process.platform` forced to 'linux'. Before this correction
+ *   the suite ran rc=0, 5 pass, 4 SKIPPED — i.e. the ubuntu lanes exercised the
+ *   allowlist and the no-shell argv path and NOTHING about the quoting. It now
+ *   runs rc=0, 12 pass, 4 SKIPPED.
+ *
+ *   An earlier revision of the suppression comment in measure.mjs claimed this
+ *   suite "runs that matrix in CI". It does not, and that sentence has been
+ *   corrected — a comment asserting a control the code does not establish is the
+ *   deploy-integrity R7 defect this directory exists to catch.
+ *
+ *   So the properties the win32 matrix proves BEHAVIOURALLY are also pinned here
+ *   in forms that execute everywhere:
+ *
+ *     - `the built cmd.exe line leaves no metacharacter LIVE` runs the same
+ *       payload matrix through the same `buildCmdLine`, and applies cmd.exe's
+ *       own liveness rule (a running quote toggle) to the result.
+ *     - `the built cmd.exe line REFUSES what it cannot quote` holds the `%` and
+ *       CR/LF fail-closed behaviour shut at the `buildCmdLine` layer.
+ *     - `SHAPE:` tests read measure.mjs's source and pin three structures that
+ *       no behavioural assertion in JavaScript can distinguish (see each).
+ *
+ *   What remains win32-only, and is therefore declared UNTESTED on the CI lanes:
+ *   whether cmd.exe and CommandLineToArgvW really behave as modelled. Making
+ *   that real needs a windows-latest job, which is a workflow change outside
+ *   this lane's ownership. Filed as a gap, not implied working.
+ *
  * MUTATION CONTROL — what turns each test RED
  *
- *   These were not reasoned about; they were run (2026-08-25, win32, node
- *   v24.18.0), one single-token mutation at a time, results in the PR body:
+ *   Not reasoned about — RUN, 2026-08-25, node v24.18.0, one single-token
+ *   mutation at a time against an ISOLATED COPY of measure.mjs + cmd-quote.mjs +
+ *   this file under `mkdtemp`; nothing tracked was ever written. Each needle is
+ *   asserted to match EXACTLY ONCE, because a needle that matches zero times
+ *   reads exactly like a passing arm. Every arm is run twice: on win32, and with
+ *   `process.platform` forced to 'linux' to measure what the ubuntu lanes see.
+ *   The linux column is the one that matters — a guard that only fires on a
+ *   workstation is not a guard. Both harness runs assert a GREEN BASELINE first;
+ *   the first attempt at the linux column reported all 8 arms CAUGHT off a RED
+ *   baseline (a Windows path handed to `--import` is not a valid ESM specifier),
+ *   and the baseline check is the only reason that was not reported as a result.
  *
- *     measure.mjs   `shell: false`            -> `shell: true`
- *                     => "no shell interprets a direct argv" FAILS (the payload
- *                        is split, and on win32 the marker file is created).
- *     measure.mjs   restore `...plan.opts` spread after `shell: false`
- *                     => nothing fails today, which is the point: the spread is
- *                        latent, so it is guarded structurally by the line above
- *                        rather than by a test that cannot see it.
- *     cmd-quote.mjs `quoteForCmd` -> `return String(arg)`  (no quoting at all)
- *                     => "the cmd.exe wrapper neutralises every payload" FAILS
- *                        with real command execution (marker file present).
- *     cmd-quote.mjs drop the `%` / CR-LF refusals
- *                     => "the wrapper fails CLOSED" FAILS.
- *     measure.mjs   `return ALLOWED_BINARIES[key]` -> `return bin`
- *                     => "the allowlist returns its own literal" FAILS.
+ *     arm                                             win32          linux-forced
+ *     A  measure.mjs   shell:false -> shell:true      rc1 12/4 RED   rc1  9/3 RED
+ *     B  measure.mjs   return ALLOWED_BINARIES[key]
+ *                        -> return bin                rc1 14/2 RED   rc1 10/2 RED
+ *     C  measure.mjs   ... -> return key              rc1 15/1 RED   rc1 11/1 RED
+ *     D  measure.mjs   restore ...plan.opts spread    rc1 15/1 RED   rc1 11/1 RED
+ *     E  measure.mjs   drop the outer quote pair      rc1 15/1 RED   rc1 11/1 RED
+ *     F  cmd-quote.mjs quoteForCmd -> String(arg)     rc1  9/7 RED   rc1  9/3 RED
+ *     G  cmd-quote.mjs drop the '%' refusal           rc1 14/2 RED   rc1 11/1 RED
+ *     H  cmd-quote.mjs drop the CR/LF refusal         rc1 14/2 RED   rc1 11/1 RED
  *
- *   cmd-quote.mjs is NOT modified by this change — those two rows were measured
- *   against a scratch copy and reverted. They are recorded because a suppression
- *   is only honest if the thing it leans on is under test.
+ *   Arms C, D and E all SURVIVED at rc=0, 9/9 against the previous revision of
+ *   this suite. C is the narrow form of B: `key` is `bin.toLowerCase()`, a
+ *   caller-derived string that defeats a case-widening detector by construction
+ *   while restoring exactly the caller->spawnSync dataflow edge the triage rests
+ *   on. D and E are latent, so no behavioural assertion can reach them. G and H
+ *   survived on the LINUX lane only — the assertions holding them shut lived in
+ *   the win32 matrix, which skips there.
+ *
+ *   cmd-quote.mjs is NOT modified by this change — its arms were applied to the
+ *   isolated copy and never to the tree.
  *
  * POSITIVE CONTROLS (R5)
  *
  *   "No injection occurred" and "my detector is broken" produce the identical
  *   string, and the wrong one is always the more convenient. Every negative
  *   result below is therefore paired with a control that proves the harness can
- *   still observe the thing it is failing to find.
+ *   still observe the thing it is failing to find. The SHAPE tests carry the
+ *   same discipline in the form the class needs: a source-text needle that
+ *   matches zero times reads exactly like a passing assertion, so every
+ *   extraction here asserts its own population first.
  */
 
 import test from 'node:test';
@@ -50,10 +102,15 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { run, canonicalBinary, MeasurementError, SELF_NODE } from '../measure.mjs';
+import { buildCmdLine } from '../cmd-quote.mjs';
 
 const WIN = process.platform === 'win32';
 const notWin = WIN ? false : 'the cmd.exe wrapper branch only exists on win32';
+
+/** measure.mjs, read as TEXT. The SHAPE tests below pin structure, not behaviour. */
+const MEASURE_MJS = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'measure.mjs');
 
 /** Scratch dir; mkdtemp per check-temp-artifact-safety (never a constant name). */
 function scratch() {
@@ -69,8 +126,14 @@ const DUMP = 'console.log("CHILD_ARGV=" + JSON.stringify(process.argv.slice(2)))
 /**
  * Payloads that each try to run a SECOND command creating `marker`. Every one is
  * a shell metacharacter construction that works in cmd.exe when unquoted.
+ *
+ * The trailing-backslash case is deliberately NOT in here. It carries no
+ * metacharacter and starts no second command, so its `existsSync(marker) ===
+ * false` assertion would be vacuous — nothing could have written the marker. It
+ * exercises a different property (the quote-consumption splice) and lives in
+ * `fidelityPayloads()` below, so that "N injection detections" means N.
  */
-function payloads(marker) {
+function injectionPayloads(marker) {
   const mk = `echo pwned> "${marker}"`;
   return [
     ['plain-amp', `x& ${mk}`],
@@ -81,8 +144,24 @@ function payloads(marker) {
     ['subshell', `x& (${mk})`],
     ['redirect', `x> "${marker}"`],
     ['bang-delayed', `x!COMSPEC!& ${mk}`],
-    ['trailing-bslash', 'C:\\my dir\\'],
   ];
+}
+
+/**
+ * Not injection — FIDELITY. `C:\my dir\` ends in a backslash, and
+ * CommandLineToArgvW reads `\"` as an escaped literal quote, so an undoubled
+ * trailing backslash consumes the closing quote and splices every later argument
+ * into this one. Measured in cmd-quote.mjs's own note: `["C:\my dir\",
+ * "--query", "SECRET"]` arrived as one token. Only the deepEqual assertion
+ * carries weight for this row.
+ */
+function fidelityPayloads() {
+  return [['trailing-bslash', 'C:\\my dir\\']];
+}
+
+/** Every row, for the assertions (argv fidelity) that apply to both classes. */
+function payloads(marker) {
+  return [...injectionPayloads(marker), ...fidelityPayloads()];
 }
 
 // ────────────────────────────────────────────── every platform: the no-shell path
@@ -96,10 +175,14 @@ test('no shell interprets a direct argv — metacharacters reach the child liter
   const marker = path.join(dir, 'PWNED.txt');
   fs.writeFileSync(dump, DUMP);
 
+  // Fidelity applies to every row; the marker assertion only to the rows that
+  // actually try to start a second command.
+  const injecting = new Set(injectionPayloads(marker).map(([n]) => n));
   for (const [name, payload] of payloads(marker)) {
     const r = run(SELF_NODE, [dump, payload]);
     const got = JSON.parse(r.stdout.match(/CHILD_ARGV=(.*)/)[1]);
     assert.deepEqual(got, [payload], `${name}: must arrive as ONE literal argv element`);
+    if (!injecting.has(name)) continue;
     assert.equal(
       fs.existsSync(marker), false,
       `${name}: a second command EXECUTED — spawnSync is interpreting a shell`,
@@ -169,7 +252,248 @@ test('POSITIVE CONTROL: the allowlist is not refusing EVERYTHING', () => {
   assert.equal(canonicalBinary('az'), 'az');
 });
 
-// ──────────────────────────────────────────────── win32: the cmd.exe shell path
+// ───────────────────────────── every platform: SHAPE pins, where behaviour ends
+//
+// Three of this file's load-bearing properties are DATAFLOW or STRUCTURAL, not
+// behavioural, and no assertion written in JavaScript can see them:
+//
+//   1. `canonicalBinary` must return the TABLE's literal, not a value derived
+//      from its argument. `return key` (i.e. `bin.toLowerCase()`) is observably
+//      identical to `return ALLOWED_BINARIES[key]` — two equal primitive strings
+//      are indistinguishable by `===`, by identity, by everything. It is not
+//      exploitable today, and it restores exactly the caller->spawnSync edge the
+//      whole alert-983 triage rests on. MEASURED: it used to survive at 9/9,
+//      including against the case-widening assertion directly above, which it
+//      defeats by construction.
+//   2. The spawnSync options must carry no SPREAD. A spread after `shell: false`
+//      silently outranks it, so the one option that must never be true is the
+//      one a plan could set. No plan sets it — that is why no behavioural test
+//      can reach it, and why removing the shape is the only guard available.
+//   3. The cmd.exe command line must keep its OUTER quote pair. Documented as
+//      required in README.md and in measure.mjs; nothing verified it.
+//
+// So they are pinned against the source TEXT. That is the repo's existing idiom
+// for this class (scripts/measure/mutate.mjs quotes measure.mjs's own lines;
+// scripts/ci/check-node-test-suites.mjs asserts against workflow YAML text), and
+// it has one known failure mode: a needle that matches ZERO times reads exactly
+// like a passing assertion. Every extraction below therefore asserts its own
+// population BEFORE it asserts anything about the contents.
+
+/** measure.mjs's source. Read once; `\r\n` is irrelevant to every match below. */
+const SRC = fs.readFileSync(MEASURE_MJS, 'utf8');
+
+/**
+ * The body of a top-level `function <name>(…)`, by brace matching.
+ * @returns {string|null} null when the function is absent — never an empty
+ * string, so a caller cannot mistake "not found" for "found and empty".
+ */
+function functionBody(src, name) {
+  const m = new RegExp(`^(?:export )?function ${name}\\s*\\(`, 'm').exec(src);
+  if (!m) return null;
+  return braceBlock(src, src.indexOf('{', m.index));
+}
+
+/** The text between `src[open]` and its matching close brace. */
+function braceBlock(src, open) {
+  if (open === -1) return null;
+  let depth = 0;
+  for (let i = open; i < src.length; i += 1) {
+    if (src[i] === '{') depth += 1;
+    else if (src[i] === '}') {
+      depth -= 1;
+      if (depth === 0) return src.slice(open + 1, i);
+    }
+  }
+  return null;
+}
+
+/** Statements that begin with `return`, so comment prose can never be one. */
+function returnStatements(body) {
+  return body.split(/\r?\n/).map((l) => l.trim()).filter((l) => /^return\b/.test(l));
+}
+
+/**
+ * Drop whole-line `//` comments.
+ *
+ * Needed because the options object below carries a comment that quotes the
+ * removed `...plan.opts` verbatim — the first run of this test went RED on its
+ * own prose, which is the correct failure direction for an imperfect stripper
+ * (a missed comment can only produce a false RED, never a missed spread) but is
+ * still a broken test. Deliberately naive: it does not strip trailing comments,
+ * so writing `...` in one inside these blocks will fail this test. Put the prose
+ * above the object.
+ */
+function stripLineComments(block) {
+  return block.split(/\r?\n/).filter((l) => !/^\s*\/\//.test(l)).join('\n');
+}
+
+test('SHAPE: canonicalBinary returns an ALLOWED_BINARIES lookup, never a derived string', () => {
+  const body = functionBody(SRC, 'canonicalBinary');
+  assert.ok(body, 'POSITIVE CONTROL: canonicalBinary not found in measure.mjs — this test measured NOTHING');
+
+  const returns = returnStatements(body);
+  assert.equal(
+    returns.length, 1,
+    `POSITIVE CONTROL: expected exactly one return statement, found ${returns.length}: ${JSON.stringify(returns)}`,
+  );
+  assert.match(
+    returns[0],
+    /^return\s+ALLOWED_BINARIES\[[A-Za-z_$][\w$]*\];$/,
+    'canonicalBinary must return a value read OUT of the frozen table. `return key` / `return bin` / ' +
+    '`return bin.toLowerCase()` all produce the same string and are all the CWE-078 dataflow edge back. ' +
+    'If this shape is changing on purpose, the alert-983 triage in measure.mjs has to be re-argued first.',
+  );
+  // Complementary, not redundant: the shape above permits `ALLOWED_BINARIES[bin]`
+  // (an index by the RAW argument), which is a different defect — case
+  // sensitivity — and is what the behavioural `canonicalBinary('GH')` assertions
+  // above hold shut. Neither test catches the other's arm.
+});
+
+test('SHAPE: the spawnSync options carry no spread, and shell:false is literal', () => {
+  const call = SRC.indexOf('spawnSync(plan.cmd, plan.argv, {');
+  assert.notEqual(call, -1, 'POSITIVE CONTROL: the spawnSync call was not found — this test measured NOTHING');
+  const block = braceBlock(SRC, SRC.indexOf('{', call));
+  assert.ok(block && /windowsHide/.test(block), 'POSITIVE CONTROL: the options object did not extract cleanly');
+  const opts = stripLineComments(block);
+  assert.ok(/windowsHide/.test(opts), 'POSITIVE CONTROL: comment stripping ate the options object');
+
+  assert.ok(
+    !/\.\.\./.test(opts),
+    'a SPREAD is back in the spawnSync options. Placed after `shell: false` it silently outranks it, so a ' +
+    `plan could set shell/env/cwd/uid. Read every option BY NAME instead. Options block:\n${opts}`,
+  );
+  const shellKeys = opts.match(/(^|[\s,{])shell\s*:\s*[^,\n]*/g) || [];
+  assert.equal(shellKeys.length, 1, `expected exactly one \`shell:\` key, found ${shellKeys.length}`);
+  assert.match(
+    shellKeys[0].trim(),
+    /^shell\s*:\s*false\s*,?$/,
+    '`shell` must be the literal `false`, not a variable, a plan field, or an expression',
+  );
+  assert.match(
+    opts,
+    /windowsVerbatimArguments\s*:\s*plan\.verbatim\b/,
+    'windowsVerbatimArguments must be read off the plan BY NAME — that is what replaced the spread',
+  );
+});
+
+test('SHAPE: the cmd.exe command line keeps its outer quote pair', () => {
+  const body = functionBody(SRC, 'spawnPlan');
+  assert.ok(body, 'POSITIVE CONTROL: spawnPlan not found in measure.mjs — this test measured NOTHING');
+  const argvLine = body.split(/\r?\n/).map((l) => l.trim()).find((l) => l.includes("'/c'"));
+  assert.ok(argvLine, "POSITIVE CONTROL: no `'/c'` argument found in spawnPlan — this test measured NOTHING");
+  assert.match(
+    argvLine,
+    /`"\$\{buildCmdLine\(.*\)\}"`/,
+    'the /c argument must wrap buildCmdLine in a literal outer quote pair. cmd strips it, leaving the inner ' +
+    'quoting intact; without it `/s` has nothing to strip and the documented invariant in README.md is false. ' +
+    `Got: ${argvLine}`,
+  );
+});
+
+// ────────────────── every platform: the cmd.exe LINE, without a cmd.exe to run
+//
+// The matrix below this point is the real thing — payloads through cmd.exe on a
+// real .cmd shim — and it is SKIPPED on every lane this repo has. So the same
+// payloads run through the same `buildCmdLine` here, and cmd.exe's own liveness
+// rule is applied to the result: cmd decides whether `& | < > ( ) ^` is a
+// metacharacter by a running quote toggle over the raw line, and understands no
+// escape at all (not `\"`, not `^"`). Modelling that one rule is cheap and it is
+// what quoteForCmd is written against.
+//
+// This is a weaker claim than the win32 matrix — it proves the LINE is quoted,
+// not that cmd.exe then behaves — and it is the strongest one available on a
+// runner with no cmd.exe. It is not a substitute for the Windows lane.
+
+/** Offsets of every metacharacter cmd.exe would treat as LIVE in `line`. */
+function liveMetachars(line) {
+  const hits = [];
+  let inQuotes = false;
+  for (let i = 0; i < line.length; i += 1) {
+    const c = line[i];
+    if (c === '"') { inQuotes = !inQuotes; continue; }
+    if (!inQuotes && '&|<>()^'.includes(c)) hits.push(`${c}@${i}`);
+  }
+  return hits;
+}
+
+test('the built cmd.exe line leaves no metacharacter LIVE', () => {
+  const marker = 'C:\\scratch\\PWNED.txt';
+  for (const [name, payload] of payloads(marker)) {
+    const line = buildCmdLine('npm.cmd', [payload]);
+    assert.deepEqual(
+      liveMetachars(line), [],
+      `${name}: a metacharacter survives OUTSIDE quotes — cmd.exe would act on it: ${line}`,
+    );
+  }
+});
+
+test('POSITIVE CONTROL: liveMetachars can actually see an unquoted metacharacter', () => {
+  // Without this the assertion above passes just as happily on a detector that
+  // returns [] unconditionally — "nothing is live" and "I cannot see live" are
+  // the same empty array.
+  //
+  // Two independent halves, because a control derived only from the detector
+  // itself would move with it:
+  //
+  //   (a) hand-built lines whose verdict is known by inspection, so the detector
+  //       is checked against something it did not produce;
+  //   (b) POPULATION ACCOUNTING over the real matrix — how many rows the
+  //       detector can discriminate at all. The first version of this test
+  //       filtered on `!payload.includes('"')` and MEASURED 0 of 8 rows, i.e. it
+  //       would have proven nothing while reading green. The floor is what
+  //       catches that.
+  assert.notDeepEqual(liveMetachars('npm.cmd x& echo hi'), [], 'a bare `&` outside quotes must read as LIVE');
+  assert.notDeepEqual(liveMetachars('npm.cmd a|b'), [], 'a bare `|` outside quotes must read as LIVE');
+  assert.deepEqual(liveMetachars('npm.cmd "x& echo hi"'), [], 'the same `&` INSIDE quotes must read as inert');
+  assert.deepEqual(liveMetachars('npm.cmd plain'), [], 'a line with no metacharacter must read as clean');
+
+  const marker = 'C:\\scratch\\PWNED.txt';
+  const rows = injectionPayloads(marker);
+  const discriminable = rows.filter(([, p]) => liveMetachars(`npm.cmd ${p}`).length > 0);
+  assert.ok(
+    discriminable.length >= 6,
+    `only ${discriminable.length} of ${rows.length} payloads are discriminable unquoted — the matrix above ` +
+    'is losing its teeth. (Two rows are legitimately invisible to this detector: `quote-breakout` supplies ' +
+    "its own quote toggles, and the fidelity row carries no metacharacter at all — those are the win32 " +
+    "matrix's to catch, not this one's.)",
+  );
+});
+
+test('the built cmd.exe line REFUSES what it cannot quote', () => {
+  // MEASURED: without this, mutating away the `%` refusal or the CR/LF refusal
+  // left this suite at rc=0, 10 pass, 4 skipped on a Linux-like platform — the
+  // only assertions holding them shut were in the win32 matrix, which skips
+  // there. Two of the triage's load-bearing sentences were unguarded on every
+  // lane the repo actually runs.
+  //
+  // Not a duplicate of cmd-quote.test.mjs: that file tests `quoteForCmd` in
+  // isolation, this one goes through `buildCmdLine` — the exact call measure.mjs
+  // makes — so a refusal dropped at the join layer is caught here and not there.
+  for (const bad of ['%COMSPEC%', 'name-%-mid']) {
+    assert.throws(
+      () => buildCmdLine('npm.cmd', [bad]),
+      (e) => /'%'/.test(e.message),
+      `${bad}: a % argument must be refused, not silently expanded`,
+    );
+  }
+  for (const nl of ['a\nb', 'a\rb', 'a\r\nb', "resources\n| where type =~ 'x'"]) {
+    assert.throws(
+      () => buildCmdLine('npm.cmd', [nl]),
+      (e) => /newline/.test(e.message),
+      `${JSON.stringify(nl)} must be refused, not truncated at rc=0`,
+    );
+  }
+});
+
+test('POSITIVE CONTROL: buildCmdLine is not refusing every argument', () => {
+  // A refusal rate of 100% passes the test above and takes the toolkit down.
+  const arm = '/subscriptions/0000/resourceGroups/rg/providers/Microsoft.Web/sites/app';
+  assert.match(buildCmdLine('npm.cmd', [arm, '--query', 'a b']), /--query "a b"$/);
+});
+
+// ──────────────────────────────────── win32 ONLY: the cmd.exe shell path
+//
+// SKIPPED ON EVERY CI LANE THIS REPO HAS — see the header. Local evidence.
 //
 // This is the branch CodeQL flags, and the ONLY one where a shell exists. Node
 // >= 20 refuses to spawn a .cmd directly (EINVAL, CVE-2024-27980) and `az` ships
@@ -209,7 +533,7 @@ test('POSITIVE CONTROL: the wrapper path is genuinely exercised', { skip: notWin
 test('the cmd.exe wrapper neutralises every injection payload', { skip: notWin }, () => {
   withShim((dir) => {
     const marker = path.join(dir, 'PWNED.txt');
-    for (const [name, payload] of payloads(marker)) {
+    for (const [name, payload] of injectionPayloads(marker)) {
       if (fs.existsSync(marker)) fs.rmSync(marker);
       const r = run('npm', [payload]);
       const got = JSON.parse(r.stdout.match(/CHILD_ARGV=(.*)/)[1]);
@@ -218,6 +542,16 @@ test('the cmd.exe wrapper neutralises every injection payload', { skip: notWin }
         `${name}: COMMAND INJECTION — a second command executed through cmd.exe`,
       );
       assert.deepEqual(got, [payload], `${name}: fidelity — must arrive byte-for-byte as one argument`);
+    }
+    // The fidelity rows carry no metacharacter, so only the deepEqual is
+    // meaningful for them — asserting "no marker" there would be vacuous.
+    for (const [name, payload] of fidelityPayloads()) {
+      const r = run('npm', [payload, '--query', 'SECRET']);
+      assert.deepEqual(
+        JSON.parse(r.stdout.match(/CHILD_ARGV=(.*)/)[1]),
+        [payload, '--query', 'SECRET'],
+        `${name}: the closing quote was consumed — later arguments spliced into this one`,
+      );
     }
   });
 });

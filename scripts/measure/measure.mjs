@@ -59,7 +59,11 @@ export class MeasurementError extends Error {
  *
  * So a batch shim goes through `cmd.exe /d /s /c` with a hand-quoted command
  * line and `windowsVerbatimArguments`, which preserves argument fidelity. The
- * outer quote pair is required — cmd strips it, leaving the inner quoting intact.
+ * outer quote pair is there because cmd strips it, leaving the inner quoting
+ * intact. Honest scope: that pairing is asserted STRUCTURALLY (the `SHAPE:` test
+ * in __tests__/measure-injection.test.mjs), not behaviourally — nothing in this
+ * repo runs on Windows, so "required" is the design intent and the documented
+ * cmd.exe rule, not something a check here measures.
  *
  * The quoting itself lives in `./cmd-quote.mjs`: it is pure, so it is testable
  * without spawning anything.
@@ -266,8 +270,33 @@ export function run(bin, args, { allowNonZero = false, timeoutMs = 600000, retri
     // CR/LF) and quotes every metacharacter that can. MEASURED 2026-08-25 on
     // win32/node v24.18.0 against a controlled .cmd shim reached through this
     // exact code path: 12 injection payloads, 0 achieved execution, 10 delivered
-    // to the child byte-for-byte as ONE argv element, 2 refused. See
-    // __tests__/measure-injection.test.mjs, which runs that matrix in CI.
+    // to the child byte-for-byte as ONE argv element, 2 refused. Those 12/10/2
+    // figures come from a one-off probe that is NOT in the repo, so treat them
+    // as the origin of the claim, not as its standing control.
+    //
+    // The standing control is __tests__/measure-injection.test.mjs. Be precise
+    // about what of it runs where, because an earlier revision of this comment
+    // said it "runs that matrix in CI" and that was FALSE:
+    //
+    //   - The suite IS discovered and executed by
+    //     scripts/ci/check-node-test-suites.mjs from the REQUIRED `guardrails`
+    //     check. No wiring line is needed; `--list` shows it.
+    //   - But `runs-on: windows` appears in ZERO workflows here (206
+    //     ubuntu-latest, 9 self-hosted Linux). The cmd.exe matrix — 8 injection
+    //     payloads + 1 fidelity row, plus 4 refusal classes (`%`, `\n`, `\r`,
+    //     `\r\n`) — is `{ skip: notWin }`, so on every lane this repo has it
+    //     SKIPS. Measured with process.platform forced to 'linux': 12 pass,
+    //     4 SKIPPED.
+    //   - What DOES run on those lanes: the same payloads through the same
+    //     `buildCmdLine`, checked against cmd.exe's own metacharacter-liveness
+    //     rule; the `%` and CR/LF refusals at the buildCmdLine layer; and three
+    //     `SHAPE:` assertions that pin this options object, the outer quote pair
+    //     below, and canonicalBinary's return — three properties no behavioural
+    //     assertion in JavaScript can distinguish.
+    //
+    // So: the QUOTING is guarded on every lane; cmd.exe's actual behaviour is
+    // evidenced locally on win32 only. Closing that needs a windows-latest job,
+    // which is not in this change.
     //
     // The regression that would make this a TRUE positive is named in #3985: a
     // path where the spawned executable is NOT drawn from the frozen
