@@ -6,7 +6,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.45.15.27210",
-      "templateHash": "3968403960841552303"
+      "templateHash": "12135459452810963538"
     }
   },
   "definitions": {
@@ -39181,6 +39181,95 @@
         "singleDlz"
       ]
     },
+    "singleDlzAdfKeyVaultRbac": {
+      "condition": "[and(variables('useSingleDlz'), variables('deployAdminPlane'))]",
+      "type": "Microsoft.Resources/deployments",
+      "apiVersion": "2025-04-01",
+      "name": "dlz-single-adf-keyvault-rbac",
+      "resourceGroup": "[variables('adminPlaneRgName')]",
+      "properties": {
+        "expressionEvaluationOptions": {
+          "scope": "inner"
+        },
+        "mode": "Incremental",
+        "parameters": {
+          "keyVaultName": {
+            "value": "[last(split(reference('adminPlane').outputs.keyVaultId.value, '/'))]"
+          },
+          "dataFactoryPrincipalId": {
+            "value": "[reference('singleDlz').outputs.adfFactoryPrincipalId.value]"
+          },
+          "skipRoleGrants": {
+            "value": "[parameters('skipRoleGrants')]"
+          }
+        },
+        "template": {
+          "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+          "contentVersion": "1.0.0.0",
+          "metadata": {
+            "_generator": {
+              "name": "bicep",
+              "version": "0.45.15.27210",
+              "templateHash": "773117795510875895"
+            }
+          },
+          "parameters": {
+            "keyVaultName": {
+              "type": "string",
+              "metadata": {
+                "description": "Name of the Loom Key Vault in this resource group (holds Loom Connection secrets). Empty skips the grant."
+              }
+            },
+            "dataFactoryPrincipalId": {
+              "type": "string",
+              "defaultValue": "",
+              "metadata": {
+                "description": "Data Factory SYSTEM-ASSIGNED identity principalId — landing-zone/adf.bicep output `factoryPrincipalId`. Empty skips the grant (no factory deployed in this estate)."
+              }
+            },
+            "skipRoleGrants": {
+              "type": "bool",
+              "defaultValue": false,
+              "metadata": {
+                "description": "When true, skip the grant (re-deploy where RBAC already exists, or the deployer lacks User Access Administrator)."
+              }
+            }
+          },
+          "variables": {
+            "keyVaultSecretsUser": "4633458b-17de-408a-b874-0445c86b69e6",
+            "grantActive": "[and(and(not(empty(parameters('keyVaultName'))), not(empty(parameters('dataFactoryPrincipalId')))), not(parameters('skipRoleGrants')))]"
+          },
+          "resources": [
+            {
+              "condition": "[variables('grantActive')]",
+              "type": "Microsoft.Authorization/roleAssignments",
+              "apiVersion": "2022-04-01",
+              "scope": "[resourceId('Microsoft.KeyVault/vaults', parameters('keyVaultName'))]",
+              "name": "[guid(resourceGroup().id, parameters('keyVaultName'), parameters('dataFactoryPrincipalId'), variables('keyVaultSecretsUser'))]",
+              "properties": {
+                "roleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', variables('keyVaultSecretsUser'))]",
+                "principalId": "[parameters('dataFactoryPrincipalId')]",
+                "principalType": "ServicePrincipal",
+                "description": "Data Factory MI: read Loom Connection secrets BY REFERENCE for auto-bound mirroring linked services (Snowflake password / private key)."
+              }
+            }
+          ],
+          "outputs": {
+            "granted": {
+              "type": "bool",
+              "metadata": {
+                "description": "True when the grant was actually made — false when skipped for a missing factory, missing vault, or skipRoleGrants."
+              },
+              "value": "[variables('grantActive')]"
+            }
+          }
+        }
+      },
+      "dependsOn": [
+        "adminPlane",
+        "singleDlz"
+      ]
+    },
     "dlz": {
       "copy": {
         "name": "dlz",
@@ -48433,6 +48522,99 @@
               }
             }
           ]
+        }
+      },
+      "dependsOn": [
+        "adminPlane",
+        "[format('dlz[{0}]', copyIndex())]"
+      ]
+    },
+    "dlzAdfKeyVaultRbac": {
+      "copy": {
+        "name": "dlzAdfKeyVaultRbac",
+        "count": "[length(parameters('dlzSubscriptionIds'))]"
+      },
+      "condition": "[and(variables('useMultiDlz'), variables('deployAdminPlane'))]",
+      "type": "Microsoft.Resources/deployments",
+      "apiVersion": "2025-04-01",
+      "name": "[format('dlz-{0}-adf-keyvault-rbac', copyIndex())]",
+      "resourceGroup": "[variables('adminPlaneRgName')]",
+      "properties": {
+        "expressionEvaluationOptions": {
+          "scope": "inner"
+        },
+        "mode": "Incremental",
+        "parameters": {
+          "keyVaultName": {
+            "value": "[last(split(reference('adminPlane').outputs.keyVaultId.value, '/'))]"
+          },
+          "dataFactoryPrincipalId": {
+            "value": "[reference(format('dlz[{0}]', copyIndex())).outputs.adfFactoryPrincipalId.value]"
+          },
+          "skipRoleGrants": {
+            "value": "[parameters('skipRoleGrants')]"
+          }
+        },
+        "template": {
+          "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+          "contentVersion": "1.0.0.0",
+          "metadata": {
+            "_generator": {
+              "name": "bicep",
+              "version": "0.45.15.27210",
+              "templateHash": "773117795510875895"
+            }
+          },
+          "parameters": {
+            "keyVaultName": {
+              "type": "string",
+              "metadata": {
+                "description": "Name of the Loom Key Vault in this resource group (holds Loom Connection secrets). Empty skips the grant."
+              }
+            },
+            "dataFactoryPrincipalId": {
+              "type": "string",
+              "defaultValue": "",
+              "metadata": {
+                "description": "Data Factory SYSTEM-ASSIGNED identity principalId — landing-zone/adf.bicep output `factoryPrincipalId`. Empty skips the grant (no factory deployed in this estate)."
+              }
+            },
+            "skipRoleGrants": {
+              "type": "bool",
+              "defaultValue": false,
+              "metadata": {
+                "description": "When true, skip the grant (re-deploy where RBAC already exists, or the deployer lacks User Access Administrator)."
+              }
+            }
+          },
+          "variables": {
+            "keyVaultSecretsUser": "4633458b-17de-408a-b874-0445c86b69e6",
+            "grantActive": "[and(and(not(empty(parameters('keyVaultName'))), not(empty(parameters('dataFactoryPrincipalId')))), not(parameters('skipRoleGrants')))]"
+          },
+          "resources": [
+            {
+              "condition": "[variables('grantActive')]",
+              "type": "Microsoft.Authorization/roleAssignments",
+              "apiVersion": "2022-04-01",
+              "scope": "[resourceId('Microsoft.KeyVault/vaults', parameters('keyVaultName'))]",
+              "name": "[guid(resourceGroup().id, parameters('keyVaultName'), parameters('dataFactoryPrincipalId'), variables('keyVaultSecretsUser'))]",
+              "properties": {
+                "roleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', variables('keyVaultSecretsUser'))]",
+                "principalId": "[parameters('dataFactoryPrincipalId')]",
+                "principalType": "ServicePrincipal",
+                "description": "Data Factory MI: read Loom Connection secrets BY REFERENCE for auto-bound mirroring linked services (Snowflake password / private key)."
+              }
+            }
+          ],
+          "outputs": {
+            "granted": {
+              "type": "bool",
+              "metadata": {
+                "description": "True when the grant was actually made — false when skipped for a missing factory, missing vault, or skipRoleGrants."
+              },
+              "value": "[variables('grantActive')]"
+            }
+          }
         }
       },
       "dependsOn": [

@@ -29,7 +29,8 @@ import { listContainers } from '@/lib/azure/cosmos-account-client';
 // could diverge from it and silently ignore the stored connection.
 import { resolveSqlAuth } from '@/lib/azure/connection-auth';
 import { withSession } from '@/lib/api/route-toolkit';
-import { MIRROR_SQL_FAMILY, MIRROR_PG_FAMILY, MIRROR_COSMOS_FAMILY } from '@/lib/azure/mirror-engine';
+import { MIRROR_SQL_FAMILY, MIRROR_PG_FAMILY, MIRROR_COSMOS_FAMILY, MIRROR_ADF_COPY_FAMILY } from '@/lib/azure/mirror-engine';
+import { listSnowflakeTables } from '@/lib/azure/snowflake-adf';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -73,6 +74,18 @@ export const GET = withSession<{ id: string }>(async (req: NextRequest, { sessio
       tables = await listPostgresTables(server, database);
     } else if (MIRROR_COSMOS_FAMILY.has(sourceType)) {
       tables = (await listContainers(database)).map((c: any) => ({ schema: 'cosmos', table: c.name || c.id }));
+    } else if (MIRROR_ADF_COPY_FAMILY.has(sourceType)) {
+      // Snowflake: enumerated via the ADF Lookup that uses the mirror's own
+      // auto-bound linked service, so the credential path here is the SAME one
+      // the Copy runtime replicates with.
+      const listed = await listSnowflakeTables(s.claims.oid, connectionId, database);
+      if ('gate' in listed) {
+        return NextResponse.json({ ok: false, gate: true, error: listed.gate.message }, { status: 200 });
+      }
+      const sf = listed.tables
+        .map((t) => ({ schema: t.schema, table: t.table, isIceberg: t.isIceberg }))
+        .sort((a, b) => `${a.schema}.${a.table}`.localeCompare(`${b.schema}.${b.table}`));
+      return NextResponse.json({ ok: true, tables: sf, icebergKnown: listed.icebergKnown });
     } else {
       return NextResponse.json(
         { ok: false, gate: true, error: `${sourceType || 'This source'} can't be enumerated here — leave the table list empty to mirror everything the engine discovers.` },

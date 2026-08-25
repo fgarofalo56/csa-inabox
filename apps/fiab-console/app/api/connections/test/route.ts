@@ -35,13 +35,17 @@ import {
 } from '@/lib/azure/connections-store';
 import { getKeyVaultSecretValue } from '@/lib/azure/kv-secrets-client';
 import { probeConnection } from '@/lib/azure/connection-probe';
+// Derived allowlists — see connectable-types. A hand-listed copy here is what
+// made a new connection type pass the UI and fail at the boundary.
+import { CONNECTION_TYPES, AUTH_METHODS } from '@/lib/azure/connectable-types';
 import { withSession } from '@/lib/api/route-toolkit';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-const TYPES: ConnectionType[] = ['azure-sql', 'synapse-dedicated', 'synapse-serverless', 'databricks-sql', 'postgres', 'storage-adls', 'cosmos', 'generic-sql', 'adx', 'event-hub', 'service-bus', 'key-vault'];
-const METHODS: AuthMethod[] = ['entra-mi', 'sql-password', 'connection-string', 'account-key', 'service-principal'];
+const TYPES: ConnectionType[] = CONNECTION_TYPES;
+const METHODS: AuthMethod[] = AUTH_METHODS;
+
 
 export const POST = withSession(async (req: NextRequest, { session }) => {
 

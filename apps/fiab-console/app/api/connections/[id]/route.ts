@@ -4,7 +4,6 @@
  * DELETE /api/connections/[id]   → remove from Cosmos + best-effort KV secret delete
  */
 import { NextRequest, NextResponse } from 'next/server';
-import { getSession } from '@/lib/auth/session';
 import {
   loadConnection, deleteConnection, authNeedsSecret,
   type AuthMethod,
@@ -13,6 +12,7 @@ import { putKeyVaultSecret, kvSecretsConfigGate } from '@/lib/azure/kv-secrets-c
 import { connectionsContainer } from '@/lib/azure/cosmos-client';
 import type { LoomConnection } from '@/lib/azure/connections-store';
 import { apiServerError, apiError } from '@/lib/api/respond';
+import { withSession } from '@/lib/api/route-toolkit';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -26,12 +26,7 @@ function toView(c: LoomConnection) {
 
 // ─── GET ─────────────────────────────────────────────────────────────────────
 
-export async function GET(
-  _req: NextRequest,
-  { params }: { params: { id: string } },
-) {
-  const session = getSession();
-  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+export const GET = withSession<{ id: string }>(async (_req: NextRequest, { session, params }) => {
   try {
     const conn = await loadConnection(session.claims.oid, params.id);
     if (!conn) return NextResponse.json({ ok: false, error: 'not found' }, { status: 404 });
@@ -39,16 +34,11 @@ export async function GET(
   } catch (e: any) {
     return apiServerError(e);
   }
-}
+});
 
 // ─── PATCH ───────────────────────────────────────────────────────────────────
 
-export async function PATCH(
-  req: NextRequest,
-  { params }: { params: { id: string } },
-) {
-  const session = getSession();
-  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+export const PATCH = withSession<{ id: string }>(async (req: NextRequest, { session, params }) => {
   const tenantId = session.claims.oid;
 
   let body: any;
@@ -67,7 +57,19 @@ export async function PATCH(
     const spnTenantId = body?.spnTenantId !== undefined ? (String(body.spnTenantId).trim() || undefined) : existing.spnTenantId;
     const spnClientId = body?.spnClientId !== undefined ? (String(body.spnClientId).trim() || undefined) : existing.spnClientId;
     const description = body?.description !== undefined ? (String(body.description).trim() || undefined) : existing.description;
+    // Non-secret source coordinates for the non-Azure connectors. Same
+    // supplied-only merge rule: an absent key keeps the stored value, an
+    // explicit empty string clears it.
+    const pick = (k: keyof typeof body, cur: string | undefined) =>
+      body?.[k] !== undefined ? (String(body[k]).trim() || undefined) : cur;
+    const warehouse = pick('warehouse', existing.warehouse);
+    const role = pick('role', existing.role);
+    const schema = pick('schema', existing.schema);
+    const projectId = pick('projectId', existing.projectId);
+    const serviceName = pick('serviceName', existing.serviceName);
+    const gateway = pick('gateway', existing.gateway);
     const authMethod: AuthMethod = body?.authMethod ?? existing.authMethod;
+
 
     if (!name) return NextResponse.json({ ok: false, error: 'name is required' }, { status: 400 });
 
@@ -104,7 +106,14 @@ export async function PATCH(
       username,
       spnTenantId,
       spnClientId,
+      warehouse,
+      role,
+      schema,
+      projectId,
+      serviceName,
+      gateway,
       description,
+
       secretRef,
       updatedAt: now,
     };
@@ -116,16 +125,11 @@ export async function PATCH(
     const status = e?.status || 500;
     return NextResponse.json({ ok: false, error: e?.message || String(e), missing: e?.missing }, { status });
   }
-}
+});
 
 // ─── DELETE ──────────────────────────────────────────────────────────────────
 
-export async function DELETE(
-  _req: NextRequest,
-  { params }: { params: { id: string } },
-) {
-  const session = getSession();
-  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+export const DELETE = withSession<{ id: string }>(async (_req: NextRequest, { session, params }) => {
   try {
     await deleteConnection(session, params.id);
     return NextResponse.json({ ok: true });
@@ -134,4 +138,4 @@ export async function DELETE(
     if (e?.status === 409) return apiError(e.message, 409, { dependents: e.dependents });
     return apiServerError(e);
   }
-}
+});
