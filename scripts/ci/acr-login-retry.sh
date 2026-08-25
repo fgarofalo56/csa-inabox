@@ -100,7 +100,43 @@ if [ -z "$ACR" ]; then
 fi
 
 # Transient in the window right after an ACR firewall open, or under throttling.
-TRANSIENT='CONNECTIVITY_REFRESH_TOKEN_ERROR|Response code: 403|try running .az login. again|TooManyRequests|temporarily unavailable|Connection aborted|connection reset|ServiceUnavailable|GatewayTimeout|504|503'
+#
+# THE IP-DENIAL SHAPE (loom-roll-and-validate run 32819789544, 2026-08-25 - a P0
+# roll failure that froze the Commercial estate mid-roll). `az acr login` shells
+# out to the Docker daemon when one is present, and the daemon reports a firewall
+# refusal in ITS words, not the AAD client's:
+#
+#   [acr-dataplane-ready] READY after 1 attempt(s) - HTTP 401 ...   <- probe: open
+#   WARNING: Error response from daemon: Get "https://<acr>/v2/": denied:
+#     {"errors":[{"code":"DENIED","message":"client with IP '<ip>' is not allowed
+#      access. Refer https://aka.ms/acr/firewall to grant access."}]}
+#   ERROR: Login failed.
+#
+# That text contains NO `Response code: 403` and none of the other needles below,
+# so the set classified the CANONICAL post-open propagation failure as permanent
+# and exited on attempt 1 - the precise outcome this script exists to prevent.
+#
+# `is not allowed access` is the right needle. It is emitted by ACR's NETWORK
+# RULE path; acr-dataplane-ready.sh:33-36 measured it on 2026-08-11, but what it
+# measured was firewall-CLOSED (403 DENIED ... is not allowed access) vs
+# firewall-OPEN (401 UNAUTHORIZED), with an anonymous `curl GET /v2/`. A probe
+# with no principal cannot produce an RBAC denial, so that measurement does NOT
+# establish that an RBAC denial never carries this phrase. Do not cite it for
+# that.
+#
+# It does not need to. The narrowness claim is NOT load-bearing here: the
+# canonical RBAC denial ("Access to registry 'x' was denied. Response code:
+# 403.") already matches `Response code: 403` in the set below, so it is
+# ALREADY retried today, pre-this-change. Even if `is not allowed access` did
+# appear in some RBAC wording, this needle changes nothing about how that case
+# is classified. The behaviour this line adds is confined to the daemon-worded
+# firewall refusal above, which matched nothing at all.
+#
+# COST OF BEING WRONG. If the lease genuinely never opened the registry, this now
+# takes ~165s to say so instead of ~0s. That is the SAME trade #3383 already made
+# deliberately for a true RBAC denial: a slow true answer beats a fast false one,
+# and the exhaustion message names both possibilities rather than asserting one.
+TRANSIENT='CONNECTIVITY_REFRESH_TOKEN_ERROR|Response code: 403|is not allowed access|try running .az login. again|TooManyRequests|temporarily unavailable|Connection aborted|connection reset|ServiceUnavailable|GatewayTimeout|504|503'
 
 LAST=""
 # Report the time this actually took, not ATTEMPTS*BACKOFF — the loop never
@@ -125,5 +161,5 @@ for i in $(seq 1 "$ATTEMPTS"); do
   fi
 done
 
-echo "::error::acr-login-retry: could NOT authenticate to '${ACR}' after ${ATTEMPTS} attempts over ${SECONDS}s (budget ${ATTEMPTS}x${BACKOFF}s). Every attempt failed with a transient-looking auth error, so this is either a token-exchange window far longer than expected or a permission problem wearing a transient's clothes. LAST ERROR: $(printf '%s' "$LAST" | tr -d '\r' | tr '\n' ' ' | cut -c1-400)" >&2
+echo "::error::acr-login-retry: could NOT authenticate to '${ACR}' after ${ATTEMPTS} attempts over ${SECONDS}s (budget ${ATTEMPTS}x${BACKOFF}s). Every attempt failed with a transient-looking auth error, so this is either a token-exchange window far longer than expected, a registry whose network rules never admitted this runner (the firewall lease may have been erased mid-run - see #3676), or a permission problem wearing a transient's clothes. LAST ERROR: $(printf '%s' "$LAST" | tr -d '\r' | tr '\n' ' ' | cut -c1-400)" >&2
 exit 1
