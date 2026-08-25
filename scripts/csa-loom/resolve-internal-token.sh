@@ -55,8 +55,13 @@
 #     effect.  The old dual behaviour is precisely what made `--export
 #     > /dev/null` look like a working call site.
 #   * Workflows use `--github-env`, which writes `$GITHUB_ENV` directly and puts
-#     ONLY the mask on stdout.  The value is never printed at all, so there is
-#     nothing to redirect and correctness no longer depends on the mask landing.
+#     ONLY the mask on stdout.  That removes the SECOND leak — the printed value
+#     — but NOT the first: `$GITHUB_ENV` is job-level environment and the runner
+#     renders it in every later step, so the mask is still the only thing
+#     standing between the token and the log.  Correctness still depends on the
+#     mask landing.  What changed is that there is no longer any reason for a
+#     caller to redirect this mode, and both a runtime check and a static guard
+#     now refuse it if one does.
 #
 # `--fingerprint` and `--rotate` emit only a sha256 fingerprint (first 12 hex
 # chars) and the length — the same comparison the 2026-08-06/07 triage used.
@@ -108,7 +113,19 @@ log() { printf '[resolve-internal-token] %s\n' "$*" >&2; }
 # silently — the stderr `log` lines above still appear, so the log looks healthy
 # while the token is published.  That is #4061, verbatim.
 mask() {
-  if [ -n "${GITHUB_ACTIONS:-}" ]; then printf '::add-mask::%s\n' "$1"; fi
+  # `::add-mask::` is LINE-oriented: the runner registers the text up to the
+  # newline and publishes everything after it verbatim. `read_live` strips
+  # `\r\n`, so today the value cannot be multi-line and this loop is defence in
+  # depth — but the $GITHUB_ENV write beside it is heredoc-based precisely
+  # BECAUSE it does not rely on that, and the mask should not be the one place
+  # that does.
+  #
+  # `if` rather than `[ … ] && printf`: under `set -e` a false `&&` list as the
+  # last command in a loop body is an exit, not a skip.
+  if [ -z "${GITHUB_ACTIONS:-}" ]; then return 0; fi
+  printf '%s\n' "$1" | while IFS= read -r _line; do
+    if [ -n "$_line" ]; then printf '::add-mask::%s\n' "$_line"; fi
+  done
 }
 
 # `--export`'s stdout is CAPTURED by the caller's `$(…)` — that is its whole
@@ -135,11 +152,21 @@ require_github_env() {
     log "       Actions step. Outside Actions use: eval \"\$(… --export)\"."
     exit 1
   fi
-  # Fail CLOSED on the exact regression this mode exists to prevent.  Scoped to
-  # Actions because that is the only place the mask means anything, and the only
-  # place the runner's stdout is guaranteed to be a pipe (so a /dev/null or a
-  # regular file is unambiguously a caller-added redirect, not the normal case).
+  # Fail CLOSED on the exact regression this mode exists to prevent.
+  #
+  # LINUX ONLY, and gated on /proc rather than on a uname string. Measured on
+  # MSYS/Git Bash this test is wrong in BOTH directions: an untouched console
+  # stats as a regular file (false POSITIVE, which would break a Windows
+  # runner), and a `>/dev/null` presents fd 1 as a pipe (false NEGATIVE). Every
+  # deploy lane runs on ubuntu-latest, where `/dev/stdout -> /proc/self/fd/1`
+  # gives the semantics this reasons about.
+  #
+  # WHAT IT DOES NOT CATCH, stated rather than implied: a pipe, a `$( )`
+  # capture, a named FIFO, or a closed descriptor. Those are indistinguishable
+  # here from the runner's own pipe. The static guard R3 is what covers them;
+  # this is the second layer, not the only one.
   [ -n "${GITHUB_ACTIONS:-}" ] || return 0
+  [ -d /proc ] || return 0
   [ -e /dev/stdout ] || return 0
   local how=''
   if [ /dev/stdout -ef /dev/null ]; then

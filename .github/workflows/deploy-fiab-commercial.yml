@@ -626,7 +626,9 @@ jobs:
           # later step's env block, in a public repo (#4061). The stderr log()
           # lines survived the same redirect, which is why the log looked fine.
           # scripts/ci/check-internal-token-single-writer.mjs R3 now refuses the
-          # shape, and the script itself fails closed if its stdout is moved.
+          # shape, and the script itself fails closed if its stdout is /dev/null
+          # or a regular file. Neither layer can see a pipe or a $( ) capture —
+          # R3 catches those statically, the runtime check does not.
           bash scripts/csa-loom/resolve-internal-token.sh --github-env
 
       # ── ONE PARAMETER SOURCE FOR THE WHAT-IF AND THE APPLY (refs #3022) ──

@@ -119,13 +119,23 @@ self-hosted runner, in Commercial and in Gov, with no extra hop.
 >
 > Three things now hold that line:
 >
-> * `--github-env` prints **no secret value at all** — only the mask — so there
->   is nothing a caller could reasonably want to discard.
+> * `--github-env` prints **no secret value at all** — only the mask. That
+>   removes the *second* leak, not the first: the `$GITHUB_ENV` value is still
+>   job-level environment, so **the mask is still load-bearing**. What changed is
+>   that no caller has any reason to redirect this mode.
 > * The script **fails closed** if its own stdout is `/dev/null` or a regular
->   file (Linux runner semantics; it cannot self-detect on Git Bash).
+>   file. Measured limits, stated rather than implied: it does **not** detect a
+>   pipe, a `$( )` capture, a named FIFO, or a closed descriptor — and under Git
+>   Bash it is wrong in *both* directions (a plain console reads as a regular
+>   file; a `>/dev/null` reads as clean). All four lanes run on `ubuntu-latest`,
+>   where it is correct.
 > * `scripts/ci/check-internal-token-single-writer.mjs` **R3** refuses the shape
->   at review time — any stdout redirect, any pipe, any mask-swallowing `$( )`
->   — across `.github/**` and `scripts/**/*.sh`, not just the four lanes.
+>   at review time — a stdout redirect anywhere on the invocation's logical line,
+>   a pipe, a mask-swallowing `$( )`, and a block-level `exec >` / `} >` / `) |`
+>   — across `.github/**` and `scripts/**/*.sh`, matching the resolver by
+>   basename so a relative or variable-built path cannot hide. It reasons about
+>   text, not about a shell: a redirect assembled at runtime is outside its
+>   reach.
 >
 > `--export` is the shell mode and **prints the token by design**; that is the
 > `eval` contract. Use it only as `eval "$(… --export)"`, never in a workflow

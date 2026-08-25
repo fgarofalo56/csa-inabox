@@ -28,11 +28,23 @@
  *      repo. The stderr `log()` lines survived the same redirect, so the log
  *      looked healthy the whole time.
  *
- *      R3 is keyed to the SHAPE, not to the spelling `> /dev/null`: any stdout
- *      redirect (`>`, `>>`, `1>`, `&>`, `>&`, `> "$F"`), any pipe, and any
- *      command substitution that swallows the mask are all the same defect.
+ *      R3 is keyed to the SHAPE, not to the spelling `> /dev/null`: a stdout
+ *      redirect anywhere on the invocation's logical line (`>`, `>>`, `1>`,
+ *      `&>`, `>&`, `> "$F"`, and with or without surrounding whitespace), a
+ *      pipe, a mask-swallowing `$( )`, and a block-level `exec >` / `} >` /
+ *      `) |` are all the same defect. The resolver is matched by BASENAME, so a
+ *      relative or variable-built path cannot hide an invocation.
+ *
  *      `2>` is deliberately NOT flagged — moving stderr does not touch the
  *      mask.
+ *
+ *      STATED LIMITS, because a guard that overstates its reach is how the
+ *      original defect survived review: R3 reasons about text, not about a
+ *      shell. A redirect built at runtime (`bash "$SCRIPT" $REDIR`), an `exec`
+ *      in a sourced file, or a wrapper that rebinds fd 1 in another process are
+ *      all outside what it can see. The script's own fail-closed check is the
+ *      second layer, and it detects `/dev/null` and regular files only — not a
+ *      pipe, not a `$( )`, not a closed descriptor.
  *
  * ── WHY A STATIC GUARD AT ALL ────────────────────────────────────────────────
  * The live drift guard (loom-internal-token-drift.yml) catches divergence AFTER
@@ -54,6 +66,16 @@ import { readLogicalLines, isCommentLine } from './_logical-lines.mjs';
 export const OWNER_BICEP = 'platform/fiab/bicep/modules/admin-plane/main.bicep';
 /** The shared existing-value lookup every deploy lane must call. */
 export const RESOLVER = 'scripts/csa-loom/resolve-internal-token.sh';
+/**
+ * Match the resolver by BASENAME, not by the full repo-relative path.
+ *
+ * `text.indexOf(RESOLVER)` could not see `bash ./resolve-internal-token.sh`
+ * after a `cd`, nor `bash "$DIR/resolve-internal-token.sh"` — both invisible,
+ * both counted as zero, and the repo-wide population check could not notice
+ * because the four known lanes held the global count at 4. A sibling script in
+ * `scripts/csa-loom/` calling it by relative path is the natural next caller.
+ */
+export const RESOLVER_RE = /resolve-internal-token\.sh/;
 /** The ARM parameter that carries the adopted value. */
 export const ADOPT_PARAM = 'loomInternalTokenValue';
 
@@ -186,11 +208,59 @@ export const RESOLVER_MODES = ['--github-env', '--fingerprint', '--rotate', '--e
  * `2>` and `2>&1` are deliberately NOT matched. Moving stderr cannot destroy a
  * stdout workflow command, and `2>"$ERR_FILE"` is a shape this repo uses on
  * purpose — per deploy-integrity R7 stderr is captured, never discarded.
+ *
+ * NO LEADING-SEPARATOR REQUIREMENT. An earlier form required whitespace (or one
+ * of `;&|(`) immediately before the operator, which let `--github-env>/dev/null`
+ * — valid bash, verified — read as clean. The operator is now matched wherever
+ * it appears; `(?<![02-9])` is what keeps `2>` (and any other explicit fd) out,
+ * while still admitting `1>` and `&>`.
  */
-export const STDOUT_REDIRECT = /(?:^|[\s;&|(])(?:1|&)?>>?/;
+export const STDOUT_REDIRECT = /(?<![02-9])>/;
 
 /** A real pipe, not the `||` control operator. */
 export const PIPE = /(?<!\|)\|(?!\|)/;
+
+/**
+ * Shell redirections that move stdout for a WHOLE BLOCK rather than for one
+ * command, and therefore never appear on the invocation's own logical line.
+ *
+ *   exec >/dev/null            — rebinds fd 1 for the rest of the script
+ *   { … } >/dev/null           — the redirect rides the closing brace
+ *   ( … ) | tee                — likewise for a subshell
+ *
+ * Each of these silently swallows the mask of an invocation that looks pristine
+ * in isolation, which is why the per-line test alone was not enough.
+ */
+export const BLOCK_REDIRECT = /^\s*(?:exec\s+(?:[1&]\s*)?>|[})]\s*(?:[1&]?>|\|(?!\|)))/;
+
+/**
+ * Strip an inline `#` comment so a comment cannot decide the verdict.
+ *
+ * This is not cosmetic. `--export  # TODO: move to --github-env` used to
+ * classify as `--github-env` — the mode was chosen by scanning the whole tail
+ * and taking the first hit in RESOLVER_MODES order, so a mode named only in
+ * PROSE outranked the one actually passed. That is a one-comment bypass of the
+ * guard, on the single shape that prints the token straight into the log.
+ *
+ * Quoting is respected so a `#` inside a string is not treated as a comment.
+ *
+ * @param {string} text
+ * @returns {string} text with any unquoted `#` tail removed
+ */
+export function stripInlineComment(text) {
+  let quote = null;
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (quote) {
+      if (c === quote) quote = null;
+    } else if (c === '"' || c === "'") {
+      quote = c;
+    } else if (c === '#' && (i === 0 || /\s/.test(text[i - 1]))) {
+      return text.slice(0, i);
+    }
+  }
+  return text;
+}
 
 /**
  * Describe one resolver invocation found on a logical line.
@@ -199,25 +269,40 @@ export const PIPE = /(?<!\|)\|(?!\|)/;
  * @returns {{mode:string,captured:boolean,evaled:boolean,redirected:boolean,piped:boolean}|null}
  */
 export function classifyResolverInvocation(text) {
-  const at = text.indexOf(RESOLVER);
+  const code = stripInlineComment(text);
+  const at = code.search(RESOLVER_RE);
   if (at < 0) return null;
-  const head = text.slice(0, at);
-  const tail = text.slice(at + RESOLVER.length);
-  // The terminator is `(?![\w-])`, not `(?:\s|$)`: a captured invocation ends
-  // in `)` — `FP=$(… --fingerprint)` — and a whitespace-or-end terminator does
-  // not match there, so every captured call silently fell back to the
-  // `--export` default and got judged as the wrong mode. `[\w-]` still rejects
-  // `--export-something`.
-  const mode =
-    RESOLVER_MODES.find((m) => new RegExp(`(?:^|\\s)${m}(?![\\w-])`).test(tail)) ?? '--export';
+  const m = code.match(RESOLVER_RE);
+  const head = code.slice(0, at);
+  const tail = code.slice(at + m[0].length);
+  // Mode is chosen by POSITION in the string, not by RESOLVER_MODES order: with
+  // order precedence, a line naming two modes was judged on whichever happened
+  // to sit earlier in the array rather than on the one the shell would use.
+  //
+  // The terminator is `(?![\w-])`, not `(?:\s|$)`: a captured invocation ends in
+  // `)` — `FP=$(… --fingerprint)` — and a whitespace-or-end terminator does not
+  // match there, so every captured call silently fell back to `--export`.
+  let mode = '--export';
+  let best = Infinity;
+  for (const cand of RESOLVER_MODES) {
+    const hit = new RegExp(`(?:^|\\s)${cand}(?![\\w-])`).exec(tail);
+    if (hit && hit.index < best) {
+      best = hit.index;
+      mode = cand;
+    }
+  }
+  // Redirects and pipes are tested across the WHOLE line, not just the tail.
+  // `>/dev/null bash …resolve-internal-token.sh --github-env` is valid bash
+  // (verified) and puts the redirect entirely to the LEFT of the invocation,
+  // where a tail-only test cannot see it.
   return {
     mode,
     // An unclosed `$(` or backtick to our left means our stdout is being
     // CAPTURED by the caller's shell rather than reaching the runner.
     captured: /\$\([^)]*$/.test(head) || /`[^`]*$/.test(head),
     evaled: /\beval\b/.test(head),
-    redirected: STDOUT_REDIRECT.test(tail),
-    piped: PIPE.test(tail),
+    redirected: STDOUT_REDIRECT.test(code),
+    piped: PIPE.test(code),
   };
 }
 
@@ -229,6 +314,34 @@ const R3_WHY =
   'with the stderr log() lines surviving the same redirect so the log looked healthy.';
 
 /**
+ * The physical-line range of the `run:` block (or whole file) containing a
+ * given line, so a block-level redirect can be attributed to the invocation it
+ * silences.
+ *
+ * @param {string[]} lines physical lines
+ * @param {number} idx 0-based index of the invocation's first physical line
+ * @returns {[number, number]} [start, end) as 0-based indices
+ */
+export function enclosingBlock(lines, idx) {
+  for (let i = idx; i >= 0; i--) {
+    const m = lines[i].match(/^(\s*)(?:-\s*)?run:/);
+    if (!m) continue;
+    const indent = m[1].length;
+    let end = lines.length;
+    for (let j = i + 1; j < lines.length; j++) {
+      if (lines[j].trim() === '') continue;
+      if (lines[j].match(/^\s*/)[0].length <= indent) {
+        end = j;
+        break;
+      }
+    }
+    return [i + 1, end];
+  }
+  // No `run:` above it — a plain shell script. The whole file is the block.
+  return [0, lines.length];
+}
+
+/**
  * R3 — every invocation leaves stdout alone, and uses a mode whose stdout is
  * safe to leave alone.
  *
@@ -238,6 +351,7 @@ const R3_WHY =
  */
 export function checkResolverInvocation(name, src) {
   const failures = [];
+  const physical = String(src).split(/\r?\n/);
   let invocations = 0;
 
   for (const { line, text } of readLogicalLines(src)) {
@@ -255,6 +369,22 @@ export function checkResolverInvocation(name, src) {
       );
       continue;
     }
+
+    // A redirect on the ENCLOSING block never appears on the invocation's own
+    // line, and swallows the mask just as completely.
+    const [bs, be] = enclosingBlock(physical, line - 1);
+    let blockRedirected = false;
+    for (let i = bs; i < be && !blockRedirected; i++) {
+      if (isCommentLine(physical[i])) continue;
+      if (!BLOCK_REDIRECT.test(stripInlineComment(physical[i]))) continue;
+      blockRedirected = true;
+      failures.push(
+        `${at} sits in a block whose stdout is redirected at ${name}:${i + 1} ` +
+          `(\`${physical[i].trim()}\`). The invocation itself looks clean, which is exactly why this ` +
+          `has to be checked separately. ${R3_WHY}`,
+      );
+    }
+    if (blockRedirected) continue;
 
     if (inv.mode === '--github-env' && inv.captured) {
       failures.push(
@@ -342,7 +472,7 @@ export function run(root) {
     } catch {
       continue;
     }
-    if (!src.includes(RESOLVER)) continue;
+    if (!RESOLVER_RE.test(src)) continue;
     const r = checkResolverInvocation(rel, src);
     invocations += r.invocations;
     failures.push(...r.failures);

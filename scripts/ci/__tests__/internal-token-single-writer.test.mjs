@@ -22,6 +22,8 @@ import {
   checkDeployLane,
   checkResolverInvocation,
   classifyResolverInvocation,
+  stripInlineComment,
+  enclosingBlock,
   callerCandidates,
   appliesPlatformTemplate,
   stripCommentLines,
@@ -308,4 +310,136 @@ test('R3 scope: the caller sweep reaches shell scripts, not just the deploy lane
     files.some((f) => f.startsWith('scripts/') && f.endsWith('.sh')),
     'scripts/**/*.sh must be in scope — a caller can be a shell script',
   );
+});
+
+/* ── R3 bypasses found by independent review of the first cut of this guard ──
+ *
+ * Every case below was GREEN against the real lane files when R3 first shipped.
+ * They are here because the first version of this guard was defeated four ways
+ * while its own header claimed it was "keyed to the SHAPE, not the spelling" —
+ * the same overstated-reach failure the guard exists to catch.
+ */
+
+test('BYPASS-1: an inline comment naming another mode must not decide the verdict', () => {
+  // `--export … # TODO: move to --github-env` classified as --github-env, because
+  // the mode was picked by scanning the whole tail in RESOLVER_MODES order. A
+  // mode named only in PROSE outranked the one actually passed — a one-comment
+  // bypass on the single shape that prints the token into the log.
+  const src = lane(
+    'bash scripts/csa-loom/resolve-internal-token.sh --export  # TODO(#4061): move to --github-env',
+  );
+  assert.equal(classifyResolverInvocation(src.split('\n')[2]).mode, '--export');
+  const r = checkResolverInvocation('deploy-fiab-commercial.yml', src);
+  assert.ok(r.failures.length >= 1, 'a comment must not launder an uncaptured --export');
+  assert.match(r.failures.join('\n'), /PRINTS THE TOKEN/);
+});
+
+test('BYPASS-1b: when two modes appear, the FIRST in the string wins, not the first in the array', () => {
+  const inv = classifyResolverInvocation(
+    'bash scripts/csa-loom/resolve-internal-token.sh --export --github-env',
+  );
+  assert.equal(inv.mode, '--export');
+});
+
+test('stripInlineComment leaves a # inside quotes alone', () => {
+  assert.equal(stripInlineComment('cmd --flag  # gone'), 'cmd --flag  ');
+  assert.equal(stripInlineComment('cmd "a # b"'), 'cmd "a # b"');
+  assert.equal(stripInlineComment("cmd 'a # b' # gone"), "cmd 'a # b' ");
+});
+
+for (const [label, cmd] of [
+  ['redirect placed BEFORE the command', '>/dev/null bash scripts/csa-loom/resolve-internal-token.sh --github-env'],
+  ['no space between the arg and the operator', 'bash scripts/csa-loom/resolve-internal-token.sh --github-env>/dev/null'],
+  ['descriptor closed rather than redirected', 'bash scripts/csa-loom/resolve-internal-token.sh --github-env>&-'],
+  ['piped, with the operator glued on', 'bash scripts/csa-loom/resolve-internal-token.sh --github-env|grep -v add-mask'],
+]) {
+  test(`BYPASS-2 MUTATION: ${label} → red`, () => {
+    // All four are valid bash and all four were GREEN: the redirect/pipe test
+    // only looked at text to the RIGHT of the resolver path, and required a
+    // separator immediately before the operator.
+    const r = checkResolverInvocation('deploy-fiab-commercial.yml', lane(cmd));
+    assert.equal(r.invocations, 1, 'the invocation must still be COUNTED');
+    assert.ok(r.failures.length >= 1, `\`${cmd}\` must not pass`);
+  });
+}
+
+test('BYPASS-2 MUTATION: `exec >/dev/null` earlier in the same run block → red', () => {
+  const src = `
+      - name: Adopt
+        run: |
+          exec >/dev/null
+          bash scripts/csa-loom/resolve-internal-token.sh --github-env
+`;
+  const r = checkResolverInvocation('deploy-fiab-commercial.yml', src);
+  assert.ok(r.failures.length >= 1, 'a block-level exec redirect must not pass');
+  assert.match(r.failures.join('\n'), /block whose stdout is redirected/);
+});
+
+for (const [label, open, close] of [
+  ['a brace group piped to a filter that drops the mask', '{', '} | grep -v add-mask'],
+  ['a brace group redirected wholesale', '{', '} >/dev/null'],
+  ['a subshell redirected wholesale', '(', ') >/dev/null'],
+]) {
+  test(`BYPASS-2 MUTATION: ${label} → red`, () => {
+    // The worst of the set: both layers blind. R3 saw a pristine line, and the
+    // runtime check cannot distinguish a caller's pipe from the runner's own —
+    // measured to write the token to $GITHUB_ENV with the mask gone and exit 0.
+    const src = `
+      - name: Adopt
+        run: |
+          ${open}
+            bash scripts/csa-loom/resolve-internal-token.sh --github-env
+          ${close}
+`;
+    const r = checkResolverInvocation('deploy-fiab-commercial.yml', src);
+    assert.ok(r.failures.length >= 1, `${label} must not pass`);
+  });
+}
+
+test('BYPASS-2 CONTROL: a clean run block with no redirect anywhere stays green', () => {
+  const src = `
+      - name: Adopt
+        run: |
+          export ADMIN_RG="rg-csa-loom-admin-$AZURE_LOCATION"
+          bash scripts/csa-loom/resolve-internal-token.sh --github-env
+`;
+  assert.deepEqual(checkResolverInvocation('deploy-fiab-commercial.yml', src).failures, []);
+});
+
+for (const [label, cmd] of [
+  ['relative path after a cd', 'bash ./resolve-internal-token.sh --github-env >/dev/null'],
+  ['path built from a variable', 'bash "$D/resolve-internal-token.sh" --github-env >/dev/null'],
+  ['bare basename', 'resolve-internal-token.sh --github-env | tee /tmp/t'],
+]) {
+  test(`BYPASS-4 MUTATION: ${label} → seen AND red`, () => {
+    // Matching the literal repo-relative path meant invocations=0 for all of
+    // these, and the repo-wide population check could not notice because the
+    // four known lanes held the global count at 4.
+    const r = checkResolverInvocation('x.sh', lane(cmd));
+    assert.equal(r.invocations, 1, 'the invocation must be SEEN at all');
+    assert.ok(r.failures.length >= 1);
+  });
+}
+
+test('BYPASS-4 CONTROL: a similarly-named script is not mistaken for the resolver', () => {
+  const r = checkResolverInvocation('x.sh', lane('bash scripts/csa-loom/resolve-msal-client-id.sh > /dev/null'));
+  assert.equal(r.invocations, 0);
+  assert.deepEqual(r.failures, []);
+});
+
+test('enclosingBlock bounds the scan to the step, not the whole workflow', () => {
+  // Without a bound, an unrelated `exec >` anywhere in a 2000-line deploy lane
+  // would flag every invocation in the file.
+  const lines = [
+    '      - name: Something else',
+    '        run: |',
+    '          exec >/dev/null',
+    '      - name: Adopt',
+    '        run: |',
+    '          bash scripts/csa-loom/resolve-internal-token.sh --github-env',
+  ];
+  const [start, end] = enclosingBlock(lines, 5);
+  assert.equal(start, 5, 'the block starts after its own run:');
+  assert.equal(end, lines.length);
+  assert.deepEqual(checkResolverInvocation('deploy.yml', lines.join('\n')).failures, []);
 });
