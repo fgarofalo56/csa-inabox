@@ -19,6 +19,21 @@
  *      (`resolve-internal-token.sh`) AND passes `loomInternalTokenValue`. A
  *      deploy lane that skips either half is a lane that clobbers.
  *
+ *  R3. Every invocation of the resolver leaves its STDOUT alone (#4061).
+ *      `::add-mask::` is a workflow command the runner parses off the emitting
+ *      process's stdout, so `… > /dev/null` discards the mask registration
+ *      while the `$GITHUB_ENV` write happens anyway — and `$GITHUB_ENV` is
+ *      job-level environment, which the runner renders in EVERY subsequent
+ *      step's Run group. All four deploy lanes carried that shape, in a public
+ *      repo. The stderr `log()` lines survived the same redirect, so the log
+ *      looked healthy the whole time.
+ *
+ *      R3 is keyed to the SHAPE, not to the spelling `> /dev/null`: any stdout
+ *      redirect (`>`, `>>`, `1>`, `&>`, `>&`, `> "$F"`), any pipe, and any
+ *      command substitution that swallows the mask are all the same defect.
+ *      `2>` is deliberately NOT flagged — moving stderr does not touch the
+ *      mask.
+ *
  * ── WHY A STATIC GUARD AT ALL ────────────────────────────────────────────────
  * The live drift guard (loom-internal-token-drift.yml) catches divergence AFTER
  * a deploy has already caused it. This one refuses to merge the change that
@@ -32,8 +47,8 @@
  * Usage: node scripts/ci/check-internal-token-single-writer.mjs [repo-root]
  */
 import { readFileSync, readdirSync } from 'node:fs';
-import { join, resolve } from 'node:path';
-import { readLogicalLines } from './_logical-lines.mjs';
+import { join, resolve, relative, sep } from 'node:path';
+import { readLogicalLines, isCommentLine } from './_logical-lines.mjs';
 
 /** The bicep module that owns the token expression. */
 export const OWNER_BICEP = 'platform/fiab/bicep/modules/admin-plane/main.bicep';
@@ -156,6 +171,153 @@ export function checkDeployLane(name, src) {
   return fail;
 }
 
+/* ── R3 — the resolver's stdout must reach the runner (#4061) ─────────────── */
+
+/**
+ * Modes the resolver accepts. The script itself treats a missing mode as
+ * `--export`, and so does this classifier — an invocation with no mode prints
+ * the secret exactly as an explicit `--export` would.
+ */
+export const RESOLVER_MODES = ['--github-env', '--fingerprint', '--rotate', '--export'];
+
+/**
+ * Any redirect that moves fd 1: `>`, `>>`, `1>`, `1>>`, `&>`, `>&`.
+ *
+ * `2>` and `2>&1` are deliberately NOT matched. Moving stderr cannot destroy a
+ * stdout workflow command, and `2>"$ERR_FILE"` is a shape this repo uses on
+ * purpose — per deploy-integrity R7 stderr is captured, never discarded.
+ */
+export const STDOUT_REDIRECT = /(?:^|[\s;&|(])(?:1|&)?>>?/;
+
+/** A real pipe, not the `||` control operator. */
+export const PIPE = /(?<!\|)\|(?!\|)/;
+
+/**
+ * Describe one resolver invocation found on a logical line.
+ *
+ * @param {string} text a logical (continuation-folded) line
+ * @returns {{mode:string,captured:boolean,evaled:boolean,redirected:boolean,piped:boolean}|null}
+ */
+export function classifyResolverInvocation(text) {
+  const at = text.indexOf(RESOLVER);
+  if (at < 0) return null;
+  const head = text.slice(0, at);
+  const tail = text.slice(at + RESOLVER.length);
+  // The terminator is `(?![\w-])`, not `(?:\s|$)`: a captured invocation ends
+  // in `)` — `FP=$(… --fingerprint)` — and a whitespace-or-end terminator does
+  // not match there, so every captured call silently fell back to the
+  // `--export` default and got judged as the wrong mode. `[\w-]` still rejects
+  // `--export-something`.
+  const mode =
+    RESOLVER_MODES.find((m) => new RegExp(`(?:^|\\s)${m}(?![\\w-])`).test(tail)) ?? '--export';
+  return {
+    mode,
+    // An unclosed `$(` or backtick to our left means our stdout is being
+    // CAPTURED by the caller's shell rather than reaching the runner.
+    captured: /\$\([^)]*$/.test(head) || /`[^`]*$/.test(head),
+    evaled: /\beval\b/.test(head),
+    redirected: STDOUT_REDIRECT.test(tail),
+    piped: PIPE.test(tail),
+  };
+}
+
+const R3_WHY =
+  'The mask is a workflow command the runner parses off this process\'s STDOUT. Anything that ' +
+  'moves, discards or swallows that stream destroys the ::add-mask:: registration while the ' +
+  '$GITHUB_ENV write still happens — and $GITHUB_ENV is JOB-level environment, which the runner ' +
+  'renders in every subsequent step. That is #4061: the live token published in a public repo, ' +
+  'with the stderr log() lines surviving the same redirect so the log looked healthy.';
+
+/**
+ * R3 — every invocation leaves stdout alone, and uses a mode whose stdout is
+ * safe to leave alone.
+ *
+ * @param {string} name file path, for the message
+ * @param {string} src file contents
+ * @returns {{failures:string[],invocations:number}}
+ */
+export function checkResolverInvocation(name, src) {
+  const failures = [];
+  let invocations = 0;
+
+  for (const { line, text } of readLogicalLines(src)) {
+    if (isCommentLine(text)) continue;
+    const inv = classifyResolverInvocation(text);
+    if (!inv) continue;
+    invocations += 1;
+    const at = `${name}:${line}`;
+
+    if (inv.redirected || inv.piped) {
+      const what = inv.redirected ? 'redirects' : 'pipes';
+      failures.push(
+        `${at} ${what} the resolver's stdout. ${R3_WHY} Use \`--github-env\` with NO redirect: ` +
+          'it writes $GITHUB_ENV itself and prints only the mask, so there is nothing to discard.',
+      );
+      continue;
+    }
+
+    if (inv.mode === '--github-env' && inv.captured) {
+      failures.push(
+        `${at} captures \`--github-env\` in a command substitution. A \`$( )\` swallows the mask ` +
+          `exactly as \`> /dev/null\` did. ${R3_WHY} Call it as a plain command.`,
+      );
+      continue;
+    }
+
+    if (inv.mode === '--export' && !inv.captured) {
+      failures.push(
+        `${at} runs \`--export\` without capturing it. That mode PRINTS THE TOKEN by design — ` +
+          'that is the eval contract — so an uncaptured call writes the secret straight into the ' +
+          'log. In a workflow use `--github-env`; in a shell use `eval "$(… --export)"`.',
+      );
+      continue;
+    }
+
+    if (inv.mode === '--export' && inv.captured && !inv.evaled) {
+      failures.push(
+        `${at} captures \`--export\` into something other than an \`eval\`. Its stdout is shell ` +
+          'code, and the `::add-mask::` registration is part of that code — captured and never ' +
+          'run, the value is assigned to a variable and never masked. Use `eval "$(… --export)"`.',
+      );
+    }
+  }
+
+  return { failures, invocations };
+}
+
+/**
+ * Files that could plausibly invoke the resolver. Deliberately BROADER than the
+ * four deploy lanes: a guard scoped to the files that already carry the defect
+ * cannot see the fifth caller, and `check-cloud-endpoint-literals`' SCOPE_DIRS
+ * hole is the standing example of that failure mode in this repo.
+ *
+ * @param {string} root repo root
+ * @returns {string[]} repo-relative paths
+ */
+export function callerCandidates(root) {
+  const out = [];
+  const walk = (absDir, wanted) => {
+    let entries;
+    try {
+      entries = readdirSync(absDir, { withFileTypes: true });
+    } catch {
+      return; // a missing tree is reported by the zero-population check, not here
+    }
+    for (const e of entries) {
+      const abs = join(absDir, e.name);
+      if (e.isDirectory()) {
+        if (e.name === 'node_modules' || e.name === '.git') continue;
+        walk(abs, wanted);
+      } else if (wanted.some((ext) => e.name.endsWith(ext))) {
+        out.push(relative(root, abs).split(sep).join('/'));
+      }
+    }
+  };
+  walk(resolve(root, '.github'), ['.yml', '.yaml', '.sh']);
+  walk(resolve(root, 'scripts'), ['.sh']);
+  return out.sort();
+}
+
 /** @param {string} root repo root */
 export function run(root) {
   const failures = [];
@@ -171,6 +333,21 @@ export function run(root) {
     failures.push(...checkDeployLane(f, src));
   }
 
+  // R3 over every plausible caller, not only the deploy lanes.
+  let invocations = 0;
+  for (const rel of callerCandidates(root)) {
+    let src;
+    try {
+      src = readFileSync(resolve(root, rel), 'utf8');
+    } catch {
+      continue;
+    }
+    if (!src.includes(RESOLVER)) continue;
+    const r = checkResolverInvocation(rel, src);
+    invocations += r.invocations;
+    failures.push(...r.failures);
+  }
+
   // A guard that inspected ZERO deploy lanes has measured nothing. Fail rather
   // than print a green line over an empty set.
   if (checked === 0) {
@@ -179,15 +356,24 @@ export function run(root) {
         '(update this guard) or the glob is wrong — either way this run verified nothing.',
     );
   }
+  // Same accounting for R3. Four deploy lanes call the resolver; if that count
+  // drops to zero, every R3 "pass" is vacuous and the zero is not evidence.
+  if (invocations === 0) {
+    failures.push(
+      `R3 found ZERO invocations of ${RESOLVER} under .github/** or scripts/**. Either every deploy ` +
+        'lane stopped adopting the estate token (R2 should have caught that), or the callers moved out ' +
+        "of this guard's reach. An empty population is an unmeasured tree, not a pass (#4061).",
+    );
+  }
 
-  return { failures, checked };
+  return { failures, checked, invocations };
 }
 
 const invokedDirectly =
   process.argv[1] && import.meta.url === new URL(`file://${process.argv[1].replace(/\\/g, '/')}`).href;
 if (invokedDirectly) {
   const root = process.argv[2] || process.cwd();
-  const { failures, checked } = run(root);
+  const { failures, checked, invocations } = run(root);
   if (failures.length > 0) {
     for (const f of failures) console.error(`[internal-token-single-writer] FAIL — ${f}`);
     console.error(
@@ -196,6 +382,7 @@ if (invokedDirectly) {
     process.exit(1);
   }
   console.log(
-    `[internal-token-single-writer] PASS — bicep adopts the estate value; ${checked} deploy lane(s) resolve and pass it.`,
+    `[internal-token-single-writer] PASS — bicep adopts the estate value; ${checked} deploy lane(s) resolve ` +
+      `and pass it; ${invocations} resolver invocation(s) leave stdout intact.`,
   );
 }
