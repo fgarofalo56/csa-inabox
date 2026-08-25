@@ -183,13 +183,21 @@ function needsWrapper(bin) {
  * reach the .cmd branch without az installed — was itself enough to stop the
  * same query terminating. The pure half lives in cmd-quote.mjs and is tested
  * directly there instead.
+ *
+ * The third field is a BOOLEAN, not an options object. It used to be
+ * `opts: { windowsVerbatimArguments: true }`, spread into the spawnSync call —
+ * which meant a plan could set ANY spawn option, `shell` included, and the
+ * literal `shell: false` written above the spread would lose to it. No plan ever
+ * did; the shape allowed it, and a guard that only holds because nobody has
+ * exercised the hole is the pattern the comment above already rejects for
+ * ComSpec. A boolean cannot carry a second option.
  */
 function spawnPlan(bin, args) {
   // SELF_NODE resolves to this process's own executable. It cannot be a .cmd,
   // so it never needs the wrapper.
-  if (bin === SELF_NODE) return { cmd: process.execPath, argv: args, opts: {} };
+  if (bin === SELF_NODE) return { cmd: process.execPath, argv: args, verbatim: false };
   const file = canonicalBinary(bin);
-  if (!needsWrapper(file)) return { cmd: file, argv: args, opts: {} };
+  if (!needsWrapper(file)) return { cmd: file, argv: args, verbatim: false };
   // The interpreter is a LITERAL. ComSpec used to be honoured when it "named
   // cmd.exe", tested as /(^|[\\/])cmd\.exe$/i — which any attacker who can set
   // ComSpec satisfies by naming their binary `cmd.exe` in a directory they own.
@@ -198,7 +206,7 @@ function spawnPlan(bin, args) {
   return {
     cmd: 'cmd.exe',
     argv: ['/d', '/s', '/c', `"${buildCmdLine(file, args)}"`],
-    opts: { windowsVerbatimArguments: true },
+    verbatim: true,
   };
 }
 
@@ -236,13 +244,60 @@ export function run(bin, args, { allowNonZero = false, timeoutMs = 600000, retri
   let lastStatus = null;
 
   for (let attempt = 0; attempt <= retries; attempt++) {
+    // CodeQL alert 983, `js/indirect-command-line-injection` (CWE-078), fires on
+    // this call. Triaged 2026-08-25 as a FALSE POSITIVE — an unmodelled
+    // sanitizer, not an unexploitable-in-practice path. The reasoning, so it is
+    // readable here and not only in a dismissal comment:
+    //
+    // The SOURCE is real. `run` is exported, and two callers genuinely feed it
+    // `process.argv` (drain-status.mjs:18, red-tally.mjs:17). This is not a
+    // theoretical taint.
+    //
+    // The SINK is real too, and only on one branch. `cmd.exe /d /s /c "<line>"`
+    // IS a shell by any definition, including CodeQL's, and no code change can
+    // make it not one: Node >= 20 refuses to spawn a .cmd/.bat directly
+    // (EINVAL, CVE-2024-27980), and `az` ships on Windows only as `az.cmd`. So
+    // "use an argv array with shell:false" — the correct answer everywhere else,
+    // and what the other two branches already do — is unavailable for a batch
+    // shim. Quoting is not a shortcut taken here; it is the only mechanism.
+    //
+    // What severs the path is `quoteForCmd` (cmd-quote.mjs), which fails CLOSED
+    // on the two characters that cannot be escaped on a cmd command line (`%`,
+    // CR/LF) and quotes every metacharacter that can. MEASURED 2026-08-25 on
+    // win32/node v24.18.0 against a controlled .cmd shim reached through this
+    // exact code path: 12 injection payloads, 0 achieved execution, 10 delivered
+    // to the child byte-for-byte as ONE argv element, 2 refused. See
+    // __tests__/measure-injection.test.mjs, which runs that matrix in CI.
+    //
+    // The regression that would make this a TRUE positive is named in #3985: a
+    // path where the spawned executable is NOT drawn from the frozen
+    // ALLOWED_BINARIES table. That is pinned by the `TAINT:` tests in
+    // measure.test.mjs and by this suppression's sibling assertions — the
+    // rationale is backed by executable guards, not by this paragraph.
+    //
+    // The marker below is placed per the CodeQL convention (the line BEFORE the
+    // alert). Do not read it as a closed control: .github/workflows/codeql.yml
+    // runs no suppression-consuming step, so on GitHub this most likely does NOT
+    // retire alert 983 by itself. The authoritative disposition is an API
+    // dismissal carrying this analysis, per #3985. The comment stays because it
+    // is correct if the workflow ever gains that step, and because the reasoning
+    // belongs next to the code either way.
+    //
+    // codeql[js/indirect-command-line-injection]
     const res = spawnSync(plan.cmd, plan.argv, {
       encoding: 'utf8',
       timeout: timeoutMs,
       maxBuffer: 64 * 1024 * 1024,
-      shell: false,
       windowsHide: true,
-      ...plan.opts,
+      // Read off the plan BY NAME. This was `...plan.opts`, and a spread placed
+      // after `shell: false` silently outranks it — so the one option that must
+      // never be true was the one a plan could set. Nothing in this file sets
+      // it; the point is that nothing CAN.
+      windowsVerbatimArguments: plan.verbatim === true,
+      // Literal, last, and unreachable by any caller. Two of the three branches
+      // rely on this alone: they hand `argv` to the OS as an array, where no
+      // interpreter ever sees the metacharacters.
+      shell: false,
     });
 
     if (res.error) {
