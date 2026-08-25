@@ -43,7 +43,10 @@ function mountNew() {
 
 /** Open the connection Dropdown and click an option by its visible name. */
 async function pickConnection(name: string) {
-  fireEvent.click(screen.getByRole('combobox', { name: '' }) ?? screen.getAllByRole('combobox')[0]);
+  // No `?? getAllByRole(...)[0]` fallback: `getByRole` THROWS when it finds
+  // nothing, so the right-hand side was unreachable and only read as if the
+  // null case were handled.
+  fireEvent.click(screen.getByRole('combobox', { name: '' }));
   await waitFor(() => expect(screen.getByRole('option', { name: new RegExp(name) })).toBeInTheDocument());
   fireEvent.click(screen.getByRole('option', { name: new RegExp(name) }));
 }

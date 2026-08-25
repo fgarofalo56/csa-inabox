@@ -23,8 +23,11 @@
  * it carry no constructed hostname while naming the real cause.
  */
 import { describe, it, expect, afterEach } from 'vitest';
+import fs from 'node:fs';
+import path from 'node:path';
 import {
   MIRROR_SOURCE_CONN_TYPES, MIRROR_SOURCE_LABEL, MIRROR_SOURCE_IDS,
+  MIRROR_SOURCE_READER_PROTOCOL, MIRROR_CONN_ENDPOINT_PROTOCOL,
   isMirrorConnectionCompatible, mirrorSourceIdsForConnType, describeMirrorConnMismatch,
 } from '../mirror-source-compat';
 import { CONNECTION_TYPES } from '../connectable-types';
@@ -123,6 +126,61 @@ describe('the refusal TEXT (deploy-integrity R7)', () => {
 
   it('states the concrete repair', () => {
     expect(msg).toMatch(/Set this mirror's source type to "Snowflake"/);
+  });
+
+  /**
+   * ROUND 4 — the message asserted a cause it had not established.
+   *
+   * It said the connection was one "which that source type cannot read". That
+   * is an inference about the remote system, and it was demonstrably FALSE for
+   * some pairs it was emitted on: under the old allowlist
+   * `('SqlServer2025','azure-sql')` was refused with those words, and TDS reads
+   * Azure SQL perfectly well. deploy-integrity.md R7.
+   *
+   * What the code CAN establish is which client its own dispatch selects and
+   * what protocol the bound connection's endpoint speaks. That is what it now
+   * says, and these pin it.
+   */
+  it('reports the PROTOCOL disagreement it established, not an inferred "cannot read"', () => {
+    expect(msg, 'the message re-asserts a cause it did not establish').not.toMatch(/cannot read/i);
+    expect(msg).toMatch(/which Loom reads over the SQL Server wire protocol \(TDS\)/);
+    expect(msg).toMatch(/whose endpoint speaks the Snowflake driver protocol/);
+  });
+
+  /**
+   * ROUND 4 — the remediation pointed at a route that does not exist.
+   *
+   * It said "(Edit the mirror → Choose a source)". `app/api/cdc/connectors/[id]/
+   * route.ts` exports GET and DELETE only, and there is no PATCH or PUT anywhere
+   * under `app/api/cdc/` — asserted below rather than described, so this cannot
+   * quietly become true-again-or-not. A remediation naming a surface that is not
+   * there is the dead end auto-bind-by-default.md forbids.
+   */
+  it('sends the operator to NO navigation path — the Fix-it affordance is `candidates`', () => {
+    expect(msg, 'the refusal names an edit surface that does not exist for every consumer')
+      .not.toMatch(/Edit the mirror/i);
+    // The repair is still concrete, and still machine-readable for the Fix-it bar.
+    expect(describeMirrorConnMismatch(INCIDENT)!.candidates).toEqual(['Snowflake']);
+  });
+
+  it('the CDC connector really has no edit route — the reason the navigation was dropped', () => {
+    const cdcRoot = path.join(__dirname, '..', '..', '..', 'app', 'api', 'cdc');
+    const routes: string[] = [];
+    const walk = (dir: string) => {
+      for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+        const p = path.join(dir, e.name);
+        if (e.isDirectory()) walk(p);
+        else if (e.name === 'route.ts') routes.push(p);
+      }
+    };
+    walk(cdcRoot);
+    expect(routes.length, 'no CDC routes found — this control is measuring nothing').toBeGreaterThan(0);
+    const withEdit = routes.filter((f) =>
+      /export\s+(?:async\s+function\s+(?:PATCH|PUT)\b|const\s+(?:PATCH|PUT)\s*=)/.test(fs.readFileSync(f, 'utf8')));
+    expect(
+      withEdit.map((f) => path.relative(cdcRoot, f).replace(/\\/g, '/')),
+      'a CDC edit route now exists — the refusal MAY name it again, deliberately',
+    ).toEqual([]);
   });
 
   it('quotes the connection name when one is supplied, so the operator knows WHICH connection', () => {
@@ -263,6 +321,167 @@ describe('catalog integrity', () => {
   it('never offers DatabricksUC as a candidate — it declares no connection types', () => {
     for (const t of CONNECTION_TYPES) {
       expect(mirrorSourceIdsForConnType(t)).not.toContain('DatabricksUC');
+    }
+  });
+});
+
+/**
+ * THE MAPS THEMSELVES ARE PINNED.
+ *
+ * Round 4 measured the hole: mutating `MIRROR_SOURCE_CONN_TYPES` to
+ * `MSSQL: ['generic-sql','snowflake']` ESCAPED ALL TWELVE spec files. The thing
+ * this module exists to add was the one thing no test would notice being gutted
+ * — every assertion sampled a pair or two and nothing described the whole
+ * surface. These pin the surface.
+ */
+describe('PINNED: the maps cannot be gutted unnoticed', () => {
+  it('the RECOMMENDATION catalog, verbatim', () => {
+    // What the wizard's cards filter on and what Fix-it offers as repairs.
+    expect(MIRROR_SOURCE_CONN_TYPES).toEqual({
+      AzureSqlDatabase: ['azure-sql', 'generic-sql'],
+      AzureSqlMI: ['azure-sql', 'generic-sql'],
+      AzurePostgreSql: ['postgres'],
+      CosmosDb: ['cosmos'],
+      Snowflake: ['snowflake'],
+      GoogleBigQuery: ['bigquery'],
+      Oracle: ['oracle', 'generic-sql'],
+      SqlServer2025: ['generic-sql'],
+      MSSQL: ['generic-sql'],
+      GenericMirror: ['azure-sql', 'postgres', 'cosmos', 'storage-adls', 'generic-sql'],
+      DatabricksUC: [],
+    });
+  });
+
+  it('the REFUSAL maps, verbatim — this is what isMirrorConnectionCompatible decides on', () => {
+    expect(MIRROR_SOURCE_READER_PROTOCOL).toEqual({
+      AzureSqlDatabase: 'tds',
+      AzureSqlMI: 'tds',
+      SqlServer2025: 'tds',
+      MSSQL: 'tds',
+      AzurePostgreSql: 'postgresql',
+      CosmosDb: 'cosmos-sql',
+      Snowflake: 'snowflake',
+      // null = Loom never dials it, so it makes no protocol claim. Flipping any
+      // of these four to a protocol INVENTS a refusal for a source that is
+      // honest-gated (BigQuery/Oracle), customer-pushed (GenericMirror), or
+      // handled by another item type (DatabricksUC).
+      GoogleBigQuery: null,
+      Oracle: null,
+      GenericMirror: null,
+      DatabricksUC: null,
+    });
+    expect(MIRROR_CONN_ENDPOINT_PROTOCOL).toEqual({
+      'azure-sql': 'tds',
+      'generic-sql': 'tds',
+      'synapse-dedicated': 'tds',
+      'synapse-serverless': 'tds',
+      'postgres': 'postgresql',
+      'cosmos': 'cosmos-sql',
+      'snowflake': 'snowflake',
+      'bigquery': 'bigquery',
+      'oracle': 'oracle',
+      'mysql': 'mysql',
+      'databricks-sql': 'databricks-sql',
+      'adx': 'kusto',
+      'storage-adls': 'adls-https',
+      'event-hub': 'eventhub-amqp',
+      'service-bus': 'servicebus-amqp',
+      'key-vault': 'keyvault-https',
+    });
+  });
+
+  it('classifies EVERY ConnectionType — an unclassified one would be silently un-refusable', () => {
+    for (const t of CONNECTION_TYPES) {
+      expect(
+        (MIRROR_CONN_ENDPOINT_PROTOCOL as Record<string, string | undefined>)[t],
+        `${t} has no endpoint protocol, so it is compatible with EVERY source type by default`,
+      ).toBeTruthy();
+    }
+    // …and nothing extra, which would be a protocol claim about a type that
+    // cannot be created.
+    expect(Object.keys(MIRROR_CONN_ENDPOINT_PROTOCOL).sort()).toEqual([...CONNECTION_TYPES].sort());
+  });
+});
+
+/**
+ * THE REFUSAL SURFACE AS A WHOLE — the cross-product, counted.
+ *
+ * Round 4's blocker was a NUMBER nobody had computed: read as an allowlist the
+ * first cut refused 143 of these 176 pairs, including
+ * `('SqlServer2025','azure-sql')` — TDS on both sides, creatable, working. The
+ * count is pinned here so the next change to either map has to state what it
+ * did to the refusal surface rather than discover it in production.
+ */
+describe('PINNED: the refusal surface, cross-producted', () => {
+  const PAIRS = MIRROR_SOURCE_IDS.flatMap((s) => CONNECTION_TYPES.map((c) => [s, c] as const));
+  const refused = PAIRS.filter(([s, c]) => !isMirrorConnectionCompatible(s, c));
+
+  it('the population is the full cross-product, not a subset', () => {
+    // Guards the two derived domains: an emptied MIRROR_SOURCE_IDS or
+    // CONNECTION_TYPES would make every assertion below vacuously true.
+    expect(MIRROR_SOURCE_IDS.length).toBe(11);
+    expect(CONNECTION_TYPES.length).toBe(16);
+    expect(PAIRS.length).toBe(176);
+  });
+
+  it('refuses exactly 93 of 176 pairs', () => {
+    expect(refused.length).toBe(93);
+  });
+
+  it('refuses ONLY on an established protocol disagreement — every refusal is defensible', () => {
+    // The whole defence, mechanised: for each refused pair, BOTH protocols are
+    // known and they differ. Nothing is refused for being absent from a catalog.
+    const indefensible = refused.filter(([s, c]) => {
+      const reader = MIRROR_SOURCE_READER_PROTOCOL[s];
+      const endpoint = (MIRROR_CONN_ENDPOINT_PROTOCOL as Record<string, string | undefined>)[c];
+      return !reader || !endpoint || reader === endpoint;
+    });
+    expect(
+      indefensible.map(([s, c]) => `${s}+${c}`),
+      'a pair is refused without an established protocol disagreement',
+    ).toEqual([]);
+  });
+
+  it('never refuses a pairing the wizard itself RECOMMENDS', () => {
+    // The picker offering something the server then refuses is the drift that
+    // makes a product feel broken. Also the direct catch for round 4's mutation:
+    // `MSSQL: ['generic-sql','snowflake']` puts a snowflake connection in the
+    // MSSQL card, and MSSQL reads over TDS, so this goes red naming the pair.
+    const contradictions: string[] = [];
+    for (const id of MIRROR_SOURCE_IDS) {
+      for (const t of MIRROR_SOURCE_CONN_TYPES[id]) {
+        if (!isMirrorConnectionCompatible(id, t)) contradictions.push(`${id}+${t}`);
+      }
+    }
+    expect(
+      contradictions,
+      'the wizard offers these connection types for this source type, but the guard refuses them',
+    ).toEqual([]);
+  });
+
+  it('allows every pair whose two sides speak the SAME protocol', () => {
+    // The round-4 counterexample and its whole family, stated positively rather
+    // than as one spot check.
+    const wronglyRefused = refused.filter(([s, c]) =>
+      MIRROR_SOURCE_READER_PROTOCOL[s]
+      && MIRROR_SOURCE_READER_PROTOCOL[s] === (MIRROR_CONN_ENDPOINT_PROTOCOL as Record<string, string>)[c]);
+    expect(wronglyRefused).toEqual([]);
+    // Named explicitly, because this exact call was the round-4 blocker.
+    expect(isMirrorConnectionCompatible('SqlServer2025', 'azure-sql')).toBe(true);
+    expect(isMirrorConnectionCompatible('MSSQL', 'azure-sql')).toBe(true);
+    expect(isMirrorConnectionCompatible('AzureSqlDatabase', 'synapse-dedicated')).toBe(true);
+    expect(isMirrorConnectionCompatible('AzureSqlDatabase', 'synapse-serverless')).toBe(true);
+  });
+
+  it('a source Loom never dials refuses NOTHING', () => {
+    // GenericMirror is open mirroring (the customer pushes files); BigQuery and
+    // Oracle are honest-gated with no reader at all; DatabricksUC is another
+    // item type. None of them can establish a protocol mismatch, so per R7 none
+    // of them may report one.
+    for (const s of ['GoogleBigQuery', 'Oracle', 'GenericMirror', 'DatabricksUC'] as const) {
+      for (const c of CONNECTION_TYPES) {
+        expect(isMirrorConnectionCompatible(s, c), `${s} refused ${c} without dialling anything`).toBe(true);
+      }
     }
   });
 });

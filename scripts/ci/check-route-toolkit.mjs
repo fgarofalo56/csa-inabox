@@ -71,6 +71,13 @@ const TOUCH_EXEMPT = new Map([
   // against a hostname the platform constructed). The auth prologue is
   // UNTOUCHED — the added block sits after it, inside the try.
   //
+  // That last sentence is now literally true, and was not when this entry
+  // landed: the PR also swapped this route's owner-only `loadWs()` for the
+  // `authorizeWorkspace()` ladder — a WIDENING of who can reach it, riding
+  // untested inside a P0 hotfix. Round 4 of review caught it; it was reverted
+  // out and split into its own PR with its own test. `git diff origin/main` on
+  // this file is now the refusal block and nothing else.
+  //
   // THE CODEMOD REFUSES THIS FILE, which is what this escape hatch is for. Its
   // `is401Unauthorized` accepts `apiUnauthorized()` or a NextResponse 401 only;
   // this route guards with `apiError('unauthenticated', 401)`, so the prologue

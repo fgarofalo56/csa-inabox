@@ -131,6 +131,24 @@ const COSMOS_WRITE = /items\s*\.\s*item\([^;]*?\)\s*\.\s*replace\s*\(|items\s*\.
  */
 const POST_RUN_DIAL = /\b(captureSourceSchema)\s*\(/;
 
+// ── The two DERIVED populations, hoisted and PINNED ─────────────────────────
+//
+// `it.each([])` REGISTERS ZERO TESTS AND REPORTS GREEN. Verified against this
+// repo's vitest (3.2.7), not assumed: Jest throws "Error: Received an empty
+// Array" on `each([])`; vitest has no equivalent guard, so an empty population
+// is silently a no-op suite.
+//
+// Everything in the EMBEDDED CONTROL above is pinned by an exact `toEqual`.
+// These two were not: they are `.filter()`s over those pinned sets, keyed to
+// regexes (`POST_RUN_DIAL`, `COSMOS_WRITE`) that a rename would quietly stop
+// matching. Renaming `captureSourceSchema`, or restyling a Cosmos write, would
+// have emptied the population and taken the two strongest positional assertions
+// in this file — refuse-before-post-run-dial and refuse-before-persist — out of
+// the suite with no failure anywhere. They are pinned by exact membership AND by
+// a literal count below.
+const POST_RUN_DIALERS = DELEGATED.filter((r) => POST_RUN_DIAL.test(r.src));
+const COSMOS_WRITERS = DIRECT.filter((r) => COSMOS_WRITE.test(r.src));
+
 describe('every route that binds or runs a mirror source is guarded', () => {
   it('EMBEDDED CONTROL: the population, split by who holds the check', () => {
     // A guard over a zero (or silently shrunken) population proves nothing. If
@@ -169,6 +187,28 @@ describe('every route that binds or runs a mirror source is guarded', () => {
     // none of them would silently drop out of this contract entirely.
     expect(ENGINE_RUNNERS.map((r) => r.rel).sort())
       .toEqual([...DELEGATED, ...UNBOUND].map((r) => r.rel).sort());
+  });
+
+  it('EMBEDDED CONTROL: the two DERIVED populations are non-empty', () => {
+    // The `it.each` blocks at the bottom of this file iterate these. vitest 3.2.7
+    // registers ZERO tests for `it.each([])` and reports the file green — it has
+    // no equivalent of Jest's "Received an empty Array" throw. So without these
+    // two lines, renaming `captureSourceSchema` or restyling a Cosmos write would
+    // delete two assertions from the suite silently.
+    //
+    // Counts are PINNED LITERALS, not `.length > 0`: a literal also catches the
+    // population SHRINKING (one of three writers renamed) rather than only
+    // emptying, which is the failure mode a `toBeGreaterThan(0)` would sail past.
+    expect(POST_RUN_DIALERS.length, 'POST_RUN_DIAL matched no route — the post-run-dial contract would register ZERO tests').toBe(1);
+    expect(COSMOS_WRITERS.length, 'COSMOS_WRITE matched no route — the refuse-before-persist contract would register ZERO tests').toBe(3);
+    expect(POST_RUN_DIALERS.map((r) => r.rel).sort()).toEqual([
+      'cdc/connectors/[id]/state/route.ts',
+    ]);
+    expect(COSMOS_WRITERS.map((r) => r.rel).sort()).toEqual([
+      'items/mirrored-database/[id]/route.ts',
+      'items/mirrored-database/[id]/sources/route.ts',
+      'items/mirrored-database/route.ts',
+    ]);
   });
 
   it.each(UNBOUND.map((r) => [r.rel, r] as const))(
@@ -231,7 +271,7 @@ describe('every route that binds or runs a mirror source is guarded', () => {
   );
 
   it.each(
-    DELEGATED.filter((r) => POST_RUN_DIAL.test(r.src)).map((r) => [r.rel, r] as const),
+    POST_RUN_DIALERS.map((r) => [r.rel, r] as const),
   )('%s does not dial the source after a Gated verdict', (_rel, r) => {
     // THE SIXTH SURFACE. `captureSourceSchema` ran unconditionally after the
     // engine returned Gated, reaching azure-sql-client's hostname-constructing
@@ -253,7 +293,7 @@ describe('every route that binds or runs a mirror source is guarded', () => {
   });
 
   it.each(
-    DIRECT.filter((r) => COSMOS_WRITE.test(r.src)).map((r) => [r.rel, r] as const),
+    COSMOS_WRITERS.map((r) => [r.rel, r] as const),
   )('%s refuses BEFORE it writes the binding to Cosmos', (_rel, r) => {
     // A guard that ran after the write would let the bad binding land and merely
     // complain about it afterwards.

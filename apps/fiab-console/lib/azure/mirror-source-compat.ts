@@ -20,6 +20,18 @@
  * message asserted a cause the code had not established, which is precisely
  * what deploy-integrity.md R7 forbids.
  *
+ * THE SHAPE OF THE REFUSAL (round 4 of review changed this)
+ * ---------------------------------------------------------
+ * Refusal is a DENYLIST over WIRE PROTOCOL, not an allowlist over catalogued
+ * pairings. The first cut was the latter, and cross-producting its two domains
+ * refused 143 of 176 pairs — among them
+ * `isMirrorConnectionCompatible('SqlServer2025','azure-sql') === false`, a SQL
+ * Server mirror bound to an Azure SQL connection: TDS on both sides, creatable,
+ * and working. An allowlist also fails in the wrong direction, refusing any
+ * newly-added ConnectionType under every source type until someone remembers to
+ * list it. `MIRROR_SOURCE_CONN_TYPES` survives as the picker's CATALOG and the
+ * source of repair candidates; the predicate is keyed to protocol.
+ *
  * CLOUD-INDEPENDENT BY CONSTRUCTION. This module decides using ONLY the
  * declared `sourceType` and the bound connection's `type`. It never inspects,
  * parses, or matches a hostname, so it behaves identically in Commercial, GCC,
@@ -51,11 +63,24 @@ export type MirrorSourceId =
   | 'SqlServer2025' | 'MSSQL' | 'GenericMirror' | 'DatabricksUC';
 
 /**
- * Source type → the Loom Connection types that can legitimately back it.
+ * Source type → the Loom Connection types Loom RECOMMENDS for it.
  *
- * THE single source of truth: `MIRROR_SOURCES` in the wizard reads its
- * `connTypes` from here rather than restating them, so the picker and the
- * server-side refusal cannot disagree about what is compatible.
+ * THIS IS A CATALOG, NOT A REFUSAL RULE. It drives two things only:
+ *   - the wizard's per-card connection filter (`MIRROR_SOURCES` reads its
+ *     `connTypes` from here rather than restating them, so the picker and this
+ *     module cannot disagree about what is OFFERED); and
+ *   - `mirrorSourceIdsForConnType()`, the repair candidates a Fix-it button is
+ *     rendered from.
+ *
+ * It is deliberately NOT what `isMirrorConnectionCompatible()` refuses on. Round
+ * 4 of review measured that: read as an allowlist, cross-producting the two
+ * domains refused **143 of 176 pairs**, including
+ * `('SqlServer2025','azure-sql')` — a SQL Server mirror bound to an Azure SQL
+ * connection, which is TDS on both sides and works today. An allowlist also
+ * fails in the wrong DIRECTION: a ConnectionType added to `connections-store`
+ * and not added here would be refused under every source type by default, which
+ * is the opposite of the default-ON/opt-out posture the platform is held to.
+ * Refusal is now a DENYLIST keyed to wire protocol — see `WIRE_PROTOCOL` below.
  *
  * `DatabricksUC` is intentionally empty — that card routes to the dedicated
  * `mirrored-databricks` item type and never binds a connection here.
@@ -92,6 +117,138 @@ export const MIRROR_SOURCE_LABEL: Record<MirrorSourceId, string> = {
 /** Ordered ids, so the wizard renders a stable card order. */
 export const MIRROR_SOURCE_IDS = Object.keys(MIRROR_SOURCE_CONN_TYPES) as MirrorSourceId[];
 
+// ── The refusal rule: a WIRE-PROTOCOL denylist ──────────────────────────────
+//
+// The defect is not "an unlisted pairing". It is that `sourceType` selects WHICH
+// CLIENT reads the source, and a client can only speak one wire protocol. The
+// incident was a Snowflake account identifier handed to `azure-sql-client`,
+// whose `getPool()` does `server.includes('.') ? server : server + sqlSuffix()`
+// and then `pool.connect()` — a TDS dial against a hostname Loom constructed.
+//
+// So the only thing that is ESTABLISHED, and the only thing worth refusing on,
+// is: the source type's reader speaks protocol A, the bound connection is an
+// endpoint that speaks protocol B, and A !== B. Anything we cannot establish —
+// either side unknown — is ALLOWED. That is the direction round 4 required: a
+// new ConnectionType, or a new source type, is permitted by default rather than
+// refused by default.
+
+/**
+ * The wire protocols this module distinguishes. Two things are the SAME protocol
+ * only when one client can read both — `azure-sql`, `generic-sql`,
+ * `synapse-dedicated` and `synapse-serverless` are all TDS/1433 and are all read
+ * by `azure-sql-client`, so they are one family here even though they are four
+ * ConnectionTypes and four different Azure services.
+ */
+export type MirrorWireProtocol =
+  | 'tds' | 'postgresql' | 'cosmos-sql' | 'snowflake' | 'bigquery' | 'oracle'
+  | 'mysql' | 'databricks-sql' | 'kusto' | 'adls-https' | 'eventhub-amqp'
+  | 'servicebus-amqp' | 'keyvault-https';
+
+/**
+ * The protocol the reader for each source type actually speaks, read off the
+ * ENGINE's own family dispatch (`mirror-engine.ts`) rather than asserted here:
+ *
+ *   MIRROR_SQL_FAMILY    → azure-sql-client        → TDS
+ *   MIRROR_PG_FAMILY     → postgres-flex-client    → the PostgreSQL wire protocol
+ *   MIRROR_COSMOS_FAMILY → the Cosmos SQL data plane
+ *   MIRROR_ADF_COPY_FAMILY → an ADF Snowflake linked service
+ *
+ * `null` means LOOM NEVER DIALS THIS SOURCE, so no protocol claim can be made
+ * about it and nothing is refused under it:
+ *   - `GoogleBigQuery` / `Oracle` have no reader at all today. They are outside
+ *     every engine family, so `engineCanSnapshot()` is false and Start returns
+ *     an honest "needs its own copy runtime" gate without contacting anything.
+ *     Claiming a protocol mismatch for a source Loom cannot read either way
+ *     would be an unestablished claim (deploy-integrity.md R7).
+ *   - `GenericMirror` is OPEN MIRRORING: the customer pushes files into the
+ *     landing zone and Loom reads no source at all.
+ *   - `DatabricksUC` routes to the `mirrored-databricks` item type.
+ *
+ * NOTE the asymmetry, and that it is deliberate: a bigquery/oracle CONNECTION
+ * under a SQL SOURCE TYPE is still refused, because THAT direction dials TDS.
+ * It is only the reverse — those source types, which never dial — that makes no
+ * claim.
+ */
+export const MIRROR_SOURCE_READER_PROTOCOL: Record<MirrorSourceId, MirrorWireProtocol | null> = {
+  AzureSqlDatabase: 'tds',
+  AzureSqlMI: 'tds',
+  SqlServer2025: 'tds',
+  MSSQL: 'tds',
+  AzurePostgreSql: 'postgresql',
+  CosmosDb: 'cosmos-sql',
+  Snowflake: 'snowflake',
+  GoogleBigQuery: null,
+  Oracle: null,
+  GenericMirror: null,
+  DatabricksUC: null,
+};
+
+/**
+ * The protocol each ConnectionType's endpoint speaks. Every entry is a property
+ * of the Azure/third-party service itself, not of Loom — which is what makes a
+ * refusal built on it defensible one pair at a time.
+ *
+ * Exhaustive over `ConnectionType` by type, so adding a ConnectionType without
+ * classifying it fails `tsc` rather than silently defaulting to "refuse".
+ */
+export const MIRROR_CONN_ENDPOINT_PROTOCOL: Record<ConnectionType, MirrorWireProtocol> = {
+  // All four are SQL Server-protocol endpoints on 1433, read by azure-sql-client.
+  'azure-sql': 'tds',
+  'generic-sql': 'tds',
+  'synapse-dedicated': 'tds',
+  'synapse-serverless': 'tds',
+  'postgres': 'postgresql',
+  'cosmos': 'cosmos-sql',
+  'snowflake': 'snowflake',
+  'bigquery': 'bigquery',
+  'oracle': 'oracle',
+  'mysql': 'mysql',
+  'databricks-sql': 'databricks-sql',
+  'adx': 'kusto',
+  'storage-adls': 'adls-https',
+  'event-hub': 'eventhub-amqp',
+  'service-bus': 'servicebus-amqp',
+  'key-vault': 'keyvault-https',
+};
+
+/** How each protocol is named to an operator, in the refusal text. */
+const PROTOCOL_LABEL: Record<MirrorWireProtocol, string> = {
+  'tds': 'the SQL Server wire protocol (TDS)',
+  'postgresql': 'the PostgreSQL wire protocol',
+  'cosmos-sql': 'the Cosmos DB SQL data-plane API',
+  'snowflake': 'the Snowflake driver protocol',
+  'bigquery': 'the BigQuery API',
+  'oracle': 'Oracle Net',
+  'mysql': 'the MySQL wire protocol',
+  'databricks-sql': 'the Databricks SQL warehouse protocol',
+  'kusto': 'the Kusto (Azure Data Explorer) query API',
+  'adls-https': 'the ADLS Gen2 HTTPS API',
+  'eventhub-amqp': 'the Event Hubs AMQP/Kafka protocol',
+  'servicebus-amqp': 'the Service Bus AMQP protocol',
+  'keyvault-https': 'the Key Vault HTTPS API',
+};
+
+function readerProtocolOf(sourceType: string): MirrorWireProtocol | null {
+  return isKnownSource(sourceType) ? MIRROR_SOURCE_READER_PROTOCOL[sourceType] : null;
+}
+
+function endpointProtocolOf(connType: string): MirrorWireProtocol | null {
+  return (MIRROR_CONN_ENDPOINT_PROTOCOL as Record<string, MirrorWireProtocol | undefined>)[connType] ?? null;
+}
+
+/**
+ * The ConnectionTypes whose endpoint speaks the protocol this source type is
+ * read with — i.e. exactly the set that is NOT refused. Used for the second half
+ * of the repair ("or bind one of these instead"), so the text names what would
+ * actually be accepted rather than what the catalog happens to list.
+ */
+export function mirrorConnTypesSpeaking(sourceType: string): ConnectionType[] {
+  const want = readerProtocolOf(sourceType);
+  if (!want) return [];
+  return (Object.keys(MIRROR_CONN_ENDPOINT_PROTOCOL) as ConnectionType[])
+    .filter((c) => MIRROR_CONN_ENDPOINT_PROTOCOL[c] === want);
+}
+
 function isKnownSource(t: string): t is MirrorSourceId {
   return Object.prototype.hasOwnProperty.call(MIRROR_SOURCE_CONN_TYPES, t);
 }
@@ -107,19 +264,24 @@ export function mirrorSourceIdsForConnType(connType: string): MirrorSourceId[] {
 /**
  * Is this connection type a legitimate backing for this source type?
  *
+ * A DENYLIST, not an allowlist: `false` ONLY when both protocols are known and
+ * they differ. Everything else is `true`.
+ *
  * Returns TRUE whenever the answer cannot be ESTABLISHED — an unknown source
- * type, or a connection whose type we could not read (deleted connection, no
- * connection bound at all). Per deploy-integrity.md R7 an unknown must never be
- * reported as a negative: refusing a mirror because a lookup failed would be
- * the same class of false claim this module exists to remove.
+ * type, an unclassified connection type, a connection whose type we could not
+ * read (deleted connection, no connection bound at all), or a source Loom never
+ * dials. Per deploy-integrity.md R7 an unknown must never be reported as a
+ * negative: refusing a mirror because a lookup failed, or because a pairing was
+ * merely not in a catalog, is the same class of false claim this module exists
+ * to remove.
  */
 export function isMirrorConnectionCompatible(sourceType: string, connType?: string): boolean {
   if (!connType) return true;
-  if (!isKnownSource(sourceType)) return true;
-  const allowed = MIRROR_SOURCE_CONN_TYPES[sourceType] as string[];
-  // A source that declares no connection types makes no claim either way.
-  if (!allowed.length) return true;
-  return allowed.includes(connType);
+  const reader = readerProtocolOf(sourceType);
+  if (!reader) return true;
+  const endpoint = endpointProtocolOf(connType);
+  if (!endpoint) return true;
+  return reader === endpoint;
 }
 
 export interface MirrorConnMismatch {
@@ -144,10 +306,28 @@ function sourceLabelOf(sourceType: string): string {
  * compatible (or when compatibility could not be established).
  *
  * The message states ONLY what is established at the point of refusal:
- *   - what the mirror is typed as, and what the bound connection actually is;
+ *   - what the mirror is typed as, and WHICH WIRE PROTOCOL that selects — a
+ *     fact about Loom's own dispatch, not a prediction about the remote system;
+ *   - what the bound connection actually is, and what protocol its endpoint
+ *     speaks;
  *   - that NO request was sent to either system — true because every caller
  *     consults this before it dials anything, which is the whole point;
- *   - the concrete repair, naming the source type to switch to.
+ *   - the concrete repair.
+ *
+ * WHAT IT DELIBERATELY NO LONGER SAYS (round 4, deploy-integrity.md R7):
+ *
+ *   - "…which that source type CANNOT READ." That was an inferred cause, and it
+ *     was sometimes false: it was emitted for `('SqlServer2025','azure-sql')`,
+ *     where TDS reads Azure SQL perfectly well. The refusal now reports the
+ *     protocol disagreement it actually established and stops there.
+ *   - "(Edit the mirror → Choose a source)". A navigation instruction to a route
+ *     that does not exist for every consumer of this text: `app/api/cdc/
+ *     connectors/[id]/route.ts` exports GET and DELETE only, and there is no
+ *     PATCH or PUT anywhere under `app/api/cdc/`. Sending an operator to an edit
+ *     surface that is not there is the dead end `auto-bind-by-default.md` names
+ *     explicitly. The repair is stated as the CHANGE to make; the in-product
+ *     one-click path is the wizard's Fix-it bar, which renders from `candidates`
+ *     below rather than from a sentence.
  *
  * It never contains a hostname, a port, or a DNS result. Loom constructs the
  * Azure SQL hostname from the source's server field, so echoing it back reports
@@ -167,25 +347,30 @@ export function describeMirrorConnMismatch(args: {
   const connLabel = connLabelOf(connType);
   const who = connName ? `the connection bound to it ("${connName}")` : 'the connection bound to it';
 
-  // What "${srcLabel}" WOULD accept, named by connection-type label, so the
-  // second half of the repair is as concrete as the first.
-  const acceptedHere = (isKnownSource(sourceType) ? MIRROR_SOURCE_CONN_TYPES[sourceType] : [])
-    .map(connLabelOf).join(' / ');
+  // Both protocols are non-null here — `isMirrorConnectionCompatible` returned
+  // false, which it only does when both are known and they differ.
+  const readerLabel = PROTOCOL_LABEL[readerProtocolOf(sourceType)!];
+  const endpointLabel = PROTOCOL_LABEL[endpointProtocolOf(connType)!];
+
+  // What WOULD be accepted here, named by connection-type label. Derived from
+  // the protocol map, so this half of the repair is exactly the set that would
+  // pass the check — not a catalog that could disagree with it.
+  const acceptedHere = mirrorConnTypesSpeaking(sourceType).map(connLabelOf).join(' / ');
   const swapConnection = acceptedHere
-    ? `bind a connection "${srcLabel}" can read instead (${acceptedHere})`
+    ? `bind a connection that speaks it instead (${acceptedHere})`
     : 'bind a different connection';
 
   const repair = candidates.length === 1
-    ? `Set this mirror's source type to "${MIRROR_SOURCE_LABEL[candidates[0]]}" (Edit the mirror → Choose a source), or ${swapConnection}.`
+    ? `Set this mirror's source type to "${MIRROR_SOURCE_LABEL[candidates[0]]}", or ${swapConnection}.`
     : candidates.length > 1
       ? `Set this mirror's source type to one of ${candidates.map((c) => `"${MIRROR_SOURCE_LABEL[c]}"`).join(', ')}, or ${swapConnection}.`
-      : `No mirrored-database source type can be backed by a ${connLabel} connection — ${swapConnection}.`;
+      : `No mirrored-database source type is backed by a ${connLabel} connection — ${swapConnection}.`;
 
   const message =
     `Source type does not match the bound connection, so no request was sent to either system — ` +
     `this is not a network, DNS, or firewall problem. ` +
-    `This mirror's source type is "${srcLabel}", but ${who} is a ${connLabel} connection, ` +
-    `which that source type cannot read. ${repair}`;
+    `This mirror's source type is "${srcLabel}", which Loom reads over ${readerLabel}, ` +
+    `but ${who} is a ${connLabel} connection, whose endpoint speaks ${endpointLabel}. ${repair}`;
 
   return { sourceType, connType, candidates, message };
 }
