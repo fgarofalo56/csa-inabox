@@ -1563,7 +1563,7 @@ dispatch is invisible to it. Full limits: `scripts/ci/_route-backends.mjs`.
 | `items/mirrored-database/[id]/sql-endpoint/route.ts` | GET | owner-scoped |  | Azure SQL, Cosmos, Microsoft Graph, Synapse SQL |
 | `items/mirrored-database/[id]/state/route.ts` | POST | owner-scoped |  | ADF, ADLS, ARM, Azure Monitor, Azure SQL, Azure Storage, Cosmos, Key Vault, Managed Identity, Microsoft Graph, PostgreSQL, Resource Graph |
 | `items/mirrored-database/[id]/tables/route.ts` | GET | owner-scoped |  | ADF, ARM, Azure SQL, Cosmos, Key Vault, Microsoft Graph, PostgreSQL, Resource Graph |
-| `items/mirrored-database/route.ts` | GET POST | owner-scoped |  | Cosmos |
+| `items/mirrored-database/route.ts` | GET POST | owner-scoped |  | Cosmos, Microsoft Graph |
 | `items/mirrored-database/source-tables/route.ts` | POST | owner-scoped |  | ADF, ARM, Azure SQL, Cosmos, Key Vault, PostgreSQL, Resource Graph |
 | `items/mirrored-database/verify/route.ts` | POST | session-only | ● | Azure SQL |
 | `items/mirrored-databricks/[id]/catalog/route.ts` | GET | owner-scoped |  | Azure Monitor, Cosmos, Databricks, Microsoft Graph |
@@ -2416,7 +2416,7 @@ dispatch is invisible to it. Full limits: `scripts/ci/_route-backends.mjs`.
 
 ## Authorization resolvers (derived)
 
-184 function(s) across 83 module(s) reach an owner / workspace-ACL
+186 function(s) across 83 module(s) reach an owner / workspace-ACL
 decision. Derived by `scripts/ci/_route-auth-scope.mjs` from the seeds above —
 nothing here is hand-maintained. A change to this list in a diff means the
 authorization surface moved.
@@ -2469,7 +2469,7 @@ authorization surface moved.
 | `apps/fiab-console/lib/azure/agent-memory-client.ts` | `deleteThread`, `getThread` |
 | `apps/fiab-console/lib/azure/agent-mesh-run.ts` | `agentConfig` |
 | `apps/fiab-console/lib/azure/attached-services-store.ts` | `applyIntegrationResults`, `loadAttachedService` |
-| `apps/fiab-console/lib/azure/connection-auth.ts` | `resolvePgAuthDescribed`, `resolveSqlAuth`, `resolveSqlAuthDescribed` |
+| `apps/fiab-console/lib/azure/connection-auth.ts` | `mirrorBindingMismatch`, `resolveConnectionType`, `resolvePgAuthDescribed`, `resolveSqlAuth`, `resolveSqlAuthDescribed` |
 | `apps/fiab-console/lib/azure/connections-store.ts` | `loadConnection` |
 | `apps/fiab-console/lib/azure/copilot-orchestrator.ts` | `buildDefaultRegistry`, `updateSessionMeta` |
 | `apps/fiab-console/lib/azure/feature-store-item.ts` | `loadFeatureTableItem`, `persistFeatureTableItem`, `resolveFeatureTableItem` |

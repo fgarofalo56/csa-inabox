@@ -22,7 +22,7 @@
  * These tests pin BOTH halves: the pair is refused, and the words used to refuse
  * it carry no constructed hostname while naming the real cause.
  */
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, afterEach } from 'vitest';
 import {
   MIRROR_SOURCE_CONN_TYPES, MIRROR_SOURCE_LABEL, MIRROR_SOURCE_IDS,
   isMirrorConnectionCompatible, mirrorSourceIdsForConnType, describeMirrorConnMismatch,
@@ -36,16 +36,41 @@ const INCIDENT = { sourceType: 'AzureSqlDatabase', connType: 'snowflake', connNa
  * Every artifact of the FALSE claim. A refusal message containing any of these
  * is reporting a hostname the platform invented, a port the user never chose,
  * or a DNS verdict that was never reached at the point of refusal.
+ *
+ * HOST checks are plain SUBSTRING checks, deliberately NOT regexes. A regex for
+ * a host is either unanchored — which CodeQL flags as `js/regex/missing-regexp-anchor`,
+ * because an unanchored host pattern matches anywhere and arbitrary hosts may
+ * precede or follow it — or anchored, which would be WRONG here: the assertion
+ * is "this substring appears nowhere in the message", and anchoring would weaken
+ * it to "the message is not exactly this host". `toContain` expresses the real
+ * property with no regex at all.
+ *
+ * BOTH clouds are listed. The suffix `azure-sql-client` appends is cloud-
+ * dependent (`cloud-endpoints.getSqlSuffix`), so checking only the Commercial
+ * one would let a Gov-suffix leak through (cloud-parity.md).
  */
-const CONSTRUCTED_ARTIFACTS = [
-  /database\.windows\.net/i,
-  /database\.usgovcloudapi\.net/i,
+const CONSTRUCTED_HOSTS = [
+  'database.windows.net',        // Commercial / GCC
+  'database.usgovcloudapi.net',  // GCC-High / IL5 / DoD
+];
+/** Non-host artifacts of the original message; these are not URL-shaped. */
+const CONSTRUCTED_PATTERNS = [
   /getaddrinfo/i,
   /ENOTFOUND/i,
   /\b1433\b/,
   /Failed to connect to/i,
   /could not enumerate source tables/i,
 ];
+
+/** Assert a refusal message carries no invented hostname / port / DNS verdict. */
+function expectNoConstructedArtifacts(msg: string) {
+  for (const host of CONSTRUCTED_HOSTS) {
+    expect(msg, `refusal text leaked the constructed host ${host}: ${msg}`).not.toContain(host);
+  }
+  for (const pattern of CONSTRUCTED_PATTERNS) {
+    expect(msg, `refusal text leaked a constructed artifact ${pattern}: ${msg}`).not.toMatch(pattern);
+  }
+}
 
 describe('the mismatch that caused the incident is REFUSED', () => {
   it('a Snowflake connection is not compatible with an Azure SQL Database mirror', () => {
@@ -72,9 +97,7 @@ describe('the refusal TEXT (deploy-integrity R7)', () => {
   const msg = describeMirrorConnMismatch(INCIDENT)!.message;
 
   it('contains NO hostname, port, or DNS verdict the platform constructed', () => {
-    for (const artifact of CONSTRUCTED_ARTIFACTS) {
-      expect(msg, `refusal text leaked a constructed artifact ${artifact}: ${msg}`).not.toMatch(artifact);
-    }
+    expectNoConstructedArtifacts(msg);
   });
 
   it('never echoes the account identifier the user supplied as though it were a host', () => {
@@ -125,7 +148,7 @@ describe('BigQuery and Oracle share the trap and are covered by the same guard',
     const mm = describeMirrorConnMismatch({ sourceType: 'AzureSqlDatabase', connType })!;
     expect(mm).not.toBeNull();
     expect(mm.candidates).toContain(expectedCandidate);
-    for (const artifact of CONSTRUCTED_ARTIFACTS) expect(mm.message).not.toMatch(artifact);
+    for (const artifact of CONSTRUCTED_PATTERNS) expect(mm.message).not.toMatch(artifact);
   });
 
   it('offers EVERY candidate when the connection type maps to several source types', () => {
@@ -153,6 +176,72 @@ describe('an UNKNOWN is never reported as a mismatch', () => {
   it('an unrecognised source type makes no claim either way', () => {
     expect(isMirrorConnectionCompatible('SomeFutureSource', 'snowflake')).toBe(true);
     expect(describeMirrorConnMismatch({ sourceType: 'SomeFutureSource', connType: 'snowflake' })).toBeNull();
+  });
+});
+
+/**
+ * CLOUD PARITY (cloud-parity.md, die-hard).
+ *
+ * The suffix `azure-sql-client` appends is cloud-dependent — `getSqlSuffix()`
+ * returns `database.windows.net` in Commercial/GCC and
+ * `database.usgovcloudapi.net` in GCC-High/IL5/DoD. A detector keyed to one
+ * cloud's suffix would be BLIND in the other: a Gov operator would make exactly
+ * the mistake this guard exists to catch and get the original unhelpful
+ * ENOTFOUND back.
+ *
+ * This guard decides using ONLY `sourceType` vs the connection's `type` and
+ * never inspects a hostname, so it is cloud-independent by construction. These
+ * tests PIN that property rather than assuming it: if anyone later reworks the
+ * detector to sniff hostnames — the obvious "improvement" — keying it to the
+ * Commercial suffix turns the Gov arm red.
+ */
+describe('the refusal is identical in every cloud', () => {
+  const CLOUD_ENVS = [
+    ['Commercial', { LOOM_CLOUD: 'AzureCloud', AZURE_CLOUD: 'AzureCloud' }],
+    ['GCC-High / IL5 / DoD', { LOOM_CLOUD: 'AzureUSGovernment', AZURE_CLOUD: 'AzureUSGovernment' }],
+  ] as const;
+
+  const saved = { LOOM_CLOUD: process.env.LOOM_CLOUD, AZURE_CLOUD: process.env.AZURE_CLOUD };
+  afterEach(() => {
+    process.env.LOOM_CLOUD = saved.LOOM_CLOUD;
+    process.env.AZURE_CLOUD = saved.AZURE_CLOUD;
+  });
+
+  it.each(CLOUD_ENVS)('refuses the incident pair in %s', (_name, env) => {
+    Object.assign(process.env, env);
+    const mm = describeMirrorConnMismatch(INCIDENT);
+    expect(mm, 'the mismatch went undetected in this cloud').not.toBeNull();
+    expect(mm!.candidates).toEqual(['Snowflake']);
+    expectNoConstructedArtifacts(mm!.message);
+  });
+
+  it('produces a BYTE-IDENTICAL message in Commercial and Gov', () => {
+    // The strongest form of "cloud-independent": not merely that both refuse,
+    // but that the cloud cannot influence the text at all. A hostname-sniffing
+    // rewrite would almost certainly differ between the two.
+    Object.assign(process.env, CLOUD_ENVS[0][1]);
+    const commercial = describeMirrorConnMismatch(INCIDENT)!.message;
+    Object.assign(process.env, CLOUD_ENVS[1][1]);
+    const gov = describeMirrorConnMismatch(INCIDENT)!.message;
+    expect(gov).toBe(commercial);
+  });
+
+  it('names NEITHER cloud\'s SQL suffix, in either cloud', () => {
+    for (const [, env] of CLOUD_ENVS) {
+      Object.assign(process.env, env);
+      const m = describeMirrorConnMismatch(INCIDENT)!.message;
+      for (const host of CONSTRUCTED_HOSTS) expect(m).not.toContain(host);
+    }
+  });
+
+  it('refuses a Gov-suffixed server value the same way', () => {
+    // A Gov operator whose connection carries a Gov-suffixed host is the same
+    // defect; the guard must not care what the server field holds.
+    const mm = describeMirrorConnMismatch({
+      sourceType: 'AzureSqlDatabase', connType: 'snowflake', connName: 'gov-snowflake',
+    });
+    expect(mm).not.toBeNull();
+    expectNoConstructedArtifacts(mm!.message);
   });
 });
 

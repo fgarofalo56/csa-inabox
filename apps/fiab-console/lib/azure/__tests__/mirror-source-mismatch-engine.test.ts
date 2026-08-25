@@ -23,6 +23,7 @@ const h = vi.hoisted(() => ({
   executePostgresQuery: vi.fn(async () => ({ columns: [] as string[], rows: [] as unknown[][], executionMs: 1 })),
   listPostgresTables: vi.fn(async () => [] as any[]),
   listContainers: vi.fn(async () => [] as any[]),
+  loadConnection: vi.fn(async () => null as any),
 }));
 
 vi.mock('../azure-sql-client', () => ({
@@ -59,8 +60,11 @@ vi.mock('../cosmos-account-client', () => ({ listContainers: h.listContainers })
 vi.mock('@/lib/ingest/contract-enforcement', () => ({
   enforceOrPassThrough: vi.fn(async (_c: unknown, rows: unknown[]) => ({ rows, quarantined: 0 })),
 }));
+vi.mock('../connections-store', () => ({ loadConnection: h.loadConnection }));
+vi.mock('../kv-secrets-client', () => ({ getKeyVaultSecretValue: vi.fn(async () => 'unused') }));
 
 import { runMirrorSnapshot, type MirrorSource } from '../mirror-engine';
+import { withSourceAuth } from '../connection-auth';
 
 beforeEach(() => {
   for (const fn of Object.values(h)) (fn as any).mockClear?.();
@@ -114,11 +118,19 @@ describe('runMirrorSnapshot refuses a mis-typed mirror before it dials anything'
     expect(msg).toMatch(/Azure SQL Database/);
     expect(msg).toMatch(/Snowflake/);
     expect(msg).toMatch(/no request was sent/i);
-    for (const bad of [/database\.windows\.net/i, /getaddrinfo/i, /ENOTFOUND/i, /\b1433\b/]) {
+    // Host checks are SUBSTRING, not regex: an unanchored host regex is a
+    // CodeQL js/regex/missing-regexp-anchor high, and anchoring one would
+    // weaken "appears nowhere" into "is not exactly this". BOTH clouds' SQL
+    // suffixes are checked — the suffix azure-sql-client appends is
+    // cloud-dependent, so checking only Commercial would miss a Gov leak.
+    for (const host of ['database.windows.net', 'database.usgovcloudapi.net']) {
+      expect(msg, `gate message leaked the constructed host ${host}`).not.toContain(host);
+    }
+    for (const bad of [/getaddrinfo/i, /ENOTFOUND/i, /\b1433\b/]) {
       expect(msg, `gate message leaked ${bad}`).not.toMatch(bad);
     }
     // And never the account identifier glued to a domain.
-    expect(msg).not.toMatch(/fakeorg-fakeacct999\./);
+    expect(msg).not.toContain('fakeorg-fakeacct999.');
   });
 
   it('refuses the ADF Copy direction too — a Snowflake mirror with an Azure SQL connection', async () => {
@@ -138,6 +150,54 @@ describe('runMirrorSnapshot refuses a mis-typed mirror before it dials anything'
     const { connType, connectionId, ...noConn } = MISTYPED;
     const res = await runMirrorSnapshot('m5', 'ws1', { ...noConn, sourceType: 'AzureSqlDatabase', server: 'srv.database.windows.net', tables: [{ schema: 'dbo', table: 'Orders' }] }, []);
     expect(res.gate?.missing).not.toBe('matching source type');
+    expect(h.enableMirroring).toHaveBeenCalled();
+  });
+});
+
+/**
+ * R9 — the DELEGATED path, end to end, with `connType` COMPUTED rather than
+ * supplied by a fixture.
+ *
+ * Every test above hands the engine a `connType` directly, which is exactly why
+ * they caught "delete the engine guard" and did NOT catch "delete the stamp that
+ * feeds it". The two mirrored-database Start routes and the CDC connector route
+ * all obtain `src` from `withSourceAuth`; if that stops stamping `connType`, the
+ * engine's guard silently sees `undefined`, treats it as an unknown, and lets
+ * all three through — with the suite green.
+ *
+ * So this builds `src` the way the routes do and asserts the refusal survives
+ * the whole chain.
+ */
+describe('withSourceAuth → engine: the stamp reaches the guard', () => {
+  it('a Snowflake connection under an Azure SQL mirror is refused end to end', async () => {
+    h.loadConnection.mockResolvedValue({
+      id: 'conn-snow', name: 'snowflake-prod', type: 'snowflake',
+      authMethod: 'key-pair', secretRef: 'kv-snow',
+    });
+    const { src } = await withSourceAuth(
+      'tenant-1',
+      { sourceType: 'AzureSqlDatabase', server: 'fakeorg-fakeacct999', database: 'SALES_DB' },
+      'conn-snow',
+    );
+    const res = await runMirrorSnapshot('m6', 'ws1', src as MirrorSource, []);
+    expect(res.status, 'the connType stamp no longer reaches the engine guard').toBe('Gated');
+    expect(res.gate?.missing).toBe('matching source type');
+    expect(h.enableMirroring).not.toHaveBeenCalled();
+    expect(h.listTablesWithAuth).not.toHaveBeenCalled();
+  });
+
+  it('EMBEDDED CONTROL: a MATCHING connection built the same way still runs', async () => {
+    h.loadConnection.mockResolvedValue({
+      id: 'conn-sql', name: 'azure-sql-prod', type: 'azure-sql',
+      authMethod: 'sql-password', secretRef: 'kv-sql', username: 'loom_reader',
+    });
+    const { src } = await withSourceAuth(
+      'tenant-1',
+      { sourceType: 'AzureSqlDatabase', server: 'srv.database.windows.net', database: 'appdb', tables: [{ schema: 'dbo', table: 'Orders' }] },
+      'conn-sql',
+    );
+    const res = await runMirrorSnapshot('m7', 'ws1', src as MirrorSource, []);
+    expect(res.status).not.toBe('Gated');
     expect(h.enableMirroring).toHaveBeenCalled();
   });
 });

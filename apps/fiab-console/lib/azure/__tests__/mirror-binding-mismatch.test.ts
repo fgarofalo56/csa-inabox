@@ -18,7 +18,8 @@ vi.mock('../connections-store', () => ({ loadConnection: h.loadConnection }));
 // Key Vault is never reached on this path; stub so the module graph stays light.
 vi.mock('../kv-secrets-client', () => ({ getKeyVaultSecretValue: vi.fn() }));
 
-import { mirrorBindingMismatch, resolveConnectionType } from '../connection-auth';
+import { mirrorBindingMismatch, resolveConnectionType, withSourceAuth } from '../connection-auth';
+import { isMirrorConnectionCompatible } from '../mirror-source-compat';
 
 const SNOWFLAKE_CONN = {
   id: 'conn-snow', name: 'snowflake-prod', type: 'snowflake',
@@ -41,8 +42,15 @@ describe('mirrorBindingMismatch — the answer, not the call site', () => {
     expect(mm!.message).toMatch(/Snowflake/);
     // The connection's own name is quoted so the operator knows which one.
     expect(mm!.message).toContain('"snowflake-prod"');
-    // …and never a hostname the platform constructed.
-    for (const bad of [/database\.windows\.net/i, /getaddrinfo/i, /ENOTFOUND/i, /\b1433\b/]) {
+    // …and never a hostname the platform constructed. SUBSTRING, not regex:
+    // an unanchored host regex is a CodeQL js/regex/missing-regexp-anchor high,
+    // and anchoring one would weaken "appears nowhere" to "is not exactly this".
+    // Both clouds' SQL suffixes — the one azure-sql-client appends is
+    // cloud-dependent, so Commercial-only would miss a Gov leak.
+    for (const host of ['database.windows.net', 'database.usgovcloudapi.net']) {
+      expect(mm!.message, `refusal leaked the constructed host ${host}`).not.toContain(host);
+    }
+    for (const bad of [/getaddrinfo/i, /ENOTFOUND/i, /\b1433\b/]) {
       expect(mm!.message).not.toMatch(bad);
     }
   });
@@ -89,5 +97,56 @@ describe('resolveConnectionType', () => {
   it('returns undefined with no id, without touching the store', async () => {
     expect(await resolveConnectionType('tenant-1', undefined)).toBeUndefined();
     expect(h.loadConnection).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * R9 — `withSourceAuth` is the OTHER shared helper, and the one the two Start
+ * routes plus the CDC connector route all delegate to. Deleting its `connType`
+ * stamp neuters the engine guard on ALL THREE at once.
+ *
+ * It was previously asserted only by a presence regex in the route population
+ * spec, whose test name claimed it "stamps the connection type" while checking
+ * merely that the call existed. The single pre-existing unit test called it with
+ * NO `connectionId` — the one shape where `connType` is never computed. So the
+ * mutation escaped. This pins the ANSWER, on the computed path.
+ */
+describe('withSourceAuth stamps the connection TYPE, not just the credential', () => {
+  it('SQL family: stamps connType from the bound connection', async () => {
+    h.loadConnection.mockResolvedValue(SNOWFLAKE_CONN);
+    const { src } = await withSourceAuth('tenant-1', { sourceType: 'AzureSqlDatabase' }, 'conn-snow');
+    expect(src.connType, 'the connType stamp is gone — the engine guard is blind').toBe('snowflake');
+    // The whole point of the stamp: the engine can now see the contradiction.
+    expect(isMirrorConnectionCompatible(src.sourceType, src.connType)).toBe(false);
+  });
+
+  it('PostgreSQL family: stamps connType too (the pg branch is a separate return)', async () => {
+    h.loadConnection.mockResolvedValue(SNOWFLAKE_CONN);
+    const { src } = await withSourceAuth('tenant-1', { sourceType: 'AzurePostgreSql' }, 'conn-snow');
+    expect(src.connType, 'the pg branch drops the stamp').toBe('snowflake');
+    expect(isMirrorConnectionCompatible(src.sourceType, src.connType)).toBe(false);
+  });
+
+  it('EMBEDDED CONTROL: a MATCHING connection stamps the type and is compatible', async () => {
+    // Without this, a stamp hard-coded to a mismatching constant would satisfy
+    // the assertions above.
+    h.loadConnection.mockResolvedValue(SQL_CONN);
+    const { src } = await withSourceAuth('tenant-1', { sourceType: 'AzureSqlDatabase' }, 'conn-sql');
+    expect(src.connType).toBe('azure-sql');
+    expect(isMirrorConnectionCompatible(src.sourceType, src.connType)).toBe(true);
+  });
+
+  it('leaves connType undefined when nothing is bound — the UAMI path is untouched', async () => {
+    const { src, descriptor } = await withSourceAuth('tenant-1', { sourceType: 'AzureSqlDatabase' });
+    expect(src.connType).toBeUndefined();
+    expect(descriptor.identity).toBe('uami');
+    expect(h.loadConnection).not.toHaveBeenCalled();
+  });
+
+  it('leaves connType undefined when the connection was deleted (unknown, not a negative)', async () => {
+    h.loadConnection.mockResolvedValue(null);
+    const { src } = await withSourceAuth('tenant-1', { sourceType: 'AzureSqlDatabase' }, 'conn-gone');
+    expect(src.connType).toBeUndefined();
+    expect(isMirrorConnectionCompatible(src.sourceType, src.connType)).toBe(true);
   });
 });

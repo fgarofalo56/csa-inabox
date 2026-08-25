@@ -135,6 +135,36 @@ describe('a connection with exactly one home moves the source type to it', () =>
     expect(screen.queryByText(/Source type set to/i)).toBeNull();
     expect(screen.queryByText(/Source type does not match this connection/i)).toBeNull();
   });
+
+  it('does NOT auto-switch when the connection type has SEVERAL homes', async () => {
+    // R6 — "exactly one home" must mean exactly one. A `generic-sql` connection
+    // legitimately backs SQL Server 2025, SQL Server 2016-2022, Azure SQL DB/MI,
+    // Oracle and open mirroring; silently picking the first of those would be
+    // the wizard guessing a backend again, which is the whole defect. It must
+    // ASK — a Fix-it button per candidate — and leave the source type alone.
+    const GENERIC_SQL_CONN = {
+      id: 'conn-gen', name: 'onprem-sqlserver', type: 'generic-sql',
+      authMethod: 'sql-password', hasSecret: true, host: 'sql.contoso.local', database: 'appdb',
+    };
+    installFetchMock({ '/api/connections': () => ({ ok: true, connections: [GENERIC_SQL_CONN] }) });
+    mountNew();
+    await waitFor(() => expect(screen.getByText(/Choose a source/i)).toBeInTheDocument());
+    fireEvent.click(screen.getByText('Snowflake'));
+    await waitFor(() => expect(screen.getByPlaceholderText('myorg-account123')).toBeInTheDocument());
+
+    await pickConnection('onprem-sqlserver');
+
+    await waitFor(() => expect(screen.getByText(/Source type does not match this connection/i)).toBeInTheDocument());
+    // Did NOT silently adopt a source type…
+    expect(screen.queryByText(/Source type set to/i)).toBeNull();
+    // …still Snowflake…
+    expect(screen.getByPlaceholderText('myorg-account123')).toBeInTheDocument();
+    // …and offers MORE THAN ONE Fix-it, so the user chooses.
+    const switchButtons = screen.getAllByRole('button', { name: /^Switch to / });
+    expect(switchButtons.length).toBeGreaterThan(1);
+    // Create stays blocked until they do.
+    expect(screen.getByRole('button', { name: /Create mirror/i })).toBeDisabled();
+  });
 });
 
 describe('an ALREADY-SAVED mismatch is surfaced with a Fix-it, not silently rewritten', () => {

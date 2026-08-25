@@ -183,6 +183,17 @@ export interface EngineSourceConfig {
    */
   auth?: unknown;
   pgAuth?: unknown;
+  /**
+   * The bound connection's TYPE ('snowflake' | 'azure-sql' | …), stamped by
+   * `withSourceAuth()` alongside the credential. Non-secret.
+   *
+   * Load-bearing for schema capture: `captureSourceSchema` refuses a source
+   * whose type contradicts this before it dials, so a connector typed
+   * `sqlserver` with a Snowflake connection bound cannot be read over TDS
+   * against a hostname `azure-sql-client` constructs. Absent = not established,
+   * which is never treated as a mismatch (deploy-integrity.md R7).
+   */
+  connType?: string;
 }
 
 /** The connector document's `state` bag — what we persist on the Cosmos item. */

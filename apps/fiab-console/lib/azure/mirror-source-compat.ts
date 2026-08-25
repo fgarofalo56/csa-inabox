@@ -11,17 +11,24 @@
  * Snowflake ACCOUNT IDENTIFIER to the Azure SQL client — which appends the
  * Azure SQL host suffix to any server name with no dot in it
  * (`azure-sql-client.ts`: `server.includes('.') ? server : ${server}.${suffix}`).
- * The operator was then shown:
+ * The operator was then shown a connect failure naming
+ * `<their-account-id>.<the deployment's Azure SQL suffix>` on the TDS port,
+ * with a `getaddrinfo ENOTFOUND` for it — a DNS failure for a hostname LOOM
+ * ITSELF INVENTED, naming a domain they had never typed. They reasonably read
+ * it as a network problem and opened their Snowflake firewall wide open, which
+ * changed nothing, because no packet had ever been sent toward Snowflake. That
+ * message asserted a cause the code had not established, which is precisely
+ * what deploy-integrity.md R7 forbids.
  *
- *     Could not enumerate source tables: Failed to connect to
- *     <account>.database.windows.net:1433 - getaddrinfo ENOTFOUND
- *     <account>.database.windows.net
- *
- * — a DNS failure for a hostname LOOM ITSELF INVENTED, naming a domain they had
- * never typed. They reasonably read it as a network problem and opened their
- * Snowflake firewall wide open, which changed nothing, because no packet had
- * ever been sent toward Snowflake. That message asserted a cause the code had
- * not established, which is precisely what deploy-integrity.md R7 forbids.
+ * CLOUD-INDEPENDENT BY CONSTRUCTION. This module decides using ONLY the
+ * declared `sourceType` and the bound connection's `type`. It never inspects,
+ * parses, or matches a hostname, so it behaves identically in Commercial, GCC,
+ * GCC-High, IL5 and DoD — which matters because the suffix `azure-sql-client`
+ * appends is cloud-dependent (`cloud-endpoints.getSqlSuffix`), and a detector
+ * keyed to one cloud's suffix would be blind in the others (cloud-parity.md).
+ * The verbatim Commercial-suffix error text lives in
+ * `__tests__/mirror-source-compat.test.ts`, where a host literal is in scope for
+ * assertions; keeping it out of this module keeps the module suffix-free.
  *
  * The mismatch is refused HERE, before anything is dialled, so the message can
  * say truthfully that nothing was contacted and that this is not a network

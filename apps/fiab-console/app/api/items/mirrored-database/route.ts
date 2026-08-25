@@ -5,31 +5,31 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { apiError, apiServerError } from '@/lib/api/respond';
 import { getSession } from '@/lib/auth/session';
-import { itemsContainer, workspacesContainer } from '@/lib/azure/cosmos-client';
-import type { Workspace, WorkspaceItem } from '@/lib/types/workspace';
+import { authorizeWorkspace } from '@/lib/auth/workspace-guard';
+import { itemsContainer } from '@/lib/azure/cosmos-client';
+import type { WorkspaceItem } from '@/lib/types/workspace';
 import { mirrorBindingMismatch } from '@/lib/azure/connection-auth';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-
-
-async function loadWs(id: string, tenantId: string): Promise<Workspace | null> {
-  const c = await workspacesContainer();
-  try {
-    const { resource } = await c.item(id, tenantId).read<Workspace>();
-    return resource?.tenantId === tenantId ? resource : null;
-  } catch (e: any) { if (e?.code === 404) return null; throw e; }
-}
+// `loadWs()` used to live here: a point-read of workspacesContainer() keyed by
+// the caller's oid plus a `resource.tenantId === tenantId` check — the
+// OWNER-ONLY idiom #2947 removed. It answered "did you CREATE this workspace",
+// never "may you ACCESS it", so a tenant admin or a shared member got a 404 on
+// their own workspace. Replaced by the canonical ladder below.
 
 export async function GET(req: NextRequest) {
   const s = getSession();
   if (!s) return apiError('unauthenticated', 401);
   const workspaceId = req.nextUrl.searchParams.get('workspaceId');
   if (!workspaceId) return apiError('workspaceId required', 400);
+  // READ-ONLY list → Viewer/Contributor members are admitted.
+  {
+    const denied = await authorizeWorkspace(s, workspaceId, { allowReadRoles: true });
+    if (denied) return denied;
+  }
   try {
-    const ws = await loadWs(workspaceId, s.claims.oid);
-    if (!ws) return apiError('workspace not found', 404);
     const items = await itemsContainer();
     const { resources } = await items.items.query<WorkspaceItem>({
       query: 'SELECT * FROM c WHERE c.workspaceId = @w AND c.itemType = @t ORDER BY c.updatedAt DESC',
@@ -53,9 +53,13 @@ export async function POST(req: NextRequest) {
   const body = await req.json().catch(() => ({}));
   const displayName = String(body?.displayName || '').trim();
   if (!displayName) return apiError('displayName required', 400);
+  // MUTATING create → write scope. Deliberately NO `allowReadRoles`: adding it
+  // here would let a read-only Viewer create items in someone else's workspace.
+  {
+    const denied = await authorizeWorkspace(s, workspaceId);
+    if (denied) return denied;
+  }
   try {
-    const ws = await loadWs(workspaceId, s.claims.oid);
-    if (!ws) return apiError('workspace not found', 404);
     const items = await itemsContainer();
     const now = new Date().toISOString();
     // Persist the source config in a flat, engine-readable shape (sourceType +
