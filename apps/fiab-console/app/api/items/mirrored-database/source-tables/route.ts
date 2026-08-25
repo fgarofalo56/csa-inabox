@@ -15,8 +15,7 @@ import { listPostgresTables } from '@/lib/azure/postgres-flex-client';
 import { listContainers } from '@/lib/azure/cosmos-account-client';
 import { MIRROR_SQL_FAMILY, MIRROR_PG_FAMILY, MIRROR_COSMOS_FAMILY, MIRROR_ADF_COPY_FAMILY } from '@/lib/azure/mirror-engine';
 import { listSnowflakeTables } from '@/lib/azure/snowflake-adf';
-import { resolveConnectionType } from '@/lib/azure/connection-auth';
-import { describeMirrorConnMismatch } from '@/lib/azure/mirror-source-compat';
+import { mirrorBindingMismatch } from '@/lib/azure/connection-auth';
 import { apiServerError } from '@/lib/api/respond';
 import { withSession } from '@/lib/api/route-toolkit';
 
@@ -39,8 +38,7 @@ export const POST = withSession(async (req: NextRequest, { session: s }) => {
     // reached the Azure SQL client, which appended the Azure SQL host suffix and
     // surfaced the resulting DNS failure as though the user had typed that host.
     {
-      const connType = await resolveConnectionType(s.claims.oid, connectionId);
-      const mismatch = describeMirrorConnMismatch({ sourceType, connType });
+      const mismatch = await mirrorBindingMismatch(s.claims.oid, sourceType, connectionId);
       if (mismatch) return NextResponse.json({ ok: false, gate: true, error: mismatch.message }, { status: 200 });
     }
     let tables: Array<{ schema: string; table: string; isIceberg?: boolean }> = [];

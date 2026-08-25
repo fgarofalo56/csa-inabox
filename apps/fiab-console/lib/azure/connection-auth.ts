@@ -31,6 +31,7 @@
  */
 import { loadConnection } from './connections-store';
 import { getKeyVaultSecretValue } from './kv-secrets-client';
+import { describeMirrorConnMismatch, type MirrorConnMismatch } from './mirror-source-compat';
 import type { SqlExplicitAuth } from './azure-sql-client';
 import type { PgExplicitAuth } from './postgres-flex-client';
 
@@ -192,6 +193,35 @@ export async function resolveConnectionType(
   if (!connectionId) return undefined;
   const conn = await loadConnection(tenantId, connectionId);
   return conn?.type;
+}
+
+/**
+ * THE mirror binding check every route shares: does this mirror's source type
+ * contradict the connection bound to it?
+ *
+ * Returns the honest refusal (message + repair candidates) or `null`. One
+ * exported helper rather than the check inlined per route, for the reason this
+ * file's header already records: the last credential fix here half-landed
+ * because each route carried its own copy, so one of them silently diverged.
+ * `lib/azure/__tests__/mirror-route-mismatch-guard.test.ts` asserts every route
+ * that reads a mirror source type calls THIS.
+ *
+ * Callers must invoke it BEFORE they dispatch on the source type or persist the
+ * binding — the refusal states that nothing was contacted, which is only true
+ * from that position (deploy-integrity.md R7).
+ */
+export async function mirrorBindingMismatch(
+  tenantId: string,
+  sourceType: string,
+  connectionId?: string,
+): Promise<MirrorConnMismatch | null> {
+  if (!connectionId) return null;
+  const conn = await loadConnection(tenantId, connectionId);
+  // A deleted connection is an UNKNOWN, not a mismatch. That mirror falls back
+  // to the Console UAMI by design, and refusing it because a lookup came back
+  // empty would be the same class of false claim this guard exists to remove.
+  if (!conn) return null;
+  return describeMirrorConnMismatch({ sourceType, connType: conn.type, connName: conn.name });
 }
 
 

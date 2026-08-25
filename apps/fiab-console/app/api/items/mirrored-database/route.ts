@@ -7,6 +7,7 @@ import { apiError, apiServerError } from '@/lib/api/respond';
 import { getSession } from '@/lib/auth/session';
 import { itemsContainer, workspacesContainer } from '@/lib/azure/cosmos-client';
 import type { Workspace, WorkspaceItem } from '@/lib/types/workspace';
+import { mirrorBindingMismatch } from '@/lib/azure/connection-auth';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -62,12 +63,20 @@ export async function POST(req: NextRequest) {
     // the Azure-native mirror without re-deriving everything from definition.
     const definition = body?.definition || {};
     const srcProps = definition?.properties?.source?.typeProperties || {};
+    const sourceType = body?.sourceType || definition?.properties?.source?.type || '';
+    // A mirror is never CREATED with a source type that contradicts its
+    // connection. Refused here rather than left for Start to discover, so the
+    // bad binding never reaches Cosmos in the first place.
+    {
+      const mismatch = await mirrorBindingMismatch(s.claims.oid, sourceType, body?.connectionId || undefined);
+      if (mismatch) return apiError(mismatch.message, 400);
+    }
     const item: WorkspaceItem = {
       id: crypto.randomUUID(), workspaceId, itemType: 'mirrored-database',
       displayName, description: body?.description,
       state: {
         definition,
-        sourceType: body?.sourceType || definition?.properties?.source?.type || '',
+        sourceType,
         server: body?.server || srcProps.server || '',
         database: body?.database || srcProps.database || '',
         connectionId: body?.connectionId || undefined,
