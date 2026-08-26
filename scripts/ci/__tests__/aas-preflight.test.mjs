@@ -36,10 +36,12 @@ import {
   aasRemediationFor,
   azWithRetry,
   runPreflight,
+  parseArgs,
   AAS_API_VERSION,
   DEFAULT_TIMEOUT_SECONDS,
   POLL_INTERVAL_SECONDS,
   MAX_RESUME_ATTEMPTS,
+  RESUME_GRACE_SECONDS,
   TRANSIENT_BACKOFF_SECONDS,
 } from '../ensure-aas-server-settled.mjs';
 
@@ -155,15 +157,80 @@ test('REGRESSION #4074-R2: a state that BECAME resumable is RESUMED, not waited 
 test('planSettleStep: the resume count is BOUNDED — a duel with the pause actuator is not a strategy', () => {
   const v = planSettleStep({
     state: 'Paused',
-    elapsedSeconds: 30,
-    budgetSeconds: 600,
+    elapsedSeconds: 900,
+    budgetSeconds: 1800,
     resumesIssued: MAX_RESUME_ATTEMPTS,
+    secondsSinceLastResume: 600,
   });
   assert.equal(v.action, 'fail');
-  assert.match(v.reason, /already issued/);
-  // R7: it names the pause actuator as a CANDIDATE, never as an established
-  // cause — this step observes state, never a suspend event.
-  assert.match(v.reason, /candidate/);
+  assert.match(v.reason, /has not left/);
+  // R7: it must NOT choose between the two things that produce this reading.
+  // The first draft led with "Something OTHER than this step is suspending it"
+  // as a bare assertion — a cause the code never established, which sent the
+  // operator to audit the pause actuator over a resume that was still landing.
+  assert.match(v.reason, /has not taken effect/);
+  assert.match(v.reason, /does NOT choose/);
+});
+
+test('REGRESSION #4074-R2b: an ACCEPTED resume gets a grace window before a second one', () => {
+  // `az resource invoke-action --action resume` returns on the RP's 202 — it
+  // starts a long-running operation and does not wait for it. So a `Paused`
+  // reading shortly after an accepted resume is EXPECTED, not a second problem.
+  //
+  // With a bare count bound this returned `resume`, and with
+  // MAX_RESUME_ATTEMPTS=2 at a 30s poll the whole `Paused` path hard-failed at
+  // t=60s against an 1800s budget — the budget was unreachable on the single
+  // likeliest branch this preflight takes.
+  const held = planSettleStep({
+    state: 'Paused',
+    elapsedSeconds: 30,
+    budgetSeconds: 1800,
+    resumesIssued: 1,
+    secondsSinceLastResume: 30,
+  });
+  assert.equal(held.action, 'wait');
+  assert.match(held.reason, /grace/);
+  assert.match(held.reason, /202|long-running/);
+
+  // Once the grace has elapsed and attempts remain, it DOES re-issue.
+  const rearmed = planSettleStep({
+    state: 'Paused',
+    elapsedSeconds: 400,
+    budgetSeconds: 1800,
+    resumesIssued: 1,
+    secondsSinceLastResume: 400,
+  });
+  assert.equal(rearmed.action, 'resume');
+});
+
+test('planSettleStep: the grace hold still respects the budget — it is not a way to poll forever', () => {
+  const v = planSettleStep({
+    state: 'Paused',
+    elapsedSeconds: 1800,
+    budgetSeconds: 1800,
+    resumesIssued: 1,
+    secondsSinceLastResume: 10,
+  });
+  assert.equal(v.action, 'fail');
+  assert.match(v.reason, /UNCONFIRMED/);
+});
+
+test('planSettleStep: resume-exhaustion BEATS the budget — the ordering the doc calls load-bearing', () => {
+  // Both conditions true at once. Without this fixture the two orderings are
+  // indistinguishable and the "ORDER IS LOAD-BEARING" comment asserts something
+  // no test holds — the defect class `_az-failure-class.mjs` names explicitly.
+  const v = planSettleStep({
+    state: 'Paused',
+    elapsedSeconds: 600,
+    budgetSeconds: 600,
+    resumesIssued: MAX_RESUME_ATTEMPTS,
+    secondsSinceLastResume: 600,
+  });
+  assert.equal(v.action, 'fail');
+  assert.match(v.reason, /has not left/);
+  // The specific reason, not the generic timeout: "the budget ran out" would
+  // send the operator nowhere, while this names the server to go look at.
+  assert.doesNotMatch(v.reason, /UNCONFIRMED/);
 });
 
 test('planSettleStep: budget exhaustion FAILS — an unconfirmed outcome is not a pass', () => {
@@ -297,22 +364,31 @@ test('azWithRetry: a transient failure that never clears FAILS CLOSED', () => {
  * string is a successful state read, an object is a raw {ok,stdout,stderr}.
  *
  * Running OUT of scripted readings THROWS rather than looping — a test that
- * under-scripts must fail loudly, not hang a suite.
+ * under-scripts must fail loudly, not hang a suite. `resumeQueue` throws on
+ * exhaustion for the same reason: a double that hands out unlimited successful
+ * resumes is MORE FORGIVING THAN REALITY, and an unscripted extra resume would
+ * pass silently.
  */
-function scriptedAz({ list = { ok: true, stdout: 'aasloomtest', stderr: '' }, showQueue = [], resumeQueue = [] }) {
+function scriptedAz({ list = { ok: true, stdout: 'aasloomtest', stderr: '' }, showQueue = [], resumeQueue = null }) {
   const calls = [];
   const shows = [...showQueue];
-  const resumes = [...resumeQueue];
+  // `null` means "every resume succeeds" — the common case. An explicit array
+  // is a strict script and is exhausted strictly.
+  const resumes = resumeQueue === null ? null : [...resumeQueue];
   const run = (args) => {
     const joined = args.join(' ');
     calls.push(joined);
     if (args[1] === 'list') return list;
     if (args[1] === 'show') {
-      if (shows.length === 0) throw new Error(`scripted az exhausted after ${calls.length} calls: ${joined}`);
+      if (shows.length === 0) throw new Error(`scripted az exhausted (show) after ${calls.length} calls: ${joined}`);
       const next = shows.shift();
       return typeof next === 'string' ? { ok: true, stdout: next, stderr: '' } : next;
     }
-    if (args[1] === 'invoke-action') return resumes.shift() ?? { ok: true, stdout: '', stderr: '' };
+    if (args[1] === 'invoke-action') {
+      if (resumes === null) return { ok: true, stdout: '', stderr: '' };
+      if (resumes.length === 0) throw new Error(`scripted az exhausted (resume) after ${calls.length} calls: ${joined}`);
+      return resumes.shift();
+    }
     throw new Error(`scripted az: unexpected call ${joined}`);
   };
   return { calls, run };
@@ -324,9 +400,14 @@ function fakeClock() {
   return { now: () => ms, sleep: (s) => { ms += s * 1000; } };
 }
 
-function drive({ argv = ['--subscription', 'sub', '--rg', 'rg-csa-loom-admin-centralus'], az }) {
-  const clock = fakeClock();
+/** A clock that NEVER moves. Defeats the budget; the iteration cap must catch it. */
+function frozenClock() {
+  return { now: () => 0, sleep: () => {} };
+}
+
+function drive({ argv = ['--subscription', 'sub', '--rg', 'rg-csa-loom-admin-centralus'], az, clock = fakeClock() }) {
   const outputs = {};
+  const emits = [];
   const logs = [];
   const exitCode = runPreflight({
     argv,
@@ -336,10 +417,13 @@ function drive({ argv = ['--subscription', 'sub', '--rg', 'rg-csa-loom-admin-cen
       sleep: clock.sleep,
       log: (m) => logs.push(String(m)),
       error: (m) => logs.push(String(m)),
-      emit: (k, v) => { outputs[k] = v; },
+      // Recorded as a LIST, not only folded into an object: an object is
+      // last-key-wins, which is exactly how a double emission of `aas_resumed`
+      // would hide from an assertion.
+      emit: (k, v) => { emits.push([k, v]); outputs[k] = v; },
     },
   });
-  return { exitCode, outputs, logs, calls: az.calls };
+  return { exitCode, outputs, emits, logs, calls: az.calls };
 }
 
 const resumeCalls = (calls) => calls.filter((c) => c.includes('--action resume'));
@@ -390,18 +474,95 @@ test('E2E REGRESSION #4074-R4: the aas_resumed output is PRODUCED BY shouldResus
   // The wiring proof. `shouldResuspend` used to be exported, unit-tested and
   // called by NOTHING, while main() computed String(resumedByUs) inline — so
   // its tests could stay green through any change to the behaviour they claim
-  // to guard. Mutating shouldResuspend now moves this verdict.
+  // to guard.
   const resumed = drive({ az: scriptedAz({ showQueue: ['Paused', 'Succeeded'] }) });
-  assert.equal(resumed.outputs.aas_resumed, String(shouldResuspend({ priorState: 'Paused', resumedByUs: true }).resuspend));
   assert.equal(resumed.outputs.aas_resumed, 'true');
 
   const untouched = drive({ az: scriptedAz({ showQueue: ['Succeeded'] }) });
-  assert.equal(untouched.outputs.aas_resumed, String(shouldResuspend({ priorState: 'Succeeded', resumedByUs: false }).resuspend));
   assert.equal(untouched.outputs.aas_resumed, 'false');
 
-  // And the reason is SURFACED, so the operator can see why the workflow's
-  // re-suspend step did or did not fire.
+  // THE ASSERTION THAT ACTUALLY CATCHES THE RE-INLINE. Comparing the output to
+  // shouldResuspend() is tautological — a mutation flips both sides — and the
+  // literals above only prove the VALUE is right, which an inline
+  // `String(resumedByUs)` also gets right. These two strings exist nowhere but
+  // inside shouldResuspend's returned `reason`, so they are red the moment the
+  // decision is computed anywhere else. Verified: re-inlining leaves every
+  // other assertion in this file green.
+  assert.match(untouched.logs.join('\n'), /does not own/);
+  assert.match(resumed.logs.join('\n'), /no auto-pause/);
   assert.ok(untouched.logs.some((l) => l.includes('re-suspend gate:')), 'the gate decision must be logged');
+});
+
+test('E2E: aas_resumed is emitted EXACTLY ONCE, never twice', () => {
+  // $GITHUB_OUTPUT is last-key-wins, so a second emission would make the
+  // workflow gate depend on file-parsing order rather than on the decision.
+  // Asserted on the emit LIST, because the outputs object cannot see a repeat.
+  for (const showQueue of [['Succeeded'], ['Paused', 'Succeeded'], ['Paused', 'Paused', 'Paused']]) {
+    const r = drive({ az: scriptedAz({ showQueue }), argv: ['--subscription', 's', '--rg', 'rg', '--timeout-seconds', '60'] });
+    const n = r.emits.filter(([k]) => k === 'aas_resumed').length;
+    assert.equal(n, 1, `aas_resumed emitted ${n}x for ${JSON.stringify(showQueue)} (exit ${r.exitCode})`);
+  }
+});
+
+test('E2E: a failure SURFACES the raw az stderr — the R7 half of failWith', () => {
+  // An error that classifies a failure but hides what az actually said leaves
+  // the operator with a verdict and no evidence. The distinctive token must
+  // reach the log.
+  const az = scriptedAz({
+    showQueue: [{ ok: false, stdout: '', stderr: 'ERROR: (AuthorizationFailed) does not have authorization over scope XYZZY-TOKEN' }],
+  });
+  const r = drive({ az });
+  assert.equal(r.exitCode, 1);
+  assert.match(r.logs.join('\n'), /XYZZY-TOKEN/);
+  assert.match(r.logs.join('\n'), /raw az stderr/);
+});
+
+test('E2E: a trailing CR from `az -o tsv` does not corrupt the state read', () => {
+  // az -o tsv carries a trailing CR on some agents (az_tsv_carriage_return
+  // _breaks_loops). A state of "Succeeded\r" must classify as Succeeded, and
+  // the emitted prior_state must not carry the CR into $GITHUB_OUTPUT.
+  const az = scriptedAz({ list: { ok: true, stdout: 'aasloomtest\r', stderr: '' }, showQueue: ['Succeeded\r'] });
+  const r = drive({ az });
+  assert.equal(r.exitCode, 0);
+  assert.equal(r.outputs.aas_prior_state, 'Succeeded');
+  assert.equal(r.outputs.aas_server, 'aasloomtest');
+});
+
+test('E2E REGRESSION #4074-R2b: a stuck server is resumed ONCE inside the grace, not twice', () => {
+  // budget 60s, poll 30s, grace 300s. The server never leaves Paused.
+  //   t=0   Paused -> resume #1
+  //   t=30  Paused -> inside grace -> WAIT (a bare count bound resumed here)
+  //   t=60  Paused -> budget spent -> fail, UNCONFIRMED
+  // The discriminating assertions are the resume COUNT and which failure it is:
+  // under the old count-only bound this issued two resumes and reported an
+  // external actor it had never observed.
+  const az = scriptedAz({ showQueue: ['Paused', 'Paused', 'Paused'] });
+  const r = drive({ az, argv: ['--subscription', 's', '--rg', 'rg', '--timeout-seconds', '60'] });
+  assert.equal(r.exitCode, 1);
+  assert.equal(resumeCalls(r.calls).length, 1, 'the grace must hold off the second resume');
+  const text = r.logs.join('\n');
+  assert.match(text, /UNCONFIRMED/);
+  assert.doesNotMatch(text, /Something OTHER than this step/);
+  // It still owns putting the server back — it did resume it.
+  assert.equal(r.outputs.aas_resumed, 'true');
+});
+
+test('E2E: a clock that never advances is stopped by the ITERATION CAP, not by luck', () => {
+  // The budget is only reachable if now() advances. elapsedSecondsSince clamps
+  // a backwards clock to 0, which reads as "no time has passed" forever — so
+  // the budget alone is not a bound that always binds. maxPolls is.
+  // budget 60 / poll 30 -> cap = ceil(60/30)+2 = 4, so 1 initial + 4 reads.
+  const az = scriptedAz({ showQueue: ['Resuming', 'Resuming', 'Resuming', 'Resuming', 'Resuming'] });
+  const r = drive({
+    az,
+    clock: frozenClock(),
+    argv: ['--subscription', 's', '--rg', 'rg', '--timeout-seconds', '60'],
+  });
+  assert.equal(r.exitCode, 1);
+  const text = r.logs.join('\n');
+  assert.match(text, /cap of 4/);
+  assert.match(text, /UNTRUSTWORTHY/);
+  assert.match(text, /UNCONFIRMED/);
 });
 
 test('E2E: a rejected resume never claims the server was resumed', () => {
@@ -469,12 +630,19 @@ test('E2E: the settle budget is ENFORCED and reported as unconfirmed', () => {
   assert.match(r.logs.join('\n'), /UNCONFIRMED/);
 });
 
-test('E2E: resumes are BOUNDED when something else keeps suspending the server', () => {
-  const az = scriptedAz({ showQueue: ['Paused', 'Paused', 'Paused'] });
+test('E2E: resumes are BOUNDED when the server will not leave Paused', () => {
+  // Default budget (1800s), grace 300s, poll 30s. The server never leaves
+  // Paused, so: resume #1 at t=0, ten polls of grace, resume #2 at t=300, ten
+  // more, refusal at t=600 — well inside the budget, and with a message that
+  // names BOTH explanations rather than picking one it never established.
+  const az = scriptedAz({ showQueue: Array(30).fill('Paused') });
   const r = drive({ az });
   assert.equal(r.exitCode, 1);
-  assert.equal(resumeCalls(r.calls).length, MAX_RESUME_ATTEMPTS, 'the resume/suspend duel must be bounded');
-  assert.match(r.logs.join('\n'), /already issued/);
+  assert.equal(resumeCalls(r.calls).length, MAX_RESUME_ATTEMPTS, 'the resume bound must hold');
+  const text = r.logs.join('\n');
+  assert.match(text, /has not left/);
+  assert.match(text, /has not taken effect/);
+  assert.match(text, /does NOT choose/);
   // It STILL owns putting the server back — it did resume it.
   assert.equal(r.outputs.aas_resumed, 'true');
 });
@@ -496,6 +664,25 @@ test('E2E: missing required arguments exit 2 without touching Azure', () => {
   assert.equal(drive({ az, argv: ['--rg', 'rg'] }).exitCode, 2);
   assert.equal(drive({ az, argv: ['--subscription', 'sub'] }).exitCode, 2);
   assert.equal(az.calls.length, 0);
+});
+
+test('E2E: a BARE --timeout-seconds is refused, not silently defaulted to 1800', () => {
+  // parseArgs used to hand back `undefined` for a flag with no value, and
+  // `undefined ?? DEFAULT_TIMEOUT_SECONDS` IS the default — so a typo'd or
+  // truncated invocation would run on a budget the caller never asked for,
+  // silently. `''` is not nullish, so it reaches the validation and is refused.
+  const az = scriptedAz({ showQueue: ['Succeeded'] });
+  // trailing flag
+  assert.equal(drive({ az, argv: ['--subscription', 's', '--rg', 'rg', '--timeout-seconds'] }).exitCode, 2);
+  // flag immediately followed by another flag
+  assert.equal(drive({ az, argv: ['--subscription', 's', '--timeout-seconds', '--rg', 'rg'] }).exitCode, 2);
+  assert.equal(az.calls.length, 0, 'neither form may reach Azure');
+});
+
+test('parseArgs: a valueless flag is the empty string, never the NEXT flag and never undefined', () => {
+  assert.deepEqual(parseArgs(['--a', '1', '--b']), { a: '1', b: '' });
+  assert.deepEqual(parseArgs(['--a', '--b', '2']), { a: '', b: '2' });
+  assert.deepEqual(parseArgs(['--a', '1']), { a: '1' });
 });
 
 // ── Constants that encode a decision ────────────────────────────────────────

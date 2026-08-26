@@ -88,11 +88,13 @@
  *     loop: every reading is re-classified, and a reading that becomes resumable
  *     IS resumed. `planSettleStep` is that decision, extracted pure.
  *
- *     The resume count is BOUNDED (`MAX_RESUME_ATTEMPTS`). A server that returns
- *     to `Paused` after we resumed it is being suspended by something else, and
- *     an unbounded resume/suspend duel with the pause actuator would burn the
- *     budget looking busy. deploy-integrity.md R6: "a retry that cannot fail is
- *     forbidden."
+ *     The resume count is BOUNDED (`MAX_RESUME_ATTEMPTS`), and — after a review
+ *     round found a bare count is not a safe bound here — TIME-bounded first
+ *     (`RESUME_GRACE_SECONDS`). A server that returns to `Paused` after we
+ *     resumed it may be being suspended by something else, OR may simply not
+ *     have finished resuming; the script cannot tell those apart, so it waits
+ *     before re-issuing and its refusal names both. deploy-integrity.md R6: "a
+ *     retry that cannot fail is forbidden."
  *
  * R3. NO RETRY ON THE `az` CALLS. Every call was single-shot, in a script whose
  *     entire job is settling a resource — so a GatewayTimeout on the state read
@@ -157,8 +159,44 @@ export const POLL_INTERVAL_SECONDS = 30;
  * down, and one retry absorbs that race. Bounded because a server that keeps
  * returning to `Paused` is being suspended by something ELSE, and duelling with
  * it for the whole budget produces a timeout instead of the real story.
+ *
+ * READ THIS WITH `RESUME_GRACE_SECONDS`. A count alone is NOT a safe bound
+ * here — see the note on that constant for why a bare count made the effective
+ * ceiling 60 seconds.
  */
 export const MAX_RESUME_ATTEMPTS = 2;
+
+/**
+ * How long an ACCEPTED resume gets to take effect before a second one is even
+ * considered.
+ *
+ * THE DEFECT THIS CLOSES (#4074 review, round 2). `az resource invoke-action
+ * --action resume` returns on the RP's 202: it starts a long-running operation
+ * and does not wait for it. Nothing in this script waits for the LRO either —
+ * it observes `properties.state`. So for some period after an accepted resume,
+ * a reading of `Paused` is EXPECTED, not a second problem.
+ *
+ * With a bare count bound and a 30s poll, `MAX_RESUME_ATTEMPTS = 2` meant the
+ * `Paused` branch tolerated exactly two readings before hard-failing the
+ * deploy. Measured: it gave up at t=60s against a stated 1800s budget — on the
+ * single likeliest path this preflight takes, and directly contradicting this
+ * file's own premise that "an AAS control-plane operation on a suspended S1
+ * does not finish inside fifty seconds". The 1800s budget was unreachable on
+ * that branch.
+ *
+ * Worse, it said so DISHONESTLY: the message asserted "something OTHER than
+ * this step is suspending it", when at t=60s the likelier explanation is the
+ * one it did not offer — the accepted resume has not landed yet. That is R7,
+ * and it is the `csa_loom_a_bare_substring_signal_misclassifies_and_blocks`
+ * shape: an operator sent to inspect the pause actuator when the answer was
+ * "wait longer".
+ *
+ * So the bound is now TIME-based first and count-based second, and the
+ * exhaustion message names both possibilities without choosing between them.
+ * 300s is ten polls — comfortably longer than a normal AAS resume, and two
+ * grace windows plus the refusal still land at ~600s inside the 1800s budget.
+ */
+export const RESUME_GRACE_SECONDS = 300;
 
 /**
  * Backoff schedule for a TRANSIENT az failure. Length defines the retry count:
@@ -229,10 +267,13 @@ export function classifyServerState(state) {
 /**
  * PURE. Real elapsed seconds between two timestamps.
  *
- * Clamped at 0: a non-monotonic clock (an NTP step, a VM resuming) must never
- * hand the settle loop a NEGATIVE elapsed, which reads as "no time has passed"
- * and makes the budget unreachable — the same "budget that cannot be exceeded"
- * shape the `--timeout-seconds` validation closes.
+ * Clamped at 0 so the number this hands to `planSettleStep` — and therefore the
+ * number QUOTED IN THE ERROR — is never negative. That is all the clamp buys,
+ * and the earlier comment here overclaimed: clamping to 0 does NOT make the
+ * budget reachable under a backwards clock, because `-5 >= 600` and `0 >= 600`
+ * are equally false. A clock that decreases on every call would defeat the
+ * budget either way. The bound that survives that is the iteration cap in the
+ * settle loop (`maxPolls`), not this function.
  *
  * @param {number} startedAtMs Date.now() when the settle loop began
  * @param {number} nowMs       Date.now() at the moment of the check
@@ -258,13 +299,16 @@ export function elapsedSecondsSince(startedAtMs, nowMs) {
  *   2. fail on a refuse-class state — reported NOW with the real reason, never
  *      deferred to the budget. A `Failed` server reported as a timeout is a
  *      false cause (R7), and the budget would hide it for 30 minutes first.
- *   3. resume   — but only while attempts remain; exhaustion is its own, more
- *      specific failure than "the budget ran out", and it names the thing the
- *      operator actually has to go look at.
- *   4. wait     — subject to the budget.
+ *   3. resume   — but only after the GRACE window has let the previous accepted
+ *      resume take effect, and only while attempts remain. Exhaustion is its
+ *      own, more specific failure than "the budget ran out", so it is checked
+ *      BEFORE the budget; the fixture at `elapsedSeconds === budgetSeconds`
+ *      pins that ordering.
+ *   4. wait     — subject to the budget, which therefore always binds.
  *
  * @param {{state: string|null, elapsedSeconds: number, budgetSeconds: number,
- *          resumesIssued?: number, maxResumes?: number}} p
+ *          resumesIssued?: number, maxResumes?: number,
+ *          secondsSinceLastResume?: number, resumeGraceSeconds?: number}} p
  * @returns {{action: 'settled'|'resume'|'wait'|'fail', reason: string}}
  */
 export function planSettleStep({
@@ -273,6 +317,8 @@ export function planSettleStep({
   budgetSeconds,
   resumesIssued = 0,
   maxResumes = MAX_RESUME_ATTEMPTS,
+  secondsSinceLastResume = Number.POSITIVE_INFINITY,
+  resumeGraceSeconds = RESUME_GRACE_SECONDS,
 }) {
   const verdict = classifyServerState(state);
 
@@ -292,23 +338,35 @@ export function planSettleStep({
       'may still be suspended.',
   };
 
+  // Set when the state IS resumable but a second resume would be premature —
+  // the loop then waits instead, and the budget below still binds.
+  let graceHold = null;
+
   if (verdict.action === 'resume') {
-    if (resumesIssued >= maxResumes) {
+    if (resumesIssued > 0 && secondsSinceLastResume < resumeGraceSeconds) {
+      graceHold =
+        `state='${state}', ${elapsedSeconds}s elapsed — ${secondsSinceLastResume}s since the last ACCEPTED ` +
+        `resume, inside the ${resumeGraceSeconds}s grace. An accepted resume is a 202 on a long-running ` +
+        'operation, so a state that has not moved yet is expected, not a second problem.';
+    } else if (resumesIssued >= maxResumes) {
       return {
         action: 'fail',
         reason:
-          `this run has already issued ${resumesIssued} resume(s) and the server is '${state}' again. ` +
-          'Something OTHER than this step is suspending it — the estate pause actuator is the candidate to ' +
-          'check first, though this step observed only the state and never a suspend event. Refusing to duel ' +
-          'with it for the rest of the budget and report a timeout instead of this.',
+          `the state has not left '${state}' in ${elapsedSeconds}s, after ${resumesIssued} ACCEPTED resume(s), ` +
+          `the last of them ${secondsSinceLastResume}s ago. EITHER the resume has not taken effect OR ` +
+          'something else is re-suspending it — this step observed only the state and never a suspend event, ' +
+          'so it does NOT choose between those. Check the server (Analysis Services -> the server -> ' +
+          'Overview) and the estate pause actuator.',
       };
+    } else if (elapsedSeconds >= budgetSeconds) {
+      return outOfBudget;
+    } else {
+      return { action: 'resume', reason: verdict.reason };
     }
-    if (elapsedSeconds >= budgetSeconds) return outOfBudget;
-    return { action: 'resume', reason: verdict.reason };
   }
 
   if (elapsedSeconds >= budgetSeconds) return outOfBudget;
-  return { action: 'wait', reason: `state='${state}', ${elapsedSeconds}s elapsed.` };
+  return { action: 'wait', reason: graceHold ?? `state='${state}', ${elapsedSeconds}s elapsed.` };
 }
 
 /**
@@ -462,11 +520,22 @@ export function azWithRetry(args, io = {}) {
 
 // ── I/O shell ───────────────────────────────────────────────────────────────
 
+/**
+ * PURE. `--flag value` pairs.
+ *
+ * A flag present with NO value yields the empty string, not `undefined`. The
+ * distinction is load-bearing: `args['timeout-seconds'] ?? DEFAULT` would turn
+ * a trailing `--timeout-seconds` into a silent 1800s default, so a typo'd
+ * invocation would run on a budget the caller never asked for. `''` is not
+ * nullish, so it reaches the validation and is refused.
+ */
 export function parseArgs(argv) {
   const out = {};
   for (let i = 0; i < argv.length; i += 1) {
     const key = argv[i];
-    if (key.startsWith('--')) out[key.slice(2)] = argv[i + 1];
+    if (!key.startsWith('--')) continue;
+    const next = argv[i + 1];
+    out[key.slice(2)] = next === undefined || next.startsWith('--') ? '' : next;
   }
   return out;
 }
@@ -511,7 +580,13 @@ export function runPreflight({ argv = [], io = {} } = {}) {
   const emit =
     io.emit ??
     ((name, value) => {
-      const line = `${name}=${value}`;
+      // NEWLINE GUARD. `$GITHUB_OUTPUT` is parsed line-by-line, so a value
+      // carrying a newline injects an arbitrary extra step output. These values
+      // come from an ARM response, and `.trim()` only strips the ENDS — an
+      // embedded newline would survive it. Nothing observed has ever contained
+      // one; this is closing the shape, not reacting to an incident.
+      const safe = String(value).replace(/[\r\n]+/g, ' ');
+      const line = `${name}=${safe}`;
       console.log(line);
       if (process.env.GITHUB_OUTPUT) appendFileSync(process.env.GITHUB_OUTPUT, `${line}\n`);
     });
@@ -624,15 +699,39 @@ export function runPreflight({ argv = [], io = {} } = {}) {
   // poll) is what made `wait` a dead end: the poll had no vocabulary for "it has
   // become resumable". Each iteration RE-CLASSIFIES and acts.
   let resumesIssued = 0;
+  let lastResumeAtMs = null;
   let state = priorState;
   const startedAtMs = now();
 
+  // A SECOND bound, independent of the clock. The budget is the primary one,
+  // but it is only reachable if `now()` advances — and `elapsedSecondsSince`
+  // clamps a backwards clock to 0, which reads as "no time has passed" forever.
+  // This cap cannot be defeated by any clock at all, so the loop terminates
+  // even when the wall clock lies. Derived from the budget, +2 for the initial
+  // reading and the boundary poll, so it can never fire BEFORE the budget on a
+  // healthy clock — the budget stays the control that reports.
+  const maxPolls = Math.ceil(budgetSeconds / POLL_INTERVAL_SECONDS) + 2;
+  let polls = 0;
+
   for (;;) {
+    polls += 1;
+    if (polls > maxPolls) {
+      emitResumeVerdict(priorState, resumesIssued > 0);
+      return failWith(
+        `${name}: made ${polls - 1} readings against a cap of ${maxPolls} derived from the ${budgetSeconds}s ` +
+          `budget at ${POLL_INTERVAL_SECONDS}s per poll, without the budget ever being reached. That means the ` +
+          'wall clock did not advance as expected, so every elapsed figure in this log is UNTRUSTWORTHY and ' +
+          'the outcome is UNCONFIRMED. Stopping on the iteration count instead of polling forever.',
+      );
+    }
+
     const step = planSettleStep({
       state,
       elapsedSeconds: elapsedSecondsSince(startedAtMs, now()),
       budgetSeconds,
       resumesIssued,
+      secondsSinceLastResume:
+        lastResumeAtMs === null ? Number.POSITIVE_INFINITY : elapsedSecondsSince(lastResumeAtMs, now()),
     });
 
     if (step.action === 'settled') {
@@ -665,11 +764,16 @@ export function runPreflight({ argv = [], io = {} } = {}) {
         );
       }
       resumesIssued += 1;
+      lastResumeAtMs = now();
       // Emitted the moment Azure ACCEPTS the resume, not at the end: if this
       // process is killed mid-poll (a job timeout), the marker is already
       // written and the workflow's always() step still puts the server back.
       emitResumeVerdict(priorState, true);
-      log(`[aas-preflight] ${name}: resume accepted (${resumesIssued}/${MAX_RESUME_ATTEMPTS}); polling until it settles.`);
+      log(
+        `[aas-preflight] ${name}: resume ACCEPTED (${resumesIssued}/${MAX_RESUME_ATTEMPTS}) — that is a 202 on a ` +
+          `long-running operation, not a settled server. Polling, and holding off a further resume for ` +
+          `${RESUME_GRACE_SECONDS}s.`,
+      );
     } else {
       log(`[aas-preflight] ${name}: ${step.reason} — waiting ${POLL_INTERVAL_SECONDS}s.`);
     }
