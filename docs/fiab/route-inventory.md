@@ -1563,7 +1563,7 @@ dispatch is invisible to it. Full limits: `scripts/ci/_route-backends.mjs`.
 | `items/mirrored-database/[id]/sql-endpoint/route.ts` | GET | owner-scoped |  | Azure SQL, Cosmos, Microsoft Graph, Synapse SQL |
 | `items/mirrored-database/[id]/state/route.ts` | POST | owner-scoped |  | ADF, ADLS, ARM, Azure Monitor, Azure SQL, Azure Storage, Cosmos, Key Vault, Managed Identity, Microsoft Graph, PostgreSQL, Resource Graph |
 | `items/mirrored-database/[id]/tables/route.ts` | GET | owner-scoped |  | ADF, ARM, Azure SQL, Cosmos, Key Vault, Microsoft Graph, PostgreSQL, Resource Graph |
-| `items/mirrored-database/route.ts` | GET POST | owner-scoped |  | Cosmos |
+| `items/mirrored-database/route.ts` | GET POST | owner-scoped |  | Cosmos, Microsoft Graph |
 | `items/mirrored-database/source-tables/route.ts` | POST | owner-scoped |  | ADF, ARM, Azure SQL, Cosmos, Key Vault, PostgreSQL, Resource Graph |
 | `items/mirrored-database/verify/route.ts` | POST | session-only | ● | Azure SQL |
 | `items/mirrored-databricks/[id]/catalog/route.ts` | GET | owner-scoped |  | Azure Monitor, Cosmos, Databricks, Microsoft Graph |
