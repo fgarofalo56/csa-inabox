@@ -27,6 +27,17 @@ on:
   # calls inside scripts/ci resolve FIXED PR numbers, not the current one), so
   # every guard behaves identically under a dispatch.
   workflow_dispatch:
+  # MERGE QUEUE. `guardrails` is a REQUIRED context, so it must report on a merge
+  # group or the group sits pending until the queue times out and ejects the PR.
+  #
+  # Every guard here is a static scan of the checked-out tree — no step carries an
+  # `if:` keyed to `github.event_name` (the only such reference in this file is the
+  # concurrency block below and a comment at ~line 840), and the same "no step reads
+  # PR context" property that makes a dispatch safe makes a merge group safe. The
+  # merge-group commit is the exact tree about to land, which is the RIGHT thing for
+  # a static guard to judge — strictly better than the PR head, which has not yet
+  # been combined with its batch-mates.
+  merge_group:
 
 permissions:
   contents: read

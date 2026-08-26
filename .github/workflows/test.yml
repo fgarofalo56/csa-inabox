@@ -38,6 +38,31 @@ on:
   # so the change-detection step below takes its "always run" branch: the FULL
   # suite runs, which is the conservative direction.
   workflow_dispatch:
+  # MERGE QUEUE. This lane publishes SEVEN of the fifteen required contexts
+  # (Python Tests 3.10/3.11/3.12, dbt Compile shared/finance/inventory/sales).
+  # A merge group is gated on the same required set as a PR, and a context that
+  # never reports leaves the group PENDING — the queue does not fail it, it times
+  # out and ejects the PR — so a missing trigger here would stall every merge.
+  #
+  # BARE ON PURPOSE: the `paths:` list above is attached to `push:`, and it must
+  # NOT be inherited here. A merge group whose batch touched no Python path would
+  # then never produce these seven contexts.
+  #
+  # THREE THINGS TO KNOW ABOUT HOW THE JOBS BEHAVE HERE, all verified against the
+  # bodies below rather than assumed:
+  #   * `python-tests` gates its heavy steps on a step-level check that reads
+  #     `github.event_name != 'pull_request'` -> under `merge_group` that is TRUE,
+  #     so `run=true` and the FULL suite runs. That is the conservative direction
+  #     and it is the one we want: the merge-group tree is a combination of PRs
+  #     that were never tested together. Do NOT "optimise" this into a
+  #     merge-group-aware diff — a wrong range here reports a REQUIRED check green
+  #     over an unexamined tree.
+  #   * `dbt-compile` has no `if:` and no event dependency at all.
+  #   * `pr-summary` IS gated `github.event_name == 'pull_request'` and therefore
+  #     skips here. That is CORRECT, not an oversight: it posts a comment via
+  #     `context.issue.number`, which does not exist in a merge group, and "PR
+  #     Summary" is not a required context.
+  merge_group:
 
 concurrency:
   # #3426 — per-SHA on push/dispatch. This lane is the WORST case measured: it
@@ -97,10 +122,21 @@ jobs:
       # check is satisfied) but skips the heavy steps. Pushes / schedule always
       # run the full suite. This is a step-level gate (not a job `if:`) so the
       # check can never get stuck "pending" and block a merge.
+      # MERGE GROUPS LAND ON THE "always run" BRANCH BELOW, deliberately. A merge
+      # group is a combination of PRs that were never tested together, and its
+      # `github.event.pull_request` payload is empty — so there is no honest range
+      # to narrow with, and running the full suite is the only answer that cannot
+      # report this REQUIRED check green over an unexamined tree. Do NOT add a
+      # merge-group-aware diff here to save minutes; `merge_group.base_sha` would
+      # be the range, but getting it wrong reports seven required contexts green
+      # on code nothing executed.
+      #
+      # (Prose lives here rather than inside the `run:` body on purpose — see the
+      # note further down about actionlint piping each script through shellcheck.)
       - name: Detect Python-relevant changes
         id: relevant
         run: |
-          # Always run for non-PR events (push to main / schedule).
+          # Always run for non-PR events (push to main / schedule / merge_group).
           if [ "${{ github.event_name }}" != "pull_request" ]; then
             echo "run=true" >> "$GITHUB_OUTPUT"; exit 0
           fi
