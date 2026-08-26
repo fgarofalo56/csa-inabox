@@ -102,12 +102,23 @@
 # sampling config that cannot fit its own budget is therefore refused (exit 3)
 # through the SAME opt-out flag, so one grep still finds every weakening.
 #
+# ...AND THE HIGH SIDE HAS ITS OWN FLOOR, because the check above is arithmetic
+# and bash arithmetic wraps. `--consecutive-samples 9223372036854775807` is a
+# VALID bash integer: it clears the low floor, and then `(N-1)*2` overflows to
+# -4, so `budget < MIN_SPAN` is false and the unsatisfiability check never fires.
+# Measured 2026-08-26 on the previous commit: that config was accepted and run
+# with no warning and no error whatsoever. Values past INT64_MAX fail the same
+# way for a different reason — `[` cannot compare them, returns 2, and the `if`
+# reads that as "not below the floor", an UNKNOWN treated as a NEGATIVE. Both are
+# closed by a DIGIT-COUNT bound tested on the string before any arithmetic runs.
+#
 # scripts/ci/test-acr-dataplane-ready.sh proves each half — that the DEFAULTS
 # still take >= 3 samples >= 2s apart (measured through the sampling loop by
 # counting the probe's own requests and reading the argument it hands `sleep`, not
 # by grepping this file for the literals), that a bare caller override below the
-# floor is REFUSED with exit 3, that a whitespace-only reason is refused, and that
-# an unsatisfiable budget is refused rather than merely warned about.
+# floor is REFUSED with exit 3, that a whitespace-only reason is refused, that
+# an unsatisfiable budget is refused rather than merely warned about, and that
+# an overflowing sample count is refused rather than silently accepted.
 #
 # WHAT THIS STILL CANNOT PROVE. N consecutive answers are evidence that the rule
 # has reached the frontends this runner reached, in that window — not a guarantee
@@ -130,8 +141,9 @@
 #   1  never sustained N consecutive answers before the budget ran out
 #   2  never got an HTTP response at all (DNS/connect) within the budget
 #   3  usage / sampling below the #4067 floor without the opt-out / a sampling
-#      config that cannot fit its own budget without the opt-out / could not
-#      determine the cloud's registry suffix
+#      config that cannot fit its own budget without the opt-out / a numeric
+#      argument past the digit bound where bash arithmetic stops being sound /
+#      could not determine the cloud's registry suffix
 # -----------------------------------------------------------------------------
 set -uo pipefail
 
@@ -183,6 +195,38 @@ fi
 # Reject a non-numeric or non-positive sampling config rather than coercing it.
 # A silent coercion is how a "3 consecutive samples" gate becomes a 1-sample gate
 # without anything going red.
+#
+# THE MAGNITUDE BOUND, and why it is a STRING test done FIRST. Every check below
+# this point is bash arithmetic, and bash arithmetic is signed 64-bit and wraps
+# SILENTLY. Measured 2026-08-26 against the previous commit, which had both the
+# low floor and the high-side unsatisfiability check in place:
+#
+#   --consecutive-samples 9223372036854775807   (INT64_MAX — a VALID bash integer)
+#     [ N -lt 3 ]                 -> false, so the low floor does not fire
+#     MIN_SPAN=$(( (N-1)*2 ))     -> wraps to -4
+#     [ BUDGET -lt -4 ]           -> false, so UNSATISFIABLE does not fire either
+#     => the probe ACCEPTED a config needing 9.2 quintillion consecutive samples
+#        inside a 1s budget and ran it, printing NO warning and NO error at all.
+#
+#   --consecutive-samples 99999999999999999999  (past INT64_MAX)
+#     bash prints `[: 99999999999999999999: integer expected` and `[` returns 2,
+#     which an `if` reads as FALSE — so a value bash CANNOT COMPARE was treated
+#     as "above the floor" and the probe ran the full 180s budget (RC=2).
+#     An UNKNOWN read as a NEGATIVE, which is its own recorded failure class.
+#
+# Both shapes land where the high-side check exists to prevent: a probe that can
+# only ever exit 1, at the 14-of-17 call sites that discard the exit status, and
+# reached WITHOUT typing the greppable opt-out. So the bound is enforced on the
+# DIGIT STRING, before any `[ -lt ]` or `$(( ))` touches the value — a test that
+# cannot itself overflow. 9 digits keeps the worst case
+# (999999998 * 999999999 ~= 1.0e18) an order of magnitude below INT64_MAX
+# (~9.2e18), so MIN_SPAN can no longer wrap for ANY accepted input.
+#
+# There is deliberately no opt-out for this one, unlike the floor: a 10-digit
+# sample count has no operational use, and past this bound the script cannot even
+# describe the config truthfully (the exhaustion message would quote a negative
+# MIN_SPAN), which deploy-integrity R7 forbids.
+MAX_ARG_DIGITS=9
 for pair in "BUDGET:$BUDGET" "INTERVAL:$INTERVAL" "SAMPLE_INTERVAL:$SAMPLE_INTERVAL" "CONSECUTIVE_REQUIRED:$CONSECUTIVE_REQUIRED"; do
   name="${pair%%:*}"; val="${pair#*:}"
   case "$val" in
@@ -190,6 +234,14 @@ for pair in "BUDGET:$BUDGET" "INTERVAL:$INTERVAL" "SAMPLE_INTERVAL:$SAMPLE_INTER
       echo "::error::acr-dataplane-ready: ${name} must be a non-negative integer, got '${val}'." >&2
       exit 3 ;;
   esac
+  # Strip leading zeros before measuring, so `0000000003` is the integer 3 and
+  # not a 10-digit refusal. An all-zero string collapses to a single "0".
+  significant="${val#"${val%%[!0]*}"}"
+  [ -z "$significant" ] && significant="0"
+  if [ "${#significant}" -gt "$MAX_ARG_DIGITS" ]; then
+    echo "::error::acr-dataplane-ready: ${name} has ${#significant} digits ('${val}'), above the ${MAX_ARG_DIGITS}-digit bound. Past this, bash's signed 64-bit arithmetic wraps silently and the sampling checks stop working: INT64_MAX consecutive samples clears the #4067 floor AND the unsatisfiable-budget check (MIN_SPAN wraps negative) and the probe runs a config it can never satisfy. There is no legitimate value this large." >&2
+    exit 3
+  fi
 done
 if [ "$CONSECUTIVE_REQUIRED" -lt 1 ]; then
   echo "::error::acr-dataplane-ready: --consecutive-samples must be >= 1, got '${CONSECUTIVE_REQUIRED}'." >&2

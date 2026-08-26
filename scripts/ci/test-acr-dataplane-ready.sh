@@ -562,6 +562,76 @@ OUT="$(STUB_CODE=401 PATH="$STUB_DIR:$PATH" bash "$PROBE" --acr testacr --consec
 OUT="$(STUB_CODE=401 PATH="$STUB_DIR:$PATH" bash "$PROBE" --acr testacr --consecutive-samples 1 --unsafe-sampling-below-4067-floor "$(printf '\t \n')" 2>&1)"; RC=$?
 [ $RC -eq 3 ] && pass "opt-out with a tab/newline-only reason => still exit 3" || fail "whitespace other than a plain space satisfied the 'mandatory reason' (got $RC): $OUT"
 
+# ---------------------------------------------------------------------------
+# 11g. THE MAGNITUDE BOUND — the high-side check is ARITHMETIC, and bash
+# arithmetic wraps. Both floor halves above are `[ x -lt y ]` and `$(( ))`, so a
+# big enough number walks straight through both of them. MEASURED 2026-08-26 on
+# the previous commit, which already had the low floor AND the unsatisfiable
+# check:
+#
+#   --consecutive-samples 9223372036854775807  (INT64_MAX, a VALID bash integer)
+#     cleared the low floor, MIN_SPAN=(N-1)*2 wrapped to -4, `budget < -4` was
+#     false, and the probe ACCEPTED and RAN a config needing 9.2 quintillion
+#     consecutive samples in a 1s budget — printing NO warning and NO error.
+#   --consecutive-samples 99999999999999999999 (past INT64_MAX)
+#     bash printed `[: ...: integer expected` and `[` returned 2, which the `if`
+#     read as false; the probe ran the full 180s budget (RC=2). A value bash
+#     could not compare was treated as "safely above the floor" — an UNKNOWN
+#     scored as a NEGATIVE.
+#
+# Both land exactly where the high-side check exists to prevent: a probe that can
+# only ever exit 1, at the 14-of-17 call sites that discard the exit status, and
+# reached WITHOUT typing the greppable opt-out. Case 10c enumerated 1000; that is
+# the narrow-enumeration trap this repo keeps re-learning, so these assert the
+# PROPERTY (the arithmetic can never be handed a value that wraps) by driving the
+# real entry point at and past the boundary.
+#
+# Each asserts ZERO requests as well as exit 3: a refusal that still opens a
+# connection has not refused early enough to be free.
+for BIGVAL in 9223372036854775807 99999999999999999999; do
+  reset_samples
+  OUT="$(STUB_CODES='401' PATH="$STUB_DIR:$PATH" bash "$PROBE" --acr testacr --consecutive-samples "$BIGVAL" --timeout-seconds 1 2>&1)"; RC=$?
+  CALLS="$(samples)"
+  [ $RC -eq 3 ] && pass "--consecutive-samples ${BIGVAL} => exit 3 (arithmetic cannot wrap)" || fail "--consecutive-samples ${BIGVAL} overflows MIN_SPAN past both floor checks and must exit 3, got $RC: $OUT"
+  [ "$CALLS" -eq 0 ] && pass "  ...refused before any request (${BIGVAL})" || fail "the probe made ${CALLS} request(s) for a sample count it can never reach"
+done
+
+# The same bound applies to the other two numbers the arithmetic consumes. A
+# bound on --consecutive-samples alone would leave MIN_SPAN's other factor free.
+reset_samples
+OUT="$(STUB_CODES='401' PATH="$STUB_DIR:$PATH" bash "$PROBE" --acr testacr --sample-interval-seconds 9223372036854775807 --timeout-seconds 1 2>&1)"; RC=$?
+[ $RC -eq 3 ] && pass "--sample-interval-seconds INT64_MAX => exit 3" || fail "the spacing is the OTHER factor in MIN_SPAN and must be bounded too, got $RC: $OUT"
+OUT="$(STUB_CODES='401' PATH="$STUB_DIR:$PATH" bash "$PROBE" --acr testacr --timeout-seconds 9223372036854775807 2>&1)"; RC=$?
+[ $RC -eq 3 ] && pass "--timeout-seconds INT64_MAX => exit 3" || fail "an unbounded budget is compared against MIN_SPAN and must be bounded too, got $RC: $OUT"
+
+# The magnitude bound deliberately has NO opt-out, unlike the #4067 floor: past
+# it the script cannot describe its own config truthfully (the exhaustion message
+# would quote a negative MIN_SPAN), which deploy-integrity R7 forbids. If the
+# refusal were routed through the opt-out, this assertion would go red.
+OUT="$(STUB_CODES='401' PATH="$STUB_DIR:$PATH" bash "$PROBE" --acr testacr --consecutive-samples 9223372036854775807 --timeout-seconds 1 --unsafe-sampling-below-4067-floor "self-test: the opt-out must NOT buy an overflowing value" 2>&1)"; RC=$?
+[ $RC -eq 3 ] && pass "the opt-out does not buy an overflowing sample count" || fail "the opt-out bought a value that breaks the arithmetic, so the floor checks silently stop working (got $RC): $OUT"
+
+# 11h. THE NON-REGRESSION for 11g. The bound counts DIGITS, so it must count
+# SIGNIFICANT digits — otherwise `0000000003` (ten characters, the integer 3)
+# becomes a refusal and the bound is a new defect rather than a fix. This is the
+# positive control: a zero-padded 3 must be accepted and reach READY exactly as a
+# bare 3 does. Uses the sleep recorder + a large budget for the reason at
+# run_nosleep: a control that can go red on correct code is the control that gets
+# loosened next time.
+install_sleep_recorder
+reset_samples
+OUT="$(STUB_CODES='401' PATH="$STUB_DIR:$PATH" bash "$PROBE" --acr testacr --timeout-seconds 600 --interval-seconds 2 --sample-interval-seconds 0000000002 --consecutive-samples 0000000003 2>&1)"; RC=$?
+CALLS="$(samples)"
+remove_sleep_recorder
+[ $RC -eq 0 ] && pass "zero-padded 0000000003/0000000002 is accepted and reaches READY" || fail "the digit bound must count SIGNIFICANT digits — a zero-padded 3 is the integer 3, not a 10-digit value (got $RC): $OUT"
+[ "$CALLS" -ge 3 ] && pass "  ...and still took ${CALLS} samples (>= 3), so the padding did not weaken it" || fail "zero-padded config took only ${CALLS} sample(s)"
+# ...and a padded value whose SIGNIFICANT digits are past the bound is still
+# refused, so the zero-stripping cannot be used to smuggle one through.
+reset_samples
+OUT="$(STUB_CODES='401' PATH="$STUB_DIR:$PATH" bash "$PROBE" --acr testacr --consecutive-samples 0009223372036854775807 --timeout-seconds 1 2>&1)"; RC=$?
+[ $RC -eq 3 ] && pass "zero-padding does not smuggle an overflowing value past the bound" || fail "padding INT64_MAX with leading zeros defeated the digit bound (got $RC): $OUT"
+# ---------------------------------------------------------------------------
+
 # 12. `--help` PRINTS THE HEADER AND NOTHING ELSE. The first version of this
 #     script printed the header with `sed -n '1,95p'` while the header ended at
 #     line 92, so `--help` leaked three lines of executable code — and any edit to
