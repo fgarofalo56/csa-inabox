@@ -1568,6 +1568,9 @@ param loomMirrorSnowflakeLinkedService string = ''
 ])
 param loomMirrorCopyCadence string = '1h'
 
+@description('Name of the dedicated Blob SCRATCH account a Snowflake mirror unloads through on its way to Bronze, deployed by modules/landing-zone/mirror-staging.bicep. Snowflake COPY INTO can only write to a Blob endpoint and only with a SAS, so a mirror cannot move a single row without this; the Console mints a short-lived container-scoped user-delegation SAS against it and binds the ADF staging linked service itself (auto-bind-by-default.md §5 — the operator sets nothing). Empty only on a topology with no single DLZ, where no factory is deployed either.')
+param loomMirrorStagingAccount string = ''
+
 @description('Semantic-model tabular backend. Default "loom-native" reads model metadata from Cosmos + evaluates DAX over Synapse SQL — NO Power BI / Fabric. Set to "analysis-services" / "aas" (with loomAasServer) to opt into an Azure Analysis Services XMLA backend (Commercial / GCC only — AAS is not in Azure Government). "fabric" / "powerbi" remain opt-in alternatives that require a bound Power BI / Fabric workspace.')
 @allowed([
   'loom-native'
@@ -4318,6 +4321,23 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             { name: 'LOOM_MIRROR_ADLS_LINKED_SERVICE', value: loomMirrorAdlsLinkedService }
             { name: 'LOOM_MIRROR_SNOWFLAKE_LINKED_SERVICE', value: loomMirrorSnowflakeLinkedService }
             { name: 'LOOM_MIRROR_COPY_CADENCE', value: loomMirrorCopyCadence }
+            // Snowflake mirror staging (#4083). Snowflake's COPY INTO unload can
+            // only write to an Azure *Blob* endpoint, so a Snowflake mirror is
+            // physically incapable of moving a row into the Gen2 lake without an
+            // interim Blob hop — ADF rejects the payload up front otherwise.
+            //
+            // The ACCOUNT is deployed by modules/landing-zone/mirror-staging.bicep
+            // and named here by the same deterministic expression (the DLZ
+            // deploys after this module, so its outputs are not readable here).
+            // The LINKED SERVICE is bound by the Console at mirror-Start, not by
+            // bicep: it must carry a SAS, and every SAS bicep can mint requires
+            // allowSharedKeyAccess=true, which this estate's Azure Policy denies.
+            // The Console mints an Entra user-delegation SAS instead — no account
+            // key exists to leak. Its NAME is fixed by convention so the console
+            // and the factory agree without the operator wiring anything
+            // (auto-bind-by-default.md §5).
+            { name: 'LOOM_MIRROR_STAGING_ACCOUNT', value: loomMirrorStagingAccount }
+            { name: 'LOOM_MIRROR_STAGING_BLOB_LINKED_SERVICE', value: empty(loomMirrorStagingAccount) ? '' : 'loom_mirror_staging_blob' }
             // Semantic-model tabular backend (Semantic Link read — the tabular_*
             // Copilot tools). Default "loom-native" = Cosmos model metadata +
             // Synapse SQL DAX eval, NO Power BI / Fabric. "analysis-services"
