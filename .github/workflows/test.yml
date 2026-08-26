@@ -60,6 +60,25 @@ jobs:
     name: Python Tests (${{ matrix.python-version }})
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    env:
+      # This job builds ONE environment out of ~22 INDEPENDENT pip resolutions
+      # (the pyproject extras, then 20 per-domain requirements.txt, then
+      # apps/loom-duckdb). No single resolution sees the whole graph, so pip
+      # cannot detect a cross-file conflict — it warns and proceeds, and the
+      # version that survives is whichever installed LAST. That order comes from
+      # `find`, i.e. directory-traversal order, which is not stable across
+      # machines. PIP_CONSTRAINT applies the same ceiling to every one of those
+      # resolutions, which is the only way to make the end state deterministic
+      # without installing the locks (deliberately excluded — see #3485 and the
+      # comment above the install step).
+      #
+      # It bounds protobuf only. See requirements/ci-constraints.txt for the
+      # measured reason (#4077): dbt-core 1.8.9 fences protobuf<6.0 while
+      # googleapis-common-protos>=1.75.1 demands protobuf>=6.33.5, and when the
+      # loop happened to leave protobuf at 5.29.6 the 6.33.5 gencode in
+      # google/rpc/error_details_pb2.py raised VersionError and failed
+      # COLLECTION for the whole suite.
+      PIP_CONSTRAINT: ${{ github.workspace }}/requirements/ci-constraints.txt
     strategy:
       matrix:
         python-version: ['3.10', '3.11', '3.12']

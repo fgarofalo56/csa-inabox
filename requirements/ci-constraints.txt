@@ -1,0 +1,77 @@
+# CI dependency ceiling for the shared "Python Tests" environment (test.yml).
+#
+# This is a pip CONSTRAINTS file, not a requirements file. It installs nothing.
+# It only bounds the version pip may choose IF something else pulls the package.
+# It is deliberately NOT named `requirements.txt`: that spelling would be picked
+# up by test.yml's per-domain install loop and by the Trivy/Syft scanners that
+# key on the filename (see requirements/README.md).
+#
+# ---------------------------------------------------------------------------
+# WHY THIS EXISTS — the protobuf gencode/runtime break (#4077)
+# ---------------------------------------------------------------------------
+# The "Python Tests" job builds ONE shared environment out of ~22 INDEPENDENT
+# pip resolutions: `pip install -e ".[...]"`, then a loop over 20 per-domain
+# requirements.txt, then apps/loom-duckdb last. No single resolution ever sees
+# the whole graph, so pip cannot detect a cross-file conflict — it prints a
+# "dependency resolver" warning and proceeds. The version that survives is
+# simply the one installed LAST, and that order comes from `find`, which is
+# directory-traversal order and is NOT stable across machines.
+#
+# Three parties in this environment constrain protobuf, and they are not all
+# satisfiable together:
+#
+#   dbt-core==1.8.9                 protobuf<6.0,>=5.0
+#     (apps/fiab-dbt-runner, apps/loom-transform-runner — the fence is
+#      documented at length in apps/loom-transform-runner/requirements.txt;
+#      dbt-core cannot move past 1.8.x without also moving dbt-synapse, whose
+#      newest release is 1.8.5, and Synapse is the Azure-native DEFAULT backend
+#      per .claude/rules/no-fabric-dependency.md)
+#
+#   databricks-sdk==0.133.0         protobuf<7.0,>=4.25.8 (with !=5.26.*-5.29.4)
+#     (csa_platform/semantic_model — protobuf 5.29.6 IS inside this range)
+#
+#   google-api-core==2.34.0         protobuf<8.0.0,>=6.33.5
+#   googleapis-common-protos==1.75.2  protobuf<8.0.0,>=6.33.5
+#     (azure-functions/copilot-chat -> opencensus-ext-azure -> opencensus ->
+#      google-api-core — an INCIDENTAL transitive; no first-party code in this
+#      repo imports google.api_core)
+#
+# The google side is the newcomer. Measured against the published wheels:
+#
+#   googleapis-common-protos==1.75.0  declares protobuf>=4.25.8  | no gencode guard
+#   googleapis-common-protos==1.75.1  declares protobuf>=6.33.5  | no gencode guard
+#   googleapis-common-protos==1.75.2  declares protobuf>=6.33.5  | gencode 6.33.5
+#   google-api-core==2.33.0           declares protobuf>=5.29.6
+#   google-api-core==2.34.0           declares protobuf>=6.33.5
+#
+# 1.75.2 is the first release whose generated code carries
+# `ValidateProtobufRuntimeVersion(..., 6, 33, 5, ...)`. When the loop happened
+# to leave protobuf at 5.29.6 (dbt installing last), importing
+# google/rpc/error_details_pb2.py raised:
+#
+#   google.protobuf.runtime_version.VersionError: Detected incompatible
+#   Protobuf Gencode/Runtime versions ... gencode 6.33.5 runtime 5.29.6
+#
+# That surfaced as a COLLECTION error on
+# csa_platform/governance/dataquality/ge_example/tests/test_ge_demo.py, because
+# great_expectations/compatibility/google.py imports google.api_core inside a
+# guard that only catches ImportError — and VersionError is not an ImportError,
+# so it escaped the guard and failed the whole run.
+#
+# ---------------------------------------------------------------------------
+# THE BOUND
+# ---------------------------------------------------------------------------
+# Hold protobuf on the 5.x line that dbt-core fences this environment to, and
+# let pip pick the google-stack versions that fit (google-api-core<=2.33.0,
+# googleapis-common-protos<=1.75.0 — both of which accept protobuf 5.29.6 and
+# neither of which carries a 6.x gencode guard).
+#
+# Capping the incidental transitive is the low-risk side of the trade: the
+# alternative — raising protobuf to >=6.33.5 — breaks dbt-core 1.8.9, which is
+# a first-class Loom runner, to satisfy a package nothing here imports.
+#
+# WHEN THIS CAN BE REMOVED: when dbt-core moves to a release that accepts
+# protobuf>=6 AND dbt-synapse has a matching release. That is the coordinated
+# four-adapter change described in apps/loom-transform-runner/requirements.txt.
+# Tracked by #4077.
+protobuf<6.0,>=5.0
