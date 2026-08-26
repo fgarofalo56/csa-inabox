@@ -15,9 +15,16 @@ on:
     # code. Two lists that must agree cannot be kept in agreement by review.
     paths:
       # SHAPE, NOT SPELLING. This head matches any Python file ANYWHERE in the
-      # repo, including under directories nobody has created yet, so a directory
-      # can no longer be omitted by being forgotten - which is the entire defect
-      # #3862 reported (apps/copilot: 137 tracked .py, matched by nothing).
+      # repo - at ANY depth, INCLUDING the repo root, and under directories
+      # nobody has created yet - so a directory can no longer be omitted by
+      # being forgotten, which is the entire defect #3862 reported
+      # (apps/copilot: 137 tracked .py, matched by nothing).
+      # Do NOT "tidy" these to '**/*.py'. That form drops depth 0, and this repo
+      # has ZERO root-level tracked .py, so the population test over the tree
+      # cannot see the difference - measured. A conftest.py / setup.py /
+      # noxfile.py added later would match nothing and three REQUIRED contexts
+      # would report success over an unexecuted suite. Root-level probes in
+      # tests/repo/test_python_trigger_scope.py hold this shape.
       # .ipynb is here because python_lint_scope.LINTABLE_SUFFIXES lints
       # notebooks too and six tracked ones are in its population.
       - '**.py'
@@ -166,6 +173,20 @@ jobs:
       # merge-group-aware diff here to save minutes; `merge_group.base_sha` would
       # be the range, but getting it wrong reports seven required contexts green
       # on code nothing executed.
+      # THIS STEP IS A DELEGATE, and the tests below now enforce that
+      # BEHAVIOURALLY. It may force-run - `run=true` for a non-PR event, a
+      # failed diff, an empty diff, an unwritable temp file, a module that could
+      # not answer, or a change to this file itself; every one of those errs
+      # toward RUNNING MORE. It may NOT decide to skip. Do not add a cheap
+      # pre-filter "to save a python3 start": a 103-byte extension test spliced
+      # in above the module call flipped pyproject.toml,
+      # requirements/ci-constraints.txt, dbt's .sql models, an app Dockerfile,
+      # a pytest fixture and apps/loom-duckdb's requirements.txt to run=false -
+      # measured, with the whole guard green, because that guard only scanned
+      # this script for DIRECTORY LITERALS and an extension test carries none.
+      # tests/repo/test_python_trigger_scope.py now EXTRACTS this step, RUNS it
+      # in bash against probe paths, and diffs its verdict against the module's,
+      # so any narrowing is RED whatever it is written with.
       #
       # (Prose lives here rather than inside the `run:` body on purpose — see the
       # note further down about actionlint piping each script through shellcheck.)

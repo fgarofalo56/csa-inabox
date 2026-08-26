@@ -41,17 +41,29 @@ Two things changed, and the second is the one that matters.
 
 1. The predicate is keyed to the SHAPE of a path, not to a SPELLING. The head
    of the filter is ``**.py`` / ``**.ipynb``: *any* Python file, anywhere,
-   including directories nobody has created yet. A directory can no longer be
-   forgotten, because no directory is named. (Directory prefixes remain BELOW
-   that head, because the jobs also read NON-Python inputs under them - dbt's
-   ``.sql``/``.yml`` models under ``domains/``, pytest fixtures under
-   ``tests/``, ``requirements*.txt`` anywhere.)
+   including directories nobody has created yet, and including the repo ROOT.
+   A directory can no longer be forgotten, because no directory is named.
+   (Directory prefixes remain BELOW that head, because the jobs also read
+   NON-Python inputs under them - dbt's ``.sql``/``.yml`` models under
+   ``domains/``, pytest fixtures under ``tests/``, ``requirements*.txt``
+   anywhere.)
 
-2. There is now exactly ONE list. This module parses ``on.push.paths`` out of
-   the workflow file and evaluates it; the PR detector calls this module instead
-   of carrying a second copy. The two cannot drift because there is no longer a
-   "the two". ``tests/repo/test_python_trigger_scope.py`` asserts that - it
-   fails if a hard-coded prefix list reappears inside the detect step.
+2. There is now exactly ONE population definition, and the detect step is a
+   DELEGATE to it. The step must not decide anything: it may force-run
+   (``run=true``) on the fail-open conditions it documents, and otherwise it
+   hands GitHub whatever this module printed.
+
+   That delegation is asserted BEHAVIOURALLY, which is the part the first
+   attempt got wrong. ``tests/repo/test_python_trigger_scope.py`` used to check
+   only that no directory LITERAL reappeared in the step's text; a 103-byte
+   ``grep -qE`` over the file EXTENSION carries no such literal, passed all 12
+   assertions, and flipped six reader classes - ``pyproject.toml``,
+   ``requirements/ci-constraints.txt``, ``domains/**/*.sql``,
+   ``apps/fiab-setup-orchestrator/Dockerfile``, ``tests/fixtures/*.json``,
+   ``apps/loom-duckdb/requirements.txt`` - to ``run=false`` while this module
+   said ``run=true``. The test now EXECUTES the shipped step against probe
+   paths and compares its verdict to this module's, so any narrowing is caught
+   by its effect, whatever it is spelled with.
 
 Self-defence
 ------------
@@ -65,6 +77,11 @@ Self-defence
   merely an entry in this list, a PR that deleted the entry would be judged by
   the list it had just deleted from, skip the suite, and carry the guard that
   would have caught it out of the run.
+* A path is normalised by stripping a leading ``./`` as a UNIT, never as a
+  character set. ``lstrip("./")`` also eats the dot that BEGINS a name, and it
+  did: the first draft could not match ``.github/workflows/test.yml``, an
+  entry in its own pattern list. Every entry in that list is now asserted to
+  match itself.
 
 Usage::
 
@@ -223,11 +240,28 @@ def pattern_to_regex(pattern: str) -> re.Pattern[str]:
     return re.compile("".join(out) + r"\Z")
 
 
+#: A leading ``./`` on a path is noise; a leading ``.`` on a NAME is not.
+#: ``str.lstrip`` takes a CHARACTER SET, so ``lstrip("./")`` ate both. Measured
+#: on the first draft of this module: ``matches('.github/workflows/test.yml')``
+#: returned False - the filter could not match its OWN self-reference, which is
+#: a literal entry in ``on.push.paths``. Nothing regressed that day only because
+#: the detect step force-runs on that one path with a hard-coded ``grep -qxF``;
+#: every OTHER dot-leading entry anyone adds later would have been silently
+#: inert. This strips the prefix as a UNIT, any number of times, and leaves a
+#: dot that begins a name alone.
+_LEADING_DOT_SLASH = re.compile(r"^(?:\./)+")
+
+
+def normalise(path: str) -> str:
+    """Repo-relative form of one changed path, for matching."""
+    return _LEADING_DOT_SLASH.sub("", path.strip().replace("\\", "/"))
+
+
 def matches(path: str, patterns: list[str]) -> bool:
     """True when ``path`` is matched by any pattern. Empty list is a hard error."""
     if not patterns:
         raise TriggerScopeError("cannot match against an empty pattern list")
-    normalised = path.strip().replace("\\", "/").lstrip("./")
+    normalised = normalise(path)
     if not normalised:
         return False
     return any(pattern_to_regex(p).fullmatch(normalised) for p in patterns)
@@ -235,6 +269,20 @@ def matches(path: str, patterns: list[str]) -> bool:
 
 def matching_paths(paths: list[str], patterns: list[str]) -> list[str]:
     return [p for p in paths if p.strip() and matches(p, patterns)]
+
+
+#: The two strings the workflow's ``run:`` output can legitimately carry. They
+#: are named here, once, so the CLI below and
+#: ``tests/repo/test_python_trigger_scope.py`` compare the SAME literals - a
+#: differential in which the two sides spell the verdict differently would
+#: agree by accident or disagree by accident, and neither is a measurement.
+VERDICT_RUN = "run=true"
+VERDICT_SKIP = "run=false"
+
+
+def verdict(paths: list[str], patterns: list[str]) -> str:
+    """The exact string the detect step is expected to hand to GITHUB_OUTPUT."""
+    return VERDICT_RUN if matching_paths(paths, patterns) else VERDICT_SKIP
 
 
 def _read_workflow(repo_root: str | None) -> str:
@@ -311,7 +359,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.explain and hits:
         for hit in hits[:20]:
             print(f"python-trigger-scope: matched {hit}", file=sys.stderr)
-    print("run=true" if hits else "run=false")
+    print(VERDICT_RUN if hits else VERDICT_SKIP)
     return EXIT_OK
 
 
