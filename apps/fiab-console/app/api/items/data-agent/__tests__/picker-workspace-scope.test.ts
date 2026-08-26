@@ -215,5 +215,20 @@ describe('workspaceId projection — every picker-scoped item GET (#4092 class)'
       expect(body).toHaveProperty('workspaceId');
       expect(body.workspaceId).toBe(`ws-${r.slug}`);
     });
+
+    // COMPENSATING CONTROL for the `TOUCH_EXEMPT` entry these routes carry in
+    // scripts/ci/check-route-toolkit.mjs. The boy-scout ratchet wants a touched
+    // route migrated onto the route-toolkit; the codemod REFUSES all five
+    // ("getSession() without the exact 401 guard"), so they are exempted from
+    // the touch rule and keep hand-rolled prologues. That is only acceptable
+    // while something watches the prologue — so this does, per route: delete the
+    // `if (!s) return 401` line and this fails.
+    it(`${r.slug} GET 401s before loading anything`, async () => {
+      (getSession as any).mockReturnValue(null);
+      const mod = await r.load();
+      const res = await mod.GET({} as any, ctx('x-1'));
+      expect(res.status).toBe(401);
+      expect(loadOwnedItem).not.toHaveBeenCalled();
+    });
   }
 });
