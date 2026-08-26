@@ -86,7 +86,59 @@ export const DEFAULT_MAX_DEPTH = 6;
 const NESTED_TYPE = 'microsoft.resources/deployments';
 
 /**
- * Every LEAF of an ARM error tree — the nodes with no `details[]` children.
+ * `details[]` entries that ANNOTATE an error rather than nest a cause inside it.
+ *
+ * The walk below rests on one assumption: a node that HAS `details[]` is a
+ * boilerplate wrapper, so its own message may be dropped and the cause is
+ * somewhere beneath. That is true of ARM's own
+ * `DeploymentFailed → ResourceDeploymentFailure` chain, which is what it was
+ * written against.
+ *
+ * It is FALSE for the Analysis Services / Power BI error envelope, where
+ * `details[]` carries request diagnostics — a correlation id and the message's
+ * own format arguments — and the ONLY statement of the cause is the parent's
+ * `message`. Measured verbatim on deploy-fiab-commercial run 32806407520
+ * (2026-08-25T04:09:13Z, `Microsoft.AnalysisServices/servers`, statusCode
+ * BadRequest, duration PT0.3135239S):
+ *
+ *   { "code": "BadRequest",
+ *     "message": "The server '<server>' is currently being updated. Please try again later.",
+ *     "details": [ { "code": "RootActivityId", "message": "<guid>" },
+ *                  { "code": "Param1",         "message": "<server>" } ] }
+ *
+ * So the walk descended one level too far and handed the classifier
+ * `RootActivityId: <guid>` and `Param1: <server>` — two identifiers with no
+ * cause in them. It reported `unknown` and failed closed, which was the correct
+ * verdict on the input it was given (R7) and left the deploy dead with no
+ * diagnosis. The taxonomy could not have closed this on its own: no signal can
+ * match a string that is not in the input, which is the argument in this file's
+ * own header, applied one level deeper than the original fix reached.
+ *
+ * Deliberately keyed to the ANNOTATION SHAPE, not to a service. `Param<N>` is
+ * the format-argument series, `RootActivityId` the correlation id, `Time` the
+ * server timestamp — the three the AAS/Power BI RP family emits. A code outside
+ * this set is treated as a possible cause and the walk recurses exactly as
+ * before, so nothing that classifies today can stop classifying.
+ */
+export const ANNOTATION_CODE = /^(?:rootactivityid|time|param\d+)$/i;
+
+/**
+ * PURE. Is this `details[]` entry an annotation rather than a nested cause?
+ *
+ * An entry with children of its own is a wrapper and is never an annotation,
+ * however it is coded — that keeps the predicate from swallowing a real error
+ * tree that happens to be labelled `Time`.
+ */
+export function isDiagnosticAnnotation(node) {
+  if (!node || typeof node !== 'object') return false;
+  const kids = Array.isArray(node.details) ? node.details.filter(Boolean) : [];
+  if (kids.length > 0) return false;
+  return ANNOTATION_CODE.test(String(node.code ?? ''));
+}
+
+/**
+ * Every LEAF of an ARM error tree — the nodes with no `details[]` children, plus
+ * the nodes whose only children are annotations (see `isDiagnosticAnnotation`).
  *
  * ARM nests the real cause under repeated
  * `DeploymentFailed → ResourceDeploymentFailure → …` wrappers whose messages
@@ -95,15 +147,26 @@ const NESTED_TYPE = 'microsoft.resources/deployments';
  */
 export function errorLeaves(err, acc = []) {
   if (!err || typeof err !== 'object') return acc;
+  const self = () => ({
+    code: typeof err.code === 'string' ? err.code : null,
+    message: typeof err.message === 'string' ? err.message : '',
+    target: typeof err.target === 'string' ? err.target : null,
+  });
   const kids = Array.isArray(err.details) ? err.details.filter(Boolean) : [];
   if (kids.length === 0) {
-    if (err.code || err.message) {
-      acc.push({
-        code: typeof err.code === 'string' ? err.code : null,
-        message: typeof err.message === 'string' ? err.message : '',
-        target: typeof err.target === 'string' ? err.target : null,
-      });
-    }
+    if (err.code || err.message) acc.push(self());
+    return acc;
+  }
+  // THIS node is the cause, and its children only annotate it. Guarded on a
+  // non-empty message as well as on the child shape: a node with annotation
+  // children and nothing to say is not a diagnosis, and falling through to the
+  // children leaves such a case exactly as it was before this branch existed.
+  if (
+    typeof err.message === 'string' &&
+    err.message.trim() !== '' &&
+    kids.every(isDiagnosticAnnotation)
+  ) {
+    acc.push(self());
     return acc;
   }
   for (const k of kids) errorLeaves(k, acc);
