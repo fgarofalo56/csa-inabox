@@ -661,3 +661,81 @@ test('ROUND3 CONTROL: the quoted-argument false positive stays fixed', () => {
   );
   assert.deepEqual(r.failures, []);
 });
+
+/* ── Round 4: the closer-line generalisation, and the limits now disclosed ── */
+
+for (const [label, closer] of [
+  ['stderr moved first, then stdout', '} 2>&1 >/dev/null'],
+  ['the ordinary while-read input redirect', 'done < /dev/null >/dev/null'],
+  ['input redirect then a pipe', 'done < /dev/null | cat'],
+  ['a space before the operator', '}   >/dev/null'],
+]) {
+  test(`ROUND4: closer with ${label} → red`, () => {
+    // The previous form required the operator IMMEDIATELY after the keyword,
+    // so the operator's POSITION was being enumerated rather than the shape
+    // generalised — the same mistake three rounds running.
+    const src = `
+      - name: Adopt
+        run: |
+          {
+            bash scripts/csa-loom/resolve-internal-token.sh --github-env
+          ${closer}
+`;
+    assert.ok(checkResolverInvocation('deploy-fiab-gcc.yml', src).failures.length >= 1, `\`${closer}\` must not pass`);
+  });
+}
+
+test('ROUND4 CONTROL: a closer with ONLY a stderr redirect is not flagged', () => {
+  // `2>` cannot destroy a stdout workflow command. Flagging it would push
+  // authors toward `2>/dev/null`, which is the R7 defect.
+  const src = `
+      - name: Adopt
+        run: |
+          {
+            bash scripts/csa-loom/resolve-internal-token.sh --github-env
+          } 2>&1
+`;
+  assert.deepEqual(checkResolverInvocation('deploy-fiab-gcc.yml', src).failures, []);
+});
+
+test('ROUND4 CONTROL: a bare closer with no redirect at all is not flagged', () => {
+  const src = `
+      - name: Adopt
+        run: |
+          {
+            bash scripts/csa-loom/resolve-internal-token.sh --github-env
+          }
+`;
+  assert.deepEqual(checkResolverInvocation('deploy-fiab-gcc.yml', src).failures, []);
+});
+
+test('ROUND4 DISCLOSED LIMIT: a redirected FUNCTION WRAPPER is not caught', () => {
+  // Pinning the limit so it is a known, documented hole rather than a surprise
+  // in review round five. Catching this needs call-graph awareness, not a line
+  // matcher. If someone generalises R3 to catch it, this test SHOULD fail and
+  // be deleted — that is the signal the limit is gone.
+  const src = `
+      - name: Adopt
+        run: |
+          resolve() { bash scripts/csa-loom/resolve-internal-token.sh --github-env; }
+          resolve >/dev/null
+`;
+  const r = checkResolverInvocation('deploy-fiab-gcc.yml', src);
+  assert.deepEqual(r.failures, [], 'DISCLOSED LIMIT — see STATED LIMITS in the guard header');
+});
+
+test('ROUND4 DISCLOSED LIMIT: a MULTI-LINE command substitution is not caught', () => {
+  // `captured` looks only at text to the LEFT on the same logical line, so a
+  // `$(` that opens on the previous physical line is invisible. Catching it
+  // needs `$(`-depth tracked across lines. Same deal: if this starts failing,
+  // the limit has been closed and the test should go.
+  const src = `
+      - name: Adopt
+        run: |
+          X=$(
+            bash scripts/csa-loom/resolve-internal-token.sh --github-env
+          )
+`;
+  const r = checkResolverInvocation('deploy-fiab-gcc.yml', src);
+  assert.deepEqual(r.failures, [], 'DISCLOSED LIMIT — see STATED LIMITS in the guard header');
+});

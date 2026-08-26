@@ -175,7 +175,14 @@ require_github_env() {
   # indistinguishable here from the runner's own pipe. The static guard R3 is
   # what covers them; this is the second layer, not the only one.
   [ -n "${GITHUB_ACTIONS:-}" ] || return 0
-  [ "$(uname -s 2>/dev/null)" = "Linux" ] || return 0
+  # No `2>/dev/null` on the uname: this file's header states there is
+  # deliberately none anywhere in it, and that claim was TRUE on main until this
+  # check added the first one. Beyond the false comment, the construct was the
+  # R7 shape itself — a uname that is missing or fails would have had its stderr
+  # discarded, the comparison would yield non-Linux, and the entire fail-closed
+  # stdout check would be silently skipped. "I could not determine the platform"
+  # must not become "not Linux, do not check".
+  [ "$(uname -s)" = "Linux" ] || return 0
   [ -e /dev/stdout ] || return 0
   local how=''
   if [ /dev/stdout -ef /dev/null ]; then

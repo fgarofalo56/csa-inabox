@@ -40,13 +40,23 @@
  *      mask.
  *
  *      STATED LIMITS, because a guard that overstates its reach is how the
- *      original defect survived review — and because the first cut of R3 DID
- *      overstate, and was defeated four ways on the real lane files. R3 reasons
- *      about text, not about a shell. Outside its reach:
+ *      original defect survived review — and because R3 has now been defeated
+ *      in three successive review rounds, every time by a case its author had
+ *      not enumerated. R3 reasons about TEXT, not about a shell. Outside its
+ *      reach, each MEASURED rather than assumed:
  *        - a redirect built at runtime (`R=">/dev/null"; bash script.sh $R`)
  *        - an `exec` in a sourced file
  *        - a path SPLICED across variables, where no single line carries the
  *          basename (`N=resolve-internal; bash "$D/$N-token.sh"`)
+ *        - A FUNCTION WRAPPER whose CALL SITE carries the redirect:
+ *              resolve() { bash …resolve-internal-token.sh --github-env; }
+ *              resolve >/dev/null
+ *          The invocation line is genuinely clean; catching this needs
+ *          call-graph awareness, not a line matcher.
+ *        - A MULTI-LINE command substitution, where `$(` opens on one physical
+ *          line and the invocation sits on the next. `captured` looks only at
+ *          text to the left ON THE SAME logical line, so the capture is
+ *          invisible. Catching it needs `$(`-depth tracked across lines.
  *        - any wrapper that rebinds fd 1 in another process
  *      The script's own fail-closed check is the second layer, and it detects
  *      `/dev/null` and regular files on Linux only — not a pipe, not a `$( )`,
@@ -243,7 +253,23 @@ export const PIPE = /(?<!\|)\|(?!\|)/;
  * shape of blindness it was written to fix.
  */
 export const EXEC_REDIRECT = /(?<![\w-])exec\s*(?:[1&]\s*)?>/;
-export const CLOSER_REDIRECT = /^\s*(?:[})]|done|fi|esac)\s*(?:[1&]?>|\|(?!\|))/;
+/**
+ * A line that CLOSES a compound command. Identifying the KEYWORD is
+ * deliberately separated from judging the REDIRECT.
+ *
+ * An earlier form required the operator IMMEDIATELY after the keyword
+ * (`(?:[})]|done|fi|esac)\s*(?:[1&]?>|\|)`), so two natural shapes slipped:
+ * `} 2>&1 >/dev/null` (stderr moved first, then stdout) and
+ * `done < /dev/null >/dev/null` (the ordinary `while read … done < file` form).
+ * That is the same mistake this guard has now made three times — enumerating
+ * positions instead of generalising. The keyword now only says "this line
+ * closes a block"; STDOUT_REDIRECT/PIPE judge the rest of it.
+ * The `\b` applies ONLY to the word keywords. `}` and `)` are non-word
+ * characters, and a `\b` between `}` and a following space matches nothing —
+ * which silently un-caught every brace-group and subshell case the moment this
+ * was generalised. The tests caught it; the shape is worth remembering.
+ */
+export const CLOSER_LINE = /^\s*(?:[})]|(?:done|fi|esac)\b)/;
 
 /**
  * Blank out quoted spans so a `>` or `|` INSIDE an argument is not read as a
@@ -500,7 +526,9 @@ export function checkResolverInvocation(name, src) {
     }
     for (let i = inv0 + 1; i < be && blockHit === null; i++) {
       if (isCommentLine(physical[i])) continue;
-      if (CLOSER_REDIRECT.test(blankQuotedSpans(stripInlineComment(physical[i])))) blockHit = i;
+      const t = blankQuotedSpans(stripInlineComment(physical[i]));
+      // The keyword identifies the line; the operator may sit anywhere after it.
+      if (CLOSER_LINE.test(t) && (STDOUT_REDIRECT.test(t) || PIPE.test(t))) blockHit = i;
     }
 
     if (blockHit !== null) {
