@@ -51,8 +51,11 @@ const credential = uamiClientId
   : new DefaultAzureCredential();
 
 async function token(): Promise<string> {
-  // Cloud-aware audience: a Commercial-audience token fails auth against a Gov
-  // search service on EVERY data-plane call (cloud-endpoints.ts:searchAadScope).
+  // Cloud-aware audience. Per cloud-endpoints.ts:searchAadScope — grounded in
+  // Microsoft Learn "Connect your app to Azure AI Search using identities",
+  // which lists https://search.azure.us as the Azure Government audience — a
+  // Commercial-audience token does not authenticate against a Gov search
+  // service. Not measured against a live Gov service by #4063.
   const t = await credential.getToken(searchAadScope());
   if (!t?.token) throw new Error('Failed to acquire AAD token for AI Search');
   return t.token;

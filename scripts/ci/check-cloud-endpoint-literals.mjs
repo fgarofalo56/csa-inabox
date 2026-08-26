@@ -30,15 +30,29 @@
  *   directories that hold them is the presence-not-enforcement shape.
  *
  *   `lib/install` WAS ADDED BY #4063, FOR THE SAME REASON A SECOND TIME. Every
- *   item-type provisioner builds its data-plane URL there, and the directory
- *   held SEVEN live Commercial literals — including two `fetchWithTimeout`
- *   calls in `provisioners/ai-search.ts` and a Commercial ADLS hostname written
- *   into an ADF linked service by `provisioners/mirrored-database.ts:129`. That
- *   last one is the quiet direction: ADF accepts the linked service, so a
- *   sovereign provision reports GREEN with a dead sink. The call sites were
- *   converted to `dfsUrl()` / `searchEndpointBase()` / `searchAadScope()` /
- *   `kustoClusterUri()` FIRST, then scope widened — so the ratchet count did
- *   not rise for any file that had a live literal.
+ *   item-type provisioner builds its data-plane URL there. MEASURED with this
+ *   scanner's own predicate over the tree at `origin/main` (58 .ts files, 19
+ *   test files excluded, 0 marker lines): the directory held 14 forbidden-
+ *   literal occurrences in non-test files across 6 files, of which 4 sat on
+ *   comment lines, leaving 10 in LIVE code across 4 files —
+ *     _seed-dev-pipeline.ts 2, ai-search.ts 5, mirrored-database.ts 2,
+ *     workspace-monitor.ts 1.
+ *   (#4063's section-2 table lists SEVEN of those ten; it deliberately scopes
+ *   itself to the highest-severity call sites and notes `workspace-monitor.ts`
+ *   separately. An earlier revision of this header repeated "seven" as a count
+ *   OF THE DIRECTORY, which the code does not establish — deploy-integrity R7.)
+ *   Among them: two live `fetchWithTimeout` calls in `provisioners/ai-search.ts`
+ *   and a Commercial ADLS hostname written into an ADF linked service by
+ *   `provisioners/mirrored-database.ts:129`. On that last one #4063 argues the
+ *   quiet direction — ADF accepts the linked service, so a sovereign provision
+ *   reports GREEN with a dead sink. NOT MEASURED HERE: no `az` was run and no
+ *   Gov Actions receipt was taken for this change, so treat that as #4063's
+ *   claim plus the in-repo prior art at `_seed-dev-pipeline.ts:249` (Synapse
+ *   "validates reference existence, not connectivity, at PUT time"), not as a
+ *   receipt this guard produced. The call sites were converted to `dfsUrl()` /
+ *   `searchEndpointBase()` / `searchAadScope()` / `kustoClusterUri()` FIRST,
+ *   then scope widened — so the ratchet count did not rise for any file that
+ *   had a live literal.
  *
  *   SCOPE_DIRS is an ALLOWLIST, which means every console directory not named
  *   here is unguarded — that shape has now produced two live defects (#3381,
@@ -69,6 +83,22 @@
  *   @deprecated scope constant, sovereign-suffix validation copy) may be marked
  *   with an inline `cloud-endpoint-literal-ok` comment on the same line; the
  *   scanner ignores that line. Whole-file exemptions live in FILE_ALLOWLIST.
+ *
+ *   The marker suppresses the WHOLE LINE, not just the literal that motivated
+ *   it, and a marked line is invisible in the baseline diff a reviewer reads.
+ *   So: keep marked lines short, and disclose new markers in the PR body next
+ *   to the baseline delta. #4063 added two (`provisioners/ai-search.ts:17`,
+ *   `provisioners/mirrored-database.ts:241` — both per-cloud truth tables in doc
+ *   comments), taking repo-wide marker usage from 2 to 4.
+ *
+ * ZERO POPULATION — a scan that finds NOTHING is not the same as a clean repo.
+ *   `listSourceFiles` reads each SCOPE_DIR through `git ls-files`; if that
+ *   fails, or a SCOPE_DIR is renamed/typo'd, the directory silently contributes
+ *   zero files and the ratchet reads 249 -> 0 as a SHRINK, printing "baseline
+ *   holds". The CLI therefore refuses — in BOTH modes — a scan in which any
+ *   SCOPE_DIR yields zero source files (`requireFullPopulation`), and a
+ *   `git ls-files` failure is reported as "could not look", never as "there is
+ *   nothing there" (deploy-integrity R7).
  *
  * RATCHET SEMANTICS (shared mechanic — scripts/ci/_ratchet-count.mjs, R3):
  *   per-file counts of forbidden literals are frozen as the baseline; CI fails
@@ -151,30 +181,73 @@ const isTestFile = (rel) => /(^|\/)__tests__\//.test(rel) || /\.(test|spec)\.tsx
  * instead of mutating a tracked file on disk — `node --test` runs the guardrail
  * suite's files in PARALLEL, so an in-tree mutation would race every sibling
  * test that scans the console. Production callers pass nothing.
+ *
+ * `perDirOut`, when supplied, receives `{ [scopeDir]: { count, error } }` so a
+ * caller can tell "this directory holds no source files" apart from "I could
+ * not look" — see the ZERO POPULATION note in the header.
  */
-function listSourceFiles({ appRoot = APP_ROOT, relPrefix = 'apps/fiab-console' } = {}) {
+function listSourceFiles({ appRoot = APP_ROOT, relPrefix = 'apps/fiab-console', perDirOut = null } = {}) {
   const files = [];
   for (const dir of SCOPE_DIRS) {
     let out;
     try {
       // NB: double quotes — single quotes are not quoting chars in cmd.exe.
       out = execSync(`git ls-files "${dir}"`, { cwd: appRoot, encoding: 'utf8' });
-    } catch {
+    } catch (err) {
+      // A `git ls-files` failure is "could not look", NOT "nothing is there"
+      // (deploy-integrity R7). Record the cause; requireFullPopulation turns it
+      // into a hard error on the production path.
+      if (perDirOut) perDirOut[dir] = { count: 0, error: String(err?.message ?? err).split('\n')[0] };
       continue;
     }
+    let n = 0;
     for (const f of out.split('\n').map((s) => s.trim()).filter(Boolean)) {
       if (!/\.(ts|tsx)$/.test(f)) continue;
       if (isTestFile(f)) continue;
       files.push(`${relPrefix}/${f}`);
+      n += 1;
     }
+    if (perDirOut) perDirOut[dir] = { count: n, error: null };
   }
   return files;
 }
 
-/** Measure current forbidden-literal counts → { repoRelPath: count }. */
-export function scanLiterals({ appRoot = APP_ROOT, repoRoot = REPO_ROOT, relPrefix = 'apps/fiab-console' } = {}) {
+/**
+ * Measure current forbidden-literal counts → { repoRelPath: count }.
+ *
+ * `requireFullPopulation` (the CLI passes it in BOTH modes — regenerating a
+ * baseline from a collapsed population is the worse half of this failure; the
+ * fixture-driven self-test exercises both settings) THROWS when any SCOPE_DIR
+ * contributed zero source files, so a renamed directory or an unreadable index
+ * fails closed instead of arriving at the ratchet as a shrink to zero.
+ */
+export function scanLiterals({
+  appRoot = APP_ROOT,
+  repoRoot = REPO_ROOT,
+  relPrefix = 'apps/fiab-console',
+  requireFullPopulation = false,
+} = {}) {
+  const perDir = {};
+  const sourceFiles = listSourceFiles({ appRoot, relPrefix, perDirOut: perDir });
+
+  if (requireFullPopulation) {
+    const dead = SCOPE_DIRS.filter((d) => (perDir[d]?.count ?? 0) === 0);
+    if (dead.length > 0) {
+      const detail = dead
+        .map((d) => (perDir[d]?.error ? `${d} (could not look: ${perDir[d].error})` : `${d} (0 source files)`))
+        .join(', ');
+      throw new Error(
+        `cloud-endpoint-literals: SCOPE_DIR population collapsed — ${detail}. ` +
+          'A scope directory that yields no source files makes this guard blind there ' +
+          'while the ratchet still reads "baseline holds" (the shape #3381 and #4063 both ' +
+          'shipped). Check SCOPE_DIRS against the real tree, and that `git ls-files` can ' +
+          `run in ${appRoot}.`,
+      );
+    }
+  }
+
   const current = {};
-  for (const rel of listSourceFiles({ appRoot, relPrefix })) {
+  for (const rel of sourceFiles) {
     if (FILE_ALLOWLIST.has(rel)) continue;
     let src;
     try {
@@ -194,7 +267,13 @@ export function scanLiterals({ appRoot = APP_ROOT, repoRoot = REPO_ROOT, relPref
 }
 
 function main() {
-  const current = scanLiterals();
+  let current;
+  try {
+    current = scanLiterals({ requireFullPopulation: true });
+  } catch (err) {
+    console.error(`[cloud-endpoint-literals] ${err?.message ?? err}`);
+    process.exit(1);
+  }
   const exit = runRatchet({
     name: 'cloud-endpoint-literals',
     baselineFile: BASELINE_FILE,
