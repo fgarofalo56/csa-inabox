@@ -985,6 +985,106 @@ function mask(src) {
 }
 
 /**
+ * NOTATION IS NOT MEANING: `X['name']` IS REWRITTEN TO `X.name` (#4006 round 2).
+ *
+ * WHAT WAS MEASURED, on the real tree, as two files differing in ONE character
+ * class. Same route, same function, same grant:
+ *
+ *     if (session.claims.oid === process.env.LOOM_TENANT_ADMIN_OID) return null;    -> exit 1
+ *     if (session.claims.oid === process.env['LOOM_TENANT_ADMIN_OID']) return null; -> exit 0
+ *
+ * THE CAUSE IS STRUCTURAL, NOT A MISSING ALTERNATIVE, and that is why the answer
+ * is not "also match the bracket spelling". Every detector in this file runs on
+ * {@link mask}ed source, and masking BLANKS STRING CONTENTS — that is what makes
+ * the M9/N21 negative controls pass, and it is not negotiable. So the moment a
+ * property name is written between quotes it stops existing for every scan in
+ * this file at once. `process.env['LOOM_TENANT_ADMIN_OID']` is only the instance
+ * that was measured; `gate['isTenantAdmin'](s)` is the same erasure one receiver
+ * over, and so is any name a future section keys on. The report line above
+ * `skipTidBoundary` already conceded the class in prose ("a key reached through a
+ * computed string … is invisible to a scan that runs on MASKED source") without
+ * ever closing it.
+ *
+ * SO THE FIX IS APPLIED ONCE, AT THE READ, ABOVE EVERY DETECTOR — see
+ * {@link readSource}. A member access whose key is a STATIC string literal is
+ * exactly the dot access; normalising the two into one form means no section of
+ * this guard can be keyed to notation, including sections written later that
+ * never heard of this bug.
+ *
+ * THE REWRITE IS LENGTH-PRESERVING, and that is load-bearing rather than tidy:
+ * `functionSpan`, `importRanges`, `braceRegions`, `pathCondition` and the line
+ * numbers in every failure message are all OFFSETS into this text. `['NAME']`
+ * (n+4 chars) becomes `.NAME` plus (n+4)-(n+1) spaces, so every index downstream
+ * still points where it did. Trailing space inside an expression is inert JS.
+ *
+ * IT RUNS OVER CODE POSITIONS ONLY. The bracket, both quotes and the closing
+ * bracket are located through the MASK — `mask` preserves string DELIMITERS and
+ * blanks only the interior — so a `[` inside a comment or inside another string
+ * cannot trigger a rewrite, while the key itself is read from RAW text, which is
+ * the only place it still exists. An ARRAY LITERAL `['a', 'b']` is excluded by
+ * the same test that makes this a member access: the `[` must follow an
+ * identifier, `)` or `]`.
+ *
+ * WHAT IS DELIBERATELY NOT REWRITTEN, named rather than rounded to zero: a key
+ * that is not identifier-shaped (`x['a-b']` has no dot form), and a key that is
+ * COMPUTED (`x[K]`, `x['a' + 'b']`). The first is inert here. The second is a
+ * different class — a value known only at runtime — and it is handled where
+ * values are, not here: {@link adminVerdictBindings} resolves a local bound to a
+ * string literal naming an admin env var, so `const K = 'LOOM_TENANT_ADMIN_OID';
+ * process.env[K]` is seen. A key assembled by concatenation stays outside both,
+ * and the specs are the backstop for it.
+ *
+ * MEASURED BLAST RADIUS on this tree: 1216 static-string member accesses are
+ * rewritten across 4199 scanned modules, and the guard's ENTIRE report is
+ * byte-identical before and after — so the normalisation adds detections without
+ * moving a single existing verdict.
+ */
+function desugarStaticKeys(raw) {
+  const masked = mask(raw);
+  const out = raw.split('');
+  const ident = /^[A-Za-z_$][\w$]*$/;
+  for (let i = 0; i < masked.length; i += 1) {
+    if (masked[i] !== '[') continue;
+    // A MEMBER access, not an array literal: the receiver must end the token.
+    let p = i - 1;
+    while (p >= 0 && /\s/.test(masked[p])) p -= 1;
+    if (p < 0 || !/[\w$)\]]/.test(masked[p])) continue;
+    let q = i + 1;
+    while (q < masked.length && /\s/.test(masked[q])) q += 1;
+    const quote = masked[q];
+    if (quote !== '"' && quote !== "'" && quote !== '`') continue;
+    // `mask` keeps the delimiters, so the CLOSING quote is findable in the mask
+    // even though everything between them was blanked.
+    let r = q + 1;
+    while (r < masked.length && masked[r] !== quote) r += 1;
+    if (r >= masked.length) continue;
+    let s = r + 1;
+    while (s < masked.length && /\s/.test(masked[s])) s += 1;
+    if (masked[s] !== ']') continue;
+    const key = raw.slice(q + 1, r);
+    if (!ident.test(key)) continue;
+    const span = s - i + 1;
+    const replacement = `.${key}`;
+    if (replacement.length > span) continue; // cannot rewrite without moving offsets
+    for (let k = 0; k < span; k += 1) {
+      out[i + k] = k < replacement.length ? replacement[k] : ' ';
+    }
+    i = s;
+  }
+  return out.join('');
+}
+
+/**
+ * THE ONLY WAY THIS GUARD READS SOURCE. Every `readFileSync` of a scanned module
+ * goes through here, so {@link desugarStaticKeys}'s normalisation sits ABOVE the
+ * detectors rather than beside them — a section added later inherits it without
+ * knowing it exists, which is the property a per-detector fix would not have.
+ */
+function readSource(file) {
+  return desugarStaticKeys(readFileSync(file, 'utf8'));
+}
+
+/**
  * Brace-match a named function's body. Returns the masked body text, or null
  * when the function is absent (which the caller reports as a failure — a
  * renamed chokepoint must not silently pass).
@@ -1236,7 +1336,7 @@ for (const [entry, admitted] of SOURCE_FILTER_PROBES) {
 }
 
 // ── 1..4: the chokepoint module itself ──────────────────────────────────────
-const accessSrc = readFileSync(ACCESS_FILE, 'utf8');
+const accessSrc = readSource(ACCESS_FILE);
 const access = mask(accessSrc);
 
 if (!/export\s+type\s+WorkspaceAccessOpts\s*=/.test(access)) {
@@ -1613,7 +1713,7 @@ const used = new Set();
 
 for (const file of files) {
   const rel = file.slice(CONSOLE_ROOT.length + 1);
-  const src = readFileSync(file, 'utf8');
+  const src = readSource(file);
   if (!GUARDED_CALLS.some(([n]) => src.includes(n)) && !src.includes('skipTidBoundary')) continue;
   const masked = mask(src);
   const imports = importRanges(masked);
@@ -1675,7 +1775,7 @@ for (const file of files) {
 }
 
 // ── 7: listAllOwnedItems can enforce it ─────────────────────────────────────
-const crud = mask(readFileSync(ITEM_CRUD_FILE, 'utf8'));
+const crud = mask(readSource(ITEM_CRUD_FILE));
 const listAllSig = signature(crud, 'listAllOwnedItems');
 if (listAllSig === null) {
   fail(`${ITEM_CRUD_FILE}: listAllOwnedItems not found.`);
@@ -2537,7 +2637,7 @@ function allowIsNullFor(t) {
 const authzFiles = walk(AUTHZ_DIR);
 const moduleCache = new Map();
 const readMasked = (f) => {
-  if (!moduleCache.has(f)) moduleCache.set(f, mask(readFileSync(f, 'utf8')));
+  if (!moduleCache.has(f)) moduleCache.set(f, mask(readSource(f)));
   return moduleCache.get(f);
 };
 
@@ -3024,7 +3124,7 @@ for (const file of authzFiles) {
 //     authorization decision in this module. `loadWorkspaceAdmin` is a bare
 //     `SELECT * FROM c WHERE c.id = @id`; returning its result past the boundary
 //     is what made `resolveAdminWorkspace` cross-tenant.
-const guardSrc = readFileSync(GUARD_FILE, 'utf8');
+const guardSrc = readSource(GUARD_FILE);
 const guard = mask(guardSrc);
 if (/\bloadWorkspaceAdmin\b/.test(guard)) {
   fail(
@@ -3282,18 +3382,277 @@ const ADMIN_VERDICT_MODULE =
 const ADMIN_VERDICT_EXPORT = 'isTenantAdmin';
 
 /**
- * A RAW-TEXT SUPERSET of everything `adminVerdictProbe` can possibly match, used
- * only to skip files cheaply. It is a superset BY CONSTRUCTION, not by
- * inspection: every alternative the probe builds derives from either the literal
- * `isTenantAdmin` (the floor name, and the only specifier that seeds an alias),
- * the admin module specifier (which contains `feature-gate`), or the env vars.
- * A module containing none of those three raw substrings cannot produce a probe
- * hit, so skipping it discards nothing.
+ * The RAW TOKENS that let a module reach the verdict WITHOUT importing it from
+ * somewhere else: the floor name, and the env vars the derivation reads.
+ * {@link ADMIN_VERDICT_PREFILTER} closes this over the re-export graph — see the
+ * superset argument there, which is the part that stopped being true in round 2.
  */
-const ADMIN_VERDICT_PREFILTER =
+const ADMIN_VERDICT_TOKENS =
   /\bisTenantAdmin\b|\bLOOM_TENANT_ADMIN_(?:OID|GROUP_ID)\b|feature-gate/;
 
 const escapeRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+// ── THE ADMIN MODULE IS A SET, NOT A PATH (#4006 round 2) ───────────────────
+//
+// WHAT WAS MEASURED. `ADMIN_VERDICT_MODULE` is a PATH LITERAL, and a path
+// literal is a spelling. One line in any module on the tree —
+//
+//     export { isTenantAdmin as isAdmin } from '@/lib/auth/feature-gate';
+//
+// — and a route importing `isAdmin` from THAT module binds the admin verdict
+// under a name this guard had never heard of, from a specifier that does not
+// contain `feature-gate`. Measured on the real tree: the grant exited 0.
+//
+// #4006's own "what done looks like" item 1 asked for exactly this and it was
+// not built: "an alias, a namespace call, OR A RE-EXPORT is followed to the same
+// helper". The PR claimed items 1-4; the re-export half of item 1 was absent.
+//
+// THE CLASS, so the repair is not a fourth spelling. Name resolution stopped at
+// ONE hop: the importing module's own text. Everything a barrel can do — rename,
+// star-forward, forward a forward — is invisible to a one-hop resolver, and the
+// number of hops is unbounded, so no list of module paths can ever be complete.
+// The verdict's identity is not "it came from this path", it is "it came from a
+// module that exports it", and that relation is TRANSITIVE.
+//
+// SO THE PATH TEST BECOMES A SEED AND THE RELATION IS CLOSED. `feature-gate`
+// seeds the set with `{isTenantAdmin}`; every `export … from`, `export *` and
+// local `export {}` re-export is then followed to a FIXED POINT, exactly as
+// {@link adminVerdictAliases} already does for locals one scope down. A module
+// that re-exports the verdict IS an admin module, under whatever name it chose.
+//
+// COST, MEASURED rather than assumed: 185 of 4199 scanned modules contain an
+// `export … from` or an `export {` at all, so the closure masks 4.8 MB out of
+// the tree and the guard's wall time is unchanged. On this tree the fixed point
+// names ONE module — `lib/auth/feature-gate.ts` itself — so nothing on the tree
+// today reaches the verdict through a barrel, and the value of the closure is
+// that a barrel added tomorrow cannot be invisible.
+//
+// RESIDUAL, named rather than rounded to zero: an `export … from` whose
+// specifier this resolver cannot map to a scanned file (a bare package name, a
+// path alias other than `@/`) contributes nothing, and a re-export chain deeper
+// than {@link MODULE_GRAPH_ROUNDS} hops is truncated. Both fail OPEN, which is
+// why the bound is stated here instead of left implicit.
+const MODULE_GRAPH_ROUNDS = 8;
+
+/** Every scanned module, by POSIX path — the existence oracle the resolver needs. */
+const SCANNED_FILES = new Set(files);
+
+const MODULE_EXTS = ['.ts', '.tsx', '.mts', '.cts', '.js', '.jsx', '.mjs', '.cjs'];
+
+/**
+ * An import specifier -> a scanned file, or null when it leaves the tree.
+ *
+ * `@/` is the console's tsconfig root alias; `./` and `../` are resolved against
+ * the importing file. A bare specifier is a package and is deliberately null —
+ * this guard does not read `node_modules`, and saying so is the honest form of
+ * "not found" (R7) rather than pretending the module has no exports.
+ *
+ * `known` is the EXISTENCE ORACLE. It defaults to the scanned tree; the embedded
+ * re-export controls widen it with their synthetic modules, which is what lets
+ * those controls run this resolver rather than a copy of it. A control that
+ * cannot reach the code it is controlling is the failure this file calls its
+ * worst, and the first cut of those controls hit it: the synthetic barrel was
+ * not on the tree, so resolution returned null and R1-R3 measured nothing.
+ */
+function resolveModule(fromFile, spec, known = SCANNED_FILES) {
+  let base;
+  if (spec.startsWith('@/')) base = `${CONSOLE_ROOT}/${spec.slice(2)}`;
+  else if (spec.startsWith('./') || spec.startsWith('../')) {
+    if (!fromFile) return null;
+    const dir = fromFile.slice(0, fromFile.lastIndexOf('/'));
+    const parts = `${dir}/${spec}`.split('/');
+    const stack = [];
+    for (const seg of parts) {
+      if (seg === '.' || seg === '') continue;
+      if (seg === '..') stack.pop();
+      else stack.push(seg);
+    }
+    base = stack.join('/');
+  } else return null;
+  if (known.has(base)) return base;
+  for (const ext of MODULE_EXTS) {
+    if (known.has(base + ext)) return base + ext;
+    if (known.has(`${base}/index${ext}`)) return `${base}/index${ext}`;
+  }
+  return null;
+}
+
+/**
+ * The import and re-export EDGES of one module.
+ *
+ * Reads specifiers from RAW text for the reason {@link adminVerdictBindings}
+ * records: `mask` blanks string CONTENTS, so a module specifier read off the
+ * mask is an empty string. Statement BOUNDARIES come from the mask, so an
+ * `export … from` inside a comment or a template literal is not an edge.
+ */
+function moduleLinks(raw) {
+  const masked = mask(raw);
+  const imports = [];
+  const exports = [];
+  const named = (block) => {
+    const out = [];
+    for (const rawSpec of block.split(',')) {
+      const m = /^\s*(?:type\s+)?([A-Za-z_$][\w$]*|default)(?:\s+as\s+([A-Za-z_$][\w$]*|default))?\s*$/
+        .exec(rawSpec);
+      if (m) out.push([m[1], m[2] || m[1]]);
+    }
+    return out;
+  };
+  for (const [a, b] of importRanges(masked)) {
+    // NOT `const stmt = …`: `check-tid-boundary-chokepoint.selftest.mjs` anchors
+    // section 10's dead-arm mutation on that exact line with a FIRST-occurrence
+    // `String.replace`, and this function sits ~1800 lines ABOVE it. Spelling the
+    // local `stmt` here silently redirects CASE 2's mutation onto this function,
+    // and the control goes green having measured something else entirely — the
+    // hazard `adminVerdictBindings` records below, reproduced one function over.
+    // MEASURED: with the collision present the selftest still exits 0 while
+    // section 10's arm is untouched; renamed, CASE 2 lands where it is aimed.
+    const edge = raw.slice(a, b);
+    if (/^\s*(?:import|export)\s+type\b/.test(edge)) continue;
+    const from = /\bfrom\s*['"]([^'"]+)['"]/.exec(edge);
+    const braces = /\{([\s\S]*?)\}/.exec(edge);
+    if (/^\s*export\b/.test(edge)) {
+      if (!from && !braces) continue;
+      exports.push({
+        spec: from ? from[1] : null,
+        star: /^\s*export\s*\*(?!\s*as)/.test(edge),
+        starAs: (/^\s*export\s*\*\s*as\s+([A-Za-z_$][\w$]*)/.exec(edge) || [])[1] || null,
+        named: braces ? named(braces[1]) : [],
+      });
+      continue;
+    }
+    if (!from) continue;
+    imports.push({
+      spec: from[1],
+      named: braces ? named(braces[1]) : [],
+      ns: (/\bimport\s+\*\s+as\s+([A-Za-z_$][\w$]*)/.exec(edge) || [])[1] || null,
+      def: (/\bimport\s+([A-Za-z_$][\w$]*)\s*(?:,|from)/.exec(edge) || [])[1] || null,
+    });
+  }
+  return { imports, exports };
+}
+
+/**
+ * `file -> the set of names that file EXPORTS which ARE the admin verdict`,
+ * closed transitively over re-exports.
+ *
+ * Seeded from the ONE module that defines the verdict and grown outward, so the
+ * answer to "is this an admin module?" is derived rather than spelled.
+ */
+const ADMIN_VERDICT_EXPORTERS = (() => {
+  const graph = new Map();
+  for (const f of files) {
+    let raw;
+    try { raw = readSource(f); } catch { continue; }
+    if (!/\bexport\b[^;\n]*\bfrom\b/.test(raw) && !/\bexport\s*\{/.test(raw)) continue;
+    graph.set(f, { raw, links: moduleLinks(raw) });
+  }
+  const exporters = new Map();
+  for (const f of files) {
+    if (ADMIN_VERDICT_MODULE.test(`'${f.slice(CONSOLE_ROOT.length + 1)}'`) ||
+        /\/feature-gate\.[cm]?[jt]sx?$/.test(f)) {
+      exporters.set(f, new Set([ADMIN_VERDICT_EXPORT]));
+    }
+  }
+  for (let round = 0; round < MODULE_GRAPH_ROUNDS; round += 1) {
+    let grew = false;
+    for (const [f, { raw, links }] of graph) {
+      const out = new Set(exporters.get(f) ?? []);
+      const before = out.size;
+      // Locals this module binds the verdict to, from the CURRENT closure.
+      const locals = new Set();
+      for (const imp of links.imports) {
+        const target = resolveModule(f, imp.spec);
+        const set = target ? exporters.get(target) : null;
+        if (!set) continue;
+        for (const [imported, local] of imp.named) if (set.has(imported)) locals.add(local);
+        if (imp.def && set.has('default')) locals.add(imp.def);
+      }
+      const localRe = locals.size
+        ? new RegExp(`\\b(?:${[...locals].map(escapeRe).join('|')})\\b`)
+        : null;
+      for (const ex of links.exports) {
+        if (ex.spec) {
+          const target = resolveModule(f, ex.spec);
+          const set = target ? exporters.get(target) : null;
+          if (!set) continue;
+          if (ex.star) for (const n of set) out.add(n);
+          else if (ex.starAs) out.add(ex.starAs);
+          else for (const [imported, exported] of ex.named) if (set.has(imported)) out.add(exported);
+          continue;
+        }
+        for (const [local, exported] of ex.named) if (locals.has(local)) out.add(exported);
+      }
+      // `export const B = <a verdict local>` is the same forward without braces.
+      if (localRe) {
+        const decl = /\bexport\s+(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*(?::[^=;{}]*)?=\s*([^;]*)/g;
+        let m;
+        while ((m = decl.exec(mask(raw))) !== null) {
+          if (matchesAtTopLevel(m[2], localRe)) out.add(m[1]);
+        }
+      }
+      if (out.size > before) { exporters.set(f, out); grew = true; }
+    }
+    if (!grew) break;
+  }
+  return exporters;
+})();
+
+/**
+ * A RAW-TEXT SUPERSET of everything `adminVerdictProbe` can possibly match, used
+ * only to skip files cheaply.
+ *
+ * THE OLD SUPERSET ARGUMENT WAS TRUE AND THEN STOPPED BEING TRUE, which is worth
+ * recording because it is how a prefilter silently becomes the real detector.
+ * It read: every alternative the probe builds derives from the literal
+ * `isTenantAdmin`, from the admin module specifier (which contains
+ * `feature-gate`), or from the env vars — so a module carrying none of those
+ * three substrings cannot produce a hit. That held while the resolver stopped at
+ * one hop. The re-export closure above breaks it exactly: a route reading
+ *
+ *     import { isAdmin } from '@/lib/zzbarrel';
+ *
+ * carries NONE of the three tokens and still binds the verdict. MEASURED with
+ * the closure in place and this prefilter left alone: the graph resolved
+ * `isAdmin` correctly, `adminShapeFunctionsIn` named the granting function, and
+ * the guard still exited 0 — because the file was skipped one line before any of
+ * that ran. A cheap filter in front of a repaired detector is a place a repair
+ * goes to die, and this one nearly did.
+ *
+ * THE ARGUMENT THAT IS TRUE NOW. A module reaches the verdict in exactly two
+ * ways: it names one of {@link ADMIN_VERDICT_TOKENS} itself, or it imports from
+ * a module in {@link ADMIN_VERDICT_EXPORTERS}. For the second, the specifier must
+ * RESOLVE to that module, and {@link resolveModule} only ever produces a path by
+ * appending an extension to the specifier, or `/index<ext>` to it. So the
+ * specifier's final segment is the file's basename without extension — or, in
+ * the `/index` case ONLY, the parent directory's basename. Both are added here,
+ * the second only for a module actually named `index`, which is what keeps the
+ * alternation from picking up an ordinary directory name like `auth` and
+ * admitting a third of the tree. The filter is derived FROM the closure rather
+ * than listed beside it, which is what stops the two drifting apart the way the
+ * sentence above did.
+ *
+ * IT IS A FUNCTION OF THE CLOSURE, not a constant, so the embedded controls can
+ * build the filter the same way for their synthetic graph and assert that it
+ * admits a module carrying NONE of the tokens. Without that, the one repair with
+ * no control would be this one — and it is the repair whose absence silently ate
+ * the other one.
+ */
+function adminVerdictPrefilterFor(exporters) {
+  const segs = new Set();
+  for (const f of exporters.keys()) {
+    const parts = f.split('/');
+    const base = parts[parts.length - 1].replace(/\.[cm]?[jt]sx?$/, '');
+    segs.add(base);
+    // A directory name can only appear as a specifier's last segment when the
+    // module resolves through `<dir>/index`, so it is only in scope for one.
+    if (base === 'index' && parts.length > 1) segs.add(parts[parts.length - 2]);
+  }
+  const alts = [ADMIN_VERDICT_TOKENS.source, ...[...segs].map(escapeRe)];
+  return new RegExp(alts.join('|'));
+}
+
+const ADMIN_VERDICT_PREFILTER = adminVerdictPrefilterFor(ADMIN_VERDICT_EXPORTERS);
 
 /**
  * Local names this module binds the admin verdict to, and admin-module namespaces.
@@ -3304,11 +3663,22 @@ const escapeRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
  * silently returned zero namespaces — probe V3 (`gate[K](session)`) caught it
  * before this shipped. Taking one raw string makes "pass masked where raw was
  * meant" inexpressible rather than merely discouraged.
+ *
+ * `file` and `exporters` are how the RE-EXPORT closure reaches this function
+ * (#4006 round 2). `exporters` is injectable so the embedded controls below can
+ * run this REAL resolver against a SYNTHETIC module graph — a barrel that exists
+ * only in the control cannot be planted on the tree, and a control that
+ * re-implements the resolution would prove nothing about it.
  */
-function adminVerdictBindings(raw) {
+function adminVerdictBindings(raw, file = null, exporters = ADMIN_VERDICT_EXPORTERS) {
   const masked = mask(raw);
   const called = new Set([ADMIN_VERDICT_EXPORT]);
-  const namespaces = new Set();
+  const namespaces = new Map();
+  const envNames = new Set();
+  // The oracle is the tree PLUS whatever the caller's closure names. For the
+  // real closure that is a no-op (its keys are tree files); for the embedded
+  // controls it is what makes a synthetic barrel resolvable.
+  const known = new Set([...SCANNED_FILES, ...exporters.keys()]);
   for (const [a, b] of importRanges(masked)) {
     // NOT `const stmt = …`, and this comment deliberately does not quote the
     // string either. `check-tid-boundary-chokepoint.selftest.mjs` anchors
@@ -3324,27 +3694,77 @@ function adminVerdictBindings(raw) {
     // `import type { … }` is erased at compile time — it binds no callable.
     if (/^\s*(?:import|export)\s+type\b/.test(importStmt)) continue;
     const braces = /\{([\s\S]*?)\}/.exec(importStmt);
+    // THE RE-EXPORT CLOSURE, consulted BEFORE the path literal. `target` is the
+    // scanned module this specifier actually resolves to; `exported` is the set
+    // of names that module hands out which ARE the verdict, however many barrels
+    // deep it got them from. The floor name below stays as the case where the
+    // module is off-tree and cannot be resolved at all.
+    const spec = /\bfrom\s*['"]([^'"]+)['"]/.exec(importStmt);
+    const target = spec ? resolveModule(file, spec[1], known) : null;
+    const exported = target ? exporters.get(target) : null;
     if (braces) {
       for (const rawSpec of braces[1].split(',')) {
         const m = /^\s*(?:type\s+)?([A-Za-z_$][\w$]*)(?:\s+as\s+([A-Za-z_$][\w$]*))?\s*$/.exec(rawSpec);
-        if (m && m[1] === ADMIN_VERDICT_EXPORT) called.add(m[2] || m[1]);
+        if (!m) continue;
+        if (m[1] === ADMIN_VERDICT_EXPORT || (exported && exported.has(m[1]))) {
+          called.add(m[2] || m[1]);
+        }
       }
     }
-    if (!ADMIN_VERDICT_MODULE.test(importStmt)) continue;
+    const isAdminModule = ADMIN_VERDICT_MODULE.test(importStmt) || Boolean(exported?.size);
+    if (!isAdminModule) continue;
     const ns = /\b(?:import|export)\s+(?:\*\s+as\s+)?([A-Za-z_$][\w$]*)/.exec(importStmt);
-    if (ns) namespaces.add(ns[1]);
+    // The namespace carries the set of names on it that ARE the verdict, so a
+    // DESTRUCTURE of the namespace can be resolved key-by-key rather than
+    // treating every member as a verdict — see {@link adminVerdictAliases}.
+    if (ns) namespaces.set(ns[1], new Set(exported?.size ? exported : [ADMIN_VERDICT_EXPORT]));
   }
-  return { called, namespaces };
+  // A LOCAL WHOSE VALUE *IS* AN ADMIN ENV VAR NAME (#4006 round 2). `mask` blanks
+  // string contents, so `const K = 'LOOM_TENANT_ADMIN_OID'` leaves nothing for a
+  // masked scan to see and `process.env[K]` reads as an ordinary lookup — the
+  // residual {@link desugarStaticKeys} names, closed here rather than left open.
+  // Read from RAW because the value only exists there. The name must EQUAL an
+  // admin env var, so this cannot widen onto unrelated configuration.
+  const strConst = /(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*(?::[^=;{}]*)?=\s*['"`]([^'"`]*)['"`]/g;
+  let sc;
+  while ((sc = strConst.exec(raw)) !== null) {
+    if (/^LOOM_TENANT_ADMIN_(?:OID|GROUP_ID)$/.test(sc[2])) envNames.add(sc[1]);
+  }
+  return { called, namespaces, envNames };
 }
 
-/** A DIRECT reference to the admin verdict in expression text. */
-function adminVerdictReference(raw) {
-  const { called, namespaces } = adminVerdictBindings(raw);
-  const alts = [...called].map((n) => `\\b${escapeRe(n)}\\s*\\(`);
-  for (const ns of namespaces) {
+/**
+ * A reference to the admin verdict in expression text.
+ *
+ * TWO MODES, because "does this CONDITION turn on the verdict?" and "does this
+ * INITIALISER carry the verdict?" are different questions and one regex was
+ * answering both (#4006 round 2).
+ *
+ * `asValue: false` (the default, for condition text) requires a CALL — `\bname\s*\(`
+ * — because a bare mention of the gate's name in a condition is not the gate
+ * being consulted.
+ *
+ * `asValue: true` drops the paren, and that is what a BINDING needs. MEASURED,
+ * and blind at origin/main as well as at this branch's first cut:
+ *
+ *     const check = isTenantAdmin;        // no call here…
+ *     if (check(session)) return null;    // …the call is one line down
+ *
+ * The verdict flows into `check` as a VALUE and is called through the new name,
+ * so a call-shaped reference cannot see the flow. `const [check] =
+ * [isTenantAdmin]` is the same thing inside a container. This is the same class
+ * as the destructure and the wrapper — a name the verdict reaches — and closing
+ * it by requiring the call would have been a fourth spelling.
+ */
+function adminVerdictReference(raw, file = null, exporters = ADMIN_VERDICT_EXPORTERS,
+                               { asValue = false } = {}) {
+  const { called, namespaces, envNames } = adminVerdictBindings(raw, file, exporters);
+  const alts = [...called].map((n) => (asValue ? `\\b${escapeRe(n)}\\b` : `\\b${escapeRe(n)}\\s*\\(`));
+  for (const ns of namespaces.keys()) {
     alts.push(`\\b${escapeRe(ns)}\\s*(?:\\.\\s*[A-Za-z_$][\\w$]*|\\[)`);
   }
   alts.push('\\bLOOM_TENANT_ADMIN_(?:OID|GROUP_ID)\\b');
+  for (const n of envNames) alts.push(`\\b${escapeRe(n)}\\b`);
   return new RegExp(alts.join('|'));
 }
 
@@ -3371,8 +3791,15 @@ function adminVerdictReference(raw) {
  * not. So `(process.env.LOOM_TENANT_ADMIN_OID || '').trim()` still reads at
  * depth 0 — the env value bound to a local, which IS the verdict re-derived —
  * while a verdict handed as one argument among many to some other call does not.
+ *
+ * `containersHide` is FALSE for a destructuring target (#4006 round 2): an object
+ * or array LITERAL is not a call, it is a box, and `const [check] =
+ * [isTenantAdmin]` takes the verdict straight back out of it. Turning container
+ * nesting off does NOT reopen the V9 false positive, because V9's verdict sits
+ * inside the RESOLVER'S ARGUMENT LIST — one call paren deep — and call parens are
+ * counted under both settings.
  */
-function matchesAtTopLevel(text, re) {
+function matchesAtTopLevel(text, re, containersHide = true) {
   const sticky = new RegExp(re.source, 'y');
   const opens = [];
   let depth = 0;
@@ -3389,8 +3816,8 @@ function matchesAtTopLevel(text, re) {
       opens.push(isCall);
       if (isCall) depth += 1;
     } else if (c === '{' || c === '[') {
-      opens.push(true);
-      depth += 1;
+      opens.push(containersHide);
+      if (containersHide) depth += 1;
     } else if (c === ')' || c === '}' || c === ']') {
       if (opens.pop()) depth -= 1;
     }
@@ -3399,7 +3826,90 @@ function matchesAtTopLevel(text, re) {
 }
 
 /**
- * Locals assigned FROM the admin verdict, to a fixed point — the hoist evasion.
+ * EVERY NAME A BINDING TARGET INTRODUCES, WITH THE KEY IT CAME FROM (#4006 rd 2).
+ *
+ * `const admin = …` binds one name and `const { isTenantAdmin: check } = …` binds
+ * one name too, but only the first is an IDENTIFIER — and the alias scan matched
+ * identifiers only. That is why
+ *
+ *     import * as gate from '@/lib/auth/feature-gate';
+ *     const { isTenantAdmin: check } = gate;
+ *     if (check(session)) return null;
+ *
+ * exited 0 while the one-line-different `const check = gate.isTenantAdmin;`
+ * exited 1. Destructuring is not a trick; it is the ordinary way to take a
+ * function off a namespace, and three more forms sit beside it (array pattern,
+ * nested pattern, rest).
+ *
+ * So the target is parsed as a PATTERN. A key in `{ key: value }` position is NOT
+ * a binding — `{ isTenantAdmin: check }` binds `check`, not `isTenantAdmin` —
+ * which is the one distinction that decides whether this over- or under-reports.
+ *
+ * THE KEY IS RETURNED ALONGSIDE THE NAME because destructuring a MODULE
+ * NAMESPACE is a member access written differently: `const { isTenantAdmin: check
+ * } = gate` and `const check = gate.isTenantAdmin` name the same function. Having
+ * the key lets {@link adminVerdictAliases} resolve which members of the namespace
+ * are the verdict instead of assuming all of them are — `{ checkCapability }` off
+ * the same namespace is not an admin verdict, and flagging it would be the kind
+ * of wrong accusation that gets a guard weakened later.
+ */
+function patternBindings(target) {
+  const t = target.trim();
+  if (/^[A-Za-z_$][\w$]*$/.test(t)) return [{ key: null, name: t }];
+  if (!/^[{[]/.test(t)) return [];
+  const out = [];
+  const isArray = t[0] === '[';
+  // Strip default values (`= expr`) at depth 0 of each element before reading
+  // names: a default may itself contain identifiers that bind nothing.
+  let depth = 0;
+  let inDefault = 0;
+  let buf = '';
+  const parts = [];
+  for (let i = 1; i < t.length - 1; i += 1) {
+    const c = t[i];
+    if (c === '{' || c === '[' || c === '(') depth += 1;
+    else if (c === '}' || c === ']' || c === ')') depth -= 1;
+    if (c === ',' && depth === 0) { parts.push(buf); buf = ''; inDefault = 0; continue; }
+    if (c === '=' && depth === 0 && t[i + 1] !== '=' && t[i - 1] !== '=' &&
+        t[i - 1] !== '!' && t[i - 1] !== '<' && t[i - 1] !== '>') { inDefault = 1; continue; }
+    if (!inDefault) buf += c;
+  }
+  parts.push(buf);
+  for (const part of parts) {
+    const rest = /^\s*\.\.\./.test(part);
+    const p = part.trim().replace(/^\.\.\./, '').trim();
+    if (!p) continue;
+    const colon = (() => {
+      let d = 0;
+      for (let i = 0; i < p.length; i += 1) {
+        const c = p[i];
+        if (c === '{' || c === '[' || c === '(') d += 1;
+        else if (c === '}' || c === ']' || c === ')') d -= 1;
+        else if (c === ':' && d === 0) return i;
+      }
+      return -1;
+    })();
+    // `{ a: <target> }` binds the RIGHT side; a bare `{ a }` binds `a` under its
+    // own key. A rest element or an array slot has no resolvable key, so it
+    // carries `key: null` and is judged as "could be anything on the object".
+    const inner = colon === -1 ? p : p.slice(colon + 1);
+    const key = isArray || rest ? null : (colon === -1 ? p.trim() : p.slice(0, colon).trim());
+    for (const b of patternBindings(inner)) {
+      out.push({ key: b.key === null ? key : b.key, name: b.name });
+    }
+  }
+  return out;
+}
+
+/** Just the names — the common case, kept so callers read as before. */
+function patternNames(target) {
+  return patternBindings(target).map((b) => b.name);
+}
+
+/**
+ * Locals the admin verdict FLOWS INTO, to a fixed point — the hoist evasion and
+ * every binding form beside it.
+ *
  * `const admin = isTenantAdmin(s)` makes `admin` a reference; `const b = admin`
  * makes `b` one too. Bounded at four rounds because the chain is a chain, not a
  * graph, and an unbounded loop in a guard is its own defect.
@@ -3408,26 +3918,114 @@ function matchesAtTopLevel(text, re) {
  * `const IS_ADMIN = isTenantAdmin(session)` is the same evasion one scope up.
  * The cost is that two functions in one file share an alias namespace, which is
  * the fail-CLOSED direction.
+ *
+ * WHAT ROUND 2 WIDENED, and why it is one class rather than three fixes. The
+ * scan matched exactly ONE syntactic shape — `const|let|var IDENT = expr` — and
+ * a verdict reaches a name through several. MEASURED as isolated fixtures on the
+ * real tree, all four of these exited 0 while the identifier form exited 1:
+ *
+ *     const { isTenantAdmin: check } = gate;        object pattern
+ *     const [check] = [isTenantAdmin];              array pattern
+ *     let check; check = gate.isTenantAdmin;        assignment, no declarator
+ *     function check(s) { return isTenantAdmin(s); }   a wrapper, not a binding
+ *
+ * The class is "a name the verdict flows into", and the declarator was one
+ * member of it. So the LEFT side is now any binding target
+ * ({@link patternBindings}), the OPERATOR is a declarator OR a plain assignment,
+ * and a FUNCTION DECLARATION whose RETURNS carry the verdict makes its own name
+ * a verdict — the same "follow it to a fixed point" the docblock above already
+ * claimed, applied to the forms it did not reach.
+ *
+ * TWO DEPTH MODELS, and the reason there are two. An IDENTIFIER target keeps the
+ * strict {@link matchesAtTopLevel} test, because that is what stops the SAFE
+ * pattern (`const access = await resolveWorkspaceAccessByOid(…, { tenantAdmin:
+ * isTenantAdmin(s) })`) from being read as a verdict — seven wrong accusations
+ * the first cut of this rule produced, pinned as probe V9. A PATTERN target is
+ * different in kind: `const [check] = [isTenantAdmin]` and `const { isTenantAdmin:
+ * check } = { ...gate }` put the verdict in a CONTAINER and then take it back
+ * out, so a container brace must not hide it. Pattern targets therefore ignore
+ * `{`/`[` nesting and count CALL parens only — which leaves V9 exactly where it
+ * was, since its verdict sits inside the resolver's argument list, one call paren
+ * deep, under either model.
+ *
+ * DESTRUCTURING A NAMESPACE IS RESOLVED KEY-BY-KEY, not treated as "everything on
+ * this object is the verdict". `const { isTenantAdmin: check } = gate` binds the
+ * verdict; `const { checkCapability } = gate` off the same namespace does not,
+ * and saying otherwise would be a wrong accusation on ordinary code. A key that
+ * cannot be resolved — an array slot, a rest element — falls back to the
+ * container test, which is the fail-CLOSED direction.
+ *
+ * The `=` matcher excludes `==`, `===`, `!=`, `<=`, `>=` and `=>` explicitly. An
+ * arrow's `=>` is the one that matters: without it every `(x) => …` parameter
+ * list would read as an assignment target and the alias set would swallow the
+ * module.
  */
-function adminVerdictAliases(masked, ref) {
+function adminVerdictAliases(masked, ref, namespaces = new Map(), valueRef = ref) {
   const found = new Set();
-  const decl = /(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*(?::[^=;{}]*)?=\s*([^;]*)/g;
+  const decl =
+    /(?:(?:const|let|var)\s+|(?:^|[;{})]|=>)\s*)((?:[A-Za-z_$][\w$]*|\{[^;]*?\}|\[[^;]*?\]))\s*(?::[^=;{}]*)?(?<![=!<>])=(?![=>])\s*([^;]*)/gm;
+  // Spanned ONCE, outside the round loop: the bodies do not change between
+  // rounds, only the alias set they are tested against does. Re-spanning them
+  // each round added ~15s to this guard's wall time for no extra detection.
+  const wrappers = [];
+  const fnDecl = /\bfunction\s*\*?\s*([A-Za-z_$][\w$]*)\s*\(/g;
+  let f;
+  while ((f = fnDecl.exec(masked)) !== null) {
+    const span = callableSpan(masked, f.index, f.index, false);
+    if (span) wrappers.push([f[1], bodyReturns(span).map((r) => r.expr)]);
+  }
+  /**
+   * The verdict-name set of the namespace this initialiser IS, or SPREADS.
+   *
+   * "Bare" means used as a VALUE rather than as a receiver: `= gate` and
+   * `= { ...gate }` both hand the whole namespace over, while `gate.foo` and
+   * `gate[k]` are member accesses the reference regex already covers. The `...`
+   * alternative is why the leading-`.` exclusion is not simply `[^\w$.]` — a
+   * spread's dots would otherwise read as a member access and `{ ...gate }`
+   * stayed invisible (MEASURED: RC=0 before this alternative, RC=1 after).
+   */
+  const namespaceOf = (init) => {
+    for (const [ns, names] of namespaces) {
+      const bare = new RegExp(`(?:^|\\.\\.\\.|[^\\w$.])${escapeRe(ns)}\\s*(?![\\w$(.[])`);
+      if (bare.test(init)) return names;
+    }
+    return null;
+  };
   for (let round = 0; round < 4; round += 1) {
     const before = found.size;
     const aliasRe = found.size
       ? new RegExp(`\\b(?:${[...found].map(escapeRe).join('|')})\\b`)
       : null;
+    const bears = (text, containersHide = true) =>
+      matchesAtTopLevel(text, valueRef, containersHide) ||
+      (aliasRe !== null && matchesAtTopLevel(text, aliasRe, containersHide));
     decl.lastIndex = 0;
     let m;
     while ((m = decl.exec(masked)) !== null) {
-      const [, name, init] = m;
-      if (found.has(name)) continue;
-      if (
-        matchesAtTopLevel(init, ref) ||
-        (aliasRe !== null && matchesAtTopLevel(init, aliasRe))
-      ) {
-        found.add(name);
+      const [, target, init] = m;
+      const bindings = patternBindings(target);
+      const isPattern = bindings.length !== 1 || bindings[0].key !== null ||
+                        !/^\s*[A-Za-z_$][\w$]*\s*$/.test(target);
+      const nsNames = isPattern ? namespaceOf(init) : null;
+      if (nsNames) {
+        // A member access spelled as a destructure — resolve the key.
+        for (const b of bindings) {
+          if (b.key === null || nsNames.has(b.key)) found.add(b.name);
+        }
+        continue;
       }
+      if (!bears(init, !isPattern)) continue;
+      for (const b of bindings) found.add(b.name);
+    }
+    // A LOCAL WRAPPER IS AN ALIAS WITH A BODY. `function check(s) { return
+    // isTenantAdmin(s); }` carries the verdict out under a new name without ever
+    // binding it, so no assignment form can see it. Judged on its RETURN
+    // EXPRESSIONS rather than its whole body — the body's own braces would put
+    // every statement below top level, and a wrapper that merely PASSES the
+    // verdict into the chokepoint (`return resolveWorkspaceAccessByOid(…,
+    // { tenantAdmin: isTenantAdmin(s) })`) is the V9 shape and must stay clean.
+    for (const [name, returns] of wrappers) {
+      if (!found.has(name) && returns.some((expr) => bears(expr))) found.add(name);
     }
     if (found.size === before) break;
   }
@@ -3438,9 +4036,11 @@ function adminVerdictAliases(masked, ref) {
  * `(text) => does this condition text turn on the admin verdict?`, for ONE
  * module. Takes RAW source and masks inside — see {@link adminVerdictBindings}.
  */
-function adminVerdictProbe(raw) {
-  const ref = adminVerdictReference(raw);
-  const aliases = adminVerdictAliases(mask(raw), ref);
+function adminVerdictProbe(raw, file = null, exporters = ADMIN_VERDICT_EXPORTERS) {
+  const ref = adminVerdictReference(raw, file, exporters);
+  const valueRef = adminVerdictReference(raw, file, exporters, { asValue: true });
+  const { namespaces } = adminVerdictBindings(raw, file, exporters);
+  const aliases = adminVerdictAliases(mask(raw), ref, namespaces, valueRef);
   const aliasRe = aliases.size
     ? new RegExp(`\\b(?:${[...aliases].map(escapeRe).join('|')})\\b`)
     : null;
@@ -3459,9 +4059,18 @@ function adminVerdictProbe(raw) {
  * applied here — it is applied by each caller — so the control can measure the
  * net's effect as a separate observation rather than folding it in.
  */
-function adminShapeFunctionsIn(raw) {
+function adminShapeFunctionsIn(rawIn, file = null, exporters = ADMIN_VERDICT_EXPORTERS) {
+  // NORMALISED HERE AND NOT ONLY AT THE READ (#4006 round 2). `readSource` puts
+  // {@link desugarStaticKeys} above every section, but the embedded controls
+  // below hand this function a source STRING, not a file — so with the
+  // normalisation only at the read they entered the pipeline one step BELOW the
+  // repair and V11/V12 failed while the identical file on the real tree exited 1.
+  // A control that cannot reach the code it controls is worse than no control.
+  // The pass is idempotent (it leaves no bracket-quote-bracket behind), so
+  // running it on already-normalised text costs time and changes nothing.
+  const raw = desugarStaticKeys(rawIn);
   const masked = mask(raw);
-  const isAdminBearing = adminVerdictProbe(raw);
+  const isAdminBearing = adminVerdictProbe(raw, file, exporters);
   const hits = [];
   for (const fn of declaredFunctions(masked)) {
     // Does THIS function grant on the admin flag? (Not "does this file".)
@@ -3618,7 +4227,251 @@ async function GET(_req: NextRequest, props: { params: Promise<{ id: string }> }
   return null;
 }`,
   },
+  // ── ROUND 2: the three indirections an independent verifier defeated this
+  // guard with, plus the members of their classes the verifier did not name.
+  //
+  // EVERY ROW BELOW WAS MEASURED AS A REAL FILE ON THE REAL TREE FIRST — written
+  // into `app/api/zzprobe/[id]/route.ts`, guard run, exit code recorded, file
+  // removed — and only then transcribed here. That ordering matters: a probe
+  // written from the fix rather than from the defect proves the fix agrees with
+  // itself. The recorded before/after for each is in the PR body.
+  //
+  // V11-V15 ARE ONE CLASS: a property NAME written between quotes is erased by
+  // `mask`, so every detector in this file goes blind at once.
+  // {@link desugarStaticKeys} normalises the access ABOVE all of them.
+  //
+  // WHICH ROWS ACTUALLY MEASURE THAT NORMALISATION, stated because the first
+  // draft of this comment claimed all five and MUTATION TESTING refuted it.
+  // Reverting `desugarStaticKeys` to a pass-through turns V11 and V12 RED and
+  // leaves V13 and V14 GREEN — V13 is already caught by the namespace rule's
+  // fail-closed `ns[` arm (a computed member access on the admin namespace
+  // counts whatever the key is), and V14 by the string-const env-name
+  // resolution. They are real controls of real mechanisms, they are simply
+  // controls of DIFFERENT mechanisms, and saying "all five move together" would
+  // have been a claim the tests do not establish. The mutation matrix in the PR
+  // body records which mutation moves which row.
+  {
+    label: 'V11 BRACKET env key — the notation the verifier defeated the guard with',
+    fn: 'assertWs',
+    seen: true,
+    src: `async function assertWs(session: SessionPayload, workspaceId: string): Promise<NextResponse | null> {
+  if (session.claims.oid === process.env['LOOM_TENANT_ADMIN_OID']) return null;
+  return NextResponse.json({ ok: false }, { status: 404 });
+}`,
+  },
+  {
+    label: 'V12 BRACKET env key, double-quoted — same class, a spelling nobody listed',
+    fn: 'assertWs',
+    seen: true,
+    src: `async function assertWs(session: SessionPayload, workspaceId: string): Promise<NextResponse | null> {
+  if (session.claims.oid === process.env["LOOM_TENANT_ADMIN_OID"]) return null;
+  return NextResponse.json({ ok: false }, { status: 404 });
+}`,
+  },
+  {
+    label: 'V13 BRACKET member call on the admin namespace — the same erasure, other receiver',
+    fn: 'assertWs',
+    seen: true,
+    src: `import * as gate from '@/lib/auth/feature-gate';
+async function assertWs(session: SessionPayload, workspaceId: string): Promise<NextResponse | null> {
+  if (gate['isTenantAdmin'](session)) return null;
+  return NextResponse.json({ ok: false }, { status: 404 });
+}`,
+  },
+  {
+    label: 'V14 BRACKET key held in a string CONST — the key is computed, the value is not',
+    fn: 'assertWs',
+    seen: true,
+    src: `const ADMIN_OID_ENV = 'LOOM_TENANT_ADMIN_OID';
+async function assertWs(session: SessionPayload, workspaceId: string): Promise<NextResponse | null> {
+  if (session.claims.oid === process.env[ADMIN_OID_ENV]) return null;
+  return NextResponse.json({ ok: false }, { status: 404 });
+}`,
+  },
+  {
+    label: 'V15 CONTROL — a bracket key on an UNRELATED env var must NOT be seen',
+    fn: 'assertWs',
+    seen: false,
+    src: `async function assertWs(session: SessionPayload, workspaceId: string): Promise<NextResponse | null> {
+  if (session.claims.oid === process.env['LOOM_SOME_OTHER_SETTING']) return null;
+  return NextResponse.json({ ok: false }, { status: 404 });
+}`,
+  },
+  // V16-V20 ARE ONE CLASS: a NAME the verdict flows into. The old rule matched
+  // exactly `const|let|var IDENT = expr` with the reference CALL-shaped, and
+  // every other binding form — and every uncalled reference — walked past it.
+  {
+    label: 'V16 DESTRUCTURE off the namespace — the verifier case (a)',
+    fn: 'assertWs',
+    seen: true,
+    src: `import * as gate from '@/lib/auth/feature-gate';
+const { isTenantAdmin: check } = gate;
+async function assertWs(session: SessionPayload, workspaceId: string): Promise<NextResponse | null> {
+  if (check(session)) return null;
+  return NextResponse.json({ ok: false }, { status: 404 });
+}`,
+  },
+  {
+    label: 'V17 LOCAL FUNCTION WRAPPER — an alias with a body, live on this tree',
+    fn: 'assertWs',
+    seen: true,
+    src: `import { isTenantAdmin } from '@/lib/auth/feature-gate';
+function check(s: SessionPayload) { return isTenantAdmin(s); }
+async function assertWs(session: SessionPayload, workspaceId: string): Promise<NextResponse | null> {
+  if (check(session)) return null;
+  return NextResponse.json({ ok: false }, { status: 404 });
+}`,
+  },
+  {
+    label: 'V18 BARE UNCALLED reference — the call is one line down, under the new name',
+    fn: 'assertWs',
+    seen: true,
+    src: `import { isTenantAdmin } from '@/lib/auth/feature-gate';
+const check = isTenantAdmin;
+async function assertWs(session: SessionPayload, workspaceId: string): Promise<NextResponse | null> {
+  if (check(session)) return null;
+  return NextResponse.json({ ok: false }, { status: 404 });
+}`,
+  },
+  {
+    label: 'V19 ARRAY PATTERN out of a container literal',
+    fn: 'assertWs',
+    seen: true,
+    src: `import { isTenantAdmin } from '@/lib/auth/feature-gate';
+const [check] = [isTenantAdmin];
+async function assertWs(session: SessionPayload, workspaceId: string): Promise<NextResponse | null> {
+  if (check(session)) return null;
+  return NextResponse.json({ ok: false }, { status: 404 });
+}`,
+  },
+  {
+    label: 'V20 SPREAD then destructure — the namespace boxed and unboxed',
+    fn: 'assertWs',
+    seen: true,
+    src: `import * as gate from '@/lib/auth/feature-gate';
+const { isTenantAdmin: check } = { ...gate };
+async function assertWs(session: SessionPayload, workspaceId: string): Promise<NextResponse | null> {
+  if (check(session)) return null;
+  return NextResponse.json({ ok: false }, { status: 404 });
+}`,
+  },
+  {
+    label: 'V21 CONTROL — destructuring a NON-verdict member off the same namespace',
+    fn: 'assertWs',
+    seen: false,
+    src: `import * as gate from '@/lib/auth/feature-gate';
+const { checkCapability: check } = gate;
+async function assertWs(session: SessionPayload, workspaceId: string): Promise<NextResponse | null> {
+  if (check(session)) return null;
+  return NextResponse.json({ ok: false }, { status: 404 });
+}`,
+  },
+  {
+    label: 'V22 CONTROL — a WRAPPER that routes through the chokepoint is not a verdict',
+    fn: 'assertWs',
+    seen: false,
+    src: `import { isTenantAdmin } from '@/lib/auth/feature-gate';
+async function check(oid: string, id: string, session: SessionPayload) {
+  return resolveWorkspaceAccessByOid(oid, id, {
+    callerTid: session.claims.tid,
+    tenantAdmin: isTenantAdmin(session),
+  });
+}
+async function assertWs(session: SessionPayload, workspaceId: string): Promise<NextResponse | null> {
+  if (await check(session.claims.oid, workspaceId, session)) return null;
+  return NextResponse.json({ ok: false }, { status: 404 });
+}`,
+  },
 ];
+
+/**
+ * THE RE-EXPORT CONTROLS, run against a SYNTHETIC module graph (#4006 round 2).
+ *
+ * These cannot be probes in the array above, because a barrel is a SECOND
+ * module and the array holds one source string per row. They pass an
+ * `exporters` map straight into the real {@link adminShapeFunctionsIn}, so the
+ * resolver, the alias fixed point and the value classifier under test are the
+ * ones the tree scan runs — only the graph is synthetic.
+ *
+ * Why a synthetic graph rather than a real barrel on the tree: the tree HAS no
+ * barrel re-exporting the verdict (measured — the closure names exactly one
+ * module, `lib/auth/feature-gate.ts`), so the tree cannot demonstrate the
+ * repair. That is the zero-population shape this file names as its worst
+ * failure mode, and the answer to it is a control whose verdict MOVES: delete
+ * the `exported.has(...)` arm from `adminVerdictBindings` and R2/R3 go RED.
+ */
+const REEXPORT_CONTROLS = (() => {
+  const BARREL = `${CONSOLE_ROOT}/lib/zz-barrel/index.ts`;
+  const DEEP = `${CONSOLE_ROOT}/lib/zz-deep/index.ts`;
+  const graph = new Map([
+    [`${CONSOLE_ROOT}/lib/auth/feature-gate.ts`, new Set([ADMIN_VERDICT_EXPORT])],
+    [BARREL, new Set(['isAdmin'])],
+    [DEEP, new Set(['isAdmin', 'gateOf'])],
+  ]);
+  const route = `${CONSOLE_ROOT}/app/api/zz/[id]/route.ts`;
+  return [
+    {
+      label: 'R1 RE-EXPORT HOP — `export { isTenantAdmin as isAdmin } from` one module over',
+      fn: 'assertWs',
+      seen: true,
+      graph,
+      file: route,
+      src: `import { isAdmin } from '@/lib/zz-barrel';
+async function assertWs(session: SessionPayload, workspaceId: string): Promise<NextResponse | null> {
+  if (isAdmin(session)) return null;
+  return NextResponse.json({ ok: false }, { status: 404 });
+}`,
+    },
+    {
+      label: 'R2 RE-EXPORT + RENAME LOCALLY — two renames, one verdict',
+      fn: 'assertWs',
+      seen: true,
+      graph,
+      file: route,
+      src: `import { isAdmin as mayPass } from '@/lib/zz-deep';
+async function assertWs(session: SessionPayload, workspaceId: string): Promise<NextResponse | null> {
+  if (mayPass(session)) return null;
+  return NextResponse.json({ ok: false }, { status: 404 });
+}`,
+    },
+    {
+      label: 'R3 RE-EXPORT reached as a NAMESPACE — the barrel is an admin module too',
+      fn: 'assertWs',
+      seen: true,
+      graph,
+      file: route,
+      src: `import * as barrel from '@/lib/zz-barrel';
+async function assertWs(session: SessionPayload, workspaceId: string): Promise<NextResponse | null> {
+  if (barrel.isAdmin(session)) return null;
+  return NextResponse.json({ ok: false }, { status: 404 });
+}`,
+    },
+    {
+      label: 'R4 CONTROL — a name the barrel does NOT re-export as the verdict',
+      fn: 'assertWs',
+      seen: false,
+      graph,
+      file: route,
+      src: `import { formatName } from '@/lib/zz-barrel';
+async function assertWs(session: SessionPayload, workspaceId: string): Promise<NextResponse | null> {
+  if (formatName(session)) return null;
+  return NextResponse.json({ ok: false }, { status: 404 });
+}`,
+    },
+    {
+      label: 'R5 CONTROL — a module NOT in the closure contributes nothing',
+      fn: 'assertWs',
+      seen: false,
+      graph,
+      file: route,
+      src: `import { isAdmin } from '@/lib/zz-unrelated';
+async function assertWs(session: SessionPayload, workspaceId: string): Promise<NextResponse | null> {
+  if (isAdmin(session)) return null;
+  return NextResponse.json({ ok: false }, { status: 404 });
+}`,
+    },
+  ];
+})();
 
 let adminVerdictProbesPassed = 0;
 for (const p of ADMIN_VERDICT_SHAPE_PROBES) {
@@ -3632,8 +4485,89 @@ for (const p of ADMIN_VERDICT_SHAPE_PROBES) {
       `${p.seen ? 'SEE' : 'NOT see'} \`${p.fn}\` and it did the opposite. This detector was keyed ` +
       'to the literal `isTenantAdmin(` spelling in a path condition, and five rewrites of one ' +
       'grant exited 0 on a new route file (#4006). Fix the detector, never the probe — and if a ' +
-      'CONTROL row (V9/V10) is the one that moved, the detector has been widened into accusing ' +
-      'the correct pattern, which is how a guard gets weakened out again.',
+      'CONTROL row (V9/V10/V15/V21/V22) is the one that moved, the detector has been widened into ' +
+      'accusing the correct pattern, which is how a guard gets weakened out again.',
+  );
+}
+
+let reexportControlsPassed = 0;
+for (const p of REEXPORT_CONTROLS) {
+  const seen = adminShapeFunctionsIn(p.src, p.file, p.graph).some((f) => f.name === p.fn);
+  if (seen === p.seen) {
+    reexportControlsPassed += 1;
+    continue;
+  }
+  fail(
+    `8h RE-EXPORT CONTROL ${p.label} — expected the admin-grant detector to ` +
+      `${p.seen ? 'SEE' : 'NOT see'} \`${p.fn}\` and it did the opposite. The verdict's identity is ` +
+      '"a module exports it", not "it came from this path", and that relation is TRANSITIVE — see ' +
+      'ADMIN_VERDICT_EXPORTERS. If R4/R5 moved, the closure has been widened into treating any ' +
+      'imported name as the verdict, which accuses correct code and gets the guard weakened out.',
+  );
+}
+
+// ── THE PREFILTER IS PART OF THE DETECTOR, so it is controlled like one ──────
+//
+// MEASURED, and the reason this block exists: with the re-export closure fully
+// working, a route importing the verdict through a barrel STILL exited 0,
+// because `ADMIN_VERDICT_PREFILTER` skipped the file one line before the closure
+// ran. The repair and the thing that silently discarded it were in different
+// functions, and only the repair had a control. So the filter now gets its own,
+// built from the SAME synthetic graph the rows above use: the token-only filter
+// must REJECT a barrel importer (that is the defect, reproduced) and the
+// closure-derived filter must ADMIT it (that is the repair).
+const PREFILTER_CONTROLS = (() => {
+  const graph = REEXPORT_CONTROLS[0].graph;
+  const derived = adminVerdictPrefilterFor(graph);
+  const rows = [
+    {
+      label: 'P1 the closure-derived prefilter ADMITS every barrel importer the closure catches',
+      got: REEXPORT_CONTROLS.filter((r) => r.seen).every((r) => derived.test(r.src)),
+      want: true,
+    },
+    {
+      label: 'P2 DISCRIMINATION — the token-only filter REJECTS those same modules',
+      got: REEXPORT_CONTROLS.filter((r) => r.seen).some((r) => ADMIN_VERDICT_TOKENS.test(r.src)),
+      want: false,
+    },
+    {
+      label: 'P3 the live prefilter still admits every direct namer of the floor name',
+      got: ADMIN_VERDICT_PREFILTER.test('if (isTenantAdmin(session)) return null;'),
+      want: true,
+    },
+    {
+      label: 'P4 CONTROL — an unrelated module is still skipped',
+      got: ADMIN_VERDICT_PREFILTER.test('export function sum(a: number, b: number) { return a + b; }'),
+      want: false,
+    },
+    {
+      // WITHOUT THIS ROW P1-P4 ARE DECORATIVE, and that was MEASURED: replacing
+      // the live constant with the token-only regex left all four GREEN and the
+      // guard at RC=0, because P1/P2 call the DERIVATION directly and never
+      // touch the constant the tree scan actually consults. This row pins the
+      // wiring, so "the derivation is correct" and "the scan uses it" are both
+      // asserted rather than one standing in for the other.
+      label: 'P5 WIRING — the live prefilter IS the derivation applied to the live closure',
+      got: ADMIN_VERDICT_PREFILTER.source ===
+           adminVerdictPrefilterFor(ADMIN_VERDICT_EXPORTERS).source,
+      want: true,
+    },
+  ];
+  return rows;
+})();
+
+let prefilterControlsPassed = 0;
+for (const p of PREFILTER_CONTROLS) {
+  if (p.got === p.want) {
+    prefilterControlsPassed += 1;
+    continue;
+  }
+  fail(
+    `8h PREFILTER CONTROL ${p.label} — expected ${p.want} and got ${p.got}. A cheap filter in ` +
+      'front of a repaired detector is where a repair goes to die: this exact combination ' +
+      '(closure working, filter stale) exited 0 over a live cross-tenant grant. If P2 moved, the ' +
+      'control has stopped discriminating and P1 proves nothing; if P4 moved, the filter has been ' +
+      'widened into the whole tree and is no longer a filter.',
   );
 }
 
@@ -3987,7 +4921,7 @@ const adminShapePinnedEntries = [...ADMIN_SHAPE_UNSCOPED.values()].filter(
 const adminShapeUnscopedSeen = new Set();
 for (const file of files) {
   const rel = file.slice(CONSOLE_ROOT.length + 1);
-  const src = readFileSync(file, 'utf8');
+  const src = readSource(file);
   // THE FILE PREFILTER IS A SUPERSET OF THE PROBE, NOT A SECOND SPELLING (#4006).
   // This was `ISADMIN.test(src)`, which skipped the whole file when the grant
   // was re-derived from `process.env.LOOM_TENANT_ADMIN_OID` — no token, no scan,
@@ -3995,7 +4929,7 @@ for (const file of files) {
   // {@link ADMIN_VERDICT_PREFILTER} for why this cannot discard a probe hit.
   if (!ADMIN_VERDICT_PREFILTER.test(src)) continue;
   const masked = mask(src);
-  for (const fn of adminShapeFunctionsIn(src)) {
+  for (const fn of adminShapeFunctionsIn(src, file)) {
     adminShapeFunctions += 1;
     const line = masked.slice(0, fn.declAt).split('\n').length;
     if (!ADMIN_GRANT_SCOPE.test(fn.params)) {
@@ -4354,7 +5288,7 @@ let adminVerdictFreeChecked = 0;
 for (const [rel, spec] of ADMIN_VERDICT_FREE_ROUTES) {
   let src;
   try {
-    src = readFileSync(`${CONSOLE_ROOT}/${rel}`, 'utf8');
+    src = readSource(`${CONSOLE_ROOT}/${rel}`);
   } catch {
     fail(
       `ADMIN_VERDICT_FREE_ROUTES entry \`${rel}\` names a file that does not exist. If the route ` +
@@ -4797,7 +5731,7 @@ const tidPinsUsed = new Set();
 const tidComparisonCensus = [];
 for (const file of files) {
   const rel = file.slice(CONSOLE_ROOT.length + 1);
-  const src = readFileSync(file, 'utf8');
+  const src = readSource(file);
   if (!/\btid\b|Tid\b/.test(src)) continue;
   const masked = mask(src);
   const eq = /!==|===|!=|==/g;
@@ -4962,7 +5896,7 @@ const TENANT_BOUNDARY_FILE = `${CONSOLE_ROOT}/lib/auth/tenant-boundary.ts`;
 const TENANT_COMPARISON_EXPORTS = (() => {
   const out = new Set();
   try {
-    for (const fn of exportedFunctions(mask(readFileSync(TENANT_BOUNDARY_FILE, 'utf8')))) {
+    for (const fn of exportedFunctions(mask(readSource(TENANT_BOUNDARY_FILE)))) {
       if (/\bTenantMatch\b|\bboolean\b/.test(fn.returnType || '')) out.add(fn.name);
     }
   } catch (e) {
@@ -5151,7 +6085,7 @@ for (const [rel, pin] of TID_COMPARISON_PINS) {
     const file = `${CONSOLE_ROOT}/${rel}`;
     let consolidated = false;
     try {
-      consolidated = importsTenantBoundary(readFileSync(file, 'utf8'));
+      consolidated = importsTenantBoundary(readSource(file));
     } catch {
       consolidated = false; // the file is gone — that is not a consolidation
     }
@@ -5317,7 +6251,12 @@ console.log(`[tid-boundary-chokepoint]   walk-filter controls passed: ` +
             'under app/ or lib/ today, so the tree scan reports the same numbers either way); ' +
             `admin-verdict SHAPE controls passed: ${adminVerdictProbesPassed}/` +
             `${ADMIN_VERDICT_SHAPE_PROBES.length} (#4006 — hoist / alias / namespace / env / ` +
-            'ternary, each asserted to be SEEN and the safe chokepoint-input shape asserted NOT to be)');
+            'ternary / bracket-notation / destructure / wrapper / bare-reference, each asserted ' +
+            'to be SEEN and five safe shapes asserted NOT to be); ' +
+            `re-export closure controls passed: ${reexportControlsPassed}/` +
+            `${REEXPORT_CONTROLS.length} over a SYNTHETIC module graph (the tree's closure names ` +
+            `${ADMIN_VERDICT_EXPORTERS.size} module(s), so the tree cannot demonstrate a barrel hop); ` +
+            `prefilter controls passed: ${prefilterControlsPassed}/${PREFILTER_CONTROLS.length}`);
 // THE UNRESOLVED ENTRIES ARE PRINTED, NOT MERELY COMMENTED. Review measured that
 // the previous run's stdout contained neither `folders` nor `UNRESOLVED` — only
 // the aggregate "11 outside lib/auth" — while the PR body claimed the finding was
