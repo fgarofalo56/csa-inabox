@@ -1,0 +1,101 @@
+[
+ {
+  "id": "/subscriptions/00000000-0000-0000-0000-000000000000/providers/Microsoft.Resources/deployments/csa-loom-ci-32806407520/operations/825114D28B9B9D45",
+  "operationId": "825114D28B9B9D45",
+  "properties": {
+   "duration": "PT10M53.7565055S",
+   "provisioningOperation": "Create",
+   "provisioningState": "Failed",
+   "request": null,
+   "response": null,
+   "serviceRequestId": null,
+   "statusCode": "Conflict",
+   "statusMessage": {
+    "error": {
+     "additionalInfo": null,
+     "code": "DeploymentFailed",
+     "details": [
+      {
+       "additionalInfo": null,
+       "code": "ResourceDeploymentFailure",
+       "details": [
+        {
+         "additionalInfo": null,
+         "code": "DeploymentFailed",
+         "details": [
+          {
+           "additionalInfo": null,
+           "code": "BadRequest",
+           "details": [
+            {
+             "additionalInfo": null,
+             "code": "RootActivityId",
+             "details": null,
+             "message": "aaaaaaaa-bbbb-cccc-dddd-000000000001",
+             "target": null
+            },
+            {
+             "additionalInfo": null,
+             "code": "Param1",
+             "details": null,
+             "message": "aasloomfixturesuffix",
+             "target": null
+            }
+           ],
+           "message": "The server 'aasloomfixturesuffix' is currently being updated. Please try again later.",
+           "target": null
+          }
+         ],
+         "message": "At least one resource deployment operation failed. Please list deployment operations for details. Please see https://aka.ms/arm-deployment-operations for usage details.",
+         "target": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-csa-loom-admin-centralus/providers/Microsoft.Resources/deployments/aas-server"
+        }
+       ],
+       "message": "The resource write operation failed to complete successfully, because it reached terminal provisioning state 'Failed'.",
+       "target": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-csa-loom-admin-centralus/providers/Microsoft.Resources/deployments/aas-server"
+      }
+     ],
+     "message": "At least one resource deployment operation failed. Please list deployment operations for details. Please see https://aka.ms/arm-deployment-operations for usage details.",
+     "target": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-csa-loom-admin-centralus/providers/Microsoft.Resources/deployments/admin-plane"
+    },
+    "status": "Failed"
+   },
+   "targetResource": {
+    "apiVersion": null,
+    "extension": null,
+    "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-csa-loom-admin-centralus/providers/Microsoft.Resources/deployments/admin-plane",
+    "identifiers": null,
+    "resourceGroup": "rg-csa-loom-admin-centralus",
+    "resourceName": "admin-plane",
+    "resourceType": "Microsoft.Resources/deployments",
+    "symbolicName": null
+   },
+   "timestamp": "2026-08-25T04:08:29.327517+00:00",
+   "trackingId": "aaaaaaaa-bbbb-cccc-dddd-000000000002"
+  }
+ },
+ {
+  "id": "/subscriptions/00000000-0000-0000-0000-000000000000/providers/Microsoft.Resources/deployments/csa-loom-ci-32806407520/operations/EC6948F47599E023",
+  "operationId": "EC6948F47599E023",
+  "properties": {
+   "duration": "PT2.3715965S",
+   "provisioningOperation": "Create",
+   "provisioningState": "Succeeded",
+   "request": null,
+   "response": null,
+   "serviceRequestId": null,
+   "statusCode": "OK",
+   "statusMessage": null,
+   "targetResource": {
+    "apiVersion": null,
+    "extension": null,
+    "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-csa-loom-admin-centralus",
+    "identifiers": null,
+    "resourceName": "rg-csa-loom-admin-centralus",
+    "resourceType": "Microsoft.Resources/resourceGroups",
+    "symbolicName": null
+   },
+   "timestamp": "2026-08-25T04:08:29.327517+00:00",
+   "trackingId": "aaaaaaaa-bbbb-cccc-dddd-000000000003"
+  }
+ }
+]

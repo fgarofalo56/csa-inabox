@@ -1229,13 +1229,30 @@ test('MUTATION PROOF — a drill-down that reads NOTHING contributes nothing, an
   const d = armDrilldown(args, armFixtureRunner); // fixture miss -> az DeploymentNotFound
   assert.equal(d.result.status, 'unreadable');
   assert.equal(d.classifyText, '', 'an unreadable drill-down must not reach the classifier');
-  // The R7 trap this guards: az's OWN failure text matches a taxonomy signal.
+
+  // THE R7 TRAP THIS GUARDS: az's OWN failure text can carry a taxonomy signal,
+  // so feeding it to the classifier would attribute az's problem to the deploy.
+  //
+  // This used to be demonstrated with THIS fixture's own DeploymentNotFound
+  // text, because `could not be found` was a bare substring on
+  // config.resource-group-not-found and az's not-found therefore rendered a
+  // RESOURCE-GROUP remediation. #4076 removed that over-match — it was
+  // mis-classifying an ACA vnet error too — so this string is now correctly
+  // unknown, and the demonstration needs a text that genuinely matches.
   assert.equal(
     classify(d.rendered).signalId,
-    'config.resource-group-not-found',
-    "az's not-found text does match a signal — which is exactly why it must never be fed in",
+    null,
+    'after #4076, az DeploymentNotFound no longer borrows a resource-group remediation',
   );
-  // …and because classifyText is empty, the real verdict is untouched.
+  assert.notEqual(
+    classify('ERROR: (AuthorizationFailed) The client does not have authorization').class,
+    'unknown',
+    "az failure text CAN carry a signal — which is why an unreadable drill-down must never be fed in",
+  );
+
+  // …and because classifyText is empty, the real verdict is untouched. This is
+  // the assertion that actually pins the contract: whatever az said, an
+  // unreadable drill-down contributes nothing.
   assert.equal(classify(`${MYSTERY}${d.classifyText}`).class, 'unknown');
 });
 
@@ -1325,6 +1342,48 @@ test('D6: an empty leaf set refuses to decide rather than inventing a verdict', 
   const d = decideRetryForLeaves({ ...leafBudget, leafDiagnoses: [] });
   assert.equal(d.retry, false);
   assert.match(d.reason, /no ARM leaves/);
+});
+
+// ── #3948: the AAS envelope, from ARM shape to retry decision ────────────────
+// Run 32806407520 exited 17 on "2 ARM leaf(s) could not be classified
+// (RootActivityId → unknown; Param1 → unknown)". Both halves of that are pinned
+// here: the leaves the OLD walk produced still fail closed, and the ONE leaf the
+// fixed walk produces is retried. This is the last link in the chain — the
+// drill-down and the taxonomy are only worth anything if the decision moves.
+
+const LEAF_AAS_MID_UPDATE = {
+  code: 'BadRequest',
+  message: "The server '<aas-server>' is currently being updated. Please try again later.",
+  resourceType: 'Microsoft.AnalysisServices/servers',
+  resourceName: '<aas-server>',
+};
+const LEAVES_AAS_ANNOTATIONS_ONLY = [
+  { code: 'RootActivityId', message: '<guid>', resourceType: 'Microsoft.AnalysisServices/servers', resourceName: '<aas-server>' },
+  { code: 'Param1', message: '<aas-server>', resourceType: 'Microsoft.AnalysisServices/servers', resourceName: '<aas-server>' },
+];
+
+test('#3948: the AAS mid-update leaf IS retried (the run failed closed on attempt 1)', () => {
+  const d = decideRetryForLeaves({ ...leafBudget, leafDiagnoses: classifyLeaves([LEAF_AAS_MID_UPDATE]) });
+  assert.equal(d.retry, true, 'a lone transient mid-update leaf must be retried');
+});
+
+test('#3948: the annotations the OLD walk emitted still fail closed', () => {
+  // The control. Adding the taxonomy signal must NOT make a correlation id and
+  // a format argument look like a diagnosis — the fix has to be the WALK.
+  const d = decideRetryForLeaves({ ...leafBudget, leafDiagnoses: classifyLeaves(LEAVES_AAS_ANNOTATIONS_ONLY) });
+  assert.equal(d.retry, false);
+  assert.match(d.reason, /could not be classified/);
+  assert.match(d.reason, /RootActivityId/);
+  assert.match(d.reason, /Param1/);
+});
+
+test('#3948: a mid-update leaf beside a deterministic one is still NOT retried', () => {
+  const d = decideRetryForLeaves({
+    ...leafBudget,
+    leafDiagnoses: classifyLeaves([LEAF_AAS_MID_UPDATE, LEAF_DEFECT]),
+  });
+  assert.equal(d.retry, false, 'a deterministic leaf makes the whole re-deploy futile');
+  assert.match(d.reason, /InvalidTemplate.*defect/);
 });
 
 test('D6: a capacity leaf elevates the backoff base to the taxonomy 300s; non-retryable leaves do not', () => {
