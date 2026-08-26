@@ -935,3 +935,334 @@ test('MUTATION: defaulting an unrecognised state resurrects the false NOT ATTEMP
   assert.equal(syntheticMonitorVerdict(i).verdict, 'journeys-failed');
 });
 
+
+// ------------------------------- (h) THE CORRELATION CONTRACT, AND THE CLI'S
+//                                     OWN DEFAULTS
+//
+// Round 2 made execution-correlation the load-bearing control: it is the only
+// thing standing between "a UAT_REAL_FAILS row exists" and "THIS execution's
+// journeys failed". Round 3 measured how well the suite actually held it, by
+// mutating the module and re-running: 17 independent arms, 8 of which SURVIVED
+// a fully green 41/41. Three classes of survivor mattered, and this section is
+// each of them, with the mutant that used to live through it named in-place.
+//
+//   1. Correlation matched by PREFIX instead of exactly. The fixtures were
+//      'e1' vs 'e0-previous' — neither is a prefix of the other, so the pair
+//      could not tell `s === execution` from `execution.startsWith(s)`. That
+//      is not a hypothetical drift: the QUERY deliberately uses
+//      `ContainerGroupName_s startswith '$EXEC'` (replicas are
+//      <execution>-<suffix>), so "make the comparison match the query" is the
+//      most likely wrong turn a future editor takes — and it re-opens exactly
+//      the cross-execution promotion round 2 closed, because the JOB NAME is a
+//      prefix of every execution this job has ever run.
+//   2. The CLI's DEFAULTS. Every (d) test calls syntheticMonitorVerdict()
+//      with correlatedTo spelled out, which by construction cannot detect that
+//      the CLI hands it the wrong thing. Measured: the uat side's default was
+//      pinned, the journeys side's was not, so `?? a.execution` (silent
+//      self-correlation — every row correlates to the run reading it) survived
+//      green. Same for the query STATES: defaulting an unsupplied state to
+//      'zero-rows'/'rows' asserts a measurement about a query that never ran,
+//      which is this module's founding R7 error, and nothing caught it.
+//   3. UAT_FAIL's word boundaries. REAL_FAILS_LINE's were pinned; the sibling
+//      regex's were not.
+//
+// Every test below is paired with a POSITIVE control on the same inputs, so a
+// green can never mean "the module refuses everything".
+
+/** A realistic execution name, and the JOB NAME that is a prefix of it. */
+const JOB = 'loom-synthetic-monitor';
+const EXEC_H = `${JOB}-06cuztq`;
+
+/** journeys rows carrying one real-failure line, scoped to `scopedTo`. */
+const withJourneyRealFail = (scopedTo) => ({
+  status: 'Failed',
+  execution: EXEC_H,
+  jobName: JOB,
+  resourceGroup: 'rg-csa-loom-admin-centralus',
+  uat: { state: 'zero-rows', line: null, rc: 0 },
+  journeys: {
+    state: 'rows',
+    lines: ['UAT_REAL_FAILS app=console crashes=[j3-editor] empties=[] infraGatedSteps=0'],
+    rc: 0,
+    correlatedTo: scopedTo,
+  },
+});
+
+test('(h) correlation is an EXACT match — the JOB NAME is a prefix of every execution and must NOT correlate', () => {
+  // The shape that matters live: a query scoped only to the job name would
+  // hand back rows from any of the ~12 executions inside a 2h window, and its
+  // honest correlation token is the job name — which is a PREFIX of the
+  // execution under test.
+  const byJobName = syntheticMonitorVerdict(withJourneyRealFail(JOB));
+  assert.equal(byJobName.verdict, 'unknown', 'a job-name-scoped row must not become this execution s failure');
+  assert.equal(byJobName.reason, 'uncorrelated-evidence');
+  assert.doesNotMatch(byJobName.message, /JOURNEYS FAILED/);
+
+  // ...and the other direction: a token that merely EXTENDS the execution name
+  // (a replica name, say) is also not the execution.
+  const byReplica = syntheticMonitorVerdict(withJourneyRealFail(`${EXEC_H}-xhk2p`));
+  assert.equal(byReplica.verdict, 'unknown');
+  assert.equal(byReplica.reason, 'uncorrelated-evidence');
+
+  // POSITIVE CONTROL — the exact token still promotes, so the two reds above
+  // are about exactness and not about a gate that refuses everything.
+  const exact = syntheticMonitorVerdict(withJourneyRealFail(EXEC_H));
+  assert.equal(exact.verdict, 'journeys-failed');
+  assert.match(exact.message, /JOURNEYS FAILED/);
+});
+
+test('(h) MUTATION: prefix-matching correlation resurrects the cross-execution promotion', async () => {
+  // Both directions of the loosening, because they are different edits and the
+  // old fixture pair ('e1' / 'e0-previous') was blind to each of them.
+  const needle = "  return s === execution && execution !== '' && execution !== UNKNOWN_EXECUTION;";
+
+  const wide = await mutantOf(
+    needle,
+    "  return execution.startsWith(s) && execution !== '' && execution !== UNKNOWN_EXECUTION; // MUTANT",
+    'corrprefix',
+  );
+  assert.equal(
+    wide.syntheticMonitorVerdict(withJourneyRealFail(JOB)).verdict,
+    'journeys-failed',
+    'the mutant must promote a job-name-scoped row',
+  );
+  assert.equal(syntheticMonitorVerdict(withJourneyRealFail(JOB)).verdict, 'unknown', 'the real module must not');
+
+  const narrow = await mutantOf(
+    needle,
+    "  return s.startsWith(execution) && execution !== '' && execution !== UNKNOWN_EXECUTION; // MUTANT",
+    'corrextend',
+  );
+  const replicaToken = `${EXEC_H}-xhk2p`;
+  assert.equal(
+    narrow.syntheticMonitorVerdict(withJourneyRealFail(replicaToken)).verdict,
+    'journeys-failed',
+    'the mutant must promote an extended token',
+  );
+  assert.equal(syntheticMonitorVerdict(withJourneyRealFail(replicaToken)).verdict, 'unknown');
+});
+
+test('(h) UAT_FAIL needs whole-token boundaries too, not just UAT_REAL_FAILS', () => {
+  const base = () => ({
+    status: 'Failed',
+    execution: EXEC_H,
+    jobName: JOB,
+    uat: { state: 'zero-rows', line: null, rc: 0 },
+    journeys: { state: 'rows', rc: 0, correlatedTo: EXEC_H, lines: [] },
+  });
+
+  // A line that merely CONTAINS the token inside a longer word is a different
+  // field, exactly as `xrealFails=3` is.
+  const embedded = base();
+  embedded.journeys.lines = ['synthetic J2 warehouse ok NOUAT_FAIL residue'];
+  const r = syntheticMonitorVerdict(embedded);
+  assert.equal(r.verdict, 'unknown');
+  assert.equal(r.reason, 'no-real-fail-markers', 'an embedded token was counted as a UAT_FAIL');
+
+  // POSITIVE CONTROL — a properly delimited UAT_FAIL still registers, and moves
+  // the reason to the gated-only branch.
+  const real = base();
+  real.journeys.lines = ['UAT_FAIL synthetic-journeys.uat.ts:210 > J4 :: LOOM_WAREHOUSE_BACKEND not set'];
+  assert.equal(syntheticMonitorVerdict(real).reason, 'gated-fails-only');
+});
+
+test('(h) MUTATION: a boundary-free UAT_FAIL regex counts an embedded token', async () => {
+  const mutant = await mutantOf(
+    "const ANY_FAIL_LINE = /(?:^|\\s)UAT_FAIL\\s/;",
+    'const ANY_FAIL_LINE = /UAT_FAIL/; // MUTANT: no word boundaries',
+    'anyfail',
+  );
+  const i = {
+    status: 'Failed',
+    execution: EXEC_H,
+    jobName: JOB,
+    uat: { state: 'zero-rows', line: null, rc: 0 },
+    journeys: { state: 'rows', rc: 0, correlatedTo: EXEC_H, lines: ['synthetic J2 ok NOUAT_FAIL residue'] },
+  };
+  assert.equal(mutant.syntheticMonitorVerdict(i).reason, 'gated-fails-only', 'the mutant must miscount');
+  assert.equal(syntheticMonitorVerdict(i).reason, 'no-real-fail-markers', 'the real module must not');
+});
+
+// ---- the CLI's own defaults. These drive the REAL entry point with the flags
+// ---- OMITTED, which is the only way to observe what it substitutes.
+
+test('(h) CLI: the JOURNEYS correlation default is ABSENT, never the execution under test', () => {
+  // The uat side of this was already pinned; the journeys side was not, and
+  // `?? a.execution` (every row silently correlates to whoever is reading it)
+  // survived a green suite.
+  const dir = mkdtempSync(join(tmpdir(), 'synthmon-jdefault-'));
+  const jFile = join(dir, 'j.txt');
+  writeFileSync(jFile, 'UAT_REAL_FAILS app=console crashes=[j3-editor] empties=[] infraGatedSteps=0\n');
+  const args = [SCRIPT, '--status', 'Failed', '--execution', EXEC_H, '--uat-state', 'zero-rows',
+    '--journeys-state', 'rows', '--journeys-file', jFile];
+
+  const bare = spawnSync(process.execPath, args, { encoding: 'utf8' });
+  assert.equal(bare.status, 1, `stdout:\n${bare.stdout}\nstderr:\n${bare.stderr}`);
+  assert.match(bare.stdout, /UNKNOWN/);
+  assert.doesNotMatch(bare.stdout, /JOURNEYS FAILED/);
+  assert.match(bare.stdout, /DISCARDED/);
+
+  // POSITIVE CONTROL — supplying the token on the same command line promotes.
+  const corr = spawnSync(process.execPath, [...args, '--journeys-correlation', EXEC_H], { encoding: 'utf8' });
+  assert.equal(corr.status, 1);
+  assert.match(corr.stdout, /JOURNEYS FAILED/);
+});
+
+test('(h) CLI: an unsupplied query state is NOT ATTEMPTED — never a measurement nobody took', () => {
+  // Both files are supplied and both correlate; ONLY the states are omitted.
+  // So if a default ever becomes a data state the lines below get promoted,
+  // and if it becomes 'zero-rows' the module reports a query that never ran as
+  // having returned nothing.
+  const dir = mkdtempSync(join(tmpdir(), 'synthmon-statedefault-'));
+  const uatFile = join(dir, 'uat.txt');
+  const jFile = join(dir, 'j.txt');
+  writeFileSync(uatFile, 'UAT_RESULT pass=4 fail=2 skip=0 realFails=2 infraGated=0\n');
+  writeFileSync(jFile, 'UAT_REAL_FAILS app=console crashes=[j3-editor] empties=[] infraGatedSteps=0\n');
+
+  const r = spawnSync(
+    process.execPath,
+    [SCRIPT, '--status', 'Failed', '--execution', EXEC_H,
+      '--uat-file', uatFile, '--uat-correlation', EXEC_H,
+      '--journeys-file', jFile, '--journeys-correlation', EXEC_H],
+    { encoding: 'utf8' },
+  );
+  assert.equal(r.status, 1, `stdout:\n${r.stdout}\nstderr:\n${r.stderr}`);
+  assert.match(r.stdout, /UAT_RESULT query was NOT ATTEMPTED/);
+  assert.match(r.stdout, /Per-journey query was NOT ATTEMPTED/);
+  assert.doesNotMatch(r.stdout, /JOURNEYS FAILED/);
+  assert.doesNotMatch(r.stdout, /realFails=2/);
+});
+
+test('(h) CLI: a valueless flag does not swallow the NEXT flag as its value', () => {
+  // `--uat-correlation` with nothing after it (the shape a future edit produces
+  // by dropping the quotes around an empty $UAT_CORR) must not consume
+  // `--journeys-state`, or the journeys side silently reverts to NOT ATTEMPTED
+  // while the run still reports a state it was handed.
+  const dir = mkdtempSync(join(tmpdir(), 'synthmon-argv-'));
+  const uatFile = join(dir, 'uat.txt');
+  writeFileSync(uatFile, 'UAT_RESULT pass=4 fail=2 skip=0 realFails=2 infraGated=0\n');
+  const r = spawnSync(
+    process.execPath,
+    [SCRIPT, '--status', 'Failed', '--execution', EXEC_H, '--uat-state', 'row', '--uat-file', uatFile,
+      '--uat-correlation', '--journeys-state', 'zero-rows'],
+    { encoding: 'utf8' },
+  );
+  assert.equal(r.status, 1, `stdout:\n${r.stdout}\nstderr:\n${r.stderr}`);
+  // The journeys state SURVIVED the valueless flag ahead of it.
+  assert.match(r.stdout, /Per-journey query succeeded with ZERO ROWS/);
+  // ...and the uat row is uncorrelated (its token became the literal 'true'),
+  // so it is discarded rather than promoted.
+  assert.doesNotMatch(r.stdout, /JOURNEYS FAILED/);
+});
+
+// ---- and the other half of the wiring: the workflow must hand the module
+// ---- every input it READS, not just the ones someone remembered to list.
+
+/**
+ * The module's real CLI input contract, DERIVED from its source rather than
+ * transcribed. A hand-kept list is a second thing to forget — and forgetting
+ * it is the defect this test exists for, so it must not be the mechanism.
+ */
+function moduleInputFlags() {
+  const src = readFileSync(SCRIPT, 'utf8');
+  const flags = new Set();
+  for (const m of src.matchAll(/\ba\['([a-z0-9-]+)'\]/g)) flags.add(m[1]);
+  for (const m of src.matchAll(/\ba\.([a-zA-Z][a-zA-Z0-9]*)/g)) flags.add(m[1]);
+  return [...flags].sort();
+}
+
+/** Which of `flags` the invocation never passes. */
+const missingFlags = (cmd, flags) => flags.filter((f) => !cmd.includes(`--${f} `));
+
+test('(h) the workflow hands the module EVERY input it reads', () => {
+  // MEASURED gap this closes: section (g) pinned the states and the correlation
+  // tokens, but not the PAYLOAD flags — so deleting `--journeys-file "$J_FILE"`
+  // from the production invocation left all 48 tests green. The consequence is
+  // not a smaller verdict, it is a dead one: with no journey file the module
+  // can never see a UAT_REAL_FAILS line again, so every future run resolves to
+  // `unknown`/`no-journey-data` and the monitor silently loses real-failure
+  // detection entirely, with every gate still green. That is the hollow-control
+  // shape, one level out from the module.
+  const flags = moduleInputFlags();
+  // Population control FIRST: a derivation that quietly returns [] would make
+  // the loop below pass vacuously, which is the same defect wearing a hat.
+  assert.ok(flags.length >= 12, `derived only ${flags.length} input flags: ${JSON.stringify(flags)}`);
+  for (const required of ['uat-file', 'journeys-file', 'uat-state', 'journeys-state',
+    'uat-correlation', 'journeys-correlation', 'status', 'execution']) {
+    assert.ok(flags.includes(required), `the derivation lost --${required}; it is no longer watching`);
+  }
+
+  const cmd = invocationCommand(activeLines(workflowText()));
+  assert.ok(cmd, 'no invocation found');
+  assert.deepEqual(
+    missingFlags(cmd, flags),
+    [],
+    'the module reads these inputs and the workflow never passes them',
+  );
+});
+
+test('(h) MUTATION: dropping ANY single input flag from the invocation is detected', () => {
+  const flags = moduleInputFlags();
+  const cmd = invocationCommand(activeLines(workflowText()));
+
+  // Every flag individually, so this cannot pass because one loud one is
+  // covered while the quiet ones are not.
+  for (const f of flags) {
+    const broken = cmd.replace(`--${f} `, `--renamed-${f} `);
+    assert.notEqual(broken, cmd, `mutation for --${f} was a no-op`);
+    assert.deepEqual(
+      missingFlags(broken, flags),
+      [f],
+      `dropping --${f} from the invocation is not detected`,
+    );
+  }
+
+  // ...and the real invocation is clean, so none of the reds above comes from
+  // a predicate that simply never passes.
+  assert.deepEqual(missingFlags(cmd, flags), []);
+});
+
+test('(h) every input the workflow passes is a QUOTED shell variable, never a literal', () => {
+  // Two defects in one property.
+  //
+  //   1. A hardcoded value. `--journeys-state rows` or `--job loom-monitor`
+  //      keeps the flag present (so the contract test above still passes) while
+  //      detaching it from what the run actually measured — a measurement
+  //      asserted regardless of what happened, which is this module's founding
+  //      R7 error moved to the call site.
+  //   2. An UNQUOTED expansion. `--uat-correlation $UAT_CORR` with an empty
+  //      UAT_CORR does not pass an empty argument, it passes NOTHING — the flag
+  //      becomes valueless and swallows the flag after it. The CLI-side of that
+  //      is covered above; this is the side that produces it.
+  const flags = moduleInputFlags();
+  const cmd = invocationCommand(activeLines(workflowText()));
+  assert.ok(cmd, 'no invocation found');
+  assert.ok(flags.length >= 12, `derived only ${flags.length} input flags`);
+
+  const notVariableFed = flags.filter((f) => !cmd.includes(`--${f} "$`));
+  assert.deepEqual(
+    notVariableFed,
+    [],
+    'these inputs are not fed by a quoted shell variable (hardcoded, or unquoted and therefore droppable)',
+  );
+});
+
+test('(h) MUTATION: hardcoding or unquoting any input is detected', () => {
+  const flags = moduleInputFlags();
+  const cmd = invocationCommand(activeLines(workflowText()));
+  const notVariableFed = (c) => flags.filter((f) => !c.includes(`--${f} "$`));
+
+  for (const f of flags) {
+    // Hardcoded literal in place of the variable.
+    const hard = cmd.replace(new RegExp(`--${f} "\\$[A-Z_]+"`), `--${f} a-literal-value`);
+    assert.notEqual(hard, cmd, `hardcode mutation for --${f} was a no-op`);
+    assert.deepEqual(notVariableFed(hard), [f], `a hardcoded --${f} is not detected`);
+
+    // Same variable, quotes removed — the empty-value argv shift.
+    const bare = cmd.replace(new RegExp(`--${f} "(\\$[A-Z_]+)"`), `--${f} $1`);
+    assert.notEqual(bare, cmd, `unquote mutation for --${f} was a no-op`);
+    assert.deepEqual(notVariableFed(bare), [f], `an unquoted --${f} is not detected`);
+  }
+
+  assert.deepEqual(notVariableFed(cmd), [], 'the real invocation must be clean');
+});
