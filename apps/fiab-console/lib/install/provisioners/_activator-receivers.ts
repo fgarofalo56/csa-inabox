@@ -103,6 +103,8 @@ export const MONITOR_CONFIG_EMAIL_FIELDS = ['to'] as const;
 export const MONITOR_CONFIG_WEBHOOK_FIELDS = ['webhookUrl', 'url', 'triggerUrl', 'serviceUri'] as const;
 /** `action.config.*` fields `ruleSmsReceivers` reads. */
 export const MONITOR_CONFIG_SMS_FIELDS = ['phoneNumber', 'phone'] as const;
+/** `action.config.*` fields `ruleLogicAppReceivers` reads. Both are required. */
+export const MONITOR_CONFIG_LOGIC_APP_FIELDS = ['logicAppResourceId', 'callbackUrl'] as const;
 
 /**
  * `action.config.*` fields a BUNDLE author naturally uses for recipients that
@@ -112,13 +114,94 @@ export const MONITOR_CONFIG_SMS_FIELDS = ['phoneNumber', 'phone'] as const;
  */
 const LIFTABLE_CONFIG_EMAIL_FIELDS = ['recipients', 'emails', 'email', 'recipient', 'notify', 'notifyEmails'] as const;
 
+/**
+ * THE DESTINATION SURFACE — every field on a rule's `action` whose value, if
+ * present, is a place an alert is supposed to arrive. This is the single table
+ * the classifier below drives off, so a field can never be READ without being
+ * ACCOUNTED FOR: {@link normalizeActivatorAction} emits exactly one
+ * {@link DestinationOutcome} per present entry.
+ *
+ * Fields that merely NAME an intent (`config.channel`, `config.webhookSecretName`,
+ * `config.title`) are deliberately absent: they yield no Azure Monitor receiver
+ * by construction, so there is nothing to deliver to and nothing to account.
+ * Bundles are generic and cannot know a tenant's Teams webhook or ops mailbox —
+ * declaring the INTENT and letting the platform bind the installing operator is
+ * correct. Putting a VALUE in one of the fields below and having it be
+ * undeliverable is not: that is a destination the bundle asserted and the
+ * platform cannot honour.
+ */
+export const DESTINATION_FIELDS: ReadonlyArray<{
+  /** `action.<field>` or `action.config.<field>`. */
+  at: 'action' | 'config';
+  field: string;
+  kind: 'email' | 'webhook' | 'sms' | 'logicApp';
+  /** True for a config alias this module LIFTS; the ARM derivation does not read it. */
+  lifted?: boolean;
+}> = [
+  ...MONITOR_ACTION_EMAIL_FIELDS.map((field) => ({ at: 'action' as const, field, kind: 'email' as const })),
+  ...MONITOR_CONFIG_EMAIL_FIELDS.map((field) => ({ at: 'config' as const, field, kind: 'email' as const })),
+  ...LIFTABLE_CONFIG_EMAIL_FIELDS.map((field) => ({ at: 'config' as const, field, kind: 'email' as const, lifted: true })),
+  ...MONITOR_CONFIG_WEBHOOK_FIELDS.map((field) => ({ at: 'config' as const, field, kind: 'webhook' as const })),
+  ...MONITOR_CONFIG_SMS_FIELDS.map((field) => ({ at: 'config' as const, field, kind: 'sms' as const })),
+  ...MONITOR_CONFIG_LOGIC_APP_FIELDS.map((field) => ({ at: 'config' as const, field, kind: 'logicApp' as const })),
+];
+
+/** Dotted path of a destination field, as it reads in a step log / test failure. */
+export function destinationPath(at: 'action' | 'config', field: string): string {
+  return at === 'action' ? `action.${field}` : `action.config.${field}`;
+}
+
+/**
+ * Every destination field a rule's action ACTUALLY carries — computed from the
+ * raw action, independently of whether the binder managed to do anything with
+ * it. The conservation control compares this against the binder's outcomes: a
+ * field present here and missing from `destinations` was dropped in silence,
+ * which is the failure mode this whole module exists to prevent.
+ */
+export function declaredDestinationFields(rawAction: any): string[] {
+  const action = rawAction && typeof rawAction === 'object' ? rawAction : {};
+  const config = action.config && typeof action.config === 'object' ? action.config : {};
+  const out: string[] = [];
+  for (const d of DESTINATION_FIELDS) {
+    const bag = d.at === 'action' ? action : config;
+    if (bag[d.field] !== undefined) out.push(destinationPath(d.at, d.field));
+  }
+  return Array.from(new Set(out));
+}
+
 function splitAddresses(v: unknown): string[] {
   if (Array.isArray(v)) return v.flatMap(splitAddresses);
   if (typeof v === 'string') return v.split(/[;,]/).map((s) => s.trim()).filter(Boolean);
   return [];
 }
 
+/** A value rendered for a human, without ever throwing on an exotic shape. */
+function stringifyValue(v: unknown): string {
+  if (typeof v === 'string') return v.trim();
+  if (v === null || v === undefined) return String(v);
+  if (typeof v === 'object') {
+    try {
+      return JSON.stringify(v);
+    } catch {
+      return Object.prototype.toString.call(v);
+    }
+  }
+  return String(v);
+}
+
 // ── normalization ───────────────────────────────────────────────────────────
+
+export interface DestinationOutcome {
+  /** Dotted path, e.g. `action.config.url`. */
+  path: string;
+  kind: 'email' | 'webhook' | 'sms' | 'logicApp';
+  /** `bound` — a receiver was produced. `rejected` — the value cannot deliver. */
+  verdict: 'bound' | 'rejected';
+  /** The value the bundle declared, verbatim (stringified), for the message. */
+  value: string;
+  /** Why, when rejected. */
+  why?: string;
+}
 
 export interface NormalizedActivatorAction {
   /** The action to hand to createMonitorActivatorRule. */
@@ -127,8 +210,24 @@ export interface NormalizedActivatorAction {
   bound: string[];
   /** Destinations the bundle asked for that could not be wired, verbatim. */
   unbound: string[];
+  /**
+   * One entry per DESTINATION FIELD the action actually carried — the
+   * machine-readable form of `bound`/`unbound`. Exactly one outcome per present
+   * field of {@link DESTINATION_FIELDS}, so a caller can ask "did anything the
+   * bundle declared get dropped?" without parsing prose. `unbound` may ALSO
+   * carry non-field notes (an unbindable Teams channel intent); those are not
+   * destinations and deliberately produce no outcome here.
+   */
+  destinations: DestinationOutcome[];
   /** True when the ONLY receiver is the platform's fallback address. */
   usedFallback: boolean;
+}
+
+/** The destinations a bundle asserted that the platform cannot deliver to.
+ *  A non-empty result is a CONTENT defect: the bundle named a place, and that
+ *  place does not exist. Distinct from naming no place at all, which is fine. */
+export function rejectedDestinations(norm: Pick<NormalizedActivatorAction, 'destinations'>): DestinationOutcome[] {
+  return norm.destinations.filter((d) => d.verdict === 'rejected');
 }
 
 /**
@@ -147,35 +246,61 @@ export function normalizeActivatorAction(rawAction: any, fallbackEmails: string[
 
   const bound: string[] = [];
   const unbound: string[] = [];
+  const destinations: DestinationOutcome[] = [];
+  const record = (
+    at: 'action' | 'config',
+    field: string,
+    kind: DestinationOutcome['kind'],
+    verdict: DestinationOutcome['verdict'],
+    value: unknown,
+    why?: string,
+  ) => {
+    destinations.push({ path: destinationPath(at, field), kind, verdict, value: stringifyValue(value), ...(why ? { why } : {}) });
+  };
 
   // ── emails: union every field the derivation reads PLUS the liftable ones ──
   const emails = new Set<string>();
-  const considerEmails = (values: unknown, where: string) => {
-    for (const candidate of splitAddresses(values)) {
-      if (isDeliverableEmail(candidate)) emails.add(candidate);
-      else unbound.push(`${where}: '${candidate}' is not a deliverable address`);
+  const considerEmails = (at: 'action' | 'config', field: string, values: unknown) => {
+    const where = destinationPath(at, field);
+    const candidates = splitAddresses(values);
+    if (!candidates.length) {
+      // Present but carrying nothing addressable at all (an empty string, an
+      // empty array, an object). Still a declared destination that yields no
+      // receiver — account for it rather than dropping it in silence.
+      record(at, field, 'email', 'rejected', values, 'carries no address at all');
+      unbound.push(`${where}: carries no address at all`);
+      return;
+    }
+    for (const candidate of candidates) {
+      if (isDeliverableEmail(candidate)) {
+        emails.add(candidate);
+        record(at, field, 'email', 'bound', candidate);
+      } else {
+        record(at, field, 'email', 'rejected', candidate, 'is not a deliverable address');
+        unbound.push(`${where}: '${candidate}' is not a deliverable address`);
+      }
     }
   };
   for (const f of MONITOR_ACTION_EMAIL_FIELDS) {
     if (action[f] !== undefined) {
-      considerEmails(action[f], `action.${f}`);
+      considerEmails('action', f, action[f]);
       delete action[f]; // rebuilt canonically below — no rejected value survives
     }
   }
   for (const f of MONITOR_CONFIG_EMAIL_FIELDS) {
     if (config[f] !== undefined) {
-      considerEmails(config[f], `action.config.${f}`);
+      considerEmails('config', f, config[f]);
       delete config[f];
     }
   }
   for (const f of LIFTABLE_CONFIG_EMAIL_FIELDS) {
     if (config[f] !== undefined) {
-      considerEmails(config[f], `action.config.${f}`);
+      considerEmails('config', f, config[f]);
       delete config[f];
     }
   }
 
-  // ── webhooks: drop any URI carrying an unsubstituted template ──
+  // ── webhooks: drop any URI that is not one ARM can POST to ──
   let webhooks = 0;
   for (const f of MONITOR_CONFIG_WEBHOOK_FIELDS) {
     const v = config[f];
@@ -183,8 +308,14 @@ export function normalizeActivatorAction(rawAction: any, fallbackEmails: string[
     if (isDeliverableWebhookUrl(v)) {
       webhooks += 1;
       bound.push(`webhook ${String(v).trim()}`);
-    } else if (typeof v === 'string' && v.trim()) {
-      unbound.push(`action.config.${f}: '${v.trim()}' is not a URL Azure Monitor can POST to`);
+      record('config', f, 'webhook', 'bound', v);
+    } else {
+      // EVERY present-but-unusable value, whatever its type. A non-string here
+      // used to fall through both branches and stay in `config` undisclosed —
+      // no receiver, no message, no record that the bundle had asked for one.
+      const why = 'is not a URL Azure Monitor can POST to';
+      record('config', f, 'webhook', 'rejected', v, why);
+      unbound.push(`${destinationPath('config', f)}: '${stringifyValue(v)}' ${why}`);
       delete config[f];
     }
   }
@@ -194,12 +325,19 @@ export function normalizeActivatorAction(rawAction: any, fallbackEmails: string[
   for (const f of MONITOR_CONFIG_SMS_FIELDS) {
     const v = config[f];
     if (v === undefined) continue;
-    const raw = String(v);
-    if (!hasUnexpandedPlaceholder(raw) && raw.replace(/[^0-9]/g, '')) {
+    const raw = stringifyValue(v);
+    const digits = raw.replace(/[^0-9]/g, '');
+    // E.164 subscriber numbers are 4–15 digits. A placeholder that happens to
+    // contain a digit ('ext-1') would otherwise be wired as a real SMS receiver
+    // — the same "counts as one, can never deliver" failure as the ${…} URL.
+    if (!hasUnexpandedPlaceholder(raw) && digits.length >= 4 && digits.length <= 15) {
       sms += 1;
-      bound.push(`SMS ${raw.replace(/[^0-9]/g, '')}`);
+      bound.push(`SMS ${digits}`);
+      record('config', f, 'sms', 'bound', digits);
     } else {
-      unbound.push(`action.config.${f}: '${raw}' is not a dialable number`);
+      const why = 'is not a dialable number';
+      record('config', f, 'sms', 'rejected', v, why);
+      unbound.push(`${destinationPath('config', f)}: '${raw}' ${why}`);
       delete config[f];
     }
   }
@@ -211,26 +349,38 @@ export function normalizeActivatorAction(rawAction: any, fallbackEmails: string[
   if (laId !== undefined || laCb !== undefined) {
     const idOk = typeof laId === 'string' && !!laId.trim() && !hasUnexpandedPlaceholder(laId);
     const cbOk = typeof laCb === 'string' && !!laCb.trim() && !hasUnexpandedPlaceholder(laCb);
-    if (idOk && cbOk) {
+    const verdict: DestinationOutcome['verdict'] = idOk && cbOk ? 'bound' : 'rejected';
+    const why = verdict === 'rejected' ? `incomplete or unsubstituted (${idOk ? 'callbackUrl' : 'logicAppResourceId'} missing)` : undefined;
+    if (verdict === 'bound') {
       logicApps += 1;
       bound.push(`Logic App ${String(laId).trim()}`);
     } else {
-      unbound.push(
-        `action.config.logicAppResourceId/callbackUrl: incomplete or unsubstituted (${idOk ? 'callbackUrl' : 'logicAppResourceId'} missing)`,
-      );
+      unbound.push(`action.config.logicAppResourceId/callbackUrl: ${why}`);
       delete config.logicAppResourceId;
       delete config.callbackUrl;
     }
+    // One outcome per PRESENT half, so the conservation check sees both.
+    if (laId !== undefined) record('config', 'logicAppResourceId', 'logicApp', verdict, laId, why);
+    if (laCb !== undefined) record('config', 'callbackUrl', 'logicApp', verdict, laCb, why);
   }
 
-  // A `teams` action whose only destination is a channel NAME or a Key Vault
-  // secret NAME names a binding the platform cannot mint: an incoming-webhook
-  // URL is created by a channel owner in Teams. Say so verbatim.
-  if (String(action.kind || '').toLowerCase() === 'teams' && webhooks === 0) {
+  // A destination the bundle NAMED as an intent rather than as a value — a
+  // Teams channel, a Key Vault secret holding the real webhook URL. The
+  // platform cannot mint those (an incoming-webhook URL is created by a channel
+  // owner; a secret is supplied by the operator), so the fallback will bind
+  // instead. Say WHOSE destination was not honoured, verbatim, rather than
+  // silently substituting.
+  //
+  // Deliberately NOT keyed to `action.kind === 'teams'`: it was, and the two
+  // Sentinel activators declare `kind: 'webhook'` with a secret reference, so
+  // the intent they named would have been substituted in silence. The condition
+  // that matters is "no destination bound AND the config names one", whatever
+  // the action calls itself.
+  if (webhooks === 0) {
     const named = [config.channel, config.channelId, config.webhookSecretName, config.teamsWebhookSecretRef]
       .filter((v) => typeof v === 'string' && v.trim())
       .map((v) => String(v).trim());
-    if (named.length) unbound.push(`Teams channel '${named[0]}' has no incoming-webhook URL bound`);
+    if (named.length) unbound.push(`'${named[0]}' names a notification destination the platform cannot mint (no webhook URL is bound to it)`);
   }
 
   let usedFallback = false;
@@ -246,7 +396,7 @@ export function normalizeActivatorAction(rawAction: any, fallbackEmails: string[
     for (const e of emails) bound.push(`email ${e}`);
   }
 
-  return { action, bound, unbound, usedFallback };
+  return { action, bound, unbound, destinations, usedFallback };
 }
 
 /**

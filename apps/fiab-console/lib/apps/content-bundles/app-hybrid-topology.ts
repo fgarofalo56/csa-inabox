@@ -1229,11 +1229,19 @@ const bundle: AppBundle = {
               description:
                 'POST the ItarCrossCloudViolations / UnattestedMovements rows to ' +
                 'the Sentinel (Gov) Logs ingestion endpoint and notify security. ' +
-                'Backed by HybridBridgeAudit.ItarCrossCloudViolations.',
-              url: 'https://${sentinelGovWorkspace}.ods.opinsights.azure.us/api/logs',
+                'Backed by HybridBridgeAudit.ItarCrossCloudViolations. The Gov DCE ' +
+                'ingestion URI and DCR immutable id are tenant-specific, so they ' +
+                'are named as Key Vault secret REFERENCES rather than shipped as ' +
+                'literals — until they are supplied, the install binds the ' +
+                'notification to the installing operator.',
+              // #4097 — see app-federal-data-mesh: this used to ship
+              // `url: 'https://${sentinelGovWorkspace}.ods…'`, an unsubstituted
+              // template that reached ARM as a webhook receiver pointed at a
+              // hostname that cannot exist.
+              webhookSecretName: 'SENTINEL_GOV_DCE_INGESTION_URL',
               method: 'POST',
               source: 'HybridBridgeAudit.ItarCrossCloudViolations',
-              dcrImmutableId: '${SENTINEL_GOV_DCR_IMMUTABLE_ID}',
+              dcrImmutableIdSecretName: 'SENTINEL_GOV_DCR_IMMUTABLE_ID',
               streamName: 'Custom-LoomHybridBridgeViolation_CL',
               alsoNotify: { kind: 'teams', channel: 'Department Security Operations' },
             },
