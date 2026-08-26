@@ -1,0 +1,53 @@
+[
+ {
+  "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-csa-loom-admin-centralus/providers/Microsoft.Resources/deployments/aas-server/operations/132AAD856C6367F7",
+  "operationId": "132AAD856C6367F7",
+  "properties": {
+   "duration": "PT0.3135239S",
+   "provisioningOperation": "Create",
+   "provisioningState": "Failed",
+   "request": null,
+   "response": null,
+   "serviceRequestId": null,
+   "statusCode": "BadRequest",
+   "statusMessage": {
+    "error": {
+     "additionalInfo": null,
+     "code": "BadRequest",
+     "details": [
+      {
+       "additionalInfo": null,
+       "code": "RootActivityId",
+       "details": null,
+       "message": "aaaaaaaa-bbbb-cccc-dddd-000000000001",
+       "target": null
+      },
+      {
+       "additionalInfo": null,
+       "code": "Param1",
+       "details": null,
+       "message": "aasloomfixturesuffix",
+       "target": null
+      }
+     ],
+     "message": "The server 'aasloomfixturesuffix' is currently being updated. Please try again later.",
+     "target": null
+    },
+    "status": "Failed"
+   },
+   "targetResource": {
+    "apiVersion": null,
+    "extension": null,
+    "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-csa-loom-admin-centralus/providers/Microsoft.AnalysisServices/servers/aasloomfixturesuffix",
+    "identifiers": null,
+    "resourceGroup": "rg-csa-loom-admin-centralus",
+    "resourceName": "aasloomfixturesuffix",
+    "resourceType": "Microsoft.AnalysisServices/servers",
+    "symbolicName": null
+   },
+   "timestamp": "2026-08-25T04:09:13.197122+00:00",
+   "trackingId": "aaaaaaaa-bbbb-cccc-dddd-000000000002"
+  },
+  "resourceGroup": "rg-csa-loom-admin-centralus"
+ }
+]
