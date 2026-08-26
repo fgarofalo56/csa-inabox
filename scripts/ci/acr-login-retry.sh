@@ -64,7 +64,9 @@
 # The real defect was that the probe treated ONE sample as an observation. It now
 # requires 3 consecutive fresh-connection samples spaced >=2s, with any 403, any
 # connect failure and any other status resetting the count, and that floor is
-# ENFORCED rather than merely defaulted — dropping below it needs
+# ENFORCED rather than merely defaulted — dropping below it, or asking for a
+# sample count the budget cannot fit (which can only ever fail closed, and at 14
+# of the 17 call sites is discarded anyway), needs
 # `--unsafe-sampling-below-4067-floor "<reason>"`
 # (scripts/ci/acr-dataplane-ready.sh). Note that this changed its READY line: the
 # `READY after 1 attempt(s) — HTTP 401 …` text quoted above and below is a

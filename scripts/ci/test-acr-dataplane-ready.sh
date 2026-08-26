@@ -26,10 +26,19 @@
 #
 # 2. THE CALLER BYPASS. Pinning the numbers as DEFAULTS was not enough: a caller
 #    passing `--consecutive-samples 1` or `--sample-interval-seconds 0` restored
-#    the exact pre-#4067 behaviour with every case here still green. Cases 11b-11e
+#    the exact pre-#4067 behaviour with every case here still green. Cases 11b-11f
 #    assert the floor is ENFORCED — the weakening is refused with exit 3, the only
-#    way through is an explicit reason-carrying opt-out, and a run that takes it
-#    says so loudly in the log.
+#    way through is an explicit reason-carrying opt-out, a reason made only of
+#    whitespace does NOT count as a reason (one space bought the whole override on
+#    the previous commit), and a run that takes the opt-out says so loudly.
+#
+# 2b. THE HIGH SIDE OF THE SAME BYPASS. A floor only guards the low side. A
+#    sample count high enough to be unsatisfiable inside the budget clears the
+#    floor and leaves a probe that can ONLY exit 1 — which, at the 14 of 17 call
+#    sites that discard the exit status, is the guard switched off without typing
+#    the greppable flag. Cases 10b and 10c assert such a config is REFUSED rather
+#    than merely warned about; case 10 keeps the exhaustion path under test by
+#    taking the opt-out deliberately.
 #
 # 3. THE STREAK RESETS. Three code paths reset the streak (403, no-response, and
 #    any other status) and each one is on the critical path of a VERDICT, not just
@@ -172,21 +181,27 @@ run() {
 # Same, but with the pauses stubbed out. Cases that assert on a SEQUENCE and a
 # VERDICT (not on timing) use this.
 #
-# THE BUDGET IS DELIBERATELY LARGE. Stubbing `sleep` removes the probe's pauses
-# but NOT the cost of the ~4 processes each sample spawns (mktemp, the curl stub,
-# head, rm), and that cost is what the wall-clock budget is actually spent on
-# here. Measured on this Windows box under concurrent load, a 6-sample case burnt
-# up to 16s of a 30s budget, and two 6-sample cases were observed failing at 5
-# samples while the same probes run alone gave 6/6 in 12 of 12 iterations. A
-# control that can go red on CORRECT code is the control that gets loosened next
-# time, so the budget is 120s: the sleeps are stubbed, so a large budget costs no
-# wall time on the happy path, and every case here reaches a verdict in <= 6
-# samples.
+# THE BUDGET IS DELIBERATELY ENORMOUS, AND THAT COSTS NOTHING. Stubbing `sleep`
+# removes the probe's pauses but NOT the cost of the ~4 processes each sample
+# spawns (mktemp, the curl stub, head, rm), and the wall-clock budget is spent on
+# exactly that. The previous value was 120s, chosen after measuring a 6-sample
+# case burn 16s of a 30s budget. 120s was still a bet, and the bet lost: running
+# EIGHT copies of this suite concurrently on the Windows dev box (2026-08-25,
+# ~150 other node processes), two UNMUTATED control copies went red — case 7 took
+# 2 samples of 3 inside 30s and case 8b reached only 5 of the 6 it needs inside
+# 120s. That is a control failing on CORRECT code, which is the control that gets
+# loosened next time.
+#
+# Every case using this helper TERMINATES ON ITS OWN — correct code reaches READY
+# in <= 6 samples, and every mutation these cases exist to catch reaches it
+# SOONER (deleting a streak reset makes READY arrive at sample 4, not later). So
+# the budget is never actually spent on a healthy box, and a 600s ceiling buys
+# ~100x headroom on a loaded one while still bounding a genuinely stuck probe.
 run_nosleep() {
   install_sleep_recorder
   reset_samples
   PATH="$STUB_DIR:$PATH" bash "$PROBE" --acr testacr \
-    --timeout-seconds "${1:-120}" --interval-seconds 2 \
+    --timeout-seconds "${1:-600}" --interval-seconds 2 \
     --sample-interval-seconds 2 --consecutive-samples 3 2>&1
   local rc=$?
   remove_sleep_recorder
@@ -194,15 +209,17 @@ run_nosleep() {
 }
 # DEFAULTS ONLY — no --sample-interval-seconds, no --consecutive-samples. Case 7
 # depends on this passing nothing the script could read instead of its defaults.
+# The budget is large for the reason above: it is not spent on a healthy box, and
+# at 30s case 7 was measured going red on correct code under load.
 run_defaults() {
   reset_samples
-  PATH="$STUB_DIR:$PATH" bash "$PROBE" --acr testacr --timeout-seconds "${1:-30}" 2>&1
+  PATH="$STUB_DIR:$PATH" bash "$PROBE" --acr testacr --timeout-seconds "${1:-600}" 2>&1
 }
 
 echo "== acr-dataplane-ready self-test =="
 
 # 1. 401 throughout => the registry is evaluating auth => READY.
-OUT="$(STUB_CODE=401 STUB_BODY='{"errors":[{"code":"UNAUTHORIZED"}]}' run_nosleep 120)"; RC=$?
+OUT="$(STUB_CODE=401 STUB_BODY='{"errors":[{"code":"UNAUTHORIZED"}]}' run_nosleep 600)"; RC=$?
 [ $RC -eq 0 ] && pass "401 UNAUTHORIZED => ready (exit 0)" || fail "401 should be ready, got exit $RC: $OUT"
 
 # 1b. R7: the READY line must not claim the registry "is not blocking by IP".
@@ -219,7 +236,7 @@ else
 fi
 
 # 2. 200 (anonymous pull enabled) => also reachable.
-OUT="$(STUB_CODE=200 STUB_BODY='{}' run_nosleep 120)"; RC=$?
+OUT="$(STUB_CODE=200 STUB_BODY='{}' run_nosleep 600)"; RC=$?
 [ $RC -eq 0 ] && pass "200 => ready (exit 0)" || fail "200 should be ready, got exit $RC: $OUT"
 
 # 3. 403 DENIED for the whole budget => NOT ready, exit 1.
@@ -260,7 +277,7 @@ fi
 #    the count assertion fails; set SAMPLE_INTERVAL to 0 and the pause assertion
 #    fails. Both mutations were run; both go red.
 install_sleep_recorder
-OUT="$(STUB_CODES='401' run_defaults 30)"; RC=$?
+OUT="$(STUB_CODES='401' run_defaults 600)"; RC=$?
 CALLS="$(samples)"
 SLEEP_ARGS="$(tr '\n' ' ' < "$STUB_DIR/.sleeps" 2>/dev/null)"
 SLEEP_COUNT=0
@@ -299,7 +316,7 @@ echo "$OUT" | grep -q "consecutive" && pass "READY reports the consecutive-sampl
 #    WITHOUT the reset: 1, (403 ignored) 1, 2, 3 -> READY on sample 4. A `>= 4`
 #    threshold therefore passes either way — it was measured GREEN against a
 #    mutation that deleted `STREAK=0` from the 403 branch. See 8b.
-OUT="$(STUB_CODES='401 403 401 401' run_nosleep 120)"; RC=$?
+OUT="$(STUB_CODES='401 403 401 401' run_nosleep 600)"; RC=$?
 CALLS="$(samples)"
 if [ "$CALLS" -ge 5 ]; then
   pass "401,403,401,401: kept sampling past the first 401 and past the 403 (${CALLS} samples)"
@@ -334,7 +351,7 @@ fi
 #       with the reset:    1, 2, reset, 1, 2, 3 -> READY on sample 6
 #       without the reset: 1, 2, (ignored), 3   -> READY on sample 4
 #     Six versus four. No message is consulted.
-OUT="$(STUB_CODES='401 401 403 401' run_nosleep 120)"; RC=$?
+OUT="$(STUB_CODES='401 401 403 401' run_nosleep 600)"; RC=$?
 CALLS="$(samples)"
 if [ "$CALLS" -ge 6 ]; then
   pass "401,401,403,401: the 403 discarded the 2-sample streak (${CALLS} samples, 6 required)"
@@ -351,7 +368,7 @@ fi
 #     Stream: 401 401 000 401 401 401… (trailing entry repeats).
 #       with the reset:    1, 2, reset, 1, 2, 3 -> READY on sample 6
 #       without the reset: 1, 2, (ignored), 3   -> READY on sample 4
-OUT="$(STUB_CODES='401 401 000 401' run_nosleep 120)"; RC=$?
+OUT="$(STUB_CODES='401 401 000 401' run_nosleep 600)"; RC=$?
 CALLS="$(samples)"
 if [ "$CALLS" -ge 6 ]; then
   pass "401,401,000,401: the connect failure discarded the 2-sample streak (${CALLS} samples, 6 required)"
@@ -372,7 +389,7 @@ fi
 #     The 500 needs no stub change: the curl stub synthesises `{}` for any code
 #     that is not 401/403, which is exactly what a real 5xx body is not required
 #     to be for this assertion to hold. No message is consulted.
-OUT="$(STUB_CODES='401 401 500 401' run_nosleep 120)"; RC=$?
+OUT="$(STUB_CODES='401 401 500 401' run_nosleep 600)"; RC=$?
 CALLS="$(samples)"
 if [ "$CALLS" -ge 6 ]; then
   pass "401,401,500,401: the 500 discarded the 2-sample streak (${CALLS} samples, 6 required)"
@@ -388,10 +405,24 @@ fi
 # 9. HARD NEGATIVE. One 401 then 403 forever. The old probe exited 0 on sample 1;
 #    this must never report READY, and the message must name the intermittency
 #    rather than claiming a flat refusal it did not observe (R7).
-OUT="$(STUB_CODES='401 403' run 20)"; RC=$?
+#
+#    THIS CASE CANNOT USE A HUGE BUDGET. Unlike 7 and 8b-8d it never reaches
+#    READY, so it runs until the budget expires and the budget IS its runtime.
+#    That makes it the one case whose sample count is genuinely load-dependent,
+#    and at 20s it was MEASURED going red on correct code under 8-way parallel
+#    load (2026-08-25): only the first sample landed inside the budget, so no 403
+#    was ever observed and the probe correctly took the all-positive exhaustion
+#    branch instead of the intermittent one. The budget is now 60s, and the
+#    sample count is checked FIRST so that a box too slow to take two samples
+#    reports THAT, instead of blaming the probe for a message it was never given
+#    the chance to print (deploy-integrity.md R7).
+OUT="$(STUB_CODES='401 403' run 60)"; RC=$?
+CALLS="$(samples)"
 [ $RC -ne 0 ] && pass "401 then 403 forever => never READY (exit $RC)" || fail "401-then-403 reported READY — one sample is being treated as an observation (#4067)"
-if echo "$OUT" | grep -qi "INTERMITTENTLY"; then
-  pass "mixed answers are reported as intermittent propagation"
+if [ "$CALLS" -lt 2 ]; then
+  fail "401-then-403: only ${CALLS} sample(s) completed inside the 60s budget, so this case never reached the 403 at all. That is a HARNESS-CAPACITY failure on this machine, not a verdict about the probe — raise the budget in this case."
+elif echo "$OUT" | grep -qi "INTERMITTENTLY"; then
+  pass "mixed answers are reported as intermittent propagation (${CALLS} samples)"
 else
   fail "mixed 401/403 exhaustion should say the answers were intermittent: $OUT"
 fi
@@ -399,7 +430,14 @@ fi
 # 10. R7 ON THE BUDGET PATH. If every sample answered 401 but the budget was too
 #     short to fit the required run, the failure is a CONFIG problem — the script
 #     must not report it as the registry refusing this runner.
-OUT="$(STUB_CODES='401' PATH="$STUB_DIR:$PATH" bash "$PROBE" --acr testacr --timeout-seconds 2 --sample-interval-seconds 2 --consecutive-samples 3 2>&1)"; RC=$?
+#
+#     THE OPT-OUT IS PART OF THE SETUP, NOT A WEAKENING OF THIS CASE. A budget
+#     that cannot fit the required run is now REFUSED up front (exit 3, case 10b),
+#     so the only way to reach the exhaustion path this case is about is to insist
+#     on it explicitly. The assertions below are unchanged: what is tested is
+#     still that the exhaustion message names the budget and does NOT claim a
+#     refusal it never observed.
+OUT="$(STUB_CODES='401' PATH="$STUB_DIR:$PATH" bash "$PROBE" --acr testacr --timeout-seconds 2 --sample-interval-seconds 2 --consecutive-samples 3 --unsafe-sampling-below-4067-floor "self-test: reaching the exhaustion path on purpose" 2>&1)"; RC=$?
 [ $RC -eq 1 ] && pass "budget shorter than the sampling config => exit 1 (fails closed)" || fail "short budget should exit 1, got $RC: $OUT"
 if echo "$OUT" | grep -qi "still refusing this runner"; then
   fail "a budget that was too short is reported as a firewall refusal (R7): $OUT"
@@ -411,6 +449,36 @@ if echo "$OUT" | grep -qi "budget/sampling-configuration problem"; then
 else
   fail "the exhaustion message does not name the budget as the cause: $OUT"
 fi
+
+# 10b. THE HIGH SIDE OF THE #4067 FLOOR. The same configuration WITHOUT the
+#      opt-out is refused before the probe touches the network. Until this case
+#      existed the script only printed `::warning:: … can only fail closed` and
+#      then burnt the budget: measured 2026-08-25 on the previous commit,
+#      `--consecutive-samples 1000 --timeout-seconds 6` cleared BOTH floor checks
+#      (1000 >= 3, spacing 2 >= 2), warned, took a sample and exited 1. At the 14
+#      of 17 call sites that discard the exit status with `|| echo "::warning::"`
+#      that is a permanently-yellow, permanently-ignored gate — the #4067 guard
+#      switched off without ever typing the greppable opt-out flag. (That 14-of-17
+#      swallowing, and the fact that every Gov call site is one of them, is
+#      tracked separately as #4079; no workflow is touched here.)
+OUT="$(STUB_CODES='401' PATH="$STUB_DIR:$PATH" bash "$PROBE" --acr testacr --timeout-seconds 2 --sample-interval-seconds 2 --consecutive-samples 3 2>&1)"; RC=$?
+[ $RC -eq 3 ] && pass "a budget too short for the sampling config => exit 3 (refused, not merely warned)" || fail "an unsatisfiable sampling config should be REFUSED with exit 3, got $RC — a config that can only fail closed is a switched-off gate at 14 of 17 call sites: $OUT"
+if echo "$OUT" | grep -q -- "--unsafe-sampling-below-4067-floor"; then
+  pass "the unsatisfiable-config refusal routes through the same greppable opt-out"
+else
+  fail "the refusal does not name the opt-out, so a weakening here would not be greppable: $OUT"
+fi
+
+# 10c. The reviewer's literal scenario, at the DEFAULT budget: a sample count high
+#      enough to be unsatisfiable clears the low floor and must still be refused.
+#      This is the arithmetic in the header — 1000 samples spaced 2s need 1998s,
+#      and the default budget is 180s. No stub sequence is needed: the refusal
+#      happens before the first request.
+reset_samples
+OUT="$(STUB_CODES='401' PATH="$STUB_DIR:$PATH" bash "$PROBE" --acr testacr --consecutive-samples 1000 2>&1)"; RC=$?
+CALLS="$(samples)"
+[ $RC -eq 3 ] && pass "--consecutive-samples 1000 at the default budget => exit 3" || fail "--consecutive-samples 1000 clears the low floor and can only fail; it should exit 3, got $RC: $OUT"
+[ "$CALLS" -eq 0 ] && pass "the unsatisfiable config was refused before any request was made" || fail "the probe made ${CALLS} request(s) for a config it can never satisfy"
 
 # 11. A sampling config that would silently defeat the gate is REJECTED, not
 #     coerced. A silent coercion is how "3 consecutive" becomes "1" with nothing
@@ -482,6 +550,31 @@ if echo "$OUT" | grep -q "self-test: proving the opt-out is the only way through
 else
   fail "the warning does not carry the reason the caller gave: $OUT"
 fi
+
+# 11f. A reason made only of WHITESPACE is still a refusal. `[ -z "$REASON" ]`
+#      accepts one space, and 11d only ever passed the truly-empty string, so the
+#      "mandatory reason" half of the opt-out was one keystroke from being
+#      cosmetic. MEASURED on the previous commit with these stubs: a single space
+#      and a single tab each exited 0 after exactly ONE curl call — the full
+#      pre-#4067 single-sample behaviour, bought without writing a word.
+OUT="$(STUB_CODE=401 PATH="$STUB_DIR:$PATH" bash "$PROBE" --acr testacr --consecutive-samples 1 --unsafe-sampling-below-4067-floor " " 2>&1)"; RC=$?
+[ $RC -eq 3 ] && pass "opt-out with a space-only reason => still exit 3" || fail "a space satisfied the 'mandatory reason' and bought the single-sample override (got $RC): $OUT"
+OUT="$(STUB_CODE=401 PATH="$STUB_DIR:$PATH" bash "$PROBE" --acr testacr --consecutive-samples 1 --unsafe-sampling-below-4067-floor "$(printf '\t \n')" 2>&1)"; RC=$?
+[ $RC -eq 3 ] && pass "opt-out with a tab/newline-only reason => still exit 3" || fail "whitespace other than a plain space satisfied the 'mandatory reason' (got $RC): $OUT"
+
+# 12. `--help` PRINTS THE HEADER AND NOTHING ELSE. The first version of this
+#     script printed the header with `sed -n '1,95p'` while the header ended at
+#     line 92, so `--help` leaked three lines of executable code — and any edit to
+#     the header silently changes how much. The fix walks until the first
+#     non-comment line, so this case asserts the PROPERTY (no code in the output)
+#     rather than a line count that would need updating with every header edit.
+HELP_OUT="$(PATH="$STUB_DIR:$PATH" bash "$PROBE" --help 2>&1)"; RC=$?
+HELP_LINES="$(printf '%s\n' "$HELP_OUT" | wc -l | tr -d '[:space:]')"
+# Every line after the shebang must be a comment. `grep -c` counts the offenders.
+HELP_CODE="$(printf '%s\n' "$HELP_OUT" | tail -n +2 | grep -cvE '^#|^[[:space:]]*$')"
+[ $RC -eq 0 ] && pass "--help exits 0" || fail "--help should exit 0, got $RC"
+[ "$HELP_LINES" -gt 50 ] && pass "--help printed the header (${HELP_LINES} lines)" || fail "--help printed only ${HELP_LINES} lines — the header is not being shown"
+[ "$HELP_CODE" -eq 0 ] && pass "--help leaked 0 lines of executable code" || fail "--help leaked ${HELP_CODE} line(s) of executable script after the header"
 
 # 6. Suffix must come from the cloud, never a literal — an az that cannot answer
 #    must make the probe refuse rather than guess. Last, because it swaps the az

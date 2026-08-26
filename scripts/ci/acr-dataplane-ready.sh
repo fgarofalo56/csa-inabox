@@ -89,13 +89,25 @@
 # Values below the floor are now REJECTED (exit 3) unless the caller ALSO passes
 # `--unsafe-sampling-below-4067-floor "<reason>"`. That flag is deliberately ugly
 # and greppable: one `grep -rn unsafe-sampling-below-4067-floor` over
-# .github/workflows and scripts finds every weakening in the repo, the reason is
-# mandatory and non-empty, and the run log carries a `::warning::` naming #4067
-# and the reason. scripts/ci/test-acr-dataplane-ready.sh proves both halves —
-# that the DEFAULTS still take >= 3 samples >= 2s apart (measured through the
-# sampling loop by counting the probe's own requests and reading the argument it
-# hands `sleep`, not by grepping this file for the literals), AND that a bare
-# caller override below the floor is REFUSED with exit 3.
+# .github/workflows and scripts finds every weakening in the repo, the reason must
+# contain at least one NON-WHITESPACE character (a lone space bought the whole
+# override in the first version of this fix), and the run log carries a
+# `::warning::` naming #4067 and the reason.
+#
+# THE HIGH SIDE IS A WEAKENING TOO. `--consecutive-samples 1000` clears both floor
+# checks and then needs 1998s inside a 180s budget, so the probe can only ever
+# exit 1 — and 14 of the 17 call sites discard the exit status with
+# `|| echo "::warning::"` (measured 2026-08-25; every Azure Government call site
+# is in that 14 — see #4079). Permanently-failing and ignored is switched off. A
+# sampling config that cannot fit its own budget is therefore refused (exit 3)
+# through the SAME opt-out flag, so one grep still finds every weakening.
+#
+# scripts/ci/test-acr-dataplane-ready.sh proves each half — that the DEFAULTS
+# still take >= 3 samples >= 2s apart (measured through the sampling loop by
+# counting the probe's own requests and reading the argument it hands `sleep`, not
+# by grepping this file for the literals), that a bare caller override below the
+# floor is REFUSED with exit 3, that a whitespace-only reason is refused, and that
+# an unsatisfiable budget is refused rather than merely warned about.
 #
 # WHAT THIS STILL CANNOT PROVE. N consecutive answers are evidence that the rule
 # has reached the frontends this runner reached, in that window — not a guarantee
@@ -117,7 +129,8 @@
 #   0  data plane answered (401/200) on N consecutive samples — ready
 #   1  never sustained N consecutive answers before the budget ran out
 #   2  never got an HTTP response at all (DNS/connect) within the budget
-#   3  usage / sampling below the #4067 floor without the opt-out / could not
+#   3  usage / sampling below the #4067 floor without the opt-out / a sampling
+#      config that cannot fit its own budget without the opt-out / could not
 #      determine the cloud's registry suffix
 # -----------------------------------------------------------------------------
 set -uo pipefail
@@ -183,11 +196,24 @@ if [ "$CONSECUTIVE_REQUIRED" -lt 1 ]; then
   exit 3
 fi
 
-# THE #4067 FLOOR. Enforced here rather than left to the defaults, because a
-# safety property a caller can dial away is not a property. `--consecutive-samples 1`
-# and `--sample-interval-seconds 0` each restore the exact single-sample behaviour
-# the incident was about, so they are REFUSED unless the caller states a reason
-# through a flag that is trivial to grep for across every workflow and script.
+# A reason made only of whitespace satisfies `[ -z ]`. The first version of this
+# fix tested the raw value, so ONE SPACE bought the full single-sample override:
+# measured 2026-08-25, `--consecutive-samples 1 --unsafe-sampling-below-4067-floor " "`
+# exited 0 after exactly ONE curl call, and a lone tab did the same. Test the
+# value with all whitespace removed.
+#
+# There is deliberately no MINIMUM LENGTH: any threshold is met by padding, so a
+# length rule buys nothing an `x`-string does not defeat. The enforcement is that
+# the flag name is ugly and greppable and that the reason is echoed into the run
+# log next to it, which is what a human reads after an incident.
+UNSAFE_REASON_TRIMMED="$(printf '%s' "$UNSAFE_REASON" | tr -d '[:space:]')"
+
+# THE #4067 FLOOR — the LOW side. Enforced here rather than left to the defaults,
+# because a safety property a caller can dial away is not a property.
+# `--consecutive-samples 1` and `--sample-interval-seconds 0` each restore the
+# exact single-sample behaviour the incident was about, so they are REFUSED unless
+# the caller states a reason through a flag that is trivial to grep for across
+# every workflow and script.
 BELOW_FLOOR=""
 if [ "$CONSECUTIVE_REQUIRED" -lt "$FLOOR_CONSECUTIVE" ]; then
   BELOW_FLOOR="--consecutive-samples ${CONSECUTIVE_REQUIRED} (floor ${FLOOR_CONSECUTIVE})"
@@ -195,14 +221,38 @@ fi
 if [ "$SAMPLE_INTERVAL" -lt "$FLOOR_SAMPLE_INTERVAL" ]; then
   BELOW_FLOOR="${BELOW_FLOOR}${BELOW_FLOOR:+, }--sample-interval-seconds ${SAMPLE_INTERVAL} (floor ${FLOOR_SAMPLE_INTERVAL})"
 fi
-if [ -n "$BELOW_FLOOR" ] && [ -z "$UNSAFE_REASON" ]; then
-  echo "::error::acr-dataplane-ready: REFUSING a sampling configuration below the #4067 floor: ${BELOW_FLOOR}. One sample, or samples with no spacing, is what run 31564296050 / 32248671357 reported READY ~2s before the same URL denied them by IP. If you genuinely need this, pass --unsafe-sampling-below-4067-floor \"<why>\" so the weakening is greppable and the reason lands in the run log." >&2
+
+# THE HIGH SIDE, which the first version of the floor did not guard at all.
+# `--consecutive-samples 1000` clears both floor checks and then needs 1998s of
+# wall time inside a 180s budget, so the probe can only ever exit 1 — and 14 of
+# the 17 call sites discard that exit status with `|| echo "::warning::"` (#4079).
+# A gate that is permanently yellow and permanently ignored is a gate switched
+# off, reached without ever typing the greppable opt-out. MIN_SPAN is also the
+# number the exhaustion message quotes, so it is computed once, here, before any
+# network or `az` call — a config that cannot succeed should cost nothing to
+# reject.
+MIN_SPAN=$(( (CONSECUTIVE_REQUIRED - 1) * SAMPLE_INTERVAL ))
+UNSATISFIABLE=""
+if [ "$BUDGET" -lt "$MIN_SPAN" ]; then
+  UNSATISFIABLE="${CONSECUTIVE_REQUIRED} samples spaced ${SAMPLE_INTERVAL}s need at least ${MIN_SPAN}s of wall time, but --timeout-seconds is ${BUDGET}"
+fi
+
+if [ -n "$BELOW_FLOOR" ] && [ -z "$UNSAFE_REASON_TRIMMED" ]; then
+  echo "::error::acr-dataplane-ready: REFUSING a sampling configuration below the #4067 floor: ${BELOW_FLOOR}. One sample, or samples with no spacing, is what run 31564296050 / 32248671357 reported READY ~2s before the same URL denied them by IP. If you genuinely need this, pass --unsafe-sampling-below-4067-floor \"<why>\" (the reason must contain a non-whitespace character) so the weakening is greppable and the reason lands in the run log." >&2
+  exit 3
+fi
+if [ -n "$UNSATISFIABLE" ] && [ -z "$UNSAFE_REASON_TRIMMED" ]; then
+  echo "::error::acr-dataplane-ready: REFUSING a sampling configuration that CANNOT succeed: ${UNSATISFIABLE}. This can only ever exit 1, and at the call sites that discard the exit status it is indistinguishable from switching the #4067 guard off. Raise --timeout-seconds, lower --consecutive-samples, or — if a permanently-failing probe is genuinely what you want — pass --unsafe-sampling-below-4067-floor \"<why>\" so it is greppable and the reason lands in the run log." >&2
   exit 3
 fi
 if [ -n "$BELOW_FLOOR" ]; then
   echo "::warning::acr-dataplane-ready: sampling BELOW the #4067 floor by explicit opt-out — ${BELOW_FLOOR}. Reason given: ${UNSAFE_REASON}. This weakens the guard that exists because a single 401 was falsified ~2s later on the same URL; a READY from this run is worth less than a READY from the defaults."
-elif [ -n "$UNSAFE_REASON" ]; then
-  echo "::warning::acr-dataplane-ready: --unsafe-sampling-below-4067-floor was passed (\"${UNSAFE_REASON}\") but nothing is below the floor (${CONSECUTIVE_REQUIRED} samples spaced ${SAMPLE_INTERVAL}s). Drop the flag so it does not sit in a caller waiting to hide a future weakening."
+fi
+if [ -n "$UNSATISFIABLE" ]; then
+  echo "::warning::acr-dataplane-ready: proceeding with a sampling configuration that can only fail closed, by explicit opt-out — ${UNSATISFIABLE}. Reason given: ${UNSAFE_REASON}."
+fi
+if [ -z "$BELOW_FLOOR" ] && [ -z "$UNSATISFIABLE" ] && [ -n "$UNSAFE_REASON_TRIMMED" ]; then
+  echo "::warning::acr-dataplane-ready: --unsafe-sampling-below-4067-floor was passed (\"${UNSAFE_REASON}\") but nothing is below the floor and the budget is satisfiable (${CONSECUTIVE_REQUIRED} samples spaced ${SAMPLE_INTERVAL}s in ${BUDGET}s). Drop the flag so it does not sit in a caller waiting to hide a future weakening."
 fi
 
 # Suffix from the ACTIVE CLOUD, never a literal — Gov registries are .azurecr.us
@@ -230,13 +280,11 @@ STREAK_CODES=""
 LAST_CODE=""
 LAST_BODY=""
 
-# The minimum wall time the happy path needs. Saying this up front makes a budget
-# that CANNOT satisfy the sampling config diagnosable from the log, instead of
-# presenting as an unexplained fail-closed after the budget burns.
-MIN_SPAN=$(( (CONSECUTIVE_REQUIRED - 1) * SAMPLE_INTERVAL ))
-if [ "$BUDGET" -lt "$MIN_SPAN" ]; then
-  echo "::warning::acr-dataplane-ready: budget ${BUDGET}s is shorter than the ${MIN_SPAN}s minimum needed for ${CONSECUTIVE_REQUIRED} samples spaced ${SAMPLE_INTERVAL}s. This configuration can only fail closed."
-fi
+# MIN_SPAN (the minimum wall time the happy path needs) was computed and enforced
+# with the rest of the sampling configuration, above, before this script touched
+# the network. A budget that cannot fit the required run is now REFUSED rather
+# than warned about, so by this point the config is known to be satisfiable
+# unless the caller took the explicit opt-out.
 
 echo "[acr-dataplane-ready] probing ${URL} — need ${CONSECUTIVE_REQUIRED} consecutive 401/200 samples spaced ${SAMPLE_INTERVAL}s (budget ${BUDGET}s, ${INTERVAL}s backoff after a denial)"
 
