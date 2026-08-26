@@ -52,6 +52,28 @@
 #    to `000000`. That fell past the `000` branch and reported a DNS failure as
 #    "still refusing this runner" — the exact UNKNOWN-as-NEGATIVE bug the probe
 #    exists to prevent, reproduced inside the fix. Case 5.
+#
+# 5. THE EXHAUSTION MESSAGE NAMED A CAUSE ITS OWN TALLY CONTRADICTED. The
+#    "answered INTERMITTENTLY" branch is the catch-all for ANY positive/non-
+#    positive mix and asserted one fixed cause for all of them — "a mix of
+#    answers and denials … an ACR firewall rule … still propagating" — printed
+#    next to its own tally reading "0 were 403 IP-denials" whenever the non-
+#    positive samples were connect failures or 5xx. Case 9b. It is a
+#    BICONDITIONAL over the probe's own tally rather than one case per mix,
+#    because one-case-per-mix is the narrow enumeration this repo keeps
+#    re-learning: the class named in the prose must appear IF AND ONLY IF that
+#    class's count in the tally is non-zero, for every mix driven.
+#
+# 6. THE WHITESPACE-REASON FIX WAS PINNED ON ONE OF THE TWO PATHS IT GUARDS.
+#    The trimmed reason is read by the LOW-side floor and by the HIGH-side
+#    unsatisfiable-budget check; only the low one was covered, so reverting the
+#    high one to the raw reason left the whole suite green while a single space
+#    bought the high-side opt-out. Case 11f2 asserts it over the cross product
+#    of {every refusal path} x {every whitespace-only reason}.
+#
+# 7. THE FLOOR CONSTANTS WERE ONLY EVER DRIVEN AT THE EXTREMES (1 and 0), so
+#    lowering either floor by ONE notch left the suite green. Case 11i drives
+#    the whole finite below-floor domain instead.
 # -----------------------------------------------------------------------------
 set -uo pipefail
 
@@ -427,6 +449,117 @@ else
   fail "mixed 401/403 exhaustion should say the answers were intermittent: $OUT"
 fi
 
+# ---------------------------------------------------------------------------
+# 9b. THE EXHAUSTION MESSAGE MAY NOT NAME A CAUSE ITS OWN TALLY DOES NOT SHOW.
+#
+# The "answered INTERMITTENTLY" branch is the CATCH-ALL for any mix of positive
+# and non-positive samples, and it used to assert one fixed cause for every mix
+# it could ever see: "A mix of answers and denials is the signature of an ACR
+# firewall rule that has reached some frontends and not others; it is still
+# propagating." MEASURED on the previous commit with these stubs, budget 8s:
+#
+#   STUB_CODES='401 000' -> "... 0 were 403 IP-denials, 9 got no HTTP response ...
+#                            A mix of answers and denials ... still propagating"
+#   STUB_CODES='401 500' -> "... 0 were 403 IP-denials, 0 got no HTTP response,
+#                            6 returned some other status ... still propagating"
+#
+# Zero denials observed, a denial named as the cause. That is deploy-integrity
+# R7 — an error stating as fact something it did not establish — in the script
+# whose entire purpose is enforcing R7, and no case here could see it.
+#
+# WHY THIS IS NOT TWO NEW CASES. Adding one case for `401+000` and one for
+# `401+5xx` is the narrow enumeration this repo has already burned three rounds
+# on: the next unenumerated mix prints a wrong cause again. This asserts the
+# PROPERTY instead — a BICONDITIONAL between the probe's own tally and its own
+# prose. For every non-positive class, the causal sentence for that class must
+# appear IF AND ONLY IF that class's count in the tally is non-zero. Both
+# directions are teeth: hard-coding a cause back in fails the `iff` on the mixes
+# that lack it, and dropping a cause fails it on the mixes that have it.
+#
+# The counts are read out of the tally SEGMENT (between "sample(s) in Ns:" and
+# "; longest consecutive run") rather than out of the whole message, because the
+# derived clause repeats those phrases — parsing the whole message would read
+# the prose to check the prose, which measures nothing.
+# ---------------------------------------------------------------------------
+tally_segment() { printf '%s\n' "$1" | sed -n 's/.*sample(s) in [0-9]*s: \(.*\); longest consecutive run.*/\1/p' | head -1; }
+# The [^0-9] before the capture is LOAD-BEARING, not decoration. Written first as
+# `[, ]\{0,2\}`, which can match zero characters, the greedy leading `.*` ate all
+# but the LAST digit: a true count of 19 parsed as 9 and a true count of 20 parsed
+# as ZERO. That false zero made the "was this class observed?" check below report
+# a HARNESS-CAPACITY failure on a run where 21 samples had landed — a control
+# going red on correct code, caught by the d_floor2/h_dropcause mutations. `[^0-9]`
+# forces the match to start at a non-digit, so the whole number is captured.
+tally_of() { # $1 = tally segment, $2 = class key
+  case "$2" in
+    denied)     printf '%s\n' "$1" | sed -n 's/.*[^0-9]\([0-9][0-9]*\) were 403 IP-denials.*/\1/p' | head -1 ;;
+    noresponse) printf '%s\n' "$1" | sed -n 's/.*[^0-9]\([0-9][0-9]*\) got no HTTP response.*/\1/p' | head -1 ;;
+    other)      printf '%s\n' "$1" | sed -n 's/.*[^0-9]\([0-9][0-9]*\) returned some other status.*/\1/p' | head -1 ;;
+  esac
+}
+cause_needle() { # the sentence the probe prints for that class, and nothing else
+  case "$1" in
+    denied)     printf '%s' "it is still propagating" ;;
+    noresponse) printf '%s' "DNS or TCP failures, not a firewall verdict" ;;
+    other)      printf '%s' "registry-side or gateway-side condition" ;;
+  esac
+}
+
+# Each spec is <stub sequence>|<description>|<class this mix exists to produce>.
+# The stub repeats its trailing entry, so every sequence below answers ONCE and
+# is non-positive forever after: the streak can never rebuild, the budget always
+# expires, and the intermittent branch is always the one under test.
+for MIXSPEC in \
+  "401 403|answers + IP denials|denied" \
+  "401 000|answers + connect failures|noresponse" \
+  "401 500|answers + 5xx|other" \
+  "401 403 000 500|answers + all three non-positive classes|other"
+do
+  MIXSEQ="${MIXSPEC%%|*}"; MIXREST="${MIXSPEC#*|}"
+  MIXDESC="${MIXREST%%|*}"; MIXWANT="${MIXREST#*|}"
+  install_sleep_recorder
+  reset_samples
+  OUT="$(STUB_CODES="$MIXSEQ" PATH="$STUB_DIR:$PATH" bash "$PROBE" --acr testacr \
+    --timeout-seconds 12 --interval-seconds 2 --sample-interval-seconds 2 --consecutive-samples 3 2>&1)"; RC=$?
+  CALLS="$(samples)"
+  remove_sleep_recorder
+  SEG="$(tally_segment "$OUT")"
+
+  # SELF-DEFENCE FIRST. If the tally could not be parsed, or the class this mix
+  # exists to produce was never observed, this case measured NOTHING — and a
+  # case that measures nothing must say so rather than report a verdict about
+  # the probe (deploy-integrity R7, and the lesson case 9 records).
+  if [ -z "$SEG" ]; then
+    fail "mix '${MIXSEQ}' (${MIXDESC}): could not parse the tally out of the probe's output (RC=$RC, ${CALLS} samples). This case measured nothing: $OUT"
+    continue
+  fi
+  WANTN="$(tally_of "$SEG" "$MIXWANT")"
+  if [ -z "$WANTN" ] || [ "$WANTN" -eq 0 ]; then
+    fail "mix '${MIXSEQ}' (${MIXDESC}): only ${CALLS} sample(s) landed inside the 12s budget, so the '${MIXWANT}' class was never observed and the biconditional below is vacuous. That is a HARNESS-CAPACITY failure on this machine, not a verdict about the probe — raise the budget in this case."
+    continue
+  fi
+
+  for CLS in denied noresponse other; do
+    N="$(tally_of "$SEG" "$CLS")"
+    if [ -z "$N" ]; then
+      fail "mix '${MIXSEQ}': the tally did not report a '${CLS}' count at all — the tally format changed and this control has gone blind: ${SEG}"
+      continue
+    fi
+    WANT=0; [ "$N" -gt 0 ] && WANT=1
+    HAVE=0; printf '%s\n' "$OUT" | grep -qF "$(cause_needle "$CLS")" && HAVE=1
+    if [ "$HAVE" -eq "$WANT" ]; then
+      if [ "$WANT" -eq 1 ]; then
+        pass "mix '${MIXSEQ}': tally shows ${N} ${CLS} and the message explains ${CLS}"
+      else
+        pass "mix '${MIXSEQ}': tally shows 0 ${CLS} and the message makes no ${CLS} claim"
+      fi
+    elif [ "$WANT" -eq 0 ]; then
+      fail "mix '${MIXSEQ}' (${MIXDESC}): the exhaustion message asserts the '${CLS}' cause while its own tally reports ZERO of that class — an error stating a cause it did not establish (deploy-integrity R7). Tally: ${SEG}"
+    else
+      fail "mix '${MIXSEQ}' (${MIXDESC}): the tally reports ${N} ${CLS} but the message never explains that class, so an observed condition is going unexplained. Tally: ${SEG}"
+    fi
+  done
+done
+
 # 10. R7 ON THE BUDGET PATH. If every sample answered 401 but the budget was too
 #     short to fit the required run, the failure is a CONFIG problem — the script
 #     must not report it as the registry refusing this runner.
@@ -561,6 +694,103 @@ OUT="$(STUB_CODE=401 PATH="$STUB_DIR:$PATH" bash "$PROBE" --acr testacr --consec
 [ $RC -eq 3 ] && pass "opt-out with a space-only reason => still exit 3" || fail "a space satisfied the 'mandatory reason' and bought the single-sample override (got $RC): $OUT"
 OUT="$(STUB_CODE=401 PATH="$STUB_DIR:$PATH" bash "$PROBE" --acr testacr --consecutive-samples 1 --unsafe-sampling-below-4067-floor "$(printf '\t \n')" 2>&1)"; RC=$?
 [ $RC -eq 3 ] && pass "opt-out with a tab/newline-only reason => still exit 3" || fail "whitespace other than a plain space satisfied the 'mandatory reason' (got $RC): $OUT"
+
+# 11f2. THE SAME PROPERTY, ON EVERY PATH THAT CONSUMES THE OPT-OUT — not just
+#      the one 11f happens to drive.
+#
+#      The trimmed reason is read by TWO refusal paths: the LOW-side #4067 floor
+#      and the HIGH-side unsatisfiable-budget check. 11f only ever exercises the
+#      low one, so the headline fix of this PR was pinned on half of what it
+#      guards. MEASURED on the review head: reverting ONLY the high-side test to
+#      the RAW reason left the full suite at 58 ok / 0 FAIL, RC=0 — while the
+#      behaviour genuinely changed (head refuses a space-only reason on that path
+#      with RC=3; the mutated copy proceeded with RC=1 and emitted the opt-out
+#      warning). A mutation that changes behaviour and moves no assertion is a
+#      control that is not watching.
+#
+#      So this asserts the property over the CROSS PRODUCT of {every refusal
+#      path} x {every whitespace-only reason}: a reason carrying no non-
+#      whitespace character must never buy anything that passing no flag at all
+#      would not. A third refusal path added later is added to the list here once
+#      and inherits every whitespace form for free — which is the difference
+#      between keying a control to a shape and keying it to a spelling.
+#
+#      The whitespace forms use $'...' rather than "$(printf ...)": command
+#      substitution STRIPS trailing newlines, so "$(printf '\n')" is the EMPTY
+#      string and a case written that way would silently be re-testing 11d
+#      instead of testing a newline.
+for REFUSALSPEC in \
+  "the low-side #4067 floor|--consecutive-samples 1" \
+  "the high-side unsatisfiable-budget check|--consecutive-samples 3 --sample-interval-seconds 2 --timeout-seconds 2"
+do
+  RLABEL="${REFUSALSPEC%%|*}"; RARGS="${REFUSALSPEC#*|}"
+
+  # BASELINE. Without any opt-out this path must refuse with exit 3. If it does
+  # not, everything below it is measuring nothing and says so here instead.
+  # shellcheck disable=SC2086
+  OUT="$(STUB_CODE=401 PATH="$STUB_DIR:$PATH" bash "$PROBE" --acr testacr $RARGS 2>&1)"; RC=$?
+  if [ $RC -eq 3 ]; then
+    pass "opt-out paths: ${RLABEL} refuses with exit 3 when no reason is given"
+  else
+    fail "opt-out paths: ${RLABEL} did not refuse (got $RC) with no reason given, so the whitespace assertions below are vacuous: $OUT"
+    continue
+  fi
+
+  for WSNAME in space tab newline carriage-return mixed; do
+    case "$WSNAME" in
+      space)           WSVAL=' ' ;;
+      tab)             WSVAL=$'\t' ;;
+      newline)         WSVAL=$'\n' ;;
+      carriage-return) WSVAL=$'\r' ;;
+      mixed)           WSVAL=$' \t\r\n ' ;;
+    esac
+    # shellcheck disable=SC2086
+    OUT="$(STUB_CODE=401 PATH="$STUB_DIR:$PATH" bash "$PROBE" --acr testacr $RARGS \
+      --unsafe-sampling-below-4067-floor "$WSVAL" 2>&1)"; RC=$?
+    if [ $RC -eq 3 ]; then
+      pass "opt-out paths: a ${WSNAME}-only reason does not buy ${RLABEL}"
+    else
+      fail "opt-out paths: a ${WSNAME}-only reason bought its way past ${RLABEL} (got $RC). A reason with no non-whitespace character is not a reason: $OUT"
+    fi
+  done
+
+  # THE POSITIVE HALF. A reason with a real character must still be honoured on
+  # this path, or the case above would also pass on a probe that simply refuses
+  # everything — which would be a control with no discrimination at all.
+  # shellcheck disable=SC2086
+  OUT="$(STUB_CODE=401 PATH="$STUB_DIR:$PATH" bash "$PROBE" --acr testacr $RARGS \
+    --unsafe-sampling-below-4067-floor "self-test: a real reason must still work on this path" 2>&1)"; RC=$?
+  if [ $RC -ne 3 ]; then
+    pass "opt-out paths: a real reason is still honoured on ${RLABEL} (exit $RC, not a refusal)"
+  else
+    fail "opt-out paths: ${RLABEL} refused even a REAL reason, so the whitespace cases above prove nothing: $OUT"
+  fi
+done
+
+# 11i. THE FLOOR AT ITS BOUNDARY, not only at the far end of each range.
+#      11b drives --consecutive-samples 1 and 11c drives
+#      --sample-interval-seconds 0 — the extremes. Nothing drove the value one
+#      notch below each floor, so MEASURED on the review head: lowering
+#      FLOOR_CONSECUTIVE from 3 to 2 left the suite at 58 ok / 0 FAIL RC=0, and
+#      lowering FLOOR_SAMPLE_INTERVAL from 2 to 1 did the same. A one-notch
+#      weakening of either floor would have shipped with nothing going red.
+#
+#      The below-floor domain is FINITE and SMALL, so this enumerates ALL of it
+#      rather than sampling it — consecutive-samples in {1,2} and
+#      sample-interval-seconds in {0,1} are every value the floors reject (0 and
+#      below are rejected earlier by the >= 1 check, which case 11 pins). With
+#      the whole domain covered there is no notch left to move either constant
+#      to quietly. The UPWARD direction is already pinned by case 7: raising a
+#      floor above the defaults makes the default configuration refuse, and case
+#      7 runs the defaults and requires READY.
+for BELOW in 1 2; do
+  OUT="$(STUB_CODE=401 PATH="$STUB_DIR:$PATH" bash "$PROBE" --acr testacr --consecutive-samples "$BELOW" 2>&1)"; RC=$?
+  [ $RC -eq 3 ] && pass "--consecutive-samples ${BELOW} is below the floor of 3 => exit 3" || fail "--consecutive-samples ${BELOW} is below the #4067 floor of 3 and must be REFUSED with exit 3, got $RC — the floor has been lowered: $OUT"
+done
+for BELOW in 0 1; do
+  OUT="$(STUB_CODE=401 PATH="$STUB_DIR:$PATH" bash "$PROBE" --acr testacr --sample-interval-seconds "$BELOW" 2>&1)"; RC=$?
+  [ $RC -eq 3 ] && pass "--sample-interval-seconds ${BELOW} is below the floor of 2 => exit 3" || fail "--sample-interval-seconds ${BELOW} is below the #4067 spacing floor of 2 and must be REFUSED with exit 3, got $RC — the spacing floor has been lowered: $OUT"
+done
 
 # ---------------------------------------------------------------------------
 # 11g. THE MAGNITUDE BOUND — the high-side check is ARITHMETIC, and bash

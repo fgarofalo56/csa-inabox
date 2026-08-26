@@ -131,6 +131,18 @@
 # denials, longest streak). It never reports ready on a state it did not observe,
 # and it never converts "I could not reach it" into "it is not there".
 #
+# ...AND THE EXHAUSTION MESSAGE IS DERIVED FROM THE TALLY, NOT CHOSEN AHEAD OF
+# IT (review of #4090, 2026-08-26). The intermittent branch is the catch-all for
+# any positive/non-positive mix, and it used to assert ONE fixed cause for all of
+# them: "a mix of answers and denials … an ACR firewall rule that has reached
+# some frontends and not others". Measured on the previous commit, `401 000` and
+# `401 500` each printed that denial/propagation claim right next to the same
+# message's own tally reading "0 were 403 IP-denials" — an error stating as fact
+# something it had not established, which is R7, inside the script written to
+# enforce R7. Each observed class now contributes its own clause and a class with
+# a ZERO count contributes nothing, so no mix — including one nobody enumerated —
+# can name a cause that did not occur.
+#
 # USAGE
 #   bash scripts/ci/acr-dataplane-ready.sh --acr <acrName> [--timeout-seconds 180]
 #        [--interval-seconds 10] [--sample-interval-seconds 2] [--consecutive-samples 3]
@@ -239,7 +251,23 @@ for pair in "BUDGET:$BUDGET" "INTERVAL:$INTERVAL" "SAMPLE_INTERVAL:$SAMPLE_INTER
   significant="${val#"${val%%[!0]*}"}"
   [ -z "$significant" ] && significant="0"
   if [ "${#significant}" -gt "$MAX_ARG_DIGITS" ]; then
-    echo "::error::acr-dataplane-ready: ${name} has ${#significant} digits ('${val}'), above the ${MAX_ARG_DIGITS}-digit bound. Past this, bash's signed 64-bit arithmetic wraps silently and the sampling checks stop working: INT64_MAX consecutive samples clears the #4067 floor AND the unsatisfiable-budget check (MIN_SPAN wraps negative) and the probe runs a config it can never satisfy. There is no legitimate value this large." >&2
+    # R7: name the mechanism THIS argument breaks, not one that did not occur.
+    # The first version of this message printed the consecutive-samples overflow
+    # story for all four arguments, so `--timeout-seconds 1234567890` was told
+    # about "INT64_MAX consecutive samples" — a true sentence about a run that
+    # never happened. Each clause below was MEASURED on 2026-08-26 rather than
+    # reasoned about; the numbers quoted are the observed ones.
+    case "$name" in
+      CONSECUTIVE_REQUIRED|SAMPLE_INTERVAL)
+        WHY="MIN_SPAN=(consecutive-1)*sample-interval wraps NEGATIVE at this magnitude — measured, 9223372036854775807 samples gives MIN_SPAN -4, and spacing 9223372036854775807 at 3 samples gives -2 — so '[ budget -lt MIN_SPAN ]' is false and the unsatisfiable-budget check never fires. The value clears the #4067 floor AND that check, and the probe runs a sampling configuration it can never satisfy." ;;
+      BUDGET)
+        WHY="DEADLINE=now+budget wraps NEGATIVE at this magnitude — measured, 1756000000+9223372036854775807 gives -9223372035098775809 — so the deadline is already in the past, the loop breaks after its FIRST sample, and the result is a one-sample probe: #4067 itself, reinstated through the budget." ;;
+      INTERVAL)
+        WHY="the backoff is clamped to the budget that remains by '[ remain -lt sleep ]', and past INT64_MAX '[' cannot compare the value at all: measured, it prints 'integer expected' and returns 2, which an 'if' reads as 'no clamp needed'. The backoff would then sleep past the probe's own deadline." ;;
+      *)
+        WHY="every check below this point is bash arithmetic, which is signed 64-bit and wraps silently, so a value this large makes them stop measuring what they say they measure." ;;
+    esac
+    echo "::error::acr-dataplane-ready: ${name} has ${#significant} digits ('${val}'), above the ${MAX_ARG_DIGITS}-digit bound. Past this bound bash's signed 64-bit arithmetic stops being sound for THIS argument: ${WHY} There is no legitimate value this large." >&2
     exit 3
   fi
 done
@@ -443,7 +471,49 @@ if [ "$MAX_STREAK" -gt 0 ] && [ "$DENIED_TOTAL" -eq 0 ] && [ "$NORESPONSE_TOTAL"
 fi
 
 if [ "$MAX_STREAK" -gt 0 ]; then
-  echo "::error::acr-dataplane-ready: ${HOST} answered INTERMITTENTLY and never sustained ${CONSECUTIVE_REQUIRED} consecutive samples within ${BUDGET}s — ${TALLY}. A mix of answers and denials is the signature of an ACR firewall rule that has reached some frontends and not others; it is still propagating. Last response: HTTP ${LAST_CODE} ${LAST_BODY:0:200}. ${CP_NOTE} This is an UNKNOWN about reachability, not a verdict about the registry's contents." >&2
+  # THE PROSE IS DERIVED FROM THE TALLY, NEVER ASSERTED AHEAD OF IT.
+  #
+  # The first version of this branch named exactly one cause for every mix it
+  # could ever see — "A mix of answers and denials is the signature of an ACR
+  # firewall rule that has reached some frontends and not others; it is still
+  # propagating" — and this branch is the catch-all for ANY positive/non-positive
+  # mix. So whenever the non-positive samples were connect failures or 5xx, that
+  # sentence printed verbatim NEXT TO ITS OWN TALLY reading "0 were 403
+  # IP-denials". Measured 2026-08-26 on the previous commit: `401 000` and
+  # `401 500` both produced the denial/propagation claim with ZERO denials
+  # observed. An error asserting a cause it did not establish is deploy-integrity
+  # R7 — the rule this probe exists to enforce — inside the probe itself.
+  #
+  # The fix is NOT a branch for `401+000` and another for `401+5xx`. That is
+  # enumeration, and the next mix nobody enumerated (403+000, 403+5xx, all three
+  # at once) would print a wrong cause again — this repo has burned three rounds
+  # on exactly that. Instead each observed class contributes its OWN clause and a
+  # class with a ZERO count contributes NOTHING, so the message is a function of
+  # the tally. No mix, including one nobody has thought of, can name a cause that
+  # did not occur.
+  MIXED_WITH=""
+  MIXED_CAUSE=""
+  add_observed() { # $1 = count, $2 = what it was, $3 = what that class means
+    [ "$1" -gt 0 ] || return 0
+    MIXED_WITH="${MIXED_WITH}${MIXED_WITH:+, }$1 $2"
+    MIXED_CAUSE="${MIXED_CAUSE}${MIXED_CAUSE:+ }$3"
+  }
+  add_observed "$DENIED_TOTAL" "403 IP-denial(s)" \
+    "Answers interleaved with IP denials are the signature of an ACR firewall rule that has reached some frontends and not others; it is still propagating."
+  add_observed "$NORESPONSE_TOTAL" "sample(s) that got no HTTP response" \
+    "Samples that got no HTTP response are DNS or TCP failures, not a firewall verdict; this run did not establish why they failed."
+  add_observed "$OTHER_TOTAL" "sample(s) that returned some other status" \
+    "Statuses outside 401/200/403 are a registry-side or gateway-side condition; this run did not establish which."
+  # Reaching here means MAX_STREAK > 0 and at least one non-positive class is
+  # non-zero (the all-positive case exited in the branch above), so MIXED_WITH is
+  # populated. The guard is here so that if that ever stops being true the
+  # message degrades to saying less, rather than to saying something false.
+  if [ -n "$MIXED_WITH" ]; then
+    MIXED_CLAUSE=" ${POSITIVE_TOTAL} sample(s) answered 401/200, interleaved with ${MIXED_WITH}. ${MIXED_CAUSE}"
+  else
+    MIXED_CLAUSE=""
+  fi
+  echo "::error::acr-dataplane-ready: ${HOST} answered INTERMITTENTLY and never sustained ${CONSECUTIVE_REQUIRED} consecutive samples within ${BUDGET}s — ${TALLY}.${MIXED_CLAUSE} Last response: HTTP ${LAST_CODE} ${LAST_BODY:0:200}. ${CP_NOTE} This is an UNKNOWN about reachability, not a verdict about the registry's contents." >&2
   exit 1
 fi
 

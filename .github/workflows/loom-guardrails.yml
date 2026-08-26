@@ -1051,6 +1051,19 @@ jobs:
       - name: 'acr-login-retry-adoption (a bare `az acr login` reds a deploy on a known transient)'
         if: ${{ !cancelled() }}
         run: node scripts/ci/check-acr-login-retry-adoption.mjs
+      # The #4067 floor (3 consecutive samples, 2s apart) is enforced INSIDE
+      # acr-dataplane-ready.sh, and the reason an opt-out is permitted at all is
+      # that the flag is "ugly and greppable — one grep finds every weakening".
+      # Nothing performed that grep, so greppability was a property a human had
+      # to remember to exercise. This performs it, keyed to the SHAPE rather
+      # than the spelling: call sites must pass only {--acr, --timeout-seconds,
+      # --interval-seconds}, so a second opt-out spelled anything else is caught
+      # too. Adoption is zero over 19 invocation sites, so this ratchets at 0.
+      - name: 'acr-dataplane-probe-args (an argument at a call site can dial the #4067 floor away)'
+        if: ${{ !cancelled() }}
+        run: |
+          node scripts/ci/check-acr-dataplane-probe-args.mjs --self-test
+          node scripts/ci/check-acr-dataplane-probe-args.mjs
       # cosign's INTERNAL retry holds one OIDC token, so on a Sigstore hiccup it
       # retries until the token EXPIRES and reports `expired_token` — a network
       # transient dressed as a credential fault (run 31496454872: a TLS handshake
