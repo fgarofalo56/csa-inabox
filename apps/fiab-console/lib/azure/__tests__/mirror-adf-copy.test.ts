@@ -1,8 +1,9 @@
 /**
  * Unit tests for the ADF Copy mirror path (runMirrorAdfCopy) + the PG/Snowflake
  * routing in runMirrorSnapshot. These lock in:
- *   - Snowflake mirrors via a real ADF Copy pipeline (delete-then-copy → Bronze
- *     Parquet) + a schedule trigger, with honest gates when unconfigured.
+ *   - Snowflake mirrors via a real ADF Copy pipeline (copy-then-swap → Bronze
+ *     Parquet, staged through Blob) + a schedule trigger, with honest gates when
+ *     unconfigured.
  *   - PostgreSQL is NEVER routed through the ADF CDC resource (`adfcdcs`) — it is
  *     not a valid `adfcdcs` source; PG uses the built-in snapshot/watermark engine.
  *
@@ -93,6 +94,7 @@ vi.mock('../cosmos-data-client', () => ({ queryItems: vi.fn(async () => ({ docum
 vi.mock('../cosmos-account-client', () => ({ listContainers: vi.fn(async () => []) }));
 
 import { runMirrorAdfCopy, runMirrorSnapshot } from '../mirror-engine';
+import { planSnowflakeCopyTransfer } from '../mirror-adf-copy';
 
 const SNOW = {
   sourceType: 'Snowflake', server: 'myorg-acct123', database: 'ANALYTICS',
@@ -108,13 +110,17 @@ describe('runMirrorAdfCopy (Snowflake)', () => {
     process.env.LOOM_SUBSCRIPTION_ID = 'sub';
     process.env.LOOM_DLZ_RG = 'rg';
     process.env.LOOM_MIRROR_ADLS_LINKED_SERVICE = 'ls-adls';
+    // Snowflake's COPY INTO unload only writes to an Azure Blob endpoint, so a
+    // staged copy through a Blob linked service is what makes the pairing legal
+    // (#4083). Without it ADF rejects every Copy up front.
+    process.env.LOOM_MIRROR_STAGING_BLOB_LINKED_SERVICE = 'ls-stage-blob';
     process.env.LOOM_BRONZE_URL = 'https://acct.dfs.core.windows.net/bronze';
     delete process.env.LOOM_MIRROR_SNOWFLAKE_LINKED_SERVICE;
     delete process.env.LOOM_MIRROR_COPY_CADENCE;
   });
   afterEach(() => { process.env = { ...saved }; });
 
-  it('provisions a delete-then-copy Parquet pipeline + schedule trigger', async () => {
+  it('provisions a copy-then-swap Parquet pipeline + schedule trigger', async () => {
     const r = await runMirrorAdfCopy('abcd1234-ef', 'ws1', SNOW, TABLES, 'note');
     expect(r.ok).toBe(true);
     expect(r.engine).toBe('adf-copy');
@@ -122,14 +128,14 @@ describe('runMirrorAdfCopy (Snowflake)', () => {
     expect(r.cdcName).toBe('loom_copy_abcd1234');
     // Two datasets (source + sink) per table.
     expect(upsertDataset).toHaveBeenCalledTimes(2);
-    // The pipeline carries a Delete then a Copy activity (dependsOn Succeeded).
+    // The pipeline carries a Copy then a Delete activity (dependsOn Succeeded).
     const [, pipeSpec] = upsertPipeline.mock.calls[0] as any[];
     const acts = pipeSpec.properties.activities;
-    expect(acts.map((a: any) => a.type)).toEqual(['Delete', 'Copy']);
+    expect(acts.map((a: any) => a.type)).toEqual(['Copy', 'Delete']);
     expect(acts[1].dependsOn[0].dependencyConditions).toEqual(['Succeeded']);
     // The CURRENT connector, not the retired V1 one.
-    expect(acts[1].typeProperties.source.type).toBe('SnowflakeV2Source');
-    expect(acts[1].typeProperties.sink.type).toBe('ParquetSink');
+    expect(acts[0].typeProperties.source.type).toBe('SnowflakeV2Source');
+    expect(acts[0].typeProperties.sink.type).toBe('ParquetSink');
     // Initial load fired + ongoing schedule trigger started (default incremental).
     expect(runPipeline).toHaveBeenCalledTimes(1);
     expect(upsertTrigger).toHaveBeenCalledTimes(1);
@@ -139,6 +145,90 @@ describe('runMirrorAdfCopy (Snowflake)', () => {
     expect(trgSpec.properties.typeProperties.recurrence.frequency).toBe('Hour');
     // Per-table receipt is a Parquet OPENROWSET.
     expect(r.tables[0].openrowset).toContain("FORMAT = 'PARQUET'");
+  });
+
+  // ── #4083 defect 2: the Delete must never destroy the previous snapshot ────
+  // Measured live on `loom_copy_1ac5d678`: the Delete ran FIRST with
+  // `dependsOn: []`, succeeded, and the Copy then failed — four consecutive
+  // runs, `rowsCopied: null` each time, Bronze emptied every run. The ordering
+  // below is what makes a failed copy a no-op instead of data loss.
+  it('copies BEFORE deleting, so a failed Copy cannot empty Bronze', async () => {
+    await runMirrorAdfCopy('abcd1234-ef', 'ws1', SNOW, TABLES, 'note');
+    const [, pipeSpec] = upsertPipeline.mock.calls[0] as any[];
+    const acts: any[] = pipeSpec.properties.activities;
+    const copy = acts.find((a) => a.type === 'Copy');
+    const del = acts.find((a) => a.type === 'Delete');
+
+    // The Copy is the ROOT of the graph — nothing runs before it.
+    expect(copy.dependsOn).toEqual([]);
+    // ...and the Delete is gated on that Copy having SUCCEEDED. If the Copy
+    // fails the Delete is skipped and the previous snapshot survives.
+    expect(del.dependsOn).toEqual([
+      { activity: copy.name, dependencyConditions: ['Succeeded'] },
+    ]);
+    // The Delete must never be the root activity again.
+    expect(del.dependsOn).not.toEqual([]);
+    // Positionally too: whatever ADF does with the graph, the authored order
+    // puts Copy first.
+    expect(acts.indexOf(copy)).toBeLessThan(acts.indexOf(del));
+  });
+
+  it('deletes only the PREVIOUS generation, not the rows this run just wrote', async () => {
+    await runMirrorAdfCopy('abcd1234-ef', 'ws1', SNOW, TABLES, 'note');
+    const [, pipeSpec] = upsertPipeline.mock.calls[0] as any[];
+    const del = (pipeSpec.properties.activities as any[]).find((a) => a.type === 'Delete');
+    const ss = del.typeProperties.storeSettings;
+    // Scoped to files last modified before this run started. A bare recursive
+    // delete would also remove the freshly copied Parquet.
+    expect(ss.modifiedDatetimeEnd).toEqual({
+      value: '@pipeline().TriggerTime', type: 'Expression',
+    });
+    // Documented limitation: a modifiedDatetime filter is ignored unless
+    // wildcardFileName is set too.
+    //   https://learn.microsoft.com/azure/data-factory/delete-activity
+    expect(ss.wildcardFileName).toBe('*');
+  });
+
+  // ── #4083 defect 1: the source/sink pairing must be legal ─────────────────
+  it('stages the Snowflake unload through Blob — never a bare Gen2 direct copy', async () => {
+    await runMirrorAdfCopy('abcd1234-ef', 'ws1', SNOW, TABLES, 'note');
+    const [, pipeSpec] = upsertPipeline.mock.calls[0] as any[];
+    const copy = (pipeSpec.properties.activities as any[]).find((a) => a.type === 'Copy');
+    const tp = copy.typeProperties;
+    // SnowflakeExportCopyCommand delegates the unload to Snowflake, which can
+    // only write to a Blob endpoint — so it is ONLY legal with staging on.
+    expect(tp.source.exportSettings.type).toBe('SnowflakeExportCopyCommand');
+    expect(tp.enableStaging).toBe(true);
+    expect(tp.stagingSettings.linkedServiceName.referenceName).toBe('ls-stage-blob');
+    // Without MergeFiles only the last partitioned file of the unload lands.
+    expect(tp.sink.storeSettings.copyBehavior).toBe('MergeFiles');
+  });
+
+  it('GATES instead of authoring a pipeline ADF would reject on every run', async () => {
+    // No staging Blob linked service → there is no supported way to move a
+    // Snowflake row into a Gen2 sink. Refuse at construction time rather than
+    // shipping a pipeline whose Copy fails after the Delete already ran.
+    delete process.env.LOOM_MIRROR_STAGING_BLOB_LINKED_SERVICE;
+    const r = await runMirrorAdfCopy('abcd1234-ef', 'ws1', SNOW, TABLES, 'note');
+    expect(r.ok).toBe(false);
+    expect(r.status).toBe('Gated');
+    expect(r.gate?.missing).toBe('LOOM_MIRROR_STAGING_BLOB_LINKED_SERVICE');
+    // Nothing was authored and nothing was run — no Delete can reach Bronze.
+    expect(upsertPipeline).not.toHaveBeenCalled();
+    expect(upsertDataset).not.toHaveBeenCalled();
+    expect(runPipeline).not.toHaveBeenCalled();
+    // The gate names the real cause, not a generic failure.
+    expect(r.gate?.message).toContain('Azure Blob');
+  });
+
+  it('planSnowflakeCopyTransfer decides the shape without touching Azure', () => {
+    expect(planSnowflakeCopyTransfer('ls-stage-blob')).toEqual({
+      kind: 'staged', stagingLinkedService: 'ls-stage-blob',
+    });
+    const gated = planSnowflakeCopyTransfer(null);
+    expect(gated.kind).toBe('unsupported');
+    // An empty string is not a linked service name.
+    expect(planSnowflakeCopyTransfer('').kind).toBe('unsupported');
   });
 
   it('AUTO-BINDS the Snowflake linked service from the connection — no env var needed', async () => {
@@ -207,7 +297,8 @@ describe('runMirrorAdfCopy (Snowflake)', () => {
     const [, dsSpec] = upsertDataset.mock.calls[0] as any[];
     expect(dsSpec.properties.type).toBe('SnowflakeTable');
     const [, pipeSpec] = upsertPipeline.mock.calls[0] as any[];
-    expect(pipeSpec.properties.activities[1].typeProperties.source.type).toBe('SnowflakeSource');
+    const copy = (pipeSpec.properties.activities as any[]).find((a) => a.type === 'Copy');
+    expect(copy.typeProperties.source.type).toBe('SnowflakeSource');
   });
 
   it('syncMode=snapshot does a one-time load with NO schedule trigger', async () => {

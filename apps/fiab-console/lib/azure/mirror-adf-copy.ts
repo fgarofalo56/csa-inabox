@@ -26,13 +26,81 @@ import type { MirrorSource, MirrorTableSpec, MirrorTableResult, MirrorRunResult 
 // ADF Copy runtime path (opt-in) — the no-Fabric backend for sources that
 // authenticate with their own runtime and that ADF reads via its Copy connector
 // (Snowflake today; BigQuery / Oracle extend later). Each selected table gets a
-// **delete-then-copy** full-refresh pipeline (Delete activity clears the Bronze
-// folder, Copy lands fresh Parquet) and, unless syncMode='snapshot', a schedule
-// trigger that re-runs the pipeline on a cadence. Real ARM (upsertDataset +
-// upsertPipeline + runPipeline + upsertTrigger/startTrigger). No Microsoft Fabric.
+// **copy-then-swap** full-refresh pipeline (Copy lands fresh Parquet, then a
+// Delete conditional on that Copy having SUCCEEDED removes the previous
+// generation) and, unless syncMode='snapshot', a schedule trigger that re-runs
+// the pipeline on a cadence. Real ARM (upsertDataset + upsertPipeline +
+// runPipeline + upsertTrigger/startTrigger). No Microsoft Fabric.
 //   https://learn.microsoft.com/azure/data-factory/connector-snowflake
 //   https://learn.microsoft.com/azure/data-factory/connector-azure-data-lake-storage
+//   https://learn.microsoft.com/azure/data-factory/delete-activity
 // ============================================================
+
+/** Container + prefix ADF stages a Snowflake unload through before Bronze. */
+const STAGING_PATH_ROOT = 'loom-mirror-staging';
+
+/**
+ * The interim Azure **Blob Storage** linked service ADF stages a Snowflake
+ * unload through, or null when this deployment has none.
+ *
+ * This is a genuine infra prerequisite, not a tuning knob. Snowflake's
+ * `COPY INTO <location>` unload — which `SnowflakeExportCopyCommand` delegates
+ * to Snowflake to execute — can only write to an Azure **Blob** endpoint, so
+ * ADF refuses the payload up front when the sink linked service is
+ * `AzureBlobFS` (the ADLS Gen2 `dfs` endpoint):
+ *
+ *   ErrorCode=UnsupportPayloadForExternalCommand, ... Snowflake Export Copy
+ *   Command validation failed: 'Snowflake copy command not support Connector
+ *   type as 'not Azure Blob Storage'
+ *
+ * Learn documents exactly two supported shapes for a Snowflake source, and BOTH
+ * require a Blob-typed linked service:
+ *   - direct copy → the SINK linked service is Azure Blob Storage with shared
+ *     access signature auth (it MAY point at a Gen2 account's blob endpoint);
+ *   - staged copy → an interim Azure Blob Storage linked service, SAS auth
+ *     absent a Snowflake `storageIntegration`.
+ * Loom takes the staged shape because it preserves the ADLS Gen2 Bronze sink
+ * the rest of the platform reads from (the paired Synapse Serverless endpoint
+ * is provisioned over it).
+ *   https://learn.microsoft.com/azure/data-factory/connector-snowflake
+ */
+function mirrorStagingBlobLinkedService(): string | null {
+  const v = process.env.LOOM_MIRROR_STAGING_BLOB_LINKED_SERVICE;
+  return v && v.trim() ? v.trim() : null;
+}
+
+/**
+ * How a Snowflake table can be moved into Bronze on this deployment.
+ *
+ * Split out as a pure function so the pairing is validated at CONSTRUCTION
+ * time. Before #4083 the engine authored a `SnowflakeExportCopyCommand` source
+ * against an `AzureBlobFS` sink unconditionally; ADF accepted the pipeline and
+ * rejected every RUN, after the unconditional Delete had already cleared
+ * Bronze. Deciding here means an unsupported pairing is never authored at all.
+ */
+export type SnowflakeCopyTransferPlan =
+  | { kind: 'staged'; stagingLinkedService: string }
+  | { kind: 'unsupported'; missing: string; message: string };
+
+export function planSnowflakeCopyTransfer(
+  stagingLinkedService: string | null,
+): SnowflakeCopyTransferPlan {
+  if (stagingLinkedService) {
+    return { kind: 'staged', stagingLinkedService };
+  }
+  return {
+    kind: 'unsupported',
+    missing: 'LOOM_MIRROR_STAGING_BLOB_LINKED_SERVICE',
+    message:
+      "Snowflake's COPY INTO unload can only write to an Azure Blob endpoint, so Azure Data Factory rejects a " +
+      'Snowflake source paired with an ADLS Gen2 (AzureBlobFS) sink: "Snowflake copy command not support ' +
+      'Connector type as \'not Azure Blob Storage\'". The documented path is a staged copy through an interim ' +
+      'Azure Blob Storage linked service using shared access signature authentication — point ' +
+      'LOOM_MIRROR_STAGING_BLOB_LINKED_SERVICE at one and Start again. That linked service is NOT yet deployed ' +
+      'by platform/fiab/bicep (tracked on issue #4083). Until it is, this mirror is gated rather than authoring ' +
+      'a pipeline ADF would reject on every run.',
+  };
+}
 
 /**
  * Snowflake source linked service to bind.
@@ -93,7 +161,8 @@ function copyRecurrence(cadence: string): { frequency: string; interval: number 
  *
  * HONESTY NOTE (deploy-integrity.md R7): on this backend `incremental` means
  * "re-copied on a schedule", not row-level change capture — the ADF Snowflake
- * connector has no CDC source, so each run is a delete-then-copy full refresh.
+ * connector has no CDC source, so each run is a full refresh: a fresh copy
+ * followed by a delete of the previous generation.
  * Snowflake CHANGES/stream-based row-level deltas are a disclosed follow-up, and
  * the wizard's per-source note says exactly this rather than implying more.
  */
@@ -122,7 +191,7 @@ export function planCopyTrigger(
 
 /**
  * Provision + run an ADF Copy pipeline that lands each selected table as Parquet
- * in ADLS Bronze (delete-then-copy full refresh), and — unless syncMode is
+ * in ADLS Bronze (copy-then-swap full refresh), and — unless syncMode is
  * 'snapshot' — register a schedule trigger that re-runs the copy on a cadence
  * (LOOM_MIRROR_COPY_CADENCE, default '1h'). Returns a MirrorRunResult carrying the
  * pipeline name (the ADF run-id receipt) + per-table Parquet landing paths. The
@@ -145,6 +214,19 @@ export async function runMirrorAdfCopy(
           `${adfGate?.missing || 'LOOM_MIRROR_ADLS_LINKED_SERVICE'}. The Snowflake source linked service is NOT a ` +
           "prerequisite — Loom builds it from the mirror's connection.",
       },
+      note,
+    };
+  }
+
+  // ── Validate the source/sink pairing BEFORE authoring anything ────────────
+  // Cheapest gate first: if this deployment cannot move a Snowflake row into
+  // Bronze at all, say so now rather than binding a linked service, enumerating
+  // the source, and authoring a pipeline whose every run ADF will reject.
+  const transfer = planSnowflakeCopyTransfer(mirrorStagingBlobLinkedService());
+  if (transfer.kind === 'unsupported') {
+    return {
+      ok: false, status: 'Gated', backend: 'azure-native-cdc', engine: 'adf-copy', tables: [],
+      gate: { missing: transfer.missing, message: transfer.message },
       note,
     };
   }
@@ -229,7 +311,7 @@ export async function runMirrorAdfCopy(
   const cadence = (process.env.LOOM_MIRROR_COPY_CADENCE || '1h').trim();
   const triggerPlan = planCopyTrigger(src.syncMode, cadence);
 
-  // One source dataset + one Parquet sink dataset + a delete-then-copy activity
+  // One source dataset + one Parquet sink dataset + a copy-then-swap activity
   // pair per selected table. Datasets named off the pipeline + table (safe).
   const activities: unknown[] = [];
   try {
@@ -257,31 +339,61 @@ export async function runMirrorAdfCopy(
           },
         },
       } as any);
-      const delName = adfSafeName(`Delete_${t.schema}_${t.table}`);
+      const delName = adfSafeName(`DeletePrev_${t.schema}_${t.table}`);
       const copyName = adfSafeName(`Copy_${t.schema}_${t.table}`);
-      // Delete clears the folder so each full-refresh run overwrites (no dup rows).
-      activities.push({
-        name: delName,
-        type: 'Delete',
-        dependsOn: [],
-        typeProperties: {
-          dataset: { referenceName: sinkDs, type: 'DatasetReference' },
-          recursive: true,
-          enableLogging: false,
-          storeSettings: { type: 'AzureBlobFSReadSettings', recursive: true },
-        },
-      });
+      // ── Copy FIRST; delete the PREVIOUS generation only once it succeeded ──
+      // The Delete used to run first with `dependsOn: []`, which made the full
+      // refresh non-transactional: the Delete succeeded, the Copy failed, and
+      // Bronze was left EMPTY. That is silent data loss on any copy failure,
+      // transient or not. Measured on pipeline `loom_copy_1ac5d678` — four
+      // consecutive runs, every Delete Succeeded, every Copy Failed,
+      // `rowsCopied: null` throughout (issue #4083).
+      //
+      // Copy now has no dependency and the Delete is conditional on it having
+      // SUCCEEDED, so a failed copy leaves the previous snapshot intact. The
+      // Delete removes only files last modified BEFORE this run started
+      // (`@pipeline().TriggerTime`), which is the previous generation — the
+      // rows this run just wrote are newer and are not matched. Chaining a
+      // Delete behind a Copy this way is the shape Learn documents for moving
+      // data; `wildcardFileName` is required whenever a modifiedDatetime filter
+      // is used, a documented limitation of the Delete activity.
+      //   https://learn.microsoft.com/azure/data-factory/delete-activity
       activities.push({
         name: copyName,
         type: 'Copy',
-        dependsOn: [{ activity: delName, dependencyConditions: ['Succeeded'] }],
+        dependsOn: [],
         inputs: [{ referenceName: srcDs, type: 'DatasetReference' }],
         outputs: [{ referenceName: sinkDs, type: 'DatasetReference' }],
         typeProperties: {
           source: { type: kind.source, exportSettings: { type: 'SnowflakeExportCopyCommand' } },
-
-          sink: { type: 'ParquetSink', storeSettings: { type: 'AzureBlobFSWriteSettings' } },
-          enableStaging: false,
+          // MergeFiles is required on a staged Snowflake copy: without it only
+          // the last partitioned file of the unload is copied to the sink.
+          //   https://learn.microsoft.com/azure/data-factory/connector-snowflake
+          sink: {
+            type: 'ParquetSink',
+            storeSettings: { type: 'AzureBlobFSWriteSettings', copyBehavior: 'MergeFiles' },
+          },
+          enableStaging: true,
+          stagingSettings: {
+            linkedServiceName: { referenceName: transfer.stagingLinkedService, type: 'LinkedServiceReference' },
+            path: `${STAGING_PATH_ROOT}/${mirrorId}`,
+          },
+        },
+      });
+      activities.push({
+        name: delName,
+        type: 'Delete',
+        dependsOn: [{ activity: copyName, dependencyConditions: ['Succeeded'] }],
+        typeProperties: {
+          dataset: { referenceName: sinkDs, type: 'DatasetReference' },
+          recursive: true,
+          enableLogging: false,
+          storeSettings: {
+            type: 'AzureBlobFSReadSettings',
+            recursive: true,
+            wildcardFileName: '*',
+            modifiedDatetimeEnd: { value: '@pipeline().TriggerTime', type: 'Expression' },
+          },
         },
       });
     }
@@ -364,7 +476,8 @@ export async function runMirrorAdfCopy(
       : '';
   const adfNote =
     'Azure-native mirror via ADF Copy runtime (no Microsoft Fabric): each selected Snowflake table is ' +
-    `delete-then-copied as Parquet into ADLS Bronze. Pipeline: ${pipelineName}. ` +
+    `copied as Parquet into ADLS Bronze, staged through ${transfer.stagingLinkedService}, and the previous ` +
+    `generation deleted only after that copy succeeded. Pipeline: ${pipelineName}. ` +
     `Snowflake linked service: ${sourceLs}.${credNote}${tableNote}${triggerNote}`;
   const lastSync = new Date().toISOString();
   const tables: MirrorTableResult[] = tableSpecsResolved.map((t) => {
