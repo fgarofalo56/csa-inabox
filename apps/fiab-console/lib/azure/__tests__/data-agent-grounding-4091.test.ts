@@ -310,3 +310,152 @@ describe('#4091 — promisesExecution', () => {
     expect(promisesExecution(t)).toBe(false);
   });
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// PR #4095 review blockers.
+//
+// Both describe defects the #4091 fix ITSELF introduced, so every test below
+// fails against the PR head and passes only after the follow-up. The tests that
+// must stay GREEN throughout are the no-regression controls, and they already
+// exist above:
+//   · 'binds a query to the ONLY attached source when the model names a table
+//      instead'  — the #4091 defect this PR exists to fix (type MATCHES, so the
+//      blocker-1 narrowing must not disturb it).
+//   · 'declares itself NOT GROUNDED when even the recovery turn produces no
+//      query' — the genuinely model-attributed gate, which blocker 2 must keep
+//      distinct from a transport failure rather than collapse into it.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** Tools JSON whose declared `type` is the routing input under test. */
+const typedToolsJson = (query: string, source: string, type?: string) =>
+  '```json\n' +
+  JSON.stringify({ toolsUsed: [{ source, ...(type ? { type } : {}), action: 'query', query }] }) +
+  '\n```';
+
+const KQL_QUERY = 'SessionEvents | where Timestamp > ago(7d) | summarize NetWin=sum(Net) by Player';
+
+/** One attached ADX source — the mirror image of CASINO_CFG. */
+const ADX_CFG = {
+  instructions: 'Answer questions about session telemetry.',
+  sources: [{ id: 'kql-1', type: 'kql' as const, name: 'telemetry', tables: 'SessionEvents' }],
+};
+
+/**
+ * A type-aware executor: only the backend whose type the source actually
+ * carries answers; anything else returns its honest gate. This is what makes
+ * the assertion discriminating — a mis-routed query does not merely land on the
+ * wrong source, it comes back `executed:true` and is reported as grounded.
+ */
+function executorAnsweringOnly(type: string, gate: string) {
+  executeSourceQuery.mockImplementation(async (src: any) =>
+    src?.type === type ? REAL_ROWS : { executed: false, gate });
+}
+
+describe('#4095 blocker 1 — the single-attached-source fallback must respect tool.type', () => {
+  it('does NOT hand a kql tool the only attached WAREHOUSE source, and does not call that grounded', async () => {
+    // On the PR head the fallback ignores `tool.type` entirely: a `kql` tool
+    // whose source name does not match is routed to whatever the single
+    // attached source happens to be — here a Synapse warehouse. The warehouse
+    // answers `executed:true`, so the turn reports `grounded:true` with NO gate
+    // for a question answered by the WRONG backend. On `main` this could not
+    // happen: with no single-source fallback the tool synthesised its DECLARED
+    // type and gated honestly. That makes the PR head strictly worse than main.
+    //
+    // MUTATION RECEIPT: revert the `!tool.type || tool.type === …` narrowing in
+    // the source-resolution chain and this fails — the executor is handed
+    // {type:'warehouse', name:'loompool'} and `grounded` comes back true.
+    queueAoai(
+      { content: `Pulling the telemetry now.\n${typedToolsJson(KQL_QUERY, 'SessionEvents', 'kql')}` },
+      { content: 'Ada Lovelace leads with 48,210.' }, // only consumed on the BROKEN path
+    );
+    executorAnsweringOnly('warehouse', 'ADX is not configured in this deployment; set LOOM_ADX_CLUSTER.');
+
+    const ans = await chatGrounded(CASINO_CFG, [], 'who led net win in the last 7 days?');
+
+    expect(executeSourceQuery).toHaveBeenCalledTimes(1);
+    const routedTo = executeSourceQuery.mock.calls[0][0];
+    // The kql tool must never be given the warehouse's typed config.
+    expect(routedTo.type).toBe('kql');
+    expect(routedTo.name).not.toBe('loompool');
+
+    // …and because no ADX source is attached, the turn is honestly gated.
+    expect(ans.grounded).toBe(false);
+    expect(ans.groundingGate).toContain('ADX is not configured');
+  });
+
+  it('does NOT hand a warehouse tool the only attached KQL source either (the mirror case)', async () => {
+    // The same defect in the other direction, so the guard cannot be satisfied
+    // by special-casing one source type.
+    // MUTATION RECEIPT: revert the narrowing → the executor is handed
+    // {type:'kql', name:'telemetry'} and `grounded` comes back true.
+    queueAoai(
+      { content: `Querying the warehouse.\n${typedToolsJson(RECOVERED_SQL, 'casino.fact_session', 'warehouse')}` },
+      { content: 'Ada Lovelace leads with 48,210.' },
+    );
+    executorAnsweringOnly('kql', 'Synapse dedicated SQL is not configured in this deployment.');
+
+    const ans = await chatGrounded(ADX_CFG, [], 'who are my top players by net win?');
+
+    expect(executeSourceQuery).toHaveBeenCalledTimes(1);
+    const routedTo = executeSourceQuery.mock.calls[0][0];
+    expect(routedTo.type).toBe('warehouse');
+    expect(routedTo.name).not.toBe('telemetry');
+
+    expect(ans.grounded).toBe(false);
+    expect(ans.groundingGate).toContain('Synapse dedicated SQL is not configured');
+  });
+});
+
+describe('#4095 blocker 2 — a recovery call that never completed is not a silent model', () => {
+  it('attributes a THROWN recovery call to the transport, not to the model (deploy-integrity R7)', async () => {
+    // The recovery turn is wrapped in a bare `catch {}`. When the recovery HTTP
+    // call throws, `parsed.tools` carries no gate, `gates.length === 0`, and the
+    // gate string blames the model for emitting no query — but the model was
+    // never reached. That is a transport failure reported as a model failure:
+    // exactly the shape R7 exists to prevent, inside the block whose own
+    // comment cites R7.
+    //
+    // MUTATION RECEIPT: restore the bare `catch {}` (drop the captured failure
+    // and the third gate branch) and this fails — the gate reads "The model
+    // produced no runnable query…" and carries no mention of ECONNRESET.
+    fetchWithTimeout.mockReset();
+    fetchWithTimeout.mockResolvedValueOnce(aoaiResponse(NARRATION)); // phase 1 — narrates
+    fetchWithTimeout.mockRejectedValueOnce(new Error('fetch failed: ECONNRESET')); // phase 1b — never reaches the model
+    fetchWithTimeout.mockResolvedValue(aoaiResponse(''));
+
+    const ans = await chatGrounded(CASINO_CFG, [], 'who are my top players by net win?');
+
+    expect(executeSourceQuery).not.toHaveBeenCalled();
+    expect(ans.grounded).toBe(false);
+
+    // The gate states what was actually established: the call failed, with its reason.
+    expect(ans.groundingGate).toMatch(/recovery/i);
+    expect(ans.groundingGate).toContain('ECONNRESET');
+    // …and explicitly does NOT assert a model behaviour the code never observed.
+    expect(ans.groundingGate).not.toMatch(/model produced no runnable query/i);
+    // The unknown is named as unknown rather than resolved against the model.
+    expect(ans.groundingGate).toMatch(/unknown/i);
+  });
+
+  it('carries the QUOTA reason when the recovery call is rate-limited', async () => {
+    // A 429 is the most common real cause of this path and is emphatically not
+    // "the model declined to emit a query".
+    // MUTATION RECEIPT: restore the bare `catch {}` → the gate blames the model
+    // and the 429 disappears entirely.
+    fetchWithTimeout.mockReset();
+    fetchWithTimeout.mockResolvedValueOnce(aoaiResponse(NARRATION));
+    fetchWithTimeout.mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({ error: { code: '429', message: 'Requests to the ChatCompletions_Create Operation have exceeded the token rate limit.' } }),
+        { status: 429, headers: { 'content-type': 'application/json' } },
+      ),
+    );
+    fetchWithTimeout.mockResolvedValue(aoaiResponse(''));
+
+    const ans = await chatGrounded(CASINO_CFG, [], 'who are my top players by net win?');
+
+    expect(ans.grounded).toBe(false);
+    expect(ans.groundingGate).toMatch(/429|rate limit/i);
+    expect(ans.groundingGate).not.toMatch(/model produced no runnable query/i);
+  });
+});

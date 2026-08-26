@@ -474,6 +474,12 @@ export async function chatGrounded(cfg: DataAgentConfig, history: ChatTurn[], qu
   // Ask again with the QUERY-ONLY prompt, which cannot be narrated away and
   // puts the runnable payload FIRST so truncation cannot eat it.
   let recoveredQuery = false;
+  // #4095 — WHY the recovery produced nothing, when it produced nothing. A
+  // recovery call that THREW never reached the model at all, so the honest gate
+  // below must not report it as "the model emitted no query": that would assert
+  // a cause the code never established (deploy-integrity.md R7). Undefined means
+  // the call genuinely completed and simply carried no runnable query.
+  let recoveryFailure: string | undefined;
   if (cfg.sources.length > 0 && !hasRunnableQuery(parsed)) {
     try {
       const retry = await runChat(
@@ -494,8 +500,12 @@ export async function chatGrounded(cfg: DataAgentConfig, history: ChatTurn[], qu
         parsed = { ...parsed, tools: retryParsed.tools, query: retryParsed.query, sourceUsed: retryParsed.sourceUsed };
         recoveredQuery = true;
       }
-    } catch {
-      /* recovery is best-effort — a failed retry falls through to the honest gate */
+    } catch (err) {
+      // Recovery stays best-effort — a failed retry still falls through to the
+      // honest gate — but the REASON is load-bearing, because it is the whole
+      // difference between a model that said nothing and an endpoint we never
+      // reached (transport, timeout, quota/429, auth).
+      recoveryFailure = (err instanceof Error ? err.message : String(err)).slice(0, 200);
     }
   }
 
@@ -508,18 +518,27 @@ export async function chatGrounded(cfg: DataAgentConfig, history: ChatTurn[], qu
       if (!tool.query) continue;
       // Resolve the typed source for this tool. Precedence matters:
       //   1. exact name match — the model copied the source name, as asked;
-      //   2. the ONLY attached source — the model routinely writes the
-      //      schema-qualified TABLE (`casino.fact_session`) where the source
-      //      name belongs. With one source attached that is unambiguous, and
-      //      throwing a perfectly runnable query away over a name mismatch is
-      //      one of the ways #4091 produced "no data";
+      //   2. the ONLY attached source, but ONLY when the tool's declared type
+      //      agrees with it (or the tool declared none). The model routinely
+      //      writes the schema-qualified TABLE (`casino.fact_session`) where
+      //      the source name belongs, and with one source attached that is
+      //      unambiguous — throwing a perfectly runnable query away over a name
+      //      mismatch is one of the ways #4091 produced "no data". But the type
+      //      guard is NOT optional: without it a `kql` tool lands on the single
+      //      attached WAREHOUSE, the wrong backend answers `executed:true`, and
+      //      the turn reports `grounded:true` for an answer the question was
+      //      never asked of. A name mismatch is a naming slip; a TYPE mismatch
+      //      means the model was routing somewhere else entirely, and the only
+      //      honest response is to fall through to (3) and gate.
       //   3. synthesise from the tool's declared type — last resort ONLY, since
       //      a synthesised source carries none of the real source's typed config
       //      (AI Search index, Graph scope, agent invoke URL, semantic-model id,
       //      lakehouse database name), so preferring it over a real attached
       //      source would silently target the wrong thing.
+      const only = cfg.sources.length === 1 ? cfg.sources[0] : undefined;
+      const toolType = tool.type?.trim().toLowerCase();
       const src = cfg.sources.find((s) => s.name && tool.source && s.name.toLowerCase() === tool.source.toLowerCase())
-        || (cfg.sources.length === 1 ? cfg.sources[0] : undefined)
+        || (only && (!toolType || toolType === only.type.toLowerCase()) ? only : undefined)
         || (tool.type ? { id: tool.source, type: tool.type as DataAgentSource['type'], name: tool.source } : undefined);
       if (!src) { tool.executed = false; tool.gate = 'Source not found on this agent.'; continue; }
       const exec: SourceExecution = await executeSourceQuery(src, tool.query, ctx);
@@ -570,9 +589,20 @@ export async function chatGrounded(cfg: DataAgentConfig, history: ChatTurn[], qu
   let groundingGate: string | undefined;
   if (!grounded && cfg.sources.length > 0) {
     const gates = (parsed.tools || []).map((t) => t.gate).filter(Boolean) as string[];
+    // Three DISTINCT causes, never collapsed into one another (deploy-integrity
+    // R7 — an error must not state as fact something it did not establish):
+    //   · a backend refused the query        → report the backend's own reason;
+    //   · the recovery call never completed  → report the transport failure and
+    //     say plainly that the model's behaviour is UNKNOWN, because we never
+    //     reached it. Reporting this as "the model produced no query" is the
+    //     exact false-attribution R7 exists to prevent;
+    //   · the recovery call DID complete and carried no query → and only then
+    //     is the model the established cause.
     groundingGate = gates.length
       ? `No query executed against the attached source(s): ${gates.join(' · ')}`
-      : 'The model produced no runnable query for the attached source(s), so nothing was executed and this answer is NOT grounded in real rows.';
+      : recoveryFailure
+        ? `The query-recovery turn did not complete (${recoveryFailure}), so no runnable query was obtained and this answer is NOT grounded in real rows. Whether a runnable query would have been returned is unknown — the deployment was never reached.`
+        : 'The model produced no runnable query for the attached source(s), so nothing was executed and this answer is NOT grounded in real rows.';
     // A confident promise of execution that never executed is the exact failure
     // this gate exists to make impossible to mistake for a working answer.
     if (promisesExecution(finalAnswer)) {
