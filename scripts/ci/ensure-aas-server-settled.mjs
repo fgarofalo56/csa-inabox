@@ -38,7 +38,8 @@
  * `deploy-integrity.md` R6 both say the opposite — where the platform CAN
  * perform the remediation, it must. This is the same argument
  * `ensure-adx-cluster-running.mjs` makes for starting a stopped Kusto cluster,
- * and the same first-party action the deploy identity already holds.
+ * and the same first-party action the deploy identity already holds
+ * (`Microsoft.AnalysisServices/servers/resume/action`).
  *
  * MEASURED, and the reason this is not hypothetical: `asAdministrators` on
  * aasloomk6mvh5sm6z7do is `null` right now. The delta that adds it landed on
@@ -50,10 +51,10 @@
  * ADX can afford to be left started because `enableAutoStop: true` makes Azure
  * stop it again when it goes idle. **Analysis Services has no auto-pause.** A
  * resume that is never undone bills an S1 indefinitely and silently defeats the
- * estate PAUSE tier, so this script prints a RESUMED marker and exits with the
- * prior state in its output; the workflow re-suspends afterwards in an
- * `if: always()` step. The cost is bounded to the deploy window rather than
- * being open-ended, and the pause tier's intent survives.
+ * estate PAUSE tier, so this script emits `aas_resumed` and the workflow
+ * re-suspends afterwards in an `if: always()` step gated on that output. The
+ * cost is bounded to the deploy window rather than being open-ended, and the
+ * pause tier's intent survives.
  *
  * WHAT THIS DOES *NOT* CLAIM. It does not assert WHY the server was paused. The
  * estate pause-actuator suspends exactly this resource type, which is a
@@ -63,15 +64,69 @@
  * no longer paused or transitional. If the write still fails, that is a
  * different defect and the deploy will say so.
  *
+ * ── ROUND 2 (#4074 review): FOUR DEFECTS THE FIRST DRAFT SHIPPED ────────────
+ *
+ * R1. `Pausing` WAS NOT IN THE TABLE. The Analysis Services `State` enum has
+ *     exactly twelve values — Deleting, Succeeded, Failed, Paused, Suspended,
+ *     Provisioning, Updating, Suspending, Pausing, Resuming, Preparing, Scaling
+ *     (learn.microsoft.com/javascript/api/@azure/arm-analysisservices/knownstate).
+ *     The first draft covered eleven. `Pausing` — a server mid-suspend, which is
+ *     PRECISELY what the estate PAUSE tier produces and therefore the single
+ *     most likely state for this preflight to arrive on — fell through to
+ *     `default: refuse` and would have failed the deploy on a completely
+ *     ordinary, self-resolving condition. It is a transitional state, so it is
+ *     `wait`, and the loop below then resumes the `Paused` it settles into.
+ *
+ * R2. THE `wait` ARM WAS A DEAD END. The old poll only ever terminated on
+ *     `Succeeded`, a refuse-class state, or budget exhaustion. So a server found
+ *     `Suspending`/`Pausing` was classified `wait`, polled while it settled to
+ *     `Paused` — a state whose classification is `resume` and therefore neither
+ *     success nor refusal — and then spun for the entire 1800s budget before
+ *     failing with a timeout. It never issued the one verb that would have
+ *     fixed it, and the deploy died reporting a budget where the truth was "I
+ *     watched it become fixable and did nothing" (R7). The poll is now a SETTLE
+ *     loop: every reading is re-classified, and a reading that becomes resumable
+ *     IS resumed. `planSettleStep` is that decision, extracted pure.
+ *
+ *     The resume count is BOUNDED (`MAX_RESUME_ATTEMPTS`). A server that returns
+ *     to `Paused` after we resumed it is being suspended by something else, and
+ *     an unbounded resume/suspend duel with the pause actuator would burn the
+ *     budget looking busy. deploy-integrity.md R6: "a retry that cannot fail is
+ *     forbidden."
+ *
+ * R3. NO RETRY ON THE `az` CALLS. Every call was single-shot, in a script whose
+ *     entire job is settling a resource — so a GatewayTimeout on the state read
+ *     failed the whole deploy. That is the #3786 defect verbatim, already paid
+ *     for once on the ADX sibling. Reads and resumes now go through
+ *     `azWithRetry`, which retries ONLY what `_az-failure-class.mjs` classifies
+ *     as transient, with bounded backoff, and FAILS CLOSED on exhaustion. Every
+ *     remediation is derived from the classified cause, never assumed.
+ *
+ * R4. `shouldResuspend` WAS DEAD CODE — exported, unit-tested, and called by
+ *     nothing, while `main()` computed the same answer inline as
+ *     `String(resumedByUs)`. An exported, tested function that nothing calls is
+ *     a control that measures nothing: its tests could stay green through any
+ *     change to the behaviour they claim to guard. It is now the ONLY producer
+ *     of the `aas_resumed` output the workflow's re-suspend step gates on, so a
+ *     mutation to it moves a real verdict.
+ *
+ * Also fixed here: `--timeout-seconds` was unvalidated, and `elapsed >= NaN` is
+ * ALWAYS false — a non-numeric budget made the poll unbounded, terminated only
+ * by the job's `timeout-minutes`. A budget that cannot be exceeded is not a
+ * budget. Same defect the ADX sibling closed; this file had inherited the shape
+ * without the fix.
+ *
  * ── FAILURE MODES ───────────────────────────────────────────────────────────
  *
- *   none    already Succeeded and not transitional → no mutation at all.
+ *   none    already Succeeded → no mutation at all.
  *   resume  Paused/Suspended → POST .../resume, then poll until settled.
- *   wait    Provisioning/Updating/Scaling/Resuming/Suspending/Preparing →
- *           someone else is mid-flight; poll rather than issuing a second verb.
+ *   wait    Provisioning/Updating/Scaling/Resuming/Suspending/Pausing/Preparing
+ *           → someone else is mid-flight; poll rather than issuing a second
+ *           verb, and resume it once it settles somewhere resumable.
  *   refuse  Failed/Deleting/Deleted, an unknown state string, an unreadable
- *           control plane, or a resume that did not settle inside the budget.
- *           Never "assume it came up".
+ *           control plane, a resume Azure rejected, more than
+ *           MAX_RESUME_ATTEMPTS resumes, or a settle that did not finish inside
+ *           the budget. Never "assume it came up".
  *
  * Usage:
  *   node scripts/ci/ensure-aas-server-settled.mjs \
@@ -80,13 +135,14 @@
  * Outputs (to $GITHUB_OUTPUT when set, and always to stdout as NAME=VALUE):
  *   aas_server        the server name it acted on, or empty when none exists
  *   aas_prior_state   the state observed BEFORE any mutation
- *   aas_resumed       'true' only when THIS run issued the resume
+ *   aas_resumed       'true' only when THIS run issued a resume Azure ACCEPTED
  *
  * Tests: node --test scripts/ci/__tests__/aas-preflight.test.mjs
  */
 
 import { execFileSync } from 'node:child_process';
 import { appendFileSync } from 'node:fs';
+import { classifyAzFailure, isRetryable } from './_az-failure-class.mjs';
 
 /** The api-version every AAS caller in this repo already uses. */
 export const AAS_API_VERSION = '2017-08-01';
@@ -94,7 +150,32 @@ export const DEFAULT_TIMEOUT_SECONDS = 1800;
 export const POLL_INTERVAL_SECONDS = 30;
 
 /**
+ * How many times this run will resume the SAME server before giving up.
+ *
+ * More than one because the honest sequence `Pausing → Paused → resume` can be
+ * preceded by a resume we issued against a server that was already on its way
+ * down, and one retry absorbs that race. Bounded because a server that keeps
+ * returning to `Paused` is being suspended by something ELSE, and duelling with
+ * it for the whole budget produces a timeout instead of the real story.
+ */
+export const MAX_RESUME_ATTEMPTS = 2;
+
+/**
+ * Backoff schedule for a TRANSIENT az failure. Length defines the retry count:
+ * 1 initial attempt + one retry per entry, so 4 attempts over ~50s of waiting.
+ * A schedule expressed as a finite array cannot become unbounded by arithmetic
+ * the way a `while (Date.now() < deadline)` loop can. Matches the ADX sibling.
+ */
+export const TRANSIENT_BACKOFF_SECONDS = [5, 15, 30];
+
+/**
  * PURE. What to do about a `properties.state` reading.
+ *
+ * The state table is the full Analysis Services `State` enum, and it is
+ * COMPLETE on purpose — every one of the twelve documented values is named, so
+ * the `default` arm can only ever be reached by a value Azure did not document
+ * when this was written. That is what makes refusing there defensible rather
+ * than merely strict.
  *
  * The `refuse` branch is the point of the function: an unrecognised state is
  * UNKNOWN, and an unknown state is not "probably fine". Adding a state to this
@@ -120,6 +201,10 @@ export function classifyServerState(state) {
     case 'Scaling':
     case 'Resuming':
     case 'Suspending':
+    // `Pausing` is the state the estate PAUSE tier puts this server INTO, so it
+    // is the likeliest one for this preflight to arrive on. Omitting it (the
+    // first draft did) sent the single most ordinary condition to `refuse`.
+    case 'Pausing':
     case 'Preparing':
       return { action: 'wait', reason: `the server is ${state} — a control-plane operation is already in flight.` };
     case 'Failed':
@@ -142,29 +227,88 @@ export function classifyServerState(state) {
 }
 
 /**
- * PURE. Turn a poll reading into a verdict.
- * @param {{state: string|null, elapsedSeconds: number, budgetSeconds: number}} p
- * @returns {{done: boolean, ok: boolean, reason: string}}
+ * PURE. Real elapsed seconds between two timestamps.
+ *
+ * Clamped at 0: a non-monotonic clock (an NTP step, a VM resuming) must never
+ * hand the settle loop a NEGATIVE elapsed, which reads as "no time has passed"
+ * and makes the budget unreachable — the same "budget that cannot be exceeded"
+ * shape the `--timeout-seconds` validation closes.
+ *
+ * @param {number} startedAtMs Date.now() when the settle loop began
+ * @param {number} nowMs       Date.now() at the moment of the check
+ * @returns {number} whole seconds, never negative
  */
-export function evaluatePoll({ state, elapsedSeconds, budgetSeconds }) {
-  if (state === 'Succeeded') {
-    return { done: true, ok: true, reason: `settled to Succeeded after ${elapsedSeconds}s.` };
+export function elapsedSecondsSince(startedAtMs, nowMs) {
+  const deltaMs = Number(nowMs) - Number(startedAtMs);
+  if (!Number.isFinite(deltaMs) || deltaMs < 0) return 0;
+  return Math.floor(deltaMs / 1000);
+}
+
+/**
+ * PURE. What should the settle loop DO about this reading?
+ *
+ * This replaces the first draft's `evaluatePoll`, which could only answer
+ * "keep going / stop". That vocabulary is what made the `wait` arm a dead end:
+ * a server observed settling from `Suspending` into `Paused` had become
+ * FIXABLE, and a function that can only say "not done yet" cannot say so. The
+ * verb set is therefore settled / resume / wait / fail.
+ *
+ * ORDER IS LOAD-BEARING:
+ *   1. settled  — the only successful exit.
+ *   2. fail on a refuse-class state — reported NOW with the real reason, never
+ *      deferred to the budget. A `Failed` server reported as a timeout is a
+ *      false cause (R7), and the budget would hide it for 30 minutes first.
+ *   3. resume   — but only while attempts remain; exhaustion is its own, more
+ *      specific failure than "the budget ran out", and it names the thing the
+ *      operator actually has to go look at.
+ *   4. wait     — subject to the budget.
+ *
+ * @param {{state: string|null, elapsedSeconds: number, budgetSeconds: number,
+ *          resumesIssued?: number, maxResumes?: number}} p
+ * @returns {{action: 'settled'|'resume'|'wait'|'fail', reason: string}}
+ */
+export function planSettleStep({
+  state,
+  elapsedSeconds,
+  budgetSeconds,
+  resumesIssued = 0,
+  maxResumes = MAX_RESUME_ATTEMPTS,
+}) {
+  const verdict = classifyServerState(state);
+
+  if (verdict.action === 'none') {
+    return { action: 'settled', reason: `settled to '${state}' after ${elapsedSeconds}s.` };
   }
-  const terminal = classifyServerState(state);
-  if (terminal.action === 'refuse') {
-    return { done: true, ok: false, reason: terminal.reason };
+
+  if (verdict.action === 'refuse') {
+    return { action: 'fail', reason: verdict.reason };
   }
-  if (elapsedSeconds >= budgetSeconds) {
-    return {
-      done: true,
-      ok: false,
-      reason:
-        `still '${state}' after ${elapsedSeconds}s (budget ${budgetSeconds}s). The outcome is UNCONFIRMED, so ` +
-        'this reports failure rather than letting the deploy attempt an administrator write on a server that ' +
-        'may still be suspended.',
-    };
+
+  const outOfBudget = {
+    action: 'fail',
+    reason:
+      `still '${state}' after ${elapsedSeconds}s (budget ${budgetSeconds}s). The outcome is UNCONFIRMED, so ` +
+      'this reports failure rather than letting the deploy attempt an administrator write on a server that ' +
+      'may still be suspended.',
+  };
+
+  if (verdict.action === 'resume') {
+    if (resumesIssued >= maxResumes) {
+      return {
+        action: 'fail',
+        reason:
+          `this run has already issued ${resumesIssued} resume(s) and the server is '${state}' again. ` +
+          'Something OTHER than this step is suspending it — the estate pause actuator is the candidate to ' +
+          'check first, though this step observed only the state and never a suspend event. Refusing to duel ' +
+          'with it for the rest of the budget and report a timeout instead of this.',
+      };
+    }
+    if (elapsedSeconds >= budgetSeconds) return outOfBudget;
+    return { action: 'resume', reason: verdict.reason };
   }
-  return { done: false, ok: false, reason: `state='${state}', ${elapsedSeconds}s elapsed.` };
+
+  if (elapsedSeconds >= budgetSeconds) return outOfBudget;
+  return { action: 'wait', reason: `state='${state}', ${elapsedSeconds}s elapsed.` };
 }
 
 /**
@@ -173,6 +317,11 @@ export function evaluatePoll({ state, elapsedSeconds, budgetSeconds }) {
  * Only when THIS run resumed it. A server that was already running when we
  * arrived belongs to whoever started it, and suspending it would be this script
  * reaching outside what it changed.
+ *
+ * WIRED, not decorative (#4074 review R4): the boolean this returns IS the
+ * `aas_resumed` output, and `deploy-fiab-commercial.yml` gates its `always()`
+ * re-suspend step on `steps.aas_preflight.outputs.aas_resumed == 'true'`. There
+ * is no second inline copy of this decision to drift away from it.
  *
  * @param {{priorState: string, resumedByUs: boolean}} p
  * @returns {{resuspend: boolean, reason: string}}
@@ -192,9 +341,128 @@ export function shouldResuspend({ priorState, resumedByUs }) {
   };
 }
 
+/**
+ * PURE. How long to wait before attempt N+1, or null when the budget is spent.
+ *
+ * Exported so the exhaustion boundary is unit-testable without burning 50s of
+ * real sleep, and so a future edit that makes the schedule infinite fails a test
+ * rather than hanging a deploy.
+ *
+ * @param {number} attemptIndex 0-based index of the attempt that just FAILED
+ * @returns {number|null} seconds to sleep, or null to stop retrying
+ */
+export function nextRetryDelaySeconds(attemptIndex) {
+  if (!Number.isInteger(attemptIndex) || attemptIndex < 0) return null;
+  return attemptIndex < TRANSIENT_BACKOFF_SECONDS.length ? TRANSIENT_BACKOFF_SECONDS[attemptIndex] : null;
+}
+
+/**
+ * PURE. The remediation for a classified az failure, in Analysis Services terms.
+ *
+ * NOT `_az-failure-class.mjs`'s `remediationFor`, deliberately. That one names
+ * "Azure Kusto Contributor" and "adx-cluster.bicep `adxSku`" in three of its
+ * five branches, because it was written for the ADX preflight. Reusing it here
+ * would print a Kusto role for an Analysis Services scope — a remediation that
+ * cannot possibly be right, which is deploy-integrity.md R7 in the exact form
+ * that file exists to end. The CLASSIFIER is shared (that part is provider
+ * agnostic); only the operator-facing text is local.
+ *
+ * Permission strings verified against
+ * learn.microsoft.com/azure/role-based-access-control/permissions/analytics.
+ *
+ * @param {'capacity'|'transient'|'denied'|'notfound'|'unknown'} kind
+ * @param {string} scopeId the ARM id the failing call targeted
+ * @param {number} [attempts] how many times a transient failure was retried
+ * @returns {string}
+ */
+export function aasRemediationFor(kind, scopeId, attempts = 0) {
+  switch (kind) {
+    case 'transient':
+      return (
+        `az did not complete the call in ${attempts} attempt(s), and the last failure carried a transient ` +
+        'signal (the raw error below is what it said). Re-run this workflow. THE LIMIT OF WHAT THIS ' +
+        "ESTABLISHES: the call did not complete. This step did not test the deploy identity's permissions, " +
+        "the SKU's capacity, or the server's existence, so none of those is ruled out — if a re-run fails " +
+        'the same way, read the raw error rather than assuming the cause is Azure-side.'
+      );
+    case 'denied':
+      return (
+        `the deploy service principal was REFUSED on ${scopeId}. This one IS a permission problem, and az ` +
+        'named it: it needs Microsoft.AnalysisServices/servers/read to read the state and ' +
+        'Microsoft.AnalysisServices/servers/resume/action to resume it — Contributor at that scope carries ' +
+        'both, or grant a custom role holding exactly those two.'
+      );
+    case 'capacity':
+      return (
+        "Azure has NO CAPACITY for this server's SKU in this region, so no retry and no role grant will " +
+        'resolve it. This is not a defect in the deploy. Either pick a SKU that has capacity in the region ' +
+        '(the aas-server bicep module\'s `sku`), deploy the server to a region that does, or wait for ' +
+        'capacity to free up and re-run. The raw az error below names the SKU.'
+      );
+    case 'notfound':
+      return (
+        `ARM reports the target does not exist at ${scopeId}. If this is a greenfield subscription the ` +
+        'template creates the server, and a freshly created server is Succeeded — so this step should not ' +
+        'have reached a per-server read at all. Treat a not-found HERE as a real inconsistency.'
+      );
+    default:
+      return (
+        'az failed with an error this step does NOT recognise, so NO cause is asserted — not permissions, ' +
+        'not capacity, not a transient blip. The raw az stderr below is the only thing that was ' +
+        'established; read it before acting on any hypothesis.'
+      );
+  }
+}
+
+/**
+ * Run an `az` call, retrying ONLY what `_az-failure-class.mjs` calls transient.
+ *
+ * Returns the LAST attempt's result plus what was learned about it, so a caller
+ * can build a message from the established cause instead of a hypothesis. A
+ * `denied`, `capacity`, `notfound` or `unknown` failure returns immediately —
+ * retrying a refusal just delays the truth by 50 seconds.
+ *
+ * DUPLICATION, DISCLOSED. `ensure-adx-cluster-running.mjs` carries a function of
+ * the same name and shape. Unifying them means refactoring a preflight that is
+ * currently working on a lane that is currently broken, and
+ * `_az-failure-class.mjs`'s own header records the precedent for not doing that
+ * here: "Unifying them is a behaviour change that needs its own measurement, not
+ * a drive-by in a P0." The CLASSIFIER — the part where drift would silently
+ * change how a real failure is read — is already shared. Tracked for extraction
+ * into a `_az-retry.mjs` once this lane is green.
+ *
+ * @param {string[]} args
+ * @param {{runner?: Function, sleep?: Function, log?: Function, label?: string}} [io] seams for tests
+ * @returns {{ok: boolean, stdout: string, stderr: string, kind: string|null, attempts: number}}
+ */
+export function azWithRetry(args, io = {}) {
+  const runner = io.runner ?? az;
+  const sleep = io.sleep ?? sleepSeconds;
+  const log = io.log ?? console.log;
+  const label = io.label ?? 'az';
+  let attempts = 0;
+  for (;;) {
+    const res = runner(args);
+    attempts += 1;
+    if (res.ok) return { ...res, kind: null, attempts };
+
+    const kind = classifyAzFailure(res.stderr);
+    if (!isRetryable(kind)) return { ...res, kind, attempts };
+
+    const delay = nextRetryDelaySeconds(attempts - 1);
+    if (delay == null) {
+      // FAIL CLOSED. The budget is spent and the call never succeeded, so the
+      // outcome is UNCONFIRMED and this hands that back rather than proceeding.
+      return { ...res, kind, attempts };
+    }
+    log(`[aas-preflight] ${label}: transient az failure (attempt ${attempts}) — retrying in ${delay}s.`);
+    sleep(delay);
+  }
+}
+
 // ── I/O shell ───────────────────────────────────────────────────────────────
 
-function parseArgs(argv) {
+export function parseArgs(argv) {
   const out = {};
   for (let i = 0; i < argv.length; i += 1) {
     const key = argv[i];
@@ -214,116 +482,214 @@ function az(args) {
     const stdout = execFileSync('az', args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
     return { ok: true, stdout: String(stdout).trim(), stderr: '' };
   } catch (e) {
-    return { ok: false, stdout: String(e.stdout ?? '').trim(), stderr: String(e.stderr ?? e.message ?? '').trim() };
+    return { ok: false, stdout: String(e?.stdout ?? '').trim(), stderr: String(e?.stderr ?? e?.message ?? e).trim() };
   }
 }
 
-function emit(name, value) {
-  const line = `${name}=${value}`;
-  console.log(line);
-  if (process.env.GITHUB_OUTPUT) appendFileSync(process.env.GITHUB_OUTPUT, `${line}\n`);
+function sleepSeconds(seconds) {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, seconds * 1000);
 }
 
-function sleepSync(ms) {
-  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
-}
+/**
+ * The whole preflight, with every I/O edge injected.
+ *
+ * Returns an exit code rather than calling `process.exit`, so the settle loop —
+ * the thing the #4074 review found broken in two separate ways — can be driven
+ * end-to-end by a test with a scripted `az`. A state machine whose only proof is
+ * a unit test of its pure parts is a state machine whose WIRING is unproven,
+ * which is how `shouldResuspend` shipped exported, tested and uncalled.
+ *
+ * @param {{argv: string[], io: object}} p
+ * @returns {number} process exit code
+ */
+export function runPreflight({ argv = [], io = {} } = {}) {
+  const runAz = io.az ?? ((args) => az(args));
+  const sleep = io.sleep ?? sleepSeconds;
+  const now = io.now ?? (() => Date.now());
+  const log = io.log ?? console.log;
+  const error = io.error ?? console.error;
+  const emit =
+    io.emit ??
+    ((name, value) => {
+      const line = `${name}=${value}`;
+      console.log(line);
+      if (process.env.GITHUB_OUTPUT) appendFileSync(process.env.GITHUB_OUTPUT, `${line}\n`);
+    });
 
-function main() {
-  const args = parseArgs(process.argv.slice(2));
+  const args = parseArgs(argv);
   const subscription = args.subscription;
   const rg = args.rg;
-  const budgetSeconds = Number(args['timeout-seconds'] ?? DEFAULT_TIMEOUT_SECONDS);
 
   if (!subscription || !rg) {
-    console.error('[aas-preflight] ERROR: --subscription and --rg are both required.');
-    process.exit(2);
+    error('[aas-preflight] ERROR: --subscription and --rg are both required.');
+    return 2;
   }
 
-  const list = az([
-    'resource', 'list',
-    '--subscription', subscription,
-    '--resource-group', rg,
-    '--resource-type', 'Microsoft.AnalysisServices/servers',
-    '--query', '[].name', '-o', 'tsv',
-  ]);
-  if (!list.ok) {
-    console.error(
-      '[aas-preflight] ERROR: could not LIST Analysis Services servers. This is NOT the same as "there is no ' +
-        'server" — the lookup did not happen at all. az said:',
+  const budgetSeconds = Number(args['timeout-seconds'] ?? DEFAULT_TIMEOUT_SECONDS);
+  // `elapsed >= NaN` is ALWAYS false, so a non-numeric budget makes the settle
+  // loop unbounded — terminated only by the job's `timeout-minutes`, at which
+  // point nothing gets to classify anything. A budget that cannot be exceeded
+  // is a budget that is not enforced.
+  if (!Number.isFinite(budgetSeconds) || budgetSeconds <= 0) {
+    error(
+      `[aas-preflight] ERROR: --timeout-seconds must be a positive number; got ` +
+        `'${args['timeout-seconds']}'. Refusing to poll on a budget that can never be exceeded.`,
     );
-    console.error(list.stderr);
-    process.exit(1);
+    return 2;
   }
 
+  // `aas_resumed` is emitted EXACTLY ONCE, on every exit path, and always via
+  // shouldResuspend(). Once-only because the workflow gate reads a single value
+  // and a second emission would make the outcome depend on GITHUB_OUTPUT's
+  // last-key-wins parsing rather than on this decision.
+  let resumedEmitted = false;
+  const emitResumeVerdict = (priorState, resumedByUs) => {
+    if (resumedEmitted) return;
+    resumedEmitted = true;
+    const v = shouldResuspend({ priorState, resumedByUs });
+    log(`[aas-preflight] re-suspend gate: aas_resumed=${v.resuspend} — ${v.reason}`);
+    emit('aas_resumed', String(v.resuspend));
+  };
+
+  const failWith = (message, stderr) => {
+    error(`::error::[aas-preflight] ${message}`);
+    if (stderr) {
+      error('--- raw az stderr (first 20 lines) ---');
+      error(String(stderr).split('\n').slice(0, 20).join('\n'));
+    }
+    return 1;
+  };
+
+  const list = azWithRetry(
+    [
+      'resource', 'list',
+      '--subscription', subscription,
+      '--resource-group', rg,
+      '--resource-type', 'Microsoft.AnalysisServices/servers',
+      '--query', '[].name', '-o', 'tsv',
+    ],
+    { runner: runAz, sleep, log, label: `enumerate Microsoft.AnalysisServices/servers in ${rg}` },
+  );
+  if (!list.ok) {
+    emitResumeVerdict('', false);
+    return failWith(
+      `Could NOT enumerate Analysis Services servers in ${rg} after ${list.attempts} attempt(s). This is NOT ` +
+        'the same as "there is no server" — the lookup did not happen at all, so whether this estate has a ' +
+        `suspended server is UNKNOWN. az classified this as: ${list.kind}. ` +
+        `REMEDIATION: ${aasRemediationFor(list.kind, rg, list.attempts)}`,
+      list.stderr,
+    );
+  }
+
+  // `az -o tsv` carries a trailing CR on some agents; strip it before using it.
   const name = list.stdout.replace(/\r/g, '').split('\n').map((s) => s.trim()).filter(Boolean)[0];
   if (!name) {
-    console.log(`[aas-preflight] No Microsoft.AnalysisServices/servers in ${rg}. Nothing to settle.`);
+    log(`[aas-preflight] No Microsoft.AnalysisServices/servers in ${rg}. Nothing to settle.`);
     emit('aas_server', '');
     emit('aas_prior_state', '');
-    emit('aas_resumed', 'false');
-    return;
+    emitResumeVerdict('', false);
+    return 0;
   }
 
   const id = `/subscriptions/${subscription}/resourceGroups/${rg}/providers/Microsoft.AnalysisServices/servers/${name}`;
   const readState = () => {
-    const r = az(['resource', 'show', '--ids', id, '--api-version', AAS_API_VERSION, '--query', 'properties.state', '-o', 'tsv']);
-    return r.ok ? r.stdout.replace(/\r/g, '').trim() : null;
+    const r = azWithRetry(
+      ['resource', 'show', '--ids', id, '--api-version', AAS_API_VERSION, '--query', 'properties.state', '-o', 'tsv'],
+      { runner: runAz, sleep, log, label: `read state of ${name}` },
+    );
+    if (!r.ok) return { ok: false, state: null, stderr: r.stderr, kind: r.kind, attempts: r.attempts };
+    return { ok: true, state: r.stdout.replace(/\r/g, '').trim(), stderr: '', kind: null, attempts: r.attempts };
   };
 
   const first = readState();
-  if (first === null) {
-    console.error(`[aas-preflight] ERROR: could not READ ${name}'s state, so it is NOT established what it is.`);
-    process.exit(1);
+  if (!first.ok) {
+    emitResumeVerdict('', false);
+    return failWith(
+      `Could NOT read the state of Analysis Services server '${name}' after ${first.attempts} attempt(s), so ` +
+        "whether the deploy's administrator write can land is UNKNOWN. It is not something to proceed past on " +
+        `an unread value. az classified this as: ${first.kind}. ` +
+        `REMEDIATION: ${aasRemediationFor(first.kind, id, first.attempts)}`,
+      first.stderr,
+    );
   }
 
+  const priorState = first.state;
   emit('aas_server', name);
-  emit('aas_prior_state', first);
+  emit('aas_prior_state', priorState);
+  const firstVerdict = classifyServerState(priorState);
+  log(`[aas-preflight] ${name}: state='${priorState}' -> ${firstVerdict.action} — ${firstVerdict.reason}`);
 
-  const decision = classifyServerState(first);
-  console.log(`[aas-preflight] ${name}: state='${first}' -> ${decision.action} — ${decision.reason}`);
+  // ── THE SETTLE LOOP ──────────────────────────────────────────────────────
+  // One loop for every path, because the first draft's split (decide once, then
+  // poll) is what made `wait` a dead end: the poll had no vocabulary for "it has
+  // become resumable". Each iteration RE-CLASSIFIES and acts.
+  let resumesIssued = 0;
+  let state = priorState;
+  const startedAtMs = now();
 
-  if (decision.action === 'refuse') {
-    console.error(`::error::[aas-preflight] REFUSING: ${decision.reason}`);
-    emit('aas_resumed', 'false');
-    process.exit(1);
-  }
-  if (decision.action === 'none') {
-    emit('aas_resumed', 'false');
-    return;
-  }
-
-  let resumedByUs = false;
-  if (decision.action === 'resume') {
-    const r = az(['resource', 'invoke-action', '--ids', id, '--api-version', AAS_API_VERSION, '--action', 'resume']);
-    if (!r.ok) {
-      console.error(`[aas-preflight] ERROR: the resume on ${name} FAILED. az said:`);
-      console.error(r.stderr);
-      emit('aas_resumed', 'false');
-      process.exit(1);
-    }
-    resumedByUs = true;
-    console.log(`[aas-preflight] resume issued on ${name}; polling until it settles.`);
-  }
-  emit('aas_resumed', String(resumedByUs));
-
-  const started = Date.now();
   for (;;) {
-    const elapsedSeconds = Math.round((Date.now() - started) / 1000);
-    const state = readState();
-    const v = evaluatePoll({ state, elapsedSeconds, budgetSeconds });
-    if (v.done) {
-      if (v.ok) {
-        console.log(`[aas-preflight] ${name}: ${v.reason}`);
-        return;
-      }
-      console.error(`::error::[aas-preflight] ${name}: ${v.reason}`);
-      process.exit(1);
+    const step = planSettleStep({
+      state,
+      elapsedSeconds: elapsedSecondsSince(startedAtMs, now()),
+      budgetSeconds,
+      resumesIssued,
+    });
+
+    if (step.action === 'settled') {
+      log(`[aas-preflight] ${name}: ${step.reason}`);
+      emitResumeVerdict(priorState, resumesIssued > 0);
+      return 0;
     }
-    console.log(`[aas-preflight] ${name}: ${v.reason}`);
-    sleepSync(POLL_INTERVAL_SECONDS * 1000);
+
+    if (step.action === 'fail') {
+      emitResumeVerdict(priorState, resumesIssued > 0);
+      return failWith(`${name}: ${step.reason}`);
+    }
+
+    if (step.action === 'resume') {
+      log(`[aas-preflight] ${name}: ${step.reason}`);
+      const r = azWithRetry(
+        ['resource', 'invoke-action', '--ids', id, '--api-version', AAS_API_VERSION, '--action', 'resume'],
+        { runner: runAz, sleep, log, label: `resume ${name}` },
+      );
+      if (!r.ok) {
+        // The resume was REJECTED, so this run did not resume anything and must
+        // not claim it did — the workflow would then try to suspend a server it
+        // never started.
+        emitResumeVerdict(priorState, resumesIssued > 0);
+        return failWith(
+          `The resume of Analysis Services server '${name}' was REJECTED after ${r.attempts} attempt(s), so ` +
+            "the deploy's administrator write would still fail on a suspended server. " +
+            `az classified this as: ${r.kind}. REMEDIATION: ${aasRemediationFor(r.kind, id, r.attempts)}`,
+          r.stderr,
+        );
+      }
+      resumesIssued += 1;
+      // Emitted the moment Azure ACCEPTS the resume, not at the end: if this
+      // process is killed mid-poll (a job timeout), the marker is already
+      // written and the workflow's always() step still puts the server back.
+      emitResumeVerdict(priorState, true);
+      log(`[aas-preflight] ${name}: resume accepted (${resumesIssued}/${MAX_RESUME_ATTEMPTS}); polling until it settles.`);
+    } else {
+      log(`[aas-preflight] ${name}: ${step.reason} — waiting ${POLL_INTERVAL_SECONDS}s.`);
+    }
+
+    sleep(POLL_INTERVAL_SECONDS);
+
+    const poll = readState();
+    if (!poll.ok) {
+      emitResumeVerdict(priorState, resumesIssued > 0);
+      return failWith(
+        `Lost the ability to read Analysis Services server '${name}' while waiting for it to settle ` +
+          `(${poll.attempts} attempt(s)), so its state is UNKNOWN and this step will NOT report that it came ` +
+          `up. az classified this as: ${poll.kind}. REMEDIATION: ${aasRemediationFor(poll.kind, id, poll.attempts)}`,
+        poll.stderr,
+      );
+    }
+    state = poll.state;
   }
 }
 
 const invokedDirectly =
   process.argv[1] && import.meta.url === new URL(`file://${process.argv[1].replace(/\\/g, '/')}`).href;
-if (invokedDirectly) main();
+if (invokedDirectly) process.exit(runPreflight({ argv: process.argv.slice(2) }));
