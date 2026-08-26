@@ -40,11 +40,23 @@
  *         body-order case, and BOTH tenant-admin delegation cases)
  *   M4  re-inline `loadWs()` in the GET, LEAVING `authorizeWorkspace` in place
  *       → RC=1, 2 failed / 19 passed  (the two `workspacesContainerCalls` cases)
+ *   M5  move the POST's `authorizeWorkspace` to AFTER `await req.json()`,
+ *       leaving it before the `displayName required` 400
+ *       → RC=1, 1 failed / 20 passed  (the body-parse-order case)
  *
  * M4 is the one worth naming: the ladder is still present and still called, so a
  * check that merely looks for `authorizeWorkspace` stays green — it is the
  * call-count probe below that moves. (`check-owner-only-workspace-guard.mjs`
  * also went RC=1 on M4, independently.)
+ *
+ * M5 is the one this suite ORIGINALLY MISSED, and it is recorded here because
+ * the miss was the interesting part. The body-parse-order case asserted only the
+ * status/error pair, and that pair is IDENTICAL under M5 — the guard still
+ * precedes the 400, so a refused Viewer still gets 404 `workspace not found`
+ * whether the parse ran or not. Measured at e9155b9: M5 survived, RC=0, 21/21
+ * PASSED, while the commit message claimed the parse ordering was "pinned by a
+ * test". The fix is the `vi.spyOn(req, 'json')` probe on that case, plus its
+ * positive control on the authorized 400 — see both below.
  *
  * `workspacesContainer` is asserted NEVER CALLED. That is the re-inline probe:
  * restore `loadWs()` in either handler and the counter moves, independent of
@@ -265,13 +277,37 @@ describe('#4059 — POST (create) is WRITE-scoped: read-only roles are refused',
     // Under `loadWs()` the `displayName required` 400 was returned BEFORE any
     // workspace check, so an unauthorized caller could learn their body was
     // malformed for a workspace they may not see. Authorization now runs first.
+    //
+    // MUTATION M5: move the POST's `authorizeWorkspace` ladder to AFTER
+    //   `const body = await req.json()`, leaving it BEFORE the `displayName
+    //   required` check.
+    // → The status/error pair below CANNOT SEE THAT. Both stay 404 /
+    //   `workspace not found`, because the guard still precedes the 400. RUN at
+    //   e9155b9 with only those two assertions: RC=0, 21/21 PASSED — the case
+    //   was green against both the correct and the broken route, so it pinned
+    //   nothing, while the commit message and the PR body both claimed "no
+    //   attacker-controlled JSON is parsed on their behalf". Asserting a
+    //   property the suite does not establish is the deploy-integrity.md R7
+    //   failure mode.
+    //
+    // The `jsonSpy` below is what actually pins the ORDER: it is the only
+    // assertion here that moves when the parse moves. RUN under M5: RC=1,
+    // `expected "json" to not be called at all, but actually been called 1
+    // times` — 1 failed / 20 passed, and this is the case that fails.
     resolveWorkspaceAccessByOid.mockResolvedValue(VIEWER);
 
-    const r = await POST(postReq({}), CTX);
+    const req = postReq({});
+    const jsonSpy = vi.spyOn(req, 'json');
+
+    const r = await POST(req, CTX);
     const j = await r.json();
 
     expect(r.status).toBe(404);
     expect(j.error).toBe('workspace not found');
+    // THE ORDERING ASSERTION. A refused caller's body is never read: the route
+    // must not hand attacker-controlled JSON to `JSON.parse` on behalf of a
+    // principal it is about to 404.
+    expect(jsonSpy).not.toHaveBeenCalled();
   });
 });
 
@@ -364,14 +400,24 @@ describe('#4059 — the 400s still precede authorization where they leak nothing
     expect(created).toHaveLength(0);
   });
 
-  it('an AUTHORIZED POST with no displayName is still 400', async () => {
+  it('an AUTHORIZED POST with no displayName is still 400 — and its body IS read', async () => {
+    // The POSITIVE CONTROL for the `jsonSpy` assertion above. `vi.spyOn` on a
+    // `NextRequest` instance shadows `Request.prototype.json`; if that
+    // interception ever stopped working, `not.toHaveBeenCalled()` would pass
+    // for the wrong reason and the ordering assertion would be vacuous again.
+    // This case proves the spy DOES observe the call on the path that makes
+    // it — so a zero over there is a real zero, not a dead probe.
     resolveWorkspaceAccessByOid.mockResolvedValue(CREATOR);
 
-    const r = await POST(postReq({}), CTX);
+    const req = postReq({});
+    const jsonSpy = vi.spyOn(req, 'json');
+
+    const r = await POST(req, CTX);
     const j = await r.json();
 
     expect(r.status).toBe(400);
     expect(j).toEqual({ ok: false, error: 'displayName required' });
     expect(created).toHaveLength(0);
+    expect(jsonSpy).toHaveBeenCalledTimes(1);
   });
 });
