@@ -25,6 +25,13 @@ This file is maintained automatically by
 [Conventional Commits](https://www.conventionalcommits.org/). See
 [RELEASE.md](RELEASE.md) for the release process.
 
+## [0.101.2](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.101.1...csa-inabox-v0.101.2) (2026-08-25)
+
+
+### Bug Fixes
+
+* **deploy:** the AAS error envelope states its cause in the PARENT, so the drill-down threw it away ([#3948](https://github.com/fgarofalo56/csa-inabox/issues/3948)) ([#4034](https://github.com/fgarofalo56/csa-inabox/issues/4034)) ([92f43ce](https://github.com/fgarofalo56/csa-inabox/commit/92f43cea852b74f933847f19be67afe1066fb405))
+
 ## [0.101.1](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.101.0...csa-inabox-v0.101.1) (2026-08-25)
 
 
