@@ -77,6 +77,7 @@ import shutil
 import stat
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 import pytest
@@ -280,15 +281,13 @@ def _bash() -> str:
         if git:
             for ancestor in Path(git).resolve().parents:
                 for rel in ("bin/bash.exe", "usr/bin/bash.exe"):
-                    candidate = ancestor / rel
-                    if candidate.is_file():
-                        candidates.append(str(candidate))
+                    git_bash = ancestor / rel
+                    if git_bash.is_file():
+                        candidates.append(str(git_bash))
     found = shutil.which("bash")
     if found:
         candidates.append(found)
     candidates.extend(["/bin/bash", "/usr/bin/bash"])
-
-    import tempfile
 
     probe_dir = tempfile.mkdtemp(prefix="loom-bash-probe-")
     posix_probe = probe_dir.replace("\\", "/")
