@@ -233,18 +233,36 @@ export function DataAgentEditor({ item, id }: { item: FabricItemType; id: string
   const [pickerType, setPickerType] = useState<DaSourceType>('warehouse');
   const [available, setAvailable] = useState<Record<string, { id: string; name: string }[]>>({});
   const [pickerLoading, setPickerLoading] = useState(false);
+  // #4092 — the candidate fetch's failure reason, PER TYPE. Without it the
+  // `catch {}` below turned every failure into the SAME screen as a genuinely
+  // empty workspace: the dropdown read "None found" and Add sat disabled, which
+  // asserts as fact ("there are none") something the code never established
+  // (`deploy-integrity.md` R7). It now says which of the two happened, and a
+  // failure is retryable rather than terminal.
+  const [pickerError, setPickerError] = useState<Record<string, string>>({});
   const loadAvailable = useCallback(async (t: DaSourceType) => {
     const cfg = DA_SOURCE_TYPES.find((x) => x.value === t)!;
-    // microsoft-graph isn't a Loom item type — nothing to fetch for the picker.
+    // microsoft-graph / metric-view aren't Loom item types — nothing to fetch.
     if (!cfg.itemType) { setAvailable((prev) => ({ ...prev, [t]: [] })); return; }
     setPickerLoading(true);
+    setPickerError((prev) => { if (!prev[t]) return prev; const next = { ...prev }; delete next[t]; return next; });
     try {
       const wsParam = workspaceId ? `&workspaceId=${encodeURIComponent(workspaceId)}` : '';
       const r = await clientFetch(`/api/items/by-type?types=${encodeURIComponent(cfg.itemType)}${wsParam}`);
-      const j = await r.json();
-      const items = (j.items || []).map((it: any) => ({ id: it.id, name: it.displayName || it.id }));
+      const j = await r.json().catch(() => ({}));
+      // A non-2xx (or `ok:false`) used to fall through as `j.items || []` — i.e.
+      // a 404/500 rendered as "None found". Treat it as the failure it is.
+      if (!r.ok || j?.ok === false) throw new Error(j?.error || `HTTP ${r.status}`);
+      const items = arr<any>(j.items).map((it: any) => ({ id: it.id, name: it.displayName || it.id }));
       setAvailable((prev) => ({ ...prev, [t]: items }));
-    } catch { /* leave empty; user can still pick another type */ }
+    } catch (e: any) {
+      // Seed the key with [] even on failure. The load effect is guarded on
+      // `!available[pickerType]`, so leaving it UNDEFINED here re-armed the
+      // effect on the very next render and spun the endpoint in a tight retry
+      // loop for as long as it stayed unhealthy.
+      setAvailable((prev) => ({ ...prev, [t]: [] }));
+      setPickerError((prev) => ({ ...prev, [t]: e?.message || String(e) }));
+    }
     finally { setPickerLoading(false); }
   }, [workspaceId]);
   useEffect(() => { if (workspaceId && !available[pickerType]) loadAvailable(pickerType); }, [pickerType, available, loadAvailable, workspaceId]);
@@ -843,7 +861,15 @@ export function DataAgentEditor({ item, id }: { item: FabricItemType; id: string
                   ) : (
                     <Field label="Item" style={{ minWidth: 220 }}>
                       <Dropdown value={(available[pickerType] || []).find((o) => o.id === pickSel)?.name || ''} selectedOptions={pickSel ? [pickSel] : []}
-                        placeholder={pickerLoading ? 'Loading…' : ((available[pickerType] || []).length ? 'Select…' : 'None found')}
+                        placeholder={pickerLoading
+                          ? 'Loading…'
+                          : (available[pickerType] || []).length
+                            ? 'Select…'
+                            // R7: never claim "none" when the lookup FAILED —
+                            // say which of the two actually happened.
+                            : pickerError[pickerType]
+                              ? "Couldn't load — retry"
+                              : 'None in this workspace'}
                         onOptionSelect={(_, d) => d.optionValue && setPickSel(d.optionValue)}>
                         {(available[pickerType] || []).map((o) => <Option key={o.id} value={o.id}>{o.name}</Option>)}
                       </Dropdown>
@@ -852,6 +878,20 @@ export function DataAgentEditor({ item, id }: { item: FabricItemType; id: string
                   <Button appearance="primary" icon={<Add20Regular />} onClick={addSource}
                     disabled={(pickerType !== 'microsoft-graph' && !pickSel) || sources.length >= 5}>Add source</Button>
                 </div>
+                {/* An honest, RETRYABLE failure state for the candidate lookup —
+                    never a silent "None found" that reads as an empty workspace
+                    (#4092 / deploy-integrity.md R7). */}
+                {pickerError[pickerType] && !pickerLoading && (
+                  <MessageBar intent="warning">
+                    <MessageBarBody>
+                      <MessageBarTitle>Couldn&apos;t list {DA_SOURCE_TYPES.find((t) => t.value === pickerType)?.label || pickerType} items</MessageBarTitle>
+                      {' '}{pickerError[pickerType]}
+                      {' '}
+                      <Button size="small" appearance="transparent" icon={<ArrowSync16Regular />}
+                        onClick={() => loadAvailable(pickerType)}>Retry</Button>
+                    </MessageBarBody>
+                  </MessageBar>
+                )}
 
                 {sources.map((src) => (
                   <div key={src.id} className={s.daSrcCard}>

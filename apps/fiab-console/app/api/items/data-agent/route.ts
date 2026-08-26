@@ -25,6 +25,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import { createOwnedItem, jerr, listOwnedItems, loadOwnedItem } from '../_lib/item-crud';
+import { autoBindDataAgentSources } from '@/lib/azure/data-agent-autobind';
 import { apiServerError } from '@/lib/api/respond';
 
 export const runtime = 'nodejs';
@@ -101,10 +102,20 @@ export async function POST(req: NextRequest) {
       displayName: body?.displayName,
       description: body?.description,
       // A fresh agent starts with an empty typed-source list + empty
-      // instructions; the editor's Build tab fills these in.
+      // instructions; auto-bind (below) attaches the workspace's compatible
+      // source, and the editor's Build tab refines from there.
       state: body?.state && typeof body.state === 'object' ? body.state : { sources: [], instructions: '' },
     });
     if (!r.ok) return jerr(r.error, r.status);
+    // AUTO-BIND ON CREATE — auto-bind-by-default.md §1: "Creating a Loom item
+    // PROVISIONS AND BINDS its backing resource. […] No second step, no wizard
+    // the user must find." A data-agent's backing is a sibling Loom item, so
+    // this ATTACHES the workspace's highest-precedence compatible source rather
+    // than creating anything (see lib/azure/data-agent-autobind.ts for why it is
+    // not an AutoBindProvider). No-op when the workspace holds nothing
+    // compatible or the caller supplied their own `state.sources`. Never throws,
+    // and mutates `r.item.state` in memory so the 201 reports the real binding.
+    await autoBindDataAgentSources(r.item);
     return NextResponse.json({ ok: true, item: r.item }, { status: 201 });
   } catch (e: any) {
     return apiServerError(e);

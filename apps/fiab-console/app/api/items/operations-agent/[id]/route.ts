@@ -24,7 +24,13 @@ export async function GET(_req: NextRequest, ctx: { params: Promise<{ id: string
     const item = await loadOwnedItem(id, ITEM_TYPE, s.claims.oid);
     if (!item) return NextResponse.json({ error: 'not found' }, { status: 404 });
     return NextResponse.json({
-      id: item.id, displayName: item.displayName, description: item.description,
+      id: item.id,
+      // #4092 — `useItemState` reads its `workspaceId` from THIS field and the
+      // editor scopes its pickers on it. Omitting it left the guard
+      // `if (workspaceId && …)` permanently false, so the candidate fetch never
+      // ran and the dropdown rendered an empty list over a healthy API.
+      workspaceId: item.workspaceId,
+      displayName: item.displayName, description: item.description,
       state: item.state || {}, updatedAt: item.updatedAt || null,
     });
   } catch (e: any) {
