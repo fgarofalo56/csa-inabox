@@ -41,11 +41,20 @@
  *   7. zero-population — a SCOPE_DIR that contributes no source files is
  *                      REFUSED rather than handed to the ratchet, where 249->0
  *                      reads as a shrink and prints "baseline holds".
- *   8. wiring        — `main()` actually asks for (7). Source-shape assertion,
- *                      which is weaker than behaviour: it proves the call is
- *                      written, not that the process exits non-zero. Driving
- *                      the CLI itself would need a mutated copy of the whole
- *                      repo tree, so this is the honest limit here.
+ *   8. THE CLI       — the guard is RUN, as a process, at its production
+ *                      defaults, over a fixture console. `REPO_ROOT` derives
+ *                      from the guard's own `__dirname`, so a COPY of it in a
+ *                      throwaway repo resolves `APP_ROOT` to that repo — which
+ *                      makes `main()` drivable end-to-end without mutating one
+ *                      tracked byte. Three arms: a literal in `lib/install` is
+ *                      COUNTED and exits 1; a clean full population exits 0
+ *                      (so the refusal is not unconditional); a missing
+ *                      `lib/install` exits NON-ZERO saying "population
+ *                      collapsed" instead of "baseline holds".
+ *                      (This replaces an earlier source-shape regex over
+ *                      `main()`, which asserted the call was WRITTEN rather
+ *                      than that the process exits non-zero — presence, not
+ *                      enforcement.)
  *
  * NOTE on (4) and (5): both assert a NEGATIVE (the literal was not counted),
  * and an empty result is also what an UNSCANNED directory produces. Each
@@ -64,7 +73,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, copyFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -115,6 +124,69 @@ function scanFixture(files, scanOpts = {}) {
 }
 
 const LITERAL_SRC = 'export const u = `https://probe.dfs.core.windows.net`;\n';
+
+/** Every SCOPE_DIR the guard declares, in declaration order. */
+const ALL_SCOPE_DIRS = ['lib/azure', 'app/api', 'lib/auth', 'lib/admin', 'lib/apps', 'lib/install'];
+
+/**
+ * The ratchet's PASS line, and only it.
+ *
+ * NOT `/baseline holds/` — the population-collapse error QUOTES that phrase to
+ * explain the failure mode it prevents, so a bare `/baseline holds/` needle
+ * matches the guard's own diagnosis and reports a correct refusal as a
+ * regression. (Measured: it did, on the first run of this test.) The pass line
+ * is what actually distinguishes "the ratchet accepted this scan" from "the
+ * guard explained why it refused".
+ */
+const RATCHET_PASS_LINE = /OK[^\n]*no new violations/;
+
+/**
+ * RUN THE GUARD AS THE CLI, at its PRODUCTION defaults.
+ *
+ * `REPO_ROOT` is `path.resolve(__dirname, '..', '..')` and `APP_ROOT` is
+ * `<REPO_ROOT>/apps/fiab-console` — both derived from the guard file's OWN
+ * location. So copying the real guard (and the ratchet helper it imports) into
+ * `<tmp>/scripts/ci/` makes those defaults resolve to `<tmp>/apps/fiab-console`,
+ * and `main()` becomes drivable end-to-end without mutating a tracked byte or
+ * passing a single test seam. A mutation to the real guard is copied with it,
+ * so this bites on the real file.
+ *
+ * `populatedDirs` get a `probe.ts`; `literalIn`, if given, is the one directory
+ * whose probe carries a forbidden literal. No baseline file is written, so the
+ * ratchet's baseline is empty and any count at all is a rise.
+ */
+function runGuardCli(populatedDirs, { literalIn = null } = {}) {
+  const root = mkdtempSync(join(tmpdir(), 'cel-cli-'));
+  try {
+    const ci = join(root, 'scripts', 'ci');
+    mkdirSync(ci, { recursive: true });
+    for (const f of ['check-cloud-endpoint-literals.mjs', '_ratchet-count.mjs']) {
+      copyFileSync(resolve(HERE, '..', f), join(ci, f));
+    }
+    const appRoot = join(root, 'apps', 'fiab-console');
+    for (const d of populatedDirs) {
+      const abs = join(appRoot, d, 'probe.ts');
+      mkdirSync(dirname(abs), { recursive: true });
+      writeFileSync(abs, d === literalIn ? LITERAL_SRC : 'export const u = 1;\n');
+    }
+    for (const args of [['init', '-q'], ['add', '-A']]) {
+      const r = spawnSync('git', args, { cwd: root, encoding: 'utf8' });
+      assert.equal(r.status, 0, `git ${args.join(' ')} failed: ${r.stderr}`);
+    }
+    const r = spawnSync(process.execPath, [join(ci, 'check-cloud-endpoint-literals.mjs')], {
+      cwd: root,
+      encoding: 'utf8',
+    });
+    // Never swallow a spawn failure into "the guard said nothing" (R7).
+    assert.equal(r.error, undefined, `could not run the guard: ${r.error?.message}`);
+    return {
+      status: r.status,
+      all: `--- stdout ---\n${r.stdout ?? ''}\n--- stderr ---\n${r.stderr ?? ''}`,
+    };
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+}
 
 /**
  * A second, unmarked, NON-test fixture that must always be counted. Tests 4 and
@@ -265,32 +337,53 @@ test('requireFullPopulation REFUSES a scan where a SCOPE_DIR contributed no file
   // Positive control on the refusal itself: with EVERY SCOPE_DIR populated the
   // same call must succeed, so test 7 is not passing because the throw is
   // unconditional.
-  const populated = Object.fromEntries(
-    ['lib/azure', 'app/api', 'lib/auth', 'lib/admin', 'lib/apps', 'lib/install'].map((d) => [
-      `${d}/probe.ts`,
-      LITERAL_SRC,
-    ]),
-  );
+  const populated = Object.fromEntries(ALL_SCOPE_DIRS.map((d) => [`${d}/probe.ts`, LITERAL_SRC]));
   const found = scanFixture(populated, { requireFullPopulation: true });
   assert.equal(Object.keys(found).length, 6, 'the fully-populated fixture did not scan cleanly');
 });
 
-test('main() asks for requireFullPopulation, so the CLI is the caller that fails closed', () => {
-  const src = readFileSync(GUARD_SRC, 'utf8');
-  const body = src.slice(src.indexOf('function main()'));
-  assert.ok(body.length > 0, 'main() not found in check-cloud-endpoint-literals.mjs');
-
-  assert.match(
-    body,
-    /scanLiterals\(\s*\{[^}]*requireFullPopulation:\s*true/,
-    'main() calls scanLiterals WITHOUT requireFullPopulation — the zero-population ' +
-      'refusal exists but the only production caller does not ask for it, which is ' +
-      'presence-not-enforcement',
+test('THE CLI — main() run as a process counts lib/install, passes clean, and refuses a collapsed population', () => {
+  // ARM A — the CLI, at its production defaults, reaches the console tree and
+  // COUNTS a literal under lib/install. If APP_ROOT's default were wrong this
+  // arm would still exit 1, but with the collapse message instead of a named
+  // regression, so the assertion is on the MESSAGE, not merely on the code.
+  const bite = runGuardCli(ALL_SCOPE_DIRS, { literalIn: 'lib/install' });
+  assert.equal(
+    bite.status,
+    1,
+    `the CLI did not fail on a bare Commercial host under lib/install.\n${bite.all}`,
   );
   assert.match(
-    body,
-    /catch[\s\S]{0,200}?process\.exit\(1\)/,
-    'main() does not turn the population refusal into a non-zero exit, so the throw ' +
-      'would surface as an unhandled rejection rather than a failed gate',
+    bite.all,
+    /apps\/fiab-console\/lib\/install\/probe\.ts: 1 \(baseline 0\)/,
+    'the CLI failed, but not for the literal under lib/install — so this proves nothing ' +
+      `about the #4063 widening on the path main() takes.\n${bite.all}`,
+  );
+
+  // ARM B — POSITIVE CONTROL on the refusal: a fully-populated, literal-free
+  // console must exit 0. Without this, arms A and C both pass for a guard that
+  // simply always fails.
+  const clean = runGuardCli(ALL_SCOPE_DIRS);
+  assert.equal(clean.status, 0, `a clean, fully-populated console did not exit 0.\n${clean.all}`);
+  assert.match(clean.all, RATCHET_PASS_LINE, `expected the clean run to pass the ratchet.\n${clean.all}`);
+
+  // ARM C — the zero-population refusal, driven as a PROCESS. This is the arm
+  // the old source-shape regex only asserted was written.
+  const collapsed = runGuardCli(ALL_SCOPE_DIRS.filter((d) => d !== 'lib/install'));
+  assert.equal(
+    collapsed.status,
+    1,
+    'a SCOPE_DIR contributing ZERO source files did not fail the CLI — the ratchet reads ' +
+      `249 -> 0 as a shrink and prints "baseline holds", which is the #3381/#4063 shape.\n${collapsed.all}`,
+  );
+  assert.match(
+    collapsed.all,
+    /population collapsed[\s\S]*lib\/install/,
+    `the CLI failed, but not with the population-collapse diagnosis naming lib/install.\n${collapsed.all}`,
+  );
+  assert.doesNotMatch(
+    collapsed.all,
+    RATCHET_PASS_LINE,
+    `the CLI passed the ratchet over a collapsed population.\n${collapsed.all}`,
   );
 });
