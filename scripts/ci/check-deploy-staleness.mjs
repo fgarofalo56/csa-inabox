@@ -451,6 +451,21 @@ export const WATCHED = [
       'scripts/ci/ensure-adx-cluster-running.mjs',
       'scripts/ci/resolve-dns-inbound-allocation.mjs',
       'scripts/ci/assert-no-silent-image-tag-revert.mjs',
+      // ── #3948 — the AAS preflight, the ADX preflight's exact sibling ──────
+      // Same class as ensure-adx-cluster-running.mjs above and watched for the
+      // same reason: it MUTATES the estate. It resumes a Paused Analysis
+      // Services server so `admin-plane` can write its asAdministrators, and it
+      // can REFUSE the apply outright on a state no resume resolves. Either
+      // half changes what this lane does to Azure, so a commit touching it
+      // without a subsequent successful run IS drift.
+      //
+      // It is NOT CI_PLUMBING. The plumbing loans in the coverage guard are all
+      // "shapes how a run behaves, deploys nothing" (deploy-retry.mjs,
+      // deploy-classify.mjs, preflight-policy-restrictions.mjs). This one
+      // issues `az resource invoke-action --action resume` against a live
+      // server and gates the workflow's re-suspend step — it crosses exactly
+      // the boundary those loans state they do not.
+      'scripts/ci/ensure-aas-server-settled.mjs',
       // The shared absence rule the two preflights import. Hand-listed for the
       // same reason as on the sovereign lanes: an imported module is invisible to
       // every execution shape, #3787 included.
