@@ -20,7 +20,7 @@
  * dead end over an API that was serving the item correctly. The route projects
  * the field now; this module carries the client half of the repair.
  *
- * THE TWO CLIENT DEFECTS FIXED HERE:
+ * THE THREE CLIENT DEFECTS FIXED HERE:
  *
  *   A. `catch {}` left the cache entry UNDEFINED and recorded no reason, so the
  *      failure was invisible in both the state and the UI. The entry is now
@@ -42,6 +42,16 @@
  *      identically to an empty workspace. That states as fact ("there are none")
  *      something the code never established — `deploy-integrity.md` R7. The
  *      reason is now kept per type and rendered as a retryable gate.
+ *
+ *   C. The FIRST repair of (B) reintroduced R7 one state over. It gave the
+ *      placeholder function `options | loading | error` and no way to express
+ *      DEFERRED, so "we have no workspace yet, and therefore asked nothing"
+ *      rendered as "None in this workspace" — a positive claim about the
+ *      workspace's contents, made having queried nothing, and reachable on
+ *      every single open (the picker renders alongside the load Spinner) plus
+ *      permanently on `/new`. `deferred` is now part of the state and part of
+ *      the placeholder's input, so the state can be supplied by a test and is
+ *      kept distinct on screen.
  */
 import { useCallback, useEffect, useState } from 'react';
 import { Button, MessageBar, MessageBarBody, MessageBarTitle } from '@fluentui/react-components';
@@ -57,6 +67,24 @@ export interface SourceCandidatesState {
   loading: boolean;
   /** The real failure reason for the current type, or null. Never a fake "none". */
   error: string | null;
+  /**
+   * DEFERRED — no `workspaceId` yet, so NOTHING was queried and nothing is
+   * known about the workspace's contents.
+   *
+   * This flag exists because without it the state is unrepresentable, and an
+   * unrepresentable state gets rendered as whichever neighbour it collapses
+   * into. It collapsed into EMPTY, so the picker asserted "None in this
+   * workspace" — a positive claim about a workspace it had never asked about,
+   * which is the same `deploy-integrity.md` R7 defect as (B) in the module
+   * docblock above, and a STRONGER false claim than the `'None found'` it
+   * replaced.
+   *
+   * Reachable on every open, not in theory: the editor renders the picker
+   * alongside its load Spinner with no early return, so this is the state for
+   * the whole of a saved item's load — and permanently on `/items/data-agent/new`,
+   * where the item has no workspace until it is saved.
+   */
+  deferred: boolean;
   /** Re-run the lookup for the current type (the Retry affordance). */
   reload: () => void;
 }
@@ -112,20 +140,34 @@ export function useSourceCandidates(
     options: cache[pickerType] || [],
     loading,
     error: errors[pickerType] || null,
+    // The guard above, restated as OUTPUT. Without this the caller cannot tell
+    // "the query returned nothing" from "there was no query", and the second
+    // one silently renders as the first.
+    deferred: !workspaceId,
     reload: useCallback(() => load(pickerType, itemType), [load, pickerType, itemType]),
   };
 }
 
 /**
- * The placeholder for the Item dropdown — three DISTINCT states, because
+ * The placeholder for the Item dropdown — four DISTINCT states, because
  * collapsing them is what made #4092 unreadable from the screen: "None found"
  * was shown for a healthy-but-unqueried endpoint, a failed query, AND a
  * genuinely empty workspace.
+ *
+ * DEFERRED is a REQUIRED input, not an optional refinement. The first revision
+ * of this function took only `options | loading | error`, which left DEFERRED
+ * unrepresentable — so it fell through to the final `return` and claimed "None
+ * in this workspace" having queried nothing. A spec named "never collapsed"
+ * could not catch that, because it could not SUPPLY the state.
  */
-export function sourceCandidatePlaceholder(s: Pick<SourceCandidatesState, 'options' | 'loading' | 'error'>): string {
+export function sourceCandidatePlaceholder(
+  s: Pick<SourceCandidatesState, 'options' | 'loading' | 'error' | 'deferred'>,
+): string {
   if (s.loading) return 'Loading…';
   if (s.options.length) return 'Select…';
   if (s.error) return "Couldn't load — retry";
+  // Nothing was asked, so nothing may be asserted about the answer.
+  if (s.deferred) return 'Waiting for the workspace…';
   return 'None in this workspace';
 }
 

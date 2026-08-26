@@ -2,16 +2,23 @@
  * `data-agent-source-candidates` — the picker's candidate lookup (#4092).
  *
  * This is the code the bug lived in. Inside the 2000-line editor it was
- * unreachable by test; as its own hook the three states that were collapsed
+ * unreachable by test; as its own hook the states that were collapsed
  * into one screen are asserted directly:
  *
  *   DEFERRED  no workspaceId yet ⇒ do not query (scoping is mandatory).
  *             THE #4092 SYMPTOM: the route never sent one, so the picker sat
  *             here forever while rendering the same thing an empty workspace
- *             renders.
+ *             renders. This state must be REPRESENTABLE in the placeholder's
+ *             input — the first repair listed it here and then shipped a
+ *             function that could not take it, so this file could name the
+ *             state but not supply it, and it silently rendered as EMPTY.
  *   EMPTY     queried, workspace genuinely holds none.
  *   FAILED    queried, the lookup broke ⇒ say so, and offer a retry. Never
  *             "None" (deploy-integrity.md R7).
+ *
+ * The CONSUMER's adoption of all three is pinned separately, in
+ * `data-agent-editor-source-picker.test.tsx` — these specs prove the functions
+ * behave, that one proves the editor still uses them.
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { renderHook, act, waitFor } from '@testing-library/react';
@@ -54,6 +61,21 @@ describe('useSourceCandidates', () => {
     // nothing to do with the workspace's contents.
     expect(clientFetch).not.toHaveBeenCalled();
     expect(result.current.options).toEqual([]);
+    // …and the state SAYS so. Without this flag the caller receives a state
+    // indistinguishable from an empty workspace and renders it as one.
+    expect(result.current.deferred).toBe(true);
+  });
+
+  it('stops deferring the moment a workspaceId exists', async () => {
+    (clientFetch as any).mockResolvedValue(ok([]));
+    const { result } = renderHook(() => useSourceCandidates(WS, 'warehouse', 'warehouse'));
+    await waitFor(() => expect(clientFetch).toHaveBeenCalled());
+    // Discriminating half of the flag: a constant `true` would pass the spec
+    // above. An EMPTY answer from a REAL query is not deferred — it is the one
+    // state in which "None in this workspace" is a true statement.
+    expect(result.current.deferred).toBe(false);
+    expect(result.current.options).toEqual([]);
+    expect(result.current.error).toBeNull();
   });
 
   it('queries as soon as the workspaceId arrives (the route fix landing)', async () => {
@@ -178,16 +200,39 @@ describe('useSourceCandidates', () => {
   });
 });
 
-describe('sourceCandidatePlaceholder — three states, never collapsed', () => {
-  it('distinguishes loading / populated / failed / genuinely empty', () => {
-    expect(sourceCandidatePlaceholder({ options: [], loading: true, error: null })).toBe('Loading…');
-    expect(sourceCandidatePlaceholder({ options: [{ id: 'a', name: 'A' }], loading: false, error: null })).toBe('Select…');
-    expect(sourceCandidatePlaceholder({ options: [], loading: false, error: 'HTTP 500' })).toBe("Couldn't load — retry");
-    expect(sourceCandidatePlaceholder({ options: [], loading: false, error: null })).toBe('None in this workspace');
+describe('sourceCandidatePlaceholder — four states, never collapsed', () => {
+  it('distinguishes loading / populated / failed / deferred / genuinely empty', () => {
+    expect(sourceCandidatePlaceholder({ options: [], loading: true, error: null, deferred: false })).toBe('Loading…');
+    expect(sourceCandidatePlaceholder({ options: [{ id: 'a', name: 'A' }], loading: false, error: null, deferred: false })).toBe('Select…');
+    expect(sourceCandidatePlaceholder({ options: [], loading: false, error: 'HTTP 500', deferred: false })).toBe("Couldn't load — retry");
+    expect(sourceCandidatePlaceholder({ options: [], loading: false, error: null, deferred: true })).toBe('Waiting for the workspace…');
+    expect(sourceCandidatePlaceholder({ options: [], loading: false, error: null, deferred: false })).toBe('None in this workspace');
   });
 
   it('never renders the old "None found" for a FAILED lookup', () => {
-    const p = sourceCandidatePlaceholder({ options: [], loading: false, error: 'cosmos unavailable' });
+    const p = sourceCandidatePlaceholder({ options: [], loading: false, error: 'cosmos unavailable', deferred: false });
     expect(p).not.toMatch(/None/);
+  });
+
+  it('never claims the workspace is EMPTY for a lookup that never ran (R7)', () => {
+    // The state the first repair could not express, and therefore could not
+    // assert on. "None in this workspace" is a positive claim about the
+    // workspace's contents; DEFERRED means nothing was ever asked, so the claim
+    // is not merely unproven, it is manufactured — a STRONGER falsehood than
+    // the 'None found' this module replaced.
+    const p = sourceCandidatePlaceholder({ options: [], loading: false, error: null, deferred: true });
+    expect(p).not.toBe('None in this workspace');
+    expect(p).not.toMatch(/None/);
+    expect(p).not.toMatch(/in this workspace/); // no claim about the contents at all
+  });
+
+  it('takes DEFERRED straight from the hook, so the wiring is pinned too', async () => {
+    // Guards the JOIN: a placeholder that reads `deferred` is worth nothing if
+    // the hook never sets it. Feed the real hook's real output to the real
+    // placeholder for the exact case the editor hits while an item is loading.
+    (clientFetch as any).mockResolvedValue(ok(WAREHOUSE));
+    const { result } = renderHook(() => useSourceCandidates('', 'warehouse', 'warehouse'));
+    await new Promise((r) => setTimeout(r, 30));
+    expect(sourceCandidatePlaceholder(result.current)).not.toBe('None in this workspace');
   });
 });
