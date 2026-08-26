@@ -298,34 +298,283 @@ function deleteActivityName(o: CopyObjectPlan): string {
   return adfSafe(`DeletePrev_${o.landingSegment}`);
 }
 
+/* ────────────────────────────────────────────────────────────────────────────
+ * THE INVARIANT: nothing is destroyed until its replacement is proven written.
+ *
+ * A copy-in pipeline both DESTROYS data (the Delete retires the previous
+ * generation of one table's landing folder) and WRITES data (the Copy lands the
+ * new generation). Exactly one property makes that safe, and it is PER TARGET:
+ *
+ *     no Delete may run unless the write that REPLACES WHAT IT DELETES has
+ *     provably succeeded first.
+ *
+ * Everything below computes that property, and only that property, from the
+ * pipeline's own data — the dataset each activity writes (`outputs`), the
+ * dataset each Delete destroys (`typeProperties.dataset`), and the dependency
+ * edges between them. It reads no activity NAME, no authoring order, and no
+ * marker saying which function produced the list.
+ *
+ * WHY IT IS WRITTEN THIS WAY RATHER THAN AS A CHECKLIST. Round 1 of PR #4104
+ * shipped a WEAKER question — "does this Delete have SOME dependency, on
+ * SOMETHING typed Copy, whose condition list mentions Succeeded?" — and an
+ * independent verifier defeated it. Re-measured here against that exact
+ * implementation before this rewrite; all five were ACCEPTED with no throw:
+ *
+ *   1. CROSS-WIRED. Copy_A, Copy_B, and DeletePrev_B gated on Copy_A. Table B's
+ *      landing folder is cleared the instant A's copy succeeds — whether or not
+ *      Copy_B ever wrote a byte. That is delete-first for B, precisely.
+ *   2. WIDENED CONDITION SET. `dependencyConditions: ['Succeeded','Failed']`.
+ *      `includes('Succeeded')` is true, so round 1 read that as a success gate
+ *      — but a list naming `Failed` is not one, and Learn does not document how
+ *      a multi-condition list combines, so it establishes nothing either way.
+ *   3. ORPHAN TARGET. A Delete whose dataset nothing in the pipeline writes,
+ *      gated on an unrelated Copy: pure destruction behind a decoy gate.
+ *   4. NO TARGET. A Delete with no `typeProperties.dataset` at all — what it
+ *      destroys was unknowable and the old check never asked.
+ *   5. NESTED. A root Delete inside a ForEach. The old check scanned only the
+ *      top-level array, so that Delete was not in the population at all. ADF
+ *      counts "inner activities for containers" toward the 120-activity ceiling
+ *      too, so the budget check was blind to them as well.
+ *
+ * None of those five is enumerated in the code. Each is a CONSEQUENCE of asking
+ * the per-target dominance question instead of the existential one — which is
+ * the point, because the next evasion nobody has thought of is refused by the
+ * same question.
+ *
+ * WHAT IT DELIBERATELY DOES NOT COVER, stated rather than implied: it reasons
+ * about ADF `Delete` activities only. An edit that destroyed Bronze some other
+ * way — a Script activity running a DROP, a Copy with a truncating pre-copy
+ * script — is outside what this can see, and would need its own invariant.
+ * ──────────────────────────────────────────────────────────────────────────── */
+
+/** One activity as it sits in the pipeline TREE, flattened with its scope. */
+interface FlatActivity {
+  idx: number;
+  name: string;
+  type: string;
+  raw: Record<string, unknown>;
+  /** Flat index of the enclosing container activity, or -1 at pipeline level. */
+  parent: number;
+  /** name → flat indices sharing this activity's scope (ADF resolves per scope). */
+  scope: Map<string, number[]>;
+}
+
 /**
- * Is this Delete activity gated behind a Copy that SUCCEEDED?
- *
- * That single property is what separates the safe copy-then-retire shape from
- * the delete-first shape that empties Bronze whenever the Copy fails. A Delete
- * with `dependsOn: []` is a ROOT activity: ADF runs it unconditionally, before
- * anything has been written.
- *
- * Keyed to the SHAPE (does a successful Copy dominate this Delete?), never to a
- * name or an authoring version — a mutation that renames the activities, adds a
- * decoy dependency on a non-Copy activity, or depends on a Copy with a
- * `Completed`/`Failed`/`Skipped` condition is still delete-first and is still
- * caught here. Deliberately identical in intent to the predicate the mirror
- * engine carries for the same defect (#4083/#4085), so the two engines cannot
- * drift back apart the way they did to produce #4087.
+ * Does this value look like an ACTIVITY rather than, say, a dataset schema
+ * column (which is also `{ name, type }`)? Used only to recognise a nested
+ * activity ARRAY inside a container's typeProperties, so that a container type
+ * nobody has added yet — Switch, Until, a future one — is still walked without
+ * this file carrying a list of container spellings.
  */
-export function deleteIsGatedOnCopySuccess(
-  act: unknown,
-  byName: Map<string, { type?: string }>,
-): boolean {
-  const a = act as { dependsOn?: unknown };
-  const deps = Array.isArray(a?.dependsOn) ? a.dependsOn : [];
-  return deps.some((d: unknown) => {
-    const dep = d as { dependencyConditions?: unknown; activity?: unknown };
-    const conds = Array.isArray(dep?.dependencyConditions) ? dep.dependencyConditions : [];
-    if (!conds.includes('Succeeded')) return false;
-    return byName.get(String(dep?.activity ?? ''))?.type === 'Copy';
-  });
+function isActivityLike(v: unknown): v is Record<string, unknown> {
+  if (!v || typeof v !== 'object' || Array.isArray(v)) return false;
+  const o = v as Record<string, unknown>;
+  if (typeof o.name !== 'string' || typeof o.type !== 'string') return false;
+  return 'dependsOn' in o || 'typeProperties' in o || 'policy' in o
+    || o.type === 'Copy' || o.type === 'Delete';
+}
+
+/** Every nested activity array reachable under one activity's typeProperties. */
+function nestedActivityArrays(node: unknown, out: unknown[][], depth = 0): void {
+  if (depth > 8 || !node || typeof node !== 'object') return;
+  if (Array.isArray(node)) {
+    if (node.length > 0 && node.every(isActivityLike)) { out.push(node); return; }
+    for (const v of node) nestedActivityArrays(v, out, depth + 1);
+    return;
+  }
+  for (const v of Object.values(node as Record<string, unknown>)) {
+    nestedActivityArrays(v, out, depth + 1);
+  }
+}
+
+/**
+ * The pipeline's activities INCLUDING the ones nested inside control-flow
+ * containers. ADF's 120-activity ceiling "includes inner activities for
+ * containers", and so does the destruction this file exists to refuse.
+ *   https://learn.microsoft.com/azure/azure-resource-manager/management/azure-subscription-service-limits#azure-data-factory-limits
+ */
+function flattenActivities(activities: readonly unknown[]): FlatActivity[] {
+  const flat: FlatActivity[] = [];
+  const walk = (list: readonly unknown[], parent: number): void => {
+    const scope = new Map<string, number[]>();
+    const mine: number[] = [];
+    for (const entry of list) {
+      const raw = (entry && typeof entry === 'object' ? entry : {}) as Record<string, unknown>;
+      const idx = flat.length;
+      const name = typeof raw.name === 'string' ? raw.name : '';
+      flat.push({ idx, name, type: typeof raw.type === 'string' ? raw.type : '', raw, parent, scope });
+      scope.set(name, [...(scope.get(name) ?? []), idx]);
+      mine.push(idx);
+    }
+    for (const idx of mine) {
+      const nested: unknown[][] = [];
+      nestedActivityArrays(flat[idx].raw.typeProperties, nested);
+      for (const list2 of nested) walk(list2, idx);
+    }
+  };
+  walk(activities, -1);
+  return flat;
+}
+
+/**
+ * Is this ONE dependency edge a pure success gate?
+ *
+ * `dependencyConditions` is a LIST. Learn documents what each condition means
+ * individually — and that `Completed` alone means "succeeded OR failed", so a
+ * condition is a status the upstream is ALLOWED to end in, not a requirement —
+ * but it does not state how a list of several is combined.
+ *   https://learn.microsoft.com/azure/data-factory/concepts-pipelines-activities#activity-dependency
+ * So a list carrying anything besides `Succeeded` is not a gate this code can
+ * claim to understand, and it is treated as no gate at all rather than assumed
+ * benign. Fail-closed: being wrong in this direction costs a refusal to author;
+ * being wrong in the other costs Bronze. Nothing here authors such a list.
+ */
+function isPureSuccessEdge(dep: unknown): boolean {
+  const d = dep as { dependencyConditions?: unknown };
+  const conds = Array.isArray(d?.dependencyConditions) ? d.dependencyConditions : [];
+  return conds.length === 1 && conds[0] === 'Succeeded';
+}
+
+/**
+ * Every activity that MUST have succeeded for `flat[idx]` to run at all —
+ * transitively, and only across pure-success edges.
+ *
+ * Transitive because a chain Copy → Wait → Delete is genuinely safe and a check
+ * that only looked one hop would reject it. Scope-aware because ADF resolves
+ * `dependsOn` within an activity's own scope, and an activity nested in a
+ * container additionally inherits whatever gates that CONTAINER runs behind.
+ *
+ * An unresolvable name and an ambiguous (duplicated) name each contribute
+ * NOTHING rather than being assumed safe. A dependency CYCLE is cut and
+ * reported through `viaCycle`, because a cut leaves the answer an
+ * UNDER-approximation — the caller must not read "no violation" off a walk that
+ * was truncated. (The cached value can only ever be a subset for the same
+ * reason, so memoisation across queries stays on the fail-closed side.)
+ */
+function provenPredecessors(
+  flat: readonly FlatActivity[],
+  idx: number,
+  memo: Map<number, { proven: Set<number>; viaCycle: boolean }>,
+  stack: Set<number>,
+): { proven: Set<number>; viaCycle: boolean } {
+  const cached = memo.get(idx);
+  if (cached) return cached;
+  if (stack.has(idx)) return { proven: new Set(), viaCycle: true };
+  stack.add(idx);
+
+  const proven = new Set<number>();
+  let viaCycle = false;
+  const a = flat[idx];
+  const deps = Array.isArray(a.raw.dependsOn) ? (a.raw.dependsOn as unknown[]) : [];
+  for (const dep of deps) {
+    if (!isPureSuccessEdge(dep)) continue;
+    const target = String((dep as { activity?: unknown })?.activity ?? '');
+    const candidates = a.scope.get(target) ?? [];
+    if (candidates.length !== 1) continue;
+    const j = candidates[0];
+    if (j === idx) continue;
+    proven.add(j);
+    const up = provenPredecessors(flat, j, memo, stack);
+    viaCycle = viaCycle || up.viaCycle;
+    for (const k of up.proven) proven.add(k);
+  }
+  if (a.parent >= 0) {
+    const up = provenPredecessors(flat, a.parent, memo, stack);
+    viaCycle = viaCycle || up.viaCycle;
+    for (const k of up.proven) proven.add(k);
+  }
+
+  stack.delete(idx);
+  const result = { proven, viaCycle };
+  memo.set(idx, result);
+  return result;
+}
+
+/** Dataset reference names an activity WRITES. */
+function writtenDatasets(raw: Record<string, unknown>): string[] {
+  const outs = Array.isArray(raw.outputs) ? (raw.outputs as unknown[]) : [];
+  return outs
+    .map((o) => String((o as { referenceName?: unknown })?.referenceName ?? ''))
+    .filter(Boolean);
+}
+
+/** Dataset reference name a Delete activity DESTROYS, or null if unknowable. */
+function destroyedDataset(raw: Record<string, unknown>): string | null {
+  const tp = raw.typeProperties as { dataset?: { referenceName?: unknown } } | undefined;
+  const n = tp?.dataset?.referenceName;
+  return typeof n === 'string' && n ? n : null;
+}
+
+/** A Delete this pipeline has not proven it can safely perform. */
+export interface UnsafeDelete {
+  /** Activity name as authored (may be '' — an unnamed activity is still unsafe). */
+  name: string;
+  /** `no-target` · `no-producer` · `producer-not-proven` · `cycle` */
+  reason: 'no-target' | 'no-producer' | 'producer-not-proven' | 'cycle';
+  detail: string;
+}
+
+/**
+ * Every Delete in the pipeline — nested ones included — that could destroy data
+ * the pipeline has not proven it will replace. Empty means the invariant holds.
+ *
+ * Exported so the property can be asserted directly on a hand-built shape, not
+ * only on whatever {@link buildCopyActivities} happens to emit today. A test
+ * that can only see the builder's current output cannot tell an invariant that
+ * enforces the property from one that merely agrees with the builder.
+ */
+export function findUnsafeDeletes(activities: readonly unknown[]): UnsafeDelete[] {
+  const flat = flattenActivities(activities);
+  const memo = new Map<number, { proven: Set<number>; viaCycle: boolean }>();
+  const bad: UnsafeDelete[] = [];
+
+  for (const d of flat) {
+    if (d.type !== 'Delete') continue;
+    const label = d.name || '<unnamed>';
+
+    const target = destroyedDataset(d.raw);
+    if (!target) {
+      bad.push({
+        name: d.name,
+        reason: 'no-target',
+        detail: `${label} names no dataset to delete, so what it destroys cannot be established`,
+      });
+      continue;
+    }
+
+    const producers = flat.filter((a) => writtenDatasets(a.raw).includes(target));
+    if (!producers.length) {
+      bad.push({
+        name: d.name,
+        reason: 'no-producer',
+        detail: `${label} deletes dataset "${target}", which NO activity in this pipeline writes`,
+      });
+      continue;
+    }
+
+    const { proven, viaCycle } = provenPredecessors(flat, d.idx, memo, new Set());
+    if (viaCycle) {
+      // The walk was truncated at a cycle, so "dominated" was never established.
+      // ADF cannot run a cyclic pipeline either — refuse rather than author it.
+      bad.push({
+        name: d.name,
+        reason: 'cycle',
+        detail: `${label} sits behind a dependency CYCLE, so nothing about what runs before it is established`,
+      });
+      continue;
+    }
+    const unproven = producers.filter((p) => !proven.has(p.idx));
+    if (unproven.length) {
+      bad.push({
+        name: d.name,
+        reason: 'producer-not-proven',
+        detail:
+          `${label} deletes dataset "${target}", but [${unproven.map((p) => p.name || '<unnamed>').join(', ')}] ` +
+          '— the activity(ies) that write it — are not proven to have SUCCEEDED before it runs',
+      });
+    }
+  }
+  return bad;
 }
 
 /**
@@ -341,29 +590,26 @@ export function deleteIsGatedOnCopySuccess(
  * that resolves it: it is a defect in Loom's own authoring.
  */
 export function assertSafeCopyPipeline(activities: readonly unknown[]): void {
-  const byName = new Map<string, { type?: string }>();
-  for (const a of activities) {
-    const act = a as { name?: unknown; type?: unknown };
-    byName.set(String(act?.name ?? ''), { type: typeof act?.type === 'string' ? act.type : undefined });
-  }
-
-  const ungated = activities
-    .filter((a) => (a as { type?: unknown })?.type === 'Delete')
-    .filter((a) => !deleteIsGatedOnCopySuccess(a, byName))
-    .map((a) => String((a as { name?: unknown })?.name ?? '<unnamed>'));
-  if (ungated.length) {
+  const unsafe = findUnsafeDeletes(activities);
+  if (unsafe.length) {
     throw new Error(
-      `Refusing to author copy-in pipeline: ${ungated.length} Delete activity(ies) ` +
-      `[${ungated.join(', ')}] are not gated on a Copy that SUCCEEDED. A root Delete clears the ` +
-      'Bronze landing folder before anything is written, so any copy failure destroys the previous ' +
-      'snapshot (issue #4083, repeated here as #4087).',
+      `Refusing to author copy-in pipeline: ${unsafe.length} Delete activity(ies) would destroy data this ` +
+      'pipeline has not proven it can replace — ' +
+      unsafe.map((u) => `${u.detail} [${u.reason}]`).join('; ') +
+      '. A Delete that is not dominated by the write that replaces what it deletes clears the Bronze landing ' +
+      'folder before that data exists, so any copy failure destroys the previous snapshot ' +
+      '(issue #4083, repeated here as #4087).',
     );
   }
 
-  if (activities.length > ADF_MAX_ACTIVITIES_PER_PIPELINE) {
+  // ADF counts "inner activities for containers" toward the ceiling, so this
+  // counts the FLATTENED tree — a nested activity is not free.
+  const total = flattenActivities(activities).length;
+  if (total > ADF_MAX_ACTIVITIES_PER_PIPELINE) {
     throw new Error(
-      `Refusing to author copy-in pipeline: ${activities.length} activities exceeds ADF's ceiling of ` +
-      `${ADF_MAX_ACTIVITIES_PER_PIPELINE} per pipeline (default AND maximum — not raisable by support). ` +
+      `Refusing to author copy-in pipeline: ${total} activities exceeds ADF's ceiling of ` +
+      `${ADF_MAX_ACTIVITIES_PER_PIPELINE} per pipeline (default AND maximum — not raisable by support, and it ` +
+      'counts inner activities for containers). ' +
       `At ${ACTIVITIES_PER_OBJECT} activities per object that is more than ${MAX_COPY_OBJECTS} objects.`,
     );
   }

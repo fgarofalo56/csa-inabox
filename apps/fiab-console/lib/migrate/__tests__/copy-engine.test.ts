@@ -16,11 +16,17 @@
  *    a plan with two objects, and asserts each Delete is gated on ITS OWN
  *    Copy — not merely on "some Copy".
  *
- * 3. THE GUARD IS KEYED TO THE SHAPE, NOT A SPELLING. `deleteIsGatedOnCopySuccess`
- *    is exercised against the decoys a delete-first regression actually looks
- *    like: no dependency, a dependency on a non-Copy activity, and a dependency
- *    on a real Copy with a `Completed`/`Failed`/`Skipped` condition (all three
- *    of which run the Delete even when the Copy did not succeed).
+ * 3. THE INVARIANT IS KEYED TO THE SHAPE OF THE DEFECT, NOT TO A LIST OF
+ *    EVASIONS. Round 1 of this PR checked "does this Delete have SOME
+ *    dependency, on SOMETHING typed Copy, whose condition list mentions
+ *    Succeeded?". An independent verifier defeated that, and re-measuring it
+ *    here before the rewrite found FIVE shapes it accepted with no throw:
+ *    cross-wired (DeletePrev_B gated on Copy_A), a widened condition set
+ *    (`['Succeeded','Failed']`), an orphan target nothing writes, a Delete with
+ *    no target at all, and a root Delete nested inside a ForEach. All five are
+ *    asserted below — not because they are the list, but because each one
+ *    exercises a different way the PER-TARGET dominance question can be dodged,
+ *    and the question is what is being pinned.
  *
  * 4. THE TRANSFER GATE READS THE TYPE. `planCopyTransfer` must reject the
  *    AzureBlobFS Bronze sink even though its NAME is a perfectly good non-empty
@@ -32,7 +38,7 @@
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import {
-  buildCopyActivities, deleteIsGatedOnCopySuccess, assertSafeCopyPipeline,
+  buildCopyActivities, findUnsafeDeletes, assertSafeCopyPipeline,
   planCopyTransfer, datasetNamesFor, MAX_COPY_OBJECTS,
 } from '@/lib/migrate/copy-engine';
 import type { CopyObjectPlan } from '@/lib/migrate/copy-plan';
@@ -157,43 +163,170 @@ describe('buildCopyActivities — Snowflake connector shape', () => {
   });
 });
 
-// ── 3. The predicate is keyed to the SHAPE, not to a name ──────────────────
+// ── 3. The invariant is keyed to PER-TARGET dominance, not to a spelling ───
 
-describe('deleteIsGatedOnCopySuccess — shape, not spelling', () => {
-  const names = new Map<string, { type?: string }>([
-    ['Copy_x', { type: 'Copy' }],
-    ['Lookup_x', { type: 'Lookup' }],
-  ]);
+/**
+ * Hand-built shapes, deliberately NOT produced by `buildCopyActivities`.
+ *
+ * A test that can only look at the builder's current output cannot tell an
+ * invariant that ENFORCES the safety property from one that merely happens to
+ * agree with today's builder. Every case below is handed straight to the
+ * exported invariant.
+ */
+const copyAct = (name: string, sink: string, dependsOn: unknown[] = []) => ({
+  name, type: 'Copy', dependsOn,
+  outputs: [{ referenceName: sink, type: 'DatasetReference' }],
+});
+const deleteAct = (
+  name: string, sink: string | null, dep: string | null, conds: string[] = ['Succeeded'],
+) => ({
+  name, type: 'Delete',
+  dependsOn: dep ? [{ activity: dep, dependencyConditions: conds }] : [],
+  typeProperties: sink ? { dataset: { referenceName: sink, type: 'DatasetReference' } } : {},
+});
 
-  it('accepts a Delete gated on a Copy that Succeeded', () => {
-    expect(deleteIsGatedOnCopySuccess(
-      { dependsOn: [{ activity: 'Copy_x', dependencyConditions: ['Succeeded'] }] }, names,
-    )).toBe(true);
+describe('findUnsafeDeletes — per-target dominance, not "some Copy succeeded"', () => {
+  it('accepts the safe shape: each Delete gated on the Copy that writes ITS dataset', () => {
+    expect(findUnsafeDeletes([
+      copyAct('Copy_A', 'sink_A'), deleteAct('DeletePrev_A', 'sink_A', 'Copy_A'),
+      copyAct('Copy_B', 'sink_B'), deleteAct('DeletePrev_B', 'sink_B', 'Copy_B'),
+    ])).toEqual([]);
   });
 
-  it('rejects a ROOT Delete (dependsOn: [])', () => {
-    expect(deleteIsGatedOnCopySuccess({ dependsOn: [] }, names)).toBe(false);
-    expect(deleteIsGatedOnCopySuccess({}, names)).toBe(false);
+  it('BYPASS 1 — CROSS-WIRED: DeletePrev_B gated on Copy_A, not on Copy_B', () => {
+    // The exact evasion an independent verifier used against round 1, which
+    // ACCEPTED it. Copy_A succeeding says nothing about table B, so B's landing
+    // folder is cleared whether or not Copy_B ever wrote a byte.
+    const bad = findUnsafeDeletes([
+      copyAct('Copy_A', 'sink_A'), deleteAct('DeletePrev_A', 'sink_A', 'Copy_A'),
+      copyAct('Copy_B', 'sink_B'), deleteAct('DeletePrev_B', 'sink_B', 'Copy_A'),
+    ]);
+    expect(bad).toHaveLength(1);
+    expect(bad[0].name).toBe('DeletePrev_B');
+    expect(bad[0].reason).toBe('producer-not-proven');
+    // It names the producer that was not proven — Copy_B — not just "a Copy".
+    expect(bad[0].detail).toMatch(/Copy_B/);
   });
 
-  it('rejects a Delete gated on a NON-Copy activity (decoy dependency)', () => {
-    expect(deleteIsGatedOnCopySuccess(
-      { dependsOn: [{ activity: 'Lookup_x', dependencyConditions: ['Succeeded'] }] }, names,
-    )).toBe(false);
-    // An activity that is not in the pipeline at all is not a gate either.
-    expect(deleteIsGatedOnCopySuccess(
-      { dependsOn: [{ activity: 'Copy_missing', dependencyConditions: ['Succeeded'] }] }, names,
-    )).toBe(false);
+  it('BYPASS 2 — WIDENED CONDITION SET: Succeeded alongside Failed is no gate', () => {
+    // `includes('Succeeded')` was true for each of these, which is how round 1
+    // read them as success gates. A list that also names Failed/Skipped/
+    // Completed does not establish that the Copy succeeded, so it must not be
+    // allowed to stand in for one.
+    for (const conds of [['Succeeded', 'Failed'], ['Succeeded', 'Skipped'], ['Completed', 'Succeeded']]) {
+      const bad = findUnsafeDeletes([
+        copyAct('Copy_A', 'sink_A'), deleteAct('DeletePrev_A', 'sink_A', 'Copy_A', conds),
+      ]);
+      expect(bad, `conditions ${JSON.stringify(conds)} must not gate`).toHaveLength(1);
+      expect(bad[0].reason).toBe('producer-not-proven');
+    }
   });
 
-  it.each(['Completed', 'Failed', 'Skipped'])(
-    'rejects a Delete gated on a Copy with condition %s (it still runs on failure)',
-    (cond) => {
-      expect(deleteIsGatedOnCopySuccess(
-        { dependsOn: [{ activity: 'Copy_x', dependencyConditions: [cond] }] }, names,
-      )).toBe(false);
-    },
-  );
+  it('BYPASS 3 — ORPHAN TARGET: deleting a dataset nothing in the pipeline writes', () => {
+    const bad = findUnsafeDeletes([
+      copyAct('Copy_A', 'sink_A'),
+      deleteAct('DeletePrev_ORPHAN', 'sink_nobody_writes', 'Copy_A'),
+    ]);
+    expect(bad).toHaveLength(1);
+    expect(bad[0].reason).toBe('no-producer');
+  });
+
+  it('BYPASS 4 — NO TARGET: a Delete that names no dataset is unknowable, so unsafe', () => {
+    const bad = findUnsafeDeletes([
+      copyAct('Copy_A', 'sink_A'), deleteAct('DeletePrev_X', null, 'Copy_A'),
+    ]);
+    expect(bad).toHaveLength(1);
+    expect(bad[0].reason).toBe('no-target');
+  });
+
+  it('BYPASS 5 — NESTED: a root Delete inside a container is still in the population', () => {
+    const bad = findUnsafeDeletes([
+      copyAct('Copy_A', 'sink_A'),
+      {
+        name: 'ForEach_1', type: 'ForEach', dependsOn: [],
+        typeProperties: { items: '@pipeline().parameters.x', activities: [
+          deleteAct('DeletePrev_NESTED', 'sink_A', null),
+        ] },
+      },
+    ]);
+    expect(bad).toHaveLength(1);
+    expect(bad[0].name).toBe('DeletePrev_NESTED');
+  });
+
+  it('a nested Delete IS safe when its container runs behind the producing Copy', () => {
+    // The mirror of BYPASS 5: dominance is inherited from the container, so the
+    // check is not merely "refuse anything nested".
+    expect(findUnsafeDeletes([
+      copyAct('Copy_A', 'sink_A'),
+      {
+        name: 'ForEach_1', type: 'ForEach',
+        dependsOn: [{ activity: 'Copy_A', dependencyConditions: ['Succeeded'] }],
+        typeProperties: { activities: [deleteAct('DeletePrev_NESTED', 'sink_A', null)] },
+      },
+    ])).toEqual([]);
+  });
+
+  it('accepts a TRANSITIVE gate (Copy -> Wait -> Delete)', () => {
+    // Dominance, not adjacency: inserting a step between the Copy and the
+    // Delete does not make it unsafe, and must not be refused.
+    expect(findUnsafeDeletes([
+      copyAct('Copy_A', 'sink_A'),
+      { name: 'Wait_1', type: 'Wait', dependsOn: [{ activity: 'Copy_A', dependencyConditions: ['Succeeded'] }] },
+      deleteAct('DeletePrev_A', 'sink_A', 'Wait_1'),
+    ])).toEqual([]);
+  });
+
+  it('rejects a transitive chain whose FIRST hop is not a success edge', () => {
+    const bad = findUnsafeDeletes([
+      copyAct('Copy_A', 'sink_A'),
+      { name: 'Wait_1', type: 'Wait', dependsOn: [{ activity: 'Copy_A', dependencyConditions: ['Completed'] }] },
+      deleteAct('DeletePrev_A', 'sink_A', 'Wait_1'),
+    ]);
+    expect(bad).toHaveLength(1);
+    expect(bad[0].reason).toBe('producer-not-proven');
+  });
+
+  it('rejects a ROOT Delete and a Delete gated on a non-writing activity', () => {
+    expect(findUnsafeDeletes([
+      copyAct('Copy_A', 'sink_A'), deleteAct('DeletePrev_A', 'sink_A', null),
+    ])[0].reason).toBe('producer-not-proven');
+    expect(findUnsafeDeletes([
+      copyAct('Copy_A', 'sink_A'),
+      { name: 'Lookup_1', type: 'Lookup', dependsOn: [] },
+      deleteAct('DeletePrev_A', 'sink_A', 'Lookup_1'),
+    ])[0].reason).toBe('producer-not-proven');
+    // A dependency on an activity that is not in the pipeline is not a gate.
+    expect(findUnsafeDeletes([
+      copyAct('Copy_A', 'sink_A'), deleteAct('DeletePrev_A', 'sink_A', 'Copy_missing'),
+    ])[0].reason).toBe('producer-not-proven');
+  });
+
+  it('does not read activity NAMES: renaming everything changes nothing', () => {
+    // Same graph, no `Copy_`/`DeletePrev_` spelling anywhere.
+    expect(findUnsafeDeletes([
+      copyAct('zzz', 'ds1'), deleteAct('qqq', 'ds1', 'zzz'),
+    ])).toEqual([]);
+    expect(findUnsafeDeletes([
+      copyAct('zzz', 'ds1'), copyAct('www', 'ds2'), deleteAct('qqq', 'ds2', 'zzz'),
+    ])).toHaveLength(1);
+  });
+
+  it('refuses rather than reasoning through a dependency CYCLE', () => {
+    // Delete-first with a back-edge. ADF cannot run a cyclic pipeline, and the
+    // dominance walk has to be cut, so "dominated" was never established —
+    // reported as such instead of read as an absence of violations.
+    const bad = findUnsafeDeletes([
+      { ...copyAct('Copy_A', 'sink_A'), dependsOn: [{ activity: 'DeletePrev_A', dependencyConditions: ['Succeeded'] }] },
+      deleteAct('DeletePrev_A', 'sink_A', 'Copy_A'),
+    ]);
+    expect(bad).toHaveLength(1);
+    expect(bad[0].reason).toBe('cycle');
+
+    // A Delete depending on ITSELF proves nothing about its producer either.
+    expect(findUnsafeDeletes([
+      copyAct('Copy_A', 'sink_A'), deleteAct('DeletePrev_A', 'sink_A', 'DeletePrev_A'),
+    ])[0].reason).toBe('producer-not-proven');
+  });
 });
 
 // ── 4. The pre-upsert invariant refuses to author a destructive pipeline ────
@@ -201,11 +334,22 @@ describe('deleteIsGatedOnCopySuccess — shape, not spelling', () => {
 describe('assertSafeCopyPipeline', () => {
   it('throws on a ROOT Delete, naming it', () => {
     const bad = [
-      { name: 'DeletePrev_a', type: 'Delete', dependsOn: [] },
-      { name: 'Copy_a', type: 'Copy', dependsOn: [{ activity: 'DeletePrev_a', dependencyConditions: ['Succeeded'] }] },
+      { name: 'DeletePrev_a', type: 'Delete', dependsOn: [],
+        typeProperties: { dataset: { referenceName: 'sink_a', type: 'DatasetReference' } } },
+      { name: 'Copy_a', type: 'Copy', outputs: [{ referenceName: 'sink_a', type: 'DatasetReference' }],
+        dependsOn: [{ activity: 'DeletePrev_a', dependencyConditions: ['Succeeded'] }] },
     ];
     expect(() => assertSafeCopyPipeline(bad)).toThrow(/DeletePrev_a/);
-    expect(() => assertSafeCopyPipeline(bad)).toThrow(/not gated on a Copy that SUCCEEDED/);
+    expect(() => assertSafeCopyPipeline(bad)).toThrow(/has not proven it can replace/);
+  });
+
+  it('throws on the CROSS-WIRED shape (round 1 authored this and did not throw)', () => {
+    const crossWired = [
+      copyAct('Copy_A', 'sink_A'), deleteAct('DeletePrev_A', 'sink_A', 'Copy_A'),
+      copyAct('Copy_B', 'sink_B'), deleteAct('DeletePrev_B', 'sink_B', 'Copy_A'),
+    ];
+    expect(() => assertSafeCopyPipeline(crossWired)).toThrow(/DeletePrev_B/);
+    expect(() => assertSafeCopyPipeline(crossWired)).toThrow(/Copy_B/);
   });
 
   it('throws when the activity count breaches ADF\'s 120 ceiling', () => {
@@ -215,6 +359,19 @@ describe('assertSafeCopyPipeline', () => {
     );
     expect(tooMany.length).toBeGreaterThan(120);
     expect(() => assertSafeCopyPipeline(tooMany)).toThrow(/exceeds ADF's ceiling of 120/);
+  });
+
+  it('counts INNER activities toward the ceiling, as ADF does', () => {
+    // "Maximum activities per pipeline, WHICH INCLUDES INNER ACTIVITIES FOR
+    // CONTAINERS | 120 | 120" — a container is not a way to buy more budget.
+    const nested = [{
+      name: 'ForEach_1', type: 'ForEach', dependsOn: [],
+      typeProperties: {
+        activities: Array.from({ length: 130 }, (_, i) => copyAct(`Copy_${i}`, `s${i}`)),
+      },
+    }];
+    expect(nested).toHaveLength(1);
+    expect(() => assertSafeCopyPipeline(nested)).toThrow(/exceeds ADF's ceiling of 120/);
   });
 
   it('accepts a plan exactly at the derived ceiling', () => {
@@ -306,7 +463,7 @@ describe('startCopyIn — gates before it authors', () => {
   });
   afterEach(() => { process.env = { ...ENV }; });
 
-  it('authors a pipeline whose stored definition has NO ungated Delete', async () => {
+  it('authors a pipeline whose stored definition has NO unsafe Delete', async () => {
     const { startCopyIn } = await import('@/lib/migrate/copy-engine');
     const res = await startCopyIn(PLAN, 'mig1');
     expect(res.ok).toBe(true);
@@ -315,12 +472,9 @@ describe('startCopyIn — gates before it authors', () => {
     // Assert against what was actually handed to ARM, not against the builder.
     const spec = arm.upsertPipeline.mock.calls[0][1] as any;
     const stored: Act[] = spec.properties.activities;
-    const names = byName(stored);
-    const deletes = stored.filter((a) => a.type === 'Delete');
-    expect(deletes).toHaveLength(TWO_TABLES.length);
-    for (const d of deletes) {
-      expect(deleteIsGatedOnCopySuccess(d, names), `stored Delete ${d.name} is ungated`).toBe(true);
-    }
+    expect(stored.filter((a) => a.type === 'Delete')).toHaveLength(TWO_TABLES.length);
+    // Per-target: every stored Delete is dominated by the Copy writing ITS dataset.
+    expect(findUnsafeDeletes(stored)).toEqual([]);
   });
 
   it('takes the connector types FROM the linked service, never hard-coded', async () => {
