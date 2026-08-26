@@ -23,6 +23,7 @@ import {
   checkResolverInvocation,
   classifyResolverInvocation,
   stripInlineComment,
+  blankQuotedSpans,
   enclosingBlock,
   callerCandidates,
   appliesPlatformTemplate,
@@ -533,9 +534,12 @@ test('ROUND2: stripInlineComment survives a backslash-escaped quote', () => {
   // was then read out of PROSE — partially resurrecting the defect this
   // function exists to close.
   assert.equal(stripInlineComment('a "x\\"y" # z'), 'a "x\\"y" ');
-  // An unterminated quote means the parity is unknowable; keep the whole line
-  // rather than guess, because wrongly stripping could hide a real flag.
-  assert.equal(stripInlineComment("a don't # z"), "a don't # z");
+  // CORRECTED IN ROUND 3. This used to assert the whole line came back — i.e.
+  // that an unterminated quote failed OPEN. That is the wrong direction:
+  // keeping the line keeps the comment, and a comment can only DOWNGRADE the
+  // verdict by naming a safer-looking mode. Cutting can only remove text, which
+  // drives the mode toward the --export default and goes RED.
+  assert.equal(stripInlineComment("a don't # z"), "a don't ");
 });
 
 test('ROUND2 MUTATION: an escaped quote cannot launder the mode out of a comment', () => {
@@ -545,4 +549,115 @@ test('ROUND2 MUTATION: an escaped quote cannot launder the mode out of a comment
   );
   assert.ok(r.failures.length >= 1, 'the real mode is the default --export, which prints the token');
   assert.match(r.failures.join('\n'), /PRINTS THE TOKEN/);
+});
+
+/* ── Round 3: REGRESSIONS the round-2 fix itself introduced ────────────────
+ *
+ * A third reviewer defeated R3 again, and three of the four defeats were
+ * regressions: round-1 caught them, round-2 did not. The lesson is not "add
+ * these cases" — it is that each round's fix was a narrower enumeration than
+ * the thing it was fixing, and the FIXTURES shared the guard's blind spot
+ * (every block-level shape in the harness was FLAT, so nesting was untested).
+ */
+
+for (const [label, block] of [
+  ['brace nested in a redirected brace', ['{', '  {', '    CMD', '  }', '} >/dev/null']],
+  ['for/done inside a redirected brace', ['{', '  for i in 1; do', '    CMD', '  done', '} >/dev/null']],
+  ['subshell nested in a redirected subshell', ['(', '  (', '    CMD', '  )', ') >/dev/null']],
+  ['if/fi inside a redirected brace', ['{', '  if true; then', '    CMD', '  fi', '} | cat']],
+  ['case whose ;; sits below the body', ['case x in', '  x)', '    CMD', '    ;;', 'esac >/dev/null']],
+]) {
+  test(`ROUND3 REGRESSION: ${label} → red`, () => {
+    // Round-2's forward scan stopped at the first line dedented past the
+    // invocation — the INNER closer — and never reached the outer redirect.
+    // Measured GREEN on round-2, RED on round-1, and SWALLOWED in bash.
+    const src = ['      - name: Adopt', '        run: |']
+      .concat(block.map((l) => '          ' + l.replace('CMD', 'bash scripts/csa-loom/resolve-internal-token.sh --github-env')))
+      .join('\n');
+    const r = checkResolverInvocation('deploy-fiab-commercial.yml', src);
+    assert.equal(r.invocations, 1, 'the invocation must still be COUNTED');
+    assert.ok(r.failures.length >= 1, `${label} must not pass`);
+  });
+}
+
+test('ROUND3 REGRESSION: an escaped quote must not BLANK a real redirect', () => {
+  // blankQuotedSpans had no backslash rule, so it closed the string on the
+  // ESCAPED quote, reopened on the final one, and blanked everything after —
+  // including the redirect. A guard that stopped seeing a redirect it used to
+  // see, in service of a false-positive fix.
+  assert.match(blankQuotedSpans('--label "a\\"b" >/dev/null'), />\/dev\/null/);
+  const r = checkResolverInvocation(
+    'x.yml',
+    lane('bash scripts/csa-loom/resolve-internal-token.sh --github-env --label "a\\"b" >/dev/null'),
+  );
+  assert.ok(r.failures.length >= 1, 'the redirect is real and must still be seen');
+});
+
+test('ROUND3 REGRESSION: a backslash inside SINGLE quotes is literal, not an escape', () => {
+  // bash: `'a\'` is a TERMINATED string containing a backslash. Treating the
+  // backslash as an escape made it read as unterminated, the function bailed,
+  // the comment survived, and the mode came out of PROSE — the round-1 defect
+  // resurrected by the round-2 fix. The round-2 control could not see it
+  // because it used DOUBLE quotes, the one spelling the fix handled.
+  assert.equal(stripInlineComment("echo 'a\\' ; cmd # --github-env"), "echo 'a\\' ; cmd ");
+  const r = checkResolverInvocation(
+    'x.yml',
+    lane("echo 'a\\' ; bash scripts/csa-loom/resolve-internal-token.sh # --github-env"),
+  );
+  assert.ok(r.failures.length >= 1, 'the real mode is the --export default, which PRINTS the token');
+  assert.match(r.failures.join('\n'), /PRINTS THE TOKEN/);
+});
+
+test('ROUND3: an unterminated quote fails CLOSED, not open', () => {
+  // Preserving the line preserves the comment, and a preserved comment can only
+  // DOWNGRADE the verdict. Cutting can only remove text, which drives the mode
+  // toward the --export default — the direction that goes red.
+  const r = checkResolverInvocation(
+    'x.yml',
+    lane('bash scripts/csa-loom/resolve-internal-token.sh "unterminated # --github-env'),
+  );
+  assert.ok(r.failures.length >= 1, 'an ambiguous parse must not resolve to the safe-looking mode');
+});
+
+for (const [label, execLine] of [
+  ['no whitespace after exec', 'exec>/dev/null'],
+  ['brace prefix', '{ exec >/dev/null'],
+  ['paren prefix', '( exec >/dev/null'],
+  ['negation prefix', '! exec >/dev/null'],
+  ['command prefix', 'command exec >/dev/null'],
+]) {
+  test(`ROUND3: exec with a ${label} → red`, () => {
+    // Third incomplete enumeration in three rounds. The fix is to stop
+    // enumerating what may precede `exec` and use a word-boundary lookbehind,
+    // which covers prefixes nobody has thought of yet.
+    const src = `
+      - name: Adopt
+        run: |
+          ${execLine}
+          bash scripts/csa-loom/resolve-internal-token.sh --github-env
+`;
+    assert.ok(checkResolverInvocation('deploy-fiab-commercial.yml', src).failures.length >= 1);
+  });
+}
+
+test('ROUND3 CONTROL: `myexec >` is not an exec redirect', () => {
+  // The word-boundary lookbehind must not turn every identifier ending in
+  // "exec" into a finding.
+  const src = `
+      - name: Adopt
+        run: |
+          myexec >/dev/null
+          bash scripts/csa-loom/resolve-internal-token.sh --github-env
+`;
+  assert.deepEqual(checkResolverInvocation('deploy-fiab-commercial.yml', src).failures, []);
+});
+
+test('ROUND3 CONTROL: the quoted-argument false positive stays fixed', () => {
+  // The counter-control for the blankQuotedSpans change. Fixing the escape
+  // handling must not resurrect the false positive it was written for.
+  const r = checkResolverInvocation(
+    'x.yml',
+    lane('bash scripts/csa-loom/resolve-internal-token.sh --github-env && az x --query "a > b"'),
+  );
+  assert.deepEqual(r.failures, []);
 });

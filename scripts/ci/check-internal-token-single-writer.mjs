@@ -242,7 +242,7 @@ export const PIPE = /(?<!\|)\|(?!\|)/;
  * the same way, and an enumeration that stopped at braces was the identical
  * shape of blindness it was written to fix.
  */
-export const EXEC_REDIRECT = /(?:^|[;&|]|\bthen\b|\bdo\b|\belse\b)\s*exec\s+(?:[1&]\s*)?>/;
+export const EXEC_REDIRECT = /(?<![\w-])exec\s*(?:[1&]\s*)?>/;
 export const CLOSER_REDIRECT = /^\s*(?:[})]|done|fi|esac)\s*(?:[1&]?>|\|(?!\|))/;
 
 /**
@@ -250,6 +250,17 @@ export const CLOSER_REDIRECT = /^\s*(?:[})]|done|fi|esac)\s*(?:[1&]?>|\|(?!\|))/
  * redirect. `--query "a > b"` on the same logical line as an invocation used to
  * turn the whole line red. A guard that cries wolf gets ignored, which costs
  * more than the case it was protecting.
+ *
+ * IT FOLLOWS BASH'S REAL QUOTING RULES, and the reason is a regression this
+ * function itself caused. A first cut had no backslash handling at all, so in
+ * `--label "a\"b" >/dev/null` it closed the string on the ESCAPED quote and
+ * reopened on the final one — blanking everything after it, including the real
+ * `>/dev/null`. It stopped seeing a redirect it used to see, in the service of
+ * a false-positive fix. So:
+ *
+ *   - inside single quotes NOTHING escapes; the string ends at the next `'`
+ *   - inside double quotes and outside quotes, `\` escapes the next character
+ *   - an escaped character is never an operator, so `\>` is blanked too
  *
  * Length is preserved so any index computed against the original still lines up.
  *
@@ -261,15 +272,29 @@ export function blankQuotedSpans(text) {
   let quote = null;
   for (let i = 0; i < text.length; i++) {
     const c = text[i];
-    if (quote) {
-      out += c === quote ? c : ' ';
-      if (c === quote) quote = null;
-    } else if (c === '"' || c === "'") {
-      quote = c;
-      out += c;
-    } else {
-      out += c;
+    if (quote === "'") {
+      // Single quotes: a backslash is literal text, not an escape.
+      out += c === "'" ? c : ' ';
+      if (c === "'") quote = null;
+      continue;
     }
+    if (c === '\\' && i + 1 < text.length) {
+      // The escape and what it escapes are both inert as operators.
+      out += '  ';
+      i += 1;
+      continue;
+    }
+    if (quote === '"') {
+      out += c === '"' ? c : ' ';
+      if (c === '"') quote = null;
+      continue;
+    }
+    if (c === '"' || c === "'") {
+      out += c;
+      quote = c;
+      continue;
+    }
+    out += c;
   }
   return out;
 }
@@ -283,36 +308,52 @@ export function blankQuotedSpans(text) {
  * PROSE outranked the one actually passed. That is a one-comment bypass of the
  * guard, on the single shape that prints the token straight into the log.
  *
- * Quoting is respected so a `#` inside a string is not treated as a comment —
- * and a BACKSLASH-ESCAPED quote no longer flips the parity, which is how
- * `a "x\"y" # z` kept its comment and partially resurrected the defect above.
- * An UNTERMINATED quote means the parity is unknowable, and the safe answer is
- * "there is no comment here": keeping the whole line cannot hide a flag, while
- * wrongly stripping one could.
+ * TWO CORRECTNESS DETAILS, BOTH LEARNED THE HARD WAY:
+ *
+ * 1. A backslash escapes ONLY outside single quotes. A first fix applied the
+ *    skip unconditionally, so `echo 'a\' ; bash …resolve-internal-token.sh # --github-env`
+ *    read as an unterminated quote — bash sees a TERMINATED string containing a
+ *    literal backslash. The function bailed, the comment survived, and the mode
+ *    came out of the prose again: the exact defect this function exists to
+ *    close, resurrected by its own fix.
+ * 2. AN UNTERMINATED QUOTE FAILS CLOSED, not open. Returning the whole line
+ *    PRESERVES the comment, and a preserved comment can only ever DOWNGRADE the
+ *    verdict (a mode named in prose outranks the real one). Cutting at the first
+ *    candidate `#` can only remove text, which drives the mode toward the
+ *    `--export` default — the shape that goes RED. When the parse is
+ *    ambiguous, take the direction that cannot hide a leak.
  *
  * @param {string} text
  * @returns {string} text with any unquoted `#` tail removed
  */
 export function stripInlineComment(text) {
   let quote = null;
-  let cut = -1;
   for (let i = 0; i < text.length; i++) {
     const c = text[i];
-    if (c === '\\') {
-      i += 1; // the next character is literal, whatever it is
+    if (quote === "'") {
+      if (c === "'") quote = null;
       continue;
     }
-    if (quote) {
-      if (c === quote) quote = null;
-    } else if (c === '"' || c === "'") {
-      quote = c;
-    } else if (c === '#' && (i === 0 || /\s/.test(text[i - 1]))) {
-      cut = i;
-      break;
+    if (c === '\\') {
+      i += 1; // outside quotes, or inside "" — the next character is literal
+      continue;
     }
+    if (quote === '"') {
+      if (c === '"') quote = null;
+      continue;
+    }
+    if (c === '"' || c === "'") {
+      quote = c;
+      continue;
+    }
+    if (c === '#' && (i === 0 || /\s/.test(text[i - 1]))) return text.slice(0, i);
   }
-  if (quote !== null) return text; // unterminated quote — do not trust the parity
-  return cut >= 0 ? text.slice(0, cut) : text;
+  if (quote !== null) {
+    // Unterminated: fail CLOSED (see 2 above).
+    const m = /(?:^|\s)#/.exec(text);
+    if (m) return text.slice(0, m.index === 0 ? 0 : m.index + 1);
+  }
+  return text;
 }
 
 /**
@@ -431,23 +472,35 @@ export function checkResolverInvocation(name, src) {
     // closing-keyword redirect only AFTER. Scanning both ways for both shapes
     // is what made an unrelated later `exec >` in a plain .sh flag a clean
     // invocation.
+    //
+    // NO DEDENT BOUND ON THE FORWARD SCAN. A first fix stopped at the first
+    // line dedented past the invocation, reasoning that it was the closer. It
+    // is the INNER closer: with
+    //
+    //     {
+    //       {
+    //         bash …resolve-internal-token.sh --github-env
+    //       }
+    //     } >/dev/null
+    //
+    // the scan hit the inner `}`, stopped, and never reached the redirect —
+    // measured GREEN, and measured in bash to swallow the mask. Six nesting
+    // variants behaved identically, and a conventionally-formatted `case` whose
+    // `;;` sits below the body defeated the `esac` arm the same way. The
+    // false positive that motivated the bound was an `exec >` AFTER the
+    // invocation, and the direction split already fixes that on its own — so
+    // the bound bought nothing and cost the whole nested class.
     const [bs, be] = enclosingBlock(physical, line - 1);
     const inv0 = line - 1;
-    const indent = (physical[inv0] || '').match(/^\s*/)[0].length;
     let blockHit = null;
 
-    for (let i = bs; i < inv0 && !blockHit; i++) {
+    for (let i = bs; i < inv0 && blockHit === null; i++) {
       if (isCommentLine(physical[i])) continue;
-      const t = blankQuotedSpans(stripInlineComment(physical[i]));
-      if (EXEC_REDIRECT.test(t)) blockHit = i;
+      if (EXEC_REDIRECT.test(blankQuotedSpans(stripInlineComment(physical[i])))) blockHit = i;
     }
-    // Forward: stop after the first line dedented past the invocation — that is
-    // the closer of the block it sits in. Going further reaches siblings.
-    for (let i = inv0 + 1; i < be && !blockHit; i++) {
+    for (let i = inv0 + 1; i < be && blockHit === null; i++) {
       if (isCommentLine(physical[i])) continue;
-      const t = blankQuotedSpans(stripInlineComment(physical[i]));
-      if (CLOSER_REDIRECT.test(t)) blockHit = i;
-      if ((physical[i].match(/^\s*/)[0].length) < indent && physical[i].trim() !== '') break;
+      if (CLOSER_REDIRECT.test(blankQuotedSpans(stripInlineComment(physical[i])))) blockHit = i;
     }
 
     if (blockHit !== null) {
