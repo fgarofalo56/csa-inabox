@@ -615,10 +615,22 @@ jobs:
           # region into $GITHUB_ENV, and an expression resolved against the
           # workflow-level value would look at the wrong resource group.
           export ADMIN_RG="rg-csa-loom-admin-${AZURE_LOCATION}"
-          # The script appends LOOM_INTERNAL_TOKEN to $GITHUB_ENV itself (masked
-          # first). Its stdout is the `export …` form for shell callers, which we
-          # discard here precisely so the value is not re-echoed into this log.
-          bash scripts/csa-loom/resolve-internal-token.sh --export > /dev/null
+          # `--github-env` writes LOOM_INTERNAL_TOKEN to $GITHUB_ENV itself and
+          # prints ONLY the `::add-mask::` line — no secret value — so there is
+          # nothing here to discard.
+          #
+          # DO NOT ADD A REDIRECT. `::add-mask::` is a workflow command the
+          # runner parses off this process's STDOUT, so the `> /dev/null` that
+          # used to be on this line discarded the mask registration while the
+          # $GITHUB_ENV write happened anyway — publishing the token into every
+          # later step's env block, in a public repo (#4061). The stderr log()
+          # lines survived the same redirect, which is why the log looked fine.
+          # scripts/ci/check-internal-token-single-writer.mjs R3 refuses the
+          # shape statically — including a pipe and a $( ) capture. The script's
+          # own runtime check is narrower: it catches /dev/null and a regular
+          # file, on Linux, and cannot distinguish a pipe or a $( ) from the
+          # runner's own stdout.
+          bash scripts/csa-loom/resolve-internal-token.sh --github-env
 
       # ── ONE PARAMETER SOURCE FOR THE WHAT-IF AND THE APPLY (refs #3022) ──
       #
