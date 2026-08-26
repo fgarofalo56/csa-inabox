@@ -1,0 +1,61 @@
+[
+ {
+  "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-csa-loom-admin-centralus/providers/Microsoft.Resources/deployments/admin-plane/operations/37455D98FAE6E50A",
+  "operationId": "37455D98FAE6E50A",
+  "properties": {
+   "duration": "PT32.3570672S",
+   "provisioningOperation": "Create",
+   "provisioningState": "Failed",
+   "request": null,
+   "response": null,
+   "serviceRequestId": null,
+   "statusCode": "Conflict",
+   "statusMessage": {
+    "error": {
+     "additionalInfo": null,
+     "code": "DeploymentFailed",
+     "details": [
+      {
+       "additionalInfo": null,
+       "code": "BadRequest",
+       "details": [
+        {
+         "additionalInfo": null,
+         "code": "RootActivityId",
+         "details": null,
+         "message": "aaaaaaaa-bbbb-cccc-dddd-000000000001",
+         "target": null
+        },
+        {
+         "additionalInfo": null,
+         "code": "Param1",
+         "details": null,
+         "message": "aasloomfixturesuffix",
+         "target": null
+        }
+       ],
+       "message": "The server 'aasloomfixturesuffix' is currently being updated. Please try again later.",
+       "target": null
+      }
+     ],
+     "message": "At least one resource deployment operation failed. Please list deployment operations for details. Please see https://aka.ms/arm-deployment-operations for usage details.",
+     "target": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-csa-loom-admin-centralus/providers/Microsoft.Resources/deployments/aas-server"
+    },
+    "status": "Failed"
+   },
+   "targetResource": {
+    "apiVersion": null,
+    "extension": null,
+    "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-csa-loom-admin-centralus/providers/Microsoft.Resources/deployments/aas-server",
+    "identifiers": null,
+    "resourceGroup": "rg-csa-loom-admin-centralus",
+    "resourceName": "aas-server",
+    "resourceType": "Microsoft.Resources/deployments",
+    "symbolicName": null
+   },
+   "timestamp": "2026-08-25T04:08:42.117166+00:00",
+   "trackingId": "aaaaaaaa-bbbb-cccc-dddd-000000000002"
+  },
+  "resourceGroup": "rg-csa-loom-admin-centralus"
+ }
+]

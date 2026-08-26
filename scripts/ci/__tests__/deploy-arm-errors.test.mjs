@@ -45,6 +45,8 @@ import {
 
 const FIXTURES = path.resolve(import.meta.dirname, '..', '__fixtures__', 'arm-ops-31069329802');
 const ROOT_DEPLOYMENT = 'csa-loom-ci-31069329802';
+const AAS_FIXTURES = path.resolve(import.meta.dirname, '..', '__fixtures__', 'arm-ops-32806407520');
+const AAS_ROOT_DEPLOYMENT = 'csa-loom-ci-32806407520';
 const SCRIPT = path.resolve(import.meta.dirname, '..', 'deploy-arm-errors.mjs');
 
 /**
@@ -52,14 +54,14 @@ const SCRIPT = path.resolve(import.meta.dirname, '..', 'deploy-arm-errors.mjs');
  * MISS, reported as az would report an unknown deployment — so a parser that
  * asks for the wrong thing fails rather than silently reading nothing.
  */
-function fixtureRunner(calls = []) {
+function fixtureRunner(calls = [], dir = FIXTURES) {
   return (args) => {
     calls.push(args.join(' '));
     const isGroup = args[2] === 'group';
     const name = args[args.indexOf('--name') + 1];
     const rg = isGroup ? args[args.indexOf('-g') + 1] : null;
     const file = isGroup ? `group--${rg}--${name}.json` : `sub--${name}.json`;
-    const p = path.join(FIXTURES, file);
+    const p = path.join(dir, file);
     if (!fs.existsSync(p)) {
       return {
         status: 1,
@@ -275,6 +277,147 @@ test('errorLeaves walks past the boilerplate wrappers to the real code', () => {
   assert.deepEqual(errorLeaves(err), [{ code: 'BadRequest', message: 'the actual cause', target: '/x' }]);
   assert.deepEqual(errorLeaves(null), []);
   assert.deepEqual(errorLeaves(undefined), []);
+});
+
+// ── #3948: details[] is not always a nest ────────────────────────────────────
+
+test('#3948 — an ANNOTATION-only details[] keeps the parent message as the leaf', () => {
+  // The AAS/Power BI envelope, verbatim in shape from run 32806407520. The
+  // cause is in the PARENT; details[] holds a correlation id and the message's
+  // own format argument.
+  const err = {
+    code: 'BadRequest',
+    message: "The server '<aas-server>' is currently being updated. Please try again later.",
+    details: [
+      { code: 'RootActivityId', message: '<guid>', details: null },
+      { code: 'Param1', message: '<aas-server>', details: null },
+    ],
+  };
+  assert.deepEqual(errorLeaves(err), [
+    {
+      code: 'BadRequest',
+      message: "The server '<aas-server>' is currently being updated. Please try again later.",
+      target: null,
+    },
+  ]);
+});
+
+test('#3948 — MUTATION PROOF: the OLD walk emitted only identifiers, and they classify as nothing', () => {
+  // What the previous implementation produced for the same input. Kept as an
+  // explicit control so the fix is measured against the defect rather than
+  // against a restatement of itself: if errorLeaves ever regresses to
+  // descending here, the assertion above goes red and THIS is what it would
+  // have gone back to — an input carrying no cause at all.
+  const annotationsOnly = [
+    "  RootActivityId: <guid> [Microsoft.AnalysisServices/servers '<aas-server>']",
+    "  Param1: <aas-server> [Microsoft.AnalysisServices/servers '<aas-server>']",
+  ].join('\n');
+  assert.equal(classify(annotationsOnly).class, 'unknown');
+  assert.equal(classify(annotationsOnly).signalId, null);
+});
+
+test('#3948 — a REAL nested error alongside an annotation is still followed', () => {
+  // The narrowness that keeps this from swallowing the tree it was written to
+  // walk: `every` child must be an annotation. One genuine child and the walk
+  // behaves EXACTLY as it did before — it recurses, the parent message does not
+  // win, and the annotation still surfaces as its own leaf. That last part is
+  // pre-existing behaviour and is asserted here rather than quietly improved:
+  // this change is scoped to inputs where descending loses the only cause.
+  const mixed = {
+    code: 'BadRequest',
+    message: 'a parent message that must NOT win here',
+    details: [
+      { code: 'RootActivityId', message: '<guid>', details: null },
+      { code: 'RoleAssignmentExists', message: 'The role assignment already exists.', details: null },
+    ],
+  };
+  const leaves = errorLeaves(mixed);
+  assert.deepEqual(leaves, [
+    { code: 'RootActivityId', message: '<guid>', target: null },
+    { code: 'RoleAssignmentExists', message: 'The role assignment already exists.', target: null },
+  ]);
+  // The point of the assertion: the parent was NOT taken as the leaf, so the
+  // real cause is still the thing that classifies.
+  assert.ok(!leaves.some((l) => l.message.includes('must NOT win')));
+  assert.equal(classify(leaves.map((l) => `${l.code}: ${l.message}`).join('\n')).signalId, 'config.role-assignment-exists');
+});
+
+test('#3948 — an annotation-coded node that HAS children is a wrapper, not an annotation', () => {
+  // `Time` is in the annotation set, but a node with a subtree is never an
+  // annotation however it is coded — otherwise a real error tree could be
+  // discarded by its label.
+  const err = {
+    code: 'Outer',
+    message: 'outer message',
+    details: [
+      {
+        code: 'Time',
+        message: '2026-08-25T04:09:13Z',
+        details: [{ code: 'QuotaExceeded', message: 'the real cause', details: null }],
+      },
+    ],
+  };
+  assert.deepEqual(errorLeaves(err), [{ code: 'QuotaExceeded', message: 'the real cause', target: null }]);
+});
+
+test('#3948 — a node with annotation children and NO message falls through unchanged', () => {
+  // Guarded on a non-empty parent message as well as on the child shape: a
+  // wrapper with nothing to say must not become a leaf that says nothing.
+  const err = {
+    code: 'Wrapper',
+    message: '   ',
+    details: [{ code: 'Param1', message: 'just-an-argument', details: null }],
+  };
+  assert.deepEqual(errorLeaves(err), [{ code: 'Param1', message: 'just-an-argument', target: null }]);
+});
+
+test('#3948 — END TO END: the captured run now drills to a cause and classifies retryable', () => {
+  // The whole chain against the REAL captured ARM output of run 32806407520:
+  // sub → admin-plane → aas-server → the AAS leaf.
+  const calls = [];
+  const r = collectArmLeafErrors({
+    name: AAS_ROOT_DEPLOYMENT,
+    scope: 'sub',
+    run: fixtureRunner(calls, AAS_FIXTURES),
+  });
+
+  assert.equal(r.status, STATUS.FOUND);
+  assert.ok(calls.some((c) => c.includes('--name admin-plane')), 'did not expand admin-plane');
+  assert.ok(calls.some((c) => c.includes('--name aas-server')), 'did not expand aas-server');
+
+  // ONE leaf, and it is the sentence — not the two identifiers.
+  assert.equal(r.leaves.length, 1, `expected 1 leaf, got ${JSON.stringify(r.leaves)}`);
+  assert.equal(r.leaves[0].code, 'BadRequest');
+  assert.match(r.leaves[0].message, /is currently being updated\. Please try again later\./);
+  assert.equal(r.leaves[0].resourceType, 'Microsoft.AnalysisServices/servers');
+  assert.ok(!r.leaves.some((l) => l.code === 'RootActivityId' || l.code === 'Param1'));
+
+  const rendered = renderLeaves(r);
+  assert.doesNotMatch(rendered, /RootActivityId|Param1/);
+
+  // The run exited 17 on `unknown`. The same evidence now classifies, and as a
+  // class the retry harness is allowed to retry (--class-allow transient,…).
+  const d = classify(rendered);
+  assert.equal(d.class, 'transient');
+  assert.equal(d.signalId, 'transient.resource-mid-update');
+  assert.equal(d.retryable, true);
+});
+
+test('#3948 — the fixture publishes no subscription id and no live server name', () => {
+  // These fixtures are captured from the live Commercial estate on a PUBLIC
+  // repo. The capture masked the subscription id and the estate's uniqueString
+  // suffix; this is what stops the next capture from forgetting to. Asserted on
+  // the SHAPE rather than against the real name, so the control does not itself
+  // publish the thing it exists to keep out.
+  for (const f of fs.readdirSync(AAS_FIXTURES).filter((n) => n.endsWith('.json'))) {
+    const text = fs.readFileSync(path.join(AAS_FIXTURES, f), 'utf8');
+    for (const [, sub] of text.matchAll(/\/subscriptions\/([0-9a-fA-F-]{36})/g)) {
+      assert.equal(sub, '00000000-0000-0000-0000-000000000000', `${f} carries a real subscription id`);
+    }
+    for (const [name] of text.matchAll(/aasloom[a-z0-9]+/gi)) {
+      assert.equal(name, 'aasloomfixturesuffix', `${f} carries an unmasked AAS server name`);
+    }
+  }
 });
 
 test('failedOperations / nestedDeploymentTargets read the real fixture shape', () => {
