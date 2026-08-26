@@ -60,6 +60,25 @@ const HERE = path.dirname(fileURLToPath(import.meta.url));
 const SUBJECT_DIR = path.join(HERE, '..');
 const SUITE_REL = path.join('__tests__', 'measure-injection.test.mjs');
 
+// A FOURTH way a mutation harness lies, and the reason this refuses to run
+// anywhere but win32: the `expect` table below is keyed `win32` / `linux`, where
+// `win32` means "the un-forced column on THIS host". On an ubuntu runner the
+// un-forced column IS linux, so every verdict labelled win32 would be compared
+// against the wrong column and the run would report arms that were never
+// measured. Deriving a correct ubuntu expectation set needs a real ubuntu host,
+// which this lane has never had (see the suite header). Until one runs it, the
+// honest behaviour is to refuse rather than to guess — that is also why this
+// file is still not wired into `guardrails`, where every lane is Linux.
+if (process.platform !== 'win32') {
+  console.error(
+    `injection-arms.mjs: REFUSING to run on ${process.platform}. The expected verdicts are keyed to a win32 ` +
+    'host — the un-forced column here would be linux, and every `win32` row would be compared against it. ' +
+    'A wrong verdict reported confidently is worse than no verdict. Derive an ubuntu expectation set on a ' +
+    'real ubuntu host first, then key the table by host.',
+  );
+  process.exit(2);
+}
+
 /** Detect the subject's own line ending. See lie (2) above. */
 function eolOf(text) {
   const crlf = (text.match(/\r\n/g) || []).length;
@@ -165,6 +184,158 @@ const ARMS = [
     expect: { win32: 'SURVIVED', linux: 'SURVIVED' },
     note: 'UNMEASURABLE on Windows: the POSIX shim is never written here and the forced column skips the test. This control needs a real Linux runner — it is declared, not silently omitted.',
   },
+
+  // ── ROUND 3. An independent review defeated the round-2 guard by going one
+  //    level out AGAIN: it was keyed to the identifier `bin`, and on the cmd.exe
+  //    branch — the only branch with a shell — the executable is buildCmdLine's
+  //    FIRST ARGUMENT, which nothing constrained. Arms R11/R12/R1 are that
+  //    review's; RA/RR/RS were invented alongside them.
+  {
+    id: 'R12',
+    what: 'an ENV VAR chooses the program cmd.exe runs — buildCmdLine(process.env.LOOM_BIN || file, args)',
+    file: 'measure.mjs',
+    find: 'buildCmdLine(file, args)',
+    repl: ['buildCmdLine(process.env.LOOM_BIN || file, args)'],
+    expect: { win32: 'CAUGHT', linux: 'CAUGHT' },
+    note: 'SURVIVED the round-2 guard at rc=0 in BOTH columns: `cmd:` stays \'cmd.exe\' and the `bin` read count stays at 2.',
+  },
+  {
+    id: 'R11',
+    what: 'needsWrapper returns the PATH-resolved path and spawnPlan interpolates it',
+    file: 'measure.mjs',
+    edits: [
+      { find: '      if (existsSync(found)) return needsCmdWrapper(found);', repl: ['      if (existsSync(found)) return needsCmdWrapper(found) && found;'] },
+      { find: 'buildCmdLine(file, args)', repl: ['buildCmdLine(needsWrapper(file), args)'] },
+    ],
+    expect: { win32: 'CAUGHT', linux: 'CAUGHT' },
+    note: 'violates measure.mjs\'s own written invariant that `found` "must never be returned, spawned, or interpolated". SURVIVED round 2. Introduces NO new name, so only the buildCmdLine arg-0 pin catches it — the vocabulary contract does not.',
+  },
+  {
+    id: 'R1',
+    what: 'run() rewrites plan.cmd AFTER spawnPlan returned, on the non-cmd.exe branch only',
+    file: 'measure.mjs',
+    find: '  let last = null;',
+    repl: ["  if (plan.cmd !== 'cmd.exe' && typeof bin === 'string') plan.cmd = bin;", '  let last = null;'],
+    expect: { win32: 'CAUGHT', linux: 'CAUGHT' },
+    note: 'the window between `plan = spawnPlan(...)` and the spawnSync, which every round-2 guard was scoped to miss. Targets the branch PRODUCTION PATH does not reach on this host, and that test stands down entirely in the forced column.',
+  },
+  {
+    id: 'RA',
+    what: 'ALIAS: a `const alias = process.env.LOOM_BIN || file` binding is interpolated in file\'s place',
+    file: 'measure.mjs',
+    edits: [
+      { find: '  const file = canonicalBinary(bin);', repl: ['  const file = canonicalBinary(bin);', '  const alias = process.env.LOOM_BIN || file;'] },
+      { find: 'buildCmdLine(file, args)', repl: ['buildCmdLine(alias, args)'] },
+    ],
+    expect: { win32: 'CAUGHT', linux: 'CAUGHT' },
+    note: 'SURVIVED round 2 — the `file` BINDING count stays at 1 because the new name is not `file`.',
+  },
+  {
+    id: 'RR',
+    what: 'REASSIGN: `let file`, then `file = needsWrapper(file)` — no new name, binding count unchanged',
+    file: 'measure.mjs',
+    edits: [
+      { find: '      if (existsSync(found)) return needsCmdWrapper(found);', repl: ['      if (existsSync(found)) return needsCmdWrapper(found) && found;'] },
+      { find: '  const file = canonicalBinary(bin);', repl: ['  let file = canonicalBinary(bin);'] },
+      { find: "  return {\r\n    cmd: 'cmd.exe',", repl: ['  file = needsWrapper(file);', '  return {', "    cmd: 'cmd.exe',"] },
+    ],
+    expect: { win32: 'CAUGHT', linux: 'CAUGHT' },
+    note: 'already held in round 2, by the `const` in the named-binding assertion — a const cannot be reassigned, so pinning the keyword is what closes the whole reassignment class.',
+  },
+  {
+    id: 'RS',
+    what: 'the cmd.exe branch spawns a different LITERAL interpreter',
+    file: 'measure.mjs',
+    find: "    cmd: 'cmd.exe',",
+    repl: ["    cmd: 'powershell.exe',"],
+    expect: { win32: 'CAUGHT', linux: 'CAUGHT' },
+    note: 'already held in round 2 by the `cmd:` value population — recorded because it is the arm people assume is the dangerous one, and it is not.',
+  },
+
+  // ── ROUND 3, PART TWO. Arms invented against the round-3 guard itself. E1 and
+  //    E3 leave spawnPlan's body BYTE-IDENTICAL and both SURVIVED it — the same
+  //    "scoped one level too narrow" shape, reproduced by the fix for it. They
+  //    are what the module-scope taint-source contract was written for.
+  {
+    id: 'E1',
+    what: 'SHADOW: a top-level buildCmdLine wrapper — spawnPlan untouched, arg-0 still `file`',
+    file: 'measure.mjs',
+    find: "import { buildCmdLine, needsCmdWrapper, CmdQuoteError } from './cmd-quote.mjs';",
+    repl: [
+      "import { buildCmdLine as _realBuildCmdLine, needsCmdWrapper, CmdQuoteError } from './cmd-quote.mjs';",
+      'function buildCmdLine(f, a) { return _realBuildCmdLine(process.env.LOOM_BIN || f, a); }',
+    ],
+    expect: { win32: 'CAUGHT', linux: 'CAUGHT' },
+    note: 'defeats every function-scoped assertion by construction. Caught ONLY by the taint-source population.',
+  },
+  {
+    id: 'E3',
+    what: 'TABLE: an ALLOWED_BINARIES value stops being a literal',
+    file: 'measure.mjs',
+    find: "  gh: 'gh', az: 'az', git: 'git', node: 'node', npm: 'npm', pnpm: 'pnpm', pwsh: 'pwsh',",
+    repl: ["  gh: process.env.LOOM_GH || 'gh', az: 'az', git: 'git', node: 'node', npm: 'npm', pnpm: 'pnpm', pwsh: 'pwsh',"],
+    expect: { win32: 'CAUGHT', linux: 'CAUGHT' },
+    note: 'canonicalBinary still returns `ALLOWED_BINARIES[key]`, exactly as its own SHAPE test demands — the TABLE became the taint source. Caught ONLY by the taint-source population.',
+  },
+  {
+    id: 'E6',
+    what: 'SECOND SINK: an extra spawnSync in run() executes the caller string directly',
+    file: 'measure.mjs',
+    find: '  let last = null;',
+    repl: ["  spawnSync(bin, args, { encoding: 'utf8', shell: false });", '  let last = null;'],
+    expect: { win32: 'CAUGHT', linux: 'CAUGHT' },
+    note: 'was ALREADY caught by the behavioural marker tests before the one-sink assertion existed — recorded so that is on the record rather than credited to the new guard.',
+  },
+  {
+    id: 'E7',
+    what: 'ONE RING OUT: buildCmdLine in cmd-quote.mjs itself honours an env override',
+    file: 'cmd-quote.mjs',
+    find: 'export function buildCmdLine(file, args) {',
+    repl: ['export function buildCmdLine(file, args) {', '  file = process.env.LOOM_BIN || file;'],
+    expect: { win32: 'CAUGHT', linux: 'CAUGHT' },
+    note: 'the reason the taint-source contract covers BOTH files. It survived every measure.mjs-only formulation.',
+  },
+
+  // ── the ROUND-3 guards, mutated.
+  {
+    id: 'GS',
+    what: 'GUARD: break the suite\'s comment stripper so PROSE is counted as code',
+    file: SUITE_REL,
+    find: "    'measure.mjs': { src: stripComments(fs.readFileSync(MEASURE_MJS, 'utf8')),",
+    repl: ["    'measure.mjs': { src: fs.readFileSync(MEASURE_MJS, 'utf8'),"],
+    expect: { win32: 'CAUGHT', linux: 'CAUGHT' },
+    note: 'measure.mjs carries 13 `process.X` mentions in prose against 5 real reads. Caught by the stripper POSITIVE CONTROL, not by the count drifting — a count that drifted would just get "corrected" upward.',
+  },
+  {
+    id: 'GB',
+    what: 'GUARD: revert functionBody to the version that returns run()\'s destructured DEFAULTS',
+    file: SUITE_REL,
+    find: "  return braceBlock(src, src.indexOf('{', i));",
+    repl: ["  return braceBlock(src, src.indexOf('{', m.index));"],
+    expect: { win32: 'CAUGHT', linux: 'CAUGHT' },
+    note: 'the pre-round-3 helper returned 71 characters for `run` — the parameter defaults. A wrong extraction that reads exactly like a successful one.',
+  },
+  {
+    id: 'GV',
+    what: 'GUARD: rename spawnPlan\'s `file` binding to `f` — behaviour-preserving',
+    file: 'measure.mjs',
+    edits: [
+      { find: '  const file = canonicalBinary(bin);', repl: ['  const f = canonicalBinary(bin);'] },
+      { find: '  if (!needsWrapper(file)) return { cmd: file, argv: args, verbatim: false };', repl: ['  if (!needsWrapper(f)) return { cmd: f, argv: args, verbatim: false };'] },
+      { find: 'buildCmdLine(file, args)', repl: ['buildCmdLine(f, args)'] },
+    ],
+    expect: { win32: 'CAUGHT', linux: 'CAUGHT' },
+    note: 'MEASURED reason: the vocabulary diff names `f` as added and `file` as removed. The set assertion fails CLOSED on a rename, in both directions.',
+  },
+  {
+    id: 'GE',
+    what: 'GUARD: delete the process.env.PATH read entirely — is ABSENCE read as a pass?',
+    file: 'measure.mjs',
+    find: "  for (const dir of (process.env.PATH || '').split(path.delimiter)) {",
+    repl: ["  for (const dir of ''.split(path.delimiter)) {"],
+    expect: { win32: 'CAUGHT', linux: 'CAUGHT' },
+    note: 'MEASURED reason: `expected {…"process.env":1…} found {…}` — the population assertion fails CLOSED when a member DISAPPEARS, not only when one is added.',
+  },
 ];
 
 function tally(out) {
@@ -245,14 +416,29 @@ if (base.win32.rc !== 0 || base.linux.rc !== 0) {
   process.exit(2);
 }
 
+/**
+ * An arm's edits, normalised. `edits: [...]` for arms that need three; the older
+ * `find`/`repl` (+ optional `also`) shape still works and means the same thing.
+ * Population-checked by the caller: an arm that produces ZERO edits would apply
+ * no mutation and report a survival that measured nothing.
+ */
+function editsOf(arm) {
+  if (arm.edits) return arm.edits;
+  return [{ find: arm.find, repl: arm.repl }, ...(arm.also ? [arm.also] : [])];
+}
+
 // ──────────────────────────────────────────────────────────────────── the arms
 let failures = 0;
 for (const arm of ARMS) {
   const dir = isolate(arm.id);
   const target = path.join(dir, arm.file);
-  if (arm.rewriteSpawnPlan) rewriteSpawnPlan(target);
-  else edit(target, arm.find, arm.repl);
-  if (arm.also) edit(target, arm.also.find, arm.also.repl);
+  if (arm.rewriteSpawnPlan) {
+    rewriteSpawnPlan(target);
+  } else {
+    const edits = editsOf(arm);
+    if (edits.length === 0) throw new Error(`arm ${arm.id} has no edits — it would report a survival off an unmutated copy`);
+    for (const e of edits) edit(target, e.find, e.repl);
+  }
 
   const got = { win32: runSuite(dir, false), linux: runSuite(dir, true) };
   console.log(`\n[${arm.id}] ${arm.what}`);

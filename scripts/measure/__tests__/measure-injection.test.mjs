@@ -27,7 +27,8 @@
  *   MEASURED with `process.platform` forced to 'linux'. Before this correction
  *   the suite ran rc=0, 5 pass, 4 SKIPPED — i.e. the ubuntu lanes exercised the
  *   allowlist and the no-shell argv path and NOTHING about the quoting. It now
- *   runs rc=0, 13 pass, 5 SKIPPED. The fifth skip is new and is NOT a CI gap:
+ *   runs rc=0, 16 pass, 5 SKIPPED (21 tests; win32 rc=0, 21 pass, 0 skipped).
+ *   The fifth skip is NOT a CI gap:
  *   `PRODUCTION PATH` spawns a real child, so it cannot run under a FORGED
  *   platform (the OS underneath is still Windows). On a real Linux runner
  *   `process.platform` and `os.type()` agree, the skip predicate is false, and
@@ -51,7 +52,7 @@
  *     - `PRODUCTION PATH` drives the exported `run` with its real defaults and
  *       makes the spawned executable's IDENTITY observable, so the
  *       caller->spawnSync edge is pinned by execution and not only by shape.
- *     - `SHAPE:` tests read measure.mjs's source and pin four structures that
+ *     - `SHAPE:` tests read measure.mjs's source and pin seven structures that
  *       no behavioural assertion in JavaScript can distinguish (see each).
  *
  *   What remains win32-only, and is therefore declared UNTESTED on the CI lanes:
@@ -181,6 +182,87 @@
  *   cmd-quote.mjs is NOT modified by this change — its arms were applied to the
  *   isolated copy and never to the tree.
  *
+ *   ROUND 3 — the guard was keyed to `bin`, and the EXECUTABLE is not always `bin`
+ *
+ *   An independent review defeated round 2 by going one level out AGAIN. Round 2
+ *   pinned the identifier `bin`; on the cmd.exe branch — the ONLY branch with a
+ *   shell, and the entire subject of alert 983 — `cmd:` is the literal 'cmd.exe'
+ *   and the program that actually runs is `buildCmdLine`'s FIRST ARGUMENT, which
+ *   nothing constrained. The comment at the `cmd:` population assertion claimed
+ *   to enumerate "every value that can BECOME the executable" and enumerated the
+ *   `cmd:` fields only: the deploy-integrity R7 defect, third instance in this
+ *   file's history.
+ *
+ *   MEASURED against round 2, isolated copies, baseline green first in both
+ *   columns (win32 rc=0 18/0/0; forced-linux rc=0 13 pass/5 skipped). All four
+ *   SURVIVED at rc=0 in BOTH columns — `cmd:` stays 'cmd.exe', the `bin` read
+ *   count stays at 2, the `file` binding count stays at 1:
+ *
+ *     R12  buildCmdLine(process.env.LOOM_BIN || file, args)
+ *     R11  needsWrapper returns the PATH-resolved path, spawnPlan interpolates it
+ *          — violating measure.mjs's own written invariant that it never is
+ *     RA   const alias = process.env.LOOM_BIN || file, interpolated in file's place
+ *     R1   run() rewrites plan.cmd AFTER spawnPlan returned, non-cmd.exe branch
+ *          only — the window between construction and the spawn, which every
+ *          round-2 assertion was scoped to miss
+ *
+ *   ROUND 3, PART TWO — the round-3 fix reproduced the SAME shape, one ring out
+ *
+ *   The first round-3 guard pinned buildCmdLine's arg-0 and froze spawnPlan's
+ *   vocabulary. Two arms invented against IT leave spawnPlan's body BYTE-
+ *   IDENTICAL, so every function-scoped assertion sees nothing. MEASURED off
+ *   that revision's own green baseline (win32 rc=0 20p/0f/0s; forced-linux rc=0
+ *   15p/0f/5s), both SURVIVED at rc=0 in both columns:
+ *
+ *     E1   a top-level `function buildCmdLine` shadowing the import and
+ *          forwarding `process.env.LOOM_BIN || f` to the real one
+ *     E3   `gh: process.env.LOOM_GH || 'gh'` inside ALLOWED_BINARIES — which
+ *          keeps canonicalBinary returning `ALLOWED_BINARIES[key]` exactly as
+ *          its own SHAPE test demands, and makes the TABLE the taint source
+ *
+ *   E7 (`file = process.env.LOOM_BIN || file` at the top of cmd-quote.mjs's
+ *   buildCmdLine) survived every measure.mjs-only formulation, which is why the
+ *   control that closes these covers BOTH files.
+ *
+ *   That control is keyed to the TAINT SOURCE, not to any of those shapes:
+ *   measure.mjs:181-183 already claims "Every value that can become the
+ *   EXECUTABLE originates in this file … Nothing derived from argv or the
+ *   environment does", and nothing enforced that sentence. `SHAPE: the
+ *   taint-source population …` IS that sentence — every `process.<member>` read
+ *   in both files, counted, with the bare-`process` total counted separately so
+ *   a computed access cannot slip past the member enumeration. All ten round-3
+ *   arms are rc1 RED in BOTH columns against the current revision.
+ *
+ *   THE ROUND-3 GUARDS, MUTATED
+ *
+ *     GS  break the suite's comment stripper so PROSE counts as code (13
+ *         `process.X` mentions against 5 real reads)   rc1 RED both columns
+ *         — caught by the stripper's POSITIVE CONTROL, not by the count
+ *           drifting. A drifting count gets "corrected" upward and the slack
+ *           then hides a real read.
+ *     GB  revert `functionBody` to the pre-round-3 version, which returned
+ *         run()'s destructured DEFAULTS (71 chars) rather than its body — a
+ *         wrong extraction that reads exactly like a successful one
+ *                                                     rc1 RED both columns
+ *     GV  rename spawnPlan's `file` binding to `f`, behaviour-preserving
+ *                                                     rc1 RED both columns
+ *         — MEASURED reason: the vocabulary diff names `f` added, `file`
+ *           removed. Fails CLOSED on a rename, in both directions.
+ *     GE  delete the `process.env.PATH` read entirely  rc1 RED both columns
+ *         — MEASURED reason: `expected {…"process.env":1…} found {…}`. The
+ *           population fails CLOSED when a member DISAPPEARS, not only when one
+ *           is added.
+ *
+ *   `node scripts/measure/__tests__/injection-arms.mjs` runs all 24 arms and
+ *   exits 0 only if every one matches the verdict written here. MEASURED
+ *   2026-08-26: rc=0, "ALL 24 ARMS MATCH THEIR DOCUMENTED VERDICT", off a
+ *   baseline of win32 rc=0 21p/0f/0s and forced-linux rc=0 16p/0f/5s. Flipping
+ *   one arm's recorded verdict makes it exit 1 with `*** EXPECTED SURVIVED ***`
+ *   — measured, not assumed. It REFUSES to run on a non-win32 host, because its
+ *   `win32` column means "un-forced on this host" and on an ubuntu runner that
+ *   column would silently be linux; that refusal is also why it is still not
+ *   wired into `guardrails`, where every lane is Linux.
+ *
  * POSITIVE CONTROLS (R5)
  *
  *   "No injection occurred" and "my detector is broken" produce the identical
@@ -226,6 +308,8 @@ const simulatedPlatform = WIN === REAL_WIN
 
 /** measure.mjs, read as TEXT. The SHAPE tests below pin structure, not behaviour. */
 const MEASURE_MJS = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'measure.mjs');
+/** cmd-quote.mjs, likewise — it is the other half of the cmd.exe command line. */
+const CMD_QUOTE_MJS = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'cmd-quote.mjs');
 
 /** Scratch dir; mkdtemp per check-temp-artifact-safety (never a constant name). */
 function scratch() {
@@ -485,13 +569,62 @@ const SRC = fs.readFileSync(MEASURE_MJS, 'utf8');
 
 /**
  * The body of a top-level `function <name>(…)`, by brace matching.
+ *
+ * The PARAMETER LIST is skipped by balancing parens first. Without that step
+ * `indexOf('{')` finds the first brace after the name, and for `run` — whose
+ * signature ends `, { allowNonZero = false, … } = {})` — that brace opens the
+ * DESTRUCTURED DEFAULTS. MEASURED: the previous version returned those 71
+ * characters for `run` and every downstream assertion would have been made
+ * against them, which is a wrong extraction that reads exactly like a
+ * successful one. Byte-identical for `spawnPlan`, `canonicalBinary` and
+ * `needsWrapper`, whose parameter lists contain no braces.
+ *
  * @returns {string|null} null when the function is absent — never an empty
  * string, so a caller cannot mistake "not found" for "found and empty".
  */
 function functionBody(src, name) {
   const m = new RegExp(`^(?:export )?function ${name}\\s*\\(`, 'm').exec(src);
   if (!m) return null;
-  return braceBlock(src, src.indexOf('{', m.index));
+  let depth = 0;
+  let i = src.indexOf('(', m.index);
+  for (; i < src.length; i += 1) {
+    if (src[i] === '(') depth += 1;
+    else if (src[i] === ')') { depth -= 1; if (depth === 0) break; }
+  }
+  if (i >= src.length) return null;
+  return braceBlock(src, src.indexOf('{', i));
+}
+
+/**
+ * The argument lists of every `<name>(…)` call in `body`, split at top-level
+ * commas by balancing `()[]{}`.
+ *
+ * @returns {string[][]} one entry per call site — so the CALLER asserts the
+ * population and a name that appears zero times cannot read like a pass.
+ */
+function callSites(body, name) {
+  const calls = [];
+  const re = new RegExp(`\\b${name}\\s*\\(`, 'g');
+  let m;
+  while ((m = re.exec(body)) !== null) {
+    const open = body.indexOf('(', m.index);
+    const args = [];
+    let depth = 0;
+    let start = open + 1;
+    for (let i = open; i < body.length; i += 1) {
+      const ch = body[i];
+      if (ch === '(' || ch === '[' || ch === '{') depth += 1;
+      else if (ch === ')' || ch === ']' || ch === '}') {
+        depth -= 1;
+        if (depth === 0) { args.push(body.slice(start, i).trim()); break; }
+      } else if (ch === ',' && depth === 1) {
+        args.push(body.slice(start, i).trim());
+        start = i + 1;
+      }
+    }
+    calls.push(args);
+  }
+  return calls;
 }
 
 /** The text between `src[open]` and its matching close brace. */
@@ -526,6 +659,47 @@ function returnStatements(body) {
  */
 function stripLineComments(block) {
   return block.split(/\r?\n/).filter((l) => !/^\s*\/\//.test(l)).join('\n');
+}
+
+/**
+ * Drop line AND block comments, at LINE granularity.
+ *
+ * The whole-line stripper above is not enough at FILE scope: measure.mjs's block
+ * comments quote the very expressions the module-scope test below counts — the
+ * doc above needsWrapper says "which put `process.env.PATH` on a dataflow path".
+ * MEASURED: 13 `process.X` occurrences in the raw text against 5 real reads.
+ * Counting prose as code would make that test permanently wrong in the
+ * SAFE-LOOKING direction — the population would never match, the expected number
+ * would get "corrected" upward to accommodate prose, and a real read could then
+ * hide inside the slack.
+ *
+ * Line granularity, NOT character granularity, and that is the whole design.
+ * The first version of this scanned characters and tracked string state so it
+ * could strip trailing comments too. It desynchronised on cmd-quote.mjs:84,
+ * `/[\s"^&|<>()]/` — a REGEX literal containing a double quote, which a scanner
+ * that does not also solve regex-versus-division reads as the start of a string.
+ * Everything from there to the next quote on line 91 was swallowed, including a
+ * block comment that then survived into the "stripped" text. Its own positive
+ * control is what caught that; the fix is to stop parsing JavaScript, because
+ * every comment in both files opens and closes on its own line.
+ */
+function stripComments(src) {
+  const out = [];
+  let inBlock = false;
+  for (const line of src.split(/\r?\n/)) {
+    const t = line.trim();
+    if (inBlock) {
+      if (t.includes('*/')) inBlock = false;
+      continue;
+    }
+    if (t.startsWith('/*')) {
+      if (!t.includes('*/')) inBlock = true;
+      continue;
+    }
+    if (t.startsWith('//')) continue;
+    out.push(line);
+  }
+  return out.join('\n');
 }
 
 test('SHAPE: canonicalBinary returns an ALLOWED_BINARIES lookup, never a derived string', () => {
@@ -623,9 +797,21 @@ test('SHAPE: spawnPlan reads `bin` ONLY to canonicalise it — nothing else cons
   const fileBindings = src.match(/(?:const|let|var)\s+file\s*=/g) || [];
   assert.equal(fileBindings.length, 1, `expected exactly one \`file\` binding, found ${fileBindings.length}`);
 
-  // Every value that can BECOME the executable, enumerated from the source
-  // rather than assumed. The population assertion is what stops a needle that
-  // matches zero times reading like a pass.
+  // ── the EXECUTABLE positions. Two of them, and the second one is the branch
+  // that matters.
+  //
+  // A previous revision of this comment claimed to enumerate "every value that
+  // can BECOME the executable" and then listed the `cmd:` fields only. That was
+  // FALSE, and it is the deploy-integrity R7 defect this directory exists to
+  // catch — the third instance in this file's history. On the cmd.exe branch
+  // `cmd:` is the literal `'cmd.exe'` and the program that actually runs is
+  // buildCmdLine's FIRST ARGUMENT, which nothing constrained. MEASURED
+  // 2026-08-26 against that revision, isolated copies, green baseline first:
+  // `buildCmdLine(process.env.LOOM_BIN || file, args)` and
+  // `buildCmdLine(needsWrapper(file), args)` (with needsWrapper returning the
+  // PATH-resolved path it is documented never to return) both SURVIVED at rc=0
+  // 18p/0f/0s win32 and rc=0 13p/0f/5s forced-linux, as did a `const alias =
+  // process.env.LOOM_BIN || file` binding interpolated in file's place.
   const cmdValues = (src.match(/\bcmd:\s*([^,\n]+)/g) || []).map((s) => s.replace(/^\bcmd:\s*/, '').trim());
   assert.equal(cmdValues.length, 3, `expected exactly three \`cmd:\` fields, found ${cmdValues.length}: ${JSON.stringify(cmdValues)}`);
   for (const v of cmdValues) {
@@ -635,6 +821,188 @@ test('SHAPE: spawnPlan reads `bin` ONLY to canonicalise it — nothing else cons
       "(process.execPath, the canonicalised `file`, or the literal 'cmd.exe').",
     );
   }
+
+  const lines = callSites(src, 'buildCmdLine');
+  assert.equal(
+    lines.length, 1,
+    'spawnPlan must build the cmd.exe command line exactly ONCE. ' +
+    `Found ${lines.length}. Zero means this assertion measured nothing; more than one means there is a ` +
+    'second command line whose executable this test never looked at.',
+  );
+  assert.equal(
+    lines[0][0], 'file',
+    `the cmd.exe command line's FIRST argument is the program cmd.exe runs, and it must be the canonicalised ` +
+    `\`file\` — not \`${lines[0][0]}\`. This is the only branch with a shell and the entire subject of alert ` +
+    '983. `process.env.X || file`, `needsWrapper(file)`, and an aliased binding all leave `cmd: \'cmd.exe\'` ' +
+    'and the `bin` read count untouched, and all three were MEASURED surviving before this assertion existed.',
+  );
+});
+
+test('SHAPE: spawnPlan\'s vocabulary is CLOSED — no new name can enter the function', () => {
+  // The two assertions above pin the executable POSITIONS this file has today.
+  // On their own that is still an enumeration: it is complete only if no THIRD
+  // position can be introduced. This is what makes it complete — the set of
+  // names spawnPlan may mention at all is frozen, so a new call, a new binding,
+  // a new property read, or a new environment lookup cannot appear anywhere in
+  // the function without failing here, wherever its value would have flowed.
+  //
+  // Deliberately NOT a list of forbidden names (`env`, `execSync`, `require`, …)
+  // — that is the spelling-keyed guard this file's header warns about, and an
+  // attacker-shaped value does not have to use a spelling anyone enumerated.
+  //
+  // Tokens contributed by STRING LITERALS are included on purpose (`cmd`, `exe`
+  // from 'cmd.exe'; `d`, `s`, `c` from the cmd.exe switches; `$` from the
+  // template's `${`). A new literal is a vocabulary change too, and blanking
+  // literals would need a mini-lexer whose bugs would be silent.
+  const body = functionBody(SRC, 'spawnPlan');
+  assert.ok(body, 'POSITIVE CONTROL: spawnPlan not found in measure.mjs — this test measured NOTHING');
+  const src = stripLineComments(body);
+  assert.ok(/canonicalBinary/.test(src), 'POSITIVE CONTROL: comment stripping ate spawnPlan — this test measured NOTHING');
+
+  const allowed = [
+    '$', 'SELF_NODE', 'args', 'argv', 'bin', 'buildCmdLine', 'c', 'canonicalBinary', 'cmd',
+    'const', 'd', 'exe', 'execPath', 'false', 'file', 'if', 'needsWrapper', 'process',
+    'return', 's', 'true', 'verbatim',
+  ];
+  const found = [...new Set(src.match(/[A-Za-z_$][\w$]*/g) || [])].sort();
+  assert.deepEqual(
+    found, [...allowed].sort(),
+    'spawnPlan\'s vocabulary changed. Every name in this function is either a value that can determine WHAT ' +
+    'gets spawned or part of the syntax that carries one, so a name entering or leaving it is a change to the ' +
+    'alert-983 dataflow argument in measure.mjs. Re-argue that triage FIRST, then update this list — in that ' +
+    `order, never the other way round.\n  expected: ${JSON.stringify([...allowed].sort())}\n  found:    ${JSON.stringify(found)}`,
+  );
+});
+
+test('SHAPE: run() never rewrites the plan between spawnPlan and spawnSync', () => {
+  // spawnPlan's guarantees are about the object it RETURNS. Everything above
+  // pins its source; nothing pinned the window between `plan = spawnPlan(…)`
+  // and the `spawnSync(plan.cmd, …)` twelve lines later, where `bin` — the
+  // caller's own string — is still in scope. MEASURED 2026-08-26: inserting
+  // `if (plan.cmd !== 'cmd.exe' && typeof bin === 'string') plan.cmd = bin;`
+  // into run() SURVIVED at rc=0 in BOTH columns. It targets the branch the
+  // behavioural PRODUCTION PATH test does not reach on this host, and that test
+  // stands down entirely in the forced-linux column, so nothing saw it.
+  //
+  // Keyed to the SHAPE of a write — `plan`, optionally through any property
+  // path, followed by a single `=` — not to a list of properties. `plan.cmd`,
+  // `plan.argv`, `plan.verbatim` and any field a later revision adds are all
+  // covered by the same expression.
+  const body = functionBody(SRC, 'run');
+  assert.ok(body, 'POSITIVE CONTROL: run not found in measure.mjs — this test measured NOTHING');
+  assert.ok(
+    /spawnSync\(/.test(body) && !/^\s*allowNonZero/.test(body),
+    'POSITIVE CONTROL: the extracted body is not run() — it must contain the spawnSync call and must NOT be ' +
+    `the destructured parameter defaults. Got: ${JSON.stringify(body.slice(0, 120))}`,
+  );
+  const src = stripLineComments(body);
+
+  const writes = src.match(/\bplan\b(?:\s*\.\s*[A-Za-z_$][\w$]*)*\s*=(?!=)/g) || [];
+  assert.equal(
+    writes.length, 1,
+    'run() must write to `plan` exactly ONCE — the construction itself. ' +
+    `Found ${writes.length}: ${JSON.stringify(writes)}. Zero means this assertion measured nothing; a second ` +
+    'write is a path for a value spawnPlan refused to produce to become the executable anyway.',
+  );
+  assert.ok(
+    !writes[0].includes('.'),
+    `the single write to \`plan\` must replace the whole object, never a field of it. Got: ${JSON.stringify(writes[0])}`,
+  );
+  assert.match(
+    src,
+    /(?:^|\n)\s*plan\s*=\s*spawnPlan\(bin,\s*args\);/,
+    'that one write must be `plan = spawnPlan(bin, args);` — the plan comes from the guarded builder and from ' +
+    'nowhere else.',
+  );
+});
+
+test('SHAPE: the taint-source population of measure.mjs and cmd-quote.mjs is FIXED', () => {
+  // Everything above is scoped to a function BODY. That is one level too narrow,
+  // and it is the same mistake, one ring out, that this round was opened to fix.
+  // MEASURED 2026-08-26 against the revision that added those tests, isolated
+  // copies, green baseline first (win32 rc=0 20p/0f/0s; forced-linux rc=0
+  // 15p/0f/5s) — two mutations that leave spawnPlan's body BYTE-IDENTICAL, so
+  // the vocabulary contract, the `cmd:` pin and the buildCmdLine arg-0 pin all
+  // see nothing, and both SURVIVED at rc=0 in BOTH columns:
+  //
+  //   - a top-level `function buildCmdLine(f, a)` shadowing the import and
+  //     forwarding `process.env.LOOM_BIN || f` to the real one;
+  //   - `gh: process.env.LOOM_GH || 'gh'` inside ALLOWED_BINARIES, which keeps
+  //     canonicalBinary returning `ALLOWED_BINARIES[key]` exactly as its own
+  //     SHAPE test demands while making the table's value environment-derived.
+  //
+  // A third, in cmd-quote.mjs (`file = process.env.LOOM_BIN || file` at the top
+  // of buildCmdLine), also survived — which is why this test covers BOTH files.
+  //
+  // So the control is keyed to the TAINT SOURCE rather than to any of those
+  // three shapes. measure.mjs:181-183 already claims "Every value that can
+  // become the EXECUTABLE originates in this file … Nothing derived from argv or
+  // the environment does", and until now nothing enforced that sentence. This
+  // is that sentence, as a population: every `process.<member>` read in either
+  // file, counted, with the bare-`process` total counted separately so a
+  // computed access (`process['env']`) cannot slip past the member enumeration.
+  const files = {
+    'measure.mjs': { src: stripComments(fs.readFileSync(MEASURE_MJS, 'utf8')), bare: 5, members: { 'process.execPath': 2, 'process.platform': 1, 'process.env': 1, 'process.stderr': 1 } },
+    'cmd-quote.mjs': { src: stripComments(fs.readFileSync(CMD_QUOTE_MJS, 'utf8')), bare: 1, members: { 'process.platform': 1 } },
+  };
+
+  for (const [name, want] of Object.entries(files)) {
+    assert.ok(
+      /spawnSync|buildCmdLine/.test(want.src),
+      `POSITIVE CONTROL: comment stripping ate ${name} — this test measured NOTHING`,
+    );
+    assert.ok(
+      !/dataflow path|CVE-2024-27980/.test(want.src),
+      `POSITIVE CONTROL: comment stripping left PROSE in ${name}, so every count below is of the wrong thing`,
+    );
+
+    const got = {};
+    for (const m of (want.src.match(/\bprocess\s*\.\s*[A-Za-z_$][\w$]*/g) || [])) {
+      const k = m.replace(/\s+/g, '');
+      got[k] = (got[k] || 0) + 1;
+    }
+    assert.deepEqual(
+      got, want.members,
+      `the \`process.<member>\` population of ${name} changed. Every entry is a value the alert-983 triage ` +
+      'argues cannot reach the executable; a new one is a new taint source and has to be argued for in ' +
+      `measure.mjs BEFORE it is added here.\n  expected: ${JSON.stringify(want.members)}\n  found:    ${JSON.stringify(got)}`,
+    );
+
+    const bare = (want.src.match(/\bprocess\b/g) || []).length;
+    assert.equal(
+      bare, want.bare,
+      `${name} mentions \`process\` ${bare} times but the member enumeration above accounts for ${want.bare}. ` +
+      "A computed access (`process['env']`), a destructure (`const { env } = process`), or an alias reaches the " +
+      'same values while matching no `process.<member>` needle — this count is what makes the enumeration a ' +
+      'POPULATION rather than a list.',
+    );
+  }
+
+  // The one environment read must stay where it is documented to be: inside
+  // needsWrapper, which consumes the result for its EXTENSION and drops it.
+  const raw = fs.readFileSync(MEASURE_MJS, 'utf8');
+  const envReads = (stripComments(raw).match(/\bprocess\s*\.\s*env\s*\.\s*[A-Za-z_$][\w$]*/g) || []);
+  assert.deepEqual(envReads.map((s) => s.replace(/\s+/g, '')), ['process.env.PATH'], 'the only environment read must be process.env.PATH');
+  const nw = functionBody(raw, 'needsWrapper');
+  assert.ok(nw, 'POSITIVE CONTROL: needsWrapper not found — this test measured NOTHING');
+  assert.ok(
+    stripComments(nw).includes('process.env.PATH'),
+    'the single environment read moved OUT of needsWrapper. needsWrapper is the one function whose contract ' +
+    'says the PATH scan discards what it finds; anywhere else that guarantee does not apply.',
+  );
+
+  // One sink, and one place the command line can come from.
+  assert.equal(
+    (stripComments(raw).match(/\bspawnSync\s*\(/g) || []).length, 1,
+    'measure.mjs must contain exactly ONE spawnSync call. The options-block test finds it with indexOf, so a ' +
+    'SECOND one is a sink no assertion in this file has ever looked at.',
+  );
+  const specifiers = [...stripComments(raw).matchAll(/^import[^;]*?from\s*'([^']+)';/gm)].map((m) => m[1]).sort();
+  assert.deepEqual(
+    specifiers, ['./cmd-quote.mjs', 'node:child_process', 'node:fs', 'node:path'],
+    `measure.mjs's imports changed. buildCmdLine's origin is part of the executable's provenance, and a new ` +
+    `module is a new one. Found: ${JSON.stringify(specifiers)}`,
+  );
 });
 
 // ────────────────── every platform: the cmd.exe LINE, without a cmd.exe to run

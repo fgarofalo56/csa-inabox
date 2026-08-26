@@ -286,7 +286,7 @@ export function run(bin, args, { allowNonZero = false, timeoutMs = 600000, retri
     //     payloads + 1 fidelity row, plus 4 refusal classes (`%`, `\n`, `\r`,
     //     `\r\n`) — is `{ skip: notWin }`, so on every lane this repo has it
     //     SKIPS. Measured 2026-08-26 with process.platform forced to 'linux':
-    //     rc=0, 18 tests, 13 pass, 5 SKIPPED. The fifth skip is an artefact of
+    //     rc=0, 21 tests, 16 pass, 5 SKIPPED. The fifth skip is an artefact of
     //     the FORGERY and not a CI gap: `PRODUCTION PATH` spawns a real child,
     //     and a forged platform does not change the OS underneath, so it stands
     //     down rather than fail for the wrong reason. On a real ubuntu runner
@@ -294,10 +294,13 @@ export function run(bin, args, { allowNonZero = false, timeoutMs = 600000, retri
     //     the skip predicate, not observed; no Linux host was available here.
     //   - What DOES run on those lanes: the same payloads through the same
     //     `buildCmdLine`, checked against cmd.exe's own metacharacter-liveness
-    //     rule; the `%` and CR/LF refusals at the buildCmdLine layer; and four
+    //     rule; the `%` and CR/LF refusals at the buildCmdLine layer; and seven
     //     `SHAPE:` assertions that pin this options object, the outer quote pair
-    //     below, canonicalBinary's return, and spawnPlan's `bin` reads — four
-    //     properties no behavioural assertion in JavaScript can distinguish.
+    //     below, canonicalBinary's return, spawnPlan's `bin` reads, the FIRST
+    //     ARGUMENT of the cmd.exe command line, spawnPlan's whole vocabulary,
+    //     the single write to `plan` in this function, and the `process.<member>`
+    //     population of measure.mjs AND cmd-quote.mjs — properties no
+    //     behavioural assertion in JavaScript can distinguish.
     //
     // So: the QUOTING is guarded on every lane; cmd.exe's actual behaviour is
     // evidenced locally on win32 only. Closing that needs a windows-latest job,
@@ -305,14 +308,26 @@ export function run(bin, args, { allowNonZero = false, timeoutMs = 600000, retri
     //
     // The regression that would make this a TRUE positive is named in #3985: a
     // path where the spawned executable is NOT drawn from the frozen
-    // ALLOWED_BINARIES table. It took two rounds to hold that shut. The first
-    // revision pinned only what `canonicalBinary` RETURNS, and an independent
-    // review restored the whole edge with one line at the CALL SITE
-    // (`canonicalBinary(bin); const file = bin;`) — the helper still returns the
-    // table's literal and spawnPlan simply stops using it. That arm was re-run
-    // here against the OLD suite and SURVIVED: rc=0, 16 pass/0 fail on win32 and
-    // rc=0, 12 pass/4 skipped forced-linux, identical to that revision's own
-    // baseline. So, precisely, what pins it now:
+    // ALLOWED_BINARIES table. It took THREE rounds to hold that shut, and each
+    // round was defeated by a reviewer going one scope level further out than
+    // the guard reached:
+    //
+    //   1. Pinned what `canonicalBinary` RETURNS. Defeated at the CALL SITE:
+    //      `canonicalBinary(bin); const file = bin;` — the helper still returns
+    //      the table's literal, spawnPlan simply stops using it. Re-run against
+    //      that suite: rc=0, 16 pass/0 fail win32, rc=0 12 pass/4 skipped
+    //      forced-linux. It SURVIVED.
+    //   2. Pinned the identifier `bin`. Defeated on the cmd.exe branch, where
+    //      `cmd:` is the literal 'cmd.exe' and the program that actually runs is
+    //      `buildCmdLine`'s FIRST ARGUMENT — which nothing constrained.
+    //      `buildCmdLine(process.env.LOOM_BIN || file, args)` SURVIVED at rc=0
+    //      in both columns, as did three siblings.
+    //   3. Pinned that argument and froze spawnPlan's vocabulary. Defeated at
+    //      MODULE scope, by mutations that leave spawnPlan byte-identical: a
+    //      top-level `buildCmdLine` shadow, and an ALLOWED_BINARIES value that
+    //      stops being a literal. Both SURVIVED at rc=0 in both columns.
+    //
+    // So, precisely, what pins it now:
     //
     //   - `PRODUCTION PATH: run() spawns the TABLE literal…` drives THIS
     //     function with its real defaults and makes the executable's identity
@@ -320,15 +335,27 @@ export function run(bin, args, { allowNonZero = false, timeoutMs = 600000, retri
     //     call-site arm fails it with `'GH' !== 'gh'`. It reaches only the
     //     branch the host platform takes.
     //   - `SHAPE: spawnPlan reads bin ONLY to canonicalise it…` pins the
-    //     remaining branches by counting `bin` reads in spawnPlan's source, so a
-    //     read this comment's author never imagined still fails.
+    //     remaining branches by counting `bin` reads in spawnPlan's source, and
+    //     pins the cmd.exe command line's first argument to `file`.
+    //   - `SHAPE: spawnPlan's vocabulary is CLOSED…` freezes the SET of names
+    //     the function may mention, so a new call, binding, or property read
+    //     fails wherever its value would have flowed. That is what makes the two
+    //     executable positions above a complete enumeration rather than a list.
+    //   - `SHAPE: run() never rewrites the plan…` pins the window between
+    //     `plan = spawnPlan(…)` and the spawnSync below, where `bin` is still in
+    //     scope. Keyed to the shape of a WRITE, not to a list of fields.
+    //   - `SHAPE: the taint-source population…` is the enforcement of the
+    //     sentence above needsWrapper: every `process.<member>` read in this
+    //     file AND in cmd-quote.mjs, counted, with the bare-`process` total
+    //     counted separately so a computed access cannot slip past. This is the
+    //     one that catches a mutation which never touches spawnPlan at all.
     //
-    // They are not redundant and neither subsumes the other: the behavioural one
+    // They are not redundant and none subsumes the others: the behavioural one
     // reaches only the host's branch but proves the real dataflow edge; the
-    // SHAPE one reaches every branch but proves only structure. Be exact about
+    // SHAPE ones reach every branch but prove only structure. Be exact about
     // which of them a CI lane gets, because the two columns are NOT the same
-    // thing. In the forced-linux column MEASURED here, only the SHAPE assertion
-    // catches — the behavioural one stands down, because the forgery does not
+    // thing. In the forced-linux column MEASURED here, only the SHAPE assertions
+    // catch — the behavioural one stands down, because the forgery does not
     // change the OS. On a REAL ubuntu runner process.platform and os.type()
     // agree, the skip predicate is false, and BOTH should execute — but that is
     // INFERRED from reading the predicate and has never been observed, because
@@ -336,14 +363,15 @@ export function run(bin, args, { allowNonZero = false, timeoutMs = 600000, retri
     // guarantee measured end to end is the SHAPE one.
     //
     // MEASURED 2026-08-26, isolated copies, green baseline verified first
-    // (win32 rc=0 18/0/0; forced-linux rc=0 13 pass/5 skipped), every needle
-    // asserted to match exactly once against the file's own CRLF: the call-site
-    // arm, the direct-branch `cmd: bin` arm, and the `buildCmdLine(bin, args)`
-    // arm all go rc=1 in BOTH columns. Renaming spawnPlan's `bin` parameter —
-    // a behaviour-preserving refactor that drops the read count to zero — also
-    // goes rc=1, so the SHAPE assertion fails closed rather than reading absence
-    // as a pass. What is NOT established is any of these on a REAL Linux host —
-    // see the arm table in the suite's header, which says so.
+    // (win32 rc=0 21p/0f/0s; forced-linux rc=0 16p/0f/5s), every needle asserted
+    // to match exactly once against the file's own CRLF: all 24 arms in
+    // __tests__/injection-arms.mjs match their documented verdict at rc=0,
+    // including every arm above and four that mutate the round-3 GUARDS
+    // themselves. Renaming spawnPlan's `bin` parameter, renaming its `file`
+    // binding, and deleting the `process.env.PATH` read all go rc=1 — the
+    // population assertions fail CLOSED rather than reading absence as a pass.
+    // What is NOT established is any of these on a REAL Linux host — see the arm
+    // table in the suite's header, which says so.
     //
     // The marker below is placed per the CodeQL convention (the line BEFORE the
     // alert). Do not read it as a closed control: .github/workflows/codeql.yml
