@@ -33,21 +33,29 @@ vi.mock('@/lib/azure/monitor-client', () => ({
 }));
 vi.mock('@/lib/azure/activator-monitor', () => ({
   createMonitorActivatorRule: vi.fn(),
+  disableMonitorRule: vi.fn(async () => undefined),
+  // Pure in the real module — mirrored verbatim so the mock cannot claim a
+  // behaviour the shipped helper does not have.
+  isOnDemandAdxRule: (r: any) => !!r && String(r?.sourceKind || '').toLowerCase() === 'adx' && r?.scheduled !== true,
 }));
 
-const replace = vi.fn(async () => ({}));
+const replace = vi.fn(async (_doc?: any) => ({}));
 const read = vi.fn(async () => ({ resource: { id: 'act-1', workspaceId: 'w', state: {} } }));
 vi.mock('@/lib/azure/cosmos-client', () => ({
   itemsContainer: vi.fn(async () => ({ item: vi.fn(() => ({ read, replace })) })),
 }));
 
 import { activatorProvisioner } from '../activator';
-import { createMonitorActivatorRule } from '@/lib/azure/activator-monitor';
+import { createMonitorActivatorRule, disableMonitorRule } from '@/lib/azure/activator-monitor';
 
-// The Direct-Lake-shim bundle rule: a phantom custom metric, Teams action.
+// The Direct-Lake-shim bundle rule: a phantom custom metric, Teams action whose
+// only destination is a Key Vault secret NAME (#4097 — nothing Azure can use).
+// The session is an ordinary interactive install, so the provisioner's fallback
+// binds the operator's own address and the rule is reachable; the unreachable
+// path has its own file (activator-receiver-reachability.test.ts).
 function input(overrides: any = {}) {
   return {
-    session: { claims: { oid: 'o' } } as any,
+    session: { claims: { oid: 'o', upn: 'operator@contoso.com' } } as any,
     target: { mode: 'shared', activatorBackend: 'azure-monitor' },
     cosmosItemId: 'act-1',
     workspaceId: 'w',
@@ -75,11 +83,24 @@ beforeEach(() => {
   replace.mockResolvedValue({});
   saved = {};
   for (const k of ENV_KEYS) { saved[k] = process.env[k]; delete process.env[k]; }
-  (createMonitorActivatorRule as any).mockImplementation(async (_name: string, i: any) => ({
-    id: 'r1', name: i.name, azureRuleName: 'DL-Shim-Activator-rule', query: 'AppEvents | take 0',
-    condition: i.condition, action: i.action, severity: 3, evaluationFrequency: 'PT5M', windowSize: 'PT5M',
-    state: 'Active', backend: 'azure-monitor', sourceKind: i.sourceKind || 'log-analytics', createdAt: 'now',
-  }));
+  (createMonitorActivatorRule as any).mockImplementation(async (_name: string, i: any) => {
+    // Faithful stand-in: the real helper builds an action group from the action's
+    // receiver-bearing fields and reports the counts on the record. Deriving the
+    // count here (instead of hard-coding one) keeps this mock from asserting a
+    // reachability the shipped code would not produce.
+    const emails = (Array.isArray(i.action?.recipients) ? i.action.recipients : []).filter((e: any) => typeof e === 'string' && e.includes('@'));
+    return {
+      id: 'r1', name: i.name, azureRuleName: 'DL-Shim-Activator-rule', query: 'AppEvents | take 0',
+      condition: i.condition, action: i.action, severity: 3, evaluationFrequency: 'PT5M', windowSize: 'PT5M',
+      state: 'Active', backend: 'azure-monitor', sourceKind: i.sourceKind || 'log-analytics', createdAt: 'now',
+      ...(emails.length
+        ? {
+            actionGroupId: '/subscriptions/s/resourceGroups/rg/providers/microsoft.insights/actionGroups/ag',
+            actionGroupReceivers: { emails: emails.length, sms: 0, webhooks: 0, logicApps: 0 },
+          }
+        : {}),
+    };
+  });
 });
 afterEach(() => { for (const k of ENV_KEYS) { if (saved[k] === undefined) delete process.env[k]; else process.env[k] = saved[k]; } });
 
@@ -254,5 +275,33 @@ describe('#3551 activatorProvisioner — state.rules persistence gates the statu
     // The user's own rule survives; the install's rule is updated in place.
     expect(written.state.rules.map((r: any) => r.id).sort()).toEqual(['r1', 'user-rule']);
     expect(written.state.rules.find((r: any) => r.id === 'r1').name).toBe('DL-Shim refresh SLA breach');
+  });
+});
+
+/**
+ * #4097 — an ON-DEMAND Eventhouse/ADX rule has NO scheduledQueryRule on ARM
+ * (it evaluates only via Trigger/Preview), so the quiesce path must not PATCH
+ * one: `patchScheduledQueryRule` would 404 and the step log would then claim a
+ * disable that never happened. This is the branch's only population, so without
+ * it the branch is untested code.
+ */
+describe('#4097 an unreachable ON-DEMAND ADX rule is not PATCHed', () => {
+  it('reports the missing destination without claiming it disabled anything', async () => {
+    process.env.LOOM_ADX_ALERT_SCOPE = '/subscriptions/s/resourceGroups/rg/providers/Microsoft.Kusto/clusters/adx';
+    (createMonitorActivatorRule as any).mockImplementation(async (_n: string, i: any) => ({
+      id: 'r1', name: i.name, azureRuleName: 'DL-Shim-Activator-rule', query: 'Events | take 0',
+      condition: i.condition, action: i.action, severity: 3, evaluationFrequency: 'PT5M', windowSize: 'PT5M',
+      state: 'Active', backend: 'azure-monitor', sourceKind: 'adx', scheduled: false, createdAt: 'now',
+      // No action group: nobody is notified.
+    }));
+
+    const res = await activatorProvisioner(input());
+
+    expect(res.status).toBe('remediation');
+    expect(res.secondaryIds?.rulesUnreachable).toBe('1');
+    expect(disableMonitorRule).not.toHaveBeenCalled();
+    const log = res.steps?.join(' ') || '';
+    expect(log).toMatch(/evaluates on demand only/i);
+    expect(log).not.toMatch(/was DISABLED/);
   });
 });
