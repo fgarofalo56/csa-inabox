@@ -6,11 +6,39 @@ on:
     # No paths filter — branch protection requires these checks on every PR.
   push:
     branches: [main]
+    # THE SINGLE SOURCE OF TRUTH for "is this change Python-relevant?" (#3862).
+    # The PR-side detector below does NOT carry a second copy of this list; it
+    # parses THIS list out of THIS file via scripts/ci/python_trigger_scope.py.
+    # There used to be two lists and they disagreed in BOTH directions -
+    # apps/fiab-setup-orchestrator was here and not there, tools/ was there and
+    # not here - so three REQUIRED contexts reported success over unexecuted
+    # code. Two lists that must agree cannot be kept in agreement by review.
     paths:
-      - 'csa_platform/**'
-      - 'domains/**'
-      - 'scripts/**'
-      - 'tests/**'
+      # SHAPE, NOT SPELLING. This head matches any Python file ANYWHERE in the
+      # repo, including under directories nobody has created yet, so a directory
+      # can no longer be omitted by being forgotten - which is the entire defect
+      # #3862 reported (apps/copilot: 137 tracked .py, matched by nothing).
+      # .ipynb is here because python_lint_scope.LINTABLE_SUFFIXES lints
+      # notebooks too and six tracked ones are in its population.
+      - '**.py'
+      - '**.ipynb'
+      # The directories the jobs below actually READ, IN FULL - the head above
+      # covers their Python but not their NON-Python inputs (dbt's .sql/.yml
+      # models under domains/, pytest fixtures under tests/ and portal_tests/,
+      # an app's Dockerfile). Every entry names WHICH reader requires it, and
+      # tests/repo/test_python_trigger_scope.py derives those readers
+      # mechanically - from python_lint_scope.SCOPE_DIRS, pyproject's
+      # `testpaths`, the bandit argv below, PIP_CONSTRAINT, and the app the
+      # fresh-resolve job names - so widening a reader without widening this
+      # list turns that test RED rather than quietly leaving a hole.
+      - 'csa_platform/**'      # ruff scope + bandit scope + pytest testpath
+      - 'dev-loop/**'          # ruff scope
+      - 'domains/**'           # ruff scope + bandit scope + the dbt jobs below
+      - 'governance/**'        # ruff scope
+      - 'scripts/**'           # ruff scope + bandit scope
+      - 'tools/**'             # ruff scope
+      - 'tests/**'             # pytest testpath
+      - 'portal/shared/portal_tests/**'   # pytest testpath (271 tests)
       # apps/loom-duckdb is a deployed container app whose ONLY automated
       # signal is tests/loom_duckdb (#2543). Its requirements.txt pins duckdb
       # and pyarrow, so a dependency bump has to reach this lane.
@@ -21,7 +49,15 @@ on:
       # `testpaths`, so the app-fresh-resolve job below is its ONLY automated
       # signal (story 3063).
       - 'apps/fiab-setup-orchestrator/**'
+      # The dependency inputs that DECIDE what this suite installs.
+      # requirements/ci-constraints.txt is PIP_CONSTRAINT below - it bounds all
+      # ~22 independent pip resolutions this job performs - and the install
+      # step's `find . -name requirements.txt` reaches every requirements file
+      # in the tree. Neither reached any lane before #3862.
       - 'pyproject.toml'
+      - 'requirements/**'
+      - 'requirements*.txt'
+      - '**/requirements*.txt'
       - '.github/workflows/test.yml'
   schedule:
     - cron: '37 3 * * 1'
@@ -141,19 +177,45 @@ jobs:
             echo "run=true" >> "$GITHUB_OUTPUT"; exit 0
           fi
           base='${{ github.event.pull_request.base.sha }}'
-          # FAIL OPEN: if we cannot reliably compute the changed-file list, run
-          # the full suite. Never let a diff hiccup silently SKIP Python tests
-          # on a PR that actually changes Python.
-          if ! changed="$(git diff --name-only "$base"...HEAD 2>/dev/null)" || [ -z "$changed" ]; then
-            echo "::warning::Could not compute changed files reliably — running the full Python suite (fail-open)."
+          # FAIL OPEN, and say WHICH failure happened. These two conditions used
+          # to share one branch behind a `2>/dev/null`, so "git could not diff"
+          # and "the diff was empty" printed the same sentence and git's own
+          # reason was discarded - the shape deploy-integrity R7 forbids.
+          if ! changed="$(git diff --name-only "$base"...HEAD)"; then
+            echo "::warning::git diff against the PR base FAILED (its stderr is in this log) - running the full Python suite (fail-open)."
             echo "run=true" >> "$GITHUB_OUTPUT"; exit 0
           fi
-          if printf '%s\n' "$changed" \
-              | grep -qE '^(csa_platform/|domains/|scripts/|tests/|tools/|apps/loom-duckdb/|pyproject\.toml|\.github/workflows/test\.yml)'; then
-            echo "run=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "run=false" >> "$GITHUB_OUTPUT"
-            echo "::notice::No Python-relevant changes in this PR — skipping the Python test suite (reporting success)."
+          if [ -z "$changed" ]; then
+            echo "::warning::The changed-file list came back EMPTY - running the full Python suite (fail-open)."
+            echo "run=true" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          tmp="${RUNNER_TEMP:-/tmp}/python-trigger-changed.txt"
+          if ! printf '%s\n' "$changed" > "$tmp"; then
+            echo "::warning::Could not write the changed-path list to $tmp - running the full Python suite (fail-open)."
+            echo "run=true" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          # SELF-REFERENCE, hard-coded HERE and deliberately OUTSIDE the parsed
+          # list. '.github/workflows/test.yml' is ALSO an entry in on.push.paths,
+          # but membership alone is self-defeating: a PR that DELETED that entry
+          # would be judged by the list it had just deleted from, take the skip
+          # branch, and carry the test that guards this file out of the run with
+          # it. This line is the one thing editing the list cannot switch off.
+          if grep -qxF '.github/workflows/test.yml' "$tmp"; then
+            echo "run=true" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          # ONE list. The patterns are on.push.paths, READ OUT OF THIS FILE -
+          # not a second copy of it that has to be kept in agreement by review.
+          # rc is captured on the line immediately after the assignment, not
+          # after a pipe, so it is this command's status and not some tail's.
+          verdict="$(python3 scripts/ci/python_trigger_scope.py --changed-file "$tmp" --explain)"
+          rc=$?
+          if [ "$rc" -ne 0 ] || [ -z "$verdict" ]; then
+            echo "::warning::python_trigger_scope.py could not answer (rc=$rc) - running the full Python suite (fail-open)."
+            echo "run=true" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          echo "$verdict" >> "$GITHUB_OUTPUT"
+          if [ "$verdict" = "run=false" ]; then
+            echo "::notice::No Python-relevant changes in this PR - skipping the Python test suite (reporting success)."
           fi
 
       - name: Set up Python
