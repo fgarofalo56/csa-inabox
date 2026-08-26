@@ -182,6 +182,15 @@ function needsWrapper(bin) {
  * in this file: a frozen literal from ALLOWED_BINARIES, the literal `cmd.exe`,
  * or `process.execPath`. Nothing derived from argv or the environment does.
  *
+ * That sentence is now ENFORCED rather than asserted, which it was not until
+ * 2026-08-26 — and it took four rounds and six live counterexamples to make it
+ * true. Five tests hold the two halves: the vocabulary and origin contracts for
+ * this function and its callees, the ambient-global and `process.<member>`
+ * populations for the environment half, and a behavioural check that the built
+ * command line always begins with the file it was given for the argv half. See
+ * the list in `run()` below, and the header of
+ * __tests__/measure-injection.test.mjs for what is still NOT covered.
+ *
  * NOT exported. An exported function's parameters are an external taint source
  * to a static analyser, and exporting this one — solely so a unit test could
  * reach the .cmd branch without az installed — was itself enough to stop the
@@ -286,7 +295,7 @@ export function run(bin, args, { allowNonZero = false, timeoutMs = 600000, retri
     //     payloads + 1 fidelity row, plus 4 refusal classes (`%`, `\n`, `\r`,
     //     `\r\n`) — is `{ skip: notWin }`, so on every lane this repo has it
     //     SKIPS. Measured 2026-08-26 with process.platform forced to 'linux':
-    //     rc=0, 21 tests, 16 pass, 5 SKIPPED. The fifth skip is an artefact of
+    //     rc=0, 25 tests, 20 pass, 5 SKIPPED. The fifth skip is an artefact of
     //     the FORGERY and not a CI gap: `PRODUCTION PATH` spawns a real child,
     //     and a forged platform does not change the OS underneath, so it stands
     //     down rather than fail for the wrong reason. On a real ubuntu runner
@@ -294,13 +303,16 @@ export function run(bin, args, { allowNonZero = false, timeoutMs = 600000, retri
     //     the skip predicate, not observed; no Linux host was available here.
     //   - What DOES run on those lanes: the same payloads through the same
     //     `buildCmdLine`, checked against cmd.exe's own metacharacter-liveness
-    //     rule; the `%` and CR/LF refusals at the buildCmdLine layer; and seven
-    //     `SHAPE:` assertions that pin this options object, the outer quote pair
-    //     below, canonicalBinary's return, spawnPlan's `bin` reads, the FIRST
-    //     ARGUMENT of the cmd.exe command line, spawnPlan's whole vocabulary,
-    //     the single write to `plan` in this function, and the `process.<member>`
-    //     population of measure.mjs AND cmd-quote.mjs — properties no
-    //     behavioural assertion in JavaScript can distinguish.
+    //     rule; the `%` and CR/LF refusals at the buildCmdLine layer; the
+    //     behavioural proof that the built command line always begins with the
+    //     file it was given; and nine `SHAPE:` assertions that pin this options
+    //     object, the outer quote pair below, canonicalBinary's return,
+    //     spawnPlan's `bin` reads, the FIRST ARGUMENT of the cmd.exe command
+    //     line, spawnPlan's whole vocabulary, the single top-level ORIGIN of
+    //     each name spawnPlan calls, the single write to `plan` in this
+    //     function, the absence of any ambient global, and the
+    //     `process.<member>` population of measure.mjs AND cmd-quote.mjs —
+    //     properties no behavioural assertion in JavaScript can distinguish.
     //
     // So: the QUOTING is guarded on every lane; cmd.exe's actual behaviour is
     // evidenced locally on win32 only. Closing that needs a windows-latest job,
@@ -326,6 +338,13 @@ export function run(bin, args, { allowNonZero = false, timeoutMs = 600000, retri
     //      MODULE scope, by mutations that leave spawnPlan byte-identical: a
     //      top-level `buildCmdLine` shadow, and an ALLOWED_BINARIES value that
     //      stops being a literal. Both SURVIVED at rc=0 in both columns.
+    //   4. Added a `process.<member>` population. Defeated SIX ways, five proven
+    //      as live execution of an attacker-named binary: `process` is a
+    //      SPELLING (`globalThis['pro' + 'cess'].env` reaches the same object
+    //      three different places), a `/**` + `/` prefix exploited a bug in the
+    //      round-3 comment stripper to hide a LITERAL `process.env` in the
+    //      table, and a shadow deriving arg-0 from the caller's `args` needs no
+    //      taint token at all.
     //
     // So, precisely, what pins it now:
     //
@@ -339,16 +358,38 @@ export function run(bin, args, { allowNonZero = false, timeoutMs = 600000, retri
     //     pins the cmd.exe command line's first argument to `file`.
     //   - `SHAPE: spawnPlan's vocabulary is CLOSED…` freezes the SET of names
     //     the function may mention, so a new call, binding, or property read
-    //     fails wherever its value would have flowed. That is what makes the two
-    //     executable positions above a complete enumeration rather than a list.
+    //     fails wherever its value would have flowed. That completes the
+    //     enumeration of executable positions WITHIN THIS FUNCTION BODY — and
+    //     only within it; where those names come from is the next assertion.
+    //   - `SHAPE: every name spawnPlan CALLS has exactly one top-level origin…`
+    //     closes module scope: buildCmdLine must be the IMPORT from
+    //     ./cmd-quote.mjs, so a local shadow of that name cannot choose the
+    //     program. The callee list is DERIVED from spawnPlan's body.
     //   - `SHAPE: run() never rewrites the plan…` pins the window between
     //     `plan = spawnPlan(…)` and the spawnSync below, where `bin` is still in
     //     scope. Keyed to the shape of a WRITE, not to a list of fields.
-    //   - `SHAPE: the taint-source population…` is the enforcement of the
+    //   - `SHAPE: neither file can reach an ambient global` pins `globalThis`,
+    //     `global`, `eval`, `Function`, `require`, `module`, `exports` and
+    //     dynamic `import(` at ZERO in both files. A population of zero cannot
+    //     be satisfied by an alias or a computed key, which is what the
+    //     `process`-spelled population below could not say.
+    //   - `SHAPE: the taint-source population…` is the ENVIRONMENT half of the
     //     sentence above needsWrapper: every `process.<member>` read in this
     //     file AND in cmd-quote.mjs, counted, with the bare-`process` total
-    //     counted separately so a computed access cannot slip past. This is the
-    //     one that catches a mutation which never touches spawnPlan at all.
+    //     counted separately. On its own it is keyed to a spelling; it is the
+    //     ambient-global assertion above that makes it a boundary.
+    //   - `the built command line ALWAYS begins with the file it was given` is
+    //     the ARGV half, and BEHAVIOURAL — source text cannot follow a value
+    //     into cmd-quote.mjs. For all seven allowlisted names and every payload
+    //     the line must start with the name handed in, so an argument that
+    //     chooses the program fails however it is spelled.
+    //
+    // NONE OF THIS IS A BOUNDARY AGAINST A DELIBERATE REINTRODUCTION. Every
+    // SHAPE assertion reads source text, and anyone who can edit this file can
+    // write the sink directly; four rounds have each been defeated by moving one
+    // scope outward. These guards catch REGRESSION and DECAY — the triage above
+    // is a claim, and a claim nobody re-runs becomes folklore the first time
+    // someone edits the file. The suite header names what is NOT covered.
     //
     // They are not redundant and none subsumes the others: the behavioural one
     // reaches only the host's branch but proves the real dataflow edge; the
@@ -363,8 +404,8 @@ export function run(bin, args, { allowNonZero = false, timeoutMs = 600000, retri
     // guarantee measured end to end is the SHAPE one.
     //
     // MEASURED 2026-08-26, isolated copies, green baseline verified first
-    // (win32 rc=0 21p/0f/0s; forced-linux rc=0 16p/0f/5s), every needle asserted
-    // to match exactly once against the file's own CRLF: all 24 arms in
+    // (win32 rc=0 25p/0f/0s; forced-linux rc=0 20p/0f/5s), every needle asserted
+    // to match exactly once against the file's own CRLF: all 34 arms in
     // __tests__/injection-arms.mjs match their documented verdict at rc=0,
     // including every arm above and four that mutate the round-3 GUARDS
     // themselves. Renaming spawnPlan's `bin` parameter, renaming its `file`

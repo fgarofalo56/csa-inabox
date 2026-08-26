@@ -27,7 +27,7 @@
  *   MEASURED with `process.platform` forced to 'linux'. Before this correction
  *   the suite ran rc=0, 5 pass, 4 SKIPPED — i.e. the ubuntu lanes exercised the
  *   allowlist and the no-shell argv path and NOTHING about the quoting. It now
- *   runs rc=0, 16 pass, 5 SKIPPED (21 tests; win32 rc=0, 21 pass, 0 skipped).
+ *   runs rc=0, 20 pass, 5 SKIPPED (25 tests; win32 rc=0, 25 pass, 0 skipped).
  *   The fifth skip is NOT a CI gap:
  *   `PRODUCTION PATH` spawns a real child, so it cannot run under a FORGED
  *   platform (the OS underneath is still Windows). On a real Linux runner
@@ -52,7 +52,7 @@
  *     - `PRODUCTION PATH` drives the exported `run` with its real defaults and
  *       makes the spawned executable's IDENTITY observable, so the
  *       caller->spawnSync edge is pinned by execution and not only by shape.
- *     - `SHAPE:` tests read measure.mjs's source and pin seven structures that
+ *     - `SHAPE:` tests read both files' source and pin nine structures that
  *       no behavioural assertion in JavaScript can distinguish (see each).
  *
  *   What remains win32-only, and is therefore declared UNTESTED on the CI lanes:
@@ -253,10 +253,79 @@
  *           population fails CLOSED when a member DISAPPEARS, not only when one
  *           is added.
  *
- *   `node scripts/measure/__tests__/injection-arms.mjs` runs all 24 arms and
+ *   ROUND 4 — the token `process` is a SPELLING, and `args` needs no token
+ *
+ *   An independent review of round 3 defeated it SIX ways, five proven as live
+ *   execution of an attacker-named binary through `run()`. Measured off round
+ *   3's own green baseline (win32 rc=0 21p/0f/0s; forced-linux rc=0 16p/0f/5s),
+ *   all SURVIVED at rc=0 in BOTH columns:
+ *
+ *     SS-TABLE   `/**` + `/` prefixed onto the ALLOWED_BINARIES line, with
+ *                `gh: process.env.LOOM_GH || 'gh'` after it. A LITERAL
+ *                environment read, hidden by a bug in round 3's own comment
+ *                stripper: it dropped any line whose trimmed text STARTED with
+ *                a block-comment opener, code included. The counts matched
+ *                perfectly while counting the wrong text.
+ *     NP-TABLE   `globalThis['pro' + 'cess'].env.LOOM_GH` in the table
+ *     NP-SHADOW  the same, in a module-scope buildCmdLine shadow
+ *     NP-CQ      the same, inside cmd-quote.mjs's buildCmdLine
+ *     ARGV-EXEC  a module-scope buildCmdLine shadow deriving arg-0 from the
+ *                CALLER'S args — no environment, no `process`, no obfuscation
+ *     CQ-ARGV    the same derivation inside cmd-quote.mjs's own buildCmdLine
+ *
+ *   ARGV-EXEC is the sharpest: `args` IS the documented alert-983 source
+ *   (drain-status.mjs:18 and red-tally.mjs:17 feed `process.argv` into `run`),
+ *   and no taint-token contract can ever see it.
+ *
+ *   What closes them, by mechanism rather than by spelling:
+ *
+ *     - `stripComments` now removes the comment SPAN and never a line, and has
+ *       its OWN fixture test. The counts it feeds are not its control: a
+ *       stripper that eats code makes every count match.
+ *     - `SHAPE: every name spawnPlan CALLS has exactly one top-level origin`
+ *       — the callee list is DERIVED from spawnPlan's body, and buildCmdLine's
+ *       single origin must be the import from './cmd-quote.mjs'. Closes both
+ *       shadows.
+ *     - `SHAPE: neither file can reach an ambient global` — `globalThis`,
+ *       `global`, `eval`, `Function`, `require`, `module`, `exports` and
+ *       dynamic `import(` pinned at ZERO in both files. A population of zero
+ *       cannot be satisfied by an alias or a computed key.
+ *     - `the built command line ALWAYS begins with the file it was given` —
+ *       BEHAVIOURAL, and the only thing that can follow a value into another
+ *       file. For all seven allowlisted names and every payload, the line
+ *       `buildCmdLine` returns must start with the name it was handed. Closes
+ *       CQ-ARGV and any `quoteForCmd` that rewrites its first token.
+ *
+ *   The round-4 guards were mutated too: reverting the stripper (GX), breaking
+ *   the origin test's import parser (GO), and emptying the token list (GA) or
+ *   the binary list (GP) so a loop iterates zero times all go rc=1 RED in both
+ *   columns. GA and GP were real vacuity holes in the round-4 tests, found by
+ *   mutating them and closed before the arms were recorded.
+ *
+ * WHAT THESE GUARDS ARE FOR, AND WHAT THEY CANNOT DO
+ *
+ *   Every `SHAPE:` assertion here reads source TEXT, and against an author who
+ *   is deliberately hiding a reintroduction, source text is not a boundary and
+ *   cannot be made into one — anyone who can edit this file can write the sink
+ *   directly, and no assertion living in the same repository outranks that.
+ *
+ *   Four rounds have each been defeated by moving one scope outward: the call
+ *   site, then the cmd.exe branch, then module scope, then an obfuscated global.
+ *   The honest reading of that sequence is NOT that round four is finally
+ *   airtight. It is that these guards catch REGRESSION and DECAY, which is what
+ *   they exist for: the alert-983 triage is a claim, and a claim nobody re-runs
+ *   becomes folklore the first time someone edits the file.
+ *
+ *   So where completeness is claimed below it is scoped explicitly to a named
+ *   function body, and it is stated where the next ring is open. NOT covered:
+ *   `quoteForCmd`'s internals beyond its own suite in cmd-quote.test.mjs;
+ *   anything below `node:child_process`; and any construct none of the 34 arms
+ *   in `__tests__/injection-arms.mjs` models. Those are gaps, named as gaps.
+ *
+ *   `node scripts/measure/__tests__/injection-arms.mjs` runs all 34 arms and
  *   exits 0 only if every one matches the verdict written here. MEASURED
- *   2026-08-26: rc=0, "ALL 24 ARMS MATCH THEIR DOCUMENTED VERDICT", off a
- *   baseline of win32 rc=0 21p/0f/0s and forced-linux rc=0 16p/0f/5s. Flipping
+ *   2026-08-26: rc=0, "ALL 34 ARMS MATCH THEIR DOCUMENTED VERDICT", off a
+ *   baseline of win32 rc=0 25p/0f/0s and forced-linux rc=0 20p/0f/5s. Flipping
  *   one arm's recorded verdict makes it exit 1 with `*** EXPECTED SURVIVED ***`
  *   — measured, not assumed. It REFUSES to run on a non-win32 host, because its
  *   `win32` column means "un-forced on this host" and on an ubuntu runner that
@@ -662,42 +731,54 @@ function stripLineComments(block) {
 }
 
 /**
- * Drop line AND block comments, at LINE granularity.
+ * Drop comments, keeping every line and every scrap of CODE on it.
  *
  * The whole-line stripper above is not enough at FILE scope: measure.mjs's block
  * comments quote the very expressions the module-scope test below counts — the
  * doc above needsWrapper says "which put `process.env.PATH` on a dataflow path".
  * MEASURED: 13 `process.X` occurrences in the raw text against 5 real reads.
- * Counting prose as code would make that test permanently wrong in the
- * SAFE-LOOKING direction — the population would never match, the expected number
- * would get "corrected" upward to accommodate prose, and a real read could then
- * hide inside the slack.
  *
- * Line granularity, NOT character granularity, and that is the whole design.
- * The first version of this scanned characters and tracked string state so it
- * could strip trailing comments too. It desynchronised on cmd-quote.mjs:84,
- * `/[\s"^&|<>()]/` — a REGEX literal containing a double quote, which a scanner
- * that does not also solve regex-versus-division reads as the start of a string.
- * Everything from there to the next quote on line 91 was swallowed, including a
- * block comment that then survived into the "stripped" text. Its own positive
- * control is what caught that; the fix is to stop parsing JavaScript, because
- * every comment in both files opens and closes on its own line.
+ * TWO WAYS THIS CAN LIE, IN OPPOSITE DIRECTIONS, AND ONLY ONE IS SAFE:
+ *
+ *   - Strip too LITTLE and prose gets counted. The population never matches, the
+ *     expected number gets "corrected" upward to accommodate prose, and a real
+ *     read then hides in the slack. Loud, but corrodes.
+ *   - Strip too MUCH and real code vanishes from the counted text. SILENT, and a
+ *     straight miss. MEASURED: the first version of this dropped any line whose
+ *     trimmed text STARTED with a block-comment opener — including the code
+ *     after the closer. Prefixing the ALLOWED_BINARIES line with an empty block
+ *     comment and writing `gh: process.env.LOOM_GH || 'gh'` after it SURVIVED at
+ *     rc=0 in both columns, and ran an attacker-named binary end to end.
+ *
+ * So this removes the comment SPAN and never a line. `//` is honoured only when
+ * it starts the line, because a trailing one may be inside a string or a regex
+ * (`/[\s"^&|<>()]/` at cmd-quote.mjs:84 is exactly that) — and keeping a real
+ * comment can only cause a false RED, which is the safe direction. The stripper
+ * has its own fixture test below; that fixture is the control, not the counts.
  */
 function stripComments(src) {
   const out = [];
   let inBlock = false;
-  for (const line of src.split(/\r?\n/)) {
-    const t = line.trim();
-    if (inBlock) {
-      if (t.includes('*/')) inBlock = false;
-      continue;
+  for (const raw of src.split(/\r?\n/)) {
+    let rest = raw;
+    let kept = '';
+    for (;;) {
+      if (inBlock) {
+        const end = rest.indexOf('*/');
+        if (end === -1) { rest = ''; break; }
+        inBlock = false;
+        rest = rest.slice(end + 2);
+        continue;
+      }
+      const open = rest.indexOf('/*');
+      const lineComment = /^\s*\/\//.test(rest) ? rest.search(/\/\//) : -1;
+      if (lineComment !== -1 && (open === -1 || lineComment < open)) { rest = ''; break; }
+      if (open === -1) { kept += rest; rest = ''; break; }
+      kept += rest.slice(0, open);
+      inBlock = true;
+      rest = rest.slice(open + 2);
     }
-    if (t.startsWith('/*')) {
-      if (!t.includes('*/')) inBlock = true;
-      continue;
-    }
-    if (t.startsWith('//')) continue;
-    out.push(line);
+    out.push(kept);
   }
   return out.join('\n');
 }
@@ -839,12 +920,19 @@ test('SHAPE: spawnPlan reads `bin` ONLY to canonicalise it — nothing else cons
 });
 
 test('SHAPE: spawnPlan\'s vocabulary is CLOSED — no new name can enter the function', () => {
-  // The two assertions above pin the executable POSITIONS this file has today.
-  // On their own that is still an enumeration: it is complete only if no THIRD
-  // position can be introduced. This is what makes it complete — the set of
-  // names spawnPlan may mention at all is frozen, so a new call, a new binding,
-  // a new property read, or a new environment lookup cannot appear anywhere in
-  // the function without failing here, wherever its value would have flowed.
+  // The two assertions above pin the executable POSITIONS spawnPlan has today.
+  // This is what makes that enumeration complete WITHIN THIS FUNCTION BODY — and
+  // only within it. The set of names spawnPlan may mention is frozen, so a new
+  // call, a new binding, a new property read, or a new environment lookup cannot
+  // appear anywhere in the function without failing here, wherever its value
+  // would have flowed.
+  //
+  // It is NOT complete for the file. Where those names COME FROM is module
+  // scope, and MEASURED 2026-08-26 a top-level `buildCmdLine` shadow deriving
+  // arg-0 from the caller's `args` survived every assertion in this function
+  // while leaving its body byte-identical. That is closed by `SHAPE: every name
+  // spawnPlan CALLS has exactly one top-level origin`, not by this test. Read
+  // the two together; neither is sufficient alone.
   //
   // Deliberately NOT a list of forbidden names (`env`, `execSync`, `require`, …)
   // — that is the spelling-keyed guard this file's header warns about, and an
@@ -916,6 +1004,172 @@ test('SHAPE: run() never rewrites the plan between spawnPlan and spawnSync', () 
   );
 });
 
+test('POSITIVE CONTROL: stripComments removes PROSE and keeps CODE that shares its line', () => {
+  // This fixture is the control for the population test below, and it exists
+  // because the counts are NOT their own control: a stripper that eats real code
+  // makes every count match perfectly while measuring the wrong text. Each row
+  // is a shape that has actually been used against this suite.
+  const cases = [
+    ['/**/  gh: process.env.LOOM_GH,', 'process.env.LOOM_GH', true],
+    ['  /* why */ spawnSync(bin, args);', 'spawnSync', true],
+    ['  const x = 1; /* trailing prose process.env.PATH */', 'process.env', false],
+    ['  const y = 2; /* trailing prose process.env.PATH */', 'const y', true],
+    ['  // process.env.LOOM_X is only prose here', 'process.env', false],
+    ['  let line = quoteForCmd(String(file).replace(/\\//g, String.fromCharCode(92)));', 'quoteForCmd', true],
+  ];
+  for (const [input, needle, shouldKeep] of cases) {
+    const got = stripComments(input);
+    assert.equal(
+      got.includes(needle), shouldKeep,
+      `stripComments(${JSON.stringify(input)}) => ${JSON.stringify(got)}: expected ${shouldKeep ? 'to KEEP' : 'to DROP'} ` +
+      `${JSON.stringify(needle)}. Dropping code is the SILENT failure — it makes the population below match perfectly ` +
+      'while counting the wrong text.',
+    );
+  }
+  // A block comment spanning lines must not eat the code after its closer.
+  const multi = stripComments(['/**', ' * prose process.env.LOOM_A', ' */', "  gh: process.env.LOOM_B,"].join('\n'));
+  assert.ok(!multi.includes('LOOM_A'), `multi-line prose survived: ${JSON.stringify(multi)}`);
+  assert.ok(multi.includes('process.env.LOOM_B'), `code after the closer was eaten: ${JSON.stringify(multi)}`);
+  // Line count is preserved — a stripper that deletes lines is one that can
+  // delete code.
+  assert.equal(stripComments('a\n/* x */\nb').split('\n').length, 3, 'stripComments must blank lines, never remove them');
+});
+
+test('SHAPE: every name spawnPlan CALLS has exactly one top-level origin', () => {
+  // The vocabulary contract freezes which names spawnPlan may call. It says
+  // nothing about where those names COME FROM, and at module scope that is a
+  // third executable position. MEASURED 2026-08-26: a top-level
+  // `function buildCmdLine(f, a)` shadowing the import and deriving arg-0 from
+  // the CALLER'S args —
+  //   `_bcl(String(a[0]).startsWith('!X:') ? String(a[0]).slice(3) : f, a)`
+  // — SURVIVED at rc=0 in BOTH columns and executed an attacker-named binary end
+  // to end. It leaves spawnPlan byte-identical and contains no `process` token
+  // at all, so every function-scoped assertion AND the taint-source population
+  // see nothing. `args` is the documented alert-983 source: drain-status.mjs:18
+  // and red-tally.mjs:17 feed `process.argv` straight into `run`.
+  //
+  // The callee list is DERIVED from spawnPlan's body, not written here, so it
+  // cannot drift from the vocabulary contract that freezes it.
+  const body = functionBody(SRC, 'spawnPlan');
+  assert.ok(body, 'POSITIVE CONTROL: spawnPlan not found in measure.mjs — this test measured NOTHING');
+  const callees = [...new Set((stripLineComments(body).match(/\b[A-Za-z_$][\w$]*\s*\(/g) || [])
+    .map((s) => s.replace(/\s*\($/, ''))
+    .filter((n) => !['if', 'for', 'while', 'switch', 'catch', 'return', 'typeof'].includes(n)))].sort();
+  assert.deepEqual(
+    callees, ['buildCmdLine', 'canonicalBinary', 'needsWrapper'],
+    `spawnPlan's callees changed: ${JSON.stringify(callees)}. Each one decides or carries the executable.`,
+  );
+
+  const src = stripComments(SRC);
+  const importBindings = new Map();
+  for (const m of src.matchAll(/^import\s*\{([^}]*)\}\s*from\s*'([^']+)';/gm)) {
+    for (const raw of m[1].split(',')) {
+      const t = raw.trim();
+      if (!t) continue;
+      const as = /\bas\s+([A-Za-z_$][\w$]*)$/.exec(t);
+      importBindings.set(as ? as[1] : t, m[2]);
+    }
+  }
+  assert.ok(importBindings.size > 0, 'POSITIVE CONTROL: no import bindings parsed — this test measured NOTHING');
+
+  for (const name of callees) {
+    const declared = (src.match(new RegExp(`^(?:export )?(?:async )?function\\s+${name}\\b`, 'gm')) || []).length;
+    const bound = (src.match(new RegExp(`^(?:export )?(?:const|let|var)\\s+${name}\\b`, 'gm')) || []).length;
+    const imported = importBindings.has(name) ? 1 : 0;
+    assert.equal(
+      declared + bound + imported, 1,
+      `\`${name}\` has ${declared + bound + imported} top-level origins in measure.mjs (function=${declared}, ` +
+      `binding=${bound}, import=${imported}). Exactly one, or the last definition silently wins.`,
+    );
+  }
+  assert.equal(
+    importBindings.get('buildCmdLine'), './cmd-quote.mjs',
+    "`buildCmdLine` must be the IMPORT from './cmd-quote.mjs'. A local function of that name shadows the quoting " +
+    'layer entirely and chooses the program cmd.exe runs, while leaving spawnPlan byte-identical — MEASURED ' +
+    `surviving before this assertion existed. Bound instead to: ${JSON.stringify(importBindings.get('buildCmdLine') ?? null)}`,
+  );
+});
+
+test('SHAPE: neither file can reach an ambient global', () => {
+  // The taint-source population counts `process.<member>` and the bare `process`
+  // token. That is keyed to a SPELLING, and MEASURED 2026-08-26 three mutations
+  // reached the same values without ever writing it — `globalThis['pro' +
+  // 'cess'].env.LOOM_GH` in ALLOWED_BINARIES, in a buildCmdLine shadow, and in
+  // cmd-quote.mjs — all SURVIVED at rc=0 in both columns and all executed an
+  // attacker-named binary. So the population needs a companion that closes the
+  // OTHER routes to the same object rather than another spelling of this one.
+  //
+  // Zero is the whole contract: neither file has any business reaching an
+  // ambient global, and a population pinned at zero cannot be satisfied by an
+  // alias, a computed key, or string concatenation.
+  const forbidden = ['globalThis', 'global', 'eval', 'Function', 'require', 'module', 'exports'];
+  assert.equal(
+    forbidden.length, 7,
+    'POSITIVE CONTROL: the forbidden list is not the expected size — emptying it makes every loop below iterate ' +
+    'zero times and the test pass while measuring NOTHING.',
+  );
+  for (const [name, file] of [['measure.mjs', MEASURE_MJS], ['cmd-quote.mjs', CMD_QUOTE_MJS]]) {
+    const src = stripComments(fs.readFileSync(file, 'utf8'));
+    assert.ok(/buildCmdLine|spawnSync/.test(src), `POSITIVE CONTROL: comment stripping ate ${name} — this test measured NOTHING`);
+    for (const tok of forbidden) {
+      const n = (src.match(new RegExp(`\\b${tok}\\b`, 'g')) || []).length;
+      assert.equal(n, 0, `${name} mentions \`${tok}\` ${n} times. It is a route to the same objects the taint-source population pins, reachable without naming them.`);
+    }
+    const dynamic = (src.match(/\bimport\s*\(/g) || []).length;
+    assert.equal(dynamic, 0, `${name} contains ${dynamic} DYNAMIC import(s). Only the frozen static specifier list is allowed.`);
+  }
+  // POSITIVE CONTROL: the detector can see these tokens when they are present.
+  for (const tok of forbidden) {
+    assert.equal((`x ${tok} y`.match(new RegExp(`\\b${tok}\\b`, 'g')) || []).length, 1, `the detector cannot see \`${tok}\` at all`);
+  }
+  assert.equal(('await import("x")'.match(/\bimport\s*\(/g) || []).length, 1, 'the dynamic-import detector cannot see one');
+});
+
+test('the built command line ALWAYS begins with the file it was given', () => {
+  // Every contract above is source TEXT, and text cannot follow a value into
+  // cmd-quote.mjs. MEASURED 2026-08-26: deriving arg-0 from `args` inside
+  // `buildCmdLine` itself — `if (String(args[0]).startsWith('!X:')) file =
+  // String(args[0]).slice(3)` — SURVIVED at rc=0 in both columns. No `process`
+  // token, no change to measure.mjs, invisible to every SHAPE assertion.
+  //
+  // This is the behavioural companion, and it is the stronger claim because it
+  // holds whatever the mechanism: for the only file values that can ever reach
+  // this function — the seven ALLOWED_BINARIES literals — the line it returns
+  // must START with that value, for EVERY argument. An argument that changes the
+  // program cannot satisfy it, however it is spelled, and neither can a
+  // quoteForCmd that rewrites its first token.
+  const names = ['gh', 'az', 'git', 'node', 'npm', 'pnpm', 'pwsh'];
+  assert.equal(
+    names.length, 7,
+    'POSITIVE CONTROL: the binary list is not the expected size — emptying it makes the loop below iterate zero ' +
+    'times and every assertion in it vacuous.',
+  );
+  const marker = 'C:\\scratch\\PWNED.txt';
+  const adversarial = [
+    ['argv-prefix smuggling', '!X:evilprog'],
+    ['absolute path', 'C:\\evil\\evilprog.exe'],
+    ['relative path', '../evilprog'],
+    ['bare name', 'evilprog'],
+    ...payloads(marker),
+  ];
+  let checked = 0;
+  for (const bin of names) {
+    for (const [label, payload] of adversarial) {
+      const line = buildCmdLine(bin, [payload]);
+      assert.ok(
+        line.startsWith(`${bin} `),
+        `${bin} / ${label}: the built line does not begin with the file it was given — the ARGUMENT chose the ` +
+        `program. Got: ${line}`,
+      );
+      checked += 1;
+    }
+  }
+  assert.ok(checked >= 28, `POSITIVE CONTROL: only ${checked} combinations were checked — expected at least 28 (7 binaries x 4 adversarial shapes)`);
+  // POSITIVE CONTROL: the assertion can actually FAIL. If it could not, every
+  // row above is a tautology.
+  assert.ok(!buildCmdLine('evilprog', ['x']).startsWith('gh '), 'the prefix check cannot distinguish two different programs');
+});
+
 test('SHAPE: the taint-source population of measure.mjs and cmd-quote.mjs is FIXED', () => {
   // Everything above is scoped to a function BODY. That is one level too narrow,
   // and it is the same mistake, one ring out, that this round was opened to fix.
@@ -934,13 +1188,25 @@ test('SHAPE: the taint-source population of measure.mjs and cmd-quote.mjs is FIX
   // A third, in cmd-quote.mjs (`file = process.env.LOOM_BIN || file` at the top
   // of buildCmdLine), also survived — which is why this test covers BOTH files.
   //
-  // So the control is keyed to the TAINT SOURCE rather than to any of those
-  // three shapes. measure.mjs:181-183 already claims "Every value that can
+  // So the control is keyed to the taint source's IDENTIFIER rather than to any
+  // of those three shapes. measure.mjs:181-183 claims "Every value that can
   // become the EXECUTABLE originates in this file … Nothing derived from argv or
-  // the environment does", and until now nothing enforced that sentence. This
-  // is that sentence, as a population: every `process.<member>` read in either
-  // file, counted, with the bare-`process` total counted separately so a
-  // computed access (`process['env']`) cannot slip past the member enumeration.
+  // the environment does", and until now nothing enforced it at all. This is the
+  // ENVIRONMENT half of that sentence, as a population: every `process.<member>`
+  // read in either file, counted, with the bare-`process` total counted
+  // separately so a computed access (`process['env']`) cannot slip past the
+  // member enumeration.
+  //
+  // BE PRECISE ABOUT WHAT THIS DOES NOT DO. It is keyed to the SPELLING
+  // `process`, and MEASURED 2026-08-26 three mutations reached the same object
+  // without writing it — `globalThis['pro' + 'cess'].env` in the table, in a
+  // buildCmdLine shadow, and in cmd-quote.mjs — all SURVIVING this assertion at
+  // rc=0 in both columns. Those are closed by `SHAPE: neither file can reach an
+  // ambient global`, which is pinned at ZERO and therefore cannot be satisfied
+  // by an alias or a computed key. The ARGV half of the sentence is not an
+  // environment read at all and is closed behaviourally, by `the built command
+  // line ALWAYS begins with the file it was given`. Three tests, three
+  // mechanisms; this one on its own proves only the third of it.
   const files = {
     'measure.mjs': { src: stripComments(fs.readFileSync(MEASURE_MJS, 'utf8')), bare: 5, members: { 'process.execPath': 2, 'process.platform': 1, 'process.env': 1, 'process.stderr': 1 } },
     'cmd-quote.mjs': { src: stripComments(fs.readFileSync(CMD_QUOTE_MJS, 'utf8')), bare: 1, members: { 'process.platform': 1 } },

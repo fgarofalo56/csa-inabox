@@ -336,6 +336,113 @@ const ARMS = [
     expect: { win32: 'CAUGHT', linux: 'CAUGHT' },
     note: 'MEASURED reason: `expected {…"process.env":1…} found {…}` — the population assertion fails CLOSED when a member DISAPPEARS, not only when one is added.',
   },
+
+  // ── ROUND 4. An independent review of the round-3 guard defeated it SIX ways,
+  //    five of them proven as live execution of an attacker-named binary. Two
+  //    classes: the token `process` is a SPELLING and can be reached without
+  //    writing it, and a value derived from `args` needs no taint token at all.
+  //    One of the six was a bug in the round-3 comment stripper itself.
+  {
+    id: 'SS-TABLE',
+    what: 'STRIPPER BUG: a `/**/` prefix made the round-3 stripper drop the CODE along with the comment',
+    file: 'measure.mjs',
+    find: "  gh: 'gh', az: 'az', git: 'git', node: 'node', npm: 'npm', pnpm: 'pnpm', pwsh: 'pwsh',",
+    repl: ["  /**/  gh: process.env.LOOM_GH || 'gh', az: 'az', git: 'git', node: 'node', npm: 'npm', pnpm: 'pnpm', pwsh: 'pwsh',"],
+    expect: { win32: 'CAUGHT', linux: 'CAUGHT' },
+    note: 'a LITERAL `process.env` in the table, hidden by a stripper that ate its line. The counts matched perfectly while counting the wrong text — which is why the stripper now has a FIXTURE test rather than being controlled by the counts it feeds.',
+  },
+  {
+    id: 'NP-TABLE',
+    what: "OBFUSCATED: globalThis['pro'+'cess'].env in the table — no `process` token anywhere",
+    file: 'measure.mjs',
+    find: "  gh: 'gh', az: 'az', git: 'git', node: 'node', npm: 'npm', pnpm: 'pnpm', pwsh: 'pwsh',",
+    repl: ["  gh: globalThis['pro' + 'cess'].env.LOOM_GH || 'gh', az: 'az', git: 'git', node: 'node', npm: 'npm', pnpm: 'pnpm', pwsh: 'pwsh',"],
+    expect: { win32: 'CAUGHT', linux: 'CAUGHT' },
+    note: 'the taint-source population is keyed to a SPELLING. Caught now by the ambient-global contract, which is pinned at ZERO and so cannot be satisfied by an alias or a computed key.',
+  },
+  {
+    id: 'NP-SHADOW',
+    what: "OBFUSCATED SHADOW: module-scope buildCmdLine wrapper reading globalThis['pro'+'cess'].env",
+    file: 'measure.mjs',
+    find: "import { buildCmdLine, needsCmdWrapper, CmdQuoteError } from './cmd-quote.mjs';",
+    repl: [
+      "import { buildCmdLine as _bcl, needsCmdWrapper, CmdQuoteError } from './cmd-quote.mjs';",
+      "function buildCmdLine(f, a) { return _bcl(globalThis['pro' + 'cess'].env.LOOM_BIN || f, a); }",
+    ],
+    expect: { win32: 'CAUGHT', linux: 'CAUGHT' },
+    note: 'E1 with the token hidden. Caught by BOTH the ambient contract and the origin contract.',
+  },
+  {
+    id: 'NP-CQ',
+    what: 'OBFUSCATED, ONE RING OUT: the same globalThis env override inside cmd-quote.mjs',
+    file: 'cmd-quote.mjs',
+    find: 'export function buildCmdLine(file, args) {',
+    repl: ['export function buildCmdLine(file, args) {', "  file = globalThis['pro' + 'cess'].env.LOOM_BIN || file;"],
+    expect: { win32: 'CAUGHT', linux: 'CAUGHT' },
+    note: 'E7 with the token hidden — the reason the ambient contract covers BOTH files.',
+  },
+  {
+    id: 'ARGV-EXEC',
+    what: "NO TAINT TOKEN AT ALL: a module-scope buildCmdLine shadow derives arg-0 from the CALLER's args",
+    file: 'measure.mjs',
+    find: "import { buildCmdLine, needsCmdWrapper, CmdQuoteError } from './cmd-quote.mjs';",
+    repl: [
+      "import { buildCmdLine as _bcl, needsCmdWrapper, CmdQuoteError } from './cmd-quote.mjs';",
+      "function buildCmdLine(f, a) { return _bcl(a.length > 0 && String(a[0]).startsWith('!X:') ? String(a[0]).slice(3) : f, a); }",
+    ],
+    expect: { win32: 'CAUGHT', linux: 'CAUGHT' },
+    note: 'the sharpest arm in the whole table: plain, unobfuscated, no environment, no `process`. `args` IS the alert-983 source (drain-status.mjs:18, red-tally.mjs:17 feed process.argv into run). Only the ORIGIN contract catches it — buildCmdLine must be the import.',
+  },
+  {
+    id: 'CQ-ARGV',
+    what: "NO TAINT TOKEN, ONE RING OUT: cmd-quote.mjs's own buildCmdLine derives arg-0 from its args",
+    file: 'cmd-quote.mjs',
+    find: 'export function buildCmdLine(file, args) {',
+    repl: [
+      'export function buildCmdLine(file, args) {',
+      "  if (args.length > 0 && String(args[0]).startsWith('!X:')) file = String(args[0]).slice(3);",
+    ],
+    expect: { win32: 'CAUGHT', linux: 'CAUGHT' },
+    note: 'source text cannot follow a value into another file, so this one is closed BEHAVIOURALLY: the built line must begin with the file it was given, for all seven allowlisted names and every payload. That claim holds whatever the mechanism.',
+  },
+
+  // ── the ROUND-4 guards, mutated.
+  {
+    id: 'GX',
+    what: 'GUARD: revert stripComments to the LINE-DROPPING version that ate code',
+    file: SUITE_REL,
+    find: "      if (open === -1) { kept += rest; rest = ''; break; }",
+    repl: ["      if (open === -1) { kept += rest; rest = ''; break; }", "      if (true) { rest = ''; break; }"],
+    expect: { win32: 'CAUGHT', linux: 'CAUGHT' },
+    note: 'caught by the stripper FIXTURE, which is the point of having one — the counts it feeds would have matched.',
+  },
+  {
+    id: 'GO',
+    what: 'GUARD: break the import-binding parser in the origin test',
+    file: SUITE_REL,
+    find: "  for (const m of src.matchAll(/^import\\s*\\{([^}]*)\\}\\s*from\\s*'([^']+)';/gm)) {",
+    repl: ["  for (const m of src.matchAll(/^NEVERMATCHES\\s*\\{([^}]*)\\}\\s*from\\s*'([^']+)';/gm)) {"],
+    expect: { win32: 'CAUGHT', linux: 'CAUGHT' },
+    note: 'a parser that matches nothing would report every callee as having ZERO origins. The population control fires instead.',
+  },
+  {
+    id: 'GA',
+    what: 'GUARD: empty the forbidden-token list so the ambient test iterates zero times',
+    file: SUITE_REL,
+    find: "  const forbidden = ['globalThis', 'global', 'eval', 'Function', 'require', 'module', 'exports'];",
+    repl: ['  const forbidden = [];'],
+    expect: { win32: 'CAUGHT', linux: 'CAUGHT' },
+    note: 'an empty list makes BOTH the assertion loop and its own positive-control loop vacuous. Found while mutating the round-4 guards, and closed before this arm was recorded.',
+  },
+  {
+    id: 'GP',
+    what: 'GUARD: empty the binary list so the command-line prefix test iterates zero times',
+    file: SUITE_REL,
+    find: "  const names = ['gh', 'az', 'git', 'node', 'npm', 'pnpm', 'pwsh'];",
+    repl: ['  const names = [];'],
+    expect: { win32: 'CAUGHT', linux: 'CAUGHT' },
+    note: 'same vacuity, same round, same fix — the floor is now an absolute number, not one derived from the list being counted.',
+  },
 ];
 
 function tally(out) {
