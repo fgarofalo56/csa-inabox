@@ -142,7 +142,7 @@ jobs:
           #
           # WHAT THE VERDICT IS ALLOWED TO KNOW (#4065).
           #
-          # These four variables ARE the verdict's evidence set, and they are
+          # These variables ARE the verdict's evidence set, and the states are
           # initialised to `not-attempted` on purpose: until a query has run,
           # the honest state is "we have not looked", never "there is nothing
           # there". Each block below moves its own state to exactly one of
@@ -150,15 +150,34 @@ jobs:
           # synthetic-monitor-verdict.mjs refuses to convert any of the three
           # non-data states into a claim about the journeys.
           #
-          # The log text travels by FILE, never by shell string: a Playwright
-          # error line carrying a backtick or `${` has already killed a step in
-          # this workflow once (see the github-script note below).
+          # ..._CORR is the EXECUTION each query was scoped to, and it is set
+          # ONLY inside a branch whose query carries
+          #   | where ContainerGroupName_s startswith '$EXEC'
+          # Without it, rows are UNCORRELATED and the module will not promote
+          # them: this job carries its own */15 schedule trigger, so a window
+          # bounded only by time or by job name routinely spans a dozen OTHER
+          # executions — and a UAT_REAL_FAILS line written by one of those,
+          # attributed to this one, is the same over-claim #4065 removed, on a
+          # new evidence path. `ContainerGroupName_s` is the REPLICA name in
+          # ContainerAppConsoleLogs_CL and a job execution's replicas are named
+          # <execution>-<suffix>, which is why startswith and not ==; this is
+          # the key Learn's own "Query job run logs" recipe uses
+          # (learn.microsoft.com/azure/container-apps/jobs-get-started-cli).
+          #
+          # The log text reaches the VERDICT MODULE by FILE, never by shell
+          # string: a Playwright error line carrying a backtick or `${` has
+          # already killed a step in this workflow once (see the github-script
+          # note below). That is a property of the module's input path only —
+          # the ::notice:: / ::group:: echoes further down still put log text
+          # on a shell command line, so they stay inside double quotes.
           UAT_STATE=not-attempted
           UAT_FILE=$(mktemp)
           UAT_RC=0
+          UAT_CORR=
           J_STATE=not-attempted
           J_FILE=$(mktemp)
           J_RC=0
+          J_CORR=
 
           LA_ERR=$(mktemp)
           WS=$(az monitor log-analytics workspace list -g "$RG_NAME" \
@@ -177,9 +196,14 @@ jobs:
             # stderr-emptiness test reports a perfectly good query as FAILED —
             # measured on run 31351602478, which is the same stderr-contamination
             # class this step exists to stop mis-reporting.
+            # The COST bound is `ago(2h)`; the CORRELATION is
+            # `ContainerGroupName_s startswith '$EXEC'`. They are different jobs
+            # and the second is the one that makes a row this execution's — a
+            # time window alone was exactly the defect (the poll above caps at
+            # 20 minutes, so 2h cannot exclude this execution's own rows).
             set +e
             RAW=$(az monitor log-analytics query -w "$WS" --analytics-query \
-              "ContainerAppConsoleLogs_CL | where ContainerAppName_s == '$JOB_NAME' | where Log_s contains 'UAT_RESULT' | order by TimeGenerated desc | take 1 | project Log_s" \
+              "ContainerAppConsoleLogs_CL | where TimeGenerated > ago(2h) | where ContainerGroupName_s startswith '$EXEC' | where Log_s contains 'UAT_RESULT' | order by TimeGenerated desc | take 1 | project Log_s" \
               --query "[0].Log_s" -o tsv 2>"$QERR")
             QRC=$?
             set -e
@@ -187,6 +211,9 @@ jobs:
             UAT_RC=$QRC
             if [[ -n "$RESULT" ]]; then
               UAT_STATE=row
+              # The query above is scoped to $EXEC, so this row IS this
+              # execution's. Set the correlation token the module requires.
+              UAT_CORR="$EXEC"
               printf '%s' "$RESULT" > "$UAT_FILE"
               echo "::notice::$RESULT"
               echo "loom-synthetic-monitor: $RESULT" >> "$GITHUB_STEP_SUMMARY"
@@ -197,7 +224,7 @@ jobs:
               sed 's/^/  /' "$QERR" >&2 || true
             else
               UAT_STATE=zero-rows
-              echo "::notice::No UAT_RESULT row yet for $JOB_NAME (query succeeded, zero rows — ingestion typically lags a few minutes)."
+              echo "::notice::No UAT_RESULT row yet for execution $EXEC (query succeeded, zero rows — ingestion typically lags a few minutes)."
             fi
           fi
 
@@ -213,9 +240,11 @@ jobs:
           if [[ -n "$WS" ]]; then
             JERR=$(mktemp)
             # Exit code, not stderr-emptiness — see the UAT_RESULT block above.
+            # ago(2h) is the COST bound; the execution scope is what makes these
+            # lines THIS run's (see the UAT_RESULT block).
             set +e
             JRAW=$(az monitor log-analytics query -w "$WS" --analytics-query \
-              "ContainerAppConsoleLogs_CL | where ContainerAppName_s == '$JOB_NAME' | where TimeGenerated > ago(2h) | where Log_s has_any ('synthetic J', 'UAT_FAIL', 'UAT_REAL_FAILS') | order by TimeGenerated asc | take 60 | project Log_s" \
+              "ContainerAppConsoleLogs_CL | where TimeGenerated > ago(2h) | where ContainerGroupName_s startswith '$EXEC' | where Log_s has_any ('synthetic J', 'UAT_FAIL', 'UAT_REAL_FAILS') | order by TimeGenerated asc | take 60 | project Log_s" \
               --query "[].Log_s" -o tsv 2>"$JERR")
             JRC=$?
             set -e
@@ -223,8 +252,10 @@ jobs:
             J_RC=$JRC
             if [[ -n "$JOURNEYS" ]]; then
               J_STATE=rows
+              # Scoped to $EXEC above — these lines are THIS execution's.
+              J_CORR="$EXEC"
               printf '%s\n' "$JOURNEYS" > "$J_FILE"
-              echo "::group::Per-journey console lines (last 2h)"
+              echo "::group::Per-journey console lines (execution $EXEC)"
               echo "$JOURNEYS"
               echo "::endgroup::"
               {
@@ -250,7 +281,7 @@ jobs:
               sed 's/^/  /' "$JERR" >&2 || true
             else
               J_STATE=zero-rows
-              echo "::notice::No 'synthetic J' console lines in the last 2h (query succeeded, zero rows)."
+              echo "::notice::No 'synthetic J' console lines for execution $EXEC (query succeeded, zero rows)."
             fi
           fi
 
@@ -275,6 +306,13 @@ jobs:
           # Exit status is unchanged: UNKNOWN still fails the run. An unattended
           # monitor that cannot see its subject must not report green — it just
           # must not name a cause either.
+          #
+          # Round 2: both queries above are now scoped to THIS execution, and
+          # --*-correlation states that fact to the module. If a future edit
+          # widens either query back to a time/job-name window, the correlation
+          # token becomes a lie — so the test suite reads THIS FILE and fails if
+          # a branch sets ..._CORR without its query carrying
+          # `ContainerGroupName_s startswith '$EXEC'`.
           set +e
           node scripts/ci/synthetic-monitor-verdict.mjs \
             --status "$STATUS" \
@@ -282,7 +320,9 @@ jobs:
             --job "$JOB_NAME" \
             --resource-group "$RG_NAME" \
             --uat-state "$UAT_STATE" --uat-file "$UAT_FILE" --uat-rc "$UAT_RC" \
-            --journeys-state "$J_STATE" --journeys-file "$J_FILE" --journeys-rc "$J_RC"
+            --uat-correlation "$UAT_CORR" \
+            --journeys-state "$J_STATE" --journeys-file "$J_FILE" --journeys-rc "$J_RC" \
+            --journeys-correlation "$J_CORR"
           VRC=$?
           set -e
           if [[ $VRC -ne 0 ]]; then

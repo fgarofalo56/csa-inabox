@@ -9,12 +9,28 @@
  * are all about the DISTANCE between "the execution failed" and "the journeys
  * failed" — the moment those two collapse back into one, a test goes red.
  *
+ * ROUND 2 added two more distances, each after a reviewer defeated the first cut:
+ *
+ *   1. Between "a row exists" and "a row about THIS execution exists". The ACA
+ *      job carries its own 15-minute schedule trigger, so a query bounded only
+ *      by time or job name spans a dozen prior executions — and one of their
+ *      UAT_REAL_FAILS lines, promoted, names the wrong execution as failing.
+ *      Covered on both sides: the module refuses uncorrelated rows, AND the
+ *      WORKFLOW section below reads the real YAML and fails if a branch claims
+ *      correlation while its query has lost the scoping filter.
+ *   2. Between "the module is correct" and "the module is WIRED". The 19
+ *      round-1 tests imported the module directly and never read the workflow,
+ *      so deleting the invocation left every one of them green — and
+ *      check-ci-guard-reachability.mjs does not cover a `-verdict.mjs`
+ *      (measured: its classifier accepts `-verdict.sh` only), so nothing else
+ *      watched it either.
+ *
  * MUTATION CONTROLS (a verdict that cannot change is not a verdict)
- *   - `MUTATION: …` at the end rewrites the module's evidence test to be
- *     unconditionally true — i.e. restores the old "always blame the journeys"
- *     behaviour — and asserts the zero-rows case FLIPS to `journeys-failed`.
- *     If someone deletes the UNKNOWN branch, that mutant becomes the real file
- *     and the zero-rows tests below go red. The control proves they can.
+ *   - `MUTATION: …` tests rewrite the module source (or the workflow text) to
+ *     reintroduce the exact defect, then assert the guarding assertion FLIPS.
+ *     A control that passes against both the fixed and the broken subject has
+ *     measured nothing, so each one asserts the mutant misbehaves AND that the
+ *     real subject does not.
  *   - Each state test also carries its own inverse: flip one input (add a
  *     `realFails=2`, add a `UAT_REAL_FAILS` line, set status Succeeded) and the
  *     verdict must move.
@@ -32,6 +48,11 @@ import { syntheticMonitorVerdict, parseRealFails } from '../synthetic-monitor-ve
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const SCRIPT = resolve(HERE, '..', 'synthetic-monitor-verdict.mjs');
+const REPO_ROOT = resolve(HERE, '..', '..', '..');
+const WORKFLOW = resolve(REPO_ROOT, '.github', 'workflows', 'loom-synthetic-monitor.yml');
+
+/** The execution every fixture below is a verdict ABOUT. */
+const EXEC = 'loom-synthetic-monitor-06cuztq';
 
 /**
  * The run measured on 2026-08-25T14:04:39Z, reproduced exactly: the execution
@@ -39,7 +60,7 @@ const SCRIPT = resolve(HERE, '..', 'synthetic-monitor-verdict.mjs');
  */
 const ZERO_ROWS_FAILED = () => ({
   status: 'Failed',
-  execution: 'loom-synthetic-monitor-06cuztq',
+  execution: EXEC,
   jobName: 'loom-synthetic-monitor',
   resourceGroup: 'rg-csa-loom-admin-centralus',
   uat: { state: 'zero-rows', line: null, rc: 0 },
@@ -72,9 +93,18 @@ test('(a) the no-data remediation points at EXECUTION diagnostics, not at the em
   assert.match(rem, /ContainerAppSystemLogs_CL/);
   assert.match(rem, /ErrImagePull/);
 
-  // Where it is NOT: both of these were empty across all 25 runs.
+  // Where it is NOT: the console-log table was measured empty for these
+  // executions across all 25 runs.
   assert.doesNotMatch(rem, /ContainerAppConsoleLogs_CL/);
-  assert.doesNotMatch(rem, /admin\/health/);
+  // NOTE — the /admin/health Journeys tab is deliberately NOT asserted absent.
+  // Round 1 asserted it was, on the reasoning that it too was "empty by
+  // construction". Measured since: that tab is served by
+  // lib/admin/synthetic-runs-reader.ts from BLOB artifacts
+  // (uat-runs/synthetic/<runId>/verdicts.ndjson in LOOM_UAT_RESULTS_ACCOUNT),
+  // a different store from ContainerAppConsoleLogs_CL, and it lists the last N
+  // runs rather than this execution. Zero console rows establishes nothing
+  // about it, so a test enforcing its absence would be pinning an inference —
+  // which is the R7 error this whole change removes.
 });
 
 test('(a) a query that FAILED is also UNKNOWN — a read that did not happen is not a measurement', () => {
@@ -101,7 +131,7 @@ test('(a) no workspace at all -> still UNKNOWN, and says the queries were NOT AT
 
 test('(b) a UAT_RESULT row with realFails=2 -> journeys-failed, and cites the count it read', () => {
   const i = ZERO_ROWS_FAILED();
-  i.uat = { state: 'row', line: 'UAT_RESULT pass=4 fail=2 skip=0 realFails=2 infraGated=0', rc: 0 };
+  i.uat = { state: 'row', line: 'UAT_RESULT pass=4 fail=2 skip=0 realFails=2 infraGated=0', rc: 0, correlatedTo: EXEC };
   const r = syntheticMonitorVerdict(i);
   assert.equal(r.verdict, 'journeys-failed');
   assert.equal(r.reason, 'uat-result-real-fails');
@@ -122,6 +152,7 @@ test('(b) a UAT_REAL_FAILS console line -> journeys-failed even without a UAT_RE
       'UAT_REAL_FAILS app=console crashes=[j3-editor] empties=[] infraGatedSteps=0',
     ],
     rc: 0,
+    correlatedTo: EXEC,
   };
   const r = syntheticMonitorVerdict(i);
   assert.equal(r.verdict, 'journeys-failed');
@@ -133,7 +164,7 @@ test('(b) INVERSE — realFails=0 is NOT a failing-journey claim, it is UNKNOWN'
   // The runner counted zero real failures, yet the execution is non-Succeeded.
   // That contradiction is real information, and it is still not `realFails>0`.
   const i = ZERO_ROWS_FAILED();
-  i.uat = { state: 'row', line: 'UAT_RESULT pass=6 fail=0 skip=0 realFails=0 infraGated=1', rc: 0 };
+  i.uat = { state: 'row', line: 'UAT_RESULT pass=6 fail=0 skip=0 realFails=0 infraGated=1', rc: 0, correlatedTo: EXEC };
   const r = syntheticMonitorVerdict(i);
   assert.equal(r.verdict, 'unknown');
   assert.equal(r.realFails, 0);
@@ -152,6 +183,7 @@ test('(b) UAT_FAIL alone is NOT promoted to a real failure — it covers honest 
       'UAT_FAIL synthetic-journeys.uat.ts:210 › J4 warehouse query :: LOOM_WAREHOUSE_BACKEND not set',
     ],
     rc: 0,
+    correlatedTo: EXEC,
   };
   const r = syntheticMonitorVerdict(i);
   assert.equal(r.verdict, 'unknown');
@@ -199,6 +231,18 @@ test('parseRealFails: absent token -> null (UNKNOWN), never 0', () => {
   assert.equal(parseRealFails('UAT_RESULT pass=6 fail=0 skip=0 realFails=0 infraGated=1'), 0);
   assert.equal(parseRealFails('UAT_RESULT exit_code=1 realFails=3 infraGated=0'), 3);
   assert.equal(parseRealFails('UAT_RESULT pass=1 realFails=12'), 12);
+});
+
+test('parseRealFails: a PREFIXED token is a different field, not this one', () => {
+  // The leading boundary was previously asserted only via `realFailsX=3`, which
+  // a boundary-free /realFails=(\d+)/ ALSO rejects — so that case could not
+  // discriminate the two regexes and the leading `(?:^|\s)` was untested.
+  // These can only pass with the leading boundary present.
+  assert.equal(parseRealFails('xrealFails=3'), null);
+  assert.equal(parseRealFails('UAT_RESULT pass=1 gatedRealFails=7'), null);
+  assert.equal(parseRealFails('UAT_RESULT pass=1 my_realFails=7'), null);
+  // Positive control on the same shape: with the separator it IS this field.
+  assert.equal(parseRealFails('UAT_RESULT pass=1 realFails=7'), 7);
 });
 
 // ------------------------------------------------------------------- the CLI
@@ -267,12 +311,55 @@ test('CLI: a real UAT_RESULT row read from a FILE exits 1 with the failure verdi
   const r = spawnSync(
     process.execPath,
     [SCRIPT, '--status', 'Failed', '--execution', 'e1', '--uat-state', 'row', '--uat-file', uatFile,
-      '--journeys-state', 'zero-rows'],
+      '--uat-correlation', 'e1', '--journeys-state', 'zero-rows'],
     { encoding: 'utf8', env: { ...process.env, GITHUB_ACTIONS: 'true' } },
   );
   assert.equal(r.status, 1, `stdout:\n${r.stdout}\nstderr:\n${r.stderr}`);
   assert.match(r.stdout, /JOURNEYS FAILED/);
   assert.match(r.stdout, /realFails=2/);
+});
+
+test('CLI: the SAME row without --uat-correlation is UNKNOWN, not a journey failure', () => {
+  // The correlation flag is the whole difference between "this execution's
+  // journeys failed" and "a row exists somewhere in this job's history".
+  // Dropping it must change the verdict — if it does not, the flag is decoration.
+  const dir = mkdtempSync(join(tmpdir(), 'synthmon-uncorr-'));
+  const uatFile = join(dir, 'uat.txt');
+  writeFileSync(uatFile, 'UAT_RESULT pass=4 fail=2 skip=0 realFails=2 infraGated=0\n');
+  const args = ['--status', 'Failed', '--execution', 'e1', '--uat-state', 'row', '--uat-file', uatFile,
+    '--journeys-state', 'zero-rows'];
+  const r = spawnSync(process.execPath, [SCRIPT, ...args], {
+    encoding: 'utf8', env: { ...process.env, GITHUB_ACTIONS: 'true' },
+  });
+  assert.equal(r.status, 1, `stdout:\n${r.stdout}\nstderr:\n${r.stderr}`);
+  assert.match(r.stdout, /UNKNOWN/);
+  assert.doesNotMatch(r.stdout, /JOURNEYS FAILED/);
+  assert.match(r.stdout, /DISCARDED/);
+
+  // The empty-string form the workflow emits when its branch never set the
+  // token (UAT_CORR= stays empty) must behave identically to absent.
+  const rEmpty = spawnSync(process.execPath, [SCRIPT, ...args, '--uat-correlation', ''], {
+    encoding: 'utf8', env: { ...process.env, GITHUB_ACTIONS: 'true' },
+  });
+  assert.equal(rEmpty.status, 1);
+  assert.doesNotMatch(rEmpty.stdout, /JOURNEYS FAILED/);
+
+  // A DIFFERENT execution's token must not correlate either — this is the
+  // stale-row shape: the query ran, it returned a row, the row is someone
+  // else's.
+  const rOther = spawnSync(process.execPath, [SCRIPT, ...args, '--uat-correlation', 'e0-previous'], {
+    encoding: 'utf8', env: { ...process.env, GITHUB_ACTIONS: 'true' },
+  });
+  assert.equal(rOther.status, 1);
+  assert.doesNotMatch(rOther.stdout, /JOURNEYS FAILED/);
+
+  // ...and the POSITIVE control on the same command line, so a green here can
+  // never mean "the CLI refuses everything".
+  const rOk = spawnSync(process.execPath, [SCRIPT, ...args, '--uat-correlation', 'e1'], {
+    encoding: 'utf8', env: { ...process.env, GITHUB_ACTIONS: 'true' },
+  });
+  assert.equal(rOk.status, 1);
+  assert.match(rOk.stdout, /JOURNEYS FAILED/);
 });
 
 test('CLI: Succeeded exits 0', () => {
@@ -287,6 +374,197 @@ test('CLI: no --status is a usage error (exit 2), never a silent pass', () => {
   assert.equal(r.status, 2);
 });
 
+// -------------------------------------------------- (d) EXECUTION CORRELATION
+//
+// A row is evidence about the execution it came FROM. The ACA job carries its
+// own */15 schedule trigger, so a query bounded by time or job name spans many
+// executions; promoting one of THEIR rows names the wrong execution as having
+// failing journeys — the #4065 over-claim on a new evidence path.
+
+test('(d) a UAT_REAL_FAILS line from ANOTHER execution does not become this one\'s failure', () => {
+  const i = ZERO_ROWS_FAILED();
+  i.journeys = {
+    state: 'rows',
+    lines: ['UAT_REAL_FAILS app=console crashes=[j3-editor] empties=[] infraGatedSteps=0'],
+    rc: 0,
+    correlatedTo: 'loom-synthetic-monitor-PREVIOUS',
+  };
+  const r = syntheticMonitorVerdict(i);
+  assert.equal(r.verdict, 'unknown', 'a prior execution\'s line is not this execution\'s verdict');
+  assert.equal(r.reason, 'uncorrelated-evidence');
+  assert.equal(r.exitCode, 1, 'still fails closed');
+  assert.doesNotMatch(r.message, /JOURNEYS FAILED/);
+  assert.match(r.evidence.join('\n'), /DISCARDED/);
+  // ...and the remediation sends the reader to the SCOPED read, not to a window.
+  assert.match(r.remediation.join('\n'), new RegExp(`ContainerGroupName_s startswith '${EXEC}'`));
+
+  // POSITIVE CONTROL, same line, correct token: it MUST be promoted, or this
+  // test is only proving the module rejects everything.
+  i.journeys.correlatedTo = EXEC;
+  const ok = syntheticMonitorVerdict(i);
+  assert.equal(ok.verdict, 'journeys-failed');
+  assert.equal(ok.reason, 'uat-real-fails-line');
+});
+
+test('(d) a stale UAT_RESULT row is not this execution\'s realFails count', () => {
+  const i = ZERO_ROWS_FAILED();
+  i.uat = { state: 'row', line: 'UAT_RESULT pass=4 fail=2 skip=0 realFails=2 infraGated=0', rc: 0 };
+  // correlatedTo omitted entirely — the shape produced by a query with no
+  // execution filter.
+  const r = syntheticMonitorVerdict(i);
+  assert.equal(r.verdict, 'unknown');
+  assert.equal(r.reason, 'uncorrelated-evidence');
+  assert.equal(r.realFails, null, 'an uncorrelated count must not be reported as this run\'s');
+  assert.doesNotMatch(r.message, /realFails\s*>\s*0/);
+
+  for (const bad of ['', '   ', null, undefined, 42, {}]) {
+    i.uat.correlatedTo = bad;
+    assert.equal(
+      syntheticMonitorVerdict(i).verdict,
+      'unknown',
+      `correlatedTo=${JSON.stringify(bad)} must not correlate`,
+    );
+  }
+  i.uat.correlatedTo = EXEC;
+  assert.equal(syntheticMonitorVerdict(i).verdict, 'journeys-failed', 'positive control');
+});
+
+test('(d) with no --execution at all NOTHING can be correlated', () => {
+  // Without knowing which execution is under test there is no execution to
+  // attribute a row TO. The placeholder must never satisfy the check.
+  const i = ZERO_ROWS_FAILED();
+  delete i.execution;
+  i.uat = { state: 'row', line: 'UAT_RESULT realFails=5', rc: 0, correlatedTo: '<unknown execution>' };
+  const r = syntheticMonitorVerdict(i);
+  assert.equal(r.verdict, 'unknown');
+  assert.equal(r.reason, 'uncorrelated-evidence');
+});
+
+test('(d) correlation is only asked of DATA states — zero-rows/query-failed keep their own reasons', () => {
+  // "The query returned nothing" says nothing about any execution, so there is
+  // nothing to mis-attribute and no correlation to demand. If this regressed,
+  // every zero-rows run would be relabelled `uncorrelated-evidence` and the
+  // startup-diagnostics remediation would be lost.
+  const zero = syntheticMonitorVerdict(ZERO_ROWS_FAILED());
+  assert.equal(zero.reason, 'no-journey-data');
+  const i = ZERO_ROWS_FAILED();
+  i.uat = { state: 'query-failed', rc: 2 };
+  i.journeys = { state: 'query-failed', rc: 2 };
+  assert.equal(syntheticMonitorVerdict(i).reason, 'no-journey-data');
+});
+
+// ------------------------------------------------- (e) STATE CONTRACT
+//
+// The published QueryState type used to omit `rows` while the code required it,
+// so a caller who obeyed the contract got the FALSE line "Per-journey query was
+// NOT ATTEMPTED (no Log Analytics workspace resolved)" about a query that had
+// run and returned rows — R7, inside the R7 module.
+
+test('(e) both `row` and `rows` are data states on BOTH sides', () => {
+  for (const spelling of ['row', 'rows']) {
+    const i = ZERO_ROWS_FAILED();
+    i.journeys = {
+      state: spelling,
+      lines: ['UAT_REAL_FAILS app=console crashes=[j1] empties=[] infraGatedSteps=0'],
+      rc: 0,
+      correlatedTo: EXEC,
+    };
+    const r = syntheticMonitorVerdict(i);
+    assert.equal(r.verdict, 'journeys-failed', `journeys state '${spelling}' must be data-bearing`);
+    assert.doesNotMatch(r.evidence.join('\n'), /Per-journey query was NOT ATTEMPTED/);
+
+    const u = ZERO_ROWS_FAILED();
+    u.uat = { state: spelling, line: 'UAT_RESULT realFails=2', rc: 0, correlatedTo: EXEC };
+    assert.equal(syntheticMonitorVerdict(u).verdict, 'journeys-failed', `uat state '${spelling}'`);
+  }
+});
+
+test('(e) an UNRECOGNISED state THROWS — it never renders as "NOT ATTEMPTED"', () => {
+  for (const bad of ['Rows', 'zero_rows', 'ok', 'true', 'queryfailed']) {
+    const i = ZERO_ROWS_FAILED();
+    i.journeys = { state: bad, lines: [], rc: 0 };
+    assert.throws(
+      () => syntheticMonitorVerdict(i),
+      (e) => e instanceof TypeError && /per-journey query state/.test(e.message),
+      `state '${bad}' must be refused, not defaulted`,
+    );
+    const u = ZERO_ROWS_FAILED();
+    u.uat = { state: bad, rc: 0 };
+    assert.throws(() => syntheticMonitorVerdict(u), /UAT_RESULT query state/);
+  }
+  // Absent / null / '' remain the honest default.
+  for (const empty of [undefined, null, '']) {
+    const i = ZERO_ROWS_FAILED();
+    i.journeys = { state: empty, lines: [], rc: 0 };
+    assert.match(syntheticMonitorVerdict(i).evidence.join('\n'), /Per-journey query was NOT ATTEMPTED/);
+  }
+});
+
+test('(e) CLI: a bad --journeys-state exits 2 with the reason, never a verdict', () => {
+  const r = spawnSync(
+    process.execPath,
+    [SCRIPT, '--status', 'Failed', '--execution', 'e1', '--journeys-state', 'Rows'],
+    { encoding: 'utf8' },
+  );
+  assert.equal(r.status, 2, `stdout:\n${r.stdout}\nstderr:\n${r.stderr}`);
+  assert.match(r.stderr, /per-journey query state/);
+  assert.doesNotMatch(r.stdout, /NOT ATTEMPTED/);
+});
+
+test('(e) a data state with an EMPTY payload says so — not "NOT ATTEMPTED", not "DISCARDED"', () => {
+  // The CLI reads --uat-file unconditionally, so a state/file mismatch is
+  // reachable. Both wrong answers here are R7: "not attempted" denies a query
+  // that ran, "discarded" claims data that never existed.
+  const i = ZERO_ROWS_FAILED();
+  i.uat = { state: 'row', line: '   ', rc: 0 };
+  i.journeys = { state: 'rows', lines: [], rc: 0 };
+  const r = syntheticMonitorVerdict(i);
+  const ev = r.evidence.join('\n');
+  assert.match(ev, /UAT_RESULT state says a row was returned but its payload is EMPTY/);
+  assert.match(ev, /Per-journey state says rows were returned but the payload is EMPTY/);
+  assert.doesNotMatch(ev, /NOT ATTEMPTED/);
+  assert.doesNotMatch(ev, /DISCARDED/);
+  assert.equal(r.verdict, 'unknown');
+  assert.equal(r.reason, 'no-journey-data', 'an empty payload is no data, not uncorrelated data');
+});
+
+// ------------------------------------- (f) a NON-DATA state carries NO line
+//
+// The CLI reads --uat-file unconditionally, so a zero-rows run whose temp file
+// somehow has content must still count as zero rows. Without the guard the
+// file's content becomes the verdict.
+
+test('(f) a supplied line is IGNORED when the state says the query returned no data', () => {
+  for (const state of ['zero-rows', 'query-failed', 'not-attempted']) {
+    const i = ZERO_ROWS_FAILED();
+    i.uat = { state, line: 'UAT_RESULT pass=0 fail=9 realFails=9 infraGated=0', rc: 1, correlatedTo: EXEC };
+    const r = syntheticMonitorVerdict(i);
+    assert.equal(r.verdict, 'unknown', `state '${state}' must not read the line`);
+    assert.equal(r.realFails, null, `state '${state}' leaked realFails from a non-data state`);
+    assert.doesNotMatch(r.evidence.join('\n'), /realFails=9/, `state '${state}' leaked the line into evidence`);
+  }
+  // POSITIVE CONTROL — the identical line under a data state DOES count.
+  const ok = ZERO_ROWS_FAILED();
+  ok.uat = { state: 'row', line: 'UAT_RESULT pass=0 fail=9 realFails=9 infraGated=0', rc: 0, correlatedTo: EXEC };
+  assert.equal(syntheticMonitorVerdict(ok).realFails, 9);
+});
+
+test('(f) the same, through the CLI with a real non-empty --uat-file', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'synthmon-nondata-'));
+  const uatFile = join(dir, 'uat.txt');
+  writeFileSync(uatFile, 'UAT_RESULT pass=0 fail=9 skip=0 realFails=9 infraGated=0\n');
+  const r = spawnSync(
+    process.execPath,
+    [SCRIPT, '--status', 'Failed', '--execution', 'e1', '--uat-state', 'zero-rows', '--uat-file', uatFile,
+      '--uat-correlation', 'e1', '--journeys-state', 'zero-rows'],
+    { encoding: 'utf8', env: { ...process.env, GITHUB_ACTIONS: 'true' } },
+  );
+  assert.equal(r.status, 1);
+  assert.match(r.stdout, /UNKNOWN/);
+  assert.doesNotMatch(r.stdout, /JOURNEYS FAILED/);
+  assert.doesNotMatch(r.stdout, /realFails=9/);
+});
+
 // ------------------------------------------------- embedding safety
 
 test('no verdict string carries a backtick — these get embedded in a JS template literal', () => {
@@ -299,16 +577,204 @@ test('no verdict string carries a backtick — these get embedded in a JS templa
     ZERO_ROWS_FAILED(),
     { ...ZERO_ROWS_FAILED(), status: 'Succeeded' },
     { ...ZERO_ROWS_FAILED(), status: 'NotDeployed' },
-    { ...ZERO_ROWS_FAILED(), uat: { state: 'row', line: 'UAT_RESULT realFails=2', rc: 0 } },
+    { ...ZERO_ROWS_FAILED(), uat: { state: 'row', line: 'UAT_RESULT realFails=2', rc: 0, correlatedTo: EXEC } },
+    // ...and the same row UNCORRELATED, whose evidence line quotes the token.
+    { ...ZERO_ROWS_FAILED(), uat: { state: 'row', line: 'UAT_RESULT realFails=2', rc: 0, correlatedTo: 'other-exec' } },
     {
       ...ZERO_ROWS_FAILED(),
-      journeys: { state: 'rows', lines: ['UAT_FAIL a.ts:1 › J1 :: gate'], rc: 0 },
+      journeys: { state: 'rows', lines: ['UAT_FAIL a.ts:1 › J1 :: gate'], rc: 0, correlatedTo: EXEC },
     },
   ];
   for (const i of inputs) {
     const r = syntheticMonitorVerdict(i);
     const all = [r.message, ...r.evidence, ...r.remediation].join('\n');
     assert.ok(!all.includes('`'), `backtick in verdict output for status=${i.status}: ${all}`);
+  }
+});
+
+// ------------------------------------------- (g) THE WIRING, IN THE WORKFLOW
+//
+// Round 1's 19 tests imported the module and never read a workflow, so DELETING
+// the invocation left all 19 green. Nothing else covered it either: measured,
+// check-ci-guard-reachability.mjs classifies a control as `check-*`/`test-*.sh`
+// / `*-verdict.SH` / a `.mjs` carrying a quoted `--check`, and a `-verdict.mjs`
+// matches none of the three — so the new file was never in its population and
+// its green said nothing about this file. These assertions are that coverage.
+//
+// Whole-line comments are stripped FIRST. This file's own header names the
+// module path several times, and a check a COMMENT can satisfy is decoration.
+
+/** The workflow this module is the verdict for. */
+function workflowText() {
+  return readFileSync(WORKFLOW, 'utf8').replace(/\r\n/g, '\n');
+}
+
+/** Lines with whole-line comments blanked, so only executable text can match. */
+function activeLines(text) {
+  return text.split('\n').map((l) => (/^\s*#/.test(l) ? '' : l));
+}
+
+/** Index of the `run:` line that actually invokes the verdict module. */
+function invocationIndex(lines) {
+  return lines.findIndex((l) => /^\s*node scripts\/ci\/synthetic-monitor-verdict\.mjs(\s|\\|$)/.test(l));
+}
+
+/** The whole invocation, continuation lines folded into one string. */
+function invocationCommand(lines) {
+  const i = invocationIndex(lines);
+  if (i < 0) return null;
+  const parts = [];
+  for (let j = i; j < lines.length; j += 1) {
+    parts.push(lines[j]);
+    if (!/\\\s*$/.test(lines[j])) break;
+  }
+  return parts.join(' ');
+}
+
+/** Does `VRC=$?` sit on the line IMMEDIATELY after the invocation? */
+function capturesExitCode(lines) {
+  const i = invocationIndex(lines);
+  if (i < 0) return false;
+  let j = i;
+  while (j < lines.length && /\\\s*$/.test(lines[j])) j += 1;
+  return /^\s*VRC=\$\?\s*$/.test(lines[j + 1] ?? '');
+}
+
+/** Is that captured code the step's own exit status? */
+function propagatesExitCode(lines) {
+  return lines.some((l) => /^\s*exit "\$VRC"\s*$/.test(l));
+}
+
+/** Every `<X>_CORR="$EXEC"` assignment, with its line index. */
+function correlationAssignments(lines) {
+  const out = [];
+  lines.forEach((l, idx) => {
+    const m = /^\s*([A-Z_]+_CORR)="\$EXEC"\s*$/.exec(l);
+    if (m) out.push({ name: m[1], idx });
+  });
+  return out;
+}
+
+/**
+ * The Log Analytics query whose result branch an assignment sits in: the
+ * nearest `--analytics-query` above it, plus the line carrying the query text.
+ * Returns null when there is none — which the caller treats as a FAILURE of
+ * this harness, never as a pass.
+ */
+function queryFeeding(lines, idx) {
+  for (let k = idx; k >= 0; k -= 1) {
+    if (/--analytics-query/.test(lines[k])) return `${lines[k]}\n${lines[k + 1] ?? ''}`;
+  }
+  return null;
+}
+
+const SCOPE_FILTER = "ContainerGroupName_s startswith '$EXEC'";
+
+test('(g) the workflow actually INVOKES the verdict module, in a run: body, not a comment', () => {
+  const lines = activeLines(workflowText());
+  assert.ok(invocationIndex(lines) >= 0, 'no executable `node scripts/ci/synthetic-monitor-verdict.mjs` line');
+  // Harness health: the raw text mentions the path more than once (comments),
+  // so a green above must come from the stripped view, not from a mention.
+  const mentions = (workflowText().match(/scripts\/ci\/synthetic-monitor-verdict\.mjs/g) || []).length;
+  assert.ok(mentions > 1, `expected the path in prose too; found ${mentions}`);
+});
+
+test('(g) the module decides the step: VRC=$? on the next line, and exit "$VRC"', () => {
+  const lines = activeLines(workflowText());
+  assert.ok(capturesExitCode(lines), 'VRC=$? is not on the line immediately after the invocation');
+  assert.ok(propagatesExitCode(lines), 'the captured exit code is never used as the step status');
+});
+
+test('(g) every branch that CLAIMS correlation is fed by an execution-scoped query', () => {
+  const lines = activeLines(workflowText());
+  const assigns = correlationAssignments(lines);
+  // Population control first: a zero-population loop passes vacuously.
+  assert.equal(assigns.length, 2, `expected UAT_CORR + J_CORR; found ${JSON.stringify(assigns)}`);
+  assert.deepEqual(assigns.map((a) => a.name).sort(), ['J_CORR', 'UAT_CORR']);
+  for (const a of assigns) {
+    const q = queryFeeding(lines, a.idx);
+    assert.ok(q, `${a.name} has no --analytics-query above it — the harness cannot see its query`);
+    assert.ok(
+      q.includes(SCOPE_FILTER),
+      `${a.name} claims this execution's rows, but its query is not scoped to $EXEC:\n${q}`,
+    );
+  }
+});
+
+test('(g) both correlation tokens are handed to the module', () => {
+  const cmd = invocationCommand(activeLines(workflowText()));
+  assert.ok(cmd, 'no invocation found');
+  assert.match(cmd, /--uat-correlation "\$UAT_CORR"/);
+  assert.match(cmd, /--journeys-correlation "\$J_CORR"/);
+  // ...and the states/files it reasons over.
+  for (const flag of ['--status "$STATUS"', '--execution "$EXEC"', '--uat-state "$UAT_STATE"',
+    '--journeys-state "$J_STATE"']) {
+    assert.ok(cmd.includes(flag), `invocation lost ${flag}`);
+  }
+});
+
+test('(g) MUTATION: each wiring assertion goes RED when its subject is broken', () => {
+  const real = workflowText();
+
+  /** Apply a needle->replacement, refusing a no-op (the CRLF/typo silent pass). */
+  const mutate = (needle, repl) => {
+    const n = real.split(needle).length - 1;
+    assert.equal(n, 1, `needle must appear exactly once, found ${n}: ${needle.slice(0, 60)}`);
+    const out = real.replace(needle, repl);
+    assert.notEqual(out, real, 'mutation was a no-op');
+    return activeLines(out);
+  };
+
+  // M1 — delete the invocation. (g)#1 must fail.
+  const m1 = mutate('node scripts/ci/synthetic-monitor-verdict.mjs \\', 'true \\');
+  assert.equal(invocationIndex(m1), -1, 'M1: the invocation check cannot see its own removal');
+
+  // M2 — keep the invocation, throw the exit code away. (g)#2 must fail.
+  const m2 = mutate('          exit "$VRC"', '          true  # swallowed');
+  assert.ok(invocationIndex(m2) >= 0, 'M2 must not disturb the invocation');
+  assert.equal(propagatesExitCode(m2), false, 'M2: a swallowed exit code reads as propagated');
+
+  // M2b — move VRC=$? off the line after the invocation (a pipe, or a stray
+  // line between, makes the captured code someone else's).
+  const m2b = mutate('          VRC=$?', '          echo "verdict done"\n          VRC=$?');
+  assert.equal(capturesExitCode(m2b), false, 'M2b: a displaced VRC=$? still reads as captured');
+
+  // M3 — THE REVIEW FINDING: drop the execution scope from the per-journey
+  // query while still claiming correlation, leaving only the ago(2h) COST
+  // bound. This is the exact shape that promoted a prior execution's
+  // UAT_REAL_FAILS line, and it must go RED.
+  const m3 = mutate(
+    "| where ContainerGroupName_s startswith '$EXEC' | where Log_s has_any",
+    '| where Log_s has_any',
+  );
+  const jAssign = correlationAssignments(m3).find((a) => a.name === 'J_CORR');
+  assert.ok(jAssign, 'M3 must leave the J_CORR assignment in place — that is the point');
+  const jq = queryFeeding(m3, jAssign.idx);
+  assert.ok(jq, 'M3: harness lost the query');
+  assert.equal(jq.includes(SCOPE_FILTER), false, 'M3: a time-window-only query still reads as execution-scoped');
+
+  // M3b — the same for the UAT_RESULT query (which had NO filter at all).
+  const m3b = mutate(
+    "| where ContainerGroupName_s startswith '$EXEC' | where Log_s contains 'UAT_RESULT'",
+    "| where Log_s contains 'UAT_RESULT'",
+  );
+  const uAssign = correlationAssignments(m3b).find((a) => a.name === 'UAT_CORR');
+  assert.ok(uAssign);
+  assert.equal(queryFeeding(m3b, uAssign.idx).includes(SCOPE_FILTER), false, 'M3b: unscoped UAT query reads as scoped');
+
+  // M4 — drop a correlation flag from the invocation. (g)#4 must fail.
+  const m4 = mutate(' --journeys-correlation "$J_CORR"', '');
+  assert.doesNotMatch(invocationCommand(m4), /--journeys-correlation/, 'M4: a dropped flag still reads as present');
+
+  // ...and every one of these predicates is TRUE on the real file, so none of
+  // the reds above is a predicate that simply never passes.
+  const now = activeLines(real);
+  assert.ok(invocationIndex(now) >= 0);
+  assert.ok(capturesExitCode(now));
+  assert.ok(propagatesExitCode(now));
+  assert.match(invocationCommand(now), /--journeys-correlation/);
+  for (const a of correlationAssignments(now)) {
+    assert.ok(queryFeeding(now, a.idx).includes(SCOPE_FILTER));
   }
 });
 
@@ -360,7 +826,112 @@ test('MUTATION: promoting UAT_FAIL to real-failure evidence flips the gated-only
     state: 'rows',
     lines: ['UAT_FAIL synthetic-journeys.uat.ts:210 › J4 :: LOOM_WAREHOUSE_BACKEND not set'],
     rc: 0,
+    // Correlated on purpose: this control is about UAT_FAIL vs UAT_REAL_FAILS,
+    // and it must not be able to pass merely because the row was discarded for
+    // an unrelated reason.
+    correlatedTo: EXEC,
   };
   assert.equal(mutant.syntheticMonitorVerdict(i).verdict, 'journeys-failed', 'mutant must over-claim');
   assert.equal(syntheticMonitorVerdict(i).verdict, 'unknown', 'the real module must not');
 });
+
+/** Build a mutant module from a single unique needle->replacement. */
+async function mutantOf(needle, repl, tag) {
+  const src = readFileSync(SCRIPT, 'utf8');
+  const n = src.split(needle).length - 1;
+  assert.equal(n, 1, `${tag}: needle must appear exactly once, found ${n}`);
+  const mutated = src.replace(needle, repl);
+  assert.notEqual(mutated, src, `${tag}: mutation was a no-op`);
+  const dir = mkdtempSync(join(tmpdir(), `synthmon-${tag}-`));
+  const p = join(dir, 'mutant.mjs');
+  writeFileSync(p, mutated);
+  return import(pathToFileURL(p).href);
+}
+
+test('MUTATION: dropping the correlation gate lets a PRIOR execution\'s line become this verdict', async () => {
+  // The literal defect the review found: rows retrieved by an unscoped query
+  // promoted to "this execution's journeys failed".
+  const mutant = await mutantOf(
+    '  const jCorrelated = jHasData && isCorrelated(execution, input?.journeys?.correlatedTo);',
+    '  const jCorrelated = jHasData; // MUTANT: any row will do',
+    'corr',
+  );
+  const i = ZERO_ROWS_FAILED();
+  i.journeys = {
+    state: 'rows',
+    lines: ['UAT_REAL_FAILS app=console crashes=[j3-editor] empties=[] infraGatedSteps=0'],
+    rc: 0,
+    correlatedTo: 'loom-synthetic-monitor-PREVIOUS',
+  };
+  assert.equal(mutant.syntheticMonitorVerdict(i).verdict, 'journeys-failed', 'the mutant must misattribute');
+  assert.equal(syntheticMonitorVerdict(i).verdict, 'unknown', 'the real module must refuse');
+  // ...and the (d) assertion is the one that catches it.
+  assert.throws(
+    () => assert.equal(mutant.syntheticMonitorVerdict(i).verdict, 'unknown'),
+    'test (d) has no teeth against an uncorrelated promotion',
+  );
+});
+
+test('MUTATION: dropping the UAT correlation gate resurrects the stale-row claim', async () => {
+  const mutant = await mutantOf(
+    '  const uatCorrelated = uatHasData && isCorrelated(execution, input?.uat?.correlatedTo);',
+    '  const uatCorrelated = uatHasData; // MUTANT: any row will do',
+    'ucorr',
+  );
+  const i = ZERO_ROWS_FAILED();
+  i.uat = { state: 'row', line: 'UAT_RESULT pass=4 fail=2 realFails=2 infraGated=0', rc: 0 };
+  assert.equal(mutant.syntheticMonitorVerdict(i).realFails, 2, 'the mutant must read the uncorrelated count');
+  assert.equal(syntheticMonitorVerdict(i).realFails, null, 'the real module must not');
+});
+
+test('MUTATION: dropping the non-data-state guard makes a zero-rows file the verdict', async () => {
+  // The CLI reads --uat-file unconditionally; this guard is the only thing
+  // that stops its contents counting when the query returned nothing.
+  const mutant = await mutantOf(
+    '  const uatLine = uatCorrelated ? (input?.uat?.line ?? null) : null;',
+    '  const uatLine = input?.uat?.line ?? null; // MUTANT: trust the file',
+    'nondata',
+  );
+  const i = ZERO_ROWS_FAILED();
+  i.uat = { state: 'zero-rows', line: 'UAT_RESULT pass=0 fail=9 realFails=9 infraGated=0', rc: 0 };
+  assert.equal(mutant.syntheticMonitorVerdict(i).verdict, 'journeys-failed', 'the mutant must trust the stray file');
+  assert.equal(syntheticMonitorVerdict(i).verdict, 'unknown', 'the real module must not');
+});
+
+test('MUTATION: a boundary-free realFails regex accepts a PREFIXED token', async () => {
+  const mutant = await mutantOf(
+    "  const m = /(?:^|\\s)realFails=(\\d+)(?:\\s|$)/.exec(line);",
+    '  const m = /realFails=(\\d+)/.exec(line); // MUTANT: no word boundaries',
+    'rf',
+  );
+  assert.equal(mutant.parseRealFails('xrealFails=3'), 3, 'the mutant must accept the prefixed token');
+  assert.equal(parseRealFails('xrealFails=3'), null, 'the real module must reject it');
+  assert.equal(mutant.parseRealFails('realFailsX=3'), null, 'both regexes reject the SUFFIX case — which is why it could not discriminate');
+});
+
+test('MUTATION: defaulting an unrecognised state resurrects the false NOT ATTEMPTED line', async () => {
+  // The pre-round-2 behaviour: any unknown state falls through the if/else
+  // chain to the terminal branch, which asserts the query was never attempted
+  // and that no workspace resolved — both false, about a query that ran.
+  const mutant = await mutantOf(
+    '  if (!VALID_STATES.has(s)) {',
+    '  if (false) { // MUTANT: accept anything and let it fall through',
+    'state',
+  );
+  const i = ZERO_ROWS_FAILED();
+  i.journeys = { state: 'row', lines: ['UAT_REAL_FAILS app=console crashes=[j1] empties=[]'], rc: 0, correlatedTo: EXEC };
+  // 'row' on the journeys side is the spelling the published type USED to
+  // allow. Under the mutant it is unrecognised-and-defaulted...
+  const bad = mutant.syntheticMonitorVerdict({ ...i, journeys: { ...i.journeys, state: 'Rows' } });
+  assert.match(
+    bad.evidence.join('\n'),
+    /Per-journey query was NOT ATTEMPTED/,
+    'the mutant must produce the false line',
+  );
+  // ...while the real module refuses rather than asserting it.
+  assert.throws(() => syntheticMonitorVerdict({ ...i, journeys: { ...i.journeys, state: 'Rows' } }), TypeError);
+  // And 'row'/'rows' both work on both sides in the real module (the round-1
+  // type/implementation mismatch).
+  assert.equal(syntheticMonitorVerdict(i).verdict, 'journeys-failed');
+});
+

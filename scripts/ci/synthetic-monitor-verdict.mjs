@@ -24,14 +24,49 @@
  * and the final verdict simply did not.
  *
  * The remediation was wrong for the same reason. Those executions went
- * Running → Failed in ~65 seconds having written NOTHING, so `ContainerAppConsoleLogs_CL`
- * and the /admin/health Journeys tab are both empty by construction: the reader
- * is sent to search an empty table. A job that dies that fast with no output is
- * failing at STARTUP — image pull, env/secret resolution, managed-identity
- * login, or a crash before the first write — which lives in the execution and
- * replica surfaces (`ContainerAppSystemLogs_CL` carries
- * "Error provisioning revision … ErrorCode: [ErrImagePull]|[Timeout]|[ContainerCrashing]"),
- * not in journey logs that were never emitted.
+ * Running → Failed in ~65 seconds having written NOTHING, so the console-log
+ * table carries no row for them: the reader is sent to search an empty table.
+ * A job that dies that fast with no output is failing at STARTUP — image pull,
+ * env/secret resolution, managed-identity login, or a crash before the first
+ * write — which lives in the execution and replica surfaces
+ * (`ContainerAppSystemLogs_CL` carries "Error provisioning revision …
+ * ErrorCode: [ErrImagePull]|[Timeout]|[ContainerCrashing]"), not in journey
+ * logs that were never emitted.
+ *
+ * SCOPE OF THAT "EMPTY" CLAIM — it is about `ContainerAppConsoleLogs_CL` and
+ * NOTHING ELSE. An earlier revision of this header also asserted the
+ * /admin/health Journeys tab was "empty by construction", which was an
+ * inference presented as a measurement — the R7 error this very module exists
+ * to remove. Measured instead: that tab is served by
+ * `app/api/admin/synthetic-runs/route.ts` → `lib/admin/synthetic-runs-reader.ts`,
+ * which lists Blob artifacts at `uat-runs/synthetic/<runId>/verdicts.ndjson`
+ * in `LOOM_UAT_RESULTS_ACCOUNT` — a DIFFERENT store, and one that returns the
+ * last N runs rather than this execution's. Zero console rows therefore
+ * establishes nothing about it, in either direction. It is left out of the
+ * no-data remediation because it is not where a startup failure's evidence is,
+ * not because it was measured to be empty.
+ *
+ * ── EVIDENCE MUST BE THIS EXECUTION'S (#4065 round 2) ──────────────────────
+ * A row is only evidence about the execution it came FROM. The ACA job carries
+ * its own 15-minute schedule trigger, so a 2-hour log window routinely spans a
+ * dozen prior executions: a query scoped only by time (or by job name) can hand
+ * this module a `UAT_REAL_FAILS` line written by execution N-9 while execution
+ * N died at startup having emitted nothing — and the verdict would then name
+ * the wrong execution as having failing journeys. That is the SAME over-claim
+ * this module removes, rebuilt on a new evidence path, so the module refuses
+ * it structurally: a data-bearing side (`row`/`rows`) may only be promoted to
+ * real-failure evidence when the caller states WHICH execution its query was
+ * scoped to, and that execution is the one under test.
+ *
+ * The workflow supplies that by scoping both queries with
+ * `ContainerAppConsoleLogs_CL | where ContainerGroupName_s startswith '<exec>'`
+ * — the correlation key Microsoft Learn's own "Query job run logs" recipe uses
+ * (`az containerapp job execution list --query "[0].name"` → `startswith`;
+ * learn.microsoft.com/azure/container-apps/jobs-get-started-cli). `ContainerGroupName_s`
+ * is the REPLICA name in that table, and a job execution's replicas are named
+ * `<execution>-<suffix>`, which is why `startswith` and not `==`.
+ * `scripts/ci/__tests__/synthetic-monitor-verdict.test.mjs` reads the workflow
+ * and fails if either query loses that filter while still claiming correlation.
  *
  * ── WHAT COUNTS AS EVIDENCE (nothing here is a guessed regex) ───────────────
  * Every token below is PINNED by the runner that emits it, so this module reads
@@ -59,7 +94,8 @@
  * ── THE VERDICTS ────────────────────────────────────────────────────────────
  *   succeeded       execution Succeeded                                exit 0
  *   journeys-failed non-Succeeded AND real-fail evidence exists        exit 1
- *   unknown         non-Succeeded AND no real-fail evidence            exit 1
+ *                   (…and that evidence is correlated to THIS execution)
+ *   unknown         non-Succeeded AND no correlated real-fail evidence exit 1
  *   not-deployed    the job is absent from this estate                 exit 0
  *
  * `unknown` keeps the NON-ZERO exit on purpose. Failing closed on UNKNOWN is
@@ -71,7 +107,14 @@
  *     --status Failed --execution loom-synthetic-monitor-06cuztq \
  *     --job loom-synthetic-monitor --resource-group rg-csa-loom-admin-centralus \
  *     --uat-state zero-rows   [--uat-file FILE]      [--uat-rc N] \
- *     --journeys-state zero-rows [--journeys-file FILE] [--journeys-rc N]
+ *     [--uat-correlation EXEC] \
+ *     --journeys-state zero-rows [--journeys-file FILE] [--journeys-rc N] \
+ *     [--journeys-correlation EXEC]
+ *
+ * `--uat-correlation` / `--journeys-correlation` name the execution the
+ * corresponding query was SCOPED to. Omit them and the rows are treated as
+ * uncorrelated — readable as evidence of nothing, which is the honest reading
+ * of a row that could have come from any execution.
  *
  * Log text reaches this process through FILES and argv, never through a shell
  * string that is re-evaluated — a Playwright error line carrying a backtick or
@@ -81,10 +124,74 @@
  * Tests: node --test scripts/ci/__tests__/synthetic-monitor-verdict.test.mjs
  */
 
-/** @typedef {'row'|'zero-rows'|'query-failed'|'not-attempted'} QueryState */
+/**
+ * The states a result query can be in.
+ *
+ * `row` and `rows` are the same concept — the query returned data — and both
+ * spellings are accepted on both sides. The published type used to omit `rows`
+ * while the code required it, so a caller who followed the contract fell into
+ * the terminal `else` and was told "NOT ATTEMPTED (no Log Analytics workspace
+ * resolved)" about a query that had run and returned rows. A false statement
+ * produced by a type/implementation mismatch is still a false statement.
+ *
+ * @typedef {'row'|'rows'|'zero-rows'|'query-failed'|'not-attempted'} QueryState
+ */
+
+/** Every state this module recognises. Anything else is a caller bug, loudly. */
+const VALID_STATES = new Set(['row', 'rows', 'zero-rows', 'query-failed', 'not-attempted']);
+/** The two spellings that mean "the query came back with data". */
+const DATA_STATES = new Set(['row', 'rows']);
+/** The placeholder used when no --execution was supplied — never correlatable. */
+const UNKNOWN_EXECUTION = '<unknown execution>';
 
 /**
+ * Coerce + VALIDATE a query state. An unrecognised value throws rather than
+ * falling through to a default, because every default here is a factual claim
+ * about a query, and a claim derived from a typo is exactly the class this
+ * module exists to remove.
+ *
+ * @param {unknown} v
+ * @param {'UAT_RESULT'|'per-journey'} which
+ * @returns {QueryState}
+ */
+function normalizeQueryState(v, which) {
+  const s = v === undefined || v === null || v === '' ? 'not-attempted' : String(v);
+  if (!VALID_STATES.has(s)) {
+    throw new TypeError(
+      `[synthetic-monitor] the ${which} query state ${JSON.stringify(s)} is not one of ` +
+        `${[...VALID_STATES].join(' | ')}. Refusing to guess: an unrecognised state must not ` +
+        'render as "NOT ATTEMPTED", which would assert something about the query that was never measured.',
+    );
+  }
+  return /** @type {QueryState} */ (s);
+}
+
+/**
+ * Is this side's data actually about the execution under test?
+ *
+ * A row is evidence about the execution it came FROM. The caller states which
+ * execution its query was scoped to; anything else — absent, blank, or a
+ * different execution — is UNCORRELATED and may not be promoted to a claim
+ * about this run's journeys.
+ *
+ * @param {string} execution the execution under test
+ * @param {unknown} scopedTo what the caller says the query was scoped to
+ * @returns {boolean}
+ */
+function isCorrelated(execution, scopedTo) {
+  if (typeof scopedTo !== 'string') return false;
+  const s = scopedTo.trim();
+  if (s === '') return false;
+  return s === execution && execution !== '' && execution !== UNKNOWN_EXECUTION;
+}
+
+/** The placeholder used when no --execution was supplied — never correlatable. */
+/**
  * Pull `realFails=<n>` out of a UAT_RESULT summary line.
+ *
+ * The boundaries on both sides are load-bearing: `realFails` must be a whole
+ * token. `xrealFails=3` (a prefix) and `realFailsX=3` (a suffix) are both
+ * something else's field and yield null, not 3.
  *
  * @param {string|null|undefined} line
  * @returns {number|null} the count, or null when the line/token is absent
@@ -115,23 +222,43 @@ function toLines(v) {
  *   execution?: string,
  *   jobName?: string,
  *   resourceGroup?: string,
- *   uat?: {state: QueryState, line?: string|null, rc?: number|null},
- *   journeys?: {state: QueryState, lines?: string[]|string|null, rc?: number|null},
+ *   uat?: {state: QueryState, line?: string|null, rc?: number|null, correlatedTo?: string|null},
+ *   journeys?: {state: QueryState, lines?: string[]|string|null, rc?: number|null, correlatedTo?: string|null},
  * }} input
  * @returns {{verdict: 'succeeded'|'journeys-failed'|'unknown'|'not-deployed',
  *            reason: string, exitCode: number, realFails: number|null,
  *            evidence: string[], message: string, remediation: string[]}}
+ * @throws {TypeError} on an unrecognised query state — never a silent default.
  */
 export function syntheticMonitorVerdict(input) {
   const status = String(input?.status ?? 'Unknown');
-  const execution = input?.execution || '<unknown execution>';
+  const execution = input?.execution || UNKNOWN_EXECUTION;
   const jobName = input?.jobName || 'loom-synthetic-monitor';
   const rg = input?.resourceGroup || 'rg-csa-loom-admin-centralus';
 
-  const uatState = /** @type {QueryState} */ (input?.uat?.state ?? 'not-attempted');
-  const uatLine = uatState === 'row' ? (input?.uat?.line ?? null) : null;
-  const jState = /** @type {QueryState} */ (input?.journeys?.state ?? 'not-attempted');
-  const jLines = jState === 'rows' ? toLines(input?.journeys?.lines) : [];
+  const uatState = normalizeQueryState(input?.uat?.state, 'UAT_RESULT');
+  const jState = normalizeQueryState(input?.journeys?.state, 'per-journey');
+
+  // Correlation is checked for the DATA states only: "zero rows" and "the query
+  // failed" say nothing about any execution, so there is nothing to mis-attribute.
+  const uatHasData = DATA_STATES.has(uatState);
+  const jHasData = DATA_STATES.has(jState);
+  const uatCorrelated = uatHasData && isCorrelated(execution, input?.uat?.correlatedTo);
+  const jCorrelated = jHasData && isCorrelated(execution, input?.journeys?.correlatedTo);
+
+  // Data that is not correlated to THIS execution is not this execution's
+  // evidence. It is still reported (an operator wants to know it exists) — it
+  // simply cannot move the verdict.
+  const uatLine = uatCorrelated ? (input?.uat?.line ?? null) : null;
+  const jLines = jCorrelated ? toLines(input?.journeys?.lines) : [];
+  const rawUatLine = typeof input?.uat?.line === 'string' ? input.uat.line.trim() : '';
+  const uncorrelatedJLines = jHasData && !jCorrelated ? toLines(input?.journeys?.lines) : [];
+  // A data state whose payload is EMPTY is not discarded data — there was
+  // nothing to discard. Naming it "DISCARDED" would be its own small R7.
+  const uatDiscarded = uatHasData && !uatCorrelated && rawUatLine !== '';
+  const uatEmptyRow = uatHasData && rawUatLine === '';
+  const jDiscarded = uncorrelatedJLines.length > 0;
+  const jEmptyRows = jHasData && toLines(input?.journeys?.lines).length === 0;
 
   if (status === 'NotDeployed') {
     return {
@@ -150,11 +277,23 @@ export function syntheticMonitorVerdict(input) {
   const realFails = parseRealFails(uatLine);
   const realFailLines = jLines.filter((l) => REAL_FAILS_LINE.test(l));
   const anyFailLines = jLines.filter((l) => ANY_FAIL_LINE.test(l));
+  const hasUncorrelatedData = uatDiscarded || jDiscarded;
 
   /** Evidence lines, in the order an operator should read them. */
   const evidence = [];
-  if (uatState === 'row') evidence.push(`UAT_RESULT row: ${uatLine}`);
-  else if (uatState === 'query-failed') {
+  if (uatCorrelated && !uatEmptyRow) evidence.push(`UAT_RESULT row (scoped to ${execution}): ${uatLine}`);
+  else if (uatEmptyRow) {
+    evidence.push(
+      'UAT_RESULT state says a row was returned but its payload is EMPTY — there is nothing to read, ' +
+        'and nothing is claimed from it.',
+    );
+  } else if (uatDiscarded) {
+    evidence.push(
+      `UAT_RESULT row DISCARDED — the query was not scoped to ${execution} ` +
+        `(scoped to: ${JSON.stringify(input?.uat?.correlatedTo ?? null)}), so the row may belong to ` +
+        'any prior execution of this job and is not evidence about this one.',
+    );
+  } else if (uatState === 'query-failed') {
     evidence.push(
       `UAT_RESULT query FAILED (rc=${input?.uat?.rc ?? '?'}) — its silence is UNKNOWN, not zero failures.`,
     );
@@ -163,8 +302,19 @@ export function syntheticMonitorVerdict(input) {
   } else {
     evidence.push('UAT_RESULT query was NOT ATTEMPTED (no Log Analytics workspace resolved).');
   }
-  if (jState === 'rows') evidence.push(`Journey console lines retrieved: ${jLines.length}`);
-  else if (jState === 'query-failed') {
+  if (jCorrelated && !jEmptyRows) evidence.push(`Journey console lines retrieved for ${execution}: ${jLines.length}`);
+  else if (jEmptyRows) {
+    evidence.push(
+      'Per-journey state says rows were returned but the payload is EMPTY — there is nothing to read, ' +
+        'and nothing is claimed from it.',
+    );
+  } else if (jDiscarded) {
+    evidence.push(
+      `Journey console lines DISCARDED (${uncorrelatedJLines.length}) — the query was not scoped to ${execution} ` +
+        `(scoped to: ${JSON.stringify(input?.journeys?.correlatedTo ?? null)}). This job runs on its own 15-minute ` +
+        'schedule, so an unscoped window routinely contains other executions lines.',
+    );
+  } else if (jState === 'query-failed') {
     evidence.push(
       `Per-journey query FAILED (rc=${input?.journeys?.rc ?? '?'}) — its silence is UNKNOWN, not "no journey failed".`,
     );
@@ -216,37 +366,56 @@ export function syntheticMonitorVerdict(input) {
   const noJourneyDataAtAll = jLines.length === 0;
   const gatedOnly = anyFailLines.length > 0 && realFailLines.length === 0 && (realFails === null || realFails === 0);
 
-  const remediation = noJourneyDataAtAll
+  const remediation = hasUncorrelatedData
     ? [
-        // The ~65s no-output shape: diagnose the EXECUTION, not journey logs
-        // that were never written.
+        // Re-run the read scoped to THIS execution. Learn's own job-run log
+        // recipe uses exactly this key.
+        `az monitor log-analytics query -w <workspace> --analytics-query "ContainerAppConsoleLogs_CL | where ContainerGroupName_s startswith '${execution}' | order by TimeGenerated asc | project TimeGenerated, Log_s"  # THIS execution only — the rows above were not scoped to it`,
+        `az containerapp job logs show -n ${jobName} -g ${rg} --container ${jobName} --execution ${execution} --tail 300`,
         `az containerapp job execution show -n ${jobName} -g ${rg} --job-execution-name ${execution}`,
-        `az containerapp job replica list -n ${jobName} -g ${rg} --execution ${execution} -o table`,
-        `az containerapp job logs show -n ${jobName} -g ${rg} --container ${jobName} --execution ${execution} --tail 300`,
-        `az monitor log-analytics query -w <workspace> --analytics-query "ContainerAppSystemLogs_CL | where ContainerAppName_s == '${jobName}' | where TimeGenerated > ago(2h) | order by TimeGenerated asc | project TimeGenerated, Log_s"  # carries "Error provisioning revision … ErrorCode: [ErrImagePull]|[Timeout]|[ContainerCrashing]"`,
-        `az containerapp job show -n ${jobName} -g ${rg} --query "properties.template.containers[].{image:image,env:env[].name}"  # image tag actually referenced + env/secretref names`,
       ]
-    : [
-        `az monitor log-analytics query -w <workspace> --analytics-query "ContainerAppConsoleLogs_CL | where ContainerGroupName_s startswith '${execution}' | order by TimeGenerated asc | project Log_s"  # the FULL log for THIS execution, not a 2h window`,
-        `az containerapp job logs show -n ${jobName} -g ${rg} --container ${jobName} --execution ${execution} --tail 300`,
-      ];
+    : noJourneyDataAtAll
+      ? [
+          // The ~65s no-output shape: diagnose the EXECUTION, not journey logs
+          // that were never written.
+          `az containerapp job execution show -n ${jobName} -g ${rg} --job-execution-name ${execution}`,
+          `az containerapp job replica list -n ${jobName} -g ${rg} --execution ${execution} -o table`,
+          `az containerapp job logs show -n ${jobName} -g ${rg} --container ${jobName} --execution ${execution} --tail 300`,
+          `az monitor log-analytics query -w <workspace> --analytics-query "ContainerAppSystemLogs_CL | where ContainerAppName_s == '${jobName}' | where TimeGenerated > ago(2h) | order by TimeGenerated asc | project TimeGenerated, Log_s"  # carries "Error provisioning revision … ErrorCode: [ErrImagePull]|[Timeout]|[ContainerCrashing]"`,
+          `az containerapp job show -n ${jobName} -g ${rg} --query "properties.template.containers[].{image:image,env:env[].name}"  # image tag actually referenced + env/secretref names`,
+        ]
+      : [
+          `az monitor log-analytics query -w <workspace> --analytics-query "ContainerAppConsoleLogs_CL | where ContainerGroupName_s startswith '${execution}' | order by TimeGenerated asc | project Log_s"  # the FULL log for THIS execution, not a 2h window`,
+          `az containerapp job logs show -n ${jobName} -g ${rg} --container ${jobName} --execution ${execution} --tail 300`,
+        ];
 
-  const whyUnknown = noJourneyDataAtAll
-    ? 'BOTH result queries came back without a single journey row, so nothing is known about J1..J6 — ' +
-      'not which one failed, not whether any of them ran. An execution that reaches a terminal state ' +
-      'having emitted no console output at all is failing at STARTUP (image pull, env/secret resolution, ' +
-      'managed-identity login, or a crash before the first write), which journey logs cannot show you ' +
-      'because they do not exist.'
-    : gatedOnly
-      ? `journey lines were retrieved (${jLines.length}, including ${anyFailLines.length} UAT_FAIL) but NOT one UAT_REAL_FAILS ` +
-        'line and no realFails= count above zero. UAT_FAIL covers honest infra gates too, so it does not ' +
-        'establish a real failure — which of the two this is, is unknown from the data in hand.'
-      : `journey lines were retrieved (${jLines.length}) but none of them carries the runner's real-failure ` +
-        "markers (UAT_REAL_FAILS, or a realFails= count above zero), so the journeys' outcome is not established.";
+  const whyUnknown = hasUncorrelatedData
+    ? 'result rows WERE retrieved, but the query that produced them was not scoped to this execution, so they ' +
+      'cannot be attributed to it. This job also runs on its own 15-minute schedule, which means an unscoped ' +
+      "window normally contains several OTHER executions' lines — promoting one of those would name the wrong " +
+      'execution as having failing journeys, which is the same over-claim this verdict exists to remove.'
+    : noJourneyDataAtAll
+      ? 'BOTH result queries came back without a single journey row, so nothing is known about J1..J6 — ' +
+        'not which one failed, not whether any of them ran. An execution that reaches a terminal state ' +
+        'having emitted no console output at all is failing at STARTUP (image pull, env/secret resolution, ' +
+        'managed-identity login, or a crash before the first write), which journey logs cannot show you ' +
+        'because they do not exist.'
+      : gatedOnly
+        ? `journey lines were retrieved (${jLines.length}, including ${anyFailLines.length} UAT_FAIL) but NOT one UAT_REAL_FAILS ` +
+          'line and no realFails= count above zero. UAT_FAIL covers honest infra gates too, so it does not ' +
+          'establish a real failure — which of the two this is, is unknown from the data in hand.'
+        : `journey lines were retrieved (${jLines.length}) but none of them carries the runner's real-failure ` +
+          "markers (UAT_REAL_FAILS, or a realFails= count above zero), so the journeys' outcome is not established.";
 
   return {
     verdict: 'unknown',
-    reason: noJourneyDataAtAll ? 'no-journey-data' : gatedOnly ? 'gated-fails-only' : 'no-real-fail-markers',
+    reason: hasUncorrelatedData
+      ? 'uncorrelated-evidence'
+      : noJourneyDataAtAll
+        ? 'no-journey-data'
+        : gatedOnly
+          ? 'gated-fails-only'
+          : 'no-real-fail-markers',
     exitCode: 1,
     realFails,
     evidence,
@@ -297,7 +466,9 @@ async function main() {
     console.error(
       'usage: node scripts/ci/synthetic-monitor-verdict.mjs --status S [--execution E] [--job J] ' +
         '[--resource-group RG] [--uat-state row|zero-rows|query-failed|not-attempted] [--uat-file F] [--uat-rc N] ' +
-        '[--journeys-state rows|zero-rows|query-failed|not-attempted] [--journeys-file F] [--journeys-rc N]',
+        '[--uat-correlation EXEC] ' +
+        '[--journeys-state rows|zero-rows|query-failed|not-attempted] [--journeys-file F] [--journeys-rc N] ' +
+        '[--journeys-correlation EXEC]',
     );
     process.exit(2);
   }
@@ -313,11 +484,15 @@ async function main() {
       state: /** @type {QueryState} */ (a['uat-state'] || 'not-attempted'),
       line: readIf(a['uat-file']).replace(/\r/g, '').trim(),
       rc: a['uat-rc'] !== undefined ? Number(a['uat-rc']) : null,
+      // The execution the UAT_RESULT query was scoped to. Absent ⇒ uncorrelated
+      // ⇒ the row cannot become a claim about this execution's journeys.
+      correlatedTo: a['uat-correlation'] ?? null,
     },
     journeys: {
       state: /** @type {QueryState} */ (a['journeys-state'] || 'not-attempted'),
       lines: readIf(a['journeys-file']).replace(/\r/g, ''),
       rc: a['journeys-rc'] !== undefined ? Number(a['journeys-rc']) : null,
+      correlatedTo: a['journeys-correlation'] ?? null,
     },
   });
 
