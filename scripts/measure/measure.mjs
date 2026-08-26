@@ -285,14 +285,19 @@ export function run(bin, args, { allowNonZero = false, timeoutMs = 600000, retri
     //     ubuntu-latest, 9 self-hosted Linux). The cmd.exe matrix — 8 injection
     //     payloads + 1 fidelity row, plus 4 refusal classes (`%`, `\n`, `\r`,
     //     `\r\n`) — is `{ skip: notWin }`, so on every lane this repo has it
-    //     SKIPS. Measured with process.platform forced to 'linux': 12 pass,
-    //     4 SKIPPED.
+    //     SKIPS. Measured 2026-08-26 with process.platform forced to 'linux':
+    //     rc=0, 18 tests, 13 pass, 5 SKIPPED. The fifth skip is an artefact of
+    //     the FORGERY and not a CI gap: `PRODUCTION PATH` spawns a real child,
+    //     and a forged platform does not change the OS underneath, so it stands
+    //     down rather than fail for the wrong reason. On a real ubuntu runner
+    //     process.platform and os.type() agree and it executes — INFERRED from
+    //     the skip predicate, not observed; no Linux host was available here.
     //   - What DOES run on those lanes: the same payloads through the same
     //     `buildCmdLine`, checked against cmd.exe's own metacharacter-liveness
-    //     rule; the `%` and CR/LF refusals at the buildCmdLine layer; and three
+    //     rule; the `%` and CR/LF refusals at the buildCmdLine layer; and four
     //     `SHAPE:` assertions that pin this options object, the outer quote pair
-    //     below, and canonicalBinary's return — three properties no behavioural
-    //     assertion in JavaScript can distinguish.
+    //     below, canonicalBinary's return, and spawnPlan's `bin` reads — four
+    //     properties no behavioural assertion in JavaScript can distinguish.
     //
     // So: the QUOTING is guarded on every lane; cmd.exe's actual behaviour is
     // evidenced locally on win32 only. Closing that needs a windows-latest job,
@@ -300,9 +305,45 @@ export function run(bin, args, { allowNonZero = false, timeoutMs = 600000, retri
     //
     // The regression that would make this a TRUE positive is named in #3985: a
     // path where the spawned executable is NOT drawn from the frozen
-    // ALLOWED_BINARIES table. That is pinned by the `TAINT:` tests in
-    // measure.test.mjs and by this suppression's sibling assertions — the
-    // rationale is backed by executable guards, not by this paragraph.
+    // ALLOWED_BINARIES table. It took two rounds to hold that shut. The first
+    // revision pinned only what `canonicalBinary` RETURNS, and an independent
+    // review restored the whole edge with one line at the CALL SITE
+    // (`canonicalBinary(bin); const file = bin;`) — the helper still returns the
+    // table's literal and spawnPlan simply stops using it. That arm was re-run
+    // here against the OLD suite and SURVIVED: rc=0, 16 pass/0 fail on win32 and
+    // rc=0, 12 pass/4 skipped forced-linux, identical to that revision's own
+    // baseline. So, precisely, what pins it now:
+    //
+    //   - `PRODUCTION PATH: run() spawns the TABLE literal…` drives THIS
+    //     function with its real defaults and makes the executable's identity
+    //     OBSERVABLE — the child reports the name it was invoked under, and the
+    //     call-site arm fails it with `'GH' !== 'gh'`. It reaches only the
+    //     branch the host platform takes.
+    //   - `SHAPE: spawnPlan reads bin ONLY to canonicalise it…` pins the
+    //     remaining branches by counting `bin` reads in spawnPlan's source, so a
+    //     read this comment's author never imagined still fails.
+    //
+    // They are not redundant and neither subsumes the other: the behavioural one
+    // reaches only the host's branch but proves the real dataflow edge; the
+    // SHAPE one reaches every branch but proves only structure. Be exact about
+    // which of them a CI lane gets, because the two columns are NOT the same
+    // thing. In the forced-linux column MEASURED here, only the SHAPE assertion
+    // catches — the behavioural one stands down, because the forgery does not
+    // change the OS. On a REAL ubuntu runner process.platform and os.type()
+    // agree, the skip predicate is false, and BOTH should execute — but that is
+    // INFERRED from reading the predicate and has never been observed, because
+    // no Linux host was available to this lane. Until one is, the only CI
+    // guarantee measured end to end is the SHAPE one.
+    //
+    // MEASURED 2026-08-26, isolated copies, green baseline verified first
+    // (win32 rc=0 18/0/0; forced-linux rc=0 13 pass/5 skipped), every needle
+    // asserted to match exactly once against the file's own CRLF: the call-site
+    // arm, the direct-branch `cmd: bin` arm, and the `buildCmdLine(bin, args)`
+    // arm all go rc=1 in BOTH columns. Renaming spawnPlan's `bin` parameter —
+    // a behaviour-preserving refactor that drops the read count to zero — also
+    // goes rc=1, so the SHAPE assertion fails closed rather than reading absence
+    // as a pass. What is NOT established is any of these on a REAL Linux host —
+    // see the arm table in the suite's header, which says so.
     //
     // The marker below is placed per the CodeQL convention (the line BEFORE the
     // alert). Do not read it as a closed control: .github/workflows/codeql.yml
