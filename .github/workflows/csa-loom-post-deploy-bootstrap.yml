@@ -512,7 +512,20 @@ jobs:
           if [ -z "$CID" ]; then
             # resolve-msal-client-id.sh logs to stderr and prints ONLY the id on
             # stdout, so its diagnostics stay visible in the job log — no 2>/dev/null.
-            CID="$(bash scripts/csa-loom/resolve-msal-client-id.sh --rg "$ADMIN_RG" || true)"
+            # NOT `|| true`: the resolver now distinguishes ABSENT (exit 0, empty — a
+            # genuinely fresh subscription) from UNKNOWN (exit 3 — a read FAILED).
+            # Swallowing exit 3 renders an empty LOOM_MSAL_CLIENT_ID, and a declarative
+            # ACA template DROPS every env var it does not declare, so that takes sign-in
+            # dark and empties LOOM_UNITY_CLIENT_ID / LOOM_UNITY_AUDIENCE with it.
+            if CID="$(bash scripts/csa-loom/resolve-msal-client-id.sh --rg "$ADMIN_RG")"; then
+              RESOLVE_RC=0
+            else
+              RESOLVE_RC=$?
+            fi
+            if [ "$RESOLVE_RC" -ne 0 ]; then
+              echo "::error::Could not read this estate's Entra app registration (resolver exit $RESOLVE_RC). This is NOT 'no registration exists' — the reads themselves failed. Proceeding would render an empty LOOM_MSAL_CLIENT_ID, drop it from the Container App and take sign-in dark. Re-run once the read succeeds."
+              exit 1
+            fi
             CID="$(printf '%s' "$CID" | tr -d '\r')"
           fi
           # NO `2>/dev/null` ON ANY QUERY BELOW, deliberately. The dominant defect
