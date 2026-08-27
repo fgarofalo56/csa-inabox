@@ -30,6 +30,7 @@ import {
   runPipeline,
 } from '@/lib/azure/adf-client';
 import { resolveAbfssRoot } from '@/lib/azure/adls-client';
+import { dfsUrl } from '@/lib/azure/cloud-endpoints';
 import {
   listMirroredDatabases,
   createMirroredDatabase,
@@ -122,14 +123,19 @@ async function provisionAdfCdc(input: any, steps: string[]): Promise<ProvisionRe
     steps.push(`Linked service '${srcLs}' → ${server}/${database} (factory MI auth).`);
 
     // 2. Sink linked service — ADLS Gen2 via the factory's managed identity.
+    //    The DFS host comes from `dfsUrl()` (cloud-endpoints.ts), never a
+    //    literal. This line used to hard-code the Commercial DFS host, so every
+    //    GCC-High / IL5 / DoD mirror bound to a hostname that does not resolve in
+    //    those boundaries and the Copy activity failed at run time on an estate
+    //    whose lake was fine (cloud-parity.md).
     await upsertLinkedService(sinkLs, {
       name: sinkLs,
       properties: {
         type: 'AzureBlobFS',
-        typeProperties: { url: `https://${adlsAccount}.dfs.core.windows.net` },
+        typeProperties: { url: dfsUrl(adlsAccount) },
       },
     } as any);
-    steps.push(`Linked service '${sinkLs}' → ${adlsAccount}.dfs.core.windows.net (factory MI auth).`);
+    steps.push(`Linked service '${sinkLs}' → ${dfsUrl(adlsAccount)} (factory MI auth).`);
 
     // 3. One source+sink dataset + copy activity per mounted table.
     const useTables = tables.length ? tables : ['dbo.*'];

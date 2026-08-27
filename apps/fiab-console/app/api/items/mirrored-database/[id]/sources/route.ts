@@ -21,6 +21,7 @@ import { authorizeItemWorkspace } from '@/lib/auth/workspace-guard';
 import { itemsContainer } from '@/lib/azure/cosmos-client';
 import type { WorkspaceItem } from '@/lib/types/workspace';
 import { loadConnection } from '@/lib/azure/connections-store';
+import { mirrorBindingMismatch } from '@/lib/azure/connection-auth';
 import { MIRROR_SQL_FAMILY, MIRROR_PG_FAMILY, MIRROR_COSMOS_FAMILY } from '@/lib/azure/mirror-engine';
 
 export const runtime = 'nodejs';
@@ -115,6 +116,16 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
     const { resource: existing } = await items.item((await ctx.params).id, workspaceId).read<WorkspaceItem>();
     if (!existing || existing.itemType !== 'mirrored-database') return apiError('mirrored database not found', 404);
     const state = (existing.state || {}) as Record<string, any>;
+
+    // Refuse to PERSIST a binding whose source type contradicts its connection.
+    // Checked against the EFFECTIVE connection (the body's, else the one already
+    // stored), because changing only the source type — or only the connection —
+    // produces the same contradiction as setting both at once.
+    const effectiveConnectionId = connectionId !== undefined ? connectionId : state.connectionId;
+    {
+      const mismatch = await mirrorBindingMismatch(s.claims.oid, sourceType, effectiveConnectionId);
+      if (mismatch) return apiError(mismatch.message, 400);
+    }
 
     const nextState: Record<string, any> = {
       ...state,

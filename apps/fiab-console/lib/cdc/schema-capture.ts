@@ -21,6 +21,7 @@
  */
 import type { SchemaMap, EngineSourceConfig } from './connector-plane';
 import { MIRROR_SQL_FAMILY, MIRROR_PG_FAMILY } from '@/lib/azure/mirror-engine';
+import { isMirrorConnectionCompatible } from '@/lib/azure/mirror-source-compat';
 import { tsql } from '@/lib/sql/trusted-sql';
 
 /** Cap the captured surface so a pathological source can't bloat the fingerprint. */
@@ -45,9 +46,30 @@ function scopeToSelection(map: SchemaMap, source: EngineSourceConfig): SchemaMap
 /**
  * Capture the connector source's `schema.table → [columns]` map. Best-effort:
  * any read failure or an un-captured (ADF-copy) family returns `{}`.
+ *
+ * REFUSES A MIS-TYPED SOURCE BEFORE DIALLING. This is the SIXTH surface that
+ * reached `azure-sql-client`'s hostname-constructing ternary
+ * (`server.includes('.') ? server : `${server}.${suffix}``): a connector typed
+ * `sqlserver` with a Snowflake connection bound would have its account
+ * identifier turned into a `<account>.<azure-sql-suffix>` host and dialled on
+ * the TDS port. CDC kind `sqlserver` maps into MIRROR_SQL_FAMILY, and connector
+ * validation checks `connectionId` FORMAT only — never its type — so the
+ * mismatched pair is creatable there.
+ *
+ * The check lives HERE, at the point of dial, rather than only in the caller,
+ * so a SEVENTH caller cannot reintroduce it. That matters because the refusal
+ * message this platform now shows says "no request was sent to either system —
+ * this is not a network, DNS, or firewall problem"; a path that dials anyway
+ * makes that message FALSE, which is the exact R7 defect the guard exists to
+ * remove. A message whose truth depends on which caller ran is not a fix.
+ *
+ * Returns `{}` (the established best-effort contract) rather than throwing —
+ * capture never blocks Start, and the mismatch is already surfaced with its own
+ * message by the engine and the routes.
  */
 export async function captureSourceSchema(source: EngineSourceConfig): Promise<SchemaMap> {
   try {
+    if (!isMirrorConnectionCompatible(source.sourceType, source.connType)) return {};
     if (MIRROR_PG_FAMILY.has(source.sourceType)) return scopeToSelection(await capturePostgres(source), source);
     if (MIRROR_SQL_FAMILY.has(source.sourceType)) return scopeToSelection(await captureSql(source), source);
     return {};

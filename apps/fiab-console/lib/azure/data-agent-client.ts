@@ -538,7 +538,7 @@ export async function chatGrounded(cfg: DataAgentConfig, history: ChatTurn[], qu
       const only = cfg.sources.length === 1 ? cfg.sources[0] : undefined;
       const toolType = tool.type?.trim().toLowerCase();
       const src = cfg.sources.find((s) => s.name && tool.source && s.name.toLowerCase() === tool.source.toLowerCase())
-        || (only && (!toolType || toolType === only.type.toLowerCase()) ? only : undefined)
+        || (only && (!toolType || toolType === only.type?.trim().toLowerCase()) ? only : undefined)
         || (tool.type ? { id: tool.source, type: tool.type as DataAgentSource['type'], name: tool.source } : undefined);
       if (!src) { tool.executed = false; tool.gate = 'Source not found on this agent.'; continue; }
       const exec: SourceExecution = await executeSourceQuery(src, tool.query, ctx);

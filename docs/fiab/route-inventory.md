@@ -13,11 +13,11 @@ verdict is DERIVED, not name-matched — see "How the owner column is decided".
 
 | Metric | Count |
 | --- | ---: |
-| Total routes | 1687 |
+| Total routes | 1688 |
 | Public (no session) | 58 |
 | Session-only | 647 |
 | Owner-scoped | 675 |
-| Admin | 307 |
+| Admin | 308 |
 | Unknown (generator fails) | 0 |
 | Gated (backend config) | 496 |
 | Areas | 122 |
@@ -207,6 +207,7 @@ dispatch is invisible to it. Full limits: `scripts/ci/_route-backends.mjs`.
 | `admin/brain/graph/route.ts` | GET | admin |  | ARM, Container Apps, Resource Graph, Retail Prices API |
 | `admin/brain/history/route.ts` | GET POST | admin |  | ARM, Container Apps, Resource Graph |
 | `admin/brain/proposals/route.ts` | POST | admin |  | Azure Monitor, Cosmos |
+| `admin/brain/synapses/route.ts` | GET | admin |  | — |
 | `admin/capacity/chargeback/route.ts` | GET | admin |  | ARM, Azure Cache for Redis, Cosmos, Cost Management |
 | `admin/capacity/cost/route.ts` | GET | admin |  | ARM, Azure Cache for Redis, Cosmos, Cost Management, Microsoft Graph |
 | `admin/capacity/guardrails/route.ts` | GET PUT | admin |  | Azure Monitor, Cosmos |
@@ -2416,7 +2417,7 @@ dispatch is invisible to it. Full limits: `scripts/ci/_route-backends.mjs`.
 
 ## Authorization resolvers (derived)
 
-184 function(s) across 83 module(s) reach an owner / workspace-ACL
+186 function(s) across 83 module(s) reach an owner / workspace-ACL
 decision. Derived by `scripts/ci/_route-auth-scope.mjs` from the seeds above —
 nothing here is hand-maintained. A change to this list in a diff means the
 authorization surface moved.
@@ -2469,7 +2470,7 @@ authorization surface moved.
 | `apps/fiab-console/lib/azure/agent-memory-client.ts` | `deleteThread`, `getThread` |
 | `apps/fiab-console/lib/azure/agent-mesh-run.ts` | `agentConfig` |
 | `apps/fiab-console/lib/azure/attached-services-store.ts` | `applyIntegrationResults`, `loadAttachedService` |
-| `apps/fiab-console/lib/azure/connection-auth.ts` | `resolvePgAuthDescribed`, `resolveSqlAuth`, `resolveSqlAuthDescribed` |
+| `apps/fiab-console/lib/azure/connection-auth.ts` | `mirrorBindingMismatch`, `resolveConnectionType`, `resolvePgAuthDescribed`, `resolveSqlAuth`, `resolveSqlAuthDescribed` |
 | `apps/fiab-console/lib/azure/connections-store.ts` | `loadConnection` |
 | `apps/fiab-console/lib/azure/copilot-orchestrator.ts` | `buildDefaultRegistry`, `updateSessionMeta` |
 | `apps/fiab-console/lib/azure/feature-store-item.ts` | `loadFeatureTableItem`, `persistFeatureTableItem`, `resolveFeatureTableItem` |
@@ -2524,7 +2525,7 @@ silently downgrading the route.
 
 ## Backend signals (derived)
 
-446 module(s) ORIGINATE a backend label — the derivation read an
+447 module(s) ORIGINATE a backend label — the derivation read an
 Azure identifier out of them. Every other route/module below inherits through the
 call graph. Nothing in this section is a Loom module name someone typed: the
 modules are derived, and only the Microsoft-owned identifier vocabulary is seeded.
@@ -3026,6 +3027,8 @@ caps the NUMBER of cuts at three; it does not bound what one cut can hide.
 | `apps/fiab-console/lib/azure/workspace-grants.ts` | Azure RBAC, Azure Storage, Cosmos, Event Hubs |
 | `apps/fiab-console/lib/azure/workspace-identity-client.ts` | Azure RBAC, Managed Identity |
 | `apps/fiab-console/lib/azure/workspace-roles-client.ts` | Azure RBAC, Fabric |
+| `apps/fiab-console/lib/brain/cost/derived.ts` | Container Apps |
+| `apps/fiab-console/lib/brain/cost/rate-card.ts` | Retail Prices API |
 | `apps/fiab-console/lib/brain/detectors/cost-model.ts` | Retail Prices API |
 | `apps/fiab-console/lib/brain/history/cosmos-store.ts` | Cosmos |
 | `apps/fiab-console/lib/catalog/item-types/azure-ai-foundry.ts` | AML |
@@ -3177,7 +3180,6 @@ caps the NUMBER of cuts at three; it does not bound what one cut can hide.
 | `apps/fiab-console/lib/install/provisioners/kql-db.ts` | ADX |
 | `apps/fiab-console/lib/install/provisioners/lakehouse.ts` | Azure Storage, Fabric |
 | `apps/fiab-console/lib/install/provisioners/logic-app.ts` | Logic Apps |
-| `apps/fiab-console/lib/install/provisioners/mirrored-database.ts` | ADLS |
 | `apps/fiab-console/lib/install/provisioners/mirrored-databricks.ts` | Databricks |
 | `apps/fiab-console/lib/install/provisioners/notebook.ts` | Synapse |
 | `apps/fiab-console/lib/install/provisioners/prompt-flow.ts` | AML |
