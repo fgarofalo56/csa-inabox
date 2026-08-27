@@ -2927,6 +2927,26 @@ module consoleCosmos 'loom-console-cosmos.bicep' = if (deployConsoleCosmos && !e
     requireCmk: cosmosRequireCmk
     cmkKeyUri: cosmosCmkKeyUri
     cmkIdentityId: cosmosCmkIdentityId
+    // GOV BRAIN-SCAN DATA-PLANE GRANT (Refs #3430, Refs #4014, Refs #4051).
+    // The Gov `loom-brain-scan` job runs on `ubuntu-latest`, which has no
+    // managed identity, so it authenticates as THIS deploy principal — and with
+    // disableLocalAuth=true on that account, AAD-RBAC is its only data-plane
+    // path. The module grants it metadata-read at the account and Data
+    // Contributor on the Brain CONTAINERS only; see its header for why not
+    // account or database scope.
+    //
+    // Reuses `deployerIsInteractiveUser` (declared with the tenant-admin
+    // fallback above, which is the same discriminator read the OTHER way).
+    // There, an SP oid must NOT be bound as tenant admin because it matches no
+    // signed-in user. HERE the SP is precisely the principal that needs the
+    // grant, and a human deployer is precisely the one that must NOT silently
+    // acquire a standing data-plane role. So the polarity is inverted on
+    // purpose: pass the oid only when ARM disclosed no userPrincipalName.
+    //
+    // Empty on Commercial too — the module additionally gates on
+    // environment() being AzureUSGovernment, so Commercial (whose scan runs on
+    // the in-VNet ACA runner as the console UAMI) gains no second writer.
+    deployerServicePrincipalId: deployerIsInteractiveUser ? '' : deployer().objectId
   }
 }
 

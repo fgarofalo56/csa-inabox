@@ -6,7 +6,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.45.15.27210",
-      "templateHash": "5093135030530525138"
+      "templateHash": "17408857281951577466"
     }
   },
   "definitions": {
@@ -2579,7 +2579,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.45.15.27210",
-              "templateHash": "974272837264999118"
+              "templateHash": "3008618572712596871"
             }
           },
           "definitions": {
@@ -8364,7 +8364,8 @@
                   },
                   "cmkIdentityId": {
                     "value": "[variables('cosmosCmkIdentityId')]"
-                  }
+                  },
+                  "deployerServicePrincipalId": "[if(variables('deployerIsInteractiveUser'), createObject('value', ''), createObject('value', deployer().objectId))]"
                 },
                 "template": {
                   "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
@@ -8373,7 +8374,7 @@
                     "_generator": {
                       "name": "bicep",
                       "version": "0.45.15.27210",
-                      "templateHash": "12229359588487691186"
+                      "templateHash": "9888553210182242871"
                     }
                   },
                   "parameters": {
@@ -8419,6 +8420,13 @@
                       "defaultValue": false,
                       "metadata": {
                         "description": "Skip role-assignment grants (re-deploy where grants already exist)."
+                      }
+                    },
+                    "deployerServicePrincipalId": {
+                      "type": "string",
+                      "defaultValue": "",
+                      "metadata": {
+                        "description": "Object id of the deploying principal, passed ONLY when it is non-interactive (a CI service principal). Grants the Gov Brain-scan lane its narrow Cosmos data-plane access. Empty = no grant, which is the default and the interactive-deploy case."
                       }
                     },
                     "complianceTags": {
@@ -8521,6 +8529,11 @@
                         "name": "function-registry",
                         "partitionKey": "/tenantId"
                       }
+                    ],
+                    "isAzureUSGovernment": "[equals(environment().suffixes.storage, 'core.usgovcloudapi.net')]",
+                    "grantBrainScanDataPlane": "[and(and(variables('isAzureUSGovernment'), not(empty(parameters('deployerServicePrincipalId')))), not(parameters('skipRoleGrants')))]",
+                    "brainScanContainers": [
+                      "brain-graph-versions"
                     ]
                   },
                   "resources": [
@@ -8728,6 +8741,63 @@
                       },
                       "dependsOn": [
                         "[resourceId('Microsoft.DocumentDB/databaseAccounts', parameters('accountName'))]"
+                      ]
+                    },
+                    {
+                      "condition": "[variables('grantBrainScanDataPlane')]",
+                      "type": "Microsoft.DocumentDB/databaseAccounts/sqlRoleDefinitions",
+                      "apiVersion": "2024-12-01-preview",
+                      "name": "[format('{0}/{1}', parameters('accountName'), guid(resourceId('Microsoft.DocumentDB/databaseAccounts', parameters('accountName')), 'loom-brain-scan-metadata-reader'))]",
+                      "properties": {
+                        "roleName": "Loom Brain Scan Metadata Reader",
+                        "type": "CustomRole",
+                        "assignableScopes": [
+                          "[resourceId('Microsoft.DocumentDB/databaseAccounts', parameters('accountName'))]"
+                        ],
+                        "permissions": [
+                          {
+                            "dataActions": [
+                              "Microsoft.DocumentDB/databaseAccounts/readMetadata"
+                            ]
+                          }
+                        ]
+                      },
+                      "dependsOn": [
+                        "[resourceId('Microsoft.DocumentDB/databaseAccounts', parameters('accountName'))]"
+                      ]
+                    },
+                    {
+                      "condition": "[variables('grantBrainScanDataPlane')]",
+                      "type": "Microsoft.DocumentDB/databaseAccounts/sqlRoleAssignments",
+                      "apiVersion": "2024-12-01-preview",
+                      "name": "[format('{0}/{1}', parameters('accountName'), guid(resourceId('Microsoft.DocumentDB/databaseAccounts', parameters('accountName')), parameters('deployerServicePrincipalId'), 'loom-brain-scan-metadata-reader'))]",
+                      "properties": {
+                        "roleDefinitionId": "[resourceId('Microsoft.DocumentDB/databaseAccounts/sqlRoleDefinitions', parameters('accountName'), guid(resourceId('Microsoft.DocumentDB/databaseAccounts', parameters('accountName')), 'loom-brain-scan-metadata-reader'))]",
+                        "principalId": "[parameters('deployerServicePrincipalId')]",
+                        "scope": "[resourceId('Microsoft.DocumentDB/databaseAccounts', parameters('accountName'))]"
+                      },
+                      "dependsOn": [
+                        "[resourceId('Microsoft.DocumentDB/databaseAccounts', parameters('accountName'))]",
+                        "[resourceId('Microsoft.DocumentDB/databaseAccounts/sqlRoleDefinitions', parameters('accountName'), guid(resourceId('Microsoft.DocumentDB/databaseAccounts', parameters('accountName')), 'loom-brain-scan-metadata-reader'))]"
+                      ]
+                    },
+                    {
+                      "copy": {
+                        "name": "brainScanDataAssignments",
+                        "count": "[length(variables('brainScanContainers'))]"
+                      },
+                      "condition": "[variables('grantBrainScanDataPlane')]",
+                      "type": "Microsoft.DocumentDB/databaseAccounts/sqlRoleAssignments",
+                      "apiVersion": "2024-12-01-preview",
+                      "name": "[format('{0}/{1}', parameters('accountName'), guid(resourceId('Microsoft.DocumentDB/databaseAccounts', parameters('accountName')), parameters('deployerServicePrincipalId'), variables('brainScanContainers')[copyIndex()], '00000000-0000-0000-0000-000000000002'))]",
+                      "properties": {
+                        "roleDefinitionId": "[format('{0}/sqlRoleDefinitions/00000000-0000-0000-0000-000000000002', resourceId('Microsoft.DocumentDB/databaseAccounts', parameters('accountName')))]",
+                        "principalId": "[parameters('deployerServicePrincipalId')]",
+                        "scope": "[format('{0}/dbs/{1}/colls/{2}', resourceId('Microsoft.DocumentDB/databaseAccounts', parameters('accountName')), variables('loomDatabase'), variables('brainScanContainers')[copyIndex()])]"
+                      },
+                      "dependsOn": [
+                        "[resourceId('Microsoft.DocumentDB/databaseAccounts', parameters('accountName'))]",
+                        "[resourceId('Microsoft.DocumentDB/databaseAccounts/sqlDatabases/containers', parameters('accountName'), variables('loomDatabase'), 'brain-graph-versions')]"
                       ]
                     }
                   ],
