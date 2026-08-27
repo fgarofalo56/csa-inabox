@@ -731,3 +731,139 @@ test('CONTROL: the shared az-failure classifier is actually imported', () => {
   const src = fs.readFileSync(path.join(REPO_ROOT, 'scripts/ci/ensure-adx-cluster-running.mjs'), 'utf8');
   assert.match(src, /from '\.\/_az-failure-class\.mjs'/);
 });
+
+// ── 9. THE CAPACITY REMEDIATION MUST NAME A LEVER THAT ACTUALLY MOVES ───────
+//
+// MEASURED (deploy-fiab-gcch run 32958070797, 2026-08-26 — the 5th consecutive
+// class-A failure and the 17th consecutive red run since 2026-08-11):
+//
+//   ##[error]The start of ADX cluster 'adx-csa-loom-fmezxj' was REJECTED after 1
+//   attempt(s) ... az classified this as: capacity. REMEDIATION: ... Either pick
+//   a SKU that has capacity in the region (adx-cluster.bicep `adxSku`) ...
+//
+// The classification is RIGHT — the raw az error is
+// `(InsufficientResourcesForSubscription)`, and no retry or role grant resolves
+// that. The REMEDIATION is what this section pins, because following it
+// literally cannot work, in three independent ways:
+//
+//   1. `adxSku` is not a parameter. adx-cluster.bicep declares `param skuName`;
+//      admin-plane/main.bicep declares the var `adxSkuName`.
+//   2. adx-cluster.bicep's `skuName` DEFAULT is dead on every path that reaches
+//      this error, because admin-plane/main.bicep always passes `skuName:`
+//      explicitly (test below). Editing the file the message names changes
+//      nothing.
+//   3. On GCC-High / IL5 the `effectiveAdxSkuName` boundary guard REWRITES the
+//      Dev default to 'Dev(No SLA)_Standard_D11_v2' regardless — so the only
+//      lever that moves the Gov SKU is `adxConfig.adxSkuName` in the boundary's
+//      own .bicepparam.
+//
+// This is deploy-integrity.md R7 applied to a remediation rather than to a
+// cause: the message asserts a fix it did not establish would work.
+
+const BICEP_SOURCES = [
+  'platform/fiab/bicep/modules/admin-plane/adx-cluster.bicep',
+  'platform/fiab/bicep/modules/admin-plane/main.bicep',
+  'platform/fiab/bicep/params/gcc-high.bicepparam',
+];
+
+test('every bicep identifier the CAPACITY remediation names actually exists', () => {
+  const text = remediationFor('capacity', '/subscriptions/x/clusters/c');
+  const named = [...text.matchAll(/`([A-Za-z][A-Za-z0-9.]*)`/g)].map((m) => m[1]);
+
+  // POPULATION. A remediation that names no identifier at all would satisfy the
+  // loop below vacuously — that is the weakening this guards against.
+  assert.ok(
+    named.length > 0,
+    'the capacity remediation names no bicep identifier at all, so it points the operator at nothing',
+  );
+
+  const haystack = BICEP_SOURCES.map((rel) => fs.readFileSync(path.join(REPO_ROOT, rel), 'utf8')).join('\n');
+  for (const ident of named) {
+    // Match the LEAF of a dotted path (adxConfig.adxSkuName -> adxSkuName), since
+    // bicep declares the property, not the dotted access.
+    const leaf = ident.split('.').pop();
+    assert.ok(
+      new RegExp(`\\b${leaf}\\b`).test(haystack),
+      `the capacity remediation names \`${ident}\`, but no bicep source declares '${leaf}' — ` +
+        'an operator following this remediation edits something that does not exist',
+    );
+  }
+});
+
+test('the CAPACITY remediation names the lever that is NOT overridden for Gov', () => {
+  const text = remediationFor('capacity', '/subscriptions/x/clusters/c');
+  // The reachable lever is the boundary's own param file. Naming only
+  // adx-cluster.bicep sends the operator to a default the caller always
+  // overrides.
+  assert.match(
+    text,
+    /bicepparam/i,
+    'the capacity remediation does not name the .bicepparam, which is the only SKU lever the ' +
+      'effectiveAdxSkuName boundary guard does not rewrite on GCC-High / IL5',
+  );
+});
+
+test('the CAPACITY remediation discloses that re-running this lane cannot apply the SKU change', () => {
+  const text = remediationFor('capacity', '/subscriptions/x/clusters/c');
+  // THE DEADLOCK. The preflight that prints this runs BEFORE what-if and before
+  // the apply (test below), so "change the SKU and re-run" dies at the identical
+  // step, having applied nothing. A remediation that omits this sends the
+  // operator round a loop that cannot terminate.
+  assert.match(
+    text,
+    /before what-if|before the apply/i,
+    'the capacity remediation says to change a template value, but does not disclose that this ' +
+      'preflight aborts before the apply — so re-running the lane can never apply that change',
+  );
+});
+
+test('CONTROL: adx-cluster.bicep’s skuName DEFAULT is dead — the caller always passes it', () => {
+  // This is the premise of the message fix above. If someone later stops passing
+  // skuName explicitly, adx-cluster.bicep's default becomes live again and the
+  // remediation wording should be revisited — so this control goes red on that
+  // change rather than letting the two drift apart silently.
+  const mainBicep = fs.readFileSync(
+    path.join(REPO_ROOT, 'platform/fiab/bicep/modules/admin-plane/main.bicep'),
+    'utf8',
+  );
+  assert.match(
+    mainBicep,
+    /skuName:\s*effectiveAdxSkuName/,
+    'admin-plane/main.bicep no longer passes skuName to the adx-cluster module',
+  );
+  assert.match(
+    mainBicep,
+    /var effectiveAdxSkuName\s*=/,
+    'the effectiveAdxSkuName boundary guard is gone — the Gov SKU substitution this message describes no longer exists',
+  );
+});
+
+test('CONTROL: the ADX preflight precedes what-if AND the apply on every deploy lane', () => {
+  // The structural fact that makes the deadlock real, pinned per lane so a
+  // future reorder cannot silently invalidate the remediation wording.
+  const lanes = [
+    'deploy-fiab-commercial',
+    'deploy-fiab-gcc',
+    'deploy-fiab-gcch',
+    'deploy-fiab-il5',
+  ];
+  let checkedReaders = 0;
+  for (const lane of lanes) {
+    const wf = fs.readFileSync(path.join(REPO_ROOT, `.github/workflows/${lane}.yml`), 'utf8');
+    const preflight = wf.indexOf('- name: ADX preflight');
+    assert.notEqual(preflight, -1, `${lane}: no ADX preflight step — this control has no population`);
+
+    for (const reader of ['- name: Bicep what-if', '- name: Provision']) {
+      const at = wf.indexOf(reader);
+      if (at === -1) continue; // il5 has no Provision step; absence is not a failure
+      checkedReaders += 1;
+      assert.ok(
+        preflight < at,
+        `${lane}: '${reader}' appears BEFORE the ADX preflight — the preflight no longer gates them`,
+      );
+    }
+  }
+  // POPULATION. Without this, renaming both readers everywhere would make the
+  // loop above compare nothing and stay green.
+  assert.ok(checkedReaders >= 6, `only ${checkedReaders} preflight/reader pairs compared — expected at least 6`);
+});
