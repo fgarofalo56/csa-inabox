@@ -66,6 +66,9 @@ import {
 } from '@/lib/components/graph/azure-maps-canvas';
 import { GraphTypeEditor } from '@/lib/components/graph/graph-type-editor';
 import { GraphSourceBinding, type SourceBindable } from '@/lib/components/graph/graph-source-binding';
+import {
+  useSourceCandidates, sourceCandidatePlaceholder, SourceCandidateError,
+} from './data-agent-source-candidates';
 // Ontology typed-model (Foundry object/link/action types) — pure logic + types
 // shared with the BFF routes. The typed-modeling surface in OntologyEditor drives
 // this model; deriveSourceFromObjectTypes() keeps state.source in sync so the AGE
@@ -230,24 +233,12 @@ export function DataAgentEditor({ item, id }: { item: FabricItemType; id: string
   });
 
   // ---- source picker data (real Loom items) ----
+  // The lookup itself lives in ./data-agent-source-candidates — extracted while
+  // fixing #4092 so the code the bug lived in is directly testable, and so this
+  // editor stays under its monolith-creep ceiling.
   const [pickerType, setPickerType] = useState<DaSourceType>('warehouse');
-  const [available, setAvailable] = useState<Record<string, { id: string; name: string }[]>>({});
-  const [pickerLoading, setPickerLoading] = useState(false);
-  const loadAvailable = useCallback(async (t: DaSourceType) => {
-    const cfg = DA_SOURCE_TYPES.find((x) => x.value === t)!;
-    // microsoft-graph isn't a Loom item type — nothing to fetch for the picker.
-    if (!cfg.itemType) { setAvailable((prev) => ({ ...prev, [t]: [] })); return; }
-    setPickerLoading(true);
-    try {
-      const wsParam = workspaceId ? `&workspaceId=${encodeURIComponent(workspaceId)}` : '';
-      const r = await clientFetch(`/api/items/by-type?types=${encodeURIComponent(cfg.itemType)}${wsParam}`);
-      const j = await r.json();
-      const items = (j.items || []).map((it: any) => ({ id: it.id, name: it.displayName || it.id }));
-      setAvailable((prev) => ({ ...prev, [t]: items }));
-    } catch { /* leave empty; user can still pick another type */ }
-    finally { setPickerLoading(false); }
-  }, [workspaceId]);
-  useEffect(() => { if (workspaceId && !available[pickerType]) loadAvailable(pickerType); }, [pickerType, available, loadAvailable, workspaceId]);
+  const pickerCfg = DA_SOURCE_TYPES.find((x) => x.value === pickerType)!;
+  const candidates = useSourceCandidates(workspaceId, pickerType, pickerCfg.itemType);
 
   // DBX-5 delta: "Open in Databricks Genie" deep link — resolved ONLY when a
   // Databricks workspace host is bound (Loom's own Data Agent stays the default;
@@ -302,7 +293,7 @@ export function DataAgentEditor({ item, id }: { item: FabricItemType; id: string
       return;
     }
     if (!pickSel) return;
-    const opts = available[pickerType] || [];
+    const opts = candidates.options;
     const chosen = opts.find((o) => o.id === pickSel);
     // Hosted agent (DBX-2): resolve the deployed app's live URL so the executor
     // can call its /invoke endpoint; the URL is re-validated (SSRF) server-side.
@@ -842,16 +833,18 @@ export function DataAgentEditor({ item, id }: { item: FabricItemType; id: string
                     </Field>
                   ) : (
                     <Field label="Item" style={{ minWidth: 220 }}>
-                      <Dropdown value={(available[pickerType] || []).find((o) => o.id === pickSel)?.name || ''} selectedOptions={pickSel ? [pickSel] : []}
-                        placeholder={pickerLoading ? 'Loading…' : ((available[pickerType] || []).length ? 'Select…' : 'None found')}
+                      <Dropdown value={candidates.options.find((o) => o.id === pickSel)?.name || ''} selectedOptions={pickSel ? [pickSel] : []}
+                        placeholder={sourceCandidatePlaceholder(candidates)}
                         onOptionSelect={(_, d) => d.optionValue && setPickSel(d.optionValue)}>
-                        {(available[pickerType] || []).map((o) => <Option key={o.id} value={o.id}>{o.name}</Option>)}
+                        {candidates.options.map((o) => <Option key={o.id} value={o.id}>{o.name}</Option>)}
                       </Dropdown>
                     </Field>
                   )}
                   <Button appearance="primary" icon={<Add20Regular />} onClick={addSource}
                     disabled={(pickerType !== 'microsoft-graph' && !pickSel) || sources.length >= 5}>Add source</Button>
                 </div>
+                <SourceCandidateError error={candidates.error} loading={candidates.loading}
+                  label={pickerCfg.label} onRetry={candidates.reload} />
 
                 {sources.map((src) => (
                   <div key={src.id} className={s.daSrcCard}>

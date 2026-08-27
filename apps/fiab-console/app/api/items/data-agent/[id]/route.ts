@@ -18,6 +18,7 @@ import { getSession } from '@/lib/auth/session';
 import { loadOwnedItem, updateOwnedItem, deleteOwnedItem } from '../../_lib/item-crud';
 import { deleteAgent as deleteFoundryAgent } from '@/lib/azure/foundry-agent-client';
 import { deleteAgent as deleteCopilotStudioAgent } from '@/lib/azure/copilot-studio-client';
+import { autoBindDataAgentSources } from '@/lib/azure/data-agent-autobind';
 import { apiServerError } from '@/lib/api/respond';
 
 export const runtime = 'nodejs';
@@ -33,8 +34,32 @@ export async function GET(_req: NextRequest, ctx: { params: Promise<{ id: string
   try {
     const item = await loadOwnedItem(id, ITEM_TYPE, s.claims.oid);
     if (!item) return NextResponse.json({ error: 'not found' }, { status: 404 });
+    // AUTO-BIND ON OPEN (auto-bind-by-default.md §1/§3, #4092). An agent with no
+    // sources is attached to its workspace's compatible source HERE, so the
+    // editor opens on a bound agent rather than on a picker the user has to
+    // work out. No-ops once it has run, and for an agent that already has
+    // sources. Mutates `item.state` in memory, so the response below carries the
+    // binding even if the Cosmos write lost a race. Never throws.
+    //
+    // A read performing a write is the established pattern for this rule, not a
+    // new one: `autoBindOnOpen` does exactly this on the two pipeline bind GETs.
+    await autoBindDataAgentSources(item);
     return NextResponse.json({
-      id: item.id, displayName: item.displayName, description: item.description,
+      id: item.id,
+      // #4092 — THE RENDER DEFECT. This projection omitted `workspaceId`, and
+      // that single omission is the whole bug: `useItemState` populates its
+      // `workspaceId` from THIS field (`lib/editors/phase4/shared.tsx`), the
+      // data-agent editor's source-picker effect is guarded on
+      // `if (workspaceId && …)`, so the guard was permanently false and
+      // `/api/items/by-type` was NEVER CALLED. The dropdown then fell through to
+      // its `'None found'` placeholder and **Add** stayed disabled — a dead end
+      // over an API that was serving the item correctly the whole time.
+      //
+      // Not a data-agent quirk: `map`, `plan` and `operations-agent` are the
+      // other editors that scope a picker by `useItemState().workspaceId`, and
+      // their GETs are fixed in the same change. `agent-flow` already had it.
+      workspaceId: item.workspaceId,
+      displayName: item.displayName, description: item.description,
       state: item.state || {}, updatedAt: item.updatedAt || null,
     });
   } catch (e: any) {
