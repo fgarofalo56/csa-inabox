@@ -7,6 +7,7 @@ import { getSession } from '@/lib/auth/session';
 import { authorizeItemWorkspace } from '@/lib/auth/workspace-guard';
 import { itemsContainer } from '@/lib/azure/cosmos-client';
 import type { WorkspaceItem } from '@/lib/types/workspace';
+import { mirrorBindingMismatch } from '@/lib/azure/connection-auth';
 import { mirroredDatabaseFromContent } from '../../_lib/ai-content-fallback';
 
 export const runtime = 'nodejs';
@@ -151,6 +152,16 @@ export async function PATCH(req: NextRequest, ctx: { params: Promise<{ id: strin
     const tables = Array.isArray(body?.tables)
       ? body.tables.filter((t: any) => t?.schema && t?.table).map((t: any) => ({ schema: String(t.schema), table: String(t.table) }))
       : state.tables || [];
+
+    // Refuse to PERSIST a binding whose source type contradicts its connection.
+    // Both fields fall back to stored state, so the EFFECTIVE pair is what must
+    // agree — editing only one of them produces the same contradiction.
+    const effSourceType = String(body?.sourceType ?? state.sourceType ?? '');
+    const effConnectionId = body?.connectionId !== undefined ? body.connectionId : state.connectionId;
+    {
+      const mismatch = await mirrorBindingMismatch(s.claims.oid, effSourceType, effConnectionId);
+      if (mismatch) return apiError(mismatch.message, 400);
+    }
 
     const nextState: Record<string, any> = {
       ...state,

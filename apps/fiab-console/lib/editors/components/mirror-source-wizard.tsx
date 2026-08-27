@@ -38,6 +38,10 @@ import {
 } from '@fluentui/react-icons';
 import { ConnectionBuilder, type ConnectionView } from '@/lib/components/connections/connection-builder';
 import { TileGrid } from '@/lib/components/ui/tile-grid';
+import {
+  MIRROR_SOURCE_CONN_TYPES, MIRROR_SOURCE_LABEL, describeMirrorConnMismatch,
+  type MirrorSourceId,
+} from '@/lib/azure/mirror-source-compat';
 import { useSharedEditorStyles } from '../shared-styles';
 
 export interface MirrorTableSpec { schema: string; table: string; isIceberg?: boolean }
@@ -46,24 +50,30 @@ export interface MirrorTableSpec { schema: string; table: string; isIceberg?: bo
 /**
  * Mirroring source types → display name, an accent color, and the Loom
  * Connection types that can back them. Each gets its own card in the wizard.
+ *
+ * `name` and `connTypes` are READ FROM `mirror-source-compat`, never restated
+ * here: that module is the same source of truth the server-side refusal uses,
+ * so the picker cannot come to a different conclusion about what is compatible
+ * than the route that enumerates the tables. Only `accent` (pure styling) and
+ * `external` (a client-side deep link) are local to this file.
  */
-export const MIRROR_SOURCES: { id: string; name: string; accent: string; connTypes: string[]; external?: string }[] = [
-  { id: 'AzureSqlDatabase', name: 'Azure SQL Database', accent: '#0078d4', connTypes: ['azure-sql', 'generic-sql'] },
-  { id: 'AzureSqlMI', name: 'Azure SQL Managed Instance', accent: '#0063b1', connTypes: ['azure-sql', 'generic-sql'] },
-  { id: 'AzurePostgreSql', name: 'Azure Database for PostgreSQL', accent: '#336791', connTypes: ['postgres'] },
-  { id: 'CosmosDb', name: 'Azure Cosmos DB', accent: '#3999c6', connTypes: ['cosmos'] },
-  { id: 'Snowflake', name: 'Snowflake', accent: '#29b5e8', connTypes: ['snowflake'] },
-  { id: 'GoogleBigQuery', name: 'Google BigQuery', accent: '#4285f4', connTypes: ['bigquery'] },
-  { id: 'Oracle', name: 'Oracle Database', accent: '#c74634', connTypes: ['oracle', 'generic-sql'] },
+export const MIRROR_SOURCES: { id: MirrorSourceId; name: string; accent: string; connTypes: string[]; external?: string }[] = [
+  { id: 'AzureSqlDatabase', name: MIRROR_SOURCE_LABEL.AzureSqlDatabase, accent: '#0078d4', connTypes: MIRROR_SOURCE_CONN_TYPES.AzureSqlDatabase },
+  { id: 'AzureSqlMI', name: MIRROR_SOURCE_LABEL.AzureSqlMI, accent: '#0063b1', connTypes: MIRROR_SOURCE_CONN_TYPES.AzureSqlMI },
+  { id: 'AzurePostgreSql', name: MIRROR_SOURCE_LABEL.AzurePostgreSql, accent: '#336791', connTypes: MIRROR_SOURCE_CONN_TYPES.AzurePostgreSql },
+  { id: 'CosmosDb', name: MIRROR_SOURCE_LABEL.CosmosDb, accent: '#3999c6', connTypes: MIRROR_SOURCE_CONN_TYPES.CosmosDb },
+  { id: 'Snowflake', name: MIRROR_SOURCE_LABEL.Snowflake, accent: '#29b5e8', connTypes: MIRROR_SOURCE_CONN_TYPES.Snowflake },
+  { id: 'GoogleBigQuery', name: MIRROR_SOURCE_LABEL.GoogleBigQuery, accent: '#4285f4', connTypes: MIRROR_SOURCE_CONN_TYPES.GoogleBigQuery },
+  { id: 'Oracle', name: MIRROR_SOURCE_LABEL.Oracle, accent: '#c74634', connTypes: MIRROR_SOURCE_CONN_TYPES.Oracle },
 
-  { id: 'SqlServer2025', name: 'SQL Server 2025', accent: '#a4262c', connTypes: ['generic-sql'] },
-  { id: 'MSSQL', name: 'SQL Server 2016-2022', accent: '#a4262c', connTypes: ['generic-sql'] },
-  { id: 'GenericMirror', name: 'Open mirroring', accent: '#5c2d91', connTypes: ['azure-sql', 'postgres', 'cosmos', 'storage-adls', 'generic-sql'] },
+  { id: 'SqlServer2025', name: MIRROR_SOURCE_LABEL.SqlServer2025, accent: '#a4262c', connTypes: MIRROR_SOURCE_CONN_TYPES.SqlServer2025 },
+  { id: 'MSSQL', name: MIRROR_SOURCE_LABEL.MSSQL, accent: '#a4262c', connTypes: MIRROR_SOURCE_CONN_TYPES.MSSQL },
+  { id: 'GenericMirror', name: MIRROR_SOURCE_LABEL.GenericMirror, accent: '#5c2d91', connTypes: MIRROR_SOURCE_CONN_TYPES.GenericMirror },
   // Databricks Unity Catalog is a *dedicated* Loom item type (`mirrored-databricks`)
   // — it mounts a UC catalog read-only into OneLake (metastore + catalog selection,
   // not server/database/tables), so this card routes to that editor instead of the
   // generic mirrored-database flow. `external` = the deep link to its New editor.
-  { id: 'DatabricksUC', name: 'Databricks Unity Catalog', accent: '#ff3621', connTypes: [], external: '/items/mirrored-databricks/new' },
+  { id: 'DatabricksUC', name: MIRROR_SOURCE_LABEL.DatabricksUC, accent: '#ff3621', connTypes: MIRROR_SOURCE_CONN_TYPES.DatabricksUC, external: '/items/mirrored-databricks/new' },
 ];
 
 /** Sources whose connection needs a GCP project id + dataset rather than a SQL server FQDN. */
@@ -226,7 +236,13 @@ export function MirrorSourceWizard(props: MirrorSourceWizardProps) {
   const { open, editing, workspaceId, mirrorId, initialSrc, onClose, onCreated, onUpdated } = props;
   const s = useStyles();
 
-  const [createSrc, setCreateSrc] = useState('AzureSqlDatabase');
+  // NO PRE-SELECTION. This was `useState('AzureSqlDatabase')`, and that default
+  // is what made the Snowflake incident reachable: step 1 says "Choose a source"
+  // while having already chosen one, so an operator who went straight to the
+  // connection picker shipped a mirror typed Azure SQL with a Snowflake
+  // connection bound. An empty string means the user's choice is the only thing
+  // that can set it — the wizard never guesses a backend on their behalf.
+  const [createSrc, setCreateSrc] = useState('');
   const [createServer, setCreateServer] = useState('');
   const [createDb, setCreateDb] = useState('');
   const [createName, setCreateName] = useState('');
@@ -256,8 +272,13 @@ export function MirrorSourceWizard(props: MirrorSourceWizardProps) {
   const [editConnOpen, setEditConnOpen] = useState(false);
   const [createBusy, setCreateBusy] = useState(false);
   const [createErr, setCreateErr] = useState<string | null>(null);
+  /** Set when picking a connection auto-corrected the source type, so the switch is disclosed rather than silent. */
+  const [autoSwitched, setAutoSwitched] = useState<{ to: MirrorSourceId; connName: string } | null>(null);
 
-  const srcDef = useMemo(() => MIRROR_SOURCES.find((x) => x.id === createSrc) || MIRROR_SOURCES[0], [createSrc]);
+  // `null` until the operator picks — NOT a fallback to MIRROR_SOURCES[0]. The
+  // old `|| MIRROR_SOURCES[0]` was the second half of the hardcoded default:
+  // with no explicit pick every downstream read still resolved to Azure SQL.
+  const srcDef = useMemo(() => MIRROR_SOURCES.find((x) => x.id === createSrc) || null, [createSrc]);
   const isBigQuery = BIGQUERY_SOURCES.has(createSrc);
   const isOracle = GATEWAY_SOURCES.has(createSrc);
   // Cosmos DB's change-feed engine connects via the Cosmos connection (account
@@ -272,7 +293,7 @@ export function MirrorSourceWizard(props: MirrorSourceWizardProps) {
   // Pre-select the connection type when the source has exactly one, so "New
   // connection" from a Snowflake mirror opens ON Snowflake rather than making
   // the user find it (auto-bind-by-default: no user-performed plumbing).
-  const connLockType = srcDef.connTypes.length === 1 ? srcDef.connTypes[0] : undefined;
+  const connLockType = srcDef && srcDef.connTypes.length === 1 ? srcDef.connTypes[0] : undefined;
 
   // Mode labels follow the SOURCE's real backend — see syncModeOptions.
   const syncModes = useMemo(() => syncModeOptions(createSrc), [createSrc]);
@@ -305,7 +326,7 @@ export function MirrorSourceWizard(props: MirrorSourceWizardProps) {
   const pickSource = useCallback((srcId: string) => {
     setCreateSrc(srcId); setConnId(''); setAvailTables(null); setSelTables(new Set());
     setTablesMsg(null); setProjectId(''); setServiceName(''); setGateway(''); setSyncUser('');
-    setVerify({ status: 'idle' });
+    setVerify({ status: 'idle' }); setAutoSwitched(null);
     if (srcId !== 'Snowflake') setIncludeIceberg(false);
   }, []);
 
@@ -322,7 +343,10 @@ export function MirrorSourceWizard(props: MirrorSourceWizardProps) {
     if (!open) return;
     void loadConnections();
     if (editing && initialSrc) {
-      setCreateSrc(initialSrc.sourceType || 'AzureSqlDatabase');
+      // No `|| 'AzureSqlDatabase'` fallback: a stored mirror with no source type
+      // recorded is an UNKNOWN, and defaulting an unknown to Azure SQL is how a
+      // Snowflake mirror got read over TDS in the first place.
+      setCreateSrc(initialSrc.sourceType || '');
       setCreateServer(initialSrc.server || '');
       setCreateDb(initialSrc.database || '');
       setConnId(initialSrc.connectionId || '');
@@ -335,13 +359,13 @@ export function MirrorSourceWizard(props: MirrorSourceWizardProps) {
       setIncludeIceberg(!!initialSrc.includeIcebergTables);
       setSyncMode(initialSrc.syncMode === 'snapshot' || initialSrc.syncMode === 'continuous' ? initialSrc.syncMode : 'incremental');
     } else {
-      setCreateSrc('AzureSqlDatabase'); setCreateServer(''); setCreateDb(''); setConnId(''); setCreateName('');
+      setCreateSrc(''); setCreateServer(''); setCreateDb(''); setConnId(''); setCreateName('');
       setProjectId(''); setServiceName(''); setGateway(''); setSyncUser('');
       setSelTables(new Set());
       setIncludeIceberg(false);
       setSyncMode('incremental');
     }
-    setAvailTables(null); setTablesMsg(null); setVerify({ status: 'idle' }); setCreateErr(null);
+    setAvailTables(null); setTablesMsg(null); setVerify({ status: 'idle' }); setCreateErr(null); setAutoSwitched(null);
   }, [open, editing, initialSrc, loadConnections]);
 
   // Connections recommended for this source (type matches the source's backends)
@@ -350,14 +374,64 @@ export function MirrorSourceWizard(props: MirrorSourceWizardProps) {
   // type filter used to drop every non-exact-match connection). Recommended ones
   // surface first; the rest appear under "Other connections".
   const compatibleConns = useMemo(
-    () => connections.filter((c) => srcDef.connTypes.includes(c.type)),
+    () => (srcDef ? connections.filter((c) => srcDef.connTypes.includes(c.type)) : []),
     [connections, srcDef],
   );
   const otherConns = useMemo(
-    () => connections.filter((c) => !srcDef.connTypes.includes(c.type)),
+    () => (srcDef ? connections.filter((c) => !srcDef.connTypes.includes(c.type)) : connections),
     [connections, srcDef],
   );
   const pickedConn = useMemo(() => connections.find((c) => c.id === connId) || null, [connections, connId]);
+
+  /**
+   * The bound connection addresses a different system than the chosen source
+   * type — computed from the SAME module the BFF refuses with, so the wizard
+   * and the route can never disagree. Non-null blocks Load tables and Create.
+   */
+  const connMismatch = useMemo(
+    () => (pickedConn
+      ? describeMirrorConnMismatch({ sourceType: createSrc, connType: pickedConn.type, connName: pickedConn.name })
+      : null),
+    [pickedConn, createSrc],
+  );
+
+  /**
+   * Move the mirror onto the source type a connection actually belongs to.
+   *
+   * Used two ways: automatically when a picked connection's type maps to
+   * EXACTLY ONE source (there is nothing to ask — auto-bind-by-default), and
+   * from the "Switch to …" buttons on the mismatch bar when it maps to several.
+   * Unlike `pickSource` this KEEPS the connection: the connection is the thing
+   * the operator chose deliberately; the source type is what was wrong.
+   */
+  const adoptSourceForConn = useCallback((to: MirrorSourceId, disclose?: { connName: string }) => {
+    setCreateSrc(to);
+    setAvailTables(null); setSelTables(new Set()); setTablesMsg(null);
+    setProjectId(''); setServiceName(''); setGateway(''); setSyncUser('');
+    setVerify({ status: 'idle' });
+    if (to !== 'Snowflake') setIncludeIceberg(false);
+    setAutoSwitched(disclose ? { to, connName: disclose.connName } : null);
+  }, []);
+
+  /**
+   * Selecting a connection. When its type can only belong to one source type and
+   * that is not the one currently chosen, switch — rather than letting the user
+   * carry a mismatch forward into a create. This is the interactive path only;
+   * an ALREADY-SAVED mismatch (opening Edit on the mirror this defect produced)
+   * is surfaced as a Fix-it bar instead, because silently rewriting a stored
+   * item's source type on open would be a surprise, not a repair.
+   */
+  const chooseConnection = useCallback((id: string, known?: ConnectionView) => {
+    setConnId(id); setConnTest({ status: 'idle' }); setAutoSwitched(null);
+    // `known` is passed by the "New connection" path: `setConnections` has not
+    // flushed yet when this runs, so the state array does NOT contain the
+    // just-created connection and a lookup would silently find nothing.
+    const c = known || connections.find((x) => x.id === id);
+    if (!c) return;
+    const mm = describeMirrorConnMismatch({ sourceType: createSrc, connType: c.type, connName: c.name });
+    if (mm && mm.candidates.length === 1) adoptSourceForConn(mm.candidates[0], { connName: c.name });
+  }, [connections, createSrc, adoptSourceForConn]);
+
   useEffect(() => {
     if (pickedConn) {
       if (pickedConn.host) setCreateServer(pickedConn.host);
@@ -377,6 +451,10 @@ export function MirrorSourceWizard(props: MirrorSourceWizardProps) {
   );
 
   const loadSourceTables = useCallback(async () => {
+    // Refuse the mismatch locally too. The BFF refuses it as well (that is the
+    // real guard), but round-tripping only to be told the source type is wrong
+    // is exactly the dead end this fix removes.
+    if (connMismatch) { setTablesMsg(connMismatch.message); setAvailTables(null); return; }
     if (!effServer && createSrc !== 'CosmosDb') { setTablesMsg(isBigQuery ? 'Enter the GCP project and dataset first.' : 'Enter the server/host and database first.'); return; }
     if (!effDb) { setTablesMsg(isBigQuery ? 'Enter the dataset first.' : isOracle ? 'Enter the service name first.' : 'Enter the database first.'); return; }
     setTablesLoading(true); setTablesMsg(null); setAvailTables(null);
@@ -398,7 +476,7 @@ export function MirrorSourceWizard(props: MirrorSourceWizardProps) {
       if (!(j.tables || []).length) setTablesMsg('No tables found.');
     } catch (e: any) { setTablesMsg(e?.message || String(e)); setAvailTables([]); }
     finally { setTablesLoading(false); }
-  }, [createSrc, effServer, effDb, isBigQuery, isOracle, mirrorId, workspaceId, connId]);
+  }, [createSrc, effServer, effDb, isBigQuery, isOracle, mirrorId, workspaceId, connId, connMismatch]);
 
 
   const runVerify = useCallback(async () => {
@@ -435,7 +513,9 @@ export function MirrorSourceWizard(props: MirrorSourceWizardProps) {
   }, [pickedConn]);
 
   const submit = useCallback(async () => {
-    if (!workspaceId || !createName.trim()) return;
+    // A source type is now REQUIRED (no hardcoded default), and a mirror is
+    // never written while its source type contradicts its connection.
+    if (!workspaceId || !createName.trim() || !createSrc || connMismatch) return;
     setCreateBusy(true); setCreateErr(null);
     try {
       // Iceberg-table inclusion is Snowflake-only (Fabric Build 2026 parity).
@@ -496,7 +576,7 @@ export function MirrorSourceWizard(props: MirrorSourceWizardProps) {
         onCreated(newId || '', createName.trim());
       }
     } finally { setCreateBusy(false); }
-  }, [workspaceId, createName, createSrc, effServer, effDb, connId, includeIceberg, syncMode, editing, mirrorId, visibleTables, selTables, isBigQuery, isOracle, projectId, serviceName, gateway, syncUser, onCreated, onUpdated]);
+  }, [workspaceId, createName, createSrc, effServer, effDb, connId, includeIceberg, syncMode, editing, mirrorId, visibleTables, selTables, isBigQuery, isOracle, projectId, serviceName, gateway, syncUser, connMismatch, onCreated, onUpdated]);
 
 
   return (
@@ -529,7 +609,7 @@ export function MirrorSourceWizard(props: MirrorSourceWizardProps) {
                 </TileGrid>
               </div>
 
-              {srcDef.external && (
+              {srcDef?.external && (
                 <MessageBar intent="info" style={{ marginTop: tokens.spacingVerticalM }}>
                   <MessageBarBody>
                     <MessageBarTitle>Databricks Unity Catalog mirror</MessageBarTitle>
@@ -545,7 +625,21 @@ export function MirrorSourceWizard(props: MirrorSourceWizardProps) {
                 </MessageBar>
               )}
 
-              {!srcDef.external && (<>
+              {/* No source chosen yet — steps 2-4 are genuinely undefined until
+                  one is, because the connection shape, the field labels, and the
+                  backend all follow from it. Rendering them against a guessed
+                  default is the defect this wizard shipped. */}
+              {!srcDef && (
+                <MessageBar intent="info" style={{ marginTop: tokens.spacingVerticalM }}>
+                  <MessageBarBody>
+                    <MessageBarTitle>Pick a source to continue</MessageBarTitle>
+                    Choose the system this mirror replicates FROM. The connection, credentials, and
+                    fields on the next step are specific to it.
+                  </MessageBarBody>
+                </MessageBar>
+              )}
+
+              {srcDef && !srcDef.external && (<>
               <Divider />
 
               {/* Step 2 — connection (Key Vault-backed auth) */}
@@ -562,7 +656,7 @@ export function MirrorSourceWizard(props: MirrorSourceWizardProps) {
                   <Field style={{ flex: 1 }}>
                     <Dropdown placeholder={connections.length ? 'Select a connection' : 'No saved connections yet — create one'}
                       value={pickedConn ? pickedConn.name : ''} selectedOptions={connId ? [connId] : []}
-                      onOptionSelect={(_, d) => { setConnId(d.optionValue || ''); setConnTest({ status: 'idle' }); }}>
+                      onOptionSelect={(_, d) => chooseConnection(d.optionValue || '')}>
                       {compatibleConns.length > 0 && (
                         <OptionGroup label="Recommended for this source">
                           {compatibleConns.map((c) => (
@@ -604,6 +698,37 @@ export function MirrorSourceWizard(props: MirrorSourceWizardProps) {
                     {pickedConn.hasSecret ? <Key16Regular /> : <CheckmarkCircle16Filled style={{ color: tokens.colorPaletteGreenForeground1 }} />}
                     <Caption1>Auth: <strong>{pickedConn.authMethod}</strong>{pickedConn.hasSecret ? ' (secret in Key Vault)' : ''}</Caption1>
                   </div>
+                )}
+                {/* Source type vs connection — the guard that makes the Snowflake
+                    dead end unreachable. Its text comes from the same module the
+                    BFF refuses with, and names the real cause instead of a DNS
+                    failure for a hostname the platform constructed. */}
+                {connMismatch && (
+                  <MessageBar intent="error" style={{ marginTop: tokens.spacingVerticalS }}>
+                    <MessageBarBody>
+                      <MessageBarTitle>Source type does not match this connection</MessageBarTitle>
+                      {connMismatch.message}
+                      {connMismatch.candidates.length > 0 && (
+                        <div style={{ marginTop: tokens.spacingVerticalS, display: 'flex', gap: tokens.spacingHorizontalS, flexWrap: 'wrap' }}>
+                          {connMismatch.candidates.map((c) => (
+                            <Button key={c} size="small" appearance="primary" icon={<ArrowSync20Regular />}
+                              onClick={() => adoptSourceForConn(c)}>
+                              Switch to {MIRROR_SOURCE_LABEL[c]}
+                            </Button>
+                          ))}
+                        </div>
+                      )}
+                    </MessageBarBody>
+                  </MessageBar>
+                )}
+                {autoSwitched && !connMismatch && (
+                  <MessageBar intent="success" style={{ marginTop: tokens.spacingVerticalS }}>
+                    <MessageBarBody>
+                      Source type set to <strong>{MIRROR_SOURCE_LABEL[autoSwitched.to]}</strong> to match
+                      the connection you picked (&quot;{autoSwitched.connName}&quot;) — it is the only source
+                      type that connection can back.
+                    </MessageBarBody>
+                  </MessageBar>
                 )}
                 {connTest.status === 'ok' && (
                   <MessageBar intent="success" style={{ marginTop: tokens.spacingVerticalS }}>
@@ -834,8 +959,8 @@ export function MirrorSourceWizard(props: MirrorSourceWizardProps) {
           </DialogContent>
           <DialogActions>
             <Button appearance="secondary" onClick={onClose}>Cancel</Button>
-            {!srcDef.external && (
-              <Button appearance="primary" icon={<Add20Regular />} disabled={createBusy || !createName.trim()} onClick={submit}>
+            {srcDef && !srcDef.external && (
+              <Button appearance="primary" icon={<Add20Regular />} disabled={createBusy || !createName.trim() || !!connMismatch} onClick={submit}>
                 {createBusy ? (editing ? 'Saving…' : 'Creating…') : (editing ? 'Save changes' : 'Create mirror')}
               </Button>
             )}
@@ -845,7 +970,7 @@ export function MirrorSourceWizard(props: MirrorSourceWizardProps) {
     </Dialog>
       <ConnectionBuilder open={connBuilderOpen} onClose={() => setConnBuilderOpen(false)}
         lockType={connLockType}
-        onCreated={(c) => { setConnections((prev) => [...prev.filter((x) => x.id !== c.id), c]); setConnId(c.id); }} />
+        onCreated={(c) => { setConnections((prev) => [...prev.filter((x) => x.id !== c.id), c]); chooseConnection(c.id, c); }} />
 
       {pickedConn && (
         <ConnectionBuilder
