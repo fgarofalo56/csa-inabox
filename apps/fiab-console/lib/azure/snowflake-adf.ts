@@ -48,6 +48,12 @@ import {
 
 import { loadConnection, type LoomConnection } from './connections-store';
 import { getKeyVaultSecretValue, vaultUrl } from './kv-secrets-client';
+// What a failed Snowflake read actually established. Only ever used to decide
+// WHICH remediation (if any) is true of the backend's message — never to alter
+// or replace the message itself.
+import {
+  classifySnowflakeFailure, describeSnowflakeFailure, snowflakeGateMissing,
+} from './snowflake-failure-class';
 
 /**
  * ADF object name: letters/digits/_ only, first char a letter.
@@ -538,12 +544,18 @@ export async function listSnowflakeTables(
         // A missing IS_ICEBERG column fails the first attempt — fall through to
         // the retry rather than reporting a gate the operator cannot act on.
         if (withIceberg && /IS_ICEBERG|invalid identifier/i.test(detail)) continue;
+        // THE R7 SITE (deploy-integrity.md). This used to append, to EVERY
+        // failure whatever it said: "Check that the connection's role has USAGE
+        // on database <db> and SELECT on its tables, and that the warehouse can
+        // start." Measured live against an MFA rejection, that advice was
+        // false — Snowflake had already named the cause and no grant could
+        // touch it. The remediation is now derived from what the backend
+        // actually said, and an unrecognised failure gets NONE.
+        const kind = classifySnowflakeFailure(detail);
         return {
           gate: {
-            missing: 'snowflake-read',
-            message:
-              `Snowflake did not return a table list: ${detail}. Check that the connection's role has USAGE on ` +
-              `database ${database} and SELECT on its tables, and that the warehouse can start.`,
+            missing: snowflakeGateMissing(kind),
+            message: describeSnowflakeFailure('Snowflake did not return a table list', detail, database),
           },
         };
       }
@@ -567,6 +579,13 @@ export async function listSnowflakeTables(
     } catch (e: any) {
       const msg = e?.message || String(e);
       if (withIceberg && /IS_ICEBERG|invalid identifier/i.test(msg)) continue;
+      // DELIBERATELY NOT run through snowflakeRemediation. Everything inside
+      // this try throws from ARM (upsertDataset / upsertPipeline / runPipeline /
+      // getPipelineRun), not from Snowflake — the Snowflake driver's words reach
+      // us via the pipeline run's `message`, handled above. Attaching Snowflake
+      // advice to an ARM fault would be this module's own defect inverted:
+      // naming a cause on the wrong system entirely. The message is surfaced
+      // verbatim with no cause asserted, which is what it establishes.
       return {
         gate: {
           missing: 'snowflake-read',

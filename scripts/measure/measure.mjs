@@ -59,7 +59,11 @@ export class MeasurementError extends Error {
  *
  * So a batch shim goes through `cmd.exe /d /s /c` with a hand-quoted command
  * line and `windowsVerbatimArguments`, which preserves argument fidelity. The
- * outer quote pair is required — cmd strips it, leaving the inner quoting intact.
+ * outer quote pair is there because cmd strips it, leaving the inner quoting
+ * intact. Honest scope: that pairing is asserted STRUCTURALLY (the `SHAPE:` test
+ * in __tests__/measure-injection.test.mjs), not behaviourally — nothing in this
+ * repo runs on Windows, so "required" is the design intent and the documented
+ * cmd.exe rule, not something a check here measures.
  *
  * The quoting itself lives in `./cmd-quote.mjs`: it is pure, so it is testable
  * without spawning anything.
@@ -178,18 +182,35 @@ function needsWrapper(bin) {
  * in this file: a frozen literal from ALLOWED_BINARIES, the literal `cmd.exe`,
  * or `process.execPath`. Nothing derived from argv or the environment does.
  *
+ * That sentence is now ENFORCED rather than asserted, which it was not until
+ * 2026-08-26 — and it took four rounds and six live counterexamples to make it
+ * true. Five tests hold the two halves: the vocabulary and origin contracts for
+ * this function and its callees, the ambient-global and `process.<member>`
+ * populations for the environment half, and a behavioural check that the built
+ * command line always begins with the file it was given for the argv half. See
+ * the list in `run()` below, and the header of
+ * __tests__/measure-injection.test.mjs for what is still NOT covered.
+ *
  * NOT exported. An exported function's parameters are an external taint source
  * to a static analyser, and exporting this one — solely so a unit test could
  * reach the .cmd branch without az installed — was itself enough to stop the
  * same query terminating. The pure half lives in cmd-quote.mjs and is tested
  * directly there instead.
+ *
+ * The third field is a BOOLEAN, not an options object. It used to be
+ * `opts: { windowsVerbatimArguments: true }`, spread into the spawnSync call —
+ * which meant a plan could set ANY spawn option, `shell` included, and the
+ * literal `shell: false` written above the spread would lose to it. No plan ever
+ * did; the shape allowed it, and a guard that only holds because nobody has
+ * exercised the hole is the pattern the comment above already rejects for
+ * ComSpec. A boolean cannot carry a second option.
  */
 function spawnPlan(bin, args) {
   // SELF_NODE resolves to this process's own executable. It cannot be a .cmd,
   // so it never needs the wrapper.
-  if (bin === SELF_NODE) return { cmd: process.execPath, argv: args, opts: {} };
+  if (bin === SELF_NODE) return { cmd: process.execPath, argv: args, verbatim: false };
   const file = canonicalBinary(bin);
-  if (!needsWrapper(file)) return { cmd: file, argv: args, opts: {} };
+  if (!needsWrapper(file)) return { cmd: file, argv: args, verbatim: false };
   // The interpreter is a LITERAL. ComSpec used to be honoured when it "named
   // cmd.exe", tested as /(^|[\\/])cmd\.exe$/i — which any attacker who can set
   // ComSpec satisfies by naming their binary `cmd.exe` in a directory they own.
@@ -198,7 +219,7 @@ function spawnPlan(bin, args) {
   return {
     cmd: 'cmd.exe',
     argv: ['/d', '/s', '/c', `"${buildCmdLine(file, args)}"`],
-    opts: { windowsVerbatimArguments: true },
+    verbatim: true,
   };
 }
 
@@ -236,13 +257,186 @@ export function run(bin, args, { allowNonZero = false, timeoutMs = 600000, retri
   let lastStatus = null;
 
   for (let attempt = 0; attempt <= retries; attempt++) {
+    // CodeQL alert 983, `js/indirect-command-line-injection` (CWE-078), fires on
+    // this call. Triaged 2026-08-25 as a FALSE POSITIVE — an unmodelled
+    // sanitizer, not an unexploitable-in-practice path. The reasoning, so it is
+    // readable here and not only in a dismissal comment:
+    //
+    // The SOURCE is real. `run` is exported, and two callers genuinely feed it
+    // `process.argv` (drain-status.mjs:18, red-tally.mjs:17). This is not a
+    // theoretical taint.
+    //
+    // The SINK is real too, and only on one branch. `cmd.exe /d /s /c "<line>"`
+    // IS a shell by any definition, including CodeQL's, and no code change can
+    // make it not one: Node >= 20 refuses to spawn a .cmd/.bat directly
+    // (EINVAL, CVE-2024-27980), and `az` ships on Windows only as `az.cmd`. So
+    // "use an argv array with shell:false" — the correct answer everywhere else,
+    // and what the other two branches already do — is unavailable for a batch
+    // shim. Quoting is not a shortcut taken here; it is the only mechanism.
+    //
+    // What severs the path is `quoteForCmd` (cmd-quote.mjs), which fails CLOSED
+    // on the two characters that cannot be escaped on a cmd command line (`%`,
+    // CR/LF) and quotes every metacharacter that can. MEASURED 2026-08-25 on
+    // win32/node v24.18.0 against a controlled .cmd shim reached through this
+    // exact code path: 12 injection payloads, 0 achieved execution, 10 delivered
+    // to the child byte-for-byte as ONE argv element, 2 refused. Those 12/10/2
+    // figures come from a one-off probe that is NOT in the repo, so treat them
+    // as the origin of the claim, not as its standing control.
+    //
+    // The standing control is __tests__/measure-injection.test.mjs. Be precise
+    // about what of it runs where, because an earlier revision of this comment
+    // said it "runs that matrix in CI" and that was FALSE:
+    //
+    //   - The suite IS discovered and executed by
+    //     scripts/ci/check-node-test-suites.mjs from the REQUIRED `guardrails`
+    //     check. No wiring line is needed; `--list` shows it.
+    //   - But `runs-on: windows` appears in ZERO workflows here (206
+    //     ubuntu-latest, 9 self-hosted Linux). The cmd.exe matrix — 8 injection
+    //     payloads + 1 fidelity row, plus 4 refusal classes (`%`, `\n`, `\r`,
+    //     `\r\n`) — is `{ skip: notWin }`, so on every lane this repo has it
+    //     SKIPS. Measured 2026-08-26 with process.platform forced to 'linux':
+    //     rc=0, 25 tests, 20 pass, 5 SKIPPED. The fifth skip is an artefact of
+    //     the FORGERY and not a CI gap: `PRODUCTION PATH` spawns a real child,
+    //     and a forged platform does not change the OS underneath, so it stands
+    //     down rather than fail for the wrong reason. On a real ubuntu runner
+    //     process.platform and os.type() agree and it executes — INFERRED from
+    //     the skip predicate, not observed; no Linux host was available here.
+    //   - What DOES run on those lanes: the same payloads through the same
+    //     `buildCmdLine`, checked against cmd.exe's own metacharacter-liveness
+    //     rule; the `%` and CR/LF refusals at the buildCmdLine layer; the
+    //     behavioural proof that the built command line always begins with the
+    //     file it was given; and nine `SHAPE:` assertions that pin this options
+    //     object, the outer quote pair below, canonicalBinary's return,
+    //     spawnPlan's `bin` reads, the FIRST ARGUMENT of the cmd.exe command
+    //     line, spawnPlan's whole vocabulary, the single top-level ORIGIN of
+    //     each name spawnPlan calls, the single write to `plan` in this
+    //     function, the absence of any ambient global, and the
+    //     `process.<member>` population of measure.mjs AND cmd-quote.mjs —
+    //     properties no behavioural assertion in JavaScript can distinguish.
+    //
+    // So: the QUOTING is guarded on every lane; cmd.exe's actual behaviour is
+    // evidenced locally on win32 only. Closing that needs a windows-latest job,
+    // which is not in this change.
+    //
+    // The regression that would make this a TRUE positive is named in #3985: a
+    // path where the spawned executable is NOT drawn from the frozen
+    // ALLOWED_BINARIES table. It took THREE rounds to hold that shut, and each
+    // round was defeated by a reviewer going one scope level further out than
+    // the guard reached:
+    //
+    //   1. Pinned what `canonicalBinary` RETURNS. Defeated at the CALL SITE:
+    //      `canonicalBinary(bin); const file = bin;` — the helper still returns
+    //      the table's literal, spawnPlan simply stops using it. Re-run against
+    //      that suite: rc=0, 16 pass/0 fail win32, rc=0 12 pass/4 skipped
+    //      forced-linux. It SURVIVED.
+    //   2. Pinned the identifier `bin`. Defeated on the cmd.exe branch, where
+    //      `cmd:` is the literal 'cmd.exe' and the program that actually runs is
+    //      `buildCmdLine`'s FIRST ARGUMENT — which nothing constrained.
+    //      `buildCmdLine(process.env.LOOM_BIN || file, args)` SURVIVED at rc=0
+    //      in both columns, as did three siblings.
+    //   3. Pinned that argument and froze spawnPlan's vocabulary. Defeated at
+    //      MODULE scope, by mutations that leave spawnPlan byte-identical: a
+    //      top-level `buildCmdLine` shadow, and an ALLOWED_BINARIES value that
+    //      stops being a literal. Both SURVIVED at rc=0 in both columns.
+    //   4. Added a `process.<member>` population. Defeated SIX ways, five proven
+    //      as live execution of an attacker-named binary: `process` is a
+    //      SPELLING (`globalThis['pro' + 'cess'].env` reaches the same object
+    //      three different places), a `/**` + `/` prefix exploited a bug in the
+    //      round-3 comment stripper to hide a LITERAL `process.env` in the
+    //      table, and a shadow deriving arg-0 from the caller's `args` needs no
+    //      taint token at all.
+    //
+    // So, precisely, what pins it now:
+    //
+    //   - `PRODUCTION PATH: run() spawns the TABLE literal…` drives THIS
+    //     function with its real defaults and makes the executable's identity
+    //     OBSERVABLE — the child reports the name it was invoked under, and the
+    //     call-site arm fails it with `'GH' !== 'gh'`. It reaches only the
+    //     branch the host platform takes.
+    //   - `SHAPE: spawnPlan reads bin ONLY to canonicalise it…` pins the
+    //     remaining branches by counting `bin` reads in spawnPlan's source, and
+    //     pins the cmd.exe command line's first argument to `file`.
+    //   - `SHAPE: spawnPlan's vocabulary is CLOSED…` freezes the SET of names
+    //     the function may mention, so a new call, binding, or property read
+    //     fails wherever its value would have flowed. That completes the
+    //     enumeration of executable positions WITHIN THIS FUNCTION BODY — and
+    //     only within it; where those names come from is the next assertion.
+    //   - `SHAPE: every name spawnPlan CALLS has exactly one top-level origin…`
+    //     closes module scope: buildCmdLine must be the IMPORT from
+    //     ./cmd-quote.mjs, so a local shadow of that name cannot choose the
+    //     program. The callee list is DERIVED from spawnPlan's body.
+    //   - `SHAPE: run() never rewrites the plan…` pins the window between
+    //     `plan = spawnPlan(…)` and the spawnSync below, where `bin` is still in
+    //     scope. Keyed to the shape of a WRITE, not to a list of fields.
+    //   - `SHAPE: neither file can reach an ambient global` pins `globalThis`,
+    //     `global`, `eval`, `Function`, `require`, `module`, `exports` and
+    //     dynamic `import(` at ZERO in both files. A population of zero cannot
+    //     be satisfied by an alias or a computed key, which is what the
+    //     `process`-spelled population below could not say.
+    //   - `SHAPE: the taint-source population…` is the ENVIRONMENT half of the
+    //     sentence above needsWrapper: every `process.<member>` read in this
+    //     file AND in cmd-quote.mjs, counted, with the bare-`process` total
+    //     counted separately. On its own it is keyed to a spelling; it is the
+    //     ambient-global assertion above that makes it a boundary.
+    //   - `the built command line ALWAYS begins with the file it was given` is
+    //     the ARGV half, and BEHAVIOURAL — source text cannot follow a value
+    //     into cmd-quote.mjs. For all seven allowlisted names and every payload
+    //     the line must start with the name handed in, so an argument that
+    //     chooses the program fails however it is spelled.
+    //
+    // NONE OF THIS IS A BOUNDARY AGAINST A DELIBERATE REINTRODUCTION. Every
+    // SHAPE assertion reads source text, and anyone who can edit this file can
+    // write the sink directly; four rounds have each been defeated by moving one
+    // scope outward. These guards catch REGRESSION and DECAY — the triage above
+    // is a claim, and a claim nobody re-runs becomes folklore the first time
+    // someone edits the file. The suite header names what is NOT covered.
+    //
+    // They are not redundant and none subsumes the others: the behavioural one
+    // reaches only the host's branch but proves the real dataflow edge; the
+    // SHAPE ones reach every branch but prove only structure. Be exact about
+    // which of them a CI lane gets, because the two columns are NOT the same
+    // thing. In the forced-linux column MEASURED here, only the SHAPE assertions
+    // catch — the behavioural one stands down, because the forgery does not
+    // change the OS. On a REAL ubuntu runner process.platform and os.type()
+    // agree, the skip predicate is false, and BOTH should execute — but that is
+    // INFERRED from reading the predicate and has never been observed, because
+    // no Linux host was available to this lane. Until one is, the only CI
+    // guarantee measured end to end is the SHAPE one.
+    //
+    // MEASURED 2026-08-26, isolated copies, green baseline verified first
+    // (win32 rc=0 25p/0f/0s; forced-linux rc=0 20p/0f/5s), every needle asserted
+    // to match exactly once against the file's own CRLF: all 34 arms in
+    // __tests__/injection-arms.mjs match their documented verdict at rc=0,
+    // including every arm above and four that mutate the round-3 GUARDS
+    // themselves. Renaming spawnPlan's `bin` parameter, renaming its `file`
+    // binding, and deleting the `process.env.PATH` read all go rc=1 — the
+    // population assertions fail CLOSED rather than reading absence as a pass.
+    // What is NOT established is any of these on a REAL Linux host — see the arm
+    // table in the suite's header, which says so.
+    //
+    // The marker below is placed per the CodeQL convention (the line BEFORE the
+    // alert). Do not read it as a closed control: .github/workflows/codeql.yml
+    // runs no suppression-consuming step, so on GitHub this most likely does NOT
+    // retire alert 983 by itself. The authoritative disposition is an API
+    // dismissal carrying this analysis, per #3985. The comment stays because it
+    // is correct if the workflow ever gains that step, and because the reasoning
+    // belongs next to the code either way.
+    //
+    // codeql[js/indirect-command-line-injection]
     const res = spawnSync(plan.cmd, plan.argv, {
       encoding: 'utf8',
       timeout: timeoutMs,
       maxBuffer: 64 * 1024 * 1024,
-      shell: false,
       windowsHide: true,
-      ...plan.opts,
+      // Read off the plan BY NAME. This was `...plan.opts`, and a spread placed
+      // after `shell: false` silently outranks it — so the one option that must
+      // never be true was the one a plan could set. Nothing in this file sets
+      // it; the point is that nothing CAN.
+      windowsVerbatimArguments: plan.verbatim === true,
+      // Literal, last, and unreachable by any caller. Two of the three branches
+      // rely on this alone: they hand `argv` to the OS as an array, where no
+      // interpreter ever sees the metacharacters.
+      shell: false,
     });
 
     if (res.error) {

@@ -24,6 +24,19 @@ on:
   # None of those four jobs read PR context, and none of them `needs:` the
   # `changes` job, so they behave identically under a dispatch.
   workflow_dispatch:
+  # MERGE QUEUE. Secret Scan / PowerShell Lint / Python Lint / Repo Hygiene are
+  # REQUIRED contexts, and a merge group is gated on the SAME required set as a
+  # PR. A required context that never reports in a merge group does not fail the
+  # group — it leaves it pending until the queue times out and ejects the PR, so
+  # a missing trigger here would stall every merge in the repo.
+  #
+  # DELIBERATELY BARE — no `branches:`, no `paths:`. The `paths:` list above
+  # belongs to `push:` only; inheriting a path filter here would reintroduce the
+  # same stall by another route (a merge group touching no matching path would
+  # never produce the context). All four jobs are event-agnostic: none has a
+  # job-level `if:`, none reads `github.event.pull_request.*`, and none `needs:`
+  # the path-filtered `changes` job. They behave identically here.
+  merge_group:
 
 concurrency:
   # #3426 — per-SHA on push/dispatch. This lane publishes FOUR required
