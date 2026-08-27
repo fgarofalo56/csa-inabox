@@ -126,6 +126,13 @@ jobs:
       admin_sub: ${{ steps.bootstrap_coords.outputs.admin_sub }}
       dlz_sub: ${{ steps.bootstrap_coords.outputs.dlz_sub }}
       region: ${{ steps.bootstrap_coords.outputs.region }}
+      # 'true' ONLY when scripts/ci/estate-pause-declaration.json carries an
+      # owned, unexpired entry for CSA_LOOM_BOUNDARY *and* the preflight observed
+      # a stopped cluster. Published as a job output so the chained bootstrap can
+      # stand down too — it wires Synapse SQL, Purview and Databricks SCIM, and
+      # the Synapse dedicated SQL pool is paused alongside the ADX cluster, so
+      # bootstrapping a paused estate would put this lane straight back to red.
+      estate_paused: ${{ steps.adx_preflight.outputs.estate_paused }}
 
     # ── IMAGE TAGS: THE DEPLOY MEASURES THEM, NOBODY TYPES THEM (#3449) ─────
     # gcc-high.bicepparam resolves all seventeen `appImageTags` entries with
@@ -669,6 +676,7 @@ jobs:
       # path in the repo and destabilising it to pre-empt a latent fault would
       # trade one P0 for a worse one. Tracked in #3786.
       - name: ADX preflight — a stopped cluster cannot take its principal assignments
+        id: adx_preflight
         if: github.event_name == 'schedule' || inputs.run_mode == 'full'
         env:
           AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_GOV_SUBSCRIPTION_ID }}
@@ -685,11 +693,55 @@ jobs:
             echo "::error::No target subscription, so the estate's ADX cluster cannot be located. It comes from the AZURE_GOV_SUBSCRIPTION_ID repository secret; it is empty."
             exit 1
           fi
+          # --boundary is what lets scripts/ci/estate-pause-declaration.json apply
+          # to THIS lane. Without it the script cannot match a declaration and
+          # behaves exactly as it did before the register existed: a stopped
+          # cluster is started, and a start Azure refuses fails the lane.
           node scripts/ci/ensure-adx-cluster-running.mjs \
             --subscription "$DEPLOY_SUB" \
-            --rg "rg-csa-loom-admin-${AZURE_LOCATION}"
+            --rg "rg-csa-loom-admin-${AZURE_LOCATION}" \
+            --boundary "$CSA_LOOM_BOUNDARY"
+
+      # deploy-integrity.md R3: a lane's state must be DECLARED, never silently
+      # trailing. A run that stands down has to SAY the estate was not measured,
+      # or it reads as a clean pass — which is the failure mode #3980 removed
+      # from the What-If lane ("UNMEASURED, not clean") and the one this whole
+      # change is at risk of reintroducing in the opposite direction.
+      - name: Estate is DECLARED paused — this run measures nothing
+        if: steps.adx_preflight.outputs.estate_paused == 'true'
+        run: |
+          set -euo pipefail
+          {
+            echo "## GCC-High: STOOD DOWN — the estate is declared paused"
+            echo ""
+            echo "\`${CSA_LOOM_BOUNDARY}\` has an owned, unexpired entry in"
+            echo "\`scripts/ci/estate-pause-declaration.json\`, and the ADX preflight observed"
+            echo "its cluster stopped. The what-if, the apply and the post-deploy bootstrap were"
+            echo "SKIPPED — a stopped Kusto engine refuses \`principalAssignments\`, so none of"
+            echo "them could have produced a real answer."
+            echo ""
+            echo "**This run is UNMEASURED, not clean.** It is not evidence the template applies,"
+            echo "and it does not refresh this estate's drift position against \`main\`."
+            echo ""
+            echo "To measure it again: resume the estate, then delete the entry. The declaration"
+            echo "expires on its own \`reviewBy\` date, after which this lane goes red again."
+          } >> "$GITHUB_STEP_SUMMARY"
+          echo "::notice::GCC-High stood down: the estate is DECLARED paused. This run is UNMEASURED, not clean."
 
       - name: Bicep what-if
+        # STAND DOWN on a DECLARED-paused estate. ARM what-if cannot enumerate
+        # Microsoft.Kusto/clusters/principalAssignments against a stopped engine
+        # (ClusterNotValidForPrincipals), so against a paused estate this step
+        # reports a refusal it never established as drift — the exact false
+        # negative #3980 removed from the What-If lane.
+        #
+        # Keyed to the preflight's DECLARATION verdict, never to the cluster
+        # state: the output is 'true' only when scripts/ci/estate-pause-declaration.json
+        # carries an owned, unexpired entry for CSA_LOOM_BOUNDARY. When the step
+        # is skipped (a whatif-only dispatch) the output is '' and this runs, and
+        # when the estate is stopped WITHOUT a declaration the preflight has
+        # already failed the job before this is reached.
+        if: steps.adx_preflight.outputs.estate_paused != 'true'
         run: |
           az deployment sub what-if \
             --name csa-loom-gcch-ci-${{ github.run_id }} \
@@ -929,7 +981,11 @@ jobs:
 
       - name: Provision (with full Gov dispatch)
         id: provision
-        if: github.event_name == 'schedule' || inputs.run_mode == 'full'
+        # The `estate_paused` clause is the same stand-down as `Bicep what-if`
+        # above, and it matters MORE here: the apply is what actually writes the
+        # principal assignments a stopped engine refuses. Without it a declared
+        # pause would only move the identical red from the preflight to here.
+        if: (github.event_name == 'schedule' || inputs.run_mode == 'full') && steps.adx_preflight.outputs.estate_paused != 'true'
         # #3161 — gcc-high.bicepparam reads sixteen image tags with
         # readEnvironmentVariable(), and this step had NO env: block at all. So
         # every full Gov deploy fell back to the default and wrote the MUTABLE
@@ -1173,7 +1229,12 @@ jobs:
       # auto-bind-by-default.md forbids, applied to the boundary that can least
       # afford a manual step. Same script, same behaviour, every cloud.
       - name: Approve the Front Door -> ACA private-endpoint connection
-        if: github.event_name == 'schedule' || inputs.run_mode == 'full'
+        # Stood down on a declared-paused estate: this is a MUTATION that only
+        # makes sense behind an apply that just ran, and the apply was skipped.
+        # It also hard-fails (exit 1) when it cannot resolve the managed
+        # environment, which is reachable if the estate is ever taken past PAUSE
+        # to HIBERNATE, where resources without a stop API are deleted.
+        if: (github.event_name == 'schedule' || inputs.run_mode == 'full') && steps.adx_preflight.outputs.estate_paused != 'true'
         run: |
           set -euo pipefail
           CAE_ID=$(az containerapp env show -n "cae-csa-loom-${{ env.AZURE_LOCATION }}" -g "rg-csa-loom-admin-${{ env.AZURE_LOCATION }}" --query id -o tsv | tr -d '[:space:]')
@@ -1293,7 +1354,7 @@ jobs:
   post-deploy-bootstrap:
     name: Post-deploy bootstrap (GCC-High)
     needs: deploy-validate
-    if: ${{ inputs.keep_resources && (github.event_name == 'schedule' || inputs.run_mode == 'full') && needs.deploy-validate.result == 'success' }}
+    if: ${{ inputs.keep_resources && (github.event_name == 'schedule' || inputs.run_mode == 'full') && needs.deploy-validate.result == 'success' && needs.deploy-validate.outputs.estate_paused != 'true' }}
     uses: ./.github/workflows/csa-loom-post-deploy-bootstrap.yml
     secrets: inherit
     with:
