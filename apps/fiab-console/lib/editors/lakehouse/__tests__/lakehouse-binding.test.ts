@@ -10,6 +10,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   bindingFromItemState, joinPrefix, relativeToRoot, containerRelativePath, isClientKnownContainer,
+  CLIENT_KNOWN_CONTAINERS,
 } from '../lakehouse-binding';
 import { KNOWN_CONTAINERS } from '@/lib/azure/adls-client';
 
@@ -78,20 +79,60 @@ describe('bindingFromItemState', () => {
 });
 
 describe('isClientKnownContainer — drift guard', () => {
-  it('mirrors adls-client KNOWN_CONTAINERS exactly', () => {
+  it('mirrors adls-client KNOWN_CONTAINERS exactly, in BOTH directions', () => {
     // The client bundle cannot import adls-client (it pulls in the credential
     // chain), so the container list is duplicated in lakehouse-binding.ts. This
     // spec runs in node, CAN import the real one, and fails the moment the two
-    // disagree — so a container added to the DLZ and not mirrored here is a red
-    // test rather than a lakehouse the editor silently refuses to bind.
-    for (const c of KNOWN_CONTAINERS) {
+    // disagree.
+    //
+    // #3921 — the first version of this guard was ONE-directional: a loop over
+    // the real list, plus a hard-coded negative list of four names standing in
+    // for "and nothing beyond it". A mirror SUPERSET therefore passed green,
+    // and that is the direction that matters. If the editor offers a container
+    // the DLZ does not serve, `/api/lakehouse/paths` answers `404 unknown
+    // container: …` through `apiError` rather than `classifyListFailure`, and
+    // the user lands on a raw "List failed" with no remediation — the exact
+    // dead-end #3904 reported. (The subset direction degrades gracefully: a
+    // container the editor does not know about simply is not offered.)
+    // Enumerating "names that must not appear" can never be complete, so both
+    // directions are compared as sets instead.
+    const real = KNOWN_CONTAINERS as readonly string[];
+    const mirror = CLIENT_KNOWN_CONTAINERS as readonly string[];
+
+    // Neither list may be EMPTY. A set comparison over two empty lists is
+    // vacuously true and would report a green guard that measures nothing.
+    expect(real.length, 'adls-client KNOWN_CONTAINERS is empty').toBeGreaterThan(0);
+    expect(mirror.length, 'the editor container mirror is empty').toBeGreaterThan(0);
+
+    // →  nothing the DLZ serves is missing from the mirror (a lakehouse the
+    //    editor would silently refuse to bind). Enumerated, not compared, so
+    //    the failure names the offender.
+    for (const c of real) {
       expect(isClientKnownContainer(c), `${c} is served by the DLZ but unknown to the editor`).toBe(true);
     }
-    // …and nothing beyond it. Enumerated rather than compared as a set so the
-    // failure names the offender.
-    for (const c of ['customer-owned', 'onelake', '', 'Bronze']) {
-      expect(isClientKnownContainer(c), `${c} is not a DLZ container`).toBe(false);
+
+    // ←  and nothing beyond it: every mirrored name is really served. Named
+    //    the same way, for the same reason.
+    for (const c of mirror) {
+      expect(real.includes(c), `${c} is offered by the editor but NOT served by the DLZ`).toBe(true);
     }
+
+    // Belt-and-braces over both loops, and the assertion that carries the two
+    // SIZES into the failure message — a mirror that drifted by a duplicate or
+    // by count alone shows up here even if every individual name passed above.
+    expect(
+      [...mirror].sort(),
+      `editor mirror (${mirror.length} entries) vs adls-client KNOWN_CONTAINERS (${real.length} entries)`,
+    ).toEqual([...real].sort());
+  });
+
+  it('pins the PREDICATE, not the list: exact, case-sensitive names only', () => {
+    // Deliberately NOT a drift guard — the set comparison above is. These pin
+    // two behaviours of `isClientKnownContainer` itself that a set comparison
+    // cannot express: ADLS container names are lowercase, and the empty string
+    // (the old container-root default that produced #3904) is not a container.
+    expect(isClientKnownContainer(''), 'the empty string is not a container').toBe(false);
+    expect(isClientKnownContainer('Bronze'), 'container matching is case-sensitive').toBe(false);
   });
 });
 
