@@ -93,6 +93,7 @@ vi.mock('../cosmos-data-client', () => ({ queryItems: vi.fn(async () => ({ docum
 vi.mock('../cosmos-account-client', () => ({ listContainers: vi.fn(async () => []) }));
 
 import { runMirrorAdfCopy, runMirrorSnapshot } from '../mirror-engine';
+import { adfDenialEvidence, describeTriggerStartFailure } from '../mirror-adf-copy';
 
 const SNOW = {
   sourceType: 'Snowflake', server: 'myorg-acct123', database: 'ANALYTICS',
@@ -314,6 +315,123 @@ describe('runMirrorAdfCopy (Snowflake)', () => {
     expect(r.engine).toBe('adf-copy');
     // Never touches the CDC resource.
     expect(upsertAdfCdc).not.toHaveBeenCalled();
+  });
+
+  // ── R7: the remediation must match the failure the BACKEND reported ───────
+  it('an MFA rejection reaches the operator WITHOUT grant advice (the live regression)', async () => {
+    // END TO END through the real call path — the pure classifier being right
+    // proves nothing if `listSnowflakeTables` does not use it. With no table
+    // subset the engine enumerates, the enumeration pipeline fails, and the
+    // gate message is what the operator actually reads.
+    //
+    // Identifiers are elided exactly as they were reported (PUBLIC REPO); the
+    // Snowflake driver's own sentence is verbatim, because that string IS the
+    // regression.
+    const MFA =
+      'Operation on target CountSchemas failed: ... [Snowflake] 394509 (08004): '
+      + 'Failed to authenticate: MFA authentication is required, but none of your current '
+      + 'MFA methods are supported for programmatic authentication.';
+    getPipelineRun.mockResolvedValueOnce({ runId: 'run-1', pipelineName: 'p', status: 'Failed', message: MFA } as any);
+
+    const r = await runMirrorAdfCopy('id7', 'ws', SNOW, [], 'note');
+    expect(r.ok).toBe(false);
+    expect(r.status).toBe('Gated');
+    // Snowflake's own words survive, verbatim. That part was always right.
+    expect(r.gate?.message).toContain(MFA);
+    // …and the advice that used to follow them does not.
+    expect(r.gate?.message).not.toMatch(/USAGE on|SELECT on/i);
+    expect(r.gate?.message).not.toContain('warehouse can start');
+    expect(r.gate?.message).not.toContain(SNOW.database);
+    // The remediation that IS true of an MFA rejection.
+    expect(r.gate?.message).toMatch(/key-pair|TYPE = SERVICE/i);
+    expect(r.gate?.missing).toBe('snowflake-authentication');
+  }, 20_000);
+
+  it('a GRANTS failure still gets the grant advice — the fix is conditional, not a deletion', async () => {
+    const AUTHZ =
+      'Operation on target ListTables failed: 003001 (42501): SQL access control error: '
+      + "Insufficient privileges to operate on schema 'PLACEHOLDER_SCHEMA'.";
+    getPipelineRun.mockResolvedValueOnce({ runId: 'run-1', pipelineName: 'p', status: 'Failed', message: AUTHZ } as any);
+
+    const r = await runMirrorAdfCopy('id8', 'ws', SNOW, [], 'note');
+    expect(r.ok).toBe(false);
+    expect(r.gate?.message).toContain(AUTHZ);
+    expect(r.gate?.message).toContain(`USAGE on database ${SNOW.database}`);
+    expect(r.gate?.missing).toBe('snowflake-grants');
+  }, 20_000);
+
+  it('an UNRECOGNISED enumeration failure asserts no cause at all', async () => {
+    const ODD = 'Operation on target ListTables failed: ErrorCode=UserErrorOdbcOperationFailed.';
+    getPipelineRun.mockResolvedValueOnce({ runId: 'run-1', pipelineName: 'p', status: 'Failed', message: ODD } as any);
+
+    const r = await runMirrorAdfCopy('id9', 'ws', SNOW, [], 'note');
+    expect(r.ok).toBe(false);
+    expect(r.gate?.message).toContain(ODD);
+    expect(r.gate?.message).toMatch(/asserts NO cause/);
+    expect(r.gate?.message).not.toMatch(/USAGE on|SELECT on|AUTO_RESUME|firewall/i);
+    // Unknown keeps the pre-existing key: the read failed, cause unclassified.
+    expect(r.gate?.missing).toBe('snowflake-read');
+  }, 20_000);
+
+  it('a trigger that fails for a NON-permission reason is not blamed on RBAC', async () => {
+    startTrigger.mockRejectedValueOnce(new Error('startTrigger failed 409: {"error":{"code":"Conflict"}}'));
+    const r = await runMirrorAdfCopy('id10', 'ws', SNOW, TABLES, 'note');
+    // The initial load DID run — that is established and stated.
+    expect(r.ok).toBe(true);
+    expect(r.note).toContain('Initial load ran');
+    expect(r.note).toContain('Conflict');
+    expect(r.note).not.toContain('Data Factory Contributor');
+    expect(r.note).toContain('did NOT establish why');
+  });
+
+  it('a trigger REFUSED by ARM still names the exact role to grant', async () => {
+    startTrigger.mockRejectedValueOnce(
+      Object.assign(new Error('startTrigger failed 403: {"error":{"code":"AuthorizationFailed"}}'), { status: 403 }),
+    );
+    const r = await runMirrorAdfCopy('id11', 'ws', SNOW, TABLES, 'note');
+    expect(r.ok).toBe(true);
+    expect(r.note).toContain('Data Factory Contributor');
+    expect(r.note).toContain('ARM answered 403');
+  });
+});
+
+describe('adfDenialEvidence / describeTriggerStartFailure', () => {
+  it('reads the STRUCTURED status first — adf-client rides it along for exactly this', () => {
+    expect(adfDenialEvidence(Object.assign(new Error('nope'), { status: 403 }))).toBe('ARM answered 403');
+    expect(adfDenialEvidence(Object.assign(new Error('nope'), { statusCode: 401 }))).toBe('ARM answered 401');
+  });
+
+  it('falls back to ARM denial codes in the message, because startTrigger throws a bare Error', () => {
+    expect(adfDenialEvidence(new Error('startTrigger failed 403: AuthorizationFailed'))).toMatch(/refused the call/);
+    expect(adfDenialEvidence(new Error('LinkedAuthorizationFailed on the factory'))).toMatch(/refused the call/);
+  });
+
+  it('returns null for everything that is not evidence of a refusal', () => {
+    for (const e of [
+      new Error('startTrigger failed 409: Conflict'),
+      new Error('startTrigger failed 429: TooManyRequests'),
+      new Error('startTrigger failed 404: the pipeline reference was not found'),
+      new Error('socket hang up'),
+      null,
+      undefined,
+    ]) {
+      expect(adfDenialEvidence(e), `for ${String(e)}`).toBeNull();
+    }
+  });
+
+  it('does not read 403 out of a TRIGGER NAME (the rg-loom-503 defect)', () => {
+    expect(adfDenialEvidence(new Error('startTrigger loom_copy_403abc_trg failed: socket hang up'))).toBeNull();
+    expect(describeTriggerStartFailure('schedule', new Error('startTrigger loom_copy_403abc_trg failed: socket hang up')))
+      .not.toContain('Data Factory Contributor');
+  });
+
+  it('names the trigger kind and carries the ADF message verbatim in both branches', () => {
+    const denied = describeTriggerStartFailure('tumbling', Object.assign(new Error('AuthorizationFailed'), { status: 403 }));
+    expect(denied).toContain('tumbling-window');
+    expect(denied).toContain('AuthorizationFailed');
+    const unknown = describeTriggerStartFailure('schedule', new Error('socket hang up'));
+    expect(unknown).toContain('schedule');
+    expect(unknown).toContain('socket hang up');
   });
 });
 
