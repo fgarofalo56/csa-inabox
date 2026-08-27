@@ -83,6 +83,61 @@ name: loom-brain-scan
 # chain; when it is absent the managed-identity leg is not added at all, so there
 # is no failed IMDS probe before the fallback.
 #
+# ── AND THE CREDENTIAL CHAIN HAS TO BE ALLOWED TO REACH IT (review of #4014) ─
+# The paragraph above was true about intent and FALSE about behaviour, and the
+# lane could not have completed a single run in either boundary because of it.
+#
+# MEASURED at head, by reading the installed SDK:
+# `apps/fiab-console/node_modules/@azure/identity` is 4.13.1 and
+# `dist/commonjs/credentials/defaultAzureCredential.js:78-80` orders the
+# production chain
+#
+#     EnvironmentCredential -> WorkloadIdentityCredential -> ManagedIdentityCredential
+#
+# with `:130` appending the developer credentials when `AZURE_TOKEN_CREDENTIALS`
+# is unset — which it is: zero occurrences anywhere in `.github/workflows`.
+# THIS FILE set `AZURE_CLIENT_ID` / `AZURE_CLIENT_SECRET` / `AZURE_TENANT_ID` at
+# JOB level, so `EnvironmentCredential` won every time, the managed-identity leg
+# was never evaluated, and `LOOM_UAMI_CLIENT_ID` was inert — the two resolution
+# steps below were establishing nothing at all.
+#
+# The consequence was total rather than partial: the deploy SP holds no
+# `sqlRoleAssignments` anywhere in the platform bicep, `disableLocalAuth: true`
+# makes AAD-RBAC the only data-plane path, and `recordRun` fires on OK, PAUSED
+# AND UNREACHABLE — so every verdict would have died on its Cosmos write.
+#
+# There is a SECOND door, measured in the same file: when
+# `managedIdentityClientId` is not supplied, `createDefaultManagedIdentityCredential`
+# falls back to `process.env.AZURE_CLIENT_ID` — the SP's app id — and asks IMDS
+# for an identity attached to nothing.
+#
+# So the three variables are GONE from both jobs. They were never needed:
+# `Azure/login` takes its credentials inline via `creds:`, and every `az` call
+# below uses the resulting login session. And because "we removed the env vars"
+# is a claim about a file rather than about a run, `lib/brain/run/token-identity.ts`
+# now DECODES the minted token and fails closed when the principal is not the one
+# the run declared — see `Assert the scan ran as the identity it declared` below.
+#
+# ── CLOUD PARITY, AND WHERE THE TWO BOUNDARIES GENUINELY DIFFER ────────────
+# The fix above is identical in both jobs, because the defect was. What is NOT
+# identical is what the chain can then reach:
+#
+#   Commercial  `[self-hosted, loom-aca]` HAS a managed identity (the console
+#               UAMI), so unshadowing the chain makes the lane run as it. The
+#               assertion below proves that per run rather than assuming it.
+#   Gov         `ubuntu-latest` has NO managed identity at all, so no chain
+#               order can reach one. The chain falls through to
+#               AzureCliCredential — the service principal, via the `az login`
+#               two steps up — and that principal holds no Cosmos data-plane
+#               role. That is a REAL and still-open Gov gap, tracked in #4051
+#               alongside the network gap below, and the scan now names it with
+#               the exact `az cosmosdb sql role assignment create` command
+#               instead of failing with a 403 stack trace.
+#
+# Per `cloud-parity.md` that lag is stated, owned and dated rather than implied
+# fixed: a change that repaired Commercial and left Gov looking repaired would be
+# worse than the bug.
+#
 # ── CLOUD PARITY (`cloud-parity.md`) ────────────────────────────────────────
 # Two jobs, one per boundary, identical steps. The ARM host and token audience
 # come from `lib/azure/cloud-endpoints` keyed on `LOOM_CLOUD`, never from a
@@ -172,6 +227,9 @@ jobs:
       verdict: ${{ steps.scan.outputs.verdict }}
       regressions: ${{ steps.scan.outputs.regressions }}
       population_regression: ${{ steps.scan.outputs.population_regression }}
+      scan_stale: ${{ steps.scan.outputs.scan_stale }}
+      last_scanned_age_days: ${{ steps.scan.outputs.last_scanned_age_days }}
+      last_scanned_at: ${{ steps.scan.outputs.last_scanned_at }}
     env:
       LOOM_CLOUD: Commercial
       # NOT a literal estate id. `LOOM_ESTATE_ID` is emitted by no bicep module,
@@ -186,9 +244,13 @@ jobs:
       LOOM_BRAIN_RESOURCE_GROUPS: rg-csa-loom-admin-centralus
       ADMIN_RG: rg-csa-loom-admin-centralus
       CONSOLE_APP: loom-console
-      AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
-      AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
-      AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+      # AZURE_CLIENT_ID / AZURE_CLIENT_SECRET / AZURE_TENANT_ID are DELIBERATELY
+      # ABSENT here. See the credential-chain note in this file's header: their
+      # presence made EnvironmentCredential outrank ManagedIdentityCredential, so
+      # the scan authenticated as the deploy service principal — which holds no
+      # Cosmos data-plane role — and LOOM_UAMI_CLIENT_ID was inert. `Azure/login`
+      # below passes them inline via `creds:`, and every `az` call uses that
+      # session, so nothing in this job needs them in the environment.
       AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
     steps:
       - uses: actions/checkout@v7
@@ -270,16 +332,23 @@ jobs:
             exit 1
           fi
           if [ -z "${UAMI:-}" ]; then
-            # NOT fatal, and the message says exactly why rather than asserting a
-            # cause: without it the credential chain simply omits the
-            # managed-identity leg and falls back to the SP, which can read ARM
-            # but cannot reach a private Cosmos account. The scan will then fail
-            # LOUDLY on the Cosmos call rather than silently here.
-            echo "::warning::$CONSOLE_APP carries no LOOM_UAMI_CLIENT_ID. The credential chain will fall back to the service principal, which holds no Cosmos data-plane role — expect the scan to fail on the first Cosmos call, with that as the reason."
-          else
-            echo "::add-mask::$UAMI"
-            echo "LOOM_UAMI_CLIENT_ID=$UAMI" >> "$GITHUB_ENV"
+            # NOW FATAL, and the reason the old warning gave was FALSE (review of
+            # #4014, B1). It said the chain "will fall back to the service
+            # principal" as though that only happened when this value was
+            # missing; with EnvironmentCredential ahead of ManagedIdentityCredential
+            # it happened ALWAYS. With the SP env vars gone, this runner's only
+            # route to the Cosmos data plane IS the console UAMI, so an absent
+            # client id is not a degraded mode — there is nothing to degrade to,
+            # and running on would produce a 403 whose stated cause was wrong.
+            #
+            # This is a mis-deployed console rather than a missing setting: the
+            # platform bicep emits LOOM_UAMI_CLIENT_ID onto this app for every
+            # boundary (auto-bind-by-default.md §5).
+            echo "::error::$CONSOLE_APP in $ADMIN_RG carries no LOOM_UAMI_CLIENT_ID env entry. The scan is NOT being run. This runner reaches the Cosmos data plane ONLY as the console UAMI — the account sets disableLocalAuth, so AAD-RBAC is the only path, and the deploy service principal holds no sqlRoleAssignment anywhere in the platform bicep. Without the client id the credential chain cannot select that identity. The platform bicep emits this value onto the console container app for every boundary, so its absence is a mis-deployed console: re-run the admin-plane deploy, or read the value from identity.outputs.uamiConsoleClientId and confirm it reached the app."
+            exit 1
           fi
+          echo "::add-mask::$UAMI"
+          echo "LOOM_UAMI_CLIENT_ID=$UAMI" >> "$GITHUB_ENV"
           echo "resolved the estate Cosmos endpoint and the console UAMI (values masked)."
 
       - name: Run the Brain scan
@@ -309,6 +378,10 @@ jobs:
               ;;
             3)
               echo "::error::POPULATION REGRESSION — the Commercial estate was reached and scanned, and the SCAN examined materially less than it did last run. PRP §5 treats a shrinking judged count as a P0: a detector that stops looking reports the same clean result as a detector that looked and found nothing."
+              exit 1
+              ;;
+            4)
+              echo "::error::SCAN STALE — the Commercial estate was reached, and this lane has not ACTUALLY SCANNED anything inside its declared ceiling. A PAUSED run exits 0 by design, so without this axis a lane paused for months was indistinguishable at the check level from a working one — deploy-integrity R3 calls a path that has never run the loudest case of drift, not a silent pass. The step summary carries the last actual scan date, how many runs back it was, and the ceiling. Resume the estate for a validation window, or record a decision that it is not being scanned."
               exit 1
               ;;
             *)
@@ -405,6 +478,9 @@ jobs:
       verdict: ${{ steps.scan.outputs.verdict }}
       regressions: ${{ steps.scan.outputs.regressions }}
       population_regression: ${{ steps.scan.outputs.population_regression }}
+      scan_stale: ${{ steps.scan.outputs.scan_stale }}
+      last_scanned_age_days: ${{ steps.scan.outputs.last_scanned_age_days }}
+      last_scanned_at: ${{ steps.scan.outputs.last_scanned_at }}
     env:
       LOOM_CLOUD: GCC-High
       LOOM_CLOUD_BOUNDARY: gcc-high
@@ -414,9 +490,26 @@ jobs:
       LOOM_BRAIN_RESOURCE_GROUPS: rg-csa-loom-admin-usgovvirginia
       ADMIN_RG: rg-csa-loom-admin-usgovvirginia
       CONSOLE_APP: loom-console
-      AZURE_CLIENT_ID: ${{ secrets.AZURE_GOV_CLIENT_ID }}
-      AZURE_CLIENT_SECRET: ${{ secrets.AZURE_GOV_CLIENT_SECRET }}
-      AZURE_TENANT_ID: ${{ secrets.AZURE_GOV_TENANT_ID }}
+      # AZURE_CLIENT_ID / AZURE_CLIENT_SECRET / AZURE_TENANT_ID are DELIBERATELY
+      # ABSENT here too, and for the SAME reason as Commercial — the defect was
+      # identical in both jobs, so the removal is (cloud-parity.md).
+      #
+      # WHAT THIS BOUNDARY GETS IS NOT THE SAME, AND THE DIFFERENCE IS REAL:
+      # `ubuntu-latest` has NO managed identity, so no chain order reaches one
+      # here. With the env vars gone the chain falls through to
+      # AzureCliCredential and authenticates as the service principal via the
+      # `az login` above — which is the only identity this runner has, and which
+      # holds no Cosmos data-plane role. The scan now NAMES that principal and
+      # prints the exact `az cosmosdb sql role assignment create` command rather
+      # than dying on a 403 (deploy-integrity R6).
+      #
+      # Removing them is still strictly better than leaving them: it closes the
+      # second door measured in @azure/identity 4.13.1, where
+      # createDefaultManagedIdentityCredential falls back to
+      # `process.env.AZURE_CLIENT_ID` and asks IMDS for the SP's app id — an
+      # identity attached to nothing — before failing. And it means the Gov job
+      # does NOT inherit the Commercial bug on the day #4051 points `runs-on` at
+      # an in-boundary runner that DOES carry the console UAMI.
       AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_GOV_SUBSCRIPTION_ID }}
       # DefaultAzureCredential must mint tokens against the SOVEREIGN authority.
       # Without this the run authenticates to Commercial and every Gov ARM call
@@ -493,7 +586,14 @@ jobs:
             exit 1
           fi
           if [ -z "${UAMI:-}" ]; then
-            echo "::warning::$CONSOLE_APP carries no LOOM_UAMI_CLIENT_ID. The credential chain will fall back to the service principal, which holds no Cosmos data-plane role — expect the scan to fail on the first Cosmos call, with that as the reason."
+            # Reported, not fatal — and the asymmetry with the Commercial job is
+            # deliberate rather than an oversight. On Commercial the client id is
+            # the ONLY route to the data plane, so its absence is terminal. Here
+            # the runner has no managed identity to select with it, so the value
+            # changes nothing about which identity this job can use: it will be
+            # the service principal either way, and the scan says so by decoding
+            # its own token rather than by inferring it from this variable.
+            echo "::warning::$CONSOLE_APP in $ADMIN_RG carries no LOOM_UAMI_CLIENT_ID. On this boundary that is NOT what blocks the run: ubuntu-latest has no managed identity to select, so the scan authenticates as the service principal regardless. #4051 tracks the in-boundary Gov runner that would carry the console UAMI."
           else
             echo "::add-mask::$UAMI"
             echo "LOOM_UAMI_CLIENT_ID=$UAMI" >> "$GITHUB_ENV"
@@ -558,6 +658,10 @@ jobs:
               ;;
             3)
               echo "::error::POPULATION REGRESSION — the Gov estate was reached and scanned, and the SCAN examined materially less than it did last run (PRP §5 P0)."
+              exit 1
+              ;;
+            4)
+              echo "::error::SCAN STALE — the Gov estate was reached, and this lane has not ACTUALLY SCANNED anything inside its declared ceiling. See the step summary for the last actual scan date and the ceiling. On this boundary the likeliest cause is the one #4051 tracks: there is no in-boundary Gov runner, so this job cannot persist a run record and therefore cannot establish a baseline at all."
               exit 1
               ;;
             *)

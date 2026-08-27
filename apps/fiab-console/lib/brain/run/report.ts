@@ -122,6 +122,26 @@ function renderDigestSections(d: RunDigest): string[] {
   return out;
 }
 
+/**
+ * The staleness block, printed on the two NON-SCANNING paths.
+ *
+ * ── WHY IT IS ABOVE THE OBSERVED STATES, NOT BELOW (review of #4014, S5) ──
+ * A PAUSED run exits 0. Its whole log therefore reads as a normal night, and
+ * the one thing that distinguishes "paused since yesterday" from "this lane has
+ * not looked at anything in seven weeks" is this number. It goes first, and it
+ * is marked when it is past the ceiling, for the same reason REGRESSIONS lead
+ * the digest: burying the loudest line under a longer list is the same defect
+ * as not printing it.
+ */
+function stalenessBlock(outcome: ScanOutcome): string[] {
+  const s = outcome.scanStaleness;
+  if (s === null) return [];
+  if (s.exceeded) {
+    return ['!'.repeat(78), 'SCAN STALENESS — THIS LANE HAS NOT SCANNED', '!'.repeat(78), s.message, ''];
+  }
+  return [`SCAN STALENESS: ${s.message}`, ''];
+}
+
 /** The full plain-text report for the workflow log. */
 export function renderRunReport(outcome: ScanOutcome): string {
   const v = outcome.verdict;
@@ -143,6 +163,7 @@ export function renderRunReport(outcome: ScanOutcome): string {
   if (v.kind === 'paused') {
     return [
       ...head,
+      ...stalenessBlock(outcome),
       'OBSERVED RESOURCE STATES (each from a direct ARM GET):',
       ...v.observed.map(
         (o) => `  ${o.powerState.padEnd(12, ' ')} ${o.resourceId}  [api ${o.armApiVersion} @ ${o.readAt}]`,
@@ -154,7 +175,7 @@ export function renderRunReport(outcome: ScanOutcome): string {
   }
 
   if (v.kind === 'unreachable') {
-    const body: string[] = [];
+    const body: string[] = [...stalenessBlock(outcome)];
     if (v.failures.length > 0) {
       body.push('PROBE FAILURES, verbatim:');
       for (const f of v.failures) {
@@ -336,13 +357,20 @@ export function mdFence(text: string, info = ''): string[] {
 /** Markdown for `$GITHUB_STEP_SUMMARY`. Same content, same ordering. */
 export function renderStepSummary(outcome: ScanOutcome): string {
   const v = outcome.verdict;
+  // A stale lane is named IN THE HEADLINE, not only in a section further down.
+  // The headline is the one thing an operator reads on a run they did not open
+  // deliberately, and "PAUSED" alone made 60 unscanned nights look like one.
+  const stale = outcome.scanStaleness?.exceeded === true;
   const badge =
     v.kind === 'ok'
       ? outcome.populationRegression
         ? 'POPULATION REGRESSION — the estate was scanned and the SCAN got worse'
         : 'OK — the estate was scanned'
       : v.kind === 'paused'
-        ? 'PAUSED — the estate is stopped; NOTHING was scanned'
+        ? stale
+          ? 'PAUSED, AND STALE — the estate is stopped, and this lane has not actually ' +
+            `scanned in ${outcome.scanStaleness?.ageDays ?? '?'} day(s)`
+          : 'PAUSED — the estate is stopped; NOTHING was scanned'
         : `UNREACHABLE — ${v.reason}${isReachFailure(v.reason) ? '' : ' (Azure WAS reached)'}`;
 
   const out: string[] = [
@@ -361,6 +389,28 @@ export function renderStepSummary(outcome: ScanOutcome): string {
     mdParagraph(v.message),
     '',
   ];
+
+  // The staleness section sits directly under the verdict on both non-scanning
+  // paths, above everything else those paths render.
+  const s = outcome.scanStaleness;
+  if (s !== null) {
+    out.push(
+      s.exceeded
+        ? '### :rotating_light: This lane has not actually scanned'
+        : '### Scan staleness',
+      '',
+      mdParagraph(s.message),
+      '',
+      '| | |',
+      '|---|---|',
+      `| last actual scan | ${mdTableCell(s.lastScannedAt ?? 'NEVER')} |`,
+      `| basis run | ${mdTableCell(s.lastScannedRunId ?? 'none')} |`,
+      `| age (days) | ${s.ageDays === null ? '_not established_' : s.ageDays} |`,
+      `| age (runs) | ${s.lastScannedAgeRuns} |`,
+      `| ceiling (days) | ${s.ceilingDays} |`,
+      '',
+    );
+  }
 
   if (v.kind === 'paused') {
     out.push('### Observed resource states', '', '| state | resource | api-version |', '|---|---|---|');

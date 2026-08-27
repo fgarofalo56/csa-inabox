@@ -17,8 +17,18 @@
  *         — and reporting it as `new` throws that away silently.
  *
  *  P-SUP  `accepted` requires a reason AND an owner. Rejected at the type level
- *         by `Suppression` (no field is optional) and again at runtime here,
- *         because a record can also arrive from Cosmos as untyped JSON.
+ *         by `Suppression` (no field is optional), at CONSTRUCTION by
+ *         `acceptFinding()`, and — because a record can also arrive from Cosmos
+ *         as untyped JSON — at the READ boundary by
+ *         `./record-validation.ts#validateFindingDocument`, which
+ *         `CosmosFindingStore.list()` applies to every document.
+ *
+ *         That third layer was MISSING until the review of #4014. This header
+ *         claimed "and again at runtime here", but the runtime validation was on
+ *         the WRITE path only, and `reconcile()` re-validated nothing — so an
+ *         `accepted` document with no `suppression` at all killed the run with a
+ *         TypeError, and one with an unparseable `expiresAt` suppressed its
+ *         finding forever in silence. Neither shape had a fixture anywhere.
  *
  *  P-EXP  Suppressions EXPIRE. An `accepted` with no expiry is indistinguishable
  *         from a deleted detector, so `expiresAt` is required, bounded by
@@ -152,9 +162,38 @@ function commonFields(
   };
 }
 
-/** True iff this suppression has lapsed at `at`. Boundary is inclusive. */
+/**
+ * True iff this suppression has lapsed at `at`. Boundary is inclusive.
+ *
+ * ── THROWS ON AN UNPARSEABLE INSTANT (review of #4014, S1) ────────────────
+ * `Date.parse` returns `NaN` for `''`, `'never'`, or a shape a future writer
+ * emits, and EVERY comparison against `NaN` is `false`. The previous version
+ * therefore answered "not yet expired" — forever — for a suppression whose
+ * expiry could not be read at all. That is byte-for-byte the outcome of the
+ * `suppressions-never-expire` mutation arm, arrived at through DATA rather than
+ * code, which is precisely why the mutation sweep could not see it.
+ *
+ * `./record-validation.ts` already rejects such a document at the READ boundary.
+ * This is the second layer, and it is here because the two are keyed to
+ * different things: the read boundary guards documents that came from Cosmos,
+ * this guards the FUNCTION however it is reached — including from an in-memory
+ * store, a route, or a future caller that has no read boundary at all.
+ */
 export function suppressionExpired(s: Suppression, at: string): boolean {
-  return Date.parse(at) >= Date.parse(s.expiresAt);
+  const atMs = Date.parse(at);
+  const expiresMs = Date.parse(s.expiresAt);
+  if (!Number.isFinite(atMs) || !Number.isFinite(expiresMs)) {
+    throw new Error(
+      `cannot decide whether a suppression has expired: at='${at}' / expiresAt=` +
+        `'${s.expiresAt}' — Date.parse returned NaN for ` +
+        `${!Number.isFinite(atMs) ? 'the run instant' : 'the expiry'}. REFUSING to answer ` +
+        'false, because every comparison against NaN is false and "false" here means "not ' +
+        'yet expired": an expiry that cannot be read would suppress a real finding FOREVER, ' +
+        'silently, with nothing in the digest or the log to show for it. P-EXP requires an ' +
+        'expiry that can actually be evaluated.',
+    );
+  }
+  return atMs >= expiresMs;
 }
 
 /**

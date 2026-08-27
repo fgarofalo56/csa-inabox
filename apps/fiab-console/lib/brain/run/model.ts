@@ -901,6 +901,78 @@ export const HIGH_WATER_DECAY_DAYS = 30;
  */
 export const HIGH_WATER_DECAY_FLOOR = 0.9;
 
+// ---------------------------------------------------------------------------
+// §Scan staleness — "we have never actually scanned" (deploy-integrity R3)
+// ---------------------------------------------------------------------------
+
+/**
+ * How long the lane may go without ACTUALLY SCANNING before it goes red.
+ *
+ * ── WHY THIS AXIS EXISTS (review of #4014, S5) ────────────────────────────
+ * PAUSED exits 0, and that is well argued — Actions has only pass/fail, and a
+ * paused estate failing nightly is how an operator learns to ignore a lane. But
+ * with no staleness axis it produced the failure from the opposite direction:
+ * under the standing estate-pause mandate PAUSED is the NORMAL mode, so this
+ * lane would be green every single night having built no graph, run no detector
+ * and reconciled nothing — and NOTHING in the workflow, the report or the run
+ * record would ever escalate that. A lane legitimately paused for sixty nights
+ * was indistinguishable at the check level from a working one.
+ *
+ * `deploy-integrity.md` R3 names this exactly: *"A deploy path that has never
+ * run is the loudest case of this, not a silent pass."*
+ *
+ * ── WHY DAYS AND NOT RUNS ─────────────────────────────────────────────────
+ * A run count is not comparable across a lane whose cadence changes, and
+ * `scannedRunAgeRuns()` is BOUNDED (it reads at most
+ * {@link RUN_AGE_SCAN_LIMIT} runs), so past that bound it cannot answer at all.
+ * Wall clock is what the operator actually asks about — "when did this last
+ * really scan?" — and it is answerable from a single instant on the basis run.
+ * The run age is still reported alongside it, because it says something the
+ * day count does not: how many opportunities were missed.
+ *
+ * ── WHY THIS IS NOT A "GATE THAT CANNOT FAIL", NOR ONE THAT ALWAYS DOES ───
+ * It is a THRESHOLD over a measured quantity, not a boolean that skips a run:
+ * nothing about it can be set to make the lane green, and it is derived from
+ * persisted run records rather than from configuration. It CAN sit red for as
+ * long as an estate stays paused past the ceiling — and that is the intended
+ * reading. Sixty nights of "nothing was scanned" is a standing condition that
+ * someone should have decided about, not a background hum.
+ *
+ * 45 days is wider than any pause this estate has actually held and far inside
+ * the window in which a permanently-dead lane would otherwise go unnoticed.
+ */
+export const SCAN_STALENESS_CEILING_DAYS = 45;
+
+/**
+ * What the run established about the last time this lane actually SCANNED.
+ *
+ * `null` age with `neverScanned: true` is the genuine first run for an estate —
+ * distinct from "the lane has been running for weeks and has never scanned",
+ * which is the case R3 calls the loudest.
+ */
+export interface ScanStaleness {
+  /** The last run whose `detectorPopulations` is non-null, or `null`. */
+  readonly lastScannedRunId: string | null;
+  readonly lastScannedAt: string | null;
+  /**
+   * How many runs back that basis is, counting itself as 1. `0` means no
+   * scanned run was found within the store's bounded window — NOT "one run ago".
+   */
+  readonly lastScannedAgeRuns: number;
+  /**
+   * Days since the lane last actually scanned. `null` only when there is no
+   * earlier run at all to measure from — i.e. this is the first run.
+   */
+  readonly ageDays: number | null;
+  /** True when no run for this estate has EVER carried detector populations. */
+  readonly neverScanned: boolean;
+  readonly ceilingDays: number;
+  /** `ageDays` is past {@link ceilingDays}. RED, on its own exit code. */
+  readonly exceeded: boolean;
+  /** Operator-readable, and TRUE — states only what was established. */
+  readonly message: string;
+}
+
 
 /** One scheduled run, persisted so a lane that stops running is visible. */
 export interface ScanRunRecord {

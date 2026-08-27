@@ -40,9 +40,11 @@
 
 import { Buffer } from 'node:buffer';
 import { CosmosClient, type Container } from '@azure/cosmos';
-import { DefaultAzureCredential, type TokenCredential } from '@azure/identity';
+import type { TokenCredential } from '@azure/identity';
+import { scanCredential } from './azure/scan-credential';
 import type { FindingRecord, ScanRunRecord } from './model';
 import type { FindingStore } from './ports';
+import { validateFindingDocument } from './record-validation';
 
 /** The container. Also declared in both cosmos bicep modules — keep in step. */
 export const BRAIN_FINDINGS_CONTAINER = 'brain-findings';
@@ -134,13 +136,32 @@ export function fingerprintFromDocumentId(id: string): string {
  * On the in-VNet ACA runner the selected identity is the console UAMI, which
  * already holds Cosmos Data Contributor on this account.
  *
+ * ── AND IT IS NOW ASSERTED, NOT ASSUMED (review of #4014, B1) ─────────────
+ * The paragraph above was TRUE about what was constructed and WRONG about what
+ * ran. `EnvironmentCredential` is FIRST in that chain (measured:
+ * @azure/identity 4.13.1, defaultAzureCredential.js:78-80), the workflow set
+ * AZURE_CLIENT_ID/SECRET/TENANT_ID at job level, and nothing in this repo sets
+ * `AZURE_TOKEN_CREDENTIALS` — so the deploy service principal won every time and
+ * the managed-identity leg was never evaluated. The SP holds no
+ * `sqlRoleAssignments` anywhere in the platform bicep, and `disableLocalAuth`
+ * makes AAD-RBAC the only data-plane path, so every call here would have
+ * returned 403 on the first scheduled run in both boundaries.
+ *
+ * The shadowing env vars are gone from both jobs, and this now goes through
+ * `./azure/scan-credential.ts`, which decodes the minted token and FAILS CLOSED
+ * if the principal is not the one the run declared. Constructing the right
+ * credential is not evidence that the right credential was used.
+ *
  * `AZURE_CLIENT_ID` is deliberately NOT consulted: in Actions that is the
  * service principal's app id, and handing it to a managed-identity credential
  * asks IMDS for an identity that is not attached to anything.
  */
 function credential(): TokenCredential {
   const clientId = (process.env.LOOM_UAMI_CLIENT_ID || '').trim();
-  return new DefaultAzureCredential(clientId ? { managedIdentityClientId: clientId } : {});
+  return scanCredential({
+    expectedClientId: clientId,
+    cloud: (process.env.LOOM_CLOUD || 'unknown-boundary').trim() || 'unknown-boundary',
+  });
 }
 
 let _client: CosmosClient | null = null;
@@ -192,6 +213,15 @@ export class CosmosFindingStore implements FindingStore {
    * Deliberately unfiltered. A store that helpfully hid fixed findings would
    * make the next recurrence look brand new — the regression property defeated
    * at the persistence layer, one level below where any type can catch it.
+   *
+   * ── AND EVERY RECORD IS VALIDATED HERE (review of #4014, S1) ─────────────
+   * This is the READ boundary, and until this fix it was the only boundary that
+   * did not have one. `acceptFinding()` validates at CONSTRUCTION; nothing
+   * validated what Cosmos handed back, so `doc as unknown as FindingRecord` was
+   * a lie told to the compiler that `reconcile()` then dereferenced. See
+   * `./record-validation.ts` for the two input shapes that had no fixture — one
+   * kills the lane permanently, the other suppresses a finding forever in
+   * silence.
    */
   async list(estateId: string): Promise<readonly FindingRecord[]> {
     const container = await this.getContainer();
@@ -218,7 +248,10 @@ export class CosmosFindingStore implements FindingStore {
       void _etag;
       void _attachments;
       void _ts;
-      out.push(record as unknown as FindingRecord);
+      // FAIL CLOSED on a shape this build cannot reconcile. Never skipped — a
+      // record that silently leaves the backlog is the population-shrinking
+      // failure this lane exists to detect.
+      out.push(validateFindingDocument(record, doc.id));
     }
     return out;
   }
@@ -285,11 +318,22 @@ export class CosmosFindingStore implements FindingStore {
   /**
    * How many runs back the last SCANNED run is, counting itself as 1.
    *
-   * Bounded: it reads at most {@link RUN_AGE_SCAN_LIMIT} recent runs. If the
-   * last real scan is further back than that, the age is reported as that limit
-   * rather than as an unbounded query — the number is for the operator's
-   * context, and paying for an unbounded scan to refine "more than 200 runs ago"
-   * would be spending RU to make a message marginally more precise.
+   * Bounded: it reads at most {@link RUN_AGE_SCAN_LIMIT} recent runs.
+   *
+   * ── `0` MEANS "NOT FOUND", NEVER "ONE RUN AGO" (review of #4014, N5) ─────
+   * The two `FindingStore` implementations disagreed for the case "runs exist,
+   * none of them scanned": the in-memory one returned `0` and this one returned
+   * {@link RUN_AGE_SCAN_LIMIT}. Harmless while the value was only read when
+   * `previousRun !== null` — and NOT harmless now, because the S5 staleness axis
+   * reads it on the PAUSED path, which is exactly the case where a lane may have
+   * run for weeks without ever scanning. A contract divergence between the
+   * implementation that is TESTED and the one that will RUN is the gap
+   * `cosmos-store.test.ts`'s own header was written about.
+   *
+   * So both now return `0` for "no scanned run inside the window", and the
+   * authoritative answer to "has anything EVER scanned?" is
+   * {@link lastScannedRun}, whose filter is IN THE QUERY and therefore unbounded.
+   * `./staleness.ts` uses exactly that split.
    */
   async scannedRunAgeRuns(estateId: string): Promise<number> {
     const runs = await this.recentRuns(estateId, RUN_AGE_SCAN_LIMIT);
@@ -298,7 +342,7 @@ export class CosmosFindingStore implements FindingStore {
         return i + 1;
       }
     }
-    return runs.length === 0 ? 0 : RUN_AGE_SCAN_LIMIT;
+    return 0;
   }
 
   private async recentRuns(estateId: string, top: number): Promise<ScanRunRecord[]> {

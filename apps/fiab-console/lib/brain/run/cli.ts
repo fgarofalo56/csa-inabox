@@ -46,6 +46,7 @@ import { WIRE_BINDINGS } from '../../../app/api/admin/brain/_lib/wire-bindings';
 import { ArmEstateProbe, type FetchLike } from './azure/arm-probe';
 import { ArgGraphSource } from './azure/arg-graph-source';
 import { W9GraphHistoryWriter, resolveHistoryModule } from './azure/history-writer';
+import { scanCredential } from './azure/scan-credential';
 import { CosmosFindingStore } from './cosmos-finding-store';
 import { renderRunReport, renderStepSummary, renderVerdictHeadline } from './report';
 import { exitCodeForOutcome, runBrainScan } from './scan';
@@ -231,6 +232,13 @@ export async function runAndReport(
       [
         `verdict=${outcome.verdict.kind}`,
         `population_regression=${outcome.populationRegression === null ? 'false' : 'true'}`,
+        // S5 — the staleness axis, carried as an output for the same reason the
+        // verdict is: PAUSED exits 0, so a green check must not be the only
+        // thing an operator sees about a lane that has stopped scanning.
+        `scan_stale=${outcome.scanStaleness?.exceeded === true ? 'true' : 'false'}`,
+        `last_scanned_age_days=${outcome.scanStaleness?.ageDays ?? ''}`,
+        `last_scanned_age_runs=${outcome.scanStaleness?.lastScannedAgeRuns ?? ''}`,
+        `last_scanned_at=${outcome.scanStaleness?.lastScannedAt ?? ''}`,
         `regressions=${outcome.counts?.regressions ?? 0}`,
         `new_findings=${outcome.counts?.new ?? 0}`,
         `findings_produced=${outcome.counts?.findingsProduced ?? 0}`,
@@ -281,21 +289,31 @@ export async function main(): Promise<number> {
   const scope = armScope();
   const subscriptions = optionalList('LOOM_BRAIN_SUBSCRIPTIONS');
 
-  const { DefaultAzureCredential } = await import('@azure/identity');
-  // The SDK's OWN chain, not a hand-rolled one. See the long note on
-  // `credential()` in ./cosmos-finding-store.ts: the credential factory that
-  // `check-workspace-credential-adoption` points at is alias-bound
-  // (`arm-credential` -> `@/lib/azure/aca-managed-identity` ->
-  // `./fetch-with-timeout` -> `@/lib/resilience/fault-injection`), and this file
-  // is the CLI's emit closure, which must stay alias-free or the compiled
-  // artifact dies at runtime. `DefaultAzureCredential` already composes
-  // Environment -> WorkloadIdentity -> ManagedIdentity -> AzureCLI, and
-  // `managedIdentityClientId` selects WHICH managed identity — exactly what the
-  // two-leg chain was written to do, in one documented constructor.
+  // The SDK's OWN chain, not a hand-rolled one, and now ASSERTED rather than
+  // trusted. See the long note on `credential()` in ./cosmos-finding-store.ts
+  // for why the per-workspace factory is unavailable inside the CLI's alias-free
+  // emit closure, and ./azure/scan-credential.ts for why the fix is a wrapper
+  // rather than a different credential.
+  //
+  // ── WHAT SHIPPED WRONG (review of #4014, B1) ────────────────────────────
+  // `DefaultAzureCredential` composes Environment -> WorkloadIdentity ->
+  // ManagedIdentity, in that order, and `AZURE_TOKEN_CREDENTIALS` is set nowhere
+  // in this repo. The workflow put AZURE_CLIENT_ID/SECRET/TENANT_ID on the JOB,
+  // so EnvironmentCredential won every time and `managedIdentityClientId`
+  // parameterised a leg that was never evaluated. The two workflow steps that
+  // resolve LOOM_UAMI_CLIENT_ID were establishing nothing, and the deploy SP —
+  // which holds no Cosmos data-plane role — was the identity behind every call.
+  //
+  // The env vars are gone from both jobs. This asserts that they stay gone.
   const uamiClientId = (process.env.LOOM_UAMI_CLIENT_ID || '').trim();
-  const credential = new DefaultAzureCredential(
-    uamiClientId ? { managedIdentityClientId: uamiClientId } : {},
-  );
+  const credential = scanCredential({
+    expectedClientId: uamiClientId,
+    cloud,
+    // The identity reaches the log BEFORE any Azure call is classified, for the
+    // same reason the verdict does: a later failure must not be able to hide
+    // what the run had already established about itself.
+    onIdentity: (v) => process.stdout.write(`LOOM BRAIN SCAN — ${v.message}\n`),
+  });
   const getToken = async (s: string): Promise<string | null> => {
     const token = await credential.getToken(s);
     return token?.token ?? null;

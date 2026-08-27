@@ -129,8 +129,76 @@ export const MUTATIONS = [
       'indistinguishable from a deleted detector, and it is how a real finding gets buried ' +
       'with a plausible-looking reason attached.',
     expect: 'caught',
-    find: '  return Date.parse(at) >= Date.parse(s.expiresAt);',
+    // The needle moved when `suppressionExpired` gained its NaN guard (review of
+    // #4014, S1) — the arm reported NEEDLE-MISSED, which is the harness being
+    // honest and is ALSO an arm silently leaving the sweep's population. Re-aimed
+    // at the return, which is what the mutation is actually about.
+    find: '  return atMs >= expiresMs;',
     replace: '  return false;',
+  },
+  {
+    // The DATA-side twin of the arm above, and the reason that one is not
+    // sufficient on its own. `Date.parse` returns NaN for an unreadable expiry,
+    // and every comparison against NaN is false — so a suppression could be made
+    // permanent WITHOUT touching this code at all, just by writing 'never' into
+    // a Cosmos document. The 26-arm sweep could not see that, because a mutation
+    // sweep only mutates CODE. This arm removes the NaN guard so the sweep now
+    // covers the data route too.
+    id: 'unparseable-expiry-reads-as-not-yet-expired',
+    file: 'lib/brain/run/lifecycle.ts',
+    why:
+      'Removes the NaN guard from `suppressionExpired`, restoring the shape where an ' +
+      "unparseable `expiresAt` ('', 'never', a date-only string) makes the comparison false " +
+      'FOREVER. Same outcome as `suppressions-never-expire`, reached through DATA rather than ' +
+      'code — which is exactly why a code-only mutation sweep cannot see it.',
+    expect: 'caught',
+    find: '  if (!Number.isFinite(atMs) || !Number.isFinite(expiresMs)) {',
+    replace: '  if (false) {',
+  },
+  {
+    // The READ-boundary half of the same finding. `reconcile()` dereferences
+    // `prior.suppression.expiresAt`, and until this review nothing validated
+    // what Cosmos handed back — an `accepted` document with no `suppression` at
+    // all killed the whole run with a TypeError, every night, permanently.
+    id: 'cosmos-read-boundary-removed',
+    file: 'lib/brain/run/cosmos-finding-store.ts',
+    why:
+      'Restores the raw `as unknown as FindingRecord` cast on the READ path, so a stored ' +
+      'document is reconciled against without any shape check. Two input shapes had no ' +
+      'fixture anywhere before this review: one kills the lane permanently, the other ' +
+      'suppresses a finding forever in silence.',
+    expect: 'caught',
+    find: '      out.push(validateFindingDocument(record, doc.id));',
+    replace: '      out.push(record as unknown as FindingRecord);',
+  },
+  {
+    // B1. The lane could not have completed a single run in either boundary, and
+    // no gate on the PR could see it, because none of them authenticate.
+    id: 'scan-identity-never-asserted',
+    file: 'lib/brain/run/azure/scan-credential.ts',
+    why:
+      'Drops the fail-closed on a token minted by the wrong principal. The scan then ' +
+      'authenticates as whatever the credential chain happens to pick — which, with ' +
+      'EnvironmentCredential ahead of ManagedIdentityCredential, was the deploy service ' +
+      'principal on every run, in both boundaries. It holds no Cosmos data-plane role, and ' +
+      '`recordRun` fires on OK, PAUSED and UNREACHABLE alike.',
+    expect: 'caught',
+    find: '    if (!verdict.ok) throw new ScanIdentityError(verdict);',
+    replace: '    if (!verdict.ok) void verdict;',
+  },
+  {
+    // S5. The axis that turns "paused for sixty nights" into something other
+    // than a green tick.
+    id: 'scan-staleness-never-goes-red',
+    file: 'lib/brain/run/scan.ts',
+    why:
+      'Removes the staleness arm from the exit-code mapping, so a lane that has not actually ' +
+      'scanned anything inside its declared ceiling exits 0 exactly like a healthy paused ' +
+      'night. Under the standing estate-pause mandate PAUSED is the NORMAL mode, so this is ' +
+      'the shape in which the lane would go green forever having examined nothing.',
+    expect: 'caught',
+    find: '  if (outcome.scanStaleness?.exceeded === true) return 4;',
+    replace: '',
   },
   {
     id: 'acceptance-without-a-reason',

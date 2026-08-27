@@ -26,6 +26,7 @@ export {
   POPULATION_SHRINK_TOLERANCE,
   REACH_FAILURE_REASONS,
   RUN_RECORD_TTL_SECONDS,
+  SCAN_STALENESS_CEILING_DAYS,
   InconsistentProbeError,
   fingerprintOf,
   isReachFailure,
@@ -53,6 +54,7 @@ export {
   type RunDigest,
   type ScanCounts,
   type ScanRunRecord,
+  type ScanStaleness,
   type ScanVerdict,
   type ScanVerdictKind,
   type Suppression,
@@ -113,3 +115,18 @@ export {
 } from './scan';
 
 export { renderCounts, renderRunReport, renderStepSummary, renderVerdictHeadline } from './report';
+
+export { assessScanStaleness } from './staleness';
+
+export {
+  FindingDocumentShapeError,
+  validateFindingDocument,
+} from './record-validation';
+
+export {
+  assertTokenIdentity,
+  decodeTokenIdentity,
+  maskPrincipal,
+  type IdentityVerdict,
+  type TokenIdentity,
+} from './token-identity';

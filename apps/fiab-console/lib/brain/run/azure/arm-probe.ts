@@ -43,6 +43,7 @@
  */
 
 import { armPowerReading, type ArmPowerReading, type EstatePowerState } from '../../../estate/pause-state';
+import { ScanIdentityError } from './scan-credential';
 import type { EstateProbe } from '../ports';
 import type { ProbeFailure, ProbeResult } from '../model';
 
@@ -331,6 +332,21 @@ export class ArmEstateProbe implements EstateProbe {
     try {
       token = await this.opts.getToken(this.opts.armScope);
     } catch (err) {
+      // ── AN IDENTITY REFUSAL IS NOT A REACHABILITY FAILURE (R7) ───────────
+      // MEASURED by running the compiled CLI: a `ScanIdentityError` fell into
+      // the arm below and was classified `network`, so the verdict read
+      // "could not reach Azure … network-failed" for a run that had reached
+      // Azure perfectly well, minted a token, and REFUSED IT because it belonged
+      // to the wrong principal. That is exactly the conflation this module's
+      // header forbids — and it would send an engineer to check DNS and
+      // firewalls for what is an env-var placement in a workflow file.
+      //
+      // `ports.ts` draws the line: a probe MUST NOT throw for a REACHABILITY
+      // failure, and "an unexpected defect may still throw, and should". A run
+      // authenticating as a principal it did not declare is a defect in the run,
+      // not a fact about the estate, so it propagates and lands on the CLI's
+      // exit 1 — "a defect in the scan, not a verdict about the estate".
+      if (err instanceof ScanIdentityError) throw err;
       return {
         readings: [],
         failures: [networkFailure('discovery', 'token acquisition', err)],

@@ -105,9 +105,19 @@ function executedCount(output) {
 /**
  * The floor the baseline must clear.
  *
- * Measured 240 at the time of writing; set ~10% below so ordinary churn does not
- * trip it while a suite that silently stopped executing does. RAISE this as the
- * suite grows — never lower it.
+ * A sweep whose baseline suite silently stopped executing would report every arm
+ * as CAUGHT — every one of them "fails" when nothing runs — so this refuses to
+ * start below a floor.
+ *
+ * ── THE COMMENT USED TO CONTRADICT THE CONSTANT (review of #4014, N4) ──────
+ * It said "measured 240 at the time of writing; set ~10% below", which would be
+ * ~216. The constant was already 300, i.e. 25% ABOVE the number it cited. The
+ * constant was fine and the reasoning was not, which is the worse of the two to
+ * leave behind: the next person to touch this would have reasoned from 240.
+ *
+ * MEASURED at this head: `vitest run lib/brain/run` executes 520 tests across 18
+ * files. 300 sits comfortably below that and comfortably above any plausible
+ * partial run. RAISE it as the suite grows — never lower it.
  */
 const MIN_BASELINE_TESTS = 300;
 

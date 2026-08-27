@@ -39,14 +39,17 @@ import type { Detector } from '../types';
 import { classifyEstate, observedStates } from './verdict';
 import { reconcile, toOccurrences } from './lifecycle';
 import { detectPopulationRegression, digestOfIds, snapshotPopulations } from './population';
+import { assessScanStaleness } from './staleness';
 import {
   RUN_RECORD_TTL_SECONDS,
   FINDING_SCHEMA_VERSION,
+  SCAN_STALENESS_CEILING_DAYS,
   type DetectorPopulationSnapshot,
   type PopulationRegression,
   type RunDigest,
   type ScanCounts,
   type ScanRunRecord,
+  type ScanStaleness,
   type ScanVerdict,
 } from './model';
 import type {
@@ -109,6 +112,16 @@ export interface ScanOutcome {
    * fields and different exit codes rather than a fourth verdict.
    */
   readonly populationRegression: PopulationRegression | null;
+  /**
+   * How long since this lane ACTUALLY SCANNED — the axis PAUSED had none of.
+   *
+   * Computed on the two non-scanning paths, which are the only ones where the
+   * question is open: an OK run scanned by definition. `exceeded` is red on its
+   * own exit code (4), because "the estate could not be reached", "the scan got
+   * worse" and "this lane has not looked at anything in seven weeks" are three
+   * different investigations with three different owners.
+   */
+  readonly scanStaleness: ScanStaleness | null;
   /** Per-detector examined counts, persisted for the NEXT run to compare. */
   readonly detectorPopulations: readonly DetectorPopulationSnapshot[] | null;
   readonly notes: readonly string[];
@@ -122,6 +135,9 @@ export interface ScanOutcome {
  *   UNREACHABLE               2   — RED, and distinguishable from a crash (1).
  *   POPULATION REGRESSION     3   — RED on its own axis: the estate was scanned
  *                                   and the SCAN got worse (PRP §5).
+ *   SCAN STALE                4   — RED on its own axis: the lane has not
+ *                                   ACTUALLY SCANNED inside the declared
+ *                                   ceiling (review of #4014, S5).
  *
  * PAUSED being 0 is the one that needs justifying: Actions has only pass/fail,
  * so a paused estate would otherwise fail the lane nightly, the operator would
@@ -131,11 +147,20 @@ export interface ScanOutcome {
  *
  * 3 is distinct from 2 because "I could not reach the estate" and "I reached it
  * and looked at a fifth of what I looked at yesterday" send an engineer to
- * completely different places.
+ * completely different places. 4 is distinct from both because "I have not
+ * looked at anything at all for seven weeks" sends them to a third — and until
+ * it existed, that state rendered as a green tick every night.
+ *
+ * ── ORDERING, AND WHY ─────────────────────────────────────────────────────
+ * UNREACHABLE wins over staleness: a run that could not reach Azure is already
+ * red, and its reason is the more immediately actionable one. Staleness is still
+ * reported in the headline, the step summary and the job output on that path —
+ * it just does not get to change a red run's code to a different red.
  */
-export function exitCodeForOutcome(outcome: ScanOutcome): 0 | 2 | 3 {
+export function exitCodeForOutcome(outcome: ScanOutcome): 0 | 2 | 3 | 4 {
   if (outcome.verdict.kind === 'unreachable') return 2;
   if (outcome.populationRegression !== null) return 3;
+  if (outcome.scanStaleness?.exceeded === true) return 4;
   return 0;
 }
 
@@ -191,6 +216,53 @@ export async function runBrainScan(deps: ScanDeps): Promise<ScanOutcome> {
 
   // ── the two non-scanning paths ───────────────────────────────────────────
   if (verdict.kind !== 'ok') {
+    // S5 — the staleness axis. READ BEFORE `recordRun` writes this run, or the
+    // run being classified would become its own basis. These are the same three
+    // reads the OK path already makes for `basisAgeRuns`; the finding was that
+    // the non-scanning paths — the ones where "has anything scanned lately?" is
+    // actually an open question — never made them.
+    //
+    // ── WHY THIS IS WRAPPED, AND WHY IT IS NOT A SWALLOW ────────────────────
+    // MEASURED by running the compiled CLI: adding these reads put THREE Cosmos
+    // calls ahead of `recordRun` on a path that previously made exactly one. A
+    // read that failed would therefore have cost the RUN RECORD as well — and
+    // the run record is the thing that makes a lane which stops running visible
+    // at all. Losing it to a supplementary read would trade the S5 signal for
+    // the more basic one it was built on top of.
+    //
+    // So a read failure produces an HONEST "could not establish" staleness, the
+    // run record is written WITH that stated in it, and then the original error
+    // is RE-RAISED. Nothing is swallowed: the run still fails, with the same
+    // error, and the record survives to say so.
+    let scanStaleness: ScanStaleness;
+    let stalenessReadError: unknown = null;
+    try {
+      const lastScanned = await deps.findings.lastScannedRun(deps.estateId);
+      const lastAny = await deps.findings.lastRun(deps.estateId);
+      const ageRuns = await deps.findings.scannedRunAgeRuns(deps.estateId);
+      scanStaleness = assessScanStaleness({ lastScanned, lastAny, ageRuns, at });
+    } catch (err) {
+      stalenessReadError = err;
+      scanStaleness = {
+        lastScannedRunId: null,
+        lastScannedAt: null,
+        lastScannedAgeRuns: 0,
+        ageDays: null,
+        neverScanned: false,
+        ceilingDays: SCAN_STALENESS_CEILING_DAYS,
+        // NOT `true`. Reading a failure as "stale" would assert something this
+        // run did not establish (R7) — the history may be perfectly healthy and
+        // simply unreadable right now.
+        exceeded: false,
+        message:
+          'scan staleness: NOT ESTABLISHED. The run-history read failed, so how long it has ' +
+          'been since this lane actually scanned is UNKNOWN — this run is not claiming the ' +
+          'history is healthy and is not claiming it is stale. The read failure is re-raised ' +
+          'after this record is written, so the run still fails with its real cause: ' +
+          `${err instanceof Error ? err.message : String(err)}`,
+      };
+    }
+
     const runRecord: ScanRunRecord = {
       schemaVersion: FINDING_SCHEMA_VERSION,
       docType: 'scan-run',
@@ -215,10 +287,14 @@ export async function runBrainScan(deps: ScanDeps): Promise<ScanOutcome> {
             'next resume.'
           : 'UNREACHABLE: no graph was built, no detector ran, and NO finding state was ' +
             'changed. This run establishes nothing about the estate.',
+        scanStaleness.message,
       ],
       ttl: RUN_RECORD_TTL_SECONDS,
     };
     await deps.findings.recordRun(runRecord);
+    // The read failure is raised AFTER the record is safely written, so the run
+    // fails with its real cause and the record still exists to show the attempt.
+    if (stalenessReadError !== null) throw stalenessReadError;
     return {
       verdict,
       runRecord,
@@ -227,6 +303,7 @@ export async function runBrainScan(deps: ScanDeps): Promise<ScanOutcome> {
       graphVersion: null,
       detectorRun: null,
       populationRegression: null,
+      scanStaleness,
       detectorPopulations: null,
       notes: [...notes, ...runRecord.notes],
     };
@@ -369,6 +446,7 @@ export async function runBrainScan(deps: ScanDeps): Promise<ScanOutcome> {
     graphVersion,
     detectorRun,
     populationRegression,
+    scanStaleness: null,
     detectorPopulations,
     notes: runRecord.notes,
   };

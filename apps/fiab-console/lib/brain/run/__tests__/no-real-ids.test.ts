@@ -33,6 +33,17 @@ const GUID = /[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-
 const ALLOWED = new Set<string>([
   '11111111-1111-1111-1111-111111111111',
   '00000000-0000-0000-0000-000000000000',
+  // Azure's BUILT-IN "Cosmos DB Built-in Data Contributor" role DEFINITION id.
+  // A fixed, documented, tenant-independent Azure constant — the same kind of
+  // value as the all-zeros entry above, and already a literal in both cosmos
+  // bicep modules. It is quoted verbatim in `../token-identity.ts`'s wrong-
+  // principal remediation so the operator gets a command they can paste
+  // (deploy-integrity R6), rather than a role NAME they then have to look up.
+  //
+  // Added BY VALUE, deliberately. The alternative — assembling the GUID at
+  // runtime to dodge the regex — would be keying to this guard's spelling
+  // instead of to its point, which is the evasion shape this repo measures.
+  '00000000-0000-0000-0000-000000000002',
 ]);
 
 function sourceFiles(dir: string): string[] {

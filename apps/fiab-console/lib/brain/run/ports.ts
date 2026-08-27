@@ -189,6 +189,13 @@ export interface FindingStore {
   /**
    * How many runs back {@link lastScannedRun} is, counting itself as 1.
    *
+   * `0` means NO scanned run was found inside the implementation's window — it
+   * never means "one run ago". Both implementations agree on that (review of
+   * #4014, N5: they did not, and the S5 staleness axis reads this on the PAUSED
+   * path, which is precisely the case where they differed). The authoritative
+   * "has anything EVER scanned?" is {@link lastScannedRun}, whose filter is in
+   * the query and is therefore unbounded.
+   *
    * Reported so an operator reading a comparison against a basis eleven nights
    * old is told so, rather than left to assume it was last night's.
    */

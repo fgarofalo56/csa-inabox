@@ -43,11 +43,45 @@ Plus one signal on a separate axis:
 | Signal | Exit | What it means |
 |---|---|---|
 | `POPULATION REGRESSION` | 3 | The estate **was** reached and scanned, and the scan examined materially less than it did last run. PRP §5: a shrinking judged count is a P0. |
+| `SCAN STALE` | 4 | The lane has not **actually scanned** inside the declared ceiling (`SCAN_STALENESS_CEILING_DAYS`, 45 days). See "The staleness axis" below. |
 | (a defect in the scan) | 1 | Not a verdict about the estate at all. |
 
-Exit codes 1, 2 and 3 are distinct because "this program is broken", "I could
-not reach the estate" and "I reached it and looked at a fifth of what I looked
-at yesterday" send an engineer to three completely different places.
+Exit codes 1, 2, 3 and 4 are distinct because "this program is broken", "I could
+not reach the estate", "I reached it and looked at a fifth of what I looked at
+yesterday" and "I have not looked at anything at all for seven weeks" send an
+engineer to four completely different places.
+
+### The staleness axis — why PAUSED exiting 0 was not enough
+
+PAUSED maps to 0 deliberately: Actions has only pass/fail, and a paused estate
+failing nightly is how an operator learns to ignore a lane. But under the
+standing estate-pause mandate **PAUSED is the normal mode**, so with no staleness
+axis this lane would have been green every night having built no graph, run no
+detector and reconciled nothing — and nothing in the workflow, the report or the
+run record would ever have escalated it. A lane legitimately paused for sixty
+nights was indistinguishable, at the check level, from a working one.
+
+So the two non-scanning paths now read the last run that actually scanned and
+report:
+
+| Surface | What it carries |
+|---|---|
+| Log | A `SCAN STALENESS` block **above** the observed states — banner-boxed when past the ceiling. |
+| Step summary | The verdict headline itself says `PAUSED, AND STALE`, plus a table of last-scan date, age in days, age in runs, and the ceiling. |
+| Job outputs | `scan_stale`, `last_scanned_age_days`, `last_scanned_age_runs`, `last_scanned_at`. |
+| Exit code | `4` once `ageDays` is past the ceiling. |
+
+This is a **threshold over a measured quantity**, not a boolean that skips a run:
+nothing about it can be set to make the lane green, and it is derived from
+persisted run records rather than from configuration. It can sit red for as long
+as an estate stays paused past the ceiling, and that is the intended reading —
+`deploy-integrity.md` R3, *"a deploy path that has never run is the loudest case
+of this, not a silent pass."*
+
+The loudest case is distinguished from the quiet one: "this is the first run for
+this estate" is **not** stale, while "this lane has run before and has never once
+carried detector populations" is red as soon as the earliest visible run is past
+the ceiling.
 
 ### The paused verdict cannot be forged from a setting
 
@@ -484,7 +518,7 @@ a workflow and its environment does not come from a container app.
 |---|---|---|
 | `LOOM_ESTATE_ID` | no | Cosmos partition key. When unset it is DERIVED from `LOOM_SUBSCRIPTION_ID` + `LOOM_ADMIN_RG` as `loom:<sub8>:<rg>` — the same algorithm `lib/estate/pause-orchestrator.ts#resolveEstateId` uses, so the console and this lane agree by construction. No bicep module emits it, so a literal in the workflow would disagree with whatever the console resolves and write findings into a partition nothing reads. |
 | `LOOM_SUBSCRIPTION_ID` · `LOOM_ADMIN_RG` | yes (unless the above is set) | The deploy facts the estate id is derived from. |
-| `LOOM_UAMI_CLIENT_ID` | on the ACA runner | The console UAMI. Selects the identity that already holds Cosmos Data Contributor. Absent = the managed-identity leg is not added at all, so there is no failed IMDS probe before the fallback. |
+| `LOOM_UAMI_CLIENT_ID` | on the ACA runner | The console UAMI. Selects the identity that already holds Cosmos Data Contributor, and is the identity the run asserts its minted token against. On Commercial its absence is **fatal** — with the SP env vars gone there is no other route to the data plane, so running on would 403 with a wrong stated cause. On Gov it is reported but not fatal: `ubuntu-latest` has no managed identity to select with it either way. |
 | `LOOM_BRAIN_RUN_ID` | yes | Stamped on every transition and on the run record. |
 | `LOOM_BRAIN_RESOURCE_GROUPS` | yes | Comma-separated. The power-probe scope. No default — see "The scan scope" above. |
 | `LOOM_BRAIN_SUBSCRIPTIONS` | no | Comma-separated. Omitted = every readable subscription. |
@@ -545,6 +579,78 @@ built-in Data Contributor role via `cosmosDataRole` in both modules, so this lan
 needs **no new `sqlRoleAssignment`** and puts no object id in a public
 repository. The workflow reads `LOOM_UAMI_CLIENT_ID` off the console app so the
 credential chain selects it explicitly.
+
+### The credential chain had to be unshadowed before it could reach that identity
+
+Everything in the paragraph above was true about **intent** and false about
+**behaviour**, and the lane could not have completed a single run in either
+boundary because of it. Measured at head by reading the installed SDK rather than
+the docs:
+
+- `apps/fiab-console/node_modules/@azure/identity` is **4.13.1**.
+- `dist/commonjs/credentials/defaultAzureCredential.js:78-80` orders the
+  production chain `EnvironmentCredential -> WorkloadIdentityCredential ->
+  ManagedIdentityCredential`, and `:130` appends the developer credentials when
+  `AZURE_TOKEN_CREDENTIALS` is unset.
+- `AZURE_TOKEN_CREDENTIALS` appears **zero** times across `.github/workflows`.
+- `loom-brain-scan.yml` set `AZURE_CLIENT_ID` / `AZURE_CLIENT_SECRET` /
+  `AZURE_TENANT_ID` at **job** level in both jobs.
+
+So `EnvironmentCredential` won every time, the managed-identity leg was never
+evaluated, and `LOOM_UAMI_CLIENT_ID` was **inert** — the two workflow steps that
+exist to resolve it were establishing nothing. The deploy service principal holds
+no `sqlRoleAssignments` anywhere in the platform bicep, `disableLocalAuth: true`
+makes AAD-RBAC the only data-plane path, and `recordRun` fires on OK, PAUSED
+**and** UNREACHABLE — so every verdict would have died on its Cosmos write, from
+the first scheduled run onwards.
+
+There was a second door in the same file: when `managedIdentityClientId` is not
+supplied, `createDefaultManagedIdentityCredential` falls back to
+`process.env.AZURE_CLIENT_ID` — the SP's app id — and asks IMDS for an identity
+attached to nothing.
+
+Two changes, and the second is the durable one:
+
+1. **The three variables are gone from both jobs.** They were never needed:
+   `Azure/login` takes its credentials inline via `creds:`, and every `az` call
+   uses the resulting session.
+2. **The identity is now asserted, not assumed.** "We removed the env vars" is a
+   claim about a file, not about a run. `lib/brain/run/token-identity.ts` decodes
+   the minted token's `appid`/`oid`/`tid` and fails closed when the principal is
+   not the one the run declared — so a re-added env var, a runner without the
+   UAMI attached, or a chain reorder in a future SDK all fail loudly with the
+   principal they actually got, instead of a 403 three steps later. The principal
+   is printed **masked**: this repo is public and a workflow log publishes.
+
+An unreadable token with an expectation set is a **failure**, not a pass — a
+check that waves through what it could not parse is a check that can be defeated
+by making it unparseable.
+
+### Per-cloud status of that fix (`cloud-parity.md`)
+
+The defect was identical in both jobs, so the removal is identical in both. What
+the chain can then **reach** is not, and the difference is real rather than an
+oversight:
+
+| Boundary | Runner | What the chain reaches now | Status |
+|---|---|---|---|
+| Commercial | `[self-hosted, loom-aca]` | The console UAMI — the runner carries it. Asserted per run. | **Fixed**, pending a live receipt. |
+| Gov (GCC-High) | `ubuntu-latest` | No managed identity exists on a GitHub-hosted runner, so the chain falls through to `AzureCliCredential` — the service principal, via `az login`. That principal holds no Cosmos data-plane role. | **Still blocked**, tracked in [#4051]. |
+
+On Gov this is the *second* blocker, not the first: the job's own preflight
+already fails because a hosted runner cannot reach a private-endpoint-only Cosmos
+account at all. Both are closed by the same thing — an in-boundary Gov runner
+carrying the console UAMI (#4051). Until then the scan names the principal it
+actually used and prints the exact
+`az cosmosdb sql role assignment create --role-definition-id 00000000-0000-0000-0000-000000000002`
+command, rather than failing on a 403 whose stated cause would be wrong
+(`deploy-integrity.md` R6/R7).
+
+**Neither boundary has a live receipt for this yet.** The estates are paused per
+`scripts/ci/estate-pause-declaration.json` and nothing here was executed against
+Azure — the claims above rest on the installed SDK source, the workflow tree and
+the bicep grants, all read at head, plus the vitest suites. Stated as untested
+rather than implied working.
 
 ### There is NO Gov in-boundary runner — and the Gov job says so out loud
 
