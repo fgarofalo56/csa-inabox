@@ -32014,10 +32014,10 @@
           "facet": {
             "kind": "publication",
             "module": "scripts/ci/check-standalone-vitest-suites.mjs",
-            "declaredSinkCount": 16,
+            "declaredSinkCount": 18,
             "sinks": [
               {
-                "id": "stdout:member:203",
+                "id": "stdout:member:437",
                 "surface": "stdout",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -32027,7 +32027,7 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "stderr:member:204",
+                "id": "stderr:member:438",
                 "surface": "stderr",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -32037,7 +32037,7 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "console:member:213",
+                "id": "console:member:384",
                 "surface": "console",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -32047,7 +32047,7 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "console:member:222",
+                "id": "console:member:447",
                 "surface": "console",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -32057,7 +32057,7 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "console:member:232",
+                "id": "console:member:456",
                 "surface": "console",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -32067,7 +32067,7 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "console:member:233",
+                "id": "console:member:466",
                 "surface": "console",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -32077,7 +32077,7 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "console:member:249",
+                "id": "console:member:467",
                 "surface": "console",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -32087,7 +32087,7 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "console:member:252",
+                "id": "console:member:483",
                 "surface": "console",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -32097,7 +32097,7 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "console:member:257",
+                "id": "console:member:489",
                 "surface": "console",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -32107,7 +32107,7 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "console:member:262",
+                "id": "console:member:511",
                 "surface": "console",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -32117,7 +32117,7 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "console:member:269",
+                "id": "console:member:519",
                 "surface": "console",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -32127,7 +32127,7 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "console:member:277",
+                "id": "console:member:522",
                 "surface": "console",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -32137,7 +32137,7 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "console:member:286",
+                "id": "console:member:528",
                 "surface": "console",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -32147,7 +32147,7 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "console:member:293",
+                "id": "console:member:535",
                 "surface": "console",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -32157,7 +32157,7 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "console:member:296",
+                "id": "console:member:543",
                 "surface": "console",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -32167,13 +32167,33 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "inherited-fd:spawn-stdio:191",
-                "surface": "inherited-fd",
-                "accessPath": "spawn-stdio",
+                "id": "console:member:552",
+                "surface": "console",
+                "accessPath": "member",
                 "wholeExpressionBounded": false,
                 "boundary": null,
                 "unredactedByDesign": false,
-                "carriesSensitive": true,
+                "carriesSensitive": false,
+                "childProvenRedacting": null
+              },
+              {
+                "id": "console:member:559",
+                "surface": "console",
+                "accessPath": "member",
+                "wholeExpressionBounded": false,
+                "boundary": null,
+                "unredactedByDesign": false,
+                "carriesSensitive": false,
+                "childProvenRedacting": null
+              },
+              {
+                "id": "console:member:562",
+                "surface": "console",
+                "accessPath": "member",
+                "wholeExpressionBounded": false,
+                "boundary": null,
+                "unredactedByDesign": false,
+                "carriesSensitive": false,
                 "childProvenRedacting": null
               }
             ]
@@ -47300,9 +47320,9 @@
     },
     "meta": {
       "generatorVersion": 1,
-      "generatedAt": "2026-08-27T22:24:57.733Z",
-      "commit": "01fddc7fa688145c15a239ce65d4cb1ae1aaee3d",
-      "inputsDigest": "9483584efe2ae6dc",
+      "generatedAt": "2026-08-28T00:02:10.722Z",
+      "commit": "025f59b895ab3e713503500954c19c75a4f6aa6c",
+      "inputsDigest": "fec1907169e914ea",
       "filesScanned": 2059,
       "scanScopes": [
         {
@@ -47951,7 +47971,7 @@
         },
         {
           "subject": "scripts/ci/check-standalone-vitest-suites.mjs",
-          "reason": "module declares no PUBLICATION-SINKS marker, so C4's declared-count drift check is INERT for it (declaredSinkCount is set to the observed 16). Recorded so the inertness is countable rather than invisible — a check that cannot fail must not be mistaken for a check that passed."
+          "reason": "module declares no PUBLICATION-SINKS marker, so C4's declared-count drift check is INERT for it (declaredSinkCount is set to the observed 18). Recorded so the inertness is countable rather than invisible — a check that cannot fail must not be mistaken for a check that passed."
         },
         {
           "subject": "scripts/ci/check-teardown-not-on-schedule.mjs",
@@ -48319,7 +48339,7 @@
         },
         {
           "subject": "C4 expression arm (carriesSensitive)",
-          "reason": "matched 0 of 2222 non-spawn publication sink(s), so every C4 finding on this tree comes from the spawn-stdio arm. The expression arm is INERT here and its correctness is therefore unexercised by the real corpus — C4 output is not evidence that no unbounded sensitive write exists."
+          "reason": "matched 0 of 2225 non-spawn publication sink(s), so every C4 finding on this tree comes from the spawn-stdio arm. The expression arm is INERT here and its correctness is therefore unexercised by the real corpus — C4 output is not evidence that no unbounded sensitive write exists."
         }
       ]
     }
