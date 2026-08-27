@@ -47260,10 +47260,10 @@
     },
     "meta": {
       "generatorVersion": 1,
-      "generatedAt": "2026-08-27T08:32:51.543Z",
-      "commit": "e5bbbc64e1e5022c2022163efa05e05ace36075f",
-      "inputsDigest": "7065700a4f0b8466",
-      "filesScanned": 2055,
+      "generatedAt": "2026-08-27T17:27:32.540Z",
+      "commit": "0d2d28f5b2773b4d8bc95f4b65df9da0076b537e",
+      "inputsDigest": "0d3dccaf8dfc02fc",
+      "filesScanned": 2056,
       "scanScopes": [
         {
           "scope": "app/**/route.ts (console BFF routes)",
@@ -47272,7 +47272,7 @@
         },
         {
           "scope": ".github/**, scripts/** (CI publication surfaces)",
-          "filesMatched": 361,
+          "filesMatched": 362,
           "nodesEmitted": 214
         }
       ],
