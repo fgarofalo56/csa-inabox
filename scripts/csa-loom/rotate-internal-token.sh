@@ -16,10 +16,28 @@
 #   holders plus the GitHub secret. Rotating by hand strands whichever holder you
 #   miss — that is the 2026-08-06/07/08 outage.
 #
-# THE VALUE NEVER APPEARS ANYWHERE
-#   Read from LOOM_NEW_TOKEN only. Never echoed, never written to a file, never
-#   passed on a visible command line, never logged. Only lengths and resource
-#   names appear in the output.
+# WHAT THIS DOES AND DOES NOT PROTECT — measured, not asserted
+#   The value is read from LOOM_NEW_TOKEN only. It is never echoed to stdout or
+#   stderr, and never written to a file. Only lengths and resource names appear
+#   in the output.
+#
+#   It IS on the child process's argv while each write runs — `az containerapp
+#   secret set --secrets loom-internal-token=<value>`. A reviewer stubbed `az`,
+#   recorded argv, and captured the token verbatim on all seven write calls.
+#   Anyone with process-listing rights on this machine can read it during those
+#   seconds. There is no way around that with the az CLI: it takes the secret as
+#   an argument.
+#
+#   What IS true is that az does not persist it — its command log records
+#   `--secrets {}`, and five logs across the 2026-08-26 incident window contain
+#   zero token-shaped values. So the exposure is transient and local, not an
+#   artefact left on disk.
+#
+#   An earlier version of this header claimed the value was "never passed on a
+#   visible command line". That was FALSE, and it is corrected here rather than
+#   softened: a comment asserting something the code does not establish is the
+#   R7 defect this repo keeps getting caught by, and it is worse in a script
+#   whose whole subject is handling a credential.
 #
 # USAGE
 #   export LOOM_NEW_TOKEN="$(python -c 'import uuid; print(uuid.uuid4())')"
