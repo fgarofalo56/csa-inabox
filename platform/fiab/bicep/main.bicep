@@ -1601,6 +1601,17 @@ module adminPlane 'modules/admin-plane/main.bicep' = if (deployAdminPlane) {
     loomMirrorAdlsLinkedService: loomMirrorAdlsLinkedService
     loomMirrorSnowflakeLinkedService: loomMirrorSnowflakeLinkedService
     loomMirrorCopyCadence: loomMirrorCopyCadence
+    // Snowflake mirror staging scratch account (#4083). Computed here rather
+    // than read from singleDlz.outputs because `module singleDlz` is declared
+    // AFTER `module adminPlane` — the DLZ's outputs do not exist in the pass
+    // that renders the console env. Same deterministic-name trick
+    // `loomStorageAccount` above already uses for the lake, and it must stay
+    // character-for-character identical to `stagingAccountName` in
+    // modules/landing-zone/mirror-staging.bicep or the console binds to an
+    // account that was never created.
+    loomMirrorStagingAccount: useSingleDlz
+      ? take('saloomstg${uniqueString(singleDlzRg.id, 'loom-mirror-staging')}', 24)
+      : ''
     // No-Fabric mode (default): force the bound workspace empty so nothing
     // hard-depends on a Fabric capacity/workspace (no-fabric-dependency.md). Set
     // fabricEnabled=true ONLY to opt into a bound Fabric workspace.

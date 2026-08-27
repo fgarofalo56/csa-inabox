@@ -80,7 +80,7 @@ export const MIRROR_COSMOS_FAMILY = new Set(['CosmosDb']);
  * Sources mirrored via an ADF **Copy** runtime (Snowflake today; BigQuery /
  * Oracle extend here later). These authenticate with their own runtime, so the
  * built-in TDS/PG/Cosmos snapshot engine cannot read them — an Azure Data Factory
- * Copy pipeline (delete-then-copy full refresh) + an optional schedule trigger
+ * Copy pipeline (copy-then-swap full refresh) + an optional schedule trigger
  * lands each selected table as Parquet in ADLS Bronze instead. Opt-in: needs
  * LOOM_ADF_NAME + a Snowflake source linked service + the ADLS sink linked
  * service. No Microsoft Fabric.
@@ -217,7 +217,7 @@ export interface MirrorRunResult {
    *     initial full load + continuous CDC → Delta-in-Bronze (opt-in: needs
    *     LOOM_ADF_NAME + the two linked-service env vars). The canonical no-Fabric
    *     mirrored-database backend per no-fabric-dependency.md.
-   *   - `adf-copy`     — an Azure Data Factory Copy pipeline (delete-then-copy
+   *   - `adf-copy`     — an Azure Data Factory Copy pipeline (copy-then-swap
    *     full refresh) + optional schedule trigger → Parquet-in-Bronze. The
    *     no-Fabric backend for sources that authenticate with their own runtime
    *     (Snowflake), which ADF reads via its Copy connector.

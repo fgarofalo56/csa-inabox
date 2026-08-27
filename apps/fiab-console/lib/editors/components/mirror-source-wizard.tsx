@@ -81,7 +81,7 @@ const GATEWAY_SOURCES = new Set(['Oracle']);
  * really is "only the rows that changed" — Change Tracking, a monotonic
  * watermark, or the Cosmos `_ts` feed. On the ADF Copy engine (Snowflake) it is
  * a scheduled **full reload**: the ADF Snowflake connector exposes no CDC
- * source, so every run is a delete-then-copy. Labelling that "changed rows since
+ * source, so every run re-copies the whole table. Labelling that "changed rows since
  * last sync" — while the note directly below it said "full refresh" — put a
  * contradiction on one screen with the misleading half selected by DEFAULT.
  */
@@ -121,7 +121,7 @@ export const SOURCE_SYNC_NOTE: Record<string, string> = {
   MSSQL: 'SQL Change Tracking drives incremental deltas; set the ADF CDC env vars for continuous Delta CDC.',
   AzurePostgreSql: 'Watermark-incremental on a monotonic column (updated-at timestamp / serial id). Insert/update fidelity; deletes are a disclosed follow-up.',
   CosmosDb: 'Change-feed `_ts`-watermark incremental — each run reads only documents changed since the last sync.',
-  Snowflake: 'ADF Copy runtime. Snapshot = one full load, no trigger. Incremental = re-copied on the deployment cadence via a schedule trigger. Continuous = a 15-minute tumbling window (max 1 concurrent). Every run is a delete-then-copy full refresh — the ADF Snowflake connector has no CDC source.',
+  Snowflake: 'ADF Copy runtime. Snapshot = one full load, no trigger. Incremental = re-copied on the deployment cadence via a schedule trigger. Continuous = a 15-minute tumbling window (max 1 concurrent). Every run is a full refresh — the ADF Snowflake connector has no CDC source — and the previous copy is deleted only after the new one succeeds, so a failed run leaves the last good snapshot in place.',
 
   GoogleBigQuery: 'ADF Copy backend (Google BigQuery V2 connector → Bronze) once the ADF linked services are configured.',
   Oracle: 'ADF Copy backend through the on-prem data gateway → Bronze once the ADF linked services are configured.',
