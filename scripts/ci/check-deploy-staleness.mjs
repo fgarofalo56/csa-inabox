@@ -480,6 +480,14 @@ export const WATCHED = [
       // that decides whether a failed read is transient (retry), denied, capacity
       // or unknown. It gates whether the preflight retries or fails the deploy.
       'scripts/ci/_az-failure-class.mjs',
+      // Same import edge, third module: the estate-pause register reader the ADX
+      // preflight imports to tell a DELIBERATELY stopped cluster from a broken
+      // one. It is the strongest of the three — the other two decide how the
+      // preflight REACTS to a failure; this one decides whether the lane stands
+      // down and applies NOTHING at all. Editing it changes what reaches Azure,
+      // so a commit touching it without a subsequent successful run IS drift,
+      // for exactly the reason the two above are watched.
+      'scripts/ci/_estate-pause-declaration.mjs',
     ],
     maxDays: 7,
   },
@@ -614,6 +622,14 @@ export const WATCHED = [
       // that decides whether a failed read is transient (retry), denied, capacity
       // or unknown. It gates whether the preflight retries or fails the deploy.
       'scripts/ci/_az-failure-class.mjs',
+      // Same import edge, third module: the estate-pause register reader the ADX
+      // preflight imports to tell a DELIBERATELY stopped cluster from a broken
+      // one. It is the strongest of the three — the other two decide how the
+      // preflight REACTS to a failure; this one decides whether the lane stands
+      // down and applies NOTHING at all. Editing it changes what reaches Azure,
+      // so a commit touching it without a subsequent successful run IS drift,
+      // for exactly the reason the two above are watched.
+      'scripts/ci/_estate-pause-declaration.mjs',
       // #3203 — Front Door answers 504 while the ACA private-endpoint connection
       // is Pending, so this decides whether the deployed sovereign estate is
       // reachable at all.
@@ -722,6 +738,14 @@ export const WATCHED = [
       // that decides whether a failed read is transient (retry), denied, capacity
       // or unknown. It gates whether the preflight retries or fails the deploy.
       'scripts/ci/_az-failure-class.mjs',
+      // Same import edge, third module: the estate-pause register reader the ADX
+      // preflight imports to tell a DELIBERATELY stopped cluster from a broken
+      // one. It is the strongest of the three — the other two decide how the
+      // preflight REACTS to a failure; this one decides whether the lane stands
+      // down and applies NOTHING at all. Editing it changes what reaches Azure,
+      // so a commit touching it without a subsequent successful run IS drift,
+      // for exactly the reason the two above are watched.
+      'scripts/ci/_estate-pause-declaration.mjs',
     ],
     maxDays: 7,
   },
@@ -826,6 +850,14 @@ export const WATCHED = [
       // that decides whether a failed read is transient (retry), denied, capacity
       // or unknown. It gates whether the preflight retries or fails the deploy.
       'scripts/ci/_az-failure-class.mjs',
+      // Same import edge, third module: the estate-pause register reader the ADX
+      // preflight imports to tell a DELIBERATELY stopped cluster from a broken
+      // one. It is the strongest of the three — the other two decide how the
+      // preflight REACTS to a failure; this one decides whether the lane stands
+      // down and applies NOTHING at all. Editing it changes what reaches Azure,
+      // so a commit touching it without a subsequent successful run IS drift,
+      // for exactly the reason the two above are watched.
+      'scripts/ci/_estate-pause-declaration.mjs',
       // DELIBERATELY ABSENT, and named so the omission is a decision rather than
       // an oversight: deploy-classify.mjs, deploy-retry.mjs and
       // gov-verify-evidence.sh are CI_PLUMBING (see check-deploy-paths-coverage),
