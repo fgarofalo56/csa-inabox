@@ -2525,7 +2525,7 @@ silently downgrading the route.
 
 ## Backend signals (derived)
 
-447 module(s) ORIGINATE a backend label — the derivation read an
+446 module(s) ORIGINATE a backend label — the derivation read an
 Azure identifier out of them. Every other route/module below inherits through the
 call graph. Nothing in this section is a Loom module name someone typed: the
 modules are derived, and only the Microsoft-owned identifier vocabulary is seeded.
@@ -3171,7 +3171,6 @@ caps the NUMBER of cuts at three; it does not bound what one cut can hide.
 | `apps/fiab-console/lib/gates/registry/data-plane.ts` | Azure RBAC |
 | `apps/fiab-console/lib/gates/registry/types.ts` | AAS, ADF, ADX, AI Search, AML, APIM, Azure AI Services, Azure Maps, Azure SQL, Azure Storage, Batch, Container Apps, Cosmos, Databricks, Event Hubs, Key Vault, Log Analytics, PostgreSQL, Purview, Service Bus, Synapse |
 | `apps/fiab-console/lib/governance/workspace-egress-pane.tsx` | Azure Storage |
-| `apps/fiab-console/lib/install/provisioners/_seed-dev-pipeline.ts` | ADLS |
 | `apps/fiab-console/lib/install/provisioners/ai-search.ts` | AI Search |
 | `apps/fiab-console/lib/install/provisioners/data-product.ts` | Purview |
 | `apps/fiab-console/lib/install/provisioners/evaluation.ts` | AML |
