@@ -20,11 +20,12 @@
  * is alias-free. It walks the import graph rather than checking the entrypoint,
  * because the failure is always three files down.
  *
- * MEASURED while building this lane: `lib/azure/fetch-with-timeout.ts` imports
- * `@/lib/resilience/fault-injection`, which is exactly why the CLI reaches
+ * MEASURED while building this lane: `lib/azure/fetch-with-timeout.ts` used to
+ * import `@/lib/resilience/fault-injection`, which is why the CLI reached
  * `lib/azure/cloud-endpoints` (alias-free) and NOT `lib/azure/aca-managed-identity`
- * (which pulls in `fetch-with-timeout`). That is a real constraint on what this
- * lane may import, and it is invisible without this check.
+ * (which pulls in `fetch-with-timeout`). That specifier is now RELATIVE (#4040),
+ * so the constraint has moved: the CLI may reach those modules, and this walk is
+ * what keeps them alias-free.
  *
  * ── THE WALKER WAS BLIND TO THE ONE MODULE THAT BROKE (#3993 merge) ───────
  * Seeding only `cli.ts` follows STATIC imports, and the two history specifiers
@@ -42,12 +43,14 @@
  * exported specifiers rather than hard-coded, so a future runtime-resolved
  * import cannot fall outside the population the same way.
  *
- * THIS TEST IS NOW RED, AND THAT IS THE POINT (#4040). The two hits above are a
- * real defect: the CLI cannot emit W9's console-shaped Cosmos store, so the
- * scheduled scan has nowhere to write a graph version. Resolving it is a design
- * call between three options, all costed in #4040. Do NOT restore this guard to
- * green by narrowing the seeds — that returns it to reporting clean over a lane
- * that cannot run.
+ * ── RESOLVED, AND HOW (#4040) ────────────────────────────────────────────
+ * Both hits above are now relative, plus a third this walker could not see at
+ * all: `lib/resilience/fault-injection.ts:215` reached `@/lib/admin/audit-stream`
+ * through a DYNAMIC import, and `tsc` resolves a literal dynamic specifier, so it
+ * was a TS2307 as well. It became an injected audit sink wired by the gated chaos
+ * route (`lib/resilience/__tests__/fault-audit-sink-wiring.test.ts` asserts the
+ * audit still happens). Do NOT restore this guard to green in future by narrowing
+ * the seeds — that returns it to reporting clean over a lane that cannot run.
  */
 
 import { existsSync, readFileSync } from 'node:fs';
@@ -75,6 +78,12 @@ const RUNTIME_SEEDS: readonly (readonly [from: string, spec: string])[] = [
 
 const IMPORT_RE = /(?:^|\n)\s*(?:import|export)\s+(?:[\s\S]*?)\s+from\s+'([^']+)'/g;
 const BARE_IMPORT_RE = /(?:^|\n)\s*import\s+'([^']+)'/g;
+// LITERAL DYNAMIC imports count too, and this walker did not see them (#4040).
+// `tsc` resolves `import('…')` when the specifier is a literal and emits a
+// `require()` for it, so an alias there is a TS2307 at build time and a
+// MODULE_NOT_FOUND at 04:11 UTC — identical consequence, and it was the third
+// blocking specifier while this population held only the static two.
+const DYNAMIC_IMPORT_RE = /\bimport\(\s*'([^']+)'\s*\)/g;
 
 const ALIAS_RE = /^@\//;
 
@@ -82,6 +91,7 @@ function specifiersIn(text: string): string[] {
   const out: string[] = [];
   for (const m of text.matchAll(IMPORT_RE)) out.push(m[1]);
   for (const m of text.matchAll(BARE_IMPORT_RE)) out.push(m[1]);
+  for (const m of text.matchAll(DYNAMIC_IMPORT_RE)) out.push(m[1]);
   return out;
 }
 
@@ -175,6 +185,16 @@ describe('the CLI dependency closure', () => {
   it('EMBEDDED CONTROL: the walker does not flag a relative import', () => {
     const specs = specifiersIn("import { y } from './verdict';");
     expect(specs.filter((s) => ALIAS_RE.test(s))).toHaveLength(0);
+  });
+
+  it('EMBEDDED CONTROL: a LITERAL DYNAMIC import is in the population (#4040)', () => {
+    // This is the arm that was missing. `fault-injection.ts:215` reached
+    // `@/lib/admin/audit-stream` through `await import('…')`, tsc resolved it,
+    // and this walker saw nothing — so the closure reported clean over a
+    // specifier that failed the build.
+    const specs = specifiersIn("await import('@/lib/admin/audit-stream');");
+    expect(specs).toEqual(['@/lib/admin/audit-stream']);
+    expect(specs.filter((s) => ALIAS_RE.test(s))).toHaveLength(1);
   });
 
   it('the CLI tsconfig deliberately declares NO `paths` mapping', () => {

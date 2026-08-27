@@ -25,7 +25,15 @@
  * No mocks. This only adds a deadline around the real `fetch`.
  */
 
-import { fetchFaultForUrl, type FetchFaultDirective } from '@/lib/resilience/fault-injection';
+// RELATIVE, NOT `@/` — DELIBERATE (#4040). This is the ONLY static import in
+// this module, and it is the single edge that drags the resilience layer into
+// every emit closure that reaches `fetchWithTimeout`. The Brain scan CLI
+// (`lib/brain/run/tsconfig.cli.json`) declares no `paths` mapping on purpose,
+// so an alias here compiles green and dies at runtime with
+// `Cannot find module '@/lib/...'`. Inside Next both spellings resolve to the
+// same file — this is behaviour-neutral for the console and for every test that
+// mocks `@/lib/azure/fetch-with-timeout` (vitest keys mocks on the RESOLVED id).
+import { fetchFaultForUrl, type FetchFaultDirective } from '../resilience/fault-injection';
 
 /** Extract a URL string from any `fetch` input shape. */
 function urlString(input: string | URL | Request): string {

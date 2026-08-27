@@ -72,15 +72,25 @@
   // directory, and resolves both runtime specifiers against a stub tree — so
   // neither half of that defect can return silently.
   //
-  // ── AND IT IS CURRENTLY RED, ON PURPOSE (#4040) ──────────────────────────
-  // W9 landed and the glob works, but W9's `lib/brain/history/cosmos-store.ts`
-  // imports `@/lib/azure/aca-managed-identity` — the head of a chain that runs
-  // through fetch-with-timeout, fault-injection, audit-stream and the whole
-  // console event subsystem. This config CANNOT emit that, and it says so at
-  // build time with the file named. DO NOT "fix" it by removing this include or
-  // by adding a `paths` mapping: both convert a loud CI failure into a silent
-  // 04:11 UTC MODULE_NOT_FOUND, which is the failure mode the whole comment
-  // above exists to prevent. #4040 carries the three real options.
+  // ── IT WAS RED, ON PURPOSE, AND IS NOW RESOLVED (#4040) ──────────────────
+  // W9 landed and the glob worked, but W9's `lib/brain/history/cosmos-store.ts`
+  // imported `@/lib/azure/aca-managed-identity`, and this config cannot emit an
+  // alias. The chain was measured rather than guessed, and it is THREE
+  // specifiers, not a subsystem:
+  //   1. `lib/brain/history/cosmos-store.ts:47`  -> aca-managed-identity  (static)
+  //   2. `lib/azure/fetch-with-timeout.ts:28`    -> fault-injection       (static)
+  //   3. `lib/resilience/fault-injection.ts:215` -> audit-stream          (DYNAMIC,
+  //      and `tsc` resolves a literal dynamic specifier, so it raised TS2307 too)
+  // 1 and 2 are now relative. 3 became an injected audit sink wired by the gated
+  // chaos route — making it relative instead would have taken this closure from
+  // 43 files to 75 and closed a CommonJS `require` cycle through the credential
+  // path. `lib/resilience/__tests__/fault-audit-sink-wiring.test.ts` asserts the
+  // audit still happens, so that trade cannot rot silently.
+  //
+  // STILL DO NOT "fix" a future alias by removing this include or by adding a
+  // `paths` mapping: both convert a loud CI failure into a silent 04:11 UTC
+  // MODULE_NOT_FOUND, which is the failure mode the whole comment above exists
+  // to prevent. Cut the alias at its source instead, as above.
   "include": ["./cli.ts", "../history/**/*.ts"],
   // ── THE EXCLUDE MUST REACH WHEREVER THE INCLUDE DOES (#3993 merge) ────────
   // `exclude` globs are resolved relative to THIS directory, so `**/__tests__/**`

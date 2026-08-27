@@ -44,7 +44,13 @@ import {
   DefaultAzureCredential,
   ManagedIdentityCredential,
 } from '@azure/identity';
-import { AcaManagedIdentityCredential } from '@/lib/azure/aca-managed-identity';
+// RELATIVE, NOT `@/` — DELIBERATE (#4040). This module is inside the emit
+// closure of `lib/brain/run/tsconfig.cli.json`, which declares no `paths`
+// mapping on purpose: `tsc` resolves `@/` for typechecking but does NOT rewrite
+// the specifier on emit, so an alias here compiles green and then dies at
+// 04:11 UTC with `Cannot find module '@/lib/...'`. Inside Next both spellings
+// resolve to the same file, so this is behaviour-neutral for the console.
+import { AcaManagedIdentityCredential } from '../../azure/aca-managed-identity';
 import { verifyGraphVersion } from './digest';
 import {
   GraphVersionIntegrityError,
