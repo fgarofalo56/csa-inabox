@@ -23,6 +23,7 @@ import {
 import {
   BlobServiceClient,
   BlobSASPermissions,
+  ContainerSASPermissions,
   SASProtocol,
   generateBlobSASQueryParameters,
   type BlobClient as AzureBlobClient,
@@ -277,6 +278,68 @@ export async function generateReadSasUrl(
 
   const blobUrl = svc.getContainerClient(container).getBlobClient(clean).url;
   return { url: `${blobUrl}?${sas}`, expiresAt: expiresOn.toISOString() };
+}
+
+export interface ContainerWriteSas {
+  /** `https://<account>.blob.<suffix>/<container>?<sas>` — what ADF stores. */
+  containerSasUri: string;
+  expiresAt: string;
+}
+
+/**
+ * Mint a CONTAINER-scoped, write-capable user-delegation SAS URI.
+ *
+ * Exists for one caller: the Snowflake mirror staging hop (#4083). Snowflake's
+ * `COPY INTO <location>` unload runs in SNOWFLAKE's cloud and authenticates with
+ * a SAS — it cannot use a managed identity, and ADF requires the interim staging
+ * linked service to be `AzureBlobStorage` with SAS auth for exactly that reason.
+ *
+ * Signed with the Console UAMI's Entra credentials via `getUserDelegationKey`,
+ * never an account key: the staging account runs `allowSharedKeyAccess: false`
+ * (there is no key to leak, and this estate's Azure Policy denies accounts that
+ * have one). Scoped to the ONE container, HTTPS-only, and short-lived —
+ * `ttlHours` is clamped to Azure's 7-day user-delegation ceiling, and callers
+ * should pass far less.
+ *
+ * Permissions are the minimum a staged copy needs and no more:
+ *   w  Snowflake writes the unload
+ *   r  ADF reads it back to land it in Bronze
+ *   l  ADF enumerates the unload's partition files
+ *   d  the staged scratch is removed after the copy
+ * Deliberately EXCLUDED: `a` (append), `c` (create-container), `t` (tags).
+ */
+export async function generateContainerWriteSasUri(
+  container: string,
+  ttlHours: number,
+  account?: string,
+): Promise<ContainerWriteSas> {
+  const acct = account ?? resolveAccountName();
+  const svc = getBlobServiceClient(acct);
+
+  const now = Date.now();
+  // Start a few minutes in the past to tolerate clock skew.
+  const startsOn = new Date(now - 5 * 60 * 1000);
+  const cappedHours = Math.min(Math.max(ttlHours, 1), SAS_MAX_TTL_HOURS);
+  const expiresOn = new Date(now + cappedHours * 60 * 60 * 1000);
+
+  // Requires Storage Blob Delegator at account scope — granted to the Console
+  // UAMI by modules/landing-zone/mirror-staging.bicep.
+  const delegationKey = await svc.getUserDelegationKey(startsOn, expiresOn);
+
+  const sas = generateBlobSASQueryParameters(
+    {
+      containerName: container,
+      permissions: ContainerSASPermissions.parse('rwdl'),
+      startsOn,
+      expiresOn,
+      protocol: SASProtocol.Https,
+    },
+    delegationKey,
+    acct,
+  ).toString();
+
+  const containerUrl = svc.getContainerClient(container).url;
+  return { containerSasUri: `${containerUrl}?${sas}`, expiresAt: expiresOn.toISOString() };
 }
 
 /** Read the current access tier of a single blob via Get Blob Properties. */

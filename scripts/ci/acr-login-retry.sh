@@ -24,11 +24,58 @@
 #     Access to registry '…' was denied. Response code: 403.
 #     ERROR: Unable to authenticate using AAD or admin login credentials.
 #
-# The probe's verdict was CORRECT and the two failures are not a contradiction:
-# `/v2/` answering 401 means the request reached the auth layer, which is exactly
-# what it claims. The token exchange is a different surface and was still 403ing
-# ~38 seconds after the open. gov-console-roll succeeded in the same window on the
-# same day, which is the signature of a transient, not a permission defect.
+# Those two runs failed on the AAD token exchange — `CONNECTIVITY_REFRESH_TOKEN_ERROR`,
+# then `Response code: 403` — which is a genuinely different call from the anonymous
+# `GET /v2/` the probe makes, and gov-console-roll succeeded in the same window on
+# the same day, which is the signature of a transient rather than a permission
+# defect. So the RETRY this script adds was, and remains, the right response.
+#
+# WHAT WAS WRONG HERE, AND IS NOW STRUCK (#4067, 2026-08-25).
+#
+# This block used to generalise from those two runs to the claim that a
+# READY-then-denied pair is "not a contradiction" because "the token exchange is a
+# different surface". That reasoning does not hold, and it was the stated reason
+# the probe itself was left alone. Three runs denied on the SAME surface, the same
+# path, ~2s after the probe reported READY:
+#
+#   31564296050  deploy-loom-sharing     READY 04:48:12.008 -> denied 04:48:13.821
+#   32248671357  loom-roll-and-validate  READY 11:46:35.621 -> denied 11:46:37.254
+#   32819789544  loom-roll-and-validate  READY 07:13:27.818 -> denied 07:13:29.912
+#
+# Every one of those denials reads `Get "https://<acr>/v2/": denied: … client with
+# IP '<ip>' is not allowed access` — the exact URL the probe had just polled, from
+# the same runner. What they establish is NOT the same for all three, and stating
+# one mechanism for all three would be the same over-general claim this block was
+# rewritten to strike (deploy-integrity.md R7):
+#
+#   31564296050 and 32248671357 support the propagation reading. 32248671357 is
+#     the strongest: it held the firewall lease EXCLUSIVELY — no contention, no
+#     re-lock until 11:46:40 — so nothing closed the registry between the 401 and
+#     the denial. A denial on `/v2/` seconds after a 401 on `/v2/` in THAT job is
+#     not two surfaces disagreeing; it is one surface whose firewall rule had not
+#     finished propagating across frontends.
+#   32819789544 does NOT support it. #4067's own "Caveat on (A)" records that this
+#     job held no lease (`ACR_LEASE_STATE: none`) and rode another run's open
+#     window, so a concurrent RE-LOCK by the lease holder is an equally consistent
+#     explanation — and re-sampling cannot fix that one. If you hit an ACR denial
+#     in a no-lease job, look for a concurrent re-lock BEFORE concluding
+#     propagation; the probe's consecutive sampling does not address it.
+#
+# The real defect was that the probe treated ONE sample as an observation. It now
+# requires 3 consecutive fresh-connection samples spaced >=2s, with any 403, any
+# connect failure and any other status resetting the count, and that floor is
+# ENFORCED rather than merely defaulted — dropping below it, or asking for a
+# sample count the budget cannot fit (which can only ever fail closed, and at 14
+# of the 17 call sites is discarded anyway), needs
+# `--unsafe-sampling-below-4067-floor "<reason>"`
+# (scripts/ci/acr-dataplane-ready.sh). Note that this changed its READY line: the
+# `READY after 1 attempt(s) — HTTP 401 …` text quoted above and below is a
+# historical log excerpt, not a string the script emits any more.
+#
+# None of that weakens the case for retrying here. Propagation is asynchronous,
+# so even N consecutive answers cannot promise the next call will be allowed —
+# which is precisely why a denial must be ridden out rather than trusted as a
+# permanent verdict.
 #
 # WHAT IS RETRIED, AND WHAT IS NOT. Only signals that are genuinely transient in
 # this window. A registry that does not exist, or a principal with no role, fails
@@ -100,7 +147,43 @@ if [ -z "$ACR" ]; then
 fi
 
 # Transient in the window right after an ACR firewall open, or under throttling.
-TRANSIENT='CONNECTIVITY_REFRESH_TOKEN_ERROR|Response code: 403|try running .az login. again|TooManyRequests|temporarily unavailable|Connection aborted|connection reset|ServiceUnavailable|GatewayTimeout|504|503'
+#
+# THE IP-DENIAL SHAPE (loom-roll-and-validate run 32819789544, 2026-08-25 - a P0
+# roll failure that froze the Commercial estate mid-roll). `az acr login` shells
+# out to the Docker daemon when one is present, and the daemon reports a firewall
+# refusal in ITS words, not the AAD client's:
+#
+#   [acr-dataplane-ready] READY after 1 attempt(s) - HTTP 401 ...   <- probe: open
+#   WARNING: Error response from daemon: Get "https://<acr>/v2/": denied:
+#     {"errors":[{"code":"DENIED","message":"client with IP '<ip>' is not allowed
+#      access. Refer https://aka.ms/acr/firewall to grant access."}]}
+#   ERROR: Login failed.
+#
+# That text contains NO `Response code: 403` and none of the other needles below,
+# so the set classified the CANONICAL post-open propagation failure as permanent
+# and exited on attempt 1 - the precise outcome this script exists to prevent.
+#
+# `is not allowed access` is the right needle. It is emitted by ACR's NETWORK
+# RULE path; acr-dataplane-ready.sh:33-36 measured it on 2026-08-11, but what it
+# measured was firewall-CLOSED (403 DENIED ... is not allowed access) vs
+# firewall-OPEN (401 UNAUTHORIZED), with an anonymous `curl GET /v2/`. A probe
+# with no principal cannot produce an RBAC denial, so that measurement does NOT
+# establish that an RBAC denial never carries this phrase. Do not cite it for
+# that.
+#
+# It does not need to. The narrowness claim is NOT load-bearing here: the
+# canonical RBAC denial ("Access to registry 'x' was denied. Response code:
+# 403.") already matches `Response code: 403` in the set below, so it is
+# ALREADY retried today, pre-this-change. Even if `is not allowed access` did
+# appear in some RBAC wording, this needle changes nothing about how that case
+# is classified. The behaviour this line adds is confined to the daemon-worded
+# firewall refusal above, which matched nothing at all.
+#
+# COST OF BEING WRONG. If the lease genuinely never opened the registry, this now
+# takes ~165s to say so instead of ~0s. That is the SAME trade #3383 already made
+# deliberately for a true RBAC denial: a slow true answer beats a fast false one,
+# and the exhaustion message names both possibilities rather than asserting one.
+TRANSIENT='CONNECTIVITY_REFRESH_TOKEN_ERROR|Response code: 403|is not allowed access|try running .az login. again|TooManyRequests|temporarily unavailable|Connection aborted|connection reset|ServiceUnavailable|GatewayTimeout|504|503'
 
 LAST=""
 # Report the time this actually took, not ATTEMPTS*BACKOFF — the loop never
@@ -125,5 +208,5 @@ for i in $(seq 1 "$ATTEMPTS"); do
   fi
 done
 
-echo "::error::acr-login-retry: could NOT authenticate to '${ACR}' after ${ATTEMPTS} attempts over ${SECONDS}s (budget ${ATTEMPTS}x${BACKOFF}s). Every attempt failed with a transient-looking auth error, so this is either a token-exchange window far longer than expected or a permission problem wearing a transient's clothes. LAST ERROR: $(printf '%s' "$LAST" | tr -d '\r' | tr '\n' ' ' | cut -c1-400)" >&2
+echo "::error::acr-login-retry: could NOT authenticate to '${ACR}' after ${ATTEMPTS} attempts over ${SECONDS}s (budget ${ATTEMPTS}x${BACKOFF}s). Every attempt failed with a transient-looking auth error, so this is either a token-exchange window far longer than expected, a registry whose network rules never admitted this runner (the firewall lease may have been erased mid-run - see #3676), or a permission problem wearing a transient's clothes. LAST ERROR: $(printf '%s' "$LAST" | tr -d '\r' | tr '\n' ' ' | cut -c1-400)" >&2
 exit 1

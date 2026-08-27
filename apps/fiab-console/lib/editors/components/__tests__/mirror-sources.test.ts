@@ -18,6 +18,36 @@
 import { describe, it, expect } from 'vitest';
 import { MIRROR_SOURCES, SOURCE_SYNC_NOTE, syncModeOptions } from '../mirror-source-wizard';
 import { CONNECTION_TYPES } from '@/lib/azure/connectable-types';
+import { MIRROR_SOURCE_CONN_TYPES, MIRROR_SOURCE_LABEL } from '@/lib/azure/mirror-source-compat';
+
+
+/**
+ * The wizard catalog and the server-side refusal MUST agree about what backs
+ * what. They are one source of truth by construction (MIRROR_SOURCES reads its
+ * `connTypes` / `name` from mirror-source-compat), and this asserts nobody has
+ * re-inlined a literal — which is how the picker could start offering a pairing
+ * the BFF then refuses, or worse, stop refusing one it should.
+ */
+describe('the wizard catalog does not drift from the compatibility map', () => {
+  it('every source card reads its connTypes from the shared map', () => {
+    for (const src of MIRROR_SOURCES) {
+      expect(src.connTypes, `${src.id} connTypes drifted from mirror-source-compat`)
+        .toEqual(MIRROR_SOURCE_CONN_TYPES[src.id]);
+    }
+  });
+
+  it('every source card reads its display name from the shared map', () => {
+    for (const src of MIRROR_SOURCES) {
+      expect(src.name, `${src.id} name drifted from mirror-source-compat`)
+        .toBe(MIRROR_SOURCE_LABEL[src.id]);
+    }
+  });
+
+  it('covers every id the compatibility map knows about', () => {
+    expect(MIRROR_SOURCES.map((s) => s.id).sort())
+      .toEqual(Object.keys(MIRROR_SOURCE_CONN_TYPES).sort());
+  });
+});
 
 
 describe('MIRROR_SOURCES', () => {
