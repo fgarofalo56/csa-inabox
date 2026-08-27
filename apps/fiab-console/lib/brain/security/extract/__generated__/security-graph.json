@@ -1437,6 +1437,33 @@
           }
         },
         {
+          "id": "sec:authorizer:apps/fiab-console/app/api/admin/brain/synapses/route.ts#GET",
+          "kind": "authorizer",
+          "provenance": "declared",
+          "label": "GET /api/admin/brain/synapses",
+          "facet": {
+            "kind": "authorizer",
+            "fnName": "GET /api/admin/brain/synapses",
+            "params": [],
+            "resourceScoped": false,
+            "callerNamedResourceInputs": [],
+            "allowPaths": [
+              {
+                "id": "get:admin-claim",
+                "conditionPredicates": [
+                  "isTenantAdmin"
+                ],
+                "scopeLiterals": [],
+                "mentionsVerdict": false,
+                "impliedByOwnsVerdict": false,
+                "ownsResolver": null
+              }
+            ],
+            "reachesPrivilegedSink": false,
+            "privilegedSinkKinds": []
+          }
+        },
+        {
           "id": "sec:authorizer:apps/fiab-console/app/api/admin/capacity/chargeback/route.ts#GET",
           "kind": "authorizer",
           "provenance": "declared",
@@ -19051,16 +19078,6 @@
             "declaredSinkCount": 14,
             "sinks": [
               {
-                "id": "console:member:148",
-                "surface": "console",
-                "accessPath": "member",
-                "wholeExpressionBounded": false,
-                "boundary": null,
-                "unredactedByDesign": false,
-                "carriesSensitive": false,
-                "childProvenRedacting": null
-              },
-              {
                 "id": "console:member:149",
                 "surface": "console",
                 "accessPath": "member",
@@ -19081,7 +19098,7 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "console:member:153",
+                "id": "console:member:151",
                 "surface": "console",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -19141,7 +19158,7 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "console:member:160",
+                "id": "console:member:159",
                 "surface": "console",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -19151,7 +19168,7 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "console:member:165",
+                "id": "console:member:161",
                 "surface": "console",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -19161,7 +19178,7 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "console:member:168",
+                "id": "console:member:166",
                 "surface": "console",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -19181,7 +19198,17 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "console:member:171",
+                "id": "console:member:170",
+                "surface": "console",
+                "accessPath": "member",
+                "wholeExpressionBounded": false,
+                "boundary": null,
+                "unredactedByDesign": false,
+                "carriesSensitive": false,
+                "childProvenRedacting": null
+              },
+              {
+                "id": "console:member:172",
                 "surface": "console",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -37392,7 +37419,7 @@
             "declaredSinkCount": 1,
             "sinks": [
               {
-                "id": "stdout:member:313",
+                "id": "stdout:member:556",
                 "surface": "stdout",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -42840,6 +42867,11 @@
           "deployedAs": "loom-console"
         },
         {
+          "nodeId": "sec:authorizer:apps/fiab-console/app/api/admin/brain/synapses/route.ts#GET",
+          "codeModuleId": "code:apps/fiab-console/app/api/admin/brain/synapses/route.ts",
+          "deployedAs": "loom-console"
+        },
+        {
           "nodeId": "sec:authorizer:apps/fiab-console/app/api/admin/capacity/chargeback/route.ts#GET",
           "codeModuleId": "code:apps/fiab-console/app/api/admin/capacity/chargeback/route.ts",
           "deployedAs": "loom-console"
@@ -47160,19 +47192,19 @@
     },
     "meta": {
       "generatorVersion": 1,
-      "generatedAt": "2026-08-27T05:15:41.124Z",
-      "commit": "83a6c4cbc0821671ea3dde80509920110d738d0b",
-      "inputsDigest": "b2e89813c1a88966",
-      "filesScanned": 2051,
+      "generatedAt": "2026-08-27T05:46:06.299Z",
+      "commit": "4e975657ac4eebe989931b34a370cbf1a075a18a",
+      "inputsDigest": "847f29c55e66e7de",
+      "filesScanned": 2053,
       "scanScopes": [
         {
           "scope": "app/**/route.ts (console BFF routes)",
-          "filesMatched": 1693,
-          "nodesEmitted": 705
+          "filesMatched": 1694,
+          "nodesEmitted": 706
         },
         {
           "scope": ".github/**, scripts/** (CI publication surfaces)",
-          "filesMatched": 358,
+          "filesMatched": 359,
           "nodesEmitted": 213
         }
       ],
@@ -48167,7 +48199,7 @@
         },
         {
           "subject": "scripts/** (*.ps1, *.py, *.sh, *.yaml)",
-          "reason": "178 file(s) under a SCANNED root were seen and NOT read: this extractor lexes JavaScript/TypeScript only, so a workflow YAML `run:` block, a shell step or a Python script is outside the examined population even though it publishes to the same PUBLIC Actions log. C4 output therefore says nothing about these files. Recorded with a count so the narrowing is countable rather than inferred from a scope string — which is how the `.github/**` gap survived until 2026-08-24."
+          "reason": "179 file(s) under a SCANNED root were seen and NOT read: this extractor lexes JavaScript/TypeScript only, so a workflow YAML `run:` block, a shell step or a Python script is outside the examined population even though it publishes to the same PUBLIC Actions log. C4 output therefore says nothing about these files. Recorded with a count so the narrowing is countable rather than inferred from a scope string — which is how the `.github/**` gap survived until 2026-08-24."
         },
         {
           "subject": ".github/** (*.py, *.sh, *.yaml, *.yml)",
