@@ -28,6 +28,7 @@ import {
 } from './kusto-client';
 import { getServiceClientFor } from './adls-client';
 import { fetchWithTimeout } from './fetch-with-timeout';
+import { statusToken } from './status-token';
 import type { SqlExplicitAuth } from './azure-sql-client';
 import type { ConnectionType, AuthMethod } from './connections-store';
 
@@ -204,8 +205,13 @@ export async function probeConnection(input: ProbeInput): Promise<ProbeResult> {
   };
 }
 
-/** Classify common TDS/Kusto auth+connectivity failures into an actionable hint. */
-function classifySqlError(e: unknown, redact: (m: string) => string): ProbeErr {
+/** Classify common TDS/Kusto auth+connectivity failures into an actionable hint.
+ *
+ *  Exported for direct test: the `hint` is only ever attached when a branch
+ *  matched, and `undefined` otherwise. That "no branch matched ⇒ no advice"
+ *  property is the whole R7 guarantee here, and it is not observable through
+ *  `probeConnection` without a live driver. */
+export function classifySqlError(e: unknown, redact: (m: string) => string): ProbeErr {
   const msg = redact(e instanceof Error ? e.message : String(e));
   let hint: string | undefined;
   if (/login failed|cannot open.*database|token-identified principal|authentication failed/i.test(msg)) {
@@ -218,11 +224,25 @@ function classifySqlError(e: unknown, redact: (m: string) => string): ProbeErr {
   return { ok: false, status: 502, error: msg, ...(hint ? { hint } : {}) };
 }
 
+/**
+ * A refusal, matched as an ANCHORED status token rather than as bare digits.
+ *
+ * `/403/` matches inside `stloom403`, `kv-403-prod`, and any GUID segment that
+ * happens to contain the run — which would tell an operator whose storage
+ * account is named `st403data` that a DNS failure was a missing role
+ * assignment. Same defect `_az-failure-class.mjs` shipped as `\b503\b` and had
+ * to fix; `\b` does not help, because it treats `-` as a boundary.
+ */
+const REACH_DENIED = new RegExp(
+  [statusToken('40[13]'), 'forbidden', 'authorization', 'not authorized'].join('|'),
+  'i',
+);
+
 /** Classify a reachability (network/permission) failure for HTTP/ADLS probes. */
-function classifyReachError(e: unknown, redact: (m: string) => string, subject: string): ProbeErr {
+export function classifyReachError(e: unknown, redact: (m: string) => string, subject: string): ProbeErr {
   const msg = redact(e instanceof Error ? e.message : String(e));
   let hint: string | undefined;
-  if (/403|forbidden|authorization|not authorized/i.test(msg)) {
+  if (REACH_DENIED.test(msg)) {
     hint = `Reached the ${subject}, but the Console identity is not authorized. Grant it the appropriate data-plane role (e.g. Storage Blob Data Reader / Data Receiver).`;
   } else if (/getaddrinfo|enotfound|dns/i.test(msg)) {
     hint = `The ${subject} host could not be resolved. Check the host name for typos.`;

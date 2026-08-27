@@ -293,3 +293,91 @@ describe('#3817 — a transient PostgreSQL Entra-admin window (run 32341450273)'
     expect(denied.retryable).toBe(false);
   });
 });
+
+describe('#3948 — an Analysis Services server mid-update (run 32806407520)', () => {
+  // The leaf as it renders once deploy-arm-errors.mjs stops descending into the
+  // AAS envelope's details[] annotations. The Node suite pins the walk that
+  // produces this string; this pins what the table does with it.
+  const REAL_LEAF =
+    "BadRequest: The server '<aas-server>' is currently being updated. Please try again later. " +
+    "[Microsoft.AnalysisServices/servers '<aas-server>']";
+
+  it('classifies the real leaf as transient and retryable', () => {
+    const d = classifyDeployFailure(REAL_LEAF);
+    expect(d.class).toBe('transient');
+    expect(d.signalId).toBe('transient.resource-mid-update');
+    expect(d.retryable).toBe(true);
+    expect(d.defaultMaxAttempts).toBeGreaterThan(0);
+    expect(d.exitCode).not.toBe(0);
+  });
+
+  it('is a failure the PLATFORM absorbs, not one the operator is told to fix', () => {
+    expect(isPlatformRemediable(classifyDeployFailure(REAL_LEAF))).toBe(true);
+  });
+
+  it('the rendered message states only what was established (R7)', () => {
+    const d = classifyDeployFailure(REAL_LEAF);
+    const msg = renderDiagnosis(d, { step: 'provision' });
+    expect(msg).not.toMatch(/could not classify/i);
+    for (const e of d.evidence) {
+      expect(REAL_LEAF.toLowerCase()).toContain(e.signal);
+    }
+    // It read no resource state, so it must assert none — in particular it must
+    // not name the estate PAUSE tier as the cause, which no run established.
+    expect(msg).not.toMatch(/because the (server|resource) (is|was) paused/i);
+    expect(msg).toMatch(/az resource show/);
+  });
+
+  // ── THE OVER-BREADTH GUARD ────────────────────────────────────────────────
+  // A signal that matched everything would be worse than the gap it closed:
+  // it would turn every permanent failure into six retries and a message that
+  // never names the real cause. These four pin the conjunction's teeth.
+
+  it('NEITHER phrase matches this signal on its own', () => {
+    // 'is currently being updated' without the retry hint could be a permanent
+    // conflict; 'please try again later' alone is Azure-wide boilerplate that
+    // also decorates refusals nothing should retry.
+    const halfA = classifyDeployFailure(
+      "BadRequest: The server '<aas-server>' is currently being updated.",
+    );
+    const halfB = classifyDeployFailure('Operation failed. Please try again later.');
+    expect(halfA.signalId).not.toBe('transient.resource-mid-update');
+    expect(halfB.signalId).not.toBe('transient.resource-mid-update');
+    expect(halfA.class).toBe('unknown');
+    expect(halfB.class).toBe('unknown');
+  });
+
+  it('the annotations the walk USED to emit still carry no cause', () => {
+    // The permanent control. This is verbatim what the classifier was handed on
+    // run 32806407520, and it must stay unclassifiable: a correlation id and a
+    // format argument are not a diagnosis. If this ever classifies, some signal
+    // is matching on an identifier.
+    const asReceived =
+      'ARM leaf failures (2) drilled from the failed deployment operations:\n' +
+      "  RootActivityId: <guid> [Microsoft.AnalysisServices/servers '<aas-server>']\n" +
+      "  Param1: <aas-server> [Microsoft.AnalysisServices/servers '<aas-server>']";
+    const d = classifyDeployFailure(asReceived);
+    expect(d.class).toBe('unknown');
+    expect(d.signalId).toBeNull();
+    expect(d.retryable).toBe(false);
+    expect(d.evidence).toEqual([]);
+  });
+
+  it('a NON-retryable cause in the same output still wins', () => {
+    // The safety property that makes a provider-agnostic phrase pair safe:
+    // classPrecedence sorts `transient` last, so a quota refusal that happens
+    // to carry the same courtesy sentence is still quota, and still fatal.
+    const both = classifyDeployFailure(
+      'ERROR: Failed to schedule the task: QuotaExceeded: standardDDSv5Family Cores, ' +
+        'Location: centralus, Current Limit: 200, Current Usage: 196, Additional Required: 8. ' +
+        'The resource is currently being updated. Please try again later.',
+    );
+    expect(both.class).toBe('quota');
+    expect(both.retryable).toBe(false);
+  });
+
+  it('does NOT make the taxonomy retryable anywhere new', () => {
+    const retryable = allFailureClasses().filter((c) => isRetryableClass(c));
+    expect(retryable.sort()).toEqual(['capacity', 'eventual-consistency', 'transient']);
+  });
+});

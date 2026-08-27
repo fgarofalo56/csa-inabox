@@ -10,10 +10,25 @@
  * starter analyst queries), a high-roller Activator rule (Teams alert when
  * a player's net win exceeds $50,000 in a 1-hour window), and two starter
  * notebooks for player-value RFM/LTV/churn analysis and floor optimization.
+ *
+ * #4093 — the two notebooks originally carried the upstream Databricks source
+ * verbatim, so their cells read `silver.slv_slot_events` /
+ * `silver.slv_fnb_transactions`: tables this bundle NEVER creates. They opened
+ * looking authoritative and failed on the first Run. The cells are now written
+ * against the star schema the bundle actually provisions and seeds
+ * (casino.dim_player / dim_table / dim_date / fact_session / fact_handle),
+ * read from the Synapse dedicated SQL pool with `spark.read.synapsesql`.
+ *
+ * The seed is deliberately small (24 rows), so every analysis degrades
+ * gracefully at that scale rather than throwing or emitting a hollow result:
+ * RFM uses rank percentiles instead of `pd.qcut` (which raises on tied/small
+ * samples), the KMeans k sweep is bounded by the machine count, and each model
+ * prints the row count and whether its metrics are hold-out or in-sample.
  */
 
 import type { AppBundle } from './types';
 import type { NotebookCell } from '@/lib/types/notebook-cell';
+import { backendUtilShimCell } from './notebook-backend';
 
 function cell(
   type: 'code' | 'markdown',
@@ -807,394 +822,13 @@ ORDER BY d.full_date DESC,
          ABS(100.0 * (SUM(s.coin_in) - SUM(s.coin_out)) / NULLIF(SUM(s.coin_in), 0)
              - AVG(t.target_hold_pct)) DESC;
 `;
-
-// ─── Notebook cells ─────────────────────────────────────────────────────
-// Source: examples/casino-analytics/notebooks/player_value_analysis.py
-// Split into logical cells along the original `# COMMAND ----------` markers.
-
-const PVA_INTRO_MD = `# Player Value Analysis
-
-Comprehensive player analytics for casino operations:
-
-- Player segmentation and lifetime value (LTV) estimation
-- Behavioral pattern analysis (session duration, game preferences)
-- Cross-property spend analysis (gaming + F&B)
-- RFM (Recency-Frequency-Monetary) scoring
-- Churn risk identification
-- Promotional ROI analysis
-
-> All seed data is **entirely synthetic** — no real player data is included.
-`;
-
-const PVA_SETUP = `# Setup — common imports for RFM, churn modeling, and LTV forecasting.
-import warnings
-from datetime import timedelta
-
-import matplotlib.pyplot as plt
-import numpy as np
-import pandas as pd
-import seaborn as sns
-
-from pyspark.sql.functions import *
-
-warnings.filterwarnings("ignore")
-plt.style.use("seaborn-v0_8")
-sns.set_palette("husl")
-`;
-
-const PVA_LOAD = `# Load silver-layer tables produced by the casino dbt project.
-# Requires: slv_player_sessions, slv_slot_events, slv_fnb_transactions.
-
-def load_casino_data():
-    """Load all casino datasets."""
-    sessions = spark.table("silver.slv_player_sessions").toPandas()
-    slots = spark.table("silver.slv_slot_events").toPandas()
-    fnb = spark.table("silver.slv_fnb_transactions").toPandas()
-
-    sessions["session_date"] = pd.to_datetime(sessions["session_date"])
-    fnb["transaction_date"] = pd.to_datetime(fnb["transaction_date"])
-
-    print(f"Sessions: {len(sessions):,}")
-    print(f"Slot events: {len(slots):,}")
-    print(f"F&B transactions: {len(fnb):,}")
-    print(f"Unique players: {sessions['player_id'].nunique()}")
-    return sessions, slots, fnb
-
-
-df_sessions, df_slots, df_fnb = load_casino_data()
-`;
-
-const PVA_RFM = `# RFM Analysis — assigns each player a (Recency, Frequency, Monetary) score
-# bucket and a segment label (VIP / Loyal / Regular / New / At Risk / Lost).
-
-def compute_rfm(sessions, fnb):
-    """Compute RFM scores for player segmentation."""
-    ref_date = sessions["session_date"].max() + timedelta(days=1)
-
-    gaming_rfm = (
-        sessions.groupby("player_id")
-        .agg(
-            recency_days=("session_date", lambda x: (ref_date - x.max()).days),
-            frequency=("session_id", "count"),
-            monetary_coin_in=("coin_in", "sum"),
-            monetary_theo_win=("theoretical_win", "sum"),
-            avg_duration=("duration_minutes", "mean"),
-            total_actual_win=("actual_win", "sum"),
-        )
-        .reset_index()
-    )
-
-    fnb_spend = (
-        fnb.groupby("player_id")
-        .agg(fnb_total=("total", "sum"),
-             fnb_visits=("transaction_id", "count"),
-             comp_total=("comp_value", "sum"))
-        .reset_index()
-    )
-
-    player_rfm = gaming_rfm.merge(fnb_spend, on="player_id", how="left").fillna(0)
-
-    for col in ["recency_days", "frequency", "monetary_coin_in"]:
-        if col == "recency_days":
-            player_rfm[f"{col}_score"] = pd.qcut(
-                player_rfm[col], 5, labels=[5, 4, 3, 2, 1], duplicates="drop"
-            ).astype(int)
-        else:
-            player_rfm[f"{col}_score"] = pd.qcut(
-                player_rfm[col].rank(method="first"), 5,
-                labels=[1, 2, 3, 4, 5], duplicates="drop"
-            ).astype(int)
-
-    player_rfm["rfm_score"] = (
-        player_rfm["recency_days_score"] * 100
-        + player_rfm["frequency_score"] * 10
-        + player_rfm["monetary_coin_in_score"]
-    )
-
-    def segment(row):
-        r, f, m = row["recency_days_score"], row["frequency_score"], row["monetary_coin_in_score"]
-        if r >= 4 and f >= 4 and m >= 4: return "VIP"
-        if r >= 3 and f >= 3:            return "Loyal"
-        if r >= 4 and f <= 2:            return "New"
-        if r <= 2 and f >= 3:            return "At Risk"
-        if r <= 2 and f <= 2:            return "Lost"
-        return "Regular"
-
-    player_rfm["segment"] = player_rfm.apply(segment, axis=1)
-    return player_rfm
-
-
-player_rfm = compute_rfm(df_sessions, df_fnb)
-print(player_rfm["segment"].value_counts())
-`;
-
-const PVA_CHURN = `# Churn-Prediction Model — defines "churned" = no visit in 30+ days,
-# trains three classifiers, logs everything to MLflow.
-import mlflow
-import mlflow.sklearn
-from sklearn.ensemble import GradientBoostingClassifier, RandomForestClassifier
-from sklearn.linear_model import LogisticRegression
-from sklearn.metrics import f1_score, roc_auc_score
-from sklearn.model_selection import train_test_split
-from sklearn.preprocessing import StandardScaler
-
-mlflow.set_experiment("/Casino/player_value_analysis")
-
-
-def build_churn_model(player_rfm, sessions):
-    df_churn = player_rfm.copy()
-    df_churn["is_churned"] = (df_churn["recency_days"] > 30).astype(int)
-
-    session_stats = (
-        sessions.groupby("player_id")
-        .agg(
-            session_count=("session_id", "count"),
-            avg_session_duration=("duration_minutes", "mean"),
-            std_session_duration=("duration_minutes", "std"),
-            game_variety=("game_type", "nunique"),
-            zones_visited=("floor_zone", "nunique"),
-            avg_coin_in=("coin_in", "mean"),
-            total_actual_win=("actual_win", "sum"),
-        )
-        .reset_index()
-    )
-
-    df_churn = df_churn.merge(session_stats, on="player_id", how="left").fillna(0)
-    df_churn["win_rate"] = (
-        df_churn["total_actual_win"] / df_churn["monetary_coin_in"].clip(lower=1)
-    ).round(4)
-
-    features = [
-        "frequency", "monetary_coin_in", "monetary_theo_win", "fnb_total",
-        "avg_duration", "session_count", "avg_session_duration",
-        "std_session_duration", "game_variety", "zones_visited",
-        "avg_coin_in", "win_rate", "comp_total",
-    ]
-    X = df_churn[features].fillna(0)
-    y = df_churn["is_churned"]
-
-    X_tr, X_te, y_tr, y_te = train_test_split(X, y, test_size=0.2, stratify=y, random_state=42)
-    scaler = StandardScaler()
-    X_tr_s = scaler.fit_transform(X_tr)
-    X_te_s = scaler.transform(X_te)
-
-    models = {
-        "logreg": LogisticRegression(max_iter=1000, random_state=42),
-        "rf":     RandomForestClassifier(n_estimators=100, max_depth=8, random_state=42),
-        "gbm":    GradientBoostingClassifier(n_estimators=100, max_depth=4, random_state=42),
-    }
-
-    results = {}
-    for name, model in models.items():
-        with mlflow.start_run(run_name=f"churn_{name}"):
-            model.fit(X_tr_s, y_tr)
-            y_pred = model.predict(X_te_s)
-            y_prob = model.predict_proba(X_te_s)[:, 1]
-            f1  = f1_score(y_te, y_pred)
-            auc = roc_auc_score(y_te, y_prob)
-            mlflow.log_metric("f1",  f1)
-            mlflow.log_metric("auc", auc)
-            mlflow.sklearn.log_model(model, f"churn_{name}")
-            results[name] = {"model": model, "f1": f1, "auc": auc}
-            print(f"{name}: F1={f1:.3f}, AUC={auc:.3f}")
-
-    return df_churn, results
-
-
-df_churn, churn_results = build_churn_model(player_rfm, df_sessions)
-`;
-
-const PVA_SAVE = `# Persist RFM segments and churn predictions to the Gold layer for
-# downstream consumption by player-development hosts.
-
-rfm_spark = spark.createDataFrame(
-    player_rfm[[
-        "player_id", "recency_days", "frequency",
-        "monetary_coin_in", "monetary_theo_win", "total_actual_win",
-        "fnb_total", "fnb_visits", "comp_total", "avg_duration",
-        "segment", "rfm_score",
-    ]]
-).withColumn("analysis_date", current_date())
-
-(rfm_spark.write.mode("overwrite")
-    .option("mergeSchema", "true")
-    .saveAsTable("gold.gld_player_rfm_segments"))
-
-churn_spark = spark.createDataFrame(
-    df_churn[["player_id", "segment", "rfm_score", "is_churned"]]
-).withColumn("analysis_date", current_date())
-
-(churn_spark.write.mode("overwrite")
-    .option("mergeSchema", "true")
-    .saveAsTable("gold.gld_player_churn_predictions"))
-
-print("Outputs:")
-print("  gold.gld_player_rfm_segments")
-print("  gold.gld_player_churn_predictions")
-print("  MLflow experiment: /Casino/player_value_analysis")
-`;
-
-// Floor optimization notebook cells.
-const FLR_INTRO_MD = `# Casino Floor Optimization
-
-ML-driven floor optimization and slot performance analytics:
-
-- Machine performance ranking (RTP, occupancy, revenue)
-- Floor zone revenue density analysis
-- Denomination mix optimization
-- KMeans clustering of machines by performance profile
-- Peak-hour staffing demand prediction
-- Predictive maintenance indicators (error rate + RTP deviation)
-
-> All seed data is **entirely synthetic**.
-`;
-
-const FLR_SETUP = `import warnings
-import matplotlib.pyplot as plt
-import numpy as np
-import pandas as pd
-import seaborn as sns
-
-import mlflow
-import mlflow.sklearn
-from pyspark.sql.functions import *
-from sklearn.ensemble import GradientBoostingRegressor, RandomForestRegressor
-from sklearn.cluster import KMeans
-from sklearn.metrics import mean_absolute_error, r2_score, silhouette_score
-from sklearn.model_selection import train_test_split
-from sklearn.preprocessing import LabelEncoder, StandardScaler
-
-warnings.filterwarnings("ignore")
-plt.style.use("seaborn-v0_8")
-mlflow.set_experiment("/Casino/floor_optimization")
-`;
-
-const FLR_LOAD = `# Load slot events + sessions from the silver layer.
-
-def load_floor_data():
-    slots = spark.table("silver.slv_slot_events").toPandas()
-    sessions = spark.table("silver.slv_player_sessions").toPandas()
-    slots["event_timestamp"] = pd.to_datetime(slots["event_timestamp"])
-    sessions["session_date"] = pd.to_datetime(sessions["session_date"])
-    print(f"Slot events: {len(slots):,}")
-    print(f"Sessions:    {len(sessions):,}")
-    return slots, sessions
-
-
-df_slots, df_sessions = load_floor_data()
-`;
-
-const FLR_PERF = `# Machine performance ranking — RTP, revenue, jackpot count by machine.
-
-def analyze_machine_performance(slots):
-    spins = slots[slots["event_type"] == "SPIN"].copy()
-    machine_perf = (
-        spins.groupby("machine_id")
-        .agg(
-            total_spins=("event_id", "count"),
-            total_wagered=("credits_wagered", "sum"),
-            total_won=("credits_won", "sum"),
-            avg_denomination=("denomination", "mean"),
-            floor_zone=("floor_zone", lambda x: x.mode().iloc[0] if len(x.mode()) > 0 else "UNKNOWN"),
-            jackpot_count=("credits_won", lambda x: (x > 1000).sum()),
-        )
-        .reset_index()
-    )
-    machine_perf["actual_rtp"] = (
-        machine_perf["total_won"] / machine_perf["total_wagered"].clip(lower=1) * 100
-    ).round(2)
-    machine_perf["revenue"] = machine_perf["total_wagered"] - machine_perf["total_won"]
-
-    errors = (slots[slots["event_type"] == "ERROR"]
-              .groupby("machine_id").size().reset_index(name="error_events"))
-    machine_perf = machine_perf.merge(errors, on="machine_id", how="left").fillna(0)
-    return machine_perf
-
-
-machine_perf = analyze_machine_performance(df_slots)
-print(machine_perf.head())
-`;
-
-const FLR_REV_MODEL = `# Revenue prediction model — GBM regressor; features: spins, wagered,
-# denomination, zone, jackpot count.
-
-def predict_machine_revenue(machine_perf):
-    le_zone = LabelEncoder()
-    machine_perf["zone_encoded"] = le_zone.fit_transform(machine_perf["floor_zone"])
-
-    features = ["total_spins", "total_wagered", "avg_denomination",
-                "zone_encoded", "jackpot_count"]
-    X = machine_perf[features].fillna(0)
-    y = machine_perf["revenue"]
-
-    X_tr, X_te, y_tr, y_te = train_test_split(X, y, test_size=0.2, random_state=42)
-    scaler = StandardScaler()
-    X_tr_s = scaler.fit_transform(X_tr)
-    X_te_s = scaler.transform(X_te)
-
-    model = GradientBoostingRegressor(n_estimators=100, max_depth=4, random_state=42)
-    with mlflow.start_run(run_name="floor_revenue_prediction"):
-        model.fit(X_tr_s, y_tr)
-        y_pred = model.predict(X_te_s)
-        mae = mean_absolute_error(y_te, y_pred)
-        r2  = r2_score(y_te, y_pred)
-        mlflow.log_metric("mae", mae)
-        mlflow.log_metric("r2",  r2)
-        mlflow.sklearn.log_model(model, "floor_revenue_model")
-        print(f"Revenue Prediction: MAE={mae:.2f}, R2={r2:.4f}")
-    return model, r2
-
-
-rev_model, rev_r2 = predict_machine_revenue(machine_perf)
-`;
-
-const FLR_CLUSTER = `# Cluster machines by performance profile to identify optimization groups.
-
-def cluster_slot_machines(machine_perf):
-    cluster_features = ["total_spins", "actual_rtp", "revenue",
-                        "avg_denomination", "jackpot_count", "error_events"]
-    X = machine_perf[cluster_features].fillna(0)
-    X_scaled = StandardScaler().fit_transform(X)
-
-    sil = []
-    for k in range(2, 9):
-        km = KMeans(n_clusters=k, random_state=42, n_init=10)
-        sil.append(silhouette_score(X_scaled, km.fit_predict(X_scaled)))
-    optimal_k = list(range(2, 9))[int(np.argmax(sil))]
-    print(f"Optimal k by silhouette: {optimal_k}")
-
-    km_final = KMeans(n_clusters=optimal_k, random_state=42, n_init=10)
-    machine_perf["cluster"] = km_final.fit_predict(X_scaled)
-    summary = (machine_perf.groupby("cluster")
-        .agg(n_machines=("machine_id", "count"),
-             avg_rtp=("actual_rtp", "mean"),
-             avg_revenue=("revenue", "mean"),
-             total_revenue=("revenue", "sum")).round(2))
-    print(summary)
-    return machine_perf, summary
-
-
-machine_perf, cluster_summary = cluster_slot_machines(machine_perf)
-`;
-
-const FLR_SAVE = `# Persist outputs to the Gold layer + MLflow.
-
-machine_spark = spark.createDataFrame(
-    machine_perf[[
-        "machine_id", "total_spins", "total_wagered", "total_won",
-        "actual_rtp", "revenue", "floor_zone", "avg_denomination",
-        "jackpot_count", "error_events", "cluster",
-    ]]
-).withColumn("analysis_date", current_date())
-
-(machine_spark.write.mode("overwrite")
-    .option("mergeSchema", "true")
-    .saveAsTable("gold.gld_machine_performance"))
-
-print("Outputs:")
-print("  gold.gld_machine_performance")
-print("  MLflow experiment: /Casino/floor_optimization")
-`;
+// Notebook cell bodies live in a sibling module so this file stays under the
+// monolith-creep ratchet (scripts/ci/check-file-size.mjs).
+import {
+  PVA_INTRO_MD, PVA_SETUP, PVA_LOAD, PVA_RFM, PVA_CHURN, PVA_SAVE,
+  FLR_INTRO_MD, FLR_SETUP, FLR_LOAD, FLR_PERF, FLR_ZONE, FLR_REV_MODEL,
+  FLR_CLUSTER, FLR_SAVE,
+} from './casino-notebook-cells';
 
 // ─── Synthetic seed rows ────────────────────────────────────────────────
 // Inserted after the DDL by the warehouse provisioner so the warehouse is
@@ -1300,8 +934,9 @@ const bundle: AppBundle = {
   intro:
     'Reference architecture for tribal-casino operations analytics: ' +
     'player-grain warehouse (sessions + handles), high-roller Activator ' +
-    'alerts wired to Teams, and Databricks notebooks for RFM/LTV/churn ' +
-    'modeling and floor optimization. Compliance-aware: NIGC MICS, Title 31 ' +
+    'alerts wired to Teams, and two starter notebooks that read that same ' +
+    'warehouse for RFM/LTV/churn modeling and floor optimization. ' +
+    'Compliance-aware: NIGC MICS, Title 31 ' +
     'CTR/SAR detection patterns. All seed data is synthetic.',
   sourceDocs: [
     'examples/casino-analytics/README.md',
@@ -1403,9 +1038,12 @@ const bundle: AppBundle = {
       itemType: 'notebook',
       displayName: 'Player Value Analysis',
       description:
-        'Databricks notebook: RFM segmentation, churn prediction (LogReg / ' +
-        'RandomForest / GBM ensemble), LTV forecasting, and promotional-ROI ' +
-        'analysis. Writes outputs to gold.gld_player_rfm_segments + MLflow.',
+        'Reads the casino star schema this app installs (dim_player, ' +
+        'fact_session, fact_handle) straight from the Synapse dedicated SQL ' +
+        'pool: RFM segmentation, a churn-risk scorecard, comp efficiency and ' +
+        'ADT, and a churn classifier (LogReg / RandomForest / GBM) whose ' +
+        'validation basis is chosen by the sample size. Writes ' +
+        'gld_player_rfm_segments + gld_player_churn_risk.',
       learnDoc: 'casino-analytics/player-value-notebook',
       content: {
         kind: 'notebook',
@@ -1413,12 +1051,15 @@ const bundle: AppBundle = {
         cells: [
           cell('markdown', PVA_INTRO_MD),
           cell('markdown', '## Setup'),
+          // Defines loom_get_arg/loom_get_secret so the setup cell below can
+          // read its notebook parameters on Synapse, Databricks, Fabric or AML.
+          backendUtilShimCell('casino-pva-backend-shim'),
           cell('code', PVA_SETUP),
           cell('markdown', '## Data Loading'),
           cell('code', PVA_LOAD),
           cell('markdown', '## RFM Analysis'),
           cell('code', PVA_RFM),
-          cell('markdown', '## Churn Prediction Model'),
+          cell('markdown', '## Churn Risk'),
           cell('code', PVA_CHURN),
           cell('markdown', '## Save Results'),
           cell('code', PVA_SAVE),
@@ -1429,9 +1070,12 @@ const bundle: AppBundle = {
       itemType: 'notebook',
       displayName: 'Floor Optimization',
       description:
-        'Databricks notebook: machine performance ranking, GBM revenue ' +
-        'prediction, KMeans clustering of machines by performance profile, ' +
-        'and gold-layer outputs for the floor-operations dashboard.',
+        'Reads the casino star schema this app installs (dim_table, ' +
+        'fact_session, fact_handle) straight from the Synapse dedicated SQL ' +
+        'pool: machine performance with hold variance vs target, per-zone ' +
+        'optimisation score and recommendation, a GBM revenue model, and ' +
+        'KMeans clustering with k bounded by the machine count. Writes ' +
+        'gld_machine_performance + gld_floor_zone_optimization.',
       learnDoc: 'casino-analytics/floor-optimization-notebook',
       content: {
         kind: 'notebook',
@@ -1439,14 +1083,17 @@ const bundle: AppBundle = {
         cells: [
           cell('markdown', FLR_INTRO_MD),
           cell('markdown', '## Setup'),
+          backendUtilShimCell('casino-floor-backend-shim'),
           cell('code', FLR_SETUP),
           cell('markdown', '## Data Loading'),
           cell('code', FLR_LOAD),
           cell('markdown', '## Machine Performance Analysis'),
           cell('code', FLR_PERF),
+          cell('markdown', '## Zone Optimization'),
+          cell('code', FLR_ZONE),
           cell('markdown', '## Revenue Prediction Model'),
           cell('code', FLR_REV_MODEL),
-          cell('markdown', '## Slot Machine Clustering'),
+          cell('markdown', '## Machine Clustering'),
           cell('code', FLR_CLUSTER),
           cell('markdown', '## Save Results'),
           cell('code', FLR_SAVE),

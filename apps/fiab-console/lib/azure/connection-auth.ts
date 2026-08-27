@@ -31,6 +31,7 @@
  */
 import { loadConnection } from './connections-store';
 import { getKeyVaultSecretValue } from './kv-secrets-client';
+import { describeMirrorConnMismatch, type MirrorConnMismatch } from './mirror-source-compat';
 import type { SqlExplicitAuth } from './azure-sql-client';
 import type { PgExplicitAuth } from './postgres-flex-client';
 
@@ -45,6 +46,16 @@ export interface ConnectionAuthDescriptor {
   connectionName?: string;
   /** The connection's auth method ('sql-password' | 'connection-string' | 'entra-mi' | …). Never the secret. */
   authMethod?: string;
+  /**
+   * The connection's TYPE ('snowflake' | 'azure-sql' | 'postgres' | …). Non-secret,
+   * and the coordinate that says WHICH system this connection addresses.
+   *
+   * Load-bearing: `mirror-source-compat` compares it against the mirror's
+   * `sourceType` so a Snowflake connection can never be read down the Azure SQL
+   * TDS path. Absent when the connection could not be loaded — an unknown, which
+   * per R7 is never reported as a mismatch.
+   */
+  connectionType?: string;
   /**
    * Set when a connection was bound but could NOT supply an explicit driver
    * credential, so the run fell back to the Console UAMI. Per deploy-integrity
@@ -90,7 +101,7 @@ export async function resolveSqlAuthDescribed(
       },
     };
   }
-  const base = { connectionName: conn.name, authMethod: conn.authMethod };
+  const base = { connectionName: conn.name, authMethod: conn.authMethod, connectionType: conn.type };
   if (conn.authMethod === 'entra-mi') {
     // Entra-MI connections are UAMI by design — not a fallback, the intended path.
     return { descriptor: { identity: 'uami', ...base } };
@@ -147,19 +158,70 @@ export async function withSourceAuth<T extends { sourceType: string }>(
   tenantId: string,
   src: T,
   connectionId?: string,
-): Promise<{ src: T & { auth?: SqlExplicitAuth; pgAuth?: PgExplicitAuth; connectionId?: string; tenantId?: string }; descriptor: ConnectionAuthDescriptor }> {
+): Promise<{ src: T & { auth?: SqlExplicitAuth; pgAuth?: PgExplicitAuth; connectionId?: string; tenantId?: string; connType?: string }; descriptor: ConnectionAuthDescriptor }> {
   // Stamp the NON-SECRET binding coordinates on every source, always. Sources
   // whose runtime authenticates itself (Snowflake via ADF) never get an `auth`
   // object, but they still need to know WHICH connection to build their linked
   // service from — and that must be true on both Start paths, not just one.
-  const stamped = { ...src, connectionId, tenantId } as T & { connectionId?: string; tenantId?: string };
+  const stamped = { ...src, connectionId, tenantId } as T & { connectionId?: string; tenantId?: string; connType?: string };
   if (!connectionId) return { src: stamped, descriptor: UAMI_AUTH };
   if (PG_SOURCE_TYPES.has(src.sourceType)) {
     const { auth, descriptor } = await resolvePgAuthDescribed(tenantId, connectionId);
-    return { src: { ...stamped, pgAuth: auth }, descriptor };
+    return { src: { ...stamped, pgAuth: auth, connType: descriptor.connectionType }, descriptor };
   }
   const { auth, descriptor } = await resolveSqlAuthDescribed(tenantId, connectionId);
-  return { src: { ...stamped, auth }, descriptor };
+  // `connType` rides along so the ENGINE can refuse a source-type/connection
+  // mismatch before it dials anything (mirror-source-compat). Resolving it here
+  // rather than in each Start route is deliberate: a per-route copy is exactly
+  // how the credential plumbing half-landed the first time (see this file's header).
+  return { src: { ...stamped, auth, connType: descriptor.connectionType }, descriptor };
+}
+
+/**
+ * The non-secret TYPE of a stored connection ('snowflake' | 'azure-sql' | …), or
+ * `undefined` when there is no connection bound or it no longer exists.
+ *
+ * A deliberately light lookup for the table-ENUMERATION routes, which need to
+ * know what system a connection addresses before they choose a family branch,
+ * but must not pay for (or touch) the Key Vault secret fetch that the auth
+ * resolvers perform. Reads no secret material.
+ */
+export async function resolveConnectionType(
+  tenantId: string,
+  connectionId?: string,
+): Promise<string | undefined> {
+  if (!connectionId) return undefined;
+  const conn = await loadConnection(tenantId, connectionId);
+  return conn?.type;
+}
+
+/**
+ * THE mirror binding check every route shares: does this mirror's source type
+ * contradict the connection bound to it?
+ *
+ * Returns the honest refusal (message + repair candidates) or `null`. One
+ * exported helper rather than the check inlined per route, for the reason this
+ * file's header already records: the last credential fix here half-landed
+ * because each route carried its own copy, so one of them silently diverged.
+ * `lib/azure/__tests__/mirror-route-mismatch-guard.test.ts` asserts every route
+ * that reads a mirror source type calls THIS.
+ *
+ * Callers must invoke it BEFORE they dispatch on the source type or persist the
+ * binding — the refusal states that nothing was contacted, which is only true
+ * from that position (deploy-integrity.md R7).
+ */
+export async function mirrorBindingMismatch(
+  tenantId: string,
+  sourceType: string,
+  connectionId?: string,
+): Promise<MirrorConnMismatch | null> {
+  if (!connectionId) return null;
+  const conn = await loadConnection(tenantId, connectionId);
+  // A deleted connection is an UNKNOWN, not a mismatch. That mirror falls back
+  // to the Console UAMI by design, and refusing it because a lookup came back
+  // empty would be the same class of false claim this guard exists to remove.
+  if (!conn) return null;
+  return describeMirrorConnMismatch({ sourceType, connType: conn.type, connName: conn.name });
 }
 
 
@@ -193,7 +255,7 @@ export async function resolvePgAuthDescribed(
       },
     };
   }
-  const base = { connectionName: conn.name, authMethod: conn.authMethod };
+  const base = { connectionName: conn.name, authMethod: conn.authMethod, connectionType: conn.type };
   if (conn.authMethod === 'entra-mi') return { descriptor: { identity: 'uami', ...base } };
   if (!conn.secretRef) {
     return {

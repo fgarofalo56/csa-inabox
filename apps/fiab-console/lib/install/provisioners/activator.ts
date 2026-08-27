@@ -30,17 +30,36 @@
  * Azure, with no error anywhere. So the write is retried with bounded backoff
  * and the returned status reflects whether the record actually landed — per
  * deploy-integrity.md R6, never report success on an unverified outcome.
+ *
+ * #4097 — and neither of those is evidence that anyone gets TOLD. A rule can be
+ * created, enabled, recorded, and routed to an action group carrying zero
+ * receivers; that is what the live estate ran. So the provisioner now (a) BINDS
+ * a real notification destination before authoring each rule — scrubbing
+ * undeliverable values, lifting the ones the bundle supplied into the field the
+ * Azure Monitor derivation reads, and falling back to an address the platform
+ * always has (auto-bind-by-default.md) — and (b) VERIFIES reachability from the
+ * returned record, quiescing any rule that would notify nobody and refusing to
+ * report `created`. See ./_activator-receivers.ts.
  */
 import { listActivators, createActivator, addRule, ActivatorError, listRules } from '@/lib/azure/activator-client';
 import { MonitorNotConfiguredError, MonitorError } from '@/lib/azure/monitor-client';
 import {
   createMonitorActivatorRule,
+  disableMonitorRule,
+  isOnDemandAdxRule,
   type MonitorRuleRecord,
 } from '@/lib/azure/activator-monitor';
 import { itemsContainer } from '@/lib/azure/cosmos-client';
 import type { WorkspaceItem } from '@/lib/types/workspace';
 import type { Provisioner, ProvisionResult } from './types';
 import { resolveInfraResidual } from './types';
+import {
+  isUnreachable,
+  normalizeActivatorAction,
+  receiverTotal,
+  resolveFallbackAlertEmails,
+  unreachableReason,
+} from './_activator-receivers';
 
 function rulesFromContent(content: any): any[] {
   if (content?.kind === 'activator' && content.rule) return [content.rule];
@@ -183,6 +202,12 @@ async function provisionAzureMonitor(input: any, steps: string[]): Promise<Provi
   // its action config (email / SMS / webhook / Logic App) and the scheduledQuery
   // rule, returning a full MonitorRuleRecord (id == azureRuleName, query, state,
   // severity, schedule, …).
+  // #4097 — the destination the alert notifies when its bundle action names no
+  // deliverable one: the installing operator's own address. Resolved ONCE so a
+  // rule still reaches a human with zero user-performed plumbing
+  // (auto-bind-by-default.md).
+  const fallbackEmails = resolveFallbackAlertEmails(input.session);
+
   const records: MonitorRuleRecord[] = [];
   for (const r of rules) {
     try {
@@ -204,6 +229,15 @@ async function provisionAzureMonitor(input: any, steps: string[]): Promise<Provi
         (r.condition.metric !== undefined || r.condition.op !== undefined || r.condition.threshold !== undefined)
           ? { property: r.condition.metric, operator: r.condition.op, value: r.condition.threshold }
           : r.condition;
+      // #4097 — bind a real notification destination BEFORE authoring the rule.
+      // Every shipped bundle activator names its destination in a shape the
+      // Azure Monitor receiver derivation does not read (a Teams channel name, a
+      // Key Vault secret NAME, recipients nested one level too deep, or a URL
+      // still carrying an unsubstituted `${…}`), so each one produced an enabled
+      // rule whose action group notified nobody. This scrubs the undeliverable
+      // values, lifts the ones the bundle DID supply into the field the
+      // derivation reads, and falls back to an address the platform always has.
+      const norm = normalizeActivatorAction(r.action, fallbackEmails);
       const rec = await createMonitorActivatorRule(input.displayName, {
         name: r.name,
         // Stamp the owning Loom item onto the ARM rule (the `loom-item-id` tag)
@@ -211,7 +245,7 @@ async function provisionAzureMonitor(input: any, steps: string[]): Promise<Provi
         // identity rather than on the derived, user-controlled name.
         loomItemId: input.cosmosItemId,
         condition: cond,
-        action: r.action,
+        action: norm.action,
         // Scope the rule against whichever alert host this deployment actually
         // has (Log Analytics preferred, else the ADX cluster) so it CREATEs 200
         // day-one — a bundle rule's phantom custom metric no longer sinks the
@@ -230,7 +264,22 @@ async function provisionAzureMonitor(input: any, steps: string[]): Promise<Provi
       });
       records.push(rec);
       if (rec.note) steps.push(rec.note);
-      steps.push(`Created Azure Monitor alert rule for '${r.name || 'rule'}'.`);
+      // Report the receivers the RECORD carries, not the ones we predicted —
+      // the record is what createMonitorActivatorRule actually wired.
+      const wired = receiverTotal(rec);
+      steps.push(
+        `Created Azure Monitor alert rule for '${r.name || 'rule'}'` +
+          (wired === null
+            ? ' (attached an existing action group; its receivers were not reported).'
+            : ` with ${wired} notification receiver(s)${norm.bound.length ? ` — ${norm.bound.join('; ')}` : ''}.`),
+      );
+      if (norm.usedFallback && wired) {
+        steps.push(
+          `Rule '${r.name || 'rule'}' named no deliverable destination, so notifications were bound to ${norm.action.recipients?.join(', ')}. ` +
+            'Add a Teams webhook URL, an email, an SMS number, or a Logic App on the rule in the Activator editor to change where it notifies.',
+        );
+      }
+      for (const u of norm.unbound) steps.push(`Rule '${r.name || 'rule'}': ${u}.`);
     } catch (e: any) {
       // Keep the existing honest Azure infra-gates verbatim — createMonitorActivatorRule
       // throws the SAME error types (MonitorNotConfiguredError / MonitorError) as the
@@ -270,6 +319,50 @@ async function provisionAzureMonitor(input: any, steps: string[]): Promise<Provi
       gate: { reason: 'No alert rules could be created.', remediation: 'See step log for the per-rule errors above.' },
       steps,
     };
+  }
+
+  // ── #4097: can each created rule actually reach a human? ──────────────────
+  // Azure Monitor accepting the rule proves the rule EXISTS, never that anyone
+  // is told when it fires. The live estate carried an enabled rule routed to an
+  // enabled action group with zero receivers of all ten kinds while the install
+  // reported `rulesCreated: 1, rulesPersisted: true` — both true, and the one
+  // fact that mattered was false.
+  //
+  // Reachability is read off the RECORD createMonitorActivatorRule returned (the
+  // same record persisted to state.rules), so this check cannot drift from what
+  // was actually wired. An unreachable rule is QUIESCED rather than left enabled
+  // — an enabled-looking alert pointing into the void is the defect — and the
+  // install refuses to report `created`.
+  const unreachable = records.filter((r) => isUnreachable(r));
+  for (const rec of unreachable) {
+    const why = unreachableReason(rec);
+    if (isOnDemandAdxRule(rec)) {
+      // No scheduledQueryRule exists on ARM for an on-demand ADX rule, so there
+      // is nothing to disable; it only evaluates via Trigger/Preview.
+      rec.note = [rec.note, `No notification destination is bound (${why}).`].filter(Boolean).join(' ');
+      steps.push(`Rule '${rec.name}' has no notification destination (${why}); it evaluates on demand only.`);
+      continue;
+    }
+    try {
+      await disableMonitorRule(rec.azureRuleName);
+      rec.state = 'Disabled';
+      rec.updatedAt = new Date().toISOString();
+      rec.note = [rec.note, `Disabled at install: no notification destination is bound (${why}).`]
+        .filter(Boolean)
+        .join(' ');
+      steps.push(
+        `Rule '${rec.name}' (${rec.azureRuleName}) was DISABLED because ${why} — an enabled alert that notifies nobody is worse than no alert.`,
+      );
+    } catch (e: any) {
+      // R7 — do not claim it was disabled. Say what was established.
+      rec.note = [rec.note, `No notification destination is bound (${why}); the attempt to disable it did not complete.`]
+        .filter(Boolean)
+        .join(' ');
+      steps.push(
+        `Rule '${rec.name}' (${rec.azureRuleName}) ${why}, and disabling it did not complete: ${e?.message || String(e)}. ` +
+          'It may still be enabled in Azure Monitor and notifying nobody.',
+      );
+    }
   }
 
   // Persist the authored MonitorRuleRecord[] onto the Cosmos activator item's
@@ -314,6 +407,38 @@ async function provisionAzureMonitor(input: any, steps: string[]): Promise<Provi
         steps,
       },
     );
+  }
+
+  // #4097 — the rules exist AND are recorded, but if any of them cannot reach a
+  // human this install is NOT `created`. `rulesCreated: N` is not evidence that
+  // anyone gets told; reporting success here is exactly how an enabled alert
+  // wired to an empty action group survived on the estate with every surface
+  // green. The rules and the record are kept (the editor needs them for the
+  // fix), the unreachable ones were quiesced above, and the status says so.
+  if (unreachable.length) {
+    const names = unreachable.map((r) => `'${r.name}'`).join(', ');
+    return {
+      status: 'remediation',
+      resourceId: records[records.length - 1]?.azureRuleName,
+      secondaryIds: {
+        backend: 'azure-monitor',
+        rulesCreated: String(created),
+        rulesPersisted: 'true',
+        rulesUnreachable: String(unreachable.length),
+      },
+      gate: {
+        reason:
+          `${unreachable.length} of ${created} alert rule(s) (${names}) would fire and notify nobody — ` +
+          `${unreachableReason(unreachable[0])}.`,
+        remediation:
+          `Open the Activator and add a notification destination to ${unreachable.length === 1 ? 'the rule' : 'each rule'} — ` +
+          'a Teams incoming-webhook URL, an email address, an SMS number, or a Logic App. ' +
+          'A Teams webhook URL can only be minted by a channel owner in Teams, which is why the platform cannot create it for you. ' +
+          `${unreachable.length === 1 ? 'The rule was' : 'The rules were'} left disabled so ${unreachable.length === 1 ? 'it does' : 'they do'} not fire into the void.`,
+        link: 'https://learn.microsoft.com/azure/azure-monitor/alerts/action-groups',
+      },
+      steps,
+    };
   }
 
   return {

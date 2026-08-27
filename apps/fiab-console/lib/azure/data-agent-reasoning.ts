@@ -239,7 +239,26 @@ export interface ReasoningAnswer extends DataAgentAnswer {
   repairs?: RepairAttempt[];
   /** N12 — does the answer follow from the real returned rows? */
   plausibility?: PlausibilityVerdict;
+  /**
+   * #4091 — the PLAN pass hit its token cap before it could emit a plan
+   * (`finish_reason:'length'`), even after the bounded larger-budget retry. An
+   * empty plan is then a MEASUREMENT failure, not a model decision — surfaced so
+   * the degradation is visible instead of reading as a deliberate single pass.
+   */
+  planTruncated?: boolean;
 }
+
+// ── Token budgets (issue #4091) ──────────────────────────────────────────────
+// The PLAN and VERIFY passes ride the STRONG (reasoning) tier by design. On an
+// o-series / gpt-5 deployment the REASONING tokens are billed against the same
+// `max_completion_tokens` cap as the visible JSON, so the previous 900-token cap
+// could be consumed entirely by reasoning — returning `finish_reason:'length'`
+// with empty content, which the loop then read as "the model produced no plan".
+// These budgets cover reasoning + the (small) JSON payload.
+const PLAN_MAX_TOKENS = 2400;
+/** One bounded retry when the plan pass truncates before emitting any JSON. */
+const PLAN_MAX_TOKENS_RETRY = 6000;
+const VERIFY_MAX_TOKENS = 2400;
 
 // ── Prompt builders (kept local — the reasoning loop's own system prompts) ────
 
@@ -1132,31 +1151,77 @@ export async function runReasoningAgent(
   }
 
   // ── PLAN ──────────────────────────────────────────────────────────────────
-  const planResp = await aoaiChatTurn(
-    target,
-    [
-      { role: 'system', content: buildPlanPrompt(plannerCfg) },
-      ...history.map((h) => ({ role: h.role, content: h.content })),
-      { role: 'user', content: question },
-    ],
-    { deployment: planDeployment, maxCompletionTokens: 900 },
-  );
-  const plan = sequenceSteps(parsePlan(planResp.content).steps);
+  const planMessages = [
+    { role: 'system', content: buildPlanPrompt(plannerCfg) },
+    ...history.map((h) => ({ role: h.role, content: h.content })),
+    { role: 'user', content: question },
+  ];
+  let planResp = await aoaiChatTurn(target, planMessages, {
+    deployment: planDeployment,
+    maxCompletionTokens: PLAN_MAX_TOKENS,
+  });
+  let plan = sequenceSteps(parsePlan(planResp.content).steps);
+  let planTruncated = planResp.finishReason === 'length';
+
+  // #4091 — an EMPTY plan is ambiguous, and the ambiguity was being resolved the
+  // wrong way. The plan pass rides the STRONG (reasoning) tier, where reasoning
+  // tokens are billed against the same `max_completion_tokens` cap as the visible
+  // JSON — so a cap that looks generous can be consumed entirely by reasoning,
+  // returning `finish_reason:'length'` with NO content. Treating that as "the
+  // model chose not to plan" is what produced the reported `plan:[] steps:[]`
+  // with a reassuring "no multi-step plan was produced". Retry ONCE with a
+  // materially larger budget before degrading.
+  if (plan.length === 0 && planTruncated) {
+    planResp = await aoaiChatTurn(target, planMessages, {
+      deployment: planDeployment,
+      maxCompletionTokens: PLAN_MAX_TOKENS_RETRY,
+    });
+    plan = sequenceSteps(parsePlan(planResp.content).steps);
+    planTruncated = planResp.finishReason === 'length';
+  }
 
   // No plan produced → degrade honestly to a single grounded pass (still real).
   if (plan.length === 0) {
     const single = await chatGrounded(plannerCfg, history, question, stepCtx);
+    const meta = stepExecutionMeta(single);
+    // #4091 — the single pass may well have generated AND executed real SQL.
+    // Reporting `steps: []` regardless hid that evidence: the operator saw an
+    // empty trace and could not tell a query had run. Surface the pass as the
+    // one step it is, so the generated query + real row count are visible.
+    const steps: ReasoningStepResult[] = single.tools?.length
+      ? [{
+          step: 1,
+          source: single.tools[0]?.source || cfg.sources[0]?.name || 'single grounded pass',
+          subQuery: question,
+          rationale: 'No multi-step plan was produced — answered in one grounded pass.',
+          status: meta.gated ? 'gated' : 'completed',
+          answer: single.answer,
+          tools: single.tools,
+          executed: meta.executed,
+          rowCount: meta.rowCount,
+        }]
+      : [];
+    const plausibility = assessPlausibility(single.answer, steps);
+    const reason = planTruncated
+      ? `The planner response was TRUNCATED at its token cap before it could emit a plan (finish_reason=length); answered in a single grounded pass${meta.executed ? ` that executed and returned ${meta.rowCount} row(s)` : ' that executed nothing'}.`
+      : meta.executed
+        ? `No multi-step plan was produced; answered in a single grounded pass that executed and returned ${meta.rowCount} row(s).`
+        : `No multi-step plan was produced, and the single grounded pass executed no query${single.groundingGate ? ` — ${single.groundingGate}` : ''}.`;
     return {
       ...single,
       mode: 'plan-execute-verify',
       modelTier: sel.tier,
       reasoningConfigured,
       plan: [],
-      steps: [],
+      steps,
       verify: {
-        verdict: 'partial',
-        reason: 'No multi-step plan was produced; answered in a single grounded pass.',
+        // Honest: only claim `pass` when a query really ran AND the answer
+        // follows from the rows it returned.
+        verdict: meta.executed && plausibility.plausible ? 'pass' : 'partial',
+        reason,
       },
+      planTruncated: planTruncated || undefined,
+      plausibility,
       contract: contractSignal,
       ...(graphSignal ? { graph: graphSignal } : {}),
     };
@@ -1199,7 +1264,7 @@ export async function runReasoningAgent(
         { role: 'system', content: buildVerifyPrompt() },
         { role: 'user', content: buildVerifyContext(question, stepResults) },
       ],
-      { deployment: planDeployment, maxCompletionTokens: 900 },
+      { deployment: planDeployment, maxCompletionTokens: VERIFY_MAX_TOKENS },
     );
     const parsed = parseVerify(vr.content);
     verdict = parsed.verdict;

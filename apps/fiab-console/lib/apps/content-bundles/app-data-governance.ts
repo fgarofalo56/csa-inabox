@@ -591,7 +591,14 @@ const bundle: AppBundle = {
             kind: 'teams',
             config: {
               channel: 'Data Governance',
-              recipients: ['data-governance@csa.example.com'],
+              // #4097 — this used to ship
+              // `recipients: ['data-governance@csa.example.com']`. `example.com`
+              // is reserved by RFC 2606 and can never receive mail, so that was
+              // a fabricated destination presented as a real one. A bundle
+              // cannot know a tenant's governance DL; naming the Teams channel
+              // as the INTENT and letting the install bind the operator is the
+              // honest shape (auto-bind-by-default.md). Set a real address on
+              // the rule in the Activator editor to change where it notifies.
               title: 'Data quality SLA breach — Customer 360',
               body:
                 'The Customer 360 data-product quality score fell below the 90% ' +

@@ -108,21 +108,61 @@ The wizard's per-source sync note says exactly this rather than implying more
 
 ## Auto-bind: what the platform now does for the user
 
-Per `auto-bind-by-default.md` §5, `LOOM_MIRROR_SNOWFLAKE_LINKED_SERVICE` is no
-longer a prerequisite — it is an **override** for brownfield estates with a
-hand-tuned linked service (private endpoints, self-hosted IR). When unset:
+Per `auto-bind-by-default.md` §5, neither `LOOM_MIRROR_SNOWFLAKE_LINKED_SERVICE`
+nor `LOOM_MIRROR_ADLS_LINKED_SERVICE` is a prerequisite — both are **overrides**
+for brownfield estates with hand-tuned linked services (private endpoints,
+self-hosted IR, a different Bronze account). When unset:
 
 1. Loom upserts a `loom_key_vault` linked service (factory managed identity).
 2. Loom upserts a `SnowflakeV2` linked service named after the Loom connection,
    referencing the credential as an `AzureKeyVaultSecret` — a secret **name**.
-3. Both upserts are unconditional on every Start, so a linked service deleted or
-   edited out-of-band self-heals (§3).
+3. Loom upserts `loom_mirror_sink_adls`, an `AzureBlobFS` linked service pointing
+   at the deployment's own Bronze account (derived from `LOOM_BRONZE_URL`, so the
+   DFS host is sovereign-correct), with **no credential field** — the factory's
+   own managed identity authenticates.
+4. All three upserts are unconditional on every Start, so a linked service deleted
+   or edited out-of-band self-heals (§3), and every one is a name-addressed ARM
+   PUT, so a re-Start can never create a second copy.
 
 The credential therefore never leaves Key Vault and never lands in a
 linked-service definition. That requires the factory MI to hold **Key Vault
 Secrets User** on the Loom vault — deployed by
-`platform/fiab/bicep/modules/admin-plane/adf-keyvault-rbac.bicep`, wired for both
-the single-sub and multi-sub DLZ topologies.
+`platform/fiab/bicep/modules/admin-plane/adf-keyvault-rbac.bicep`.
+
+### The grant's call sites, and the one that was missing
+
+The module originally had two call sites, gated on `useSingleDlz` and
+`useMultiDlz`. **Neither is reachable on any shipped `.bicepparam`**: they all pin
+`topology='tenant'`, which makes `deployLandingZones` false and therefore both
+flags false. So the grant existed and never fired, and on the live Commercial
+estate the factory MI held zero role assignments on the vault — every Snowflake
+mirror failed at the credential read.
+
+Four call sites now cover the four shapes a factory can have:
+
+| Topology | Call site | Where the principal comes from |
+|---|---|---|
+| `single-sub` | `singleDlzAdfKeyVaultRbac` | `singleDlz.outputs.adfFactoryPrincipalId` |
+| legacy `multi-sub` | `dlzAdfKeyVaultRbac` (per DLZ) | `dlz[i].outputs.adfFactoryPrincipalId` |
+| **`tenant` (every shipped boundary)** | **`adoptedAdfKeyVaultRbac`** | **resolved cross-subscription from the ADOPTED factory's name/RG/sub** |
+| `dlz-attach` | `dlzAttachAdfKeyVaultRbac` | `dlzAttach.outputs.adfFactoryPrincipalId`, granted on the HUB vault cross-sub |
+
+The `tenant` row is the one that matters in practice, and it depends on the adopt
+plan carrying an `adf` entry — discovered by
+`scripts/csa-loom/discover-dlz-adopt-plan.sh`, which every `deploy-fiab-*.yml`
+lane runs before composing the deployment. Cloud parity: all four are boundary-
+agnostic (the Key Vault Secrets User role GUID is identical in Commercial, GCC,
+GCC-High, IL5 and DoD), and the `tenant` row is reached identically by
+`commercial`, `commercial-full`, `gcc`, `gcc-high` and `il5`.
+
+**RoleAssignmentExists.** ARM enforces uniqueness on the (scope, principalId,
+roleDefinitionId) triple, not the assignment name. An estate where an operator
+already granted this by hand — Azure mints a random v4 name — will fail the first
+deploy after this lands until that assignment is deleted. The estate's automatic
+remediation (`scripts/csa-loom/converge-role-assignment.mjs`, invoked by
+`deploy-retry.mjs --remediate` on every cloud lane) **refuses** this case, because
+the principal is a factory's SYSTEM-assigned identity rather than a user-assigned
+managed identity in the deployment subscription.
 
 Remaining honest gates (things the platform genuinely cannot do for the user):
 the connection itself must exist and must carry account / database / warehouse /
