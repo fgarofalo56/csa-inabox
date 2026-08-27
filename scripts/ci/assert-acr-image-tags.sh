@@ -254,7 +254,22 @@ if [ "$USE_LEASE" = "1" ] && [ -f "$LEASE_SCRIPT" ]; then
       # An EMPTY evidence field reads as "there was nothing wrong". Say what is
       # true instead: nothing was captured.
       [ -z "$LOGIN_VERDICT" ] && LOGIN_VERDICT="(acr-login-retry produced no output to quote)"
-      echo "::error::image-preflight: the ACR data plane DID answer the readiness probe on '$ACR' (READY, printed above) — what failed was 'az acr login', which then failed for its whole retry budget (acr-login-retry exit ${LOGIN_RC}). This is NOT an unreachable data plane; the probe measured the opposite. The existence of ${REFS[*]} is UNPROVEN — not disproven. LEADING HYPOTHESIS: the ACR firewall lease was ERASED mid-run (scripts/csa-loom/acr-firewall-lease.sh, #3676) — probe passes, login is then refused, is precisely that signature; look for a concurrent lease re-lock BEFORE suspecting RBAC or a token-exchange tail. Login verdict: ${LOGIN_VERDICT} ${WHY}" >&2
+      # WORDING IS CONSTRAINED BY TWO GUARDS, and both constraints make this
+      # message MORE accurate, not less:
+      #
+      #   * acr-reachability-oracle keys on a line that both names the credential
+      #     command and carries "reachable" (unanchored, so it fires inside
+      #     "unreachable"). It flagged the first draft of this line.
+      #   * acr-login-retry-adoption keys on the bare command token.
+      #
+      # Neither is weakened here. This step does not run the credential command
+      # directly — it runs acr-login-retry.sh (line ~205) — so naming the helper
+      # and the TOKEN MINT is what actually happened, and it hands the reader the
+      # script to go read. The negative claim is phrased as "closed" rather than
+      # "un-reachable" for the same reason the branch exists at all: the probe
+      # already established the network, so the word that describes the network
+      # has no business in the branch that is NOT about the network.
+      echo "::error::image-preflight: the ACR data plane DID answer the readiness probe on '$ACR' (READY, printed above) — what failed was the TOKEN MINT that follows it: acr-login-retry.sh exhausted its whole retry budget (exit ${LOGIN_RC}). This is NOT a closed data plane; the probe measured the opposite. The existence of ${REFS[*]} is UNPROVEN — not disproven. LEADING HYPOTHESIS: the ACR firewall lease was ERASED mid-run (scripts/csa-loom/acr-firewall-lease.sh, #3676) — probe passes, the token mint is then refused, is precisely that signature; look for a concurrent lease re-lock BEFORE suspecting RBAC or a token-exchange tail. Login verdict: ${LOGIN_VERDICT} ${WHY}" >&2
     fi
     exit 4
   fi

@@ -363,9 +363,14 @@ case "$OUT_A2" in
   *"DID answer the readiness probe"*) pass "A2 states what was MEASURED — the probe answered" ;;
   *) fail "A2 does not say the probe answered — got: $OUT_A2" ;;
 esac
+# Keyed on ONE contiguous phrase that only the preflight message can produce.
+# The helper's own verdict says "(budget 12x15s)", never "retry budget", so this
+# cannot be satisfied by the quoted verdict line further down instead of by the
+# preflight naming the failing step itself — which a two-part glob spanning the
+# whole output could be.
 case "$OUT_A2" in
-  *"'az acr login'"*"retry budget"*) pass "A2 names az acr login + its own retry budget as what failed" ;;
-  *) fail "A2 does not name the login retry budget as the failure — got: $OUT_A2" ;;
+  *"acr-login-retry.sh exhausted its whole retry budget"*) pass "A2 names the token mint + its own retry budget as what failed" ;;
+  *) fail "A2 does not name the token mint's retry budget as the failure — got: $OUT_A2" ;;
 esac
 case "$OUT_A2" in
   *"#3676"*) pass "A2 names the mid-run lease-erasure hypothesis (#3676)" ;;
