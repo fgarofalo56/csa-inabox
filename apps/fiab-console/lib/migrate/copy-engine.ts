@@ -134,15 +134,36 @@ function sourceHasCopyConnector(sourceType: MigrationSourceType): boolean {
  * The interim Azure **Blob Storage** linked service ADF stages a Snowflake
  * unload through before it lands in the ADLS Gen2 Bronze sink.
  *
- * Shares `LOOM_MIRROR_STAGING_BLOB_LINKED_SERVICE` with the mirror engine on
- * purpose: it is the same factory, the same staging account, and the same
- * Snowflake restriction. A second variable would let the two engines disagree
- * about a value that is physically one thing.
+ * WHY THIS IS A CONSTANT AND NOT AN ENV VAR. It is a Loom-OWNED resource in
+ * Loom's OWN factory, provisioned by Loom's bicep alongside the staging storage
+ * account (#4086). `auto-bind-by-default.md` is explicit that an infra
+ * prerequisite the platform can create is DEPLOYED, not requested — "set
+ * LOOM_X" as the terminal user-facing state is a violation of that rule — so
+ * there is no operator choice here to carry in a variable.
+ *
+ * An env var would also have carried strictly LESS information than the probe
+ * below already gets. Its only possible non-empty value is this same name, and
+ * a name proves nothing on its own: the engine has to read the linked service
+ * back from the factory regardless (see {@link planCopyTransfer} on why the
+ * TYPE is authoritative and the name is not). Asking ADF answers "is it there,
+ * and is it the right type?" in one call; a variable could only ever have
+ * answered "did something set a string?", and could be stale or wrong on top.
  */
-function stagingBlobLinkedService(): string | null {
-  const v = process.env.LOOM_MIRROR_STAGING_BLOB_LINKED_SERVICE;
-  return v && v.trim() ? v.trim() : null;
-}
+export const STAGING_BLOB_LINKED_SERVICE = 'loom_mirror_staging_blob';
+
+/**
+ * What the factory says about the staging linked service.
+ *
+ * `absent` and `unreadable` are kept apart deliberately, per
+ * `deploy-integrity.md` R7: an error must not assert something it did not
+ * establish. A swallowed exception that reports "not deployed" when the truth
+ * was "the identity cannot read this factory" sends the operator to the wrong
+ * fix — that exact conflation cost two investigations on 2026-08-05.
+ */
+export type StagingProbe =
+  | { kind: 'present'; type: string }
+  | { kind: 'absent' }
+  | { kind: 'unreadable'; detail: string };
 
 /** Staging prefix inside the interim Blob container, per migration. */
 const STAGING_PATH_ROOT = 'loom-copyin-staging';
@@ -169,75 +190,87 @@ export type CopyTransferPlan =
  * Bronze where the rest of the platform reads it.
  *   https://learn.microsoft.com/azure/data-factory/connector-snowflake
  *
- * WHY THE TYPE IS READ BACK AND NOT INFERRED FROM THE NAME BEING SET: a
- * non-empty string proves only that somebody set the variable. The first thing
- * an operator does when a gate says "point it at a Blob linked service" is
- * point it at the linked service they already have — which on every Loom
- * deployment is the `AzureBlobFS` Bronze sink. That passes a name-only check,
- * authors the pipeline, and reproduces the exact failure the gate exists to
- * prevent. `observedType` is passed in rather than fetched here so this stays
- * pure and can be tested against every type ADF can return.
+ * WHY THE TYPE IS THE ANSWER AND THE NAME IS NOT: a linked service EXISTING
+ * under the expected name proves only that something was created. If a factory
+ * carries an `AzureBlobFS` linked service at that name — which is what the
+ * Bronze sink is — authoring on it reproduces the exact failure this gate
+ * exists to prevent. The probe is passed in rather than fetched here so this
+ * stays pure and can be tested against every shape ADF can return.
  */
-export function planCopyTransfer(
-  stagingLinkedService: string | null,
-  observedType: string | null,
-): CopyTransferPlan {
-  if (!stagingLinkedService) {
+export function planCopyTransfer(probe: StagingProbe): CopyTransferPlan {
+  if (probe.kind === 'absent') {
     return {
       kind: 'unsupported',
-      missing: 'LOOM_MIRROR_STAGING_BLOB_LINKED_SERVICE',
+      missing: 'staging-linked-service-absent',
       message:
         "Snowflake's COPY INTO unload can only write to an Azure Blob endpoint, so Azure Data Factory rejects a " +
         'Snowflake source paired with an ADLS Gen2 (AzureBlobFS) Bronze sink: "Snowflake copy command not ' +
         'support Connector type as \'not Azure Blob Storage\'". The documented path is a staged copy through an ' +
-        'interim Azure Blob Storage linked service using shared access signature authentication. Set ' +
-        'LOOM_MIRROR_STAGING_BLOB_LINKED_SERVICE to that linked service (issue #4086 tracks the deploy ' +
-        'provisioning the staging account and binding it for you). Until then the copy is gated rather than ' +
-        'authoring a pipeline ADF would reject on every run — which is what made this defect destroy Bronze ' +
-        'before the Delete was gated (#4083 / #4087).',
+        `interim Azure Blob Storage linked service. Loom provisions that itself — the "${STAGING_BLOB_LINKED_SERVICE}" ` +
+        'linked service and the storage account behind it are deployed by platform bicep (issue #4086) — and it ' +
+        'is NOT in this factory yet, so there is nothing for the copy to stage through. Until then the copy is ' +
+        'gated rather than authoring a pipeline ADF would reject on every run — which is what made this defect ' +
+        'destroy Bronze before the Delete was gated (#4083 / #4087).',
     };
   }
 
-  if (observedType === STAGING_REQUIRED_TYPE) {
-    return { kind: 'staged', stagingLinkedService };
-  }
-
-  if (observedType) {
-    return {
-      kind: 'unsupported',
-      missing: 'LOOM_MIRROR_STAGING_BLOB_LINKED_SERVICE',
-      message:
-        `LOOM_MIRROR_STAGING_BLOB_LINKED_SERVICE points at "${stagingLinkedService}", which is a ` +
-        `${observedType} linked service. Snowflake's COPY INTO unload can only write to an Azure Blob ` +
-        `endpoint, so the staging linked service must be ${STAGING_REQUIRED_TYPE} with shared access ` +
-        'signature authentication. An AzureBlobFS (ADLS Gen2 / dfs endpoint) linked service — including the ' +
-        'Bronze sink this copy writes to — is rejected by ADF with "Snowflake copy command not support ' +
-        'Connector type as \'not Azure Blob Storage\'", which is the failure this gate exists to prevent.',
-    };
-  }
-
-  // UNKNOWN is not "wrong type" and it is not "fine". Say precisely what
+  // UNKNOWN is not "wrong type" and it is not "absent". Say precisely what
   // happened — the linked service could not be READ — and fail closed, because
   // authoring on an unverified pairing is what produced #4083.
+  if (probe.kind === 'unreadable') {
+    return {
+      kind: 'unsupported',
+      missing: 'staging-linked-service-unreadable',
+      message:
+        `Loom could not READ the "${STAGING_BLOB_LINKED_SERVICE}" staging linked service from the data factory ` +
+        `(${probe.detail}), so its type is unknown — this is NOT a report that the type is wrong, and it is NOT a ` +
+        'report that it is missing. The most likely cause is that the Console identity lacks Data Factory read ' +
+        'access to this factory. Loom is gating rather than authoring a copy whose source/sink pairing it could ' +
+        'not verify.',
+    };
+  }
+
+  if (probe.type === STAGING_REQUIRED_TYPE) {
+    return { kind: 'staged', stagingLinkedService: STAGING_BLOB_LINKED_SERVICE };
+  }
+
   return {
     kind: 'unsupported',
-    missing: 'staging-linked-service-unreadable',
+    missing: 'staging-linked-service-wrong-type',
     message:
-      `LOOM_MIRROR_STAGING_BLOB_LINKED_SERVICE names "${stagingLinkedService}", but Loom could not READ that ` +
-      'linked service from the data factory, so its type is unknown — this is NOT a report that the type is ' +
-      'wrong. Either it does not exist in this factory, or the Console identity lacks Data Factory read access ' +
-      'to it. Loom is gating rather than authoring a copy whose source/sink pairing it could not verify.',
+      `The "${STAGING_BLOB_LINKED_SERVICE}" staging linked service in this factory is a ${probe.type} linked ` +
+      "service. Snowflake's COPY INTO unload can only write to an Azure Blob endpoint, so the staging linked " +
+      `service must be ${STAGING_REQUIRED_TYPE} with shared access signature authentication. An AzureBlobFS ` +
+      '(ADLS Gen2 / dfs endpoint) linked service — including the Bronze sink this copy writes to — is rejected ' +
+      'by ADF with "Snowflake copy command not support Connector type as \'not Azure Blob Storage\'", which is ' +
+      'the failure this gate exists to prevent.',
   };
 }
 
-/** `properties.type` of a linked service, or null when it could not be READ. */
-async function readLinkedServiceType(name: string): Promise<string | null> {
+/**
+ * Ask the factory about the staging linked service.
+ *
+ * The 404 is classified from the `status` the adf-client attaches to the thrown
+ * error rather than by regexing its message, so "absent" is only ever reported
+ * when ADF actually said Not Found. Every other failure — 403, a network error,
+ * a malformed body — is `unreadable`, which fails closed just the same but says
+ * something TRUE about why.
+ */
+async function probeStagingLinkedService(): Promise<StagingProbe> {
   try {
-    const ls = await getLinkedService(name);
+    const ls = await getLinkedService(STAGING_BLOB_LINKED_SERVICE);
     const t = (ls as { properties?: { type?: unknown } })?.properties?.type;
-    return typeof t === 'string' && t ? t : null;
-  } catch {
-    return null;
+    if (typeof t === 'string' && t) return { kind: 'present', type: t };
+    return { kind: 'unreadable', detail: 'the factory returned it with no properties.type' };
+  } catch (e) {
+    const status = (e as { status?: unknown } | null)?.status;
+    if (status === 404) return { kind: 'absent' };
+    return {
+      kind: 'unreadable',
+      detail: typeof status === 'number'
+        ? `the factory answered HTTP ${status}`
+        : 'the factory could not be reached',
+    };
   }
 }
 
@@ -765,11 +798,7 @@ export async function startCopyIn(
   // Can this deployment actually MOVE a row? Decided before anything is
   // authored: the pre-#4087 engine authored an invalid pairing unconditionally,
   // ADF rejected every RUN, and the root Delete had already cleared Bronze.
-  const stagingLs = stagingBlobLinkedService();
-  const transfer = planCopyTransfer(
-    stagingLs,
-    stagingLs ? await readLinkedServiceType(stagingLs) : null,
-  );
+  const transfer = planCopyTransfer(await probeStagingLinkedService());
   if (transfer.kind === 'unsupported') {
     return { ok: false, gate: { missing: transfer.missing, message: transfer.message } };
   }

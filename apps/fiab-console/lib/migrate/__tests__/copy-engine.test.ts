@@ -39,7 +39,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import {
   buildCopyActivities, findUnsafeDeletes, assertSafeCopyPipeline,
-  planCopyTransfer, datasetNamesFor, MAX_COPY_OBJECTS,
+  planCopyTransfer, datasetNamesFor, MAX_COPY_OBJECTS, STAGING_BLOB_LINKED_SERVICE,
 } from '@/lib/migrate/copy-engine';
 import type { CopyObjectPlan } from '@/lib/migrate/copy-plan';
 
@@ -388,35 +388,50 @@ describe('assertSafeCopyPipeline', () => {
 
 describe('planCopyTransfer', () => {
   it('is staged only for an AzureBlobStorage linked service', () => {
-    expect(planCopyTransfer('loom_stage_blob', 'AzureBlobStorage'))
-      .toEqual({ kind: 'staged', stagingLinkedService: 'loom_stage_blob' });
+    expect(planCopyTransfer({ kind: 'present', type: 'AzureBlobStorage' }))
+      .toEqual({ kind: 'staged', stagingLinkedService: STAGING_BLOB_LINKED_SERVICE });
   });
 
-  it('gates when nothing is configured, naming the infra issue', () => {
-    const p = planCopyTransfer(null, null);
+  it('gates when the staging linked service is not in the factory, naming the deploy issue', () => {
+    const p = planCopyTransfer({ kind: 'absent' });
     expect(p.kind).toBe('unsupported');
     if (p.kind !== 'unsupported') throw new Error('unreachable');
-    expect(p.missing).toBe('LOOM_MIRROR_STAGING_BLOB_LINKED_SERVICE');
+    expect(p.missing).toBe('staging-linked-service-absent');
     expect(p.message).toMatch(/#4086/);
+    // auto-bind-by-default: the remediation is a DEPLOY, never "set LOOM_X".
+    expect(p.message).not.toMatch(/\bSet LOOM_/);
   });
 
-  it('REJECTS the AzureBlobFS Bronze sink even though its name is set', () => {
-    // This is the whole point of reading the type: the operator's first move is
-    // to point the variable at the ADLS linked service they already have.
-    const p = planCopyTransfer('loom_mirror_sink_adls', 'AzureBlobFS');
+  it('REJECTS the AzureBlobFS Bronze sink even though a linked service exists', () => {
+    // This is the whole point of reading the type: the name existing proves
+    // nothing, and the ADLS sink is the shape that reproduces the defect.
+    const p = planCopyTransfer({ kind: 'present', type: 'AzureBlobFS' });
     expect(p.kind).toBe('unsupported');
     if (p.kind !== 'unsupported') throw new Error('unreachable');
+    expect(p.missing).toBe('staging-linked-service-wrong-type');
     expect(p.message).toMatch(/AzureBlobFS/);
     expect(p.message).toMatch(/must be AzureBlobStorage/);
   });
 
-  it('reports UNREADABLE distinctly from wrong-type', () => {
-    const p = planCopyTransfer('who_knows', null);
+  it('reports UNREADABLE distinctly from wrong-type AND from absent', () => {
+    const p = planCopyTransfer({ kind: 'unreadable', detail: 'the factory answered HTTP 403' });
     expect(p.kind).toBe('unsupported');
     if (p.kind !== 'unsupported') throw new Error('unreachable');
-    // Not conflated with "the type is wrong" — a different missing key entirely.
+    // Three different missing keys — the caller can tell the three apart.
     expect(p.missing).toBe('staging-linked-service-unreadable');
     expect(p.message).toMatch(/NOT a report that the type is wrong/);
+    expect(p.message).toMatch(/NOT a report that it is missing/);
+    // deploy-integrity R7: the message carries the reason it actually observed.
+    expect(p.message).toMatch(/HTTP 403/);
+  });
+
+  it('gives absent / unreadable / wrong-type three DISTINCT missing keys', () => {
+    const keys = [
+      planCopyTransfer({ kind: 'absent' }),
+      planCopyTransfer({ kind: 'unreadable', detail: 'x' }),
+      planCopyTransfer({ kind: 'present', type: 'AzureSqlDatabase' }),
+    ].map((p) => (p.kind === 'unsupported' ? p.missing : 'staged'));
+    expect(new Set(keys).size).toBe(3);
   });
 });
 
@@ -459,7 +474,6 @@ describe('startCopyIn — gates before it authors', () => {
     process.env.LOOM_BRONZE_URL = 'https://stloomtest.dfs.core.windows.net/bronze';
     process.env.LOOM_MIRROR_ADLS_LINKED_SERVICE = 'loom_mirror_sink_adls';
     process.env.LOOM_MIRROR_SNOWFLAKE_LINKED_SERVICE = 'loom_snowflake';
-    process.env.LOOM_MIRROR_STAGING_BLOB_LINKED_SERVICE = 'loom_stage_blob';
   });
   afterEach(() => { process.env = { ...ENV }; });
 
@@ -498,16 +512,44 @@ describe('startCopyIn — gates before it authors', () => {
     for (const c of copies) expect(c.typeProperties.source.type).toBe('SnowflakeV2Source');
   });
 
-  it('gates — and upserts NOTHING — when staging is unconfigured', async () => {
-    delete process.env.LOOM_MIRROR_STAGING_BLOB_LINKED_SERVICE;
+  it('gates — and upserts NOTHING — when the staging linked service is not deployed', async () => {
+    // ADF says Not Found. That is "the deploy has not created it yet", and it is
+    // the only shape allowed to report absence.
+    arm.getLinkedService.mockRejectedValueOnce(
+      Object.assign(new Error('getLinkedService failed 404: NotFound'), { status: 404 }),
+    );
     const { startCopyIn } = await import('@/lib/migrate/copy-engine');
     const res = await startCopyIn(PLAN, 'mig1');
     expect(res.ok).toBe(false);
     if (res.ok) throw new Error('unreachable');
-    expect(res.gate.missing).toBe('LOOM_MIRROR_STAGING_BLOB_LINKED_SERVICE');
+    expect(res.gate.missing).toBe('staging-linked-service-absent');
     // The pre-#4087 engine authored + RAN regardless. Nothing may reach ADF.
     expect(arm.upsertPipeline).not.toHaveBeenCalled();
     expect(arm.runPipeline).not.toHaveBeenCalled();
+  });
+
+  it('does NOT call a 403 "absent" — an unreadable factory is its own gate', async () => {
+    // R7: the engine must not assert the linked service is missing when all it
+    // established is that it could not read the factory.
+    arm.getLinkedService.mockRejectedValueOnce(
+      Object.assign(new Error('getLinkedService failed 403: Forbidden'), { status: 403 }),
+    );
+    const { startCopyIn } = await import('@/lib/migrate/copy-engine');
+    const res = await startCopyIn(PLAN, 'mig1');
+    expect(res.ok).toBe(false);
+    if (res.ok) throw new Error('unreachable');
+    expect(res.gate.missing).toBe('staging-linked-service-unreadable');
+    expect(res.gate.message).toMatch(/HTTP 403/);
+    expect(arm.upsertPipeline).not.toHaveBeenCalled();
+    expect(arm.runPipeline).not.toHaveBeenCalled();
+  });
+
+  it('probes the Loom-OWNED staging linked service by name — no env var decides it', async () => {
+    // The name is a platform-owned constant (auto-bind-by-default): if a future
+    // edit re-introduces an operator-supplied name, this stops matching.
+    const { startCopyIn } = await import('@/lib/migrate/copy-engine');
+    await startCopyIn(PLAN, 'mig1');
+    expect(arm.getLinkedService).toHaveBeenCalledWith(STAGING_BLOB_LINKED_SERVICE);
   });
 
   it('gates when the staging linked service is the ADLS sink (wrong type)', async () => {
@@ -515,6 +557,8 @@ describe('startCopyIn — gates before it authors', () => {
     const { startCopyIn } = await import('@/lib/migrate/copy-engine');
     const res = await startCopyIn(PLAN, 'mig1');
     expect(res.ok).toBe(false);
+    if (res.ok) throw new Error('unreachable');
+    expect(res.gate.missing).toBe('staging-linked-service-wrong-type');
     expect(arm.upsertPipeline).not.toHaveBeenCalled();
   });
 
