@@ -53,30 +53,55 @@ on:
   push:
     branches: [main]
   workflow_dispatch:
+  # MERGE QUEUE. `changelog parser can read every commit message` is a REQUIRED
+  # context (registered in classic branch protection after the comment further
+  # down was written — see the correction there). A required context that never
+  # reports on a merge group does NOT fail the group; it leaves it pending until
+  # the queue times out and ejects the PR. Without this trigger, and without the
+  # two merge_group arms added below, every merge in the repo would stall.
+  #
+  # This is the one workflow of the five producers where the merge-group hazard
+  # was structural rather than incidental: the job `name:` is a conditional
+  # expression, and `merge_group` fell through it to the DISPATCH arm — so the
+  # required context would have been renamed out of existence rather than merely
+  # delayed.
+  merge_group:
 
 permissions:
   contents: read
 
 jobs:
   check:
-    # The three shapes of this run are NOT interchangeable and must not share a check name.
+    # The shapes of this run are NOT interchangeable and must not share a check name.
     # A workflow_dispatch has no pull_request payload, so it skips the range scan and goes
     # green having judged no commits at all. Under one shared name that green is
-    # indistinguishable from a real PR verdict — and if this context were ever registered as
-    # required, a dispatch-produced green would satisfy it. Naming the dispatch shape
+    # indistinguishable from a real PR verdict — and this context IS now registered as
+    # required, so a dispatch-produced green would satisfy it. Naming the dispatch shape
     # differently makes that structurally impossible: the required context can only ever be
-    # produced by the pull_request path, which is the only path that scans a PR range.
+    # produced by a path that actually SCANS A RANGE.
+    #
+    # WHY merge_group SHARES THE pull_request NAME. It is the same question asked one step
+    # later. A merge group is the batch of queued PRs about to land, and
+    # `merge_group.base_sha..head_sha` is a REAL range covering exactly those commits — so
+    # the name is earned by a scan, not borrowed. It has to share the name rather than get
+    # its own: a merge group is gated on the same required contexts as a PR, so if this run
+    # published a different string, `changelog parser can read every commit message` would
+    # never report on the group, the group would sit pending until the queue timed out, and
+    # the PR would be ejected. Before this arm existed, `merge_group` fell all the way
+    # through to the DISPATCH literal below — the required context renamed out of existence
+    # on every batch.
     #
     # The push shape is split off for the same reason in the other direction: it judges what
     # LANDED on main, which is a different question and a different range, and its green must
     # not be mistakable for a PR having been checked.
     #
-    # The fold points below sit BETWEEN tokens, never inside a quoted literal. The
-    # pull_request arm of this expression is the exact string that would be registered as a
-    # required context, so a reflow that moved a fold into the middle of it would silently
-    # rename the check and quietly un-require it.
+    # The fold points below sit BETWEEN tokens, never inside a quoted literal. The first arm
+    # of this expression is the exact string registered as a required context, so a reflow
+    # that moved a fold into the middle of it would silently rename the check and quietly
+    # un-require it. `&&` binds tighter than `||`, so the parenthesised disjunction below is
+    # the whole condition of the first arm, not just its left operand.
     name: >-
-      ${{ github.event_name == 'pull_request'
+      ${{ (github.event_name == 'pull_request' || github.event_name == 'merge_group')
       && 'changelog parser can read every commit message'
       || github.event_name == 'push'
       && 'changelog parser can read what landed on main'
@@ -206,6 +231,13 @@ jobs:
           EVENT: ${{ github.event_name }}
           PR_BASE: ${{ github.event.pull_request.base.sha }}
           PR_HEAD: ${{ github.event.pull_request.head.sha }}
+          # merge_group — the batch of queued PRs about to land. base_sha is the commit the
+          # group was built on, head_sha its tip, so base_sha..head_sha is exactly the set of
+          # commits being merged. Note this is NOT derivable from HEAD~1: the repo
+          # squash-merges, so each queued PR contributes one commit and a batch of five is
+          # five commits deep.
+          MG_BASE: ${{ github.event.merge_group.base_sha }}
+          MG_HEAD: ${{ github.event.merge_group.head_sha }}
           PUSH_BEFORE: ${{ github.event.before }}
           PUSH_AFTER: ${{ github.event.after }}
         run: |
@@ -214,6 +246,25 @@ jobs:
           if [ "$EVENT" = "pull_request" ]; then
             BASE="$PR_BASE"
             HEAD="$PR_HEAD"
+          elif [ "$EVENT" = "merge_group" ]; then
+            BASE="$MG_BASE"
+            HEAD="$MG_HEAD"
+            # FAIL CLOSED here, and deliberately unlike fiab-console-ci.yml, where the
+            # fail-open answer is "build everything" — always available, always safe. There
+            # is no equivalent move for this guard: its verdict IS the range, so a run that
+            # cannot establish one has judged nothing, and a green would then satisfy a
+            # REQUIRED context with a scan that never happened.
+            #
+            # Without this arm the push branch below would read two empty payload fields and
+            # refuse citing `github.event.before` — an error asserting a cause it never
+            # established, which is its own defect (deploy-integrity R7).
+            if [ -z "$BASE" ] || [ -z "$HEAD" ]; then
+              echo "::error::merge_group payload did not carry both base_sha and head_sha"\
+                   "(base='${BASE}' head='${HEAD}'), so the set of commits about to land cannot"\
+                   "be established. Refusing to report a clean scan over a range this step"\
+                   "could not resolve."
+              exit 1
+            fi
           else
             HEAD="$PUSH_AFTER"
             BASE="$PUSH_BEFORE"
@@ -258,26 +309,31 @@ jobs:
       # control and unit-test steps and stops — an on-demand "is this guard still healthy"
       # check, which is why the job name above renames itself on that path.
       #
-      # WHAT THIS STEP DOES NOT YET GUARANTEE, stated rather than implied. An earlier
-      # revision of this comment claimed "no PR can reach a green verdict without this step
-      # running". That is false, and measurably so: on 2026-08-21 main carried 14 required
-      # status contexts and `commit-message-parses` was not among them (`guardrails` was,
-      # which is the control proving the query returns a real, non-empty list). So a PR can
-      # merge with this workflow queued, failed, or never triggered at all.
+      # THIS CONTEXT IS NOW REQUIRED — corrected 2026-08-26, and the correction matters
+      # because the previous text told you the opposite. That text read: "on 2026-08-21 main
+      # carried 14 required status contexts and `commit-message-parses` was not among them …
+      # the PR run is advisory". Re-measured against the API on 2026-08-26, main carries
+      # FIFTEEN, and this job's pull_request name is one of them:
       #
-      #   gh api repos/:owner/:repo/branches/main/protection \
-      #     --jq '.required_status_checks.contexts[]' | grep -i commit-message
+      #   gh api repos/fgarofalo56/csa-inabox/branches/main/protection \
+      #     --jq '.required_status_checks.contexts[]'
+      #   → …, 'changelog parser can read every commit message'
       #
       # Note the contexts live in CLASSIC branch protection, not in the ruleset — querying the
       # ruleset returns zero required checks and reads as "nothing missing".
       #
-      # The asymmetry is worth stating precisely, because half of this file IS enforced: the
-      # unit-test step above also runs inside `guardrails`, which is required, because that
-      # workflow globs `scripts/ci/__tests__/*.test.mjs`. So the guard's own rails are
-      # protected on every PR; the SCAN below — the part that judges commit messages — is not.
-      # Registering this context is a branch-protection change and belongs to the operator,
-      # not to this file. Until then the PR run is advisory, and the push run is detection
-      # after the fact rather than prevention.
+      # AND NOTE WHAT THE OLD RECIPE GOT WRONG, because it would have kept saying "advisory"
+      # even after the registration landed. It piped the context list through
+      # `grep -i commit-message`. The required context is the JOB NAME, "changelog parser can
+      # read every commit message" — a space, not a hyphen, and the workflow's own filename
+      # appears nowhere in it. That grep can never match, so it returns empty, and empty reads
+      # as "not required". A verification command that cannot produce a positive is not a
+      # check; grep for the job name, or drop the grep and read the list.
+      #
+      # So the SCAN below is now merge-blocking on every PR and on every merge group, which is
+      # what the rest of this file's fail-closed behaviour was written in anticipation of. The
+      # push-to-main run remains detection-after-the-fact and is still worth having: it judges
+      # the squash body GitHub composed, which is not any commit the PR run saw.
       - name: Check every changelog-bound commit message parses
         if: github.event_name != 'workflow_dispatch'
         env:

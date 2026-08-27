@@ -1010,10 +1010,10 @@ param hubFirewallEnabled bool = true
 @description('Opt-in ADF CDC mirroring — pre-existing ADF linked service for the relational SOURCE (Azure SQL / SQL Server). Empty = built-in CSV snapshot engine (Azure-native, no Fabric).')
 param loomMirrorSourceLinkedService string = ''
 
-@description('Opt-in ADF CDC/Copy mirroring — pre-existing ADF AzureBlobFS linked service pointing at the DLZ ADLS account (Delta/Parquet sink). Empty = built-in snapshot engine.')
+@description('BROWNFIELD OVERRIDE, not a prerequisite. Name of an EXISTING ADF AzureBlobFS linked service to sink mirrors through. Empty (the default, and what every shipped estate has) makes Loom auto-create `loom_mirror_sink_adls` from LOOM_BRONZE_URL with factory managed-identity auth — see apps/fiab-console/lib/azure/mirror-adf-shared.ts. Set it only to keep a hand-tuned linked service (managed private endpoint / different account) that Loom must not clobber. Requiring it was an auto-bind-by-default.md §5 violation: the platform holds every value it needs.')
 param loomMirrorAdlsLinkedService string = ''
 
-@description('Opt-in ADF Copy mirroring — pre-existing ADF Snowflake linked service (credential in Key Vault). Empty = falls back to loomMirrorSourceLinkedService. Snowflake → ADF Copy → ADLS Bronze Parquet, NO Fabric.')
+@description('BROWNFIELD OVERRIDE, not a prerequisite. Name of an EXISTING ADF Snowflake linked service (credential in Key Vault). Empty (the default) makes Loom build the SnowflakeV2 linked service from the mirror\'s Loom Connection — see apps/fiab-console/lib/azure/snowflake-adf.ts. Snowflake → ADF Copy → ADLS Bronze Parquet, NO Fabric.')
 param loomMirrorSnowflakeLinkedService string = ''
 
 @description('Refresh cadence for the ADF Copy backend schedule trigger (Snowflake): 15min | 1h | 4h | daily | on-demand. Default 1h.')
@@ -1601,6 +1601,17 @@ module adminPlane 'modules/admin-plane/main.bicep' = if (deployAdminPlane) {
     loomMirrorAdlsLinkedService: loomMirrorAdlsLinkedService
     loomMirrorSnowflakeLinkedService: loomMirrorSnowflakeLinkedService
     loomMirrorCopyCadence: loomMirrorCopyCadence
+    // Snowflake mirror staging scratch account (#4083). Computed here rather
+    // than read from singleDlz.outputs because `module singleDlz` is declared
+    // AFTER `module adminPlane` — the DLZ's outputs do not exist in the pass
+    // that renders the console env. Same deterministic-name trick
+    // `loomStorageAccount` above already uses for the lake, and it must stay
+    // character-for-character identical to `stagingAccountName` in
+    // modules/landing-zone/mirror-staging.bicep or the console binds to an
+    // account that was never created.
+    loomMirrorStagingAccount: useSingleDlz
+      ? take('saloomstg${uniqueString(singleDlzRg.id, 'loom-mirror-staging')}', 24)
+      : ''
     // No-Fabric mode (default): force the bound workspace empty so nothing
     // hard-depends on a Fabric capacity/workspace (no-fabric-dependency.md). Set
     // fabricEnabled=true ONLY to opt into a bound Fabric workspace.
@@ -1804,6 +1815,10 @@ var effHubVnetName = !empty(effHubVnetId) ? last(split(effHubVnetId, '/')) : ''
 // IS what dlz-attach always provides (individual hub* params OR hubCoordinates).
 var dlzAttachHasHubVnet = !empty(hubVnetId) || !empty(string(hubCoordinates.?hubVnetId ?? ''))
 var dlzAttachHasHubConsoleUami = !empty(hubConsoleUamiId) || !empty(string(hubCoordinates.?consoleUamiResourceId ?? ''))
+// Same rule for the hub Key Vault, which the attached DLZ's factory must be able
+// to read Loom Connection secrets from (mirroring auto-bind). Reads ONLY the
+// dlz-attach input params so it is start-of-deployment computable.
+var dlzAttachHasHubKeyVault = !empty(hubKeyVaultId) || !empty(string(hubCoordinates.?keyVaultId ?? ''))
 
 // audit-t156 — DLZ inventory for the topologyManifest output. for-expressions
 // must be the direct value of a var (BCP138), so the multi-sub fan-out list is
@@ -1956,6 +1971,48 @@ module singleDlzAdfKeyVaultRbac 'modules/admin-plane/adf-keyvault-rbac.bicep' = 
   params: {
     keyVaultName: last(split(adminPlane!.outputs.keyVaultId, '/'))
     dataFactoryPrincipalId: singleDlz!.outputs.adfFactoryPrincipalId
+    skipRoleGrants: skipRoleGrants
+  }
+}
+
+// Mirrored-database auto-bind (Snowflake), THE ESTATES THAT ACTUALLY RUN.
+//
+// The two call sites around this one are gated on `useSingleDlz` / `useMultiDlz`,
+// and BOTH are false on every shipped .bicepparam — commercial, commercial-full,
+// gcc, gcc-high and il5 all pin `topology='tenant'`, which makes
+// `deployLandingZones` false, which makes both flags false (see the MEASURED
+// REACHABILITY block in the admin-plane params above, and the evaluation of these
+// exact expressions in scripts/ci/__tests__/adf-keyvault-grant-reachable.test.mjs).
+// So the grant that mirroring depends on had NO reachable call site on any
+// shipped boundary. An operator reported the consequence on the Commercial estate
+// 2026-08-25: the factory MI held zero role assignments on the Loom Key Vault and
+// Snowflake mirrors failed at the credential read — an infra prerequisite the
+// platform was supposed to deploy and did not (auto-bind-by-default.md §5).
+//
+// On a `topology='tenant'` estate the Console binds to a factory it did NOT
+// deploy: `adopt.adf` (EXISTING_ADF / LOOM_ADOPT_JSON) supplies name + RG + SUB,
+// which admin-plane/main.bicep turns into LOOM_ADF_NAME / LOOM_ADF_RG /
+// LOOM_ADF_SUB. That factory routinely lives in the landing-zone RG of a
+// DIFFERENT SUBSCRIPTION from the vault, so this passes COORDINATES and lets the
+// module resolve the system-assigned principal cross-subscription. `adopt.adf` is
+// discovered by scripts/csa-loom/discover-dlz-adopt-plan.sh, which every
+// deploy-fiab-*.yml lane runs before composing the deployment — so this branch is
+// reached with the checked-in param files, not only in principle.
+//
+// Reached on: commercial / commercial-full / gcc / gcc-high / il5 (all
+// `topology='tenant'`, all `deployAdminPlane=true`) whenever the estate owns a
+// factory. Skipped, correctly, on a greenfield sub that has none.
+//
+// RoleAssignmentExists: this factory is NOT minted by this run, so read the
+// module header before assuming a re-deploy is free.
+module adoptedAdfKeyVaultRbac 'modules/admin-plane/adf-keyvault-rbac.bicep' = if (deployAdminPlane && !empty(existingAdfFactory)) {
+  name: 'adopted-adf-keyvault-rbac'
+  scope: resourceGroup(adminPlaneRgName)
+  params: {
+    keyVaultName: last(split(adminPlane!.outputs.keyVaultId, '/'))
+    dataFactoryName: existingAdfFactory
+    dataFactoryRg: existingAdfRg
+    dataFactorySub: existingAdfSub
     skipRoleGrants: skipRoleGrants
   }
 }
@@ -2471,6 +2528,41 @@ module dlzAttachS3GatewayLakeRbac 'modules/data-plane/s3-gateway-lake-rbac.bicep
     storageAccountName: dlzAttach!.outputs.storageAccountName
     principalId: dlzAttachS3Gateway!.outputs.storageUamiPrincipalId
     assignRole: !skipRoleGrants
+  }
+}
+
+// Mirrored-database auto-bind (Snowflake), dlz-attach: the factory this pass
+// just stamped into the DLZ subscription must be able to read Loom Connection
+// secrets out of the HUB's Key Vault, which lives in a DIFFERENT subscription.
+//
+// This is the third of the three shapes an estate can have a factory in, and it
+// was the missing one: `useSingleDlz` and `useMultiDlz` are both false on
+// `topology='dlz-attach'` (deployLandingZones is true but effectiveTopology is
+// not 'single-sub', so useMultiDlz is true — and `dlzSubscriptionIds` is empty on
+// this path, so its fan-out runs zero iterations). Without this the attached
+// DLZ's factory holds no grant on the vault and every Snowflake mirror on that
+// domain fails at the credential read, the same way it did before #4024.
+//
+// Scope is the HUB admin RG in the HUB subscription — the vault is there, the
+// factory is not. Same cross-sub shape as `dlzAttachHubPeering` /
+// `dlzAttachHubConsoleEnv` above, and for the same reason: this deployment is
+// submitted at the DLZ subscription scope, so anything that must land on the hub
+// has to name it explicitly. The principal comes from the DLZ module's own output
+// because THIS run minted it — so no pre-existing assignment for the triple can
+// exist on a first attach (see the module header on RoleAssignmentExists).
+//
+// No `provisionAdf` term in the gate on purpose: landing-zone/main.bicep already
+// emits an EMPTY `adfFactoryPrincipalId` when no factory was created, and the
+// module skips on an empty principal. Adding the flag would couple this grant to
+// the adopt plan, which on a SECOND attach can legitimately say 'adopt' for a
+// factory in a different domain's landing zone.
+module dlzAttachAdfKeyVaultRbac 'modules/admin-plane/adf-keyvault-rbac.bicep' = if (topology == 'dlz-attach' && dlzAttachHasHubKeyVault && !skipRoleGrants) {
+  name: 'dlz-attach-adf-keyvault-rbac-${attachDomainName}'
+  scope: resourceGroup(effHubSubscriptionId, adminPlaneRgName)
+  params: {
+    keyVaultName: last(split(effHubKeyVaultId, '/'))
+    dataFactoryPrincipalId: dlzAttach!.outputs.adfFactoryPrincipalId
+    skipRoleGrants: skipRoleGrants
   }
 }
 

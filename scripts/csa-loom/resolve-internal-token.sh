@@ -37,22 +37,52 @@
 # Commercial and in Gov, with no extra hop.
 #
 # ── SECRET HYGIENE ─────────────────────────────────────────────────────────────
-# The value is NEVER printed.  Only a sha256 fingerprint (first 12 hex chars)
-# and the length reach stdout / the workflow log — the same comparison the
-# 2026-08-06/07 triage used.  Under GitHub Actions the value is registered with
-# `::add-mask::` before it is written anywhere.
+# `::add-mask::` is a WORKFLOW COMMAND: the runner registers it only if the line
+# reaches the step's output stream.  A caller that redirects this script's stdout
+# (`… --export > /dev/null`) therefore DESTROYS the mask while the stderr `log`
+# lines survive untouched — which is precisely how #4061 published the live token
+# into the job environment of every deploy lane, in a public repo, for weeks.
+#
+# Two consequences, both load-bearing:
+#
+#   * `--export` PRINTS THE VALUE BY DESIGN — that is the `eval` contract.  Its
+#     stdout must never be redirected, piped, or teed.  `eval "$(… --export)"`
+#     is the only correct call shape.  Note that `$(…)` ALSO captures stdout, so
+#     a bare `::add-mask::` line emitted here could never reach the runner
+#     either — under Actions this mode therefore emits the mask as CODE the
+#     `eval` executes, which prints it on the CALLER's stdout where the runner
+#     parses it.  `--export` writes NOTHING to `$GITHUB_ENV`: one mode, one
+#     effect.  The old dual behaviour is precisely what made `--export
+#     > /dev/null` look like a working call site.
+#   * Workflows use `--github-env`, which writes `$GITHUB_ENV` directly and puts
+#     ONLY the mask on stdout.  That removes the SECOND leak — the printed value
+#     — but NOT the first: `$GITHUB_ENV` is job-level environment and the runner
+#     renders it in every later step, so the mask is still the only thing
+#     standing between the token and the log.  Correctness still depends on the
+#     mask landing.  What changed is that there is no longer any reason for a
+#     caller to redirect this mode, and both a runtime check and a static guard
+#     now refuse it if one does.
+#
+# `--fingerprint` and `--rotate` emit only a sha256 fingerprint (first 12 hex
+# chars) and the length — the same comparison the 2026-08-06/07 triage used.
 #
 # ── USAGE ──────────────────────────────────────────────────────────────────────
-#   # 1. Deploy paths — resolve, mask, export, then pass to ARM:
-#   eval "$(scripts/csa-loom/resolve-internal-token.sh --export)"
-#   #   -> exports LOOM_INTERNAL_TOKEN (empty on a greenfield estate)
-#   #   -> under Actions also appends it to $GITHUB_ENV, masked
+#   # 1. GitHub Actions deploy paths — resolve, mask, write $GITHUB_ENV.  Emits
+#   #    no secret value, so it needs NO redirect (and a redirect would eat the
+#   #    mask — see SECRET HYGIENE above):
+#   scripts/csa-loom/resolve-internal-token.sh --github-env
 #   [ -n "$LOOM_INTERNAL_TOKEN" ] && add --parameters "loomInternalTokenValue=$LOOM_INTERNAL_TOKEN"
 #
-#   # 2. Fingerprint only (drift checks, receipts) — never emits the value:
+#   # 2. Shell callers — resolve, mask, export into THIS shell:
+#   eval "$(scripts/csa-loom/resolve-internal-token.sh --export)"
+#   #   -> exports LOOM_INTERNAL_TOKEN (empty on a greenfield estate)
+#   #   -> prints the value; NEVER redirect, pipe, or tee this mode's stdout
+#   #   -> writes nothing to $GITHUB_ENV; use --github-env for that
+#
+#   # 3. Fingerprint only (drift checks, receipts) — never emits the value:
 #   scripts/csa-loom/resolve-internal-token.sh --fingerprint
 #
-#   # 3. Deliberate rotation (the ONLY supported rotation path).  Writes a new
+#   # 4. Deliberate rotation (the ONLY supported rotation path).  Writes a new
 #   #    value to the console secret; the NEXT deploy adopts it:
 #   scripts/csa-loom/resolve-internal-token.sh --rotate
 #
@@ -76,6 +106,98 @@ ADMIN_RG="${ADMIN_RG:-}"
 MODE="${1:---export}"
 
 log() { printf '[resolve-internal-token] %s\n' "$*" >&2; }
+
+# ── Mask plumbing ──────────────────────────────────────────────────────────────
+# `::add-mask::` is a workflow command the runner parses off THIS PROCESS'S
+# STDOUT.  A caller that redirects or pipes our stdout destroys the registration
+# silently — the stderr `log` lines above still appear, so the log looks healthy
+# while the token is published.  That is #4061, verbatim.
+mask() {
+  # `::add-mask::` is LINE-oriented: the runner registers the text up to the
+  # newline and publishes everything after it verbatim. `read_live` strips
+  # `\r\n`, so today the value cannot be multi-line and this loop is defence in
+  # depth — but the $GITHUB_ENV write beside it is heredoc-based precisely
+  # BECAUSE it does not rely on that, and the mask should not be the one place
+  # that does.
+  #
+  # `if` rather than `[ … ] && printf`: under `set -e` a false `&&` list as the
+  # last command in a loop body is an exit, not a skip.
+  if [ -z "${GITHUB_ACTIONS:-}" ]; then return 0; fi
+  printf '%s\n' "$1" | while IFS= read -r _line; do
+    if [ -n "$_line" ]; then printf '::add-mask::%s\n' "$_line"; fi
+  done
+}
+
+# `--export`'s stdout is CAPTURED by the caller's `$(…)` — that is its whole
+# contract — so a mask printed here would be swallowed by the substitution
+# exactly as `> /dev/null` swallowed it.  Emit the registration as CODE instead:
+# the caller's `eval` runs it, so the `::add-mask::` line is written by the
+# CALLER's shell, on the step's real stdout, where the runner parses it.  The
+# value is read back out of the variable the preceding line just exported, so it
+# is never quoted into the log twice.
+emit_eval_mask() {
+  if [ -n "${GITHUB_ACTIONS:-}" ]; then
+    # SC2016 is the POINT: this string is emitted verbatim as code for the
+    # caller's `eval` to run, so `$LOOM_INTERNAL_TOKEN` must NOT expand here.
+    # shellcheck disable=SC2016
+    printf '%s\n' 'printf "::add-mask::%s\n" "$LOOM_INTERNAL_TOKEN"'
+  fi
+}
+
+# Preconditions for --github-env: it must be able to write the env file, and its
+# stdout must actually reach the runner.
+require_github_env() {
+  if [ -z "${GITHUB_ENV:-}" ]; then
+    log "ERROR: --github-env needs \$GITHUB_ENV, which exists only inside a GitHub"
+    log "       Actions step. Outside Actions use: eval \"\$(… --export)\"."
+    exit 1
+  fi
+  # Fail CLOSED on the exact regression this mode exists to prevent.
+  #
+  # LINUX ONLY, gated on `uname`. An earlier revision gated on `[ -d /proc ]` and
+  # claimed that made it "Linux only" — /proc EXISTS on MSYS/Git Bash, so that
+  # gate excluded nothing and the comment asserted a mechanism that was not in
+  # effect. Measured matrix, verdict written on fd 3 so the probe cannot
+  # contaminate the descriptor it is measuring:
+  #
+  #                       Linux (the runner)   MSYS / Git Bash
+  #   fd1 = pipe          clean                clean
+  #   fd1 = /dev/null     CAUGHT               clean   <- false NEGATIVE
+  #   fd1 = regular file  CAUGHT               CAUGHT
+  #   fd1 = >> file       CAUGHT               CAUGHT
+  #
+  # So on MSYS the check silently fails to catch the case it exists for. The
+  # console/tty direction could not be measured here (no /dev/tty available) and
+  # is NOT asserted either way. All four deploy lanes run on ubuntu-latest.
+  #
+  # WHAT IT DOES NOT CATCH ON ANY PLATFORM, stated rather than implied: a pipe,
+  # a `$( )` capture, a named FIFO, or a closed descriptor. Those are
+  # indistinguishable here from the runner's own pipe. The static guard R3 is
+  # what covers them; this is the second layer, not the only one.
+  [ -n "${GITHUB_ACTIONS:-}" ] || return 0
+  # No `2>/dev/null` on the uname: this file's header states there is
+  # deliberately none anywhere in it, and that claim was TRUE on main until this
+  # check added the first one. Beyond the false comment, the construct was the
+  # R7 shape itself — a uname that is missing or fails would have had its stderr
+  # discarded, the comparison would yield non-Linux, and the entire fail-closed
+  # stdout check would be silently skipped. "I could not determine the platform"
+  # must not become "not Linux, do not check".
+  [ "$(uname -s)" = "Linux" ] || return 0
+  [ -e /dev/stdout ] || return 0
+  local how=''
+  if [ /dev/stdout -ef /dev/null ]; then
+    how='redirected to /dev/null'
+  elif [ -f /dev/stdout ]; then
+    how='redirected into a regular file'
+  fi
+  if [ -n "$how" ]; then
+    log "ERROR: this script's stdout is ${how}, which DESTROYS the ::add-mask::"
+    log "       registration and would publish the token into the job environment."
+    log "       Remove the redirect — --github-env prints no secret value, so it"
+    log "       does not need one. (#4061)"
+    exit 1
+  fi
+}
 
 fingerprint() {
   # sha256 of the exact bytes, first 12 hex chars. Matches the comparison used
@@ -116,9 +238,22 @@ if [ -z "$ADMIN_RG" ]; then
       log "ERROR: --rotate needs an existing console. Deploy the estate first."
       exit 1
       ;;
-    *)
+    --github-env)
+      # Still validated even though there is no value to protect here: the point
+      # is to reject the broken CALL SHAPE on every estate, not only on the ones
+      # that happen to hold a token. A catch-all `*)` used to live here, so a new
+      # mode fell through to printing `export LOOM_INTERNAL_TOKEN=''` — silently
+      # doing the wrong thing rather than saying so.
+      require_github_env
+      # Empty is the honest greenfield answer; bicep mints. Nothing to mask.
+      echo "LOOM_INTERNAL_TOKEN=" >> "$GITHUB_ENV"
+      ;;
+    --export)
       echo "export LOOM_INTERNAL_TOKEN=''"
-      if [ -n "${GITHUB_ENV:-}" ]; then echo "LOOM_INTERNAL_TOKEN=" >> "$GITHUB_ENV"; fi
+      ;;
+    *)
+      log "ERROR: unknown mode '$MODE'. Use --export | --github-env | --fingerprint | --rotate."
+      exit 1
       ;;
   esac
   exit 0
@@ -140,7 +275,7 @@ read_live() {
 case "$MODE" in
   --rotate)
     NEW="$(openssl rand -hex 32)"
-    if [ -n "${GITHUB_ACTIONS:-}" ]; then echo "::add-mask::$NEW"; fi
+    mask "$NEW"
     az containerapp secret set -n "$CONSOLE_APP" -g "$ADMIN_RG" \
       --secrets "${SECRET_NAME}=${NEW}" -o none
     NEW_FP="$(fingerprint "$NEW")"
@@ -167,29 +302,49 @@ case "$MODE" in
     fingerprint "$VAL"
     ;;
 
+  --github-env)
+    # THE MODE EVERY WORKFLOW USES. It emits no secret value at all — only the
+    # `::add-mask::` line — so there is nothing a caller could want to discard,
+    # and a caller that discards it anyway is rejected above rather than
+    # silently publishing the token (#4061).
+    require_github_env
+    VAL="$(read_live)"
+    if [ -z "$VAL" ]; then
+      log "The console exists but holds NO '${SECRET_NAME}' secret — bicep will mint one."
+      echo "LOOM_INTERNAL_TOKEN=" >> "$GITHUB_ENV"
+      exit 0
+    fi
+    mask "$VAL"
+    log "ADOPTING live token: fingerprint $(fingerprint "$VAL") len ${#VAL}."
+    # Multi-line-safe heredoc form. The mask registration above is what makes
+    # this safe, and it reaches the runner only because this mode's stdout is
+    # unredirected — the two facts are one fact.
+    {
+      echo "LOOM_INTERNAL_TOKEN<<__LOOM_TOKEN_EOF__"
+      printf '%s\n' "$VAL"
+      echo "__LOOM_TOKEN_EOF__"
+    } >> "$GITHUB_ENV"
+    ;;
+
   --export)
     VAL="$(read_live)"
     if [ -z "$VAL" ]; then
       log "The console exists but holds NO '${SECRET_NAME}' secret — bicep will mint one."
       echo "export LOOM_INTERNAL_TOKEN=''"
-      if [ -n "${GITHUB_ENV:-}" ]; then echo "LOOM_INTERNAL_TOKEN=" >> "$GITHUB_ENV"; fi
       exit 0
     fi
-    if [ -n "${GITHUB_ACTIONS:-}" ]; then echo "::add-mask::$VAL"; fi
-    log "ADOPTING live token: fingerprint $(fingerprint "$VAL") len ${#VAL} (value never printed)."
+    # No mask here: this mode's stdout is captured by the caller's `$(…)`, so a
+    # `::add-mask::` printed here would never reach the runner. It is emitted
+    # below as code the caller's `eval` executes instead.
+    log "ADOPTING live token: fingerprint $(fingerprint "$VAL") len ${#VAL}."
+    # The value IS printed here — that is the eval contract, and it is why this
+    # mode's stdout must never be redirected, piped, or teed.
     printf 'export LOOM_INTERNAL_TOKEN=%q\n' "$VAL"
-    if [ -n "${GITHUB_ENV:-}" ]; then
-      # Multi-line-safe heredoc form; the value is already masked above.
-      {
-        echo "LOOM_INTERNAL_TOKEN<<__LOOM_TOKEN_EOF__"
-        printf '%s\n' "$VAL"
-        echo "__LOOM_TOKEN_EOF__"
-      } >> "$GITHUB_ENV"
-    fi
+    emit_eval_mask
     ;;
 
   *)
-    log "ERROR: unknown mode '$MODE'. Use --export | --fingerprint | --rotate."
+    log "ERROR: unknown mode '$MODE'. Use --export | --github-env | --fingerprint | --rotate."
     exit 1
     ;;
 esac

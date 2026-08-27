@@ -1030,11 +1030,24 @@ const bundle: AppBundle = {
               description:
                 'POST the LabelViolationDetections row to the Sentinel ' +
                 'Logs ingestion endpoint (DCR) and notify the security team. ' +
-                'Backed by the FederationAudit.LabelViolationDetections function.',
-              url: 'https://${sentinelWorkspace}.ods.opinsights.azure.us/api/logs',
+                'Backed by the FederationAudit.LabelViolationDetections function. ' +
+                'The DCE ingestion URI and DCR immutable id are tenant-specific, ' +
+                'so they are named as Key Vault secret REFERENCES rather than ' +
+                'shipped as literals — until they are supplied, the install binds ' +
+                'the notification to the installing operator.',
+              // #4097 — this used to ship
+              // `url: 'https://${sentinelWorkspace}.ods.opinsights.azure.us/api/logs'`.
+              // `${sentinelWorkspace}` has no substitution engine anywhere in the
+              // install path, so that literal reached ARM as a real webhook
+              // receiver pointed at a hostname that cannot exist: a receiver that
+              // COUNTS as one and can never deliver — worse than declaring none.
+              // A bundle cannot know a tenant's DCE, so it names the secret that
+              // holds it (the convention app-casino-analytics/app-direct-lake-
+              // replacement already use) instead of asserting a fake destination.
+              webhookSecretName: 'SENTINEL_DCE_INGESTION_URL',
               method: 'POST',
               source: 'FederationAudit.LabelViolationDetections',
-              dcrImmutableId: '${SENTINEL_DCR_IMMUTABLE_ID}',
+              dcrImmutableIdSecretName: 'SENTINEL_DCR_IMMUTABLE_ID',
               streamName: 'Custom-LoomCrossDomainViolation_CL',
               alsoNotify: { kind: 'teams', channel: 'Department Security Operations' },
             },

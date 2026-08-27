@@ -17,6 +17,15 @@
  * anything failing. The attribute makes the state machine observable, and the
  * test additionally asserts the accent and the badge differ, so the distinction
  * has to survive on three channels at once.
+ *
+ * ── THE SYNAPSE OVERLAY REPLACES THE MARK, IT DOES NOT STACK ON IT ─────────
+ * When `data.synapse` is present (the Synapses tab) the accent, the badge, the
+ * ring and the WIDTH come from the synapse mark, and `data-synapse-layer` is
+ * emitted alongside `data-brain-state`. It replaces rather than adds: a second
+ * badge would be the badge overlap `ux-baseline.md` names as a defect, and a
+ * node carrying both "Unreachable" and "Prune" says one thing twice. When it is
+ * absent — the Graph tab — every line below behaves exactly as it did before the
+ * overlay existed, and the ABSENCE of the attribute is itself assertable.
  */
 
 import * as React from 'react';
@@ -37,6 +46,7 @@ import {
 import { CanvasNode, type CanvasVisual } from '@/lib/components/canvas/canvas-node-kit';
 import type { WireNode } from '@/app/api/admin/brain/_lib/wire';
 import { nodeVisual, type NodeVisualState } from './model';
+import type { SynapseNodeMark } from './synapse-model';
 
 /** Data carried on each React Flow node. */
 export interface BrainNodeData extends Record<string, unknown> {
@@ -45,6 +55,16 @@ export interface BrainNodeData extends Record<string, unknown> {
   readonly findingCount: number;
   /** Derived cost attributed to this node, or null when nothing priced it. */
   readonly derivedCostUsd: number | null;
+  /**
+   * The SYNAPSE mark, when the synapse overlay is active.
+   *
+   * Absent on the plain Graph tab, so that surface renders byte-identically to
+   * how it did before the overlay existed. Present on the Synapses tab, where it
+   * REPLACES the accent, the badge, the error ring and the node width — it does
+   * not layer a second badge on top, because `ux-baseline.md` node compactness
+   * allows exactly one on-node badge and two would be the overlap the rule names.
+   */
+  readonly synapse?: SynapseNodeMark;
 }
 
 function glyphFor(state: NodeVisualState, kind: WireNode['kind']): JSX.Element {
@@ -73,19 +93,21 @@ export function shortType(resourceType: string | undefined, kind: WireNode['kind
 function BrainCanvasNodeImpl({ data, selected }: NodeProps) {
   const d = data as unknown as BrainNodeData;
   const v = nodeVisual(d.node, d.coverageConfigured);
+  const syn = d.synapse;
 
   const visual: CanvasVisual = {
     icon: glyphFor(v.state, d.node.kind),
     // `external` is the neutral category; the accent below overrides its tint,
     // so the category only selects the gradient shape.
     category: 'external',
-    accent: v.accent,
+    accent: syn ? syn.accent : v.accent,
   };
 
   // ONE badge (ux-baseline node compactness). Cost and finding counts are richer
   // signals but they go to the tooltip + the details panel — stacking them on
-  // the node is exactly the overlap the rule forbids.
-  const badge = v.badge;
+  // the node is exactly the overlap the rule forbids. Under the synapse overlay
+  // the LAYER is the one badge; the reachability badge is not additionally shown.
+  const badge = syn ? syn.badge : v.badge;
 
   const description =
     d.derivedCostUsd !== null
@@ -101,9 +123,19 @@ function BrainCanvasNodeImpl({ data, selected }: NodeProps) {
       data-brain-node-id={d.node.id}
       data-brain-unreachable={String(d.node.unreachableConfigured)}
       data-brain-always-on={String(d.node.alwaysOn)}
-      data-brain-accent={v.accent}
+      data-brain-accent={syn ? syn.accent : v.accent}
       data-brain-badge={badge ?? ''}
-      title={v.reason}
+      // The synapse layer is observable on the same terms, and only when the
+      // overlay is active — an absent attribute is how the Graph tab proves it
+      // is NOT painting a synapse verdict it was never given.
+      {...(syn
+        ? {
+            'data-synapse-layer': syn.layer,
+            'data-synapse-width': String(syn.widthPx),
+            'data-synapse-ring': String(syn.ring),
+          }
+        : {})}
+      title={syn ? syn.reason : v.reason}
     >
       <Handle type="target" position={Position.Left} style={{ opacity: 0 }} />
       <CanvasNode
@@ -111,7 +143,10 @@ function BrainCanvasNodeImpl({ data, selected }: NodeProps) {
         visual={visual}
         selected={selected}
         status={v.status}
-        error={v.error}
+        error={syn ? syn.ring : v.error}
+        // Only the overlay sizes a node. Without it the shared kit's own compact
+        // default applies, so the Graph tab is untouched by this file's change.
+        {...(syn ? { width: syn.widthPx } : {})}
         typeLabel={shortType(d.node.resourceType, d.node.kind)}
         {...(description ? { description } : {})}
         {...(badge

@@ -27,7 +27,7 @@ import { listContainers } from '@/lib/azure/cosmos-account-client';
 // One shared credential path (lib/azure/connection-auth) — this route used to
 // carry a private copy of this logic, which is exactly why the replication path
 // could diverge from it and silently ignore the stored connection.
-import { resolveSqlAuth } from '@/lib/azure/connection-auth';
+import { resolveSqlAuth, mirrorBindingMismatch } from '@/lib/azure/connection-auth';
 import { withSession } from '@/lib/api/route-toolkit';
 import { MIRROR_SQL_FAMILY, MIRROR_PG_FAMILY, MIRROR_COSMOS_FAMILY, MIRROR_ADF_COPY_FAMILY } from '@/lib/azure/mirror-engine';
 import { listSnowflakeTables } from '@/lib/azure/snowflake-adf';
@@ -63,6 +63,15 @@ export const GET = withSession<{ id: string }>(async (req: NextRequest, { sessio
     const connectionId: string | undefined = st.connectionId || undefined;
 
     if (!database) return apiError('this mirror has no source database set; edit the mirror first', 400);
+
+    // Same refusal as the pre-create enumerator, for the SAME reason: the family
+    // dispatch below reads `sourceType` only, so a mirror typed Azure SQL with a
+    // Snowflake connection bound would be read over TDS against a hostname this
+    // platform constructs. Checked before any branch dials (R7).
+    {
+      const mismatch = await mirrorBindingMismatch(s.claims.oid, sourceType, connectionId);
+      if (mismatch) return NextResponse.json({ ok: false, gate: true, error: mismatch.message }, { status: 200 });
+    }
 
     let tables: Array<{ schema: string; table: string }> = [];
     if (MIRROR_SQL_FAMILY.has(sourceType)) {

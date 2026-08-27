@@ -60,10 +60,13 @@ Source UI (grounded in Microsoft Learn):
   (`connections-store.ts`); the per-item `tables` route resolves the secret server-side
   via `getKeyVaultSecretValue` and never returns/stores it in plaintext.
 - **Start** dispatches to **ADF ChangeDataCapture** (`adfcdcs` ARM resource) landing
-  Delta in ADLS Bronze when `LOOM_ADF_NAME` + `LOOM_MIRROR_SOURCE_LINKED_SERVICE` +
-  `LOOM_MIRROR_ADLS_LINKED_SERVICE` are set; otherwise the built-in TDS/PG/Cosmos →
-  CSV-in-Bronze engine runs. **No Microsoft Fabric** on either path
-  (`no-fabric-dependency.md`).
+  Delta in ADLS Bronze when `LOOM_ADF_NAME` + `LOOM_MIRROR_SOURCE_LINKED_SERVICE`
+  are set; otherwise the built-in TDS/PG/Cosmos → CSV-in-Bronze engine runs. The
+  **ADLS Bronze sink linked service is auto-bound** (`loom_mirror_sink_adls`,
+  created from `LOOM_BRONZE_URL` with factory-MI auth by
+  `lib/azure/mirror-adf-shared.ts`) and is NOT a prerequisite;
+  `LOOM_MIRROR_ADLS_LINKED_SERVICE` only pins a brownfield replacement. **No
+  Microsoft Fabric** on either path (`no-fabric-dependency.md`).
 - **Bicep:** Console UAMI granted Storage Blob Data Contributor on the lakehouse SA
   (`synapse-storage-rbac.bicep`, default-on for the CSV engine writes); ADF system MI
   already has Storage Blob Data Contributor (`adf.bicep`) for the Delta writes; Key
@@ -99,10 +102,17 @@ fixed allowlist carried into `mirroring.json` + item state and consumed by Start
 Insert/update fidelity for PG/Cosmos matches the SQL Change-Tracking engine;
 physical-delete propagation is a disclosed follow-up across all watermark engines.
 
-New env vars (default-empty / `1h`, threaded root `main.bicep` → `admin-plane`):
-`LOOM_MIRROR_SNOWFLAKE_LINKED_SERVICE`, `LOOM_MIRROR_COPY_CADENCE`. The two
-pre-existing linked-service vars are now threaded from the root template too.
+Env vars (default-empty / `1h`, threaded root `main.bicep` → `admin-plane`):
+`LOOM_MIRROR_COPY_CADENCE` is the operator knob.
+`LOOM_MIRROR_SOURCE_LINKED_SERVICE` is a real prerequisite for the ADF CDC engine.
+`LOOM_MIRROR_SNOWFLAKE_LINKED_SERVICE` and `LOOM_MIRROR_ADLS_LINKED_SERVICE` are
+**brownfield overrides** — empty is the supported default and both bindings are
+created by Loom (`snowflake-adf.ts` / `mirror-adf-shared.ts`).
 
 `lib/azure/__tests__/mirror-adf-copy.test.ts` locks the Copy spec (Delete→Copy
-delete-then-copy, SnowflakeSource → ParquetSink, schedule trigger, honest gates)
-and asserts PostgreSQL never reaches `upsertAdfCdc`.
+delete-then-copy, SnowflakeSource → ParquetSink, schedule trigger, the auto-bound
+ADLS sink, the pinned-override path, and the lake-level honest gate) and asserts
+PostgreSQL never reaches `upsertAdfCdc`.
+`scripts/ci/__tests__/adf-keyvault-grant-reachable.test.mjs` locks that the
+factory's Key Vault Secrets User grant exists in the SHIPPED compiled ARM and that
+its condition is one the checked-in param files can take.

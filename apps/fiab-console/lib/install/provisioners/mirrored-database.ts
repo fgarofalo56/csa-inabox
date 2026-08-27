@@ -123,19 +123,19 @@ async function provisionAdfCdc(input: any, steps: string[]): Promise<ProvisionRe
     steps.push(`Linked service '${srcLs}' → ${server}/${database} (factory MI auth).`);
 
     // 2. Sink linked service — ADLS Gen2 via the factory's managed identity.
-    // The DFS host is per-cloud (dfsUrl → cloud-endpoints.ts). A hard-coded
-    // Commercial host here writes a dead sink into a SOVEREIGN factory: ADF
-    // accepts the linked service, so the provision reports green and the copy
-    // has nowhere to land (#4063).
-    const sinkUrl = dfsUrl(adlsAccount);
+    //    The DFS host comes from `dfsUrl()` (cloud-endpoints.ts), never a
+    //    literal. This line used to hard-code the Commercial DFS host, so every
+    //    GCC-High / IL5 / DoD mirror bound to a hostname that does not resolve in
+    //    those boundaries and the Copy activity failed at run time on an estate
+    //    whose lake was fine (cloud-parity.md).
     await upsertLinkedService(sinkLs, {
       name: sinkLs,
       properties: {
         type: 'AzureBlobFS',
-        typeProperties: { url: sinkUrl },
+        typeProperties: { url: dfsUrl(adlsAccount) },
       },
     } as any);
-    steps.push(`Linked service '${sinkLs}' → ${sinkUrl} (factory MI auth).`);
+    steps.push(`Linked service '${sinkLs}' → ${dfsUrl(adlsAccount)} (factory MI auth).`);
 
     // 3. One source+sink dataset + copy activity per mounted table.
     const useTables = tables.length ? tables : ['dbo.*'];

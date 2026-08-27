@@ -779,6 +779,22 @@ module adf 'adf.bicep' = if (adfOn) {
   }
 }
 
+// Interim Blob SCRATCH account for Snowflake mirror unloads (#4083). Deployed
+// alongside the factory because it is only ever reachable through it, and gated
+// on the same `adfOn` — with no factory there is no Copy pipeline to stage for.
+// The ADF factory MSI grant is why this runs AFTER `adf`: it needs the factory's
+// principal id, which only exists once the factory does.
+module mirrorStaging 'mirror-staging.bicep' = if (adfOn) {
+  name: 'dlz-mirror-staging'
+  params: {
+    location: location
+    complianceTags: complianceTags
+    consolePrincipalId: consolePrincipalId
+    adfPrincipalId: adfOn ? adf!.outputs.factoryPrincipalId : ''
+    skipRoleGrants: skipRoleGrants
+  }
+}
+
 // =====================================================================
 // (Azure Analysis Services is provisioned by the unified `aas` module above
 //  — section 8b. The Power Query ingest refresh phase and the Model view XMLA
@@ -1044,6 +1060,12 @@ output adfFactoryId string = adfOn ? adf!.outputs.factoryId : ''
 output adfFactoryName string = adfOn ? adf!.outputs.factoryName : ''
 output approvalLogicAppName string = approvalLogicAppEnabled ? approvalLogicApp!.outputs.workflowName : ''
 output adfFactoryPrincipalId string = adfOn ? adf!.outputs.factoryPrincipalId : ''
+// Snowflake mirror staging scratch (#4083). The console is told this name by a
+// deterministic expression in the ROOT template rather than by this output —
+// the DLZ deploys after admin-plane, so these outputs are not available to the
+// console env block. Exported anyway so a caller can assert the two agree.
+output mirrorStagingAccountName string = adfOn ? mirrorStaging!.outputs.stagingAccountName : ''
+output mirrorStagingContainerName string = adfOn ? mirrorStaging!.outputs.stagingContainerName : ''
 // CSA Loom semantic-model AAS (opt-in) — empty when enableAas is false. One
 // server backs both the Model view XMLA write path and the Power Query ingest
 // refresh. xmlaEndpoint → LOOM_AAS_XMLA_ENDPOINT; aasConnectionString →

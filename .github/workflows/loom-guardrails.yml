@@ -27,6 +27,17 @@ on:
   # calls inside scripts/ci resolve FIXED PR numbers, not the current one), so
   # every guard behaves identically under a dispatch.
   workflow_dispatch:
+  # MERGE QUEUE. `guardrails` is a REQUIRED context, so it must report on a merge
+  # group or the group sits pending until the queue times out and ejects the PR.
+  #
+  # Every guard here is a static scan of the checked-out tree — no step carries an
+  # `if:` keyed to `github.event_name` (the only such reference in this file is the
+  # concurrency block below and a comment at ~line 840), and the same "no step reads
+  # PR context" property that makes a dispatch safe makes a merge group safe. The
+  # merge-group commit is the exact tree about to land, which is the RIGHT thing for
+  # a static guard to judge — strictly better than the PR head, which has not yet
+  # been combined with its batch-mates.
+  merge_group:
 
 permissions:
   contents: read
@@ -1051,6 +1062,19 @@ jobs:
       - name: 'acr-login-retry-adoption (a bare `az acr login` reds a deploy on a known transient)'
         if: ${{ !cancelled() }}
         run: node scripts/ci/check-acr-login-retry-adoption.mjs
+      # The #4067 floor (3 consecutive samples, 2s apart) is enforced INSIDE
+      # acr-dataplane-ready.sh, and the reason an opt-out is permitted at all is
+      # that the flag is "ugly and greppable — one grep finds every weakening".
+      # Nothing performed that grep, so greppability was a property a human had
+      # to remember to exercise. This performs it, keyed to the SHAPE rather
+      # than the spelling: call sites must pass only {--acr, --timeout-seconds,
+      # --interval-seconds}, so a second opt-out spelled anything else is caught
+      # too. Adoption is zero over 19 invocation sites, so this ratchets at 0.
+      - name: 'acr-dataplane-probe-args (an argument at a call site can dial the #4067 floor away)'
+        if: ${{ !cancelled() }}
+        run: |
+          node scripts/ci/check-acr-dataplane-probe-args.mjs --self-test
+          node scripts/ci/check-acr-dataplane-probe-args.mjs
       # cosign's INTERNAL retry holds one OIDC token, so on a Sigstore hiccup it
       # retries until the token EXPIRES and reports `expired_token` — a network
       # transient dressed as a credential fault (run 31496454872: a TLS handshake

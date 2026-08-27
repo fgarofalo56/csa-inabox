@@ -46,6 +46,20 @@ on:
   # (`range=HEAD~1...HEAD`), and the release commit DOES touch
   # apps/fiab-console/package.json — so the full real `next build` + vitest run.
   workflow_dispatch:
+  # MERGE QUEUE. `next build (node 20)` and `vitest (node 20)` are both REQUIRED
+  # contexts, and `vitest (node 20)` is additionally the ROLL GATE. A required
+  # context that never reports on a merge group leaves the group PENDING until the
+  # queue times out and ejects the PR, so without this trigger the queue would
+  # stall on every batch.
+  #
+  # Bare on purpose — this workflow is not path-filtered at the `on:` level for
+  # exactly the reason spelled out above, and a merge group needs that property
+  # even more than a PR does.
+  #
+  # See the change-detection steps below: `merge_group` gets its OWN range arm.
+  # The non-PR `HEAD~1...HEAD` fallback is WRONG for a merge group and would have
+  # reported both of these required checks green over an unbuilt console.
+  merge_group:
 
 # CONCURRENCY: keyed per-COMMIT on main, per-ref on PRs.
 #
@@ -62,9 +76,18 @@ on:
 # to completion — cancel-in-progress is FALSE there. On PR refs a new push
 # genuinely supersedes the old one, so cancelling still applies (and still
 # saves the CI minutes).
+#
+# MERGE GROUPS ARE ALSO EXEMPT FROM CANCELLATION. `github.ref` for a merge group
+# is a unique `refs/heads/gh-readonly-queue/**` ref, so in principle nothing
+# shares the group — but "in principle unique" is exactly the assumption that
+# produced #3426, where a cancelled REQUIRED check read as a pass when it was an
+# ABSENCE. In a merge queue that absence is worse than on main: the group never
+# reaches a verdict, the queue times it out, and the PR is ejected for a reason
+# nothing in the run list explains. Excluding merge_group here costs nothing and
+# removes the failure mode entirely.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}${{ github.event_name == 'push' && github.sha || '' }}
-  cancel-in-progress: ${{ github.event_name != 'push' }}
+  cancel-in-progress: ${{ github.event_name != 'push' && github.event_name != 'merge_group' }}
 
 permissions:
   contents: read
@@ -98,6 +121,30 @@ jobs:
               git fetch --no-tags --deepen=200 origin "${{ github.base_ref }}" >/dev/null 2>&1 || true
             fi
             range="$base...HEAD"
+          elif [ "${{ github.event_name }}" = "merge_group" ]; then
+            # A merge group is a SPECULATIVE COMBINATION of up to N queued PRs,
+            # built on a temporary refs/heads/gh-readonly-queue/** branch. The
+            # `HEAD~1...HEAD` fallback below is WRONG here and dangerously so:
+            # this repo squash-merges, so each queued PR contributes ONE commit,
+            # and HEAD~1...HEAD would see only the LAST PR in the batch. With a
+            # batch of five, a console change in the first four would be
+            # invisible and this REQUIRED check would report green having built
+            # and tested nothing — the #3783 defect, reintroduced by a new route.
+            #
+            # base_sha is the commit the WHOLE group was built on, so
+            # base_sha...HEAD covers every PR in the batch.
+            mg_base="${{ github.event.merge_group.base_sha }}"
+            if [ -z "$mg_base" ]; then
+              # Never silently narrow. If the payload did not carry a base we do
+              # not KNOW what the batch contains, so we build everything — the
+              # same fail-open direction taken everywhere else in this step. The
+              # sentinel below cannot resolve, so the fail-open branch fires and
+              # names this cause in the log rather than inventing another.
+              echo "::warning::merge_group payload carried no base_sha, so the batch cannot be bounded — building/testing everything rather than reporting this required check green over an unexamined tree."
+              range="__merge_group_base_sha_missing__"
+            else
+              range="$mg_base...HEAD"
+            fi
           else
             range="HEAD~1...HEAD"
           fi
@@ -247,6 +294,30 @@ jobs:
               git fetch --no-tags --deepen=200 origin "${{ github.base_ref }}" >/dev/null 2>&1 || true
             fi
             range="$base...HEAD"
+          elif [ "${{ github.event_name }}" = "merge_group" ]; then
+            # A merge group is a SPECULATIVE COMBINATION of up to N queued PRs,
+            # built on a temporary refs/heads/gh-readonly-queue/** branch. The
+            # `HEAD~1...HEAD` fallback below is WRONG here and dangerously so:
+            # this repo squash-merges, so each queued PR contributes ONE commit,
+            # and HEAD~1...HEAD would see only the LAST PR in the batch. With a
+            # batch of five, a console change in the first four would be
+            # invisible and this REQUIRED check would report green having built
+            # and tested nothing — the #3783 defect, reintroduced by a new route.
+            #
+            # base_sha is the commit the WHOLE group was built on, so
+            # base_sha...HEAD covers every PR in the batch.
+            mg_base="${{ github.event.merge_group.base_sha }}"
+            if [ -z "$mg_base" ]; then
+              # Never silently narrow. If the payload did not carry a base we do
+              # not KNOW what the batch contains, so we build everything — the
+              # same fail-open direction taken everywhere else in this step. The
+              # sentinel below cannot resolve, so the fail-open branch fires and
+              # names this cause in the log rather than inventing another.
+              echo "::warning::merge_group payload carried no base_sha, so the batch cannot be bounded — building/testing everything rather than reporting this required check green over an unexamined tree."
+              range="__merge_group_base_sha_missing__"
+            else
+              range="$mg_base...HEAD"
+            fi
           else
             range="HEAD~1...HEAD"
           fi
