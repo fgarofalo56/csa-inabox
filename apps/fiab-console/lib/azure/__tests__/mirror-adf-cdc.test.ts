@@ -11,10 +11,12 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 
 const upsertAdfCdc = vi.fn(async () => ({ name: 'x', properties: {} }));
 const startAdfCdc = vi.fn(async () => {});
+const upsertLinkedService = vi.fn(async (n: string) => ({ name: n, properties: { type: 'AzureBlobFS' } }));
 
 vi.mock('../adf-client', () => ({
   upsertAdfCdc: (...a: any[]) => upsertAdfCdc(...a),
   startAdfCdc: (...a: any[]) => startAdfCdc(...a),
+  upsertLinkedService: (...a: any[]) => upsertLinkedService(...a),
   adfCdcConfigGate: () =>
     process.env.LOOM_ADF_NAME && process.env.LOOM_SUBSCRIPTION_ID && process.env.LOOM_DLZ_RG
       ? null
@@ -57,11 +59,13 @@ describe('runMirrorAdfCdc', () => {
   beforeEach(() => {
     upsertAdfCdc.mockClear();
     startAdfCdc.mockClear();
+    upsertLinkedService.mockClear();
     process.env.LOOM_ADF_NAME = 'adf-loom';
     process.env.LOOM_SUBSCRIPTION_ID = 'sub';
     process.env.LOOM_DLZ_RG = 'rg';
     process.env.LOOM_MIRROR_SOURCE_LINKED_SERVICE = 'ls-src';
     process.env.LOOM_MIRROR_ADLS_LINKED_SERVICE = 'ls-adls';
+    process.env.LOOM_BRONZE_URL = 'https://acct.dfs.core.windows.net/bronze';
   });
   afterEach(() => { process.env = { ...saved }; });
 
@@ -98,13 +102,42 @@ describe('runMirrorAdfCdc', () => {
     expect(spec.sourceConnectionsInfo[0].connection.linkedServiceType).toBe('SqlServer');
   });
 
-  it('gates honestly when the ADLS linked service is unset', async () => {
+  it('AUTO-CREATES the Delta sink linked service when none is pinned', async () => {
+    // Locks the same asymmetry the Copy path had: the CDC engine demanded
+    // LOOM_MIRROR_ADLS_LINKED_SERVICE, which no shipped deployment sets, for a
+    // sink Loom can compose from its own LOOM_BRONZE_URL.
     delete process.env.LOOM_MIRROR_ADLS_LINKED_SERVICE;
+    const r = await runMirrorAdfCdc('abcd1234-ef56-7890', 'ws1', SRC, TABLES, 'note');
+    expect(r.ok).toBe(true);
+    const sink = upsertLinkedService.mock.calls.find(
+      ([n]) => n === 'loom_mirror_sink_adls',
+    ) as any[] | undefined;
+    expect(sink).toBeTruthy();
+    expect(sink![1].properties.type).toBe('AzureBlobFS');
+    expect(sink![1].properties.typeProperties.url).toBe('https://acct.dfs.core.windows.net');
+    const [, spec] = upsertAdfCdc.mock.calls[0] as any[];
+    expect(spec.targetConnectionsInfo[0].connection.linkedService.referenceName).toBe('loom_mirror_sink_adls');
+  });
+
+  it('gates on the LAKE, never on a linked-service env var, when Bronze is unwired', async () => {
+    delete process.env.LOOM_MIRROR_ADLS_LINKED_SERVICE;
+    delete process.env.LOOM_BRONZE_URL;
     const r = await runMirrorAdfCdc('id', 'ws', SRC, TABLES, 'note');
     expect(r.ok).toBe(false);
     expect(r.status).toBe('Gated');
     expect(upsertAdfCdc).not.toHaveBeenCalled();
-    expect(r.gate?.message).toContain('LOOM_MIRROR_ADLS_LINKED_SERVICE');
+    expect(r.gate?.missing).toBe('LOOM_BRONZE_URL');
+    expect(r.gate?.message).not.toContain('LOOM_MIRROR_ADLS_LINKED_SERVICE');
+  });
+
+  it('still gates on the SOURCE linked service, which only the operator can supply', async () => {
+    delete process.env.LOOM_MIRROR_SOURCE_LINKED_SERVICE;
+    const r = await runMirrorAdfCdc('id', 'ws', SRC, TABLES, 'note');
+    expect(r.ok).toBe(false);
+    expect(r.gate?.missing).toBe('LOOM_MIRROR_SOURCE_LINKED_SERVICE');
+    // The message must not re-introduce the sink as a prerequisite.
+    expect(r.gate?.message).not.toContain('set LOOM_MIRROR_ADLS_LINKED_SERVICE');
+    expect(upsertAdfCdc).not.toHaveBeenCalled();
   });
 
   it('gates when no tables are selected', async () => {

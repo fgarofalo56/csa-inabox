@@ -768,13 +768,55 @@ describe('runMirrorAdfCopy (Snowflake)', () => {
     expect(trgSpec.properties.typeProperties.maxConcurrency).toBe(1);
   });
 
-  it('gates honestly when the ADLS sink linked service is unset', async () => {
+  it('AUTO-CREATES the ADLS Bronze sink when no linked service is pinned', async () => {
+    // The defect this locks: the Snowflake path used to GATE here, demanding
+    // LOOM_MIRROR_ADLS_LINKED_SERVICE — a value no shipped deployment sets and
+    // that Loom can compose itself from LOOM_BRONZE_URL. The SQL mirror path has
+    // always auto-created its own sink; this is the asymmetry closed.
     delete process.env.LOOM_MIRROR_ADLS_LINKED_SERVICE;
+    const r = await runMirrorAdfCopy('id', 'ws', SNOW, TABLES, 'note');
+    expect(r.ok).toBe(true);
+    expect(r.status).toBe('Running');
+    const sink = upsertLinkedService.mock.calls.find(
+      ([n]) => n === 'loom_mirror_sink_adls',
+    ) as any[] | undefined;
+    expect(sink).toBeTruthy();
+    expect(sink![1].properties.type).toBe('AzureBlobFS');
+    // Sovereign-correct by construction: the host comes from dfsSuffix(), and
+    // there is NO credential field — the factory's own MI authenticates.
+    expect(sink![1].properties.typeProperties.url).toBe('https://acct.dfs.core.windows.net');
+    expect(JSON.stringify(sink![1])).not.toContain('SecureString');
+    // ...and the Parquet sink datasets bind to it.
+    const sinkDs = upsertDataset.mock.calls.find(
+      ([, spec]: any[]) => spec.properties.type === 'Parquet',
+    ) as any[];
+    expect(sinkDs[1].properties.linkedServiceName.referenceName).toBe('loom_mirror_sink_adls');
+    expect(r.note).toContain('auto-bound by Loom');
+  });
+
+  it('honours an operator-PINNED ADLS sink instead of creating one', async () => {
+    process.env.LOOM_MIRROR_ADLS_LINKED_SERVICE = 'ls-adls-byo';
+    const r = await runMirrorAdfCopy('id', 'ws', SNOW, TABLES, 'note');
+    expect(r.ok).toBe(true);
+    expect(upsertLinkedService.mock.calls.some(([n]) => n === 'loom_mirror_sink_adls')).toBe(false);
+    const sinkDs = upsertDataset.mock.calls.find(
+      ([, spec]: any[]) => spec.properties.type === 'Parquet',
+    ) as any[];
+    expect(sinkDs[1].properties.linkedServiceName.referenceName).toBe('ls-adls-byo');
+    expect(r.note).toContain('pinned by LOOM_MIRROR_ADLS_LINKED_SERVICE');
+  });
+
+  it('gates on the LAKE, never on a linked-service env var, when Bronze is unwired', async () => {
+    delete process.env.LOOM_MIRROR_ADLS_LINKED_SERVICE;
+    delete process.env.LOOM_BRONZE_URL;
     const r = await runMirrorAdfCopy('id', 'ws', SNOW, TABLES, 'note');
     expect(r.ok).toBe(false);
     expect(r.status).toBe('Gated');
     expect(upsertPipeline).not.toHaveBeenCalled();
-    expect(r.gate?.message).toContain('LOOM_MIRROR_ADLS_LINKED_SERVICE');
+    expect(r.gate?.missing).toBe('LOOM_BRONZE_URL');
+    // The remediation names the DEPLOY, not a linked service the operator would
+    // have to hand-build — that instruction is the thing this change removed.
+    expect(r.gate?.message).not.toContain('LOOM_MIRROR_ADLS_LINKED_SERVICE');
     // ...and it must NOT tell the operator to go make a Snowflake linked
     // service, which is the thing Loom now does for them.
     expect(r.gate?.message).not.toContain('set LOOM_MIRROR_SNOWFLAKE_LINKED_SERVICE');

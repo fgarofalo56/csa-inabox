@@ -42,6 +42,9 @@ import {
 import { snowflakeDatasetKind } from '@/lib/azure/snowflake-adf';
 import { getAccountName, pathToHttpsUrl } from '@/lib/azure/adls-client';
 import { dfsSuffix } from '@/lib/azure/cloud-endpoints';
+// ONE owner for the Bronze sink linked service, shared with the mirror engine,
+// so the migration copy and a mirror can never sink through different bindings.
+import { ensureMirrorAdlsLinkedService } from '@/lib/azure/mirror-adf-shared';
 import {
   listSparkPools, submitLivyBatch, getLivyStatement,
 } from '@/lib/azure/synapse-dev-client';
@@ -105,10 +108,18 @@ function bronzeConfigured(): boolean {
   try { getAccountName(); return true; } catch { return false; }
 }
 
-/** The pre-existing ADF AzureBlobFS (ADLS) linked service to bind, or null. */
-function adlsLinkedService(): string | null {
-  const v = process.env.LOOM_MIRROR_ADLS_LINKED_SERVICE;
-  return v && v.trim() ? v.trim() : null;
+/**
+ * The ADF AzureBlobFS (ADLS) linked service the copy sinks through.
+ *
+ * `LOOM_MIRROR_ADLS_LINKED_SERVICE` is an OVERRIDE, never a prerequisite — same
+ * contract as in the mirror engine, and the same module does the work, so the
+ * two paths can never disagree about which linked service the Bronze account is
+ * reached through. When it is unset (every shipped deployment), Loom creates
+ * `loom_mirror_sink_adls` from LOOM_BRONZE_URL with factory-MI auth.
+ */
+async function adlsLinkedService(): Promise<string | null> {
+  const sink = await ensureMirrorAdlsLinkedService();
+  return 'gate' in sink ? null : sink.linkedServiceName;
 }
 
 /**
@@ -276,8 +287,15 @@ async function probeStagingLinkedService(): Promise<StagingProbe> {
 
 /**
  * Pre-flight gate for the copy. Returns an honest gate when a prerequisite is
- * missing (ADF factory, ADLS sink linked service, Bronze, or an unsupported
- * source that has no default-path ADF Copy connector), else null.
+ * missing (ADF factory, Bronze, or an unsupported source that has no
+ * default-path ADF Copy connector), else null.
+ *
+ * The ADLS SINK linked service is deliberately NOT checked here any more: it is
+ * created on demand from LOOM_BRONZE_URL at copy time
+ * (`ensureMirrorAdlsLinkedService`), so demanding it was an
+ * `auto-bind-by-default.md` §5 violation — a value the platform holds, asked of
+ * the operator. `bronzeConfigured()` above already covers the only genuine
+ * prerequisite behind it.
  */
 export function copyGate(sourceType: MigrationSourceType): CopyGate | null {
   const adf = adfConfigGate();
@@ -293,14 +311,6 @@ export function copyGate(sourceType: MigrationSourceType): CopyGate | null {
       missing: 'LOOM_BRONZE_URL',
       message:
         'The Bronze landing zone is not configured. Set LOOM_BRONZE_URL to the deployment ADLS Gen2 Bronze container (platform/fiab/bicep/modules/landing-zone/storage*.bicep).',
-    };
-  }
-  const adlsLs = adlsLinkedService();
-  if (!adlsLs) {
-    return {
-      missing: 'LOOM_MIRROR_ADLS_LINKED_SERVICE',
-      message:
-        'The ADLS sink linked service is not set. Point LOOM_MIRROR_ADLS_LINKED_SERVICE at the AzureBlobFS linked service for the deployment Bronze account (the same one the mirror engine uses).',
     };
   }
   const supported = sourceHasCopyConnector(sourceType) && sourceLinkedService(sourceType);
@@ -793,7 +803,22 @@ export async function startCopyIn(
   }
 
   const sourceLs = sourceLinkedService(plan.sourceType)!;
-  const adlsLs = adlsLinkedService()!;
+  // Bound (and created if absent) here rather than gated on. A null can only
+  // mean the Bronze binding vanished between `copyGate` and now, so it reports
+  // that rather than asserting a missing env var it never checked (R7).
+  const adlsLs = await adlsLinkedService();
+  if (!adlsLs) {
+    return {
+      ok: false,
+      gate: {
+        missing: 'LOOM_BRONZE_URL',
+        message:
+          'The ADLS Bronze sink linked service could not be bound because the Bronze landing zone is not ' +
+          'configured (LOOM_BRONZE_URL). It is produced by the landing-zone deploy — no linked service has to be ' +
+          'hand-created.',
+      },
+    };
+  }
 
   // Can this deployment actually MOVE a row? Decided before anything is
   // authored: the pre-#4087 engine authored an invalid pairing unconditionally,
