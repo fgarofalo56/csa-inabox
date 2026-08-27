@@ -416,6 +416,9 @@ param observabilityConfig object = {}
 @description('Deploy ADX shared cluster (admin-plane) + per-DLZ ADX databases. Backs the RTI editor family — Eventhouse, KQL Database, KQL Queryset, KQL Dashboard, Eventstream. Default on as of 2026-05-27 (sweep-rti). Set false to skip ~$140/mo Dev SKU cluster.')
 param adxEnabled bool = true
 
+@description('ADX cluster tuning bag (R0) — passed through to admin-plane/main.bicep adxConfig (typed there as adxConfigT). {} (default) = the shared admin-plane cluster keeps its Dev SKU: Dev(No SLA)_Standard_E2a_v4 on Commercial, which admin-plane substitutes with the LIVE-verified Dev(No SLA)_Standard_D11_v2 on GCC-High / IL5 where the E2a_v4 VM is not offered. Set adxSkuName to move the cluster OFF a SKU Azure has no capacity to start: `az kusto cluster start` answering InsufficientResourcesForSubscription is a capacity condition that no retry and no role grant clears, and until this bag was threaded NOTHING an operator could set reached the SKU — every lane deploys THIS root, and assigning adxConfig in a bicepparam failed BCP259 (#4122; GCC-High red on a Stopped adx-csa-loom-fmezxj since 2026-08-11). Also carries adxEnableOptimizedAutoscale / adxAutoscaleMinimum / adxAutoscaleMaximum. Future ADX cluster knobs ride THIS bag — never a new top-level param.')
+param adxConfig object = {}
+
 @description('Provision a NEW Event Hubs namespace in each DLZ (Real-Time Intelligence: Eventstream sources, Data Explorer receive, Mirroring CDC transport, event-schema-set Avro enforcement). Default true (opt-out). Set false to skip the ~namespace cost — the Eventstream / Data Explorer navigators then honest-gate. To REUSE an existing namespace instead of provisioning, set existingEventHubNamespace (the new namespace is skipped and the Console binds to the existing one). Entra-only auth, private-endpoint + servicebus DNS by default.')
 param loomEventHubEnabled bool = true
 
@@ -1250,6 +1253,15 @@ module adminPlane 'modules/admin-plane/main.bicep' = if (deployAdminPlane) {
     apimEnabled: (loomApimEnabled && provisionApim)
     aiSearchEnabled: provisionAiSearch
     adxEnabled: provisionAdx
+    // #4122 — same defect class as the aasEnabled / reportSubscriptionsEnabled
+    // gap recorded just below: adxConfig was declared on admin-plane/main.bicep
+    // (adxConfigT — the cluster SKU + autoscale bag) but never passed from this
+    // top level, so it always took its {} default and the SKU was unreachable
+    // from EVERY lane's bicepparam — assigning it there is BCP259, because every
+    // lane deploys THIS root. GCC-High sat red from 2026-08-11 on a Stopped ADX
+    // cluster Azure Gov had no capacity to start, with no in-repo lever to move
+    // it to a SKU that did. Wire it through.
+    adxConfig: adxConfig
     // audit day-one gap-closure: aasEnabled + reportSubscriptionsEnabled were
     // declared on admin-plane/main.bicep but never passed from the top level, so
     // AAS (semantic-model / BI Azure-native default) and the report-subscription

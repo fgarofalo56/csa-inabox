@@ -22,9 +22,34 @@
 #   3. The LOOM_MSAL_CLIENT_ID env var on the live Console Container App
 #      (covers estates bootstrapped before the Key Vault record existed)
 #
-# Prints the client id on stdout (empty string when there is none — a genuinely
-# fresh subscription). NEVER fails the caller: an empty result is the correct
-# answer on a first deploy, and the catalog then deploys sealed rather than open.
+# ── ABSENT IS NOT UNKNOWN (deploy-integrity.md R7) ────────────────────────────
+# Until 2026-08-27 every read above ended `2>/dev/null`, and the script had
+# exactly one outcome for failure and for absence: print nothing, `exit 0`. So an
+# expired token, an RBAC denial, a throttle, or the wrong subscription context all
+# rendered as "no app registration exists" — and line 92 SAID so, in those words,
+# without having established it. That is verbatim the construct R7 was written
+# about ("the tag does not exist" when the truth was "I could not reach the
+# registry"), and the blast radius here is larger: an empty result makes the next
+# ACA template render drop LOOM_MSAL_CLIENT_ID and take sign-in dark, and it also
+# empties LOOM_UNITY_CLIENT_ID / LOOM_UNITY_AUDIENCE (admin-plane/main.bicep
+# :4718-4719), which fails the Loom Unity catalog closed on every call.
+#
+# So this script now distinguishes THREE states, the same present/absent/unknown
+# model scripts/ci/internal-token-drift-verdict.mjs already uses:
+#
+#   exit 0 + a client id on stdout  PRESENT — resolved.
+#   exit 0 + empty stdout           ABSENT  — the reads SUCCEEDED and there is no
+#                                             registration. Correct on a genuinely
+#                                             fresh subscription; the deploy renders
+#                                             an empty client id and the catalog
+#                                             deploys sealed rather than open.
+#   exit 3 + empty stdout           UNKNOWN — a read FAILED. The caller must NOT
+#                                             treat this as absence. Rendering an
+#                                             empty client id here is destructive,
+#                                             so this fails the step instead.
+#
+# Callers must therefore NOT wrap this in `|| true`. That construct predates the
+# unknown state and would convert it straight back into a silent empty.
 #
 # Usage:
 #   CID=$(bash scripts/csa-loom/resolve-msal-client-id.sh)          # auto-discover
@@ -38,6 +63,8 @@ KV="${LOOM_ADMIN_KEYVAULT:-}"
 CONSOLE_APP="${CONSOLE_APP_NAME:-loom-console}"
 SECRET_NAME="${MSAL_CLIENT_ID_SECRET_NAME:-loom-msal-client-id}"
 
+EXIT_UNKNOWN=3
+
 while [ $# -gt 0 ]; do
   case "$1" in
     --rg) RG="${2:-}"; shift 2 ;;
@@ -49,6 +76,33 @@ done
 
 log() { echo "[resolve-msal-client-id] $*" >&2; }
 
+ERRF="$(mktemp)"
+# shellcheck disable=SC2064
+trap "rm -f '$ERRF'" EXIT
+
+# Stderr from a failed `az` read, trimmed. Never carries a secret VALUE: every
+# call below is a control-plane read whose error text names the resource, and on
+# the one call that could return a value (`keyvault secret show`) a non-zero exit
+# means no value was produced at all.
+az_err() { tr '\n' ' ' < "$ERRF" | cut -c1-400; }
+
+# A read that returned non-zero because the thing genuinely is not there, as
+# opposed to one that could not be performed. Keyed to the ARM/Graph error CODES,
+# not to prose, so a reworded message does not silently reclassify a failure as
+# an absence.
+is_not_found() {
+  grep -qE 'SecretNotFound|ResourceNotFound|ParentResourceNotFound|\(NotFound\)|ResourceGroupNotFound' "$ERRF"
+}
+
+unknown() {
+  log "UNKNOWN — $1"
+  log "This is NOT 'no app registration exists'. Rendering an empty LOOM_MSAL_CLIENT_ID"
+  log "would drop the env var from the ACA template and take sign-in dark, and would"
+  log "also empty LOOM_UNITY_CLIENT_ID / LOOM_UNITY_AUDIENCE. Failing closed instead."
+  printf ''
+  exit "$EXIT_UNKNOWN"
+}
+
 # 1 — already supplied.
 if [ -n "${LOOM_MSAL_CLIENT_ID:-}" ]; then
   log "using LOOM_MSAL_CLIENT_ID from the environment"
@@ -56,9 +110,14 @@ if [ -n "${LOOM_MSAL_CLIENT_ID:-}" ]; then
   exit 0
 fi
 
-# Discover the admin resource group when not given.
+# Discover the admin resource group when not given. This is a LIST: it returns 0
+# with an empty result when nothing matches, so non-zero is unambiguously a
+# failure to read and never an absence.
 if [ -z "${RG}" ]; then
-  RG="$(az group list --query "[?starts_with(name,'rg-csa-loom-admin-')].name | [0]" -o tsv 2>/dev/null | tr -d '\r')"
+  raw="$(az group list --query "[?starts_with(name,'rg-csa-loom-admin-')].name | [0]" -o tsv 2>"$ERRF")"
+  rc=$?
+  [ "$rc" -eq 0 ] || unknown "could not list resource groups (az exited $rc): $(az_err)"
+  RG="$(printf '%s' "$raw" | tr -d '\r')"
 fi
 if [ -z "${RG}" ]; then
   log "no rg-csa-loom-admin-* resource group in this subscription — fresh estate, no app registration yet"
@@ -68,27 +127,47 @@ fi
 
 # 2 — Key Vault record (the durable one bootstrap-msal-app-reg.sh writes).
 if [ -z "${KV}" ]; then
-  KV="$(az keyvault list -g "${RG}" --query "[0].name" -o tsv 2>/dev/null | tr -d '\r')"
+  raw="$(az keyvault list -g "${RG}" --query "[0].name" -o tsv 2>"$ERRF")"
+  rc=$?
+  [ "$rc" -eq 0 ] || unknown "could not list key vaults in ${RG} (az exited $rc): $(az_err)"
+  KV="$(printf '%s' "$raw" | tr -d '\r')"
 fi
 if [ -n "${KV}" ]; then
-  CID="$(az keyvault secret show --vault-name "${KV}" --name "${SECRET_NAME}" --query value -o tsv 2>/dev/null | tr -d '\r')"
-  if [ -n "${CID:-}" ]; then
-    log "resolved from Key Vault ${KV}/${SECRET_NAME}"
+  raw="$(az keyvault secret show --vault-name "${KV}" --name "${SECRET_NAME}" --query value -o tsv 2>"$ERRF")"
+  rc=$?
+  if [ "$rc" -ne 0 ]; then
+    # A missing secret is a legitimate absence — fall through to source 3.
+    # Anything else (403 on the data plane, firewall, expired token) is unknown.
+    is_not_found || unknown "could not read ${KV}/${SECRET_NAME} (az exited $rc): $(az_err)"
+    log "no ${SECRET_NAME} secret in ${KV} — trying the live Console app"
+  else
+    CID="$(printf '%s' "$raw" | tr -d '\r')"
+    if [ -n "${CID:-}" ]; then
+      log "resolved from Key Vault ${KV}/${SECRET_NAME}"
+      printf '%s' "${CID}"
+      exit 0
+    fi
+  fi
+fi
+
+# 3 — the live Console Container App (pre-Key-Vault estates).
+raw="$(az containerapp show -n "${CONSOLE_APP}" -g "${RG}" \
+  --query "properties.template.containers[0].env[?name=='LOOM_MSAL_CLIENT_ID'].value | [0]" \
+  -o tsv 2>"$ERRF")"
+rc=$?
+if [ "$rc" -ne 0 ]; then
+  # No console app yet is a legitimate absence on a part-built estate.
+  is_not_found || unknown "could not read the ${CONSOLE_APP} Container App in ${RG} (az exited $rc): $(az_err)"
+  log "no ${CONSOLE_APP} Container App in ${RG} yet"
+else
+  CID="$(printf '%s' "$raw" | tr -d '\r')"
+  if [ -n "${CID:-}" ] && [ "${CID}" != "None" ]; then
+    log "resolved from the live ${CONSOLE_APP} Container App (consider re-running bootstrap-msal-app-reg.sh so it is also recorded in Key Vault)"
     printf '%s' "${CID}"
     exit 0
   fi
 fi
 
-# 3 — the live Console Container App (pre-Key-Vault estates).
-CID="$(az containerapp show -n "${CONSOLE_APP}" -g "${RG}" \
-  --query "properties.template.containers[0].env[?name=='LOOM_MSAL_CLIENT_ID'].value | [0]" \
-  -o tsv 2>/dev/null | tr -d '\r')"
-if [ -n "${CID:-}" ] && [ "${CID}" != "None" ]; then
-  log "resolved from the live ${CONSOLE_APP} Container App (consider re-running bootstrap-msal-app-reg.sh so it is also recorded in Key Vault)"
-  printf '%s' "${CID}"
-  exit 0
-fi
-
-log "no existing app registration found in ${RG} — the deploy will render an empty client id (sign-in stays unconfigured until deploy phase 3 runs)"
+log "no existing app registration found in ${RG} — every read SUCCEEDED and returned nothing (this is absence, not an unreadable estate). The deploy will render an empty client id; sign-in stays unconfigured until deploy phase 3 runs."
 printf ''
 exit 0
