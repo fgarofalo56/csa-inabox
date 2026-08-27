@@ -172,6 +172,76 @@ test('an empty run history is null (feeds the never-ran branch)', () => {
 });
 
 // ---------------------------------------------------------------------------
+// pickLastRealSuccess — the DECLARED-PAUSE filter
+//
+// A deploy lane whose boundary is declared paused stands down: the what-if, the
+// apply and the post-deploy bootstrap are gated off and the job SUCCEEDS having
+// deployed nothing. Without this filter the first such scheduled run resets
+// "last success" to today, and deploy-fiab-gcch flips from
+// `STALE … 17 consecutive FAILURE(s)` to `ok` — a loud true red becoming a
+// silent false green, which is exactly the "green on nothing" shape this file
+// exists to catch. It cannot be detected from the run TITLE: `run-name` is fixed
+// before any step runs and cannot read a file. Hence the declaration's own date.
+// ---------------------------------------------------------------------------
+
+test('a success DURING a declared pause does not count as a deploy', () => {
+  const rows = [
+    { createdAt: '2026-08-27T10:00:00Z', displayTitle: 'deploy-fiab-gcch' }, // stood down
+    { createdAt: '2026-08-11T09:00:00Z', displayTitle: 'deploy-fiab-gcch' }, // the real one
+  ];
+  const r = pickLastRealSuccess(rows, '2026-08-26');
+  assert.equal(r.at, '2026-08-11T09:00:00Z', 'the stood-down run must not clear the drift it did not fix');
+  assert.equal(r.pausedRunsSkipped, 1);
+  assert.equal(r.dryRunsSkipped, 0, 'a stood-down run is not a dry run — the counts are distinct');
+});
+
+test('CONTROL: the SAME rows with no declaration take the newest success', () => {
+  // The population assert for the test above. Without this, "the newest success
+  // was skipped" could be true for some unrelated reason and the filter could be
+  // doing nothing at all.
+  const rows = [
+    { createdAt: '2026-08-27T10:00:00Z', displayTitle: 'deploy-fiab-gcch' },
+    { createdAt: '2026-08-11T09:00:00Z', displayTitle: 'deploy-fiab-gcch' },
+  ];
+  const r = pickLastRealSuccess(rows, null);
+  assert.equal(r.at, '2026-08-27T10:00:00Z', 'with no declaration nothing may be discarded');
+  assert.equal(r.pausedRunsSkipped, 0);
+});
+
+test('a run ON the declaration date is treated as stood down', () => {
+  // `declaredOn` is a DATE and `createdAt` a full timestamp, so any run on that
+  // day sorts after it. The declaration is written when the estate is already
+  // paused, so that is the correct direction to round.
+  const rows = [{ createdAt: '2026-08-26T23:59:59Z', displayTitle: 'deploy-fiab-gcch' }];
+  assert.equal(pickLastRealSuccess(rows, '2026-08-26').at, null);
+});
+
+test('a success BEFORE the declaration still counts', () => {
+  // The filter must not erase deploy history that genuinely happened — that
+  // would manufacture drift in the other direction and make a healthy lane look
+  // like it had never run.
+  const rows = [{ createdAt: '2026-08-25T23:59:59Z', displayTitle: 'deploy-fiab-gcch' }];
+  const r = pickLastRealSuccess(rows, '2026-08-26');
+  assert.equal(r.at, '2026-08-25T23:59:59Z');
+  assert.equal(r.pausedRunsSkipped, 0);
+});
+
+test('every deploy-fiab lane declares the boundary the pause filter keys on', () => {
+  // Without `boundary` the lookup returns null and the filter is permanently
+  // inert for that lane — the classic guard with no population. cloud-parity.md:
+  // a filter that watches one boundary is not a complete filter.
+  const lanes = WATCHED.filter((e) => e.workflow.startsWith('deploy-fiab-'));
+  assert.ok(lanes.length >= 4, `expected the four deploy-fiab lanes, found ${lanes.length}`);
+  for (const lane of lanes) {
+    assert.match(
+      lane.boundary ?? '',
+      /^(Commercial|GCC|GCC-High|IL5)$/,
+      `${lane.workflow} has no usable \`boundary\`, so a pause declaration could never apply to it`,
+    );
+  }
+});
+
+// ---------------------------------------------------------------------------
 // decide — the exit code over a set of rows
 // ---------------------------------------------------------------------------
 

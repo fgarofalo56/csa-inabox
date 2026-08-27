@@ -72,11 +72,21 @@ export const POST = withWorkspaceOwner('cdc-connector', async (req: NextRequest,
 
     // Capture the source schema + fold the drift into the schema-change log
     // (best-effort — never blocks Start; empty for ADF-copy families).
+    //
+    // NEVER AFTER A GATED VERDICT. `Gated` means the engine refused BEFORE
+    // contacting anything — including the source-type/connection mismatch gate,
+    // whose message states that no request was sent to either system. Capture
+    // dials the source itself (captureSql → executeParameterized →
+    // azure-sql-client, which CONSTRUCTS the hostname from `server`), so running
+    // it here would have made that message false on this one path. There is also
+    // nothing to fingerprint: a gated Start did not run.
     let cdcSchema = state.cdcSchema as CdcSchemaTracking | undefined;
-    try {
-      const captured = await captureSourceSchema(src);
-      if (Object.keys(captured).length) cdcSchema = foldSchemaCapture(cdcSchema, captured, new Date().toISOString());
-    } catch { /* schema capture is best-effort */ }
+    if (run.status !== 'Gated') {
+      try {
+        const captured = await captureSourceSchema(src);
+        if (Object.keys(captured).length) cdcSchema = foldSchemaCapture(cdcSchema, captured, new Date().toISOString());
+      } catch { /* schema capture is best-effort */ }
+    }
 
     const next: WorkspaceItem = {
       ...item,

@@ -64,6 +64,47 @@ const TOOLKIT_RE = /\bwith(?:Session|WorkspaceOwner|BackendGate|TenantAdmin|DlzA
 // reason (e.g. a prologue the codemod legitimately can't transform yet). Keep
 // this SHORT — prefer running the codemod.
 const TOUCH_EXEMPT = new Map([
+  // #4092 touched these five item-CRUD routes for ONE reason: their GET
+  // projection omitted `workspaceId`. `useItemState` reads its workspace id
+  // from exactly that field, and the data-agent editor's source picker is
+  // guarded on `if (workspaceId && …)` — so the guard was permanently false,
+  // /api/items/by-type was never called, and the Item dropdown rendered
+  // "None found" with Add disabled over an API that was returning the item
+  // correctly. `map`, `plan` and `operations-agent` are the other editors that
+  // scope a picker on the same hook field, so all four were repaired together
+  // (`agent-flow` already projected it). THE AUTH PROLOGUES ARE UNTOUCHED —
+  // every handler keeps its `getSession()` → 401.
+  //
+  // THE CODEMOD REFUSES ALL FIVE, which is what this hatch is for. Falsifiable
+  // in one command per file, e.g.:
+  //   node scripts/codemods/migrate-route-toolkit.mjs --file=app/api/items/map/[id]/route.ts
+  //   → app/api/items/map/[id]/route.ts: SKIPPED (GET: getSession() without the exact 401 guard)
+  //   (…and the same for PATCH and DELETE)
+  // The 401s here are the bare `{ error: 'unauthenticated' }` envelope rather
+  // than `apiUnauthorized()` / `{ ok:false, error:… }`, which is the literal
+  // shape withSession replaces. Normalising that and hand-migrating 15
+  // handlers across five unrelated item types — inside a fix for a
+  // customer-blocking render defect — would put real 401-regression risk on
+  // map / plan / operations-agent PATCH+DELETE for zero benefit to #4092.
+  //
+  // COMPENSATING CONTROL (added by #4092, not assumed): every one of these GETs
+  // now has an explicit "401s before loading anything" spec in
+  // app/api/items/data-agent/__tests__/picker-workspace-scope.test.ts, asserting
+  // both the status AND that `loadOwnedItem` was never reached. Deleting a
+  // prologue fails a merge-blocking test rather than passing quietly.
+  //
+  // FOLLOW-UP: migrating this family is tracked separately; these entries come
+  // out when it lands.
+  ['apps/fiab-console/app/api/items/data-agent/[id]/route.ts',
+   '#4092: GET projection fix only, auth prologue untouched; codemod SKIPS (401 not the exact guard shape). 401 pinned by picker-workspace-scope.test.ts'],
+  ['apps/fiab-console/app/api/items/data-agent/route.ts',
+   '#4092: auto-bind on create only, auth prologue untouched; codemod SKIPS (401 not the exact guard shape)'],
+  ['apps/fiab-console/app/api/items/map/[id]/route.ts',
+   '#4092: GET projection fix only, auth prologue untouched; codemod SKIPS (401 not the exact guard shape). 401 pinned by picker-workspace-scope.test.ts'],
+  ['apps/fiab-console/app/api/items/operations-agent/[id]/route.ts',
+   '#4092: GET projection fix only, auth prologue untouched; codemod SKIPS (401 not the exact guard shape). 401 pinned by picker-workspace-scope.test.ts'],
+  ['apps/fiab-console/app/api/items/plan/[id]/route.ts',
+   '#4092: GET projection fix only, auth prologue untouched; codemod SKIPS (401 not the exact guard shape). 401 pinned by picker-workspace-scope.test.ts'],
   // #3549/#3551 touched this route ONLY inside Phase-1 item creation, to backfill
   // the bundle definition onto a name-matched EXISTING item that has none. The
   // dedup path pushed `status:'existed'` and wrote nothing while still handing

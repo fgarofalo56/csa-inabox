@@ -63,7 +63,7 @@ import {
   logAnalyticsResourceId,
   MonitorNotConfiguredError,
 } from '@/lib/azure/monitor-client';
-import { armBase } from '@/lib/azure/cloud-endpoints';
+import { armBase, kustoClusterUri } from '@/lib/azure/cloud-endpoints';
 import type { Provisioner, ProvisionResult } from './types';
 import { resolveInfraResidual } from './types';
 
@@ -387,7 +387,10 @@ export const workspaceMonitorProvisioner: Provisioner = async (input): Promise<P
       gate: {
         reason: 'ADX cluster not configured for workspace monitoring.',
         remediation:
-          'Set LOOM_KUSTO_CLUSTER_URI (e.g. https://adx-csa-loom-shared.eastus2.kusto.windows.net) and LOOM_KUSTO_CLUSTER_NAME so the monitoring database can be created.',
+          // Cloud-aware example: a Gov operator shown a Commercial ADX host
+          // copies a hostname that does not exist in their boundary (#4063).
+          // kustoClusterUri() renders the ACTIVE cloud's suffix.
+          `Set LOOM_KUSTO_CLUSTER_URI (e.g. ${kustoClusterUri('adx-csa-loom-shared', 'eastus2')}) and LOOM_KUSTO_CLUSTER_NAME so the monitoring database can be created.`,
         link: 'https://learn.microsoft.com/azure/data-explorer/',
       },
       steps,

@@ -1,0 +1,52 @@
+{
+  "$comment": [
+    "DELIBERATELY PAUSED ESTATES — consumed by scripts/ci/_estate-pause-declaration.mjs.",
+    "",
+    "WHY THIS FILE EXISTS. The estate pause/resume mandate keeps the sovereign and",
+    "Commercial estates STOPPED unless something is actively being validated. A stopped",
+    "ADX cluster cannot take the Microsoft.Kusto/clusters/principalAssignments the",
+    "template declares on it, so a deploy lane pointed at a paused estate fails — and it",
+    "fails for a reason that is now deliberate.",
+    "",
+    "THE FIX IS NOT 'SKIP WHEN STOPPED'. Intent is not inferable from state: a genuinely",
+    "broken cluster and a deliberately stopped one look identical to `az resource show`.",
+    "A lane keyed to the STATE would read a real outage as fine forever, on a P0 deploy",
+    "path, in a boundary nobody watches closely. This file is the EXPLICIT signal instead,",
+    "and it is the only thing that can suppress the failure.",
+    "",
+    "WHY A FILE AND NOT A REPO VARIABLE — the same answer",
+    "scripts/ci/workflow-lane-states-allowlist.json gives for workflow disablement: a",
+    "repo variable is 'one click, no commit, no review, no record'. This file IS the",
+    "record, and it is the same shape as that allowlist on purpose.",
+    "",
+    "RULES (enforced by _estate-pause-declaration.mjs, not by convention). Every one of",
+    "them resolves to NOT-PAUSED on failure, so a malformed entry can never silence a",
+    "lane by accident — it just stops suppressing, and the script prints which rule it",
+    "failed:",
+    "  1. `boundary` must match CSA_LOOM_BOUNDARY on the lane exactly (GCC-High, GCC,",
+    "     IL5, Commercial). One boundary's declaration never covers another's.",
+    "  2. `owner` is required. A paused estate has an owner, not just a note.",
+    "  3. `reason` must be at least 60 characters and free of TODO/TBD/WIP. State what",
+    "     was stopped, what was MEASURED, and what must be true to resume. Do not state",
+    "     a motive you did not establish (.claude/rules/deploy-integrity.md R7).",
+    "  4. `reviewBy` (YYYY-MM-DD) is required and EXPIRES. Past its date the estate reads",
+    "     as NOT declared paused, the preflight resumes trying to start the cluster, and",
+    "     the lane goes red again. Without an expiry a pause is permanent by default,",
+    "     which is how a lane stays dark for months while every dashboard reads green",
+    "     (deploy-integrity.md R3).",
+    "",
+    "WHAT A DECLARATION DOES NOT DO. It does not excuse a cluster in Unavailable,",
+    "Deleting, Deleted, or an unrecognised state — those stay red. It does not excuse an",
+    "unreadable control plane. And it does not make the lane report success: a paused",
+    "run SKIPS the what-if and the apply and says so, which is UNMEASURED, not clean."
+  ],
+  "paused": [
+    {
+      "boundary": "GCC-High",
+      "owner": "fgarofalo56",
+      "declaredOn": "2026-08-26",
+      "reason": "The GCC-High estate is held stopped under the estate pause/resume mandate, and the operator has decided the ADX cluster stays stopped rather than being started for each daily run. MEASURED: deploy-fiab-gcch has been red for 17 consecutive runs since its last success on 2026-08-11, every one of them at the ADX preflight with byte-identical output — `adx-csa-loom-fmezxj: state=Stopped` followed by `(InsufficientResourcesForSubscription) [BadRequest] Currently there are no available resources to start the cluster with current SKU`. The lane itself is healthy: it authenticated to Azure Government, built its image, opened and re-locked the ACR firewall lease, and read the live cluster state, so this is a real answer about a real estate rather than a hollow green. `adx-cluster.bicep` sets `enableAutoStop: true`, so idle-after-08-11 reaching stopped-by-08-13 needs no human action. TO RESUME: start the cluster (Gov has no pause/resume path yet — scripts/measure/estate-resume.mjs hard-codes the Commercial resource group and a different cluster), confirm it reaches Running, and delete this entry. The capacity refusal on the current SKU is a separate, unresolved problem tracked outside this register; nothing here fixes it.",
+      "reviewBy": "2026-11-24"
+    }
+  ]
+}

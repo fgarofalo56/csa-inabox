@@ -13,9 +13,10 @@
  */
 import {
   adfCdcConfigGate, upsertDataset, upsertPipeline, runPipeline, upsertTrigger, startTrigger,
+  getLinkedService, getPipeline, getTrigger, stopTrigger, upsertLinkedService,
 } from './adf-client';
-import { pathToHttpsUrl } from './adls-client';
-import { BRONZE, MAX_TABLES, adfSafeName, mirrorAdlsLinkedService } from './mirror-adf-shared';
+import { pathToHttpsUrl, generateContainerWriteSasUri } from './adls-client';
+import { BRONZE, MAX_TABLES, adfSafeName, ensureMirrorAdlsLinkedService } from './mirror-adf-shared';
 // The Snowflake backend: auto-binds its ADF linked service from the mirror's
 // Loom Connection and enumerates the source through the same runtime that
 // replicates it, so the table list can never disagree with what Copy can read.
@@ -27,13 +28,266 @@ import type { MirrorSource, MirrorTableSpec, MirrorTableResult, MirrorRunResult 
 // ADF Copy runtime path (opt-in) — the no-Fabric backend for sources that
 // authenticate with their own runtime and that ADF reads via its Copy connector
 // (Snowflake today; BigQuery / Oracle extend later). Each selected table gets a
-// **delete-then-copy** full-refresh pipeline (Delete activity clears the Bronze
-// folder, Copy lands fresh Parquet) and, unless syncMode='snapshot', a schedule
-// trigger that re-runs the pipeline on a cadence. Real ARM (upsertDataset +
-// upsertPipeline + runPipeline + upsertTrigger/startTrigger). No Microsoft Fabric.
+// **copy-then-swap** full-refresh pipeline (Copy lands fresh Parquet, then a
+// Delete conditional on that Copy having SUCCEEDED removes the previous
+// generation) and, unless syncMode='snapshot', a schedule trigger that re-runs
+// the pipeline on a cadence. Real ARM (upsertDataset + upsertPipeline +
+// runPipeline + upsertTrigger/startTrigger). No Microsoft Fabric.
 //   https://learn.microsoft.com/azure/data-factory/connector-snowflake
 //   https://learn.microsoft.com/azure/data-factory/connector-azure-data-lake-storage
+//   https://learn.microsoft.com/azure/data-factory/delete-activity
 // ============================================================
+
+/** Container + prefix ADF stages a Snowflake unload through before Bronze. */
+const STAGING_PATH_ROOT = 'loom-mirror-staging';
+
+/**
+ * Name of the staging linked service Loom binds for itself. Fixed by convention
+ * so the console and the factory agree with no operator step — the same reason
+ * `dataflow-run.ts` hard-names `loom-adls-mi`. An operator MAY still pin their
+ * own with LOOM_MIRROR_STAGING_BLOB_LINKED_SERVICE (brownfield estates have
+ * hand-tuned linked services); that name then wins.
+ */
+const STAGING_LS_CONVENTION_NAME = 'loom_mirror_staging_blob';
+
+/**
+ * SAS lifetime. Azure caps a user-delegation SAS at 7 days from the delegation
+ * key's start and we take all of it, because this credential is not refreshed by
+ * the pipeline that uses it.
+ *
+ * DISCLOSED LIMITATION (deploy-integrity.md R7). The staging SAS is minted at
+ * mirror Start. A schedule trigger keeps firing after it expires, and those runs
+ * FAIL to stage until the mirror is Started again — they do not silently copy
+ * nothing, and they cannot destroy Bronze (the Delete is gated on a successful
+ * Copy), but a mirror left running for more than a week will stop refreshing.
+ * The durable fix is a Snowflake `storageIntegration`, which removes the SAS
+ * from the loop entirely at the cost of a one-time object created in Snowflake
+ * by the customer — tracked separately, NOT claimed here.
+ *   https://learn.microsoft.com/azure/data-factory/connector-snowflake
+ */
+const STAGING_SAS_TTL_HOURS = 7 * 24;
+
+/**
+ * The dedicated Blob SCRATCH account the platform deployed for staged Snowflake
+ * unloads (modules/landing-zone/mirror-staging.bicep), or null when this
+ * deployment predates it.
+ */
+function mirrorStagingAccount(): string | null {
+  const v = process.env.LOOM_MIRROR_STAGING_ACCOUNT;
+  return v && v.trim() ? v.trim() : null;
+}
+
+/**
+ * The interim Azure **Blob Storage** linked service ADF stages a Snowflake
+ * unload through, or null when this deployment has none.
+ *
+ * This is a genuine infra prerequisite, not a tuning knob. Snowflake's
+ * `COPY INTO <location>` unload — which `SnowflakeExportCopyCommand` delegates
+ * to Snowflake to execute — can only write to an Azure **Blob** endpoint, so
+ * ADF refuses the payload up front when the sink linked service is
+ * `AzureBlobFS` (the ADLS Gen2 `dfs` endpoint):
+ *
+ *   ErrorCode=UnsupportPayloadForExternalCommand, ... Snowflake Export Copy
+ *   Command validation failed: 'Snowflake copy command not support Connector
+ *   type as 'not Azure Blob Storage'
+ *
+ * Learn documents exactly two supported shapes for a Snowflake source, and BOTH
+ * require a Blob-typed linked service:
+ *   - direct copy → the SINK linked service is Azure Blob Storage with shared
+ *     access signature auth (it MAY point at a Gen2 account's blob endpoint);
+ *   - staged copy → an interim Azure Blob Storage linked service, SAS auth
+ *     absent a Snowflake `storageIntegration`.
+ * Loom takes the staged shape because it preserves the ADLS Gen2 Bronze sink
+ * the rest of the platform reads from (the paired Synapse Serverless endpoint
+ * is provisioned over it).
+ *   https://learn.microsoft.com/azure/data-factory/connector-snowflake
+ */
+function mirrorStagingBlobLinkedService(): string | null {
+  const v = process.env.LOOM_MIRROR_STAGING_BLOB_LINKED_SERVICE;
+  return v && v.trim() ? v.trim() : null;
+}
+
+/**
+ * The `properties.type` of a linked service as the FACTORY reports it, or null
+ * when it could not be read.
+ *
+ * Null means UNKNOWN — the linked service is absent, or unreadable by this
+ * identity — and callers must not collapse that into "wrong type" or into
+ * "fine". The same read-back-rather-than-assume pattern the source linked
+ * service uses (`snowflake-adf.snowflakeDatasetKind`).
+ */
+async function readLinkedServiceType(name: string): Promise<string | null> {
+  try {
+    const ls = await getLinkedService(name);
+    const t = ls?.properties?.type;
+    return typeof t === 'string' && t ? t : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * How a Snowflake table can be moved into Bronze on this deployment.
+ *
+ * Split out as a pure function so the pairing is validated at CONSTRUCTION
+ * time. Before #4083 the engine authored a `SnowflakeExportCopyCommand` source
+ * against an `AzureBlobFS` sink unconditionally; ADF accepted the pipeline and
+ * rejected every RUN, after the unconditional Delete had already cleared
+ * Bronze. Deciding here means an unsupported pairing is never authored at all.
+ */
+export type SnowflakeCopyTransferPlan =
+  | { kind: 'staged'; stagingLinkedService: string }
+  | { kind: 'unsupported'; missing: string; message: string };
+
+/** The ONE linked-service type Snowflake's COPY-unload can write to. */
+const STAGING_REQUIRED_TYPE = 'AzureBlobStorage';
+
+/**
+ * Decide the transfer shape.
+ *
+ * `observedType` is the `properties.type` READ BACK from the factory for
+ * `stagingLinkedService` — `null` when the linked service could not be read at
+ * all. It is passed in rather than fetched here so this stays a pure function
+ * that can be tested against every type ADF can return.
+ *
+ * WHY THE TYPE IS CHECKED AND NOT JUST THE NAME: a non-empty string proves only
+ * that somebody set the variable. The first thing an operator does when a gate
+ * says "point LOOM_MIRROR_STAGING_BLOB_LINKED_SERVICE at a Blob linked service"
+ * is point it at the linked service they already have — which on every Loom
+ * deployment is `loom_mirror_sink_adls`, an `AzureBlobFS` (ADLS Gen2) linked
+ * service. That passed the name-only check, authored the pipeline, and
+ * reproduced the exact #4083 failure the gate exists to prevent. Reading the
+ * type is what makes the gate mean what it says.
+ */
+export function planSnowflakeCopyTransfer(
+  stagingLinkedService: string | null,
+  observedType: string | null,
+): SnowflakeCopyTransferPlan {
+  if (!stagingLinkedService) {
+    return {
+      kind: 'unsupported',
+      missing: 'LOOM_MIRROR_STAGING_BLOB_LINKED_SERVICE',
+      message:
+        "Snowflake's COPY INTO unload can only write to an Azure Blob endpoint, so Azure Data Factory rejects a " +
+        'Snowflake source paired with an ADLS Gen2 (AzureBlobFS) sink: "Snowflake copy command not support ' +
+        'Connector type as \'not Azure Blob Storage\'". The documented path is a staged copy through an interim ' +
+        'Azure Blob Storage linked service using shared access signature authentication. ' +
+        'Loom BINDS that linked service for you once the deploy has provisioned the staging account it needs ' +
+        '(platform/fiab/bicep/modules/landing-zone/mirror-staging.bicep, surfaced as LOOM_MIRROR_STAGING_ACCOUNT). ' +
+        'Neither value is set here, so this deployment predates that module — re-run the infra deploy. Until then ' +
+        'this mirror is gated rather than authoring a pipeline ADF would reject on every run (issue #4086).',
+    };
+  }
+
+  if (observedType === STAGING_REQUIRED_TYPE) {
+    return { kind: 'staged', stagingLinkedService };
+  }
+
+  // Read it back and it was something else — name the type actually found, so
+  // the operator is not left guessing which of their linked services is wrong.
+  if (observedType) {
+    return {
+      kind: 'unsupported',
+      missing: 'LOOM_MIRROR_STAGING_BLOB_LINKED_SERVICE',
+      message:
+        `LOOM_MIRROR_STAGING_BLOB_LINKED_SERVICE points at "${stagingLinkedService}", which is a ` +
+        `${observedType} linked service. Snowflake's COPY INTO unload can only write to an Azure Blob ` +
+        `endpoint, so the staging linked service must be ${STAGING_REQUIRED_TYPE} with shared access ` +
+        'signature authentication. An AzureBlobFS (ADLS Gen2 / dfs endpoint) linked service — including the ' +
+        'Bronze sink this mirror writes to — is rejected by ADF with "Snowflake copy command not support ' +
+        'Connector type as \'not Azure Blob Storage\'", which is the failure this gate exists to prevent. ' +
+        'Unset LOOM_MIRROR_STAGING_BLOB_LINKED_SERVICE to let Loom bind a correctly typed one against the ' +
+        'staging account the deploy provisioned, or point it at a real AzureBlobStorage linked service — but ' +
+        'not at the Bronze sink.',
+    };
+  }
+
+  // UNKNOWN is not "wrong type" and it is not "fine" (memory:
+  // csa_loom_unknown_as_negative_class). Say precisely what happened — the
+  // linked service could not be READ — and fail closed, because authoring on an
+  // unverified pairing is what produced #4083.
+  return {
+    kind: 'unsupported',
+    missing: 'staging-linked-service-unreadable',
+    message:
+      `LOOM_MIRROR_STAGING_BLOB_LINKED_SERVICE names "${stagingLinkedService}", but Loom could not READ that ` +
+      'linked service from the data factory, so its type is unknown — this is NOT a report that the type is ' +
+      'wrong. Either the linked service does not exist in this factory, or the Console identity lacks Data ' +
+      'Factory read access to it. Loom is gating rather than authoring a pipeline whose source/sink pairing it ' +
+      `could not verify. Confirm "${stagingLinkedService}" exists in the factory and that the Console UAMI holds ` +
+      'Data Factory Contributor on it.',
+  };
+}
+
+/**
+ * Bind the interim Blob staging linked service — CREATING it when the platform
+ * has deployed a staging account for it.
+ *
+ * This is the `auto-bind-by-default.md` §5 half of #4083. The gate that
+ * preceded it told the operator to go set
+ * LOOM_MIRROR_STAGING_BLOB_LINKED_SERVICE at "a Blob linked service", which is
+ * a plumbing job Loom holds every value for and can therefore do itself.
+ *
+ * WHY THE LINKED SERVICE IS NOT IN BICEP. It must carry a SAS — Snowflake's COPY
+ * unload runs in Snowflake's cloud and cannot use a managed identity, and Learn
+ * requires SAS auth on the staging linked service for exactly that reason. The
+ * only SAS bicep can mint is `listAccountSas`/`listServiceSas`, both of which
+ * need `allowSharedKeyAccess: true`, which this estate's Azure Policy denies. So
+ * bicep deploys the ACCOUNT (hardened, keyless) and the console mints an Entra
+ * USER-DELEGATION SAS against it here — no account key exists to leak.
+ *
+ * Re-bound on every Start, so a linked service deleted or edited out-of-band
+ * self-heals and the SAS is refreshed (auto-bind-by-default.md §3).
+ */
+type StagingBinding =
+  | { ok: true; name: string; stagingPath: string; autoBound: boolean; expiresAt: string | null }
+  | { ok: false; missing: string; message: string };
+
+async function bindStagingLinkedService(mirrorId: string): Promise<StagingBinding> {
+  const pinned = mirrorStagingBlobLinkedService();
+  const account = mirrorStagingAccount();
+
+  // No staging account deployed → nothing to auto-bind. A pinned name is still
+  // honoured (brownfield); otherwise planSnowflakeCopyTransfer gates below.
+  if (!account) {
+    return pinned
+      ? { ok: true, name: pinned, stagingPath: `${STAGING_PATH_ROOT}/${mirrorId}`, autoBound: false, expiresAt: null }
+      : { ok: false, missing: 'LOOM_MIRROR_STAGING_BLOB_LINKED_SERVICE', message: '' };
+  }
+
+  const name = pinned || STAGING_LS_CONVENTION_NAME;
+  try {
+    const sas = await generateContainerWriteSasUri(STAGING_PATH_ROOT, STAGING_SAS_TTL_HOURS, account);
+    await upsertLinkedService(name, {
+      name,
+      properties: {
+        type: 'AzureBlobStorage',
+        description:
+          'Loom Snowflake mirror staging (scratch). Container-scoped Entra user-delegation SAS, ' +
+          'refreshed on every mirror Start. Not a data store — purged daily by lifecycle policy.',
+        typeProperties: {
+          // ADF stores this encrypted and never reads it back out.
+          sasUri: { type: 'SecureString', value: sas.containerSasUri },
+        },
+      },
+    } as any);
+    // The SAS URI is CONTAINER-scoped, so the staging path is relative to that
+    // container — prefixing it with the container name again would resolve to
+    // `loom-mirror-staging/loom-mirror-staging/<id>`.
+    return { ok: true, name, stagingPath: mirrorId, autoBound: true, expiresAt: sas.expiresAt };
+  } catch (e: any) {
+    return {
+      ok: false,
+      missing: 'staging-linked-service-bind-failed',
+      message:
+        `Loom could not bind the Snowflake staging linked service "${name}" against staging account ` +
+        `"${account}": ${e?.message || String(e)}. The account is deployed by ` +
+        'platform/fiab/bicep/modules/landing-zone/mirror-staging.bicep, which also grants the Console UAMI ' +
+        'Storage Blob Delegator (to mint the SAS) and Storage Blob Data Contributor on it. If this deployment ' +
+        'predates that module, or those grants have not propagated yet, re-run Start.',
+    };
+  }
+}
 
 /**
  * Snowflake source linked service to bind.
@@ -52,14 +306,24 @@ function mirrorSnowflakeLinkedService(): string | null {
 }
 
 /**
- * Is the ADF Copy path usable? The factory + the ADLS sink are genuine infra
- * prerequisites (deployed by bicep). The SOURCE linked service is no longer one
- * — it is auto-bound from the connection at Start.
+ * Is the ADF Copy path usable?
+ *
+ * The FACTORY is the only genuine infra prerequisite (bicep deploys it). Neither
+ * linked service is one any more: the SOURCE is auto-bound from the mirror's
+ * connection (`snowflake-adf.resolveSnowflakeLinkedService`) and the ADLS SINK is
+ * auto-created from `LOOM_BRONZE_URL`
+ * (`mirror-adf-shared.ensureMirrorAdlsLinkedService`). This used to also require
+ * `LOOM_MIRROR_ADLS_LINKED_SERVICE`, which no shipped deployment sets — so the
+ * Snowflake path was gated shut on every estate by a value the platform could
+ * compose itself (auto-bind-by-default.md §5).
+ *
+ * The Bronze binding is checked by the caller (`mirror-engine`'s
+ * `bronzeConfigured()`), and again inside the sink ensure, so a lake-less
+ * deployment still gets one honest gate naming LOOM_BRONZE_URL.
  */
 export function adfCopyConfigured(): boolean {
   return !!process.env.LOOM_ADF_NAME
-    && !adfCdcConfigGate()
-    && !!mirrorAdlsLinkedService();
+    && !adfCdcConfigGate();
 }
 
 
@@ -67,6 +331,212 @@ export function adfCopyConfigured(): boolean {
 function adfCopyName(mirrorId: string): string {
   const safe = (mirrorId || '').replace(/[^A-Za-z0-9]/g, '').slice(0, 8) || 'mirror';
   return `loom_copy_${safe}`;
+}
+
+/** The schedule/tumbling trigger that re-runs a mirror's Copy pipeline. */
+function adfCopyTriggerName(pipelineName: string): string {
+  return adfSafeName(`${pipelineName}_trg`);
+}
+
+/**
+ * Is this Delete activity gated behind a Copy that SUCCEEDED?
+ *
+ * That single property is what separates the safe copy-then-swap shape from the
+ * delete-first shape that empties Bronze whenever the Copy fails. A Delete with
+ * `dependsOn: []` is a ROOT activity: ADF runs it unconditionally, before
+ * anything has been written.
+ *
+ * Keyed to the SHAPE (does a successful Copy dominate this Delete?), never to a
+ * name or an authoring version — a mutation that renames the activities, adds a
+ * decoy dependency on a non-Copy activity, or depends on a Copy with a
+ * `Completed`/`Failed`/`Skipped` condition is still delete-first and is still
+ * caught here.
+ */
+function deleteIsGatedOnCopySuccess(act: any, byName: Map<string, any>): boolean {
+  const deps = Array.isArray(act?.dependsOn) ? act.dependsOn : [];
+  return deps.some((d: any) => {
+    const conds = Array.isArray(d?.dependencyConditions) ? d.dependencyConditions : [];
+    if (!conds.includes('Succeeded')) return false;
+    return byName.get(String(d?.activity ?? ''))?.type === 'Copy';
+  });
+}
+
+/**
+ * What `disarmExistingCopyPipeline` ACTUALLY did. Every field is an observation,
+ * not an intention — `summary` is built from these and must never assert
+ * something the calls did not establish (deploy-integrity.md R7).
+ */
+export interface CopyDisarmOutcome {
+  trigger: 'stopped' | 'already-stopped' | 'absent' | 'stop-failed' | 'unreadable' | 'not-checked';
+  pipeline: 'absent' | 'already-safe' | 'rewritten' | 'rewrite-failed' | 'unreadable' | 'not-checked';
+  /** Delete-first activities actually removed from the STORED definition. */
+  deletesRemoved: number;
+  summary: string;
+}
+
+/**
+ * Repair a mirror's ALREADY-PROVISIONED ADF artifacts when this deployment
+ * cannot run the copy correctly.
+ *
+ * WHY THIS EXISTS. Gating only stops Loom from authoring a NEW bad pipeline. It
+ * does nothing about one that is already in the factory: the gate returns long
+ * before `upsertPipeline`, so a delete-first definition provisioned by an older
+ * build survives untouched, and its ScheduleTrigger keeps firing on cadence.
+ * Measured on `loom_copy_1ac5d678` (2026-08-26): trigger `runtimeState: Started`,
+ * hourly, 14 triggered runs that day; every one of the three Delete activities
+ * `Succeeded` and every Copy `Failed`. Those Deletes removed nothing only
+ * because the Copy had never once succeeded, so the Bronze prefix they sweep had
+ * never been populated (`foldersDeleted: 0`, no `filesDeleted`, on every run
+ * sampled). That is luck, not safety: the first time a Copy succeeds the prefix
+ * IS populated, and the next run's Delete — which runs first and unconditionally
+ * — empties it whenever that run's Copy fails.
+ *
+ * Which makes shipping a Copy fix while leaving the old pipeline armed strictly
+ * MORE dangerous than the broken state it replaces. Hence: repair, don't just
+ * gate (auto-bind-by-default.md §3 — a stale binding is a bug to fix
+ * automatically, not a message to show the user).
+ *
+ * ── ORDER: STOP THE TRIGGER FIRST, THEN REWRITE THE DEFINITION ──────────────
+ * This order is chosen for what it leaves behind when it dies HALFWAY, which is
+ * the only interesting case:
+ *
+ *   stop → rewrite  (chosen). If the rewrite fails or the process dies after the
+ *     stop, the definition is still delete-first but it can no longer FIRE on a
+ *     schedule. The hazard is inert.
+ *   rewrite → stop  (rejected). If the REWRITE fails — the likelier failure, as
+ *     it is a full PUT of a document that must first be read, versus a
+ *     parameterless POST — we abort with a delete-first pipeline still on a live
+ *     trigger. That is exactly the state this function exists to eliminate, and
+ *     we would have spent our one attempt getting nowhere.
+ *
+ * The rule generalises: perform the action that REMOVES REACHABILITY before the
+ * action that removes the hazard itself, so every prefix of the sequence is safe.
+ *
+ * What this canNOT do: a run already in flight when the trigger stops keeps
+ * going, and a stopped trigger does not prevent a manual run of a pipeline that
+ * is still delete-first. That is why the rewrite is still attempted after the
+ * stop, and why a failed rewrite is REPORTED rather than swallowed.
+ */
+export async function disarmExistingCopyPipeline(mirrorId: string): Promise<CopyDisarmOutcome> {
+  const pipelineName = adfCopyName(mirrorId);
+  const triggerName = adfCopyTriggerName(pipelineName);
+
+  // No factory configured means there is nothing to reach and nothing we can
+  // claim about. Say "not checked" rather than "nothing to disarm" — those are
+  // different facts (memory: csa_loom_unknown_as_negative_class).
+  if (adfCdcConfigGate()) {
+    return {
+      trigger: 'not-checked', pipeline: 'not-checked', deletesRemoved: 0,
+      summary:
+        `Loom did NOT check whether a previously provisioned pipeline (${pipelineName}) is still armed, because no ` +
+        'data factory is configured in this deployment. If this mirror was provisioned by an earlier deployment, ' +
+        'its trigger may still be running.',
+    };
+  }
+
+  // ── 1. Remove reachability: stop the schedule ─────────────────────────────
+  let trigger: CopyDisarmOutcome['trigger'] = 'absent';
+  let triggerDetail = '';
+  try {
+    const trg = await getTrigger(triggerName);
+    const state = trg?.properties?.runtimeState;
+    if (state === 'Started' || !state) {
+      // Started, or present-but-state-unreadable. Stopping an already-stopped
+      // trigger is a no-op in ADF, so when the state is UNKNOWN the safe move is
+      // to stop it rather than to assume it is idle.
+      try {
+        await stopTrigger(triggerName);
+        trigger = 'stopped';
+      } catch (e: any) {
+        trigger = 'stop-failed';
+        triggerDetail = e?.message || String(e);
+      }
+    } else {
+      trigger = 'already-stopped';
+    }
+  } catch (e: any) {
+    if (e?.status === 404) {
+      trigger = 'absent';
+    } else {
+      // Could not READ the trigger. That is not evidence it is idle, so attempt
+      // the stop regardless rather than leave a possibly-armed schedule running.
+      try {
+        await stopTrigger(triggerName);
+        trigger = 'stopped';
+      } catch {
+        trigger = 'unreadable';
+        triggerDetail = e?.message || String(e);
+      }
+    }
+  }
+
+  // ── 2. Remove the hazard: strip the delete-first activities ───────────────
+  // Only Deletes that are NOT gated on a successful Copy are removed. A Delete
+  // from the corrected shape is load-bearing — it retires the previous
+  // generation — and stripping it would trade data loss for unbounded duplicate
+  // accumulation, a different defect.
+  let pipeline: CopyDisarmOutcome['pipeline'] = 'absent';
+  let deletesRemoved = 0;
+  let pipelineDetail = '';
+  let existing: any = null;
+  try {
+    existing = await getPipeline(pipelineName);
+  } catch (e: any) {
+    existing = null;
+    pipeline = e?.status === 404 ? 'absent' : 'unreadable';
+    if (pipeline === 'unreadable') pipelineDetail = e?.message || String(e);
+  }
+  if (existing) {
+    const acts: any[] = Array.isArray(existing?.properties?.activities) ? existing.properties.activities : [];
+    const byName = new Map<string, any>(acts.map((a) => [String(a?.name ?? ''), a]));
+    const armed = acts.filter((a) => a?.type === 'Delete' && !deleteIsGatedOnCopySuccess(a, byName));
+    if (!armed.length) {
+      pipeline = 'already-safe';
+    } else {
+      const armedNames = new Set(armed.map((a) => String(a?.name ?? '')));
+      const kept = acts
+        .filter((a) => !armedNames.has(String(a?.name ?? '')))
+        .map((a) => {
+          const deps = Array.isArray(a?.dependsOn) ? a.dependsOn : [];
+          const pruned = deps.filter((d: any) => !armedNames.has(String(d?.activity ?? '')));
+          return pruned.length === deps.length ? a : { ...a, dependsOn: pruned };
+        });
+      try {
+        await upsertPipeline(pipelineName, {
+          name: pipelineName,
+          properties: { ...existing.properties, activities: kept },
+        } as any);
+        deletesRemoved = armed.length;
+        pipeline = 'rewritten';
+      } catch (e: any) {
+        pipeline = 'rewrite-failed';
+        pipelineDetail = e?.message || String(e);
+      }
+    }
+  }
+
+  // ── 3. Report exactly what happened ───────────────────────────────────────
+  const triggerPhrase = {
+    'stopped': `its schedule trigger ${triggerName} was STOPPED`,
+    'already-stopped': `its schedule trigger ${triggerName} was already stopped`,
+    'absent': 'it has no schedule trigger',
+    'stop-failed': `its schedule trigger ${triggerName} could NOT be stopped (${triggerDetail}) and may still be firing`,
+    'unreadable': `its schedule trigger ${triggerName} could NOT be read or stopped (${triggerDetail}), so whether it is still firing is UNKNOWN`,
+    'not-checked': 'its schedule trigger was not checked',
+  }[trigger];
+  const pipelinePhrase = {
+    'absent': 'no previously provisioned pipeline exists in the factory',
+    'already-safe': 'the stored pipeline has no delete-first activity',
+    'rewritten': `${deletesRemoved} delete-first activit${deletesRemoved === 1 ? 'y was' : 'ies were'} REMOVED from the stored pipeline`,
+    'rewrite-failed': `the stored pipeline still holds delete-first activities and could NOT be rewritten (${pipelineDetail})`,
+    'unreadable': `the stored pipeline could NOT be read (${pipelineDetail}), so whether it holds a delete-first activity is UNKNOWN`,
+    'not-checked': 'the stored pipeline was not checked',
+  }[pipeline];
+
+  return {
+    trigger, pipeline, deletesRemoved,
+    summary: `Existing ADF artifacts for this mirror (${pipelineName}): ${pipelinePhrase}, and ${triggerPhrase}.`,
+  };
 }
 
 /** Refresh cadence → ADF schedule-trigger recurrence. 'on-demand' = no trigger. */
@@ -94,7 +564,8 @@ function copyRecurrence(cadence: string): { frequency: string; interval: number 
  *
  * HONESTY NOTE (deploy-integrity.md R7): on this backend `incremental` means
  * "re-copied on a schedule", not row-level change capture — the ADF Snowflake
- * connector has no CDC source, so each run is a delete-then-copy full refresh.
+ * connector has no CDC source, so each run is a full refresh: a fresh copy
+ * followed by a delete of the previous generation.
  * Snowflake CHANGES/stream-based row-level deltas are a disclosed follow-up, and
  * the wizard's per-source note says exactly this rather than implying more.
  */
@@ -120,6 +591,32 @@ export function planCopyTrigger(
   return { kind: 'schedule', cadence, recurrence };
 }
 
+
+/**
+ * Return a Gated result — and first REPAIR whatever this mirror already has in
+ * the factory.
+ *
+ * Every gate in `runMirrorAdfCopy` returns before `upsertPipeline`, so without
+ * this a gate is purely advisory for an already-provisioned mirror: it stops the
+ * next bad pipeline being written and leaves the existing one running. Routing
+ * all of them through here makes "Loom cannot run this correctly" and "so Loom
+ * has made sure it is not running" the same event.
+ *
+ * The disarm's own account of what it did is appended to the gate message, so
+ * the operator is told the true post-state — including when the repair itself
+ * failed or could not be verified — rather than being left to assume the gate
+ * made things safe (deploy-integrity.md R7).
+ */
+async function gatedRun(
+  mirrorId: string, missing: string, message: string, note: string,
+): Promise<MirrorRunResult> {
+  const disarm = await disarmExistingCopyPipeline(mirrorId);
+  return {
+    ok: false, status: 'Gated', backend: 'azure-native-cdc', engine: 'adf-copy', tables: [],
+    gate: { missing, message: `${message} ${disarm.summary}` },
+    note,
+  };
+}
 
 /**
  * POSITIVE evidence that ADF REFUSED the trigger call, or `null` when nothing
@@ -198,43 +695,70 @@ export function describeTriggerStartFailure(
 
 /**
  * Provision + run an ADF Copy pipeline that lands each selected table as Parquet
- * in ADLS Bronze (delete-then-copy full refresh), and — unless syncMode is
+ * in ADLS Bronze (copy-then-swap full refresh), and — unless syncMode is
  * 'snapshot' — register a schedule trigger that re-runs the copy on a cadence
  * (LOOM_MIRROR_COPY_CADENCE, default '1h'). Returns a MirrorRunResult carrying the
  * pipeline name (the ADF run-id receipt) + per-table Parquet landing paths. The
- * Snowflake source + AzureBlobFS sink are pre-existing ADF linked services bound
- * by env var. Real ARM calls; failures surface verbatim (no fake success).
+ * Snowflake source and the AzureBlobFS sink are BOTH auto-bound — the source from
+ * the mirror's Loom Connection, the sink from the deployment's Bronze account —
+ * so neither is an env var the operator has to discover. Real ARM calls; failures
+ * surface verbatim (no fake success).
  */
 export async function runMirrorAdfCopy(
   mirrorId: string, workspaceId: string, src: MirrorSource, tableSpecs: MirrorTableSpec[], note: string,
 ): Promise<MirrorRunResult> {
-  const adlsLs = mirrorAdlsLinkedService();
   const adfGate = adfCdcConfigGate();
-  if (adfGate || !adlsLs) {
-    return {
-      ok: false, status: 'Gated', backend: 'azure-native-cdc', engine: 'adf-copy', tables: [],
-      gate: {
-        missing: adfGate?.missing || 'LOOM_MIRROR_ADLS_LINKED_SERVICE',
-        message:
-          'Snowflake mirroring runs on an ADF Copy runtime (no Microsoft Fabric). This deployment is missing the ' +
-          'factory or the ADLS sink linked service, both of which platform/fiab/bicep deploys: ' +
-          `${adfGate?.missing || 'LOOM_MIRROR_ADLS_LINKED_SERVICE'}. The Snowflake source linked service is NOT a ` +
-          "prerequisite — Loom builds it from the mirror's connection.",
-      },
+  if (adfGate) {
+    return gatedRun(
+      mirrorId,
+      adfGate.missing,
+      'Snowflake mirroring runs on an ADF Copy runtime (no Microsoft Fabric). This deployment has no Data ' +
+        `Factory bound: ${adfGate.missing}. platform/fiab/bicep deploys it. Neither linked service is a ` +
+        "prerequisite — Loom builds the Snowflake source from the mirror's connection and the ADLS sink from " +
+        'the deployment’s Bronze account.',
       note,
-    };
+    );
   }
+
+  // ── Validate the source/sink pairing BEFORE authoring anything ────────────
+  // Cheapest gate first: if this deployment cannot move a Snowflake row into
+  // Bronze at all, say so now rather than binding a linked service, enumerating
+  // the source, and authoring a pipeline whose every run ADF will reject.
+  //
+  // The staging linked service's TYPE is read back from the factory, not
+  // inferred from the variable being set — see planSnowflakeCopyTransfer for
+  // why a name-only check is not a gate. This mirrors what the SOURCE linked
+  // service already does via snowflakeDatasetKind().
+  const stagingLs = mirrorStagingBlobLinkedService();
+  const staging = await bindStagingLinkedService(mirrorId);
+  if (!staging.ok && staging.missing === 'staging-linked-service-bind-failed') {
+    return gatedRun(mirrorId, staging.missing, staging.message, note);
+  }
+  const stagingName = staging.ok ? staging.name : stagingLs;
+  const transfer = planSnowflakeCopyTransfer(
+    stagingName,
+    stagingName ? await readLinkedServiceType(stagingName) : null,
+  );
+  if (transfer.kind === 'unsupported') {
+    return gatedRun(mirrorId, transfer.missing, transfer.message, note);
+  }
+
+  // ── Auto-bind the ADLS Bronze sink (auto-bind-by-default.md §5) ────────────
+  // Created here rather than demanded via LOOM_MIRROR_ADLS_LINKED_SERVICE, which
+  // no shipped deployment sets. Re-upserted every Start, so a sink deleted
+  // out-of-band self-heals (§3). An operator-pinned name still wins.
+  const sink = await ensureMirrorAdlsLinkedService();
+  if ('gate' in sink) {
+    return gatedRun(mirrorId, sink.gate.missing, sink.gate.message, note);
+  }
+  const adlsLs = sink.linkedServiceName;
 
   // ── Auto-bind the Snowflake linked service (auto-bind-by-default.md §5) ────
   // Built from the mirror's Loom Connection, named after it, and re-upserted on
   // every Start so a linked service deleted or edited out-of-band self-heals.
   const bound = await resolveSnowflakeLinkedService(src.tenantId || '', src.connectionId);
   if ('gate' in bound) {
-    return {
-      ok: false, status: 'Gated', backend: 'azure-native-cdc', engine: 'adf-copy', tables: [],
-      gate: { missing: bound.gate.missing, message: bound.gate.message },
-      note,
-    };
+    return gatedRun(mirrorId, bound.gate.missing, bound.gate.message, note);
   }
   const sourceLs = bound.binding.linkedServiceName;
   // A pinned linked service may be the LEGACY V1 connector; read its type rather
@@ -254,11 +778,7 @@ export async function runMirrorAdfCopy(
   if (!specs.length) {
     const listed = await listSnowflakeTables(src.tenantId || '', src.connectionId, src.database);
     if ('gate' in listed) {
-      return {
-        ok: false, status: 'Gated', backend: 'azure-native-cdc', engine: 'adf-copy', tables: [],
-        gate: { missing: listed.gate.missing, message: listed.gate.message },
-        note,
-      };
+      return gatedRun(mirrorId, listed.gate.missing, listed.gate.message, note);
     }
     const all = listed.tables;
     visibleSchemas = listed.visibleSchemas;
@@ -286,16 +806,14 @@ export async function runMirrorAdfCopy(
         (visibleSchemas === null
           ? ' (Loom could not determine whether the role can see its schemas, so a missing grant is still possible).'
           : ` across the ${visibleSchemas} schema(s) the role can see.`);
-    return {
-      ok: false, status: 'Gated', backend: 'azure-native-cdc', engine: 'adf-copy', tables: [],
-      gate: {
-        missing: noVisibility ? 'snowflake-grants' : 'tables',
-        message: src.includeIcebergTables || noVisibility
-          ? base
-          : `${base} If its tables are Snowflake-managed Iceberg tables, turn on "Include Iceberg tables" on the mirror.`,
-      },
+    return gatedRun(
+      mirrorId,
+      noVisibility ? 'snowflake-grants' : 'tables',
+      src.includeIcebergTables || noVisibility
+        ? base
+        : `${base} If its tables are Snowflake-managed Iceberg tables, turn on "Include Iceberg tables" on the mirror.`,
       note,
-    };
+    );
   }
   const tableSpecsResolved = specs;
 
@@ -305,7 +823,7 @@ export async function runMirrorAdfCopy(
   const cadence = (process.env.LOOM_MIRROR_COPY_CADENCE || '1h').trim();
   const triggerPlan = planCopyTrigger(src.syncMode, cadence);
 
-  // One source dataset + one Parquet sink dataset + a delete-then-copy activity
+  // One source dataset + one Parquet sink dataset + a copy-then-swap activity
   // pair per selected table. Datasets named off the pipeline + table (safe).
   const activities: unknown[] = [];
   try {
@@ -333,31 +851,87 @@ export async function runMirrorAdfCopy(
           },
         },
       } as any);
-      const delName = adfSafeName(`Delete_${t.schema}_${t.table}`);
+      const delName = adfSafeName(`DeletePrev_${t.schema}_${t.table}`);
       const copyName = adfSafeName(`Copy_${t.schema}_${t.table}`);
-      // Delete clears the folder so each full-refresh run overwrites (no dup rows).
-      activities.push({
-        name: delName,
-        type: 'Delete',
-        dependsOn: [],
-        typeProperties: {
-          dataset: { referenceName: sinkDs, type: 'DatasetReference' },
-          recursive: true,
-          enableLogging: false,
-          storeSettings: { type: 'AzureBlobFSReadSettings', recursive: true },
-        },
-      });
+      // ── Copy FIRST; delete the PREVIOUS generation only once it succeeded ──
+      // The Delete used to run first with `dependsOn: []`, which made the full
+      // refresh non-transactional: the Delete succeeded, the Copy failed, and
+      // Bronze was left EMPTY. That is silent data loss on any copy failure,
+      // transient or not. Measured on pipeline `loom_copy_1ac5d678` — four
+      // consecutive runs, every Delete Succeeded, every Copy Failed,
+      // `rowsCopied: null` throughout (issue #4083).
+      //
+      // Copy now has no dependency and the Delete is conditional on it having
+      // SUCCEEDED, so a failed copy leaves the previous snapshot intact. The
+      // Delete removes only files last modified BEFORE this run started
+      // (`@pipeline().TriggerTime`), which is the previous generation — the
+      // rows this run just wrote are newer and are not matched. Chaining a
+      // Delete behind a Copy this way is the shape Learn documents for moving
+      // data; `wildcardFileName` is required whenever a modifiedDatetime filter
+      // is used, a documented limitation of the Delete activity.
+      //   https://learn.microsoft.com/azure/data-factory/delete-activity
+      //
+      // WHAT THIS SHAPE COSTS — both windows, stated (deploy-integrity.md R7).
+      // Copy-then-delete is not transactional. There is no instant at which
+      // Bronze is guaranteed to hold exactly one generation, so a concurrent
+      // reader (Synapse Serverless OPENROWSET over this folder, which is how
+      // the rest of the platform reads Bronze) can observe two wrong states:
+      //
+      //   1. DURING every healthy run, between the Copy completing and the
+      //      Delete completing, Bronze holds BOTH the previous generation and
+      //      the fresh one, so a read in that window returns EVERY ROW TWICE.
+      //      This is the dangerous one because it is SILENT: no error, no empty
+      //      folder, nothing anomalous in the data — just doubled counts and
+      //      doubled sums, for as long as the Delete takes.
+      //   2. AFTER a run whose Copy SUCCEEDED and whose Delete FAILED, Bronze
+      //      holds both generations persistently — duplicate rows until the
+      //      next successful run repairs it.
+      //
+      // Both are recoverable and neither destroys data, which is why this shape
+      // was chosen over the pre-#4083 delete-first shape (that one emptied
+      // Bronze on ANY copy failure) and over write-then-swap (4 activities per
+      // table would breach ADF's 120-activity pipeline ceiling at MAX_TABLES=50
+      // and force a regression from 50 tables to 30). This is a real
+      // correctness limit of the ADF Copy backend, not something reordering
+      // fixes: closing window 1 needs an atomic publish (swapping a pointer the
+      // reader follows), which is tracked separately. Do NOT describe this
+      // backend as giving readers a consistent snapshot — it does not.
       activities.push({
         name: copyName,
         type: 'Copy',
-        dependsOn: [{ activity: delName, dependencyConditions: ['Succeeded'] }],
+        dependsOn: [],
         inputs: [{ referenceName: srcDs, type: 'DatasetReference' }],
         outputs: [{ referenceName: sinkDs, type: 'DatasetReference' }],
         typeProperties: {
           source: { type: kind.source, exportSettings: { type: 'SnowflakeExportCopyCommand' } },
-
-          sink: { type: 'ParquetSink', storeSettings: { type: 'AzureBlobFSWriteSettings' } },
-          enableStaging: false,
+          // MergeFiles is required on a staged Snowflake copy: without it only
+          // the last partitioned file of the unload is copied to the sink.
+          //   https://learn.microsoft.com/azure/data-factory/connector-snowflake
+          sink: {
+            type: 'ParquetSink',
+            storeSettings: { type: 'AzureBlobFSWriteSettings', copyBehavior: 'MergeFiles' },
+          },
+          enableStaging: true,
+          stagingSettings: {
+            linkedServiceName: { referenceName: transfer.stagingLinkedService, type: 'LinkedServiceReference' },
+            path: staging.ok ? staging.stagingPath : `${STAGING_PATH_ROOT}/${mirrorId}`,
+          },
+        },
+      });
+      activities.push({
+        name: delName,
+        type: 'Delete',
+        dependsOn: [{ activity: copyName, dependencyConditions: ['Succeeded'] }],
+        typeProperties: {
+          dataset: { referenceName: sinkDs, type: 'DatasetReference' },
+          recursive: true,
+          enableLogging: false,
+          storeSettings: {
+            type: 'AzureBlobFSReadSettings',
+            recursive: true,
+            wildcardFileName: '*',
+            modifiedDatetimeEnd: { value: '@pipeline().TriggerTime', type: 'Expression' },
+          },
         },
       });
     }
@@ -390,10 +964,32 @@ export async function runMirrorAdfCopy(
   // factory (see planCopyTrigger). Best-effort: a trigger failure does not fail
   // the initial load, and the reason is stated rather than swallowed.
   let triggerNote = '';
+  const triggerName = adfCopyTriggerName(pipelineName);
   if (triggerPlan.kind === 'none') {
-    triggerNote = ` ${triggerPlan.reason}`;
+    // A mode with NO ongoing trigger must also retire one a previous Start left
+    // behind. Switching a mirror from incremental to snapshot otherwise leaves
+    // the old ScheduleTrigger firing the pipeline on the old cadence forever,
+    // which makes the sync-mode selector a lie — the same stale-binding class as
+    // the delete-first pipeline (auto-bind-by-default.md §3).
+    let stopped = '';
+    try {
+      const trg = await getTrigger(triggerName);
+      if (trg?.properties?.runtimeState === 'Started') {
+        await stopTrigger(triggerName);
+        stopped = ` A trigger left by a previous sync mode (${triggerName}) was stopped.`;
+      }
+    } catch (e: any) {
+      // 404 = there was never a trigger, which is the expected case. Anything
+      // else means Loom does NOT know whether one is still firing, and says so
+      // rather than implying the one-time load is the only thing that will run.
+      if (e?.status !== 404) {
+        stopped =
+          ` Loom could NOT confirm whether a trigger from a previous sync mode (${triggerName}) is still running ` +
+          `(${e?.message || String(e)}).`;
+      }
+    }
+    triggerNote = ` ${triggerPlan.reason}${stopped}`;
   } else {
-    const triggerName = adfSafeName(`${pipelineName}_trg`);
     const startTime = new Date().toISOString();
     try {
       if (triggerPlan.kind === 'tumbling') {
@@ -438,10 +1034,20 @@ export async function runMirrorAdfCopy(
     : bound.binding.credential === 'inline-secure-string'
       ? ' Credential stored in the linked service as an encrypted SecureString (no Key Vault linked service is bound in this deployment).'
       : '';
+  // Say when the staging credential runs out. A trigger keeps firing past that
+  // point and those runs fail to stage — stating the date is the difference
+  // between a known limit and a mystery outage (deploy-integrity.md R7).
+  const stagingNote = staging.ok && staging.autoBound && staging.expiresAt
+    ? ` Staging linked service ${staging.name} was bound automatically with a container-scoped Entra ` +
+      `user-delegation SAS valid until ${staging.expiresAt}; Start the mirror again before then to refresh it.`
+    : '';
   const adfNote =
     'Azure-native mirror via ADF Copy runtime (no Microsoft Fabric): each selected Snowflake table is ' +
-    `delete-then-copied as Parquet into ADLS Bronze. Pipeline: ${pipelineName}. ` +
-    `Snowflake linked service: ${sourceLs}.${credNote}${tableNote}${triggerNote}`;
+    `copied as Parquet into ADLS Bronze, staged through ${transfer.stagingLinkedService}, and the previous ` +
+    `generation deleted only after that copy succeeded. Pipeline: ${pipelineName}. ` +
+    `Snowflake linked service: ${sourceLs}. ADLS sink linked service: ${adlsLs}` +
+    `${sink.pinned ? ' (pinned by LOOM_MIRROR_ADLS_LINKED_SERVICE)' : ' (auto-bound by Loom)'}.` +
+    `${credNote}${stagingNote}${tableNote}${triggerNote}`;
   const lastSync = new Date().toISOString();
   const tables: MirrorTableResult[] = tableSpecsResolved.map((t) => {
 

@@ -2417,7 +2417,7 @@ dispatch is invisible to it. Full limits: `scripts/ci/_route-backends.mjs`.
 
 ## Authorization resolvers (derived)
 
-184 function(s) across 83 module(s) reach an owner / workspace-ACL
+186 function(s) across 83 module(s) reach an owner / workspace-ACL
 decision. Derived by `scripts/ci/_route-auth-scope.mjs` from the seeds above —
 nothing here is hand-maintained. A change to this list in a diff means the
 authorization surface moved.
@@ -2470,7 +2470,7 @@ authorization surface moved.
 | `apps/fiab-console/lib/azure/agent-memory-client.ts` | `deleteThread`, `getThread` |
 | `apps/fiab-console/lib/azure/agent-mesh-run.ts` | `agentConfig` |
 | `apps/fiab-console/lib/azure/attached-services-store.ts` | `applyIntegrationResults`, `loadAttachedService` |
-| `apps/fiab-console/lib/azure/connection-auth.ts` | `resolvePgAuthDescribed`, `resolveSqlAuth`, `resolveSqlAuthDescribed` |
+| `apps/fiab-console/lib/azure/connection-auth.ts` | `mirrorBindingMismatch`, `resolveConnectionType`, `resolvePgAuthDescribed`, `resolveSqlAuth`, `resolveSqlAuthDescribed` |
 | `apps/fiab-console/lib/azure/connections-store.ts` | `loadConnection` |
 | `apps/fiab-console/lib/azure/copilot-orchestrator.ts` | `buildDefaultRegistry`, `updateSessionMeta` |
 | `apps/fiab-console/lib/azure/feature-store-item.ts` | `loadFeatureTableItem`, `persistFeatureTableItem`, `resolveFeatureTableItem` |
@@ -2525,7 +2525,7 @@ silently downgrading the route.
 
 ## Backend signals (derived)
 
-448 module(s) ORIGINATE a backend label — the derivation read an
+446 module(s) ORIGINATE a backend label — the derivation read an
 Azure identifier out of them. Every other route/module below inherits through the
 call graph. Nothing in this section is a Loom module name someone typed: the
 modules are derived, and only the Microsoft-owned identifier vocabulary is seeded.
@@ -3171,7 +3171,6 @@ caps the NUMBER of cuts at three; it does not bound what one cut can hide.
 | `apps/fiab-console/lib/gates/registry/data-plane.ts` | Azure RBAC |
 | `apps/fiab-console/lib/gates/registry/types.ts` | AAS, ADF, ADX, AI Search, AML, APIM, Azure AI Services, Azure Maps, Azure SQL, Azure Storage, Batch, Container Apps, Cosmos, Databricks, Event Hubs, Key Vault, Log Analytics, PostgreSQL, Purview, Service Bus, Synapse |
 | `apps/fiab-console/lib/governance/workspace-egress-pane.tsx` | Azure Storage |
-| `apps/fiab-console/lib/install/provisioners/_seed-dev-pipeline.ts` | ADLS |
 | `apps/fiab-console/lib/install/provisioners/ai-search.ts` | AI Search |
 | `apps/fiab-console/lib/install/provisioners/data-product.ts` | Purview |
 | `apps/fiab-console/lib/install/provisioners/evaluation.ts` | AML |
@@ -3180,7 +3179,6 @@ caps the NUMBER of cuts at three; it does not bound what one cut can hide.
 | `apps/fiab-console/lib/install/provisioners/kql-db.ts` | ADX |
 | `apps/fiab-console/lib/install/provisioners/lakehouse.ts` | Azure Storage, Fabric |
 | `apps/fiab-console/lib/install/provisioners/logic-app.ts` | Logic Apps |
-| `apps/fiab-console/lib/install/provisioners/mirrored-database.ts` | ADLS |
 | `apps/fiab-console/lib/install/provisioners/mirrored-databricks.ts` | Databricks |
 | `apps/fiab-console/lib/install/provisioners/notebook.ts` | Synapse |
 | `apps/fiab-console/lib/install/provisioners/prompt-flow.ts` | AML |

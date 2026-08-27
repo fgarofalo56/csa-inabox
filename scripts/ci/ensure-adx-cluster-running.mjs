@@ -48,9 +48,33 @@
  *   none    already Running → no mutation at all.
  *   start   Stopped/Stopping → POST .../start, then poll until Running.
  *   wait    Starting/Creating/Updating → someone else is mid-flight; poll.
+ *   paused  Stopped/Stopping AND the boundary is DECLARED paused → no start, no
+ *           failure, and the lane stands down. See the section below.
  *   refuse  Unavailable/Deleting/Deleted, an unknown state string, an
  *           unreadable control plane, or a start that did not reach Running
  *           inside the budget. Never "assume it came up".
+ *
+ * ── ROUND 3: A DELIBERATELY PAUSED ESTATE IS NOT A FAILURE ──────────────────
+ *
+ * `deploy-fiab-gcch` went red for 17 consecutive runs after 2026-08-11, every
+ * one at this step with byte-identical output: `state=Stopped → start`, then
+ * `(InsufficientResourcesForSubscription)`. Nothing about the lane was broken —
+ * it authenticated to Azure Government, read the live state, and failed closed
+ * on a real refusal. What changed is that the estate is now deliberately kept
+ * stopped under the pause/resume mandate, so the daily schedule was failing on a
+ * condition the operator chose.
+ *
+ * THE FIX IS NOT `if (state === 'Stopped') skip`. That is a control that cannot
+ * fail, and it would make a genuinely broken cluster read as fine forever on a
+ * P0 sovereign path. Intent is NOT inferable from state. So the suppression keys
+ * to an explicit, checked-in, expiring declaration —
+ * scripts/ci/estate-pause-declaration.json, via `--boundary` — and never to the
+ * observed state alone. Undeclared + Stopped still fails, exactly as before.
+ *
+ * The verdict is published as an `estate_paused` step output because this step
+ * is not the only one a stopped engine breaks: `Bicep what-if` and `Provision`
+ * hit the same ClusterNotValidForPrincipals refusal. Exiting 0 here without
+ * standing the lane down would just move the identical red two steps later.
  *
  * ── ROUND 2 (#3786): A TRANSIENT ARM BLIP TOOK THE WHOLE DEPLOY DOWN ────────
  *
@@ -103,14 +127,23 @@
  *
  * Usage:
  *   node scripts/ci/ensure-adx-cluster-running.mjs \
- *     --subscription <sub-id> --rg rg-csa-loom-admin-<loc> [--timeout-seconds 1800]
+ *     --subscription <sub-id> --rg rg-csa-loom-admin-<loc> [--timeout-seconds 1800] \
+ *     [--boundary GCC-High]
  *
  * Tests: node --test scripts/ci/__tests__/estate-preflight.test.mjs
  */
 
 import { execFileSync } from 'node:child_process';
+import { appendFileSync, readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import path from 'node:path';
 import { definiteAbsenceCode } from './_arm-absence.mjs';
 import { classifyAzFailure, isRetryable, remediationFor } from './_az-failure-class.mjs';
+import {
+  classifyPauseDeclaration,
+  reconcileWithDeclaredPause,
+  PAUSE_DECLARATION_PATH,
+} from './_estate-pause-declaration.mjs';
 
 export const KUSTO_API_VERSION = '2024-04-13';
 
@@ -399,6 +432,55 @@ function readState(id) {
   return { ok: true, state: res.stdout.replace(/\r/g, '').trim(), stderr: '', kind: null, attempts: res.attempts };
 }
 
+/**
+ * Read the estate-pause register, or null.
+ *
+ * NULL IS NOT AN ERROR. The common case is that no estate is declared paused and
+ * this file does not exist, and `classifyPauseDeclaration` turns null into "NOT
+ * declared paused" — i.e. into the behaviour this script had before the register
+ * existed. There is deliberately no `2>/dev/null`-shaped swallow here: the catch
+ * returns the message so the caller can PRINT why a declaration the operator
+ * believes they wrote did not apply.
+ *
+ * @param {string} repoRoot
+ * @returns {{register: object|null, readError: string|null}}
+ */
+function loadPauseRegister(repoRoot) {
+  const file = path.join(repoRoot, PAUSE_DECLARATION_PATH);
+  let text;
+  try {
+    text = readFileSync(file, 'utf8');
+  } catch (e) {
+    if (e && e.code === 'ENOENT') return { register: null, readError: null };
+    return { register: null, readError: `could not read ${PAUSE_DECLARATION_PATH}: ${e?.message ?? e}` };
+  }
+  try {
+    return { register: JSON.parse(text), readError: null };
+  } catch (e) {
+    return { register: null, readError: `${PAUSE_DECLARATION_PATH} is not valid JSON: ${e?.message ?? e}` };
+  }
+}
+
+/**
+ * Publish the estate-paused verdict to the workflow.
+ *
+ * The lane needs this because the preflight is NOT the only step a stopped
+ * cluster breaks: `Bicep what-if` cannot enumerate principalAssignments against
+ * a stopped engine either (that is the same ARM refusal #3980 was written
+ * about), and `Provision` fails on the same leaf. So a paused estate has to make
+ * the lane STAND DOWN, not merely make this one step exit 0 on its way to the
+ * identical failure two steps later.
+ *
+ * ALWAYS WRITTEN, both values, so the output is a measurement rather than a
+ * presence check. A step that writes the key only when it is `true` cannot be
+ * distinguished from a step that failed to write at all.
+ */
+function publishEstatePaused(paused) {
+  const line = `estate_paused=${paused ? 'true' : 'false'}\n`;
+  console.log(`[adx-preflight] ${line.trim()}`);
+  if (process.env.GITHUB_OUTPUT) appendFileSync(process.env.GITHUB_OUTPUT, line);
+}
+
 function main() {
   const args = parseArgs(process.argv.slice(2));
   const missing = ['subscription', 'rg'].filter((k) => !args[k]);
@@ -418,6 +500,26 @@ function main() {
         `'${args['timeout-seconds']}'. Refusing to poll on a budget that can never be exceeded.`,
     );
   }
+
+  // ── Is this estate DECLARED paused? ───────────────────────────────────────
+  // Read BEFORE any az call, and LOGGED UNCONDITIONALLY — whether it suppresses
+  // or not, and with the reason either way. A suppression nobody can see in the
+  // log is a suppression nobody can audit, and a declaration that was silently
+  // rejected (expired, unowned, thin reason) would otherwise look identical to
+  // one that was never written.
+  //
+  // --boundary is OPTIONAL. A lane that does not pass it gets `declared: false`,
+  // which is byte-for-byte the behaviour this script had before the register
+  // existed. That is what keeps this change scoped to the lane that opts in.
+  const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
+  const { register, readError } = loadPauseRegister(repoRoot);
+  if (readError) console.log(`::warning::[adx-preflight] ${readError} — NOT treating any estate as declared paused.`);
+  const pause = classifyPauseDeclaration({
+    register,
+    boundary: args.boundary,
+    today: new Date().toISOString().slice(0, 10),
+  });
+  console.log(`[adx-preflight] estate pause declaration: declared=${pause.declared} — ${pause.reason}`);
 
   const listed = azWithRetry(
     [
@@ -448,6 +550,13 @@ function main() {
 
   if (enumeration.decision === 'greenfield') {
     console.log(`[adx-preflight] ${enumeration.reason}`);
+    // NOT paused, even when the register declares this boundary paused. A pause
+    // declaration says an EXISTING engine is deliberately down; it says nothing
+    // about an estate that has no cluster yet. Standing the lane down here would
+    // block the greenfield half of deploy-integrity.md R4 — the from-scratch
+    // apply that CREATES the cluster — on a declaration about a cluster that
+    // does not exist.
+    publishEstatePaused(false);
     return;
   }
 
@@ -456,6 +565,7 @@ function main() {
   // on. Today the admin plane deploys exactly one, so the two sets are identical;
   // if a second is ever added here it would also be started (and billed). Each
   // cluster it acts on is named in the log below, so the scope is never silent.
+  let anyPaused = false;
   for (const id of enumeration.ids) {
     const name = id.split('/').pop();
     const first = readState(id);
@@ -469,13 +579,33 @@ function main() {
       );
     }
 
-    const verdict = classifyClusterState(first.state);
-    console.log(`[adx-preflight] ${name}: state=${first.state} → ${verdict.action} — ${verdict.reason}`);
+    const observed = classifyClusterState(first.state);
+    const verdict = reconcileWithDeclaredPause({
+      action: observed.action,
+      state: first.state,
+      declared: pause.declared,
+    });
+    console.log(`[adx-preflight] ${name}: state=${first.state} → ${verdict.action} — ${observed.reason}`);
+    if (verdict.note) {
+      // An INCONSISTENCY (declared paused, engine live) is a warning, never a
+      // failure: a Running cluster is precisely what the apply needs, so failing
+      // on it would break the lane in the one case where it can actually work.
+      const level = verdict.action === 'paused' ? 'notice' : 'warning';
+      console.log(`::${level}::[adx-preflight] ${name}: ${verdict.note}`);
+    }
 
+    if (verdict.action === 'paused') {
+      // The declared, expected case. No start (that would defeat the pause
+      // mandate and bill the operator from an unattended cron), no failure —
+      // and the lane stands down below rather than walking into the identical
+      // ClusterNotValidForPrincipals refusal at what-if and at the apply.
+      anyPaused = true;
+      continue;
+    }
     if (verdict.action === 'none') continue;
     if (verdict.action === 'refuse') {
       fail(
-        `ADX cluster '${name}' cannot be brought to Running: ${verdict.reason} ` +
+        `ADX cluster '${name}' cannot be brought to Running: ${observed.reason} ` +
           'The deployment declares Microsoft.Kusto/clusters/principalAssignments on it, which the Kusto RP can ' +
           'only write against a live engine, so the apply would fail regardless. ' +
           'REMEDIATION: resolve the cluster state in the portal (Data Explorer → the cluster → Overview), then re-run.',
@@ -549,6 +679,10 @@ function main() {
       sleepSeconds(POLL_INTERVAL_SECONDS);
     }
   }
+
+  // Reached ONLY on the paths that did not fail(), so this can never publish a
+  // stand-down for a lane that is about to go red anyway.
+  publishEstatePaused(anyPaused);
 }
 
 if (process.argv[1] && process.argv[1].endsWith('ensure-adx-cluster-running.mjs')) main();

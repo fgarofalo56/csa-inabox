@@ -5,8 +5,16 @@
  * upsert) followed by POST /indexes/{name}/docs/index for sample
  * documents.
  *
- * Auth: DefaultAzureCredential / UAMI against
- * https://{service}.search.windows.net/.default
+ * Auth: DefaultAzureCredential / UAMI against `searchAadScope()` —
+ * `https://search.azure.com/.default` in Commercial/GCC,
+ * `https://search.azure.us/.default` in GCC-High / IL5 / DoD.
+ *
+ * Sovereign clouds (cloud-parity.md): every host and audience on this path is
+ * resolved through `@/lib/azure/cloud-endpoints` — `searchEndpointBase()` for
+ * the data-plane base URL, `searchAadScope()` for the token audience. The
+ * data-plane suffix differs per cloud, so a wired-in Commercial literal never
+ * reaches the sovereign service at all — see #4063.
+ *   Commercial / GCC: search.windows.net   GCC-High / IL5: search.usgovcloudapi.net   cloud-endpoint-literal-ok: per-cloud truth table, not a wired-in host
  *
  * Remediation gates:
  *   - LOOM_AI_SEARCH_SERVICE missing → set it.
@@ -32,6 +40,7 @@
 import { fetchWithTimeout } from '@/lib/azure/fetch-with-timeout';
 import { ChainedTokenCredential, DefaultAzureCredential, ManagedIdentityCredential } from '@azure/identity';
 import { AcaManagedIdentityCredential } from '@/lib/azure/aca-managed-identity';
+import { searchAadScope, searchEndpointBase, searchSuffix } from '@/lib/azure/cloud-endpoints';
 import type { Provisioner, ProvisionResult } from './types';
 import { resolveInfraResidual } from './types';
 
@@ -42,7 +51,12 @@ const credential = uamiClientId
   : new DefaultAzureCredential();
 
 async function token(): Promise<string> {
-  const t = await credential.getToken('https://search.azure.com/.default');
+  // Cloud-aware audience. Per cloud-endpoints.ts:searchAadScope — grounded in
+  // Microsoft Learn "Connect your app to Azure AI Search using identities",
+  // which lists https://search.azure.us as the Azure Government audience — a
+  // Commercial-audience token does not authenticate against a Gov search
+  // service. Not measured against a live Gov service by #4063.
+  const t = await credential.getToken(searchAadScope());
   if (!t?.token) throw new Error('Failed to acquire AAD token for AI Search');
   return t.token;
 }
@@ -244,7 +258,7 @@ export const aiSearchProvisioner: Provisioner = async (input): Promise<Provision
       status: 'remediation',
       gate: {
         reason: 'AI Search service not configured.',
-        remediation: 'Set LOOM_AI_SEARCH_SERVICE to the service name (without .search.windows.net).',
+        remediation: `Set LOOM_AI_SEARCH_SERVICE to the service name (without .${searchSuffix()}).`,
         link: 'https://learn.microsoft.com/azure/search/',
       },
       steps,
@@ -256,7 +270,8 @@ export const aiSearchProvisioner: Provisioner = async (input): Promise<Provision
     return { status: 'skipped', steps: ['No schema in bundle; nothing to provision.'] };
   }
   const indexName = input.displayName.toLowerCase().replace(/[^a-z0-9-]/g, '-').slice(0, 128) || 'loom-index';
-  steps.push(`Target: https://${svc}.search.windows.net/indexes/${indexName}`);
+  const indexUrl = `${searchEndpointBase(svc)}/indexes/${indexName}`;
+  steps.push(`Target: ${indexUrl}`);
 
   const tok = await token();
 
@@ -315,7 +330,7 @@ export const aiSearchProvisioner: Provisioner = async (input): Promise<Provision
     ...(cleanProfiles.length > 0 ? { scoringProfiles: cleanProfiles } : {}),
   };
 
-  const putRes = await fetchWithTimeout(`https://${svc}.search.windows.net/indexes/${indexName}?api-version=${SEARCH_API}`, {
+  const putRes = await fetchWithTimeout(`${indexUrl}?api-version=${SEARCH_API}`, {
     method: 'PUT',
     headers: { authorization: `Bearer ${tok}`, 'content-type': 'application/json' },
     body: JSON.stringify(indexBody),
@@ -342,7 +357,7 @@ export const aiSearchProvisioner: Provisioner = async (input): Promise<Provision
   // Push sample docs if any.
   const sampleDocs: any[] = Array.isArray(content.sampleDocs) ? content.sampleDocs : [];
   if (sampleDocs.length > 0) {
-    const ingestRes = await fetchWithTimeout(`https://${svc}.search.windows.net/indexes/${indexName}/docs/index?api-version=${SEARCH_API}`, {
+    const ingestRes = await fetchWithTimeout(`${indexUrl}/docs/index?api-version=${SEARCH_API}`, {
       method: 'POST',
       headers: { authorization: `Bearer ${tok}`, 'content-type': 'application/json' },
       body: JSON.stringify({ value: sampleDocs.map((d) => ({ '@search.action': 'mergeOrUpload', ...d })) }),
@@ -359,7 +374,7 @@ export const aiSearchProvisioner: Provisioner = async (input): Promise<Provision
   return {
     status: putRes.status === 201 ? 'created' : 'exists',
     resourceId: indexName,
-    secondaryIds: { service: svc, endpoint: `https://${svc}.search.windows.net/indexes/${indexName}` },
+    secondaryIds: { service: svc, endpoint: indexUrl },
     steps,
   };
 };
