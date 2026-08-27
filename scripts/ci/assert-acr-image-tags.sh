@@ -186,8 +186,14 @@ if [ "$USE_LEASE" = "1" ] && [ -f "$LEASE_SCRIPT" ]; then
   # path those tools use, THEN mint the token.
   LOGIN_OUT=""
   LOGIN_OK=0
+  LOGIN_RC=""
+  # ONE place for the probe budget. The exhaustion message below QUOTES this
+  # number, and a message that quotes a budget the call site no longer passes
+  # asserts a fact it did not establish (deploy-integrity.md R7) — the exact
+  # class of defect the branch below was fixed for.
+  READY_TIMEOUT_SECONDS="${LOOM_PREFLIGHT_READY_TIMEOUT_SECONDS:-120}"
   set +e
-  READY_OUT=$(bash "$READY_SCRIPT" --acr "$ACR" --timeout-seconds 120 2>&1)
+  READY_OUT=$(bash "$READY_SCRIPT" --acr "$ACR" --timeout-seconds "$READY_TIMEOUT_SECONDS" 2>&1)
   READY_RC=$?
   printf '%s\n' "$READY_OUT"
   if [ "$READY_RC" -eq 0 ]; then
@@ -207,7 +213,64 @@ if [ "$USE_LEASE" = "1" ] && [ -f "$LEASE_SCRIPT" ]; then
     if [ -f "$REPO_ROOT/scripts/ci/deploy-classify.mjs" ] && command -v node >/dev/null 2>&1; then
       WHY=$(node "$REPO_ROOT/scripts/ci/deploy-classify.mjs" --text "$LOGIN_OUT" --query 2>&1)
     fi
-    echo "::error::image-preflight: held the firewall lease on '$ACR' and opened it, but the ACR DATA PLANE never became reachable within the 120s probe budget. The existence of ${REFS[*]} is UNPROVEN — not disproven. Last error: $(printf '%s' "$LOGIN_OUT" | tr -d '\r' | tr '\n' ' ' | cut -c1-300) ${WHY}" >&2
+    # ── #4056 — TWO failures reach here, and they are DIFFERENT FACTS ────────
+    #
+    # This used to be ONE message, emitted from both branches: "the ACR DATA
+    # PLANE never became reachable within the 120s probe budget". In the
+    # READY_RC=0 branch that is not merely imprecise, it asserts the OPPOSITE of
+    # what the code had just measured — acr-dataplane-ready.sh had printed READY
+    # (three consecutive fresh-connection samples, #4067) one line earlier, and
+    # the failure was `az acr login` exhausting its OWN, separate 12x15s budget.
+    # deploy-integrity.md R7: an error must not state as fact something it did
+    # not establish. That message sent the reader at the firewall lease's OPEN
+    # path when the probe had already proven the open worked.
+    #
+    # It became reachable-in-practice with #4052: IP-denial-shaped login
+    # failures are now correctly classified as transient, so they consume the
+    # whole ~165s retry budget instead of returning in ~0s. A probe that passes
+    # and a login that is then refused for the full budget is the SIGNATURE of a
+    # mid-run lease erasure (#3676), which is why that is named as the leading
+    # hypothesis rather than left for the reader to guess.
+    #
+    # The EXIT CODE is deliberately the same 4 in both branches: the caller
+    # contract is PASS/MISSING/UNPROVEN (loom-roll-and-validate.yml branches on
+    # those numbers) and both of these are UNPROVEN. It is the PROSE that has to
+    # tell the truth, not the code.
+    if [ "$READY_RC" -ne 0 ]; then
+      echo "::error::image-preflight: held the firewall lease on '$ACR' and opened it, but the ACR DATA PLANE never became reachable within the ${READY_TIMEOUT_SECONDS}s probe budget. The existence of ${REFS[*]} is UNPROVEN — not disproven. Last error: $(printf '%s' "$LOGIN_OUT" | tr -d '\r' | tr '\n' ' ' | cut -c1-300) ${WHY}" >&2
+    else
+      # THE VERDICT LINE, not the head of the log. acr-login-retry.sh prints a
+      # per-attempt warning first and its VERDICT last, so `cut -c1-300` showed
+      # "attempt 1/12 … waiting 15s" and silently dropped the only line that
+      # says how much budget was actually burned and names the lease-erasure
+      # possibility. A blind byte-tail is no better — it cuts mid-sentence — so
+      # select the line, and fall back to a tail only when there is no verdict
+      # line to select (an early exit that never reached one).
+      LOGIN_VERDICT=$(printf '%s' "$LOGIN_OUT" | tr -d '\r' | grep -a 'acr-login-retry: could NOT authenticate' | tail -1)
+      if [ -z "$LOGIN_VERDICT" ]; then
+        LOGIN_VERDICT=$(printf '%s' "$LOGIN_OUT" | tr -d '\r' | tr '\n' ' ' | tail -c 400)
+      fi
+      LOGIN_VERDICT=$(printf '%s' "$LOGIN_VERDICT" | tr '\n' ' ' | cut -c1-600)
+      # An EMPTY evidence field reads as "there was nothing wrong". Say what is
+      # true instead: nothing was captured.
+      [ -z "$LOGIN_VERDICT" ] && LOGIN_VERDICT="(acr-login-retry produced no output to quote)"
+      # WORDING IS CONSTRAINED BY TWO GUARDS, and both constraints make this
+      # message MORE accurate, not less:
+      #
+      #   * acr-reachability-oracle keys on a line that both names the credential
+      #     command and carries "reachable" (unanchored, so it fires inside
+      #     "unreachable"). It flagged the first draft of this line.
+      #   * acr-login-retry-adoption keys on the bare command token.
+      #
+      # Neither is weakened here. This step does not run the credential command
+      # directly — it runs acr-login-retry.sh (line ~205) — so naming the helper
+      # and the TOKEN MINT is what actually happened, and it hands the reader the
+      # script to go read. The negative claim is phrased as "closed" rather than
+      # "un-reachable" for the same reason the branch exists at all: the probe
+      # already established the network, so the word that describes the network
+      # has no business in the branch that is NOT about the network.
+      echo "::error::image-preflight: the ACR data plane DID answer the readiness probe on '$ACR' (READY, printed above) — what failed was the TOKEN MINT that follows it: acr-login-retry.sh exhausted its whole retry budget (exit ${LOGIN_RC}). This is NOT a closed data plane; the probe measured the opposite. The existence of ${REFS[*]} is UNPROVEN — not disproven. LEADING HYPOTHESIS: the ACR firewall lease was ERASED mid-run (scripts/csa-loom/acr-firewall-lease.sh, #3676) — probe passes, the token mint is then refused, is precisely that signature; look for a concurrent lease re-lock BEFORE suspecting RBAC or a token-exchange tail. Login verdict: ${LOGIN_VERDICT} ${WHY}" >&2
+    fi
     exit 4
   fi
 fi

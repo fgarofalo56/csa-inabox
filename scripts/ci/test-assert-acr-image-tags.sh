@@ -38,6 +38,18 @@
 #       -> UNPROVEN (4). Under the old code this was MISSING (1). This single
 #          case is #3090.
 #
+# and the R7 pair added for #4056 — the lease block fails in TWO ways and they
+# are DIFFERENT FACTS, but it emitted ONE message for both:
+#
+#   A1  the readiness probe never came up      -> "never became reachable"
+#   A2  the probe came up READY and `az acr login` then burned its whole retry
+#       budget -> a message that says the probe ANSWERED and names the login.
+#       This INPUT SHAPE had NO FIXTURE before #4056: every --lease case here
+#       either succeeded at both steps or died at lease ACQUIRE, so the branch
+#       was never executed and the untrue message went unmeasured.
+#   A3  the collapse detector — each claim must appear in EXACTLY ONE of the
+#       two, so folding them back into one message goes red in either direction.
+#
 # No Azure, no network, no credentials, no wall-clock waiting.
 set -uo pipefail
 
@@ -57,6 +69,11 @@ trap 'rm -rf "$STUB_DIR"' EXIT
 #   partial-deny   THE #3090 CONDITION: `repository show` is DENIED for every
 #                  ref, but `repository list` SUCCEEDS. The old code called this
 #                  MISSING. It is UNPROVEN.
+#   login-denied   #4056: the data-plane readiness probe SUCCEEDS and `az acr
+#                  login` is then refused by IP for its whole retry budget. This
+#                  INPUT SHAPE had no fixture — every --lease case here either
+#                  succeeded at both steps or failed at lease ACQUIRE — so the
+#                  branch that fires for it was never executed by this suite.
 #   throttled      429 on the per-ref lookup; `list` succeeds
 #   corr404        a non-404 error whose CORRELATION ID contains "404" — the
 #                  loose regex read this as absence
@@ -91,6 +108,17 @@ case "$1 $2" in
   "acr login")
      case "${MODE}" in
        unreachable|partial-deny) echo "denied: client with IP '20.1.2.3' is not allowed access." >&2; exit 1 ;;
+       login-denied)
+         # The #3676 signature, in the DAEMON's words (acr-login-retry.sh:151).
+         # `az acr login` shells out to the Docker daemon when one is present,
+         # so a firewall refusal arrives worded by the daemon, not by the AAD
+         # client. It matches acr-login-retry's TRANSIENT set on `is not allowed
+         # access`, so it burns the FULL 12-attempt budget rather than exiting
+         # on attempt 1 — which is exactly what #4052 changed and what makes the
+         # READY-passed/login-exhausted branch reachable in practice.
+         printf '%s\n' 'WARNING: Error response from daemon: Get "https://stubacr.azurecr.io/v2/": denied: {"errors":[{"code":"DENIED","message":"client with IP 20.1.2.3 is not allowed access. Refer https://aka.ms/acr/firewall to grant access."}]}' >&2
+         printf '%s\n' 'ERROR: Login failed.' >&2
+         exit 1 ;;
      esac
      exit 0 ;;
   "acr repository")
@@ -289,6 +317,115 @@ OUT=$(env MODE=ok PRESENT_REF="loom-duckdb:v0.1" LEASE_RELEASE_MODE=fail \
   bash "$UNDER_TEST" --acr stubacr --lease loom-duckdb:v0.1 2>&1); RC=$?
 check "MUTATION: tags present but re-lock UNVERIFIED -> not green" 5 "$RC"
 
+# ── A1/A2/A3 (#4056). The lease block fails in TWO ways, and they are two
+# DIFFERENT FACTS. Before these cases the READY-passed/login-exhausted path had
+# NO FIXTURE AT ALL: every --lease run above either succeeds at both steps
+# (MODE=ok) or dies at lease ACQUIRE (LEASE_MODE=fail), so the branch was never
+# executed — and it emitted the OTHER branch's message, "the ACR DATA PLANE
+# never became reachable within the 120s probe budget", one line after
+# acr-dataplane-ready.sh had printed READY. That is deploy-integrity.md R7 in
+# its purest form: the error asserts the OPPOSITE of what the code measured.
+#
+# The mutation is on the CONTROL — which of the two steps the registry refuses —
+# and the assertion is that the PROSE changes with it while the EXIT CODE does
+# not (both are UNPROVEN; loom-roll-and-validate.yml branches on the number).
+#
+#   A1  probe FAILS   -> "never became reachable"
+#   A2  probe PASSES, `az acr login` burns its budget -> a message that says the
+#       probe ANSWERED, names the login as what failed, and points at #3676
+#   A3  THE COLLAPSE DETECTOR: "never became reachable" must appear in EXACTLY
+#       ONE of the two, and so must "DID answer the readiness probe". Fold the
+#       branches back into a single message — in EITHER direction — and one of
+#       those counts goes to 2 or 0 and this check goes red.
+
+# A1 — the probe genuinely never came up. Note --lease: without it the whole
+# block is skipped, which is why MODE=unreachable further up (no --lease) does
+# not exercise this at all.
+OUT_A1=$(env MODE=unreachable LOOM_ACR_LEASE_SCRIPT="$STUB_DIR/lease.sh" \
+  bash "$UNDER_TEST" --acr stubacr --lease loom-duckdb:v0.1 2>&1); RC_A1=$?
+check "A1: readiness probe never came up -> UNPROVEN" 4 "$RC_A1"
+case "$OUT_A1" in
+  *"never became reachable"*) pass "A1 keeps the unreachable-data-plane wording where it is TRUE" ;;
+  *) fail "A1 lost the unreachable-data-plane wording — got: $OUT_A1" ;;
+esac
+
+# A2 — the #4056 case. The probe answers READY; `az acr login` is then refused
+# by IP for the full retry budget (the #3676 mid-run lease-erasure signature).
+OUT_A2=$(env MODE=login-denied PRESENT_REF="loom-duckdb:v0.1" LOOM_ACR_LEASE_SCRIPT="$STUB_DIR/lease.sh" \
+  bash "$UNDER_TEST" --acr stubacr --lease loom-duckdb:v0.1 2>&1); RC_A2=$?
+check "A2 MUTATION (#4056): probe READY + login exhausts its budget -> UNPROVEN" 4 "$RC_A2"
+case "$OUT_A2" in
+  *"never became reachable"*)
+    fail "A2 R7 VIOLATION: claimed the data plane never became reachable in the branch where the probe SUCCEEDED — got: $OUT_A2" ;;
+  *) pass "A2 does NOT claim the data plane was unreachable" ;;
+esac
+case "$OUT_A2" in
+  *"DID answer the readiness probe"*) pass "A2 states what was MEASURED — the probe answered" ;;
+  *) fail "A2 does not say the probe answered — got: $OUT_A2" ;;
+esac
+# Keyed on ONE contiguous phrase that only the preflight message can produce.
+# The helper's own verdict says "(budget 12x15s)", never "retry budget", so this
+# cannot be satisfied by the quoted verdict line further down instead of by the
+# preflight naming the failing step itself — which a two-part glob spanning the
+# whole output could be.
+case "$OUT_A2" in
+  *"acr-login-retry.sh exhausted its whole retry budget"*) pass "A2 names the token mint + its own retry budget as what failed" ;;
+  *) fail "A2 does not name the token mint's retry budget as the failure — got: $OUT_A2" ;;
+esac
+case "$OUT_A2" in
+  *"#3676"*) pass "A2 names the mid-run lease-erasure hypothesis (#3676)" ;;
+  *) fail "A2 does not point at the lease as the leading hypothesis — got: $OUT_A2" ;;
+esac
+# The login VERDICT is the LAST line acr-login-retry prints; a head-anchored
+# excerpt showed "attempt 1/12 … waiting 15s" and dropped it entirely.
+#
+# NOTE FOR ANYONE SPEEDING THIS UP: A2 runs the REAL acr-login-retry.sh, and it
+# must keep doing so — the assertion below is on THAT script's verdict wording,
+# so stubbing it would delete the evidence the check exists to read. The cost is
+# PROCESS SPAWNS, not wall-clock waiting: the `sleep` stub returns immediately
+# (measured here — `sleep 15` elapses 0s), and the ~40s this case takes on Git
+# Bash under Windows is 12 x (az stub + grep + sleep) spawn overhead.
+case "$OUT_A2" in
+  *"acr-login-retry: could NOT authenticate"*) pass "A2 surfaces the login VERDICT line" ;;
+  *) fail "A2 does not surface the login verdict — got: $OUT_A2" ;;
+esac
+# Keyed on the per-attempt warning's PREFIX, not on "1/12" — the attempt count
+# is a tunable (#3383 already moved it once) and an assertion keyed to it would
+# quietly stop discriminating the next time it moves.
+case "$OUT_A2" in
+  *"acr-login-retry: attempt "*)
+    fail "A2 excerpt is HEAD-anchored: it shows a per-attempt warning instead of the exhaustion verdict" ;;
+  *) pass "A2 excerpt is the verdict, not the first attempt's warning" ;;
+esac
+case "$OUT_A2" in
+  *"UNPROVEN"*) pass "A2 says UNPROVEN" ;;
+  *) fail "A2 did not say UNPROVEN — got: $OUT_A2" ;;
+esac
+case "$OUT_A2" in
+  *"MISSING in stubacr"*) fail "A2 REGRESSION: a login failure produced a MISSING verdict" ;;
+  *) pass "A2 does not produce a MISSING verdict" ;;
+esac
+
+# A3 — the collapse detector. Two-sided on purpose: collapsing to EITHER wording
+# drives one of these counts off 1.
+N_UNREACHABLE=0
+N_ANSWERED=0
+case "$OUT_A1" in *"never became reachable"*) N_UNREACHABLE=$((N_UNREACHABLE + 1)) ;; esac
+case "$OUT_A2" in *"never became reachable"*) N_UNREACHABLE=$((N_UNREACHABLE + 1)) ;; esac
+case "$OUT_A1" in *"DID answer the readiness probe"*) N_ANSWERED=$((N_ANSWERED + 1)) ;; esac
+case "$OUT_A2" in *"DID answer the readiness probe"*) N_ANSWERED=$((N_ANSWERED + 1)) ;; esac
+if [ "$N_UNREACHABLE" = "1" ] && [ "$N_ANSWERED" = "1" ]; then
+  pass "A3 COLLAPSE DETECTOR: each claim appears in exactly ONE of the two branches"
+else
+  fail "A3: the two lease-failure branches are not distinct (unreachable-claim in $N_UNREACHABLE/2, probe-answered-claim in $N_ANSWERED/2) — collapsing them back into one message is the #4056 defect"
+fi
+# Both are UNPROVEN, so the CALLER contract must not have moved.
+if [ "$RC_A1" = "$RC_A2" ] && [ "$RC_A1" = "4" ]; then
+  pass "A3 both lease-failure branches still exit 4 — the PROSE differs, the caller contract does not"
+else
+  fail "A3 the two branches no longer share the UNPROVEN exit code ($RC_A1/$RC_A2) — a caller branching on 4 would break"
+fi
+
 # ── Usage ───────────────────────────────────────────────────────────────────
 bash "$UNDER_TEST" --acr stubacr >/dev/null 2>&1
 check "no refs supplied is a usage error" 2 "$?"
@@ -298,4 +435,4 @@ if [ "$FAILURES" -gt 0 ]; then
   echo "::error::[assert-acr-image-tags] SELF-TEST FAILED — $FAILURES check(s)." >&2
   exit 1
 fi
-echo "[assert-acr-image-tags] self-test OK — PASS/MISSING/UNPROVEN mutation-proved and distinguishable."
+echo "[assert-acr-image-tags] self-test OK — PASS/MISSING/UNPROVEN mutation-proved and distinguishable, and the two lease-failure branches state what was measured (#4056)."
