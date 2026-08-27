@@ -647,3 +647,104 @@ test('#3817 R7 — the remediation asserts no server state, and names how to est
   // It must not claim the server is fine — that is precisely what it did not read.
   assert.doesNotMatch(rem, /the server is (healthy|fine|ready|up)\b/i);
 });
+
+/* ── #4075 / #4076 — the CAE leaf, and the bare substring that mis-classed it ─
+ *
+ * On deploy-fiab-commercial run 32874774243 ONE spurious 109 ms refusal aborted
+ * an apply whose other two leaves were both retryable. It was classed `config`
+ * — non-retryable — not by a signal about Container Apps, but by
+ * `config.resource-group-not-found`'s bare `could not be found` substring. So an
+ * ACA vnet error rendered a RESOURCE-GROUP remediation and stopped the deploy.
+ */
+
+const CAE_LEAF =
+  'ManagedEnvironmentInvalidNetworkConfiguration: The environment network configuration is ' +
+  'invalid: Invalid vnet resource ID provided, or the virtual network could not be found.';
+
+const RG_MISSING =
+  "ERROR: (ResourceGroupNotFound) Resource group 'rg-csa-loom-admin-eastus2' could not be found." +
+  String.fromCharCode(10) +
+  'Code: ResourceGroupNotFound';
+
+/** The taxonomy with one signal removed, for mutation proofs. */
+function without(id) {
+  return { ...TAXONOMY, signals: TAXONOMY.signals.filter((s) => s.id !== id) };
+}
+
+test('#4075: the CAE leaf classifies TRANSIENT, so the apply can retry it', () => {
+  const d = classify(CAE_LEAF);
+  assert.equal(d.signalId, 'transient.aca-env-network-config');
+  assert.equal(d.class, 'transient');
+  assert.equal(TAXONOMY.classes[d.class].retryable, true);
+});
+
+test('#4075 MUTATION: without the signal the leaf is UNKNOWN — which fails closed and blocks', () => {
+  // The control that proves the signal is what makes the deploy retry. Unknown
+  // is the correct fail-closed answer for an unrecognised error, and it is also
+  // exactly what stranded the two retryable leaves.
+  assert.equal(classify(CAE_LEAF, without('transient.aca-env-network-config')).signalId, null);
+});
+
+test('#4076: the CAE leaf must NOT borrow the resource-group remediation', () => {
+  // The defect, stated as an assertion. A remediation that names a different
+  // resource kind than the error is a deploy-integrity R7 violation.
+  const d = classify(CAE_LEAF);
+  assert.notEqual(d.signalId, 'config.resource-group-not-found');
+  assert.doesNotMatch(render(d), /resource group/i);
+});
+
+test('#4076 MUTATION: restore the bare substring and the mis-classification returns', () => {
+  // Proves the removal is load-bearing and not cosmetic: put `could not be
+  // found` back on the RG signal and the CAE leaf is captured by it again.
+  const mutated = {
+    ...TAXONOMY,
+    signals: TAXONOMY.signals.map((s) =>
+      s.id === 'config.resource-group-not-found'
+        ? { ...s, anyOf: [...s.anyOf, 'could not be found'] }
+        : s,
+    ),
+  };
+  const d = classify(CAE_LEAF, mutated);
+  assert.equal(d.class, 'config', 'the bare substring re-captures it');
+  assert.equal(d.signalId, 'config.resource-group-not-found');
+});
+
+test('#4076: a genuinely missing resource group still classifies, via the CODE', () => {
+  // Nothing was lost by dropping the prose: ARM emits the code alongside it.
+  const d = classify(RG_MISSING);
+  assert.equal(d.signalId, 'config.resource-group-not-found');
+  assert.equal(d.class, 'config');
+});
+
+test('#4075 SAFETY: transient can never upgrade a permanent failure into a retry', () => {
+  // classPrecedence sorts transient LAST. A config/permission/quota signal in
+  // the same output still wins, so adding this signal cannot make a genuinely
+  // deterministic failure look retryable.
+  const both =
+    CAE_LEAF + String.fromCharCode(10) + 'ERROR: (AuthorizationFailed) The client does not have authorization';
+  const d = classify(both);
+  assert.equal(d.class, 'permission');
+  assert.equal(TAXONOMY.classes[d.class].retryable, false);
+  assert.ok(
+    TAXONOMY.classPrecedence.indexOf('transient') > TAXONOMY.classPrecedence.indexOf('config'),
+    'transient must sort below config, or this signal could mask a real misconfiguration',
+  );
+});
+
+test('#4075: the remediation does not claim the network config is correct', () => {
+  // It read no resource state. Saying "the config is fine, just retry" would be
+  // the R7 defect in the other direction — a retry class asserting health.
+  const rem = TAXONOMY.signals.find((s) => s.id === 'transient.aca-env-network-config').remediation;
+  assert.match(rem, /does not establish/i);
+  assert.match(rem, /az containerapp env show/);
+  // It must disclaim BOTH directions, not just one. A remediation that said
+  // only "this does not prove it is broken" would still leave the reader with
+  // "so it is probably fine" — which is the assumption that costs a deploy.
+  assert.match(rem, /neither/i, 'it must disclaim health AND fault, not just one');
+  assert.match(rem, /nor/i);
+  // And it must not assert health in an UNQUALIFIED sentence. Matching the bare
+  // phrase is too crude — the honest text contains it inside "evidence NEITHER
+  // that the network configuration is correct NOR that it is wrong" — so pin
+  // the shape that would actually be wrong: a claim with no disclaimer near it.
+  assert.doesNotMatch(rem, /(?<!neither that )the network configuration is (correct|fine|valid)\b/i);
+});

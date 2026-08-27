@@ -1,0 +1,762 @@
+/**
+ * LOOM BRAIN cost — reading a Cost Management export.
+ *
+ * The four ways this reader could lie, each with a test that fails when the
+ * defence is removed:
+ *
+ *   PARTIAL READ   exports are ALWAYS partitioned; a run is N blobs plus a
+ *                  manifest. Summing a subset gives a confident, low, wrong
+ *                  total — this repo's most repeated failure. Completeness is
+ *                  `'unknown'` without a manifest and `'incomplete'` when the
+ *                  manifest names a blob that was not supplied or a row count
+ *                  that does not match. The blob comparison is by WHOLE
+ *                  container-relative path and as a MULTISET, because the
+ *                  wrong-DIRECTION failure is just as real: matching last
+ *                  segments let one run's `part_0_0001.csv` stand in for
+ *                  another's, and matching as a set let the same blob be
+ *                  supplied twice and counted once. Both read `'complete'`
+ *                  over a DOUBLED total.
+ *   WRONG COLUMN   `BilledCost` / `CostInBillingCurrency` / `Cost` are the same
+ *                  role under three agreements. A reader hard-coded to one
+ *                  returns ZERO for the others — silent, total, plausible. And
+ *                  the harder version of the same fault: binding the right ROLE
+ *                  to the wrong NUMBER. `PaygCost*` is the pay-as-you-go LIST
+ *                  price and was PREFERRED over the billed column, so the
+ *                  reader emitted a list-rate estimate labelled `billed`.
+ *   WRONG CURRENCY every Brain figure is `amountUsd`. Copying a EUR amount into
+ *                  it mislabels the unit and looks completely normal.
+ *   NAIVE SPLIT    the `Tags` column is quoted and contains commas.
+ *                  `line.split(',')` shifts every later column, so `ResourceId`
+ *                  becomes a fragment of a tag value and the row attributes to
+ *                  nothing at all.
+ *
+ * PUBLIC REPO: every id below is a synthetic placeholder. See `./fixtures.ts`.
+ */
+
+import { describe, expect, it } from 'vitest';
+import { azureResourceNodeId } from '../../graph/node-id';
+import {
+  ASOF_NOT_ESTABLISHED,
+  bindColumns,
+  parseCsvFields,
+  parseManifest,
+  readCostExport,
+  schemaOf,
+  splitCsvRecords,
+} from '../../cost/export-reader';
+import { BILLED_MARKER, renderCost } from '../../cost/figure';
+import { containerAppArmId, SUB_A } from './fixtures';
+
+const BROKER_ARM = containerAppArmId(SUB_A, 'rg-loom', 'loom-capacity-broker');
+const CONSOLE_ARM = containerAppArmId(SUB_A, 'rg-loom', 'loom-console');
+const BROKER_ID = azureResourceNodeId(BROKER_ARM);
+const CONSOLE_ID = azureResourceNodeId(CONSOLE_ARM);
+
+/** EA / MCA current schema, WITH a quoted Tags column containing commas. */
+const EA_CSV = [
+  'Date,ResourceId,ResourceName,Tags,CostInBillingCurrency,BillingCurrencyCode,ConsumedService',
+  `2026-08-22,${BROKER_ARM},loom-capacity-broker,"{""env"":""prod"",""owner"":""loom"",""band"":""a""}",12.34,USD,Microsoft.App`,
+  `2026-08-22,${CONSOLE_ARM},loom-console,"{""env"":""prod"",""tier"":""ui""}",40.00,USD,Microsoft.App`,
+].join('\r\n');
+
+/**
+ * The blob's container-relative path, spelled IDENTICALLY on both sides.
+ *
+ * This fixture used to supply `part_0_0001.csv` against a manifest listing
+ * `loom-brain/part_0_0001.csv`, and it passed — because the reader compared last
+ * segments. That leniency is precisely the defect being fixed, so the fixture is
+ * brought up to the real shape rather than the matcher kept loose to preserve
+ * it: `ExportPartition.blobName` is documented as the whole container-relative
+ * name, which is what a container listing returns and what the manifest carries.
+ */
+const EA_PART = 'loom-brain/part_0_0001.csv';
+
+const EA_MANIFEST = JSON.stringify({
+  manifestVersion: '2023-08-01',
+  blobCount: 1,
+  dataRowCount: 2,
+  exportConfig: { exportName: 'loom-brain-daily', type: 'ActualCost' },
+  runInfo: { executionType: 'Scheduled', endDate: '2026-08-22T23:59:59Z' },
+  blobs: [{ blobName: EA_PART, dataRowCount: 2 }],
+});
+
+function eaRun(overrides?: { manifest?: string; partitions?: { blobName: string; csv: string }[] }) {
+  return readCostExport({
+    exportName: 'loom-brain-daily',
+    manifest:
+      overrides?.manifest === undefined
+        ? { blobName: 'loom-brain/manifest.json', json: EA_MANIFEST }
+        : { blobName: 'loom-brain/manifest.json', json: overrides.manifest },
+    partitions: overrides?.partitions ?? [{ blobName: EA_PART, csv: EA_CSV }],
+  });
+}
+
+describe('the quoted Tags column does not shift the resource id (naive-split guard)', () => {
+  it('attributes to the RIGHT resource despite commas inside Tags', () => {
+    const read = eaRun();
+    expect(read.byResource.has(BROKER_ID)).toBe(true);
+    expect(read.byResource.get(BROKER_ID)?.amountUsd).toBeCloseTo(12.34, 6);
+  });
+
+  it('parseCsvFields keeps a quoted comma inside its field', () => {
+    const fields = parseCsvFields('a,"b,c",d');
+    expect(fields).toEqual(['a', 'b,c', 'd']);
+  });
+
+  it('parseCsvFields unescapes a doubled quote', () => {
+    expect(parseCsvFields('a,"say ""hi""",b')).toEqual(['a', 'say "hi"', 'b']);
+  });
+
+  it('splitCsvRecords keeps a quoted NEWLINE inside its field', () => {
+    const records = splitCsvRecords('h1,h2\r\nv1,"line1\nline2"\r\nv3,v4');
+    expect(records).toHaveLength(3);
+    expect(parseCsvFields(records[1])[1]).toBe('line1\nline2');
+  });
+
+  it('splitCsvRecords strips a UTF-8 BOM so the first header still matches', () => {
+    const withBom = `﻿Date,ResourceId,CostInBillingCurrency,BillingCurrencyCode\r\n2026-08-22,${BROKER_ARM},1.00,USD`;
+    const read = readCostExport({
+      exportName: 'bom',
+      partitions: [{ blobName: 'p.csv', csv: withBom }],
+    });
+    expect(read.schema).toBe('ea-mca');
+    expect(read.byResource.get(BROKER_ID)?.amountUsd).toBeCloseTo(1.0, 6);
+  });
+});
+
+describe('column binding across agreements — no schema is silently zero', () => {
+  it('binds the EA / MCA current schema', () => {
+    const read = eaRun();
+    expect(read.schema).toBe('ea-mca');
+    expect(read.columns.cost).toBe('CostInBillingCurrency');
+    expect(read.columns.resourceId).toBe('ResourceId');
+  });
+
+  it('binds the FOCUS schema and PREFERS its explicit USD column', () => {
+    // Billing currency is EUR; x_BilledCostInUsd is the USD truth. A reader that
+    // took BilledCost would record 10.00 EUR as 10.00 USD.
+    const csv = [
+      'ChargePeriodStart,ResourceId,BilledCost,EffectiveCost,BillingCurrency,x_BilledCostInUsd',
+      `2026-08-22T00:00:00Z,${BROKER_ARM},10.00,10.00,EUR,11.50`,
+    ].join('\n');
+    const read = readCostExport({ exportName: 'focus', partitions: [{ blobName: 'p.csv', csv }] });
+    expect(read.schema).toBe('focus');
+    expect(read.columns.usdCost).toBe('x_BilledCostInUsd');
+    expect(read.byResource.get(BROKER_ID)?.amountUsd).toBeCloseTo(11.5, 6);
+    expect(read.currencyResolution).toContain('explicit USD column');
+  });
+
+  it('binds the legacy EA schema (InstanceId / Cost / Currency)', () => {
+    const csv = ['Date,InstanceId,Cost,Currency', `08/22/2026,${BROKER_ARM},5.00,USD`].join('\n');
+    const read = readCostExport({ exportName: 'legacy', partitions: [{ blobName: 'p.csv', csv }] });
+    expect(read.schema).toBe('legacy-ea');
+    expect(read.columns.resourceId).toBe('InstanceId');
+    expect(read.byResource.get(BROKER_ID)?.amountUsd).toBeCloseTo(5.0, 6);
+  });
+
+  it('an UNRECOGNISED header is blind, not zero-cost', () => {
+    const csv = ['Alpha,Beta,Gamma', '1,2,3', '4,5,6'].join('\n');
+    const read = readCostExport({ exportName: 'weird', partitions: [{ blobName: 'p.csv', csv }] });
+    expect(read.schema).toBe('unrecognized');
+    expect(read.byResource.size).toBe(0);
+    // The rows WERE examined — that is the difference between "unrecognised" and
+    // "empty", and it is what stops a $0.00 being quoted over real data.
+    expect(read.population.examined).toBe(2);
+    expect(read.rowsSkipped).toBe(2);
+    const detail = read.skipped.find((s) => s.subject === 'p.csv')?.reason ?? '';
+    expect(detail).toContain('UNRECOGNISED, not zero-cost');
+    // BOTH missing roles are named in one message, not just the first.
+    expect(detail).toContain('no resource-id column');
+    expect(detail).toContain('no cost column');
+    // The header is echoed, so a reader can see what the file actually had.
+    expect(detail).toContain('Alpha, Beta, Gamma');
+  });
+
+  it('names ONLY the missing role when the other one bound', () => {
+    // A resource-id column present, no cost column: the message must not claim
+    // the resource-id column is missing too.
+    const csv = ['ResourceId,Alpha', `${BROKER_ARM},1`].join('\n');
+    const read = readCostExport({ exportName: 'halfway', partitions: [{ blobName: 'p.csv', csv }] });
+    const detail = read.skipped.find((s) => s.subject === 'p.csv')?.reason ?? '';
+    expect(detail).toContain('no cost column');
+    expect(detail).not.toContain('no resource-id column');
+  });
+
+  it('bindColumns / schemaOf are directly testable over a bare header', () => {
+    expect(schemaOf(bindColumns(['ResourceId', 'BilledCost']))).toBe('focus');
+    expect(schemaOf(bindColumns(['ResourceId', 'CostInBillingCurrency']))).toBe('ea-mca');
+    expect(schemaOf(bindColumns(['InstanceId', 'PreTaxCost']))).toBe('legacy-ea');
+    expect(schemaOf(bindColumns(['Nope']))).toBe('unrecognized');
+  });
+
+  // ── A LIST PRICE IS NOT A BILL ────────────────────────────────────────────
+  // `PaygCost*` is the pay-as-you-go LIST cost — the number BEFORE any
+  // negotiated rate — and it was an entry in the USD-cost candidate list, which
+  // is preferred over the billing-currency column unconditionally. On the header
+  // below the export says 10.00 and the reader emitted 100.00, labelled
+  // `source: 'billed'`: a 10x overstatement in the exact visual form of a bill.
+  //
+  // It got there through COLUMN BINDING, which is why nothing caught it. The
+  // figure `figure.ts` builds is a genuinely billed one over the wrong number,
+  // so every type-level guard there is bypassed by construction rather than
+  // defeated — there is no cast to refuse and no label to check.
+  //
+  // Reachability, stated rather than overclaimed: on the current MCA/EA header
+  // `CostInUsd` is also present and wins on ORDER, so a real Microsoft export
+  // could not have triggered it today. Ordering was the only thing standing in
+  // the way, and ordering is not a guard.
+  it('does NOT bind a pay-as-you-go LIST price as the billed USD cost', () => {
+    const csv = [
+      'Date,ResourceId,CostInBillingCurrency,PaygCostInUsd,BillingCurrency',
+      `2026-08-22,${BROKER_ARM},10.00,100.00,USD`,
+    ].join('\n');
+    const read = readCostExport({ exportName: 'payg', partitions: [{ blobName: 'p.csv', csv }] });
+    expect(read.columns.usdCost).toBeNull();
+    expect(read.columns.cost).toBe('CostInBillingCurrency');
+    // The BILLED number, not the list number. This is the assertion the defect
+    // failed at 100.00.
+    expect(read.byResource.get(BROKER_ID)?.amountUsd).toBeCloseTo(10.0, 6);
+    expect(read.byResource.get(BROKER_ID)?.source).toBe('billed');
+    expect(read.currencyResolution).not.toMatch(/payg/i);
+  });
+
+  it('a header whose ONLY cost-shaped column is a PAYG list price yields NO billed figure', () => {
+    // The honest answer to "I have a list price and nothing else" is BLIND — not
+    // a billed figure, and not $0.00. The rows are still counted, so
+    // "nothing could be attributed" stays distinguishable from "nothing was
+    // examined", which is the whole point of the population report.
+    const csv = [
+      'Date,ResourceId,PaygCostInUSD,BillingCurrency',
+      `2026-08-22,${BROKER_ARM},100.00,USD`,
+    ].join('\n');
+    const read = readCostExport({
+      exportName: 'payg-only',
+      partitions: [{ blobName: 'p.csv', csv }],
+    });
+    expect(read.byResource.size).toBe(0);
+    expect(read.schema).toBe('unrecognized');
+    expect(read.population.examined).toBe(1);
+    expect(read.rowsSkipped).toBe(1);
+    expect(read.skipped.find((s) => s.subject === 'p.csv')?.reason ?? '').toContain(
+      'no cost column',
+    );
+  });
+
+  it('NO payg spelling is a cost candidate — asserted over the whole LIST, not one name', () => {
+    // POPULATION, not an example. The no-cost-column message ENUMERATES every
+    // entry in both cost candidate lists, so this asserts over the list itself:
+    // re-adding `PaygCostInUSD`, `PaygCostInUsd` or any sibling puts it into this
+    // string and turns this red, where a test naming one spelling would only
+    // catch that one.
+    const csv = ['ResourceId,Alpha', `${BROKER_ARM},1`].join('\n');
+    const read = readCostExport({
+      exportName: 'candidates',
+      partitions: [{ blobName: 'p.csv', csv }],
+    });
+    const detail = read.skipped.find((s) => s.subject === 'p.csv')?.reason ?? '';
+    expect(detail).not.toMatch(/payg/i);
+    // The control. Without these, a message that simply stopped naming its
+    // candidates would satisfy the assertion above in silence.
+    expect(detail).toContain('x_BilledCostInUsd');
+    expect(detail).toContain('CostInBillingCurrency');
+  });
+
+  it('a legitimate USD column beside a PAYG one binds the legitimate one', () => {
+    // The real MCA/EA shape: both columns present. `CostInUsd` binds and the list
+    // price is not a candidate at all — so the answer no longer depends on which
+    // of the two happens to sit earlier in the list.
+    expect(bindColumns(['ResourceId', 'CostInUsd', 'PaygCostInUsd', 'BillingCurrency']).usdCost).toBe(
+      'CostInUsd',
+    );
+    expect(bindColumns(['ResourceId', 'PaygCostInUsd']).usdCost).toBeNull();
+  });
+});
+
+describe('currency — no conversion, and no mislabelling', () => {
+  // POPULATION > 1, ON PURPOSE. The first version of this block tested EUR and
+  // nothing else, and the mutation harness proved that was not enough: a NARROW
+  // exemption — `currency === 'USD' || currency === 'GBP'` — passed the entire
+  // 129-test suite (`N1-currency-exemption-for-one-currency`, SURVIVED). A guard
+  // whose test has a population of one is a guard against one input. The list
+  // below is what makes the mutation die.
+  const NON_USD = ['EUR', 'GBP', 'CAD', 'AUD', 'JPY', 'CHF', 'INR'];
+
+  it.each(NON_USD)('SKIPS a %s row with no USD column, naming the currency', (currency) => {
+    const csv = [
+      'Date,ResourceId,CostInBillingCurrency,BillingCurrencyCode',
+      `2026-08-22,${BROKER_ARM},9.99,${currency}`,
+    ].join('\n');
+    const read = readCostExport({
+      exportName: `cur-${currency}`,
+      partitions: [{ blobName: 'p.csv', csv }],
+    });
+    expect(read.byResource.size).toBe(0);
+    expect(read.rowsSkipped).toBe(1);
+    expect(read.skipped[0].reason).toContain(`'${currency}'`);
+    expect(read.skipped[0].reason).toContain('refusing to convert');
+  });
+
+  it('accepts USD in any casing, so the rejection is about the CURRENCY not the spelling', () => {
+    const csv = [
+      'Date,ResourceId,CostInBillingCurrency,BillingCurrencyCode',
+      `2026-08-22,${BROKER_ARM},9.99,usd`,
+    ].join('\n');
+    const read = readCostExport({ exportName: 'lower', partitions: [{ blobName: 'p.csv', csv }] });
+    expect(read.byResource.get(BROKER_ID)?.amountUsd).toBeCloseTo(9.99, 6);
+  });
+
+  it('SKIPS when the currency cannot be established at all', () => {
+    const csv = ['Date,ResourceId,CostInBillingCurrency', `2026-08-22,${BROKER_ARM},9.99`].join('\n');
+    const read = readCostExport({ exportName: 'nocur', partitions: [{ blobName: 'p.csv', csv }] });
+    expect(read.byResource.size).toBe(0);
+    expect(read.skipped[0].reason).toContain('billing currency not established');
+  });
+
+  it('accepts a currency-less export ONLY on explicit caller opt-in, and records it', () => {
+    const csv = ['Date,ResourceId,CostInBillingCurrency', `2026-08-22,${BROKER_ARM},9.99`].join('\n');
+    const read = readCostExport({
+      exportName: 'nocur',
+      partitions: [{ blobName: 'p.csv', csv }],
+      assumeUsdWhenCurrencyAbsent: true,
+    });
+    expect(read.byResource.get(BROKER_ID)?.amountUsd).toBeCloseTo(9.99, 6);
+    expect(read.currencyResolution).toContain('explicit caller opt-in');
+  });
+
+  it('a non-finite cost value is skipped, not coerced to 0', () => {
+    const csv = [
+      'Date,ResourceId,CostInBillingCurrency,BillingCurrencyCode',
+      `2026-08-22,${BROKER_ARM},n/a,USD`,
+    ].join('\n');
+    const read = readCostExport({ exportName: 'nan', partitions: [{ blobName: 'p.csv', csv }] });
+    expect(read.byResource.size).toBe(0);
+    expect(read.skipped[0].reason).toContain('not a finite number');
+  });
+
+  // The test above passes with the blank-cell bug present, which is why this one
+  // exists separately rather than as another value in its table. `Number('n/a')`
+  // is NaN and gets caught; `Number('')` is 0 and `Number.isFinite(0)` is TRUE,
+  // so a blank sails past the finite check. Azure exports do emit blank cost
+  // cells (adjustment and purchase lines, notably).
+  //
+  // THIS TEST WAS OBSERVED FAILING BEFORE THE GUARD WAS WRITTEN. A test that has
+  // never been seen red is indistinguishable from a test that agrees with
+  // whatever the code does, and this repo has shipped several of those, so the
+  // before/after was measured rather than assumed. Run against this file's tree
+  // at 80c79211 with the guard absent:
+  //
+  //   baseline, file unmodified ....... 53 passed (53)   <- the harness runs
+  //   this test, guard absent ......... AssertionError: expected 1 to be +0
+  //                                     at export-reader.test.ts, byResource.size
+  //   this test, guard present ........ 54 passed (54)
+  //
+  // And the shape of what it caught, printed from the unguarded reader:
+  //
+  //   size=1  attributed=1  skipped=0
+  //   amountUsd=0  source="billed"
+  //   $0.00 (billed, Cost Management export 'blank', ... 1 row(s) summed ...)
+  //
+  // A BILLED claim of zero over a value that was never read -- the one state
+  // this module's header says must not exist -- and `rowsSkipped=0`, so the
+  // population report does not surface the blindness either.
+  it('an EMPTY cost cell is NOT MEASURED, not $0.00', () => {
+    const csv = [
+      'Date,ResourceId,CostInBillingCurrency,BillingCurrencyCode',
+      `2026-08-22,${BROKER_ARM},,USD`,
+    ].join('\n');
+    const read = readCostExport({ exportName: 'blank', partitions: [{ blobName: 'p.csv', csv }] });
+    expect(read.byResource.size).toBe(0);
+    expect(read.rowsAttributed).toBe(0);
+    expect(read.rowsSkipped).toBe(1);
+    expect(read.skipped[0].reason).toContain('EMPTY');
+  });
+
+  it('a row with no resource id is recorded as unattributable, not dropped silently', () => {
+    const csv = [
+      'Date,ResourceId,CostInBillingCurrency,BillingCurrencyCode',
+      '2026-08-22,,120.00,USD',
+    ].join('\n');
+    const read = readCostExport({ exportName: 'purchase', partitions: [{ blobName: 'p.csv', csv }] });
+    expect(read.byResource.size).toBe(0);
+    expect(read.rowsSkipped).toBe(1);
+    expect(read.skipped[0].reason).toContain('no resource id');
+  });
+});
+
+describe('completeness — a partial read never reports as whole', () => {
+  it("a manifest whose partitions were ALL supplied reports 'complete'", () => {
+    const read = eaRun();
+    expect(read.completeness).toBe('complete');
+    expect(read.completenessDetail).toContain('all 1 manifest partition(s) supplied');
+  });
+
+  it("NO manifest reports 'unknown', never 'complete'", () => {
+    const read = readCostExport({
+      exportName: 'loom-brain-daily',
+      partitions: [{ blobName: EA_PART, csv: EA_CSV }],
+    });
+    expect(read.completeness).toBe('unknown');
+    expect(read.completenessDetail).toContain('UNKNOWN fraction');
+  });
+
+  it("a MISSING partition reports 'incomplete' and NAMES it", () => {
+    const manifest = JSON.stringify({
+      dataRowCount: 4,
+      blobs: [
+        { blobName: 'loom-brain/part_0_0001.csv' },
+        { blobName: 'loom-brain/part_0_0002.csv' },
+      ],
+      runInfo: { endDate: '2026-08-22T23:59:59Z' },
+    });
+    const read = eaRun({ manifest });
+    expect(read.completeness).toBe('incomplete');
+    expect(read.completenessDetail).toContain('1 MISSING');
+    expect(read.completenessDetail).toContain('part_0_0002.csv');
+    expect(read.completenessDetail).toContain('PARTIAL read');
+  });
+
+  it('a ROW-COUNT mismatch downgrades an otherwise-complete run (truncated blob)', () => {
+    // Every named partition supplied, but the manifest says 99 rows and 2 were
+    // parsed. Name-matching alone would have called this complete.
+    const manifest = JSON.stringify({
+      dataRowCount: 99,
+      blobs: [{ blobName: 'loom-brain/part_0_0001.csv' }],
+      runInfo: { endDate: '2026-08-22T23:59:59Z' },
+    });
+    const read = eaRun({ manifest });
+    expect(read.completeness).toBe('incomplete');
+    expect(read.completenessDetail).toContain('99 data row(s) and 2 were parsed');
+  });
+
+  // POPULATION NOTE — this block exists because the case above was, on its own,
+  // the ENTIRE population of the row-count cross-check, at a delta of 97.
+  // (The `dataRowCount: 4` case in the missing-partition test never reaches this
+  // branch: the name check has already set `incomplete`, and the cross-check is
+  // guarded by `completeness === 'complete'`.) Measured 2026-08-23: relaxing the
+  // check to `Math.abs(declared - parsed) > 1` — i.e. tolerating an off-by-one —
+  // passed all 136 tests, RC=0. A blob truncated mid-record loses EXACTLY ONE
+  // row, so delta 1 is the PRODUCTION cardinality of the partial read this
+  // defence is named for, and it was the one delta never exercised.
+  //
+  // Parametrised rather than adding a single case, so the population is stated
+  // and a future narrowing has to delete visible rows to shrink it.
+  const PARSED_ROWS = 2;
+  it.each([
+    [1, 'one row FEWER than parsed — a manifest written before a late record'],
+    [3, 'one row MORE than parsed — a blob TRUNCATED MID-RECORD (production shape)'],
+    [4, 'two rows more'],
+    [99, 'far more'],
+  ])(
+    'declared %i vs 2 parsed is INCOMPLETE (%s)',
+    (declared, _why) => {
+      const manifest = JSON.stringify({
+        dataRowCount: declared,
+        blobs: [{ blobName: 'loom-brain/part_0_0001.csv' }],
+        runInfo: { endDate: '2026-08-22T23:59:59Z' },
+      });
+      const read = eaRun({ manifest });
+      expect(read.completeness).toBe('incomplete');
+      expect(read.completenessDetail).toContain(
+        `${declared} data row(s) and ${PARSED_ROWS} were parsed`,
+      );
+      expect(read.completenessDetail).toContain('PARTIAL read');
+    },
+  );
+
+  it('declared === parsed is the ONLY count that stays complete', () => {
+    // The control for the block above: without this, a mutation that made the
+    // cross-check always fire would look identical to a correct one.
+    const manifest = JSON.stringify({
+      dataRowCount: PARSED_ROWS,
+      blobs: [{ blobName: 'loom-brain/part_0_0001.csv' }],
+      runInfo: { endDate: '2026-08-22T23:59:59Z' },
+    });
+    const read = eaRun({ manifest });
+    expect(read.completeness).toBe('complete');
+  });
+
+  it("an UNPARSEABLE manifest degrades to 'unknown' and does not abort the read", () => {
+    const read = eaRun({ manifest: '{not json' });
+    expect(read.completeness).toBe('unknown');
+    expect(read.completenessDetail).toContain('did not parse');
+    // The rows were still read — a bad manifest must not destroy usable data.
+    expect(read.byResource.size).toBe(2);
+  });
+
+  it("a manifest with no blobs[] degrades to 'unknown'", () => {
+    const read = eaRun({ manifest: JSON.stringify({ dataRowCount: 2 }) });
+    expect(read.completeness).toBe('unknown');
+    expect(read.completenessDetail).toContain('no blobs[] list');
+  });
+
+  it('an extra partition not listed in the manifest is also incomplete-worthy', () => {
+    const read = eaRun({
+      partitions: [
+        { blobName: EA_PART, csv: EA_CSV },
+        { blobName: 'loom-brain/part_0_9999.csv', csv: EA_CSV },
+      ],
+    });
+    expect(read.completeness).toBe('incomplete');
+    expect(read.completenessDetail).toContain('supplied but not listed');
+  });
+
+  it('completenessDetail is populated even on the happy path — a verdict never travels alone', () => {
+    expect(eaRun().completenessDetail.length).toBeGreaterThan(0);
+  });
+});
+
+// ── PARTITION IDENTITY ──────────────────────────────────────────────────────
+// Matching partitions on their LAST SEGMENT is how a DOUBLE COUNT reads as
+// whole. Cost Management writes `<export>/<dateRange>/<runId>/part_0_0001.csv`,
+// so `part_0_0001.csv` is the last segment of the FIRST partition of every run
+// that has ever been written — the least distinguishing string in the file
+// layout, used as the identity.
+//
+// THE MUTATION THIS BLOCK EXISTS TO KILL. Twelve arms were run against the
+// 142-test suite, on the PREVIOUS (last-segment, set-based) matcher, with both
+// controls working. Eleven died; one survived:
+//
+//   M7   missing = supplied.size >= manifest.length ? [] : <original>
+//                                                     rc=0  142 passed SURVIVED
+//   M7b  the name normaliser returns a constant            (BROAD)      killed
+//   M7c  drop the `extra.length === 0` term                (BROAD)      killed
+//
+// Degrading the name check to a bare COUNT comparison passed everything, while
+// both broad forms went red instantly — the narrow-bypass shape exactly. A test
+// that checks only counts REPRODUCES that hole, so every case below is RIGHT
+// COUNT, WRONG MEMBER and asserts on the NAMES the verdict carries.
+describe('partition identity — the right NUMBER of blobs is not the right blobs', () => {
+  const RUN_A = 'loom-brain/20260801-20260831/run-aaaa/part_0_0001.csv';
+  const RUN_B = 'loom-brain/20260801-20260831/run-bbbb/part_0_0001.csv';
+
+  /**
+   * A manifest naming ONE blob and carrying NO `dataRowCount`.
+   *
+   * The omission is the point. `dataRowCount` is an OPTIONAL manifest field, and
+   * while it is present the row cross-check catches these cases on its own —
+   * which is exactly how the name comparison came to be untested in the first
+   * place. Without it the name check is the only thing standing.
+   */
+  function oneBlobManifest(blobName: string): string {
+    return JSON.stringify({
+      blobs: [{ blobName }],
+      runInfo: { endDate: '2026-08-22T23:59:59Z' },
+    });
+  }
+
+  /** Every case here reads the SAME one-blob manifest; only the partitions vary. */
+  function runWith(partitions: { blobName: string; csv: string }[]) {
+    return readCostExport({
+      exportName: 'loom-brain-daily',
+      manifest: { blobName: 'loom-brain/manifest.json', json: oneBlobManifest(RUN_A) },
+      partitions,
+    });
+  }
+
+  it('RIGHT COUNT, WRONG MEMBER: a same-named partition from ANOTHER run is not a match', () => {
+    const read = runWith([{ blobName: RUN_B, csv: EA_CSV }]);
+    expect(read.completeness).toBe('incomplete');
+    // One listed, one supplied. A count comparison sees nothing wrong here, so
+    // the two assertions below are the ones it cannot satisfy: the run that was
+    // NOT supplied and the run that was are both named.
+    expect(read.completenessDetail).toContain('1 MISSING');
+    expect(read.completenessDetail).toContain('run-aaaa');
+    expect(read.completenessDetail).toContain('supplied but not listed');
+    expect(read.completenessDetail).toContain('run-bbbb');
+  });
+
+  it("a second run's partition ALONGSIDE the right one doubles the total and says so", () => {
+    // The production shape. The manifest names one blob; the caller hands over
+    // that blob plus a same-last-segment blob from a different run. Under
+    // last-segment matching this reported `'complete'` over a doubled total
+    // wearing the strongest label this module has.
+    const read = runWith([
+      { blobName: RUN_A, csv: EA_CSV },
+      { blobName: RUN_B, csv: EA_CSV },
+    ]);
+    expect(read.completeness).toBe('incomplete');
+    expect(read.completenessDetail).toContain('supplied but not listed');
+    expect(read.completenessDetail).toContain('run-bbbb');
+    // The double count is real — 12.34 counted twice — and the figure now
+    // carries the incompleteness, so the number can never be quoted as whole.
+    expect(read.byResource.get(BROKER_ID)?.amountUsd).toBeCloseTo(24.68, 6);
+    expect(read.byResource.get(BROKER_ID)?.basis).toContain('completeness=incomplete');
+  });
+
+  it('the SAME partition supplied TWICE is extra, because the match is a MULTISET', () => {
+    // A set answers "was this name seen?" and a name supplied twice is seen
+    // once — so a duplicated blob doubles the total and still matches cleanly.
+    // Matching consumes one manifest entry per supplied partition, so the second
+    // copy has nothing left to match. This case is invisible to a set and to a
+    // count alike; only the multiset registers it.
+    const read = runWith([
+      { blobName: RUN_A, csv: EA_CSV },
+      { blobName: RUN_A, csv: EA_CSV },
+    ]);
+    expect(read.completeness).toBe('incomplete');
+    expect(read.completenessDetail).toContain('1 supplied but not listed');
+    expect(read.byResource.get(BROKER_ID)?.amountUsd).toBeCloseTo(24.68, 6);
+  });
+
+  it('identical WHOLE paths on both sides is what reads complete — the control', () => {
+    // Without this, a matcher that answered `'incomplete'` unconditionally would
+    // pass every case above.
+    const read = runWith([{ blobName: RUN_A, csv: EA_CSV }]);
+    expect(read.completeness).toBe('complete');
+    expect(read.byResource.get(BROKER_ID)?.amountUsd).toBeCloseTo(12.34, 6);
+  });
+
+  it('casing, separator and leading-slash drift still match — pinned as DELIBERATE', () => {
+    // Folded on purpose, and recorded here so a later reader does not tighten it
+    // silently and start reporting whole runs as partial. A manifest and a
+    // container listing can disagree on the casing of the export-name segment,
+    // and a caller that joined with `\` is naming the same blob — while a FALSE
+    // `'incomplete'` is its own untrue claim. None of these foldings can make a
+    // DIFFERENT blob count as a supplied one, which is the property the cases
+    // above are actually about.
+    const drifted = '\\LOOM-BRAIN\\20260801-20260831\\RUN-AAAA\\part_0_0001.CSV';
+    const read = runWith([{ blobName: drifted, csv: EA_CSV }]);
+    expect(read.completeness).toBe('complete');
+  });
+});
+
+describe('population (PRP §3.2)', () => {
+  it('reports rows examined and partitions examined as SEPARATE populations', () => {
+    const read = eaRun();
+    expect(read.population.subject).toBe('rows');
+    expect(read.population.examined).toBe(2);
+    expect(read.population.blind).toBe(false);
+    expect(read.partitionPopulation.subject).toBe('partitions');
+    expect(read.partitionPopulation.examined).toBe(1);
+  });
+
+  it('ZERO partitions is BLIND on both populations', () => {
+    const read = readCostExport({ exportName: 'nothing', partitions: [] });
+    expect(read.population.blind).toBe(true);
+    expect(read.partitionPopulation.blind).toBe(true);
+    expect(read.byResource.size).toBe(0);
+  });
+
+  it('a partition with a header and no data rows is examined-zero, not an error', () => {
+    const read = readCostExport({
+      exportName: 'headeronly',
+      partitions: [{ blobName: 'p.csv', csv: 'Date,ResourceId,CostInBillingCurrency,BillingCurrencyCode' }],
+    });
+    expect(read.population.examined).toBe(0);
+    expect(read.population.blind).toBe(true);
+    expect(read.partitionPopulation.blind).toBe(false);
+  });
+
+  it('rowsAttributed + rowsSkipped accounts for every row examined', () => {
+    const csv = [
+      'Date,ResourceId,CostInBillingCurrency,BillingCurrencyCode',
+      `2026-08-22,${BROKER_ARM},1.00,USD`,
+      `2026-08-22,${CONSOLE_ARM},2.00,EUR`,
+      '2026-08-22,,3.00,USD',
+    ].join('\n');
+    const read = readCostExport({ exportName: 'mixed', partitions: [{ blobName: 'p.csv', csv }] });
+    expect(read.population.examined).toBe(3);
+    expect(read.rowsAttributed + read.rowsSkipped).toBe(read.population.examined);
+  });
+});
+
+describe('the figures produced are BILLED and carry their run date', () => {
+  it('every figure is source=billed', () => {
+    for (const f of eaRun().byResource.values()) expect(f.source).toBe('billed');
+  });
+
+  it('renders with the billed marker', () => {
+    const f = eaRun().byResource.get(BROKER_ID)!;
+    expect(renderCost(f)).toContain(BILLED_MARKER);
+  });
+
+  it('carries the export name, schema and completeness in the basis', () => {
+    const f = eaRun().byResource.get(BROKER_ID)!;
+    expect(f.basis).toContain('loom-brain-daily');
+    expect(f.basis).toContain('schema=ea-mca');
+    expect(f.basis).toContain('completeness=complete');
+  });
+
+  it('states the ~24h latency rather than implying the number is live', () => {
+    const f = eaRun().byResource.get(BROKER_ID)!;
+    expect(f.basis).toContain('not a live feed');
+    expect(f.basis).toContain('~24h');
+  });
+
+  it('takes asOf from the manifest run date', () => {
+    const read = eaRun();
+    expect(read.asOf).toBe('2026-08-22T23:59:59Z');
+    expect(read.byResource.get(BROKER_ID)?.asOf).toBe('2026-08-22T23:59:59Z');
+  });
+
+  it('uses a LOUD marker, not a blank, when the run date was not established', () => {
+    const read = readCostExport({
+      exportName: 'nodate',
+      partitions: [{ blobName: 'p.csv', csv: EA_CSV }],
+    });
+    expect(read.asOf).toBeNull();
+    expect(read.byResource.get(BROKER_ID)?.asOf).toBe(ASOF_NOT_ESTABLISHED);
+    expect(read.byResource.get(BROKER_ID)?.basis).toContain('run date NOT ESTABLISHED');
+  });
+
+  it('SUMS multiple rows for the same resource across partitions', () => {
+    const p1 = ['Date,ResourceId,CostInBillingCurrency,BillingCurrencyCode', `2026-08-21,${BROKER_ARM},1.00,USD`].join('\n');
+    const p2 = ['Date,ResourceId,CostInBillingCurrency,BillingCurrencyCode', `2026-08-22,${BROKER_ARM},2.50,USD`].join('\n');
+    const read = readCostExport({
+      exportName: 'multi',
+      partitions: [
+        { blobName: 'p1.csv', csv: p1 },
+        { blobName: 'p2.csv', csv: p2 },
+      ],
+    });
+    expect(read.byResource.get(BROKER_ID)?.amountUsd).toBeCloseTo(3.5, 6);
+    expect(read.byResource.get(BROKER_ID)?.basis).toContain('2 row(s) summed');
+  });
+
+  it('canonicalises resource ids so ARM casing drift does not split a resource in two', () => {
+    const upper = BROKER_ARM.replace('/subscriptions/', '/SUBSCRIPTIONS/').replace(
+      '/resourceGroups/',
+      '/RESOURCEGROUPS/',
+    );
+    const csv = [
+      'Date,ResourceId,CostInBillingCurrency,BillingCurrencyCode',
+      `2026-08-22,${BROKER_ARM},1.00,USD`,
+      `2026-08-22,${upper},2.00,USD`,
+    ].join('\n');
+    const read = readCostExport({ exportName: 'casing', partitions: [{ blobName: 'p.csv', csv }] });
+    expect(read.byResource.size).toBe(1);
+    expect(read.byResource.get(BROKER_ID)?.amountUsd).toBeCloseTo(3.0, 6);
+  });
+});
+
+describe('parseManifest never throws and never invents', () => {
+  it('reports a parse error rather than raising', () => {
+    const facts = parseManifest('{{{');
+    expect(facts.parseError).toBeTruthy();
+    expect(facts.blobNames).toBeNull();
+    expect(facts.dataRowCount).toBeNull();
+  });
+
+  it('returns null for every field a manifest did not carry', () => {
+    const facts = parseManifest('{}');
+    expect(facts.parseError).toBeNull();
+    expect(facts.blobNames).toBeNull();
+    expect(facts.dataRowCount).toBeNull();
+    expect(facts.asOf).toBeNull();
+  });
+
+  it('falls back to submittedTime when endDate is absent', () => {
+    const facts = parseManifest(JSON.stringify({ runInfo: { submittedTime: '2026-08-22T01:02:03Z' } }));
+    expect(facts.asOf).toBe('2026-08-22T01:02:03Z');
+  });
+
+  it('reads blob names and the declared row count', () => {
+    const facts = parseManifest(EA_MANIFEST);
+    expect(facts.blobNames).toEqual(['loom-brain/part_0_0001.csv']);
+    expect(facts.dataRowCount).toBe(2);
+  });
+
+  it('rejects a JSON scalar as a manifest', () => {
+    expect(parseManifest('42').parseError).toContain('not a JSON object');
+  });
+});

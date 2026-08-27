@@ -21,6 +21,7 @@ import { BRONZE, MAX_TABLES, adfSafeName, mirrorAdlsLinkedService } from './mirr
 // Loom Connection and enumerates the source through the same runtime that
 // replicates it, so the table list can never disagree with what Copy can read.
 import { resolveSnowflakeLinkedService, snowflakeDatasetKind, listSnowflakeTables } from './snowflake-adf';
+import { statusToken } from './status-token';
 import type { MirrorSource, MirrorTableSpec, MirrorTableResult, MirrorRunResult } from './mirror-engine';
 
 // ============================================================
@@ -608,6 +609,81 @@ async function gatedRun(
 }
 
 /**
+ * POSITIVE evidence that ADF REFUSED the trigger call, or `null` when nothing
+ * establishes it.
+ *
+ * The sibling of the Snowflake R7 defect, in the same file's blast radius: the
+ * trigger-start `catch` used to append "re-run Start or grant the Console UAMI
+ * Data Factory Contributor" to EVERY failure, whatever ADF said. A missing
+ * pipeline reference, a 409 on a concurrent update, a 429, an ARM outage — all
+ * of them told the operator to go check an RBAC grant that was, in every one of
+ * those cases, already correct.
+ *
+ * So the grant is named only on evidence of a refusal:
+ *   - a STRUCTURED status: `adf-client`'s `jsonOrThrow` rides `status` along on
+ *     the thrown error precisely "so a BFF route can classify … without regexing
+ *     the message". Reading the field beats parsing prose, so it is read first.
+ *   - failing that, ARM's own denial CODES in the message. `startTrigger` throws
+ *     a bare Error with the status interpolated into the string, so the prose
+ *     path is not dead code — it is the only path for that call.
+ *
+ * The `40[13]` alternation is ANCHORED (`status-token.ts`). Unanchored, it
+ * matches inside a factory or trigger name — `loom_copy_403abc_trg` — which is
+ * exactly how `_az-failure-class.mjs` once classified `rg-loom-503` as transient.
+ */
+export function adfDenialEvidence(e: unknown): string | null {
+  const err = (e ?? null) as { status?: unknown; statusCode?: unknown; message?: unknown } | null;
+  const raw = err?.status ?? err?.statusCode;
+  const status = Number(raw ?? 0);
+  if (status === 401 || status === 403) return `ARM answered ${status}`;
+  const msg = typeof err?.message === 'string' ? err.message : String(e ?? '');
+  const DENIED = new RegExp(
+    [
+      'AuthorizationFailed',
+      'LinkedAuthorizationFailed',
+      'does not have authorization',
+      'Forbidden',
+      'Unauthorized',
+      statusToken('40[13]'),
+    ].join('|'),
+    'i',
+  );
+  const m = DENIED.exec(msg);
+  return m ? `ARM refused the call (${m[0]})` : null;
+}
+
+/**
+ * The run note for a trigger that would not start. The initial load DID run —
+ * that part is established and is stated first — and the cause of the trigger
+ * failure is named only when `adfDenialEvidence` found it.
+ *
+ * Exported so it is directly testable: inline, it could be reverted to the
+ * unconditional string with the whole suite still green.
+ */
+export function describeTriggerStartFailure(
+  kind: CopyTriggerPlan['kind'],
+  e: unknown,
+): string {
+  const label = kind === 'tumbling' ? 'tumbling-window' : 'schedule';
+  const detail = (e as { message?: string } | null)?.message || String(e ?? '');
+  const denial = adfDenialEvidence(e);
+  if (denial) {
+    return (
+      ` Initial load ran; the ongoing ${label} trigger could NOT be started — ${denial}: ${detail}. ` +
+      'This one IS a permission problem and ARM named it: grant the Console UAMI "Data Factory Contributor" ' +
+      'on the factory, then re-run Start.'
+    );
+  }
+  return (
+    ` Initial load ran; the ongoing ${label} trigger could NOT be started: ${detail}. ` +
+    'Loom did NOT establish why — this was not shown to be a permission problem, so do not start by changing ' +
+    'role assignments. Re-run Start to try again; if it fails the same way, the ADF message above is the whole ' +
+    'of what is known.'
+  );
+}
+
+
+/**
  * Provision + run an ADF Copy pipeline that lands each selected table as Parquet
  * in ADLS Bronze (copy-then-swap full refresh), and — unless syncMode is
  * 'snapshot' — register a schedule trigger that re-runs the copy on a cadence
@@ -928,7 +1004,7 @@ export async function runMirrorAdfCopy(
         ? ` Continuous sync: tumbling-window trigger ${triggerName} every ${triggerPlan.cadence} (max 1 concurrent window).`
         : ` Incremental sync: schedule trigger ${triggerName} re-copies every ${triggerPlan.cadence}.`;
     } catch (e: any) {
-      triggerNote = ` Initial load ran; the ongoing ${triggerPlan.kind === 'tumbling' ? 'tumbling-window' : 'schedule'} trigger could not be started (${e?.message || String(e)}) — re-run Start or grant the Console UAMI Data Factory Contributor.`;
+      triggerNote = describeTriggerStartFailure(triggerPlan.kind, e);
     }
   }
 
