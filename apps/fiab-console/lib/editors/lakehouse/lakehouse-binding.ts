@@ -42,11 +42,16 @@ const ABFSS_RE = /^abfss:\/\/([^@]+)@[^/]+\/(.*)$/i;
  * The DLZ containers a binding may name — a verbatim mirror of
  * `KNOWN_CONTAINERS` in lib/azure/adls-client.ts, which cannot be imported here
  * (it pulls the credential chain into the client bundle). Kept honest by
- * `lakehouse-binding.test.ts`, which imports the real one and asserts equality,
- * so a container added there and not here fails a test rather than silently
- * diverging.
+ * `lakehouse-binding.test.ts`, which imports the real one and compares the two
+ * as SETS, in both directions, so neither a container added there and missing
+ * here nor one invented here and absent there can diverge silently.
+ *
+ * Exported for that spec alone (#3921). The predicate below is the API the
+ * editor uses; nothing outside the test should read the list itself. It is
+ * exported rather than re-typed in the spec because a second copy of the list
+ * inside the guard would compare the mirror against itself and prove nothing.
  */
-const CLIENT_KNOWN_CONTAINERS = ['bronze', 'silver', 'gold', 'landing', 'csv-imports'] as const;
+export const CLIENT_KNOWN_CONTAINERS = ['bronze', 'silver', 'gold', 'landing', 'csv-imports'] as const;
 
 export function isClientKnownContainer(name: string): boolean {
   return (CLIENT_KNOWN_CONTAINERS as readonly string[]).includes(name);
