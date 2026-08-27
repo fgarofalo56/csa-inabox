@@ -434,7 +434,19 @@ async function bapCallWithHeaders<T = any>(
   // refused first -> "Both identities were refused"; no user token -> not), and
   // __tests__/powerplatform-lifecycle.test.ts asserts substrings unique to the
   // shared helper's copy.
-  const { res, triedUser } = await ppFetch(full, bapScope(), {
+  // ONE binding, used for BOTH the wire and the remediation copy (#3957).
+  // These were two independent `bapScope()` calls straddling the `await` below.
+  // `powerPlatformEndpoints()` is pure over `process.env` and deliberately
+  // UNCACHED ("so a runtime env change and unit tests both take effect"), so
+  // two calls are two reads, and nothing forced the scope the hint DESCRIBES to
+  // be the scope the request was ISSUED under — a hint that names a principal
+  // the code never used is deploy-integrity R7, the same class of untrue
+  // message #3688 fixed here twice. `ppCall` binds its scope once and reuses
+  // it; this site now does the same, and the binding is pinned structurally (no
+  // literal, no second read, same identifier as the transport's) by
+  // __tests__/powerplatform-lifecycle.test.ts.
+  const scope = bapScope();
+  const { res, triedUser } = await ppFetch(full, scope, {
     method,
     headers: {
       'content-type': 'application/json',
@@ -451,7 +463,7 @@ async function bapCallWithHeaders<T = any>(
     const msg = (json?.error?.message || json?.message || text || `${method} ${url} failed`).toString();
     let hint: string | undefined;
     if (res.status === 401 || res.status === 403) {
-      hint = ppAuthHint(triedUser, bapScope());
+      hint = ppAuthHint(triedUser, scope);
     }
     throw new PowerPlatformError(msg, res.status, json || text, full, hint);
   }
