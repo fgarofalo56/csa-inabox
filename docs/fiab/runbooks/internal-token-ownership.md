@@ -98,12 +98,49 @@ var loomInternalToken = empty(loomInternalTokenValue)
   : loomInternalTokenValue                                        // adopt what is live
 ```
 
-Every deploy lane runs `scripts/csa-loom/resolve-internal-token.sh --export`
+Every deploy lane runs `scripts/csa-loom/resolve-internal-token.sh --github-env`
 before `az deployment sub create` and passes the result as
 `loomInternalTokenValue`. The lookup is an **ARM control-plane read of the
 running console's Container Apps secret**, which needs no VNet and no Key Vault
 data plane — so it works from a GitHub-hosted runner, from the in-VNet
 self-hosted runner, in Commercial and in Gov, with no extra hop.
+
+> **The resolver's stdout is load-bearing. Never redirect, pipe, or tee it (#4061).**
+>
+> `::add-mask::` is a **workflow command**: the runner registers the value as a
+> secret only if that line reaches the step's output stream. Until 2026-08-25
+> all four lanes called the resolver as `--export > /dev/null` — a redirect
+> added *in order to* protect the value — and the redirect discarded the mask
+> while the `$GITHUB_ENV` write happened anyway. `$GITHUB_ENV` is **job-level**
+> environment, which the runner renders in the Run group of every subsequent
+> step, so the live token was published into a public repo's logs for weeks.
+> The `log()` diagnostics go to **stderr** and survived the same redirect, which
+> is why the log looked healthy throughout.
+>
+> Three things now hold that line:
+>
+> * `--github-env` prints **no secret value at all** — only the mask. That
+>   removes the *second* leak, not the first: the `$GITHUB_ENV` value is still
+>   job-level environment, so **the mask is still load-bearing**. What changed is
+>   that no caller has any reason to redirect this mode.
+> * The script **fails closed** if its own stdout is `/dev/null` or a regular
+>   file. Measured limits, stated rather than implied: it does **not** detect a
+>   pipe, a `$( )` capture, a named FIFO, or a closed descriptor. It is gated on
+>   `uname -s = Linux`, because measurement showed MSYS/Git Bash returns `clean`
+>   for a `>/dev/null` — a silent false negative. (The console/tty direction was
+>   not measurable and is not asserted.) All four lanes run on `ubuntu-latest`,
+>   where the matrix is correct in every case.
+> * `scripts/ci/check-internal-token-single-writer.mjs` **R3** refuses the shape
+>   at review time — a stdout redirect anywhere on the invocation's logical line,
+>   a pipe, a mask-swallowing `$( )`, an `exec >` before it, and a redirect on
+>   the line that CLOSES its block (`}`, `)`, `done`, `fi`, `esac`) — across
+>   `.github/**` and `scripts/**/*.sh`, matching the resolver by basename. It
+>   reasons about text, not about a shell: a redirect assembled at runtime, or a
+>   path spliced across several variables, is outside its reach.
+>
+> `--export` is the shell mode and **prints the token by design**; that is the
+> `eval` contract. Use it only as `eval "$(… --export)"`, never in a workflow
+> step that is not an `eval`. It writes nothing to `$GITHUB_ENV`.
 
 Consequences:
 

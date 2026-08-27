@@ -1229,13 +1229,30 @@ test('MUTATION PROOF — a drill-down that reads NOTHING contributes nothing, an
   const d = armDrilldown(args, armFixtureRunner); // fixture miss -> az DeploymentNotFound
   assert.equal(d.result.status, 'unreadable');
   assert.equal(d.classifyText, '', 'an unreadable drill-down must not reach the classifier');
-  // The R7 trap this guards: az's OWN failure text matches a taxonomy signal.
+
+  // THE R7 TRAP THIS GUARDS: az's OWN failure text can carry a taxonomy signal,
+  // so feeding it to the classifier would attribute az's problem to the deploy.
+  //
+  // This used to be demonstrated with THIS fixture's own DeploymentNotFound
+  // text, because `could not be found` was a bare substring on
+  // config.resource-group-not-found and az's not-found therefore rendered a
+  // RESOURCE-GROUP remediation. #4076 removed that over-match — it was
+  // mis-classifying an ACA vnet error too — so this string is now correctly
+  // unknown, and the demonstration needs a text that genuinely matches.
   assert.equal(
     classify(d.rendered).signalId,
-    'config.resource-group-not-found',
-    "az's not-found text does match a signal — which is exactly why it must never be fed in",
+    null,
+    'after #4076, az DeploymentNotFound no longer borrows a resource-group remediation',
   );
-  // …and because classifyText is empty, the real verdict is untouched.
+  assert.notEqual(
+    classify('ERROR: (AuthorizationFailed) The client does not have authorization').class,
+    'unknown',
+    "az failure text CAN carry a signal — which is why an unreadable drill-down must never be fed in",
+  );
+
+  // …and because classifyText is empty, the real verdict is untouched. This is
+  // the assertion that actually pins the contract: whatever az said, an
+  // unreadable drill-down contributes nothing.
   assert.equal(classify(`${MYSTERY}${d.classifyText}`).class, 'unknown');
 });
 
