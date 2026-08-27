@@ -90,6 +90,12 @@ import {
   STATUS_TOKEN_LOOKBEHIND,
   STATUS_TOKEN_LOOKAHEAD,
 } from '../_az-failure-class.mjs';
+import {
+  classifyPauseDeclaration,
+  reconcileWithDeclaredPause,
+  PAUSE_DECLARATION_PATH,
+  MIN_REASON_CHARS,
+} from '../_estate-pause-declaration.mjs';
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
 
@@ -730,4 +736,181 @@ test('CONTROL: every az call in the preflight goes through the retry wrapper', (
 test('CONTROL: the shared az-failure classifier is actually imported', () => {
   const src = fs.readFileSync(path.join(REPO_ROOT, 'scripts/ci/ensure-adx-cluster-running.mjs'), 'utf8');
   assert.match(src, /from '\.\/_az-failure-class\.mjs'/);
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ROUND 3 — A DELIBERATELY PAUSED ESTATE IS NOT A FAILURE
+//
+// deploy-fiab-gcch ran red for 17 consecutive runs after 2026-08-11, every one
+// at the ADX preflight: `state=Stopped → start`, then
+// `(InsufficientResourcesForSubscription)`. The estate is deliberately kept
+// stopped under the pause/resume mandate, so the daily schedule was failing on a
+// condition the operator chose.
+//
+// THE WHOLE RISK OF THIS CHANGE is that the fix becomes `if (state ===
+// 'Stopped') skip` — a control that CANNOT FAIL, which would make a genuinely
+// broken cluster read as fine forever on a P0 sovereign path. So the two tests
+// that matter most are the two DIRECTIONS, and they are pinned separately and
+// named for what they defend:
+//
+//   * `Stopped` WITHOUT a declaration must still ask for a start (→ the lane
+//     still goes red on the capacity refusal). This is the test that dies if
+//     anyone keys the suppression to the STATE.
+//   * `Stopped` WITH a declaration must NOT start. This is the test that dies if
+//     anyone drops the declaration and restores the old unconditional behaviour.
+//
+// A suppression whose verdict cannot move in BOTH directions is keyed to the
+// wrong thing, and one of these two tests will say so.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** A register entry that satisfies every rule, so each test can break ONE thing. */
+const VALID_REASON =
+  'The GCC-High estate is deliberately held stopped under the estate pause mandate; '
+  + 'resume it and delete this entry to measure the lane again.';
+const validRegister = (over = {}) => ({
+  paused: [{
+    boundary: 'GCC-High',
+    owner: 'fgarofalo56',
+    declaredOn: '2026-08-26',
+    reason: VALID_REASON,
+    reviewBy: '2026-11-24',
+    ...over,
+  }],
+});
+const TODAY = '2026-08-26';
+
+test('THE DIRECTION THAT MUST KEEP FAILING: Stopped with NO declaration still asks for a start', () => {
+  // The undeclared estate is the whole reason this is not `if (stopped) skip`.
+  // An operator who has NOT declared a pause is telling us nothing, and a
+  // stopped cluster is then exactly the defect the preflight was written for.
+  const pause = classifyPauseDeclaration({ register: null, boundary: 'GCC-High', today: TODAY });
+  assert.equal(pause.declared, false, 'an absent register must never read as a declaration');
+
+  const observed = classifyClusterState('Stopped');
+  assert.equal(observed.action, 'start');
+  const verdict = reconcileWithDeclaredPause({ action: observed.action, state: 'Stopped', declared: pause.declared });
+  assert.equal(verdict.action, 'start', 'an UNDECLARED stopped cluster must still be started — and fail the lane when Azure refuses');
+  assert.equal(verdict.note, null);
+});
+
+test('THE DIRECTION THAT MUST BE SUPPRESSED: Stopped WITH a declaration is `paused`, not `start`', () => {
+  const pause = classifyPauseDeclaration({ register: validRegister(), boundary: 'GCC-High', today: TODAY });
+  assert.equal(pause.declared, true, pause.reason);
+
+  const verdict = reconcileWithDeclaredPause({ action: 'start', state: 'Stopped', declared: pause.declared });
+  assert.equal(verdict.action, 'paused', 'a DECLARED-paused estate must not be started and must not fail');
+  assert.match(verdict.note, /NOT starting it/);
+});
+
+test('a declaration for ANOTHER boundary does not cover this one', () => {
+  // One boundary's pause must never silence a different boundary's deploy.
+  const reg = validRegister({ boundary: 'IL5' });
+  const pause = classifyPauseDeclaration({ register: reg, boundary: 'GCC-High', today: TODAY });
+  assert.equal(pause.declared, false);
+  assert.match(pause.reason, /not declared paused/);
+  assert.match(pause.reason, /IL5/, 'the message must name what IS declared, so a typo is diagnosable');
+});
+
+test('declared paused + a RUNNING cluster is reported as an INCONSISTENCY, and still proceeds', () => {
+  // A live cluster is precisely what the apply needs, so this must not fail —
+  // but "declared down, observed up" is a real finding and is never silent.
+  const verdict = reconcileWithDeclaredPause({ action: 'none', state: 'Running', declared: true });
+  assert.equal(verdict.action, 'none', 'a running cluster must not be turned into a failure');
+  assert.match(verdict.note, /INCONSISTENCY/);
+});
+
+test('a pause declaration does NOT excuse a cluster in a REFUSE state', () => {
+  // The #3980 PAUSE_STATES lesson, restated: folding every non-Running state
+  // into "paused" converts a genuine defect into a silent skip. A declaration
+  // says the engine is deliberately DOWN; it says nothing about Deleting.
+  for (const state of ['Unavailable', 'Deleting', 'Deleted', 'SomethingNew']) {
+    const observed = classifyClusterState(state);
+    assert.equal(observed.action, 'refuse', `${state} should be refuse`);
+    const verdict = reconcileWithDeclaredPause({ action: observed.action, state, declared: true });
+    assert.equal(verdict.action, 'refuse', `a declaration must not excuse '${state}'`);
+  }
+});
+
+test('EVERY uncertain register outcome resolves to NOT-declared', () => {
+  // The asymmetry #3980 established, applied to a register. Suppressing is the
+  // dangerous direction, so it takes positive evidence; "I could not tell" must
+  // never become "it is paused, stand down". Each case also has to SAY why, or
+  // an operator who believes they declared a pause cannot find out otherwise.
+  const cases = [
+    ['null register', { register: null, boundary: 'GCC-High', today: TODAY }, /no .* was readable/],
+    ['register is an array', { register: [], boundary: 'GCC-High', today: TODAY }, /not a JSON object/],
+    ['no paused array', { register: { paused: 'yes' }, boundary: 'GCC-High', today: TODAY }, /no `paused` array/],
+    ['boundary missing', { register: validRegister(), boundary: '', today: TODAY }, /no boundary was supplied/],
+    ['today not a date', { register: validRegister(), boundary: 'GCC-High', today: 'now' }, /not an ISO date/],
+    ['no owner', { register: validRegister({ owner: '' }), boundary: 'GCC-High', today: TODAY }, /names no `owner`/],
+    ['thin reason', { register: validRegister({ reason: 'paused' }), boundary: 'GCC-High', today: TODAY }, /minimum 60/],
+    ['placeholder reason', { register: validRegister({ reason: `TODO ${VALID_REASON}` }), boundary: 'GCC-High', today: TODAY }, /placeholder/],
+    ['reviewBy malformed', { register: validRegister({ reviewBy: 'soon' }), boundary: 'GCC-High', today: TODAY }, /not an ISO date/],
+    ['reviewBy EXPIRED', { register: validRegister({ reviewBy: '2026-08-25' }), boundary: 'GCC-High', today: TODAY }, /EXPIRED/],
+  ];
+  for (const [label, input, messagePattern] of cases) {
+    const got = classifyPauseDeclaration(input);
+    assert.equal(got.declared, false, `${label} must NOT suppress`);
+    assert.match(got.reason, messagePattern, `${label} must say why it did not suppress`);
+  }
+  // POPULATION: the same builder with nothing broken MUST declare, or every row
+  // above is passing for the trivial reason that nothing can ever declare.
+  assert.equal(
+    classifyPauseDeclaration({ register: validRegister(), boundary: 'GCC-High', today: TODAY }).declared,
+    true,
+    'the unbroken control case must declare — otherwise this test has no population',
+  );
+});
+
+test('the expiry actually expires: the SAME entry declares before reviewBy and not after', () => {
+  // The teeth. A pause that never lapses is how a lane stays dark for months
+  // while every dashboard reads green (deploy-integrity.md R3).
+  const reg = validRegister({ reviewBy: '2026-11-24' });
+  assert.equal(classifyPauseDeclaration({ register: reg, boundary: 'GCC-High', today: '2026-11-24' }).declared, true, 'valid ON the review date');
+  assert.equal(classifyPauseDeclaration({ register: reg, boundary: 'GCC-High', today: '2026-11-25' }).declared, false, 'expired the day AFTER');
+});
+
+test('the SHIPPED register is structurally valid', () => {
+  // Deliberately NOT asserting non-expiry against the real clock: the expiry is
+  // meant to re-red the deploy LANE, not to turn main's unit suite red on a
+  // date. The lapse behaviour is pinned above with fixed dates instead.
+  const file = path.join(REPO_ROOT, PAUSE_DECLARATION_PATH);
+  const reg = JSON.parse(fs.readFileSync(file, 'utf8'));
+  assert.ok(Array.isArray(reg.paused), `${PAUSE_DECLARATION_PATH} must carry a \`paused\` array`);
+  for (const e of reg.paused) {
+    assert.match(e.boundary, /^(Commercial|GCC|GCC-High|IL5)$/, `unknown boundary '${e.boundary}'`);
+    assert.ok(e.owner && e.owner.trim(), `${e.boundary} needs an owner`);
+    assert.ok(e.reason.trim().length >= MIN_REASON_CHARS, `${e.boundary}'s reason is too thin`);
+    assert.match(e.reviewBy, /^\d{4}-\d{2}-\d{2}$/, `${e.boundary} needs an ISO reviewBy`);
+    assert.match(e.declaredOn, /^\d{4}-\d{2}-\d{2}$/, `${e.boundary} needs an ISO declaredOn`);
+    assert.ok(e.reviewBy > e.declaredOn, `${e.boundary}'s reviewBy must be after declaredOn`);
+    // Declared on its OWN declaredOn date — proves the shipped entry is one the
+    // classifier accepts, not merely one that parses.
+    assert.equal(
+      classifyPauseDeclaration({ register: reg, boundary: e.boundary, today: e.declaredOn }).declared,
+      true,
+      `${e.boundary}'s shipped entry is rejected by the classifier`,
+    );
+  }
+});
+
+test('CONTROL: the gcch lane passes --boundary and stands down on the verdict', () => {
+  // The script half is inert without the YAML half. Without `--boundary` the
+  // register can never match; without the `estate_paused` gates the preflight
+  // exits 0 straight into the identical ClusterNotValidForPrincipals refusal at
+  // what-if and at the apply. Both are pinned so neither can be dropped quietly.
+  const wf = fs.readFileSync(path.join(REPO_ROOT, '.github/workflows/deploy-fiab-gcch.yml'), 'utf8');
+  assert.match(wf, /id: adx_preflight/, 'the preflight needs an id for its output to be referenced');
+  assert.match(wf, /--boundary "\$CSA_LOOM_BOUNDARY"/, 'the lane must pass its boundary or no declaration can apply');
+  assert.match(wf, /estate_paused: \$\{\{ steps\.adx_preflight\.outputs\.estate_paused \}\}/, 'the job must publish the verdict');
+  assert.match(wf, /needs\.deploy-validate\.outputs\.estate_paused != 'true'/, 'the chained bootstrap must stand down too');
+
+  // POPULATION + REACHABILITY: count the step-level gates rather than matching
+  // once. A single `!= 'true'` somewhere in a 1300-line file would satisfy a
+  // bare regex while what-if or the apply ran on regardless.
+  const stepGates = wf.match(/steps\.adx_preflight\.outputs\.estate_paused != 'true'/g) ?? [];
+  assert.ok(
+    stepGates.length >= 3,
+    `expected at least 3 step-level estate_paused gates (what-if, provision, front-door), found ${stepGates.length}`,
+  );
 });

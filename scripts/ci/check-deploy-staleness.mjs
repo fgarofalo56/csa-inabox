@@ -38,9 +38,14 @@
  * UNKNOWN (never a false green), and the maxDays boundary in both directions.
  */
 import { execFileSync } from 'node:child_process';
+import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { CLOUD_ESTATES, parseBuildMarker } from './_estate-registry.mjs';
+import { classifyPauseDeclaration, PAUSE_DECLARATION_PATH } from './_estate-pause-declaration.mjs';
+
+/** Repo root, for resolving the estate-pause register. */
+const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 
 const REPO = process.env.GITHUB_REPOSITORY || 'fgarofalo56/csa-inabox';
 
@@ -328,6 +333,7 @@ export const WATCHED = [
   // DRY_RUN_MARKER on whatif-only dispatches, so only real applies count here.
   {
     workflow: 'deploy-fiab-commercial.yml',
+    boundary: 'Commercial',
     why: 'The ONLY workflow that applies platform/fiab/bicep/main.bicep to the Commercial estate — every env var, role grant and module the Console depends on reaches production through this path and no other. Stale here means main and the running estate have silently diverged: merged bicep is inert, and the daily cron that should be reconciling it is failing in a way that looks like yesterday.',
     paths: [
       '.github/workflows/deploy-fiab-commercial.yml',
@@ -474,6 +480,14 @@ export const WATCHED = [
       // that decides whether a failed read is transient (retry), denied, capacity
       // or unknown. It gates whether the preflight retries or fails the deploy.
       'scripts/ci/_az-failure-class.mjs',
+      // Same import edge, third module: the estate-pause register reader the ADX
+      // preflight imports to tell a DELIBERATELY stopped cluster from a broken
+      // one. It is the strongest of the three — the other two decide how the
+      // preflight REACTS to a failure; this one decides whether the lane stands
+      // down and applies NOTHING at all. Editing it changes what reaches Azure,
+      // so a commit touching it without a subsequent successful run IS drift,
+      // for exactly the reason the two above are watched.
+      'scripts/ci/_estate-pause-declaration.mjs',
     ],
     maxDays: 7,
   },
@@ -542,6 +556,7 @@ export const WATCHED = [
   //     NOT cross, so the reasoning is asserted rather than restated.
   {
     workflow: 'deploy-fiab-gcch.yml',
+    boundary: 'GCC-High',
     why: 'The ONLY workflow that applies platform/fiab/bicep/main.bicep to the GCC-High (Azure Government) estate — every env var, role grant and module the sovereign Console depends on reaches production through this path and no other. Databricks Unity Catalog has no Gov endpoint, so this is also the lane that adopts and re-points the loom-unity catalog that IS the sovereign catalog story (cloud-parity.md). Stale, failing or disabled here means merged bicep is inert in the boundary that can least afford it. This row is the "did the deploy lane RUN" half of the sovereign signal; the ESTATES probe of the Gov console\'s live /build-marker.txt is the "did it LAND" half (#3730). Neither implies the other: a lane can succeed having deployed nothing, and an estate can be current because someone rolled it by hand.',
     paths: [
       '.github/workflows/deploy-fiab-gcch.yml',
@@ -607,6 +622,14 @@ export const WATCHED = [
       // that decides whether a failed read is transient (retry), denied, capacity
       // or unknown. It gates whether the preflight retries or fails the deploy.
       'scripts/ci/_az-failure-class.mjs',
+      // Same import edge, third module: the estate-pause register reader the ADX
+      // preflight imports to tell a DELIBERATELY stopped cluster from a broken
+      // one. It is the strongest of the three — the other two decide how the
+      // preflight REACTS to a failure; this one decides whether the lane stands
+      // down and applies NOTHING at all. Editing it changes what reaches Azure,
+      // so a commit touching it without a subsequent successful run IS drift,
+      // for exactly the reason the two above are watched.
+      'scripts/ci/_estate-pause-declaration.mjs',
       // #3203 — Front Door answers 504 while the ACA private-endpoint connection
       // is Pending, so this decides whether the deployed sovereign estate is
       // reachable at all.
@@ -668,6 +691,7 @@ export const WATCHED = [
   },
   {
     workflow: 'deploy-fiab-gcc.yml',
+    boundary: 'GCC',
     why: 'The ONLY workflow that applies platform/fiab/bicep/main.bicep to the GCC estate (Azure public cloud under GCC M365 identity). It is `disabled_manually` as of 2026-08-08 — its 08:00 UTC cron therefore cannot fire, so GCC accrues drift forever and nothing anywhere said so. Registering it is what turns "switched off" from an invisible state into a named row: classifyWorkflowState reports the disablement separately from the drift, because "the reconcile is off" and "the reconcile is behind" have different fixes.',
     paths: [
       '.github/workflows/deploy-fiab-gcc.yml',
@@ -714,6 +738,14 @@ export const WATCHED = [
       // that decides whether a failed read is transient (retry), denied, capacity
       // or unknown. It gates whether the preflight retries or fails the deploy.
       'scripts/ci/_az-failure-class.mjs',
+      // Same import edge, third module: the estate-pause register reader the ADX
+      // preflight imports to tell a DELIBERATELY stopped cluster from a broken
+      // one. It is the strongest of the three — the other two decide how the
+      // preflight REACTS to a failure; this one decides whether the lane stands
+      // down and applies NOTHING at all. Editing it changes what reaches Azure,
+      // so a commit touching it without a subsequent successful run IS drift,
+      // for exactly the reason the two above are watched.
+      'scripts/ci/_estate-pause-declaration.mjs',
     ],
     maxDays: 7,
   },
@@ -769,6 +801,7 @@ export const WATCHED = [
   // they are inert until that PR lands and correct the moment it does.
   {
     workflow: 'deploy-fiab-il5.yml',
+    boundary: 'IL5',
     why: 'The ONLY workflow that applies platform/fiab/bicep/main.bicep to the DoD IL5 estate, and it was in no watchdog anywhere: not this table, and therefore not the report an operator reads. It has NEVER run. It also carries an `az deployment sub what-if` with adxEnabled=true and, before #3888, no ADX preflight — the identical #3449 shape that failed GCC-High nine consecutive times — so the boundary with the least margin was the one carrying a known unmitigated defect with nothing measuring it (cloud-parity.md).',
     paths: [
       '.github/workflows/deploy-fiab-il5.yml',
@@ -817,6 +850,14 @@ export const WATCHED = [
       // that decides whether a failed read is transient (retry), denied, capacity
       // or unknown. It gates whether the preflight retries or fails the deploy.
       'scripts/ci/_az-failure-class.mjs',
+      // Same import edge, third module: the estate-pause register reader the ADX
+      // preflight imports to tell a DELIBERATELY stopped cluster from a broken
+      // one. It is the strongest of the three — the other two decide how the
+      // preflight REACTS to a failure; this one decides whether the lane stands
+      // down and applies NOTHING at all. Editing it changes what reaches Azure,
+      // so a commit touching it without a subsequent successful run IS drift,
+      // for exactly the reason the two above are watched.
+      'scripts/ci/_estate-pause-declaration.mjs',
       // DELIBERATELY ABSENT, and named so the omission is a decision rather than
       // an oversight: deploy-classify.mjs, deploy-retry.mjs and
       // gov-verify-evidence.sh are CI_PLUMBING (see check-deploy-paths-coverage),
@@ -1070,12 +1111,36 @@ function gh(args) {
  * exists to catch. A history of ONLY dry runs therefore returns { at: null }
  * (never ran for real), NOT the dry run's timestamp.
  *
+ * RUNS AGAINST A DECLARED-PAUSED ESTATE ARE SKIPPED FOR THE SAME REASON, and
+ * this is not a hypothetical. The deploy lanes stand down when
+ * scripts/ci/estate-pause-declaration.json declares their boundary paused: the
+ * what-if, the apply and the post-deploy bootstrap are all gated off, and the
+ * job then SUCCEEDS having deployed nothing. Without this filter the first such
+ * scheduled run would reset "last success" to today and this row would flip from
+ * `STALE … 17 consecutive FAILURE(s)` to `ok` — converting a loud, true red into
+ * a silent, false green, which is precisely what the paragraph above says this
+ * file exists to prevent. The stand-down cannot be detected from the run TITLE
+ * (`run-name` is fixed before any step executes and cannot read a file), so it
+ * is detected from the declaration's own `declaredOn` date instead.
+ *
  * @param {{createdAt?:string, displayTitle?:string}[]} rows
- * @returns {{at:string|null, dryRunsSkipped:number}}
+ * @param {string|null} pausedSince ISO date from the boundary's declaration, or
+ *   null when the boundary is not declared paused.
+ * @returns {{at:string|null, dryRunsSkipped:number, pausedRunsSkipped:number}}
  */
-export function pickLastRealSuccess(rows) {
-  const real = rows.filter((r) => !String(r.displayTitle || '').includes(DRY_RUN_MARKER));
-  return { at: real[0]?.createdAt || null, dryRunsSkipped: rows.length - real.length };
+export function pickLastRealSuccess(rows, pausedSince = null) {
+  const notDry = rows.filter((r) => !String(r.displayTitle || '').includes(DRY_RUN_MARKER));
+  // Lexical compare is valid because both sides are ISO-8601 and `createdAt` is
+  // a full timestamp while `declaredOn` is a date — so a run ON the declaration
+  // day sorts AFTER it and is correctly treated as stood down.
+  const real = pausedSince
+    ? notDry.filter((r) => String(r.createdAt || '') < pausedSince)
+    : notDry;
+  return {
+    at: real[0]?.createdAt || null,
+    dryRunsSkipped: rows.length - notDry.length,
+    pausedRunsSkipped: notDry.length - real.length,
+  };
 }
 
 /**
@@ -1095,16 +1160,40 @@ export function pickLastRealSuccess(rows) {
  * clear the drift it did not fix. Hence `--limit 20` and a client-side filter
  * rather than `--limit 1` — the newest success may well be a dry run.
  */
-function lastSuccessfulRun(workflow) {
+function lastSuccessfulRun(workflow, pausedSince = null) {
   try {
     const out = gh([
       'run', 'list', '--workflow', workflow, '--status', 'success',
       '--limit', '20', '--json', 'createdAt,displayTitle', '--repo', REPO,
     ]);
-    return pickLastRealSuccess(JSON.parse(out || '[]'));
+    return pickLastRealSuccess(JSON.parse(out || '[]'), pausedSince);
   } catch (e) {
     return { queryFailed: true, error: String(e?.stderr || e?.message || e).slice(0, 160) };
   }
+}
+
+/**
+ * `declaredOn` for a lane's boundary, when that boundary is declared paused.
+ *
+ * Returns null for every uncertain outcome — an unreadable register, an entry
+ * that fails a rule, an expired declaration — which means NOTHING is filtered
+ * and the lane is measured exactly as it was before. The asymmetry runs the
+ * same way here as everywhere else in this mechanism: the DANGEROUS direction
+ * is discarding evidence of a successful deploy, so it takes a valid, owned,
+ * unexpired declaration to do it.
+ */
+function declaredPauseSince(boundary) {
+  if (!boundary) return null;
+  let register = null;
+  try {
+    register = JSON.parse(readFileSync(path.join(REPO_ROOT, PAUSE_DECLARATION_PATH), 'utf8'));
+  } catch {
+    return null;
+  }
+  const verdict = classifyPauseDeclaration({
+    register, boundary, today: new Date().toISOString().slice(0, 10),
+  });
+  return verdict.declared ? (verdict.entry?.declaredOn ?? null) : null;
 }
 
 /** ISO timestamp of the most recent commit touching any of `paths`. */
@@ -1445,7 +1534,7 @@ export function classifyDrift({ codeAt, run, maxDays }) {
     : Math.max(0, Math.round((Date.parse(codeAt) - Date.parse(runAt)) / DAY_MS));
   const stale = queryFailed || neverRan
     || (Date.parse(codeAt) > Date.parse(runAt) && driftDays > maxDays);
-  return { runAt, driftDays, neverRan, queryFailed, queryError: run.error, dryRunsSkipped: run.dryRunsSkipped || 0, stale };
+  return { runAt, driftDays, neverRan, queryFailed, queryError: run.error, dryRunsSkipped: run.dryRunsSkipped || 0, pausedRunsSkipped: run.pausedRunsSkipped || 0, stale };
 }
 
 /**
@@ -1472,7 +1561,7 @@ function buildRows() {
   const states = workflowStates();
   const rows = [];
   for (const entry of WATCHED) {
-    const run = lastSuccessfulRun(entry.workflow);
+    const run = lastSuccessfulRun(entry.workflow, declaredPauseSince(entry.boundary));
     const codeAt = lastCodeChange(entry.paths);
     if (!codeAt) continue; // path removed from the tree — nothing to compare.
     const drift = classifyDrift({ codeAt, run, maxDays: entry.maxDays });
@@ -1506,9 +1595,16 @@ function describeRow(r) {
   // "nobody dispatched this" and "somebody dispatched it and it deployed
   // nothing", and those need different responses.
   const dry = r.dryRunsSkipped ? `  [${r.dryRunsSkipped} dry run(s) ignored]` : '';
+  // Named separately from dry runs, because the CAUSE is different and the fix
+  // is different: a dry run was asked for, a stood-down run was refused. Silence
+  // here would make a declared-paused lane indistinguishable from one nobody
+  // has dispatched.
+  const paused = r.pausedRunsSkipped
+    ? `  [${r.pausedRunsSkipped} run(s) ignored — estate DECLARED paused, they deployed nothing]`
+    : '';
   const fail = r.failureStreak ? `  [${r.failureStreak} consecutive FAILURE(s) since]` : '';
   const off = r.stateUnknown ? '  [workflow state UNKNOWN]' : r.disabled ? `  [workflow ${r.workflowState}]` : '';
-  return `${when}${drift}${dry}${fail}${off}`;
+  return `${when}${drift}${dry}${paused}${fail}${off}`;
 }
 
 /** Everything wrong with one row, as operator-readable lines. */
