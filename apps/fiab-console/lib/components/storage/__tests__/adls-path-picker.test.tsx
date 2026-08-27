@@ -38,11 +38,48 @@ const ACCOUNT_ROW = {
   subscriptionId: 's1',
 };
 
-/** Choose the account through the shared picker, the way a user would. */
-async function pickAccount() {
+/**
+ * Open the shared picker's account Combobox, the way a user would.
+ *
+ * WHY THE CLICK IS RETRIED. `AzureResourcePicker` renders its Combobox
+ * `disabled={loading}` with `loading` initialised `true`, so the control is
+ * inert until the Resource Graph query resolves. `findByRole('combobox')`
+ * matches that DISABLED input on its very first poll, so a single click can
+ * land before discovery returns — and a click the control ignores is simply
+ * GONE. Nothing re-opens the listbox, so the follow-up `findByRole('option')`
+ * burns its (1000ms, testing-library default) budget against a collapsed
+ * dropdown and fails.
+ *
+ * That is not hypothetical: it is #4096's `vitest (node 20)` failure verbatim —
+ * `Unable to find role="option" and name /loomlake01/` over a DOM whose
+ * combobox reads `aria-expanded="false"`, failing all three CI attempts
+ * identically because a retry re-runs the same lost-click sequence. It was
+ * reproduced deterministically by resolving `/api/azure/resources` on a 120ms
+ * timer instead of in a microtask; swapping only this helper flips the verdict.
+ *
+ * The wait is keyed to the OUTCOME — the listbox is actually open — and NOT to
+ * `disabled`. Keying it to that attribute would re-break the moment the picker
+ * gates input some other way (`aria-disabled`, `readOnly`, or swapping in a
+ * Spinner while loading), which is the "defeated one step over" pattern.
+ */
+async function openAccountCombo() {
   const combo = await screen.findByRole('combobox');
-  fireEvent.click(combo);
-  fireEvent.click(await screen.findByRole('option', { name: /loomlake01/ }));
+  await waitFor(() => {
+    if (combo.getAttribute('aria-expanded') === 'true') return;
+    fireEvent.click(combo);
+    throw new Error('the account combobox has not opened yet');
+  });
+  return combo;
+}
+
+/** Choose the account through the shared picker, the way a user would. */
+async function pickAccountNamed(name: RegExp) {
+  await openAccountCombo();
+  fireEvent.click(await screen.findByRole('option', { name }));
+}
+
+async function pickAccount() {
+  await pickAccountNamed(/loomlake01/);
 }
 
 afterEach(cleanup);
@@ -215,10 +252,13 @@ describe('the emitted URI never names the wrong account or a guessed suffix', ()
     });
   }
 
+  /**
+   * Same lost-click hazard as `pickAccount` above, and additionally on EVERY
+   * re-open: switching accounts re-enters the picker's loading state, so a
+   * second bare click can be dropped too. Share the outcome-keyed opener.
+   */
   async function chooseAccount(name: string) {
-    const combo = await screen.findByRole('combobox');
-    fireEvent.click(combo);
-    fireEvent.click(await screen.findByRole('option', { name: new RegExp(name) }));
+    await pickAccountNamed(new RegExp(name));
   }
 
   it('does NOT carry account A\'s host over to account B after a switch', async () => {

@@ -237,9 +237,9 @@ async function provisionAdfCdc(input: any, steps: string[]): Promise<ProvisionRe
     // synapse-serverless-sql-pool over it. The mirror engine lands each table's
     // CSV under `mirrors/<workspaceId>/<mirrorId>/<schema>.<table>/`, so the
     // mirror root is `<bronze>/mirrors/<workspaceId>/<mirrorId>`. resolveAbfssRoot
-    // derives the DFS host from LOOM_BRONZE_URL → sovereign-cloud-correct
-    // (dfs.core.windows.net vs dfs.core.usgovcloudapi.net) with no hard-coded
-    // domain. Null (LOOM_BRONZE_URL unset) simply skips pairing — honest, no gate.
+    // derives the DFS host from LOOM_BRONZE_URL → sovereign-cloud-correct with
+    // no hard-coded domain: dfs.core.windows.net vs dfs.core.usgovcloudapi.net.  cloud-endpoint-literal-ok: per-cloud truth table, not a wired-in host
+    // Null (LOOM_BRONZE_URL unset) simply skips pairing — honest, no gate.
     const mirrorRoot = resolveAbfssRoot('bronze', `mirrors/${input.workspaceId}/${input.cosmosItemId}`);
     if (mirrorRoot) secondaryIds.adlsRoot = mirrorRoot;
     return { status: 'created', resourceId: pipelineName, secondaryIds, steps };
