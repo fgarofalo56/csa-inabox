@@ -239,15 +239,20 @@ export function remediationFor(kind, scopeId, attempts = 0) {
     case 'capacity':
       return (
         `Azure reports NO CAPACITY for this cluster's current SKU in this region, so no retry and no role ` +
-        'grant will resolve it. This is not a defect in the deploy. THE SKU LEVER IS THE BOUNDARY PARAM ' +
-        'FILE: set `adxConfig.adxSkuName` in the .bicepparam this lane deploys (e.g. ' +
-        'platform/fiab/bicep/params/gcc-high.bicepparam). Editing adx-cluster.bicep\'s `skuName` default ' +
-        'does NOT work — admin-plane/main.bicep always passes skuName explicitly, and on GCC-High / IL5 ' +
-        'the `effectiveAdxSkuName` guard rewrites the Dev default to Dev(No SLA)_Standard_D11_v2 ' +
-        'regardless. AND NOTE THE ORDERING: this preflight runs BEFORE what-if and before the apply, so ' +
-        'changing that param and re-running this lane cannot apply it — the run dies here again, having ' +
-        'applied nothing. Getting past this step therefore needs the LIVE cluster changed out-of-band ' +
-        '(portal, or `az kusto cluster update`), a region that has capacity, or capacity to free up. ' +
+        'grant will resolve it. This is not a defect in the deploy. THERE IS NO IN-REPO SKU LEVER TODAY, ' +
+        'and this message will not send you looking for one. The SKU is chosen in admin-plane/main.bicep, ' +
+        'whose `adxConfig` param the ROOT template (platform/fiab/bicep/main.bicep) neither declares nor ' +
+        'passes on to it, so the .bicepparam this lane deploys cannot carry it — bicep rejects that with ' +
+        'BCP259. Editing adx-cluster.bicep\'s `skuName` default does nothing either: admin-plane/main.bicep ' +
+        'always passes skuName explicitly, and on GCC-High / IL5 the `effectiveAdxSkuName` guard rewrites ' +
+        'the Dev default to Dev(No SLA)_Standard_D11_v2 regardless. AND NOTE THE ORDERING: this preflight ' +
+        'runs BEFORE what-if and before the apply, so no template change could be applied by re-running ' +
+        'this lane even if a lever existed — the run dies here again, having applied nothing. WHAT ' +
+        'ACTUALLY REACHES THE SKU is the LIVE cluster, changed out-of-band: Data Explorer scale-up in the ' +
+        'portal (it greys out the SKUs this region cannot serve, so it also tells you which one to pick), ' +
+        'or `az kusto cluster update` from an in-boundary session. Re-run after that. It is not durable on ' +
+        'its own — this lane\'s own apply asks for the template SKU again — so treat it as unblocking THIS ' +
+        'run, not as a fix. Otherwise: a region that has capacity, or wait for capacity to free up. ' +
         'The raw az error below names the SKU.'
       );
     case 'notfound':
