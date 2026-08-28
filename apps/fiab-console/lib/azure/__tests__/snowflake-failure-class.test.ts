@@ -29,6 +29,8 @@ import {
   snowflakeRemediation,
   describeSnowflakeFailure,
   snowflakeGateMissing,
+  SNOWFLAKE_FAILURE_KINDS,
+  type SnowflakeFailureKind,
 } from '../snowflake-failure-class';
 
 /**
@@ -175,6 +177,9 @@ describe('per-class classification', () => {
     const msg = describeSnowflakeFailure('Snowflake did not return a table list', wh, DB);
     expect(msg).toMatch(WAREHOUSE_ADVICE);
     expect(msg).not.toMatch(AUTH_ADVICE);
+    // #4049 F3 — and the vendor's own sentence survives. See the six-branch
+    // block below for why this line is here rather than only there.
+    expect(msg).toContain(wh);
   });
 
   it('a blocked IP is told about the network policy, NOT about its credential', () => {
@@ -183,6 +188,20 @@ describe('per-class classification', () => {
     expect(msg).toContain('NETWORK POLICY');
     expect(msg).not.toMatch(AUTH_ADVICE);
     expect(msg).not.toMatch(GRANT_ADVICE);
+    expect(msg).toContain(np); // #4049 F3
+  });
+
+  it('a NETWORK failure is told about the transport, and keeps the vendor sentence', () => {
+    // THERE WAS NO `network` CASE AT ALL in this block. `describeSnowflakeFailure`
+    // has six branches; five had a message assertion and this one had none, so a
+    // change that swallowed Snowflake's own words on the network path shipped
+    // green (#4049 F3).
+    const net = cases.find(([, k]) => k === 'network')![0];
+    const msg = describeSnowflakeFailure('Snowflake did not return a table list', net, DB);
+    expect(msg).toMatch(NETWORK_ADVICE);
+    expect(msg).not.toMatch(AUTH_ADVICE);
+    expect(msg).not.toMatch(GRANT_ADVICE);
+    expect(msg).toContain(net);
   });
 
   it('every class maps to its own gate key', () => {
@@ -247,6 +266,59 @@ describe('an unrecognised failure attaches NO remediation', () => {
     expect(describeSnowflakeFailure('Snowflake did not return a table list', payload, DB))
       .not.toMatch(NETWORK_ADVICE);
   });
+});
+
+// ── #4049 F3: the verbatim-`detail` invariant, for ALL SIX branches ────────
+//
+// `snowflake-failure-class.ts` states that `detail` is carried through VERBATIM
+// in every branch and that this is "asserted by its own test". Measured by
+// mutation — dropping `detail` one branch at a time:
+//
+//     authentication  RC=1 CAUGHT      warehouse       RC=0 ESCAPED
+//     authorization   RC=1 CAUGHT      network         RC=0 ESCAPED
+//     unknown         RC=1 CAUGHT      network-policy  RC=0 ESCAPED
+//
+// Three of six, and there was no `network` case in the suite at all. A change
+// that swallowed the vendor's own sentence in those three branches shipped
+// green — the exact regression the comment says would be "a net regression".
+describe('#4049 F3 — the vendor sentence survives EVERY branch, not three of six', () => {
+  /** One payload per kind, keyed so the coverage assertion below can be total. */
+  const BY_KIND: Record<SnowflakeFailureKind, string> = {
+    authentication: MFA_PAYLOAD,
+    authorization:
+      'Operation on target ListTables failed: 003001 (42501): SQL access control error: '
+      + "Insufficient privileges to operate on schema 'PLACEHOLDER_SCHEMA'.",
+    warehouse:
+      'Operation on target CountSchemas failed: 000606 (57P03): No active warehouse selected in the current session.',
+    'network-policy':
+      'Operation on target ListTables failed: IP 203.0.113.10 is not allowed to access Snowflake. '
+      + 'Contact your local security administrator.',
+    network:
+      'Operation on target ListTables failed: 250001 (08001): Could not connect to Snowflake backend after 2 attempt(s).',
+    unknown:
+      'Operation on target ListTables failed: ErrorCode=UserErrorOdbcOperationFailed, an unexpected condition.',
+  };
+
+  it('COVERAGE FLOOR: every member of SNOWFLAKE_FAILURE_KINDS has a fixture', () => {
+    // Derived from the exported runtime list rather than hand-listed, so adding a
+    // seventh kind without a fixture is a RED test rather than a silent gap —
+    // which is precisely how `network` came to have no case at all.
+    for (const kind of SNOWFLAKE_FAILURE_KINDS) {
+      expect(BY_KIND[kind], `no fixture for '${kind}'`).toBeTruthy();
+    }
+    expect(Object.keys(BY_KIND).sort()).toEqual([...SNOWFLAKE_FAILURE_KINDS].sort());
+  });
+
+  for (const kind of SNOWFLAKE_FAILURE_KINDS) {
+    it(`carries the vendor sentence verbatim in the '${kind}' branch`, () => {
+      const payload = BY_KIND[kind];
+      // The fixture must actually REACH the branch it claims to, or the
+      // assertion below is about some other branch's message.
+      expect(classifySnowflakeFailure(payload), `fixture for '${kind}' misclassified`).toBe(kind);
+      const msg = describeSnowflakeFailure('Snowflake did not return a table list', payload, DB);
+      expect(msg).toContain(payload);
+    });
+  }
 });
 
 // ── Ordering, pinned where it is actually load-bearing ─────────────────────

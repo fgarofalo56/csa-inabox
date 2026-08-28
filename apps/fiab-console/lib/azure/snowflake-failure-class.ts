@@ -78,6 +78,28 @@ export type SnowflakeFailureKind =
   | 'unknown';
 
 /**
+ * Every member of {@link SnowflakeFailureKind}, at RUNTIME.
+ *
+ * A union type is erased, so a spec that wants to assert something about EVERY
+ * branch has to hand-list them — and a hand-list silently misses the next member
+ * added. #4049 F3 measured the cost of exactly that: the docblock on
+ * {@link describeSnowflakeFailure} claims its verbatim-`detail` invariant is
+ * "asserted by its own test", and dropping `detail` one branch at a time showed
+ * it held for THREE of six (authentication / authorization / unknown CAUGHT;
+ * warehouse / network / network-policy ESCAPED). This array is what makes the
+ * coverage assertion derive from the type rather than restate it, and
+ * `KIND_COVERAGE` in the test pins that every member has a fixture.
+ */
+export const SNOWFLAKE_FAILURE_KINDS = [
+  'authentication',
+  'authorization',
+  'warehouse',
+  'network-policy',
+  'network',
+  'unknown',
+] as const satisfies readonly SnowflakeFailureKind[];
+
+/**
  * Snowflake's NETWORK POLICY rejection — the IP allowlist, not the credential.
  *
  * CHECKED FIRST, AND THE REASON IS NETWORK, NOT AUTHENTICATION (#4048 F2).
@@ -338,10 +360,22 @@ export function snowflakeRemediation(
 /**
  * PURE. The full operator-facing message for a failed Snowflake read.
  *
- * INVARIANT, asserted by its own test: `detail` is carried through VERBATIM in
- * every branch, including `unknown`. Surfacing the backend's own words was the
- * one thing the original message got right, and a "fix" that swallowed them
- * while tidying the advice would be a net regression.
+ * INVARIANT: `detail` is carried through VERBATIM in every branch, including
+ * `unknown`. Surfacing the backend's own words was the one thing the original
+ * message got right, and a "fix" that swallowed them while tidying the advice
+ * would be a net regression.
+ *
+ * ASSERTED FOR ALL SIX BRANCHES SINCE #4049, and it was not before. This
+ * docblock said "asserted by its own test" while dropping `detail` one branch at
+ * a time gave:
+ *
+ *     authentication  RC=1 CAUGHT      warehouse       RC=0 ESCAPED
+ *     authorization   RC=1 CAUGHT      network         RC=0 ESCAPED
+ *     unknown         RC=1 CAUGHT      network-policy  RC=0 ESCAPED
+ *
+ * — three of six, and there was no `network` case in the suite at all. The
+ * coverage is now DERIVED from {@link SNOWFLAKE_FAILURE_KINDS} rather than
+ * hand-listed, so the next branch added cannot be missed the same way.
  *
  * @param prefix  what Loom was doing, in Loom's terms
  * @param detail  the backend's message, unmodified

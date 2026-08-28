@@ -66,6 +66,46 @@ describe('classifyReachError — a refusal is an ANCHORED status token', () => {
     }
   });
 
+  it('#4049 F4 — each anchor HALF is independently discriminated in THIS suite', () => {
+    // `status-token.ts` claims each anchor half has a fixture the other half
+    // alone would not block. That was true in `status-token.test.ts` and NOT
+    // here: every numeric fixture in this suite (`st403data`, `kv-401-prod`,
+    // `eh-403hub`, `st4031`) is blocked by BOTH anchors, so neither half was
+    // discriminated. Measured — dropping either half left this suite at RC=0,
+    // and MX13 (re-inlining a lookahead-only anchor in `connection-probe.ts`)
+    // ESCAPED.
+    //
+    // Two shapes, each blocked by exactly ONE half. Both must produce NO
+    // role-grant hint; drop the lookbehind and the first starts producing one,
+    // drop the lookahead and the second does.
+    //
+    // NOTE the wording is deliberately transport-free: after #4048 F5 the
+    // transport branches run first, so a message containing `getaddrinfo` would
+    // be classified before REACH_DENIED is ever consulted and the anchor would
+    // not be exercised at all. These reach REACH_DENIED.
+    const trailing = classifyReachError(
+      new Error('PUT to container loom403 returned an unexpected condition'),
+      noRedact, 'storage account',
+    );
+    expect(trailing.hint, 'TRAILING token — only the LOOKBEHIND blocks this').toBeUndefined();
+
+    const leading = classifyReachError(
+      new Error('PUT to container 403abc returned an unexpected condition'),
+      noRedact, 'storage account',
+    );
+    expect(leading.hint, 'LEADING token — only the LOOKAHEAD blocks this').toBeUndefined();
+  });
+
+  it('CONTROL: a REAL standalone status in the same sentence shape IS a refusal', () => {
+    // Without this, the two `toBeUndefined()`s above are equally satisfied by a
+    // classifier that stopped recognising numeric refusals at all.
+    const r = classifyReachError(
+      new Error('PUT to container loom failed 403: an unexpected condition'),
+      noRedact, 'storage account',
+    );
+    expect(r.hint).toMatch(/not authorized/);
+  });
+
   it('#4048 F5 — a transport failure on a host whose NAME contains an authz WORD', () => {
     // THE SAME R7 DEFECT, ONE DATATYPE OVER. The numeric half of REACH_DENIED was
     // anchored by `statusToken`; `forbidden` / `authorization` / `not authorized`

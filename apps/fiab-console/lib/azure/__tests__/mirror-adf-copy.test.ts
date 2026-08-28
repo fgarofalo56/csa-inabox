@@ -998,6 +998,39 @@ describe('adfDenialEvidence / describeTriggerStartFailure', () => {
     }
   });
 
+  it('#4049 F4 — each anchor HALF is independently discriminated in THIS suite', () => {
+    // `status-token.ts` claims each anchor half has a fixture the other half
+    // alone would not block. That was true in `status-token.test.ts` and NOT
+    // here: every numeric fixture in this suite (`loom_copy_403abc_trg`-shaped
+    // names, `403: Forbidden`) is blocked by BOTH anchors, so neither half was
+    // discriminated. Measured — dropping either half left this suite at RC=0,
+    // and MX14 (re-inlining a lookahead-only anchor in this very file) ESCAPED.
+    //
+    // Two shapes, each blocked by exactly ONE half:
+    //
+    //   TRAILING token — digits END a word run: only the LOOKBEHIND blocks it.
+    //   LEADING  token — digits START a word run: only the LOOKAHEAD blocks it.
+    //
+    // Both must stay null. Drop the lookbehind and the first matches; drop the
+    // lookahead and the second does.
+    expect(
+      adfDenialEvidence(new Error('startTrigger loom_copy_403 failed: socket hang up')),
+      'TRAILING token — the LOOKBEHIND is the only thing blocking this',
+    ).toBeNull();
+    expect(
+      adfDenialEvidence(new Error('startTrigger on trigger 403abc failed: socket hang up')),
+      'LEADING token — the LOOKAHEAD is the only thing blocking this',
+    ).toBeNull();
+  });
+
+  it('CONTROL: a REAL standalone status in the same sentence shape IS evidence', () => {
+    // Without this, the two nulls above are equally satisfied by a classifier
+    // that stopped recognising numeric refusals at all — which is how an anchor
+    // "fix" becomes a silent removal.
+    expect(adfDenialEvidence(new Error('startTrigger loom_copy failed 403: socket hang up')))
+      .toMatch(/refused the call/);
+  });
+
   it('does not read 403 out of a TRIGGER NAME (the rg-loom-503 defect)', () => {
     expect(adfDenialEvidence(new Error('startTrigger loom_copy_403abc_trg failed: socket hang up'))).toBeNull();
     expect(describeTriggerStartFailure('schedule', new Error('startTrigger loom_copy_403abc_trg failed: socket hang up')))
