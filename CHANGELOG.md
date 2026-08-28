@@ -25,6 +25,70 @@ This file is maintained automatically by
 [Conventional Commits](https://www.conventionalcommits.org/). See
 [RELEASE.md](RELEASE.md) for the release process.
 
+## [0.102.0](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.101.2...csa-inabox-v0.102.0) (2026-08-28)
+
+
+### Features
+
+* **brain:** cost from an EXPORT, where a derived figure cannot be rendered as a bill ([#3950](https://github.com/fgarofalo56/csa-inabox/issues/3950)) ([edda4e1](https://github.com/fgarofalo56/csa-inabox/commit/edda4e16db8814f6afcdd7e39401ab6f68b6e11a))
+* **brain:** produce the SecurityGraph the nine detectors were written for ([#3933](https://github.com/fgarofalo56/csa-inabox/issues/3933)) ([#4022](https://github.com/fgarofalo56/csa-inabox/issues/4022)) ([6fb688a](https://github.com/fgarofalo56/csa-inabox/commit/6fb688aa6b23ca27abd5984016aa25d2cc27bbbf))
+* **brain:** the synapses view — waste and risk painted on the estate graph ([#3992](https://github.com/fgarofalo56/csa-inabox/issues/3992)) ([ace5f65](https://github.com/fgarofalo56/csa-inabox/commit/ace5f65d3d59889a10b0ffa91d7f1c5156b0dd02))
+
+
+### Bug Fixes
+
+* **activator:** the High-Roller alert was enabled, fired, and notified nobody ([#4097](https://github.com/fgarofalo56/csa-inabox/issues/4097)) ([#4105](https://github.com/fgarofalo56/csa-inabox/issues/4105)) ([fb77e95](https://github.com/fgarofalo56/csa-inabox/commit/fb77e95efbf1b1357a55e27acc5c35048e95915d))
+* **authz:** the mirrored-database guard let a tenant admin be refused their own workspace ([#4070](https://github.com/fgarofalo56/csa-inabox/issues/4070)) ([1bcdcbb](https://github.com/fgarofalo56/csa-inabox/commit/1bcdcbb450fcb8a5ccdc17d7ea0658e5782477cf))
+* **azure:** bind the BAP lifecycle hint to the scope the request went out on ([#4131](https://github.com/fgarofalo56/csa-inabox/issues/4131)) ([e43b4f4](https://github.com/fgarofalo56/csa-inabox/commit/e43b4f4774f2074c74b943d5117922e23b6c39ed))
+* **brain:** regenerate the security graph — two new scripts drifted the committed artifact ([#4125](https://github.com/fgarofalo56/csa-inabox/issues/4125)) ([f6b0d17](https://github.com/fgarofalo56/csa-inabox/commit/f6b0d170099e95c09d7bf9dbcfaed076e8b8631d))
+* **brain:** the security-graph drift gate compared the graph and was blind to the population ([#4128](https://github.com/fgarofalo56/csa-inabox/issues/4128)) ([#4140](https://github.com/fgarofalo56/csa-inabox/issues/4140)) ([84e83d9](https://github.com/fgarofalo56/csa-inabox/commit/84e83d90b8b4b02f488d21f22197833d801218ba))
+* **casino-analytics:** the notebooks read silver tables the bundle never creates ([#4093](https://github.com/fgarofalo56/csa-inabox/issues/4093)) ([#4099](https://github.com/fgarofalo56/csa-inabox/issues/4099)) ([fdbf8ca](https://github.com/fgarofalo56/csa-inabox/commit/fdbf8ca3ba55a9930842ca47c6d589adef9670f7))
+* **ci:** a network ECONNRESET reddened the whole standalone-vitest step and the message blamed the package ([#4129](https://github.com/fgarofalo56/csa-inabox/issues/4129)) ([0a0d589](https://github.com/fgarofalo56/csa-inabox/commit/0a0d5895640b934f59ba31a63987345189828c02))
+* **ci:** four decorative arms on the only guard watching cross-tenant admin grants ([#4106](https://github.com/fgarofalo56/csa-inabox/issues/4106)) ([dc30a35](https://github.com/fgarofalo56/csa-inabox/commit/dc30a35ec0c0c7670fa1184d27873219c39d45d4))
+* **ci:** the [#4067](https://github.com/fgarofalo56/csa-inabox/issues/4067) floor guarded only the LOW side, one space bought the whole opt-out, and the controls could go red on correct code ([#4090](https://github.com/fgarofalo56/csa-inabox/issues/4090)) ([305d8e0](https://github.com/fgarofalo56/csa-inabox/commit/305d8e0bf90bbb9ae768507bec02b292bf87c819))
+* **ci:** the image preflight claimed an unreachable data plane in the branch where the probe SUCCEEDED (R7) ([#4133](https://github.com/fgarofalo56/csa-inabox/issues/4133)) ([2e4b756](https://github.com/fgarofalo56/csa-inabox/commit/2e4b756ac077d4ebf97a84d909ea277104c2391e))
+* **ci:** the PER-SHAPE control had no population floor — emptying it stayed 18/18 green ([#4132](https://github.com/fgarofalo56/csa-inabox/issues/4132)) ([605bb5b](https://github.com/fgarofalo56/csa-inabox/commit/605bb5ba393c7b6078be1772d26789c628c15c1d)), closes [#3996](https://github.com/fgarofalo56/csa-inabox/issues/3996)
+* **ci:** three REQUIRED Python contexts reported success over unexecuted code ([#3862](https://github.com/fgarofalo56/csa-inabox/issues/3862)) ([#4103](https://github.com/fgarofalo56/csa-inabox/issues/4103)) ([405a84c](https://github.com/fgarofalo56/csa-inabox/commit/405a84c65d62ac7096e7ba8b1f665e185ae94373))
+* **console:** the sovereign-host fix went into lib/install, so the provisioners still built Commercial URLs ([#4089](https://github.com/fgarofalo56/csa-inabox/issues/4089)) ([b634afa](https://github.com/fgarofalo56/csa-inabox/commit/b634afaa05caa248bda0c5913d0ef3bc149a9547))
+* **data-agent:** a source with no type crashed the shared LLM path with a 500 ([#4116](https://github.com/fgarofalo56/csa-inabox/issues/4116)) ([b906c88](https://github.com/fgarofalo56/csa-inabox/commit/b906c88caa66a55daeb130d1ea78e4eca6d4de91))
+* **data-agent:** the chat narrated "let me run the query" and no code ever checked that it had ([#4095](https://github.com/fgarofalo56/csa-inabox/issues/4095)) ([87d8d42](https://github.com/fgarofalo56/csa-inabox/commit/87d8d4239530a69b3c230e61cf90670850b866ab))
+* **data-agent:** the source picker read "None found" because its own GET never told the editor which workspace it was in ([#4092](https://github.com/fgarofalo56/csa-inabox/issues/4092)) ([#4096](https://github.com/fgarofalo56/csa-inabox/issues/4096)) ([490829d](https://github.com/fgarofalo56/csa-inabox/commit/490829d6c96bb7e659c1e94cd3b3e0b6b9e24fb5))
+* **deploy:** a DELIBERATELY paused GCC-High estate is reported as a failure ([#4117](https://github.com/fgarofalo56/csa-inabox/issues/4117)) ([e5bbbc6](https://github.com/fgarofalo56/csa-inabox/commit/e5bbbc64e1e5022c2022163efa05e05ace36075f))
+* **deploy:** a suspended AAS server cannot take its administrator write, and four retries could not change that ([#3948](https://github.com/fgarofalo56/csa-inabox/issues/3948)) ([#4074](https://github.com/fgarofalo56/csa-inabox/issues/4074)) ([b57ffdb](https://github.com/fgarofalo56/csa-inabox/commit/b57ffdbf7d1eb442dfbf3fe4322f7d30ac5f23fc))
+* **deploy:** Azure Government has no Dev-tier ADX SKU — the Gov guard steered into the failure it existed to prevent ([#4142](https://github.com/fgarofalo56/csa-inabox/issues/4142)) ([89153a3](https://github.com/fgarofalo56/csa-inabox/commit/89153a31d8cba99e741a6543d9e515aef505375f)), closes [#4141](https://github.com/fgarofalo56/csa-inabox/issues/4141) [#4072](https://github.com/fgarofalo56/csa-inabox/issues/4072) [#4135](https://github.com/fgarofalo56/csa-inabox/issues/4135) [#4115](https://github.com/fgarofalo56/csa-inabox/issues/4115)
+* **deploy:** one spurious 109 ms refusal aborted an apply, because a bare substring made it look permanent ([#4075](https://github.com/fgarofalo56/csa-inabox/issues/4075), [#4076](https://github.com/fgarofalo56/csa-inabox/issues/4076)) ([#4078](https://github.com/fgarofalo56/csa-inabox/issues/4078)) ([962395f](https://github.com/fgarofalo56/csa-inabox/commit/962395f49bda8cfaa41ad980300abe708a6166e9))
+* **deploy:** the ADX capacity remediation names a param that does not exist and a fix this lane cannot apply ([#4115](https://github.com/fgarofalo56/csa-inabox/issues/4115)) ([bfe433c](https://github.com/fgarofalo56/csa-inabox/commit/bfe433c949f97d1a6b7dfc4d705661304553a563))
+* **deploy:** the converger's ownership proof could not see half the managed identities it was written to cover ([#4110](https://github.com/fgarofalo56/csa-inabox/issues/4110)) ([347505d](https://github.com/fgarofalo56/csa-inabox/commit/347505d52e0a92adbe6e200c6e2cbaf06f98a2c2)), closes [#4037](https://github.com/fgarofalo56/csa-inabox/issues/4037)
+* **deploy:** the MSAL resolver reported "no app registration" when it had failed to look ([#4127](https://github.com/fgarofalo56/csa-inabox/issues/4127)) ([4c57517](https://github.com/fgarofalo56/csa-inabox/commit/4c575173e7474de43c7d369e4bc3bd8adfa6832b))
+* **deploy:** thread adxConfig from the root template so the ADX SKU is reachable ([#4126](https://github.com/fgarofalo56/csa-inabox/issues/4126)) ([ef6cf72](https://github.com/fgarofalo56/csa-inabox/commit/ef6cf727e37fccd81ff071c3efbe3ebcbd3cdeed))
+* **deps:** the protobuf runtime was older than the gencode it had to load, so main went red on a required check ([#4080](https://github.com/fgarofalo56/csa-inabox/issues/4080)) ([64a4e04](https://github.com/fgarofalo56/csa-inabox/commit/64a4e0485289df4b501998a0f6443411b04359de)), closes [#4077](https://github.com/fgarofalo56/csa-inabox/issues/4077)
+* **gov:** the Gov Brain-scan lane had no Cosmos data-plane path at all ([#4134](https://github.com/fgarofalo56/csa-inabox/issues/4134)) ([6039c91](https://github.com/fgarofalo56/csa-inabox/commit/6039c9134586d5991f63604fd81977f0c9849d09))
+* **lakehouse:** the container-mirror drift guard was one-directional — a SUPERSET passed green ([#4130](https://github.com/fgarofalo56/csa-inabox/issues/4130)) ([d98fbbe](https://github.com/fgarofalo56/csa-inabox/commit/d98fbbe0457a68e783fba8e7317659f5c0c0a327))
+* **measure:** the suite pinned what the allowlist RETURNS and nothing pinned what spawnPlan CONSUMES ([#4088](https://github.com/fgarofalo56/csa-inabox/issues/4088)) ([9385900](https://github.com/fgarofalo56/csa-inabox/commit/9385900346ef3c020f05d6ef4abf1a6f303adffc))
+* **migrate:** the copy engine cleared Bronze before it knew it could write ([#4087](https://github.com/fgarofalo56/csa-inabox/issues/4087)) ([#4104](https://github.com/fgarofalo56/csa-inabox/issues/4104)) ([30ea4fa](https://github.com/fgarofalo56/csa-inabox/commit/30ea4fa600cec59ad10f1b676f8d8049fdedd2ef))
+* **mirroring:** a true Snowflake error carried a remediation that contradicted it ([#4033](https://github.com/fgarofalo56/csa-inabox/issues/4033)) ([2f36881](https://github.com/fgarofalo56/csa-inabox/commit/2f368818c0469c19c67943fcd1c7ab98d5b9157a))
+* **mirroring:** the Key Vault grant Snowflake needs had no reachable call site, and the ADLS sink was demanded of the operator ([#4041](https://github.com/fgarofalo56/csa-inabox/issues/4041)) ([a6e56f0](https://github.com/fgarofalo56/csa-inabox/commit/a6e56f0c23f2482f272a154c875898098d57a029))
+* **mirroring:** the wizard defaulted to Azure SQL, so a Snowflake connection was read over TDS against a hostname Loom invented ([#4031](https://github.com/fgarofalo56/csa-inabox/issues/4031)) ([1a16dc4](https://github.com/fgarofalo56/csa-inabox/commit/1a16dc407d0e59acee6c8f20647b30fff02dc21f))
+* **mirror:** Snowflake Copy could never move a row, and gating it left the armed pipeline running ([#4085](https://github.com/fgarofalo56/csa-inabox/issues/4085)) ([4d13236](https://github.com/fgarofalo56/csa-inabox/commit/4d1323652b8cb782c120c2846eac7fe643a5429e))
+* **ops:** the token-rotation script defaulted to WRITING, so testing it hit production ([#4109](https://github.com/fgarofalo56/csa-inabox/issues/4109)) ([5fa0d65](https://github.com/fgarofalo56/csa-inabox/commit/5fa0d654d1ec4c598559d1dd1795bbe22cab0f33))
+* **security:** the internal-token mask was destroyed by the redirect meant to protect it ([#4062](https://github.com/fgarofalo56/csa-inabox/issues/4062)) ([45b5ae5](https://github.com/fgarofalo56/csa-inabox/commit/45b5ae5de055f03f067230ae770279fe8fe40718))
+
+
+### Documentation
+
+* **deploy:** the adxConfig [@description](https://github.com/description) still promised the Gov Dev SKU — and it SHIPS ([#4147](https://github.com/fgarofalo56/csa-inabox/issues/4147)) ([ea5ca02](https://github.com/fgarofalo56/csa-inabox/commit/ea5ca02f6326918912d3e08d0d7d7df48866b872)), closes [#4141](https://github.com/fgarofalo56/csa-inabox/issues/4141) [#4142](https://github.com/fgarofalo56/csa-inabox/issues/4142) [#4072](https://github.com/fgarofalo56/csa-inabox/issues/4072)
+
+
+### Tests
+
+* **data-agent:** every source fixture had a type, so nothing could catch the null deref ([#4118](https://github.com/fgarofalo56/csa-inabox/issues/4118)) ([e18f149](https://github.com/fgarofalo56/csa-inabox/commit/e18f149f6823166bcdad2f76f84136dcd4a6de8a)), closes [#4091](https://github.com/fgarofalo56/csa-inabox/issues/4091)
+
+
+### Continuous Integration
+
+* measure which ADX SKUs Azure Government offers before anyone picks one ([#4135](https://github.com/fgarofalo56/csa-inabox/issues/4135)) ([e5cb75d](https://github.com/fgarofalo56/csa-inabox/commit/e5cb75d84c00890a4e04004e1e33caa9fe580981)), closes [#4072](https://github.com/fgarofalo56/csa-inabox/issues/4072)
+* **merge-queue:** add merge_group triggers so a queue can end the O(N^2) rebase storm ([#4100](https://github.com/fgarofalo56/csa-inabox/issues/4100)) ([e1f913d](https://github.com/fgarofalo56/csa-inabox/commit/e1f913dd3900ab7e2b8445e98b42346ecb346ba3))
+
 ## [0.101.2](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.101.1...csa-inabox-v0.101.2) (2026-08-25)
 
 
