@@ -450,3 +450,132 @@ test(
     );
   },
 );
+
+// ---------------------------------------------------------------------------
+// #3852 — THE REPAIR, held in place.
+//
+// This guard PREVENTS the next loss. It does not repair the 15 already taken,
+// and for two months nothing in the repo could tell whether they had been
+// repaired or not — which is how a one-off repair quietly rots back out on the
+// next `git revert` or merge conflict.
+//
+// So the repair becomes a property: every commit in history that release-please
+// WOULD have dropped must nevertheless be present in CHANGELOG.md. It is the
+// same shape as the guard above — the parser is the oracle, no grammar is
+// restated — asked of the artefact instead of the branch.
+//
+// WHAT THIS DOES NOT COVER, stated so it is not mistaken for coverage: the
+// GitHub release NOTES. Those are published objects that need `gh release edit`
+// and an explicit sign-off, and nothing offline can read them. A commit can
+// satisfy this test and still be missing from its release page.
+// ---------------------------------------------------------------------------
+
+/** Non-merge history is only scannable when the clone is not shallow. */
+function historyIsComplete() {
+  try {
+    const shallow = execFileSync('git', ['rev-parse', '--is-shallow-repository'], {
+      cwd: REPO_ROOT,
+      encoding: 'utf8',
+    }).trim();
+    return shallow === 'false';
+  } catch {
+    return false;
+  }
+}
+
+const HAVE_HISTORY = historyIsComplete();
+const SHALLOW =
+  'this clone is shallow, so the history scan would judge a truncated population and ' +
+  'report a clean result it never measured. commit-message-parses.yml checks out with ' +
+  'fetch-depth: 0, so this test is live there.';
+if (HAVE_HISTORY === false) console.log(`# NOTE: ${SHALLOW}`);
+
+/**
+ * The measured floor. History is append-only, so the count of already-dropped
+ * commits can never legitimately fall — a scan returning fewer than this read
+ * less than the whole history and must not report a pass.
+ */
+const KNOWN_DROPPED = 15;
+
+test(
+  '#3852: every commit release-please silently dropped is present in CHANGELOG.md',
+  { skip: (!HAVE_PARSER && NO_PARSER) || (!HAVE_HISTORY && SHALLOW) },
+  () => {
+    const RS_ = String.fromCharCode(1);
+    const FS_ = String.fromCharCode(0);
+    // The separators go over the wire as git's %x01 / %x00 PLACEHOLDERS, not as
+    // literal control bytes: execFileSync refuses an argv element containing a
+    // NUL, so passing the byte itself throws ERR_INVALID_ARG_VALUE before git
+    // ever runs. git expands them, so the output carries the real bytes.
+    const raw = execFileSync(
+      'git',
+      ['log', '--no-merges', '--format=%x01%H%x00%B', 'HEAD'],
+      { cwd: REPO_ROOT, encoding: 'utf8', maxBuffer: 512 * 1024 * 1024 },
+    );
+
+    let scanned = 0;
+    let bound = 0;
+    const dropped = [];
+    for (const rec of raw.split(RS_).slice(1)) {
+      const cut = rec.indexOf(FS_);
+      if (cut === -1) continue;
+      const sha = rec.slice(0, cut);
+      const message = rec.slice(cut + 1).replace(/\s+$/, '');
+      if (!/^[0-9a-f]{40}$/.test(sha)) continue;
+      scanned++;
+      const v = judgeMessage(message);
+      if (v.changelogBound) bound++;
+      if (v.changelogBound && !v.ok) dropped.push({ sha, subject: message.split('\n')[0] });
+    }
+
+    // POPULATION, printed rather than implied. A scan of nothing is green.
+    console.log(
+      `# 3852 population: ${scanned} non-merge commit(s), ${bound} changelog-bound, ` +
+        `${dropped.length} dropped by the parser.`,
+    );
+    assert.ok(scanned >= 3000, `only ${scanned} commits scanned — the history read was truncated`);
+    assert.ok(bound >= 3000, `only ${bound} changelog-bound — the subject scope collapsed`);
+    assert.ok(
+      dropped.length >= KNOWN_DROPPED,
+      `only ${dropped.length} dropped commits found against a floor of ${KNOWN_DROPPED}. History is ` +
+        'append-only, so this number cannot legitimately shrink — the scan read less than it thinks.',
+    );
+
+    const changelog = readFileSync(path.join(REPO_ROOT, 'CHANGELOG.md'), 'utf8');
+    const missing = [];
+    for (const d of dropped) {
+      // The changelog renders the SHORT sha inside the commit link, and rewrites
+      // `#N` into a markdown link — so match on the sha, which survives both.
+      if (!changelog.includes(d.sha.slice(0, 7))) missing.push(d);
+    }
+    assert.deepEqual(
+      missing.map((m) => `${m.sha.slice(0, 8)} ${m.subject}`),
+      [],
+      'these commits were silently dropped from the changelog by the parser and have not been ' +
+        'repaired. Add each to the release section of the version that first contains it ' +
+        '(`git tag --contains <sha>`), in the shape release-please writes.',
+    );
+  },
+);
+
+/**
+ * DELIBERATELY UNGATED — no parser, no git, no history. This is the half that
+ * runs in the REQUIRED `guardrails` lane, where the test above is skipped, so
+ * the repair is held in place by something every PR must pass rather than only
+ * by the lane that installs the parser.
+ */
+test('#3852: the repair check can FAIL — and the repaired entries are actually there', () => {
+  const changelog = readFileSync(path.join(REPO_ROOT, 'CHANGELOG.md'), 'utf8');
+  // The predicate is only worth its green if a genuinely missing entry would be
+  // caught. Drive it over a sha that is certainly not in the document.
+  assert.equal(changelog.includes('0'.repeat(7)), false, 'the negative fixture is not negative');
+  // And the positive side is not vacuous: a sample of the repaired entries,
+  // spanning the oldest and newest losses, is present and matched the same way.
+  for (const sha of ['51ac418', '4124398', 'a293b80', '346f172']) {
+    assert.ok(
+      changelog.includes(sha),
+      `the #3852 repair for ${sha} is missing from CHANGELOG.md — the entry release-please silently ` +
+        'dropped has been dropped again',
+    );
+  }
+});

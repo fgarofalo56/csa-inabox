@@ -208,6 +208,7 @@ This file is maintained automatically by
 * **security:** bulk-delete DESTROYED workspaces across the tenant boundary ([#3833](https://github.com/fgarofalo56/csa-inabox/issues/3833) member 1) ([#3836](https://github.com/fgarofalo56/csa-inabox/issues/3836)) ([3be6906](https://github.com/fgarofalo56/csa-inabox/commit/3be6906f6d0c9b229ad2c4e3ac7e9fabcfde28ab))
 * **security:** every session-minting harness fell back to a placeholder oid when the real identity was absent ([#3804](https://github.com/fgarofalo56/csa-inabox/issues/3804)) ([#3805](https://github.com/fgarofalo56/csa-inabox/issues/3805)) ([c5168af](https://github.com/fgarofalo56/csa-inabox/commit/c5168af90295b93bc181d40c1d9af36f7e3b5e5a))
 * **security:** the tenant-admin bypass granted on an UNCONFIRMED tenant, not a matching one ([#3824](https://github.com/fgarofalo56/csa-inabox/issues/3824)) ([d4acf06](https://github.com/fgarofalo56/csa-inabox/commit/d4acf06180b2f2fc64276bceb0c7cd66d9b8d210))
+* **security:** the tenant-admin bypass in the workspace guards answered BEFORE any read ([#3830](https://github.com/fgarofalo56/csa-inabox/issues/3830)) ([51ac418](https://github.com/fgarofalo56/csa-inabox/commit/51ac41841e8c5da9dd95c72ae8285883f05bd59c))
 
 ## [0.99.1](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.99.0...csa-inabox-v0.99.1) (2026-08-19)
 
@@ -240,7 +241,9 @@ This file is maintained automatically by
 
 * **auto-bind:** the first bind manufactured an EMPTY twin of content the item already held ([#3549](https://github.com/fgarofalo56/csa-inabox/issues/3549)) ([#3696](https://github.com/fgarofalo56/csa-inabox/issues/3696)) ([b6bfe34](https://github.com/fgarofalo56/csa-inabox/commit/b6bfe3461b81abcadfbb59db9e8054be687ab484))
 * **ci:** gates-2641 pinned two facts [#3745](https://github.com/fgarofalo56/csa-inabox/issues/3745) correctly removed, so main went red ([#3781](https://github.com/fgarofalo56/csa-inabox/issues/3781)) ([#3782](https://github.com/fgarofalo56/csa-inabox/issues/3782)) ([90d1adb](https://github.com/fgarofalo56/csa-inabox/commit/90d1adb8e91869e1e2e4b1bc4d6f728e7fc065a6))
+* **ci:** the producer-coverage guard credited a generic producer for apps it can never create (refs [#3416](https://github.com/fgarofalo56/csa-inabox/issues/3416)) ([#3712](https://github.com/fgarofalo56/csa-inabox/issues/3712)) ([4124398](https://github.com/fgarofalo56/csa-inabox/commit/4124398daf7cf83ebf208d7769c7a88a4f6640ef))
 * **gov:** give Azure Government the continuous-deploy chain Commercial has — every Gov lane was dispatch-only ([#3730](https://github.com/fgarofalo56/csa-inabox/issues/3730)) ([#3745](https://github.com/fgarofalo56/csa-inabox/issues/3745)) ([049349a](https://github.com/fgarofalo56/csa-inabox/commit/049349a94e3e2078d2269487f122bc032f3d693c))
+* **synapse:** clamp Livy batch page size in the client so all four callers inherit it ([#3568](https://github.com/fgarofalo56/csa-inabox/issues/3568)) ([#3689](https://github.com/fgarofalo56/csa-inabox/issues/3689)) ([aeef007](https://github.com/fgarofalo56/csa-inabox/commit/aeef0079444208c4ec99b362512867c8aab56a08))
 
 
 ### Documentation
@@ -386,6 +389,7 @@ This file is maintained automatically by
 * **ci:** the resolve gate triggered on 21 requirements files and checked 7, so 14 could pass un-resolved ([#3507](https://github.com/fgarofalo56/csa-inabox/issues/3507)) ([0bf58f5](https://github.com/fgarofalo56/csa-inabox/commit/0bf58f5608bc3a1db3d905c03f46ad50ae363317)), closes [#3497](https://github.com/fgarofalo56/csa-inabox/issues/3497)
 * **governance:** certification counted rules that were ENABLED, not rules that PASSED, so the gate could not fail ([#3499](https://github.com/fgarofalo56/csa-inabox/issues/3499)) ([7cf9a6e](https://github.com/fgarofalo56/csa-inabox/commit/7cf9a6ea5f886d8f0e65e12ad3f99a111a50e128))
 * **security:** a file on disk chose which api.github.com endpoint we called, with our token attached ([#776](https://github.com/fgarofalo56/csa-inabox/issues/776), [#767](https://github.com/fgarofalo56/csa-inabox/issues/767), [#766](https://github.com/fgarofalo56/csa-inabox/issues/766), [#762](https://github.com/fgarofalo56/csa-inabox/issues/762)) ([#3504](https://github.com/fgarofalo56/csa-inabox/issues/3504)) ([63bac9f](https://github.com/fgarofalo56/csa-inabox/commit/63bac9fb28f2901ebbdfcc3b7fb53228d02a7d8a))
+* **security:** the args array did not remove the quoting question — a whitespace-free metacharacter reached cmd.exe naked ([#3496](https://github.com/fgarofalo56/csa-inabox/issues/3496)) ([8f8e569](https://github.com/fgarofalo56/csa-inabox/commit/8f8e569a868217f0602daff2aa60b694acce574b))
 * **security:** the guard about regex anchoring contained a ReDoS, and the payload was already committed ([#3502](https://github.com/fgarofalo56/csa-inabox/issues/3502)) ([aaa1712](https://github.com/fgarofalo56/csa-inabox/commit/aaa17122b9dda245e8c58200a78e1e0cf1589915))
 
 ## [0.97.2](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.97.1...csa-inabox-v0.97.2) (2026-08-14)
@@ -417,6 +421,7 @@ This file is maintained automatically by
 * **deploy:** the operator runbook asked for two grants the bootstrap already performs ([#3375](https://github.com/fgarofalo56/csa-inabox/issues/3375)) ([#3437](https://github.com/fgarofalo56/csa-inabox/issues/3437)) ([4cf948e](https://github.com/fgarofalo56/csa-inabox/commit/4cf948e21a28ae6c24f97620b504d55edfe4d3fd))
 * **deploy:** the SC1 gate ran on a CANCELLED run and blamed images the run never built ([#3418](https://github.com/fgarofalo56/csa-inabox/issues/3418)) ([#3422](https://github.com/fgarofalo56/csa-inabox/issues/3422)) ([1fc4a56](https://github.com/fgarofalo56/csa-inabox/commit/1fc4a5602ad215a660a2064d42517d6154fac5b3))
 * **deploy:** the sovereign azd path could not bind ANY of main.bicep's 22 required params (P0) ([#3421](https://github.com/fgarofalo56/csa-inabox/issues/3421)) ([b610b8c](https://github.com/fgarofalo56/csa-inabox/commit/b610b8cbbc8380af569ae90542a332b8d1d5f35c))
+* **deploy:** Weave PG + pgvector were blank on EVERY shipped param file, not just Gov ([#3432](https://github.com/fgarofalo56/csa-inabox/issues/3432)) ([ca29969](https://github.com/fgarofalo56/csa-inabox/commit/ca29969ddfae341a785fcc3707b9c5a136990847))
 * **directlake:** WIRE IT — svc-loom-directlake had no orchestrator, no image producer, and had never been compiled ([#3291](https://github.com/fgarofalo56/csa-inabox/issues/3291)) ([#3404](https://github.com/fgarofalo56/csa-inabox/issues/3404)) ([eae3452](https://github.com/fgarofalo56/csa-inabox/commit/eae34522cfdea607a5d69cff5524b956448447c0))
 * **gov:** svc-transform-runner + svc-copilot-evaluator had NO Gov image producer ([#3416](https://github.com/fgarofalo56/csa-inabox/issues/3416)) ([#3425](https://github.com/fgarofalo56/csa-inabox/issues/3425)) ([e18a0b1](https://github.com/fgarofalo56/csa-inabox/commit/e18a0b1bb9d34dfd03663649041c898f4587b59d))
 * **graph:** sovereign Graph host had no DoD branch — and the same helper dropped /v1.0 on EVERY boundary, Commercial included ([#3434](https://github.com/fgarofalo56/csa-inabox/issues/3434)) ([5aa9a00](https://github.com/fgarofalo56/csa-inabox/commit/5aa9a00bdad73d117ba6d58db2bc9b95f0658d79))
@@ -764,6 +769,7 @@ This file is maintained automatically by
 
 ### Features
 
+* **client:** typed client-route map — an /api path with no route fails to COMPILE (B-R15-17, FINISHLINE C4) ([#3152](https://github.com/fgarofalo56/csa-inabox/issues/3152)) ([3e81520](https://github.com/fgarofalo56/csa-inabox/commit/3e81520893e87abbffed8927b1dabe61564460e0))
 * **deploy:** the ONLY roll path for loom-unity / iceberg-catalog / loom-trino — three production apps had none (FINISHLINE D2-ROLL) ([#3163](https://github.com/fgarofalo56/csa-inabox/issues/3163)) ([5d17d2c](https://github.com/fgarofalo56/csa-inabox/commit/5d17d2c37d8c5043dc059758b6f19231c40b5a48))
 * **loom:** the mirroring wizard's Key Vault credential was collected and never used — now consumed (FINISHLINE C10) ([#3146](https://github.com/fgarofalo56/csa-inabox/issues/3146)) ([87fac1f](https://github.com/fgarofalo56/csa-inabox/commit/87fac1feecec3541af795da85aab5674fded4b0e))
 * **uat:** run the full functional suite on a schedule ([#3164](https://github.com/fgarofalo56/csa-inabox/issues/3164)) ([#3173](https://github.com/fgarofalo56/csa-inabox/issues/3173)) ([1eb1864](https://github.com/fgarofalo56/csa-inabox/commit/1eb18641ff54cea5f50cd71fa3a50d1a6c4a89fe))
@@ -787,6 +793,7 @@ This file is maintained automatically by
 
 ### Documentation
 
+* **c4:** two C4 premises were STALE — the widget catalog shipped; R10-14 scoped out with state measured ([#3153](https://github.com/fgarofalo56/csa-inabox/issues/3153)) ([87b8c09](https://github.com/fgarofalo56/csa-inabox/commit/87b8c09416b6b532abeb41b800ec95ca7ed2d706))
 * **help:** the 33-item help backlog was ALREADY DONE — and the one real gap hid a broken approval chain (FINISHLINE C6) ([#3148](https://github.com/fgarofalo56/csa-inabox/issues/3148)) ([e1a81c2](https://github.com/fgarofalo56/csa-inabox/commit/e1a81c2bd9fcd62fa1f2bab06f44ecc04af6d4d6))
 
 
@@ -875,6 +882,7 @@ This file is maintained automatically by
 * **evals:** the quality gate scored pass-rates over survivors of an AOAI 429 — probe, retry, refusal, and the stampede (FINISHLINE [#3083](https://github.com/fgarofalo56/csa-inabox/issues/3083)) ([#3087](https://github.com/fgarofalo56/csa-inabox/issues/3087)) ([e284e82](https://github.com/fgarofalo56/csa-inabox/commit/e284e82554798e512b860b948b12aac3b034a811))
 * **federation:** the Iceberg REST Catalog answered 403 because the proxy sent the raw Entra token (FINISHLINE F1) ([#3102](https://github.com/fgarofalo56/csa-inabox/issues/3102)) ([249669d](https://github.com/fgarofalo56/csa-inabox/commit/249669dea8b3eff493fa1e19b3913404c5776dfe))
 * **federation:** the token exchange never worked — requested_token_type was missing; unblock every browser receipt (FINISHLINE F1) ([#3118](https://github.com/fgarofalo56/csa-inabox/issues/3118)) ([5230738](https://github.com/fgarofalo56/csa-inabox/commit/523073885280aa1ca9db93a8883c03bc4b8cd53e))
+* **security:** a guard that passed on the NAME of an authorization check, and a re-lock that reported success without ever reading the registry back (FINISHLINE C22 + C24) ([#3111](https://github.com/fgarofalo56/csa-inabox/issues/3111)) ([ea83f94](https://github.com/fgarofalo56/csa-inabox/commit/ea83f943691d06dcc9122c0c57a3d8565803783f))
 * **supply-chain:** clear CVE-2025-68121 from loom-uat at the root — vite override ^6.4.3 → ^7.3.6 (esbuild 0.25.12 → 0.28.1, go1.26.4) ([#3055](https://github.com/fgarofalo56/csa-inabox/issues/3055)) ([f534d87](https://github.com/fgarofalo56/csa-inabox/commit/f534d87c9ae0e9901dd1e2bcd73ddcdedd3f039e))
 
 
@@ -1461,9 +1469,11 @@ This file is maintained automatically by
 * **guards:** the randomness ratchet was counting PROSE, not code ([#2656](https://github.com/fgarofalo56/csa-inabox/issues/2656)) ([#2712](https://github.com/fgarofalo56/csa-inabox/issues/2712)) ([c611509](https://github.com/fgarofalo56/csa-inabox/commit/c6115097cc342688a27dd3211a8071334f6f8386))
 * **loom-duckdb:** bound the unwrappable fallback, forbid unknown /query keys, scope the bare-SQL Flight ticket, tell the truth on /capabilities, migrate to lifespan ([#2614](https://github.com/fgarofalo56/csa-inabox/issues/2614)) ([88be976](https://github.com/fgarofalo56/csa-inabox/commit/88be976d0f17d1bc2a8816c452cbbfb47b7f1225)), closes [#2575](https://github.com/fgarofalo56/csa-inabox/issues/2575) [#2576](https://github.com/fgarofalo56/csa-inabox/issues/2576) [#2577](https://github.com/fgarofalo56/csa-inabox/issues/2577) [#2578](https://github.com/fgarofalo56/csa-inabox/issues/2578) [#2579](https://github.com/fgarofalo56/csa-inabox/issues/2579)
 * **lu8a:** ONE canonical dataset identity for every OpenLineage producer — and the ingest ReDoS bc267d6d missed ([#2609](https://github.com/fgarofalo56/csa-inabox/issues/2609)) ([934b002](https://github.com/fgarofalo56/csa-inabox/commit/934b002cb6fa83667e73ce7c6844c6f17983c0a3))
+* **perf:** bound every ARM nextLink pager; cache Foundry connections ([#2557](https://github.com/fgarofalo56/csa-inabox/issues/2557)) ([#2568](https://github.com/fgarofalo56/csa-inabox/issues/2568)) ([a293b80](https://github.com/fgarofalo56/csa-inabox/commit/a293b80598a45f9c6019a54e106c4de87e35b1fe))
 * **perf:** give the 14 residual ARM pagers a wall clock, not just a page cap ([#2582](https://github.com/fgarofalo56/csa-inabox/issues/2582)) ([#2612](https://github.com/fgarofalo56/csa-inabox/issues/2612)) ([2e00470](https://github.com/fgarofalo56/csa-inabox/commit/2e00470547a7ea289d24d10cc6dc6ca10e5c3291))
 * **risingwave:** the module's default cpu/memory pair was never deployable ([#2645](https://github.com/fgarofalo56/csa-inabox/issues/2645)) ([45afb58](https://github.com/fgarofalo56/csa-inabox/commit/45afb58df753cec8e054615b86c783749ad1db2b))
 * **security:** a Key Vault credential must never be aimed by user-writable state ([#2683](https://github.com/fgarofalo56/csa-inabox/issues/2683)) ([23f0028](https://github.com/fgarofalo56/csa-inabox/commit/23f00286ec42d3f74735d8f86fae3ce8ccdeae7a))
+* **security:** anonymous rate limiters were keyed on attacker-supplied input ([#2637](https://github.com/fgarofalo56/csa-inabox/issues/2637)) ([7b8bdb0](https://github.com/fgarofalo56/csa-inabox/commit/7b8bdb0eb8e51ddc147e5945fb75717c7753f39c))
 * **security:** bound the two user-code-execution hosts to the Console subnet ([#2653](https://github.com/fgarofalo56/csa-inabox/issues/2653)) ([#2699](https://github.com/fgarofalo56/csa-inabox/issues/2699)) ([395bc15](https://github.com/fgarofalo56/csa-inabox/commit/395bc151f70730fa761639561a494e7274de75a0))
 * **security:** close the js/polynomial-redos + js/incomplete-sanitization classes (79 alerts triaged, 76 fixed, 3 dismissed) ([#2677](https://github.com/fgarofalo56/csa-inabox/issues/2677)) ([f1f738d](https://github.com/fgarofalo56/csa-inabox/commit/f1f738d93bc9d1402534628dabe586264ee43564))
 * **security:** CodeQL never re-analyzed main after a TypeScript merge — the alert list was up to a week stale for the repo's main language ([#2714](https://github.com/fgarofalo56/csa-inabox/issues/2714)) ([b1eaadb](https://github.com/fgarofalo56/csa-inabox/commit/b1eaadb60a5ed66efddb070ed3b6dc37c0b4dabb))
@@ -1494,6 +1504,7 @@ This file is maintained automatically by
 
 * **apex-D:** Help Center accuracy pass — U7/U8/U13 guides + D5 stale-statement sweep ([#2566](https://github.com/fgarofalo56/csa-inabox/issues/2566)) ([61a46c2](https://github.com/fgarofalo56/csa-inabox/commit/61a46c22ac5bbc251f1217a979a7588567dd71cd))
 * **copilot-evals:** triage [#2585](https://github.com/fgarofalo56/csa-inabox/issues/2585) — retrieval ranking, not a harness bug ([#2610](https://github.com/fgarofalo56/csa-inabox/issues/2610)) ([7b55f54](https://github.com/fgarofalo56/csa-inabox/commit/7b55f54b482ce0dc8d0df24d38ea8b07ace1d511))
+* **security:** architecture security audit — 12 findings, 2 incident-grade, plus why CI missed them ([#2674](https://github.com/fgarofalo56/csa-inabox/issues/2674)) ([1120d1b](https://github.com/fgarofalo56/csa-inabox/commit/1120d1b30c3f524ddaa5cb3fc64200f5a6633b90))
 
 
 ### Tests
@@ -2750,6 +2761,7 @@ This file is maintained automatically by
 * **loom,scheduler:** unified cross-item job scheduler — visual cron wizard, run history, failure alerts (rel-T81) ([#1668](https://github.com/fgarofalo56/csa-inabox/issues/1668)) ([faadcf0](https://github.com/fgarofalo56/csa-inabox/commit/faadcf08a70f79214877422512cf90d00cda4ed1))
 * **loom,shell:** cross-workspace object explorer (rel-T88 tabbed multitasking + object explorer) ([#1662](https://github.com/fgarofalo56/csa-inabox/issues/1662)) ([f634e85](https://github.com/fgarofalo56/csa-inabox/commit/f634e857b6aa4056b40cb4972a6f73176d3dc004))
 * **loom,warehouse:** time-travel / CLONE / restore points / COPY INTO / snapshots (rel-T82) ([#1664](https://github.com/fgarofalo56/csa-inabox/issues/1664)) ([91b25d6](https://github.com/fgarofalo56/csa-inabox/commit/91b25d63d054ac04e36ac9ac97da3cf7eb2e0a01))
+* **loom:** surface org reports + analytics outside Admin via a Reports hub (live data by default) ([#1677](https://github.com/fgarofalo56/csa-inabox/issues/1677)) ([7cedcc0](https://github.com/fgarofalo56/csa-inabox/commit/7cedcc04daced3d7ca10436f522dc1afffd8cbb3))
 * **loom/governance:** DLP default-on + best-practice default policy + policy library ([#1680](https://github.com/fgarofalo56/csa-inabox/issues/1680)) ([453663c](https://github.com/fgarofalo56/csa-inabox/commit/453663ce94c6651cae2ee30c3e7a3eadf7075d89))
 * **loom:** Loom Apps (Fabric-Apps parity, Azure-native) + remove dead ADLA category ([#1683](https://github.com/fgarofalo56/csa-inabox/issues/1683)) ([54c3009](https://github.com/fgarofalo56/csa-inabox/commit/54c3009e933018dfebc1ad89b36a4aa8507d0608))
 
@@ -3402,6 +3414,7 @@ This file is maintained automatically by
 * **fiab-console:** Wave 1 — multi-sub RG/subscription resolution, AbortError relabel, Activities/Activity-log LAW queries ([#1471](https://github.com/fgarofalo56/csa-inabox/issues/1471)) ([8b580f2](https://github.com/fgarofalo56/csa-inabox/commit/8b580f2cfb721f8bc23354f2b5bd63dbf8f9014a))
 * **fiab-console:** wire all API Management CRUD buttons (dead-button day-one blocker) ([#1489](https://github.com/fgarofalo56/csa-inabox/issues/1489)) ([c2431ce](https://github.com/fgarofalo56/csa-inabox/commit/c2431ced33732aa9cbf86d6bfadc9725e9890af8)), closes [#1470](https://github.com/fgarofalo56/csa-inabox/issues/1470)
 * **fiab-console:** wire APIM admin Backends + Policies + Developer portal tabs ([#1470](https://github.com/fgarofalo56/csa-inabox/issues/1470)) ([#1474](https://github.com/fgarofalo56/csa-inabox/issues/1474)) ([c78e77a](https://github.com/fgarofalo56/csa-inabox/commit/c78e77a3ea0f43fbc6134db8bd4752cf8f9ca116))
+* **fiab-console/tests:** convert partial cloud-endpoints mocks to importOriginal spread ([#1470](https://github.com/fgarofalo56/csa-inabox/issues/1470)) ([#1501](https://github.com/fgarofalo56/csa-inabox/issues/1501)) ([cb1da91](https://github.com/fgarofalo56/csa-inabox/commit/cb1da911be5d75c7c0bce75b338d1e675efb8c02))
 * **fiab:** day-one config round-2 — DLP Graph Security roles + AI Search governance index + posture-refresh function ([#1470](https://github.com/fgarofalo56/csa-inabox/issues/1470)) ([#1478](https://github.com/fgarofalo56/csa-inabox/issues/1478)) ([029c070](https://github.com/fgarofalo56/csa-inabox/commit/029c0706ae0e50f19f5e514641c6c230455944b8))
 * **fiab:** MSAL console secret as Key Vault reference so bootstrap rotations stop breaking login (AADSTS7000215) ([#1479](https://github.com/fgarofalo56/csa-inabox/issues/1479)) ([c2de651](https://github.com/fgarofalo56/csa-inabox/commit/c2de65103f68b21c6012142ae176ad3a1d40c45a))
 
@@ -3427,6 +3440,7 @@ This file is maintained automatically by
 
 ### Bug Fixes
 
+* **bicep:** dlz-attach template errors (empty cosmos/blob outputs + empty workspaceId) ([#1459](https://github.com/fgarofalo56/csa-inabox/issues/1459)) ([1bfdc42](https://github.com/fgarofalo56/csa-inabox/commit/1bfdc420cf1c262f98618b6ebb7c329b6d490c47))
 * **bicep+bootstrap:** day-one deploy-time RBAC + service bootstraps (zero permission gates) ([#1453](https://github.com/fgarofalo56/csa-inabox/issues/1453)) ([1c81685](https://github.com/fgarofalo56/csa-inabox/commit/1c81685a3e8ebeca1c5d52a3563fdf381f5540af))
 * **bicep:** admin-portal day-one defaults (AOAI model+endpoint, tenant-admin OID, org-visuals env) ([#1458](https://github.com/fgarofalo56/csa-inabox/issues/1458)) ([e1f14cd](https://github.com/fgarofalo56/csa-inabox/commit/e1f14cdbd2bf81c9bb0a9bb84ac855ccb0b6c7e5))
 * **bicep:** day-one clean-deploy hardening (APIM create+policy, appImageTags, FD privatelink) ([#1438](https://github.com/fgarofalo56/csa-inabox/issues/1438)) ([25b69a8](https://github.com/fgarofalo56/csa-inabox/commit/25b69a8ae03128873644a3707aed2241f2dc7a85))
@@ -3666,6 +3680,7 @@ This file is maintained automatically by
 
 ### Bug Fixes
 
+* **csa-loom:** /admin/security triage — DSPM-for-AI agent scope + Purview/DLP gate confirm (audit-t151) ([#1240](https://github.com/fgarofalo56/csa-inabox/issues/1240)) ([346f172](https://github.com/fgarofalo56/csa-inabox/commit/346f1728a2b53ddef59460d717450b68c81962d7))
 * **csa-loom:** /thread adopts shared ViewToggle component (audit-t113) ([#1291](https://github.com/fgarofalo56/csa-inabox/issues/1291)) ([58f4587](https://github.com/fgarofalo56/csa-inabox/commit/58f4587be8ad5e9b69ae21650210e976bf2be9f1))
 * **csa-loom:** close AKS env-write gap for /admin/env-config Save (audit-t49) ([#1283](https://github.com/fgarofalo56/csa-inabox/issues/1283)) ([cce18b9](https://github.com/fgarofalo56/csa-inabox/commit/cce18b97c3ae57b95cec1796914b183cefd8640d))
 * **csa-loom:** close audit-t43 — Learn portal Loom-docs-first link integrity (README index alias) ([#1278](https://github.com/fgarofalo56/csa-inabox/issues/1278)) ([333fb9e](https://github.com/fgarofalo56/csa-inabox/commit/333fb9e5eafa70e8093d6ca56227f9ad615d1360))
