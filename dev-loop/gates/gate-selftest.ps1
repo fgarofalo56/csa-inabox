@@ -1034,6 +1034,197 @@ try {
             Add-Case 'S6 an all-excluded population is diagnosed distinctly' 'Fail' "expected exit 2 and 'EVERY file found was excluded', got exit $($s6.ExitCode). Output: $($s6.Output)"
         }
     }
+
+    # =======================================================================
+    # Cases T1-T8 - validate-dbt.ps1 (#3903)
+    #
+    # The identical absolute-path blindness #3894 documented in the bicep gate.
+    # Measured before the fix, from a real agent worktree with 19 tracked
+    # projects under it:
+    #     === dbt Validation Gate ===
+    #     No dbt_project.yml found - CANNOT VALIDATE.        RC=2
+    # A non-zero exit that means "I am blind" reads as a validation failure, and
+    # it came from the one place every agent in this repo works.
+    #
+    # THESE LIVE HERE, NOT IN A SIBLING __tests__ FILE. #3914 deleted that second
+    # mechanism precisely because a suite nothing invokes measures nothing; a new
+    # dev-loop/gates/__tests__/validate-dbt.selftest.ps1 would have re-created the
+    # defect the same week it was closed.
+    #
+    # NO REAL dbt IS REQUIRED, and that is a consequence of the fix rather than a
+    # shortcut: validate-dbt.ps1 now reports its POPULATION before it checks the
+    # toolchain, because the population is a fact about the TREE and holds either
+    # way. T1-T5 and T7 therefore assert the population line and exit 2, on any
+    # host. T6 and T8 need the gate to get PAST the toolchain check, so they use
+    # a SHIM that compiles nothing - see T8's own note about what that does and
+    # does not establish.
+    # =======================================================================
+    $validateDbt = Join-Path $gatesDir 'validate-dbt.ps1'
+    $dbtRoot = Join-Path $tempRoot 'dbt'
+    New-Item -ItemType Directory -Path $dbtRoot -Force | Out-Null
+
+    # A minimal, real dbt_project.yml. Contents are irrelevant to every assertion
+    # below (nothing here compiles models), but a file the gate would recognise
+    # is what makes the walk's answer meaningful.
+    $dbtProjectYaml = @(
+        'name: selftest',
+        'version: 1.0.0',
+        'profile: selftest',
+        'config-version: 2'
+    )
+
+    # --- T1 / T2 - the exclusion is RELATIVE to the root being walked. --------
+    # One tree, two roots: a gate matching ABSOLUTE paths gets T1 right and T2
+    # catastrophically wrong; a gate that simply dropped the exclusion gets T2
+    # right and T1 wrong. Only relative matching satisfies both.
+    $dTreeA = Join-Path $dbtRoot 'tree-a'
+    $dNested = Join-Path $dTreeA '.claude/worktrees/agent-x/domains/sales/dbt'
+    New-Item -ItemType Directory -Path (Join-Path $dTreeA 'domains/sales/dbt') -Force | Out-Null
+    New-Item -ItemType Directory -Path $dNested -Force | Out-Null
+    Set-Content -Path (Join-Path $dTreeA 'domains/sales/dbt/dbt_project.yml') -Value $dbtProjectYaml -Encoding ASCII
+    Set-Content -Path (Join-Path $dNested 'dbt_project.yml') -Value $dbtProjectYaml -Encoding ASCII
+
+    $t1 = Invoke-Child -ScriptPath $validateDbt -Arguments @('-RepoRoot', $dTreeA) -WorkingDirectory $dTreeA
+    if ($t1.Output -match 'Population: 1 dbt project\(s\) to compile \(1 found, 0 excluded\)') {
+        Add-Case 'T1 from the primary root, a NESTED worktree copy is excluded' 'Pass' 'population 1; the nested copy was pruned before descent'
+    } else {
+        Add-Case 'T1 from the primary root, a NESTED worktree copy is excluded' 'Fail' "expected 'Population: 1 dbt project(s) to compile (1 found, 0 excluded)', got exit $($t1.ExitCode). Output: $($t1.Output)"
+    }
+
+    $dNestedRoot = Join-Path $dTreeA '.claude/worktrees/agent-x'
+    $t2 = Invoke-Child -ScriptPath $validateDbt -Arguments @('-RepoRoot', $dNestedRoot) -WorkingDirectory $dNestedRoot
+    if ($t2.Output -match 'Population: 1 dbt project\(s\) to compile \(1 found, 0 excluded\)') {
+        Add-Case 'T2 from INSIDE a worktree, its own project IS measured' 'Pass' 'population 1 - the #3903 defect is closed'
+    } elseif ($t2.Output -match 'ZERO POPULATION' -or $t2.Output -match 'No dbt_project\.yml found') {
+        Add-Case 'T2 from INSIDE a worktree, its own project IS measured' 'Fail' '#3903 has regressed: the gate is blind in the one place every agent in this repo works. It measured NOTHING and exited non-zero.'
+    } else {
+        Add-Case 'T2 from INSIDE a worktree, its own project IS measured' 'Fail' "expected 'Population: 1 dbt project(s) to compile (1 found, 0 excluded)', got exit $($t2.ExitCode). Output: $($t2.Output)"
+    }
+
+    if ($t1.Output -match 'Population: 1 dbt' -and $t2.Output -match 'Population: 1 dbt') {
+        Add-Case 'T1/T2 each root sees its OWN project and only its own' 'Pass' 'the same file set, walked from two roots, yields the correct population from each'
+    } else {
+        Add-Case 'T1/T2 each root sees its OWN project and only its own' 'Fail' 'one half of the pair did not report a population of 1; the exclusion is not being evaluated relative to the root'
+    }
+
+    # --- T3 - the SAME root spelled with FORWARD SLASHES. --------------------
+    # Join-Path always emits backslashes, so this input has to be built by string
+    # surgery. That is the point: the first fix for the sibling gate closed the
+    # CASING variant of the prefix-strip and left the SEPARATOR variant open, and
+    # forward slashes are the NATURAL spelling from Git Bash.
+    $dNestedFwd = $dNestedRoot.Replace('\', '/')
+    $t3 = Invoke-Child -ScriptPath $validateDbt -Arguments @('-RepoRoot', $dNestedFwd) -WorkingDirectory $dNestedRoot
+    if ($t3.Output -match 'Population: 1 dbt project\(s\) to compile \(1 found, 0 excluded\)') {
+        Add-Case 'T3 the same root spelled with FORWARD SLASHES still measures' 'Pass' 'population 1'
+    } else {
+        Add-Case 'T3 the same root spelled with FORWARD SLASHES still measures' 'Fail' "the root prefix did not strip on the separator, so paths were filtered as ABSOLUTE. exit $($t3.ExitCode). Output: $($t3.Output)"
+    }
+
+    # --- T4 - a RELATIVE root, resolved against the child's working directory.
+    $t4 = Invoke-Child -ScriptPath $validateDbt -Arguments @('-RepoRoot', '.') -WorkingDirectory $dNestedRoot
+    if ($t4.Output -match 'Population: 1 dbt project\(s\) to compile \(1 found, 0 excluded\)') {
+        Add-Case 'T4 a RELATIVE root still measures' 'Pass' 'population 1'
+    } else {
+        Add-Case 'T4 a RELATIVE root still measures' 'Fail' "expected population 1, got exit $($t4.ExitCode). Output: $($t4.Output)"
+    }
+
+    # --- T5 - a nonexistent root is NOT a population verdict. ----------------
+    $dMissing = Join-Path $dbtRoot 'no-such-root-here'
+    $t5 = Invoke-Child -ScriptPath $validateDbt -Arguments @('-RepoRoot', $dMissing) -WorkingDirectory $dbtRoot
+    if ($t5.ExitCode -eq 2 -and $t5.Output -match 'UNRESOLVABLE ROOT') {
+        Add-Case 'T5 a nonexistent root is diagnosed as UNRESOLVABLE, not as empty' 'Pass' 'exit 2, named distinctly from ZERO POPULATION'
+    } else {
+        Add-Case 'T5 a nonexistent root is diagnosed as UNRESOLVABLE, not as empty' 'Fail' "expected exit 2 and 'UNRESOLVABLE ROOT', got exit $($t5.ExitCode). Output: $($t5.Output)"
+    }
+
+    # --- T6 - an empty tree is ZERO POPULATION, never a pass. ----------------
+    $dTreeB = Join-Path $dbtRoot 'tree-b'
+    New-Item -ItemType Directory -Path $dTreeB -Force | Out-Null
+    Set-Content -Path (Join-Path $dTreeB 'readme.md') -Value 'no dbt here' -Encoding ASCII
+    $t6 = Invoke-Child -ScriptPath $validateDbt -Arguments @('-RepoRoot', $dTreeB) -WorkingDirectory $dTreeB
+    if ($t6.Output -match 'DBT COMPILE PASSED') {
+        Add-Case 'T6 an empty population is NOT reported as a pass' 'Fail' 'the gate declared a compile passed over a population of zero'
+    } elseif ($t6.ExitCode -eq 2 -and $t6.Output -match 'ZERO POPULATION' -and $t6.Output -match 'No dbt_project\.yml exists anywhere under that root') {
+        Add-Case 'T6 an empty population is NOT reported as a pass' 'Pass' 'exit 2, named as ZERO POPULATION (empty tree)'
+    } else {
+        Add-Case 'T6 an empty population is NOT reported as a pass' 'Fail' "expected exit 2 with an explicit ZERO POPULATION message, got exit $($t6.ExitCode). Output: $($t6.Output)"
+    }
+
+    # --- T7 - "the prune/filter ate everything" is a DIFFERENT diagnosis from
+    # "the tree is empty". Same exit code, different fix, so different words.
+    # dbt_packages is the dbt-specific half: it is dbt's own vendored-dependency
+    # directory, full of OTHER PEOPLE'S dbt_project.yml files, and validating one
+    # of those would be a verdict about a dependency rather than about this repo.
+    $dTreeC = Join-Path $dbtRoot 'tree-c'
+    $dVendored = Join-Path $dTreeC 'domains/sales/dbt/dbt_packages/dbt_utils'
+    New-Item -ItemType Directory -Path $dVendored -Force | Out-Null
+    Set-Content -Path (Join-Path $dVendored 'dbt_project.yml') -Value $dbtProjectYaml -Encoding ASCII
+    $t7 = Invoke-Child -ScriptPath $validateDbt -Arguments @('-RepoRoot', $dTreeC) -WorkingDirectory $dTreeC
+    if ($t7.ExitCode -eq 2 -and $t7.Output -match 'ZERO POPULATION' -and $t7.Output -match 'check whether it sits under an excluded path') {
+        Add-Case 'T7 a vendored dbt_packages project is pruned, and said so distinctly' 'Pass' 'exit 2, and the message names the exclusion rather than the tree'
+    } else {
+        Add-Case 'T7 a vendored dbt_packages project is pruned, and said so distinctly' 'Fail' "expected exit 2 naming the exclusion, got exit $($t7.ExitCode). Output: $($t7.Output)"
+    }
+
+    # --- T8 - the gate writes NOTHING into the tree it judges. ---------------
+    #
+    # WHAT THIS ESTABLISHES AND WHAT IT DOES NOT, stated rather than implied. The
+    # `dbt` on PATH here is a SHIM that compiles nothing, so this case measures
+    # the GATE's own machinery - the walk, the prune, the report - and proves it
+    # neither deletes nor overwrites anything, which is the #3894 shape and the
+    # part this repo controls. It does NOT claim a real `dbt compile` writes
+    # nothing: real dbt writes `target/` and `logs/` INSIDE the project directory,
+    # which is dbt's documented behaviour and is gitignored. Asserting otherwise
+    # would be a false invariant, and a suite that states one is worse than a
+    # suite that states less.
+    #
+    # The population precondition is what makes this a control at all: "the tree
+    # did not change" is trivially true of a gate that walked nothing.
+    $dTreeD = Join-Path $dbtRoot 'tree-d'
+    $dProjD = Join-Path $dTreeD 'domains/sales/dbt'
+    New-Item -ItemType Directory -Path $dProjD -Force | Out-Null
+    Set-Content -Path (Join-Path $dProjD 'dbt_project.yml') -Value $dbtProjectYaml -Encoding ASCII
+    Set-Content -Path (Join-Path $dProjD 'committed.yml') -Value 'sentinel: not a build artifact' -Encoding ASCII
+
+    $shimDir = Join-Path $dbtRoot 'shim'
+    New-Item -ItemType Directory -Path $shimDir -Force | Out-Null
+    $onWindows = ($null -eq (Get-Variable -Name IsWindows -ErrorAction SilentlyContinue)) -or $IsWindows
+    if ($onWindows) {
+        Set-Content -Path (Join-Path $shimDir 'dbt.cmd') -Value @(
+            '@echo off',
+            'echo [selftest dbt shim] compiled nothing on purpose',
+            'exit /b 0'
+        ) -Encoding ASCII
+    } else {
+        $shimPath = Join-Path $shimDir 'dbt'
+        Set-Content -Path $shimPath -Value @(
+            '#!/bin/sh',
+            'echo "[selftest dbt shim] compiled nothing on purpose"',
+            'exit 0'
+        ) -Encoding ASCII
+        & chmod +x $shimPath 2>&1 | Out-Null
+    }
+
+    $savedPath = $env:PATH
+    try {
+        $env:PATH = "$shimDir$([System.IO.Path]::PathSeparator)$savedPath"
+        $beforeDbt = Get-Inventory $dTreeD
+        $t8 = Invoke-Child -ScriptPath $validateDbt -Arguments @('-RepoRoot', $dTreeD) -WorkingDirectory $dTreeD
+        $afterDbt = Get-Inventory $dTreeD
+    } finally {
+        $env:PATH = $savedPath
+    }
+
+    $dbtMeasured = ($t8.Output -match 'Population: 1 dbt')
+    if (-not $dbtMeasured) {
+        Add-Case 'T8 the gate writes NOTHING into the tree it judges' 'Fail' "population was not 1, so an unchanged tree proves nothing - the gate may simply have walked nothing. exit $($t8.ExitCode). Output: $($t8.Output)"
+    } elseif ($t8.ExitCode -ne 0) {
+        Add-Case 'T8 the gate writes NOTHING into the tree it judges' 'Fail' "the shimmed compile did not reach a verdict (exit $($t8.ExitCode)), so the run under test is not the one being asserted about. Output: $($t8.Output)"
+    } elseif ($beforeDbt -eq $afterDbt) {
+        Add-Case 'T8 the gate writes NOTHING into the tree it judges' 'Pass' 'file inventory + SHA256 identical before and after, over a population of 1'
+    } else {
+        Add-Case 'T8 the gate writes NOTHING into the tree it judges' 'Fail' "the tree changed across the run.`nBEFORE:`n$beforeDbt`nAFTER:`n$afterDbt"
+    }
 } finally {
     Remove-Item $tempRoot -Recurse -Force -ErrorAction SilentlyContinue
 }
