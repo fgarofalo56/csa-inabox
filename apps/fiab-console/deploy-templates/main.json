@@ -6,7 +6,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.45.15.27210",
-      "templateHash": "4978132698538298300"
+      "templateHash": "13938754712809740162"
     }
   },
   "definitions": {
@@ -961,7 +961,7 @@
       "type": "object",
       "defaultValue": {},
       "metadata": {
-        "description": "ADX cluster tuning bag (R0) — passed through to admin-plane/main.bicep adxConfig (typed there as adxConfigT). {} (default) = the shared admin-plane cluster keeps its Dev SKU: Dev(No SLA)_Standard_E2a_v4 on Commercial, which admin-plane substitutes with the LIVE-verified Dev(No SLA)_Standard_D11_v2 on GCC-High / IL5 where the E2a_v4 VM is not offered. Set adxSkuName to move the cluster OFF a SKU Azure has no capacity to start: `az kusto cluster start` answering InsufficientResourcesForSubscription is a capacity condition that no retry and no role grant clears, and until this bag was threaded NOTHING an operator could set reached the SKU — every lane deploys THIS root, and assigning adxConfig in a bicepparam failed BCP259 (#4122; GCC-High red on a Stopped adx-csa-loom-fmezxj since 2026-08-11). Also carries adxEnableOptimizedAutoscale / adxAutoscaleMinimum / adxAutoscaleMaximum. Future ADX cluster knobs ride THIS bag — never a new top-level param."
+        "description": "ADX cluster tuning bag (R0) — passed through to admin-plane/main.bicep adxConfig (typed there as adxConfigT). {} (default) = the shared admin-plane cluster keeps its Dev SKU Dev(No SLA)_Standard_E2a_v4 on Commercial / GCC. On GCC-High / IL5 admin-plane substitutes Standard_E8as_v5+1TB_PS instead, because Azure Government offers NO Dev(No SLA)/Basic-tier ADX SKU AT ALL — measured in-boundary 2026-08-27 (gov-adx-sku-probe run 33120409251: usgovvirginia offers 9 SKUs, usgovarizona 14, every one Standard tier, none restricted). The earlier substitute Dev(No SLA)_Standard_D11_v2, recorded here as LIVE-verified on 2026-07-10, is NOT in either list today and left a Stopped adx-csa-loom-fmezxj unstartable for 17 consecutive gcch runs (#4072, #4141). COST, because this is not a like-for-like swap and cannot be: Standard tier is a documented 2-NODE minimum, so a Gov cluster is two instances where the Dev node was one. Set adxSkuName to move the cluster OFF a SKU Azure has no capacity to start: `az kusto cluster start` answering InsufficientResourcesForSubscription is a capacity condition that no retry and no role grant clears, and until this bag was threaded NOTHING an operator could set reached the SKU — every lane deploys THIS root, and assigning adxConfig in a bicepparam failed BCP259 (#4122). Also carries adxEnableOptimizedAutoscale / adxAutoscaleMinimum / adxAutoscaleMaximum. Future ADX cluster knobs ride THIS bag — never a new top-level param."
       }
     },
     "loomEventHubEnabled": {
