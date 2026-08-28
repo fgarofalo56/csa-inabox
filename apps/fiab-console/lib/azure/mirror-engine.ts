@@ -35,6 +35,7 @@ import { BRONZE, MAX_TABLES, adfSafeName, ensureMirrorAdlsLinkedService } from '
 // picker and this refusal cannot drift; see that module's header for the
 // incident it closes.
 import { describeMirrorConnMismatch } from './mirror-source-compat';
+import { describeChangeTrackingFailure } from './change-tracking-failure-class';
 export { runMirrorAdfCopy, planCopyTrigger, type CopyTriggerPlan } from './mirror-adf-copy';
 
 
@@ -687,10 +688,17 @@ async function snapshotTable(
             await enableChangeTracking(src.server, src.database, t.schema, t.table, src.auth);
             fallbackNote = 'Change tracking enabled this run; the next Start will sync incrementally.';
           } catch (ce: any) {
-            fallbackNote =
-              'Change tracking could not be enabled — falling back to full snapshot. ' +
-              'Grant db_owner to the console identity to unlock incremental sync. ' +
-              `(${ce?.message || String(ce)})`;
+            // #4050 — CLASSIFY BEFORE ADVISING. This used to append the
+            // `db_owner` sentence UNCONDITIONALLY, so a missing primary key, a
+            // database with CT off, or a deadlock all told the operator to
+            // escalate a grant on their production database that would not fix
+            // any of them (deploy-integrity R7). The fallback to a full snapshot
+            // is unchanged; only the sentence explaining it is.
+            fallbackNote = describeChangeTrackingFailure(
+              'Change tracking could not be enabled — falling back to full snapshot',
+              ce?.message || String(ce),
+              t.schema, t.table, src.database,
+            );
           }
         } else if (ct.minValid !== null && savedSyncVersion < ct.minValid) {
           fallbackNote = `Saved watermark (v${savedSyncVersion}) aged out of the change-tracking retention window (min valid v${ct.minValid}) or the table was truncated — full re-snapshot.`;
@@ -732,10 +740,14 @@ async function snapshotTable(
           ctNow = await changeTrackingStatus(src.server, src.database, t.schema, t.table, src.auth);
           if (ctNow && ctNow.minValid !== null && !fallbackNote) result.note = 'Change tracking enabled this run; the next Start will sync incrementally.';
         } catch (ce: any) {
-          if (!fallbackNote) result.note =
-            'Change tracking could not be enabled — the next Start will re-snapshot. ' +
-            'Grant db_owner to the console identity to unlock incremental sync. ' +
-            `(${ce?.message || String(ce)})`;
+          // #4050 — the SECOND unconditional `db_owner` site, same fix. Both are
+          // routed through the one classifier so they cannot drift into two
+          // answers for one condition.
+          if (!fallbackNote) result.note = describeChangeTrackingFailure(
+            'Change tracking could not be enabled — the next Start will re-snapshot',
+            ce?.message || String(ce),
+            t.schema, t.table, src.database,
+          );
         }
       }
       if (ctNow) result.syncVersion = ctNow.current;
