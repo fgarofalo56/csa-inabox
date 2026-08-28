@@ -201,14 +201,93 @@ ${vitestRows ? `| Metric | Floor |\n|---|---|\n${vitestRows}` : '_thresholds not
 
 const outPath = path.join(repoRoot, OUT_REL);
 
+/**
+ * POPULATION FLOOR — refuse to judge a doc assembled from parsers that read
+ * NOTHING (#4058 review).
+ *
+ * Every figure in this doc comes from a regex over a config file. If one of
+ * those configs is reformatted past its matcher, the corresponding value goes
+ * `null` / `[]` / `{}` and the doc renders `_thresholds not parsed_` or
+ * `_none parsed_` — and `--check` then compares that empty doc against an
+ * equally empty committed copy and reports "up to date". The gate stays green
+ * over a summary that states nothing, which is exactly the failure the
+ * generator exists to prevent (a published number that has drifted from the
+ * one CI enforces).
+ *
+ * So a collapsed parse is a HARD failure on both paths, not a rendered
+ * placeholder. `measuredPy` is deliberately NOT in this list: it comes from a
+ * coverage artefact that legitimately does not exist outside a machine that
+ * just ran `pytest --cov`, and the carry-forward above handles it.
+ */
+function assertParsedPopulation() {
+  const empty = [];
+  if (enforcedPy === null) empty.push('enforced Python gate (--cov-fail-under in .github/workflows/test.yml)');
+  if (declaredPy === null) empty.push('declared Python gate (fail_under in pyproject.toml)');
+  if (gatedSource.length === 0) empty.push('gated source packages ([tool.coverage.run] source in pyproject.toml)');
+  if (Object.keys(vitestFloor).length === 0) {
+    empty.push('Vitest floors (thresholds block in apps/fiab-console/vitest.config.ts)');
+  }
+  if (empty.length === 0) return;
+  console.error(
+    '[coverage-summary] REFUSING to render or judge this doc: the following inputs parsed to nothing, so the ' +
+      'summary would publish placeholders instead of the gates CI enforces.',
+  );
+  for (const e of empty) console.error(`  - ${e}`);
+  console.error(
+    '  A matcher here has drifted off its config file. Fix the matcher — do NOT commit a doc with "_not parsed_" ' +
+      'in it, because --check would then be permanently green over an empty summary.',
+  );
+  process.exit(1);
+}
+assertParsedPopulation();
+
 if (process.argv.includes('--check')) {
   const current = readOptional(OUT_REL);
-  // Compare ignoring the Generated-on date line (which changes every run).
-  const strip = (s) => (s || '').replace(/Generated-on:.*?-->/s, '').trim();
-  if (strip(current) !== strip(doc)) {
+  if (current === null) {
     console.error(
-      `[coverage-summary] ${OUT_REL} is stale. Run:\n  node scripts/ci/generate-coverage-summary.mjs`,
+      `[coverage-summary] ${OUT_REL} does not exist. Run:\n  node scripts/ci/generate-coverage-summary.mjs`,
     );
+    process.exit(1);
+  }
+  // NORMALISE LINE ENDINGS BEFORE COMPARING (#4058).
+  //
+  // `doc` is assembled in memory from template literals, so it is LF-only.
+  // `current` is read from disk verbatim. `.gitattributes` does not cover
+  // `docs/**`, so with `core.autocrlf=true` Git materialises this path as CRLF
+  // on a Windows checkout — correct, expected Git behaviour. The comparison was
+  // a raw `!==`, so EVERY line differed by one byte and `--check` failed on a
+  // pristine tree with zero local modifications: measured 3103 bytes / 77 CR /
+  // 77 LF on disk against 3026 bytes / 0 CR / 77 LF in memory. Delta 77 —
+  // exactly the CR count.
+  //
+  // Worse than a false red: the message told the developer to regenerate, which
+  // rewrites the file LF-only and attributes a whole-file line-ending change to
+  // whatever PR they happened to be on. CI is Linux, so the checkout is LF there
+  // and this never fired in CI — it only bit the person the gate exists to help.
+  //
+  // This normalises the COMPARISON, not the checkout; it does not touch what is
+  // written, and it changes nothing about which CONTENT differences are
+  // detected. A changed row, a deleted row, a reordered table all still fail.
+  // The `Generated-on:` strip is unchanged — that line genuinely varies per run.
+  const strip = (s) => (s || '').replace(/\r\n/g, '\n').replace(/Generated-on:.*?-->/s, '').trim();
+  const a = strip(current);
+  const b = strip(doc);
+  if (a !== b) {
+    // Say WHAT differs, not just that something does (deploy-integrity.md R7).
+    // "is stale" on its own sent this exact investigation down a line-ending
+    // rabbit hole once already.
+    const al = a.split('\n');
+    const bl = b.split('\n');
+    let i = 0;
+    while (i < al.length && i < bl.length && al[i] === bl[i]) i++;
+    console.error(
+      `[coverage-summary] ${OUT_REL} does not match the live coverage config (compared with line endings ` +
+        `normalised, and with the Generated-on line ignored).`,
+    );
+    console.error(`  first difference at line ${i + 1} of the compared text:`);
+    console.error(`    on disk:   ${al[i] === undefined ? '<end of file>' : JSON.stringify(al[i])}`);
+    console.error(`    generated: ${bl[i] === undefined ? '<end of file>' : JSON.stringify(bl[i])}`);
+    console.error(`  Regenerate with:\n    node scripts/ci/generate-coverage-summary.mjs`);
     process.exit(1);
   }
   console.log(`[coverage-summary] ${OUT_REL} is up to date.`);
