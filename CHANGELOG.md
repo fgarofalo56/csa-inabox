@@ -25,6 +25,18 @@ This file is maintained automatically by
 [Conventional Commits](https://www.conventionalcommits.org/). See
 [RELEASE.md](RELEASE.md) for the release process.
 
+## [0.103.0](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.102.0...csa-inabox-v0.103.0) (2026-08-28)
+
+
+### Features
+
+* **brain:** W10 — the loop that runs the Brain, and the lifecycle that makes its output usable ([#3936](https://github.com/fgarofalo56/csa-inabox/issues/3936)) ([#4014](https://github.com/fgarofalo56/csa-inabox/issues/4014)) ([78e49de](https://github.com/fgarofalo56/csa-inabox/commit/78e49deed914d721ab1a3e24d433b70c3bdc2a9c))
+
+
+### Bug Fixes
+
+* **auth:** the item-grant path decided tenancy itself, and skipped entirely for a tid-less caller ([#3840](https://github.com/fgarofalo56/csa-inabox/issues/3840)) ([#4154](https://github.com/fgarofalo56/csa-inabox/issues/4154)) ([a4ee602](https://github.com/fgarofalo56/csa-inabox/commit/a4ee602ffb672dc3800d222e213f23bc145dd858))
+
 ## [0.102.0](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.101.2...csa-inabox-v0.102.0) (2026-08-28)
 
 
