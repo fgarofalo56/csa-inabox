@@ -13,13 +13,11 @@ Data sources:
 import argparse
 import json
 import logging
-import os
 import sys
 import zipfile
-from datetime import datetime
+from datetime import datetime, timezone
 from io import BytesIO
 from pathlib import Path
-from typing import Dict, List, Optional
 
 import pandas as pd
 import requests
@@ -48,7 +46,7 @@ class DOTDownloader:
             'User-Agent': 'CSA-in-a-Box Data Downloader (research/educational use)'
         })
 
-    def _download_file(self, url: str, description: str) -> Optional[bytes]:
+    def _download_file(self, url: str, description: str) -> bytes | None:
         """Download file with progress bar and return content."""
         try:
             response = self.session.get(url, stream=True, timeout=120)  # Longer timeout for large files
@@ -69,19 +67,15 @@ class DOTDownloader:
             logging.error(f"Failed to download {url}: {e}")
             return None
 
-    def download_fars_data(self, year: str) -> Dict[str, List[Dict]]:
+    def download_fars_data(self, year: str) -> dict[str, list[dict]]:
         """Download FARS fatal crash data for specified year."""
-        # FARS data is typically available as a ZIP file containing multiple CSV files
-        filename = f"FARS{year}NationalCSV.zip"
-
-        # Try multiple URL patterns as NHTSA sometimes changes structure
-        url_patterns = [
-            f"https://www.nhtsa.gov/file-downloads?p=nhtsa/downloads/FARS/{year}/National/FARS{year}NationalCSV.zip",
-            f"https://www.nhtsa.gov/sites/nhtsa.dot.gov/files/documents/FARS{year}NationalCSV.zip",
-            f"https://crashstats.nhtsa.dot.gov/Api/Public/ViewPublication/813417"  # Example for API approach
-        ]
-
-        # Simplified approach - try direct download first
+        # FARS data is typically available as a ZIP file containing multiple CSV
+        # files. Only the direct URL below is actually used; the alternative
+        # NHTSA URL patterns this function used to bind to a dead local are kept
+        # as a comment rather than as unreachable code, because a list nothing
+        # reads reads as "we try these" and we do not:
+        #   .../file-downloads?p=nhtsa/downloads/FARS/<year>/National/FARS<year>NationalCSV.zip
+        #   https://crashstats.nhtsa.dot.gov/Api/Public/ViewPublication/813417
         direct_url = f"https://www.nhtsa.gov/sites/nhtsa.dot.gov/files/documents/FARS{year}NationalCSV.zip"
 
         content = self._download_file(direct_url, f"FARS {year}")
@@ -93,7 +87,7 @@ class DOTDownloader:
             # Extract ZIP file and read CSV files
             fars_data = {}
             with zipfile.ZipFile(BytesIO(content)) as zf:
-                csv_files = [f for f in zf.namelist() if f.endswith('.csv') or f.endswith('.CSV')]
+                csv_files = [f for f in zf.namelist() if f.endswith(('.csv', '.CSV'))]
 
                 for csv_file in csv_files:
                     try:
@@ -111,7 +105,7 @@ class DOTDownloader:
             logging.error(f"Failed to extract FARS data: {e}")
             return {}
 
-    def download_airline_ontime(self, year: str, month: Optional[str] = None) -> List[Dict]:
+    def download_airline_ontime(self, year: str, month: str | None = None) -> list[dict]:
         """Download BTS airline on-time performance data."""
         # BTS on-time data is available monthly
         if month:
@@ -144,7 +138,7 @@ class DOTDownloader:
 
         return all_data
 
-    def download_traffic_volume(self, year: str) -> List[Dict]:
+    def download_traffic_volume(self, year: str) -> list[dict]:
         """Download traffic volume data (if available)."""
         # Traffic volume data from FHWA
         try:
@@ -160,7 +154,7 @@ class DOTDownloader:
 
         return []
 
-    def get_fars_table_descriptions(self) -> Dict[str, str]:
+    def get_fars_table_descriptions(self) -> dict[str, str]:
         """Get descriptions of FARS data tables."""
         return {
             'accident': 'Crash-level data including date, time, location, and severity',
@@ -176,7 +170,7 @@ class DOTDownloader:
         }
 
 
-def save_data_with_manifest(data: List[Dict], filename: str, output_dir: Path,
+def save_data_with_manifest(data: list[dict], filename: str, output_dir: Path,
                           description: str, source_url: str) -> None:
     """Save data as CSV and update manifest."""
     if not data:
@@ -193,14 +187,14 @@ def save_data_with_manifest(data: List[Dict], filename: str, output_dir: Path,
 
     manifest = {}
     if manifest_path.exists():
-        with open(manifest_path, 'r') as f:
+        with open(manifest_path) as f:
             manifest = json.load(f)
 
     file_info = {
         'filename': filename,
         'description': description,
         'source_url': source_url,
-        'download_timestamp': datetime.utcnow().isoformat() + 'Z',
+        'download_timestamp': datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z'),
         'record_count': len(data),
         'file_size_bytes': csv_path.stat().st_size,
         'columns': list(df.columns) if not df.empty else []
@@ -214,7 +208,7 @@ def save_data_with_manifest(data: List[Dict], filename: str, output_dir: Path,
     logging.info(f"Saved {len(data)} records to {csv_path}")
 
 
-def save_fars_tables(fars_data: Dict[str, List[Dict]], output_dir: Path, year: str) -> None:
+def save_fars_tables(fars_data: dict[str, list[dict]], output_dir: Path, year: str) -> None:
     """Save FARS tables with combined manifest."""
     if not fars_data:
         return
@@ -222,7 +216,7 @@ def save_fars_tables(fars_data: Dict[str, List[Dict]], output_dir: Path, year: s
     manifest_path = output_dir / "manifest.json"
     manifest = {}
     if manifest_path.exists():
-        with open(manifest_path, 'r') as f:
+        with open(manifest_path) as f:
             manifest = json.load(f)
 
     for table_name, data in fars_data.items():
@@ -238,7 +232,7 @@ def save_fars_tables(fars_data: Dict[str, List[Dict]], output_dir: Path, year: s
             'filename': filename,
             'description': f"FARS {table_name} table for {year}",
             'source_url': "https://www.nhtsa.gov/research-data/fatality-analysis-reporting-system-fars",
-            'download_timestamp': datetime.utcnow().isoformat() + 'Z',
+            'download_timestamp': datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z'),
             'record_count': len(data),
             'file_size_bytes': csv_path.stat().st_size,
             'columns': list(df.columns) if not df.empty else [],
@@ -310,7 +304,7 @@ def main():
                 json.dump({
                     'descriptions': descriptions,
                     'year': args.year,
-                    'generated': datetime.utcnow().isoformat() + 'Z'
+                    'generated': datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z')
                 }, f, indent=2)
 
         if args.dataset in ['airline', 'all']:
