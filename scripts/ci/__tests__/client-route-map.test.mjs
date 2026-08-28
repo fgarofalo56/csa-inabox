@@ -456,7 +456,20 @@ test('#3158 — the REAL --check failure prints the expected diff, not just the 
     assert.match(r.stderr, /STALE/);
     // THE FIX: the failure now names the route, not merely the file.
     assert.match(r.stderr, /1 route\(s\) to ADD, 0 to REMOVE/, r.stderr);
-    assert.match(r.stderr, new RegExp(`\\+ ${victim.replace(/\//g, '\\/')}`), r.stderr);
+    // ESCAPE EVERY REGEX METACHARACTER, not just `/`. The first version of this
+    // line used `victim.replace(/\//g, '\\/')`, which escapes forward slashes and
+    // NOTHING else — CodeQL flagged it HIGH ("does not escape backslash
+    // characters in the input"), and it was right: a route containing `.`, `+`,
+    // `(` or `\` would have been compiled as a PATTERN rather than matched
+    // literally, so the assertion could pass on a string it was never meant to
+    // match. Benign for today's alphanumeric route paths and a latent false
+    // PASS the moment one is not.
+    //
+    // This is the same character class the shipped script already uses at
+    // `generate-client-route-map.mjs:134` — the test was weaker than the code it
+    // tests, which is the wrong way round for an assertion about escaping.
+    const victimRe = victim.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    assert.match(r.stderr, new RegExp(`\\+ ${victimRe}`), r.stderr);
     assert.match(r.stderr, /#3158 merge-order race/, r.stderr);
     // …and it still prints the command. The diff is an addition, not a swap.
     assert.match(r.stderr, /Regenerate: node scripts\/ci\/generate-client-route-map\.mjs/);
