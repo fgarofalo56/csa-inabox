@@ -1,0 +1,454 @@
+name: gov-adx-sku-probe
+
+# READ-ONLY Azure Government ADX SKU / capacity enumeration. Refs #4072.
+#
+# WHY THIS EXISTS
+# ---------------
+# The GCC-High deploy lane fails at the ADX preflight. Everything downstream of
+# that failure never runs — including csa-loom-post-deploy-bootstrap, which is
+# what sets LOOM_UNITY_AUDIENCE — so the red on `gov-bff-verify` is a SYMPTOM of
+# the ADX failure, not an independent bug.
+#
+# Nobody has measured which ADX SKUs Azure Government actually offers in the
+# regions this estate targets. Picking one by guessing is how the lane got stuck:
+# admin-plane/main.bicep already carries a hard-won substitution because the
+# Commercial default `Dev(No SLA)_Standard_E2a_v4` is backed by a VM size that is
+# NOT offered in usgovvirginia (a live deploy proved it on 2026-07-10). The
+# operator's decision was explicit — MEASURE the available SKUs first, then
+# choose. This workflow is the measuring instrument. It is NOT the fix, and it
+# deliberately changes nothing.
+#
+# WHAT IT ESTABLISHES, AND WHAT IT REFUSES TO CLAIM
+# -------------------------------------------------
+# Three DIFFERENT answers get conflated every time this class of failure is
+# investigated, and conflating them sends the remediation the wrong way:
+#
+#   A. "The SKU is not offered in this region at all."     -> change the SKU or the region
+#   B. "It is offered, but restricted for THIS subscription." -> a capacity/quota request
+#   C. "I could not read the answer."                      -> fix the read; claim NOTHING
+#
+# (A) and (B) are distinguished by the `restrictions` array that the Kusto RP
+# returns on each SKU entry — that is the ARM-standard channel for
+# NotAvailableForSubscription. (C) is never rendered as (A): every read here
+# fails the step rather than degrading into a negative result, because "I could
+# not reach it" reported as "it is not there" is the exact defect
+# deploy-integrity.md R7 exists to prevent.
+#
+# READ-ONLY BY CONSTRUCTION. Every call this job makes against Azure is
+# `list-sku`, `list` or `list-usage`. There is no create, update, delete,
+# deployment or role assignment anywhere in this file, and none may be added —
+# the moment this mutates, it stops being safe to point at a sovereign estate on
+# a whim. Two verbs below LOOK mutating and are not: `az cloud set` rewrites the
+# CLI's own profile on the runner, and `az extension add` installs a CLI
+# extension on the runner. Both are client-side; neither touches the estate.
+# Every Gov workflow in this repo already runs the first.
+#
+# THE RUN CONCLUSION MEANS SOMETHING (this is the contract):
+#   GREEN = the configured effective ADX SKU IS offered in the region the deploy
+#           actually asks for it, and every read succeeded.
+#   RED   = either it is NOT offered (a measured, deploy-blocking finding), or
+#           something could not be read (UNKNOWN). The log says which.
+# A probe whose conclusion is always green is a probe nobody needs to open.
+#
+# NOT SCHEDULED, ON PURPOSE. `workflow_dispatch` only: this is an investigation
+# instrument for a specific decision, not a standing watchdog. Adding a cron
+# would put a recurring red on the board for a condition that is already tracked.
+
+on:
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    name: Enumerate the ADX SKUs Azure Government offers
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@v7
+
+      # Auth block copied VERBATIM from .github/workflows/gov-verify-facts.yml
+      # (the repo's existing read-only Gov fact-finder), which carries the same
+      # block as deploy-fiab-gcch.yml / gov-discover.yml. Same four secrets, same
+      # sovereign endpoint overrides, same `environment: AzureUSGovernment`.
+      # Nothing here is invented — a Gov secret name guessed wrong fails as an
+      # empty credential, which authenticates to nothing and reads as "no
+      # resources found".
+      - name: Azure login (Gov sub) — deploy SP
+        uses: Azure/login@v2
+        with:
+          creds: |
+            {
+              "clientId": "${{ secrets.AZURE_GOV_CLIENT_ID }}",
+              "clientSecret": "${{ secrets.AZURE_GOV_CLIENT_SECRET }}",
+              "tenantId": "${{ secrets.AZURE_GOV_TENANT_ID }}",
+              "subscriptionId": "${{ secrets.AZURE_GOV_SUBSCRIPTION_ID }}",
+              "activeDirectoryEndpointUrl": "https://login.microsoftonline.us",
+              "resourceManagerEndpointUrl": "https://management.usgovcloudapi.net/",
+              "sqlManagementEndpointUrl": "https://management.core.usgovcloudapi.net:8443/",
+              "galleryEndpointUrl": "https://gallery.usgovcloudapi.net/",
+              "managementEndpointUrl": "https://management.core.usgovcloudapi.net/"
+            }
+          environment: AzureUSGovernment
+
+      - name: Set Azure cloud to Gov
+        run: az cloud set --name AzureUSGovernment
+
+      # Same reasoning as `Pre-install the resource-graph CLI extension` in
+      # deploy-fiab-gcch.yml: install it EXPLICITLY so the CLI's dynamic-install
+      # banner never fires mid-probe and contaminates a captured stream. It is
+      # doubly worth doing here because `az kusto` additionally prints
+      # "Command group 'kusto' is experimental" to stderr on EVERY invocation
+      # (measured against azure-cli 2.88.0 / kusto extension 0.5.0), which is
+      # precisely why the reads below capture stdout and stderr SEPARATELY.
+      # Fail-closed: without the extension there is no enumeration at all, and
+      # that must stop the probe rather than let it report an empty answer.
+      - name: Pre-install the kusto CLI extension
+        run: |
+          set -euo pipefail
+          az extension add --name kusto --upgrade --only-show-errors -o none
+          echo "kusto extension version: $(az extension show --name kusto --query version -o tsv | tr -d '\r')"
+
+      # ── WHERE THE REGIONS AND THE SKU COME FROM ────────────────────────────
+      # DERIVED FROM THE REPO, NEVER TYPED HERE. A probe that hardcodes the SKU
+      # it is checking answers a question about its own literal, not about the
+      # deploy — and it goes stale silently the first time somebody sets
+      # `adxConfig`. Every value below is read out of the files that actually
+      # drive the deployment, and any extraction that comes back empty FAILS the
+      # step rather than falling back to a default.
+      - name: Derive the target Gov regions and the CONFIGURED ADX SKU from the repo
+        run: |
+          set -euo pipefail
+          PARAM_DIR="platform/fiab/bicep/params"
+          ADMIN_PLANE="platform/fiab/bicep/modules/admin-plane/main.bicep"
+          OUT="$RUNNER_TEMP/adx-probe"
+          mkdir -p "$OUT"
+
+          need_file() {
+            if [ ! -f "$1" ]; then
+              echo "::error::gov-adx-sku-probe: $1 is missing, so the target regions and the configured ADX SKU cannot be derived. Refusing to enumerate against a guessed value — a probe that invents the thing it is checking measures nothing."
+              exit 1
+            fi
+          }
+          need_file "$PARAM_DIR/gcc-high.bicepparam"
+          need_file "$PARAM_DIR/il5.bicepparam"
+          need_file "$ADMIN_PLANE"
+
+          # PRIMARY region = `param location`. admin-plane/main.bicep passes
+          # `location: location` straight into the adxCluster module, so this is
+          # the region the deploy actually asks Kusto for. GCC-High and IL5 are
+          # read independently rather than assumed equal.
+          GCCH_LOC="$(sed -n "s/^param location = '\([a-z0-9]*\)'.*/\1/p" "$PARAM_DIR/gcc-high.bicepparam" | head -1)"
+          IL5_LOC="$(sed -n "s/^param location = '\([a-z0-9]*\)'.*/\1/p" "$PARAM_DIR/il5.bicepparam" | head -1)"
+
+          # SECONDARY region = `param openaiEmbeddingsLocation`. This is NOT where
+          # ADX is deployed today; it is the other Azure Government region this
+          # estate already targets, so it is the only sovereign fallback that
+          # needs no new region decision. Enumerated for the report, and
+          # deliberately NOT allowed to decide this run's conclusion.
+          GCCH_EMB="$(sed -n "s/^param openaiEmbeddingsLocation = '\([a-z0-9]*\)'.*/\1/p" "$PARAM_DIR/gcc-high.bicepparam" | head -1)"
+          IL5_EMB="$(sed -n "s/^param openaiEmbeddingsLocation = '\([a-z0-9]*\)'.*/\1/p" "$PARAM_DIR/il5.bicepparam" | head -1)"
+
+          for PAIR in "gcc-high:location:$GCCH_LOC" "il5:location:$IL5_LOC" \
+                      "gcc-high:openaiEmbeddingsLocation:$GCCH_EMB" "il5:openaiEmbeddingsLocation:$IL5_EMB"; do
+            if [ -z "${PAIR##*:}" ]; then
+              echo "::error::gov-adx-sku-probe: could not read a region out of the bicepparam files (${PAIR%:*} came back empty). The param file shape has changed and this probe would otherwise enumerate against nothing. Fix the extraction — do not let it default."
+              exit 1
+            fi
+          done
+
+          # gcc.bicepparam is DELIBERATELY EXCLUDED and the reason is recorded so
+          # nobody adds it back as an oversight: it declares boundary 'GCC' at
+          # location 'eastus', which is an Azure COMMERCIAL region. GCC runs on
+          # commercial infrastructure, so it is not reachable from the Gov
+          # credential this job holds and enumerating it here would either error
+          # or — worse — silently answer about the wrong cloud.
+          printf '%s\n%s\n' "$GCCH_LOC" "$IL5_LOC" | sort -u > "$OUT/regions-primary.txt"
+          printf '%s\n%s\n' "$GCCH_EMB" "$IL5_EMB" | sort -u > "$OUT/regions-secondary.txt"
+          sort -u "$OUT/regions-primary.txt" "$OUT/regions-secondary.txt" > "$OUT/regions-all.txt"
+
+          # THE SKU. Two values, because the deploy uses two:
+          #   adxSkuName          — admin-plane/main.bicep's own default, used when
+          #                         no adxConfig.adxSkuName is supplied.
+          #   effectiveAdxSkuName — the value the Gov boundaries ACTUALLY get, via
+          #                         the GCC-High/IL5 substitution. This is the one
+          #                         that has to exist in the region.
+          SKU_DEFAULT="$(sed -n "s/^var adxSkuName = adxConfig\.?adxSkuName ?? '\(.*\)'\$/\1/p" "$ADMIN_PLANE" | head -1)"
+          SKU_GOV="$(grep -A 1 '^var effectiveAdxSkuName' "$ADMIN_PLANE" | sed -n "s/^  ? '\(.*\)'\$/\1/p" | head -1)"
+
+          if [ -z "$SKU_DEFAULT" ] || [ -z "$SKU_GOV" ]; then
+            echo "::error::gov-adx-sku-probe: could not read the ADX SKU out of $ADMIN_PLANE (default='$SKU_DEFAULT' gov-substituted='$SKU_GOV'). The var shape has changed. Refusing to probe a SKU nobody derived — reporting availability for the wrong string is worse than reporting nothing."
+            exit 1
+          fi
+
+          # Does either Gov boundary OVERRIDE the SKU via adxConfig? Measured
+          # today as ZERO in both, which is what makes the substitution above the
+          # effective value. If that ever changes, the sed extraction can no
+          # longer tell which SKU the deploy actually asks for — and a probe that
+          # reports availability for the WRONG SKU is worse than one that reports
+          # nothing, because its green is read as an answer. So it refuses.
+          #
+          # awk rather than `grep -c`: grep exits 1 on a zero count, and zero is
+          # the EXPECTED answer here, so grep would turn the normal case into a
+          # step failure. awk always exits 0 and prints the number, so the count
+          # is obtained without discarding anyone's exit status.
+          GCCH_ADXCFG="$(awk '/adxConfig/ {n++} END {print n+0}' "$PARAM_DIR/gcc-high.bicepparam")"
+          IL5_ADXCFG="$(awk '/adxConfig/ {n++} END {print n+0}' "$PARAM_DIR/il5.bicepparam")"
+          GCCH_ADXON="$(awk '/^param adxEnabled = true/ {n++} END {print n+0}' "$PARAM_DIR/gcc-high.bicepparam")"
+          IL5_ADXON="$(awk '/^param adxEnabled = true/ {n++} END {print n+0}' "$PARAM_DIR/il5.bicepparam")"
+
+          if [ "$GCCH_ADXCFG" != "0" ] || [ "$IL5_ADXCFG" != "0" ]; then
+            echo "::error::gov-adx-sku-probe: a Gov bicepparam now mentions adxConfig (gcc-high=$GCCH_ADXCFG, il5=$IL5_ADXCFG), so the effective ADX SKU is NO LONGER just the admin-plane substitution '$SKU_GOV' — it may be overridden per boundary. This probe derives the SKU by reading admin-plane/main.bicep and cannot resolve a bicepparam override, so which SKU the deploy asks for is UNKNOWN. Refusing rather than reporting availability for a SKU that may not be the one deployed. Teach this step to read the override, then re-run."
+            exit 1
+          fi
+          SKU_EFFECTIVE="$SKU_GOV"
+          printf '%s\n' "$SKU_GOV" > "$OUT/sku-effective.txt"
+
+          echo "=== DERIVED FROM THE REPO (nothing below is typed into this workflow) ==="
+          echo "gcc-high.bicepparam  location                 : $GCCH_LOC"
+          echo "il5.bicepparam       location                 : $IL5_LOC"
+          echo "gcc-high.bicepparam  openaiEmbeddingsLocation : $GCCH_EMB"
+          echo "il5.bicepparam       openaiEmbeddingsLocation : $IL5_EMB"
+          echo "gcc-high.bicepparam  adxEnabled=true matches  : $GCCH_ADXON"
+          echo "il5.bicepparam       adxEnabled=true matches  : $IL5_ADXON"
+          echo "gcc-high.bicepparam  adxConfig mentions       : $GCCH_ADXCFG"
+          echo "il5.bicepparam       adxConfig mentions       : $IL5_ADXCFG"
+          echo "admin-plane default  adxSkuName               : $SKU_DEFAULT"
+          echo "admin-plane Gov      effectiveAdxSkuName      : $SKU_EFFECTIVE"
+          echo "--- regions this run enumerates ---"
+          echo "primary (ADX actually deploys here):"
+          sed 's/^/  - /' "$OUT/regions-primary.txt"
+          echo "secondary (already-targeted Gov region, fallback candidate only):"
+          sed 's/^/  - /' "$OUT/regions-secondary.txt"
+
+      # ── THE ENUMERATION ────────────────────────────────────────────────────
+      # `az kusto cluster list-sku` with NO --name/--resource-group is the Kusto
+      # RP's subscription-scoped Skus_List operation.
+      #
+      # IT HAS NO --location FLAG. Verified against the installed CLI rather than
+      # assumed (`az kusto cluster list-sku --help`: the only arguments are
+      # --cluster-name and --resource-group, and note the command is `list-sku`,
+      # SINGULAR — `list-skus` does not exist and exits "misspelled or not
+      # recognized"). It returns ONE ENTRY PER (SKU, region) PAIR, each carrying
+      # `name`, `tier`, `locations` and `restrictions`, so the per-region answer
+      # is a filter over that one result rather than a call per region.
+      - name: Enumerate the ADX SKUs the Kusto RP offers in this subscription
+        run: |
+          set -euo pipefail
+          OUT="$RUNNER_TEMP/adx-probe"
+          SKU_JSON="$OUT/adx-skus.json"
+          SKU_ERR="$OUT/adx-skus.err"
+
+          # stdout and stderr go to SEPARATE files. Not `2>&1` (which would splice
+          # the CLI's "kusto is experimental" banner into the JSON and make it
+          # unparseable), and never a redirect of stderr to the null device —
+          # discarding it is what once turned a permission denial into an empty
+          # string and then into a false claim about a tag not existing.
+          # The stderr file is PRINTED on both paths below — kept, never dropped.
+          set +e
+          az kusto cluster list-sku -o json > "$SKU_JSON" 2> "$SKU_ERR"
+          SKU_RC=$?
+          set -e
+
+          if [ "$SKU_RC" -ne 0 ]; then
+            echo "--- az stderr ---"
+            cat "$SKU_ERR"
+            echo "::error::gov-adx-sku-probe: COULD NOT ENUMERATE the Kusto SKUs (az kusto cluster list-sku exited $SKU_RC). Nothing in this run establishes which SKUs Azure Government offers, so no SKU may be reported unavailable and no SKU may be chosen on the strength of it. This is UNKNOWN, not 'none'. Usual causes: the Gov deploy SP lacks Reader on the subscription, or the Microsoft.Kusto resource provider is not registered in it."
+            exit 1
+          fi
+
+          if [ -s "$SKU_ERR" ]; then
+            echo "::warning::gov-adx-sku-probe: az wrote to stderr while SUCCEEDING. Recording it rather than hiding it:"
+            sed 's/^/  /' "$SKU_ERR"
+          fi
+
+          set +e
+          TOTAL="$(jq -r 'if type == "array" then length else "not-an-array" end' "$SKU_JSON")"
+          JQ_RC=$?
+          set -e
+          if [ "$JQ_RC" -ne 0 ] || [ "$TOTAL" = "not-an-array" ]; then
+            echo "--- first 400 bytes of what az returned ---"
+            head -c 400 "$SKU_JSON"
+            echo ""
+            echo "::error::gov-adx-sku-probe: az exited 0 but its output is not a JSON array (jq exit $JQ_RC, length '$TOTAL'), so the SKU list was NOT parsed. Whether a SKU is offered is therefore UNVERIFIED. Refusing to report an availability verdict from an unread response."
+            exit 1
+          fi
+          if [ "$TOTAL" -eq 0 ]; then
+            echo "::error::gov-adx-sku-probe: the Kusto RP returned an EMPTY SKU list for this subscription. That is not a measurement that Azure Government offers no ADX SKUs — a subscription-wide Skus_List returning nothing means the query path is broken (unregistered RP, or a credential scoped to nothing). Refusing to pass vacuously."
+            exit 1
+          fi
+          echo "Kusto RP returned $TOTAL (SKU, region) entries across this subscription."
+
+          # Per-region projection. `.locations | index($r)` is index-or-null, and
+          # jq treats only null/false as falsy — so index 0 correctly selects.
+          while IFS= read -r REGION; do
+            [ -z "$REGION" ] && continue
+            jq -r --arg r "$REGION" \
+              '[.[] | select(.locations | index($r))] | sort_by(.name) | .[] | "\(.name)\t\(.tier)\t\(.restrictions | length)"' \
+              "$SKU_JSON" > "$OUT/skus-$REGION.tsv"
+            COUNT="$(wc -l < "$OUT/skus-$REGION.tsv" | tr -d ' ')"
+            echo ""
+            echo "=== $REGION — $COUNT ADX SKU(s) offered ==="
+            if [ "$COUNT" -eq 0 ]; then
+              echo "  (none — the enumeration RETURNED and listed no ADX SKU for this region)"
+            else
+              printf '  %-34s %-9s %s\n' "SKU" "TIER" "RESTRICTIONS"
+              # A non-empty restrictions array is the ARM channel for
+              # NotAvailableForSubscription: offered in the region, but not to
+              # THIS subscription. That is a quota/capacity conversation, and a
+              # different remediation from the SKU simply not existing here.
+              awk -F'\t' '{ printf "  %-34s %-9s %s\n", $1, $2, ($3 == "0" ? "-" : $3 " RESTRICTED") }' "$OUT/skus-$REGION.tsv"
+            fi
+          done < "$OUT/regions-all.txt"
+
+          echo ""
+          echo "--- full restriction detail (empty output == no SKU is restricted for this subscription) ---"
+          jq -r '.[] | select(.restrictions | length > 0) | "\(.locations[0])\t\(.name)\t\(.restrictions | tostring)"' "$SKU_JSON"
+
+      # Region COMPUTE quota. Presented as a SEPARATE, clearly-labelled signal:
+      # it reports the subscription's Microsoft.Compute usage/limits for the
+      # region. This workflow does NOT assert that an ADX cluster draws on these
+      # counters — that mapping was not established here, and stating it would be
+      # exactly the "assert a cause the code did not verify" defect. The
+      # authoritative "offered, and offered to THIS subscription" signal is the
+      # SKU `restrictions` array in the step above; this is corroboration and
+      # context for a capacity request, nothing stronger.
+      - name: Region compute quota (a separate signal — see the note above)
+        run: |
+          set -euo pipefail
+          OUT="$RUNNER_TEMP/adx-probe"
+
+          while IFS= read -r REGION; do
+            [ -z "$REGION" ] && continue
+            Q_JSON="$OUT/quota-$REGION.json"
+            Q_ERR="$OUT/quota-$REGION.err"
+            set +e
+            az vm list-usage --location "$REGION" -o json > "$Q_JSON" 2> "$Q_ERR"
+            Q_RC=$?
+            set -e
+            if [ "$Q_RC" -ne 0 ]; then
+              echo "--- az stderr ---"
+              cat "$Q_ERR"
+              echo "::error::gov-adx-sku-probe: could not read the compute quota for '$REGION' (az vm list-usage exited $Q_RC). The quota half of this report is UNKNOWN for that region — it is not 'no quota'. A read that fails is not allowed to degrade into a negative result here."
+              exit 1
+            fi
+            if [ -s "$Q_ERR" ]; then
+              echo "::warning::gov-adx-sku-probe: az wrote to stderr while SUCCEEDING on the quota read for '$REGION':"
+              sed 's/^/  /' "$Q_ERR"
+            fi
+            echo ""
+            echo "=== $REGION — compute quota, families with a non-zero limit ==="
+            printf '  %-46s %8s %8s\n' "FAMILY" "USED" "LIMIT"
+            jq -r '.[] | select(.limit > 0) | "\(.name.localizedValue)\t\(.currentValue)\t\(.limit)"' "$Q_JSON" \
+              | sort \
+              | awk -F'\t' '{ printf "  %-46s %8s %8s\n", $1, $2, $3 }'
+          done < "$OUT/regions-all.txt"
+
+      # Context, not a gate. What is ACTUALLY deployed right now, so the report
+      # can say "configured X / running Y" instead of leaving the reader to guess
+      # whether the configured SKU was ever reached. An ABSENT cluster is a
+      # legitimate measured answer and does NOT fail this step; a failed READ
+      # does, because those are different facts.
+      - name: What ADX cluster (if any) the Gov estate is running today
+        run: |
+          set -euo pipefail
+          OUT="$RUNNER_TEMP/adx-probe"
+          LIVE_JSON="$OUT/adx-live.json"
+          LIVE_ERR="$OUT/adx-live.err"
+
+          set +e
+          az kusto cluster list --query "[].{name:name, location:location, sku:sku.name, tier:sku.tier, capacity:sku.capacity, state:state}" -o json > "$LIVE_JSON" 2> "$LIVE_ERR"
+          LIVE_RC=$?
+          set -e
+          if [ "$LIVE_RC" -ne 0 ]; then
+            echo "--- az stderr ---"
+            cat "$LIVE_ERR"
+            echo "::error::gov-adx-sku-probe: could not list the Kusto clusters in the Gov subscription (exit $LIVE_RC). Whether this estate already runs an ADX cluster is UNKNOWN — that is not the same as 'it runs none', and the report must not say the latter."
+            exit 1
+          fi
+          if [ -s "$LIVE_ERR" ]; then
+            echo "::warning::gov-adx-sku-probe: az wrote to stderr while SUCCEEDING on the cluster list:"
+            sed 's/^/  /' "$LIVE_ERR"
+          fi
+          LIVE_N="$(jq -r 'length' "$LIVE_JSON")"
+          echo "ADX clusters in the Gov subscription: $LIVE_N (read SUCCEEDED; this count is measured)"
+          jq -r '.[] | "  \(.name)  location=\(.location)  sku=\(.sku)  tier=\(.tier)  capacity=\(.capacity)  state=\(.state)"' "$LIVE_JSON"
+
+      # ── THE VERDICT ────────────────────────────────────────────────────────
+      # The one question this workflow was built to answer: is the SKU the Gov
+      # deploy actually asks for offered in the region it actually asks for it?
+      # Only the PRIMARY regions decide the conclusion. The secondary region is
+      # reported for the choice that comes next and is explicitly not allowed to
+      # turn this run red — failing on a region ADX does not deploy to would be a
+      # false red, and a false red is how a detector gets switched off.
+      - name: Verdict — is the configured SKU offered where the deploy asks for it
+        run: |
+          set -euo pipefail
+          OUT="$RUNNER_TEMP/adx-probe"
+          SKU_EFFECTIVE="$(cat "$OUT/sku-effective.txt")"
+          VERDICT_FAILED=0
+
+          {
+            echo "## Gov ADX SKU probe — Refs #4072"
+            echo ""
+            echo "Configured effective ADX SKU for the Gov boundaries: \`$SKU_EFFECTIVE\`"
+            echo ""
+            echo "| Region | Role | ADX SKUs offered | Configured SKU offered here |"
+            echo "| --- | --- | --- | --- |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          while IFS= read -r REGION; do
+            [ -z "$REGION" ] && continue
+            if grep -qxF "$REGION" "$OUT/regions-primary.txt"; then
+              ROLE="primary (ADX deploys here)"
+              DECIDES=1
+            else
+              ROLE="secondary (fallback candidate)"
+              DECIDES=0
+            fi
+            COUNT="$(wc -l < "$OUT/skus-$REGION.tsv" | tr -d ' ')"
+            # Exact, whole-field match on the SKU name. cut isolates column 1 so a
+            # substring of a longer SKU name can never be read as a hit.
+            if cut -f1 "$OUT/skus-$REGION.tsv" | grep -qxF "$SKU_EFFECTIVE"; then
+              OFFERED="YES"
+            else
+              OFFERED="NO"
+            fi
+            echo "| \`$REGION\` | $ROLE | $COUNT | **$OFFERED** |" >> "$GITHUB_STEP_SUMMARY"
+            echo "$REGION ($ROLE): $COUNT SKU(s) offered; configured SKU offered = $OFFERED"
+
+            if [ "$DECIDES" -eq 1 ] && [ "$OFFERED" = "NO" ]; then
+              VERDICT_FAILED=1
+              echo "--- SKUs that ARE offered in $REGION ---"
+              cut -f1 "$OUT/skus-$REGION.tsv" | sed 's/^/  /'
+            fi
+          done < "$OUT/regions-all.txt"
+
+          {
+            echo ""
+            echo "The compute-quota block in the job log is a SEPARATE signal: this probe"
+            echo "does not assert that an ADX cluster draws on those counters. The"
+            echo "authoritative per-subscription signal is the SKU \`restrictions\` array."
+            echo ""
+            echo "This probe changed nothing. Every call was \`list\` / \`show\` / \`list-sku\` / \`list-usage\`."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          if [ "$VERDICT_FAILED" -ne 0 ]; then
+            echo "::error::gov-adx-sku-probe: the configured effective ADX SKU '$SKU_EFFECTIVE' is NOT offered in at least one PRIMARY Gov region. This is a MEASURED result — the enumeration returned successfully and did not list it — and it is a deploy-blocking finding for the GCC-High/IL5 lanes. Choose a SKU from the offered list printed above; do not guess one. Refs #4072."
+            exit 1
+          fi
+          echo "OK — the configured effective ADX SKU '$SKU_EFFECTIVE' IS offered in every primary Gov region, and every read in this run succeeded."
+
+      - name: Upload the enumeration evidence
+        # `always()` so the artifact survives a red verdict — the enumeration is
+        # the deliverable, and it is most valuable on exactly the run that fails.
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: gov-adx-sku-probe-${{ github.run_id }}
+          path: ${{ runner.temp }}/adx-probe/
+          # A probe that produced no evidence has not run. That is an error, not
+          # a shrug — it is the "exits 0 having produced nothing" shape.
+          if-no-files-found: error

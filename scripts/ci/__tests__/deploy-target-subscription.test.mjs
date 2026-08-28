@@ -700,6 +700,59 @@ test('CONTROL (PER-SHAPE) — every emptiness idiom is caught, on every bound na
   // Eight narrow mutations, each asserted individually. A guard that catches
   // only the shape the last offender used is the "keyed to the unsafe pattern"
   // class, and it is what #3947 measured this one to be.
+  //
+  // #3996 — THE POPULATION IS PINNED FIRST, before the loop that consumes it.
+  // `survived` is trivially empty when the loop iterates zero cases, so this
+  // control — the embedded positive control that makes the POPULATION test's
+  // empty offender list mean anything — could itself be emptied to nothing.
+  // MEASURED against 4c57517: replacing OFFENDING_IDIOMS with [] left the suite
+  // 18/18 green at RC=0. The only tell was the runtime, 292ms → 0.5ms, and
+  // nothing in CI reads a test's duration. Deleting ONE entry is the realistic
+  // version and does not even move the clock (501ms, still 18/18).
+  //
+  // The labels are pinned as an EXACT ORDERED LIST, not a length floor. A floor
+  // still passes two edits that silently narrow coverage: swapping one idiom
+  // for another, and duplicating an entry to restore the count after dropping a
+  // real one. Pinning the labels pins WHICH shapes are covered, so both go red.
+  assert.deepEqual(
+    OFFENDING_IDIOMS.map(([label]) => label),
+    [
+      '#3888 original spelling',
+      '[ -z "$V" ], no :- expansion',
+      '[[ -z ]] bashism, one line',
+      'test -z, no brackets',
+      'string comparison against ""',
+      'the portable x-prefix idiom',
+      'laundered through a plain alias',
+      'on the ADMIN_SUB-bound step',
+    ],
+    'the idiom population changed. Adding a shape: extend this list in the SAME edit. '
+    + 'Removing one: say in the PR why that idiom can no longer reach the workflow — '
+    + 'seven of these eight walked past the filter this control replaced (#3947 F1).',
+  );
+
+  // The second half of this test's title, which the labels alone do NOT pin.
+  // Repointing the ADMIN_SUB entry at DEPLOY_SUB_ANCHOR is a one-token edit
+  // that leaves the label list byte-identical while making "on every bound
+  // name" false — and ADMIN_SUB is precisely the name the old filter could not
+  // see. So derive the covered names from the anchors themselves and require
+  // them to be the FULL set the workflow binds, not a subset.
+  const src = fs.readFileSync(WORKFLOW, 'utf8').replace(/\r\n/g, '\n');
+  const steps = src.split(/^ {6}- name: /m).slice(1);
+  const covered = new Set();
+  for (const [label, anchor] of OFFENDING_IDIOMS) {
+    const owning = steps.filter((s) => s.includes(anchor));
+    assert.equal(owning.length, 1,
+      `the anchor for '${label}' sits in ${owning.length} steps, not one — this mutation lands somewhere unintended`);
+    for (const n of boundDeploySubNames(owning[0])) covered.add(n);
+  }
+  assert.deepEqual(
+    [...covered].sort(),
+    [...boundDeploySubNames(src)].sort(),
+    'the idioms are injected at steps that do not cover every deploy_sub-bound name — '
+    + 'this control no longer exercises the name it claims to',
+  );
+
   const survived = [];
   for (const [label, anchor, injected] of OFFENDING_IDIOMS) {
     const found = withMutatedWorkflow(
