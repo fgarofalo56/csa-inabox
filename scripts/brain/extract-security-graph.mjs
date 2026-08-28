@@ -23,6 +23,16 @@
  *       survive a merge, because at runtime the console cannot recompute the
  *       inputs digest and can only fall back to an age check.
  *
+ *       WHAT IT COMPARES CHANGED ON #4128. It used to compare `{graph, join}`
+ *       and nothing else, so a change that moved the POPULATION without moving
+ *       the GRAPH — a new `.mjs` inside the publication scope that carries no
+ *       publication construct, i.e. zero nodes — passed it while the REQUIRED
+ *       census in `no-estate-identifiers.test.ts` went red. It now compares the
+ *       WHOLE artifact except the run-volatile fields named in
+ *       `_artifact-drift.mjs`, so `meta.scanScopes[].filesMatched`,
+ *       `meta.filesScanned`, `meta.skipped` and `meta.generatorVersion` are all
+ *       covered, along with any field a later extractor version adds.
+ *
  * ── NO RESULT IS DISCARDED ───────────────────────────────────────────────
  *
  * There is no `|| true`, no `2>/dev/null` and no `continue-on-error` anywhere in
@@ -37,6 +47,7 @@ import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'n
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { driftDifferences, populationRefusals } from './_artifact-drift.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(HERE, '..', '..');
@@ -233,27 +244,67 @@ function main() {
       process.exit(1);
     }
 
-    // Compare the GRAPH AND JOIN, not merely the inputs digest.
+    // ── THE POPULATION FLOOR, BEFORE ANY COMPARISON ────────────────────
+    //
+    // Two empty things compare equal. A drift gate that passes because BOTH
+    // sides measured nothing is green and blind, so the floor is asserted on
+    // each side first and a degenerate population is REFUSED rather than
+    // certified.
+    const refusals = [
+      ...populationRefusals(a, 'the COMMITTED artifact'),
+      ...populationRefusals(artifact, 'the artifact just extracted from this tree'),
+    ];
+    if (refusals.length > 0) {
+      console.error(
+        '[security-extract] REFUSING TO CERTIFY: the comparison would have run over a degenerate ' +
+          'population, where "they match" means only that both sides measured nothing.',
+      );
+      for (const r of refusals) console.error(`  - ${r}`);
+      process.exit(1);
+    }
+
+    // Compare the WHOLE artifact minus the run-volatile fields — not an
+    // enumeration of watched ones.
     //
     // The digest covers input drift (the tree changed) but is BLIND to extractor
     // drift (the analyzers changed while the tree did not) — and that case is
     // real: fixing the generic-call matcher in sinks.ts moved the node count
     // 905 -> 908 with a byte-identical digest. A check that only compared
-    // digests would have called the stale artifact current. `generatedAt` and
-    // `commit` are excluded because they legitimately differ on every run.
-    const norm = (x) => JSON.stringify({ graph: x.graph, join: x.join });
-    if (norm(a) !== norm(artifact)) {
+    // digests would have called the stale artifact current.
+    //
+    // Until #4128 this compared `{graph, join}`, which had the mirror-image
+    // blind spot: a file inside the declared scan scope that emits NO node moved
+    // `meta.scanScopes[].filesMatched` and `meta.filesScanned` while the graph
+    // held identical, and this gate passed while the REQUIRED census went red.
+    // Naming `meta.scanScopes` as a third watched field would have left
+    // `filesScanned` — and every future field — invisible, so the comparison is
+    // inverted instead: everything is compared, and exemptions are declared with
+    // a reason in `_artifact-drift.mjs`.
+    const CAP = 20;
+    const differences = driftDifferences(a, artifact, CAP);
+    if (differences.length > 0) {
       console.error(
         '[security-extract] DRIFT: the committed artifact does not match what the extractor ' +
           `produces from this tree (committed ${a.graph.nodes.length} nodes / ` +
           `${a.graph.edges.length} edges, current ${nodes} / ${edges}). Either the source ` +
           'changed or the extractor did. Run: node scripts/brain/extract-security-graph.mjs',
       );
+      console.error(
+        `[security-extract] ${differences.length} differing field(s)` +
+          (differences.length >= CAP
+            ? ` (the walk stopped at its ${CAP}-field cap, so there may be more)`
+            : '') +
+          ', committed -> current:',
+      );
+      for (const d of differences) {
+        console.error(`  - ${d.path === '' ? '<root>' : d.path}: ${d.committed} -> ${d.current}`);
+      }
       process.exit(1);
     }
     console.log(
       `[security-extract] OK — committed artifact matches the tree (${nodes} nodes, ${edges} edges, ` +
-        `digest ${artifact.meta.inputsDigest}).`,
+        `${artifact.meta.filesScanned} file(s) across ${artifact.meta.scanScopes.length} declared ` +
+        `scan scope(s), digest ${artifact.meta.inputsDigest}).`,
     );
     return;
   }
