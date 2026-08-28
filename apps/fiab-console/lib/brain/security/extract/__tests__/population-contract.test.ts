@@ -149,24 +149,21 @@ describe('the allowlist parse cannot degrade silently', () => {
   });
 
   it('still records the ABSENT-source case separately', () => {
-    // THE SUBJECT IS ASSERTED IN TWO HALVES ON PURPOSE, AND IT IS NOT WEAKER.
+    // #4057 — THE SUBJECT IS ONE LITERAL AGAIN, and that reversion is the
+    // acceptance test for that issue.
     //
-    // `__tests__/spec-imported-scripts-have-no-shebang.test.ts` treats any quoted
-    // `scripts/**.mjs` literal inside a spec as an IMPORT of that script, and
-    // `check-route-guards.mjs` correctly carries a `#!` line. That guard is right
-    // in its own terms, but its consequence does not hold here: this spec imports
-    // nothing outside `../`, and measured on PR #4022 its tests run and pass in
-    // the same suite the guard reddened. Spelling the path out in one literal
-    // would drag a long-standing, correct script into that guard's population for
-    // no defect. Same reasoning, and the same remedy, as `join.test.ts`.
-    //
-    // Prefix plus suffix pins the WHOLE string, and `toHaveLength(1)` is stricter
-    // than the `.some()` it replaces: the sibling `(ALLOWLIST_PREFIXES)` entry
-    // cannot satisfy the suffix, so this cannot pass by matching that one instead.
+    // It used to be asserted in two halves (prefix + suffix) because
+    // `__tests__/spec-imported-scripts-have-no-shebang.test.ts` treated any
+    // quoted `scripts/**.mjs` literal inside a spec as an IMPORT of that script,
+    // and `check-route-guards.mjs` correctly carries a `#!` line. That guard
+    // reddened over this spec on PR #4022 — while this spec's 20 tests RAN AND
+    // PASSED in the same suite, making the guard's own message ("the listed
+    // spec(s) are NOT RUNNING AT ALL") false in that instance. The guard now
+    // reads the IMPORT GRAPH: this spec imports only `vitest` and three `../`
+    // siblings, so naming the path here is a mention and costs nothing.
     const a = build({ routeGuardSource: null });
-    const absent = a.meta.skipped.filter((s) => s.subject.endsWith('/check-route-guards.mjs'));
+    const absent = a.meta.skipped.filter((s) => s.subject === 'scripts/ci/check-route-guards.mjs');
     expect(absent).toHaveLength(1);
-    expect(absent[0].subject.startsWith('scripts/ci/')).toBe(true);
   });
 });
 
