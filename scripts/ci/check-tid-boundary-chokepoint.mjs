@@ -787,26 +787,35 @@ const POST_DELEGATION_PINS = new Map([
     'lib/auth/item-access.ts:resolveItemAccessByOid',
     [
       {
-        cond: '!(!item) && !(wsAccess) && !(!multiUserAclEnabled()) && !(!grant.matched)',
-        ret: "{ item, role: grant.canWrite ? '                ' : '          ', via: '          ', canWrite: grant.canWrite, }",
+        cond:
+          '!(!item) && !(wsAccess) && !(!multiUserAclEnabled()) && !(!grant.matched) && ' +
+          '!(!sameTenantConfirmed(tid, wsDoc?.tid))',
+        ret: "{ item, role: grant.canWrite ? ' ' : ' ', via: ' ', canWrite: grant.canWrite, }",
         region:
           "; if (wsAccess) { return { item, role: wsAccess.role, via: wsAccess.via === ' ' ? ' ' : ' ', " +
           'canWrite: wsAccess.canWrite, }; } if (!multiUserAclEnabled()) return null; ' +
           'const grant = await resolveItemGrant(itemId, oid, groups); if (!grant.matched) return null; ' +
-          'if (tid) { const wsDoc = await readWorkspaceById(item.workspaceId); ' +
-          'if (wsDoc?.tid && wsDoc.tid !== tid) return null; } ' +
+          'const wsDoc = await readWorkspaceById(item.workspaceId); ' +
+          'if (!sameTenantConfirmed(tid, wsDoc?.tid)) return null; ' +
           "return { item, role: grant.canWrite ? ' ' : ' ', via: ' ', canWrite: grant.canWrite, };",
         reason:
           'the ITEM-LEVEL grant path (the F6 "Grant people access" share). It is reached ' +
           'only when the workspace resolver has already DENIED, so it cannot be the ' +
-          'delegated verdict — it is a second grant with its own tenant boundary, the ' +
-          '`wsDoc.tid !== tid` refusal immediately above it. WHAT IS ACTUALLY ENFORCED, so ' +
-          'the reason and the check agree: `cond` fails if the conditions that lead here are ' +
-          'widened, `ret` fails if the grant itself changes, and `region` — the span from the ' +
-          'end of the delegation call to the end of this return — fails if the tid ' +
-          'comparison, the kill switch, or the grant lookup between them is edited or ' +
-          'DELETED. Removing that boundary is therefore a red build in fact, not only in ' +
-          'this sentence.',
+          'delegated verdict — it is a second grant with its own tenant boundary. #3840 ' +
+          'CONSOLIDATED that boundary onto the shared `sameTenantConfirmed`, so the ' +
+          'refusal immediately above this return is now POSITIVE: an absent tid on ' +
+          'EITHER side (caller session or workspace doc) refuses, where the previous ' +
+          '`wsDoc?.tid && wsDoc.tid !== tid` abstained and fell through to the grant. ' +
+          'That is a NARROWING and was reviewed as one — see the #3840 note in ' +
+          '`item-access.ts` and the estate backfill that precedes it. WHAT IS ACTUALLY ' +
+          'ENFORCED, so the reason and the check agree: `cond` fails if the conditions ' +
+          'that lead here are widened — it now carries the tenant term itself, so ' +
+          'deleting the comparison changes `cond` and is red on its own; `ret` fails if ' +
+          'the grant itself changes; and `region` — the span from the end of the ' +
+          'delegation call to the end of this return — fails if the tid comparison, the ' +
+          'kill switch, or the grant lookup between them is edited or DELETED. Removing ' +
+          'that boundary is therefore a red build in fact, not only in this sentence, ' +
+          'and now in two independent ways rather than one.',
       },
     ],
   ],
@@ -5696,35 +5705,22 @@ const TID_COMPARISON_PINS = new Map([
       ],
     },
   ],
-  [
-    'lib/auth/item-access.ts',
-    {
-      reason:
-        'the ITEM-LEVEL grant path (the F6 "Grant people access" share) — a second grant ' +
-        'reached only after the workspace resolver has DENIED, so it carries its own tenant ' +
-        'boundary. THAT BOUNDARY IS THE LENIENT ONE, and saying so is the point of this ' +
-        'clause: it is truthiness-guarded (`if (wsDoc?.tid && …)`) and it sits under an outer ' +
-        '`if (tid)`, so a caller whose session carries NO tid never reads the workspace ' +
-        'document at all and the item grant stands alone. #3840 and #3843 tightened its ' +
-        'structural twins to a POSITIVE match; this one was left as-is because it is reached ' +
-        'only behind an explicit per-item share and changing it is the item-access owner\'s ' +
-        'call — a residual, not a clearance. It is ALSO pinned by POSITION in ' +
-        'POST_DELEGATION_PINS above (`region`), which is what makes DELETING it a red build; ' +
-        'this entry is what makes ADDING a second comparison to that file one.',
-      // #3877-f2 — WITHOUT THIS, THE CONSOLIDATION NOTE CONTRADICTED THE REASON
-      // DIRECTLY ABOVE IT. Consolidating THIS site is not a rename: it swaps a
-      // deliberately LENIENT boundary for a POSITIVE one and narrows access.
-      onConsolidation:
-        'this site\'s comparison was LENIENT ON PURPOSE (see the reason above), so consolidating ' +
-        'it onto `sameTenantConfirmed` is a BEHAVIOUR CHANGE, not a rename: the item grant is ' +
-        'now refused whenever the caller session or the workspace doc carries no `tid`, which ' +
-        'are both live supported states. It is also pinned by POSITION in POST_DELEGATION_PINS ' +
-        '(`region`) — that pin quotes the comparison text and MUST be re-pinned in the same ' +
-        'commit or the build stays red for a second, unrelated-looking reason. Treat this as the ' +
-        'security review the reason calls for, not as a maintenance delete.',
-      exprs: ['wsDoc.tid !== tid'],
-    },
-  ],
+  // `lib/auth/item-access.ts` HAD AN ENTRY HERE AND NO LONGER NEEDS ONE (#3840).
+  //
+  // It pinned a raw `wsDoc.tid !== tid` — the last LENIENT tenant comparison in
+  // the tree, truthiness-guarded and sitting under an outer `if (tid)`, so a
+  // caller with no tid never read the workspace doc and the item grant stood
+  // alone. That site now calls the shared `sameTenantConfirmed` as a VALUE, so
+  // there is no private comparison left to pin, and this map's own
+  // `onConsolidation` note named deleting this entry as the required step of
+  // that consolidation. Leaving it would be the stale-pin failure the map
+  // guards against one level up: an entry that pre-clears a comparison the file
+  // no longer contains, and would silently bless a DIFFERENT one added later.
+  //
+  // The file is still pinned — by POSITION, in POST_DELEGATION_PINS above,
+  // whose `cond` now carries the `sameTenantConfirmed` term itself. So adding a
+  // second comparison to this file, or deleting the boundary, is still red;
+  // it is caught by the position pin rather than by an expression pin here.
 ]);
 
 const tidPinsUsed = new Set();
