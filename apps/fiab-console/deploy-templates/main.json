@@ -6,7 +6,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.45.15.27210",
-      "templateHash": "5093135030530525138"
+      "templateHash": "3669288242279134172"
     }
   },
   "definitions": {
@@ -961,7 +961,7 @@
       "type": "object",
       "defaultValue": {},
       "metadata": {
-        "description": "ADX cluster tuning bag (R0) — passed through to admin-plane/main.bicep adxConfig (typed there as adxConfigT). {} (default) = the shared admin-plane cluster keeps its Dev SKU: Dev(No SLA)_Standard_E2a_v4 on Commercial, which admin-plane substitutes with the LIVE-verified Dev(No SLA)_Standard_D11_v2 on GCC-High / IL5 where the E2a_v4 VM is not offered. Set adxSkuName to move the cluster OFF a SKU Azure has no capacity to start: `az kusto cluster start` answering InsufficientResourcesForSubscription is a capacity condition that no retry and no role grant clears, and until this bag was threaded NOTHING an operator could set reached the SKU — every lane deploys THIS root, and assigning adxConfig in a bicepparam failed BCP259 (#4122; GCC-High red on a Stopped adx-csa-loom-fmezxj since 2026-08-11). Also carries adxEnableOptimizedAutoscale / adxAutoscaleMinimum / adxAutoscaleMaximum. Future ADX cluster knobs ride THIS bag — never a new top-level param."
+        "description": "ADX cluster tuning bag (R0) — passed through to admin-plane/main.bicep adxConfig (typed there as adxConfigT). {} (default) = the shared admin-plane cluster keeps its Dev SKU Dev(No SLA)_Standard_E2a_v4 on Commercial / GCC. On GCC-High / IL5 admin-plane substitutes Standard_E8as_v5+1TB_PS instead, because Azure Government offers NO Dev(No SLA)/Basic-tier ADX SKU AT ALL — measured in-boundary 2026-08-27 (gov-adx-sku-probe run 33120409251: usgovvirginia offers 9 SKUs, usgovarizona 14, every one Standard tier, none restricted). The earlier substitute Dev(No SLA)_Standard_D11_v2, recorded here as LIVE-verified on 2026-07-10, is NOT in either list today and left a Stopped adx-csa-loom-fmezxj unstartable for 17 consecutive gcch runs (#4072, #4141). COST, because this is not a like-for-like swap and cannot be: Standard tier is a documented 2-NODE minimum, so a Gov cluster is two instances where the Dev node was one. Set adxSkuName to move the cluster OFF a SKU Azure has no capacity to start: `az kusto cluster start` answering InsufficientResourcesForSubscription is a capacity condition that no retry and no role grant clears, and until this bag was threaded NOTHING an operator could set reached the SKU — every lane deploys THIS root, and assigning adxConfig in a bicepparam failed BCP259 (#4122). Also carries adxEnableOptimizedAutoscale / adxAutoscaleMinimum / adxAutoscaleMaximum. Future ADX cluster knobs ride THIS bag — never a new top-level param."
       }
     },
     "loomEventHubEnabled": {
@@ -2579,7 +2579,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.45.15.27210",
-              "templateHash": "974272837264999118"
+              "templateHash": "7376873331744789539"
             }
           },
           "definitions": {
@@ -2709,15 +2709,21 @@
                     "Dev(No SLA)_Standard_D11_v2",
                     "Dev(No SLA)_Standard_E2a_v4",
                     "Standard_E16a_v4",
+                    "Standard_E16as_v5+3TB_PS",
+                    "Standard_E16as_v5+4TB_PS",
                     "Standard_E2a_v4",
                     "Standard_E2ads_v5",
                     "Standard_E4a_v4",
                     "Standard_E4ads_v5",
-                    "Standard_E8a_v4"
+                    "Standard_E80ids_v4",
+                    "Standard_E80ids_v4+32TB_PS",
+                    "Standard_E8a_v4",
+                    "Standard_E8as_v5+1TB_PS",
+                    "Standard_E8as_v5+2TB_PS"
                   ],
                   "nullable": true,
                   "metadata": {
-                    "description": "ADX cluster SKU. Dev SKU is ~$140/mo."
+                    "description": "ADX cluster SKU. Dev(No SLA) SKUs are ~$140/mo and are COMMERCIAL-ONLY — Azure Government offers no Dev/Basic-tier ADX SKU in usgovvirginia or usgovarizona (MEASURED 2026-08-27, gov-adx-sku-probe run 33120409251). The six Standard_E*as_v5 / E80ids_v4 entries are the intersection of what both Gov regions offer. Standard tier has a 2-node minimum, so a Gov cluster costs two instances, not one (#4141, #4072)."
                   }
                 },
                 "adxEnableOptimizedAutoscale": {
@@ -5255,7 +5261,7 @@
             "mcpMountPath": "/data",
             "mcpCaeName": "[format('cae-csa-loom-{0}', parameters('location'))]",
             "aiSearchDebugStorageName": "[take(format('sasrchdbg{0}', uniqueString(resourceGroup().id)), 24)]",
-            "effectiveAdxSkuName": "[if(and(or(equals(parameters('boundary'), 'GCC-High'), equals(parameters('boundary'), 'IL5')), equals(variables('adxSkuName'), 'Dev(No SLA)_Standard_E2a_v4')), 'Dev(No SLA)_Standard_D11_v2', variables('adxSkuName'))]",
+            "effectiveAdxSkuName": "[if(and(or(equals(parameters('boundary'), 'GCC-High'), equals(parameters('boundary'), 'IL5')), startsWith(variables('adxSkuName'), 'Dev(No SLA)_')), 'Standard_E8as_v5+1TB_PS', variables('adxSkuName'))]",
             "presidioImagesImported": false,
             "syntheticMonitorActive": "[and(and(variables('syntheticMonitorEnabled'), equals(parameters('containerPlatform'), 'containerApps')), parameters('deployAppsEnabled'))]",
             "uatResultsStoreActive": "[variables('syntheticMonitorEnabled')]",
@@ -8364,7 +8370,8 @@
                   },
                   "cmkIdentityId": {
                     "value": "[variables('cosmosCmkIdentityId')]"
-                  }
+                  },
+                  "deployerServicePrincipalId": "[if(variables('deployerIsInteractiveUser'), createObject('value', ''), createObject('value', deployer().objectId))]"
                 },
                 "template": {
                   "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
@@ -8373,7 +8380,7 @@
                     "_generator": {
                       "name": "bicep",
                       "version": "0.45.15.27210",
-                      "templateHash": "12229359588487691186"
+                      "templateHash": "1547640137092168000"
                     }
                   },
                   "parameters": {
@@ -8419,6 +8426,13 @@
                       "defaultValue": false,
                       "metadata": {
                         "description": "Skip role-assignment grants (re-deploy where grants already exist)."
+                      }
+                    },
+                    "deployerServicePrincipalId": {
+                      "type": "string",
+                      "defaultValue": "",
+                      "metadata": {
+                        "description": "Object id of the deploying principal, passed ONLY when it is non-interactive (a CI service principal). Grants the Gov Brain-scan lane its narrow Cosmos data-plane access. Empty = no grant, which is the default and the interactive-deploy case."
                       }
                     },
                     "complianceTags": {
@@ -8521,6 +8535,12 @@
                         "name": "function-registry",
                         "partitionKey": "/tenantId"
                       }
+                    ],
+                    "isAzureUSGovernment": "[equals(environment().suffixes.storage, 'core.usgovcloudapi.net')]",
+                    "grantBrainScanDataPlane": "[and(and(variables('isAzureUSGovernment'), not(empty(parameters('deployerServicePrincipalId')))), not(parameters('skipRoleGrants')))]",
+                    "brainScanContainers": [
+                      "brain-graph-versions",
+                      "brain-findings"
                     ]
                   },
                   "resources": [
@@ -8615,6 +8635,30 @@
                             "kind": "Hash"
                           },
                           "defaultTtl": 7776000,
+                          "indexingPolicy": {
+                            "indexingMode": "consistent",
+                            "automatic": true
+                          }
+                        }
+                      },
+                      "dependsOn": [
+                        "[resourceId('Microsoft.DocumentDB/databaseAccounts/sqlDatabases', parameters('accountName'), variables('loomDatabase'))]"
+                      ]
+                    },
+                    {
+                      "type": "Microsoft.DocumentDB/databaseAccounts/sqlDatabases/containers",
+                      "apiVersion": "2024-12-01-preview",
+                      "name": "[format('{0}/{1}/{2}', parameters('accountName'), variables('loomDatabase'), 'brain-findings')]",
+                      "properties": {
+                        "resource": {
+                          "id": "brain-findings",
+                          "partitionKey": {
+                            "paths": [
+                              "/estateId"
+                            ],
+                            "kind": "Hash"
+                          },
+                          "defaultTtl": -1,
                           "indexingPolicy": {
                             "indexingMode": "consistent",
                             "automatic": true
@@ -8728,6 +8772,64 @@
                       },
                       "dependsOn": [
                         "[resourceId('Microsoft.DocumentDB/databaseAccounts', parameters('accountName'))]"
+                      ]
+                    },
+                    {
+                      "condition": "[variables('grantBrainScanDataPlane')]",
+                      "type": "Microsoft.DocumentDB/databaseAccounts/sqlRoleDefinitions",
+                      "apiVersion": "2024-12-01-preview",
+                      "name": "[format('{0}/{1}', parameters('accountName'), guid(resourceId('Microsoft.DocumentDB/databaseAccounts', parameters('accountName')), 'loom-brain-scan-metadata-reader'))]",
+                      "properties": {
+                        "roleName": "Loom Brain Scan Metadata Reader",
+                        "type": "CustomRole",
+                        "assignableScopes": [
+                          "[resourceId('Microsoft.DocumentDB/databaseAccounts', parameters('accountName'))]"
+                        ],
+                        "permissions": [
+                          {
+                            "dataActions": [
+                              "Microsoft.DocumentDB/databaseAccounts/readMetadata"
+                            ]
+                          }
+                        ]
+                      },
+                      "dependsOn": [
+                        "[resourceId('Microsoft.DocumentDB/databaseAccounts', parameters('accountName'))]"
+                      ]
+                    },
+                    {
+                      "condition": "[variables('grantBrainScanDataPlane')]",
+                      "type": "Microsoft.DocumentDB/databaseAccounts/sqlRoleAssignments",
+                      "apiVersion": "2024-12-01-preview",
+                      "name": "[format('{0}/{1}', parameters('accountName'), guid(resourceId('Microsoft.DocumentDB/databaseAccounts', parameters('accountName')), parameters('deployerServicePrincipalId'), 'loom-brain-scan-metadata-reader'))]",
+                      "properties": {
+                        "roleDefinitionId": "[resourceId('Microsoft.DocumentDB/databaseAccounts/sqlRoleDefinitions', parameters('accountName'), guid(resourceId('Microsoft.DocumentDB/databaseAccounts', parameters('accountName')), 'loom-brain-scan-metadata-reader'))]",
+                        "principalId": "[parameters('deployerServicePrincipalId')]",
+                        "scope": "[resourceId('Microsoft.DocumentDB/databaseAccounts', parameters('accountName'))]"
+                      },
+                      "dependsOn": [
+                        "[resourceId('Microsoft.DocumentDB/databaseAccounts', parameters('accountName'))]",
+                        "[resourceId('Microsoft.DocumentDB/databaseAccounts/sqlRoleDefinitions', parameters('accountName'), guid(resourceId('Microsoft.DocumentDB/databaseAccounts', parameters('accountName')), 'loom-brain-scan-metadata-reader'))]"
+                      ]
+                    },
+                    {
+                      "copy": {
+                        "name": "brainScanDataAssignments",
+                        "count": "[length(variables('brainScanContainers'))]"
+                      },
+                      "condition": "[variables('grantBrainScanDataPlane')]",
+                      "type": "Microsoft.DocumentDB/databaseAccounts/sqlRoleAssignments",
+                      "apiVersion": "2024-12-01-preview",
+                      "name": "[format('{0}/{1}', parameters('accountName'), guid(resourceId('Microsoft.DocumentDB/databaseAccounts', parameters('accountName')), parameters('deployerServicePrincipalId'), variables('brainScanContainers')[copyIndex()], '00000000-0000-0000-0000-000000000002'))]",
+                      "properties": {
+                        "roleDefinitionId": "[format('{0}/sqlRoleDefinitions/00000000-0000-0000-0000-000000000002', resourceId('Microsoft.DocumentDB/databaseAccounts', parameters('accountName')))]",
+                        "principalId": "[parameters('deployerServicePrincipalId')]",
+                        "scope": "[format('{0}/dbs/{1}/colls/{2}', resourceId('Microsoft.DocumentDB/databaseAccounts', parameters('accountName')), variables('loomDatabase'), variables('brainScanContainers')[copyIndex()])]"
+                      },
+                      "dependsOn": [
+                        "[resourceId('Microsoft.DocumentDB/databaseAccounts', parameters('accountName'))]",
+                        "[resourceId('Microsoft.DocumentDB/databaseAccounts/sqlDatabases/containers', parameters('accountName'), variables('loomDatabase'), 'brain-findings')]",
+                        "[resourceId('Microsoft.DocumentDB/databaseAccounts/sqlDatabases/containers', parameters('accountName'), variables('loomDatabase'), 'brain-graph-versions')]"
                       ]
                     }
                   ],
@@ -13439,7 +13541,7 @@
                     "_generator": {
                       "name": "bicep",
                       "version": "0.45.15.27210",
-                      "templateHash": "9484973057605582532"
+                      "templateHash": "6471458969559386897"
                     }
                   },
                   "parameters": {
@@ -13467,28 +13569,35 @@
                         "Standard_E8a_v4",
                         "Standard_E16a_v4",
                         "Standard_E2ads_v5",
-                        "Standard_E4ads_v5"
+                        "Standard_E4ads_v5",
+                        "Standard_E8as_v5+1TB_PS",
+                        "Standard_E8as_v5+2TB_PS",
+                        "Standard_E16as_v5+3TB_PS",
+                        "Standard_E16as_v5+4TB_PS",
+                        "Standard_E80ids_v4",
+                        "Standard_E80ids_v4+32TB_PS"
                       ],
                       "metadata": {
-                        "description": "SKU name. The E*a_v4 family is the Commercial default; the E*ads_v5 family is the LIVE-verified Azure Government (usgovvirginia) equivalent (the v4 family is not offered there). Dev(No SLA)_Standard_D11_v2 is the Gov-available Dev SKU used as the tier-preserving substitute for the Commercial Dev default on GCC-High / IL5 (see admin-plane/main.bicep effectiveAdxSkuName)."
+                        "description": "SKU name. The E*a_v4 family is the Commercial default. The Gov entries below were MEASURED against the Kusto RP in Azure Government on 2026-08-27 (gov-adx-sku-probe, run 33120409251) — not carried forward from a prior note. usgovvirginia offers 9 SKUs and usgovarizona 14; the six listed here are the intersection, i.e. the ones that work in EVERY Gov region this estate targets, so one value needs no second regional decision. CRITICAL: Azure Government offers NO Dev(No SLA)/Basic-tier ADX SKU in either region, so the two Dev entries are COMMERCIAL-ONLY and a Gov deploy that lands on one cannot start (#4141, #4072)."
                       }
                     },
                     "skuTier": {
                       "type": "string",
-                      "defaultValue": "Basic",
+                      "defaultValue": "[if(startsWith(parameters('skuName'), 'Dev(No SLA)_'), 'Basic', 'Standard')]",
                       "allowedValues": [
                         "Basic",
                         "Standard"
                       ],
                       "metadata": {
-                        "description": "Tier — Basic for Dev SKUs, Standard for the production SKUs."
+                        "description": "Tier. DERIVED from skuName by default — Basic for Dev(No SLA) SKUs, Standard otherwise. Override only with a reason."
                       }
                     },
                     "skuCapacity": {
                       "type": "int",
-                      "defaultValue": 1,
+                      "defaultValue": "[if(startsWith(parameters('skuName'), 'Dev(No SLA)_'), 1, 2)]",
+                      "minValue": 1,
                       "metadata": {
-                        "description": "Capacity (instance count). 1 for Dev SKUs."
+                        "description": "Capacity (instance count). DERIVED from skuName by default — 1 for Dev(No SLA) SKUs, 2 for Standard tier, which is the documented minimum node count for a production (with SLA) cluster."
                       }
                     },
                     "enableOptimizedAutoscale": {
@@ -30015,7 +30124,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.45.15.27210",
-              "templateHash": "9744095349749879047"
+              "templateHash": "10438238567886389002"
             }
           },
           "functions": [
@@ -35832,7 +35941,7 @@
                     "_generator": {
                       "name": "bicep",
                       "version": "0.45.15.27210",
-                      "templateHash": "6949681123683155163"
+                      "templateHash": "7881732571790807215"
                     }
                   },
                   "parameters": {
@@ -36218,6 +36327,11 @@
                         "name": "brain-graph-versions",
                         "partitionKey": "/estateId",
                         "ttl": 7776000
+                      },
+                      {
+                        "name": "brain-findings",
+                        "partitionKey": "/estateId",
+                        "ttl": -1
                       }
                     ]
                   },
@@ -39868,7 +39982,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.45.15.27210",
-              "templateHash": "9744095349749879047"
+              "templateHash": "10438238567886389002"
             }
           },
           "functions": [
@@ -45685,7 +45799,7 @@
                     "_generator": {
                       "name": "bicep",
                       "version": "0.45.15.27210",
-                      "templateHash": "6949681123683155163"
+                      "templateHash": "7881732571790807215"
                     }
                   },
                   "parameters": {
@@ -46071,6 +46185,11 @@
                         "name": "brain-graph-versions",
                         "partitionKey": "/estateId",
                         "ttl": 7776000
+                      },
+                      {
+                        "name": "brain-findings",
+                        "partitionKey": "/estateId",
+                        "ttl": -1
                       }
                     ]
                   },
@@ -49886,7 +50005,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.45.15.27210",
-              "templateHash": "9744095349749879047"
+              "templateHash": "10438238567886389002"
             }
           },
           "functions": [
@@ -55703,7 +55822,7 @@
                     "_generator": {
                       "name": "bicep",
                       "version": "0.45.15.27210",
-                      "templateHash": "6949681123683155163"
+                      "templateHash": "7881732571790807215"
                     }
                   },
                   "parameters": {
@@ -56089,6 +56208,11 @@
                         "name": "brain-graph-versions",
                         "partitionKey": "/estateId",
                         "ttl": 7776000
+                      },
+                      {
+                        "name": "brain-findings",
+                        "partitionKey": "/estateId",
+                        "ttl": -1
                       }
                     ]
                   },

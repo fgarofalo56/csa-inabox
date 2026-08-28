@@ -16378,10 +16378,10 @@
           "facet": {
             "kind": "publication",
             "module": "scripts/brain/extract-security-graph.mjs",
-            "declaredSinkCount": 15,
+            "declaredSinkCount": 19,
             "sinks": [
               {
-                "id": "console:member:177",
+                "id": "console:member:188",
                 "surface": "console",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -16391,7 +16391,7 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "console:member:189",
+                "id": "console:member:200",
                 "surface": "console",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -16401,7 +16401,7 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "console:member:215",
+                "id": "console:member:226",
                 "surface": "console",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -16411,7 +16411,7 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "console:member:229",
+                "id": "console:member:240",
                 "surface": "console",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -16421,7 +16421,7 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "console:member:246",
+                "id": "console:member:258",
                 "surface": "console",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -16431,7 +16431,7 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "console:member:254",
+                "id": "console:member:262",
                 "surface": "console",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -16441,7 +16441,7 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "console:member:265",
+                "id": "console:member:286",
                 "surface": "console",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -16451,7 +16451,7 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "console:member:267",
+                "id": "console:member:292",
                 "surface": "console",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -16461,7 +16461,7 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "console:member:269",
+                "id": "console:member:300",
                 "surface": "console",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -16471,7 +16471,7 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "console:member:270",
+                "id": "console:member:304",
                 "surface": "console",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -16481,7 +16481,7 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "console:member:271",
+                "id": "console:member:316",
                 "surface": "console",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -16491,7 +16491,7 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "console:member:272",
+                "id": "console:member:318",
                 "surface": "console",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -16501,7 +16501,7 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "console:member:273",
+                "id": "console:member:320",
                 "surface": "console",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -16511,7 +16511,7 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "console:member:274",
+                "id": "console:member:321",
                 "surface": "console",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -16521,7 +16521,47 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "inherited-fd:spawn-stdio:103",
+                "id": "console:member:322",
+                "surface": "console",
+                "accessPath": "member",
+                "wholeExpressionBounded": false,
+                "boundary": null,
+                "unredactedByDesign": false,
+                "carriesSensitive": false,
+                "childProvenRedacting": null
+              },
+              {
+                "id": "console:member:323",
+                "surface": "console",
+                "accessPath": "member",
+                "wholeExpressionBounded": false,
+                "boundary": null,
+                "unredactedByDesign": false,
+                "carriesSensitive": false,
+                "childProvenRedacting": null
+              },
+              {
+                "id": "console:member:324",
+                "surface": "console",
+                "accessPath": "member",
+                "wholeExpressionBounded": false,
+                "boundary": null,
+                "unredactedByDesign": false,
+                "carriesSensitive": false,
+                "childProvenRedacting": null
+              },
+              {
+                "id": "console:member:325",
+                "surface": "console",
+                "accessPath": "member",
+                "wholeExpressionBounded": false,
+                "boundary": null,
+                "unredactedByDesign": false,
+                "carriesSensitive": false,
+                "childProvenRedacting": null
+              },
+              {
+                "id": "inherited-fd:spawn-stdio:114",
                 "surface": "inherited-fd",
                 "accessPath": "spawn-stdio",
                 "wholeExpressionBounded": false,
@@ -31974,10 +32014,10 @@
           "facet": {
             "kind": "publication",
             "module": "scripts/ci/check-standalone-vitest-suites.mjs",
-            "declaredSinkCount": 16,
+            "declaredSinkCount": 18,
             "sinks": [
               {
-                "id": "stdout:member:203",
+                "id": "stdout:member:437",
                 "surface": "stdout",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -31987,7 +32027,7 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "stderr:member:204",
+                "id": "stderr:member:438",
                 "surface": "stderr",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -31997,7 +32037,7 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "console:member:213",
+                "id": "console:member:384",
                 "surface": "console",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -32007,7 +32047,7 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "console:member:222",
+                "id": "console:member:447",
                 "surface": "console",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -32017,7 +32057,7 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "console:member:232",
+                "id": "console:member:456",
                 "surface": "console",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -32027,7 +32067,7 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "console:member:233",
+                "id": "console:member:466",
                 "surface": "console",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -32037,7 +32077,7 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "console:member:249",
+                "id": "console:member:467",
                 "surface": "console",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -32047,7 +32087,7 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "console:member:252",
+                "id": "console:member:483",
                 "surface": "console",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -32057,7 +32097,7 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "console:member:257",
+                "id": "console:member:489",
                 "surface": "console",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -32067,7 +32107,7 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "console:member:262",
+                "id": "console:member:511",
                 "surface": "console",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -32077,7 +32117,7 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "console:member:269",
+                "id": "console:member:519",
                 "surface": "console",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -32087,7 +32127,7 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "console:member:277",
+                "id": "console:member:522",
                 "surface": "console",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -32097,7 +32137,7 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "console:member:286",
+                "id": "console:member:528",
                 "surface": "console",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -32107,7 +32147,7 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "console:member:293",
+                "id": "console:member:535",
                 "surface": "console",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -32117,7 +32157,7 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "console:member:296",
+                "id": "console:member:543",
                 "surface": "console",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -32127,13 +32167,33 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "inherited-fd:spawn-stdio:191",
-                "surface": "inherited-fd",
-                "accessPath": "spawn-stdio",
+                "id": "console:member:552",
+                "surface": "console",
+                "accessPath": "member",
                 "wholeExpressionBounded": false,
                 "boundary": null,
                 "unredactedByDesign": false,
-                "carriesSensitive": true,
+                "carriesSensitive": false,
+                "childProvenRedacting": null
+              },
+              {
+                "id": "console:member:559",
+                "surface": "console",
+                "accessPath": "member",
+                "wholeExpressionBounded": false,
+                "boundary": null,
+                "unredactedByDesign": false,
+                "carriesSensitive": false,
+                "childProvenRedacting": null
+              },
+              {
+                "id": "console:member:562",
+                "surface": "console",
+                "accessPath": "member",
+                "wholeExpressionBounded": false,
+                "boundary": null,
+                "unredactedByDesign": false,
+                "carriesSensitive": false,
                 "childProvenRedacting": null
               }
             ]
@@ -33899,10 +33959,10 @@
           "facet": {
             "kind": "publication",
             "module": "scripts/ci/check-workspace-credential-adoption.mjs",
-            "declaredSinkCount": 10,
+            "declaredSinkCount": 21,
             "sinks": [
               {
-                "id": "console:member:78",
+                "id": "console:member:208",
                 "surface": "console",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -33912,7 +33972,7 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "console:member:81",
+                "id": "console:member:212",
                 "surface": "console",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -33922,7 +33982,7 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "console:member:82",
+                "id": "console:member:261",
                 "surface": "console",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -33932,7 +33992,7 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "console:member:83",
+                "id": "console:member:264",
                 "surface": "console",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -33942,7 +34002,7 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "console:member:84",
+                "id": "console:member:304",
                 "surface": "console",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -33952,7 +34012,7 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "console:member:85",
+                "id": "console:member:313",
                 "surface": "console",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -33962,7 +34022,7 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "console:member:86",
+                "id": "console:member:314",
                 "surface": "console",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -33972,7 +34032,7 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "console:member:88",
+                "id": "console:member:315",
                 "surface": "console",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -33982,7 +34042,7 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "console:member:94",
+                "id": "console:member:316",
                 "surface": "console",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -33992,7 +34052,117 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "console:member:96",
+                "id": "console:member:317",
+                "surface": "console",
+                "accessPath": "member",
+                "wholeExpressionBounded": false,
+                "boundary": null,
+                "unredactedByDesign": false,
+                "carriesSensitive": false,
+                "childProvenRedacting": null
+              },
+              {
+                "id": "console:member:318",
+                "surface": "console",
+                "accessPath": "member",
+                "wholeExpressionBounded": false,
+                "boundary": null,
+                "unredactedByDesign": false,
+                "carriesSensitive": false,
+                "childProvenRedacting": null
+              },
+              {
+                "id": "console:member:320",
+                "surface": "console",
+                "accessPath": "member",
+                "wholeExpressionBounded": false,
+                "boundary": null,
+                "unredactedByDesign": false,
+                "carriesSensitive": false,
+                "childProvenRedacting": null
+              },
+              {
+                "id": "console:member:326",
+                "surface": "console",
+                "accessPath": "member",
+                "wholeExpressionBounded": false,
+                "boundary": null,
+                "unredactedByDesign": false,
+                "carriesSensitive": false,
+                "childProvenRedacting": null
+              },
+              {
+                "id": "console:member:327",
+                "surface": "console",
+                "accessPath": "member",
+                "wholeExpressionBounded": false,
+                "boundary": null,
+                "unredactedByDesign": false,
+                "carriesSensitive": false,
+                "childProvenRedacting": null
+              },
+              {
+                "id": "console:member:328",
+                "surface": "console",
+                "accessPath": "member",
+                "wholeExpressionBounded": false,
+                "boundary": null,
+                "unredactedByDesign": false,
+                "carriesSensitive": false,
+                "childProvenRedacting": null
+              },
+              {
+                "id": "console:member:329",
+                "surface": "console",
+                "accessPath": "member",
+                "wholeExpressionBounded": false,
+                "boundary": null,
+                "unredactedByDesign": false,
+                "carriesSensitive": false,
+                "childProvenRedacting": null
+              },
+              {
+                "id": "console:member:330",
+                "surface": "console",
+                "accessPath": "member",
+                "wholeExpressionBounded": false,
+                "boundary": null,
+                "unredactedByDesign": false,
+                "carriesSensitive": false,
+                "childProvenRedacting": null
+              },
+              {
+                "id": "console:member:331",
+                "surface": "console",
+                "accessPath": "member",
+                "wholeExpressionBounded": false,
+                "boundary": null,
+                "unredactedByDesign": false,
+                "carriesSensitive": false,
+                "childProvenRedacting": null
+              },
+              {
+                "id": "console:member:332",
+                "surface": "console",
+                "accessPath": "member",
+                "wholeExpressionBounded": false,
+                "boundary": null,
+                "unredactedByDesign": false,
+                "carriesSensitive": false,
+                "childProvenRedacting": null
+              },
+              {
+                "id": "console:member:337",
+                "surface": "console",
+                "accessPath": "member",
+                "wholeExpressionBounded": false,
+                "boundary": null,
+                "unredactedByDesign": false,
+                "carriesSensitive": false,
+                "childProvenRedacting": null
+              },
+              {
+                "id": "console:member:339",
                 "surface": "console",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -47260,10 +47430,10 @@
     },
     "meta": {
       "generatorVersion": 1,
-      "generatedAt": "2026-08-27T17:27:32.540Z",
-      "commit": "0d2d28f5b2773b4d8bc95f4b65df9da0076b537e",
-      "inputsDigest": "0d3dccaf8dfc02fc",
-      "filesScanned": 2056,
+      "generatedAt": "2026-08-28T02:42:04.539Z",
+      "commit": "ad4405af34763f63b2bca7fce123e75cae1b1739",
+      "inputsDigest": "ae00294e9e01b9c9",
+      "filesScanned": 2059,
       "scanScopes": [
         {
           "scope": "app/**/route.ts (console BFF routes)",
@@ -47272,7 +47442,7 @@
         },
         {
           "scope": ".github/**, scripts/** (CI publication surfaces)",
-          "filesMatched": 362,
+          "filesMatched": 365,
           "nodesEmitted": 214
         }
       ],
@@ -47423,7 +47593,7 @@
         },
         {
           "subject": "scripts/brain/extract-security-graph.mjs",
-          "reason": "module declares no PUBLICATION-SINKS marker, so C4's declared-count drift check is INERT for it (declaredSinkCount is set to the observed 15). Recorded so the inertness is countable rather than invisible — a check that cannot fail must not be mistaken for a check that passed."
+          "reason": "module declares no PUBLICATION-SINKS marker, so C4's declared-count drift check is INERT for it (declaredSinkCount is set to the observed 19). Recorded so the inertness is countable rather than invisible — a check that cannot fail must not be mistaken for a check that passed."
         },
         {
           "subject": "scripts/ci/__tests__/commit-message-parses.test.mjs",
@@ -47911,7 +48081,7 @@
         },
         {
           "subject": "scripts/ci/check-standalone-vitest-suites.mjs",
-          "reason": "module declares no PUBLICATION-SINKS marker, so C4's declared-count drift check is INERT for it (declaredSinkCount is set to the observed 16). Recorded so the inertness is countable rather than invisible — a check that cannot fail must not be mistaken for a check that passed."
+          "reason": "module declares no PUBLICATION-SINKS marker, so C4's declared-count drift check is INERT for it (declaredSinkCount is set to the observed 18). Recorded so the inertness is countable rather than invisible — a check that cannot fail must not be mistaken for a check that passed."
         },
         {
           "subject": "scripts/ci/check-teardown-not-on-schedule.mjs",
@@ -47971,7 +48141,7 @@
         },
         {
           "subject": "scripts/ci/check-workspace-credential-adoption.mjs",
-          "reason": "module declares no PUBLICATION-SINKS marker, so C4's declared-count drift check is INERT for it (declaredSinkCount is set to the observed 10). Recorded so the inertness is countable rather than invisible — a check that cannot fail must not be mistaken for a check that passed."
+          "reason": "module declares no PUBLICATION-SINKS marker, so C4's declared-count drift check is INERT for it (declaredSinkCount is set to the observed 21). Recorded so the inertness is countable rather than invisible — a check that cannot fail must not be mistaken for a check that passed."
         },
         {
           "subject": "scripts/ci/classify-reindex-result.mjs",
@@ -48271,15 +48441,15 @@
         },
         {
           "subject": "scripts/** (*.ps1, *.py, *.sh, *.yaml)",
-          "reason": "179 file(s) under a SCANNED root were seen and NOT read: this extractor lexes JavaScript/TypeScript only, so a workflow YAML `run:` block, a shell step or a Python script is outside the examined population even though it publishes to the same PUBLIC Actions log. C4 output therefore says nothing about these files. Recorded with a count so the narrowing is countable rather than inferred from a scope string — which is how the `.github/**` gap survived until 2026-08-24."
+          "reason": "181 file(s) under a SCANNED root were seen and NOT read: this extractor lexes JavaScript/TypeScript only, so a workflow YAML `run:` block, a shell step or a Python script is outside the examined population even though it publishes to the same PUBLIC Actions log. C4 output therefore says nothing about these files. Recorded with a count so the narrowing is countable rather than inferred from a scope string — which is how the `.github/**` gap survived until 2026-08-24."
         },
         {
           "subject": ".github/** (*.py, *.sh, *.yaml, *.yml)",
-          "reason": "141 file(s) under a SCANNED root were seen and NOT read: this extractor lexes JavaScript/TypeScript only, so a workflow YAML `run:` block, a shell step or a Python script is outside the examined population even though it publishes to the same PUBLIC Actions log. C4 output therefore says nothing about these files. Recorded with a count so the narrowing is countable rather than inferred from a scope string — which is how the `.github/**` gap survived until 2026-08-24."
+          "reason": "143 file(s) under a SCANNED root were seen and NOT read: this extractor lexes JavaScript/TypeScript only, so a workflow YAML `run:` block, a shell step or a Python script is outside the examined population even though it publishes to the same PUBLIC Actions log. C4 output therefore says nothing about these files. Recorded with a count so the narrowing is countable rather than inferred from a scope string — which is how the `.github/**` gap survived until 2026-08-24."
         },
         {
           "subject": "C4 expression arm (carriesSensitive)",
-          "reason": "matched 0 of 2218 non-spawn publication sink(s), so every C4 finding on this tree comes from the spawn-stdio arm. The expression arm is INERT here and its correctness is therefore unexercised by the real corpus — C4 output is not evidence that no unbounded sensitive write exists."
+          "reason": "matched 0 of 2236 non-spawn publication sink(s), so every C4 finding on this tree comes from the spawn-stdio arm. The expression arm is INERT here and its correctness is therefore unexercised by the real corpus — C4 output is not evidence that no unbounded sensitive write exists."
         }
       ]
     }

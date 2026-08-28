@@ -45,12 +45,26 @@ import {
   listArmedFaults,
   dependencyChaosEnabled,
   isFaultPoint,
+  setFaultAuditSink,
   FAULT_POINTS,
   FAULT_META,
   MAX_FAULT_TTL_MS,
   MAX_FAULT_OCCURRENCES,
 } from '@/lib/resilience/fault-injection';
 import { RESILIENCE_MATRIX, auditBreakerCoverage } from '@/lib/resilience/breaker-audit';
+
+// ── The per-injection audit sink (#4040) ─────────────────────────────────────
+//
+// `fault-injection.ts` deliberately holds ZERO static imports — it is reached
+// from `fetch-with-timeout.ts`, which sits inside the Brain scan CLI's emit
+// closure, and that build declares no `paths` mapping. It used to reach the
+// audit stream through `await import('@/lib/admin/audit-stream')`; `tsc`
+// resolves a literal dynamic specifier, so that alias was a hard TS2307 there.
+//
+// Wiring happens at MODULE LOAD, not inside the `arm` handler: this route is the
+// only path to `armFault`, so it cannot serve a request without having been
+// loaded, and there is no call site to forget in a later refactor.
+setFaultAuditSink(emitAuditEvent);
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';

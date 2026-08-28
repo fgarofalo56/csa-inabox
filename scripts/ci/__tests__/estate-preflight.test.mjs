@@ -738,6 +738,319 @@ test('CONTROL: the shared az-failure classifier is actually imported', () => {
   assert.match(src, /from '\.\/_az-failure-class\.mjs'/);
 });
 
+// ── 9. THE CAPACITY REMEDIATION MUST NAME A LEVER THAT ACTUALLY MOVES ───────
+//
+// MEASURED (deploy-fiab-gcch run 32958070797, 2026-08-26 — the 5th consecutive
+// class-A failure and the 17th consecutive red run since 2026-08-11):
+//
+//   ##[error]The start of ADX cluster 'adx-csa-loom-fmezxj' was REJECTED after 1
+//   attempt(s) ... az classified this as: capacity. REMEDIATION: ... Either pick
+//   a SKU that has capacity in the region (adx-cluster.bicep `adxSku`) ...
+//
+// The classification is RIGHT — the raw az error is
+// `(InsufficientResourcesForSubscription)`, and no retry or role grant resolves
+// that. The REMEDIATION is what this section pins, because lever after lever
+// proposed for it turned out to be unreachable:
+//
+//   1. `adxSku` is not a parameter anywhere. adx-cluster.bicep declares
+//      `param skuName`; admin-plane/main.bicep declares the var `adxSkuName`.
+//   2. adx-cluster.bicep's `skuName` DEFAULT is dead on every path that reaches
+//      this error, because admin-plane/main.bicep always passes `skuName:`
+//      explicitly (control below). Editing that file changes nothing.
+//   3. On GCC-High / IL5 the `effectiveAdxSkuName` boundary guard rewrites the
+//      Commercial Dev default — but ONLY that default. An explicitly-set value
+//      passes through unchanged, which is what makes lever 4 work now.
+//      (An earlier revision of this comment said "regardless". That was wrong:
+//      the guard is an equality test against the Commercial default, not an
+//      unconditional overwrite. The message was corrected with it.)
+//   4. `adxConfig.adxSkuName` in the boundary .bicepparam WAS unreachable, and
+//      is now the real lever. HISTORY, because the receipt below is worth
+//      keeping and would otherwise read as a present-tense claim:
+//
+//      UNTIL #4126 (ef6cf727e3), `adxConfig` was a param of the MODULE
+//      (admin-plane/main.bicep) only. Every lane's .bicepparam is
+//      `using '../main.bicep'`, the ROOT template, which declared no
+//      `adxConfig` and passed none to the adminPlane module — so it always took
+//      its `{}` default, and assigning it in the param file did not change the
+//      SKU, it stopped the deploy from compiling.
+//
+//      RECEIPT AS MEASURED THEN (local `az bicep build-params`, no Azure
+//      contact), each probe a byte-copy of the real params/gcc-high.bicepparam
+//      plus ONE assignment:
+//        baseline, unmodified ................................. RC=0
+//        + hubAdxClusterPrincipalId (declared on root) ......... RC=0   <- positive control
+//        + adxEnabled (declared, already assigned) ............. RC=1 BCP028 (duplicate)
+//        + adxConfig .......................................... RC=1 BCP259
+//        + adxSkuName ......................................... RC=1 BCP259
+//      BCP259 is "assigned in the params file without being declared in the
+//      Bicep file". The positive control returning RC=0 is what makes the two
+//      BCP259s a measurement rather than "any append fails".
+//
+//      #4126 THEN BUILT THE LEVER: main.bicep:420 declares
+//      `param adxConfig object = {}` and :1264 threads `adxConfig: adxConfig`
+//      into the adminPlane module. So a boundary .bicepparam CAN now carry the
+//      SKU, the BCP259 above no longer reproduces, and the CONVERSE arm in the
+//      control below is what caught the message still claiming otherwise.
+//
+// So there are now TWO different actions, and the remediation names both
+// because they are not substitutes for each other:
+//   * to UNBLOCK THIS RUN — the LIVE cluster, changed out-of-band, because this
+//     preflight aborts before the apply;
+//   * to make it DURABLE — `adxConfig.adxSkuName` in the boundary .bicepparam,
+//     or this lane's own apply asks for the template SKU again and reverts it.
+//
+// This is deploy-integrity.md R7 applied to a remediation rather than to a
+// cause: a message must not assert a fix it did not establish would work — and,
+// as this comment block itself had to learn, neither may the comment that
+// justifies it.
+
+const BICEP_SOURCES = [
+  'platform/fiab/bicep/modules/admin-plane/adx-cluster.bicep',
+  'platform/fiab/bicep/modules/admin-plane/main.bicep',
+  'platform/fiab/bicep/params/gcc-high.bicepparam',
+];
+
+// The .bicepparam the GCC-High lane actually deploys (deploy-fiab-gcch.yml
+// passes it as --parameters alongside --template-file .../bicep/main.bicep).
+const LANE_PARAM_FILE = 'platform/fiab/bicep/params/gcc-high.bicepparam';
+
+// `_` and `-` are IN the class deliberately. With the previous
+// /`([A-Za-z][A-Za-z0-9.]*)`/ a snake_case or kebab-case identifier extracted to
+// NOTHING, so `adx_sku_name` — an identifier that exists nowhere — slipped past
+// the existence loop entirely unless EVERY identifier in the message was
+// snake/kebab (which is all the population assert could catch).
+const IDENT_RE = /`([A-Za-z][A-Za-z0-9._-]*)`/g;
+
+/**
+ * Resolve what a .bicepparam can ACTUALLY set: follow its `using` to the
+ * template it targets and collect that template's declared params.
+ *
+ * This is the fix for the control that let PR #4115's own message through. The
+ * old version joined three bicep files into one haystack and word-matched the
+ * dotted leaf, so a property of a MODULE's param type satisfied a claim about
+ * what is settable in a ROOT-targeted param file. Following `using` cannot be
+ * defeated that way, because it reads whichever layer is genuinely deployed.
+ */
+function paramTargetOf(paramFileRel) {
+  const abs = path.join(REPO_ROOT, paramFileRel);
+  const src = fs.readFileSync(abs, 'utf8');
+  const using = src.match(/^\s*using\s+'([^']+)'/m);
+  assert.ok(using, `${paramFileRel} has no \`using\` statement, so its deploy target cannot be resolved`);
+  const targetAbs = path.resolve(path.dirname(abs), using[1]);
+  assert.ok(fs.existsSync(targetAbs), `${paramFileRel} targets '${using[1]}', which does not exist`);
+  const target = fs.readFileSync(targetAbs, 'utf8');
+  const declared = new Set([...target.matchAll(/^param\s+([A-Za-z_][A-Za-z0-9_]*)/gm)].map((m) => m[1]));
+  return { rel: using[1], src: target, declared };
+}
+
+test('every bicep identifier the CAPACITY remediation names actually exists', () => {
+  const text = remediationFor('capacity', '/subscriptions/x/clusters/c');
+  const named = [...text.matchAll(IDENT_RE)].map((m) => m[1]);
+
+  // POPULATION. A remediation that names no identifier at all would satisfy the
+  // loop below vacuously — that is the weakening this guards against.
+  assert.ok(
+    named.length > 0,
+    'the capacity remediation names no bicep identifier at all, so it points the operator at nothing',
+  );
+
+  const haystack = BICEP_SOURCES.map((rel) => fs.readFileSync(path.join(REPO_ROOT, rel), 'utf8')).join('\n');
+  for (const ident of named) {
+    // Match the LEAF of a dotted path (adxConfig.adxSkuName -> adxSkuName), since
+    // bicep declares the property, not the dotted access.
+    const leaf = ident.split('.').pop();
+    assert.ok(
+      new RegExp(`\\b${leaf}\\b`).test(haystack),
+      `the capacity remediation names \`${ident}\`, but no bicep source declares '${leaf}' — ` +
+        'an operator following this remediation edits something that does not exist',
+    );
+  }
+});
+
+test('the CAPACITY remediation names an action that actually reaches the SKU', () => {
+  const text = remediationFor('capacity', '/subscriptions/x/clusters/c');
+  // The ONLY thing that unblocks THIS run is the live resource, changed
+  // out-of-band — the .bicepparam lever #4126 built is durable but cannot take
+  // effect here, because this preflight aborts before the apply (control
+  // below). A remediation that names only template edits is naming things this
+  // lane will never apply — which is the loop this whole section exists to
+  // close.
+  assert.match(
+    text,
+    /out-of-band/i,
+    'the capacity remediation does not say the change has to happen OUT-OF-BAND on the live cluster — ' +
+      'every in-repo lever is either non-existent or unappliable by this lane (BCP259 / preflight ordering)',
+  );
+  assert.match(
+    text,
+    /az kusto cluster update/,
+    'the capacity remediation names no concrete out-of-band mechanism — deploy-integrity.md R6 wants the ' +
+      'exact command or portal action, not "resolve it elsewhere"',
+  );
+});
+
+test('CONTROL: the remediation may only name a .bicepparam lever the DEPLOYED template accepts', () => {
+  const text = remediationFor('capacity', '/subscriptions/x/clusters/c');
+  const { rel, src, declared } = paramTargetOf(LANE_PARAM_FILE);
+
+  // POPULATION, twice over: the `using` target must resolve and must actually
+  // declare parameters. Without this a typo in the path would make every branch
+  // below vacuous and the control would pass on nothing.
+  assert.ok(
+    declared.size > 0,
+    `${LANE_PARAM_FILE} targets '${rel}', which declares no params at all — this control has no population`,
+  );
+
+  // Does the message INSTRUCT the operator to set something in a .bicepparam?
+  // Matched as a bounded window so the identifiers checked are the ones inside
+  // the instruction, not every identifier the message happens to mention.
+  const INSTRUCTION_RE =
+    /\b(?:set|assign|add|put)\b[\s\S]{0,80}?\.bicepparam|\.bicepparam[\s\S]{0,80}?\b(?:set|assign|add|put)\b/gi;
+  const instructions = text.match(INSTRUCTION_RE) ?? [];
+
+  if (instructions.length > 0) {
+    const inside = instructions.flatMap((w) => [...w.matchAll(IDENT_RE)].map((m) => m[1]));
+    assert.ok(
+      inside.length > 0,
+      'the remediation tells the operator to set something in a .bicepparam but names no identifier, ' +
+        'so there is nothing to check reachability against',
+    );
+    for (const ident of inside) {
+      const root = ident.split('.')[0];
+      assert.ok(
+        declared.has(root),
+        `the remediation tells the operator to set \`${ident}\` in a .bicepparam, but '${root}' is not ` +
+          `declared on '${rel}' — the template ${LANE_PARAM_FILE} actually targets. Assigning it there ` +
+          'fails to compile with BCP259; it does not change the SKU. This is the #4108 layer-hop: the ' +
+          'identifier is real one layer down (admin-plane/main.bicep) and unreachable at the layer ' +
+          'that is deployed.',
+      );
+    }
+  }
+
+  // THE CONVERSE, so this control keeps working after someone fixes the gap.
+  // The day the root both declares adxConfig AND threads it into the adminPlane
+  // module, a param-file lever genuinely exists and the message must name it
+  // instead of saying there is none.
+  const threaded = /\n\s*adxConfig:\s*\S/.test(src);
+  if (declared.has('adxConfig') && threaded) {
+    assert.ok(
+      instructions.length > 0,
+      `'${rel}' now declares adxConfig AND passes it to the adminPlane module, so the boundary ` +
+        '.bicepparam IS a real SKU lever now — the capacity remediation still says there is no in-repo ' +
+        'lever, and that is no longer true. Update the message.',
+    );
+  }
+});
+
+test('the CAPACITY remediation discloses that re-running this lane cannot apply the SKU change', () => {
+  const text = remediationFor('capacity', '/subscriptions/x/clusters/c');
+  // THE DEADLOCK. The preflight that prints this runs BEFORE what-if and before
+  // the apply (control below), so "change a template value and re-run" dies at
+  // the identical step, having applied nothing. A remediation that omits this
+  // sends the operator round a loop that cannot terminate — and it is also why
+  // the only lever that helps is one applied OUTSIDE the lane.
+  assert.match(
+    text,
+    /before what-if|before the apply/i,
+    'the capacity remediation does not disclose that this preflight aborts before the apply — so a ' +
+      'reader can still conclude that changing a template value and re-running would take effect',
+  );
+});
+
+test('CONTROL: adx-cluster.bicep’s skuName DEFAULT is dead — the caller always passes it', () => {
+  // This is the premise of the message fix above. If someone later stops passing
+  // skuName explicitly, adx-cluster.bicep's default becomes live again and the
+  // remediation wording should be revisited — so this control goes red on that
+  // change rather than letting the two drift apart silently.
+  const mainBicep = fs.readFileSync(
+    path.join(REPO_ROOT, 'platform/fiab/bicep/modules/admin-plane/main.bicep'),
+    'utf8',
+  );
+  assert.match(
+    mainBicep,
+    /skuName:\s*effectiveAdxSkuName/,
+    'admin-plane/main.bicep no longer passes skuName to the adx-cluster module',
+  );
+  assert.match(
+    mainBicep,
+    /var effectiveAdxSkuName\s*=/,
+    'the effectiveAdxSkuName boundary guard is gone — the Gov SKU substitution this message describes no longer exists',
+  );
+});
+
+test('CONTROL: the ADX preflight precedes what-if AND the apply on every deploy lane', () => {
+  // The structural fact that makes the deadlock real, pinned per lane so a
+  // future reorder cannot silently invalidate the remediation wording.
+  //
+  // PER-LANE, not `if (at === -1) continue`. The old shape skipped any reader it
+  // could not find and only required 6 comparisons overall, which had two holes:
+  // renaming a reader on one lane still left 6 and stayed green, and IL5's apply
+  // step is called 'Teardown -> redeploy -> smoke', not 'Provision', so IL5's
+  // APPLY was never ordering-checked at all — it was silently skipped as an
+  // absence. Naming each lane's readers turns both into a red.
+  const LANE_READERS = {
+    'deploy-fiab-commercial': ['- name: Bicep what-if', '- name: Provision'],
+    'deploy-fiab-gcc': ['- name: Bicep what-if', '- name: Provision'],
+    'deploy-fiab-gcch': ['- name: Bicep what-if', '- name: Provision'],
+    // IL5 has no step literally called 'Provision'; this is its apply.
+    'deploy-fiab-il5': ['- name: Bicep what-if', '- name: Teardown -> redeploy -> smoke'],
+  };
+  let checkedReaders = 0;
+  for (const [lane, readers] of Object.entries(LANE_READERS)) {
+    const wf = fs.readFileSync(path.join(REPO_ROOT, `.github/workflows/${lane}.yml`), 'utf8');
+    const preflight = wf.indexOf('- name: ADX preflight');
+    assert.notEqual(preflight, -1, `${lane}: no ADX preflight step — this control has no population`);
+
+    for (const reader of readers) {
+      const at = wf.indexOf(reader);
+      assert.notEqual(
+        at,
+        -1,
+        `${lane}: expected step '${reader}' is gone. Either it was renamed — in which case this control ` +
+          'stopped watching it — or the lane no longer previews/applies. Re-point it, do not delete it.',
+      );
+      checkedReaders += 1;
+      assert.ok(
+        preflight < at,
+        `${lane}: '${reader}' appears BEFORE the ADX preflight — the preflight no longer gates it`,
+      );
+    }
+  }
+  // POPULATION, exact. The true count is 4 lanes x 2 readers. `>= 6` (the old
+  // bound) had a free removal in it: dropping one lane's reader left 6 and
+  // passed.
+  assert.equal(checkedReaders, 8, `compared ${checkedReaders} preflight/reader pairs — expected exactly 8`);
+});
+
+test('CONTROL: only the ADX preflight imports remediationFor — its wording is ADX-specific', () => {
+  // The capacity branch asserts 'this preflight runs BEFORE what-if and before
+  // the apply'. That is true of ensure-adx-cluster-running.mjs and is NOT
+  // guaranteed of any other caller, so a second importer would silently inherit
+  // a claim that may be false for it. ensure-aas-server-settled.mjs already
+  // declines to reuse this function for exactly that reason (see its comment)
+  // and imports only classifyAzFailure/isRetryable — nothing pinned that until
+  // now.
+  const dir = path.join(REPO_ROOT, 'scripts/ci');
+  const files = fs.readdirSync(dir).filter((f) => f.endsWith('.mjs') && f !== '_az-failure-class.mjs');
+  assert.ok(files.length > 0, 'no scripts/ci/*.mjs found — this control has no population');
+
+  const importers = [];
+  for (const f of files) {
+    const src = fs.readFileSync(path.join(dir, f), 'utf8');
+    const imported = src.match(/^import\s*\{([^}]*)\}\s*from\s*'\.\/_az-failure-class\.mjs'/m);
+    if (imported && /\bremediationFor\b/.test(imported[1])) importers.push(f);
+  }
+  assert.deepEqual(
+    importers,
+    ['ensure-adx-cluster-running.mjs'],
+    'the set of non-test importers of remediationFor changed. A NEW importer inherits ADX-specific ' +
+      'wording (the what-if/apply ordering, the adxConfig/BCP259 explanation) that is not established ' +
+      'for it — give it its own remediation, as ensure-aas-server-settled.mjs did. If the ADX preflight ' +
+      'stopped importing it, the capacity message is now dead code.',
+  );
+});
+
 // ─────────────────────────────────────────────────────────────────────────────
 // ROUND 3 — A DELIBERATELY PAUSED ESTATE IS NOT A FAILURE
 //
