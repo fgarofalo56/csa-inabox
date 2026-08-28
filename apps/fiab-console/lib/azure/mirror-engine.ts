@@ -47,7 +47,7 @@ import { executePostgresQuery, listPostgresTables, postgresQueryGate, type PgExp
 import { queryItems } from './cosmos-data-client';
 import { listContainers } from './cosmos-account-client';
 import {
-  upsertAdfCdc, startAdfCdc, adfCdcConfigGate,
+  upsertAdfCdc, startAdfCdc, statusAdfCdc, adfCdcConfigGate,
   upsertPipeline, upsertDataset, runPipeline, upsertTrigger, startTrigger,
   type AdfCdcSpec, type MapperConnection, type MapperTable,
 } from './adf-client';
@@ -171,9 +171,26 @@ export interface MirrorSource {
 export interface MirrorTableResult {
   schema: string;
   table: string;
-  status: 'replicated' | 'error';
-  rows: number;
-  bytes: number;
+  /**
+   * `pending` was added by #4025 and is the honest third state.
+   *
+   * The ADF engines used to report every table as `replicated` the moment the
+   * pipeline was SUBMITTED — a claim that the table had been copied, made before
+   * anything had been copied. `pending` means the load was started and Loom has
+   * not established the outcome; `replicated` now means a terminal Succeeded was
+   * observed for it.
+   */
+  status: 'replicated' | 'pending' | 'error';
+  /**
+   * Rows landed, when Loom MEASURED it. OPTIONAL since #4025, and the optionality
+   * is the fix: `rows: 0` is a CLAIM that nothing was copied, and the ADF engines
+   * were making it for every table on every run before the run had produced
+   * anything. Absent means "not measured", which is a different fact from zero
+   * and must not be rendered as one.
+   */
+  rows?: number;
+  /** Bytes landed, when Loom MEASURED it. Absent means not measured — see `rows`. */
+  bytes?: number;
   truncated: boolean;
   lastSync: string;
   /** abfss/https path of the landed snapshot folder (for shortcuts/notebooks). */
@@ -918,20 +935,67 @@ export async function runMirrorAdfCdc(
     };
   }
 
+  // #4025 — CONFIRM THE RESOURCE ACTUALLY STARTED. `startAdfCdc` returning 200
+  // means ARM ACCEPTED the start, not that the CDC resource is running: a
+  // credential the factory cannot dereference, or a source it cannot reach,
+  // shows up in the resource's STATUS, not in the accept.
+  //
+  // An ADF CDC resource has no pipeline run to poll, so the primitive is
+  // `statusAdfCdc` rather than `awaitAdfRun` — a genuinely different API, and
+  // the difference is stated rather than papered over with a shared name. Its
+  // own docblock records that the endpoint answers a BARE JSON string
+  // (`"Running"` / `"Stopped"` / `"Starting"`).
+  let cdcStatus = 'Unknown';
+  let cdcStatusError = '';
+  try {
+    cdcStatus = await statusAdfCdc(cdcName);
+  } catch (e: any) {
+    // A failure to READ the status is NOT a failure of the resource, and the two
+    // are kept apart (R7). Reporting "the mirror failed" when the truth is "I
+    // could not look" is the shape this repo has already paid for once.
+    cdcStatusError = e?.message || String(e);
+  }
+  const started = /^(Running|Starting)$/i.test(cdcStatus);
+
+  if (!started && !cdcStatusError) {
+    // ARM accepted the start and the resource is not running. That is a real
+    // failure, and it is reported as one instead of as a green badge.
+    return {
+      ok: false, status: 'Error', backend: 'azure-native-cdc', engine: 'adf-cdc', cdcName, tables: [],
+      basePath: pathToHttpsUrl(BRONZE, `${basePath}/`), note: adfNote,
+      error:
+        `ADF CDC ${cdcName} was started but ARM reports its status as "${cdcStatus}". The initial full load is ` +
+        'NOT running. Open the CDC resource in the Data Factory monitor: the usual causes are the factory ' +
+        'managed identity lacking "Key Vault Secrets User" on the vault backing the source linked service, or ' +
+        'the source being unreachable from the factory\'s network.',
+    };
+  }
+
   const lastSync = new Date().toISOString();
+  // PER-TABLE STATE IS `pending`, NOT `replicated`. Every row used to be
+  // synthesised as `status: 'replicated', rows: 0, bytes: 0` the moment the
+  // resource was created — a claim that the table had been copied and that zero
+  // rows were in it, both asserted before the initial load had produced
+  // anything. `pending` is what is actually established: the load was started.
   const tables: MirrorTableResult[] = tableSpecs.map((t) => {
     const folderUrl = pathToHttpsUrl(BRONZE, `${basePath}/${t.schema}.${t.table}/`);
     const openrowset = `SELECT TOP 100 * FROM OPENROWSET(BULK '${folderUrl}', FORMAT = 'DELTA') AS rows`;
     return {
-      schema: t.schema, table: t.table, status: 'replicated', mode: 'snapshot',
-      rows: 0, bytes: 0, truncated: false, lastSync, path: folderUrl, openrowset,
-      note: 'ADF CDC: initial full load in progress, then continuous CDC. Row/byte metrics populate in the ADF monitor.',
+      schema: t.schema, table: t.table, status: 'pending', mode: 'snapshot',
+      truncated: false, lastSync, path: folderUrl, openrowset,
+      note:
+        'ADF CDC: initial full load in progress, then continuous CDC. Loom has NOT confirmed this table has ' +
+        'landed — row/byte counters come from the ADF monitor, and this row will not claim them.',
     };
   });
 
   return {
     ok: true, status: 'Running', backend: 'azure-native-cdc', engine: 'adf-cdc', cdcName, tables,
-    basePath: pathToHttpsUrl(BRONZE, `${basePath}/`), note: adfNote,
+    basePath: pathToHttpsUrl(BRONZE, `${basePath}/`),
+    note: cdcStatusError
+      ? `${adfNote} ARM accepted the start, but Loom could NOT read the CDC resource's status to confirm it is ` +
+        `running (${cdcStatusError}) — that is an unknown, not a success. Check the ADF monitor.`
+      : `${adfNote} ARM reports the CDC resource as "${cdcStatus}".`,
   };
 }
 
