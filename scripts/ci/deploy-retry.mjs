@@ -380,10 +380,22 @@ export function planRemediation(diagnosis, stderr, opts = {}) {
         ...(opts.subscription ? ['--subscription', String(opts.subscription)] : []),
         '--apply',
       ],
+      // THE CLAIM HERE MUST BE THE ONE THE CONVERGER ACTUALLY PROVES (#4112,
+      // deploy-integrity.md R7). This sentence used to read "a user-assigned
+      // managed identity in this subscription", which was true when written and
+      // stopped being true at #4110: `az identity list` STRUCTURALLY cannot
+      // return a system-assigned principal (it is a property of its owning
+      // resource, not a Microsoft.ManagedIdentity resource), so the narrow check
+      // was a strict subset of its own intent and #4041 put the ADF-to-Key-Vault
+      // grant in the gap. The converger now proves the wider, correctly-scoped
+      // claim via a second source (`az ad sp show`), and this string says so.
+      // `scripts/ci/__tests__/deploy-retry.test.mjs` pins the two together, so a
+      // narrowing of either side fails rather than silently re-opening the gap.
       why:
         `The grant is already in place under assignment ${name.slice(0, 8)}…, which is NOT the deterministic name ` +
         'the template computes, so ARM refuses the create forever. The converger proves the stray belongs to a ' +
-        'user-assigned managed identity in this subscription, removes it, and verifies it is gone; the retry then ' +
+        'MANAGED IDENTITY — user- or system-assigned — whose owning resource is in a subscription this deployment ' +
+        'can reach, removes it, and verifies it is gone; the retry then ' +
         'recreates the identical triple under the name the template owns. Intended net effect on the estate: zero ' +
         'permission change, one name converged. RESIDUAL, stated because this is the one destructive action in the ' +
         'lane: the grant is absent between the delete and the retry\'s create, so if that retry fails for another ' +
