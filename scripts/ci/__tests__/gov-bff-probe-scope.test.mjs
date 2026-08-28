@@ -188,6 +188,20 @@ const PURVIEW_STATUS_NOT_CONFIGURED = {
   },
 };
 
+// #4000, defect 1. The body the pre-fix step graded `OK (200)`: a 2xx from the
+// purview-status route carrying NO `purview` key at all. The gate predicate's
+// own first arm names this case — 'purview status missing from the envelope' —
+// and could never reach it, because gates were invoked only for keys already
+// present in the body. Not a hypothetical shape: `{ok:true}` is what the route
+// would emit if its purview resolution were ever refactored to omit the field,
+// and it is what a truncating proxy or a partial serializer produces.
+const PURVIEW_STATUS_KEY_ABSENT = { ok: true };
+
+// #4000, defect 2. `ok:false` on a 200 — an error envelope with a success
+// status. `ok` was classified `info` on all three probes, so it was printed and
+// never graded, while the governance-catalog comment asserted the contract.
+const GOV_CATALOG_OK_FALSE = { ...GOV_CATALOG_CLEAN, ok: false };
+
 const ROUTES = {
   '/api/catalog/metastores': METASTORES_CLEAN,
   '/api/governance/catalog': GOV_CATALOG_CLEAN,
@@ -514,6 +528,124 @@ test('a non-2xx status is classified as a status, never as a subsystem gate', { 
   assert.match(line, /HTTP 403 — expected 2xx/);
   assert.ok(!/purview\.configured=false/.test(line),
     `an error page must not be read as a subsystem verdict:\n${line}`);
+});
+
+// ── #4000 defect 1: a declared gate key ABSENT from the envelope ────────────
+
+test('ABSENT KEY: a purview-status 2xx with no `purview` key FAILS the probe', { skip: !bashAvailable }, async () => {
+  // The condition the probe announces it watches and did not. Measured on the
+  // pre-fix step this body produced `::notice::purview wiring status: OK (200)`
+  // and exit 0 — a probe named "purview wiring status" reporting OK over a body
+  // carrying no purview status.
+  const r = await probe({ '/api/admin/domains/purview-status': PURVIEW_STATUS_KEY_ABSENT });
+  assert.equal(r.status, 1, `an absent required key must not be graded clean\n${r.out}`);
+  const [line, ...rest] = errorsFor(r.out, 'purview wiring status');
+  assert.equal(rest.length, 0, r.out);
+  assert.match(line, /MISSING required top-level key "purview"/);
+  // deploy-integrity.md R7: the line must say the key is not in the body, not
+  // report a fabricated offset 0 as if it had located it.
+  assert.match(line, /offset unknown — the key is not literally present in the raw body/);
+});
+
+test('ABSENT KEY MUTATION: dropping `purview` from that probe\'s `required` list makes the same body green', { skip: !bashAvailable }, async () => {
+  // The counterfactual. If this still went red, the red above would not have
+  // been caused by the required rule this change adds.
+  const src = probeStep().script;
+  const mutated = src.replace(
+    /required: \['ok', 'purview'\],(\s*)gates: \{(\s*)ok: okTrue,(\s*)purview: \(v\)/,
+    "required: ['ok'],$1gates: {$2ok: okTrue,$3purview: (v)",
+  );
+  assert.notEqual(mutated, src, "the purview-status probe's required list moved — this proof no longer targets it");
+  const r = await probe({ '/api/admin/domains/purview-status': PURVIEW_STATUS_KEY_ABSENT }, { script: mutated });
+  assert.equal(r.status, 0,
+    `without the required entry the absent key must go unnoticed — that is the defect being fixed\n${r.out}`);
+  assert.match(r.out, /::notice::purview wiring status: OK \(200\)/);
+});
+
+test('PRESENT KEY UNCHANGED: a present-but-null `purview` still fires the predicate, and is NOT called missing', { skip: !bashAvailable }, async () => {
+  // The arm that WAS reachable before this change must keep working, and must
+  // now be truthful about which case it is: the key is present, so claiming it
+  // is "missing from the envelope" would be the R7 error in the other
+  // direction. The required rule must NOT fire here — presence is
+  // hasOwnProperty, not truthiness.
+  const r = await probe({ '/api/admin/domains/purview-status': { ok: true, purview: null } });
+  assert.equal(r.status, 1, r.out);
+  const [line, ...rest] = errorsFor(r.out, 'purview wiring status');
+  assert.equal(rest.length, 0, `a present-but-null value must produce exactly one finding, not a missing-key one too:\n${r.out}`);
+  assert.match(line, /purview is present but is null, not a status object/);
+  assert.ok(!/MISSING required top-level key/.test(line),
+    `the key IS present — the finding must not claim absence:\n${line}`);
+  assert.match(line, /field "purview" at offset \d+ of \d+/);
+});
+
+test('POPULATION FLOOR: a probe declaring no required keys aborts the job', { skip: !bashAvailable }, async () => {
+  // An empty `required` list would grade `{}` as a clean envelope, which is the
+  // exact shape this defect is about. A table that cannot detect it is a defect
+  // in the step, so it must be loud rather than a quietly narrower probe — and
+  // it must be loud even when every route answers perfectly.
+  const src = probeStep().script;
+  const mutated = src.replace("required: ['ok', 'total', 'assets', 'workspaces', 'source'],", 'required: [],');
+  assert.notEqual(mutated, src, "the governance-catalog required list moved — this proof no longer targets it");
+  const r = await probe({}, { script: mutated });
+  assert.equal(r.status, 1, `an empty required list must fail even with all three routes clean\n${r.out}`);
+  assert.match(r.out, /probe table defect: purview governance catalog declares no required top-level keys/);
+});
+
+test('POPULATION FLOOR: a required key classified in neither gates nor info aborts the job', { skip: !bashAvailable }, async () => {
+  // Otherwise a typo in `required` would fail every run on the UNCLASSIFIED arm
+  // — red for the wrong reason, which sends the reader at the wrong subsystem.
+  const src = probeStep().script;
+  const mutated = src.replace("required: ['ok', 'total', 'assets', 'workspaces', 'source'],", "required: ['ok', 'assetz'],");
+  assert.notEqual(mutated, src, 'the governance-catalog required list moved — this proof no longer targets it');
+  const r = await probe({}, { script: mutated });
+  assert.equal(r.status, 1, r.out);
+  assert.match(r.out, /probe table defect: purview governance catalog requires "assetz" but classifies it in neither gates nor info/);
+});
+
+// ── #4000 defect 2: the `ok:true` contract the comment claimed and the code
+//    did not grade ─────────────────────────────────────────────────────────
+
+test('OK CONTRACT: `ok:false` on a 200 FAILS the governance-catalog probe', { skip: !bashAvailable }, async () => {
+  // Measured on the pre-fix step: this body returned `OK (200)` and exit 0
+  // while the step's own comment said "Its real contract is 2xx + `ok:true`".
+  const r = await probe({ '/api/governance/catalog': GOV_CATALOG_OK_FALSE });
+  assert.equal(r.status, 1, `a 2xx error envelope must not be graded clean\n${r.out}`);
+  const [line, ...rest] = errorsFor(r.out, 'purview governance catalog');
+  assert.equal(rest.length, 0, r.out);
+  assert.match(line, /ok is not true on a 2xx — the route returned an error envelope \(ok=false\)/);
+  assert.match(line, /field "ok" at offset \d+ of \d+/);
+});
+
+test('OK CONTRACT: the same is graded on the other two probes, not just one', { skip: !bashAvailable }, async () => {
+  // The comment named one route; `ok:true` is the 2xx contract of all three
+  // (metastores/route.ts:115, purview-status/route.ts:89). Grading it on one
+  // probe only would leave the same hole open on the other two.
+  const a = await probe({ '/api/catalog/metastores': { ...METASTORES_CLEAN, ok: false } });
+  assert.equal(a.status, 1, a.out);
+  assert.match(errorsFor(a.out, 'unity-catalog')[0], /ok is not true on a 2xx/);
+
+  const b = await probe({ '/api/admin/domains/purview-status': { ...PURVIEW_STATUS_CLEAN, ok: false } });
+  assert.equal(b.status, 1, b.out);
+  assert.match(errorsFor(b.out, 'purview wiring status')[0], /ok is not true on a 2xx/);
+});
+
+test('OK CONTRACT MUTATION: re-classifying `ok` as info makes that same body green', { skip: !bashAvailable }, async () => {
+  // The pre-fix state, reintroduced verbatim: `ok` back in `info`, out of
+  // `gates`. If this still went red, the red above came from somewhere else.
+  const src = probeStep().script;
+  const mutated = src
+    .replace(
+      /ok: okTrue,(\s*)error: gate\('route returned an error envelope on a 2xx'\),/,
+      "error: gate('route returned an error envelope on a 2xx'),",
+    )
+    .replace(
+      "info: ['total', 'assets', 'facets', 'workspaces', 'source', 'code'],",
+      "info: ['ok', 'total', 'assets', 'facets', 'workspaces', 'source', 'code'],",
+    );
+  assert.notEqual(mutated, src, "the governance-catalog probe's ok classification moved — this proof no longer targets it");
+  const r = await probe({ '/api/governance/catalog': GOV_CATALOG_OK_FALSE }, { script: mutated });
+  assert.equal(r.status, 0, `with ok back in info the same body must pass\n${r.out}`);
+  assert.match(r.out, /::notice::purview governance catalog: OK \(200\)/);
 });
 
 test('EVERY probed path is graded — a route the stub does not serve goes red', { skip: !bashAvailable }, async () => {

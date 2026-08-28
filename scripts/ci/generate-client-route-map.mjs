@@ -39,6 +39,25 @@
  *   - route groups `(name)` contribute nothing to the URL (none exist today;
  *     handled anyway so adding one does not silently produce a wrong pattern).
  *
+ * THE DRIFT GATE PRINTS THE EXPECTED DIFF (#3158)
+ *   Both artifacts are COMMITTED, so they race the merge order: PR A adds a
+ *   route and regenerates; PR B, branched before A, regenerates without it; B
+ *   merges last and `main` carries a map missing A's route. `main` goes red
+ *   here, which is the correct and honest outcome — the map IS stale — but the
+ *   failure used to name only the two files and the regenerate command, so
+ *   every occurrence cost a fresh ~20-minute diagnosis.
+ *
+ *   The two structural fixes are both unavailable and measured to be so at
+ *   origin/main 5a5572aa: branch protection's `required_status_checks.strict`
+ *   reads FALSE (it was true when this was last triaged), so up-to-date-before-
+ *   merge is not in force; and `gh api repos/… --jq .owner.type` reads `User`,
+ *   so the `merge_group` triggers in the tree cannot be backed by a real merge
+ *   queue. Regenerating in CI was rejected outright: it would make this gate
+ *   unable to fail, which is the exact class this repo keeps digging out of.
+ *
+ *   So the gate is unchanged and the MESSAGE carries the remedy — see
+ *   {@link describeExpectedDiff}.
+ *
  * USAGE:
  *   node scripts/ci/generate-client-route-map.mjs           # (re)write both artifacts
  *   node scripts/ci/generate-client-route-map.mjs --check   # CI drift gate (exit 1 if stale)
@@ -229,6 +248,131 @@ function renderJson(patterns) {
   }, null, 2) + '\n';
 }
 
+/**
+ * How many diff rows the stale report prints before it summarises the rest.
+ *
+ * A regeneration after a large merge can move hundreds of routes; dumping all of
+ * them buries the two that matter. Bounded, and the count of what was elided is
+ * always printed — a truncated list that does not say it was truncated is its
+ * own small false statement.
+ */
+export const MAX_DIFF_ROWS = 25;
+
+/** The committed JSON's route list, or an honest reason it could not be read. */
+function readCommittedPatterns(text) {
+  if (text === null) return { patterns: null, why: 'the file does not exist yet' };
+  let parsed;
+  try {
+    parsed = JSON.parse(text);
+  } catch (e) {
+    return { patterns: null, why: `it is not valid JSON (${String(e.message).slice(0, 80)})` };
+  }
+  if (!Array.isArray(parsed?.patterns)) {
+    return { patterns: null, why: 'it has no `patterns` array — it is not this generator\'s shape' };
+  }
+  return { patterns: parsed.patterns.map(String), why: null };
+}
+
+/** `[a, b, c]` → bounded lines with a truthful "and N more" when elided. */
+function boundedRows(items, render, max = MAX_DIFF_ROWS) {
+  const out = items.slice(0, max).map(render);
+  if (items.length > max) out.push(`      … and ${items.length - max} more`);
+  return out;
+}
+
+/** The first lines at which two renderings disagree, with their line numbers. */
+function firstDifferingLines(committed, expected, max = 3) {
+  const a = String(committed ?? '').replace(/\r\n/g, '\n').split('\n');
+  const b = String(expected ?? '').replace(/\r\n/g, '\n').split('\n');
+  const out = [];
+  const n = Math.max(a.length, b.length);
+  for (let i = 0; i < n && out.length < max; i += 1) {
+    if (a[i] === b[i]) continue;
+    const clip = (s) => (s === undefined ? '(no such line)' : `"${s.length > 110 ? `${s.slice(0, 110)}…` : s}"`);
+    out.push(`      line ${i + 1}  committed: ${clip(a[i])}`);
+    out.push(`      ${' '.repeat(String(i + 1).length)}       expected: ${clip(b[i])}`);
+  }
+  return out;
+}
+
+/**
+ * THE EXPECTED DIFF, in the terms the reader actually needs (#3158).
+ *
+ * WHY THIS EXISTS. The committed route map races the merge order: PR A adds a
+ * route and regenerates; PR B, branched before A, regenerates without it; B
+ * merges last and `main` now carries a map missing A's route. `main` goes red on
+ * this gate, which is correct — the map IS stale — but the failure said only
+ * "the generated route map is STALE", listed the two filenames, and printed the
+ * regenerate command. It never said WHAT was stale, so every occurrence cost a
+ * fresh ~20-minute diagnosis of a condition that is one line to state.
+ *
+ * The operator's own resolution (issue #3158, 2026-08-16): print the expected
+ * diff, not just the command. The two structural resolutions that were on the
+ * table are both off it — `strict` branch protection now reads false, and the
+ * repo is user-owned so a merge queue cannot back the `merge_group` triggers.
+ *
+ * THE DIFF IS SEMANTIC FIRST, TEXTUAL ONLY AS A FALLBACK. What a reader needs is
+ * "your map is missing /api/foo, which PR A added" — not 1,700 lines of union
+ * members. So the route SETS are diffed, and each row says which side has the
+ * file on disk, because that is the fact that tells you whether you are behind
+ * main or have deleted a route. Only when the sets are IDENTICAL and the bytes
+ * still differ (a rendering change, a regexSources change, a formatting change)
+ * does it fall back to naming the first differing lines.
+ *
+ * PURE — no IO, no process.exit — so the self-test drives every branch.
+ *
+ * @param {{committedJson:string|null, committedDts:string|null,
+ *          nextJson:string, nextDts:string, patterns:string[]}} a
+ * @returns {string[]} operator-readable lines, already indented
+ */
+export function describeExpectedDiff({ committedJson, committedDts, nextJson, nextDts, patterns }) {
+  const lines = [];
+  const { patterns: committed, why } = readCommittedPatterns(committedJson);
+
+  if (committed === null) {
+    // NAME THE REASON. "No diff available" would be true and useless; the reason
+    // is what distinguishes "run the generator" from "someone hand-edited this".
+    lines.push(`  expected diff: the committed route list could not be read — ${why}.`);
+    lines.push(`  Regenerating writes all ${patterns.length} discovered route(s) fresh.`);
+    return lines;
+  }
+
+  const have = new Set(committed);
+  const want = new Set(patterns);
+  const added = patterns.filter((p) => !have.has(p));
+  const removed = committed.filter((p) => !want.has(p));
+
+  if (added.length || removed.length) {
+    lines.push(`  expected diff — ${added.length} route(s) to ADD, ${removed.length} to REMOVE:`);
+    lines.push(...boundedRows(added, (p) => `      + ${p}    (app/api has this route; the committed map does not list it)`));
+    lines.push(...boundedRows(removed, (p) => `      - ${p}    (the committed map lists it; app/api no longer has it)`));
+    if (added.length && !removed.length) {
+      // The merge-order race, named. This is the shape #3158 is about, and
+      // saying so converts the diagnosis into a read.
+      lines.push('  Routes present on disk but absent from the map is the #3158 merge-order race:');
+      lines.push('  another PR added them and this branch\'s map predates it. Regenerating is the whole fix.');
+    }
+    return lines;
+  }
+
+  // Same routes, different bytes. Say that plainly rather than printing an empty
+  // diff, which would read as "nothing is wrong" over a red gate.
+  lines.push('  expected diff: the ROUTE SET is identical — the difference is in how the artifacts');
+  lines.push('  are rendered (member order, regexSources, the header, or line endings), not in which');
+  lines.push('  routes exist. First differing line(s):');
+  const jsonDiff = firstDifferingLines(committedJson, nextJson);
+  if (jsonDiff.length) {
+    lines.push(`    ${path.relative(REPO_ROOT, JSON_PATH)}`);
+    lines.push(...jsonDiff);
+  }
+  const dtsDiff = firstDifferingLines(committedDts, nextDts);
+  if (dtsDiff.length) {
+    lines.push(`    ${path.relative(REPO_ROOT, DTS_PATH)}`);
+    lines.push(...dtsDiff);
+  }
+  return lines;
+}
+
 function main() {
   const patterns = buildRoutes();
   // FAIL CLOSED. A discovery bug that finds nothing must not silently emit an
@@ -246,13 +390,21 @@ function main() {
   const read = (p) => (fs.existsSync(p) ? fs.readFileSync(p, 'utf8') : null);
 
   if (process.argv.includes('--check')) {
+    const committedDts = read(DTS_PATH);
+    const committedJson = read(JSON_PATH);
     const stale = [];
-    if (norm(read(DTS_PATH)) !== norm(nextDts)) stale.push(path.relative(REPO_ROOT, DTS_PATH));
-    if (norm(read(JSON_PATH)) !== norm(nextJson)) stale.push(path.relative(REPO_ROOT, JSON_PATH));
+    if (norm(committedDts) !== norm(nextDts)) stale.push(path.relative(REPO_ROOT, DTS_PATH));
+    if (norm(committedJson) !== norm(nextJson)) stale.push(path.relative(REPO_ROOT, JSON_PATH));
     if (stale.length) {
       console.error('[client-route-map] FAIL — the generated route map is STALE:');
       for (const f of stale) console.error(`  - ${f}`);
       console.error(`  discovered ${patterns.length} routes under app/api/`);
+      // #3158 — WHAT is stale, not merely THAT it is. The stale-map failure used
+      // to print the file list, the route count and the regenerate command and
+      // stop, so each occurrence cost a fresh diagnosis of a one-line condition.
+      for (const line of describeExpectedDiff({
+        committedJson, committedDts, nextJson, nextDts, patterns,
+      })) console.error(line);
       console.error('  Regenerate: node scripts/ci/generate-client-route-map.mjs');
       process.exit(1);
     }

@@ -423,6 +423,65 @@ jobs:
             --subscription "$DEPLOY_SUB" \
             --rg "rg-csa-loom-admin-${AZURE_LOCATION}"
 
+      # ── AAS PREFLIGHT (#3948, ported by #4098) ─────────────────────────────
+      # The SIBLING of the ADX preflight above, and this lane carried the same
+      # exposure with none of the mitigation. #4074 wired
+      # ensure-aas-server-settled.mjs into deploy-fiab-commercial.yml ONLY;
+      # measured on this tree, `git grep -n ensure-aas-server-settled --
+      # .github/workflows` returned exactly one hit, and it was not this file.
+      #
+      # THIS BOUNDARY IS EXPOSED BY DEFAULT, not by configuration.
+      # platform/fiab/bicep/main.bicep declares `param aasEnabled bool = true`;
+      # gcc-high.bicepparam and il5.bicepparam both set it FALSE (AAS is
+      # unavailable there, so those two are genuinely N/A) — and
+      # params/gcc.bicepparam sets it NOWHERE, so GCC INHERITS `true`. It
+      # therefore deploys the same Analysis Services server and writes the same
+      # `asAdministrators` as Commercial. A SUSPENDED server refuses that write:
+      #
+      #   BadRequest: The server '<name>' is currently being updated.
+      #
+      # #4034 taught the taxonomy to classify that as transient, and retrying it
+      # is the wrong answer — the server is not momentarily busy, it is Paused,
+      # and an AAS control-plane operation does not finish inside a retry
+      # window. The durable fix is to settle the server BEFORE the first step
+      # that reads it.
+      #
+      # ORDERING, for the same reason #3880 cost the GCC-High lane six runs: a
+      # preflight must precede the first step that READS the resource, not the
+      # first that WRITES it. `az deployment sub what-if` below evaluates the
+      # admin-plane AAS leaf, so this sits above the what-if.
+      #
+      # NO RECEIPT IS PRODUCIBLE. This lane is `disabled_manually` (#3345/#4071)
+      # so its cron cannot fire, which makes this a CODE-IDENTITY fix, not a
+      # measured-failure fix, and it is stated as such rather than implied
+      # working (deploy-integrity.md R4). It is made anyway because per
+      # cloud-parity.md fixing three of four boundaries is INCOMPLETE, and
+      # re-enabling this lane onto a known-unmitigated AAS write order would
+      # only rediscover #3948 a second time.
+      #
+      # Same trigger as the apply, so a whatif-only DRY RUN never mutates.
+      - name: AAS preflight — a suspended server cannot take its administrator write (#3948)
+        id: aas_preflight
+        if: github.event_name == 'schedule' || inputs.run_mode == 'full'
+        env:
+          AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_GCC_SUBSCRIPTION_ID }}
+        run: |
+          set -euo pipefail
+          # dlz-attach deploys no admin plane, so it declares no AAS
+          # administrators and has nothing to settle.
+          if [ "${CSA_LOOM_TOPOLOGY:-}" = "dlz-attach" ]; then
+            echo "::notice::topology=dlz-attach deploys no admin-plane AAS server; nothing to settle."
+            exit 0
+          fi
+          DEPLOY_SUB="${CSA_LOOM_TARGET_SUBSCRIPTION:-$AZURE_SUBSCRIPTION_ID}"
+          if [ -z "$DEPLOY_SUB" ]; then
+            echo "::error::No target subscription, so the estate's AAS server cannot be located. It comes from the AZURE_GCC_SUBSCRIPTION_ID repository secret; it is empty."
+            exit 1
+          fi
+          node scripts/ci/ensure-aas-server-settled.mjs \
+            --subscription "$DEPLOY_SUB" \
+            --rg "rg-csa-loom-admin-${AZURE_LOCATION}"
+
       - name: Bicep what-if
         run: |
           az deployment sub what-if \
@@ -616,6 +675,53 @@ jobs:
           bash scripts/csa-loom/apply-acr-compliance-tags.sh \
             --acr "$ACR" \
             --params-file platform/fiab/bicep/params/gcc.bicepparam
+
+      # ── PUT THE AAS SERVER BACK (#3948, ported by #4098) ──────────────────
+      #
+      # THE HALF THAT MAKES THE PREFLIGHT SAFE, and it is not optional. Analysis
+      # Services has NO auto-pause, unlike the ADX cluster above whose
+      # `enableAutoStop: true` caps the cost of starting it. A resume that is
+      # never undone bills an S1 indefinitely and silently defeats the estate
+      # PAUSE tier, so the preflight's resume is bounded to the deploy window by
+      # this step. Porting the preflight WITHOUT this would have handed the GCC
+      # boundary a cost leak in exchange for the fix.
+      #
+      # `always()` because the whole point is that it runs when the apply
+      # FAILED — that is exactly the path that would otherwise leave a resumed
+      # server running. Gated on the preflight's own `aas_resumed` output, so a
+      # server that was ALREADY running when we arrived is never suspended by
+      # this lane: it belongs to whoever started it, and suspending it could
+      # take a live workload down.
+      #
+      # `set -uo pipefail` without `-e`, matching the Commercial sibling: a
+      # cleanup step must report a failure rather than abort and leave the rest
+      # of the cleanup unrun. The suspend's own exit code is checked and
+      # surfaced as a warning, never swallowed.
+      #
+      # DEPLOY_SUB is recomputed the same way the preflight computed it — this
+      # lane resolves its target subscription from CSA_LOOM_TARGET_SUBSCRIPTION
+      # falling back to the AZURE_GCC_SUBSCRIPTION_ID secret, and there is no
+      # topology-guard output carrying it (that is the Commercial shape).
+      - name: Re-suspend the AAS server this run resumed (#3948)
+        if: always() && steps.aas_preflight.outputs.aas_resumed == 'true'
+        env:
+          AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_GCC_SUBSCRIPTION_ID }}
+          AAS_SERVER: ${{ steps.aas_preflight.outputs.aas_server }}
+          AAS_PRIOR: ${{ steps.aas_preflight.outputs.aas_prior_state }}
+        run: |
+          set -uo pipefail
+          DEPLOY_SUB="${CSA_LOOM_TARGET_SUBSCRIPTION:-$AZURE_SUBSCRIPTION_ID}"
+          if [ -z "$DEPLOY_SUB" ] || [ -z "$AAS_SERVER" ]; then
+            echo "::warning::This run resumed an AAS server but the coordinates needed to re-suspend it are incomplete (subscription='${DEPLOY_SUB}', server='${AAS_SERVER}'). It is LEFT RUNNING and will bill an S1 until something suspends it. Reported rather than swallowed: a cleanup that fails silently is how a cost leak survives."
+            exit 0
+          fi
+          ID="/subscriptions/${DEPLOY_SUB}/resourceGroups/rg-csa-loom-admin-${AZURE_LOCATION}/providers/Microsoft.AnalysisServices/servers/${AAS_SERVER}"
+          echo "::notice::Re-suspending ${AAS_SERVER} (it was '${AAS_PRIOR}' before this run resumed it)."
+          if ! az resource invoke-action --ids "$ID" --api-version 2017-08-01 --action suspend -o none; then
+            echo "::warning::Could not re-suspend ${AAS_SERVER}. It is LEFT RUNNING and will bill an S1 until something suspends it — the estate pause tier will catch it on its next pass, but check it. This is reported rather than swallowed: a cleanup that fails silently is how a cost leak survives."
+          else
+            echo "::notice::${AAS_SERVER} re-suspended."
+          fi
 
       # Front Door -> ACA env Private Link approval (#3203). CLOUD PARITY: the
       # sovereign lanes previously passed an EMPTY scriptIdentityId so the ARM

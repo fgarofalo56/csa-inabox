@@ -2825,3 +2825,578 @@ test('CONTROL: every verdict this file can produce is a real verdict with a real
     assert.ok(typeof c.reason === 'string' && c.reason.length > 30, `thin reason: ${c.reason}`);
   }
 });
+
+// ==========================================================================
+// #4148 — THE DURABILITY-PIN RACE IN loom-dataplane-roll.yml
+// ==========================================================================
+//
+// Controls for the DURABILITY-PIN RACE in .github/workflows/loom-dataplane-roll.yml
+// (#4148).
+//
+// ── WHAT WENT WRONG ─────────────────────────────────────────────────────────
+// Read out of run 33129547662's log, not inferred:
+//
+//   00:28:19-00:28:32  `az acr import` retagged loom-trino and loom-unity onto
+//                      :v0.1. Both succeeded. This happened OUTSIDE the ACR
+//                      firewall lease, because a control-plane import does not
+//                      need the data plane.
+//   00:28:32-00:51:14  the step then BLOCKED 22.5 minutes (to attempt 52) at
+//                      the lease acquire, which it takes only for the read-back.
+//                      The lease was held by run 33129550648
+//                      (build-fiab-images-acr-tasks, sha 89153a31,
+//                      00:23:15 -> 00:50:53).
+//   00:51:14           by then that build had repointed :v0.1. The read-back
+//                      emitted
+//                        loom-trino:v0.1 resolves to sha256:4a96038a…, not the
+//                        rolled digest sha256:5d52d40b… The pin did NOT land
+//                      — a cause the code never established. The import DID
+//                      land; it was superseded.
+//   and then           the rollback gate `if: failure() && steps.roll.outcome ==
+//                      'success'` fired and REVERTED a roll whose own health and
+//                      live-image verification had both passed, printing
+//                        A post-roll gate failed (health=success, verify=success)
+//
+// So: a write and its verification in two separate critical sections with an
+// unbounded gap; a message asserting a cause it had not established
+// (deploy-integrity.md R7); and an auto-rollback of a verified-live estate on
+// the strength of a registry tag race.
+//
+// NOTE the issue's own stated fix — "wire the step through deploy-retry.mjs" —
+// is wrong: it already is (loom-dataplane-roll.yml, the `--step "pin …"`
+// invocation). That was a red herring from the auto-filed classification
+// comment, and following it would have changed nothing.
+//
+// ── WHAT IS ACTUALLY UNDER TEST ─────────────────────────────────────────────
+// The REAL pin step, extracted from the workflow YAML and EXECUTED under bash in
+// a sandbox working directory. Nothing is re-implemented here. The step invokes
+// its three collaborators through explicit interpreters at repo-relative paths —
+//
+//     bash scripts/csa-loom/acr-firewall-lease.sh …
+//     node scripts/ci/deploy-retry.mjs … -- az acr import …
+//     bash scripts/ci/resolve-acr-digest.sh …
+//
+// — so the sandbox supplies stubs at exactly those paths and real bash/node run
+// them. Each stub APPENDS TO AN ORDERED EVENT LOG, which is what makes the
+// ordering claim a measurement rather than a reading of the source text. The
+// step's own bytes are never rewritten except by a test that says it is
+// mutating, and a harness control asserts that.
+//
+// The rollback gate is a workflow `if:`, so it is checked by translating that
+// expression to JS and evaluating it over step outcomes. The translator refuses
+// any construct it does not model rather than silently mis-evaluating one.
+
+const WF = join(REPO_ROOT, '.github', 'workflows', 'loom-dataplane-roll.yml');
+const PIN_STEP = 'Pin the verified digest onto :v0.1 (deploy durability)';
+const ROLLBACK_STEP = 'Roll back on failure';
+
+const bashAvailable = spawnSync('bash', ['-c', 'exit 0']).status === 0;
+
+const WANT_UNITY = 'sha256:5d52d40bfeedfacefeedfacefeedfacefeedfacefeedfacefeedfacefeedface';
+const WANT_TRINO = 'sha256:5d52d40bcafebabecafebabecafebabecafebabecafebabecafebabecafebabe';
+const OTHER = 'sha256:4a96038adeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef';
+const TAG = '89153a31';
+const ACR = 'acrloomtest';
+
+// ── Extracting the shipped step ─────────────────────────────────────────────
+
+const wfLines = () => readFileSync(WF, 'utf8').split(/\r?\n/);
+
+/**
+ * Pull a step's `run:` block out of the workflow as text.
+ *
+ * Deliberately NOT a YAML library: the `guardrails` job that runs this suite
+ * does `actions/setup-node` and no install, so a third-party import would make
+ * the whole file throw — and a suite that cannot load is a suite that enforces
+ * nothing. Same approach gov-bff-probe-scope.test.mjs takes.
+ *
+ * Every failure mode throws rather than returning something empty: an extractor
+ * that silently yielded `''` would make every case below "pass" by running no
+ * script at all.
+ */
+function stepRun(stepName) {
+  const lines = wfLines();
+  const start = lines.findIndex((l) => l.trim() === `- name: ${stepName}`);
+  assert.ok(start >= 0, `workflow step "${stepName}" not found in ${WF} — renamed or removed?`);
+  let runAt = -1;
+  for (let i = start + 1; i < lines.length; i++) {
+    if (/^\s*- name:/.test(lines[i])) break;
+    if (/^\s*run:\s*\|\s*$/.test(lines[i])) { runAt = i; break; }
+  }
+  assert.ok(runAt >= 0, `no "run: |" block under "${stepName}"`);
+  const runIndent = lines[runAt].match(/^\s*/)[0].length;
+  const body = [];
+  for (let i = runAt + 1; i < lines.length; i++) {
+    const l = lines[i];
+    if (l.trim() === '') { body.push(''); continue; }
+    if (l.match(/^\s*/)[0].length <= runIndent) break;
+    body.push(l.slice(runIndent + 2));
+  }
+  const script = body.join('\n');
+  // The split/join normalises line endings on purpose. A Windows checkout hands
+  // this file back CRLF; the mutation needles below match on plain LF, and a
+  // stray \r would make those `replace()` calls silently no-op — the mutation
+  // then "passes" by having changed nothing at all.
+  assert.ok(!script.includes('\r'), 'extracted script carries CR — the mutation needles below would no-op');
+  return script;
+}
+
+function pinScript() {
+  const script = stepRun(PIN_STEP);
+  assert.ok(script.includes('az acr import'), 'the extracted pin step issues no retag — extraction has drifted');
+  assert.ok(
+    script.includes('acr-firewall-lease.sh acquire'),
+    'the extracted pin step acquires no lease — extraction has drifted',
+  );
+  assert.ok(script.includes('resolve-acr-digest.sh'), 'the extracted pin step reads nothing back');
+  return script;
+}
+
+/** A step's `if:` expression, folded scalar included, as one line. */
+function stepIf(stepName) {
+  const lines = wfLines();
+  const start = lines.findIndex((l) => l.trim() === `- name: ${stepName}`);
+  assert.ok(start >= 0, `workflow step "${stepName}" not found`);
+  for (let i = start + 1; i < lines.length; i++) {
+    if (/^\s*- name:/.test(lines[i])) break;
+    const m = lines[i].match(/^(\s*)if:\s*(.*)$/);
+    if (!m) continue;
+    const [, indent, rest] = m;
+    if (rest.trim() !== '>-' && rest.trim() !== '>' && rest.trim() !== '') return rest.trim();
+    const parts = [];
+    for (let j = i + 1; j < lines.length; j++) {
+      if (lines[j].trim() === '') continue;
+      if (lines[j].match(/^\s*/)[0].length <= indent.length) break;
+      parts.push(lines[j].trim());
+    }
+    assert.ok(parts.length > 0, `the folded if: under "${stepName}" is empty`);
+    return parts.join(' ');
+  }
+  assert.fail(`no if: found on step "${stepName}"`);
+}
+
+// ── The sandbox ─────────────────────────────────────────────────────────────
+
+const LEASE_STUB = `#!/usr/bin/env bash
+# Harness stub for scripts/csa-loom/acr-firewall-lease.sh. Records the call in
+# ORDER, which is the whole point: the ordering claim is measured, not read.
+ACTION="\${1:-}"
+printf '%s\\n' "lease:\${ACTION}" >> "\$EVENT_LOG"
+if [ "\$ACTION" = "acquire" ]; then exit "\${STUB_ACQUIRE_RC:-0}"; fi
+exit "\${STUB_RELEASE_RC:-0}"
+`;
+
+const RETRY_STUB = `// Harness stub for scripts/ci/deploy-retry.mjs. Records the retag it was asked
+// to perform, in order, and honours STUB_IMPORT_FAIL_REPO.
+import { appendFileSync } from 'node:fs';
+const argv = process.argv.slice(2);
+const i = argv.indexOf('--');
+const cmd = i >= 0 ? argv.slice(i + 1) : argv;
+const at = (flag) => { const k = cmd.indexOf(flag); return k >= 0 ? cmd[k + 1] : ''; };
+const source = at('--source');
+const image = at('--image');
+appendFileSync(process.env.EVENT_LOG, \`import:\${source}->\${image}\\n\`);
+const fail = process.env.STUB_IMPORT_FAIL_REPO || '';
+process.exit(fail && image.startsWith(fail) ? 1 : 0);
+`;
+
+const RESOLVE_STUB = `#!/usr/bin/env bash
+# Harness stub for scripts/ci/resolve-acr-digest.sh. Answers from a fixture map
+# and records the read in ORDER. An image with no fixture exits LOUDLY (9)
+# rather than answering empty — an unfixtured read must never look like a pass.
+IMAGE=""
+while [ "\$#" -gt 0 ]; do
+  case "\$1" in
+    --image) IMAGE="\$2"; shift 2 ;;
+    *) shift ;;
+  esac
+done
+printf '%s\\n' "resolve:\${IMAGE}" >> "\$EVENT_LOG"
+ROW="\$(awk -F'\\t' -v im="\$IMAGE" '\$1 == im { print \$2 "\\t" \$3; exit }' "\$STUB_DIGEST_MAP")"
+if [ -z "\$ROW" ]; then
+  echo "stub: no fixture for '\$IMAGE'" >&2
+  exit 9
+fi
+RC="\$(printf '%s' "\$ROW" | cut -f1)"
+DG="\$(printf '%s' "\$ROW" | cut -f2)"
+if [ "\$RC" != "0" ]; then exit "\$RC"; fi
+printf '%s\\n' "\$DG"
+`;
+
+const posix = (p) => p.replace(/\\/g, '/').replace(/^([A-Za-z]):/, (_m, d) => `/${d.toLowerCase()}`);
+
+/**
+ * Run the pin step in a sandbox.
+ *
+ * `digests` is the .roll/digests.tsv the roll produced. `registry` is what the
+ * resolver answers for each image ref: `[image, rc, digest]`. Anything the step
+ * reads that is not in `registry` fails loudly, so a test cannot pass by reading
+ * nothing.
+ */
+function runPin(script, { digests, registry, env = {} } = {}) {
+  const dir = mkdtempSync(join(tmpdir(), 'roll-race-'));
+  mkdirSync(join(dir, 'scripts', 'csa-loom'), { recursive: true });
+  mkdirSync(join(dir, 'scripts', 'ci'), { recursive: true });
+  mkdirSync(join(dir, '.roll'), { recursive: true });
+
+  writeFileSync(join(dir, 'scripts', 'csa-loom', 'acr-firewall-lease.sh'), LEASE_STUB, 'utf8');
+  writeFileSync(join(dir, 'scripts', 'ci', 'deploy-retry.mjs'), RETRY_STUB, 'utf8');
+  writeFileSync(join(dir, 'scripts', 'ci', 'resolve-acr-digest.sh'), RESOLVE_STUB, 'utf8');
+  writeFileSync(
+    join(dir, '.roll', 'digests.tsv'),
+    `${digests.map(([r, d]) => `${r}\t${d}`).join('\n')}\n`,
+    'utf8',
+  );
+  const mapPath = join(dir, 'digest-map.tsv');
+  writeFileSync(mapPath, `${registry.map((r) => r.join('\t')).join('\n')}\n`, 'utf8');
+  const logPath = join(dir, 'events.log');
+  writeFileSync(logPath, '', 'utf8');
+
+  const stepPath = join(dir, 'pin.sh');
+  writeFileSync(stepPath, script, 'utf8');
+
+  const r = spawnSync('bash', [stepPath], {
+    cwd: dir,
+    encoding: 'utf8',
+    env: {
+      ...process.env,
+      TAG,
+      ACR,
+      ACR_LOGIN: `${ACR}.azurecr.io`,
+      EVENT_LOG: posix(logPath),
+      STUB_DIGEST_MAP: posix(mapPath),
+      ...env,
+    },
+  });
+  const events = readFileSync(logPath, 'utf8').split('\n').filter(Boolean);
+  return { status: r.status, out: `${r.stdout}${r.stderr}`, events, dir, stepPath };
+}
+
+const errors = (out) => out.split('\n').filter((l) => l.includes('::error::'));
+
+/** A clean two-repo roll whose :v0.1 read-back matches. */
+const HAPPY = {
+  digests: [['loom-unity', WANT_UNITY], ['loom-trino', WANT_TRINO]],
+  registry: [
+    ['loom-unity:v0.1', '0', WANT_UNITY],
+    ['loom-trino:v0.1', '0', WANT_TRINO],
+    [`loom-unity:${TAG}`, '0', WANT_UNITY],
+    [`loom-trino:${TAG}`, '0', WANT_TRINO],
+  ],
+};
+
+/**
+ * The measured incident: :v0.1 was superseded by a concurrent build while the
+ * SOURCE tag still carries the digest this run rolled.
+ */
+const SUPERSEDED = {
+  digests: [['loom-trino', WANT_TRINO]],
+  registry: [
+    ['loom-trino:v0.1', '0', OTHER],
+    [`loom-trino:${TAG}`, '0', WANT_TRINO],
+  ],
+};
+
+// ── Harness integrity ───────────────────────────────────────────────────────
+
+test('HARNESS: the script bash executes IS the shipped step, byte for byte', { skip: !bashAvailable }, () => {
+  const script = pinScript();
+  const r = runPin(script, HAPPY);
+  assert.equal(readFileSync(r.stepPath, 'utf8'), script,
+    'the harness rewrote the subject — every assertion below would then be about the harness');
+});
+
+test('HARNESS: the collaborators the step calls exist at those paths in the real repo', () => {
+  const fileExists = (p) => { try { readFileSync(p); return true; } catch { return false; } };
+  // If a collaborator were renamed, the sandbox would keep answering on the old
+  // path and this suite would go on "passing" over a step that cannot run.
+  for (const rel of [
+    'scripts/csa-loom/acr-firewall-lease.sh',
+    'scripts/ci/deploy-retry.mjs',
+    'scripts/ci/resolve-acr-digest.sh',
+  ]) {
+    assert.ok(fileExists(join(REPO_ROOT, rel)), `${rel} no longer exists — the stub shadows a path that is gone`);
+    assert.ok(pinScript().includes(rel), `the pin step no longer calls ${rel} — this suite stubs the wrong thing`);
+  }
+});
+
+test('HARNESS: an image the fixture map does not cover fails LOUDLY', { skip: !bashAvailable }, () => {
+  // Otherwise a test could pass by reading nothing at all.
+  const r = runPin(pinScript(), {
+    digests: [['loom-unity', WANT_UNITY]],
+    registry: [[`loom-unity:${TAG}`, '0', WANT_UNITY]], // :v0.1 deliberately absent
+  });
+  assert.notEqual(r.status, 0);
+  assert.match(r.out, /resolver exit 9/);
+});
+
+// ── 1. ATOMICITY: the lease is held across the write AND the verify ─────────
+
+test('ORDERING: the lease is acquired BEFORE the first retag, and released after the read-back', { skip: !bashAvailable }, () => {
+  const r = runPin(pinScript(), HAPPY);
+  assert.equal(r.status, 0, r.out);
+
+  const firstAcquire = r.events.indexOf('lease:acquire');
+  const firstImport = r.events.findIndex((e) => e.startsWith('import:'));
+  const lastResolve = r.events.map((e) => e.startsWith('resolve:')).lastIndexOf(true);
+  const release = r.events.indexOf('lease:release');
+
+  assert.ok(firstAcquire >= 0, `no lease acquire was observed:\n${r.events.join('\n')}`);
+  assert.ok(firstImport >= 0, `no retag was observed:\n${r.events.join('\n')}`);
+  assert.ok(lastResolve >= 0, `no read-back was observed:\n${r.events.join('\n')}`);
+  assert.ok(release >= 0, `the lease was never released:\n${r.events.join('\n')}`);
+
+  assert.ok(firstAcquire < firstImport,
+    `the retag ran OUTSIDE the lease — that is the #4148 race window:\n${r.events.join('\n')}`);
+  assert.ok(lastResolve < release,
+    `the read-back ran after the lease was released:\n${r.events.join('\n')}`);
+  // Exactly one acquire: a second one would mean two critical sections again.
+  assert.equal(r.events.filter((e) => e === 'lease:acquire').length, 1, r.events.join('\n'));
+  assert.equal(r.events.filter((e) => e === 'lease:release').length, 1, r.events.join('\n'));
+});
+
+test('ORDERING MUTATION: the pre-fix order puts the retag OUTSIDE the lease', { skip: !bashAvailable }, () => {
+  // The regression reintroduced, by swapping the two blocks back the way they
+  // were. If the ordering assertion above could not see this, it would be
+  // asserting nothing about where the lease is taken.
+  const r = runPin(preFixOrdering(pinScript()), HAPPY);
+  const firstAcquire = r.events.indexOf('lease:acquire');
+  const firstImport = r.events.findIndex((e) => e.startsWith('import:'));
+  assert.ok(firstImport >= 0 && firstAcquire >= 0, r.events.join('\n'));
+  assert.ok(firstImport < firstAcquire,
+    `the pre-fix transform did not actually restore the old order:\n${r.events.join('\n')}`);
+});
+
+test('LEASE REFUSED: nothing is retagged, and the message says so', { skip: !bashAvailable }, () => {
+  // With the lease taken first, a refusal means no write happened — a better
+  // and TRUER state than the old ordering could report, which had already
+  // issued the retags before discovering it could not verify them.
+  const r = runPin(pinScript(), { ...HAPPY, env: { STUB_ACQUIRE_RC: '1' } });
+  assert.notEqual(r.status, 0, r.out);
+  assert.equal(r.events.filter((e) => e.startsWith('import:')).length, 0,
+    `a retag was issued despite the lease being refused:\n${r.events.join('\n')}`);
+  assert.match(errors(r.out)[0], /NO retag was attempted and :v0\.1 is unchanged/);
+});
+
+test('LEASE REFUSED MUTATION: under the pre-fix order the retags were already issued', { skip: !bashAvailable }, () => {
+  const r = runPin(preFixOrdering(pinScript()), { ...HAPPY, env: { STUB_ACQUIRE_RC: '1' } });
+  assert.equal(r.events.filter((e) => e.startsWith('import:')).length, 2,
+    `the pre-fix order must show the writes happening before the refusal:\n${r.events.join('\n')}`);
+});
+
+/**
+ * Rebuild the PRE-FIX ordering: move the lease acquisition back to AFTER the
+ * import loop. A deterministic block swap on the extracted text — it fails loudly
+ * if either block cannot be located, so it can never silently no-op.
+ */
+function preFixOrdering(script) {
+  const leaseStart = script.indexOf('LEASE_HELD=0');
+  const leaseEnd = script.indexOf('LEASE_HELD=1');
+  assert.ok(leaseStart >= 0 && leaseEnd > leaseStart, 'could not locate the lease block');
+  const leaseBlock = script.slice(leaseStart, leaseEnd + 'LEASE_HELD=1'.length);
+
+  const impStart = script.indexOf('IMPORT_FAILED=0');
+  assert.ok(impStart > leaseEnd, 'the import loop is not after the lease block — already pre-fix?');
+  const impEnd = script.indexOf('done < .roll/digests.tsv', impStart);
+  assert.ok(impEnd > impStart, 'could not locate the end of the import loop');
+  const importBlock = script.slice(impStart, impEnd + 'done < .roll/digests.tsv'.length);
+
+  // Replacer FUNCTIONS, not strings. `String.replace` interprets `$'` in a
+  // string replacement, and both blocks contain `IFS=$'\t'` — with a plain
+  // string replacement the swap silently corrupts the script instead of moving
+  // it, and the "mutation" would then be testing garbage.
+  const L = '@@LEASE_SLOT@@';
+  const I = '@@IMPORT_SLOT@@';
+  assert.ok(!script.includes(L) && !script.includes(I), 'the sentinels collide with the step text');
+  const swapped = script
+    .replace(leaseBlock, () => L)
+    .replace(importBlock, () => I)
+    .replace(L, () => importBlock)
+    .replace(I, () => leaseBlock);
+  assert.ok(!swapped.includes(L) && !swapped.includes(I), 'the block swap did not complete');
+  assert.notEqual(swapped, script, 'the swap changed nothing — this proof no longer targets the ordering');
+  assert.ok(
+    swapped.indexOf('IMPORT_FAILED=0') < swapped.indexOf('acr-firewall-lease.sh acquire'),
+    'the swap did not put the retag loop ahead of the acquire',
+  );
+  return swapped;
+}
+
+// ── 2. R7: a :v0.1 mismatch must not assert a cause it did not establish ────
+
+test('SUPERSEDED: a mismatch re-resolves the SOURCE tag and reports supersession, NOT "the pin did NOT land"', { skip: !bashAvailable }, () => {
+  const r = runPin(pinScript(), SUPERSEDED);
+  assert.notEqual(r.status, 0, 'durability is genuinely not established — the step must still fail');
+
+  // The discriminating read actually happened.
+  assert.ok(r.events.includes(`resolve:loom-trino:${TAG}`),
+    `the step did not re-resolve the source tag, so it cannot have distinguished the two causes:\n${r.events.join('\n')}`);
+
+  const [line, ...rest] = errors(r.out);
+  assert.equal(rest.length, 0, r.out);
+  assert.match(line, /SUPERSEDED by a later write/);
+  assert.match(line, /STILL resolves to/);
+  assert.match(line, /does NOT claim the import failed/);
+  // deploy-integrity.md R7 — the exact false sentence from run 33129547662.
+  assert.ok(!/The pin did NOT land/.test(line), `the step still asserts a cause it did not establish:\n${line}`);
+  // And it says what IS established, rather than only what it will not claim.
+  assert.match(line, /does not currently carry the rolled digest/);
+  assert.match(line, /NOT rolled back for this/);
+});
+
+test('SUPERSEDED MUTATION: without the source re-resolution the step cannot tell the two apart', { skip: !bashAvailable }, () => {
+  // Kill the discriminator and the same registry state is reported as a
+  // different, and false, story about the source tag.
+  const src = pinScript();
+  const mutated = src.replace('elif [ "$SRC_NOW" = "$WANT_DIGEST" ]; then', 'elif false; then');
+  assert.notEqual(mutated, src, 'the supersession discriminator moved — this proof no longer targets it');
+  const r = runPin(mutated, SUPERSEDED);
+  assert.notEqual(r.status, 0, r.out);
+  const [line] = errors(r.out);
+  assert.ok(!/SUPERSEDED/.test(line),
+    `the supersession verdict must come from the discriminator, not from anywhere else:\n${line}`);
+  assert.match(line, /has ALSO moved/); // i.e. it now says something untrue
+});
+
+test('SOURCE TAG ALSO MOVED: reported as UNKNOWN, not as supersession', { skip: !bashAvailable }, () => {
+  const r = runPin(pinScript(), {
+    digests: [['loom-trino', WANT_TRINO]],
+    registry: [
+      ['loom-trino:v0.1', '0', OTHER],
+      [`loom-trino:${TAG}`, '0', OTHER],
+    ],
+  });
+  assert.notEqual(r.status, 0, r.out);
+  const [line] = errors(r.out);
+  assert.match(line, /has ALSO moved/);
+  assert.match(line, /which write won is UNKNOWN/);
+  assert.ok(!/SUPERSEDED/.test(line), `both tags moved — supersession was not established:\n${line}`);
+});
+
+test('SOURCE TAG UNREADABLE: no cause is asserted at all', { skip: !bashAvailable }, () => {
+  const r = runPin(pinScript(), {
+    digests: [['loom-trino', WANT_TRINO]],
+    registry: [
+      ['loom-trino:v0.1', '0', OTHER],
+      [`loom-trino:${TAG}`, '7', ''],
+    ],
+  });
+  assert.notEqual(r.status, 0, r.out);
+  const [line] = errors(r.out);
+  assert.match(line, /could not be re-read \(resolver exit 7\)/);
+  assert.match(line, /asserts no cause/);
+  assert.ok(!/SUPERSEDED/.test(line), line);
+  assert.ok(!/The pin did NOT land/.test(line), line);
+});
+
+test('A GENUINE retag failure is still reported as one', { skip: !bashAvailable }, () => {
+  // The guard must not have become a blanket "it was probably a race".
+  const r = runPin(pinScript(), { ...HAPPY, env: { STUB_IMPORT_FAIL_REPO: 'loom-trino' } });
+  assert.notEqual(r.status, 0, r.out);
+  assert.ok(errors(r.out).some((l) => /Could not retag loom-trino/.test(l)), r.out);
+});
+
+test('THE HAPPY PATH still passes and still says what it proved', { skip: !bashAvailable }, () => {
+  const r = runPin(pinScript(), HAPPY);
+  assert.equal(r.status, 0, r.out);
+  assert.deepEqual(errors(r.out), []);
+  assert.match(r.out, /loom-unity:v0\.1 now resolves to/);
+  assert.match(r.out, /loom-trino:v0\.1 now resolves to/);
+});
+
+// ── 3. The rollback gate must not fire on a durability-pin failure ──────────
+
+/**
+ * Translate the subset of the GitHub expression language this gate uses into
+ * JS. Anything left over after the known constructs are stripped means the
+ * expression grew something this translator does not model — refuse rather than
+ * mis-evaluate it, because a translator that quietly guesses would make every
+ * assertion below a statement about the guess.
+ */
+function ghIfToJs(expr) {
+  const js = expr
+    .replace(/\bfailure\(\)/g, 'CTX.failure')
+    .replace(/\bsuccess\(\)/g, 'CTX.success')
+    .replace(/\bcancelled\(\)/g, 'CTX.cancelled')
+    .replace(/\balways\(\)/g, 'true')
+    .replace(/\bsteps\.([A-Za-z_][A-Za-z0-9_]*)\.outcome\b/g, (_m, id) => `CTX.outcome[${JSON.stringify(id)}]`)
+    .replace(/!=/g, '!==')
+    .replace(/(?<![=!<>])==(?!=)/g, '===');
+  const residue = js
+    .replace(/CTX\.outcome\[[^\]]*\]/g, '')
+    .replace(/CTX\.(failure|success|cancelled)/g, '')
+    .replace(/'[^']*'/g, '')
+    .replace(/\b(true|false)\b/g, '')
+    .replace(/[\s()&|!=]/g, '');
+  assert.equal(residue, '',
+    `the rollback if: uses a construct this translator does not model (${JSON.stringify(residue)}) — `
+    + 'teach it, or the cases below are evaluating something other than the shipped gate');
+  return js;
+}
+
+const rollbackFires = (ctx) => {
+  const fn = new Function('CTX', `return (${ghIfToJs(stepIf(ROLLBACK_STEP))});`);
+  return fn({ failure: true, success: false, cancelled: false, outcome: ctx });
+};
+
+test('ROLLBACK GATE: a durability-pin failure does NOT trigger a rollback', () => {
+  // The measured incident. health and verify both passed; the pin failed on a
+  // registry tag race; the roll was reverted anyway.
+  assert.equal(
+    rollbackFires({ roll: 'success', health: 'success', verify: 'success', digest: 'success', pin: 'failure' }),
+    false,
+    'a verified-live roll is still reverted when only the durability pin fails (#4148)',
+  );
+});
+
+test('ROLLBACK GATE: every gate that judges the LIVE ESTATE still triggers it', () => {
+  // The other direction, so the fix is a discrimination and not a disabling.
+  for (const failing of ['health', 'verify', 'digest']) {
+    const ctx = { roll: 'success', health: 'success', verify: 'success', digest: 'success', pin: 'success' };
+    ctx[failing] = 'failure';
+    assert.equal(rollbackFires(ctx), true, `a ${failing} failure no longer rolls back — that is a coverage loss`);
+  }
+});
+
+test('ROLLBACK GATE: a failed roll still does not trigger it (pre-existing behaviour)', () => {
+  assert.equal(
+    rollbackFires({ roll: 'failure', health: 'skipped', verify: 'skipped', digest: 'skipped', pin: 'skipped' }),
+    false,
+  );
+});
+
+test('ROLLBACK GATE MUTATION: the pre-fix expression DOES revert on a pin-only failure', () => {
+  // The gate as it shipped before this change, evaluated by the same translator.
+  const OLD = "failure() && steps.roll.outcome == 'success'";
+  const fn = new Function('CTX', `return (${ghIfToJs(OLD)});`);
+  assert.equal(
+    fn({
+      failure: true,
+      success: false,
+      cancelled: false,
+      outcome: { roll: 'success', health: 'success', verify: 'success', digest: 'success', pin: 'failure' },
+    }),
+    true,
+    'the pre-fix gate must fire here — otherwise the control above proves nothing',
+  );
+});
+
+test('ROLLBACK GATE: the message names the gates it fires on, and excludes the pin', () => {
+  // deploy-integrity.md R7 applied to the rollback's own announcement: the old
+  // one printed "A post-roll gate failed (health=success, verify=success)"
+  // while reverting, which named two passing steps as the cause.
+  const run = stepRun(ROLLBACK_STEP);
+  assert.match(run, /health=\$\{\{ steps\.health\.outcome \}\}/);
+  assert.match(run, /verify=\$\{\{ steps\.verify\.outcome \}\}/);
+  assert.match(run, /digest-reassert=\$\{\{ steps\.digest\.outcome \}\}/);
+  assert.match(run, /durability pin is NOT one of these/i);
+});
+
+test('the digest re-assertion step carries the id the rollback gate reads', () => {
+  // Without the id, `steps.digest.outcome` is always '' and the gate silently
+  // stops rolling back on a tag re-point — a coverage loss with no error.
+  const lines = wfLines();
+  const at = lines.findIndex((l) => l.trim() === '- name: Re-assert the tag still resolves to the preflighted digest');
+  assert.ok(at >= 0, 'the digest re-assertion step was renamed — the rollback gate now reads a dead id');
+  assert.equal(lines[at + 1].trim(), 'id: digest',
+    'the digest re-assertion step lost its `id: digest`, so steps.digest.outcome is empty in the rollback gate');
+});
