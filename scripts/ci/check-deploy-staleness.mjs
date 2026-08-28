@@ -724,6 +724,22 @@ export const WATCHED = [
       // gates whether the apply proceeds at all — the #3449 defect, ported to
       // this lane so GCC does not carry it unmitigated (cloud-parity.md).
       'scripts/ci/ensure-adx-cluster-running.mjs',
+      // ── #3948, ported to this lane by #4098 ───────────────────────────────
+      // The AAS preflight, watched here for exactly the reason the Commercial
+      // entry gives: it MUTATES the estate. It resumes a Paused Analysis
+      // Services server so `admin-plane` can write its asAdministrators, it can
+      // REFUSE the apply outright on a state no resume resolves, and its
+      // `aas_resumed` output gates this lane's always() re-suspend — so a
+      // change to it can also leave an S1 billing after the job ends. It is NOT
+      // CI_PLUMBING (the plumbing loans are all "shapes how a run behaves,
+      // deploys nothing"); this one issues `az resource invoke-action --action
+      // resume` against a live server.
+      //
+      // GCC needs it BECAUSE it is exposed by default, not by choice:
+      // main.bicep defaults `aasEnabled` true and params/gcc.bicepparam sets it
+      // nowhere, while gcc-high/il5 set it false. Its only repo-relative import,
+      // scripts/ci/_az-failure-class.mjs, is already listed below.
+      'scripts/ci/ensure-aas-server-settled.mjs',
       // The shared rule it imports to tell "definitely absent" from "I could not
       // read it". HAND-LISTED, and the distinction matters: it is `import`ed, not
       // `node`-invoked, so it is NOT a mechanically-detected source even with the
@@ -1307,14 +1323,38 @@ export function classifyWorkflowState(state) {
  * an image built off a branch). Reporting a commit distance for it would be
  * arithmetic on two unrelated histories.
  *
+ * ── `rollInFlight` — WHY THE PAST-GRACE MESSAGE HAS THREE FORMS (#4143) ─────
+ * Past the allowance this used to state, as fact, that "the roll path has
+ * stopped applying main to this estate" — computed from
+ * `behindForMinutes > behindGraceMinutes` and NOTHING ELSE. No caller looked for
+ * a roll that was executing at that moment, so the sentence asserted a cause the
+ * code had never established: deploy-integrity.md R7, the same shape as the
+ * 2026-08-05 "the tag does not exist" claim that was really "I could not reach
+ * the registry".
+ *
+ * The caller now supplies what it measured, and the message says only that:
+ *
+ *   rollInFlight === false  a roll workflow query RAN and found nothing running
+ *                           → the stopped-roll-path claim is ESTABLISHED, and is
+ *                             the only branch entitled to make it.
+ *   rollInFlight === true   a run was observed queued/in_progress → the claim is
+ *                           FALSE and is not made; the run is named instead.
+ *   rollInFlight nullish    nobody looked → the message says nobody looked.
+ *
+ * `stale` is IDENTICAL in all three. The defect was the stated cause, not the
+ * verdict — and making an in-flight roll suppress the verdict would convert an
+ * R7 fix into a gate a long roll can silence, which is this repo's most-repeated
+ * defect wearing the fix's clothes.
+ *
  * @param {{name:string, liveSha?:string|null, commitsBehind?:number|null,
  *          ageDays?:number|null, ancestor?:boolean, error?:string|null,
  *          behindSince?:string|null, behindForMinutes?:number|null,
+ *          rollInFlight?:boolean|null, rollDetail?:string|null,
  *          behindGraceMinutes:number, maxAgeDays:number}} a
  */
 export function classifyEstate({
   name, liveSha, commitsBehind, ageDays, ancestor, aheadOfRef, error,
-  behindSince, behindForMinutes,
+  behindSince, behindForMinutes, rollInFlight, rollDetail,
   behindGraceMinutes, maxAgeDays,
 }) {
   if (error || !liveSha) {
@@ -1394,17 +1434,141 @@ export function classifyEstate({
     };
   }
   const pastGrace = behindForMinutes > behindGraceMinutes;
+  const behindFor = `${commitsBehind} commit(s) behind main, oldest unapplied for ${behindForMinutes}min `
+    + `(allowance ${behindGraceMinutes}min)`;
   return {
     ...shell,
+    // Carried on the row so a --json consumer can tell the three states apart
+    // without re-parsing prose: true / false / null-for-unmeasured.
+    rollInFlight: rollInFlight === true || rollInFlight === false ? rollInFlight : null,
     state: 'behind',
+    // UNCHANGED IN ALL THREE BRANCHES, deliberately. #4143 is about the stated
+    // CAUSE being unestablished, not about the verdict being wrong: an estate
+    // past its roll window is a real drift condition whether or not something is
+    // currently rolling. Suppressing `stale` on an in-flight roll would have
+    // turned an R7 fix into a gate that a long-running roll can silence.
     stale: pastGrace || overAge,
     detail: pastGrace
-      ? `${commitsBehind} commit(s) behind main, oldest unapplied for ${behindForMinutes}min (allowance ${behindGraceMinutes}min) `
-        + '— longer than a build and roll take, so the roll path has stopped applying main to this estate'
+      ? (rollInFlight === true
+        // MEASURED, and it contradicts the old sentence. Say what was seen and
+        // stop; why THIS roll has outrun the allowance is a further question
+        // this function did not ask and must not answer.
+        ? `${behindFor} — but a roll IS in flight (${rollDetail || 'an in-flight run was found'}), `
+          + 'so the roll path has NOT stopped; this is a roll that has not landed yet. Past the allowance either way'
+        // MEASURED, and it ESTABLISHES the claim. This is the only branch
+        // entitled to say the roll path has stopped, and it now says so on the
+        // strength of a run-history query, not of a clock.
+        : rollInFlight === false
+          ? `${behindFor} — longer than a build and roll take, and no roll is in flight `
+            + `(${rollDetail || 'the roll workflows were queried and none was queued or running'}), `
+            + 'so the roll path has stopped applying main to this estate'
+          // NOT MEASURED. The pre-#4143 default, and the one that used to assert
+          // the cause anyway. It now states only what it established.
+          : `${behindFor} — past the allowance. Whether a roll is in flight was NOT measured`
+            + `${rollDetail ? ` (${rollDetail})` : ''}, so WHY main has not landed is not established here`)
       : overAge
         ? `${commitsBehind} commit(s) behind main and the running image is ${ageDays}d old (limit ${maxAgeDays}d)`
-        : `${commitsBehind} commit(s) behind main, oldest unapplied only ${behindForMinutes}min ago — a roll is plausibly in flight`,
+        : `${commitsBehind} commit(s) behind main, oldest unapplied only ${behindForMinutes}min ago — inside the `
+          + `${behindGraceMinutes}min allowance for a roll in flight`,
   };
+}
+
+/**
+ * Which run statuses mean "this workflow is executing RIGHT NOW".
+ *
+ * `completed` is the only terminal status the Actions API reports; everything
+ * else is a stage of not-yet-finished. Enumerated positively rather than as
+ * `status !== 'completed'` so a status GitHub adds later reads as unrecognised
+ * (and therefore not in-flight) instead of silently becoming evidence.
+ */
+export const IN_FLIGHT_STATUSES = Object.freeze([
+  'queued', 'in_progress', 'waiting', 'requested', 'pending',
+]);
+
+/**
+ * Is a roll executing right now? PURE, over already-fetched run rows (#4143).
+ *
+ * THREE STATES, NEVER TWO — the same discipline check-cross-cloud-drift.mjs
+ * applies to the estate itself, applied here to the question ABOUT the estate:
+ *
+ *   true   at least one run of a roll workflow is queued/in_progress/…
+ *   false  every roll workflow was queried successfully and none is running
+ *   null   we could not look — the query failed, or nothing was configured to
+ *          query. NOT "no roll": absence of a query is not absence of a roll,
+ *          and collapsing those two is exactly the R7 error #4143 is about.
+ *
+ * A failed query on one workflow does NOT erase a positive finding on another:
+ * an in-flight run that was actually observed is established fact regardless of
+ * what else could not be read. It is only the NEGATIVE answer that requires
+ * every probe to have succeeded, because "none found" is only meaningful when
+ * everything was looked at.
+ *
+ * @param {{workflow:string, rows?:{status?:string, createdAt?:string, databaseId?:number}[],
+ *          queryFailed?:boolean, error?:string}[]} probes
+ * @returns {{inFlight:boolean|null, detail:string}}
+ */
+export function classifyRollInFlight(probes) {
+  const list = Array.isArray(probes) ? probes : [];
+  if (list.length === 0) {
+    return {
+      inFlight: null,
+      detail: 'no roll workflow is registered for this estate, so the question was never asked',
+    };
+  }
+  const running = [];
+  for (const p of list) {
+    for (const r of p.rows || []) {
+      if (IN_FLIGHT_STATUSES.includes(String(r?.status || ''))) {
+        running.push(`${p.workflow} run ${r.databaseId ?? '?'} is ${r.status}`
+          + `${r.createdAt ? `, started ${String(r.createdAt).slice(0, 16).replace('T', ' ')}Z` : ''}`);
+      }
+    }
+  }
+  if (running.length) return { inFlight: true, detail: running.join('; ') };
+
+  const failed = list.filter((p) => p.queryFailed);
+  if (failed.length) {
+    return {
+      inFlight: null,
+      detail: `the run-history query failed for ${failed.map((p) => p.workflow).join(', ')} `
+        + `— ${failed[0].error || 'no reason reported'}`,
+    };
+  }
+  return {
+    inFlight: false,
+    detail: `queried ${list.map((p) => p.workflow).join(' + ')}; none queued or running`,
+  };
+}
+
+/**
+ * The IO half of {@link classifyRollInFlight}: ask gh for each roll workflow's
+ * unfinished runs.
+ *
+ * `--status` is NOT used to filter server-side. gh accepts one status per
+ * invocation, so five statuses would be five round trips per workflow, and a
+ * status this repo has not enumerated would be invisible rather than merely
+ * unrecognised. Fetching the newest runs and filtering locally keeps the
+ * enumeration in ONE place (IN_FLIGHT_STATUSES) where a test can drive it.
+ */
+function probeRollWorkflows(workflows) {
+  const probes = [];
+  for (const workflow of workflows || []) {
+    try {
+      const out = gh([
+        'run', 'list', '--workflow', workflow, '--limit', '20',
+        '--json', 'databaseId,status,createdAt', '--repo', REPO,
+      ]);
+      probes.push({ workflow, rows: JSON.parse(out || '[]') });
+    } catch (e) {
+      probes.push({
+        workflow,
+        rows: [],
+        queryFailed: true,
+        error: String(e?.stderr || e?.message || e).slice(0, 160),
+      });
+    }
+  }
+  return probes;
 }
 
 /** Recent runs of `workflow`, ANY conclusion, newest first. */
@@ -1505,7 +1669,17 @@ async function probeEstate(estate) {
     // branch). UNKNOWN — classifyEstate turns that into a loud stale, not a green.
     return classifyEstate({ ...estate, liveSha, commitsBehind: null, ageDays: null });
   }
-  return classifyEstate({ ...estate, liveSha, commitsBehind, ageDays, ancestor, behindSince, behindForMinutes });
+  // #4143 — ASK, rather than assert. Only asked when the estate is actually
+  // behind: a current estate's message says nothing about the roll path, so a
+  // query there would be two gh round trips buying no sentence. When it is
+  // behind, the answer is what entitles (or disentitles) the "the roll path has
+  // stopped" claim below.
+  let roll = { inFlight: null, detail: 'the estate is not behind, so no roll query was made' };
+  if (commitsBehind > 0) roll = classifyRollInFlight(probeRollWorkflows(estate.rollWorkflows));
+  return classifyEstate({
+    ...estate, liveSha, commitsBehind, ageDays, ancestor, behindSince, behindForMinutes,
+    rollInFlight: roll.inFlight, rollDetail: roll.detail,
+  });
 }
 
 /**

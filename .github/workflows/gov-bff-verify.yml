@@ -266,11 +266,38 @@ jobs:
           // array (an empty `unityWorkspaceErrors` is not a finding).
           const gate = (why) => (v) => (v === undefined || v === null ? false : why);
           const gateNonEmpty = (why) => (v) => (Array.isArray(v) ? v.length > 0 : v !== undefined && v !== null) && why;
+          // `ok:false` on a 2xx is an ERROR ENVELOPE, not data. Every 2xx path of
+          // all three routes emits `ok:true` — metastores/route.ts:115,
+          // governance/catalog/route.ts:121,135,204, purview-status/route.ts:89 —
+          // and `ok:false` only ever ships with a non-2xx status. So a 2xx
+          // carrying `ok:false` is a contract break wherever it appears.
+          // It was classified `info` on all three probes, i.e. PRINTED AND NEVER
+          // GRADED, while the governance-catalog comment below asserted the
+          // contract as if it were enforced. Measured on the pre-fix step:
+          // `{"ok":false}` on a 200 produced `::notice:: OK (200)` and exit 0
+          // (#4000; deploy-integrity.md R7 — a comment must not assert an
+          // enforcement the code does not perform).
+          const okTrue = (v) =>
+            v === true ? false : `ok is not true on a 2xx — the route returned an error envelope (ok=${JSON.stringify(v)})`;
+          // `required` names the top-level keys the route's 2xx contract emits on
+          // EVERY path. It is graded separately from `gates`, because the gate
+          // loop walks `Object.keys(body)` and therefore cannot see a key that is
+          // not there — which is why purview's own "missing from the envelope"
+          // arm could fire for a present-but-null value and never for the missing
+          // key it names. Measured on the pre-fix step: a `{"ok":true}` body from
+          // the purview-status route produced `::notice::purview wiring status:
+          // OK (200)` and exit 0 (#4000).
           const probes = [
             {
               path: '/api/catalog/metastores',
               label: 'unity-catalog (OSS loom-unity)',
+              // `ok` and `purview` are on EVERY 2xx path of that route
+              // (`const result: any = { ok: true }` at :115, and :213-220 sets
+              // `result.purview` to an object or to null in both branches), so
+              // an envelope missing either is unreadable, not clean.
+              required: ['ok', 'purview'],
               gates: {
+                ok: okTrue,
                 unityError: gate('unity catalog error'),
                 unityHint: gate('unity catalog NOT CONFIGURED (missing hostnames env)'),
                 unityWorkspaceErrors: gateNonEmpty('one or more Unity workspaces failed to list'),
@@ -285,7 +312,7 @@ jobs:
               // listing work without, and which Gov's OSS Unity has no account
               // for, so it is present there BY DESIGN.
               info: [
-                'ok', 'unity', 'unityHosts', 'registrations', 'degraded', 'warning',
+                'unity', 'unityHosts', 'registrations', 'degraded', 'warning',
                 'accountApiConfigured', 'accountMetastores', 'accountApiHint',
                 'discoverableWorkspaces', 'discoveryError', 'onelake', 'onelakeError',
                 'purview', 'purviewError',
@@ -295,13 +322,24 @@ jobs:
               path: '/api/governance/catalog',
               label: 'purview governance catalog',
               // This route emits NO gate marker on any path — hence defect 3
-              // above. Its real contract is 2xx + `ok:true`; `error` appears
-              // only on the 500 the status ladder already owns. `source:'cosmos'`
-              // is the honest AI-Search-absent fallback, NOT a gate, so it is
-              // printed and not failed. The fail-closed rule below is what gives
-              // this probe teeth the day the route does grow a gate field.
-              gates: { error: gate('route returned an error envelope on a 2xx') },
-              info: ['ok', 'total', 'assets', 'facets', 'workspaces', 'source', 'code'],
+              // above. Its real contract is 2xx + `ok:true`, and that contract is
+              // now GRADED rather than merely asserted here (`ok: okTrue`);
+              // `error` appears only on the 500 the status ladder already owns.
+              // `source:'cosmos'` is the honest AI-Search-absent fallback, NOT a
+              // gate, so it is printed and not failed. The fail-closed rule below
+              // is what gives this probe teeth the day the route grows a gate
+              // field.
+              //
+              // `facets` is deliberately NOT required: the callerWorkspaceIds==0
+              // branch (:135) omits it while the other two 2xx branches emit it.
+              // Requiring a key the producer does not always emit would turn a
+              // legitimate response into a false finding.
+              required: ['ok', 'total', 'assets', 'workspaces', 'source'],
+              gates: {
+                ok: okTrue,
+                error: gate('route returned an error envelope on a 2xx'),
+              },
+              info: ['total', 'assets', 'facets', 'workspaces', 'source', 'code'],
             },
             {
               path: '/api/admin/domains/purview-status',
@@ -314,16 +352,29 @@ jobs:
               // stayed silent on the case that actually says `gated:true`
               // (deploy-integrity.md R7: an error must not assert what it has
               // not established).
+              // The route's 2xx is exactly `{ ok: true, purview }` (:89), so both
+              // keys are required. ABSENCE of `purview` is graded by the required
+              // rule, NOT by the predicate below — which is the whole of #4000:
+              // the predicate's own "missing from the envelope" string could only
+              // ever be reached with the key PRESENT.
+              required: ['ok', 'purview'],
               gates: {
+                ok: okTrue,
                 purview: (v) => {
-                  if (!v || typeof v !== 'object') return 'purview status missing from the envelope';
+                  // Reachable only with the key present, so this arm must not
+                  // claim absence (deploy-integrity.md R7). A present-but-null /
+                  // non-object value is a status that could not be READ.
+                  if (v === null || typeof v !== 'object' || Array.isArray(v)) {
+                    const kind = v === null ? 'null' : Array.isArray(v) ? 'an array' : `a ${typeof v}`;
+                    return `purview is present but is ${kind}, not a status object — the Purview wiring state could not be read from it`;
+                  }
                   if (v.configured === true) return false;
                   return v.gated === true
                     ? 'purview.gated=true — provisioned, but the Console UAMI lacks a Purview Data Map data-plane role on the ROOT collection'
                     : 'purview.configured=false — the Purview mirror is not wired (LOOM_PURVIEW_ACCOUNT unset, or the account was unreachable)';
                 },
               },
-              info: ['ok', 'error'],
+              info: ['error'],
             },
           ];
           // This job holds Gov secrets and prints response bytes to TWO distinct
@@ -359,9 +410,31 @@ jobs:
               ? `field ${JSON.stringify(key)} (offset unknown — the key is not literally present in the raw body): ${flat(t.slice(0, 280))}`
               : `field ${JSON.stringify(key)} at offset ${i} of ${t.length}: ${excerpt(t, i, 40, 660)}`;
           };
+          // POPULATION FLOOR for the required rule, checked before any request.
+          // A probe with an empty `required` list cannot detect an EMPTIED
+          // envelope at all — it would grade `{}` as clean, which is the exact
+          // shape #4000 measured. And a `required` key classified in neither
+          // `gates` nor `info` would fail every run on the unclassified arm
+          // instead of on the missing-key arm, hiding what actually broke. Both
+          // are defects in THIS table, so they abort the job loudly rather than
+          // silently reducing what it watches.
+          let tableBad = 0;
+          for (const p of probes) {
+            if (!Array.isArray(p.required) || p.required.length === 0) {
+              console.log(`::error::probe table defect: ${p.label} declares no required top-level keys, so an EMPTY 2xx envelope from ${p.path} would be graded clean. List the keys that route emits on every 2xx path.`);
+              tableBad++;
+              continue;
+            }
+            for (const k of p.required) {
+              if (!Object.prototype.hasOwnProperty.call(p.gates, k) && !p.info.includes(k)) {
+                console.log(`::error::probe table defect: ${p.label} requires ${JSON.stringify(k)} but classifies it in neither gates nor info — a present one would then fail on the UNCLASSIFIED arm instead of being graded.`);
+                tableBad++;
+              }
+            }
+          }
           (async () => {
-            let bad = 0;
-            for (const { path, label, gates, info } of probes) {
+            let bad = tableBad;
+            for (const { path, label, gates, info, required } of probes) {
               try {
                 const r = await fetch(B + path, { headers: { cookie } });
                 const t = await r.text();
@@ -385,6 +458,15 @@ jobs:
                   bad++; continue;
                 }
                 const findings = [];
+                // REQUIRED FIRST — and NOT inside the loop below, which walks
+                // `Object.keys(body)` and so is structurally incapable of seeing
+                // an ABSENT key. That is the defect: a declared gate whose own
+                // message named a missing key could never fire for one (#4000).
+                for (const k of required) {
+                  if (!Object.prototype.hasOwnProperty.call(body, k)) {
+                    findings.push(`${label}: MISSING required top-level key ${JSON.stringify(redact(k))} — this route emits it on every 2xx path, so an envelope without it is UNVERIFIED, not clean: ${evidence(t, k)}`);
+                  }
+                }
                 for (const k of Object.keys(body)) {
                   if (Object.prototype.hasOwnProperty.call(gates, k)) {
                     const why = gates[k](body[k]);

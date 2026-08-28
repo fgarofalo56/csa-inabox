@@ -705,6 +705,7 @@ jobs:
       #  tag underneath this run. It is not a claim about the running container's
       #  own digest.
       - name: Re-assert the tag still resolves to the preflighted digest
+        id: digest
         if: steps.preflight.outputs.digests_complete == 'true'
         run: |
           set -uo pipefail
@@ -761,8 +762,20 @@ jobs:
       #  `az acr import` with --source and --image on the SAME registry is an ARM
       #  control-plane retag performed by the registry service. It is
       #  digest-preserving (no rebuild, no repush) and does not need the data
-      #  plane, so it works while the registry is firewalled shut. The VERIFY
+      #  plane, so it CAN run while the registry is firewalled shut. The VERIFY
       #  afterwards does need the data plane, hence the lease.
+      #
+      #  THE LEASE IS NEVERTHELESS TAKEN FIRST, BEFORE ANY WRITE (#4148). That is
+      #  not about reachability — it is about ATOMICITY. Taking it only for the
+      #  read left the write and its verification in two separate critical
+      #  sections with an unbounded gap between them, and the lease is this
+      #  estate's only cross-workflow mutual exclusion on the registry. Measured
+      #  in run 33129547662: `az acr import` onto :v0.1 succeeded at 00:28:19 for
+      #  loom-trino and loom-unity, the step then BLOCKED 22.5 minutes at the
+      #  acquire (attempt 52) because build-fiab-images-acr-tasks run 33129550648
+      #  held the lease 00:23:15 → 00:50:53, and by the time the read ran that
+      #  build had repointed :v0.1. Write and verify now happen inside ONE lease,
+      #  so no lease-honouring producer can interleave between them.
       #
       #  Gated on the estate having verified first, and on the digest being known.
       #  Pinning an unverified image would make it the deploy default — the
@@ -776,6 +789,28 @@ jobs:
             echo "::notice::The rolled tag IS v0.1 — nothing to pin. Note that this run therefore rolled a MUTABLE tag; the estate is durable only for as long as nothing else repoints it."
             exit 0
           fi
+
+          LEASE_HELD=0
+          release_lease() {
+            [ "$LEASE_HELD" = "1" ] || return 0
+            LEASE_HELD=0
+            if bash scripts/csa-loom/acr-firewall-lease.sh release --acr "$ACR"; then
+              return 0
+            fi
+            echo "::error::The ACR firewall lease on '$ACR' could NOT be confirmed released. The registry data plane may still be publicly reachable."
+            return 1
+          }
+          trap 'release_lease' EXIT
+
+          # ACQUIRE BEFORE THE FIRST WRITE. Failing here means NOTHING was
+          # retagged, which is a different and better state than the previous
+          # ordering could report: it used to issue the retags first and then
+          # discover it could not verify them.
+          if ! LOOM_ACR_LEASE_TTL_MINUTES=20 bash scripts/csa-loom/acr-firewall-lease.sh acquire --acr "$ACR"; then
+            echo "::error::Could not acquire the ACR firewall lease on '$ACR', so NO retag was attempted and :v0.1 is unchanged. The roll itself is verified and live; its DURABILITY is not established. Re-run this workflow once the holder of the lease has finished."
+            exit 1
+          fi
+          LEASE_HELD=1
 
           IMPORT_FAILED=0
           while IFS=$'\t' read -r REPO WANT_DIGEST; do
@@ -793,24 +828,6 @@ jobs:
             fi
           done < .roll/digests.tsv
 
-          LEASE_HELD=0
-          release_lease() {
-            [ "$LEASE_HELD" = "1" ] || return 0
-            LEASE_HELD=0
-            if bash scripts/csa-loom/acr-firewall-lease.sh release --acr "$ACR"; then
-              return 0
-            fi
-            echo "::error::The ACR firewall lease on '$ACR' could NOT be confirmed released. The registry data plane may still be publicly reachable."
-            return 1
-          }
-          trap 'release_lease' EXIT
-
-          if ! LOOM_ACR_LEASE_TTL_MINUTES=20 bash scripts/csa-loom/acr-firewall-lease.sh acquire --acr "$ACR"; then
-            echo "::error::Retag(s) were issued but the lease to VERIFY them could not be acquired. This run will not claim the pin landed — an unverified pin is exactly the class of claim this program exists to eliminate."
-            exit 1
-          fi
-          LEASE_HELD=1
-
           VERIFY_FAILED=0
           while IFS=$'\t' read -r REPO WANT_DIGEST; do
             [ -n "$REPO" ] || continue
@@ -824,7 +841,24 @@ jobs:
               continue
             fi
             if [ "$PINNED" != "$WANT_DIGEST" ]; then
-              echo "::error::${REPO}:v0.1 resolves to $PINNED, not the rolled digest $WANT_DIGEST. The pin did NOT land, so the next bicep deploy of this boundary would revert this app."
+              # DO NOT SAY "the pin did NOT land" (deploy-integrity.md R7). The
+              # current state of :v0.1 alone cannot distinguish "the import was
+              # rejected" from "the import was accepted and then overwritten by a
+              # later push" — and the second is what actually happened in run
+              # 33129547662, where the message asserted the first. Re-resolve the
+              # SOURCE tag: if :$TAG still carries the digest this run rolled,
+              # then our import had a valid source and a later write to :v0.1 won.
+              set +e
+              SRC_NOW=$(bash scripts/ci/resolve-acr-digest.sh --acr "$ACR" --image "${REPO}:${TAG}")
+              SRC_RC=$?
+              set -e
+              if [ "$SRC_RC" != "0" ]; then
+                echo "::error::${REPO}:v0.1 resolves to $PINNED, not the rolled digest $WANT_DIGEST — and ${REPO}:${TAG} could not be re-read (resolver exit $SRC_RC), so WHY is UNKNOWN. Durability is NOT established and this run asserts no cause for it."
+              elif [ "$SRC_NOW" = "$WANT_DIGEST" ]; then
+                echo "::error::${REPO}:v0.1 resolves to $PINNED, not the rolled digest $WANT_DIGEST — while ${REPO}:${TAG} STILL resolves to $WANT_DIGEST. The retag this step issued therefore had a valid source, and :v0.1 was SUPERSEDED by a later write (a concurrent image build repointing it is the known source). This run does NOT claim the import failed. What IS established either way: :v0.1 does not currently carry the rolled digest, so a subsequent bicep deploy of this boundary would not land it. The live roll is unaffected and is deliberately NOT rolled back for this."
+              else
+                echo "::error::${REPO}:v0.1 resolves to $PINNED, not the rolled digest $WANT_DIGEST — and ${REPO}:${TAG} has ALSO moved, to $SRC_NOW. Both tags were re-pointed around this step, so which write won is UNKNOWN. Durability is NOT established."
+              fi
               VERIFY_FAILED=1
               continue
             fi
@@ -851,11 +885,33 @@ jobs:
       #        the previous and current image strings are equal (both ':v0.1', the
       #        common case here). This one carries its own suffix.
       - name: Roll back on failure
-        if: failure() && steps.roll.outcome == 'success'
+        # THE GATE NAMES THE STEPS THAT JUDGE THE LIVE ESTATE, rather than firing
+        # on any job failure (#4148). `failure() && roll == 'success'` swept in
+        # the DURABILITY PIN, which runs after health AND live-image verification
+        # have both already passed and which asserts nothing about the running
+        # apps — it is a claim about a REGISTRY TAG. Run 33129547662 reverted a
+        # roll whose own health and verify were both green because :v0.1 had been
+        # superseded, and its rollback message printed
+        # "(health=success, verify=success)" while doing it.
+        #
+        # Reverting a verified-live roll on the strength of a tag race is
+        # strictly worse than leaving it: the estate loses a good image AND stays
+        # non-durable. A pin failure still FAILS THE JOB — durability not
+        # established is a real failure — it just no longer triggers a revert.
+        #
+        # `digest` IS included: that step failing means the tag was re-pointed
+        # while the roll was in flight, so which digest the live apps are running
+        # is genuinely unknown, and restoring the captured images is the correct
+        # response. Its `id:` was added for exactly this expression.
+        if: >-
+          failure() && steps.roll.outcome == 'success' &&
+          (steps.health.outcome == 'failure' ||
+           steps.verify.outcome == 'failure' ||
+           steps.digest.outcome == 'failure')
         run: |
           set -uo pipefail
           SUFFIX="rb${{ github.run_id }}-${{ github.run_attempt }}"
-          echo "::error::A post-roll gate failed (health=${{ steps.health.outcome }}, verify=${{ steps.verify.outcome }}). Restoring the images captured before the roll."
+          echo "::error::A post-roll gate that judges the LIVE ESTATE failed (health=${{ steps.health.outcome }}, verify=${{ steps.verify.outcome }}, digest-reassert=${{ steps.digest.outcome }}). The durability pin is NOT one of these and never reaches here. Restoring the images captured before the roll."
           FAILED=0
           while IFS=$'\t' read -r APP PREV; do
             [ -n "$APP" ] || continue

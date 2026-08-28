@@ -536,6 +536,34 @@ test('MUTATION PROOF — a STALE fabricated marker FAILS (exit 1, reported as DR
   });
 });
 
+test('#4143 — this lane never claims the roll path STOPPED; it says it did not look', async () => {
+  // R7 APPLIED TO THIS LANE'S OWN SCOPE. classifyEstate's past-grace message has
+  // three forms since #4143, and the one that asserts "the roll path has stopped
+  // applying main" belongs to a caller that queried the roll workflows and found
+  // none running. THIS LANE QUERIES NOTHING — by design: it reads only the two
+  // unauthenticated build markers, which is what lets it run with
+  // `permissions: contents: read` and no Azure credential (see its header).
+  //
+  // So a drifted estate here must report the drift and say plainly that the
+  // CAUSE was not established. Wire a roll query into buildRow, or delete the
+  // explicit `rollInFlight: null`, and this test moves — which is the point:
+  // the honest-unmeasured state must be a deliberate, visible choice, not the
+  // accident of a missing argument.
+  const base = REPO_FIXTURE.shas[0];
+  const marker = `loom-build-marker sha=${base} stamp=2026-08-11T09:23:46Z token=LOOM_LIVE_BUILD\n`;
+  await withMarkerServer(serve(marker, '0.90.2'), async (port) => {
+    const r = await runCli(`http://127.0.0.1:${port}`);
+    const out = `${r.stdout}${r.stderr}`;
+    assert.equal(r.status, 1, `precondition: the fixture must drift; got ${r.status}\n${out}`);
+    assert.doesNotMatch(out, /roll path has stopped/,
+      'this lane measured no run history, so it may not state that the roll path stopped');
+    assert.match(out, /NOT measured/,
+      'the message must say what it did not establish, not go quiet about it');
+    assert.match(out, /queries no workflow run history by design/,
+      'and must say WHY, so a reader can tell "cannot look" from "forgot to wire it"');
+  });
+});
+
 test('MUTATION PROOF — a STALE ABBREVIATED sha (the Gov shape) also FAILS', async () => {
   // Belt and braces on the format that #3730 is actually about: the sovereign
   // console publishes 8 hex, and a control that only ever saw 40 would have

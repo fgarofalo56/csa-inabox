@@ -62,7 +62,7 @@ measureWithControl({
 | `__tests__/injection-arms.mjs` | The same idea for the injection suite, and the reason its header's arm table is now checkable rather than quotable. 34 arms, each carrying the verdict the table claims, per column; the run **fails if reality diverges in either direction** — a documented CAUGHT that survives *and* a documented SURVIVED that starts failing both go red. Eight of the arms mutate the GUARDS rather than the subject — two of which found real vacuity holes in the round-4 tests, closed before the arms were recorded. Copies to `mkdtemp` instead of rewriting the tree, which is what lets the SUITE itself be a subject. **Refuses to run on a non-win32 host** rather than compare a linux column against `win32` expectations. Also not `*.test.mjs`, for the same reason as `mutate.mjs`. |
 | `drain-status.mjs` | Worked example: PR merge-readiness. A failed read prints `QUERY-FAILED` **with the reason** and exits non-zero, so it cannot be quoted as a state. The bash version it replaced reported `0/0/0` for twenty PRs during an HTTP 403. |
 | `red-tally.mjs` | Names the red checks across PRs to expose a shared cause. Reports `cancelled` **separately** from `failed` — a cancelled check did not finish, so it is UNKNOWN, not a verdict. Flattening them made a one-file docs PR look broken. |
-| `estate-resume.mjs` | Undoes the 2026-08-23 Commercial pause. `--dry-run` by default; `--apply` to act. Scope is a **fixed list**, never discovered — only 1 of the 13 Container App environments in these subscriptions is Loom's. Every action verifies its own outcome and it is idempotent. |
+| `estate-resume.mjs` | Undoes the 2026-08-23 **Commercial** pause. `--dry-run` by default; `--apply` to act. Scope is a **fixed list**, never discovered — only 1 of the 13 Container App environments in these subscriptions is Loom's. Every action verifies its own outcome and it is idempotent. **It REFUSES to run unless `az account show` reports `environmentName == AzureCloud`** (#4149) — see below. |
 
 ## Launching `az` / `gh` on Windows — three ways to get a fake result
 
@@ -110,6 +110,62 @@ linux — so every `win32` verdict would be compared against the wrong column. T
 also why it is not wired into `guardrails`, where every lane is Linux: a gate that
 reports verdicts it never measured is worse than no gate. Closing it needs an ubuntu
 host to derive a second expectation set from, which this lane has never had.
+
+## The boundary guard in `estate-resume.mjs` (#4149)
+
+`estate-resume.mjs` is **Commercial-only, by construction**: `rg-csa-loom-admin-centralus`,
+`rg-csa-loom-dlz-default-centralus` and `adx-csa-loom-z52x3p` are that estate's resources
+and nothing else. It used to resolve each one's subscription *by resource name* against
+whatever cloud the ambient `az` session happened to be on, with **nothing reading the active
+cloud before the first mutation**. An operator who had run `az cloud set --name
+AzureUSGovernment`, intending to resume Gov, got one of two outcomes and could not tell them
+apart from the report: every row failing for a reason that looks like RBAC, or — with both
+credential sets cached — the **Commercial** estate silently mutated while the transcript said
+nothing about which boundary it had acted on.
+
+Three properties close it, and each is proved by
+`scripts/ci/__tests__/estate-resume-boundary-guard.test.mjs`:
+
+1. **Fail closed before the first mutation.** `az account show` is read and
+   `environmentName` must be exactly `AzureCloud`. A sovereign cloud, an empty answer, or an
+   `az` that would not run all refuse — and refuse **on `--dry-run` too**, because a dry-run
+   report about the wrong boundary is the report the operator would then act on.
+   UNKNOWN is a refusal, never a pass.
+2. **Every line names the boundary and the subscription**, so a pasted transcript is
+   self-describing. The cloud in that tag is the **measured** value, not the constant.
+3. **`subFor` refuses an ambiguous or unexpected resolution.** It no longer takes `limit 1`
+   from a name-only query. The row's resource group must be the one the script is about to
+   pass to `-g`; a name resolving to more than one subscription, to a different resource
+   group, or to nothing is refused with the reason — and "nothing found" is reported as *not
+   visible to this session*, never as *does not exist* (deploy-integrity.md R7).
+
+**It does not generalise to a cloud selector, deliberately.** Resuming Gov is not this script
+with a different environment name — the resource names differ, and per this repo's standing
+rule Gov is never touched from a workstation `az` at all: Gov facts come from a GitHub Actions
+run inside the boundary. `scripts/ci/estate-pause-declaration.json` records the GCC-High
+cluster as one the operator resumes by hand for exactly that reason.
+
+The suite lives under `scripts/ci/__tests__/` because `loom-guardrails.yml` runs
+`node --test scripts/ci/__tests__/*.test.mjs` explicitly, so it is covered by both that step
+**and** the tree-wide discovery runner.
+
+A correction worth recording, because the premise was carried into the work item and would
+otherwise propagate: the reason given for that placement was that *"nothing in CI runs
+`scripts/measure/*.test.mjs`"*. **That is FALSE at head.** Measured:
+
+```
+$ node scripts/ci/check-node-test-suites.mjs --list
+… 145 suites, including
+  - scripts/ci/__tests__/estate-resume-boundary-guard.test.mjs
+  - scripts/measure/__tests__/measure-injection.test.mjs
+  - scripts/measure/cmd-quote.test.mjs
+  - scripts/measure/measure.test.mjs
+  - scripts/measure/measurement-guard.test.mjs
+```
+
+The discovery runner (#2856) picks up every `node:test` suite in the tree and `guardrails`
+runs it, so a suite beside the script would have had teeth too. The placement is still the
+right one — belt and braces — but not for the reason claimed.
 
 ## The hook
 
