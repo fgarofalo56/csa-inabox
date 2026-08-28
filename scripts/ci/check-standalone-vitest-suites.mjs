@@ -62,10 +62,53 @@
  *      no stream is sent to /dev/null, and no failure is downgraded to a
  *      warning (.claude/rules/deploy-integrity.md R7 / the
  *      gates-that-cannot-fail memory).
+ *   5. The install retry is BOUNDED and FAILS CLOSED. See below — a retry that
+ *      cannot fail is forbidden (deploy-integrity.md R6), so the attempt count
+ *      is a module constant, is asserted to be a positive integer, and
+ *      exhaustion returns a FAILURE, never a pass.
  *
  *   Every log line names the command actually run (R7): the install step prints
  *   `npm ci` or `npm install` according to which one it invokes, never a fixed
  *   label that could describe the other.
+ *
+ * TRANSIENT INSTALL FAILURES (#4032)
+ *
+ *   On 2026-08-26 this step reddened `Loom Guardrails` on a PR whose diff
+ *   contained ZERO files under azure-functions/. It failed at install, before a
+ *   single test ran, on one socket reset reading a CDN blob:
+ *
+ *     npm error code ECONNRESET
+ *     npm error network request to https://<host>/default-browser-5.5.0.tgz
+ *       failed, reason: read ECONNRESET
+ *     FAIL: azure-functions/copilot-evaluator `npm ci` exited 1.
+ *
+ *   Measured: 1 occurrence in 120 guardrails runs (~0.8%), the other four
+ *   packages installed and passed in the SAME run, and the package reproduced
+ *   healthy at that exact SHA (`npm ci` RC=0, 74/74 tests pass). So it was the
+ *   network, and the verdict said the package.
+ *
+ *   That is BOTH halves of deploy-integrity.md wrong at once:
+ *     R6 — "Retry what is genuinely transient, with bounded backoff, and fail
+ *          closed on exhaustion." There was no retry at all.
+ *     R7 — "Error messages must be TRUE." "`npm ci` exited 1" states a package
+ *          failure; the code had npm's own `code ECONNRESET` in the stream it
+ *          had just printed and never read it.
+ *
+ *   So the install is now CAPTURED rather than inherited (both streams are
+ *   still written out verbatim — nothing is discarded, FAILING CLOSED #4 holds),
+ *   its failure is CLASSIFIED from npm's own `npm error code <CODE>` line, and
+ *   only the network/registry-transient classes are retried. Everything else
+ *   fails on the first attempt exactly as before.
+ *
+ *   The classifier is anchored to the `npm error code|errno <CODE>` LINE SHAPE,
+ *   never to a bare substring: a suite whose own output merely mentions the word
+ *   ECONNRESET must not buy itself three retries and a "this was the network"
+ *   verdict (`a_bare_substring_signal_misclassifies_and_blocks`). Mixed output
+ *   carrying a transient code AND a non-transient one is treated as
+ *   NON-transient — the fail-closed direction.
+ *
+ *   The TEST step is deliberately NOT retried. A retried test masks a flaky
+ *   test, which is the same class of defect as a gate that measures nothing.
  *
  * USAGE
  *   node scripts/ci/check-standalone-vitest-suites.mjs          # discover + run
@@ -157,9 +200,23 @@ export function discoverPackages(repoRoot = REPO_ROOT) {
 }
 
 /**
+ * Strip SGR colour sequences.
+ *
+ * The ESC byte is PART of the sequence and must be consumed with it. A pattern
+ * of `/\[[0-9;]*m/` alone leaves a bare 0x1B glued to the next character, which
+ * then defeats every `^\s*<word>` anchor downstream — the line is present and
+ * the matcher cannot see it. Written as the escape \u001B rather than a
+ * literal ESC byte so the intent survives a copy/paste. ESC is optional so a
+ * log that has already lost it still cleans up.
+ */
+function stripAnsi(s) {
+  return String(s ?? '').replace(/\u001B?\[[0-9;]*m/g, '');
+}
+
+/**
  * Parse vitest's `Tests` summary line into executed/skipped counts.
  *
- * Recognised shapes (ANSI already stripped by the caller):
+ * Recognised shapes (ANSI is stripped first, by stripAnsi above):
  *   "Tests  53 passed (53)"
  *   "Tests  3 failed | 50 passed (53)"
  *   "Tests  2 skipped (2)"
@@ -170,7 +227,7 @@ export function discoverPackages(repoRoot = REPO_ROOT) {
  * as a hard error rather than assuming success.
  */
 export function parseVitestSummary(output) {
-  const clean = String(output).replace(/\[[0-9;]*m/g, '');
+  const clean = stripAnsi(output);
   if (/No test files found/i.test(clean)) return { passed: 0, failed: 0, skipped: 0, executed: 0 };
   // PHYSICAL-LINES-OK: parses vitest's own OUTPUT (`Tests 12 passed`), not a
   // shell body. Program output has no backslash continuations (#3420).
@@ -187,8 +244,185 @@ export function parseVitestSummary(output) {
   return { passed, failed, skipped, executed: passed + failed };
 }
 
-function runInherit(cmd, args, cwd) {
-  return spawnSync(cmd, args, { cwd, stdio: 'inherit', shell: process.platform === 'win32' });
+/**
+ * npm error codes naming a genuinely TRANSIENT network or registry condition —
+ * the only classes this guard retries.
+ *
+ * Socket/DNS/route level: the connection to the registry or its CDN did not
+ * survive. Registry level: 429 (rate limit) and 5xx are the registry telling us
+ * to come back. Nothing here can be caused by the package's own contents, which
+ * is exactly the property that makes a retry legitimate rather than a mask.
+ *
+ * Deliberately ABSENT: EUSAGE, ERESOLVE, ETARGET, E404, ELIFECYCLE, EJSONPARSE,
+ * ENOLOCK, EINTEGRITY — every one of those is reproducible and a retry would
+ * only spend CI time before failing anyway. EPIPE is absent too: it is as often
+ * a local stream break as a network one, and an ambiguous signal must not buy a
+ * retry.
+ */
+export const TRANSIENT_NPM_CODES = new Set([
+  'ECONNRESET',
+  'ETIMEDOUT',
+  'ECONNREFUSED',
+  'EAI_AGAIN',
+  'ENOTFOUND',
+  'ENETUNREACH',
+  'EHOSTUNREACH',
+  'ERR_SOCKET_TIMEOUT',
+  'E429',
+  'E500',
+  'E502',
+  'E503',
+  'E504',
+]);
+
+/**
+ * The ONLY shape a code is read from. Anchored to npm's own
+ * `npm error code <CODE>` / `npm error errno <CODE>` line (and the pre-npm-10
+ * `npm ERR!` spelling) — never a bare substring anywhere in the output.
+ *
+ * A numeric errno (`npm error errno -4077`) is intentionally not matched: it
+ * carries no class information npm has not already given us on the `code` line,
+ * and admitting it would let a bare `1` register as an unknown "code" and poison
+ * an otherwise-clean transient classification.
+ */
+const NPM_CODE_LINE = /^\s*npm (?:error|ERR!)\s+(?:code|errno)\s+([A-Za-z][A-Za-z0-9_]*)\s*$/;
+
+/**
+ * Classify an npm install failure from npm's own output.
+ *
+ * Returns `{ transient, codes, reason }`. `transient` is true ONLY when at
+ * least one code line was found AND every code found is in
+ * TRANSIENT_NPM_CODES. Three fail-closed properties, in order:
+ *
+ *   - No code line at all  → NOT transient. The class is unknown, and an
+ *     unclassified failure is not retried (R7: the message says "unknown",
+ *     it does not guess "network").
+ *   - Any non-transient code present → NOT transient, even alongside a
+ *     transient one. Mixed output means something reproducible also went wrong.
+ *   - The word ECONNRESET appearing in prose, a package name, or a test title
+ *     is NOT a code line and buys nothing.
+ */
+export function classifyInstallFailure(output) {
+  const clean = stripAnsi(output ?? '');
+  const codes = [];
+  // PHYSICAL-LINES-OK: parses npm's own OUTPUT (`npm error code ECONNRESET`),
+  // not a shell body. Program output has no backslash continuations (#3420).
+  for (const line of clean.split(/\r?\n/)) {
+    const m = NPM_CODE_LINE.exec(line);
+    if (m) codes.push(m[1].toUpperCase());
+  }
+  const found = [...new Set(codes)];
+
+  if (found.length === 0) {
+    return {
+      transient: false,
+      codes: found,
+      reason:
+        'npm printed no `npm error code <CODE>` line, so the failure class is UNKNOWN — ' +
+        'refusing to guess "network" and refusing to retry an unclassified failure.',
+    };
+  }
+
+  const nonTransient = found.filter((c) => !TRANSIENT_NPM_CODES.has(c));
+  if (nonTransient.length > 0) {
+    return {
+      transient: false,
+      codes: found,
+      reason:
+        `npm reported ${nonTransient.join(', ')}, which is NOT a network-transient class ` +
+        '(it is reproducible), so this failed on the first attempt without retrying.',
+    };
+  }
+
+  return {
+    transient: true,
+    codes: found,
+    reason: `npm reported ${found.join(', ')} — a NETWORK/registry transient, not a defect in the package.`,
+  };
+}
+
+/**
+ * Attempt count for a transient install failure. A MODULE CONSTANT, not an
+ * input: deploy-integrity.md R6 forbids a retry that cannot fail, so the bound
+ * must not be widenable — or disable-able — from the environment.
+ */
+export const INSTALL_ATTEMPTS = 3;
+
+/**
+ * Backoff between attempts, in ms, indexed by (attempt - 1); the last entry is
+ * reused if attempts ever exceeds its length.
+ *
+ * `LOOM_INSTALL_RETRY_BACKOFF_MS` is a TEST HOOK so the self-test can exercise
+ * the real retry path in milliseconds instead of eight seconds. It changes only
+ * how long we WAIT — never how many attempts happen and never whether
+ * exhaustion fails, which are the properties that make this fail closed.
+ */
+const backoffOverride = Number(process.env.LOOM_INSTALL_RETRY_BACKOFF_MS);
+export const INSTALL_BACKOFF_MS =
+  Number.isFinite(backoffOverride) && backoffOverride >= 0
+    ? [backoffOverride, backoffOverride]
+    : [2000, 6000];
+
+/** Block the (single-threaded, spawnSync-shaped) main thread for `ms`. */
+function sleepSync(ms) {
+  if (!(ms > 0)) return;
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+
+/**
+ * Run an install with a BOUNDED retry over network-transient failures only.
+ *
+ * `run(attempt)` must return a spawnSync-shaped result. Retries happen ONLY
+ * while `classifyInstallFailure` says transient AND attempts remain; exhaustion
+ * returns `{ ok: false, exhausted: true }` — a failure, never a pass.
+ */
+export function installWithRetry({
+  run,
+  attempts = INSTALL_ATTEMPTS,
+  backoffMs = INSTALL_BACKOFF_MS,
+  sleep = sleepSync,
+  onNotice = (m) => console.error(m),
+}) {
+  if (!Number.isInteger(attempts) || attempts < 1) {
+    // An unbounded or zero-attempt loop is the "retry that cannot fail" R6
+    // forbids — refuse to construct one rather than silently normalising it.
+    throw new Error(
+      `installWithRetry: attempts must be a positive integer (bounded retry), got ${attempts}`,
+    );
+  }
+
+  let last = null;
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    const r = run(attempt);
+    if (r && r.status === 0) {
+      return { ok: true, attempts: attempt, result: r, classification: null, exhausted: false };
+    }
+    const combined =
+      `${(r && r.stdout) || ''}\n${(r && r.stderr) || ''}` +
+      (r && r.error ? `\nspawn error: ${r.error.message}` : '');
+    const classification = classifyInstallFailure(combined);
+    last = { result: r, classification };
+
+    if (!classification.transient) {
+      return { ok: false, attempts: attempt, result: r, classification, exhausted: false };
+    }
+    if (attempt < attempts) {
+      const wait = backoffMs[Math.min(attempt - 1, backoffMs.length - 1)] ?? 0;
+      onNotice(
+        `RETRY: install attempt ${attempt}/${attempts} failed transiently. ` +
+          `${classification.reason} Retrying in ${wait}ms.`,
+      );
+      sleep(wait);
+    }
+  }
+  // Bound reached. Fail closed: an install that never succeeded is not a pass.
+  return {
+    ok: false,
+    attempts,
+    result: last.result,
+    classification: last.classification,
+    exhausted: true,
+  };
 }
 
 /** Run a command, echoing its output live-ish while also capturing it. */
@@ -247,16 +481,48 @@ function main() {
       : ['install', '--no-audit', '--no-fund', '--no-package-lock'];
     const installCmd = installArgs[0];
     console.log(`\n=== ${p.rel} — npm ${installArgs.join(' ')} ===`);
-    const install = runInherit('npm', installArgs, p.dir);
-    if (install.status !== 0) {
-      console.error(`FAIL: ${p.rel} \`npm ${installCmd}\` exited ${install.status}.`);
+    // Captured, not inherited, so a failure can be CLASSIFIED (#4032). Both
+    // streams are still written verbatim by runCaptured — FAILING CLOSED #4.
+    const install = installWithRetry({
+      run: (attempt) => {
+        if (attempt > 1) {
+          console.log(
+            `=== ${p.rel} — npm ${installArgs.join(' ')} (attempt ${attempt}/${INSTALL_ATTEMPTS}) ===`,
+          );
+        }
+        return runCaptured('npm', installArgs, p.dir);
+      },
+    });
+    if (!install.ok) {
+      const status = install.result?.status;
+      // R7: say what actually happened. "exited 1" alone reads as a broken
+      // package when the cause was a socket reset on a CDN blob read.
+      const exited =
+        status === null || status === undefined
+          ? 'did not produce an exit code'
+          : `exited ${status}`;
+      const spawnFailed = install.result?.error
+        ? ` npm could not be started: ${install.result.error.message}.`
+        : '';
+      const bound = install.exhausted
+        ? ` Bounded retry EXHAUSTED after ${install.attempts} attempt(s) — failing closed, ` +
+          'because an install that never succeeded is not a pass.'
+        : ` Failed on attempt ${install.attempts} and was not retried.`;
+      console.error(
+        `FAIL: ${p.rel} \`npm ${installCmd}\` ${exited}.${spawnFailed} ` +
+          `${install.classification.reason}${bound}`,
+      );
       failed += 1;
       continue;
+    }
+    if (install.attempts > 1) {
+      console.log(`  ${p.rel}: install succeeded on attempt ${install.attempts}/${INSTALL_ATTEMPTS}.`);
     }
 
     console.log(`=== ${p.rel} — npm test ===`);
     // `--passWithNoTests` is deliberately NOT passed, so a package matching no
-    // spec fails rather than reporting an empty pass.
+    // spec fails rather than reporting an empty pass. And unlike the install,
+    // this is single-shot on purpose: a retried test masks a flaky test.
     const test = runCaptured('npm', ['test', '--silent'], p.dir);
     if (test.status !== 0) {
       console.error(`FAIL: ${p.rel} vitest exited ${test.status}.`);
