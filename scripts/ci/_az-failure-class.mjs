@@ -238,10 +238,23 @@ export function remediationFor(kind, scopeId, attempts = 0) {
       );
     case 'capacity':
       return (
-        `Azure has NO CAPACITY for this cluster's current SKU in this region, so no retry and no role ` +
-        'grant will resolve it. This is not a defect in the deploy. Either pick a SKU that has ' +
-        'capacity in the region (adx-cluster.bicep `adxSku`), deploy the cluster to a region that ' +
-        'does, or wait for capacity to free up and re-run. The raw az error below names the SKU.'
+        `Azure reports NO CAPACITY for this cluster's current SKU in this region, so no retry and no role ` +
+        'grant will resolve it. This is not a defect in the deploy. TWO SEPARATE THINGS ARE NEEDED — one ' +
+        'unblocks THIS run, the other makes the change survive the next apply. (1) TO UNBLOCK THIS RUN, ' +
+        'the live cluster has to move off the SKU out-of-band, because this preflight runs BEFORE what-if ' +
+        'and before the apply: no template change can take effect by re-running this lane, the run dies ' +
+        'here again having applied nothing. Use Data Explorer scale-up in the portal (it greys out the ' +
+        'SKUs this region cannot serve, so it also tells you which one to pick), or `az kusto cluster ' +
+        'update` from an in-boundary session, then re-run. (2) TO MAKE IT DURABLE, set ' +
+        '`adxConfig.adxSkuName` in the boundary ' +
+        '.bicepparam — otherwise this lane\'s own apply asks for the template SKU again and reverts the ' +
+        'out-of-band change. That bag does reach the cluster: the root template ' +
+        'platform/fiab/bicep/main.bicep declares adxConfig and threads it to admin-plane/main.bicep ' +
+        '(#4126); before that it did not, and assigning it in a .bicepparam failed to compile with ' +
+        'BCP259. Editing adx-cluster.bicep\'s `skuName` default does NOT work — admin-plane/main.bicep ' +
+        'always passes skuName explicitly — and on GCC-High / IL5 the `effectiveAdxSkuName` guard ' +
+        'rewrites only the Commercial Dev default, so an explicit value passes through unchanged. ' +
+        'Otherwise: a region that has capacity, or wait for capacity to free up.'
       );
     case 'notfound':
       return (
