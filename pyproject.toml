@@ -277,7 +277,7 @@ copilot = [
     # anthropic 1.0.0 therefore arrives from INSIDE this ceiling — do not read
     # <2.0.0 as having held it back. google-genai stays at 1.73.1 and openai was
     # already 2.32.0 (pinned directly by this file), neither moved by this bump.
-    "pydantic-ai>=1.106.0,<2.0.0",
+    "pydantic-ai>=1.106.0,<3.0.0",
     # Settings + model typing (already on the platform extra but listed
     # here so `pip install -e .[copilot]` is self-contained).
     "pydantic>=2.7.0,<3.0.0",
