@@ -238,16 +238,43 @@ const REACH_DENIED = new RegExp(
   'i',
 );
 
-/** Classify a reachability (network/permission) failure for HTTP/ADLS probes. */
+/**
+ * Classify a reachability (network/permission) failure for HTTP/ADLS probes.
+ *
+ * THE TRANSPORT BRANCHES ARE TESTED FIRST (#4048 F5), and the order is the fix.
+ *
+ * `REACH_DENIED` used to run first. Its NUMERIC half was anchored by
+ * `statusToken` (the `st403data` defect this module's own docstring describes),
+ * but `forbidden` / `authorization` / `not authorized` were left as BARE
+ * SUBSTRINGS — so a DNS failure on a host whose NAME contains one of those words
+ * produced confident, false role-grant advice. Measured before this change:
+ *
+ *     getaddrinfo ENOTFOUND authorization-api.contoso.com         -> "not authorized. Grant it …"
+ *     getaddrinfo ENOTFOUND kv-authorization-prod.vault.azure.net -> same
+ *     getaddrinfo ENOTFOUND stforbidden.dfs.core.windows.net      -> same
+ *     connect ECONNREFUSED loom-forbidden-eh.servicebus…          -> same
+ *     getaddrinfo ENOTFOUND stloom403.dfs.core.windows.net        -> "host could not be
+ *                                                                    resolved" (digits ARE fixed)
+ *
+ * That is `deploy-integrity.md` R7: the message asserts a cause the code did not
+ * establish, and it costs an operator a role assignment they did not need.
+ *
+ * THE FIX NEEDS NO REGEX WORK. A `getaddrinfo` / `ENOTFOUND` / `ECONNREFUSED`
+ * token is POSITIVE evidence of a transport failure and cannot co-occur with an
+ * HTTP 403 body — there is no response to carry one. So the transport branches
+ * are asked first and `REACH_DENIED` is asked only of what is left. Checked
+ * against all four pre-existing `REACH_DENIED` fixtures: they still pass,
+ * because none of them carries a transport token.
+ */
 export function classifyReachError(e: unknown, redact: (m: string) => string, subject: string): ProbeErr {
   const msg = redact(e instanceof Error ? e.message : String(e));
   let hint: string | undefined;
-  if (REACH_DENIED.test(msg)) {
-    hint = `Reached the ${subject}, but the Console identity is not authorized. Grant it the appropriate data-plane role (e.g. Storage Blob Data Reader / Data Receiver).`;
-  } else if (/getaddrinfo|enotfound|dns/i.test(msg)) {
+  if (/getaddrinfo|enotfound|dns/i.test(msg)) {
     hint = `The ${subject} host could not be resolved. Check the host name for typos.`;
   } else if (/timeout|timed out|abort|econnrefused|refused/i.test(msg)) {
     hint = `The ${subject} did not respond. It may be behind a firewall or private endpoint the Console cannot reach.`;
+  } else if (REACH_DENIED.test(msg)) {
+    hint = `Reached the ${subject}, but the Console identity is not authorized. Grant it the appropriate data-plane role (e.g. Storage Blob Data Reader / Data Receiver).`;
   }
   return { ok: false, status: 502, error: msg || `could not reach the ${subject}`, ...(hint ? { hint } : {}) };
 }
