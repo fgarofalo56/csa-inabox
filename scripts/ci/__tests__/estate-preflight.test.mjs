@@ -749,26 +749,34 @@ test('CONTROL: the shared az-failure classifier is actually imported', () => {
 //
 // The classification is RIGHT — the raw az error is
 // `(InsufficientResourcesForSubscription)`, and no retry or role grant resolves
-// that. The REMEDIATION is what this section pins, because EVERY in-repo lever
-// proposed for it so far turned out to be unreachable:
+// that. The REMEDIATION is what this section pins, because lever after lever
+// proposed for it turned out to be unreachable:
 //
 //   1. `adxSku` is not a parameter anywhere. adx-cluster.bicep declares
 //      `param skuName`; admin-plane/main.bicep declares the var `adxSkuName`.
 //   2. adx-cluster.bicep's `skuName` DEFAULT is dead on every path that reaches
 //      this error, because admin-plane/main.bicep always passes `skuName:`
 //      explicitly (control below). Editing that file changes nothing.
-//   3. On GCC-High / IL5 the `effectiveAdxSkuName` boundary guard REWRITES the
-//      Dev default to 'Dev(No SLA)_Standard_D11_v2' regardless.
-//   4. AND — the correction this section exists to pin — `adxConfig.adxSkuName`
-//      in the boundary .bicepparam is ALSO unreachable. `adxConfig` is a param
-//      of the MODULE (admin-plane/main.bicep). Every lane's .bicepparam is
-//      `using '../main.bicep'`, the ROOT template, which neither declares
-//      `adxConfig` nor passes one to the adminPlane module — so it always takes
-//      its `{}` default. Assigning it in the param file does not change the SKU,
-//      it stops the deploy from compiling.
+//   3. On GCC-High / IL5 the `effectiveAdxSkuName` boundary guard rewrites the
+//      Commercial Dev default — but ONLY that default. An explicitly-set value
+//      passes through unchanged, which is what makes lever 4 work now.
+//      (An earlier revision of this comment said "regardless". That was wrong:
+//      the guard is an equality test against the Commercial default, not an
+//      unconditional overwrite. The message was corrected with it.)
+//   4. `adxConfig.adxSkuName` in the boundary .bicepparam WAS unreachable, and
+//      is now the real lever. HISTORY, because the receipt below is worth
+//      keeping and would otherwise read as a present-tense claim:
 //
-//      RECEIPT (local `az bicep build-params`, no Azure contact), each probe a
-//      byte-copy of the real params/gcc-high.bicepparam plus ONE assignment:
+//      UNTIL #4126 (ef6cf727e3), `adxConfig` was a param of the MODULE
+//      (admin-plane/main.bicep) only. Every lane's .bicepparam is
+//      `using '../main.bicep'`, the ROOT template, which declared no
+//      `adxConfig` and passed none to the adminPlane module — so it always took
+//      its `{}` default, and assigning it in the param file did not change the
+//      SKU, it stopped the deploy from compiling.
+//
+//      RECEIPT AS MEASURED THEN (local `az bicep build-params`, no Azure
+//      contact), each probe a byte-copy of the real params/gcc-high.bicepparam
+//      plus ONE assignment:
 //        baseline, unmodified ................................. RC=0
 //        + hubAdxClusterPrincipalId (declared on root) ......... RC=0   <- positive control
 //        + adxEnabled (declared, already assigned) ............. RC=1 BCP028 (duplicate)
@@ -778,14 +786,23 @@ test('CONTROL: the shared az-failure classifier is actually imported', () => {
 //      Bicep file". The positive control returning RC=0 is what makes the two
 //      BCP259s a measurement rather than "any append fails".
 //
-// So the honest answer is that there is NO in-repo SKU lever today, and the
-// remediation now says exactly that instead of inventing a third one. What does
-// reach the SKU is the LIVE cluster changed out-of-band — and the message
-// discloses that this lane's own apply asks for the template SKU again, so that
-// change unblocks the run without being durable.
+//      #4126 THEN BUILT THE LEVER: main.bicep:420 declares
+//      `param adxConfig object = {}` and :1264 threads `adxConfig: adxConfig`
+//      into the adminPlane module. So a boundary .bicepparam CAN now carry the
+//      SKU, the BCP259 above no longer reproduces, and the CONVERSE arm in the
+//      control below is what caught the message still claiming otherwise.
+//
+// So there are now TWO different actions, and the remediation names both
+// because they are not substitutes for each other:
+//   * to UNBLOCK THIS RUN — the LIVE cluster, changed out-of-band, because this
+//     preflight aborts before the apply;
+//   * to make it DURABLE — `adxConfig.adxSkuName` in the boundary .bicepparam,
+//     or this lane's own apply asks for the template SKU again and reverts it.
 //
 // This is deploy-integrity.md R7 applied to a remediation rather than to a
-// cause: a message must not assert a fix it did not establish would work.
+// cause: a message must not assert a fix it did not establish would work — and,
+// as this comment block itself had to learn, neither may the comment that
+// justifies it.
 
 const BICEP_SOURCES = [
   'platform/fiab/bicep/modules/admin-plane/adx-cluster.bicep',
@@ -852,10 +869,12 @@ test('every bicep identifier the CAPACITY remediation names actually exists', ()
 
 test('the CAPACITY remediation names an action that actually reaches the SKU', () => {
   const text = remediationFor('capacity', '/subscriptions/x/clusters/c');
-  // Since no in-repo lever exists (see the section header), the ONLY thing that
-  // reaches this cluster's SKU is the live resource, changed out-of-band. A
-  // remediation that names only template edits is naming things this lane will
-  // never apply — which is the loop this whole section exists to close.
+  // The ONLY thing that unblocks THIS run is the live resource, changed
+  // out-of-band — the .bicepparam lever #4126 built is durable but cannot take
+  // effect here, because this preflight aborts before the apply (control
+  // below). A remediation that names only template edits is naming things this
+  // lane will never apply — which is the loop this whole section exists to
+  // close.
   assert.match(
     text,
     /out-of-band/i,
