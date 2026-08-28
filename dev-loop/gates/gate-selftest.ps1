@@ -6,7 +6,7 @@
     Exit codes:
       0 - every case behaved as expected
       1 - a case disagreed: the gate machinery is not measuring what it claims
-      2 - COULD NOT RUN (git or a TypeScript compiler unavailable)
+      2 - COULD NOT RUN (git, a TypeScript compiler, or bicep unavailable)
 
     WHY THIS EXISTS
 
@@ -85,6 +85,39 @@
          this assertion for nine real files while both lists agreed on
          `scripts/`.
 
+      S1 validate-bicep, a COMMITTED sibling .json survives a compile that
+         genuinely measured (population 1). That gate used to compile in place
+         and delete the sibling .json afterwards; exactly one tracked file
+         collides - deploy/bicep/landing-zone-alz/modules/networking/subnet/
+         subnet.json, a committed ARM template rather than a build artifact -
+         so every local run destroyed it.
+      S2 the same run wrote NOTHING into the tree: file inventory + SHA256
+         identical before and after, asserted ONLY once the population is
+         confirmed non-zero.
+      S3a from the PRIMARY root, a nested .claude/worktrees copy is EXCLUDED.
+      S3b from INSIDE that same worktree, its files are INCLUDED. (0 before the
+          #3894 fix - the defect, direct.) S3a/S3b is the load-bearing pair.
+      S3c the SAME root spelled with FORWARD SLASHES; S3d a RELATIVE root;
+          S3e a root that does not EXIST, diagnosed as unresolvable rather than
+          silently reported as an empty tree.
+      S4 a root with no .bicep at all: exit 2, saying ZERO POPULATION.
+      S5 a broken .bicep: exit 1. Without this, S1 would still pass on a gate
+         that had stopped detecting failures at all.
+      S6 a root whose only .bicep files are all excluded: exit 2, and the
+         message distinguishes "the filter ate everything" from "the tree is
+         empty". Different fixes, so different words.
+
+    S1-S6 ARRIVED HERE FROM A FILE NOTHING INVOKED (#3914). PR #3901 shipped
+    them as dev-loop/gates/__tests__/validate-bicep.selftest.ps1, which no
+    Makefile target, workflow or script referenced - so they ran once, by their
+    author, and then never again. That is the same zero-population class the PR
+    was fixing: #3894 was a gate that could not tell "measured nothing" from
+    "validated", and its fix came with a suite that measured nothing because it
+    never ran. Folding them in also removes the SECOND self-test mechanism, which
+    is the drift this repo keeps rediscovering (#3896, #3908). They were renamed
+    N* -> S* because N collides with case N above; the mapping is 1:1 and in
+    order, so a reference to N3c in #3894 / #3901 / #3903 is S3c here.
+
     A and B together are the load-bearing pair. If both return the same code,
     this script fails - because a verdict that does not move between "measured
     nothing" and "measured something and it passed" is not a verdict.
@@ -118,8 +151,8 @@ $gatesDir = $PSScriptRoot
 
 if ($WhatIfPreference) {
     Write-Host "=== Gate Self-Test (-WhatIf) ===" -ForegroundColor Cyan
-    Write-Host "  Would build a synthetic git repo and a TypeScript fixture, then assert"
-    Write-Host "  that the gate verdicts move with their inputs."
+    Write-Host "  Would build a synthetic git repo, a TypeScript fixture and six synthetic"
+    Write-Host "  Bicep trees, then assert that the gate verdicts move with their inputs."
     Write-Host "  Nothing was measured. This is NOT a pass." -ForegroundColor Yellow
     exit 2
 }
@@ -775,6 +808,231 @@ try {
             Add-Case 'F  dangling LOOM_TSC_BIN exits 2, no silent fallback' 'Fail' "expected exit 2 and a refusal, got $($f.ExitCode)"
         }
         $env:LOOM_TSC_BIN = $compiler
+    }
+
+    # =======================================================================
+    # Cases S1-S6 - validate-bicep.ps1 (#3894, folded in by #3914)
+    #
+    # These arrived in PR #3901 as dev-loop/gates/__tests__/validate-bicep.selftest.ps1
+    # and WERE INVOKED BY NOTHING: no Makefile target, no workflow, no other
+    # script referenced that directory, so they ran once by their author and
+    # then never again. That is the SAME zero-population class the PR they
+    # shipped in was fixing - #3894 was about a gate that could not tell
+    # "measured nothing" from "validated", and its fix came with a suite that
+    # measured nothing because it never ran.
+    #
+    # RENAMED N* -> S*. The originals were N1-N6, which collides with case N
+    # above ("a gitignored-but-TRACKED .py"). The mapping is 1:1 and in order,
+    # so a reference to N3c in #3894 / #3901 / #3903 is S3c here.
+    #
+    # The load-bearing pair is S3a/S3b: the SAME file set walked from two
+    # different roots, where each root must see its own files and only its own.
+    # A gate that excluded everything, or excluded nothing, fails one half.
+    # =======================================================================
+    $validateBicep = Join-Path $gatesDir 'validate-bicep.ps1'
+    $bicepFixture = Join-Path $gatesDir '__fixtures__/bicep/sample.bicep'
+
+    # An inventory of every file under a root, with its exact bytes hashed. This
+    # is how S2 proves the gate wrote nothing: comparing a directory listing
+    # alone would miss an IN-PLACE OVERWRITE, which is what actually happened to
+    # subnet.json before that gate deleted it.
+    function Get-Inventory {
+        param([string]$Root)
+        return (Get-ChildItem -Path $Root -Recurse -File |
+            Sort-Object FullName |
+            ForEach-Object { "$($_.FullName.Substring($Root.Length))|$((Get-FileHash $_.FullName -Algorithm SHA256).Hash)" }) -join "`n"
+    }
+
+    $brokenBicep = @(
+        "param location string = 'eastus'",
+        "output loc string = thisSymbolDoesNotExist"
+    )
+    # Deliberately NOT valid ARM: if the gate ever regenerates over this file,
+    # the CONTENT check fails even when the path still exists.
+    $committedArm = '{ "__sentinel__": "committed ARM template, not a build artifact" }'
+
+    if (-not (Test-Path $bicepFixture)) {
+        Add-Case 'S1-S6 validate-bicep cases' 'NotRun' "the committed fixture is missing: $bicepFixture. The cases copy it into every synthetic tree, so without it they would compile a template this suite invented rather than one a human can reproduce."
+    } elseif (-not (Get-Command bicep -ErrorAction SilentlyContinue)) {
+        Add-Case 'S1-S6 validate-bicep cases' 'NotRun' 'bicep is not on PATH, so validate-bicep.ps1 would exit 2 for the TOOLCHAIN reason and every assertion below would pass or fail for the wrong reason. `az bicep install` puts bicep in ~/.azure/bin, which is NOT on PATH by default - add that directory.'
+    } else {
+        $bicepRoot = Join-Path $tempRoot 'bicep'
+        New-Item -ItemType Directory -Path $bicepRoot -Force | Out-Null
+
+        # ---------------------------------------------------------------
+        # S1 / S2 - the gate does not write into the tree it is judging.
+        # ---------------------------------------------------------------
+        $treeA = Join-Path $bicepRoot 'tree-a'
+        New-Item -ItemType Directory -Path $treeA -Force | Out-Null
+        Copy-Item $bicepFixture (Join-Path $treeA 'a.bicep')
+        Set-Content -Path (Join-Path $treeA 'a.json') -Value $committedArm -Encoding ASCII
+
+        $before = Get-Inventory $treeA
+        $s1 = Invoke-Child -ScriptPath $validateBicep -Arguments @('-RepoRoot', $treeA) -WorkingDirectory $treeA
+        $after = Get-Inventory $treeA
+
+        $armPath = Join-Path $treeA 'a.json'
+        $armSurvived = Test-Path $armPath
+        $armIntact = $armSurvived -and ((Get-Content $armPath -Raw).Trim() -eq $committedArm)
+        $measured = ($s1.Output -match 'Population: 1 ')
+
+        if (-not $measured) {
+            Add-Case 'S1 a committed sibling .json survives a MEASURED compile' 'Fail' "the gate did not report a population of 1, so the file surviving proves nothing. exit $($s1.ExitCode). Output: $($s1.Output)"
+        } elseif ($s1.ExitCode -ne 0) {
+            Add-Case 'S1 a committed sibling .json survives a MEASURED compile' 'Fail' "expected exit 0 from a valid template, got $($s1.ExitCode). Output: $($s1.Output)"
+        } elseif (-not $armSurvived) {
+            Add-Case 'S1 a committed sibling .json survives a MEASURED compile' 'Fail' 'the gate DELETED a .json it did not create - #3894 defect 1 has regressed'
+        } elseif (-not $armIntact) {
+            Add-Case 'S1 a committed sibling .json survives a MEASURED compile' 'Fail' 'the gate OVERWROTE a .json it did not create - the file is still there but its contents are not the operator''s'
+        } else {
+            Add-Case 'S1 a committed sibling .json survives a MEASURED compile' 'Pass' 'population 1, exit 0, sentinel intact'
+        }
+
+        # The population precondition is S2's whole claim to being a control.
+        # Without it, "the tree did not change" is trivially true of a gate that
+        # compiled NOTHING - and that is not hypothetical: when these cases were
+        # first run against the pre-fix gate, every synthetic tree sat under
+        # %TEMP%, whose \Temp\ segment that gate's ABSOLUTE-path filter excluded,
+        # so S2 passed over a population of zero while S1 correctly failed. A
+        # control that cannot fail at zero population is not a control.
+        # (#3914 asked for this precondition to be carried over; it was already
+        # present when the cases were folded in, and is kept verbatim.)
+        if (-not $measured) {
+            Add-Case 'S2 the gate writes NOTHING into the tree it judges' 'Fail' "population was not 1, so an unchanged tree proves nothing - the gate may simply have compiled nothing. exit $($s1.ExitCode). Output: $($s1.Output)"
+        } elseif ($before -eq $after) {
+            Add-Case 'S2 the gate writes NOTHING into the tree it judges' 'Pass' 'file inventory + SHA256 identical before and after, over a population of 1'
+        } else {
+            Add-Case 'S2 the gate writes NOTHING into the tree it judges' 'Fail' "the tree changed across the run.`nBEFORE:`n$before`nAFTER:`n$after"
+        }
+
+        # ---------------------------------------------------------------
+        # S3a / S3b - the exclusion is RELATIVE to the root being walked.
+        #
+        # One tree, two roots. This pair is the whole of #3894 defect 2: a gate
+        # that matched absolute paths gets S3a right and S3b catastrophically
+        # wrong, and a gate that simply dropped the exclusion gets S3b right and
+        # S3a wrong. Only relative matching satisfies both.
+        # ---------------------------------------------------------------
+        $treeB = Join-Path $bicepRoot 'tree-b'
+        $nested = Join-Path $treeB '.claude/worktrees/agent-x'
+        New-Item -ItemType Directory -Path $nested -Force | Out-Null
+        Copy-Item $bicepFixture (Join-Path $treeB 'top.bicep')
+        Copy-Item $bicepFixture (Join-Path $nested 'nested.bicep')
+
+        $s3a = Invoke-Child -ScriptPath $validateBicep -Arguments @('-RepoRoot', $treeB) -WorkingDirectory $treeB
+        if ($s3a.ExitCode -eq 0 -and $s3a.Output -match 'Population: 1 Bicep file\(s\) to compile \(2 found, 1 excluded\)') {
+            Add-Case 'S3a from the primary root, a NESTED worktree copy is excluded' 'Pass' 'population 1 of 2 found, 1 excluded'
+        } else {
+            Add-Case 'S3a from the primary root, a NESTED worktree copy is excluded' 'Fail' "expected exit 0 and 'Population: 1 ... (2 found, 1 excluded)', got exit $($s3a.ExitCode). Output: $($s3a.Output)"
+        }
+
+        $s3b = Invoke-Child -ScriptPath $validateBicep -Arguments @('-RepoRoot', $nested) -WorkingDirectory $nested
+        if ($s3b.ExitCode -eq 0 -and $s3b.Output -match 'Population: 1 Bicep file\(s\) to compile \(1 found, 0 excluded\)') {
+            Add-Case 'S3b from INSIDE a worktree, its own files ARE measured' 'Pass' 'population 1, exit 0'
+        } elseif ($s3b.Output -match 'ZERO POPULATION') {
+            Add-Case 'S3b from INSIDE a worktree, its own files ARE measured' 'Fail' '#3894 defect 2 has regressed: the gate is blind in the one place every agent in this repo works. It exited 2 having measured nothing.'
+        } else {
+            Add-Case 'S3b from INSIDE a worktree, its own files ARE measured' 'Fail' "expected exit 0 and 'Population: 1 ... (1 found, 0 excluded)', got exit $($s3b.ExitCode). Output: $($s3b.Output)"
+        }
+
+        if ($s3a.Output -match 'Population: 1 ' -and $s3b.Output -match 'Population: 1 ') {
+            Add-Case 'S3a/S3b each root sees its OWN files and only its own' 'Pass' 'the same file set, walked from two roots, yields the correct population from each'
+        } else {
+            Add-Case 'S3a/S3b each root sees its OWN files and only its own' 'Fail' 'one half of the pair did not report a population of 1; the exclusion is not being evaluated relative to the root'
+        }
+
+        # ---------------------------------------------------------------
+        # S3c - the SAME root, spelled with FORWARD SLASHES.
+        #
+        # This case exists because the first fix for #3894 closed the CASING
+        # variant of the prefix-strip and left the SEPARATOR variant wide open,
+        # and the suite could not see it: Join-Path ALWAYS emits backslashes, so
+        # the harness was structurally incapable of constructing the failing
+        # input. The bad root has to be built by string surgery, which is why
+        # this case looks different from its neighbours - that difference is the
+        # point, not an inconsistency.
+        #
+        # Forward slashes are the NATURAL spelling here: an agent inside a
+        # worktree running `validate-all.ps1 -RepoRoot "$(pwd)"` from Git Bash
+        # produces exactly this, and against the real worktree it measured
+        # Population: 0 (351 found, 351 excluded), RC=2 - #3894 in full.
+        # ---------------------------------------------------------------
+        $nestedFwd = $nested.Replace('\', '/')
+        $s3c = Invoke-Child -ScriptPath $validateBicep -Arguments @('-RepoRoot', $nestedFwd) -WorkingDirectory $nested
+        if ($s3c.ExitCode -eq 0 -and $s3c.Output -match 'Population: 1 Bicep file\(s\) to compile \(1 found, 0 excluded\)') {
+            Add-Case 'S3c the same root spelled with FORWARD SLASHES still measures' 'Pass' 'population 1, exit 0'
+        } elseif ($s3c.Output -match 'ZERO POPULATION') {
+            Add-Case 'S3c the same root spelled with FORWARD SLASHES still measures' 'Fail' 'the root prefix failed to strip on the separator, so every file was filtered as an ABSOLUTE path and excluded. #3894 has regressed through a different spelling of the root.'
+        } else {
+            Add-Case 'S3c the same root spelled with FORWARD SLASHES still measures' 'Fail' "expected exit 0 and 'Population: 1 ... (1 found, 0 excluded)', got exit $($s3c.ExitCode). Output: $($s3c.Output)"
+        }
+
+        # S3d - a RELATIVE root, resolved against the child's working directory.
+        $s3d = Invoke-Child -ScriptPath $validateBicep -Arguments @('-RepoRoot', '.') -WorkingDirectory $nested
+        if ($s3d.ExitCode -eq 0 -and $s3d.Output -match 'Population: 1 Bicep file\(s\) to compile \(1 found, 0 excluded\)') {
+            Add-Case 'S3d a RELATIVE root still measures' 'Pass' 'population 1, exit 0'
+        } else {
+            Add-Case 'S3d a RELATIVE root still measures' 'Fail' "expected exit 0 and 'Population: 1 ... (1 found, 0 excluded)', got exit $($s3d.ExitCode). Output: $($s3d.Output)"
+        }
+
+        # S3e - a root that does not exist is NOT a population verdict. Without
+        # this, the Resolve-Path added for S3c/S3d could throw or silently
+        # produce a null prefix, and the gate would fall through to a ZERO
+        # POPULATION message that misdiagnoses a typo'd root as an empty tree.
+        $missingBicepRoot = Join-Path $bicepRoot 'no-such-root-here'
+        $s3e = Invoke-Child -ScriptPath $validateBicep -Arguments @('-RepoRoot', $missingBicepRoot) -WorkingDirectory $bicepRoot
+        if ($s3e.ExitCode -eq 2 -and $s3e.Output -match 'UNRESOLVABLE ROOT') {
+            Add-Case 'S3e a nonexistent root is diagnosed as UNRESOLVABLE, not as empty' 'Pass' 'exit 2, named distinctly from ZERO POPULATION'
+        } else {
+            Add-Case 'S3e a nonexistent root is diagnosed as UNRESOLVABLE, not as empty' 'Fail' "expected exit 2 and 'UNRESOLVABLE ROOT', got exit $($s3e.ExitCode). Output: $($s3e.Output)"
+        }
+
+        # ---------------------------------------------------------------
+        # S4 - zero population is NOT a pass, and says so in its own words.
+        # ---------------------------------------------------------------
+        $treeC = Join-Path $bicepRoot 'tree-c'
+        New-Item -ItemType Directory -Path $treeC -Force | Out-Null
+        Set-Content -Path (Join-Path $treeC 'readme.md') -Value 'no templates here' -Encoding ASCII
+
+        $s4 = Invoke-Child -ScriptPath $validateBicep -Arguments @('-RepoRoot', $treeC) -WorkingDirectory $treeC
+        if ($s4.Output -match 'ALL BICEP FILES VALID') {
+            Add-Case 'S4 an empty population is NOT reported as a pass' 'Fail' 'the gate declared every file valid over a population of zero'
+        } elseif ($s4.ExitCode -eq 2 -and $s4.Output -match 'ZERO POPULATION' -and $s4.Output -match 'No \.bicep file exists anywhere under that root') {
+            Add-Case 'S4 an empty population is NOT reported as a pass' 'Pass' 'exit 2, named as ZERO POPULATION (empty tree)'
+        } else {
+            Add-Case 'S4 an empty population is NOT reported as a pass' 'Fail' "expected exit 2 with an explicit ZERO POPULATION message, got exit $($s4.ExitCode). Output: $($s4.Output)"
+        }
+
+        # ---------------------------------------------------------------
+        # S5 - the verdict still MOVES. Sending compiler output to a scratch
+        # file must not cost the gate its ability to see a failure.
+        # ---------------------------------------------------------------
+        $treeD = Join-Path $bicepRoot 'tree-d'
+        New-Item -ItemType Directory -Path $treeD -Force | Out-Null
+        Set-Content -Path (Join-Path $treeD 'broken.bicep') -Value $brokenBicep -Encoding ASCII
+
+        $s5 = Invoke-Child -ScriptPath $validateBicep -Arguments @('-RepoRoot', $treeD) -WorkingDirectory $treeD
+        if ($s5.ExitCode -eq 1 -and $s5.Output -match 'VALIDATION FAILED' -and $s5.Output -match 'Population: 1 ') {
+            Add-Case 'S5 a broken template still FAILS (exit 1)' 'Pass' 'exit 1 over a population of 1'
+        } else {
+            Add-Case 'S5 a broken template still FAILS (exit 1)' 'Fail' "expected exit 1 with VALIDATION FAILED over population 1, got exit $($s5.ExitCode). Output: $($s5.Output)"
+        }
+
+        # ---------------------------------------------------------------
+        # S6 - "the filter ate everything" is a DIFFERENT diagnosis from "the
+        # tree is empty", and gets different words. Same exit code, different fix.
+        # ---------------------------------------------------------------
+        $treeE = Join-Path $bicepRoot 'tree-e'
+        $treeEnested = Join-Path $treeE '.claude/worktrees/agent-y'
+        New-Item -ItemType Directory -Path $treeEnested -Force | Out-Null
+        Copy-Item $bicepFixture (Join-Path $treeEnested 'only.bicep')
+
+        $s6 = Invoke-Child -ScriptPath $validateBicep -Arguments @('-RepoRoot', $treeE) -WorkingDirectory $treeE
+        if ($s6.ExitCode -eq 2 -and $s6.Output -match 'EVERY file found was excluded') {
+            Add-Case 'S6 an all-excluded population is diagnosed distinctly' 'Pass' 'exit 2, and the message names the filter rather than the tree'
+        } else {
+            Add-Case 'S6 an all-excluded population is diagnosed distinctly' 'Fail' "expected exit 2 and 'EVERY file found was excluded', got exit $($s6.ExitCode). Output: $($s6.Output)"
+        }
     }
 } finally {
     Remove-Item $tempRoot -Recurse -Force -ErrorAction SilentlyContinue
