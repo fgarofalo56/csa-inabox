@@ -28,6 +28,10 @@ import {
   TAXONOMY_PATH,
   REPO_ROOT,
 } from '../deploy-classify.mjs';
+// #3899 — the CI_PLUMBING loan that exempts deploy-classify.mjs from the
+// deploy-path drift watch is asserted here, so the loan's stated boundary is
+// executable rather than prose. See the block at the bottom of this file.
+import { CI_PLUMBING } from '../check-deploy-paths-coverage.mjs';
 
 const CORPUS = JSON.parse(
   fs.readFileSync(
@@ -747,4 +751,134 @@ test('#4075: the remediation does not claim the network config is correct', () =
   // that the network configuration is correct NOR that it is wrong" — so pin
   // the shape that would actually be wrong: a claim with no disclaimer near it.
   assert.doesNotMatch(rem, /(?<!neither that )the network configuration is (correct|fine|valid)\b/i);
+});
+
+// ---------------------------------------------------------------------------
+// #3899 — the CI_PLUMBING loan for THIS FILE, made executable.
+//
+// deploy-classify.mjs is exempted from the deploy-path drift watch by a named
+// loan in check-deploy-paths-coverage.mjs. That loan is not decorative: the
+// hazard it discharges is real. `--assert-signal config.resource-group-not-found`
+// IS A PASS — deploy-fiab-commercial.yml:1322, gcch:625 and il5:370 each `exit 0`
+// on it and SKIP the image-tag preflight, and assert-no-silent-image-tag-revert
+// and adopt-image-tags both return {greenfield:true} on it. A classifier that
+// emitted that signal for a failure which was really an auth denial would turn
+// "I could not read the estate" into "there is no estate", skipping a gate on a
+// LIVE one.
+//
+// The loan named `classPrecedence` as what holds that shut, and stated that it
+// voids if that order changes. MEASURED during review of #3889: reordering
+// classPrecedence to config > permission left EVERY suite green, AND the
+// auth-denial input STILL classified as permission.authorization-failed. So the
+// stated void condition was unenforced, and it credited a mechanism that is not
+// the one doing the work.
+//
+// What actually holds it shut is upstream of precedence: the
+// `config.resource-group-not-found` signal carries `authorizationfailed` in its
+// `not[]`, so the match is refused before precedence is ever consulted. Remove
+// that entry and the loan's stated condition would remain satisfied while the
+// boundary it claims was gone.
+//
+// So both are pinned here, and the OUTCOME is pinned above either mechanism —
+// a mechanism assertion can be satisfied by code that no longer behaves.
+// `deploy-watched-completeness.test.mjs` set the precedent one file away: an
+// exclusion cannot outlive its reason because the reason is executable.
+// ---------------------------------------------------------------------------
+
+const RG_SIGNAL_ID = 'config.resource-group-not-found';
+
+/** An auth denial that ALSO carries the resource-group-not-found prose. */
+const AUTHZ_DENIED_ON_RG =
+  "ERROR: (AuthorizationFailed) The client does not have authorization to perform action " +
+  "'Microsoft.Resources/subscriptions/resourcegroups/read' over scope " +
+  "'/subscriptions/00000000-0000-0000-0000-000000000000/resourcegroups/rg-csa-loom-admin-centralus'." +
+  String.fromCharCode(10) +
+  "ERROR: (ResourceGroupNotFound) Resource group 'rg-csa-loom-admin-centralus' could not be found." +
+  String.fromCharCode(10) +
+  'Code: ResourceGroupNotFound';
+
+test('#3899 OUTCOME: an auth denial is never classified into the greenfield pass signal', () => {
+  // THE ASSERTION THAT MATTERS. Both mechanisms below are means; this is the
+  // end. A control keyed only to a mechanism goes green over code that keeps
+  // the mechanism and loses the behaviour.
+  const d = classify(AUTHZ_DENIED_ON_RG);
+  assert.equal(
+    d.signalId,
+    'permission.authorization-failed',
+    'an auth denial that also carries resource-group prose must classify as PERMISSION. Classifying it as ' +
+      `${RG_SIGNAL_ID} makes --assert-signal exit 0 and SKIPS the image-tag preflight on a LIVE estate.`,
+  );
+  assert.equal(d.class, 'permission');
+  assert.notEqual(d.signalId, RG_SIGNAL_ID);
+  assert.equal(isRetryableClass(d.class), false, 'a permission denial is not something to retry into');
+});
+
+test('#3899 MECHANISM A: the resource-group signal excludes authorizationfailed in its not[]', () => {
+  // THE LOAD-BEARING ONE, and unasserted anywhere before this. It is what
+  // refuses the match BEFORE precedence is consulted.
+  const sig = TAXONOMY.signals.find((s) => s.id === RG_SIGNAL_ID);
+  // POPULATION FLOOR: an assertion over a signal that no longer exists is green
+  // and blind — `undefined?.not` would simply not be inspected.
+  assert.ok(sig, `${RG_SIGNAL_ID} is not in the taxonomy — the loan's whole hazard has moved and it must be re-argued`);
+  assert.ok(Array.isArray(sig.not), `${RG_SIGNAL_ID} lost its not[] entirely`);
+  assert.ok(
+    sig.not.includes('authorizationfailed'),
+    `${RG_SIGNAL_ID}'s not[] no longer excludes 'authorizationfailed'. That entry is what stops an auth denial ` +
+      'being read as "there is no estate", which is a PASS on three deploy lanes. The CI_PLUMBING loan for ' +
+      'deploy-classify.mjs depends on it.',
+  );
+});
+
+test('#3899 MECHANISM B: classPrecedence still ranks permission above config', () => {
+  // The condition the loan actually STATES. Weaker than mechanism A — measured:
+  // reordering this alone did not change the verdict — but the loan names it, so
+  // it is enforced rather than described.
+  const p = TAXONOMY.classPrecedence;
+  assert.ok(Array.isArray(p) && p.length > 0, 'classPrecedence is empty — nothing orders the classes at all');
+  const iPerm = p.indexOf('permission');
+  const iConf = p.indexOf('config');
+  assert.ok(iPerm >= 0, "classPrecedence no longer contains 'permission'");
+  assert.ok(iConf >= 0, "classPrecedence no longer contains 'config'");
+  assert.ok(
+    iPerm < iConf,
+    `classPrecedence must rank permission (${iPerm}) above config (${iConf}). The CI_PLUMBING loan for ` +
+      'deploy-classify.mjs names this order as its self-voiding condition; if it is deliberately reordered, ' +
+      'delete the loan and watch the file.',
+  );
+});
+
+test('#3899: the loan names the mechanism that actually holds it shut', () => {
+  // The loan credited classPrecedence alone. If someone later removed the not[]
+  // — the thing genuinely holding it — the stated condition would still be
+  // satisfied and the loan would keep claiming a boundary it no longer had.
+  const loan = CI_PLUMBING['scripts/ci/deploy-classify.mjs'];
+  assert.ok(loan, 'the CI_PLUMBING loan for deploy-classify.mjs is gone — these three tests now guard nothing');
+  assert.match(
+    loan,
+    /not\[\]/,
+    "the loan no longer names the signal's not[] — it would again be crediting a weaker mechanism than the one " +
+      'protecting it',
+  );
+  assert.match(loan, /authorizationfailed/i, 'the loan no longer names the specific excluded term');
+  assert.match(
+    loan,
+    /deploy-classify\.test\.mjs/,
+    'the loan does not point at the tests that ENFORCE it, so a reader cannot tell the condition is executable',
+  );
+});
+
+test('#3899: report the population these assertions evaluate', () => {
+  // An assertion over an empty signal set is green and blind, so the numbers it
+  // rests on are printed, not implied.
+  const signals = TAXONOMY.signals.length;
+  const configSignals = TAXONOMY.signals.filter((s) => s.class === 'config').length;
+  const withNot = TAXONOMY.signals.filter((s) => Array.isArray(s.not) && s.not.length > 0).length;
+  console.log(
+    `#3899 population: ${signals} taxonomy signal(s), ${configSignals} in class 'config', ${withNot} carrying a ` +
+      `not[]; classPrecedence has ${TAXONOMY.classPrecedence.length} class(es); ` +
+      `${Object.keys(CI_PLUMBING).length} CI_PLUMBING loan(s) declared.`,
+  );
+  assert.ok(signals >= 20, `only ${signals} signals — the taxonomy collapsed and this suite measures nothing`);
+  assert.ok(configSignals >= 1, 'no config-class signals at all');
+  assert.ok(withNot >= 1, 'no signal carries a not[] — the exclusion mechanism this loan rests on is gone');
 });
