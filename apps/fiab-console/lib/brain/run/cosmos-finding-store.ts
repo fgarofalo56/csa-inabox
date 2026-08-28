@@ -43,6 +43,7 @@ import { CosmosClient, type Container } from '@azure/cosmos';
 import type { TokenCredential } from '@azure/identity';
 import { scanCredential } from './azure/scan-credential';
 import type { FindingRecord, ScanRunRecord } from './model';
+import { assertScanRunRecord } from './model';
 import type { FindingStore } from './ports';
 import { validateFindingDocument } from './record-validation';
 
@@ -301,7 +302,11 @@ export class CosmosFindingStore implements FindingStore {
   async lastScannedRun(estateId: string): Promise<ScanRunRecord | null> {
     const container = await this.getContainer();
     const { resources } = await container.items
-      .query<ScanRunRecord>({
+      // `unknown`, NOT `<ScanRunRecord>` (#4120). The generic is erased at
+      // runtime, so asking Cosmos for a ScanRunRecord and receiving whatever was
+      // persisted hands the compiler a claim the data never had to honour. Every
+      // document goes through `assertScanRunRecord` below instead.
+      .query<unknown>({
         query:
           'SELECT TOP 1 * FROM c WHERE c.estateId = @estateId AND c.docType = @docType ' +
           'AND IS_DEFINED(c.detectorPopulations) AND NOT IS_NULL(c.detectorPopulations) ' +
@@ -312,7 +317,12 @@ export class CosmosFindingStore implements FindingStore {
         ],
       })
       .fetchAll();
-    return resources[0] ?? null;
+    // `resources.length === 0` is the ONLY legitimate null: no run has ever
+    // scanned. A present-but-malformed document is an ERROR, because returning
+    // null for it is indistinguishable from that state and silently removes the
+    // anti-ratchet's basis.
+    if (resources.length === 0) return null;
+    return assertScanRunRecord(resources[0], 'lastScannedRun');
   }
 
   /**
@@ -359,7 +369,11 @@ export class CosmosFindingStore implements FindingStore {
     }
     const container = await this.getContainer();
     const { resources } = await container.items
-      .query<ScanRunRecord>({
+      // `unknown` for the same reason as `lastScannedRun` (#4120). This one also
+      // carried a second hazard: a `null` element in `resources` reached
+      // `runs[i].detectorPopulations` in `scannedRunAgeRuns` as an unhandled
+      // TypeError, and `lastRun` returned it as a "record".
+      .query<unknown>({
         query:
           'SELECT TOP @top * FROM c WHERE c.estateId = @estateId AND c.docType = @docType ' +
           'ORDER BY c.startedAt DESC',
@@ -370,6 +384,6 @@ export class CosmosFindingStore implements FindingStore {
         ],
       })
       .fetchAll();
-    return resources;
+    return resources.map((r, i) => assertScanRunRecord(r, `recentRuns[${i}]`));
   }
 }

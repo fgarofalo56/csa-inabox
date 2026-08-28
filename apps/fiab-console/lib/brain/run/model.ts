@@ -1049,6 +1049,167 @@ export interface ScanRunRecord {
 export const RUN_RECORD_TTL_SECONDS = 7_776_000;
 
 // ---------------------------------------------------------------------------
+// RUNTIME VALIDATION OF A PERSISTED RUN RECORD (#4120)
+//
+// WHY A TYPE IS NOT ENOUGH HERE. `cosmos-finding-store` used to do
+// `.query<ScanRunRecord>(...)` and `return resources[0] ?? null`. The generic is
+// ERASED at runtime: Cosmos returns whatever was persisted and the caller
+// receives it typed as a ScanRunRecord regardless of shape. The type is a
+// CLAIM, not a fact — the same class as #4119 and #4116.
+//
+// THE MEASURED CONSEQUENCE IS THAT THE ANTI-RATCHET SWITCHES ITSELF OFF. A
+// snapshot missing `maxExamined` makes `examined >= prior.maxExamined` compare
+// against `undefined`, which is `false` for every finite number, and
+// `Date.parse(undefined)` is `NaN`, so `decayed` is false and the mark is
+// "kept" as `undefined` forever. No throw, no log, no failing test — the
+// control written to stop a ratchet decaying is disabled by a document that is
+// merely INCOMPLETE.
+//
+// So a record is PARSED on read, and a record that does not satisfy the
+// interface is an ERROR. Not a `null`: `null` from `lastScannedRun` means "no
+// scanned run has ever happened", which is a legitimate state the caller
+// renders as "no basis" and moves on from. Coercing a corrupt document into
+// that state is precisely how the ratchet would go quiet.
+//
+// Reachability today is ~zero (W10 is new, no old-shaped snapshots exist).
+// This is the forward-compatibility trap the first schema change, migration,
+// hand-edited document or partial write walks into.
+// ---------------------------------------------------------------------------
+
+/** A persisted document did not satisfy the interface it was read as. */
+export class PersistedRunShapeError extends Error {
+  readonly problems: readonly string[];
+  readonly docId: string | null;
+  readonly where: string;
+  constructor(where: string, docId: string | null, problems: readonly string[]) {
+    super(
+      `${where}: a persisted scan-run document does not satisfy ScanRunRecord` +
+        `${docId ? ` (id '${docId}')` : ''}. It is NOT being read as "no scanned run", because that ` +
+        'would silently disable the population anti-ratchet. Problems: ' +
+        problems.join('; '),
+    );
+    this.name = 'PersistedRunShapeError';
+    this.problems = problems;
+    this.docId = docId;
+    this.where = where;
+  }
+}
+
+const isRecord = (v: unknown): v is Record<string, unknown> =>
+  typeof v === 'object' && v !== null && !Array.isArray(v);
+
+/**
+ * Problems with one persisted {@link DetectorPopulationSnapshot}.
+ *
+ * `reportedStepAt` and `decayRebases` are checked ONLY when present: both
+ * post-date the first snapshots and `population.ts` reads them with `?? null` /
+ * `?? 0` on purpose. Every other field is load-bearing for the comparator and
+ * an absence is a defect, not a default.
+ */
+function snapshotProblems(v: unknown, path: string): string[] {
+  if (!isRecord(v)) return [`${path} is not an object (got ${v === null ? 'null' : typeof v})`];
+  const out: string[] = [];
+  const str = (k: string) => {
+    if (typeof v[k] !== 'string') out.push(`${path}.${k} is not a string (got ${v[k] === undefined ? 'absent' : typeof v[k]})`);
+  };
+  const num = (k: string) => {
+    if (typeof v[k] !== 'number' || !Number.isFinite(v[k] as number)) {
+      out.push(`${path}.${k} is not a finite number (got ${v[k] === undefined ? 'absent' : String(v[k])})`);
+    }
+  };
+  str('detector');
+  num('examined');
+  if (typeof v.blind !== 'boolean') out.push(`${path}.blind is not a boolean`);
+  num('findings');
+  num('maxExamined');
+  str('maxExaminedAt');
+  if (v.reportedStepAt !== undefined && v.reportedStepAt !== null && typeof v.reportedStepAt !== 'string') {
+    out.push(`${path}.reportedStepAt is neither a string nor null`);
+  }
+  if (v.decayRebases !== undefined && (typeof v.decayRebases !== 'number' || !Number.isFinite(v.decayRebases))) {
+    out.push(`${path}.decayRebases is present but not a finite number`);
+  }
+  return out;
+}
+
+/**
+ * Every way a persisted document fails to be a {@link ScanRunRecord}. Empty
+ * means it is one.
+ *
+ * ABSENT AND `null` ARE DIFFERENT, deliberately. `graphVersionId`, `counts`,
+ * `detectorPopulations` and `graphSubjectsDigest` are `T | null` — `null` is a
+ * MEANINGFUL value written on the PAUSED and UNREACHABLE paths. A document
+ * where the key is missing entirely is a different thing and is rejected,
+ * because `undefined` is what silently walks through every `=== null` guard in
+ * this module.
+ */
+export function scanRunRecordProblems(doc: unknown): string[] {
+  if (!isRecord(doc)) return [`document is not an object (got ${doc === null ? 'null' : typeof doc})`];
+  const out: string[] = [];
+  const str = (k: string) => {
+    if (typeof doc[k] !== 'string') out.push(`${k} is not a string (got ${doc[k] === undefined ? 'absent' : typeof doc[k]})`);
+  };
+  const num = (k: string) => {
+    if (typeof doc[k] !== 'number' || !Number.isFinite(doc[k] as number)) {
+      out.push(`${k} is not a finite number (got ${doc[k] === undefined ? 'absent' : String(doc[k])})`);
+    }
+  };
+  /** Present, and either null or of the given shape. Absence is a problem. */
+  const nullableKey = (k: string, ok: (x: unknown) => boolean, what: string) => {
+    if (!(k in doc)) {
+      out.push(`${k} is ABSENT. It is nullable, not optional — a missing key reads as undefined and walks through every "=== null" guard.`);
+      return false;
+    }
+    if (doc[k] === null) return false;
+    if (!ok(doc[k])) out.push(`${k} is neither null nor ${what}`);
+    return true;
+  };
+
+  num('schemaVersion');
+  if (doc.docType !== 'scan-run') out.push(`docType is not 'scan-run' (got ${JSON.stringify(doc.docType)})`);
+  str('id');
+  str('estateId');
+  str('runId');
+  str('startedAt');
+  str('finishedAt');
+  str('cloud');
+  if (doc.verdict !== 'ok' && doc.verdict !== 'paused' && doc.verdict !== 'unreachable') {
+    out.push(`verdict is not a ScanVerdictKind (got ${JSON.stringify(doc.verdict)})`);
+  }
+  str('verdictMessage');
+  nullableKey('graphVersionId', (x) => typeof x === 'string', 'a string');
+  nullableKey('counts', isRecord, 'an object');
+  nullableKey('graphSubjectsDigest', (x) => typeof x === 'string', 'a string');
+
+  if (nullableKey('detectorPopulations', Array.isArray, 'an array')) {
+    const pops = doc.detectorPopulations as unknown[];
+    pops.forEach((p, i) => out.push(...snapshotProblems(p, `detectorPopulations[${i}]`)));
+  }
+
+  if (!Array.isArray(doc.observed)) out.push('observed is not an array');
+  if (!Array.isArray(doc.notes)) out.push('notes is not an array');
+  else if ((doc.notes as unknown[]).some((n) => typeof n !== 'string')) out.push('notes contains a non-string');
+  num('ttl');
+  return out;
+}
+
+/**
+ * Read one persisted document AS a {@link ScanRunRecord}, or throw.
+ *
+ * Throwing is the honest outcome, and `scan.ts` already handles it correctly:
+ * the run-history read is wrapped so a failure produces a "NOT ESTABLISHED"
+ * staleness — which asserts neither health nor staleness — writes the run
+ * record saying so, and then RE-RAISES. So a corrupt document fails the run
+ * loudly with its real cause instead of quietly removing the baseline.
+ */
+export function assertScanRunRecord(doc: unknown, where: string): ScanRunRecord {
+  const problems = scanRunRecordProblems(doc);
+  if (problems.length === 0) return doc as ScanRunRecord;
+  const docId = isRecord(doc) && typeof doc.id === 'string' ? doc.id : null;
+  throw new PersistedRunShapeError(where, docId, problems);
+}
+
+// ---------------------------------------------------------------------------
 // Keep the assertion aliases referenced so they cannot be pruned as dead code,
 // exactly as `../types.ts` and `lib/estate/pause-state.ts` do.
 // ---------------------------------------------------------------------------
