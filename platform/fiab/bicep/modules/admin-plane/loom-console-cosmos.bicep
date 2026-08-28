@@ -192,9 +192,9 @@ resource loomDbContainers 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/co
 // W9 (#3935) — Loom Brain GRAPH HISTORY.
 //
 // Declared as its own resource rather than as a row in `loomContainers` because
-// it is the only container here with a TTL, and the loop above emits none. It is
-// also the only one partitioned by ESTATE rather than by tenant: the Brain's
-// graph is a property of the deployed estate, not of a tenant inside it.
+// it carries a TTL, and the loop above emits none. It is also partitioned by
+// ESTATE rather than by tenant: the Brain's graph is a property of the deployed
+// estate, not of a tenant inside it.
 //
 // DEPLOYED, NOT REQUESTED (auto-bind-by-default.md §5). The console's
 // `CosmosGraphHistoryStore` also createIfNotExists's this container with the same
@@ -222,6 +222,62 @@ resource brainGraphVersions 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/
       id: 'brain-graph-versions'
       partitionKey: { paths: ['/estateId'], kind: 'Hash' }
       defaultTtl: 7776000
+      indexingPolicy: { indexingMode: 'consistent', automatic: true }
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// W10 (#3936) — Loom Brain FINDINGS + SCAN RUNS.
+//
+// Declared as its own resource rather than as a row in `loomContainers` because
+// it needs a `defaultTtl`, and the loop above emits none. It is partitioned by
+// ESTATE rather than by tenant, for the same reason `brainGraphVersions` above
+// is: the Brain's findings are a property of the deployed estate, not of a
+// tenant inside it, and every reconcile reads one estate's whole backlog, so
+// that key makes it a single physical partition.
+//
+// Two document kinds share the container, discriminated by `docType`:
+//   'finding'   one doc per detector+subject fingerprint with its lifecycle
+//               state — new -> acknowledged -> accepted -> fixed, plus the
+//               fifth state that matters most, REGRESSED.
+//   'scan-run'  one doc per scheduled run: the verdict, the counts, and the
+//               per-detector examined counts the NEXT run compares against so a
+//               shrinking population is visible (PRP §5 treats that as a P0).
+//
+// ── defaultTtl: -1 IS THE LOAD-BEARING SETTING ─────────────────────────────
+// It is the OPPOSITE of the choice `brainGraphVersions` makes, and deliberately
+// so. -1 turns TTL ON with NO blanket expiry; each document opts in with its
+// own `ttl`.
+//
+//   FINDING docs carry NO ttl, and must never be given one. A `fixed` finding
+//   is the ONLY thing that makes its next occurrence a REGRESSION rather than a
+//   new finding. Expire it and the loudest signal this lane produces is
+//   silently downgraded to the quietest — by a retention policy, with nothing
+//   in any log to show for it.
+//
+//   SCAN-RUN docs carry ttl 7776000 (90 days). Operational telemetry; losing an
+//   old one costs nothing.
+//
+// DEPLOYED, NOT REQUESTED (auto-bind-by-default.md §5). The scan's
+// `CosmosFindingStore` also createIfNotExists's this container with the same
+// partition key and the same TTL, which is the sanctioned idempotent fallback
+// for an estate whose Cosmos account predates this module — but the deploy is
+// the primary path, so nothing is ever asked of an operator.
+//
+// CLOUD PARITY — this module is invoked from admin-plane/main.bicep for every
+// boundary, so the container exists in Commercial and in Gov alike. The scan
+// reaches it through `LOOM_COSMOS_ENDPOINT`, which the deploy emits onto the
+// console app and `.github/workflows/loom-brain-scan.yml` reads from there, so
+// no host literal appears in the workflow either.
+resource brainFindings 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/containers@2024-12-01-preview' = {
+  parent: loomDb
+  name: 'brain-findings'
+  properties: {
+    resource: {
+      id: 'brain-findings'
+      partitionKey: { paths: ['/estateId'], kind: 'Hash' }
+      defaultTtl: -1
       indexingPolicy: { indexingMode: 'consistent', automatic: true }
     }
   }
@@ -358,16 +414,41 @@ var grantBrainScanDataPlane = isAzureUSGovernment && !empty(deployerServicePrinc
 // derived from this list, so a Brain container added WITHOUT a row here simply
 // gets no grant — it never silently widens an existing one.
 //
-// TODAY THIS IS ONE ENTRY. `brain-findings` (#4014 / W10) — which is where
-// `recordRun` actually upserts — is NOT declared in this module on `main` yet.
-// The lane that adds that container MUST add its name here in the same edit, or
-// the Gov scan will still 403 on its run record. That is called out in the PR
-// body rather than pre-granted: a role-assignment scope naming a container this
-// template does not create is an unverified deploy-time risk, and per
-// `deploy-integrity.md` R1/R7 this template does not gamble the whole estate
-// deploy on it.
+// `brain-findings` (#4014 / W10) is the container `recordRun` actually upserts
+// into, on OK, PAUSED and UNREACHABLE alike. It is declared above as
+// `brainFindings` by this same module, so its grant is no longer a scope naming
+// a container the template does not create — which is the condition the earlier
+// revision of this comment (written while W10 was unmerged) withheld it for.
+//
+// ── WHY EACH NAME IS READ OFF ITS RESOURCE AND NOT RETYPED AS A LITERAL ────
+// The obvious extension of the earlier one-entry shape — append a bare string
+// `'brain-findings'` to a list of string literals — COMPILES CLEAN and orders
+// the WRONG THING. The loop below used to carry `dependsOn: [ brainGraphVersions ]`
+// as a literal, so a second row produced an assignment scoped to `brain-findings`
+// that waited on `brain-graph-versions` and on nothing else. Nothing warns,
+// `az bicep build` exits 0 with zero diagnostics, and the defect is visible only
+// in the compiled ARM — which is why the guard for it reads the compiled ARM.
+//
+// Reading the name OFF the container resource closes it structurally, and does
+// so twice over:
+//
+//   1. A grant scoped to a container this template does not declare becomes
+//      UNWRITABLE — there is no symbol to read a name from.
+//   2. Bicep derives the ordering edge from that same expression, so the
+//      compiled `dependsOn` names every Brain container automatically. The
+//      dependency and the scope can no longer disagree, because they are the
+//      same expression. An explicit `dependsOn` is not merely unnecessary here,
+//      it is worse: it is a second place that can drift, and the linter says so
+//      (`no-unnecessary-dependson`).
+//
+// Adding a third Brain container is therefore one line — `brainThing.name` —
+// and its ordering edge appears in the compiled ARM without further thought.
+// `apps/fiab-console/lib/brain/run/__tests__/bicep-containers.test.ts` asserts
+// that edge against the COMMITTED COMPILED ARM, so a future literal cannot
+// reintroduce the trap silently.
 var brainScanContainers = [
-  'brain-graph-versions'
+  brainGraphVersions.name
+  brainFindings.name
 ]
 
 // ── 1. Account-scoped METADATA read (a custom role: metadata ONLY) ─────────
@@ -419,8 +500,12 @@ resource brainScanMetadataAssignment 'Microsoft.DocumentDB/databaseAccounts/sqlR
 // create/replace/upsert action and would fail on the first run record, in every
 // verdict. Contributor is the least-privilege role that actually works.
 //
-// `dependsOn` on the container is explicit: the assignment names the container
-// in its scope path, and nothing else in this template orders them.
+// There is deliberately NO explicit `dependsOn`. `brainScanContainers` reads
+// each name off its container resource, so Bicep emits the ordering edge to
+// EVERY Brain container into the compiled ARM by itself. A hand-written
+// `dependsOn` here is what previously named one container while the scope named
+// another — see `brainScanContainers` above, and the compiled-ARM guard in
+// `lib/brain/run/__tests__/bicep-containers.test.ts`.
 resource brainScanDataAssignments 'Microsoft.DocumentDB/databaseAccounts/sqlRoleAssignments@2024-12-01-preview' = [
   for containerName in brainScanContainers: if (grantBrainScanDataPlane) {
     parent: account
@@ -430,6 +515,5 @@ resource brainScanDataAssignments 'Microsoft.DocumentDB/databaseAccounts/sqlRole
       principalId: deployerServicePrincipalId
       scope: '${account.id}/dbs/${loomDatabase}/colls/${containerName}'
     }
-    dependsOn: [ brainGraphVersions ]
   }
 ]

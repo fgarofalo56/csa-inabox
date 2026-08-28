@@ -6,7 +6,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.45.15.27210",
-      "templateHash": "13938754712809740162"
+      "templateHash": "3669288242279134172"
     }
   },
   "definitions": {
@@ -2579,7 +2579,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.45.15.27210",
-              "templateHash": "8619667176515967648"
+              "templateHash": "7376873331744789539"
             }
           },
           "definitions": {
@@ -8380,7 +8380,7 @@
                     "_generator": {
                       "name": "bicep",
                       "version": "0.45.15.27210",
-                      "templateHash": "9888553210182242871"
+                      "templateHash": "1547640137092168000"
                     }
                   },
                   "parameters": {
@@ -8539,7 +8539,8 @@
                     "isAzureUSGovernment": "[equals(environment().suffixes.storage, 'core.usgovcloudapi.net')]",
                     "grantBrainScanDataPlane": "[and(and(variables('isAzureUSGovernment'), not(empty(parameters('deployerServicePrincipalId')))), not(parameters('skipRoleGrants')))]",
                     "brainScanContainers": [
-                      "brain-graph-versions"
+                      "brain-graph-versions",
+                      "brain-findings"
                     ]
                   },
                   "resources": [
@@ -8634,6 +8635,30 @@
                             "kind": "Hash"
                           },
                           "defaultTtl": 7776000,
+                          "indexingPolicy": {
+                            "indexingMode": "consistent",
+                            "automatic": true
+                          }
+                        }
+                      },
+                      "dependsOn": [
+                        "[resourceId('Microsoft.DocumentDB/databaseAccounts/sqlDatabases', parameters('accountName'), variables('loomDatabase'))]"
+                      ]
+                    },
+                    {
+                      "type": "Microsoft.DocumentDB/databaseAccounts/sqlDatabases/containers",
+                      "apiVersion": "2024-12-01-preview",
+                      "name": "[format('{0}/{1}/{2}', parameters('accountName'), variables('loomDatabase'), 'brain-findings')]",
+                      "properties": {
+                        "resource": {
+                          "id": "brain-findings",
+                          "partitionKey": {
+                            "paths": [
+                              "/estateId"
+                            ],
+                            "kind": "Hash"
+                          },
+                          "defaultTtl": -1,
                           "indexingPolicy": {
                             "indexingMode": "consistent",
                             "automatic": true
@@ -8803,6 +8828,7 @@
                       },
                       "dependsOn": [
                         "[resourceId('Microsoft.DocumentDB/databaseAccounts', parameters('accountName'))]",
+                        "[resourceId('Microsoft.DocumentDB/databaseAccounts/sqlDatabases/containers', parameters('accountName'), variables('loomDatabase'), 'brain-findings')]",
                         "[resourceId('Microsoft.DocumentDB/databaseAccounts/sqlDatabases/containers', parameters('accountName'), variables('loomDatabase'), 'brain-graph-versions')]"
                       ]
                     }
@@ -30098,7 +30124,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.45.15.27210",
-              "templateHash": "9744095349749879047"
+              "templateHash": "10438238567886389002"
             }
           },
           "functions": [
@@ -35915,7 +35941,7 @@
                     "_generator": {
                       "name": "bicep",
                       "version": "0.45.15.27210",
-                      "templateHash": "6949681123683155163"
+                      "templateHash": "7881732571790807215"
                     }
                   },
                   "parameters": {
@@ -36301,6 +36327,11 @@
                         "name": "brain-graph-versions",
                         "partitionKey": "/estateId",
                         "ttl": 7776000
+                      },
+                      {
+                        "name": "brain-findings",
+                        "partitionKey": "/estateId",
+                        "ttl": -1
                       }
                     ]
                   },
@@ -39951,7 +39982,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.45.15.27210",
-              "templateHash": "9744095349749879047"
+              "templateHash": "10438238567886389002"
             }
           },
           "functions": [
@@ -45768,7 +45799,7 @@
                     "_generator": {
                       "name": "bicep",
                       "version": "0.45.15.27210",
-                      "templateHash": "6949681123683155163"
+                      "templateHash": "7881732571790807215"
                     }
                   },
                   "parameters": {
@@ -46154,6 +46185,11 @@
                         "name": "brain-graph-versions",
                         "partitionKey": "/estateId",
                         "ttl": 7776000
+                      },
+                      {
+                        "name": "brain-findings",
+                        "partitionKey": "/estateId",
+                        "ttl": -1
                       }
                     ]
                   },
@@ -49969,7 +50005,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.45.15.27210",
-              "templateHash": "9744095349749879047"
+              "templateHash": "10438238567886389002"
             }
           },
           "functions": [
@@ -55786,7 +55822,7 @@
                     "_generator": {
                       "name": "bicep",
                       "version": "0.45.15.27210",
-                      "templateHash": "6949681123683155163"
+                      "templateHash": "7881732571790807215"
                     }
                   },
                   "parameters": {
@@ -56172,6 +56208,11 @@
                         "name": "brain-graph-versions",
                         "partitionKey": "/estateId",
                         "ttl": 7776000
+                      },
+                      {
+                        "name": "brain-findings",
+                        "partitionKey": "/estateId",
+                        "ttl": -1
                       }
                     ]
                   },

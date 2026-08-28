@@ -1,0 +1,720 @@
+name: loom-brain-scan
+
+# LOOM BRAIN W10 — the SCHEDULER (#3936, PRP `PRPs/active/loom-brain/PRP.md`).
+#
+# A Brain nobody runs finds nothing. W1-W9 built a graph, six detectors, a
+# security layer and a version history; this is the loop that runs them. The
+# cautionary instance is already in this repo: `lcu-autopilot` implements
+# read -> decide -> actuate -> audit and has NO scheduler, so it has never
+# produced a finding in anger.
+#
+# ── RECOMMEND-ONLY, AND STRUCTURALLY SO ─────────────────────────────────────
+# Two Azure verbs are reachable from the scan:
+#   POST {arm}/providers/Microsoft.ResourceGraph/resources   (a query)
+#   GET  {arm}{resourceId}?api-version=...                   (a read)
+# Nothing here can create, scale, start, stop or delete anything. PRP §1
+# decision 1, and the measured reason is blast radius: of the 13 Container App
+# environments visible across these subscriptions, ONE is Loom's.
+#
+# ── THE HARD PROBLEM THIS LANE HAD TO SOLVE: THE ESTATE IS PAUSED ───────────
+# Standing operator mandate: the Commercial and Gov estates are kept PAUSED
+# unless actively validating. A naive scheduled scan therefore fails RED every
+# cycle with "could not reach Azure", the operator learns to ignore the lane,
+# and the lane becomes decorative — which is exactly the silently-broken path
+# `deploy-integrity.md` R1 forbids.
+#
+# The forbidden cure is a config flag that skips the run: a boolean that
+# disables a job is a gate that cannot fail. So the scan produces THREE
+# verdicts, each derived from an ACTUAL ARM READ (never from a setting):
+#
+#   exit 0  OK      — reached ARM, something is Online. Graph built, detectors
+#                     run, a graph version written, findings reconciled.
+#   exit 0  PAUSED  — reached ARM, and EVERY in-scope resource is definitively
+#                     stopped. Neutral: nothing was scanned, so not green;
+#                     nothing is broken, so not red. Observed per-resource
+#                     states are printed.
+#   exit 2  UNREACHABLE — auth/network/ARM error, zero in-scope resources, or a
+#                     power state that could not be established. RED.
+#   exit 3  POPULATION REGRESSION — the estate WAS scanned and the SCAN got
+#                     worse than last run (PRP §5: a shrinking judged count is a
+#                     P0). RED on its own axis.
+#   exit 1  a defect in the scan itself.
+#
+# PAUSED exiting 0 means a green check does NOT imply a scan happened, so the
+# verdict is carried in three places a green check cannot hide: the first line
+# of the log, the step-summary headline, and the `verdict` job output.
+#
+# ── NO RESULT IS EVER DISCARDED ─────────────────────────────────────────────
+# There is no `continue-on-error`, no `|| true` and no `2>/dev/null` in this
+# file. Where a step needs stderr it is written to a file under `temp/` and
+# `cat`-ed. `deploy-integrity.md` forbids result-discarding, and a `2>/dev/null`
+# once turned a permission denial into "the tag does not exist" here and sent
+# two investigations down the wrong path.
+#
+# NOTE ON `set -e`: GitHub's default shell is `bash -e`. `set -uo pipefail` does
+# NOT clear it, so a failing command aborts the step BEFORE any RC check can
+# classify it. Every step below that classifies an exit code turns -e OFF first
+# (`set +e`) and captures `RC=$?` on the LINE IMMEDIATELY AFTER the command,
+# never after a pipe (a pipe yields the LAST command's status, not the
+# subject's).
+#
+# ── WHY THIS RUNS ON THE IN-VNET ACA RUNNER, NOT ubuntu-latest ─────────────
+# MEASURED 2026-08-24, from outside the VNet (a workstation is in exactly the
+# same network position as a GitHub-hosted runner):
+#
+#   GET https://<loom cosmos account>/  ->  HTTP 403
+#   {"code":"Forbidden","message":"Request originated from IP <redacted> through
+#    public internet. This is blocked by your Cosmos DB account firewall
+#    settings."}
+#
+# Both cosmos modules set `publicNetworkAccess: 'Disabled'` with
+# `networkAclBypass: 'AzureServices'` and a private endpoint, and a hosted runner
+# is neither in the VNet nor an Azure first-party service. `recordRun` fires on
+# EVERY path — including PAUSED and UNREACHABLE — so on a hosted runner every
+# single run would die before it could persist anything.
+#
+# `[self-hosted, loom-aca]` is the scale-to-zero ACA Job runner
+# (`platform/fiab/bicep/modules/admin-plane/gh-runner-job.bicep`), which is
+# INSIDE the hub VNet and — this is the part that matters twice — runs AS THE
+# CONSOLE UAMI (`identity: consoleUamiId`). That identity already holds the
+# Cosmos built-in Data Contributor role via `cosmosDataRole` in both modules, so
+# this lane needs NO new `sqlRoleAssignment` and no new object id in a public
+# repository. `LOOM_UAMI_CLIENT_ID` selects it explicitly in the credential
+# chain; when it is absent the managed-identity leg is not added at all, so there
+# is no failed IMDS probe before the fallback.
+#
+# ── AND THE CREDENTIAL CHAIN HAS TO BE ALLOWED TO REACH IT (review of #4014) ─
+# The paragraph above was true about intent and FALSE about behaviour, and the
+# lane could not have completed a single run in either boundary because of it.
+#
+# MEASURED at head, by reading the installed SDK:
+# `apps/fiab-console/node_modules/@azure/identity` is 4.13.1 and
+# `dist/commonjs/credentials/defaultAzureCredential.js:78-80` orders the
+# production chain
+#
+#     EnvironmentCredential -> WorkloadIdentityCredential -> ManagedIdentityCredential
+#
+# with `:130` appending the developer credentials when `AZURE_TOKEN_CREDENTIALS`
+# is unset — which it is: zero occurrences anywhere in `.github/workflows`.
+# THIS FILE set `AZURE_CLIENT_ID` / `AZURE_CLIENT_SECRET` / `AZURE_TENANT_ID` at
+# JOB level, so `EnvironmentCredential` won every time, the managed-identity leg
+# was never evaluated, and `LOOM_UAMI_CLIENT_ID` was inert — the two resolution
+# steps below were establishing nothing at all.
+#
+# The consequence was total rather than partial: the deploy SP holds no
+# `sqlRoleAssignments` anywhere in the platform bicep, `disableLocalAuth: true`
+# makes AAD-RBAC the only data-plane path, and `recordRun` fires on OK, PAUSED
+# AND UNREACHABLE — so every verdict would have died on its Cosmos write.
+#
+# There is a SECOND door, measured in the same file: when
+# `managedIdentityClientId` is not supplied, `createDefaultManagedIdentityCredential`
+# falls back to `process.env.AZURE_CLIENT_ID` — the SP's app id — and asks IMDS
+# for an identity attached to nothing.
+#
+# So the three variables are GONE from both jobs. They were never needed:
+# `Azure/login` takes its credentials inline via `creds:`, and every `az` call
+# below uses the resulting login session. And because "we removed the env vars"
+# is a claim about a file rather than about a run, `lib/brain/run/token-identity.ts`
+# now DECODES the minted token and fails closed when the principal is not the one
+# the run declared — see `Assert the scan ran as the identity it declared` below.
+#
+# ── CLOUD PARITY, AND WHERE THE TWO BOUNDARIES GENUINELY DIFFER ────────────
+# The fix above is identical in both jobs, because the defect was. What is NOT
+# identical is what the chain can then reach:
+#
+#   Commercial  `[self-hosted, loom-aca]` HAS a managed identity (the console
+#               UAMI), so unshadowing the chain makes the lane run as it. The
+#               assertion below proves that per run rather than assuming it.
+#   Gov         `ubuntu-latest` has NO managed identity at all, so no chain
+#               order can reach one. The chain falls through to
+#               AzureCliCredential — the service principal, via the `az login`
+#               two steps up — and that principal holds no Cosmos data-plane
+#               role. That is a REAL and still-open Gov gap, tracked in #4051
+#               alongside the network gap below, and the scan now names it with
+#               the exact `az cosmosdb sql role assignment create` command
+#               instead of failing with a 403 stack trace.
+#
+# Per `cloud-parity.md` that lag is stated, owned and dated rather than implied
+# fixed: a change that repaired Commercial and left Gov looking repaired would be
+# worse than the bug.
+#
+# ── CLOUD PARITY (`cloud-parity.md`) ────────────────────────────────────────
+# Two jobs, one per boundary, identical steps. The ARM host and token audience
+# come from `lib/azure/cloud-endpoints` keyed on `LOOM_CLOUD`, never from a
+# literal. Gov cannot be driven from a workstation — there is no local Gov `az`
+# context — so the Gov receipt can only ever come from a run of this workflow.
+# See docs/fiab/brain/scheduler.md for which boundaries have actually produced
+# one.
+
+on:
+  schedule:
+    # 04:11 UTC daily. Deliberately NOT minute 0 or 30: the whole GitHub fleet
+    # lands there and a scheduled run can be delayed by many minutes, which for
+    # a lane whose verdict depends on whether an estate is running at that
+    # instant is a real source of noise.
+    - cron: '11 4 * * *'
+  workflow_dispatch:
+    inputs:
+      cloud:
+        description: 'Which boundary to scan.'
+        type: choice
+        default: both
+        options:
+          - both
+          - commercial
+          - gov
+
+permissions:
+  contents: read
+  # `actions: read` is what `gh api .../actions/runs/<id>/jobs` needs. It is a
+  # GRANTABLE permission; listing self-hosted RUNNERS needs `administration:
+  # read`, which GITHUB_TOKEN cannot be given — so the watchdog below measures
+  # whether the job STARTED rather than whether a runner exists. That is the
+  # observable that actually matters and the one this token can establish.
+  actions: read
+
+concurrency:
+  group: loom-brain-scan
+  cancel-in-progress: false
+
+jobs:
+  # ── QUEUE-TIME WATCHDOG ────────────────────────────────────────────────────
+  #
+  # `timeout-minutes` bounds a job's EXECUTION, not the time it spends waiting
+  # for a runner. A job targeting a label no runner serves therefore sits QUEUED
+  # — up to GitHub's 24-hour ceiling — showing as neither red nor green. A lane
+  # that never runs and never goes red is the exact failure mode #3936 exists to
+  # prevent, and the `lcu-autopilot` precedent it cites.
+  #
+  # This job runs on a GitHub-hosted runner (always available), polls this run's
+  # own jobs, and FAILS if a scan job is still queued past the budget. It does
+  # not cancel anything: a late scan that eventually runs is still worth having,
+  # and the red run is the signal.
+  #
+  # WHY THE BUDGET IS 20 MINUTES AND NOT 2: `loom-aca` is a KEDA-scaled ACA Job
+  # that scales FROM ZERO when a job queues — brief queueing is its normal,
+  # designed behaviour (`loom-aca-runner-smoke.yml` exists to prove that path).
+  # A preflight demanding a runner already be online would fail on the healthy
+  # path. 20 minutes is far outside a cold start and far inside the 24-hour
+  # silent ceiling.
+  #
+  # ── THE SCRIPT LIVES IN scripts/ci SO IT CAN BE TESTED (review of #4014) ──
+  # The inline version exited 0 on the FIRST `gh api` failure, so one 403 made
+  # the watchdog silently absent while the run stayed green; and it printed
+  # "still QUEUED" when it had seen ZERO jobs, which is false. Both are R7
+  # violations inside an R7 guard, and both are the kind only EXECUTION finds.
+  # `scripts/ci/test-brain-scan-queue-watchdog.sh` runs the forced-failure arm
+  # and its transient-failure control with `gh`/`jq`/`sleep` stubbed.
+  queue-watchdog:
+    name: Queue watchdog
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Fail if a scan job is still queued after the budget
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BUDGET_MINUTES: '20'
+        run: bash scripts/ci/brain-scan-queue-watchdog.sh
+
+  commercial:
+    name: Brain scan — Commercial
+    if: github.event_name == 'schedule' || inputs.cloud == 'both' || inputs.cloud == 'commercial'
+    runs-on: [self-hosted, loom-aca]
+    timeout-minutes: 30
+    outputs:
+      verdict: ${{ steps.scan.outputs.verdict }}
+      regressions: ${{ steps.scan.outputs.regressions }}
+      population_regression: ${{ steps.scan.outputs.population_regression }}
+      scan_stale: ${{ steps.scan.outputs.scan_stale }}
+      last_scanned_age_days: ${{ steps.scan.outputs.last_scanned_age_days }}
+      last_scanned_at: ${{ steps.scan.outputs.last_scanned_at }}
+    env:
+      LOOM_CLOUD: Commercial
+      # NOT a literal estate id. `LOOM_ESTATE_ID` is emitted by no bicep module,
+      # and lib/estate/pause-orchestrator.ts#resolveEstateId SYNTHESIZES
+      # `loom:<sub8>:<rg>` when it is unset — so a literal here would disagree
+      # with whatever the console resolves and this lane's findings would land in
+      # a Cosmos partition nothing else reads. The CLI derives it from these two
+      # values using the same algorithm, and `__tests__/estate-id.test.ts`
+      # asserts the two implementations agree.
+      LOOM_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+      LOOM_ADMIN_RG: rg-csa-loom-admin-centralus
+      LOOM_BRAIN_RESOURCE_GROUPS: rg-csa-loom-admin-centralus
+      ADMIN_RG: rg-csa-loom-admin-centralus
+      CONSOLE_APP: loom-console
+      # AZURE_CLIENT_ID / AZURE_CLIENT_SECRET / AZURE_TENANT_ID are DELIBERATELY
+      # ABSENT here. See the credential-chain note in this file's header: their
+      # presence made EnvironmentCredential outrank ManagedIdentityCredential, so
+      # the scan authenticated as the deploy service principal — which holds no
+      # Cosmos data-plane role — and LOOM_UAMI_CLIENT_ID was inert. `Azure/login`
+      # below passes them inline via `creds:`, and every `az` call uses that
+      # session, so nothing in this job needs them in the environment.
+      AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Azure login (Commercial)
+        uses: Azure/login@v2
+        with:
+          creds: |
+            {
+              "clientId": "${{ secrets.AZURE_CLIENT_ID }}",
+              "clientSecret": "${{ secrets.AZURE_CLIENT_SECRET }}",
+              "tenantId": "${{ secrets.AZURE_TENANT_ID }}",
+              "subscriptionId": "${{ secrets.AZURE_SUBSCRIPTION_ID }}"
+            }
+
+      - name: Install console dependencies
+        working-directory: apps/fiab-console
+        run: |
+          corepack enable
+          CI=true pnpm install --frozen-lockfile
+
+      - name: Build the scan CLI
+        working-directory: apps/fiab-console
+        run: |
+          # `tsconfig.cli.json` deliberately declares NO `paths` mapping: tsc
+          # resolves the console's `@/*` alias for typechecking but does NOT
+          # rewrite it on emit, so an alias import would compile here and then
+          # fail at 04:11 UTC with a module-not-found that reads like a broken
+          # install. Omitting `paths` makes that a compile error instead.
+          node_modules/.bin/tsc -p lib/brain/run/tsconfig.cli.json
+          test -f temp/brain-scan-build/lib/brain/run/cli.js
+
+      - name: Resolve the estate Cosmos endpoint and the console UAMI
+        working-directory: apps/fiab-console
+        run: |
+          # DEPLOYED, NOT REQUESTED (auto-bind-by-default.md §5). Both values are
+          # emitted onto the console app by the platform bicep, so the lane reads
+          # them from the estate rather than asking an operator to set variables.
+          # These are CONTROL-plane reads and work whether or not the app is
+          # running, which matters: the console is one of the things that may be
+          # stopped when the estate is paused.
+          set +e -uo pipefail
+          mkdir -p ../../temp
+
+          # ── MASK THE SUBSCRIPTION PREFIX (review N6 on #4014) ─────────────
+          # The estate id is `loom:<first 8 of the subscription GUID>:<rg>`, and
+          # that shape is NOT negotiable: it must agree byte-for-byte with the
+          # console's own `resolveEstateId()` or this lane writes to a Cosmos
+          # partition nothing else reads. GitHub masks `AZURE_SUBSCRIPTION_ID`
+          # automatically, but a masked secret's 8-character PREFIX is a
+          # different string and is not covered — so it is masked explicitly,
+          # for the same reason the endpoint below is: this repo is public and a
+          # workflow log is a publication surface.
+          #
+          # This covers the LOG. It is NOT relied on for the step summary, which
+          # is a rendered file rather than a log stream and whose masking
+          # behaviour is not established — `report.ts#maskEstateId` elides the
+          # prefix at render time so that surface needs no assumption.
+          if [ -n "${LOOM_SUBSCRIPTION_ID:-}" ]; then
+            echo "::add-mask::${LOOM_SUBSCRIPTION_ID:0:8}"
+          fi
+
+          ENDPOINT=$(az containerapp show -n "$CONSOLE_APP" -g "$ADMIN_RG" \
+            --query "properties.template.containers[0].env[?name=='LOOM_COSMOS_ENDPOINT'].value | [0]" \
+            -o tsv 2>../../temp/cosmos-endpoint.err)
+          RC=$?
+          if [ $RC -ne 0 ]; then
+            echo "::error::could not read LOOM_COSMOS_ENDPOINT from $CONSOLE_APP in $ADMIN_RG (az exit $RC). The findings backlog has nowhere to persist, so the scan is NOT being run — it would report findings it could not store, and the next run would then re-report every one of them as new."
+            cat ../../temp/cosmos-endpoint.err
+            exit 1
+          fi
+          if [ -z "${ENDPOINT:-}" ]; then
+            echo "::error::az succeeded but $CONSOLE_APP in $ADMIN_RG carries no LOOM_COSMOS_ENDPOINT env entry. That is a mis-deployed console, not a missing setting: the platform bicep emits this value for every boundary."
+            exit 1
+          fi
+          # The endpoint is an account HOST, not a credential. It is masked
+          # anyway: this repo is public and a workflow log is a publication
+          # surface.
+          echo "::add-mask::$ENDPOINT"
+          echo "LOOM_COSMOS_ENDPOINT=$ENDPOINT" >> "$GITHUB_ENV"
+
+          # The console UAMI's client id. This runner runs AS that identity
+          # (gh-runner-job.bicep `identity: consoleUamiId`), and that identity
+          # already holds Cosmos Data Contributor on the account — which is why
+          # this lane needs no new role assignment. Naming it explicitly makes
+          # the credential chain select it rather than guessing.
+          UAMI=$(az containerapp show -n "$CONSOLE_APP" -g "$ADMIN_RG" \
+            --query "properties.template.containers[0].env[?name=='LOOM_UAMI_CLIENT_ID'].value | [0]" \
+            -o tsv 2>../../temp/uami.err)
+          URC=$?
+          if [ $URC -ne 0 ]; then
+            echo "::error::could not read LOOM_UAMI_CLIENT_ID from $CONSOLE_APP in $ADMIN_RG (az exit $URC)."
+            cat ../../temp/uami.err
+            exit 1
+          fi
+          if [ -z "${UAMI:-}" ]; then
+            # NOW FATAL, and the reason the old warning gave was FALSE (review of
+            # #4014, B1). It said the chain "will fall back to the service
+            # principal" as though that only happened when this value was
+            # missing; with EnvironmentCredential ahead of ManagedIdentityCredential
+            # it happened ALWAYS. With the SP env vars gone, this runner's only
+            # route to the Cosmos data plane IS the console UAMI, so an absent
+            # client id is not a degraded mode — there is nothing to degrade to,
+            # and running on would produce a 403 whose stated cause was wrong.
+            #
+            # This is a mis-deployed console rather than a missing setting: the
+            # platform bicep emits LOOM_UAMI_CLIENT_ID onto this app for every
+            # boundary (auto-bind-by-default.md §5).
+            echo "::error::$CONSOLE_APP in $ADMIN_RG carries no LOOM_UAMI_CLIENT_ID env entry. The scan is NOT being run. This runner reaches the Cosmos data plane ONLY as the console UAMI — the account sets disableLocalAuth, so AAD-RBAC is the only path, and the deploy service principal holds no sqlRoleAssignment anywhere in the platform bicep. Without the client id the credential chain cannot select that identity. The platform bicep emits this value onto the console container app for every boundary, so its absence is a mis-deployed console: re-run the admin-plane deploy, or read the value from identity.outputs.uamiConsoleClientId and confirm it reached the app."
+            exit 1
+          fi
+          echo "::add-mask::$UAMI"
+          echo "LOOM_UAMI_CLIENT_ID=$UAMI" >> "$GITHUB_ENV"
+          echo "resolved the estate Cosmos endpoint and the console UAMI (values masked)."
+
+      - name: Run the Brain scan
+        id: scan
+        working-directory: apps/fiab-console
+        env:
+          LOOM_BRAIN_RUN_ID: ${{ github.run_id }}-${{ github.run_attempt }}-commercial
+        run: |
+          # -e OFF so the RC below classifies the outcome instead of the step
+          # dying before it can. RC is captured on the LINE IMMEDIATELY AFTER the
+          # command — never after a pipe, which would yield the pipe's status.
+          set +e -uo pipefail
+          mkdir -p ../../temp
+          node temp/brain-scan-build/lib/brain/run/cli.js 2>../../temp/brain-scan.err
+          RC=$?
+          echo "--- stderr (verbatim, nothing discarded) ---"
+          cat ../../temp/brain-scan.err
+          echo "--- scan exit code: $RC ---"
+          case "$RC" in
+            0)
+              echo "Scan completed. See the step summary for the verdict — a green check does NOT mean the estate was scanned; a PAUSED estate also exits 0."
+              exit 0
+              ;;
+            2)
+              echo "::error::UNREACHABLE — the scan could not establish anything about the Commercial estate. NO graph was built, NO detector ran and NO finding state was changed. The verdict message above states exactly what was established; a run that REACHED Azure and found nothing says so and does NOT claim a connectivity failure."
+              exit 1
+              ;;
+            3)
+              echo "::error::POPULATION REGRESSION — the Commercial estate was reached and scanned, and the SCAN examined materially less than it did last run. PRP §5 treats a shrinking judged count as a P0: a detector that stops looking reports the same clean result as a detector that looked and found nothing."
+              exit 1
+              ;;
+            4)
+              echo "::error::SCAN STALE — the Commercial estate was reached, and this lane has not ACTUALLY SCANNED anything inside its declared ceiling. A PAUSED run exits 0 by design, so without this axis a lane paused for months was indistinguishable at the check level from a working one — deploy-integrity R3 calls a path that has never run the loudest case of drift, not a silent pass. The step summary carries the last actual scan date, how many runs back it was, and the ceiling. Resume the estate for a validation window, or record a decision that it is not being scanned."
+              exit 1
+              ;;
+            *)
+              echo "::error::The Brain scan failed with exit $RC — a defect in the scan itself, not a verdict about the estate. The stderr above is the whole failure."
+              exit 1
+              ;;
+          esac
+
+      # ── THE GUARD AGAINST GREEN-OVER-NOTHING (review of #4014, G2) ────────
+      #
+      # A mutation arm neutered the CLI's direct-invocation predicate: `node
+      # cli.js` then exited 0 having produced NO output, NO verdict, NO step
+      # summary and NO job output — and this workflow printed "Scan completed."
+      # and passed. Green over literally nothing, which is the precise failure
+      # #3936 exists to prevent.
+      #
+      # The job DECLARED `outputs.verdict` but nothing consumed it and no step
+      # failed on it being empty, so the claimed "three places a green check
+      # cannot hide the verdict" was two in practice. This is the third, and it
+      # catches ANY silent no-op rather than only that one arm: if the scan did
+      # not run, or ran and wrote nothing, or wrote something unrecognised, this
+      # fails.
+      - name: Assert the scan actually produced a verdict
+        if: always() && steps.scan.conclusion != 'skipped'
+        env:
+          VERDICT: ${{ steps.scan.outputs.verdict }}
+        run: |
+          set +e -uo pipefail
+          if [ -z "${VERDICT:-}" ]; then
+            echo "::error::The scan step produced an EMPTY verdict output. The scan either did not run, or ran and wrote nothing to \$GITHUB_OUTPUT. Either way NOTHING was established about the estate, and a passing job here would be green over nothing — the exact failure this lane exists to prevent. Check the scan log above: a real run always prints a 'LOOM BRAIN SCAN — VERDICT:' headline before it does anything else."
+            exit 1
+          fi
+          case "$VERDICT" in
+            ok|paused|unreachable)
+              echo "verdict output present and recognised: $VERDICT"
+              ;;
+            *)
+              echo "::error::The scan produced an UNRECOGNISED verdict '$VERDICT'. Expected one of ok|paused|unreachable. Refusing to pass on a value this workflow cannot interpret."
+              exit 1
+              ;;
+          esac
+
+  gov:
+    name: Brain scan — Azure Government
+    # ── DISPATCH-ONLY, NOT NIGHTLY (#4051, review of #4014) ────────────────
+    #
+    # `github.event_name == 'schedule'` was here and has been REMOVED. It made
+    # this job red every night by construction (see the runner note below), and
+    # a permanently red sibling makes a GENUINE Commercial population regression
+    # indistinguishable at the run level — the run is red either way, so the one
+    # signal PRP §5 calls the most valuable thing this system produces gets
+    # buried under a known-red job within a week of nobody looking. That is the
+    # "gate that always fails" shape `lib/brain/run/model.ts` refuses in its own
+    # header, and this lane had become its twin.
+    #
+    # Nothing is hidden by this. The job still exists, still carries its full
+    # preflight, and is still one `workflow_dispatch` away — and per the standing
+    # Gov-access rule a Gov receipt can ONLY come from a GitHub Actions run,
+    # never from local `az`, so dispatch is the same mechanism it always was.
+    # What changes is that a red Commercial run now means COMMERCIAL is red.
+    #
+    # #4051 tracks the in-boundary Gov runner that closes this, and states
+    # plainly that until it lands Gov has NO nightly Brain coverage. Restore
+    # `github.event_name == 'schedule' ||` below on the same commit that points
+    # `runs-on` at the Gov runner label — not before, or the nightly red is back.
+    if: github.event_name == 'workflow_dispatch' && (inputs.cloud == 'both' || inputs.cloud == 'gov')
+    # ── THERE IS NO GOV IN-BOUNDARY RUNNER. MEASURED, NOT ASSUMED. ──────────
+    #
+    # An earlier revision of this lane targeted `[self-hosted, loom-aca-gov]`.
+    # That label was INVENTED. `.github/actionlint.yaml` declares exactly one
+    # self-hosted label — `loom-aca` — and every one of the ~25 `gov-*.yml`
+    # workflows in this repo runs on `ubuntu-latest`. actionlint said so
+    # directly: `label "loom-aca-gov" is unknown`.
+    #
+    # Targeting it would have made the Gov job QUEUE forever: neither red nor
+    # green, a lane that never runs and never complains — the precise failure
+    # #3936 exists to prevent. So the label is gone and the job runs where every
+    # other Gov job runs.
+    #
+    # THE CONSEQUENCE IS HONEST AND IT IS RED: the Gov Cosmos account is
+    # `publicNetworkAccess: 'Disabled'` behind a private endpoint, exactly as
+    # the Commercial one is, so a hosted runner CANNOT persist a run record.
+    # The preflight below establishes that by measurement and fails with that
+    # specific reason, rather than letting the run die later inside `recordRun`
+    # with a stack trace. Under `cloud-parity.md` a Gov gap must be "a tracked
+    # defect with an owner and a date — never a silent state": #4051 is that
+    # tracked state, and it is where the owner and the date belong. A NIGHTLY
+    # red was not — it was an untracked one that also drowned the Commercial
+    # signal, which is why the schedule trigger came off above. Making this
+    # green would be a false claim; running it nightly was a costly one.
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    outputs:
+      verdict: ${{ steps.scan.outputs.verdict }}
+      regressions: ${{ steps.scan.outputs.regressions }}
+      population_regression: ${{ steps.scan.outputs.population_regression }}
+      scan_stale: ${{ steps.scan.outputs.scan_stale }}
+      last_scanned_age_days: ${{ steps.scan.outputs.last_scanned_age_days }}
+      last_scanned_at: ${{ steps.scan.outputs.last_scanned_at }}
+    env:
+      LOOM_CLOUD: GCC-High
+      LOOM_CLOUD_BOUNDARY: gcc-high
+      # Derived, not typed in — see the Commercial job's note.
+      LOOM_SUBSCRIPTION_ID: ${{ secrets.AZURE_GOV_SUBSCRIPTION_ID }}
+      LOOM_ADMIN_RG: rg-csa-loom-admin-usgovvirginia
+      LOOM_BRAIN_RESOURCE_GROUPS: rg-csa-loom-admin-usgovvirginia
+      ADMIN_RG: rg-csa-loom-admin-usgovvirginia
+      CONSOLE_APP: loom-console
+      # AZURE_CLIENT_ID / AZURE_CLIENT_SECRET / AZURE_TENANT_ID are DELIBERATELY
+      # ABSENT here too, and for the SAME reason as Commercial — the defect was
+      # identical in both jobs, so the removal is (cloud-parity.md).
+      #
+      # WHAT THIS BOUNDARY GETS IS NOT THE SAME, AND THE DIFFERENCE IS REAL:
+      # `ubuntu-latest` has NO managed identity, so no chain order reaches one
+      # here. With the env vars gone the chain falls through to
+      # AzureCliCredential and authenticates as the service principal via the
+      # `az login` above — which is the only identity this runner has, and which
+      # holds no Cosmos data-plane role. The scan now NAMES that principal and
+      # prints the exact `az cosmosdb sql role assignment create` command rather
+      # than dying on a 403 (deploy-integrity R6).
+      #
+      # Removing them is still strictly better than leaving them: it closes the
+      # second door measured in @azure/identity 4.13.1, where
+      # createDefaultManagedIdentityCredential falls back to
+      # `process.env.AZURE_CLIENT_ID` and asks IMDS for the SP's app id — an
+      # identity attached to nothing — before failing. And it means the Gov job
+      # does NOT inherit the Commercial bug on the day #4051 points `runs-on` at
+      # an in-boundary runner that DOES carry the console UAMI.
+      AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_GOV_SUBSCRIPTION_ID }}
+      # DefaultAzureCredential must mint tokens against the SOVEREIGN authority.
+      # Without this the run authenticates to Commercial and every Gov ARM call
+      # returns 401 — which the probe would correctly classify as `auth`, and
+      # which would be a completely misleading answer.
+      AZURE_AUTHORITY_HOST: https://login.microsoftonline.us
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Azure login (Gov)
+        uses: Azure/login@v2
+        with:
+          creds: |
+            {
+              "clientId": "${{ secrets.AZURE_GOV_CLIENT_ID }}",
+              "clientSecret": "${{ secrets.AZURE_GOV_CLIENT_SECRET }}",
+              "tenantId": "${{ secrets.AZURE_GOV_TENANT_ID }}",
+              "subscriptionId": "${{ secrets.AZURE_GOV_SUBSCRIPTION_ID }}",
+              "activeDirectoryEndpointUrl": "https://login.microsoftonline.us",
+              "resourceManagerEndpointUrl": "https://management.usgovcloudapi.net/",
+              "sqlManagementEndpointUrl": "https://management.core.usgovcloudapi.net:8443/",
+              "galleryEndpointUrl": "https://gallery.usgovcloudapi.net/",
+              "managementEndpointUrl": "https://management.core.usgovcloudapi.net/"
+            }
+          environment: AzureUSGovernment
+
+      - name: Set Azure cloud to Gov
+        run: az cloud set --name AzureUSGovernment
+
+      - name: Install console dependencies
+        working-directory: apps/fiab-console
+        run: |
+          corepack enable
+          CI=true pnpm install --frozen-lockfile
+
+      - name: Build the scan CLI
+        working-directory: apps/fiab-console
+        run: |
+          node_modules/.bin/tsc -p lib/brain/run/tsconfig.cli.json
+          test -f temp/brain-scan-build/lib/brain/run/cli.js
+
+      - name: Resolve the estate Cosmos endpoint and the console UAMI
+        working-directory: apps/fiab-console
+        run: |
+          set +e -uo pipefail
+          mkdir -p ../../temp
+
+          # Mask the subscription prefix the estate id embeds (review N6 on
+          # #4014). Identical to the Commercial job — see the long note there;
+          # `cloud-parity.md` means the same publication surface exists in both
+          # boundaries and neither gets the lesser treatment.
+          if [ -n "${LOOM_SUBSCRIPTION_ID:-}" ]; then
+            echo "::add-mask::${LOOM_SUBSCRIPTION_ID:0:8}"
+          fi
+
+          ENDPOINT=$(az containerapp show -n "$CONSOLE_APP" -g "$ADMIN_RG" \
+            --query "properties.template.containers[0].env[?name=='LOOM_COSMOS_ENDPOINT'].value | [0]" \
+            -o tsv 2>../../temp/cosmos-endpoint.err)
+          RC=$?
+          if [ $RC -ne 0 ]; then
+            echo "::error::could not read LOOM_COSMOS_ENDPOINT from $CONSOLE_APP in $ADMIN_RG (az exit $RC). The findings backlog has nowhere to persist, so the scan is NOT being run."
+            cat ../../temp/cosmos-endpoint.err
+            exit 1
+          fi
+          if [ -z "${ENDPOINT:-}" ]; then
+            echo "::error::az succeeded but $CONSOLE_APP in $ADMIN_RG carries no LOOM_COSMOS_ENDPOINT env entry. That is a mis-deployed console, not a missing setting."
+            exit 1
+          fi
+          echo "::add-mask::$ENDPOINT"
+          echo "LOOM_COSMOS_ENDPOINT=$ENDPOINT" >> "$GITHUB_ENV"
+
+          UAMI=$(az containerapp show -n "$CONSOLE_APP" -g "$ADMIN_RG" \
+            --query "properties.template.containers[0].env[?name=='LOOM_UAMI_CLIENT_ID'].value | [0]" \
+            -o tsv 2>../../temp/uami.err)
+          URC=$?
+          if [ $URC -ne 0 ]; then
+            echo "::error::could not read LOOM_UAMI_CLIENT_ID from $CONSOLE_APP in $ADMIN_RG (az exit $URC)."
+            cat ../../temp/uami.err
+            exit 1
+          fi
+          if [ -z "${UAMI:-}" ]; then
+            # Reported, not fatal — and the asymmetry with the Commercial job is
+            # deliberate rather than an oversight. On Commercial the client id is
+            # the ONLY route to the data plane, so its absence is terminal. Here
+            # the runner has no managed identity to select with it, so the value
+            # changes nothing about which identity this job can use: it will be
+            # the service principal either way, and the scan says so by decoding
+            # its own token rather than by inferring it from this variable.
+            echo "::warning::$CONSOLE_APP in $ADMIN_RG carries no LOOM_UAMI_CLIENT_ID. On this boundary that is NOT what blocks the run: ubuntu-latest has no managed identity to select, so the scan authenticates as the service principal regardless. #4051 tracks the in-boundary Gov runner that would carry the console UAMI."
+          else
+            echo "::add-mask::$UAMI"
+            echo "LOOM_UAMI_CLIENT_ID=$UAMI" >> "$GITHUB_ENV"
+          fi
+          echo "resolved the estate Cosmos endpoint and the console UAMI (values masked)."
+
+      # ── THE KNOWN GOV GAP, ESTABLISHED BY MEASUREMENT ────────────────────
+      #
+      # This runner is on the public internet and the Gov Cosmos account is
+      # private-endpoint-only. Rather than let the scan die two steps later
+      # inside `recordRun` with a Cosmos stack trace, probe the account HERE and
+      # fail with the actual cause and the actual remediation (deploy-integrity
+      # R6). The probe requests a NON-EXISTENT database path: any HTTP answer at
+      # all proves reachability, so no Cosmos data is read and no permission
+      # beyond network access is exercised.
+      #
+      # R7: three outcomes, and it asserts nothing it did not observe.
+      - name: Can this runner reach the Gov Cosmos account?
+        run: |
+          set +e -uo pipefail
+          mkdir -p ../../temp
+          HOST=$(printf '%s' "$LOOM_COSMOS_ENDPOINT" | sed -E 's#^https?://##; s#/.*$##')
+          CODE=$(curl -sS --max-time 20 -o ../../temp/cosmos-probe.out \
+            -w '%{http_code}' "https://${HOST}/dbs/__loom_brain_reachability_probe__" \
+            2>../../temp/cosmos-probe.err)
+          CRC=$?
+          echo "curl exit: ${CRC}, http status: ${CODE:-<none>}"
+          if [ $CRC -ne 0 ]; then
+            echo "::error::could not reach the Gov Cosmos account from this runner (curl exit ${CRC}). NOTHING was scanned. The transport failure below is all that was established — no further cause is claimed."
+            cat ../../temp/cosmos-probe.err
+            exit 1
+          fi
+          if grep -q 'through public internet' ../../temp/cosmos-probe.out; then
+            echo "::error::KNOWN GOV GAP, CONFIRMED THIS RUN. The Gov Cosmos account refused this runner with its public-internet firewall message (HTTP ${CODE}). The account is publicNetworkAccess=Disabled behind a private endpoint, and every gov-*.yml workflow in this repo runs on ubuntu-latest because there is NO Gov in-boundary runner — .github/actionlint.yaml declares only 'loom-aca', which serves Commercial. The scan can reach ARM and classify a verdict, but CANNOT persist a run record or a finding. Remediation: stand up a Gov equivalent of the gh-aca-runner ACA Job (platform/fiab/bicep/modules/admin-plane/gh-runner-job.bicep) inside the Gov hub VNet, declare its label in .github/actionlint.yaml, and point this job at it. Failing here rather than mid-run so the reason is the first thing in the log."
+            head -c 400 ../../temp/cosmos-probe.out; echo
+            exit 1
+          fi
+          echo "the Gov Cosmos account answered HTTP ${CODE} — reachable from this runner. Proceeding."
+        working-directory: apps/fiab-console
+
+      - name: Run the Brain scan
+        id: scan
+        working-directory: apps/fiab-console
+        env:
+          LOOM_BRAIN_RUN_ID: ${{ github.run_id }}-${{ github.run_attempt }}-gov
+        run: |
+          set +e -uo pipefail
+          mkdir -p ../../temp
+          node temp/brain-scan-build/lib/brain/run/cli.js 2>../../temp/brain-scan.err
+          RC=$?
+          echo "--- stderr (verbatim, nothing discarded) ---"
+          cat ../../temp/brain-scan.err
+          echo "--- scan exit code: $RC ---"
+          case "$RC" in
+            0)
+              echo "Scan completed. See the step summary for the verdict — a green check does NOT mean the estate was scanned; a PAUSED estate also exits 0."
+              exit 0
+              ;;
+            2)
+              echo "::error::UNREACHABLE — the scan could not establish anything about the Gov estate. NO graph was built, NO detector ran and NO finding state was changed."
+              exit 1
+              ;;
+            3)
+              echo "::error::POPULATION REGRESSION — the Gov estate was reached and scanned, and the SCAN examined materially less than it did last run (PRP §5 P0)."
+              exit 1
+              ;;
+            4)
+              echo "::error::SCAN STALE — the Gov estate was reached, and this lane has not ACTUALLY SCANNED anything inside its declared ceiling. See the step summary for the last actual scan date and the ceiling. On this boundary the likeliest cause is the one #4051 tracks: there is no in-boundary Gov runner, so this job cannot persist a run record and therefore cannot establish a baseline at all."
+              exit 1
+              ;;
+            *)
+              echo "::error::The Brain scan failed with exit $RC — a defect in the scan itself, not a verdict about the estate."
+              exit 1
+              ;;
+          esac
+
+      # The Gov half of the green-over-nothing guard. See the Commercial job.
+      - name: Assert the scan actually produced a verdict
+        if: always() && steps.scan.conclusion != 'skipped'
+        env:
+          VERDICT: ${{ steps.scan.outputs.verdict }}
+        run: |
+          set +e -uo pipefail
+          if [ -z "${VERDICT:-}" ]; then
+            echo "::error::The scan step produced an EMPTY verdict output. The scan either did not run, or ran and wrote nothing to \$GITHUB_OUTPUT. Either way NOTHING was established about the Gov estate, and a passing job here would be green over nothing."
+            exit 1
+          fi
+          case "$VERDICT" in
+            ok|paused|unreachable)
+              echo "verdict output present and recognised: $VERDICT"
+              ;;
+            *)
+              echo "::error::The scan produced an UNRECOGNISED verdict '$VERDICT'. Expected one of ok|paused|unreachable."
+              exit 1
+              ;;
+          esac

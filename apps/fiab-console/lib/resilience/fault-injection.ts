@@ -26,9 +26,11 @@
  *      outlive the drill window.
  *
  * Every injection is audited: it is recorded in a per-fault in-process ring
- * (surfaced on the admin chaos tab) and fanned out through `emitAuditEvent`
- * (SIEM/webhooks) via a lazy import so this module stays free of the heavy audit
- * graph (keeping `fetch-with-timeout.ts`'s static import surface tiny).
+ * (surfaced on the admin chaos tab) and fanned out through an INJECTED audit
+ * sink (`setFaultAuditSink`, wired at module load by the gated chaos route) so
+ * this module keeps ZERO static imports and stays out of the audit graph — which
+ * is what keeps `fetch-with-timeout.ts`'s import surface tiny. See the block
+ * above `setFaultAuditSink` for why this is a sink and not an import (#4040).
  *
  * Per-replica state: the registry is module-scoped, so a fault armed on one ACA
  * replica only injects on that replica — matching the redis breaker + warm-pool
@@ -204,16 +206,92 @@ function consume(point: FaultPoint, detail: string): boolean {
     // Budget exhausted — self-heal immediately (do not wait for the TTL).
     registry.delete(point);
   }
-  void auditInjection(rec, f.armedBy);
+  auditInjection(rec, f.armedBy);
   return true;
 }
 
-/** Best-effort per-injection audit (SIEM/webhooks) via a lazy import — keeps the
- *  transport chokepoints free of the heavy audit-stream static graph. */
-async function auditInjection(rec: InjectionRecord, armedBy: string): Promise<void> {
+// ── The audit sink (#4040) ───────────────────────────────────────────────────
+//
+// WHY THIS IS AN INJECTED SINK AND NOT AN IMPORT.
+//
+// This module used to fan injections out with `await import('@/lib/admin/audit-stream')`.
+// `tsc` RESOLVES a literal dynamic specifier, so that line put the alias — and
+// therefore audit-stream's four static imports, the webhook emitter, event types,
+// signing and the registry — inside the emit closure of every build that reaches
+// `fetchWithTimeout`. The Brain scan CLI (`lib/brain/run/tsconfig.cli.json`)
+// declares no `paths` mapping deliberately, so that alias was a hard TS2307 there
+// (#4040). Measured: making the specifier RELATIVE instead takes the CLI closure
+// from 43 files to 75 and from 3 aliases to 30 across 14 files, and it closes a
+// `require` cycle through the credential path — fault-injection -> audit-stream
+// -> webhook-emitter -> webhook-registry -> cosmos-client -> aca-managed-identity
+// -> fetch-with-timeout — which under CommonJS returns partially-initialised
+// exports. The dynamic import was the thing BREAKING that cycle.
+//
+// So the dependency is inverted: the audit implementation is handed IN by the
+// only module that can arm a fault. This module keeps zero static imports.
+//
+// THE SINK IS WIRED AT MODULE LOAD BY `app/api/admin/chaos/dependency/route.ts`,
+// which is the sole path to `armFault`. It is wired at module scope rather than
+// inside the arm handler on purpose: a call site can be dropped in a refactor and
+// nothing would go red, whereas the route cannot serve a request without being
+// loaded. `__tests__/fault-audit-sink-wiring.test.ts` asserts the OUTCOME — load
+// the route, arm, inject, and an audit event must have been emitted — so removing
+// the wiring line reddens a test rather than silently disabling an audit control.
+
+/** The shape `emitAuditEvent` takes. Structural, so this module imports nothing. */
+export interface FaultAuditEvent {
+  actorOid: string;
+  actorUpn: string;
+  action: string;
+  targetType: string;
+  targetId: string;
+  tenantId: string;
+  detail: Record<string, unknown>;
+}
+
+/** A sink that receives one event per injection. Must not throw (it is caught). */
+export type FaultAuditSink = (event: FaultAuditEvent) => void;
+
+let auditSink: FaultAuditSink | null = null;
+
+/**
+ * Register the per-injection audit sink. Called at module load by the gated
+ * chaos route. Passing `null` unregisters (tests only).
+ */
+export function setFaultAuditSink(sink: FaultAuditSink | null): void {
+  auditSink = sink;
+}
+
+/** Test-only: the sink currently registered (or null). Lets the wiring test
+ *  assert the OUTCOME of loading the route, and save/restore around a case that
+ *  swaps in a throwing sink. */
+export function _faultAuditSinkForTest(): FaultAuditSink | null {
+  return auditSink;
+}
+
+/** Best-effort per-injection audit (SIEM/webhooks) through the registered sink.
+ *  Never throws — a drill injection is never blocked by its own audit. */
+function auditInjection(rec: InjectionRecord, armedBy: string): void {
+  const sink = auditSink;
+  if (!sink) {
+    // ── N8 (#4014 review) — AN AUDIT CONTROL MUST NOT NO-OP SILENTLY ───────
+    // `armFault`'s sole caller is the gated chaos route, which wires the sink at
+    // module load, so this branch is unreachable today (verified by grep, and
+    // asserted by `__tests__/fault-audit-sink-wiring.test.ts`). It becomes
+    // reachable the moment a second arming path appears without the wiring —
+    // and the failure would be a fault injected into a production dependency
+    // with NOTHING in the audit trail. A control that stops watching must say
+    // so; `console.warn` is the one surface available here, because this module
+    // deliberately holds zero static imports (see the note above).
+    console.warn(
+      `[resilience] chaos fault injected at '${rec.point}' (armed by ${armedBy}) with NO ` +
+        'audit sink wired — the injection HAPPENED and is NOT recorded in the audit ' +
+        'stream. Wire the sink via setInjectionAuditSink() from whatever armed this fault.',
+    );
+    return;
+  }
   try {
-    const { emitAuditEvent } = await import('@/lib/admin/audit-stream');
-    emitAuditEvent({
+    sink({
       actorOid: 'system:dependency-chaos',
       actorUpn: `dependency-chaos-harness (armed by ${armedBy})`,
       action: 'chaos.fault.injected',

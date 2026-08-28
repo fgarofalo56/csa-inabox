@@ -1,0 +1,109 @@
+{
+  // LOOM BRAIN W10 — the CLI build (#3936).
+  //
+  // The scheduled scan runs OUTSIDE the console image: it is a plain Node
+  // process launched by `.github/workflows/loom-brain-scan.yml`, because the
+  // console Container App is itself one of the things that may be STOPPED when
+  // the estate is paused. A scheduler that could only run inside the thing it
+  // monitors cannot report that the thing is down.
+  //
+  // ── WHY THERE IS NO `paths` MAPPING HERE, DELIBERATELY ────────────────────
+  // The console's tsconfig maps `@/*`. `tsc` RESOLVES that mapping for
+  // typechecking but does NOT rewrite the specifier on emit, so a compiled
+  // `require('@/lib/x')` fails at runtime with a module-not-found that looks
+  // like a broken install. Omitting `paths` makes an alias import a COMPILE
+  // error in this config instead — the failure lands at build time, in CI, with
+  // the offending file named, rather than at 04:11 UTC in a scheduled run.
+  //
+  // Everything the CLI reaches (`lib/brain/**`, `lib/estate/pause-state`,
+  // `lib/azure/cloud-endpoints` + `cloud-boundary` + `cloud-endpoints-graph`,
+  // `app/api/admin/brain/_lib/wire-bindings`) is alias-free by construction and
+  // `../__tests__/cli-buildable.test.ts` asserts that so the property cannot
+  // rot silently.
+  //
+  // ── COMMONJS ON PURPOSE ───────────────────────────────────────────────────
+  // `apps/fiab-console/package.json` has no `"type": "module"`, so emitted `.js`
+  // is CJS and Node resolves the extensionless relative imports the source uses.
+  // An ESM emit would need every specifier rewritten with a `.js` suffix.
+  //
+  // Strictness matches the console's own tsconfig: `strict: true` is not
+  // optional here, because `lib/brain/types.ts` and `lib/estate/pause-state.ts`
+  // carry build-checked type assertions that only hold under strict mode.
+  //
+  // ── WHY outDir SITS UNDER apps/fiab-console AND NOT AT THE REPO ROOT ──────
+  // Node resolves `@azure/cosmos` and `@azure/identity` by walking UP from the
+  // emitted file. The console is a standalone pnpm package, so those live in
+  // `apps/fiab-console/node_modules` and NOT at the repo root. Emitting to
+  // `<repo>/temp` produced `Cannot find module '@azure/cosmos'` on the first
+  // smoke run — measured, not theorised. `apps/fiab-console/temp/**` is covered
+  // by the root `.gitignore` `temp/` rule and by this project's own
+  // `tsconfig.build.json` exclude list.
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["ES2022"],
+    "module": "commonjs",
+    "moduleResolution": "node10",
+    "strict": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "resolveJsonModule": true,
+    "sourceMap": true,
+    "noEmit": false,
+    "declaration": false,
+    "rootDir": "../../..",
+    "outDir": "../../../temp/brain-scan-build"
+  },
+  // ── `include`, NOT `files` — THIS SHIPPED WRONG (review of #4014) ─────────
+  //
+  // `files: ["./cli.ts"]` makes tsc's emit closure follow STATIC imports only.
+  // Both history specifiers are assembled at RUNTIME precisely so tsc cannot
+  // resolve them while #3935 is unmerged — so the history module was never
+  // emitted at all. Measured: 34 emitted .js files, none under
+  // `lib/brain/history/`. The OK path would have failed at 04:11 UTC with a
+  // module-not-found, before AND after #3935 lands, and no gate could see it.
+  //
+  // `include` fixes it and is self-healing: the glob below matches zero files
+  // today (W9 is not on this branch) and picks up `lib/brain/history/**` the
+  // moment it lands, with no second edit. A config whose globs match zero files
+  // in TOTAL is an error, but `./cli.ts` always matches, so the history glob
+  // being empty is fine.
+  //
+  // `__tests__/history-wiring.test.ts` asserts this include covers the history
+  // directory, and resolves both runtime specifiers against a stub tree — so
+  // neither half of that defect can return silently.
+  //
+  // ── IT WAS RED, ON PURPOSE, AND IS NOW RESOLVED (#4040) ──────────────────
+  // W9 landed and the glob worked, but W9's `lib/brain/history/cosmos-store.ts`
+  // imported `@/lib/azure/aca-managed-identity`, and this config cannot emit an
+  // alias. The chain was measured rather than guessed, and it is THREE
+  // specifiers, not a subsystem:
+  //   1. `lib/brain/history/cosmos-store.ts:47`  -> aca-managed-identity  (static)
+  //   2. `lib/azure/fetch-with-timeout.ts:28`    -> fault-injection       (static)
+  //   3. `lib/resilience/fault-injection.ts:215` -> audit-stream          (DYNAMIC,
+  //      and `tsc` resolves a literal dynamic specifier, so it raised TS2307 too)
+  // 1 and 2 are now relative. 3 became an injected audit sink wired by the gated
+  // chaos route — making it relative instead would have taken this closure from
+  // 43 files to 75 and closed a CommonJS `require` cycle through the credential
+  // path. `lib/resilience/__tests__/fault-audit-sink-wiring.test.ts` asserts the
+  // audit still happens, so that trade cannot rot silently.
+  //
+  // STILL DO NOT "fix" a future alias by removing this include or by adding a
+  // `paths` mapping: both convert a loud CI failure into a silent 04:11 UTC
+  // MODULE_NOT_FOUND, which is the failure mode the whole comment above exists
+  // to prevent. Cut the alias at its source instead, as above.
+  "include": ["./cli.ts", "../history/**/*.ts"],
+  // ── THE EXCLUDE MUST REACH WHEREVER THE INCLUDE DOES (#3993 merge) ────────
+  // `exclude` globs are resolved relative to THIS directory, so `**/__tests__/**`
+  // covers `lib/brain/run/**` and nothing above it. The moment W9 landed, the
+  // `../history/**/*.ts` include swept in `lib/brain/history/__tests__/`, whose
+  // route test imports `@/lib/auth/session` and `@/app/api/...` — five compile
+  // errors in a config that forbids aliases, from files that are not part of the
+  // CLI at all. An include that reaches outside this directory needs an exclude
+  // that reaches with it.
+  "exclude": [
+    "**/__tests__/**",
+    "**/*.test.ts",
+    "../history/**/__tests__/**",
+    "../history/**/*.test.ts"
+  ]
+}
