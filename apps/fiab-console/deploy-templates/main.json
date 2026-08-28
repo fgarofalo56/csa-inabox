@@ -6,7 +6,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.45.15.27210",
-      "templateHash": "17408857281951577466"
+      "templateHash": "4978132698538298300"
     }
   },
   "definitions": {
@@ -2579,7 +2579,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.45.15.27210",
-              "templateHash": "3008618572712596871"
+              "templateHash": "8619667176515967648"
             }
           },
           "definitions": {
@@ -2709,15 +2709,21 @@
                     "Dev(No SLA)_Standard_D11_v2",
                     "Dev(No SLA)_Standard_E2a_v4",
                     "Standard_E16a_v4",
+                    "Standard_E16as_v5+3TB_PS",
+                    "Standard_E16as_v5+4TB_PS",
                     "Standard_E2a_v4",
                     "Standard_E2ads_v5",
                     "Standard_E4a_v4",
                     "Standard_E4ads_v5",
-                    "Standard_E8a_v4"
+                    "Standard_E80ids_v4",
+                    "Standard_E80ids_v4+32TB_PS",
+                    "Standard_E8a_v4",
+                    "Standard_E8as_v5+1TB_PS",
+                    "Standard_E8as_v5+2TB_PS"
                   ],
                   "nullable": true,
                   "metadata": {
-                    "description": "ADX cluster SKU. Dev SKU is ~$140/mo."
+                    "description": "ADX cluster SKU. Dev(No SLA) SKUs are ~$140/mo and are COMMERCIAL-ONLY — Azure Government offers no Dev/Basic-tier ADX SKU in usgovvirginia or usgovarizona (MEASURED 2026-08-27, gov-adx-sku-probe run 33120409251). The six Standard_E*as_v5 / E80ids_v4 entries are the intersection of what both Gov regions offer. Standard tier has a 2-node minimum, so a Gov cluster costs two instances, not one (#4141, #4072)."
                   }
                 },
                 "adxEnableOptimizedAutoscale": {
@@ -5255,7 +5261,7 @@
             "mcpMountPath": "/data",
             "mcpCaeName": "[format('cae-csa-loom-{0}', parameters('location'))]",
             "aiSearchDebugStorageName": "[take(format('sasrchdbg{0}', uniqueString(resourceGroup().id)), 24)]",
-            "effectiveAdxSkuName": "[if(and(or(equals(parameters('boundary'), 'GCC-High'), equals(parameters('boundary'), 'IL5')), equals(variables('adxSkuName'), 'Dev(No SLA)_Standard_E2a_v4')), 'Dev(No SLA)_Standard_D11_v2', variables('adxSkuName'))]",
+            "effectiveAdxSkuName": "[if(and(or(equals(parameters('boundary'), 'GCC-High'), equals(parameters('boundary'), 'IL5')), startsWith(variables('adxSkuName'), 'Dev(No SLA)_')), 'Standard_E8as_v5+1TB_PS', variables('adxSkuName'))]",
             "presidioImagesImported": false,
             "syntheticMonitorActive": "[and(and(variables('syntheticMonitorEnabled'), equals(parameters('containerPlatform'), 'containerApps')), parameters('deployAppsEnabled'))]",
             "uatResultsStoreActive": "[variables('syntheticMonitorEnabled')]",
@@ -13509,7 +13515,7 @@
                     "_generator": {
                       "name": "bicep",
                       "version": "0.45.15.27210",
-                      "templateHash": "9484973057605582532"
+                      "templateHash": "6471458969559386897"
                     }
                   },
                   "parameters": {
@@ -13537,28 +13543,35 @@
                         "Standard_E8a_v4",
                         "Standard_E16a_v4",
                         "Standard_E2ads_v5",
-                        "Standard_E4ads_v5"
+                        "Standard_E4ads_v5",
+                        "Standard_E8as_v5+1TB_PS",
+                        "Standard_E8as_v5+2TB_PS",
+                        "Standard_E16as_v5+3TB_PS",
+                        "Standard_E16as_v5+4TB_PS",
+                        "Standard_E80ids_v4",
+                        "Standard_E80ids_v4+32TB_PS"
                       ],
                       "metadata": {
-                        "description": "SKU name. The E*a_v4 family is the Commercial default; the E*ads_v5 family is the LIVE-verified Azure Government (usgovvirginia) equivalent (the v4 family is not offered there). Dev(No SLA)_Standard_D11_v2 is the Gov-available Dev SKU used as the tier-preserving substitute for the Commercial Dev default on GCC-High / IL5 (see admin-plane/main.bicep effectiveAdxSkuName)."
+                        "description": "SKU name. The E*a_v4 family is the Commercial default. The Gov entries below were MEASURED against the Kusto RP in Azure Government on 2026-08-27 (gov-adx-sku-probe, run 33120409251) — not carried forward from a prior note. usgovvirginia offers 9 SKUs and usgovarizona 14; the six listed here are the intersection, i.e. the ones that work in EVERY Gov region this estate targets, so one value needs no second regional decision. CRITICAL: Azure Government offers NO Dev(No SLA)/Basic-tier ADX SKU in either region, so the two Dev entries are COMMERCIAL-ONLY and a Gov deploy that lands on one cannot start (#4141, #4072)."
                       }
                     },
                     "skuTier": {
                       "type": "string",
-                      "defaultValue": "Basic",
+                      "defaultValue": "[if(startsWith(parameters('skuName'), 'Dev(No SLA)_'), 'Basic', 'Standard')]",
                       "allowedValues": [
                         "Basic",
                         "Standard"
                       ],
                       "metadata": {
-                        "description": "Tier — Basic for Dev SKUs, Standard for the production SKUs."
+                        "description": "Tier. DERIVED from skuName by default — Basic for Dev(No SLA) SKUs, Standard otherwise. Override only with a reason."
                       }
                     },
                     "skuCapacity": {
                       "type": "int",
-                      "defaultValue": 1,
+                      "defaultValue": "[if(startsWith(parameters('skuName'), 'Dev(No SLA)_'), 1, 2)]",
+                      "minValue": 1,
                       "metadata": {
-                        "description": "Capacity (instance count). 1 for Dev SKUs."
+                        "description": "Capacity (instance count). DERIVED from skuName by default — 1 for Dev(No SLA) SKUs, 2 for Standard tier, which is the documented minimum node count for a production (with SLA) cluster."
                       }
                     },
                     "enableOptimizedAutoscale": {
