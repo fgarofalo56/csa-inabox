@@ -38,6 +38,7 @@ import { parseWorkflow, scalarValue } from '../_workflow-yaml.mjs';
 import {
   classifyDrift,
   classifyEstate,
+  classifyRollInFlight,
   classifyRunHealth,
   classifyWorkflowState,
   decide,
@@ -46,6 +47,7 @@ import {
   DRY_RUN_MARKER,
   ESTATES,
   FAILING_STREAK,
+  IN_FLIGHT_STATUSES,
   WATCHED,
 } from '../check-deploy-staleness.mjs';
 
@@ -422,6 +424,13 @@ test('MUTATION PROOF — the REAL 2026-08-05 estate (13 behind, ~16h) is NOT gre
   // the exit-1 came entirely from the WATCHED workflow rows.
   //
   // A threshold that cannot fire on today's real condition is not a signal.
+  //
+  // `rollInFlight: false` is EXPLICIT since #4143 and is the point of that
+  // change: the "roll path has stopped" sentence is now the ESTABLISHED branch,
+  // reached only when the roll workflows were actually queried and none was
+  // running. On 2026-08-05 that was the true state; asserting it here without
+  // supplying the measurement would be asserting a cause the fixture never
+  // established, which is the very defect #4143 closes.
   const real = estate({
     liveSha: '678b53bccccc4c23ae6afa7f851a22a6910d7bb0',
     commitsBehind: 13,
@@ -429,6 +438,8 @@ test('MUTATION PROOF — the REAL 2026-08-05 estate (13 behind, ~16h) is NOT gre
     ancestor: true,
     behindSince: minsAgo(936), // 15.6h
     behindForMinutes: 936,
+    rollInFlight: false,
+    rollDetail: 'queried build-fiab-images-acr-tasks.yml + loom-roll-and-validate.yml; none queued or running',
   });
   assert.equal(real.stale, true, 'a 13-commits-behind estate must produce a non-green signal');
   assert.equal(real.state, 'behind');
@@ -444,6 +455,150 @@ test('MUTATION PROOF — the REAL 2026-08-05 estate (13 behind, ~16h) is NOT gre
   });
   assert.equal(inFlight.stale, false, 'a merge one minute old is a roll in flight, not drift');
   assert.equal(inFlight.state, 'behind');
+});
+
+// --- #4143: the past-grace CAUSE must be measured, not asserted -------------
+//
+// THE DEFECT. classifyEstate emitted "longer than a build and roll take, so the
+// roll path has stopped applying main to this estate" from
+// `behindForMinutes > behindGraceMinutes` and nothing else. No caller ever
+// looked for a roll that was executing at that moment, so the sentence stated a
+// cause the code had not established — deploy-integrity.md R7, the same shape as
+// the 2026-08-05 "the tag does not exist" claim that was really "I could not
+// reach the registry".
+//
+// These four tests are written to DIE under the obvious ways to undo the fix:
+//   - delete the rollInFlight branch and always emit the old sentence → the
+//     in-flight and the unmeasured tests both go red.
+//   - make `null` fall through to the ESTABLISHED branch → the unmeasured test
+//     goes red (that IS the pre-fix behaviour).
+//   - suppress `stale` when a roll is in flight → the "still stale" assertion
+//     goes red. That mutation is the tempting one, and it would turn an R7 fix
+//     into a gate any long-running roll can silence.
+
+test('#4143 — a roll IS in flight: the "has stopped" claim is NOT emitted', () => {
+  const e = estate({
+    liveSha: '678b53bccccc4c23ae6afa7f851a22a6910d7bb0',
+    commitsBehind: 13, ageDays: 1, ancestor: true,
+    behindSince: minsAgo(936), behindForMinutes: 936, // WAY past the 90min grace
+    rollInFlight: true,
+    rollDetail: 'loom-roll-and-validate.yml run 42 is in_progress, started 2026-08-28 09:14Z',
+  });
+  // The claim the code cannot support is gone…
+  assert.doesNotMatch(e.detail, /roll path has stopped/,
+    'a roll was observed running — asserting the roll path has stopped is a cause the code disproved');
+  // …replaced by what WAS established, naming the run.
+  assert.match(e.detail, /a roll IS in flight/);
+  assert.match(e.detail, /loom-roll-and-validate\.yml run 42 is in_progress/);
+  // …and the verdict is UNCHANGED. Past the allowance is past the allowance.
+  assert.equal(e.stale, true, 'an in-flight roll explains the drift; it does not excuse it');
+  assert.equal(e.state, 'behind');
+  assert.equal(e.rollInFlight, true);
+});
+
+test('#4143 — nobody looked: the message says nobody looked, and still fails', () => {
+  // The PRE-FIX default. Every caller that supplies no roll signal lands here,
+  // and this is exactly the input that used to produce the false claim.
+  for (const unmeasured of [undefined, null]) {
+    const e = estate({
+      liveSha: 'abc1234567', commitsBehind: 4, ageDays: 1, ancestor: true,
+      behindForMinutes: GRACE + 1, rollInFlight: unmeasured,
+    });
+    assert.doesNotMatch(e.detail, /roll path has stopped/,
+      `rollInFlight=${String(unmeasured)} means nothing was measured — the cause must not be asserted`);
+    assert.match(e.detail, /NOT measured/);
+    assert.match(e.detail, /not established/);
+    assert.equal(e.stale, true, 'unmeasured is not a green — the estate is still past its allowance');
+    assert.equal(e.rollInFlight, null, 'the row must carry null, never a fabricated false');
+  }
+});
+
+test('#4143 — measured-and-none-running is the ONLY branch that may say it stopped', () => {
+  const e = estate({
+    liveSha: 'abc1234567', commitsBehind: 4, ageDays: 1, ancestor: true,
+    behindForMinutes: GRACE + 1,
+    rollInFlight: false,
+    rollDetail: 'queried build-fiab-images-acr-tasks.yml + loom-roll-and-validate.yml; none queued or running',
+  });
+  assert.match(e.detail, /no roll is in flight/);
+  assert.match(e.detail, /roll path has stopped applying main/);
+  // The claim now carries its own evidence, so a reader can check it.
+  assert.match(e.detail, /queried build-fiab-images-acr-tasks\.yml/);
+  assert.equal(e.stale, true);
+  assert.equal(e.rollInFlight, false);
+});
+
+test('#4143 — INSIDE the grace, no branch claims anything about the roll path', () => {
+  // The tolerated case must not acquire a claim either. It says the wait is
+  // inside the allowance, which is all it knows.
+  const e = estate({
+    liveSha: 'abc1234567', commitsBehind: 2, ageDays: 0, ancestor: true,
+    behindForMinutes: 1, rollInFlight: null,
+  });
+  assert.equal(e.stale, false);
+  assert.doesNotMatch(e.detail, /roll path has stopped/);
+  assert.match(e.detail, /inside the 90min allowance/);
+});
+
+test('#4143 — classifyRollInFlight never collapses "could not look" into "none"', () => {
+  // TRUE — an observed unfinished run, whatever the flavour of unfinished.
+  for (const status of IN_FLIGHT_STATUSES) {
+    const r = classifyRollInFlight([
+      { workflow: 'loom-roll-and-validate.yml', rows: [{ databaseId: 7, status, createdAt: '2026-08-28T09:14:00Z' }] },
+    ]);
+    assert.equal(r.inFlight, true, `status ${status} must count as in flight`);
+    assert.match(r.detail, /run 7 is /);
+  }
+  // FALSE — every probe succeeded and nothing is running. Only a `completed`
+  // history earns this.
+  const none = classifyRollInFlight([
+    { workflow: 'a.yml', rows: [{ databaseId: 1, status: 'completed' }] },
+    { workflow: 'b.yml', rows: [] },
+  ]);
+  assert.equal(none.inFlight, false);
+  assert.match(none.detail, /none queued or running/);
+
+  // NULL — a failed query. This is the R7 core: a query that did not run must
+  // never read as "no roll is in flight", because that answer would then be
+  // laundered into "the roll path has stopped".
+  const broke = classifyRollInFlight([
+    { workflow: 'a.yml', rows: [], queryFailed: true, error: 'HTTP 403 rate limited' },
+    { workflow: 'b.yml', rows: [{ databaseId: 2, status: 'completed' }] },
+  ]);
+  assert.equal(broke.inFlight, null, 'a failed probe must not produce a negative answer');
+  assert.match(broke.detail, /HTTP 403 rate limited/);
+
+  // …but an OBSERVED in-flight run stands even when a sibling probe failed:
+  // established fact is not erased by an unrelated failure.
+  const mixed = classifyRollInFlight([
+    { workflow: 'a.yml', rows: [], queryFailed: true, error: 'boom' },
+    { workflow: 'b.yml', rows: [{ databaseId: 3, status: 'queued' }] },
+  ]);
+  assert.equal(mixed.inFlight, true);
+
+  // NULL — nothing to query at all. An estate with no rollWorkflows must not
+  // silently produce the negative answer, which would restore the false claim
+  // by the back door.
+  assert.equal(classifyRollInFlight([]).inFlight, null);
+  assert.equal(classifyRollInFlight(undefined).inFlight, null);
+});
+
+test('#4143 — every registered estate declares the roll workflows to query', () => {
+  // Without this, an estate silently answers UNKNOWN forever and the
+  // established branch becomes unreachable — a control that cannot fire.
+  for (const e of ESTATES) {
+    assert.ok(Array.isArray(e.rollWorkflows) && e.rollWorkflows.length > 0,
+      `${e.name} declares no rollWorkflows, so "is a roll in flight" can never be answered for it`);
+    for (const w of e.rollWorkflows) {
+      assert.match(w, /\.yml$/, `${e.name}: rollWorkflows entries are workflow FILE names (got "${w}")`);
+      // A NAME THAT NO LONGER EXISTS IS THE SILENT FAILURE HERE: `gh run list
+      // --workflow <gone>.yml` errors, which this code correctly classifies as
+      // UNKNOWN — so a rename would permanently disable the established branch
+      // while every gate stayed green. Pin it to the tree.
+      assert.doesNotThrow(() => readFileSync(join(WORKFLOWS, w)),
+        `${e.name}: rollWorkflows names ${w}, which is not in ${WORKFLOWS}/ — the roll query would fail forever`);
+    }
+  }
 });
 
 test('ONE commit behind, past the grace, is STALE — there is no count band', () => {

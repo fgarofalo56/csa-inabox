@@ -283,12 +283,16 @@ jobs:
 
           # Per-region projection. `.locations | index($r)` is index-or-null, and
           # jq treats only null/false as falsy — so index 0 correctly selects.
+          REGIONS_SEEN=0
+          PROJECTED_TOTAL=0
           while IFS= read -r REGION; do
             [ -z "$REGION" ] && continue
+            REGIONS_SEEN=$((REGIONS_SEEN + 1))
             jq -r --arg r "$REGION" \
               '[.[] | select(.locations | index($r))] | sort_by(.name) | .[] | "\(.name)\t\(.tier)\t\(.restrictions | length)"' \
               "$SKU_JSON" > "$OUT/skus-$REGION.tsv"
             COUNT="$(wc -l < "$OUT/skus-$REGION.tsv" | tr -d ' ')"
+            PROJECTED_TOTAL=$((PROJECTED_TOTAL + COUNT))
             echo ""
             echo "=== $REGION — $COUNT ADX SKU(s) offered ==="
             if [ "$COUNT" -eq 0 ]; then
@@ -302,6 +306,52 @@ jobs:
               awk -F'\t' '{ printf "  %-34s %-9s %s\n", $1, $2, ($3 == "0" ? "-" : $3 " RESTRICTED") }' "$OUT/skus-$REGION.tsv"
             fi
           done < "$OUT/regions-all.txt"
+
+          # ── THE PROJECTION GUARD ───────────────────────────────────────────
+          # Everything above guards the TOP-LEVEL enumeration: a non-zero az, a
+          # non-array body, and a zero-length array each refuse. Nothing guarded
+          # the PROJECTION, and the projection is where this instrument can
+          # invert silently.
+          #
+          # POPULATION FLOOR FIRST. If the region list is empty the loop above
+          # ran zero times, every per-region assertion is vacuous, and
+          # PROJECTED_TOTAL would be 0 for a reason that has nothing to do with
+          # the RP. A guard whose population is zero must fail, not pass.
+          if [ "$REGIONS_SEEN" -eq 0 ]; then
+            echo "::error::gov-adx-sku-probe: the derived region list is EMPTY, so the per-region projection ran over NO regions and this run measured nothing about any of them. The regions come from platform/fiab/bicep/params/{gcc-high,il5}.bicepparam via the derive step; that step's own extraction guard should have caught this first, so reaching here means the file it writes was lost between steps. Refusing to report an availability verdict computed over zero regions."
+            exit 1
+          fi
+
+          # THE COMBINATION THAT CANNOT BE A REAL MEASUREMENT. The RP returned
+          # entries, and EVERY target region projected to zero. A genuine
+          # absence in one region is ordinary and stays allowed; all of them
+          # going to zero while the enumeration is non-empty means the filter
+          # `.locations | index($r)` matched nothing anywhere — i.e. `.locations`
+          # no longer carries the compact lowercase form the bicepparam files
+          # supply (display form "US Gov Virginia", different casing, or a schema
+          # change).
+          #
+          # Left unguarded, the verdict step downstream reads those zeros as an
+          # answer and emits, as fact, "the configured effective ADX SKU … is NOT
+          # offered in at least one PRIMARY Gov region. This is a MEASURED
+          # result" — a confident false negative that would send someone to
+          # change a SKU on the strength of a parse failure. That is the
+          # deploy-integrity R7 shape this workflow's header says it exists to
+          # prevent, reached through the one path the header does not cover.
+          #
+          # The observed `locations` values are printed WITH the failure so it
+          # diagnoses itself instead of requiring a re-run to investigate (R6).
+          if [ "$PROJECTED_TOTAL" -eq 0 ]; then
+            echo "--- distinct \`locations\` values the RP ACTUALLY returned (first 10) ---"
+            jq -r '[.[].locations[]?] | unique | .[0:10][]' "$SKU_JSON" | sed 's/^/  /'
+            echo "--- the region strings this run projected FOR ---"
+            sed 's/^/  /' "$OUT/regions-all.txt"
+            echo "::error::gov-adx-sku-probe: the enumeration returned $TOTAL (SKU, region) entries, but ALL $REGIONS_SEEN target regions projected to ZERO SKUs. That combination is not an absence — it means the per-region filter matched nothing anywhere, i.e. the RP's \`locations\` values no longer string-match the compact region names derived from the bicepparam files. Whether the configured SKU is offered is therefore UNVERIFIED, and this run must NOT be read as 'not offered'. Compare the two lists printed above and fix the projection to match what the RP returns, then re-run."
+            exit 1
+          fi
+
+          echo ""
+          echo "Projection sanity: $REGIONS_SEEN region(s) projected, $PROJECTED_TOTAL (SKU, region) row(s) matched out of $TOTAL enumerated."
 
           echo ""
           echo "--- full restriction detail (empty output == no SKU is restricted for this subscription) ---"

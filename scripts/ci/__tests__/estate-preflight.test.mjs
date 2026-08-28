@@ -889,7 +889,64 @@ test('the CAPACITY remediation names an action that actually reaches the SKU', (
   );
 });
 
-test('CONTROL: the remediation may only name a .bicepparam lever the DEPLOYED template accepts', () => {
+/**
+ * The predicate the control below applies, named once so the SCOPE test after
+ * it exercises the SAME code rather than a look-alike copy of it.
+ *
+ * TRUE means exactly this: the ROOT of `ident` is declared as a `param` on the
+ * template the lane's .bicepparam targets — i.e. assigning it in that file
+ * COMPILES rather than dying with BCP259. It does NOT mean the value reaches
+ * the ADX SKU, and it cannot: see the control's docblock.
+ */
+function rootIsDeclaredOnDeployedTemplate(ident, declared) {
+  return declared.has(ident.split('.')[0]);
+}
+
+/**
+ * WHAT THIS CONTROL MEASURES, AND WHAT IT DOES NOT (#4146).
+ *
+ * MEASURES: every backticked identifier inside a `.bicepparam` instruction in
+ * the capacity remediation has its ROOT declared as a `param` on the template
+ * that param file's `using` actually points at. That is DECLAREDNESS at the
+ * layer that is genuinely deployed, and it is what closed the #4108 layer-hop —
+ * an identifier real one layer down (admin-plane/main.bicep) and unreachable at
+ * the root the lane deploys.
+ *
+ * DOES NOT MEASURE: that setting the named identifier changes the thing the
+ * error was about. "Declared on the deployed template" is not "reaches the
+ * SKU", and the gap is not theoretical — an independent reviewer ran both of
+ * these against PR #4115 at head and both left the suite fully green
+ * (RC=0, 75/75):
+ *
+ *   `adxEnabled`                   a boolean on/off flag; cannot express a SKU
+ *   `adxConfig.adxAutoscaleMaximum` a real property of the bag, wrong knob
+ *
+ * They pass for the same reason by two different routes: `adxEnabled` is a root
+ * param in its own right (platform/fiab/bicep/main.bicep:417), while
+ * `adxAutoscaleMaximum` rides the root-declared `adxConfig` bag (:420) as a
+ * property of the `adxConfigT` type declared in admin-plane/main.bicep. Which is
+ * precisely why keying the control to a blessed NAME cannot fix it. #4126 made
+ * `adxConfig` root-declared — correctly; it is the fix that gave Gov a real SKU
+ * lever — and in doing so reopened this for every property inside that bag.
+ *
+ * WHY IT IS NOT BEING EXTENDED. Answering "does this identifier reach
+ * `skuName` on the ADX cluster resource" means walking the compiled ARM through
+ * the emitted expressions to the resource property. That is round 3 of an
+ * enumeration game — round 1 was "the identifier exists nowhere", round 2 was
+ * "it exists in a MODULE but not on the DEPLOYED root" — and each earlier round
+ * was walked around by the next layer. The standing rule for this shape is stop
+ * at round 2, merge the gain, file the class. #4146 records the class and its
+ * own preferred resolution is this one: name the control after what it
+ * measures, because a control read as "…that WORKS" when it means "…that
+ * COMPILES" puts the gap in the reader's head, which is the more dangerous
+ * place for it.
+ *
+ * NOTHING BELOW IS WEAKENED BY THE RENAME. The assertion, its population floor
+ * and its converse are unchanged; only the name and this block are new, plus
+ * the SCOPE test that pins the limit as a measured fact instead of a comment
+ * that can rot.
+ */
+test('CONTROL: every .bicepparam identifier the remediation names has its ROOT DECLARED on the DEPLOYED template (declaredness — NOT reachability to the SKU; see docblock)', () => {
   const text = remediationFor('capacity', '/subscriptions/x/clusters/c');
   const { rel, src, declared } = paramTargetOf(LANE_PARAM_FILE);
 
@@ -918,7 +975,7 @@ test('CONTROL: the remediation may only name a .bicepparam lever the DEPLOYED te
     for (const ident of inside) {
       const root = ident.split('.')[0];
       assert.ok(
-        declared.has(root),
+        rootIsDeclaredOnDeployedTemplate(ident, declared),
         `the remediation tells the operator to set \`${ident}\` in a .bicepparam, but '${root}' is not ` +
           `declared on '${rel}' — the template ${LANE_PARAM_FILE} actually targets. Assigning it there ` +
           'fails to compile with BCP259; it does not change the SKU. This is the #4108 layer-hop: the ' +
@@ -939,6 +996,54 @@ test('CONTROL: the remediation may only name a .bicepparam lever the DEPLOYED te
       `'${rel}' now declares adxConfig AND passes it to the adminPlane module, so the boundary ` +
         '.bicepparam IS a real SKU lever now — the capacity remediation still says there is no in-repo ' +
         'lever, and that is no longer true. Update the message.',
+    );
+  }
+});
+
+test('SCOPE OF THAT CONTROL: a declared-but-irrelevant identifier satisfies it — measured here, not left to the docblock', () => {
+  // The rename above is only worth anything if the limit it names is a CHECKED
+  // FACT rather than prose. A comment describing a gap rots the moment the gap
+  // moves; this runs the control's own predicate over the two identifiers an
+  // independent reviewer used to walk past it on PR #4115 (both RC=0, 75/75)
+  // and records the answer.
+  const { rel, declared } = paramTargetOf(LANE_PARAM_FILE);
+
+  // POPULATION FLOOR. If `using` resolved to a template declaring no params,
+  // every assertion below would be a statement about an empty set.
+  assert.ok(
+    declared.size > 0,
+    `${LANE_PARAM_FILE} targets '${rel}', which declares no params at all — this test has no population`,
+  );
+
+  const WALK_PAST = [
+    ['adxEnabled', 'a boolean on/off flag — it cannot express a SKU at all', 'a root param in its own right'],
+    ['adxConfig.adxAutoscaleMaximum', 'a real property of the bag, but the wrong knob', 'rides the root-declared adxConfig bag'],
+  ];
+
+  for (const [ident, why, route] of WALK_PAST) {
+    assert.equal(
+      rootIsDeclaredOnDeployedTemplate(ident, declared),
+      true,
+      `\`${ident}\` (${why}) no longer satisfies the control on '${rel}'. If that is because the control ` +
+        'grew reachability reasoning — following the param through the compiled ARM to `skuName` on the ADX ' +
+        'cluster resource — then it now measures more than its name says: rename it back to "…a .bicepparam ' +
+        'lever the DEPLOYED template ACCEPTS", rewrite its docblock, and DELETE this test. If instead it is ' +
+        `because '${route}' stopped being true of platform/fiab/bicep/main.bicep, update this list. Either ` +
+        'way the docblock above is now wrong and must not be left standing. (#4146)',
+    );
+  }
+
+  // AND THE OTHER HALF, so this is a discrimination and not a tautology: an
+  // identifier whose root is NOT on the deployed template must still be
+  // rejected. Without this, the two assertions above would be satisfied by a
+  // predicate that simply returned true.
+  for (const ident of ['adxSkuName', 'adxSkuName.tier', 'notAParamAnywhere']) {
+    assert.equal(
+      rootIsDeclaredOnDeployedTemplate(ident, declared),
+      false,
+      `\`${ident}\` is now accepted by the control, but its root is not a param on '${rel}'. That is the ` +
+        '#4108 layer-hop reopening — an identifier real one layer down and unreachable at the layer that ' +
+        'is deployed.',
     );
   }
 });

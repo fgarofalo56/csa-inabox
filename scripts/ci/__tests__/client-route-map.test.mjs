@@ -36,6 +36,7 @@ import { fileURLToPath } from 'node:url';
 
 import {
   routeFileToUrlPattern, patternToTypeLiteral, patternToRegexSource, buildRoutes,
+  describeExpectedDiff, MAX_DIFF_ROWS,
 } from '../generate-client-route-map.mjs';
 import {
   loadRouteMap, staticPrefixes, classifyPath, extractCallPaths, stripComments,
@@ -315,6 +316,163 @@ test('the drift gate FAILS when the generated map is stale', () => {
     r = run('--check');
     assert.equal(r.status, 1, `a stale map must fail the drift gate\n${r.stdout}${r.stderr}`);
     assert.match(r.stderr, /STALE/);
+  } finally {
+    fs.rmSync(gen.dir, { recursive: true, force: true });
+    fs.rmSync(fixture, { recursive: true, force: true });
+  }
+});
+
+// ── #3158: the stale failure must say WHAT is stale ──────────────────────────
+//
+// THE DEFECT. The committed map races the merge order (PR A adds a route and
+// regenerates; PR B, branched before A, regenerates without it; B merges last
+// and `main` carries a map missing A's route). The gate correctly went red — and
+// printed only the two filenames, the route count and `Regenerate: …`. So each
+// occurrence cost a fresh ~20-minute diagnosis of a condition that is one line
+// to state. Both structural alternatives are off the table at head: `strict`
+// branch protection is FALSE and the repo is user-owned, so no merge queue.
+//
+// These tests are written to DIE if the diff stops being printed, and — the
+// subtler risk — if it ever starts printing an EMPTY diff over a red gate,
+// which would read as "nothing is wrong".
+
+test('#3158 — a route on disk but missing from the map is named, with the race', () => {
+  const lines = describeExpectedDiff({
+    committedJson: JSON.stringify({ patterns: ['/api/a', '/api/b'] }),
+    committedDts: 'irrelevant',
+    nextJson: JSON.stringify({ patterns: ['/api/a', '/api/b', '/api/c'] }),
+    nextDts: 'irrelevant2',
+    patterns: ['/api/a', '/api/b', '/api/c'],
+  });
+  const text = lines.join('\n');
+  assert.match(text, /1 route\(s\) to ADD, 0 to REMOVE/);
+  assert.match(text, /\+ \/api\/c/);
+  assert.doesNotMatch(text, /- \/api\//, 'nothing was removed — inventing a removal would be a false claim');
+  // The add-only shape IS the merge-order race, and saying so is the whole
+  // point: it turns the diagnosis into a read.
+  assert.match(text, /#3158 merge-order race/);
+});
+
+test('#3158 — a route removed from disk is named as a removal, not as an add', () => {
+  const lines = describeExpectedDiff({
+    committedJson: JSON.stringify({ patterns: ['/api/a', '/api/gone'] }),
+    committedDts: 'x', nextJson: JSON.stringify({ patterns: ['/api/a'] }), nextDts: 'y',
+    patterns: ['/api/a'],
+  });
+  const text = lines.join('\n');
+  assert.match(text, /0 route\(s\) to ADD, 1 to REMOVE/);
+  assert.match(text, /- \/api\/gone/);
+  // A deletion is NOT the merge-order race, so that explanation must not fire.
+  assert.doesNotMatch(text, /merge-order race/,
+    'the race explanation is for add-only drift; claiming it for a deletion asserts a cause not established');
+});
+
+test('#3158 — an identical route set with different bytes says so, and never prints an empty diff', () => {
+  // The trap: the sets match but the rendering changed (regexSources, header,
+  // member order). An empty diff under a red gate reads as "nothing is wrong".
+  const patterns = ['/api/a', '/api/b'];
+  const lines = describeExpectedDiff({
+    committedJson: `{\n  "count": 2,\n  "patterns": ["/api/a", "/api/b"]\n}`,
+    committedDts: 'header v1\n  | \'/api/a\'\n',
+    nextJson: `{\n  "count": 2,\n  "patterns": ["/api/a", "/api/b"],\n  "regexSources": []\n}`,
+    nextDts: 'header v2\n  | \'/api/a\'\n',
+    patterns,
+  });
+  const text = lines.join('\n');
+  assert.ok(lines.length > 0, 'a red gate must never be explained by silence');
+  assert.match(text, /ROUTE SET is identical/);
+  assert.match(text, /First differing line/);
+  assert.match(text, /committed: "header v1"/);
+  assert.match(text, /expected: "header v2"/);
+});
+
+test('#3158 — an unreadable committed map names the reason instead of guessing', () => {
+  // R7 in miniature: "no diff available" is true and useless; the reason is what
+  // separates "run the generator" from "somebody hand-edited this".
+  const absent = describeExpectedDiff({
+    committedJson: null, committedDts: null, nextJson: '{}', nextDts: '', patterns: ['/api/a'],
+  });
+  assert.match(absent.join('\n'), /does not exist yet/);
+
+  const garbage = describeExpectedDiff({
+    committedJson: 'not json at all', committedDts: null, nextJson: '{}', nextDts: '', patterns: ['/api/a'],
+  });
+  assert.match(garbage.join('\n'), /not valid JSON/);
+
+  const wrongShape = describeExpectedDiff({
+    committedJson: '{"routes":[]}', committedDts: null, nextJson: '{}', nextDts: '', patterns: ['/api/a'],
+  });
+  assert.match(wrongShape.join('\n'), /no `patterns` array/);
+});
+
+test('#3158 — a huge diff is bounded AND says how much it elided', () => {
+  // A truncated list that does not admit it was truncated is its own small false
+  // statement, and this repo has paid for that shape before.
+  const many = Array.from({ length: MAX_DIFF_ROWS + 40 }, (_, i) => `/api/r${i}`);
+  const lines = describeExpectedDiff({
+    committedJson: JSON.stringify({ patterns: [] }),
+    committedDts: '', nextJson: '{}', nextDts: '', patterns: many,
+  });
+  const rows = lines.filter((l) => l.includes('+ /api/r'));
+  assert.equal(rows.length, MAX_DIFF_ROWS, `expected the diff to stop at ${MAX_DIFF_ROWS} rows`);
+  assert.match(lines.join('\n'), new RegExp(`… and ${many.length - MAX_DIFF_ROWS} more`));
+});
+
+test('#3158 — the REAL --check failure prints the expected diff, not just the command', () => {
+  // END TO END, against a fixture console tree (never the tracked one — see
+  // redirectedScript() for the measured reason). This is the assertion that
+  // dies if describeExpectedDiff stops being CALLED, which a pure unit test
+  // cannot catch: an exported, tested function nothing invokes is a control that
+  // measures nothing.
+  const fixture = consoleFixture();
+  const gen = redirectedScript('generate-client-route-map.mjs', fixture);
+  try {
+    const run = (...args) => spawnSync(process.execPath, [gen.file, ...args], { cwd: REPO_ROOT, encoding: 'utf8' });
+
+    let r = run();
+    assert.equal(r.status, 0, `the generator failed on the fixture:\n${r.stdout}${r.stderr}`);
+    const jsonPath = path.join(fixture, 'lib', 'api-routes.generated.json');
+    const original = fs.readFileSync(jsonPath, 'utf8');
+
+    // POSITIVE CONTROL first: green on what it just wrote, so the red below
+    // cannot mean "it never matched in the first place".
+    r = run('--check');
+    assert.equal(r.status, 0, `--check must pass on a freshly generated map:\n${r.stdout}${r.stderr}`);
+
+    // Now reproduce the #3158 race exactly: the route EXISTS on disk, and the
+    // committed map does not list it (the state PR B's branch is in after PR A
+    // merges).
+    const parsed = JSON.parse(original);
+    const victim = '/api/loom/probe050';
+    const idx = parsed.patterns.indexOf(victim);
+    assert.notEqual(idx, -1, 'precondition: the fixture must contain the route being removed');
+    parsed.patterns.splice(idx, 1);
+    parsed.regexSources.splice(idx, 1);
+    parsed.count -= 1;
+    fs.writeFileSync(jsonPath, `${JSON.stringify(parsed, null, 2)}\n`);
+
+    r = run('--check');
+    assert.equal(r.status, 1, `a stale map must fail the drift gate\n${r.stdout}${r.stderr}`);
+    assert.match(r.stderr, /STALE/);
+    // THE FIX: the failure now names the route, not merely the file.
+    assert.match(r.stderr, /1 route\(s\) to ADD, 0 to REMOVE/, r.stderr);
+    // ESCAPE EVERY REGEX METACHARACTER, not just `/`. The first version of this
+    // line used `victim.replace(/\//g, '\\/')`, which escapes forward slashes and
+    // NOTHING else — CodeQL flagged it HIGH ("does not escape backslash
+    // characters in the input"), and it was right: a route containing `.`, `+`,
+    // `(` or `\` would have been compiled as a PATTERN rather than matched
+    // literally, so the assertion could pass on a string it was never meant to
+    // match. Benign for today's alphanumeric route paths and a latent false
+    // PASS the moment one is not.
+    //
+    // This is the same character class the shipped script already uses at
+    // `generate-client-route-map.mjs:134` — the test was weaker than the code it
+    // tests, which is the wrong way round for an assertion about escaping.
+    const victimRe = victim.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    assert.match(r.stderr, new RegExp(`\\+ ${victimRe}`), r.stderr);
+    assert.match(r.stderr, /#3158 merge-order race/, r.stderr);
+    // …and it still prints the command. The diff is an addition, not a swap.
+    assert.match(r.stderr, /Regenerate: node scripts\/ci\/generate-client-route-map\.mjs/);
   } finally {
     fs.rmSync(gen.dir, { recursive: true, force: true });
     fs.rmSync(fixture, { recursive: true, force: true });

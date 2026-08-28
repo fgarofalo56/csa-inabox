@@ -374,6 +374,83 @@ test('planRemediation scopes the converge to the subscription the drill-down rea
   assert.ok(plan.argv.includes('dlz-sub'));
 });
 
+/**
+ * #4112 — the remediation's `why` describes a check performed in ANOTHER FILE,
+ * and nothing tied the two together, so the description went stale in place.
+ *
+ * It read "the converger proves the stray belongs to a user-assigned managed
+ * identity in this subscription". True when written; false from #4110 onward.
+ * `az identity list` STRUCTURALLY cannot return a system-assigned principal — a
+ * system-assigned identity is a property of its owning resource, not a
+ * Microsoft.ManagedIdentity resource — so the narrow check was a strict subset
+ * of its own intent, and #4041 put the ADF-to-Key-Vault grant in that gap: the
+ * stray reached the "foreign service principal" refusal and the deploy stayed
+ * wedged on something the platform can fix.
+ *
+ * An operator-facing string asserting a check the code does not perform is a
+ * deploy-integrity.md R7 defect. Fixing the sentence alone would leave the
+ * ORIGINAL weakness — a claim about a sibling file with no link to it — so
+ * these assertions pin BOTH SIDES:
+ *
+ *   - deploy-retry's `why` must not re-narrow to the user-assigned-only claim,
+ *     and must name the system-assigned half it now covers;
+ *   - the converger must actually IMPLEMENT the wider proof (its second
+ *     ownership source, `az ad sp show`). If someone narrows the converger back
+ *     to `az identity list` alone, this goes RED against the string that would
+ *     then be overclaiming — which is the direction the defect travelled.
+ */
+const CONVERGER = path.resolve(import.meta.dirname, '..', '..', 'csa-loom', 'converge-role-assignment.mjs');
+
+test('#4112: the RoleAssignmentExists remediation claims only what the converger proves', () => {
+  const plan = planRemediation(classify(ROLE_ASSIGNMENT_EXISTS), ROLE_ASSIGNMENT_EXISTS);
+  assert.equal(plan.kind, 'converge-role-assignment');
+  const why = String(plan.why);
+
+  assert.doesNotMatch(
+    why,
+    /user-assigned managed identity in this subscription/i,
+    'the remediation re-narrowed to the user-assigned-only claim — that is the #4112 defect, and it is the ' +
+      'exact wording that hid the #4041 system-assigned case',
+  );
+  assert.match(
+    why,
+    /system-assigned/i,
+    'the remediation no longer names the system-assigned half of what the converger proves',
+  );
+  assert.match(
+    why,
+    /subscription this deployment can reach/i,
+    'the remediation dropped the scope the converger actually establishes (the OWNING resource\'s subscription)',
+  );
+  // The residual disclosure and the fail-closed clause are load-bearing on the
+  // one destructive action in this lane; a rewrite must not quietly drop them.
+  assert.match(why, /RESIDUAL/, 'the destructive-action residual disclosure was removed');
+  assert.match(why, /refuses and fails closed on anything it cannot establish/i);
+});
+
+test('#4112: the converger still IMPLEMENTS the wider claim — both ownership sources present', () => {
+  const src = fs.readFileSync(CONVERGER, 'utf8');
+  // Source 1 — every USER-assigned MI in the subscription.
+  assert.match(
+    src,
+    /'identity',\s*\n?\s*'list'|\['identity', 'list'/,
+    'the converger no longer enumerates user-assigned identities — deploy-retry\'s why is now overclaiming',
+  );
+  // Source 2 — the directory read that is the ONLY way to see a system-assigned
+  // one. This is the half #4110 added and the half #4112's string was missing.
+  assert.match(
+    src,
+    /'ad',\s*\n?\s*'sp',\s*\n?\s*'show'/,
+    'the converger dropped the `az ad sp show` ownership source, so it can no longer establish a SYSTEM-assigned ' +
+      'identity — deploy-retry\'s remediation would then claim a proof the code does not perform (R7)',
+  );
+  assert.match(
+    src,
+    /servicePrincipalType/,
+    'the converger no longer reads servicePrincipalType, so "is a managed identity" is not established at all',
+  );
+});
+
 test('the remediation must be planned from the DRILL-DOWN text, not from stderr alone', () => {
   // On run 31780698652 `az deployment sub create` wrote only bicep linter
   // warnings and "At least one resource deployment operation failed" to stderr.

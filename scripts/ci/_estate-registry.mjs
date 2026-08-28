@@ -256,6 +256,31 @@ function describeBody(text) {
  * sovereign boundary (#3730 flags that question and does not answer it), the
  * answer is a documented operator acknowledgement — not a wider band here.
  *
+ * ── `rollWorkflows` — WHAT "A ROLL IS IN FLIGHT" IS ACTUALLY MEASURED FROM ──
+ * ADDED BY #4143, and the defect it closes is a deploy-integrity.md R7 one.
+ * Past the allowance, classifyEstate used to state as fact that "the roll path
+ * has stopped applying main to this estate" — derived from ELAPSED TIME ALONE.
+ * Nothing anywhere looked for a roll that was running at that moment, so the
+ * sentence asserted a cause the code had not established. That is the same
+ * error as the 2026-08-05 "the tag does not exist" claim, which was really "I
+ * could not reach the registry", and which cost two investigations.
+ *
+ * These are the workflows whose execution CAN change the sha this estate's
+ * marker serves, so an in-flight run of any of them is the evidence the claim
+ * needs. BOTH halves of each chain are listed, because the marker cannot move
+ * until the image exists: an image build in progress is as much "a roll in
+ * flight" as the roll step that follows it.
+ *
+ *   Commercial   build-fiab-images-acr-tasks (push: main) -> loom-roll-and-validate
+ *                (workflow_run). The chain that makes this estate roll itself.
+ *   Gov          gov-build-images -> gov-console-roll, both dispatch-only, which
+ *                is why the Gov window is 240 minutes rather than 90.
+ *
+ * An empty list would be a silent way to make the in-flight question
+ * unanswerable and the claim unrestorable, so a consumer that finds one must
+ * report UNKNOWN rather than "no roll is in flight" — absence of a query is not
+ * absence of a roll.
+ *
  * ── THE URL OVERRIDES ──────────────────────────────────────────────────────
  * Each URL may be overridden by env, which is what lets the alarm be
  * MUTATION-PROVED against a fabricated marker (a guard nobody has watched fail
@@ -276,6 +301,9 @@ export const CLOUD_ESTATES = [
     versionUrlEnv: 'LOOM_ESTATE_VERSION_URL',
     behindGraceMinutes: 90,
     maxAgeDays: 7,
+    // The chain whose in-flight run is the evidence for / against "the roll
+    // path has stopped" (#4143). See the `rollWorkflows` note above.
+    rollWorkflows: ['build-fiab-images-acr-tasks.yml', 'loom-roll-and-validate.yml'],
     rollHint: 'gh workflow run loom-roll-and-validate.yml --ref main',
   },
   {
@@ -290,6 +318,11 @@ export const CLOUD_ESTATES = [
     versionUrlEnv: 'LOOM_GOV_ESTATE_VERSION_URL',
     behindGraceMinutes: 240,
     maxAgeDays: 7,
+    // Both halves of the Gov chain (#4143). Listing them is a READ, not a
+    // dispatch: it answers "is a roll running right now" so the drift message
+    // can stop asserting a cause it never measured. It does not, and must not,
+    // start one — see the note on rollHint immediately below.
+    rollWorkflows: ['gov-build-images.yml', 'gov-console-roll.yml'],
     // Deliberately NOT a dispatch this lane could perform. Whether Gov should
     // roll automatically is an open change-control decision for the sovereign
     // boundary (#3730); this registry makes the drift visible and stops there.

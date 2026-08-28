@@ -273,7 +273,19 @@ jobs:
       - name: Install console dependencies
         working-directory: apps/fiab-console
         run: |
-          corepack enable
+          # PIN pnpm; do NOT `corepack enable` (#4040). corepack resolves to the
+          # LATEST pnpm, and latest pnpm requires `node:sqlite` — a built-in that
+          # only exists from Node 22.5. This job pins node-version 20, so the
+          # very first run of this lane died here, before installing anything:
+          #   Error [ERR_UNKNOWN_BUILTIN_MODULE]: No such built-in module: node:sqlite
+          # (run 33187527585, BOTH the Commercial and the Gov job).
+          #
+          # Every other lane in this repo already pins pnpm@9 —
+          # fiab-console-ci.yml:189, license-scan.yml:60,
+          # csa-loom-tutorial-capture.yml:83 — and this workflow was the ONLY
+          # corepack caller. Pinning also matches the Dockerfile the console
+          # actually builds with (node 20 + pnpm 9), so CI and the image agree.
+          npm install -g pnpm@9
           CI=true pnpm install --frozen-lockfile
 
       - name: Build the scan CLI
@@ -565,7 +577,19 @@ jobs:
       - name: Install console dependencies
         working-directory: apps/fiab-console
         run: |
-          corepack enable
+          # PIN pnpm; do NOT `corepack enable` (#4040). corepack resolves to the
+          # LATEST pnpm, and latest pnpm requires `node:sqlite` — a built-in that
+          # only exists from Node 22.5. This job pins node-version 20, so the
+          # very first run of this lane died here, before installing anything:
+          #   Error [ERR_UNKNOWN_BUILTIN_MODULE]: No such built-in module: node:sqlite
+          # (run 33187527585, BOTH the Commercial and the Gov job).
+          #
+          # Every other lane in this repo already pins pnpm@9 —
+          # fiab-console-ci.yml:189, license-scan.yml:60,
+          # csa-loom-tutorial-capture.yml:83 — and this workflow was the ONLY
+          # corepack caller. Pinning also matches the Dockerfile the console
+          # actually builds with (node 20 + pnpm 9), so CI and the image agree.
+          npm install -g pnpm@9
           CI=true pnpm install --frozen-lockfile
 
       - name: Build the scan CLI

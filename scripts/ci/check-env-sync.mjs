@@ -455,7 +455,16 @@ const ALLOWLIST = new Set([
   'LOOM_FABRIC_SEMANTIC_MODEL_ID',  // opt-in Fabric semantic model
   'LOOM_FABRIC_WORKSPACE_ID',       // opt-in Fabric workspace (no-fabric-dependency.md: never a default gate)
   'LOOM_FOUNDRY_EVAL_DATASET',      // opt-in eval dataset
-  'LOOM_FOUNDRY_EVAL_DEPLOYMENT',   // opt-in eval deployment
+  // GENUINELY opt-in as of #3508, and it was not before. The entry read
+  // "opt-in eval deployment" while evaluation.ts HARD-GATED install on it —
+  // an unset var that blocks a first-class item type is not opt-in, it is a
+  // missing wire, and this allowlist entry is what let that sit unnoticed
+  // (no bicep module sets it: `git grep LOOM_FOUNDRY_EVAL_DEPLOYMENT --
+  // platform/fiab/bicep` is empty). The provisioner now defaults the judge to
+  // the platform standard tier (LOOM_AOAI_DEPLOYMENT, which bicep DOES wire),
+  // so this var is what the comment always claimed: an override for a
+  // different judge model.
+  'LOOM_FOUNDRY_EVAL_DEPLOYMENT',   // opt-in override for the judge model (default: LOOM_AOAI_DEPLOYMENT)
   'LOOM_FOUNDRY_HUB_NAME',          // derived from Foundry hub
   'LOOM_FOUNDRY_PROJECT',           // derived from Foundry project
   'LOOM_GHCR_OWNER',                // opt-in GHCR mirror owner

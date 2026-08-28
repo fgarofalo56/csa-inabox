@@ -698,3 +698,79 @@ describe('digestOfIds — composition at constant size (G5)', () => {
     expect(fnv1a64('anything')).toMatch(/^[0-9a-f]{16}$/);
   });
 });
+
+/**
+ * #4120 — an INCOMPLETE carried snapshot must not switch the anti-ratchet off.
+ *
+ * Every comparison in `snapshotPopulations` is against `prior.maxExamined` /
+ * `prior.maxExaminedAt`. With either absent, `examined >= undefined` is false
+ * for every finite number and `nowMs - NaN` is NaN, so the "keep the mark"
+ * branch runs and carries `undefined` forward — for ever, silently, with the
+ * ratchet nominally in place and enforcing nothing.
+ *
+ * FALLING BACK TO "NO HISTORY" WOULD BE WORSE, and that is why this throws:
+ * treating a broken prior as absent LAUNDERS today's value into the new mark,
+ * which is the exact erosion `HIGH_WATER_DECAY_FLOOR` exists to bound.
+ *
+ * Each fixture deliberately violates `DetectorPopulationSnapshot` — a
+ * type-correct one cannot reach this bug.
+ *
+ * MUTATION-PROVEN: delete the `badMark || badStamp` guard in
+ * `snapshotPopulations` and the first two go RED; revert `detectPopulationRegression`'s
+ * `== null` to `=== null` and the third does.
+ */
+describe('#4120: a carried snapshot with no usable mark FAILS CLOSED', () => {
+  const results = [{ detector: 'd', findings: [], population: { examined: 5, blind: false } }];
+
+  /** A snapshot missing a required field. Cast at the boundary on purpose. */
+  const broken = (mutate: (s: Record<string, unknown>) => void): DetectorPopulationSnapshot => {
+    const s: Record<string, unknown> = { ...p('d', 100) };
+    mutate(s);
+    return s as unknown as DetectorPopulationSnapshot;
+  };
+
+  it('a prior with no maxExamined throws rather than carrying undefined forward', () => {
+    const prior = broken((s) => {
+      delete s.maxExamined;
+    });
+    expect(() => snapshotPopulations(results, { previous: [prior], at: T1 })).toThrow(
+      /maxExamined=undefined/,
+    );
+  });
+
+  it('a prior with an unparseable maxExaminedAt throws rather than treating the mark as fresh', () => {
+    // `Date.parse('never')` is NaN, so `markAgeMs > window` is false and the
+    // mark is held for ever — the decay clock stops without saying so.
+    const prior = broken((s) => {
+      s.maxExaminedAt = 'never';
+    });
+    expect(() => snapshotPopulations(results, { previous: [prior], at: T1 })).toThrow(
+      /maxExaminedAt="never"/,
+    );
+  });
+
+  it('a well-formed prior still compares — the guard is not a blanket refusal', () => {
+    // POPULATION FLOOR. Without this, a `snapshotPopulations` that threw on
+    // EVERY prior would satisfy both assertions above and be a worse defect.
+    const out = snapshotPopulations(results, { previous: [p('d', 100)], at: T1 });
+    expect(out[0].maxExamined).toBe(100);
+    expect(out[0].examined).toBe(5);
+  });
+
+  it('a previous run whose detectorPopulations key is ABSENT is no basis, not a TypeError', () => {
+    // `undefined !== null`, so the strict guard passed and `.map` of undefined
+    // threw on the one path that decides whether a shrink is reported.
+    const prev = priorRun([]) as unknown as Record<string, unknown>;
+    delete prev.detectorPopulations;
+    const got = detectPopulationRegression(
+      prev as unknown as ScanRunRecord,
+      [p('d', 1)],
+    );
+    expect(got).toBeNull();
+  });
+
+  it('a previous run whose detectorPopulations is null is still no basis', () => {
+    // The pre-existing, legitimate case — PAUSED and UNREACHABLE write null.
+    expect(detectPopulationRegression(priorRun(null), [p('d', 1)])).toBeNull();
+  });
+});

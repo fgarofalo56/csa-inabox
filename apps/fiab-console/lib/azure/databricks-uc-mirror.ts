@@ -21,6 +21,80 @@ import {
   getUcTable,
   databricksConfigGate,
 } from '@/lib/azure/databricks-client';
+import { updatePermissions, resolveWorkspaceHostnames } from '@/lib/azure/unity-catalog-client';
+
+/**
+ * The privileges a mirror needs on the catalog it mounts, in the REST
+ * permissions API's spelling (`USE_CATALOG`, not the SQL `USE CATALOG`). Same
+ * set `/api/catalog/permissions` grants for the Reader role, minus the volume
+ * read a table mirror never uses.
+ */
+export const UC_MIRROR_PRIVILEGES = ['USE_CATALOG', 'USE_SCHEMA', 'SELECT'] as const;
+
+export interface UcSelfGrantOutcome {
+  granted: boolean;
+  /** The principal the grant was made to, when one could be resolved. */
+  principal?: string;
+  /** Why the platform could NOT grant. Present only when `granted` is false. */
+  reason?: string;
+}
+
+/**
+ * SELF-GRANT the mirror's read privileges on a Unity Catalog (#3509).
+ *
+ * WHY THIS EXISTS. The mirrored-databricks provisioner used to answer a
+ * privilege-shaped failure with a remediation telling the operator to grant
+ * `USE CATALOG` / `USE SCHEMA` / `SELECT` to the Console UAMI by hand — while
+ * `unity-catalog-client` had exported `updatePermissions()` and
+ * `grantPrivilegesSQL()` the whole time. auto-bind-by-default.md: a remediation
+ * whose fix is an action the PLATFORM could have taken is a defect.
+ *
+ * WHY THE REST PATH, NOT `grantPrivilegesSQL`. The SQL form needs a running SQL
+ * warehouse; a workspace can legitimately have none, and failing the mirror
+ * because no warehouse is running would trade one gate for another.
+ * `updatePermissions` is a control-plane PATCH with no compute dependency, and
+ * it is the same call `/api/catalog/permissions` makes on its default path.
+ *
+ * It FAILS CLOSED and says why. If the Console UAMI is not itself entitled to
+ * grant on that catalog (it is not the owner and holds no MANAGE), Databricks
+ * refuses and this reports the refusal verbatim — a genuine deploy-time gap,
+ * which is the one thing an honest gate is still for.
+ */
+export async function selfGrantUcMirrorPrivileges(catalogName: string): Promise<UcSelfGrantOutcome> {
+  const principal = (process.env.LOOM_UAMI_CLIENT_ID || process.env.AZURE_CLIENT_ID || '').trim();
+  if (!principal) {
+    return {
+      granted: false,
+      reason:
+        'the Console identity could not be named (neither LOOM_UAMI_CLIENT_ID nor AZURE_CLIENT_ID is set), so ' +
+        'there is no principal to grant to. Nothing was changed.',
+    };
+  }
+  let host: string;
+  try {
+    const hosts = await resolveWorkspaceHostnames();
+    if (!hosts.length) {
+      return { granted: false, reason: 'no Databricks workspace hostname resolved, so the grant had nowhere to go.' };
+    }
+    host = hosts[0];
+  } catch (e: any) {
+    return { granted: false, reason: `the Databricks workspace hostname could not be resolved: ${e?.message || e}` };
+  }
+  try {
+    await updatePermissions(host, 'CATALOG', catalogName, {
+      add: [{ principal, privileges: [...UC_MIRROR_PRIVILEGES] }],
+    });
+    return { granted: true, principal };
+  } catch (e: any) {
+    return {
+      granted: false,
+      principal,
+      reason:
+        `Databricks refused the grant of ${UC_MIRROR_PRIVILEGES.join(' / ')} on CATALOG ${catalogName} to ` +
+        `${principal}: ${e?.message || e}`,
+    };
+  }
+}
 
 export interface UcMirrorTable {
   schema: string;

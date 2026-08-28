@@ -271,3 +271,127 @@ describe('the container settings match the bicep', () => {
     expect(BRAIN_FINDINGS_DEFAULT_TTL).toBe(-1);
   });
 });
+
+/**
+ * #4120 — the `<ScanRunRecord>` generic was a CLAIM, not a fact.
+ *
+ * `.query<ScanRunRecord>(...)` then `return resources[0] ?? null` types whatever
+ * Cosmos persisted as a ScanRunRecord, because the generic is erased at runtime.
+ * Same class as #4119 and #4116: a deserialisation boundary that trusts a
+ * generic instead of validating.
+ *
+ * EVERY FIXTURE BELOW DELIBERATELY VIOLATES `ScanRunRecord`, which is the
+ * load-bearing requirement — a type-correct fixture cannot reach a lie told to
+ * the compiler, so each is built as a plain object and cast at the boundary the
+ * store itself sits on. They FAIL against main: there, `lastScannedRun` returns
+ * the malformed document (or `null`, or throws a raw TypeError) with nothing
+ * saying so, and the anti-ratchet quietly stops enforcing.
+ *
+ * MUTATION-PROVEN: delete the `assertScanRunRecord` call in `lastScannedRun`
+ * and the first four go RED; delete it in `recentRuns` and the last two do.
+ */
+describe('#4120: a persisted run document is VALIDATED, not coerced', () => {
+  /** A run doc with one field removed or replaced. Deliberately not a ScanRunRecord. */
+  function malformed(mutate: (d: Record<string, unknown>) => void): Record<string, unknown> {
+    const d = runDoc({ runId: 'r1', startedAt: '2026-08-20T00:00:00.000Z', populations: [] });
+    d.detectorPopulations = [
+      {
+        detector: 'd',
+        examined: 10,
+        blind: false,
+        findings: 0,
+        maxExamined: 10,
+        maxExaminedAt: '2026-08-20T00:00:00.000Z',
+        reportedStepAt: null,
+        decayRebases: 0,
+      },
+    ];
+    mutate(d);
+    return d;
+  }
+
+  it('a snapshot missing maxExamined is REJECTED, not returned as a basis', async () => {
+    // THE MEASURED CASE. Carried forward, `examined >= undefined` is false for
+    // every finite number and `Date.parse(undefined)` is NaN, so the mark is
+    // "kept" as undefined forever: the anti-ratchet is on paper and enforces
+    // nothing, with no throw, no log and no failing test.
+    const doc = malformed((d) => {
+      delete (d.detectorPopulations as Record<string, unknown>[])[0].maxExamined;
+    });
+    const { store } = storeOver([doc]);
+    await expect(store.lastScannedRun(ESTATE)).rejects.toThrow(/maxExamined is not a finite number/);
+  });
+
+  it('the rejection says it is NOT reading the document as "no scanned run"', async () => {
+    // Because that is the whole defect: `null` is a legitimate state the caller
+    // renders as "no basis" and moves past.
+    const doc = malformed((d) => {
+      delete (d.detectorPopulations as Record<string, unknown>[])[0].maxExaminedAt;
+    });
+    const { store } = storeOver([doc]);
+    await expect(store.lastScannedRun(ESTATE)).rejects.toThrow(/silently disable the population anti-ratchet/);
+  });
+
+  it('an ABSENT nullable key is rejected — absent is not null', async () => {
+    // `graphVersionId: null` is written on PAUSED/UNREACHABLE and is fine.
+    // A MISSING key reads as `undefined`, which walks through every `=== null`
+    // guard in this module.
+    const doc = malformed((d) => {
+      delete d.graphVersionId;
+    });
+    const { store } = storeOver([doc]);
+    await expect(store.lastScannedRun(ESTATE)).rejects.toThrow(/graphVersionId is ABSENT/);
+  });
+
+  it('names the offending document id, so the repair is possible', async () => {
+    const doc = malformed((d) => {
+      d.verdict = 'sideways';
+    });
+    const { store } = storeOver([doc]);
+    await expect(store.lastScannedRun(ESTATE)).rejects.toThrow(/id 'run:r1'/);
+  });
+
+  it('a WELL-FORMED document still comes back — the check is not a blanket refusal', async () => {
+    // POPULATION FLOOR for this block. Without it every assertion above is
+    // satisfied by a store that rejects everything, which would be a worse bug
+    // than the one being fixed.
+    const doc = malformed(() => {});
+    const { store } = storeOver([doc]);
+    const got = await store.lastScannedRun(ESTATE);
+    expect(got?.runId).toBe('r1');
+    expect(got?.detectorPopulations?.[0].maxExamined).toBe(10);
+  });
+
+  it('an empty result is still null — "nothing has ever scanned" is a real state', async () => {
+    const { store } = storeOver([]);
+    expect(await store.lastScannedRun(ESTATE)).toBeNull();
+  });
+
+  it('recentRuns rejects a malformed element instead of handing it to the caller', async () => {
+    // `lastRun` and `scannedRunAgeRuns` both read through `recentRuns`; the
+    // latter dereferenced `runs[i].detectorPopulations` with no guard at all.
+    const bad = runDoc({ runId: 'r2', startedAt: '2026-08-21T00:00:00.000Z', populations: null });
+    delete bad.startedAt;
+    const { store } = storeOver([bad]);
+    await expect(store.lastRun(ESTATE)).rejects.toThrow(/startedAt is not a string \(got absent\)/);
+  });
+
+  it('recentRuns rejects a NULL element rather than dereferencing it', async () => {
+    // A null in `resources` reached `runs[i].detectorPopulations` in
+    // `scannedRunAgeRuns` as an unhandled TypeError with no document named.
+    // `fakeContainer` filters on `d.estateId` and so cannot carry a null row —
+    // the container is stubbed directly here so the null actually reaches the
+    // store, which is the only way this input shape is testable at all.
+    const direct = new CosmosFindingStore(
+      async () =>
+        ({
+          items: {
+            query: () => ({ fetchAll: async () => ({ resources: [null] }) }),
+          },
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        }) as any,
+    );
+    await expect(direct.lastRun(ESTATE)).rejects.toThrow(/document is not an object \(got null\)/);
+    await expect(direct.scannedRunAgeRuns(ESTATE)).rejects.toThrow(/document is not an object \(got null\)/);
+  });
+});

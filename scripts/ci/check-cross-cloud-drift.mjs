@@ -389,6 +389,25 @@ export async function buildRow(estate, deps = {}) {
   const g = resolve(marker.sha);
   const row = classifyEstate({
     ...estate,
+    // #4143 — SAY SO, rather than let the default speak. classifyEstate's
+    // past-grace message now has three forms, and the one that claims "the roll
+    // path has stopped applying main" is reserved for a caller that actually
+    // queried the roll workflows and found nothing running.
+    //
+    // THIS LANE DELIBERATELY QUERIES NOTHING. Its whole design (see the header,
+    // and cross-cloud-drift-alarm.yml) is that both estates are read through
+    // their own unauthenticated /build-marker.txt — no credentials, no az, no
+    // Actions API — which is what makes the sovereign estate measurable from an
+    // ordinary runner with `permissions: contents: read`. Adding a run-history
+    // query would need `actions: read` on that workflow and would trade away the
+    // property that makes this lane trustworthy.
+    //
+    // So it passes the honest answer explicitly: NOT MEASURED, with the reason.
+    // Passing nothing would produce the same verdict, but a later reader could
+    // not tell "this lane cannot look" from "somebody forgot to wire it".
+    rollInFlight: null,
+    rollDetail: 'this lane queries no workflow run history by design — it reads only the '
+      + 'unauthenticated build markers; deploy-staleness.yml is the lane that asks',
     liveSha: marker.sha,
     // A git failure is passed as `error` so the row reports WHY it is unknown,
     // rather than reporting an unexplained null distance.
