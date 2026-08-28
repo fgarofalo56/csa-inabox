@@ -234,10 +234,18 @@ export class InMemoryFindingStore implements FindingStore {
     return null;
   }
 
+  // `!= null` — LOOSE, and deliberately (#4120). `detectorPopulations` is
+  // `T | null`: null is a value the PAUSED and UNREACHABLE paths write, absent
+  // is not. A strict `!== null` treats an ABSENT field as a scanned population,
+  // so a record whose key never made it through a migration is handed to
+  // `detectPopulationRegression`, whose own `=== null` guard also passes, and
+  // `.map` of `undefined` throws. The Cosmos store now rejects such a document
+  // on read; this implementation is fed by tests and callers directly, so it
+  // hardens the same edge rather than assuming the store is the only source.
   async lastScannedRun(estateId: string): Promise<ScanRunRecord | null> {
     for (let i = this.runs.length - 1; i >= 0; i -= 1) {
       const r = this.runs[i];
-      if (r.estateId === estateId && r.detectorPopulations !== null) return r;
+      if (r.estateId === estateId && r.detectorPopulations != null) return r;
     }
     return null;
   }
@@ -248,7 +256,7 @@ export class InMemoryFindingStore implements FindingStore {
       const r = this.runs[i];
       if (r.estateId !== estateId) continue;
       age += 1;
-      if (r.detectorPopulations !== null) return age;
+      if (r.detectorPopulations != null) return age;
     }
     return 0;
   }

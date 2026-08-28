@@ -13,13 +13,37 @@
  * their storage locations, stamping them onto `secondaryIds.ucTablesJson` so the
  * pairing rule can forward them. It does NOT itself talk to Synapse.
  *
+ * THE PRIVILEGES ARE GRANTED, NOT REQUESTED (#3509, auto-bind-by-default).
+ * This item type has ONE path — there is no opt-in alternative — and it used to
+ * answer a privilege-shaped resolution failure with a remediation telling the
+ * operator to grant `USE CATALOG` / `USE SCHEMA` / `SELECT` to the Console UAMI
+ * by hand. `unity-catalog-client` has exported `updatePermissions()` and
+ * `grantPrivilegesSQL()` the whole time, and `/api/catalog/permissions` calls
+ * them in production. A gate over an action the platform could perform is a
+ * defect, so the provisioner now self-grants and re-resolves once.
+ *
+ * Note this is a SYMPTOM-shaped trigger, deliberately: Unity Catalog HIDES
+ * securables the caller cannot see, so insufficient privileges surface as
+ * "catalog has no queryable Delta tables" (NO_TABLES), not as a 403. Keying the
+ * self-heal to a 403 alone would miss the case that actually happens.
+ *
  * Honest gates (no silent config-doc-only success):
  *   - LOOM_DATABRICKS_HOSTNAME unset  → NO_DATABRICKS remediation.
  *   - catalogName missing on the item → fix the mirror config.
- *   - catalog has no queryable Delta tables → NO_TABLES remediation.
+ *   - the self-grant itself was REFUSED (the Console UAMI is not the catalog
+ *     owner and holds no MANAGE) → a genuine deploy-time gap, reported with
+ *     Databricks' own refusal rather than a guess.
+ *   - grant succeeded and the catalog STILL exposes no queryable Delta tables →
+ *     it is genuinely empty. Said in exactly those words, because "grant these
+ *     privileges" would now be false (deploy-integrity.md R7).
  */
 import type { Provisioner, ProvisionResult } from './types';
-import { resolveUcMirrorTables } from '@/lib/azure/databricks-uc-mirror';
+import {
+  resolveUcMirrorTables,
+  selfGrantUcMirrorPrivileges,
+  UC_MIRROR_PRIVILEGES,
+  type UcMirrorResolution,
+} from '@/lib/azure/databricks-uc-mirror';
 
 export const mirroredDatabricksProvisioner: Provisioner = async (input): Promise<ProvisionResult> => {
   const steps: string[] = [];
@@ -40,32 +64,66 @@ export const mirroredDatabricksProvisioner: Provisioner = async (input): Promise
     };
   }
 
-  const resolved = await resolveUcMirrorTables(catalogName, {
-    tableSubset: Array.isArray(content.tables) ? content.tables : undefined,
-  });
+  const subset = Array.isArray(content.tables) ? content.tables : undefined;
+  let resolved: UcMirrorResolution = await resolveUcMirrorTables(catalogName, { tableSubset: subset });
+
+  if (!resolved.ok && resolved.code === 'NO_DATABRICKS') {
+    return {
+      status: 'remediation',
+      gate: {
+        reason: 'Databricks workspace not provisioned in this deployment — cannot validate the Unity Catalog source.',
+        remediation:
+          'Set LOOM_DATABRICKS_HOSTNAME (e.g. adb-…azuredatabricks.net) on the Console container app and grant the ' +
+          'Console UAMI workspace-user + USE CATALOG on the metastore (see docs/fiab/v3-tenant-bootstrap.md). No Fabric required.',
+        link: 'https://learn.microsoft.com/azure/databricks/dev-tools/api/',
+      },
+      steps,
+    };
+  }
 
   if (!resolved.ok) {
-    if (resolved.code === 'NO_DATABRICKS') {
+    // SELF-HEAL, once. `NO_TABLES` and `ERROR` are both privilege-shaped here:
+    // Unity Catalog hides what the caller cannot see, so a missing SELECT looks
+    // like an empty catalog, and a missing USE CATALOG throws on the schema
+    // list. Grant, then re-resolve — one attempt, so a catalog that is genuinely
+    // empty fails closed instead of looping against the Databricks API.
+    steps.push(
+      `Catalog "${catalogName}" resolved no queryable tables (${resolved.code}); granting ` +
+        `${UC_MIRROR_PRIVILEGES.join(' / ')} to the Console identity and retrying.`,
+    );
+    const grant = await selfGrantUcMirrorPrivileges(catalogName);
+    if (!grant.granted) {
+      // The one genuinely-unfixable case: the platform is not entitled to grant.
       return {
         status: 'remediation',
         gate: {
-          reason: 'Databricks workspace not provisioned in this deployment — cannot validate the Unity Catalog source.',
+          reason:
+            `Loom could not read catalog "${catalogName}" and could not grant itself access to it.`,
           remediation:
-            'Set LOOM_DATABRICKS_HOSTNAME (e.g. adb-…azuredatabricks.net) on the Console container app and grant the ' +
-            'Console UAMI workspace-user + USE CATALOG on the metastore (see docs/fiab/v3-tenant-bootstrap.md). No Fabric required.',
-          link: 'https://learn.microsoft.com/azure/databricks/dev-tools/api/',
+            `The grant was attempted automatically and did not succeed: ${grant.reason} ` +
+            'Make the Console UAMI the catalog owner, or grant it MANAGE on the catalog (or metastore-admin), ' +
+            'so Loom can bind mirrors without a per-catalog manual step.',
+          link: 'https://learn.microsoft.com/azure/databricks/data-governance/unity-catalog/manage-privileges/',
         },
         steps,
       };
     }
+    steps.push(`Granted ${UC_MIRROR_PRIVILEGES.join(' / ')} on CATALOG ${catalogName} to ${grant.principal}.`);
+    resolved = await resolveUcMirrorTables(catalogName, { tableSubset: subset });
+  }
+
+  if (!resolved.ok) {
+    // Post-grant. The privileges are now in place, so "grant these privileges"
+    // would be a FALSE remediation (deploy-integrity.md R7). Say what is
+    // actually left: the catalog has nothing this mirror can read.
     return {
       status: 'remediation',
       gate: {
-        reason: resolved.error || `Could not resolve queryable Delta tables for catalog "${catalogName}".`,
+        reason: resolved.error || `Catalog "${catalogName}" exposes no queryable Delta tables to Loom.`,
         remediation:
-          'Ensure the mounted catalog contains Delta tables with a resolvable ADLS storage location (EXTERNAL Delta ' +
-          'tables, or MANAGED tables whose storage_location the UC API returns) and that the Console UAMI has ' +
-          'USE CATALOG / USE SCHEMA / SELECT on them.',
+          `Loom already holds ${UC_MIRROR_PRIVILEGES.join(' / ')} on this catalog — the grant was made during this ` +
+          'install and the catalog still returned nothing. Ensure it contains Delta tables with a resolvable ADLS ' +
+          'storage location (EXTERNAL Delta tables, or MANAGED tables whose storage_location the UC API returns).',
         link: 'https://learn.microsoft.com/azure/databricks/connect/unity-catalog/external-locations',
       },
       steps,

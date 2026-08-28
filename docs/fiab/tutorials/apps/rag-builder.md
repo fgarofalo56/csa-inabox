@@ -20,7 +20,8 @@ AI Foundry run. **~25 minutes** (plus provisioning time).
 | `LOOM_AI_SEARCH_SERVICE` set on the Console | The index provisioner targets `https://<service>.search.windows.net` | The AI Search item installs with an honest remediation gate naming the variable |
 | Console UAMI has **Search Service Contributor** + **Search Index Data Contributor** | Create the index, then push documents | The provisioner surfaces the verbatim `403` and the role to grant |
 | `LOOM_FOUNDRY_PROJECT` set (optional for step 1) | The prompt-flow provisioner creates the flow in an AI Foundry project | The prompt-flow item shows a gate; the AI Search half still works |
-| `LOOM_FOUNDRY_EVAL_DATASET` + `LOOM_FOUNDRY_EVAL_DEPLOYMENT` (optional) | Submit a real evaluation run | The evaluation item renders metric definitions with **no fabricated scores** |
+| `LOOM_FOUNDRY_EVAL_DATASET` (optional) | Submit a real evaluation run | The evaluation item renders metric definitions with **no fabricated scores** |
+| `LOOM_FOUNDRY_EVAL_DEPLOYMENT` (optional **override** only) | Judge the run with a model other than the deployment's default | The judge is resolved from `LOOM_AOAI_DEPLOYMENT`, which admin-plane bicep wires — no action needed |
 
 !!! tip "The AI Search half is independent"
     You do not need AI Foundry to get value from step 1. The index provisions, seeds,
@@ -54,7 +55,7 @@ finishes.
 | --- | --- | --- | --- |
 | `RAG Corpus — CSA Loom Knowledge Base` (`ai-search-index`) | `aiSearchProvisioner` | `PUT /indexes/rag-corpus---csa-loom-knowledge-base` then `POST /docs/index` with the 10 seed documents | *"AI Search service not configured. Set `LOOM_AI_SEARCH_SERVICE` to the service name (without `.search.windows.net`)."* |
 | `RAG Basic — grounded Q&A over the corpus` (`prompt-flow`) | `promptFlowProvisioner` | Creates the flow in the AI Foundry project via the AML data plane | *"No AI Foundry project configured… Set `LOOM_FOUNDRY_PROJECT`."* |
-| `RAG Quality — 7-metric suite` (`evaluation`) | `evaluationProvisioner` | Submits a real AI Foundry evaluation run | Names whichever of `LOOM_FOUNDRY_PROJECT` / `LOOM_FOUNDRY_EVAL_DATASET` / `LOOM_FOUNDRY_EVAL_DEPLOYMENT` is unset |
+| `RAG Quality — 7-metric suite` (`evaluation`) | `evaluationProvisioner` | Submits a real AI Foundry evaluation run, judged by the deployment's resolved chat model | Names whichever of `LOOM_FOUNDRY_PROJECT` / `LOOM_FOUNDRY_EVAL_DATASET` is unset. The judge model is **not** a gate — it resolves from `LOOM_AOAI_DEPLOYMENT` |
 | `RAG Builder Walkthrough` (`notebook`) | `notebookProvisioner` | Synapse (`LOOM_SYNAPSE_WORKSPACE`) or Databricks (`LOOM_DATABRICKS_HOSTNAME`) artifact | Names the missing workspace variable |
 
 The provisioning report renders **inside the install dialog**, one row per item, with
@@ -160,7 +161,8 @@ If any of those four are missing, the app is not working yet — go to Troublesh
 | AI Search row shows a verbatim `403` | UAMI lacks the Search roles | Grant **Search Service Contributor** (create index) and **Search Index Data Contributor** (push docs) on the search service |
 | Schema tab renders but Search returns nothing | Documents were not pushed | Check the install dialog's step log for the `docs/index` call; re-run the install (idempotent) |
 | Prompt-flow gate on `LOOM_FOUNDRY_PROJECT` | No AI Foundry project bound | Set it to a `Microsoft.MachineLearningServices` **kind=Project** workspace name under the hub |
-| Evaluation shows definitions but no scores | One of the three eval variables is unset | Set `LOOM_FOUNDRY_PROJECT`, `LOOM_FOUNDRY_EVAL_DATASET`, `LOOM_FOUNDRY_EVAL_DEPLOYMENT`, then re-run |
+| Evaluation shows definitions but no scores | `LOOM_FOUNDRY_PROJECT` or `LOOM_FOUNDRY_EVAL_DATASET` is unset | Set both, then re-run. The judge model is resolved for you and is not part of this gate |
+| Evaluation gate names `LOOM_AOAI_DEPLOYMENT` | The deployment has **no** Foundry chat deployment wired at all | Re-apply admin-plane bicep, which sets it from the Foundry account's default chat deployment; this is an infrastructure gap, not a value you should set by hand |
 | Notebook cell 1 fails on `AZURE_OPENAI_ENDPOINT` | Notebook is running outside the Console identity | Grant your local identity **Search Index Data Contributor** + **Cognitive Services OpenAI User**, or run on Console-attached compute |
 
 ## Cleanup

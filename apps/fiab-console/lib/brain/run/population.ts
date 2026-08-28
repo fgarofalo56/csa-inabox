@@ -58,6 +58,7 @@ import {
   HIGH_WATER_DECAY_DAYS,
   HIGH_WATER_DECAY_FLOOR,
   POPULATION_SHRINK_TOLERANCE,
+  PersistedRunShapeError,
   type DetectorPopulationRegression,
   type DetectorPopulationSnapshot,
   type PopulationRegression,
@@ -145,6 +146,28 @@ export function snapshotPopulations(
     const examined = r.population.examined;
     const blind = r.population.blind;
     const findings = r.findings.length;
+
+    // A PRIOR WITHOUT A MARK IS NOT "NO PRIOR" (#4120). Every comparison below
+    // is against `prior.maxExamined` / `prior.maxExaminedAt`. If either is
+    // absent or unparseable, `examined >= undefined` is false for every finite
+    // number and `nowMs - NaN` is NaN, so the branch that "keeps the mark" runs
+    // and carries `undefined` forward — the anti-ratchet stays on paper and
+    // enforces nothing, every night, with no error. Falling back to "treat it
+    // as no history" would be worse still: it LAUNDERS today's value into the
+    // new mark, which is exactly the ratchet HIGH_WATER_DECAY_FLOOR exists to
+    // bound. So it fails closed and names the detector.
+    if (prior !== undefined) {
+      const badMark = typeof prior.maxExamined !== 'number' || !Number.isFinite(prior.maxExamined);
+      const badStamp = typeof prior.maxExaminedAt !== 'string' || !Number.isFinite(Date.parse(prior.maxExaminedAt));
+      if (badMark || badStamp) {
+        throw new PersistedRunShapeError('snapshotPopulations', null, [
+          `detector '${r.detector}': carried snapshot has ` +
+            `maxExamined=${JSON.stringify(prior.maxExamined)} and ` +
+            `maxExaminedAt=${JSON.stringify(prior.maxExaminedAt)}. The high-water comparison cannot be ` +
+            'performed against those, and continuing would silently re-base the mark to this run.',
+        ]);
+      }
+    }
 
     // No history: this run IS the mark.
     if (prior === undefined) {
@@ -239,7 +262,12 @@ export function detectPopulationRegression(
   current: readonly DetectorPopulationSnapshot[],
   opts?: { readonly basisAgeRuns?: number },
 ): PopulationRegression | null {
-  if (previous === null || previous.detectorPopulations === null) return null;
+  // `== null` — LOOSE, and deliberately (#4120). `previous` may be `null` (no
+  // basis) and `detectorPopulations` may be `null` (a run that did not scan).
+  // A record whose key is ABSENT is neither, and a strict `=== null` waved it
+  // straight through to `.map` of `undefined` — an unhandled TypeError on the
+  // one path that decides whether a shrinking population is reported.
+  if (previous == null || previous.detectorPopulations == null) return null;
 
   const before = new Map(previous.detectorPopulations.map((p) => [p.detector, p]));
   const now = new Map(current.map((p) => [p.detector, p]));

@@ -21,7 +21,9 @@
  *      submits a real AI Foundry evaluation run; results are read by
  *      GET /api/items/evaluation/<id>?project=&results=1 → {ok, evaluation,
  *      results}. Honest remediation gate naming LOOM_FOUNDRY_PROJECT /
- *      LOOM_FOUNDRY_EVAL_DATASET / LOOM_FOUNDRY_EVAL_DEPLOYMENT. NO
+ *      LOOM_FOUNDRY_EVAL_DATASET. The judge model is RESOLVED by the platform
+ *      (LOOM_AOAI_DEPLOYMENT, wired by admin-plane bicep) and is no longer a
+ *      gate — LOOM_FOUNDRY_EVAL_DEPLOYMENT only OVERRIDES it (#3508). NO
  *      hard-coded scores — numbers come only from a live run.
  *
  *   4. Walkthrough notebook  — Cosmos-only starter content. Its runnable
@@ -209,8 +211,9 @@ MessageBar naming the exact env var / role to provision (no fake data):
    Foundry evaluation run; results are read by
    \`GET /api/items/evaluation/<id>?project=&results=1\`. **No scores are
    hard-coded** — numbers appear only after a live run. Gate: set
-   \`LOOM_FOUNDRY_PROJECT\`, \`LOOM_FOUNDRY_EVAL_DATASET\`,
-   \`LOOM_FOUNDRY_EVAL_DEPLOYMENT\`.
+   \`LOOM_FOUNDRY_PROJECT\` and \`LOOM_FOUNDRY_EVAL_DATASET\`. The judge model
+   is resolved for you from the deployment's Foundry chat deployment; set
+   \`LOOM_FOUNDRY_EVAL_DEPLOYMENT\` only to override it.
 
 4. **Walkthrough notebook** — steps through chunking → embedding → index
    push → Q&A → evaluation. Its runnable cells call **only the real
@@ -551,7 +554,7 @@ Write the grounded answer per the system rules. End with a "Citations:" block li
       itemType: 'evaluation',
       displayName: 'RAG Quality — 7-metric suite',
       description:
-        'Evaluation suite covering groundedness, retrieval recall/precision, answer relevance, citation coverage, p95 latency, and hallucination rate. The evaluationProvisioner submits a REAL AI Foundry evaluation run when LOOM_FOUNDRY_PROJECT / LOOM_FOUNDRY_EVAL_DATASET / LOOM_FOUNDRY_EVAL_DEPLOYMENT are set; scores come only from that live run (read via GET /api/items/evaluation/<id>?project=&results=1). No baseline numbers are hard-coded.',
+        'Evaluation suite covering groundedness, retrieval recall/precision, answer relevance, citation coverage, p95 latency, and hallucination rate. The evaluationProvisioner submits a REAL AI Foundry evaluation run when LOOM_FOUNDRY_PROJECT / LOOM_FOUNDRY_EVAL_DATASET are set; the judge model is resolved from the deployment\'s Foundry chat deployment (LOOM_FOUNDRY_EVAL_DEPLOYMENT overrides it). Scores come only from that live run (read via GET /api/items/evaluation/<id>?project=&results=1). No baseline numbers are hard-coded.',
       learnDoc: 'rag/evaluation',
       content: {
         kind: 'evaluation',

@@ -108,12 +108,27 @@ const CONSOLE_DIRS = ['apps/fiab-console/app', 'apps/fiab-console/lib'];
  * {@link assertKnownSplitIssues}, because "each entry must name a tracked issue"
  * enforced only by a comment is exactly the kind of rule this repo has watched
  * go quiet.
+ *
+ * `issueTitle` MUST be the issue's ACTUAL title, transcribed at the time the
+ * entry was written (#3802). It is a REVIEW aid, not a proof — see
+ * {@link assertKnownSplitIssues} for why the referent is deliberately not
+ * resolved. Its whole job is to make a wrong NUMBER visible in the diff: the
+ * miscitation that actually happened here (`#3793`, a real but unrelated
+ * readiness-probe issue) was well-formed and passed every check, and would have
+ * been caught on sight had the title sat next to it and disagreed with `why`.
  */
 const KNOWN_SPLIT = new Map([
   [
     'tenantSettingsContainer :: <S>',
     {
       issue: '#3794',
+      /**
+       * Transcribed from `gh issue view 3794 --json title` on 2026-08-28. If this
+       * does not read like the `why` below, the NUMBER is wrong — go look.
+       */
+      issueTitle:
+        'Tenant-settings singleton is written under the caller oid and read under tenantScopeId — ' +
+        'the chargeback-tagging toggle never takes effect (4th occurrence of the #3282 class)',
       why:
         'The tenant-settings singleton is WRITTEN by /api/admin/tenant-settings under ' +
         'the caller oid and READ by /api/admin/chargeback under tenantScopeId(), so the ' +
@@ -134,16 +149,41 @@ const KNOWN_SPLIT = new Map([
 /**
  * A placeholder issue reference makes the exemption unaccountable — reject it.
  *
- * THIS CHECKS THE FORM, NOT THE REFERENT, and the difference is not academic:
- * the first revision of this entry cited `#3793`, which is a real but UNRELATED
- * issue, and this check would have accepted it. It catches
- * `ISSUE-TENANT-SETTINGS-SCOPE`; it cannot catch a well-formed wrong number.
- * Whoever reviews an exemption still has to open the issue and read it.
+ * THIS CHECKS THE FORM, NOT THE REFERENT. THE TITLE IS NOT PROOF (#3802).
+ * ---------------------------------------------------------------------------
+ * Requiring `issueTitle` does NOT establish that the number is right, and this
+ * function does not try to: resolving the referent means a network call inside
+ * a merge-blocking guard, which buys a rate-limit and an offline-failure mode
+ * on a control the repo would then be tempted to soften. For a population of
+ * ONE exemption that is a worse trade than the miss it prevents.
+ *
+ * What the title DOES buy is free and offline: a wrong number stops being
+ * invisible. The miscitation that actually happened here was `#3793` — a real,
+ * open, well-formed issue about an unrelated readiness-probe defect — and the
+ * form check accepted it precisely because it was well formed. With the title
+ * pinned alongside, that same miscitation reads as a title about a readiness
+ * probe sitting next to a `why` about tenant-settings partitioning: caught on
+ * sight, by a reviewer reading only the diff, with nothing to open.
+ *
+ * So: this catches `ISSUE-TENANT-SETTINGS-SCOPE` and it catches an EMPTY or
+ * boilerplate title. It still cannot catch a well-formed wrong number paired
+ * with a plausible-looking title. Whoever reviews an exemption still has to
+ * open the issue and read it.
  */
 function assertKnownSplitIssues() {
   const bad = [];
   for (const [key, v] of KNOWN_SPLIT) {
-    if (!/^#\d+$/.test(String(v.issue || ''))) bad.push(`${key} — issue "${v.issue}" is not a #NNNN reference`);
+    const issue = String(v.issue || '');
+    if (!/^#\d+$/.test(issue)) bad.push(`${key} — issue "${v.issue}" is not a #NNNN reference`);
+    const title = String(v.issueTitle || '').trim();
+    // Form only. A title short enough to be a placeholder ('tbd', 'see issue',
+    // or the issue number echoed back) carries no information a reviewer could
+    // disagree with, which is the entire point of the field.
+    if (!title) {
+      bad.push(`${key} — no issueTitle. Transcribe ${issue || 'the issue'}'s actual title so a wrong number is visible in the diff.`);
+    } else if (title.length < 20 || title.replace(/[^A-Za-z]/g, '').length < 12 || title === issue) {
+      bad.push(`${key} — issueTitle "${title}" is a placeholder, not a transcribed issue title.`);
+    }
   }
   if (bad.length) {
     console.error(
@@ -153,6 +193,14 @@ function assertKnownSplitIssues() {
     for (const b of bad) console.error(`::error::  ${b}`);
     process.exit(1);
   }
+  // Print the population this assertion actually evaluated. An assertion over
+  // an empty set is green and blind, and the summary line at the bottom of this
+  // run counts SPLITS FOUND, not EXEMPTIONS DECLARED — those are different
+  // numbers, and only this one says how many entries were form-checked.
+  console.log(
+    `tenant-singleton-scope: ${KNOWN_SPLIT.size} KNOWN_SPLIT exemption(s) form-checked (issue + issueTitle present). ` +
+      'The referent is NOT verified — see assertKnownSplitIssues().',
+  );
 }
 assertKnownSplitIssues();
 
@@ -854,7 +902,10 @@ if (scopeSites === 0) {
 }
 
 for (const [key, b, exempt] of knownSplits) {
-  console.log(`::warning::tenant-singleton-scope: KNOWN SPLIT (not clean) ${key} — ${exempt.issue}: ${exempt.why}`);
+  console.log(
+    `::warning::tenant-singleton-scope: KNOWN SPLIT (not clean) ${key} — ${exempt.issue} ` +
+      `("${exempt.issueTitle}", title transcribed, referent NOT verified): ${exempt.why}`,
+  );
   for (const r of b.oid) {
     const w = r.witness?.get('oid');
     const pinned = exempt.sites.includes(r.file) ? 'pinned' : 'NOT PINNED';

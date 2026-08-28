@@ -414,3 +414,64 @@ describe('the report SURFACES it — three places a green check cannot hide', ()
     expect(md).toContain('last actual scan: 2 day&#40;s&#41; ago');
   });
 });
+
+/**
+ * #4120 — an INCOMPLETE persisted snapshot must not read as "never scanned".
+ *
+ * `InMemoryFindingStore.lastScannedRun` tested `detectorPopulations !== null`.
+ * A record whose key is ABSENT — the shape the first schema change, migration
+ * or partial write produces — is `undefined`, which passes that guard, is
+ * returned as the population basis, and then walks straight into
+ * `detectPopulationRegression`'s own `=== null` guard and out the other side.
+ * The staleness axis reads the same record, so the two controls this lane exists
+ * to provide were both defeated by an omission rather than a value.
+ *
+ * The fixture deliberately violates `ScanRunRecord`. A type-correct one cannot
+ * reach it — which is the point of #4119's lesson and the reason this is a test
+ * rather than a comment.
+ *
+ * MUTATION-PROVEN: revert either `!= null` in `InMemoryFindingStore` to
+ * `!== null` and both assertions below go RED.
+ */
+describe('#4120: an absent detectorPopulations is NOT a scanned run', () => {
+  /** A run record with the key removed. Not a ScanRunRecord, on purpose. */
+  function runWithNoPopulationsKey(runId: string, startedAt: string): ScanRunRecord {
+    const r = run({ runId, startedAt, scanned: true }) as unknown as Record<string, unknown>;
+    delete r.detectorPopulations;
+    return r as unknown as ScanRunRecord;
+  }
+
+  it('lastScannedRun skips it rather than handing it back as the population basis', async () => {
+    const findings = new InMemoryFindingStore();
+    await findings.recordRun(runWithNoPopulationsKey('broken-1', '2026-08-20T00:00:00.000Z'));
+    expect(await findings.lastScannedRun(ESTATE)).toBeNull();
+  });
+
+  it('scannedRunAgeRuns does not count it as the scanned run', async () => {
+    const findings = new InMemoryFindingStore();
+    await findings.recordRun(runWithNoPopulationsKey('broken-1', '2026-08-20T00:00:00.000Z'));
+    expect(await findings.scannedRunAgeRuns(ESTATE)).toBe(0);
+  });
+
+  it('a WELL-FORMED scanned run is still found — the guard is not a blanket skip', async () => {
+    // POPULATION FLOOR. Both assertions above are satisfied by a store that
+    // finds nothing, which would disable the basis in the other direction.
+    const findings = new InMemoryFindingStore();
+    await findings.recordRun(run({ runId: 'scan-1', startedAt: '2026-08-20T00:00:00.000Z', scanned: true }));
+    expect((await findings.lastScannedRun(ESTATE))?.runId).toBe('scan-1');
+    expect(await findings.scannedRunAgeRuns(ESTATE)).toBe(1);
+  });
+
+  it('and the staleness axis then reports NEVER SCANNED rather than a false basis', async () => {
+    const findings = new InMemoryFindingStore();
+    await findings.recordRun(runWithNoPopulationsKey('broken-1', '2026-08-20T00:00:00.000Z'));
+    const s = assessScanStaleness({
+      lastScanned: await findings.lastScannedRun(ESTATE),
+      lastAny: await findings.lastRun(ESTATE),
+      ageRuns: await findings.scannedRunAgeRuns(ESTATE),
+      at: '2026-08-24T00:00:00.000Z',
+    });
+    expect(s.neverScanned).toBe(true);
+    expect(s.lastScannedRunId).toBeNull();
+  });
+});
