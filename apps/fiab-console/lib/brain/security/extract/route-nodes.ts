@@ -99,8 +99,16 @@ export interface RouteExtraction {
  * `__tests__/no-estate-identifiers.test.ts` ("every predicate name this extractor
  * emits is one C1 recognises", with a negative control), because a rename on
  * either side would otherwise silently empty the finding set without erroring.
+ *
+ * EXPORTED FOR THAT TEST, AND ONLY FOR IT (#4028). It was module-private, so the
+ * spec that claims to check the coupling could not READ the set and iterated a
+ * hardcoded `['isTenantAdmin', 'hasTenantAdminRole']` instead — mentioning this
+ * constant in a comment while asserting something narrower than its own title.
+ * Adding a fifth spelling mapped to a predicate C1 does not recognise passed that
+ * block silently, which is precisely the failure it exists to prevent. The test
+ * now derives its subjects from here, so the two cannot drift.
  */
-const ADMIN_CLAIM_SPELLINGS: readonly (readonly [string, string])[] = [
+export const ADMIN_CLAIM_SPELLINGS: readonly (readonly [string, string])[] = [
   ['withTenantAdmin', 'isTenantAdmin'],
   ['requireTenantAdmin', 'isTenantAdmin'],
   ['isTenantAdmin', 'isTenantAdmin'],
