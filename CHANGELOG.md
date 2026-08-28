@@ -25,6 +25,15 @@ This file is maintained automatically by
 [Conventional Commits](https://www.conventionalcommits.org/). See
 [RELEASE.md](RELEASE.md) for the release process.
 
+## [0.103.1](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.103.0...csa-inabox-v0.103.1) (2026-08-28)
+
+
+### Bug Fixes
+
+* **ci,deploy:** nine triaged defects — inert baselines, gates that cannot fire, an R7 causal claim, and a roll that reverted itself ([#4159](https://github.com/fgarofalo56/csa-inabox/issues/4159)) ([16ff0ef](https://github.com/fgarofalo56/csa-inabox/commit/16ff0efe60c6ba77f58bbc607d2fc6c2ec91aaff))
+* **ci,install:** nine defects — 15 erased changelog entries, three auto-bind gates the platform could resolve itself, and a check that could never pass on Windows ([#4162](https://github.com/fgarofalo56/csa-inabox/issues/4162)) ([6aa393f](https://github.com/fgarofalo56/csa-inabox/commit/6aa393f9522bf3de14e7418dfa37528aa1b0ddc9))
+* **ci:** the Brain scan lane died on its first-ever run, before installing anything ([#4040](https://github.com/fgarofalo56/csa-inabox/issues/4040)) ([#4157](https://github.com/fgarofalo56/csa-inabox/issues/4157)) ([5a219ef](https://github.com/fgarofalo56/csa-inabox/commit/5a219efc681484b974aecba6436d3ffd9f48358e))
+
 ## [0.103.0](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.102.0...csa-inabox-v0.103.0) (2026-08-28)
 
 
