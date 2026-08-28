@@ -724,6 +724,22 @@ export const WATCHED = [
       // gates whether the apply proceeds at all — the #3449 defect, ported to
       // this lane so GCC does not carry it unmitigated (cloud-parity.md).
       'scripts/ci/ensure-adx-cluster-running.mjs',
+      // ── #3948, ported to this lane by #4098 ───────────────────────────────
+      // The AAS preflight, watched here for exactly the reason the Commercial
+      // entry gives: it MUTATES the estate. It resumes a Paused Analysis
+      // Services server so `admin-plane` can write its asAdministrators, it can
+      // REFUSE the apply outright on a state no resume resolves, and its
+      // `aas_resumed` output gates this lane's always() re-suspend — so a
+      // change to it can also leave an S1 billing after the job ends. It is NOT
+      // CI_PLUMBING (the plumbing loans are all "shapes how a run behaves,
+      // deploys nothing"); this one issues `az resource invoke-action --action
+      // resume` against a live server.
+      //
+      // GCC needs it BECAUSE it is exposed by default, not by choice:
+      // main.bicep defaults `aasEnabled` true and params/gcc.bicepparam sets it
+      // nowhere, while gcc-high/il5 set it false. Its only repo-relative import,
+      // scripts/ci/_az-failure-class.mjs, is already listed below.
+      'scripts/ci/ensure-aas-server-settled.mjs',
       // The shared rule it imports to tell "definitely absent" from "I could not
       // read it". HAND-LISTED, and the distinction matters: it is `import`ed, not
       // `node`-invoked, so it is NOT a mechanically-detected source even with the
