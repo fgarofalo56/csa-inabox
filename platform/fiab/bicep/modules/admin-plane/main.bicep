@@ -227,8 +227,8 @@ type functionAppsConfigT = {
 param functionAppsConfig functionAppsConfigT = {}
 
 type adxConfigT = {
-  @description('ADX cluster SKU. Dev SKU is ~$140/mo.')
-  adxSkuName: ('Dev(No SLA)_Standard_E2a_v4' | 'Dev(No SLA)_Standard_D11_v2' | 'Standard_E2a_v4' | 'Standard_E4a_v4' | 'Standard_E8a_v4' | 'Standard_E16a_v4' | 'Standard_E2ads_v5' | 'Standard_E4ads_v5')?
+  @description('ADX cluster SKU. Dev(No SLA) SKUs are ~$140/mo and are COMMERCIAL-ONLY — Azure Government offers no Dev/Basic-tier ADX SKU in usgovvirginia or usgovarizona (MEASURED 2026-08-27, gov-adx-sku-probe run 33120409251). The six Standard_E*as_v5 / E80ids_v4 entries are the intersection of what both Gov regions offer. Standard tier has a 2-node minimum, so a Gov cluster costs two instances, not one (#4141, #4072).')
+  adxSkuName: ('Dev(No SLA)_Standard_E2a_v4' | 'Dev(No SLA)_Standard_D11_v2' | 'Standard_E2a_v4' | 'Standard_E4a_v4' | 'Standard_E8a_v4' | 'Standard_E16a_v4' | 'Standard_E2ads_v5' | 'Standard_E4ads_v5' | 'Standard_E8as_v5+1TB_PS' | 'Standard_E8as_v5+2TB_PS' | 'Standard_E16as_v5+3TB_PS' | 'Standard_E16as_v5+4TB_PS' | 'Standard_E80ids_v4' | 'Standard_E80ids_v4+32TB_PS')?
 
   @description('Enable ADX optimized auto-scale. Requires a Standard-tier adxSkuName (Basic/Dev SKUs reject it).')
   adxEnableOptimizedAutoscale: bool?
@@ -3563,15 +3563,49 @@ module apim 'apim.bicep' = if (apimEnabled && empty(existingApimName)) {
 // ADX SKU boundary guard. The Commercial default (Dev(No SLA)_Standard_E2a_v4)
 // is backed by the E2a_v4 VM, which is NOT offered in usgovvirginia — a LIVE
 // `az deployment sub create` there (2026-07-10) failed the cluster with
-// `Standard_E2a_v4 is not supported in usgovvirginia`. When a Gov boundary
-// (GCC-High / IL5) is left on that default, substitute the LIVE-verified Gov Dev
-// SKU Dev(No SLA)_Standard_D11_v2 — the tier-preserving 1:1 swap (both Dev(No
-// SLA) / Basic tier, single node, ~$140/mo, no optimizedAutoscale), so no other
-// cluster param changes. An operator who sets adxSkuName explicitly (e.g. a
-// production Standard_E2ads_v5 in Gov) passes through unchanged. Commercial / GCC
-// never enter this branch, so their SKU is byte-identical.
-var effectiveAdxSkuName = (boundary == 'GCC-High' || boundary == 'IL5') && adxSkuName == 'Dev(No SLA)_Standard_E2a_v4'
-  ? 'Dev(No SLA)_Standard_D11_v2'
+// `Standard_E2a_v4 is not supported in usgovvirginia`.
+//
+// THIS GUARD USED TO SUBSTITUTE Dev(No SLA)_Standard_D11_v2, described here as
+// the "LIVE-verified Gov Dev SKU" and a tier-preserving 1:1 swap. That is no
+// longer true, and the guard was therefore steering Gov INTO the failure it
+// exists to prevent. MEASURED 2026-08-27 (gov-adx-sku-probe, Actions run
+// 33120409251, in-boundary): usgovvirginia offers 9 ADX SKUs and usgovarizona
+// 14, ALL Standard tier, none restricted — Azure Government offers NO
+// Dev(No SLA)/Basic-tier ADX SKU AT ALL. The live cluster adx-csa-loom-fmezxj
+// sat Stopped at D11_v2, could not be started for want of capacity in a SKU the
+// region no longer lists, and took deploy-fiab-gcch red for 17 consecutive
+// scheduled runs from 2026-08-11 (#4072).
+//
+// So the substitution target is now Standard_E8as_v5+1TB_PS, chosen by the
+// operator from the measured list. It is one of the SIX SKUs offered in BOTH
+// usgovvirginia and usgovarizona, so a usgovarizona fallback needs no second
+// decision.
+//
+// THIS IS NOT A TIER-PRESERVING SWAP, and nothing can make it one — there is no
+// Dev tier in Gov to preserve. Consequences, all deliberate:
+//   * tier becomes Standard and capacity 2 (adx-cluster.bicep derives both from
+//     skuName). Standard is a documented 2-node minimum, so the Gov cluster
+//     costs two instances where the Dev node cost one.
+//   * adxEnableOptimizedAutoscale becomes LEGAL on Gov (ARM rejects it on Basic
+//     tier). It still defaults to FALSE. Turning it on adopts the min=2/max=10
+//     defaults, so review those first or the bill moves again.
+//
+// The condition is `startsWith(adxSkuName, 'Dev(No SLA)_')`, not equality with
+// the Commercial default. Equality left a hole: setting adxSkuName explicitly to
+// the OTHER Dev SKU on a Gov boundary passed straight through to a SKU the
+// region does not offer. Since no Dev SKU exists in Gov, every one of them must
+// be substituted, not just the default.
+//
+// An operator who sets a non-Dev adxSkuName explicitly still passes through
+// unchanged. Commercial / GCC never enter this branch, so their SKU is
+// byte-identical.
+//
+// NOTE FOR ANYONE EDITING THE NEXT TWO LINES: gov-adx-sku-probe.yml extracts the
+// substituted SKU with `grep -A 1 '^var effectiveAdxSkuName'` and a sed keyed to
+// a line of exactly `  ? '<value>'`. Keep that shape or the probe fails closed
+// (which is the correct failure, but it stops measuring).
+var effectiveAdxSkuName = (boundary == 'GCC-High' || boundary == 'IL5') && startsWith(adxSkuName, 'Dev(No SLA)_')
+  ? 'Standard_E8as_v5+1TB_PS'
   : adxSkuName
 
 module adxCluster 'adx-cluster.bicep' = if (adxEnabled && empty(existingAdxClusterName)) {

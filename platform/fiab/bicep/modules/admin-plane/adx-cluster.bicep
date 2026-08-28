@@ -27,26 +27,58 @@ param location string
 @description('Cluster name (admin-plane shared). ADX cluster names are GLOBALLY-unique DNS names, so the default is suffixed with a per-subscription uniqueString — this lets a new tenant/DMLZ estate coexist with an older hub (e.g. during a clean-rebuild migration) without colliding on `adx-csa-loom-shared`. The DLZ landing-zone module derives the same per-sub name in its `adminPlaneAdxClusterName` default (single-sub/tenant paths share the subscription); cross-sub consumers (dlz-attach, multi-sub fan-out) must instead receive the real deployed name via the hub output / LOOM_ADMIN_ADX_CLUSTER.')
 param clusterName string = 'adx-csa-loom-${take(uniqueString(subscription().id), 6)}'
 
-@description('SKU name. The E*a_v4 family is the Commercial default; the E*ads_v5 family is the LIVE-verified Azure Government (usgovvirginia) equivalent (the v4 family is not offered there). Dev(No SLA)_Standard_D11_v2 is the Gov-available Dev SKU used as the tier-preserving substitute for the Commercial Dev default on GCC-High / IL5 (see admin-plane/main.bicep effectiveAdxSkuName).')
+@description('SKU name. The E*a_v4 family is the Commercial default. The Gov entries below were MEASURED against the Kusto RP in Azure Government on 2026-08-27 (gov-adx-sku-probe, run 33120409251) — not carried forward from a prior note. usgovvirginia offers 9 SKUs and usgovarizona 14; the six listed here are the intersection, i.e. the ones that work in EVERY Gov region this estate targets, so one value needs no second regional decision. CRITICAL: Azure Government offers NO Dev(No SLA)/Basic-tier ADX SKU in either region, so the two Dev entries are COMMERCIAL-ONLY and a Gov deploy that lands on one cannot start (#4141, #4072).')
 @allowed([
+  // Commercial only. Neither is offered in any Azure Government region — see above.
   'Dev(No SLA)_Standard_E2a_v4'
   'Dev(No SLA)_Standard_D11_v2'
   'Standard_E2a_v4'
   'Standard_E4a_v4'
   'Standard_E8a_v4'
   'Standard_E16a_v4'
-  // LIVE-verified available in usgovvirginia (Azure Government) 2026-07-10.
+  // These two were recorded as "LIVE-verified available in usgovvirginia
+  // 2026-07-10". The 2026-08-27 enumeration does NOT list either of them in
+  // usgovvirginia or usgovarizona. Kept so an existing deployment that pinned
+  // one still compiles, but they must NOT be treated as Gov-available.
   'Standard_E2ads_v5'
   'Standard_E4ads_v5'
+  // MEASURED 2026-08-27, offered in BOTH usgovvirginia and usgovarizona.
+  // All are Standard tier — see skuTier/skuCapacity below for why that is not
+  // a free swap.
+  'Standard_E8as_v5+1TB_PS'
+  'Standard_E8as_v5+2TB_PS'
+  'Standard_E16as_v5+3TB_PS'
+  'Standard_E16as_v5+4TB_PS'
+  'Standard_E80ids_v4'
+  'Standard_E80ids_v4+32TB_PS'
 ])
 param skuName string = 'Dev(No SLA)_Standard_E2a_v4'
 
-@description('Tier — Basic for Dev SKUs, Standard for the production SKUs.')
+// TIER AND CAPACITY ARE DERIVED FROM skuName, NOT INDEPENDENTLY DEFAULTED.
+//
+// They used to default to 'Basic' / 1 unconditionally, and admin-plane/main.bicep
+// — the ONLY caller — passes neither. So the moment skuName moved to a Standard
+// SKU, this module would have emitted `sku: { name: 'Standard_…', tier: 'Basic',
+// capacity: 1 }`, which ARM rejects: `tier` is a required field whose value must
+// match the SKU family. Fixing the Gov SKU without this would have traded one
+// deploy failure for a different one, on a lane that is already red.
+//
+// Deriving the DEFAULT from skuName makes that mismatch unrepresentable while
+// leaving both params as explicit overrides for a caller that needs one.
+//
+// Capacity 2, not 1, for Standard: per Microsoft's own SKU guidance a
+// Production (with SLA) cluster "contains at least two nodes for the engine
+// cluster", while Dev/Test (no SLA) is single-node. So moving Gov off the Dev
+// tier is a 2-NODE minimum, not a like-for-like node swap — the cost floor is
+// two instances of the chosen SKU. That is a deliberate, disclosed consequence
+// of Azure Government offering no Dev-tier ADX SKU at all.
+@description('Tier. DERIVED from skuName by default — Basic for Dev(No SLA) SKUs, Standard otherwise. Override only with a reason.')
 @allowed(['Basic', 'Standard'])
-param skuTier string = 'Basic'
+param skuTier string = startsWith(skuName, 'Dev(No SLA)_') ? 'Basic' : 'Standard'
 
-@description('Capacity (instance count). 1 for Dev SKUs.')
-param skuCapacity int = 1
+@description('Capacity (instance count). DERIVED from skuName by default — 1 for Dev(No SLA) SKUs, 2 for Standard tier, which is the documented minimum node count for a production (with SLA) cluster.')
+@minValue(1)
+param skuCapacity int = startsWith(skuName, 'Dev(No SLA)_') ? 1 : 2
 
 @description('Enable optimized auto-scale on the cluster. Must be false for Dev(No SLA)/Basic-tier SKUs (ARM rejects optimizedAutoscale on Basic tier).')
 param enableOptimizedAutoscale bool = false
