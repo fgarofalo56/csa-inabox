@@ -8,7 +8,12 @@ about a mock returning a canned object.
 
 from __future__ import annotations
 
+import http.server
 import json
+import threading
+import urllib.error
+import urllib.request
+from io import BytesIO
 
 import pytest
 
@@ -22,6 +27,7 @@ from csa_loom import (
     LoomRateLimitError,
     LoomTransportError,
     UrllibTransport,
+    _transport,
 )
 from csa_loom._paths import expand
 from csa_loom.testing import StubTransport
@@ -220,3 +226,156 @@ def test_non_http_schemes_are_refused() -> None:
     transport = UrllibTransport()
     with pytest.raises(LoomTransportError, match="refusing to open"):
         transport.send("GET", "file:///etc/passwd", headers={}, body=None, timeout=1.0)
+
+
+# --------------------------------------------------------------------------- #
+# #3717 — the credential-safe opener
+# --------------------------------------------------------------------------- #
+#
+# THE VECTOR. `UrllibTransport.send` carries `Authorization: Bearer <token>` on
+# every authenticated call. Until #3717 it handed the Request to
+# `urllib.request.urlopen`, the DEFAULT GLOBAL OPENER, whose
+# `HTTPRedirectHandler.redirect_request` rebuilds the Request copying EVERY
+# header except content-length/content-type — urllib does not strip
+# `Authorization` across a host change the way `requests` does. So
+# `302 -> http://attacker/loot` from a hostile upstream handed out the token,
+# and the call SUCCEEDED, so nothing raised and nothing was logged.
+#
+# The scheme check in `ALLOWED_SCHEMES` never covered this: it validates the URL
+# the SDK BUILDS, not the redirect target. The comment that claimed otherwise is
+# corrected in `_transport.py`.
+
+
+def test_the_transport_opener_has_no_ftp_file_or_data_route() -> None:
+    # `build_opener(HTTPHandler, HTTPSHandler, HTTPRedirectHandler)` does NOT
+    # produce this — its arguments only DE-DUPLICATE the default handler set and
+    # ftp/file/data stay installed. That is why the list is built explicitly.
+    routes = set(_transport._OPENER.handle_open)
+    assert "ftp" not in routes
+    assert "file" not in routes
+    assert "data" not in routes
+    assert "http" in routes
+
+
+def test_an_ftp_proxy_env_var_cannot_re_register_the_ftp_route(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # `ProxyHandler.__init__` registers a `<scheme>_open` for EVERY key in the
+    # proxies dict and the default `ProxyHandler()` reads `getproxies()`, so one
+    # `ftp_proxy` puts the route back — and it fails OPEN, re-dispatching to the
+    # proxy over HTTP with the headers intact.
+    monkeypatch.setenv("ftp_proxy", "http://127.0.0.1:9")
+    assert "ftp" not in set(_transport._http_only_opener().handle_open)
+
+
+def test_a_cross_host_redirect_is_refused_rather_than_followed() -> None:
+    handler = _transport._SameOriginRedirectHandler()
+    req = urllib.request.Request(
+        "https://loom.example.gov/api/v1/workspaces",
+        headers={"Authorization": "Bearer loom_pat_abc_secret"},
+    )
+    with pytest.raises(urllib.error.HTTPError, match="refusing cross-origin redirect"):
+        handler.redirect_request(req, BytesIO(b""), 302, "Found", {}, "https://attacker.invalid/loot")
+
+
+def test_a_scheme_downgrade_and_a_port_change_are_both_refused() -> None:
+    handler = _transport._SameOriginRedirectHandler()
+    base = urllib.request.Request("https://loom.example.gov/api/v1/workspaces")
+    for target in (
+        "http://loom.example.gov/api/v1/workspaces",
+        "https://loom.example.gov:8443/api/v1/workspaces",
+    ):
+        with pytest.raises(urllib.error.HTTPError, match="refusing cross-origin redirect"):
+            handler.redirect_request(base, BytesIO(b""), 302, "Found", {}, target)
+
+
+def test_a_same_origin_redirect_is_still_followed() -> None:
+    # Without this the guard is indistinguishable from an SDK that cannot follow
+    # redirects at all, and trailing-slash normalisation is routine.
+    handler = _transport._SameOriginRedirectHandler()
+    req = urllib.request.Request("https://loom.example.gov/api/v1/workspaces")
+    redirected = handler.redirect_request(
+        req, BytesIO(b""), 302, "Found", {}, "https://loom.example.gov/api/v1/workspaces/"
+    )
+    assert redirected is not None
+    assert redirected.full_url == "https://loom.example.gov/api/v1/workspaces/"
+
+
+def test_the_stdlib_handler_would_have_leaked_the_token() -> None:
+    # THE COUNTERFACTUAL. Without it the assertions above prove only that the new
+    # handler refuses something, not that what it refuses was ever a leak.
+    req = urllib.request.Request(
+        "https://loom.example.gov/api/v1/workspaces",
+        headers={"Authorization": "Bearer loom_pat_abc_secret"},
+    )
+    leaked = urllib.request.HTTPRedirectHandler().redirect_request(
+        req, BytesIO(b""), 302, "Found", {}, "https://attacker.invalid/loot"
+    )
+    assert leaked is not None
+    assert leaked.full_url.startswith("https://attacker.invalid/")
+    assert leaked.get_header("Authorization") == "Bearer loom_pat_abc_secret"
+
+
+def test_a_live_cross_host_redirect_never_reaches_the_attacker() -> None:
+    """End-to-end over real sockets: the token must not arrive next door.
+
+    The assertion is on the ATTACKER's log, not only on the SDK's exception — an
+    exception can be raised for any reason; the empty log is what proves nothing
+    was sent.
+    """
+    received: list[str | None] = []
+
+    class Attacker(http.server.BaseHTTPRequestHandler):
+        def do_GET(self) -> None:
+            received.append(self.headers.get("Authorization"))
+            self.send_response(200)
+            self.end_headers()
+            self.wfile.write(b"{}")
+
+        def log_message(self, *_args: object) -> None:
+            pass
+
+    attacker = http.server.HTTPServer(("127.0.0.1", 0), Attacker)
+    attacker_port = attacker.server_address[1]
+
+    class Origin(http.server.BaseHTTPRequestHandler):
+        def do_GET(self) -> None:
+            self.send_response(302)
+            self.send_header("Location", f"http://127.0.0.1:{attacker_port}/loot")
+            self.end_headers()
+
+        def log_message(self, *_args: object) -> None:
+            pass
+
+    origin = http.server.HTTPServer(("127.0.0.1", 0), Origin)
+    for srv in (attacker, origin):
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
+    # THE OUTCOME IS CAPTURED, NOT ASSERTED INLINE. With `with pytest.raises(…)`
+    # here, a regression that re-followed the redirect fails on "DID NOT RAISE"
+    # and the attacker-log assertion never runs — red for the weaker reason,
+    # with the actual evidence unread.
+    outcome: object = None
+    try:
+        transport = UrllibTransport()
+        try:
+            outcome = transport.send(
+                "GET",
+                f"http://127.0.0.1:{origin.server_address[1]}/api/v1/workspaces",
+                headers={"Authorization": "Bearer loom_pat_abc_secret"},
+                body=None,
+                timeout=5.0,
+            )
+        except LoomTransportError as exc:
+            outcome = exc
+    finally:
+        for srv in (attacker, origin):
+            srv.shutdown()
+            srv.server_close()
+
+    assert received == [], f"the bearer token reached the attacker: {received!r}"
+    # A LoomTransportError, NOT a `Response(status=302)`. The refusal is the
+    # transport declining to send a second request; rendering it as a server
+    # response would give the caller a status to branch on and discard the
+    # reason (R7). See `CrossOriginRedirectRefused`.
+    assert isinstance(outcome, LoomTransportError), f"the redirect was followed: {outcome!r}"
+    assert "refusing cross-origin redirect" in str(outcome)
