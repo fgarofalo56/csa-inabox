@@ -154,11 +154,34 @@ describe('mdTableCell — the cell cannot be broken out of', () => {
     // the DEFECT, quoted verbatim so the corpus below can prove it broken. The
     // fixed encoder is `mdTableCell`, asserted two tests above.
     //
-    // It is annotated AND dismissed on the alert list rather than left standing:
-    // a permanent HIGH in a public repository's alert list is how an alert list
-    // stops being read, which is the failure mode this whole lane exists to
-    // prevent, one surface over. Deleting the control instead would be worse —
-    // it is the only thing that distinguishes the fix from the bug.
+    // Deleting the control instead would be worse — it is the only thing that
+    // distinguishes the fix from the bug. And leaving the alert standing would
+    // be worse still: a permanent HIGH in a public repository's alert list is
+    // how an alert list stops being read, which is the failure mode this whole
+    // lane exists to prevent, one surface over.
+    //
+    // ── WHAT ACTUALLY RETIRES THE ALERT, AND IT IS NOT THE MARKER BELOW ────
+    // An earlier revision of this comment asserted the alert "is annotated AND
+    // dismissed". The annotation was real; the dismissal had not happened, and
+    // the marker alone would never have produced it — a claim stated as fact
+    // that the code had not established, which is the R7 violation this whole
+    // PR is about, committed inside the fix for it.
+    //
+    // MEASURED: `.github/workflows/codeql.yml` runs NO suppression-consuming
+    // step. Its only `query-filters:` entry EXCLUDES a query from the set that
+    // RUNS, which is a different mechanism and does not read these markers. So
+    // on GitHub this comment does not retire anything by itself — alert 993 was
+    // raised 2026-08-25 and was still `open` after the marker was added.
+    //
+    // The authoritative disposition is therefore an API dismissal carrying this
+    // reasoning: alert 993 is dismissed as `used in tests` (2026-08-28). That is
+    // the same conclusion #3985 reached for `scripts/measure/measure.mjs`, whose
+    // marker carries the identical caveat — see that file for the precedent.
+    //
+    // The marker stays: it is placed per the CodeQL convention (the line BEFORE
+    // the alert), it becomes load-bearing if the workflow ever gains a
+    // suppression-consuming step, and the reasoning belongs next to the code
+    // either way. It is documentation, not a control.
     // codeql[js/incomplete-sanitization]
     const original = (s: string) => s.replace(/\|/g, '\\|');
     const broken = PAYLOADS.filter((p) => {
