@@ -77,7 +77,12 @@ import {
   type SinkHit,
 } from './sinks';
 import { classifyConsumption, consumingWrappersIn } from './consumption';
-import { assertEveryCandidateJudged } from './population-contract';
+import {
+  assertEveryCandidateJudged,
+  assertEveryEmitAccounted,
+  type EmitLedgerEntry,
+  type NoEmitReason,
+} from './population-contract';
 
 export interface RouteExtraction {
   readonly nodes: readonly SecurityNode[];
@@ -228,6 +233,14 @@ export function extractRouteNodes(
   const candidates: string[] = [];
   const judged: string[] = [];
 
+  // THE PER-NODE LEDGER (#4027). One entry per `(file, handler, emit kind)`
+  // triple the loop ATTEMPTS, whether or not anything came out. The denominator
+  // is the handler enumeration `findExportedHandlers` already returns, crossed
+  // with the two emit kinds — so a narrowing inside an emit, below the file loop
+  // and after the file is already counted as judged, has a row that goes
+  // unaccounted instead of disappearing into a balanced per-file count.
+  const emitLedger: EmitLedgerEntry[] = [];
+
   for (const file of files) {
     const routePath = routePathOf(file.path);
     // NOT a skip: a module that is not an `app/**/route.ts` was never in this
@@ -267,7 +280,13 @@ export function extractRouteNodes(
       const callerNamed = [...dynamicSegments, ...queryIds];
       const sinkKinds = distinctSinkKinds(sinks);
 
-      emitAuthorizer({
+      // #4027 — THE COUNT COMES FROM THE OUTPUT ARRAY, NEVER FROM THE RETURN
+      // VALUE. `nodes.length` is read either side of each emit, so an emit that
+      // returns a reason while having pushed nodes — or, the shape this closes,
+      // one mutated to `return;` and push nothing — cannot balance the ledger by
+      // asserting something about itself. The ledger never takes the emit's word.
+      const beforeAuthorizer = nodes.length;
+      const authorizerReason = emitAuthorizer({
         nodes,
         file,
         routePath,
@@ -278,14 +297,38 @@ export function extractRouteNodes(
         callerNamed,
         dynamicSegments,
       });
+      emitLedger.push({
+        subject: `${file.path}#${handler.method}:authorizer`,
+        emitted: nodes.length - beforeAuthorizer,
+        reason: authorizerReason,
+      });
 
-      emitVerdictCalls({ nodes, file, routePath, handler, sinks, sinkKinds, allowlisted });
+      const beforeVerdict = nodes.length;
+      const verdictReason = emitVerdictCalls({
+        nodes,
+        file,
+        routePath,
+        handler,
+        sinks,
+        sinkKinds,
+        allowlisted,
+      });
+      emitLedger.push({
+        subject: `${file.path}#${handler.method}:verdict-call`,
+        emitted: nodes.length - beforeVerdict,
+        reason: verdictReason,
+      });
     }
 
     judged.push(file.path);
   }
 
   assertEveryCandidateJudged('extractRouteNodes', candidates, judged);
+  // The PER-NODE half (#4027). `assertEveryCandidateJudged` above is per-FILE and
+  // balances happily while an emit below the loop drops every node it should have
+  // produced — measured at 920 -> 722 nodes with an identical digest, identical
+  // filesScanned and identical skipped. This is the denominator that moves.
+  assertEveryEmitAccounted('extractRouteNodes', emitLedger);
 
   return { nodes, skipped, filesMatched: candidates.length };
 }
@@ -302,14 +345,24 @@ interface AuthorizerArgs {
   dynamicSegments: readonly string[];
 }
 
-function emitAuthorizer(a: AuthorizerArgs): void {
+/**
+ * Emit the authorizer node for one handler, or say why there is none (#4027).
+ *
+ * RETURNS A REASON RATHER THAN `void`. The caller records the outcome in the
+ * per-emit ledger, and the ledger cross-checks it against the actual growth of
+ * `nodes` — so this return value is a CLAIM the caller verifies, not a fact the
+ * caller trusts. A future `return;` inserted at the top of this function yields
+ * `undefined`, which is neither a node nor a declared reason, and
+ * `assertEveryEmitAccounted` refuses the extraction.
+ */
+function emitAuthorizer(a: AuthorizerArgs): NoEmitReason | null {
   const predicates: string[] = [];
   for (const [spelling, predicate] of ADMIN_CLAIM_SPELLINGS) {
     if (new RegExp(`\\b${spelling}\\b`).test(a.handler.body) && !predicates.includes(predicate)) {
       predicates.push(predicate);
     }
   }
-  if (predicates.length === 0) return;
+  if (predicates.length === 0) return 'no-admin-claim-spelling';
 
   const { implied, resolver } = impliedByOwns(a.handler.body, a.wrappers, a.sinks);
 
@@ -344,6 +397,7 @@ function emitAuthorizer(a: AuthorizerArgs): void {
     label: `${a.handler.method} ${a.routePath}`,
     facet,
   });
+  return null;
 }
 
 interface VerdictArgs {
@@ -356,7 +410,13 @@ interface VerdictArgs {
   allowlisted: boolean;
 }
 
-function emitVerdictCalls(v: VerdictArgs): void {
+/**
+ * Emit one verdict-call node per verdict call in the handler, or say there were
+ * none (#4027). Same contract as {@link emitAuthorizer}: the returned reason is a
+ * claim the caller cross-checks against the growth of `nodes`.
+ */
+function emitVerdictCalls(v: VerdictArgs): NoEmitReason | null {
+  let emitted = 0;
   for (const call of findVerdictCalls(v.handler.body)) {
     const consumption = classifyConsumption(v.handler.body, call.index);
 
@@ -396,5 +456,7 @@ function emitVerdictCalls(v: VerdictArgs): void {
       label: `${v.handler.method} ${v.routePath} -> ${call.name}`,
       facet,
     });
+    emitted += 1;
   }
+  return emitted > 0 ? null : 'no-verdict-call';
 }
