@@ -131,6 +131,11 @@ export function classifyEstate(probe: ProbeResult, ctx: ClassifyContext): ScanVe
     cloud: ctx.cloud,
     estateId: ctx.estateId,
     scope: probe.scope,
+    // S4 (#4014 review) — the retry count rides on EVERY verdict, not only the
+    // red ones. A retried-then-succeeded run is the interesting case: it is the
+    // only observable difference between a healthy estate and one that is
+    // degrading toward the night the retries run out.
+    ...(probe.retries === undefined ? {} : { retries: probe.retries }),
   } as const;
 
   // ── 1. a reach failure. RED, and the only branch that says "could not reach".

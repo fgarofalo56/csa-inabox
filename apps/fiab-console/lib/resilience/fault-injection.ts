@@ -273,7 +273,23 @@ export function _faultAuditSinkForTest(): FaultAuditSink | null {
  *  Never throws — a drill injection is never blocked by its own audit. */
 function auditInjection(rec: InjectionRecord, armedBy: string): void {
   const sink = auditSink;
-  if (!sink) return;
+  if (!sink) {
+    // ── N8 (#4014 review) — AN AUDIT CONTROL MUST NOT NO-OP SILENTLY ───────
+    // `armFault`'s sole caller is the gated chaos route, which wires the sink at
+    // module load, so this branch is unreachable today (verified by grep, and
+    // asserted by `__tests__/fault-audit-sink-wiring.test.ts`). It becomes
+    // reachable the moment a second arming path appears without the wiring —
+    // and the failure would be a fault injected into a production dependency
+    // with NOTHING in the audit trail. A control that stops watching must say
+    // so; `console.warn` is the one surface available here, because this module
+    // deliberately holds zero static imports (see the note above).
+    console.warn(
+      `[resilience] chaos fault injected at '${rec.point}' (armed by ${armedBy}) with NO ` +
+        'audit sink wired — the injection HAPPENED and is NOT recorded in the audit ' +
+        'stream. Wire the sink via setInjectionAuditSink() from whatever armed this fault.',
+    );
+    return;
+  }
   try {
     sink({
       actorOid: 'system:dependency-chaos',

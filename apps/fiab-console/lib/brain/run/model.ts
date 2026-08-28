@@ -189,6 +189,18 @@ export interface ProbeResult {
   readonly discovered: number;
   /** Plain-English scope, e.g. "Loom Container Apps in 1 subscription". */
   readonly scope: string;
+  /**
+   * How many requests were RETRIED on a transient condition (429, 5xx, or no
+   * response) during this pass.
+   *
+   * Carried out of the probe and rendered with the verdict (review S4 on #4014).
+   * A lane with bounded retry and no retry COUNT smooths an intermittently
+   * failing path into a run that looks identical to a healthy one — the estate
+   * is degrading, every night is green, and the first visible symptom is the
+   * night the retries run out. Optional so a fixture that does not model
+   * transport need not state it; `undefined` means "not measured", not "zero".
+   */
+  readonly retries?: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -246,6 +258,14 @@ interface VerdictBase {
   readonly scope: string;
   /** Operator-readable, and TRUE — see the R7 note in this file's header. */
   readonly message: string;
+  /**
+   * Transient-condition retries the probe performed to reach this verdict.
+   *
+   * Rendered whenever it is above zero. See {@link ProbeResult.retries} for why
+   * a bounded-retry lane that hides its retry count is worse than one with no
+   * retry at all.
+   */
+  readonly retries?: number;
 }
 
 /**

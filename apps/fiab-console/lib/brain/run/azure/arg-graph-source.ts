@@ -49,6 +49,14 @@ import {
 import type { GraphSource, GraphSourceResult } from '../ports';
 import type { ProbeFailure } from '../model';
 import type { FetchLike } from './arm-probe';
+import {
+  DEFAULT_RETRY_POLICY,
+  fetchWithBoundedRetry,
+  readJsonBody,
+  readTextBody,
+  requireTotalRecords,
+  type RetryPolicy,
+} from './http';
 
 const RESOURCE_GRAPH_API = '2022-10-01';
 const PAGE_SIZE = 1000;
@@ -139,6 +147,14 @@ export interface ArgGraphSourceOptions {
   /** From `app/api/admin/brain/_lib/wire-bindings.ts`. Never re-declared here. */
   readonly bindings: readonly WireBindingRow[];
   readonly subscriptions?: readonly string[];
+  /**
+   * Bounded retry for transient ARG conditions (429, 5xx, no response).
+   *
+   * `deploy-integrity.md` R6, review S4 on #4014. Optional; defaults to
+   * {@link DEFAULT_RETRY_POLICY}. The graph pull is the SECOND ARG query a run
+   * issues, so it is the one most likely to meet the rolling per-user throttle.
+   */
+  readonly retryPolicy?: RetryPolicy;
 }
 
 /** Build the live graph from a Resource Graph pull. */
@@ -240,22 +256,33 @@ export class ArgGraphSource implements GraphSource {
       }
 
       const url = `${base}/providers/Microsoft.ResourceGraph/resources?api-version=${RESOURCE_GRAPH_API}`;
-      const res = await this.opts.fetchImpl(url, {
-        method: 'POST',
-        headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
-        body: JSON.stringify({
-          query: GRAPH_QUERY,
-          options: {
-            resultFormat: 'objectArray',
-            $top: PAGE_SIZE,
-            ...(skipToken ? { $skipToken: skipToken } : {}),
-          },
-          ...(this.opts.subscriptions?.length ? { subscriptions: this.opts.subscriptions } : {}),
-        }),
+      const attempt = await fetchWithBoundedRetry({
+        fetchImpl: this.opts.fetchImpl,
+        url,
+        init: {
+          method: 'POST',
+          headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+          body: JSON.stringify({
+            query: GRAPH_QUERY,
+            options: {
+              resultFormat: 'objectArray',
+              $top: PAGE_SIZE,
+              ...(skipToken ? { $skipToken: skipToken } : {}),
+            },
+            ...(this.opts.subscriptions?.length ? { subscriptions: this.opts.subscriptions } : {}),
+          }),
+        },
+        stage: 'discovery',
+        target: `Microsoft.ResourceGraph/resources (page ${pages + 1})`,
+        policy: this.opts.retryPolicy ?? DEFAULT_RETRY_POLICY,
       });
+      if (!attempt.ok) {
+        throw new GraphCollectionError(attempt.failure);
+      }
+      const res = attempt.res;
 
       if (!res.ok) {
-        const body = await res.text();
+        const body = await readTextBody(res);
         throw new GraphCollectionError({
           stage: 'discovery',
           target: `Microsoft.ResourceGraph/resources (page ${pages + 1})`,
@@ -265,7 +292,20 @@ export class ArgGraphSource implements GraphSource {
         });
       }
 
-      const json = (await res.json()) as {
+      // S2 (#4014 review) — a 200 whose body is not JSON reached this line as an
+      // unguarded rejection, which escaped the collector entirely and landed on
+      // the CLI's "a defect in the scan" arm. It is a fact about the estate's
+      // network path, so it becomes a named GraphCollectionError like every
+      // other transport outcome here.
+      const parsed = await readJsonBody(
+        res,
+        'discovery',
+        `Microsoft.ResourceGraph/resources (page ${pages + 1})`,
+      );
+      if (!parsed.ok) {
+        throw new GraphCollectionError(parsed.failure);
+      }
+      const json = (parsed.value ?? {}) as {
         data?: unknown;
         totalRecords?: unknown;
         $skipToken?: unknown;
@@ -283,17 +323,23 @@ export class ArgGraphSource implements GraphSource {
       skipToken = next;
     }
 
-    if (totalRecords !== null && totalRecords !== rows.length) {
+    // S3 (#4014 review) — the completeness cross-check must also fail when it
+    // could not RUN. `totalRecords` absent left this comparison executing zero
+    // times while the pull proceeded to build a graph over a possibly-partial
+    // estate: a control that is present and measures nothing.
+    const completeness = requireTotalRecords(
+      totalRecords,
+      rows.length,
+      pages,
+      'Microsoft.ResourceGraph/resources',
+    );
+    if (completeness !== null) {
       throw new GraphCollectionError({
-        stage: 'discovery',
-        target: 'Microsoft.ResourceGraph/resources',
-        classification: 'arm-error',
-        httpStatus: null,
+        ...completeness,
         detail:
-          `totalRecords=${totalRecords} but ${rows.length} row(s) were read across ${pages} ` +
-          'page(s). Refusing to build a graph over a partial estate: every node in the ' +
-          'unread remainder would be found with zero inbound edges, which renders a ' +
-          'page-boundary artifact as a fleet of unreachable services.',
+          `${completeness.detail} Refusing to build a graph over a partial estate: every ` +
+          'node in the unread remainder would be found with zero inbound edges, which ' +
+          'renders a page-boundary artifact as a fleet of unreachable services.',
       });
     }
 

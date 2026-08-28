@@ -43,6 +43,21 @@
  * failure mode this guards is a TEXT-LEVEL merge resolution, which is visible in
  * the source, and `az bicep build` is still run as a gate on every PR that
  * touches these files (both compiled outputs were checked by hand for this one).
+ *
+ * ── EXCEPT FOR THE ONE PROPERTY SOURCE CANNOT SHOW (added 2026-08-27) ──────
+ * The Gov data-plane grant loop is the exception, and it needs the COMPILED
+ * output — because the defect it guards is invisible in the source. That is not
+ * a hypothetical: the obvious way to extend `brainScanContainers` from one name
+ * to two is to append a string literal, and the loop's `dependsOn` was a literal
+ * `[ brainGraphVersions ]`. That combination compiles with RC=0 and ZERO
+ * diagnostics, and produces a role assignment SCOPED to `brain-findings` that
+ * waits on `brain-graph-versions` and on nothing else. Source review reads fine.
+ * Only the emitted `dependsOn` shows it.
+ *
+ * No CLI is needed, because `apps/fiab-console/deploy-templates/main.json` is a
+ * COMMITTED compiled artifact kept byte-identical to a fresh build by
+ * `scripts/ci/check-deploy-template-sync.mjs`. Asserting against it is asserting
+ * against the real emitted ARM.
  */
 
 import { readFileSync } from 'node:fs';
@@ -187,5 +202,112 @@ describe('the two cosmos modules declare the same Brain containers', () => {
     }
     expect(readFileSync(ADMIN, 'utf8')).toContain('resource brainFindings ');
     expect(readFileSync(ADMIN, 'utf8')).toContain('resource brainGraphVersions ');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// THE COMPILED-ARM GUARD — the property source review cannot see
+// ---------------------------------------------------------------------------
+
+const COMPILED_ARM = join(REPO_ROOT, 'apps/fiab-console/deploy-templates/main.json');
+
+interface ArmResource {
+  readonly type?: unknown;
+  readonly name?: unknown;
+  readonly copy?: { readonly name?: unknown; readonly count?: unknown };
+  readonly dependsOn?: unknown;
+  readonly properties?: unknown;
+}
+
+function asRecord(v: unknown): Record<string, unknown> {
+  return typeof v === 'object' && v !== null && !Array.isArray(v)
+    ? (v as Record<string, unknown>)
+    : {};
+}
+
+/**
+ * Every resource in the template, descending into nested deployments.
+ *
+ * `resources` is a LIST in classic templates and a DICT keyed by symbolic name
+ * in newer ones; both shapes appear in this artifact, and a walker that handled
+ * only one would range over a fraction of the template and report a confident
+ * green over it.
+ */
+function* armResources(node: unknown): Generator<ArmResource> {
+  const res = asRecord(node).resources;
+  const list: unknown[] = Array.isArray(res)
+    ? res
+    : typeof res === 'object' && res !== null
+      ? Object.values(res)
+      : [];
+  for (const r of list) {
+    if (typeof r !== 'object' || r === null) continue;
+    yield r as ArmResource;
+    const tmpl = asRecord(asRecord(r).properties).template;
+    if (typeof tmpl === 'object' && tmpl !== null) yield* armResources(tmpl);
+  }
+}
+
+describe('the compiled ARM orders each Brain grant after the container it scopes to', () => {
+  const template: unknown = JSON.parse(readFileSync(COMPILED_ARM, 'utf8'));
+  const all = [...armResources(template)];
+  const grantLoops = all.filter(
+    (r) =>
+      typeof r.type === 'string' &&
+      r.type.endsWith('databaseAccounts/sqlRoleAssignments') &&
+      r.copy?.name === 'brainScanDataAssignments',
+  );
+
+  it('has a NON-EMPTY population to examine', () => {
+    // The walker is the thing most likely to be silently wrong here (two
+    // `resources` shapes, arbitrary nesting depth), and a walker that found
+    // nothing would pass every assertion below vacuously.
+    expect(all.length).toBeGreaterThan(100);
+    expect(grantLoops.length, 'the brainScanDataAssignments copy loop').toBe(1);
+  });
+
+  it.each(SHIPPED_BRAIN_CONTAINERS)(
+    'THE TRAP: the emitted dependsOn names $name',
+    ({ name }) => {
+      // This is the assertion the naive extension fails. Appending a string
+      // literal to `brainScanContainers` while leaving `dependsOn` as a literal
+      // `[ brainGraphVersions ]` compiles clean, emits a grant scoped to
+      // `brain-findings`, and emits NO edge to the container that creates it.
+      const deps = JSON.stringify(grantLoops[0]?.dependsOn ?? []);
+      expect(deps, `dependsOn for the ${name} grant`).toContain(`'${name}'`);
+    },
+  );
+
+  it('the grant SCOPE is indexed by copyIndex(), not pinned to one container', () => {
+    // A scope that named a container literally would grant every iteration on
+    // the same container — the mirror-image defect, and equally invisible in
+    // the bicep source.
+    const scope = String(asRecord(grantLoops[0]?.properties).scope ?? '');
+    expect(scope).toContain('copyIndex()');
+    expect(scope).toContain("variables('brainScanContainers')");
+  });
+
+  it('the loop count is the container list, so a name added gets a grant', () => {
+    expect(String(grantLoops[0]?.copy?.count ?? '')).toContain(
+      "length(variables('brainScanContainers'))",
+    );
+  });
+
+  it.each(SHIPPED_BRAIN_CONTAINERS)('$name is actually CREATED by the template', ({ name, ttl }) => {
+    // The other half of the trap: a grant scoped to a container nothing
+    // creates. The container resources are asserted in the compiled output, not
+    // only in the source, because that is where the grant's scope points.
+    const containers = all.filter(
+      (r) =>
+        typeof r.type === 'string' &&
+        r.type.endsWith('sqlDatabases/containers') &&
+        asRecord(asRecord(r.properties).resource).id === name,
+    );
+    expect(containers.length, `${name} container declarations`).toBeGreaterThan(0);
+    for (const c of containers) {
+      const resource = asRecord(asRecord(c.properties).resource);
+      expect(String(resource.defaultTtl), `${name} TTL`).toBe(ttl);
+      expect(JSON.stringify(resource.partitionKey)).toContain('/estateId');
+    }
   });
 });

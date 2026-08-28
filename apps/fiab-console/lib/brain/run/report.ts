@@ -32,6 +32,54 @@ function line(label: string, value: string | number): string {
 }
 
 /**
+ * The synthesized estate id shape, `loom:<sub8>:<rg>`.
+ *
+ * Matched STRICTLY — exactly 8 hex characters between two colons — so an
+ * operator-supplied `LOOM_ESTATE_ID` that happens to contain colons is left
+ * untouched rather than mangled.
+ */
+const SYNTHESIZED_ESTATE_ID = /^loom:([0-9a-fA-F]{8}):(.+)$/;
+
+/**
+ * Render an estate id with the SUBSCRIPTION PREFIX elided (review N6 on #4014).
+ *
+ * `resolveScanEstateId()` synthesizes `loom:<first 8 of the subscription
+ * GUID>:<resource group>` — deliberately, because it must agree byte-for-byte
+ * with the console's `resolveEstateId()` or this lane's findings land in a
+ * Cosmos partition nothing else reads. So the VALUE cannot change; what changes
+ * is how it is DISPLAYED.
+ *
+ * This repository is public and a workflow log is a publication surface. The
+ * workflow already `::add-mask::`es the Cosmos endpoint and the UAMI client id
+ * for exactly that reason, and it now masks this prefix too — but a mask is a
+ * LOG mechanism, and this report also writes `$GITHUB_STEP_SUMMARY`, which is a
+ * file rendered by GitHub rather than a log stream. Whether runner masking
+ * reaches it is NOT established here, and a control whose coverage is unverified
+ * is not a control. Eliding at the point of rendering needs no such assumption.
+ *
+ * Nothing operational is lost: the resource group is what identifies the estate
+ * to a human, and the unelided id remains the partition key on every persisted
+ * record.
+ */
+export function maskEstateId(estateId: string): string {
+  const m = SYNTHESIZED_ESTATE_ID.exec(estateId);
+  return m === null ? estateId : `loom:${'*'.repeat(8)}:${m[2]}`;
+}
+
+/** The retry line, rendered only when there were retries. Zero is not news. */
+function retryLine(v: ScanVerdict): readonly string[] {
+  return v.retries === undefined || v.retries === 0
+    ? []
+    : [
+        line(
+          'transient retries',
+          `${v.retries} — the probe met a 429/5xx/no-response condition and retried within ` +
+            'its bounded policy. This run is not clean transport.',
+        ),
+      ];
+}
+
+/**
  * The verdict alone, rendered the moment it is formed.
  *
  * Printed BEFORE any persistence, because a persistence failure must not be able
@@ -46,10 +94,11 @@ export function renderVerdictHeadline(v: ScanVerdict): string {
     `LOOM BRAIN SCAN — VERDICT: ${v.kind.toUpperCase()}` +
       (v.kind === 'unreachable' ? ` (${v.reason})` : ''),
     '='.repeat(78),
-    line('estate', v.estateId),
+    line('estate', maskEstateId(v.estateId)),
     line('cloud', v.cloud),
     line('at', v.at),
     line('scope', v.scope),
+    ...retryLine(v),
     '',
     v.message,
   ].join('\n');
@@ -150,11 +199,12 @@ export function renderRunReport(outcome: ScanOutcome): string {
     `LOOM BRAIN SCAN — VERDICT: ${v.kind.toUpperCase()}` +
       (v.kind === 'unreachable' ? ` (${v.reason})` : ''),
     '='.repeat(78),
-    line('estate', v.estateId),
+    line('estate', maskEstateId(v.estateId)),
     line('cloud', v.cloud),
     line('run', outcome.runRecord.runId),
     line('at', v.at),
     line('scope', v.scope),
+    ...retryLine(v),
     '',
     v.message,
     '',
@@ -378,11 +428,14 @@ export function renderStepSummary(outcome: ScanOutcome): string {
     '',
     `| | |`,
     `|---|---|`,
-    `| estate | ${mdTableCell(v.estateId)} |`,
+    `| estate | ${mdTableCell(maskEstateId(v.estateId))} |`,
     `| cloud | ${mdTableCell(v.cloud)} |`,
     `| run | ${mdTableCell(outcome.runRecord.runId)} |`,
     `| at | ${mdTableCell(v.at)} |`,
     `| scope | ${mdTableCell(v.scope)} |`,
+    ...(v.retries === undefined || v.retries === 0
+      ? []
+      : [`| transient retries | ${mdTableCell(String(v.retries))} |`]),
     '',
     // The verdict message EMBEDS `ProbeFailure.detail` verbatim, so it is
     // attacker-influenced even though this lane composed the sentence around it.

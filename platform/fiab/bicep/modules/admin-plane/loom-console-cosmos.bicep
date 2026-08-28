@@ -42,6 +42,22 @@ param consolePrincipalId string = ''
 @description('Skip role-assignment grants (re-deploy where grants already exist).')
 param skipRoleGrants bool = false
 
+// ── The Gov Brain-scan data-plane principal (Refs #3430, Refs #4014) ───────
+// Object id of the DEPLOYING principal, supplied by admin-plane/main.bicep ONLY
+// when ARM disclosed no userPrincipalName for it — i.e. a non-interactive CI
+// service principal. Empty on an interactive (human) deploy and empty by
+// default, which is what keeps the two grants below off every hand-run deploy.
+//
+// It is threaded as a PARAM rather than read from `deployer()` in this module on
+// purpose: `deployer()` is already used for the tenant-admin fallback in
+// admin-plane/main.bicep (the proven call site), and this module runs as a
+// NESTED deployment, where the repo has no measurement of what `deployer()`
+// returns. One leaf-module param costs nothing against the ARM 256-param
+// ceiling that admin-plane/main.bicep (240) and main.bicep (226) are ratcheted
+// against — neither gains a param from this change.
+@description('Object id of the deploying principal, passed ONLY when it is non-interactive (a CI service principal). Grants the Gov Brain-scan lane its narrow Cosmos data-plane access. Empty = no grant, which is the default and the interactive-deploy case.')
+param deployerServicePrincipalId string = ''
+
 @description('Compliance tags')
 param complianceTags object
 
@@ -337,3 +353,167 @@ resource cosmosDataRole 'Microsoft.DocumentDB/databaseAccounts/sqlRoleAssignment
 output accountId string = account.id
 output accountName string = account.name
 output endpoint string = account.properties.documentEndpoint
+
+// ===========================================================================
+// GOV BRAIN-SCAN DATA-PLANE GRANT (Refs #3430, Refs #4014, Refs #4051)
+// ===========================================================================
+//
+// ── THE MEASURED PROBLEM ───────────────────────────────────────────────────
+// `loom-brain-scan.yml`'s Gov job runs on `ubuntu-latest`. A GitHub-hosted
+// runner has NO managed identity, so no credential-chain order can reach one:
+// the chain falls through to AzureCliCredential — the Gov deploy service
+// principal from the job's `az login`. This account sets `disableLocalAuth:
+// true`, so AAD-RBAC is the ONLY data-plane path, and until this block existed
+// the deploy SP held no `sqlRoleAssignments` anywhere in the platform bicep.
+// The Brain's `recordRun` fires on OK, PAUSED **and** UNREACHABLE alike, so the
+// lane could not complete a run in ANY verdict.
+//
+// The Commercial job runs on `[self-hosted, loom-aca]`, which DOES carry the
+// console UAMI, and that identity already holds account-wide Data Contributor
+// via `cosmosDataRole` above. Commercial therefore needs nothing here and
+// deliberately gains no second writer — see the boundary condition below.
+//
+// ── WHY THE PRINCIPAL IS `deployer()` AND NOT A LITERAL OID ────────────────
+// Two objections were raised against this grant before, and both are answered
+// by threading the DEPLOYING principal rather than a configured one:
+//   1. No object id ever enters this PUBLIC repository — not in a param file,
+//      not in a template, not in the compiled ARM artifact.
+//   2. The Gov deploy secret has been exposed in logs once and was rotated. A
+//      literal oid would have to be re-supplied on every rotation; a
+//      self-referential grant follows the new principal automatically.
+// The deploy SP grants ITSELF, and only itself.
+//
+// ── WHY IT IS GOV-ONLY, AND WHY `environment()` DECIDES ────────────────────
+// `environment().suffixes.storage` is evaluated by ARM in the cloud the deploy
+// is actually running in (the same discriminator ai-search.bicep and
+// aas-server.bicep already use), so it cannot be mis-set by a param file. GCC
+// runs on Commercial infrastructure and correctly does NOT match — which is
+// right, because the scan workflow's `gov` job authenticates against
+// `AzureUSGovernment` specifically.
+//
+// Per `cloud-parity.md` this asymmetry is STATED, not implied: the capability
+// is identical in both boundaries; what differs is the runner topology, and
+// this block is what makes the Gov boundary reach the same outcome.
+//
+// ── WHY NOT ACCOUNT SCOPE, AND WHY NOT DATABASE SCOPE ──────────────────────
+// Account scope is what `cosmosDataRole` gives the console UAMI, and handing
+// the same reach to a public-repo deploy credential is the exact widening that
+// was objected to. DATABASE scope is no better here: `loom` is the ONLY
+// database on this account, so `dbs/loom` and the account root have the same
+// blast radius — it would cover `env-config`, `azure-connections`,
+// `tenant-topology` and every other console container.
+//
+// So the data grant is CONTAINER-scoped, one assignment per Brain container.
+// ===========================================================================
+
+// Gov, non-interactive deployer, grants not suppressed. All three required.
+var isAzureUSGovernment = environment().suffixes.storage == 'core.usgovcloudapi.net'
+var grantBrainScanDataPlane = isAzureUSGovernment && !empty(deployerServicePrincipalId) && !skipRoleGrants
+
+// The Brain containers this module declares. Container-scoped data grants are
+// derived from this list, so a Brain container added WITHOUT a row here simply
+// gets no grant — it never silently widens an existing one.
+//
+// `brain-findings` (#4014 / W10) is the container `recordRun` actually upserts
+// into, on OK, PAUSED and UNREACHABLE alike. It is declared above as
+// `brainFindings` by this same module, so its grant is no longer a scope naming
+// a container the template does not create — which is the condition the earlier
+// revision of this comment (written while W10 was unmerged) withheld it for.
+//
+// ── WHY EACH NAME IS READ OFF ITS RESOURCE AND NOT RETYPED AS A LITERAL ────
+// The obvious extension of the earlier one-entry shape — append a bare string
+// `'brain-findings'` to a list of string literals — COMPILES CLEAN and orders
+// the WRONG THING. The loop below used to carry `dependsOn: [ brainGraphVersions ]`
+// as a literal, so a second row produced an assignment scoped to `brain-findings`
+// that waited on `brain-graph-versions` and on nothing else. Nothing warns,
+// `az bicep build` exits 0 with zero diagnostics, and the defect is visible only
+// in the compiled ARM — which is why the guard for it reads the compiled ARM.
+//
+// Reading the name OFF the container resource closes it structurally, and does
+// so twice over:
+//
+//   1. A grant scoped to a container this template does not declare becomes
+//      UNWRITABLE — there is no symbol to read a name from.
+//   2. Bicep derives the ordering edge from that same expression, so the
+//      compiled `dependsOn` names every Brain container automatically. The
+//      dependency and the scope can no longer disagree, because they are the
+//      same expression. An explicit `dependsOn` is not merely unnecessary here,
+//      it is worse: it is a second place that can drift, and the linter says so
+//      (`no-unnecessary-dependson`).
+//
+// Adding a third Brain container is therefore one line — `brainThing.name` —
+// and its ordering edge appears in the compiled ARM without further thought.
+// `apps/fiab-console/lib/brain/run/__tests__/bicep-containers.test.ts` asserts
+// that edge against the COMMITTED COMPILED ARM, so a future literal cannot
+// reintroduce the trap silently.
+var brainScanContainers = [
+  brainGraphVersions.name
+  brainFindings.name
+]
+
+// ── 1. Account-scoped METADATA read (a custom role: metadata ONLY) ─────────
+// The @azure/cosmos client performs an ACCOUNT-level metadata read for endpoint
+// discovery before any container request, and `CosmosFindingStore` additionally
+// calls `databases.createIfNotExists` — a DATABASE-level metadata read on the
+// already-existing database. Neither is reachable from a container-scoped
+// assignment, so a purely container-scoped grant would 403 on client bootstrap
+// before it ever touched a document.
+//
+// The built-in Data Reader role would satisfy that read, but it also carries
+// `containers/items/read` + `executeQuery` — at account scope that is read
+// access to every console container. So this is a CUSTOM role holding exactly
+// one data action. It exposes STRUCTURE (database/container names, offers);
+// it can read no document.
+resource brainScanMetadataRole 'Microsoft.DocumentDB/databaseAccounts/sqlRoleDefinitions@2024-12-01-preview' = if (grantBrainScanDataPlane) {
+  parent: account
+  name: guid(account.id, 'loom-brain-scan-metadata-reader')
+  properties: {
+    roleName: 'Loom Brain Scan Metadata Reader'
+    type: 'CustomRole'
+    assignableScopes: [ account.id ]
+    permissions: [
+      {
+        dataActions: [
+          'Microsoft.DocumentDB/databaseAccounts/readMetadata'
+        ]
+      }
+    ]
+  }
+}
+
+resource brainScanMetadataAssignment 'Microsoft.DocumentDB/databaseAccounts/sqlRoleAssignments@2024-12-01-preview' = if (grantBrainScanDataPlane) {
+  parent: account
+  name: guid(account.id, deployerServicePrincipalId, 'loom-brain-scan-metadata-reader')
+  properties: {
+    roleDefinitionId: brainScanMetadataRole!.id
+    principalId: deployerServicePrincipalId
+    scope: account.id
+  }
+}
+
+// ── 2. Container-scoped DATA CONTRIBUTOR, per Brain container ──────────────
+// Built-in "Cosmos DB Built-in Data Contributor" (00000000-…-000000000002) —
+// the same built-in `cosmosDataRole` uses, so no new role id enters the repo.
+//
+// Data CONTRIBUTOR and not Data Reader because the Brain WRITES: `recordRun`
+// and `put` both call `container.items.upsert`. Reader (…0001) carries no
+// create/replace/upsert action and would fail on the first run record, in every
+// verdict. Contributor is the least-privilege role that actually works.
+//
+// There is deliberately NO explicit `dependsOn`. `brainScanContainers` reads
+// each name off its container resource, so Bicep emits the ordering edge to
+// EVERY Brain container into the compiled ARM by itself. A hand-written
+// `dependsOn` here is what previously named one container while the scope named
+// another — see `brainScanContainers` above, and the compiled-ARM guard in
+// `lib/brain/run/__tests__/bicep-containers.test.ts`.
+resource brainScanDataAssignments 'Microsoft.DocumentDB/databaseAccounts/sqlRoleAssignments@2024-12-01-preview' = [
+  for containerName in brainScanContainers: if (grantBrainScanDataPlane) {
+    parent: account
+    name: guid(account.id, deployerServicePrincipalId, containerName, '00000000-0000-0000-0000-000000000002')
+    properties: {
+      roleDefinitionId: '${account.id}/sqlRoleDefinitions/00000000-0000-0000-0000-000000000002'
+      principalId: deployerServicePrincipalId
+      scope: '${account.id}/dbs/${loomDatabase}/colls/${containerName}'
+    }
+  }
+]

@@ -512,7 +512,29 @@ jobs:
           if [ -z "$CID" ]; then
             # resolve-msal-client-id.sh logs to stderr and prints ONLY the id on
             # stdout, so its diagnostics stay visible in the job log — no 2>/dev/null.
-            CID="$(bash scripts/csa-loom/resolve-msal-client-id.sh --rg "$ADMIN_RG" || true)"
+            # NOT `|| true`: the resolver now distinguishes ABSENT (exit 0, empty — a
+            # genuinely fresh subscription) from UNKNOWN (exit 3 — a read FAILED).
+            # Swallowing exit 3 renders an empty LOOM_MSAL_CLIENT_ID, and a declarative
+            # ACA template DROPS every env var it does not declare, so that takes sign-in
+            # dark and empties LOOM_UNITY_CLIENT_ID / LOOM_UNITY_AUDIENCE with it.
+            if CID="$(bash scripts/csa-loom/resolve-msal-client-id.sh --rg "$ADMIN_RG")"; then
+              RESOLVE_RC=0
+            else
+              RESOLVE_RC=$?
+            fi
+            if [ "$RESOLVE_RC" -ne 0 ]; then
+              # A WARNING annotation + `exit 0`, not an error annotation + `exit 1`,
+              # and the choice is forced: this step carries `continue-on-error: true`,
+              # so a step emitting an error annotation would report SUCCESS while
+              # saying the thing it detects has happened — annotation-teeth rejects
+              # exactly that (#2837, recurrence of #2787). (Written without the
+              # literal annotation token, which that scanner matches in comments
+              # too.) Same idiom the loom-unity enumeration below uses for its own
+              # unreadable case. Exiting here is the point: the unseal does NOT
+              # proceed on an empty client id.
+              echo "::warning::Could not read this estate's Entra app registration (resolver exit $RESOLVE_RC). This is NOT 'no registration exists' — the reads themselves failed, so NOT treating it as absent. Unsealing is skipped this run rather than wiring an empty LOOM_MSAL_CLIENT_ID, which would drop the env var from the Container App and take sign-in dark. Check the deploy identity's rights on $ADMIN_RG and re-run."
+              exit 0
+            fi
             CID="$(printf '%s' "$CID" | tr -d '\r')"
           fi
           # NO `2>/dev/null` ON ANY QUERY BELOW, deliberately. The dominant defect

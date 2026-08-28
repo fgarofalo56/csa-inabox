@@ -147,6 +147,19 @@ describe('mdTableCell — the cell cannot be broken out of', () => {
   it('CONTROL: the ORIGINAL one-liner fails this corpus', () => {
     // Without this the suite could not distinguish the fix from the bug. This is
     // the shipped code, reproduced, and it must be shown to be broken.
+    //
+    // ── THIS LINE IS A DELIBERATE NEGATIVE CONTROL (review S6 on #4014) ─────
+    // CodeQL flags the next line `js/incomplete-sanitization` — "does not escape
+    // backslash characters" — and it is RIGHT: that is the entire point. This is
+    // the DEFECT, quoted verbatim so the corpus below can prove it broken. The
+    // fixed encoder is `mdTableCell`, asserted two tests above.
+    //
+    // It is annotated AND dismissed on the alert list rather than left standing:
+    // a permanent HIGH in a public repository's alert list is how an alert list
+    // stops being read, which is the failure mode this whole lane exists to
+    // prevent, one surface over. Deleting the control instead would be worse —
+    // it is the only thing that distinguishes the fix from the bug.
+    // codeql[js/incomplete-sanitization]
     const original = (s: string) => s.replace(/\|/g, '\\|');
     const broken = PAYLOADS.filter((p) => {
       const out = original(p.value);

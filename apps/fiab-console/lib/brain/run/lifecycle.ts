@@ -203,6 +203,16 @@ export function suppressionExpired(s: Suppression, at: string): boolean {
  * expiry-free, already-expired or over-long suppression — every one of which is
  * a way a real finding gets buried. `regressionCount` is carried forward, so
  * accepting a finding does not erase the fact that it once regressed.
+ *
+ * ── NO PRODUCTION CALLER YET, AND THAT IS DISCLOSED (N1 on #4014) ─────────
+ * Neither this nor {@link acknowledgeFinding} is called from any route, UI or
+ * job — grepping `apps/fiab-console` finds only `__tests__/lifecycle.test.ts`
+ * and the `index.ts` barrel. So today BOTH human transitions in the lifecycle
+ * are reachable only by hand-writing a Cosmos document, exactly as
+ * `POST /api/admin/brain/history` has no caller. The machinery is complete and
+ * tested; the surface that drives it is not built. Stated here rather than left
+ * to be discovered, because a lifecycle whose human states are unreachable is a
+ * different product from one whose states are merely unused.
  */
 export function acceptFinding(
   record: FindingRecord,
@@ -511,6 +521,26 @@ export function reconcile(args: ReconcileArgs): ReconcileResult {
 
     // Gone, and the detector was watching. That is a fix — whatever state it was
     // in, including `accepted`: a suppression governs REPORTING, not existence.
+    //
+    // ── THE FLAPPING-UNDER-SUPPRESSION CASE, STATED (N7 on #4014) ──────────
+    // An `accepted` finding whose detector misses it for a SINGLE run lands
+    // here, so the suppression is dropped along with the state, and its return
+    // on the very next run is a REGRESSION — the loudest thing this lane can
+    // say — despite an unexpired, reasoned, owned suppression that nobody
+    // revoked. A flapping subject under suppression therefore generates the
+    // loudest signal the design exists to protect.
+    //
+    // That is the accepted trade, not an oversight, and the alternative is
+    // worse: carrying the suppression across a genuine disappearance would mean
+    // a finding that was suppressed, actually fixed, and then genuinely
+    // regressed comes back SILENT — the suppression outliving the thing it was
+    // written about. Between "too loud on a flap" and "silent on a real
+    // regression", this lane picks loud, because a regression that nobody sees
+    // is the failure mode the whole finding lifecycle is built to prevent.
+    //
+    // The mitigation available to an operator is the one already in the model:
+    // re-accept it with a reason naming the flap. That is a deliberate act with
+    // an owner and an expiry, which is the point.
     const record: FixedFinding = {
       schemaVersion: prior.schemaVersion,
       fingerprint: prior.fingerprint,

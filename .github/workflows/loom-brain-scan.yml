@@ -298,6 +298,25 @@ jobs:
           # stopped when the estate is paused.
           set +e -uo pipefail
           mkdir -p ../../temp
+
+          # ── MASK THE SUBSCRIPTION PREFIX (review N6 on #4014) ─────────────
+          # The estate id is `loom:<first 8 of the subscription GUID>:<rg>`, and
+          # that shape is NOT negotiable: it must agree byte-for-byte with the
+          # console's own `resolveEstateId()` or this lane writes to a Cosmos
+          # partition nothing else reads. GitHub masks `AZURE_SUBSCRIPTION_ID`
+          # automatically, but a masked secret's 8-character PREFIX is a
+          # different string and is not covered — so it is masked explicitly,
+          # for the same reason the endpoint below is: this repo is public and a
+          # workflow log is a publication surface.
+          #
+          # This covers the LOG. It is NOT relied on for the step summary, which
+          # is a rendered file rather than a log stream and whose masking
+          # behaviour is not established — `report.ts#maskEstateId` elides the
+          # prefix at render time so that surface needs no assumption.
+          if [ -n "${LOOM_SUBSCRIPTION_ID:-}" ]; then
+            echo "::add-mask::${LOOM_SUBSCRIPTION_ID:0:8}"
+          fi
+
           ENDPOINT=$(az containerapp show -n "$CONSOLE_APP" -g "$ADMIN_RG" \
             --query "properties.template.containers[0].env[?name=='LOOM_COSMOS_ENDPOINT'].value | [0]" \
             -o tsv 2>../../temp/cosmos-endpoint.err)
@@ -560,6 +579,15 @@ jobs:
         run: |
           set +e -uo pipefail
           mkdir -p ../../temp
+
+          # Mask the subscription prefix the estate id embeds (review N6 on
+          # #4014). Identical to the Commercial job — see the long note there;
+          # `cloud-parity.md` means the same publication surface exists in both
+          # boundaries and neither gets the lesser treatment.
+          if [ -n "${LOOM_SUBSCRIPTION_ID:-}" ]; then
+            echo "::add-mask::${LOOM_SUBSCRIPTION_ID:0:8}"
+          fi
+
           ENDPOINT=$(az containerapp show -n "$CONSOLE_APP" -g "$ADMIN_RG" \
             --query "properties.template.containers[0].env[?name=='LOOM_COSMOS_ENDPOINT'].value | [0]" \
             -o tsv 2>../../temp/cosmos-endpoint.err)

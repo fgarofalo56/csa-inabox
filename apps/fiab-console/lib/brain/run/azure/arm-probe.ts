@@ -44,6 +44,14 @@
 
 import { armPowerReading, type ArmPowerReading, type EstatePowerState } from '../../../estate/pause-state';
 import { ScanIdentityError } from './scan-credential';
+import {
+  DEFAULT_RETRY_POLICY,
+  fetchWithBoundedRetry,
+  readJsonBody,
+  readTextBody,
+  requireTotalRecords,
+  type RetryPolicy,
+} from './http';
 import type { EstateProbe } from '../ports';
 import type { ProbeFailure, ProbeResult } from '../model';
 
@@ -134,6 +142,15 @@ export interface ArmEstateProbeOptions {
   /** Returns a bearer token, or null when one could not be acquired. */
   readonly getToken: (scope: string) => Promise<string | null>;
   readonly fetchImpl: FetchLike;
+  /**
+   * Bounded retry for transient ARM/ARG conditions (429, 5xx, no response).
+   *
+   * `deploy-integrity.md` R6. Optional so every existing caller and fixture is
+   * unchanged; {@link DEFAULT_RETRY_POLICY} when omitted. A test that wants to
+   * assert "one attempt, no retry" passes `NO_RETRY_POLICY` rather than relying
+   * on a shape that happens not to retry.
+   */
+  readonly retryPolicy?: RetryPolicy;
   /**
    * Restrict discovery to one estate by its `loom-estate-id` tag.
    *
@@ -308,7 +325,11 @@ export function discoveryQuery(opts?: {
  * may still throw, and should.
  */
 export class ArmEstateProbe implements EstateProbe {
-  constructor(private readonly opts: ArmEstateProbeOptions) {}
+  private readonly retryPolicy: RetryPolicy;
+
+  constructor(private readonly opts: ArmEstateProbeOptions) {
+    this.retryPolicy = opts.retryPolicy ?? DEFAULT_RETRY_POLICY;
+  }
 
   async probe(): Promise<ProbeResult> {
     const base = this.opts.armBase.replace(/\/+$/, '');
@@ -382,11 +403,13 @@ export class ArmEstateProbe implements EstateProbe {
         failures: discovered.failures,
         discovered: discovered.rows.length,
         scope: scopeText,
+        retries: discovered.retries,
       };
     }
 
     const readings: ArmPowerReading[] = [];
     const failures: ProbeFailure[] = [];
+    let retries = 0;
     for (const row of discovered.rows) {
       const armId = typeof row.id === 'string' ? row.id : '';
       const armType = (typeof row.type === 'string' ? row.type : '').toLowerCase();
@@ -409,47 +432,70 @@ export class ArmEstateProbe implements EstateProbe {
       }
 
       const url = `${base}${armId}?api-version=${reader.apiVersion}`;
-      let res: Awaited<ReturnType<FetchLike>>;
-      try {
-        res = await this.opts.fetchImpl(url, {
-          method: 'GET',
-          headers: { authorization: `Bearer ${token}` },
-        });
-      } catch (err) {
-        failures.push(networkFailure('power-read', armId, err));
+      const attempt = await fetchWithBoundedRetry({
+        fetchImpl: this.opts.fetchImpl,
+        url,
+        init: { method: 'GET', headers: { authorization: `Bearer ${token}` } },
+        stage: 'power-read',
+        target: armId,
+        policy: this.retryPolicy,
+      });
+      retries += attempt.retries;
+      if (!attempt.ok) {
+        failures.push(attempt.failure);
         continue;
       }
+      const res = attempt.res;
       if (!res.ok) {
-        const body = await res.text();
+        const body = await readTextBody(res);
         failures.push(httpFailure('power-read', armId, res.status, body));
         continue;
       }
-      const json = await res.json();
+      // S2 — a 200 whose body is not JSON is DATA, not an exception. Without
+      // this the rejection escapes the probe entirely and the CLI reports "a
+      // defect in the scan" for what is a fact about the estate's network path.
+      const parsed = await readJsonBody(res, 'power-read', armId);
+      if (!parsed.ok) {
+        failures.push(parsed.failure);
+        continue;
+      }
       readings.push(
         armPowerReading({
           resourceId: armId,
-          powerState: reader.read(json),
+          powerState: reader.read(parsed.value),
           armApiVersion: reader.apiVersion,
         }),
       );
     }
 
-    return { readings, failures, discovered: discovered.rows.length, scope: scopeText };
+    return {
+      readings,
+      failures,
+      discovered: discovered.rows.length,
+      scope: scopeText,
+      retries: retries + discovered.retries,
+    };
   }
 
   private async discover(
     base: string,
     token: string,
-  ): Promise<{ rows: readonly ArgRow[]; failures: readonly ProbeFailure[] }> {
+  ): Promise<{
+    rows: readonly ArgRow[];
+    failures: readonly ProbeFailure[];
+    retries: number;
+  }> {
     const rows: ArgRow[] = [];
     let skipToken: string | undefined;
     let pages = 0;
+    let retries = 0;
     let totalRecords: number | null = null;
 
     for (;;) {
       if (pages >= MAX_PAGES) {
         return {
           rows,
+          retries,
           failures: [
             {
               stage: 'discovery',
@@ -481,20 +527,28 @@ export class ArmEstateProbe implements EstateProbe {
       };
 
       const url = `${base}/providers/Microsoft.ResourceGraph/resources?api-version=${RESOURCE_GRAPH_API}`;
-      let res: Awaited<ReturnType<FetchLike>>;
-      try {
-        res = await this.opts.fetchImpl(url, {
+      const attempt = await fetchWithBoundedRetry({
+        fetchImpl: this.opts.fetchImpl,
+        url,
+        init: {
           method: 'POST',
           headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
           body: JSON.stringify(body),
-        });
-      } catch (err) {
-        return { rows, failures: [networkFailure('discovery', 'Microsoft.ResourceGraph/resources', err)] };
+        },
+        stage: 'discovery',
+        target: `Microsoft.ResourceGraph/resources (page ${pages + 1})`,
+        policy: this.retryPolicy,
+      });
+      retries += attempt.retries;
+      if (!attempt.ok) {
+        return { rows, failures: [attempt.failure], retries };
       }
+      const res = attempt.res;
       if (!res.ok) {
-        const text = await res.text();
+        const text = await readTextBody(res);
         return {
           rows,
+          retries,
           failures: [
             httpFailure(
               'discovery',
@@ -506,7 +560,16 @@ export class ArmEstateProbe implements EstateProbe {
         };
       }
 
-      const json = (await res.json()) as {
+      // S2 — a 200 that is not JSON is a ProbeFailure, not an escaping rejection.
+      const parsed = await readJsonBody(
+        res,
+        'discovery',
+        `Microsoft.ResourceGraph/resources (page ${pages + 1})`,
+      );
+      if (!parsed.ok) {
+        return { rows, failures: [parsed.failure], retries };
+      }
+      const json = (parsed.value ?? {}) as {
         data?: unknown;
         totalRecords?: unknown;
         $skipToken?: unknown;
@@ -525,29 +588,22 @@ export class ArmEstateProbe implements EstateProbe {
       skipToken = next;
     }
 
-    // ARG's own count is the cross-check. A collector that ignores the token
-    // gets a plausible-looking partial estate and then reports reachability over
-    // it — every node in the unread remainder found with zero inbound edges, a
-    // page-boundary artifact rendered as a fleet of unreachable services.
-    if (totalRecords !== null && totalRecords !== rows.length) {
-      return {
-        rows,
-        failures: [
-          {
-            stage: 'discovery',
-            target: 'Microsoft.ResourceGraph/resources',
-            classification: 'arm-error',
-            httpStatus: null,
-            detail:
-              `Resource Graph reported totalRecords=${totalRecords} but ${rows.length} row(s) ` +
-              'were read across ' +
-              `${pages} page(s). The estate is INCOMPLETE; refusing to form a verdict over a ` +
-              'partial population.',
-          },
-        ],
-      };
+    // S3 — ARG's own count is the cross-check, and its ABSENCE is a failure too.
+    // A collector that ignores the token gets a plausible-looking partial estate
+    // and then reports reachability over it — every node in the unread remainder
+    // found with zero inbound edges, a page-boundary artifact rendered as a
+    // fleet of unreachable services. The control that could not run is reported
+    // as a control that could not run, never as agreement.
+    const completeness = requireTotalRecords(
+      totalRecords,
+      rows.length,
+      pages,
+      'Microsoft.ResourceGraph/resources',
+    );
+    if (completeness !== null) {
+      return { rows, failures: [completeness], retries };
     }
 
-    return { rows, failures: [] };
+    return { rows, failures: [], retries };
   }
 }
