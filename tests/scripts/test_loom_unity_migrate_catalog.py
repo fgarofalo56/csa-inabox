@@ -28,6 +28,7 @@ import io
 import threading
 import urllib.error
 import urllib.request
+from http.client import HTTPMessage
 from pathlib import Path
 
 import pytest
@@ -150,8 +151,13 @@ class TestTheRedirectGuard:
             "https://loom-unity.internal/api/2.1/unity-catalog/catalogs",
             headers={"Authorization": "Bearer UNITY_SECRET"},
         )
+        # A real HTTPMessage, not `{}` — see the twin in
+        # tests/scripts/test_semantic_link_redirect.py. The stdlib signature
+        # wants one, and an empty dict is not the shape urllib passes in
+        # production, so the counterfactual would have exercised something the
+        # real path never sees.
         leaked = urllib.request.HTTPRedirectHandler().redirect_request(
-            req, io.BytesIO(b""), 302, "Found", {}, "https://attacker.invalid/loot"
+            req, io.BytesIO(b""), 302, "Found", HTTPMessage(), "https://attacker.invalid/loot"
         )
         assert leaked is not None
         assert leaked.full_url.startswith("https://attacker.invalid/")

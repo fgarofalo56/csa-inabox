@@ -28,7 +28,9 @@ import sys
 import threading
 import urllib.error
 import urllib.request
+from http.client import HTTPMessage
 from pathlib import Path
+from types import ModuleType
 
 import pytest
 
@@ -42,7 +44,7 @@ _MODULE_PATH = (
 )
 
 
-def _load_semantic_link():
+def _load_semantic_link() -> ModuleType:
     """Load the notebook module, defeating its re-entry guard.
 
     The file's whole body sits under
@@ -134,8 +136,13 @@ class TestTheRedirectGuardCoversBOTHCredentials:
         req = urllib.request.Request("https://csa-loom.example.com/api/items/semantic-model/m1/semantic-link")
         req.add_header("cookie", "loom_session=SESSION_SECRET")
         req.add_header("authorization", "Bearer SESSION_SECRET")
+        # A real HTTPMessage, not `{}`. The stdlib signature wants one, and mypy
+        # is right to reject a bare dict here — but the stronger reason is that
+        # an empty dict is not what urllib hands this method in production, so
+        # the counterfactual would have been exercising a shape the real code
+        # path never sees.
         leaked = urllib.request.HTTPRedirectHandler().redirect_request(
-            req, io.BytesIO(b""), 302, "Found", {}, "https://attacker.invalid/loot"
+            req, io.BytesIO(b""), 302, "Found", HTTPMessage(), "https://attacker.invalid/loot"
         )
         assert leaked is not None
         assert leaked.get_header("Cookie") == "loom_session=SESSION_SECRET"

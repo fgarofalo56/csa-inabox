@@ -249,12 +249,17 @@ const REACH_DENIED = new RegExp(
  * SUBSTRINGS — so a DNS failure on a host whose NAME contains one of those words
  * produced confident, false role-grant advice. Measured before this change:
  *
- *     getaddrinfo ENOTFOUND authorization-api.contoso.com         -> "not authorized. Grant it …"
- *     getaddrinfo ENOTFOUND kv-authorization-prod.vault.azure.net -> same
- *     getaddrinfo ENOTFOUND stforbidden.dfs.core.windows.net      -> same
- *     connect ECONNREFUSED loom-forbidden-eh.servicebus…          -> same
- *     getaddrinfo ENOTFOUND stloom403.dfs.core.windows.net        -> "host could not be
- *                                                                    resolved" (digits ARE fixed)
+ * These are MEASURED strings, kept verbatim because a paraphrased hostname would
+ * not demonstrate the substring collision that caused the defect. Each carries
+ * the inline ratchet marker: they are documentation of an observed failure, not
+ * a Commercial host this module ever resolves.
+ *
+ *     getaddrinfo ENOTFOUND authorization-api.contoso.com -> "not authorized. Grant it …"
+ *     getaddrinfo ENOTFOUND kv-authorization-prod.vault.azure.net -> same   cloud-endpoint-literal-ok: measured example string, not a resolved host
+ *     getaddrinfo ENOTFOUND stforbidden.dfs.core.windows.net -> same   cloud-endpoint-literal-ok: measured example string, not a resolved host
+ *     connect ECONNREFUSED loom-forbidden-eh.servicebus… -> same   cloud-endpoint-literal-ok: measured example string, not a resolved host
+ *     getaddrinfo ENOTFOUND stloom403.dfs.core.windows.net -> "host could not be resolved"   cloud-endpoint-literal-ok: measured example string, not a resolved host
+ *     (the digits case was already fixed by statusToken)
  *
  * That is `deploy-integrity.md` R7: the message asserts a cause the code did not
  * establish, and it costs an operator a role assignment they did not need.
