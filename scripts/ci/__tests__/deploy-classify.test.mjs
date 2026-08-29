@@ -882,3 +882,173 @@ test('#3899: report the population these assertions evaluate', () => {
   assert.ok(configSignals >= 1, 'no config-class signals at all');
   assert.ok(withNot >= 1, 'no signal carries a not[] — the exclusion mechanism this loan rests on is gone');
 });
+
+// ── #3886: the ACR task run that failed and said only that it had failed ─────
+//
+// gov-provision-runner-images run 33191237788 (2026-08-28, sha 5a219efc,
+// gcc-high) failed building loom-copilot-evaluator, and the ENTIRE captured
+// stderr was three upload warnings and a pointer:
+//
+//   ERROR: The run with ID 'ha7w' finished with unsuccessful status
+//   'RunStatus.FAILED'. Show run logs by 'az acr task logs …'
+//
+// That classified `unknown` and the lane exited 17 — R7 working exactly as
+// designed, and NOT the bug. The bug was that the operator was handed a pointer
+// with no cause and no verdict on whether a retry could help. The real cause
+// (four TS2307s from an incomplete Dockerfile copy closure) existed only inside
+// the ACR task, because the build runs with `--no-logs`.
+//
+// WHY THIS BLOCK HAS TO BE ABLE TO FAIL. The dangerous direction here is
+// OVER-BREADTH, in two different ways. Widen the matcher to "finished with
+// unsuccessful status" and it swallows RunStatus.TIMEOUT / ERROR / CANCELED —
+// which are the run not completing, not a build failing, and at least the first
+// two can be genuinely transient. Widen it toward a bare "failed" and it eats
+// most of the taxonomy. So the DISCRIMINATION tests below are the load-bearing
+// ones, and the corpus carries a permanent TIMEOUT negative control.
+
+const TAXONOMY_REL_3886 = 'apps/fiab-console/lib/deploy/failure-taxonomy.json';
+const SIGNAL_3886 = 'defect.acr-task-run-failed';
+
+/** The captured stderr, verbatim from run 33191237788. */
+const STDERR_3886 =
+  'WARNING: Sending context (63.518 MiB) to registry: acrloomdcmt6cqoezlgs...\n' +
+  'WARNING: Queued a build with ID: ha7w\n' +
+  'WARNING: Waiting for an agent...\n' +
+  "ERROR: The run with ID 'ha7w' finished with unsuccessful status 'RunStatus.FAILED'. " +
+  "Show run details by 'az acr task show-run -r acrloomdcmt6cqoezlgs --run-id ha7w'. " +
+  "Show run logs by 'az acr task logs -r acrloomdcmt6cqoezlgs --run-id ha7w'.";
+
+/** The ACR task log for that same run, as the #3416 diagnose step fetched it. */
+const TASKLOG_3886 =
+  'Step 11/20 : RUN npm run build && node scripts/stage-evals.mjs\n' +
+  "../../apps/fiab-console/lib/azure/cloud-endpoints.ts(54,8): error TS2307: Cannot find module './cloud-boundary' or its corresponding type declarations.\n" +
+  "The command '/bin/sh -c npm run build && node scripts/stage-evals.mjs' returned a non-zero code: 2\n" +
+  '2026/08/28 16:47:18 Container failed during run: build. No retries remaining.\n' +
+  'Run ID: ha7w failed after 35s. Error: failed during run, err: exit status 1';
+
+test('#3886 population — the taxonomy on disk still carries the signal', () => {
+  const onDisk = JSON.parse(fs.readFileSync(TAXONOMY_PATH, 'utf8'));
+  assert.ok(
+    Array.isArray(onDisk.signals) && onDisk.signals.length > 0,
+    `${TAXONOMY_REL_3886} has an empty or missing "signals" list — an empty population means the ` +
+      'table was gutted, never that the repo is clean.',
+  );
+  assert.ok(
+    onDisk.signals.length >= 40,
+    `${TAXONOMY_REL_3886} declares ${onDisk.signals.length} signals; 40 were present when the ` +
+      '#3886 signal landed. A shrinking table is a deletion to justify, not a pass.',
+  );
+  assert.ok(
+    onDisk.signals.some((s) => s.id === SIGNAL_3886),
+    `${TAXONOMY_REL_3886} no longer declares "${SIGNAL_3886}" — run 33191237788's stderr would fall ` +
+      'back to unknown and the operator would again get a pointer with no cause.',
+  );
+});
+
+test('#3886 matcher set is EXACTLY the two observed strings', () => {
+  const onDisk = JSON.parse(fs.readFileSync(TAXONOMY_PATH, 'utf8'));
+  const sig = onDisk.signals.find((s) => s.id === SIGNAL_3886);
+  assert.ok(sig, `${TAXONOMY_REL_3886} is missing signal "${SIGNAL_3886}"`);
+  assert.deepEqual(
+    sig.anyOf,
+    ['runstatus.failed', 'failed during run, err: exit status'],
+    `${TAXONOMY_REL_3886}: the anyOf of "${SIGNAL_3886}" changed. The first is what az prints to ` +
+      'stderr, the second is what the ACR task log says, and BOTH are needed because a caller ' +
+      'classifying the fetched log never sees the first. Widening either — to "finished with ' +
+      'unsuccessful status", say — would swallow TIMEOUT/ERROR/CANCELED into a non-retryable ' +
+      'verdict. Update this test deliberately, with the run id, or revert.',
+  );
+  assert.deepEqual(
+    sig.not,
+    ['runstatus.timeout', 'runstatus.error', 'runstatus.canceled', 'runstatus.cancelled'],
+    `${TAXONOMY_REL_3886}: the exclusions on "${SIGNAL_3886}" changed. They exist so a mixed input ` +
+      'carrying a non-FAILED terminal status falls closed to unknown rather than being labelled a ' +
+      'build failure.',
+  );
+  assert.equal(sig.class, 'defect', `${TAXONOMY_REL_3886}: "${SIGNAL_3886}" changed class`);
+  assert.equal(
+    TAXONOMY.classes[sig.class].retryable,
+    false,
+    'this signal must never become retryable — the same context and Dockerfile fail identically',
+  );
+  assert.ok(
+    /33191237788/.test(sig.observed ?? ''),
+    `${TAXONOMY_REL_3886}: "${SIGNAL_3886}" must cite the run it was observed on — provenance is ` +
+      'the only thing separating an observed signal from a guessed one.',
+  );
+});
+
+test('#3886 the verbatim stderr classifies defect + non-retryable, with evidence from that stderr', () => {
+  const d = classify(STDERR_3886);
+  assert.equal(d.class, 'defect');
+  assert.equal(d.signalId, SIGNAL_3886);
+  assert.equal(d.retryable, false);
+  assert.equal(isRetryableClass(d.class), false);
+  assert.equal(d.exitCode, classExitCode('defect'));
+  assert.notEqual(d.exitCode, 17, 'this shape must no longer land on the unknown exit code');
+  assert.deepEqual(
+    d.evidence.map((e) => e.signal),
+    ['runstatus.failed'],
+  );
+  assert.match(d.evidence[0].line, /RunStatus\.FAILED/);
+});
+
+test('#3886 the fetched ACR task log classifies to the SAME signal', () => {
+  const d = classify(TASKLOG_3886);
+  assert.equal(d.signalId, SIGNAL_3886);
+  assert.equal(d.retryable, false);
+  assert.deepEqual(
+    d.evidence.map((e) => e.signal),
+    ['failed during run, err: exit status'],
+  );
+});
+
+test('#3886 the remediation names the task-log command and asserts no cause it did not establish', () => {
+  const sig = TAXONOMY.signals.find((s) => s.id === SIGNAL_3886);
+  assert.match(sig.remediation, /az acr task logs -r <acr> --run-id <id>/);
+  assert.match(sig.remediation, /--no-logs/, 'it must say WHY the cause is not in this output');
+  assert.match(sig.remediation, /#3416/, 'it must say the Gov lane now fetches the log automatically');
+  // R7 — it may not state which step failed or why, because it did not read the
+  // task log. The honest sentence is the disclaimer; pin it.
+  assert.match(sig.remediation, /asserts nothing about WHY/i);
+  // ...and it must not silently absorb the upstream-outage case as a Loom bug.
+  assert.match(sig.remediation, /NOT a Loom defect/);
+});
+
+test('#3886 DISCRIMINATION — a non-FAILED terminal RunStatus is NOT this signal', () => {
+  // Each of these is the run not completing, not a build step returning
+  // non-zero. TIMEOUT and ERROR can be genuinely transient, so classifying them
+  // here would convert a retryable condition into a hard stop — the exact
+  // inversion classPrecedence exists to prevent, in the other direction.
+  for (const status of ['RunStatus.TIMEOUT', 'RunStatus.ERROR', 'RunStatus.CANCELED', 'RunStatus.SUCCEEDED']) {
+    const input = `ERROR: The run with ID 'ha7w' finished with unsuccessful status '${status}'.`;
+    const d = classify(input);
+    assert.equal(
+      d.signalId,
+      null,
+      `${status} classified as ${d.signalId}; only RunStatus.FAILED means a step in the build failed`,
+    );
+    assert.equal(d.class, 'unknown');
+    assert.equal(d.remediation, null, 'an unknown must carry no remediation');
+  }
+});
+
+test('#3886 DISCRIMINATION — an ACR failure that never reached a task run is untouched', () => {
+  // QuotaExceeded is refused at SCHEDULING time: there is no run, so no
+  // RunStatus at all. It must keep its own, more specific class.
+  const d = classify(
+    'ERROR: Failed to schedule the task: QuotaExceeded: standardDDSv5Family Cores, Location: usgovvirginia, Current Limit: 200, Current Usage: 196, Additional Required: 8',
+  );
+  assert.equal(d.class, 'quota');
+  assert.notEqual(d.signalId, SIGNAL_3886);
+});
+
+test('#3886 the fail-closed default survives — an unrelated ACR build failure is still unknown', () => {
+  // The whole point of the entry is to name ONE observed shape, not to become a
+  // catch-all for "something went wrong in a build". A shape the table has
+  // never seen must still fall to unknown and fail closed.
+  const d = classify('ERROR: could not upload the build context: connection closed by peer');
+  assert.equal(d.class, 'unknown');
+  assert.equal(d.signalId, null);
+  assert.match(render(d, 'az acr build'), /Could not classify this failure/);
+});

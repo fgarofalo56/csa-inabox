@@ -87,12 +87,132 @@ class ConnectorError(Exception):
 
 
 # ── HTTP helpers (stdlib) ─────────────────────────────────────────────────────
+#
+# CREDENTIAL-SAFE OPENER (#3717). Both helpers below send
+# `Authorization: Bearer <the operator's source-estate token>` to a host the
+# OPERATOR supplied, which is exactly the situation the default global opener
+# handles badly:
+#
+#   * `HTTPRedirectHandler.redirect_request` rebuilds the Request copying EVERY
+#     header except content-length/content-type. urllib does NOT strip
+#     `Authorization` across a host change the way `requests` does.
+#   * `http_error_302` permits a `Location:` whose scheme is in
+#     `('http','https','ftp','')`, and `urlopen`'s default handler set installs
+#     `FTPHandler` / `FileHandler` / `DataHandler` with NO proxy variable set.
+#
+# So a compromised or hostile source answering `302 -> http://attacker/loot`
+# receives the operator's Databricks / Snowflake / Fabric token — and the call
+# SUCCEEDS, so nothing raises and nothing is logged. The plain cross-host
+# `http:` variant is the one that matters; `ftp:` is the lesser one.
+#
+# Two remedies that do NOT work, both measured: `build_opener(HTTPHandler,
+# HTTPSHandler, HTTPRedirectHandler)` only DE-DUPLICATES the default set
+# (ftp/file/data stay installed), and an unscoped `ProxyHandler()` re-registers
+# an `ftp` route from a single `ftp_proxy` env var and fails OPEN.
+#
+# Canonical long-form argument with the measurement log:
+# `scripts/csa-loom/livy-session-census.py`. Duplicated rather than imported —
+# loom-migrate ships as its own container with no path to `scripts/`.
+_DEFAULT_PORTS = {"http": 80, "https": 443}
+
+
+def _origin(url: str) -> tuple[str, str, int | None]:
+    """The (scheme, host, port) triple two URLs must share to be same-origin."""
+    parts = urllib.parse.urlsplit(url)
+    scheme = (parts.scheme or "").lower()
+    return (scheme, (parts.hostname or "").lower(), parts.port or _DEFAULT_PORTS.get(scheme))
+
+
+def _origin_str(origin: tuple[str, str, int | None]) -> str:
+    scheme, host, port = origin
+    return f"{scheme}://{host}" + (f":{port}" if port is not None else "")
+
+
+class _SameOriginRedirectHandler(urllib.request.HTTPRedirectHandler):
+    """Refuse any redirect that leaves the origin the request was aimed at.
+
+    THIS is the guard that closes the exfiltration vector; the scheme scoping in
+    :func:`_http_only_opener` is defence in depth. It REFUSES rather than
+    stripping the header, because a request that silently lost its credentials
+    comes back 401 from an unexpected host and sends the reader somewhere else
+    entirely. Same-origin redirects (path changes, trailing-slash normalisation,
+    the Databricks/Snowflake API's own 307s) still work.
+    """
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):  # type: ignore[no-untyped-def]
+        target = urllib.parse.urljoin(req.full_url, newurl)
+        if _origin(target) != _origin(req.full_url):
+            raise urllib.error.HTTPError(
+                target, code,
+                f"refusing cross-origin redirect "
+                f"{_origin_str(_origin(req.full_url))} -> "
+                f"{_origin_str(_origin(target))} — urllib copies the "
+                f"Authorization header across a host change, so following this "
+                f"would hand the source-estate token to that host",
+                headers, fp)
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+
+def _http_only_opener() -> urllib.request.OpenerDirector:
+    """An opener whose only URL schemes are http and https (defence in depth).
+
+    The proxy dict is SCOPED on purpose: `ProxyHandler.__init__` registers a
+    `<scheme>_open` for EVERY key in the dict and the default `ProxyHandler()`
+    reads `getproxies()`, so one `ftp_proxy` re-registers the ftp route on an
+    otherwise-locked-down opener — and it fails OPEN (`proxy_open` re-dispatches
+    to the proxy over HTTP with the headers intact). That matters most in exactly
+    the environment this handler exists for: a PROXIED runner. Dropping the
+    `'no'` key does not break `no_proxy` — `proxy_open` calls the module-level
+    `proxy_bypass()`, which re-reads the environment itself.
+    """
+    proxies = {
+        scheme: url
+        for scheme, url in urllib.request.getproxies().items()
+        if scheme in ("http", "https")
+    }
+    handlers: list[urllib.request.BaseHandler] = [
+        urllib.request.ProxyHandler(proxies),
+        urllib.request.HTTPHandler(),
+        _SameOriginRedirectHandler(),
+        urllib.request.HTTPErrorProcessor(),
+        urllib.request.HTTPDefaultErrorHandler(),
+        urllib.request.UnknownHandler(),
+    ]
+    # The stdlib defines HTTPSHandler only under
+    # `hasattr(http.client, "HTTPSConnection")`; referencing it unconditionally
+    # would turn an ssl-less interpreter into an ImportError at module load.
+    https_handler = getattr(urllib.request, "HTTPSHandler", None)
+    if https_handler is not None:
+        handlers.insert(2, https_handler())
+
+    opener = urllib.request.OpenerDirector()
+    for handler in handlers:
+        opener.add_handler(handler)
+    return opener
+
+
+_OPENER = _http_only_opener()
+
+
+def _assert_http_url(url: str) -> None:
+    """Refuse a non-http(s) URL structurally, at the call site.
+
+    The source host is OPERATOR-SUPPLIED. This checks the URL WE build; where the
+    SERVER tries to send us next is `_SameOriginRedirectHandler`'s job, and which
+    transports exist at all is `_http_only_opener`'s. Three guards, three
+    different things — conflating them is how an earlier fix elsewhere removed
+    the `ftp:` transport and declared the redirect vector closed while the
+    easier `http:` variant stayed wide open.
+    """
+    if urllib.parse.urlparse(url).scheme not in ("http", "https"):
+        raise ConnectorError(f"refusing non-http(s) source URL: {url!r}", status=400)
 
 
 def _get_json(url: str, token: str, timeout: int = 45) -> Any:
+    _assert_http_url(url)
     req = urllib.request.Request(url, headers={"Authorization": f"Bearer {token}", "Accept": "application/json"})
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
+        with _OPENER.open(req, timeout=timeout) as resp:
             return json.loads(resp.read().decode("utf-8"))
     except urllib.error.HTTPError as exc:  # pragma: no cover - network
         body = exc.read().decode("utf-8", "replace")[:300] if exc.fp else ""
@@ -102,6 +222,7 @@ def _get_json(url: str, token: str, timeout: int = 45) -> Any:
 
 
 def _post_json(url: str, token: str, payload: dict[str, Any], timeout: int = 45) -> Any:
+    _assert_http_url(url)
     data = json.dumps(payload).encode("utf-8")
     req = urllib.request.Request(
         url,
@@ -114,7 +235,7 @@ def _post_json(url: str, token: str, payload: dict[str, Any], timeout: int = 45)
         method="POST",
     )
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
+        with _OPENER.open(req, timeout=timeout) as resp:
             return json.loads(resp.read().decode("utf-8"))
     except urllib.error.HTTPError as exc:  # pragma: no cover - network
         body = exc.read().decode("utf-8", "replace")[:300] if exc.fp else ""
