@@ -145,7 +145,7 @@ one `continue` on `/admin/` inside extractRouteNodes, then regenerate:
   generator RC=0 · --check RC=0 ("OK — 511 nodes") · vitest RC=0 (77/77)
 ```
 
-Two answers, both mirroring what the detectors already do:
+Three answers, the first two mirroring what the detectors already do:
 
 1. **`judged` after a verdict.** `candidates` is appended when a file enters
    scope; `judged` only once nodes were emitted or a `SkippedSubject` recorded.
@@ -155,11 +155,38 @@ Two answers, both mirroring what the detectors already do:
    therefore recounts the population with a predicate that does **not** call
    `routePathOf`, and throws when the two disagree. (`population.ts` point 4
    makes the same move on the detector side.)
+3. **A per-*node* ledger (#4027).** (1) and (2) are per-FILE while the emitted
+   unit is per-HANDLER, so a narrowing below the loop balanced both. Measured on
+   this tree, with the exact `if (a.file.path.includes('/admin/')) return;` at
+   the top of `emitAuthorizer`:
 
-Neither is total: a narrowing injected *inside* the per-handler emit is below
-the loop and invisible to both — the same limit C1 discloses for
-`judgeAuthorizer`. What they close is the loop-level skip, which is the shape
-that was measured escaping. The residual is tracked in **#4027**.
+   ```
+   nodes        920 -> 722   (-198, 21.5%; console BFF scope 706 -> 508)
+   edges        174 -> 37
+   inputsDigest, filesScanned, skipped   ALL IDENTICAL
+   generator RC=0 · --check RC=0 ("OK — 722 nodes") · vitest RC=0 (114/114)
+   ```
+
+   `assertEveryEmitAccounted` takes one entry per `(file, handler, emit kind)`
+   triple the loop *attempts* — the denominator is the handler enumeration
+   `findExportedHandlers` already returns — and every entry must be accounted for
+   by an emitted node or by a reason from a **closed** set
+   (`no-admin-claim-spelling`, `no-verdict-call`). The emitted count is read from
+   the OUTPUT ARRAY either side of the call, so the ledger never takes the emit's
+   word for what it did.
+
+**The residual, measured rather than assumed.** Three mutation shapes were run:
+
+| # | mutation | result |
+|---|---|---|
+| A | `return;` | ledger RC=1 — *329 of 5280 attempted emit(s) produced NO node and declared NO reason* |
+| B | `return null;` (type-correct) | ledger RC=1, same message — the count comes from the output array |
+| C | `return 'no-admin-claim-spelling';` | ledger **balances**. Caught one layer over: `population-contract.test.ts` asserts the `/admin/` corpus route *emits* its authorizer node (vitest RC=1) |
+
+C is the residual and it is not free — it requires knowingly mislabelling a
+subject with a code that means something else, in a closed enumeration validated
+at runtime. The cheapest evasion, inventing a plausible-sounding reason, is
+refused outright.
 
 The same census is re-derived from the filesystem by
 `__tests__/no-estate-identifiers.test.ts` and asserted against the committed

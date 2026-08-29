@@ -13,13 +13,10 @@ Data sources:
 import argparse
 import json
 import logging
-import os
 import sys
-import zipfile
-from datetime import datetime
+from datetime import datetime, timezone
 from io import BytesIO
 from pathlib import Path
-from typing import Dict, List, Optional
 
 import pandas as pd
 import requests
@@ -48,7 +45,7 @@ class HealthDownloader:
             'User-Agent': 'CSA-in-a-Box Data Downloader (research/educational use)'
         })
 
-    def _download_file(self, url: str, description: str) -> Optional[bytes]:
+    def _download_file(self, url: str, description: str) -> bytes | None:
         """Download file with progress bar and return content."""
         try:
             response = self.session.get(url, stream=True, timeout=120)
@@ -69,7 +66,7 @@ class HealthDownloader:
             logging.error(f"Failed to download {url}: {e}")
             return None
 
-    def download_medicare_provider_utilization(self, year: str) -> List[Dict]:
+    def download_medicare_provider_utilization(self, year: str) -> list[dict]:
         """Download Medicare Provider Utilization and Payment data."""
         # This is a large dataset - the actual filename varies by year
         filename_patterns = [
@@ -98,7 +95,7 @@ class HealthDownloader:
         logging.warning(f"Could not download Medicare provider data for {year}")
         return []
 
-    def download_medicare_inpatient_charges(self, year: str) -> List[Dict]:
+    def download_medicare_inpatient_charges(self, year: str) -> list[dict]:
         """Download Medicare Inpatient Hospital Charge data."""
         filename_patterns = [
             f"Inpatient_Prospective_Payment_System__IPPS__Provider_Summary_for_the_Top_100_Diagnosis-Related_Groups__DRG__-_FY{year}.csv",
@@ -121,7 +118,7 @@ class HealthDownloader:
 
         return []
 
-    def download_nursing_home_data(self, year: str) -> List[Dict]:
+    def download_nursing_home_data(self, year: str) -> list[dict]:
         """Download Nursing Home Compare data."""
         # Nursing home data via data.cms.gov API or direct download
         try:
@@ -130,8 +127,7 @@ class HealthDownloader:
             response = self.session.get(api_url, timeout=30)
 
             if response.status_code == 200:
-                data = response.json()
-                return data
+                return response.json()
 
         except Exception as e:
             logging.warning(f"Could not access nursing home data via API: {e}")
@@ -150,9 +146,9 @@ class HealthDownloader:
 
         return []
 
-    def download_hospital_general_information(self, year: str) -> List[Dict]:
+    def download_hospital_general_information(self, year: str) -> list[dict]:
         """Download Hospital General Information."""
-        filename = f"Hospital_General_Information.csv"
+        filename = "Hospital_General_Information.csv"
         url = f"https://data.cms.gov/provider-data/sites/default/files/resources/{filename}"
 
         content = self._download_file(url, f"Hospital Info {year}")
@@ -165,7 +161,7 @@ class HealthDownloader:
 
         return []
 
-    def download_cms_datasets_catalog(self) -> Dict:
+    def download_cms_datasets_catalog(self) -> dict:
         """Get catalog of available CMS datasets."""
         try:
             url = "https://data.cms.gov/data-api/v1/dataset"
@@ -177,7 +173,7 @@ class HealthDownloader:
             logging.error(f"Could not get CMS datasets catalog: {e}")
             return {}
 
-    def get_available_health_datasets(self) -> List[str]:
+    def get_available_health_datasets(self) -> list[str]:
         """Get list of available health datasets."""
         return [
             'Medicare Provider Utilization and Payment',
@@ -190,7 +186,7 @@ class HealthDownloader:
         ]
 
 
-def save_data_with_manifest(data: List[Dict], filename: str, output_dir: Path,
+def save_data_with_manifest(data: list[dict], filename: str, output_dir: Path,
                           description: str, source_url: str) -> None:
     """Save data as CSV and update manifest."""
     if not data:
@@ -207,14 +203,14 @@ def save_data_with_manifest(data: List[Dict], filename: str, output_dir: Path,
 
     manifest = {}
     if manifest_path.exists():
-        with open(manifest_path, 'r') as f:
+        with open(manifest_path) as f:
             manifest = json.load(f)
 
     file_info = {
         'filename': filename,
         'description': description,
         'source_url': source_url,
-        'download_timestamp': datetime.utcnow().isoformat() + 'Z',
+        'download_timestamp': datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z'),
         'record_count': len(data),
         'file_size_bytes': csv_path.stat().st_size,
         'columns': list(df.columns) if not df.empty else []
@@ -326,13 +322,13 @@ def main():
             )
 
         if args.dataset in ['hospital-info', 'all']:
-            logging.info(f"Downloading Hospital General Information")
+            logging.info("Downloading Hospital General Information")
             data = downloader.download_hospital_general_information(args.year)
             filename = f"hospital_general_information_{args.year}.csv"
 
             save_data_with_manifest(
                 data, filename, output_dir,
-                f"Hospital General Information",
+                "Hospital General Information",
                 "https://data.cms.gov/provider-data"
             )
 
@@ -340,7 +336,7 @@ def main():
         datasets_info = {
             'available_datasets': downloader.get_available_health_datasets(),
             'year': args.year,
-            'generated': datetime.utcnow().isoformat() + 'Z',
+            'generated': datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z'),
             'note': 'Health data typically has 1-2 year reporting lag'
         }
 

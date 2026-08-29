@@ -23,6 +23,121 @@ class APIError(Exception):
         super().__init__(f"HTTP {status}: {detail}")
 
 
+# ── Credential-safe opener (#3717) ────────────────────────────────────────────
+#
+# THE DEFECT THIS REPLACES. `urllib.request.urlopen()` uses the DEFAULT GLOBAL
+# OPENER, and every request below carries `Authorization: Bearer <token>`. Two
+# measured properties of that opener:
+#
+#   * `HTTPRedirectHandler.redirect_request` rebuilds the Request copying EVERY
+#     header except content-length/content-type. urllib does NOT strip
+#     `Authorization` across a host change the way `requests` does.
+#   * `HTTPRedirectHandler.http_error_302` permits a `Location:` whose scheme is
+#     in `('http', 'https', 'ftp', '')`, and the default opener installs
+#     `FTPHandler` / `FileHandler` / `DataHandler` with NO proxy variable set.
+#
+# So a hostile or compromised upstream answering `302 -> http://attacker/loot`
+# hands the caller's bearer token to whatever host `Location:` names — and the
+# call SUCCEEDS, so nothing is raised and nothing is logged. Measured against the
+# sibling `scripts/csa-loom/livy-session-census.py` before its fix:
+#
+#     ATTACKER RECEIVED auth : Bearer SUPER_SECRET_TOKEN
+#
+# The plain `http:` cross-host redirect is the variant that matters — it needs no
+# proxy variable and no unusual scheme. `ftp:` is the lesser one.
+#
+# TWO REMEDIES THAT DO NOT WORK, both measured, recorded so nobody re-spends the
+# time: `build_opener(HTTPHandler, HTTPSHandler, HTTPRedirectHandler)` only
+# DE-DUPLICATES the default handler set (ftp/file/data stay installed), and an
+# unscoped `ProxyHandler()` re-registers an `ftp` route from a single `ftp_proxy`
+# env var and then fails OPEN through `proxy_open`.
+#
+# Canonical long-form argument, with the full measurement log:
+# `scripts/csa-loom/livy-session-census.py`. It is duplicated rather than
+# imported because `cli/` ships as its own distributable with no dependency on
+# `scripts/`; the same is true of the other four sites this issue covers.
+_DEFAULT_PORTS = {"http": 80, "https": 443}
+
+
+def _origin(url: str) -> tuple[str, str, int | None]:
+    """The (scheme, host, port) triple two URLs must share to be same-origin."""
+    parts = urllib.parse.urlsplit(url)
+    scheme = (parts.scheme or "").lower()
+    return (scheme, (parts.hostname or "").lower(), parts.port or _DEFAULT_PORTS.get(scheme))
+
+
+def _origin_str(origin: tuple[str, str, int | None]) -> str:
+    """Render an origin triple for an error message, omitting an unknown port."""
+    scheme, host, port = origin
+    return f"{scheme}://{host}" + (f":{port}" if port is not None else "")
+
+
+class _SameOriginRedirectHandler(urllib.request.HTTPRedirectHandler):
+    """Refuse any redirect that leaves the origin the request was aimed at.
+
+    THIS is the guard that closes the exfiltration vector; the scheme scoping in
+    :func:`_http_only_opener` is defence in depth, not the fix.
+
+    It REFUSES rather than stripping the header: a request that silently lost its
+    credentials would come back 401 from an unexpected host and send the reader
+    somewhere else entirely. Refusing names the real cause. Same-origin redirects
+    (path changes, trailing-slash normalisation) still work.
+    """
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):  # type: ignore[no-untyped-def]
+        target = urllib.parse.urljoin(req.full_url, newurl)
+        if _origin(target) != _origin(req.full_url):
+            raise urllib.error.HTTPError(
+                target, code,
+                f"refusing cross-origin redirect "
+                f"{_origin_str(_origin(req.full_url))} -> "
+                f"{_origin_str(_origin(target))} — urllib copies the "
+                f"Authorization header across a host change, so following this "
+                f"would hand the bearer token to that host",
+                headers, fp)
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+
+def _http_only_opener() -> urllib.request.OpenerDirector:
+    """An opener whose only URL schemes are http and https (defence in depth).
+
+    The proxy dict is SCOPED on purpose. `ProxyHandler.__init__` does
+    `setattr(self, '%s_open' % type, …)` for EVERY key in the dict, and the
+    default `ProxyHandler()` reads `getproxies()` — so one `ftp_proxy` puts the
+    ftp route straight back, and it fails OPEN (`proxy_open` re-dispatches to the
+    proxy over HTTP with every header intact). Dropping the `'no'` key does not
+    break `no_proxy`: `proxy_open` calls the module-level `proxy_bypass()`, which
+    re-reads the environment itself.
+    """
+    proxies = {
+        scheme: url
+        for scheme, url in urllib.request.getproxies().items()
+        if scheme in ("http", "https")
+    }
+    handlers: list[urllib.request.BaseHandler] = [
+        urllib.request.ProxyHandler(proxies),
+        urllib.request.HTTPHandler(),
+        _SameOriginRedirectHandler(),
+        urllib.request.HTTPErrorProcessor(),
+        urllib.request.HTTPDefaultErrorHandler(),
+        urllib.request.UnknownHandler(),
+    ]
+    # The stdlib defines HTTPSHandler only under
+    # `hasattr(http.client, "HTTPSConnection")`; referencing it unconditionally
+    # would turn an ssl-less interpreter into an ImportError at module load.
+    https_handler = getattr(urllib.request, "HTTPSHandler", None)
+    if https_handler is not None:
+        handlers.insert(2, https_handler())
+
+    opener = urllib.request.OpenerDirector()
+    for handler in handlers:
+        opener.add_handler(handler)
+    return opener
+
+
+_OPENER = _http_only_opener()
+
+
 class APIClient:
     """Thin HTTP client for the CSA Portal REST API.
 
@@ -73,8 +188,17 @@ class APIClient:
         url = self._url(path, params)
         data = json.dumps(body).encode() if body is not None else None
         req = urllib.request.Request(url, data=data, headers=self._headers(), method=method)
+        # `base_url` is operator-supplied, so the scheme is checked STRUCTURALLY
+        # (parse, not a substring test) right at the call site. THREE separate
+        # guards, covering different things:
+        #   this check                 — the URL WE build
+        #   _SameOriginRedirectHandler — where the server tries to send us next,
+        #                                for ANY scheme including plain http
+        #   _http_only_opener          — which transports exist at all
+        if urllib.parse.urlparse(url).scheme not in ("http", "https"):
+            raise APIError(0, f"refusing non-http(s) request URL: {url!r}")
         try:
-            with urllib.request.urlopen(req, timeout=self.timeout) as resp:
+            with _OPENER.open(req, timeout=self.timeout) as resp:
                 raw = resp.read().decode()
                 return json.loads(raw) if raw else None
         except urllib.error.HTTPError as exc:
