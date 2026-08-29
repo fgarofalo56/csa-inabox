@@ -24,10 +24,103 @@ import json
 import logging
 import os
 import urllib.error
+import urllib.parse
 import urllib.request
 from typing import Tuple
 
 logger = logging.getLogger(__name__)
+
+
+# ── Credential-safe opener (#3717) ────────────────────────────────────────────
+#
+# `urllib.request.urlopen()` uses the DEFAULT GLOBAL OPENER, and `_cs_post`
+# below sends `Authorization: Bearer <AAD token for cognitiveservices>`.
+# Measured properties of that opener: `HTTPRedirectHandler.redirect_request`
+# rebuilds the Request copying EVERY header except content-length/content-type
+# (urllib does NOT strip `Authorization` across a host change), and
+# `http_error_302` permits a `Location:` whose scheme is http/https/ftp/'' while
+# the default handler set installs FTPHandler/FileHandler/DataHandler with no
+# proxy variable set. So a `302 -> http://attacker/loot` from a compromised
+# upstream hands out the token, and the caller sees a normal-looking failure.
+#
+# `CONTENT_SAFETY_ENDPOINT` is operator-supplied, which is what makes this
+# reachable rather than theoretical.
+#
+# Canonical long-form argument and the full measurement log:
+# `scripts/csa-loom/livy-session-census.py`. Duplicated rather than imported —
+# this function app ships as its own deployable with no path to `scripts/`.
+_DEFAULT_PORTS = {"http": 80, "https": 443}
+
+
+def _origin(url: str) -> tuple:
+    """The (scheme, host, port) triple two URLs must share to be same-origin."""
+    parts = urllib.parse.urlsplit(url)
+    scheme = (parts.scheme or "").lower()
+    return (scheme, (parts.hostname or "").lower(), parts.port or _DEFAULT_PORTS.get(scheme))
+
+
+def _origin_str(origin: tuple) -> str:
+    scheme, host, port = origin
+    return f"{scheme}://{host}" + (f":{port}" if port is not None else "")
+
+
+class _SameOriginRedirectHandler(urllib.request.HTTPRedirectHandler):
+    """Refuse any redirect that leaves the origin the request was aimed at.
+
+    THIS is the guard that closes the exfiltration vector; the scheme scoping in
+    :func:`_http_only_opener` is defence in depth. It REFUSES rather than
+    stripping the header — a request that silently lost its credentials comes
+    back 401 from an unexpected host, which sends the reader somewhere else
+    entirely. Same-origin redirects still work.
+    """
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        target = urllib.parse.urljoin(req.full_url, newurl)
+        if _origin(target) != _origin(req.full_url):
+            raise urllib.error.HTTPError(
+                target, code,
+                f"refusing cross-origin redirect "
+                f"{_origin_str(_origin(req.full_url))} -> "
+                f"{_origin_str(_origin(target))} — urllib copies the "
+                f"Authorization header across a host change, so following this "
+                f"would hand the Content Safety token to that host",
+                headers, fp)
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+
+def _http_only_opener() -> urllib.request.OpenerDirector:
+    """An opener whose only URL schemes are http and https (defence in depth).
+
+    The proxy dict is SCOPED on purpose: `ProxyHandler.__init__` registers a
+    `<scheme>_open` for EVERY key in the dict and the default `ProxyHandler()`
+    reads `getproxies()`, so one `ftp_proxy` re-registers the ftp route and it
+    fails OPEN. Dropping the `'no'` key does not break `no_proxy` — `proxy_open`
+    calls the module-level `proxy_bypass()`, which re-reads the environment.
+    """
+    proxies = {
+        scheme: url
+        for scheme, url in urllib.request.getproxies().items()
+        if scheme in ("http", "https")
+    }
+    handlers = [
+        urllib.request.ProxyHandler(proxies),
+        urllib.request.HTTPHandler(),
+        _SameOriginRedirectHandler(),
+        urllib.request.HTTPErrorProcessor(),
+        urllib.request.HTTPDefaultErrorHandler(),
+        urllib.request.UnknownHandler(),
+    ]
+    https_handler = getattr(urllib.request, "HTTPSHandler", None)
+    if https_handler is not None:
+        handlers.insert(2, https_handler())
+
+    opener = urllib.request.OpenerDirector()
+    for handler in handlers:
+        opener.add_handler(handler)
+    return opener
+
+
+_OPENER = _http_only_opener()
 
 _CONTENT_SAFETY_ENDPOINT = os.environ.get("CONTENT_SAFETY_ENDPOINT", "").rstrip("/")
 _CONTENT_SAFETY_KEY = os.environ.get("CONTENT_SAFETY_KEY", "")
@@ -80,9 +173,17 @@ def _cs_post(path: str, payload: dict) -> dict:
         headers["Authorization"] = f"Bearer {tok}"
     elif _CONTENT_SAFETY_KEY:
         headers["Ocp-Apim-Subscription-Key"] = _CONTENT_SAFETY_KEY
+    # `CONTENT_SAFETY_ENDPOINT` is operator-supplied, so the scheme is checked
+    # STRUCTURALLY (parse, not a substring test) right at the call site — the
+    # URL WE build. Where the SERVER tries to send us next is
+    # `_SameOriginRedirectHandler`'s job, and which transports exist at all is
+    # `_http_only_opener`'s. Three guards, three different things.
+    if urllib.parse.urlparse(url).scheme not in ("http", "https"):
+        logger.warning("[content-safety] refusing non-http(s) endpoint URL: %s", url)
+        return {}
     req = urllib.request.Request(url, data=data, headers=headers, method="POST")
     try:
-        with urllib.request.urlopen(req, timeout=5) as resp:
+        with _OPENER.open(req, timeout=5) as resp:
             return json.loads(resp.read())
     except urllib.error.HTTPError as e:
         body = e.read()[:200] if hasattr(e, "read") else b""

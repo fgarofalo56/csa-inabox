@@ -18,9 +18,15 @@
  * this leaf is no longer import-free, not that it gained an edge back into an
  * engine.
  */
-import { upsertLinkedService } from './adf-client';
+import {
+  getPipelineRun,
+  listActivityRuns,
+  upsertLinkedService,
+  type AdfActivityRun,
+} from './adf-client';
 import { getAccountName } from './adls-client';
 import { dfsSuffix } from './cloud-endpoints';
+import { classifySnowflakeFailure, describeSnowflakeFailure } from './snowflake-failure-class';
 
 /** The ADLS container every mirror lands into. */
 export const BRONZE = 'bronze';
@@ -149,4 +155,207 @@ export async function ensureMirrorAdlsLinkedService(): Promise<
     },
   } as never);
   return { linkedServiceName: LOOM_MIRROR_SINK_LINKED_SERVICE, pinned: false };
+}
+
+// ============================================================
+// #4025 — the SUBMITTED-IS-NOT-SUCCEEDED repair
+// ============================================================
+//
+// `runMirrorAdfCopy` fired `runPipeline(pipelineName)`, DISCARDED the
+// `PipelineRunResponse` (which carries the runId), and returned
+// `ok: true, status: 'Running'` with every table synthesised as
+// `status: 'replicated', rows: 0, bytes: 0`. The pipeline was SUBMITTED, and
+// Loom reported that as success.
+//
+// Every run-time failure on the Snowflake mirroring path therefore surfaced as
+// success — the factory MI lacking Key Vault Secrets User, the Snowflake role
+// lacking CREATE STAGE (the Copy activity creates an external stage with a SAS
+// URI), a suspended warehouse that cannot auto-resume, a source unreachable from
+// the factory's network. In all four the badge read "Running", the grid read
+// `replicated / 0 rows`, and nothing landed in Bronze. An independent review of
+// #4024 called this the single thing most likely to make a demo look fine while
+// no data moves.
+//
+// The polling primitive already existed and was proven: `snowflake-adf.ts`
+// `listSnowflakeTables` runs a bounded `getPipelineRun` loop and reports the real
+// terminal status. This is that shape, extracted so both mirror engines use ONE
+// implementation rather than two that can drift.
+
+/** How long a Start waits for the initial load before reporting UNKNOWN. */
+export const ADF_RUN_TIMEOUT_MS = Number(process.env.LOOM_MIRROR_RUN_TIMEOUT_MS || 120_000);
+/** Gap between `getPipelineRun` polls. */
+export const ADF_RUN_POLL_MS = Number(process.env.LOOM_MIRROR_RUN_POLL_MS || 3_000);
+
+/** ARM pipeline-run states that will not change again. */
+const TERMINAL = new Set(['Succeeded', 'Failed', 'Cancelled']);
+
+/** What a bounded poll of one pipeline run established. */
+export interface AdfRunOutcome {
+  readonly runId: string;
+  /** The last status ARM reported. `'Unknown'` when the run could not be read. */
+  readonly status: string;
+  /** True only when ARM reported a state that will not change again. */
+  readonly terminal: boolean;
+  /** True only for a terminal `Succeeded`. NEVER inferred from anything else. */
+  readonly succeeded: boolean;
+  /** ARM's own message, verbatim, or '' when there was none. */
+  readonly message: string;
+  /** Per-activity detail, read once the run reached a terminal state. */
+  readonly activities: readonly AdfActivityRun[];
+  /** True when the deadline expired before a terminal state was reached. */
+  readonly timedOut: boolean;
+}
+
+/**
+ * Poll ONE pipeline run to a terminal state, or to the deadline.
+ *
+ * NEVER REPORTS SUCCESS ON AN UNVERIFIED OUTCOME (`deploy-integrity.md` R6).
+ * `succeeded` is true for exactly one input — a terminal `Succeeded` — and every
+ * other path (Failed, Cancelled, still running at the deadline, ARM unreadable)
+ * leaves it false with `timedOut` / `status` saying which.
+ *
+ * A failure to READ the run is not a failure of the run, and the two are kept
+ * apart: an unreadable run comes back `status: 'Unknown'`, `terminal: false`,
+ * with the read error as the message. Reporting "the pipeline failed" when the
+ * truth is "I could not look" is the R7 shape this repo has already paid for
+ * once (the `2>/dev/null` roll that reported a permission denial as a missing
+ * tag).
+ */
+export async function awaitAdfRun(
+  runId: string,
+  opts: { timeoutMs?: number; pollMs?: number } = {},
+): Promise<AdfRunOutcome> {
+  const timeoutMs = opts.timeoutMs ?? ADF_RUN_TIMEOUT_MS;
+  const pollMs = opts.pollMs ?? ADF_RUN_POLL_MS;
+  const deadline = Date.now() + timeoutMs;
+
+  let status = 'Queued';
+  let message = '';
+  let readError = '';
+  // READ FIRST, THEN SLEEP. The sibling loop in `snowflake-adf.ts` sleeps first,
+  // which costs a full poll interval on every run whose pipeline was already
+  // terminal — a small copy of two tables finishes in well under 3s, and the
+  // sleep-first shape charged it 3s of latency for nothing. Measured while
+  // wiring this in: sleep-first added 78s to the mirror vitest suite alone.
+  let first = true;
+  while (first || Date.now() < deadline) {
+    if (!first) await new Promise((r) => setTimeout(r, pollMs));
+    first = false;
+    try {
+      const run = await getPipelineRun(runId);
+      if (run) {
+        status = run.status || status;
+        message = run.message || '';
+        readError = '';
+      } else {
+        // 404 on a run ARM just handed us is not "no failure" — it is a state
+        // Loom cannot explain, and it is recorded as such rather than treated
+        // as still-queued.
+        readError = `ARM returned no run for ${runId}`;
+      }
+    } catch (e: any) {
+      readError = e?.message || String(e);
+    }
+    if (TERMINAL.has(status)) break;
+  }
+
+  const terminal = TERMINAL.has(status);
+  let activities: AdfActivityRun[] = [];
+  if (terminal) {
+    // Best-effort: the run's verdict does not depend on this, so a failure to
+    // read per-activity detail degrades the row/byte counters rather than the
+    // status. It is not swallowed silently — the caller sees an empty list and
+    // reports rows/bytes as unknown rather than as zero.
+    try { activities = await listActivityRuns(runId); } catch { activities = []; }
+  }
+
+  return {
+    runId,
+    status: readError && !terminal ? 'Unknown' : status,
+    terminal,
+    succeeded: status === 'Succeeded',
+    message: message || readError,
+    activities,
+    timedOut: !terminal,
+  };
+}
+
+/** Row/byte counters harvested from one Copy activity's ARM output. */
+export interface AdfCopyCounters {
+  readonly rows: number | null;
+  readonly bytes: number | null;
+  readonly status: string | null;
+  readonly error: string | null;
+}
+
+/**
+ * The Copy activity's own counters, by activity name.
+ *
+ * `null` rather than `0` when a counter is absent, and the distinction is the
+ * point: `rows: 0` is a CLAIM that nothing was copied, and the defect this
+ * repairs is exactly a synthesised `rows: 0` presented as measured. An absent
+ * counter means Loom did not read one.
+ */
+export function adfCopyCounters(
+  activities: readonly AdfActivityRun[],
+  activityName: string,
+): AdfCopyCounters {
+  const act = activities.find((a) => a.activityName === activityName);
+  if (!act) return { rows: null, bytes: null, status: null, error: null };
+  const out = (act.output ?? {}) as Record<string, unknown>;
+  const num = (v: unknown): number | null => (typeof v === 'number' && Number.isFinite(v) ? v : null);
+  return {
+    rows: num(out.rowsCopied) ?? num(out.rowsRead),
+    bytes: num(out.dataWritten) ?? num(out.dataRead),
+    status: act.status ?? null,
+    error: act.error?.message ?? null,
+  };
+}
+
+/**
+ * The operator-facing explanation for a FAILED ADF Copy run.
+ *
+ * The four causes #4025 enumerates are classified into concrete remediations
+ * (`deploy-integrity.md` R6), and anything else falls through to the Snowflake
+ * classifier — which itself returns NO remediation for an unrecognised failure
+ * rather than a friendly-sounding guess (#4033 / #4048).
+ *
+ * ORDER. The two ADF-SIDE causes are asked first, because they are decidable
+ * from tokens Snowflake never emits (`Key Vault`, `CREATE STAGE` on a staging
+ * path) and because misrouting an ADF fault into Snowflake advice is this
+ * module's own defect inverted — naming a cause on the wrong system entirely,
+ * which `snowflake-adf.ts` already calls out at its ARM catch.
+ */
+export function describeAdfCopyRunFailure(detail: string, database?: string): string {
+  const d = String(detail ?? '');
+
+  if (/key ?vault/i.test(d) && /(forbidden|denied|unauthorized|not authorized|403|SecretNotFound|AKV)/i.test(d)) {
+    return (
+      `The ADF Copy run FAILED and the factory could not dereference the credential from Key Vault (${d}). ` +
+      'Grant the data factory\'s managed identity the "Key Vault Secrets User" role on the vault that backs ' +
+      'this connection\'s linked service, then Start the mirror again. Nothing about the Snowflake role, its ' +
+      'grants or the warehouse was tested — the run never reached Snowflake.'
+    );
+  }
+
+  if (/CREATE STAGE|create stage|external stage/i.test(d)) {
+    return (
+      `The ADF Copy run FAILED creating the external stage it unloads through (${d}). The ADF Copy activity ` +
+      'creates a Snowflake external stage with a SAS URI, so the connection\'s role needs CREATE STAGE on the ' +
+      'schema it reads — SELECT alone is not enough. In Snowflake: GRANT CREATE STAGE ON SCHEMA ' +
+      `${database ? `${database}.<schema>` : '<database>.<schema>'} TO ROLE <role>; then Start the mirror again.`
+    );
+  }
+
+  // Everything else is Snowflake's own words, classified by the module that
+  // already refuses to assert an unestablished cause.
+  return describeSnowflakeFailure('The ADF Copy run FAILED', d, database);
+}
+
+/** The machine-readable gate key for a failed ADF Copy run. */
+export function adfCopyRunGate(detail: string): string {
+  const d = String(detail ?? '');
+  if (/key ?vault/i.test(d)) return 'mirror-adf-keyvault';
+  if (/CREATE STAGE|create stage|external stage/i.test(d)) return 'snowflake-create-stage';
+  return `snowflake-${classifySnowflakeFailure(d)}`;
 }

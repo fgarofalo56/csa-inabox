@@ -9,6 +9,7 @@ import { getSession, type SessionPayload } from '@/lib/auth/session';
 import { foldersContainer, itemsContainer, workspacesContainer } from '@/lib/azure/cosmos-client';
 import { isTenantAdmin } from '@/lib/auth/feature-gate';
 import { readWorkspaceById } from '@/lib/auth/workspace-access';
+import { sameTenantConfirmed } from '@/lib/auth/tenant-boundary';
 import type { WorkspaceItem } from '@/lib/types/workspace';
 import crypto from 'node:crypto';
 import { apiServerError } from '@/lib/api/respond';
@@ -18,10 +19,41 @@ export const dynamic = 'force-dynamic';
 
 /**
  * True when the caller may manage this workspace's folders: the owner (partition
- * point-read) OR — ADMIN-OPEN — a tenant admin for any workspace in the tenant,
- * so an admin opening a workspace from /admin/workspaces sees its folders too
- * rather than a 404 (the Items tab renders both the item list and this folder
- * tree).
+ * point-read) OR — ADMIN-OPEN — a tenant admin for a workspace POSITIVELY
+ * CONFIRMED to be in that admin's OWN Entra tenant, so an admin opening a
+ * workspace from /admin/workspaces sees its folders too rather than a 404 (the
+ * Items tab renders both the item list and this folder tree).
+ *
+ * #3891 — THE ADMIN BRANCH USED TO COERCE AN UNFILTERED READ INTO THE VERDICT.
+ * It read `if (isTenantAdmin(session)) return !!(await readWorkspaceById(id));`.
+ * `readWorkspaceById` is a raw cross-partition document read with NO tenant
+ * predicate — its own docblock says so, and says the RESOLVER is what subjects
+ * the result to the tid comparison. Nothing subjected it here, so the boolean
+ * that gated GET/POST/PATCH/DELETE on the folder tree was "a workspace with this
+ * id exists ANYWHERE", and a tenant admin in tenant A reached tenant B's
+ * folders. This is the third executable spelling of the #3833 admin-bypass
+ * family: neither `isTenantAdmin(session)) return null` nor an unfiltered
+ * `loadWorkspaceAdmin`, which is why the two-shape grep that closed the other
+ * members missed it.
+ *
+ * THE COMPARISON IS NOT WRITTEN HERE. `sameTenantConfirmed`
+ * (`lib/auth/tenant-boundary.ts`) is the one implementation; a private fifth
+ * copy is exactly what produced #3823, #3825, #3840 and #3843. It is a POSITIVE
+ * match that FAILS CLOSED on `unconfirmed`, so a tid-less session (#3845 proved
+ * `app/api/auth/cli-session/route.ts` is a live generator of those) and a
+ * pre-rel-T11 workspace doc with no `tid` are both REFUSED rather than admitted.
+ * The shape `callerTid && doc.tid && doc.tid !== callerTid` is the WRONG one and
+ * is deliberately not written.
+ *
+ * WHAT THIS NARROWS, precisely: nothing is added. The owner point-read is
+ * byte-identical. The admin branch loses every workspace whose tenancy Loom
+ * cannot positively confirm — cross-tenant, unstamped workspace, or tid-less
+ * session. A tenant admin opening a workspace stamped with their own tid is
+ * unaffected, which is the /admin/workspaces case the bypass exists for.
+ *
+ * The refusal stays a 404 at the four handlers, deliberately: the caller supplies
+ * `id`, so a 403 (or any code that distinguishes "exists elsewhere" from "does
+ * not exist") turns this into an existence oracle over a caller-chosen scope.
  */
 async function assertWorkspaceAccess(id: string, session: SessionPayload): Promise<boolean> {
   const oid = session.claims.oid;
@@ -33,7 +65,25 @@ async function assertWorkspaceAccess(id: string, session: SessionPayload): Promi
     if (e?.code !== 404) throw e;
   }
   if (isTenantAdmin(session)) {
-    return !!(await readWorkspaceById(id));
+    const wsDoc = await readWorkspaceById(id);
+    if (!wsDoc) return false;
+    if (sameTenantConfirmed(session.claims.tid, wsDoc.tid)) return true;
+    // A REFUSAL, not an absence — and the operator can act on the `unconfirmed`
+    // half of it. Logged server-side (the response stays 404 for the oracle
+    // reason above), stating only what was established (deploy-integrity R7).
+    console.warn(
+      '[workspaces/folders] tenant-admin folder access REFUSED — workspace tenancy not confirmed (#3891).',
+      {
+        workspaceId: id,
+        callerTidPresent: Boolean(session.claims.tid),
+        workspaceTidPresent: Boolean(wsDoc.tid),
+        remediation:
+          'If this workspace predates rel-T11 it carries no `tid`: run `node ' +
+          'scripts/csa-loom/backfill-workspace-tid.mjs` (DRY-RUN by default) then re-run with ' +
+          '`--apply`. If your session carries no `tid` claim, sign out and sign in again.',
+      },
+    );
+    return false;
   }
   return false;
 }

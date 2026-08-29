@@ -16,7 +16,11 @@ import {
   getLinkedService, getPipeline, getTrigger, stopTrigger, upsertLinkedService,
 } from './adf-client';
 import { pathToHttpsUrl, generateContainerWriteSasUri } from './adls-client';
-import { BRONZE, MAX_TABLES, adfSafeName, ensureMirrorAdlsLinkedService } from './mirror-adf-shared';
+import {
+  BRONZE, MAX_TABLES, adfSafeName, ensureMirrorAdlsLinkedService,
+  ADF_RUN_TIMEOUT_MS, adfCopyCounters, adfCopyRunGate, awaitAdfRun, describeAdfCopyRunFailure,
+  type AdfRunOutcome,
+} from './mirror-adf-shared';
 // The Snowflake backend: auto-binds its ADF linked service from the mirror's
 // Loom Connection and enumerates the source through the same runtime that
 // replicates it, so the table list can never disagree with what Copy can read.
@@ -706,6 +710,14 @@ export function describeTriggerStartFailure(
  */
 export async function runMirrorAdfCopy(
   mirrorId: string, workspaceId: string, src: MirrorSource, tableSpecs: MirrorTableSpec[], note: string,
+  /**
+   * Bounds for the initial-load poll (#4025). Optional, defaulting to
+   * `ADF_RUN_TIMEOUT_MS` / `ADF_RUN_POLL_MS`, and present so the STILL-RUNNING
+   * arm is reachable from a spec in milliseconds. Without it the only way to
+   * exercise that branch would be to let a test wait two minutes — which is how
+   * a timeout branch ends up with no coverage at all.
+   */
+  runBounds?: { runTimeoutMs?: number; runPollMs?: number },
 ): Promise<MirrorRunResult> {
   const adfGate = adfCdcConfigGate();
   if (adfGate) {
@@ -948,14 +960,39 @@ export async function runMirrorAdfCopy(
     };
   }
 
-  // Fire the initial full load. Auth-to-source/sink failures are surfaced verbatim.
+  // Fire the initial full load, then WAIT FOR IT (#4025). Auth-to-source/sink
+  // failures are surfaced verbatim.
+  //
+  // This used to be `await runPipeline(pipelineName);` with the response — which
+  // carries the runId — DISCARDED, followed by `ok: true, status: 'Running'`.
+  // The pipeline was SUBMITTED and Loom reported that as success, so every
+  // run-time failure on this path (factory MI without Key Vault Secrets User, a
+  // role without CREATE STAGE, a suspended warehouse, an unreachable source)
+  // surfaced as a green badge over a Bronze container with nothing in it.
+  let outcome: AdfRunOutcome;
   try {
-    await runPipeline(pipelineName);
+    const submitted = await runPipeline(pipelineName);
+    outcome = await awaitAdfRun(submitted.runId, {
+      timeoutMs: runBounds?.runTimeoutMs,
+      pollMs: runBounds?.runPollMs,
+    });
   } catch (e: any) {
     return {
       ok: false, status: 'Error', backend: 'azure-native-cdc', engine: 'adf-copy', cdcName: pipelineName, tables: [],
       basePath: pathToHttpsUrl(BRONZE, `${basePath}/`), note,
       error: `ADF Copy initial run failed: ${e?.message || String(e)}`,
+    };
+  }
+
+  // A TERMINAL FAILURE IS A FAILURE. The ADF message is carried verbatim and the
+  // remediation is derived from it — never appended unconditionally (R6/R7).
+  if (outcome.terminal && !outcome.succeeded) {
+    const detail = outcome.message || `the run ended as ${outcome.status}`;
+    return {
+      ok: false, status: 'Error', backend: 'azure-native-cdc', engine: 'adf-copy', cdcName: pipelineName, tables: [],
+      basePath: pathToHttpsUrl(BRONZE, `${basePath}/`), note,
+      error: describeAdfCopyRunFailure(detail, src.database),
+      gate: { missing: adfCopyRunGate(detail), message: describeAdfCopyRunFailure(detail, src.database) },
     };
   }
 
@@ -1049,19 +1086,80 @@ export async function runMirrorAdfCopy(
     `${sink.pinned ? ' (pinned by LOOM_MIRROR_ADLS_LINKED_SERVICE)' : ' (auto-bound by Loom)'}.` +
     `${credNote}${stagingNote}${tableNote}${triggerNote}`;
   const lastSync = new Date().toISOString();
-  const tables: MirrorTableResult[] = tableSpecsResolved.map((t) => {
 
+  // #4025 — PER-TABLE STATE COMES FROM THE RUN, NOT FROM A TEMPLATE.
+  //
+  // Every row used to be synthesised as `status: 'replicated', rows: 0,
+  // bytes: 0` with the note "full load running. Row/byte metrics populate in the
+  // ADF monitor." — asserted before the run had produced anything, and identical
+  // whether the copy moved a million rows or failed to start. `rows: 0` is a
+  // CLAIM that nothing was copied; when it is not measured it must not be made.
+  // The counters now come from the Copy activity's own ARM output, and stay
+  // `undefined` when Loom did not read one.
+  const tables: MirrorTableResult[] = tableSpecsResolved.map((t) => {
     const folderUrl = pathToHttpsUrl(BRONZE, `${basePath}/${t.schema}.${t.table}/`);
     const openrowset = `SELECT TOP 100 * FROM OPENROWSET(BULK '${folderUrl}', FORMAT = 'PARQUET') AS rows`;
+    const counters = adfCopyCounters(outcome.activities, adfSafeName(`Copy_${t.schema}_${t.table}`));
+
+    // The per-activity status is the truth for THIS table. A run can succeed
+    // overall while one table's Copy was skipped, and the old shape reported
+    // every table as `replicated` regardless.
+    const failedHere = counters.status === 'Failed' || counters.status === 'Cancelled';
+    const status: MirrorTableResult['status'] = failedHere
+      ? 'error'
+      : outcome.succeeded ? 'replicated' : 'pending';
+
+    let tableNote: string;
+    if (failedHere) {
+      tableNote = `ADF Copy: this table's Copy activity ended as ${counters.status}.`;
+    } else if (outcome.succeeded) {
+      tableNote = counters.rows === null
+        ? 'ADF Copy: the run succeeded; ADF reported no row counter for this table.'
+        : 'ADF Copy: initial full load complete.';
+    } else if (outcome.timedOut) {
+      tableNote =
+        'ADF Copy: the initial load was STILL RUNNING when Loom stopped waiting — ' +
+        'this table is NOT yet known to have landed. Watch the ADF monitor.';
+    } else {
+      tableNote = `ADF Copy: the run ended as ${outcome.status}; this table's outcome is not established.`;
+    }
+
     return {
-      schema: t.schema, table: t.table, status: 'replicated', mode: 'snapshot',
-      rows: 0, bytes: 0, truncated: false, lastSync, path: folderUrl, openrowset,
-      note: 'ADF Copy: full load running. Row/byte metrics populate in the ADF monitor.',
+      schema: t.schema, table: t.table, status, mode: 'snapshot',
+      ...(counters.rows !== null ? { rows: counters.rows } : {}),
+      ...(counters.bytes !== null ? { bytes: counters.bytes } : {}),
+      truncated: false, lastSync, path: folderUrl, openrowset,
+      note: tableNote,
+      ...(counters.error ? { error: counters.error } : {}),
     };
   });
 
+  // STILL RUNNING AT THE DEADLINE IS NOT SUCCESS (R6: "never report success on
+  // an unverified outcome"). It is reported as exactly what it is — the run was
+  // submitted, it has not finished, and Loom does not know whether it will.
+  if (!outcome.terminal) {
+    return {
+      ok: true, status: 'Running', backend: 'azure-native-cdc', engine: 'adf-copy', cdcName: pipelineName, tables,
+      basePath: pathToHttpsUrl(BRONZE, `${basePath}/`),
+      note:
+        `${adfNote} The initial load (run ${outcome.runId}) was still ${outcome.status} after ` +
+        `${Math.round((runBounds?.runTimeoutMs ?? ADF_RUN_TIMEOUT_MS) / 1000)}s and Loom stopped waiting, so ` +
+        `whether it SUCCEEDS is NOT ` +
+        `established here — watch the ADF monitor for pipeline ${pipelineName}.` +
+        (outcome.message ? ` Last message from ADF: ${outcome.message}` : ''),
+    };
+  }
+
+  // Succeeded. `Running` remains the status when an ongoing trigger is
+  // registered — the mirror keeps going — and the note states that the INITIAL
+  // load is the part that is now established.
   return {
     ok: true, status: 'Running', backend: 'azure-native-cdc', engine: 'adf-copy', cdcName: pipelineName, tables,
-    basePath: pathToHttpsUrl(BRONZE, `${basePath}/`), note: adfNote,
+    basePath: pathToHttpsUrl(BRONZE, `${basePath}/`),
+    note:
+      `${adfNote} Initial full load (run ${outcome.runId}) SUCCEEDED` +
+      (triggerPlan.kind === 'none'
+        ? '; this sync mode registers no ongoing trigger, so nothing further will run until the next Start.'
+        : '; the ongoing trigger is registered.'),
   };
 }

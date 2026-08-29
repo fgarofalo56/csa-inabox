@@ -350,6 +350,20 @@ jobs:
       # the POINTER, not the failure — every such build would still need a human
       # inside the boundary to run the command az itself printed.
       #
+      # UPDATE 2026-08-28 (#3886): the signal now EXISTS —
+      # `defect.acr-task-run-failed` in failure-taxonomy.json — and the sentence
+      # above is the reason it could not have been added first. It is honest
+      # only because THIS step already fetches the log: the entry classifies the
+      # pointer as "the task ran and its build failed, non-retryable", says in
+      # so many words that it asserts nothing about WHY, and points at the log
+      # this step prints. Order mattered. Run 33191237788 is the second apply
+      # run this lane has had, and it failed the same way: the evaluator
+      # Dockerfile hand-copied three console modules and one of them re-exports
+      # two more, so `RUN npm run build` died on four TS2307s. Only the log
+      # fetched here named them; the runner's own stderr never did.
+      # scripts/ci/check-dockerfile-copy-closure.mjs now blocks that class in CI
+      # so the next occurrence is a red PR check, not a Gov build minute.
+      #
       # Measured across the whole tree (123 workflows), 2026-08-23, re-counted
       # after a review found the earlier figure in this comment was wrong:
       #   `az acr task logs`      invoked in 1 workflow — THIS one, and only
