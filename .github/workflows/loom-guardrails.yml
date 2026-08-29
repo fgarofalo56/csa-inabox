@@ -685,6 +685,31 @@ jobs:
       - name: dockerfile-lockfiles (npm ci / --frozen-lockfile needs its lockfile in the context — #2816)
         if: ${{ !cancelled() }}
         run: node scripts/ci/check-dockerfile-lockfiles.mjs
+      # #3886 — the same class as #2816 one layer up: not "is the lockfile in the
+      # context" but "is every file the copied SOURCES reach in the context".
+      # azure-functions/copilot-evaluator/Dockerfile hand-copies individual
+      # console modules, and that list is a hand-maintained mirror of another
+      # app's source tree with nothing watching it. It held the three files
+      # `src/` imports DIRECTLY; cloud-endpoints.ts re-exports from
+      # ./cloud-boundary and ./cloud-endpoints-graph, and neither was copied, so
+      # `RUN npm run build` died on four TS2307s
+      # (gov-provision-runner-images run 33191237788, 2026-08-28).
+      #
+      # It stayed invisible because the ONLY reader of a copy list is a build,
+      # this image is built by one Gov lane, and that lane runs `az acr build
+      # --no-logs` — so the failure reaches the runner as "RunStatus.FAILED" and
+      # a pointer to a log inside the registry. CI never sees a Dockerfile.
+      #
+      # Deliberately NOT path-filtered, for the reason spelled out at
+      # deploy-template-sync above: a path filter is how the sibling gates in
+      # this repo went quiet (#2775, #2939), and there is no correct filter here
+      # anyway — the breaking edit is a new `import` in a console file that the
+      # Dockerfile does not mention. It is static and offline: it reads
+      # Dockerfiles and TypeScript from the checkout, makes no Azure call, and
+      # needs no credentials.
+      - name: dockerfile-copy-closure (hand-copied sources must carry their full import closure — #3886)
+        if: ${{ !cancelled() }}
+        run: node scripts/ci/check-dockerfile-copy-closure.mjs
       - name: duplicate-env (env name emitted more than once per app)
         if: ${{ !cancelled() }}
         run: node scripts/ci/check-duplicate-env.mjs
