@@ -78,13 +78,66 @@ export type SnowflakeFailureKind =
   | 'unknown';
 
 /**
+ * Every member of {@link SnowflakeFailureKind}, at RUNTIME.
+ *
+ * A union type is erased, so a spec that wants to assert something about EVERY
+ * branch has to hand-list them — and a hand-list silently misses the next member
+ * added. #4049 F3 measured the cost of exactly that: the docblock on
+ * {@link describeSnowflakeFailure} claims its verbatim-`detail` invariant is
+ * "asserted by its own test", and dropping `detail` one branch at a time showed
+ * it held for THREE of six (authentication / authorization / unknown CAUGHT;
+ * warehouse / network / network-policy ESCAPED). This array is what makes the
+ * coverage assertion derive from the type rather than restate it, and
+ * `KIND_COVERAGE` in the test pins that every member has a fixture.
+ */
+export const SNOWFLAKE_FAILURE_KINDS = [
+  'authentication',
+  'authorization',
+  'warehouse',
+  'network-policy',
+  'network',
+  'unknown',
+] as const satisfies readonly SnowflakeFailureKind[];
+
+/**
  * Snowflake's NETWORK POLICY rejection — the IP allowlist, not the credential.
  *
- * Checked FIRST, and this ordering is the one that genuinely flips a real input.
- * Snowflake returns the policy rejection over SQLSTATE `08004` — the SAME
- * SQLSTATE as the measured MFA failure — so on `AUTHENTICATION`-first ordering
- * a blocked IP would be told to switch to key-pair auth, which cannot fix it.
- * Pinned by a fixture; do not reorder without reading that test.
+ * CHECKED FIRST, AND THE REASON IS NETWORK, NOT AUTHENTICATION (#4048 F2).
+ *
+ * This comment used to read: "Snowflake returns the policy rejection over
+ * SQLSTATE `08004` — the SAME SQLSTATE as the measured MFA failure — so on
+ * AUTHENTICATION-first ordering a blocked IP would be told to switch to
+ * key-pair auth. Pinned by a fixture."
+ *
+ * THAT COLLISION WAS NEVER ESTABLISHED, and the fixture that "pinned" it was
+ * self-authored — a comment citing a test written to match the comment, which is
+ * circular, and is the one thing this module exists to forbid. Three independent
+ * sources point the other way:
+ *
+ *   - Microsoft's own ADF connector troubleshooting doc (MicrosoftDocs/azure-docs,
+ *     `connector-troubleshoot-snowflake.md`) gives the observed ADF payload as
+ *     `IP % is not allowed to access Snowflake. Contact your local security
+ *     administrator.` — NO vendor code and NO SQLSTATE at all. That is the exact
+ *     path this classifier consumes.
+ *   - PostHog's production Snowflake source annotates the same rejection as
+ *     `250001 (08001)`.
+ *   - The old fixture's `390432` returns zero Snowflake-related hits in GitHub
+ *     code search; tools in the wild use `390429` / `390422`.
+ *
+ * THE ORDERING IS STILL LOAD-BEARING — the real dependency is
+ * NETWORK_POLICY BEFORE NETWORK. Class-token membership over the four real
+ * payload forms, measured:
+ *
+ *     A  ms-adf-doc form        AUTH=false  NET=false
+ *     B  posthog 250001 (08001) AUTH=false  NET=true   <- NETWORK would claim it
+ *     D  "Incoming request ..." AUTH=false  NET=false
+ *
+ * Form B carries `08001`, which the NETWORK branch matches, so reordering
+ * NETWORK ahead of NETWORK_POLICY tells a blocked-IP operator to check DNS and
+ * firewalls for their factory's egress — advice that cannot fix an allowlist.
+ * That is a groundable justification and it is strictly better than the one it
+ * replaces. Pinned by forms A and B in the test; do not reorder without reading
+ * it.
  */
 const NETWORK_POLICY = new RegExp(
   [
@@ -245,14 +298,27 @@ export function snowflakeRemediation(
   const db = (database || '').trim();
   switch (kind) {
     case 'authentication':
+      // #4048 F1 — SEQUENTIAL, NOT ALTERNATIVE. This used to read "switch to
+      // KEY-PAIR auth … OR point the connection at a user created with
+      // TYPE = SERVICE, which is exempt from interactive MFA". The exemption
+      // half is right; the "or" is not. Per
+      // docs.snowflake.com/en/user-guide/admin-user-management a TYPE = SERVICE
+      // user "cannot log in using a password … cannot have the following
+      // properties: … PASSWORD". So it is not an alternative to key-pair — it
+      // has no password at all and still REQUIRES key-pair (or OAuth). An
+      // operator who read the "or", created a SERVICE user and left the Loom
+      // connection on basic auth failed again, having done real work in their
+      // own Snowflake account first.
       return (
         'Snowflake REJECTED THE SIGN-IN, so nothing past the login was reached: this failure says nothing about ' +
         'the role, its grants, or the warehouse, and no GRANT will change it. Loom signs in through the ADF ' +
         'Snowflake connector, which is non-interactive, so a user that requires interactive MFA cannot complete ' +
-        'this login by design. Either switch the connection to KEY-PAIR auth (in Snowflake: ' +
-        'ALTER USER … SET RSA_PUBLIC_KEY = …, then set the Loom connection\'s auth method to "Key pair"), or point ' +
-        'the connection at a user created with TYPE = SERVICE, which is exempt from interactive MFA. Snowflake\'s ' +
-        'own message above is the authoritative detail.'
+        'this login by design. Switch the connection to KEY-PAIR auth (in Snowflake: ' +
+        'ALTER USER … SET RSA_PUBLIC_KEY = …, then set the Loom connection\'s auth method to "Key pair"). If the ' +
+        'account additionally enforces MFA by authentication policy, ALSO change the user to TYPE = SERVICE, ' +
+        'which is not subject to that enforcement — note a SERVICE user cannot have a password at all, so ' +
+        'key-pair is required either way and TYPE = SERVICE is never a substitute for it. Snowflake\'s own ' +
+        'message above is the authoritative detail.'
       );
     case 'authorization':
       return (
@@ -294,10 +360,22 @@ export function snowflakeRemediation(
 /**
  * PURE. The full operator-facing message for a failed Snowflake read.
  *
- * INVARIANT, asserted by its own test: `detail` is carried through VERBATIM in
- * every branch, including `unknown`. Surfacing the backend's own words was the
- * one thing the original message got right, and a "fix" that swallowed them
- * while tidying the advice would be a net regression.
+ * INVARIANT: `detail` is carried through VERBATIM in every branch, including
+ * `unknown`. Surfacing the backend's own words was the one thing the original
+ * message got right, and a "fix" that swallowed them while tidying the advice
+ * would be a net regression.
+ *
+ * ASSERTED FOR ALL SIX BRANCHES SINCE #4049, and it was not before. This
+ * docblock said "asserted by its own test" while dropping `detail` one branch at
+ * a time gave:
+ *
+ *     authentication  RC=1 CAUGHT      warehouse       RC=0 ESCAPED
+ *     authorization   RC=1 CAUGHT      network         RC=0 ESCAPED
+ *     unknown         RC=1 CAUGHT      network-policy  RC=0 ESCAPED
+ *
+ * — three of six, and there was no `network` case in the suite at all. The
+ * coverage is now DERIVED from {@link SNOWFLAKE_FAILURE_KINDS} rather than
+ * hand-listed, so the next branch added cannot be missed the same way.
  *
  * @param prefix  what Loom was doing, in Loom's terms
  * @param detail  the backend's message, unmodified

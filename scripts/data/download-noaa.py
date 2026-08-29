@@ -15,13 +15,10 @@ import csv
 import gzip
 import json
 import logging
-import os
 import sys
-from datetime import datetime
+from datetime import datetime, timezone
 from io import StringIO
 from pathlib import Path
-from typing import Dict, List, Optional
-from urllib.parse import urljoin
 
 import pandas as pd
 import requests
@@ -50,7 +47,7 @@ class NOAADownloader:
             'User-Agent': 'CSA-in-a-Box Data Downloader (research/educational use)'
         })
 
-    def _download_file(self, url: str, description: str) -> Optional[str]:
+    def _download_file(self, url: str, description: str) -> str | None:
         """Download file with progress bar and return content."""
         try:
             response = self.session.get(url, stream=True, timeout=30)
@@ -71,7 +68,7 @@ class NOAADownloader:
             logging.error(f"Failed to download {url}: {e}")
             return None
 
-    def get_station_list(self, state: Optional[str] = None) -> List[Dict]:
+    def get_station_list(self, state: str | None = None) -> list[dict]:
         """Get list of available weather stations."""
         stations_url = "https://www.ncei.noaa.gov/data/global-historical-climatology-network-daily/doc/ghcnd-stations.txt"
 
@@ -104,7 +101,7 @@ class NOAADownloader:
 
         return stations
 
-    def download_ghcn_daily(self, year: str, stations: List[str]) -> List[Dict]:
+    def download_ghcn_daily(self, year: str, stations: list[str]) -> list[dict]:
         """Download GHCN-Daily data for specified stations and year."""
         all_data = []
 
@@ -133,7 +130,7 @@ class NOAADownloader:
 
         return all_data
 
-    def download_storm_events(self, year: str) -> List[Dict]:
+    def download_storm_events(self, year: str) -> list[dict]:
         """Download NOAA Storm Events data for specified year."""
         # Storm events are available by year
         url = f"{self.STORM_BASE_URL}StormEvents_details-ftp_v1.0_d{year}_c20230927.csv.gz"
@@ -164,7 +161,7 @@ class NOAADownloader:
             logging.error(f"Failed to download storm events for {year}: {e}")
             return []
 
-    def get_default_stations(self, state: Optional[str] = None, limit: int = 10) -> List[str]:
+    def get_default_stations(self, state: str | None = None, limit: int = 10) -> list[str]:
         """Get default set of weather stations for a state or nationwide."""
         stations = self.get_station_list(state)
 
@@ -176,7 +173,7 @@ class NOAADownloader:
         return [s['station_id'] for s in filtered_stations[:limit]]
 
 
-def save_data_with_manifest(data: List[Dict], filename: str, output_dir: Path,
+def save_data_with_manifest(data: list[dict], filename: str, output_dir: Path,
                           description: str, source_url: str) -> None:
     """Save data as CSV and update manifest."""
     if not data:
@@ -193,14 +190,14 @@ def save_data_with_manifest(data: List[Dict], filename: str, output_dir: Path,
 
     manifest = {}
     if manifest_path.exists():
-        with open(manifest_path, 'r') as f:
+        with open(manifest_path) as f:
             manifest = json.load(f)
 
     file_info = {
         'filename': filename,
         'description': description,
         'source_url': source_url,
-        'download_timestamp': datetime.utcnow().isoformat() + 'Z',
+        'download_timestamp': datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z'),
         'record_count': len(data),
         'file_size_bytes': csv_path.stat().st_size,
         'columns': list(df.columns) if not df.empty else []
