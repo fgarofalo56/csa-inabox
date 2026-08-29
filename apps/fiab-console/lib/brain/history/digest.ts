@@ -95,7 +95,17 @@ function canonicalNode(n: VersionNode): string {
     n.ingress === null ? NULL_TOKEN : f(n.ingress.fqdn),
     // The key set is sorted by `./project`; sorted again here so a caller
     // cannot move the digest by handing over an unsorted array.
-    n.tagKeys === null ? NULL_TOKEN : f([...n.tagKeys].sort().join(',')),
+    //
+    // EVERY KEY IS PREFIXED INDIVIDUALLY, and the COUNT leads (#4017). Prefixing
+    // the JOINED string instead — `f(keys.join(','))` — was the one field in this
+    // canonical form that was NOT injective: a comma is a legal Azure tag name
+    // character, so the single key `a,b` and the pair `a` + `b` both rendered
+    // `3:a,b` and hashed identically. Two versions differing only in that way
+    // deduped into one and were never written. `f(count)` leading makes the field
+    // self-delimiting on its own rather than relying on SEP.
+    n.tagKeys === null
+      ? NULL_TOKEN
+      : [f(String(n.tagKeys.length)), ...[...n.tagKeys].sort().map((k) => f(k))].join(''),
     f(n.estateTag),
   ].join(SEP);
 }

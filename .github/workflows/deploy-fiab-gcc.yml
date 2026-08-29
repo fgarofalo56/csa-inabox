@@ -24,6 +24,45 @@ run-name: >-
 # CSA Loom — nightly deploy validation against GCC (Azure Commercial
 # under M365 GCC identity). GCC limitations: no F-SKU, no Direct
 # Lake parity.
+#
+# ── THIS LANE IS `disabled_manually`, AND HERE IS WHY (#4071) ────────────────
+#
+# Measured 2026-08-29 via the Actions API: `state: disabled_manually`,
+# `updated_at: 2026-08-08T04:36:15-04:00` (= 08:36:15Z). It was NOT disabled for
+# failing — its last 20 runs are 20/20 SUCCESS. It was disabled because those
+# greens were HOLLOW, for three independently measured reasons:
+#
+#   1. NO GCC CREDENTIALS AT ALL. `gh secret list` returns 13 secrets; the
+#      AZURE_GOV_* family is present and `grep -c AZURE_GCC` is 0. None of the
+#      four secrets the precheck below reads exists, so it set `configured=false`,
+#      both real jobs were `if:`-skipped, and the run concluded SUCCESS (#3219).
+#   2. THE HUB-EXISTENCE GUARD COULD NOT FAIL. `2>/dev/null || echo "0"` turned
+#      an auth failure, a missing extension or a throttle into "no hub exists",
+#      so the what-if SUCCESS was the ABSENCE of a check (#3139, merged one hour
+#      before the disablement).
+#   3. IT DEPLOYS ZERO CONTAINER APPS. `deployAppsEnabled` is never set in
+#      gcc.bicepparam; GCC-High and IL5 both set it true (#3078, open).
+#
+# So the disablement was deliberate and correct, not neglect.
+#
+# STILL INFERRED, NOT MEASURED: that the 08:36:15Z state change was made BY the
+# actor who dispatched the final run at 08:36:07Z and FOR the #3139 reason. The
+# API exposes neither, and there is no audit-log access on this repo. The
+# 8-second and one-hour correlations are strong and circumstantial; causation is
+# not established (deploy-integrity.md R7).
+#
+# THE DURABLE RECORD — owner, reason and an EXPIRING `reviewBy` — lives in
+# scripts/ci/workflow-lane-states-allowlist.json and is enforced on every run by
+# scripts/ci/check-workflow-lane-states.mjs. That is the dated owner
+# .claude/rules/cloud-parity.md clause 1 requires; #3078's stated target ("with
+# the Gov image-lane work") is a dependency, not a date. Fuller write-up:
+# docs/fiab/parity/cloud-capability-matrix.md.
+#
+# RE-ENABLING is an operator decision and is cheap NOW in a way it was not on
+# 08-08: #3219 (merged 2026-08-11, after the disablement) made a SCHEDULED run
+# with the secrets absent emit `::error::` naming all four and exit 1. So
+# re-enabling converts a silent state into a daily, correctly-attributed RED —
+# read the `schedule:` and the Teardown `if:` first regardless.
 
 on:
   schedule:
