@@ -17,11 +17,9 @@ import logging
 import os
 import sys
 import zipfile
-from datetime import datetime
+from datetime import datetime, timezone
 from io import BytesIO
 from pathlib import Path
-from typing import Dict, List, Optional
-from urllib.parse import urljoin
 
 import pandas as pd
 import requests
@@ -59,7 +57,7 @@ class GeospatialDownloader:
             'User-Agent': 'CSA-in-a-Box Data Downloader (research/educational use)'
         })
 
-    def _download_file(self, url: str, description: str) -> Optional[bytes]:
+    def _download_file(self, url: str, description: str) -> bytes | None:
         """Download file with progress bar and return content."""
         try:
             response = self.session.get(url, stream=True, timeout=120)
@@ -80,7 +78,7 @@ class GeospatialDownloader:
             logging.error(f"Failed to download {url}: {e}")
             return None
 
-    def download_tiger_states(self, year: str = "2023") -> Optional[str]:
+    def download_tiger_states(self, year: str = "2023") -> str | None:
         """Download Census TIGER state boundaries."""
         filename = f"tl_{year}_us_state.zip"
         url = f"https://www2.census.gov/geo/tiger/TIGER{year}/STATE/{filename}"
@@ -91,7 +89,7 @@ class GeospatialDownloader:
 
         return self._extract_shapefile(content, f"tiger_states_{year}")
 
-    def download_tiger_counties(self, state_fips: Optional[str] = None, year: str = "2023") -> Optional[str]:
+    def download_tiger_counties(self, state_fips: str | None = None, year: str = "2023") -> str | None:
         """Download Census TIGER county boundaries."""
         if state_fips:
             # Download for specific state
@@ -109,7 +107,7 @@ class GeospatialDownloader:
         suffix = f"_{state_fips}" if state_fips else "_national"
         return self._extract_shapefile(content, f"tiger_counties_{year}{suffix}")
 
-    def download_tiger_tracts(self, state_fips: str, year: str = "2023") -> Optional[str]:
+    def download_tiger_tracts(self, state_fips: str, year: str = "2023") -> str | None:
         """Download Census TIGER tract boundaries for a state."""
         filename = f"tl_{year}_{state_fips}_tract.zip"
         url = f"https://www2.census.gov/geo/tiger/TIGER{year}/TRACT/{filename}"
@@ -120,7 +118,7 @@ class GeospatialDownloader:
 
         return self._extract_shapefile(content, f"tiger_tracts_{state_fips}_{year}")
 
-    def download_natural_earth_countries(self, resolution: str = "50m") -> Optional[str]:
+    def download_natural_earth_countries(self, resolution: str = "50m") -> str | None:
         """Download Natural Earth country boundaries."""
         # Resolution: 10m, 50m, or 110m
         filename = f"ne_{resolution}_admin_0_countries.zip"
@@ -132,7 +130,7 @@ class GeospatialDownloader:
 
         return self._extract_shapefile(content, f"natural_earth_countries_{resolution}")
 
-    def download_natural_earth_coastlines(self, resolution: str = "50m") -> Optional[str]:
+    def download_natural_earth_coastlines(self, resolution: str = "50m") -> str | None:
         """Download Natural Earth coastline data."""
         filename = f"ne_{resolution}_coastline.zip"
         url = f"https://www.naturalearthdata.com/http//www.naturalearthdata.com/download/{resolution}/physical/{filename}"
@@ -143,7 +141,7 @@ class GeospatialDownloader:
 
         return self._extract_shapefile(content, f"natural_earth_coastlines_{resolution}")
 
-    def download_epa_frs_facilities(self) -> List[Dict]:
+    def download_epa_frs_facilities(self) -> list[dict]:
         """Download EPA Facility Registry Service (FRS) data."""
         # EPA FRS provides CSV downloads
         url = "https://www.epa.gov/system/files/other-files/2022-11/national_single.zip"
@@ -167,7 +165,7 @@ class GeospatialDownloader:
 
         return []
 
-    def _extract_shapefile(self, zip_content: bytes, base_name: str) -> Optional[str]:
+    def _extract_shapefile(self, zip_content: bytes, base_name: str) -> str | None:
         """Extract shapefile and optionally convert to GeoParquet."""
         try:
             # Extract ZIP file
@@ -197,22 +195,21 @@ class GeospatialDownloader:
                     shutil.rmtree(extract_dir)
 
                     return output_file
-                else:
-                    # Keep as shapefile - move files to final location
-                    for file in extract_dir.glob("*"):
-                        final_path = Path(file.name)
-                        file.rename(final_path)
+                # Keep as shapefile - move files to final location
+                for file in extract_dir.glob("*"):
+                    final_path = Path(file.name)
+                    file.rename(final_path)
 
-                    # Clean up directory
-                    extract_dir.rmdir()
+                # Clean up directory
+                extract_dir.rmdir()
 
-                    return shp_files[0]
+                return shp_files[0]
 
         except Exception as e:
             logging.error(f"Failed to process shapefile: {e}")
             return None
 
-    def get_state_fips_codes(self) -> Dict[str, str]:
+    def get_state_fips_codes(self) -> dict[str, str]:
         """Get mapping of state abbreviations to FIPS codes."""
         return {
             'AL': '01', 'AK': '02', 'AZ': '04', 'AR': '05', 'CA': '06',
@@ -229,7 +226,7 @@ class GeospatialDownloader:
         }
 
 
-def save_data_with_manifest(data: List[Dict], filename: str, output_dir: Path,
+def save_data_with_manifest(data: list[dict], filename: str, output_dir: Path,
                           description: str, source_url: str) -> None:
     """Save data as CSV and update manifest."""
     if not data:
@@ -246,14 +243,14 @@ def save_data_with_manifest(data: List[Dict], filename: str, output_dir: Path,
 
     manifest = {}
     if manifest_path.exists():
-        with open(manifest_path, 'r') as f:
+        with open(manifest_path) as f:
             manifest = json.load(f)
 
     file_info = {
         'filename': filename,
         'description': description,
         'source_url': source_url,
-        'download_timestamp': datetime.utcnow().isoformat() + 'Z',
+        'download_timestamp': datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z'),
         'record_count': len(data),
         'file_size_bytes': csv_path.stat().st_size,
         'columns': list(df.columns) if not df.empty else []
@@ -279,14 +276,14 @@ def save_geospatial_manifest(filename: str, output_dir: Path, description: str,
 
     manifest = {}
     if manifest_path.exists():
-        with open(manifest_path, 'r') as f:
+        with open(manifest_path) as f:
             manifest = json.load(f)
 
     file_info = {
         'filename': filename,
         'description': description,
         'source_url': source_url,
-        'download_timestamp': datetime.utcnow().isoformat() + 'Z',
+        'download_timestamp': datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z'),
         'file_size_bytes': file_path.stat().st_size,
         'format': format_type,
         'coordinate_system': 'EPSG:4326 (WGS84)' if format_type == 'geoparquet' else 'varies'
@@ -457,7 +454,7 @@ def main():
             json.dump({
                 'fips_codes': fips_codes,
                 'description': 'State FIPS codes for TIGER data downloads',
-                'generated': datetime.utcnow().isoformat() + 'Z'
+                'generated': datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z')
             }, f, indent=2)
 
         logging.info("Download completed successfully")
