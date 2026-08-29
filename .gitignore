@@ -42,6 +42,17 @@ data/
 !examples/*/data/
 # Un-ignore cookiecutter template data/ (same pattern as examples).
 !templates/example-vertical/*/data/
+# Un-ignore scripts/data/ — the open-data DOWNLOADERS, which are source, not
+# portal persistence. This is the SIXTH un-ignore line for the same `data/`
+# over-match and it earned its own defect: ruff, bandit and mypy all respect
+# .gitignore, so nine tracked `scripts/data/download-*.py` were invisible to
+# every directory-walk invocation while the dev-loop gate fired for changes to
+# them and reported PASS having read nothing of them (#3811). 216 findings hid
+# there. `scripts/ci/python_lint_scope.py` closed the LINT half by passing
+# explicit tracked paths; this closes it for every gitignore-respecting tool at
+# once, so the next one added does not have to rediscover it (#3990).
+!scripts/data/
+!scripts/data/**
 # Re-ignore generator *output* (fixtures produced at runtime).
 examples/*/data/seed/
 

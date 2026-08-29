@@ -103,6 +103,49 @@ unknown() {
   exit "$EXIT_UNKNOWN"
 }
 
+# ── A FAILED SOURCE ENDS THAT SOURCE, NOT THE SEARCH (#4163) ──────────────────
+#
+# deploy-fiab-commercial run 33199055298 (2026-08-28) failed here, and the two
+# runs before it had SUCCEEDED. Measured, the estate had not changed: the
+# Key Vault carries publicNetworkAccess=Disabled with networkAcls.defaultAction
+# =Deny, and `az monitor activity-log` records ZERO vault writes since
+# 2026-08-25. It has been unreachable from a hosted runner the whole time, and
+# `actions/runners` reports total_count 0, so there is no in-VNet runner either.
+#
+# What changed was this script. #4127 correctly stopped it reporting "no app
+# registration" when a read had FAILED — but it wired that verdict to exit
+# IMMEDIATELY, so a Key Vault the runner cannot reach ended the search before
+# source 3. Source 3 is the live Console Container App, an ARM CONTROL-plane
+# read that the runner CAN make, and it is what had been answering all along.
+#
+# So the #4127 invariant is kept exactly — an unreadable source is never an
+# absence — but it is now evaluated over ALL sources rather than the first one
+# that fails. A failure is REMEMBERED and only becomes the verdict if nothing
+# else resolves a value.
+#
+# The asymmetry is deliberate and is the whole safety argument:
+#
+#   a later source returns a VALUE   -> exit 0. The question was "which client
+#                                       id", and it has been answered. An
+#                                       unreadable Key Vault does not make a
+#                                       present, live answer less true.
+#   every source returns NOTHING and
+#     at least one FAILED            -> UNKNOWN. This is the case that must not
+#                                       collapse to absence: the durable record
+#                                       could not be read, so "nothing found"
+#                                       is not the same as "nothing exists".
+#   every source returns NOTHING and
+#     all SUCCEEDED                  -> absence, exit 0 with empty output.
+DEFERRED_UNKNOWN=""
+
+defer_unknown() {
+  # The message is captured NOW. `az_err` reads $ERRF, which the next az call
+  # overwrites — deferring the read would report a later command's stderr as
+  # this failure's cause, which is the R7 error this file exists to prevent.
+  [ -n "$DEFERRED_UNKNOWN" ] || DEFERRED_UNKNOWN="$1"
+  log "source unreadable, continuing to the next source — $1"
+}
+
 # 1 — already supplied.
 if [ -n "${LOOM_MSAL_CLIENT_ID:-}" ]; then
   log "using LOOM_MSAL_CLIENT_ID from the environment"
@@ -129,7 +172,7 @@ fi
 if [ -z "${KV}" ]; then
   raw="$(az keyvault list -g "${RG}" --query "[0].name" -o tsv 2>"$ERRF")"
   rc=$?
-  [ "$rc" -eq 0 ] || unknown "could not list key vaults in ${RG} (az exited $rc): $(az_err)"
+  [ "$rc" -eq 0 ] || defer_unknown "could not list key vaults in ${RG} (az exited $rc): $(az_err)"
   KV="$(printf '%s' "$raw" | tr -d '\r')"
 fi
 if [ -n "${KV}" ]; then
@@ -137,9 +180,14 @@ if [ -n "${KV}" ]; then
   rc=$?
   if [ "$rc" -ne 0 ]; then
     # A missing secret is a legitimate absence — fall through to source 3.
-    # Anything else (403 on the data plane, firewall, expired token) is unknown.
-    is_not_found || unknown "could not read ${KV}/${SECRET_NAME} (az exited $rc): $(az_err)"
-    log "no ${SECRET_NAME} secret in ${KV} — trying the live Console app"
+    # Anything else (403 on the data plane, firewall, expired token) is unknown,
+    # and is now DEFERRED rather than terminal: the firewall denial that broke
+    # run 33199055298 lands here, and source 3 can still answer.
+    if is_not_found; then
+      log "no ${SECRET_NAME} secret in ${KV} — trying the live Console app"
+    else
+      defer_unknown "could not read ${KV}/${SECRET_NAME} (az exited $rc): $(az_err)"
+    fi
   else
     CID="$(printf '%s' "$raw" | tr -d '\r')"
     if [ -n "${CID:-}" ]; then
@@ -157,15 +205,32 @@ raw="$(az containerapp show -n "${CONSOLE_APP}" -g "${RG}" \
 rc=$?
 if [ "$rc" -ne 0 ]; then
   # No console app yet is a legitimate absence on a part-built estate.
-  is_not_found || unknown "could not read the ${CONSOLE_APP} Container App in ${RG} (az exited $rc): $(az_err)"
-  log "no ${CONSOLE_APP} Container App in ${RG} yet"
+  if is_not_found; then
+    log "no ${CONSOLE_APP} Container App in ${RG} yet"
+  else
+    defer_unknown "could not read the ${CONSOLE_APP} Container App in ${RG} (az exited $rc): $(az_err)"
+  fi
 else
   CID="$(printf '%s' "$raw" | tr -d '\r')"
   if [ -n "${CID:-}" ] && [ "${CID}" != "None" ]; then
+    # A PRESENT value settles it, even if an earlier source was unreadable —
+    # that is the #4163 asymmetry. The unreadable source is still reported,
+    # because an estate whose durable record cannot be read is a real condition
+    # the operator should see even when the deploy proceeds.
+    if [ -n "$DEFERRED_UNKNOWN" ]; then
+      log "NOTE — an earlier source could not be read: ${DEFERRED_UNKNOWN}"
+      log "Resolving anyway: the live Container App returned a value, which answers the question that source could not."
+    fi
     log "resolved from the live ${CONSOLE_APP} Container App (consider re-running bootstrap-msal-app-reg.sh so it is also recorded in Key Vault)"
     printf '%s' "${CID}"
     exit 0
   fi
+fi
+
+# Nothing resolved. Whether that is ABSENCE or UNKNOWN turns entirely on whether
+# every read actually completed — the distinction #4127 exists to preserve.
+if [ -n "$DEFERRED_UNKNOWN" ]; then
+  unknown "$DEFERRED_UNKNOWN — and no later source resolved a value either, so absence cannot be distinguished from an unreadable estate"
 fi
 
 log "no existing app registration found in ${RG} — every read SUCCEEDED and returned nothing (this is absence, not an unreadable estate). The deploy will render an empty client id; sign-in stays unconfigured until deploy phase 3 runs."

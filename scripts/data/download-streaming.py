@@ -17,16 +17,15 @@ import logging
 import os
 import sys
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import Dict, List, Optional
 
 import requests
 from tqdm import tqdm
 
 # Optional import for Azure Event Hubs
 try:
-    from azure.eventhub import EventHubProducerClient, EventData
+    from azure.eventhub import EventData, EventHubProducerClient
     HAS_AZURE_EVENTHUB = True
 except ImportError:
     HAS_AZURE_EVENTHUB = False
@@ -57,7 +56,7 @@ class StreamingDataCollector:
     NOAA_ALERTS_URL = "https://api.weather.gov/alerts/active"
     WIKIMEDIA_STREAM_URL = "https://stream.wikimedia.org/v2/stream/recentchange"
 
-    def __init__(self, output_type: str = "file", eventhub_connection_string: Optional[str] = None):
+    def __init__(self, output_type: str = "file", eventhub_connection_string: str | None = None):
         """Initialize collector."""
         self.output_type = output_type
         self.eventhub_connection_string = eventhub_connection_string
@@ -77,7 +76,7 @@ class StreamingDataCollector:
             except Exception as e:
                 logging.error(f"Failed to connect to Event Hub: {e}")
 
-    def collect_earthquake_data(self, duration_seconds: int, output_file: Optional[str] = None) -> List[Dict]:
+    def collect_earthquake_data(self, duration_seconds: int, output_file: str | None = None) -> list[dict]:
         """Collect USGS earthquake data by polling."""
         data_points = []
         start_time = time.time()
@@ -90,7 +89,7 @@ class StreamingDataCollector:
                     response.raise_for_status()
                     earthquake_data = response.json()
 
-                    timestamp = datetime.utcnow().isoformat() + 'Z'
+                    timestamp = datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z')
                     earthquakes = earthquake_data.get('features', [])
 
                     # Only process if we have new earthquakes
@@ -116,7 +115,7 @@ class StreamingDataCollector:
 
         return data_points
 
-    def collect_weather_alerts(self, duration_seconds: int, output_file: Optional[str] = None) -> List[Dict]:
+    def collect_weather_alerts(self, duration_seconds: int, output_file: str | None = None) -> list[dict]:
         """Collect NOAA weather alerts by polling."""
         data_points = []
         start_time = time.time()
@@ -129,7 +128,7 @@ class StreamingDataCollector:
                     response.raise_for_status()
                     alerts_data = response.json()
 
-                    timestamp = datetime.utcnow().isoformat() + 'Z'
+                    timestamp = datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z')
                     alerts = alerts_data.get('features', [])
 
                     # Only process if we have new alerts
@@ -155,7 +154,7 @@ class StreamingDataCollector:
 
         return data_points
 
-    def collect_wikimedia_stream(self, duration_seconds: int, output_file: Optional[str] = None) -> List[Dict]:
+    def collect_wikimedia_stream(self, duration_seconds: int, output_file: str | None = None) -> list[dict]:
         """Collect Wikimedia recent changes via Server-Sent Events."""
         if not HAS_SSECLIENT:
             logging.error("sseclient-py required for Wikimedia stream")
@@ -176,7 +175,7 @@ class StreamingDataCollector:
                     if event.data:
                         try:
                             change_data = json.loads(event.data)
-                            timestamp = datetime.utcnow().isoformat() + 'Z'
+                            timestamp = datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z')
 
                             data_point = {
                                 'timestamp': timestamp,
@@ -198,7 +197,7 @@ class StreamingDataCollector:
 
         return data_points
 
-    def _output_data(self, data_point: Dict, output_file: Optional[str] = None) -> None:
+    def _output_data(self, data_point: dict, output_file: str | None = None) -> None:
         """Output data to file or Event Hub."""
         if self.output_type == "file" and output_file:
             # Append to JSONL file
@@ -214,7 +213,7 @@ class StreamingDataCollector:
             except Exception as e:
                 logging.error(f"Failed to send to Event Hub: {e}")
 
-    def collect_all_feeds(self, duration_seconds: int, output_dir: Path) -> Dict[str, List[Dict]]:
+    def collect_all_feeds(self, duration_seconds: int, output_dir: Path) -> dict[str, list[dict]]:
         """Collect from all available feeds simultaneously (simplified)."""
         all_data = {}
 
@@ -239,7 +238,7 @@ class StreamingDataCollector:
         return all_data
 
 
-def save_streaming_manifest(feeds_data: Dict[str, List[Dict]], output_dir: Path,
+def save_streaming_manifest(feeds_data: dict[str, list[dict]], output_dir: Path,
                           duration_seconds: int) -> None:
     """Save manifest for streaming data collection."""
     manifest_path = output_dir / "streaming_manifest.json"
@@ -247,7 +246,7 @@ def save_streaming_manifest(feeds_data: Dict[str, List[Dict]], output_dir: Path,
     manifest = {
         'collection_info': {
             'duration_seconds': duration_seconds,
-            'collection_timestamp': datetime.utcnow().isoformat() + 'Z',
+            'collection_timestamp': datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z'),
             'feeds_collected': list(feeds_data.keys())
         },
         'feeds': {}

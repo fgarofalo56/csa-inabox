@@ -66,6 +66,84 @@ describe('classifyReachError — a refusal is an ANCHORED status token', () => {
     }
   });
 
+  it('#4049 F4 — each anchor HALF is independently discriminated in THIS suite', () => {
+    // `status-token.ts` claims each anchor half has a fixture the other half
+    // alone would not block. That was true in `status-token.test.ts` and NOT
+    // here: every numeric fixture in this suite (`st403data`, `kv-401-prod`,
+    // `eh-403hub`, `st4031`) is blocked by BOTH anchors, so neither half was
+    // discriminated. Measured — dropping either half left this suite at RC=0,
+    // and MX13 (re-inlining a lookahead-only anchor in `connection-probe.ts`)
+    // ESCAPED.
+    //
+    // Two shapes, each blocked by exactly ONE half. Both must produce NO
+    // role-grant hint; drop the lookbehind and the first starts producing one,
+    // drop the lookahead and the second does.
+    //
+    // NOTE the wording is deliberately transport-free: after #4048 F5 the
+    // transport branches run first, so a message containing `getaddrinfo` would
+    // be classified before REACH_DENIED is ever consulted and the anchor would
+    // not be exercised at all. These reach REACH_DENIED.
+    const trailing = classifyReachError(
+      new Error('PUT to container loom403 returned an unexpected condition'),
+      noRedact, 'storage account',
+    );
+    expect(trailing.hint, 'TRAILING token — only the LOOKBEHIND blocks this').toBeUndefined();
+
+    const leading = classifyReachError(
+      new Error('PUT to container 403abc returned an unexpected condition'),
+      noRedact, 'storage account',
+    );
+    expect(leading.hint, 'LEADING token — only the LOOKAHEAD blocks this').toBeUndefined();
+  });
+
+  it('CONTROL: a REAL standalone status in the same sentence shape IS a refusal', () => {
+    // Without this, the two `toBeUndefined()`s above are equally satisfied by a
+    // classifier that stopped recognising numeric refusals at all.
+    const r = classifyReachError(
+      new Error('PUT to container loom failed 403: an unexpected condition'),
+      noRedact, 'storage account',
+    );
+    expect(r.hint).toMatch(/not authorized/);
+  });
+
+  it('#4048 F5 — a transport failure on a host whose NAME contains an authz WORD', () => {
+    // THE SAME R7 DEFECT, ONE DATATYPE OVER. The numeric half of REACH_DENIED was
+    // anchored by `statusToken`; `forbidden` / `authorization` / `not authorized`
+    // were left as BARE SUBSTRINGS, and REACH_DENIED was tested FIRST. Every one
+    // of these produced "not authorized. Grant it the appropriate data-plane
+    // role" for a DNS or connect failure that established nothing of the sort —
+    // measured, then fixed by asking the transport branches first.
+    //
+    // These are exactly the five probes from #4048, kept as fixtures so the
+    // ordering cannot silently revert.
+    const cases: Array<[string, RegExp]> = [
+      ['getaddrinfo ENOTFOUND authorization-api.contoso.com', /could not be resolved/],
+      ['getaddrinfo ENOTFOUND kv-authorization-prod.vault.azure.net', /could not be resolved/],
+      ['getaddrinfo ENOTFOUND stforbidden.dfs.core.windows.net', /could not be resolved/],
+      ['connect ECONNREFUSED loom-forbidden-eh.servicebus.windows.net:443', /did not respond/],
+      ['getaddrinfo ENOTFOUND stloom403.dfs.core.windows.net', /could not be resolved/],
+    ];
+    for (const [msg, expected] of cases) {
+      const r = classifyReachError(new Error(msg), noRedact, 'storage account');
+      expect(r.hint, `for ${JSON.stringify(msg)}`).toMatch(expected);
+      expect(r.hint, `for ${JSON.stringify(msg)}`).not.toMatch(/not authorized/);
+      expect(r.hint, `for ${JSON.stringify(msg)}`).not.toMatch(/data-plane role/);
+    }
+  });
+
+  it('CONTROL: a REAL refusal that also mentions a host still gets the role hint', () => {
+    // Without this, the reorder above is equally satisfied by a classifier that
+    // stopped producing the authorization hint at all — which would be a
+    // different R7 failure, not a fix. No transport token here, so REACH_DENIED
+    // is reached and must fire.
+    const r = classifyReachError(
+      new Error('PUT https://stforbidden.dfs.core.windows.net/loom failed 403: AuthorizationPermissionMismatch'),
+      noRedact,
+      'storage account',
+    );
+    expect(r.hint).toMatch(/not authorized/);
+  });
+
   it('attaches NO hint when nothing classified the failure', () => {
     const r = classifyReachError(new Error('an unexpected condition occurred'), noRedact, 'Key Vault');
     expect(r.hint).toBeUndefined();
