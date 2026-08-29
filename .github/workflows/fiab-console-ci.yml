@@ -153,12 +153,43 @@ jobs:
           if ! changed=$(git diff --name-only "$range" 2>&1); then
             echo "::warning::could not resolve '$range' ($changed) — building anyway rather than reporting this required check green on an unexamined tree."
             echo "console=true" >> "$GITHUB_OUTPUT"
-          elif echo "$changed" | grep -qE '^apps/fiab-console/|^\.github/workflows/fiab-console-ci\.yml'; then
-            echo "console=true" >> "$GITHUB_OUTPUT"
-            echo "Console changed — running full next build."
+            echo "portal=true" >> "$GITHUB_OUTPUT"
           else
-            echo "console=false" >> "$GITHUB_OUTPUT"
-            echo "No apps/fiab-console changes — skipping build, reporting this required check green."
+            if echo "$changed" | grep -qE '^apps/fiab-console/|^\.github/workflows/fiab-console-ci\.yml'; then
+              echo "console=true" >> "$GITHUB_OUTPUT"
+              echo "Console changed — running full next build."
+            else
+              echo "console=false" >> "$GITHUB_OUTPUT"
+              echo "No apps/fiab-console changes — skipping build, reporting this required check green."
+            fi
+            # #4187 — THE PORTAL IS THE OTHER FRONT END, AND IT HAD NO BLOCKING
+            # CHECK AT ALL. Measured on PR #4170, a bump of `next` itself in
+            # portal/react-webapp: all 15 required contexts were hollow or
+            # irrelevant, while the only check that actually built the portal —
+            # `Frontend Tests` -> `jest (node 20.x)`, 10 real steps — sits among
+            # the 23 ADVISORY checks and cannot block. So a dependency bump that
+            # broke the portal build would merge green.
+            #
+            # It is covered HERE rather than by promoting frontend-test.yml to a
+            # required context, because that workflow is path-filtered at the
+            # `on:` level and therefore does not trigger at all on a non-portal
+            # PR. A required context that never reports leaves the PR blocked
+            # forever — the exact stall that held release PR #4186 until its
+            # parked run was approved by hand. This workflow is deliberately NOT
+            # path-filtered at `on:` for precisely that reason, so a job added
+            # here always reports.
+            #
+            # It reuses the range resolution above rather than re-implementing
+            # it. That logic handles merge-group batching, shallow-clone
+            # deepening and fail-open on an unresolvable range; a second copy
+            # keyed to a different path would drift from it silently.
+            if echo "$changed" | grep -qE '^portal/react-webapp/|^\.github/workflows/fiab-console-ci\.yml'; then
+              echo "portal=true" >> "$GITHUB_OUTPUT"
+              echo "Portal changed — running the portal type-check + jest."
+            else
+              echo "portal=false" >> "$GITHUB_OUTPUT"
+              echo "No portal/react-webapp changes — skipping the portal steps."
+            fi
           fi
 
       - name: Use Node.js 20
@@ -226,6 +257,40 @@ jobs:
         # errors (missing keys, comment-in-JSX, parse errors), not on the ~600
         # existing style warnings.
         run: pnpm lint
+
+      # ── PORTAL (#4187) ────────────────────────────────────────────────────
+      # These mirror frontend-test.yml's `jest (node 20.x)` job, which stays as
+      # it is: it remains the fast path-filtered lane that runs on portal PRs
+      # and uploads the coverage artefact. What it CANNOT do is block a merge,
+      # because it is path-filtered at the `on:` level and so never reports on
+      # a non-portal PR. These steps carry the same work inside a context that
+      # always reports, which is what makes it blocking.
+      #
+      # npm, not pnpm: the portal has its own package-lock.json and is not part
+      # of the console's pnpm workspace. `npm ci` is the same install
+      # frontend-test.yml performs.
+      - name: Use Node.js 20 (portal)
+        if: steps.changed.outputs.portal == 'true'
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: portal/react-webapp/package-lock.json
+
+      - name: Install dependencies (portal)
+        if: steps.changed.outputs.portal == 'true'
+        working-directory: portal/react-webapp
+        run: npm ci --no-audit --no-fund
+
+      - name: Type-check (portal)
+        if: steps.changed.outputs.portal == 'true'
+        working-directory: portal/react-webapp
+        run: npm run type-check
+
+      - name: Jest (portal)
+        if: steps.changed.outputs.portal == 'true'
+        working-directory: portal/react-webapp
+        run: npm test
 
   vitest:
     name: vitest (node 20)

@@ -346,6 +346,35 @@ fi
 
 HOST="${ACR}${ACR_SUFFIX}"
 URL="https://${HOST}/v2/"
+# THE SECOND HOP (#4053). `/v2/` is the CHALLENGE; it is not where the tools
+# failed. Run 32819789544 reported READY on a 401 from `/v2/` and the next step
+# was refused at a DIFFERENT endpoint:
+#
+#   Error: POST https://…/oauth2/token: DENIED: client with IP … is not allowed access
+#
+# ACR rule propagation is per-frontend AND the token endpoint is a separate
+# path, so "the challenge answered" does not establish "the token exchange will
+# be admitted". A probe that samples only `/v2/` returns a TRUE answer that
+# callers reasonably read as a stronger guarantee than it is — deploy-integrity.md
+# R7. So every sample now probes BOTH, and a sample counts only if BOTH answer.
+#
+# THE URL IS NOT GUESSED. `/v2/` advertises the realm to use, and it names this
+# exact endpoint. Measured against a real registry on 2026-08-28:
+#
+#   Www-Authenticate: Bearer realm="https://<host>/oauth2/token",service="<host>"
+#
+# GET, NOT POST, and that is load-bearing. The incident line above is cosign's
+# POST, which carries a refresh token in its body. Measured on the same registry
+# the same day, a POST without that body returns 400 REQUEST_BODY_INVALID — a
+# status this script correctly treats as "not a readiness signal", so a POST
+# probe could never go positive and the whole check would be dead on arrival.
+# The anonymous GET is what a `docker pull` issues after the challenge, and it
+# discriminates the same way `/v2/` does. Both sides measured 2026-08-28:
+#
+#   firewall OPEN to this IP   -> HTTP 401, {"errors":[{"code":"UNAUTHORIZED"…
+#   firewall CLOSED to this IP -> HTTP 403, DENIED … is not allowed access
+#                                 (the incident log above, same endpoint)
+TOKEN_URL="https://${HOST}/oauth2/token?service=${HOST}&scope=registry:catalog:*"
 STARTED=$(date +%s)
 DEADLINE=$(( STARTED + BUDGET ))
 ATTEMPT=0
@@ -366,11 +395,15 @@ LAST_BODY=""
 # than warned about, so by this point the config is known to be satisfiable
 # unless the caller took the explicit opt-out.
 
-echo "[acr-dataplane-ready] probing ${URL} — need ${CONSECUTIVE_REQUIRED} consecutive 401/200 samples spaced ${SAMPLE_INTERVAL}s (budget ${BUDGET}s, ${INTERVAL}s backoff after a denial)"
+echo "[acr-dataplane-ready] probing ${URL} AND ${TOKEN_URL} — need ${CONSECUTIVE_REQUIRED} consecutive samples where BOTH answer 401/200, spaced ${SAMPLE_INTERVAL}s (budget ${BUDGET}s, ${INTERVAL}s backoff after a denial)"
 
-while :; do
-  ATTEMPT=$(( ATTEMPT + 1 ))
-  BODY_FILE="$(mktemp)"
+# One request. Echoes "<code> <body>" so the caller reads exactly what the
+# endpoint said. Factored out for #4053 so the two endpoints are probed by
+# IDENTICAL code — a second hand-inlined curl would be free to drift in its
+# flags, and the `000` handling below is the part that must not.
+probe_once() {
+  local url="$1" body_file code body
+  body_file="$(mktemp)"
   # Each sample is a FRESH curl process: new TCP connection, new DNS resolution,
   # no keep-alive reuse. That is the point — ACR rule propagation is per-frontend,
   # so re-using one warm connection would re-ask the SAME frontend N times and
@@ -382,10 +415,42 @@ while :; do
   # refusal. That is the very UNKNOWN-as-NEGATIVE bug this script exists to kill,
   # reproduced inside the fix; caught by the negative test in
   # scripts/ci/test-acr-dataplane-ready.sh.
-  CODE="$(curl -s -o "$BODY_FILE" -w '%{http_code}' --max-time 20 "$URL" 2>/dev/null)"
-  [ -n "$CODE" ] || CODE="000"
-  BODY="$(head -c 400 "$BODY_FILE" 2>/dev/null | tr -d '\r\n')"
-  rm -f "$BODY_FILE"
+  code="$(curl -s -o "$body_file" -w '%{http_code}' --max-time 20 "$url" 2>/dev/null)"
+  [ -n "$code" ] || code="000"
+  body="$(head -c 400 "$body_file" 2>/dev/null | tr -d '\r\n')"
+  rm -f "$body_file"
+  printf '%s %s' "$code" "$body"
+}
+
+while :; do
+  ATTEMPT=$(( ATTEMPT + 1 ))
+  V2_RESULT="$(probe_once "$URL")"
+  CODE="${V2_RESULT%% *}"
+  BODY="${V2_RESULT#* }"
+  [ "$BODY" = "$V2_RESULT" ] && BODY=""
+
+  # The token endpoint is probed ONLY when the challenge answered. Not an
+  # optimisation — when `/v2/` is already 403 the streak resets either way, and
+  # a second request to a registry that is refusing us buys nothing. WHICH
+  # endpoint produced the verdict is carried in ENDPOINT so the log never
+  # attributes a refusal to the wrong URL (R7).
+  ENDPOINT="/v2/"
+  case "$CODE" in
+    401|200)
+      TOKEN_RESULT="$(probe_once "$TOKEN_URL")"
+      TOKEN_CODE="${TOKEN_RESULT%% *}"
+      TOKEN_BODY="${TOKEN_RESULT#* }"
+      [ "$TOKEN_BODY" = "$TOKEN_RESULT" ] && TOKEN_BODY=""
+      # The token endpoint's verdict REPLACES the challenge's whenever it is not
+      # itself positive. A 401 on `/v2/` plus a 403 on `/oauth2/token` is exactly
+      # run 32819789544, and it must read as a denial, not as a positive sample.
+      case "$TOKEN_CODE" in
+        401|200) ;;
+        *) CODE="$TOKEN_CODE"; BODY="$TOKEN_BODY"; ENDPOINT="/oauth2/token" ;;
+      esac
+      ;;
+  esac
+
   LAST_CODE="$CODE"
   LAST_BODY="$BODY"
 
@@ -408,28 +473,28 @@ while :; do
         # registry "is not blocking by IP" — three runs (31564296050,
         # 32248671357, 32819789544) falsified exactly that claim ~2s later on
         # this same URL.
-        echo "[acr-dataplane-ready] READY — HTTP ${STREAK_CODES} on ${STREAK} consecutive fresh-connection samples over ${SPAN}s from ${HOST} (${ATTEMPT} sample(s) total, ${DENIED_TOTAL} IP-denied). ACR firewall-rule propagation is per-frontend and asynchronous, so a later call to this registry can still be IP-denied; callers must retry a denial as transient (scripts/ci/acr-login-retry.sh) rather than treat it as permanent."
+        echo "[acr-dataplane-ready] READY — HTTP ${STREAK_CODES} on ${STREAK} consecutive fresh-connection samples over ${SPAN}s from ${HOST}, each answered by BOTH /v2/ and /oauth2/token (${ATTEMPT} sample(s) total, ${DENIED_TOTAL} IP-denied). ACR firewall-rule propagation is per-frontend and asynchronous, so a later call to this registry can still be IP-denied; callers must retry a denial as transient (scripts/ci/acr-login-retry.sh) rather than treat it as permanent."
         exit 0
       fi
-      echo "[acr-dataplane-ready] sample ${ATTEMPT}: HTTP ${CODE} — ${STREAK}/${CONSECUTIVE_REQUIRED} consecutive."
+      echo "[acr-dataplane-ready] sample ${ATTEMPT}: HTTP ${CODE} on /v2/ and ${TOKEN_CODE} on /oauth2/token — ${STREAK}/${CONSECUTIVE_REQUIRED} consecutive."
       ;;
     403)
       DENIED_TOTAL=$(( DENIED_TOTAL + 1 ))
       STREAK=0
       STREAK_CODES=""
-      echo "[acr-dataplane-ready] sample ${ATTEMPT}: HTTP 403 — firewall has not propagated yet (streak reset to 0): ${BODY:0:160}"
+      echo "[acr-dataplane-ready] sample ${ATTEMPT}: HTTP 403 from ${ENDPOINT} — firewall has not propagated yet (streak reset to 0): ${BODY:0:160}"
       ;;
     000)
       NORESPONSE_TOTAL=$(( NORESPONSE_TOTAL + 1 ))
       STREAK=0
       STREAK_CODES=""
-      echo "[acr-dataplane-ready] sample ${ATTEMPT}: no HTTP response (connect/DNS) — streak reset to 0."
+      echo "[acr-dataplane-ready] sample ${ATTEMPT}: no HTTP response from ${ENDPOINT} (connect/DNS) — streak reset to 0."
       ;;
     *)
       OTHER_TOTAL=$(( OTHER_TOTAL + 1 ))
       STREAK=0
       STREAK_CODES=""
-      echo "[acr-dataplane-ready] sample ${ATTEMPT}: HTTP ${CODE} (not a readiness signal; streak reset to 0): ${BODY:0:160}"
+      echo "[acr-dataplane-ready] sample ${ATTEMPT}: HTTP ${CODE} from ${ENDPOINT} (not a readiness signal; streak reset to 0): ${BODY:0:160}"
       ;;
   esac
 
