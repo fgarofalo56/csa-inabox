@@ -491,6 +491,10 @@ var loomContainers = [
   // 1.6 MB fails with a named remediation rather than truncating or chunking,
   // because a half-written diff base reports mass deletion and reads as an
   // outage. createIfNotExists in the store remains the hotfix fallback.
+  // INDEXING — `/content/*` IS EXCLUDED for this container (#4018). The
+  // exclusion is declared in `containerExcludedPaths` BELOW rather than as a
+  // fourth key on this row; see that variable for why the row shape is
+  // deliberately left alone.
   { name: 'brain-graph-versions',  partitionKey: '/estateId', ttl: 7776000 }
   // W10 (#3936) — Loom Brain FINDINGS + SCAN RUNS. Two document kinds in one
   // container, discriminated by `docType`:
@@ -532,6 +536,35 @@ resource loomDb 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases@2024-12-01-p
   }
 }
 
+// PER-CONTAINER INDEX EXCLUSIONS (#4018), keyed by container name.
+//
+// WHY A LOOKUP RATHER THAN A FOURTH KEY ON THE ROW. `loomContainers` rows are
+// parsed by `lib/brain/run/__tests__/bicep-containers.test.ts`, the guard that
+// proves this file and `admin-plane/loom-console-cosmos.bicep` declare the SAME
+// Brain containers — the shape a one-sided merge resolution silently breaks.
+// Its row regex ends the row after the optional `ttl`, so an extra key makes the
+// guard stop seeing the row: it would report a set mismatch it did not measure,
+// and a real one-sided drop would then be indistinguishable from this. Keeping
+// the row shape untouched keeps that guard measuring what it claims to.
+//
+// The exclusion itself is still PER-CONTAINER — a container absent from this map
+// keeps the previous policy byte-for-byte, so this cannot de-index the other 51
+// containers sharing the loop below.
+//
+// WHAT IT BUYS: `content` is the full node/edge graph, 60-100 KB per version
+// (docs/fiab/brain/graph-history.md). NOTHING queries inside it — the store's
+// only access patterns are a partition-scoped list ordered by `capturedAt` and a
+// point read by id — so indexing it cost write RU and index storage on every
+// capture and was never read. Keep in step with the sibling declaration in
+// `admin-plane/loom-console-cosmos.bicep` and with the `createIfNotExists`
+// fallback in `apps/fiab-console/lib/brain/history/cosmos-store.ts`.
+var containerExcludedPaths = {
+  'brain-graph-versions': [ { path: '/content/*' } ]
+}
+
+// `includedPaths: ['/*']` is emitted ONLY alongside an exclusion, because it is
+// what the service defaults to anyway — stating it on every container would be a
+// no-op template diff on each one.
 resource loomDbContainers 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/containers@2024-12-01-preview' = [for c in loomContainers: {
   parent: loomDb
   name: c.name
@@ -539,7 +572,12 @@ resource loomDbContainers 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/co
     resource: union({
       id: c.name
       partitionKey: { paths: [c.partitionKey], kind: 'Hash' }
-      indexingPolicy: { indexingMode: 'consistent', automatic: true }
+      indexingPolicy: union(
+        { indexingMode: 'consistent', automatic: true },
+        (containerExcludedPaths[?c.name] != null)
+          ? { includedPaths: [ { path: '/*' } ], excludedPaths: containerExcludedPaths[c.name] }
+          : {}
+      )
     }, (c.?ttl != null) ? { defaultTtl: c.?ttl } : {})
   }
 }]

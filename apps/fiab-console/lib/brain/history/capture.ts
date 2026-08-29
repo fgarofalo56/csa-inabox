@@ -136,6 +136,34 @@ export function buildVersionRecord(args: {
 }
 
 /**
+ * The newest retained version, taken by `capturedAt` rather than by POSITION
+ * (#4021 item 1).
+ *
+ * `planPrune` in `./retention` re-sorts its input for exactly this reason and
+ * says so: *"a store returning them newest-first would otherwise prune the
+ * newest 10, which is the worst possible failure of a retention routine and
+ * exactly the kind of ordering assumption that does not survive a refactor."*
+ * The same argument applies here and the failure is arguably worse — a reversed
+ * `listSummaries` made the capture dedupe against the OLDEST version, so a
+ * genuinely changed estate could be recorded as `unchanged` and the change
+ * would never be retained at all.
+ *
+ * The tie-break on `id` is the same one `planPrune` uses, so the two functions
+ * agree on which version is newest when two share a `capturedAt`.
+ */
+function newestOf<T extends { readonly capturedAt: string; readonly id: string }>(
+  summaries: readonly T[],
+): T | null {
+  let best: T | null = null;
+  for (const s of summaries) {
+    if (best === null) { best = s; continue; }
+    if (s.capturedAt > best.capturedAt) { best = s; continue; }
+    if (s.capturedAt === best.capturedAt && s.id > best.id) best = s;
+  }
+  return best;
+}
+
+/**
  * Capture the current graph.
  *
  * Returns `created` with the stored version, or `unchanged` with the version the
@@ -159,7 +187,7 @@ export async function captureGraphVersion(args: CaptureArgs): Promise<CaptureRes
   const bytes = byteLength(JSON.stringify(candidate));
 
   const summaries = await args.store.listSummaries(args.estateId);
-  const head = summaries.length > 0 ? summaries[summaries.length - 1] : null;
+  const head = newestOf(summaries);
 
   // ── stage 1: the content address ─────────────────────────────────────────
   if (head !== null && head.digest === digest && head.formatVersion === HISTORY_FORMAT_VERSION) {
@@ -171,7 +199,8 @@ export async function captureGraphVersion(args: CaptureArgs): Promise<CaptureRes
       unchangedReason: 'identical-digest',
       bytes,
       pruned: [],
-      population: capturePopulation(summaries, notes, 'dedupe against the retained head'),
+      // 2 examined: the retained head's digest and the candidate just built.
+      population: capturePopulation(summaries, 2, 'dedupe against the retained head'),
       notes: [
         ...notes,
         `the projected graph hashes to the head version's digest (${digest.slice(0, 12)}…), so ` +
@@ -203,7 +232,8 @@ export async function captureGraphVersion(args: CaptureArgs): Promise<CaptureRes
           unchangedReason: 'no-semantic-change',
           bytes,
           pruned: [],
-          population: capturePopulation(summaries, notes, 'full comparison against the head'),
+          // 2 examined: the head loaded in full, and the candidate just built.
+          population: capturePopulation(summaries, 2, 'full comparison against the head'),
           notes: [
             ...notes,
             'the digest differed from the head but the comparator found nothing added, ' +
@@ -242,19 +272,40 @@ export async function captureGraphVersion(args: CaptureArgs): Promise<CaptureRes
     unchangedReason: null,
     bytes,
     pruned: doomed,
-    population: capturePopulation(remaining, notes, 'versions retained after this write'),
+    // The candidate, plus the head it was compared against when one existed.
+    // On the FIRST capture there is no head, so exactly one version was examined.
+    population: capturePopulation(
+      remaining,
+      head !== null ? 2 : 1,
+      'versions retained after this write',
+    ),
     notes,
   };
 }
 
+/**
+ * The capture's population report.
+ *
+ * `versionsExamined` is the number of versions this capture ACTUALLY looked at
+ * (#4021 item 2), not the size of the retained set. A capture compares the
+ * candidate against the head and nothing else — so it is 2 when a head existed
+ * and 1 (the candidate alone) on the very first capture. It used to be
+ * `summaries.length`, which on a 50-version estate claimed the capture had
+ * examined 50 versions when it had examined one plus the candidate.
+ *
+ * Population honesty is load-bearing throughout this module — a shrinking
+ * examined count is treated as a P0 — so the one place the number was LARGER
+ * than the work done mattered more here than it would elsewhere.
+ * `versionsRetained` carries the population size, which is what it is for.
+ */
 function capturePopulation(
   summaries: readonly { readonly counts: { readonly nodes: number; readonly edges: number } }[],
-  _notes: readonly string[],
+  examined: number,
   scope: string,
 ): HistoryPopulation {
   return {
     versionsRetained: summaries.length,
-    versionsExamined: summaries.length,
+    versionsExamined: examined,
     versionsIgnoredByFormat: 0,
     nodesPerVersion: summaries.map((s) => s.counts.nodes),
     edgesPerVersion: summaries.map((s) => s.counts.edges),

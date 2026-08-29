@@ -77,10 +77,18 @@ export const BRAIN_HISTORY_PARTITION_KEY = '/estateId';
 export class BrainHistoryNotConfiguredError extends Error {
   constructor() {
     super(
+      // WHAT THE CODE ESTABLISHED, THEN THE INFERENCE LABELLED AS ONE (#4021
+      // item 5). The old wording said the absence "MEANS the console is running
+      // outside a completed deploy" — a defensible inference from the bicep
+      // contract, stated as a fact. A console running against a partially rolled
+      // revision, or one whose env was edited out of band, reaches this same
+      // state without being outside a completed deploy. R7: if the code does not
+      // know, the message says it does not know.
       'LOOM_COSMOS_ENDPOINT is not set in this deployment, so the Brain graph history has ' +
-        'nowhere to persist. This value is emitted by the platform bicep for every boundary; ' +
-        'its absence means the console is running outside a completed deploy, not that an ' +
-        'operator forgot a setting. No history was read and none was written.',
+        'nowhere to persist. The platform bicep emits this value for every boundary, so the ' +
+        'likely cause is an incomplete or partially rolled deploy rather than a setting an ' +
+        'operator forgot — but this code established only that the variable is unset. ' +
+        'No history was read and none was written.',
     );
     this.name = 'BrainHistoryNotConfiguredError';
   }
@@ -121,6 +129,24 @@ export async function brainHistoryContainer(
     id: BRAIN_HISTORY_CONTAINER,
     partitionKey: { paths: [BRAIN_HISTORY_PARTITION_KEY] },
     defaultTtl: policy.ttlSeconds,
+    // `/content/*` IS NOT INDEXED (#4018). Kept in step with BOTH bicep
+    // declarations — `admin-plane/loom-console-cosmos.bicep` and the
+    // `loomContainers` row in `landing-zone/cosmos.bicep` — exactly as the TTL
+    // above is. Without it this fallback took the service default, which indexes
+    // every property including `content`: the full node/edge graph, sized at
+    // 60-100 KB per version in `docs/fiab/brain/graph-history.md`.
+    //
+    // NOTHING QUERIES INSIDE `content`. The store implements exactly two access
+    // patterns — a partition-scoped list ordered by `capturedAt`, and a point
+    // read by id + partition key — so the index over the blob is paid for on
+    // every write (write RU, plus index storage on top of document storage) and
+    // never read.
+    indexingPolicy: {
+      indexingMode: 'consistent',
+      automatic: true,
+      includedPaths: [{ path: '/*' }],
+      excludedPaths: [{ path: '/content/*' }],
+    },
   });
   _container = container;
   return container;

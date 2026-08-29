@@ -87,6 +87,44 @@ export const POST = withSession<{ id: string }>(async (req: NextRequest, { sessi
   };
   try {
     const c = await copilotSessionsContainer();
+    // AUTHORIZE THE TARGET DOCUMENT BEFORE WRITING IT (#4005).
+    //
+    // `convId` is CALLER-SUPPLIED, so a bare `items.upsert` is a blind write
+    // over whatever already lives at that id: it replaced the victim's title
+    // and messages AND rewrote `userOid` to the caller, transferring ownership
+    // of the row. After that write the victim failed the GET check above on
+    // their own conversation. Read and DELETE were already guarded with a
+    // positive ownership match; the write was not, which is a coherence gap
+    // rather than a deliberate asymmetry.
+    //
+    // Same POSITIVE match as the siblings (#3943) — an existing document with
+    // NO `userOid` is refused, never adopted by whoever asks first:
+    //   absent document                    -> create, fine
+    //   present and owned by the caller    -> update, fine
+    //   present and ownerless or foreign   -> 403
+    let existing: any = null;
+    try {
+      const { resource } = await c.item(convId, sid(agentId, convId)).read<any>();
+      existing = resource ?? null;
+    } catch (e: any) {
+      // A 404 is "no such conversation", which is the create path. Anything
+      // else is a real read failure and MUST NOT be treated as absence — R7:
+      // an unreadable document is not an unowned one, and falling through would
+      // turn a transient Cosmos error into the very overwrite this guard exists
+      // to prevent.
+      if (e?.code !== 404) {
+        return NextResponse.json(
+          { ok: false, error: `could not read the existing conversation to authorize this write: ${e?.message || String(e)}. NOTHING was written.` },
+          { status: 502 },
+        );
+      }
+    }
+    if (existing && (!existing.userOid || existing.userOid !== userOid)) {
+      return NextResponse.json({ ok: false, error: 'forbidden' }, { status: 403 });
+    }
+    // Preserve the original creation time of a conversation being updated: the
+    // body must not be able to rewrite it, and `body.createdAt` is caller-supplied.
+    if (existing?.createdAt) doc.createdAt = existing.createdAt;
     const { resource } = await c.items.upsert(doc);
     return NextResponse.json({ ok: true, conversation: { id: convId, title, updatedAt: now, turns: messages.length }, raw: resource ? undefined : undefined });
   } catch (e: any) {

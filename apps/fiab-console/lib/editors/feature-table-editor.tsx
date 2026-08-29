@@ -89,6 +89,73 @@ async function loadServingEndpoints(): Promise<LoomObjectLoad> {
   };
 }
 
+/**
+ * UNITY CATALOG CASCADING PICKER — catalog → schema (#3522).
+ *
+ * The Define tab used to ask the operator to TYPE the catalog and schema
+ * (`placeholder="main"` / `"default"`). Unity Catalog is a real, hierarchical,
+ * API-browsable structure and the console already lists both, so typing them was
+ * a `auto-bind-by-default.md` violation of exactly the shape the rule names: a
+ * value the platform can enumerate, asked of the user instead.
+ *
+ * WHY THESE TWO ROUTES AND NOT THE DATABRICKS-ONLY LISTER. Both BFF routes
+ * dispatch on `isOssUc()`: Databricks Unity Catalog by default, and the OSS
+ * `loom-unity` catalog in Azure Government, where Databricks UC does not exist
+ * at all. Listing through them is therefore the SAME control in every boundary
+ * (`cloud-parity.md`); a picker wired straight to the Databricks lister would be
+ * permanently empty in Gov, which is the inversion that rule exists to stop.
+ *
+ * AN ERROR IS NEVER FLATTENED TO AN EMPTY LIST (R7). "This deployment has no
+ * catalogs" and "I could not reach the catalog" are different answers, and
+ * `LoomObjectLoad.error` keeps them distinguishable — the picker renders the
+ * message verbatim instead of an empty dropdown that reads as "there are none".
+ */
+async function loadUcCatalogs(): Promise<LoomObjectLoad> {
+  const r = await clientFetch('/api/databricks/unity-catalog/catalogs');
+  const j = await r.json().catch(() => ({}));
+  if (!j?.ok) {
+    return {
+      options: [],
+      error: j?.error || `Could not list catalogs (HTTP ${r.status}).`,
+      hint: j?.missing ? `Missing: ${j.missing}` : undefined,
+    };
+  }
+  return {
+    options: (j.catalogs || [])
+      .map((c: any) => String(c?.name || ''))
+      .filter(Boolean)
+      .map((name: string) => ({ id: name, name })),
+  };
+}
+
+/**
+ * Schemas of ONE catalog. Returns an empty list with NO error when no catalog is
+ * chosen yet — that is the honest state of a cascade whose parent is unset, and
+ * calling the route with an empty `catalog` would 400 and surface as a failure
+ * the user did not cause.
+ */
+function loadUcSchemas(catalog: string): () => Promise<LoomObjectLoad> {
+  return async () => {
+    const c = catalog.trim();
+    if (!c) return { options: [] };
+    const r = await clientFetch(`/api/databricks/unity-catalog/schemas?catalog=${encodeURIComponent(c)}`);
+    const j = await r.json().catch(() => ({}));
+    if (!j?.ok) {
+      return {
+        options: [],
+        error: j?.error || `Could not list schemas in '${c}' (HTTP ${r.status}).`,
+        hint: j?.missing ? `Missing: ${j.missing}` : undefined,
+      };
+    }
+    return {
+      options: (j.schemas || [])
+        .map((x: any) => String(x?.name || ''))
+        .filter(Boolean)
+        .map((name: string) => ({ id: name, name })),
+    };
+  };
+}
+
 const useLocalStyles = makeStyles({
   card: { padding: tokens.spacingVerticalM, border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusLarge, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS, minWidth: 0 },
   badges: { display: 'flex', gap: tokens.spacingHorizontalS, flexWrap: 'wrap', alignItems: 'center', minWidth: 0, rowGap: tokens.spacingVerticalXXS },
@@ -376,11 +443,54 @@ function FeatureBody({ item, id }: { item: FabricItemType; id: string }) {
                     Creates a real {backend === 'postgres' ? 'PostgreSQL' : 'Unity Catalog Delta'} feature table (entity keys + an event-time column for point-in-time correctness + typed feature columns) AND its Lakebase/pgvector online serving table.
                   </Body1>
                   <div className={s.form}>
-                    {backend !== 'postgres' && (
-                      <Field label="Catalog"><Input value={dCatalog} onChange={(_, d) => setDCatalog(d.value)} placeholder="main" disabled={!!gate} /></Field>
+                    {backend !== 'postgres' ? (
+                      <>
+                        {/* CASCADING PICKERS, NOT TYPED NAMES (#3522). Catalog is
+                            browsed live; picking one re-runs the schema list for
+                            THAT catalog (`loadKey`), and changing it clears a
+                            schema that belonged to the previous catalog rather
+                            than leaving a name that no longer resolves. */}
+                        <div style={{ minWidth: '220px' }}>
+                          <LoomObjectPicker
+                            label="Catalog"
+                            value={dCatalog}
+                            onChange={(v) => { setDCatalog(v); setDSchema(''); }}
+                            load={loadUcCatalogs}
+                            loadKey="uc-catalogs"
+                            placeholder="Select a catalog…"
+                            emptyTitle="No Unity Catalog catalogs"
+                            emptyBody="This deployment's catalog reports no catalogs the console identity can read. Create one from the Catalog surface, or grant the console identity USE CATALOG."
+                            unresolvedCaption="stored value — not returned by the catalog list"
+                            data-testid="feature-table-catalog"
+                          />
+                        </div>
+                        <div style={{ minWidth: '220px' }}>
+                          <LoomObjectPicker
+                            label="Schema"
+                            value={dSchema}
+                            onChange={setDSchema}
+                            load={loadUcSchemas(dCatalog)}
+                            loadKey={`uc-schemas:${dCatalog}`}
+                            placeholder={dCatalog ? 'Select a schema…' : 'Pick a catalog first'}
+                            emptyTitle={dCatalog ? `No schemas in '${dCatalog}'` : 'Pick a catalog first'}
+                            emptyBody={dCatalog
+                              ? 'That catalog reports no schemas the console identity can read. Create one from the Catalog surface, or grant USE SCHEMA.'
+                              : 'Schemas are listed for the catalog selected on the left.'}
+                            unresolvedCaption="stored value — not returned by the schema list"
+                            data-testid="feature-table-schema"
+                          />
+                        </div>
+                      </>
+                    ) : (
+                      // POSTGRES BACKEND (the Gov / OSS default for the ONLINE
+                      // store): there is no catalog level and no discovery route
+                      // for PostgreSQL schemas, so this one stays typed. Stated
+                      // rather than silently left as-is.
+                      <Field label="Schema" hint="PostgreSQL schema — no catalog list exists for this backend."><Input value={dSchema} onChange={(_, d) => setDSchema(d.value)} placeholder="default" disabled={!!gate} /></Field>
                     )}
-                    <Field label="Schema"><Input value={dSchema} onChange={(_, d) => setDSchema(d.value)} placeholder="default" disabled={!!gate} /></Field>
-                    <Field label="Table" required><Input value={dTable} onChange={(_, d) => setDTable(d.value)} placeholder="customer_features" disabled={!!gate} /></Field>
+                    {/* The LEAF stays typed on purpose: this names the feature
+                        table being CREATED, so it is not in any list yet. */}
+                    <Field label="Table" required hint="Name of the feature table to create."><Input value={dTable} onChange={(_, d) => setDTable(d.value)} placeholder="customer_features" disabled={!!gate} /></Field>
                     <Field label="Entity (primary) keys" required hint="Comma-separated"><Input value={dKeys} onChange={(_, d) => setDKeys(d.value)} placeholder="customer_id" disabled={!!gate} /></Field>
                     <Field label="Timestamp key" required><Input value={dTs} onChange={(_, d) => setDTs(d.value)} placeholder="event_ts" disabled={!!gate} /></Field>
                   </div>
