@@ -280,6 +280,10 @@ export function SparkJobDefinitionEditor({ item, id }: { item: FabricItemType; i
   const [refJarText, setRefJarText] = useState('');
   const [refFilesText, setRefFilesText] = useState('');
   const [pool, setPool] = useState('');
+  // Mirrors `pool` for `loadRuns`, which must read the CURRENT selection without
+  // taking `pool` as a dependency — see the note at the persistedPool fallback.
+  const poolRef = useRef('');
+  useEffect(() => { poolRef.current = pool; }, [pool]);
   const [environmentId, setEnvironmentId] = useState('');
 
   // Spark compute
@@ -354,7 +358,32 @@ export function SparkJobDefinitionEditor({ item, id }: { item: FabricItemType; i
     // entirely: nothing to list, nothing to report, the "No runs yet" guided
     // empty state below is the correct surface. Read off `cosmosItem` rather than
     // the `pool` field state because the hydrating effect and this one race.
-    const persistedPool = (cosmosItem?.state as any)?.spec?.pool;
+    // …FALLING BACK TO THE LIVE FIELD when the persisted copy has not caught up.
+    // Without that fallback this skip breaks the PRIMARY FLOW on a fresh item:
+    // `submit()` persists the spec and then `setTimeout(loadRuns, 1500)`, but it
+    // does not `reload()`, so `cosmosItem` still carries no `spec.pool`, the
+    // fetch is skipped, the just-submitted batch never appears, `anyActive`
+    // stays false so the 5s auto-refresh never starts, and "Refresh runs" calls
+    // this same closure and is equally dead. Only a page reload recovered it.
+    //
+    // `await reload()` in submit() does NOT fix this on its own: the timeout has
+    // already captured THIS closure, so a refreshed `cosmosItem` never reaches
+    // the call that matters. Reading the field is what actually works.
+    //
+    // It does not reopen the race the comment above describes. During hydration
+    // BOTH are empty — persisted is not loaded and the field is not populated —
+    // so the skip still fires and the first open stays guided rather than red.
+    // The fallback can only be reached after the user has chosen a pool, which
+    // is exactly when a fetch is correct. If the spec genuinely has no pool the
+    // route's 400 `spec.pool is not configured` arm below absorbs it.
+    //
+    // A REF, not the `pool` state, and that is deliberate. Putting `pool` in this
+    // callback's dependency array would change `loadRuns`'s identity on every
+    // selection, and the effect below (`[cosmosItem, loadRuns]`) would then fire
+    // a fetch on each pool change — against a route that reads the PERSISTED
+    // spec, so it would answer for the OLD pool or 400. The ref reads the live
+    // value without re-keying the callback, which is what this needs.
+    const persistedPool = (cosmosItem?.state as any)?.spec?.pool || poolRef.current;
     if (!persistedPool) { setRuns([]); setRunsWindow(null); return; }
     try {
       const r = await clientFetch(`/api/items/spark-job-definition/${encodeURIComponent(id)}/runs?size=25`);
