@@ -25,6 +25,14 @@ This file is maintained automatically by
 [Conventional Commits](https://www.conventionalcommits.org/). See
 [RELEASE.md](RELEASE.md) for the release process.
 
+## [0.103.3](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.103.2...csa-inabox-v0.103.3) (2026-08-29)
+
+
+### Bug Fixes
+
+* **ci:** the ACR readiness probe called READY on the challenge, not the hop that fails ([#4189](https://github.com/fgarofalo56/csa-inabox/issues/4189)) ([5f0f3ef](https://github.com/fgarofalo56/csa-inabox/commit/5f0f3efc4bf5206d1b48b1fdccd304cc4ca5653b)), closes [#4053](https://github.com/fgarofalo56/csa-inabox/issues/4053)
+* **deploy:** a failed source ended the MSAL search instead of ending that source ([#4163](https://github.com/fgarofalo56/csa-inabox/issues/4163)) ([#4188](https://github.com/fgarofalo56/csa-inabox/issues/4188)) ([70ca3d1](https://github.com/fgarofalo56/csa-inabox/commit/70ca3d136651efc01cf9b8449b0d73e609fdb071))
+
 ## [0.103.2](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.103.1...csa-inabox-v0.103.2) (2026-08-29)
 
 
