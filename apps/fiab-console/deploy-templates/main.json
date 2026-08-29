@@ -6,7 +6,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.45.15.27210",
-      "templateHash": "10099096424804408399"
+      "templateHash": "11074429000884710534"
     }
   },
   "definitions": {
@@ -2589,7 +2589,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.45.15.27210",
-              "templateHash": "767847808097494956"
+              "templateHash": "7889661681892088798"
             }
           },
           "definitions": {
@@ -8390,7 +8390,7 @@
                     "_generator": {
                       "name": "bicep",
                       "version": "0.45.15.27210",
-                      "templateHash": "1547640137092168000"
+                      "templateHash": "14851942444266271765"
                     }
                   },
                   "parameters": {
@@ -8647,7 +8647,17 @@
                           "defaultTtl": 7776000,
                           "indexingPolicy": {
                             "indexingMode": "consistent",
-                            "automatic": true
+                            "automatic": true,
+                            "includedPaths": [
+                              {
+                                "path": "/*"
+                              }
+                            ],
+                            "excludedPaths": [
+                              {
+                                "path": "/content/*"
+                              }
+                            ]
                           }
                         }
                       },
@@ -30134,7 +30144,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.45.15.27210",
-              "templateHash": "10438238567886389002"
+              "templateHash": "3180286004065916505"
             }
           },
           "functions": [
@@ -35951,7 +35961,7 @@
                     "_generator": {
                       "name": "bicep",
                       "version": "0.45.15.27210",
-                      "templateHash": "7881732571790807215"
+                      "templateHash": "13851340003465711055"
                     }
                   },
                   "parameters": {
@@ -36343,7 +36353,14 @@
                         "partitionKey": "/estateId",
                         "ttl": -1
                       }
-                    ]
+                    ],
+                    "containerExcludedPaths": {
+                      "brain-graph-versions": [
+                        {
+                          "path": "/content/*"
+                        }
+                      ]
+                    }
                   },
                   "resources": [
                     {
@@ -36422,7 +36439,7 @@
                       "apiVersion": "2024-12-01-preview",
                       "name": "[format('{0}/{1}/{2}', variables('accountName'), variables('loomDatabase'), variables('loomContainers')[copyIndex()].name)]",
                       "properties": {
-                        "resource": "[union(createObject('id', variables('loomContainers')[copyIndex()].name, 'partitionKey', createObject('paths', createArray(variables('loomContainers')[copyIndex()].partitionKey), 'kind', 'Hash'), 'indexingPolicy', createObject('indexingMode', 'consistent', 'automatic', true())), if(not(equals(tryGet(variables('loomContainers')[copyIndex()], 'ttl'), null())), createObject('defaultTtl', tryGet(variables('loomContainers')[copyIndex()], 'ttl')), createObject()))]"
+                        "resource": "[union(createObject('id', variables('loomContainers')[copyIndex()].name, 'partitionKey', createObject('paths', createArray(variables('loomContainers')[copyIndex()].partitionKey), 'kind', 'Hash'), 'indexingPolicy', union(createObject('indexingMode', 'consistent', 'automatic', true()), if(not(equals(tryGet(variables('containerExcludedPaths'), variables('loomContainers')[copyIndex()].name), null())), createObject('includedPaths', createArray(createObject('path', '/*')), 'excludedPaths', variables('containerExcludedPaths')[variables('loomContainers')[copyIndex()].name]), createObject()))), if(not(equals(tryGet(variables('loomContainers')[copyIndex()], 'ttl'), null())), createObject('defaultTtl', tryGet(variables('loomContainers')[copyIndex()], 'ttl')), createObject()))]"
                       },
                       "dependsOn": [
                         "[resourceId('Microsoft.DocumentDB/databaseAccounts/sqlDatabases', variables('accountName'), variables('loomDatabase'))]"
@@ -39992,7 +40009,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.45.15.27210",
-              "templateHash": "10438238567886389002"
+              "templateHash": "3180286004065916505"
             }
           },
           "functions": [
@@ -45809,7 +45826,7 @@
                     "_generator": {
                       "name": "bicep",
                       "version": "0.45.15.27210",
-                      "templateHash": "7881732571790807215"
+                      "templateHash": "13851340003465711055"
                     }
                   },
                   "parameters": {
@@ -46201,7 +46218,14 @@
                         "partitionKey": "/estateId",
                         "ttl": -1
                       }
-                    ]
+                    ],
+                    "containerExcludedPaths": {
+                      "brain-graph-versions": [
+                        {
+                          "path": "/content/*"
+                        }
+                      ]
+                    }
                   },
                   "resources": [
                     {
@@ -46280,7 +46304,7 @@
                       "apiVersion": "2024-12-01-preview",
                       "name": "[format('{0}/{1}/{2}', variables('accountName'), variables('loomDatabase'), variables('loomContainers')[copyIndex()].name)]",
                       "properties": {
-                        "resource": "[union(createObject('id', variables('loomContainers')[copyIndex()].name, 'partitionKey', createObject('paths', createArray(variables('loomContainers')[copyIndex()].partitionKey), 'kind', 'Hash'), 'indexingPolicy', createObject('indexingMode', 'consistent', 'automatic', true())), if(not(equals(tryGet(variables('loomContainers')[copyIndex()], 'ttl'), null())), createObject('defaultTtl', tryGet(variables('loomContainers')[copyIndex()], 'ttl')), createObject()))]"
+                        "resource": "[union(createObject('id', variables('loomContainers')[copyIndex()].name, 'partitionKey', createObject('paths', createArray(variables('loomContainers')[copyIndex()].partitionKey), 'kind', 'Hash'), 'indexingPolicy', union(createObject('indexingMode', 'consistent', 'automatic', true()), if(not(equals(tryGet(variables('containerExcludedPaths'), variables('loomContainers')[copyIndex()].name), null())), createObject('includedPaths', createArray(createObject('path', '/*')), 'excludedPaths', variables('containerExcludedPaths')[variables('loomContainers')[copyIndex()].name]), createObject()))), if(not(equals(tryGet(variables('loomContainers')[copyIndex()], 'ttl'), null())), createObject('defaultTtl', tryGet(variables('loomContainers')[copyIndex()], 'ttl')), createObject()))]"
                       },
                       "dependsOn": [
                         "[resourceId('Microsoft.DocumentDB/databaseAccounts/sqlDatabases', variables('accountName'), variables('loomDatabase'))]"
@@ -50015,7 +50039,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.45.15.27210",
-              "templateHash": "10438238567886389002"
+              "templateHash": "3180286004065916505"
             }
           },
           "functions": [
@@ -55832,7 +55856,7 @@
                     "_generator": {
                       "name": "bicep",
                       "version": "0.45.15.27210",
-                      "templateHash": "7881732571790807215"
+                      "templateHash": "13851340003465711055"
                     }
                   },
                   "parameters": {
@@ -56224,7 +56248,14 @@
                         "partitionKey": "/estateId",
                         "ttl": -1
                       }
-                    ]
+                    ],
+                    "containerExcludedPaths": {
+                      "brain-graph-versions": [
+                        {
+                          "path": "/content/*"
+                        }
+                      ]
+                    }
                   },
                   "resources": [
                     {
@@ -56303,7 +56334,7 @@
                       "apiVersion": "2024-12-01-preview",
                       "name": "[format('{0}/{1}/{2}', variables('accountName'), variables('loomDatabase'), variables('loomContainers')[copyIndex()].name)]",
                       "properties": {
-                        "resource": "[union(createObject('id', variables('loomContainers')[copyIndex()].name, 'partitionKey', createObject('paths', createArray(variables('loomContainers')[copyIndex()].partitionKey), 'kind', 'Hash'), 'indexingPolicy', createObject('indexingMode', 'consistent', 'automatic', true())), if(not(equals(tryGet(variables('loomContainers')[copyIndex()], 'ttl'), null())), createObject('defaultTtl', tryGet(variables('loomContainers')[copyIndex()], 'ttl')), createObject()))]"
+                        "resource": "[union(createObject('id', variables('loomContainers')[copyIndex()].name, 'partitionKey', createObject('paths', createArray(variables('loomContainers')[copyIndex()].partitionKey), 'kind', 'Hash'), 'indexingPolicy', union(createObject('indexingMode', 'consistent', 'automatic', true()), if(not(equals(tryGet(variables('containerExcludedPaths'), variables('loomContainers')[copyIndex()].name), null())), createObject('includedPaths', createArray(createObject('path', '/*')), 'excludedPaths', variables('containerExcludedPaths')[variables('loomContainers')[copyIndex()].name]), createObject()))), if(not(equals(tryGet(variables('loomContainers')[copyIndex()], 'ttl'), null())), createObject('defaultTtl', tryGet(variables('loomContainers')[copyIndex()], 'ttl')), createObject()))]"
                       },
                       "dependsOn": [
                         "[resourceId('Microsoft.DocumentDB/databaseAccounts/sqlDatabases', variables('accountName'), variables('loomDatabase'))]"
