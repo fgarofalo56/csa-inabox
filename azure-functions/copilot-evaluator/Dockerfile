@@ -26,9 +26,22 @@ RUN npm ci
 COPY azure-functions/copilot-evaluator/src ./src
 COPY azure-functions/copilot-evaluator/scripts ./scripts
 # Shared pure console modules the evaluator imports (type + logic reuse).
+#
+# THIS LIST IS A TRANSITIVE CLOSURE, NOT A LIST OF DIRECT IMPORTS (#3886).
+# tsc resolves what these files THEMSELVES import, so a module reached only
+# indirectly is just as required as one named in src/. On 2026-08-28 the list
+# held only the three files src/ imports directly and the Gov build died at
+# `RUN npm run build` with four TS2307s: cloud-endpoints.ts re-exports from
+# ./cloud-boundary and ./cloud-endpoints-graph, and neither was in the context.
+# The failure was invisible for as long as it was because `--no-logs` keeps the
+# tsc output inside the ACR task; only the run log names the missing modules.
+# scripts/ci/check-dockerfile-copy-closure.mjs now walks this closure on every
+# PR, so a new relative import in any copied file fails CI instead of the build.
 COPY apps/fiab-console/lib/foundry/model-tier-router.ts /repo/apps/fiab-console/lib/foundry/model-tier-router.ts
 COPY apps/fiab-console/lib/foundry/model-availability-matrix.ts /repo/apps/fiab-console/lib/foundry/model-availability-matrix.ts
 COPY apps/fiab-console/lib/azure/cloud-endpoints.ts /repo/apps/fiab-console/lib/azure/cloud-endpoints.ts
+COPY apps/fiab-console/lib/azure/cloud-endpoints-graph.ts /repo/apps/fiab-console/lib/azure/cloud-endpoints-graph.ts
+COPY apps/fiab-console/lib/azure/cloud-boundary.ts /repo/apps/fiab-console/lib/azure/cloud-boundary.ts
 # E1 golden eval sets — staged into ./evals so the image is self-contained
 # (resolveEvalRoot checks ./evals first; no external fetch at IL5).
 COPY content/evals /repo/content/evals

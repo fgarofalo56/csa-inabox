@@ -56,7 +56,12 @@ another regresses. A file absent from ``RATCHET`` is held at zero, so the debt
 cannot grow by file count either. Any drift in EITHER direction fails - a
 finding added is a regression, a finding removed is a number in this file that
 has stopped being true, and #3811 exists because of numbers that stopped being
-true. Paydown is tracked in #3990; done is ``RATCHET == {}``.
+true.
+
+**It is now EMPTY, which is what #3990 defined as done.** The nine
+``scripts/data/download-*.py`` files that carried its 216 findings are paid off
+and sit in the strict population at zero. The mechanism stays: the next tranche
+of pre-existing debt gets frozen here and paid down rather than tolerated.
 
 Usage::
 
@@ -115,17 +120,14 @@ LINTABLE_SUFFIXES: tuple[str, ...] = (".py", ".ipynb")
 #: ruff release that adds or retires a rule will move several of these at once -
 #: that is a real signal about what is now enforced, and it is re-recorded in
 #: one commit rather than tolerated by loosening the comparison.
-RATCHET: dict[str, int] = {
-    "scripts/data/download-census.py": 27,
-    "scripts/data/download-commerce.py": 21,
-    "scripts/data/download-dot.py": 28,
-    "scripts/data/download-epa.py": 22,
-    "scripts/data/download-geospatial.py": 23,
-    "scripts/data/download-health.py": 25,
-    "scripts/data/download-noaa.py": 20,
-    "scripts/data/download-streaming.py": 26,
-    "scripts/data/download-usda.py": 24,
-}
+#:
+#: EMPTY AS OF #3990, WHICH IS THE DEFINITION OF DONE THAT ISSUE STATED. The nine
+#: ``scripts/data/download-*.py`` files carried 216 findings; every one is fixed
+#: rather than exempted, and those files are now in the strict population held at
+#: ZERO. The mechanism is deliberately KEPT rather than deleted: the next batch of
+#: pre-existing debt should be frozen here and paid down, not tolerated, and an
+#: empty dict is what ``assert_ratchet`` needs to hold every file at zero.
+RATCHET: dict[str, int] = {}
 
 #: Tracked files inside ``SCOPE_DIRS`` that ruff legitimately refuses to open,
 #: each with the reason. ``pyproject.toml``'s ``extend-exclude`` is honoured via
