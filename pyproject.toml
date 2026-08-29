@@ -1,6 +1,6 @@
 [project]
 name = "csa-inabox"
-version = "0.103.0"
+version = "0.103.3"
 description = "Cloud-Scale Analytics in-a-Box — Azure-native reference implementation of the Microsoft 'Unify your data platform' CAF guidance, providing Fabric-parity capabilities on Azure PaaS for Government (pre-Fabric-GA) and regulated Commercial workloads."
 requires-python = ">=3.10"
 license = "MIT"
@@ -599,7 +599,14 @@ indent-style = "space"
 # add `streaming` to that pip install line and drop this --ignore in the same PR,
 # then verify the required Python check stays green on the 3-version matrix.
 testpaths = ["tests", "portal/shared/portal_tests", "csa_platform"]
-pythonpath = ["."]
+# `sdk/python/csa-loom/src` is on the path so `sdk/python/csa-loom/tests` can be
+# run by explicit path (`python -m pytest sdk/python/csa-loom/tests`) without
+# first `pip install -e`-ing the SDK. It is NOT in `testpaths`: the SDK keeps its
+# own suite outside the three discovery roots on purpose. Added by #3717, whose
+# verify command names that path and which otherwise died at conftest import
+# with `ModuleNotFoundError: No module named 'csa_loom'` — a suite that cannot be
+# collected is the zero-population failure, not a pass.
+pythonpath = [".", "sdk/python/csa-loom/src"]
 python_files = ["test_*.py", "*_test.py"]
 python_functions = ["test_*"]
 addopts = "--tb=short -q --strict-markers --import-mode=importlib"
