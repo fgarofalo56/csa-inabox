@@ -53,6 +53,39 @@ export const RG = 'rg-loom-example';
 export const ESTATE = 'estate-alpha';
 export const ENV_DOMAIN = 'example-env.centralus.azurecontainerapps.io';
 
+/**
+ * #4020 R6 — THE ESTATE IDS PRODUCTION ACTUALLY EMITS.
+ *
+ * Every retention proof used to run on `ESTATE = 'estate-alpha'`, a value
+ * `resolveEstateId()` can never return. That made an entire class of bypass
+ * inert in the suite and live on the estate: a prune gated on
+ * `estateId.startsWith('loom:')` disables the 50-version bound on EVERY real
+ * deployment and in NO test, leaving only the 90-day TTL holding the container.
+ * Same class as the cardinality-conditioned bypasses in #3963 — a filter whose
+ * predicate is false for every fixture.
+ *
+ * `resolveEstateId()` (`lib/estate/pause-orchestrator.ts`) returns exactly two
+ * shapes when `LOOM_ESTATE_ID` is unset:
+ *
+ *     `loom:${sub.slice(0, 8)}:${rg}`   both a subscription and an RG are known
+ *     'loom:unbound'                    either is missing
+ *
+ * Both are reproduced here — as WORDS, never GUIDs, so `no-real-ids.test.ts`
+ * stays enforceable (see the header). `sub-alph` is literally
+ * `'sub-alpha'.slice(0, 8)`, i.e. the same truncation production performs, so
+ * the shape is derived rather than typed out.
+ */
+export const PROD_ESTATE_BOUND = `loom:${SUB.slice(0, 8)}:${RG}`;
+export const PROD_ESTATE_UNBOUND = 'loom:unbound';
+
+/**
+ * The estate ids every retention/capture proof is parameterised over: the
+ * fixture-only one (kept, because the older specs read against it) plus both
+ * production shapes. A bypass keyed to any one of them now fails at least one
+ * arm.
+ */
+export const ESTATE_IDS: readonly string[] = [ESTATE, PROD_ESTATE_BOUND, PROD_ESTATE_UNBOUND];
+
 export function armId(name: string): string {
   return `/subscriptions/${SUB}/resourceGroups/${RG}/providers/Microsoft.App/containerApps/${name}`;
 }

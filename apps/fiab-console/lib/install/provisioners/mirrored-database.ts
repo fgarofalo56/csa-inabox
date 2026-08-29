@@ -28,9 +28,12 @@ import {
   upsertDataset,
   upsertPipeline,
   runPipeline,
+  getDefaultFactory,
 } from '@/lib/azure/adf-client';
 import { resolveAbfssRoot } from '@/lib/azure/adls-client';
-import { dfsUrl } from '@/lib/azure/cloud-endpoints';
+import { armBase, armScope, dfsUrl } from '@/lib/azure/cloud-endpoints';
+import { uamiArmCredential } from '@/lib/azure/arm-credential';
+import { deterministicAssignmentGuid, grantScriptFor } from '@/lib/azure/role-grant-client';
 import {
   listMirroredDatabases,
   createMirroredDatabase,
@@ -54,6 +57,156 @@ function splitTable(t: string): { schema: string; table: string } {
   return parts.length > 1
     ? { schema: parts[0], table: parts.slice(1).join('.') }
     : { schema: 'dbo', table: parts[0] };
+}
+
+// ── #3512 — the two halves of the run-auth failure are NOT the same kind of gap ─
+//
+// A Copy run that cannot authenticate needs BOTH of:
+//   (a) db_datareader for the factory MI on the CUSTOMER's source SQL server —
+//       infrastructure Loom does not own, so Loom cannot self-grant it. That is
+//       a legitimate honest gate under auto-bind-by-default.md §Allowed.
+//   (b) Storage Blob Data Contributor for the factory MI on LOOM'S OWN Bronze
+//       ADLS account — a resource this platform deploys. Asking the operator to
+//       grant it is exactly the "remediation the PLATFORM could have taken"
+//       auto-bind-by-default.md forbids.
+// They used to be one sentence, so (b) rode along with (a) and never got done
+// by the platform. Loom now ATTEMPTS (b) itself and only gates on what is left.
+//
+// Storage Blob Data Contributor — built-in, same GUID in every cloud. Kept
+// literal here (as `attached-service-kinds.ts` does) rather than imported, so
+// this file does not take a dependency on the brownfield-attach kind catalog
+// for a single constant.
+const STORAGE_BLOB_DATA_CONTRIBUTOR = 'ba92f5b4-2d11-453d-a403-e96b0029c9fe';
+const ROLE_ASSIGNMENTS_API = '2022-04-01';
+
+/**
+ * The Bronze storage account's ARM scope, resolved the SAME way
+ * `adls-client.resolveAccountScope` does (LOOM_SUBSCRIPTION_ID + LOOM_DLZ_RG +
+ * the account name) so the two cannot disagree about which account Bronze is.
+ * Null when the coordinates are not set — the caller then falls back to naming
+ * the grant rather than pretending it attempted one.
+ */
+function bronzeAccountScope(adlsAccount: string): string | null {
+  const sub = process.env.LOOM_SUBSCRIPTION_ID;
+  const rg = process.env.LOOM_DLZ_RG;
+  if (!sub || !rg || !adlsAccount) return null;
+  return `/subscriptions/${sub}/resourceGroups/${rg}/providers/Microsoft.Storage/storageAccounts/${adlsAccount}`;
+}
+
+type BronzeGrantOutcome =
+  /** The role assignment exists now — either this PUT created it or it was already there. */
+  | { state: 'granted'; scope: string; detail: string }
+  /** Loom could not perform the grant. `detail` says only what was established. */
+  | { state: 'not-granted'; scope: string | null; detail: string; grantScript?: string };
+
+/**
+ * Grant the DATA FACTORY's managed identity Storage Blob Data Contributor on
+ * Loom's Bronze account, via ARM `PUT …/roleAssignments/{guid}`. The assignment
+ * name is the shared deterministic hash of scope+role+principal, so re-running
+ * an install re-PUTs the same object instead of accumulating duplicates.
+ *
+ * Never throws: every failure becomes a `not-granted` outcome carrying the exact
+ * `az role assignment create` the operator would run. Per deploy-integrity.md R7
+ * each detail states what was OBSERVED — "ARM refused the role assignment", "the
+ * factory reports no managed identity" — and never infers a cause it did not see.
+ */
+async function grantFactoryBronzeAccess(
+  adlsAccount: string,
+  steps: string[],
+): Promise<BronzeGrantOutcome> {
+  const scope = bronzeAccountScope(adlsAccount);
+  if (!scope) {
+    return {
+      state: 'not-granted',
+      scope: null,
+      detail:
+        'Loom could not resolve the Bronze storage account\'s ARM id (LOOM_SUBSCRIPTION_ID and LOOM_DLZ_RG are required alongside the account name), so it did not attempt the grant.',
+    };
+  }
+
+  let principalId: string | undefined;
+  try {
+    // `getDefaultFactory` returns the raw ARM body; `identity.principalId` is
+    // present whenever the factory has a system-assigned MI, which is the
+    // identity both linked services above authenticate with.
+    const factory = (await getDefaultFactory()) as any;
+    principalId = factory?.identity?.principalId;
+  } catch (e: any) {
+    return {
+      state: 'not-granted',
+      scope,
+      detail: `Loom could not read the data factory to find its managed identity, so it did not attempt the grant: ${e?.message || String(e)}`,
+      grantScript: grantScriptFor(STORAGE_BLOB_DATA_CONTRIBUTOR, null, scope),
+    };
+  }
+  if (!principalId) {
+    return {
+      state: 'not-granted',
+      scope,
+      detail:
+        'The data factory reports no system-assigned managed identity, so there is no principal to grant Bronze access to. Enable the factory\'s system-assigned identity (platform/fiab/bicep deploys it that way) and re-run.',
+      grantScript: grantScriptFor(STORAGE_BLOB_DATA_CONTRIBUTOR, null, scope),
+    };
+  }
+
+  const assignmentGuid = deterministicAssignmentGuid(scope, STORAGE_BLOB_DATA_CONTRIBUTOR, principalId);
+  const sub = /\/subscriptions\/([^/]+)/i.exec(scope)?.[1];
+  const roleDefinitionId = `/subscriptions/${sub}/providers/Microsoft.Authorization/roleDefinitions/${STORAGE_BLOB_DATA_CONTRIBUTOR}`;
+  const url = `${armBase()}${scope}/providers/Microsoft.Authorization/roleAssignments/${assignmentGuid}?api-version=${ROLE_ASSIGNMENTS_API}`;
+
+  let token: string | undefined;
+  try {
+    token = (await uamiArmCredential().getToken(armScope()))?.token;
+  } catch (e: any) {
+    return {
+      state: 'not-granted', scope,
+      detail: `Loom could not acquire an ARM token to perform the grant: ${e?.message || String(e)}`,
+      grantScript: grantScriptFor(STORAGE_BLOB_DATA_CONTRIBUTOR, principalId, scope),
+    };
+  }
+  if (!token) {
+    return {
+      state: 'not-granted', scope,
+      detail: 'Loom could not acquire an ARM token to perform the grant.',
+      grantScript: grantScriptFor(STORAGE_BLOB_DATA_CONTRIBUTOR, principalId, scope),
+    };
+  }
+
+  try {
+    const res = await fetch(url, {
+      method: 'PUT',
+      headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+      body: JSON.stringify({
+        properties: { roleDefinitionId, principalId, principalType: 'ServicePrincipal' },
+      }),
+      cache: 'no-store',
+    });
+    if (res.ok) {
+      steps.push(`Granted the data factory's managed identity "Storage Blob Data Contributor" on ${adlsAccount} (Loom's own Bronze account).`);
+      return { state: 'granted', scope, detail: `Loom granted the grant itself at ${scope}.` };
+    }
+    const body: any = await res.json().catch(() => ({}));
+    const code: string = body?.error?.code || body?.code || '';
+    const message: string = body?.error?.message || body?.message || `HTTP ${res.status}`;
+    if (res.status === 409 || /RoleAssignmentExists/i.test(code) || /already exists/i.test(message)) {
+      steps.push(`The data factory's managed identity already holds "Storage Blob Data Contributor" on ${adlsAccount}.`);
+      return { state: 'granted', scope, detail: `The assignment already existed at ${scope}.` };
+    }
+    return {
+      state: 'not-granted', scope,
+      // The observed fact is the ARM refusal; the most common cause is that the
+      // Console UAMI lacks Microsoft.Authorization/roleAssignments/write at this
+      // scope, and that is offered as the thing to CHECK, not asserted as fact.
+      detail: `ARM refused the role assignment (HTTP ${res.status}${code ? ` ${code}` : ''}): ${message}. Check whether the Console UAMI holds Microsoft.Authorization/roleAssignments/write at that scope — User Access Administrator or Owner on the Bronze account.`,
+      grantScript: grantScriptFor(STORAGE_BLOB_DATA_CONTRIBUTOR, principalId, scope),
+    };
+  } catch (e: any) {
+    return {
+      state: 'not-granted', scope,
+      detail: `The role-assignment request did not complete: ${e?.message || String(e)}`,
+      grantScript: grantScriptFor(STORAGE_BLOB_DATA_CONTRIBUTOR, principalId, scope),
+    };
+  }
 }
 
 // ── Azure-native DEFAULT: ADF CDC / copy → ADLS Bronze ──────────────────────
@@ -215,19 +368,84 @@ async function provisionAdfCdc(input: any, steps: string[]): Promise<ProvisionRe
       const msg = e?.message || String(e);
       // Auth-to-source/sink failures are an Azure RBAC gate, not a hard failure.
       if (/managed identity|login failed|not authorized|forbidden|permission|AADSTS|cannot open server/i.test(msg)) {
-        return {
-          status: 'remediation',
-          resourceId: pipelineName,
-          secondaryIds: { backend: 'adf-cdc', pipeline: pipelineName },
-          gate: {
-            reason: 'Bronze copy pipeline created, but its run could not authenticate to the source/sink.',
-            remediation: `Grant the Data Factory's managed identity db_datareader on ${server}/${database} (CREATE USER [<factory>] FROM EXTERNAL PROVIDER; ALTER ROLE db_datareader ADD MEMBER [<factory>];) and "Storage Blob Data Contributor" on ${adlsAccount}. Then re-run: ${msg}`,
-            link: 'https://learn.microsoft.com/azure/data-factory/connector-azure-sql-database#managed-identity',
-          },
-          steps,
-        };
+        // #3512 — DO LOOM'S HALF FIRST, THEN GATE ONLY ON WHAT IS LEFT.
+        //
+        // This error does not say WHICH side refused, and nothing here can make
+        // it say so, so no claim is made about that (deploy-integrity.md R7).
+        // What IS known is that one of the two required grants is on Loom's own
+        // Bronze account, and the platform can make that one itself. It does,
+        // then retries the run ONCE. Whatever remains after that is genuinely
+        // outside Loom's control and is what the gate names.
+        const bronze = await grantFactoryBronzeAccess(adlsAccount, steps);
+
+        if (bronze.state === 'granted') {
+          try {
+            const retry = await runPipeline(pipelineName);
+            steps.push(`Re-triggered the Bronze copy after granting the factory MI access to ${adlsAccount}: run ${retry.runId}.`);
+            const okIds: Record<string, string> = {
+              backend: 'adf-cdc', pipeline: pipelineName,
+              bronze: `${adlsAccount}/${bronzeContainer}`, lastRunId: retry.runId,
+              bronzeGrant: 'auto',
+            };
+            const okRoot = resolveAbfssRoot('bronze', `mirrors/${input.workspaceId}/${input.cosmosItemId}`);
+            if (okRoot) okIds.adlsRoot = okRoot;
+            return { status: 'created', resourceId: pipelineName, secondaryIds: okIds, steps };
+          } catch (e2: any) {
+            const msg2 = e2?.message || String(e2);
+            if (!/managed identity|login failed|not authorized|forbidden|permission|AADSTS|cannot open server/i.test(msg2)) {
+              steps.push(`Bronze access granted; on-demand run deferred (${msg2}).`);
+              // Fall through to the normal `created` return below.
+              runId = undefined;
+            } else {
+              // The Loom-side half is done and the run still cannot
+              // authenticate. The remaining requirement is on the CUSTOMER's
+              // source server, which Loom does not own and cannot self-grant —
+              // the one legitimate honest gate here. Stated with its caveat: a
+              // fresh role assignment can take a few minutes to take effect, so
+              // the retry alone does not prove the source is the blocker.
+              return {
+                status: 'remediation',
+                resourceId: pipelineName,
+                secondaryIds: { backend: 'adf-cdc', pipeline: pipelineName, bronzeGrant: 'auto' },
+                gate: {
+                  reason: `Bronze copy pipeline created. Loom granted the factory's managed identity access to its own Bronze account (${adlsAccount}); the run still could not authenticate.`,
+                  remediation:
+                    `Grant the Data Factory's managed identity db_datareader on ${server}/${database} — Loom cannot do this one, because that server is not a resource this platform owns:\n` +
+                    `  CREATE USER [<factory-name>] FROM EXTERNAL PROVIDER;\n` +
+                    `  ALTER ROLE db_datareader ADD MEMBER [<factory-name>];\n` +
+                    `Then re-run the install. Note that the Bronze role assignment above was created moments ago and Azure RBAC can take a few minutes to take effect, so a retry may also succeed on its own. Underlying error: ${msg2}`,
+                  link: 'https://learn.microsoft.com/azure/data-factory/connector-azure-sql-database#managed-identity',
+                },
+                steps,
+              };
+            }
+          }
+        } else {
+          // Loom tried and could not. That is a DEPLOY-TIME gap on Loom's own
+          // resource, reported as such and separately from the customer-side
+          // one, with the exact command for each.
+          return {
+            status: 'remediation',
+            resourceId: pipelineName,
+            secondaryIds: { backend: 'adf-cdc', pipeline: pipelineName, bronzeGrant: 'failed' },
+            gate: {
+              reason: 'Bronze copy pipeline created, but its run could not authenticate, and Loom could not grant its own Bronze account access on your behalf.',
+              remediation:
+                `TWO SEPARATE GRANTS ARE NEEDED, and only one of them is yours to make.\n` +
+                `1. LOOM-SIDE (this is a Loom deploy defect, not your configuration): the Data Factory's managed identity needs "Storage Blob Data Contributor" on ${adlsAccount}. Loom attempted this automatically and could not — ${bronze.detail}` +
+                (bronze.grantScript ? `\n   Unblock it with: ${bronze.grantScript}` : '') +
+                `\n2. SOURCE-SIDE (Loom cannot do this one — the server is not a resource this platform owns): grant the same identity db_datareader on ${server}/${database}:\n` +
+                `   CREATE USER [<factory-name>] FROM EXTERNAL PROVIDER;\n` +
+                `   ALTER ROLE db_datareader ADD MEMBER [<factory-name>];\n` +
+                `Then re-run the install. Underlying run error: ${msg}`,
+              link: 'https://learn.microsoft.com/azure/data-factory/connector-azure-sql-database#managed-identity',
+            },
+            steps,
+          };
+        }
+      } else {
+        steps.push(`Pipeline created; on-demand run deferred (${msg}).`);
       }
-      steps.push(`Pipeline created; on-demand run deferred (${msg}).`);
     }
 
     const secondaryIds: Record<string, string> = { backend: 'adf-cdc', pipeline: pipelineName, bronze: `${adlsAccount}/${bronzeContainer}` };

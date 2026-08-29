@@ -31,6 +31,9 @@ import { InMemoryGraphHistoryStore } from '../store';
 import {
   BASELINE,
   ESTATE,
+  ESTATE_IDS,
+  PROD_ESTATE_BOUND,
+  PROD_ESTATE_UNBOUND,
   RUNTIME_PROVENANCES,
   buildEstate,
   versionFrom,
@@ -49,11 +52,12 @@ function capture(
     | 'configured'
     | 'owns'
   )[],
+  estateId: string = ESTATE,
 ) {
   return captureGraphVersion({
     graph: buildEstate(spec),
     store,
-    estateId: ESTATE,
+    estateId,
     collectedProvenances: collected,
     source: 'test',
     now: at(iso),
@@ -154,7 +158,22 @@ describe('capture — an unchanged estate produces NO new version', () => {
   });
 });
 
-describe('retention — the bound is real and is enforced on the write path', () => {
+/**
+ * #4020 R6 — EVERY RETENTION PROOF RUNS ON AN ESTATE ID PRODUCTION EMITS.
+ *
+ * These two specs used to run on `ESTATE = 'estate-alpha'` alone, a value
+ * `resolveEstateId()` cannot return. A prune bypass keyed to the `loom:` prefix
+ * — the prefix BOTH production shapes start with — was therefore inert in the
+ * whole 103-test suite and live on every real deployment: the 50-version bound
+ * silently stops being enforced and only the 90-day TTL is left holding the
+ * container. Measured as ESCAPED (RC=0) on the #3993 head.
+ *
+ * Parameterising over `ESTATE_IDS` is the fix: the fixture id keeps its
+ * coverage, and `loom:<sub8>:<rg>` + `loom:unbound` mean any prefix- or
+ * shape-conditioned bypass reddens at least one arm. `it.each` rather than a
+ * loop inside one `it`, so the failing SHAPE is named in the report.
+ */
+describe.each(ESTATE_IDS)('retention — the bound is real on estate id %s', (estateId) => {
   it('sixty distinct captures leave exactly fifty versions', async () => {
     const store = new InMemoryGraphHistoryStore();
     const created: string[] = [];
@@ -168,14 +187,14 @@ describe('retention — the bound is real and is enforced on the write path', ()
         ),
       };
       const iso = new Date(Date.UTC(2026, 7, 1, 0, i, 0)).toISOString();
-      const r = await capture(store, spec, iso);
+      const r = await capture(store, spec, iso, undefined, estateId);
       // Every one is a genuine change, so every one must be stored.
       expect(r.status).toBe('created');
       created.push(r.version.id);
       prunedAll.push(...r.pruned);
     }
 
-    const kept = await store.listSummaries(ESTATE);
+    const kept = await store.listSummaries(estateId);
     expect(kept).toHaveLength(DEFAULT_MAX_VERSIONS);
     expect(kept).toHaveLength(50);
 
@@ -186,14 +205,14 @@ describe('retention — the bound is real and is enforced on the write path', ()
     expect(keptIds).toEqual(created.slice(10));
     expect(prunedAll.sort()).toEqual(created.slice(0, 10).sort());
     for (const gone of created.slice(0, 10)) {
-      expect(await store.load(ESTATE, gone)).toBeNull();
+      expect(await store.load(estateId, gone)).toBeNull();
     }
-    expect(await store.load(ESTATE, created[59])).not.toBeNull();
+    expect(await store.load(estateId, created[59])).not.toBeNull();
   });
 
   it('the capture REPORTS the prune rather than doing it silently', async () => {
     const store = new InMemoryGraphHistoryStore({ ...DEFAULT_RETENTION_POLICY, maxVersions: 3 });
-    let last = await capture(store, BASELINE, '2026-08-01T00:00:00.000Z');
+    let last = await capture(store, BASELINE, '2026-08-01T00:00:00.000Z', undefined, estateId);
     for (let i = 1; i <= 4; i += 1) {
       const spec: EstateSpec = {
         ...BASELINE,
@@ -201,12 +220,33 @@ describe('retention — the bound is real and is enforced on the write path', ()
           a.name === 'loom-scratch' ? { ...a, minReplicas: i } : a,
         ),
       };
-      last = await capture(store, spec, `2026-08-01T00:0${i}:00.000Z`);
+      last = await capture(store, spec, `2026-08-01T00:0${i}:00.000Z`, undefined, estateId);
     }
-    expect((await store.listSummaries(ESTATE))).toHaveLength(3);
+    expect((await store.listSummaries(estateId))).toHaveLength(3);
     expect(last.pruned).toHaveLength(1);
     expect(last.notes.join(' ')).toContain('retention:');
     expect(last.notes.join(' ')).toContain(String(DEFAULT_TTL_SECONDS));
+  });
+});
+
+describe('retention — planPrune', () => {
+  // #4020 R6 — the control on the parameterisation itself. If the two
+  // production shapes stopped LOOKING like what `resolveEstateId()` emits, the
+  // arms above would go on passing while testing nothing production produces —
+  // the exact defect they were added to close, one level up. `resolveEstateId`
+  // is not imported (it lives in the pause orchestrator, which pulls in the
+  // whole estate stack); the SHAPE it documents is asserted instead, and it is
+  // stated here that this is a shape check rather than a call.
+  it('the parameterised estate ids carry the two shapes resolveEstateId emits', () => {
+    expect(PROD_ESTATE_BOUND).toMatch(/^loom:[^:]{1,8}:.+$/);
+    expect(PROD_ESTATE_UNBOUND).toBe('loom:unbound');
+    // Both production shapes share the `loom:` prefix — that shared prefix is
+    // precisely what a bypass would key on, so the set must contain BOTH and
+    // must NOT be only the fixture id.
+    expect(ESTATE_IDS).toContain(PROD_ESTATE_BOUND);
+    expect(ESTATE_IDS).toContain(PROD_ESTATE_UNBOUND);
+    expect(ESTATE_IDS.filter((e) => e.startsWith('loom:'))).toHaveLength(2);
+    expect(ESTATE.startsWith('loom:')).toBe(false);
   });
 
   it('planPrune is order-insensitive and names the OLDEST', () => {
