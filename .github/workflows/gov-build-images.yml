@@ -8,7 +8,11 @@ name: gov-build-images
 # replaced it as the problem is the opposite failure: it ran, and then it did not
 # run again for ten days, because nothing except a human could start it.
 # Everything downstream of the build is still written to fail LOUDLY rather than
-# assume it worked: see the "Verify the pulled tag exists" step below.
+# assume it worked: see the "Verify the DEPLOY-REFERENCED tag exists in the Gov
+# ACR" step below. That header is quoted verbatim as the durable anchor in
+# apps/fiab-console/lib/deploy/__tests__/gates-2641-deploy-chain.test.ts, so if
+# you rename the step, rename it in both places (#3784 — this line previously
+# pointed at "Verify the pulled tag exists", a step name that does not exist).
 #
 # ── WHY THIS NOW RUNS ON A SCHEDULE (#3730) ────────────────────────────────
 # Measured 2026-08-18: `deploy-gov` reported SUCCESS on 2026-08-16 while the live

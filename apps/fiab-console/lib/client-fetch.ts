@@ -70,14 +70,79 @@ export const CROSS_SUB_FETCH_TIMEOUT_MS = 45_000;
  */
 export class ClientFetchTimeoutError extends Error {
   readonly timeoutMs: number;
-  constructor(timeoutMs: number) {
+  /** The call-site copy that was used, if any. */
+  readonly hint?: string;
+  constructor(timeoutMs: number, hint?: string) {
     super(
       `The request took longer than ${Math.round(timeoutMs / 1000)}s and timed out. `
-      + 'This query can be heavier across multiple subscriptions — retry, or narrow the window.',
+      + (hint || DEFAULT_TIMEOUT_HINT),
     );
     this.name = 'ClientFetchTimeoutError';
     this.timeoutMs = timeoutMs;
+    this.hint = hint;
   }
+}
+
+/**
+ * The default second sentence — #3546, deploy-integrity.md R7.
+ *
+ * It used to read "This query can be heavier across multiple subscriptions —
+ * retry, or narrow the window." on EVERY client timeout, app-wide. That is a
+ * specific claim about a specific cause, and this class has established nothing
+ * of the kind: it knows only that a request did not answer inside its budget.
+ * Measured live on 2026-08-15 (#3546), a RisingWave `Materialize` — a single
+ * pg-wire connect to ONE always-on Container App, with no subscription
+ * enumeration anywhere in the path — surfaced exactly that sentence, and #3571
+ * put the same wording on `SELECT 1 AS hello` against a scale-to-zero DuckDB
+ * tier. Both readers were handed a cause that was not merely unproven, it was
+ * irrelevant, and the real one (cold start / connect-phase reachability) was
+ * never mentioned.
+ *
+ * What survives measurement is: the deadline elapsed; the server may or may not
+ * still be working; nothing here proves the operation failed. A call site that
+ * genuinely knows more passes `timeoutHint` and says so in its own words.
+ */
+export const DEFAULT_TIMEOUT_HINT =
+  'That is all this establishes — the request may still be completing on the server, and this is not '
+  + 'evidence that the operation failed. Retry; if it keeps timing out, check the surface\'s own status panel.';
+
+/**
+ * The cross-subscription copy, used ONLY when the call site opted into
+ * {@link CROSS_SUB_FETCH_TIMEOUT_MS}. That budget exists for exactly one reason
+ * (documented on the constant), so it is the one signal in this module that
+ * licenses talking about subscription fan-out — and even then the sentence is
+ * conditional, because the budget is what was established, not the fan-out.
+ */
+export const CROSS_SUB_TIMEOUT_HINT =
+  'This call uses the cross-subscription budget, so it may be fanning out across every subscription you '
+  + 'can see — retry, or narrow the window.';
+
+/** Per-call transport options. A bare `number` still means "timeout in ms". */
+export interface ClientFetchOptions {
+  /** Per-request ceiling in ms. Defaults to {@link CLIENT_FETCH_TIMEOUT_MS}. */
+  timeoutMs?: number;
+  /**
+   * Call-site copy for the timeout message, replacing {@link DEFAULT_TIMEOUT_HINT}.
+   * It must state something the CALL SITE actually knows — a scale-to-zero
+   * backend, a cold pool, a known-heavy aggregation. Do not restate a guess as
+   * a cause (R7); that is the defect this parameter exists to end.
+   */
+  timeoutHint?: string;
+}
+
+/** Normalize the third argument, which historically was a bare `number`. */
+function resolveOptions(opts?: number | ClientFetchOptions): { ms: number; hint?: string } {
+  if (typeof opts === 'number') {
+    return {
+      ms: opts,
+      hint: opts === CROSS_SUB_FETCH_TIMEOUT_MS ? CROSS_SUB_TIMEOUT_HINT : undefined,
+    };
+  }
+  const ms = opts?.timeoutMs ?? CLIENT_FETCH_TIMEOUT_MS;
+  return {
+    ms,
+    hint: opts?.timeoutHint ?? (ms === CROSS_SUB_FETCH_TIMEOUT_MS ? CROSS_SUB_TIMEOUT_HINT : undefined),
+  };
 }
 
 /**
@@ -134,14 +199,18 @@ export function describeNonJsonResponse(status: number, service = 'The service')
 export async function clientFetch<S extends string>(
   input: ValidateApiPath<S> | URL,
   init?: RequestInit,
-  timeoutMs: number = CLIENT_FETCH_TIMEOUT_MS,
+  // #3546 — accepts the historical bare `number` OR `{ timeoutMs, timeoutHint }`
+  // so a call site can supply timeout copy that is true of ITS backend instead
+  // of inheriting one sentence written for cross-subscription reads.
+  opts: number | ClientFetchOptions = CLIENT_FETCH_TIMEOUT_MS,
 ): Promise<Response> {
+  const { ms: timeoutMs, hint: timeoutHint } = resolveOptions(opts);
   // `ValidateApiPath<S>` is a compile-time-only refinement of `string` (it is
   // either `S` itself or the `UnknownApiRoute` error object, which is
   // unreachable here because such a call does not compile). Widen once, at the
   // boundary, so the rest of the body keeps its plain `string | URL` typing.
   const target = input as string | URL;
-  const res = await rawFetch(target, init, timeoutMs);
+  const res = await rawFetch(target, init, timeoutMs, timeoutHint);
   // SLIDING-SESSION RECOVERY: a 401 from a first-party /api route MAY mean the
   // encrypted loom_session cookie lapsed while the MSAL refresh token is still
   // alive. In that one case we transparently POST /api/auth/refresh ONCE to
@@ -182,7 +251,7 @@ export async function clientFetch<S extends string>(
     // succeeds. Callers pass JSON strings in practice, so the common path always
     // retries.
     if (isReSendableBody(init)) {
-      return rawFetch(target, init, timeoutMs);
+      return rawFetch(target, init, timeoutMs, timeoutHint);
     }
     return res;
   }
@@ -319,6 +388,7 @@ async function rawFetch(
   input: string | URL,
   init?: RequestInit,
   timeoutMs: number = CLIENT_FETCH_TIMEOUT_MS,
+  timeoutHint?: string,
 ): Promise<Response> {
   const controller = new AbortController();
   let timedOut = false;
@@ -348,7 +418,7 @@ async function rawFetch(
     // (component unmount): only the former becomes a friendly timeout error; a
     // caller abort re-throws unchanged so unmount cleanup behaves as before.
     if (timedOut && !callerSignal?.aborted) {
-      throw new ClientFetchTimeoutError(timeoutMs);
+      throw new ClientFetchTimeoutError(timeoutMs, timeoutHint);
     }
     throw err;
   } finally {

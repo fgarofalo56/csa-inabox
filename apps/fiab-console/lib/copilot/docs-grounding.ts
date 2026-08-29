@@ -88,6 +88,37 @@ export interface DocExcerpt {
 }
 
 /**
+ * #3918 — the superseded marker, applied HERE and never in indexed content.
+ *
+ * `PRPs/archive/**` holds PRP units the omnibus consolidation superseded. They
+ * are retrievable on purpose (they are real design history), but a user asking
+ * "what is the plan for X" can be answered from one with nothing saying so.
+ *
+ * The first attempt at this prepended the notice to each archived chunk's
+ * INDEXED `content`. Measured on the staged production corpus (49,481 chunks,
+ * archived = 5.10%), that made archived chunks 10/10 of the top-10 for "what is
+ * the current plan" (1/10 without) and cost 23-32% IDF on `current` / `plan` /
+ * `active` / `work` corpus-wide — the sentence meaning "this is NOT the current
+ * plan" made archived docs the top match for "current". See `SUPERSEDED_NOTICE`
+ * in lib/azure/loom-docs-corpus.ts for the full table.
+ *
+ * So the marker is applied at ASSEMBLY, on the header line of the excerpt,
+ * keyed off `path` — a field both retrieval backends already return. It is
+ * therefore invisible to BM25, to AI Search's full-text query, and to the
+ * candidate window, because it is not in the corpus at all. It also does not
+ * consume any of the {@link EVIDENCE_CHARS} budget: the content slice is
+ * unchanged, byte for byte.
+ */
+const SUPERSEDED_PREFIX = 'PRPs/archive/';
+const SUPERSEDED_EXCERPT_MARK =
+  '[ARCHIVED / SUPERSEDED design history — NOT the current plan. PRPs/active/ holds current work.]';
+
+/** True when a retrieved excerpt is superseded design history. */
+export function isSupersededExcerpt(path: string): boolean {
+  return typeof path === 'string' && path.startsWith(SUPERSEDED_PREFIX);
+}
+
+/**
  * The grounding rules every docs-RAG answer must follow. Injected verbatim into
  * BOTH the eval probe's single-turn prompt and the shipped Help Copilot's
  * system prompt, so the two cannot drift.
@@ -123,6 +154,12 @@ export const DOCS_GROUNDING_RULES = [
     'give — every publish target, source type, destination, and operator — not just the first one you find.',
   '6. PARTIAL BEATS REFUSAL. Answer with whatever the excerpts DO support and name the specific part they do not ' +
     'cover. Refuse outright only when no retrieved excerpt is relevant to the question at all.',
+  '7. AN ARCHIVED SOURCE IS NOT THE CURRENT PLAN. Any excerpt or searchDocs hit whose path starts with ' +
+    'PRPs/archive/ — equivalently, one carrying an ARCHIVED / SUPERSEDED marker on its header line or in a ' +
+    '"status" field — is design history that was explicitly superseded. Prefer a non-archived source that covers ' +
+    'the same ground. If an archived one is all you have, still answer from it AND say in the answer that the ' +
+    'source is superseded design history that may not describe current behaviour. Never present it as the current ' +
+    'plan, and never drop the fact that it is archived.',
 ].join('\n');
 
 /**
@@ -132,7 +169,13 @@ export const DOCS_GROUNDING_RULES = [
 export function renderDocExcerpts(excerpts: DocExcerpt[]): string {
   if (!excerpts.length) return '(no documentation excerpts were retrieved)';
   return excerpts
-    .map((e, i) => `[${i + 1}] ${e.path}${e.heading ? ` — ${e.heading}` : ''}\n${e.content.slice(0, EVIDENCE_CHARS)}`)
+    .map((e, i) => {
+      // #3918 — the mark rides the HEADER line, never the content slice, so the
+      // evidence the model reads is byte-identical to what was indexed and the
+      // ranker never sees this string at all.
+      const mark = isSupersededExcerpt(e.path) ? ` ${SUPERSEDED_EXCERPT_MARK}` : '';
+      return `[${i + 1}] ${e.path}${e.heading ? ` — ${e.heading}` : ''}${mark}\n${e.content.slice(0, EVIDENCE_CHARS)}`;
+    })
     .join('\n\n');
 }
 

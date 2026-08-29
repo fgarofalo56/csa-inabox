@@ -40,6 +40,13 @@ import {
   DEFAULT_DOC_RETRIEVAL_TOP,
   type DocHit,
 } from './loom-docs-index';
+// #3918 — the superseded marker is stamped HERE, at prompt/citation assembly,
+// keyed off `path`. It is NEVER written into indexed `content`: the first
+// attempt did that and it poisoned BM25 (archived chunks took 10/10 of the
+// top-10 for "what is the current plan", vs 1/10 without). This module already
+// depends on loom-docs-index, which depends on loom-docs-corpus, so the
+// canonical predicate costs no new dependency here.
+import { isSupersededPath, SUPERSEDED_NOTICE } from './loom-docs-corpus';
 import { NAV_ITEMS } from '@/lib/nav/nav-items';
 import { DOCS_GROUNDING_RULES } from '@/lib/copilot/docs-grounding';
 import { gatherReceipts, type ReceiptSource } from './help-receipts';
@@ -86,6 +93,16 @@ export interface Citation {
   url?: string;
   /** First ~200 chars of the chunk for inline preview */
   preview: string;
+  /**
+   * #3918 — the chunk is SUPERSEDED design history (`PRPs/archive/**`).
+   *
+   * Structured for any consumer that wants to style or filter it. The
+   * human-visible marker is also folded into `heading`, because `CitationChips`
+   * renders `heading` as both the chip label and the tooltip line — a flag the
+   * renderer does not read would be another seam wired to nothing, which is the
+   * state #3918 was filed about.
+   */
+  superseded?: boolean;
 }
 
 export type HelpStep =
@@ -199,14 +216,28 @@ interface ToolDef {
   handler: (args: any) => Promise<{ result: unknown; citations?: Citation[] }>;
 }
 
+/**
+ * #3918 — the short, chip-safe marker. `CitationChips` caps a chip at 280px
+ * with an ellipsis, so a full sentence here would push the real heading off the
+ * chip; the full sentence goes to the MODEL instead (see `SUPERSEDED_NOTICE`
+ * on the tool result below). It costs nothing from the 200-char `preview`
+ * budget, which the abandoned in-content banner consumed 49.5% of.
+ */
+const ARCHIVED_TAG = '[ARCHIVED]';
+
 function citationFromHit(hit: DocHit): Citation {
+  const superseded = isSupersededPath(hit.path);
+  const heading = superseded
+    ? `${ARCHIVED_TAG} ${hit.heading && hit.heading.trim() ? hit.heading : 'superseded design history'}`
+    : hit.heading;
   return {
     id: hit.id,
     path: hit.path,
     kind: hit.kind,
-    heading: hit.heading,
+    heading,
     url: hit.url,
     preview: hit.content.slice(0, 200).replace(/\s+/g, ' ').trim(),
+    ...(superseded ? { superseded: true } : {}),
   };
 }
 
@@ -253,6 +284,11 @@ function buildTools(deps: {
               heading: h.heading,
               url: h.url,
               score: Number(h.score.toFixed(3)),
+              // #3918 — the disclaimer the MODEL reads, on the hit envelope and
+              // NOT inside `content`. `content` is handed back byte-identical to
+              // what was indexed, so nothing here can reach the ranker, the AI
+              // Search full-text query, or the candidate window.
+              ...(isSupersededPath(h.path) ? { status: SUPERSEDED_NOTICE } : {}),
               content: h.content,
             })),
           },
