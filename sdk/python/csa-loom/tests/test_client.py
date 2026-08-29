@@ -13,6 +13,7 @@ import json
 import threading
 import urllib.error
 import urllib.request
+from http.client import HTTPMessage
 from io import BytesIO
 
 import pytest
@@ -246,11 +247,25 @@ def test_non_http_schemes_are_refused() -> None:
 # corrected in `_transport.py`.
 
 
+def _routes(opener: urllib.request.OpenerDirector) -> set[str]:
+    """The URL schemes an opener can actually dispatch.
+
+    `OpenerDirector.__init__` really does `self.handle_open = {}` and
+    `add_handler` really does populate it — this is the runtime source of truth
+    for "what can this opener open", and it is what the whole ftp/file/data
+    argument turns on. typeshed simply does not declare the attribute, so the
+    ignore records a GAP IN THE STUBS, not a doubt about the value. Kept in one
+    helper so there is one suppression rather than one per call site, and
+    `warn_unused_ignores` turns it red the day typeshed adds it.
+    """
+    return set(opener.handle_open)  # type: ignore[attr-defined]
+
+
 def test_the_transport_opener_has_no_ftp_file_or_data_route() -> None:
     # `build_opener(HTTPHandler, HTTPSHandler, HTTPRedirectHandler)` does NOT
     # produce this — its arguments only DE-DUPLICATE the default handler set and
     # ftp/file/data stay installed. That is why the list is built explicitly.
-    routes = set(_transport._OPENER.handle_open)
+    routes = _routes(_transport._OPENER)
     assert "ftp" not in routes
     assert "file" not in routes
     assert "data" not in routes
@@ -265,7 +280,7 @@ def test_an_ftp_proxy_env_var_cannot_re_register_the_ftp_route(
     # `ftp_proxy` puts the route back — and it fails OPEN, re-dispatching to the
     # proxy over HTTP with the headers intact.
     monkeypatch.setenv("ftp_proxy", "http://127.0.0.1:9")
-    assert "ftp" not in set(_transport._http_only_opener().handle_open)
+    assert "ftp" not in _routes(_transport._http_only_opener())
 
 
 def test_a_cross_host_redirect_is_refused_rather_than_followed() -> None:
@@ -275,7 +290,9 @@ def test_a_cross_host_redirect_is_refused_rather_than_followed() -> None:
         headers={"Authorization": "Bearer loom_pat_abc_secret"},
     )
     with pytest.raises(urllib.error.HTTPError, match="refusing cross-origin redirect"):
-        handler.redirect_request(req, BytesIO(b""), 302, "Found", {}, "https://attacker.invalid/loot")
+        handler.redirect_request(
+            req, BytesIO(b""), 302, "Found", HTTPMessage(), "https://attacker.invalid/loot"
+        )
 
 
 def test_a_scheme_downgrade_and_a_port_change_are_both_refused() -> None:
@@ -286,7 +303,7 @@ def test_a_scheme_downgrade_and_a_port_change_are_both_refused() -> None:
         "https://loom.example.gov:8443/api/v1/workspaces",
     ):
         with pytest.raises(urllib.error.HTTPError, match="refusing cross-origin redirect"):
-            handler.redirect_request(base, BytesIO(b""), 302, "Found", {}, target)
+            handler.redirect_request(base, BytesIO(b""), 302, "Found", HTTPMessage(), target)
 
 
 def test_a_same_origin_redirect_is_still_followed() -> None:
@@ -295,7 +312,7 @@ def test_a_same_origin_redirect_is_still_followed() -> None:
     handler = _transport._SameOriginRedirectHandler()
     req = urllib.request.Request("https://loom.example.gov/api/v1/workspaces")
     redirected = handler.redirect_request(
-        req, BytesIO(b""), 302, "Found", {}, "https://loom.example.gov/api/v1/workspaces/"
+        req, BytesIO(b""), 302, "Found", HTTPMessage(), "https://loom.example.gov/api/v1/workspaces/"
     )
     assert redirected is not None
     assert redirected.full_url == "https://loom.example.gov/api/v1/workspaces/"
@@ -309,7 +326,7 @@ def test_the_stdlib_handler_would_have_leaked_the_token() -> None:
         headers={"Authorization": "Bearer loom_pat_abc_secret"},
     )
     leaked = urllib.request.HTTPRedirectHandler().redirect_request(
-        req, BytesIO(b""), 302, "Found", {}, "https://attacker.invalid/loot"
+        req, BytesIO(b""), 302, "Found", HTTPMessage(), "https://attacker.invalid/loot"
     )
     assert leaked is not None
     assert leaked.full_url.startswith("https://attacker.invalid/")

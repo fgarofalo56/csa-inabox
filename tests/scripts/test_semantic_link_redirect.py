@@ -105,7 +105,7 @@ class TestTheRedirectGuardCoversBOTHCredentials:
         req.add_header("cookie", "loom_session=SESSION_SECRET")
         req.add_header("authorization", "Bearer SESSION_SECRET")
         with pytest.raises(urllib.error.HTTPError) as excinfo:
-            handler.redirect_request(req, io.BytesIO(b""), 302, "Found", {}, "https://attacker.invalid/loot")
+            handler.redirect_request(req, io.BytesIO(b""), 302, "Found", HTTPMessage(), "https://attacker.invalid/loot")
         # R7 — the message names what would actually have been handed over.
         assert "refusing cross-origin redirect" in str(excinfo.value)
         assert "loom_session cookie" in str(excinfo.value)
@@ -118,13 +118,13 @@ class TestTheRedirectGuardCoversBOTHCredentials:
             "https://csa-loom.example.com:8443/api/items/semantic-model/m1/semantic-link",
         ):
             with pytest.raises(urllib.error.HTTPError, match="refusing cross-origin redirect"):
-                handler.redirect_request(base, io.BytesIO(b""), 302, "Found", {}, target)
+                handler.redirect_request(base, io.BytesIO(b""), 302, "Found", HTTPMessage(), target)
 
     def test_a_same_origin_redirect_is_still_followed(self) -> None:
         handler = _mod._SameOriginRedirectHandler()
         req = urllib.request.Request("https://csa-loom.example.com/api/items/semantic-model/m1/semantic-link")
         redirected = handler.redirect_request(
-            req, io.BytesIO(b""), 302, "Found", {},
+            req, io.BytesIO(b""), 302, "Found", HTTPMessage(),
             "https://csa-loom.example.com/api/items/semantic-model/m1/semantic-link/",
         )
         assert redirected is not None

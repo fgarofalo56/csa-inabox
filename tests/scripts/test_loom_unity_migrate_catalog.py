@@ -98,7 +98,7 @@ class TestTheRedirectGuard:
         )
         with pytest.raises(urllib.error.HTTPError) as excinfo:
             handler.redirect_request(
-                req, io.BytesIO(b""), 302, "Found", {}, "https://attacker.invalid/loot"
+                req, io.BytesIO(b""), 302, "Found", HTTPMessage(), "https://attacker.invalid/loot"
             )
         assert "refusing cross-origin redirect" in str(excinfo.value)
 
@@ -107,7 +107,7 @@ class TestTheRedirectGuard:
         req = urllib.request.Request("https://loom-unity.internal/api/2.1/unity-catalog/catalogs")
         with pytest.raises(urllib.error.HTTPError, match="refusing cross-origin redirect"):
             handler.redirect_request(
-                req, io.BytesIO(b""), 302, "Found", {},
+                req, io.BytesIO(b""), 302, "Found", HTTPMessage(),
                 "http://loom-unity.internal/api/2.1/unity-catalog/catalogs",
             )
 
@@ -116,7 +116,7 @@ class TestTheRedirectGuard:
         req = urllib.request.Request("https://loom-unity.internal/api/2.1/unity-catalog/catalogs")
         with pytest.raises(urllib.error.HTTPError, match="refusing cross-origin redirect"):
             handler.redirect_request(
-                req, io.BytesIO(b""), 302, "Found", {},
+                req, io.BytesIO(b""), 302, "Found", HTTPMessage(),
                 "https://loom-unity.internal:8443/api/2.1/unity-catalog/catalogs",
             )
 
@@ -126,7 +126,7 @@ class TestTheRedirectGuard:
         handler = _mod._SameOriginRedirectHandler()
         req = urllib.request.Request("https://loom-unity.internal/api/2.1/unity-catalog/catalogs")
         redirected = handler.redirect_request(
-            req, io.BytesIO(b""), 302, "Found", {},
+            req, io.BytesIO(b""), 302, "Found", HTTPMessage(),
             "https://loom-unity.internal/api/2.1/unity-catalog/catalogs/",
         )
         assert redirected is not None
@@ -138,7 +138,7 @@ class TestTheRedirectGuard:
         handler = _mod._SameOriginRedirectHandler()
         req = urllib.request.Request("https://loom-unity.internal/api/2.1/unity-catalog/catalogs")
         redirected = handler.redirect_request(
-            req, io.BytesIO(b""), 302, "Found", {},
+            req, io.BytesIO(b""), 302, "Found", HTTPMessage(),
             "https://LOOM-UNITY.INTERNAL/api/2.1/unity-catalog/catalogs/",
         )
         assert redirected is not None

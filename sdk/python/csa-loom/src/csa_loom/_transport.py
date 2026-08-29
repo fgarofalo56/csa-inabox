@@ -18,7 +18,8 @@ import urllib.parse
 import urllib.request
 from collections.abc import Mapping
 from dataclasses import dataclass, field
-from typing import Protocol, runtime_checkable
+from http.client import HTTPMessage
+from typing import IO, Protocol, runtime_checkable
 
 from csa_loom.errors import LoomTransportError
 
@@ -104,7 +105,22 @@ class _SameOriginRedirectHandler(urllib.request.HTTPRedirectHandler):
     somewhere else entirely. Same-origin redirects still work.
     """
 
-    def redirect_request(self, req, fp, code, msg, headers, newurl):  # type: ignore[no-untyped-def]
+    def redirect_request(
+        self,
+        req: urllib.request.Request,
+        fp: IO[bytes],
+        code: int,
+        msg: str,
+        headers: HTTPMessage,
+        newurl: str,
+    ) -> urllib.request.Request | None:
+        # ANNOTATED RATHER THAN IGNORED. The first cut carried
+        # `# type: ignore[no-untyped-def]`, which silenced the definition and
+        # left every CALL SITE failing `no-untyped-call` under this package's
+        # strict config — a suppression that moved the error rather than
+        # answering it. The signature is typeshed's for the method being
+        # overridden, so an incompatible override now fails here instead of
+        # somewhere downstream.
         target = urllib.parse.urljoin(req.full_url, newurl)
         if _origin(target) != _origin(req.full_url):
             raise CrossOriginRedirectRefused(
