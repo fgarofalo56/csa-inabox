@@ -25,6 +25,14 @@ This file is maintained automatically by
 [Conventional Commits](https://www.conventionalcommits.org/). See
 [RELEASE.md](RELEASE.md) for the release process.
 
+## [0.103.2](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.103.1...csa-inabox-v0.103.2) (2026-08-29)
+
+
+### Bug Fixes
+
+* **gov,ci:** the evaluator copy list held direct imports where tsc needed a closure — and nothing was watching it ([#3886](https://github.com/fgarofalo56/csa-inabox/issues/3886)) ([#4164](https://github.com/fgarofalo56/csa-inabox/issues/4164)) ([f7b3ecc](https://github.com/fgarofalo56/csa-inabox/commit/f7b3ecc57ce12831646ceb99ab3c88ebb6ee3862))
+* **security,ci:** twelve defects — a token forwarded across a cross-host 302, an unfiltered read used as an authz verdict, and a gate that found zero projects ([#4182](https://github.com/fgarofalo56/csa-inabox/issues/4182)) ([9bb8131](https://github.com/fgarofalo56/csa-inabox/commit/9bb8131596a76cc286c62d16a3f8063fec6c6b3d))
+
 ## [0.103.1](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.103.0...csa-inabox-v0.103.1) (2026-08-28)
 
 
