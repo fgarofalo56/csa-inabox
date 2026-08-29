@@ -214,6 +214,15 @@ resource loomDbContainers 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/co
 // boundary, so the container exists in Commercial and in Gov alike. The console
 // reaches it through `LOOM_COSMOS_ENDPOINT`, which the deploy emits, so no host
 // literal appears in the app.
+// INDEXING — `/content/*` IS EXCLUDED (#4018), and that exclusion must stay in
+// step with the sibling declaration in `landing-zone/cosmos.bicep` and with the
+// `createIfNotExists` fallback in `lib/brain/history/cosmos-store.ts`, exactly
+// as the TTL above does. `automatic: true` with no `excludedPaths` indexes every
+// property of the document, and `content` IS the full node/edge graph — sized at
+// 60-100 KB per version in `docs/fiab/brain/graph-history.md`. Nothing queries
+// inside it: the store's only access patterns are a partition-scoped list
+// ordered by `capturedAt` and a point read by id, so the index over the blob was
+// paid for on every write and never read.
 resource brainGraphVersions 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/containers@2024-12-01-preview' = {
   parent: loomDb
   name: 'brain-graph-versions'
@@ -222,7 +231,12 @@ resource brainGraphVersions 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/
       id: 'brain-graph-versions'
       partitionKey: { paths: ['/estateId'], kind: 'Hash' }
       defaultTtl: 7776000
-      indexingPolicy: { indexingMode: 'consistent', automatic: true }
+      indexingPolicy: {
+        indexingMode: 'consistent'
+        automatic: true
+        includedPaths: [ { path: '/*' } ]
+        excludedPaths: [ { path: '/content/*' } ]
+      }
     }
   }
 }
