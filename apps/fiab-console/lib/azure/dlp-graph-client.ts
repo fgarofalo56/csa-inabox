@@ -95,6 +95,32 @@ const credential: TokenCredential = uamiClientId
 
 export interface DlpNotConfiguredHint {
   missingEnvVar: string;
+  /**
+   * #3749 — WHAT IS ACTUALLY KNOWN ABOUT `missingEnvVar`.
+   *
+   * `missingEnvVar` is rendered by `NotConfiguredBar` as "Missing env var: X",
+   * i.e. as a statement of CAUSE. Three of the builders below reuse the same
+   * base hint for conditions that are NOT an unset flag, and each then
+   * overwrites `bicepStatus` with text that begins "LOOM_DLP_ENABLED=true …".
+   * The card therefore printed, live on /admin/security?tab=dlp:
+   *
+   *     DLP policies is not wired in this deployment
+   *     Missing env var: LOOM_DLP_ENABLED
+   *     … LOOM_DLP_ENABLED=true and the Console UAMI holds Policy.Read.All, but
+   *       Microsoft Graph does not expose a readable DLP policy segment …
+   *
+   * Both cannot be true, and the FALSE one is the headline — so an operator (or
+   * a Copilot summarising gate status) goes and sets a variable that is already
+   * set and never reads the real blocker. deploy-integrity.md R7: an error must
+   * not assert a cause it did not establish.
+   *
+   * `'set'` tells the renderer the flag is not the blocker; it already supports
+   * this (`not-configured-bar.tsx`, `envVarState`) and has since #3749 landed
+   * the consumer half — nothing produced it until now. Omitted / `'missing'`
+   * keeps the previous wording byte-for-byte, so the genuine unset-flag gate is
+   * unchanged.
+   */
+  envVarState?: 'missing' | 'set';
   bicepModule: string;
   bicepStatus: string;
   rolesRequired: { name: string; appRoleId: string; scope: string; reason: string }[];
@@ -104,7 +130,14 @@ export interface DlpNotConfiguredHint {
 export class DlpNotConfiguredError extends Error {
   hint: DlpNotConfiguredHint;
   constructor(hint: DlpNotConfiguredHint) {
-    super(`Microsoft DLP is not wired in this deployment: missing ${hint.missingEnvVar}`);
+    // The thrown message is the `error` field of the 503 the BFF returns, so it
+    // is read in logs and by Copilot even when nobody looks at the card. It gets
+    // the same #3749 treatment: never call a set flag "missing".
+    super(
+      hint.envVarState === 'set'
+        ? `Microsoft DLP is enabled in this deployment (${hint.missingEnvVar} is set) but unavailable — see hint.bicepStatus for the blocker this call actually established.`
+        : `Microsoft DLP is not wired in this deployment: missing ${hint.missingEnvVar}`,
+    );
     this.hint = hint;
   }
 }
@@ -173,6 +206,10 @@ function assertEnabled() {
  */
 function graphDlpUnavailableHint(): DlpNotConfiguredHint {
   const h = notConfiguredHint('LOOM_DLP_ENABLED');
+  // #3749. `dlpEnabled()` is `!== 'false'`, so this path is only REACHED when
+  // the flag is unset-or-true — i.e. never because it is off. The card must not
+  // headline a config gap it has disproven by being here.
+  h.envVarState = 'set';
   h.bicepStatus =
     'LOOM_DLP_ENABLED=true and the Console UAMI holds Policy.Read.All, but Microsoft Graph does not expose a readable DLP policy segment for this tenant — the /beta/informationProtection/dataLossPreventionPolicies endpoint returns "Resource not found for the segment". DLP policy authoring/reads are still Purview-compliance-portal + Security & Compliance PowerShell only outside the Graph DLP preview.';
   h.followUp =
@@ -190,6 +227,9 @@ function graphDlpUnavailableHint(): DlpNotConfiguredHint {
 function graphDlpGovUnavailableHint(): DlpNotConfiguredHint {
   const label = cloudBoundaryLabel();
   const h = notConfiguredHint('LOOM_DLP_ENABLED');
+  // #3749. The Gov/DoD Graph roots do not expose the segment AT ALL — that is a
+  // property of the cloud, entirely independent of the flag's value.
+  h.envVarState = 'set';
   h.bicepStatus =
     `LOOM_DLP_ENABLED=true, but this deployment runs in ${label}. Microsoft Graph's ` +
     '/beta/informationProtection/dataLossPreventionPolicies segment is not available in the US ' +
@@ -222,6 +262,10 @@ function isDlpSegmentUnavailable(e: unknown): boolean {  if (!(e instanceof DlpE
  */
 function graphSecurityRoleHint(status: number): DlpNotConfiguredHint {
   const h = notConfiguredHint('LOOM_DLP_ENABLED');
+  // #3749. A 401/403 from alerts_v2 is an UNCONSENTED APPROLE, named below. The
+  // env var is not the blocker and telling an operator it is sends them to the
+  // wrong place — the roles list one line down is the actionable part.
+  h.envVarState = 'set';
   h.rolesRequired = [
     {
       name: 'SecurityAlert.Read.All',

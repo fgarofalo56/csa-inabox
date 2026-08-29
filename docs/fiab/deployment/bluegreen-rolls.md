@@ -1,7 +1,69 @@
 # Blue-green console rolls (BR-BLUEGREEN)
 
-**Status:** active · **Supersedes:** the in-place `az containerapp update --image`
-roll (`gov-console-roll.yml` and manual `containerapp update`).
+**Status:** active but **UNVERIFIED** — see *Verification status* below ·
+**Supersedes:** the in-place `az containerapp update --image` roll
+(`gov-console-roll.yml` and manual `containerapp update`).
+
+## Verification status (#3968) — read this before you reach for it in an incident
+
+This is a **`workflow_dispatch`-only** path. `deploy-integrity.md` R3 treats a
+deploy path that does not run as the loudest case of drift, not a silent pass, and
+that is exactly the state this one is in.
+
+Measured with `gh run list --workflow console-bluegreen-roll.yml`, 2026-08-29:
+
+| run | date | conclusion |
+|---|---|---|
+| 30635466301 | 2026-07-31 | failure |
+| 29812313317 | 2026-07-21 | failure |
+| 29760624991 | 2026-07-20 | failure |
+| 29529724362 | 2026-07-16 | failure |
+
+**Four runs, four failures, nothing since.** All four failed in *Ensure
+multiple-revision mode*, on ARM's `ContainerAppInvalidIngressStickySessionRevisionMode`
+— blue-green requires multiple-revision mode, and ARM refuses that transition
+while ingress session affinity is set.
+
+**That cause has since been removed at BOTH layers, in code, and neither fix has
+been exercised by a run of this workflow:**
+
+1. **The template.** `admin-plane/app-deployments.bicep` now renders
+   `ingress.stickySessions.affinity: 'none'` for any app carrying
+   `multiRevision: true` (#3399), and `main.bicep` sets `multiRevision: true` for
+   `loom-console` and nothing else. Before that change the property appeared
+   NOWHERE in `platform/fiab/bicep`, so an affinity set out-of-band could not be
+   cleared by any deploy — the template was neither setting nor unsetting the
+   value it was conflicting with. That is also the answer to "why did the console
+   move from Single to Multiple?": a deploy did it, deliberately, and the pairing
+   is now self-healing on every re-render.
+2. **The workflow.** The *Ensure multiple-revision mode* step no longer exits 1
+   with an unexplained code: it classifies the read failure separately from the
+   write failure, enters the sticky branch ONLY when ARM's own error names it,
+   clears affinity to `none`, retries, and reports anything else verbatim as
+   explicitly unclassified (R6/R7).
+
+**So the July red is a fact about July, not about now — and "it probably works" is
+not a receipt.** The only thing that settles it is a dispatch:
+
+```
+gh workflow run console-bluegreen-roll.yml -f cloud=commercial
+```
+
+Until that run exists and is green, treat this runbook as untested. If it fails,
+record whether the cause is the July one (sticky / revision mode) or new.
+
+**Gov is untested too, and separately so.** The `cloud` input offers `gov`, and
+this workflow has never been dispatched against it. The bicep fix above is
+cloud-invariant — `apps[]` in `admin-plane/main.bicep` is one list for every
+boundary, so the Gov console carries `multiRevision: true` and the same
+`affinity: 'none'` pairing — but per `cloud-parity.md` §4 a Commercial receipt
+proves nothing about Gov, and there is no Gov receipt for this path at all.
+
+**After a first green run, this path needs a recurring smoke dispatch.** A runbook
+whose correctness is only ever tested by an operator during an incident is not
+tested. That schedule is deliberately NOT added here: it would roll the live
+console on a timer, which is an estate-behaviour decision for the operator, not a
+side effect of a documentation fix.
 
 ## Why
 
