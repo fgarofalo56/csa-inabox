@@ -62,6 +62,112 @@ API = "/api/2.1/unity-catalog"
 TIMEOUT = 60
 
 
+# ── Credential-safe opener (#3717) ────────────────────────────────────────────
+#
+# `_request` below sends `Authorization: Bearer <the operator's Unity token>` to
+# two base URLs supplied on the COMMAND LINE. It used to call
+# `urllib.request.urlopen`, i.e. the DEFAULT GLOBAL OPENER, whose measured
+# properties are:
+#
+#   * `HTTPRedirectHandler.redirect_request` rebuilds the Request copying EVERY
+#     header except content-length/content-type. urllib does NOT strip
+#     `Authorization` across a host change the way `requests` does.
+#   * `http_error_302` permits a `Location:` whose scheme is in
+#     `('http','https','ftp','')`, and the default handler set installs
+#     `FTPHandler` / `FileHandler` / `DataHandler` with NO proxy variable set.
+#
+# The `__init__` scheme allow-list below covers the URL WE build; it says
+# nothing about where the SERVER redirects us. A `302 -> http://attacker/loot`
+# from a compromised source instance hands over the token, and the migration
+# reports a normal-looking failure — or, worse, succeeds against the wrong host.
+#
+# Two remedies that do NOT work, both measured: `build_opener(HTTPHandler,
+# HTTPSHandler, HTTPRedirectHandler)` only DE-DUPLICATES the default set, and an
+# unscoped `ProxyHandler()` re-registers an `ftp` route from a single
+# `ftp_proxy` env var and then fails OPEN through `proxy_open`.
+#
+# Long-form argument and full measurement log: the sibling
+# `scripts/csa-loom/livy-session-census.py`. Duplicated rather than imported so
+# this script stays runnable as a bare file inside an ACA exec session, which is
+# one of its two documented invocation paths.
+_DEFAULT_PORTS = {"http": 80, "https": 443}
+
+
+def _origin(url: str) -> tuple[str, str, int | None]:
+    """The (scheme, host, port) triple two URLs must share to be same-origin."""
+    parts = urllib.parse.urlsplit(url)
+    scheme = (parts.scheme or "").lower()
+    return (scheme, (parts.hostname or "").lower(), parts.port or _DEFAULT_PORTS.get(scheme))
+
+
+def _origin_str(origin: tuple[str, str, int | None]) -> str:
+    scheme, host, port = origin
+    return f"{scheme}://{host}" + (f":{port}" if port is not None else "")
+
+
+class _SameOriginRedirectHandler(urllib.request.HTTPRedirectHandler):
+    """Refuse any redirect that leaves the origin the request was aimed at.
+
+    THIS is the guard that closes the exfiltration vector; the scheme scoping in
+    :func:`_http_only_opener` is defence in depth, not the fix. It REFUSES
+    rather than stripping the header: a request that silently lost its
+    credentials would come back 401 from an unexpected host and send the reader
+    somewhere else entirely. Same-origin redirects still work.
+    """
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):  # type: ignore[no-untyped-def]
+        target = urllib.parse.urljoin(req.full_url, newurl)
+        if _origin(target) != _origin(req.full_url):
+            raise urllib.error.HTTPError(
+                target, code,
+                f"refusing cross-origin redirect "
+                f"{_origin_str(_origin(req.full_url))} -> "
+                f"{_origin_str(_origin(target))} -- urllib copies the "
+                f"Authorization header across a host change, so following this "
+                f"would hand the Unity token to that host",
+                headers, fp)
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+
+def _http_only_opener() -> urllib.request.OpenerDirector:
+    """An opener whose only URL schemes are http and https (defence in depth).
+
+    The proxy dict is SCOPED on purpose: `ProxyHandler.__init__` registers a
+    `<scheme>_open` for EVERY key in the dict and the default `ProxyHandler()`
+    reads `getproxies()`, so one `ftp_proxy` re-registers the ftp route on an
+    otherwise-locked-down opener -- and it fails OPEN. Dropping the `'no'` key
+    does not break `no_proxy`: `proxy_open` calls the module-level
+    `proxy_bypass()`, which re-reads the environment itself.
+    """
+    proxies = {
+        scheme: url
+        for scheme, url in urllib.request.getproxies().items()
+        if scheme in ("http", "https")
+    }
+    handlers: list[urllib.request.BaseHandler] = [
+        urllib.request.ProxyHandler(proxies),
+        urllib.request.HTTPHandler(),
+        _SameOriginRedirectHandler(),
+        urllib.request.HTTPErrorProcessor(),
+        urllib.request.HTTPDefaultErrorHandler(),
+        urllib.request.UnknownHandler(),
+    ]
+    # The stdlib defines HTTPSHandler only under
+    # `hasattr(http.client, "HTTPSConnection")`; referencing it unconditionally
+    # would turn an ssl-less interpreter into an ImportError at module load.
+    https_handler = getattr(urllib.request, "HTTPSHandler", None)
+    if https_handler is not None:
+        handlers.insert(2, https_handler())
+
+    opener = urllib.request.OpenerDirector()
+    for handler in handlers:
+        opener.add_handler(handler)
+    return opener
+
+
+_OPENER = _http_only_opener()
+
+
 class UnityClient:
     def __init__(self, base_url: str, token: str | None, label: str) -> None:
         # Scheme allow-list (bandit B310). Both base URLs come from CLI args, so
@@ -90,15 +196,17 @@ class UnityClient:
         if self.token:
             req.add_header("Authorization", f"Bearer {self.token}")
         # Re-assert at the call site: `path` is composed internally, but this
-        # keeps the scheme guarantee local to the urlopen bandit flags rather
-        # than relying on a reader tracing back to __init__.
+        # keeps the scheme guarantee local rather than relying on a reader
+        # tracing back to __init__. THREE separate guards, covering different
+        # things -- conflating them is how a fix elsewhere in this repo removed
+        # the `ftp:` transport and declared the redirect vector closed while the
+        # far easier `http:` variant stayed open:
+        #   this check                 -- the URL WE build
+        #   _SameOriginRedirectHandler -- where the server tries to send us next
+        #   _http_only_opener          -- which transports exist at all
         if urllib.parse.urlparse(url).scheme not in ("http", "https"):
             raise ValueError(f"refusing non-http(s) request URL: {url!r}")
-        # nosec B310 - the URL scheme is allow-listed to http/https on the two
-        # lines above AND in __init__; B310's concern (file:/ + custom schemes)
-        # cannot be reached. Suppressed HERE rather than added to the global
-        # pyproject skips, so any FUTURE urlopen elsewhere is still flagged.
-        with urllib.request.urlopen(req, timeout=TIMEOUT) as resp:  # nosec B310
+        with _OPENER.open(req, timeout=TIMEOUT) as resp:
             raw = resp.read().decode("utf-8")
         return json.loads(raw) if raw.strip() else {}
 

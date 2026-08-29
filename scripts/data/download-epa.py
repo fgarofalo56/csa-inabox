@@ -13,13 +13,11 @@ Data sources:
 import argparse
 import json
 import logging
-import os
 import sys
 import zipfile
-from datetime import datetime
+from datetime import datetime, timezone
 from io import BytesIO
 from pathlib import Path
-from typing import Dict, List, Optional
 
 import pandas as pd
 import requests
@@ -48,7 +46,7 @@ class EPADownloader:
             'User-Agent': 'CSA-in-a-Box Data Downloader (research/educational use)'
         })
 
-    def _download_file(self, url: str, description: str) -> Optional[bytes]:
+    def _download_file(self, url: str, description: str) -> bytes | None:
         """Download file with progress bar and return content."""
         try:
             response = self.session.get(url, stream=True, timeout=60)
@@ -69,9 +67,18 @@ class EPADownloader:
             logging.error(f"Failed to download {url}: {e}")
             return None
 
-    def download_aqs_annual(self, year: str, pollutant: str = "44201") -> List[Dict]:
-        """Download AQS annual summary data for specific pollutant."""
-        # 44201 = Ozone, 42401 = SO2, 42101 = CO, etc.
+    def download_aqs_annual(self, year: str, pollutant: str = "44201") -> list[dict]:  # noqa: ARG002
+        """Download AQS annual summary data for specific pollutant.
+
+        `pollutant` is UNUSED and kept ON PURPOSE. The AQS annual file this
+        downloads (`annual_conc_by_monitor_<year>.zip`) covers EVERY parameter
+        code in one archive, so there is no per-pollutant URL to build. Dropping
+        the parameter would silently change this method's signature for callers
+        that pass a code and reasonably expect it to narrow the result; keeping
+        it, documented, is the honest state. Filtering by `pollutant` after the
+        parse is the real fix and belongs with whoever needs it.
+        (44201 = Ozone, 42401 = SO2, 42101 = CO, …)
+        """
         filename = f"annual_conc_by_monitor_{year}.zip"
         url = f"{self.AQS_BASE_URL}{filename}"
 
@@ -96,7 +103,7 @@ class EPADownloader:
             logging.error(f"Failed to extract AQS data: {e}")
             return []
 
-    def download_aqs_daily(self, year: str, pollutant: str = "44201") -> List[Dict]:
+    def download_aqs_daily(self, year: str, pollutant: str = "44201") -> list[dict]:
         """Download AQS daily summary data for specific pollutant."""
         filename = f"daily_{pollutant}_{year}.zip"
         url = f"{self.AQS_BASE_URL}{filename}"
@@ -122,14 +129,13 @@ class EPADownloader:
             logging.error(f"Failed to extract AQS daily data: {e}")
             return []
 
-    def download_tri_basic(self, year: str) -> List[Dict]:
+    def download_tri_basic(self, year: str) -> list[dict]:
         """Download TRI Basic Data Files."""
-        # TRI basic data file naming convention
-        filename = f"tri_basic_data_file_calendar_year_{year}_comma_delimited_download.zip"
-
-        # The URL format has changed over time, try multiple patterns
+        # The URL format has changed over time, so several patterns are tried in
+        # order. (The archive's own name is embedded in two of them; it used to
+        # be bound to a `filename` local that nothing read.)
         url_patterns = [
-            f"https://enviro.epa.gov/enviro/efservice/tri_facility/state_abbr/=/CSV",
+            "https://enviro.epa.gov/enviro/efservice/tri_facility/state_abbr/=/CSV",
             f"https://www.epa.gov/system/files/other-files/{year}-{int(year)+1}/tri_basic_data_file_calendar_year_{year}_comma_delimited_download.zip",
             f"https://www.epa.gov/system/files/other-files/2022-03/tri_basic_data_file_calendar_year_{year}_comma_delimited_download.zip"
         ]
@@ -140,7 +146,7 @@ class EPADownloader:
                 try:
                     # Try to extract and parse
                     with zipfile.ZipFile(BytesIO(content)) as zf:
-                        csv_files = [f for f in zf.namelist() if f.endswith('.csv') or f.endswith('.txt')]
+                        csv_files = [f for f in zf.namelist() if f.endswith(('.csv', '.txt'))]
                         if csv_files:
                             # Read the first data file
                             with zf.open(csv_files[0]) as csv_file:
@@ -154,7 +160,7 @@ class EPADownloader:
         logging.info("Attempting direct TRI facility data download...")
         return self.download_tri_facilities()
 
-    def download_tri_facilities(self) -> List[Dict]:
+    def download_tri_facilities(self) -> list[dict]:
         """Download TRI facility information via EPA Envirofacts API."""
         # Use EPA's Envirofacts web service for TRI facility data
         base_url = "https://enviro.epa.gov/enviro/efservice/tri_facility"
@@ -174,7 +180,7 @@ class EPADownloader:
             logging.error(f"Failed to download TRI facilities: {e}")
             return []
 
-    def get_aqs_pollutant_codes(self) -> Dict[str, str]:
+    def get_aqs_pollutant_codes(self) -> dict[str, str]:
         """Get mapping of pollutant codes to names."""
         return {
             '44201': 'Ozone',
@@ -187,7 +193,7 @@ class EPADownloader:
         }
 
 
-def save_data_with_manifest(data: List[Dict], filename: str, output_dir: Path,
+def save_data_with_manifest(data: list[dict], filename: str, output_dir: Path,
                           description: str, source_url: str) -> None:
     """Save data as CSV and update manifest."""
     if not data:
@@ -204,14 +210,14 @@ def save_data_with_manifest(data: List[Dict], filename: str, output_dir: Path,
 
     manifest = {}
     if manifest_path.exists():
-        with open(manifest_path, 'r') as f:
+        with open(manifest_path) as f:
             manifest = json.load(f)
 
     file_info = {
         'filename': filename,
         'description': description,
         'source_url': source_url,
-        'download_timestamp': datetime.utcnow().isoformat() + 'Z',
+        'download_timestamp': datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z'),
         'record_count': len(data),
         'file_size_bytes': csv_path.stat().st_size,
         'columns': list(df.columns) if not df.empty else []

@@ -1921,6 +1921,26 @@ var agentFoundryCreate = agentFoundryEnabled && provisionAgentFoundry
 // APIM and a real endpoint exists — an empty pool is never authored (no-vaporware).
 var loomAoaiEndpointValue = agentFoundryCreate ? agentFoundry!.outputs.aoaiEndpoint : (!empty(existingFoundryAccountName) ? byoFoundryEndpoint : ((aiFoundryEnabled && empty(existingFoundryAccountName)) ? aiFoundry!.outputs.aoaiInferenceEndpoint : ''))
 var aoaiApimBackendEndpoints = (apimEnabled && empty(existingApimName) && aoaiApimGatewayEnabled && !empty(loomAoaiEndpointValue)) ? [ loomAoaiEndpointValue ] : []
+// The Foundry PROJECT NAME (#4185). One expression, consumed by both
+// LOOM_FOUNDRY_PROJECT and LOOM_FOUNDRY_PROJECT_NAME below, so the two names
+// cannot drift apart — which is the defect this fixes.
+//
+// WHAT WAS WRONG. `evaluation.ts:98` and `prompt-flow.ts:92` both read
+// `process.env.LOOM_FOUNDRY_PROJECT`, and NO bicep module emitted it. What the
+// deploy DID emit was LOOM_FOUNDRY_PROJECT_NAME — the correct value under a
+// name nothing reads (measured: zero source readers outside the generated ARM).
+// Producer and consumers had never agreed, so on a default deploy the
+// prompt-flow provisioner returned `status:'remediation'` with "Set
+// LOOM_FOUNDRY_PROJECT ...", which auto-bind-by-default.md §5 names as a
+// violation outright. Its `createProject()` self-heal, added by #3510, sits
+// BELOW that gate and was therefore unreachable on the very estate it was
+// written for.
+//
+// The fallback chain matches LOOM_FOUNDRY_PROJECT_ENDPOINT and _PROJECT_ID
+// exactly. The old _NAME line stopped at `: ''`, so on a shared-hub deploy —
+// agentFoundryCreate false, aiFoundry present — the endpoint and id were set
+// while the name was empty. That asymmetry is fixed here rather than copied.
+var loomFoundryProjectNameValue = agentFoundryCreate ? agentFoundry!.outputs.projectNameOut : ((aiFoundryEnabled && empty(existingFoundryAccountName)) ? aiFoundry!.outputs.projectName : '')
 var byoFoundryChatDeployment = string(byoExisting.?foundryChatDeployment ?? '')
 var byoFoundryEmbedDeployment = string(byoExisting.?foundryEmbedDeployment ?? '')
 // Model-tier deployments on an ADOPTED AOAI account. The wizard/plan resolves
@@ -5867,7 +5887,16 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             // AI Services account endpoint. Empty when neither is deployed.
             { name: 'LOOM_FOUNDRY_ENDPOINT',         value: agentFoundryCreate ? agentFoundry!.outputs.aoaiEndpoint : ((aiFoundryEnabled && empty(existingFoundryAccountName)) ? aiFoundry!.outputs.aiServicesEndpoint : (!empty(existingFoundryAccountName) ? byoFoundryEndpoint : '')) }
             { name: 'LOOM_FOUNDRY_PROJECT_ID',       value: agentFoundryCreate ? agentFoundry!.outputs.projectId : ((aiFoundryEnabled && empty(existingFoundryAccountName)) ? aiFoundry!.outputs.projectId : '') }
-            { name: 'LOOM_FOUNDRY_PROJECT_NAME',     value: agentFoundryCreate ? agentFoundry!.outputs.projectNameOut : '' }
+            // #4185 — the name the CODE reads. evaluation.ts and prompt-flow.ts
+            // both read the BARE var; nothing reads _NAME. Emitting only _NAME
+            // meant a default deploy left both provisioners gated on a value the
+            // platform had already computed. Same expression for both, so they
+            // cannot diverge again.
+            { name: 'LOOM_FOUNDRY_PROJECT',          value: loomFoundryProjectNameValue }
+            // Retained: documented in docs/fiab/v3-tenant-bootstrap.md and
+            // emitted since before #4185. Now shares the expression above, which
+            // also gives it the shared-hub fallback it previously lacked.
+            { name: 'LOOM_FOUNDRY_PROJECT_NAME',     value: loomFoundryProjectNameValue }
             // AOAI inference endpoint + model deployment names for the Agent
             // Service account. Consumed by the AOAI clients (chat + embeddings).
             // AOAI inference endpoint + model deployment names. Sourced from the
