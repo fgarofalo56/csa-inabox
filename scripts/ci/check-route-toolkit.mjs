@@ -119,6 +119,24 @@ const TOUCH_EXEMPT = new Map([
   //   → app/api/apps/[id]/install/route.ts: SKIPPED (POST: body declares its own `params` (collision))
   ['apps/fiab-console/app/api/apps/[id]/install/route.ts',
    '#3549/#3551: Phase-1 content backfill only, auth prologue untouched; the codemod SKIPS this file (`params` collision)'],
+  // #3891 touched this route for ONE thing: the tenant-admin branch of
+  // `assertWorkspaceAccess` coerced an UNFILTERED cross-partition workspace read
+  // into the authorization verdict (`return !!(await readWorkspaceById(id))`),
+  // so a tenant admin in tenant A reached GET/POST/PATCH/DELETE on the folder
+  // tree of a workspace in tenant B. The branch now requires
+  // `sameTenantConfirmed(...)`. That is a NARROWING, and the four `getSession()`
+  // → 401 prologues are byte-identical.
+  //
+  // THE CODEMOD REFUSES ALL FOUR HANDLERS, which is what this hatch is for.
+  // Falsifiable in one command:
+  //   node scripts/codemods/migrate-route-toolkit.mjs --file=app/api/workspaces/[id]/folders/route.ts
+  //   → SKIPPED (GET: body declares its own `params` (collision))   … and POST, PATCH, DELETE
+  //
+  // COMPENSATING CONTROL (added by #3891, not assumed): the 401 is pinned by
+  // folders/__tests__/tenant-boundary-3891.test.ts ("401s when unauthenticated"),
+  // alongside twelve specs that pin the tenant boundary on all four verbs.
+  ['apps/fiab-console/app/api/workspaces/[id]/folders/route.ts',
+   '#3891: tenant-boundary NARROWING only, all four auth prologues untouched; the codemod SKIPS every handler (`params` collision). 401 pinned by tenant-boundary-3891.test.ts'],
   // FINISHLINE C7 (#3064) touched this route ONLY to stop the BFF silently
   // DROPPING four of the create-wizard's five fields — the old handler
   // destructured `{ name, description, capacity, domain }` and discarded

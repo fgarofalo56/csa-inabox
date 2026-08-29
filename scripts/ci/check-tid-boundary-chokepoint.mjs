@@ -4857,24 +4857,30 @@ const ADMIN_SHAPE_UNSCOPED = new Map([
   [
     'app/api/workspaces/[id]/folders/route.ts:assertWorkspaceAccess',
     {
-      verdict: 'UNRESOLVED',
-      requires: ['isTenantAdmin(', 'readWorkspaceById('],
+      verdict: 'NARROWS',
+      requires: ['isTenantAdmin(', 'readWorkspaceById(', 'sameTenantConfirmed('],
       why:
-        'UNRESOLVED — A FINDING, NOT A CLEARANCE, AND THE REASON THIS CENSUS IS NOT A FORMALITY. ' +
-        'After the owner point-read fails it runs `if (isTenantAdmin(session)) return ' +
-        '!!(await readWorkspaceById(id));`. `readWorkspaceById` is a raw cross-partition document ' +
-        'read with NO tenant predicate — its own NON_AUTHORIZERS reason in this file says so, and ' +
-        'says the RESOLVER is what subjects the result to the tid comparison. Nothing subjects it ' +
-        'here. So a tenant admin in tenant A appears to reach GET/POST/PATCH/DELETE on the folder ' +
-        'tree of a workspace in tenant B. It is a #3833-family member in a THIRD spelling: neither ' +
+        'NARROWS — FIXED IN #3891, AND THIS ENTRY IS NOW THE PIN ON THE FIX RATHER THAN ON THE ' +
+        'FINDING. It USED to read `if (isTenantAdmin(session)) return !!(await ' +
+        'readWorkspaceById(id));`. `readWorkspaceById` is a raw cross-partition document read with ' +
+        'NO tenant predicate — its own NON_AUTHORIZERS reason in this file says so, and says the ' +
+        'RESOLVER is what subjects the result to the tid comparison. Nothing subjected it here, so ' +
+        'a tenant admin in tenant A reached GET/POST/PATCH/DELETE on the folder tree of a ' +
+        'workspace in tenant B. It was a #3833-family member in a THIRD spelling: neither ' +
         '`isTenantAdmin(session)) return null` nor an unfiltered `loadWorkspaceAdmin`, which is why ' +
         'the two-shape grep that closed the other members did not surface it. It is also outside ' +
-        'the scope net for the same reason #3855 was — its parameter is called `id`. NOT fixed in ' +
-        'the change that added this entry: `app/api/workspaces/**` belongs to another lane and a ' +
-        'cross-lane edit is how two agents corrupt one file. Routed, not silently carried. The ' +
-        'two `requires` tokens pin the finding itself (#4007): if either the admin test or the ' +
-        'unfiltered read leaves this function, the build reddens and someone re-reads it, rather ' +
-        'than the entry quietly describing code that is no longer there.',
+        'the scope net for the same reason #3855 was — its parameter is called `id`. THE READ IS ' +
+        'NOW SUBJECTED IN PLACE: the admin branch keeps the cross-partition lookup (an admin ' +
+        'legitimately opens workspaces they do not own) and then requires ' +
+        '`sameTenantConfirmed(session.claims.tid, wsDoc.tid)` — the ONE comparison in ' +
+        'lib/auth/tenant-boundary.ts, a POSITIVE match that fails closed on `unconfirmed`, so a ' +
+        'tid-less session (#3845) and an unstamped pre-rel-T11 workspace are both refused rather ' +
+        'than admitted. WHAT IT NARROWS AND WHAT IT DOES NOT: the owner point-read above is ' +
+        'byte-identical, and an admin opening a workspace stamped with their own tid is ' +
+        'unaffected; what is lost is exactly the cross-tenant and unconfirmed reach. The three ' +
+        '`requires` tokens pin the fix (#4007): drop the comparison and this entry no longer ' +
+        'describes the code, so the build reddens. Section 8i is the SHAPE-keyed backstop that ' +
+        'does not depend on this entry, on the function name, or on any of the three spellings.',
     },
   ],
 ]);
@@ -4928,6 +4934,15 @@ const adminShapePinnedEntries = [...ADMIN_SHAPE_UNSCOPED.values()].filter(
   (e) => (e.requires ?? []).length > 0,
 ).length;
 const adminShapeUnscopedSeen = new Set();
+/**
+ * Every admin-shape function 8h saw, kept for section 8i (#3891).
+ *
+ * Collected HERE rather than re-walked there so the two sections cannot end up
+ * scanning different populations — a second walk is a second answer to "which
+ * functions grant on the admin verdict", and this guard has already paid for
+ * that mistake once (#3908, two mechanisms drifting).
+ */
+const adminShapeSeen = [];
 for (const file of files) {
   const rel = file.slice(CONSOLE_ROOT.length + 1);
   const src = readSource(file);
@@ -4941,6 +4956,7 @@ for (const file of files) {
   for (const fn of adminShapeFunctionsIn(src, file)) {
     adminShapeFunctions += 1;
     const line = masked.slice(0, fn.declAt).split('\n').length;
+    adminShapeSeen.push({ rel, line, fn });
     if (!ADMIN_GRANT_SCOPE.test(fn.params)) {
       // NOT "not a workspace-scoped decision" — that is what this line used to
       // claim, and it was false of `assertItemAccess` (#3877). All this branch
@@ -5005,6 +5021,235 @@ for (const k of [...ADMIN_SHAPE_UNSCOPED.keys()].filter((x) => !adminShapeUnscop
       '(delete the entry and say so), or 8h stopped SEEING it — which is the failure mode the ' +
       'census exists to catch, and is how #3855 stayed invisible for as long as it did. ' +
       're-review before deleting.',
+  );
+}
+
+// ── 8i. THE ADMIN-BYPASS FAMILY, KEYED ON THE SHAPE RATHER THAN THE SPELLING ─
+//        (#3891 acceptance 3)
+//
+// WHY THIS SECTION EXISTS. The family has been audited three times with a grep
+// for a SPELLING, and each audit missed the next member:
+//
+//   shape 1  `if (isTenantAdmin(session)) return null;`      (#3833 and kin)
+//   shape 2  an unfiltered `loadWorkspaceAdmin`              (#3825)
+//   shape 3  `return !!(await readWorkspaceById(id));`       (#3891) — neither
+//            of the above, so BOTH prior audits printed OK over it while it
+//            gated GET/POST/PATCH/DELETE on a folder tree cross-tenant.
+//
+// A guard keyed to a spelling goes blind the moment someone writes a fourth. So
+// this section keys on the SHAPE the three members share and nothing else:
+//
+//   (1) the function GRANTS on an admin-verdict-bearing condition — not
+//       re-derived here, it is exactly 8h's `adminShapeFunctionsIn` population,
+//       which already models hoisting, aliasing, ternaries, bracket notation,
+//       env-var re-derivation and the re-export closure (#4006); AND
+//   (2) its body REACHES a workspace-document read; AND
+//   (3) its body contains NO tenant SUBJECTION of that read.
+//
+// (2) AND (3) ARE DELIBERATELY ASYMMETRIC IN BREADTH, and that is the whole
+// design. The reader probe is BROAD (any handle on the workspaces container
+// counts, not only the two readers with names) because narrowing it to a known
+// call is what let shape 3 through. The subjection probe is NARROW — the ONE
+// comparison in `lib/auth/tenant-boundary.ts`, or a delegation to a resolver
+// that applies it — because "some tenant-ish token appears nearby" is not
+// evidence and would re-admit every member of this family.
+//
+// WHAT THIS DOES NOT ESTABLISH, stated rather than implied (R7). It is a
+// whole-body test, not a dataflow test: a function that reads a workspace, calls
+// `sameTenantConfirmed` on some OTHER value, and grants on the admin flag
+// anyway passes here. 8h/8a-8e are what model the value; this section closes the
+// specific hole that all three family members walked through, which is a read
+// with NO comparison anywhere in the deciding function. It also sees only
+// functions `declaredFunctions` finds, which is 8h's finder and its limits.
+const WORKSPACE_DOC_READ = [
+  {
+    id: 'readWorkspaceById',
+    re: /\breadWorkspaceById\s*\(/,
+    what:
+      'the exported bare cross-partition point-lookup in lib/auth/workspace-access.ts, whose own ' +
+      'docblock says the RESOLVER is what subjects its result to the tid comparison — shape 3 (#3891)',
+  },
+  {
+    id: 'loadWorkspaceAdmin',
+    re: /\bloadWorkspaceAdmin\s*\(/,
+    what: 'the unfiltered `SELECT * FROM c WHERE c.id = @id` in lib/auth/workspace-guard.ts — shape 2 (#3825)',
+  },
+  {
+    id: 'workspacesContainer',
+    re: /\bworkspacesContainer\s*\(/,
+    what:
+      'a handle on the workspaces container taken INSIDE the deciding function — a hand-rolled ' +
+      'fourth reader, which is precisely the spelling this section refuses to depend on',
+  },
+];
+/** The ONE comparison, or a delegation to a resolver that performs it. */
+const TENANT_SUBJECTION =
+  /\b(?:sameTenantConfirmed|classifyTenantMatch|tenantUnconfirmedCause)\s*\(|\b(?:resolveWorkspaceAccessByOid|authorizeWorkspace|authorizeItemWorkspace|requireWorkspace|resolveAdminWorkspace|resolveItemAccessByOid|resolveWorkspaceRole|authorizeWorkspaceList)\s*\(/;
+
+/**
+ * Judge ONE function for the family shape. Returns null when it is not a member.
+ *
+ * Split out of the tree loop so the embedded controls below run the REAL
+ * judgement rather than a paraphrase of it — a control that re-implements what
+ * it controls proves nothing (`csa_loom_agreement_is_not_independence_shared_method`).
+ */
+function familyShapeVerdict(fn) {
+  const reader = WORKSPACE_DOC_READ.find((p) => p.re.test(fn.body));
+  if (!reader) return null;
+  if (TENANT_SUBJECTION.test(fn.body)) return null;
+  return reader;
+}
+
+let familyShapeReaders = 0;
+for (const { rel, line, fn } of adminShapeSeen) {
+  const reader = familyShapeVerdict(fn);
+  if (!reader) continue;
+  familyShapeReaders += 1;
+  fail(
+    `${rel}:${line}: ${fn.name}() is the #3833/#3825/#3891 ADMIN-BYPASS SHAPE — it grants on an ` +
+      `admin-verdict-bearing condition and reaches a workspace-document read (\`${reader.id}\`: ` +
+      `${reader.what}) with NO tenant comparison and no delegation anywhere in its body. The ` +
+      'read answers "a workspace with this id exists", never "it is in the caller\'s tenant". ' +
+      'Fix it by calling `sameTenantConfirmed(callerTid, doc.tid)` from ' +
+      '`lib/auth/tenant-boundary.ts` — the ONE implementation, a POSITIVE match that fails ' +
+      'closed on `unconfirmed` — or by delegating to `resolveWorkspaceAccessByOid`, which ' +
+      'applies it. Do NOT write `callerTid && doc.tid && doc.tid !== callerTid`: that is a ' +
+      'non-contradiction test, it decides nothing when either side is absent, and both absences ' +
+      'have live generators (#3840, #3845).',
+  );
+}
+
+// ── 8i EMBEDDED CONTROLS — the section must fire on all three known spellings,
+//    on a FOURTH nobody has written, and must NOT fire on the safe patterns ───
+//
+// THE TREE CANNOT BE THE EVIDENCE HERE, for the same reason 8h's controls exist:
+// once the three members are fixed the tree population is ZERO, and zero is what
+// a re-broken probe also prints. So the controls carry the section, they run
+// `familyShapeVerdict` + `adminShapeFunctionsIn` — the REAL judgement, not a
+// paraphrase — and the expected fire count is asserted exactly, so a control
+// that stops matching is a failure rather than a smaller suite.
+const FAMILY_SHAPE_PROBES = [
+  {
+    name: 'F1 shape 1 — `if (isTenantAdmin(s)) return null;` over an unfiltered read',
+    fn: 'f1',
+    expect: true,
+    src: `
+      import { isTenantAdmin } from '@/lib/auth/feature-gate';
+      import { readWorkspaceById } from '@/lib/auth/workspace-access';
+      export async function f1(workspaceId, session) {
+        const doc = await readWorkspaceById(workspaceId);
+        if (isTenantAdmin(session)) return null;
+        return deny();
+      }`,
+  },
+  {
+    name: 'F2 shape 2 — the unfiltered loadWorkspaceAdmin (#3825)',
+    fn: 'f2',
+    expect: true,
+    src: `
+      import { isTenantAdmin } from '@/lib/auth/feature-gate';
+      export async function f2(workspaceId, session) {
+        if (isTenantAdmin(session)) return await loadWorkspaceAdmin(workspaceId);
+        return null;
+      }`,
+  },
+  {
+    name: 'F3 shape 3 — the coerced truthy read this issue is about (#3891)',
+    fn: 'f3',
+    expect: true,
+    src: `
+      import { isTenantAdmin } from '@/lib/auth/feature-gate';
+      import { readWorkspaceById } from '@/lib/auth/workspace-access';
+      export async function f3(id, session) {
+        if (isTenantAdmin(session)) {
+          return !!(await readWorkspaceById(id));
+        }
+        return false;
+      }`,
+  },
+  {
+    name: 'F4 a FOURTH spelling nobody has written — a ternary over a raw container query',
+    fn: 'f4',
+    expect: true,
+    src: `
+      import { isTenantAdmin } from '@/lib/auth/feature-gate';
+      import { workspacesContainer } from '@/lib/azure/cosmos-client';
+      export async function f4(workspaceId, session) {
+        const c = await workspacesContainer();
+        const { resources } = await c.items.query({ query: 'SELECT * FROM c WHERE c.id = @id' }).fetchAll();
+        return isTenantAdmin(session) ? resources[0] : null;
+      }`,
+  },
+  {
+    name: 'F5 SAFE — the comparison is present (the #3891 fix). Must NOT fire.',
+    fn: 'f5',
+    expect: false,
+    src: `
+      import { isTenantAdmin } from '@/lib/auth/feature-gate';
+      import { readWorkspaceById } from '@/lib/auth/workspace-access';
+      import { sameTenantConfirmed } from '@/lib/auth/tenant-boundary';
+      export async function f5(id, session) {
+        if (isTenantAdmin(session)) {
+          const doc = await readWorkspaceById(id);
+          return !!doc && sameTenantConfirmed(session.claims.tid, doc.tid);
+        }
+        return false;
+      }`,
+  },
+  {
+    // THE DELEGATION ARM OF THE SUBJECTION PROBE, and it has to be written as a
+    // GRANT to be a control at all. The first draft handed the flag down
+    // (`tenantAdmin: isTenantAdmin(session)`) and returned the resolver's
+    // verdict — the correct pattern, but #4006's alias rule rightly says that is
+    // not a grant, so `adminShapeFunctionsIn` never saw it and the control
+    // measured NOTHING while reporting PASS. Caught by the "finder did not see
+    // it" arm below, which is why that arm exists.
+    name: 'F6 SAFE — grants on the flag, but the read is subjected by DELEGATION. Must NOT fire.',
+    fn: 'f6',
+    expect: false,
+    src: `
+      import { isTenantAdmin } from '@/lib/auth/feature-gate';
+      import { readWorkspaceById, resolveWorkspaceAccessByOid } from '@/lib/auth/workspace-access';
+      export async function f6(workspaceId, session) {
+        const doc = await readWorkspaceById(workspaceId);
+        const access = await resolveWorkspaceAccessByOid(session.claims.oid, workspaceId, {
+          callerTid: session.claims.tid, tenantAdmin: isTenantAdmin(session),
+        });
+        if (isTenantAdmin(session)) return access ? doc : null;
+        return null;
+      }`,
+  },
+];
+let familyProbesPassed = 0;
+for (const p of FAMILY_SHAPE_PROBES) {
+  const fn = adminShapeFunctionsIn(p.src).find((f) => f.name === p.fn);
+  if (!fn) {
+    fail(
+      `8i control ${p.name}: 8h's own finder did not see \`${p.fn}\` as granting on the admin ` +
+        'verdict at all, so this control measured NOTHING. That is a broken control, not a pass — ' +
+        'the probe and the detector have to be reconciled before the section means anything.',
+    );
+    continue;
+  }
+  const fired = familyShapeVerdict(fn) !== null;
+  if (fired !== p.expect) {
+    fail(
+      `8i control ${p.name}: expected the family-shape judgement to ${p.expect ? 'FIRE' : 'stay SILENT'} ` +
+        `and it did ${fired ? 'FIRE' : 'not'}. ${p.expect
+          ? 'A member of the admin-bypass family is now invisible to this guard — which is the exact ' +
+            'state that let #3891 sit on main gating four HTTP verbs.'
+          : 'The section is accusing a SAFE pattern; a guard that cries wolf on the correct shape is ' +
+            'the one that gets weakened later (see the V9 note above).'}`,
+    );
+    continue;
+  }
+  familyProbesPassed += 1;
+}
+if (familyProbesPassed !== FAMILY_SHAPE_PROBES.length) {
+  fail(
+    `8i: ${familyProbesPassed} of ${FAMILY_SHAPE_PROBES.length} family-shape controls passed. The ` +
+      'count is asserted EXACTLY so that a control which silently stopped matching reads as a ' +
+      'failure rather than as a smaller suite (the zero-population class).',
   );
 }
 
@@ -6228,6 +6473,17 @@ console.log(`[tid-boundary-chokepoint] repo-wide admin-shape scan: ${adminShapeF
 console.log(`[tid-boundary-chokepoint]   8h embedded controls passed: ${adminProbesPassed}/` +
             `${ADMIN_SHAPE_PROBES.length} — each runs the REAL judgement on a synthetic module, ` +
             'so a re-narrowed scope net goes RED even while the tree scan judges zero functions');
+// 8i REPORTS ITS MATCHED POPULATION, NOT JUST ITS VERDICT (#3891 acceptance 3).
+// The middle number is the one that matters and it is a FINDING count: how many
+// admin-granting functions reach a workspace read with no comparison. Zero there
+// is only meaningful next to the denominator and the control count beside it —
+// the same reason 8h's line was rewritten in #3877.
+console.log(`[tid-boundary-chokepoint]   8i admin-bypass FAMILY shape (#3833/#3825/#3891): ` +
+            `${adminShapeSeen.length} admin-granting function(s) examined, ${familyShapeReaders} ` +
+            `reaching a workspace-document read with NO tenant comparison and no delegation; ` +
+            `controls passed: ${familyProbesPassed}/${FAMILY_SHAPE_PROBES.length} — three known ` +
+            'spellings, a FOURTH nobody has written, and two safe patterns asserted NOT to fire, ' +
+            'each through the real judgement so the section is not blind when the tree is clean');
 // PRINTED BECAUSE A CONTENT PIN NOBODY CAN SEE IS A MEMBERSHIP TEST AGAIN
 // (#4007). The count is the number of TOKENS checked against real function
 // bodies this run, not the number of entries — an entry with no `requires`

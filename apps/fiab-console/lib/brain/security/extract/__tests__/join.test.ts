@@ -26,23 +26,29 @@ import { extractedArtifact } from '../runtime';
 /**
  * A path table covering everything `node-id.ts` normalises.
  *
- * The `scripts/**` entries are DELIBERATELY FICTIONAL filenames. Canonicalization
- * and join bucketing are decided from the path SHAPE and never from whether the
- * file exists, so a real name buys nothing — and it costs something real:
- * `__tests__/spec-imported-scripts-have-no-shebang.test.ts` treats any quoted
+ * #4057 — THE REAL FILENAMES ARE BACK, and that reversion is the acceptance test
+ * for that issue. These entries used to be deliberately FICTIONAL because
+ * `__tests__/spec-imported-scripts-have-no-shebang.test.ts` treated any quoted
  * `scripts/**.mjs` literal inside a spec as an IMPORT of that script, and both
- * `deploy-retry.mjs` and `check-route-guards.mjs` carry a `#!` line. Naming them
- * here pulled two long-standing, correct scripts into that guard's population
- * and failed the vitest suite (measured on PR #4022). The guard is right in its
- * own terms; a fixture should not be what drags a file into it.
+ * `deploy-retry.mjs` and `check-route-guards.mjs` carry a `#!` line — so naming
+ * them here pulled two long-standing, correct scripts into that guard's
+ * population and failed the vitest suite (measured on PR #4022). The workaround
+ * was correct in the moment and corrosive as a precedent: every future spec that
+ * legitimately names a script would learn the same dodge.
+ *
+ * That guard now reads the IMPORT GRAPH, so a path appearing in a fixture table
+ * is a mention and not a load. Canonicalization and join bucketing are decided
+ * from the path SHAPE and never from whether the file exists, so these could
+ * equally be fictional — they are real precisely so this file keeps proving the
+ * guard is no longer keyed on string presence.
  */
 const PATHS = [
   'apps/fiab-console/app/api/x/route.ts',
   'apps\\fiab-console\\app\\api\\x\\route.ts',
   'Apps/Fiab-Console/App/Api/X/Route.ts',
   './apps/fiab-console/lib/api/route-toolkit.ts',
-  'scripts/ci/example-guard.mjs/',
-  'scripts/ci/example-retry.mjs',
+  'scripts/ci/check-route-guards.mjs/',
+  'scripts/ci/deploy-retry.mjs',
 ];
 
 describe('codeModuleJoinKey is byte-identical to the real codeModuleNodeId', () => {
@@ -95,7 +101,8 @@ describe('buildJoin', () => {
   });
 
   it('leaves a CI script UNJOINED, with a reason that explains why', () => {
-    const join = buildJoin([node('sec:publication:scripts/ci/example-retry.mjs#module')]);
+    // #4057 — the real script name, for the reason given at PATHS above.
+    const join = buildJoin([node('sec:publication:scripts/ci/deploy-retry.mjs#module')]);
     expect(join.painted).toHaveLength(0);
     expect(join.unjoined).toHaveLength(1);
     // Not "unknown" — the reason must say a CI script has no estate presence.

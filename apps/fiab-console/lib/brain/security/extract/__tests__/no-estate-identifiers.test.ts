@@ -15,6 +15,7 @@ import { describe, expect, it } from 'vitest';
 import { runSecuritySweep } from '../../index';
 import type { SecurityGraph, SecurityNode, VerdictCallFacet } from '../../substrate';
 import { pathOfNodeId } from '../join';
+import { ADMIN_CLAIM_SPELLINGS } from '../route-nodes';
 import { extractedArtifact } from '../runtime';
 
 const artifact = extractedArtifact()!;
@@ -130,7 +131,36 @@ function sweepOne(node: SecurityNode) {
 }
 
 describe('every predicate name this extractor emits is one C1 recognises', () => {
-  for (const predicate of ['isTenantAdmin', 'hasTenantAdminRole']) {
+  // #4028 — THE SUBJECTS ARE DERIVED, NOT TYPED OUT. This loop used to iterate a
+  // hardcoded `['isTenantAdmin', 'hasTenantAdminRole']` while its title claimed
+  // to cover "every predicate name this extractor emits", and
+  // `ADMIN_CLAIM_SPELLINGS` — the thing that would have to be read for the title
+  // to be true — was mentioned only in a comment. Adding a fifth spelling mapped
+  // to a predicate C1 does NOT recognise therefore passed this block in silence,
+  // which is exactly the rename-on-either-side failure it exists to catch.
+  //
+  // Measured during the review that filed #4028: M7 (renaming the
+  // `withTenantAdmin` -> predicate mapping to `isTenantAdminGate`) was caught by
+  // the NAMED-INSTANCE test in `generated-sweep.test.ts`, not by this one. That
+  // backstop defends exactly one route (`copilot/sessions/[id]/trace`), so any
+  // change sparing it was invisible to both.
+  const emitted = [...new Set(ADMIN_CLAIM_SPELLINGS.map(([, predicate]) => predicate))];
+
+  it('the derived subject set is NON-EMPTY (population floor)', () => {
+    // Without this, a future `ADMIN_CLAIM_SPELLINGS = []` — or a mapping change
+    // that empties the projection — turns the loop below into ZERO `it` blocks
+    // and this describe reports green having asserted nothing. That is the same
+    // zero-population shape the whole extractor contract is about.
+    expect(emitted.length).toBeGreaterThan(0);
+    // And it must genuinely be a PROJECTION of the real table, not a copy that
+    // happens to agree today: every emitted predicate has to appear as some
+    // spelling's right-hand side.
+    for (const predicate of emitted) {
+      expect(ADMIN_CLAIM_SPELLINGS.some(([, p]) => p === predicate)).toBe(true);
+    }
+  });
+
+  for (const predicate of emitted) {
     it(`C1 fires on '${predicate}'`, () => {
       const sweep = sweepOne(authorizerNode(predicate));
       const c1 = sweep.findings.filter((f) => f.findingClass === 'C1-unauthorized-inbound-edge');
@@ -141,7 +171,8 @@ describe('every predicate name this extractor emits is one C1 recognises', () =>
   it('C1 does NOT fire on a predicate name it does not recognise (control)', () => {
     // Proves the assertions above are watching the PREDICATE and not merely the
     // node's presence — without this, a detector that fired on everything would
-    // pass them both.
+    // pass them all. KEPT from the pre-#4028 version deliberately: deriving the
+    // positive subjects makes the negative control MORE load-bearing, not less.
     const sweep = sweepOne(authorizerNode('someUnrelatedCheck'));
     const c1 = sweep.findings.filter((f) => f.findingClass === 'C1-unauthorized-inbound-edge');
     expect(c1).toHaveLength(0);
