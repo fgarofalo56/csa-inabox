@@ -72,7 +72,18 @@ export const CATALOG_GOVERNANCE_ENV_CHECKS: EnvSpec[] = [
     // exists (gates/registry/catalog-governance.ts svc-openlineage,
     // fixit.kind = 'wizard'), states WHY the platform does not do it silently,
     // and keeps the script as the rotation path rather than the first ask.
-    remediation: 'Use the "Fix it" wizard on this gate (Spark column lineage) to mint the per-pool credential and stamp the pool — the listener conf itself is already deployed by bicep. It is a wizard rather than an automatic step for one reason: minting rotates the per-workspace ingest token, and a bootstrap that re-ran it would invalidate every pool stamped by an earlier run, which still carries the old token in its Spark conf. The same action is available as scripts/csa-loom/openlineage-pool-setup.sh for rotation and for pools created outside the console (docs/fiab/runbooks/openlineage-spark-lineage.md). Until then column lineage keeps flowing from Databricks UC, dbt and ADF; only the Synapse-Spark source is absent.',
+    // R7: this describes what the product ACTUALLY does. An earlier draft of this
+    // string said "Use the Fix it wizard ... to mint the per-pool credential and
+    // stamp the pool", which asserts a capability that does not exist: `fixit.kind`
+    // is a DISPLAY discriminator (its only consumer is `grantOnly` in
+    // components/shared/honest-gate.tsx), the dialog renders this remediation plus
+    // grantNote plus the gate's requiredSettings, and no route under app/api mints
+    // a credential, uploads the listener JAR or writes sparkConfigProperties. The
+    // operator would have clicked "Fix it" and been shown a message telling them
+    // to click "Fix it". Nothing forced that edit either — the script is an
+    // ACKNOWLEDGED entry in check-platform-runs-it-not-you.mjs:82 and the previous
+    // wording is pinned benign at :265, so it never tripped the ratchet.
+    remediation: 'Run scripts/csa-loom/openlineage-pool-setup.sh to mint the per-pool credential and stamp the pool — the listener conf itself is already deployed by bicep, and the "Fix it" dialog on this gate surfaces these steps and that command rather than performing them. It is an operator step rather than an automatic one for a specific reason: minting ROTATES the per-workspace ingest token, so a bootstrap that re-ran it would invalidate every pool stamped by an earlier run, which still carries the old token in its Spark conf. The same script covers rotation and pools created outside the console (docs/fiab/runbooks/openlineage-spark-lineage.md). Until it is run, column lineage keeps flowing from Databricks UC, dbt and ADF; only the Synapse-Spark source is absent.',
     provisionedBy: 'modules/landing-zone/synapse-spark-pools.bicep (sparkConfigProperties: spark.extraListeners + the http transport, emitted when openLineageConfig.ingestUrl is set) → apps[] env. The listener JAR is uploaded as a Synapse workspace library by the Fix-it wizard / openlineage-pool-setup.sh, NOT by bicep — bicep has no workspace-library upload surface, and claiming otherwise sent readers looking for a module that does not exist (#3374).',
     role: 'Synapse Spark pool contributor (to upload the workspace library)',
   },

@@ -47,7 +47,11 @@ export const CATALOG_GOVERNANCE_GATE_META: Record<string, GateMeta> = {
       // bicep has no upload surface for one). The wizard is not automated on the
       // bootstrap because minting ROTATES the per-workspace token and would
       // invalidate pools stamped by an earlier run.
-      grantNote: 'Already deployed by bicep: spark.extraListeners + the http transport on the pool (landing-zone/synapse-spark-pools.bicep sparkConfigProperties, when openLineageConfig.ingestUrl is set). This wizard adds the two halves bicep cannot: the per-pool credential and the openlineage-spark listener JAR, uploaded as a Synapse workspace library. It is a wizard rather than a bootstrap step because minting ROTATES the per-workspace ingest token — an automatic re-run would invalidate every pool still carrying the previous token in its Spark conf. Rotation = re-run it, or scripts/csa-loom/openlineage-pool-setup.sh (docs/fiab/runbooks/openlineage-spark-lineage.md). Dataset-level (not column-level) Spark lineage needs NO listener: declare the job\'s inputs/outputs from the Runs tab\'s "Fix it" wizard.',
+      // R7 — same correction as the sibling remediation in
+      // lib/admin/env-checks/catalog-governance.ts: this must not describe a
+      // wizard ACTION the product cannot take. The dialog surfaces the steps and
+      // the command; the script performs them.
+      grantNote: 'Already deployed by bicep: spark.extraListeners + the http transport on the pool (landing-zone/synapse-spark-pools.bicep sparkConfigProperties, when openLineageConfig.ingestUrl is set). Two halves bicep cannot do remain, and scripts/csa-loom/openlineage-pool-setup.sh does them: the per-pool credential and the openlineage-spark listener JAR, uploaded as a Synapse workspace library. It is an operator step rather than a bootstrap one because minting ROTATES the per-workspace ingest token — an automatic re-run would invalidate every pool still carrying the previous token in its Spark conf. Rotation = re-run that script (docs/fiab/runbooks/openlineage-spark-lineage.md). Dataset-level (not column-level) Spark lineage needs NO listener: declare the job\'s inputs/outputs from the Runs tab.',
     },
     // `spark_lineage_not_declared` is the HarvestReceipt.code the Spark run
     // route returns when a succeeded batch declared no dataset pair — the one
