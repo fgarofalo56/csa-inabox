@@ -25,6 +25,31 @@ This file is maintained automatically by
 [Conventional Commits](https://www.conventionalcommits.org/). See
 [RELEASE.md](RELEASE.md) for the release process.
 
+## [0.103.3](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.103.2...csa-inabox-v0.103.3) (2026-08-29)
+
+
+### Bug Fixes
+
+* **ci:** the ACR readiness probe called READY on the challenge, not the hop that fails ([#4189](https://github.com/fgarofalo56/csa-inabox/issues/4189)) ([5f0f3ef](https://github.com/fgarofalo56/csa-inabox/commit/5f0f3efc4bf5206d1b48b1fdccd304cc4ca5653b)), closes [#4053](https://github.com/fgarofalo56/csa-inabox/issues/4053)
+* **deploy:** a failed source ended the MSAL search instead of ending that source ([#4163](https://github.com/fgarofalo56/csa-inabox/issues/4163)) ([#4188](https://github.com/fgarofalo56/csa-inabox/issues/4188)) ([70ca3d1](https://github.com/fgarofalo56/csa-inabox/commit/70ca3d136651efc01cf9b8449b0d73e609fdb071))
+
+## [0.103.2](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.103.1...csa-inabox-v0.103.2) (2026-08-29)
+
+
+### Bug Fixes
+
+* **gov,ci:** the evaluator copy list held direct imports where tsc needed a closure — and nothing was watching it ([#3886](https://github.com/fgarofalo56/csa-inabox/issues/3886)) ([#4164](https://github.com/fgarofalo56/csa-inabox/issues/4164)) ([f7b3ecc](https://github.com/fgarofalo56/csa-inabox/commit/f7b3ecc57ce12831646ceb99ab3c88ebb6ee3862))
+* **security,ci:** twelve defects — a token forwarded across a cross-host 302, an unfiltered read used as an authz verdict, and a gate that found zero projects ([#4182](https://github.com/fgarofalo56/csa-inabox/issues/4182)) ([9bb8131](https://github.com/fgarofalo56/csa-inabox/commit/9bb8131596a76cc286c62d16a3f8063fec6c6b3d))
+
+## [0.103.1](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.103.0...csa-inabox-v0.103.1) (2026-08-28)
+
+
+### Bug Fixes
+
+* **ci,deploy:** nine triaged defects — inert baselines, gates that cannot fire, an R7 causal claim, and a roll that reverted itself ([#4159](https://github.com/fgarofalo56/csa-inabox/issues/4159)) ([16ff0ef](https://github.com/fgarofalo56/csa-inabox/commit/16ff0efe60c6ba77f58bbc607d2fc6c2ec91aaff))
+* **ci,install:** nine defects — 15 erased changelog entries, three auto-bind gates the platform could resolve itself, and a check that could never pass on Windows ([#4162](https://github.com/fgarofalo56/csa-inabox/issues/4162)) ([6aa393f](https://github.com/fgarofalo56/csa-inabox/commit/6aa393f9522bf3de14e7418dfa37528aa1b0ddc9))
+* **ci:** the Brain scan lane died on its first-ever run, before installing anything ([#4040](https://github.com/fgarofalo56/csa-inabox/issues/4040)) ([#4157](https://github.com/fgarofalo56/csa-inabox/issues/4157)) ([5a219ef](https://github.com/fgarofalo56/csa-inabox/commit/5a219efc681484b974aecba6436d3ffd9f48358e))
+
 ## [0.103.0](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.102.0...csa-inabox-v0.103.0) (2026-08-28)
 
 

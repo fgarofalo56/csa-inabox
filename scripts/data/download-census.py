@@ -14,13 +14,11 @@ import json
 import logging
 import os
 import sys
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import Dict, List, Optional
 
 import pandas as pd
 import requests
-from tqdm import tqdm
 
 
 def setup_logging(verbose: bool = False) -> None:
@@ -37,12 +35,12 @@ class CensusDownloader:
 
     BASE_URL = "https://api.census.gov/data"
 
-    def __init__(self, api_key: Optional[str] = None):
+    def __init__(self, api_key: str | None = None):
         """Initialize with optional API key."""
         self.api_key = api_key
         self.session = requests.Session()
 
-    def _make_request(self, url: str, params: Dict) -> Optional[List]:
+    def _make_request(self, url: str, params: dict) -> list | None:
         """Make API request with error handling."""
         if self.api_key:
             params['key'] = self.api_key
@@ -56,7 +54,7 @@ class CensusDownloader:
             logging.error(f"API request failed: {e}")
             return None
 
-    def get_available_variables(self, year: str, dataset: str = "acs/acs5") -> Dict:
+    def get_available_variables(self, year: str, dataset: str = "acs/acs5") -> dict:
         """Get list of available variables for a dataset."""
         url = f"{self.BASE_URL}/{year}/{dataset}/variables.json"
 
@@ -69,8 +67,8 @@ class CensusDownloader:
             logging.error(f"Failed to get variables: {e}")
             return {}
 
-    def download_acs_data(self, year: str, variables: List[str],
-                         geography: str = "state:*") -> List[Dict]:
+    def download_acs_data(self, year: str, variables: list[str],
+                         geography: str = "state:*") -> list[dict]:
         """Download ACS 5-year estimates data."""
         url = f"{self.BASE_URL}/{year}/acs/acs5"
 
@@ -95,7 +93,12 @@ class CensusDownloader:
 
             chunk_records = []
             for row in rows:
-                record = dict(zip(headers, row))
+                # strict=False, deliberately: the Census API returns rows that
+                # can be SHORTER than the header when a variable is suppressed
+                # for a small geography, and a raised ValueError there would
+                # abort a whole download over one redacted cell. The old bare
+                # zip() already truncated; this states that it is intended.
+                record = dict(zip(headers, row, strict=False))
                 chunk_records.append(record)
 
             # Merge with existing data if this is not the first chunk
@@ -103,7 +106,10 @@ class CensusDownloader:
                 # Merge by geographic keys (state, county, etc.)
                 geo_keys = [k for k in headers if k in ['state', 'county', 'tract', 'block group']]
 
-                for i, existing_record in enumerate(all_data):
+                # No enumerate(): the index was never read. `existing_record` is
+                # mutated in place below, which is what makes the merge work, so
+                # dropping the counter changes nothing about the behaviour.
+                for existing_record in all_data:
                     matching_new = None
                     for new_record in chunk_records:
                         if all(existing_record.get(k) == new_record.get(k) for k in geo_keys):
@@ -120,8 +126,8 @@ class CensusDownloader:
 
         return all_data
 
-    def download_decennial_data(self, year: str, variables: List[str],
-                              geography: str = "state:*") -> List[Dict]:
+    def download_decennial_data(self, year: str, variables: list[str],
+                              geography: str = "state:*") -> list[dict]:
         """Download Decennial Census data."""
         # Determine the correct dataset path for decennial data
         if year == "2020":
@@ -146,9 +152,11 @@ class CensusDownloader:
         headers = data[0]
         rows = data[1:]
 
-        return [dict(zip(headers, row)) for row in rows]
+        # strict=False for the same reason as the chunked path above: a
+        # suppressed variable shortens the row, and that is data, not an error.
+        return [dict(zip(headers, row, strict=False)) for row in rows]
 
-    def get_default_demographics_variables(self) -> List[str]:
+    def get_default_demographics_variables(self) -> list[str]:
         """Get default set of demographic variables."""
         return [
             'B01003_001E',  # Total Population
@@ -175,8 +183,8 @@ class CensusDownloader:
             'B15003_025E',  # Doctorate Degree
         ]
 
-    def get_variable_labels(self, variables: List[str], year: str,
-                          dataset: str = "acs/acs5") -> Dict[str, str]:
+    def get_variable_labels(self, variables: list[str], year: str,
+                          dataset: str = "acs/acs5") -> dict[str, str]:
         """Get human-readable labels for variable codes."""
         variables_info = self.get_available_variables(year, dataset)
         if not variables_info or 'variables' not in variables_info:
@@ -192,9 +200,9 @@ class CensusDownloader:
         return labels
 
 
-def save_data_with_manifest(data: List[Dict], filename: str, output_dir: Path,
+def save_data_with_manifest(data: list[dict], filename: str, output_dir: Path,
                           description: str, source_url: str,
-                          variable_labels: Optional[Dict[str, str]] = None) -> None:
+                          variable_labels: dict[str, str] | None = None) -> None:
     """Save data as CSV and update manifest."""
     if not data:
         logging.warning(f"No data to save for {description}")
@@ -210,14 +218,14 @@ def save_data_with_manifest(data: List[Dict], filename: str, output_dir: Path,
 
     manifest = {}
     if manifest_path.exists():
-        with open(manifest_path, 'r') as f:
+        with open(manifest_path) as f:
             manifest = json.load(f)
 
     file_info = {
         'filename': filename,
         'description': description,
         'source_url': source_url,
-        'download_timestamp': datetime.utcnow().isoformat() + 'Z',
+        'download_timestamp': datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z'),
         'record_count': len(data),
         'file_size_bytes': csv_path.stat().st_size,
         'columns': list(df.columns) if not df.empty else [],

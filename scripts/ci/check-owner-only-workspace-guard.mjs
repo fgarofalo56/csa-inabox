@@ -114,6 +114,25 @@ const TOUCH_EXEMPT = new Map([
   // a drive-by inside a security fix.
   ['apps/fiab-console/lib/azure/kusto-client.ts',
    'GHSA-v2g8-gp3r-rg4r: +10 LOC on createDatabase only; migrating loadKustoItem WIDENS access for 13 /api/adx routes — separate PR'],
+  // #3891 touched `assertWorkspaceAccess` in the direction THIS RATCHET WANTS,
+  // on the OTHER branch. The baselined occurrence is the owner point-read
+  // (`ws.item(id, oid).read()` + `resource.tenantId === oid`); it is BYTE-
+  // IDENTICAL after this change and the file's count is unchanged. What moved is
+  // the ADMIN branch below it, which coerced an unfiltered cross-partition read
+  // into the verdict (`return !!(await readWorkspaceById(id))`) and so let a
+  // tenant admin in tenant A reach tenant B's folder tree over all four verbs.
+  // It now requires `sameTenantConfirmed(...)` — the one comparison in
+  // lib/auth/tenant-boundary.ts — which strictly NARROWS.
+  //
+  // Migrating the owner read to `authorizeWorkspace` would WIDEN access here:
+  // the resolver newly admits shared-ACL members to the folder tree, which is a
+  // real access change with its own review and tests, and doing it inside a
+  // cross-tenant security fix is how a narrowing turns into a widening nobody
+  // noticed. Section 8i of check-tid-boundary-chokepoint.mjs is the compensating
+  // control: it fails the build if this function (or any admin-granting
+  // function) reaches a workspace read with no tenant comparison.
+  ['apps/fiab-console/app/api/workspaces/[id]/folders/route.ts',
+   '#3891: ADMIN branch narrowed to sameTenantConfirmed; the baselined OWNER point-read is byte-identical and the count is unchanged. Migrating it WIDENS the folder tree to shared-ACL members — separate PR'],
   // #3697/#3698 touched this file ONLY to fix `accessOptsFor`, which is itself a
   // correction IN THIS GUARD'S DIRECTION: the helper hand-built the
   // workspace-access options and DROPPED `tenantAdmin`, so the ~345 routes behind

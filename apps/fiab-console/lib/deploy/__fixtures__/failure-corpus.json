@@ -478,6 +478,36 @@
         "signalId": null,
         "retryable": false
       }
+    },
+    {
+      "name": "defect — az acr build, the RunStatus.FAILED pointer, verbatim",
+      "source": "gov-provision-runner-images run 33191237788, 2026-08-28T16:47:44Z (sha 5a219efc, gcc-high) — the whole captured stderr, which classified unknown and exited the lane 17 (#3886)",
+      "input": "WARNING: Sending context (63.518 MiB) to registry: acrloomdcmt6cqoezlgs...\nWARNING: Queued a build with ID: ha7w\nWARNING: Waiting for an agent...\nERROR: The run with ID 'ha7w' finished with unsuccessful status 'RunStatus.FAILED'. Show run details by 'az acr task show-run -r acrloomdcmt6cqoezlgs --run-id ha7w'. Show run logs by 'az acr task logs -r acrloomdcmt6cqoezlgs --run-id ha7w'.",
+      "expect": {
+        "class": "defect",
+        "signalId": "defect.acr-task-run-failed",
+        "retryable": false
+      }
+    },
+    {
+      "name": "defect — the ACR task log for the same run, which is what a caller classifying the FETCHED log sees",
+      "source": "gov-provision-runner-images run 33191237788 — the log the #3416 diagnose step pulled with `az acr task logs`. The az stderr and this log share no matcher, so both are pinned.",
+      "input": "Step 11/20 : RUN npm run build && node scripts/stage-evals.mjs\n../../apps/fiab-console/lib/azure/cloud-endpoints.ts(54,8): error TS2307: Cannot find module './cloud-boundary' or its corresponding type declarations.\nThe command '/bin/sh -c npm run build && node scripts/stage-evals.mjs' returned a non-zero code: 2\n2026/08/28 16:47:18 Container failed during run: build. No retries remaining.\nRun ID: ha7w failed after 35s. Error: failed during run, err: exit status 1",
+      "expect": {
+        "class": "defect",
+        "signalId": "defect.acr-task-run-failed",
+        "retryable": false
+      }
+    },
+    {
+      "name": "unknown — an ACR run that TIMED OUT is not a failed build and must stay unclassified",
+      "source": "Synthesised from the az CLI's own status enum, as the permanent negative control for defect.acr-task-run-failed. A timeout is the run not completing, not a step returning non-zero, and it can be genuinely transient — a signal keyed on the broader 'finished with unsuccessful status' would have swallowed it into a non-retryable verdict.",
+      "input": "ERROR: The run with ID 'ha7w' finished with unsuccessful status 'RunStatus.TIMEOUT'. Show run logs by 'az acr task logs -r acrloomdcmt6cqoezlgs --run-id ha7w'.",
+      "expect": {
+        "class": "unknown",
+        "signalId": null,
+        "retryable": false
+      }
     }
   ]
 }

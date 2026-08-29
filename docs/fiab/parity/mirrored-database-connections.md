@@ -89,7 +89,7 @@ row is the tracked gap, not a silent omission.
 | Sync mode — incremental | ✅ | `ScheduleTrigger` at `LOOM_MIRROR_COPY_CADENCE` (default 1h) |
 | Sync mode — continuous | ✅ | `TumblingWindowTrigger`, 15-minute floor, `maxConcurrency: 1` |
 | Replicate to Bronze | ✅ | delete-then-copy → Parquet in ADLS Bronze |
-| Report run outcome | ❌ **#4025** | reports `Running` on submit without polling — see below |
+| Report run outcome | ✅ | the initial load is polled to a terminal state; `Failed` is an error with a classified remediation, still-running is reported as unestablished, never as success (#4025) |
 
 
 ### Honest limitation, stated in-product
@@ -174,8 +174,9 @@ param files — the same gating as the pre-existing sibling `aoai-spark-rbac` it
 was modelled on, so this is not new drift, but it does mean the grant is not
 proven by any param file in the repo. The credential path has **no fallback**
 when it is missing: the linked service upsert still succeeds and the copy then
-fails at run time with a Key Vault authorization error, which per **#4025** Loom
-currently reports as `Running`.
+fails at run time with a Key Vault authorization error. Since **#4025** that is
+reported as an ERROR naming the exact role to grant on the exact identity — it
+used to surface as `Running`.
 
 
 ---
@@ -206,17 +207,48 @@ from "no tables across the N schemas the role can see". When the probe itself
 cannot be read the count is `null` and the message says the ambiguity is
 unresolved rather than asserting either cause (`deploy-integrity.md` R7).
 
-### 3. Loom reports `Running` without polling — watch the ADF monitor, not the badge
+### 3. ~~Loom reports `Running` without polling~~ — FIXED in #4025
 
-`runMirrorAdfCopy` returns `ok: true, status: 'Running'` immediately after
-submitting the pipeline. Every run-time failure — Key Vault authorization, a
-missing `CREATE STAGE`, a suspended warehouse, an unreachable source — surfaces
-in Loom as **success**, with the per-table grid showing `replicated` and
-`rows: 0`.
+**Was:** `runMirrorAdfCopy` returned `ok: true, status: 'Running'` immediately
+after submitting the pipeline, discarding the run id. Every run-time failure —
+Key Vault authorization, a missing `CREATE STAGE`, a suspended warehouse, an
+unreachable source — surfaced in Loom as **success**, with the per-table grid
+showing `replicated` and `rows: 0`. The advice here used to be "validate a mirror
+by looking at the ADF monitor, not the Loom status badge".
 
-This predates the connection work and is tracked in **#4025**. Until it is
-fixed, validate a mirror by looking at the ADF monitor (the pipeline name is in
-the run note), not the Loom status badge.
+**Now:** the initial load is POLLED to a terminal state before anything is
+reported, reusing the bounded-poll shape already proven in
+`snowflake-adf.ts#listSnowflakeTables`:
+
+| run outcome | Loom reports |
+|---|---|
+| `Succeeded` | `ok: true, status: 'Running'`, note names the run id and says the initial load SUCCEEDED; per-table `rows`/`bytes` come from the Copy activity's own ARM output |
+| `Failed` / `Cancelled` | `ok: false, status: 'Error'`, ADF's message verbatim, plus a remediation CLASSIFIED from it and a `gate.missing` key |
+| still running at the deadline | `ok: true, status: 'Running'`, and the note says the outcome is **NOT** established — never that it succeeded (`deploy-integrity.md` R6) |
+
+The four causes above are classified into concrete remediations rather than a
+generic grants message:
+
+| cause | `gate.missing` | remediation |
+|---|---|---|
+| factory MI lacks Key Vault access | `mirror-adf-keyvault` | grant **Key Vault Secrets User** to the factory's managed identity — and it states the run never reached Snowflake |
+| role lacks `CREATE STAGE` | `snowflake-create-stage` | `GRANT CREATE STAGE ON SCHEMA …` — SELECT alone is not enough, because the Copy activity creates an external stage with a SAS URI |
+| warehouse suspended | `snowflake-warehouse` | `AUTO_RESUME` / resume it, and it does **not** mention grants |
+| source unreachable | `snowflake-network` | the transport remediation, stating that nothing about the credential, role, warehouse or grants was tested |
+
+Anything else falls through to `classifySnowflakeFailure`, which returns **no**
+remediation for an unrecognised failure rather than a plausible-sounding guess.
+
+`rows`/`bytes` are now **optional** on `MirrorTableResult`. Absent means *not
+measured*, which is a different fact from zero — synthesising `rows: 0` was half
+of the original defect. A table's row shows `pending` until its Copy activity is
+observed to have succeeded.
+
+The ADF **CDC** engine got the same treatment: `startAdfCdc` returning 200 means
+ARM *accepted* the start, so the resource's status is read back with
+`statusAdfCdc`, a non-`Running`/`Starting` status is an error rather than a green
+badge, and a failure to *read* the status is reported as an unknown rather than
+as either outcome.
 
 ---
 

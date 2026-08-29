@@ -29,6 +29,8 @@ import {
   snowflakeRemediation,
   describeSnowflakeFailure,
   snowflakeGateMissing,
+  SNOWFLAKE_FAILURE_KINDS,
+  type SnowflakeFailureKind,
 } from '../snowflake-failure-class';
 
 /**
@@ -67,6 +69,27 @@ describe('the MFA rejection (the measured regression)', () => {
     const msg = describeSnowflakeFailure('Snowflake did not return a table list', MFA_PAYLOAD, DB);
     expect(msg).not.toMatch(GRANT_ADVICE);
     expect(msg).not.toContain(DB);
+  });
+
+  it('#4048 F1 — the MFA remediation is SEQUENTIAL, and TYPE = SERVICE is not an alternative', () => {
+    // It used to read "switch to KEY-PAIR auth … OR point the connection at a
+    // user created with TYPE = SERVICE, which is exempt from interactive MFA".
+    // Per docs.snowflake.com/en/user-guide/admin-user-management a SERVICE user
+    // "cannot log in using a password … cannot have the following properties:
+    // … PASSWORD" — so it is not an alternative to key-pair, it REQUIRES it. An
+    // operator who read the "or", created a SERVICE user and left the connection
+    // on basic auth failed again, having done real work in their account first.
+    const msg = snowflakeRemediation('authentication')!;
+    expect(msg).toMatch(/RSA_PUBLIC_KEY/);
+    expect(msg).toMatch(/TYPE = SERVICE/);
+    // The two are joined by "ALSO", never by an "or" that makes them exclusive.
+    expect(msg).not.toMatch(/or point the connection at a user created with TYPE = SERVICE/i);
+    expect(msg).toMatch(/ALSO change the user to TYPE = SERVICE/);
+    // And the fact that makes the "or" wrong is STATED, not left for the
+    // operator to discover in their own Snowflake account.
+    expect(msg).toMatch(/cannot have a password at all/);
+    expect(msg).toMatch(/key-pair is required either way/);
+    expect(msg).toMatch(/never a substitute/);
   });
 
   it('does not produce warehouse or network advice either', () => {
@@ -124,7 +147,13 @@ describe('per-class classification', () => {
       'network', 'could not connect',
     ],
     [
-      'Operation on target ListTables failed: 390432 (08004): IP address 203.0.113.10 is not allowed to access Snowflake.',
+      // #4048 F2 — the ms-adf-doc form, NOT the self-authored `390432 (08004)`
+      // this used to carry. `390432` has zero Snowflake-related hits in GitHub
+      // code search, and Microsoft's own ADF connector troubleshooting page
+      // (connector-troubleshoot-snowflake.md) gives this payload with NO vendor
+      // code and NO SQLSTATE — which is what ADF actually hands this classifier.
+      'Operation on target ListTables failed: IP 203.0.113.10 is not allowed to access Snowflake. '
+        + 'Contact your local security administrator.',
       'network-policy', 'network policy / IP allowlist',
     ],
   ];
@@ -148,6 +177,9 @@ describe('per-class classification', () => {
     const msg = describeSnowflakeFailure('Snowflake did not return a table list', wh, DB);
     expect(msg).toMatch(WAREHOUSE_ADVICE);
     expect(msg).not.toMatch(AUTH_ADVICE);
+    // #4049 F3 — and the vendor's own sentence survives. See the six-branch
+    // block below for why this line is here rather than only there.
+    expect(msg).toContain(wh);
   });
 
   it('a blocked IP is told about the network policy, NOT about its credential', () => {
@@ -156,6 +188,20 @@ describe('per-class classification', () => {
     expect(msg).toContain('NETWORK POLICY');
     expect(msg).not.toMatch(AUTH_ADVICE);
     expect(msg).not.toMatch(GRANT_ADVICE);
+    expect(msg).toContain(np); // #4049 F3
+  });
+
+  it('a NETWORK failure is told about the transport, and keeps the vendor sentence', () => {
+    // THERE WAS NO `network` CASE AT ALL in this block. `describeSnowflakeFailure`
+    // has six branches; five had a message assertion and this one had none, so a
+    // change that swallowed Snowflake's own words on the network path shipped
+    // green (#4049 F3).
+    const net = cases.find(([, k]) => k === 'network')![0];
+    const msg = describeSnowflakeFailure('Snowflake did not return a table list', net, DB);
+    expect(msg).toMatch(NETWORK_ADVICE);
+    expect(msg).not.toMatch(AUTH_ADVICE);
+    expect(msg).not.toMatch(GRANT_ADVICE);
+    expect(msg).toContain(net);
   });
 
   it('every class maps to its own gate key', () => {
@@ -222,16 +268,110 @@ describe('an unrecognised failure attaches NO remediation', () => {
   });
 });
 
+// ── #4049 F3: the verbatim-`detail` invariant, for ALL SIX branches ────────
+//
+// `snowflake-failure-class.ts` states that `detail` is carried through VERBATIM
+// in every branch and that this is "asserted by its own test". Measured by
+// mutation — dropping `detail` one branch at a time:
+//
+//     authentication  RC=1 CAUGHT      warehouse       RC=0 ESCAPED
+//     authorization   RC=1 CAUGHT      network         RC=0 ESCAPED
+//     unknown         RC=1 CAUGHT      network-policy  RC=0 ESCAPED
+//
+// Three of six, and there was no `network` case in the suite at all. A change
+// that swallowed the vendor's own sentence in those three branches shipped
+// green — the exact regression the comment says would be "a net regression".
+describe('#4049 F3 — the vendor sentence survives EVERY branch, not three of six', () => {
+  /** One payload per kind, keyed so the coverage assertion below can be total. */
+  const BY_KIND: Record<SnowflakeFailureKind, string> = {
+    authentication: MFA_PAYLOAD,
+    authorization:
+      'Operation on target ListTables failed: 003001 (42501): SQL access control error: '
+      + "Insufficient privileges to operate on schema 'PLACEHOLDER_SCHEMA'.",
+    warehouse:
+      'Operation on target CountSchemas failed: 000606 (57P03): No active warehouse selected in the current session.',
+    'network-policy':
+      'Operation on target ListTables failed: IP 203.0.113.10 is not allowed to access Snowflake. '
+      + 'Contact your local security administrator.',
+    network:
+      'Operation on target ListTables failed: 250001 (08001): Could not connect to Snowflake backend after 2 attempt(s).',
+    unknown:
+      'Operation on target ListTables failed: ErrorCode=UserErrorOdbcOperationFailed, an unexpected condition.',
+  };
+
+  it('COVERAGE FLOOR: every member of SNOWFLAKE_FAILURE_KINDS has a fixture', () => {
+    // Derived from the exported runtime list rather than hand-listed, so adding a
+    // seventh kind without a fixture is a RED test rather than a silent gap —
+    // which is precisely how `network` came to have no case at all.
+    for (const kind of SNOWFLAKE_FAILURE_KINDS) {
+      expect(BY_KIND[kind], `no fixture for '${kind}'`).toBeTruthy();
+    }
+    expect(Object.keys(BY_KIND).sort()).toEqual([...SNOWFLAKE_FAILURE_KINDS].sort());
+  });
+
+  for (const kind of SNOWFLAKE_FAILURE_KINDS) {
+    it(`carries the vendor sentence verbatim in the '${kind}' branch`, () => {
+      const payload = BY_KIND[kind];
+      // The fixture must actually REACH the branch it claims to, or the
+      // assertion below is about some other branch's message.
+      expect(classifySnowflakeFailure(payload), `fixture for '${kind}' misclassified`).toBe(kind);
+      const msg = describeSnowflakeFailure('Snowflake did not return a table list', payload, DB);
+      expect(msg).toContain(payload);
+    });
+  }
+});
+
 // ── Ordering, pinned where it is actually load-bearing ─────────────────────
 describe('classification ORDER', () => {
-  it('a NETWORK POLICY rejection beats AUTHENTICATION despite sharing SQLSTATE 08004', () => {
-    // The one ordering with a real input that flips. Snowflake returns the IP
-    // rejection over 08004 — the same SQLSTATE as the measured MFA failure — so
-    // authentication-first would tell a blocked IP to switch to key-pair auth.
+  // #4048 F2 — THE SELF-AUTHORED 390432 (08004) FIXTURE IS GONE, and with it the
+  // claim it "pinned". The old case asserted that Snowflake returns the IP
+  // rejection over SQLSTATE 08004, the same code as the measured MFA failure —
+  // an assertion this repo never established, backed by a fixture written to
+  // match the comment that cited it. `390432` has zero Snowflake-related hits in
+  // GitHub code search; tools in the wild use 390429 / 390422.
+  //
+  // These two are the forms actually observed in the wild, and the ordering they
+  // pin is NETWORK_POLICY before NETWORK — which is the dependency that really
+  // flips a real input, because form B carries 08001 and the NETWORK branch
+  // matches it.
+
+  it('form A — the Microsoft ADF connector doc payload, which carries NO code at all', () => {
+    // MicrosoftDocs/azure-docs, connector-troubleshoot-snowflake.md. This is the
+    // exact path this classifier consumes, and it has no vendor code and no
+    // SQLSTATE — so any ordering argument that depends on one is arguing about a
+    // payload shape that this consumer does not see.
     const payload =
-      'Operation on target CountSchemas failed: 390432 (08004): IP address 203.0.113.10 '
+      'Operation on target CountSchemas failed: IP 203.0.113.10 is not allowed to access '
+      + 'Snowflake. Contact your local security administrator.';
+    expect(classifySnowflakeFailure(payload)).toBe('network-policy');
+  });
+
+  it('form B — the 250001 (08001) form, which NETWORK would otherwise claim', () => {
+    // PostHog's production Snowflake source annotates the rejection this way.
+    // 08001 is in the NETWORK branch, so this case is what makes the
+    // NETWORK_POLICY-first ordering load-bearing rather than decorative:
+    // reorder them and a blocked-IP operator is sent to check DNS and firewall
+    // egress, which cannot fix an allowlist.
+    const payload =
+      'Operation on target CountSchemas failed: 250001 (08001): IP address 203.0.113.10 '
       + 'is not allowed to access Snowflake.';
     expect(classifySnowflakeFailure(payload)).toBe('network-policy');
+  });
+
+  it('CONTROL: the same 08001 WITHOUT the policy sentence is still NETWORK', () => {
+    // Without this, form B is equally satisfied by a classifier that stopped
+    // recognising 08001 as a connect failure at all.
+    expect(classifySnowflakeFailure('250001 (08001): Could not connect to Snowflake backend.'))
+      .toBe('network');
+  });
+
+  it('form D — the bare "Incoming request" sentence, no code on either side', () => {
+    expect(
+      classifySnowflakeFailure(
+        'Operation on target CountSchemas failed: Incoming request with IP/Token 203.0.113.10 '
+        + 'is not allowed to access Snowflake.',
+      ),
+    ).toBe('network-policy');
   });
 
   it('SQLSTATE 08001 is a CONNECT failure, not an auth one — the codes are exact tokens', () => {

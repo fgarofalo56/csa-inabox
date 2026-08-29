@@ -13,13 +13,10 @@ Data sources:
 import argparse
 import json
 import logging
-import os
 import sys
-import zipfile
-from datetime import datetime
+from datetime import datetime, timezone
 from io import BytesIO
 from pathlib import Path
-from typing import Dict, List, Optional
 
 import pandas as pd
 import requests
@@ -48,7 +45,7 @@ class CommerceDownloader:
             'User-Agent': 'CSA-in-a-Box Data Downloader (research/educational use)'
         })
 
-    def _download_file(self, url: str, description: str) -> Optional[bytes]:
+    def _download_file(self, url: str, description: str) -> bytes | None:
         """Download file with progress bar and return content."""
         try:
             response = self.session.get(url, stream=True, timeout=60)
@@ -69,7 +66,7 @@ class CommerceDownloader:
             logging.error(f"Failed to download {url}: {e}")
             return None
 
-    def download_monthly_retail_trade(self, year: str) -> List[Dict]:
+    def download_monthly_retail_trade(self, year: str) -> list[dict]:
         """Download Monthly Retail Trade Survey data."""
         # Monthly retail trade data is typically available as Excel files
         filename = f"mrtssales{year}.xlsx"
@@ -99,7 +96,7 @@ class CommerceDownloader:
             logging.error(f"Failed to parse retail trade data: {e}")
             return []
 
-    def download_retail_ecommerce(self, year: str) -> List[Dict]:
+    def download_retail_ecommerce(self, year: str) -> list[dict]:
         """Download E-commerce retail sales data."""
         filename = f"ecomm{year}.xlsx"
         url = f"{self.RETAIL_BASE_URL}{filename}"
@@ -121,10 +118,18 @@ class CommerceDownloader:
             logging.error(f"Failed to parse e-commerce data: {e}")
             return []
 
-    def download_quarterly_services(self, year: str) -> List[Dict]:
-        """Download Quarterly Services Survey data."""
-        # QSS data is often available through Economic Indicators
-        # This is a simplified implementation - actual URLs may vary
+    def download_quarterly_services(self, year: str) -> list[dict]:  # noqa: ARG002
+        """Download Quarterly Services Survey data.
+
+        RETURNS [] AND SAYS SO. `year` is unused because this method does not
+        yet resolve a QSS URL at all — the Census Economic Indicators site
+        publishes QSS behind links that have to be scraped per release, and none
+        of that is implemented. The parameter is kept so the signature matches
+        its sibling downloaders and so the eventual implementation is a body
+        change rather than a call-site change; the `logging.warning` below is
+        what tells an operator nothing was fetched, rather than an empty list
+        that reads like "no data this year".
+        """
         try:
             # Try to find QSS data via the economic indicators page
             # This would typically require scraping the page to find current links
@@ -135,7 +140,7 @@ class CommerceDownloader:
             logging.error(f"Failed to download quarterly services data: {e}")
             return []
 
-    def download_business_formation_statistics(self, year: str) -> List[Dict]:
+    def download_business_formation_statistics(self, year: str) -> list[dict]:
         """Download Business Formation Statistics (if available)."""
         # This is newer data that may be available via API or direct download
         try:
@@ -153,7 +158,7 @@ class CommerceDownloader:
 
         return []
 
-    def get_available_retail_categories(self) -> List[str]:
+    def get_available_retail_categories(self) -> list[str]:
         """Get list of retail trade categories."""
         return [
             'Total (excluding nonstore retailers)',
@@ -172,7 +177,7 @@ class CommerceDownloader:
         ]
 
 
-def save_data_with_manifest(data: List[Dict], filename: str, output_dir: Path,
+def save_data_with_manifest(data: list[dict], filename: str, output_dir: Path,
                           description: str, source_url: str) -> None:
     """Save data as CSV and update manifest."""
     if not data:
@@ -189,14 +194,14 @@ def save_data_with_manifest(data: List[Dict], filename: str, output_dir: Path,
 
     manifest = {}
     if manifest_path.exists():
-        with open(manifest_path, 'r') as f:
+        with open(manifest_path) as f:
             manifest = json.load(f)
 
     file_info = {
         'filename': filename,
         'description': description,
         'source_url': source_url,
-        'download_timestamp': datetime.utcnow().isoformat() + 'Z',
+        'download_timestamp': datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z'),
         'record_count': len(data),
         'file_size_bytes': csv_path.stat().st_size,
         'columns': list(df.columns) if not df.empty else []
@@ -297,7 +302,7 @@ def main():
             json.dump({
                 'categories': categories,
                 'description': 'Retail trade categories from Monthly Retail Trade Survey',
-                'generated': datetime.utcnow().isoformat() + 'Z'
+                'generated': datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z')
             }, f, indent=2)
 
         logging.info("Download completed successfully")

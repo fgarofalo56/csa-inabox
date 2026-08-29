@@ -998,6 +998,39 @@ describe('adfDenialEvidence / describeTriggerStartFailure', () => {
     }
   });
 
+  it('#4049 F4 — each anchor HALF is independently discriminated in THIS suite', () => {
+    // `status-token.ts` claims each anchor half has a fixture the other half
+    // alone would not block. That was true in `status-token.test.ts` and NOT
+    // here: every numeric fixture in this suite (`loom_copy_403abc_trg`-shaped
+    // names, `403: Forbidden`) is blocked by BOTH anchors, so neither half was
+    // discriminated. Measured — dropping either half left this suite at RC=0,
+    // and MX14 (re-inlining a lookahead-only anchor in this very file) ESCAPED.
+    //
+    // Two shapes, each blocked by exactly ONE half:
+    //
+    //   TRAILING token — digits END a word run: only the LOOKBEHIND blocks it.
+    //   LEADING  token — digits START a word run: only the LOOKAHEAD blocks it.
+    //
+    // Both must stay null. Drop the lookbehind and the first matches; drop the
+    // lookahead and the second does.
+    expect(
+      adfDenialEvidence(new Error('startTrigger loom_copy_403 failed: socket hang up')),
+      'TRAILING token — the LOOKBEHIND is the only thing blocking this',
+    ).toBeNull();
+    expect(
+      adfDenialEvidence(new Error('startTrigger on trigger 403abc failed: socket hang up')),
+      'LEADING token — the LOOKAHEAD is the only thing blocking this',
+    ).toBeNull();
+  });
+
+  it('CONTROL: a REAL standalone status in the same sentence shape IS evidence', () => {
+    // Without this, the two nulls above are equally satisfied by a classifier
+    // that stopped recognising numeric refusals at all — which is how an anchor
+    // "fix" becomes a silent removal.
+    expect(adfDenialEvidence(new Error('startTrigger loom_copy failed 403: socket hang up')))
+      .toMatch(/refused the call/);
+  });
+
   it('does not read 403 out of a TRIGGER NAME (the rg-loom-503 defect)', () => {
     expect(adfDenialEvidence(new Error('startTrigger loom_copy_403abc_trg failed: socket hang up'))).toBeNull();
     expect(describeTriggerStartFailure('schedule', new Error('startTrigger loom_copy_403abc_trg failed: socket hang up')))
@@ -1039,5 +1072,221 @@ describe('PostgreSQL is never routed through the ADF CDC resource', () => {
     // It actually wrote a CSV snapshot to Bronze (real backend path, not gated).
     expect(uploadFile).toHaveBeenCalled();
     expect(r.engine).not.toBe('adf-cdc');
+  });
+});
+
+// ── #4025: SUBMITTED IS NOT SUCCEEDED ──────────────────────────────────────
+//
+// `runMirrorAdfCopy` used to `await runPipeline(pipelineName)`, DISCARD the
+// response (which carries the runId), and return `ok: true, status: 'Running'`
+// with every table synthesised as `status: 'replicated', rows: 0, bytes: 0`.
+// Every run-time failure on the Snowflake path therefore surfaced as SUCCESS:
+// the factory MI without Key Vault Secrets User, a role without CREATE STAGE,
+// a suspended warehouse, an unreachable source. In all four the badge read
+// "Running" and the grid read `replicated / 0 rows` while nothing landed in
+// Bronze.
+describe('#4025 the initial ADF Copy load is POLLED to a terminal state', () => {
+  // THE TWO PIPELINE RUNS HAVE TO BE TOLD APART. `runMirrorAdfCopy` fires TWO
+  // pipelines through the same mocked client: `<stem>_pl`, the Lookup that
+  // ENUMERATES Snowflake tables, and `loom_copy_<id>`, the mirror itself. A
+  // blanket `getPipelineRun.mockResolvedValue({status:'Failed'})` fails the
+  // ENUMERATION, so the run is `Gated` before it ever reaches the code under
+  // test — measured, and it is exactly the "the mutation never reached the
+  // subject" trap. The mocks below are keyed on the runId `runPipeline` hands
+  // back, so the enumeration always succeeds and only the MIRROR run fails.
+  const MIRROR_RUN = 'run-mirror';
+  const LOOKUP_RUN = 'run-lookup';
+  const saved = { ...process.env };
+
+  beforeEach(() => {
+    // The SAME environment the main describe builds. A first cut omitted it and
+    // every case here came back `Gated: LOOM_ADF_NAME` — the run never reached
+    // the code under test, so nine "failures" said nothing about the subject.
+    // The env is duplicated rather than hoisted because the main block's
+    // beforeEach also resets mocks these cases deliberately override.
+    for (const f of [upsertDataset, upsertPipeline, runPipeline, upsertTrigger, startTrigger, stopTrigger, getPipeline, getTrigger, upsertLinkedService, getLinkedService, listActivityRuns, getPipelineRun, loadConnection]) f.mockClear();
+    getLinkedService.mockImplementation(defaultLinkedServiceTypes);
+    getPipeline.mockImplementation(async (n: string) => { throw notFound(`getPipeline(${n})`); });
+    getTrigger.mockImplementation(async (n: string) => { throw notFound(`getTrigger(${n})`); });
+    stopTrigger.mockImplementation(async () => {});
+    upsertPipeline.mockImplementation(async (n: string) => ({ name: n }));
+    process.env.LOOM_ADF_NAME = 'adf-loom';
+    process.env.LOOM_SUBSCRIPTION_ID = 'sub';
+    process.env.LOOM_DLZ_RG = 'rg';
+    process.env.LOOM_MIRROR_ADLS_LINKED_SERVICE = 'ls-adls';
+    process.env.LOOM_MIRROR_STAGING_BLOB_LINKED_SERVICE = 'ls-stage-blob';
+    delete process.env.LOOM_MIRROR_STAGING_ACCOUNT;
+    process.env.LOOM_BRONZE_URL = 'https://acct.dfs.core.windows.net/bronze';
+    delete process.env.LOOM_MIRROR_SNOWFLAKE_LINKED_SERVICE;
+    delete process.env.LOOM_MIRROR_COPY_CADENCE;
+    generateContainerWriteSasUri.mockClear();
+    generateContainerWriteSasUri.mockImplementation(async (container: string, _t: number, account: string) => ({
+      containerSasUri: `https://${account}.blob.core.windows.net/${container}?sv=TEST-NOT-A-CREDENTIAL`,
+      expiresAt: '2026-09-02T00:00:00.000Z',
+    }));
+
+    runPipeline.mockImplementation(async (name: string) => ({
+      runId: name.startsWith('loom_copy') ? MIRROR_RUN : LOOKUP_RUN,
+    }));
+  });
+  afterEach(() => { process.env = { ...saved }; });
+
+  it('SANITY: the environment reaches the code under test (not a LOOM_ADF_NAME gate)', () => {
+    // The failure this file already made once. Every assertion below is about a
+    // classified RUN outcome; if the run is gated on configuration instead, all
+    // of them fail for a reason that has nothing to do with #4025.
+    expect(process.env.LOOM_ADF_NAME).toBe('adf-loom');
+    expect(process.env.LOOM_MIRROR_STAGING_BLOB_LINKED_SERVICE).toBe('ls-stage-blob');
+  });
+
+  /** The mirror run ends Failed; the enumeration run still succeeds. */
+  const runFailed = (message: string) =>
+    getPipelineRun.mockImplementation(async (runId: string) => (
+      runId === MIRROR_RUN
+        ? { runId, pipelineName: 'p', status: 'Failed', message }
+        : { runId, pipelineName: 'p', status: 'Succeeded' }
+    ) as never);
+
+  /** The mirror run reaches `status`; the enumeration run still succeeds. */
+  const mirrorRunStatus = (status: string) =>
+    getPipelineRun.mockImplementation(async (runId: string) => (
+      runId === MIRROR_RUN
+        ? { runId, pipelineName: 'p', status }
+        : { runId, pipelineName: 'p', status: 'Succeeded' }
+    ) as never);
+
+  /** Activity output for the mirror run only — the enumeration keeps its Lookup. */
+  const mirrorActivities = (acts: unknown[]) =>
+    listActivityRuns.mockImplementation(async (runId: string) => (
+      runId === MIRROR_RUN
+        ? acts
+        : [{ activityRunId: 'a', activityName: 'ListTables', activityType: 'Lookup', output: { value: [] } }]
+    ) as never);
+
+  it('a FAILED run is ok:false / Error, not ok:true / Running', async () => {
+    runFailed('Operation on target Copy_PUBLIC_ORDERS failed: an unexpected condition.');
+    const r = await runMirrorAdfCopy('id-f1', 'ws', SNOW, TABLES, 'note');
+    expect(r.ok).toBe(false);
+    expect(r.status).toBe('Error');
+    // The vendor's own sentence survives (the invariant #4049 F3 made total).
+    expect(r.error).toContain('an unexpected condition');
+  });
+
+  it('KEY VAULT authz names the exact role on the exact identity', async () => {
+    runFailed(
+      'Operation on target Copy_PUBLIC_ORDERS failed: Failed to get the secret from Key Vault. '
+      + 'Operation returned an invalid status code Forbidden.',
+    );
+    const r = await runMirrorAdfCopy('id-f2', 'ws', SNOW, TABLES, 'note');
+    expect(r.ok).toBe(false);
+    expect(r.error).toContain('Key Vault Secrets User');
+    expect(r.gate?.missing).toBe('mirror-adf-keyvault');
+    // R7 — the run never reached Snowflake, so it must not blame the role.
+    expect(r.error).toContain('never reached Snowflake');
+    expect(r.error).not.toMatch(/USAGE on/);
+  });
+
+  it('a missing CREATE STAGE names CREATE STAGE, not "SELECT"', async () => {
+    // The ADF Copy activity creates a Snowflake external stage with a SAS URI,
+    // so SELECT alone is not enough — and a generic grants message would send
+    // the operator to re-grant something they already have.
+    runFailed(
+      "Operation on target Copy_PUBLIC_ORDERS failed: SQL access control error: Insufficient privileges "
+      + "to operate on schema 'PUBLIC'. CREATE STAGE is required.",
+    );
+    const r = await runMirrorAdfCopy('id-f3', 'ws', SNOW, TABLES, 'note');
+    expect(r.ok).toBe(false);
+    expect(r.error).toContain('GRANT CREATE STAGE');
+    expect(r.gate?.missing).toBe('snowflake-create-stage');
+  });
+
+  it('a SUSPENDED warehouse gets the warehouse remediation, not a grants one', async () => {
+    runFailed(
+      'Operation on target Copy_PUBLIC_ORDERS failed: 000606 (57P03): No active warehouse selected in the '
+      + 'current session.',
+    );
+    const r = await runMirrorAdfCopy('id-f4', 'ws', SNOW, TABLES, 'note');
+    expect(r.ok).toBe(false);
+    expect(r.error).toMatch(/AUTO_RESUME|resume it/);
+    expect(r.gate?.missing).toBe('snowflake-warehouse');
+    expect(r.error).not.toMatch(/USAGE on database/);
+  });
+
+  it('an UNREACHABLE source gets the transport remediation and asserts nothing else', async () => {
+    runFailed(
+      'Operation on target Copy_PUBLIC_ORDERS failed: 250001 (08001): Could not connect to Snowflake backend.',
+    );
+    const r = await runMirrorAdfCopy('id-f5', 'ws', SNOW, TABLES, 'note');
+    expect(r.ok).toBe(false);
+    expect(r.gate?.missing).toBe('snowflake-network');
+    expect(r.error).toMatch(/nothing about the credential, the role, the warehouse or the grants was tested/);
+  });
+
+  it('STILL RUNNING at the deadline is reported as UNKNOWN, never as success', async () => {
+    // R6: "never report success on an unverified outcome". `ok:true` is kept —
+    // the submit DID happen and nothing failed — but the note says plainly that
+    // the outcome is not established, and no table claims to have landed.
+    mirrorRunStatus('InProgress');
+    const r = await runMirrorAdfCopy('id-f6', 'ws', SNOW, TABLES, 'note', { runTimeoutMs: 1, runPollMs: 1 });
+    expect(r.status).toBe('Running');
+    expect(r.note).toMatch(/still InProgress/);
+    expect(r.note).toMatch(/is NOT\s+established/);
+    for (const t of r.tables) {
+      expect(t.status).toBe('pending');
+      expect(t.rows).toBeUndefined();
+      expect(t.bytes).toBeUndefined();
+    }
+  });
+
+  it('a SUCCEEDED run carries the Copy activity’s REAL row and byte counters', async () => {
+    mirrorRunStatus('Succeeded');
+    mirrorActivities([
+      {
+        activityRunId: 'a1',
+        activityName: 'Copy_PUBLIC_ORDERS',
+        activityType: 'Copy',
+        status: 'Succeeded',
+        output: { rowsCopied: 12345, dataWritten: 987654 },
+      },
+    ]);
+    const r = await runMirrorAdfCopy('id-s1', 'ws', SNOW, TABLES, 'note');
+    expect(r.ok).toBe(true);
+    const orders = r.tables.find((t) => t.table === 'ORDERS')!;
+    expect(orders.status).toBe('replicated');
+    expect(orders.rows).toBe(12345);
+    expect(orders.bytes).toBe(987654);
+    expect(r.note).toMatch(/Initial full load \(run run-mirror\) SUCCEEDED/);
+  });
+
+  it('a succeeded run with NO counter reports rows as ABSENT, never as zero', async () => {
+    // `rows: 0` is a claim that nothing was copied. Not measuring it is a
+    // different fact and must not be rendered as the same one — which is the
+    // whole of the synthesised `rows: 0, bytes: 0` defect.
+    mirrorRunStatus('Succeeded');
+    mirrorActivities([]);
+    const r = await runMirrorAdfCopy('id-s2', 'ws', SNOW, TABLES, 'note');
+    expect(r.ok).toBe(true);
+    for (const t of r.tables) {
+      expect(t.rows).toBeUndefined();
+      expect(t.bytes).toBeUndefined();
+      expect(t.note).toMatch(/no row counter/);
+    }
+  });
+
+  it('a per-table Copy that FAILED inside a succeeded run is not reported as replicated', async () => {
+    mirrorRunStatus('Succeeded');
+    mirrorActivities([
+      {
+        activityRunId: 'a1',
+        activityName: 'Copy_PUBLIC_ORDERS',
+        activityType: 'Copy',
+        status: 'Failed',
+        error: { message: 'the sink rejected the write' },
+      },
+    ]);
+    const r = await runMirrorAdfCopy('id-s3', 'ws', SNOW, TABLES, 'note');
+    const orders = r.tables.find((t) => t.table === 'ORDERS')!;
+    expect(orders.status).toBe('error');
+    expect(orders.error).toContain('the sink rejected the write');
   });
 });
