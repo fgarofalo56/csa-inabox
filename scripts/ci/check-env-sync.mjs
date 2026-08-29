@@ -466,7 +466,15 @@ const ALLOWLIST = new Set([
   // different judge model.
   'LOOM_FOUNDRY_EVAL_DEPLOYMENT',   // opt-in override for the judge model (default: LOOM_AOAI_DEPLOYMENT)
   'LOOM_FOUNDRY_HUB_NAME',          // derived from Foundry hub
-  'LOOM_FOUNDRY_PROJECT',           // derived from Foundry project
+  // LOOM_FOUNDRY_PROJECT is NO LONGER allowlisted (#4185). Its reason said
+  // "derived from Foundry project", which was not true of the deployed estate:
+  // nothing derived it and nothing emitted it, so `evaluation.ts:98` and
+  // `prompt-flow.ts:92` read an env var that was never set and both returned a
+  // remediation gate telling the operator to set it by hand. The deploy had the
+  // value all along and shipped it as LOOM_FOUNDRY_PROJECT_NAME, which no source
+  // file reads. admin-plane/main.bicep now emits the bare name too, so this
+  // entry is exactly what the docblock above says an allowlist must never be:
+  // a silenced guard standing in for a missing emission.
   'LOOM_GHCR_OWNER',                // opt-in GHCR mirror owner
   'LOOM_GHCR_REGISTRY',             // opt-in GHCR mirror registry
   'LOOM_GITHUB_REPO_NAME',          // opt-in GitHub integration
