@@ -53,6 +53,7 @@ import { pathToHttpsUrl } from '@/lib/azure/adls-client';
 import {
   buildReportBinding,
   parseDdlTypedColumns,
+  seedCsvPathLookup,
   type SeedTable,
   type ModelInfo,
 } from '@/lib/install/report-binding';
@@ -541,27 +542,34 @@ async function bindInstalledReports(
     );
     if (!seededNames.size) continue;
     const content = lh.content as any;
-    const schemasEnabled = content?.schemasEnabled === true;
     const deltaTables: Array<{ name: string; ddl?: string; schema?: string; sampleRows?: any[][] }> = Array.isArray(content?.deltaTables)
       ? content.deltaTables
       : [];
     const s: SeedTable[] = [];
     const paths = new Map<string, string>();
+    // #3919 — READ the path the provisioner recorded; never rebuild it. This
+    // block used to compose `${sec.rootPath}/Tables/${schema}/${name}/${name}.csv`
+    // from a naming convention, and #3904 had already moved the seed CSV to
+    // `<root>/Files/_seed/`. Every report auto-bound during an install therefore
+    // persisted a `dataSource` whose OPENROWSET BULK url pointed at a blob the
+    // seeder no longer writes — on the demo-deploy path, silently, with the
+    // sibling seeder test still green because nothing bound the two together.
+    const recordedCsvPath = seedCsvPathLookup(sec);
     for (const t of deltaTables) {
       const name = safeRelPath(t?.name || '');
       if (!name) continue;
-      const isSeeded = seededNames.has(name);
+      // A table is bindable only when the seeder both reported it seeded AND
+      // recorded where its CSV landed. `seeded: false` keeps it out of the
+      // binder's fact/dim candidates entirely, so `httpsUrlFor` below is total
+      // for every table that can reach it — no fallback, no guessed url.
+      const csvPath = seededNames.has(name) ? recordedCsvPath(name) : undefined;
       s.push({
         name,
         columns: parseDdlTypedColumns(t?.ddl || ''),
-        seeded: isSeeded,
+        seeded: !!csvPath,
         rowCount: Array.isArray(t?.sampleRows) ? t.sampleRows.length : undefined,
       });
-      if (isSeeded) {
-        const schema = schemasEnabled ? (String(t?.schema || 'dbo').replace(/[^A-Za-z0-9_]/g, '') || 'dbo') : '';
-        const dir = schema ? `${sec.rootPath}/Tables/${schema}/${name}` : `${sec.rootPath}/Tables/${name}`;
-        paths.set(name, `${dir}/${name}.csv`);
-      }
+      if (csvPath) paths.set(name, csvPath);
     }
     if (!s.some((x) => x.seeded)) continue;
     seeds = s;
@@ -573,9 +581,17 @@ async function bindInstalledReports(
 
   const cont = container;
   const paths = csvPathByName;
-  // Only ever called for seeded tables (the binder joins seeded tables only), so
-  // the map always resolves; the guard keeps it total.
-  const httpsUrlFor = (physical: string): string => pathToHttpsUrl(cont, paths.get(physical) || physical);
+  // Only ever called for seeded tables, and #3919 made `seeded` mean "the
+  // provisioner recorded a CSV path for it" — so this map always resolves. The
+  // previous `|| physical` fallback silently turned a miss into a URL built from
+  // a bare table name; that is the shape that let a wrong path reach a persisted
+  // dataSource unnoticed. Throwing keeps the miss loud and inside the per-report
+  // try/catch below, which leaves the report UNBOUND rather than mis-bound.
+  const httpsUrlFor = (physical: string): string => {
+    const p = paths.get(physical);
+    if (!p) throw new Error(`no recorded seed CSV path for table '${physical}' — refusing to bind a report to a guessed path (#3919)`);
+    return pathToHttpsUrl(cont, p);
+  };
 
   for (const rep of reports) {
     try {
