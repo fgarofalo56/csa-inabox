@@ -19,7 +19,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { randomUUID } from 'node:crypto';
 import { getSession } from '@/lib/auth/session';
 import { loadOwnedItem, updateOwnedItem } from '../../../_lib/item-crud';
-import { chatGrounded, NoAoaiDeploymentError, type DataAgentConfig } from '@/lib/azure/data-agent-client';
+import { chatGrounded, rehydrateSources, NoAoaiDeploymentError, type DataAgentConfig } from '@/lib/azure/data-agent-client';
 import { aoaiChatJson } from '@/lib/azure/aoai-chat-client';
 import type { WorkspaceItem } from '@/lib/types/workspace';
 import { apiServerError } from '@/lib/api/respond';
@@ -43,23 +43,20 @@ interface EvalRun {
   total: number; passed: number; accuracy: number; results: EvalResult[];
 }
 
-/** Same projection the /chat route uses, kept local so the two stay independent. */
+/**
+ * Same shape the /chat route builds. The AGENT-LEVEL fields stay local so this route's
+ * config stays independent of that one; the PER-SOURCE projection does not, because
+ * keeping six independent copies of it is precisely what produced #4119 — every copy
+ * coerced `id`/`name` and passed `type` through raw, so a persisted non-string `type`
+ * reached `chatGrounded` and threw an uncaught TypeError (HTTP 500) on the shared path
+ * behind ~15 call sites. Independence between routes was never the property at risk;
+ * a single deserialisation boundary is.
+ */
 function stateToConfig(state: Record<string, unknown>): DataAgentConfig {
-  const sources = Array.isArray(state.sources) ? (state.sources as any[]) : [];
   return {
     instructions: String(state.instructions || state.systemPrompt || ''),
     description: state.description ? String(state.description) : undefined,
-    sources: sources.map((s) => ({
-      id: String(s.id || s.name || ''),
-      type: s.type,
-      name: String(s.name || ''),
-      tables: s.tables ? String(s.tables) : undefined,
-      description: s.description ? String(s.description) : undefined,
-      instructions: s.instructions ? String(s.instructions) : undefined,
-      examples: Array.isArray(s.examples) ? s.examples : undefined,
-      aiSearch: s.aiSearch && typeof s.aiSearch === 'object' ? s.aiSearch : undefined,
-      graph: s.graph && typeof s.graph === 'object' ? s.graph : undefined,
-    })),
+    sources: rehydrateSources(state.sources),
   };
 }
 

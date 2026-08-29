@@ -14,7 +14,7 @@ import { getApiSession } from '@/lib/auth/api-session';
 import { tenantScopeId } from '@/lib/auth/session';
 import { loadOwnedItem } from '../../../_lib/item-crud';
 import { enrichSemanticModelSources } from '../../../semantic-model/_lib/prep-for-ai-store';
-import { chatGrounded, NoAoaiDeploymentError, type DataAgentConfig, type ChatTurn } from '@/lib/azure/data-agent-client';
+import { chatGrounded, rehydrateSources, NoAoaiDeploymentError, type DataAgentConfig, type ChatTurn } from '@/lib/azure/data-agent-client';
 import { handleA2aRpc, A2A_ERROR } from '@/lib/copilot/a2a-protocol';
 import { buildItemAgentCard, buildItemA2aContext } from '@/lib/copilot/a2a-item-server';
 import type { WorkspaceItem } from '@/lib/types/workspace';
@@ -31,19 +31,11 @@ function endpointFor(req: NextRequest, id: string): string {
 }
 
 function stateToConfig(state: Record<string, unknown>): DataAgentConfig {
-  const sources = Array.isArray(state.sources) ? (state.sources as any[]) : [];
   return {
     instructions: String(state.instructions || state.systemPrompt || ''),
     description: state.description ? String(state.description) : undefined,
-    sources: sources.map((s) => ({
-      id: String(s.id || s.name || ''), type: s.type, name: String(s.name || ''),
-      tables: s.tables ? String(s.tables) : undefined,
-      description: s.description ? String(s.description) : undefined,
-      instructions: s.instructions ? String(s.instructions) : undefined,
-      examples: Array.isArray(s.examples) ? s.examples : undefined,
-      aiSearch: s.aiSearch && typeof s.aiSearch === 'object' ? s.aiSearch : undefined,
-      graph: s.graph && typeof s.graph === 'object' ? s.graph : undefined,
-    })),
+    // #4119 — one coercion boundary, shared by all six rehydration sites.
+    sources: rehydrateSources(state.sources),
   };
 }
 

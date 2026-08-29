@@ -26,7 +26,12 @@ import {
 } from '@/lib/azure/foundry-agent-client';
 import { resolveWorkspaceFoundry } from '@/lib/azure/copilot-config-store';
 import { loadOwnedItem, listOwnedItems } from '../../items/_lib/item-crud';
-import { chatGrounded, NoAoaiDeploymentError, type DataAgentConfig } from '@/lib/azure/data-agent-client';
+import {
+  chatGrounded,
+  rehydrateSources,
+  NoAoaiDeploymentError,
+  type DataAgentConfig,
+} from '@/lib/azure/data-agent-client';
 import type { WorkspaceItem } from '@/lib/types/workspace';
 
 export const runtime = 'nodejs';
@@ -34,21 +39,13 @@ export const dynamic = 'force-dynamic';
 export const maxDuration = 60;
 
 function stateToConfig(state: Record<string, unknown>): DataAgentConfig {
-  const sources = Array.isArray(state.sources) ? (state.sources as any[]) : [];
   return {
     instructions: String(state.instructions || state.systemPrompt || ''),
     description: state.description ? String(state.description) : undefined,
-    sources: sources.map((s) => ({
-      id: String(s.id || s.name || ''),
-      type: s.type,
-      name: String(s.name || ''),
-      tables: s.tables ? String(s.tables) : undefined,
-      description: s.description ? String(s.description) : undefined,
-      instructions: s.instructions ? String(s.instructions) : undefined,
-      examples: Array.isArray(s.examples) ? s.examples : undefined,
-      aiSearch: s.aiSearch && typeof s.aiSearch === 'object' ? s.aiSearch : undefined,
-      graph: s.graph && typeof s.graph === 'object' ? s.graph : undefined,
-    })),
+    // #4119 — the per-source projection was inlined here and in five sibling routes, and
+    // every copy coerced `id`/`name` while passing `type` through raw. `rehydrateSources`
+    // is the one boundary now, so a persisted non-string `type` cannot reach chatGrounded.
+    sources: rehydrateSources(state.sources),
   };
 }
 

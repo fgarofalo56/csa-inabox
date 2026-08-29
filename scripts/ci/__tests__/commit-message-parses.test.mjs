@@ -210,6 +210,84 @@ test('commitsIn returns attributable records for a real range', (t) => {
   assert.equal(commits.length, oneline, 'record count disagrees with an independent git count');
 });
 
+test('commitsIn returns the EXACT records of a built history, in order (#3865)', () => {
+  // The ambient-history case above is deliberately kept, but it cannot be the only
+  // coverage, for two measured reasons.
+  //
+  // 1. IT SKIPS IN A REAL LANE. `fiab-console-ci.yml`'s `node-test-suites` job checks out
+  //    with no `fetch-depth`, so the clone is depth 1, `rev-list --count HEAD` returns 1,
+  //    and the `< 6` guard skips. A skip asserts nothing. `loom-guardrails` and
+  //    `commit-message-parses.yml` both set `fetch-depth: 0` and do run it, so the
+  //    assertion is not absent from CI — but it is absent from that lane, and this case
+  //    runs in all three because it brings its own history.
+  // 2. AMBIENT HISTORY CANNOT PIN AN EXACT ANSWER. Against unknown history the strongest
+  //    available assertions are loose ones. #3853 measured what that costs on the sibling
+  //    function: `Number.isInteger(n) && n >= 0` and `with_ >= without` BOTH held when
+  //    `expectedCount` was mutated to `return 0`. Exact count + exact shas, in order, is
+  //    an assertion a broken `commitsIn` cannot satisfy — see the mutation proof below.
+  //
+  // The GIT_* scrub and the gpgsign / hooksPath overrides are the same two guardrails the
+  // `expectedCount` case carries, for the same measured reasons; the long-form rationale
+  // lives there rather than being duplicated here. The scrub is at PROCESS scope because
+  // `commitsIn` runs its OWN `execFileSync('git', …, { cwd })` with the ambient
+  // environment, so a per-call `env` object would cover only the half of this test that
+  // BUILDS history.
+  const dir = mkdtempSync(path.join(os.tmpdir(), 'loom-cmp-commits-'));
+  const savedGitEnv = {};
+  for (const k of ['GIT_DIR', 'GIT_WORK_TREE', 'GIT_INDEX_FILE', 'GIT_OBJECT_DIRECTORY', 'GIT_COMMON_DIR']) {
+    if (k in process.env) savedGitEnv[k] = process.env[k];
+    delete process.env[k];
+  }
+  const git = (...a) => execFileSync('git', a, { cwd: dir, encoding: 'utf8' });
+  try {
+    git('init', '-q', '-b', 'main');
+    git('config', 'user.email', 'test@example.invalid');
+    git('config', 'user.name', 'test');
+    git('config', 'commit.gpgsign', 'false');
+    git('config', 'core.hooksPath', path.join(dir, '.no-hooks'));
+    git('commit', '-q', '--allow-empty', '-m', 'base');
+    const base = git('rev-parse', 'HEAD').trim();
+
+    // Three non-merge commits plus one merge. The merge is here so the `--no-merges` half
+    // of the contract is asserted rather than assumed: a `commitsIn` that dropped the flag
+    // would return four records and fail the exact count.
+    git('checkout', '-q', '-b', 'side');
+    git('commit', '-q', '--allow-empty', '-m', 'fix(side): one');
+    const sideOne = git('rev-parse', 'HEAD').trim();
+    git('commit', '-q', '--allow-empty', '-m', 'fix(side): two\n\nA body with\nseveral lines.');
+    const sideTwo = git('rev-parse', 'HEAD').trim();
+
+    git('checkout', '-q', 'main');
+    git('commit', '-q', '--allow-empty', '-m', 'feat(main): one');
+    const mainOne = git('rev-parse', 'HEAD').trim();
+    git('merge', '-q', '--no-ff', '-m', 'merge side', 'side');
+
+    const commits = commitsIn(base, 'HEAD', { cwd: dir });
+
+    assert.equal(commits.length, 3, 'exactly the three NON-merge commits, never the merge');
+    // `git log` is newest-first, and this order is part of what a caller gets, so it is
+    // asserted rather than sorted away. main one is the newest non-merge; the two side
+    // commits follow it.
+    assert.deepEqual(
+      commits.map((c) => c.sha),
+      [mainOne, sideTwo, sideOne],
+      'exact shas, in git log order',
+    );
+    assert.match(commits[0].message, /^feat\(main\): one/);
+    assert.match(commits[1].message, /^fix\(side\): two/);
+    assert.match(commits[1].message, /A body with\nseveral lines\./, 'multi-line bodies survive the split');
+    assert.match(commits[2].message, /^fix\(side\): one/);
+
+    // The degenerate-range refusal must hold in the throwaway repo too — otherwise this
+    // case proves `cwd` reached `git log` but says nothing about whether it reached the
+    // `expectedCount` cross-check that raises that throw.
+    assert.throws(() => commitsIn('HEAD', 'HEAD', { cwd: dir }), /contains no commits at all/);
+  } finally {
+    for (const [k, v] of Object.entries(savedGitEnv)) process.env[k] = v;
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('expectedCount counts merges only when asked', () => {
   // Built here rather than read off ambient history. The previous version called
   // expectedCount('HEAD~5','HEAD') against whatever repo the test happened to run in,
