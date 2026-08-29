@@ -1254,6 +1254,16 @@ jobs:
       - name: 'acr-dataplane-ready self-test (403 != ready; DNS failure != refusal)'
         if: ${{ !cancelled() }}
         run: bash scripts/ci/test-acr-dataplane-ready.sh
+      # The same present/absent/UNKNOWN shape, one deploy step over: the MSAL
+      # resolver. #4127 taught it that an unreadable source is not an absence and
+      # shipped with only STATIC checks — one asserting the step is wired, one
+      # asserting the file is watched — so nothing executed its decision table.
+      # The next day a firewall-denied Key Vault ended the search before the
+      # source that had been answering, and deploy-fiab-commercial broke with
+      # every gate green (#4163). Runs offline against a stub `az`.
+      - name: 'resolve-msal-client-id self-test (a failed source ends that source, not the search)'
+        if: ${{ !cancelled() }}
+        run: bash scripts/ci/test-resolve-msal-client-id.sh
       # Its sibling — the TOKEN half of the same window — had 25 call sites and no
       # test at all, so its retry budget was a number nobody could change safely.
       # 6x10s was too small for the AAD->ACR token-exchange tail: run 31732873272
