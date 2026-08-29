@@ -14,9 +14,8 @@ import json
 import logging
 import os
 import sys
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import Dict, List, Optional
 
 import pandas as pd
 import requests
@@ -44,9 +43,20 @@ class USDADownloader:
         self.session = requests.Session()
         self.session.params = {'key': api_key, 'format': 'JSON'}
 
-    def _make_request(self, params: Dict) -> Dict:
-        """Make API request with error handling and retry logic."""
-        for attempt in range(3):
+    def _make_request(self, params: dict) -> dict:
+        """Make API request with error handling and retry logic.
+
+        FAILS CLOSED ON EXHAUSTION, STRUCTURALLY. This used to re-raise inside
+        the loop on `if attempt == 2`, a magic number coupled to `range(3)` two
+        lines up — correct as written, but the function's "cannot return None"
+        property was incidental rather than guaranteed, and changing the retry
+        count in one place and not the other would have made it fall off the end
+        and return None through a `-> dict` signature. The raise now lives after
+        the loop, where exhausting the retries is the only way to reach it.
+        """
+        attempts = 3
+        last_error: Exception | None = None
+        for attempt in range(attempts):
             try:
                 response = self.session.get(self.BASE_URL, params=params, timeout=30)
                 response.raise_for_status()
@@ -58,11 +68,14 @@ class USDADownloader:
                 return data
 
             except requests.RequestException as e:
-                logging.warning(f"Request attempt {attempt + 1} failed: {e}")
-                if attempt == 2:
-                    raise
+                last_error = e
+                logging.warning(f"Request attempt {attempt + 1} of {attempts} failed: {e}")
 
-    def get_count(self, params: Dict) -> int:
+        raise requests.RequestException(
+            f"USDA NASS request failed after {attempts} attempts: {last_error}"
+        ) from last_error
+
+    def get_count(self, params: dict) -> int:
         """Get total count of records for a query."""
         count_params = params.copy()
         count_params.update({'statisticcat_desc': 'AREA HARVESTED', 'format': 'JSON'})
@@ -77,15 +90,21 @@ class USDADownloader:
             logging.warning(f"Could not get count: {e}")
             return 0
 
-    def download_data(self, params: Dict, description: str) -> List[Dict]:
+    def download_data(self, params: dict, description: str) -> list[dict]:
         """Download data with pagination support."""
         all_data = []
         offset = 0
 
-        # Get approximate total for progress bar
+        # The approximate total for the progress bar. It WAS fetched and then
+        # dropped on the floor — `self.get_count()` costs a full extra API round
+        # trip, so computing it and not using it was a wasted request per
+        # download. It is now passed to tqdm as `total`, which is what it was
+        # obviously for; `get_count` returns 0 on failure and tqdm treats a
+        # falsy total as unknown, so the bar degrades to the old behaviour
+        # rather than reporting a wrong denominator.
         total_estimate = self.get_count(params)
 
-        with tqdm(desc=description, unit="records") as pbar:
+        with tqdm(desc=description, unit="records", total=total_estimate or None) as pbar:
             while True:
                 page_params = params.copy()
                 page_params['offset'] = offset
@@ -113,7 +132,7 @@ class USDADownloader:
         logging.info(f"Downloaded {len(all_data)} records for {description}")
         return all_data
 
-    def download_crop_yields(self, year: str, state: Optional[str] = None) -> List[Dict]:
+    def download_crop_yields(self, year: str, state: str | None = None) -> list[dict]:
         """Download crop yield data."""
         params = {
             'source_desc': 'SURVEY',
@@ -129,7 +148,7 @@ class USDADownloader:
 
         return self.download_data(params, f"Crop yields {year}")
 
-    def download_livestock_counts(self, year: str, state: Optional[str] = None) -> List[Dict]:
+    def download_livestock_counts(self, year: str, state: str | None = None) -> list[dict]:
         """Download livestock inventory data."""
         params = {
             'source_desc': 'SURVEY',
@@ -144,7 +163,7 @@ class USDADownloader:
 
         return self.download_data(params, f"Livestock counts {year}")
 
-    def download_land_use(self, year: str, state: Optional[str] = None) -> List[Dict]:
+    def download_land_use(self, year: str, state: str | None = None) -> list[dict]:
         """Download land use data."""
         params = {
             'source_desc': 'SURVEY',
@@ -160,7 +179,7 @@ class USDADownloader:
         return self.download_data(params, f"Land use {year}")
 
 
-def save_data_with_manifest(data: List[Dict], filename: str, output_dir: Path,
+def save_data_with_manifest(data: list[dict], filename: str, output_dir: Path,
                           description: str, source_url: str) -> None:
     """Save data as CSV and update manifest."""
     if not data:
@@ -177,14 +196,14 @@ def save_data_with_manifest(data: List[Dict], filename: str, output_dir: Path,
 
     manifest = {}
     if manifest_path.exists():
-        with open(manifest_path, 'r') as f:
+        with open(manifest_path) as f:
             manifest = json.load(f)
 
     file_info = {
         'filename': filename,
         'description': description,
         'source_url': source_url,
-        'download_timestamp': datetime.utcnow().isoformat() + 'Z',
+        'download_timestamp': datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z'),
         'record_count': len(data),
         'file_size_bytes': csv_path.stat().st_size,
         'columns': list(df.columns) if not df.empty else []

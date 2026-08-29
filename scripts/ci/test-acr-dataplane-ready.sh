@@ -123,11 +123,56 @@ cat > "$STUB_DIR/curl" <<'CURL'
 #!/usr/bin/env bash
 SELF_DIR="$(dirname "$0")"
 OUT=""
+URLARG=""
 prev=""
 for a in "$@"; do
   if [ "$prev" = "-o" ]; then OUT="$a"; fi
+  case "$a" in https://*) URLARG="$a" ;; esac
   prev="$a"
 done
+
+# #4053 — the probe now makes TWO requests per sample: /v2/ then /oauth2/token.
+# Token calls are logged to .tokencalls and NOT to .calls, so `samples()` still
+# counts SAMPLES and every STUB_CODES sequence written before #4053 keeps its
+# exact original meaning. Without that split, adding a second request would have
+# silently re-keyed every existing sequence — sample boundaries would move and
+# the cases would still pass, measuring something else.
+case "$URLARG" in
+  *"/oauth2/token"*)
+    echo "call" >> "$SELF_DIR/.tokencalls"
+    # STUB_TOKEN_CODES is its own sequence with its own counter, for the cases
+    # that need the token endpoint to DISAGREE with the challenge — which is the
+    # whole shape #4053 exists to catch. Unset, it MIRRORS the /v2/ answer this
+    # sample just got, so pre-#4053 cases behave exactly as they always did.
+    if [ -n "${STUB_TOKEN_CODES:-}" ]; then
+      TN=0
+      [ -f "$SELF_DIR/.tokenseq" ] && TN="$(cat "$SELF_DIR/.tokenseq")"
+      TN=$(( TN + 1 ))
+      printf '%s' "$TN" > "$SELF_DIR/.tokenseq"
+      # shellcheck disable=SC2086
+      set -- $STUB_TOKEN_CODES
+      TIDX=$TN
+      [ "$TIDX" -gt "$#" ] && TIDX=$#
+      TCODE="${!TIDX}"
+    else
+      TCODE="$(cat "$SELF_DIR/.lastv2" 2>/dev/null || echo 401)"
+    fi
+    if [ "${STUB_CONNECT_FAIL:-0}" = "1" ] || [ "$TCODE" = "000" ]; then
+      [ -n "$OUT" ] && : > "$OUT"
+      printf '000'
+      exit 6
+    fi
+    case "$TCODE" in
+      403) TB='{"errors":[{"code":"DENIED","message":"client with IP is not allowed access"}]}' ;;
+      401) TB='{"errors":[{"code":"UNAUTHORIZED","message":"authentication required"}]}' ;;
+      *)   TB='{}' ;;
+    esac
+    [ -n "$OUT" ] && printf '%s' "$TB" > "$OUT"
+    printf '%s' "$TCODE"
+    exit 0
+    ;;
+esac
+
 echo "call" >> "$SELF_DIR/.calls"
 CODE="${STUB_CODE:-401}"
 if [ -n "${STUB_CODES:-}" ]; then
@@ -141,6 +186,10 @@ if [ -n "${STUB_CODES:-}" ]; then
   [ "$IDX" -gt "$#" ] && IDX=$#
   CODE="${!IDX}"
 fi
+# Recorded BEFORE the connect-failure branch so the token call can mirror a
+# `000` too — otherwise a connect failure on /v2/ would be mirrored as a stale
+# 401 if the probe ever reordered the two requests.
+printf '%s' "$CODE" > "$SELF_DIR/.lastv2"
 if [ "${STUB_CONNECT_FAIL:-0}" = "1" ] || [ "$CODE" = "000" ]; then
   [ -n "$OUT" ] && : > "$OUT"
   printf '000'
@@ -161,8 +210,12 @@ exit 0
 CURL
 chmod +x "$STUB_DIR/curl"
 
-reset_samples() { rm -f "$STUB_DIR/.seq" "$STUB_DIR/.calls" "$STUB_DIR/.sleeps"; }
+reset_samples() {
+  rm -f "$STUB_DIR/.seq" "$STUB_DIR/.calls" "$STUB_DIR/.sleeps" \
+        "$STUB_DIR/.tokenseq" "$STUB_DIR/.tokencalls" "$STUB_DIR/.lastv2"
+}
 samples() { [ -f "$STUB_DIR/.calls" ] && wc -l < "$STUB_DIR/.calls" | tr -d '[:space:]' || echo 0; }
+token_calls() { [ -f "$STUB_DIR/.tokencalls" ] && wc -l < "$STUB_DIR/.tokencalls" | tr -d '[:space:]' || echo 0; }
 
 # `sleep` recorder. bash has no `sleep` builtin, so the probe's `sleep "$SLEEP"`
 # resolves through PATH and this stub intercepts it — logging the ARGUMENT and
@@ -518,8 +571,16 @@ do
   MIXDESC="${MIXREST%%|*}"; MIXWANT="${MIXREST#*|}"
   install_sleep_recorder
   reset_samples
+  # BUDGET RAISED 12s -> 40s FOR #4053, on this block's own instruction. Each
+  # sample now spawns TWO stub curls instead of one, so the number of samples
+  # that fit a fixed wall-clock budget roughly halved, and on this dev box the
+  # `401 000` and `401 403 000 500` specs stopped reaching the class they exist
+  # to produce. The self-defence below caught that and FAILED rather than
+  # reporting a vacuous pass — which is the harness working, so the budget is
+  # what moves, not the assertion. Measured before the raise: 1 sample and 3
+  # samples respectively, against the 3 the biconditional needs.
   OUT="$(STUB_CODES="$MIXSEQ" PATH="$STUB_DIR:$PATH" bash "$PROBE" --acr testacr \
-    --timeout-seconds 12 --interval-seconds 2 --sample-interval-seconds 2 --consecutive-samples 3 2>&1)"; RC=$?
+    --timeout-seconds 40 --interval-seconds 2 --sample-interval-seconds 2 --consecutive-samples 3 2>&1)"; RC=$?
   CALLS="$(samples)"
   remove_sleep_recorder
   SEG="$(tally_segment "$OUT")"
@@ -883,6 +944,87 @@ install_az_fail
 OUT="$(STUB_CODE=401 run 6)"; RC=$?
 [ $RC -eq 3 ] && pass "unreadable cloud config => exit 3, refuses to guess a suffix" || fail "should exit 3 when the suffix is unknown, got $RC: $OUT"
 install_az_ok
+
+# ---------------------------------------------------------------------------
+# 7. #4053 — READY must not rest on evidence that only proves the CHALLENGE is
+#    reachable.
+#
+#    Run 32819789544 reported `READY after 1 attempt(s) — HTTP 401` and the next
+#    step was refused at a DIFFERENT endpoint: `POST .../oauth2/token: DENIED:
+#    client with IP … is not allowed access`. Both statements were true; they
+#    measured different things. #4067 made the probe require CONSECUTIVE samples,
+#    which addresses one-shot flapping — but every one of those samples still
+#    only asked `/v2/`. This block covers the second hop.
+# ---------------------------------------------------------------------------
+
+# 7a. THE POPULATION FLOOR, and it comes first on purpose. Every assertion below
+#     is about what the token probe DID; if the probe stopped issuing that
+#     request at all, they would all still pass — 7b would exit 1 for the wrong
+#     reason and 7c would be trivially true. This is the control that fails when
+#     the whole second hop is deleted.
+reset_samples
+install_sleep_recorder
+OUT="$(STUB_CODES='401' PATH="$STUB_DIR:$PATH" bash "$PROBE" --acr testacr \
+  --timeout-seconds 40 --interval-seconds 2 --sample-interval-seconds 2 --consecutive-samples 3 2>&1)"; RC=$?
+TCALLS="$(token_calls)"; VCALLS="$(samples)"
+remove_sleep_recorder
+[ "$TCALLS" -ge 3 ] \
+  && pass "#4053 population: the token endpoint was actually probed (${TCALLS} token request(s) across ${VCALLS} sample(s))" \
+  || fail "#4053: only ${TCALLS} request(s) reached /oauth2/token across ${VCALLS} sample(s). The second hop is not being probed, so every assertion in section 7 is vacuous: $OUT"
+[ "$TCALLS" -eq "$VCALLS" ] \
+  && pass "#4053 population: one token request per sample, not one per run" \
+  || fail "#4053: ${VCALLS} sample(s) but ${TCALLS} token request(s) — the token probe is not running once per sample, so a stale open could be carried across samples"
+
+# 7b. THE DEFECT ITSELF. `/v2/` answers 401 forever; `/oauth2/token` refuses with
+#     403 forever. That is run 32819789544's shape. The probe must NEVER report
+#     READY here — before #4053 it reported READY on the third consecutive 401.
+reset_samples
+install_sleep_recorder
+OUT="$(STUB_CODES='401' STUB_TOKEN_CODES='403' PATH="$STUB_DIR:$PATH" bash "$PROBE" --acr testacr \
+  --timeout-seconds 40 --interval-seconds 2 --sample-interval-seconds 2 --consecutive-samples 3 2>&1)"; RC=$?
+remove_sleep_recorder
+[ $RC -ne 0 ] \
+  && pass "#4053: a 401 challenge with a 403 token exchange is NOT ready (exit $RC)" \
+  || fail "#4053 THE REGRESSION: the probe reported READY while /oauth2/token was IP-denied — exactly run 32819789544. $OUT"
+case "$OUT" in
+  *"READY"*) fail "#4053: the output claims READY despite a denied token exchange: $OUT" ;;
+  *) pass "#4053: the word READY never appears when the token exchange is denied" ;;
+esac
+# R7 — the message must name the endpoint that actually refused. Attributing this
+# denial to /v2/ would send the reader to the endpoint that ANSWERED.
+case "$OUT" in
+  *"403 from /oauth2/token"*) pass "#4053 R7: the denial names /oauth2/token as the refusing endpoint" ;;
+  *) fail "#4053 R7: the denial does not name /oauth2/token, so the log attributes it to the endpoint that answered: $OUT" ;;
+esac
+
+# 7c. THE CONTROL. Without this, 7b is equally satisfied by a probe that can no
+#     longer return READY at all — which would be a permanently-failing gate, and
+#     14 of the 17 call sites discard the exit status, so it would be silent.
+reset_samples
+install_sleep_recorder
+OUT="$(STUB_CODES='401' STUB_TOKEN_CODES='401' PATH="$STUB_DIR:$PATH" bash "$PROBE" --acr testacr \
+  --timeout-seconds 40 --interval-seconds 2 --sample-interval-seconds 2 --consecutive-samples 3 2>&1)"; RC=$?
+remove_sleep_recorder
+[ $RC -eq 0 ] \
+  && pass "#4053 control: both endpoints answering 401 still reaches READY (exit 0)" \
+  || fail "#4053: the probe can no longer report READY even when BOTH endpoints answer — a permanently-failing gate, got $RC: $OUT"
+case "$OUT" in
+  *"BOTH /v2/ and /oauth2/token"*) pass "#4053: READY states that both endpoints answered" ;;
+  *) fail "#4053: the READY line does not say what was actually established: $OUT" ;;
+esac
+
+# 7d. The token endpoint is NOT probed when the challenge already refused —
+#     asserted because it is the one place the two-hop change could double the
+#     request load against a registry that is actively denying us.
+reset_samples
+install_sleep_recorder
+OUT="$(STUB_CODES='403' PATH="$STUB_DIR:$PATH" bash "$PROBE" --acr testacr \
+  --timeout-seconds 12 --interval-seconds 2 --sample-interval-seconds 2 --consecutive-samples 3 2>&1)"; RC=$?
+TCALLS="$(token_calls)"
+remove_sleep_recorder
+[ "$TCALLS" -eq 0 ] \
+  && pass "#4053: a 403 challenge short-circuits — no token request issued" \
+  || fail "#4053: ${TCALLS} token request(s) were sent to a registry already refusing at /v2/; the short-circuit is gone"
 
 echo
 if [ $FAILED -eq 0 ]; then echo "acr-dataplane-ready: ALL CASES PASS"; else echo "acr-dataplane-ready: FAILURES ABOVE"; fi
