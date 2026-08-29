@@ -943,6 +943,39 @@ jobs:
         run: |
           node scripts/ci/check-workflow-lane-states.mjs --self-test
           node scripts/ci/check-workflow-lane-states.mjs
+      # The same class one level over: a control that is in the SOURCE and not in
+      # the REPOSITORY. deploy-fiab-il5.yml declared `environment: il5-deploy
+      # # requires manual approval` while no such environment existed — and
+      # GitHub AUTO-CREATES an environment on first use with NO protection rules,
+      # so the first real IL5 run would have created it unprotected and walked
+      # through an approval gate that was only a YAML comment, on a lane that
+      # deploys into a DoD Impact Level 5 subscription (#4114). It stayed latent
+      # solely because that lane has never run once.
+      #
+      # Keyed to the SHAPE — every job-level `environment:` resolves against the
+      # LIVE list — not to a roster of known names, which is the enumeration trap
+      # #4108 records. It reads workflow STRUCTURE rather than grepping, because
+      # `azure/login`'s step input is also spelled `environment:` (~50 of them
+      # here) and a line-oriented matcher would report every one as a phantom.
+      #
+      # Self-test first (it carries the mutant fixtures: absent environment, empty
+      # environment list, zero workflows parsed, a population under the floor, a
+      # step input that must NOT count, and a templated value that must be
+      # disclosed rather than dropped). The plain run ALSO executes an embedded
+      # known-true control before judging the real population, so on a repo where
+      # every name happens to resolve the detector is still exercised.
+      #
+      # It judges EXISTENCE and prints PROTECTION without judging it: deciding
+      # which lanes must carry required reviewers is an operator judgement over a
+      # list of lanes, i.e. the enumeration this guard refuses to become. A
+      # `0 protection rule(s)` row is therefore visible on every run.
+      - name: 'workflow-environments-exist (an `environment:` a lane names must EXIST, or the approval gate is imaginary — #4114)'
+        if: ${{ !cancelled() }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          node scripts/ci/check-workflow-environments-exist.mjs --self-test
+          node scripts/ci/check-workflow-environments-exist.mjs
       # #3423 was `trivy.yml` cancelling its own main-branch scans; #3424 fixed
       # that ONE lane and shipped no ratchet. Within hours the identical defect
       # was measured on the lanes that publish 12 of the 14 REQUIRED contexts —

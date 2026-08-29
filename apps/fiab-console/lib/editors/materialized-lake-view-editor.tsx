@@ -90,6 +90,23 @@ interface BatchRun { id: number; name?: string; state?: string; result?: string;
 interface LineageNode { id: string; label: string; type?: string; focus?: boolean; openHref?: string }
 interface LineageEdge { from: string; to: string }
 
+/**
+ * The COMPLETENESS ENVELOPE the runs route returns alongside `sessions`
+ * (`app/api/items/materialized-lake-view/[id]/runs/route.ts`, which computes it
+ * from `lib/azure/livy-batch-paging.ts`). #3731 — this grid kept the rows and
+ * dropped the envelope.
+ */
+interface RunsWindow {
+  /** Non-null when a ceiling cut the walk short — the window is INCOMPLETE. */
+  truncatedBy?: 'pages' | 'time' | null;
+  /** Distinct pool rows the walk actually looked at. */
+  scanned?: number;
+  /** The pool batch count the walk can stand behind. */
+  poolTotal?: number;
+  /** The route's own summary: no ceiling tripped AND the walk saw everything. */
+  windowComplete?: boolean;
+}
+
 const SAMPLE_SQL =
   '-- SELECT that defines this materialized lake view\nSELECT\n  customerName,\n  SUM(sales) AS total_sales\nFROM bronze.customer_bronze\nWHERE sales IS NOT NULL\nGROUP BY customerName';
 const SAMPLE_PYSPARK =
@@ -112,6 +129,43 @@ function GateBar({ gate }: { gate: { error?: string; remediation?: string; link?
         <MessageBarTitle>Configuration required</MessageBarTitle>
         {gate.error} {gate.remediation}
         {gate.link && <> <a href={gate.link} target="_blank" rel="noreferrer">Learn more</a>.</>}
+      </MessageBarBody>
+    </MessageBar>
+  );
+}
+
+/**
+ * #3731 — SURFACE THE INCOMPLETE WINDOW.
+ *
+ * This grid is the case where dropping the envelope hurts most, because the
+ * route filters the pool's run history by the `loomItemId` tag CLIENT-SIDE over
+ * a bounded scan. So "no runs" and "no runs in the part I looked at" render
+ * identically without this bar, and the second one is not a fact about this
+ * view at all. Hence the `rowCount === 0` arm: an EMPTY grid over an incomplete
+ * window needs the disclosure more than a full one does.
+ *
+ * Renders NOTHING when the window is complete. It never claims older runs EXIST
+ * — the walk did not establish that (deploy-integrity R7) — only that absence
+ * here is not evidence of absence.
+ */
+function RunsWindowBar({ window: w, rowCount }: { window: RunsWindow | null; rowCount: number }) {
+  if (!w) return null;
+  const cut = !!w.truncatedBy;
+  const partial = w.windowComplete === false;
+  if (!cut && !partial) return null;
+  const ceiling = w.truncatedBy === 'time' ? 'the time budget' : 'the page ceiling';
+  const scanned = Number.isFinite(w.scanned) ? `${w.scanned}` : 'an unrecorded number of';
+  const total = Number.isFinite(w.poolTotal) ? ` of ${w.poolTotal} the pool reported` : '';
+  return (
+    <MessageBar intent="warning">
+      <MessageBarBody style={{ overflowWrap: 'anywhere', wordBreak: 'break-word', minWidth: 0 }}>
+        <MessageBarTitle>This run list is incomplete</MessageBarTitle>
+        {cut
+          ? `The pool's run history was cut short by ${ceiling} after ${scanned} run(s)${total}, so `
+          : `Only ${scanned} of the pool's run(s)${total} were read, so `}
+        {rowCount === 0
+          ? 'this view showing no runs means "none in the window that was read" — not that it has never refreshed.'
+          : 'these are the refreshes this window could reach, not necessarily the most recent that exist.'}
       </MessageBarBody>
     </MessageBar>
   );
@@ -152,6 +206,8 @@ export function MaterializedLakeViewEditor({ item, id }: { item: FabricItemType;
 
   // Runs / lineage / preview
   const [runs, setRuns] = useState<BatchRun[]>([]);
+  // #3731 — the completeness envelope that came back WITH those rows.
+  const [runsWindow, setRunsWindow] = useState<RunsWindow | null>(null);
   const [lineageNodes, setLineageNodes] = useState<LineageNode[]>([]);
   const [lineageEdges, setLineageEdges] = useState<LineageEdge[]>([]);
   const [adfStatus, setAdfStatus] = useState<string | null>(null);
@@ -235,8 +291,18 @@ export function MaterializedLakeViewEditor({ item, id }: { item: FabricItemType;
     try {
       const r = await clientFetch(`/api/items/materialized-lake-view/${encodeURIComponent(id)}/runs?size=25`);
       const j = await r.json();
-      if (j.ok) setRuns(j.sessions || []);
-      else if (j.gate) setGate({ error: j.error, remediation: j.remediation });
+      if (j.ok) {
+        setRuns(j.sessions || []);
+        // #3731 — keep the envelope, not just the rows. The route computes
+        // truncatedBy/scanned/poolTotal/windowComplete precisely so this grid can
+        // say when "no runs" means "none in the part I read".
+        setRunsWindow({
+          truncatedBy: j.truncatedBy ?? null,
+          scanned: j.scanned,
+          poolTotal: j.poolTotal,
+          windowComplete: j.windowComplete,
+        });
+      } else if (j.gate) setGate({ error: j.error, remediation: j.remediation });
       else if (j.error) setErr(j.error);
     } catch (e: any) { setErr(e?.message || String(e)); }
   }, [id]);
@@ -599,6 +665,7 @@ export function MaterializedLakeViewEditor({ item, id }: { item: FabricItemType;
               </div>
 
               <Body1Strong style={{ marginTop: tokens.spacingVerticalS }}>Run history</Body1Strong>
+              <RunsWindowBar window={runsWindow} rowCount={runs.length} />
               {runs.length === 0 ? (
                 <EmptyState
                   icon={<DataLine20Regular />}

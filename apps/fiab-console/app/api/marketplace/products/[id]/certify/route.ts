@@ -11,7 +11,7 @@
 import { NextRequest } from 'next/server';
 import { tenantScopeId } from '@/lib/auth/session';
 import { isTenantAdmin } from '@/lib/auth/feature-gate';
-import { sameTenantConfirmed, tenantUnconfirmedCause } from '@/lib/auth/tenant-boundary';
+import { classifyTenantMatch, sameTenantConfirmed, tenantUnconfirmedCause } from '@/lib/auth/tenant-boundary';
 import { apiOk, apiForbidden, apiNotFound, apiServerError } from '@/lib/api/respond';
 import { getProduct, upsertProduct } from '@/lib/marketplace/product-store';
 import { runCertification } from '@/lib/marketplace/certification';
@@ -61,8 +61,38 @@ export const POST = withSession<{ id: string }>(async (_req: NextRequest, { sess
     // hoisting it reads better and would make the guard blind to this decision,
     // which is the exact evasion that file exists to prevent. The census entry
     // for this route lives in that guard's ADMIN_SHAPE_UNSCOPED — keep both.
+    //
+    // #4010 — THE ESCAPE HATCH WAS DEAD IN THE ONE DEPLOYMENT IT WAS WRITTEN FOR.
+    //
+    // `sameTenantConfirmed` alone never discriminated here, and the measurement
+    // is the read above: `getProduct` is a STRICT POINT READ on a container whose
+    // partition key IS `/tenantId`, so `product.tenantId === tenantScopeId(session)`
+    // holds by construction — the document could not have been read otherwise.
+    // `tenantScopeId` is `tid || oid`, so the conjunct was
+    //   - always TRUE for a tid-bearing session (the partition key WAS the tid), and
+    //   - always FALSE for a tid-less one (no tid to positively match).
+    // The second branch is the single-operator bootstrap `lib/auth/session.ts`
+    // names as the reason the `|| oid` fallback exists: an orphaned product (no
+    // `ownerOid`) was a PERMANENT 403 whose remediation — "supply a tid" — the
+    // operator cannot act on, in exactly the deployment most likely to hold
+    // orphaned rows. A dead end with an unactionable remediation is what
+    // `auto-bind-by-default.md` and `ux-baseline.md` G2 forbid.
+    //
+    // WHAT REPLACES IT, AND WHY IT IS NOT A WIDENING. `unconfirmed` is admitted
+    // ONLY when partition identity stands in for the comparison — the row was
+    // read out of the caller's OWN scope partition. On the tid-less path that
+    // partition is the caller's own `oid`, so the grant reaches a row nobody else
+    // could have written under that key; on the tid-bearing path
+    // `sameTenantConfirmed` still carries the decision and `different-tenant`
+    // still refuses. Nothing cross-tenant is admitted that was not already
+    // reachable: the point read is the bound, and it ran first.
+    const scopeId = tenantScopeId(session);
+    const partitionBound = !!scopeId && scopeId === product.tenantId;
+    const tenantOk =
+      sameTenantConfirmed(session.claims.tid, product.tenantId)
+      || (partitionBound && classifyTenantMatch(session.claims.tid, product.tenantId) === 'unconfirmed');
     const isOwner = !!product.ownerOid && product.ownerOid === session.claims.oid;
-    if (!isOwner && !(isTenantAdmin(session) && sameTenantConfirmed(session.claims.tid, product.tenantId))) {
+    if (!isOwner && !(isTenantAdmin(session) && tenantOk)) {
       // R7 — say what was actually established. An admin refused for an
       // unconfirmed tenancy is a different fact from "you are not an admin",
       // and only the first one has a remediation the caller can act on.

@@ -4768,7 +4768,17 @@ const ADMIN_SHAPE_UNSCOPED = new Map([
       // before the flag is consulted" claim rests on; `isTenantAdmin(` pins the
       // deliberate inline spelling the reason's last sentence promises 8h can
       // still see.
-      requires: ['getProduct(', 'sameTenantConfirmed(', 'isTenantAdmin('],
+      // #4010 — `classifyTenantMatch(` JOINS THE PIN SET, and the reason below
+      // was rewritten because its old last paragraph asserted something the
+      // measurement disproved: it argued the `sameTenantConfirmed` conjunct was
+      // load-bearing "because a session with no tid scoped the grant to a
+      // PRINCIPAL rather than a tenant". True as far as it went — but the point
+      // read's partition key IS `product.tenantId`, so the conjunct was
+      // always-true for a tid-bearing session and always-false for a tid-less
+      // one, i.e. a no-op in one direction and a permanent refusal in the other.
+      // An entry that argues for a conjunct that never discriminated is the
+      // #4007 failure one level up, so it is stated as measured.
+      requires: ['getProduct(', 'sameTenantConfirmed(', 'classifyTenantMatch(', 'isTenantAdmin('],
       why:
         'NARROWS, WITH ONE HONEST AMENDMENT TO THAT LABEL — read the function before reusing this ' +
         'wording elsewhere. Outside the net because it is a route handler: after the route-toolkit ' +
@@ -4786,12 +4796,19 @@ const ADMIN_SHAPE_UNSCOPED = new Map([
         'intra-tenant reach (an admin may re-certify a product they do not own). That widening is ' +
         'deliberate: it is the escape hatch that keeps an orphaned row recoverable, and #2703 is ' +
         'about the tenant boundary, not about ownership. Stated rather than rounded into "adds no ' +
-        'reach", which would claim more than was observed. WHY THE CONJUNCT IS LOAD-BEARING AND NOT ' +
-        'BELT-AND-BRACES: the partition key came from `tenantScopeId`, which is `tid || oid`, so a ' +
-        'session with no `tid` claim (supported by design — msal.ts / pat.ts) silently scoped the ' +
-        'admin grant to a PRINCIPAL rather than a tenant and never compared tenancies at all. ' +
-        'Added by the #3943 follow-on; the route keeps `isTenantAdmin` inline in the `if` on ' +
-        'purpose so 8h can still see this decision.',
+        'reach", which would claim more than was observed. WHAT THE TENANT CONJUNCT ACTUALLY DOES ' +
+        'HERE, MEASURED (#4010, correcting this entry\'s earlier claim that it was load-bearing): ' +
+        'the partition key of the point read IS `product.tenantId`, and `tenantScopeId` is ' +
+        '`tid || oid`, so `sameTenantConfirmed(session.claims.tid, product.tenantId)` was ALWAYS ' +
+        'TRUE for a tid-bearing session and ALWAYS FALSE for a tid-less one — a no-op in one ' +
+        'direction and a PERMANENT 403 in the other, which killed the orphan-recovery hatch in ' +
+        'exactly the single-operator bootstrap most likely to hold orphaned rows. The route now ' +
+        'ORs in `classifyTenantMatch(...) === \'unconfirmed\'` gated on partition identity ' +
+        '(`tenantScopeId(session) === product.tenantId`), so the read\'s own bound stands in ' +
+        'where there is no tid to compare; `different-tenant` still refuses. That expression is ' +
+        'pinned by TID_COMPARISON_PINS in this file — both pins must be read together. ' +
+        'The route keeps `isTenantAdmin` inline in the `if` on purpose so 8h can still see ' +
+        'this decision.',
     },
   ],
   // ── ADMITTED BY THE #4006 SHAPE REPAIR, NOT PRE-EXISTING ────────────────────
@@ -5947,6 +5964,36 @@ const TID_COMPARISON_PINS = new Map([
         'build until someone re-pins it, which is the property this entry exists to hold.',
       exprs: [
         'wsDoc.tid === callerTid',
+      ],
+    },
+  ],
+  [
+    'app/api/marketplace/products/[id]/certify/route.ts',
+    {
+      reason:
+        'THE PARTITION-IDENTITY FALLBACK, AND IT IS A NARROWING OF A DEAD END, NOT A LENIENT ' +
+        'READING (#4010). What was MEASURED before it: `getProduct(tenantScopeId(session), id)` ' +
+        'is a STRICT POINT READ on a container whose partition key IS `/tenantId` ' +
+        '(cosmos-client.ts), so `product.tenantId === tenantScopeId(session)` holds BY ' +
+        'CONSTRUCTION — the document could not have been read otherwise — and `tenantScopeId` ' +
+        'is `tid || oid`. So the `sameTenantConfirmed(session.claims.tid, product.tenantId)` ' +
+        'conjunct never discriminated: ALWAYS TRUE for a tid-bearing session (the partition key ' +
+        'WAS the tid) and ALWAYS FALSE for a tid-less one. The second branch is the ' +
+        'single-operator bootstrap `lib/auth/session.ts` names as the reason the `|| oid` ' +
+        'fallback exists, and there an orphaned product (no `ownerOid`) was a PERMANENT 403 ' +
+        'whose remediation — supply a tid — the operator cannot act on. THE PINNED EXPRESSION ' +
+        'admits `unconfirmed` ONLY when partition identity stands in for the comparison: the ' +
+        'row was read out of the caller\'s OWN scope partition, which on the tid-less path is ' +
+        'their own `oid`. `different-tenant` still refuses, and on the tid-bearing path ' +
+        '`sameTenantConfirmed` still carries the decision — so nothing cross-tenant is admitted ' +
+        'that the point read had not already bounded. This is a COMPARISON against ' +
+        '`classifyTenantMatch(...)` rather than a private re-implementation of it, which is why ' +
+        'it needs an entry here at all (see the tenant-boundary reason above: a CALL is ' +
+        'invisible, a comparison is not). Read a green section 10 as "this exact expression was ' +
+        'reviewed", never as "the widening is correct" — ' +
+        'ADMIN_SHAPE_UNSCOPED\'s entry for this route carries the behavioural claim.',
+      exprs: [
+        "classifyTenantMatch(session.claims.tid, product.tenantId) === 'unconfirmed'",
       ],
     },
   ],

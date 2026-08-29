@@ -114,6 +114,22 @@ interface PoolDTO { name: string; properties?: { sparkVersion?: string; nodeSize
 interface ItemLite { id: string; displayName: string }
 interface ItemDTO { id: string; workspaceId: string; displayName: string; state?: Record<string, any> }
 
+/**
+ * The COMPLETENESS ENVELOPE the runs routes return alongside `sessions`
+ * (`lib/azure/livy-batch-paging.ts`). #3731 — this grid used to keep `sessions`
+ * and drop the rest, which converts a walk that DISCLOSED it was cut short back
+ * into a silent wrong answer: a pool past the page ceiling returns the newest
+ * rows it could REACH, not the newest rows that exist.
+ */
+interface RunsWindow {
+  /** Non-null when a ceiling cut the walk short — the window is INCOMPLETE. */
+  truncatedBy?: 'pages' | 'time' | null;
+  /** Distinct rows the walk actually looked at. */
+  scanned?: number;
+  /** The batch count the walk can stand behind. */
+  total?: number;
+}
+
 const LANGUAGES: { value: SparkLanguage; label: string; accept: string }[] = [
   { value: 'PySpark', label: 'PySpark (Python)', accept: '.py' },
   { value: 'Spark',   label: 'Spark (Scala/Java)', accept: '.jar' },
@@ -131,6 +147,36 @@ function ErrBar({ error }: { error: string | null }) {
       <MessageBarBody>
         <MessageBarTitle>Operation failed</MessageBarTitle>
         {error}
+      </MessageBarBody>
+    </MessageBar>
+  );
+}
+
+/**
+ * #3731 — SURFACE THE INCOMPLETE WINDOW. `walkRecentBatches` is
+ * "correct OR disclosed-incomplete", and the disclosure IS the mechanism: past
+ * `LIVY_MAX_WALK_PAGES` (10 x 20 = 200 rows) it returns the newest rows it could
+ * REACH, which on a 1000-batch pool are not the newest rows that exist. A grid
+ * that renders `sessions` and drops `truncatedBy` turns that into a silent wrong
+ * answer — the `no-vaporware.md` failure mode, relocated one layer up.
+ *
+ * Renders NOTHING when the window is complete, so a healthy pool gains no noise.
+ * Deliberately does not say "there ARE older runs" — the walk did not establish
+ * that either (deploy-integrity R7); it says the list was cut short and absence
+ * below is therefore not evidence of absence.
+ */
+function RunsWindowBar({ window: w }: { window: RunsWindow | null }) {
+  if (!w || !w.truncatedBy) return null;
+  const ceiling = w.truncatedBy === 'time' ? 'the time budget' : 'the page ceiling';
+  const scanned = Number.isFinite(w.scanned) ? `${w.scanned}` : 'an unrecorded number of';
+  const total = Number.isFinite(w.total) ? ` of ${w.total} the pool reported` : '';
+  return (
+    <MessageBar intent="warning">
+      <MessageBarBody>
+        <MessageBarTitle>This run list is incomplete</MessageBarTitle>
+        {`The pool's run history was cut short by ${ceiling} after ${scanned} run(s)${total}, `}
+        {'so these are the most recent runs this window could reach — not necessarily the most '}
+        {'recent that exist. A run missing below has not been shown to be absent.'}
       </MessageBarBody>
     </MessageBar>
   );
@@ -254,6 +300,8 @@ export function SparkJobDefinitionEditor({ item, id }: { item: FabricItemType; i
   const [uploading, setUploading] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [runs, setRuns] = useState<SparkBatchRun[]>([]);
+  // #3731 — the completeness envelope that came back WITH those rows.
+  const [runsWindow, setRunsWindow] = useState<RunsWindow | null>(null);
   const [lastSubmit, setLastSubmit] = useState<any>(null);
   const [dirty, setDirty] = useState(false);
   const [saveMsg, setSaveMsg] = useState<string | null>(null);
@@ -296,13 +344,32 @@ export function SparkJobDefinitionEditor({ item, id }: { item: FabricItemType; i
 
   const loadRuns = useCallback(async () => {
     if (id === 'new') return;
+    // #3570 — A FRESHLY CREATED ITEM HAS NO POOL YET, AND THAT IS NOT A FAILURE.
+    // The runs route answers 400 `spec.pool is not configured` when the persisted
+    // spec carries no pool, and this callback used to funnel that straight into
+    // the red "Operation failed" bar — on FIRST OPEN, before the user had touched
+    // anything. `ux-baseline.md` is explicit: no error banners on a freshly
+    // created item; unconfigured states are guided, never red. So the
+    // unconfigured case is detected from the PERSISTED spec and skips the fetch
+    // entirely: nothing to list, nothing to report, the "No runs yet" guided
+    // empty state below is the correct surface. Read off `cosmosItem` rather than
+    // the `pool` field state because the hydrating effect and this one race.
+    const persistedPool = (cosmosItem?.state as any)?.spec?.pool;
+    if (!persistedPool) { setRuns([]); setRunsWindow(null); return; }
     try {
       const r = await clientFetch(`/api/items/spark-job-definition/${encodeURIComponent(id)}/runs?size=25`);
       const j = await r.json();
-      if (j.ok) setRuns(j.sessions || []);
-      else if (j.error) setErr(j.error);
+      if (j.ok) {
+        setRuns(j.sessions || []);
+        // #3731 — keep the envelope, not just the rows. Dropping it converts a
+        // walk that DISCLOSED it was cut short into a silent wrong answer.
+        setRunsWindow({ truncatedBy: j.truncatedBy ?? null, scanned: j.scanned, total: j.total });
+      } else if (/spec\.pool is not configured/i.test(String(j.error || ''))) {
+        // Belt-and-braces for the same #3570 state reached by any other path.
+        setRuns([]); setRunsWindow(null);
+      } else if (j.error) setErr(j.error);
     } catch (e: any) { setErr(e?.message || String(e)); }
-  }, [id]);
+  }, [id, cosmosItem]);
 
   useEffect(() => { if (cosmosItem) loadRuns(); }, [cosmosItem, loadRuns]);
 
@@ -791,6 +858,7 @@ export function SparkJobDefinitionEditor({ item, id }: { item: FabricItemType; i
 
               <div className={styles.resultBox}>
                 <Subtitle2 className={styles.sectionHeader}><History20Regular />Run history</Subtitle2>
+                <RunsWindowBar window={runsWindow} />
                 {loading && runs.length === 0 ? (
                   <RunsSkeleton rows={4} />
                 ) : runs.length === 0 ? (
