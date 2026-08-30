@@ -124,8 +124,88 @@ import { fileURLToPath } from 'node:url';
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 
-/** Roots scanned for standalone packages (one level deep). */
-const SCAN_ROOTS = ['azure-functions'];
+/**
+ * Roots scanned for standalone packages (one level deep).
+ *
+ * `apps` added 2026-08-29 (#3505). `azure-functions` alone was the same
+ * "a guard whose POPULATION excludes the thing it should be watching" shape the
+ * guard exists to close: `apps/loom-vscode` carried a real, passing 181-test
+ * vitest suite that NO merge-blocking lane executed. Measured on the tree
+ * before this change:
+ *
+ *   $ node scripts/ci/check-standalone-vitest-suites.mjs --list
+ *   Discovered 5 standalone vitest package(s)  ->  all under azure-functions/
+ *   $ grep -rl loom-vscode .github/workflows
+ *   .github/workflows/publish-loom-vscode.yml     # tag / dispatch only
+ *
+ * The three lanes that could have covered it each missed for their own reason:
+ * check-node-test-suites.mjs covers `node:test` only, this file's SCAN_ROOTS
+ * did not include `apps`, and publish-loom-vscode.yml fires solely on a
+ * `loom-vscode-v*` tag.
+ */
+export const SCAN_ROOTS = ['azure-functions', 'apps'];
+
+/**
+ * Trees under a SCAN_ROOT that ANOTHER runner already covers, named with the
+ * runner and the workflow that owns them — mirroring
+ * `check-node-test-suites.mjs`'s `OTHER_RUNNER_TREES`, which excludes
+ * `portal/react-webapp` the same way.
+ *
+ * An exclusion here is a claim that the suite IS run somewhere. It is printed on
+ * every run so the claim stays visible rather than becoming a silent hole.
+ */
+export const OTHER_RUNNER_TREES = [
+  {
+    dir: 'apps/fiab-console',
+    runner: 'vitest',
+    workflow: '.github/workflows/fiab-console-ci.yml',
+    reason:
+      'the console has its own vitest lane — `vitest (node 20)` — which is a REQUIRED context.',
+  },
+];
+
+/**
+ * Packages this runner CANNOT install standalone, with the measured reason.
+ *
+ * This is NOT the same claim as OTHER_RUNNER_TREES. An entry here says the suite
+ * is still DARK, and says why — the honest statement, not a quiet skip. Anything
+ * listed is printed as a warning on every run, so the gap is visible on the lane
+ * rather than only in this comment.
+ *
+ * `apps/loom-embed` depends on `@csa-loom/sdk@^0.1.0`, which is its in-repo
+ * sibling `apps/loom-sdk` and is NOT published. Measured 2026-08-29:
+ *
+ *   $ npm view @csa-loom/sdk version
+ *   npm error code E404
+ *   npm error 404 Not Found - GET https://registry.npmjs.org/@csa-loom%2fsdk
+ *
+ * E404 is deliberately absent from TRANSIENT_NPM_CODES, so admitting this
+ * package would redden a REQUIRED lane on every run for a reason unrelated to
+ * any test. Covering it needs a workspace-aware install (or a published sdk),
+ * which is a larger change than this guard.
+ */
+export const UNINSTALLABLE_PACKAGES = [
+  {
+    dir: 'apps/loom-embed',
+    reason:
+      'depends on @csa-loom/sdk@^0.1.0, its unpublished in-repo sibling — `npm view @csa-loom/sdk` ' +
+      'returns E404 (measured 2026-08-29), and a standalone `npm install` therefore cannot resolve it. ' +
+      'ITS SPECS REMAIN UNRUN by any lane.',
+  },
+];
+
+/** True when `rel` is, or is inside, one of `trees`. */
+function inTrees(rel, trees) {
+  return trees.some((t) => rel === t.dir || rel.startsWith(`${t.dir}/`));
+}
+
+export function isOwnedByOtherRunner(rel) {
+  return inTrees(rel, OTHER_RUNNER_TREES);
+}
+
+export function isUninstallable(rel) {
+  return inTrees(rel, UNINSTALLABLE_PACKAGES);
+}
 
 /**
  * Floor on discovered packages. RATCHET — only ever goes UP, and only when a
@@ -133,8 +213,13 @@ const SCAN_ROOTS = ['azure-functions'];
  *
  * 5 as of 2026-08-07: copilot-evaluator, lineage-extractor, ops-agent-evaluator,
  * report-subscriptions, secret-expiry-monitor.
+ *
+ * 9 as of 2026-08-29 (#3505): the four `apps/` packages this runner can install
+ * — fiab-label-propagation, loom-cli, loom-sdk, loom-vscode. `apps/fiab-console`
+ * is excluded as another runner's, `apps/loom-embed` as uninstallable; neither
+ * is counted, so the floor cannot be satisfied by an entry in either list.
  */
-const MIN_PACKAGES = 5;
+export const MIN_PACKAGES = 9;
 
 /** Directory names never descended into when looking for spec files. */
 const SKIP_DIRS = new Set(['node_modules', 'dist', '.next', 'coverage', '.git']);
@@ -178,6 +263,11 @@ export function discoverPackages(repoRoot = REPO_ROOT) {
     for (const d of dirs) {
       if (!d.isDirectory() || SKIP_DIRS.has(d.name)) continue;
       const pkgDir = path.join(abs, d.name);
+      const relDir = path.relative(repoRoot, pkgDir).split(path.sep).join('/');
+      // Excluded BEFORE the package.json read so a tree owned by another runner
+      // is never counted toward MIN_PACKAGES, and an uninstallable one never
+      // reaches the install step.
+      if (isOwnedByOtherRunner(relDir) || isUninstallable(relDir)) continue;
       const pkgPath = path.join(pkgDir, 'package.json');
       if (!fs.existsSync(pkgPath)) continue;
       let pkg;
@@ -463,6 +553,14 @@ function main() {
     process.exit(1);
   }
 
+  // Both exclusion lists are printed EVERY run. An exclusion nobody sees is the
+  // silent hole this guard exists to prevent.
+  for (const t of OTHER_RUNNER_TREES) {
+    console.log(`Excluded ${t.dir} — owned by ${t.runner} via ${t.workflow}. ${t.reason}`);
+  }
+  for (const u of UNINSTALLABLE_PACKAGES) {
+    console.warn(`WARNING: ${u.dir} is NOT covered by this runner — ${u.reason}`);
+  }
   console.log(`Discovered ${pkgs.length} standalone vitest package(s) (floor ${MIN_PACKAGES}):`);
   for (const p of pkgs) console.log(`  - ${p.rel} (${p.specs} spec file(s))`);
   if (listOnly) return;

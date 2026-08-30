@@ -18,6 +18,28 @@ name: publish-loom-vscode
 # user behind a blocked Marketplace can `code --install-extension` it in-boundary
 # (PRP P5.5 / R-3). That step uses the built-in GITHUB_TOKEN and is tag-gated, so
 # a fork/PR can never publish a release to this repo.
+#
+# ── THIS LANE IS NOT THE ONE THAT BLOCKS A MERGE (#3505) ────────────────────
+#
+# It runs `npm test` on a PR that touches apps/loom-vscode — but measured
+# 2026-08-29, `publish-loom-vscode` is NOT among main's 15 required contexts:
+#
+#   gh api repos/OWNER/REPO/branches/main/protection \
+#     --jq '.required_status_checks.contexts'
+#   -> Python Lint, Python Tests (3.10|3.11|3.12), PowerShell Lint, Secret Scan,
+#      Repo Hygiene, dbt Compile (shared|finance|inventory|sales),
+#      next build (node 20), guardrails, vitest (node 20),
+#      changelog parser can read every commit message
+#
+# So a RED result here would not have blocked anything, and the `paths:` filter
+# below means a PR that breaks the extension from OUTSIDE apps/loom-vscode never
+# ran it at all.
+#
+# As of #3505 the same 181 tests also run on `guardrails`, which IS required and
+# is NOT path-filtered, via scripts/ci/check-standalone-vitest-suites.mjs (its
+# SCAN_ROOTS gained `apps`). This lane keeps its own value — it additionally
+# type-checks and PACKAGES the extension, which the suite does not — but it is
+# no longer the only thing standing between a regression and `main`.
 
 on:
   push:

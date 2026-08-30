@@ -109,10 +109,67 @@ const SOURCE_HELP: Record<CatalogTableRow['source'], string> = {
   both: 'Listed by the REST catalog AND tracked by Loom interop state.',
 };
 
+/**
+ * How the catalog call failed, as CLASSIFIED BY THE BFF from the client's own
+ * measured status — never inferred here from the message text. See
+ * `app/api/catalog/iceberg/overview/route.ts` → `classifyCatalogError`.
+ */
+type CatalogErrorClass =
+  | 'authorization'
+  | 'unreachable'
+  | 'not-configured'
+  | 'refused'
+  | 'unknown';
+
+/**
+ * The badge label and the MessageBar title per class (#3746, deploy-integrity
+ * R7 — an error must not assert a cause the code did not establish).
+ *
+ * `unknown` deliberately says it does not know. #3312 measured the cost of the
+ * old behaviour: every failure was titled "Catalog unreachable", the live one
+ * was a 403 after a successful connection and a successful token mint, and the
+ * word sent an investigation down the reachability path.
+ */
+const CATALOG_ERROR_COPY: Record<CatalogErrorClass, { badge: string; title: string }> = {
+  authorization: {
+    badge: 'Access denied',
+    title: 'Catalog reached, access denied',
+  },
+  unreachable: {
+    badge: 'Unreachable',
+    title: 'Catalog unreachable',
+  },
+  'not-configured': {
+    badge: 'Not deployed',
+    title: 'Catalog not deployed',
+  },
+  refused: {
+    badge: 'Call failed',
+    title: 'Catalog returned an error',
+  },
+  unknown: {
+    badge: 'Call failed',
+    title: 'Catalog call failed — cause not established',
+  },
+};
+
+/** A payload with an error but no class predates the classifier; say so, do not guess. */
+function catalogErrorCopy(cls?: CatalogErrorClass | null): { badge: string; title: string } {
+  return CATALOG_ERROR_COPY[cls ?? 'unknown'];
+}
+
 interface OverviewResponse {
   ok: boolean;
   error?: string;
-  catalog: { configured: boolean; uri: string; warehouse: string; gate?: GateBlock; error?: string };
+  catalog: {
+    configured: boolean;
+    uri: string;
+    warehouse: string;
+    gate?: GateBlock;
+    error?: string;
+    errorClass?: CatalogErrorClass | null;
+    errorStatus?: number | null;
+  };
   namespaces: string[];
   tables: CatalogTableRow[];
   grants: NamespaceGrants[];
@@ -377,7 +434,14 @@ export default function AdminCatalogPage() {
         {q.data?.catalog.error && (
           <MessageBar intent="error" layout="multiline">
             <MessageBarBody>
-              <MessageBarTitle>Catalog unreachable</MessageBarTitle>
+              {/* #3746 — the title was the hardcoded string "Catalog unreachable"
+                  for EVERY failure. The live one was an HTTP 403 after a
+                  successful connection and a successful token mint, i.e. an
+                  authorization denial; #3312 recorded that the word "unreachable"
+                  sent an investigation down the reachability path. The title now
+                  follows the class the BFF measured, and says so plainly when the
+                  cause could not be established. */}
+              <MessageBarTitle>{catalogErrorCopy(q.data.catalog.errorClass).title}</MessageBarTitle>
               {q.data.catalog.error}
             </MessageBarBody>
           </MessageBar>
@@ -430,7 +494,12 @@ export default function AdminCatalogPage() {
                 contradiction pointed investigations away from the real 403. */}
             {q.data?.catalog.configured ? (
               q.data.catalog.error ? (
-                <Badge appearance="filled" color="danger" icon={<ErrorCircle20Filled />}>Unreachable</Badge>
+                // The badge label follows the SAME measured class as the title.
+                // A flat "Unreachable" here was the second half of the same R7
+                // problem: a 403 is a denial, not a reachability failure.
+                <Badge appearance="filled" color="danger" icon={<ErrorCircle20Filled />}>
+                  {catalogErrorCopy(q.data.catalog.errorClass).badge}
+                </Badge>
               ) : (
                 <Badge appearance="filled" color="success" icon={<CheckmarkCircle20Filled />}>Live</Badge>
               )

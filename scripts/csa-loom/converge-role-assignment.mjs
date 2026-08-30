@@ -158,7 +158,50 @@
  */
 
 import { spawnSync } from 'node:child_process';
-import { redact } from '../ci/_azure-redact.mjs';
+import { redactedLine } from '../ci/_azure-redact.mjs';
+
+/**
+ * THE ONE PUBLICATION BOUNDARY for this script (#3861).
+ *
+ * Every byte this file puts on a public stream crosses here. That is the shape
+ * #3835 spent four rounds arriving at, and this file was the counter-example
+ * left outside it: redaction was applied PER SITE, at each `${…}` that its
+ * author happened to be thinking about, so the completeness claim went stale the
+ * moment a line was added — and one already had. `run()`'s parse-error branch
+ * interpolated `e.message` raw, and `parseArgs` throws `unknown argument: <the
+ * argument>`, so a GUID handed to the wrong flag reached the run log verbatim.
+ *
+ * WHY IT MATTERS MORE HERE THAN IN A SCRIPT THAT LOGS FOR ITSELF: deploy-retry
+ * spawns this file with `stdio: ['inherit', 'inherit', 'pipe']`, which hands it
+ * the PARENT's stdout file descriptor. These bytes land in the public Actions run
+ * log with no `process.stdout.write` anywhere in deploy-retry's source, so no
+ * write-based assertion in that file can see them
+ * (`csa_loom_inherited_fd_is_an_invisible_publication_surface`). The boundary has
+ * to be here, on the child, or it does not exist for that path at all.
+ *
+ * The per-site `redact()` calls were REMOVED rather than left alongside it: a
+ * boundary with a bypass beside it is decorative, and two rules for the same
+ * bytes is one rule that stops being applied.
+ *
+ * `redactedLine` is the shared primitive every other boundary in this lane is —
+ * `String()` first, so a non-string degrades to visible garbage instead of a
+ * silently blank line.
+ *
+ * APPLIED TWICE ON THE DEFAULT PATH, DELIBERATELY. `run()` crosses this boundary
+ * when a message becomes a log line, and the default sink crosses it again at the
+ * `process.stdout.write`. That is not redundancy to tidy away: the first
+ * application bounds an INJECTED logger (the test seam, and any future caller —
+ * a boundary a dependency can bypass is decorative), and the second is the one a
+ * structural enumerator can see on the write itself. `redact()` is idempotent by
+ * contract — `<guid>` and `<redacted>` contain nothing it matches — which is
+ * exactly what lets this lane redact at stacked boundaries.
+ *
+ * @param {unknown} text
+ * @returns {string} the exact bytes that may be published
+ */
+export function formatStdout(text) {
+  return redactedLine(text);
+}
 
 export const EXIT_OK = 0;
 export const EXIT_REFUSED = 1;
@@ -195,7 +238,11 @@ export function uuidVersion(guid) {
  * scripts/ci/_azure-redact.mjs is used rather than a local regex — two copies
  * of a redaction rule is one copy that stops being updated. It collapses EVERY
  * guid, including the assignment name, so a name that has to stay legible for
- * correlation is printed through `shortName()` instead. */
+ * correlation is printed through `shortName()` instead.
+ *
+ * An 8-hex prefix followed by `…` is NOT a GUID and survives {@link formatStdout}
+ * intact, which is what makes correlation possible at all once the boundary
+ * redacts everything else. */
 export function shortName(guid) {
   const c = canonicalGuid(guid);
   return c ? `${c.slice(0, 8)}…` : '<unreadable>';
@@ -268,8 +315,26 @@ function azRunner(argv) {
  * safe reading of "cannot establish" is EXIT_UNREADABLE — never an accept. That
  * default is asserted by its own test, because a fail-OPEN default is how a
  * proof silently stops being one.
+ *
+ * ── THE VERDICT CROSSES THE PUBLICATION BOUNDARY EXACTLY ONCE (#3861) ───────
+ *
+ * `reason` is written for an operator and is published by every caller, so it is
+ * redacted — but ONCE, HERE, over the whole composed string, rather than at each
+ * `${…}` inside `decideBranches` below. The per-field spelling is what #3861
+ * reported: every new interpolation is a fresh opportunity to forget, and the
+ * claim "the enumeration is complete" goes stale the moment a line is added.
+ *
+ * There is exactly one `return` in this function, so no verdict can reach a
+ * caller without crossing it — a property a reader can check by looking, and one
+ * the structural test in `__tests__/converge-publication-surfaces-3861.test.mjs`
+ * asserts mechanically.
  */
-export function decide({
+export function decide(io) {
+  const v = decideBranches(io);
+  return { ...v, reason: formatStdout(v.reason) };
+}
+
+function decideBranches({
   assignmentName,
   listAssignments,
   listIdentities,
@@ -292,7 +357,7 @@ export function decide({
       action: 'none',
       reason:
         'the role assignments could not be READ, so it is NOT established whether a stray exists — ' +
-        `an unreadable control plane is not an empty one. ${redact(ra.error ?? '')}`.trim(),
+        `an unreadable control plane is not an empty one. ${ra.error ?? ''}`.trim(),
     };
   }
 
@@ -341,7 +406,7 @@ export function decide({
       action: 'none',
       reason:
         'the user-assigned managed identities could not be READ, so it is NOT established that this grant belongs ' +
-        `to a managed identity in this subscription. ${redact(ids.error ?? '')}`.trim(),
+        `to a managed identity in this subscription. ${ids.error ?? ''}`.trim(),
     };
   }
 
@@ -355,8 +420,8 @@ export function decide({
       assignmentId: hit.id,
       identityKind: 'user-assigned',
       reason:
-        `${redact(hit.id)} grants roleDefinitionId ${redact(hit.roleDefinitionId ?? 'unknown')} to a user-assigned ` +
-        `managed identity IN THIS SUBSCRIPTION at ${redact(hit.scope ?? 'unknown scope')} under a ` +
+        `${hit.id} grants roleDefinitionId ${hit.roleDefinitionId ?? 'unknown'} to a user-assigned ` +
+        `managed identity IN THIS SUBSCRIPTION at ${hit.scope ?? 'unknown scope'} under a ` +
         `v${uuidVersion(hit.name) ?? '?'} name. (That is what the read establishes: "az identity list" is not ` +
         'filtered to uami-loom-*, so this is not a claim that Loom owns it.) ' +
         'The template declares the same triple under its own deterministic name and cannot create it while this ' +
@@ -379,7 +444,7 @@ export function decide({
         'could not be READ, so its kind is NOT established — an unreadable directory is not an absent one. It may ' +
         'be a system-assigned managed identity this deploy is entitled to converge. Remediation: grant the deploy ' +
         'identity Entra directory read (the Directory Readers role, or Application.Read.All) so "az ad sp show" ' +
-        `resolves it; until then this collision must be cleared by hand. ${redact(sp.error ?? '')}`.trim(),
+        `resolves it; until then this collision must be cleared by hand. ${sp.error ?? ''}`.trim(),
     };
   }
 
@@ -418,7 +483,7 @@ export function decide({
         'this grant belongs to a managed identity, but the subscriptions these credentials can reach could not be ' +
         'READ, so it is NOT established that its owning resource is inside this deployment. Remediation: run where ' +
         '"az account list" succeeds (a completed az login), or clear this collision by hand. ' +
-        `${redact(subs.error ?? '')}`.trim(),
+        `${subs.error ?? ''}`.trim(),
     };
   }
 
@@ -436,7 +501,7 @@ export function decide({
       exit: EXIT_REFUSED,
       action: 'none',
       reason:
-        `the grant belongs to a managed identity owned by ${redact(owner)}, which is NOT in any subscription these ` +
+        `the grant belongs to a managed identity owned by ${owner}, which is NOT in any subscription these ` +
         'credentials can reach. An unrelated tenant-mate\'s managed identity is not this deployment\'s to converge, ' +
         'so nothing is deleted. If that resource IS part of this estate, give the deploy identity access to its ' +
         'subscription and re-run; otherwise remove the colliding assignment deliberately, by hand.',
@@ -449,8 +514,8 @@ export function decide({
     assignmentId: hit.id,
     identityKind: 'resource-owned',
     reason:
-      `${redact(hit.id)} grants roleDefinitionId ${redact(hit.roleDefinitionId ?? 'unknown')} to the MANAGED ` +
-      `IDENTITY of ${redact(owner)} at ${redact(hit.scope ?? 'unknown scope')} under a ` +
+      `${hit.id} grants roleDefinitionId ${hit.roleDefinitionId ?? 'unknown'} to the MANAGED ` +
+      `IDENTITY of ${owner} at ${hit.scope ?? 'unknown scope'} under a ` +
       `v${uuidVersion(hit.name) ?? '?'} name. (That is what the reads establish: the directory reports the ` +
       'principal as a ManagedIdentity and its owning resource is in a subscription these credentials can reach — ' +
       'not a claim that Loom owns it.) ' +
@@ -553,12 +618,22 @@ export function parseArgs(argv) {
  */
 export function run(argv, deps = {}) {
   const az = deps.az ?? azRunner;
-  const log = deps.log ?? ((s) => process.stdout.write(`${s}\n`));
+  // THE ONLY WRITE TO A PUBLIC STREAM IN THIS FILE, and its argument crosses
+  // formatStdout().
+  const sink = deps.log ?? ((line) => process.stdout.write(formatStdout(`${line}\n`)));
+  // …and the boundary is crossed AGAIN here, wrapping whatever sink is in play,
+  // so an injected logger is bounded too. Every `log(...)` below is therefore
+  // bounded by construction — including ones added later, which is exactly the
+  // property per-site redaction did not have (#3861).
+  const log = (text) => sink(formatStdout(text));
 
   let args;
   try {
     args = parseArgs(argv);
   } catch (e) {
+    // `parseArgs` throws `unknown argument: <the argument itself>`, so a GUID
+    // handed to the wrong flag arrives here. It used to be interpolated raw into
+    // a public run log; it now crosses the boundary like everything else.
     log(`converge-role-assignment: ${e.message}`);
     return EXIT_USAGE;
   }
@@ -588,7 +663,7 @@ export function run(argv, deps = {}) {
 
   const del = az(['role', 'assignment', 'delete', '--ids', verdict.assignmentId]);
   if (del.status !== 0) {
-    log(`converge-role-assignment: the delete FAILED, so the collision is unchanged. ${redact(del.stderr || del.stdout)}`);
+    log(`converge-role-assignment: the delete FAILED, so the collision is unchanged. ${del.stderr || del.stdout}`);
     return EXIT_REFUSED;
   }
 
@@ -599,7 +674,7 @@ export function run(argv, deps = {}) {
   if (after.status !== 0 || !Array.isArray(after.assignments)) {
     log(
       'converge-role-assignment: the delete reported success but the verifying re-read FAILED, so it is NOT ' +
-        `established that the assignment is gone. ${redact(after.error ?? '')}`,
+        `established that the assignment is gone. ${after.error ?? ''}`,
     );
     return EXIT_UNREADABLE;
   }
