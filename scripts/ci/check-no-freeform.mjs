@@ -2006,23 +2006,26 @@ export const ACCEPTED = [
     file: 'apps/fiab-console/app/admin/migrate/page.tsx',
     sites: 3,
     kind: 'byo',
-    ref: '#3586',
+    ref: 'auto-bind-by-default.md §Allowed',
     why:
-      'A source estate in another VENDOR or another TENANT: :176 is the workspace-or-group id INSIDE that ' +
-      'system and :185 is a token minted THERE — Loom holds no credential for the source until they are ' +
+      'A source estate in another VENDOR or another TENANT: the workspace-or-group id INSIDE that ' +
+      'system and a token minted THERE — Loom holds no credential for the source until they are ' +
       'supplied, so nothing could enumerate either. The token is already the compliant secret shape: it ' +
       'accepts an `@Microsoft.KeyVault(SecretUri=…)` reference and its hint records that the value is ' +
       'resolved server-side and never rendered back. ' +
-      'PARTIAL, AND TRACKED IN #3586 — this is a deferred fix, not a permanent exception, which is why the ' +
-      'ref is an issue rather than a rule clause. :170 is one Input whose label switches on sourceType, and ' +
-      'the SNOWFLAKE branch is genuinely un-enumerable, but the DATABRICKS branch is not: ' +
-      '`lib/azure/databricks-discovery.ts` exports listDatabricksWorkspaces(), which returns ' +
-      '`properties.workspaceUrl` for every Microsoft.Databricks/workspaces the deployment identity can ' +
-      'read, and two live BFF routes already consume it. An earlier revision of this entry claimed "no ' +
-      'discovery call could enumerate any of them"; review (#3579) established that is false for that ' +
-      'branch, and the same reasoning is why setup-identity-step.tsx was DECLINED rather than accepted. ' +
-      'The fix is the hybrid this repo already ships twice (api-marketplace, workspace-egress-pane): a ' +
-      'picker plus "Other / not in this estate".',
+      'REF REPOINTED FROM #3586 TO THE RULE, because the deferred half of that issue is now BUILT. The ' +
+      'Account-URL / Workspace-URL field is one Input whose label switches on sourceType. The SNOWFLAKE ' +
+      'branch is genuinely un-enumerable and stays free text. The DATABRICKS branch is no longer free ' +
+      'text by default: the page now calls GET /api/catalog/metastores — the same route the catalog and ' +
+      'eventstream surfaces already use — and renders its real `discoverableWorkspaces` ' +
+      '(lib/azure/databricks-discovery.ts listDatabricksWorkspaces, `properties.workspaceUrl` per ' +
+      'Microsoft.Databricks/workspaces the deployment identity can read) as a Dropdown, with an explicit ' +
+      '"Other / not in this estate…" option that reveals the Input. The remaining free-text reachability ' +
+      'is therefore the DISCLOSED escape hatch plus the honest fallback when discovery returns nothing or ' +
+      'cannot run (ux-baseline.md G2 — no dead-end gate), which is the hybrid this repo already ships ' +
+      'twice in api-marketplace and workspace-egress-pane. The site COUNT is unchanged at 3 on purpose: ' +
+      'the Input still exists on those paths, and lowering the count would claim a deletion that did not ' +
+      'happen.',
   },
   {
     file: 'apps/fiab-console/lib/components/access/request-access-button.tsx',

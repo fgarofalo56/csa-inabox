@@ -82,6 +82,27 @@ export interface EstateDrift {
   behindSince: string | null;
   /** How long this estate has been missing that commit; null when unmeasured. */
   behindForMinutes: number | null;
+  /**
+   * Was a roll executing when this verdict was formed? THREE STATES, NEVER TWO
+   * (#4160, the console twin of #4143):
+   *
+   *   true   a roll run was observed queued/in_progress → "the roll path has
+   *          stopped" is FALSE and is not said.
+   *   false  the roll lanes were queried and none was running → that claim is
+   *          ESTABLISHED, and this is the only value entitled to make it.
+   *   null   nobody looked. NOT "no roll" — absence of a query is not absence
+   *          of a roll, and collapsing the two is the R7 error itself.
+   *
+   * Null is the DEFAULT because no caller supplies it yet: the route computes
+   * the drift verdict (step 1) before it has fetched any workflow runs (step 2).
+   * An unmeasured cause therefore renders as unmeasured rather than as a fact.
+   *
+   * Declared OPTIONAL only so the pre-existing fixture literals in
+   * app/admin/readiness/__tests__/deploy-banner.test.tsx and
+   * lib/admin/__tests__/estate-fleet.test.ts keep compiling; every value
+   * `classifyEstateDrift` returns sets it explicitly, null included.
+   */
+  rollInFlight?: boolean | null;
   severity: DeploySeverity;
   headline: string;
   detail: string;
@@ -656,13 +677,37 @@ export function oldestUnappliedAt(compare: CompareResult | null | undefined): st
  *   identical                    → CURRENT.
  *   behind, oldest missing commit
  *     within BEHIND_GRACE_MINUTES → BEHIND, ok — a roll is plausibly in flight.
- *   behind, past the grace        → BEHIND, error — the roll path has stopped.
+ *   behind, past the grace        → BEHIND, error. WHY it is behind depends on
+ *                                  `rollInFlight` — see below.
  *   behind, grace UNMEASURABLE    → BEHIND, error. An unmeasured grace is not a
  *                                  grace; the one thing this file never does is
  *                                  let an unknown buy a green.
  *
  * NOTE THE ABSENCE OF A COUNT THRESHOLD. Any `ahead_by > 0` is reported as
  * behind. See BEHIND_GRACE_MINUTES for why the count band was removed.
+ *
+ * ── `rollInFlight` — WHY THE PAST-GRACE MESSAGE HAS THREE FORMS (#4160) ─────
+ * Past the allowance this used to state, as fact, that "the roll path has
+ * stopped applying main" — derived from `behindForMinutes > grace` and NOTHING
+ * ELSE. No caller ever looked for a roll that was executing at that moment, so
+ * the sentence asserted a cause the code had never established. That is
+ * deploy-integrity.md R7, and it is the identical defect fixed on the CI side
+ * in check-deploy-staleness.mjs under #4143 — except this copy renders on
+ * /admin/readiness, which R3 names as the place the operator actually looks.
+ * Measured: a roll for 5a5572aa ran 06:27–06:40 UTC on 2026-08-28; for those
+ * ~13 minutes a healthy estate catching up would have been told its roll path
+ * had stopped.
+ *
+ * The caller now supplies what it MEASURED and the message says only that:
+ * true → a run was seen, so the claim is false and is not made; false → the
+ * lanes were queried and none was running, so the claim is established; null
+ * (the current default — no caller supplies it yet) → nobody looked, and the
+ * message says nobody looked.
+ *
+ * `severity` and `state` are IDENTICAL in all three. The defect is the stated
+ * CAUSE, not the verdict: letting an in-flight roll suppress `behind` would
+ * convert an R7 fix into a gate a long roll can silence, which is this repo's
+ * most-repeated defect wearing the fix's clothes.
  */
 export function classifyEstateDrift(input: {
   buildSha?: string | null;
@@ -674,6 +719,10 @@ export function classifyEstateDrift(input: {
   /** Injected in tests; defaults to now. */
   now?: number;
   graceMinutes?: number;
+  /** What the caller MEASURED about an in-flight roll. See EstateDrift. */
+  rollInFlight?: boolean | null;
+  /** How that was established (a run url, or why the query failed). */
+  rollDetail?: string | null;
 }): EstateDrift {
   const branch = input.branch || 'main';
   const buildSha = input.buildSha || null;
@@ -684,10 +733,17 @@ export function classifyEstateDrift(input: {
   const compareUrl = buildSha && input.repo
     ? `https://github.com/${input.repo}/compare/${buildSha}...${branch}`
     : null;
+  // Normalised to exactly three values here, once, so no branch below can
+  // fabricate a `false` out of an undefined the caller never supplied.
+  const rollInFlight = input.rollInFlight === true || input.rollInFlight === false
+    ? input.rollInFlight
+    : null;
+  const rollDetail = input.rollDetail || null;
   const base = {
     buildSha, buildStamp, branch, compareUrl,
     behindSince: null as string | null,
     behindForMinutes: null as number | null,
+    rollInFlight: null as boolean | null,
   };
 
   if (!buildSha) {
@@ -761,25 +817,55 @@ export function classifyEstateDrift(input: {
     };
   }
 
-  const inFlight = behindForMinutes <= grace;
+  const withinGrace = behindForMinutes <= grace;
+  // The measured facts, said once. Everything past the grace appends a CAUSE to
+  // this, and which cause it may append is decided by `rollInFlight` alone.
+  const behindFacts = `Running build ${short}${built}. ${aheadBy} merged ${plural} have never reached this estate, `
+    + `the oldest waiting ${behindForMinutes} minutes (allowance ${grace})`;
+  const inert = `Everything merged since ${short} is inert here, including any capability fix you are looking at `
+    + 'on this page.';
+  const pastGraceDetail = rollInFlight === true
+    // MEASURED, and it CONTRADICTS the old sentence. Say what was seen and
+    // stop — why THIS roll has outrun the allowance is a further question this
+    // function did not ask and must not answer.
+    ? `${behindFacts} — but a roll IS in flight (${rollDetail || 'an in-flight run was found'}), so the roll path `
+      + `has NOT stopped; this is a roll that has not landed yet. Past the allowance either way, and until it `
+      + `lands, ${inert.charAt(0).toLowerCase()}${inert.slice(1)}`
+    : rollInFlight === false
+      // MEASURED, and it ESTABLISHES the claim. The only branch entitled to
+      // say the roll path has stopped, and it now says so on the strength of a
+      // run-history query rather than of a clock.
+      ? `${behindFacts} — longer than a build and roll take, and no roll is in flight `
+        + `(${rollDetail || 'the roll workflows were queried and none was queued or running'}), so the roll path `
+        + `has stopped applying ${branch}. ${inert}`
+      // NOT MEASURED. The pre-#4160 default, and the one that asserted the
+      // cause anyway. It now states only what it established.
+      : `${behindFacts} — that is longer than a build and roll take, but whether a roll is in flight right now `
+        + `was NOT measured${rollDetail ? ` (${rollDetail})` : ''}, so WHY ${branch} has not landed is not `
+        + `established here. ${inert}`;
   return {
     ...base,
     behindSince,
     behindForMinutes,
+    rollInFlight,
     state: 'behind',
     commitsBehind: aheadBy,
-    severity: inFlight ? 'ok' : 'error',
-    headline: inFlight
-      ? `This estate is ${aheadBy} ${plural} behind ${branch} (a roll is in flight)`
+    // UNCHANGED BY `rollInFlight`, deliberately. #4160 is about the stated CAUSE
+    // being unestablished, not about the verdict being wrong: an estate past its
+    // roll window is a real drift condition whether or not something is rolling.
+    severity: withinGrace ? 'ok' : 'error',
+    // "(a roll is in flight)" was the same R7 error one branch up: inside the
+    // window nothing had been queried either, so a plausible roll was announced
+    // as a running one. The window is what was measured, so the window is what
+    // the headline names.
+    headline: withinGrace
+      ? `This estate is ${aheadBy} ${plural} behind ${branch} (inside the ${grace}-minute roll window)`
       : `This estate is ${aheadBy} ${plural} behind ${branch}`,
-    detail: inFlight
+    detail: withinGrace
       ? `Running build ${short}${built}. The oldest unapplied commit merged ${behindForMinutes} minute(s) ago — `
         + `inside the ${grace}-minute build-and-roll window, so a roll is plausibly still running. `
         + 'This is the ONLY tolerated form of behind.'
-      : `Running build ${short}${built}. ${aheadBy} merged ${plural} have never reached this estate, the oldest `
-        + `waiting ${behindForMinutes} minutes (allowance ${grace}) — that is longer than a build and roll take, so `
-        + `the roll path has stopped applying ${branch}. Everything merged since ${short} is inert here, including `
-        + 'any capability fix you are looking at on this page.',
+      : pastGraceDetail,
   };
 }
 
