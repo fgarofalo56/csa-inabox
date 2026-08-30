@@ -51,6 +51,7 @@ import {
   runInertControl,
   KNOWN_INERT,
   UNTRIAGED_INERT,
+  NON_LOOM_CONSOLE_ENV_NAMES,
 } from '../check-env-sync.mjs';
 
 // ── the parser ────────────────────────────────────────────────────────────────
@@ -146,6 +147,58 @@ test('the real console env block parses to a large entry set', () => {
     entries.size > 100,
     `expected >100 console env entries, got ${entries.size} — parseEnvEntries has drifted`,
   );
+});
+
+// ── the POPULATION (#3940) ────────────────────────────────────────────────────
+//
+// The guard's verdict was green because its EXAMINED SET was smaller than the
+// set it exists to police: `parseEnvEntries` matched only `LOOM_*`, so every
+// `NEXT_PUBLIC_LOOM_*` the deploy emits was invisible. That prefix is the one
+// that reaches the BROWSER, so an emitted-but-empty one silently no-ops a
+// client feature — the hardest class to notice from the server side.
+//
+// Measured on the loom-console env block at 0cad3ac7, 454 distinct names:
+//   before  438 examined  (LOOM_*)
+//   after   451 examined  (LOOM_* + NEXT_PUBLIC_LOOM_*)
+//   out       3 by name   (AZURE_CLOUD, AZURE_TENANT_ID, SESSION_SECRET)
+
+test('#3940 parseEnvEntries examines NEXT_PUBLIC_LOOM_* as well as LOOM_*', () => {
+  const entries = parseEnvEntries(`[
+    { name: 'LOOM_A', value: '' }
+    { name: 'NEXT_PUBLIC_LOOM_B', value: deadParam }
+    { name: 'NEXT_PUBLIC_LOOM_C', value: active ? 'https://x' : '' }
+  ]`);
+  // Restore the old /name:\s*'(LOOM_[A-Z0-9_]+)'/ regex and this drops to 1.
+  assert.equal(entries.size, 3);
+  assert.equal(entries.get('NEXT_PUBLIC_LOOM_B'), 'deadParam');
+  assert.equal(entries.get('NEXT_PUBLIC_LOOM_C'), "active ? 'https://x' : ''");
+});
+
+test('#3940 a name in neither family FAILS CLOSED unless it was triaged by name', () => {
+  // The alternative — dropping it quietly — is the #3940 defect under a new
+  // spelling. A second blind prefix must cost a red run, not a silent shrink.
+  assert.throws(
+    () => parseEnvEntries("[{ name: 'VITE_LOOM_X', value: 'x' }]"),
+    /neither policies nor has triaged: VITE_LOOM_X/,
+  );
+  // The three the deploy really emits are triaged BY NAME, so they pass.
+  const triaged = NON_LOOM_CONSOLE_ENV_NAMES.map((n) => `{ name: '${n}', value: 'x' }`).join('\n');
+  assert.equal(parseEnvEntries(`[\n${triaged}\n]`).size, 0);
+});
+
+test('#3940 the real population covers both delivery prefixes, grow-only', () => {
+  const names = [...collectConsoleEnvExpressions().keys()];
+  const loom = names.filter((n) => n.startsWith('LOOM_'));
+  const pub = names.filter((n) => n.startsWith('NEXT_PUBLIC_LOOM_'));
+  // Floors, not equalities: the env block grows. The point is that NEITHER
+  // family may collapse to zero and go unnoticed, which is what happened.
+  assert.ok(loom.length >= 438, `LOOM_* population shrank to ${loom.length} (was 438)`);
+  assert.ok(pub.length >= 13, `NEXT_PUBLIC_LOOM_* population shrank to ${pub.length} (was 13)`);
+  assert.equal(loom.length + pub.length, names.length, 'a third family crept into the population');
+  // NON_LOOM_CONSOLE_ENV_NAMES is an exclusion list; an unbounded one would be
+  // the same blindness with extra steps.
+  assert.ok(NON_LOOM_CONSOLE_ENV_NAMES.length <= 3,
+    `${NON_LOOM_CONSOLE_ENV_NAMES.length} names excluded by name — each needs a reviewed reason`);
 });
 
 test('the tree is clean of UNRATCHETED always-empty vars', () => {
