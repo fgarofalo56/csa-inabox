@@ -92,17 +92,27 @@ for (const rel of files) {
   if (usesHelper || usesAction) installPopulation++;
   if (!usesAction) continue;
 
+  // PHYSICAL-LINES-OK: the subject is an ACTION REFERENCE, which lives in a YAML
+  // mapping VALUE (`uses: owner/action@ref`) and never inside a `run:` block. A
+  // backslash continuation is shell syntax and cannot split a `uses:` value, so
+  // folding logical lines here would buy nothing that the whole-file
+  // `text.includes(ACTION)` gate above does not already cover. The continuation
+  // shape that CAN hide this token is a YAML line fold —
+  //
+  //     uses:
+  //       sigstore/cosign-installer@v4.1.2
+  //
+  // — and the loop below is written not to care: it does NOT require `uses:` on
+  // the token's own line. An earlier draft did, and that draft would have missed
+  // exactly this form.
   const lines = text.split(/\r?\n/);
   for (let i = 0; i < lines.length; i++) {
     const raw = lines[i];
-    const at = raw.indexOf(ACTION);
-    if (at < 0) continue;
-    // A comment or a prose mention is not an invocation. Positional, so an
-    // explanation written AFTER the token on a `uses:` line still counts as the
-    // invocation it is — the same reasoning the sibling applies to annotations.
-    const before = raw.slice(0, at);
+    if (raw.indexOf(ACTION) < 0) continue;
+    // A commented-out step or a prose mention is not an invocation. Every
+    // migrated site carries this action's name in the explanatory comment above
+    // its `run:`, so without this the fix would report itself as the violation.
     if (/^\s*#/.test(raw)) continue;
-    if (!/\buses\s*:/.test(before)) continue;
     violations.push({ file: rel, line: i + 1, text: raw.trim().slice(0, 140) });
   }
 }
