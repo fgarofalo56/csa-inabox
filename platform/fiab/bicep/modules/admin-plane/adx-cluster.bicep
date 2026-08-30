@@ -153,6 +153,37 @@ resource adxCluster 'Microsoft.Kusto/clusters@2024-04-13' = {
     // cluster-principal-assignment create; see docs/fiab/v3-tenant-bootstrap.md).
     // Exposed as a param (default true) so callers can override per environment.
     enablePurge: enablePurge
+    // enableAutoStop: TRUE ON EVERY SKU AND EVERY BOUNDARY, DELIBERATELY (#4145).
+    //
+    // The two properties this module derives from `skuName` — `skuTier` (:77) and
+    // `skuCapacity` (:81) — derive because a mismatch there is a deploy failure
+    // ARM rejects. Auto-stop is not that: every value of it deploys. So the
+    // question is a COST/AVAILABILITY posture, not a representability one, and it
+    // is answered by the operator rather than by a predicate.
+    //
+    // THE ANSWER, RECORDED 2026-08-26 in scripts/ci/estate-pause-declaration.json
+    // (boundary GCC-High, owner fgarofalo56, reviewBy 2026-11-24): the cluster
+    // STAYS STOPPED rather than being started for each daily run, under the
+    // estate pause/resume mandate. That register entry cites this very setting as
+    // the mechanism producing the accepted state. Deriving auto-stop from the SKU
+    // — so a Standard/Gov cluster stopped auto-stopping — would silently reverse
+    // a decision with a named owner and a review date.
+    //
+    // WHAT THIS IS NOT: it is not the #4072 blocker. That lane fails on
+    // `InsufficientResourcesForSubscription` when it tries to START the cluster,
+    // which is a capacity refusal on the SKU and is tracked separately; auto-stop
+    // and the capacity refusal are two different problems and #4145 recorded
+    // conflating them as its own error.
+    //
+    // CONSEQUENCE, STATED PLAINLY: since #4142 the Gov boundaries run
+    // `Standard_E8as_v5+1TB_PS` — production tier, 2 instances per :81 — and a
+    // production-tier cluster that stops itself makes the ADX preflight a
+    // STANDING requirement of every deploy, not a safety net. That is the cost of
+    // the recorded decision, accepted knowingly. cloud-parity.md: the setting is
+    // identical on every boundary; note deploy-fiab-il5.yml has never run (#4144),
+    // so IL5 carries it with zero deploy evidence either way.
+    //
+    // The forcing date for revisiting this is the register's reviewBy, 2026-11-24.
     enableAutoStop: true
     // publicNetworkAccess derives from privateEndpointsEnabled (hardened default
     // Disabled). ADX has no private-endpoint wiring in the current topology, so the
