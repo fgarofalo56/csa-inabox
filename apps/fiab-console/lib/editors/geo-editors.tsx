@@ -154,8 +154,23 @@ function useGeoItemState<T extends Record<string, unknown>>(slug: string, id: st
     return () => window.removeEventListener('keydown', onKey);
   }, [dirty, saving, save]);
 
+  // #3520 — AUTO-BIND SEEDING, without a false "unsaved" flag.
+  //
+  // `fallback` is captured by `useState` on the FIRST render only, so a default
+  // that resolves asynchronously (the runtime Azure Maps account, which arrives
+  // from GET /api/config/ui a tick later) can never reach the state through it.
+  // That is why the Maps account was only ever a placeholder: the initial value
+  // was `''` and nothing wrote it afterwards.
+  //
+  // `seedState` writes a known default WITHOUT setting `dirty`, which `update`
+  // does. Pre-filling is not an edit — flagging it as one would put an "unsaved"
+  // badge on a freshly opened item the user has not touched, which
+  // `ux-baseline.md` names as a defect in its own right ("new-item first-open is
+  // clean"). It is the raw setter, deliberately: callers guard their own
+  // preconditions (see the seeding effect in GeoMapEditorBody) because only they
+  // know which field is being defaulted and from what.
   return {
-    state, setState: update, loading, saving, savedAt, error, dirty, save,
+    state, setState: update, seedState: setState, loading, saving, savedAt, error, dirty, save,
     // C19 — explicit load lifecycle. GeoSaveBar binds Save's disabled to
     // !canSave; save() refuses independently so binding is belt-and-braces.
     loadStatus, canSave: canPersistItemState(loadStatus),
@@ -298,10 +313,38 @@ function GeoMapEditorBody({ item, id }: { item: FabricItemType; id: string }) {
   // prefills the account field. Read live from GET /api/config/ui — settable from
   // the Loom admin console, no rebuild. The raster basemap is fetched through the
   // credential-free /api/maps/static proxy, so no key ever reaches the browser.
-  const { mapsEnabled, mapsAccount: configuredMapsAccount } = useMapsConfig();
-  const { state, setState, loading, saving, savedAt, error, dirty, save, loadStatus, canSave: loadCanSave, reload } = useGeoItemState<GeoMapState>('geo-map', id, {
+  const { mapsEnabled, mapsAccount: configuredMapsAccount, loading: mapsLoading } = useMapsConfig();
+  const { state, setState, seedState, loading, saving, savedAt, error, dirty, save, loadStatus, canSave: loadCanSave, reload } = useGeoItemState<GeoMapState>('geo-map', id, {
     account: configuredMapsAccount, style: 'main', tileLayerUrl: '', overlayGeoJson: GEO_MAP_SAMPLE_OVERLAY,
   });
+
+  // #3520 — PRE-FILL the deployed Azure Maps account, do not merely hint at it.
+  //
+  // The account name above is passed as `fallback`, and `useState` reads a
+  // fallback exactly once — on the first render, when `useMapsConfig()` has not
+  // resolved and `mapsAccount` is `''` (its documented fail-closed default). So
+  // the field stayed empty forever and the real name appeared only as grey
+  // placeholder text, which vanishes the moment the user clicks in. Per
+  // `auto-bind-by-default.md` a value the platform already knows is not
+  // something to ask the user to retype.
+  //
+  // THREE PRECONDITIONS, and each one is a claim this effect must not make
+  // without evidence:
+  //   • the Maps config has RESOLVED — seeding from the fail-closed `''` would
+  //     write nothing, and seeding from a stale read would write the wrong name;
+  //   • the stored document is SETTLED — while the load is in flight (or after
+  //     it failed) the saved account is UNKNOWN, and writing a default over an
+  //     unknown is the C19 data-loss shape this file already guards `save()`
+  //     against;
+  //   • the field is EMPTY — a saved account, or one the user has typed, always
+  //     wins. This is a default, not an override.
+  // It writes through `seedState`, so no "unsaved" badge appears on an untouched
+  // item.
+  useEffect(() => {
+    if (mapsLoading || !configuredMapsAccount) return;
+    if (loadStatus !== 'new' && loadStatus !== 'absent' && loadStatus !== 'loaded') return;
+    seedState((p) => (p.account ? p : { ...p, account: configuredMapsAccount }));
+  }, [mapsLoading, configuredMapsAccount, loadStatus, seedState]);
   const [previewMsg, setPreviewMsg] = useState<{ intent: 'success' | 'error'; text: string } | null>(null);
   // C19 — `loadCanSave` is false while the stored state is unknown (load in
   // flight or failed), so a blank/default surface can never be written over it.
@@ -360,9 +403,16 @@ function GeoMapEditorBody({ item, id }: { item: FabricItemType; id: string }) {
             </MessageBar>
           )}
           <div className={s.field}><Label>Azure Maps account name</Label>
-            <Input value={state.account} onChange={(_: unknown, d: any) => setState((p) => ({ ...p, account: d.value }))} placeholder={configuredMapsAccount || 'maps-csa-loom'} />
+            {/* #3520 — the deployed account is the field's VALUE (seeded above),
+                not a hint that disappears on focus. The placeholder is now only
+                what to type when nothing is deployed. */}
+            <Input value={state.account} onChange={(_: unknown, d: any) => setState((p) => ({ ...p, account: d.value }))} placeholder={mapsLoading ? 'Resolving the deployed account…' : 'maps-csa-loom'} />
             {configuredMapsAccount && (
-              <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>Deployed account <code>{configuredMapsAccount}</code> is resolved at runtime from the Loom admin console (Platform settings → Azure Maps). Override above to point at a different Maps account.</Caption1>
+              <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
+                {state.account === configuredMapsAccount
+                  ? <>Pre-filled with the deployed account <code>{configuredMapsAccount}</code>, resolved at runtime from the Loom admin console (Platform settings → Azure Maps). Edit above to point at a different Maps account.</>
+                  : <>The deployed account is <code>{configuredMapsAccount}</code> (resolved at runtime from the Loom admin console, Platform settings → Azure Maps). This item is pointed at a different one.</>}
+              </Caption1>
             )}
           </div>
           <div className={s.field}><Label>Style</Label>

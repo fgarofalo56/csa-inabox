@@ -43,7 +43,7 @@ import { spawn, spawnSync } from 'node:child_process';
 import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO = path.join(HERE, '..', '..', '..');
@@ -654,4 +654,238 @@ test('EVERY probed path is graded — a route the stub does not serve goes red',
   const r = await probe({ '/api/catalog/metastores': undefined });
   assert.equal(r.status, 1, r.out);
   assert.match(r.out, /unity-catalog \(OSS loom-unity\): HTTP 404 — expected 2xx/);
+});
+
+// ── #3999: GATE POPULATION ─────────────────────────────────────────────────
+//
+// WHAT WAS MEASURED, on the suite exactly as it stood above. Rewriting the
+// shared helper
+//
+//     const gate = (why) => (v) => (v === undefined || v === null ? false : why);
+//
+// to fire only on `v === true` left the suite at 24/24 PASS, RC=0 — because
+// every PRODUCTION value for `unityError`, `unityHint`, `accountAdminGate` and
+// `accountMetastoresError` is a string or an object and never boolean `true`.
+// One line blinded four gates at once and nothing moved. Blinding each of those
+// four individually (`() => false`) was equally invisible, as was the
+// governance-catalog `error` gate. Only `unityWorkspaceErrors` was pinned, by
+// the LATE test.
+//
+// Five of six gate predicates therefore had ZERO test population, and a guard
+// with no population that exits 0 is indistinguishable from one that is
+// watching. The two controls below close that:
+//
+//   1. GATE INVENTORY — the gate keys the SHIPPED table declares must equal the
+//      keys this file trips. A deleted gate shrinks the declared set and goes
+//      red; a new one grows it and goes red until a fixture is written.
+//   2. One red case PER GATE KEY, driven through the real step, asserting the
+//      classification string and not merely the exit code — two gates on one
+//      probe both exit 1, so an exit-code assertion alone cannot tell them
+//      apart.
+
+/**
+ * The shipped probe table, EVALUATED — not re-declared.
+ *
+ * The slice runs from the `gate` helper to the `];` that closes `const probes`,
+ * which is self-contained: `gate`, `gateNonEmpty` and `okTrue` are all defined
+ * inside it. Re-typing the table here instead would be a fixture that models
+ * what this file expects rather than what the workflow ships, which is the
+ * failure mode the header of this suite already warns about.
+ *
+ * Every boundary is asserted, because a silently-empty slice would make the
+ * inventory control below vacuous — exactly the shape #3999 is about.
+ */
+async function probeTable(script = null) {
+  const src = script ?? probeStep().script;
+  const s = src.indexOf('const gate = (why) =>');
+  assert.ok(s >= 0, 'the shared gate helper is gone from the step — this extraction no longer targets it');
+  const p = src.indexOf('const probes = [', s);
+  assert.ok(p > s, 'no probe table follows the gate helper');
+  const e = src.indexOf('\n];', p);
+  assert.ok(e > p, 'the probe table has no terminating "];" — the slice would be empty');
+  const mod = `${src.slice(s, e + 3)}\nexport { probes };\n`;
+  const dir = mkdtempSync(path.join(tmpdir(), 'bff-table-'));
+  // Unique filename per call: ESM caches by URL, so a fixed name would hand a
+  // MUTATED extraction back the unmutated table it imported first.
+  const f = path.join(dir, `table-${process.hrtime.bigint()}.mjs`);
+  writeFileSync(f, mod, 'utf8');
+  const { probes } = await import(pathToFileURL(f).href);
+  assert.ok(Array.isArray(probes) && probes.length > 0, 'the extracted table is empty');
+  return probes;
+}
+
+/**
+ * One tripping value per gate key, in the shape the PRODUCING route emits.
+ *
+ * `unityError` / `accountMetastoresError` are `e?.message || String(e)`
+ * (metastores/route.ts:149,179) — strings. `accountAdminGate` is the route's
+ * own `ACCOUNT_ADMIN_GATE` object (:65-78). `unityHint` is
+ * `UnityCatalogNotConfiguredError.hint` (unity-catalog-client.ts:99-105).
+ * `unityWorkspaceErrors` is a non-empty array (:142). None of them is ever
+ * boolean `true`, which is the whole of the measurement above.
+ */
+const GATE_TRIPS = [
+  {
+    path: '/api/catalog/metastores', label: 'unity-catalog (OSS loom-unity)', key: 'ok',
+    value: false, expect: /ok is not true on a 2xx/,
+  },
+  {
+    path: '/api/catalog/metastores', label: 'unity-catalog (OSS loom-unity)', key: 'unityError',
+    value: 'Databricks Unity Catalog is not configured: missing LOOM_UNITY_CLIENT_ID',
+    expect: /GATED — unity catalog error/,
+  },
+  {
+    path: '/api/catalog/metastores', label: 'unity-catalog (OSS loom-unity)', key: 'unityHint',
+    value: {
+      missingEnvVar: 'LOOM_UNITY_CLIENT_ID',
+      detail: 'Loom Unity OSS authorization is enabled but no client credentials are configured.',
+      bicepModule: 'platform/fiab/bicep/modules/admin-plane/unity.bicep',
+    },
+    expect: /GATED — unity catalog NOT CONFIGURED \(missing hostnames env\)/,
+  },
+  {
+    path: '/api/catalog/metastores', label: 'unity-catalog (OSS loom-unity)', key: 'unityWorkspaceErrors',
+    value: [{
+      workspace_hostname: 'loom-unity.internal.usgovvirginia.azurecontainerapps.us',
+      message: '(workspace not configured — no request was attempted)',
+      accountAdmin: false,
+    }],
+    expect: /GATED — one or more Unity workspaces failed to list/,
+  },
+  {
+    path: '/api/catalog/metastores', label: 'unity-catalog (OSS loom-unity)', key: 'accountAdminGate',
+    value: {
+      title: 'Unity Catalog not enabled / metastore not listable',
+      detail: 'Listing Unity Catalog metastores needs the workspace to be attached to a UC metastore.',
+      remediation: { role: 'Databricks "Account Admin"', identity: 'The Console UAMI named by LOOM_UAMI_CLIENT_ID' },
+    },
+    expect: /GATED — UC not enabled \/ metastore not listable \(account-admin gate\)/,
+  },
+  {
+    path: '/api/catalog/metastores', label: 'unity-catalog (OSS loom-unity)', key: 'accountMetastoresError',
+    value: 'Databricks account API returned 403',
+    expect: /GATED — UC account-plane metastore read failed/,
+  },
+  {
+    path: '/api/governance/catalog', label: 'purview governance catalog', key: 'ok',
+    value: false, expect: /ok is not true on a 2xx/,
+  },
+  {
+    path: '/api/governance/catalog', label: 'purview governance catalog', key: 'error',
+    value: 'catalog query failed', expect: /GATED — route returned an error envelope on a 2xx/,
+  },
+  {
+    path: '/api/admin/domains/purview-status', label: 'purview wiring status', key: 'ok',
+    value: false, expect: /ok is not true on a 2xx/,
+  },
+  {
+    path: '/api/admin/domains/purview-status', label: 'purview wiring status', key: 'purview',
+    value: PURVIEW_STATUS_GATED.purview, expect: /purview\.gated=true/,
+  },
+];
+
+/** The clean body for a path, plus exactly one tripping key. */
+const tripBody = (trip) => ({ ...ROUTES[trip.path], [trip.key]: trip.value });
+
+test('#3999 GATE INVENTORY: every gate predicate the step ships has a tripping fixture here', async () => {
+  const probes = await probeTable();
+  const declared = probes.map((p) => [p.path, Object.keys(p.gates).sort()]);
+  const covered = probes.map((p) => [
+    p.path,
+    [...new Set(GATE_TRIPS.filter((t) => t.path === p.path).map((t) => t.key))].sort(),
+  ]);
+  assert.deepEqual(
+    declared, covered,
+    'the shipped gate keys and the keys this suite trips have diverged. A gate was added (write a '
+    + 'tripping fixture for it in GATE_TRIPS) or deleted (say so here). A gate with no population is '
+    + 'the #3999 defect and must not be reachable by accident.',
+  );
+  // The counts, stated explicitly: a table silently reduced to one probe would
+  // still deepEqual above.
+  assert.equal(probes.length, 3, `expected 3 probes, got ${probes.length}`);
+  assert.equal(GATE_TRIPS.length, 10, 'GATE_TRIPS lost or gained an entry without the inventory moving');
+});
+
+for (const trip of GATE_TRIPS) {
+  test(`#3999 GATE POPULATION: ${trip.label} — ${trip.key} trips the probe`, { skip: !bashAvailable }, async () => {
+    const r = await probe({ [trip.path]: tripBody(trip) });
+    assert.equal(r.status, 1, `${trip.key} must fail the probe\n${r.out}`);
+    const lines = errorsFor(r.out, trip.label);
+    assert.equal(lines.length, 1, `expected exactly one finding for ${trip.key}, got:\n${r.out}`);
+    // The classification string, not just the exit code: two gates on one probe
+    // both exit 1, so an exit-code-only assertion cannot tell them apart and a
+    // predicate could be rewired to another gate's message unnoticed.
+    assert.match(lines[0], trip.expect);
+    assert.match(lines[0], new RegExp(`field "${trip.key}" at offset \\d+ of \\d+`));
+  });
+}
+
+test('#3999 MUTATION: narrowing gate() to `v === true` turns all four gate()-built keys green', { skip: !bashAvailable }, async () => {
+  // THE COUNTERFACTUAL, and the exact mutation measured in the issue. Every
+  // production value for these four keys is a string or an object, so a helper
+  // that only fires on boolean `true` stops watching all four at once. Before
+  // this section that rewrite left the suite 24/24 green; the four cases above
+  // now go red on it, and this test proves the red is caused by THIS helper and
+  // not by something else in the step.
+  const src = probeStep().script;
+  const mutated = src.replace(
+    'const gate = (why) => (v) => (v === undefined || v === null ? false : why);',
+    'const gate = (why) => (v) => (v === true ? why : false);',
+  );
+  assert.notEqual(mutated, src, 'the shared gate helper moved — this proof no longer targets it');
+
+  const built = ['unityError', 'unityHint', 'accountAdminGate', 'accountMetastoresError', 'error'];
+  for (const trip of GATE_TRIPS.filter((t) => built.includes(t.key))) {
+    const r = await probe({ [trip.path]: tripBody(trip) }, { script: mutated });
+    assert.equal(
+      r.status, 0,
+      `with gate() narrowed to \`v === true\`, ${trip.key} must go UNNOTICED — that is the defect being `
+      + `pinned. A red here means the case above was failing for some other reason.\n${r.out}`,
+    );
+  }
+});
+
+test('#3999 MUTATION: blinding ONE gate predicate is invisible to the step — only the case above catches it', { skip: !bashAvailable }, async () => {
+  // The narrower evasion, and the second half of the counterfactual. `gate()`
+  // survives; a single predicate becomes `() => false`.
+  //
+  // MEASURED, and worth stating plainly because it is not what one would guess:
+  // the step's fail-closed arm does NOT catch this. That arm fires on a key in
+  // NEITHER `gates` nor `info`, and a blinded predicate is still IN `gates` —
+  // so the key is looked up, the predicate answers false, and the probe prints
+  // `OK (200)` over a body carrying a real finding. Nothing in the shipped step
+  // can notice; the per-key cases above are the whole of the control.
+  const src = probeStep().script;
+  const targets = [
+    ["unityError: gate('unity catalog error'),", 'unityError: () => false,', 'unityError'],
+    ["accountAdminGate: gate('UC not enabled / metastore not listable (account-admin gate)'),", 'accountAdminGate: () => false,', 'accountAdminGate'],
+    ["error: gate('route returned an error envelope on a 2xx'),", 'error: () => false,', 'error'],
+  ];
+  for (const [needle, replacement, key] of targets) {
+    const mutated = src.replace(needle, replacement);
+    assert.notEqual(mutated, src, `the ${key} predicate moved — this proof no longer targets it`);
+    const trip = GATE_TRIPS.find((t) => t.key === key);
+    const r = await probe({ [trip.path]: tripBody(trip) }, { script: mutated });
+    assert.equal(
+      r.status, 0,
+      `blinding ${key} must go UNNOTICED by the step itself — that is the defect. A red here means the `
+      + `per-key case above was failing for a reason other than this predicate.\n${r.out}`,
+    );
+    assert.match(r.out, new RegExp(`::notice::${trip.label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}: OK \\(200\\)`));
+  }
+});
+
+// ── #3999 F6: a skipped suite reports green ────────────────────────────────
+
+test('#3999 HARNESS: bash must be present wherever CI runs this, or 14 of 16 cases silently skip', () => {
+  // `node:test` reports a skipped test as a PASS, so a runner without bash on
+  // PATH would leave the `{ skip: !bashAvailable }` cases green while executing
+  // none of them. Locally that is a legitimate state; in CI it is a hollow
+  // suite, so CI is where the assertion bites.
+  if (!process.env.CI) return;
+  assert.ok(
+    bashAvailable,
+    'bash is not on PATH, so every probe case in this file would SKIP — and node:test counts a skip as '
+    + 'green. This suite would then enforce nothing while reporting success.',
+  );
 });
