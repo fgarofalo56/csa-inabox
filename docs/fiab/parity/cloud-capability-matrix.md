@@ -32,7 +32,7 @@ Conflating the two is how #3078 stayed open.
 | Lane | Boundary | State | Finding |
 | --- | --- | --- | --- |
 | `deploy-fiab-commercial` | Commercial | active | — |
-| `deploy-fiab-gcc` | GCC | **`disabled_manually`** | Was SUCCESS daily to 08-03 — while deploying **zero Container Apps** (#3078). Now disabled, so it produces no signal at all. |
+| `deploy-fiab-gcc` | GCC | **`disabled_manually`** | Was SUCCESS daily to 08-03 — while deploying **zero Container Apps** (#3078). Now disabled, so it produces no signal at all. **Why it was disabled is established — see below (#4071).** |
 | `deploy-fiab-gcch` | GCC-High | **`disabled_manually`** | **12 consecutive scheduled failures**, 07-23 → 08-03, all on the topology guard. Then disabled rather than fixed. |
 | `deploy-fiab-il5` | IL5 | active | **NEVER RUN.** |
 | `deploy-gov` (legacy `deploy/bicep/gov/`) | Gov | active | Ran twice ever (07-21), both failed at step 1. Template had **never compiled** — 7 hard bicep errors. Fixed this session. |
@@ -47,6 +47,47 @@ The `deploy-fiab-gcch` guard defect itself **was** fixed on 2026-08-07 (#3079
 added the scheduled-reconcile branch, matching what Commercial has had since
 audit-t157). That fix is **merged, not deployed** — it has never executed,
 because the workflow was disabled before it landed.
+
+### Why `deploy-fiab-gcc` was disabled (RE-MEASURED 2026-08-29, #4071)
+
+Contrary to the obvious reading, it was **not** disabled because it was failing.
+Its last 20 runs are **20/20 `success`**. It was disabled because those greens
+were **hollow**, for three independently measured reasons:
+
+| # | Hollow green | Measured |
+| --- | --- | --- |
+| 1 | **No GCC credentials at all** | `gh secret list` returns 13 secrets; the `AZURE_GOV_*` family is present and `grep -c AZURE_GCC` is **0**. None of the four secrets this workflow reads exists, so its precheck set `configured=false`, both real jobs were `if:`-skipped, and the run still concluded SUCCESS (#3219). |
+| 2 | **Its hub-existence guard could not fail** | `EXISTING=$(az graph query … 2>/dev/null \|\| echo "0")` turned an auth failure, a missing extension or a throttle into *"no hub exists"*. The GCC what-if SUCCESS was the **absence of a check**, not a clean estate (#3139, merged one hour before the disablement). |
+| 3 | **It deploys zero Container Apps** | `deployAppsEnabled` defaults `false` and `gcc.bicepparam` never sets it, while GCC-High and IL5 both set it `true` (#3078, open). |
+
+So the disablement was **a deliberate and correct act, not neglect.**
+
+**Still inferred, not measured:** that the `08:36:15Z` state change was made *by*
+the actor who dispatched the final run at `08:36:07Z` and *for* the #3139
+reason. The GitHub API does not expose who disabled a workflow or why, and there
+is no audit-log access on this repo. The 8-second and one-hour correlations are
+strong but circumstantial; causation was not established.
+
+**The durable record now lives in
+`scripts/ci/workflow-lane-states-allowlist.json`**, which
+`scripts/ci/check-workflow-lane-states.mjs` enforces on every run: a non-active
+lane absent from that file fails the build, its `reason` must be substantive,
+and its `reviewBy` date **expires** — which is the dated owner
+`.claude/rules/cloud-parity.md` clause 1 requires. #3078's stated target
+("with the Gov image-lane work") is a dependency, not a date.
+
+**Recommended first step, and why it is cheap now and was not on 08-08:**
+re-enable the lane and let it fail honestly. #3219 (merged 2026-08-11, *after*
+the disablement) changed the precheck so a **scheduled** run with the secrets
+absent emits `::error::` naming all four and **exits 1**. Re-enabling therefore
+converts a silent state into a daily, correctly-attributed red. The real fork —
+wire a GCC subscription (`AZURE_GCC_*` plus a *commercial-cloud* image producer
+for the GCC ACR), or record GCC as out of scope — needs the operator, because
+the latter is itself a cloud-parity violation.
+
+**Untested boundary, stated as such:** nothing here was run against GCC. Every
+measurement above is an unauthenticated GitHub API read plus the workflow file
+on `main`. No `az` was run against any sovereign cloud.
 
 ## Gov provisioning / verification lanes (MEASURED 2026-08-08)
 

@@ -89,14 +89,24 @@
  * ## Two sinks, one call
  *
  *   1. **Cosmos `_auditLog`** — the authoritative Loom trail (`itemType:
- *      'loom-unity'`). NOTE: /admin/audit-logs scopes its Cosmos read to
- *      `c.tenantId = <session oid>` while these rows carry the Entra **tenant**
- *      id, so they do NOT appear on that surface. Until the tenant-admin
- *      "Loom Unity system tables" reader + pane land (SPLIT OUT of this PR —
- *      they have no in-browser E2E receipt yet, `ux-baseline.md` G1), the trail
- *      is read with {@link unityAuditKql} against the SIEM sink, or with a direct
- *      Cosmos query. The WRITE side is what this file and its CI guard are
- *      responsible for, and it is complete.
+ *      'loom-unity'`). These rows DO reach /admin/audit-logs and the
+ *      /admin/security Audit tab. The note that used to sit here — that
+ *      /admin/audit-logs scoped its Cosmos read to `c.tenantId = <session oid>`
+ *      while these rows carry the Entra **tenant** id, so they never appeared —
+ *      was true when it was written and is NOT true now: that reader accepts
+ *      BOTH `oid` and `tid` (`auditScopeIds`, #2635/#2650).
+ *
+ *      That stale note carried a cost worth recording. Because nobody expected
+ *      these rows to reach the generic reader, nobody checked that they carry
+ *      the FIELD NAMES it keys on — and they did not. `kind` and `key` were
+ *      absent for every Unity row, so the Audit tab's headline column rendered a
+ *      blank badge and its Key cell a "—" for what is currently the dominant row
+ *      type on a live tenant (#3750). Both are written below, alongside
+ *      `operation` / `securableFqn`, and the reader also falls back for rows
+ *      already stored without them.
+ *
+ *      {@link unityAuditKql} against the SIEM sink remains available for
+ *      estate-wide queries.
  *   2. **`LoomAudit_CL`** — fanned out through `emitAuditEvent`, the existing
  *      Azure Monitor Logs-Ingestion (DCR) stream that Sentinel/any SIEM reads.
  *      Un-provisioned DCR = silent no-op (see lib/admin/audit-stream.ts); the
@@ -545,6 +555,18 @@ export function recordUnityAccess(ev: UnityAccessEvent): Promise<void> {
         action,
         summary,
         operation: ev.operation,
+        // #3750 — `kind` and `key` are the field names the GENERIC reader
+        // (/api/admin/audit-logs) queries, dedupes and filters on, and the ones
+        // `AuditPanel` renders as the Kind badge and the Key cell. This writer
+        // recorded the same two facts under `operation` and `securableFqn` and
+        // wrote neither of the generic names, so every Unity row on
+        // /admin/security?tab=audit rendered a BLANK badge and a "—" key, and
+        // `kinds` (which is `.filter(Boolean)`) could never offer a Unity value
+        // to the Event-kind dropdown. Written here as well as normalized on
+        // read, because the read-side fallback cannot repair the server-side
+        // `c.kind = @kind` filter for rows written after this lands.
+        kind: ev.operation,
+        key: scope,
         securableType: ev.securableType,
         securableFqn: scope,
         backend: ev.backend,
