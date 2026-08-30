@@ -58,6 +58,30 @@ interface AuditRow {
   [k: string]: unknown;
 }
 
+/**
+ * #3750 — REPAIR A ROW THAT CARRIES THE FACT UNDER A DIFFERENT NAME.
+ *
+ * The Unity Catalog choke point (`lib/azure/unity-audit.ts`) records the verb as
+ * `operation` and the securable as `securableFqn`. This reader keys on `kind`
+ * and `key`, and `AuditPanel` renders exactly those two. The result on a live
+ * tenant was a column of EMPTY badges and "—" keys for the dominant row type,
+ * and an Event-kind dropdown that could never list a Unity value because `kinds`
+ * is built with `.filter(Boolean)`.
+ *
+ * The writer now stamps both names. This fallback exists for rows ALREADY in
+ * Cosmos, which cannot be rewritten — and it is a fallback, never an override: a
+ * row that carries a real `kind` keeps it.
+ */
+export function normalizeAuditRow(r: Record<string, unknown>): Record<string, unknown> {
+  const kind = r.kind || r.operation;
+  const key = r.key || r.securableFqn;
+  return {
+    ...r,
+    ...(kind ? { kind } : {}),
+    ...(key ? { key } : {}),
+  };
+}
+
 // Detect an azure-identity credential-acquisition failure (the MI/dev chain
 // could not produce a token) so the route can render an honest gate instead of
 // leaking a raw `ChainedTokenCredential authentication failed …` stack trace.
@@ -114,14 +138,24 @@ export const GET = withTenantAdmin(async (req: NextRequest, { session: s }) => {
     const c = await auditLogContainer();
     const where: string[] = [AUDIT_TENANT_PREDICATE];
     const params: SqlParameter[] = [{ name: '@tenants', value: auditScopeIdList }];
-    if (type)  { where.push('c.kind = @kind'); params.push({ name: '@kind',  value: type  }); }
+    // #3750 — a legacy Unity row has no `kind` at all, so `c.kind = @kind`
+    // matched none of them and the Event-kind filter returned an empty grid for
+    // every Unity verb. The second arm is deliberately narrow: it only reaches
+    // rows where `kind` is genuinely ABSENT, so a row that carries both fields
+    // is still matched on `kind` alone and no row is matched twice.
+    if (type)  {
+      where.push('(c.kind = @kind OR (NOT IS_DEFINED(c.kind) AND c.operation = @kind))');
+      params.push({ name: '@kind',  value: type  });
+    }
     if (since) { where.push('c.at >= @since'); params.push({ name: '@since', value: since }); }
     if (until) { where.push('c.at <= @until'); params.push({ name: '@until', value: until }); }
     const { resources } = await c.items.query({
       query: `SELECT TOP @top * FROM c WHERE ${where.join(' AND ')} ORDER BY c.at DESC`,
       parameters: [...params, { name: '@top', value: top }],
     }).fetchAll();
-    let rows = resources as any[];
+    // Normalized BEFORE the client-side filters so the free-text search and the
+    // `kinds` list both see the repaired `kind` / `key` (#3750).
+    let rows = (resources as any[]).map((r) => normalizeAuditRow(r)) as any[];
     if (q)      rows = rows.filter((r: any) => [r.who, r.kind, r.key, r.itemId].some((v) => (v || '').toLowerCase().includes(q)));
     if (itemId) rows = rows.filter((r: any) => (r.itemId || '').toLowerCase().includes(itemId.toLowerCase()));
     if (user)   rows = rows.filter((r: any) => (r.who    || '').toLowerCase().includes(user.toLowerCase()));

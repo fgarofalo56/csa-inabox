@@ -56,6 +56,22 @@ interface AuditRow {
   tenantId?: string;
   [k: string]: unknown;
 }
+/**
+ * The row's event kind, falling back to the Unity choke point's `operation`
+ * (#3750). The BFF already normalizes this; the fallback is repeated here
+ * because THIS component is what renders the badge, and a renderer that trusts
+ * one upstream to have repaired the field is the shape that produced a column
+ * of empty pills in the first place.
+ */
+function auditKindOf(r: AuditRow): string {
+  return (r.kind || (typeof r.operation === 'string' ? r.operation : '') || '').trim();
+}
+
+/** Same rule for the Key cell — `securableFqn` is the Unity row's key. */
+function auditKeyOf(r: AuditRow): string {
+  return (r.key || (typeof r.securableFqn === 'string' ? r.securableFqn : '') || '').trim();
+}
+
 interface AuditPayload {
   ok: boolean;
   total?: number;
@@ -92,7 +108,7 @@ export function AuditPanel() {
   const filteredRows = useMemo<AuditRow[]>(() => {
     if (!data?.rows) return [];
     if (!category) return data.rows;
-    return data.rows.filter((r) => (r.kind || '').toLowerCase().includes(category));
+    return data.rows.filter((r) => auditKindOf(r).toLowerCase().includes(category));
   }, [data, category]);
 
   const columns = useMemo<LoomColumn<AuditRow>[]>(() => [
@@ -104,10 +120,18 @@ export function AuditPanel() {
     { key: 'who', label: 'Who', width: 180, render: (r) => r.who || '—' },
     {
       key: 'kind', label: 'Kind', width: 160,
-      getValue: (r) => r.kind || '',
-      render: (r) => <Badge appearance="outline" size="small">{r.kind}</Badge>,
+      // #3750 — LAST-RESORT fallback, and a visible one. The real repair is on
+      // the writer + reader (Unity rows carried the verb as `operation`); this
+      // keeps a future writer that omits `kind` from rendering a row of BLANK
+      // outline pills, which is what a live tenant actually saw. An empty badge
+      // asserts a kind that was never read; "—" says there is none.
+      getValue: (r) => auditKindOf(r),
+      render: (r) => {
+        const k = auditKindOf(r);
+        return k ? <Badge appearance="outline" size="small">{k}</Badge> : <Caption1>—</Caption1>;
+      },
     },
-    { key: 'key', label: 'Key', render: (r) => <Caption1>{r.key || '—'}</Caption1> },
+    { key: 'key', label: 'Key', render: (r) => <Caption1>{auditKeyOf(r) || '—'}</Caption1> },
     {
       key: 'itemId', label: 'Target',
       getValue: (r) => r.itemId || '',
@@ -120,7 +144,9 @@ export function AuditPanel() {
     const lines = [headers.join(',')];
     for (const r of filteredRows) {
       lines.push(headers.map((h) => {
-        const v = (r as any)[h] ?? '';
+        // The CSV reads the SAME derived values the grid shows (#3750) — an
+        // export that disagreed with the screen would be its own defect.
+        const v = h === 'kind' ? auditKindOf(r) : h === 'key' ? auditKeyOf(r) : (r as any)[h] ?? '';
         const str = typeof v === 'string' ? v : JSON.stringify(v);
         return `"${str.replace(/"/g, '""')}"`;
       }).join(','));

@@ -25,6 +25,7 @@ import { buildGateEnvelope } from '@/lib/api/gate-envelope';
 import { lakehouseInteropContainer } from '@/lib/azure/cosmos-client';
 import {
   ICEBERG_CATALOG_GATE_ID,
+  IcebergCatalogError,
   icebergCatalogConfigGate,
   icebergWarehouse,
   listNamespaceGrants,
@@ -56,6 +57,53 @@ export interface CatalogTableRow {
   metadataLocation: string | null;
   via: string | null;
   container: string | null;
+}
+
+/**
+ * WHY THE FAILURE HAS A CLASS AND NOT JUST A STRING (#3746, deploy-integrity R7).
+ *
+ * `/admin/catalog` used to title every `catalog.error` "Catalog unreachable".
+ * The live failure was an HTTP 403 — the catalog was reached, answered, and
+ * REFUSED — and #3312 recorded that the word "unreachable" sent an investigation
+ * down the reachability path before anyone read the status. An error must not
+ * assert a cause the code did not establish.
+ *
+ * So the class is derived from what the client ACTUALLY measured, never from a
+ * substring of the message:
+ *
+ *   `IcebergCatalogError.code === 'unreachable'`  the fetch itself threw — no
+ *                                                 response was ever received
+ *   `.code === 'not_configured'`                  no URL is wired
+ *   `.status` 401 / 403                           a response WAS received and it
+ *                                                 was a denial — authorization
+ *   any other `.status` >= 400                    the catalog answered with an
+ *                                                 error of its own
+ *   anything else thrown                          UNKNOWN. Not guessed.
+ *
+ * `unknown` is a real, reachable outcome and is deliberately not folded into
+ * either of the others: if the code cannot tell, the payload says it cannot.
+ */
+export type CatalogErrorClass =
+  | 'authorization'
+  | 'unreachable'
+  | 'not-configured'
+  | 'refused'
+  | 'unknown';
+
+export function classifyCatalogError(e: unknown): {
+  errorClass: CatalogErrorClass;
+  errorStatus: number | null;
+} {
+  if (!(e instanceof IcebergCatalogError)) return { errorClass: 'unknown', errorStatus: null };
+  if (e.code === 'unreachable') return { errorClass: 'unreachable', errorStatus: e.status };
+  if (e.code === 'not_configured') return { errorClass: 'not-configured', errorStatus: e.status };
+  if (e.status === 401 || e.status === 403) {
+    return { errorClass: 'authorization', errorStatus: e.status };
+  }
+  // A status of 0 means the client never established one; claiming the catalog
+  // "refused" would be asserting a response that may never have arrived.
+  if (e.status >= 400) return { errorClass: 'refused', errorStatus: e.status };
+  return { errorClass: 'unknown', errorStatus: e.status || null };
 }
 
 function interopRows(docs: LakehouseInteropDoc[]): Map<string, { row: InteropTableState; container: string }> {
@@ -102,6 +150,8 @@ export const GET = withTenantAdmin(async (req, { session }) => {
   const grants: IcebergNamespaceGrants[] = [];
   const namespaces: string[] = [];
   let catalogError: string | null = null;
+  let catalogErrorClass: CatalogErrorClass | null = null;
+  let catalogErrorStatus: number | null = null;
 
   if (!gate) {
     const audit = {
@@ -160,6 +210,9 @@ export const GET = withTenantAdmin(async (req, { session }) => {
       }
     } catch (e) {
       catalogError = (e instanceof Error ? e.message : String(e)).slice(0, 400);
+      const classified = classifyCatalogError(e);
+      catalogErrorClass = classified.errorClass;
+      catalogErrorStatus = classified.errorStatus;
       await logIcebergAccess({
         ...audit, operation: 'namespace.list', outcome: 'failure', detail: catalogError,
       });
@@ -200,7 +253,11 @@ export const GET = withTenantAdmin(async (req, { session }) => {
       uri: catalogUri,
       warehouse,
       ...(gate ? { gate: buildGateEnvelope(ICEBERG_CATALOG_GATE_ID, { missing: [gate.missing] }).gate } : {}),
-      ...(catalogError ? { error: catalogError } : {}),
+      // The class travels WITH the message so the renderer never has to guess a
+      // cause from the text — see `classifyCatalogError`.
+      ...(catalogError
+        ? { error: catalogError, errorClass: catalogErrorClass, errorStatus: catalogErrorStatus }
+        : {}),
     },
     namespaces: namespaces.sort(),
     tables: rows,
