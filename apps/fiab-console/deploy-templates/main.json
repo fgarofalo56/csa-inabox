@@ -6,7 +6,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.45.15.27210",
-      "templateHash": "16262335477808429193"
+      "templateHash": "11074429000884710534"
     }
   },
   "definitions": {
@@ -1926,6 +1926,13 @@
         "description": "audit-T64: Azure SQL database name for the Plan (preview) writeback store (LOOM_PLAN_BACKING_SQL_DATABASE). Pairs with loomPlanBackingSqlServer; grant the Console UAMI db_ddladmin + db_datawriter on it (see modules/admin-plane/main.bicep plan-backing notes). Empty → Cosmos-only."
       }
     },
+    "loomPostureFunctionUrl": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "#4161: base URL of the posture-refresh Azure Function (LOOM_POSTURE_FUNCTION_URL), e.g. https://func-loom-posture-refresh-<hash>.azurewebsites.net. Backs the Govern tab's on-open data-owner posture pre-warm; empty leaves the honest gate and the Govern view still computes posture LIVE from Cosmos. The post-deploy bootstrap deploys the Function and sets this value out-of-band on loom-console with `az containerapp update`; THAT assignment does not survive the next full re-render of this template, which is why the value must also be supplied here. Same defect class as the adxConfig / aasEnabled gaps below: modules/admin-plane/main.bicep has declared `param loomPostureFunctionUrl` since the Function shipped, but nothing passed it from this top level, so the path the capability spec names as its provisionedBy did not exist and setting it in a bicepparam was a silent no-op."
+      }
+    },
     "loomSwaResourceGroup": {
       "type": "string",
       "defaultValue": "",
@@ -2267,6 +2274,9 @@
           },
           "reportSubscriptionsEnabled": {
             "value": "[parameters('reportSubscriptionsEnabled')]"
+          },
+          "loomPostureFunctionUrl": {
+            "value": "[parameters('loomPostureFunctionUrl')]"
           },
           "observabilityConfig": {
             "value": "[parameters('observabilityConfig')]"
