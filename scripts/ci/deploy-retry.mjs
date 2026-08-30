@@ -800,14 +800,28 @@ async function main() {
         // The consequence, stated rather than implied: the boundary for those
         // bytes belongs to the CHILD, not to this file. Today the child is
         // scripts/csa-loom/converge-role-assignment.mjs (or `az provider
-        // register`), and its own stdout is redacted PER SITE rather than at a
-        // boundary — measured, `run()`'s `log()` is unbounded and its
-        // parse-error branch interpolates `e.message` raw. That is a residual in
-        // THAT file, named here so it is a tracked gap rather than an unstated
-        // assumption, and pinned by `STRUCTURAL — the inherited-stream surface is
-        // ENUMERATED` in this script's suite so a second one cannot appear
-        // silently. The child's stderr is `pipe`d and reaches the log only
-        // through ghAnnotate() below, which redacts.
+        // register`).
+        //
+        // THAT RESIDUAL IS CLOSED (#3861, 2026-08-29). It used to redact PER
+        // SITE — `run()`'s `log()` was unbounded and its parse-error branch
+        // interpolated `e.message` raw, and `parseArgs` throws `unknown
+        // argument: <the argument itself>`, so a GUID handed to the wrong flag
+        // reached this run log verbatim. That file now has ONE boundary,
+        // `formatStdout()`, crossed by every verdict `decide()` returns and by
+        // its only `process.stdout.write`, with the per-site calls DELETED so
+        // the boundary is load-bearing rather than decorative. It is pinned by
+        // scripts/csa-loom/__tests__/converge-publication-surfaces-3861.test.mjs,
+        // which is the child's own suite — this file cannot assert a property of
+        // bytes it never writes.
+        //
+        // `az provider register` remains outside any Loom boundary: it is a
+        // Microsoft tool printing its own output, and the R7 parity argument
+        // above is exactly why it stays that way.
+        //
+        // The set of inherited spawns is still pinned by `STRUCTURAL — the
+        // inherited-stream surface is ENUMERATED` in this script's suite, so a
+        // SECOND one cannot appear silently. The child's stderr is `pipe`d and
+        // reaches the log only through ghAnnotate() below, which redacts.
         const rem = spawnSync(plan.argv[0], plan.argv.slice(1), {
           stdio: ['inherit', 'inherit', 'pipe'],
           encoding: 'utf8',

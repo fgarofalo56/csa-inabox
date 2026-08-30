@@ -1,0 +1,147 @@
+# brain-security — RUN THE MUTATION ARMS THAT MEASURE THE DETECTORS (#3970).
+#
+# ── WHY THIS WORKFLOW EXISTS ────────────────────────────────────────────────
+#
+# `apps/fiab-console/lib/brain/__tests__/security/mutation/run-arms.mjs` carries
+# 25 arms and is the only thing in the repo that measures whether the nine Loom
+# Brain security detectors and the population contract actually watch anything.
+# Until this file, it had never run in CI. Measured on the tree before it:
+#
+#     grep -rl "vitest"   .github/workflows | wc -l   ->  7
+#     grep -rl "run-arms" .github/workflows | wc -l   ->  0
+#     grep -n  "run-arms" Makefile                    ->  (no match)
+#
+# So it was a one-time author receipt. A future PR could gut a detector, or
+# re-introduce exactly the narrowing round 2 of #3946 closed, and nothing would
+# re-run it — the `csa_loom_guard_adoption_gap` shape: a guard that exists,
+# works, and is wired to nothing that can fail.
+#
+# THE SUITE ALONE DOES NOT COVER THIS. Three of the four arms added in #3946
+# round 2 were measured ESCAPED against a GREEN 100-test suite before the fix,
+# and the fourth (`hollow-recommend-only-shallow`) leaves 14 of 18 registry
+# specs green. A green suite is not evidence that the suite can go red.
+#
+# ── SERIAL, ONE STEP, NEVER A MATRIX ────────────────────────────────────────
+#
+# The arms MUTATE TRACKED SOURCE FILES IN PLACE and restore them in a `finally`
+# with a byte-equality assertion. That is safe serially and is NOT safe beside
+# another job sharing the same checkout. `git stash` is repo-global here, so
+# there is no cheap recovery either. Hence: one job, one step, no matrix, and
+# `concurrency` cancels an older run on the same ref rather than letting two
+# overlap.
+#
+# ── NOTHING HERE MAY BE DOWNGRADED TO A WARNING ─────────────────────────────
+#
+# `run-arms.mjs` exits 0 only when EVERY arm went RED-then-GREEN; an arm whose
+# mutated run stayed green is printed as ESCAPED and the process exits 1. No
+# `continue-on-error`, no `|| true`, no `2>/dev/null` — deploy-integrity.md and
+# the gates-that-cannot-fail memory. The harness also runs its own self-test
+# first (a needle with the wrong line terminator silently matches nothing, which
+# reads exactly like a pass) and exits 2 if that fails, so a harness that has
+# stopped challenging anything is loud rather than green.
+#
+# ── WHAT THIS LANE DOES *NOT* ESTABLISH ─────────────────────────────────────
+#
+# The detectors are FIXTURE-ONLY today. Measured in #3946 round 2 against a real
+# graph built from this repo (6,005 nodes / 7,778 edges): every detector reports
+# `candidates = 0`, because `NodeKind` on the real graph is
+# `azure-resource | loom-item | deploy-artifact | code-module` and
+# `SecurityNodeKind` is nine entirely different values, with an EMPTY
+# intersection and no adapter between them. The population contract behaves
+# correctly under exactly that condition — it refuses to report clean and emits
+# nine high-severity empty-population findings — but this workflow measures the
+# detectors against their fixtures, and it must not be read as evidence that any
+# detector has ever judged a real node. That extractor is tracked in #3970 and
+# is the actual next unit of work.
+name: brain-security
+
+on:
+  pull_request:
+    paths:
+      - 'apps/fiab-console/lib/brain/security/**'
+      - 'apps/fiab-console/lib/brain/__tests__/security/**'
+      - '.github/workflows/brain-security.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'apps/fiab-console/lib/brain/security/**'
+      - 'apps/fiab-console/lib/brain/__tests__/security/**'
+      - '.github/workflows/brain-security.yml'
+  workflow_dispatch:
+
+# Cancel an older run on the same ref. Two runs of the arms in one checkout
+# would interleave in-place source mutations; on `main` each commit keeps its
+# own run so a result is attributable to a SHA.
+concurrency:
+  group: brain-security-${{ github.ref }}-${{ github.event_name == 'push' && github.sha || 'ref' }}
+  cancel-in-progress: ${{ github.event_name != 'push' }}
+
+permissions:
+  contents: read
+
+jobs:
+  mutation-arms:
+    name: brain security detectors — 25 mutation arms
+    runs-on: ubuntu-latest
+    # The arms run the security specs twice each (mutated, then restored), so
+    # the budget is well above a single suite run. Bounded so a hang is a red
+    # result rather than a stuck lane.
+    timeout-minutes: 45
+    defaults:
+      run:
+        working-directory: apps/fiab-console
+    steps:
+      - name: Checkout
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+
+      - name: Use Node.js 20
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '20'
+
+      - name: Install pnpm
+        run: npm install -g pnpm@9
+
+      - name: Install dependencies
+        # Matches fiab-console-ci.yml and the Dockerfile, so this lane resolves
+        # the same tree the build does. `run-arms.mjs` invokes
+        # node_modules/vitest/vitest.mjs directly, so vitest must be installed
+        # here — it is not an npx fetch.
+        run: pnpm install --no-frozen-lockfile
+
+      - name: The suite the arms measure, unmutated — the GREEN control
+        # A mutation harness reports "CAUGHT" from a RED mutated run and a GREEN
+        # restored run. If the suite is already red for an unrelated reason,
+        # every arm reports CAUGHT while proving nothing. So the baseline is
+        # established FIRST, on its own step, and its failure is attributed to
+        # the suite rather than to a detector.
+        run: pnpm exec vitest run lib/brain/__tests__/security --reporter=dot
+
+      - name: Mutation arms — every detector must be able to go RED
+        # SERIAL AND ALONE. This step mutates tracked files in place; nothing
+        # else may run against this checkout while it does.
+        #
+        # The exit code is the harness's own: 0 = every arm CAUGHT, 1 = at least
+        # one ESCAPED/DIRTY, 2 = the harness self-test failed. Not piped, not
+        # wrapped, not softened.
+        run: node lib/brain/__tests__/security/mutation/run-arms.mjs
+
+      - name: The tree is unmodified — the harness restored everything it broke
+        # The harness restores in a `finally` and asserts byte-equality per arm.
+        # This is the independent check on that claim: if a crash left a mutated
+        # file behind, the arms above may have reported on a tree nobody intended
+        # and the next reader must not learn it from a stale artifact.
+        working-directory: .
+        run: |
+          git status --porcelain > /tmp/dirty.txt
+          RC=$?
+          if [ "$RC" -ne 0 ]; then
+            echo "::error::could not read git status; the tree state is UNKNOWN, not clean."
+            exit 1
+          fi
+          if [ -s /tmp/dirty.txt ]; then
+            echo "::error::the mutation harness left the working tree MODIFIED:"
+            cat /tmp/dirty.txt
+            exit 1
+          fi
+          echo "working tree clean — every mutation was restored."
