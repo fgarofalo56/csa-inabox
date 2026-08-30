@@ -165,8 +165,20 @@ export const FACTS = [
     id: 'route-toolkit-gap',
     where: 'PRP.md ground-truth #4 / ws-ratchets.md §0',
     statement: 'hand-rolled session routes not on the route-toolkit',
-    stated: 1197, // loom-apex Phase-E boundary re-baseline (2026-08-06, was 1338).
-                  // Ratchet moves DOWN only — route-toolkit adoption keeps growing.
+    stated: 1076, // re-baselined 2026-08-30 (was 1197 at the loom-apex Phase-E
+                  // boundary, 1338 before that). The ratchet moves DOWN only —
+                  // route-toolkit adoption keeps growing, and this is that
+                  // growth being recorded rather than the gate being loosened.
+                  //
+                  // WHY IT MOVED NOW, since a re-baseline should always name its
+                  // cause: `check-route-toolkit.mjs`'s boy-scout rule required
+                  // four routes touched by the #4215 backlog batch to migrate
+                  // (admin/copilot-usage, items/dashboard, thread/mirror-to-notebook
+                  // by codemod; items/report/[id]/publish by hand). That took the
+                  // live count 1080 -> 1076, which crossed the 10% tolerance the
+                  // stale 1197 already sat 9.8% away from. So the FAIL was the
+                  // gate working: the recorded ground truth had drifted and this
+                  // is it being re-measured, not widened.
     live: countHandRolledRoutes,
   },
   {

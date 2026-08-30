@@ -124,6 +124,37 @@ function emptySpec(): ActivationSyncSpec { return { mapping: [], mode: 'full', r
 
 interface PathEntry { name: string; isDirectory: boolean }
 
+/**
+ * A picker's options, or a VISIBLE explanation when there are none (#3632).
+ *
+ * ── WHAT #3632 ACTUALLY WAS ────────────────────────────────────────────────
+ * Reported as "the Container combobox never opens — not on click, not on Space,
+ * not on Down-arrow", with a note that `GET /api/items/dataset/browse` had
+ * already returned a real 200 on load, so "the picker has data to show".
+ *
+ * It had NO data to show. A Fluent v9 `Dropdown` with zero `<Option>` children
+ * DOES open — onto an empty, zero-height listbox, which is indistinguishable
+ * from not opening at every input method the reporter tried. So the visible
+ * symptom was a rendering consequence of an empty list, not a broken handler,
+ * and no amount of looking at the click wiring would have found it. (The 200 is
+ * consistent with this: `browse` answers `{ ok:true, containers:[], gate:{…} }`
+ * when no DLZ container is configured or reachable — see the SourcePicker
+ * effect, which used to drop that `gate` on the floor.)
+ *
+ * Every "Pick a …" picker in this editor has the same failure mode, because a
+ * legitimately empty population is possible for all of them: no lake containers,
+ * no Dataverse environments, no tables in the chosen environment, no columns in
+ * the chosen file. This renders ONE disabled option carrying the reason, so an
+ * empty picker states why it is empty instead of looking broken
+ * (`ux-baseline.md`: an unconfigured state is guided, never a dead end).
+ */
+function PickerOptions({
+  count, empty, children,
+}: { count: number; empty: string; children: React.ReactNode }) {
+  if (count > 0) return <>{children}</>;
+  return <Option value="" text={empty} disabled>{empty}</Option>;
+}
+
 function SourcePicker({ spec, onChange }: { spec: ActivationSyncSpec; onChange: (s: ActivationSyncSpec) => void }) {
   const styles = useStyles();
   const [containers, setContainers] = useState<string[]>([]);
@@ -138,8 +169,18 @@ function SourcePicker({ spec, onChange }: { spec: ActivationSyncSpec; onChange: 
       try {
         const r = await clientFetch('/api/items/dataset/browse');
         const j = await r.json();
+        // #3632 ROOT CAUSE — this used to be
+        //     if (j.ok && Array.isArray(j.containers)) setContainers(…)
+        //     else if (j.gate) setGate(…)
+        // and `browse` answers the NOTHING-REACHABLE case as
+        //     { ok: true, containers: [], gate: { reason, remediation } }
+        // — a 200 with ok:true AND an array. The first arm therefore won, the
+        // `gate` was discarded, and the operator got a Container picker with
+        // zero options and NO message: the "combobox never opens" symptom.
+        // The gate is now read on its own terms, independent of `ok`.
         if (j.ok && Array.isArray(j.containers)) setContainers(j.containers.map((c: any) => c.name));
-        else if (j.gate) setGate(j.gate.remediation || j.gate.reason);
+        if (j.gate) setGate(j.gate.remediation || j.gate.reason);
+        else if (!j.ok) setGate(j.error || 'Could not list the lake containers.');
       } catch (e: any) { setGate(e?.message || String(e)); }
     })();
   }, []);
@@ -185,7 +226,16 @@ function SourcePicker({ spec, onChange }: { spec: ActivationSyncSpec; onChange: 
             selectedOptions={container ? [container] : []}
             onOptionSelect={(_, d) => { setContainer(d.optionValue || ''); setPrefix(''); }}
           >
-            {containers.map((c) => <Option key={c} value={c} text={c}>{c}</Option>)}
+            <PickerOptions
+              count={containers.length}
+              empty={
+                gate
+                  ? 'No lake container is reachable — see the message above.'
+                  : 'No lake container is configured for this deployment yet.'
+              }
+            >
+              {containers.map((c) => <Option key={c} value={c} text={c}>{c}</Option>)}
+            </PickerOptions>
           </Dropdown>
         </Field>
       </div>
@@ -293,7 +343,16 @@ function DestinationPicker({ spec, onChange }: { spec: ActivationSyncSpec; onCha
                 selectedOptions={dv?.environmentId ? [dv.environmentId] : []}
                 onOptionSelect={(_, d) => setDest({ kind: 'dataverse', environmentId: d.optionValue || '', entitySetName: '', keyAttribute: '' })}
               >
-                {envs.map((e) => <Option key={e.name} value={e.name} text={e.displayName}>{e.displayName}</Option>)}
+                <PickerOptions
+                  count={envs.length}
+                  empty={
+                    gate
+                      ? 'No Dataverse environment is reachable — see the message above.'
+                      : 'No Dataverse environment is visible to this deployment.'
+                  }
+                >
+                  {envs.map((e) => <Option key={e.name} value={e.name} text={e.displayName}>{e.displayName}</Option>)}
+                </PickerOptions>
               </Dropdown>
             </Field>
             <Field label="Table" className={styles.grow}>
@@ -306,11 +365,20 @@ function DestinationPicker({ spec, onChange }: { spec: ActivationSyncSpec; onCha
                   setDest({ kind: 'dataverse', environmentId: dv?.environmentId || '', entitySetName: d.optionValue || '', keyAttribute: '' });
                 }}
               >
-                {tables.map((t) => (
-                  <Option key={t.LogicalName} value={t.EntitySetName || t.LogicalName} text={t.LogicalName}>
-                    {t.DisplayName?.UserLocalizedLabel?.Label || t.LogicalName} ({t.EntitySetName || t.LogicalName})
-                  </Option>
-                ))}
+                <PickerOptions
+                  count={tables.length}
+                  empty={
+                    dv?.environmentId
+                      ? 'No tables were returned for this environment.'
+                      : 'Pick an environment first — tables are listed per environment.'
+                  }
+                >
+                  {tables.map((t) => (
+                    <Option key={t.LogicalName} value={t.EntitySetName || t.LogicalName} text={t.LogicalName}>
+                      {t.DisplayName?.UserLocalizedLabel?.Label || t.LogicalName} ({t.EntitySetName || t.LogicalName})
+                    </Option>
+                  ))}
+                </PickerOptions>
               </Dropdown>
             </Field>
           </div>
@@ -434,7 +502,16 @@ function MappingPanel({
           selectedOptions={spec.keyColumn ? [spec.keyColumn] : []}
           onOptionSelect={(_, d) => onChange({ ...spec, keyColumn: d.optionValue || undefined })}
         >
-          {cols.map((c) => <Option key={c.name} value={c.name} text={c.name}>{c.name}{c.type ? ` (${c.type})` : ''}</Option>)}
+          <PickerOptions
+            count={cols.length}
+            empty={
+              spec.source?.container && spec.source?.path
+                ? 'No columns were read from the selected source.'
+                : 'Pick a source container and table above — columns are read from the source.'
+            }
+          >
+            {cols.map((c) => <Option key={c.name} value={c.name} text={c.name}>{c.name}{c.type ? ` (${c.type})` : ''}</Option>)}
+          </PickerOptions>
         </Dropdown>
       </Field>
 
@@ -449,7 +526,12 @@ function MappingPanel({
               onChange({ ...spec, destination: { ...dv, keyAttribute: d.optionValue || '' } });
             }}
           >
-            {targets.map((t) => <Option key={t.name} value={t.name} text={t.name}>{t.label || t.name}</Option>)}
+            <PickerOptions
+              count={targets.length}
+              empty="No destination fields were read — pick a Dataverse environment and table above."
+            >
+              {targets.map((t) => <Option key={t.name} value={t.name} text={t.name}>{t.label || t.name}</Option>)}
+            </PickerOptions>
           </Dropdown>
         </Field>
       )}
@@ -469,7 +551,9 @@ function MappingPanel({
           <Field label={i === 0 ? 'Source column' : undefined} className={styles.grow}>
             <Dropdown placeholder="Source column" value={m.source} selectedOptions={m.source ? [m.source] : []}
               onOptionSelect={(_, d) => setRow(i, { source: d.optionValue || '', ...(isDv ? {} : { target: d.optionValue || '' }) })}>
-              {cols.map((c) => <Option key={c.name} value={c.name} text={c.name}>{c.name}</Option>)}
+              <PickerOptions count={cols.length} empty="No source columns yet — pick a source above.">
+                {cols.map((c) => <Option key={c.name} value={c.name} text={c.name}>{c.name}</Option>)}
+              </PickerOptions>
             </Dropdown>
           </Field>
           <span aria-hidden style={{ color: tokens.colorNeutralForeground3 }}>→</span>
@@ -477,7 +561,9 @@ function MappingPanel({
             {isDv ? (
               <Dropdown placeholder="Destination field" value={m.target} selectedOptions={m.target ? [m.target] : []}
                 onOptionSelect={(_, d) => setRow(i, { target: d.optionValue || '' })}>
-                {targets.map((t) => <Option key={t.name} value={t.name} text={t.name}>{t.label || t.name}</Option>)}
+                <PickerOptions count={targets.length} empty="No destination fields yet — pick an environment and table above.">
+                  {targets.map((t) => <Option key={t.name} value={t.name} text={t.name}>{t.label || t.name}</Option>)}
+                </PickerOptions>
               </Dropdown>
             ) : (
               <Input value={m.target} readOnly aria-label="Destination field (same as source)" />

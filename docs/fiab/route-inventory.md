@@ -15,8 +15,8 @@ verdict is DERIVED, not name-matched — see "How the owner column is decided".
 | --- | ---: |
 | Total routes | 1688 |
 | Public (no session) | 58 |
-| Session-only | 647 |
-| Owner-scoped | 675 |
+| Session-only | 648 |
+| Owner-scoped | 674 |
 | Admin | 308 |
 | Unknown (generator fails) | 0 |
 | Gated (backend config) | 496 |
@@ -2339,7 +2339,7 @@ dispatch is invisible to it. Full limits: `scripts/ci/_route-backends.mjs`.
 | `thread/lakehouse-delta-tables/route.ts` | GET | owner-scoped |  | ADLS, ARM, Azure SQL, Azure Storage, Cosmos, Managed Identity, Microsoft Graph, Synapse SQL |
 | `thread/materialize-to-kql/route.ts` | POST | owner-scoped | ● | ADLS, ADX, ARM, Azure Storage, Cosmos, Managed Identity, Microsoft Graph, Purview |
 | `thread/mirror-to-lakehouse/route.ts` | POST | owner-scoped |  | ADLS, Cosmos, Microsoft Graph, Purview |
-| `thread/mirror-to-notebook/route.ts` | POST | owner-scoped |  | ADF, ADLS, ADX, AI Search, ARM, Azure SQL, Azure Storage, Compute, Cosmos, Microsoft Graph, PostgreSQL, Purview, Resource Graph, Synapse |
+| `thread/mirror-to-notebook/route.ts` | POST | session-only |  | — |
 | `thread/model-tables/route.ts` | GET | owner-scoped |  | Cosmos, Microsoft Graph |
 | `thread/open-in-report-builder/route.ts` | POST | owner-scoped |  | ADF, ADLS, ADX, AI Search, ARM, Azure SQL, Azure Storage, Compute, Cosmos, Key Vault, Managed Identity, Microsoft Graph, PostgreSQL, Purview, Resource Graph, Synapse, Synapse SQL |
 | `thread/promote-medallion/route.ts` | POST | owner-scoped |  | ADF, ADLS, ADX, AI Search, ARM, Azure SQL, Azure Storage, Compute, Cosmos, Microsoft Graph, PostgreSQL, Purview, Resource Graph, Synapse |
