@@ -12,6 +12,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getApiSession } from '@/lib/auth/api-session';
 import { tenantScopeId } from '@/lib/auth/session';
+import { externalOrigin } from '@/lib/auth/auth-breaker';
 import { loadOwnedItem } from '../../../_lib/item-crud';
 import { enrichSemanticModelSources } from '../../../semantic-model/_lib/prep-for-ai-store';
 import { chatGrounded, rehydrateSources, NoAoaiDeploymentError, type DataAgentConfig, type ChatTurn } from '@/lib/azure/data-agent-client';
@@ -24,10 +25,20 @@ export const dynamic = 'force-dynamic';
 
 const ITEM_TYPE = 'data-agent';
 
+// THE CARD ADVERTISES THIS URL TO EXTERNAL CALLERS, so it must be the EXTERNAL
+// origin. `new URL(req.url).origin` is the origin the CONTAINER saw — behind
+// Front Door / an ingress that is an internal address no A2A client can reach,
+// so the agent card would publish an endpoint that does not resolve. That is
+// what `check-external-origin-urls` flags, and it is a real defect rather than a
+// lint preference.
+//
+// `externalOrigin` reads the forwarded host, matching the shape the guard names:
+// app/api/flightsql/connect/route.ts and app/api/catalog/iceberg/overview/route.ts.
 function endpointFor(req: NextRequest, id: string): string {
-  let origin = '';
-  try { origin = new URL(req.url).origin; } catch { origin = process.env.LOOM_PUBLIC_BASE_URL || ''; }
-  return `${origin.replace(/\/+$/, '')}/api/items/data-agent/${encodeURIComponent(id)}/a2a`;
+  return new URL(
+    `/api/items/data-agent/${encodeURIComponent(id)}/a2a`,
+    externalOrigin(req.headers),
+  ).toString();
 }
 
 function stateToConfig(state: Record<string, unknown>): DataAgentConfig {
@@ -45,9 +56,9 @@ function stateToConfig(state: Record<string, unknown>): DataAgentConfig {
  * client that only knows `/api/a2a` can still address this agent.
  */
 function platformEndpointFor(req: NextRequest): string {
-  let origin = '';
-  try { origin = new URL(req.url).origin; } catch { origin = process.env.LOOM_PUBLIC_BASE_URL || ''; }
-  return `${origin.replace(/\/+$/, '')}/api/a2a`;
+  // Same reason as endpointFor above: this is published ON the card, so it has
+  // to be the origin an external client can actually reach.
+  return new URL('/api/a2a', externalOrigin(req.headers)).toString();
 }
 
 async function loadPublished(req: NextRequest, id: string) {
