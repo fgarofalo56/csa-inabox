@@ -83,7 +83,17 @@ import type {
  * as `versionsIgnoredByFormat` — a silent discard would be a shrinking
  * population, which this repo treats as a P0 in its own right.
  */
-export const HISTORY_FORMAT_VERSION = 1;
+// 2 (#4017): the v1 tagKeys canonical form was NOT injective — a comma is a
+// legal Azure tag name character, so the single key `a,b` and the pair `a` + `b`
+// hashed identically and two genuinely different versions deduped into one.
+// v2 prefixes each key individually with a leading count.
+//
+// The bump is what keeps that fix from rewriting history. `canonicalNode` selects
+// the form from the version a record was WRITTEN under, so records already in
+// Cosmos still verify under v1 instead of failing `verifyGraphVersion` with a
+// digest mismatch whose stated cause ("altered after it was written") would be
+// false. New writes get v2 and the injective form.
+export const HISTORY_FORMAT_VERSION = 2;
 
 // ---------------------------------------------------------------------------
 // §The projected node

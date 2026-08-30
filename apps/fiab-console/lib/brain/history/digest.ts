@@ -76,7 +76,9 @@ function fbool(v: boolean | null): string {
   return v === null ? NULL_TOKEN : f(v ? '1' : '0');
 }
 
-function canonicalNode(n: VersionNode): string {
+// `formatVersion` is the version the record was WRITTEN under, taken from the
+// content itself — not the current HISTORY_FORMAT_VERSION. See the tagKeys note.
+function canonicalNode(n: VersionNode, formatVersion: number): string {
   return [
     'N',
     f(n.id),
@@ -103,9 +105,23 @@ function canonicalNode(n: VersionNode): string {
     // `3:a,b` and hashed identically. Two versions differing only in that way
     // deduped into one and were never written. `f(count)` leading makes the field
     // self-delimiting on its own rather than relying on SEP.
-    n.tagKeys === null
-      ? NULL_TOKEN
-      : [f(String(n.tagKeys.length)), ...[...n.tagKeys].sort().map((k) => f(k))].join(''),
+    //
+    // VERSIONED, because changing a content address rewrites history (#4017).
+    // The v2 form above is correct and the v1 form below is not, but every
+    // GraphVersion already in Cosmos was hashed with v1. Recomputing those with
+    // v2 makes `verifyGraphVersion` return check:'digest' with the detail "The
+    // content was altered after it was written" — a cause the code did not
+    // establish (deploy-integrity R7; nothing was altered, the canonicalizer
+    // moved) — and `assertVerified` THROWS. `loadRecent` maps it over every doc
+    // with no per-doc tolerance, so one pre-existing record would take the whole
+    // /api/admin/brain/history list down on any estate with history.
+    //
+    // So the canonical form is selected by the version the record was WRITTEN
+    // under. New writes use v2 and get the injective form; existing records stay
+    // verifiable under v1 and keep their integrity check rather than losing it.
+    formatVersion >= 2
+      ? [f(String(n.tagKeys.length)), ...[...n.tagKeys].sort().map((k) => f(k))].join('')
+      : f([...n.tagKeys].sort().join(',')),
     f(n.estateTag),
   ].join(SEP);
 }
@@ -137,7 +153,7 @@ export function canonicalizeContent(content: GraphVersionContent): string {
   const nodes = [...content.nodes].sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
   const edges = [...content.edges].sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
   const parts: string[] = [`LOOM-BRAIN-GRAPH-HISTORY/${content.formatVersion}`];
-  for (const n of nodes) parts.push(canonicalNode(n));
+  for (const n of nodes) parts.push(canonicalNode(n, content.formatVersion));
   for (const e of edges) parts.push(canonicalEdge(e));
   return parts.join(REC);
 }
