@@ -25,6 +25,18 @@ This file is maintained automatically by
 [Conventional Commits](https://www.conventionalcommits.org/). See
 [RELEASE.md](RELEASE.md) for the release process.
 
+## [0.103.4](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.103.3...csa-inabox-v0.103.4) (2026-08-30)
+
+
+### Bug Fixes
+
+* **ci:** the portal had no blocking check, so a bump of next itself merged green ([#4193](https://github.com/fgarofalo56/csa-inabox/issues/4193)) ([359a660](https://github.com/fgarofalo56/csa-inabox/commit/359a660cb4c34137a35a1b8432839e757b500744)), closes [#4187](https://github.com/fgarofalo56/csa-inabox/issues/4187)
+* **console,brain:** the conversations write path authorized nothing, and four brain-history messages named a cause the code had not established ([#4197](https://github.com/fgarofalo56/csa-inabox/issues/4197)) ([e541c59](https://github.com/fgarofalo56/csa-inabox/commit/e541c595631ca8d0cefd9e4d97dd135d3dc8914c)), closes [#4005](https://github.com/fgarofalo56/csa-inabox/issues/4005) [#4009](https://github.com/fgarofalo56/csa-inabox/issues/4009) [#4018](https://github.com/fgarofalo56/csa-inabox/issues/4018) [#4021](https://github.com/fgarofalo56/csa-inabox/issues/4021) [#3522](https://github.com/fgarofalo56/csa-inabox/issues/3522) [#3416](https://github.com/fgarofalo56/csa-inabox/issues/3416) [#3457](https://github.com/fgarofalo56/csa-inabox/issues/3457) [#3577](https://github.com/fgarofalo56/csa-inabox/issues/3577) [#3982](https://github.com/fgarofalo56/csa-inabox/issues/3982) [#4001](https://github.com/fgarofalo56/csa-inabox/issues/4001)
+* **deploy:** an unreadable registry reverted a healthy verified roll ([#4198](https://github.com/fgarofalo56/csa-inabox/issues/4198)) ([470d399](https://github.com/fgarofalo56/csa-inabox/commit/470d399ccaddc1421cdcb3cfbdc79b230fe7adf2)), closes [#3784](https://github.com/fgarofalo56/csa-inabox/issues/3784) [#3749](https://github.com/fgarofalo56/csa-inabox/issues/3749) [#3723](https://github.com/fgarofalo56/csa-inabox/issues/3723) [#4190](https://github.com/fgarofalo56/csa-inabox/issues/4190) [#4196](https://github.com/fgarofalo56/csa-inabox/issues/4196) [#3918](https://github.com/fgarofalo56/csa-inabox/issues/3918) [#3546](https://github.com/fgarofalo56/csa-inabox/issues/3546) [#3571](https://github.com/fgarofalo56/csa-inabox/issues/3571) [#3968](https://github.com/fgarofalo56/csa-inabox/issues/3968) [#3060](https://github.com/fgarofalo56/csa-inabox/issues/3060) [#3518](https://github.com/fgarofalo56/csa-inabox/issues/3518) [#3565](https://github.com/fgarofalo56/csa-inabox/issues/3565)
+* **deploy:** the deploy computed the Foundry project name and shipped it under a name nothing reads ([#4185](https://github.com/fgarofalo56/csa-inabox/issues/4185)) ([#4194](https://github.com/fgarofalo56/csa-inabox/issues/4194)) ([5f687da](https://github.com/fgarofalo56/csa-inabox/commit/5f687dad81d0a4677d428fdab9647e5de24cb825))
+* **loom:** read the recorded seed CSV path, wire the posture URL, and name seven detector survivors ([#4200](https://github.com/fgarofalo56/csa-inabox/issues/4200)) ([0cad3ac](https://github.com/fgarofalo56/csa-inabox/commit/0cad3ac7eaf531c40f336d4aff4735b81a45c053))
+* six measured defects — a load-dependent poll budget, a dead escape hatch, an imaginary approval gate and three dropped disclosures ([#4199](https://github.com/fgarofalo56/csa-inabox/issues/4199)) ([85a88a6](https://github.com/fgarofalo56/csa-inabox/commit/85a88a69cbe59fa40412af0631902c3878092b80))
+
 ## [0.103.3](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.103.2...csa-inabox-v0.103.3) (2026-08-29)
 
 
