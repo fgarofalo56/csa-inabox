@@ -7025,44 +7025,6 @@
           }
         },
         {
-          "id": "sec:verdict-call:apps/fiab-console/app/api/admin/scaling/container-apps/route.ts#GET:denyIfNoDlzAccess:4",
-          "kind": "verdict-call",
-          "provenance": "declared",
-          "label": "GET /api/admin/scaling/container-apps -> denyIfNoDlzAccess",
-          "facet": {
-            "kind": "verdict-call",
-            "callSite": "GET /api/admin/scaling/container-apps:4",
-            "symbol": "denyIfNoDlzAccess",
-            "returnsVerdictUnion": true,
-            "pathsToPrivilegedSink": 0,
-            "pathsConsumingAsRefusal": 0,
-            "consumption": "returned",
-            "allowlisted": false,
-            "allowlistPremiseTested": false,
-            "sinkPrivileged": false,
-            "sinkKind": "none"
-          }
-        },
-        {
-          "id": "sec:verdict-call:apps/fiab-console/app/api/admin/scaling/container-apps/route.ts#POST:denyIfNoDlzAccess:4",
-          "kind": "verdict-call",
-          "provenance": "declared",
-          "label": "POST /api/admin/scaling/container-apps -> denyIfNoDlzAccess",
-          "facet": {
-            "kind": "verdict-call",
-            "callSite": "POST /api/admin/scaling/container-apps:4",
-            "symbol": "denyIfNoDlzAccess",
-            "returnsVerdictUnion": true,
-            "pathsToPrivilegedSink": 0,
-            "pathsConsumingAsRefusal": 0,
-            "consumption": "returned",
-            "allowlisted": false,
-            "allowlistPremiseTested": false,
-            "sinkPrivileged": false,
-            "sinkKind": "none"
-          }
-        },
-        {
           "id": "sec:verdict-call:apps/fiab-console/app/api/admin/scaling/cosmos/route.ts#GET:denyIfNoDlzAccess:4",
           "kind": "verdict-call",
           "provenance": "declared",
@@ -44609,16 +44571,6 @@
           "deployedAs": "loom-console"
         },
         {
-          "nodeId": "sec:verdict-call:apps/fiab-console/app/api/admin/scaling/container-apps/route.ts#GET:denyIfNoDlzAccess:4",
-          "codeModuleId": "code:apps/fiab-console/app/api/admin/scaling/container-apps/route.ts",
-          "deployedAs": "loom-console"
-        },
-        {
-          "nodeId": "sec:verdict-call:apps/fiab-console/app/api/admin/scaling/container-apps/route.ts#POST:denyIfNoDlzAccess:4",
-          "codeModuleId": "code:apps/fiab-console/app/api/admin/scaling/container-apps/route.ts",
-          "deployedAs": "loom-console"
-        },
-        {
           "nodeId": "sec:verdict-call:apps/fiab-console/app/api/admin/scaling/cosmos/route.ts#GET:denyIfNoDlzAccess:4",
           "codeModuleId": "code:apps/fiab-console/app/api/admin/scaling/cosmos/route.ts",
           "deployedAs": "loom-console"
@@ -47774,15 +47726,15 @@
     },
     "meta": {
       "generatorVersion": 1,
-      "generatedAt": "2026-08-30T04:40:44.327Z",
-      "commit": "0cad3ac7eaf531c40f336d4aff4735b81a45c053",
-      "inputsDigest": "9b9e37b253c1af64",
+      "generatedAt": "2026-08-30T05:19:46.300Z",
+      "commit": "5cef65a4b29a2944011f1eb2cdceba81217d0381",
+      "inputsDigest": "3abea64ed583a266",
       "filesScanned": 2066,
       "scanScopes": [
         {
           "scope": "app/**/route.ts (console BFF routes)",
           "filesMatched": 1694,
-          "nodesEmitted": 706
+          "nodesEmitted": 704
         },
         {
           "scope": ".github/**, scripts/** (CI publication surfaces)",
