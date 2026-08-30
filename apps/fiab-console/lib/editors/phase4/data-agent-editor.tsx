@@ -68,6 +68,7 @@ import { GraphTypeEditor } from '@/lib/components/graph/graph-type-editor';
 import { GraphSourceBinding, type SourceBindable } from '@/lib/components/graph/graph-source-binding';
 import {
   useSourceCandidates, sourceCandidatePlaceholder, SourceCandidateError,
+  sourceTypeBindsLoomItem, DA_SOURCE_TYPES,
 } from './data-agent-source-candidates';
 // Ontology typed-model (Foundry object/link/action types) — pure logic + types
 // shared with the BFF routes. The typed-modeling surface in OntologyEditor drives
@@ -179,26 +180,6 @@ interface DataAgentState {
   [k: string]: unknown;
 }
 
-const DA_SOURCE_TYPES: { value: DaSourceType; label: string; itemType: string }[] = [
-  { value: 'warehouse', label: 'Warehouse', itemType: 'warehouse' },
-  { value: 'lakehouse', label: 'Lakehouse', itemType: 'lakehouse' },
-  { value: 'kql', label: 'KQL database', itemType: 'kql-database' },
-  { value: 'semantic-model', label: 'Semantic model', itemType: 'semantic-model' },
-  // Governed metric view (DBX-6). Not a standalone Loom item — grounds the agent
-  // on the governed measure definitions (typed into the card) and executes SQL
-  // over the Azure-native warehouse. itemType '' skips the item picker.
-  { value: 'metric-view', label: 'Metric view', itemType: '' },
-  { value: 'ai-search', label: 'AI Search', itemType: 'ai-search-index' },
-  { value: 'ontology', label: 'Ontology', itemType: 'ontology' },
-  { value: 'graph', label: 'Graph model', itemType: 'graph-model' },
-  // Not a Loom item — grounds on Microsoft Graph directly (site/drive/mail
-  // scope picked on the source card). itemType '' skips the item picker.
-  { value: 'microsoft-graph', label: 'Microsoft 365 (Graph)', itemType: '' },
-  // Hosted agent compose-back (DBX-2): a deployed Loom App (Agent/FastAPI
-  // template). The picker lists loom-app-runtime items; the executor POSTs the
-  // routed sub-question to the app's /invoke endpoint.
-  { value: 'agent', label: 'Hosted agent', itemType: 'loom-app-runtime' },
-];
 // Schema-selection for graph/ontology (queried whole) + semantic-model (Power
 // BI "Prep for AI") is a caption; every other type gets the real Tree picker
 // (SourceSchemaTree) fed by /source-schema — no freeform table strings.
@@ -257,6 +238,9 @@ export function DataAgentEditor({ item, id }: { item: FabricItemType; id: string
   }, []);
 
   const [pickSel, setPickSel] = useState('');
+  // #4102 — the SHAPE, read once. A kind with no backing Loom item shows no Item
+  // dropdown and needs no selection to be addable.
+  const pickerBindsItem = sourceTypeBindsLoomItem(pickerCfg.itemType);
   const addSource = () => {
     if (arr<DaSource>(state.sources).length >= 5) return;
     // Microsoft 365 (Graph) has no backing Loom item — add directly; the scope
@@ -288,6 +272,23 @@ export function DataAgentEditor({ item, id }: { item: FabricItemType; id: string
           description: 'Governed KPIs (measures) sliced by governed dimensions.',
           instructions: '## Governed metric view\nName the metric view and list its governed dimensions + measures below. Answer KPI questions by GROUP BY the governed dimension(s) and selecting the governed measure expression(s) — do not invent alternative aggregations.\n',
           examples: [],
+        }],
+      }));
+      return;
+    }
+    // #4102 fail-closed. Every kind ABOVE this line binds no Loom item and was
+    // handled by name. A NEW `itemType: ''` kind added without its own branch
+    // would fall through to `if (!pickSel) return` and silently do nothing —
+    // the same dead end, one type later. Add it generically instead, so the
+    // button always does what its label says.
+    if (!pickerBindsItem) {
+      setState((p) => ({
+        ...p,
+        sources: [...arr<DaSource>(p.sources), {
+          id: `${pickerType}:${Date.now()}`,
+          type: pickerType,
+          name: pickerCfg.label,
+          tables: '', description: '', instructions: DA_INSTRUCTION_TEMPLATE, examples: [],
         }],
       }));
       return;
@@ -825,10 +826,16 @@ export function DataAgentEditor({ item, id }: { item: FabricItemType; id: string
                       {DA_SOURCE_TYPES.map((t) => <Option key={t.value} value={t.value}>{t.label}</Option>)}
                     </Dropdown>
                   </Field>
-                  {pickerType === 'microsoft-graph' ? (
+                  {/* #4102 — a kind with NO backing Loom item renders no Item
+                      dropdown. Keyed on `pickerType === 'microsoft-graph'` before,
+                      so `metric-view` (same `itemType: ''`) got a dropdown that could
+                      never populate, claimed "None in this workspace" over a lookup it
+                      never made, and could never be added. */}
+                  {!pickerBindsItem ? (
                     <Field label="Scope" style={{ minWidth: 220 }}>
                       <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
-                        SharePoint site / OneDrive drive / mailbox — configured on the source card after adding.
+                        {pickerCfg.scopeHint
+                          || `${pickerCfg.label} is not backed by a Loom item — configured on the source card after adding.`}
                       </Caption1>
                     </Field>
                   ) : (
@@ -841,7 +848,7 @@ export function DataAgentEditor({ item, id }: { item: FabricItemType; id: string
                     </Field>
                   )}
                   <Button appearance="primary" icon={<Add20Regular />} onClick={addSource}
-                    disabled={(pickerType !== 'microsoft-graph' && !pickSel) || sources.length >= 5}>Add source</Button>
+                    disabled={(pickerBindsItem && !pickSel) || sources.length >= 5}>Add source</Button>
                 </div>
                 <SourceCandidateError error={candidates.error} loading={candidates.loading}
                   label={pickerCfg.label} onRetry={candidates.reload} />
