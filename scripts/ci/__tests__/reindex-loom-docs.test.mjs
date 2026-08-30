@@ -76,6 +76,25 @@ async function withServer(onPost, onGet, run) {
  * process, so a synchronous `spawnSync` would block the event loop, the server
  * would never answer curl, and every case would deadlock rather than assert.
  *
+ * ── THE POLL BUDGET IS ATTEMPTS, NOT SECONDS (#3942) ────────────────────────
+ * `POLL_TIMEOUT_S: '6'` used to be the ONLY budget here, and the script checks
+ * it at the top of each iteration — so how many polls fit inside it is decided
+ * by how long one `sleep` + `curl` + `node` takes, i.e. by machine load. That
+ * made two verdicts load-dependent. MEASURED, same tree, same assertions:
+ *
+ *     idle             "202 -> polls -> fresh -> exit 0"   PASS  8.8s,  2 polls
+ *     24 busy workers  same test                           PASS  22.9s, 2 polls
+ *     96 busy workers  same test                           FAIL  65.8s, 1 poll
+ *
+ * A test whose verdict moves with the scheduler is measuring the property PLUS
+ * the machine. A bigger POLL_TIMEOUT_S would only relocate the threshold, so
+ * the script gained a DETERMINISTIC second ceiling (`POLL_MAX_ATTEMPTS`,
+ * unbounded by default so production is unchanged) and this harness drives
+ * that instead: the wall clock is set far out of reach, and load can now only
+ * make a case SLOWER, never flip it. The cases that assert a TIMEOUT get their
+ * timeout from exhausting the attempts, which is the same refusal by the same
+ * code path.
+ *
  * @returns {Promise<{status:number, stdout:string, stderr:string}>}
  */
 function runScript(url, env = {}) {
@@ -85,8 +104,10 @@ function runScript(url, env = {}) {
         ...process.env,
         CONSOLE_URL: url,
         INTERNAL_TOKEN: 'test-token',
-        POLL_TIMEOUT_S: '6',
+        // Deliberately unreachable: no case here may be decided by the clock.
+        POLL_TIMEOUT_S: '600',
         POLL_INTERVAL_S: '1',
+        POLL_MAX_ATTEMPTS: '4',
         GITHUB_OUTPUT: '', // never write to the real step output from a test
         ...env,
       },
@@ -199,6 +220,44 @@ test('202 then job.state failed → exit 1 (fails fast, no waiting out the cap)'
       assert.equal(res.status, 1, res.stdout + res.stderr);
       assert.match(res.stdout, /NOT refreshed/i);
       assert.equal(counts().gets, 1, 'must break on the failure, not poll to the cap');
+    },
+  );
+});
+
+/**
+ * #3942 — THE BUDGET THIS SUITE RELIES ON IS THE ATTEMPT CAP, PROVED.
+ *
+ * The pair below is the control for the fix itself. Delete the
+ * `POLL_MAX_ATTEMPTS` check from the loop in reindex-loom-docs.sh and both go
+ * RED: the first would keep polling to the (600s) clock and see `fresh` on GET
+ * #6, and the second would poll past 5. They are also the reason the harness's
+ * unreachable POLL_TIMEOUT_S is safe — if the clock ever became the governing
+ * ceiling again, these say so immediately rather than the whole file becoming
+ * load-dependent again in silence.
+ */
+test('#3942 the ATTEMPT cap governs: exhausting it is the refusal, not the clock', async () => {
+  await withServer(
+    () => ACCEPTED,
+    (n) => ({ status: 200, body: pollBody({ freshness: n >= 6 ? 'fresh' : 'stale' }) }),
+    async (url, counts) => {
+      const res = await runScript(url, { POLL_MAX_ATTEMPTS: '2', POLL_TIMEOUT_S: '600' });
+      assert.equal(res.status, 1, res.stdout + res.stderr);
+      assert.equal(counts().gets, 2, 'must stop at the attempt cap, not run to the 600s clock');
+      assert.match(res.stdout, /REFUSAL/i);
+      assert.match(res.stdout, /2 poll\(s\)/, 'the verdict must name the ceiling that actually tripped');
+    },
+  );
+});
+
+test('#3942 within the attempt cap a late `fresh` still passes — load can only slow it', async () => {
+  await withServer(
+    () => ACCEPTED,
+    (n) => ({ status: 200, body: pollBody({ freshness: n >= 4 ? 'fresh' : 'stale' }) }),
+    async (url, counts) => {
+      const res = await runScript(url, { POLL_MAX_ATTEMPTS: '5', POLL_TIMEOUT_S: '600' });
+      assert.equal(res.status, 0, res.stdout + res.stderr);
+      assert.equal(counts().gets, 4, 'four polls were needed and four were available');
+      assert.match(res.stdout, /FRESH index/i);
     },
   );
 });

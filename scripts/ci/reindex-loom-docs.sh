@@ -52,8 +52,10 @@
 #   CONSOLE_URL      (required) base URL of the target console, trailing / ok
 #   INTERNAL_TOKEN   (required) LOOM_INTERNAL_TOKEN; EMPTY => skip + warn + exit 0
 #                    (an unset secret is an honest gate, not a broken index)
-#   POLL_TIMEOUT_S   default 900  — cap on the wait for a full rebuild
+#   POLL_TIMEOUT_S   default 900  — WALL-CLOCK cap on the wait for a full rebuild
 #   POLL_INTERVAL_S  default 15
+#   POLL_MAX_ATTEMPTS default 0 (unbounded) — cap on the NUMBER OF POLLS. See
+#                    "A WALL CLOCK IS NOT A BUDGET A TEST CAN RELY ON" below.
 #   FATAL            default true — set 'false' ONLY where the caller is
 #                    documented non-blocking (the post-deploy bootstrap). A
 #                    downgrade is always announced as a ::warning::, never
@@ -71,6 +73,9 @@ CONSOLE_URL="${CONSOLE_URL:-}"
 INTERNAL_TOKEN="${INTERNAL_TOKEN:-}"
 POLL_TIMEOUT_S="${POLL_TIMEOUT_S:-900}"
 POLL_INTERVAL_S="${POLL_INTERVAL_S:-15}"
+# 0 = unbounded, i.e. the wall clock alone governs (production behaviour, and
+# the default so no caller changes meaning by upgrading).
+POLL_MAX_ATTEMPTS="${POLL_MAX_ATTEMPTS:-0}"
 FATAL="${FATAL:-true}"
 
 POST_BODY_FILE="$(mktemp)"
@@ -150,13 +155,41 @@ if [ "$CODE" != "202" ] && [ "$POLL_ANYWAY" != "true" ]; then
 fi
 
 # ── 2. POLL: wait for the DURABLE freshness signal ──────────────────────────
-echo "Polling $ENDPOINT for completion (cap ${POLL_TIMEOUT_S}s, every ${POLL_INTERVAL_S}s)…"
+#
+# ── A WALL CLOCK IS NOT A BUDGET A TEST CAN RELY ON (#3942) ─────────────────
+# This loop's only budget used to be `POLL_TIMEOUT_S`, checked at the TOP of
+# each iteration, so the number of polls that fit inside it is a function of how
+# long ONE iteration takes — a `sleep`, a `curl`, and a `node` spawn. That is
+# machine load, not console behaviour. MEASURED on this tree, same test, same
+# tree, same assertions:
+#
+#   idle                       "202 -> polls -> fresh -> exit 0"  PASS  (8.8s, 2 polls)
+#   24 busy workers            same test                          PASS  (22.9s, 2 polls)
+#   96 busy workers            same test                          FAIL  (65.8s, 1 poll)
+#
+# The failure is real and is the script's, not the test's: with one poll inside
+# the cap the loop returned `timeout` for a console that was answering correctly.
+# A longer POLL_TIMEOUT_S would move that threshold without removing the
+# dependence on load, which is why the fix is a SECOND, DETERMINISTIC budget —
+# a cap on the NUMBER OF POLLS. `POLL_MAX_ATTEMPTS` defaults to 0 (unbounded),
+# so every production caller keeps exactly the wall-clock behaviour it has; the
+# end-to-end suite sets it, and load can then only make the run SLOWER, never
+# change its verdict.
+#
+# BOTH ceilings still fail closed, and the classifier is TOLD WHICH ONE tripped
+# so the message cannot claim a wall-clock timeout that did not happen (R7).
+echo "Polling $ENDPOINT for completion (cap ${POLL_TIMEOUT_S}s, every ${POLL_INTERVAL_S}s, max attempts ${POLL_MAX_ATTEMPTS:-0} where 0=unbounded)…"
 STARTED=$(date +%s)
 DEADLINE=$(( STARTED + POLL_TIMEOUT_S ))
 OUTCOME=timeout
 REACHED=false
+ATTEMPTS=0
 
 while [ "$(date +%s)" -lt "$DEADLINE" ]; do
+  if [ "$POLL_MAX_ATTEMPTS" -gt 0 ] && [ "$ATTEMPTS" -ge "$POLL_MAX_ATTEMPTS" ]; then
+    break
+  fi
+  ATTEMPTS=$(( ATTEMPTS + 1 ))
   sleep "$POLL_INTERVAL_S"
   # `|| true`, never `|| echo 000` — the fallback concatenated onto the `000`
   # curl already printed, so GCODE was "000000" and the unreachable branch just
@@ -199,7 +232,7 @@ fi
 WAITED=$(( $(date +%s) - STARTED ))
 emit "reindex_poll=$OUTCOME"
 
-if ! MODE=poll POLL_OUTCOME="$OUTCOME" POLL_WAITED_S="$WAITED" \
+if ! MODE=poll POLL_OUTCOME="$OUTCOME" POLL_WAITED_S="$WAITED" POLL_ATTEMPTS="$ATTEMPTS" \
   POLL_BODY="$(cat "$POLL_BODY_FILE")" node "$CLASSIFIER"; then
   fail
 fi
