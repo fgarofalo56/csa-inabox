@@ -266,6 +266,60 @@ export interface MirrorRunResult {
   gate?: { missing: string; message: string };
 }
 
+/**
+ * THE ON-DISK FORMAT OF A LANDED TABLE — derived, never assumed (#4084).
+ *
+ * The three Azure-native engines do NOT agree on format, so a consumer that hard-codes one is wrong for the other two:
+ *   `csv-snapshot`  built-in TDS/PG/Cosmos read   -> CSV     (`snapshot.csv`, `delta-*.csv`)
+ *   `adf-cdc`       ADF ChangeDataCapture         -> DELTA
+ *   `adf-copy`      ADF Copy pipeline (Snowflake) -> PARQUET (`ParquetSink`)
+ *
+ * #4084 was `app/api/thread/mirror-to-notebook/route.ts` emitting `spark.read.option("header", True).csv(...)` for every
+ * table AND labelling the cell "ADLS Bronze CSV" — correct for exactly one of the three. It is worse than a plain error
+ * for the other two: Parquet read as headered delimited text does not necessarily throw. Spark can infer a single garbage
+ * column and return a non-empty DataFrame, so `.count()` prints a number and `display()` renders rows — a green-looking
+ * result that is not the data.
+ *
+ * WHAT THIS READS, in order, and why it is a DERIVATION rather than a guess:
+ *   1. The row's own `openrowset`. Every engine mints a ready-to-run Synapse Serverless query for the table it just
+ *      wrote, and that query names the format in its `FORMAT = '...'` clause. Produced by the same code path that writes
+ *      the files, per table — the closest recorded statement of what is actually on disk.
+ *   2. `state.lastRun.engine` — the run-level tag, for rows whose `openrowset` predates or omits the clause.
+ *
+ * Returns `null` when NEITHER establishes it, deliberately: an unestablished format must be SAYABLE, so a caller can
+ * disclose the assumption it then makes instead of asserting a format nothing recorded (deploy-integrity R7).
+ */
+export type MirrorBronzeFormat = 'csv' | 'parquet' | 'delta';
+
+export function mirrorBronzeFormatOf(
+  row: { openrowset?: string | null } | null | undefined,
+  engine?: string | null,
+): MirrorBronzeFormat | null {
+  const q = String(row?.openrowset ?? '');
+  const m = /FORMAT\s*=\s*'([A-Za-z]+)'/i.exec(q);
+  const named = (m?.[1] ?? '').toUpperCase();
+  if (named === 'CSV') return 'csv';
+  if (named === 'PARQUET') return 'parquet';
+  if (named === 'DELTA') return 'delta';
+  switch (engine) {
+    case 'csv-snapshot': return 'csv';
+    case 'adf-copy': return 'parquet';
+    case 'adf-cdc': return 'delta';
+    default: return null;
+  }
+}
+
+/**
+ * The PySpark reader expression for a landed table, keyed to {@link mirrorBronzeFormatOf}'s answer. `header` is a
+ * CSV-only option and is emitted only for CSV — carrying it on a `.parquet()` call was part of the same #4084 mismatch,
+ * and an option that cannot apply reads as though the format is still text.
+ */
+export function mirrorSparkReadExpr(fmt: MirrorBronzeFormat, abfssPath: string): string {
+  if (fmt === 'parquet') return `spark.read.parquet("${abfssPath}")`;
+  if (fmt === 'delta') return `spark.read.format("delta").load("${abfssPath}")`;
+  return `spark.read.option("header", True).csv("${abfssPath}")`;
+}
+
 /** Is the ADLS Bronze landing zone configured? */
 function bronzeConfigured(): boolean {
   if (!process.env.LOOM_BRONZE_URL) return false;

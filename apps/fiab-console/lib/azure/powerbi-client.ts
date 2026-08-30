@@ -161,10 +161,32 @@ async function call<T = any>(path: string, opts: CallOpts = {}): Promise<T> {
   let json: any = null;
   try { json = text ? JSON.parse(text) : null; } catch { /* leave as text */ }
   if (!res.ok) {
-    const msg = (json?.error?.message || json?.message || text || `${api} ${method} ${path} failed`).toString();
-    throw new PowerBiError(msg, res.status, json || text, url);
+    const detail = (json?.error?.message || json?.message || text || '').toString().trim();
+    throw new PowerBiError(detail || bareFailureMessage(api, method, path, res.status), res.status, json || text, url);
   }
   return (json as T) ?? ({} as T);
+}
+
+/**
+ * The message for a Power BI / Fabric failure whose response body said NOTHING (#3566). The fallback used to be the bare
+ * `${api} ${method} ${path} failed`, surfaced verbatim by the dashboard editor as "powerbi GET /groups/<guid>/dashboards
+ * failed": no status, no reason, no remediation, no way to tell an expected "nothing is linked yet" from a real backend
+ * fault. `deploy-integrity.md` R7 forbids asserting what the code did not establish; that string established NOTHING while
+ * reading like a verdict. This states what IS known — endpoint, verb, HTTP status — then, per status, the causes it is
+ * CONSISTENT WITH and the next action, never picking one: a Power BI 403 is genuinely ambiguous between "no role on the
+ * workspace" and "SP API access off at the tenant". The empty body is itself reported — Power BI normally returns an error
+ * object, so its absence implicates a proxy/gateway rather than the service. */
+function bareFailureMessage(api: Api, method: string, path: string, status: number): string {
+  const service = api === 'fabric' ? 'Microsoft Fabric' : 'Power BI';
+  const by: Record<number, string> = {
+    400: 'the request was rejected as malformed — a Loom defect, not an operator action. Report it with the endpoint above.',
+    401: 'the bearer token was not accepted. Either the signed-in user has not consented to Power BI delegated access, or (on a background call) the console managed identity holds none. Sign out and back in to re-consent; if it persists it is a tenant setting, not a per-user one.',
+    403: "the identity authenticated but was refused. Consistent with: no role on this Power BI workspace, service-principal API access disabled in the Power BI admin portal, or a capacity this identity cannot reach. Check the workspace's Access list first — the only one of the three fixable without tenant admin.",
+    404: 'no such object there. Consistent with: the Power BI workspace was deleted or renamed to a different id, or this Loom workspace is mapped to one that no longer exists. It is ALSO what Power BI returns when the identity cannot see the object at all, so a 404 does NOT prove absence. Re-map in Workspace settings to confirm.',
+    429: 'Power BI throttled the request. Retry after a short wait; nothing is misconfigured.',
+  };
+  const known = by[status] ?? (status >= 500 ? `${service} returned a server error — upstream of Loom. Retry, then check Microsoft service health.` : 'Loom has no specific reading for this status.');
+  return `${service} answered ${method} ${path} with HTTP ${status} and an EMPTY response body, so it gave no reason. What follows is what HTTP ${status} is consistent with — Loom did NOT establish which: ${known} (An empty error body is unusual for ${service}, which normally returns an error object, so a proxy, gateway or network appliance in front of the API is also a candidate.)`;
 }
 
 // ============================================================
