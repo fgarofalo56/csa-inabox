@@ -60,6 +60,12 @@ import {
   type SkippedSubject,
 } from '../types';
 import { LOOM_ESTATE_TAG_KEY } from '../graph';
+// #3967 — the prefix is imported from the module that MINTS it, never re-typed
+// here. `azureSubjects()` is the population for two of the six checks below and
+// an empty population is a PASS, so a prefix that drifted from the minter would
+// silently disarm them. Imported from `../graph/node-id` directly: the `../graph`
+// barrel re-exports the constructors but not the prefixes.
+import { AZURE_NODE_ID_PREFIX } from '../graph/node-id';
 import {
   makeAgentPopulation,
   mergeUsage,
@@ -179,9 +185,22 @@ function checkNoEvidence(f: Finding): Refutation | null {
   };
 }
 
-/** Azure subjects, identified by the `azure:` id prefix the node-id module mints. */
+/**
+ * Azure subjects, identified by the id prefix the node-id module MINTS
+ * ({@link AZURE_NODE_ID_PREFIX}) — not by a literal re-typed here (#3967).
+ *
+ * WHAT THIS DOES NOT COVER, stated because a half-guard read as a whole one is
+ * the shape this repo keeps finding. Sharing the constant defeats a RENAME. It
+ * does NOT defeat a filter written INSIDE this predicate that is keyed to a
+ * production-only value — #3967 measured exactly that: keep the prefix test and
+ * additionally drop any subject whose subscription segment is 36 chars (a real
+ * GUID), and the whole brain suite stays green, because every fixture uses a
+ * short non-GUID placeholder subscription segment. Closing that needs a
+ * GUID-shaped fixture in `lib/brain/__tests__/agents/fixtures.ts`, which is not
+ * added here. Do not read this comment as coverage of that mutation.
+ */
 function azureSubjects(f: Finding): NodeId[] {
-  return f.subjects.filter((s) => String(s).startsWith('azure:'));
+  return f.subjects.filter((s) => String(s).startsWith(AZURE_NODE_ID_PREFIX));
 }
 
 /**
