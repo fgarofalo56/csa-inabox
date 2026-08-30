@@ -183,7 +183,53 @@ fi
 # takes ~165s to say so instead of ~0s. That is the SAME trade #3383 already made
 # deliberately for a true RBAC denial: a slow true answer beats a fast false one,
 # and the exhaustion message names both possibilities rather than asserting one.
-TRANSIENT='CONNECTIVITY_REFRESH_TOKEN_ERROR|Response code: 403|is not allowed access|try running .az login. again|TooManyRequests|temporarily unavailable|Connection aborted|connection reset|ServiceUnavailable|GatewayTimeout|504|503'
+# #4055 — THE SET WAS NARROWER THAN THE SIBLING GUARD ON THE SAME ROLL PATH.
+#
+# Forty lines from this `az acr login`, `.github/workflows/loom-roll-and-validate.yml`
+# retries cosign on `DENIED|is not allowed access|no route to host|TLS handshake|
+# connection refused|i/o timeout|502 Bad Gateway|503 Service`. Two guards, one
+# registry, one propagation window - and whichever is NARROWER decides how the
+# roll actually fails. This one was.
+#
+# WHAT WAS ADDED, and why each is safe:
+#
+#   status: 403 Forbidden   Microsoft's own troubleshooting page
+#                           (container-registry-troubleshoot-access) documents
+#                           `Error response from daemon: login attempt failed
+#                           with status: 403 Forbidden`. Note it is NOT the
+#                           string `Response code: 403` the AAD client emits, so
+#                           the existing needle did not cover it - the same
+#                           daemon-in-its-own-words miss as #4052.
+#   aka.ms/acr/firewall     ACR appends this link to NETWORK-RULE refusals only.
+#                           Its permission denials point at aka.ms/acr/authorization.
+#   host is not reachable   The private-endpoint / DNS wording. DECIDED: TRANSIENT.
+#                           The reasoning, stated because the issue asked for a
+#                           recorded decision either way - a PE record and its
+#                           DNS propagate asynchronously after a deploy or a
+#                           firewall lease, which is the same class of window
+#                           this script already rides out, and the sibling guard
+#                           already retries `no route to host` for the same
+#                           registry. Cost of being wrong is bounded and known:
+#                           ~165s to say so instead of ~0s, and the exhaustion
+#                           message names every possibility rather than asserting
+#                           one (R7). If a genuinely permanent DNS gap starts
+#                           costing 3 minutes a roll, REVERSE THIS, do not widen
+#                           it further.
+#   no route to host        Convergence with the sibling's transport needles.
+#   TLS handshake, connection refused, i/o timeout, 502 Bad Gateway
+#                           Same - all transport, none of them a verdict about
+#                           authorization.
+#
+# WHAT IS DELIBERATELY *NOT* ADOPTED FROM THE SIBLING, so the divergence is
+# documented rather than left for the next reader to diff (#4055 acceptance):
+# bare `DENIED`. `grep -qiE` is case-insensitive, so `DENIED` also matches
+#     denied: requested access to the resource is denied
+# which is ACR's REPO-PERMISSION denial. No amount of retrying grants a role, so
+# that must stay permanent - and `test-acr-login-retry.sh`'s PERMDENY_MSG /
+# PERMDENY_LINK_MSG fixtures go red if anyone widens a needle far enough to
+# swallow it. The sibling can afford bare `DENIED` because its own failure mode
+# is "report unreachable and continue"; this one exits 1 and stops the roll.
+TRANSIENT='CONNECTIVITY_REFRESH_TOKEN_ERROR|Response code: 403|status: 403 Forbidden|is not allowed access|aka\.ms/acr/firewall|try running .az login. again|TooManyRequests|temporarily unavailable|Connection aborted|connection reset|connection refused|no route to host|host is not reachable|TLS handshake|i/o timeout|ServiceUnavailable|GatewayTimeout|502 Bad Gateway|504|503'
 
 LAST=""
 # Report the time this actually took, not ATTEMPTS*BACKOFF — the loop never
