@@ -39,7 +39,14 @@ const ADX_SKUS = ['Dev(No SLA)_Standard_E2a_v4','Standard_E2ads_v5','Standard_E4
 const WAREHOUSE_SIZES = ['2X-Small','X-Small','Small','Medium','Large','X-Large','2X-Large','3X-Large','4X-Large'];
 const SEARCH_SKUS = ['free','basic','standard','standard2','standard3','storage_optimized_l1','storage_optimized_l2'];
 const APIM_SKUS = ['Developer','Basic','Standard','Premium','BasicV2','StandardV2','PremiumV2','Consumption'];
-const ACA_PROFILES = ['Consumption','D4','D8','D16','D32','E4','E8','E16','E32'];
+// #3895 — there is NO hard-coded Container Apps profile list here any more.
+// The eight names that used to sit on this line were offered to the operator
+// while the live environment `cae-csa-loom-centralus` declared exactly two
+// (`Consumption`, `D8`), so seven of eight options accepted a click and came
+// back a raw ARM 400. Options now come from `app.availableProfiles`, which
+// GET /api/admin/scaling/container-apps reads off each app's own managed
+// environment — the only source that is right in Commercial and in every
+// sovereign boundary at once (cloud-parity.md).
 
 const useStyles = makeStyles({
   intro: { color: tokens.colorNeutralForeground2, lineHeight: 1.55, marginBottom: tokens.spacingVerticalL },
@@ -625,10 +632,29 @@ export default function ScalingPage() {
         const pendingProfile = sel.workloadProfileName ?? a.workloadProfileName ?? 'Consumption';
         const pendingMin = sel.minReplicas ?? a.minReplicas ?? 0;
         const pendingMax = sel.maxReplicas ?? a.maxReplicas ?? 1;
+        // #3895 — the profiles THIS app's environment declares, read off the
+        // estate by the BFF. The app's CURRENT profile is unioned in so a
+        // running value is never missing from its own picker (which would
+        // render the control as if the app were on something it is not).
+        const declared: string[] = Array.isArray(a.availableProfiles) ? a.availableProfiles : [];
+        const profileOptions = [...new Set([...declared, ...(a.workloadProfileName ? [a.workloadProfileName] : [])])];
+        // R7 — an empty picker must never be shown as "this environment has no
+        // profiles". When the read failed, the BFF says so and that is what the
+        // operator sees; the replica controls beside it still work.
+        const profilesUnknown = profileOptions.length === 0;
         return (
           <div className={styles.controlRow}>
-            <ScalePicker label="Profile" options={skuOpts(ACA_PROFILES)} value={pendingProfile}
-              onChange={(v) => setAcaSel({ ...acaSel, [a.name]: { ...sel, workloadProfileName: v } })} />
+            {profilesUnknown ? (
+              <div className={styles.cellStack}>
+                <Caption1 className={styles.fieldLabel}>Profile</Caption1>
+                <Caption1 className={styles.subtle}>
+                  {a.profilesError || 'The profiles this app can be moved onto could not be established.'}
+                </Caption1>
+              </div>
+            ) : (
+              <ScalePicker label="Profile" options={skuOpts(profileOptions)} value={pendingProfile}
+                onChange={(v) => setAcaSel({ ...acaSel, [a.name]: { ...sel, workloadProfileName: v } })} />
+            )}
             <div className={styles.cellStack}>
               <Caption1 className={styles.fieldLabel}>min</Caption1>
               <Input type="number" className={styles.numNarrow} value={String(pendingMin)}
@@ -657,8 +683,17 @@ export default function ScalingPage() {
               onClick={async () => {
                 setAcaState({ ...acaState, [a.name]: { applying: true } });
                 try {
+                  // #3895 — send the profile ONLY when it is actually being
+                  // changed. Re-sending the current one made every replica edit
+                  // a profile change too, which now costs an environment read
+                  // and, on an app whose environment cannot be read, would
+                  // refuse a replica change for a profile nobody was moving.
+                  const profileChanged = pendingProfile !== (a.workloadProfileName ?? 'Consumption');
                   await jsonPost('/api/admin/scaling/container-apps', {
-                    name: a.name, workloadProfileName: pendingProfile, minReplicas: pendingMin, maxReplicas: pendingMax,
+                    name: a.name,
+                    ...(profileChanged ? { workloadProfileName: pendingProfile } : {}),
+                    minReplicas: pendingMin,
+                    maxReplicas: pendingMax,
                   });
                   setAcaState({ ...acaState, [a.name]: { ok: 'Scale applied' } });
                 } catch (e: any) { setAcaState({ ...acaState, [a.name]: { error: e.message } }); }

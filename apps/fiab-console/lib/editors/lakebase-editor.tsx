@@ -34,6 +34,17 @@ import {
 } from '@fluentui/react-icons';
 import { ItemEditorChrome } from './item-editor-chrome';
 import { NewItemCreateGate } from './new-item-gate';
+// #3521 — the SAME picker + region list the ADF create-factory form already
+// uses. Imported rather than restated: two hand-kept region lists drift, and the
+// one in `pipeline-create-factory-form` already carries the US Government
+// regions, which a Commercial-only copy here would have dropped
+// (`cloud-parity.md`). `AzureResourcePicker` is the shared cross-subscription,
+// user-RBAC resource selector — its own docblock records the three defects that
+// had to be fixed before anything could adopt it, including the Gov case where
+// discovery is denied and it must stay usable rather than becoming a dead end.
+import { AzureResourcePicker, type AzureResource } from '@/lib/components/azure/azure-resource-picker';
+import { ADF_FACTORY_REGIONS as AZURE_REGIONS } from './pipeline-create-factory-form';
+import { getItem } from '@/lib/api/workspaces';
 import { MonacoTextarea } from '@/lib/components/editor/monaco-textarea';
 import { clientFetch } from '@/lib/client-fetch';
 import { openCopilot } from '@/lib/components/copilot-pane';
@@ -86,6 +97,75 @@ interface SkuOption { name: string; tier: string; label: string; vCores: number;
 interface WizardCatalog { skus: SkuOption[]; storageGb: number[]; versions: string[]; ha: { value: string; label: string }[] }
 interface QueryResult { columns: string[]; rows: unknown[][]; rowCount: number; command?: string; executionMs: number }
 
+/**
+ * The Loom item's display name, sanitized DETERMINISTICALLY into a PostgreSQL
+ * Flexible Server name (#3521, `auto-bind-by-default.md` §2).
+ *
+ * Azure's rule for `Microsoft.DBforPostgreSQL/flexibleServers`: 3-63 chars,
+ * lowercase letters, digits and hyphens, must start with a letter or digit and
+ * must not end with a hyphen. Anything outside that is replaced rather than
+ * dropped, so two different display names cannot collapse onto one server name
+ * by silently deleting the characters that distinguished them.
+ *
+ * Returns '' when the name cannot be made legal (empty, or fewer than 3 usable
+ * characters) — the caller then leaves the field blank rather than seeding
+ * something the ARM PUT would reject with a message about a name the user never
+ * typed.
+ */
+/**
+ * A PostgreSQL Flexible Server admin password, MINTED BY THE PLATFORM (#3521).
+ *
+ * Azure requires an administrator login + password at create time, and this form
+ * used to ask the operator to invent one — the one field on it that no discovery
+ * call could ever answer, and therefore, per `auto-bind-by-default.md` §5, the
+ * one whose remediation is "the platform produces it" rather than "a better
+ * picker".
+ *
+ * Azure's own complexity rule (8-128 chars from at least three of: uppercase,
+ * lowercase, digits, non-alphanumerics) is satisfied CONSTRUCTIVELY — one
+ * character taken from each class first, the rest filled from the union, then
+ * shuffled — rather than by generating and hoping. `crypto.getRandomValues` is
+ * the entropy source; `Math.random()` is not a credential generator.
+ *
+ * Characters Azure's own docs exclude from the set (`'`, `"`, `\`, `/`, `@`, `%`)
+ * are left out, so a value cannot break a connection string or an ARM payload.
+ */
+export function mintPostgresAdminPassword(len = 28): string {
+  const UPPER = 'ABCDEFGHJKLMNPQRSTUVWXYZ';
+  const LOWER = 'abcdefghijkmnopqrstuvwxyz';
+  const DIGIT = '23456789';
+  const SYM = '!#$*+-=?_~';
+  const all = UPPER + LOWER + DIGIT + SYM;
+  const n = Math.max(12, Math.min(128, len));
+  const bytes = new Uint32Array(n);
+  crypto.getRandomValues(bytes);
+  const pick = (set: string, i: number) => set[bytes[i] % set.length];
+  const chars = [pick(UPPER, 0), pick(LOWER, 1), pick(DIGIT, 2), pick(SYM, 3)];
+  for (let i = 4; i < n; i++) chars.push(pick(all, i));
+  // Fisher-Yates over the SAME entropy source, so the four seeded classes are
+  // not always in positions 0-3 (a predictable prefix is a weaker password than
+  // its length suggests).
+  const swap = new Uint32Array(chars.length);
+  crypto.getRandomValues(swap);
+  for (let i = chars.length - 1; i > 0; i--) {
+    const j = swap[i] % (i + 1);
+    [chars[i], chars[j]] = [chars[j], chars[i]];
+  }
+  return chars.join('');
+}
+
+export function postgresServerName(displayName: string): string {
+  const slug = String(displayName || '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/-+/g, '-')
+    .replace(/^-+/, '')
+    .replace(/-+$/, '')
+    .slice(0, 63)
+    .replace(/-+$/, '');
+  return slug.length >= 3 ? slug : '';
+}
+
 export function LakebaseEditor({ item, id }: EditorProps) {
   const s = useStyles();
   const isNew = id === 'new';
@@ -104,7 +184,21 @@ export function LakebaseEditor({ item, id }: EditorProps) {
   // provision wizard
   const [catalog, setCatalog] = useState<WizardCatalog | null>(null);
   const [inventory, setInventory] = useState<{ name: string }[]>([]);
-  const [wz, setWz] = useState({ name: '', resourceGroup: '', location: '', administratorLogin: '', administratorLoginPassword: '', skuName: '', storageGb: 32, version: '16', ha: 'Disabled' });
+  // #3521 — the admin credential is MINTED, not asked for: a deterministic login
+  // and a browser-generated password, both filled before the operator arrives.
+  // `useState`'s lazy initializer so the password is generated ONCE per editor
+  // mount rather than on every render.
+  const [wz, setWz] = useState(() => ({
+    name: '', resourceGroup: '', location: '',
+    administratorLogin: 'loomadmin',
+    administratorLoginPassword: mintPostgresAdminPassword(),
+    skuName: '', storageGb: 32, version: '16', ha: 'Disabled',
+  }));
+  // #3521 — the picked RG, kept whole so its ARM id round-trips through
+  // AzureResourcePicker (which preserves a value it cannot resolve rather than
+  // blanking it) and its LOCATION can default the region below. The wire shape
+  // the provision route takes is still the RG NAME.
+  const [rgPick, setRgPick] = useState<AzureResource | null>(null);
 
   // query
   const [sql, setSql] = useState('SELECT version();');
@@ -151,6 +245,32 @@ export function LakebaseEditor({ item, id }: EditorProps) {
   }, [base, wz.skuName]);
 
   useEffect(() => { if (tab === 'provision') void loadProvision(); }, [tab, loadProvision]);
+
+  // #3521 — SEED THE SERVER NAME FROM THE LOOM ITEM.
+  //
+  // `auto-bind-by-default.md` §2: the backing Azure object carries the SAME
+  // display name as the Loom item, "sanitized only where the service's naming
+  // rules force it — and then deterministically". This form opened with an empty
+  // Server name box, so the operator had to invent a name for a thing Loom had
+  // already named. The item's own name is not in this editor's GET (that route
+  // returns config + live server state), so it is read from the item document
+  // through the shared `getItem` client — the same call `ItemEditorChrome` makes
+  // for the header title.
+  //
+  // Best-effort by design: a failure leaves the field empty and typeable, which
+  // is the pre-existing behaviour. It never OVERWRITES — a name already typed,
+  // or one seeded on a previous visit to the tab, wins.
+  useEffect(() => {
+    if (isNew) return;
+    let cancelled = false;
+    getItem('lakebase-postgres', id)
+      .then((it) => {
+        const seeded = postgresServerName(it?.displayName || '');
+        if (!cancelled && seeded) setWz((w) => (w.name ? w : { ...w, name: seeded }));
+      })
+      .catch(() => { /* the field stays empty and typeable */ });
+    return () => { cancelled = true; };
+  }, [id, isNew]);
   useEffect(() => { if (tab === 'replicas' && cfg.server) void loadReplicas(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [tab, cfg.server]);
 
   async function patch(bodyObj: Record<string, unknown>, label: string) {
@@ -459,10 +579,48 @@ export function LakebaseEditor({ item, id }: EditorProps) {
       </div>
       <div className={s.card}>
         <Subtitle2>Provision a new server</Subtitle2>
+        {/* #3521 — pickers, not free text, and a name Loom already knows.
+            This row was three raw <Input>s: an empty Server name, a typed
+            resource-group NAME, and a typed region string with an "e.g. eastus"
+            placeholder — while the sibling ADF create-factory form next door had
+            already moved to the shared AzureResourcePicker + a real region
+            Dropdown. Typing a region is not merely inconvenient: `usgovvirginia`
+            mistyped is an ARM 400 the operator has to decode, and it is the
+            per-cloud value a Commercial-shaped example is least likely to help
+            with. */}
         <div className={s.row}>
-          <Field label="Server name" className={s.field}><Input value={wz.name} onChange={(_, d) => setWz({ ...wz, name: d.value })} /></Field>
-          <Field label="Resource group" className={s.field}><Input value={wz.resourceGroup} onChange={(_, d) => setWz({ ...wz, resourceGroup: d.value })} /></Field>
-          <Field label="Location" className={s.field}><Input value={wz.location} onChange={(_, d) => setWz({ ...wz, location: d.value })} placeholder="e.g. eastus" /></Field>
+          <Field label="Server name" className={s.field}
+            hint={wz.name ? 'Pre-filled from this item\'s name; 3-63 lowercase letters, digits or hyphens.' : 'Globally unique; 3-63 lowercase letters, digits or hyphens.'}>
+            <Input value={wz.name} onChange={(_, d) => setWz({ ...wz, name: d.value })} />
+          </Field>
+          <div className={s.field}>
+            <AzureResourcePicker
+              type="Microsoft.Resources/subscriptions/resourceGroups"
+              label="Resource group"
+              placeholder="Select a resource group (across all subscriptions)"
+              value={rgPick?.id}
+              onChange={(r) => {
+                setRgPick(r);
+                // The provision route takes the resource-group NAME (its own
+                // contract, `provision/route.ts:67`), so the picker's richer
+                // object is projected down to it here rather than changing a
+                // wire shape this editor does not own. The RG's location becomes
+                // the default region — the answer that is right far more often
+                // than any constant, and still overridable below.
+                setWz((w) => ({
+                  ...w,
+                  resourceGroup: r?.name || '',
+                  location: w.location || r?.location || '',
+                }));
+              }}
+            />
+          </div>
+          <Field label="Location" className={s.field} hint="Azure region for the new server. Defaults to the resource group's region.">
+            <Dropdown placeholder="Select a region" value={wz.location} selectedOptions={wz.location ? [wz.location] : []}
+              onOptionSelect={(_, d) => d.optionValue && setWz({ ...wz, location: d.optionValue })}>
+              {AZURE_REGIONS.map((r) => <Option key={r} value={r} text={r}>{r}</Option>)}
+            </Dropdown>
+          </Field>
         </div>
         <div className={s.row}>
           <Field label="Compute SKU" className={s.field}>
@@ -490,9 +648,42 @@ export function LakebaseEditor({ item, id }: EditorProps) {
             </Dropdown>
           </Field>
         </div>
+        {/* #3521 boy-scout — THE PLATFORM MINTS THE ADMIN CREDENTIAL.
+            This was a bare "Admin password" text box: the last thing on this form
+            the operator was asked to invent, and the one thing no discovery call
+            could ever have supplied. `auto-bind-by-default.md` §5 says the answer
+            to that is not a better picker, it is for the platform to produce the
+            value so nothing is asked at all — which is what
+            `mintPostgresAdminPassword()` does, in the browser, from
+            `crypto.getRandomValues`.
+            The value is DISCLOSED, not hidden: it is shown once, copyable, with
+            the plain statement that Loom does not keep it. Day-to-day access to
+            this server is Entra (the Console UAMI), not this credential — ARM
+            simply requires one at create time. */}
         <div className={s.row}>
-          <Field label="Admin login" className={s.field}><Input value={wz.administratorLogin} onChange={(_, d) => setWz({ ...wz, administratorLogin: d.value })} /></Field>
-          <Field label="Admin password" className={s.field}><Input type="password" value={wz.administratorLoginPassword} onChange={(_, d) => setWz({ ...wz, administratorLoginPassword: d.value })} /></Field>
+          <Field label="Admin login" className={s.field} hint="Pre-set by Loom; ARM requires an administrator at create time.">
+            <Input value={wz.administratorLogin} onChange={(_, d) => setWz({ ...wz, administratorLogin: d.value })} />
+          </Field>
+          <div className={s.field}>
+            <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>ADMIN PASSWORD</Caption1>
+            <Caption1 className={s.mono} data-testid="lakebase-generated-admin-password">
+              {wz.administratorLoginPassword || 'generating…'}
+            </Caption1>
+            <div className={s.row}>
+              <Button size="small" appearance="secondary" icon={<ArrowSync20Regular />}
+                onClick={() => setWz((w) => ({ ...w, administratorLoginPassword: mintPostgresAdminPassword() }))}>
+                Regenerate
+              </Button>
+              <Button size="small" appearance="subtle"
+                onClick={() => { void navigator.clipboard?.writeText(wz.administratorLoginPassword); }}>
+                Copy
+              </Button>
+            </div>
+            <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
+              Generated in your browser and sent once to create the server. Loom does not store it — copy it now if
+              you want SQL-auth access later. Everyday access uses Microsoft Entra via the Console managed identity.
+            </Caption1>
+          </div>
         </div>
         <div className={s.row}>
           <Button appearance="primary" icon={busy === 'provision' ? <Spinner size="tiny" /> : <DatabaseArrowUp20Regular />}

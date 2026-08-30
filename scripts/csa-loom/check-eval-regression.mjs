@@ -7,6 +7,15 @@
  * `content/evals/eval-floors.json` AND against the previous run:
  *
  *   - any metric BELOW its floor            → exit 1 (hard fail, ::error)
+ *   - EXCEPT (#3831) a `passRate` breach smaller than ONE JUDGED QUESTION of the
+ *     run's own denominator, where the previous comparable run was at or above
+ *     the floor → ::warning, exit 0. The floor is NOT lowered and the file is
+ *     not touched: the gate declines to call a difference it cannot resolve a
+ *     regression, the same refusal it already makes for a mixed pass predicate
+ *     (#2992) and a partial measurement (#3083). A second consecutive breach
+ *     FAILS, and `retrievalHitRate` / `groundingAvg` keep hard single-run floors
+ *     — measured stable to three decimals across the four runs in #3831 while
+ *     only the judged rate moved, in one-question steps.
  *   - a one-run drop > EVAL_REGRESSION_DELTA points but still above floor
  *                                           → ::warning annotation, exit 0
  *     (flaky-judge tolerance)
