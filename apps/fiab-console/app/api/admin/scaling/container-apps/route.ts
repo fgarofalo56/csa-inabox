@@ -1,25 +1,39 @@
 /**
- * GET  /api/admin/scaling/container-apps — list Loom container apps + current scale.
+ * GET  /api/admin/scaling/container-apps — list Loom container apps + current
+ *      scale + the workload profiles each app's OWN managed environment declares.
  * POST /api/admin/scaling/container-apps — { name, workloadProfileName?, minReplicas?, maxReplicas? }
  *
- * Real ARM PATCH against Microsoft.App/containerApps/{name}. Workload-profile
- * change requires a Premium ACA managed environment with that profile
- * pre-provisioned; switching to D-/E-series on a Consumption-only env will
- * surface ARM's 400 verbatim so the admin sees the bicep change required.
+ * Real ARM PATCH against Microsoft.App/containerApps/{name}.
+ *
+ * ── #3895: THE PICKER OFFERED PROFILES THE ENVIRONMENT DOES NOT HAVE ────────
+ *
+ * This route used to validate `workloadProfileName` against a HARD-CODED set of
+ * nine names. An app can only be bound to a profile its managed ENVIRONMENT
+ * declares, and the live Commercial environment `cae-csa-loom-centralus`
+ * declares exactly two (`Consumption`, `D8`) — so seven of the eight
+ * non-Consumption options passed this check and were then rejected by ARM with a
+ * raw 400. The operator could not tell "unavailable in my environment" from
+ * "the platform is broken".
+ *
+ * The hard-coded list is gone from the decision path. GET returns each app's
+ * `availableProfiles`, read from its environment, so the picker is populated
+ * from the estate; POST re-validates the same way inside
+ * `updateContainerAppScale`, so a hand-crafted request cannot bypass the UI.
+ *
+ * `cloud-parity.md`: the declared set is per-environment and therefore
+ * per-cloud. Reading it is the only implementation that is correct in
+ * Commercial and in every sovereign boundary at once — a second hard-coded list
+ * would have re-created the defect there.
  */
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import { denyIfNoDlzAccess } from '@/lib/auth/dlz-gate';
 import {
-  listContainerApps, updateContainerAppScale, AcaNotConfiguredError,
+  listContainerAppsWithProfiles, updateContainerAppScale, AcaNotConfiguredError,
 } from '@/lib/azure/container-apps-arm-client';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
-
-const VALID_PROFILES = new Set([
-  'Consumption', 'D4', 'D8', 'D16', 'D32', 'E4', 'E8', 'E16', 'E32',
-]);
 
 export async function GET(_req: NextRequest) {
   const s = getSession();
@@ -27,7 +41,11 @@ export async function GET(_req: NextRequest) {
   const denied = await denyIfNoDlzAccess(s, 'scaling');
   if (denied) return denied;
   try {
-    const apps = await listContainerApps();
+    // Each app carries the profiles ITS environment declares (#3895). One ARM
+    // read per distinct environment; a per-environment read failure rides along
+    // as `profilesError` instead of failing the whole list, so the replica
+    // controls keep working when only the profile read is denied.
+    const apps = await listContainerAppsWithProfiles();
     return NextResponse.json({ ok: true, apps });
   } catch (e: any) {
     if (e instanceof AcaNotConfiguredError) {
@@ -52,10 +70,18 @@ export async function POST(req: NextRequest) {
     maxReplicas?: number;
   };
   if (!body?.name) return NextResponse.json({ ok: false, error: 'name required' }, { status: 400 });
-  if (body.workloadProfileName && !VALID_PROFILES.has(body.workloadProfileName)) {
+  // #3895 — the profile is validated against the app's ENVIRONMENT, inside
+  // `updateContainerAppScale`, because only the environment knows the answer.
+  // What is checked here is the SHAPE, so a free-form string never reaches an
+  // ARM URL or a message: a name is at most 63 chars of alphanumerics and
+  // hyphens (ARM's own rule for the profile name).
+  if (body.workloadProfileName !== undefined
+      && (typeof body.workloadProfileName !== 'string' || !/^[A-Za-z0-9-]{1,63}$/.test(body.workloadProfileName))) {
     return NextResponse.json({
       ok: false,
-      error: `workloadProfileName must be one of ${[...VALID_PROFILES].join(', ')}`,
+      error: 'workloadProfileName must be 1-63 characters of letters, digits or hyphens. '
+        + 'The set actually selectable is declared by the app\'s managed environment and is returned '
+        + 'per app as `availableProfiles` by GET on this route.',
     }, { status: 400 });
   }
   if (typeof body.minReplicas === 'number' && body.minReplicas < 0) {

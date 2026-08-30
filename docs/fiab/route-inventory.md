@@ -2525,7 +2525,7 @@ silently downgrading the route.
 
 ## Backend signals (derived)
 
-449 module(s) ORIGINATE a backend label — the derivation read an
+450 module(s) ORIGINATE a backend label — the derivation read an
 Azure identifier out of them. Every other route/module below inherits through the
 call graph. Nothing in this section is a Loom module name someone typed: the
 modules are derived, and only the Microsoft-owned identifier vocabulary is seeded.
@@ -3135,6 +3135,7 @@ caps the NUMBER of cuts at three; it does not bound what one cut can hide.
 | `apps/fiab-console/lib/editors/foundry-sub-editors.tsx` | ADLS, AI Foundry, AI Search, Azure AI Services |
 | `apps/fiab-console/lib/editors/geo-editors.tsx` | Azure Maps |
 | `apps/fiab-console/lib/editors/graph-editors.tsx` | ADLS |
+| `apps/fiab-console/lib/editors/lakebase-editor.tsx` | ARM |
 | `apps/fiab-console/lib/editors/lakehouse-shortcut-editor.tsx` | ADLS, Dataverse |
 | `apps/fiab-console/lib/editors/lakehouse/dialogs/shortcut-wizard-dialog.tsx` | ADLS |
 | `apps/fiab-console/lib/editors/lakehouse/dialogs/small-dialogs.tsx` | Synapse SQL |

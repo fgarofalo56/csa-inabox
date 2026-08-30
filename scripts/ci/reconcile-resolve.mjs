@@ -45,7 +45,7 @@
  *
  * Usage: node scripts/ci/reconcile-resolve.mjs
  */
-import { execFileSync } from 'node:child_process';
+import { spawnSync } from 'node:child_process';
 import { appendFileSync } from 'node:fs';
 import {
   resolveRunningImageTags,
@@ -66,20 +66,79 @@ const deploySub = env.DEPLOY_SUB || '';
 const requestedRegion = env.INPUT_REGION || '';
 
 /**
- * The Azure CLI, invoked WITHOUT a shell for the same reason
- * deploy-fiab-guard.mjs does: arguments come from workflow inputs.
+ * The Azure CLI binary. #3704.
  *
- * Same consequence, written down again so nobody re-discovers it: on Windows
- * `az` is a .cmd shim and Node refuses to execFileSync it without a shell, so
- * these two functions fail closed to null on a workstation. That is the correct
- * behaviour but is NOT a measurement — CI is ubuntu-latest, where `az` is a real
- * executable. The pure functions they feed are covered on every platform.
+ * WHAT THIS USED TO BE, and why it mattered. `const AZ = 'az'` with no override.
+ * On Windows `az` is a `.cmd` shim that Node will not spawn without a shell, so
+ * both reads below failed closed to `null` on a workstation — and this script is
+ * the one that decides the estate's REGION and whether `deploy_apps_enabled`
+ * upgrades from the safe `false` to `true`. Measured 2026-08-18, verifying
+ * whether the 06:00 nightly would repair the estate after #3701:
+ *
+ *     $ GITHUB_EVENT_NAME=schedule DEPLOY_SUB=… node scripts/ci/reconcile-resolve.mjs
+ *     ::warning::admin-RG list failed: spawnSync az ENOENT
+ *     ::error::REGION REFUSED — could not list rg-csa-loom-admin-* resource groups
+ *
+ * …with `az account show` working in the same shell. The answer had to be
+ * reconstructed by hand instead. A decision procedure that can only run inside
+ * the job it gates can only ever be verified after the fact from logs, which is
+ * how #3701 stayed invisible for three nightlies (deploy-integrity.md R4).
+ *
+ * Ten sibling scripts already carried this resolver; these two reads did not.
+ * Verbatim the shape from `scripts/csa-loom/resolve-dlz-coordinates.mjs`.
+ *
+ * NO PRODUCTION CHANGE. On the ubuntu-latest runner `process.platform` is
+ * `linux` and `LOOM_AZ_BIN` is unset, so this returns `'az'` exactly as before
+ * and the shell branch below is not taken.
+ *
+ * NOT EXPORTED, for the reason `deploy-fiab-guard.mjs` records against its own
+ * copy: this file runs its whole resolution at module scope (no
+ * `invokedDirectly` fence — one that mis-resolved `process.argv[1]` would turn
+ * the deploy's most consequential decision into a silent no-op), so importing it
+ * to unit-test a one-line resolver would EXECUTE the resolution. The control in
+ * `scripts/ci/__tests__/reconcile-resolve-az-bin.test.mjs` therefore SPAWNS this
+ * script with `LOOM_AZ_BIN` pointed at a stub and reads which binary actually
+ * ran — which proves the override reaches the spawn, not merely that a function
+ * returns a string. A resolver nothing consults is the same defect in a hat.
+ *
+ * @returns {string} the executable name/path to spawn
  */
-const AZ = 'az';
+function azBinary() {
+  if (env.LOOM_AZ_BIN) return env.LOOM_AZ_BIN;
+  return process.platform === 'win32' ? 'az.cmd' : 'az';
+}
 
+/**
+ * Run `az <args>` and parse its stdout as JSON.
+ *
+ * `shell` is enabled ONLY for a `.cmd`/`.bat` binary — the sibling's exact
+ * condition, and the reason it exists (Node 20+ refuses to spawn a `.cmd`
+ * without one). It is safe for these two calls specifically: neither `--query`
+ * carries a shell metacharacter — no `|`, `>`, `&`, `$` — which is what forced
+ * `deploy-fiab-guard.mjs` to keep `shell:false` and `resolve-dlz-coordinates.mjs`
+ * to load its KQL from an `@file`. A JMESPath here that grows a `|` (a JMESPath
+ * PIPE is legal syntax) would be mangled by cmd.exe into a shell pipe, so adopt
+ * the `@file` pattern before adding one rather than relying on this note.
+ *
+ * `spawnSync` rather than `execFileSync` so a spawn failure (ENOENT) is a
+ * returned `error` this function can report in the CLI's own terms, instead of a
+ * throw whose message names node's internals.
+ */
 function azJson(args) {
-  const out = execFileSync(AZ, args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
-  return JSON.parse(out);
+  const bin = azBinary();
+  const res = spawnSync(bin, args, {
+    encoding: 'utf8',
+    shell: /\.(cmd|bat)$/i.test(bin),
+    stdio: ['ignore', 'pipe', 'pipe'],
+    maxBuffer: 32 * 1024 * 1024,
+  });
+  // stderr is CARRIED, never discarded: "I could not reach it" must not become
+  // "it is not there" (deploy-integrity.md R7).
+  if (res.error) throw new Error(`${bin}: ${res.error.message}`);
+  if (res.status !== 0) {
+    throw new Error(`${bin} exited ${res.status}: ${String(res.stderr || '').slice(0, 300)}`);
+  }
+  return JSON.parse(res.stdout);
 }
 
 /** rg-csa-loom-admin-* names in scope. null on ANY failure = UNKNOWN, not empty. */
