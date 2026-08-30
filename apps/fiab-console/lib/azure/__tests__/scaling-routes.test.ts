@@ -212,6 +212,28 @@ describe('POST /api/admin/scaling/apim', () => {
   });
 });
 
+// #3895 — the profile a container app may be moved onto is decided by its
+// managed ENVIRONMENT, so these fixtures carry one. The previous `accepts a
+// valid scale spec` fixture answered EVERY ARM call with
+// `{ name:'aca1', properties:{ workloadProfileName:'D4' } }` — an app with no
+// environment, a shape ARM cannot produce — and the route's new pre-flight
+// correctly refuses it (409). Making the estate realistic is the fix; loosening
+// the pre-flight would delete the check.
+const ACA_ENV_ID = '/subscriptions/sub-1/resourceGroups/rg-admin/providers/Microsoft.App/managedEnvironments/cae-test';
+
+/** ARM stub answering the app GET, the environment GET, and the PATCH. */
+function stubAcaEstate(declared = ['Consumption', 'D4']) {
+  return stubFetch((url, init) => {
+    if (url.includes('/managedEnvironments/')) {
+      return { body: { id: ACA_ENV_ID, name: 'cae-test', properties: { workloadProfiles: declared.map((n) => ({ name: n, workloadProfileType: n })) } } };
+    }
+    if (init?.method === 'PATCH') {
+      return { body: { name: 'aca1', location: 'centralus', properties: { provisioningState: 'Updating' } } };
+    }
+    return { body: { id: '/x', name: 'aca1', location: 'centralus', properties: { environmentId: ACA_ENV_ID, workloadProfileName: 'Consumption', template: { scale: { minReplicas: 1, maxReplicas: 3 } } } } };
+  });
+}
+
 describe('POST /api/admin/scaling/container-apps', () => {
   it('rejects missing name', async () => {
     const { POST } = await import('@/app/api/admin/scaling/container-apps/route');
@@ -219,10 +241,28 @@ describe('POST /api/admin/scaling/container-apps', () => {
     expect(r.status).toBe(400);
   });
 
-  it('rejects invalid workloadProfileName', async () => {
+  it('rejects a malformed workloadProfileName BEFORE any ARM call', async () => {
+    // #3895 — this case used to pass for an ACCIDENTAL reason and it was
+    // MEASURED: with no fetch stub installed, the handler reached the real
+    // `management.azure.com`, which answered 400 `InvalidSubscriptionId` about
+    // the fixture's fake `sub-1`, and the route echoed that status. The
+    // assertion was green on a live Azure error about a subscription, not on
+    // this route's validation.
+    //
+    // Two changes make it a control again: the name is one the SHAPE gate must
+    // reject — the old `X9` is well-formed and is now correctly decided by the
+    // ENVIRONMENT, not by a hardcoded list — and `fetch` is stubbed to THROW, so
+    // a 400 can only have come from the gate.
+    const netCalls: string[] = [];
+    vi.stubGlobal('fetch', vi.fn(async (u: any) => {
+      netCalls.push(String(u));
+      throw new Error('no ARM call should be made for a malformed profile name');
+    }));
     const { POST } = await import('@/app/api/admin/scaling/container-apps/route');
-    const r = await POST(makeReq('POST', { name: 'aca1', workloadProfileName: 'X9' }));
+    const r = await POST(makeReq('POST', { name: 'aca1', workloadProfileName: 'not a profile!' }));
     expect(r.status).toBe(400);
+    expect(netCalls).toEqual([]);
+    expect((await r.json()).error).toMatch(/letters, digits or hyphens/);
   });
 
   it('rejects maxReplicas > 1000', async () => {
@@ -232,10 +272,25 @@ describe('POST /api/admin/scaling/container-apps', () => {
   });
 
   it('accepts a valid scale spec', async () => {
-    stubFetch(() => ({ body: { name: 'aca1', properties: { workloadProfileName: 'D4' } } }));
+    stubAcaEstate(['Consumption', 'D4']);
     const { POST } = await import('@/app/api/admin/scaling/container-apps/route');
     const r = await POST(makeReq('POST', { name: 'aca1', workloadProfileName: 'D4', minReplicas: 1, maxReplicas: 5 }));
     expect(r.status).toBe(200);
+  });
+
+  it('refuses a well-formed profile the ENVIRONMENT does not declare (#3895)', async () => {
+    // The defect itself, at the route boundary: `D4` is in the old hardcoded
+    // allowlist and passes the shape gate, but this environment declares only
+    // Consumption and D8. Before, that reached ARM and came back a raw 400.
+    const calls = stubAcaEstate(['Consumption', 'D8']);
+    const { POST } = await import('@/app/api/admin/scaling/container-apps/route');
+    const r = await POST(makeReq('POST', { name: 'aca1', workloadProfileName: 'D4' }));
+    expect(r.status).toBe(400);
+    const j = await r.json();
+    expect(j.error).toMatch(/not declared by this app's managed environment/);
+    expect(j.error).toMatch(/The environment declares: Consumption, D8/);
+    // …and nothing was PATCHed.
+    expect(calls.mock.calls.some((c: any[]) => c[1]?.method === 'PATCH')).toBe(false);
   });
 });
 
