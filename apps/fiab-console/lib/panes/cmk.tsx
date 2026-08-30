@@ -59,7 +59,14 @@ interface CmkStatus {
   accountName: string;
 }
 interface RoleChecks { kvCryptoRole: RoleCheck; storageContributorRole: RoleCheck; principalId?: string }
-interface GateInfo { missing?: string; hint?: string; bicepModule?: string }
+/**
+ * `title` is optional and defaults to the config-gate wording below. #3757
+ * added a SECOND gate to this shape — "the backing storage account was not
+ * found" — and captioning that one "not wired in this deployment" would be the
+ * same class of untrue message the gate was introduced to remove
+ * (deploy-integrity.md R7), so the route names its own headline.
+ */
+interface GateInfo { title?: string; missing?: string; hint?: string; bicepModule?: string }
 interface KvKey { name: string; enabled: boolean }
 interface KvVersion { version: string; enabled: boolean; created?: number }
 
@@ -71,7 +78,7 @@ interface StatusResponse {
   vaultUri?: string;
   uamiResourceId?: string;
   cosmosConfigured?: boolean;
-  missing?: string; hint?: string; bicepModule?: string; error?: string;
+  title?: string; missing?: string; hint?: string; bicepModule?: string; error?: string;
 }
 
 export function CmkPane({ workspaceId }: { workspaceId: string }) {
@@ -93,7 +100,7 @@ export function CmkPane({ workspaceId }: { workspaceId: string }) {
       const res = await clientFetch(`/api/admin/workspaces/${encodeURIComponent(workspaceId)}/cmk`);
       const j: StatusResponse = await res.json();
       if (j?.gate) {
-        setGate({ missing: j.missing, hint: j.hint, bicepModule: j.bicepModule });
+        setGate({ title: j.title, missing: j.missing, hint: j.hint, bicepModule: j.bicepModule });
         setStatus(null);
       } else if (j?.ok) {
         setGate(null);
@@ -119,7 +126,7 @@ export function CmkPane({ workspaceId }: { workspaceId: string }) {
     try {
       const res = await clientFetch(`/api/admin/workspaces/${encodeURIComponent(workspaceId)}/cmk`, { method: 'DELETE' });
       const j = await res.json();
-      if (j?.gate) { setGate({ missing: j.missing, hint: j.hint, bicepModule: j.bicepModule }); return; }
+      if (j?.gate) { setGate({ title: j.title, missing: j.missing, hint: j.hint, bicepModule: j.bicepModule }); return; }
       if (!res.ok || !j?.ok) { setError(j?.error || `HTTP ${res.status}`); return; }
       await load();
     } catch (e: any) {
@@ -139,7 +146,7 @@ export function CmkPane({ workspaceId }: { workspaceId: string }) {
     return (
       <MessageBar intent="warning">
         <MessageBarBody>
-          <MessageBarTitle>Customer-managed keys not wired in this deployment</MessageBarTitle>
+          <MessageBarTitle>{gate.title || 'Customer-managed keys not wired in this deployment'}</MessageBarTitle>
           <Caption1 block>Missing: <code>{gate.missing}</code></Caption1>
           {gate.bicepModule && <Caption1 block>Bicep module: <code>{gate.bicepModule}</code></Caption1>}
           {gate.hint && <Caption1 block style={{ marginTop: tokens.spacingVerticalSNudge }}>{gate.hint}</Caption1>}

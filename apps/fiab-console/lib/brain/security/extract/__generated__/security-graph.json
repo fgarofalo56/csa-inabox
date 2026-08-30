@@ -37703,7 +37703,7 @@
             "declaredSinkCount": 2,
             "sinks": [
               {
-                "id": "console:member:275",
+                "id": "console:member:312",
                 "surface": "console",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -37713,7 +37713,7 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "console:member:276",
+                "id": "console:member:313",
                 "surface": "console",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -47934,9 +47934,9 @@
     },
     "meta": {
       "generatorVersion": 1,
-      "generatedAt": "2026-08-30T04:52:10.003Z",
-      "commit": "0cad3ac7eaf531c40f336d4aff4735b81a45c053",
-      "inputsDigest": "76e8393e904a9ceb",
+      "generatedAt": "2026-08-30T16:06:47.039Z",
+      "commit": "28808a0d61412205a7f9004c3d699217597a9189",
+      "inputsDigest": "db46c629550f9b02",
       "filesScanned": 2065,
       "scanScopes": [
         {
@@ -48952,8 +48952,8 @@
           "reason": "module declares no PUBLICATION-SINKS marker, so C4's declared-count drift check is INERT for it (declaredSinkCount is set to the observed 5). Recorded so the inertness is countable rather than invisible — a check that cannot fail must not be mistaken for a check that passed."
         },
         {
-          "subject": "scripts/** (*.ps1, *.py, *.sh, *.yaml)",
-          "reason": "182 file(s) under a SCANNED root were seen and NOT read: this extractor lexes JavaScript/TypeScript only, so a workflow YAML `run:` block, a shell step or a Python script is outside the examined population even though it publishes to the same PUBLIC Actions log. C4 output therefore says nothing about these files. Recorded with a count so the narrowing is countable rather than inferred from a scope string — which is how the `.github/**` gap survived until 2026-08-24."
+          "subject": "scripts/** (*.ps1, *.py, *.sh, *.yaml, *.yml)",
+          "reason": "184 file(s) under a SCANNED root were seen and NOT read: this extractor lexes JavaScript/TypeScript only, so a workflow YAML `run:` block, a shell step or a Python script is outside the examined population even though it publishes to the same PUBLIC Actions log. C4 output therefore says nothing about these files. Recorded with a count so the narrowing is countable rather than inferred from a scope string — which is how the `.github/**` gap survived until 2026-08-24."
         },
         {
           "subject": ".github/** (*.py, *.sh, *.yaml, *.yml)",
