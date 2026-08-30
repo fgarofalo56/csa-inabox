@@ -2,9 +2,13 @@
  * MirroredDatabaseEditor — vitest render + interaction.
  */
 import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest';
-import { render, screen, waitFor, cleanup } from '@testing-library/react';
+import { screen, waitFor, cleanup } from '@testing-library/react';
 import { MirroredDatabaseEditor } from '../mirrored-database-editor';
-import { makeItem, installFetchMock } from './test-helpers';
+// renderWithProviders, not bare render: #3512 added a useQuery to this editor,
+// and a bare render has no QueryClient — the failure is 'No QueryClient set,
+// use QueryClientProvider to set one'. Every sibling editor spec that drives a
+// query already uses this helper.
+import { makeItem, installFetchMock, renderWithProviders } from './test-helpers';
 
 describe('MirroredDatabaseEditor', () => {
   beforeEach(() => {
@@ -27,7 +31,7 @@ describe('MirroredDatabaseEditor', () => {
   afterEach(() => { cleanup(); vi.restoreAllMocks(); });
 
   it('renders the editor chrome and lists workspaces', async () => {
-    render(<MirroredDatabaseEditor item={makeItem('mirrored-database', 'Mirrored database')} id="new" />);
+    renderWithProviders(<MirroredDatabaseEditor item={makeItem('mirrored-database', 'Mirrored database')} id="new" />);
     await waitFor(() => {
       expect(screen.getByTestId('chrome')).toBeInTheDocument();
     });
@@ -37,7 +41,7 @@ describe('MirroredDatabaseEditor', () => {
   });
 
   it('exposes ribbon actions', async () => {
-    render(<MirroredDatabaseEditor item={makeItem('mirrored-database', 'Mirrored database')} id="new" />);
+    renderWithProviders(<MirroredDatabaseEditor item={makeItem('mirrored-database', 'Mirrored database')} id="new" />);
     await waitFor(() => {
       expect(screen.getByTestId('ribbon').querySelectorAll('button').length).toBeGreaterThan(0);
     });
