@@ -442,21 +442,132 @@ function MonitorsTab() {
   );
 }
 
+/**
+ * The item types a monitor can be attached to. A CLOSED SET, because it is one:
+ * the observe path reads a lakehouse's Delta tables, and `data-quality` items
+ * carry the same table coordinates. It was a freeform `<Input>` pre-filled
+ * "lakehouse", which let a typo create a monitor pointed at a type that does not
+ * exist (#3734).
+ */
+const MONITOR_ITEM_TYPES = [
+  { value: 'lakehouse', label: 'Lakehouse' },
+  { value: 'data-quality', label: 'Data quality' },
+] as const;
+
+interface WorkspaceLite { id: string; displayName: string }
+interface ItemLite { id: string; displayName: string }
+interface DeltaTableLite { name: string; sizeBytes?: number | null }
+
+/**
+ * NEW MONITOR — a cascading picker over REAL data, not three raw text boxes.
+ *
+ * ── WHAT THIS REPLACED, AND WHY IT WAS A DEFECT (#3734) ─────────────────────
+ *
+ * The dialog used to be three freeform `<Input>`s: an "Item id" the operator had
+ * to already know as a GUID, an "Item type" pre-filled `lakehouse` and freely
+ * editable, and a "Table" they typed from memory as `catalog.schema.table`.
+ * Nothing validated any of them, so a typo silently created a monitor that never
+ * trips because it never matches a real table — the worst shape a monitor can
+ * take, because it looks like coverage.
+ *
+ * `.claude/rules/auto-bind-by-default.md` names exactly this: a field asking the
+ * user to type a resource id the platform could discover itself is "now a
+ * DEFECT, not a compliant state".
+ *
+ * ── EVERY OPTION COMES FROM A REAL BACKEND CALL ─────────────────────────────
+ *
+ *   GET /api/workspaces                                       workspaces
+ *   GET /api/items/<type>?workspaceId=…                        items of that type
+ *   GET /api/marketplace/sharing/publishable-tables?…          a LIVE Delta scan
+ *                                                              (ADLS listing +
+ *                                                              _delta_log probe)
+ *
+ * The same three the `LakehouseTablePicker` precedent
+ * (`lib/components/marketplace/share-publish-pickers.tsx`) uses. The cascade is
+ * rebuilt here rather than imported because that component's `onSelect` hands
+ * back the table plus the lakehouse NAME and never its item ID — and the item ID
+ * is precisely the field this dialog was asking the operator to type.
+ *
+ * ── THE MANUAL PATH IS KEPT, AND IS SECONDARY ───────────────────────────────
+ *
+ * Behind an explicit "Enter identifiers manually" toggle, off by default. It
+ * exists for the case the rule allows narrowly — a table Loom's Delta scan
+ * cannot see (an external catalog, a view) — and it says so. It is not the
+ * default, and it is not the only path.
+ */
 function NewMonitorDialog({ onClose, onSaved }: { onClose: () => void; onSaved: () => void }) {
   const styles = useStyles();
   const [kind, setKind] = useState('freshness');
-  const [itemId, setItemId] = useState('');
-  const [itemType, setItemType] = useState('lakehouse');
-  const [table, setTable] = useState('');
+  const [itemType, setItemType] = useState<string>(MONITOR_ITEM_TYPES[0].value);
   const [sla, setSla] = useState('1440');
+
+  // Picker state.
+  const [manual, setManual] = useState(false);
+  const [wsId, setWsId] = useState('');
+  const [itemId, setItemId] = useState('');
+  const [table, setTable] = useState('');
+
+  const workspacesQ = useQuery({
+    queryKey: ['monitor-picker', 'workspaces'],
+    queryFn: async (): Promise<WorkspaceLite[]> => {
+      const r = await clientFetch('/api/workspaces');
+      const d: unknown = await r.json();
+      const raw = Array.isArray(d) ? d : ((d as { workspaces?: unknown[] })?.workspaces || []);
+      return (raw as Record<string, string>[]).map((w) => ({
+        id: w.id,
+        displayName: w.displayName || w.name || w.id,
+      }));
+    },
+    enabled: !manual,
+  });
+
+  const itemsQ = useQuery({
+    queryKey: ['monitor-picker', 'items', itemType, wsId],
+    queryFn: async (): Promise<ItemLite[]> => {
+      const r = await clientFetch(
+        `/api/items/${encodeURIComponent(itemType)}?workspaceId=${encodeURIComponent(wsId)}`,
+      );
+      const d: { ok?: boolean; items?: Record<string, string>[]; error?: string } = await r.json();
+      if (!d?.ok) throw new Error(d?.error || `Could not list ${itemType} items.`);
+      return (d.items || []).map((i) => ({ id: i.id, displayName: i.displayName || i.id }));
+    },
+    enabled: !manual && Boolean(wsId),
+  });
+
+  const tablesQ = useQuery({
+    queryKey: ['monitor-picker', 'tables', wsId, itemId],
+    queryFn: async (): Promise<DeltaTableLite[]> => {
+      const r = await clientFetch(
+        `/api/marketplace/sharing/publishable-tables?lakehouseId=${encodeURIComponent(itemId)}` +
+          `&workspaceId=${encodeURIComponent(wsId)}`,
+      );
+      const d: { ok?: boolean; tables?: DeltaTableLite[]; error?: string } = await r.json();
+      if (!d?.ok) throw new Error(d?.error || 'Could not list Delta tables.');
+      return d.tables || [];
+    },
+    enabled: !manual && Boolean(wsId) && Boolean(itemId),
+  });
+
   const save = useMutation({
     mutationFn: () => postJson('/api/observability/monitors', {
       kind, itemId, itemType, table,
+      ...(wsId ? { workspaceId: wsId } : {}),
       ...(kind === 'freshness' && sla ? { freshnessSlaMinutes: Number(sla) } : {}),
     }),
     onSuccess: (r) => { if (r._status < 400) onSaved(); },
   });
-  const valid = itemId.trim() && itemType.trim() && table.trim();
+
+  const valid = Boolean(itemId.trim() && itemType.trim() && table.trim());
+  const items = itemsQ.data ?? null;
+  const tables = tablesQ.data ?? null;
+  // The picker's own read failures are shown where they happened, never swallowed
+  // into a disabled control the operator cannot explain (no-vaporware).
+  const pickerError =
+    (workspacesQ.error as Error | null)?.message
+    || (itemsQ.error as Error | null)?.message
+    || (tablesQ.error as Error | null)?.message
+    || null;
+
   return (
     <Dialog open onOpenChange={(_, d) => { if (!d.open) onClose(); }}>
       <DialogSurface>
@@ -471,9 +582,106 @@ function NewMonitorDialog({ onClose, onSaved }: { onClose: () => void; onSaved: 
                   <Option value="schema-drift">Schema drift</Option>
                 </Dropdown>
               </Field>
-              <Field label="Item id" required><Input value={itemId} onChange={(_, d) => setItemId(d.value)} placeholder="the data-quality / lakehouse item id" /></Field>
-              <Field label="Item type"><Input value={itemType} onChange={(_, d) => setItemType(d.value)} /></Field>
-              <Field label="Table" required><Input value={table} onChange={(_, d) => setTable(d.value)} placeholder="catalog.schema.table" /></Field>
+
+              <Field label="Item type">
+                <Dropdown
+                  value={MONITOR_ITEM_TYPES.find((t) => t.value === itemType)?.label || ''}
+                  selectedOptions={[itemType]}
+                  onOptionSelect={(_, d) => {
+                    setItemType((d.optionValue as string) || MONITOR_ITEM_TYPES[0].value);
+                    // The cascade below is keyed to the type — a stale item id
+                    // from the previous type would be a silently wrong monitor.
+                    setItemId('');
+                    setTable('');
+                  }}
+                >
+                  {MONITOR_ITEM_TYPES.map((t) => <Option key={t.value} value={t.value}>{t.label}</Option>)}
+                </Dropdown>
+              </Field>
+
+              {manual ? (
+                <>
+                  <MessageBar intent="warning" layout="multiline">
+                    <MessageBarBody>
+                      <MessageBarTitle>Manual entry — nothing here is validated</MessageBarTitle>
+                      An id or table name that does not match a real object creates a monitor
+                      that never trips. Use this only for a table Loom&apos;s Delta scan cannot
+                      see.
+                    </MessageBarBody>
+                  </MessageBar>
+                  <Field label="Item id" required>
+                    <Input value={itemId} onChange={(_, d) => setItemId(d.value)} placeholder="the lakehouse / data-quality item id" />
+                  </Field>
+                  <Field label="Table" required>
+                    <Input value={table} onChange={(_, d) => setTable(d.value)} placeholder="catalog.schema.table" />
+                  </Field>
+                </>
+              ) : (
+                <>
+                  <Field label="Workspace" required>
+                    <Dropdown
+                      placeholder={workspacesQ.isPending ? 'Loading workspaces…' : 'Select a workspace…'}
+                      disabled={workspacesQ.isPending}
+                      value={(workspacesQ.data || []).find((w) => w.id === wsId)?.displayName || ''}
+                      selectedOptions={wsId ? [wsId] : []}
+                      onOptionSelect={(_, d) => { setWsId(d.optionValue || ''); setItemId(''); setTable(''); }}
+                    >
+                      {(workspacesQ.data || []).map((w) => <Option key={w.id} value={w.id}>{w.displayName}</Option>)}
+                    </Dropdown>
+                  </Field>
+
+                  <Field label="Item" required hint="Listed from this tenant's real catalog — the id is resolved for you.">
+                    <Dropdown
+                      placeholder={!wsId ? 'Pick a workspace first' : itemsQ.isPending ? 'Loading items…' : 'Select an item…'}
+                      disabled={!wsId || itemsQ.isPending}
+                      value={(items || []).find((i) => i.id === itemId)?.displayName || ''}
+                      selectedOptions={itemId ? [itemId] : []}
+                      onOptionSelect={(_, d) => { setItemId(d.optionValue || ''); setTable(''); }}
+                    >
+                      {(items || []).map((i) => <Option key={i.id} value={i.id}>{i.displayName}</Option>)}
+                    </Dropdown>
+                  </Field>
+
+                  <Field label="Table" required hint="Scanned live from the item's own storage — only real Delta tables are listed.">
+                    <Dropdown
+                      placeholder={!itemId ? 'Pick an item first' : tablesQ.isPending ? 'Scanning for Delta tables…' : 'Select a table…'}
+                      disabled={!itemId || tablesQ.isPending || !(tables || []).length}
+                      value={table}
+                      selectedOptions={table ? [table] : []}
+                      onOptionSelect={(_, d) => setTable(d.optionValue || '')}
+                    >
+                      {(tables || []).map((t) => <Option key={t.name} value={t.name}>{t.name}</Option>)}
+                    </Dropdown>
+                  </Field>
+
+                  {itemId && !tablesQ.isPending && tables !== null && tables.length === 0 && !pickerError && (
+                    <MessageBar intent="warning" layout="multiline">
+                      <MessageBarBody>
+                        <MessageBarTitle>No Delta tables under this item</MessageBarTitle>
+                        The scan reached the item&apos;s storage and found none. Pick another item,
+                        or switch to manual entry for a table Loom cannot enumerate.
+                      </MessageBarBody>
+                    </MessageBar>
+                  )}
+                </>
+              )}
+
+              {pickerError && !manual && (
+                <MessageBar intent="warning" layout="multiline">
+                  <MessageBarBody>
+                    <MessageBarTitle>Could not finish the lookup</MessageBarTitle>
+                    {pickerError} You can still create this monitor with manual entry.
+                  </MessageBarBody>
+                </MessageBar>
+              )}
+
+              <Button
+                appearance="transparent"
+                onClick={() => { setManual((m) => !m); setItemId(''); setTable(''); }}
+              >
+                {manual ? 'Back to picking from the catalog' : 'Enter identifiers manually'}
+              </Button>
+
               {kind === 'freshness' && <Field label="Freshness SLA (minutes)"><Input type="number" value={sla} onChange={(_, d) => setSla(d.value)} /></Field>}
               {save.data && save.data._status >= 400 && <MessageBar intent="error"><MessageBarBody>{save.data.error || 'Save failed.'}</MessageBarBody></MessageBar>}
             </div>
