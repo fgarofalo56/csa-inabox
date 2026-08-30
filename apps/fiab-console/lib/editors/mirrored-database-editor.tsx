@@ -40,6 +40,9 @@ import { OneLakeSecurityTab } from './components/onelake-security-tab';
 import { OpenMirrorConfig } from './components/open-mirror-config';
 import { MirrorSourceWizard, type MirrorTableSpec } from './components/mirror-source-wizard';
 import { DetailsPanel, type DetailsSection } from '@/lib/components/shared/details-panel';
+import { useQuery } from '@tanstack/react-query';
+import { getItem, type WorkspaceItem } from '@/lib/api/workspaces';
+import { QueryErrorBar } from '@/lib/components/ui/query-error-bar';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
 import { useSharedEditorStyles } from './shared-styles';
@@ -95,9 +98,39 @@ export function MirroredDatabaseEditor({ item, id }: Props) {
   const s = useStyles();
   const ws = useWorkspaces();
   const router = useRouter();
+  const isNew = id === 'new';
+  // #4081 — WHOSE WORKSPACE THE PICKER OPENS ON.
+  //
+  // Every action in the Mirroring ribbon is keyed to a mirror SELECTED IN THE
+  // TREE, and the tree is filled from the workspace picker. The picker used to
+  // initialise to `ws.workspaces[0]`, so opening a mirror by its own URL
+  // (`/items/mirrored-database/<id>`) landed on an unrelated workspace: the tree
+  // rendered "No mirrored databases", nothing was selectable, and Edit / Delete /
+  // Test connection / Start / Stop / Restart / Monitor / SQL analytics endpoint
+  // were ALL disabled — with no error, no gate and no message saying the fix was
+  // to change a dropdown. Measured live on Commercial (sha 178376fb5) against
+  // `fgarofalo_demo_snowflake_mirror`: correct breadcrumb, wrong picker,
+  // `GET /api/items/mirrored-database?workspaceId=<the-first-workspace>`; after
+  // switching the picker by hand all seven buttons enabled. That is the
+  // `auto-bind-by-default.md` §4 "editor opens on a state the user must repair"
+  // shape and `ux-baseline.md` §6's dirty first-open.
+  //
+  // The item's OWN workspace is authoritative and already in the React Query
+  // cache: `app/items/[type]/[id]/page.tsx` primes `['item', type, id]` from
+  // `getItem`, whose `WorkspaceItem` carries `workspaceId`. Reading the same key
+  // is a cache HIT on the normal navigation, so this costs no extra round-trip.
+  const itemQ = useQuery<WorkspaceItem>({
+    queryKey: ['item', 'mirrored-database', id],
+    queryFn: () => getItem('mirrored-database', id),
+    enabled: !isNew,
+  });
+  const itemWorkspaceId = itemQ.data?.workspaceId;
   const [workspaceId, setWorkspaceId] = useState('');
   const [mirrors, setMirrors] = useState<MirroredLite[] | null>(null);
-  const [mirrorId, setMirrorId] = useState('');
+  // Opened by its own URL ⇒ THAT mirror is the selection, not "whatever the
+  // list returns first". Without this the detail pane and the ribbon would key
+  // to a sibling mirror even once the workspace was right.
+  const [mirrorId, setMirrorId] = useState(isNew ? '' : id);
   const [detail, setDetail] = useState<any | null>(null);
   const [listErr, setListErr] = useState<string | null>(null);
   const [listHint, setListHint] = useState<string | null>(null);
@@ -141,8 +174,17 @@ export function MirroredDatabaseEditor({ item, id }: Props) {
       const r = await clientFetch(`/api/items/mirrored-database?workspaceId=${encodeURIComponent(wsId)}`);
       const j = await r.json();
       if (!j.ok) { setMirrors([]); setListErr(j.error); setListHint(j.hint); return; }
-      setMirrors(j.mirroredDatabases || []);
-      if ((j.mirroredDatabases || []).length && !mirrorId) setMirrorId(j.mirroredDatabases[0].id);
+      const list: MirroredLite[] = j.mirroredDatabases || [];
+      setMirrors(list);
+      // #4081 — the pre-selected mirror is the one in the URL. Fall back to the
+      // first row only when there is no selection, or when the selected id is
+      // genuinely not in this workspace's list (it was deleted, or the picker
+      // was moved to another workspace by hand). Silently keeping a selection
+      // the list does not contain would leave the ribbon enabled over a mirror
+      // that is not on screen.
+      if (list.length && (!mirrorId || !list.some((m) => m.id === mirrorId))) {
+        setMirrorId(list[0].id);
+      }
     } catch (e: any) { setMirrors([]); setListErr(e?.message || String(e)); }
   }, [mirrorId]);
 
@@ -156,11 +198,19 @@ export function MirroredDatabaseEditor({ item, id }: Props) {
     } catch (e: any) { setDetailErr(e?.message || String(e)); }
   }, []);
 
-  // Auto-pick the first workspace once loaded so the toolbar/ribbon actions
-  // enable immediately (and the list fetch auto-selects the first mirror).
+  // #4081 — initialise the picker to the workspace of the item being edited.
+  //
+  // The first-workspace fallback is KEPT, because it is right for the two cases
+  // that have no item of their own: `/new`, and a lookup that genuinely could
+  // not answer. It is only allowed to run once the item's own workspace is known
+  // to be unavailable — otherwise it would win the race against the query and
+  // reintroduce the defect, just intermittently.
   useEffect(() => {
-    if (!workspaceId && ws.workspaces && ws.workspaces.length > 0) setWorkspaceId(ws.workspaces[0].id);
-  }, [workspaceId, ws.workspaces]);
+    if (workspaceId) return;
+    if (itemWorkspaceId) { setWorkspaceId(itemWorkspaceId); return; }
+    if (!isNew && (itemQ.isPending || itemQ.isFetching)) return;
+    if (ws.workspaces && ws.workspaces.length > 0) setWorkspaceId(ws.workspaces[0].id);
+  }, [workspaceId, itemWorkspaceId, isNew, itemQ.isPending, itemQ.isFetching, ws.workspaces]);
   useEffect(() => { if (workspaceId) loadList(workspaceId); }, [workspaceId, loadList]);
   useEffect(() => { if (workspaceId && mirrorId) loadDetail(workspaceId, mirrorId); }, [workspaceId, mirrorId, loadDetail]);
 
@@ -568,6 +618,18 @@ export function MirroredDatabaseEditor({ item, id }: Props) {
           )}
           {view === 'mirror' && (
           <>
+          {/* #4081 — if the item record cannot be read, the picker CANNOT be
+              initialised to the item's own workspace and falls back to the first
+              one the user can see. That fallback is a guess, so it is disclosed
+              rather than rendered as if it were the right workspace
+              (deploy-integrity.md R7). The rest of the editor keeps rendering
+              beneath it (ux-baseline.md). */}
+          <QueryErrorBar
+            query={itemQ}
+            subject="this mirrored database's own record"
+            endpoint={`/api/cosmos-items/mirrored-database/${id}`}
+            reassurance="The Workspace picker below has fallen back to the first workspace you can see, which may not be the one this item lives in — pick it manually, or Retry."
+          />
           <div className={s.toolbar}>
             <Badge appearance="filled" color="brand" icon={<Database20Regular />}>Mirrored Database</Badge>
             <div className={s.wsField}>
