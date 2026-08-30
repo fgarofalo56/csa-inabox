@@ -165,13 +165,36 @@ export async function GET(req: NextRequest) {
       if (cur) cur.requestEvents = t.events;
       else merged.set(t.itemId, { itemId: t.itemId, auditCount: 0, requestEvents: t.events });
     }
+    // ---- Rank CATALOG ITEMS only -------------------------------------------
+    // #3737: `merged` is keyed by whatever `itemId` an audit row or an LA
+    // request event carried, and the audit log records far more than catalog
+    // items. Unity Catalog governance writes rows keyed
+    // `unity:schema.list:<date>` / `unity:metastore.list:<date>` /
+    // `unity:auth.token-exchange:…`, platform slugs (`loom`, `sql-lab`,
+    // `streaming-sql`) and bare target GUIDs. On a tenant with normal
+    // governance traffic those OUTRANK every real item, so all 25 rows of
+    // "Most active items" failed the catalog join and rendered Type, Workspace
+    // and Requests as `—` — the drill-down the section exists for was dead on
+    // arrival, and the Type/Workspace filters above it had nothing to filter.
+    //
+    // The rows are dropped rather than relabelled because this route cannot
+    // relabel them honestly: `/admin/usage` renders `workspaceName` verbatim
+    // and `itemType` as an item-type badge, so any placeholder would assert a
+    // workspace or a type that does not exist. The count of what was set aside
+    // is reported instead, so the exclusion is disclosed rather than silent.
+    const catalogIds = new Set<string>(items.map((i) => i.id));
+    const byId = new Map<string, any>(items.map((i) => [i.id, i]));
+    const mergedRows = Array.from(merged.values());
+    const nonCatalogEvents = mergedRows.filter((m) => !catalogIds.has(m.itemId));
+
     // Enrich + (optionally) filter by drill-through feature. The 'items'
     // feature owns every /items/<type>/<id> request, so a feature filter other
     // than 'items' narrows to zero LA item traffic — we then fall back to the
     // Cosmos audit set so the table is never mysteriously empty.
-    let topItems = Array.from(merged.values())
+    let topItems = mergedRows
+      .filter((m) => catalogIds.has(m.itemId))
       .map((m) => {
-        const it = items.find((i) => i.id === m.itemId);
+        const it = byId.get(m.itemId);
         return {
           ...m,
           displayName: it?.displayName,
@@ -204,6 +227,16 @@ export async function GET(req: NextRequest) {
         itemsByWorkspace,
         activity,
         topItems,
+        /**
+         * #3737 disclosure — how much activity the Most-active-items ranking
+         * set aside because its target is not a catalog item (Unity Catalog
+         * governance events, platform slugs, raw target GUIDs). Reported so
+         * "25 rows" is never mistaken for "all the activity there was".
+         */
+        topItemsNonCatalog: {
+          targets: nonCatalogEvents.length,
+          events: nonCatalogEvents.reduce((n, m) => n + m.auditCount + m.requestEvents, 0),
+        },
         activeUsersTrend,
         featureAdoption,
       };

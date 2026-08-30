@@ -39,6 +39,9 @@ import {
 } from '@/lib/azure/kusto-client';
 import { evalDax, TabularError } from '@/lib/azure/tabular-eval-client';
 import { getShortcut } from '@/lib/azure/lakehouse-shortcuts';
+// #3959 — the ONE definition of the shortcut engine-object name-space policy.
+// Imported, never re-implemented: a second predicate would drift from the mints.
+import { isMintedEngineObject, EngineObjectNamespaceError } from '@/lib/azure/shortcut-engines';
 import {
   type OntologyBinding, type OntologyBindingSourceKind, type ResolvedInstance,
   type SourceRows, normalizeOntologyBinding, mapRowsToInstances,
@@ -186,6 +189,32 @@ export async function resolveBindingInstances(
         if (!process.env.LOOM_SYNAPSE_WORKSPACE) {
           return gate(kind, 'serverless_not_configured',
             'Shortcut resolution queries the Synapse Serverless engine object. Set LOOM_SYNAPSE_WORKSPACE.');
+        }
+        // ── #3959 — NAME-SPACE, not shape ────────────────────────────────────
+        // `engineObject` is either `binding.source.ref` (a caller-authored
+        // literal: `ref` is not in SERVER_OWNED_STATE_KEYS and `createOwnedItem`
+        // passes `state` through wholesale) or the registry's `sc.engineObject`.
+        // `buildSqlSelect` validates it against SQL_REF_RE, which is a SHAPE
+        // check — `master.sys.sql_logins` and `finance_db.dbo.payroll` are both
+        // well-formed references and both passed. The query runs as the Console
+        // UAMI, a Synapse SQL admin, so a shape check bought nothing about WHICH
+        // object was read.
+        //
+        // This is the sink PR #3925 left uncovered: 9 of the 10 sites that reach
+        // SQL with an `engineObject` go through `dropShortcutObject` /
+        // `testEngineObject` (which assert internally) or the lakehouse-shortcut
+        // route's own check. Routed through the SAME predicate — the single
+        // definition of the name-space policy — rather than a second shape rule,
+        // so a new mint added to SYNAPSE_MINTED_SCHEMAS reaches this sink too.
+        //
+        // A binding that legitimately names an object OUTSIDE the shortcut
+        // name-space is refused here with the predicate's own words. That is the
+        // honest outcome, not a silent narrowing: `lakehouse-table` /
+        // `warehouse-table` are the binding kinds for objects Loom did not mint,
+        // and they take a different branch above.
+        if (!isMintedEngineObject(engineObject, engine)) {
+          return gate(kind, 'shortcut_engine_object_namespace',
+            new EngineObjectNamespaceError(engineObject).message);
         }
         const sql = buildSqlSelect(engineObject, top, tt);
         const res = await synapseExecute(serverlessTarget('master'), sql);

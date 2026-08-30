@@ -2525,7 +2525,7 @@ silently downgrading the route.
 
 ## Backend signals (derived)
 
-449 module(s) ORIGINATE a backend label — the derivation read an
+448 module(s) ORIGINATE a backend label — the derivation read an
 Azure identifier out of them. Every other route/module below inherits through the
 call graph. Nothing in this section is a Loom module name someone typed: the
 modules are derived, and only the Microsoft-owned identifier vocabulary is seeded.
@@ -2851,7 +2851,6 @@ caps the NUMBER of cuts at three; it does not bound what one cut can hide.
 | `apps/fiab-console/app/api/powerplatform/environments/operation/route.ts` | Power Platform |
 | `apps/fiab-console/app/api/setup/discover-services/route.ts` | ADF, ADX, AI Search, APIM, Azure AI Services, Azure Maps, Azure Storage, Cosmos, Databricks, Event Hubs, Key Vault, PostgreSQL, Purview, Stream Analytics, Synapse |
 | `apps/fiab-console/app/api/setup/existing-aoai/route.ts` | Azure AI Services, Resource Graph |
-| `apps/fiab-console/app/api/setup/existing-dlzs/route.ts` | Resource Graph |
 | `apps/fiab-console/app/api/setup/existing-storage/route.ts` | Resource Graph |
 | `apps/fiab-console/app/api/setup/landing-zones/grant/route.ts` | Azure RBAC |
 | `apps/fiab-console/app/api/setup/landing-zones/route.ts` | Resource Graph |

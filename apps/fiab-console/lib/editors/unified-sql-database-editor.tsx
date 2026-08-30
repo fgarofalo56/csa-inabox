@@ -69,6 +69,8 @@ import { EmptyState } from '@/lib/components/empty-state';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
 import { useSharedEditorStyles } from './shared-styles';
+// #3516 — the shared Entra directory search-and-select, adopted here.
+import { EntraAdminPicker, loginFor, type AadAdminState, type EntraPrincipalLite } from './components/sql-server-admin';
 import { bindItemConnection } from './sql-bind-connection';
 import { ConnectionStringsCard } from './components/connection-strings-card';
 
@@ -479,7 +481,8 @@ function QueriesPanel({
 // For PostgreSQL we honest-gate to the dedicated PG firewall route; SQL MI
 // admin is an honest gate (no public ARM admin surface wired). No mocks.
 interface FirewallRule { name: string; startIpAddress: string; endIpAddress: string }
-interface AadAdminState { login: string; sid: string; tenantId?: string; azureADOnlyAuthentication?: boolean }
+// `AadAdminState` is IMPORTED, not redeclared (#3516): sql-server-admin.tsx owns
+// the one copy of the `GET /aad-admin` response shape.
 
 function SqlServerAdminPanel({
   id, family, server, database, servers,
@@ -498,11 +501,13 @@ function SqlServerAdminPanel({
   const [fwEnd, setFwEnd] = useState('');
   const [confirmDeleteRule, setConfirmDeleteRule] = useState<string | null>(null);
 
-  // Entra (AAD) admin
+  // Entra (AAD) admin. #3516 — was three raw `<Input>`s (Login, Object id as a
+  // pasted GUID, Tenant id). `EntraAdminPicker` — already shipped in
+  // `components/sql-server-admin.tsx`, whose docblock says this editor "should
+  // adopt this instead of growing a second copy of it" — yields login AND sid
+  // from ONE Graph pick, and drops the tenant field (ARM defaults it).
   const [aad, setAad] = useState<AadAdminState | null>(null);
-  const [aadLogin, setAadLogin] = useState('');
-  const [aadSid, setAadSid] = useState('');
-  const [aadTenantId, setAadTenantId] = useState('');
+  const [aadPick, setAadPick] = useState<EntraPrincipalLite | null>(null);
   const [aadBusy, setAadBusy] = useState(false);
   const [aadMsg, setAadMsg] = useState<{ ok: boolean; text: string } | null>(null);
 
@@ -553,24 +558,25 @@ function SqlServerAdminPanel({
     setAadBusy(true); setAadMsg(null);
     const j = await fetchJson(`/api/items/azure-sql-database/${encodeURIComponent(id)}/aad-admin?server=${encodeURIComponent(server)}`);
     if (!j.ok) setAadMsg({ ok: false, text: j.error || 'load admin failed' });
-    else {
-      setAad(j.admin || null);
-      if (j.admin) { setAadLogin(j.admin.login || ''); setAadSid(j.admin.sid || ''); setAadTenantId(j.admin.tenantId || ''); }
-    }
+    // Displayed below, never pre-loaded into the picker: a stored login+sid is
+    // not a Graph result, and seeding it would blur "set now" with "just picked".
+    else setAad(j.admin || null);
     setAadBusy(false);
   }, [id, server, family]);
 
   const saveAad = useCallback(async () => {
-    if (!server || !aadLogin.trim() || !aadSid.trim()) return;
+    if (!server || !aadPick) return;
     setAadBusy(true); setAadMsg(null);
+    const login = loginFor(aadPick);
     const j = await fetchJson(`/api/items/azure-sql-database/${encodeURIComponent(id)}/aad-admin`, {
       method: 'PUT', headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ server, login: aadLogin.trim(), sid: aadSid.trim(), tenantId: aadTenantId.trim() || undefined }),
+      // login + sid come from ONE Graph object; tenant omitted so ARM defaults it.
+      body: JSON.stringify({ server, login, sid: aadPick.id }),
     });
     if (!j.ok) setAadMsg({ ok: false, text: j.error || 'set admin failed' });
-    else { setAad(j.admin || null); setAadMsg({ ok: true, text: `Microsoft Entra admin set to ${aadLogin.trim()}.` }); }
+    else { setAad(j.admin || null); setAadPick(null); setAadMsg({ ok: true, text: `Microsoft Entra admin set to ${login}.` }); }
     setAadBusy(false);
-  }, [id, server, aadLogin, aadSid, aadTenantId]);
+  }, [id, server, aadPick]);
 
   const submitGeo = useCallback(async () => {
     if (!server || !database) { setGeoMsg({ ok: false, text: 'select a server + database first' }); return; }
@@ -659,13 +665,10 @@ function SqlServerAdminPanel({
             Sets the server's Microsoft Entra (Azure AD) admin via ARM. The console UAMI itself must be the Entra admin (or a member of the admin group) for the TDS query path to authenticate.
           </MessageBarBody></MessageBar>
           {aad && <Caption1>Current: <strong>{aad.login}</strong>{aad.sid ? <> (<code>{aad.sid.slice(0, 8)}…</code>)</> : null}{aad.azureADOnlyAuthentication ? ' · Entra-only auth enabled' : ''}</Caption1>}
-          <div className={s.formGrid}>
-            <Field label="Login (UPN or group name)" required><Input value={aadLogin} onChange={(_, d) => setAadLogin(d.value)} placeholder="user@contoso.com" /></Field>
-            <Field label="Object id (sid)" required><Input value={aadSid} onChange={(_, d) => setAadSid(d.value)} placeholder="11111111-2222-3333-4444-555555555555" /></Field>
-            <Field label="Tenant id (optional)"><Input value={aadTenantId} onChange={(_, d) => setAadTenantId(d.value)} placeholder="leave blank for the server's tenant" /></Field>
-          </div>
+          {/* #3516 — search-and-select, zero typed GUIDs; see the state block. */}
+          <EntraAdminPicker itemId={id} selected={aadPick} onSelect={setAadPick} disabled={aadBusy} />
           {aadMsg && <MessageBar intent={aadMsg.ok ? 'success' : 'error'}><MessageBarBody><MessageBarTitle>{aadMsg.ok ? 'Entra admin updated' : 'Entra admin update failed'}</MessageBarTitle>{aadMsg.text}</MessageBarBody></MessageBar>}
-          <Button appearance="primary" disabled={aadBusy || !aadLogin.trim() || !aadSid.trim()} onClick={saveAad}>{aadBusy ? 'Saving…' : 'Set Microsoft Entra admin'}</Button>
+          <Button appearance="primary" disabled={aadBusy || !aadPick} onClick={saveAad}>{aadBusy ? 'Saving…' : 'Set Microsoft Entra admin'}</Button>
         </div>
       ) : (
         <div className={s.card}>
