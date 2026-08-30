@@ -49,10 +49,25 @@ describe('/admin/catalog — the endpoint badge states reachability, not config'
     renderWithProviders(<AdminCatalogPage />);
 
     // The error is surfaced (it always was)...
-    await waitFor(() => expect(screen.getByText('Catalog unreachable')).toBeInTheDocument());
+    //
+    // #3746 CHANGED THE COPY, AND THE OLD COPY WAS THE FALSE ONE. This fixture
+    // carries `error: 'HTTP 403 …'` and NO `errorClass`. A 403 means the catalog
+    // WAS reached and refused — so "Catalog unreachable" / "Unreachable", which
+    // this test used to assert, stated a cause the code never established
+    // (deploy-integrity R7). An unclassified error now reads "Call failed" /
+    // "Catalog call failed — cause not established", which is what is actually
+    // known. The test's INTENT is unchanged and is what still matters: the badge
+    // must not say the opposite of the error two lines above it.
+    await waitFor(() =>
+      expect(screen.getByText('Catalog call failed — cause not established')).toBeInTheDocument(),
+    );
     // ...and the badge no longer says the opposite two lines above it.
     expect(screen.queryByText('Live')).toBeNull();
-    expect(screen.getByText('Unreachable')).toBeInTheDocument();
+    expect(screen.getByText('Call failed')).toBeInTheDocument();
+    // The old strings must be GONE, not merely unasserted — otherwise this spec
+    // would pass against code that still rendered both.
+    expect(screen.queryByText('Catalog unreachable')).toBeNull();
+    expect(screen.queryByText('Unreachable')).toBeNull();
     // Still not "Direct-metadata mode" — a URL IS configured; conflating
     // "unreachable" with "unconfigured" would be a different false claim.
     expect(screen.queryByText('Direct-metadata mode')).toBeNull();

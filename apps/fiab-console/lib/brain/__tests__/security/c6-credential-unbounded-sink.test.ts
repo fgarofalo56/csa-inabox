@@ -8,7 +8,7 @@
 
 import { describe, expect, it } from 'vitest';
 import { detectCredentialUnboundedSink, securityFindingsOf } from '@/lib/brain/security';
-import { c6Node, graphOf } from './fixtures/corpus';
+import { c6Node, c7Node, graphOf } from './fixtures/corpus';
 
 const BASE = {
   callSite: 'connectors.fetch',
@@ -126,5 +126,75 @@ describe('C6 — credential to an unbounded, runtime-chosen sink', () => {
       ),
     );
     expect(findings[0].evidence.facts.join('\n')).toContain('2 distinct credentials');
+  });
+
+  // ── POPULATION (#3970) ─────────────────────────────────────────────────────
+  //
+  // C6 had ZERO assertions about its own population object. The registry-wide
+  // census added in #3946 defends every detector against CANDIDATE-level
+  // narrowing, and that part is closed. What it cannot see is a skip injected
+  // INSIDE this detector's predicate: the node is still counted as judged, the
+  // finding simply never fires, and `judged.length === candidates.length` stays
+  // true. Only a per-class positive spec catches that, and C6 had none — which
+  // is also why the mutation table carries no hollow arm for it.
+  //
+  // The property asserted is the one specific to this class: membership is
+  // (kind === 'credential-egress'), i.e. "this call site attaches a credential
+  // and can be redirected", and NOTHING about whether it was fixed. A detector
+  // keyed to the unsafe shape goes quiet on exactly the sites that adopt the
+  // fix, so coverage and compliance become indistinguishable.
+  describe('POPULATION MEMBERSHIP IS INDEPENDENT OF THE VERDICT', () => {
+    it('a call site that disabled redirects is still a CANDIDATE and still JUDGED', () => {
+      const fixed = c6Node('fx:c6:pop-fixed', { ...BASE, redirectPolicy: 'none' });
+      const result = detectCredentialUnboundedSink(graphOf([fixed]));
+      expect(result.population.candidates).toContain(fixed.id);
+      expect(result.population.judged).toContain(fixed.id);
+      expect(result.population.unjudged).toEqual([]);
+      expect(securityFindingsOf(result)).toEqual([]);
+    });
+
+    it('a fixed and an unfixed site are BOTH judged — only the verdict differs', () => {
+      const fixed = c6Node('fx:c6:pop-clean', { ...BASE, redirectPolicy: 'none' });
+      const broken = c6Node('fx:c6:pop-broken', BASE);
+      const result = detectCredentialUnboundedSink(graphOf([fixed, broken]));
+      expect(result.population.judged).toEqual([fixed.id, broken.id]);
+      expect(result.population.judged).toEqual(result.population.candidates);
+      expect(securityFindingsOf(result)).toHaveLength(1);
+    });
+
+    it('every exoneration route keeps the node judged — no predicate skip removes it', () => {
+      // One node per NEGATIVE CONTROL above. Each is exonerated for a different
+      // reason, and every one of those reasons is a place a `continue` could be
+      // injected inside the predicate. If any exit stops counting its node, this
+      // equality breaks even though the findings list is unchanged.
+      const nodes = [
+        c6Node('fx:c6:pop-no-redirect', { ...BASE, redirectPolicy: 'none' }),
+        c6Node('fx:c6:pop-strips', { ...BASE, opener: 'custom', stripsCredentialOnHostChange: true }),
+        c6Node('fx:c6:pop-anon', { ...BASE, attachedCredentials: [] }),
+      ];
+      const result = detectCredentialUnboundedSink(graphOf(nodes));
+      expect(result.population.candidates).toEqual(nodes.map((n) => n.id));
+      expect(result.population.judged).toEqual(nodes.map((n) => n.id));
+      expect(securityFindingsOf(result)).toEqual([]);
+    });
+
+    it('the population is SCOPED to this class, not to the whole graph', () => {
+      // The other direction, and the reason the equality above is not vacuous: a
+      // detector that adopted "every node is a candidate" would satisfy
+      // judged === candidates trivially while judging things it cannot reason
+      // about.
+      const mine = c6Node('fx:c6:pop-mine', BASE);
+      const foreign = c7Node('fx:c6:pop-foreign', {
+        sink: 'mintSessionCookie',
+        reachesPartitionKeyOrTenantScope: true,
+        sources: [{ origin: 'literal', validation: 'none', bypassesMinter: false }],
+        checkCopies: 1,
+        checkCopiesUnderTest: 1,
+      });
+      const result = detectCredentialUnboundedSink(graphOf([mine, foreign]));
+      expect(result.population.candidates).toEqual([mine.id]);
+      expect(result.population.candidates).not.toContain(foreign.id);
+      expect(result.population.declaredKinds).toEqual(['credential-egress']);
+    });
   });
 });
