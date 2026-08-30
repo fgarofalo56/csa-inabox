@@ -770,7 +770,17 @@ function PowerBiRemoteMcpCard({
             <Text weight="semibold">{status.name || 'Power BI (remote)'}</Text>
             {status.preview && <Badge appearance="tint" color="brand" size="small">Preview</Badge>}
             <Badge appearance="outline" color="informative" size="small">Opt-in</Badge>
-            {status.registered && <Badge appearance="tint" color="success" size="small">Connected</Badge>}
+            {/* #3741, same defect, same file. This card's transport is per-user
+                OBO too (`auth` defaults to 'entra-obo' in the copy below), and
+                its own "Power BI sign-in required" MessageBar a few lines down
+                gates on `!tokenReady` — so a registered-but-unconsented tenant
+                showed both at once here as well. Keyed to the SHARED predicate,
+                not to a second hand-written condition. */}
+            {status.registered && (
+              mcpServerUsable({ auth: 'entra-obo', tokenReady: status.tokenReady })
+                ? <Badge appearance="tint" color="success" size="small">Connected</Badge>
+                : <Badge appearance="outline" color="informative" size="small">Registered — sign-in needed</Badge>
+            )}
           </div>
           <Caption1 className={s.meta}>{status.category || 'Power BI / Fabric'}</Caption1>
         </div>
@@ -978,6 +988,29 @@ interface MsRemoteStatus {
     missing: string[];
   };
   override?: { enabled?: boolean; endpoint?: string; secretName?: string } | null;
+}
+
+/**
+ * Can Copilot actually CALL this server's tools for the signed-in admin? (#3741)
+ *
+ * `registered` is a TENANT fact — a persisted `McpServerConfigDoc` exists, set
+ * once ANY admin triggered registration. An `entra-obo` call still needs a
+ * cached PER-USER OBO token, which `ms-remote/route.ts:258-274` computes as
+ * `tokenReady` for exactly this purpose. Live on 2026-08-18 the Microsoft
+ * Foundry card was registered but not personally consented, and rendered a green
+ * "Connected" beside its own "Sign-in required" warning; Sentinel, same state
+ * but unregistered, correctly showed neither — the contradiction was visible
+ * side by side on one page.
+ *
+ * Exported so the badge and the warning are ONE predicate rather than two
+ * hand-kept conditions that drifted. `auth: 'none'` (Learn, Release
+ * Communications) has no token concept, so readiness is not part of its answer.
+ */
+export function mcpServerUsable(
+  status: Pick<MsRemoteStatus, 'auth' | 'tokenReady'>,
+): boolean {
+  if (status.auth !== 'entra-obo') return true;
+  return status.tokenReady === true;
 }
 
 /** Category → Fluent icon (web3-ui: every card carries a section icon). */
@@ -1277,7 +1310,19 @@ function MsRemoteMcpCard({
             {status.defaultOn && <Badge appearance="tint" color="success" size="small">On by default</Badge>}
             {status.preview && <Badge appearance="tint" color="brand" size="small">Preview</Badge>}
             {!status.defaultOn && status.optIn && <Badge appearance="outline" color="informative" size="small">Opt-in</Badge>}
-            {status.configured && status.registered && <Badge appearance="tint" color="success" size="small">Connected</Badge>}
+            {/* #3741 — "Connected" claims Copilot can CALL this server's tools,
+                which for `entra-obo` is a PER-USER fact. This badge read only the
+                tenant-level `registered`, so the Foundry card showed green
+                "Connected" directly above its own yellow "Sign-in required"
+                MessageBar. See mcpServerUsable() below. */}
+            {status.configured && status.registered && (
+              mcpServerUsable(status)
+                ? <Badge appearance="tint" color="success" size="small">Connected</Badge>
+                // Not a downgrade to nothing: the tenant-level fact is real and
+                // stays visible, it just no longer wears the word that means the
+                // per-user one.
+                : <Badge appearance="outline" color="informative" size="small">Registered — sign-in needed</Badge>
+            )}
           </div>
           <Caption1 className={s.meta}>{status.category}</Caption1>
         </div>
@@ -1371,7 +1416,10 @@ function MsRemoteMcpCard({
               </MessageBar>
             )}
 
-            {status.auth === 'entra-obo' && !status.tokenReady && (
+            {/* #3741 — the SAME predicate the badge above uses. These two were
+                separate hand-written conditions and they disagreed: this one
+                consulted `tokenReady`, the badge did not. */}
+            {!mcpServerUsable(status) && (
               <MessageBar intent="warning">
                 <MessageBarBody>
                   <MessageBarTitle>Sign-in required</MessageBarTitle>
