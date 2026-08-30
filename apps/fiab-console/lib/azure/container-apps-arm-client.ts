@@ -3,8 +3,8 @@
  *
  * Targets Microsoft.App/containerApps/{name} + the parent managedEnvironments
  * for workload-profile changes. Scale axis surfaced by Loom:
- *   - workloadProfileName (Consumption | D4 | D8 | D16 | E4 | E8 | E16 — must
- *     pre-exist on the managed environment)
+ *   - workloadProfileName — WHICHEVER profiles the app's managed environment
+ *     declares, read at runtime by {@link listEnvWorkloadProfiles}
  *   - minReplicas / maxReplicas
  *
  * Auth: ChainedTokenCredential(UAMI, DefaultAzureCredential). The UAMI must
@@ -12,12 +12,16 @@
  * it can PATCH the container app and (for new workload profiles) PATCH the
  * managed environment.
  *
- * Workload profile gotcha: Consumption-only environments do NOT support
- * D-/E-series profiles. Switching requires the environment to be created
- * with --enable-workload-profiles (or upgraded via ARM PATCH). If the env
- * has no workload profile with the requested name, ARM returns 400 with a
- * clear message — we surface it verbatim so the admin sees the bicep
- * change required.
+ * Workload profile gotcha, and what #3895 changed about it: an app can ONLY be
+ * bound to a profile its environment declares, and a Consumption-only
+ * environment declares only `Consumption`. This module used to send whatever
+ * name it was given and pass ARM's 400 back verbatim. That reads to an operator
+ * as a broken platform rather than an unavailable option, and it meant the
+ * Console could offer eight profiles against an environment that had two.
+ * `updateContainerAppScale` now pre-validates against the environment's own
+ * declared set and refuses with that set named; a FAILED environment read
+ * refuses too, saying the set could not be established rather than asserting
+ * the profile is wrong (deploy-integrity.md R7).
  *
  * No mocks. Real ARM REST only.
  */
@@ -35,9 +39,23 @@ const ARM_SCOPE = armScope();
 const ACA_API = '2024-03-01';
 
 /**
- * Workload profiles selectable for a Loom container app. Kept in lockstep with
- * the route-layer allowlist (app/api/admin/scaling/container-apps/route.ts) so
- * the structured deploy/scale options never accept a free-form profile string.
+ * SYNTACTIC allowlist of workload-profile names — the shape check that stops a
+ * free-form string reaching ARM. It is NOT the set an environment can actually
+ * bind, and treating it as one was #3895.
+ *
+ * MEASURED 2026-08-24: the Console's Scaling surface offered all eight D/E
+ * profiles from this constant, while the live Commercial environment
+ * `cae-csa-loom-centralus` declared exactly `Consumption` and `D8`. An app can
+ * only be PATCHed onto a profile its ENVIRONMENT declares, so seven of the eight
+ * non-Consumption options rendered, accepted the click, and were rejected by ARM
+ * with a raw 400 — the `no-vaporware.md` sibling of a button with no handler.
+ *
+ * The picker is now populated by {@link listEnvWorkloadProfiles}, which reads
+ * the environment. This constant stays as the injection guard for the MCP deploy
+ * route's structured options (`app/api/admin/mcp-servers/deploy/route.ts`), and
+ * per `cloud-parity.md` it must remain a SUPERSET check only — the declared set
+ * is per-environment and therefore per-cloud, and hard-coding it would re-create
+ * the same defect in a sovereign boundary.
  */
 export const ACA_WORKLOAD_PROFILES = new Set([
   'Consumption', 'D4', 'D8', 'D16', 'D32', 'E4', 'E8', 'E16', 'E32',
@@ -135,6 +153,12 @@ export interface ContainerAppInfo {
   minReplicas?: number;
   maxReplicas?: number;
   provisioningState?: string;
+  /**
+   * ARM id of the managed environment this app runs in. #3895 — the app can
+   * only be PATCHed onto a profile THIS environment declares, so the caller
+   * needs the id to ask which those are.
+   */
+  managedEnvironmentId?: string;
 }
 
 function shape(raw: any): ContainerAppInfo {
@@ -148,7 +172,66 @@ function shape(raw: any): ContainerAppInfo {
     minReplicas: tmpl?.scale?.minReplicas,
     maxReplicas: tmpl?.scale?.maxReplicas,
     provisioningState: props?.provisioningState,
+    // ARM emits `environmentId`; `managedEnvironmentId` is the older spelling and
+    // bicep still writes it. Read both — a shape that knows only one silently
+    // yields "no environment", which the caller would have to render as an
+    // unexplained empty picker.
+    managedEnvironmentId: props?.environmentId || props?.managedEnvironmentId,
   };
+}
+
+/** One workload profile a managed environment DECLARES. */
+export interface AcaWorkloadProfile {
+  /** The name an app's `workloadProfileName` must match, e.g. 'Consumption', 'D8'. */
+  name: string;
+  /** ARM's profile type, e.g. 'Consumption' | 'D8'. */
+  workloadProfileType?: string;
+  minimumCount?: number;
+  maximumCount?: number;
+}
+
+/**
+ * The workload profiles a managed environment DECLARES — the only profiles an
+ * app in it can be moved onto (#3895).
+ *
+ * `envRef` is the environment's ARM id (as carried on
+ * {@link ContainerAppInfo.managedEnvironmentId}) or its bare name, in which case
+ * it is resolved in the configured subscription + RG.
+ *
+ * FAILS CLOSED and says why. A read failure returns nothing and THROWS: the
+ * caller must be able to tell "this environment declares only Consumption and
+ * D8" from "I could not ask", because rendering the second as the first is the
+ * `deploy-integrity.md` R7 defect one layer up — an empty picker asserting the
+ * environment has no profiles when in truth nobody looked.
+ */
+export async function listEnvWorkloadProfiles(envRef: string): Promise<AcaWorkloadProfile[]> {
+  const ref = String(envRef || '').trim();
+  if (!ref) throw new AcaArmError(400, undefined, 'listEnvWorkloadProfiles: no environment reference supplied');
+  const url = ref.startsWith('/subscriptions/')
+    ? `${armBase()}${ref}?api-version=${ACA_API}`
+    : (() => {
+        const cfg = readAcaConfig();
+        return `${armBase()}/subscriptions/${cfg.subscriptionId}/resourceGroups/${cfg.resourceGroup}`
+          + `/providers/Microsoft.App/managedEnvironments/${ref}?api-version=${ACA_API}`;
+      })();
+  const r = await callArm(url);
+  if (!r.ok) {
+    throw new AcaArmError(r.status, await r.text(), `listEnvWorkloadProfiles(${ref}) failed ${r.status}`);
+  }
+  const j: any = await r.json();
+  const raw = j?.properties?.workloadProfiles;
+  // A Consumption-only environment omits the array entirely. That is not an
+  // unreadable answer — it declares exactly one profile, `Consumption`, and the
+  // picker must offer it rather than nothing.
+  if (!Array.isArray(raw)) return [{ name: 'Consumption', workloadProfileType: 'Consumption' }];
+  return raw
+    .filter((p: any) => p && typeof p.name === 'string' && p.name)
+    .map((p: any) => ({
+      name: String(p.name),
+      workloadProfileType: p.workloadProfileType ? String(p.workloadProfileType) : undefined,
+      minimumCount: typeof p.minimumCount === 'number' ? p.minimumCount : undefined,
+      maximumCount: typeof p.maximumCount === 'number' ? p.maximumCount : undefined,
+    }));
 }
 
 /** List the Loom container apps (Console + MCP + Copilot + Activator + Mirroring + Direct-Lake-Shim). */
@@ -158,6 +241,55 @@ export async function listContainerApps(): Promise<ContainerAppInfo[]> {
   if (!r.ok) throw new AcaArmError(r.status, await r.text(), `listContainerApps failed ${r.status}`);
   const j: any = await r.json();
   return (j.value || []).map(shape);
+}
+
+/** A container app plus the profiles ITS environment declares (#3895). */
+export interface ContainerAppWithProfiles extends ContainerAppInfo {
+  /** Profile names selectable for this app, read from its environment. */
+  availableProfiles: string[];
+  /**
+   * Why `availableProfiles` is empty, when it is. NEVER null alongside an empty
+   * list — an unexplained empty picker is a claim the environment declares
+   * nothing, which is not what a failed read establishes (R7).
+   */
+  profilesError: string | null;
+}
+
+/**
+ * The apps, each carrying the profile set its OWN environment declares.
+ *
+ * One ARM read per DISTINCT environment, not per app. A per-environment failure
+ * is carried on the apps that use it rather than failing the whole list: the
+ * replica controls stay usable when only the profile read is denied.
+ */
+export async function listContainerAppsWithProfiles(): Promise<ContainerAppWithProfiles[]> {
+  const apps = await listContainerApps();
+  const envIds = [...new Set(apps.map((a) => a.managedEnvironmentId).filter((x): x is string => !!x))];
+  const byEnv = new Map<string, { profiles: string[]; error: string | null }>();
+  await Promise.all(envIds.map(async (envId) => {
+    try {
+      const profiles = await listEnvWorkloadProfiles(envId);
+      byEnv.set(envId, { profiles: profiles.map((p) => p.name), error: null });
+    } catch (e: any) {
+      byEnv.set(envId, {
+        profiles: [],
+        error: `The managed environment's declared workload profiles could not be read, so the selectable set is `
+          + `UNKNOWN — not empty. ${e?.message || String(e)}`,
+      });
+    }
+  }));
+  return apps.map((a) => {
+    if (!a.managedEnvironmentId) {
+      return {
+        ...a,
+        availableProfiles: [],
+        profilesError: 'This app reports no managed-environment id, so the profiles it could be moved onto '
+          + 'could not be determined. The replica controls are unaffected.',
+      };
+    }
+    const hit = byEnv.get(a.managedEnvironmentId);
+    return { ...a, availableProfiles: hit?.profiles ?? [], profilesError: hit?.error ?? null };
+  });
 }
 
 export async function getContainerApp(name: string): Promise<ContainerAppInfo> {
@@ -286,15 +418,48 @@ export async function updateContainerAppEnv(
 }
 
 /**
- * PATCH workloadProfileName + replicas on one container app. workloadProfileName
- * change is GA on Premium ACA environments; switching to a D/E profile on
- * a Consumption-only environment will 400 — caller should surface to admin.
+ * PATCH workloadProfileName + replicas on one container app.
+ *
+ * #3895 — a profile change is PRE-VALIDATED against the profiles the app's OWN
+ * environment declares, and refused with that list when it does not match.
+ * Before this, an undeclared profile went to ARM and came back as a raw 400 the
+ * operator could not distinguish from "the platform is broken".
+ *
+ * The pre-flight reads the environment; if that read FAILS the change is refused
+ * rather than attempted, and the message says the set could not be established
+ * rather than asserting the profile is invalid (R7). Replica-only changes skip
+ * the pre-flight entirely — they do not touch the profile.
  */
 export async function updateContainerAppScale(
   name: string,
   opts: { workloadProfileName?: string; minReplicas?: number; maxReplicas?: number },
 ): Promise<ContainerAppInfo> {
   const cfg = readAcaConfig();
+  if (opts.workloadProfileName) {
+    const current = await getContainerApp(name);
+    if (!current.managedEnvironmentId) {
+      throw new AcaArmError(
+        409, undefined,
+        `Container app ${name} reports no managed-environment id, so the profiles it can be moved onto could `
+        + 'not be established. Refusing the profile change rather than sending one ARM would reject for a '
+        + 'reason this message would then have to guess at.',
+      );
+    }
+    // A read failure here THROWS out of this function, which is correct: it
+    // states what happened (the environment could not be read) instead of
+    // letting an unvalidated PATCH produce a 400 that says something else.
+    const declared = await listEnvWorkloadProfiles(current.managedEnvironmentId);
+    const names = declared.map((p) => p.name);
+    if (!names.includes(opts.workloadProfileName)) {
+      throw new AcaArmError(
+        400, { declaredProfiles: names },
+        `Workload profile "${opts.workloadProfileName}" is not declared by this app's managed environment, so `
+        + `it cannot be bound. The environment declares: ${names.join(', ') || '(none)'}. Declare the profile `
+        + 'on the environment first (platform/fiab/bicep — managedEnvironments.properties.workloadProfiles), '
+        + 'then retry.',
+      );
+    }
+  }
   const body: any = { properties: {} };
   if (opts.workloadProfileName) body.properties.workloadProfileName = opts.workloadProfileName;
   if (typeof opts.minReplicas === 'number' || typeof opts.maxReplicas === 'number') {

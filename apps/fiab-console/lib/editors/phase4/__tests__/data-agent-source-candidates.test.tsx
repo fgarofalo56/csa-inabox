@@ -26,7 +26,9 @@ import { renderHook, act, waitFor } from '@testing-library/react';
 vi.mock('@/lib/client-fetch', () => ({ clientFetch: vi.fn() }));
 
 import { clientFetch } from '@/lib/client-fetch';
-import { useSourceCandidates, sourceCandidatePlaceholder } from '../data-agent-source-candidates';
+import {
+  useSourceCandidates, sourceCandidatePlaceholder, sourceTypeBindsLoomItem,
+} from '../data-agent-source-candidates';
 
 const WS = 'ws-casino-analytics';
 const ok = (items: any[]) => ({ ok: true, status: 200, json: async () => ({ ok: true, items }) });
@@ -97,6 +99,33 @@ describe('useSourceCandidates', () => {
     expect(clientFetch).not.toHaveBeenCalled();
     // An intentional empty list, NOT a gate — nothing to remediate.
     expect(result.current.error).toBeNull();
+    // …and the state SAYS so (#4102). Without this the caller receives a state
+    // indistinguishable from an empty workspace — which is exactly what
+    // `metric-view` rendered.
+    expect(result.current.unbound).toBe(true);
+  });
+
+  it('reports UNBOUND for metric-view, the type that had no picker branch (#4102)', async () => {
+    // The live defect. `metric-view` declares `itemType: ''` exactly as
+    // `microsoft-graph` does, but the editor's "no item picker" branch was keyed
+    // on the NAME, so this kind got a dropdown that could never populate.
+    (clientFetch as any).mockResolvedValue(ok([]));
+    const { result } = renderHook(() => useSourceCandidates(WS, 'metric-view', ''));
+    await waitFor(() => expect(result.current.options).toEqual([]));
+    expect(clientFetch).not.toHaveBeenCalled();
+    expect(result.current.unbound).toBe(true);
+    // Discriminating half: with a workspace present, `deferred` is FALSE — so
+    // before `unbound` existed this state was indistinguishable from "queried,
+    // found nothing", and rendered as it.
+    expect(result.current.deferred).toBe(false);
+  });
+
+  it('a kind that DOES bind an item is not unbound', async () => {
+    // A constant `true` would pass the two specs above.
+    (clientFetch as any).mockResolvedValue(ok(WAREHOUSE));
+    const { result } = renderHook(() => useSourceCandidates(WS, 'warehouse', 'warehouse'));
+    await waitFor(() => expect(result.current.options).toHaveLength(1));
+    expect(result.current.unbound).toBe(false);
   });
 
   it('reports a non-2xx as a FAILURE, not as an empty workspace (R7)', async () => {
@@ -200,17 +229,18 @@ describe('useSourceCandidates', () => {
   });
 });
 
-describe('sourceCandidatePlaceholder — four states, never collapsed', () => {
-  it('distinguishes loading / populated / failed / deferred / genuinely empty', () => {
-    expect(sourceCandidatePlaceholder({ options: [], loading: true, error: null, deferred: false })).toBe('Loading…');
-    expect(sourceCandidatePlaceholder({ options: [{ id: 'a', name: 'A' }], loading: false, error: null, deferred: false })).toBe('Select…');
-    expect(sourceCandidatePlaceholder({ options: [], loading: false, error: 'HTTP 500', deferred: false })).toBe("Couldn't load — retry");
-    expect(sourceCandidatePlaceholder({ options: [], loading: false, error: null, deferred: true })).toBe('Waiting for the workspace…');
-    expect(sourceCandidatePlaceholder({ options: [], loading: false, error: null, deferred: false })).toBe('None in this workspace');
+describe('sourceCandidatePlaceholder — five states, never collapsed', () => {
+  it('distinguishes loading / populated / failed / unbound / deferred / genuinely empty', () => {
+    expect(sourceCandidatePlaceholder({ options: [], loading: true, error: null, deferred: false, unbound: false })).toBe('Loading…');
+    expect(sourceCandidatePlaceholder({ options: [{ id: 'a', name: 'A' }], loading: false, error: null, deferred: false, unbound: false })).toBe('Select…');
+    expect(sourceCandidatePlaceholder({ options: [], loading: false, error: 'HTTP 500', deferred: false, unbound: false })).toBe("Couldn't load — retry");
+    expect(sourceCandidatePlaceholder({ options: [], loading: false, error: null, deferred: false, unbound: true })).toBe('No item to pick — configured below');
+    expect(sourceCandidatePlaceholder({ options: [], loading: false, error: null, deferred: true, unbound: false })).toBe('Waiting for the workspace…');
+    expect(sourceCandidatePlaceholder({ options: [], loading: false, error: null, deferred: false, unbound: false })).toBe('None in this workspace');
   });
 
   it('never renders the old "None found" for a FAILED lookup', () => {
-    const p = sourceCandidatePlaceholder({ options: [], loading: false, error: 'cosmos unavailable', deferred: false });
+    const p = sourceCandidatePlaceholder({ options: [], loading: false, error: 'cosmos unavailable', deferred: false, unbound: false });
     expect(p).not.toMatch(/None/);
   });
 
@@ -220,10 +250,30 @@ describe('sourceCandidatePlaceholder — four states, never collapsed', () => {
     // workspace's contents; DEFERRED means nothing was ever asked, so the claim
     // is not merely unproven, it is manufactured — a STRONGER falsehood than
     // the 'None found' this module replaced.
-    const p = sourceCandidatePlaceholder({ options: [], loading: false, error: null, deferred: true });
+    const p = sourceCandidatePlaceholder({ options: [], loading: false, error: null, deferred: true, unbound: false });
     expect(p).not.toBe('None in this workspace');
     expect(p).not.toMatch(/None/);
     expect(p).not.toMatch(/in this workspace/); // no claim about the contents at all
+  });
+
+  it('never claims the workspace is EMPTY for a kind that binds no item (#4102)', () => {
+    // Same R7 error by a third route. There is no item TYPE to look up, so the
+    // lookup is not deferred — it will never happen — and any sentence about
+    // "this workspace" is manufactured.
+    const p = sourceCandidatePlaceholder({ options: [], loading: false, error: null, deferred: false, unbound: true });
+    expect(p).not.toBe('None in this workspace');
+    expect(p).not.toMatch(/None in/);
+    expect(p).not.toMatch(/in this workspace/);
+    // …and it must not borrow the DEFERRED sentence either: that promises a wait
+    // that never ends.
+    expect(p).not.toMatch(/Waiting for the workspace/);
+  });
+
+  it('UNBOUND wins over DEFERRED — an unbound kind on /new is still unbound', () => {
+    // Both flags are true while a `metric-view` picker sits on an unsaved item.
+    // The older, more specific truth is that there is no item type at all.
+    const p = sourceCandidatePlaceholder({ options: [], loading: false, error: null, deferred: true, unbound: true });
+    expect(p).toBe('No item to pick — configured below');
   });
 
   it('takes DEFERRED straight from the hook, so the wiring is pinned too', async () => {
@@ -234,5 +284,29 @@ describe('sourceCandidatePlaceholder — four states, never collapsed', () => {
     const { result } = renderHook(() => useSourceCandidates('', 'warehouse', 'warehouse'));
     await new Promise((r) => setTimeout(r, 30));
     expect(sourceCandidatePlaceholder(result.current)).not.toBe('None in this workspace');
+  });
+
+  it('takes UNBOUND straight from the hook too (#4102 join)', async () => {
+    // The join that was missing. `metric-view` + a REAL workspace is the exact
+    // live state: the hook must set `unbound`, and the placeholder must use it.
+    (clientFetch as any).mockResolvedValue(ok(WAREHOUSE));
+    const { result } = renderHook(() => useSourceCandidates(WS, 'metric-view', ''));
+    await waitFor(() => expect(result.current.options).toEqual([]));
+    expect(sourceCandidatePlaceholder(result.current)).toBe('No item to pick — configured below');
+  });
+});
+
+describe('sourceTypeBindsLoomItem — the SHAPE, not a list of names (#4102)', () => {
+  it('is false for every kind declared with an empty itemType', () => {
+    expect(sourceTypeBindsLoomItem('')).toBe(false);
+    // Whitespace is the same declaration with a typo, and must not silently
+    // become a real item type that nothing can ever list.
+    expect(sourceTypeBindsLoomItem('   ')).toBe(false);
+  });
+
+  it('is true for a real Loom item type', () => {
+    expect(sourceTypeBindsLoomItem('warehouse')).toBe(true);
+    expect(sourceTypeBindsLoomItem('kql-database')).toBe(true);
+    expect(sourceTypeBindsLoomItem('loom-app-runtime')).toBe(true);
   });
 });
