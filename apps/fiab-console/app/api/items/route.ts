@@ -51,8 +51,8 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
-import { getSession } from '@/lib/auth/session';
 import { listOwnedItemsBounded } from './_lib/item-crud';
+import { withSession } from '@/lib/api/route-toolkit';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -75,11 +75,7 @@ const MAX_PAGE_SIZE = 1000;
  */
 const WALK_BUDGET_MS = 18_000;
 
-export async function GET(req: NextRequest) {
-  const session = getSession();
-  if (!session) {
-    return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
-  }
+export const GET = withSession(async (req: NextRequest, { session }) => {
   const type = req.nextUrl.searchParams.get('type');
   if (!type) {
     return NextResponse.json(
@@ -143,4 +139,4 @@ export async function GET(req: NextRequest) {
       { status: 500 },
     );
   }
-}
+});

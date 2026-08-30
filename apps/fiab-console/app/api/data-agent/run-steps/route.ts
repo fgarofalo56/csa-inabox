@@ -18,7 +18,6 @@
  *     → { ok, data: { threadId, runId, status, answer, steps[], usage, lastError, backend } }
  */
 import { NextRequest, NextResponse } from 'next/server';
-import { getSession } from '@/lib/auth/session';
 import {
   runAgentAndInspect,
   FoundryAgentNotConfiguredError,
@@ -33,6 +32,7 @@ import {
   type DataAgentConfig,
 } from '@/lib/azure/data-agent-client';
 import type { WorkspaceItem } from '@/lib/types/workspace';
+import { withSession } from '@/lib/api/route-toolkit';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -117,9 +117,7 @@ async function groundedFallback(itemId: string, question: string, userOid: strin
   }
 }
 
-export async function POST(req: NextRequest) {
-  const session = getSession();
-  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+export const POST = withSession(async (req: NextRequest, { session }) => {
 
   let body: any;
   try { body = await req.json(); } catch { body = {}; }
@@ -182,4 +180,4 @@ export async function POST(req: NextRequest) {
     }, { status: 404 });
   }
   return groundedFallback(resolvedItemId, question, session.claims.oid, 'Ran on the Azure-native grounded backend (default — no published Foundry assistant required).');
-}
+});
