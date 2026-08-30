@@ -19,6 +19,7 @@ import { useConfirm } from '@/lib/components/confirm-dialog';
  */
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { getItem } from '@/lib/api/workspaces';
 import {
   Subtitle2, Caption1, Badge, Button, Input, Spinner, Field,
   Tab, TabList,
@@ -290,15 +291,22 @@ export function ActivatorEditor({ item, id }: { item: FabricItemType; id: string
       const r = await clientFetch(`/api/items/activator?workspaceId=${encodeURIComponent(wsId)}`);
       const j = await r.json();
       if (!j.ok) { setActivators([]); setListErr(j.error); return; }
-      setActivators(j.activators || []);
+      const list: ActivatorLite[] = j.activators || [];
+      setActivators(list);
       // Use functional setSelectedId so we don't have to depend on
       // selectedId in this callback — keeps the workspace-change effect
       // from re-firing every time the user clicks a row.
-      setSelectedId((prev) => prev || (j.activators?.[0]?.id ?? ''));
+      //
+      // #3551 — PREFER THE ACTIVATOR THE USER ACTUALLY OPENED. Falling straight
+      // to `activators[0]` is the same class of guess as the workspace default
+      // above: in a workspace holding several activators it silently shows a
+      // DIFFERENT reflex's rules under this item's title, which reads as "my
+      // rules are wrong" rather than "you are looking at another item".
+      setSelectedId((prev) => prev || (list.some((a) => a.id === id) ? id : (list[0]?.id ?? '')));
     } catch (e: any) {
       setActivators([]); setListErr(e?.message || String(e));
     } finally { setLoading(false); }
-  }, []);
+  }, [id]);
 
   const loadRules = useCallback(async (wsId: string, actId: string) => {
     setRulesErr(null);
@@ -339,15 +347,76 @@ export function ActivatorEditor({ item, id }: { item: FabricItemType; id: string
     }
   }, [selectedId]);
 
-  // Auto-pick the first workspace once loaded so the editor isn't blocked on a
-  // manual click for the common single-workspace deployments (matches the
-  // Eventstream editor). After NewItemCreateGate routes here post-create, this
-  // makes the Start/Stop/New rule/action-template ribbon reachable immediately.
+  // ── THE WORKSPACE THIS ACTIVATOR ACTUALLY LIVES IN (#3551) ────────────────
+  //
+  // #3551 reported the Reflex list as "completely empty" for two bundle-installed
+  // activators — and, as a supposedly separate minor note, that this panel's
+  // workspace selector defaulted to an UNRELATED workspace. Measured on this
+  // tree, those are ONE defect, and the second one causes the first:
+  //
+  //   • `GET /api/items/activator?workspaceId=X` queries Cosmos with
+  //     `WHERE c.workspaceId = @w` AND `{ partitionKey: workspaceId }`
+  //     (app/api/items/activator/route.ts). It can only ever return items in X.
+  //   • This effect used to seed `workspaceId` from `ws.workspaces[0].id` — the
+  //     FIRST workspace in the caller's account-wide list — with no reference to
+  //     the item being opened. On any deployment with more than one workspace
+  //     that is a coin toss, and #3551 measured it landing on
+  //     `synthetic-journey-…` while both items lived in `uat-apps-…`.
+  //   • So `loadList` asked the wrong partition, got `[]`, and the Reflex tree
+  //     rendered zero treeitems — for items that exist, with rules that exist.
+  //
+  // That contradicts #3551's stated hypothesis (a shared content-bundle →
+  // persistence gap with #3549). Nothing here is unpersisted; it was being asked
+  // for in the wrong place. Recording that explicitly, because the hypothesis
+  // sends the fix to the provisioner and there is nothing wrong there.
+  //
+  // The item record is read through the SAME `getItem` client the rest of the
+  // console uses (`GET /api/cosmos-items/activator/<id>`), which returns the
+  // WorkspaceItem — and therefore its `workspaceId` — WITHOUT needing to already
+  // know a workspace.
+  //
+  // WHY A PLAIN EFFECT AND NOT `useQuery`, which `eventhouse-editor.tsx` uses for
+  // the identical job: MEASURED — a `useQuery` here fails all five specs in
+  // `lib/editors/__tests__/activator.test.tsx` with "No QueryClient set", because
+  // that suite renders this editor bare. `useQuery` would have been slightly
+  // better (it shares the cache entry the item page already seeded, so no extra
+  // request); this costs one request and needs no provider. Recording the reason
+  // so the next person does not "upgrade" it and rediscover that the hard way.
+  const [ownWorkspaceId, setOwnWorkspaceId] = useState<string | undefined>(undefined);
+  const [ownWorkspaceResolved, setOwnWorkspaceResolved] = useState(false);
+
   useEffect(() => {
-    if (!workspaceId && ws.workspaces && ws.workspaces.length > 0) {
-      setWorkspaceId(ws.workspaces[0].id);
-    }
-  }, [workspaceId, ws.workspaces]);
+    if (!id || id === 'new') { setOwnWorkspaceResolved(true); return; }
+    let cancelled = false;
+    (async () => {
+      try {
+        const rec = await getItem('activator', id);
+        if (!cancelled) setOwnWorkspaceId(rec?.workspaceId || undefined);
+      } catch {
+        // Not fatal: a brand-new item, or a record we could not read. Step 3
+        // below still gives the editor a usable workspace.
+      } finally {
+        if (!cancelled) setOwnWorkspaceResolved(true);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [id]);
+
+  useEffect(() => {
+    if (workspaceId) return;
+    // 1. THE ITEM'S OWN workspace. Always correct when known, and it is the only
+    //    value that can make the list show this activator.
+    if (ownWorkspaceId) { setWorkspaceId(ownWorkspaceId); return; }
+    // 2. Still resolving. Wait rather than guessing — a wrong guess renders an
+    //    empty list that looks like "this activator has no rules", which is the
+    //    #3551 failure and is worse than a moment of "Loading workspaces…".
+    if (!ownWorkspaceResolved) return;
+    // 3. No item record to read (a brand-new activator, or the record could not
+    //    be loaded): fall back to the first workspace so a post-create editor is
+    //    immediately usable, exactly as before. This is the ONLY path that
+    //    guesses, and on it there is no item whose workspace it could contradict.
+    if (ws.workspaces && ws.workspaces.length > 0) setWorkspaceId(ws.workspaces[0].id);
+  }, [workspaceId, ownWorkspaceId, ownWorkspaceResolved, ws.workspaces]);
 
   useEffect(() => { if (workspaceId) loadList(workspaceId); }, [workspaceId, loadList]);
   useEffect(() => { if (workspaceId && selectedId) loadRules(workspaceId, selectedId); }, [workspaceId, selectedId, loadRules]);

@@ -420,6 +420,36 @@ describe('POST /api/admin/estate/pause', () => {
     expect(fake.touched).toEqual([]);
   });
 
+  /**
+   * #3989 — THE GATE USED TO BE OPT-IN FROM THE CALLER'S SIDE.
+   *
+   * `if (body.confirmToken && body.confirmToken !== token)` short-circuits on an
+   * ABSENT token, so omitting the field skipped the drift check entirely — while
+   * the sibling refusal below still told the operator "Loom will not pause
+   * resources you have not seen", a guarantee the code was not providing for
+   * exactly those callers (deploy-integrity R7).
+   *
+   * No test covered the omission, which is why the shape survived. This is it.
+   * The mutation control is the fix itself: restore the `body.confirmToken &&`
+   * short-circuit and this case goes from 409 to 202 with both resources ACTUATED.
+   */
+  it('409s when NO preview token is sent at all — the drift gate is not opt-in', async () => {
+    const fake = fakeActuator();
+    createArmActuator.mockResolvedValue(fake.actuator);
+    const { POST } = await import('../pause/route');
+    const res = await POST(post({ confirm: ESTATE }), { params: Promise.resolve({}) } as never);
+    expect(res.status).toBe(409);
+    const j = await res.json();
+    // Distinct from the drift message: "re-open the preview and confirm the
+    // current set" reads wrong for a caller that never previewed.
+    expect(j.error).toMatch(/carried no preview token/);
+    expect(j.error).toMatch(/REQUIRED, not optional/);
+    expect(j.error).not.toMatch(/changed between the preview you confirmed and now/);
+    // The thing that actually matters: nothing was touched, nothing was recorded.
+    expect(fake.touched).toEqual([]);
+    expect(savePauseSnapshot).not.toHaveBeenCalled();
+  });
+
   it('409s when the resolved set DRIFTED from the preview the operator confirmed', async () => {
     const fake = fakeActuator();
     createArmActuator.mockResolvedValue(fake.actuator);
@@ -466,7 +496,12 @@ describe('POST /api/admin/estate/pause', () => {
     }) as never;
     createArmActuator.mockResolvedValue(fake.actuator);
     const { POST } = await import('../pause/route');
-    const res = await POST(post({ confirm: ESTATE }), { params: Promise.resolve({}) } as never);
+    // Both resources are ours at PLAN time (the tag flips only on the re-verify),
+    // so the preview token covers both. #3989 made `confirmToken` REQUIRED.
+    const res = await POST(
+      post({ confirm: ESTATE, confirmToken: previewToken([POOL_ID, ADX_ID]) }),
+      { params: Promise.resolve({}) } as never,
+    );
     const j = await res.json();
     expect(res.status).toBe(202);
     expect(fake.touched).toEqual([POOL_ID]);
@@ -485,7 +520,14 @@ describe('POST /api/admin/estate/pause', () => {
     ) as never;
     createArmActuator.mockResolvedValue(fake.actuator);
     const { POST } = await import('../pause/route');
-    const j = await (await POST(post({ confirm: ESTATE }), { params: Promise.resolve({}) } as never)).json();
+    // ADX is excluded at DISCOVERY, so the preview — and therefore the required
+    // #3989 token — covers the pool alone.
+    const j = await (
+      await POST(
+        post({ confirm: ESTATE, confirmToken: previewToken([POOL_ID]) }),
+        { params: Promise.resolve({}) } as never,
+      )
+    ).json();
     expect(fake.touched).toEqual([POOL_ID]);
     // Excluded before the plan, so there is no action row — but it is still
     // VISIBLE in the population, never silently dropped.
@@ -503,7 +545,12 @@ describe('POST /api/admin/estate/pause', () => {
     const fake = fakeActuator();
     createArmActuator.mockResolvedValue(fake.actuator);
     const { POST } = await import('../pause/route');
-    const j = await (await POST(post({ confirm: ESTATE }), { params: Promise.resolve({}) } as never)).json();
+    const j = await (
+      await POST(
+        post({ confirm: ESTATE, confirmToken: previewToken([POOL_ID, ADX_ID]) }),
+        { params: Promise.resolve({}) } as never,
+      )
+    ).json();
     const asked = (fake.actuator.readTags as unknown as { mock: { calls: string[][] } }).mock.calls.map((c) => c[0]);
     expect(new Set(asked)).toEqual(new Set([POOL_ID, ADX_ID]));
     expect(j.population.examined).toBe(2);
@@ -521,7 +568,12 @@ describe('POST /api/admin/estate/pause', () => {
     ) as never;
     createArmActuator.mockResolvedValue(fake.actuator);
     const { POST } = await import('../pause/route');
-    const j = await (await POST(post({ confirm: ESTATE }), { params: Promise.resolve({}) } as never)).json();
+    const j = await (
+      await POST(
+        post({ confirm: ESTATE, confirmToken: previewToken([POOL_ID]) }),
+        { params: Promise.resolve({}) } as never,
+      )
+    ).json();
     expect(fake.touched).toEqual([POOL_ID]);
     expect(j.population.notLoomOwned).toBe(1);
     const saved = savePauseSnapshot.mock.calls[0]?.[0] as unknown as EstatePauseSnapshot;
@@ -536,7 +588,12 @@ describe('POST /api/admin/estate/pause', () => {
     }) as never;
     createArmActuator.mockResolvedValue(fake.actuator);
     const { POST } = await import('../pause/route');
-    const j = await (await POST(post({ confirm: ESTATE }), { params: Promise.resolve({}) } as never)).json();
+    const j = await (
+      await POST(
+        post({ confirm: ESTATE, confirmToken: previewToken([POOL_ID]) }),
+        { params: Promise.resolve({}) } as never,
+      )
+    ).json();
     expect(fake.touched).toEqual([POOL_ID]);
     expect(j.population.indeterminate).toBe(1);
     // Indeterminate is reported as its OWN class, not folded into "no Loom tag":
@@ -655,7 +712,13 @@ describe('POST /api/admin/estate/pause', () => {
     const fake = fakeActuator();
     createArmActuator.mockResolvedValue(fake.actuator);
     const { POST } = await import('../pause/route');
-    const res = await POST(post({ confirm: ESTATE }), { params: Promise.resolve({}) } as never);
+    // Nothing resolves, so the preview — and the required #3989 token — is over
+    // the EMPTY set. Sending it proves this 409 is the population statement and
+    // not the token gate one step earlier.
+    const res = await POST(
+      post({ confirm: ESTATE, confirmToken: previewToken([]) }),
+      { params: Promise.resolve({}) } as never,
+    );
     expect(res.status).toBe(409);
     const j = await res.json();
     expect(j.error).toMatch(/NOTHING would be paused/);
@@ -669,8 +732,14 @@ describe('POST /api/admin/estate/pause', () => {
     const fake = fakeActuator();
     createArmActuator.mockResolvedValue(fake.actuator);
     const { POST } = await import('../pause/route');
-    const res = await POST(post({ confirm: ESTATE }), { params: Promise.resolve({}) } as never);
+    // A matching token, so the 409 under test is the already-PAUSED refusal and
+    // not #3989's token gate two steps earlier.
+    const res = await POST(
+      post({ confirm: ESTATE, confirmToken: previewToken([POOL_ID, ADX_ID]) }),
+      { params: Promise.resolve({}) } as never,
+    );
     expect(res.status).toBe(409);
+    expect((await res.json()).error).toMatch(/already PAUSED/);
     expect(fake.touched).toEqual([]);
     expect(savePauseSnapshot).not.toHaveBeenCalled();
   });
@@ -678,7 +747,10 @@ describe('POST /api/admin/estate/pause', () => {
   it('dual-audits: Cosmos row AND the SIEM stream', async () => {
     createArmActuator.mockResolvedValue(fakeActuator().actuator);
     const { POST } = await import('../pause/route');
-    await POST(post({ confirm: ESTATE }), { params: Promise.resolve({}) } as never);
+    await POST(
+      post({ confirm: ESTATE, confirmToken: previewToken([POOL_ID, ADX_ID]) }),
+      { params: Promise.resolve({}) } as never,
+    );
     const kinds = auditCreate.mock.calls.map((c) => (c[0] as { kind: string }).kind);
     expect(kinds).toContain('estate-pause.start');
     expect(kinds).toContain('estate-pause.dispatched');

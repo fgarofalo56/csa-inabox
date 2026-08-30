@@ -51,8 +51,9 @@
  * DELETE → { ok:true, target:'org-gallery' }  (unpublish — published=false)
  */
 
-import { NextRequest, NextResponse } from 'next/server';
-import { getSession, type SessionPayload } from '@/lib/auth/session';
+import { NextResponse } from 'next/server';
+import { type SessionPayload } from '@/lib/auth/session';
+import { withSession } from '@/lib/api/route-toolkit';
 import {
   publishLoomReport,
   unpublishLoomReport,
@@ -109,15 +110,23 @@ function reportContentOf(item: WorkspaceItem): ReportContent | null {
  *
  * The mapping read is best-effort and only consulted when there is no per-item
  * binding; a missing mapping simply falls through to the env default (Power BI
- * stays opt-in, never a hard gate — no-fabric-dependency.md).
+ * stays opt-in, never a hard gate — no-fabric-dependency.md). A workspace whose
+ * tenancy the mapping module cannot CONFIRM as this caller's reads as unmapped
+ * and takes the same fall-through (#3833).
  */
-async function resolveWorkspace(item: WorkspaceItem): Promise<string | undefined> {
+async function resolveWorkspace(item: WorkspaceItem, session: SessionPayload): Promise<string | undefined> {
   const state = (item.state || {}) as Record<string, unknown>;
   const explicit = str(state.fabricWorkspaceId);
   let mapped: string | undefined;
   if (!explicit && item.workspaceId) {
     try {
-      const m = await getPbiWorkspaceMapping(item.workspaceId);
+      // #3833 member 3 — the mapping read now applies the tenant boundary
+      // ITSELF, and `callerTid` is required so this call site cannot forget it.
+      // `item.workspaceId` was already owner-checked by `loadContentBackedItem`
+      // above; the boundary is the second, independent property (the record the
+      // cross-partition read returns is in THIS caller's Entra tenant), so the
+      // safety of this call no longer depends on a fact stated in another file.
+      const m = await getPbiWorkspaceMapping(item.workspaceId, { callerTid: session.claims.tid });
       mapped = m?.pbiWorkspaceId;
     } catch {
       /* mapping read is best-effort — fall through to the platform env default */
@@ -186,13 +195,19 @@ async function publishToPowerBi(
 
 // ── handlers ──────────────────────────────────────────────────────────────────
 
-export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
-  const session = getSession();
-  if (!session) return jerr('unauthenticated', 401);
+// MIGRATED TO THE ROUTE-TOOLKIT BY HAND. The codemod skips this file — it
+// requires the exact `if (!session) return NextResponse.json(...401)` prologue
+// and this route used its local `jerr('unauthenticated', 401)` helper — so
+// `check-route-toolkit.mjs`'s boy-scout rule fires on any edit here. Migrating
+// is the right answer rather than a TOUCH_EXEMPT: `withSession` performs the
+// SAME 401 (`apiUnauthorized()`), and it takes the handler as an ARGUMENT, so
+// there is no `if (gate) return gate;` line left to delete — the failure mode
+// that left three route-guard checkers green over an open route on 2026-08-07.
+export const POST = withSession<{ id: string }>(async (req, { session, params }) => {
   const tenantId = session.claims.oid;
   const who = session.claims.upn || session.claims.email || session.claims.name || tenantId;
 
-  const rawId = (await ctx.params).id;
+  const rawId = params.id;
   const reportId = isLoomContentId(rawId) ? cosmosIdFromLoomId(rawId) : rawId;
 
   let body: { target?: unknown } = {};
@@ -223,7 +238,7 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
   const pbiOptIn = (await resolveBiBackendMode()) === 'powerbi';
   const wantPbi = requested === 'powerbi' || (requested === undefined && pbiOptIn);
   if (wantPbi) {
-    const ws = await resolveWorkspace(item);
+    const ws = await resolveWorkspace(item, session);
     if (ws) {
       try {
         return await publishToPowerBi(session, item, reportId, ws, content);
@@ -286,14 +301,12 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
         })`,
     });
   }
-}
+});
 
-export async function DELETE(_req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
-  const session = getSession();
-  if (!session) return jerr('unauthenticated', 401);
+export const DELETE = withSession<{ id: string }>(async (_req, { session, params }) => {
   const tenantId = session.claims.oid;
 
-  const rawId = (await ctx.params).id;
+  const rawId = params.id;
   const reportId = isLoomContentId(rawId) ? cosmosIdFromLoomId(rawId) : rawId;
 
   // Owner-check before mutating the snapshot.
@@ -307,4 +320,4 @@ export async function DELETE(_req: NextRequest, ctx: { params: Promise<{ id: str
   } catch (e: any) {
     return jerr(e?.message || String(e), 502);
   }
-}
+});
