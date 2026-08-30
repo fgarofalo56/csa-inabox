@@ -115,11 +115,18 @@ function compareNodes(a: VersionNode, b: VersionNode): FieldChange[] {
   push(out, 'ingress.external', a.ingress === null ? null : a.ingress.external, b.ingress === null ? null : b.ingress.external);
   push(out, 'ingress.fqdn', a.ingress === null ? null : a.ingress.fqdn, b.ingress === null ? null : b.ingress.fqdn);
 
+  // SORTED and JSON-rendered — NOT `join(',')` (#4017). The bare join shared the
+  // digest's blind spot exactly: `['a,b']` and `['a','b']` both rendered `a,b`,
+  // so stage 1 (the digest) deduped the two versions into one AND stage 2 (this
+  // comparator) reported zero changes if one somehow survived. The two stages are
+  // supposed to be independent; a shared blind spot makes the pair worthless.
+  // Sorting matches `digest.ts`, which sorts before hashing: without it a pure
+  // reorder would render here as a change the content address cannot see.
   push(
     out,
     'tagKeys',
-    a.tagKeys === null ? null : a.tagKeys.join(','),
-    b.tagKeys === null ? null : b.tagKeys.join(','),
+    a.tagKeys === null ? null : JSON.stringify([...a.tagKeys].sort()),
+    b.tagKeys === null ? null : JSON.stringify([...b.tagKeys].sort()),
   );
   push(out, 'estateTag', a.estateTag, b.estateTag);
   return out;
