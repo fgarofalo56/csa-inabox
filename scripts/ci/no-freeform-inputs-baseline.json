@@ -49,7 +49,6 @@
     "apps/fiab-console/lib/editors/foundry-playground.tsx": 1,
     "apps/fiab-console/lib/editors/foundry-sub-editors.tsx": 3,
     "apps/fiab-console/lib/editors/graph-editors.tsx": 1,
-    "apps/fiab-console/lib/editors/lakebase-editor.tsx": 1,
     "apps/fiab-console/lib/editors/lakehouse-shortcut-editor.tsx": 7,
     "apps/fiab-console/lib/editors/lakehouse/dialogs/shortcut-wizard-dialog.tsx": 8,
     "apps/fiab-console/lib/editors/ml-model-editor.tsx": 1,

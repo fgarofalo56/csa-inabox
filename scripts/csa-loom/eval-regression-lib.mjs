@@ -284,6 +284,50 @@ const JUDGE_REMEDIATION =
   'LOOM_AOAI_MINI_DEPLOYMENT → LOOM_AOAI_DEPLOYMENT) and confirm the daily cap ' +
   '(LOOM_COPILOT_EVAL_JUDGE_DAILY_CAP, default 5000 judged Q/day) is not already spent for this UTC day.';
 
+/**
+ * #3831 — the SINGLE-QUESTION RESOLUTION of a run's pass rate, in delta points.
+ *
+ * WHAT WAS MEASURED. `copilot-quality-evals` failed on two unrelated PR branches
+ * fifteen minutes apart (#3830 run 32442474988, #3808 run 32443405286), both on
+ * the `help` surface breaching its `passRate` floor. Across the last four runs of
+ * that workflow:
+ *
+ *   run 32352026194 (main)    hit 0.55  grounding 4.8  pass 0.45
+ *   run 32421987858 (fix3796) hit 0.55  grounding 4.8  pass 0.40  ← ON the floor
+ *   run 32437705053 (fix3796) hit 0.55  grounding 4.8  pass 0.45
+ *   run 32442474988 (fix3825) hit 0.55  grounding 4.8  pass 0.35  ← FAIL
+ *
+ * `hit-rate` and `grounding` are IDENTICAL to three decimals in all four; only
+ * the judged `passRate` moves, and it moves in one-question steps (help has ~20
+ * questions, so one question is 5 points). The floor is 0.40. The estate did not
+ * change across the green→red transition — the build marker read
+ * `sha=d4acf061 stamp=20260821T012042Z` both before the 01:50 GREEN run and after
+ * the 03:11 RED one — and neither branch touched Copilot, the corpus, the router
+ * or the index. The variance is in the judge, not in anything under test.
+ *
+ * WHAT THIS IS NOT. It is not a lower floor. `content/evals/eval-floors.json`
+ * says in its own `_meta` that floors move UP only and that lowering is never
+ * automated, and this change does not touch that file or read a tolerance from
+ * anywhere. It is the same refusal the #2992 predicate-mismatch and #3083
+ * partial-measurement branches already make: when a difference is smaller than
+ * what the instrument can resolve, the gate declines to call it a regression —
+ * and says so — instead of reporting a coin flip as a verdict.
+ *
+ * The tolerance is derived from the RUN's own denominator, so it is not a knob:
+ * add questions to a surface and it shrinks automatically. That is #3831's
+ * option 1 ("reduce judge variance rather than the bar") expressed as an
+ * incentive the gate enforces.
+ *
+ * Returns null when the question count is unknown (a legacy artifact that never
+ * carried it) — the caller then FAILS CLOSED, because a resolution it cannot
+ * establish must not become a tolerance it grants.
+ */
+export function passRateResolutionPoints(run) {
+  const q = run?.questions;
+  if (!Number.isFinite(q) || q <= 0) return null;
+  return (1 / q) * 100;
+}
+
 /** #3083 — the exact remediation for a run that measured only SOME of its rows. */
 const PARTIAL_REMEDIATION =
   'This is a MEASUREMENT failure, not a quality one — re-run once the cause is cleared rather than reading the ' +
@@ -495,11 +539,73 @@ export function evaluateGate(current, floorsDoc, opts = {}) {
       }
 
       if (floorVal !== null && value !== null && value < floorVal - EPS) {
-        metric.verdict = 'below-floor';
-        row.status = 'fail';
-        failures.push(
-          `${surface}: ${m.label} ${m.display(value)} is BELOW the floor ${m.display(floorVal)} (content/evals/eval-floors.json)`,
-        );
+        // #3831 — the JUDGED metric is the only one that wobbles, and it wobbles
+        // in one-question steps. `retrievalHitRate` (deterministic) and
+        // `groundingAvg` were identical to three decimals across the four runs
+        // in the issue, so they keep HARD single-run floors and fall straight
+        // through to the failure below. Only `passRate` is examined here.
+        const breachPoints = (floorVal - value) * m.pointsPerUnit;
+        const resolution = m.key === 'passRate' ? passRateResolutionPoints(cur) : null;
+        // A baseline BELOW the floor means the breach has now happened twice.
+        // Reachable in the real lane precisely because a within-resolution
+        // breach WARNS (exit 0), so that run succeeds and becomes the next run's
+        // delta baseline — which is what makes this a genuine
+        // two-consecutive-runs rule rather than a permanent pass.
+        const prevBelowFloor = prevVal !== null && prevVal < floorVal - EPS;
+        const cmp = m.key === 'passRate' && prevPredicate
+          ? predicatesComparable(predicate, prevPredicate, { deltaPoints })
+          : { ok: true };
+        const withinResolution =
+          resolution !== null
+          && breachPoints <= resolution + EPS
+          // FAIL CLOSED without a comparable baseline. "One judge flip" is a
+          // claim about a SEQUENCE, and a run with no comparable previous value
+          // has not established one — granting the tolerance there would make a
+          // first-ever breach permanently unfailable.
+          && prevVal !== null
+          && cmp.ok
+          && !prevBelowFloor;
+
+        if (withinResolution) {
+          metric.verdict = 'below-floor-within-resolution';
+          metric.resolutionPoints = Math.round(resolution * 10) / 10;
+          if (row.status === 'ok' || row.status === 'no-floor') row.status = 'warn';
+          warnings.push(
+            `${surface}: ${m.label} ${m.display(value)} is below the floor ${m.display(floorVal)} by ` +
+            `${breachPoints.toFixed(1)} points — but this run scored ${cur.questions} question(s), so ONE ` +
+            `judged question is worth ${resolution.toFixed(1)} points and the breach is inside the metric's own ` +
+            `resolution. The floor is NOT lowered and this is NOT a pass: the previous run measured ` +
+            `${m.display(prevVal)} (at or above the floor), so a single judge flip cannot be told from a ` +
+            `regression here. If the NEXT run is below the floor again the breach has persisted and the gate ` +
+            `FAILS. To shrink this tolerance, add questions to the \`${surface}\` golden set — it is 1/N of the ` +
+            `run's own denominator, not a configurable allowance (#3831).`,
+          );
+        } else {
+          metric.verdict = 'below-floor';
+          row.status = 'fail';
+          // Say WHICH arm failed. A one-question breach that fails because the
+          // previous run also breached is a different fact from a two-question
+          // drop, and a reader who cannot tell them apart cannot act (R7).
+          const why = m.key !== 'passRate'
+            ? ''
+            : prevBelowFloor
+              ? ` — and the previous run was ALSO below it (${m.display(prevVal)}), so the breach has PERSISTED ` +
+                'across two runs and is not judge noise (#3831).'
+              : resolution === null
+                ? ' — this run carries no question count, so the metric\'s single-question resolution could not be ' +
+                  'established and no noise tolerance is granted (#3831, fail closed).'
+                : prevVal === null || !cmp.ok
+                  ? ` — the breach is ${breachPoints.toFixed(1)} points against a ${resolution.toFixed(1)}-point ` +
+                    'single-question resolution, but there is no comparable baseline to establish it as a single ' +
+                    `flip${cmp.ok ? '' : ` (${cmp.reason})`}, so no tolerance is granted (#3831, fail closed).`
+                  : ` — the breach is ${breachPoints.toFixed(1)} points, larger than the ` +
+                    `${resolution.toFixed(1)}-point value of one judged question, so it is not a single judge ` +
+                    'flip (#3831).';
+          failures.push(
+            `${surface}: ${m.label} ${m.display(value)} is BELOW the floor ${m.display(floorVal)} ` +
+            `(content/evals/eval-floors.json)${why}`,
+          );
+        }
       }
 
       if (prevVal !== null && value !== null && !(m.key === 'groundingAvg' && prevVal === null)) {
@@ -522,7 +628,14 @@ export function evaluateGate(current, floorsDoc, opts = {}) {
         }
         const dropPoints = (prevVal - value) * m.pointsPerUnit;
         metric.deltaPoints = Math.round(-dropPoints * 10) / 10; // signed: negative = drop
-        if (dropPoints > deltaPoints + EPS && metric.verdict !== 'below-floor') {
+        // The FLOOR verdict wins over the delta verdict — it always has for a
+        // hard breach, and #3831's within-resolution breach is the same event
+        // seen by the more specific check. Reporting both would put two
+        // differently-framed warnings on one metric and leave `verdict` holding
+        // whichever ran last, which is how the floor finding disappeared from
+        // the row in the first draft of that change.
+        const floorVerdictHolds = metric.verdict === 'below-floor' || metric.verdict === 'below-floor-within-resolution';
+        if (dropPoints > deltaPoints + EPS && !floorVerdictHolds) {
           metric.verdict = 'big-drop';
           if (row.status === 'ok' || row.status === 'no-floor') row.status = 'warn';
           warnings.push(
@@ -575,6 +688,13 @@ export function renderMarkdown(report, meta = {}) {
         s += ` (${m.deltaPoints > 0 ? '+' : ''}${m.deltaPoints})`;
       }
       if (m.verdict === 'below-floor') s += ` **< floor ${metricDef.display(m.floor)}**`;
+      // #3831 — visibly distinct from a clean pass AND from a hard breach. A
+      // within-resolution breach that rendered like an ordinary value would be
+      // the gate quietly tolerating something, which is the failure mode this
+      // whole file exists to avoid.
+      if (m.verdict === 'below-floor-within-resolution') {
+        s += ` ⚠️ < floor ${metricDef.display(m.floor)} by <1 question (±${m.resolutionPoints}pts)`;
+      }
       return s;
     };
     // Not scored in this run (absent, or present with zero questions — #2798).

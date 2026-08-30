@@ -1,6 +1,34 @@
 /**
  * Workspaces / Items API client (BFF /api/* routes, Cosmos-backed).
+ *
+ * ── #3547: THE RAW-HTML LEAK ────────────────────────────────────────────────
+ *
+ * Every function here goes through one `fetchJson`, and it used to be a LOCAL
+ * `fetch` wrapper that did, on any non-2xx:
+ *
+ *     detail = await res.text();
+ *     throw new Error(`${res.status} ${res.statusText}: ${detail}`);
+ *
+ * Behind the deployment edge (Azure Front Door → Container Apps ingress) a
+ * stalled or failed route answers with an HTML error PAGE, not JSON. So on
+ * 2026-08-15, creating a `sql-server-2025-vector-index` item during a loaded V&V
+ * pass, `res.text()` returned the 504 interstitial and the "Name your…" dialog
+ * rendered the literal `<!DOCTYPE html …><style>body { font-family: Arial …`
+ * into its error MessageBar. `lib/client-fetch.ts` carries the warning against
+ * exactly this — and the ready-made helper, `describeNonJsonResponse` — but this
+ * module never used either, because it had its own transport.
+ *
+ * It now uses `clientFetch` (bounded timeout, credentialed, session-refresh
+ * retry, honest timeout copy) and maps a non-2xx through the JSON body when
+ * there is one and `describeNonJsonResponse` when there is not. The raw body is
+ * never concatenated into the message.
+ *
+ * Blast radius of the old shape, for the record: `listWorkspaces`,
+ * `getWorkspace`, `createWorkspace`, `updateWorkspace`, `deleteWorkspace`,
+ * `listItems`, `createItem`, `getItem`, `updateItem`, `deleteItem`,
+ * `listFolders`, `createFolder` — every one of them.
  */
+import { clientFetch, describeNonJsonResponse } from '@/lib/client-fetch';
 
 export interface Workspace {
   id: string;
@@ -61,18 +89,57 @@ export interface WorkspaceFolder {
 
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE || '';
 
+/** The label `describeNonJsonResponse` puts in front of its gateway copy. */
+const SERVICE_LABEL = 'The workspaces service';
+
+/**
+ * Turn a non-2xx into a message a MessageBar can show.
+ *
+ * The body is READ ONCE and PARSED — never concatenated. A JSON error envelope
+ * is the BFF's own words and is the best available reason, so it wins; anything
+ * else (an HTML interstitial, an empty body, a truncated stream) is the edge
+ * talking, and gets the status-mapped sentence from `client-fetch` instead.
+ *
+ * Note what this deliberately does NOT do: it never says WHY the gateway failed.
+ * `describeNonJsonResponse` states only what the status establishes
+ * (deploy-integrity.md R7) — the same reason `client-fetch`'s timeout copy stopped
+ * blaming cross-subscription fan-out (#3546).
+ */
+async function errorFromResponse(res: Response): Promise<Error> {
+  let raw = '';
+  try { raw = await res.text(); } catch { /* body unreadable — treated as non-JSON */ }
+  let parsed: unknown;
+  try { parsed = raw ? JSON.parse(raw) : undefined; } catch { parsed = undefined; }
+  if (parsed && typeof parsed === 'object') {
+    const o = parsed as Record<string, unknown>;
+    const reason = typeof o.error === 'string' && o.error
+      ? o.error
+      : typeof o.message === 'string' && o.message ? o.message : '';
+    if (reason) return new Error(`${reason} (HTTP ${res.status})`);
+  }
+  // Not JSON — an HTML error page or an empty body. NEVER echo it.
+  return new Error(describeNonJsonResponse(res.status, SERVICE_LABEL));
+}
+
 async function fetchJson<T>(path: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(`${API_BASE}${path}`, {
+  // `API_BASE` is empty in every shipped configuration (nothing sets
+  // NEXT_PUBLIC_API_BASE), but the concatenation is preserved so this module's
+  // behaviour does not change with the transport. A computed string is a wide
+  // `string` to `ValidateApiPath`, which is the documented pass-through.
+  const url = `${API_BASE}${path}`;
+  const res = await clientFetch(url, {
     ...init,
-    credentials: 'include',
     headers: { 'Content-Type': 'application/json', ...(init?.headers || {}) },
   });
-  if (!res.ok) {
-    let detail = '';
-    try { detail = await res.text(); } catch { /* ignore */ }
-    throw new Error(`${res.status} ${res.statusText}${detail ? `: ${detail}` : ''}`);
+  if (!res.ok) throw await errorFromResponse(res);
+  // A 2xx can be non-JSON too — the edge can answer 200 with an interstitial.
+  // `res.json()` would then throw a SyntaxError quoting the HTML, which is the
+  // same leak by another door.
+  try {
+    return await res.json() as T;
+  } catch {
+    throw new Error(describeNonJsonResponse(res.status, SERVICE_LABEL));
   }
-  return res.json();
 }
 
 export async function listWorkspaces(): Promise<Workspace[]> {

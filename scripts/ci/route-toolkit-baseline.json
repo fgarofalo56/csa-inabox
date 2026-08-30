@@ -94,7 +94,6 @@
     "apps/fiab-console/app/api/admin/scaling/compute/purview-managed-vnet/route.ts": 1,
     "apps/fiab-console/app/api/admin/scaling/compute/register-purview-shir/route.ts": 1,
     "apps/fiab-console/app/api/admin/scaling/compute/route.ts": 1,
-    "apps/fiab-console/app/api/admin/scaling/container-apps/route.ts": 1,
     "apps/fiab-console/app/api/admin/scaling/cosmos/route.ts": 1,
     "apps/fiab-console/app/api/admin/scaling/databricks-cluster/route.ts": 1,
     "apps/fiab-console/app/api/admin/scaling/databricks-warehouse/route.ts": 1,
