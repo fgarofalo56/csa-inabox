@@ -1148,6 +1148,20 @@ function gh(args) {
  * (`run-name` is fixed before any step executes and cannot read a file), so it
  * is detected from the declaration's own `declaredOn` date instead.
  *
+ * WHICH MAKES `declaredOn` A SWITCH FOR THIS WHOLE CHECK (#4121). Two ways of
+ * moving it forward make the filter keep everything, so the newest STOOD-DOWN
+ * success becomes "last success" and this file reports 0 days of drift on a
+ * lane that has not deployed in months:
+ *
+ *   - a FUTURE-dated `declaredOn`. Now REFUSED by classifyPauseDeclaration, so
+ *     `declaredPauseSince` returns null and nothing is filtered — the drift
+ *     stays loud rather than being hidden by a date that cannot be true.
+ *   - RE-DATING it at renewal, which is the documented lifecycle being followed
+ *     rather than any kind of mistake. The register's rule is therefore that
+ *     `declaredOn` is when the pause BEGAN and is never moved; a renewal bumps
+ *     `reviewBy` and records its fresh read in `renewedOn`, a field nothing
+ *     here reads. See scripts/ci/_estate-pause-declaration.mjs.
+ *
  * @param {{createdAt?:string, displayTitle?:string}[]} rows
  * @param {string|null} pausedSince ISO date from the boundary's declaration, or
  *   null when the boundary is not declared paused.

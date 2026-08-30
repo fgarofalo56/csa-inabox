@@ -65,6 +65,46 @@
  * that is silently ignored is worse than no declaration: the operator believes
  * the estate is declared paused and cannot see why the lane still went red
  * (deploy-integrity.md R7 — say what was actually established).
+ *
+ * ── `declaredOn` IS LOAD-BEARING, AND IT WAS DOCUMENTED NOWHERE (#4121) ─────
+ *
+ * A stood-down run SUCCEEDS having deployed nothing. Left alone, that would
+ * flip `check-deploy-staleness` from `STALE … 17 consecutive FAILURE(s)` to
+ * `ok` — a loud true red converted into a silent false green, which is the one
+ * thing that file exists to prevent. `pickLastRealSuccess(rows, pausedSince)`
+ * therefore DISCARDS successes dated at or after the declaration, and the date
+ * it uses is this entry's `declaredOn`.
+ *
+ * So `declaredOn` is not metadata. It is the single field that decides whether
+ * the drift monitor still works, and BOTH of these turn it off:
+ *
+ *   1. A FUTURE-DATED `declaredOn` (still earlier than `reviewBy`) makes the
+ *      filter keep every run — including today's stood-down success — so
+ *      driftDays goes to 0 and the check exits 0. This function now REFUSES a
+ *      declaration dated later than the run reading it: a declaration cannot
+ *      have been made in the future, and a date that cannot be true must not be
+ *      allowed to disable a control.
+ *
+ *   2. RE-DATING ON RENEWAL does the same thing with no mistake at all. The
+ *      expiry design says to re-date the declaration with a fresh read; moving
+ *      `declaredOn` forward to today discards nothing and reports 0 days of
+ *      drift over however long the lane has actually been dead. That is the
+ *      instructions being followed, which is why it needs a field rather than a
+ *      warning:
+ *
+ *        `declaredOn` is the date the pause BEGAN and is NEVER changed.
+ *        Renewal extends `reviewBy` and records the fresh read in `renewedOn`.
+ *
+ *      `renewedOn` is optional, must be an ISO date, must not precede
+ *      `declaredOn`, and must not be in the future. Nothing keys the staleness
+ *      filter to it — that is the point: the field a renewal touches is
+ *      deliberately not the field the filter reads.
+ *
+ * HONEST LIMIT: immutability of `declaredOn` across renewals is enforced by
+ * this file's rules and by having somewhere else to write the renewal date. It
+ * is NOT enforced against git history — a reviewer editing `declaredOn`
+ * backwards or forwards within the allowed range still passes. The register is
+ * a reviewed, checked-in file precisely so that edit is visible in a diff.
  */
 
 /**
@@ -149,10 +189,57 @@ export function classifyPauseDeclaration({ register, boundary, today }) {
   if (/\b(TODO|TBD|WIP)\b/i.test(reason)) {
     return no(`the '${boundary}' entry's \`reason\` is a placeholder (TODO/TBD/WIP) — NOT suppressing`);
   }
+  // ── `declaredOn` (#4121) ──────────────────────────────────────────────────
+  // The field check-deploy-staleness keys its stood-down filter to. Absent or
+  // malformed, the filter silently does nothing and stood-down successes count
+  // as deploys; future-dated, it keeps everything and reports zero drift. Both
+  // resolve to NOT-suppressing, same asymmetry as every other rule here.
+  if (!ISO_DATE.test(String(entry.declaredOn ?? ''))) {
+    return no(
+      `the '${boundary}' entry's \`declaredOn\` is not an ISO date ('${entry.declaredOn}') — NOT suppressing. ` +
+        'It is the date check-deploy-staleness discards stood-down successes from; without it the drift ' +
+        'monitor counts a run that deployed nothing as a deploy.',
+    );
+  }
+  if (String(entry.declaredOn) > today) {
+    return no(
+      `the '${boundary}' entry's \`declaredOn\` is ${entry.declaredOn}, which is LATER than today (${today}) — ` +
+        'NOT suppressing. A declaration cannot have been made in the future, and a future date makes the ' +
+        'staleness filter keep every stood-down success, reporting 0 days of drift on a dead lane.',
+    );
+  }
+  if (entry.renewedOn !== undefined && entry.renewedOn !== null) {
+    // Optional, and deliberately NOT what the staleness filter reads: renewal
+    // must have somewhere to record its fresh read that is not the field
+    // holding the drift window open.
+    if (!ISO_DATE.test(String(entry.renewedOn))) {
+      return no(`the '${boundary}' entry's \`renewedOn\` is not an ISO date ('${entry.renewedOn}') — NOT suppressing`);
+    }
+    if (String(entry.renewedOn) < String(entry.declaredOn)) {
+      return no(
+        `the '${boundary}' entry was renewed on ${entry.renewedOn}, BEFORE it was declared on ${entry.declaredOn} ` +
+          '— NOT suppressing. `declaredOn` is when the pause began and is never moved; a renewal that ' +
+          'predates it means the two have been swapped.',
+      );
+    }
+    if (String(entry.renewedOn) > today) {
+      return no(`the '${boundary}' entry's \`renewedOn\` (${entry.renewedOn}) is in the future — NOT suppressing`);
+    }
+  }
   if (!ISO_DATE.test(String(entry.reviewBy ?? ''))) {
     return no(
       `the '${boundary}' entry's \`reviewBy\` is not an ISO date ('${entry.reviewBy}') — NOT suppressing. ` +
         'Without a parseable expiry the declaration would be permanent by default.',
+    );
+  }
+  if (String(entry.reviewBy) <= String(entry.declaredOn)) {
+    // Born expired. `reviewBy < today` below only catches this from the day
+    // AFTER declaration; on the declaration day itself a reviewBy equal to
+    // declaredOn would suppress for one run and then lapse, which is a
+    // declaration nobody meant to make.
+    return no(
+      `the '${boundary}' entry's \`reviewBy\` (${entry.reviewBy}) is not after its \`declaredOn\` ` +
+        `(${entry.declaredOn}) — NOT suppressing. A pause that expires on the day it starts is not a pause.`,
     );
   }
   if (String(entry.reviewBy) < today) {
@@ -171,8 +258,10 @@ export function classifyPauseDeclaration({ register, boundary, today }) {
   return {
     declared: true,
     reason:
-      `'${boundary}' is DECLARED paused in ${PAUSE_DECLARATION_PATH} by ${entry.owner}, reviewBy ${entry.reviewBy}. ` +
-      `Declared reason: ${reason}`,
+      `'${boundary}' is DECLARED paused in ${PAUSE_DECLARATION_PATH} by ${entry.owner}, declaredOn ` +
+      `${entry.declaredOn}${entry.renewedOn ? ` (renewed ${entry.renewedOn})` : ''}, reviewBy ${entry.reviewBy}. ` +
+      `Successful runs from ${entry.declaredOn} onward are stood-down runs and are NOT counted as deploys by ` +
+      `check-deploy-staleness. Declared reason: ${reason}`,
     entry,
   };
 }
