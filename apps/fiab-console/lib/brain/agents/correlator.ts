@@ -53,6 +53,16 @@ import {
 } from './contracts';
 import { invokeModel, requestFor, type BrainModelClient } from './model-client';
 import { usageForCall, usageForFailedCall } from './tokens';
+// #3967 — the artifact prefixes come from the module that MINTS them
+// (`graph/node-id.ts`), never re-typed here. A prefix that drifted from the
+// minter would silently shrink `artifactsOf`'s key set, and a smaller key set
+// means FEWER correlations — findings that share a root cause reported
+// separately, with nothing going red.
+import {
+  AZURE_NODE_ID_PREFIX,
+  CODE_NODE_ID_PREFIX,
+  DEPLOY_NODE_ID_PREFIX,
+} from '../graph/node-id';
 
 // ---------------------------------------------------------------------------
 // §Artifact extraction
@@ -71,7 +81,11 @@ export function artifactsOf(f: Finding, graph?: BrainGraphView): string[] {
   const keys = new Set<string>();
   for (const id of [...f.subjects, ...f.evidence.nodes]) {
     const s = String(id);
-    if (s.startsWith('deploy:') || s.startsWith('code:') || s.startsWith('azure:')) {
+    if (
+      s.startsWith(DEPLOY_NODE_ID_PREFIX) ||
+      s.startsWith(CODE_NODE_ID_PREFIX) ||
+      s.startsWith(AZURE_NODE_ID_PREFIX)
+    ) {
       keys.add(s);
     }
   }

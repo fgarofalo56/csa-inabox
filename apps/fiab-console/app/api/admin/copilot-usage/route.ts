@@ -17,14 +17,13 @@
  *   { ok:false, error }                          — query failure
  */
 import { NextResponse, type NextRequest } from 'next/server';
-import { getSession } from '@/lib/auth/session';
-import { requireTenantAdmin } from '@/lib/auth/feature-gate';
 import { queryLogs, MonitorError, MonitorNotConfiguredError, type LogQueryResult } from '@/lib/azure/monitor-client';
 import { apiServerError, apiHonestError } from '@/lib/api/respond';
 import { buildScopedCacheKey, getOrComputeCached, resolveBackendTtl } from '@/lib/azure/query-result-cache';
 // rel-T85 list-price table + estimator — shared with the per-turn transparency
 // status bar (CTS-01) so the $ rate is derived in exactly one place.
 import { estCostUsd } from '@/lib/copilot/cost-estimate';
+import { withTenantAdmin } from '@/lib/api/route-toolkit';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -33,11 +32,7 @@ const col = (r: LogQueryResult, name: string) => r.columns.indexOf(name);
 const numAt = (row: unknown[], i: number) => (i < 0 ? 0 : Number(row[i] ?? 0) || 0);
 const strAt = (row: unknown[], i: number) => (i < 0 ? '' : String(row[i] ?? ''));
 
-export async function GET(req: NextRequest) {
-  const s = getSession();
-  if (!s) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
-  const denied = requireTenantAdmin(s);
-  if (denied) return denied;
+export const GET = withTenantAdmin(async (req: NextRequest) => {
 
   const days = Math.max(1, Math.min(90, Number(req.nextUrl.searchParams.get('days') || '30') || 30));
   const timespan = `P${days}D`;
@@ -71,13 +66,32 @@ union isfuzzy=true (AppEvents | where Name == "copilot.usage")
 | order by day asc
 `.trim();
 
-  // Top users (hashed — no PII) by call volume.
+  // Top users (hashed — no PII) by call volume, broken out PER MODEL.
+  //
+  // #3743 — THE `by user_hash` GROUPING WAS THE BUG. It dropped `model`, so the
+  // row build had nothing to price with and passed `estCostUsd('', …)`. That
+  // never matches a key in PRICE_PER_1K, so every per-user figure fell through
+  // to DEFAULT_PRICE — a catch-all meant for UNRECOGNIZED deployments, not for
+  // "we chose not to look up the real one". Measured on the live tenant: the
+  // SAME 1,640 + 245 tokens read $0.0004 under Token totals / By persona / By
+  // model and $0.0052 under Top users — ~13x, because gpt-4o-mini is
+  // {0.00015, 0.0006} and DEFAULT_PRICE is {0.002, 0.008}. It errs the other way
+  // on gpt-4o, whose real blended rate is HIGHER than the default. Either way
+  // the one breakdown an admin uses to find who is driving spend was the one
+  // number on the page that was not derived from the real price.
+  //
+  // `let` + a `top 20` on the user rollup preserves the previous semantics —
+  // still the twenty busiest users, not the twenty busiest (user, model) pairs —
+  // while giving the row build the model it needs. The union stays `isfuzzy`
+  // (a not-yet-materialized AppEvents table must still contribute 0 rows).
   const kqlByUser = `
-union isfuzzy=true (AppEvents | where Name == "copilot.usage")
+let usage = union isfuzzy=true (AppEvents | where Name == "copilot.usage")
 | extend pt = toint(Properties.prompt_tokens), ct = toint(Properties.completion_tokens)
-| extend user_hash = tostring(Properties.user_oid_hash)
-| summarize prompt_tokens = sum(pt), completion_tokens = sum(ct), total_tokens = sum(pt) + sum(ct), calls = count() by user_hash
-| top 20 by calls desc
+| extend user_hash = tostring(Properties.user_oid_hash), model = tostring(Properties.model);
+let top_users = usage | summarize calls = count() by user_hash | top 20 by calls desc | project user_hash;
+usage
+| where user_hash in (top_users)
+| summarize prompt_tokens = sum(pt), completion_tokens = sum(ct), total_tokens = sum(pt) + sum(ct), calls = count() by user_hash, model
 `.trim();
 
   try {
@@ -133,19 +147,42 @@ union isfuzzy=true (AppEvents | where Name == "copilot.usage")
       };
     });
 
-    const byUser = byUserR.rows.map((row) => {
+    // Per-user rows arrive PER (user, model) now (#3743), so each user's cost is
+    // the SUM of MODEL-AWARE per-model estimates — the same derivation `byDay`
+    // uses and `byPersona` sums from. One price table, one code path, so Top
+    // users cannot disagree with By model about the same tokens again.
+    //
+    // A row whose `model` is empty (the event genuinely carried no `model`
+    // property) still falls through to DEFAULT_PRICE — but so does the identical
+    // row in `byDay`, so the two breakdowns stay CONSISTENT, which is the
+    // property #3743 asks for. What is gone is the case where the model was
+    // known and thrown away.
+    const userAgg = new Map<
+      string,
+      { promptTokens: number; completionTokens: number; totalTokens: number; calls: number; estCostUsd: number }
+    >();
+    for (const row of byUserR.rows) {
+      const userHash = strAt(row, col(byUserR, 'user_hash'));
+      const model = strAt(row, col(byUserR, 'model'));
       const promptTokens = numAt(row, col(byUserR, 'prompt_tokens'));
       const completionTokens = numAt(row, col(byUserR, 'completion_tokens'));
-      return {
-        userHash: strAt(row, col(byUserR, 'user_hash')),
-        promptTokens,
-        completionTokens,
-        totalTokens: numAt(row, col(byUserR, 'total_tokens')),
-        calls: numAt(row, col(byUserR, 'calls')),
-        // Per-user rows carry no model → default-priced estimate.
-        estCostUsd: estCostUsd('', promptTokens, completionTokens),
-      };
-    });
+      const acc = userAgg.get(userHash)
+        ?? { promptTokens: 0, completionTokens: 0, totalTokens: 0, calls: 0, estCostUsd: 0 };
+      acc.promptTokens += promptTokens;
+      acc.completionTokens += completionTokens;
+      acc.totalTokens += numAt(row, col(byUserR, 'total_tokens'));
+      acc.calls += numAt(row, col(byUserR, 'calls'));
+      acc.estCostUsd += estCostUsd(model, promptTokens, completionTokens);
+      userAgg.set(userHash, acc);
+    }
+    const byUser = Array.from(userAgg, ([userHash, a]) => ({
+      userHash,
+      promptTokens: a.promptTokens,
+      completionTokens: a.completionTokens,
+      totalTokens: a.totalTokens,
+      calls: a.calls,
+      estCostUsd: Number(a.estCostUsd.toFixed(4)),
+    })).sort((a, b) => b.calls - a.calls);
 
     const totals = byPersona.reduce(
       (acc, p) => ({
@@ -206,4 +243,4 @@ union isfuzzy=true (AppEvents | where Name == "copilot.usage")
     }
     return apiServerError(e);
   }
-}
+});
