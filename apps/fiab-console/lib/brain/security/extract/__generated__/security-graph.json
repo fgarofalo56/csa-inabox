@@ -2645,25 +2645,6 @@
           }
         },
         {
-          "id": "sec:verdict-call:apps/fiab-console/app/api/admin/copilot-usage/route.ts#GET:requireTenantAdmin:4",
-          "kind": "verdict-call",
-          "provenance": "declared",
-          "label": "GET /api/admin/copilot-usage -> requireTenantAdmin",
-          "facet": {
-            "kind": "verdict-call",
-            "callSite": "GET /api/admin/copilot-usage:4",
-            "symbol": "requireTenantAdmin",
-            "returnsVerdictUnion": true,
-            "pathsToPrivilegedSink": 0,
-            "pathsConsumingAsRefusal": 0,
-            "consumption": "returned",
-            "allowlisted": false,
-            "allowlistPremiseTested": false,
-            "sinkPrivileged": false,
-            "sinkKind": "none"
-          }
-        },
-        {
           "id": "sec:authorizer:apps/fiab-console/app/api/admin/copilot/memory/[id]/route.ts#DELETE",
           "kind": "authorizer",
           "provenance": "declared",
@@ -35391,7 +35372,7 @@
             "declaredSinkCount": 1,
             "sinks": [
               {
-                "id": "console:member:590",
+                "id": "console:member:601",
                 "surface": "console",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -42152,13 +42133,6 @@
           "provenance": "declared"
         },
         {
-          "id": "sec-edge:calls:sec:authorizer:apps/fiab-console/app/api/admin/copilot-usage/route.ts#GET->sec:verdict-call:apps/fiab-console/app/api/admin/copilot-usage/route.ts#GET:requireTenantAdmin:4",
-          "from": "sec:authorizer:apps/fiab-console/app/api/admin/copilot-usage/route.ts#GET",
-          "to": "sec:verdict-call:apps/fiab-console/app/api/admin/copilot-usage/route.ts#GET:requireTenantAdmin:4",
-          "kind": "calls",
-          "provenance": "declared"
-        },
-        {
           "id": "sec-edge:calls:sec:authorizer:apps/fiab-console/app/api/admin/copilot/memory/[id]/route.ts#DELETE->sec:verdict-call:apps/fiab-console/app/api/admin/copilot/memory/[id]/route.ts#DELETE:requireTenantAdmin:3",
           "from": "sec:authorizer:apps/fiab-console/app/api/admin/copilot/memory/[id]/route.ts#DELETE",
           "to": "sec:verdict-call:apps/fiab-console/app/api/admin/copilot/memory/[id]/route.ts#DELETE:requireTenantAdmin:3",
@@ -43665,11 +43639,6 @@
         },
         {
           "nodeId": "sec:authorizer:apps/fiab-console/app/api/admin/copilot-usage/route.ts#GET",
-          "codeModuleId": "code:apps/fiab-console/app/api/admin/copilot-usage/route.ts",
-          "deployedAs": "loom-console"
-        },
-        {
-          "nodeId": "sec:verdict-call:apps/fiab-console/app/api/admin/copilot-usage/route.ts#GET:requireTenantAdmin:4",
           "codeModuleId": "code:apps/fiab-console/app/api/admin/copilot-usage/route.ts",
           "deployedAs": "loom-console"
         },
@@ -47774,15 +47743,15 @@
     },
     "meta": {
       "generatorVersion": 1,
-      "generatedAt": "2026-08-29T21:57:10.603Z",
-      "commit": "857cfe01954ebafb33fb77c5be66b9829016c813",
-      "inputsDigest": "eba1a8a94cd91c34",
+      "generatedAt": "2026-08-30T06:13:14.159Z",
+      "commit": "0cad3ac7eaf531c40f336d4aff4735b81a45c053",
+      "inputsDigest": "92edc25bf83fb1fc",
       "filesScanned": 2065,
       "scanScopes": [
         {
           "scope": "app/**/route.ts (console BFF routes)",
           "filesMatched": 1694,
-          "nodesEmitted": 706
+          "nodesEmitted": 705
         },
         {
           "scope": ".github/**, scripts/** (CI publication surfaces)",
