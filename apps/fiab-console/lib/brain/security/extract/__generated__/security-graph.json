@@ -16795,6 +16795,29 @@
           }
         },
         {
+          "id": "sec:publication:scripts/ci/__tests__/roll-race.test.mjs#module",
+          "kind": "publication",
+          "provenance": "declared",
+          "label": "scripts/ci/__tests__/roll-race.test.mjs",
+          "facet": {
+            "kind": "publication",
+            "module": "scripts/ci/__tests__/roll-race.test.mjs",
+            "declaredSinkCount": 1,
+            "sinks": [
+              {
+                "id": "console:member:2764",
+                "surface": "console",
+                "accessPath": "member",
+                "wholeExpressionBounded": false,
+                "boundary": null,
+                "unredactedByDesign": false,
+                "carriesSensitive": false,
+                "childProvenRedacting": null
+              }
+            ]
+          }
+        },
+        {
           "id": "sec:publication:scripts/ci/__tests__/sc1-verify-gate.test.mjs#module",
           "kind": "publication",
           "provenance": "declared",
@@ -46736,6 +46759,11 @@
           "reason": "CI guard script — executes on a GitHub Actions runner, not in any deployed Azure resource. Painting it onto a Container App would assert an edge that does not exist."
         },
         {
+          "nodeId": "sec:publication:scripts/ci/__tests__/roll-race.test.mjs#module",
+          "codeModuleId": "code:scripts/ci/__tests__/roll-race.test.mjs",
+          "reason": "CI guard script — executes on a GitHub Actions runner, not in any deployed Azure resource. Painting it onto a Container App would assert an edge that does not exist."
+        },
+        {
           "nodeId": "sec:publication:scripts/ci/__tests__/sc1-verify-gate.test.mjs#module",
           "codeModuleId": "code:scripts/ci/__tests__/sc1-verify-gate.test.mjs",
           "reason": "CI guard script — executes on a GitHub Actions runner, not in any deployed Azure resource. Painting it onto a Container App would assert an edge that does not exist."
@@ -47774,9 +47802,9 @@
     },
     "meta": {
       "generatorVersion": 1,
-      "generatedAt": "2026-08-30T04:33:36.850Z",
-      "commit": "00de3ce3ad5417fc92151cbedd421ce6f8afade3",
-      "inputsDigest": "4c4595aae14d47a5",
+      "generatedAt": "2026-08-30T16:12:12.883Z",
+      "commit": "6d20e0468bbeda075b856bb3cdd5957ae9d7fc8e",
+      "inputsDigest": "a719681494b829a8",
       "filesScanned": 2065,
       "scanScopes": [
         {
@@ -47787,7 +47815,7 @@
         {
           "scope": ".github/**, scripts/** (CI publication surfaces)",
           "filesMatched": 371,
-          "nodesEmitted": 217
+          "nodesEmitted": 218
         }
       ],
       "skipped": [
@@ -47965,6 +47993,10 @@
         },
         {
           "subject": "scripts/ci/__tests__/release-please-dispatch-decision.test.mjs",
+          "reason": "module declares no PUBLICATION-SINKS marker, so C4's declared-count drift check is INERT for it (declaredSinkCount is set to the observed 1). Recorded so the inertness is countable rather than invisible — a check that cannot fail must not be mistaken for a check that passed."
+        },
+        {
+          "subject": "scripts/ci/__tests__/roll-race.test.mjs",
           "reason": "module declares no PUBLICATION-SINKS marker, so C4's declared-count drift check is INERT for it (declaredSinkCount is set to the observed 1). Recorded so the inertness is countable rather than invisible — a check that cannot fail must not be mistaken for a check that passed."
         },
         {
@@ -48792,8 +48824,8 @@
           "reason": "module declares no PUBLICATION-SINKS marker, so C4's declared-count drift check is INERT for it (declaredSinkCount is set to the observed 5). Recorded so the inertness is countable rather than invisible — a check that cannot fail must not be mistaken for a check that passed."
         },
         {
-          "subject": "scripts/** (*.ps1, *.py, *.sh, *.yaml)",
-          "reason": "182 file(s) under a SCANNED root were seen and NOT read: this extractor lexes JavaScript/TypeScript only, so a workflow YAML `run:` block, a shell step or a Python script is outside the examined population even though it publishes to the same PUBLIC Actions log. C4 output therefore says nothing about these files. Recorded with a count so the narrowing is countable rather than inferred from a scope string — which is how the `.github/**` gap survived until 2026-08-24."
+          "subject": "scripts/** (*.ps1, *.py, *.sh, *.yaml, *.yml)",
+          "reason": "184 file(s) under a SCANNED root were seen and NOT read: this extractor lexes JavaScript/TypeScript only, so a workflow YAML `run:` block, a shell step or a Python script is outside the examined population even though it publishes to the same PUBLIC Actions log. C4 output therefore says nothing about these files. Recorded with a count so the narrowing is countable rather than inferred from a scope string — which is how the `.github/**` gap survived until 2026-08-24."
         },
         {
           "subject": ".github/** (*.py, *.sh, *.yaml, *.yml)",
@@ -48801,7 +48833,7 @@
         },
         {
           "subject": "C4 expression arm (carriesSensitive)",
-          "reason": "matched 0 of 2265 non-spawn publication sink(s), so every C4 finding on this tree comes from the spawn-stdio arm. The expression arm is INERT here and its correctness is therefore unexercised by the real corpus — C4 output is not evidence that no unbounded sensitive write exists."
+          "reason": "matched 0 of 2266 non-spawn publication sink(s), so every C4 finding on this tree comes from the spawn-stdio arm. The expression arm is INERT here and its correctness is therefore unexercised by the real corpus — C4 output is not evidence that no unbounded sensitive write exists."
         }
       ]
     }
