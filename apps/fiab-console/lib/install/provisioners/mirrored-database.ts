@@ -34,6 +34,7 @@ import { resolveAbfssRoot } from '@/lib/azure/adls-client';
 import { armBase, armScope, dfsUrl } from '@/lib/azure/cloud-endpoints';
 import { uamiArmCredential } from '@/lib/azure/arm-credential';
 import { deterministicAssignmentGuid, grantScriptFor } from '@/lib/azure/role-grant-client';
+import { fetchWithTimeout } from '@/lib/azure/fetch-with-timeout';
 import {
   listMirroredDatabases,
   createMirroredDatabase,
@@ -173,7 +174,16 @@ async function grantFactoryBronzeAccess(
   }
 
   try {
-    const res = await fetch(url, {
+    // fetchWithTimeout, not a bare fetch. This is an ARM PUT on the INSTALL path:
+    // with no timeout a hung control-plane call blocks the provisioner
+    // indefinitely and the item never finishes creating, which is exactly the
+    // hazard `scripts/no-bare-server-fetch.mjs` exists to catch — it failed the
+    // required `next build (node 20)` lane on this line.
+    //
+    // The precedent this was modelled on, lib/azure/role-grant-client.ts, takes
+    // `fetchImpl: typeof fetch = fetch` for injection; this copy had taken
+    // neither the injection nor the ceiling.
+    const res = await fetchWithTimeout(url, {
       method: 'PUT',
       headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
       body: JSON.stringify({
