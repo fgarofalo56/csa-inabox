@@ -60,9 +60,53 @@ describe('authflow (rel-T12 login-CSRF)', () => {
     expect(decodeAuthFlowCookie('')).toBeNull();
     expect(decodeAuthFlowCookie('not-a-valid-cookie')).toBeNull();
     const cookie = encodeAuthFlowCookie(newAuthFlow())!;
-    // Flip the last char to force an AES-GCM auth-tag / format failure.
-    const tampered = cookie.slice(0, -1) + (cookie.endsWith('A') ? 'B' : 'A');
+
+    // THE TAMPER IS ASSERTED, NOT ASSUMED (#3837 / #3856).
+    //
+    // This used to flip the LAST base64url character:
+    //   cookie.slice(0, -1) + (cookie.endsWith('A') ? 'B' : 'A')
+    // which is a padding no-op 1 run in 16, so the spec that exists to prove the
+    // login-CSRF cookie CANNOT be tampered with proved nothing ~6% of the time
+    // and failed red the rest of that 6%.
+    //
+    // The rate is structural, not incidental. `encodeAuthFlowCookie` seals
+    // {state(43), verifier(43), nonce(22)} → a JSON body that is ALWAYS 145
+    // bytes, and `encryptAtRest` prepends iv(12) + tag(16) to an equal-length
+    // GCM ciphertext → ALWAYS 173 bytes. 173 % 3 === 2, so the final base64url
+    // character carries 4 significant bits followed by 2 pure padding bits: its
+    // alphabet index is always a multiple of 4 (A E I M Q U Y c g k o s w 0 4 8),
+    // and the 'A' → 'B' arm lands on the one value whose decoded nibble is
+    // unchanged. Measured over 100,000 freshly generated 173-byte tokens with
+    // the old expression verbatim: 6,263 no-ops = 6.263%, against 1/16 = 6.25%.
+    //
+    // So tamper at the BYTE level, inside the GCM tag (iv is 0..11, tag 12..27),
+    // and assert the corruption is real before asserting the decoder rejects it.
+    // Without the control arm a future edit could silently stop tampering again
+    // and this spec would go back to passing for the wrong reason.
+    const raw = Buffer.from(cookie, 'base64url');
+    const flipped = Buffer.from(raw);
+    flipped[20] ^= 0xff; // byte 20 is inside the 16-byte auth tag
+    const tampered = flipped.toString('base64url');
+    expect(Buffer.from(tampered, 'base64url').equals(raw)).toBe(false);
     expect(decodeAuthFlowCookie(tampered)).toBeNull();
+  });
+
+  it('CONTROL: the tamper is byte-real for every cookie, not 15 times in 16', () => {
+    // The property the case above depends on, exercised over enough freshly
+    // minted cookies that the old 1-in-16 no-op could not survive here either
+    // (P(all 200 clean) under the old scheme ≈ 0.9375^200 ≈ 2.4e-6).
+    for (let i = 0; i < 200; i++) {
+      const cookie = encodeAuthFlowCookie(newAuthFlow())!;
+      const raw = Buffer.from(cookie, 'base64url');
+      // The fixed 173-byte layout the comment above leans on. If the sealed
+      // shape ever changes, this is the assertion that says so rather than the
+      // tamper quietly moving outside the tag.
+      expect(raw.length).toBe(173);
+      const flipped = Buffer.from(raw);
+      flipped[20] ^= 0xff;
+      expect(Buffer.from(flipped.toString('base64url'), 'base64url').equals(raw)).toBe(false);
+      expect(decodeAuthFlowCookie(flipped.toString('base64url'))).toBeNull();
+    }
   });
 
   it('safeEqual is constant-time-correct: true only for identical non-empty strings', () => {

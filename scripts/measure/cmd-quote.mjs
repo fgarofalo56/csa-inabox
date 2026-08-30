@@ -105,6 +105,18 @@ export function quoteForCmd(arg) {
  * red to green in a one-file diff (4f1aacd6 -> 249f81ea).
  *
  * Do not "simplify" this back to a map/join.
+ *
+ * DECISION, #3986 checkbox 3 — this comment is the control, and no lint rule is
+ * added. A rule would have to name the shape it forbids, which makes it keyed
+ * to a SPELLING: `[a, ...b].map(f).join(' ')` is one of many ways to write the
+ * same reduce, and this repo has measured a spelling-keyed guard lose to a
+ * rename twice. What is actually known is CORRELATIONAL — removing the
+ * construct turned two branches red-to-green, one variable at a time, with no
+ * minimal reproduction of the non-termination — so a hard rule would encode
+ * more certainty than the evidence supports. The real backstop is the upload
+ * assertion in .github/workflows/codeql.yml, which now fails on the 0-rule
+ * SARIF the non-termination produces instead of trusting the step's outcome:
+ * that catches the CONSEQUENCE whatever construct causes it next.
  */
 export function buildCmdLine(file, args) {
   let line = quoteForCmd(String(file).replace(/\//g, '\\'));
