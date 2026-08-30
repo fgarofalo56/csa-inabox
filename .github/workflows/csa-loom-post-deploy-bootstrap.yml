@@ -2201,11 +2201,42 @@ jobs:
             fi
           fi
           # Set the URL on the Console (and the key secretRef if a KV secret exists).
+          #
+          # #4161 — THIS ASSIGNMENT IS NOT DURABLE, and saying so is the point.
+          # `az containerapp update --set-env-vars` writes out-of-band state that
+          # the next full `az deployment sub create` of platform/fiab/bicep
+          # re-renders away: admin-plane emits LOOM_POSTURE_FUNCTION_URL from
+          # `param loomPostureFunctionUrl`, so an unset param blanks it again.
+          # MEASURED: this job last succeeded 2026-08-12, deploy-fiab-commercial
+          # then succeeded on schedule 2026-08-27 and 2026-08-29, and the
+          # capability read BLOCKED with missing:[LOOM_POSTURE_FUNCTION_URL] on
+          # 2026-08-28. The durable path is the root param, which #4161 wired
+          # from platform/fiab/bicep/main.bicep to the admin-plane module — it
+          # was declared on the module and passed by nothing, so before that
+          # change setting it in a .bicepparam was a silent no-op.
           if [ -n "$FUNC_HOST" ]; then
+            # Stderr to a FILE, never /dev/null: the previous version discarded
+            # it and then asserted "Could not set … set it manually", a cause it
+            # had not established (deploy-integrity R7). Now the real az error is
+            # quoted, and the message says only what was observed.
+            UPD_ERR="$RUNNER_TEMP/posture-url-update.err"
             az containerapp update -g "$ADMIN_RG" -n loom-console \
-              --set-env-vars "LOOM_POSTURE_FUNCTION_URL=$FUNC_URL" -o none 2>/dev/null \
-              && echo "  Wired LOOM_POSTURE_FUNCTION_URL=$FUNC_URL on loom-console." \
-              || echo "::warning::Could not set LOOM_POSTURE_FUNCTION_URL on loom-console — set it manually (admin-plane param loomPostureFunctionUrl)."
+              --set-env-vars "LOOM_POSTURE_FUNCTION_URL=$FUNC_URL" -o none 2> "$UPD_ERR"
+            UPD_RC=$?
+            # R6: never report success on an unverified outcome. Read the value
+            # BACK off the app rather than trusting the update's exit status.
+            LIVE_URL=$(az containerapp show -g "$ADMIN_RG" -n loom-console \
+              --query "properties.template.containers[0].env[?name=='LOOM_POSTURE_FUNCTION_URL'].value | [0]" \
+              -o tsv 2> "$RUNNER_TEMP/posture-url-read.err")
+            LIVE_URL=$(printf '%s' "$LIVE_URL" | tr -d '\r')
+            if [ "$LIVE_URL" = "$FUNC_URL" ]; then
+              echo "  Wired LOOM_POSTURE_FUNCTION_URL=$FUNC_URL on loom-console (read back and confirmed)."
+            elif [ "$UPD_RC" -ne 0 ]; then
+              echo "::warning::az containerapp update exited $UPD_RC setting LOOM_POSTURE_FUNCTION_URL on loom-console. az said: $(tr '\n' ' ' < "$UPD_ERR")"
+            else
+              echo "::warning::az containerapp update exited 0 but the read-back returned '$LIVE_URL', not '$FUNC_URL'. The value on the app is NOT what this step set; the cause is UNKNOWN from here. Read-back stderr: $(tr '\n' ' ' < "$RUNNER_TEMP/posture-url-read.err")"
+            fi
+            echo "::notice::LOOM_POSTURE_FUNCTION_URL=$FUNC_URL — to survive the next full infra deploy this value must also be supplied as the root bicep param: az deployment sub create … -p loomPostureFunctionUrl=$FUNC_URL (platform/fiab/bicep/main.bicep → admin-plane). Without it the next re-render blanks the env var and svc-posture-refresh goes BLOCKED again (#4161)."
           fi
 
       - name: Deploy + wire Iceberg REST Catalog (external-engine federation, day-one)

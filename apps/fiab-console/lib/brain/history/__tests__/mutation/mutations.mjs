@@ -204,6 +204,75 @@ export const MUTATIONS = [
       },
     ],
   },
+  {
+    // #4020 R6. ESCAPED at RC=0 on the #3993 head, because every retention proof
+    // ran on `ESTATE = 'estate-alpha'` and `resolveEstateId()` can only return
+    // `loom:<sub8>:<rg>` or `loom:unbound` — both prefixed `loom:`. So this
+    // bypass disabled the 50-version bound on EVERY real estate and in NO test,
+    // leaving only the 90-day TTL. Same class as #3963's cardinality-conditioned
+    // bypasses: a predicate that is false for every fixture.
+    id: 'c-prune-skipped-on-production-estate-ids',
+    property: 'C — retention bounds the history',
+    arm: 'narrow',
+    what:
+      'the prune is skipped whenever the estate id starts with `loom:` — the prefix ' +
+      'resolveEstateId() emits for EVERY real deployment and for no fixture. Retention ' +
+      'silently stops on production and stays green in the suite.',
+    spec: CAPTURE_SPEC,
+    substitutions: [
+      {
+        file: CAPTURE,
+        needle: '  const doomed = planPrune(after, args.store.policy.maxVersions);',
+        replacement:
+          '  const doomed = args.estateId.startsWith(\'loom:\') ? [] : planPrune(after, args.store.policy.maxVersions);',
+      },
+    ],
+  },
+
+  // ── PROPERTY A2: the canonical form and the comparator cover the SAME fields ─
+  //
+  // #4020 R2/R3. `digest.ts` states the pair contract, and only ONE direction
+  // was tested (EQUAL DIGESTS IMPLY AN EMPTY DIFF). These two arms break it from
+  // opposite ends, and both ESCAPED at RC=0 against the 103-test suite. The
+  // case they hide is a SAME-LENGTH, SAME-CLASS authored-value rotation — a
+  // secret swapped for another of the same shape — which moves `rawValueDigest`
+  // and nothing else.
+  {
+    id: 'a2-value-digest-not-diffed',
+    property: 'A2 — every hashed field is diffed, and every diffed field is hashed',
+    arm: 'narrow',
+    what:
+      'the comparator stops comparing `value.digest`. The digest still moves, so a ' +
+      'version IS written — and its diff is EMPTY, so stage 2 dedupes the rotation away ' +
+      'and the change is never reported. Diffed-but-not-diffed.',
+    spec: DIGEST_SPEC,
+    substitutions: [
+      {
+        file: DIFF,
+        needle:
+          "  push(out, 'value.digest', a.evidence.rawValueDigest, b.evidence.rawValueDigest);",
+        replacement: '  void a; void b;',
+      },
+    ],
+  },
+  {
+    id: 'a2-raw-value-digest-not-hashed',
+    property: 'A2 — every hashed field is diffed, and every diffed field is hashed',
+    arm: 'narrow',
+    what:
+      'the canonical form stops hashing `rawValueDigest`. Stage 1 then dedupes the ' +
+      'rotation away — the digest does not move, so no version is written at all and ' +
+      'the comparator is never reached. Hashed-but-not-hashed, the same bug from the ' +
+      'other end.',
+    spec: DIGEST_SPEC,
+    substitutions: [
+      {
+        file: DIGEST,
+        needle: '    f(e.evidence.rawValueDigest),',
+        replacement: '',
+      },
+    ],
+  },
 
   // ── PROPERTY D: a corrupt version fails CLOSED ──────────────────────────
   {

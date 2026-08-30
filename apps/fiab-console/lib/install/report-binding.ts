@@ -54,13 +54,79 @@ export interface SeedColumn {
 
 /** One seeded lakehouse table: its physical (CSV-leaf) name + typed columns. */
 export interface SeedTable {
-  /** Physical name as seeded under `Tables/<name>/<name>.csv` (e.g. `fact_sales`). */
+  /** Physical table name as the bundle declares it (e.g. `fact_sales`). */
   name: string;
   columns: SeedColumn[];
-  /** True when a seed CSV was actually written for this table. */
+  /**
+   * True when a seed CSV was actually written for this table AND the provisioner
+   * RECORDED where. #3919: `seeded` used to mean only "the seeder reported it",
+   * and the caller then rebuilt the CSV location from a naming convention. A
+   * table with no recorded path is not bindable — see {@link seedCsvPathLookup}.
+   */
   seeded: boolean;
   /** Honest seeded row count (bundle sampleRows length), when known. */
   rowCount?: number;
+}
+
+/**
+ * Read the seed CSV locations the lakehouse provisioner RECORDED, and return a
+ * lookup keyed by the physical table name the binder uses.
+ *
+ * #3919. The provisioner stamps `secondaryIds.seedCsvPaths` — a JSON object
+ * keyed `<schema>.<table>` when the bundle enables schemas, else `<table>`, whose
+ * values are the CSV's real container-relative path (`lib/install/provisioners/
+ * lakehouse.ts`, written from `_seed-lakehouse-adls.ts`'s `SeededTable.csvPath`).
+ * Every consumer used to REBUILD that path instead — `<root>/Tables/<name>/
+ * <name>.csv` — which #3904 had already moved to `<root>/Files/_seed/<name>.csv`.
+ * Nothing broke a test, because a path computed twice by two pieces of code that
+ * never call each other has nothing binding them together.
+ *
+ * The three derivations did not even agree with one another: the install route
+ * sanitized a schema with `replace(/[^A-Za-z0-9_]/g, '')` while the seeder used
+ * `'_'`, so `sales-eu` keyed `saleseu` in one place and `sales_eu` in the other.
+ * That is why the fallback below matches on the LEAF after the last `.` rather
+ * than re-deriving the schema: it recovers the right entry without reproducing
+ * either sanitizer, and it is exact whenever leaf names are unique.
+ *
+ * A table with NO recorded entry returns `undefined`, and the caller must then
+ * treat it as unbindable. Returning a guessed path would persist an
+ * `OPENROWSET(BULK '<url that 404s>')` into the report's `dataSource` — a stored
+ * artifact that looks bound and reads nothing, which is the shape no-vaporware
+ * forbids. Absent is the honest answer; wrong is not.
+ */
+export function seedCsvPathLookup(
+  secondaryIds: Record<string, string> | undefined | null,
+): (physicalTable: string) => string | undefined {
+  let recorded: Record<string, unknown> = {};
+  try {
+    const raw = secondaryIds?.seedCsvPaths;
+    if (typeof raw === 'string' && raw.trim()) {
+      const parsed = JSON.parse(raw);
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) recorded = parsed;
+    }
+  } catch {
+    // A malformed stamp is UNREADABLE, not empty — but it is also not
+    // recoverable here, and the caller's honest response to both is the same:
+    // bind nothing rather than bind a guess.
+    recorded = {};
+  }
+
+  const byLeaf = new Map<string, string>();
+  for (const [key, value] of Object.entries(recorded)) {
+    if (typeof value !== 'string' || !value) continue;
+    const leaf = key.slice(key.lastIndexOf('.') + 1);
+    // First writer wins, and an ambiguous leaf is dropped entirely: two schemas
+    // holding the same table name make the leaf a guess again.
+    if (byLeaf.has(leaf)) byLeaf.set(leaf, '');
+    else byLeaf.set(leaf, value);
+  }
+
+  return (physicalTable: string): string | undefined => {
+    const direct = recorded[physicalTable];
+    if (typeof direct === 'string' && direct) return direct;
+    const leaf = byLeaf.get(physicalTable);
+    return leaf || undefined;
+  };
 }
 
 /** The sibling semantic-model facts the binder needs (tables/measures/rels). */

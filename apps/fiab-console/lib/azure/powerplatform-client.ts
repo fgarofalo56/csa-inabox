@@ -29,8 +29,10 @@ import { fetchWithTimeout } from '@/lib/azure/fetch-with-timeout';
 // long rationale in power-platform-auth.ts.
 import {
   powerPlatformFetch, ppAuthHint,
-  bapBase, bapScope, powerAppsBase, powerAppsScope, flowBase, flowScope,
+  powerAppsBase, powerAppsScope, flowBase, flowScope,
 } from '@/lib/azure/power-platform-auth';
+// #4138 — every BAP call resolves HOST and SCOPE from ONE read of this.
+import { powerPlatformEndpoints } from '@/lib/azure/cloud-endpoints';
 /**
  * Honest config gate for the Power Platform navigator routes.
  *
@@ -310,19 +312,24 @@ export interface AiBuilderModel {
 
 const ENV_API_VERSION = '2020-10-01';
 
+// #4138 — the read paths bind host and scope from ONE read too. These were the
+// narrower case the issue tolerated (same call expression, no `await` between)
+// — an argument about the CURRENT shape, not the invariant.
 export async function listEnvironments(): Promise<PpEnvironment[]> {
+  const { bapBase: base, bapScope: scope } = powerPlatformEndpoints();
   const j = await ppCall<{ value: any[] }>(
-    `${bapBase()}/providers/Microsoft.BusinessAppPlatform/scopes/admin/environments`,
-    bapScope(),
+    `${base}/providers/Microsoft.BusinessAppPlatform/scopes/admin/environments`,
+    scope,
     { query: { 'api-version': ENV_API_VERSION } },
   );
   return (j.value || []).map(mapEnvironment);
 }
 
 export async function getEnvironment(name: string): Promise<PpEnvironment> {
+  const { bapBase: base, bapScope: scope } = powerPlatformEndpoints();
   const j = await ppCall<any>(
-    `${bapBase()}/providers/Microsoft.BusinessAppPlatform/scopes/admin/environments/${encodeURIComponent(name)}`,
-    bapScope(),
+    `${base}/providers/Microsoft.BusinessAppPlatform/scopes/admin/environments/${encodeURIComponent(name)}`,
+    scope,
     { query: { 'api-version': ENV_API_VERSION, '$expand': 'permissions,properties/billingPolicy' } },
   );
   return mapEnvironment(j);
@@ -406,11 +413,25 @@ function isTerminalOpStatus(status?: string): boolean {
  * handling so 401/403/4xx surface as a PowerPlatformError with the same hint.
  */
 async function bapCallWithHeaders<T = any>(
-  url: string,
+  target: string,
   opts: CallOpts = {},
 ): Promise<{ body: T; status: number; operationUrl?: string }> {
   const method = opts.method ?? 'GET';
-  let full = url;
+  // ── #4138 — THE HOST AND THE SCOPE COME FROM ONE READ ────────────────────
+  // #4131 closed the INTRA-CALLEE half (two `bapScope()` calls straddling an
+  // await); the residual was CALLER/CALLEE. Callers built `${bapBase()}/...`
+  // while this function called `bapScope()` — two INDEPENDENT reads of env,
+  // since `powerPlatformEndpoints()` is deliberately UNCACHED. Nothing forced
+  // them to agree, so "the token is minted for the host the request is going to"
+  // was COINCIDENTALLY true: move the override between the reads and the token
+  // is minted for host B, sent to host A, under a 401 hint — derived from the
+  // callee's scope — naming the wrong principal (R7). Closed here three times
+  // (#3688, #4131, this), each earlier one a NARROWER enumeration than the
+  // class, so callers now pass a PATH and the ONE read below yields both. An
+  // ABSOLUTE url is still accepted, and must be: a lifecycle poll follows the
+  // server's `Operation-Location`, which is a whole URL, not a path.
+  const { bapBase: base, bapScope: scope } = powerPlatformEndpoints();
+  let full = /^https?:\/\//i.test(target) ? target : `${base}${target.startsWith('/') ? '' : '/'}${target}`;
   if (opts.query) {
     const qs = new URLSearchParams();
     Object.entries(opts.query).forEach(([k, v]) => { if (v !== undefined && v !== null) qs.append(k, String(v)); });
@@ -426,26 +447,17 @@ async function bapCallWithHeaders<T = any>(
   // SP-only denial the code had not established. Same defect the comment in
   // ppCall describes; bapCallWithHeaders never got the fix.
   //
-  // It then shipped a second time with no call-site guard: the ONE test that
-  // sits on this path asserted `stringContaining('Power Platform')`, and the
-  // pre-fix inline string contains those words three times, so reverting this
-  // block byte-for-byte left the suite green. Both halves of the discriminator
-  // are now pinned in __tests__/power-platform-auth-principal.test.ts (user
-  // refused first -> "Both identities were refused"; no user token -> not), and
+  // It then shipped a second time with no call-site guard: the ONE test on this
+  // path asserted `stringContaining('Power Platform')` and the pre-fix inline
+  // string contains those words three times, so reverting this block
+  // byte-for-byte left the suite green. Both halves are now pinned in
+  // __tests__/power-platform-auth-principal.test.ts (user refused first ->
+  // "Both identities were refused"; no user token -> not), and
   // __tests__/powerplatform-lifecycle.test.ts asserts substrings unique to the
   // shared helper's copy.
-  // ONE binding, used for BOTH the wire and the remediation copy (#3957).
-  // These were two independent `bapScope()` calls straddling the `await` below.
-  // `powerPlatformEndpoints()` is pure over `process.env` and deliberately
-  // UNCACHED ("so a runtime env change and unit tests both take effect"), so
-  // two calls are two reads, and nothing forced the scope the hint DESCRIBES to
-  // be the scope the request was ISSUED under — a hint that names a principal
-  // the code never used is deploy-integrity R7, the same class of untrue
-  // message #3688 fixed here twice. `ppCall` binds its scope once and reuses
-  // it; this site now does the same, and the binding is pinned structurally (no
-  // literal, no second read, same identifier as the transport's) by
-  // __tests__/powerplatform-lifecycle.test.ts.
-  const scope = bapScope();
+  // ONE binding for BOTH the wire and the copy (#3957/#4131/#4138): `scope` is
+  // from the same destructure as `base`, and that one identifier goes to
+  // `ppFetch` AND `ppAuthHint`. No literal, no second read.
   const { res, triedUser } = await ppFetch(full, scope, {
     method,
     headers: {
@@ -460,7 +472,9 @@ async function bapCallWithHeaders<T = any>(
   let json: any = null;
   try { json = text ? JSON.parse(text) : null; } catch { /* leave as text */ }
   if (!res.ok) {
-    const msg = (json?.error?.message || json?.message || text || `${method} ${url} failed`).toString();
+    // `full`, not the caller's `target`: after #4138 the caller hands a PATH, so
+    // reporting `target` would name something that is not a URL at all.
+    const msg = (json?.error?.message || json?.message || text || `${method} ${full} failed`).toString();
     let hint: string | undefined;
     if (res.status === 401 || res.status === 403) {
       hint = ppAuthHint(triedUser, scope);
@@ -497,8 +511,9 @@ export async function createEnvironment(spec: CreateEnvironmentSpec): Promise<En
     if (spec.dataverse.securityGroupId) linked.securityGroupId = spec.dataverse.securityGroupId;
     properties.linkedEnvironmentMetadata = linked;
   }
+  // #4138 — a PATH, not a URL (the transport resolves host + scope in one read).
   const { body, operationUrl } = await bapCallWithHeaders<any>(
-    `${bapBase()}/providers/Microsoft.BusinessAppPlatform/scopes/admin/environments`,
+    '/providers/Microsoft.BusinessAppPlatform/scopes/admin/environments',
     {
       method: 'POST',
       query: { 'api-version': ENV_LIFECYCLE_API_VERSION, location: spec.location },
@@ -531,7 +546,7 @@ export async function updateEnvironment(
     properties.linkedEnvironmentMetadata = { securityGroupId: patch.securityGroupId };
   }
   const { body, operationUrl } = await bapCallWithHeaders<any>(
-    `${bapBase()}/providers/Microsoft.BusinessAppPlatform/scopes/admin/environments/${encodeURIComponent(id)}`,
+    `/providers/Microsoft.BusinessAppPlatform/scopes/admin/environments/${encodeURIComponent(id)}`,
     {
       method: 'PATCH',
       query: { 'api-version': ENV_LIFECYCLE_API_VERSION },
@@ -550,7 +565,7 @@ export async function updateEnvironment(
  */
 export async function deleteEnvironment(id: string): Promise<EnvironmentLifecycleOperation> {
   const { body, operationUrl, status: httpStatus } = await bapCallWithHeaders<any>(
-    `${bapBase()}/providers/Microsoft.BusinessAppPlatform/scopes/admin/environments/${encodeURIComponent(id)}`,
+    `/providers/Microsoft.BusinessAppPlatform/scopes/admin/environments/${encodeURIComponent(id)}`,
     { method: 'DELETE', query: { 'api-version': ENV_LIFECYCLE_API_VERSION } },
   );
   const status = body?.properties?.provisioningState || body?.status || (httpStatus === 202 ? 'Running' : 'Succeeded');

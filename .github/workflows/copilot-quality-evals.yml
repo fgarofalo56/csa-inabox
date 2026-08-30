@@ -543,11 +543,48 @@ jobs:
           # console served a different commit" from "I could not ask". Keep
           # stderr and treat an unresolved answer as UNRESOLVED, never as a
           # match (deploy-integrity R7).
+          #
+          # ── #3857 / #3472 — CAPTURE THE BODY BEFORE `jq` TOUCHES IT ─────────
+          # This block used to pipe curl STRAIGHT into jq, so when the probe
+          # answered with something that is not JSON the only trace left was
+          #     jq: parse error: Invalid numeric literal at line 1, column 10
+          # which names the SYMPTOM and destroys the evidence: an HTML error
+          # page, a redirect body, an edge 502 and an empty response are all
+          # indistinguishable from that string. Two separate issues were filed
+          # citing it and neither could say what had arrived. The body is now
+          # read to a FILE first and the first 200 bytes are printed on any
+          # failure, so the next reader sees what the console actually said.
+          #
+          # It also distinguishes the three states this step can be in, which it
+          # previously collapsed into one warning (deploy-integrity R7 — do not
+          # assert a cause you did not establish):
+          #   TRANSPORT   curl itself failed / non-2xx — we never got an answer;
+          #   UNPARSEABLE we got bytes and they are not the JSON manifest;
+          #   ANSWERED    valid JSON, but ok!=true or no corpusCommit in it.
           PROV_ERR=$(mktemp)
-          SERVED=$(curl -sS -m 30 -H "authorization: Bearer $INTERNAL_TOKEN" \
-            "${CONSOLE_URL%/}/api/internal/copilot/eval-probe" 2>"$PROV_ERR" \
-            | jq -r 'if .ok == true then (.corpusCommit // "") else "" end' 2>>"$PROV_ERR" || echo "")
-          PROV_MSG=$(tr '\n' ' ' < "$PROV_ERR" | head -c 300)
+          PROV_BODY=$(mktemp)
+          PROV_WHY=""
+          SERVED=""
+          HTTP=$(curl -sS -m 30 -o "$PROV_BODY" -w '%{http_code}' \
+            -H "authorization: Bearer $INTERNAL_TOKEN" \
+            "${CONSOLE_URL%/}/api/internal/copilot/eval-probe" 2>"$PROV_ERR") || true
+          # `%{http_code}` is always three digits, but a curl that dies before
+          # writing it leaves this empty — and a non-numeric value handed to
+          # `[ -lt ]` would make the whole elif chain fall through to the
+          # success branch, i.e. report a provenance match it never established.
+          case "$HTTP" in ''|*[!0-9]*) HTTP=000 ;; esac
+          PROV_HEAD=$(head -c 200 "$PROV_BODY" | tr '\n\r' '  ')
+          if [ "$HTTP" = "000" ]; then
+            PROV_WHY="TRANSPORT: the eval-probe could not be reached at all (curl 000). curl said: $(tr '\n' ' ' < "$PROV_ERR" | head -c 200)"
+          elif [ "$HTTP" -lt 200 ] || [ "$HTTP" -ge 300 ]; then
+            PROV_WHY="TRANSPORT: the eval-probe answered HTTP $HTTP, so no manifest was served. First 200 bytes of what came back: <<$PROV_HEAD>>"
+          elif ! jq -e . "$PROV_BODY" > /dev/null 2>>"$PROV_ERR"; then
+            PROV_WHY="UNPARSEABLE: HTTP $HTTP, but the body is not JSON — most likely an HTML error page or a redirect. First 200 bytes: <<$PROV_HEAD>> ; jq said: $(tr '\n' ' ' < "$PROV_ERR" | head -c 200)"
+          else
+            SERVED=$(jq -r 'if .ok == true then (.corpusCommit // "") else "" end' "$PROV_BODY" 2>>"$PROV_ERR")
+            [ -n "$SERVED" ] || PROV_WHY="ANSWERED: HTTP $HTTP and valid JSON, but it carried no usable corpusCommit (ok!=true, or the field is absent). First 200 bytes: <<$PROV_HEAD>>"
+          fi
+          PROV_MSG="$PROV_WHY"
           {
             echo ""
             echo "### Corpus provenance (#3085)"

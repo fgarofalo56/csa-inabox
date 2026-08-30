@@ -1924,6 +1924,25 @@ export const TOUCH_EXEMPT = new Map([
     'apps/fiab-console/lib/editors/unified-sql-database-editor.tsx',
     'GHSA-v8r7-c2p5-mjf2 required binding the server selection here; the 4 sites need UI work tracked in #3626',
   ],
+  // #3731 threaded the COMPLETENESS ENVELOPE through both Spark runs grids: the
+  // grids kept `sessions` and dropped the envelope, which turns a walk that
+  // DISCLOSED it was cut short back into a silent wrong answer — a pool past the
+  // page ceiling reports the newest rows it could REACH as the newest rows that
+  // EXIST. That change does not go anywhere near the free-text sites here.
+  //
+  // Clearing them is real product work (a picker fed by a discovery call, or the
+  // platform binding the value per auto-bind-by-default.md §5), and landing it
+  // inside a PR about run pagination would make both halves harder to review.
+  // Dated exception, not amnesty: acceptance in #4201 includes DELETING these two
+  // entries, in the same shape the #3626 entry above established.
+  [
+    'apps/fiab-console/lib/editors/azure-services-editors.tsx',
+    '#3731 threaded the Spark runs completeness envelope here; the free-text sites need pickers, tracked in #4201',
+  ],
+  [
+    'apps/fiab-console/lib/editors/spark-job-definition-editor.tsx',
+    '#3731 threaded the Spark runs completeness envelope here; the free-text sites need pickers, tracked in #4201',
+  ],
 ]);
 
 // ═══════════════════════════════════════════════════════════════════════════
