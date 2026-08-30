@@ -533,19 +533,99 @@ function provenPredecessors(
   return result;
 }
 
-/** Dataset reference names an activity WRITES. */
-function writtenDatasets(raw: Record<string, unknown>): string[] {
-  const outs = Array.isArray(raw.outputs) ? (raw.outputs as unknown[]) : [];
-  return outs
-    .map((o) => String((o as { referenceName?: unknown })?.referenceName ?? ''))
-    .filter(Boolean);
+/**
+ * Stable serialisation of a value, keys sorted, so two structurally equal
+ * parameter bags produce the same string regardless of authoring order.
+ *
+ * `undefined`, `null` and `{}` all collapse to the SAME token deliberately:
+ * "this reference carries no parameters" is one state however it is spelled, and
+ * distinguishing them would make an identity depend on whether the author typed
+ * an empty object — which is not a difference in what the reference denotes.
+ */
+/**
+ * Separates the two halves of a {@link datasetIdentity}. `|` cannot occur in an
+ * ADF entity name (Learn restricts them to letters, digits, `_` and `-`), so it
+ * cannot be smuggled into the name half to forge a collision.
+ */
+const DATASET_IDENTITY_SEP = '|';
+/** The canonical token for "this reference carries no parameters". */
+const NO_PARAMS = 'none';
+
+function canonicalRefValue(v: unknown): string {
+  if (v === null || v === undefined) return NO_PARAMS;
+  if (Array.isArray(v)) return `[${v.map(canonicalRefValue).join(',')}]`;
+  if (typeof v === 'object') {
+    const o = v as Record<string, unknown>;
+    const keys = Object.keys(o).sort();
+    if (keys.length === 0) return NO_PARAMS;
+    return `{${keys.map((k) => `${JSON.stringify(k)}:${canonicalRefValue(o[k])}`).join(',')}}`;
+  }
+  return JSON.stringify(v);
 }
 
-/** Dataset reference name a Delete activity DESTROYS, or null if unknowable. */
+/**
+ * THE IDENTITY OF AN ADF `DatasetReference` — its name AND its parameters
+ * (#4111).
+ *
+ * WHY THE NAME ALONE IS NOT AN IDENTITY. An ADF `DatasetReference` carries
+ * `parameters`, and a parameterised dataset denotes a DIFFERENT physical folder
+ * per parameter set. Keyed on `referenceName` alone, this invariant treats them
+ * as one target — and the shape that survives is the PARENT WIPE:
+ *
+ *     Copy_A     outputs:               [{ referenceName:'sink', parameters:{ path:'tableA' } }]
+ *     DeletePrev typeProperties.dataset: { referenceName:'sink', parameters:{ path:''       } }
+ *                dependsOn:             [{ activity:'Copy_A', dependencyConditions:['Succeeded'] }]
+ *
+ * One producer, proven predecessor, ACCEPTED — while the Delete clears the
+ * migration ROOT having proven only that one table underneath it was written.
+ * That is precisely the trade this invariant exists to refuse.
+ *
+ * Not a live defect at the time of writing: `buildCopyActivities` emits NO
+ * `parameters` on any reference and gives every object its own `srcDs`/`sinkDs`
+ * name, so both sides canonicalise identically and today's 78 tests are
+ * unaffected. It is guard STRENGTH — and the edit that defeats the old identity
+ * is an ordinary one: collapsing N per-object sink datasets into ONE dataset
+ * parameterised by path is the natural way to buy headroom against ADF's dataset
+ * and 120-activity limits, and it would have taken the invariant with it.
+ *
+ * ANY difference now fails closed, which is the right default for a destructive
+ * activity.
+ *
+ * WHAT THIS DOES NOT SEE, stated rather than implied — the same disclosure the
+ * Script/pre-copy-script exclusion already carries. Parameters whose values are
+ * ADF EXPRESSIONS (`@pipeline().parameters.x`) are compared as TEXT:
+ *   - two textually different expressions that resolve to the same folder are
+ *     REFUSED (fail closed, acceptable — Loom authors neither today);
+ *   - two IDENTICAL expressions that resolve differently per run are ACCEPTED.
+ * Resolving expressions would mean evaluating ADF's expression language at
+ * author time, which this module does not do.
+ */
+function datasetIdentity(ref: unknown): string | null {
+  const r = ref as { referenceName?: unknown; parameters?: unknown } | null | undefined;
+  const name = typeof r?.referenceName === 'string' ? r.referenceName : '';
+  if (!name) return null;
+  return `${name}${DATASET_IDENTITY_SEP}${canonicalRefValue(r?.parameters)}`;
+}
+
+/** The human-readable half of a {@link datasetIdentity}, for error text. */
+function datasetIdentityLabel(identity: string): string {
+  const cut = identity.indexOf(DATASET_IDENTITY_SEP);
+  if (cut < 0) return identity;
+  const name = identity.slice(0, cut);
+  const params = identity.slice(cut + DATASET_IDENTITY_SEP.length);
+  return params && params !== NO_PARAMS ? `${name} ${params}` : name;
+}
+
+/** Dataset reference IDENTITIES an activity WRITES (name + parameters, #4111). */
+function writtenDatasets(raw: Record<string, unknown>): string[] {
+  const outs = Array.isArray(raw.outputs) ? (raw.outputs as unknown[]) : [];
+  return outs.map(datasetIdentity).filter((x): x is string => Boolean(x));
+}
+
+/** Dataset IDENTITY a Delete activity DESTROYS, or null if unknowable. */
 function destroyedDataset(raw: Record<string, unknown>): string | null {
-  const tp = raw.typeProperties as { dataset?: { referenceName?: unknown } } | undefined;
-  const n = tp?.dataset?.referenceName;
-  return typeof n === 'string' && n ? n : null;
+  const tp = raw.typeProperties as { dataset?: unknown } | undefined;
+  return datasetIdentity(tp?.dataset);
 }
 
 /** A Delete this pipeline has not proven it can safely perform. */
@@ -585,12 +665,17 @@ export function findUnsafeDeletes(activities: readonly unknown[]): UnsafeDelete[
       continue;
     }
 
+    // #4111 — matched on the WHOLE reference (name + canonicalised parameters),
+    // so a Copy that writes `sink{path:'tableA'}` does not license a Delete of
+    // `sink{path:''}`. `targetLabel` is what the operator reads; `target` is what
+    // the comparison uses.
+    const targetLabel = datasetIdentityLabel(target);
     const producers = flat.filter((a) => writtenDatasets(a.raw).includes(target));
     if (!producers.length) {
       bad.push({
         name: d.name,
         reason: 'no-producer',
-        detail: `${label} deletes dataset "${target}", which NO activity in this pipeline writes`,
+        detail: `${label} deletes dataset "${targetLabel}", which NO activity in this pipeline writes`,
       });
       continue;
     }
@@ -612,7 +697,7 @@ export function findUnsafeDeletes(activities: readonly unknown[]): UnsafeDelete[
         name: d.name,
         reason: 'producer-not-proven',
         detail:
-          `${label} deletes dataset "${target}", but [${unproven.map((p) => p.name || '<unnamed>').join(', ')}] ` +
+          `${label} deletes dataset "${targetLabel}", but [${unproven.map((p) => p.name || '<unnamed>').join(', ')}] ` +
           '— the activity(ies) that write it — are not proven to have SUCCEEDED before it runs',
       });
     }

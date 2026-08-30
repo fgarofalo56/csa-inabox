@@ -29,7 +29,10 @@
  *   3. `confirmToken` — a DRIFT guard, 409 on mismatch, exactly like
  *      `/api/admin/updates/apply`'s `confirmTag`. The operator confirmed a
  *      SPECIFIC set of resources; if the resolved set has changed since, we
- *      refuse rather than pause something they never saw.
+ *      refuse rather than pause something they never saw. REQUIRED (#3989): an
+ *      absent token is refused too, because the previous `body.confirmToken &&
+ *      …` shape let any caller skip the gate by omitting the field while the
+ *      error text still promised the guarantee it was no longer providing.
  *   4. Re-verify per resource, inside the orchestrator, immediately before each
  *      ARM call (R-SCOPE-3), and actuate the VERIFIED id (`assertActuationTarget`).
  *
@@ -68,7 +71,12 @@ export const dynamic = 'force-dynamic';
 interface PauseBody {
   /** Typed confirmation — must equal the estate id exactly. */
   confirm?: string;
-  /** The preview token from GET /state. Refused (409) when the set has drifted. */
+  /**
+   * The preview token from GET /state (or from this route's own `dryRun`).
+   * REQUIRED on a real pause — refused (409) when it is absent AND when the set
+   * has drifted (#3989). Kept optional in the TYPE because it is parsed from an
+   * untrusted JSON body, never because the route tolerates its absence.
+   */
   confirmToken?: string;
   /** When true, resolve + preview and return WITHOUT acting. */
   dryRun?: boolean;
@@ -187,7 +195,33 @@ export const POST = withTenantAdmin(async (req: NextRequest, { session }) => {
   }
 
   // --- Gate 3: drift. The operator confirmed a SPECIFIC set.
-  if (body.confirmToken && body.confirmToken !== token) {
+  //
+  // #3989 — THIS USED TO BE `if (body.confirmToken && body.confirmToken !== token)`,
+  // and `confirmToken` is OPTIONAL, so the `&&` short-circuited: a caller that
+  // simply omitted the field skipped the gate entirely. A drift guard that the
+  // guarded party can switch off by leaving a field out is not a guard, and this
+  // is the same `X && X !== Y` fail-open family as #3943 / #3859 / #3824 / #3833.
+  //
+  // The refusal text made it worse. It ended "Loom will not pause resources you
+  // have not seen" — a guarantee that was FALSE for exactly the callers the gate
+  // was not running for. That is the deploy-integrity R7 shape: an error stating
+  // as fact something the code did not establish.
+  //
+  // A POSITIVE MATCH IS NOW REQUIRED, and the two failures are reported
+  // separately because they are different events and have different remediations:
+  // "you sent no token" is not "your token is stale", and telling someone who
+  // never previewed to "re-open the preview and confirm the current set" reads as
+  // though they did something they did not.
+  if (!body.confirmToken) {
+    return apiConflict(
+      'This request carried no preview token, so Loom has NOT established that you have seen '
+        + `the set it would pause (the estate currently resolves ${token}). \`confirmToken\` is `
+        + 'REQUIRED, not optional — it is the only evidence that the set you approved is the set '
+        + 'that exists now. Preview first (POST this route with `dryRun:true`, or GET '
+        + '/api/admin/estate/state) and send back the `confirmToken` it returns.',
+    );
+  }
+  if (body.confirmToken !== token) {
     return apiConflict(
       'The set of resources to pause changed between the preview you confirmed and now '
         + `(you confirmed ${body.confirmToken}, the estate now resolves ${token}). Re-open the `
