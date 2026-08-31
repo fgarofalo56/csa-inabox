@@ -613,9 +613,53 @@ export async function loadOwnedItem(
 export async function listOwnedItems(
   itemType: string,
   tenantId: string,
-  opts: { workspaceId?: string; session?: SessionPayload } = {},
+  opts: { workspaceId?: string; session?: SessionPayload; limit?: number; budgetMs?: number } = {},
 ): Promise<WorkspaceItem[]> {
+  return (await listOwnedItemsBounded(itemType, tenantId, opts)).items;
+}
+
+/**
+ * The bounded form of {@link listOwnedItems} — same walk, but it says WHY it stopped.
+ *
+ * #3728 — `GET /api/items?type=lakehouse` and `?type=warehouse` returned HTTP 504 from the
+ * Front Door after 30s on the live Commercial estate (measured 2026-08-18, head a1155022:
+ * 30079ms and 30083ms; `notebook` 9734ms and climbing; a NONEXISTENT type answered in
+ * 102ms, so the base Cosmos path is fast and the cost is per-item). There was no bound of
+ * any kind: the cross-partition query was `fetchAll()`-ed and then EVERY row was walked
+ * through the workspace-visibility resolver. `?limit=1` returned 582 items, because
+ * `limit` was not a parameter this code implemented.
+ *
+ * A 504 from the edge is an HTML page, not JSON — and this repo's own history (the
+ * 404-parsed-as-empty-array bug the `/api/items` route docblock records) says a caller
+ * doing `j?.items || []` swallows that as an empty list. So the bound is not a
+ * performance nicety; it is what keeps the failure mode structured.
+ *
+ * TWO bounds, because either alone leaves the cliff:
+ *   - `limit` caps the RESULT. Applied by paging the query with `fetchNext()` and
+ *     stopping, rather than `fetchAll()` + `slice()` — a slice would still have paid for
+ *     the whole scan, which is the cost being removed.
+ *   - `budgetMs` caps the WALL CLOCK. The per-item cost is the workspace resolution, and
+ *     its worst case is not a function of the row count alone, so a count bound cannot
+ *     promise a latency. Checked between pages and between resolutions.
+ *
+ * `truncated` distinguishes the two, and both are reported to the caller rather than
+ * silently applied: a picker that quietly omits half the estate is the same class of lie
+ * as the empty array (deploy-integrity.md R7, no-vaporware.md).
+ *
+ * With NEITHER option set the behaviour is byte-identical to the pre-#3728 walk, so the
+ * dozens of existing `listOwnedItems` callers are unaffected.
+ */
+export async function listOwnedItemsBounded(
+  itemType: string,
+  tenantId: string,
+  opts: { workspaceId?: string; session?: SessionPayload; limit?: number; budgetMs?: number } = {},
+): Promise<{ items: WorkspaceItem[]; truncated: false | 'limit' | 'budget'; scanned: number }> {
   const items = await itemsContainer();
+  const limit = Number.isFinite(opts.limit) && (opts.limit as number) > 0 ? Math.floor(opts.limit as number) : undefined;
+  const deadline = Number.isFinite(opts.budgetMs) && (opts.budgetMs as number) > 0
+    ? Date.now() + (opts.budgetMs as number)
+    : undefined;
+  const outOfTime = () => deadline !== undefined && Date.now() >= deadline;
 
   // Workspace-scoped path: authorize the ONE workspace, then a partition-keyed
   // query returns only its items (the cross-workspace-leak fix).
@@ -623,7 +667,7 @@ export async function listOwnedItems(
     const access = opts.session
       ? await authorizeWorkspaceList(opts.session, opts.workspaceId)
       : await resolveWorkspaceAccessByOid(tenantId, opts.workspaceId, await accessOptsFor(tenantId));
-    if (!access) return [];
+    if (!access) return { items: [], truncated: false, scanned: 0 };
     const { resources } = await items.items
       .query<WorkspaceItem>(
         {
@@ -633,32 +677,86 @@ export async function listOwnedItems(
             { name: '@w', value: opts.workspaceId },
           ],
         },
-        { partitionKey: opts.workspaceId },
+        // A partition-keyed read needs no per-item resolution, so it is bounded by the
+        // limit alone; `maxItemCount` keeps the server from materialising more than asked.
+        { partitionKey: opts.workspaceId, ...(limit ? { maxItemCount: limit } : {}) },
       )
       .fetchAll();
-    return resources;
+    const capped = limit !== undefined && resources.length > limit;
+    return {
+      items: capped ? resources.slice(0, limit) : resources,
+      truncated: capped ? 'limit' : false,
+      scanned: resources.length,
+    };
   }
 
-  const { resources } = await items.items
-    .query<WorkspaceItem>({
-      query: `SELECT * FROM c WHERE c.itemType = @t AND ${NOT_RECYCLED}`,
-      parameters: [{ name: '@t', value: itemType }],
-    })
-    .fetchAll();
-  if (resources.length === 0) return [];
+  const query = {
+    query: `SELECT * FROM c WHERE c.itemType = @t AND ${NOT_RECYCLED}`,
+    parameters: [{ name: '@t', value: itemType }],
+  };
+
   const owned: WorkspaceItem[] = [];
   // Resolve unique workspace visibility in one pass.
   const wsCache = new Map<string, boolean>();
   const accessOpts = await accessOptsFor(tenantId, opts.session);
-  for (const it of resources) {
+  let truncated: false | 'limit' | 'budget' = false;
+  let scanned = 0;
+
+  /** The visibility filter, shared by both walks so they cannot diverge. */
+  const admit = async (it: WorkspaceItem): Promise<void> => {
     let visible = wsCache.get(it.workspaceId);
     if (visible === undefined) {
       visible = (await resolveWorkspaceAccessByOid(tenantId, it.workspaceId, accessOpts)) !== null;
       wsCache.set(it.workspaceId, visible);
     }
     if (visible) owned.push(it);
+  };
+
+  if (limit === undefined && deadline === undefined) {
+    // THE UNBOUNDED WALK, unchanged from before #3728 — the same single `fetchAll()`.
+    // Kept as a distinct branch rather than folded into the paged one because dozens of
+    // callers (and their fixtures) rely on this exact shape; switching them to the
+    // iterator would be a behaviour change smuggled in beside a bug fix.
+    const { resources } = await items.items.query<WorkspaceItem>(query).fetchAll();
+    if (resources.length === 0) return { items: [], truncated: false, scanned: 0 };
+    scanned = resources.length;
+    for (const it of resources) await admit(it);
+    return { items: owned, truncated: false, scanned };
   }
-  return owned;
+
+  // THE BOUNDED WALK. Pages the query so the scan itself stops — `fetchAll()` + `slice()`
+  // would still have paid for the whole cross-partition read, which is the cost #3728
+  // measured as a 30s edge timeout.
+  //
+  // Page size is decoupled from `limit`: the visibility filter can reject rows, so a page
+  // of exactly `limit` rows may yield fewer than `limit` owned items and the walk has to
+  // be able to ask for another page.
+  const iterator = items.items.query<WorkspaceItem>(query, {
+    maxItemCount: Math.min(Math.max(limit ?? 200, 50), 500),
+  });
+
+  while (iterator.hasMoreResults()) {
+    if (outOfTime()) { truncated = 'budget'; break; }
+    const page = await iterator.fetchNext();
+    for (const it of page.resources ?? []) {
+      scanned += 1;
+      if (outOfTime()) { truncated = 'budget'; break; }
+      await admit(it);
+      // Stop at limit + 1, not at limit. Breaking ON the limit cannot tell "there is
+      // exactly one page and it happens to be full" from "there is more", so it would
+      // report `truncated` for a complete answer — a false claim in the direction that
+      // makes a caller paginate forever.
+      if (limit !== undefined && owned.length > limit) { truncated = 'limit'; break; }
+    }
+    if (truncated) break;
+  }
+  // A natural end (the iterator ran dry with no bound hit) means the whole type was
+  // walked, which is exactly the pre-#3728 result.
+  return {
+    items: truncated === 'limit' && limit !== undefined ? owned.slice(0, limit) : owned,
+    truncated,
+    scanned,
+  };
 }
 
 /**

@@ -65,9 +65,15 @@
  * Contract:
  *   Request : { ids: string[], cascade?: boolean }
  *   Response: { ok: boolean, deleted: string[],
- *               failed: { id, error, reason?, remediation? }[] }
+ *               failed: { id, error, reason?, remediation? }[],
+ *               budgetExhausted?: true, notAttempted?: string[], elapsedMs?: number }
  *   - ok   : true when at least one id deleted AND no failures, else false.
- *   - per-id `error`: 'not_found' | 'forbidden' | 'tenant_unconfirmed' | <message>
+ *   - per-id `error`: 'not_found' | 'forbidden' | 'tenant_unconfirmed'
+ *                   | 'not_attempted' | <message>
+ *   - `not_attempted` + the `budgetExhausted` block (#3838): the loop hit its wall-clock
+ *     budget and stopped STARTING work. Those ids were never looked up, so nothing is
+ *     known about them — they are NOT `not_found`, which would assert the workspace does
+ *     not exist. `deleted` is still complete and accurate for what did run.
  *   - 401  : no session.  400 : bad body.
  *
  * GET /api/workspaces/bulk-delete  — admin probe for the UI.
@@ -92,8 +98,44 @@ import { safeRecord } from '@/lib/security/safe-object';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
+/**
+ * #3838 — A DURATION BUDGET, ON THE LONGEST-RUNNING ROUTE IN THE APP BY CONSTRUCTION.
+ *
+ * Measured: 69 other console API routes declare a `maxDuration`; this one declared none,
+ * while accepting up to 500 ids and processing them in a STRICTLY SERIAL loop. Every id
+ * costs a point-read, a cross-partition query and (since #3836's tenant-boundary fix)
+ * an ACL resolution — plus, when a workspace carries group-type role assignments and the
+ * caller's `groups` claim is absent (which per #3175 it always is), a serial Graph
+ * membership probe per group.
+ *
+ * 300s is the ceiling this repo already uses for its other long jobs (10 routes), not a
+ * number derived from a measurement of THIS route — see the honest bound below.
+ */
+export const maxDuration = 300;
 
 const MAX_BATCH = 500;
+
+/**
+ * When to stop starting new deletes, in ms of wall clock.
+ *
+ * #3838 §3: the batch is NON-TRANSACTIONAL and the response is assembled only after the
+ * loop completes, so a platform timeout mid-batch left ids ALREADY DELETED — items purged,
+ * workspace docs gone, and with `cascade` the Azure backends torn down — while the caller
+ * received no body at all. The work was done and the receipt was lost; the caller could
+ * not tell which ids had been processed without re-listing.
+ *
+ * So the loop now stops at this budget and RETURNS what it did, with every un-attempted id
+ * reported as its own per-id outcome. Set below `maxDuration` with room for the final
+ * `deleteOne` (which can cascade an Azure teardown) plus serialisation.
+ *
+ * WHAT IS NOT CLAIMED (deploy-integrity.md R7). No estate call was made and no real purge
+ * was timed, here or in #3838. The p50/p99 of a realistic 100–500 id batch, and the real
+ * distribution of group assignments per workspace, remain UNMEASURED. This budget does not
+ * pretend to be tuned to them — it exists so that whatever the real number turns out to be,
+ * the caller gets a receipt instead of silence. Choosing `MAX_BATCH` or a concurrency model
+ * still wants that measurement first, and is deliberately NOT done here.
+ */
+const BATCH_BUDGET_MS = Number(process.env.LOOM_BULK_DELETE_BUDGET_MS || 240_000);
 
 function err(error: string, status: number, code?: string) {
   return apiError(error, status, code === undefined ? undefined : { code });
@@ -198,8 +240,21 @@ export async function POST(req: NextRequest) {
   // Per-workspace teardown receipts (only populated when cascade is set).
   // Workspace ids are request-derived (CodeQL #627).
   const teardown = safeRecord<TeardownOutcome[]>();
+  // #3838 §3 — the budget clock. Started before the first access resolution so it bounds
+  // the WHOLE loop, including the resolver work, not just the deletes.
+  const startedAt = Date.now();
+  const notAttempted: string[] = [];
 
   for (const id of ids) {
+    // Stop STARTING work once the budget is spent, and record every id that was never
+    // touched. `not_attempted` is deliberately its own code and not folded into
+    // `not_found` or a generic failure: those assert something about the id, and this
+    // asserts something about the REQUEST. Conflating them would tell the caller a
+    // workspace does not exist when the truth is that this route never looked.
+    if (deleted.length + failed.length > 0 && Date.now() - startedAt >= BATCH_BUDGET_MS) {
+      notAttempted.push(id);
+      continue;
+    }
     try {
       // ONE access decision, taken by the shared resolver — owner fast-path →
       // workspace-roles ACL → tid boundary → tenant-admin bypass. There is no
@@ -240,10 +295,28 @@ export async function POST(req: NextRequest) {
     }
   }
 
+  // #3838 §3 — an unfinished batch is reported as unfinished, never as a clean result.
+  // `ok` is false when anything was left undone, and `notAttempted` names exactly which
+  // ids to resubmit, so the caller never has to re-list to find out what happened.
+  for (const id of notAttempted) {
+    failed.push({
+      id,
+      error: 'not_attempted',
+      reason:
+        `the request reached its ${BATCH_BUDGET_MS}ms processing budget after `
+        + `${deleted.length} delete(s); this id was never looked up, so nothing is known `
+        + 'about it and nothing was done to it.',
+      remediation: 'Resubmit the remaining ids in a smaller batch.',
+    });
+  }
+
   return NextResponse.json({
     ok: failed.length === 0 && deleted.length > 0,
     deleted,
     failed,
+    ...(notAttempted.length > 0
+      ? { budgetExhausted: true, notAttempted, elapsedMs: Date.now() - startedAt }
+      : {}),
     ...(cascade ? { teardown } : {}),
   });
 }

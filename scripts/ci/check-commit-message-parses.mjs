@@ -347,16 +347,24 @@ export function parseLog(out) {
  *
  * @param {string} base
  * @param {string} head
+ * @param {{cwd?: string}} [opts] `cwd` defaults to `process.cwd()`, which is what main()
+ *   and every other caller in this file rely on. It exists for the same reason
+ *   `expectedCount`'s does (#3853): so a test can build a repository of KNOWN shape and
+ *   assert an exact record count and exact shas, instead of asserting loose properties
+ *   against whatever ambient history the runner happened to check out. Threaded into BOTH
+ *   git invocations — the `git log` here and the `expectedCount` cross-check below —
+ *   because a cwd that reached only one of them would compare a known history against an
+ *   ambient count and throw on the mismatch.
  * @returns {{sha: string, message: string}[]}
  */
-export function commitsIn(base, head) {
+export function commitsIn(base, head, { cwd = process.cwd() } = {}) {
   const out = execFileSync(
     'git',
     ['log', '--no-merges', `--format=%H%x00%B${RS}`, `${base}..${head}`],
-    { encoding: 'utf8', maxBuffer: 256 * 1024 * 1024 },
+    { encoding: 'utf8', maxBuffer: 256 * 1024 * 1024, cwd },
   );
   const records = parseLog(out);
-  const nonMerge = expectedCount(base, head);
+  const nonMerge = expectedCount(base, head, { cwd });
 
   if (records.length !== nonMerge) {
     throw new Error(
@@ -374,7 +382,7 @@ export function commitsIn(base, head) {
   // nothing. Counting WITH merges separates the two cases, because a real branch whose
   // commits happen to all be merges still has commits in it.
   if (nonMerge === 0) {
-    const total = expectedCount(base, head, { withMerges: true });
+    const total = expectedCount(base, head, { withMerges: true, cwd });
     if (total === 0) {
       throw new Error(
         `${base}..${head} contains no commits at all, not even merges. That is a degenerate ` +
