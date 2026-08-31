@@ -118,6 +118,25 @@ fork is decided. The entry itself records the fork as *"not an agent's call."*
 Options + recommendation posted on the issue 2026-08-31; the ledger row is
 `NEEDS-DECISION` until the operator picks.
 
+### Q5 — the agent-triage sweep's decision queue (added 2026-08-31)
+
+The 2026-08-31 sweep returned **11 further `NEEDS-DECISION` rows**. Each carries
+its crisp question in its ledger note (`triage-agent-verdicts.json`); they are
+queued here rather than expanded, and none blocks W0:
+
+- **#3078** — same fork as Q4 (does a GCC estate exist to wire?). Resolve together.
+- **#2642** — schedule the Commercial Redis→AMR cutover window; pick the Gov path
+  (wait for AMR-in-Gov vs OSS-Redis-on-ACA).
+- **#3457 / #3982** — thrift: no published parquet admits thrift≥0.18, so the fix
+  is blocked upstream; accept-and-monitor or fork.
+- **#3462** — release-please held runs: settle the premise before touching them.
+- **#3778** — Lakebase parity doc: accept the declined GA rows or re-scope.
+- **#3965** — cost-export.bicep: wire it or retire the allowlist entry.
+- **#3985** — CodeQL alert at the measure.mjs spawnSync sink: model the sanitizer.
+- **#4045 / #4047** — make CodeQL (and which advisory lanes) blocking; whether an
+  admin-merge override trace is wanted. Belongs to W5 "tighten last".
+- **#4051** — Gov nightly Brain scan needs an in-boundary runner: owner + date.
+
 ---
 
 ## 3. Owed receipts
