@@ -51,9 +51,9 @@ code regardless of level. `PATH` means "schedulable", never "confirmed".
 | **#3513** | `apps/fiab-console/lib/install/provisioners/**` — 119 sites / 26 files. **Takes the tree exclusively** | `PATH` |
 | **#3525** | `apps/fiab-console/lib/install/provisioners/kql-db.ts` (`:81`, `:105`, `:131`, `:147`, `:173`) | `PATH` |
 | **#4183** | `apps/fiab-console/lib/install/provisioners/mirrored-databricks.ts` (registered at engine `:36`) | `PATH` |
-| **#4113** | `apps/fiab-console/lib/install/provisioners/_activator-receivers.ts` — file exists; **attribution to #4113 is unverified** | `UNPINNED` |
+| **#4113** | `apps/fiab-console/lib/install/provisioners/_activator-receivers.ts` + `__tests__/activator-receiver-reachability.test.ts` — **attribution VERIFIED 2026-08-31** (`git ls-files`; receiver wiring lives here, which is why #4105's provision-time fix reaches no pre-existing action group). Fix shape per `auto-bind-by-default.md` §3: bindings self-heal on next touch — a backfill that re-binds existing groups in code, not a one-time script | `PINNED` |
 | **#4016** | — | `UNPINNED` |
-| **#4101** | — (`STALE` at head; needs a closure receipt, not a file list) | `UNPINNED` |
+| **#4101** | `scripts/ci/check-route-guards.mjs` — **verdict CORRECTED 2026-08-31: not STALE.** The issue's own text says head is correct (mirrored-database POST deliberately omits `allowReadRoles`, verified at route.ts:94); the deliverable is a guard for the caller-picks-guard-scope idiom, which is the #3941 guard-strength class, and `check-route-guards.mjs` is its natural home | `PINNED` |
 
 **`provisioning-engine.ts` is #3573's alone.** Checked explicitly: #3525 and #4183
 modify existing provisioner *bodies* and do not re-register, so neither touches the

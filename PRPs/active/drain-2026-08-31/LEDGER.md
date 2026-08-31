@@ -29,13 +29,12 @@ provenance of each list. `OWNERSHIP.md` §8 requires the file list before a lane
 
 | Verdict class | Count |
 |---|---|
-| `PENDING-TRIAGE` | 157 |
-| `REAL` | 49 |
+| `PENDING-TRIAGE` | 156 |
+| `REAL` | 52 |
 | `PARKED-FEATURE` | 33 |
 | `NEEDS-ESTATE` | 4 |
-| `STALE` | 2 |
-| `PENDING-REVERIFY` | 1 |
 | `STALE-CODE` | 1 |
+| `STALE` | 1 |
 | **Total** | **247** |
 
 `PENDING-TRIAGE` is the number that matters. It is carried in the open rather than
@@ -64,8 +63,10 @@ why #4036 carries a file-and-line note and the others carry a provenance flag.
 **#4035 has since been closed out.** It was re-read at head 2026-08-31 and is `REAL`,
 and larger than the row it replaced: three regressions rather than one, on a path that
 is not where the earlier note said it was. That is one carried hypothesis converted to
-a measurement — and the one conversion changed both the severity and the file. **#4064
-remains `PENDING-REVERIFY`** and must be re-measured before its lane opens.
+a measurement — and the one conversion changed both the severity and the file.
+**#4064 was re-measured at head 2026-08-31 and is `REAL`** — the `byRepo` bucketing
+and the manufactured-UNKNOWN message are both still present in
+`reconcile-policy.mjs:328` — so no `PENDING-REVERIFY` rows remain.
 
 **Consequence for scheduling:** a lane re-measures its own issues at head before
 writing code (`DEV-LOOP.md` §10, box 1). An `INHERITED` row is schedulable; it is not
@@ -98,9 +99,9 @@ actionable until that box is checked.
 | #4145 | adx-cluster.bicep hard-codes enableAutoStop, like 3 of 4 ADX modules — a consistency questio... | `PENDING-TRIAGE` | ? | ? | ? |  |
 | #4144 | six untracked deploy paths are stale or have NEVER run — including deploy-fiab-il5 (zero run... | `REAL` | M | W0 | deploy-C | Dataplane roll / ACR |
 | #4136 | the KNOWN_CONTAINERS mirror class: 11 hand-copied literals, 5 already drifted, and tsc canno... | `REAL` | S | W2 | console-ui | COMBINE with #3543 - same file, KNOWN_CONTAINERS dup at 2897/3048 |
-| #4113 | fix(activator): 11 of 13 live action groups have ZERO receivers, and the deployed fix only w... | `PENDING-TRIAGE` | ? | ? | ? |  |
+| #4113 | fix(activator): 11 of 13 live action groups have ZERO receivers, and the deployed fix only w... | `REAL` | M | W2 | console-provisioners | TRIAGED 2026-08-31: 11 of 13 live action groups have zero receivers; #4105 fixed provision-time only. Attribution to _activator-receivers.ts VERIFIED. Fix shape: self-healing re-bind per auto-bind-by-default, not a one-time script; live receipt in W4. |
 | #4108 | guard-strength: controls keyed to a LAYER get defeated by moving the narrowing one layer ove... | `PENDING-TRIAGE` | ? | ? | ? |  |
-| #4101 | guard-strength: a caller-controlled value can pick an authorization guard's read/write SCOPE... | `STALE` | - | - | - | Already fixed at head - comes off the work list |
+| #4101 | guard-strength: a caller-controlled value can pick an authorization guard's read/write SCOPE... | `REAL` | M | W5 | ci-guards | VERDICT CORRECTED 2026-08-31: not STALE. The issue never claimed a live defect (head verified correct at mirrored-database route.ts:94); it asks for a caller-picks-guard-scope idiom detector - #3941 guard-strength class, home is check-route-guards.mjs. |
 | #4097 | fix(activator): the High-Roller alert is enabled, fires, and notifies nobody | `PENDING-TRIAGE` | ? | ? | ? |  |
 | #4094 | fix(observability): the synthetic monitor fails with realFails>0 and cannot say which journe... | `PENDING-TRIAGE` | ? | ? | ? |  |
 | #4093 | fix(casino-analytics): both notebooks read silver tables the bundle never creates | `PENDING-TRIAGE` | ? | ? | ? |  |
@@ -112,7 +113,7 @@ actionable until that box is checked.
 | #4073 | cloud-parity: deploy-fiab-il5 has never run once — it is dispatch-only with no cron, and its... | `REAL` | S | W0 | deploy-B | deploy-fiab-il5 dispatch-only, never dispatched - FREE: add schedule: to on: (see U1). INHERITED - not re-verified at head 2026-08-31. |
 | #4072 | deploy: deploy-fiab-gcch — 16 consecutive failures, but only 15 measured anything; 13 of tho... | `REAL` | L | W0 | deploy-B | deploy-fiab-gcch: 16 consecutive failures. PARKED to the W4 window - needs in-boundary diagnosis. |
 | #4071 | cloud-parity: deploy-fiab-gcc is disabled_manually with no durable decision record — the rea... | `REAL` | S | W0 | deploy-B | deploy-fiab-gcc disabled_manually - FREE: re-enable, then measure |
-| #4064 | deploy-fiab-commercial step 27 refuses on a manufactured UNKNOWN: iceberg-catalog and loom-u... | `PENDING-REVERIFY` | ? | W0 | deploy-C | Rests on MEMORY, not a fresh grep - re-measure before the lane opens |
+| #4064 | deploy-fiab-commercial step 27 refuses on a manufactured UNKNOWN: iceberg-catalog and loom-u... | `REAL` | M | W0 | deploy-C | RE-MEASURED AT HEAD 2026-08-31 - PENDING-REVERIFY resolved. resolveRunningImageTags (reconcile-policy.mjs:328) still buckets byRepo and still emits the exact manufactured-UNKNOWN message when two apps share one repo mid-roll. No open PR touches it. |
 | #4060 | Trivy: the console image is never scanned pre-merge, and the CRITICAL gate is the only trivy... | `PENDING-TRIAGE` | ? | ? | ? |  |
 | #4051 | Gov has no nightly Brain scan: no in-boundary runner can reach the Gov Cosmos private endpoi... | `PENDING-TRIAGE` | ? | ? | ? |  |
 | #4047 | 13 PRs merged past a RED required context under enforce_admins:false; four hard-red | `PENDING-TRIAGE` | ? | ? | ? |  |

@@ -42,11 +42,12 @@ V = {
     3684: ("REAL", "M", "W2", "vscode", "LANE CORRECTED 2026-08-31: file is apps/loom-vscode/src/auth/device-code.ts, NOT the console. Disjoint tree (97 files vs 6283) - own lane, UNGATED by the #3847 bounding pass. device-code.ts read in full; the flow is real and complete."),
     # --- carried from earlier windows ------------------------------------
     3519: ("STALE", "-", "-", "-", "Already fixed at head - comes off the work list"),
-    4101: ("STALE", "-", "-", "-", "Already fixed at head - comes off the work list"),
+    4101: ("REAL", "M", "W5", "ci-guards", "VERDICT CORRECTED 2026-08-31: not STALE. The issue never claimed a live defect (head verified correct at mirrored-database route.ts:94); it asks for a caller-picks-guard-scope idiom detector - #3941 guard-strength class, home is check-route-guards.mjs."),
+    4113: ("REAL", "M", "W2", "console-provisioners", "TRIAGED 2026-08-31: 11 of 13 live action groups have zero receivers; #4105 fixed provision-time only. Attribution to _activator-receivers.ts VERIFIED. Fix shape: self-healing re-bind per auto-bind-by-default, not a one-time script; live receipt in W4."),
     4030: ("STALE-CODE / OWED-ROTATION", "S", "W4", "estate", "Code fixed (SHA256 fingerprint only). The PUBLISHED value must still be rotated. INHERITED - not re-verified at head 2026-08-31."),
     3941: ("REAL (RE-SCOPED)", "M", "W5", "ci-guards", "NOT an authz bypass. TOUCH_EXEMPT documents a disclosed deferral that FAILS CLOSED. Guard-strength gap."),
     4035: ("REAL+NEEDS-DECISION", "S", "W5", "ci-guards", "RE-MEASURED AT HEAD 2026-08-31 - PENDING-REVERIFY resolved. Path is scripts/github/configure-branch-protection.sh (NOT scripts/csa-loom/). THREE regressions, not one: contexts 15->3, strict back to true (the quadratic setting that starved runners into 12/12 false reds), enforce_admins true (revokes the standing --admin authorization). See FILES.md §5 + OWED Q2."),
-    4064: ("PENDING-REVERIFY", "?", "W0", "deploy-C", "Rests on MEMORY, not a fresh grep - re-measure before the lane opens"),
+    4064: ("REAL", "M", "W0", "deploy-C", "RE-MEASURED AT HEAD 2026-08-31 - PENDING-REVERIFY resolved. resolveRunningImageTags (reconcile-policy.mjs:328) still buckets byRepo and still emits the exact manufactured-UNKNOWN message when two apps share one repo mid-roll. No open PR touches it."),
     4038: ("REAL", "S", "W5", "ci-guards", "Mirror stuck at 14 while live protection carries 15. Issue's claimed unconditional exit 1 at :736 is CONDITIONAL. INHERITED - not re-verified at head 2026-08-31."),
     4036: ("REAL", "XS", "W3", "bicep", "RE-MEASURED: bicep chain is correctly wired (synapse.bicep:43 -> :415; admin-plane 5773/6038). Defect is that NO .bicepparam/.yml/.mjs/.sh ever sets loomOnelakeSecurityEnabled - defaults false at main.bicep:1446 + synapse.bicep:43, so OneLake Security ACL SHIPS DARK in every boundary. default-ON/opt-out violation."),
     3513: ("REAL", "L", "W3", "console-provisioners", "~5x its own text: 119 status:'remediation' sites across 26 files, zero Fix-it. Takes provisioners/** EXCLUSIVELY."),
@@ -200,8 +201,10 @@ def main() -> None:
     a("**#4035 has since been closed out.** It was re-read at head 2026-08-31 and is `REAL`,")
     a("and larger than the row it replaced: three regressions rather than one, on a path that")
     a("is not where the earlier note said it was. That is one carried hypothesis converted to")
-    a("a measurement — and the one conversion changed both the severity and the file. **#4064")
-    a("remains `PENDING-REVERIFY`** and must be re-measured before its lane opens.")
+    a("a measurement — and the one conversion changed both the severity and the file.")
+    a("**#4064 was re-measured at head 2026-08-31 and is `REAL`** — the `byRepo` bucketing")
+    a("and the manufactured-UNKNOWN message are both still present in")
+    a("`reconcile-policy.mjs:328` — so no `PENDING-REVERIFY` rows remain.")
     a("")
     a("**Consequence for scheduling:** a lane re-measures its own issues at head before")
     a("writing code (`DEV-LOOP.md` §10, box 1). An `INHERITED` row is schedulable; it is not")
