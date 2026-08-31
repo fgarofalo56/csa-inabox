@@ -1341,6 +1341,17 @@ jobs:
       - name: 'acr-login-retry self-test (the 180s token budget is measured, not grepped)'
         if: ${{ !cancelled() }}
         run: bash scripts/ci/test-acr-login-retry.sh
+      # ONE LAYER EARLIER than the retry above. #4067 hardened the ACR data-plane
+      # probe so a single anonymous 401 is no longer an observation — and in
+      # Azure Government that changed the LOG and nothing else, because all 12
+      # Gov call sites discarded the verdict with `|| echo`. Commercial branched
+      # on it; the sovereign boundaries got a warning line (cloud-parity.md).
+      - name: 'acr-dataplane-verdict-consumed (a discarded probe verdict is not a probe — #4079)'
+        if: ${{ !cancelled() }}
+        run: node scripts/ci/check-acr-dataplane-verdict-consumed.mjs
+      - name: 'acr-dataplane-gate self-test (it must DISTINGUISH 1 from 2, and claim neither is a refusal)'
+        if: ${{ !cancelled() }}
+        run: bash scripts/ci/test-acr-dataplane-gate.sh
       # `set +e; CMD; RC=$?; set -e` is correct ONLY when -e was on to begin with.
       # These scripts start `set -uo pipefail` deliberately, because they implement
       # multi-valued exit contracts (0 ok / 3 absent / 4 unknown) that -e destroys.
