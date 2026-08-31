@@ -243,6 +243,115 @@ test('two containers on one repository at the SAME tag is fine', () => {
   assert.equal(r.unknown.length, 0);
 });
 
+// ---------------------------------------------------------------------------
+// resolveRunningImageTags — shared-repo entries follow their canonical app.
+// Refs #4064: loom-unity and iceberg-catalog deliberately run ONE repository
+// (admin-plane/main.bicep's `module icebergCatalog` call takes the identical
+// `appImageTags.?unity` image handoff the loomUnity module reads) and the roll
+// updates them ~25s apart, so bucketing by repo read a healthy mid-roll estate
+// as "one repo at two tags" and deploy-fiab-commercial's pin-refresh refused
+// (run 32819058867).
+// ---------------------------------------------------------------------------
+
+/** The measured #4064 shape: the canonical has rolled, the follower has not YET. */
+const UNITY_MID_ROLL = [
+  { name: 'loom-unity', image: 'acr123.azurecr.io/loom-unity:2456cebb' },
+  { name: 'iceberg-catalog', image: 'acr123.azurecr.io/loom-unity:4d4fd0b9' },
+];
+
+test('#4064: the unity pair mid-roll PINS to the canonical app tag — the follower lag is convergence, not drift', () => {
+  const r = resolveRunningImageTags(UNITY_MID_ROLL);
+  assert.equal(r.probed, true);
+  assert.equal(r.pinned.unity, '2456cebb', 'the pin must follow loom-unity, the canonical app');
+  assert.equal(r.unknown.length, 0, 'a follower one apply behind must not manufacture UNKNOWN');
+  assert.equal(r.absent.includes('unity'), false);
+});
+
+test('#4064 REGRESSION ARM: the SAME fixture WITHOUT the canonicalApp declaration is still UNKNOWN', () => {
+  // Proves the pass above is caused by the DECLARATION, not a loosened
+  // predicate — an entry that does not opt in keeps today's behaviour exactly.
+  const stripped = APP_IMAGE_TAGS.map(({ canonicalApp, ...rest }) => rest);
+  const r = resolveRunningImageTags(UNITY_MID_ROLL, stripped);
+  const u = r.unknown.find((x) => x.key === 'unity');
+  assert.ok(u, 'without canonicalApp the two-tag repo must stay UNKNOWN');
+  assert.match(u.why, /different tags/i);
+  assert.equal(r.pinned.unity, undefined);
+});
+
+test('#4064: the canonical app ABSENT while a follower runs the repo is UNKNOWN, and the why names both', () => {
+  // "Absent" would be a lie — the repo IS running, and deploying it would
+  // rewrite the follower rather than merely create an app.
+  const r = resolveRunningImageTags([
+    { name: 'iceberg-catalog', image: 'acr123.azurecr.io/loom-unity:4d4fd0b9' },
+  ]);
+  const u = r.unknown.find((x) => x.key === 'unity');
+  assert.ok(u, 'a follower without its canonical must be UNKNOWN');
+  // NOT a bare /loom-unity/: the repo is ALSO named loom-unity, so that match
+  // could never fail on a mutation that drops the canonical's NAME from the
+  // message. The fuller phrase is falsifiable.
+  assert.match(u.why, /canonical app loom-unity/, 'the missing canonical app must be NAMED, not merely the repo');
+  assert.match(u.why, /iceberg-catalog/, 'the apps that DO run the repo must be named');
+  assert.equal(r.absent.includes('unity'), false, 'a running repo must never be reported absent');
+  assert.equal(r.pinned.unity, undefined, 'no tag may be adopted from a follower alone');
+});
+
+test('#4064: the canonical app on a DIGEST ref is UNKNOWN — the follower tag is not silently adopted instead', () => {
+  const r = resolveRunningImageTags([
+    { name: 'loom-unity', image: 'acr123.azurecr.io/loom-unity@sha256:beef' },
+    { name: 'iceberg-catalog', image: 'acr123.azurecr.io/loom-unity:4d4fd0b9' },
+  ]);
+  const u = r.unknown.find((x) => x.key === 'unity');
+  assert.ok(u);
+  assert.match(u.why, /digest/i);
+  assert.equal(r.pinned.unity, undefined);
+});
+
+test('#4064: a DIGEST-pinned FOLLOWER does not block the canonical tag pin — the DELIBERATE sixth shape', () => {
+  // Before canonicalApp, ANY digest hit on the repo made the key UNKNOWN; with
+  // the declaration the follower's digest is deliberately out of scope HERE:
+  // one key drives BOTH apps, so applying the canonical's tag is exactly what
+  // rolls the follower off its digest and back into convergence. The
+  // repo-level digest rule is not lost — digestPinsByKey in
+  // assert-no-silent-image-tag-revert.mjs still reads EVERY container of the
+  // repo, follower included, for the write-safety question.
+  const r = resolveRunningImageTags([
+    { name: 'loom-unity', image: 'acr123.azurecr.io/loom-unity:2456cebb' },
+    { name: 'iceberg-catalog', image: 'acr123.azurecr.io/loom-unity@sha256:beef' },
+  ]);
+  assert.equal(r.pinned.unity, '2456cebb', 'the canonical runs a plain tag; the key pins to it');
+  assert.equal(r.unknown.find((u) => u.key === 'unity'), undefined,
+    'the follower digest must not manufacture UNKNOWN for a declared shared-repo entry');
+});
+
+test('#4064: nothing running the shared repo at all is still absent', () => {
+  const r = resolveRunningImageTags([]);
+  assert.ok(r.absent.includes('unity'));
+  assert.equal(r.unknown.find((u) => u.key === 'unity'), undefined);
+});
+
+test('#4064 CONTROL: an entry WITHOUT canonicalApp still goes UNKNOWN on two tags, even under ONE app name', () => {
+  // The multi-tag guard is not weakened: the fix is keyed to the DECLARATION,
+  // never to app names happening to match.
+  const r = resolveRunningImageTags([
+    { name: 'loom-console', image: 'acr123.azurecr.io/loom-console:one' },
+    { name: 'loom-console', image: 'acr123.azurecr.io/loom-console:two' },
+  ]);
+  const u = r.unknown.find((x) => x.key === 'console');
+  assert.ok(u, 'console has no canonicalApp and must keep byte-identical behaviour');
+  assert.match(u.why, /different tags/i);
+  assert.equal(r.pinned.console, undefined);
+});
+
+test('#4064: a schedule reads the mid-roll pair as resolved — estate-wide config reconcile is no longer frozen', () => {
+  const d = decideDeployApps({
+    eventName: 'schedule',
+    baseValue: 'false',
+    resolution: resolveRunningImageTags([...LIVE, ...UNITY_MID_ROLL]),
+  });
+  assert.equal(d.value, 'true', 'the manufactured UNKNOWN was what blocked the upgrade (#4064)');
+  assert.equal(d.upgraded, true);
+});
+
 test('a FAILED probe is probed:false with everything UNKNOWN — never an empty estate', () => {
   const r = resolveRunningImageTags(null);
   assert.equal(r.probed, false);

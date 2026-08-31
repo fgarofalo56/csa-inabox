@@ -126,15 +126,47 @@ test('CONTROL: a FAILED container-app query is UNRESOLVED for every tag, never a
 });
 
 test('two containers on one repository at two tags is UNRESOLVED, not a silent pick', () => {
+  // loom-trino declares NO canonicalApp, so two tags on its repo remain the
+  // genuine ambiguity this guard exists for. (This fixture used the
+  // unity/iceberg pair before #4064 declared that pair's canonical.)
   const r = decideAdoptions({
     declared,
     env: {},
     resolution: running([
-      ['loom-unity', `${ACR}/loom-unity:v0.1`],
+      ['loom-trino', `${ACR}/loom-trino:v0.1`],
+      ['loom-trino-blue', `${ACR}/loom-trino:abc9999`],
+    ]),
+  });
+  assert.equal(row(r, 'LOOM_TRINO_TAG').source, 'unresolved');
+});
+
+test('#4064: the unity pair mid-roll ADOPTS the canonical app tag — the follower lag is not an ambiguity', () => {
+  // iceberg-catalog deliberately runs the loom-unity repository and trails the
+  // canonical by ~25s during a roll. The key's pin follows loom-unity alone;
+  // adopting its tag is what converges the follower on this very apply.
+  const r = decideAdoptions({
+    declared,
+    env: {},
+    resolution: running([
+      ['loom-unity', `${ACR}/loom-unity:28de89fb`],
       ['iceberg-catalog', `${ACR}/loom-unity:abc9999`],
     ]),
   });
+  assert.equal(row(r, 'LOOM_UNITY_TAG').source, 'adopted');
+  assert.equal(row(r, 'LOOM_UNITY_TAG').value, '28de89fb');
+  assert.equal(envOf(r).LOOM_UNITY_TAG, '28de89fb');
+  assert.equal(r.unresolved.length, 0);
+});
+
+test('#4064: a follower running the repo WITHOUT its canonical is UNRESOLVED — no tag is adopted from it', () => {
+  const r = decideAdoptions({
+    declared,
+    env: {},
+    resolution: running([['iceberg-catalog', `${ACR}/loom-unity:abc9999`]]),
+  });
   assert.equal(row(r, 'LOOM_UNITY_TAG').source, 'unresolved');
+  assert.match(row(r, 'LOOM_UNITY_TAG').why, /loom-unity/);
+  assert.match(row(r, 'LOOM_UNITY_TAG').why, /iceberg-catalog/);
 });
 
 // ---------------------------------------------------------------------------

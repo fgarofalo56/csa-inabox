@@ -296,6 +296,33 @@ test('a key that WAS pinned and is now digest-pinned is UNKNOWN, and UNKNOWN ref
   assert.match(v.reason, /UNKNOWN is not "unchanged"/);
 });
 
+test('#4064: the pin-refresh landing inside the unity-pair roll window RE-PINS to the canonical, not refuses', () => {
+  // The measured incident (deploy-fiab-commercial run 32819058867, step 27):
+  // this run pinned unity, the data-plane roll moved loom-unity to a new tag,
+  // and the fresh read landed 2s before iceberg-catalog followed. The old
+  // repo-bucketing read "2 containers at 2 different tags" -> UNKNOWN ->
+  // refuse, blocking a healthy estate. With the canonicalApp declaration the
+  // pin follows loom-unity alone and the follower converges on the apply.
+  const pinnedByThisRun = '4d4fd0b9';
+  const rolledTo = '2456cebb';
+  const v = decidePinRefresh({
+    deployAppsEnabled: 'true',
+    previous: { [CONSOLE_IMAGE_KEY]: ROLLED, unity: pinnedByThisRun },
+    resolution: resolveRunningImageTags([
+      ...estateAt(ROLLED).filter((c) => c.name !== 'loom-unity'),
+      { name: 'loom-unity', image: `acr1.azurecr.io/loom-unity:${rolledTo}` },
+      { name: 'iceberg-catalog', image: `acr1.azurecr.io/loom-unity:${pinnedByThisRun}` },
+    ]),
+  });
+  assert.equal(v.decision, 'proceed', 'a follower one apply behind must not refuse the pin-refresh');
+  assert.equal(v.repin.unity, rolledTo, 'the apply must carry the tag the CANONICAL app is running');
+  assert.ok(
+    v.comparison.moved.some((m) => m.repo === 'loom-unity' && m.was === pinnedByThisRun && m.now === rolledTo),
+    'the move is reported, not silent',
+  );
+  assert.equal(v.comparison.unknown.length, 0);
+});
+
 test('an app that came up under the run is PINNED, so the param default is not written over it', () => {
   const v = decidePinRefresh({
     deployAppsEnabled: 'true',

@@ -235,7 +235,22 @@ export const APP_IMAGE_TAGS = Object.freeze([
   // and consumed only by a manual gov-uc-purview-wire.yml dispatch, so no
   // preflight covered it; now the Commercial lane's resolver picks it up
   // automatically from this table.
-  { key: 'unity', repo: 'loom-unity', envVar: 'LOOM_UNITY_TAG' },
+  //
+  // canonicalApp (#4064). `iceberg-catalog` DELIBERATELY runs this SAME
+  // loom-unity repository — admin-plane/main.bicep's `module icebergCatalog`
+  // call hands data-plane/iceberg-catalog-aca.bicep the identical
+  // `${acr}/loom-unity:${appImageTags.?unity ?? 'v0.1'}` image expression the
+  // loomUnity module reads — and the data-plane roll updates the pair
+  // sequentially, ~25s apart.
+  // Bucketing by repo alone therefore reads "one repo at two tags" inside that
+  // window and manufactures UNKNOWN out of a healthy mid-roll estate, which
+  // made deploy-fiab-commercial's pin-refresh refuse (run 32819058867). The
+  // key's pin FOLLOWS the canonical app alone; iceberg-catalog is a FOLLOWER
+  // that runs the same image by design and CONVERGES to the key's tag on the
+  // next apply — that convergence is this reconcile's declared model, not
+  // drift. A separate appImageTags key is NOT the fix: two keys declaring the
+  // same repo receive the identical hits array and both go UNKNOWN.
+  { key: 'unity', repo: 'loom-unity', envVar: 'LOOM_UNITY_TAG', canonicalApp: 'loom-unity' },
   // loom-trino (#2678). The N7e Federated SQL engine is now DEFAULT-ON as a
   // scale-to-zero Container App (data-plane/loom-trino-aca.bicep) wired straight
   // from admin-plane/main.bicep, so `appImageTags.trino` is read on every
@@ -315,9 +330,32 @@ export function parseImageRef(image) {
  * Match every running container back to the `appImageTags` key that governs it,
  * and decide, per key, whether the running tag is KNOWN.
  *
+ * SHARED-REPO ENTRIES (#4064). An entry may declare `canonicalApp`: several
+ * Container Apps deliberately run that ONE repository, and the key's pin
+ * follows the app named `canonicalApp` alone. Semantics, per shape:
+ *
+ *   canonical present, single tag  -> pinned to the canonical's tag. A
+ *     follower mid-roll on the previous tag is NOT drift — it runs the same
+ *     image by design and converges to the key's tag on the next apply — so
+ *     its ~25s lag no longer manufactures UNKNOWN (deploy-fiab-commercial run
+ *     32819058867 refused a healthy estate on exactly that).
+ *   canonical present, running by digest -> UNKNOWN (unchanged: a tag cannot
+ *     be derived from a digest without resolving it in ACR).
+ *   canonical ABSENT while other apps DO run the repo -> UNKNOWN, naming the
+ *     missing canonical and the apps that do run it. "Absent" would be a lie —
+ *     the repo IS running, and deploying would rewrite the followers, not
+ *     merely create an app (deploy-integrity R7).
+ *   nothing runs the repo at all -> absent (unchanged).
+ *
+ * Entries WITHOUT `canonicalApp` behave exactly as before.
+ *
  * @param {Array<{name?:string, image?:string}>|null} containers
  *        `az containerapp list` projection. null = the query FAILED (UNKNOWN),
  *        which is deliberately NOT the same as an empty estate.
+ * @param {ReadonlyArray<{key:string, repo:string, envVar:string, canonicalApp?:string}>} [table]
+ *        The policy table. Defaults to APP_IMAGE_TAGS; overridable so tests can
+ *        prove a behaviour is caused by a declaration, not by a loosened
+ *        predicate.
  * @returns {{
  *   probed: boolean,
  *   pinned: Record<string,string>,
@@ -325,13 +363,13 @@ export function parseImageRef(image) {
  *   unknown: Array<{key:string, why:string}>,
  * }}
  */
-export function resolveRunningImageTags(containers) {
+export function resolveRunningImageTags(containers, table = APP_IMAGE_TAGS) {
   if (containers === null || containers === undefined) {
     return {
       probed: false,
       pinned: {},
       absent: [],
-      unknown: APP_IMAGE_TAGS.map((e) => ({
+      unknown: table.map((e) => ({
         key: e.key,
         why: 'the container-app query failed, so no running tag could be read',
       })),
@@ -354,13 +392,36 @@ export function resolveRunningImageTags(containers) {
   const absent = [];
   const unknown = [];
 
-  for (const entry of APP_IMAGE_TAGS) {
-    const hits = byRepo.get(entry.repo) || [];
+  for (const entry of table) {
+    let hits = byRepo.get(entry.repo) || [];
     if (hits.length === 0) {
       // Nothing is running this repository. Deploying it CREATES an app; it
       // cannot change a running image, so the invariant is untouched.
       absent.push(entry.key);
       continue;
+    }
+    if (entry.canonicalApp) {
+      // Shared-repo entry (#4064): the key's pin follows the canonical app
+      // alone; the other apps on this repo are followers that converge to the
+      // key's tag on the next apply. Restricting the hits BEFORE the
+      // digest/tag logic is what stops a follower's transient mid-roll lag
+      // from reading as "one repo at two tags".
+      const canonical = hits.filter((h) => h.name === entry.canonicalApp);
+      if (canonical.length === 0) {
+        // The repo IS running — just not on the app the pin follows. Calling
+        // that "absent" would be a lie: deploying would not merely create an
+        // app, it would rewrite the followers. This is a strange estate; say
+        // exactly what is missing and what is there.
+        unknown.push({
+          key: entry.key,
+          why:
+            `${entry.repo} is running on ${hits.map((h) => h.name).join(', ')} but its canonical app ` +
+            `${entry.canonicalApp} — the app this key's pin follows — is not running it; ` +
+            'no tag can be adopted from a follower alone',
+        });
+        continue;
+      }
+      hits = canonical;
     }
     const digestPinned = hits.filter((h) => h.ref.digest);
     if (digestPinned.length) {
