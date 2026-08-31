@@ -890,35 +890,42 @@ jobs:
           # on exhaustion say "I could not read" — never "it is unhealthy" (R7).
           # #4231 D2 — 10×10s (~100s) was too short for a revision still
           # None/Activating at 22s; the budget is now 30 probes (~300s).
+          # Stderr goes to a SIDE FILE, never 2>&1 into the value: on rc=0 a
+          # benign az/extension warning would otherwise be prepended into a
+          # value that is exactly compared below, turning a warning into a
+          # false mismatch that auto-reverts a good deploy. Same pattern as
+          # gov-console-roll.yml's probe; the `if VAR=$(…)` shape is also
+          # errexit-exempt.
+          PROBE_ERR=$(mktemp)
           OK=false
           VERDICT=unhealthy
           FAILED_READS=0
-          STATE=""
+          LAST_READ=""
           for i in $(seq 1 30); do
-            STATE=$(az containerapp revision show -n ${{ env.APP_NAME }} -g ${{ env.RG_NAME }} \
+            if STATE=$(az containerapp revision show -n ${{ env.APP_NAME }} -g ${{ env.RG_NAME }} \
               --revision "$REV" \
-              --query "{health:properties.healthState, running:properties.runningState}" -o tsv 2>&1) && AZRC=0 || AZRC=$?
-            if [[ $AZRC -ne 0 ]]; then
+              --query "{health:properties.healthState, running:properties.runningState}" -o tsv 2>"$PROBE_ERR"); then
+              STATE=$(printf '%s' "$STATE" | tr -d '\r')
+              LAST_READ="$STATE"
+              echo "[$i] $STATE"
+              if [[ "$STATE" == *"Healthy"* && "$STATE" == *"Running"* ]]; then OK=true; break; fi
+            else
               FAILED_READS=$((FAILED_READS+1))
-              echo "[$i] control-plane read FAILED (rc=$AZRC, failed read $FAILED_READS/12): ${STATE:0:300}"
+              echo "[$i] control-plane read FAILED (failed read $FAILED_READS/12; this is not a health verdict): $(head -c 300 "$PROBE_ERR" | tr -d '\r')"
               if [[ $FAILED_READS -ge 12 ]]; then
                 VERDICT=unknown
                 break
               fi
-              sleep 10
-              continue
             fi
-            echo "[$i] $STATE"
-            if [[ "$STATE" == *"Healthy"* && "$STATE" == *"Running"* ]]; then OK=true; break; fi
-            sleep 10
+            if [[ $i -lt 30 ]]; then sleep 10; fi
           done
           if [[ "$OK" == "true" ]]; then VERDICT=healthy; fi
           echo "verdict=$VERDICT" >> "$GITHUB_OUTPUT"
           if [[ "$OK" != "true" ]]; then
             if [[ "$VERDICT" == "unknown" ]]; then
-              echo "::error::Cannot say whether revision $REV is healthy: 12 control-plane reads failed (last: ${STATE:0:300}). That is an UNKNOWN, not a measured unhealthy — failing closed WITHOUT asserting a revision state this step never read (R7). The rollback below deliberately does not fire on an unknown: in run 33429557771 a rollback triggered by exactly this shape would have reverted a GOOD deploy (#4231 D3)."
+              echo "::error::Cannot say whether revision $REV is healthy: 12 control-plane reads failed (last read error: $(head -c 300 "$PROBE_ERR" | tr -d '\r')). That is an UNKNOWN, not a measured unhealthy — failing closed WITHOUT asserting a revision state this step never read (R7). The rollback below deliberately does not fire on an unknown: in run 33429557771 a rollback triggered by exactly this shape would have reverted a GOOD deploy (#4231 D3)."
             else
-              echo "::error::Revision $REV never reached Healthy+Running after ~300s (last state: ${STATE:-<none>}). The most common cause is an image the revision cannot pull. NOT proceeding to validation on an unhealthy roll."
+              echo "::error::Revision $REV never reached Healthy+Running after ~300s (last successfully read state: ${LAST_READ:-<none — no probe ever succeeded>}). The most common cause is an image the revision cannot pull. NOT proceeding to validation on an unhealthy roll."
             fi
             exit 1
           fi
@@ -931,13 +938,16 @@ jobs:
           # not revert a revision this step measured as Healthy+Running.
           GOT=""
           for a in 1 2 3; do
-            GOT=$(az containerapp revision show -n ${{ env.APP_NAME }} -g ${{ env.RG_NAME }} \
-              --revision "$REV" --query "properties.template.containers[0].image" -o tsv 2>&1) && AZRC=0 || AZRC=$?
-            if [[ $AZRC -eq 0 ]]; then GOT=$(printf '%s' "$GOT" | tr -d '\r'); break; fi
-            echo "image read attempt $a/3 FAILED (rc=$AZRC): ${GOT:0:300}"
+            if GOT=$(az containerapp revision show -n ${{ env.APP_NAME }} -g ${{ env.RG_NAME }} \
+              --revision "$REV" --query "properties.template.containers[0].image" -o tsv 2>"$PROBE_ERR"); then
+              GOT=$(printf '%s' "$GOT" | tr -d '\r')
+              break
+            fi
+            GOT=""
+            echo "image read attempt $a/3 FAILED (not a mismatch verdict): $(head -c 300 "$PROBE_ERR" | tr -d '\r')"
             if [[ $a -eq 3 ]]; then
               echo "verdict=unknown" >> "$GITHUB_OUTPUT"
-              echo "::error::Could not READ revision $REV's running image after 3 attempts. The revision measured Healthy+Running; this step could not verify WHICH image it runs (R7) — failing closed without asserting a mismatch it never observed."
+              echo "::error::Could not READ revision $REV's running image after 3 attempts (last error above). The revision measured Healthy+Running; this step could not verify WHICH image it runs (R7) — failing closed without asserting a mismatch it never observed."
               exit 1
             fi
             sleep 15
@@ -1364,30 +1374,51 @@ jobs:
           # ResourceNotFoundError. The rollback now retries its reads (R6) and,
           # on exhaustion, reports what it measured — a failed READ — never a
           # resource state it could not have known (R7).
+          RB_ERR=$(mktemp)
           PREV_IMAGE=""
           for a in 1 2 3; do
-            PREV_IMAGE=$(az containerapp revision show -n ${{ env.APP_NAME }} -g ${{ env.RG_NAME }} \
+            if PREV_IMAGE=$(az containerapp revision show -n ${{ env.APP_NAME }} -g ${{ env.RG_NAME }} \
               --revision "${{ steps.vars.outputs.previous_revision }}" \
-              --query "properties.template.containers[0].image" -o tsv 2>&1) && AZRC=0 || AZRC=$?
-            if [[ $AZRC -eq 0 ]]; then PREV_IMAGE=$(printf '%s' "$PREV_IMAGE" | tr -d '\r'); break; fi
-            echo "previous-revision read attempt $a/3 FAILED (rc=$AZRC): ${PREV_IMAGE:0:300}"
+              --query "properties.template.containers[0].image" -o tsv 2>"$RB_ERR"); then
+              PREV_IMAGE=$(printf '%s' "$PREV_IMAGE" | tr -d '\r')
+              break
+            fi
+            PREV_IMAGE=""
+            echo "previous-revision read attempt $a/3 FAILED: $(head -c 300 "$RB_ERR" | tr -d '\r')"
             if [[ $a -eq 3 ]]; then
-              echo "::error::Could not READ previous revision ${{ steps.vars.outputs.previous_revision }} after 3 attempts — CANNOT roll back. This is a failed read (an ARM throttle is wrapped as ResourceNotFoundError by the containerapp extension), NOT a statement that the app or revision does not exist. The estate stays on whatever revision the roll left it on — investigate before re-running."
+              echo "::error::Could not READ previous revision ${{ steps.vars.outputs.previous_revision }} after 3 attempts (last error above) — CANNOT roll back. This is a failed read (an ARM throttle is wrapped as ResourceNotFoundError by the containerapp extension), NOT a statement that the app or revision does not exist. The estate stays on whatever revision the roll left it on — investigate before re-running."
               exit 1
             fi
             sleep 15
           done
-          for a in 1 2 3; do
-            az containerapp update -n ${{ env.APP_NAME }} -g ${{ env.RG_NAME }} --image "$PREV_IMAGE" \
-              > rollback-update-out.json 2> rollback-update-err.txt && URC=0 || URC=$?
-            if [[ $URC -eq 0 ]]; then break; fi
-            echo "rollback update attempt $a/3 FAILED (rc=$URC): $(head -c 300 rollback-update-err.txt)"
-            if [[ $a -eq 3 ]]; then
-              echo "::error::Rollback update failed after 3 attempts (last output above) — the revert did NOT happen. Not asserting a cause this step did not establish (R7); the estate stays on whatever revision the roll left it on."
-              exit 1
+          # The MUTATION goes through the deploy-retry harness, not a hand
+          # loop: it retries ONLY the classes named here (the R6 classification
+          # #4231 asked for — an RBAC or quota denial is not retried, it is
+          # named), fails closed on exhaustion, and writes deploy-failure.json
+          # for the notifier. check-deploy-failure-handling C2 enforces this.
+          set +e
+          node scripts/ci/deploy-retry.mjs \
+            --class-allow transient,eventual-consistency \
+            --max-attempts 3 --backoff 20 --jitter 0.3 --wall-clock 10m \
+            --step "rollback: az containerapp update (${{ env.APP_NAME }})" \
+            --artifact "$GITHUB_WORKSPACE/deploy-failure.json" \
+            -- az containerapp update -n ${{ env.APP_NAME }} -g ${{ env.RG_NAME }} --image "$PREV_IMAGE"
+          URC=$?
+          set -e
+          if [[ $URC -ne 0 ]]; then
+            # R7: an update that failed at the CLI may still have landed (an
+            # accepted PUT with a throttled status poll). Say "not confirmed",
+            # and report the one thing this step CAN measure: what the app's
+            # template references right now.
+            if LIVE_IMAGE=$(az containerapp show -n ${{ env.APP_NAME }} -g ${{ env.RG_NAME }} \
+              --query "properties.template.containers[0].image" -o tsv 2>"$RB_ERR"); then
+              LIVE_IMAGE=$(printf '%s' "$LIVE_IMAGE" | tr -d '\r')
+              echo "::error::The rollback update was NOT confirmed (deploy-retry exit $URC; its classification is above and in deploy-failure.json). Measured after exhaustion: the app's template currently references '$LIVE_IMAGE'. Reporting that read, not a guess (R7)."
+            else
+              echo "::error::The rollback update was NOT confirmed (deploy-retry exit $URC), and a post-exhaustion read of the app's current image also failed: $(head -c 300 "$RB_ERR" | tr -d '\r'). Which revision is live is UNKNOWN — investigate before re-running (R7)."
             fi
-            sleep 15
-          done
+            exit 1
+          fi
           echo "::notice::Rolled back to $PREV_IMAGE"
 
       - name: File issue on failure
