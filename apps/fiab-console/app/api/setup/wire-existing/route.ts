@@ -10,7 +10,7 @@ import {
   isSubscriptionId,
   resolveSelectedDlzs,
   runWireScript,
-  scanDeployedDlzs,
+  scanDeployedDlzsCached,
   type RequestedDlz,
 } from '@/lib/setup/wire-existing';
 
@@ -172,8 +172,12 @@ export async function POST(req: NextRequest) {
   // above, not the reach of this scan.
   // ─────────────────────────────────────────────────────────────────────────
   let token: string;
+  // `identity` is part of the discovery cache key (#3609): a 'user' token and a
+  // 'uami' token see DIFFERENT resource groups, so one key for both would let a
+  // scan resolved under one principal answer for the other.
+  let identity: 'user' | 'uami';
   try {
-    ({ token } = await getArmTokenPreferUser(session));
+    ({ token, identity } = await getArmTokenPreferUser(session));
   } catch (e) {
     return NextResponse.json(
       {
@@ -192,7 +196,7 @@ export async function POST(req: NextRequest) {
 
   let discovered;
   try {
-    discovered = await scanDeployedDlzs(token);
+    discovered = await scanDeployedDlzsCached(session.claims.oid, identity, token);
   } catch (e) {
     return NextResponse.json(
       {

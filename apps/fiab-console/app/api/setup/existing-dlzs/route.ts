@@ -23,10 +23,9 @@
  *   { ok: false, error, hint? }
  */
 import { NextResponse } from 'next/server';
-import { getSession } from '@/lib/auth/session';
-import { armBase } from '@/lib/azure/cloud-endpoints';
 import { getArmTokenPreferUser } from '@/lib/auth/obo';
-import { swrAwait } from '@/lib/azure/cross-sub-cache';
+import { scanDeployedDlzsCached, type DiscoveredDlz } from '@/lib/setup/wire-existing';
+import { withSession } from '@/lib/api/route-toolkit';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -39,63 +38,31 @@ interface ExistingDlz {
   rg: string;
 }
 
-/** Parse `rg-csa-loom-dlz-<domain>-<region>` → { domainName, region }. */
-function parseDlzRg(rg: string): { domainName: string; region: string } | null {
-  const m = /^rg-csa-loom-dlz-(.+)-([a-z0-9]+)$/i.exec(rg);
-  if (!m) return null;
-  return { domainName: m[1], region: m[2] };
-}
-
 /**
- * Run the Resource Graph DLZ-RG scan under `token`, PAGING via `$skipToken` so a
- * tenant with more than one Resource Graph page (100+ matching RGs) lists fully
- * instead of silently truncating. Throws on any Resource Graph error.
+ * The scan itself lives in `lib/setup/wire-existing.ts` (#3609). This route
+ * carried a byte-for-byte copy of the Resource Graph query, its `$skipToken`
+ * paging and the `rg-csa-loom-dlz-<domain>-<region>` regex; the sibling
+ * `POST /api/setup/wire-existing` uses the same scan as its L2 existence
+ * control, and two copies of a security-relevant resolver that must agree is a
+ * drift hazard. Only the response projection is route-specific, and that is
+ * what this function is.
+ *
+ * `subscriptionName` is the subscription ID: Resource Graph's
+ * `ResourceContainers` rows for a resource group carry no subscription display
+ * name, and the id is the stable key. This field has always been the id — it is
+ * not a regression of this refactor.
  */
-async function scanExistingDlzs(token: string): Promise<ExistingDlz[]> {
-  const arm = armBase();
-  const dlzs: ExistingDlz[] = [];
-  let skipToken: string | undefined;
-  do {
-    const res = await fetch(
-      `${arm}/providers/Microsoft.ResourceGraph/resources?api-version=2022-10-01`,
-      {
-        method: 'POST',
-        headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
-        body: JSON.stringify({
-          query:
-            "ResourceContainers | where type == 'microsoft.resources/subscriptions/resourcegroups' " +
-            "| where name startswith 'rg-csa-loom-dlz-' " +
-            '| project name, subscriptionId, location ' +
-            '| order by name asc',
-          options: { $top: 1000, ...(skipToken ? { $skipToken: skipToken } : {}) },
-        }),
-        cache: 'no-store',
-      },
-    );
-    if (!res.ok) {
-      const t = await res.text().catch(() => '');
-      throw new Error(`Resource Graph ${res.status}: ${t.slice(0, 200)}`);
-    }
-    const j: any = await res.json();
-    for (const row of (j?.data || []) as any[]) {
-      const parsed = parseDlzRg(row.name);
-      if (!parsed) continue;
-      dlzs.push({
-        subscriptionId: row.subscriptionId,
-        subscriptionName: row.subscriptionId, // RG rows carry no sub displayName; id is the stable key
-        domainName: parsed.domainName,
-        region: parsed.region || row.location || '',
-        rg: row.name,
-      });
-    }
-    skipToken = j?.$skipToken || undefined;
-  } while (skipToken);
-  return dlzs;
+function toExistingDlz(d: DiscoveredDlz): ExistingDlz {
+  return {
+    subscriptionId: d.subscriptionId,
+    subscriptionName: d.subscriptionId,
+    domainName: d.domainName,
+    region: d.region,
+    rg: d.rg,
+  };
 }
 
-export async function GET() {
-  const session = getSession();
-  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+export const GET = withSession(async (_req, { session }) => {
 
   // USER-PASSTHROUGH: discover DLZs the SIGNED-IN USER can see (Resource Graph
   // honours their RBAC), falling back to the Console UAMI when the user's ARM
@@ -119,18 +86,15 @@ export async function GET() {
 
   // SWR-cached per (user, identity): the cross-sub Resource Graph scan can be
   // slow, so the collision-hint retries the wizard fires are served instantly.
+  // The memo now lives with the scan, so the POST that follows this GET reads
+  // the entry this GET warmed instead of re-running the fan-out (#3609).
   try {
-    const { value: dlzs } = await swrAwait(
-      session.claims.oid,
-      `existing-dlzs:${identity}`,
-      { ttlMs: 60_000 },
-      () => scanExistingDlzs(token),
-    );
-    return NextResponse.json({ ok: true, dlzs, identity });
+    const discovered = await scanDeployedDlzsCached(session.claims.oid, identity, token);
+    return NextResponse.json({ ok: true, dlzs: discovered.map(toExistingDlz), identity });
   } catch (e: any) {
     return NextResponse.json(
       { ok: false, error: `Resource Graph request failed: ${e?.message ?? String(e)}` },
       { status: 502 },
     );
   }
-}
+});
