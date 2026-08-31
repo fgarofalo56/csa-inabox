@@ -4079,6 +4079,24 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             // horizon, 'auto' = Forecast API first, linear/seasonal fallback.
             { name: 'LOOM_COST_FORECAST_HORIZON_DAYS', value: string(costForecastHorizonDays) }
             { name: 'LOOM_COST_FORECAST_METHOD', value: costForecastMethod }
+            // LIN-GC-2 — the scheduled lineage sweep's PURGE opt-in, delivered
+            // explicitly as 'false' rather than left undeclared.
+            //
+            // check-env-sync caught this: the console route READS the variable, so
+            // a deploy that never emits it means an operator has no supported way
+            // to set it — /admin/env-config can only edit what the template
+            // declares, and a declarative ACA template drops anything it does not.
+            // "Read but never delivered" is a knob that exists in code and not in
+            // the product.
+            //
+            // 'false' is the value, not '' — the route reads affirmatively
+            // (`true`/`1`/`yes`), so an empty string and 'false' behave
+            // identically, and the explicit word states the intent to a human
+            // reading the app's env instead of leaving them to infer it. Flipping
+            // this arms an UNATTENDED purge of lineage metadata; that is why it is
+            // opt-in (auto-bind-by-default.md §5's narrow destructive exception)
+            // rather than default-ON like the job that calls it.
+            { name: 'LOOM_LINEAGE_GC_PURGE', value: 'false' }
             { name: 'NEXT_PUBLIC_LOOM_VERSION', value: loomVersion }
             { name: 'LOOM_SUBSCRIPTION_ID', value: subscription().subscriptionId }
             { name: 'LOOM_ADMIN_RG', value: resourceGroup().name }
