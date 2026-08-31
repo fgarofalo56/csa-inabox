@@ -16738,6 +16738,29 @@
           }
         },
         {
+          "id": "sec:publication:scripts/ci/__tests__/roll-race.test.mjs#module",
+          "kind": "publication",
+          "provenance": "declared",
+          "label": "scripts/ci/__tests__/roll-race.test.mjs",
+          "facet": {
+            "kind": "publication",
+            "module": "scripts/ci/__tests__/roll-race.test.mjs",
+            "declaredSinkCount": 1,
+            "sinks": [
+              {
+                "id": "console:member:2764",
+                "surface": "console",
+                "accessPath": "member",
+                "wholeExpressionBounded": false,
+                "boundary": null,
+                "unredactedByDesign": false,
+                "carriesSensitive": false,
+                "childProvenRedacting": null
+              }
+            ]
+          }
+        },
+        {
           "id": "sec:publication:scripts/ci/__tests__/sc1-verify-gate.test.mjs#module",
           "kind": "publication",
           "provenance": "declared",
@@ -46837,6 +46860,11 @@
           "reason": "CI guard script — executes on a GitHub Actions runner, not in any deployed Azure resource. Painting it onto a Container App would assert an edge that does not exist."
         },
         {
+          "nodeId": "sec:publication:scripts/ci/__tests__/roll-race.test.mjs#module",
+          "codeModuleId": "code:scripts/ci/__tests__/roll-race.test.mjs",
+          "reason": "CI guard script — executes on a GitHub Actions runner, not in any deployed Azure resource. Painting it onto a Container App would assert an edge that does not exist."
+        },
+        {
           "nodeId": "sec:publication:scripts/ci/__tests__/sc1-verify-gate.test.mjs#module",
           "codeModuleId": "code:scripts/ci/__tests__/sc1-verify-gate.test.mjs",
           "reason": "CI guard script — executes on a GitHub Actions runner, not in any deployed Azure resource. Painting it onto a Container App would assert an edge that does not exist."
@@ -47875,9 +47903,9 @@
     },
     "meta": {
       "generatorVersion": 1,
-      "generatedAt": "2026-08-30T22:38:51.975Z",
-      "commit": "6af09bb9125ce94e990ce9f424d0b61c2afc1699",
-      "inputsDigest": "b000a111b2f94edb",
+      "generatedAt": "2026-08-31T01:35:08.113Z",
+      "commit": "7375d1bac52cb88da77a0b61b55b4a5deea8c4e5",
+      "inputsDigest": "d3fc7253bf8f1860",
       "filesScanned": 2068,
       "scanScopes": [
         {
@@ -47888,7 +47916,7 @@
         {
           "scope": ".github/**, scripts/** (CI publication surfaces)",
           "filesMatched": 374,
-          "nodesEmitted": 217
+          "nodesEmitted": 218
         }
       ],
       "skipped": [
@@ -48066,6 +48094,10 @@
         },
         {
           "subject": "scripts/ci/__tests__/release-please-dispatch-decision.test.mjs",
+          "reason": "module declares no PUBLICATION-SINKS marker, so C4's declared-count drift check is INERT for it (declaredSinkCount is set to the observed 1). Recorded so the inertness is countable rather than invisible — a check that cannot fail must not be mistaken for a check that passed."
+        },
+        {
+          "subject": "scripts/ci/__tests__/roll-race.test.mjs",
           "reason": "module declares no PUBLICATION-SINKS marker, so C4's declared-count drift check is INERT for it (declaredSinkCount is set to the observed 1). Recorded so the inertness is countable rather than invisible — a check that cannot fail must not be mistaken for a check that passed."
         },
         {
@@ -48902,7 +48934,7 @@
         },
         {
           "subject": "C4 expression arm (carriesSensitive)",
-          "reason": "matched 0 of 2283 non-spawn publication sink(s), so every C4 finding on this tree comes from the spawn-stdio arm. The expression arm is INERT here and its correctness is therefore unexercised by the real corpus — C4 output is not evidence that no unbounded sensitive write exists."
+          "reason": "matched 0 of 2284 non-spawn publication sink(s), so every C4 finding on this tree comes from the spawn-stdio arm. The expression arm is INERT here and its correctness is therefore unexercised by the real corpus — C4 output is not evidence that no unbounded sensitive write exists."
         }
       ]
     }

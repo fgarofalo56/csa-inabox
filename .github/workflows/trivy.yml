@@ -44,6 +44,33 @@ on:
       - 'requirements/**'
       - 'pyproject.toml'
       - 'portal/kubernetes/docker/**'
+      # #4060 F2 — THE PRODUCT IMAGE WAS NEVER SCANNED PRE-MERGE. `loom-console`
+      # was added to the image matrix below (with a comment celebrating that it
+      # was "the ONE image the recurring scan did not cover") and the TRIGGER was
+      # not extended with it. Measured on origin/main: `apps/fiab-console`
+      # appeared nowhere in this filter, so a PR changing the console's
+      # Dockerfile, package.json or pnpm-lock.yaml — the entire dependency
+      # surface of the shipped artifact — did not start this workflow at all.
+      # The image was covered on push:main, on the weekly cron and on dispatch,
+      # i.e. only AFTER merge, which is the point at which a bad dependency is
+      # most expensive to reject. The #2729/#2781 console CVE floors were
+      # therefore unenforced at review time.
+      #
+      # NARROWED TO THE DEPENDENCY SURFACE, DELIBERATELY. `apps/fiab-console/**`
+      # would be correct-by-coverage and wrong-by-cost: the console image build
+      # carries a 45-minute timeout in the matrix below, and it would run on
+      # every console PR — this repo's highest-traffic tree — including
+      # pure-`.tsx` changes that cannot move a CVE. These four paths are exactly
+      # the inputs that decide what packages land IN the image: the Dockerfile
+      # (base image + install steps) and the three manifests it COPYs. A change
+      # to console SOURCE still gets scanned on push:main and on the weekly
+      # cron; a change to what the image CONTAINS is now scanned before it
+      # merges. That trade is stated rather than implied — source-only console
+      # PRs remain post-merge-only coverage.
+      - 'apps/fiab-console/Dockerfile'
+      - 'apps/fiab-console/package.json'
+      - 'apps/fiab-console/pnpm-lock.yaml'
+      - 'apps/fiab-console/pnpm-workspace.yaml'
       - 'scripts/ci/check-lock-scan-coverage.mjs'
       - '.github/workflows/trivy.yml'
   push:
@@ -119,6 +146,20 @@ jobs:
           format: json
           output: trivy-fs-coverage.json
           vuln-type: library
+          # #4060 F1 — PIN THE SCANNER SET, same argument as `list-all-pkgs`
+          # below, applied to the other half of "what does this look at". Every
+          # other trivy call site in this repo pins it (7 of 7:
+          # build-fiab-images-acr-tasks, deploy-loom-sharing,
+          # full-app-deploy-commercial, gov-build-images, gov-console-roll,
+          # gov-provision-trino ×2); this workflow pinned it at 0 of 7, while
+          # pinning `vuln-type` four times. The pinned action.yaml declares
+          # `scanners` with default '' and forwards it as TRIVY_SCANNERS, so the
+          # effective set is whatever the trivy BINARY defaults to — a value a
+          # version bump can move underneath a blocking gate. Gaining a scanner
+          # starts failing dependency PRs on a category this gate never claimed;
+          # losing one narrows coverage with no signal. Neither shows up as a
+          # change to this file.
+          scanners: vuln
           # Populates Results[].Packages so the coverage guard can count what
           # was actually PARSED, rather than inferring it from vulnerability
           # counts — zero findings is a legitimate state, zero packages never is.
@@ -153,6 +194,10 @@ jobs:
           ignore-unfixed: true
           format: table
           vuln-type: library
+          # THE BLOCKING GATE. Of the seven call sites this is the one whose
+          # population being decided by an upstream default actually costs
+          # something: `exit-code: '1'` means this step is what fails the PR.
+          scanners: vuln
 
       # Non-blocking scan for HIGH — emits SARIF for code-scanning + JSON
       # for the PR-comment step.
@@ -168,6 +213,13 @@ jobs:
           format: sarif
           output: trivy-fs.sarif
           vuln-type: library
+          # This SARIF is uploaded to Code Scanning on a PUBLIC repo. Pinning the
+          # set also settles a question this workflow could not previously
+          # answer: whether an unpinned default could include the secret scanner
+          # and publish its findings there. It cannot, now — and that is asserted
+          # by the pin rather than by a claim about the binary's default, which
+          # was never measured.
+          scanners: vuln
 
       - name: Upload SARIF to Code Scanning
         if: always() && github.event_name != 'pull_request'
@@ -188,6 +240,7 @@ jobs:
           format: json
           output: trivy-fs-high.json
           vuln-type: library
+          scanners: vuln
 
       - name: Post HIGH findings to PR
         if: github.event_name == 'pull_request' && always()
@@ -337,6 +390,13 @@ jobs:
           exit-code: '1'
           ignore-unfixed: true
           format: table
+          # #4060 F1 — same pin as the six other image-scanning workflows in this
+          # repo (build-fiab-images-acr-tasks, gov-build-images, gov-console-roll,
+          # full-app-deploy-commercial, deploy-loom-sharing, gov-provision-trino),
+          # all of which already scope this gate to vulnerabilities. Secret-scan
+          # false positives on minified bundles are excluded here for the same
+          # reason they are there; source secret hygiene has its own lane.
+          scanners: vuln
 
       - name: Trivy image scan — HIGH+CRITICAL (SARIF)
         if: always()
@@ -348,6 +408,7 @@ jobs:
           ignore-unfixed: true
           format: sarif
           output: trivy-image-${{ matrix.component }}.sarif
+          scanners: vuln
 
       - name: Upload SARIF to Code Scanning
         if: always() && github.event_name != 'pull_request'
@@ -377,6 +438,21 @@ jobs:
           exit-code: '0'
           format: sarif
           output: trivy-config.sarif
+          # #4060 F1 — PINNED, AND DELIBERATELY *NOT* `vuln`. The issue asked for
+          # `scanners: vuln` at all seven call sites; six of seven are that, and
+          # this one is the exception, stated rather than quietly applied.
+          # `scan-type: config` becomes `trivy config <ref>`, which is trivy's
+          # alias for a misconfiguration scan. The pinned action.yaml forwards
+          # this input verbatim as TRIVY_SCANNERS (read at
+          # ed142fd0673e97e23eac54620cfb913e5ce36c25:
+          # `set_env_var_if_provided "TRIVY_SCANNERS" "$INPUT_SCANNERS" ""`), so
+          # `vuln` here would point this scan at a category it does not look for
+          # and empty its population — the exact "the gate stops finding things
+          # after being narrowed" risk F1's own acceptance criteria warn about.
+          # The PROPERTY being fixed is that the scanner set is pinned rather
+          # than inherited from an upstream default; `misconfig` is that pin for
+          # a misconfiguration scan.
+          scanners: misconfig
 
       - name: Upload config SARIF to Code Scanning
         if: always() && github.event_name != 'pull_request'

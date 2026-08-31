@@ -75,7 +75,7 @@
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync, mkdtempSync, mkdirSync, writeFileSync, chmodSync, rmSync } from 'node:fs';
+import { readFileSync, readdirSync, mkdtempSync, mkdirSync, writeFileSync, chmodSync, rmSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
@@ -109,6 +109,57 @@ const readNorm = (p) => readFileSync(p, 'utf8').replace(/\r\n/g, '\n');
 
 const ROLL_WORKFLOW = join(REPO_ROOT, '.github', 'workflows', 'loom-roll-and-validate.yml');
 const DEPLOY_WORKFLOW = join(REPO_ROOT, '.github', 'workflows', 'deploy-fiab-commercial.yml');
+const WORKFLOW_DIR = join(REPO_ROOT, '.github', 'workflows');
+
+/**
+ * Every `deploy-fiab-*` lane, DERIVED from disk rather than hand-listed (#3907).
+ *
+ * #3888 ported the #3676 re-pin to `deploy-fiab-gcch.yml` and
+ * `deploy-fiab-il5.yml` and did NOT port the guard that protects it, so the
+ * adjacency invariant below was asserted on Commercial ONLY. Measured on
+ * `origin/main` before this change: inserting a step between the re-pin and the
+ * apply took roll-race.test.mjs RC 0 -> 1 on Commercial and RC 0 -> 0 on gcch —
+ * five guards, zero discrimination. A hand-listed lane set is the same rot one
+ * level down (#3896), so the population is read off the directory.
+ */
+const DEPLOY_LANES = readdirSync(WORKFLOW_DIR)
+  .filter((f) => /^deploy-fiab-[a-z0-9]+\.yml$/.test(f))
+  .sort()
+  .map((f) => ({
+    lane: f.replace(/^deploy-fiab-/, '').replace(/\.yml$/, ''),
+    file: f,
+    path: join(WORKFLOW_DIR, f),
+  }));
+
+/**
+ * One workflow's steps at a given indent, as `{ name, id }`.
+ *
+ * The apply step is identified by its `id: provision`, not by its display name:
+ * the three lanes spell it differently today — "Provision (idempotent)" on
+ * Commercial, "Provision (with full Gov dispatch)" on gcch, "Teardown ->
+ * redeploy -> smoke (full mode only)" on il5 — and a guard keyed to one spelling
+ * is exactly the failure this issue is about. `id` is what the lanes' own `if:`
+ * conditions and post-apply gates already key on, so it is the load-bearing
+ * name.
+ */
+function stepsWithIds(yaml, indent = 6) {
+  const pad = ' '.repeat(indent);
+  const marks = [...yaml.matchAll(new RegExp(`^${pad}- name: (.+)$`, 'gm'))];
+  return marks.map((m, k) => {
+    const body = yaml.slice(m.index, k + 1 < marks.length ? marks[k + 1].index : yaml.length);
+    const id = new RegExp(`^${pad}  id: (\\S+)\\s*$`, 'm').exec(body);
+    return { name: m[1], id: id ? id[1] : null };
+  });
+}
+
+/** The lanes that actually carry the re-pin, with their parsed step lists. */
+const REPIN_LANES = DEPLOY_LANES
+  .map((l) => ({ ...l, steps: stepsWithIds(readNorm(l.path)) }))
+  .map((l) => ({
+    ...l,
+    repinIdx: l.steps.findIndex((s) => s.name.startsWith('Re-pin appImageTags to the RUNNING images')),
+  }))
+  .filter((l) => l.repinIdx !== -1);
 
 /** The real SHAs from the incident, so the fixtures are not invented shapes. */
 const ROLLED = 'b9ca620b2a4add7fb7d14bd301f695aadfc71a3b';   // what the roll shipped
@@ -2680,24 +2731,77 @@ test('every workflow named in CONSOLE_ROLL_SOURCES exists on disk', () => {
   }
 });
 
-test('the re-pin is the LAST step before the apply — nothing may sit between them', () => {
-  const yaml = readNorm(DEPLOY_WORKFLOW);
-  // ADJACENCY, not ordering. The first version of this test asserted only
-  // `repin < provision`, so an arbitrarily long step could sit between them and
-  // it stayed green — and one did: the ACR lease step, whose bounded wait is up
-  // to EIGHT MINUTES and whose whole purpose is to wait for the roll lane, i.e.
-  // exactly the writer that invalidates the measurement. A measurement is only
-  // as fresh as the last thing that happens before it is used.
-  const names = [...yaml.matchAll(/^ {6}- name: (.+)$/gm)].map((m) => m[1]);
-  const i = names.findIndex((n) => n.startsWith('Re-pin appImageTags to the RUNNING images'));
-  assert.notEqual(i, -1, 're-pin step is gone; the pin applied would again be the one measured minutes earlier');
-  assert.equal(
-    names[i + 1], 'Provision (idempotent)',
-    `the step immediately after the re-pin is ${JSON.stringify(names[i + 1])}, not the apply. Whatever it is, its ` +
-      'duration is added to the staleness of the measurement this PR exists to keep fresh.',
-  );
+// ---------------------------------------------------------------------------
+// ADJACENCY — asserted on EVERY lane that carries the re-pin, not just
+// Commercial (#3907).
+//
+// THE POPULATION IS THE POINT. A guard that examines one lane and skips two is
+// the zero-population failure this repo keeps rediscovering, so the population
+// is asserted FIRST and by name: a lane that quietly loses its re-pin drops out
+// of `REPIN_LANES` and would otherwise take its own coverage with it.
+// ---------------------------------------------------------------------------
+
+test('POPULATION: every deploy lane that carries the #3676 re-pin is under the adjacency guard', () => {
+  const lanes = REPIN_LANES.map((l) => l.lane);
+  // FLOOR, pinned by name. Derivation alone cannot catch a lane that DROPS the
+  // re-pin — it would simply leave the population, and a smaller population
+  // still passes. These three carry it today (#3683 ported it to the two
+  // sovereign lanes), so losing it is a finding about the lane.
+  for (const required of ['commercial', 'gcch', 'il5']) {
+    assert.ok(
+      lanes.includes(required),
+      `deploy-fiab-${required}.yml no longer contains a step named "Re-pin appImageTags to the RUNNING images…". ` +
+        'Either the re-pin was removed — reopening the #3676 window on that boundary — or it was renamed, which ' +
+        'silently drops the lane out of this guard entirely. Both are defects; neither is a reason to edit this list.',
+    );
+  }
   assert.ok(
-    names.slice(0, i).some((n) => n.startsWith('Take the ACR firewall lease for the apply')),
+    lanes.length >= 3,
+    `only ${lanes.length} deploy lane(s) carry the re-pin: ${JSON.stringify(lanes)}`,
+  );
+  // Reported, not merely asserted: the acceptance criterion for #3907 is the
+  // POPULATION, and a verdict with no population is what let the gap live.
+  console.log(`# roll-race adjacency population: ${lanes.length} lane(s) — ${lanes.join(', ')}`);
+});
+
+for (const lane of REPIN_LANES) {
+  test(`[${lane.lane}] the re-pin is the LAST step before the apply — nothing may sit between them`, () => {
+    // ADJACENCY, not ordering. The first version of this test asserted only
+    // `repin < provision`, so an arbitrarily long step could sit between them and
+    // it stayed green — and one did: the ACR lease step, whose bounded wait is up
+    // to EIGHT MINUTES and whose whole purpose is to wait for the roll lane, i.e.
+    // exactly the writer that invalidates the measurement. A measurement is only
+    // as fresh as the last thing that happens before it is used.
+    const { steps, repinIdx: i } = lane;
+    assert.equal(
+      steps[i].id, 'repin',
+      `${lane.file}: the re-pin step declares id ${JSON.stringify(steps[i].id)}, not "repin". The lane's own ` +
+        'downstream `if:` conditions key on that id, and so does this guard.',
+    );
+    const next = steps[i + 1];
+    assert.ok(next, `${lane.file}: the re-pin is the LAST step in the job — there is no apply after it at all`);
+    assert.equal(
+      next.id, 'provision',
+      `${lane.file}: the step immediately after the re-pin is ${JSON.stringify(next.name)} (id ` +
+        `${JSON.stringify(next.id)}), not the apply. Whatever it is, its duration is added to the staleness of ` +
+        'the measurement the re-pin exists to keep fresh. The lanes spell the apply differently — that is why ' +
+        'this asserts the id and not the display name.',
+    );
+  });
+}
+
+test('[commercial] the ACR firewall lease is taken BEFORE the re-pin, not between it and the apply', () => {
+  // Commercial-scoped ON PURPOSE, and said so rather than implied: gcch and il5
+  // have no `Take the ACR firewall lease for the apply` step at all — measured,
+  // 0 occurrences in either file — because those lanes do not open the registry
+  // from this job. Asserting its presence there would be a false red about a
+  // step that does not belong to them. The ADJACENCY invariant above is what is
+  // shared, and it is asserted on all three.
+  const commercial = REPIN_LANES.find((l) => l.lane === 'commercial');
+  assert.ok(commercial, 'the Commercial lane is missing from the re-pin population');
+  const before = commercial.steps.slice(0, commercial.repinIdx).map((s) => s.name);
+  assert.ok(
+    before.some((n) => n.startsWith('Take the ACR firewall lease for the apply')),
     'the ACR lease must be taken BEFORE the re-pin: its wait is for the roll lane, so waiting after measuring ' +
       'reopens the exact window being narrowed',
   );
