@@ -25,6 +25,26 @@ This file is maintained automatically by
 [Conventional Commits](https://www.conventionalcommits.org/). See
 [RELEASE.md](RELEASE.md) for the release process.
 
+## [0.103.5](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.103.4...csa-inabox-v0.103.5) (2026-08-31)
+
+
+### Bug Fixes
+
+* **batch-8:** eight measured backlog fixes, each mutation-proved ([#4203](https://github.com/fgarofalo56/csa-inabox/issues/4203)) ([43e980c](https://github.com/fgarofalo56/csa-inabox/commit/43e980c8818131250793be80c800b17f7f0bc639))
+* **ci:** a bicep var hid the ARM self-reference, and actionlint never returned a verdict ([#4212](https://github.com/fgarofalo56/csa-inabox/issues/4212)) ([e685fb3](https://github.com/fgarofalo56/csa-inabox/commit/e685fb38c5f87c83a799bba67fb92e820861028f))
+* **ci:** widen a blind guard population, refuse a date that disables the drift monitor, and stop two clock-only causal claims ([#4208](https://github.com/fgarofalo56/csa-inabox/issues/4208)) ([d41aea8](https://github.com/fgarofalo56/csa-inabox/commit/d41aea8444464573312e379a24e175e67a272729))
+* **console:** a green publish over an inert ADF pipeline, and three guards that watched too narrow a scope ([#4210](https://github.com/fgarofalo56/csa-inabox/issues/4210)) ([07887a5](https://github.com/fgarofalo56/csa-inabox/commit/07887a5297deec917127f69b1b366e7e2777464f))
+* **deploy:** gcc.bicepparam never read LOOM_MSAL_CLIENT_ID at all, so every GCC deploy rendered an empty client id ([#4224](https://github.com/fgarofalo56/csa-inabox/issues/4224)) ([#4225](https://github.com/fgarofalo56/csa-inabox/issues/4225)) ([b8472b3](https://github.com/fgarofalo56/csa-inabox/commit/b8472b3b7fc7b9aa58f725b8328d5e0d2ad9f3eb))
+* **deploy:** key the ACR transient set to the STATUS CODE, not a third sentence ([#4214](https://github.com/fgarofalo56/csa-inabox/issues/4214)) ([#4217](https://github.com/fgarofalo56/csa-inabox/issues/4217)) ([d5a5314](https://github.com/fgarofalo56/csa-inabox/commit/d5a531473fb203d572f76c192df9481acfddc221))
+* **deploy:** the cosign INSTALLER was a single-attempt download at 7 sites, 3 sovereign ([#4156](https://github.com/fgarofalo56/csa-inabox/issues/4156)) ([#4218](https://github.com/fgarofalo56/csa-inabox/issues/4218)) ([21e3e2c](https://github.com/fgarofalo56/csa-inabox/commit/21e3e2c3ce2cc2d972414f7222377b766131cc66))
+* eight measured backlog defects across brain history, catalog, audit and the CI guards ([#4204](https://github.com/fgarofalo56/csa-inabox/issues/4204)) ([be32a57](https://github.com/fgarofalo56/csa-inabox/commit/be32a5743b9e309bd1e725beb654d3603945c819))
+* **gov:** every Azure Government caller DISCARDED the ACR data-plane verdict ([#4079](https://github.com/fgarofalo56/csa-inabox/issues/4079)) ([#4227](https://github.com/fgarofalo56/csa-inabox/issues/4227)) ([7e3f807](https://github.com/fgarofalo56/csa-inabox/commit/7e3f807fc6a78543e7477b91ea41513fe1e554f5))
+* **guards:** seven measured defects across CI, brain-graph, route-authz and the Power Platform transport ([#4205](https://github.com/fgarofalo56/csa-inabox/issues/4205)) ([b33532b](https://github.com/fgarofalo56/csa-inabox/commit/b33532b649805c18e9cf52148946dde4551f14ec))
+* **loom:** nine measured defects — a Gov probe with five blind gates, a source type that could never be added, and a picker offering profiles the environment refuses ([#4211](https://github.com/fgarofalo56/csa-inabox/issues/4211)) ([7319b84](https://github.com/fgarofalo56/csa-inabox/commit/7319b8437bd440a9136e4e32401de2c99000e4c5))
+* **loom:** the Estate power button could never arm, and the Brain was linked from nowhere ([#4221](https://github.com/fgarofalo56/csa-inabox/issues/4221), [#4222](https://github.com/fgarofalo56/csa-inabox/issues/4222)) ([#4223](https://github.com/fgarofalo56/csa-inabox/issues/4223)) ([192cbf4](https://github.com/fgarofalo56/csa-inabox/commit/192cbf40b8d214bce73fcafaa36c0647eebf8ec6))
+* six measured backlog defects — a drift verdict read off the request template, an install that reported success over a lost write, and a raw ARM 404 shown to admins ([#4202](https://github.com/fgarofalo56/csa-inabox/issues/4202)) ([e9781ae](https://github.com/fgarofalo56/csa-inabox/commit/e9781aead5a0ff4191e50c7295e05aae4a1a9f1e))
+* twelve triaged backlog defects, each measured before and after ([#4215](https://github.com/fgarofalo56/csa-inabox/issues/4215)) ([f886177](https://github.com/fgarofalo56/csa-inabox/commit/f8861771cee0d08e0709a62bcbc3acfae3bc0ce6))
+
 ## [0.103.4](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.103.3...csa-inabox-v0.103.4) (2026-08-30)
 
 
