@@ -1,4 +1,6 @@
 import { describe, it, expect, afterEach } from 'vitest';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import {
   resolveFineTuneBackend,
   fineTuneConfigGate,
@@ -163,5 +165,106 @@ describe('fine-tuning-client — resulting-model safety-eval decision', () => {
   it('notes when Content Safety was not configured', () => {
     const d = safetyEvalDecision(summary({}), { contentSafetyConfigured: false });
     expect(d.reason).toMatch(/Content Safety is not configured/i);
+  });
+});
+
+/**
+ * #3562 — "Load failed — API version not supported" on every open of a
+ * fine-tuning job.
+ *
+ * Live repro (2026-08-15 V&V sprint, item `vnv-finetune-01`): the Overview tab —
+ * the FIRST thing a user sees — reported a backend failure on the Azure-native
+ * DEFAULT path, persisting across Reload. The transport lives one module over in
+ * `foundry-cs-client.ts`, which is what this block reads.
+ *
+ * THE INVARIANT IS ROUTE ↔ VERSION, NOT A SPELLING. `/openai/v1/...` is the
+ * Foundry Models v1 API surface and its `api-version` accepts exactly `v1` or
+ * `preview`; a DATED value is rejected. Grounded in Learn:
+ *   learn.microsoft.com/rest/api/microsoft-foundry/azureopenai/fine-tuning
+ *     "api-version | query | No | string. Possible values: `v1`, `preview`"
+ *   learn.microsoft.com/azure/ai-foundry/openai/reference-preview-latest
+ *     "GET {endpoint}/openai/v1/fine_tuning/jobs?api-version=preview"
+ * The legacy `/openai/...` routes (no `/v1`) DO take a dated version, which is
+ * why `/openai/batches` keeps one — so the assertion is scoped to the route, not
+ * applied to the file.
+ *
+ * WHY THIS IS A SOURCE-SHAPE ASSERTION, STATED RATHER THAN DRESSED UP. It reads
+ * `foundry-cs-client.ts` and checks which constant each `/openai/v1` URL builder
+ * interpolates. It is NOT an in-browser or live-Azure receipt: no request was
+ * issued against a real AOAI account in this change, and the live surface is
+ * therefore UNVERIFIED here. What it does prove is that the defect's exact
+ * shape — a dated version on the v1 route — cannot come back silently, and it
+ * covers the whole CLASS (evals, files, fine-tuning), not just the one constant
+ * that was wrong.
+ */
+describe('#3562 — every /openai/v1 call site pairs with a v1-surface api-version', () => {
+  const SRC_PATH = join(__dirname, '..', 'foundry-cs-client.ts');
+  const src = readFileSync(SRC_PATH, 'utf8').replace(/\r\n/g, '\n');
+
+  /** `const NAME = process.env.X || 'value';` → NAME → value. */
+  function apiVersionDefaults(text: string): Record<string, string> {
+    const out: Record<string, string> = {};
+    const re = /^const (AOAI_\w+_API|CS_API) = (?:process\.env\.\w+ \|\| )?'([^']+)';$/gm;
+    let m: RegExpExecArray | null;
+    while ((m = re.exec(text)) !== null) out[m[1]!] = m[2]!;
+    return out;
+  }
+
+  /** Every `${endpoint}/openai/…?api-version=${CONST}` builder, as (route, const). */
+  function callSites(text: string): Array<{ route: string; constName: string }> {
+    const out: Array<{ route: string; constName: string }> = [];
+    const re = /\$\{endpoint\}(\/openai\/[^`]*?)api-version=\$\{(\w+)\}/g;
+    let m: RegExpExecArray | null;
+    while ((m = re.exec(text)) !== null) out.push({ route: m[1]!, constName: m[2]! });
+    return out;
+  }
+
+  const DATED = /^\d{4}-\d{2}-\d{2}/;
+
+  it('POPULATION: the source was read and both parsers found real subjects', () => {
+    // A parser that matched nothing would make every assertion below vacuously
+    // true — the exact "green over an empty set" this repo keeps rediscovering.
+    expect(src.length).toBeGreaterThan(1000);
+    const versions = apiVersionDefaults(src);
+    expect(Object.keys(versions)).toEqual(
+      expect.arrayContaining(['AOAI_EVALS_API', 'AOAI_FT_API', 'AOAI_BATCH_API']),
+    );
+    const sites = callSites(src);
+    expect(sites.length).toBeGreaterThanOrEqual(4);
+    // The specific builder the issue is about is in the population, by route.
+    expect(sites.some((s) => s.route.startsWith('/openai/v1') && s.constName === 'AOAI_FT_API')).toBe(true);
+  });
+
+  it('CONTROL: the dated-version matcher fires, so a clean result is not a broken regex', () => {
+    expect(DATED.test('2025-04-01-preview')).toBe(true); // the value that broke it
+    expect(DATED.test('2024-10-01')).toBe(true);
+    expect(DATED.test('preview')).toBe(false);
+    expect(DATED.test('v1')).toBe(false);
+  });
+
+  it('no /openai/v1 builder uses a DATED api-version', () => {
+    const versions = apiVersionDefaults(src);
+    const offenders = callSites(src)
+      .filter((s) => s.route.startsWith('/openai/v1'))
+      .filter((s) => DATED.test(versions[s.constName] ?? ''))
+      .map((s) => `${s.route} uses ${s.constName}='${versions[s.constName]}'`);
+    expect(offenders).toEqual([]);
+  });
+
+  it("the fine-tuning default is a v1-surface value, and it is still overridable", () => {
+    const versions = apiVersionDefaults(src);
+    expect(['preview', 'v1']).toContain(versions.AOAI_FT_API);
+    // The override must survive: `preview` moves under Microsoft and an operator
+    // pinning `v1` must not need this file redeployed.
+    expect(src).toContain('process.env.LOOM_AOAI_FT_API_VERSION');
+  });
+
+  it('the LEGACY /openai routes keep their dated version — the fix is scoped, not blanket', () => {
+    // The other direction. A "just make everything preview" edit would break the
+    // batches surface, which has no `/v1` segment and does take a dated version.
+    const versions = apiVersionDefaults(src);
+    const batches = callSites(src).find((s) => s.route.startsWith('/openai/batches'));
+    expect(batches, 'the batches builder is gone; this assertion is looking at nothing').toBeTruthy();
+    expect(DATED.test(versions[batches!.constName] ?? '')).toBe(true);
   });
 });

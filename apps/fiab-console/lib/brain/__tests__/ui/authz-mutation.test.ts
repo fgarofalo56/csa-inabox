@@ -99,11 +99,32 @@ function adminOnly403() {
   return NextResponse.json({ ok: false, error: 'admin_only' }, { status: 403 });
 }
 
+/**
+ * #4019 — THE FIXTURE CARRIES THE VERB.
+ *
+ * These helpers built `{ nextUrl }` and nothing else, so `req.method` was
+ * `undefined` in every spec on this path. A bypass inside the shared
+ * `withTenantAdmin` chokepoint keyed to the HTTP verb —
+ *
+ *     const gate = req.method === 'GET' ? null : requireTenantAdmin(sctx.session);
+ *
+ * — is then invisible here, because `undefined === 'GET'` is false and the gate
+ * keeps firing exactly as these tests expect. Measured on the same wrapper in
+ * the #3993 review: verb-free fixture, POST-keyed bypass, RC=0 ESCAPED;
+ * verb-carrying fixture, same bypass, RC=1 CAUGHT.
+ *
+ * The verb passed is the one each route actually exports, so these two helpers
+ * cover this route pair's whole verb surface — Next returns 405 for anything
+ * else. The five-verb sweep over the wrapper itself lives in
+ * `lib/api/__tests__/route-toolkit.test.ts`, which is the assertion of record
+ * for the verbs no route here exports.
+ */
 function getReq() {
-  return { nextUrl: new URL('http://x/api/admin/brain/graph') } as never;
+  return { method: 'GET', nextUrl: new URL('http://x/api/admin/brain/graph') } as never;
 }
 function postReq(body: unknown) {
   return {
+    method: 'POST',
     nextUrl: new URL('http://x/api/admin/brain/proposals'),
     json: async () => body,
   } as never;
