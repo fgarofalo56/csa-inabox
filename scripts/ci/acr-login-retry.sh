@@ -229,7 +229,35 @@ fi
 # PERMDENY_LINK_MSG fixtures go red if anyone widens a needle far enough to
 # swallow it. The sibling can afford bare `DENIED` because its own failure mode
 # is "report unreachable and continue"; this one exits 1 and stops the roll.
-TRANSIENT='CONNECTIVITY_REFRESH_TOKEN_ERROR|Response code: 403|status: 403 Forbidden|is not allowed access|aka\.ms/acr/firewall|try running .az login. again|TooManyRequests|temporarily unavailable|Connection aborted|connection reset|connection refused|no route to host|host is not reachable|TLS handshake|i/o timeout|ServiceUnavailable|GatewayTimeout|502 Bad Gateway|504|503'
+#
+# WHY THE STATUS CODES ARE ONE TOKEN-BOUNDED ALTERNATE AND NOT A LIST OF
+# SENTENCES (#4214). #4055 added `status: 403 Forbidden` alongside the existing
+# `Response code: 403`, which fixed the wording that had just failed a P0 roll.
+# But that was the SECOND wording of this refusal to defeat this set, and the
+# fix was a third sentence. Counting the rounds:
+#
+#   round 1  Response code: 403            az CLI wording
+#   round 2  is not allowed access         daemon wording (a) - defeated round 1
+#   round 3  status: 403 Forbidden         daemon wording (b) - defeated round 2
+#
+# Each round bought exactly one more wording. The refusal is not a sentence, it
+# is an HTTP status, and every layer that reports it - CLI, daemon, registry -
+# rewords the prose while preserving the code. So the code itself is the needle
+# now, and a fourth wording carrying 403 is already covered.
+#
+# BOUNDED, because a bare `403` alternate is not safe. The previous `504|503`
+# alternates were bare, and a manifest digest is hex: `sha256:be403fa9...`
+# contains `403`, so a permanent "no such manifest" error would have been retried
+# for the full budget and then reported as a transient. Requiring a
+# non-alphanumeric on both sides admits `: 403 Forbidden` and `code: 403.` while
+# refusing `be403fa9`. The digest case is pinned by a breadth control in
+# test-acr-login-retry.sh, in the same spirit as #4055's other two.
+#
+# This does NOT widen the set to every denial, which is the property the two
+# PERMDENY fixtures exist to hold: a NETWORK refusal answers with a status code,
+# an AUTHORIZATION refusal answers with prose. Neither PERMDENY fixture carries a
+# status code, so both stay PERMANENT under this change.
+TRANSIENT='CONNECTIVITY_REFRESH_TOKEN_ERROR|(^|[^0-9A-Za-z])(403|502|503|504)([^0-9A-Za-z]|$)|is not allowed access|aka\.ms/acr/firewall|try running .az login. again|TooManyRequests|temporarily unavailable|Connection aborted|connection reset|connection refused|no route to host|host is not reachable|TLS handshake|i/o timeout|ServiceUnavailable|GatewayTimeout'
 
 LAST=""
 # Report the time this actually took, not ATTEMPTS*BACKOFF — the loop never
