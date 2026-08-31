@@ -251,9 +251,36 @@ function modelTotals(byDay: DayRow[]): ModelRow[] {
   return Array.from(m.values()).sort((a, b) => b.totalTokens - a.totalTokens);
 }
 
-/** Sum tokens by day (across persona/model) for the trend sparkline. */
-function dailyTotals(byDay: DayRow[]): Array<{ day: string; totalTokens: number; calls: number }> {
+/** `YYYY-MM-DD` for a Date, in UTC — the same key shape `byDay.day` carries. */
+function utcDayKey(t: number): string {
+  return new Date(t).toISOString().slice(0, 10);
+}
+
+/**
+ * Sum tokens by day (across persona/model) for the trend sparkline, ZERO-FILLED
+ * across the whole `days` window.
+ *
+ * WHY THE ZERO-FILL IS LOAD-BEARING (#3740). The sparkline renders one
+ * `flex: 1` bar per element of this array, so the array's LENGTH is the chart's
+ * x-axis. Returning only the days that had events made a window with one active
+ * day render as a SINGLE bar at `flex: 1` and `height: 100%` — one solid block
+ * filling the box edge to edge, which reads as thirty days of sustained usage
+ * when the truth is one spike and twenty-nine zeros. That is the chart
+ * asserting the opposite of its data.
+ *
+ * The window is built from `days` back to today inclusive, in UTC, because the
+ * API's `day` keys are UTC date strings. A row whose day falls OUTSIDE the
+ * window is still summed and emitted — dropping it would silently lose real
+ * data if the caller's `days` and the API's window ever disagreed.
+ */
+function dailyTotals(byDay: DayRow[], days: number): Array<{ day: string; totalTokens: number; calls: number }> {
   const m = new Map<string, { day: string; totalTokens: number; calls: number }>();
+  const span = Math.max(1, Math.floor(days) || 1);
+  const todayUtc = Date.parse(`${utcDayKey(Date.now())}T00:00:00.000Z`);
+  for (let i = span - 1; i >= 0; i--) {
+    const day = utcDayKey(todayUtc - i * 86_400_000);
+    m.set(day, { day, totalTokens: 0, calls: 0 });
+  }
   for (const d of byDay) {
     const cur = m.get(d.day) || { day: d.day, totalTokens: 0, calls: 0 };
     cur.totalTokens += d.totalTokens;
@@ -300,8 +327,10 @@ export function CopilotUsagePane({ days = 30 }: { days?: number }) {
   const data = resp?.ok ? resp.data ?? null : null;
 
   const personaMax = Math.max(1, ...((data?.byPersona || []).map((p) => p.totalTokens)));
-  const daily = useMemo(() => (data ? dailyTotals(data.byDay) : []), [data]);
+  const daily = useMemo(() => (data ? dailyTotals(data.byDay, days) : []), [data, days]);
   const maxDay = Math.max(1, ...daily.map((d) => d.totalTokens));
+  /** Days in the window that actually carried tokens — see the trend Section. */
+  const activeDays = useMemo(() => daily.filter((d) => d.totalTokens > 0).length, [daily]);
   const models = useMemo(() => (data ? modelTotals(data.byDay) : []), [data]);
 
   const modelColumns = useMemo<LoomColumn<ModelRow>[]>(() => [
@@ -385,10 +414,17 @@ export function CopilotUsagePane({ days = 30 }: { days?: number }) {
 
           <Section title={`Daily token trend (${days}d)`}>
             <div className={s.panel}>
-              {daily.length === 0 && (
+              {/*
+                `dailyTotals` now zero-fills the window, so `daily.length` is
+                `days` whenever the fetch resolved — it can no longer stand in
+                for "there is nothing to show". `activeDays` is the honest
+                predicate: an all-zero window still says so in words instead of
+                rendering thirty identical floor-height bars.
+              */}
+              {activeDays === 0 && (
                 <Caption1 className={s.muted}>No daily activity in this window yet.</Caption1>
               )}
-              {daily.length > 0 && (
+              {activeDays > 0 && (
                 <div className={s.sparkRow}>
                   {daily.map((d) => (
                     <div

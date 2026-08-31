@@ -352,12 +352,24 @@ yet built and are intentionally **not** documented here as parity.
 | Domains | `domains.md` | **A** | Cosmos `tenant-settings` + Purview (gated) | Purview ⚠️ |
 | Audit logs | `audit-logs.md` | **A** | Cosmos `audit-log` | — |
 | Refresh summary & schedule | `refresh-summary.md` | **A** | Power BI REST (opt-in) | PBI-bound ⚠️ |
-| Usage & adoption | `usage-adoption.md` | **A** | Cosmos aggregates | — |
+| Usage & adoption | `usage-adoption.md` | **B** (re-verified 2026-08-29, #3738) | Cosmos aggregates + Log Analytics | LA trend ⚠️ / adoption ⚠️ / embed ⚠️ |
 | Embed codes | `embed-codes.md` | **B** | PBI REST GenerateToken + `powerbi-client-react` | PBI-bound ⚠️ / Publish-to-web admin ⚠️ |
 | Org visuals & branding | `org-visuals.md` | **B+** | Cosmos `tenant-themes` + ADLS (domain images) | custom `.pbiviz` ⚠️ |
 
-**Grade distribution (rev.5):** 14 × A / A−, 5 × B+ / B. **Zero D, zero F.
-Zero ❌ in any of the 19 docs** (grep-clean), backend-per-control on every row.
+**Grade distribution (rev.5, amended 2026-08-29):** 13 × A / A−, 6 × B+ / B.
+**Zero D, zero F. Zero ❌ in any of the 19 docs** (grep-clean),
+backend-per-control on every row.
+
+> **Amendment, 2026-08-29 (#3738).** `usage-adoption.md` moved A → B on
+> re-verification: the rev.5 doc described six capabilities and claimed "zero ⚠️
+> gates" for a page that today is 751 lines and carries three honest gates
+> (Active users, Feature adoption, Open analytics — all Log-Analytics/embed
+> env-gated), plus a real defect against it (#3737, fixed but not yet deployed).
+> The re-verification was a code + test read, **not** a live browser walk, which
+> is itself why the grade is not A: `ux-baseline.md` G1 makes the browser receipt
+> a precondition of an A. Same stale-doc cohort as #3725 — a rev.5 grade is a
+> claim about a snapshot, and every one of these 19 rows is due the same
+> treatment.
 The two surfaces with material Power-BI-tenant gaps (public Publish-to-web admin,
 custom `.pbiviz` org visuals) are the *less* governable Power BI features; Loom's
 authenticated-embed and tenant/domain-branding paths deliver the parity today and
