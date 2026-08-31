@@ -694,6 +694,13 @@ export const WATCHED = [
     boundary: 'GCC',
     why: 'The ONLY workflow that applies platform/fiab/bicep/main.bicep to the GCC estate (Azure public cloud under GCC M365 identity). It is `disabled_manually` as of 2026-08-08 — its 08:00 UTC cron therefore cannot fire, so GCC accrues drift forever and nothing anywhere said so. Registering it is what turns "switched off" from an invisible state into a named row: classifyWorkflowState reports the disablement separately from the drift, because "the reconcile is off" and "the reconcile is behind" have different fixes.',
     paths: [
+      // #4224 - this lane now resolves the estate's existing Entra app-reg
+      // client id BEFORE rendering the console template, like the three sibling
+      // console lanes already did. That makes the resolver a deploy source of
+      // THIS entry: a commit to it changes whether gcc renders a real client id
+      // or an empty one, and an empty one takes sign-in dark. check-deploy-paths-
+      // coverage flagged its absence the moment the step was added.
+      'scripts/csa-loom/resolve-msal-client-id.sh',
       '.github/workflows/deploy-fiab-gcc.yml',
       'platform/fiab/bicep/main.bicep',
       'platform/fiab/bicep/modules/admin-plane/**',
