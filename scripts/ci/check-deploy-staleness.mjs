@@ -929,6 +929,15 @@ export const WATCHED = [
       // leaves an artifact in ACR. check-deploy-paths-coverage flagged its
       // absence the moment the four bare `cosign sign` sites adopted it.
       'scripts/ci/cosign-sign-retry.sh',
+      // The INSTALLER for that same signer (#4156). Same argument one step
+      // earlier: if cosign is not on the runner, nothing is signed and nothing
+      // is verified — so a commit here can decide whether this lane deploys at
+      // all, exactly as one to cosign-sign-retry.sh can. It also pins the cosign
+      // VERSION, which is the signature format the roll gates later verify
+      // against. check-deploy-paths-coverage flagged its absence the moment the
+      // seven bare `sigstore/cosign-installer` sites adopted it — the same way
+      // it caught the signer above.
+      'scripts/ci/cosign-install-retry.sh',
       // refs #2682 — the upstream-image ACR mirror. BOTH halves are deploy
       // sources of this lane and BOTH must be watched:
       //   * the SCRIPT is what the workflow executes (check-deploy-paths-coverage
