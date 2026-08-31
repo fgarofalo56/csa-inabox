@@ -300,6 +300,17 @@ jobs:
       - name: deploy-paths-coverage (the staleness watchdog measures what it claims — #2775)
         if: ${{ !cancelled() }}
         run: node scripts/ci/check-deploy-paths-coverage.mjs
+      # An Entra app registration is a Graph object ARM cannot create, so it is
+      # minted once by the post-deploy bootstrap and only RE-READ by later
+      # deploys. A lane that APPLIES the console template without resolving it
+      # first renders an EMPTY client id — and a declarative ACA template drops
+      # every env var it does not declare, taking sign-in dark and sealing the
+      # Iceberg catalog behind the `.invalid` sentinel audience nothing can mint.
+      # Three console lanes resolved first; gcc neither resolved nor even read the
+      # variable in its params file (#4224).
+      - name: 'msal-resolver-before-deploy (an empty client id takes sign-in dark — #4224)'
+        if: ${{ !cancelled() }}
+        run: node scripts/ci/check-msal-resolver-before-deploy.mjs
       # Reachability says the script is INVOKED. This says the command it invokes
       # can SUCCEED: secrets declared before they are referenced, the mutating
       # create/update not swallowing its own stderr, the container named. All three

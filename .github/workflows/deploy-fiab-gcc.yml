@@ -521,6 +521,54 @@ jobs:
             --subscription "$DEPLOY_SUB" \
             --rg "rg-csa-loom-admin-${AZURE_LOCATION}"
 
+      # ── RESOLVE THE EXISTING MSAL CLIENT ID BEFORE ANY TEMPLATE RENDER ────
+      # #4224. gcc.bicepparam carries the same line every other params file does:
+      #     param loomMsalClientId = readEnvironmentVariable('LOOM_MSAL_CLIENT_ID', '')
+      # An Entra app registration is a Microsoft Graph object that ARM cannot
+      # create, so it is minted by the post-deploy bootstrap and only RE-read
+      # here. With this env unset the template renders an EMPTY client id, and a
+      # declarative ACA template DROPS every env var it does not declare — which
+      # blanks LOOM_MSAL_CLIENT_ID (sign-in dark) and empties LOOM_UNITY_CLIENT_ID
+      # / LOOM_UNITY_AUDIENCE with it, sealing the Iceberg catalog behind the
+      # `.invalid` sentinel audience that no tenant can mint.
+      #
+      # deploy-fiab-commercial (:576), -gcch (:348) and -il5 (:636) all resolve
+      # first. This lane was the only one that did not — a latent deploy blocker
+      # rather than a live one, because GCC is `disabled_manually` with zero
+      # credentials (#4071) and has not run. It would have bitten on the first
+      # run after re-enablement, which is the worst moment to discover it.
+      #
+      # BEFORE THE WHAT-IF, not merely before Provision: what-if carries no `if:`,
+      # runs on every trigger, and renders the same template. A preflight must
+      # precede the first step that READS the value, not the first that writes it
+      # — the #3880 lesson from the ADX preflight above.
+      - name: Resolve the existing MSAL client id (sign-in durability — #4224)
+        env:
+          FALLBACK_CLIENT_ID: ${{ vars.LOOM_MSAL_CLIENT_ID }}
+        run: |
+          set -euo pipefail
+          # NOT `|| true`: the resolver distinguishes ABSENT (exit 0, empty — a
+          # genuinely fresh subscription) from UNKNOWN (exit 3 — a read FAILED).
+          # Swallowing exit 3 renders an empty client id, which is the outcome
+          # this step exists to prevent (deploy-integrity R7 — an unknown must
+          # never be spent as a negative).
+          if CID="$(bash scripts/csa-loom/resolve-msal-client-id.sh --rg "rg-csa-loom-admin-${AZURE_LOCATION}")"; then
+            RESOLVE_RC=0
+          else
+            RESOLVE_RC=$?
+          fi
+          if [ "$RESOLVE_RC" -ne 0 ]; then
+            echo "::error::Could not read this estate's Entra app registration (resolver exit $RESOLVE_RC). This is NOT 'no registration exists' — the reads themselves failed. Proceeding would render an empty LOOM_MSAL_CLIENT_ID, drop it from the Container App and take sign-in dark. Re-run once the read succeeds."
+            exit 1
+          fi
+          if [ -z "${CID:-}" ]; then CID="${FALLBACK_CLIENT_ID:-}"; fi
+          echo "LOOM_MSAL_CLIENT_ID=${CID}" >> "$GITHUB_ENV"
+          if [ -n "${CID:-}" ]; then
+            echo "::notice::MSAL client id resolved for this estate — sign-in stays wired across this deploy."
+          else
+            echo "::warning::No Entra app registration for this estate yet. Sign-in stays unconfigured until csa-loom-post-deploy-bootstrap (bootstrap-msal-app-reg.sh) runs; it records the client id in Key Vault so later deploys stay pinned."
+          fi
+
       - name: Bicep what-if
         run: |
           az deployment sub what-if \
