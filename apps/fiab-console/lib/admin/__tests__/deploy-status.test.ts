@@ -94,19 +94,77 @@ describe('classifyEstateDrift — how far behind main is the image serving this 
     expect(e.commitsBehind).toBe(13);
     expect(e.severity).toBe('error');
     expect(e.behindForMinutes).toBe(936);
-    expect(e.detail).toMatch(/roll path has stopped/);
+    // #4160: NO caller supplied `rollInFlight`, so nothing established WHY the
+    // estate is behind. The verdict still fires; the CAUSE is not asserted.
+    // This assertion used to be `toMatch(/roll path has stopped/)` — pinning a
+    // claim derived from a clock alone, which is deploy-integrity R7.
+    expect(e.rollInFlight).toBeNull();
+    expect(e.detail).toMatch(/whether a roll is in flight right now was NOT measured/);
+    expect(e.detail).not.toMatch(/roll path has stopped/);
     expect(e.compareUrl).toBe(`https://github.com/${REPO}/compare/${SHA}...main`);
   });
 
-  it('the SAME 13 commits, one minute old, is a roll in flight and reads ok', () => {
+  it('#4160 rollInFlight=false is the ONLY value that may say the roll path stopped', () => {
+    // MEASURED-AND-NONE-RUNNING. The lanes were queried and answered "no", so
+    // the causal claim is established and may be made.
+    const e = classifyEstateDrift({
+      buildSha: SHA, repo: REPO, now: NOW, compare: behindBy(13, 936),
+      rollInFlight: false, rollDetail: 'loom-roll-and-validate: 0 runs queued or in progress',
+    });
+    expect(e.severity).toBe('error');
+    expect(e.rollInFlight).toBe(false);
+    expect(e.detail).toMatch(/no roll is in flight/);
+    expect(e.detail).toMatch(/roll path has stopped applying main/);
+    expect(e.detail).toContain('loom-roll-and-validate: 0 runs queued or in progress');
+  });
+
+  it('#4160 a roll IS in flight past the grace: still error, but the claim is NOT made', () => {
+    // THE ARM WITHOUT WHICH THE FIX IS UNFALSIFIABLE. On 2026-08-28 a roll for
+    // 5a5572aa ran 06:27–06:40 UTC; during those ~13 minutes this surface would
+    // have told the operator the roll path had stopped. Delete the rollInFlight
+    // branch and re-emit the old sentence and this case goes red.
+    const e = classifyEstateDrift({
+      buildSha: SHA, repo: REPO, now: NOW, compare: behindBy(13, 936),
+      rollInFlight: true, rollDetail: 'run 32225337320 in_progress',
+    });
+    expect(e.rollInFlight).toBe(true);
+    expect(e.detail).toMatch(/a roll IS in flight/);
+    expect(e.detail).toContain('run 32225337320 in_progress');
+    expect(e.detail).not.toMatch(/roll path has stopped/);
+    // `behind` is UNCONDITIONAL. Suppressing the verdict on an in-flight roll
+    // would turn an R7 fix into a gate that a long roll can silence — this
+    // repo's most-repeated defect wearing the fix's clothes.
+    expect(e.state).toBe('behind');
+    expect(e.severity).toBe('error');
+    expect(e.commitsBehind).toBe(13);
+  });
+
+  it('#4160 an undefined/garbage rollInFlight is normalised to null, never to false', () => {
+    // A fabricated `false` would hand the strongest claim to the branch that
+    // measured nothing — the exact collapse of "nobody looked" into "no roll".
+    for (const bad of [undefined, null, 0 as unknown as boolean, 'false' as unknown as boolean]) {
+      const e = classifyEstateDrift({
+        buildSha: SHA, repo: REPO, now: NOW, compare: behindBy(4, 936), rollInFlight: bad,
+      });
+      expect(e.rollInFlight).toBeNull();
+      expect(e.detail).not.toMatch(/roll path has stopped/);
+    }
+  });
+
+  it('the SAME 13 commits, one minute old, is inside the roll window and reads ok', () => {
     // It is the TIME that fires, not the count. Delete the grace and this goes
     // red; reintroduce a count band and the case above does.
+    //
+    // #4160: the headline used to read "(a roll is in flight)" — the same R7
+    // error one branch down, since nothing had been queried here either. What
+    // was measured is the WINDOW, so the window is what it names.
     const e = classifyEstateDrift({
       buildSha: SHA, repo: REPO, now: NOW, compare: behindBy(13, 1),
     });
     expect(e.state).toBe('behind');
     expect(e.severity).toBe('ok');
-    expect(e.headline).toMatch(/roll is in flight/);
+    expect(e.headline).toMatch(/inside the \d+-minute roll window/);
+    expect(e.headline).not.toMatch(/a roll is in flight/);
   });
 
   it('ONE commit behind past the grace is an ERROR — there is no count band', () => {

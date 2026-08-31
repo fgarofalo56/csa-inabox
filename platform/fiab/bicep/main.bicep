@@ -1032,6 +1032,9 @@ param loomPlanBackingSqlServer string = ''
 @description('audit-T64: Azure SQL database name for the Plan (preview) writeback store (LOOM_PLAN_BACKING_SQL_DATABASE). Pairs with loomPlanBackingSqlServer; grant the Console UAMI db_ddladmin + db_datawriter on it (see modules/admin-plane/main.bicep plan-backing notes). Empty → Cosmos-only.')
 param loomPlanBackingSqlDatabase string = ''
 
+@description('#4161: base URL of the posture-refresh Azure Function (LOOM_POSTURE_FUNCTION_URL), e.g. https://func-loom-posture-refresh-<hash>.azurewebsites.net. Backs the Govern tab\'s on-open data-owner posture pre-warm; empty leaves the honest gate and the Govern view still computes posture LIVE from Cosmos. The post-deploy bootstrap deploys the Function and sets this value out-of-band on loom-console with `az containerapp update`; THAT assignment does not survive the next full re-render of this template, which is why the value must also be supplied here. Same defect class as the adxConfig / aasEnabled gaps below: modules/admin-plane/main.bicep has declared `param loomPostureFunctionUrl` since the Function shipped, but nothing passed it from this top level, so the path the capability spec names as its provisionedBy did not exist and setting it in a bicepparam was a silent no-op.')
+param loomPostureFunctionUrl string = ''
+
 @description('Resource group where the slate-app / workshop-app Publish routes create Azure Static Web Apps (LOOM_SWA_RESOURCE_GROUP). Empty (default) → the admin-plane RG. The Console UAMI is granted Website Contributor at this RG scope (modules/admin-plane/swa-publish-rbac.bicep). Folded into byoExisting.swaResourceGroup — admin-plane/main.bicep sits at the ARM 256-param ceiling.')
 param loomSwaResourceGroup string = ''
 
@@ -1268,6 +1271,16 @@ module adminPlane 'modules/admin-plane/main.bicep' = if (deployAdminPlane) {
     // delivery Logic App never deployed even when intended. Wire them through.
     aasEnabled: aasEnabled
     reportSubscriptionsEnabled: reportSubscriptionsEnabled
+    // #4161 — same gap again, one param over. `svc-posture-refresh` declares its
+    // provisionedBy as "azure-functions/posture-refresh/deploy/main.bicep →
+    // admin-plane param loomPostureFunctionUrl (apps[] env)". The admin-plane
+    // param and the apps[] emission both exist; the arrow between them did not,
+    // so the only writer of LOOM_POSTURE_FUNCTION_URL was the bootstrap's
+    // out-of-band `az containerapp update` — which every subsequent full deploy
+    // of this template silently reverted to ''. MEASURED 2026-08-29: bootstrap
+    // last succeeded 2026-08-12, deploy-fiab-commercial succeeded on schedule
+    // 2026-08-27 and 2026-08-29, and the capability read BLOCKED on 2026-08-28.
+    loomPostureFunctionUrl: loomPostureFunctionUrl
     // V1 — synthetic-journey monitor + future observability settings (one bag).
     observabilityConfig: observabilityConfig
     // I1 per-workspace identity settings (R0 bag → typed bag on the module;

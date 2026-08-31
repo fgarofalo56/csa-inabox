@@ -704,6 +704,24 @@ jobs:
       #  to the SAME digest the preflight resolved, i.e. nothing re-pointed the
       #  tag underneath this run. It is not a claim about the running container's
       #  own digest.
+      #
+      #  AN UNKNOWN IS NOT A NEGATIVE (#4196, and the failure #4190 was filed off).
+      #  Measured, run 33234836122 on 2026-08-29: the lease acquire hit its 25m
+      #  bounded wait against a near-simultaneous sibling (33233074257), this step
+      #  exited 1, and the rollback gate then REVERTED a roll whose own gates read
+      #  `health=success, verify=success`. The registry could not be READ. That is
+      #  not evidence the tag moved, and rolling back on it converts a lock
+      #  contention event into an estate change — strictly worse than leaving a
+      #  healthy, verified roll alone, since the restore is by the same tag whose
+      #  digest could not be read either. Two verdicts, two consequences:
+      #
+      #    verdict=mismatch  the tag genuinely moved   -> exit 1 -> ROLL BACK
+      #    verdict=unknown   the registry was unreadable -> exit 0, images LEFT
+      #                      IN PLACE, stated loudly and carried into the summary
+      #
+      #  `unknown` deliberately matches what the SKIPPED sibling below already
+      #  does for the same epistemic state, rather than inventing a third
+      #  behaviour for "could not prove it".
       - name: Re-assert the tag still resolves to the preflighted digest
         id: digest
         if: steps.preflight.outputs.digests_complete == 'true'
@@ -722,12 +740,15 @@ jobs:
           trap 'release_lease' EXIT
 
           if ! LOOM_ACR_LEASE_TTL_MINUTES=20 bash scripts/csa-loom/acr-firewall-lease.sh acquire --acr "$ACR"; then
-            echo "::error::Could not acquire the ACR firewall lease to re-read '$ACR'. The digest assertion could not be performed, so this run cannot claim the tag is unchanged. Failing closed."
-            exit 1
+            echo "verdict=unknown" >> "$GITHUB_OUTPUT"
+            echo "release_confirmed=true" >> "$GITHUB_OUTPUT"
+            echo "::warning::Could not acquire the ACR firewall lease to re-read '$ACR' within the bounded wait, so the digest re-assertion DID NOT RUN. This run does not claim the tag is unchanged — and it does not claim it moved either, because it never read the registry. The roll's own health and live-image verification above are unaffected and still stand, so the rolled images are LEFT IN PLACE. Re-dispatch this workflow once the lease holder has finished if you need the assertion."
+            exit 0
           fi
           LEASE_HELD=1
 
-          FAILED=0
+          MISMATCH=0
+          UNREADABLE=0
           while IFS=$'\t' read -r REPO WANT_DIGEST; do
             [ -n "$REPO" ] || continue
             set +e
@@ -735,20 +756,47 @@ jobs:
             RC=$?
             set -e
             if [ "$RC" != "0" ]; then
-              echo "::error::Could not re-resolve ${REPO}:${TAG} (resolver exit $RC). The preflight digest cannot be re-confirmed, so this run will not claim it."
-              FAILED=1
+              echo "::warning::Could not re-resolve ${REPO}:${TAG} (resolver exit $RC). That is a failure to READ the registry, so this run neither re-confirms the preflight digest for this repository nor establishes that it changed."
+              UNREADABLE=1
               continue
             fi
             if [ "$NOW" != "$WANT_DIGEST" ]; then
               echo "::error::${REPO}:${TAG} now resolves to $NOW but the preflight resolved $WANT_DIGEST. The tag was re-pointed while this roll was in flight — the live apps may be running either digest, and this run cannot say which."
-              FAILED=1
+              MISMATCH=1
               continue
             fi
             echo "::notice::${REPO}:${TAG} still resolves to $WANT_DIGEST."
           done < .roll/digests.tsv
 
-          if ! release_lease; then exit 1; fi
-          [ "$FAILED" = "0" ]
+          if release_lease; then
+            echo "release_confirmed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "release_confirmed=false" >> "$GITHUB_OUTPUT"
+          fi
+
+          if [ "$MISMATCH" != "0" ]; then
+            echo "verdict=mismatch" >> "$GITHUB_OUTPUT"
+            echo "::error::A tag named above was re-pointed while this roll was in flight, so which digest the live apps are running is genuinely unknown. The images captured before the roll will be restored."
+            exit 1
+          fi
+          if [ "$UNREADABLE" != "0" ]; then
+            echo "verdict=unknown" >> "$GITHUB_OUTPUT"
+            echo "::warning::At least one repository could not be re-read (named above), so the digest re-assertion is UNPROVEN - not disproven. The roll's health and live-image verification stand, and the rolled images are LEFT IN PLACE."
+            exit 0
+          fi
+          echo "verdict=match" >> "$GITHUB_OUTPUT"
+
+      # REGISTRY SAFETY, not an estate verdict — so it fails the JOB from HERE
+      # rather than from inside the step the rollback gate reads. An unconfirmed
+      # firewall re-lock says nothing about which image the apps are running;
+      # failing the digest step on it would revert a healthy, verified roll for a
+      # reason that is not about the roll (the same unknown-spent-as-a-negative
+      # #4196 is about).
+      - name: The ACR firewall re-lock could not be confirmed
+        if: always() && steps.digest.outputs.release_confirmed == 'false'
+        run: |
+          echo "::error::The ACR firewall lease on '$ACR' was NOT confirmed released after the digest re-assertion. The registry data plane may still be publicly reachable — read its networkRuleSet before doing anything else, and sweep the lease if the holder is dead: scripts/csa-loom/acr-firewall-lease.sh sweep --acr $ACR. The roll itself is health-verified and is deliberately LEFT IN PLACE."
+          exit 1
 
       - name: Digest assertion SKIPPED (state it, never imply it passed)
         if: steps.preflight.outputs.digests_complete != 'true'
@@ -960,6 +1008,10 @@ jobs:
             echo "| roll | ${{ steps.roll.outcome }} |"
             echo "| health | ${{ steps.health.outcome }} |"
             echo "| live-image verification | ${{ steps.verify.outcome }} |"
+            # The VERDICT, not just the outcome. `unknown` exits 0 on purpose
+            # (#4196), so an outcome column alone would render "the registry was
+            # unreadable" as an unqualified success.
+            echo "| digest re-assertion | ${{ steps.digest.outcome }} / verdict=${{ steps.digest.outputs.verdict || 'not-run' }} |"
             echo "| :v0.1 pin | ${{ steps.pin.outcome }} |"
             echo ""
             if [ -s .roll/observed.tsv ]; then

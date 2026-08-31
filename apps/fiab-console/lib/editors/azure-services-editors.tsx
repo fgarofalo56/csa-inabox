@@ -11,7 +11,7 @@ import { clientFetch } from '@/lib/client-fetch';
  * Fluent UI structure.
  */
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Subtitle2, Caption1, Badge, Button, Input, Dropdown, Option, Textarea,
   Tab, TabList, Spinner, Switch, Field,
@@ -98,6 +98,47 @@ interface SparkBatchDTO {
   submitterName?: string;
 }
 
+/**
+ * The COMPLETENESS ENVELOPE the pool runs route returns alongside `sessions`
+ * (spread from `listRecentSparkBatchJobs` — `lib/azure/livy-batch-paging.ts`).
+ * #3731 — this grid kept the rows and dropped the envelope.
+ */
+interface RunsWindow {
+  /** Non-null when a ceiling cut the walk short — the window is INCOMPLETE. */
+  truncatedBy?: 'pages' | 'time' | null;
+  /** Distinct rows the walk actually looked at. */
+  scanned?: number;
+  /** The batch count the walk can stand behind. */
+  total?: number;
+}
+
+/**
+ * #3731 — SURFACE THE INCOMPLETE WINDOW. `walkRecentBatches` is
+ * "correct OR disclosed-incomplete": past `LIVY_MAX_WALK_PAGES` (10 x 20 = 200
+ * rows) it returns the newest rows it could REACH, which on a 1000-batch pool
+ * are not the newest rows that exist. Rendering `sessions` and dropping
+ * `truncatedBy` turns that disclosed partial into a silent wrong answer.
+ *
+ * Renders NOTHING when the window is complete. It does not claim older runs
+ * EXIST — the walk did not establish that (deploy-integrity R7).
+ */
+function RunsWindowBar({ window: w }: { window: RunsWindow | null }) {
+  if (!w || !w.truncatedBy) return null;
+  const ceiling = w.truncatedBy === 'time' ? 'the time budget' : 'the page ceiling';
+  const scanned = Number.isFinite(w.scanned) ? `${w.scanned}` : 'an unrecorded number of';
+  const total = Number.isFinite(w.total) ? ` of ${w.total} the pool reported` : '';
+  return (
+    <MessageBar intent="warning">
+      <MessageBarBody style={{ overflowWrap: 'anywhere', wordBreak: 'break-word', minWidth: 0 }}>
+        <MessageBarTitle>This batch list is incomplete</MessageBarTitle>
+        {`The pool's batch history was cut short by ${ceiling} after ${scanned} batch(es)${total}, `}
+        {'so these are the most recent batches this window could reach — not necessarily the most '}
+        {'recent that exist. A batch missing below has not been shown to be absent.'}
+      </MessageBarBody>
+    </MessageBar>
+  );
+}
+
 // Synapse Spark Big Data pool node sizes (ARM enum) + the GA Spark runtime
 // versions. The live pool's current version is merged in at render so an
 // out-of-list value is never silently dropped from the dropdown.
@@ -110,6 +151,8 @@ export function SynapseSparkPoolEditor({ item, id }: { item: FabricItemType; id:
   const [selected, setSelected] = useState<string>(id);
   const [pool, setPool] = useState<SparkPoolDTO | null>(null);
   const [batches, setBatches] = useState<SparkBatchDTO[]>([]);
+  // #3731 — the completeness envelope that came back WITH those rows.
+  const [batchesWindow, setBatchesWindow] = useState<RunsWindow | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -178,9 +221,12 @@ export function SynapseSparkPoolEditor({ item, id }: { item: FabricItemType; id:
     try {
       const r = await clientFetch(`/api/items/synapse-spark-pool/${encodeURIComponent(name)}/runs?size=20`);
       const j = await r.json();
-      if (!j.ok) { setBatches([]); return; }
+      if (!j.ok) { setBatches([]); setBatchesWindow(null); return; }
       setBatches(j.sessions || []);
-    } catch { setBatches([]); }
+      // #3731 — keep the envelope, not just the rows. Dropping it converts a
+      // walk that DISCLOSED it was cut short into a silent wrong answer.
+      setBatchesWindow({ truncatedBy: j.truncatedBy ?? null, scanned: j.scanned, total: j.total });
+    } catch { setBatches([]); setBatchesWindow(null); }
   }, []);
 
   useEffect(() => { loadPools(); }, [loadPools]);
@@ -504,6 +550,7 @@ export function SynapseSparkPoolEditor({ item, id }: { item: FabricItemType; id:
           )}
           {tab === 'runs' && (
             <div style={{ overflow: 'auto' }}>
+              <RunsWindowBar window={batchesWindow} />
               <Table aria-label="Recent batches" size="small">
                 <TableHeader><TableRow>
                   <TableHeaderCell>Id</TableHeaderCell>
@@ -738,11 +785,33 @@ export function AdfDatasetEditor({ item, id }: { item: FabricItemType; id: strin
     } catch { /* ignore */ }
   }, []);
 
+  // #3564 — ONLY THE NEWEST loadDataset MAY WRITE STATE.
+  //
+  // MEASURED SHAPE. `selected` is seeded with the Loom item id, and `loadList()`
+  // then RE-POINTS it at the factory's first real dataset name. Both effects fire
+  // on the first render, so two `loadDataset` calls are in flight at once: one
+  // for the item GUID (which is not an ADF dataset name and 404s) and one for the
+  // name that was actually opened. Whichever RESOLVES LAST wrote last, so on the
+  // unlucky interleaving the editor rendered a red
+  // "The document could not be retrieved because it does not exist. (NotFound)"
+  // over a dataset that had already loaded cleanly — and a reload "fixed" it,
+  // which is the signature of a race rather than a backend state.
+  //
+  // That banner asserted a fact about the CURRENTLY OPEN dataset that the code
+  // had not established (deploy-integrity R7), on the first open of a freshly
+  // created item (`ux-baseline.md`: first-open must be clean). A monotonic
+  // sequence number is the fix rather than a retry: retrying the superseded
+  // request would still be answering a question nobody is asking any more.
+  const datasetSeq = useRef(0);
+
   const loadDataset = useCallback(async (name: string) => {
+    const seq = ++datasetSeq.current;
+    const stale = () => seq !== datasetSeq.current;
     setError(null);
     try {
       const r = await clientFetch(`/api/items/adf-dataset/${encodeURIComponent(name)}`);
       const j = await r.json();
+      if (stale()) return;
       if (!j.ok) throw new Error(j.error || 'get failed');
       setDs(j.dataset);
       const dsType = j.dataset?.properties?.type || 'DelimitedText';
@@ -767,7 +836,12 @@ export function AdfDatasetEditor({ item, id }: { item: FabricItemType; id: strin
       setPaginationRule(g.paginationRule || '');
       setCollectionName(g.collectionName || '');
       setEntityName(g.entityName || '');
-    } catch (e: any) { setError(e?.message || String(e)); }
+    } catch (e: any) {
+      // A superseded request's failure is not a fact about the dataset the user
+      // is looking at, so it must not be reported as one.
+      if (stale()) return;
+      setError(e?.message || String(e));
+    }
   }, []);
 
   useEffect(() => { loadList(); loadLinkedServices(); }, [loadList, loadLinkedServices]);

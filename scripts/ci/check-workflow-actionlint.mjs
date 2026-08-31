@@ -49,10 +49,70 @@
  * every run: a fixture with the real column-0-breakout defect is linted from
  * stdin and the guard FAILS if the parse error does not come back.
  *
+ * IT DEADLOCKED ON WINDOWS — MEASURED, NOT SLOW (#3550)
+ * ------------------------------------------------------
+ * Reported as "does not complete". It is worse than that: it HANGS, and the
+ * hang is in actionlint's shellcheck integration, not in this script.
+ *
+ * Measured 2026-08-29 on Windows 11 / Git Bash, actionlint on PATH,
+ * shellcheck 0.11 on PATH:
+ *
+ *   one file,   shellcheck ON   → 1.2s, verdict returned
+ *   2 files,    shellcheck ON   → 1s,   verdict returned
+ *   3 files,    shellcheck ON   → 0s,   verdict returned
+ *   4 files,    shellcheck ON   → NO VERDICT, killed at 90s (two different
+ *                                 4-file sets; each of those files passes alone)
+ *   125 files,  shellcheck ON   → NO VERDICT, killed at 1142s
+ *   125 files,  shellcheck OFF  → 0s,   verdict returned
+ *
+ * The wedged processes consume NO CPU: two samples 45s apart reported the
+ * identical cumulative CPU time. That is a deadlock, not slowness — and the
+ * machine was carrying FIVE abandoned `actionlint` processes, the oldest
+ * started five days earlier, each one a run some agent gave up on.
+ *
+ * "4 files is the threshold" was then MEASURED WRONG, which is the more useful
+ * half of this: a per-file census (all 125 workflows linted one at a time, 25s
+ * cap) found the wedge is a property of the FILE, not of the batch size.
+ * 28 of 125 wedge; the other 97 return, slowest 8.3s, median 0.74s. The 28 are
+ * the large ones — build-fiab-images-acr-tasks, csa-loom-post-deploy-bootstrap,
+ * all four deploy-fiab-*, most gov-*, loom-roll-and-validate. Retried three
+ * times on the same file it wedged three times. The earlier "3 files were fine"
+ * run simply did not contain a big file.
+ *
+ * So this cannot be fixed here: it is an upstream actionlint/shellcheck defect
+ * on Windows. What is fixed here is that it can no longer LIE.
+ *
+ * Consequences, all of which this file now handles:
+ *   1. There was no way to reach a verdict locally. The sweep is CHUNKED (one
+ *      file per invocation on win32) with a hard per-invocation timeout, and a
+ *      wedged chunk is recorded as NOT LINTED and the sweep CONTINUES — so one
+ *      run names every file it could not cover. Incomplete coverage FAILS.
+ *      Chunked/explicit-path invocation was verified to return the IDENTICAL
+ *      finding set as the single project-discovery invocation over all 125
+ *      files, and the per-file counts it produces on Windows match the
+ *      Linux-generated baseline exactly. On non-Windows the single invocation
+ *      is kept unchanged, because that is what CI has been green on.
+ *      `--changed` / `--files` is the usable local loop: seconds, not minutes.
+ *   2. A killed run LOOKED LIKE A PASS: stdout ended on two cheerful
+ *      "verified live" lines and nothing said the verdict had not been
+ *      reached. Now nothing may be mistaken for a verdict — the sweep
+ *      announces that no verdict exists yet, signals print NO VERDICT, and an
+ *      exit that never produced one says so on the way out (deploy-integrity
+ *      R7: the message states only what was established).
+ *
  * MODES
- *   node scripts/ci/check-workflow-actionlint.mjs                  # CHECK
+ *   node scripts/ci/check-workflow-actionlint.mjs                  # CHECK (full, merge-blocking)
  *   node scripts/ci/check-workflow-actionlint.mjs --self-test      # probe only
+ *   node scripts/ci/check-workflow-actionlint.mjs --files a.yml b.yml   # PARTIAL, advisory
+ *   node scripts/ci/check-workflow-actionlint.mjs --changed        # PARTIAL, advisory
  *   node scripts/ci/check-workflow-actionlint.mjs --update-baseline
+ *
+ * ENV
+ *   ACTIONLINT_BIN         path to actionlint (default: `actionlint` on PATH)
+ *   ACTIONLINT_CHUNK       files per invocation; default 1 on win32, all elsewhere
+ *   ACTIONLINT_TIMEOUT_MS  per-invocation timeout (default 30s chunked / 900s whole-dir)
+ *   ACTIONLINT_ATTEMPTS    attempts per invocation before failing closed (default 1)
+ *   ACTIONLINT_BASE_REF    base ref for --changed (default origin/main)
  */
 import { execFileSync } from 'node:child_process';
 import { existsSync, readdirSync } from 'node:fs';
@@ -65,6 +125,65 @@ const REPO_ROOT = join(__dirname, '..', '..');
 const WORKFLOW_DIR = join(REPO_ROOT, '.github', 'workflows');
 const BASELINE_FILE = join(__dirname, 'workflow-actionlint-baseline.json');
 const BIN = process.env.ACTIONLINT_BIN || 'actionlint';
+
+/**
+ * Files per actionlint invocation on Windows.
+ *
+ * ONE, not three. The first measurement suggested a clean threshold at four
+ * files; the per-file census then showed the wedge belongs to 28 specific large
+ * workflows, and the "3 files were fine" run simply had not contained one.
+ * Recording the wrong first conclusion on purpose — it was measured, and it was
+ * still wrong. At one file per invocation a wedge costs exactly one file of
+ * coverage and the report names it.
+ */
+const WIN32_CHUNK = 1;
+
+/**
+ * Per-chunk wall clock. A wedged invocation must FAIL, never hang a lane.
+ * Across the 97 workflow files that lint successfully here the slowest took
+ * 8.3s and the median 0.7s, so 30s is 3.6x the worst healthy case — long enough
+ * not to fire on a slow machine, short enough that the 28 that wedge cost about
+ * fourteen minutes rather than never terminating.
+ */
+const CHUNK_TIMEOUT_MS = Number(process.env.ACTIONLINT_TIMEOUT_MS || 30000);
+
+/**
+ * The single whole-directory invocation (the non-Windows default) legitimately
+ * takes far longer than one chunk, so it gets its own, generous cap. It still
+ * has one: an unbounded wait is what produced five abandoned processes.
+ */
+const SWEEP_TIMEOUT_MS = Number(process.env.ACTIONLINT_TIMEOUT_MS || 900000);
+
+/**
+ * Attempts per invocation. ONE by default, and that is a measurement, not a
+ * guess: the wedge was retried 3/3 on the same file and wedged every time, and
+ * a per-file census found it hits the same 28 large workflows while never
+ * touching a small one. So it is deterministic per file, and a retry would only
+ * buy N times the wall clock for the same answer. The knob stays for a machine
+ * where the failure really is transient.
+ */
+const ATTEMPTS = Math.max(1, Number(process.env.ACTIONLINT_ATTEMPTS || 1));
+
+/** Thrown when an invocation is killed on the timeout above. */
+class ActionlintTimeout extends Error {}
+
+/**
+ * NOTHING may be mistaken for a verdict.
+ *
+ * Before this, a run killed mid-sweep left stdout ending on two "verified live"
+ * lines — indistinguishable from success, which is how "I ran the guards
+ * locally" stopped meaning anything on this platform (#3550). `main()` returning
+ * a number IS a verdict, pass or fail; anything else is not, and says so.
+ */
+let verdictReached = false;
+
+function noVerdict(reason) {
+  console.error(
+    `\n[workflow-actionlint] NO VERDICT — ${reason}.\n` +
+      '   This run did NOT establish whether the workflows are clean. Do not read the lines\n' +
+      '   above it as a pass: the liveness probes print before the sweep, not after it.',
+  );
+}
 
 const META = {
   owner: 'CSA Loom platform / deploy-integrity',
@@ -106,18 +225,31 @@ jobs:
  * is not inside a git project ("no project was found in any parent
  * directories"), which would make a temp-dir probe silently return zero.
  */
-function runActionlint(paths, cwd, content) {
+function runActionlint(paths, cwd, content, timeoutMs = CHUNK_TIMEOUT_MS) {
   const args = ['-no-color', '-format', '{{json .}}', ...(content == null ? paths : ['-'])];
   const opts = {
     cwd,
     encoding: 'utf8',
     maxBuffer: 64 * 1024 * 1024,
+    timeout: timeoutMs,
+    killSignal: 'SIGKILL',
     stdio: content == null ? ['ignore', 'pipe', 'pipe'] : ['pipe', 'pipe', 'pipe'],
   };
   if (content != null) opts.input = content;
   try {
     return JSON.parse(execFileSync(BIN, args, opts) || '[]');
   } catch (e) {
+    // Timeout FIRST: a killed child can leave a truncated `[{…` on stdout, which
+    // would otherwise be parsed as findings or blow up as a JSON syntax error —
+    // either way reporting something the run never established (R7).
+    if (e && (e.signal === 'SIGKILL' || e.code === 'ETIMEDOUT' || e.errno === 'ETIMEDOUT')) {
+      throw new ActionlintTimeout(
+        `actionlint did not return within ${timeoutMs}ms for ${paths.length || 'all'} file(s)` +
+          `${paths.length ? `: ${paths.join(', ')}` : ''}. On Windows this is the shellcheck-integration ` +
+          'deadlock recorded in the header block — the process wedges consuming no CPU. ' +
+          'Raise ACTIONLINT_ATTEMPTS/ACTIONLINT_TIMEOUT_MS, or lower ACTIONLINT_CHUNK.',
+      );
+    }
     if (typeof e.stdout === 'string' && e.stdout.trim().startsWith('[')) {
       return JSON.parse(e.stdout);
     }
@@ -125,6 +257,107 @@ function runActionlint(paths, cwd, content) {
       `actionlint invocation failed: ${e.message}${e.stderr ? `\nstderr: ${String(e.stderr).slice(0, 400)}` : ''}`,
     );
   }
+}
+
+/**
+ * `runActionlint` with a bounded retry on the deadlock ONLY.
+ *
+ * A real lint error (bad flag, unreadable file) is NOT retried — retrying a
+ * deterministic failure would just spend three times as long reaching the same
+ * answer, and would blur a defect into "flaky". Exhaustion re-throws.
+ */
+function lintWithRetry(paths, content, timeoutMs) {
+  let last;
+  for (let attempt = 1; attempt <= ATTEMPTS; attempt += 1) {
+    try {
+      return runActionlint(paths, REPO_ROOT, content, timeoutMs);
+    } catch (e) {
+      if (!(e instanceof ActionlintTimeout)) throw e;
+      last = e;
+      if (attempt < ATTEMPTS) {
+        console.log(
+          `[workflow-actionlint] attempt ${attempt}/${ATTEMPTS} wedged; retrying in a fresh process. ` +
+            'Nothing has been concluded about these file(s) yet.',
+        );
+      }
+    }
+  }
+  throw new ActionlintTimeout(`${last.message}\n   Exhausted ${ATTEMPTS} attempt(s); failing closed.`);
+}
+
+/**
+ * How many workflow files to hand a single actionlint invocation.
+ *
+ * On win32 the default is one below the measured deadlock threshold. Everywhere
+ * else the default is "all of them in one invocation", which is exactly what CI
+ * has always run — this fix does not change the behaviour of the green lane.
+ *
+ * @param {number} fileCount
+ * @returns {number}
+ */
+export function chunkSize(fileCount, env = process.env, platform = process.platform) {
+  const raw = env.ACTIONLINT_CHUNK;
+  if (raw != null && String(raw).trim() !== '') {
+    const n = Number(raw);
+    if (!Number.isInteger(n) || n < 1) {
+      throw new Error(`ACTIONLINT_CHUNK must be a positive integer, got ${JSON.stringify(raw)}`);
+    }
+    return n;
+  }
+  return platform === 'win32' ? WIN32_CHUNK : Math.max(fileCount, 1);
+}
+
+/**
+ * Lint `files` (repo-relative workflow paths), chunking when required.
+ *
+ * When a single invocation covers everything AND the caller asked for the whole
+ * directory, actionlint is invoked with NO path arguments — its own project
+ * discovery — because that is the invocation the CI lane is green on and it is
+ * not worth changing under a fix for a different platform's bug.
+ *
+ * A wedged chunk does NOT abort the sweep. Aborting on the first one told you
+ * about one file and nothing about the other 124; carrying on and recording
+ * every file it could not lint tells you the whole truth in one run. Incomplete
+ * coverage is still a FAILURE — see the caller — it is just an informative one.
+ *
+ * @param {string[]} files
+ * @param {boolean} isWholeDir
+ * @returns {{findings: Array<Record<string, any>>, unlinted: string[]}}
+ */
+function sweep(files, isWholeDir) {
+  const size = chunkSize(files.length);
+  if (isWholeDir && size >= files.length) {
+    try {
+      return { findings: lintWithRetry([], undefined, SWEEP_TIMEOUT_MS), unlinted: [] };
+    } catch (e) {
+      if (!(e instanceof ActionlintTimeout)) throw e;
+      console.log(`[workflow-actionlint] the single whole-directory invocation wedged: ${e.message}`);
+      return { findings: [], unlinted: [...files] };
+    }
+  }
+
+  const findings = [];
+  const unlinted = [];
+  for (let i = 0; i < files.length; i += size) {
+    const batch = files.slice(i, i + size);
+    try {
+      findings.push(...lintWithRetry(batch, undefined, CHUNK_TIMEOUT_MS));
+    } catch (e) {
+      if (!(e instanceof ActionlintTimeout)) throw e;
+      unlinted.push(...batch);
+      console.log(
+        `[workflow-actionlint] WEDGED on ${batch.join(', ')} — recorded as NOT LINTED, continuing. ` +
+          'These file(s) have been checked by NOTHING in this run.',
+      );
+    }
+    if (size < files.length) {
+      console.log(
+        `[workflow-actionlint] … ${Math.min(i + size, files.length)}/${files.length} file(s) attempted, ` +
+          `${findings.length} finding(s), ${unlinted.length} not linted — still NO VERDICT.`,
+      );
+    }
+  }
+  return { findings, unlinted };
 }
 
 /**
@@ -156,7 +389,7 @@ print(sys.argv)
 function parseDetectionLiveness() {
   let findings;
   try {
-    findings = runActionlint([], REPO_ROOT, BROKEN_YAML_PROBE);
+    findings = lintWithRetry([], BROKEN_YAML_PROBE, CHUNK_TIMEOUT_MS);
   } catch (e) {
     return e.message;
   }
@@ -181,7 +414,7 @@ const isParseFailure = (f) =>
 function shellcheckLiveness() {
   let findings;
   try {
-    findings = runActionlint([], REPO_ROOT, PROBE);
+    findings = lintWithRetry([], PROBE, CHUNK_TIMEOUT_MS);
   } catch (e) {
     return e.message;
   }
@@ -196,6 +429,79 @@ function shellcheckLiveness() {
     );
   }
   return null;
+}
+
+/**
+ * The `--files`/`--changed` selection, as repo-relative workflow paths.
+ *
+ * Returns null for a full sweep. Throws with a concrete message rather than
+ * quietly narrowing the scan — a scoped run that silently linted nothing would
+ * be the same false green this whole file is about.
+ *
+ * @param {string[]} argv
+ * @returns {string[]|null}
+ */
+function selectFiles(argv) {
+  const wantChanged = argv.includes('--changed');
+  const filesIdx = argv.indexOf('--files');
+  if (!wantChanged && filesIdx === -1) return null;
+  if (wantChanged && filesIdx !== -1) {
+    throw new Error('--files and --changed are mutually exclusive.');
+  }
+
+  /** @type {string[]} */
+  let picked;
+  if (filesIdx !== -1) {
+    picked = argv.slice(filesIdx + 1).filter((a) => !a.startsWith('--'));
+    if (picked.length === 0) throw new Error('--files needs at least one path.');
+  } else {
+    picked = changedWorkflowFiles();
+  }
+
+  const normalized = [];
+  for (const p of picked) {
+    const rel = p.replace(/\\/g, '/').replace(/^\.\//, '');
+    const base = rel.includes('/') ? rel.slice(rel.lastIndexOf('/') + 1) : rel;
+    const candidate = `.github/workflows/${base}`;
+    if (!/\.ya?ml$/.test(base)) throw new Error(`not a workflow file: ${p}`);
+    if (!existsSync(join(REPO_ROOT, candidate))) {
+      throw new Error(`no such workflow: ${candidate} (derived from ${p})`);
+    }
+    if (!normalized.includes(candidate)) normalized.push(candidate);
+  }
+  return normalized;
+}
+
+/**
+ * Workflow files this branch changed: working tree + untracked + the commits
+ * since the merge-base with `ACTIONLINT_BASE_REF` (default origin/main).
+ *
+ * If the base ref does not resolve this FAILS loudly. Falling back to
+ * "working-tree only" would silently shrink the scan and report a pass over a
+ * file it never opened.
+ *
+ * @returns {string[]}
+ */
+function changedWorkflowFiles() {
+  const git = (args) =>
+    execFileSync('git', args, { cwd: REPO_ROOT, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+  const baseRef = process.env.ACTIONLINT_BASE_REF || 'origin/main';
+  let base;
+  try {
+    base = git(['merge-base', 'HEAD', baseRef]).trim();
+  } catch (e) {
+    throw new Error(
+      `--changed cannot resolve a base: \`git merge-base HEAD ${baseRef}\` failed (${String(e.message).trim()}). ` +
+        'Fetch the base ref, set ACTIONLINT_BASE_REF, or name the files with --files. ' +
+        'It will not silently narrow the scan to the working tree.',
+    );
+  }
+  const out = [
+    git(['diff', '--name-only', '--diff-filter=d', base, '--', '.github/workflows']),
+    git(['diff', '--name-only', '--diff-filter=d', '--', '.github/workflows']),
+    git(['ls-files', '--others', '--exclude-standard', '--', '.github/workflows']),
+  ].join('\n');
+  return [...new Set(out.split('\n').map((l) => l.trim()).filter(Boolean))];
 }
 
 function main() {
@@ -242,7 +548,50 @@ function main() {
     return 1;
   }
 
-  const findings = runActionlint([], REPO_ROOT);
+  /** @type {string[]|null} */
+  let selection;
+  try {
+    selection = selectFiles(argv);
+  } catch (e) {
+    console.error(`[workflow-actionlint] FAIL — ${e.message}`);
+    return 1;
+  }
+
+  // A scoped run is ADVISORY. It cannot see a regression in a file it did not
+  // lint, so it must never be reported as the merge-blocking verdict and must
+  // never rewrite a baseline covering files it never opened.
+  const partial = selection !== null;
+  if (partial && argv.includes('--update-baseline')) {
+    console.error(
+      '[workflow-actionlint] FAIL — --update-baseline cannot be combined with --files/--changed.\n' +
+        '   The baseline records debt for EVERY workflow; rewriting it from a partial scan would\n' +
+        '   erase the recorded debt of every file the scan never looked at.',
+    );
+    return 1;
+  }
+  if (partial && selection.length === 0) {
+    console.log(
+      '[workflow-actionlint] PARTIAL scan selected ZERO workflow files — nothing to lint.\n' +
+        '   This is NOT a pass over the repo. Run without --files/--changed for the real verdict.',
+    );
+    return 0;
+  }
+
+  const target = selection ?? files.map((f) => `.github/workflows/${f}`);
+  console.log(
+    `[workflow-actionlint] linting ${target.length} workflow file(s)` +
+      (partial ? ' (PARTIAL — advisory only)' : '') +
+      ` in chunks of ${chunkSize(target.length)} — NO VERDICT HAS BEEN REACHED YET.`,
+  );
+
+  let findings;
+  let unlinted;
+  try {
+    ({ findings, unlinted } = sweep(target, !partial));
+  } catch (e) {
+    console.error(`[workflow-actionlint] FAIL — ${e.message}`);
+    return 1;
+  }
   const current = {};
   const unparseable = new Set();
   for (const f of findings) {
@@ -251,7 +600,8 @@ function main() {
     if (isParseFailure(f)) unparseable.add(key);
   }
   console.log(
-    `[workflow-actionlint] ${findings.length} finding(s) across ${Object.keys(current).length} of ${files.length} workflow file(s).`,
+    `[workflow-actionlint] ${findings.length} finding(s) across ${Object.keys(current).length} of ${target.length} workflow file(s)` +
+      (partial ? ` (PARTIAL — ${files.length - target.length} file(s) NOT linted).` : '.'),
   );
 
   // Unparseable workflows never execute — GitHub creates the run, fails it
@@ -274,9 +624,53 @@ function main() {
     return 1;
   }
 
-  if (!argv.includes('--update-baseline')) {
+  // A file that was NOT LINTED contributed zero findings, and zero findings is
+  // exactly what "fully fixed" looks like to the stale check. Measured on the
+  // first full Windows sweep: 14 baselined files were reported STALE purely
+  // because actionlint had wedged on them, with the advice to regenerate the
+  // baseline — which would have DELETED 73 recorded findings nobody fixed.
+  const unlintedKeys = new Set(unlinted.map((p) => p.replace(/^\.github\/workflows\//, '')));
+
+  // Incomplete coverage is a FAILURE, never a footnote under a pass, and it is
+  // reported BEFORE the ratchet so it still prints when an earlier check exits.
+  // The ratchet only ever saw the files that were linted.
+  if (unlinted.length) {
+    console.error(
+      `\n[workflow-actionlint] FAIL — ${unlinted.length} workflow file(s) COULD NOT BE LINTED, so this run\n` +
+        '   does not cover them. They contributed zero findings, which is not the same as being clean:',
+    );
+    for (const f of unlinted) console.error(`   - ${f}`);
+    console.error(
+      '\n   Cause on Windows: actionlint\'s shellcheck integration deadlocks on the larger workflow\n' +
+        '   files (see the header block — the process wedges consuming no CPU). It is an upstream\n' +
+        '   tool defect, not a finding about these files.\n' +
+        (partial
+          ? ''
+          : '   For a usable local loop, scope the run to what you touched:\n' +
+            '     node scripts/ci/check-workflow-actionlint.mjs --changed\n') +
+        '   The authoritative full verdict comes from the Linux guardrails lane, where the sweep\n' +
+        '   completes. Do NOT read this failure as "the workflows are broken".',
+    );
+  }
+
+  // Same reasoning, one step earlier: a regen from an incomplete scan writes
+  // away the debt of every file the scan could not open.
+  if (unlinted.length && argv.includes('--update-baseline')) {
+    console.error(
+      `[workflow-actionlint] FAIL — refusing --update-baseline: ${unlinted.length} file(s) could not be\n` +
+        '   linted in this run, so regenerating would erase their recorded debt as if it were fixed.\n' +
+        '   Regenerate the baseline where the sweep completes — the Linux guardrails lane.',
+    );
+    return 1;
+  }
+
+  // The stale check compares EVERY baselined key against the scan, so it is
+  // only meaningful over a full sweep: in a partial scan an unlinted file
+  // reports zero findings and would be misread as "fully fixed".
+  if (!partial && !argv.includes('--update-baseline')) {
     const { entries: baseline } = loadBaseline(BASELINE_FILE);
     const stale = Object.entries(baseline)
+      .filter(([k]) => !unlintedKeys.has(k))
       .map(([k, n]) => ({ key: k, was: n, now: current[k] ?? 0 }))
       .filter((e) => e.now < e.was);
     if (stale.length) {
@@ -295,15 +689,16 @@ function main() {
     }
   }
 
-  const code = runRatchet({
+  const ratchetCode = runRatchet({
     name: 'workflow-actionlint',
     baselineFile: BASELINE_FILE,
     meta: META,
     current,
     argv: process.argv,
   });
+  const code = unlinted.length ? 1 : ratchetCode;
 
-  if (code !== 0) {
+  if (ratchetCode !== 0) {
     const { entries: baseline } = loadBaseline(BASELINE_FILE);
     console.error('\n   New findings:');
     for (const f of findings) {
@@ -315,7 +710,35 @@ function main() {
       }
     }
   }
+
+  const covered = target.length - unlinted.length;
+  if (partial) {
+    console.log(
+      `[workflow-actionlint] PARTIAL VERDICT: ${code === 0 ? 'clean' : 'not clean'} over ${covered} of the ` +
+        `${target.length} selected file(s). This is ADVISORY — it says nothing about the other ` +
+        `${files.length - target.length} workflow file(s), and it is not the merge-blocking verdict.`,
+    );
+  } else {
+    console.log(
+      `[workflow-actionlint] VERDICT: ${code === 0 ? 'PASS' : 'FAIL'} — ${covered} of ${target.length} ` +
+        'workflow file(s) actually linted.',
+    );
+  }
   return code;
 }
 
-process.exit(main());
+// A signal, an uncaught throw, or a kill must never leave output that reads
+// like a pass. `main()` returning a number IS the verdict; anything else is not.
+for (const sig of ['SIGINT', 'SIGTERM', 'SIGHUP']) {
+  process.on(sig, () => {
+    noVerdict(`the run was killed by ${sig} before it finished`);
+    process.exit(130);
+  });
+}
+process.on('exit', (code) => {
+  if (!verdictReached) noVerdict(`the process exited (code ${code}) without producing one`);
+});
+
+const exitCode = main();
+verdictReached = true;
+process.exit(exitCode);

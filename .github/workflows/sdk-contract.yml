@@ -125,7 +125,7 @@ jobs:
       # Not SHA-pinned yet: no other workflow in this repo uses setup-go, so
       # there is no verified digest to copy. Dependabot's github-actions
       # ecosystem pins + bumps it on its next run.
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v7
         with:
           go-version: '1.22'
           cache-dependency-path: sdk/terraform-provider-loom/go.mod

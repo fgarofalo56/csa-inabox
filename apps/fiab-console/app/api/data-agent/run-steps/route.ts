@@ -18,7 +18,6 @@
  *     → { ok, data: { threadId, runId, status, answer, steps[], usage, lastError, backend } }
  */
 import { NextRequest, NextResponse } from 'next/server';
-import { getSession } from '@/lib/auth/session';
 import {
   runAgentAndInspect,
   FoundryAgentNotConfiguredError,
@@ -26,29 +25,27 @@ import {
 } from '@/lib/azure/foundry-agent-client';
 import { resolveWorkspaceFoundry } from '@/lib/azure/copilot-config-store';
 import { loadOwnedItem, listOwnedItems } from '../../items/_lib/item-crud';
-import { chatGrounded, NoAoaiDeploymentError, type DataAgentConfig } from '@/lib/azure/data-agent-client';
+import {
+  chatGrounded,
+  rehydrateSources,
+  NoAoaiDeploymentError,
+  type DataAgentConfig,
+} from '@/lib/azure/data-agent-client';
 import type { WorkspaceItem } from '@/lib/types/workspace';
+import { withSession } from '@/lib/api/route-toolkit';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 export const maxDuration = 60;
 
 function stateToConfig(state: Record<string, unknown>): DataAgentConfig {
-  const sources = Array.isArray(state.sources) ? (state.sources as any[]) : [];
   return {
     instructions: String(state.instructions || state.systemPrompt || ''),
     description: state.description ? String(state.description) : undefined,
-    sources: sources.map((s) => ({
-      id: String(s.id || s.name || ''),
-      type: s.type,
-      name: String(s.name || ''),
-      tables: s.tables ? String(s.tables) : undefined,
-      description: s.description ? String(s.description) : undefined,
-      instructions: s.instructions ? String(s.instructions) : undefined,
-      examples: Array.isArray(s.examples) ? s.examples : undefined,
-      aiSearch: s.aiSearch && typeof s.aiSearch === 'object' ? s.aiSearch : undefined,
-      graph: s.graph && typeof s.graph === 'object' ? s.graph : undefined,
-    })),
+    // #4119 — the per-source projection was inlined here and in five sibling routes, and
+    // every copy coerced `id`/`name` while passing `type` through raw. `rehydrateSources`
+    // is the one boundary now, so a persisted non-string `type` cannot reach chatGrounded.
+    sources: rehydrateSources(state.sources),
   };
 }
 
@@ -120,9 +117,7 @@ async function groundedFallback(itemId: string, question: string, userOid: strin
   }
 }
 
-export async function POST(req: NextRequest) {
-  const session = getSession();
-  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+export const POST = withSession(async (req: NextRequest, { session }) => {
 
   let body: any;
   try { body = await req.json(); } catch { body = {}; }
@@ -185,4 +180,4 @@ export async function POST(req: NextRequest) {
     }, { status: 404 });
   }
   return groundedFallback(resolvedItemId, question, session.claims.oid, 'Ran on the Azure-native grounded backend (default — no published Foundry assistant required).');
-}
+});

@@ -23,6 +23,8 @@ import { FluentProvider, webLightTheme } from '@fluentui/react-components';
 import { ReactFlowProvider } from '@xyflow/react';
 import type { ComponentProps, ReactElement } from 'react';
 import { BrainCanvasNode } from '@/app/admin/brain/brain-canvas-node';
+// #4012 — the hand-off from model to renderer, which nothing here used to exercise.
+import { buildFlow } from '@/app/admin/brain/brain-canvas';
 import { buildSynapseOverlay, type SynapseNodeMark } from '@/app/admin/brain/synapse-model';
 import { snapshotFromCollection } from '@/app/api/admin/brain/_lib/snapshot';
 import type { WireNode } from '@/app/api/admin/brain/_lib/wire';
@@ -142,6 +144,121 @@ describe('DOM — the synapse layer is observable on the rendered node', () => {
   it('the reason survives to the tooltip, so the colour has a finding behind it', () => {
     renderNode(broker, overlay.nodeMarks.get(BROKER_ID)!);
     expect(shell(BROKER_ID).getAttribute('title')).toMatch(/inbound configured/i);
+  });
+});
+
+/**
+ * #4012 — THE HAND-OFF, which is the part every test above assumes.
+ *
+ * Everything above mounts `BrainCanvasNode` DIRECTLY with a `data.synapse` this file
+ * built. That verifies the RENDERER given an input. It says nothing about `buildFlow` —
+ * the code in `brain-canvas.tsx` that decides whether a mark is handed to the node at all,
+ * and whether an edge gets the overlay's stroke / width / dash / animation / layer.
+ *
+ * Measured on PR #3992, independent review arm M5: make the overlay a no-op inside
+ * `buildFlow` and the whole UI suite stays green — 193/193, RC=0. Seven sibling mutation
+ * arms in the same run were all CAUGHT, so the suite is not weak in general; this was one
+ * specific hole, and it is the one that matters, because it is the shape of the
+ * 2026-07-15 incident this file's own header cites: the model was fine and the renderer
+ * was fine, and the path between them was dead.
+ *
+ * So these drive the REAL `buildFlow` with the REAL graph and the REAL overlay, and assert
+ * the marks arrive on the objects React Flow is actually given. The CONTROL runs the same
+ * call with `overlay` omitted, so an implementation that painted everything unconditionally
+ * cannot pass either.
+ *
+ * ACCEPTANCE (from the issue): re-run arm M5 — sever the overlay in `buildFlow` and these
+ * must go RED. Measured; the receipt is in the PR body.
+ */
+describe('#4012 — buildFlow HANDS the overlay to the nodes and edges', () => {
+  const flowArgs = (withOverlay: boolean) => ({
+    nodes: snapshot.nodes,
+    edges: snapshot.edges,
+    coverageConfigured: COVERED,
+    costByNodeId: new Map<string, number>(),
+    findingCountByNodeId: new Map<string, number>(),
+    selectedId: null,
+    onSelect: () => {},
+    ...(withOverlay ? { overlay } : {}),
+  });
+
+  const nodeById = (flow: ReturnType<typeof buildFlow>, id: string) =>
+    flow.nodes.find((n) => n.id === id);
+
+  it('EMBEDDED CONTROL: the fixture reaches buildFlow and the two calls DIFFER', () => {
+    // Without this, "the mark is present" and "the mark is absent" could both be
+    // assertions about an empty graph.
+    const withOverlay = buildFlow(flowArgs(true) as never);
+    const plain = buildFlow(flowArgs(false) as never);
+    expect(withOverlay.nodes.length).toBeGreaterThan(0);
+    expect(withOverlay.nodes.length).toBe(plain.nodes.length);
+    expect(nodeById(withOverlay, BROKER_ID)).toBeTruthy();
+    expect((nodeById(withOverlay, BROKER_ID)!.data as Record<string, unknown>).synapse)
+      .not.toEqual((nodeById(plain, BROKER_ID)!.data as Record<string, unknown>).synapse);
+  });
+
+  it('every node the overlay marked carries that EXACT mark in its React Flow data', () => {
+    const flow = buildFlow(flowArgs(true) as never);
+    // Not "some node has a mark" — every marked id, matched to the mark the model
+    // produced. A hand-off that dropped one node, or handed the wrong node's mark
+    // along, passes a weaker assertion and fails this one.
+    expect(overlay.nodeMarks.size).toBeGreaterThan(0);
+    for (const [id, mark] of overlay.nodeMarks) {
+      const n = nodeById(flow, id);
+      expect(n, `buildFlow produced no node for ${id}`).toBeTruthy();
+      expect((n!.data as Record<string, unknown>).synapse).toBe(mark);
+    }
+    // And the specific pair the DOM tests above rely on.
+    expect(((nodeById(flow, BROKER_ID)!.data as Record<string, unknown>).synapse as SynapseNodeMark).layer)
+      .toBe('prune-costly');
+  });
+
+  it('every edge the overlay marked takes the overlay stroke, width, animation and layer', () => {
+    const flow = buildFlow(flowArgs(true) as never);
+    const plain = buildFlow(flowArgs(false) as never);
+    const marked = [...overlay.edgeMarks.keys()].filter((id) => flow.edges.some((e) => e.id === id));
+    expect(marked.length, 'the fixture must produce at least one marked edge on screen').toBeGreaterThan(0);
+
+    for (const id of marked) {
+      const mark = overlay.edgeMarks.get(id)!;
+      const e = flow.edges.find((x) => x.id === id)!;
+      expect((e.data as Record<string, unknown>).synapseLayer).toBe(mark.layer);
+      expect((e.style as Record<string, unknown>).stroke).toBe(mark.stroke);
+      expect((e.style as Record<string, unknown>).strokeWidth).toBe(mark.width);
+      expect(e.animated).toBe(mark.animated);
+    }
+
+    // WHICH CHANNEL ACTUALLY DISTINGUISHES, measured rather than assumed.
+    //
+    // On THIS fixture the overlay's edge values reproduce `edgeVisual`'s exactly — the
+    // three marked edges come back `broken` (red / 2 / "6 4") and `wired` (blue / 1.5),
+    // which is what the base visual already draws, and none is animated. So the four
+    // style assertions above are same-value checks here: severing the overlay's stroke
+    // substitution alone would not move them.
+    //
+    // `data.synapseLayer` is the channel that DOES separate the two calls, so it is
+    // asserted against the un-overlaid twin explicitly. It is also what arm M5 removes,
+    // which is why this pair is the load-bearing part of this spec rather than the
+    // colours. Stating it beats implying the stroke assertions are doing work they are
+    // not (deploy-integrity.md R7).
+    for (const id of marked) {
+      const a = flow.edges.find((x) => x.id === id)!;
+      const b = plain.edges.find((x) => x.id === id)!;
+      expect((a.data as Record<string, unknown>).synapseLayer).toBeTruthy();
+      expect((b.data as Record<string, unknown>).synapseLayer).toBeUndefined();
+    }
+  });
+
+  it('THE CONTROL — with no overlay prop, buildFlow hands out NO marks at all', () => {
+    // The Graph tab. An overlay that leaked into it would satisfy every positive
+    // assertion above and silently repaint the plain graph.
+    const flow = buildFlow(flowArgs(false) as never);
+    for (const n of flow.nodes) {
+      expect((n.data as Record<string, unknown>).synapse).toBeUndefined();
+    }
+    for (const e of flow.edges) {
+      expect((e.data as Record<string, unknown>)?.synapseLayer).toBeUndefined();
+    }
   });
 });
 

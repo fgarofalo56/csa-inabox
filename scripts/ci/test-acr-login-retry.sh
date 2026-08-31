@@ -73,6 +73,42 @@ IPDENY_MSG='WARNING: Error response from daemon: Get "https://x.azurecr.io/v2/":
 # under all four.
 PERMDENY_MSG='WARNING: Error response from daemon: Get "https://x.azurecr.io/v2/": denied: requested access to the resource is denied  ERROR: Login failed.'
 
+# --- #4055 fixtures --------------------------------------------------------
+#
+# The two wordings Microsoft's own troubleshooting page documents
+# (container-registry-troubleshoot-access) that the pre-#4055 needle set matched
+# NOWHERE, so the canonical daemon-side firewall refusal and the private-endpoint
+# DNS failure both classified as PERMANENT and exited on attempt 1.
+#
+# Note the first: `status: 403 Forbidden` - NOT `Response code: 403`. The AAD
+# client and the Docker daemon phrase the same condition differently, which is
+# exactly the #4052 miss repeating in a second wording.
+DAEMON403_MSG='WARNING: Error response from daemon: login attempt to https://x.azurecr.io/v2/ failed with status: 403 Forbidden  ERROR: Login failed.'
+# Private endpoint / DNS. Recorded decision (#4055): TRANSIENT - the reasoning is
+# in acr-login-retry.sh next to the needle.
+UNREACHABLE_MSG='ERROR: Failed to connect to MSI. Please make sure MSI is configured correctly. Get "https://x.azurecr.io/v2/": dial tcp: lookup x.azurecr.io: host is not reachable'
+
+# BREADTH controls, not presence controls. #4052's own finding was that a test
+# pinning a needle's PRESENCE does not stop the next person WIDENING it, and a
+# widened needle is how the repo-permission denial starts getting retried for
+# 165s and then reported as a transient.
+#
+#   PERMDENY_LINK_MSG - an RBAC denial carrying an aka.ms/acr/* link. Broadening
+#     `aka\.ms/acr/firewall` to `aka\.ms/acr` or `aka\.ms` flips this to TRANSIENT
+#     and this case goes red. (ACR points permission problems at
+#     /acr/authorization and network problems at /acr/firewall.)
+#   NOHOST_MSG - a registry that does not exist, worded with the word `host` in
+#     it. Broadening `host is not reachable` to `host` or `not reachable` flips
+#     this to TRANSIENT and this case goes red.
+PERMDENY_LINK_MSG='WARNING: Error response from daemon: Get "https://x.azurecr.io/v2/": denied: requested access to the resource is denied. Refer https://aka.ms/acr/authorization to check your role assignments.  ERROR: Login failed.'
+NOHOST_MSG='ERROR: The registry host "nope.azurecr.io" does not exist in subscription 00000000-0000-0000-0000-000000000000. Verify the registry name.'
+#   DIGEST403_MSG - a permanent manifest error whose HEX DIGEST contains the
+#     digits 403. The status-code alternate is bounded by non-alphanumerics
+#     precisely so this cannot satisfy it; dropping those boundaries (a bare
+#     `403`, as `503|504` used to be) flips this to TRANSIENT and this case goes
+#     red after burning the full retry budget on an error that will never clear.
+DIGEST403_MSG='ERROR: manifest for x.azurecr.io/loom-console@sha256:be403fa91c2d4e778bb1ac9e5d6f0071a2c3b4d5e6f708192a3b4c5d6e7f8091 not found: manifest unknown.'
+
 PASS=0
 FAIL=0
 
@@ -113,6 +149,24 @@ run_case "non-transient exits on attempt 1"         "" "$PERMANENT_MSG" 1 1  --a
 run_case "IP denial (docker shape) is TRANSIENT"    3  "$IPDENY_MSG" 0 3  --attempts 5 --backoff 0
 run_case "IP denial still fails CLOSED on budget"   "" "$IPDENY_MSG" 1 5  --attempts 5 --backoff 0
 run_case "repo-permission denial stays PERMANENT"   "" "$PERMDENY_MSG" 1 1  --attempts 5 --backoff 0
+
+# --- #4055: the two documented wordings the set used to miss entirely --------
+# Removing `status: 403 Forbidden` turns the first pair red (rc=1/calls=1
+# instead of rc=0/calls=3); removing `host is not reachable` turns the second.
+run_case "daemon 403 Forbidden is TRANSIENT"        3  "$DAEMON403_MSG" 0 3  --attempts 5 --backoff 0
+run_case "daemon 403 still fails CLOSED on budget"  "" "$DAEMON403_MSG" 1 5  --attempts 5 --backoff 0
+run_case "PE/DNS 'host is not reachable' is TRANSIENT" 3 "$UNREACHABLE_MSG" 0 3 --attempts 5 --backoff 0
+run_case "PE/DNS unreachable fails CLOSED on budget" "" "$UNREACHABLE_MSG" 1 5 --attempts 5 --backoff 0
+
+# --- #4055 BREADTH controls: widening a needle must go RED ------------------
+# These two are the reason this suite constrains the set from ABOVE as well as
+# below. Both must stay PERMANENT.
+run_case "RBAC denial w/ an aka.ms/acr link stays PERMANENT" "" "$PERMDENY_LINK_MSG" 1 1 --attempts 5 --backoff 0
+run_case "'registry host does not exist' stays PERMANENT"    "" "$NOHOST_MSG"        1 1 --attempts 5 --backoff 0
+# The third breadth control (#4214), guarding the status-code alternate's
+# boundaries rather than its presence. Replacing the bounded alternate with a
+# bare `403` — the shape `503|504` carried until this change — turns this red.
+run_case "403 inside a hex digest stays PERMANENT"          "" "$DIGEST403_MSG"     1 1 --attempts 5 --backoff 0
 
 # --- the defaults, measured through the loop (the #3383 regression guard) ---
 run_case "DEFAULT attempts is 12 (not 6)"           "" "$TRANSIENT_MSG" 1 12 --backoff 0

@@ -469,10 +469,22 @@ const DEPLOY_SUB_OUTPUT = String.raw`\$\{\{\s*steps\.topology_guard\.outputs\.de
 const DEPLOY_SUB_BINDING = String.raw`([A-Za-z_][A-Za-z0-9_]*)\s*(?::|=)\s*"?` + DEPLOY_SUB_OUTPUT + '"?';
 
 /**
- * A HARD FAIL. `exit 0` is not one, and neither is a bare `exit` (whose status
- * is the previous command's, so it asserts nothing about emptiness).
+ * A HARD FAIL.
+ *
+ * `exit 0` is not one, and neither is a bare `exit` (whose status is the
+ * previous command's, so it asserts nothing about emptiness).
+ *
+ * Three spellings, all of which end the step under the runner's default
+ * `bash -e {0}` (#3994 P9/P10 — before this the first alternative was the only
+ * one, so both walked past):
+ *   1. `exit 1` … `exit 255`  — the literal.
+ *   2. `exit $rc` / `exit "${rc}"` — the status indirected through a variable.
+ *      Conservative BY CHOICE: the value could be 0 at runtime. Over-flagging is
+ *      a review conversation; under-flagging is a 06:48Z outage.
+ *   3. a line whose entire content is `false` — under `bash -e` that IS the
+ *      hard fail, and it is the shortest way to write one.
  */
-const HARD_FAIL = /\bexit\s+[1-9][0-9]*\b/;
+const HARD_FAIL = /\bexit\s+(?:[1-9][0-9]*\b|"?\$)|^\s*false\s*(?:#.*)?$/m;
 
 /**
  * A shell reference to `name` whose value is `name` OR the empty string:
@@ -483,31 +495,100 @@ const HARD_FAIL = /\bexit\s+[1-9][0-9]*\b/;
  * that at `SUB="${DEPLOY_SUB:-$(az account show ...)}"` — and after it the
  * value is no longer deploy_sub, so an emptiness test on it means "even the
  * fallback failed", which SHOULD be fatal. Matching it here would flag the fix.
+ *
+ * For the synthetic {@link RAW_OUTPUT_REF} the "reference" is the raw `${{ }}`
+ * output expression itself, so every idiom below reads it unchanged.
  */
 function deploySubRef(name) {
+  if (name === RAW_OUTPUT_REF) return DEPLOY_SUB_OUTPUT;
   return String.raw`\$(?:\{` + name + String.raw`(?::[-=?+])?\}|` + name + String.raw`\b)`;
 }
 
 /**
- * Every name in `text` carrying the guard's `deploy_sub` value.
+ * A PLAIN copy of a deploy_sub-carrying name onto another name — the cheapest
+ * way to launder a value past a name-keyed check.
+ *
+ * `export`/`local`/`declare`/`readonly` prefixes and a trailing `# comment` are
+ * matched deliberately (#3994 P3/P5): before #3994 the name was anchored hard at
+ * start-of-line with end-of-line after the closing quote, so either one defeated
+ * the whole alias pass.
+ */
+function aliasRe(name) {
+  return new RegExp(
+    String.raw`^\s*(?:(?:export|local|declare|readonly)\s+)?([A-Za-z_][A-Za-z0-9_]*)="?`
+    + deploySubRef(name)
+    + String.raw`"?\s*(?:#.*)?$`,
+    'gm',
+  );
+}
+
+/**
+ * Every SHELL VARIABLE NAME in `text` carrying the guard's `deploy_sub` value.
  *
  * Keyed to the OUTPUT, not to a variable name. The filter this replaced was
  * keyed to the literal string `DEPLOY_SUB`, so the one step that binds the same
  * output to `ADMIN_SUB` (the dlz_adopt step) was outside its population
  * entirely — it could not have caught an offender there however it was written.
  *
- * A second pass follows PLAIN copies (`SUB="$DEPLOY_SUB"`), which is the
- * cheapest way to launder a value past a name-keyed check. Per-step, so a
- * `SUB=` in one step never widens another.
+ * A second pass follows PLAIN copies (`SUB="$DEPLOY_SUB"`) TO FIXPOINT. Before
+ * #3994 it iterated a snapshot of the set taken before the pass, so it was
+ * exactly one level deep and `SUB="$DEPLOY_SUB"` / `SUB2="$SUB"` walked past it.
+ *
+ * SCOPE IS THE CALLER'S CHOICE, not a property of this function — the claim
+ * that used to sit here ("per-step, so a `SUB=` in one step never widens
+ * another") was true of only one of the two callers (#3998). What each does:
+ *   - `findDeploySubOffenders` calls it PER STEP, so a `SUB=` in one step does
+ *     not widen the population of another. That is the scope the offender scan
+ *     needs.
+ *   - the POPULATION test calls it on the WHOLE FILE, where a `SUB=` anywhere
+ *     does widen the set globally. That over-collection is intended and
+ *     fail-closed: a new laundering name trips the `['ADMIN_SUB', 'DEPLOY_SUB']`
+ *     assertion, which is the entire point of that test.
  */
 function boundDeploySubNames(text) {
   const names = new Set();
   for (const m of text.matchAll(new RegExp(DEPLOY_SUB_BINDING, 'g'))) names.add(m[1]);
-  for (const n of [...names]) {
-    const alias = new RegExp(String.raw`^\s*([A-Za-z_][A-Za-z0-9_]*)="?` + deploySubRef(n) + '"?\\s*$', 'gm');
-    for (const m of text.matchAll(alias)) names.add(m[1]);
+  // Fixpoint, not one pass: re-scan until a full sweep adds nothing. Bounded by
+  // the number of distinct identifiers in `text`, so it terminates.
+  for (let grew = true; grew;) {
+    grew = false;
+    for (const n of [...names]) {
+      for (const m of text.matchAll(aliasRe(n))) {
+        if (!names.has(m[1])) { names.add(m[1]); grew = true; }
+      }
+    }
   }
   return names;
+}
+
+/**
+ * The guard output written INLINE, with no shell variable in between —
+ * `if [ -z "${{ steps.topology_guard.outputs.deploy_sub }}" ]`.
+ *
+ * #3994 P1. A name-keyed scan cannot see this line at all: it contains no shell
+ * variable, so nothing in `boundDeploySubNames` matches it — and the step is
+ * skipped outright when the inline use is its ONLY reference to the output. The
+ * shape is not exotic; this workflow already inlines `${{ }}` expressions inside
+ * `run:` bodies, and no repo guard forbids it.
+ *
+ * Modelled as a synthetic REFERENCE rather than a name so every emptiness idiom
+ * below applies to it unchanged. The sentinel is not a legal shell identifier,
+ * so it can never collide with a real variable name.
+ */
+const RAW_OUTPUT_REF = '${{deploy_sub}}';
+
+/**
+ * Every testable reference to deploy_sub in `text`: the shell names it is bound
+ * to, plus the synthetic inline reference when the raw output expression occurs.
+ *
+ * Including the sentinel unconditionally-on-occurrence cannot over-flag: it only
+ * widens what an emptiness test may be written AGAINST, and a step that merely
+ * binds the output in `env:` has no emptiness test to match.
+ */
+function deploySubTestableRefs(text) {
+  const refs = boundDeploySubNames(text);
+  if (new RegExp(DEPLOY_SUB_OUTPUT).test(text)) refs.add(RAW_OUTPUT_REF);
+  return refs;
 }
 
 /**
@@ -518,12 +599,35 @@ function boundDeploySubNames(text) {
  *   `! -n REF`
  *   `REF = ""` / `== ''`  (and reversed)
  *   `xREF = x`            (and reversed) — the portable-`test` idiom
- *   `-n REF` on a line that also contains `||` — the inverted guard
+ *   `-n REF` on a line that also contains `||` — the inverted guard, one line
+ *   `-n REF` opening a `then`, with the fatal branch in the `else` (#3994 P2)
+ *
+ * REF itself is covered in three forms, all by the per-shape control:
+ *   a bound shell name (`DEPLOY_SUB`), and the second name the workflow binds
+ *   the same output to (`ADMIN_SUB`); a name laundered through any depth of
+ *   plain copy, with or without an `export`/`local` prefix or a trailing
+ *   comment (#3994 P3/P4/P5); and the raw `${{ }}` output expression written
+ *   inline with no shell variable at all (#3994 P1, {@link RAW_OUTPUT_REF}).
+ *
+ * The fatal half is covered as `exit <n>`, `exit $var`, and a bare `false`
+ * under `bash -e` — see {@link HARD_FAIL} (#3994 P9/P10).
  *
  * NOT COVERED, and named rather than implied (the R7 half of #3947 was a
- * comment claiming coverage the code did not have): `case "$V" in "")`,
- * `${V:?msg}`, arithmetic tests, and a value laundered through a command
- * substitution or a defaulted expansion before being tested.
+ * comment claiming coverage the code did not have). #3994 measured these as
+ * SURVIVORS of the detector as it stands after that issue's fixes:
+ *   - `case "$V" in "") exit 1 ;; esac`                      (#3994 P7)
+ *   - `: "${V:?msg}"` — the expansion that aborts on empty   (#3994 P8)
+ *   - `[ "${#V}" -eq 0 ]` and any other arithmetic test      (#3994 P6)
+ *   - a value laundered through a command substitution (`SUB=$(echo "$V")`)
+ *     or a DEFAULTED expansion before being tested — the plain-copy pass
+ *     follows `SUB="$V"`, not `SUB="$(…)"`.
+ *   - an emptiness test and its `exit` split across a `&&`-continued line or a
+ *     function called from elsewhere in the step.
+ *
+ * Every line above is measured, not assumed: `temp/probe-3994.mjs` in #3994
+ * injects each shape and reports CAUGHT/SURVIVED. Add a shape here only with
+ * an entry in OFFENDING_IDIOMS proving it; remove one only by moving it into
+ * this NOT-COVERED list.
  */
 function emptinessTestRe(name) {
   const R = deploySubRef(name);
@@ -542,49 +646,70 @@ function nonEmptinessTestRe(name) {
 }
 
 /**
+ * Walk the `if` opened at `lines[i]` to its matching `fi` and return the first
+ * hard fail found in `arm` ('then' or 'else'), or '' if there is none.
+ *
+ * Deliberately conservative: a fail nested deeper inside the branch still
+ * counts, `elif` is treated as part of the else arm, and an unbalanced `fi`
+ * scans to the end of the step rather than stopping early.
+ *
+ * The 'else' arm exists for #3994 P2. The previous walker `break`d at the first
+ * `else`, so the whole of `if [ -n "$V" ]; then …; else …; exit 1; fi` — an
+ * ordinary inverted guard — was unreachable to it.
+ */
+function branchHardFail(lines, i, arm) {
+  let depth = 1;
+  let inArm = 'then';
+  for (let j = i + 1; j < lines.length && depth > 0; j += 1) {
+    const t = lines[j].trim();
+    if (/^if\b/.test(t)) { depth += 1; continue; }
+    if (/^fi\b/.test(t)) { depth -= 1; continue; }
+    if (depth === 1 && /^(else|elif)\b/.test(t)) { inArm = 'else'; continue; }
+    if (inArm === arm && HARD_FAIL.test(lines[j])) return t;
+  }
+  return '';
+}
+
+/**
  * Steps that read deploy_sub and treat EMPTY as fatal.
  *
- * The property, stated once: a line that tests a deploy_sub-carrying name for
- * emptiness, AND a hard fail either on that same line or inside the `then`
- * block it opens. Requiring the exit is what keeps a benign default —
+ * The property, stated once: a line that tests a deploy_sub REFERENCE for
+ * emptiness, AND a hard fail either on that same line or inside the branch that
+ * the test makes fatal. Requiring the fail is what keeps a benign default —
  * `if [ -z "${DEPLOY_SUB:-}" ]; then DEPLOY_SUB=$(az account show …); fi` —
  * out of the result; the filter this replaced flagged that one.
  *
- * The forward scan is deliberately conservative: an exit nested deeper inside
- * the branch still counts, and an unbalanced `fi` scans to the end of the step
- * rather than stopping early. Over-flagging is a review conversation;
- * under-flagging is a 06:48Z outage.
+ * "Reference", not "name": the population comes from
+ * {@link deploySubTestableRefs}, so a step whose ONLY use of the output is the
+ * raw inline `${{ }}` expression is scanned rather than skipped (#3994 P1).
+ *
+ * Which branch is fatal depends on the polarity of the test. An EMPTINESS test
+ * makes its `then` fatal; a NON-emptiness test is the inverted guard, so its
+ * `else` is (#3994 P2). Both are checked; the one-line `-n … || exit 1` form is
+ * caught by the same-line arm above them.
  */
 function findDeploySubOffenders(src) {
   const offenders = [];
   for (const step of src.split(/^ {6}- name: /m).slice(1)) {
-    const names = boundDeploySubNames(step);
-    if (names.size === 0) continue;
+    const refs = [...deploySubTestableRefs(step)];
+    if (refs.length === 0) continue;
     const stepName = step.split(/\r?\n/)[0].trim();
     const lines = step.split(/\r?\n/);
     for (let i = 0; i < lines.length; i += 1) {
       const line = lines[i];
-      const tested = [...names].some((n) => emptinessTestRe(n).test(line)
-        || (nonEmptinessTestRe(n).test(line) && line.includes('||')));
-      if (!tested) continue;
-      if (HARD_FAIL.test(line)) {
+      const empty = refs.some((n) => emptinessTestRe(n).test(line));
+      const nonEmpty = refs.some((n) => nonEmptinessTestRe(n).test(line));
+      if (!empty && !nonEmpty) continue;
+      // Same line: an emptiness test, or the one-line inverted `-n … || exit 1`.
+      if ((empty || line.includes('||')) && HARD_FAIL.test(line)) {
         offenders.push(`${stepName} :: ${line.trim()}`);
         continue;
       }
       // A `then` whose whole block is on this line was already covered above.
       const thenAt = line.indexOf('then');
       if (thenAt < 0 || /\bfi\b/.test(line.slice(thenAt))) continue;
-      let depth = 1;
-      for (let j = i + 1; j < lines.length && depth > 0; j += 1) {
-        const t = lines[j].trim();
-        if (/^if\b/.test(t)) depth += 1;
-        if (/^fi\b/.test(t)) { depth -= 1; continue; }
-        if (depth === 1 && /^(else|elif)\b/.test(t)) break;
-        if (HARD_FAIL.test(lines[j])) {
-          offenders.push(`${stepName} :: ${line.trim()} … ${t}`);
-          depth = 0;
-        }
-      }
+      const fatal = branchHardFail(lines, i, empty ? 'then' : 'else');
+      if (fatal) offenders.push(`${stepName} :: ${line.trim()} … ${fatal}`);
     }
   }
   return offenders;
@@ -594,9 +719,27 @@ function findDeploySubOffenders(src) {
  * Apply a text mutation to the workflow IN MEMORY and hand the result to `fn`.
  *
  * Mirrors {@link withMutatedGuard}, with the same load-bearing assertion: the
- * needle MUST match exactly once. This file and the workflow are both CRLF, and
- * a needle written with LF matches ZERO times — which reads exactly like a
- * passing mutation test while proving nothing.
+ * needle MUST match exactly once — a needle matching ZERO times reads exactly
+ * like a passing mutation test while proving nothing. See the LINE ENDINGS note
+ * on {@link withMutatedGuard} for how to write one: every target here is ALL-LF
+ * in the repository, the harness searches an LF-normalized copy, and needles are
+ * written with plain \n.
+ *
+ * #3995 — the two lines that used to sit here claimed the opposite ("this file
+ * and the workflow are both CRLF"). MEASURED from the git blob rather than a
+ * Windows worktree: `git show origin/main:<this file> | tr -cd '\r' | wc -c` = 0,
+ * for all four targets. That claim was retracted for the other harnesses in
+ * commit aa8722d5 and left verbatim on this one, so the file asserted both
+ * directions of the same fact 300 lines apart.
+ *
+ * #3997 — WHEN THIS ASSERTION FIRES AT 0 HITS, the usual cause is NOT a defect
+ * in the detector. The anchors below are ordinary content lines lifted from the
+ * workflow, so an unrelated PR that edits one of those lines turns CONTROL
+ * (PER-SHAPE) and CONTROL (NEGATIVE) red. The fix is to re-point the anchor at
+ * another line inside the SAME step — any line unique to that step will do; the
+ * per-shape control re-derives which names it covers from the anchor itself, so
+ * it stays honest across the move. Fail-closed here is deliberate: an anchor
+ * that silently stopped matching would leave the mutation proving nothing.
  *
  * The mutant is a STRING, never a file: a `.yml` written into
  * `.github/workflows/` is a real workflow GitHub would try to parse, and a
@@ -608,7 +751,14 @@ function withMutatedWorkflow(needle, replacement, fn) {
   const raw = fs.readFileSync(WORKFLOW, 'utf8');
   const original = raw.replace(/\r\n/g, '\n');
   const hits = original.split(needle).length - 1;
-  assert.equal(hits, 1, `the mutation needle matched ${hits} times, not once — this control proves NOTHING`);
+  assert.equal(
+    hits,
+    1,
+    `the mutation anchor matched ${hits} times in the workflow, not once — this control proves NOTHING.`
+    + ' At 0 hits this is almost certainly NOT a defect the detector found: an unrelated edit moved or'
+    + ' rewrote the anchor line. Re-point it at another line unique to the SAME step (#3997). Anchor:'
+    + ` ${JSON.stringify(needle)}`,
+  );
   try {
     return fn(original.replace(needle, replacement));
   } finally {
@@ -653,6 +803,34 @@ const OFFENDING_IDIOMS = [
   // binding sites) did not contain it at all.
   ['on the ADMIN_SUB-bound step', ADMIN_SUB_ANCHOR,
     'if [ -z "${ADMIN_SUB:-}" ]; then\n            exit 1\n          fi\n'],
+
+  // --- #3994: seven shapes measured as SURVIVORS of the eight above. ---
+  // Each was injected at these same anchors and produced 0 offenders before the
+  // detector changes that ship with them.
+
+  // P1 — the one to act on. NO shell variable on the offending line, so a
+  // name-keyed scan cannot see it however the names are collected. It is not
+  // exotic: this workflow already inlines `${{ }}` inside `run:` bodies.
+  ['the raw output expression, inline', DEPLOY_SUB_ANCHOR,
+    'if [ -z "${{ steps.topology_guard.outputs.deploy_sub }}" ]; then\n            exit 1\n          fi\n'],
+  // P2 — the inverted guard written as a block. The old walker `break`d at the
+  // first `else`, so the fatal arm was never scanned.
+  ['-n with the fatal branch in the else', DEPLOY_SUB_ANCHOR,
+    'if [ -n "$DEPLOY_SUB" ]; then\n            echo "have a sub"\n          else\n            exit 1\n          fi\n'],
+  // P3/P4/P5 — three ways to defeat the plain-copy pass without hiding
+  // anything: a keyword prefix, a second hop, a trailing comment.
+  ['laundered through an export-prefixed alias', DEPLOY_SUB_ANCHOR,
+    'export SUB="$DEPLOY_SUB"\n          if [ -z "$SUB" ]; then\n            exit 1\n          fi\n'],
+  ['laundered through TWO levels of alias', DEPLOY_SUB_ANCHOR,
+    'SUB="$DEPLOY_SUB"\n          SUB2="$SUB"\n          if [ -z "$SUB2" ]; then\n            exit 1\n          fi\n'],
+  ['aliased on a line with a trailing comment', DEPLOY_SUB_ANCHOR,
+    'SUB="$DEPLOY_SUB"  # the subscription this deploy lands in\n          if [ -z "$SUB" ]; then\n            exit 1\n          fi\n'],
+  // P9/P10 — the fatal half, spelled without a non-zero integer literal. Both
+  // end the step: the runner default is `bash -e {0}`.
+  ['a bare false under bash -e', DEPLOY_SUB_ANCHOR,
+    'if [ -z "$DEPLOY_SUB" ]; then\n            false\n          fi\n'],
+  ['an exit status indirected through a variable', DEPLOY_SUB_ANCHOR,
+    'if [ -z "$DEPLOY_SUB" ]; then\n            rc=1; exit $rc\n          fi\n'],
 ];
 
 test('POPULATION — the deploy_sub binding sites are enumerated EXACTLY', () => {
@@ -725,10 +903,18 @@ test('CONTROL (PER-SHAPE) — every emptiness idiom is caught, on every bound na
       'the portable x-prefix idiom',
       'laundered through a plain alias',
       'on the ADMIN_SUB-bound step',
+      'the raw output expression, inline',
+      '-n with the fatal branch in the else',
+      'laundered through an export-prefixed alias',
+      'laundered through TWO levels of alias',
+      'aliased on a line with a trailing comment',
+      'a bare false under bash -e',
+      'an exit status indirected through a variable',
     ],
     'the idiom population changed. Adding a shape: extend this list in the SAME edit. '
     + 'Removing one: say in the PR why that idiom can no longer reach the workflow — '
-    + 'seven of these eight walked past the filter this control replaced (#3947 F1).',
+    + 'seven of the first eight walked past the filter this control replaced (#3947 F1), '
+    + 'and the last seven walked past THAT one (#3994).',
   );
 
   // The second half of this test's title, which the labels alone do NOT pin.
@@ -778,6 +964,27 @@ test('CONTROL (NEGATIVE) — an emptiness test with NO hard fail is NOT an offen
       'if [ -z "${DEPLOY_SUB:-}" ]; then DEPLOY_SUB=$(az account show --query id -o tsv); fi\n'],
     ['fails only after a non-empty fallback also failed',
       'if [ -z "${DEPLOY_SUB:-$(az account show --query id -o tsv)}" ]; then exit 1; fi\n'],
+    // #3994 added three widenings, each of which could have turned this
+    // detector into "flag every line mentioning deploy_sub". One benign case per
+    // widening, so each is discriminating rather than merely broader.
+    //
+    // P2 widened the walker to the ELSE arm. The THEN arm of a `-n` test is the
+    // HAPPY path, so an exit there is not an emptiness failure — and the else
+    // arm here supplies a default, exactly like the first case above.
+    ['is an inverted guard whose else supplies a default',
+      'if [ -n "$DEPLOY_SUB" ]; then\n            echo "using $DEPLOY_SUB"\n          else\n'
+      + '            DEPLOY_SUB=$(az account show --query id -o tsv)\n          fi\n'],
+    // P1 added the raw `${{ }}` expression as a testable reference. The same
+    // benign default, written inline.
+    ['tests the raw expression but supplies a default',
+      'SUB="${{ steps.topology_guard.outputs.deploy_sub }}"\n'
+      + '          if [ -z "${{ steps.topology_guard.outputs.deploy_sub }}" ]; then\n'
+      + '            SUB=$(az account show --query id -o tsv)\n          fi\n'],
+    // P9/P10 widened HARD_FAIL. `exit 0` and a `false` that is an ARGUMENT
+    // rather than the whole command are still not hard fails.
+    ['exits ZERO, and mentions false only as an argument',
+      'if [ -z "$DEPLOY_SUB" ]; then\n            echo "inheriting the login subscription" false\n'
+      + '            exit 0\n          fi\n'],
   ];
   for (const [label, injected] of benign) {
     const found = withMutatedWorkflow(

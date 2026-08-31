@@ -199,10 +199,13 @@ let warnedDisabled = false;
  * can never stall the BFF; throws only on a real transport error so the route
  * can log it (the route still answers 200 — telemetry loss is never a caller
  * failure).
+ *
+ * `sent` counts envelopes App Insights ACCEPTED, not envelopes posted (#3735). `rejected`
+ * is present only when some were refused; see the 206 note in the body.
  */
 export async function postRumBatch(
   items: RumItem[],
-): Promise<{ sent: number; skipped?: 'not-configured' | 'empty' }> {
+): Promise<{ sent: number; rejected?: number; skipped?: 'not-configured' | 'empty' }> {
   if (!items.length) return { sent: 0, skipped: 'empty' };
   if (!isRumEnvEnabled()) {
     if (!warnedDisabled) {
@@ -229,5 +232,66 @@ export async function postRumBatch(
     const body = await res.text().catch(() => '');
     throw new Error(`App Insights track ${res.status}: ${body.slice(0, 200)}`);
   }
-  return { sent: envelopes.length };
+  // `res.ok` COVERS 206, AND 206 IS HOW BREEZE SAYS "I DROPPED SOME OF THAT" (#3735).
+  //
+  // The classic track endpoint answers 200 when every envelope is accepted and 206 Partial
+  // Content when only some are — with a body naming the rejected INDEXES and why. `res.ok`
+  // is true for the whole 2xx range, so the previous shape returned
+  // `{ sent: envelopes.length }` on a 206 and reported every envelope as shipped whether
+  // it was or not. That is a message asserting what the code never established
+  // (deploy-integrity.md R7), and it is silent in exactly the direction that hides a
+  // partial ingestion failure.
+  //
+  // WHY THIS IS HERE RATHER THAN IN A LATER PR. #3735 reports `/admin/rum` showing
+  // PAGE LOADS 0 and ROUTE CHANGES 0 in the same 24h window that Web Vitals reports 55
+  // sampled page views — three independent KQL queries over one `timespan`, three client
+  // paths behind one `install()` gate, and a self-contradictory answer. A per-envelope-TYPE
+  // rejection (PageviewPerformanceData / PageviewData refused, EventData accepted) produces
+  // precisely that shape, and with `res.ok` swallowing 206 there was nowhere for it to
+  // surface. THIS IS NOT A ROOT-CAUSE CLAIM: it is one candidate of several the issue
+  // lists, and it has NOT been confirmed against Log Analytics — no estate call was made.
+  // What this change does is make the case observable instead of silent, so the next
+  // occurrence is diagnosable rather than a second investigation from zero.
+  const accepted = await readAcceptedCount(res, envelopes.length);
+  if (accepted.rejected > 0) {
+    // eslint-disable-next-line no-console
+    console.warn(
+      `[rum] App Insights accepted ${accepted.received - accepted.rejected}/${accepted.received} envelope(s) `
+        + `(HTTP ${res.status}). REJECTED: ${accepted.reasons.join('; ') || 'no per-item reason supplied'}. `
+        + 'Browser telemetry for the rejected kinds will be MISSING from /admin/rum — the panel will read 0, '
+        + 'which is not the same as "nobody loaded a page".',
+    );
+  }
+  return { sent: envelopes.length - accepted.rejected, rejected: accepted.rejected || undefined };
+}
+
+/**
+ * Read Breeze's per-item accounting off a track response.
+ *
+ * Total over every response shape: a 200 with no body, a 206 with the documented
+ * `{ itemsReceived, itemsAccepted, errors: [{ index, statusCode, message }] }`, and a body
+ * that is not JSON at all. When it cannot tell, it says nothing was rejected rather than
+ * inventing a number — the caller's warning must not fire on a response this function
+ * failed to parse (R7 again, one level down).
+ */
+async function readAcceptedCount(
+  res: Response,
+  sentCount: number,
+): Promise<{ received: number; rejected: number; reasons: string[] }> {
+  if (res.status === 200) return { received: sentCount, rejected: 0, reasons: [] };
+  let body: any;
+  try {
+    body = await res.json();
+  } catch {
+    return { received: sentCount, rejected: 0, reasons: [] };
+  }
+  const received = Number.isFinite(body?.itemsReceived) ? Number(body.itemsReceived) : sentCount;
+  const acceptedCount = Number.isFinite(body?.itemsAccepted) ? Number(body.itemsAccepted) : received;
+  const rejected = Math.max(0, received - acceptedCount);
+  const reasons = Array.isArray(body?.errors)
+    ? body.errors
+        .slice(0, 5)
+        .map((e: any) => `#${e?.index} ${e?.statusCode ?? '?'} ${String(e?.message ?? '').slice(0, 120)}`)
+    : [];
+  return { received, rejected, reasons };
 }

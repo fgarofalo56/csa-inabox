@@ -54,6 +54,8 @@ import { EntityDiagram } from '@/lib/components/shared/entity-diagram';
 import { DeltaMaintenanceDialog } from '../components/delta-maintenance-dialog';
 import { TierDialog, type BlobAccessTier } from '@/lib/components/onelake/tier-dialog';
 import { parseDdlColumns } from '@/lib/azure/delta-maintenance';
+// #3919 — the ONE reader of `secondaryIds.seedCsvPaths`, shared with the install route.
+import { seedCsvPathLookup } from '@/lib/install/report-binding';
 import { LoadToTableWizard } from '../components/load-to-table-wizard';
 import { OneLakeSecurityTab } from '../components/onelake-security-tab';
 import { ConnectTab } from '@/lib/components/shared/connect-tab';
@@ -117,23 +119,24 @@ export function LakehouseEditor({ item, id }: Props) {
   const bundleShortcuts = lhContent?.shortcuts ?? [];
   const hasBundle = bundleFolders.length > 0 || bundleDeltaTables.length > 0 || bundleShortcuts.length > 0;
 
+  // #3919 — READ the recorded CSV location (see seedCsvPathLookup), never rebuild it:
+  // the old `<root>/Tables/<n>/<n>.csv` moved to `<root>/Files/_seed/` in #3913, so this
+  // pane showed — and its "Query CSV" button read — a blob that does not exist.
   const seededTableInfo = useMemo(() => {
     const prov = (itemQ.data?.state as any)?.provisioning;
     const sec = (prov?.secondaryIds || {}) as Record<string, string>;
     const container = typeof sec.container === 'string' ? sec.container : null;
-    const rootPath = typeof sec.rootPath === 'string' ? sec.rootPath : null;
     const seeded = String(sec.seededTables || '').split(',').map((x) => x.trim()).filter(Boolean);
-    if (!container || !rootPath || !seeded.length) return null;
-    const schemasEnabledBundle = lhContent?.schemasEnabled === true;
-    return seeded.map((name) => {
+    if (!container || !seeded.length) return null;
+    const recordedCsvPath = seedCsvPathLookup(sec);
+    const rows = seeded.flatMap((name) => {
+      const csvPath = recordedCsvPath(name);
+      if (!csvPath) return [];
       const def = bundleDeltaTables.find((t) => t.name === name || leafName(t.name) === name);
-      const schema = schemasEnabledBundle ? String(def?.schema || 'dbo') : '';
-      const csvPath = schema
-        ? `${rootPath}/Tables/${schema}/${name}/${name}.csv`
-        : `${rootPath}/Tables/${name}/${name}.csv`;
-      return { name, container, csvPath, rowCount: def?.sampleRows?.length ?? null };
+      return [{ name, container, csvPath, rowCount: def?.sampleRows?.length ?? null }];
     });
-  }, [itemQ.data, bundleDeltaTables, lhContent]);
+    return rows.length ? rows : null;
+  }, [itemQ.data, bundleDeltaTables]);
 
   // ── Core state ────────────────────────────────────────────────────────────
   const [activeContainer, setActiveContainer] = useState<string | null>(null);
@@ -244,6 +247,18 @@ export function LakehouseEditor({ item, id }: Props) {
   } = useLakehouseBinding({
     id, isNewItem, itemQ, activeContainer, setActiveContainer, setOpenPrefixes, cacheKey,
   });
+
+  // #3524 — an EMPTY listing is not yet proof, so hold the copy below for one probe
+  // window: listContainers() drops entries on a 6s timeout and the binding resolve runs
+  // behind it. Measured live 2026-08-15, an app-installed lakehouse showed "no containers"
+  // on first open and resolved minutes later untouched — the fresh-item error banner
+  // ux-baseline §6 forbids. Non-empty listings and containerError are unaffected.
+  const [emptyListingSettled, setEmptyListingSettled] = useState(false);
+  useEffect(() => {
+    if (containers === null || containers.length > 0) { setEmptyListingSettled(false); return; }
+    const t = setTimeout(() => setEmptyListingSettled(true), 6500); // 6s window + margin
+    return () => clearTimeout(t);
+  }, [containers]);
 
   // ── Domain hooks ──────────────────────────────────────────────────────────
   const perms = useLakehousePermissions({ activeContainer, confirm });
@@ -851,12 +866,19 @@ export function LakehouseEditor({ item, id }: Props) {
               <Database20Regular style={{ verticalAlign: 'middle', marginRight: tokens.spacingHorizontalXS }} />
               {itemQ.data?.displayName ?? 'Primary lakehouse'}
             </Caption1>
-            {containers === null && <Spinner size="tiny" label="Loading containers…" labelPosition="after" />}
+            {/* #3524 — the spinner covers the hold window too, so a fresh item never flashes a
+                diagnosis before the listing is final. R7: the copy below states what was
+                ESTABLISHED — an empty probe fits a real access gap AND a timed-out one. */}
+            {(containers === null
+              || (containers.length === 0 && !containerError && !displayContainers.length && !emptyListingSettled))
+              && <Spinner size="tiny" label="Loading containers…" labelPosition="after" />}
             {containerError && (
               <MessageBar intent="error"><MessageBarBody><MessageBarTitle>Cannot list containers</MessageBarTitle>{containerError}</MessageBarBody></MessageBar>
             )}
-            {containers && containers.length === 0 && !containerError && !displayContainers.length && (
-              <Caption1>No containers visible to BFF identity. Confirm LOOM_*_URL env vars + Storage Blob Data Contributor role.</Caption1>
+            {containers && containers.length === 0 && !containerError && !displayContainers.length && emptyListingSettled && (
+              <Caption1>The container listing came back empty. Either the Console identity has no access — it needs
+                Storage Blob Data Contributor, and LOOM_*_URL must name this lakehouse&apos;s account — or the probe
+                timed out; this view cannot tell which. Reopen to retry before changing any grant.</Caption1>
             )}
             {displayContainers.length > 0 && (
               <Tree aria-label="Lakehouse containers" defaultOpenItems={displayContainers.map((c) => `c-${c.name}`)}>

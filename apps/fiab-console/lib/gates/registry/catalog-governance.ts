@@ -39,7 +39,19 @@ export const CATALOG_GOVERNANCE_GATE_META: Record<string, GateMeta> = {
                { path: '/items/data-pipeline', label: 'Data pipeline → Output (lineage receipt)' }],
     fixit: {
       kind: 'wizard',   // wizard: mint token + run the pool-setup script
-      grantNote: 'One-time pool config: scripts/csa-loom/openlineage-pool-setup.sh mints the per-pool credential, uploads the openlineage-spark jar as a Synapse workspace library, and sets spark.extraListeners + the http transport on the pool. Rotation = re-run the script (docs/fiab/runbooks/openlineage-spark-lineage.md). Dataset-level (not column-level) Spark lineage needs NO listener: declare the job\'s inputs/outputs from the Runs tab\'s "Fix it" wizard.',
+      // #3374 — say which half the PLATFORM already did, so the note does not
+      // read as "you must configure all of this". spark.extraListeners and the
+      // http transport are emitted by landing-zone/synapse-spark-pools.bicep
+      // whenever openLineageConfig.ingestUrl is set; what the wizard adds is the
+      // per-pool CREDENTIAL and the listener JAR (a Synapse workspace library —
+      // bicep has no upload surface for one). The wizard is not automated on the
+      // bootstrap because minting ROTATES the per-workspace token and would
+      // invalidate pools stamped by an earlier run.
+      // R7 — same correction as the sibling remediation in
+      // lib/admin/env-checks/catalog-governance.ts: this must not describe a
+      // wizard ACTION the product cannot take. The dialog surfaces the steps and
+      // the command; the script performs them.
+      grantNote: 'Already deployed by bicep: spark.extraListeners + the http transport on the pool (landing-zone/synapse-spark-pools.bicep sparkConfigProperties, when openLineageConfig.ingestUrl is set). Two halves bicep cannot do remain, and scripts/csa-loom/openlineage-pool-setup.sh does them: the per-pool credential and the openlineage-spark listener JAR, uploaded as a Synapse workspace library. It is an operator step rather than a bootstrap one because minting ROTATES the per-workspace ingest token — an automatic re-run would invalidate every pool still carrying the previous token in its Spark conf. Rotation = re-run that script (docs/fiab/runbooks/openlineage-spark-lineage.md). Dataset-level (not column-level) Spark lineage needs NO listener: declare the job\'s inputs/outputs from the Runs tab.',
     },
     // `spark_lineage_not_declared` is the HarvestReceipt.code the Spark run
     // route returns when a succeeded batch declared no dataset pair — the one

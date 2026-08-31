@@ -138,6 +138,29 @@ export function DebugRunPanel({
 }: DebugRunPanelProps) {
   const s = useStyles();
 
+  /**
+   * #3755 / #3549 — DEBUG IS A COMPUTE DISPATCH, SO IT CARRIES THE EMPTY-PIPELINE GATE.
+   *
+   * This panel's own Debug button is one of the controls #3696 never reached: it lives
+   * under the editor's Output tab (and the in-canvas Output dock), not on the ribbon, so
+   * `buildPipelineRibbon`'s `runBlocked` does not govern it. Debugging a pipeline with no
+   * activities dispatches a real ADF run that reports Succeeded having executed nothing —
+   * the exact outcome #3549 exists to stop — and then streams an empty activity table,
+   * which reads as "the run has not started yet" rather than "there was nothing to run".
+   *
+   * DERIVED FROM AN EXISTING PROP, deliberately. `activityNames` is already threaded from
+   * `data-pipeline-editor` → `OutputPane` → here as `activities.map(a => a.name)`, so the
+   * signal is present without adding a prop to a caller outside this change's scope.
+   *
+   * `undefined` MUST NOT GATE (deploy-integrity.md R7). The prop is optional, so absent
+   * means "this caller did not tell me", which is not the same as "the pipeline is empty";
+   * asserting the latter from the former would be the message claiming what the code never
+   * established. Only an explicitly-supplied EMPTY array is evidence.
+   */
+  const seedIncomplete = Array.isArray(activityNames) && activityNames.length === 0;
+  const EMPTY_PIPELINE_TITLE =
+    'This pipeline is empty — add at least one activity before debugging it';
+
   const [paramValues, setParamValues] = useState<Record<string, string>>({});
   const [debugging, setDebugging] = useState(false);
   const [runId, setRunId] = useState<string | null>(null);
@@ -261,6 +284,11 @@ export function DebugRunPanel({
 
   const startDebug = useCallback(async (recovery?: DebugRecoveryOpts) => {
     if (!workspaceId || !pipelineId) return;
+    // #3755 — the same refusal as the button, in the handler. A disabled control is a
+    // UX affordance, not a boundary: this callback is also reachable from the recovery
+    // path and from any future caller, and the ribbon fix for #3549 was explicit that the
+    // dialog's own start paths had to be guarded alongside the button for the same reason.
+    if (seedIncomplete && !recovery) return;
     clearTimer();
     polls.current = 0;
     setDebugging(true); setErr(null); setGate(null);
@@ -309,7 +337,10 @@ export function DebugRunPanel({
     } finally {
       setDebugging(false);
     }
-  }, [workspaceId, pipelineId, buildParams, clearTimer, pollOnce, scheduleNext]);
+    // `seedIncomplete` is READ in the guard above, so it must be listed — a stale closure
+    // here would keep refusing after the user adds an activity (the dep-array defect
+    // #3696 round 3 found on the ribbon memo, in a callback instead of a memo).
+  }, [workspaceId, pipelineId, buildParams, clearTimer, pollOnce, scheduleNext, seedIncomplete]);
 
   // Keep the ref current so overlay rerun callbacks always hit this closure.
   useEffect(() => { startDebugRef.current = startDebug; }, [startDebug]);
@@ -357,12 +388,21 @@ export function DebugRunPanel({
             </Button>
           </Tooltip>
         )}
-        <Button
-          appearance="primary" icon={<Bug20Regular />}
-          disabled={debugging || !pipelineId} onClick={() => startDebug()}
+        <Tooltip
+          content={seedIncomplete
+            ? EMPTY_PIPELINE_TITLE
+            : 'Dispatch a debug run against the live Azure Data Factory backing'}
+          relationship="label"
         >
-          {debugging ? 'Starting…' : 'Debug'}
-        </Button>
+          <Button
+            appearance="primary" icon={<Bug20Regular />}
+            disabled={debugging || !pipelineId || seedIncomplete}
+            title={seedIncomplete ? EMPTY_PIPELINE_TITLE : undefined}
+            onClick={() => startDebug()}
+          >
+            {debugging ? 'Starting…' : 'Debug'}
+          </Button>
+        </Tooltip>
       </div>
 
       <Caption1 className={s.intro}>

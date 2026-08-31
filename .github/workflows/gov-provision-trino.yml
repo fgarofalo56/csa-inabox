@@ -219,7 +219,16 @@ jobs:
           # `GET https://<acr><suffix>/v2/` on the same HTTP path the data-plane
           # tools use, and derives the suffix from the active cloud so it works
           # unchanged in .azurecr.us (.claude/rules/cloud-parity.md).
-          bash "${LOOM_ACR_DATAPLANE_READY_SCRIPT:-scripts/ci/acr-dataplane-ready.sh}" --acr "$ACR" --timeout-seconds 180             || echo "::warning::ACR data plane not confirmed reachable; the next data-plane call may be denied."
+          # #4079 — CONSUME the probe verdict instead of discarding it. This was
+          # `… || echo "::warning::"`, which threw away three distinguishable
+          # outcomes (1 = never sustained/propagation, 2 = no HTTP response at all
+          # = an UNKNOWN, 3 = the caller's own arguments were refused) and made
+          # #4067's hardening change the Gov LOG without changing Gov BEHAVIOUR.
+          # Measured 2026-08-31: Gov branch=0 swallow=12, Commercial branch=3.
+          # The gate classifies and reports; it proceeds by default because 1 and
+          # 2 are not refusals and acr-login-retry.sh below fails closed on a real
+          # denial. Pass --on-unconfirmed fail to stop here instead.
+          bash scripts/ci/acr-dataplane-gate.sh --acr "$ACR" --timeout-seconds 180
           bash scripts/ci/acr-login-retry.sh --acr "$ACR"
           az acr build --registry "$ACR" --no-logs \
             --image "loom-trino:$DEPLOY_TAG" --image "loom-trino:$SHA" --image "loom-trino:latest" \
@@ -267,7 +276,6 @@ jobs:
 
       - name: Supply-chain — install cosign
         if: ${{ inputs.apply == 'true' && !inputs.skip_supply_chain }}
-        uses: sigstore/cosign-installer@v4.1.2
         # PIN THE CLI. cosign-installer v4 defaults to Cosign v3.0.5 — a MAJOR
         # upgrade of the tool that signs every image this repo ships. Every
         # workflow that runs `cosign sign` / `cosign verify` is DISPATCH-ONLY, so
@@ -277,8 +285,18 @@ jobs:
         # Upstream discourages pinning "unless you have a specific reason";
         # not silently changing the signature format on a path CI cannot run is
         # a specific reason. Cosign v3 gets its own change, with a real receipt.
-        with:
-          cosign-release: v2.6.1
+        # RETRY THE DOWNLOAD (#4156). This used to be a bare
+        # `sigstore/cosign-installer` step: a single-attempt binary fetch from
+        # github.com whose only failure mode is to fail the job. On 2026-08-28 a TCP
+        # reset during it (`curl: (35) Recv failure`) reverted a HEALTHY image on a
+        # P0 roll -- run 33138606218, whose only two `##[error]` lines were that curl
+        # failure and its exit code. The roll never reached a gate, so NOTHING was
+        # verified; that is a different statement from a signature failing, and the
+        # helper's messages keep the two distinguishable (deploy-integrity R7).
+        # The helper retries the fetch, verifies the binary against the release's
+        # cosign_checksums.txt, and fails closed. Enforced at all 7 sites by
+        # scripts/ci/check-cosign-install-retry-adoption.mjs.
+        run: bash scripts/ci/cosign-install-retry.sh --version v2.6.1
 
       - name: Supply-chain — sign + verify the pushed digests
         if: ${{ inputs.apply == 'true' && !inputs.skip_supply_chain }}

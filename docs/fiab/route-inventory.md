@@ -15,8 +15,8 @@ verdict is DERIVED, not name-matched — see "How the owner column is decided".
 | --- | ---: |
 | Total routes | 1688 |
 | Public (no session) | 58 |
-| Session-only | 647 |
-| Owner-scoped | 675 |
+| Session-only | 648 |
+| Owner-scoped | 674 |
 | Admin | 308 |
 | Unknown (generator fails) | 0 |
 | Gated (backend config) | 496 |
@@ -2339,7 +2339,7 @@ dispatch is invisible to it. Full limits: `scripts/ci/_route-backends.mjs`.
 | `thread/lakehouse-delta-tables/route.ts` | GET | owner-scoped |  | ADLS, ARM, Azure SQL, Azure Storage, Cosmos, Managed Identity, Microsoft Graph, Synapse SQL |
 | `thread/materialize-to-kql/route.ts` | POST | owner-scoped | ● | ADLS, ADX, ARM, Azure Storage, Cosmos, Managed Identity, Microsoft Graph, Purview |
 | `thread/mirror-to-lakehouse/route.ts` | POST | owner-scoped |  | ADLS, Cosmos, Microsoft Graph, Purview |
-| `thread/mirror-to-notebook/route.ts` | POST | owner-scoped |  | ADF, ADLS, ADX, AI Search, ARM, Azure SQL, Azure Storage, Compute, Cosmos, Microsoft Graph, PostgreSQL, Purview, Resource Graph, Synapse |
+| `thread/mirror-to-notebook/route.ts` | POST | session-only |  | — |
 | `thread/model-tables/route.ts` | GET | owner-scoped |  | Cosmos, Microsoft Graph |
 | `thread/open-in-report-builder/route.ts` | POST | owner-scoped |  | ADF, ADLS, ADX, AI Search, ARM, Azure SQL, Azure Storage, Compute, Cosmos, Key Vault, Managed Identity, Microsoft Graph, PostgreSQL, Purview, Resource Graph, Synapse, Synapse SQL |
 | `thread/promote-medallion/route.ts` | POST | owner-scoped |  | ADF, ADLS, ADX, AI Search, ARM, Azure SQL, Azure Storage, Compute, Cosmos, Microsoft Graph, PostgreSQL, Purview, Resource Graph, Synapse |
@@ -2417,7 +2417,7 @@ dispatch is invisible to it. Full limits: `scripts/ci/_route-backends.mjs`.
 
 ## Authorization resolvers (derived)
 
-186 function(s) across 83 module(s) reach an owner / workspace-ACL
+187 function(s) across 83 module(s) reach an owner / workspace-ACL
 decision. Derived by `scripts/ci/_route-auth-scope.mjs` from the seeds above —
 nothing here is hand-maintained. A change to this list in a diff means the
 authorization surface moved.
@@ -2433,7 +2433,7 @@ authorization surface moved.
 | `apps/fiab-console/app/api/items/_lib/ai-content-fallback.ts` | `loadContentBackedItem` |
 | `apps/fiab-console/app/api/items/_lib/copilot-builder-checkpoints.ts` | `captureBuilderCheckpoint`, `listBuilderCheckpoints`, `restoreBuilderCheckpoint` |
 | `apps/fiab-console/app/api/items/_lib/copilot-builder-route.ts` | `GET`, `POST`, `makeCopilotBuilderRoute` |
-| `apps/fiab-console/app/api/items/_lib/item-crud.ts` | `accessOptsFor`, `createOwnedItem`, `deleteOwnedItem`, `domainScopeFor`, `listAllOwnedItems`, `listOwnedItems`, `loadOwnedItem`, `loadRecycledItem`, `purgeRecycledItem`, `resolveDomainName`, `restoreOwnedItem`, `softDeleteOwnedItem`, `updateOwnedItem` |
+| `apps/fiab-console/app/api/items/_lib/item-crud.ts` | `accessOptsFor`, `createOwnedItem`, `deleteOwnedItem`, `domainScopeFor`, `listAllOwnedItems`, `listOwnedItems`, `listOwnedItemsBounded`, `loadOwnedItem`, `loadRecycledItem`, `purgeRecycledItem`, `resolveDomainName`, `restoreOwnedItem`, `softDeleteOwnedItem`, `updateOwnedItem` |
 | `apps/fiab-console/app/api/items/_lib/model-store.ts` | `readModelState`, `writeModelState` |
 | `apps/fiab-console/app/api/items/_lib/ontology-binding.ts` | `GET`, `POST`, `makeOntologyBindRoute` |
 | `apps/fiab-console/app/api/items/_lib/palantir-crud.ts` | `GET`, `PATCH`, `POST`, `listOntologies`, `loadOntologySurface`, `makeCollectionRoute`, `makeItemRoute` |
@@ -2525,7 +2525,7 @@ silently downgrading the route.
 
 ## Backend signals (derived)
 
-449 module(s) ORIGINATE a backend label — the derivation read an
+450 module(s) ORIGINATE a backend label — the derivation read an
 Azure identifier out of them. Every other route/module below inherits through the
 call graph. Nothing in this section is a Loom module name someone typed: the
 modules are derived, and only the Microsoft-owned identifier vocabulary is seeded.
@@ -2851,7 +2851,6 @@ caps the NUMBER of cuts at three; it does not bound what one cut can hide.
 | `apps/fiab-console/app/api/powerplatform/environments/operation/route.ts` | Power Platform |
 | `apps/fiab-console/app/api/setup/discover-services/route.ts` | ADF, ADX, AI Search, APIM, Azure AI Services, Azure Maps, Azure Storage, Cosmos, Databricks, Event Hubs, Key Vault, PostgreSQL, Purview, Stream Analytics, Synapse |
 | `apps/fiab-console/app/api/setup/existing-aoai/route.ts` | Azure AI Services, Resource Graph |
-| `apps/fiab-console/app/api/setup/existing-dlzs/route.ts` | Resource Graph |
 | `apps/fiab-console/app/api/setup/existing-storage/route.ts` | Resource Graph |
 | `apps/fiab-console/app/api/setup/landing-zones/grant/route.ts` | Azure RBAC |
 | `apps/fiab-console/app/api/setup/landing-zones/route.ts` | Resource Graph |
@@ -3135,6 +3134,7 @@ caps the NUMBER of cuts at three; it does not bound what one cut can hide.
 | `apps/fiab-console/lib/editors/foundry-sub-editors.tsx` | ADLS, AI Foundry, AI Search, Azure AI Services |
 | `apps/fiab-console/lib/editors/geo-editors.tsx` | Azure Maps |
 | `apps/fiab-console/lib/editors/graph-editors.tsx` | ADLS |
+| `apps/fiab-console/lib/editors/lakebase-editor.tsx` | ARM |
 | `apps/fiab-console/lib/editors/lakehouse-shortcut-editor.tsx` | ADLS, Dataverse |
 | `apps/fiab-console/lib/editors/lakehouse/dialogs/shortcut-wizard-dialog.tsx` | ADLS |
 | `apps/fiab-console/lib/editors/lakehouse/dialogs/small-dialogs.tsx` | Synapse SQL |
@@ -3182,6 +3182,7 @@ caps the NUMBER of cuts at three; it does not bound what one cut can hide.
 | `apps/fiab-console/lib/install/provisioners/kql-db.ts` | ADX |
 | `apps/fiab-console/lib/install/provisioners/lakehouse.ts` | Azure Storage, Fabric |
 | `apps/fiab-console/lib/install/provisioners/logic-app.ts` | Logic Apps |
+| `apps/fiab-console/lib/install/provisioners/mirrored-database.ts` | Azure RBAC, Azure Storage |
 | `apps/fiab-console/lib/install/provisioners/mirrored-databricks.ts` | Databricks |
 | `apps/fiab-console/lib/install/provisioners/notebook.ts` | Synapse |
 | `apps/fiab-console/lib/install/provisioners/prompt-flow.ts` | AML |

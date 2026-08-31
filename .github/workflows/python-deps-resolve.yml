@@ -107,9 +107,11 @@ jobs:
             req: portal/shared/requirements.txt
           # The inverse check that found the rest: the trigger matched 21 files
           # and the matrix listed 7, so 14 could report green un-resolved. All
-          # 13 that resolve on linux/py3.11 are now checked; the 14th is
-          # declared in scripts/ci/python-deps-resolve-exclusions.json, and
+          # 14 are checked here now, and
           # check-python-deps-resolve-coverage.mjs fails on any future drift.
+          # `scripts/ci/python-deps-resolve-exclusions.json` is EMPTY as a
+          # result — every tracked requirements.txt this workflow's trigger
+          # matches is resolved by a matrix row.
           - app: fn-copilot-chat
             req: azure-functions/copilot-chat/requirements.txt
           - app: fn-mcp-server
@@ -134,6 +136,16 @@ jobs:
             req: csa_platform/semantic_model/requirements.txt
           - app: csa-unity-catalog-pattern
             req: csa_platform/unity_catalog_pattern/requirements.txt
+          # The 21st file, and the one that proved #3486 was not theoretical: it
+          # matched this workflow's trigger from the day the trigger landed, was
+          # never in the matrix, and was ResolutionImpossible the whole time
+          # (azure-ai-projects==1.0.0b3 vs semantic-kernel's ~=1.0.0b12, then
+          # pydantic==2.10.2 vs its !=2.10.2 exclusion). Both pins are cleared
+          # and it resolves RC=0 in python:3.11-slim, so it is judged here
+          # rather than declared in the exclusions file — which is now empty
+          # (#3506).
+          - app: examples-ai-agents
+            req: examples/ai-agents/requirements.txt
           # ---------------------------------------------------------------
           # The compiled locks (#3485). These got the basename
           # `requirements.txt` when they moved to

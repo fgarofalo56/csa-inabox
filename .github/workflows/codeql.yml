@@ -102,6 +102,15 @@ jobs:
     # kept anyway, one rung below the 90-minute step budget, because it turns a
     # future pathological query red in ~23 minutes instead of ~90 and stops us
     # paying an hour and a half of runner time to learn the same thing.
+    #
+    # `--timeout=600` IS PER-QUERY, NOT A TOTAL BUDGET (#3986). The intuitive
+    # reading — "the whole run-queries phase gets 600s" — is wrong and matters:
+    # 104 queries may each take up to 600s and the phase is still fine, while a
+    # SINGLE query exceeding it makes `run-queries` exit 33 and DISCARD ALL 104
+    # results. The action then uploads a failed-run SARIF carrying 0 rules and
+    # 0 results, GitHub correctly refuses to retire alerts from it, and the
+    # alert list freezes at the last real scan while continuing to read as
+    # current. That silent freeze — not the red job — is the harm.
     env:
       CODEQL_ACTION_EXTRA_OPTIONS: '{"database":{"run-queries":["--timeout=600"]}}'
 
@@ -152,6 +161,14 @@ jobs:
       - name: Autobuild
         uses: github/codeql-action/autobuild@db488ddef3bf6cb639b32c2e9a7c0a7ea8271d28 # v4.37.8
 
+      # The floor the upload assertion below compares against. Without it the
+      # assertion would happily accept the PREVIOUS scan's analysis for this
+      # ref — a stale row read as this run's receipt, which is the same class of
+      # error the assertion exists to catch.
+      - name: Record the analysis start time
+        id: started
+        run: echo "at=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
+
       # The timeout lives on the STEP, not only the job. A job-level timeout
       # CANCELS the job: conclusion `cancelled`, no chance to report, and grey in
       # the checks list. A step-level timeout FAILS the step and leaves the job
@@ -180,18 +197,69 @@ jobs:
       # never the problem.
       #
       # A scan that did not finish must look like a FAILURE, not a shrug.
+      #
+      # WHY THE OUTCOME ALONE IS A PROXY, NOT A MEASUREMENT (#3986). This step
+      # used to key ENTIRELY on `steps.analyze.outcome`. That catches the LOUD
+      # case — the step fails — and would pass a hypothetical success carrying a
+      # 0-rule upload, which is the QUIET one and the one that actually freezes
+      # the alert list. A green job and an empty upload are indistinguishable at
+      # the job level, so the receipt has to come from the analyses API.
+      #
+      # MEASURED on PR #3981 (`GET .../code-scanning/analyses?ref=refs/pull/3981/merge`):
+      #   2ffc8c9fc2  14:02:39Z  rules   0  results 0   <- discarded, list frozen
+      #   992022b7ec  15:14:56Z  rules   0  results 0   <- discarded, list frozen
+      #   ebe41b9b13  16:00:14Z  rules 102  results 1   <- the real scan
+      # PR-scoped analyses live under refs/pull/<n>/merge — NOT /head, and not
+      # the branch ref; both of those come back empty.
       - name: Assert the analysis actually completed
         if: always()
         env:
           OUTCOME: ${{ steps.analyze.outcome }}
           LANGUAGE: ${{ matrix.language }}
           BUDGET: ${{ matrix.analysisTimeout }}
+          ANALYSIS_REF: ${{ github.ref }}
+          STARTED_AT: ${{ steps.started.outputs.at }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          if [ "$OUTCOME" = "success" ]; then
-            echo "[codeql] ${LANGUAGE}: analysis completed and results were uploaded."
-            exit 0
+          if [ "$OUTCOME" != "success" ]; then
+            echo "::error title=CodeQL ${LANGUAGE} analysis did not complete::outcome=${OUTCOME}. No results were evaluated, so a 'failed run' SARIF (0 rules / 0 results) was uploaded instead. GitHub does NOT retire alerts from that upload: the code-scanning list for ${LANGUAGE} is now FROZEN at the last real scan and will read as current while every merge since goes unscanned. Do not triage ${LANGUAGE} alerts until this is green. If this timed out at ${BUDGET}m, find the query that stopped terminating in the 'Perform CodeQL Analysis' log (the last 'Starting evaluation of' with no matching 'Evaluation done')."
+            exit 1
           fi
-          echo "::error title=CodeQL ${LANGUAGE} analysis did not complete::outcome=${OUTCOME}. No results were evaluated, so a 'failed run' SARIF (0 rules / 0 results) was uploaded instead. GitHub does NOT retire alerts from that upload: the code-scanning list for ${LANGUAGE} is now FROZEN at the last real scan and will read as current while every merge since goes unscanned. Do not triage ${LANGUAGE} alerts until this is green. If this timed out at ${BUDGET}m, find the query that stopped terminating in the 'Perform CodeQL Analysis' log (the last 'Starting evaluation of' with no matching 'Evaluation done')."
-          exit 1
+
+          # The step says it succeeded. Now ask GitHub what it actually STORED.
+          # Ingestion is asynchronous, so poll rather than read once — but a
+          # budget that never expires would be a check that cannot fail.
+          CATEGORY="/language:${LANGUAGE}"
+          FOUND=""
+          for attempt in $(seq 1 12); do
+            gh api -H "Accept: application/vnd.github+json" \
+              "repos/${GITHUB_REPOSITORY}/code-scanning/analyses?ref=${ANALYSIS_REF}&tool_name=CodeQL&per_page=30" \
+              > analyses.json 2> analyses.err || {
+                echo "[codeql] attempt ${attempt}: the analyses API call failed:"; cat analyses.err; sleep 20; continue; }
+            FOUND=$(jq -c --arg cat "$CATEGORY" --arg since "$STARTED_AT" \
+              'map(select(.category == $cat and .created_at >= $since)) | first // empty' analyses.json)
+            if [ -n "$FOUND" ]; then break; fi
+            echo "[codeql] attempt ${attempt}: no ${CATEGORY} analysis stored at or after ${STARTED_AT} yet; waiting."
+            sleep 20
+          done
+
+          if [ -z "$FOUND" ]; then
+            # R7: say what was established. We did NOT establish "0 rules" — we
+            # established that no analysis for this run appeared. Failing closed,
+            # because the alternative is a green check standing in for an upload
+            # nobody confirmed.
+            echo "::error title=CodeQL ${LANGUAGE} upload NOT CONFIRMED::The analyze step reported success, but after 12 polls over ~4 minutes no CodeQL analysis with category ${CATEGORY} and created_at >= ${STARTED_AT} was stored for ref ${ANALYSIS_REF}. This is UNCONFIRMED, not 'zero results': the upload may have been rejected, or ingestion may be lagging. Do not triage ${LANGUAGE} alerts on the strength of this run. Check GET repos/${GITHUB_REPOSITORY}/code-scanning/analyses?ref=${ANALYSIS_REF} — for a PR the ref is refs/pull/<n>/merge, not /head."
+            exit 1
+          fi
+
+          RULES=$(printf '%s' "$FOUND" | jq -r '.rules_count // 0')
+          RESULTS=$(printf '%s' "$FOUND" | jq -r '.results_count // 0')
+          SHA=$(printf '%s' "$FOUND" | jq -r '.commit_sha // "?"')
+          if [ "$RULES" -le 0 ]; then
+            echo "::error title=CodeQL ${LANGUAGE} uploaded a 0-RULE SARIF::The analyze step reported success but the analysis stored for ${ANALYSIS_REF} (${SHA}) evaluated ${RULES} rules and ${RESULTS} results. That is the failed-run SARIF: run-queries discarded every query's results and uploaded an empty document. GitHub does NOT retire alerts from it, so the ${LANGUAGE} alert list is FROZEN at the last real scan while continuing to read as current. This is the SILENT half of the 2026-08-03 outage and it is why this step no longer trusts steps.analyze.outcome."
+            exit 1
+          fi
+          echo "[codeql] ${LANGUAGE}: stored analysis ${SHA} — rules=${RULES} results=${RESULTS} (category ${CATEGORY}, ref ${ANALYSIS_REF})."
+          echo "[codeql] ${LANGUAGE}: analysis completed AND the upload was confirmed non-empty."
 

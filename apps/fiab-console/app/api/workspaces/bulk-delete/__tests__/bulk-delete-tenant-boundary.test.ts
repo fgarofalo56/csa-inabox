@@ -448,36 +448,66 @@ const SWEEP_CHUNK = 50;
  * interval; its old bound stopped three short of the end, which is exactly the
  * population where the residue degenerated.
  *
- * WHAT THIS DOES NOT CLOSE — MEASURED, not reasoned (deploy-integrity R7).
- * The closure is tight, not roomy. Index 499 has exactly TWO cells in the whole
- * suite, (500, cascade off) and (500, cascade on), so its two roles are
- * necessarily split across the cascade axis; index 498 has four, and gains its
- * foreign role in exactly one of them. So a narrowing keyed JOINTLY on index AND
- * cascade at the top of the interval still has a blind cell, and re-running the
- * same consult-then-discard bypass with the extra conjunct confirms it on the
- * shipped bytes rather than on paper:
+ * ── #3851: THE `% 3` RESIDUE WAS BLIND ACROSS A THIRD OF THE DOMAIN ────────
  *
- *     __mutIdx === 498 && cascade === false   ->  RC=0, 95/95   STILL BLIND
- *     __mutIdx === 499 && cascade === true    ->  RC=0, 95/95   STILL BLIND
- *     __mutIdx === 498                        ->  RC=1, 1 failed
- *     __mutIdx === 499  (as a refusal)        ->  RC=1, 1 failed
+ * The round-5 comment that used to sit here characterised the remaining hole as
+ * a joint index-and-cascade key "at the top of the interval", enumerated two
+ * cells, and called the closure "tight, not roomy". That is exactly right FOR
+ * THE CLASS IT NAMES and materially wrong about the neighbouring one. Under
+ * `% 3` the two cascade cells reach only residues r and r+1 of three, so any key
+ * conjoining `ids.length` with an index is invisible wherever
+ * `(i + size) % 3 === 1`. Re-derived here independently rather than accepted
+ * from the report, by enumerating the generator over the whole domain:
  *
- * Index 498 is never foreign with cascade OFF (both of its batches, 499 and 500,
- * land on non-zero residues there) and index 499 is never foreign with cascade
- * ON (its single batch, 500, is moved to home by the offset). No per-(size,
- * cascade) residue can fix that — at a fixed cascade value there is no third
- * batch left for those indices to take the other role in — so closing it needs
- * an axis this sweep does not have. It is a strictly narrower evasion than the
- * one measured above, and it is recorded here as OPEN rather than implied shut.
+ *     modulus  (size,index) pairs   never foreign in EITHER cascade cell
+ *     % 3      125,250              41,750   (33.33%)   e.g. (size 1, i 0), (size 4, i 0)
+ *     % 2      125,250                   0   ( 0.00%)
  *
- * Every batch of 3 or more still carries at least one foreign id and at least
+ * The conjunction is what hid: `ids.length === 100 && __mutIdx === 0` passed
+ * 95/95 on the old residue while `__mutIdx === 0` alone failed 58 specs.
+ *
+ * ── WHAT SHIPPED, AND WHY IT IS NOT PLAIN `% 2` ────────────────────────────
+ *
+ * `% 2` closes that population completely, and costs exactly one `allForeign`
+ * cell — `1/true`, a single-id batch with cascade on, where nothing is left to
+ * prove HOME ids still delete. `allForeign` is asserted `[]` for a reason, so
+ * paying for one class with a hole in another is not a trade worth making
+ * silently. Size 1 keeps the old modulus; every size from 2 up uses `% 2`.
+ * Measured over the whole domain, all four properties at once:
+ *
+ *     modulus            blind (size,index)   allForeign   noInterior   singleEnd
+ *     % 3                41,750 (33.33%)      []           []           ['3/false','3/true']
+ *     % 2                     0 ( 0.00%)      ['1/true']   []           []
+ *     size>=2 ? 2 : 3         1 ( 0.00%)      []           []           []
+ *
+ * The one remaining (size, index) pair is `(size 1, i 0)` — a batch of ONE,
+ * which the exhaustive small-size matrix above covers cell by cell. The size-3
+ * degenerate shape the old residue had to except disappears entirely, which is
+ * why the `singleEnd` assertion below is now `[]` rather than a named pair.
+ *
+ * ── WHAT IS STILL OPEN, STATED RATHER THAN IMPLIED SHUT (R7) ───────────────
+ *
+ * A key conjoining index AND cascade still has one blind cell, and it is one
+ * rather than two: enumerated over every size, the cells that are NEVER foreign
+ * are `(498,false)` and `(499,true)` under `% 3`, and `(499,false)` alone under
+ * the shipped residue. Index 499 exists only in a batch of 500, so it has
+ * exactly two cells in the whole suite and its two roles are necessarily split
+ * across the cascade axis. Closing THAT needs an axis this sweep does not have —
+ * and unlike the sentence it replaces, that impossibility is claimed only for
+ * the single cell it was checked on, not for the class.
+ *
+ * Every batch of 2 or more still carries at least one foreign id and at least
  * one home id under BOTH cascade values, so both halves of every assertion
  * always have teeth.
  */
 const sweepForeignPositions = (size: number, cascade: boolean): number[] => {
   const foreign: number[] = [];
   const offset = cascade ? 1 : 0;
-  for (let i = 0; i < size; i++) if ((i + size + offset) % 3 === 0) foreign.push(i);
+  // Size 1 keeps `% 3` so that the single-id batch is HOME under both cascade
+  // values; under `% 2` it would be entirely foreign with cascade on, which is
+  // the one `allForeign` cell the assertion below refuses.
+  const modulus = size >= 2 ? 2 : 3;
+  for (let i = 0; i < size; i++) if ((i + size + offset) % modulus === 0) foreign.push(i);
   return foreign;
 };
 
@@ -488,8 +518,13 @@ describe('#3833 property 1c — the boundary holds at EVERY admissible batch siz
     // none, which is precisely the failure mode of the last four rounds.
     // Literal pins at one size, ONE PER CASCADE VALUE, so the shape is legible
     // and the offset term cannot be dropped without a named failure here:
-    expect(sweepForeignPositions(32, false)).toEqual([1, 4, 7, 10, 13, 16, 19, 22, 25, 28, 31]);
-    expect(sweepForeignPositions(32, true)).toEqual([0, 3, 6, 9, 12, 15, 18, 21, 24, 27, 30]);
+    expect(sweepForeignPositions(32, false)).toEqual([0, 2, 4, 6, 8, 10, 12, 14, 16, 18, 20, 22, 24, 26, 28, 30]);
+    expect(sweepForeignPositions(32, true)).toEqual([1, 3, 5, 7, 9, 11, 13, 15, 17, 19, 21, 23, 25, 27, 29, 31]);
+    // …and the size-1 exception, pinned so the modulus split cannot be dropped
+    // without a named failure: a batch of ONE is HOME under both cascade values,
+    // which is what keeps `allForeign` empty below (#3851).
+    expect(sweepForeignPositions(1, false)).toEqual([]);
+    expect(sweepForeignPositions(1, true)).toEqual([]);
 
     const everForeign = new Set<number>();
     const everHome = new Set<number>();
@@ -518,11 +553,14 @@ describe('#3833 property 1c — the boundary holds at EVERY admissible batch siz
     // From 5 ids up, at least one foreign id sits strictly inside the batch:
     // an "only the head"/"only the tail" bypass is not sufficient to pass.
     expect(noInterior).toEqual([]);
-    // Size 3 is the one degenerate shape, and the cascade term gives it a mirror
-    // image rather than removing it: foreign = [0] alone with cascade off, [2]
-    // alone with cascade on. Named rather than hidden — sizes 1-4 are covered
-    // exhaustively by the matrix above, so it costs nothing here.
-    expect(singleEnd).toEqual(['3/false', '3/true']);
+    // #3851 — THE SIZE-3 DEGENERATE SHAPE IS GONE, not excepted. Under the old
+    // `% 3` residue size 3 produced foreign = [0] alone with cascade off and [2]
+    // alone with cascade on, and this line named both cells. Under the shipped
+    // residue size 3 is foreign = [1] / [0,2], so no size has a lone foreign id
+    // at an end and the exception list is empty. Kept as an assertion rather
+    // than deleted: an empty list that USED to be non-empty is the cheapest
+    // guard against the modulus drifting back.
+    expect(singleEnd).toEqual([]);
     // EVERY index in the domain holds BOTH roles, to the last one.
     //
     // THIS LOOP USED TO STOP AT `ROUTE_MAX_BATCH - 3`, and the sentence attached
@@ -534,13 +572,14 @@ describe('#3833 property 1c — the boundary holds at EVERY admissible batch siz
     // self-check was scoped precisely around the failing population, which is
     // the narrow-bypass shape this file exists to deny.
     //
-    // What is true NOW, and why: `sweepForeignPositions` offsets by cascade, so
-    // index 498 is foreign at (500, on) and index 499 is home at (500, on) while
-    // both hold the opposite role elsewhere. Nothing is skipped, so the residue
-    // has to carry the property rather than the loop's reach hiding a gap. The
-    // one narrowing this still cannot see — a JOINT index-and-cascade key at the
-    // top two indices — is stated on the generator above, not here and not as
-    // "already denied" (deploy-integrity R7).
+    // What is true NOW, and why: `sweepForeignPositions` offsets by cascade AND
+    // alternates on every size from 2 up (#3851), so consecutive sizes hand each
+    // index the opposite role and every index in `[0, ROUTE_MAX_BATCH)` holds
+    // both. Nothing is skipped, so the residue has to carry the property rather
+    // than the loop's reach hiding a gap. The one narrowing this still cannot
+    // see — the single cell `(index 499, cascade off)`, which is never foreign
+    // because index 499 exists in exactly one batch — is stated on the generator
+    // above, not here and not as "already denied" (deploy-integrity R7).
     for (let i = 0; i < ROUTE_MAX_BATCH; i++) {
       expect({ i, foreign: everForeign.has(i), home: everHome.has(i) })
         .toEqual({ i, foreign: true, home: true });

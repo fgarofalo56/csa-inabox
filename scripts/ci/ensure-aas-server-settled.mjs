@@ -418,12 +418,23 @@ export function nextRetryDelaySeconds(attemptIndex) {
  * PURE. The remediation for a classified az failure, in Analysis Services terms.
  *
  * NOT `_az-failure-class.mjs`'s `remediationFor`, deliberately. That one names
- * "Azure Kusto Contributor" and "adx-cluster.bicep `adxSku`" in three of its
+ * ADX-SPECIFIC levers — a Kusto data-plane role, the ADX cluster's SKU
+ * parameter and the ADX preflight's own what-if/apply ordering — in three of its
  * five branches, because it was written for the ADX preflight. Reusing it here
  * would print a Kusto role for an Analysis Services scope — a remediation that
  * cannot possibly be right, which is deploy-integrity.md R7 in the exact form
  * that file exists to end. The CLASSIFIER is shared (that part is provider
  * agnostic); only the operator-facing text is local.
+ *
+ * #4123 — THIS PARAGRAPH USED TO QUOTE THAT FUNCTION'S PROSE VERBATIM
+ * ("adx-cluster.bicep `adxSku`"), and the quote went stale the moment #4115
+ * rewrote the capacity branch: `adxSku` is not a parameter anywhere
+ * (`adx-cluster.bicep` declares `param skuName`), so the branch now explains the
+ * `adxConfig` / BCP259 reachability gap instead. The reasoning above was, and
+ * remains, correct — only the citation was wrong. It is therefore stated in
+ * terms of what the other function is FOR rather than what it currently SAYS, so
+ * it cannot go stale again the next time that branch is reworded. If you find
+ * yourself pasting another module's sentences in here, don't.
  *
  * Permission strings verified against
  * learn.microsoft.com/azure/role-based-access-control/permissions/analytics.

@@ -152,9 +152,29 @@ function honestly(e: unknown) {
     return apiHonestError(e, 503, e.message);
   }
   if (e instanceof ResourceGraphCollectionError) {
+    // 401 AND 403 ARE DIFFERENT CAUSES AND GET DIFFERENT ANSWERS (#4021 item 3,
+    // deploy-integrity R7). A 403 is an AUTHORIZED identity denied a resource —
+    // the missing-role remediation is right. A 401 is an AUTHENTICATION failure:
+    // no token, an expired token, the wrong audience, a managed identity that
+    // did not resolve. Granting Reader does not fix any of those, and telling an
+    // operator to go grant it sends them somewhere the problem is not. The
+    // status was flattened to 403 as well, so the caller lost the distinction
+    // twice over; both are now carried through.
+    if (e.status === 401) {
+      return apiHonestError(
+        e,
+        401,
+        `${e.message} (Azure Resource Graph status 401). The console identity could not ` +
+          'AUTHENTICATE to Azure Resource Graph — this is not a missing role assignment, and ' +
+          'granting Reader will not change it. Check that the console has a managed identity ' +
+          'that resolves, that LOOM_UAMI_CLIENT_ID names it, and that the token audience ' +
+          "matches this boundary's ARM endpoint. NO graph was captured and no change verdict " +
+          'has been drawn.',
+      );
+    }
     return apiHonestError(
       e,
-      e.status === 403 || e.status === 401 ? 403 : 503,
+      e.status === 403 ? 403 : 503,
       `${e.message} (Azure Resource Graph status ${e.status}). The console identity needs ` +
         'Reader on the subscriptions to be reported. NO graph was captured and no change ' +
         'verdict has been drawn.',

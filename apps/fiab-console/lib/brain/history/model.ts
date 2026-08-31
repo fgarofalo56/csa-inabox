@@ -444,6 +444,12 @@ export class GraphVersionTooLargeError extends Error {
  * retained count was 12, not 8. `deploy-integrity.md` R7 exactly.
  * `retainedCount` is now carried so the message can tell the two states apart —
  * and say so when it does not know.
+ *
+ * `ignoredByFormat` is carried for the same reason (#4021 item 4): the gap
+ * between retained and comparable is NOT all "not loaded". A version loaded and
+ * then dropped by `buildHistory`'s format filter is comparable to nobody and
+ * was certainly loaded. Supply it and the message splits the two exactly; omit
+ * it and the message names both possibilities rather than asserting one.
  */
 export class UnknownBaseVersionError extends Error {
   readonly requested: string;
@@ -451,22 +457,47 @@ export class UnknownBaseVersionError extends Error {
   readonly available: readonly string[];
   /** Versions the STORE holds for this estate. May exceed `available.length`. */
   readonly retainedCount: number;
+  /**
+   * Versions that WERE loaded and then discarded because their `formatVersion`
+   * differs from the head's. 0 when the caller did not measure it.
+   */
+  readonly ignoredByFormat: number;
   constructor(
     requested: string,
     available: readonly string[],
-    context?: { readonly retainedCount?: number },
+    context?: { readonly retainedCount?: number; readonly ignoredByFormat?: number },
   ) {
     // Defaulting to the window size preserves the two-argument call, and in that
     // form the window IS the whole population, so the "complete" branch below is
     // the truthful one.
     const retained = Math.max(context?.retainedCount ?? available.length, available.length);
     const complete = retained === available.length;
+    // ── "NOT LOADED" WAS THE WRONG REASON FOR PART OF THE COUNT (#4021 item 4) ──
+    // The gap is arithmetic on retained-minus-COMPARABLE, and a version that was
+    // loaded and then dropped by `buildHistory`'s format filter is comparable to
+    // nobody while having certainly been loaded. Measured: 12 retained, a window
+    // of 8, one loaded version format-discarded — the message read "4 retained
+    // version(s) were NOT loaded" when 3 were unloaded and 1 was loaded and
+    // discarded. Not an R7 violation (it errs toward MORE declared uncertainty,
+    // and the sentence after it stays true), but it pointed an operator
+    // debugging a format bump at retention. The count is now attributed only as
+    // far as the caller established: precisely when `ignoredByFormat` is
+    // supplied, and as two named possibilities when it is not.
+    const gap = retained - available.length;
+    const byFormat = Math.min(Math.max(context?.ignoredByFormat ?? 0, 0), gap);
+    const unloaded = gap - byFormat;
+    const attributed = context?.ignoredByFormat === undefined
+      ? `${gap} retained version(s) are not in the comparable set — they were either not ` +
+        'loaded, or loaded and then discarded because their format differs from the head\'s; ' +
+        'this error does not know which. So it does '
+      : `${unloaded} retained version(s) were not loaded and ${byFormat} were loaded but ` +
+        'discarded for format, so this does ';
     super(
       `graph version '${requested}' is not among the ${available.length} version(s) loaded for ` +
         `comparison; ${retained} version(s) are retained for this estate. ` +
         (complete
           ? 'Every retained version was loaded, so no retained version has that id. '
-          : `${retained - available.length} retained version(s) were NOT loaded, so this does ` +
+          : attributed +
             'NOT establish that the id is unretained — only that it is not comparable from ' +
             'what was loaded. ') +
         'REFUSING to answer: treating an unknown base as an empty graph would report every ' +
@@ -477,5 +508,6 @@ export class UnknownBaseVersionError extends Error {
     this.requested = requested;
     this.available = available;
     this.retainedCount = retained;
+    this.ignoredByFormat = byFormat;
   }
 }

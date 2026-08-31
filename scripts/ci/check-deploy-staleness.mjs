@@ -83,6 +83,13 @@ export const WATCHED = [
       // window after the firewall opens, so this lane retries `az acr login`
       // through a shared helper. Editing it changes whether the lane can
       // authenticate at all.
+      // #4079 - the ACR data-plane gate. Same argument as acr-login-retry.sh
+      // above: it decides whether this lane proceeds into a data-plane call,
+      // so a commit here can change what the lane does. check-deploy-paths-
+      // coverage flagged its absence the moment the bare `|| echo` call sites
+      // adopted it - and neither entry declared acr-dataplane-ready.sh before
+      // that either, so this closes a pre-existing gap as well as the new one.
+      'scripts/ci/acr-dataplane-gate.sh',
       'scripts/ci/acr-login-retry.sh',
     ],
     maxDays: 14,
@@ -297,6 +304,13 @@ export const WATCHED = [
       'apps/loom-sharing/**',
       'platform/fiab/bicep/modules/compute/loom-sharing-app.bicep',
       // refs #3230 — same ACR token-exchange retry as the sibling lanes.
+      // #4079 - the ACR data-plane gate. Same argument as acr-login-retry.sh
+      // above: it decides whether this lane proceeds into a data-plane call,
+      // so a commit here can change what the lane does. check-deploy-paths-
+      // coverage flagged its absence the moment the bare `|| echo` call sites
+      // adopted it - and neither entry declared acr-dataplane-ready.sh before
+      // that either, so this closes a pre-existing gap as well as the new one.
+      'scripts/ci/acr-dataplane-gate.sh',
       'scripts/ci/acr-login-retry.sh',
     ],
     maxDays: 14,
@@ -694,6 +708,13 @@ export const WATCHED = [
     boundary: 'GCC',
     why: 'The ONLY workflow that applies platform/fiab/bicep/main.bicep to the GCC estate (Azure public cloud under GCC M365 identity). It is `disabled_manually` as of 2026-08-08 — its 08:00 UTC cron therefore cannot fire, so GCC accrues drift forever and nothing anywhere said so. Registering it is what turns "switched off" from an invisible state into a named row: classifyWorkflowState reports the disablement separately from the drift, because "the reconcile is off" and "the reconcile is behind" have different fixes.',
     paths: [
+      // #4224 - this lane now resolves the estate's existing Entra app-reg
+      // client id BEFORE rendering the console template, like the three sibling
+      // console lanes already did. That makes the resolver a deploy source of
+      // THIS entry: a commit to it changes whether gcc renders a real client id
+      // or an empty one, and an empty one takes sign-in dark. check-deploy-paths-
+      // coverage flagged its absence the moment the step was added.
+      'scripts/csa-loom/resolve-msal-client-id.sh',
       '.github/workflows/deploy-fiab-gcc.yml',
       'platform/fiab/bicep/main.bicep',
       'platform/fiab/bicep/modules/admin-plane/**',
@@ -929,6 +950,15 @@ export const WATCHED = [
       // leaves an artifact in ACR. check-deploy-paths-coverage flagged its
       // absence the moment the four bare `cosign sign` sites adopted it.
       'scripts/ci/cosign-sign-retry.sh',
+      // The INSTALLER for that same signer (#4156). Same argument one step
+      // earlier: if cosign is not on the runner, nothing is signed and nothing
+      // is verified — so a commit here can decide whether this lane deploys at
+      // all, exactly as one to cosign-sign-retry.sh can. It also pins the cosign
+      // VERSION, which is the signature format the roll gates later verify
+      // against. check-deploy-paths-coverage flagged its absence the moment the
+      // seven bare `sigstore/cosign-installer` sites adopted it — the same way
+      // it caught the signer above.
+      'scripts/ci/cosign-install-retry.sh',
       // refs #2682 — the upstream-image ACR mirror. BOTH halves are deploy
       // sources of this lane and BOTH must be watched:
       //   * the SCRIPT is what the workflow executes (check-deploy-paths-coverage
@@ -1138,6 +1168,20 @@ function gh(args) {
  * file exists to prevent. The stand-down cannot be detected from the run TITLE
  * (`run-name` is fixed before any step executes and cannot read a file), so it
  * is detected from the declaration's own `declaredOn` date instead.
+ *
+ * WHICH MAKES `declaredOn` A SWITCH FOR THIS WHOLE CHECK (#4121). Two ways of
+ * moving it forward make the filter keep everything, so the newest STOOD-DOWN
+ * success becomes "last success" and this file reports 0 days of drift on a
+ * lane that has not deployed in months:
+ *
+ *   - a FUTURE-dated `declaredOn`. Now REFUSED by classifyPauseDeclaration, so
+ *     `declaredPauseSince` returns null and nothing is filtered — the drift
+ *     stays loud rather than being hidden by a date that cannot be true.
+ *   - RE-DATING it at renewal, which is the documented lifecycle being followed
+ *     rather than any kind of mistake. The register's rule is therefore that
+ *     `declaredOn` is when the pause BEGAN and is never moved; a renewal bumps
+ *     `reviewBy` and records its fresh read in `renewedOn`, a field nothing
+ *     here reads. See scripts/ci/_estate-pause-declaration.mjs.
  *
  * @param {{createdAt?:string, displayTitle?:string}[]} rows
  * @param {string|null} pausedSince ISO date from the boundary's declaration, or
