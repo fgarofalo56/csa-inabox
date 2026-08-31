@@ -246,9 +246,11 @@ test('two containers on one repository at the SAME tag is fine', () => {
 // ---------------------------------------------------------------------------
 // resolveRunningImageTags — shared-repo entries follow their canonical app.
 // Refs #4064: loom-unity and iceberg-catalog deliberately run ONE repository
-// (admin-plane/main.bicep:6585/:6595) and the roll updates them ~25s apart, so
-// bucketing by repo read a healthy mid-roll estate as "one repo at two tags"
-// and deploy-fiab-commercial's pin-refresh refused (run 32819058867).
+// (admin-plane/main.bicep's `module icebergCatalog` call takes the identical
+// `appImageTags.?unity` image handoff the loomUnity module reads) and the roll
+// updates them ~25s apart, so bucketing by repo read a healthy mid-roll estate
+// as "one repo at two tags" and deploy-fiab-commercial's pin-refresh refused
+// (run 32819058867).
 // ---------------------------------------------------------------------------
 
 /** The measured #4064 shape: the canonical has rolled, the follower has not YET. */
@@ -284,7 +286,10 @@ test('#4064: the canonical app ABSENT while a follower runs the repo is UNKNOWN,
   ]);
   const u = r.unknown.find((x) => x.key === 'unity');
   assert.ok(u, 'a follower without its canonical must be UNKNOWN');
-  assert.match(u.why, /loom-unity/, 'the missing canonical app must be named');
+  // NOT a bare /loom-unity/: the repo is ALSO named loom-unity, so that match
+  // could never fail on a mutation that drops the canonical's NAME from the
+  // message. The fuller phrase is falsifiable.
+  assert.match(u.why, /canonical app loom-unity/, 'the missing canonical app must be NAMED, not merely the repo');
   assert.match(u.why, /iceberg-catalog/, 'the apps that DO run the repo must be named');
   assert.equal(r.absent.includes('unity'), false, 'a running repo must never be reported absent');
   assert.equal(r.pinned.unity, undefined, 'no tag may be adopted from a follower alone');
@@ -299,6 +304,23 @@ test('#4064: the canonical app on a DIGEST ref is UNKNOWN — the follower tag i
   assert.ok(u);
   assert.match(u.why, /digest/i);
   assert.equal(r.pinned.unity, undefined);
+});
+
+test('#4064: a DIGEST-pinned FOLLOWER does not block the canonical tag pin — the DELIBERATE sixth shape', () => {
+  // Before canonicalApp, ANY digest hit on the repo made the key UNKNOWN; with
+  // the declaration the follower's digest is deliberately out of scope HERE:
+  // one key drives BOTH apps, so applying the canonical's tag is exactly what
+  // rolls the follower off its digest and back into convergence. The
+  // repo-level digest rule is not lost — digestPinsByKey in
+  // assert-no-silent-image-tag-revert.mjs still reads EVERY container of the
+  // repo, follower included, for the write-safety question.
+  const r = resolveRunningImageTags([
+    { name: 'loom-unity', image: 'acr123.azurecr.io/loom-unity:2456cebb' },
+    { name: 'iceberg-catalog', image: 'acr123.azurecr.io/loom-unity@sha256:beef' },
+  ]);
+  assert.equal(r.pinned.unity, '2456cebb', 'the canonical runs a plain tag; the key pins to it');
+  assert.equal(r.unknown.find((u) => u.key === 'unity'), undefined,
+    'the follower digest must not manufacture UNKNOWN for a declared shared-repo entry');
 });
 
 test('#4064: nothing running the shared repo at all is still absent', () => {

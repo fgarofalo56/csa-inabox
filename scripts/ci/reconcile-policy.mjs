@@ -237,9 +237,11 @@ export const APP_IMAGE_TAGS = Object.freeze([
   // automatically from this table.
   //
   // canonicalApp (#4064). `iceberg-catalog` DELIBERATELY runs this SAME
-  // loom-unity repository — admin-plane/main.bicep:6585 passes the loom-unity
-  // image reference into iceberg-catalog-aca.bicep, with the reasoning at
-  // :6595 — and the data-plane roll updates the pair sequentially, ~25s apart.
+  // loom-unity repository — admin-plane/main.bicep's `module icebergCatalog`
+  // call hands data-plane/iceberg-catalog-aca.bicep the identical
+  // `${acr}/loom-unity:${appImageTags.?unity ?? 'v0.1'}` image expression the
+  // loomUnity module reads — and the data-plane roll updates the pair
+  // sequentially, ~25s apart.
   // Bucketing by repo alone therefore reads "one repo at two tags" inside that
   // window and manufactures UNKNOWN out of a healthy mid-roll estate, which
   // made deploy-fiab-commercial's pin-refresh refuse (run 32819058867). The
