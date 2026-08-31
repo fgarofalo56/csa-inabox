@@ -104,6 +104,18 @@ PARKED = {
 
 FEATURE_LABELS = {"csa-feature-request", "enhancement", "epic"}
 
+# ---- agent-triage verdicts (2026-08-31 sweep) -------------------------------
+# 16 read-only lanes, <=10 issues each; every central claim re-measured at head
+# before classifying (zero missing, zero conflicts at merge time). A hand-curated
+# V entry above outranks a row here, except where the hand entry is itself
+# PENDING-* — the sweep exists to retire those.
+TRIAGE_SRC = "PRPs/active/drain-2026-08-31/triage-agent-verdicts.json"
+with open(TRIAGE_SRC, encoding="utf-8") as _fh:
+    for _k, _v in json.load(_fh)["verdicts"].items():
+        _n = int(_k)
+        if _n not in V or V[_n][0].startswith("PENDING"):
+            V[_n] = tuple(_v)
+
 
 def esc(s: str) -> str:
     return s.replace("|", "\\|").replace("\r", "").strip()
@@ -177,7 +189,8 @@ def main() -> None:
     a("")
     a("`PENDING-TRIAGE` is the number that matters. It is carried in the open rather than")
     a("rounded away: an untriaged issue has no verdict, no size, no lane, and cannot be")
-    a("scheduled. W0 runs a read-only triage sweep to drive it toward zero.")
+    a("scheduled. W0's read-only triage sweep ran 2026-08-31 and drove it to zero; any")
+    a("future filing re-opens the class until it is triaged.")
     a("")
     a("**This count supersedes the estimate in `PRP.md` §3.** That document was drafted")
     a("against a working estimate of 158 untriaged; the measured number is the one above.")
@@ -205,6 +218,15 @@ def main() -> None:
     a("**#4064 was re-measured at head 2026-08-31 and is `REAL`** — the `byRepo` bucketing")
     a("and the manufactured-UNKNOWN message are both still present in")
     a("`reconcile-policy.mjs:328` — so no `PENDING-REVERIFY` rows remain.")
+    a("")
+    a("**156 rows carry verdicts from the 2026-08-31 agent-triage sweep** — 16 read-only")
+    a("lanes of ten issues or fewer, each instructed to re-measure the issue's central")
+    a("claim at head (file:line or a live `gh run`/API read) before classifying; the merge")
+    a("reconciled 156/156 with zero missing, zero conflicting duplicates, zero invalid")
+    a("verdicts. Those rows live in `triage-agent-verdicts.json` beside this generator;")
+    a("a hand-curated entry in the script's V dict outranks them. They are one rigor tier")
+    a("below a hand verdict — per `DEV-LOOP.md` §10 box 1, a lane still re-measures its")
+    a("own issues at head before writing code.")
     a("")
     a("**Consequence for scheduling:** a lane re-measures its own issues at head before")
     a("writing code (`DEV-LOOP.md` §10, box 1). An `INHERITED` row is schedulable; it is not")
