@@ -4,12 +4,13 @@
  * duration literal, the envelope⇄table mapping, and that NO user identifier
  * ever appears in an envelope.
  */
-import { describe, it, expect, afterEach } from 'vitest';
+import { describe, it, expect, afterEach, vi } from 'vitest';
 import {
   buildRumEnvelopes,
   isRumEnvEnabled,
   msToAiDuration,
   parseAiConnectionString,
+  postRumBatch,
   rumSampleRate,
 } from '../rum-ingest';
 import { RUM_CLOUD_ROLE, type RumItem } from '../rum-shared';
@@ -111,5 +112,112 @@ describe('buildRumEnvelopes', () => {
       expect(props['csa-loom.surface']).toBeTruthy();
     }
     expect(flat).not.toMatch(/oid|upn|userId|sessionId|authenticatedId/i);
+  });
+});
+
+/**
+ * #3735 — A PARTIAL INGESTION FAILURE MUST NOT REPORT AS A CLEAN SEND.
+ *
+ * `/admin/rum` shows PAGE LOADS 0 and ROUTE CHANGES 0 for the same 24h window in which
+ * Web Vitals reports 55 sampled page views — three independent KQL queries over one
+ * `timespan`, three client paths behind one `install()` gate, and an answer that
+ * contradicts itself. One of the candidate mechanisms is a per-envelope-TYPE rejection at
+ * ingestion: `PageviewPerformanceData` and `PageviewData` refused while `EventData` is
+ * accepted produces exactly 0 / 0 / 55.
+ *
+ * There was nowhere for that to surface. The Breeze track endpoint answers **206 Partial
+ * Content** when it accepts only some envelopes, with a body naming the rejected indexes —
+ * and `res.ok` is true across the whole 2xx range, so `postRumBatch` returned
+ * `{ sent: envelopes.length }` and reported every envelope as shipped regardless.
+ *
+ * ROOT CAUSE IS NOT CLAIMED. No Log Analytics query was run and no estate call was made,
+ * here or anywhere in this change; #3735's own acceptance criteria (a live receipt showing
+ * consistent counts) are NOT met and the issue stays open. What these specs pin is the
+ * narrower, checkable thing: the code no longer asserts an outcome it did not establish
+ * (deploy-integrity.md R7), so the next occurrence is diagnosable instead of silent.
+ */
+describe('#3735 — postRumBatch reports what App Insights ACCEPTED', () => {
+  const CS = COMM_CS;
+  const one: RumItem[] = [
+    { kind: 'vitals', at: '2026-08-01T00:00:00.000Z', surface: '/browse', lcpMs: 1500 } as RumItem,
+    { kind: 'routeChange', at: '2026-08-01T00:00:00.000Z', surface: '/browse' } as RumItem,
+  ];
+
+  afterEach(() => { vi.restoreAllMocks(); });
+
+  it('EMBEDDED CONTROL: a 200 reports every envelope as sent', () => {
+    // Without this, "it counts rejections" is also satisfiable by a function that reports
+    // everything as rejected, or that never sends at all.
+    process.env.APPLICATIONINSIGHTS_CONNECTION_STRING = CS;
+    vi.spyOn(global, 'fetch').mockResolvedValue(
+      new Response(JSON.stringify({ itemsReceived: 2, itemsAccepted: 2, errors: [] }), {
+        status: 200, headers: { 'content-type': 'application/json' },
+      }) as any,
+    );
+    return postRumBatch(one).then((r) => {
+      expect(r.sent).toBe(2);
+      expect(r.rejected).toBeUndefined();
+    });
+  });
+
+  it('a 206 with a rejected envelope is NOT reported as a clean send', async () => {
+    // The exact shape that could produce 0 loads / 0 route changes / 55 vitals: the
+    // PageviewData envelope refused, the EventData one accepted.
+    process.env.APPLICATIONINSIGHTS_CONNECTION_STRING = CS;
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    vi.spyOn(global, 'fetch').mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          itemsReceived: 2,
+          itemsAccepted: 1,
+          errors: [{ index: 1, statusCode: 400, message: 'Invalid instrumentation key' }],
+        }),
+        { status: 206, headers: { 'content-type': 'application/json' } },
+      ) as any,
+    );
+
+    const r = await postRumBatch(one);
+
+    expect(r.sent).toBe(1);
+    expect(r.rejected).toBe(1);
+    // …and it SAYS so, naming the per-item reason. A count nobody reads is not an
+    // improvement over a wrong count.
+    expect(warn).toHaveBeenCalledTimes(1);
+    const msg = String(warn.mock.calls[0][0]);
+    expect(msg).toMatch(/accepted 1\/2/);
+    expect(msg).toMatch(/Invalid instrumentation key/);
+    expect(msg).toMatch(/not the same as "nobody loaded a page"/);
+  });
+
+  it('a 206 whose body is UNREADABLE claims no rejections rather than inventing them', async () => {
+    // R7 one level down: the warning must not fire on a response this code failed to
+    // parse. "I could not tell" is not "one was rejected".
+    process.env.APPLICATIONINSIGHTS_CONNECTION_STRING = CS;
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    vi.spyOn(global, 'fetch').mockResolvedValue(
+      new Response('<html>gateway</html>', { status: 206, headers: { 'content-type': 'text/html' } }) as any,
+    );
+
+    const r = await postRumBatch(one);
+
+    expect(r.sent).toBe(2);
+    expect(r.rejected).toBeUndefined();
+    expect(warn).not.toHaveBeenCalled();
+  });
+
+  it('a real transport failure still throws, unchanged', async () => {
+    process.env.APPLICATIONINSIGHTS_CONNECTION_STRING = CS;
+    vi.spyOn(global, 'fetch').mockResolvedValue(
+      new Response('boom', { status: 503 }) as any,
+    );
+    await expect(postRumBatch(one)).rejects.toThrow(/App Insights track 503/);
+  });
+
+  it('stays a silent no-op when RUM is not configured', async () => {
+    delete process.env.APPLICATIONINSIGHTS_CONNECTION_STRING;
+    const f = vi.spyOn(global, 'fetch');
+    const r = await postRumBatch(one);
+    expect(r).toEqual({ sent: 0, skipped: 'not-configured' });
+    expect(f).not.toHaveBeenCalled();
   });
 });

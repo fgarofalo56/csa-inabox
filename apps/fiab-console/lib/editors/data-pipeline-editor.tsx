@@ -495,6 +495,38 @@ export function DataPipelineEditor({ item, id, runtimePreset, templateId }: Prop
 
   // ============ Derived ============
   const activities = spec.properties.activities;
+
+  /**
+   * #3755 / #3549 — THE EMPTY-PIPELINE GATE, ON THIS EDITOR'S OWN CONTROLS.
+   *
+   * #3696 gated Run / Debug / Add-trigger inside `PipelineEditorCore`, and this file
+   * delegates to that core for the mainline open (`!templateId && runtime is adf|synapse`,
+   * see the branch near the bottom). It does NOT delegate for a TEMPLATED create
+   * (`templateId` set) or for the opt-in `runtime === 'fabric'`, and on those two paths
+   * this file's own Run (Run/Debug/Publish group), Debug and Schedule / Add-trigger
+   * controls were reachable with zero `seedIncomplete` consumers app-wide — so a pipeline
+   * bound to a real-but-EMPTY backing object could still be run, debugged and put on a
+   * recurrence, every execution reporting Succeeded having done nothing. That is exactly
+   * the defect #3549 exists to close, surviving on the two paths the core never sees.
+   *
+   * WHERE THE FLAG COMES FROM HERE, and why it is not `autoBind.seedError`.
+   * `seedError` is produced by the ADF/Synapse *bind* route, which these two paths do not
+   * call — there is no bind GET on the Fabric runtime, and a templated create authors its
+   * graph client-side. What IS available, and is the same property `seedError` is a proxy
+   * for, is the canvas itself: this editor's Run/Debug PUBLISH `spec` and then execute it
+   * (`publishToAdf` → `/run`), so an activity-less `spec` means the thing that gets run is
+   * empty by construction. Deriving the gate from the graph rather than from a server flag
+   * also means it cannot go stale against the surface the user is looking at, which was
+   * SHOULD-FIX 4 of the #3549 review.
+   *
+   * NOT an error banner, per ux-baseline.md §6: a freshly created item opens clean, with
+   * the compute controls disabled and a title naming the reason. Save / Validate / Publish
+   * / Import / Templates all stay live, so the way OUT of the state is the surface itself.
+   */
+  const seedIncomplete = activities.length === 0;
+  const EMPTY_PIPELINE_TITLE =
+    'This pipeline is empty — add at least one activity before running or scheduling it';
+
   const parameters = useMemo<PipelineParameter[]>(() => paramsFromSpec(spec), [spec]);
   const variables = useMemo<PipelineVariable[]>(() => varsFromSpec(spec), [spec]);
   const selected = activities.find((a) => a.name === selectedActivity) || null;
@@ -989,8 +1021,16 @@ export function DataPipelineEditor({ item, id, runtimePreset, templateId }: Prop
   }, [workspaceId, pipelineId, loadTriggers, dispatchToast]);
 
   // ============ Ribbon ============
-  const canRun = !running && !!pipelineId;
-  const canDebug = !debugging && !!pipelineId;
+  // #3755 — every control that puts THIS pipeline on a compute gates on
+  // `seedIncomplete`, exactly as `buildPipelineRibbon` does for the core-backed
+  // twin: Run, Debug, Schedule AND Add trigger. Enumerated together rather than
+  // fixed one at a time, because that is how #3696 round 3 left `Add trigger`
+  // live next to a correctly-greyed Run — and a schedule trigger over an empty
+  // pipeline is strictly worse than a single manual one, being unattended and
+  // repeating.
+  const canRun = !running && !!pipelineId && !seedIncomplete;
+  const canDebug = !debugging && !!pipelineId && !seedIncomplete;
+  const canSchedule = !!pipelineId && !seedIncomplete;
   const canSave = !saving && !!pipelineId && dirty;
   const canValidate = !validating && !!pipelineId;
   const canDelete = !!pipelineId;
@@ -1016,12 +1056,12 @@ export function DataPipelineEditor({ item, id, runtimePreset, templateId }: Prop
         ]},
         { label: 'Run', actions: [
           { label: publishing ? 'Publishing…' : 'Publish', icon: <CloudArrowUp20Regular />, onClick: pipelineId && !publishing ? publish : undefined, disabled: !pipelineId || publishing, title: 'Deploy this pipeline to Azure Data Factory so it can Run / Debug / schedule' },
-          { label: running ? 'Queuing…' : 'Run', icon: <Play20Regular />, onClick: canRun ? run : undefined, disabled: !canRun },
-          { label: debugging ? 'Debugging…' : 'Debug', icon: <Bug20Regular />, onClick: canDebug ? debug : undefined, disabled: !canDebug },
+          { label: running ? 'Queuing…' : 'Run', icon: <Play20Regular />, onClick: canRun ? run : undefined, disabled: !canRun, title: seedIncomplete ? EMPTY_PIPELINE_TITLE : undefined },
+          { label: debugging ? 'Debugging…' : 'Debug', icon: <Bug20Regular />, onClick: canDebug ? debug : undefined, disabled: !canDebug, title: seedIncomplete ? EMPTY_PIPELINE_TITLE : undefined },
         ]},
         { label: 'Schedule', actions: [
-          { label: 'Schedule', icon: <Clock20Regular />, onClick: pipelineId ? () => setScheduleOpen(true) : undefined, disabled: !pipelineId },
-          { label: 'Add trigger', onClick: pipelineId ? () => setScheduleOpen(true) : undefined, disabled: !pipelineId },
+          { label: 'Schedule', icon: <Clock20Regular />, onClick: canSchedule ? () => setScheduleOpen(true) : undefined, disabled: !canSchedule, title: seedIncomplete ? EMPTY_PIPELINE_TITLE : undefined },
+          { label: 'Add trigger', onClick: canSchedule ? () => setScheduleOpen(true) : undefined, disabled: !canSchedule, title: seedIncomplete ? EMPTY_PIPELINE_TITLE : undefined },
         ]},
         { label: 'Delete', actions: [
           { label: 'Delete', icon: <Delete20Regular />, onClick: canDelete ? del : undefined, disabled: !canDelete },
