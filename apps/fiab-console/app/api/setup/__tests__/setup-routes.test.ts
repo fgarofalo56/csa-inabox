@@ -248,12 +248,14 @@ describe('POST /api/setup/deploy', () => {
     featureGrants = [
       { id: 'g1', tenantId: 'delegated-user', capabilityId: 'admin.deploy-dlz', principalId: 'delegated-user', principalType: 'user', role: 'Admin', grantedBy: 'admin', grantedAt: 'now' },
     ];
+    const calls = stubArmTier(); // #3809 — no real ARM egress; the verdict is the route's
     const { POST } = await import('@/app/api/setup/deploy/route');
     const r = await POST(
       bodyReq({ subscriptionId: GOOD_SUB, boundary: 'Commercial', mode: 'single-sub', domainName: 'finance', capacitySku: 'F8', location: 'eastus2' }),
     );
     // Passes the gate → reaches the honest 503 deploy gate (no GH token in test).
     expect(r.status).toBe(503);
+    expect(calls.some((u) => u.includes('/providers/Microsoft.Resources/deployments/'))).toBe(true);
   });
 
   it('400 when subscriptionId is missing', async () => {
@@ -275,6 +277,7 @@ describe('POST /api/setup/deploy', () => {
   });
 
   it('503 honest gate with pre-filled az command for Commercial', async () => {
+    const calls = stubArmTier(); // #3809 — no real ARM egress; the verdict is the route's
     const { POST } = await import('@/app/api/setup/deploy/route');
     const r = await POST(
       bodyReq({ subscriptionId: GOOD_SUB, boundary: 'Commercial', mode: 'single-sub', domainName: 'finance', capacitySku: 'F8', location: 'eastus2' }),
@@ -289,6 +292,7 @@ describe('POST /api/setup/deploy', () => {
     expect(cmds).toContain('commercial-full.bicepparam');
     expect(cmds).toContain('boundary=Commercial');
     expect(cmds).toContain("dlzDomainNames=\"['finance']\"");
+    expect(calls.some((u) => u.includes('/providers/Microsoft.Resources/deployments/'))).toBe(true);
   });
 
   /** ARM stub for the orchestrator-tier tests: pre-flight says "can deploy"
@@ -313,6 +317,44 @@ describe('POST /api/setup/deploy', () => {
       return json({ error: { message: 'transient ARM 500' } }, 500);
     }
     return json({});
+  }
+
+  /**
+   * #3809 — INSTALL `armTierStub` AS `fetch`, AND RECORD WHAT WAS ASKED.
+   *
+   * Three tests in this describe used to run with NO fetch stub at all, so
+   * `globalThis.fetch` was real undici and the deploy route talked to production
+   * Azure — including a subscription-scoped `PUT …/Microsoft.Resources/deployments/…`
+   * from a unit test, on every run, from every workstation and every CI runner.
+   * Nothing could be created (`@azure/identity` is mocked to return the literal token
+   * `tk`, and the subscription GUID is the fake `GOOD_SUB`); the defect is the
+   * unsolicited egress and, worse, what it did to the VERDICT.
+   *
+   * `user-arm-deploy.ts` races the PUT against an `earlyReturnMs` deadline (8000ms).
+   * If ARM answers first the route returns that outcome and falls through to the honest
+   * 503 these tests assert; if the deadline wins it backgrounds the PUT and answers
+   * `202 {pending:true}` — correct, honest behaviour, and not what the tests expect. So
+   * the verdict was a function of round-trip latency to `management.azure.com`:
+   *
+   *   measured on this tree, BEFORE this change:  3 failed / 13 passed, 32.99s,
+   *     with the three tests at 8717ms / 8633ms / 8945ms — all past the 8000ms deadline
+   *   measured AFTER:  16 passed / 16, ~1s
+   *
+   * Nothing but the stub changed. A gate whose result tracks the network instead of the
+   * code is not watching the code — it can go red with no code change, and stay green
+   * while the route regresses.
+   *
+   * The returned `calls` array is the CONTROL: an assertion that the route reached ARM
+   * at all, so a future refactor that stops calling it cannot leave these tests passing
+   * for the wrong reason.
+   */
+  function stubArmTier(): string[] {
+    const calls: string[] = [];
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => {
+      calls.push(String(url));
+      return armTierStub(String(url));
+    }));
+    return calls;
   }
 
   it('answers fast (bounded, JSON) when the Setup Orchestrator hangs — the live-504 regression', async () => {
@@ -385,6 +427,7 @@ describe('POST /api/setup/deploy', () => {
   });
 
   it('503 honest gate uses Gov cloud + il5 param file for IL5', async () => {
+    const calls = stubArmTier(); // #3809 — no real ARM egress; the verdict is the route's
     const { POST } = await import('@/app/api/setup/deploy/route');
     const r = await POST(
       bodyReq({ subscriptionId: GOOD_SUB, boundary: 'IL5', mode: 'multi-sub', domainName: 'mission-ops', capacitySku: 'F64' }),
@@ -395,5 +438,20 @@ describe('POST /api/setup/deploy', () => {
     expect(cmds).toContain('az cloud set --name AzureUSGovernment');
     expect(cmds).toContain('il5.bicepparam');
     expect(cmds).toContain('-l usgovvirginia');
+    // The route really did preflight ARM, so the 503 above is the deploy gate rather
+    // than an early bail — previously unassertable, because the fetch this arm made was
+    // real and unrecorded.
+    //
+    // NOT ASSERTED, and deliberately so: which ARM PLANE it reached. Recording the calls
+    // makes that visible for the first time, and what it shows is that the IL5 arm
+    // preflights `management.azure.com` (Commercial) — `beforeEach` deletes
+    // LOOM_ARM_ENDPOINT, so the route falls back to the Commercial default while the
+    // remediation it emits is correctly `AzureUSGovernment` + `il5.bicepparam`. That may
+    // well be right: the console's own ARM plane is a property of where the console is
+    // DEPLOYED, not of the boundary the caller asked to deploy INTO. Deciding it is a
+    // cloud-parity.md question for the setup-wizard lane and is not settled here, so this
+    // test states what it knows and no more (deploy-integrity.md R7).
+    expect(calls.length).toBeGreaterThan(0);
+    expect(calls.some((u) => u.includes('/providers/Microsoft.Resources/deployments/'))).toBe(true);
   });
 });

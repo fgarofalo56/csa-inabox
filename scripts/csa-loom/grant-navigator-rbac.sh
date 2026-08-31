@@ -74,13 +74,40 @@ APIM_CONTRIB="312a565d-c81f-4fd8-895a-4e21e48d571c"    # API Management Service 
 # shellcheck source=scripts/csa-loom/_grant-role-if-absent.sh
 . "$(dirname "${BASH_SOURCE[0]}")/_grant-role-if-absent.sh"
 
+# grant() IS THE WORKHOLE, AND IT WAS THE LAST UNPROBED WRITER (#3463)
+#
+# #3454 converted two direct call sites below onto `grant_role_if_absent` and left this
+# function — invoked ~20 times, including every BYO/adopted grant via `byo_grant` — doing
+# the old unprobed create. That is the guard-adoption gap shape: the correct helper existed
+# and the siblings in the SAME FILE never adopted it. Delegating here is what actually
+# closes #3439 for this script, because these ~20 sites are the bulk of its writes.
+#
+# The old body is worth recording, since two of its properties were defects rather than
+# behaviour to preserve:
+#
+#     az role assignment create … 2>&1 | grep -vi "already exists\|RoleAssignmentExists" || true
+#     echo "  ✓ $label"
+#
+#   • it wrote UNCONDITIONALLY, so in the normal case (the template granted the same
+#     triple in phase 1) it still minted a competing v4 name — the #3439 collision;
+#   • the ✓ was printed whatever happened, so an AuthorizationFailed printed its error and
+#     was immediately followed by a tick. `grant_role_if_absent` makes that ✓ conditional
+#     (deploy-integrity.md R7).
+#
+# WHAT IS PRESERVED, deliberately:
+#   • the empty-scope skip stays HERE, ahead of the helper, so a not-discovered resource
+#     still prints "scope not found, skipping" instead of the helper's "refusing to guess"
+#     usage refusal. `byo_grant` wraps this function and is the brownfield adopt path, so
+#     that message is what an operator sees when an EXISTING_* var is set without its _RG.
+#   • the argument order (ROLE SCOPE LABEL) is unchanged, so no call site moves.
+#   • the return status is the helper's, which is 0 for every outcome except a usage error.
+#     This script runs `set -uo pipefail` with NO errexit, so propagating it cannot abort
+#     the run — and a usage error here is unreachable anyway, since scope is checked above,
+#     the roles are file-level constants and UAMI_PRINCIPAL carries a default.
 grant() { # grant ROLE_GUID SCOPE LABEL
   local role="$1" scope="$2" label="$3"
   [[ -z "$scope" ]] && { echo "  - $label: scope not found, skipping"; return; }
-  MSYS_NO_PATHCONV=1 az role assignment create \
-    --assignee-object-id "$UAMI_PRINCIPAL" --assignee-principal-type ServicePrincipal \
-    --role "$role" --scope "$scope" -o none 2>&1 | grep -vi "already exists\|RoleAssignmentExists" || true
-  echo "  ✓ $label"
+  grant_role_if_absent "$UAMI_PRINCIPAL" "$role" "$scope" "$label"
 }
 q() { az "$@" 2>/dev/null || true; }
 

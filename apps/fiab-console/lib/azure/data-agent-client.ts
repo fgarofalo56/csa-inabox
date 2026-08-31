@@ -135,6 +135,88 @@ const QUERY_LANG: Record<DataAgentSourceType, string> = {
   agent: 'a plain natural-language instruction — the hosted agent runs its own tool-calling loop and returns an answer',
 };
 
+/**
+ * Every value `DataAgentSourceType` admits, as a RUNTIME set — derived from `QUERY_LANG`
+ * rather than restated. `QUERY_LANG` is typed `Record<DataAgentSourceType, string>`, so
+ * the compiler forces it to stay exhaustive; a second hand-written list would be free to
+ * drift the moment a source type is added, which is the shape of defect this whole file
+ * has been paying for.
+ */
+const KNOWN_SOURCE_TYPES: ReadonlySet<string> = new Set(Object.keys(QUERY_LANG));
+
+/** Is this a source type the executor actually dispatches on? Runtime, not a cast. */
+export function isKnownSourceType(v: unknown): v is DataAgentSourceType {
+  return typeof v === 'string' && KNOWN_SOURCE_TYPES.has(v);
+}
+
+/**
+ * A source/tool type reduced to the string the routing comparison uses. TOTAL over every
+ * runtime value — a number, a boolean, an object and `null` all come back as a string, so
+ * nothing downstream of it can throw. `null`/`undefined` collapse to `''`, which the
+ * caller reads as "the model declared no type" exactly as before (#4116's `?.` did the
+ * same); `123` becomes `'123'`, which matches no source type and therefore falls through
+ * to the honest gate rather than binding to whichever backend happened to be attached.
+ */
+export function typeKey(v: unknown): string {
+  return v === undefined || v === null ? '' : String(v).trim().toLowerCase();
+}
+
+/**
+ * THE DESERIALISATION BOUNDARY (#4119, and the crash behind #4091 / #4116).
+ *
+ * Six API routes rehydrate a persisted Cosmos document into `DataAgentConfig` and hand it
+ * straight to `chatGrounded`. Every one of them coerced the SIBLING fields — `id` and
+ * `name` through `String(…)` — and passed `type` through raw, so the compiler believed
+ * `type: DataAgentSourceType` while the runtime got back whatever was written to Cosmos.
+ *
+ * #4116's hotfix made the read null-SAFE (`only.type?.trim()`), which closed `undefined`.
+ * It did not close a non-STRING: a persisted `type: 123` still threw
+ * `TypeError: only.type?.trim is not a function` on the same line, uncaught, HTTP 500 —
+ * and `chatGrounded` is the shared path for roughly fifteen call sites, so that is every
+ * AI feature down again for one bad document.
+ *
+ * Guarding that one line would have fixed one line. The DEFECT is that a boundary coerced
+ * some fields and not others, so this function is the boundary: every rehydration site
+ * calls it, and a non-string can no longer enter the domain object at all. Keyed to the
+ * SHAPE — "a persisted field reaching the domain object uncoerced" — not to `type`, so a
+ * field added later inherits the treatment instead of repeating this.
+ *
+ * WHAT AN UNRECOGNISED TYPE BECOMES, and why it is not blanked.
+ * A value that is not one of the ten known types is kept as its STRING form rather than
+ * emptied. `executeSourceQuery`'s `default:` branch then answers
+ *   `Live execution for source type "123" is not wired; the query is shown but not run.`
+ * — an honest gate that names what it actually found (deploy-integrity.md R7), instead of
+ * an empty string that erases the evidence, and instead of binding to the wrong backend.
+ * The cast on that branch is the one place the union is knowingly widened, and it is safe
+ * in the way that matters here: the value is guaranteed to be a string, so no `.trim()` /
+ * `.toLowerCase()` downstream can throw.
+ */
+export function rehydrateSource(raw: unknown): DataAgentSource {
+  const s = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>;
+  const rawType = s.type;
+  const type = isKnownSourceType(rawType)
+    ? rawType
+    : (String(rawType ?? '').trim() as DataAgentSourceType);
+  return {
+    id: String(s.id || s.name || ''),
+    type,
+    name: String(s.name || ''),
+    tables: s.tables ? String(s.tables) : undefined,
+    description: s.description ? String(s.description) : undefined,
+    instructions: s.instructions ? String(s.instructions) : undefined,
+    examples: Array.isArray(s.examples) ? (s.examples as DataAgentSource['examples']) : undefined,
+    // Typed per-source config (AI Search retrieval options / Graph scope) — honored by the
+    // grounding executor.
+    aiSearch: s.aiSearch && typeof s.aiSearch === 'object' ? (s.aiSearch as DataAgentAiSearchConfig) : undefined,
+    graph: s.graph && typeof s.graph === 'object' ? (s.graph as DataAgentGraphScope) : undefined,
+  };
+}
+
+/** `state.sources` → domain sources. A non-array is zero sources, never a throw. */
+export function rehydrateSources(rawSources: unknown): DataAgentSource[] {
+  return Array.isArray(rawSources) ? rawSources.map(rehydrateSource) : [];
+}
+
 function composeSystemPrompt(cfg: DataAgentConfig): string {
   const lines: string[] = [];
   lines.push('You are a CSA Loom data agent (CSA Loom is its own Azure-based data + AI platform, not Microsoft Fabric). Answer the user\'s question in natural language, grounded ONLY in the attached data sources below.');
@@ -536,9 +618,17 @@ export async function chatGrounded(cfg: DataAgentConfig, history: ChatTurn[], qu
       //      lakehouse database name), so preferring it over a real attached
       //      source would silently target the wrong thing.
       const only = cfg.sources.length === 1 ? cfg.sources[0] : undefined;
-      const toolType = tool.type?.trim().toLowerCase();
+      // #4119 — `typeKey` on BOTH sides. `rehydrateSources` is the real fix and it
+      // guarantees a string for every caller that goes through the six rehydration
+      // routes, but `chatGrounded` is exported and has roughly fifteen call sites; a
+      // caller that assembles a `DataAgentConfig` some other way still hands this line
+      // whatever it has. `only.type?.trim()` (the #4116 hotfix) is null-SAFE and not
+      // type-safe: a `type: 123` threw `only.type?.trim is not a function` right here,
+      // uncaught, HTTP 500, every AI feature down. Defence in depth rather than
+      // belt-only, because the cost is one function call and the failure mode is total.
+      const toolType = typeKey(tool.type);
       const src = cfg.sources.find((s) => s.name && tool.source && s.name.toLowerCase() === tool.source.toLowerCase())
-        || (only && (!toolType || toolType === only.type?.trim().toLowerCase()) ? only : undefined)
+        || (only && (!toolType || toolType === typeKey(only.type)) ? only : undefined)
         || (tool.type ? { id: tool.source, type: tool.type as DataAgentSource['type'], name: tool.source } : undefined);
       if (!src) { tool.executed = false; tool.gate = 'Source not found on this agent.'; continue; }
       const exec: SourceExecution = await executeSourceQuery(src, tool.query, ctx);
