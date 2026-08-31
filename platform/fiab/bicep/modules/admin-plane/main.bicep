@@ -387,6 +387,12 @@ type observabilityConfigT = {
   @description('C3 — cron (standard 5-field) for the cost-anomaly evaluation. Default daily 06:00 UTC.')
   costAnomalyCron: string?
 
+  @description('LIN-GC-2 — deploy the lineage garbage collector (loom-lineage-gc Container App Job — a scheduled SCAN for orphaned Purview entities, Weave/Thread edges and access artifacts whose backing item is gone). Default ON (opt-out) per loom_default_on_opt_out; only honored on containerApps + deployAppsEnabled (the loom-uat image carries the runner). It REPORTS and does not delete: purging on a schedule is separately gated behind LOOM_LINEAGE_GC_PURGE, because an unattended purge would delete metadata for an item whose absence might be a READ failure. Delete-time cleanup (LIN-GC-1) is unaffected and always on.')
+  lineageGcEnabled: bool?
+
+  @description('LIN-GC-2 — cron (standard 5-field) for the lineage GC sweep. Default daily 04:30 UTC: off the :00 mark and clear of the 06:00 cost-anomaly run so the two do not contend for the same console.')
+  lineageGcCron: string?
+
   @description('N5 — deploy the asset-reconciler (loom-asset-reconciler Container App Job — data-aware materialization of software-defined assets: observe real Delta commit versions / Event Hubs Capture watermarks, trigger the real Synapse / Databricks / SQLMesh job for upstream-changed or overdue assets, alert via the shared action group). Default ON (opt-out) per loom_default_on_opt_out; only honored on containerApps + deployAppsEnabled (the loom-uat image carries the runner). Per the estate constraint this is an ACA Job, NOT a Y1 Function. Instant kill without a roll: the n5-asset-reconciler runtime flag.')
   assetReconcilerEnabled: bool?
 
@@ -524,6 +530,11 @@ var lineageExtractorCron = observabilityConfig.?lineageExtractorCron ?? '*/15 * 
 // C3 (observabilityConfig bag) — cost-anomaly monitor shims (default-ON, opt-out).
 var costAnomalyEnabled = observabilityConfig.?costAnomalyEnabled ?? true
 var costAnomalyCron = observabilityConfig.?costAnomalyCron ?? '0 6 * * *'
+// LIN-GC-2. Default ON like its siblings, and safe to be: the scheduled path
+// SCANS and reports, and deletes only when LOOM_LINEAGE_GC_PURGE is separately
+// set on the console.
+var lineageGcEnabled = observabilityConfig.?lineageGcEnabled ?? true
+var lineageGcCron = observabilityConfig.?lineageGcCron ?? '30 4 * * *'
 // N5 (observabilityConfig bag) — asset-reconciler shims (default-ON, opt-out).
 var assetReconcilerEnabled = observabilityConfig.?assetReconcilerEnabled ?? true
 var assetReconcilerCron = observabilityConfig.?assetReconcilerCron ?? '*/15 * * * *'
@@ -4093,6 +4104,24 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             // horizon, 'auto' = Forecast API first, linear/seasonal fallback.
             { name: 'LOOM_COST_FORECAST_HORIZON_DAYS', value: string(costForecastHorizonDays) }
             { name: 'LOOM_COST_FORECAST_METHOD', value: costForecastMethod }
+            // LIN-GC-2 — the scheduled lineage sweep's PURGE opt-in, delivered
+            // explicitly as 'false' rather than left undeclared.
+            //
+            // check-env-sync caught this: the console route READS the variable, so
+            // a deploy that never emits it means an operator has no supported way
+            // to set it — /admin/env-config can only edit what the template
+            // declares, and a declarative ACA template drops anything it does not.
+            // "Read but never delivered" is a knob that exists in code and not in
+            // the product.
+            //
+            // 'false' is the value, not '' — the route reads affirmatively
+            // (`true`/`1`/`yes`), so an empty string and 'false' behave
+            // identically, and the explicit word states the intent to a human
+            // reading the app's env instead of leaving them to infer it. Flipping
+            // this arms an UNATTENDED purge of lineage metadata; that is why it is
+            // opt-in (auto-bind-by-default.md §5's narrow destructive exception)
+            // rather than default-ON like the job that calls it.
+            { name: 'LOOM_LINEAGE_GC_PURGE', value: 'false' }
             { name: 'NEXT_PUBLIC_LOOM_VERSION', value: loomVersion }
             { name: 'LOOM_SUBSCRIPTION_ID', value: subscription().subscriptionId }
             { name: 'LOOM_ADMIN_RG', value: resourceGroup().name }
@@ -7670,6 +7699,42 @@ module costAnomalyMonitor 'cost-anomaly-monitor-job.bicep' = if (costAnomalyActi
     acrLoginServer: registry.outputs.acrLoginServer
     loomUrl: fdOn ? frontDoor.outputs.frontDoorPublicUrl : 'http://loom-console'
     cronExpression: costAnomalyCron
+    internalToken: loomInternalToken
+    complianceTags: complianceTags
+  }
+}
+
+// =====================================================================
+// LIN-GC-2 — lineage garbage collection (the SCHEDULED half of lineage GC).
+// Scheduled Microsoft.App/jobs (daily, in-VNet, console UAMI) running
+// e2e/run-lineage-reconcile.mjs, which POSTs the console's
+// /api/internal/lineage/reconcile -- the console then runs the same
+// lib/azure/lineage-gc.ts scan the Governance → Lineage → Reconcile dialog
+// calls, across three orphan planes: Purview Atlas entities, Weave/Thread edges,
+// and access artifacts (notifications + open requests) for deleted items.
+//
+// Delete-time cleanup (LIN-GC-1) already runs inside every DELETE. This catches
+// what that structurally cannot: items deleted before it shipped, items deleted
+// out-of-band, and deletes whose fire-and-forget cleanup half failed and which
+// nothing ever retries.
+//
+// It REPORTS. Purging on a schedule is gated behind LOOM_LINEAGE_GC_PURGE on the
+// console, off unless deliberately set, because an unattended purge would delete
+// metadata for an item whose absence might be a READ failure rather than a real
+// deletion. Per the estate constraint this is an ACA Job, NOT a Y1 Function.
+// =====================================================================
+var lineageGcActive = lineageGcEnabled && containerPlatform == 'containerApps' && deployAppsEnabled
+
+module lineageGc 'lineage-gc-job.bicep' = if (lineageGcActive) {
+  name: 'lineage-gc-job'
+  params: {
+    location: location
+    environmentId: containerPlatformModule.outputs.caeId
+    consoleUamiId: identity.outputs.uamiConsoleId
+    consoleUamiClientId: identity.outputs.uamiConsoleClientId
+    acrLoginServer: registry.outputs.acrLoginServer
+    loomUrl: fdOn ? frontDoor.outputs.frontDoorPublicUrl : 'http://loom-console'
+    cronExpression: lineageGcCron
     internalToken: loomInternalToken
     complianceTags: complianceTags
   }

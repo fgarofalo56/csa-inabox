@@ -1,6 +1,6 @@
 /**
  * GENERATED — do not edit by hand. TYPE-ONLY (no runtime import is emitted).
- * Source: apps/fiab-console/app/api/**\/route.ts   (1688 routes)
+ * Source: apps/fiab-console/app/api/**\/route.ts   (1689 routes)
  * Regenerate: node scripts/ci/generate-client-route-map.mjs
  * Drift gate:  node scripts/ci/generate-client-route-map.mjs --check
  *
@@ -489,6 +489,7 @@ export type StaticApiRoute =
   | '/api/internal/copilot/skills/learn'
   | '/api/internal/copilot/tools'
   | '/api/internal/cost-anomaly/run'
+  | '/api/internal/lineage/reconcile'
   | '/api/internal/scheduler/tick'
   | '/api/internal/spark/keep-warm'
   | '/api/internal/topology/register-domain'
