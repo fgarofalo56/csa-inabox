@@ -69,10 +69,11 @@
  *
  *       `q()` only helps at sinks that CALL it, so `__tests__/identity-
  *       injection.test.ts` additionally classifies this file's emission sites:
- *       every `deployParams.<key> =` must be a static literal or a `q()` call,
- *       every `${…}` between `const deployParams` and the `return` must be a
- *       `q()` call, and string concatenation is not permitted in that region at
- *       all. The emitted `deployParams` key set is pinned at runtime as a
+ *       every `deployParams.<key> =` must BE a static literal or a `q()` call
+ *       with a literal field name, every `${…}` in the handler must BE a `q()`
+ *       call, every `+` may join only literals this file authored, and every
+ *       ELEMENT of an emitted array must positively classify as one of those
+ *       shapes. The emitted `deployParams` key set is pinned at runtime as a
  *       second, syntax-independent detector.
  *
  *       That test also counts raw `'${…}'` occurrences and `q('` calls. Those
@@ -82,20 +83,29 @@
  *       shipped green (RC=0, 36/36) with a live bicep-literal break-out. Do not
  *       read either count as "a sink cannot be added silently".
  *
- *       The emission-site classifier does NOT carry that claim either. Review
- *       round 3 measured where it stops, by mutating this file on disk and
- *       running the real 45-test suite. FOUR shapes stay GREEN at RC=0, 45/45:
- *       a bare expression added as an ELEMENT of the emitted command array; a
- *       `deployParams.<key> =` whose right-hand side only MENTIONS `q(` (rule 1
- *       tests for that substring, not for provenance); a concatenation sink in
- *       the RESPONSE OBJECT, which sits past the region end; and an earlier
- *       response `return`, which relocates the region end and silently shrinks
- *       the region while every floor still passes.
+ *       THE CLASSIFIER'S OWN BOUNDARY, ALSO MEASURED. Its first revision
+ *       scanned TEXT between `const deployParams` and the first response
+ *       `return`. Review round 3 mutated this file on disk and ran the real
+ *       suite: FOUR shapes stayed GREEN at RC=0, 45/45 — a bare expression as
+ *       an ELEMENT of the command array; a `deployParams.<key> =` whose RHS
+ *       only MENTIONED `q(`; a concatenation in the RESPONSE OBJECT, past the
+ *       region end; and an earlier response `return`, which RELOCATED the
+ *       region end and silently shrank the region while every floor still
+ *       passed.
  *
- *       So the honest statement is the narrow one: BETWEEN the region markers,
- *       and only for the three shapes rules 1-3 name, a sink cannot be added
- *       silently. Outside that span nothing here is watching. Widening the
- *       classifier is tracked in #3955.
+ *       #3955 replaced the text scan with a `ts.createSourceFile` walk over the
+ *       whole `POST` body, which removes all four causes structurally: there is
+ *       no end marker to move, nothing inside the handler is out of scope, an
+ *       unrecognised shape is a finding rather than a gap, and `q()` is
+ *       recognised as a CALL rather than as a substring. All four shapes are
+ *       pinned as controls, and each rule was mutation-proved: disabling the
+ *       array rule reddens A, restoring the substring test reddens D′, and
+ *       restoring the old text region reddens G and I — and only those.
+ *
+ *       What it still does NOT cover, stated rather than implied: `GET` (which
+ *       emits no paste target) and module scope. A value assembled at module
+ *       scope and referenced inside `POST` reaches a sink as a bare identifier,
+ *       which does not classify as safe — so that is a finding, not a hole.
  *
  * Route-toolkit: the `withSession` wrapper [R3]. The prologue it replaces was
  * `const session = getSession(); if (!session) return NextResponse.json({ ok:
@@ -203,18 +213,32 @@ export class UnsafeInterpolationError extends Error {
 
 /**
  * Quote `value` for emission into a shell word or a bicep string literal,
- * asserting first that it cannot escape either. EVERY interpolated value in
- * this route goes through this function today, and that is asserted — but by a
- * classifier with a MEASURED boundary, not a universal one:
- * __tests__/identity-injection.test.ts classifies every `deployParams.<key> =`
- * write file-wide, and every interpolation and concatenation BETWEEN
- * `const deployParams` and the first response `return`. It does not reach
- * command-array elements, the response object, or anything above that first
- * marker; see the note on L2 in the module docblock for the four shapes that
- * were measured GREEN, and #3955 for the widening. The emitted `deployParams`
- * key set is additionally pinned at runtime, which catches an added key
- * whatever syntax produced it — but only for the request shapes the suite
- * drives.
+ * asserting first that it cannot escape either. EVERY emitted value in this
+ * route goes through this function, and that is asserted by an AST classifier
+ * in __tests__/identity-injection.test.ts (#3955) whose scope is the WHOLE
+ * `POST` handler body:
+ *
+ *   - every `deployParams.<key> =` write must BE a static literal or a call to
+ *     `q()` with a literal field name — provenance, not the presence of the
+ *     characters `q(`;
+ *   - every `${…}` in the handler must BE a `q()` call;
+ *   - every `+` must join only literals this file authored;
+ *   - every ELEMENT of an emitted array must positively classify as one of
+ *     those shapes, so an unrecognised expression is a finding rather than a
+ *     gap.
+ *
+ * The earlier revision of this classifier scanned TEXT between
+ * `const deployParams` and the first response `return`, and #3955 measured four
+ * shapes that stayed green against it — a bare expression as a command-array
+ * element, a `deployParams` RHS that merely MENTIONED `q(`, a concatenation in
+ * the response object, and an earlier `return` that relocated the region end.
+ * Walking the handler's AST removes all four causes rather than adding a fourth
+ * regex; each is pinned as a control.
+ *
+ * KNOWN SCOPE: the walk covers `POST`. `GET` emits no paste target. The emitted
+ * `deployParams` key set is additionally pinned at RUNTIME, which catches an
+ * added key whatever syntax produced it — but only for the request shapes the
+ * suite drives.
  */
 function q(field: string, value: string): string {
   if (!INERT_VALUE_RE.test(value)) throw new UnsafeInterpolationError(field);

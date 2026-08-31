@@ -25,6 +25,10 @@
 import { itemsContainer } from '@/lib/azure/cosmos-client';
 import { resolveWorkspaceAccessByOid, ambientAccessOptsFor } from '@/lib/auth/workspace-access';
 import { resolveFactoryOverride, type FactoryOverride } from '@/lib/azure/adf-factory-context';
+// The ADF/Synapse WIRE translator. Imported rather than duplicated so the
+// publish path and the install path cannot disagree about the shape (#3700).
+// `_seed-dev-pipeline` imports only `cloud-endpoints`, so this adds no cycle.
+import { buildDevPipelineProperties } from '@/lib/install/provisioners/_seed-dev-pipeline';
 import type { WorkspaceItem } from '@/lib/types/workspace';
 
 export interface PipelineBinding {
@@ -252,35 +256,80 @@ export async function persistBinding(
 }
 
 /**
- * Build a backend-shaped pipeline definition (ADF / Synapse pipeline JSON:
- * `{ name?, properties: { activities, parameters, ... } }`) from a bundle's
- * stamped `state.content` (AdfPipelineContent / SynapsePipelineContent).
+ * WHICH SHAPE a bundle's stamped `state.content` is translated INTO.
+ *
+ * `'canvas'` — what the DESIGNER reads. The bundle's per-activity `config` is
+ *              spread onto the activity ROOT, which is where
+ *              `extractActivities()` and the node inspectors look.
+ * `'adf'`    — the ADF / Synapse WIRE format. Config is nested under
+ *              `typeProperties`, with the well-known siblings (`policy`,
+ *              `linkedServiceName`, `inputs`, `outputs`, `description`) lifted
+ *              back to the activity root, which is where the SERVICE looks.
+ *
+ * @see pipelineDefinitionFromContent
+ */
+export type PipelineDefinitionTarget = 'canvas' | 'adf';
+
+/**
+ * Build a pipeline definition (`{ name?, properties: { activities, parameters } }`)
+ * from a bundle's stamped `state.content` (AdfPipelineContent /
+ * SynapsePipelineContent), in the shape the named `target` reads.
  *
  * Why this exists: when an app installs a pipeline item, the bundle's rich
  * activity graph is stamped into `state.content.activities`, but the editor
  * loads its canvas from the LIVE ADF/Synapse pipeline. When that live object
  * isn't present yet (unprovisioned / RBAC-gated / not-yet-created) the canvas
- * would open EMPTY. This maps the stamped content into the exact pipeline-JSON
- * shape `extractActivities()` / the designer expect, so the canvas renders
- * every activity + dependency + parameter even with no live backend object.
+ * would open EMPTY. The default `'canvas'` target maps the stamped content into
+ * the exact pipeline-JSON shape `extractActivities()` / the designer expect, so
+ * the canvas renders every activity + dependency + parameter even with no live
+ * backend object.
  *
- * The bundle's per-activity `config` is the activity body (it already carries
- * `typeProperties` / `policy` / `linkedServiceName` / `description` for normal
- * activities, or `expression` / `items` / child `activities` for control-flow
- * activities), so it is spread directly onto the activity. `dependsOn` is the
- * compact `string[]` form, expanded to ADF's `[{activity, dependencyConditions}]`.
+ * ── WHY THE TARGET IS AN EXPLICIT PARAMETER (#3700) ─────────────────────────
+ * Two translators existed and both looked plausible. This one spread the
+ * bundle's `config` onto the activity ROOT; `buildDevPipelineProperties` (the
+ * install path) nests it under `typeProperties`. ADF reads `typeProperties` and
+ * IGNORES root-level keys, so `POST /api/items/data-pipeline/[id]/publish`
+ * called this function, PUT the canvas shape to ADF, and published a pipeline
+ * whose activities carried `notebookPath` where the service never looks. The
+ * PUT succeeded; the pipeline was inert — a green result over a dead resource.
+ * Measured on the Commercial estate at SHA d5804399: of 13 `data-pipeline`
+ * items, 2 had activities in the canvas root shape and ZERO had activities in
+ * the wire shape.
+ *
+ * A caller must now NAME the shape it wants, and the wire shape is produced by
+ * the single install-path translator rather than by a second implementation of
+ * it — so the two cannot drift, and a caller cannot pick the wrong one by
+ * accident without writing the word `adf` or `canvas`.
+ *
+ * For `'canvas'`, the bundle's per-activity `config` is the activity body (it
+ * already carries `typeProperties` / `policy` / `linkedServiceName` /
+ * `description` for normal activities, or `expression` / `items` / child
+ * `activities` for control-flow activities), so it is spread directly onto the
+ * activity. `dependsOn` is the compact `string[]` form, expanded to ADF's
+ * `[{activity, dependencyConditions}]` on both targets.
  *
  * Returns null when `content` isn't a pipeline-shaped bundle content.
  */
 export function pipelineDefinitionFromContent(
   content: unknown,
   pipelineName?: string,
+  opts: { target?: PipelineDefinitionTarget } = {},
 ): { name?: string; properties: { activities: unknown[]; parameters?: Record<string, unknown> } } | null {
   const c = content as
     | { kind?: string; activities?: Array<{ name: string; type: string; config?: any; dependsOn?: string[] }>; parameters?: Record<string, unknown> }
     | undefined;
   if (!c || (c.kind !== 'adf-pipeline' && c.kind !== 'synapse-pipeline')) return null;
   if (!Array.isArray(c.activities)) return null;
+
+  if (opts.target === 'adf') {
+    // Delegate to the install-path translator — the one PR #3696 verified
+    // against the real `app-azure-realtime-analytics` bundle — rather than
+    // reimplementing the nesting here.
+    return {
+      ...(pipelineName ? { name: pipelineName } : {}),
+      properties: buildDevPipelineProperties(c) as { activities: unknown[]; parameters?: Record<string, unknown> },
+    };
+  }
 
   const activities = c.activities.map((a) => {
     const { config, dependsOn } = a;
