@@ -4073,6 +4073,31 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             // idle compute + roll capacity env-config). The persisted per-tenant mode
             // in the Cosmos `autopilot` container overrides this once set.
             { name: 'LOOM_AUTOPILOT_MODE', value: 'propose' }
+            // ESTATE POWER — the arming switch for /admin/scaling's pause/resume
+            // control (#4221). Operator-reported live 2026-08-30: the button was
+            // dead in BOTH the Commercial and the Gov console, and it could not
+            // have been otherwise — the console read this variable in four places
+            // and NOTHING in bicep or any workflow set it, so `armed` was false on
+            // every boundary. The panel's remediation told the operator to go set
+            // an env var by hand, which is precisely the shape
+            // auto-bind-by-default.md §5 forbids ("the value must be produced by
+            // the deploy").
+            //
+            // ARMED, not gated. §5 does allow a cost-material opt-in to stay
+            // opt-in, and pausing an estate is cost-material — so this was put to
+            // the operator rather than assumed, and the decision (2026-08-30) is
+            // to arm it in EVERY boundary. cloud-parity.md: this is a literal on
+            // the shared console env list, so Commercial and all three sovereign
+            // boundaries take the same branch; there is no per-cloud condition to
+            // diverge.
+            //
+            // WHAT STOPS IT FIRING BY ACCIDENT is not this flag — it is the
+            // confirm-token gate in app/api/admin/estate/pause/route.ts, which
+            // #3989 closed and which is now live: a pause carrying no
+            // `confirmToken`, or one that no longer matches the previewed set, is
+            // refused 409. Arming the button therefore exposes a control that
+            // still cannot act on an estate the caller has not previewed.
+            { name: 'LOOM_ESTATE_PAUSE_ENABLED', value: 'true' }
             // C2 FinOps forecast (observabilityConfig bag) — horizon + method for
             // the real Cost Management Forecast API / computed-projection fallback
             // (lib/azure/cost-forecast.ts). Defaults are fully functional: 30-day

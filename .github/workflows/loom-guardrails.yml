@@ -198,6 +198,14 @@ jobs:
       - name: known-client-routes (every client /api call names a real BFF route — R17)
         if: ${{ !cancelled() }}
         run: node scripts/ci/check-known-client-routes.mjs
+      # The inverse of the two above: those prove a client call names a real
+      # route; this proves a real PAGE has a route in. /admin/brain shipped
+      # finished — canvas, synapse view, coverage, its whole API tree — with ZERO
+      # inbound links, so it was reachable only by typing the URL and read as
+      # unbuilt from the console (#4222, operator-reported).
+      - name: admin-page-reachability (a page nothing links to reads as unbuilt — #4222)
+        if: ${{ !cancelled() }}
+        run: node scripts/ci/check-admin-page-reachability.mjs
       - name: learn-doc-registry (Learning Hub slug sets vs authored guides/captures — loom-apex D1)
         if: ${{ !cancelled() }}
         run: node scripts/ci/check-learn-doc-registry.mjs

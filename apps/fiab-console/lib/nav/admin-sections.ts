@@ -42,6 +42,11 @@ export const ADMIN_SECTIONS: AdminSectionGroup[] = [
       { href: '/admin/rum', label: 'Real-user monitoring', desc: 'What real browsers experience: page-load p50/p95 by surface, Web Vitals (LCP/FCP/TTFB/CLS/INP), and top client errors — first-party capture (no CDN), PII-scrubbed, shipped to App Insights and charted from Log Analytics. Kill-switch: the rum1-client-telemetry runtime flag.' },
       { href: '/admin/readiness', label: 'Readiness', desc: 'Capability dependency graph + workload readiness scorecard (Ready / Partial / Blocked go/no-go) computed from live gate + probe state — each capability’s backends, env vars, RBAC role, bicep module, and probe status, with a one-click Fix it and a ready-to-run tenant profile export (JSON + report).' },
       { href: '/admin/diagnostics', label: 'Diagnostics', desc: 'One-click support bundle: export a point-in-time, secret-scrubbed JSON of the deployment posture — version + ACA revision, gate-registry state, masked env posture, live probes, last synthetic run, and recent audit rows — to attach to an incident.' },
+      // #4222 — this page was fully built and linked from NOWHERE: zero inbound
+      // references outside its own directory, so the only way to reach it was to
+      // type the URL. Reported live by the operator as "I don't see the brain",
+      // which is exactly what an unreachable surface looks like from outside.
+      { href: '/admin/brain', label: 'Loom Brain (estate graph)', desc: 'The estate graph: Loom reads every Container App, job and environment it can see across your subscriptions, wires them into a graph, and finds services nothing points at — waste a health check clears, because a service can be perfectly healthy and still have no inbound edge. Synapses paints four layers (prune / risk / real traffic / newly formed); Coverage says which detectors had no data, so a clean result is distinguishable from an uncollected one. Cleanup proposals are withheld where ownership is not established. Recommends and never acts — approving records the decision, the change stays a repository edit.' },
       { href: '/admin/incident-console', label: 'Incident console', desc: 'N17 — OpenLineage-backed data observability: per-table freshness / volume / schema-drift monitors (Monte-Carlo style, baselines reuse the anomaly detector — no external ML), an incident timeline (open→acknowledged→resolved, every state change audited), and a downstream-impact panel rendered from the unified lineage graph. Consumes N7d data-quality findings; incident alerts route through the one shared action group. Fully in-boundary (IL5-safe).' },
     ],
   },
@@ -82,6 +87,12 @@ export const ADMIN_SECTIONS: AdminSectionGroup[] = [
       // IA-06: access-requests / access-report / access-packages / access-reviews
       // are now the four TABS of this hub (all four routes redirect here).
       { href: '/admin/access-governance', label: 'Access governance', desc: 'The one identity-governance hub: the onboarding Requests queue, the unified who-has-access Report (principal ↔ resource, with CSV export), requestable access Packages with approval policies + separation-of-duties, and recertification Reviews with bulk decisions, delegation and auto-revoke. The Azure-native 1:1 of Entra ID Governance.' },
+      // #3724 — both of these are full, working pages (495 and 196 lines) that
+      // were in NEITHER this list nor ADMIN_LEGACY_REDIRECTS and do not
+      // self-redirect, so they were reachable only by typing the URL. They sit
+      // here beside Batch labeling, which is the surface that consumes them.
+      { href: '/admin/sensitivity-labels', label: 'Sensitivity labels', desc: 'Define the tenant sensitivity-label taxonomy Loom applies to catalog items — name, tooltip, colour and order — and the protection each label implies. Consumed by Batch labeling, the item Edit dialogs, and the DSPM for AI posture view.' },
+      { href: '/admin/classifications', label: 'Classifications', desc: 'Define and manage the data-classification vocabulary (PII, PHI, PCI, custom) that Loom attaches to columns and assets, including the Purview classification mapping used when assets are onboarded to the Data Map.' },
       { href: '/admin/batch-labeling', label: 'Batch labeling', desc: 'Bulk-apply sensitivity labels to many catalog items at once; optionally propagate to Microsoft Purview asset classifications and Power BI via Admin InformationProtection.setLabels.' },
       { href: '/admin/embed-codes', label: 'Embed codes', desc: 'Generate and revoke read-only signed embed URLs (Blob user-delegation SAS) for reports and visuals — no Fabric / Power BI workspace required.' },
       { href: '/admin/org-visuals', label: 'Organizational visuals', desc: 'Upload, version, enable/disable and remove tenant-wide custom visual bundles (.pbiviz), stored Azure-natively in Blob.' },
