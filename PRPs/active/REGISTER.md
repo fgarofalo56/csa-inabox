@@ -1,345 +1,58 @@
 # ACTIVE WORK REGISTER
 
-**Purpose:** one file that can be read cold and tell you everything in flight — every
-program, PR, agent lane and known-unstarted item, with who owns what and what ships when.
-If work is not in here, it is at risk of being lost.
+**The register of record is `PRPs/active/drain-2026-08-31/`.** This file is a
+pointer, not a snapshot. The previous revision of this file was a live-state
+snapshot measured 2026-08-23; by 2026-08-31 it was actively misleading (stale PR
+lists, a merge queue that had since drained, a P0 that had since been verified),
+and the operator authorized this rewrite. The history is in git if you need what
+it said.
 
-**Last measured: 2026-08-23 ~18:40Z.** Every count below was measured, not recalled.
-
----
-
-## 0. Priority call (mine, per operator delegation 2026-08-23)
-
-Ordered by *risk reduced per CI cycle spent*, because the merge treadmill — not compute — is
-the binding constraint (see §4).
-
-| Rank | What | Why it sits here |
-|---|---|---|
-| **P0** | **#3916 — infra deploy path deterministically broken** · fix in **#3944** | `deploy-integrity.md` R1: a broken deploy path preempts all feature work. Root cause established — a same-day regression from #3888. Bicep merges **are** landing inert. |
-| **P1** | Security PRs #3890, #3900 | Live auth defects. Both `CONFLICTING` — they need a rebase before anything else can happen. |
-| **P2** | Remediation wave (5 PRs under review) | Already built, already green; only review + treadmill stand between them and landing. |
-| **P3** | Loom Brain #3933 (W1–W11) | New capability, high operator value, but not above a broken deploy or a live auth hole. |
-| **P4** | 9 dependabot PRs | Lowest value, and each costs a full ~34-min cycle. **Batch last**, never interleaved. |
-
-**Shipping rule I am applying:** never merge onto a red suite; never merge a PR whose
-required checks were *hollow* for its own changed files; audit issue closures after every
-merge (the close-parser is negation-blind — *"Does not close #N"* closes #N).
+**The design change is deliberate:** a register that embeds live state goes stale
+the day after it is written. This one holds only pointers and dispositions, each
+dated. Live truth comes from `gh issue list` / `gh pr list` / `gh run list` and
+the estate's own `/build-marker.txt` — never from prose in this file.
 
 ---
 
-## 1. P0 — the infra deploy path (#3916) · fix in **PR #3944**
+## 1. The register of record — `PRPs/active/drain-2026-08-31/`
 
-**Root cause ESTABLISHED, with a counterfactual: a same-day regression from #3888**
-(`631c9850`, merged 2026-08-23T03:21:31Z). **Deterministic, not intermittent — main stays broken
-and the next scheduled run fails identically until #3944 lands.**
+The backlog-drain program covering **every open issue** (244 measured
+2026-08-31), written to the operator's standing ask: complete specs for
+everything owed, built for parallel dev loops.
 
-**What happened:** #3888 ported a step written for the **operator-dispatch** shape onto the
-**scheduled reconcile** lane. On `schedule` there are no inputs, so `deploy_sub` is empty **by
-design** — and `scripts/ci/deploy-fiab-guard.mjs:18` documents exactly that:
-
-    deploy_sub    subscription the deploy targets ('' = the login sub)
-
-The same doc block contrasts it with the bicep bools, which are *"NEVER the empty string"*. The
-ported step added a **fatal check** on empty rather than resolving the login subscription.
-`resolve-dns-inbound-allocation.mjs` builds a literal `/subscriptions/${subscription}/…` ARM id, so
-it genuinely cannot inherit the login sub — but the answer was to resolve it, not to abort.
-
-**The counterfactual, measured by fetching the workflow at each run's own SHA:**
-
-    2ea8252ef  (08-22 PASS)  "Resolve the hub DNS resolver" = 0
-    043c1aa3a  (08-20 FAIL)  "Resolve the hub DNS resolver" = 0
-    779b36294  (08-23 FAIL)  "Resolve the hub DNS resolver" = 1
-
-### My first analysis was wrong on three counts — recorded so the error is not repeated
-
-1. **"Intermittent" — refuted.** The 08-20 and 08-23 failures are **unrelated defects** with
-   different failing steps (25 vs 18) and different job step counts. The failing step **did not
-   exist** in the earlier run. 08-20 was a separate ARM leaf failure. Two failures on different
-   dates are not one intermittent defect until you confirm **they share a failing step**.
-2. **The `::warning::` I quoted was ECHOED SOURCE, not emitted.** Measured: **3** echoed,
-   **0** emitted — all inside an unexecuted `dlz-attach` branch. Step 15 actually printed
-   *success*, resolving a landing zone 0.5 s before the failure. **This refuted both candidate
-   causes** (throttle, missing Reader): the Resource Graph query succeeded in the same run.
-   Echoed source lists **every** branch, including unexecuted ones, so it reads as a catalogue of
-   pre-written failure modes. Real annotations are `##[...]`; grep **for** those.
-3. **"A guard passing on an empty required output is a defect" — does not apply here.** Empty is
-   the documented contract value, the passing 08-22 run had the identical empty value, and every
-   other consumer honours it (`if [ -n "${DEPLOY_SUB:-}" ]`, line 973). The new step invented a
-   requirement the contract never made.
-
-**A real secondary defect, different from the one I named:** step 18's comment asserts it decides
-*"never from `inputs.` in an `if:`"* — but `CSA_LOOM_TOPOLOGY` **is** `inputs.topology`, so its
-`dlz-attach` early-exit is unreachable on the daily trigger, and stays unreachable even for a
-genuine dlz-attach estate. Step 10 has the same shape. The guard resolves topology internally but
-**never emits it as an output**, so no consumer can read the resolved value. Contributing:
-`resolve-dns-inbound-allocation.mjs` shipped with **no test file**.
-
-**Why it is P0 even though the estate looks healthy:** the **app** roll chain is separate and
-healthy (live marker `e4dcfd72`, stamped 2026-08-23T18:10:20Z). So apps deploy while infra does
-not — **bicep merges in this window are inert**, which is `deploy-integrity.md` R2. Directly gates
-PRs #3923 and #3927, both bicep.
-
-**#3944 MERGED and VERIFIED LIVE — partially.** Run `32666693845` on `main`
-(`whatif-only`, centralus, `allow_existing_hub=true`) completed **SUCCESS with 0 failed
-steps**, and **step 18 — the exact step that failed at 06:49:24Z — now passes.**
-
-**What is NOT verified:** step 21 (`ADX preflight`, the sibling defect) was **not exercised** —
-its condition is `github.event_name == 'schedule' || inputs.run_mode == 'full'`, which a
-`whatif-only` dispatch cannot reach by design. It has **test** coverage (the reviewer's narrow
-ADX-only mutation went RC=1) but no **live** coverage. **#3916 stays OPEN until the scheduled
-run (~06:48Z) proves both steps** — half a receipt is not a receipt (R2).
-
-*A failed run `32662265651` sits in the history and is NOT evidence against #3944:* it failed
-at step 6 on my own misconfigured dispatch, where the topology guard correctly refused to stamp
-a second Console and named the fix (`allow_existing_hub=true`). R6 behaving properly.
-
-**Follow-up #3947:** the recurrence guard #3944 added is keyed to a **spelling** — `[ -z … ]`
-and `[ "${…:-}" = "" ]` both walk past it while its comment claims a third offender must fail.
-
-**#3944 jumped ahead of #3912 in the merge order** — R1: a broken deploy path preempts all
-feature work. Merged 2026-08-23.
-
-**Other deploy paths (measured, most-recent-first):**
-
-    full-app-deploy-commercial    cancelled, success, failure
-    deploy-gov                    success, success, failure      <- healthy
-    loom-roll-and-validate        running,  success, success     <- healthy
-    build-fiab-images-acr-tasks   success,  success, success     <- healthy
-    csa-loom-post-deploy-bootstrap success, success, failure     <- healthy
-
-
----
-
-## 2. Programs
-
-| Program | Spec | State |
-|---|---|---|
-| **OMNIBUS** (9 lanes, L0–L8) | `PRPs/active/omnibus-2026-08-22/PRP.md` | Wave 0 in remediation. **Scoped at 261 issues; 287 are now open** — ~26 filed since, so the PRP's population is stale. |
-| **Estate pause/resume** | `PRPs/active/estate-pause-resume/PRP.md` | W1 merged (`e4dcfd72`, live). PR #3932 open for the button. |
-| **Loom Brain + Visualizer** | `PRPs/active/loom-brain/PRP.md` · parent **#3933** | W1–W7 in flight; W8–W11 filed as #3934–#3937. |
-
----
-
-## 3. Loom Brain work items (#3933)
-
-| # | Item | Owns | Issue | State |
-|---|---|---|---|---|
-| W1 | Graph substrate | `lib/brain/graph/**`, `lib/brain/types.ts` | #3933 | **PR #3945** (16 files) |
-| W2 | Waste detectors | `lib/brain/detectors/**` | #3933 | **PR #3952** (38 files) |
-| W3 | Cost pipeline | `lib/brain/cost/**` | #3933 | **PR #3950** (16 files) |
-| W4 | Agent layer | `lib/brain/agents/**` | #3933 | **PR #3949** (34 files) |
-| W5 | **Visualizer** | `app/admin/brain/**` | #3933 | **PR #3951** (42 files) |
-| W6 | Security taxonomy | `docs/fiab/brain/security-taxonomy.md` | #3933 | **PR #3939** |
-| W7 | Security detectors | `lib/brain/security/**` | #3933 | **PR #3946** (29 files) |
-| W8 | **Synapses view** | `app/admin/brain/synapses/**` | **#3934** | blocked on W5 (same directory — §8 conflict) |
-| W9 | **Graph versioning** | `lib/brain/history/**` | **#3935** | not started |
-| W10 | **Scheduler + lifecycle** | workflow, `lib/brain/run/**` | **#3936** | not started |
-| W11 | **Gov parity** | Gov params + workflow | **#3937** | not started |
-
-**W9 and W10 are the ones most likely to be quietly skipped, and both are load-bearing.**
-Without W9 there is no history, so *"an edge that should not have formed"* is undetectable and
-prune recommendations run off a single snapshot — which would recommend deleting a resource
-that is merely mid-deploy. Without W10 the Brain never runs; `lcu-autopilot` is the standing
-proof of that failure mode, having shipped a full read→decide→actuate loop with no scheduler.
-
-**The thesis was AMENDED by its own taxonomy (#3939) — see `loom-brain/PRP.md` §3.8.** Testing
-the reachability idea against this repo's shipped defects returned *substantially right,
-materially incomplete*, and it is **not the highest-value part**. The dominant evasion measured
-here is not adding an unguarded edge — it is **falling outside the population being examined**
-(six instances, invisible in every artifact except a population count). The live proof:
-`check-tid-boundary-chokepoint.mjs` reports **15 candidates, 1 judged, RC=0** while a live
-defect grants real ADLS ACLs, because its discriminant is a regex on *parameter names*.
-
-Two classes fail the thesis outright and need non-graph mechanisms:
-**fail-open** (the edge is present, on-path, consumed — and answers ALLOW on failure; the
-property is verdict totality of a *node*) and **duplicated decision** (11 tenant comparisons
-across 3 files, all present, reachability clean **and correct** — the defect is that two
-*disagree*; a property of a *set*, and currently this repo's most productive defect class).
-
----
-
-## 4b. MERGE DRAIN STRATEGY (operator-directed 2026-08-23: "get them all in")
-
-### The mechanical insight that makes this tractable
-
-**`gh pr merge --admin` bypasses BOTH the review requirement AND the up-to-date (`strict`)
-requirement.** So the "every merge invalidates every open PR ⇒ 34 min each" treadmill is **not
-actually binding**. A `BEHIND` PR can merge without re-running CI.
-
-What that trades away is the guarantee that the PR's CI ran against *current* main. So the real
-constraint is **file-disjointness between consecutive merges**, not CI time. Two PRs touching no
-common file can merge back-to-back safely; two that share a file cannot.
-
-### Measured collision map (31 open PRs, 27 files touched by >1 PR)
-
-**The big one:** #3945, #3949, #3951, #3952 each carry **17 identical substrate files** — the
-component agents branched from main *before* the substrate landed. Verified byte-identical:
-`types.ts` is blob `b805bdf322a6` in **all four**. So they merge cleanly **in sequence**, and
-#3945 must go first.
-
-Other collisions to sequence around:
-
-    docs/fiab/route-inventory.md      3890, 3900, 3932, 3950, 3952   (GENERATED - regenerate, never hand-merge)
-    scripts/ci/check-route-guards.mjs 3890, 3928
-    no-freeform-inputs-baseline.json  3928, 3931
-    .github/workflows/gov-console-roll.yml  3875, 3927
-    .github/workflows/trivy.yml            3871, 3875
-    .github/workflows/link-check.yml       3872, 3874
-    deploy-fiab-il5.yml, loom-drift-check.yml  3873, 3874
-    pyproject.toml                    3863, 3869
-
-### Merge order
-
-| Batch | PRs | Gate |
-|---|---|---|
-| **1 — docs** | ~~#3939~~ ✅ ~~#3938~~ ✅ | zero code risk, merged 2026-08-23 |
-| **2 — Brain** | #3945 **first**, then #3946, #3949, #3950, #3951, #3952 | first review in flight; substrate is byte-identical so no conflict |
-| **3 — remediated fixes** | #3927, #3928, #3929, #3930, #3931, #3924, #3923, #3898, #3932 | all green; awaiting round-2/3 verdicts |
-| **4 — security** | #3890, #3900 | both RED and CONFLICTING; fix lane in flight |
-| **5 — dependabot** | 9 PRs | **#3875 only after #3927**; #3873 (`github-script` 7→9) and #3874 (`upload-artifact` 4→7) are MAJOR bumps to workflows that gate everything — review, don't batch |
-| **6 — release** | #3863 | last, and regenerate after everything else lands |
-
-### Standing rules for the drain
-
-1. **Verify green before every merge** — `MISSING/RED/INCOMPLETE` all zero. A hollow required
-   check is only acceptable when it is **path-appropriate for that PR's diff**.
-2. **Audit `closingIssuesReferences` before merging.** Live catch on #3927: one sentence placed
-   a close-keyword immediately before an issue number, registering a real closing reference — on
-   a PR whose own body said *"Deliberately Refs, never Closes: the close parser is
-   negation-blind."* That issue needs a **re-roll**, which a merge cannot perform. Reworded; refs
-   now empty.
-
-   **This propagates by quotation.** Writing the offending phrase verbatim — even to document the
-   hazard — re-triggers the parser. It happened again on #3953, the PR carrying *this file*.
-   Describe the shape; never reproduce the literal `<keyword> #<number>` adjacency.
-3. **Audit closed issues after every merge** — compare the closed list before and after.
-4. **Never merge onto a red suite**, and verify `main` is green between batches.
-5. **Runner capacity caps the parallel width** (§4a). Read-only review lanes are free; branch
-   updates are not.
-
-
-## 4a. CI runner saturation — measured 2026-08-23 ~21:12Z
-
-    completed 38 | queued 15-18 | in_progress 4-5 | pending 2      (24 active)
-
-**The binding constraint moved.** It was the merge treadmill; with ~10 PRs cycling it is now
-**runner capacity**. The P0 verification dispatch sat behind ~17 jobs, most of them triggered by
-my own branch updates — so adding parallel PR work actively delays the thing most worth
-verifying. **Hold branch updates while the queue is deep; read-only review lanes are free and
-should absorb the waiting time instead.**
-
-
----
-
-## 4. Merge drain — LIVE STATE (2026-08-23, end of session)
-
-**16 merged this session.** Open: **18** (9 substantive · 9 dependabot).
-
-    #3926 parity docs        #3944 P0 deploy fix      #3939 security taxonomy
-    #3938 Brain PRP+register #3953 merge strategy     #3898 pause PRP + triage
-    #3932 Pause/Resume button#3945 Brain SUBSTRATE    #3925 engine-object guard
-    #3912 test-isolation race#3927 Gov/data-plane     #3929 pasted-command escaping
-    #3930 admin surfaces     #3923 LOOM_CLOUD_TIER    #3928 seven blind guards
-    #3931 mapping-dataflow id
-
-### What remains
-
-| PR | State |
+| Document | Holds |
 |---|---|
-| #3863 release 0.101.0 | **LAST by design** — its changelog derives from everything merged before it |
-| #3890 · #3900 security | in the unblock lane; #3890's earlier lane returned EMPTY and did no work |
-| #3924 dataplane R7 | extraction lane — blocked only by the monolith-creep ratchet, not a finding |
-| #3946 #3949 #3950 #3951 #3952 Brain | in the unblock lane (conflict resolution + two still red) |
-| 9 dependabot | last. **#3873 (github-script 7→9) and #3874 (upload-artifact 4→7) are MAJOR bumps to workflows that gate all CI** — review, never batch |
+| `PRP.md` | The program: waves W0–W6, lanes, batching, merge protocol, the ten operator decisions |
+| `LEDGER.md` | **Generated** per-issue register — every open issue, exactly once, with verdict/size/wave/lane. Regenerate with `python PRPs/active/drain-2026-08-31/gen-ledger.py`; never hand-edit |
+| `OWNERSHIP.md` | Lane file-ownership rules; collision map; what may not run in parallel |
+| `FILES.md` | Per-issue file lists with provenance — the input `OWNERSHIP.md` §8 requires before a lane opens |
+| `OWED.md` | The honesty ledger: unfiled measured defects, open operator questions (§2), owed receipts, parks with dates |
+| `DEV-LOOP.md` | The per-lane dev loop: re-measure at head, implement, verify-gates, review, merge |
 
-### What actually unblocked this
+An issue absent from `LEDGER.md` is a gap in the program, not an issue that does
+not matter. `PENDING-TRIAGE` rows are carried in the open rather than rounded
+away.
 
-Rounds 1 and 2 both returned CHANGES REQUIRED on every remediation PR, **with real findings each
-time**. That is the reviews working, but it does not terminate: *"a future sibling could evade this
-guard"* always justifies another round. Round 3 asked a different question —
+## 2. Prior in-flight PRPs — dispositions (2026-08-31)
 
-> **If this merges today, is anything WORSE than before?**
+Per `OWED.md` §6. Nothing was dropped; everything folded somewhere named.
 
-No ⇒ the finding is guard-strength and becomes an issue. Yes, or unsure ⇒ it blocks. Six PRs
-landed on that basis, with their residual gaps captured as #3954–#3965, #3967.
+| PRP | Disposition |
+|---|---|
+| `PRPs/active/estate-pause-resume/` | **Folds into the drain's W1 estate-power lane.** Its Gov half is OWED U5: `scripts/measure/estate-resume.mjs` hard-codes the Commercial RG, which cannot satisfy "arm the power button in every boundary" |
+| `PRPs/active/loom-brain/` | **Folds into the drain's W1 brain lane** (#4222 — the Brain has zero inbound links — plus #3933-family items per the ledger) |
+| `PRPs/active/omnibus-2026-08-22/` | **Superseded.** Its open items are absorbed into `LEDGER.md`; the directory stays for history. Its population count (261) was stale against reality before it was superseded — do not quote it |
+| `PRPs/active/snowflake-parity/` | **Feature-class → W6** (defects-first operator decision). Its decisions are recorded and binding: migration-first · transpiler now, wire-compat later · **outcome** parity |
 
-### Two mechanical lessons from driving the merges
+## 3. Standing operator decisions carried by the program
 
-1. **`--admin` bypasses both the review requirement AND the up-to-date requirement**, so the
-   ~34-min treadmill is not the binding constraint. What matters is **file-disjointness between
-   consecutive merges**.
-2. **GitHub recomputes `mergeable` after every merge**, returning `UNKNOWN` for a minute or two.
-   A driver that reads `UNKNOWN` as a verdict skips every remaining PR — observed exactly once
-   here. **Poll until it settles**; never treat `UNKNOWN` as "not mergeable".
+Recorded in `PRP.md`; listed here because they are the ones a cold reader needs
+before touching anything: defects first, features parked to W6 · Gov = fix
+what's free, park the rest **with a date** · estate verification happens in
+batched W4 validation windows · every merge is preflighted, review verdicts are
+posted before `--admin` merge · big batches, one CI cycle each · the estate
+power button arms by default in **every** boundary.
 
-### A file-identity measurement EXPIRES
-
-The merge order rested on four Brain PRs carrying byte-identical substrate files (blob
-`b805bdf322a6`). True when measured — and then #3945's own review round **changed those files**,
-so merging it flipped all four siblings to `CONFLICTING`. **Re-verify blob identity immediately
-before merging, not when the plan is written.**
-
-## 5. Agent lanes in flight — where output lands
-
-| Lane | Run ID | Produces |
-|---|---|---|
-| `loom-brain-build` | `wf_198ed510-c77` | W1 substrate PR, then W2/W3/W4/W5 PRs |
-| `loom-brain-security` | `wf_4502aa90-852` | W6 taxonomy PR, then W7 detectors PR |
-| `review-fanout-wave` | `wf_da1e7c72-e95` | Verdicts on #3898, #3912, #3923, #3925, #3927 |
-| Pause-button agent | `a293c96b36260b06c` | Pushes to PR #3932 |
-
-**If a lane dies, its work survives as an issue** (#3933–#3937) — that is why they were filed
-before the lanes were trusted to finish.
-
----
-
-## 6. Known open questions — not yet answered, do not assume
-
-1. **#3916 root cause** — Resource Graph throttling vs a missing Reader on the DLZ
-   subscription. The alternating pattern suggests throttling. **Unmeasured.**
-2. **OMNIBUS population is stale** — the PRP says 261, reality is 287. The delta is untriaged.
-3. **Demo-data fixes are unverified live** — the three merged fixes need a *fresh* demo
-   deploy, because existing items were seeded by the old CSV path.
-4. **Nothing in Loom Brain has run against a live estate.** Every dollar figure is `derived`
-   (measured SKU × retail rate), not billed. The Cost Management API returned HTTP 429 on
-   11 consecutive attempts over ~35 minutes — which is *why* the design reads from a storage
-   export instead.
-5. **Gov is unverified for everything in this register** except `deploy-gov` itself.
-
----
-
-## 7. Follow-ups filed rather than fixed in place
-
-Each was found inside another PR's remediation and sat **outside that PR's declared file
-ownership**. Reaching across is what CLAUDE.md §8 forbids and is how parallel lanes collide —
-so they were filed instead. This section exists because a deferred finding with no issue is
-indistinguishable from a forgotten one.
-
-| Issue | Finding | Why it matters |
-|---|---|---|
-| **#3940** | `check-env-sync` collects only `LOOM_*`, so **`NEXT_PUBLIC_LOOM_*` is invisible to it** | A **population** defect, not a rule defect — the guard is green because its examined set is smaller than the set it polices. `NEXT_PUBLIC_` is also the prefix that reaches the browser, so an emitted-but-empty one no-ops client-side. |
-| **#3941** | `owner-only-workspace-guard` is **RED and unowned** | While red, the owner-filter property is **not enforced by CI**, so a regression lands silently. A red lane with no owner becomes a permanently accepted failure — there is precedent here for a red lane being disabled rather than fixed. |
-| **#3942** | `reindex-loom-docs` flakes **2/2881 under parallel load**, passes **12/12 isolated** | Load-dependent, so it surfaces intermittently and gets blamed on whatever PR is in the tree. A test whose verdict depends on machine load measures the property *plus the scheduler*. |
-
-## 8. Wave-0 remediation — landed on-branch (2026-08-23)
-
-Three PRs remediated in parallel. Both headline findings were **guards that were green while
-blind**, which is the same class the Loom Brain is being built to detect:
-
-- **#3923** — `LOOM_CLOUD_TIER` sat in `UNTRIAGED_INERT`, consumed by `computeInert()` as a
-  `continue` (a skip, **not** an assertion). Four-arm mutation: wiring REMOVED + allowlist
-  PRESENT returned **RC=0 — the guard was blind**. After the fix that arm returns **RC=1**.
-  Note the arms differ in line endings — `main.bicep` is **LF**, `check-env-sync.mjs` is
-  **CRLF** — so a single LF needle would have matched zero times and read as a passing test.
-- **#3925** — the `engineObject` guard **refused 62% of the objects Loom actually mints**
-  (measured 6,178/10,000; expected 10/16 = 62.5%, because UUID-derived names begin with a
-  digit and the head class was `[A-Za-z_]`). The load-bearing mutation was M3: widening the
-  *head* class opened no hole, while admitting a real separator still goes red.
-- **#3927** — six mutation arms, all RC=0 → RC=1. Also corrected a comment asserting **11**
-  workflows when the real figures are **12 naive / 9 comment-stripped** — 11 was measured by
-  nothing.
-
-**Merge order decision:** #3912 goes first. It fixes a test-isolation race that reddens
-*unrelated* PRs, so landing it reduces spurious failures across the remaining four. Branch
-updated 2026-08-23; its cycle is running.
-
+Merge-drain mechanics (close-parser negation-blindness, hollow-check audit,
+`--admin` authorization and its limits) live in auto-memory and `OWED.md` §7 —
+not restated here.
