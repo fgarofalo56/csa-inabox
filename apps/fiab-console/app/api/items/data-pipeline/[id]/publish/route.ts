@@ -89,7 +89,16 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
     if (body?.definition?.properties) definition = body.definition as AdfPipeline;
     else if (state?.definition?.properties) definition = state.definition as AdfPipeline;
     else {
-      const fromContent = pipelineDefinitionFromContent(state?.content, state?.adfPipelineName);
+      // #3700 — `target: 'adf'` is REQUIRED here. The default 'canvas' target
+      // spreads the bundle's per-activity `config` onto the activity ROOT,
+      // which is what the designer reads and what ADF IGNORES. Publishing that
+      // shape produced a 200 and a pipeline whose activities did nothing:
+      // measured on the estate, `notebookPath` sat at the activity root with no
+      // `typeProperties` anywhere. 'adf' routes through the install-path
+      // translator, which nests config under `typeProperties`.
+      const fromContent = pipelineDefinitionFromContent(
+        state?.content, state?.adfPipelineName, { target: 'adf' },
+      );
       if (fromContent) definition = fromContent as AdfPipeline;
     }
     if (!definition?.properties) {

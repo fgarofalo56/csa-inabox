@@ -57,14 +57,20 @@
  *    still load-bearing: it is what catches an added `q('` call, and the region
  *    interpolation count is what catches an added `${…}` in the emitted text.
  *    {@link unsafeEmissions} widens that — it classifies emission SITES rather
- *    than counting one syntax, over three shapes —
+ *    than counting one syntax. Since #3955 it does so on the AST
+ *    (`ts.createSourceFile`) over the WHOLE `POST` handler body, in four rules:
  *    a `deployParams.<key> =` whose right-hand side is neither a static literal
- *    nor a `q()` call; a `${…}` in the emission region that is not a `q()` call;
- *    and any string concatenation in that region at all. Each of those three is
- *    pinned by a control below that mutates the real source in memory, plus a
- *    DISCRIMINATING control proving a correctly-routed sixth sink is accepted —
- *    without it, "flags everything" would look identical to a working
- *    classifier. `emitted deployParams keys` is a fourth, independent detector
+ *    nor a `q()` call with a literal field name; a `${…}` that is not itself a
+ *    `q()` call; a `+` that joins anything other than literals this file
+ *    authored; and — the rule that did not exist — an ELEMENT of an emitted
+ *    array that does not positively classify as one of those shapes.
+ *
+ *    Each rule is pinned by a control below that mutates the real source in
+ *    memory, plus a DISCRIMINATING control proving a correctly-routed sixth
+ *    sink is accepted — without it, "flags everything" would look identical to
+ *    a working classifier. The four shapes #3955 measured GREEN against the
+ *    previous, text-scanning revision (A, D′, G, I) each have their own pinned
+ *    control. `emitted deployParams keys` is a further, independent detector
  *    that works at RUNTIME and so does not depend on source syntax at all.
  *
  * No test in this file contacts Graph, Azure, or a shell.
@@ -72,6 +78,10 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
+// #3955 — the emission-site classifier walks NODES, not text. `typescript` is
+// already a devDependency of this app (it is what `tsc` and the security-graph
+// extractor run on), so this adds no new dependency.
+import ts from 'typescript';
 
 // ── session: a signed-in operator (so the tests exercise validation, not 401) ──
 const getSessionMock = vi.fn(
@@ -334,53 +344,198 @@ describe('POST /api/setup/identity — sink-count invariant', () => {
 });
 
 // ───────────────────────────────────────────────────────────────────────────
-// EMISSION-SITE INVARIANT — the widened anti-narrow-bypass control
+// EMISSION-SITE INVARIANT — the anti-narrow-bypass control, on the AST (#3955)
 // ───────────────────────────────────────────────────────────────────────────
-// Why this exists rather than the two counting assertions above: review of this
-// PR defeated those by writing the sixth sink with `+` instead of `${}`. Counts
-// stayed at 1 and 5; RC=0, 36/36; and a bicep-literal break-out landed verbatim
-// in a paste target. Counting ONE syntax cannot support the claim "a sink
-// cannot be added silently".
+// Why this exists rather than the two counting assertions above: review of
+// #3929 defeated those by writing the sixth sink with `+` instead of `${}`.
+// Counts stayed at 1 and 5; RC=0, 36/36; and a bicep-literal break-out landed
+// verbatim in a paste target. Counting ONE syntax cannot support the claim
+// "a sink cannot be added silently".
 //
-// Neither can this classifier, and the boundary is measured rather than
-// assumed: mutating the real route and running this real suite, FOUR shapes
-// stay green at 45/45 — a bare expression as a command-array element; a
-// `deployParams.<key> =` whose RHS only MENTIONS `q(`; a concatenation in the
-// response object (past REGION_END); and an earlier response `return` that
-// relocates REGION_END. What this control DOES carry is the narrow claim:
-// inside the region, for the three shapes below, a sink cannot be added
-// silently. Widening is #3955.
+// THE REGEX VERSION OF THIS CLASSIFIER COULD NOT EITHER, AND #3955 MEASURED
+// EXACTLY WHERE IT STOPPED. Mutating the real route and running this real
+// suite, FOUR shapes stayed green at 45/45:
+//
+//   A   a bare member expression as an ELEMENT of the command array — no
+//       assignment, no `${…}`, no `+`, so no rule looked at it at all.
+//   D′  `deployParams.<k> =` whose RHS merely MENTIONS `q(`, with a VARIABLE
+//       q-argument (so the `q('` count is unchanged) and the write guarded by a
+//       field no runtime case sends (so the emitted-key pin never sees it).
+//   G   a concatenation sink in the RESPONSE OBJECT, past `REGION_END`.
+//   I   an EARLIER `return NextResponse.json({` relocating `REGION_END`; the
+//       region shrank but still cleared every floor, and the sink landed beyond
+//       it.
+//
+// All four are consequences of classifying TEXT instead of NODES:
+//   • the region was `[indexOf('const deployParams'), indexOf(first return))`,
+//     so everything outside it was unclassified (G) and the end marker could be
+//     MOVED by adding an earlier return (I);
+//   • rule 1 tested for the SUBSTRING `q(` rather than for provenance (D′);
+//   • there was no POSITIVE shape rule, so an expression that is not an
+//     assignment, an interpolation or a concatenation was simply not a shape
+//     any rule considered (A).
+//
+// So the classifier is now a `ts.createSourceFile` walk over the WHOLE POST
+// handler body. That removes all four root causes structurally rather than by
+// adding a fourth regex:
+//   • SCOPE is the handler's own AST subtree — there is no end marker to move
+//     (closes I) and nothing inside the handler is out of scope (closes G);
+//   • every emitted expression must POSITIVELY classify as safe, so an
+//     unrecognised shape is a finding rather than a gap (closes A);
+//   • `q()` is recognised as a CALL to the identifier `q` with a literal field
+//     name, not as the presence of the characters `q(` (closes D′).
+// Comments are not AST nodes, so the walk is also immune to a sink "hidden" in
+// a docblock without any stripping step.
+//
+// KNOWN SCOPE, stated rather than implied: the walk covers the POST handler.
+// GET emits no paste target, and module-scope helpers (`q`, `requireGuid`,
+// `normalizeConsoleHosts`) are pinned by the behavioural tests above. A value
+// assembled at module scope and merely REFERENCED inside POST would reach a
+// sink as a bare Identifier — which does not classify as safe, so it is a
+// finding, not a hole.
 // ───────────────────────────────────────────────────────────────────────────
 
-/** A single string/template literal with NO interpolation and NO concatenation
- *  — i.e. a constant the route authored itself, which no caller can influence. */
-const STATIC_LITERAL_RE = /^(?:'[^'\\]*'|"[^"\\]*"|`[^`$\\]*`)$/;
+/** The INERTNESS gate every emitted caller value must pass, by name. */
+const SINK_FN = 'q';
 
-/** Any string literal adjacent to a `+`. Inside the emission region, building
- *  emitted text by concatenation is forbidden outright — that is the shape the
- *  template-counting invariant is blind to, and there is no legitimate use of
- *  it here, so the rule is "none", not "none that look dangerous". */
-const CONCAT_RE = /(?:['"`][^'"`\n]*['"`]\s*\+|\+\s*['"`])/g;
-
-const REGION_START = 'const deployParams';
-const REGION_END = 'return NextResponse.json({';
-
-/** The two paste targets are both built between these markers. */
-function emissionRegion(code: string): string | null {
-  const a = code.indexOf(REGION_START);
-  const b = code.indexOf(REGION_END, a);
-  if (a < 0 || b < 0) return null;
-  return code.slice(a, b);
+/** A string-producing literal with no interpolation — a constant the route
+ *  authored itself, which no caller can influence. */
+function isStaticStringLiteral(n: ts.Node): boolean {
+  return ts.isStringLiteral(n) || ts.isNoSubstitutionTemplateLiteral(n);
 }
 
-/** Every `deployParams.<key> = <rhs>;` write, file-wide (so a value assembled
- *  outside the region and assigned in is still classified on its RHS). */
-function deployParamSites(code: string): Array<{ key: string; rhs: string }> {
-  const sites: Array<{ key: string; rhs: string }> = [];
-  const re = /deployParams\.(\w+)\s*=\s*([^;]*);/g;
-  let m: RegExpExecArray | null;
-  while ((m = re.exec(code))) sites.push({ key: m[1], rhs: m[2].trim() });
+/** `q('<literal field name>', …)` — a CALL to the sink gate, not a mention of
+ *  it. The field label must be a literal: that is what makes the label
+ *  meaningful in `UnsafeInterpolationError`, and it is what closes D′, whose
+ *  whole trick was a variable q-argument that kept the `q('` count unchanged. */
+function isSinkCall(n: ts.Node): boolean {
+  return (
+    ts.isCallExpression(n)
+    && ts.isIdentifier(n.expression)
+    && n.expression.text === SINK_FN
+    && n.arguments.length >= 1
+    && isStaticStringLiteral(n.arguments[0])
+  );
+}
+
+/**
+ * Is `n` an expression this route may EMIT into a paste target?
+ *
+ * POSITIVE by construction: an unrecognised shape is NOT safe. That inversion
+ * is the fix for A — the regex classifier asked "does this look dangerous?",
+ * which has an unbounded set of answers, and this asks "is this one of the
+ * shapes we accept?", which has a listed one.
+ */
+function isSafeEmittedExpr(n: ts.Node): boolean {
+  if (ts.isParenthesizedExpression(n)) return isSafeEmittedExpr(n.expression);
+  if (ts.isAsExpression(n) || ts.isTypeAssertionExpression(n)) return isSafeEmittedExpr(n.expression);
+  // Constants the route authored.
+  if (isStaticStringLiteral(n) || ts.isNumericLiteral(n)) return true;
+  if (n.kind === ts.SyntaxKind.NullKeyword) return true;
+  if (n.kind === ts.SyntaxKind.TrueKeyword || n.kind === ts.SyntaxKind.FalseKeyword) return true;
+  if (ts.isIdentifier(n) && n.text === 'undefined') return true;
+  // The inertness gate.
+  if (isSinkCall(n)) return true;
+  // `a ? safe : safe`, `cond && safe`, `safe || safe` — the shapes the command
+  // array legitimately uses to include/exclude an element.
+  if (ts.isConditionalExpression(n)) {
+    return isSafeEmittedExpr(n.whenTrue) && isSafeEmittedExpr(n.whenFalse);
+  }
+  if (ts.isBinaryExpression(n)) {
+    const op = n.operatorToken.kind;
+    if (op === ts.SyntaxKind.AmpersandAmpersandToken || op === ts.SyntaxKind.BarBarToken
+      || op === ts.SyntaxKind.QuestionQuestionToken) {
+      // The LEFT of `&&` is a predicate, not emitted text; the right is.
+      return op === ts.SyntaxKind.AmpersandAmpersandToken
+        ? isSafeEmittedExpr(n.right)
+        : isSafeEmittedExpr(n.left) && isSafeEmittedExpr(n.right);
+    }
+    if (op === ts.SyntaxKind.PlusToken) return isStaticConcat(n);
+    return false;
+  }
+  // A template is safe only when EVERY interpolation is a sink call.
+  if (ts.isTemplateExpression(n)) {
+    return n.templateSpans.every((s) => isSinkCall(unwrap(s.expression)));
+  }
+  return false;
+}
+
+/** Strip parens / `as` so a shape test sees the expression itself. */
+function unwrap(n: ts.Expression): ts.Expression {
+  let cur: ts.Expression = n;
+  while (ts.isParenthesizedExpression(cur) || ts.isAsExpression(cur)) cur = cur.expression;
+  return cur;
+}
+
+/**
+ * A `+` chain whose every LEAF is a static literal.
+ *
+ * This distinction is the reason the region could not simply be widened to the
+ * whole handler with the old CONCAT regex, and #3955 measured that too: the
+ * honest `note:` string in the response object is built by static
+ * concatenation, so a blanket "no `+` in the emitted scope" rule produces THREE
+ * findings on the clean, unmutated head. Static-only concatenation cannot carry
+ * caller text; concatenation with an expression operand is exactly the #3929
+ * bypass.
+ */
+function isStaticConcat(n: ts.Node): boolean {
+  const e = ts.isParenthesizedExpression(n) ? n.expression : n;
+  if (isStaticStringLiteral(e) || ts.isNumericLiteral(e)) return true;
+  if (ts.isBinaryExpression(e) && e.operatorToken.kind === ts.SyntaxKind.PlusToken) {
+    return isStaticConcat(e.left) && isStaticConcat(e.right);
+  }
+  return false;
+}
+
+/** The POST handler's body — the emission scope. `null` = could not be found. */
+function postHandlerBody(sf: ts.SourceFile): ts.Node | null {
+  let found: ts.Node | null = null;
+  const visit = (n: ts.Node): void => {
+    if (found) return;
+    if (ts.isVariableDeclaration(n) && ts.isIdentifier(n.name) && n.name.text === 'POST' && n.initializer) {
+      let fn: ts.Node | null = null;
+      const findFn = (m: ts.Node): void => {
+        if (fn) return;
+        if (ts.isArrowFunction(m) || ts.isFunctionExpression(m)) { fn = m; return; }
+        ts.forEachChild(m, findFn);
+      };
+      findFn(n.initializer);
+      if (fn) found = (fn as ts.ArrowFunction | ts.FunctionExpression).body;
+      return;
+    }
+    if (ts.isFunctionDeclaration(n) && n.name?.text === 'POST' && n.body) { found = n.body; return; }
+    ts.forEachChild(n, visit);
+  };
+  visit(sf);
+  return found;
+}
+
+/** Every `deployParams.<key> = <rhs>` write inside the emission scope. */
+function deployParamSites(scope: ts.Node): Array<{ key: string; rhs: ts.Expression }> {
+  const sites: Array<{ key: string; rhs: ts.Expression }> = [];
+  const visit = (n: ts.Node): void => {
+    if (
+      ts.isBinaryExpression(n)
+      && n.operatorToken.kind === ts.SyntaxKind.EqualsToken
+      && ts.isPropertyAccessExpression(n.left)
+      && ts.isIdentifier(n.left.expression)
+      && n.left.expression.text === 'deployParams'
+    ) {
+      sites.push({ key: n.left.name.text, rhs: unwrap(n.right) });
+    }
+    ts.forEachChild(n, visit);
+  };
+  visit(scope);
   return sites;
+}
+
+/** Everything the walk classified, so a floor can prove it was not vacuous. */
+export interface EmissionPopulation {
+  deployParamWrites: number;
+  arrayElements: number;
+  interpolations: number;
+  concatenations: number;
+  scopeChars: number;
 }
 
 /**
@@ -388,36 +543,75 @@ function deployParamSites(code: string): Array<{ key: string; rhs: string }> {
  * without passing q()'s inertness assertion. Empty means the route is clean.
  */
 function unsafeEmissions(code: string): string[] {
-  const findings: string[] = [];
+  return classifyEmissions(code).findings;
+}
 
-  // Fail CLOSED if the region markers moved: a classifier that silently found
-  // nothing to classify is the empty-population failure, not a pass.
-  const region = emissionRegion(code);
-  if (region === null) {
-    return ['emission region not found — REGION_START/REGION_END markers moved'];
+function classifyEmissions(code: string): { findings: string[]; population: EmissionPopulation } {
+  const empty: EmissionPopulation = {
+    deployParamWrites: 0, arrayElements: 0, interpolations: 0, concatenations: 0, scopeChars: 0,
+  };
+  const sf = ts.createSourceFile('route.ts', code, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
+  const scope = postHandlerBody(sf);
+  // Fail CLOSED if the scope vanished: a classifier that silently found nothing
+  // to classify is the empty-population failure, not a pass.
+  if (!scope) {
+    return {
+      findings: ['emission scope not found — the POST handler body could not be located'],
+      population: empty,
+    };
   }
 
+  const findings: string[] = [];
+  const pop: EmissionPopulation = { ...empty, scopeChars: scope.getText().length };
+  const text = (n: ts.Node) => n.getText().replace(/\s+/g, ' ').slice(0, 160);
+
   // (1) deployParams writes: static literal, or routed through q(). Nothing else.
-  for (const s of deployParamSites(code)) {
-    if (/\bq\(/.test(s.rhs)) continue;
-    if (STATIC_LITERAL_RE.test(s.rhs)) continue;
-    findings.push(`deployParams.${s.key} is neither a static literal nor a q() call: ${s.rhs}`);
+  //     PROVENANCE, not substring presence — that is what closes D′.
+  for (const s of deployParamSites(scope)) {
+    pop.deployParamWrites++;
+    if (isSafeEmittedExpr(s.rhs)) continue;
+    findings.push(`deployParams.${s.key} is neither a static literal nor a q() call: ${text(s.rhs)}`);
   }
   // (1b) …and the only way to write deployParams is that form.
   if (/deployParams\s*\[/.test(code)) findings.push('deployParams written by computed key');
   if (/Object\.assign\s*\(\s*deployParams/.test(code)) findings.push('deployParams written by Object.assign');
 
-  // (2) every interpolation in the emitted text is a q() call.
-  for (const i of region.match(/\$\{[^}]*\}/g) ?? []) {
-    if (!/\bq\(/.test(i)) findings.push(`interpolation not routed through q(): ${i}`);
-  }
+  const visit = (n: ts.Node): void => {
+    // (2) every interpolation in the emitted text IS a q() call.
+    if (ts.isTemplateExpression(n)) {
+      for (const span of n.templateSpans) {
+        pop.interpolations++;
+        if (!isSinkCall(unwrap(span.expression))) {
+          findings.push(`interpolation not routed through q(): \${${text(span.expression)}}`);
+        }
+      }
+    }
+    // (3) concatenation may only join literals the route authored itself.
+    if (ts.isBinaryExpression(n) && n.operatorToken.kind === ts.SyntaxKind.PlusToken) {
+      pop.concatenations++;
+      if (!isStaticConcat(n)) {
+        findings.push(`string concatenation in the emission region: ${text(n)}`);
+      }
+    }
+    // (4) POSITIVE SHAPE — every element of an emitted array must classify.
+    //     This is the rule that did not exist, and A is exactly what fell
+    //     through its absence.
+    if (ts.isArrayLiteralExpression(n)) {
+      for (const el of n.elements) {
+        if (ts.isSpreadElement(el)) { findings.push(`spread element in an emitted array: ${text(el)}`); continue; }
+        pop.arrayElements++;
+        if (!isSafeEmittedExpr(unwrap(el))) {
+          findings.push(`array element is not a static literal, a q() call, or a conditional over those: ${text(el)}`);
+        }
+      }
+    }
+    ts.forEachChild(n, visit);
+  };
+  visit(scope);
 
-  // (3) no string concatenation builds emitted text — the reviewer's bypass.
-  for (const c of region.match(CONCAT_RE) ?? []) {
-    findings.push(`string concatenation in the emission region: ${c.trim()}`);
-  }
-
-  return findings;
+  // De-duplicate: a nested `+` chain is visited as part of its parent AND on its
+  // own, and the same finding twice is noise, not signal.
+  return { findings: Array.from(new Set(findings)), population: pop };
 }
 
 describe('POST /api/setup/identity — emission-site invariant', () => {
@@ -440,26 +634,50 @@ describe('POST /api/setup/identity — emission-site invariant', () => {
   const ANCHOR_CMD = "          'CONSOLE_APP_NAME=loom-console CONSOLE_RG=<admin-rg>',";
 
   it('the live route has no unsafe emission site', () => {
-    expect(unsafeEmissions(stripComments(routeSource()))).toEqual([]);
+    // No comment-stripping step: comments are not AST nodes (#3955).
+    expect(unsafeEmissions(routeSource())).toEqual([]);
   });
 
   it('the classifier has a real population (floor, so it cannot pass vacuously)', () => {
-    const code = stripComments(routeSource());
-    const region = emissionRegion(code);
-    expect(region).not.toBeNull();
-    expect(region!.length).toBeGreaterThan(400);
+    const code = routeSource();
+    const { population } = classifyEmissions(code);
 
-    // Every `deployParams.<key> =` token in the file was actually PARSED into a
-    // site. If an RHS ever contains a `;` the slice would drop the site and the
-    // guard would go quiet — this is the check that notices.
-    const tokens = code.match(/deployParams\.\w+\s*=(?!=)/g) ?? [];
-    const sites = deployParamSites(code);
-    expect(sites.length).toBe(tokens.length);
+    // The scope exists and is the handler, not a fragment.
+    expect(population.scopeChars).toBeGreaterThan(400);
+
+    // Every `deployParams.<key> =` token the file contains was actually PARSED
+    // into a site. The regex here is the INDEPENDENT count: if the AST walk ever
+    // stopped finding writes (a renamed identifier, a changed assignment shape)
+    // the guard would go quiet, and this is the check that notices. Comments are
+    // excluded from the token count because they are excluded from the walk.
+    const tokens = stripComments(code).match(/deployParams\.\w+\s*=(?!=)/g) ?? [];
+    expect(population.deployParamWrites).toBe(tokens.length);
     // Seven writes today (3 appModes × their params, + oid, + groupId). A floor,
     // not an equality: adding a SAFE site must not require editing this number.
-    expect(sites.length).toBeGreaterThanOrEqual(7);
-    // Both interpolations in the region are the two q()-wrapped shell values.
-    expect((region!.match(/\$\{[^}]*\}/g) ?? []).length).toBe(2);
+    expect(population.deployParamWrites).toBeGreaterThanOrEqual(7);
+
+    // The two q()-wrapped shell values are the only interpolations in scope.
+    expect(population.interpolations).toBe(2);
+    // The command array is classified element-by-element — the rule that did not
+    // exist before #3955. Five elements today; a floor, not an equality.
+    expect(population.arrayElements).toBeGreaterThanOrEqual(5);
+    // The honest `note:` string is a static-literal `+` chain, so the walk DOES
+    // see concatenations on the clean head and accepts them. If this hit zero,
+    // rule 3 would be running over an empty population.
+    expect(population.concatenations).toBeGreaterThanOrEqual(3);
+  });
+
+  it('CONTROL — a purely STATIC concatenation is accepted, not flagged', () => {
+    // The trap #3955 warned about: widening the scope to the whole handler with
+    // a blanket "no `+`" rule produces THREE findings on the clean head, because
+    // the response `note:` is assembled from literals. A classifier that flagged
+    // those would be deleted by the first person who read it.
+    const mutated = mutate(
+      routeSource(),
+      ANCHOR_PARAMS,
+      "  const staticNote = 'one ' + 'two ' + 'three';\r\n  void staticNote;\r\n" + ANCHOR_PARAMS,
+    );
+    expect(unsafeEmissions(mutated)).toEqual([]);
   });
 
   // ── PINNED BYPASS CONTROLS ────────────────────────────────────────────────
@@ -543,18 +761,114 @@ describe('POST /api/setup/identity — emission-site invariant', () => {
     expect(unsafeEmissions(stripComments(mutated))).toEqual([]);
   });
 
-  it('CONTROL — a region marker that VANISHES fails CLOSED, it does not go quiet', () => {
-    // A guard over an empty population is green and blind. If a marker ever
-    // stops matching, the classifier must say so rather than find nothing.
-    //
-    // Scope, measured rather than assumed: this covers a marker that VANISHES.
-    // A marker that MOVES does NOT fail closed — adding an earlier response
-    // `return` relocates REGION_END, shrinking the region while it still clears
-    // the 400-char floor and still holds its two interpolations, and the suite
-    // stays green at 45/45. That is #3955, not something this control catches.
+  it('CONTROL — a vanished emission scope fails CLOSED, it does not go quiet', () => {
+    // A guard over an empty population is green and blind. If the handler ever
+    // stops being locatable, the classifier must say so rather than find
+    // nothing. The AST scope has no END marker at all, so the #3955 "marker
+    // MOVES" case (I) cannot exist — it is pinned below anyway, because the
+    // absence of a hazard is worth an assertion when a previous revision had it.
     expect(unsafeEmissions('export const POST = 1;')).toEqual([
-      'emission region not found — REGION_START/REGION_END markers moved',
+      'emission scope not found — the POST handler body could not be located',
     ]);
+  });
+
+  // ── THE FOUR #3955 SHAPES, PINNED ─────────────────────────────────────────
+  // Each of these was MEASURED green (RC=0, 45/45) against the regex classifier
+  // by mutating this same route and running this same suite. They are the cases
+  // the AST walk exists for, so each is pinned with the finding it must produce.
+
+  it('BYPASS A — a bare member expression as a command-array element is flagged', () => {
+    // No assignment, no `${…}`, no `+`. Under the regex classifier no rule
+    // looked at array ELEMENTS at all, so this was not "missed" — it was
+    // outside every question the guard asked. It is a live sink: the array is
+    // `.join(' ')`ed straight into the shell command the operator pastes.
+    const mutated = mutate(
+      routeSource(),
+      ANCHOR_CMD,
+      '          ((body as any).tenantHint),\r\n' + ANCHOR_CMD,
+    );
+    const findings = unsafeEmissions(mutated);
+    expect(findings.join('\n')).toContain('array element is not a static literal');
+    expect(findings.join('\n')).toContain('tenantHint');
+  });
+
+  it("BYPASS D-prime — a deployParams RHS that only MENTIONS q() is flagged", () => {
+    // The reported D was caught by two OTHER detectors (the `q('` count and the
+    // runtime key pin). D′ evades all three: a VARIABLE q-argument keeps the
+    // `q('` count unchanged, and a guard on a field no request body in this
+    // suite sends keeps the key out of the emitted set. Only provenance catches
+    // it — the RHS is a call to `String`, not to `q`.
+    const mutated = mutate(
+      routeSource(),
+      ANCHOR_PARAMS,
+      "  const hintField = 'appRegistration.tenantHint';\r\n"
+      + '  if ((body as any).tenantHint) deployParams.loomTenantHint = '
+      + 'String(q(hintField, String((body as any).tenantHint)));\r\n'
+      + ANCHOR_PARAMS,
+    );
+    const code = mutated;
+    const findings = unsafeEmissions(code);
+    expect(findings.join('\n')).toContain('loomTenantHint is neither a static literal nor a q() call');
+    // …and the two detectors that DO NOT catch it, measured in the same run so
+    // the claim above is checked rather than remembered.
+    expect((stripComments(code).match(/\bq\('/g) ?? []).length).toBe(5);
+  });
+
+  it('BYPASS G — a concatenation sink in the RESPONSE OBJECT is flagged', () => {
+    // Past the old REGION_END, therefore unclassified by the regex version. The
+    // response body is a paste source too: `apply.deployParams` and
+    // `apply.bootstrapScript` are what the wizard shows the operator to copy.
+    const mutated = mutate(
+      routeSource(),
+      '      note:',
+      "      tenantHint: 'TENANT=' + String((body as any).tenantHint),\r\n      note:",
+    );
+    expect(unsafeEmissions(mutated).join('\n')).toContain('string concatenation in the emission region');
+  });
+
+  it('BYPASS I — an EARLIER response return cannot relocate the scope end', () => {
+    // The regex classifier ended its region at the FIRST `return
+    // NextResponse.json({`, so adding an earlier one shrank the region — while
+    // still clearing the 400-char floor and still holding its two
+    // interpolations, so no floor noticed — and a sink beyond it went
+    // unclassified. The AST scope is the handler's own subtree, so there is no
+    // end marker to move: the sink is inside the scope wherever it sits.
+    const mutated = mutate(
+      routeSource(),
+      ANCHOR_PARAMS,
+      '  if ((body as any).ping) return NextResponse.json({ ok: true });\r\n'
+      + "  deployParams.loomTenantHint = \"'\" + String((body as any).tenantHint) + \"'\";\r\n"
+      + ANCHOR_PARAMS,
+    );
+    const findings = unsafeEmissions(mutated);
+    expect(findings.join('\n')).toContain('loomTenantHint');
+    expect(findings.join('\n')).toContain('string concatenation in the emission region');
+  });
+
+  it('BYPASS E — an interpolation that merely CONTAINS a q() call is flagged', () => {
+    // Reported in round 2 of #3929's review and measured NOT to be a bypass
+    // there (the pinned interpolation COUNT caught it). Provenance closes the
+    // class rather than the instance: `${x || q('lit', y)}` is not a q() call,
+    // it is an expression that ends in one, and the count assertion would not
+    // have caught a variant that kept the interpolation count at two.
+    const mutated = mutate(
+      routeSource(),
+      ANCHOR_CMD,
+      '          `TENANT_HINT=${((body as any).tenantHint) || q(\'x\', \'\')}`,\r\n' + ANCHOR_CMD,
+    );
+    expect(unsafeEmissions(mutated).join('\n')).toContain('interpolation not routed through q()');
+  });
+
+  it('CONTROL — a comment containing an unsafe-looking sink is NOT a finding', () => {
+    // The regex classifier needed `stripComments` to avoid classifying prose.
+    // The AST walk never sees a comment, and this pins that so the stripping
+    // step is not reintroduced as though it were load-bearing.
+    const mutated = mutate(
+      routeSource(),
+      ANCHOR_PARAMS,
+      '  // deployParams.loomTenantHint = "\'" + (body as any).tenantHint + "\'";\r\n' + ANCHOR_PARAMS,
+    );
+    expect(unsafeEmissions(mutated)).toEqual([]);
   });
 
   // ── RUNTIME DETECTOR — independent of source syntax entirely ──────────────
