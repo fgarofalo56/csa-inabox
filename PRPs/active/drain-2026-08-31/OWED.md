@@ -14,24 +14,29 @@ those questions live. Everything not in §2 proceeds on my judgement.
 
 ---
 
-## 1. Measured defects not yet filed as issues
+## 1. Measured defects not yet filed as issues — ALL FILED 2026-08-31
 
-Five defects measured during triage that have **no GitHub issue**. Filing them is a
-W0 deliverable — an unfiled defect is invisible to every process this repo has.
+Five defects measured during triage that had **no GitHub issue**. Each was
+re-verified at head on 2026-08-31 before filing (a carried finding is a
+hypothesis), and each is now tracked:
 
-| # | Defect | Measurement | Wave |
+| # | Defect | Disposition (2026-08-31) | Wave |
 |---|---|---|---|
-| **U1** | `deploy-fiab-il5.yml` is dispatch-only and has never been dispatched | `on:` block carries no `schedule:` / `cron:`; line 128 `environment: il5-deploy`; zero runs | W0 |
-| **U2** | `console-bluegreen-roll` has 3 consecutive FAILURE conclusions and has not run in ~3 weeks | `gh run list` | W0 (overlaps #3968) |
-| **U3** | Required-context coverage gap: the `security-graph.json` drift check **and** `Frontend Tests / jest` are rigorous but **cannot block** | live `branches/main/protection` returns 15 contexts; neither is among them | W5 |
-| **U4** | The GCC-High estate-pause declaration has drifted from its observed symptom | declaration vs. observed behaviour | W0 |
-| **U5** | **Gov has no estate resume path** — `scripts/measure/estate-resume.mjs` hard-codes the Commercial resource group | source read | W1 (estate-power lane) |
+| **U1** | `deploy-fiab-il5.yml` is dispatch-only, zero runs ever | **Already tracked by #4073** — re-measurement comment posted. Two corrections at head: the `il5-deploy` environment now EXISTS (required-reviewer rule 63816614), and adding a bare `schedule:` would reproduce #4233's parked-forever state on IL5 | W0 |
+| **U2** | `console-bluegreen-roll` consecutive failures, unrun since 2026-07-31 | **Already tracked by #3968** — re-measurement comment posted; staleness has grown to a month, direction unchanged (needs a dispatch, not a fix) | W0 |
+| **U3** | Required-context gap: the security-graph drift check and `jest (node 20.x)` cannot block | Graph half was **already filed as #4029**; jest half filed as **#4234**. Both verified present on the main tip and absent from the 15 live contexts | W5 |
+| **U4** | The GCC-High estate-pause declaration has drifted from its observed symptom | Filed as **#4233**, with a sharper measurement than this row carried: since 2026-08-27 every scheduled gcch run parks at `waiting` on the `gcc-high-deploy` approval gate — zero steps, neither red nor green — so the #4117 stand-down machinery is unreachable and the declared symptom is unobservable | W0 |
+| **U5** | **Gov has no estate resume path** — `estate-resume.mjs` is all-Commercial by its own header | Filed as **#4235**. #4149's boundary guard refuses correctly (fail-closed); the capability itself is absent | W1 (estate-power lane) |
 
-**U5 is the sharpest of the five.** The operator's decision was *"arm the estate power
+**U5 remains the sharpest.** The operator's decision was *"arm the estate power
 button by default in every boundary."* A resume script that hard-codes the Commercial
 RG cannot satisfy that decision in Gov, and `cloud-parity.md` makes Commercial-only
-**INCOMPLETE**, not "Commercial-first". It is scheduled into the W1 estate-power lane
-rather than filed and deferred.
+**INCOMPLETE**, not "Commercial-first". #4235 is scheduled into the W1 estate-power
+lane with #3922 — filed AND scheduled, not filed-and-deferred.
+
+The duplicate-check before filing did real work: two of the five (U1, U2) were
+already tracked, and half of U3 was (#4029) — filing blind would have minted three
+duplicates, the #4055 mistake repeated.
 
 ---
 
@@ -180,7 +185,7 @@ contagious**; Gov continuous deploy was fixed 2026-08-18. Read **Gov's own**
 | Re-run triage lane `a25004b5070e553ee` in smaller batches | Died on *"Prompt is too long"*; produced nothing |
 | Re-run triage lane `a64bbc96948b63d6d` ("unclassified batch A") | Reported `completed`, wrote a **zero-byte** output |
 | Re-run triage lane `adeaa344753d4cbbb` | Reported `completed`, wrote a zero-byte output **twice** before its third run succeeded (6270 bytes, 85 lines); #4035 and #4064 still rest on memory as a result |
-| Confirm tip `7ac7153e4c`'s `CSA Loom Console Build` completes | So `loom-roll-and-validate` fires and the estate picks up #4226 — then read `/build-marker.txt` before calling anything deployed |
+| ~~Confirm tip `7ac7153e4c`'s `CSA Loom Console Build` completes~~ | **DONE 2026-08-31.** Run 33432196477 went green rolling tag `00018977aa` (the LIN-GC-2 commit), and `/build-marker.txt` served `sha=00018977aa… stamp=20260831T192134Z` at HTTP 200 — the estate is live on it. The run's `displayTitle` SHA is the image tag rolled; its `headSha` is the workflow-file commit — two different things, reconciled, not a defect. The failing run before it is analyzed in #4231 |
 | Fix or retire `temp/extract-agent-reports.py` | Its `texts[-3:]` tail heuristic **truncated a 27-issue report to 818 chars**; prefer the task-notification `<result>` payload |
 | Audit issue closure after every merge | The string *"Does not close #N"* **closes #N** |
 

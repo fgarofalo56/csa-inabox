@@ -58,6 +58,11 @@ V = {
     4046: ("REAL", "M", "W5", "ci-guards", "Sequence with #3941 in one loom-guardrails.yml lane"),
     3979: ("REAL", "L", "W5", "workflows", "Claims ~84 of 123 workflow files - MUST NARROW before scheduling (OWNERSHIP §2)"),
     3882: ("REAL", "M", "W0", "deploy-C", "CONFLICT C2 resolved by fresh measurement: 6 consecutive failures 2026-08-10 -> 2026-08-31"),
+    # --- filed 2026-08-31 from OWED §1 (U3/U4/U5) + measured in that sweep --
+    4233: ("REAL", "S", "W0", "deploy-B", "U4 filed. gcch scheduled runs park at the gcc-high-deploy approval gate since 08-27 (5 stacked, zero steps) — the declared symptom is unobservable and the #4117 stand-down machinery is unreachable. Supersedes the #4072 streak framing."),
+    4234: ("REAL", "S", "W5", "ci-guards", "U3 filed (jest half; graph half was already #4029). jest (node 20.x) exists on main, absent from the 15 required contexts. Sequence with #4029 + #4038 mirror + Q2 script regen; tighten-last per the merge-gates decision."),
+    4235: ("REAL", "M", "W1", "estate-power", "U5 filed. Gov resume path missing — estate-resume.mjs is all-Commercial by its own header; #4149's guard refuses correctly, the capability is absent. Lane opens with #3922."),
+    4029: ("REAL", "S", "W5", "ci-guards", "Measured 2026-08-31: the graph drift check runs on main tip yet is absent from the 15 required contexts. Pair with #4234 in one protection change; #4038's mirror must take both."),
     # --- W0 broken deploy paths ------------------------------------------
     4231: ("REAL", "M", "W0", "deploy-A", "Three latent roll defects measured from run 33429557771: D1 health poll dies under -e on throttle (R6), D2 ~100s budget, D3 rollback asserts a FALSE 'does not exist' (R7). Stable tracker for auto-closed #4230; the throttle was a one-off (ten prior greens), so latent, not an outage."),
     3676: ("REAL", "M", "W0", "deploy-A", "Broken deploy path - P0 under deploy-integrity R1"),
