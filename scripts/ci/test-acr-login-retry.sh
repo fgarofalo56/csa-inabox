@@ -102,6 +102,12 @@ UNREACHABLE_MSG='ERROR: Failed to connect to MSI. Please make sure MSI is config
 #     this to TRANSIENT and this case goes red.
 PERMDENY_LINK_MSG='WARNING: Error response from daemon: Get "https://x.azurecr.io/v2/": denied: requested access to the resource is denied. Refer https://aka.ms/acr/authorization to check your role assignments.  ERROR: Login failed.'
 NOHOST_MSG='ERROR: The registry host "nope.azurecr.io" does not exist in subscription 00000000-0000-0000-0000-000000000000. Verify the registry name.'
+#   DIGEST403_MSG - a permanent manifest error whose HEX DIGEST contains the
+#     digits 403. The status-code alternate is bounded by non-alphanumerics
+#     precisely so this cannot satisfy it; dropping those boundaries (a bare
+#     `403`, as `503|504` used to be) flips this to TRANSIENT and this case goes
+#     red after burning the full retry budget on an error that will never clear.
+DIGEST403_MSG='ERROR: manifest for x.azurecr.io/loom-console@sha256:be403fa91c2d4e778bb1ac9e5d6f0071a2c3b4d5e6f708192a3b4c5d6e7f8091 not found: manifest unknown.'
 
 PASS=0
 FAIL=0
@@ -157,6 +163,10 @@ run_case "PE/DNS unreachable fails CLOSED on budget" "" "$UNREACHABLE_MSG" 1 5 -
 # below. Both must stay PERMANENT.
 run_case "RBAC denial w/ an aka.ms/acr link stays PERMANENT" "" "$PERMDENY_LINK_MSG" 1 1 --attempts 5 --backoff 0
 run_case "'registry host does not exist' stays PERMANENT"    "" "$NOHOST_MSG"        1 1 --attempts 5 --backoff 0
+# The third breadth control (#4214), guarding the status-code alternate's
+# boundaries rather than its presence. Replacing the bounded alternate with a
+# bare `403` — the shape `503|504` carried until this change — turns this red.
+run_case "403 inside a hex digest stays PERMANENT"          "" "$DIGEST403_MSG"     1 1 --attempts 5 --backoff 0
 
 # --- the defaults, measured through the loop (the #3383 regression guard) ---
 run_case "DEFAULT attempts is 12 (not 6)"           "" "$TRANSIENT_MSG" 1 12 --backoff 0
