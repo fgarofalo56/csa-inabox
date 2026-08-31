@@ -16,7 +16,6 @@
  * precise MessageBar, never a dead control.
  */
 import { NextRequest, NextResponse } from 'next/server';
-import { getSession } from '@/lib/auth/session';
 import { loadOwnedItem } from '../../../_lib/item-crud';
 import {
   fetchSourceSchema,
@@ -25,28 +24,33 @@ import {
   NoAoaiDeploymentError,
   type AgentConfigSuggestion,
 } from '@/lib/copilot/agent-config-tools';
-import type { DataAgentSource } from '@/lib/azure/data-agent-client';
+import { rehydrateSource, type DataAgentSource } from '@/lib/azure/data-agent-client';
 import type { WorkspaceItem } from '@/lib/types/workspace';
 import { apiServerError } from '@/lib/api/respond';
+import { withSession } from '@/lib/api/route-toolkit';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
 const ITEM_TYPE = 'data-agent';
 
+/**
+ * #4119 — the sixth rehydration site, and the sixth copy of a projection that coerced
+ * `id`/`name` and passed `type` through raw. It now goes through the shared boundary.
+ *
+ * TWO DELTAS, stated rather than left to be discovered:
+ *   • `aiSearch` / `graph` were dropped by the old local projection and now come through.
+ *     Both are read-only typed config; `fetchSourceSchema` / `generateSuggestions` get a
+ *     MORE complete source than before, never a different one.
+ *   • the old `id` fell back to `''` where the shared one falls back to the source NAME.
+ *     Unreachable here: the `find` above already required `String(x?.id) === sourceId`,
+ *     so `s.id` is non-empty by the time this runs.
+ */
 function findSource(state: Record<string, unknown>, sourceId: string): DataAgentSource | null {
   const sources = Array.isArray(state.sources) ? (state.sources as any[]) : [];
   const s = sources.find((x) => String(x?.id) === String(sourceId));
   if (!s) return null;
-  return {
-    id: String(s.id || ''),
-    type: s.type,
-    name: String(s.name || ''),
-    tables: s.tables ? String(s.tables) : undefined,
-    description: s.description ? String(s.description) : undefined,
-    instructions: s.instructions ? String(s.instructions) : undefined,
-    examples: Array.isArray(s.examples) ? s.examples : undefined,
-  };
+  return rehydrateSource(s);
 }
 
 function notDeployed(e: NoAoaiDeploymentError) {
@@ -61,11 +65,9 @@ function notDeployed(e: NoAoaiDeploymentError) {
   );
 }
 
-export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
-  const session = getSession();
-  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+export const POST = withSession<{ id: string }>(async (req: NextRequest, { session, params }) => {
 
-  const { id } = await ctx.params;
+  const { id } = params;
   let body: any;
   try { body = await req.json(); } catch { return NextResponse.json({ ok: false, error: 'invalid JSON body' }, { status: 400 }); }
 
@@ -113,4 +115,4 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
     if (e instanceof NoAoaiDeploymentError) return notDeployed(e);
     return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 502 });
   }
-}
+});
