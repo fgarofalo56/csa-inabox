@@ -1,17 +1,47 @@
 # AI Agent examples — runtime dependencies
 #
-# Pinned to Nov 2024 versions known to work together. Bump intentionally.
+# Bump intentionally. The header used to say "pinned to Nov 2024 versions known to work
+# together"; that had stopped being true (semantic-kernel 1.39.4 and pytest 9.0.3 are both
+# well past it) and the set did not in fact resolve — see below.
+#
+# #3506 — THIS FILE WAS ResolutionImpossible, AND THE GATE THAT TRIGGERS ON IT NEVER SAW IT
+#
+# `python-deps-resolve.yml` triggers on `**/requirements.txt`, so it ran on every change to
+# this file, went green, and resolved seven OTHER files (#3486). Measured in
+# `python:3.11-slim` — the base every app Dockerfile uses — running that workflow's own
+# resolve step verbatim, TWO conflicts had to be cleared, one behind the other:
+#
+#   1. azure-ai-projects==1.0.0b3   vs  semantic-kernel 1.39.4 depends on
+#                                       azure-ai-projects~=1.0.0b12       (RC=1)
+#   2. pydantic==2.10.2             vs  semantic-kernel 1.39.4 depends on
+#                                       pydantic!=2.10.0,!=2.10.1,!=2.10.2,!=2.10.3,
+#                                       <2.12,>=2.0                       (RC=1)
+#
+# Both are the same accident: an exact pin taken at one moment against a library that has
+# since moved its floor. `azure-ai-projects` in particular is a TRANSITIVE dependency of
+# `semantic-kernel` — pinning it here at all is what created the collision. Cleared to the
+# newest release inside each declared range: azure-ai-projects 1.0.0b12 (the `~=1.0.0b12`
+# floor) and pydantic 2.11.10 (the newest 2.11.x, i.e. under the `<2.12` ceiling and clear
+# of the four excluded 2.10.x patches).
+#
+# With those two, `pip install --dry-run -r requirements.txt` in python:3.11-slim exits
+# RC=0 and reports 132 packages. The file is in the resolve matrix now, so the next drift
+# reds a PR instead of shipping.
 
 # Semantic Kernel + Azure
 semantic-kernel[azure]==1.39.4
 azure-identity==1.19.0
-azure-ai-projects==1.0.0b3
+# Transitive under semantic-kernel; pinned only to keep the set reproducible. Must satisfy
+# semantic-kernel's `~=1.0.0b12` — do not lower it without lowering semantic-kernel too.
+azure-ai-projects==1.0.0b12
 azure-keyvault-secrets==4.9.0
 
 # HTTP server (hosted-agent)
 fastapi==0.115.5
 uvicorn[standard]==0.32.1
-pydantic==2.10.2
+# semantic-kernel excludes 2.10.0-2.10.3 and caps at <2.12; 2.11.10 is the newest release
+# inside that window.
+pydantic==2.11.10
 
 # Observability
 azure-monitor-opentelemetry==1.6.4
