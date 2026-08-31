@@ -124,6 +124,26 @@ test('CONTROL: a FAILED container-app query refuses rather than reporting an emp
 });
 
 test('two containers running one repo at two tags is UNKNOWN, not a silent pick', () => {
+  // loom-trino declares NO canonicalApp, so two tags on its repo remain the
+  // genuine ambiguity this guard exists for. (This fixture used the
+  // unity/iceberg pair before #4064 declared that pair's canonical.)
+  const r = decideTagWrites({
+    declared,
+    env: { LOOM_UNITY_TAG: 'v0.1', LOOM_TRINO_TAG: 'v0.1' },
+    resolution: running([
+      ['loom-unity', `${ACR}/loom-unity:v0.1`],
+      ['loom-trino', `${ACR}/loom-trino:v0.1`],
+      ['loom-trino-blue', `${ACR}/loom-trino:abc9999`],
+    ]),
+  });
+  assert.equal(r.decision, 'refuse');
+  assert.equal(row(r, 'LOOM_TRINO_TAG').running, 'UNKNOWN');
+});
+
+test('#4064: writing the tag the CANONICAL runs is a no-op even while the follower still lags', () => {
+  // Mid-roll, iceberg-catalog trails loom-unity by ~25s on the SAME repo. The
+  // running truth for the unity key is the canonical's tag; re-asserting it is
+  // exactly what converges the follower, so it must not read as UNKNOWN.
   const r = decideTagWrites({
     declared,
     env: { LOOM_UNITY_TAG: 'v0.1', LOOM_TRINO_TAG: 'v0.1' },
@@ -133,8 +153,26 @@ test('two containers running one repo at two tags is UNKNOWN, not a silent pick'
       ['loom-trino', `${ACR}/loom-trino:v0.1`],
     ]),
   });
+  assert.equal(r.decision, 'proceed');
+  assert.equal(row(r, 'LOOM_UNITY_TAG').verdict, 'no-op');
+});
+
+test('#4064: the default about to overwrite a SHA-pinned CANONICAL is still REFUSED — the guard is not weakened', () => {
+  // The follower's presence must not dilute the revert guard: the canonical
+  // runs a SHA, the write would be the v0.1 fallback, and that is the exact
+  // flatten this file exists to refuse.
+  const r = decideTagWrites({
+    declared,
+    env: { LOOM_UNITY_TAG: 'v0.1', LOOM_TRINO_TAG: 'v0.1' },
+    resolution: running([
+      ['loom-unity', `${ACR}/loom-unity:5f9edba7`],
+      ['iceberg-catalog', `${ACR}/loom-unity:5f9edba7`],
+      ['loom-trino', `${ACR}/loom-trino:v0.1`],
+    ]),
+  });
   assert.equal(r.decision, 'refuse');
-  assert.equal(row(r, 'LOOM_UNITY_TAG').running, 'UNKNOWN');
+  assert.equal(row(r, 'LOOM_UNITY_TAG').verdict, 'REFUSE');
+  assert.equal(row(r, 'LOOM_UNITY_TAG').running, '5f9edba7');
 });
 
 // ---------------------------------------------------------------------------
