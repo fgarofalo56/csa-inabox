@@ -52,6 +52,7 @@ import {
 } from '@azure/identity';
 import { AcaManagedIdentityCredential } from '@/lib/azure/aca-managed-identity';
 import { powerPlatformEndpoints, assertPowerPlatformAvailable } from '@/lib/azure/cloud-endpoints';
+import { logSafe, logSafeError } from '@/lib/util/log-safe';
 
 // ---------------------------------------------------------------------------
 // Cloud-aware endpoint accessors (single source of truth)
@@ -129,19 +130,60 @@ export function isDataverseScope(scope: string): boolean {
 /** Which identity produced the token an outbound call actually used. */
 export type PpCallIdentity = 'user' | 'sp';
 
+/**
+ * WHICH identities actually reached the wire — THREE states, because the
+ * transport genuinely has three and a boolean can only carry two (#4137).
+ *
+ *  - `false`   No delegated user token existed (no session / kill switch / mint
+ *              refused), so the SP was the only identity used. Unchanged.
+ *  - `true`    The user was issued and REFUSED, and the SP was then issued.
+ *              "Both identities were refused" is a true sentence here.
+ *  - `{ spMintFailed }`
+ *              The user was issued and refused, and then the SP token COULD NOT
+ *              BE MINTED — so the service principal never made a request and
+ *              received no denial.
+ *
+ * The third state is the defect this type exists to make unrepresentable-as-`true`.
+ * `powerPlatformFetch` returned `triedUser: true` on the no-SP-token path and
+ * `ppAuthHint` rendered "Both identities were refused: your signed-in account,
+ * then the service principal", followed by a paragraph of SP remediation — all
+ * of it directed at a principal that never made a request, for a denial it never
+ * received. That is `deploy-integrity.md` R7 exactly: a failed ACQUISITION
+ * rendered as a measured NEGATIVE RESULT, the same shape as #4127 and as the
+ * `2>/dev/null` that turned "I could not reach the registry" into "the tag does
+ * not exist".
+ *
+ * WHY THE FIELD IS STILL CALLED `triedUser`, AND `ppAuthHint` STILL TAKES TWO
+ * ARGUMENTS. `powerplatform-client.ts` destructures this value and forwards it
+ * to `ppAuthHint` without inspecting it, at two call sites, and
+ * `__tests__/powerplatform-lifecycle.test.ts` pins `ppAuthHint` at arity 2.
+ * Widening the TYPE keeps both true while making the third state sayable;
+ * renaming the field would touch files outside this change for no behavioural
+ * gain. The name is now narrower than the type — that is a documented wart, not
+ * an accident.
+ */
+export type PpUserAttempt = boolean | { readonly spMintFailed: string };
+
+/** True when the SP leg was skipped because no SP token could be minted. */
+export function ppSpWasNotAttempted(a: PpUserAttempt): a is { readonly spMintFailed: string } {
+  return typeof a === 'object' && a !== null && typeof a.spMintFailed === 'string';
+}
+
 export interface PpFetchResult {
   res: Response;
   /** The identity whose token produced `res`. */
   identity: PpCallIdentity;
   /**
-   * Whether a delegated USER token was attempted at all.
+   * Whether a delegated USER token was attempted at all — and, when it was,
+   * whether the SERVICE PRINCIPAL actually reached the wire afterwards. See
+   * {@link PpUserAttempt}.
    *
    * This — NOT `identity` — is the right discriminator for remediation copy:
    * after a retry `identity` is 'sp', so keying off it would report an SP-only
    * denial even though the signed-in user was refused first, sending the
    * operator to fix the wrong grant.
    */
-  triedUser: boolean;
+  triedUser: PpUserAttempt;
 }
 
 export interface PpFetchOptions {
@@ -212,6 +254,30 @@ export async function getPowerPlatformSpToken(scope: string, opts: PpFetchOption
   return t.token;
 }
 
+/**
+ * The reason an SP token could not be minted, in a form safe to put in
+ * operator-facing copy (#4137).
+ *
+ * BOUNDED AND FLATTENED, not redacted. The value is an Entra failure — an
+ * AADSTS code, a "tenant not found", a socket error — and the whole point of
+ * surfacing it is that it names the real cause. It never carries a secret: the
+ * credential classes throw on the value, they do not echo it. `logSafe` strips
+ * CR/LF (so a message cannot forge structure in a log or break a MessageBar) and
+ * caps the length; 300 chars keeps a full AADSTS line including its correlation
+ * id.
+ *
+ * Never empty: an error with no message still yields something a human can act
+ * on, because "" would put us straight back into asserting a cause we do not
+ * have.
+ */
+function ppMintFailureReason(e: unknown): string {
+  const raw =
+    (e instanceof Error && e.message) ||
+    (typeof e === 'string' ? e : '') ||
+    (typeof (e as any)?.message === 'string' ? (e as any).message : '');
+  return logSafe(raw, 300) || 'the credential threw without a message';
+}
+
 function withBearer(init: RequestInit, token: string): RequestInit {
   return {
     ...init,
@@ -237,9 +303,29 @@ export async function powerPlatformFetch(
     if (res.status !== 401 && res.status !== 403) return { res, identity: 'user', triedUser: true };
     // The delegated identity is not authorized for this surface — retry as the
     // service principal before surfacing the denial.
+    //
+    // #4137 — THE CATCH IS NO LONGER BARE. It discarded the reason entirely
+    // (bad secret, expired credential, wrong tenant, network, missing env var),
+    // which is the discarded-stderr failure mode expressed in TypeScript: the
+    // operator simultaneously got a confident wrong remediation AND lost the one
+    // piece of information that would have told them the truth.
     let spToken: string | null = null;
-    try { spToken = await getPowerPlatformSpToken(scope, opts); } catch { spToken = null; }
-    if (!spToken) return { res, identity: 'user', triedUser: true };
+    let spMintFailed = '';
+    try {
+      spToken = await getPowerPlatformSpToken(scope, opts);
+    } catch (e: unknown) {
+      spToken = null;
+      spMintFailed = ppMintFailureReason(e);
+      // Logged in full as well as surfaced in truncated form: the hint has a
+      // length budget, the log does not.
+      console.warn(
+        `[power-platform] the service principal was NOT attempted for ${logSafe(scope, 160)}: its token could not be ` +
+          `minted — ${logSafeError(e)}`,
+      );
+    }
+    // SP NEVER ON THE WIRE. The caller is told that, rather than being told the
+    // SP was refused.
+    if (!spToken) return { res, identity: 'user', triedUser: { spMintFailed } };
     return { res: await fetchWithTimeout(url, withBearer(init, spToken)), identity: 'sp', triedUser: true };
   }
   return {
@@ -274,12 +360,27 @@ export async function powerPlatformFetch(
  * `__tests__/power-platform-auth-principal.test.ts` ("the CALL SITES carry the
  * principal, not just the helper").
  */
-export function ppAuthHint(triedUser: boolean, scope: string): string {
+export function ppAuthHint(triedUser: PpUserAttempt, scope: string): string {
   const principal = ppSpPrincipalForScope(scope);
-  const userHalf = triedUser
-    ? 'Both identities were refused: your signed-in account, then the service principal. '
-      + 'Confirm your account has a Power Platform licence and a role on this environment. '
-    : '';
+  // #4137 — THREE STATES, BECAUSE THE TRANSPORT HAS THREE. The middle one used
+  // to be folded into "both refused" and it is the one that was untrue: when
+  // `getPowerPlatformSpToken` throws, the SP request is never issued, so the
+  // service principal was not refused — it was never on the wire. Saying so is
+  // R7's whole content, and it also changes what the operator should DO: no
+  // Dataverse Application User grant and no allow-group membership can fix a
+  // token that could not be minted.
+  const userHalf = ppSpWasNotAttempted(triedUser)
+    ? 'Your signed-in account was refused. The service principal was NOT attempted — its token could not be '
+      // The reason is never rendered as an empty parenthesis: an unexplained
+      // "could not be acquired" is the same R7 hole one level smaller.
+      + `acquired (${logSafe(triedUser.spMintFailed, 300) || 'the credential threw without a message'}), `
+      + 'so it issued no request and received no denial. '
+      + 'Fix the credential first (client id / secret / tenant for the principal named below); the grants '
+      + 'described after that cannot take effect until a token can be minted. '
+    : triedUser
+      ? 'Both identities were refused: your signed-in account, then the service principal. '
+        + 'Confirm your account has a Power Platform licence and a role on this environment. '
+      : '';
 
   switch (principal) {
     case 'dataverse-app':
