@@ -275,8 +275,16 @@ jobs:
           # same HTTP path the data-plane tools use and derives the suffix from
           # the ACTIVE cloud, so it works unchanged against .azurecr.us
           # (.claude/rules/cloud-parity.md).
-          bash "${LOOM_ACR_DATAPLANE_READY_SCRIPT:-scripts/ci/acr-dataplane-ready.sh}" --acr "$ACR" --timeout-seconds 180 \
-            || echo "::warning::ACR data plane not confirmed reachable; the next data-plane call may be denied."
+          # #4079 — CONSUME the probe verdict instead of discarding it. This was
+          # `… || echo "::warning::"`, which threw away three distinguishable
+          # outcomes (1 = never sustained/propagation, 2 = no HTTP response at all
+          # = an UNKNOWN, 3 = the caller's own arguments were refused) and made
+          # #4067's hardening change the Gov LOG without changing Gov BEHAVIOUR.
+          # Measured 2026-08-31: Gov branch=0 swallow=12, Commercial branch=3.
+          # The gate classifies and reports; it proceeds by default because 1 and
+          # 2 are not refusals and acr-login-retry.sh below fails closed on a real
+          # denial. Pass --on-unconfirmed fail to stop here instead.
+          bash scripts/ci/acr-dataplane-gate.sh --acr "$ACR" --timeout-seconds 180
           bash scripts/ci/acr-login-retry.sh --acr "$ACR"
           echo "::notice::TEMPLATE PULLS $ACR_LOGIN/loom-transform-runner:$TAG"
           # RETRY WITH CLASSIFICATION (deploy-integrity R6). NOT a bare
