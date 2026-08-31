@@ -13,8 +13,8 @@ verdict is DERIVED, not name-matched — see "How the owner column is decided".
 
 | Metric | Count |
 | --- | ---: |
-| Total routes | 1688 |
-| Public (no session) | 58 |
+| Total routes | 1689 |
+| Public (no session) | 59 |
 | Session-only | 648 |
 | Owner-scoped | 674 |
 | Admin | 308 |
@@ -1084,6 +1084,7 @@ dispatch is invisible to it. Full limits: `scripts/ci/_route-backends.mjs`.
 | `internal/copilot/tools/[name]/invoke/route.ts` | POST | session-only |  | AAS, ADF, ADLS, ADX, AI Search, AKS, AML, APIM, ARM, Azure AI Services, Azure Cache for Redis, Azure Monitor, Azure Networking, Azure OpenAI, Azure SQL, Azure Storage, Batch, Compute, Container Apps, Cosmos, Cost Management, Event Grid, Event Hubs, Fabric, IoT Hub, Key Vault, Log Analytics, Managed Identity, Microsoft Graph, PostgreSQL, Power Automate, Power BI, Power Platform, Purview, Resource Graph, Service Bus, Stream Analytics, Synapse, Synapse SQL |
 | `internal/copilot/tools/route.ts` | GET | session-only |  | AAS, ADF, ADLS, ADX, AI Search, AKS, AML, APIM, ARM, Azure AI Services, Azure Cache for Redis, Azure Monitor, Azure Networking, Azure OpenAI, Azure SQL, Azure Storage, Batch, Compute, Container Apps, Cosmos, Cost Management, Event Grid, Event Hubs, Fabric, IoT Hub, Key Vault, Log Analytics, Managed Identity, Microsoft Graph, PostgreSQL, Power Automate, Power BI, Power Platform, Purview, Resource Graph, Service Bus, Stream Analytics, Synapse, Synapse SQL |
 | `internal/cost-anomaly/run/route.ts` | POST | public | ● | ARM, Azure Cache for Redis, Azure Monitor, Cosmos, Cost Management |
+| `internal/lineage/reconcile/route.ts` | POST | public |  | Cosmos, Purview |
 | `internal/scheduler/tick/route.ts` | POST | public | ● | ADF, ADX, AML, ARM, Azure Storage, Cosmos, Managed Identity, Resource Graph, Synapse |
 | `internal/spark/keep-warm/route.ts` | GET POST | session-only | ● | ARM, Azure Cache for Redis, Azure Monitor, Cosmos, Resource Graph, Synapse |
 | `internal/topology/register-domain/route.ts` | POST | public |  | Cosmos |

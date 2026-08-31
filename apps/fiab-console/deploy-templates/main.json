@@ -6,7 +6,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.45.15.27210",
-      "templateHash": "11074429000884710534"
+      "templateHash": "7858073455426291078"
     }
   },
   "definitions": {
@@ -2589,7 +2589,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.45.15.27210",
-              "templateHash": "7889661681892088798"
+              "templateHash": "4625506489350797364"
             }
           },
           "definitions": {
@@ -3093,6 +3093,20 @@
                   "nullable": true,
                   "metadata": {
                     "description": "C3 — cron (standard 5-field) for the cost-anomaly evaluation. Default daily 06:00 UTC."
+                  }
+                },
+                "lineageGcEnabled": {
+                  "type": "bool",
+                  "nullable": true,
+                  "metadata": {
+                    "description": "LIN-GC-2 — deploy the lineage garbage collector (loom-lineage-gc Container App Job — a scheduled SCAN for orphaned Purview entities, Weave/Thread edges and access artifacts whose backing item is gone). Default ON (opt-out) per loom_default_on_opt_out; only honored on containerApps + deployAppsEnabled (the loom-uat image carries the runner). It REPORTS and does not delete: purging on a schedule is separately gated behind LOOM_LINEAGE_GC_PURGE, because an unattended purge would delete metadata for an item whose absence might be a READ failure. Delete-time cleanup (LIN-GC-1) is unaffected and always on."
+                  }
+                },
+                "lineageGcCron": {
+                  "type": "string",
+                  "nullable": true,
+                  "metadata": {
+                    "description": "LIN-GC-2 — cron (standard 5-field) for the lineage GC sweep. Default daily 04:30 UTC: off the :00 mark and clear of the 06:00 cost-anomaly run so the two do not contend for the same console."
                   }
                 },
                 "assetReconcilerEnabled": {
@@ -5077,6 +5091,8 @@
             "lineageExtractorCron": "[coalesce(tryGet(parameters('observabilityConfig'), 'lineageExtractorCron'), '*/15 * * * *')]",
             "costAnomalyEnabled": "[coalesce(tryGet(parameters('observabilityConfig'), 'costAnomalyEnabled'), true())]",
             "costAnomalyCron": "[coalesce(tryGet(parameters('observabilityConfig'), 'costAnomalyCron'), '0 6 * * *')]",
+            "lineageGcEnabled": "[coalesce(tryGet(parameters('observabilityConfig'), 'lineageGcEnabled'), true())]",
+            "lineageGcCron": "[coalesce(tryGet(parameters('observabilityConfig'), 'lineageGcCron'), '30 4 * * *')]",
             "assetReconcilerEnabled": "[coalesce(tryGet(parameters('observabilityConfig'), 'assetReconcilerEnabled'), true())]",
             "assetReconcilerCron": "[coalesce(tryGet(parameters('observabilityConfig'), 'assetReconcilerCron'), '*/15 * * * *')]",
             "assetReconcilerMaxTriggers": "[coalesce(tryGet(parameters('observabilityConfig'), 'assetReconcilerMaxTriggers'), 0)]",
@@ -5277,6 +5293,7 @@
             "uatResultsStoreActive": "[variables('syntheticMonitorEnabled')]",
             "lineageExtractorActive": "[and(and(variables('lineageExtractorEnabled'), equals(parameters('containerPlatform'), 'containerApps')), parameters('deployAppsEnabled'))]",
             "costAnomalyActive": "[and(and(variables('costAnomalyEnabled'), equals(parameters('containerPlatform'), 'containerApps')), parameters('deployAppsEnabled'))]",
+            "lineageGcActive": "[and(and(variables('lineageGcEnabled'), equals(parameters('containerPlatform'), 'containerApps')), parameters('deployAppsEnabled'))]",
             "assetReconcilerActive": "[and(and(variables('assetReconcilerEnabled'), equals(parameters('containerPlatform'), 'containerApps')), parameters('deployAppsEnabled'))]",
             "accessSweeperActive": "[and(and(variables('accessSweeperEnabled'), equals(parameters('containerPlatform'), 'containerApps')), parameters('deployAppsEnabled'))]",
             "sparkKeepWarmActive": "[and(and(and(variables('sparkKeepWarmEnabled'), variables('sparkPoolEnabled')), equals(parameters('containerPlatform'), 'containerApps')), parameters('deployAppsEnabled'))]",
@@ -24823,6 +24840,207 @@
                         "description": "The cost-anomaly-monitor Job name."
                       },
                       "value": "loom-cost-anomaly-monitor"
+                    }
+                  }
+                }
+              },
+              "dependsOn": [
+                "containerPlatformModule",
+                "frontDoor",
+                "identity",
+                "registry"
+              ]
+            },
+            "lineageGc": {
+              "condition": "[variables('lineageGcActive')]",
+              "type": "Microsoft.Resources/deployments",
+              "apiVersion": "2025-04-01",
+              "name": "lineage-gc-job",
+              "properties": {
+                "expressionEvaluationOptions": {
+                  "scope": "inner"
+                },
+                "mode": "Incremental",
+                "parameters": {
+                  "location": {
+                    "value": "[parameters('location')]"
+                  },
+                  "environmentId": {
+                    "value": "[reference('containerPlatformModule').outputs.caeId.value]"
+                  },
+                  "consoleUamiId": {
+                    "value": "[reference('identity').outputs.uamiConsoleId.value]"
+                  },
+                  "consoleUamiClientId": {
+                    "value": "[reference('identity').outputs.uamiConsoleClientId.value]"
+                  },
+                  "acrLoginServer": {
+                    "value": "[reference('registry').outputs.acrLoginServer.value]"
+                  },
+                  "loomUrl": "[if(variables('fdOn'), createObject('value', reference('frontDoor').outputs.frontDoorPublicUrl.value), createObject('value', 'http://loom-console'))]",
+                  "cronExpression": {
+                    "value": "[variables('lineageGcCron')]"
+                  },
+                  "internalToken": {
+                    "value": "[variables('loomInternalToken')]"
+                  },
+                  "complianceTags": {
+                    "value": "[parameters('complianceTags')]"
+                  }
+                },
+                "template": {
+                  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+                  "contentVersion": "1.0.0.0",
+                  "metadata": {
+                    "_generator": {
+                      "name": "bicep",
+                      "version": "0.45.15.27210",
+                      "templateHash": "3172791112236910595"
+                    }
+                  },
+                  "parameters": {
+                    "location": {
+                      "type": "string",
+                      "metadata": {
+                        "description": "Deployment region (e.g. centralus / usgovvirginia)."
+                      }
+                    },
+                    "environmentId": {
+                      "type": "string",
+                      "metadata": {
+                        "description": "Container Apps managed-environment (CAE) resource id — the console VNet-integrated env."
+                      }
+                    },
+                    "consoleUamiId": {
+                      "type": "string",
+                      "metadata": {
+                        "description": "uami-loom-console resource id — ACR pull + the identity the job runs as."
+                      }
+                    },
+                    "consoleUamiClientId": {
+                      "type": "string",
+                      "metadata": {
+                        "description": "uami-loom-console clientId (LOOM_UAMI_CLIENT_ID)."
+                      }
+                    },
+                    "acrLoginServer": {
+                      "type": "string",
+                      "metadata": {
+                        "description": "ACR login server, e.g. acrloomk6mvh5sm6z7do.azurecr.io."
+                      }
+                    },
+                    "image": {
+                      "type": "string",
+                      "defaultValue": "[format('{0}/loom-uat:latest', parameters('acrLoginServer'))]",
+                      "metadata": {
+                        "description": "Runner image. Default = the loom-uat image (carries e2e/run-lineage-reconcile.mjs). The first scheduled execution fails honestly until that image is pushed — build it in the post-deploy app phase."
+                      }
+                    },
+                    "loomUrl": {
+                      "type": "string",
+                      "metadata": {
+                        "description": "In-VNet console base URL the runner POSTs (Front Door / vanity URL, or the internal http://loom-console)."
+                      }
+                    },
+                    "cronExpression": {
+                      "type": "string",
+                      "defaultValue": "30 4 * * *",
+                      "metadata": {
+                        "description": "Schedule cron (standard 5-field). Default daily 04:30 UTC — off the :00 mark and clear of the 06:00 cost-anomaly run, so the two do not contend for the same console."
+                      }
+                    },
+                    "internalToken": {
+                      "type": "securestring",
+                      "defaultValue": "",
+                      "metadata": {
+                        "description": "Shared VNet-internal trust token (LOOM_INTERNAL_TOKEN) — the deterministic guid main.bicep also wires to the Console, so the two match."
+                      }
+                    },
+                    "replicaTimeout": {
+                      "type": "int",
+                      "defaultValue": 900,
+                      "metadata": {
+                        "description": "Max seconds one sweep may take before the execution is terminated. 15 min — the scan reads every item across three planes, so it is given more room than the cost monitor."
+                      }
+                    },
+                    "complianceTags": {
+                      "type": "object",
+                      "defaultValue": {},
+                      "metadata": {
+                        "description": "Compliance/cost tags."
+                      }
+                    }
+                  },
+                  "variables": {
+                    "programTags": "[union(parameters('complianceTags'), createObject('loom-next-level', 'true'))]",
+                    "internalTokenSecret": "[if(empty(parameters('internalToken')), createArray(), createArray(createObject('name', 'loom-internal-token', 'value', parameters('internalToken'))))]"
+                  },
+                  "resources": [
+                    {
+                      "type": "Microsoft.App/jobs",
+                      "apiVersion": "2025-02-02-preview",
+                      "name": "loom-lineage-gc",
+                      "location": "[parameters('location')]",
+                      "tags": "[variables('programTags')]",
+                      "identity": {
+                        "type": "UserAssigned",
+                        "userAssignedIdentities": {
+                          "[format('{0}', parameters('consoleUamiId'))]": {}
+                        }
+                      },
+                      "properties": {
+                        "environmentId": "[parameters('environmentId')]",
+                        "configuration": {
+                          "triggerType": "Schedule",
+                          "replicaTimeout": "[parameters('replicaTimeout')]",
+                          "replicaRetryLimit": 1,
+                          "scheduleTriggerConfig": {
+                            "cronExpression": "[parameters('cronExpression')]",
+                            "parallelism": 1,
+                            "replicaCompletionCount": 1
+                          },
+                          "registries": [
+                            {
+                              "server": "[parameters('acrLoginServer')]",
+                              "identity": "[parameters('consoleUamiId')]"
+                            }
+                          ],
+                          "secrets": "[variables('internalTokenSecret')]"
+                        },
+                        "template": {
+                          "containers": [
+                            {
+                              "name": "lineage-gc",
+                              "image": "[parameters('image')]",
+                              "command": [
+                                "node",
+                                "e2e/run-lineage-reconcile.mjs"
+                              ],
+                              "resources": {
+                                "cpu": "[json('0.5')]",
+                                "memory": "1.0Gi"
+                              },
+                              "env": "[concat(createArray(createObject('name', 'LOOM_URL', 'value', parameters('loomUrl')), createObject('name', 'LOOM_UAMI_CLIENT_ID', 'value', parameters('consoleUamiClientId'))), if(empty(parameters('internalToken')), createArray(), createArray(createObject('name', 'LOOM_INTERNAL_TOKEN', 'secretRef', 'loom-internal-token'))))]"
+                            }
+                          ]
+                        }
+                      }
+                    }
+                  ],
+                  "outputs": {
+                    "jobId": {
+                      "type": "string",
+                      "metadata": {
+                        "description": "The lineage-gc Job resource id."
+                      },
+                      "value": "[resourceId('Microsoft.App/jobs', 'loom-lineage-gc')]"
+                    },
+                    "jobName": {
+                      "type": "string",
+                      "metadata": {
+                        "description": "The lineage-gc Job name."
+                      },
+                      "value": "loom-lineage-gc"
                     }
                   }
                 }

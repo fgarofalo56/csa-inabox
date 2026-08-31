@@ -47981,14 +47981,14 @@
     },
     "meta": {
       "generatorVersion": 1,
-      "generatedAt": "2026-08-31T03:42:12.258Z",
-      "commit": "e54394b01db8fd292cc7ddc8382ef45f4f2b0f7f",
-      "inputsDigest": "aae997ae095dc0e1",
-      "filesScanned": 2069,
+      "generatedAt": "2026-08-31T05:15:17.521Z",
+      "commit": "21e3e2c3ce2cc2d972414f7222377b766131cc66",
+      "inputsDigest": "e3628894515b03ff",
+      "filesScanned": 2070,
       "scanScopes": [
         {
           "scope": "app/**/route.ts (console BFF routes)",
-          "filesMatched": 1694,
+          "filesMatched": 1695,
           "nodesEmitted": 703
         },
         {
