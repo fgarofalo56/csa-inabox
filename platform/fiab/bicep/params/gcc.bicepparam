@@ -228,3 +228,26 @@ param loomSynapseEnabled = true
 param loomDatabricksEnabled = true
 param loomDataFactoryEnabled = true
 param loomSelfHostedIrEnabled = true
+
+// =====================================================================
+// MSAL — the Gov tenant client id, read from the deploy job's environment
+// (never committed), exactly as gcc-high.bicepparam:357 and il5.bicepparam do.
+// =====================================================================
+// #4224. This line was MISSING from this file alone, which is worse than the
+// gap it looks like: without it the param takes main.bicep's `param
+// loomMsalClientId string = ''` default, so every GCC deploy rendered an EMPTY
+// client id PERMANENTLY — no environment value could reach the template, and
+// adding a resolver step to the workflow would have been inert.
+//
+// An Entra app registration is a Microsoft Graph object ARM cannot create; it is
+// minted once by csa-loom-post-deploy-bootstrap and only RE-READ here. A
+// declarative ACA template DROPS every env var it does not declare, so an empty
+// render blanks LOOM_MSAL_CLIENT_ID (sign-in dark) and empties
+// LOOM_UNITY_CLIENT_ID / LOOM_UNITY_AUDIENCE with it — sealing the Iceberg REST
+// catalog behind the `.invalid` sentinel audience no tenant can mint
+// (iceberg-catalog-aca.bicep, svc-loom-unity-authz).
+//
+// Latent rather than live: GCC is `disabled_manually` with zero credentials
+// (#4071), so this lane has not run. It would have fired on the first run after
+// re-enablement, which is the worst moment to find it.
+param loomMsalClientId = readEnvironmentVariable('LOOM_MSAL_CLIENT_ID', '')
