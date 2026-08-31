@@ -51,9 +51,9 @@ code regardless of level. `PATH` means "schedulable", never "confirmed".
 | **#3513** | `apps/fiab-console/lib/install/provisioners/**` — 119 sites / 26 files. **Takes the tree exclusively** | `PATH` |
 | **#3525** | `apps/fiab-console/lib/install/provisioners/kql-db.ts` (`:81`, `:105`, `:131`, `:147`, `:173`) | `PATH` |
 | **#4183** | `apps/fiab-console/lib/install/provisioners/mirrored-databricks.ts` (registered at engine `:36`) | `PATH` |
-| **#4113** | `apps/fiab-console/lib/install/provisioners/_activator-receivers.ts` + `__tests__/activator-receiver-reachability.test.ts` — **attribution VERIFIED 2026-08-31** (`git ls-files`; receiver wiring lives here, which is why #4105's provision-time fix reaches no pre-existing action group). Fix shape per `auto-bind-by-default.md` §3: bindings self-heal on next touch — a backfill that re-binds existing groups in code, not a one-time script | `PINNED` |
+| **#4113** | `apps/fiab-console/lib/install/provisioners/_activator-receivers.ts` + `__tests__/activator-receiver-reachability.test.ts` — **attribution VERIFIED 2026-08-31** (`git ls-files`; receiver wiring lives here, which is why #4105's provision-time fix reaches no pre-existing action group). Fix shape per `auto-bind-by-default.md` §3: bindings self-heal on next touch — a backfill that re-binds existing groups in code, not a one-time script | `PATH` |
 | **#4016** | — | `UNPINNED` |
-| **#4101** | `scripts/ci/check-route-guards.mjs` — **verdict CORRECTED 2026-08-31: not STALE.** The issue's own text says head is correct (mirrored-database POST deliberately omits `allowReadRoles`, verified at route.ts:94); the deliverable is a guard for the caller-picks-guard-scope idiom, which is the #3941 guard-strength class, and `check-route-guards.mjs` is its natural home | `PINNED` |
+| **#4101** | `scripts/ci/check-route-guards.mjs` — **verdict CORRECTED 2026-08-31: not STALE.** The issue's own text says head is correct (mirrored-database POST deliberately omits `allowReadRoles`, verified at route.ts:94); the deliverable is a guard for the caller-picks-guard-scope idiom, which is the #3941 guard-strength class, and `check-route-guards.mjs` is its natural home | `PATH` |
 
 **`provisioning-engine.ts` is #3573's alone.** Checked explicitly: #3525 and #4183
 modify existing provisioner *bodies* and do not re-register, so neither touches the
@@ -75,7 +75,7 @@ pass. It can run fully parallel to W2 in its own lane.
 
 | # | Files | Level |
 |---|---|---|
-| **#4036** | `platform/fiab/bicep/main.bicep` (`:1446`) · `modules/**/synapse.bicep` (`:43` → `:415`) · `modules/admin-plane/main.bicep` (`:5773`, `:6038`) | `PATH` |
+| **#4036** | `modules/admin-plane/main.bicep` (`:1446` param decl, `:5773`, `:6038`) · `modules/**/synapse.bicep` (`:43` → `:415`) — **corrected 2026-08-31: the `:1446` param is in admin-plane, NOT the top-level `main.bicep`, which has zero hits for `loomOnelakeSecurityEnabled` (verified by grep)** | `HEAD` |
 | **#3327** | `platform/fiab/bicep/main.bicep` (`:1482`) · `modules/admin-plane/main.bicep` (`:1359`, `:1727`) · `.github/workflows/deploy-fiab-commercial.yml` | `PATH` |
 
 **#4036 and #3327 share two bicep files at different lines.** #3327's code is already

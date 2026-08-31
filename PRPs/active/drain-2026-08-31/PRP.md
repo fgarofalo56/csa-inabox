@@ -11,8 +11,10 @@
 > the dev, test, valdatate deploy workflows."*
 
 This PRP is the single register for **every open item** in `csa-inabox` as of
-2026-08-31: 243 open GitHub issues, four live operator bug reports, four in-flight
-PRPs, and five measured-but-unfiled defects. Nothing is "planned" without a spec —
+2026-08-31: 243 open GitHub issues at the initial census — **grown to 247 the same
+day** by the U-item filings (#4231, #4233, #4234, #4235); where a count here says
+243, `LEDGER.md` governs — four live operator bug reports, four in-flight
+PRPs, and five measured-but-unfiled defects (all five filed 2026-08-31, `OWED.md` §1). Nothing is "planned" without a spec —
 if it is not built here, it is explicitly **parked with a reason and a date**, and
 that parking is itself recorded.
 
@@ -20,7 +22,7 @@ Companion documents, all normative:
 
 | File | Holds |
 |---|---|
-| `LEDGER.md` | Per-issue register of record — all 243, by number, with verdict or `PENDING-TRIAGE` |
+| `LEDGER.md` | Per-issue register of record — all 247, by number, with verdict or `PENDING-TRIAGE` |
 | `OWNERSHIP.md` | File-ownership map, collision matrix, the five serializing artifacts, lane cut |
 | `DEV-LOOP.md` | dev→test→validate→deploy loop, rigor tiers, multi-model role assignment |
 | `OWED.md` | Everything owed to the operator: live bug reports, Gov parking, receipts, parked features |
@@ -30,8 +32,12 @@ Companion documents, all normative:
 ## 1. The measured population
 
 Source: `gh issue list --state open --limit 500 --json number,title,labels`, captured
-2026-08-31 into `temp/open-issues.json`, rendered by `temp/issue-inventory.py`.
-**243 open issues.** This is a census, not a sample.
+2026-08-31 into the committed snapshot `open-issues-2026-08-31.json` (this
+directory), rendered by `gen-ledger.py` beside it.
+**243 open issues at the initial census.** This is a census, not a sample.
+**Same-day update:** the U-item filings grew the population to **247**; the
+regenerated `LEDGER.md` is the governing count, and the histogram below is the
+initial census, not re-derived.
 
 **Label histogram (measured, not estimated):**
 
@@ -232,7 +238,9 @@ Re-derive in a scripted loop after every base update. See `OWNERSHIP.md` §4.
 
 **I2 — Preflight every merge.** Operator decision: *"Tighten last, preflight every
 merge."* Run `temp/merge-eligible.py <PR>` and `temp/hollow-control.py` before
-merging. A REQUIRED check can be green over a suite that never executed
+merging (working-tree tools, not committed — if absent in a fresh clone, perform
+the equivalent checks by hand: every required check green AND executed for this
+PR's changed paths). A REQUIRED check can be green over a suite that never executed
 (`csa_loom_required_check_green_over_an_unexecuted_suite`). Only **15 of ~35**
 checks can block; CodeQL, Checkov, IaC Security Scan, Bicep Lint, `node:test
 suites`, `Frontend Tests / jest`, and the `security-graph.json` drift check are
@@ -344,9 +352,11 @@ mechanism half landed via #4061 (all four lanes call `resolve-internal-token.sh
 log receipt. These are compatible: **the code is fixed; the operational residual is
 real.** Carried as `STALE-CODE / OWED-ROTATION` → W4.
 
-**C4 — #4035 and #4064 rest on memory, not a fresh grep.** The reporting agent
-disclosed this itself. Both are marked `PENDING-REVERIFY` in `LEDGER.md` and must be
-re-measured before their lane opens.
+**C4 — #4035 and #4064 rested on memory, not a fresh grep — both since closed
+out.** The reporting agent disclosed this itself. Both were re-measured at head
+2026-08-31 and are `REAL` (#4035 with three regressions, not one; #4064 with the
+`byRepo` bucketing confirmed at `reconcile-policy.mjs:328`). No `PENDING-REVERIFY`
+rows remain in `LEDGER.md`.
 
 **C5 — #4038's two halves have different provenance.** The mirror-stuck-at-14 half is
 directly measured (`release-please.yml` has exactly 14 entries; its own comment says
@@ -406,7 +416,8 @@ No milestone closes on a merge. Each names the artifact that proves it.
 
 ## 11. Definition of done — for this PRP
 
-1. `LEDGER.md` accounts for **all 243** issues. Zero `PENDING-TRIAGE`. Every row has
+1. `LEDGER.md` accounts for **all 247** issues (the census at close — regenerate
+   the ledger for the live number). Zero `PENDING-TRIAGE`. Every row has
    a verdict, an owner, and a wave — or an explicit dated park.
 2. Every `REAL` defect is **merged AND deployed AND verified live**, in every
    boundary it claims to support (I4, I8).

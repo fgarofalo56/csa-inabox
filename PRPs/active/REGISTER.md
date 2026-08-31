@@ -16,7 +16,7 @@ the estate's own `/build-marker.txt` — never from prose in this file.
 
 ## 1. The register of record — `PRPs/active/drain-2026-08-31/`
 
-The backlog-drain program covering **every open issue** (244 measured
+The backlog-drain program covering **every open issue** (247 measured
 2026-08-31), written to the operator's standing ask: complete specs for
 everything owed, built for parallel dev loops.
 

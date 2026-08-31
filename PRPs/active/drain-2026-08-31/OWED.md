@@ -99,6 +99,25 @@ list is effectively the whole console**, the bounding fails and W2 must be re-pl
 **Recommendation: A**, and I will report the measured error-list size before choosing —
 this question only activates if the measurement says it must.
 
+### Q4 — #4071: deploy-fiab-gcc is NOT free to re-enable (added 2026-08-31)
+
+The ledger carried this as *"FREE — re-enable, then measure."* Measured at head:
+the disable is a **recorded decision** in `scripts/ci/workflow-lane-states-allowlist.json`
+(owner, measured reason, reviewBy 2026-11-11), whose reason establishes the lane's 20/20 greens were hollow three independent
+ways (no `AZURE_GCC_*` secrets · a since-fixed blind hub guard · `deployAppsEnabled`
+never set, #3078). Re-enabling also trips allowlist rule 5 (an active lane with an
+entry FAILS the guard) and produces a **daily correctly-attributed RED** until the
+fork is decided. The entry itself records the fork as *"not an agent's call."*
+
+| Option | Cost | Effect |
+|---|---|---|
+| **A (recommended if a GCC subscription exists to wire)** — wire `AZURE_GCC_*` + a GCC ACR image producer, then re-enable + delete the allowlist entry | M | Lane turns honest-green; also unblocks #3078 |
+| B — re-enable now, secrets absent | XS | Daily honest RED naming the four missing secrets (the entry's own "recommended first step" per cloud-parity clause 1); standing dashboard noise until A or C |
+| C — record GCC out of scope, with a date | XS | A cloud-parity violation that must be recorded, never implied |
+
+Options + recommendation posted on the issue 2026-08-31; the ledger row is
+`NEEDS-DECISION` until the operator picks.
+
 ---
 
 ## 3. Owed receipts
@@ -172,7 +191,7 @@ contagious**; Gov continuous deploy was fixed 2026-08-18. Read **Gov's own**
 | `PRPs/active/estate-pause-resume/` | In flight | Folds into W1 estate-power lane; U5 is its Gov half |
 | `PRPs/active/loom-brain/` | In flight | Folds into W1 brain lane (#4222 = zero inbound links) |
 | `PRPs/active/omnibus-2026-08-22/` | Superseded in scope | Its open items are absorbed into `LEDGER.md`; keep for history |
-| `PRPs/active/snowflake-parity/` | In flight, uncommitted on this branch | Feature-class → W6. Decisions recorded: migration-first, transpiler now / wire-compat later, **outcome** parity |
+| `PRPs/active/snowflake-parity/` | In flight — committed on this branch by `fe7141df74` (PR #4232) | Feature-class → W6. Decisions recorded: migration-first, transpiler now / wire-compat later, **outcome** parity |
 | `PRPs/active/REGISTER.md` | **Actively misleading** | Rewritten alongside this PRP (operator-authorized) |
 
 ---
@@ -186,7 +205,7 @@ contagious**; Gov continuous deploy was fixed 2026-08-18. Read **Gov's own**
 | Re-run triage lane `a64bbc96948b63d6d` ("unclassified batch A") | Reported `completed`, wrote a **zero-byte** output |
 | Re-run triage lane `adeaa344753d4cbbb` | Reported `completed`, wrote a zero-byte output **twice** before its third run succeeded (6270 bytes, 85 lines); #4035 and #4064 still rest on memory as a result |
 | ~~Confirm tip `7ac7153e4c`'s `CSA Loom Console Build` completes~~ | **DONE 2026-08-31.** Run 33432196477 went green rolling tag `00018977aa` (the LIN-GC-2 commit), and `/build-marker.txt` served `sha=00018977aa… stamp=20260831T192134Z` at HTTP 200 — the estate is live on it. The run's `displayTitle` SHA is the image tag rolled; its `headSha` is the workflow-file commit — two different things, reconciled, not a defect. The failing run before it is analyzed in #4231 |
-| Fix or retire `temp/extract-agent-reports.py` | Its `texts[-3:]` tail heuristic **truncated a 27-issue report to 818 chars**; prefer the task-notification `<result>` payload |
+| Fix or retire `temp/extract-agent-reports.py` (working-tree only, not committed) | Its `texts[-3:]` tail heuristic **truncated a 27-issue report to 818 chars**; prefer the task-notification `<result>` payload |
 | Audit issue closure after every merge | The string *"Does not close #N"* **closes #N** |
 
 ### 7.1 The file-list recovery gap — unmet, not deferred

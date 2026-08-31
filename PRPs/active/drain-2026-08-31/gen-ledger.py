@@ -49,7 +49,7 @@ V = {
     4035: ("REAL+NEEDS-DECISION", "S", "W5", "ci-guards", "RE-MEASURED AT HEAD 2026-08-31 - PENDING-REVERIFY resolved. Path is scripts/github/configure-branch-protection.sh (NOT scripts/csa-loom/). THREE regressions, not one: contexts 15->3, strict back to true (the quadratic setting that starved runners into 12/12 false reds), enforce_admins true (revokes the standing --admin authorization). See FILES.md §5 + OWED Q2."),
     4064: ("REAL", "M", "W0", "deploy-C", "RE-MEASURED AT HEAD 2026-08-31 - PENDING-REVERIFY resolved. resolveRunningImageTags (reconcile-policy.mjs:328) still buckets byRepo and still emits the exact manufactured-UNKNOWN message when two apps share one repo mid-roll. No open PR touches it."),
     4038: ("REAL", "S", "W5", "ci-guards", "Mirror stuck at 14 while live protection carries 15. Issue's claimed unconditional exit 1 at :736 is CONDITIONAL. INHERITED - not re-verified at head 2026-08-31."),
-    4036: ("REAL", "XS", "W3", "bicep", "RE-MEASURED: bicep chain is correctly wired (synapse.bicep:43 -> :415; admin-plane 5773/6038). Defect is that NO .bicepparam/.yml/.mjs/.sh ever sets loomOnelakeSecurityEnabled - defaults false at main.bicep:1446 + synapse.bicep:43, so OneLake Security ACL SHIPS DARK in every boundary. default-ON/opt-out violation."),
+    4036: ("REAL", "XS", "W3", "bicep", "RE-MEASURED: bicep chain is correctly wired (synapse.bicep:43 -> :415; admin-plane 5773/6038). Defect is that NO .bicepparam/.yml/.mjs/.sh ever sets loomOnelakeSecurityEnabled - defaults false at main.bicep:1446 + synapse.bicep:43, so OneLake Security ACL SHIPS DARK in every boundary. default-ON/opt-out violation. Param decl is admin-plane/main.bicep:1446 (top-level main.bicep has ZERO hits - corrected 2026-08-31)."),
     3513: ("REAL", "L", "W3", "console-provisioners", "~5x its own text: 119 status:'remediation' sites across 26 files, zero Fix-it. Takes provisioners/** EXCLUSIVELY."),
     3525: ("NEEDS-ESTATE", "S", "W4", "estate", "5 sites at provisioners/kql-db.ts:81,105,131,147,173 - overlaps #3513's tree"),
     4136: ("REAL", "S", "W2", "console-ui", "COMBINE with #3543 - same file, KNOWN_CONTAINERS dup at 2897/3048"),
@@ -65,7 +65,7 @@ V = {
     4235: ("REAL", "M", "W1", "estate-power", "U5 filed. Gov resume path missing — estate-resume.mjs is all-Commercial by its own header; #4149's guard refuses correctly, the capability is absent. Lane opens with #3922."),
     4029: ("REAL", "S", "W5", "ci-guards", "Measured 2026-08-31: the graph drift check runs on main tip yet is absent from the 15 required contexts. Pair with #4234 in one protection change; #4038's mirror must take both."),
     # --- W0 broken deploy paths ------------------------------------------
-    4231: ("REAL", "M", "W0", "deploy-A", "Three latent roll defects measured from run 33429557771: D1 health poll dies under -e on throttle (R6), D2 ~100s budget, D3 rollback asserts a FALSE 'does not exist' (R7). Stable tracker for auto-closed #4230; the throttle was a one-off (ten prior greens), so latent, not an outage."),
+    4231: ("REAL", "M", "W0", "deploy-A", "Three latent roll defects measured from run 33429557771: D1 health poll dies under -e on throttle (R6), D2 ~100s budget, D3 rollback asserts a FALSE 'does not exist' (R7). Stable tracker for #4230 (auto-closed); the throttle was a one-off (ten prior greens), so latent, not an outage."),
     3676: ("REAL", "M", "W0", "deploy-A", "Broken deploy path - P0 under deploy-integrity R1"),
     3683: ("REAL", "M", "W0", "deploy-B", "GCC-High + IL5 carry both halves of #3676 - same fix"),
     3754: ("REAL", "M", "W0", "deploy-A", "Broken deploy path - P0"),
@@ -75,7 +75,7 @@ V = {
     3429: ("REAL", "M", "W0", "deploy-A", "Broken deploy path - P0"),
     4072: ("REAL", "L", "W0", "deploy-B", "deploy-fiab-gcch: 16 consecutive failures. PARKED to the W4 window - needs in-boundary diagnosis."),
     3449: ("REAL", "L", "W0", "deploy-B", "Same population as #4072"),
-    4071: ("REAL", "S", "W0", "deploy-B", "deploy-fiab-gcc disabled_manually - FREE: re-enable, then measure"),
+    4071: ("NEEDS-DECISION", "S", "W0", "deploy-B", "NOT free (corrected 2026-08-31): the disable is a RECORDED decision in workflow-lane-states-allowlist.json (hollow greens 3 ways; reviewBy 2026-11-11), re-enabling trips allowlist rule 5 and goes daily-red until the operator picks wire-secrets / honest-red / out-of-scope. OWED Q4; options posted on the issue."),
     4073: ("REAL", "S", "W0", "deploy-B", "deploy-fiab-il5 dispatch-only, never dispatched - FREE: add schedule: to on: (see U1). INHERITED - not re-verified at head 2026-08-31."),
     3346: ("REAL", "M", "W0", "deploy-C", "Dataplane roll / ACR"),
     4144: ("REAL", "M", "W0", "deploy-C", "Dataplane roll / ACR"),
@@ -180,7 +180,7 @@ def main() -> None:
     a("scheduled. W0 runs a read-only triage sweep to drive it toward zero.")
     a("")
     a("**This count supersedes the estimate in `PRP.md` §3.** That document was drafted")
-    a("against a working estimate of ~153 untriaged; the measured number is the one above.")
+    a("against a working estimate of 158 untriaged; the measured number is the one above.")
     a("Where the two disagree, this table governs — it is derived from a live `gh issue")
     a("list`, and `PRP.md`'s figure was a projection.")
     a("")

@@ -109,8 +109,10 @@ population is part of the fix.
 rested on memory rather than a fresh grep. **#4035 was re-measured at head 2026-08-31**
 and is `REAL` — see `FILES.md` §5 and `OWED.md` Q2. It carries **three** regressions,
 not the one recorded: contexts 15 → 3, `strict` back to `true`, and `enforce_admins`
-on. Its path is `scripts/github/`, not `scripts/csa-loom/`. **#4064 remains
-`PENDING-REVERIFY`** — re-measure before its lane opens.
+on. Its path is `scripts/github/`, not `scripts/csa-loom/`. **#4064 was likewise
+re-measured at head 2026-08-31 and is `REAL`** — the `byRepo` bucketing and the
+manufactured-UNKNOWN message are both still present at `reconcile-policy.mjs:328`.
+No `PENDING-REVERIFY` rows remain.
 
 **Every file list is now enumerated in `FILES.md`** — the companion register this
 document's §8 requires. Two rows remain genuinely unpinned (#3540, #3518); every

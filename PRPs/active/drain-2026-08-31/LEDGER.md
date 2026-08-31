@@ -30,9 +30,10 @@ provenance of each list. `OWNERSHIP.md` §8 requires the file list before a lane
 | Verdict class | Count |
 |---|---|
 | `PENDING-TRIAGE` | 156 |
-| `REAL` | 52 |
+| `REAL` | 51 |
 | `PARKED-FEATURE` | 33 |
 | `NEEDS-ESTATE` | 4 |
+| `NEEDS-DECISION` | 1 |
 | `STALE-CODE` | 1 |
 | `STALE` | 1 |
 | **Total** | **247** |
@@ -42,7 +43,7 @@ rounded away: an untriaged issue has no verdict, no size, no lane, and cannot be
 scheduled. W0 runs a read-only triage sweep to drive it toward zero.
 
 **This count supersedes the estimate in `PRP.md` §3.** That document was drafted
-against a working estimate of ~153 untriaged; the measured number is the one above.
+against a working estimate of 158 untriaged; the measured number is the one above.
 Where the two disagree, this table governs — it is derived from a live `gh issue
 list`, and `PRP.md`'s figure was a projection.
 
@@ -81,7 +82,7 @@ actionable until that box is checked.
 | #4235 | cloud-parity: Gov has no estate resume path — estate-resume.mjs hard-codes the Commercial es... | `REAL` | M | W1 | estate-power | U5 filed. Gov resume path missing — estate-resume.mjs is all-Commercial by its own header; #4149's guard refuses correctly, the capability is absent. Lane opens with #3922. |
 | #4234 | guard-strength: jest (node 20.x) cannot block a merge — rigorous, present on main, absent fr... | `REAL` | S | W5 | ci-guards | U3 filed (jest half; graph half was already #4029). jest (node 20.x) exists on main, absent from the 15 required contexts. Sequence with #4029 + #4038 mirror + Q2 script regen; tighten-last per the merge-gates decision. |
 | #4233 | estate-pause: deploy-fiab-gcch has measured NOTHING since 2026-08-27 — scheduled runs park a... | `REAL` | S | W0 | deploy-B | U4 filed. gcch scheduled runs park at the gcc-high-deploy approval gate since 08-27 (5 stacked, zero steps) — the declared symptom is unobservable and the #4117 stand-down machinery is unreachable. Supersedes the #4072 streak framing. |
-| #4231 | loom-roll-and-validate: three measured defects from run 33429557771 (health poll dies under ... | `REAL` | M | W0 | deploy-A | Three latent roll defects measured from run 33429557771: D1 health poll dies under -e on throttle (R6), D2 ~100s budget, D3 rollback asserts a FALSE 'does not exist' (R7). Stable tracker for auto-closed #4230; the throttle was a one-off (ten prior greens), so latent, not an outage. |
+| #4231 | loom-roll-and-validate: three measured defects from run 33429557771 (health poll dies under ... | `REAL` | M | W0 | deploy-A | Three latent roll defects measured from run 33429557771: D1 health poll dies under -e on throttle (R6), D2 ~100s budget, D3 rollback asserts a FALSE 'does not exist' (R7). Stable tracker for #4230 (auto-closed); the throttle was a one-off (ten prior greens), so latent, not an outage. |
 | #4228 | synthetic-monitor: journeys failing (Failed) | `PENDING-TRIAGE` | ? | ? | ? |  |
 | #4222 | no-vaporware: /admin/brain had ZERO inbound links; 3 more admin pages are genuinely unreacha... | `REAL` | S | W1 | brain | LIVE OPERATOR BUG: Brain has ZERO inbound links - linked from nowhere |
 | #4219 | ontology resolve: lakehouse-table and warehouse-table reach buildSqlSelect behind the SHAPE-... | `PENDING-TRIAGE` | ? | ? | ? |  |
@@ -112,7 +113,7 @@ actionable until that box is checked.
 | #4077 | deps: the CI protobuf ceiling exists only because dbt-core 1.8.9 fences protobuf<6 — delete ... | `PENDING-TRIAGE` | ? | ? | ? |  |
 | #4073 | cloud-parity: deploy-fiab-il5 has never run once — it is dispatch-only with no cron, and its... | `REAL` | S | W0 | deploy-B | deploy-fiab-il5 dispatch-only, never dispatched - FREE: add schedule: to on: (see U1). INHERITED - not re-verified at head 2026-08-31. |
 | #4072 | deploy: deploy-fiab-gcch — 16 consecutive failures, but only 15 measured anything; 13 of tho... | `REAL` | L | W0 | deploy-B | deploy-fiab-gcch: 16 consecutive failures. PARKED to the W4 window - needs in-boundary diagnosis. |
-| #4071 | cloud-parity: deploy-fiab-gcc is disabled_manually with no durable decision record — the rea... | `REAL` | S | W0 | deploy-B | deploy-fiab-gcc disabled_manually - FREE: re-enable, then measure |
+| #4071 | cloud-parity: deploy-fiab-gcc is disabled_manually with no durable decision record — the rea... | `NEEDS-DECISION` | S | W0 | deploy-B | NOT free (corrected 2026-08-31): the disable is a RECORDED decision in workflow-lane-states-allowlist.json (hollow greens 3 ways; reviewBy 2026-11-11), re-enabling trips allowlist rule 5 and goes daily-red until the operator picks wire-secrets / honest-red / out-of-scope. OWED Q4; options posted on the issue. |
 | #4064 | deploy-fiab-commercial step 27 refuses on a manufactured UNKNOWN: iceberg-catalog and loom-u... | `REAL` | M | W0 | deploy-C | RE-MEASURED AT HEAD 2026-08-31 - PENDING-REVERIFY resolved. resolveRunningImageTags (reconcile-policy.mjs:328) still buckets byRepo and still emits the exact manufactured-UNKNOWN message when two apps share one repo mid-roll. No open PR touches it. |
 | #4060 | Trivy: the console image is never scanned pre-merge, and the CRITICAL gate is the only trivy... | `PENDING-TRIAGE` | ? | ? | ? |  |
 | #4051 | Gov has no nightly Brain scan: no in-boundary runner can reach the Gov Cosmos private endpoi... | `PENDING-TRIAGE` | ? | ? | ? |  |
@@ -121,7 +122,7 @@ actionable until that box is checked.
 | #4045 | 155 PRs merged over a hard-red advisory check, 19 of them CodeQL | `PENDING-TRIAGE` | ? | ? | ? |  |
 | #4039 | mirroring: three source-type/connection guards are correct but unwitnessed (R4/R7/R8) — need... | `PENDING-TRIAGE` | ? | ? | ? |  |
 | #4038 | release-please: the REQUIRED_CHECKS drift control cannot fire, and denies drift while drift ... | `REAL` | S | W5 | ci-guards | Mirror stuck at 14 while live protection carries 15. Issue's claimed unconditional exit 1 at :736 is CONDITIONAL. INHERITED - not re-verified at head 2026-08-31. |
-| #4036 | OneLake security ACL: the enable flag is dead at BOTH ends of the bicep chain, so the gate c... | `REAL` | XS | W3 | bicep | RE-MEASURED: bicep chain is correctly wired (synapse.bicep:43 -> :415; admin-plane 5773/6038). Defect is that NO .bicepparam/.yml/.mjs/.sh ever sets loomOnelakeSecurityEnabled - defaults false at main.bicep:1446 + synapse.bicep:43, so OneLake Security ACL SHIPS DARK in every boundary. default-ON/opt-out violation. |
+| #4036 | OneLake security ACL: the enable flag is dead at BOTH ends of the bicep chain, so the gate c... | `REAL` | XS | W3 | bicep | RE-MEASURED: bicep chain is correctly wired (synapse.bicep:43 -> :415; admin-plane 5773/6038). Defect is that NO .bicepparam/.yml/.mjs/.sh ever sets loomOnelakeSecurityEnabled - defaults false at main.bicep:1446 + synapse.bicep:43, so OneLake Security ACL SHIPS DARK in every boundary. default-ON/opt-out violation. Param decl is admin-plane/main.bicep:1446 (top-level main.bicep has ZERO hits - corrected 2026-08-31). |
 | #4035 | GATES-THAT-CANNOT-FAIL: CodeQL, Checkov, IaC Security Scan and Bicep Lint run but cannot blo... | `REAL+NEEDS-DECISION` | S | W5 | ci-guards | RE-MEASURED AT HEAD 2026-08-31 - PENDING-REVERIFY resolved. Path is scripts/github/configure-branch-protection.sh (NOT scripts/csa-loom/). THREE regressions, not one: contexts 15->3, strict back to true (the quadratic setting that starved runners into 12/12 false reds), enforce_admins true (revokes the standing --admin authorization). See FILES.md §5 + OWED Q2. |
 | #4030 | deploy: LOOM_INTERNAL_TOKEN is printed unmasked into a public Actions log | `STALE-CODE / OWED-ROTATION` | S | W4 | estate | Code fixed (SHA256 fingerprint only). The PUBLISHED value must still be rotated. INHERITED - not re-verified at head 2026-08-31. |
 | #4029 | GUARD-STRENGTH: the brain security-graph drift gate is not a required context, so it cannot ... | `REAL` | S | W5 | ci-guards | Measured 2026-08-31: the graph drift check runs on main tip yet is absent from the 15 required contexts. Pair with #4234 in one protection change; #4038's mirror must take both. |
