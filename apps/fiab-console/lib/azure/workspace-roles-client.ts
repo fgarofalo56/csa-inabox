@@ -467,12 +467,62 @@ export async function resolveEffectiveRole(
     // Graph unavailable — return whatever direct match we have rather than throw.
     return pickHighestRole(inherited);
   }
+  // #3834 §3 — THE WALK IS NOW BOUNDED IN AGGREGATE, NOT ONLY PER REQUEST.
+  //
+  // Each `graphUserInGroup` was individually bounded (30s point-read, then a
+  // 15s / 50-page PagingBudget for the enumeration) and this loop had NO
+  // ceiling of its own, so the worst case was N_groups x ~45s on routes whose
+  // own `maxDuration` is 60. That is not a slow path, it is a path that cannot
+  // finish: the route times out and the caller gets an opaque 504 instead of an
+  // authorization answer. #3830 put this edge on 13 admin-plane routes that
+  // previously touched Cosmos only, which is what made it worth bounding.
+  const walkStartedAt = Date.now();
+  const walkBudgetMs = graphGroupWalkBudgetMs();
+  let unasked = 0;
   for (const a of groupAssignments) {
+    if (Date.now() - walkStartedAt >= walkBudgetMs) {
+      unasked += 1;
+      continue;
+    }
     // 'unknown' (Graph unreachable) contributes nothing — same fail-closed
     // posture as before, when this read a bare `false`.
     if ((await graphUserInGroup(token, a.principalId, userId)) === 'member') inherited.push(a.role);
   }
+  if (unasked > 0) {
+    // R7 — SAY WHAT WAS ESTABLISHED AND NOTHING MORE. These groups were not
+    // measured as non-memberships; they were never asked about. Fail-closed is
+    // the right posture on an authorization path, but "the walk ran out of wall
+    // clock" and "the user is not in that group" are different facts and only
+    // one of them is true here.
+    console.warn(
+      `[workspace-roles] TRUNCATED (not a measured negative): the group walk for workspace ${logSafe(workspaceId, 120)} ` +
+        `spent its ${walkBudgetMs}ms budget after ${groupAssignments.length - unasked} of ${groupAssignments.length} ` +
+        'group assignment(s); the remainder were NOT asked about and contribute no role. Raise ' +
+        'LOOM_GRAPH_GROUP_WALK_BUDGET_MS, or supply the caller\'s transitive group ids via `userGroupIds` to skip ' +
+        'Graph entirely.',
+    );
+  }
   return pickHighestRole(inherited);
+}
+
+/**
+ * Wall-clock ceiling for the WHOLE per-group Graph walk inside one
+ * {@link resolveEffectiveRole} call. 30s by default — half a BFF route's 60s
+ * `maxDuration`, so the walk cannot be the thing that times the route out, and
+ * comfortably above the 15s a single group's paged enumeration may take.
+ *
+ * Read PER CALL rather than once at module load, for the same reason
+ * `paging-budget.ts` does it: the warn line names this knob, and advice that
+ * needs a container restart to take effect is not actionable.
+ *
+ * Override with `LOOM_GRAPH_GROUP_WALK_BUDGET_MS`. It is a ceiling only — it
+ * can never grant a role, only decline to ask about one, so raising it trades
+ * latency for completeness and lowering it trades completeness for latency.
+ * Neither direction can loosen authorization.
+ */
+export function graphGroupWalkBudgetMs(): number {
+  const n = Number(process.env.LOOM_GRAPH_GROUP_WALK_BUDGET_MS);
+  return Number.isFinite(n) && n > 0 ? n : 30_000;
 }
 
 /**

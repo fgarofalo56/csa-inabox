@@ -897,7 +897,36 @@ export async function getEvalRunOutputItems(evalId: string, runId: string, selec
 // Standard SKUs only (Global training jobs are not supported via REST).
 // Ref: https://learn.microsoft.com/azure/ai-foundry/openai/how-to/fine-tuning
 
-const AOAI_FT_API = process.env.LOOM_AOAI_FT_API_VERSION || '2025-04-01-preview';
+// #3562 — THE ROUTE AND THE api-version MUST AGREE, AND THEY DID NOT.
+//
+// Live repro (2026-08-15 V&V sprint, workspace `uat-apps-1786813692048`, item
+// `vnv-finetune-01`): the fine-tuning-job editor's Overview tab reported
+// "Load failed — API version not supported" on every open, persisting across
+// Reload, on the Azure-native DEFAULT backend. Not a Fabric gap and not a
+// one-off — the very first surface a user sees, dead.
+//
+// The cause is that `/openai/v1/...` is the Foundry Models **v1 API surface**,
+// whose `api-version` accepts exactly `v1` or `preview` — a DATED value is not
+// one of the possible values, so the host rejects it. Grounded in Learn, not
+// memory: "api-version | query | No | string. Possible values: `v1`, `preview`"
+// on GET {endpoint}/openai/v1/fine_tuning/jobs
+// (learn.microsoft.com/rest/api/microsoft-foundry/azureopenai/fine-tuning, and
+// learn.microsoft.com/azure/ai-foundry/openai/reference-preview-latest
+// #list-paginated-fine-tuning-jobs, which spells the call
+// `?api-version=preview`).
+//
+// The dated `2025-04-01-preview` belongs to the LEGACY `/openai/fine_tuning/...`
+// route (no `/v1`), and `ftFetch` below builds the `/openai/v1` one. The evals
+// and files siblings in this same file already sit on `/openai/v1` with
+// `'preview'` — so the file disagreed with itself about the same route prefix,
+// and this constant was the half that was wrong.
+//
+// `/openai/batches` (AOAI_BATCH_API) is deliberately NOT changed: that route
+// carries no `/v1` segment, so a dated version is correct there.
+//
+// The env override stays: `preview` moves under Microsoft, and an operator
+// pinning `v1` (the GA surface) must not need a redeploy of this file.
+const AOAI_FT_API = process.env.LOOM_AOAI_FT_API_VERSION || 'preview';
 
 export type FineTuningFile = UploadedFile;
 
