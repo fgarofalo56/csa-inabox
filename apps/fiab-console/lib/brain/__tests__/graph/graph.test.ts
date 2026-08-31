@@ -21,6 +21,8 @@ import {
   buildGraph,
   codeModuleNodeId,
   danglingEdges,
+  extractFromBicep,
+  extractFromContainerAppEnv,
   hasInboundOnly,
   nodesWithNoInboundEdge,
   scaleUnknownCount,
@@ -378,5 +380,191 @@ describe('buildGraph — node de-duplication', () => {
     const g = buildGraph([extraction([caller], [w, w])]);
     expect(g.edges).toHaveLength(2);
     expect(new Set(g.edges.map((e) => e.id)).size).toBe(2);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// #3963 — PRODUCTION CARDINALITY.
+//
+// Every other fixture in this file is 1-3 nodes. That is the right size for the
+// contract assertions above and it is exactly the wrong size to catch a mutation
+// whose CONDITION is the size itself. Four such mutations survived a fully green
+// 104-test suite during the independent review of #3945:
+//
+//   N1   container-app-env: an empty wire emits an edge ONLY when the name
+//        starts with `LOOM_BROKER`                                     SURVIVED
+//   N2   graph.ts: dangling edges count as inbound reachability ONLY
+//        when `edges > 500`                                            SURVIVED
+//   N1'  graph.ts: alwaysOnNodes reports `candidates` instead of its
+//        subject ONLY above 500 nodes                                  SURVIVED
+//   N2'  bicep.ts: population reports `edges: []` ONLY above 100 edges  SURVIVED
+//
+// Each is live at the REAL values — the measured estate graph is ~2.4k nodes /
+// ~9.4k edges and the 180-file bicep tree emits 829 declared edges — and each is
+// inert in a 3-node fixture. N1 in particular is not merely adversarial: it is
+// the shape a well-meaning "reduce empty-flag noise" edit takes, sitting right
+// next to the `looksLikeATarget` filter that already exists, and on the measured
+// estate it would collapse 157 configured empty-value edges to 1.
+//
+// So this block builds the graph AT that cardinality. The fixture is generated,
+// not stored, so it is cheap — and it converts "inert in fixtures" from an
+// escape hatch into a failure.
+// ---------------------------------------------------------------------------
+
+/** ~2.4k nodes / ~9.6k edges — the measured shape of the real estate graph. */
+const BIG_APPS = 1_200;
+const BIG_CODE = 1_200;
+const WIRES_PER_APP = 8;
+
+describe('#3963 — the detectors hold at PRODUCTION cardinality, not only in fixtures', () => {
+  /**
+   * The planted subject: an always-on app that nothing RESOLVES to, reached only
+   * by empty wires. `loom-capacity-broker` in miniature, buried in 2.4k nodes so
+   * a size-conditioned bypass has somewhere to hide.
+   */
+  const broker = appNode('planted-broker', { minReplicas: 2, source: 'resource-graph' }, 'broker.internal.example.io');
+
+  /**
+   * The empty-wire CLASS, not one pinned symbol. Deliberately spread across
+   * three prefixes with only ONE `LOOM_BROKER_*`, so a detector that keeps the
+   * pinned symbol and drops the rest (N1) shows up as a COUNT rather than as a
+   * single missing edge nobody asserted on.
+   */
+  const EMPTY_WIRE_NAMES = Array.from({ length: 150 }, (_, i) =>
+    i === 0 ? 'LOOM_BROKER_URL' : i % 2 === 0 ? `LOOM_SERVICE_${i}_URL` : `CSA_TARGET_${i}_ENDPOINT`,
+  );
+
+  const apps: AzureResourceNode[] = Array.from({ length: BIG_APPS }, (_, i) =>
+    appNode(`app-${i}`, { minReplicas: i % 3 === 0 ? 1 : 0, source: 'resource-graph' }, `app-${i}.internal.example.io`),
+  );
+  const codeModules: CodeModuleNode[] = Array.from({ length: BIG_CODE }, (_, i) =>
+    codeNode(`apps/fiab-console/lib/generated/mod-${i}.ts`),
+  );
+
+  const bigEdges: PendingEdge[] = [];
+  // Resolved traffic: every app wires to eight of its neighbours. This is the
+  // bulk that takes the graph over the 500-edge threshold N2 hides behind.
+  for (let i = 0; i < BIG_APPS; i++) {
+    for (let w = 0; w < WIRES_PER_APP; w++) {
+      const target = apps[(i + w + 1) % BIG_APPS]!;
+      bigEdges.push(wire(apps[i]!.id, `https://${target.ingress!.fqdn}`, 'configured', `WIRE_${w}`));
+    }
+  }
+  // The empty-wire class, all of it intended for the planted broker.
+  for (const name of EMPTY_WIRE_NAMES) {
+    bigEdges.push(emptyWire(apps[0]!.id, broker.id, 'configured', name));
+  }
+
+  const big = buildGraph([extraction([...apps, ...codeModules, broker], bigEdges)]);
+
+  it('POPULATION: the fixture really is at production cardinality', () => {
+    // A size-conditioned mutation is only caught if the size is actually
+    // reached. Asserting it here means an edit that shrinks the fixture fails
+    // HERE, loudly, instead of silently disarming every assertion below.
+    expect(big.nodes.length).toBeGreaterThan(2_000);
+    expect(big.edges.length).toBeGreaterThan(9_000);
+    // …and above each mutation's own threshold, named.
+    expect(big.edges.length).toBeGreaterThan(500); // N2's condition
+    expect(big.nodes.length).toBeGreaterThan(500); // N1' 's condition
+  });
+
+  it('N2: a dangling edge does NOT confer inbound reachability at 9k+ edges', () => {
+    // The mutation this kills makes the broker REACHABLE on a real graph, which
+    // deletes the founding finding itself — not its receipt, the finding.
+    expect(big.inboundEdges(broker.id, 'configured').result).toHaveLength(0);
+    expect(big.inboundEdges(broker.id).result).toHaveLength(0);
+    // …and the broker really is in the unreachable set, so the two assertions
+    // above are not passing because the node is absent.
+    const unreachable = nodesWithNoInboundEdge(big, 'configured', {
+      resourceType: 'Microsoft.App/containerApps',
+    });
+    expect(unreachable.result.map((n) => n.id)).toContain(broker.id);
+    expect(unreachable.population.blind).toBe(false);
+  });
+
+  it('N1: the WHOLE empty-value class survives, not one pinned symbol', () => {
+    const empties = danglingEdges(big, 'empty-value', 'configured');
+    // THE COUNT IS THE ASSERTION. A detector that keeps `LOOM_BROKER_URL` and
+    // drops the other 149 still satisfies any single-symbol expectation, and on
+    // the measured estate that is 157 findings collapsing to 1.
+    expect(empties.result).toHaveLength(EMPTY_WIRE_NAMES.length);
+    const symbols = new Set(empties.result.map((e) => e.evidence.symbol));
+    expect(symbols.size).toBe(EMPTY_WIRE_NAMES.length);
+    // Named explicitly: one that carries the pinned prefix, and two that do not.
+    expect(symbols.has('LOOM_BROKER_URL')).toBe(true);
+    expect(symbols.has('CSA_TARGET_1_ENDPOINT')).toBe(true);
+    expect(symbols.has('LOOM_SERVICE_2_URL')).toBe(true);
+    // The evidence chain survives at scale too — all of it, not a sample.
+    expect(empties.result.every((e) => e.evidence.rawValue === '')).toBe(true);
+    expect(big.danglingEdgesIntendedFor(broker.id).result).toHaveLength(EMPTY_WIRE_NAMES.length);
+  });
+
+  it("N1': alwaysOnNodes reports its SUBJECT as the population above 500 nodes", () => {
+    // `examined` must be the azure-resource count, NOT the candidate count. With
+    // 1,200 code-module nodes in the graph the two differ by half, so the
+    // mutation is visible; in a 3-node fixture they are close enough to hide in.
+    const azureCount = big.nodes.filter((n) => n.kind === 'azure-resource').length;
+    const on = alwaysOnNodes(big);
+    expect(azureCount).toBe(BIG_APPS + 1);
+    expect(on.population.examined).toBe(azureCount);
+    expect(on.population.examined).not.toBe(big.nodes.length);
+    expect(on.population.blind).toBe(false);
+    // The verdict itself still holds: the planted broker is always-on.
+    expect(on.result.map((n) => n.id)).toContain(broker.id);
+    expect(scaleUnknownCount(big)).toBe(0);
+  });
+
+  it("N2': the bicep extractor's population counts the edges it EMITTED, at 100+", () => {
+    // `population.edgesExamined: 0` alongside a non-empty `edges` array is the
+    // exact shape that survived, so the extractor is run over a generated tree
+    // big enough to clear the threshold the mutation hid behind.
+    const consumer = azureResourceNodeId(arm('bicep-consumer'));
+    const ENTRIES = 400;
+    const text = [
+      "resource app 'Microsoft.App/containerApps@2024-03-01' = {",
+      '  env: [',
+      ...Array.from({ length: ENTRIES }, (_, i) =>
+        i % 50 === 0
+          ? `    { name: 'LOOM_EMPTY_${i}', value: '' }`
+          : `    { name: 'LOOM_TARGET_${i}', value: 'https://app-${i % BIG_APPS}.internal.example.io' }`,
+      ),
+      '  ]',
+      '}',
+    ].join('\n');
+
+    const ex = extractFromBicep([{ path: 'platform/fiab/bicep/generated/big.bicep', text, consumer }]);
+
+    expect(ex.edges.length).toBe(ENTRIES);
+    expect(ex.edges.length).toBeGreaterThan(100); // the mutation's own condition
+    expect(ex.population.edgesExamined).toBe(ex.edges.length);
+    expect(ex.population.byProvenance.declared).toBe(ex.edges.length);
+    expect(ex.population.blind).toBe(false);
+  });
+
+  it('N1 (extractor arm): container-app-env emits the empty-wire class at 100+ entries', () => {
+    // The same class assertion one level lower — against the extractor rather
+    // than the assembled graph — because N1 was measured AS AN EXTRACTOR
+    // mutation. Killing it only at the graph level would leave the arm the
+    // reviewer actually ran unwatched.
+    const appResourceId = arm('live-app');
+    const bindings: Record<string, NodeId> = {};
+    for (const n of EMPTY_WIRE_NAMES) bindings[n] = broker.id;
+    const env = [
+      ...EMPTY_WIRE_NAMES.map((name) => ({ name, value: '' })),
+      ...Array.from({ length: 250 }, (_, i) => ({
+        name: `LOOM_SET_${i}`,
+        value: `https://app-${i % BIG_APPS}.internal.example.io`,
+      })),
+    ];
+
+    const ex = extractFromContainerAppEnv([{ appResourceId, env, envVarBindings: bindings }]);
+
+    const emptyEdges = ex.edges.filter((e) => e.emptyValue);
+    expect(emptyEdges).toHaveLength(EMPTY_WIRE_NAMES.length);
+    expect(new Set(emptyEdges.map((e) => e.evidence.symbol)).size).toBe(EMPTY_WIRE_NAMES.length);
+    // Not only the pinned prefix.
+    expect(emptyEdges.some((e) => e.evidence.symbol === 'CSA_TARGET_1_ENDPOINT')).toBe(true);
+    expect(ex.population.edgesExamined).toBe(ex.edges.length);
+    expect(ex.population.byProvenance.configured).toBe(ex.edges.length);
   });
 });

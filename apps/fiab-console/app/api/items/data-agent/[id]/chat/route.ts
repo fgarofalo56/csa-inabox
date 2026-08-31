@@ -15,7 +15,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import { loadOwnedItem } from '../../../_lib/item-crud';
 import { enrichSemanticModelSources } from '../../../semantic-model/_lib/prep-for-ai-store';
-import { chatGrounded, NoAoaiDeploymentError, type DataAgentConfig, type ChatTurn } from '@/lib/azure/data-agent-client';
+import { chatGrounded, rehydrateSources, NoAoaiDeploymentError, type DataAgentConfig, type ChatTurn } from '@/lib/azure/data-agent-client';
 import {
   runReasoningAgent,
   reasoningReceiptExtras,
@@ -43,23 +43,13 @@ export const maxDuration = 120;
 const ITEM_TYPE = 'data-agent';
 
 function stateToConfig(state: Record<string, unknown>): DataAgentConfig {
-  const sources = Array.isArray(state.sources) ? (state.sources as any[]) : [];
   return {
     instructions: String(state.instructions || state.systemPrompt || ''),
     description: state.description ? String(state.description) : undefined,
-    sources: sources.map((s) => ({
-      id: String(s.id || s.name || ''),
-      type: s.type,
-      name: String(s.name || ''),
-      tables: s.tables ? String(s.tables) : undefined,
-      description: s.description ? String(s.description) : undefined,
-      instructions: s.instructions ? String(s.instructions) : undefined,
-      examples: Array.isArray(s.examples) ? s.examples : undefined,
-      // Typed per-source config (AI Search retrieval options / Graph scope) —
-      // honored by the grounding executor.
-      aiSearch: s.aiSearch && typeof s.aiSearch === 'object' ? s.aiSearch : undefined,
-      graph: s.graph && typeof s.graph === 'object' ? s.graph : undefined,
-    })),
+    // #4119 — one coercion boundary, shared by all six rehydration sites. The inlined
+    // copy this replaces coerced `id`/`name` and passed `type` through raw, so a
+    // persisted `type: 123` reached `chatGrounded` and threw on `.trim()`.
+    sources: rehydrateSources(state.sources),
   };
 }
 

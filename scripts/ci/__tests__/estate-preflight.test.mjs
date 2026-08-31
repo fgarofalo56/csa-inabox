@@ -96,6 +96,10 @@ import {
   PAUSE_DECLARATION_PATH,
   MIN_REASON_CHARS,
 } from '../_estate-pause-declaration.mjs';
+// #4121 — the consumer that makes `declaredOn` load-bearing. Imported here so
+// the register's rules and the filter they exist for are asserted together;
+// splitting them is how the field ended up documented in neither.
+import { pickLastRealSuccess } from '../check-deploy-staleness.mjs';
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
 
@@ -1264,7 +1268,20 @@ test('EVERY uncertain register outcome resolves to NOT-declared', () => {
     ['thin reason', { register: validRegister({ reason: 'paused' }), boundary: 'GCC-High', today: TODAY }, /minimum 60/],
     ['placeholder reason', { register: validRegister({ reason: `TODO ${VALID_REASON}` }), boundary: 'GCC-High', today: TODAY }, /placeholder/],
     ['reviewBy malformed', { register: validRegister({ reviewBy: 'soon' }), boundary: 'GCC-High', today: TODAY }, /not an ISO date/],
-    ['reviewBy EXPIRED', { register: validRegister({ reviewBy: '2026-08-25' }), boundary: 'GCC-High', today: TODAY }, /EXPIRED/],
+    // declaredOn moved back so this row keeps testing EXPIRY. Left at the
+    // builder's 2026-08-26 it now trips the earlier "reviewBy is not after
+    // declaredOn" rule instead and would stop exercising the expiry at all.
+    ['reviewBy EXPIRED', { register: validRegister({ declaredOn: '2026-08-01', reviewBy: '2026-08-25' }), boundary: 'GCC-High', today: TODAY }, /EXPIRED/],
+    // #4121 — the input shapes nobody writes by hand, on the field that decides
+    // whether check-deploy-staleness still works.
+    ['declaredOn ABSENT', { register: validRegister({ declaredOn: undefined }), boundary: 'GCC-High', today: TODAY }, /`declaredOn` is not an ISO date/],
+    ['declaredOn EMPTY', { register: validRegister({ declaredOn: '' }), boundary: 'GCC-High', today: TODAY }, /`declaredOn` is not an ISO date/],
+    ['declaredOn MALFORMED', { register: validRegister({ declaredOn: '26/08/2026' }), boundary: 'GCC-High', today: TODAY }, /`declaredOn` is not an ISO date/],
+    ['declaredOn FUTURE', { register: validRegister({ declaredOn: '2026-08-27' }), boundary: 'GCC-High', today: TODAY }, /LATER than today/],
+    ['reviewBy not after declaredOn', { register: validRegister({ reviewBy: '2026-08-26' }), boundary: 'GCC-High', today: TODAY }, /not after its `declaredOn`/],
+    ['renewedOn malformed', { register: validRegister({ renewedOn: 'yesterday' }), boundary: 'GCC-High', today: TODAY }, /`renewedOn` is not an ISO date/],
+    ['renewedOn BEFORE declaredOn', { register: validRegister({ renewedOn: '2026-08-25' }), boundary: 'GCC-High', today: TODAY }, /BEFORE it was declared/],
+    ['renewedOn FUTURE', { register: validRegister({ renewedOn: '2026-08-27' }), boundary: 'GCC-High', today: TODAY }, /is in the future/],
   ];
   for (const [label, input, messagePattern] of cases) {
     const got = classifyPauseDeclaration(input);
@@ -1286,6 +1303,73 @@ test('the expiry actually expires: the SAME entry declares before reviewBy and n
   const reg = validRegister({ reviewBy: '2026-11-24' });
   assert.equal(classifyPauseDeclaration({ register: reg, boundary: 'GCC-High', today: '2026-11-24' }).declared, true, 'valid ON the review date');
   assert.equal(classifyPauseDeclaration({ register: reg, boundary: 'GCC-High', today: '2026-11-25' }).declared, false, 'expired the day AFTER');
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// #4121 — `declaredOn` is the key check-deploy-staleness filters on, and two
+// ways of moving it silently switch the drift monitor off. Both are asserted on
+// the OUTCOME (what the filter returns), not on the wording of a rule.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** Stood-down successes every day since the pause, plus the last real deploy. */
+const runRows = (lastRealDeploy, standDownDays) => {
+  const rows = [];
+  for (let i = 0; i < standDownDays; i++) {
+    const d = new Date(Date.parse('2026-11-24T10:00:00Z') - i * 86_400_000);
+    rows.push({ createdAt: d.toISOString(), displayTitle: 'deploy-fiab-gcch' });
+  }
+  rows.push({ createdAt: lastRealDeploy, displayTitle: 'deploy-fiab-gcch' });
+  return rows;
+};
+
+test('#4121 a FUTURE-dated declaredOn is refused, so the staleness filter cannot go inert', () => {
+  // FAILS AT HEAD. Before this change the classifier accepted any declaredOn,
+  // so a date later than the run reading it declared true, `declaredPauseSince`
+  // returned that future date, and pickLastRealSuccess kept EVERY run —
+  // including today's stood-down success. driftDays 0, exit 0, on a lane that
+  // had not deployed in months.
+  const future = classifyPauseDeclaration({
+    register: validRegister({ declaredOn: '2026-08-27' }), boundary: 'GCC-High', today: TODAY,
+  });
+  assert.equal(future.declared, false, 'a declaration dated after the run reading it must not suppress');
+  assert.match(future.reason, /LATER than today/);
+
+  // THE CONSEQUENCE, stated as the filter sees it. `declared:false` means
+  // check-deploy-staleness passes pausedSince=null, so nothing is discarded and
+  // the real 2026-08-11 success is still the newest one — the drift stays loud.
+  const rows = runRows('2026-08-11T10:00:00Z', 90);
+  const unfiltered = pickLastRealSuccess(rows, null);
+  assert.equal(unfiltered.at, rows[0].createdAt, 'with no filter the newest STOOD-DOWN run wins — the trap');
+  const honest = pickLastRealSuccess(rows, '2026-08-26');
+  assert.equal(honest.at, '2026-08-11T10:00:00Z', 'the ORIGINAL declaredOn is what preserves the drift signal');
+  assert.equal(honest.pausedRunsSkipped, 90);
+});
+
+test('#4121 RE-DATING declaredOn on renewal destroys the drift window; renewedOn does not', () => {
+  // The serious one, because it is the instructions being followed. At the
+  // reviewBy the design says to re-declare with a fresh read. Move `declaredOn`
+  // and the filter discards nothing older than today, so 105 days of a dead
+  // lane report as zero drift.
+  const rows = runRows('2026-08-11T10:00:00Z', 90);
+
+  const reDated = pickLastRealSuccess(rows, '2026-11-24');
+  assert.equal(reDated.at, new Date(Date.parse('2026-11-23T10:00:00Z')).toISOString(),
+    're-dating declaredOn to the renewal day makes yesterday\'s stood-down run the "last success"');
+  assert.notEqual(reDated.at, '2026-08-11T10:00:00Z', 'the real deploy date is exactly what gets lost');
+
+  // THE PRESCRIBED RENEWAL: extend reviewBy, record renewedOn, leave declaredOn
+  // alone. The classifier accepts it and the filter is unchanged.
+  const renewed = classifyPauseDeclaration({
+    register: validRegister({ declaredOn: '2026-08-26', renewedOn: '2026-11-24', reviewBy: '2027-02-22' }),
+    boundary: 'GCC-High', today: '2026-11-24',
+  });
+  assert.equal(renewed.declared, true, renewed.reason);
+  assert.equal(renewed.entry.declaredOn, '2026-08-26', 'renewal must not move the field the filter reads');
+  assert.match(renewed.reason, /renewed 2026-11-24/, 'the renewal must be visible in what the lane prints');
+  assert.equal(
+    pickLastRealSuccess(rows, renewed.entry.declaredOn).at, '2026-08-11T10:00:00Z',
+    'after a correct renewal the drift window is still anchored at the real last deploy',
+  );
 });
 
 test('the SHIPPED register is structurally valid', () => {

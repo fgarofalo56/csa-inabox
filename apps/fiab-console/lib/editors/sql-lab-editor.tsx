@@ -154,8 +154,42 @@ interface CapabilitiesResponse {
   flight?: { configured: boolean; exposure: string; note: string };
 }
 
+/**
+ * #3571 — SQL LAB'S OWN TRANSPORT BUDGET, AND ITS OWN TIMEOUT COPY.
+ *
+ * Measured live on 2026-08-15: a freshly created `sql-lab` item running the
+ * trivial default `SELECT 1 AS hello` — no I/O, no data source — timed out
+ * TWICE at the shared 20s client ceiling, then succeeded on the third attempt
+ * in "0ms engine · 21ms round-trip". The capabilities probe showed the same
+ * shape: "Engine unknown" first, then DuckDB 1.5.5 with its full extension
+ * list. The engine was never unhealthy; the CONTAINER was not running yet.
+ *
+ * That is established, not inferred: `platform/fiab/bicep/modules/admin-plane/main.bicep`
+ * deploys the tier through `duckdb-aca.bicep` with `minReplicas: 0`, so the
+ * first request after an idle period pays a full Container Apps cold start
+ * before a single byte of SQL executes. On a low-traffic surface that is most
+ * first opens — which made SQL Lab and the DuckLake catalog look broken to
+ * anyone arriving cold.
+ *
+ * The 20s default is right for the admin surfaces it was raised for and wrong
+ * here, so SQL Lab opts into a ceiling that covers a real cold start, and says
+ * WHY in its own words rather than inheriting the app-wide cross-subscription
+ * sentence that has nothing to do with this call (#3546, R7).
+ *
+ * This is the CLIENT half only. Pre-warming the tier (a min replica, or a
+ * scheduled ping) is a bicep change and is NOT done here.
+ */
+const SQL_LAB_TIMEOUT_MS = 60_000;
+const SQL_LAB_TIMEOUT_HINT =
+  'SQL Lab\'s serving tier is deployed scale-to-zero (loom-duckdb, minReplicas 0), and the Synapse '
+  + 'Serverless fallback has a cold start of its own, so the FIRST request after an idle period pays for '
+  + 'starting the engine before any SQL runs. Once warm it answers in milliseconds. Run it again — a '
+  + 'second attempt normally returns immediately. If it keeps timing out, the tier may genuinely be '
+  + 'unreachable from the console rather than cold.';
+
 async function fetchCapabilities(): Promise<CapabilitiesResponse> {
-  const res = await clientFetch('/api/duckdb/capabilities', { cache: 'no-store' });
+  const res = await clientFetch('/api/duckdb/capabilities', { cache: 'no-store' },
+    { timeoutMs: SQL_LAB_TIMEOUT_MS, timeoutHint: SQL_LAB_TIMEOUT_HINT });
   const json = (await res.json().catch(() => ({}))) as CapabilitiesResponse & { error?: string };
   if (!res.ok || json?.ok !== true) {
     throw new Error(json?.error || `Could not read engine capabilities (HTTP ${res.status})`);
@@ -229,7 +263,7 @@ export function SqlLabEditor({ item, id }: { item: FabricItemType; id: string })
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ sql: runnableSql, maxRows: 5000, itemId: id }),
-      });
+      }, { timeoutMs: SQL_LAB_TIMEOUT_MS, timeoutHint: SQL_LAB_TIMEOUT_HINT });
       const json = (await res.json().catch(() => ({}))) as SqlLabResponse;
       if (res.ok && json.ok) {
         setResult(json);
@@ -276,7 +310,7 @@ export function SqlLabEditor({ item, id }: { item: FabricItemType; id: string })
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ sql, maxRows: 200000, itemId: id }),
-      });
+      }, { timeoutMs: SQL_LAB_TIMEOUT_MS, timeoutHint: SQL_LAB_TIMEOUT_HINT });
       if (!res.ok) {
         const body = (await res.json().catch(() => ({}))) as { error?: string };
         throw new Error(body.error || `Arrow fetch failed (HTTP ${res.status})`);

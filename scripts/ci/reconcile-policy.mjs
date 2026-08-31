@@ -878,15 +878,34 @@ export function parseRollRunTitle(title) {
  *        measured. `jobConclusion: null` means the run's jobs could not be read.
  *        `runs: null` means the run list itself could not be read.
  *
- *        ORDERING USES `jobCompletedAt` WHEN PRESENT. The run's `updated_at` is
- *        when the whole run finished, which for the roll lane trails the actual
- *        `az containerapp update` by minutes — on the incident night, 4m45s
- *        (update 07:10:44, run completed 07:15:30). With two writers finishing
- *        close together, ordering by the run can name the wrong "latest". The
- *        job's own completion is the closest observable proxy for the write and
- *        the caller already fetches it. `completedAt` remains the fallback so a
- *        caller that cannot supply the job time still gets an answer rather than
- *        an exception.
+ *        ORDERING USES `jobCompletedAt` WHEN PRESENT, and the honest reason is
+ *        NOT the one this comment used to give. It claimed the run stamp trails
+ *        the `az containerapp update` by "4m45s (update 07:10:44, run completed
+ *        07:15:30)". Re-measured from the Actions API for run 32225337320 — the
+ *        incident-night roll those numbers named — the record is:
+ *
+ *          step "Roll Container App to new image"  07:04:42Z → 07:05:14Z
+ *          roll job `completed_at`                          07:11:01Z
+ *          run `updated_at`                                 07:11:02Z
+ *
+ *        Neither 07:10:44 nor 07:15:30 appears in that run's run/job/step
+ *        record. Job→run is ONE SECOND, not 4m45s, and on Gov (run 32260846293,
+ *        a single job) it is zero — which is structural, not luck: the roll job
+ *        is the LAST job of `loom-roll-and-validate` and the only job of
+ *        `gov-console-roll`, so the run stamp cannot trail it by more than
+ *        runner teardown. (#3822.)
+ *
+ *        What the record DOES show is a 5m47s gap between the image write
+ *        (07:05:14Z) and the job's completion (07:11:01Z), spent in "Wait for
+ *        revision health", "Purge Front Door", "Validate live URL" and
+ *        "Gate — in-VNet UAT". So `jobCompletedAt` is not a tight proxy for the
+ *        write either; it is simply the tightest stamp the caller already
+ *        fetches, and it never PRECEDES the write, which is the property
+ *        ordering needs. The stamp that actually brackets the write is the roll
+ *        STEP's `completed_at`, free in the same jobs payload — use it if this
+ *        ordering ever needs to be tighter than "after the write".
+ *        `completedAt` remains the fallback so a caller that cannot supply the
+ *        job time still gets an answer rather than an exception.
  * @returns {{status:'none'|'found'|'unknown', roll?:object, reason:string}}
  */
 export function selectLastConsoleRoll(runs) {
@@ -1383,7 +1402,13 @@ function describeLive(estateTag, revisionSelection) {
  * moved it", and printed a remediation naming the last COMPLETED roll's SHA.
  * The realistic producer of that state is a roll whose `az containerapp update`
  * landed AFTER the apply but whose RUN has not finished yet, so it is not in
- * the population at all (on the incident night that gap was 4m45s). In that
+ * the population at all. On the incident night that window was 5m47s, measured
+ * from run 32225337320: the image write finished at 07:05:14Z and the roll job
+ * did not complete until 07:11:01Z, the interval spent in revision health, the
+ * Front Door purge, the live-URL validation and the in-VNet UAT gate. (An
+ * earlier revision of this sentence said 4m45s and attributed it to job-vs-run;
+ * that pair of timestamps is in no record of that run, and job→run there is one
+ * second — see `selectLastConsoleRoll` and #3822.) In that
  * case the estate is AHEAD, and rolling to the named SHA would move it
  * BACKWARDS — the gate causing the very defect it exists to catch.
  *

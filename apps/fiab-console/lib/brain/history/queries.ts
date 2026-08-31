@@ -82,6 +82,39 @@ export interface GraphHistory {
   readonly retainedCount: number;
   /** Versions dropped because their format differs from the head's. */
   readonly ignoredByFormat: number;
+  /**
+   * WHERE each dropped version sat, not merely HOW MANY were dropped (#4015).
+   *
+   * A count cannot answer the only question that matters downstream: was the
+   * hole punched in the MIDDLE of a run the caller is about to treat as
+   * consecutive? `afterKeptId` names the newest KEPT version older than the
+   * dropped one — `null` when it precedes every kept version, which is a trim
+   * off the old end and harms nothing. That makes contiguity DECIDABLE rather
+   * than assumed.
+   */
+  readonly formatGaps: readonly {
+    readonly droppedId: string;
+    readonly droppedFormatVersion: number;
+    readonly afterKeptId: string | null;
+  }[];
+}
+
+/**
+ * The versions dropped for a format mismatch that sit strictly INSIDE `window`.
+ *
+ * A gap older than `window[0]` is not a hole in the run — it is history that was
+ * trimmed off the old end — so only gaps whose `afterKeptId` is one of the
+ * window's own non-final members count.
+ */
+export function formatGapsInsideWindow(
+  history: GraphHistory,
+  window: readonly GraphVersion[],
+): readonly string[] {
+  if (window.length < 2) return [];
+  const interior = new Set(window.slice(0, -1).map((v) => v.id));
+  return history.formatGaps
+    .filter((g) => g.afterKeptId !== null && interior.has(g.afterKeptId))
+    .map((g) => g.droppedId);
 }
 
 /**
@@ -103,15 +136,43 @@ export function buildHistory(
     return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
   });
   if (chronological.length === 0) {
-    return { estateId, versions: [], retainedCount: retainedCount ?? 0, ignoredByFormat: 0 };
+    return {
+      estateId,
+      versions: [],
+      retainedCount: retainedCount ?? 0,
+      ignoredByFormat: 0,
+      formatGaps: [],
+    };
   }
   const headFormat = chronological[chronological.length - 1].formatVersion;
-  const kept = chronological.filter((v) => v.formatVersion === headFormat);
+  // A single pass, so each discard records its POSITION as well as its
+  // existence. `filter` alone loses that, and the count it leaves behind cannot
+  // tell a trim off the old end from a hole punched in the middle of the run —
+  // which is the distinction `nodeUnreachableForConsecutiveVersions` needs
+  // before it can call n versions "consecutive" (#4015).
+  const kept: GraphVersion[] = [];
+  const formatGaps: {
+    droppedId: string;
+    droppedFormatVersion: number;
+    afterKeptId: string | null;
+  }[] = [];
+  for (const v of chronological) {
+    if (v.formatVersion === headFormat) {
+      kept.push(v);
+      continue;
+    }
+    formatGaps.push({
+      droppedId: v.id,
+      droppedFormatVersion: v.formatVersion,
+      afterKeptId: kept.length === 0 ? null : kept[kept.length - 1].id,
+    });
+  }
   return {
     estateId,
     versions: kept,
     retainedCount: retainedCount ?? loaded.length,
-    ignoredByFormat: chronological.length - kept.length,
+    ignoredByFormat: formatGaps.length,
+    formatGaps,
   };
 }
 
@@ -307,6 +368,42 @@ export function nodeUnreachableForConsecutiveVersions(
   const oldest = window[0];
   const head = window[window.length - 1];
   const spanMs = Date.parse(head.capturedAt) - Date.parse(oldest.capturedAt);
+
+  // CONTIGUITY. `buildHistory` DISCARDS versions whose format differs from the
+  // head's, and that discard can remove one from the MIDDLE of the run — what is
+  // left is no longer consecutive. "Unreachable for n CONSECUTIVE versions" is
+  // only a true statement over a contiguous run: a node that was wired in the
+  // punched-out version reads as unwired across the whole span, and this
+  // predicate's output is a DELETION PROPOSAL.
+  //
+  // Same class as the coverage check below — an examined window that cannot
+  // support the claim — so it gets the same answer: REFUSE (#4015). The counts
+  // were already carried in the population and never consulted here, which is
+  // exactly how a gap masqueraded as a streak.
+  const gaps = formatGapsInsideWindow(history, window);
+  if (gaps.length > 0) {
+    return {
+      provenance,
+      required: n,
+      minSpanMs,
+      spanMs,
+      nodes: [],
+      population: population(
+        history,
+        window,
+        true,
+        `${gaps.length} version(s) inside the examined span were discarded for a format ` +
+          'mismatch, so the window is NOT a consecutive run',
+      ),
+      notes: [
+        `the newest ${n} retained version(s) span '${oldest.id}' to '${head.id}', but ` +
+          `${gaps.length} version(s) INSIDE that span (${gaps.join(', ')}) were discarded for ` +
+          'a format mismatch. What is left is not a consecutive run: a node wired only in a ' +
+          'discarded version reads as unwired across the whole span, and this answer is a ' +
+          'deletion proposal. REFUSING to answer.',
+      ],
+    };
+  }
 
   // Coverage. A version that did not COLLECT this provenance has zero inbound
   // edges of it for every node, vacuously — `blind` does not fire, because the

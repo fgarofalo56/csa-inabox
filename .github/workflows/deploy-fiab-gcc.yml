@@ -24,6 +24,45 @@ run-name: >-
 # CSA Loom — nightly deploy validation against GCC (Azure Commercial
 # under M365 GCC identity). GCC limitations: no F-SKU, no Direct
 # Lake parity.
+#
+# ── THIS LANE IS `disabled_manually`, AND HERE IS WHY (#4071) ────────────────
+#
+# Measured 2026-08-29 via the Actions API: `state: disabled_manually`,
+# `updated_at: 2026-08-08T04:36:15-04:00` (= 08:36:15Z). It was NOT disabled for
+# failing — its last 20 runs are 20/20 SUCCESS. It was disabled because those
+# greens were HOLLOW, for three independently measured reasons:
+#
+#   1. NO GCC CREDENTIALS AT ALL. `gh secret list` returns 13 secrets; the
+#      AZURE_GOV_* family is present and `grep -c AZURE_GCC` is 0. None of the
+#      four secrets the precheck below reads exists, so it set `configured=false`,
+#      both real jobs were `if:`-skipped, and the run concluded SUCCESS (#3219).
+#   2. THE HUB-EXISTENCE GUARD COULD NOT FAIL. `2>/dev/null || echo "0"` turned
+#      an auth failure, a missing extension or a throttle into "no hub exists",
+#      so the what-if SUCCESS was the ABSENCE of a check (#3139, merged one hour
+#      before the disablement).
+#   3. IT DEPLOYS ZERO CONTAINER APPS. `deployAppsEnabled` is never set in
+#      gcc.bicepparam; GCC-High and IL5 both set it true (#3078, open).
+#
+# So the disablement was deliberate and correct, not neglect.
+#
+# STILL INFERRED, NOT MEASURED: that the 08:36:15Z state change was made BY the
+# actor who dispatched the final run at 08:36:07Z and FOR the #3139 reason. The
+# API exposes neither, and there is no audit-log access on this repo. The
+# 8-second and one-hour correlations are strong and circumstantial; causation is
+# not established (deploy-integrity.md R7).
+#
+# THE DURABLE RECORD — owner, reason and an EXPIRING `reviewBy` — lives in
+# scripts/ci/workflow-lane-states-allowlist.json and is enforced on every run by
+# scripts/ci/check-workflow-lane-states.mjs. That is the dated owner
+# .claude/rules/cloud-parity.md clause 1 requires; #3078's stated target ("with
+# the Gov image-lane work") is a dependency, not a date. Fuller write-up:
+# docs/fiab/parity/cloud-capability-matrix.md.
+#
+# RE-ENABLING is an operator decision and is cheap NOW in a way it was not on
+# 08-08: #3219 (merged 2026-08-11, after the disablement) made a SCHEDULED run
+# with the secrets absent emit `::error::` naming all four and exit 1. So
+# re-enabling converts a silent state into a daily, correctly-attributed RED —
+# read the `schedule:` and the Teardown `if:` first regardless.
 
 on:
   schedule:
@@ -481,6 +520,54 @@ jobs:
           node scripts/ci/ensure-aas-server-settled.mjs \
             --subscription "$DEPLOY_SUB" \
             --rg "rg-csa-loom-admin-${AZURE_LOCATION}"
+
+      # ── RESOLVE THE EXISTING MSAL CLIENT ID BEFORE ANY TEMPLATE RENDER ────
+      # #4224. gcc.bicepparam carries the same line every other params file does:
+      #     param loomMsalClientId = readEnvironmentVariable('LOOM_MSAL_CLIENT_ID', '')
+      # An Entra app registration is a Microsoft Graph object that ARM cannot
+      # create, so it is minted by the post-deploy bootstrap and only RE-read
+      # here. With this env unset the template renders an EMPTY client id, and a
+      # declarative ACA template DROPS every env var it does not declare — which
+      # blanks LOOM_MSAL_CLIENT_ID (sign-in dark) and empties LOOM_UNITY_CLIENT_ID
+      # / LOOM_UNITY_AUDIENCE with it, sealing the Iceberg catalog behind the
+      # `.invalid` sentinel audience that no tenant can mint.
+      #
+      # deploy-fiab-commercial (:576), -gcch (:348) and -il5 (:636) all resolve
+      # first. This lane was the only one that did not — a latent deploy blocker
+      # rather than a live one, because GCC is `disabled_manually` with zero
+      # credentials (#4071) and has not run. It would have bitten on the first
+      # run after re-enablement, which is the worst moment to discover it.
+      #
+      # BEFORE THE WHAT-IF, not merely before Provision: what-if carries no `if:`,
+      # runs on every trigger, and renders the same template. A preflight must
+      # precede the first step that READS the value, not the first that writes it
+      # — the #3880 lesson from the ADX preflight above.
+      - name: Resolve the existing MSAL client id (sign-in durability — #4224)
+        env:
+          FALLBACK_CLIENT_ID: ${{ vars.LOOM_MSAL_CLIENT_ID }}
+        run: |
+          set -euo pipefail
+          # NOT `|| true`: the resolver distinguishes ABSENT (exit 0, empty — a
+          # genuinely fresh subscription) from UNKNOWN (exit 3 — a read FAILED).
+          # Swallowing exit 3 renders an empty client id, which is the outcome
+          # this step exists to prevent (deploy-integrity R7 — an unknown must
+          # never be spent as a negative).
+          if CID="$(bash scripts/csa-loom/resolve-msal-client-id.sh --rg "rg-csa-loom-admin-${AZURE_LOCATION}")"; then
+            RESOLVE_RC=0
+          else
+            RESOLVE_RC=$?
+          fi
+          if [ "$RESOLVE_RC" -ne 0 ]; then
+            echo "::error::Could not read this estate's Entra app registration (resolver exit $RESOLVE_RC). This is NOT 'no registration exists' — the reads themselves failed. Proceeding would render an empty LOOM_MSAL_CLIENT_ID, drop it from the Container App and take sign-in dark. Re-run once the read succeeds."
+            exit 1
+          fi
+          if [ -z "${CID:-}" ]; then CID="${FALLBACK_CLIENT_ID:-}"; fi
+          echo "LOOM_MSAL_CLIENT_ID=${CID}" >> "$GITHUB_ENV"
+          if [ -n "${CID:-}" ]; then
+            echo "::notice::MSAL client id resolved for this estate — sign-in stays wired across this deploy."
+          else
+            echo "::warning::No Entra app registration for this estate yet. Sign-in stays unconfigured until csa-loom-post-deploy-bootstrap (bootstrap-msal-app-reg.sh) runs; it records the client id in Key Vault so later deploys stay pinned."
+          fi
 
       - name: Bicep what-if
         run: |

@@ -37,14 +37,27 @@ const read = (p: string) => readFileSync(join(REPO, p), 'utf8');
  * so with core.autocrlf=true these files read as CRLF on a Windows checkout and as
  * LF on the Linux CI runner. A needle spelled `\n` that silently no-ops against
  * `\r\n` is a gate that passes locally and measures nothing where it counts.
+ *
+ * TWO terminators, not one (#3784). The 6-space sibling marker alone never ends
+ * on a DEDENT, so a verify step that became the LAST step in its job would slice
+ * on into the next job — and every negative assertion below would then be
+ * answering a question about somebody else's YAML. Today that fails safe (an
+ * over-match trips the negatives -> RED, never vacuous green), which is why this
+ * is a hardening and not a live bug. The second terminator is the same
+ * indentation-derived idea `scripts/ci/check-ui-verify-step-teeth.mjs` already
+ * uses, restated locally rather than imported across a package boundary.
+ *
+ * `[^\s#]` and not `\S`: a workflow comment banner sits at the step-key column in
+ * these files, and terminating on one would truncate a step EARLY — which turns a
+ * cosmetic reflow into a red positive assertion.
  */
 function ghStep(wf: string, name: string): string {
   const marker = `- name: ${name}`;
   const start = wf.indexOf(marker);
   if (start < 0) return '';
   const body = wf.slice(start + marker.length);
-  const end = body.search(/\n {6}- name: /);
-  return end < 0 ? body : body.slice(0, end);
+  const ends = [body.search(/\n {6}- name: /), body.search(/\n {0,6}[^\s#]/)].filter((i) => i >= 0);
+  return ends.length === 0 ? body : body.slice(0, Math.min(...ends));
 }
 
 const ADMIN_PLANE = 'platform/fiab/bicep/modules/admin-plane/main.bicep';
@@ -208,19 +221,35 @@ describe('the Gov image lane pushes the tag the templates PULL', () => {
     // `$BOUNDARY`, NOT `${{ inputs.boundary }}` — and the distinction is the
     // assertion, not an incidental reflow (#3781).
     //
-    // #3745 gave this lane a `schedule:` trigger, and a `workflow_dispatch`
-    // `default:` DOES NOT APPLY on a schedule event. So on the nightly run
-    // `${{ inputs.boundary }}` interpolates to the EMPTY STRING, the test
-    // becomes `[ "" = "il5" ]`, and the IL5 console would silently stop being
-    // pushed as :v3.0 — while the lane still exited 0. The workflow-level
-    // `env:` block (`BOUNDARY: ${{ inputs.boundary || 'gcc-high' }}`) is the
-    // single defaults table that makes all three triggers agree, and `$BOUNDARY`
-    // is how the shell reads it.
+    // CORRECTED IN #3784. This comment used to justify the pin with a
+    // regression that CANNOT OCCUR TODAY: that on the `schedule` trigger
+    // `${{ inputs.boundary }}` is empty, so `[ "" = "il5" ]` is false and IL5's
+    // console silently stops being pushed as `:v3.0`. Every link in that chain
+    // is true and the conclusion still does not follow. Measured against the
+    // workflow: `BOUNDARY: ${{ inputs.boundary || 'gcc-high' }}` is set ONCE at
+    // workflow scope, there is exactly ONE cron, and the `build` matrix is over
+    // `app` — never over boundary. So on the schedule path `$BOUNDARY` is
+    // `gcc-high`, `[ "gcc-high" = "il5" ]` is false, and the outcome is IDENTICAL
+    // to the old spelling's `[ "" = "il5" ]`. On `workflow_dispatch` /
+    // `workflow_call` with boundary=il5 both spellings resolve to `il5`. There is
+    // no trigger under which the two differ. Stating otherwise in the comment
+    // whose only job is telling a future maintainer WHY the pin exists is the
+    // shape R7 and "a causal claim needs the counterfactual" exist to catch.
+    //
+    // THE PIN IS STILL CORRECT. The reasons that survive measurement:
+    //   - the env-var form is this workflow's own stated convention: BOUNDARY,
+    //     APPS_IN and TAG_IN are the single defaults table every trigger reads;
+    //   - `${{ inputs.* }}` really is empty on `schedule`, and for `apps` / `tag`
+    //     that is a LIVE trap — an empty app list means an empty matrix, `build`
+    //     is skipped, and the lane concludes SUCCESS having built nothing;
+    //   - for `boundary` it is a LATENT trap, which goes live the moment the
+    //     schedule path is made boundary-aware (a second cron, or a boundary in
+    //     the matrix). Pinning the convention now is what keeps that change from
+    //     silently dropping IL5's `:v3.0`.
     //
     // This is therefore deliberately NOT written to accept both shapes, unlike
     // the cosign assertion above. There the two spellings were equally correct;
-    // here the old one is the regression, so matching it would license exactly
-    // the silent failure #3730 was filed off.
+    // here one is the convention the lane's own defaults table depends on.
     expect(wf).toMatch(/if \[ "\$APP" = "loom-console" \] && \[ "\$BOUNDARY" = "il5" \]; then\s*\n\s*TAG_LIST="\$TAG_LIST v3\.0"/);
   });
 
@@ -276,6 +305,29 @@ describe('the Gov image lane pushes the tag the templates PULL', () => {
     expect(verify).toMatch(/node scripts\/ci\/deploy-classify\.mjs/);
     expect(verify).toMatch(/--assert-signal config\.image-tag-absent/);
     expect((verify.match(/exit 1\b/g) || []).length).toBeGreaterThanOrEqual(2);
+
+    // ...and the POLARITY, which is the whole point (#3784). The three needles
+    // above pin the classifier's INGREDIENTS. Measured on this suite before the
+    // two lines below existed, BOTH of these one-character mutations kept it at
+    // 18/18 GREEN:
+    //
+    //   1. drop the `!` from `&& ! node …deploy-classify.mjs`
+    //      -> the sense inverts: a genuine 404 now prints "Could NOT read $ACR …
+    //         UNPROVEN", and an UNREADABLE registry falls through to the second
+    //         branch and prints "is NOT in $ACR after the build" — the exact
+    //         false claim (R7) that cost this repo two investigations.
+    //   2. put back `2>/dev/null` in place of `2>&1`
+    //      -> the classifier is starved of the stderr it classifies, so every
+    //         failure reads as "could not read", denial and 404 alike.
+    //
+    // Both stay fail-closed (`exit 1` either way), so neither is a deploy-safety
+    // regression — what they destroy is MESSAGE TRUTH, which is the only thing
+    // this clause guards. A gate for R7 that cannot see a broken R7 message is
+    // not a gate.
+    expect(verify, 'the classifier call lost its negation — an unreadable registry would now be reported as a 404 (R7)')
+      .toMatch(/&& ! node scripts\/ci\/deploy-classify\.mjs/);
+    expect(verify, 'the az read no longer captures stderr, so deploy-classify.mjs is classifying an empty string')
+      .toMatch(/-o tsv 2>&1\)/);
 
     // A verification whose result is discarded is not a verification.
     expect(verify).not.toMatch(/\|\| true/);

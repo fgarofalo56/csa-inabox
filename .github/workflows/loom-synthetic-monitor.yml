@@ -67,7 +67,7 @@ jobs:
       # job. The edge-health step below runs a SCRIPT from the tree, so it needs
       # one. Its first live run (31479818731) died with
       #     bash: scripts/ci/check-vanity-edge-health.sh: No such file or directory
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Azure login
         uses: azure/login@v2.3.0

@@ -39,6 +39,35 @@ function canon(s: string): string {
   return s.trim().replace(/\/+$/, '').toLowerCase();
 }
 
+/**
+ * THE NODE-ID PREFIXES — exported so a consumer cannot drift from the minter.
+ *
+ * #3967. These were bare duplicated literals: this module minted `azure:` and
+ * `lib/brain/agents/critic.ts` + `lib/brain/agents/correlator.ts` consumed it
+ * with `startsWith('azure:')`, with nothing tying the two together. That matters
+ * because `azureSubjects()` is the POPULATION for two of the Critic's six
+ * measured checks (`unmeasured-scale`, `ownership-unestablished`), and both
+ * return `null` — a PASS, not `indeterminate` — on an empty population. A
+ * desynchronised prefix therefore does not fail; it makes two checks range over
+ * nothing while the suite stays green. Exporting the prefix does not by itself
+ * make the population observable (see the "what this does NOT cover" note
+ * below), but it does remove the one drift mode a rename can cause.
+ */
+export const AZURE_NODE_ID_PREFIX = 'azure:';
+/** @see AZURE_NODE_ID_PREFIX */
+export const DEPLOY_NODE_ID_PREFIX = 'deploy:';
+/** @see AZURE_NODE_ID_PREFIX */
+export const CODE_NODE_ID_PREFIX = 'code:';
+// NO `LOOM_NODE_ID_PREFIX` HERE, DELIBERATELY. `loomItemNodeId` keeps its
+// literal `loom:` inline. Hoisting it to a named constant in this module trips
+// `scripts/ci/check-loom-content-id-chokepoint.mjs`, which reserves a standalone
+// `'loom:'` definition to `app/api/items/_lib/loom-content-id` — MEASURED, that
+// guard goes RC=1 on the hoist. The two `loom:` prefixes are unrelated (this one
+// is a brain node id, that one is a bundle CONTENT id), but a guard keyed to the
+// shape cannot tell them apart, and weakening it to see the difference would be
+// the wrong trade. No consumer outside this file matches on this prefix, so it
+// has none of the drift exposure `azure:` had (#3967).
+
 /** Forward slashes, no leading `./`, no trailing slash. */
 export function canonicalPath(p: string): string {
   return p
@@ -64,7 +93,7 @@ export function azureResourceNodeId(armResourceId: string): NodeId {
         'with every other empty id and merge unrelated resources into one node.',
     );
   }
-  return `azure:${c}` as NodeId;
+  return `${AZURE_NODE_ID_PREFIX}${c}` as NodeId;
 }
 
 /** The node id for a Loom logical item. */
@@ -81,14 +110,14 @@ export function loomItemNodeId(itemType: string, itemId: string): NodeId {
 export function deployArtifactNodeId(repoRelativePath: string): NodeId {
   const p = canonicalPath(repoRelativePath).toLowerCase();
   if (!p) throw new Error('deployArtifactNodeId: empty path.');
-  return `deploy:${p}` as NodeId;
+  return `${DEPLOY_NODE_ID_PREFIX}${p}` as NodeId;
 }
 
 /** The node id for a source module. */
 export function codeModuleNodeId(repoRelativePath: string): NodeId {
   const p = canonicalPath(repoRelativePath).toLowerCase();
   if (!p) throw new Error('codeModuleNodeId: empty path.');
-  return `code:${p}` as NodeId;
+  return `${CODE_NODE_ID_PREFIX}${p}` as NodeId;
 }
 
 /**

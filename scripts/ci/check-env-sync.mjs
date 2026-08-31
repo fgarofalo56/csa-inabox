@@ -466,7 +466,15 @@ const ALLOWLIST = new Set([
   // different judge model.
   'LOOM_FOUNDRY_EVAL_DEPLOYMENT',   // opt-in override for the judge model (default: LOOM_AOAI_DEPLOYMENT)
   'LOOM_FOUNDRY_HUB_NAME',          // derived from Foundry hub
-  'LOOM_FOUNDRY_PROJECT',           // derived from Foundry project
+  // LOOM_FOUNDRY_PROJECT is NO LONGER allowlisted (#4185). Its reason said
+  // "derived from Foundry project", which was not true of the deployed estate:
+  // nothing derived it and nothing emitted it, so `evaluation.ts:98` and
+  // `prompt-flow.ts:92` read an env var that was never set and both returned a
+  // remediation gate telling the operator to set it by hand. The deploy had the
+  // value all along and shipped it as LOOM_FOUNDRY_PROJECT_NAME, which no source
+  // file reads. admin-plane/main.bicep now emits the bare name too, so this
+  // entry is exactly what the docblock above says an allowlist must never be:
+  // a silenced guard standing in for a missing emission.
   'LOOM_GHCR_OWNER',                // opt-in GHCR mirror owner
   'LOOM_GHCR_REGISTRY',             // opt-in GHCR mirror registry
   'LOOM_GITHUB_REPO_NAME',          // opt-in GitHub integration
@@ -961,31 +969,89 @@ export function collectConsoleEnvExpressions() {
 }
 
 /**
+ * Env names the console is emitted that this guard deliberately does NOT
+ * police, enumerated BY NAME rather than excluded by a prefix (#3940).
+ *
+ * A prefix exclusion is invisible: it silently shrinks the population and the
+ * verdict stays green because the examined set got smaller, not because the
+ * tree got cleaner. That is exactly the defect #3940 reports. So the three
+ * non-LOOM entries the deploy emits are listed here, each with the reason it is
+ * out of scope, and `parseEnvEntries` FAILS CLOSED on a fourth — a new prefix
+ * cannot become a second blind spot without turning this guard red first.
+ *
+ *   AZURE_CLOUD / AZURE_TENANT_ID  Azure SDK convention variables, not Loom
+ *                                  capability bindings. Neither is a
+ *                                  `param … = ''` this layer could classify.
+ *   SESSION_SECRET                 delivered by `secretRef` from Key Vault, so
+ *                                  it has no inline `value:` to be inert.
+ */
+export const NON_LOOM_CONSOLE_ENV_NAMES = Object.freeze([
+  'AZURE_CLOUD', 'AZURE_TENANT_ID', 'SESSION_SECRET',
+]);
+
+/**
  * Pure parser, exported so the embedded control can drive it with synthetic
  * input. Splitting it from the file read is what lets the control prove the
  * CLASSIFIER works rather than merely proving the repo is currently clean —
  * a guard whose population happens to be empty must still be able to fail
  * (`guard_with_zero_population_needs_embedded_control`).
  *
+ * ── POPULATION, NOT RULE (#3940) ──────────────────────────────────────────
+ * This regex used to be `/name:\s*'(LOOM_[A-Z0-9_]+)'/g`, so every
+ * `NEXT_PUBLIC_LOOM_*` entry was INVISIBLE to the layer whose whole job is to
+ * catch emitted-but-inert variables. Measured on the loom-console env block at
+ * 0cad3ac7: 454 distinct names — 438 `LOOM_*` (the entire examined set), 13
+ * `NEXT_PUBLIC_LOOM_*` (unexamined), 3 neither. The guard was green because its
+ * population was smaller than the set it is supposed to police, which is this
+ * repo's most-rediscovered failure shape.
+ *
+ * `NEXT_PUBLIC_*` is also the prefix that reaches the BROWSER, so an
+ * emitted-but-empty one produces a client feature that silently no-ops — the
+ * hardest class to notice from the server side.
+ *
+ * After: 451 (438 + 13). The three that remain out are enumerated in
+ * NON_LOOM_CONSOLE_ENV_NAMES, and anything else throws.
+ *
  * @param {string} envBlock bicep source of an `env` array
  * @returns {Map<string, string|null>} name → raw `value:` expression, or null
  */
 export function parseEnvEntries(envBlock) {
   const out = new Map();
-  const nameRe = /name:\s*'(LOOM_[A-Z0-9_]+)'/g;
+  const unpoliced = new Set();
+  // Match EVERY env name, then classify — so a name this layer does not police
+  // is a name it has SEEN and dismissed, never one it never looked at.
+  const nameRe = /name:\s*'([A-Za-z_][A-Za-z0-9_]*)'/g;
   let m;
   while ((m = nameRe.exec(envBlock)) !== null) {
+    const name = m[1];
+    if (!/^(?:NEXT_PUBLIC_)?LOOM_[A-Z0-9_]+$/.test(name)) {
+      unpoliced.add(name);
+      continue;
+    }
     const open = envBlock.lastIndexOf('{', m.index);
     if (open < 0) continue;
     const entry = balancedSlice(envBlock, open, '{', '}');
     if (!entry) continue;
     const vIdx = entry.indexOf('value:');
     if (vIdx < 0) {
-      out.set(m[1], null); // secretRef (or any non-inline delivery)
+      out.set(name, null); // secretRef (or any non-inline delivery)
       continue;
     }
     // Everything between `value:` and the entry's closing brace.
-    out.set(m[1], entry.slice(vIdx + 'value:'.length, entry.length - 1).trim());
+    out.set(name, entry.slice(vIdx + 'value:'.length, entry.length - 1).trim());
+  }
+  // FAIL CLOSED ON A NEW PREFIX. The alternative — dropping it quietly — is the
+  // #3940 defect reintroduced under a different spelling.
+  const known = new Set(NON_LOOM_CONSOLE_ENV_NAMES);
+  const surprises = [...unpoliced].filter((n) => !known.has(n)).sort();
+  if (surprises.length > 0) {
+    throw new Error(
+      `check-env-sync: the console env block carries ${surprises.length} name(s) this layer neither ` +
+        `policies nor has triaged: ${surprises.join(', ')}. Either they are LOOM capability bindings ` +
+        '(rename them to LOOM_* / NEXT_PUBLIC_LOOM_* so they are policed) or they are not ' +
+        '(add them to NON_LOOM_CONSOLE_ENV_NAMES with the reason). Silently narrowing the ' +
+        'population is the defect #3940 exists for.',
+    );
   }
   return out;
 }
@@ -1319,6 +1385,17 @@ export const KNOWN_INERT = new Map([
  *
  * This set may only SHRINK. Triaging one means deleting it here and either
  * fixing the emission or moving it to KNOWN_INERT with a real reason.
+ *
+ * ONE DELIBERATE EXCEPTION TO "MAY ONLY SHRINK", RECORDED RATHER THAN QUIET —
+ * 2026-08-29, #3940. Widening parseEnvEntries()'s population from `LOOM_*` to
+ * `(NEXT_PUBLIC_)?LOOM_*` took the examined set from 438 names to 451 and
+ * immediately flagged NEXT_PUBLIC_LOOM_HDINSIGHT_LINKED_SERVICE. That is not a
+ * NEW inert var: it is the second delivery form of LOOM_HDINSIGHT_LINKED_SERVICE,
+ * already in this set since the 2026-08-14 baseline, bound to the identical
+ * param on the adjacent line of admin-plane/main.bicep. The set therefore goes
+ * 30 -> 31 without any regression in the tree — the population grew, so the
+ * baseline it was measured against had to. Every other one of the 13
+ * newly-visible NEXT_PUBLIC_LOOM_* names is genuinely wired and was NOT flagged.
  */
 export const UNTRIAGED_INERT = new Set([
   'LOOM_ADO_HOST',
@@ -1335,6 +1412,15 @@ export const UNTRIAGED_INERT = new Set([
   'LOOM_FLOW_BASE',
   'LOOM_GITHUB_HOST',
   'LOOM_HDINSIGHT_LINKED_SERVICE',
+  // NOT A NEW DEFECT AND NOT A RELAXATION (#3940). admin-plane/main.bicep:4471-4472
+  // emits the SAME `param loomHdinsightLinkedService string = ''` under two
+  // names; only the LOOM_ one was ever in this set because parseEnvEntries()
+  // could not SEE a NEXT_PUBLIC_ name. Now that the population includes them,
+  // the twin surfaces — one param, one defect, two delivery forms. Both entries
+  // are deleted together the day `module adminPlane` passes the param; deleting
+  // only one would leave the other flagged and the guard red, which is the
+  // coupling that keeps this honest.
+  'NEXT_PUBLIC_LOOM_HDINSIGHT_LINKED_SERVICE',
   'LOOM_IOT_HUB_RESOURCE_ID',
   'LOOM_MCP_CATALOG_REGISTRY',
   'LOOM_MLFLOW_TRACKING_URI',

@@ -30,6 +30,7 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 
 const HELPER = path.resolve(import.meta.dirname, '..', '_grant-role-if-absent.sh');
+const NAVIGATOR_RBAC = path.resolve(import.meta.dirname, '..', 'grant-navigator-rbac.sh');
 const PID = '11111111-2222-3333-4444-555555555555';
 const ROLE = '7f951dda-4ed3-4680-a7ca-43fe172d538d';
 const SCOPE = '/subscriptions/sub/resourceGroups/rg/providers/Microsoft.ContainerRegistry/registries/acr';
@@ -289,4 +290,120 @@ test('a missing argument refuses rather than granting something unspecified', ()
   fs.rmSync(dir, { recursive: true, force: true });
   assert.equal(r.status, 1);
   assert.match(`${r.stdout ?? ''}${r.stderr ?? ''}`, /refusing to guess/);
+});
+
+// ── ADOPTION: grant-navigator-rbac.sh's OWN grant() must be probed (#3463) ────
+//
+// #3454 put `grant_role_if_absent` behind two direct call sites in
+// grant-navigator-rbac.sh and left `grant()` — the function ~20 of that file's grants
+// route through, including every BYO/adopted one via `byo_grant` — doing the old unprobed
+// create. That is the guard-adoption gap, occurring inside the very file the PR edited,
+// and no test above could see it: they all drive the HELPER directly, so they are green
+// whether or not anything calls it.
+//
+// So this drives the REAL SCRIPT end to end with a fake `az`, and asserts the property
+// that actually matters to #3439: the probe runs, and its answer DECIDES whether a create
+// is issued. Keying on the outcome rather than on "the file mentions the helper" is
+// deliberate — a spelling-keyed control loses to the next refactor.
+
+/**
+ * Execute the real grant-navigator-rbac.sh against a fake `az`.
+ *
+ * The fake answers `role assignment list` with `listStdout` and lets everything else
+ * (`account show`, `cloud show`, every discovery `list`) succeed with EMPTY output, which
+ * is what makes the script skip its discovered-resource blocks and reduces the run to the
+ * one unconditional grant: Reader on the DLZ resource group.
+ *
+ * @returns {{status:number, out:string, calls:string[]}}
+ */
+function runNavigatorRbac({ listStdout = '0' } = {}) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'loom-navrbac-'));
+  const log = path.join(dir, 'calls.log');
+  const bin = path.join(dir, 'bin');
+  fs.mkdirSync(bin);
+  const outFile = path.join(dir, 'stdout.bin');
+  fs.writeFileSync(outFile, listStdout, 'utf8');
+
+  const az = [
+    '#!/usr/bin/env bash',
+    `echo "$*" >> ${JSON.stringify(log)}`,
+    'case "$*" in',
+    '  *"role assignment list"*)',
+    `    cat ${JSON.stringify(outFile)}`,
+    '    exit 0 ;;',
+    'esac',
+    // Everything else: succeed, print nothing. Discovery therefore finds no Event Hubs
+    // namespace / Cosmos account / Function App / Search service / AOAI / ADX cluster, so
+    // those blocks take their documented "not found — skipping" branch.
+    'exit 0',
+    '',
+  ].join('\n');
+  fs.writeFileSync(path.join(bin, 'az'), az, { mode: 0o755 });
+
+  const r = spawnSync('bash', [NAVIGATOR_RBAC], {
+    encoding: 'utf8',
+    env: {
+      ...process.env,
+      PATH: `${bin}${path.delimiter}${process.env.PATH}`,
+      SUB: 'sub-1',
+      ADMIN_RG: 'rg-admin',
+      DLZ_RG: 'rg-dlz',
+      CONSOLE_UAMI_PRINCIPAL: PID,
+    },
+  });
+  const calls = fs.existsSync(log) ? fs.readFileSync(log, 'utf8').split('\n').filter(Boolean) : [];
+  fs.rmSync(dir, { recursive: true, force: true });
+  return { status: r.status, out: `${r.stdout ?? ''}${r.stderr ?? ''}`, calls };
+}
+
+const READER_ROLE = 'acdd72a7-3385-48ef-bd42-f606fba81ae7';
+const DLZ_RG_SCOPE = '/subscriptions/sub-1/resourceGroups/rg-dlz';
+const isReaderProbe = (c) =>
+  c.includes('role assignment list') && c.includes(READER_ROLE) && c.includes(DLZ_RG_SCOPE);
+const isReaderCreate = (c) =>
+  c.includes('role assignment create') && c.includes(READER_ROLE) && c.includes(DLZ_RG_SCOPE);
+
+test('#3463 EMBEDDED CONTROL: the fake az is reached by the real script, and the two verdicts DIFFER', () => {
+  // Without this, both assertions below could be passing against a script that never ran
+  // `az` at all — the null result that a fake-binary harness fails silently into.
+  const absent = runNavigatorRbac({ listStdout: '0' });
+  const present = runNavigatorRbac({ listStdout: '1' });
+  assert.ok(absent.calls.some(isReaderProbe), 'the probe must run at all');
+  assert.equal(absent.calls.some(isReaderCreate), true, 'an absent grant MUST create');
+  assert.equal(present.calls.some(isReaderCreate), false, 'a present grant MUST NOT create');
+});
+
+test('#3463 grant() PROBES BEFORE it creates — the probe precedes the create in call order', () => {
+  const r = runNavigatorRbac({ listStdout: '0' });
+  const probeAt = r.calls.findIndex(isReaderProbe);
+  const createAt = r.calls.findIndex(isReaderCreate);
+  assert.notEqual(probeAt, -1, 'no `role assignment list` for the role grant() routes');
+  assert.notEqual(createAt, -1, 'the absent grant should still have been created');
+  assert.ok(
+    probeAt < createAt,
+    `the probe must come FIRST; got probe at ${probeAt} and create at ${createAt}`,
+  );
+});
+
+test('#3463 a role routed through grant() that is ALREADY granted is left alone', () => {
+  // The #3439 collision itself: the template granted this triple in phase 1 under a
+  // deterministic v5 name, so a CLI create here mints a competing v4 name and blocks the
+  // template forever. Before this fix grant() wrote unconditionally, so this is the
+  // assertion the adoption gap was costing.
+  const r = runNavigatorRbac({ listStdout: '1' });
+  assert.equal(r.calls.some(isReaderCreate), false, 'an existing assignment must not be re-created');
+  assert.match(r.out, /Reader on DLZ RG \(already granted/);
+});
+
+test('#3463 grant() no longer prints a tick for a grant it did not establish', () => {
+  // The old body piped the create through `grep -vi "already exists"` and then echoed
+  // "✓ $label" unconditionally. The helper makes the ✓ conditional (deploy-integrity R7);
+  // this asserts grant()'s callers inherited that, not just the two direct call sites.
+  const r = runNavigatorRbac({ listStdout: '0' });
+  assert.match(r.out, /Reader on DLZ RG/, 'the label must still be reported either way');
+  assert.match(
+    r.out,
+    /converge-role-assignment\.mjs/,
+    'an absent grant must say the minted name needs converging — the helper speaking, not the old echo',
+  );
 });

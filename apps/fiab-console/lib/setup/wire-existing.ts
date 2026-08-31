@@ -58,6 +58,7 @@ import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { armBase } from '@/lib/azure/cloud-endpoints';
+import { swrAwait } from '@/lib/azure/cross-sub-cache';
 
 // ───────────────────────────────────────────────────────────────────────────
 // L3 — strict allow-lists
@@ -151,10 +152,13 @@ export function parseDlzRg(rg: string): { domainName: string; region: string } |
  * request cannot introduce a coordinate of its own construction. That holds
  * regardless of which of the two identities the scan ran as.
  *
- * NOTE: this mirrors the scan in `app/api/setup/existing-dlzs/route.ts`, which
- * is what populates the wizard's picker. The two are intentionally kept in step;
- * folding that route onto this helper is a worthwhile follow-up but is outside
- * the blast radius of the security fix this module exists for.
+ * THIS IS THE ONLY COPY (#3609). `app/api/setup/existing-dlzs/route.ts` — the
+ * GET that populates the wizard's picker — carried a byte-for-byte duplicate of
+ * this query, its `$skipToken` paging and its `parseDlzRg` regex. That
+ * duplication was a deliberate, disclosed tradeoff in the security fix (#3602)
+ * that created this module, and it was the wrong END state: two copies of an
+ * L2 control that must agree is a drift hazard, and the copy here also lost the
+ * sibling's 60s SWR cache. Both routes now call {@link scanDeployedDlzsCached}.
  */
 export async function scanDeployedDlzs(token: string): Promise<DiscoveredDlz[]> {
   const arm = armBase();
@@ -195,6 +199,49 @@ export async function scanDeployedDlzs(token: string): Promise<DiscoveredDlz[]> 
     skipToken = j?.$skipToken || undefined;
   } while (skipToken);
   return dlzs;
+}
+
+/**
+ * {@link scanDeployedDlzs} behind the shared 60s stale-while-revalidate memo —
+ * the form BOTH callers use.
+ *
+ * WHY THE CACHE IS SHARED AND NOT PER-ROUTE. The cross-subscription Resource
+ * Graph scan is slow enough that the wizard gives its GET a dedicated
+ * `CROSS_SUB_FETCH_TIMEOUT_MS` budget. `existing-dlzs` wrapped it in `swrAwait`
+ * for exactly that reason; the copy inside `wire-existing` did not, so every
+ * POST re-ran the whole uncached fan-out. One key, one entry: the picker GET
+ * warms the cache the POST that follows it reads.
+ *
+ * WHY CACHING DOES NOT WEAKEN L2. The property L2 rests on is that the
+ * resource-group string came from AZURE, not from the request — an existence
+ * proof, never a per-caller entitlement check (see {@link scanDeployedDlzs}).
+ * A value at most 60s old is still a value Azure reported, and `swrAwait` keys
+ * every entry by the caller's `oid`, so no caller can read rows resolved under
+ * another principal's token. A DLZ deleted inside the window resolves to a name
+ * whose downstream `az` call then fails against the real estate — the same
+ * outcome as a delete racing an uncached scan.
+ *
+ * FAILURES ARE NOT CACHED (`cross-sub-cache` clears the in-flight slot on
+ * reject), so a Resource Graph error still propagates to the caller and the
+ * next attempt does the real work.
+ *
+ * @param oid      the caller's object id — the cache scope. `''` disables the
+ *                 memo and awaits the real scan (`swrAwait`'s own passthrough).
+ * @param identity which principal the token belongs to ('user' | 'uami'); part
+ *                 of the key because the two see DIFFERENT resource groups.
+ */
+export async function scanDeployedDlzsCached(
+  oid: string,
+  identity: 'user' | 'uami',
+  token: string,
+): Promise<DiscoveredDlz[]> {
+  const { value } = await swrAwait(
+    oid,
+    `existing-dlzs:${identity}`,
+    { ttlMs: 60_000 },
+    () => scanDeployedDlzs(token),
+  );
+  return value;
 }
 
 /** Outcome of matching one requested DLZ against discovered estate state. */

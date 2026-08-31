@@ -122,7 +122,23 @@ export interface BrainCanvasProps {
   readonly resizeStorageKey?: string;
 }
 
-function buildFlow(props: BrainCanvasProps): { nodes: Node[]; edges: Edge[] } {
+/**
+ * EXPORTED FOR COVERAGE (#4012), not for reuse — `CanvasInner` is still its only
+ * production caller.
+ *
+ * `synapse-canvas.test.tsx` mounts `BrainCanvasNode` DIRECTLY with a hand-built
+ * `data.synapse`, so it verifies the renderer given an input and never exercises the code
+ * that decides whether the overlay mark is handed to the node at all. Measured on PR
+ * #3992, arm M5: sever the overlay from every node and edge inside this function and the
+ * whole UI suite stays green — 193/193, RC=0 — while seven sibling mutation arms in the
+ * same run were all caught. A test that constructs the thing it is meant to verify was
+ * produced proves nothing about production; the hand-off path had no coverage.
+ *
+ * Keeping it module-private would have meant testing it through a full React Flow mount,
+ * which is a heavier and much less precise instrument for a pure function. The export is
+ * the cheaper honest option.
+ */
+export function buildFlow(props: BrainCanvasProps): { nodes: Node[]; edges: Edge[] } {
   const positions = new Map(
     layoutNodes(props.nodes, props.coverageConfigured).map((p) => [p.id, p]),
   );

@@ -148,20 +148,45 @@ export function KqlQuerysetEditor({ item, id }: { item: FabricItemType; id: stri
     setSaveErr(null); setSaveMsg(null);
   }, [queries, dirty, selectedIdx]);
 
-  const addQuery = useCallback(() => {
+  /**
+   * Append a query tab and select it. `seed` is what the new tab STARTS WITH.
+   *
+   * SEEDING IS A SEPARATE ENTRY POINT ON PURPOSE. This is not exposed as an
+   * optional first parameter of `addQuery`, because `addQuery` is bound
+   * DIRECTLY as an `onClick` (the "New" ribbon button, the guided "New blank
+   * query" card) and React would hand that parameter a MouseEvent — truthy,
+   * spread into the query, and silently wrong. The zero-argument wrappers below
+   * are what call sites use; only they choose a seed.
+   */
+  const appendQuery = useCallback((seed?: SavedQuery) => {
     // Phase 4.5 — functional setQueries so back-to-back clicks before
     // re-render cannot drop entries. Carry the dirty draft of the
     // currently-selected query into the queries[] array before appending
     // — otherwise the new entry replaces the user's unsaved edit.
     setQueries((prev) => {
       const carried = prev.map((q, i) => i === selectedIdx ? draft : q);
-      const next = [...carried, { title: `Query ${carried.length + 1}`, kql: '' }];
+      // The seed is COPIED, never aliased: SAMPLE_QS is a module-level constant
+      // and two smoke-test tabs must not share one mutable object.
+      const appended: SavedQuery = seed
+        ? { ...seed, title: seed.title || `Query ${carried.length + 1}` }
+        : { title: `Query ${carried.length + 1}`, kql: '' };
+      const next = [...carried, appended];
       setSelectedIdx(next.length - 1);
       setDraft(next[next.length - 1]);
       return next;
     });
     setDirty(true); setSaveMsg(null);
   }, [selectedIdx, draft]);
+
+  /** "New blank query" — an empty draft. Safe to bind straight to `onClick`. */
+  const addQuery = useCallback(() => { appendQuery(); }, [appendQuery]);
+
+  /**
+   * "Run the smoke test" — appends the ready-made `print` statement the card
+   * promises. Both guided cards used to call `addQuery`, so this card created
+   * an EMPTY editor and the promised query never existed (#3548).
+   */
+  const addSmokeTestQuery = useCallback(() => { appendQuery(SAMPLE_QS); }, [appendQuery]);
 
   const deleteQuery = useCallback((idx: number) => {
     // Phase 4.5 — functional setter so multiple deletes in flight don't
@@ -492,7 +517,7 @@ export function KqlQuerysetEditor({ item, id }: { item: FabricItemType; id: stri
               paths={[
                 { key: 'new', title: 'New blank query', body: 'Add an empty query and start typing KQL in the editor below.', icon: Add24Regular, onClick: addQuery },
                 { key: 'source', title: 'Bind a data source', body: 'Query ADX, Log Analytics, or Application Insights via the cluster() proxy.', icon: DatabaseLink20Regular, onClick: () => { setDraftSrcType(draft.sourceType || 'adx'); setSrcDlgOpen(true); } },
-                { key: 'run', title: 'Run the smoke test', body: 'Add a ready-made "print" query to confirm the cluster answers.', icon: PlayCircle24Regular, onClick: addQuery },
+                { key: 'run', title: 'Run the smoke test', body: 'Add a ready-made "print" query to confirm the cluster answers.', icon: PlayCircle24Regular, onClick: addSmokeTestQuery },
               ]}
               askCopilot={{
                 onClick: () => { setAssistResult(null); setAssistError(null); setAssistView('prompt'); },

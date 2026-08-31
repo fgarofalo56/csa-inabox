@@ -46,6 +46,7 @@
 import { describe, it, expect, afterEach, vi } from 'vitest';
 import { render, screen, waitFor, cleanup, fireEvent } from '@testing-library/react';
 import { AdfPipelineEditor, SynapsePipelineEditor } from '../azure-services-editors';
+import { DataPipelineEditor } from '../data-pipeline-editor';
 import { makeItem } from './test-helpers';
 
 const ID = '00000000-0000-0000-0000-0000000000ad';
@@ -384,5 +385,117 @@ describe('#3549 BLOCKER 1 — the Synapse twin carries the same gate', () => {
     await waitFor(() => expect(screen.getByTestId('pipeline-seed-incomplete')).toBeInTheDocument(),
       { timeout: 8000 });
     expect(screen.getByRole('button', { name: /trigger now/i })).toBeDisabled();
+  });
+});
+
+/**
+ * #3755 — THE TWO PATHS `PipelineEditorCore` NEVER SEES.
+ *
+ * `data-pipeline-editor.tsx` delegates to the (gated) core for the mainline open:
+ *
+ *     const hostTemplate = !!templateId;
+ *     if (!hostTemplate && (runtime === 'adf' || runtime === 'synapse')) { …core… }
+ *
+ * so the gate #3696 added is live for the common case. It does NOT delegate for a
+ * TEMPLATED create (`templateId` set) or for the opt-in `runtime === 'fabric'`, and on
+ * those two paths this file's own Run / Debug / Schedule / Add-trigger controls were
+ * reachable with `grep -c seedIncomplete` = 0 across the whole editor. A pipeline with no
+ * activities could be run, debugged, and — worst — put on a RECURRENCE, every execution
+ * reporting Succeeded having done nothing.
+ *
+ * The specs below drive the real editor on both of those paths. They are deliberately
+ * paired: each "disabled" assertion has a CONTROL rendering the SAME path with one
+ * activity on the canvas, so a button that is disabled unconditionally cannot pass.
+ *
+ * MUTATION RECEIPT (measured, see the PR body): drop `&& !seedIncomplete` from `canRun` /
+ * `canDebug` / `canSchedule` in `data-pipeline-editor.tsx` → the two "refused" specs go
+ * RED while the two CONTROLs stay green.
+ */
+describe('#3755 — data-pipeline-editor gates its OWN Run / Debug / Schedule on the empty canvas', () => {
+  afterEach(() => { cleanup(); vi.restoreAllMocks(); });
+
+  const DP_ID = '00000000-0000-0000-0000-0000000000dd';
+  const WS = 'ws-1';
+
+  /** ADF activity shape the canvas understands. */
+  const ONE_ACTIVITY = [
+    { name: 'CopyBronze', type: 'Copy', typeProperties: {}, dependsOn: [] },
+  ];
+
+  /**
+   * The editor's own data path: `/api/cosmos-items/<slug>/<id>` resolves the workspace
+   * (which also sets `pipelineId`, so the pre-existing `!pipelineId` disable is NOT what
+   * these specs measure), then `/api/items/data-pipeline/<id>?workspaceId=…` returns
+   * `{ ok, definition }` — the shape `loadDetail` actually reads.
+   */
+  function installDataPipelineFetch(activities: unknown[]) {
+    vi.spyOn(global, 'fetch').mockImplementation((async (url: any) => {
+      const u = String(url);
+      if (u.includes('/api/loom/workspaces')) {
+        return json({ ok: true, workspaces: [{ id: WS, name: 'Test WS' }] });
+      }
+      if (u.includes('/api/cosmos-items/')) return json({ ok: true, workspaceId: WS });
+      if (u.includes(`/api/items/data-pipeline/${DP_ID}/triggers`)) return json({ ok: true, triggers: [] });
+      if (u.includes(`/api/items/data-pipeline/${DP_ID}/runs`)) return json({ ok: true, runs: [] });
+      if (u.includes(`/api/items/data-pipeline/${DP_ID}`)) {
+        return json({ ok: true, definition: { name: 'dp', properties: { activities, parameters: {} } } });
+      }
+      if (u.includes('/pipelines')) return json({ ok: true, pipelines: [{ id: DP_ID, name: 'dp' }] });
+      return json({ ok: true });
+    }) as any);
+  }
+
+  /** Every control that puts THIS pipeline on a compute, enumerated once. */
+  const COMPUTE_CONTROLS = [/^run$/i, /^debug$/i, /^schedule$/i, /add trigger/i];
+
+  async function mount(props: { templateId?: string; runtimePreset?: any }) {
+    render(<DataPipelineEditor item={makeItem('data-pipeline', 'Data pipeline')} id={DP_ID} {...props} />);
+    // The ribbon is present as soon as the editor's own body renders.
+    await waitFor(() => expect(screen.getByRole('button', { name: /^run$/i })).toBeInTheDocument(),
+      { timeout: 8000 });
+  }
+
+  it('TEMPLATED path — every compute control is refused on an empty canvas', async () => {
+    // A `templateId` that matches no template is the real shape here: it takes the
+    // non-delegating branch (`hostTemplate` is true) and the template seed bails at
+    // `if (!t) return;`, so the canvas stays empty. Before this change all four of these
+    // were live.
+    installDataPipelineFetch([]);
+    await mount({ templateId: 'no-such-template-4711' });
+
+    for (const name of COMPUTE_CONTROLS) {
+      await waitFor(() => expect(screen.getByRole('button', { name })).toBeDisabled(), { timeout: 8000 });
+    }
+  });
+
+  it('TEMPLATED path CONTROL — one activity on the canvas and all four are live again', async () => {
+    // Without this, "disabled" above also passes against buttons disabled unconditionally
+    // — which is exactly how a gate stops being a gate and becomes a broken editor.
+    installDataPipelineFetch(ONE_ACTIVITY);
+    await mount({ templateId: 'no-such-template-4711' });
+
+    for (const name of COMPUTE_CONTROLS) {
+      await waitFor(() => expect(screen.getByRole('button', { name })).not.toBeDisabled(), { timeout: 8000 });
+    }
+  });
+
+  it('FABRIC runtime path — every compute control is refused on an empty canvas', async () => {
+    // `runtime === 'fabric'` is the second non-delegating branch. no-fabric-dependency.md
+    // keeps it strictly opt-in, which is precisely why it is easy to leave ungated.
+    installDataPipelineFetch([]);
+    await mount({ runtimePreset: 'fabric' });
+
+    for (const name of COMPUTE_CONTROLS) {
+      await waitFor(() => expect(screen.getByRole('button', { name })).toBeDisabled(), { timeout: 8000 });
+    }
+  });
+
+  it('FABRIC runtime path CONTROL — one activity on the canvas and all four are live again', async () => {
+    installDataPipelineFetch(ONE_ACTIVITY);
+    await mount({ runtimePreset: 'fabric' });
+
+    for (const name of COMPUTE_CONTROLS) {
+      await waitFor(() => expect(screen.getByRole('button', { name })).not.toBeDisabled(), { timeout: 8000 });
+    }
   });
 });

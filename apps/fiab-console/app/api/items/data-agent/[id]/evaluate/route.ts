@@ -17,12 +17,12 @@
  */
 import { NextRequest, NextResponse } from 'next/server';
 import { randomUUID } from 'node:crypto';
-import { getSession } from '@/lib/auth/session';
 import { loadOwnedItem, updateOwnedItem } from '../../../_lib/item-crud';
-import { chatGrounded, NoAoaiDeploymentError, type DataAgentConfig } from '@/lib/azure/data-agent-client';
+import { chatGrounded, rehydrateSources, NoAoaiDeploymentError, type DataAgentConfig } from '@/lib/azure/data-agent-client';
 import { aoaiChatJson } from '@/lib/azure/aoai-chat-client';
 import type { WorkspaceItem } from '@/lib/types/workspace';
 import { apiServerError } from '@/lib/api/respond';
+import { withSession } from '@/lib/api/route-toolkit';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -43,23 +43,20 @@ interface EvalRun {
   total: number; passed: number; accuracy: number; results: EvalResult[];
 }
 
-/** Same projection the /chat route uses, kept local so the two stay independent. */
+/**
+ * Same shape the /chat route builds. The AGENT-LEVEL fields stay local so this route's
+ * config stays independent of that one; the PER-SOURCE projection does not, because
+ * keeping six independent copies of it is precisely what produced #4119 — every copy
+ * coerced `id`/`name` and passed `type` through raw, so a persisted non-string `type`
+ * reached `chatGrounded` and threw an uncaught TypeError (HTTP 500) on the shared path
+ * behind ~15 call sites. Independence between routes was never the property at risk;
+ * a single deserialisation boundary is.
+ */
 function stateToConfig(state: Record<string, unknown>): DataAgentConfig {
-  const sources = Array.isArray(state.sources) ? (state.sources as any[]) : [];
   return {
     instructions: String(state.instructions || state.systemPrompt || ''),
     description: state.description ? String(state.description) : undefined,
-    sources: sources.map((s) => ({
-      id: String(s.id || s.name || ''),
-      type: s.type,
-      name: String(s.name || ''),
-      tables: s.tables ? String(s.tables) : undefined,
-      description: s.description ? String(s.description) : undefined,
-      instructions: s.instructions ? String(s.instructions) : undefined,
-      examples: Array.isArray(s.examples) ? s.examples : undefined,
-      aiSearch: s.aiSearch && typeof s.aiSearch === 'object' ? s.aiSearch : undefined,
-      graph: s.graph && typeof s.graph === 'object' ? s.graph : undefined,
-    })),
+    sources: rehydrateSources(state.sources),
   };
 }
 
@@ -114,11 +111,9 @@ async function mapPool<I, O>(items: I[], limit: number, fn: (item: I, idx: numbe
   return out;
 }
 
-export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
-  const session = getSession();
-  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+export const POST = withSession<{ id: string }>(async (req: NextRequest, { session, params }) => {
 
-  const { id } = await ctx.params;
+  const { id } = params;
   let body: any;
   try { body = await req.json(); } catch { return NextResponse.json({ ok: false, error: 'invalid JSON body' }, { status: 400 }); }
 
@@ -199,4 +194,4 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
     }
     return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 502 });
   }
-}
+});

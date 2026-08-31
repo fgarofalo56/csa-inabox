@@ -253,10 +253,10 @@ export function classifyReindexResult({ code, body }) {
  *                     the same reason the POST's 000 is: the eval reaches the
  *                     console over the CAE-internal network, not Front Door.
  *
- * @param {{ outcome: string, body?: string, waitedSeconds?: number|string }} input
+ * @param {{ outcome: string, body?: string, waitedSeconds?: number|string, attempts?: number|string }} input
  * @returns {{ verdict: 'ok'|'tolerate'|'fail', level: 'notice'|'warning'|'error', message: string }}
  */
-export function classifyReindexPoll({ outcome, body, waitedSeconds }) {
+export function classifyReindexPoll({ outcome, body, waitedSeconds, attempts }) {
   const raw = typeof body === 'string' ? body : '';
   let parsed = null;
   try {
@@ -289,15 +289,41 @@ export function classifyReindexPoll({ outcome, body, waitedSeconds }) {
           (parsed?.job?.error ? ` error=${firstLine(String(parsed.job.error))}` : '') +
           '. The index was NOT refreshed — failing loud rather than measuring a stale index.',
       };
-    case 'timeout':
+    case 'timeout': {
+      // #3942 — SAY WHICH CEILING TRIPPED. The poll loop now carries a wall
+      // clock AND an attempt cap, and a message that names only the seconds
+      // would assert a wall-clock timeout on a run that was cut off after N
+      // polls (deploy-integrity R7).
+      const polls = Number.isFinite(Number(attempts)) && Number(attempts) > 0
+        ? ` after ${Number(attempts)} poll(s)`
+        : '';
+      // #3472 — TWO FAILURE MODES, ONE MESSAGE, AND A REVIEWER COULD NOT TELL
+      // THEM APART. `freshness=stale job=idle` is not "the rebuild was slow": no
+      // replica this poll reached was running one at all, which is a different
+      // fact with a different next step (re-fire the trigger / check the job
+      // dispatch) from "it is still building". Stated only from what was
+      // observed — `job.state` is the ANSWERING REPLICA's view, so `idle` can
+      // also mean the poll simply never landed on the worker, and this says so
+      // rather than asserting nothing ran anywhere.
+      const idle = job === 'idle' || job === 'unknown';
+      const which = idle
+        ? ' NOTHING WAS OBSERVED RUNNING: every replica this poll reached reported ' +
+          `job=${job}, so this is "the index is stale and no rebuild was seen", NOT "a rebuild ran ` +
+          'long". Note the replica caveat — `job.state` is only the answering replica\'s view, so ' +
+          'this does not establish that no job ran anywhere. It does establish that none was ' +
+          'visible for the whole wait.'
+        : ` A rebuild was reported IN FLIGHT for the whole wait (job=${job}) — this is a slow or ` +
+          'stuck rebuild, not an absent one.';
       return {
         verdict: 'fail',
         level: 'error',
         message:
-          `loom-docs reindex did NOT reach a fresh state within ${waited} — ${detail}. ` +
-          'A timeout is a REFUSAL, not a pass: proceeding would measure a STALE index, which is the ' +
+          `loom-docs reindex did NOT reach a fresh state within ${waited}${polls} — ${detail}.` +
+          which +
+          ' A timeout is a REFUSAL, not a pass: proceeding would measure a STALE index, which is the ' +
           'exact failure this step exists to prevent. Failing loud.',
       };
+    }
     case 'unreachable':
       return {
         verdict: 'tolerate',
@@ -340,6 +366,7 @@ function main() {
           outcome: process.env.POLL_OUTCOME ?? '',
           body: process.env.POLL_BODY ?? '',
           waitedSeconds: process.env.POLL_WAITED_S ?? '',
+          attempts: process.env.POLL_ATTEMPTS ?? '',
         })
       : classifyReindexResult({
           code: process.env.HTTP_CODE ?? process.argv[2] ?? '',

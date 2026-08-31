@@ -198,6 +198,14 @@ jobs:
       - name: known-client-routes (every client /api call names a real BFF route — R17)
         if: ${{ !cancelled() }}
         run: node scripts/ci/check-known-client-routes.mjs
+      # The inverse of the two above: those prove a client call names a real
+      # route; this proves a real PAGE has a route in. /admin/brain shipped
+      # finished — canvas, synapse view, coverage, its whole API tree — with ZERO
+      # inbound links, so it was reachable only by typing the URL and read as
+      # unbuilt from the console (#4222, operator-reported).
+      - name: admin-page-reachability (a page nothing links to reads as unbuilt — #4222)
+        if: ${{ !cancelled() }}
+        run: node scripts/ci/check-admin-page-reachability.mjs
       - name: learn-doc-registry (Learning Hub slug sets vs authored guides/captures — loom-apex D1)
         if: ${{ !cancelled() }}
         run: node scripts/ci/check-learn-doc-registry.mjs
@@ -292,6 +300,17 @@ jobs:
       - name: deploy-paths-coverage (the staleness watchdog measures what it claims — #2775)
         if: ${{ !cancelled() }}
         run: node scripts/ci/check-deploy-paths-coverage.mjs
+      # An Entra app registration is a Graph object ARM cannot create, so it is
+      # minted once by the post-deploy bootstrap and only RE-READ by later
+      # deploys. A lane that APPLIES the console template without resolving it
+      # first renders an EMPTY client id — and a declarative ACA template drops
+      # every env var it does not declare, taking sign-in dark and sealing the
+      # Iceberg catalog behind the `.invalid` sentinel audience nothing can mint.
+      # Three console lanes resolved first; gcc neither resolved nor even read the
+      # variable in its params file (#4224).
+      - name: 'msal-resolver-before-deploy (an empty client id takes sign-in dark — #4224)'
+        if: ${{ !cancelled() }}
+        run: node scripts/ci/check-msal-resolver-before-deploy.mjs
       # Reachability says the script is INVOKED. This says the command it invokes
       # can SUCCEED: secrets declared before they are referenced, the mutating
       # create/update not swallowing its own stderr, the container named. All three
@@ -943,6 +962,39 @@ jobs:
         run: |
           node scripts/ci/check-workflow-lane-states.mjs --self-test
           node scripts/ci/check-workflow-lane-states.mjs
+      # The same class one level over: a control that is in the SOURCE and not in
+      # the REPOSITORY. deploy-fiab-il5.yml declared `environment: il5-deploy
+      # # requires manual approval` while no such environment existed — and
+      # GitHub AUTO-CREATES an environment on first use with NO protection rules,
+      # so the first real IL5 run would have created it unprotected and walked
+      # through an approval gate that was only a YAML comment, on a lane that
+      # deploys into a DoD Impact Level 5 subscription (#4114). It stayed latent
+      # solely because that lane has never run once.
+      #
+      # Keyed to the SHAPE — every job-level `environment:` resolves against the
+      # LIVE list — not to a roster of known names, which is the enumeration trap
+      # #4108 records. It reads workflow STRUCTURE rather than grepping, because
+      # `azure/login`'s step input is also spelled `environment:` (~50 of them
+      # here) and a line-oriented matcher would report every one as a phantom.
+      #
+      # Self-test first (it carries the mutant fixtures: absent environment, empty
+      # environment list, zero workflows parsed, a population under the floor, a
+      # step input that must NOT count, and a templated value that must be
+      # disclosed rather than dropped). The plain run ALSO executes an embedded
+      # known-true control before judging the real population, so on a repo where
+      # every name happens to resolve the detector is still exercised.
+      #
+      # It judges EXISTENCE and prints PROTECTION without judging it: deciding
+      # which lanes must carry required reviewers is an operator judgement over a
+      # list of lanes, i.e. the enumeration this guard refuses to become. A
+      # `0 protection rule(s)` row is therefore visible on every run.
+      - name: 'workflow-environments-exist (an `environment:` a lane names must EXIST, or the approval gate is imaginary — #4114)'
+        if: ${{ !cancelled() }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          node scripts/ci/check-workflow-environments-exist.mjs --self-test
+          node scripts/ci/check-workflow-environments-exist.mjs
       # #3423 was `trivy.yml` cancelling its own main-branch scans; #3424 fixed
       # that ONE lane and shipped no ratchet. Within hours the identical defect
       # was measured on the lanes that publish 12 of the 14 REQUIRED contexts —
@@ -1122,6 +1174,18 @@ jobs:
       - name: 'cosign-sign-retry self-test (the signing retry MUST be able to fail)'
         if: ${{ !cancelled() }}
         run: bash scripts/ci/test-cosign-sign-retry.sh
+      # The UNCOVERED NEIGHBOUR of the two above (#4156). The sign retry is keyed
+      # to `cosign sign`, correctly and deliberately — so nothing watched the step
+      # that puts cosign on the runner in the first place. That step was a bare
+      # action at SEVEN sites across SIX workflows, three of them sovereign, and on
+      # 2026-08-28 a TCP reset during its download reverted a HEALTHY image on a P0
+      # roll (run 33138606218) without the roll ever reaching a gate.
+      - name: 'cosign-install-retry-adoption (a single-attempt binary download on a P0 path)'
+        if: ${{ !cancelled() }}
+        run: node scripts/ci/check-cosign-install-retry-adoption.mjs
+      - name: 'cosign-install-retry self-test (the install retry MUST be able to fail)'
+        if: ${{ !cancelled() }}
+        run: bash scripts/ci/test-cosign-install-retry.sh
       # `az acr build` is the ONLY way into these registries (publicNetworkAccess=
       # Disabled), and ACR Tasks' dependency scanner cannot parse a platform flag
       # on FROM — it fails BEFORE the first layer. deploy-loom-sharing.yml read
@@ -1277,6 +1341,17 @@ jobs:
       - name: 'acr-login-retry self-test (the 180s token budget is measured, not grepped)'
         if: ${{ !cancelled() }}
         run: bash scripts/ci/test-acr-login-retry.sh
+      # ONE LAYER EARLIER than the retry above. #4067 hardened the ACR data-plane
+      # probe so a single anonymous 401 is no longer an observation — and in
+      # Azure Government that changed the LOG and nothing else, because all 12
+      # Gov call sites discarded the verdict with `|| echo`. Commercial branched
+      # on it; the sovereign boundaries got a warning line (cloud-parity.md).
+      - name: 'acr-dataplane-verdict-consumed (a discarded probe verdict is not a probe — #4079)'
+        if: ${{ !cancelled() }}
+        run: node scripts/ci/check-acr-dataplane-verdict-consumed.mjs
+      - name: 'acr-dataplane-gate self-test (it must DISTINGUISH 1 from 2, and claim neither is a refusal)'
+        if: ${{ !cancelled() }}
+        run: bash scripts/ci/test-acr-dataplane-gate.sh
       # `set +e; CMD; RC=$?; set -e` is correct ONLY when -e was on to begin with.
       # These scripts start `set -uo pipefail` deliberately, because they implement
       # multi-valued exit contracts (0 ok / 3 absent / 4 unknown) that -e destroys.

@@ -44,41 +44,95 @@ async function token(): Promise<string> {
 /**
  * Persist the Azure-native backend refs onto the Cosmos item's state so the
  * editor's GET reports runtimeStatus:'live' (Event Hub / ASA job) instead of
- * 'draft'. Best-effort — a persistence failure is logged into steps[] and never
- * throws, so it cannot sink the install (mirrors the activator provisioner's
- * state.rules write-back). Without this, a bundle-installed eventstream lands
- * with an empty topology-state and the editor opens on a "draft, Provision to
- * Azure" banner even though the Event Hub is live.
+ * 'draft'.
+ *
+ * #3695 — THIS WRITE USED TO BE BEST-EFFORT, AND ITS JUSTIFYING COMMENT WAS
+ * FALSE. The swallowing catch claimed the editor would re-provision the item
+ * the next time it was opened. It does not:
+ * `app/api/items/eventstream/[id]/route.ts` computes
+ * `azureLive = !!item.state.ehId` and, with no `ehId` recorded, reports
+ * `runtimeStatus:'draft'` with "design the topology and Provision to Azure" —
+ * a button the user has to find and press, against an Event Hub that is
+ * ALREADY live. Nothing re-provisions on open. Per deploy-integrity.md R7 a
+ * message must not assert something the code did not establish; that false
+ * comment is what licensed the swallow, so it is deleted rather than softened,
+ * and `__tests__/eventstream.test.ts` asserts the sentence stays gone.
+ *
+ * The write now retries with bounded backoff and FAILS CLOSED — it reports its
+ * outcome to the caller instead of appending to steps[] and returning as if
+ * nothing happened, matching the shape landed for the activator in #3693
+ * (`persistRulesToItem`). Open-time self-heal is explicitly OUT OF SCOPE here
+ * (auto-bind-by-default.md §3): re-provisioning on GET would make a read
+ * request create Azure resources, which is a bigger change than this defect
+ * warrants and belongs with the editor route, not the installer.
  */
+const PERSIST_ATTEMPTS = 3;
+const PERSIST_BACKOFF_MS = [150, 400];
+
+type PersistOutcome =
+  | { ok: true; attempts: number }
+  | {
+      ok: false;
+      attempts: number;
+      reason: 'item-not-found' | 'write-failed';
+      /** The message, for the step log / receipt text. */
+      error: string;
+      /** The ORIGINAL thrown error, so `resolveInfraResidual` can classify a
+       *  Cosmos 403/429 from its STATUS rather than from prose that carries no
+       *  infra keyword. Undefined for 'item-not-found', which is not a throw. */
+      cause?: unknown;
+    };
+
 async function persistBackendRefs(
   input: any,
   refs: { ehId: string; transportHub: string; asaJobId: string | null; asaJobName: string | null; provisionedAt: string },
   steps: string[],
-): Promise<void> {
-  try {
-    const items = await itemsContainer();
-    const { resource: cur } = await items.item(input.cosmosItemId, input.workspaceId).read<WorkspaceItem>();
-    if (!cur) {
-      steps.push('Stood up the Event Hub but the eventstream item was not found to persist backend refs (editor will re-provision on open).');
-      return;
+): Promise<PersistOutcome> {
+  let reason: 'item-not-found' | 'write-failed' = 'write-failed';
+  let error = '';
+  let cause: unknown;
+  for (let attempt = 1; attempt <= PERSIST_ATTEMPTS; attempt++) {
+    try {
+      const items = await itemsContainer();
+      // Re-read on EVERY attempt so a retry merges against the CURRENT document
+      // (and so an item still replicating is picked up by a later attempt).
+      const { resource: cur } = await items.item(input.cosmosItemId, input.workspaceId).read<WorkspaceItem>();
+      if (!cur) {
+        reason = 'item-not-found';
+        cause = undefined;
+        error = `item '${input.cosmosItemId}' not found in workspace '${input.workspaceId}' (the Cosmos read returned no document)`;
+      } else {
+        const next: WorkspaceItem = {
+          ...cur,
+          state: {
+            ...(cur.state || {}),
+            ehId: refs.ehId,
+            transportHub: refs.transportHub,
+            asaJobId: refs.asaJobId,
+            asaJobName: refs.asaJobName,
+            provisionedAt: refs.provisionedAt,
+          },
+          updatedAt: new Date().toISOString(),
+        };
+        await items.item(cur.id, cur.workspaceId).replace(next);
+        steps.push(
+          'Persisted Event Hub / Stream Analytics refs to the item so the editor opens live (not draft)' +
+            (attempt > 1 ? ` on attempt ${attempt}/${PERSIST_ATTEMPTS}` : '') +
+            '.',
+        );
+        return { ok: true, attempts: attempt };
+      }
+    } catch (e: any) {
+      reason = 'write-failed';
+      cause = e;
+      error = e?.message || String(e);
     }
-    const next: WorkspaceItem = {
-      ...cur,
-      state: {
-        ...(cur.state || {}),
-        ehId: refs.ehId,
-        transportHub: refs.transportHub,
-        asaJobId: refs.asaJobId,
-        asaJobName: refs.asaJobName,
-        provisionedAt: refs.provisionedAt,
-      },
-      updatedAt: new Date().toISOString(),
-    };
-    await items.item(cur.id, cur.workspaceId).replace(next);
-    steps.push('Persisted Event Hub / Stream Analytics refs to the item so the editor opens live (not draft).');
-  } catch (e: any) {
-    steps.push(`Stood up the Event Hub but failed to persist backend refs (editor will re-provision on open): ${e?.message || String(e)}`);
+    if (attempt < PERSIST_ATTEMPTS) {
+      steps.push(`Backend-ref write attempt ${attempt}/${PERSIST_ATTEMPTS} did not complete (${error}); retrying.`);
+      await new Promise((r) => setTimeout(r, PERSIST_BACKOFF_MS[attempt - 1] ?? 400));
+    }
   }
+  return { ok: false, attempts: PERSIST_ATTEMPTS, reason, error, cause };
 }
 
 // ── Azure-native DEFAULT: Azure Event Hubs (+ Stream Analytics for transforms) ─
@@ -91,10 +145,50 @@ async function provisionEventHubs(input: any, steps: string[]): Promise<Provisio
     const result = await standUpEventstreamAzure(input.displayName, input.cosmosItemId, topology, steps);
 
     // Write the backend refs back onto the item so the editor opens 'live'.
-    await persistBackendRefs(input, result, steps);
+    const persisted = await persistBackendRefs(input, result, steps);
 
     if (result.partial && result.hint) steps.push(result.hint);
     if (result.kustoHint) steps.push(result.kustoHint);
+
+    // #3695 — the status now reflects whether the RECORD landed, not only
+    // whether Azure accepted the stand-up. `created` over a lost write is
+    // deploy-integrity.md R6's "report success on an unverified outcome": the
+    // Event Hub is real, and the editor shows a draft with a Provision button.
+    if (!persisted.ok) {
+      steps.push(
+        `Stood up the Event Hub (${result.transportHub}) but the backend refs could not be written to the eventstream item after ${persisted.attempts} attempt(s).`,
+      );
+      // Only what was ESTABLISHED (R7): the hub exists, and the write did not
+      // confirm. No cause is asserted — the underlying error is carried
+      // verbatim by resolveInfraResidual, and the ORIGINAL error object is
+      // handed over so a Cosmos 403/429 is classified from its status.
+      return resolveInfraResidual(
+        persisted.cause ?? persisted.error,
+        'Retry this install step. The retry is idempotent: the Event Hub, consumer groups and Stream Analytics job are upserted by name, so it will not create duplicates. ' +
+          'Until the refs are recorded the editor opens this eventstream as a DRAFT with a Provision button even though the Event Hub is live — there is no re-provision on open. ' +
+          'If the retry keeps failing, check the underlying error below and verify the Console UAMI holds the Cosmos DB Built-in Data Contributor role on the Loom Cosmos account.',
+        {
+          reason:
+            `Stood up the Azure-native Event Hubs backend (${result.transportHub}) but could not record it on the eventstream item: ` +
+            (persisted.reason === 'item-not-found'
+              ? `reading item '${input.cosmosItemId}' in workspace '${input.workspaceId}' returned no document.`
+              : 'the Cosmos write did not complete.'),
+          link: 'https://learn.microsoft.com/azure/cosmos-db/nosql/security/how-to-grant-data-plane-role-based-access',
+          errorPrefix: 'Stood up the Event Hub but failed to persist the backend refs: ',
+          resourceId: result.transportHub,
+          secondaryIds: {
+            backend: 'eventhubs',
+            eventHub: result.transportHub,
+            ehId: result.ehId,
+            ...(result.asaJobName ? { asaJobName: result.asaJobName } : {}),
+            ...(result.asaJobId ? { asaJobId: result.asaJobId } : {}),
+            provisionedAt: result.provisionedAt,
+            refsPersisted: 'false',
+          },
+          steps,
+        },
+      );
+    }
 
     return {
       status: 'created',
@@ -106,6 +200,7 @@ async function provisionEventHubs(input: any, steps: string[]): Promise<Provisio
         ...(result.asaJobName ? { asaJobName: result.asaJobName } : {}),
         ...(result.asaJobId ? { asaJobId: result.asaJobId } : {}),
         provisionedAt: result.provisionedAt,
+        refsPersisted: 'true',
       },
       steps,
     };

@@ -101,6 +101,33 @@ export default function MigratePage() {
   const [token, setToken] = useState('');
   const [state, setState] = useState<AssessState>({ loading: false });
 
+  // ── Databricks workspace DISCOVERY (#3586) ───────────────────────────────
+  //
+  // The Workspace-URL field used to be free text for both source types. For
+  // SNOWFLAKE that is correct and stays: Loom holds no credential for a
+  // Snowflake account until the operator supplies one, so there is nothing to
+  // enumerate. For DATABRICKS it is not: `lib/azure/databricks-discovery.ts`
+  // walks every target subscription for Microsoft.Databricks/workspaces and
+  // returns `properties.workspaceUrl` for each, and two BFF routes already
+  // consume it. auto-bind-by-default.md says the platform supplies what it can
+  // enumerate, which is exactly why setup-identity-step.tsx was DECLINED in
+  // #3579 for asking the user to type a GUID it could have discovered.
+  //
+  // BUT A MIGRATION SOURCE MAY LEGITIMATELY BE UNREACHABLE — another tenant,
+  // another cloud, an estate this deployment's identity has no Reader on. So
+  // this is the hybrid the repo already ships twice (api-marketplace's APIM
+  // dropdown + paste-your-own, workspace-egress-pane's service tags): a picker
+  // over real discovery PLUS an explicit "Other / not in this estate" that
+  // reveals the free-text box. Discovery returning nothing or erroring falls
+  // back to free text rather than dead-ending (ux-baseline.md G2).
+  const [dbxWorkspaces, setDbxWorkspaces] = useState<
+    { name: string; workspaceUrl: string; location?: string }[] | null
+  >(null);
+  const [dbxDiscoveryError, setDbxDiscoveryError] = useState<string | null>(null);
+  const [dbxDiscovering, setDbxDiscovering] = useState(false);
+  /** true = the user chose "Other / not in this estate", so `host` is free text. */
+  const [dbxManual, setDbxManual] = useState(false);
+
   async function runAssess() {
     setState({ loading: true });
     try {
@@ -128,6 +155,45 @@ export default function MigratePage() {
   const showHost = sourceType === 'snowflake' || sourceType === 'databricks-uc';
   const showWorkspace = sourceType === 'fabric' || sourceType === 'powerbi';
   const showCatalog = sourceType === 'databricks-uc' || sourceType === 'snowflake';
+
+  // Discover once, lazily, the first time Databricks is selected. The route is
+  // the one two other surfaces already use; `discoverableWorkspaces` is a REAL
+  // listDatabricksWorkspaces() result (no mock array), and `discoveryError` is
+  // the soft-fail reason when the identity cannot read ARM.
+  useEffect(() => {
+    if (sourceType !== 'databricks-uc' || dbxWorkspaces !== null || dbxDiscovering) return;
+    let cancelled = false;
+    setDbxDiscovering(true);
+    (async () => {
+      try {
+        const res = await clientFetch('/api/catalog/metastores');
+        const json = await res.json().catch(() => null);
+        if (cancelled) return;
+        const rows = Array.isArray(json?.discoverableWorkspaces) ? json.discoverableWorkspaces : [];
+        setDbxWorkspaces(rows);
+        // R7 — report what was established. "No workspaces" and "could not
+        // look" are different facts and only one of them is the estate's.
+        setDbxDiscoveryError(
+          json?.discoveryError
+            ? String(json.discoveryError)
+            : (!res.ok ? `Workspace discovery returned HTTP ${res.status}.` : null),
+        );
+        if (rows.length === 0) setDbxManual(true);
+      } catch (e) {
+        if (cancelled) return;
+        setDbxWorkspaces([]);
+        setDbxDiscoveryError((e as Error)?.message || 'Workspace discovery could not be reached.');
+        setDbxManual(true);
+      } finally {
+        if (!cancelled) setDbxDiscovering(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [sourceType, dbxWorkspaces, dbxDiscovering]);
+
+  /** The Databricks branch shows a picker only when discovery actually found some. */
+  const dbxPickable = sourceType === 'databricks-uc' && !dbxManual && (dbxWorkspaces?.length ?? 0) > 0;
+  const OTHER_WORKSPACE = '__other__';
 
   return (
     <AdminShell
@@ -165,12 +231,49 @@ export default function MigratePage() {
                   </Dropdown>
                 </Field>
                 <div className={styles.formGrid}>
-                  {showHost && (
-                    <Field label={sourceType === 'snowflake' ? 'Account URL' : 'Workspace URL'}>
+                  {showHost && (dbxPickable ? (
+                    /* #3586 — real discovery, plus an escape hatch. The Snowflake
+                       branch below is unchanged: nothing enumerates it. */
+                    <Field
+                      label="Workspace URL"
+                      hint={`${dbxWorkspaces!.length} Databricks workspace(s) discovered in this estate.`}
+                    >
+                      <Dropdown
+                        value={host || 'Select a workspace'}
+                        selectedOptions={host ? [host] : []}
+                        aria-label="Databricks workspace"
+                        onOptionSelect={(_, d) => {
+                          if (d.optionValue === OTHER_WORKSPACE) { setDbxManual(true); setHost(''); return; }
+                          setHost(d.optionValue || '');
+                        }}
+                      >
+                        {dbxWorkspaces!.map((w) => (
+                          <Option key={w.workspaceUrl} value={`https://${w.workspaceUrl}`}>
+                            {`${w.name} — ${w.workspaceUrl}${w.location ? ` (${w.location})` : ''}`}
+                          </Option>
+                        ))}
+                        <Option value={OTHER_WORKSPACE}>Other / not in this estate…</Option>
+                      </Dropdown>
+                    </Field>
+                  ) : (
+                    <Field
+                      label={sourceType === 'snowflake' ? 'Account URL' : 'Workspace URL'}
+                      hint={
+                        sourceType === 'databricks-uc'
+                          ? (dbxDiscovering
+                            ? 'Looking for Databricks workspaces in this estate…'
+                            : dbxDiscoveryError
+                              ? `Discovery could not run: ${dbxDiscoveryError} Enter the workspace URL directly.`
+                              : dbxWorkspaces && dbxWorkspaces.length === 0
+                                ? 'No Databricks workspaces are readable from this deployment — a source in another tenant or cloud is entered here.'
+                                : undefined)
+                          : undefined
+                      }
+                    >
                       <Input value={host} onChange={(_, d) => setHost(d.value)}
                         placeholder={sourceType === 'snowflake' ? 'https://<account>.snowflakecomputing.com' : 'https://adb-<id>.azuredatabricks.net'} />
                     </Field>
-                  )}
+                  ))}
                   {showWorkspace && (
                     <Field label="Workspace / group id">
                       <Input value={workspaceId} onChange={(_, d) => setWorkspaceId(d.value)} placeholder="00000000-0000-0000-0000-000000000000" />
