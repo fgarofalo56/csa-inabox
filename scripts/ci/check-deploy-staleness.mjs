@@ -83,6 +83,13 @@ export const WATCHED = [
       // window after the firewall opens, so this lane retries `az acr login`
       // through a shared helper. Editing it changes whether the lane can
       // authenticate at all.
+      // #4079 - the ACR data-plane gate. Same argument as acr-login-retry.sh
+      // above: it decides whether this lane proceeds into a data-plane call,
+      // so a commit here can change what the lane does. check-deploy-paths-
+      // coverage flagged its absence the moment the bare `|| echo` call sites
+      // adopted it - and neither entry declared acr-dataplane-ready.sh before
+      // that either, so this closes a pre-existing gap as well as the new one.
+      'scripts/ci/acr-dataplane-gate.sh',
       'scripts/ci/acr-login-retry.sh',
     ],
     maxDays: 14,
@@ -297,6 +304,13 @@ export const WATCHED = [
       'apps/loom-sharing/**',
       'platform/fiab/bicep/modules/compute/loom-sharing-app.bicep',
       // refs #3230 — same ACR token-exchange retry as the sibling lanes.
+      // #4079 - the ACR data-plane gate. Same argument as acr-login-retry.sh
+      // above: it decides whether this lane proceeds into a data-plane call,
+      // so a commit here can change what the lane does. check-deploy-paths-
+      // coverage flagged its absence the moment the bare `|| echo` call sites
+      // adopted it - and neither entry declared acr-dataplane-ready.sh before
+      // that either, so this closes a pre-existing gap as well as the new one.
+      'scripts/ci/acr-dataplane-gate.sh',
       'scripts/ci/acr-login-retry.sh',
     ],
     maxDays: 14,
