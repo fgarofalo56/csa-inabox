@@ -63,7 +63,19 @@ export type PerformOutcome =
       readonly confirmToken: string;
       readonly expiresAt: string;
     }
-  | { readonly kind: 'performed'; readonly receipt: PerformReceipt }
+  | {
+      readonly kind: 'performed';
+      readonly receipt: PerformReceipt;
+      /**
+       * Whether the state store accepted the performed record. A store outage
+       * AFTER a confirmed ARM write must never un-claim the mutation (R7 in
+       * the inverted direction) — the receipt is returned regardless, with
+       * this disclosure attached, mirroring the proposals route's
+       * `persisted: false` pattern.
+       */
+      readonly persisted: boolean;
+      readonly persistError?: string;
+    }
   | {
       readonly kind: 'failed';
       readonly executor: PerformExecutorKind;
@@ -76,6 +88,9 @@ export type PerformOutcome =
        * same honesty.
        */
       readonly mutationConfirmed: false;
+      /** Whether the failure record reached the state store (fail-soft). */
+      readonly persisted: boolean;
+      readonly persistError?: string;
     };
 
 export interface PerformDeps {
@@ -170,17 +185,56 @@ export async function performRecommendation(
   if (badConfirm) return { kind: 'refused', refusal: badConfirm };
 
   // ── execute, with the real before/after ─────────────────────────────────
+  //
+  // THE TRY SCOPES THE EXECUTOR CALL ONLY (review of #4246, blocker). When the
+  // executor and the state-store write shared one try, a Cosmos failure AFTER
+  // a successful ARM write ran the catch and answered `failed` for a mutation
+  // the code held a confirmed receipt for — R7 in the inverted direction —
+  // and a second store failure inside the catch escaped this function
+  // entirely, so a completed destructive mutation produced ZERO audit rows.
+  // Now: once a receipt is held the outcome IS `performed`; store writes are
+  // fail-soft with a `persisted:false` disclosure (the proposals route's
+  // pattern), and no store outage can prevent this function returning an
+  // outcome for the route to audit.
   const ids = { findingId: req.findingId, detector: req.detector };
+  let receipt: PerformReceipt;
   try {
-    const receipt =
+    receipt =
       executor === 'scale-to-zero'
         ? await executeScaleToZero(subject, fresh, ids)
         : await executeDeleteResource(subject, fresh, ids);
-    await store.recordPerformed(req.findingId, receipt, actor);
-    return { kind: 'performed', receipt };
   } catch (e) {
     const error = e instanceof Error ? e.message : String(e);
-    await store.recordFailed(req.findingId, error, actor);
-    return { kind: 'failed', executor, error, mutationConfirmed: false };
+    let persisted = true;
+    let persistError: string | undefined;
+    try {
+      await store.recordFailed(req.findingId, error, actor);
+    } catch (se) {
+      persisted = false;
+      persistError = se instanceof Error ? se.message : String(se);
+    }
+    return {
+      kind: 'failed',
+      executor,
+      error,
+      mutationConfirmed: false,
+      persisted,
+      ...(persistError !== undefined ? { persistError } : {}),
+    };
   }
+
+  let persisted = true;
+  let persistError: string | undefined;
+  try {
+    await store.recordPerformed(req.findingId, receipt, actor);
+  } catch (e) {
+    persisted = false;
+    persistError = e instanceof Error ? e.message : String(e);
+  }
+  return {
+    kind: 'performed',
+    receipt,
+    persisted,
+    ...(persistError !== undefined ? { persistError } : {}),
+  };
 }

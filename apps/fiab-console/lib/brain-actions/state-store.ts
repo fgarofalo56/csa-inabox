@@ -187,6 +187,14 @@ export class RecommendationStateStore {
    * successful consume clears the staging envelope, so replaying the same
    * token refuses. Returns `null` on success, a `GuardRefusal` otherwise —
    * every refusal states what was established, never what was guessed (R7).
+   *
+   * ── CONCURRENCY (review of #4246, should-fix) ─────────────────────────────
+   * The consume write is an ETAG-GUARDED replace, not an upsert. A bare
+   * read → validate → upsert is single-use only SERIALLY: two concurrent
+   * confirms both read the live staging, both validate, both write — and both
+   * execute. `IfMatch` on the document's `_etag` makes Cosmos arbitrate:
+   * exactly one replace wins; the loser gets 412 and is refused here without
+   * ever reaching an executor.
    */
   async consumeStagedToken(
     findingId: string,
@@ -195,8 +203,22 @@ export class RecommendationStateStore {
     confirmToken: string,
     actor: StateActor,
   ): Promise<GuardRefusal | null> {
-    const records = await this.read(findingId);
-    const record = records[0];
+    const container = await this.getContainer();
+    // Raw read (not `this.read()`): the `_etag` the guard needs is a Cosmos
+    // system field the record projection strips.
+    const { resources } = await container.items
+      .query<StateDoc & { _etag?: string }>({
+        query:
+          'SELECT * FROM c WHERE c.estateId = @estateId AND c.docType = @docType ' +
+          'AND c.findingId = @findingId',
+        parameters: [
+          { name: '@estateId', value: estateScope() },
+          { name: '@docType', value: 'recommendation-state' },
+          { name: '@findingId', value: findingId },
+        ],
+      })
+      .fetchAll();
+    const record = resources[0];
     if (!record || record.state !== 'staged' || !record.staging) {
       return {
         guard: 'staged-confirm',
@@ -236,13 +258,46 @@ export class RecommendationStateStore {
     }
     // Consume: clear the staging so the token can never be honoured twice. The
     // state advances to performed/failed by the caller; between consume and
-    // that write the document honestly says a confirm was consumed.
-    await this.write(findingId, {
+    // that write the document honestly says a confirm was consumed. The
+    // replace is conditioned on the `_etag` read above — see the doc-block.
+    const {
+      _etag: etag,
+      _rid: _r,
+      _self: _s,
+      _attachments: _a,
+      _ts: _t,
+      staging: _staging,
+      ...rest
+    } = record as StateDoc & Record<string, unknown>;
+    void _r;
+    void _s;
+    void _a;
+    void _t;
+    void _staging;
+    const consumed: StateDoc = {
+      ...(rest as StateDoc),
       state: 'staged',
+      updatedAt: new Date().toISOString(),
       actorOid: actor.oid,
       actorUpn: actor.upn,
       note: 'confirm token consumed; execution in progress',
-    });
+    };
+    try {
+      await container.item(record.id, record.estateId).replace(consumed, {
+        accessCondition: { type: 'IfMatch', condition: String(etag ?? '') },
+      });
+    } catch (e) {
+      if ((e as { code?: number }).code === 412) {
+        return {
+          guard: 'staged-confirm',
+          reason:
+            `REFUSED: another confirm consumed the staging for '${findingId}' ` +
+            'concurrently — exactly one confirm wins, by an etag-guarded write. ' +
+            'This request executed nothing. Nothing was changed in Azure by this call.',
+        };
+      }
+      throw e;
+    }
     return null;
   }
 

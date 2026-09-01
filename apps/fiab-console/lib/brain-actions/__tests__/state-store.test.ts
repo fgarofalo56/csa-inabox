@@ -21,12 +21,31 @@ import { FINDING_ID, NODE_ID } from './fixtures';
 const ACTOR = { oid: 'oid-1', upn: 'admin@example.test' };
 const DETECTOR = 'unreachable-always-on';
 
-/** In-memory stand-in for the Cosmos container surface the store uses. */
+/** In-memory stand-in for the Cosmos container surface the store uses —
+ * including `_etag` versioning and IfMatch-conditioned `item().replace`, so
+ * the optimistic-concurrency consume path is exercised for real. */
 class FakeContainer {
   docs = new Map<string, Record<string, unknown>>();
+  private etagCounter = 0;
+  /** Test hook: runs between a replace's IfMatch check being SET UP by the
+   * caller (its earlier read) and the write — bump the etag here to simulate
+   * a concurrent writer landing in the read→replace window. */
+  onBeforeReplace: (() => void) | null = null;
+
+  private stamp(doc: Record<string, unknown>): Record<string, unknown> {
+    this.etagCounter += 1;
+    return { ...(JSON.parse(JSON.stringify(doc)) as Record<string, unknown>), _etag: `etag-${this.etagCounter}` };
+  }
+
+  /** Simulate an out-of-band concurrent write: same body, NEW etag. */
+  bumpEtag(id: string): void {
+    const doc = this.docs.get(id);
+    if (doc) this.docs.set(id, this.stamp(doc));
+  }
+
   items = {
     upsert: async (doc: Record<string, unknown>) => {
-      this.docs.set(String(doc.id), JSON.parse(JSON.stringify(doc)) as Record<string, unknown>);
+      this.docs.set(String(doc.id), this.stamp(doc));
       return { resource: doc };
     },
     query: (spec: { query: string; parameters: { name: string; value: unknown }[] }) => ({
@@ -42,6 +61,24 @@ class FakeContainer {
       },
     }),
   };
+
+  item = (id: string, _pk: string) => ({
+    replace: async (
+      body: Record<string, unknown>,
+      opts?: { accessCondition?: { type: string; condition: string } },
+    ) => {
+      this.onBeforeReplace?.();
+      const current = this.docs.get(id);
+      const cond = opts?.accessCondition;
+      if (cond?.type === 'IfMatch' && current && current._etag !== cond.condition) {
+        const err = new Error('precondition failed') as Error & { code: number };
+        err.code = 412;
+        throw err;
+      }
+      this.docs.set(id, this.stamp(body));
+      return { resource: body };
+    },
+  });
 }
 
 let fake: FakeContainer;
@@ -140,6 +177,24 @@ describe('the staged two-step confirm', () => {
       ACTOR,
     );
     expect(wrongSubject).not.toBeNull();
+  });
+
+  it('CONCURRENT consumes: the etag arbitrates and exactly one wins (#4246 should-fix)', async () => {
+    const { confirmToken } = await store.stage(FINDING_ID, DETECTOR, NODE_ID, ACTOR);
+
+    // Simulate the race: a concurrent writer lands INSIDE this consume's
+    // read→replace window (the fake bumps the etag just before the replace).
+    // Without the IfMatch condition both consumes would write and both would
+    // execute — "single-use" only serially, which is what the review measured.
+    fake.onBeforeReplace = () => {
+      fake.bumpEtag(stateDocumentId(FINDING_ID));
+      fake.onBeforeReplace = null; // one interleave, then the world is quiet
+    };
+    const lost = await store.consumeStagedToken(FINDING_ID, DETECTOR, NODE_ID, confirmToken, ACTOR);
+    expect(lost).not.toBeNull();
+    expect(lost!.guard).toBe('staged-confirm');
+    expect(lost!.reason).toContain('concurrently');
+    expect(lost!.reason).toContain('executed nothing');
   });
 
   it('a decision (approved/dismissed) is NOT a staging — confirm refuses over it', async () => {

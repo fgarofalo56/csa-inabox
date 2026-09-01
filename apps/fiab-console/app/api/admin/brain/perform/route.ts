@@ -84,6 +84,9 @@ function parseBody(raw: unknown): PerformRequest | string {
     typeof b.confirmToken === 'string' && b.confirmToken.trim() !== ''
       ? b.confirmToken.trim()
       : undefined;
+  if (confirmToken !== undefined && confirmToken.length > MAX_ID) {
+    return 'confirmToken is too long';
+  }
 
   return { findingId, detector, subjectNodeId, ...(confirmToken ? { confirmToken } : {}) };
 }
@@ -98,10 +101,14 @@ function mutatedAzureFor(outcome: PerformOutcome): boolean | string {
 }
 
 export const POST = withTenantAdmin(async (req: NextRequest, { session }) => {
+  // Held outside the try so the infra-gate catch below can still name the
+  // finding it was refusing when it audits.
+  let parsedReq: PerformRequest | null = null;
   try {
     const raw = await req.json().catch(() => null);
     const parsed = parseBody(raw);
     if (typeof parsed === 'string') return apiBadRequest(parsed);
+    parsedReq = parsed;
 
     const actor = { oid: session.claims.oid, upn: session.claims.upn };
     const outcome = await performRecommendation(parsed, actor, { loadSnapshot });
@@ -129,9 +136,24 @@ export const POST = withTenantAdmin(async (req: NextRequest, { session }) => {
         ...(outcome.kind === 'staged'
           ? { executor: outcome.executor, expiresAt: outcome.expiresAt }
           : {}),
-        ...(outcome.kind === 'performed' ? { receipt: outcome.receipt } : {}),
+        ...(outcome.kind === 'performed'
+          ? {
+              receipt: outcome.receipt,
+              persisted: outcome.persisted,
+              ...(outcome.persistError !== undefined
+                ? { persistError: outcome.persistError }
+                : {}),
+            }
+          : {}),
         ...(outcome.kind === 'failed'
-          ? { executor: outcome.executor, error: outcome.error }
+          ? {
+              executor: outcome.executor,
+              error: outcome.error,
+              persisted: outcome.persisted,
+              ...(outcome.persistError !== undefined
+                ? { persistError: outcome.persistError }
+                : {}),
+            }
           : {}),
       },
       tenantId: session.claims.tid ?? session.claims.oid,
@@ -161,13 +183,23 @@ export const POST = withTenantAdmin(async (req: NextRequest, { session }) => {
             'Nothing was changed in Azure.',
         });
       case 'performed':
-        return apiOk({ performed: true, receipt: outcome.receipt });
+        // `persisted:false` disclosure travels with the receipt — a store
+        // outage after a confirmed ARM write never un-claims the mutation.
+        return apiOk({
+          performed: true,
+          receipt: outcome.receipt,
+          persisted: outcome.persisted,
+          ...(outcome.persistError !== undefined
+            ? { persistError: outcome.persistError }
+            : {}),
+        });
       default:
         // Narrowed to the 'failed' arm — the remaining union member.
         return apiError(outcome.error, 502, {
           performed: false,
           executor: outcome.executor,
           mutationConfirmed: false,
+          persisted: outcome.persisted,
         });
     }
   } catch (e) {
@@ -177,7 +209,28 @@ export const POST = withTenantAdmin(async (req: NextRequest, { session }) => {
       e instanceof BrainActionsNotConfiguredError
     ) {
       // Honest infra gates: the message names exactly what is missing or what
-      // failed, and nothing was performed.
+      // failed, and nothing was performed. The refusal is still AUDITED —
+      // fail-soft, because an audit-stream failure must never mask the 503
+      // the operator needs to see.
+      try {
+        emitAuditEvent({
+          actorOid: session.claims.oid,
+          actorUpn: session.claims.upn,
+          action: `brain-perform.${parsedReq?.detector ?? 'unknown'}`,
+          targetType: 'brain-finding',
+          targetId: parsedReq?.findingId ?? 'unknown',
+          outcome: 'failure',
+          detail: {
+            stage: 'infra-gate',
+            mutatedAzure: false,
+            gate: e.name,
+            reason: e.message,
+          },
+          tenantId: session.claims.tid ?? session.claims.oid,
+        });
+      } catch {
+        /* the 503 below is the signal that matters */
+      }
       return apiHonestError(e, 503);
     }
     return apiServerError(e);

@@ -102,6 +102,9 @@ const mem = vi.hoisted(() => {
     decisions: [] as unknown[],
   };
   let mintCount = 0;
+  // Failure injection for the post-write honesty arms (#4246 blocker): a
+  // store outage AFTER a confirmed ARM write must not un-claim the mutation.
+  const failures = { performed: false, failed: false };
   const store = {
     read: async () => [],
     recordDecision: async (...a: unknown[]) => {
@@ -138,10 +141,12 @@ const mem = vi.hoisted(() => {
       return null;
     },
     recordPerformed: async (findingId: string, receipt: unknown) => {
+      if (failures.performed) throw new Error('cosmos unavailable: recordPerformed');
       calls.performed.push({ findingId, receipt });
       return {} as never;
     },
     recordFailed: async (findingId: string, error: string) => {
+      if (failures.failed) throw new Error('cosmos unavailable: recordFailed');
       calls.failed.push({ findingId, error });
       return {} as never;
     },
@@ -150,6 +155,7 @@ const mem = vi.hoisted(() => {
     staged,
     calls,
     store,
+    failures,
     reset() {
       staged.clear();
       calls.stage.length = 0;
@@ -157,6 +163,8 @@ const mem = vi.hoisted(() => {
       calls.failed.length = 0;
       calls.decisions.length = 0;
       mintCount = 0;
+      failures.performed = false;
+      failures.failed = false;
     },
   };
 });
@@ -174,6 +182,7 @@ vi.mock('@/lib/brain-actions/state-store', () => {
 });
 
 import { GET, POST } from '@/app/api/admin/brain/perform/route';
+import { ResourceGraphCollectionError } from '@/app/api/admin/brain/_lib/arg-collect';
 import { getSession } from '@/lib/auth/session';
 import { requireTenantAdmin } from '@/lib/auth/feature-gate';
 
@@ -455,6 +464,62 @@ describe('the happy path — scale-to-zero with a real before/after receipt', ()
   });
 });
 
+describe('the post-write failure window — a held receipt is NEVER un-claimed (#4246 blocker)', () => {
+  it('executor succeeds + store write fails → performed:true, persisted:false, audit fires with mutatedAzure true', async () => {
+    mem.failures.performed = true;
+    const res = await stageThenConfirm();
+    // The ARM write happened and the code holds its receipt: the answer is
+    // PERFORMED, whatever Cosmos did afterwards. Answering 502 here would
+    // state as fact ("not performed") the opposite of what was established.
+    expect(res.status).toBe(200);
+    const json = (await res.json()) as {
+      ok: boolean;
+      performed: boolean;
+      persisted: boolean;
+      persistError?: string;
+      receipt: { after: { minReplicas: number }; mutatedAzure: boolean };
+    };
+    expect(json.ok).toBe(true);
+    expect(json.performed).toBe(true);
+    expect(json.receipt.after.minReplicas).toBe(0);
+    expect(json.receipt.mutatedAzure).toBe(true);
+    // ...with the store outage DISCLOSED, not absorbed.
+    expect(json.persisted).toBe(false);
+    expect(json.persistError).toContain('cosmos unavailable');
+
+    expect(arm.updateContainerAppScale).toHaveBeenCalledTimes(1);
+    // The audit row still fires, truthful about the mutation AND the store.
+    const ev = audit.emitAuditEvent.mock.calls.at(-1)![0] as {
+      outcome: string;
+      detail: { stage: string; mutatedAzure: unknown; persisted: boolean };
+    };
+    expect(ev.outcome).toBe('success');
+    expect(ev.detail.stage).toBe('performed');
+    expect(ev.detail.mutatedAzure).toBe(true);
+    expect(ev.detail.persisted).toBe(false);
+  });
+
+  it('executor fails + the failure record also fails to persist → still the honest 502, still audited', async () => {
+    arm.updateContainerAppScale.mockRejectedValue(new Error('ARM 500'));
+    mem.failures.failed = true;
+    const res = await stageThenConfirm();
+    // Before the fix this DOUBLE failure escaped the orchestrator entirely:
+    // the route's generic 500 answered and NO brain-perform audit row existed
+    // for a write that had been attempted.
+    expect(res.status).toBe(502);
+    const json = (await res.json()) as { error: string; persisted: boolean };
+    expect(json.error).toContain('ARM 500');
+    expect(json.persisted).toBe(false);
+    const ev = audit.emitAuditEvent.mock.calls.at(-1)![0] as {
+      outcome: string;
+      detail: { stage: string; mutatedAzure: unknown };
+    };
+    expect(ev.outcome).toBe('failure');
+    expect(ev.detail.stage).toBe('failed');
+    expect(String(ev.detail.mutatedAzure)).toContain('unconfirmed');
+  });
+});
+
 describe('executor failure — honest, recorded, unconfirmed', () => {
   it('a failed ARM write returns 502 with the real error and audits mutatedAzure as UNCONFIRMED', async () => {
     arm.updateContainerAppScale.mockRejectedValue(
@@ -484,6 +549,53 @@ describe('executor failure — honest, recorded, unconfirmed', () => {
     // R7: a failed write established NEITHER outcome; the audit row must not
     // claim `false` any more than `true`.
     expect(String(ev.detail.mutatedAzure)).toContain('unconfirmed');
+  });
+});
+
+describe('infra-gate 503s are audited, fail-soft (#4246 nit)', () => {
+  it('a Resource Graph failure returns the honest 503 AND writes an audit row', async () => {
+    snap.loadSnapshot.mockRejectedValue(
+      new ResourceGraphCollectionError('ARG refused the query', 403, 'forbidden'),
+    );
+    const res = await POST(postReq(BODY), { params: Promise.resolve({}) } as never);
+    expect(res.status).toBe(503);
+    const ev = audit.emitAuditEvent.mock.calls.at(-1)![0] as {
+      action: string;
+      targetId: string;
+      outcome: string;
+      detail: { stage: string; gate: string; mutatedAzure: unknown };
+    };
+    expect(ev.action).toBe('brain-perform.unreachable-always-on');
+    expect(ev.targetId).toBe(FINDING_ID);
+    expect(ev.outcome).toBe('failure');
+    expect(ev.detail.stage).toBe('infra-gate');
+    expect(ev.detail.gate).toBe('ResourceGraphCollectionError');
+    expect(ev.detail.mutatedAzure).toBe(false);
+  });
+
+  it('an audit-stream failure does not mask the 503', async () => {
+    snap.loadSnapshot.mockRejectedValue(
+      new ResourceGraphCollectionError('ARG refused the query', 403, 'forbidden'),
+    );
+    // Once, not permanently: vi.clearAllMocks() clears calls, not
+    // implementations, and a leaked throwing impl would poison later specs.
+    audit.emitAuditEvent.mockImplementationOnce(() => {
+      throw new Error('log analytics down');
+    });
+    const res = await POST(postReq(BODY), { params: Promise.resolve({}) } as never);
+    expect(res.status).toBe(503);
+  });
+});
+
+describe('request validation — confirmToken bound (#4246 nit)', () => {
+  it('rejects an oversized confirmToken before any work happens', async () => {
+    const res = await POST(
+      postReq({ ...BODY, confirmToken: 'x'.repeat(513) }),
+      { params: Promise.resolve({}) } as never,
+    );
+    expect(res.status).toBe(400);
+    expect(((await res.json()) as { error: string }).error).toContain('confirmToken');
+    expect(snap.loadSnapshot).not.toHaveBeenCalled();
   });
 });
 

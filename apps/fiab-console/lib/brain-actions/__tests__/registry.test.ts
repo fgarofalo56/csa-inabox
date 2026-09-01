@@ -10,6 +10,8 @@
  */
 
 import { describe, expect, it } from 'vitest';
+import { snapshotFromCollection } from '@/app/api/admin/brain/_lib/snapshot';
+import { collection } from '@/lib/brain/__tests__/ui/estate-fixture';
 import {
   performRegistryEntries,
   resolvePerformEntry,
@@ -114,17 +116,17 @@ describe('registry population — no silent middle', () => {
     }
   });
 
-  it('covers every detector kind the runtime surface mints', () => {
-    // The four detectors app/api/admin/brain/_lib/detect.ts registers. A new
-    // runtime detector must land with a registry entry (real executor or
-    // honest reason) — resolvePerformEntry falls back to "no executor is
-    // registered" for strays, and this spec is what notices the stray.
-    const runtime = [
-      'unreachable-always-on',
-      'dangling-empty-wire',
-      'declared-not-configured',
-      'reachable-not-observed',
-    ];
+  it('covers every detector kind the runtime surface mints — DERIVED, not enumerated', () => {
+    // #4246 review nit: a hand-typed list watches only the detectors its
+    // author remembered. Run the REAL runtime pipeline over the estate
+    // fixture instead — `snapshot.detectors` carries one run record per
+    // registered detector, so a detector added to detect.ts appears here
+    // automatically and fails this spec until it gets a registry entry
+    // (a real executor or an honest not-performable reason).
+    const runtime = snapshotFromCollection(collection()).detectors.map((d) => d.detector);
+    // POPULATION: the pipeline currently registers four; fewer means the
+    // derivation broke, not that the registry is fine.
+    expect(runtime.length).toBeGreaterThanOrEqual(4);
     const registered = new Set(performRegistryEntries().map((e) => e.detector));
     for (const d of runtime) expect(registered.has(d), d).toBe(true);
   });

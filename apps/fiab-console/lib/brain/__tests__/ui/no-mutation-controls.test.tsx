@@ -261,6 +261,7 @@ interface MutationRule {
 
 const MUTATING_VERB = /method:\s*['"`](PUT|PATCH|DELETE)['"`]/i;
 const POST_CALL = /method:\s*['"`]POST['"`]/i;
+const POST_CALL_G = /method:\s*['"`]POST['"`]/gi;
 const ALLOWED_POST_TARGETS = [
   'providers/Microsoft.ResourceGraph/resources', // ARG query API — no mutating op
   '/api/admin/brain/proposals', // the Brain's own review-decision route
@@ -273,6 +274,32 @@ const ALLOWED_POST_TARGETS = [
   '/api/admin/brain/perform',
 ];
 
+/**
+ * The POST rule is bound to the CALL SITE, not the file (#4246 review — a
+ * measured bypass). The first version tested `src.includes(target)` over the
+ * WHOLE file, so any file whose doc-block happened to contain an allow-token
+ * (the perform route's header literally names `/api/admin/brain/perform`)
+ * could carry an unrelated inline ARM POST-*action* — `…/containerApps/x/
+ * restart`, `…/start`, `…/stop` are all POSTs — and stay green.
+ *
+ * Now the allowed target must appear WITHIN THE SAME CALL as the `method:
+ * 'POST'` key: a 400-chars-back / 200-forwards window around the match, sized
+ * from the real shapes in this tree (arg-collect.ts writes the URL ~100 chars
+ * before the method; the review-route fetches are single-line). A doc-block
+ * token elsewhere in the file no longer launders anything. The window is an
+ * approximation of "same statement" — its own control below proves a
+ * far-token + POST pair goes red.
+ */
+function postCallsOutsideAllowedTargets(src: string): number {
+  let offenders = 0;
+  for (const m of src.matchAll(POST_CALL_G)) {
+    const at = m.index ?? 0;
+    const window = src.slice(Math.max(0, at - 400), at + 200);
+    if (!ALLOWED_POST_TARGETS.some((t) => window.includes(t))) offenders += 1;
+  }
+  return offenders;
+}
+
 const MUTATION_RULES: readonly MutationRule[] = [
   {
     name: 'mutating HTTP verb (PUT/PATCH/DELETE)',
@@ -280,9 +307,9 @@ const MUTATION_RULES: readonly MutationRule[] = [
     find: (src) => MUTATING_VERB.test(src),
   },
   {
-    name: 'POST to something other than the ARG query or the review route',
-    find: (src) =>
-      POST_CALL.test(src) && !ALLOWED_POST_TARGETS.some((t) => src.includes(t)),
+    name: 'POST whose own call site names no allowed target',
+    // POST_CALL is the cheap pre-filter; the per-call window does the work.
+    find: (src) => POST_CALL.test(src) && postCallsOutsideAllowedTargets(src) > 0,
   },
   {
     name: 'az CLI mutation',
@@ -342,6 +369,24 @@ describe('C — the Brain source contains no Azure write', () => {
         { method: 'PATCH', body: JSON.stringify({ properties: {} }) },
       );`;
     expect(scanForMutations(urlFirst)).not.toEqual([]);
+  });
+
+  it('THE CONTROL for the call-site binding: a doc-block allow-token does NOT launder a distant POST', () => {
+    // The reviewer's measured bypass on #4246: perform/route.ts's header
+    // legitimately names /api/admin/brain/perform, and under the old
+    // file-scoped rule that token exempted an inline ARM POST-action appended
+    // hundreds of lines later. Reconstruct exactly that shape — allow-token
+    // far away, ARM restart POST at the end — and require it flagged.
+    const probe =
+      `// BFF — POST /api/admin/brain/perform — delegates to lib/brain-actions\n` +
+      `${'// padding line to separate the doc-block from the call site\n'.repeat(12)}` +
+      `const r = await doFetch(\n` +
+      `  \`\${base}/subscriptions/x/resourceGroups/y/providers/Microsoft.App/containerApps/z/restart?api-version=2024-03-01\`,\n` +
+      `  { method: 'POST' },\n` +
+      `);`;
+    expect(scanForMutations(probe)).not.toEqual([]);
+    // And the pre-filter alone would have passed it — the window is what bites.
+    expect(ALLOWED_POST_TARGETS.some((t) => probe.includes(t))).toBe(true);
   });
 
   it('and does NOT flag the two legitimate POSTs', () => {
