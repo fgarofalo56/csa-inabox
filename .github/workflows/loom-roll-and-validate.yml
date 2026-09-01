@@ -896,10 +896,66 @@ jobs:
           # false mismatch that auto-reverts a good deploy. Same pattern as
           # gov-console-roll.yml's probe; the `if VAR=$(…)` shape is also
           # errexit-exempt.
+          #
+          # #4238 — A GATE THAT IS ONLY CORRECT BY COINCIDENCE.
+          #
+          # The decision below used to be made against the whole tsv ROW:
+          #
+          #     if [[ "$STATE" == *"Healthy"* && "$STATE" == *"Running"* ]]
+          #
+          # #4238 read that as fail-OPEN, on the grounds that *"Healthy"*
+          # matches "Unhealthy". MEASURED, that is NOT true: `[[ ]]` globbing
+          # is case-SENSITIVE (nocasematch is off on the runner), and
+          # "Unhealthy" contains "healthy" with a lowercase h, not "Healthy".
+          # `Unhealthy<TAB>Running` therefore FAILED the old predicate, and an
+          # unhealthy revision was never passed by it. The mutation receipt in
+          # the PR is the proof: restoring that exact line leaves the
+          # "Unhealthy + Running FAILS the gate" spec GREEN.
+          #
+          # What IS wrong with it is subtler and still worth removing. It
+          # matched two enums against ONE concatenated row, so each test could
+          # be satisfied by the OTHER field. It came out right only because no
+          # member of RevisionHealthState (Healthy | Unhealthy | None) and no
+          # member of RevisionRunningState (Running | Processing | Stopped |
+          # Degraded | Failed | Unknown, plus RunningAtMaxScale / ScaledToZero
+          # in practice) happens to contain the other's token. Both are
+          # ExpandableStringEnum — Microsoft explicitly reserves the right to
+          # add values — so a future runningState carrying "Healthy" would make
+          # this gate pass a revision the control plane called unhealthy, with
+          # nothing in CI to notice. A roll gate whose correctness rests on the
+          # capital H of an enum member is not one a reviewer can verify by
+          # reading, which is how it produced a P0-shaped bug report.
+          #
+          # So: split the row and compare each field against ITS OWN enum. The
+          # --query above is a two-key multiselect and az's tsv writer emits a
+          # dict's values ordered by KEY, so field 1 is healthState ("health")
+          # and field 2 is runningState ("running").
+          #
+          # THE ACCEPTED runningState SET IS PRESERVED EXACTLY, and this is the
+          # part a naive `[[ "$RUNNING" == "Running" ]]` gets wrong: the old
+          # *"Running"* glob also accepted RunningAtMaxScale, which is a real
+          # observed state on THIS estate — `iceberg-catalog` reached it about
+          # 60s into a cold start on 2026-08-07 (recorded in
+          # apps/fiab-console/lib/azure/uc-token-exchange.ts). Narrowing to the
+          # bare literal would fail a perfectly healthy revision that happened
+          # to be at max scale, and — because the rollback fires on
+          # `steps.health.outcome == 'failure'` with a non-unknown verdict —
+          # would AUTO-REVERT A GOOD DEPLOY. That is the #4231 D3 failure mode,
+          # and it is why the set is written out rather than tightened.
+          # ScaledToZero stays OUT, exactly as before: it did not contain
+          # "Running", and a revision with no replicas is not serving the
+          # validation this gate is clearing the way for.
+          #
+          # A row with no tab leaves HEALTH and RUNNING both equal to the
+          # single field, which cannot satisfy both tests — fail-closed, never
+          # fail-open — and is COUNTED so the failure below can say it could
+          # not parse the row rather than assert a revision state it never
+          # established (R7).
           PROBE_ERR=$(mktemp)
           OK=false
           VERDICT=unhealthy
           FAILED_READS=0
+          UNSPLIT_READS=0
           LAST_READ=""
           for i in $(seq 1 30); do
             if STATE=$(az containerapp revision show -n ${{ env.APP_NAME }} -g ${{ env.RG_NAME }} \
@@ -907,8 +963,11 @@ jobs:
               --query "{health:properties.healthState, running:properties.runningState}" -o tsv 2>"$PROBE_ERR"); then
               STATE=$(printf '%s' "$STATE" | tr -d '\r')
               LAST_READ="$STATE"
-              echo "[$i] $STATE"
-              if [[ "$STATE" == *"Healthy"* && "$STATE" == *"Running"* ]]; then OK=true; break; fi
+              HEALTH="${STATE%%$'\t'*}"
+              RUNNING="${STATE##*$'\t'}"
+              if [[ "$STATE" != *$'\t'* ]]; then UNSPLIT_READS=$((UNSPLIT_READS+1)); fi
+              echo "[$i] health='$HEALTH' running='$RUNNING'"
+              if [[ "$HEALTH" == "Healthy" ]] && [[ "$RUNNING" == "Running" || "$RUNNING" == "RunningAtMaxScale" ]]; then OK=true; break; fi
             else
               FAILED_READS=$((FAILED_READS+1))
               echo "[$i] control-plane read FAILED (failed read $FAILED_READS/12; this is not a health verdict): $(head -c 300 "$PROBE_ERR" | tr -d '\r')"
@@ -925,7 +984,11 @@ jobs:
             if [[ "$VERDICT" == "unknown" ]]; then
               echo "::error::Cannot say whether revision $REV is healthy: 12 control-plane reads failed (last read error: $(head -c 300 "$PROBE_ERR" | tr -d '\r')). That is an UNKNOWN, not a measured unhealthy — failing closed WITHOUT asserting a revision state this step never read (R7). The rollback below deliberately does not fire on an unknown: in run 33429557771 a rollback triggered by exactly this shape would have reverted a GOOD deploy (#4231 D3)."
             else
-              echo "::error::Revision $REV never reached Healthy+Running after ~300s (last successfully read state: ${LAST_READ:-<none — no probe ever succeeded>}). The most common cause is an image the revision cannot pull. NOT proceeding to validation on an unhealthy roll."
+              SHAPE_NOTE=""
+              if [[ $UNSPLIT_READS -gt 0 ]]; then
+                SHAPE_NOTE=" CAVEAT: $UNSPLIT_READS successful read(s) came back with NO tab separator, so healthState could not be told apart from runningState for them; if that is every successful read, this failure is about the QUERY'S OUTPUT SHAPE and not about the revision (R7) — check the --query multiselect above before concluding the revision is unhealthy."
+              fi
+              echo "::error::Revision $REV never reached Healthy+Running — i.e. healthState 'Healthy' with runningState 'Running' or 'RunningAtMaxScale' — after ~300s (last successfully read state: ${LAST_READ:-<none — no probe ever succeeded>}). The most common cause is an image the revision cannot pull. NOT proceeding to validation on an unhealthy roll.$SHAPE_NOTE"
             fi
             exit 1
           fi
