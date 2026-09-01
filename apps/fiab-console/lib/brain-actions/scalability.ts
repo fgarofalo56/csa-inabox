@@ -568,6 +568,14 @@ function consumersFor(
   // apps whose module output it does not read.
   const fqdnLiteral = `${appName}.internal.`;
   for (const blob of blobs) {
+    // Self-exclusion is per MODULE, because `reference('x')` names a module and
+    // not an app. For the expanded `apps[]` copy loop that means a wire BETWEEN
+    // two apps of that one loop is not counted — the six of them share a symbol.
+    // NOT ESTABLISHED, and stated rather than implied: it is under-refusal on
+    // the availability arm only, it applies to no app the shape marks pinned
+    // (all six are elastic WITH scale rules), and before the loop was expanded
+    // those apps carried no declaration at all and were permitted outright. A
+    // per-app exclusion needs the blob to carry the app name, not the module's.
     if (blob.ownerSymbol === ownerSymbol) continue;
     if (moduleRef && blob.text.includes(moduleRef)) {
       out.push({ consumerModule: blob.ownerSymbol, via: 'module-reference' });
