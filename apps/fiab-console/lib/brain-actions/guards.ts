@@ -37,7 +37,7 @@ import type {
 } from '@/app/api/admin/brain/_lib/wire';
 import type { ContainerAppInfo } from '@/lib/azure/container-apps-arm-client';
 import { deriveArmResourceId, isContainerAppType } from './executors';
-import { nonScalableExplanation, type ScalabilityDeclaration } from './scalability';
+import { scaleToZeroRefusalReason, type ScaleToZeroRefusal } from './scalability';
 import type {
   GuardRefusal,
   PerformExecutorKind,
@@ -225,21 +225,29 @@ export function guardDetectorNotVacuous(
  * arm is testable; `./scalability` derives it from the compiled deploy template
  * and explains why that source cannot drift from the bicep.
  *
- * `delete-resource` is deliberately NOT gated by this guard: deleting a pinned
+ * `delete-resource` is deliberately NOT gated by this guard: deleting a declared
  * singleton is destructive for its own reasons, which the orphan detector's
  * evidence and the staged confirm already speak to. This guard makes exactly one
- * claim — that a declared singleton must not have its replica floor removed.
+ * claim — that a declared replica floor must not be removed.
+ *
+ * TWO DISTINCT CLAIMS, never collapsed (review of #4261): `pinned-singleton` is
+ * DURABILITY (`loom-risingwave` loses its materialized views) and
+ * `declared-consumer` is AVAILABILITY (`loom-unity` on Postgres is ELASTIC, so
+ * the shape predicate clears it, but the deploy wires consumers to it and
+ * zeroing it takes the federated-catalog hot path offline). Telling an operator
+ * "this would lose data" about a service that would only go offline is the R7
+ * error in the other direction, so the reason is chosen by the refusal's kind.
  */
 export function guardScalableToZero(
   subject: PerformSubject,
   executor: PerformExecutorKind,
-  declaration: ScalabilityDeclaration | null,
+  refusalVerdict: ScaleToZeroRefusal | null,
 ): GuardRefusal | null {
   if (executor !== 'scale-to-zero') return null;
-  if (declaration === null || declaration.scalableToZero) return null;
+  if (refusalVerdict === null) return null;
   return refusal(
     'scalable-to-zero',
-    `REFUSED: ${nonScalableExplanation(declaration)} Nothing was changed in Azure.`,
+    `REFUSED: ${scaleToZeroRefusalReason(refusalVerdict)} Nothing was changed in Azure.`,
   );
 }
 

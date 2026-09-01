@@ -21,7 +21,7 @@ import {
   guardWriteScope,
   resolvePerformSubject,
 } from '../guards';
-import type { ScalabilityDeclaration } from '../scalability';
+import type { ScalabilityDeclaration, ScaleToZeroRefusal } from '../scalability';
 import type { PerformSubject } from '../types';
 import {
   APP_NAME,
@@ -215,6 +215,7 @@ describe('guardScalableToZero — the #4257 statefulness refusal', () => {
       module: 'loom-risingwave',
       scalableToZero: false,
       declared: { minReplicas: 1, maxReplicas: 1, hasScaleRules: false },
+      declaredConsumers: [],
       reason: "the deploy PINS 'loom-risingwave' to exactly 1 replica(s).",
       declaredStatement:
         'CANNOT scale to zero: a stopped replica loses every materialized view and its progress',
@@ -222,36 +223,70 @@ describe('guardScalableToZero — the #4257 statefulness refusal', () => {
     };
   }
 
-  it('REFUSES scale-to-zero on a declared non-scalable subject', () => {
+  const pinned: ScaleToZeroRefusal = { kind: 'pinned-singleton', declaration: declaration() };
+
+  /** `loom-unity` on the Postgres path: ELASTIC, and wired by the deploy. */
+  const hotPath: ScaleToZeroRefusal = {
+    kind: 'declared-consumer',
+    declaration: declaration({
+      appName: 'loom-unity',
+      module: 'loom-unity',
+      scalableToZero: true,
+      declared: { minReplicas: 1, maxReplicas: 3, hasScaleRules: true },
+      declaredConsumers: [{ consumerModule: 'adminplane', via: 'fqdn-literal' }],
+      declaredStatement: undefined,
+    }),
+  };
+
+  it('REFUSES scale-to-zero on a declared non-scalable subject (DURABILITY)', () => {
     const refusal = guardScalableToZero(
       subject({ displayName: 'loom-risingwave' }),
       'scale-to-zero',
-      declaration(),
+      pinned,
     );
     expect(refusal).not.toBeNull();
     expect(refusal!.guard).toBe('scalable-to-zero');
     expect(refusal!.reason).toContain('CANNOT be scaled to zero');
     // The module's own sentence reaches the operator.
     expect(refusal!.reason).toMatch(/materialized view/i);
+    expect(refusal!.reason).toContain('unrecoverable loss');
     expect(refusal!.reason).toContain('Nothing was changed in Azure');
   });
 
-  it('THE CONTROL: an ELASTIC declaration passes — the feature still works', () => {
-    expect(
-      guardScalableToZero(
-        subject(),
-        'scale-to-zero',
-        declaration({ scalableToZero: true, appName: APP_NAME }),
-      ),
-    ).toBeNull();
+  it('REFUSES an ELASTIC subject the deploy wires consumers to (AVAILABILITY)', () => {
+    // THE #4261 REVIEW HOLE. The shape predicate clears `loom-unity` on the
+    // Postgres path (min 1 / max 3 / with rules), so this refusal cannot come
+    // from replica shape — it comes from the deploy declaring a consumer.
+    const refusal = guardScalableToZero(
+      subject({ displayName: 'loom-unity' }),
+      'scale-to-zero',
+      hotPath,
+    );
+    expect(refusal).not.toBeNull();
+    expect(refusal!.guard).toBe('scalable-to-zero');
+    expect(refusal!.reason).toContain('the DEPLOY ITSELF wires');
+    expect(refusal!.reason).toContain('AVAILABILITY refusal');
   });
 
-  it('passes when the deploy declares NOTHING about this app (null, not a licence)', () => {
+  it('the two claims are DISTINCT — availability never says "would lose data"', () => {
+    // R7 in the other direction: telling an operator their federated catalog
+    // would lose data, when it would only go offline, is a false claim.
+    const durability = guardScalableToZero(subject(), 'scale-to-zero', pinned)!.reason;
+    const availability = guardScalableToZero(subject(), 'scale-to-zero', hotPath)!.reason;
+    expect(durability).toMatch(/unrecoverable loss/);
+    expect(availability).not.toMatch(/unrecoverable/);
+    expect(availability).toContain('no data is lost');
+    expect(availability).toContain('cold-starts');
+    expect(durability).not.toContain('AVAILABILITY refusal');
+  });
+
+  it('THE CONTROL: no refusal verdict passes — the feature still works', () => {
     expect(guardScalableToZero(subject(), 'scale-to-zero', null)).toBeNull();
   });
 
   it('makes exactly ONE claim: delete-resource is not gated by it', () => {
-    expect(guardScalableToZero(subject(), 'delete-resource', declaration())).toBeNull();
+    expect(guardScalableToZero(subject(), 'delete-resource', pinned)).toBeNull();
+    expect(guardScalableToZero(subject(), 'delete-resource', hotPath)).toBeNull();
   });
 });
 

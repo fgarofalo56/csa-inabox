@@ -88,6 +88,23 @@ export interface DeclaredScale {
   readonly hasScaleRules: boolean;
 }
 
+/**
+ * One wire the DEPLOY declares INTO a Container App — another app's `env`
+ * naming it (#4257 review: the availability half).
+ */
+export interface DeclaredConsumer {
+  /** The bicep module whose `env` block declares the wire. */
+  readonly consumerModule: string;
+  /**
+   * How the value expression named the target:
+   *   `module-reference`  `reference('icebergCatalog').outputs.fqdn.value`
+   *   `fqdn-literal`      `'https://loom-unity.internal.{0}'`
+   * Both forms occur in the real template; a matcher that read only one would
+   * be blind to half the estate and report a confident zero.
+   */
+  readonly via: 'module-reference' | 'fqdn-literal';
+}
+
 /** What the deploy declares about ONE Container App's scalability. */
 export interface ScalabilityDeclaration {
   /** The app name as the template declares it, lowercased (ARM is case-insensitive). */
@@ -96,7 +113,13 @@ export interface ScalabilityDeclaration {
   readonly module: string;
   /** False when the deploy pins the app to a fixed, non-zero replica count. */
   readonly scalableToZero: boolean;
-  readonly declared: DeclaredScale;
+  /**
+   * `null` when the replica shape could NOT be established — `loom-unity`'s
+   * scale is a conditional on its backing store, so no static answer exists.
+   * Null means the DURABILITY predicate is withheld (R7: not established is not
+   * "elastic"); the availability signal below still applies.
+   */
+  readonly declared: DeclaredScale | null;
   /** What was established, in the words the refusal quotes. */
   readonly reason: string;
   /**
@@ -105,6 +128,11 @@ export interface ScalabilityDeclaration {
    * replicas without explaining why, which is still a pinned singleton.
    */
   readonly declaredStatement?: string;
+  /**
+   * Other apps the DEPLOY wires to this one. Non-empty means the deploy itself
+   * declares a consumer — see {@link refuseScaleToZero} for what that decides.
+   */
+  readonly declaredConsumers: readonly DeclaredConsumer[];
 }
 
 /** The artifact every declaration in this module is derived from. */
@@ -216,18 +244,100 @@ function declaredStatementFrom(template: Record<string, unknown>): string | unde
 // The walk
 // ---------------------------------------------------------------------------
 
-/** `resources` is a list in classic templates and a dict in `languageVersion` ones. */
-function resourceList(template: Record<string, unknown>): unknown[] {
+/**
+ * `resources` is a list in classic templates and a DICT keyed by symbolic name
+ * in `languageVersion` ones — both shapes appear in this artifact. The symbolic
+ * key matters: `reference('icebergCatalog')` in a consumer's env names the
+ * MODULE by that key, so a walker that discarded it would be blind to every
+ * module-reference wire and report a confident zero.
+ */
+function resourceEntries(
+  template: Record<string, unknown>,
+): Array<{ symbol: string | null; resource: unknown }> {
   const res = template.resources;
-  if (Array.isArray(res)) return res;
-  if (typeof res === 'object' && res !== null) return Object.values(res);
+  if (Array.isArray(res)) return res.map((r) => ({ symbol: null, resource: r }));
+  if (typeof res === 'object' && res !== null) {
+    return Object.entries(res as Record<string, unknown>).map(([symbol, resource]) => ({
+      symbol,
+      resource,
+    }));
+  }
   return [];
+}
+
+/** One app's `env` block, serialized, plus the module that owns it. */
+interface EnvBlob {
+  readonly ownerSymbol: string;
+  readonly text: string;
+}
+
+/** Every `env:` block in a template body, serialized for matching. */
+function collectEnvBlobs(
+  tmpl: Record<string, unknown>,
+  ownerSymbol: string,
+  into: EnvBlob[],
+): void {
+  const visit = (node: unknown): void => {
+    if (Array.isArray(node)) {
+      for (const x of node) visit(x);
+      return;
+    }
+    if (typeof node !== 'object' || node === null) return;
+    const rec = node as Record<string, unknown>;
+    // DO NOT descend into a nested deployment's template. It is visited
+    // separately under ITS OWN symbol, and double-counting it here attributes a
+    // child app's env to the parent — which made a service look like its own
+    // consumer and defeated the self-wire exclusion below.
+    if (rec.type === 'Microsoft.Resources/deployments') {
+      for (const [k, v] of Object.entries(asRecord(rec.properties))) {
+        if (k !== 'template') visit(v);
+      }
+      return;
+    }
+    for (const [k, v] of Object.entries(rec)) {
+      // An `env` value is either a literal array of {name,value} objects or a
+      // single ARM expression string building one. Serializing covers both.
+      if (k === 'env') into.push({ ownerSymbol, text: JSON.stringify(v).toLowerCase() });
+      visit(v);
+    }
+  };
+  for (const { resource } of resourceEntries(tmpl)) visit(resource);
+  visit(tmpl.variables);
+}
+
+/**
+ * The consumers the deploy declares for one app.
+ *
+ * An app's OWN env is excluded — a service does not wire itself.
+ */
+function consumersFor(
+  appName: string,
+  ownerSymbol: string,
+  blobs: readonly EnvBlob[],
+): DeclaredConsumer[] {
+  const out: DeclaredConsumer[] = [];
+  const moduleRef = ownerSymbol ? `reference('${ownerSymbol}')` : null;
+  // `loom-unity.internal.` — the literal-FQDN form the console's env uses for
+  // apps whose module output it does not read.
+  const fqdnLiteral = `${appName}.internal.`;
+  for (const blob of blobs) {
+    if (blob.ownerSymbol === ownerSymbol) continue;
+    if (moduleRef && blob.text.includes(moduleRef)) {
+      out.push({ consumerModule: blob.ownerSymbol, via: 'module-reference' });
+      continue;
+    }
+    if (blob.text.includes(fqdnLiteral)) {
+      out.push({ consumerModule: blob.ownerSymbol, via: 'fqdn-literal' });
+    }
+  }
+  return out;
 }
 
 function declarationFor(
   resource: Record<string, unknown>,
   template: Record<string, unknown>,
   moduleLabel: string,
+  declaredConsumers: readonly DeclaredConsumer[],
 ): ScalabilityDeclaration | null {
   const params = asRecord(template.parameters);
   const variables = asRecord(template.variables);
@@ -238,7 +348,26 @@ function declarationFor(
   const scale = asRecord(asRecord(asRecord(resource.properties).template).scale);
   const minReplicas = resolveDeclaredInt(scale.minReplicas, params, variables);
   const maxReplicas = resolveDeclaredInt(scale.maxReplicas, params, variables);
-  if (minReplicas === null || maxReplicas === null) return null;
+
+  // SHAPE NOT ESTABLISHED. `loom-unity`'s scale is `[if(usePostgres, …, …)]` —
+  // two different shapes depending on its backing store, so there is no static
+  // answer. The declaration is still emitted (its consumers are knowable and
+  // the availability signal must reach it — the #4261 review hole); only the
+  // durability verdict is withheld.
+  if (minReplicas === null || maxReplicas === null) {
+    return {
+      appName,
+      module: moduleLabel,
+      scalableToZero: true,
+      declared: null,
+      declaredConsumers,
+      reason:
+        `the deploy's replica shape for '${appName}' could NOT be established from the template ` +
+        `(module '${moduleLabel}' computes it conditionally), so no pinned-singleton verdict is ` +
+        'drawn. NOT ESTABLISHED is not "elastic" — it means this half of the check has nothing ' +
+        'to say.',
+    };
+  }
 
   const rules = scale.rules;
   const hasScaleRules = Array.isArray(rules) ? rules.length > 0 : rules !== undefined;
@@ -251,6 +380,7 @@ function declarationFor(
     module: moduleLabel,
     scalableToZero: !pinned,
     declared: { minReplicas, maxReplicas, hasScaleRules },
+    declaredConsumers,
     reason: pinned
       ? `the deploy PINS '${appName}' to exactly ${minReplicas} replica(s) ` +
         `(minReplicas ${minReplicas} = maxReplicas ${maxReplicas}, no scale rules) in bicep module ` +
@@ -263,6 +393,15 @@ function declarationFor(
   };
 }
 
+/** One template body in the graph, with the identity a consumer would name it by. */
+interface TemplateBody {
+  readonly tmpl: Record<string, unknown>;
+  /** Symbolic resource key of the nested deployment — what `reference()` names. */
+  readonly symbol: string;
+  /** The deployment's `name`, shown to operators. */
+  readonly label: string;
+}
+
 /**
  * Every Container App declaration the compiled template carries, keyed by
  * lowercased app name.
@@ -272,38 +411,52 @@ function declarationFor(
  * resolves to the FIRST pinned declaration if any module pins it: a runtime that
  * is a singleton on one deploy path is a singleton, and the safe reading of a
  * disagreement is the restrictive one.
+ *
+ * Two passes, and the order is load-bearing: every `env` block in the whole
+ * graph must be collected BEFORE any app is judged, because the consumer of a
+ * data-plane app is usually the Console, whose module is walked later.
  */
 export function declarationsFromTemplate(
   template: unknown,
 ): ReadonlyMap<string, ScalabilityDeclaration> {
-  const out = new Map<string, ScalabilityDeclaration>();
-
-  const walk = (tmpl: Record<string, unknown>, label: string): void => {
-    const items = resourceList(tmpl);
-    for (const raw of items) {
-      const r = asRecord(raw);
-      const type = r.type;
-      if (typeof type === 'string' && type.toLowerCase() === CONTAINER_APPS_TYPE) {
-        const decl = declarationFor(r, tmpl, label);
-        if (decl) {
-          const existing = out.get(decl.appName);
-          if (!existing || (existing.scalableToZero && !decl.scalableToZero)) {
-            out.set(decl.appName, decl);
-          }
-        }
-      }
-    }
-    for (const raw of items) {
-      const r = asRecord(raw);
+  const bodies: TemplateBody[] = [];
+  const collect = (tmpl: Record<string, unknown>, symbol: string, label: string): void => {
+    bodies.push({ tmpl, symbol, label });
+    for (const { symbol: key, resource } of resourceEntries(tmpl)) {
+      const r = asRecord(resource);
       if (r.type !== 'Microsoft.Resources/deployments') continue;
       const inner = asRecord(r.properties).template;
       if (typeof inner !== 'object' || inner === null) continue;
       const name = typeof r.name === 'string' ? r.name : '(unnamed module)';
-      walk(asRecord(inner), name);
+      collect(asRecord(inner), (key ?? name).toLowerCase(), name);
     }
   };
+  collect(asRecord(template), 'main.bicep', 'main.bicep');
 
-  walk(asRecord(template), 'main.bicep');
+  const envBlobs: EnvBlob[] = [];
+  for (const b of bodies) collectEnvBlobs(b.tmpl, b.symbol, envBlobs);
+
+  const out = new Map<string, ScalabilityDeclaration>();
+  for (const b of bodies) {
+    for (const { resource } of resourceEntries(b.tmpl)) {
+      const r = asRecord(resource);
+      const type = r.type;
+      if (typeof type !== 'string' || type.toLowerCase() !== CONTAINER_APPS_TYPE) continue;
+      const named = resolveDeclaredName(r.name, asRecord(b.tmpl.parameters));
+      const consumers = named === null ? [] : consumersFor(named, b.symbol, envBlobs);
+      const decl = declarationFor(r, b.tmpl, b.label, consumers);
+      if (!decl) continue;
+      const existing = out.get(decl.appName);
+      // Prefer a pinned declaration; otherwise keep whichever knows more consumers.
+      if (
+        !existing ||
+        (existing.scalableToZero && !decl.scalableToZero) ||
+        (existing.declaredConsumers.length === 0 && decl.declaredConsumers.length > 0)
+      ) {
+        out.set(decl.appName, decl);
+      }
+    }
+  }
   return out;
 }
 
@@ -364,4 +517,103 @@ export function nonScalableExplanation(decl: ScalabilityDeclaration): string {
     'process, and the next deploy re-asserts the declared floor anyway — so the write is ' +
     'unrecoverable loss in exchange for drift, not a saving (deploy-integrity.md R2).'
   );
+}
+
+// ---------------------------------------------------------------------------
+// THE AVAILABILITY HALF (#4257 review) — a DIFFERENT property, stated as such
+// ---------------------------------------------------------------------------
+
+/**
+ * Why a scale-to-zero is refused. The two arms are DIFFERENT CLAIMS and are
+ * never collapsed: telling an operator "this would lose data" about a service
+ * that would only go offline is the R7 error in the other direction.
+ *
+ *   `pinned-singleton`   DURABILITY. The deploy fixed the replica count; the
+ *                        single replica holds state in process. Unrecoverable.
+ *   `declared-consumer`  AVAILABILITY. The deploy WIRES another app to this
+ *                        service, so the finding's central claim ("nothing in
+ *                        the deployment points at it") is contradicted by the
+ *                        deploy's own template. Recoverable on cold start, but
+ *                        it is an operator-triggered outage of a declared
+ *                        dependency, taken on evidence the deploy disagrees with.
+ */
+export type ScaleToZeroRefusal =
+  | { readonly kind: 'pinned-singleton'; readonly declaration: ScalabilityDeclaration }
+  | { readonly kind: 'declared-consumer'; readonly declaration: ScalabilityDeclaration };
+
+/**
+ * ── WHY A SECOND SIGNAL EXISTS, AND WHY IT IS NOT THE REPLICA SHAPE ────────
+ * The pinned-singleton predicate infers "must not scale to zero" from "is a
+ * pinned singleton". Those two properties CORRELATE on this estate; they are
+ * not the same property, and `loom-unity` is the measured counter-example:
+ * `compute/loom-unity-app.bicep` renders min 1 / max 3 / WITH scale rules on
+ * the Postgres path (`effectiveMinReplicas`/`effectiveMaxReplicas`, :292/:296,
+ * rules at :543), so the shape says ELASTIC. Its state is external, so scaling
+ * it to zero loses no data — it takes the federated-catalog metadata hot path
+ * OFFLINE until cold start. `iceberg-catalog-aca.bicep:86` says exactly that in
+ * prose: "the catalog is on the metadata hot path (never scale-to-zero)".
+ *
+ * That intent has NO machine-readable home in the compiled template today (no
+ * tag, no metadata key, nothing but the prose), and adding one is a bicep edit
+ * this lane does not own. So the second signal keys on a property the template
+ * DOES carry and that means the operative thing: **the deploy declares another
+ * app's `env` wire INTO this service.**
+ *
+ *   - shape-independent — `loom-unity` on Postgres is elastic and still refused
+ *   - not a name list, not a prose match
+ *   - generalizes — a new hot-path service is covered the day the deploy wires
+ *     a consumer to it, with no edit here
+ *
+ * And it is the honest reading of the finding itself: `unreachable-always-on`
+ * asserts "NOTHING in the live deployment points at it". When the deploy's own
+ * template names a consumer, that assertion is contradicted at its source — the
+ * #4258 extractor blindness (a 20-name env allowlist) is exactly how a wired
+ * service comes to look unreachable. Acting destructively on a claim the deploy
+ * disagrees with is not a saving; it is a false positive with an outage attached.
+ *
+ * It does NOT refuse everything: `loom-capacity-broker` — the founding
+ * acceptance case — is wired by `LOOM_BROKER_URL: ''`, an EMPTY value that names
+ * nothing, so no consumer is declared and it stays performable. That is the
+ * control, and the tests assert it.
+ */
+export function declaredConsumerExplanation(decl: ScalabilityDeclaration): string {
+  const modules = [...new Set(decl.declaredConsumers.map((c) => c.consumerModule))];
+  const via = [...new Set(decl.declaredConsumers.map((c) => c.via))].join(' + ');
+  return (
+    `'${decl.appName}' must NOT be scaled to zero: the DEPLOY ITSELF wires ` +
+    `${decl.declaredConsumers.length} consumer(s) to it (bicep module(s) ` +
+    `${modules.map((m) => `'${m}'`).join(', ')}, matched by ${via}), so the finding's central ` +
+    'claim — that NOTHING in the deployment points at this service — is contradicted by the ' +
+    'deployment template. This is an AVAILABILITY refusal, not a durability one: no data is ' +
+    'lost, but removing the always-on floor takes a declared dependency offline until it ' +
+    `cold-starts. The live graph missing that wire is the known extractor blindness (#4258 — a ` +
+    '20-name env allowlist discards most wires before resolution), not evidence that the ' +
+    `service is unused. Source: ${SCALABILITY_SOURCE_NOTE}`
+  );
+}
+
+/**
+ * The composite verdict for `scale-to-zero`, or null when nothing objects.
+ *
+ * DURABILITY IS REPORTED FIRST when both apply — it is the stronger claim and
+ * the one an operator must not have softened into "it would just go offline".
+ */
+export function refuseScaleToZero(
+  appName: string,
+  declarations: ReadonlyMap<string, ScalabilityDeclaration> = deployDeclaredScalability(),
+): ScaleToZeroRefusal | null {
+  const decl = declarations.get(appName.trim().toLowerCase());
+  if (!decl) return null;
+  if (!decl.scalableToZero) return { kind: 'pinned-singleton', declaration: decl };
+  if (decl.declaredConsumers.length > 0) {
+    return { kind: 'declared-consumer', declaration: decl };
+  }
+  return null;
+}
+
+/** The operator-facing text for a refusal, keyed to WHICH claim it is making. */
+export function scaleToZeroRefusalReason(refusal: ScaleToZeroRefusal): string {
+  return refusal.kind === 'pinned-singleton'
+    ? nonScalableExplanation(refusal.declaration)
+    : declaredConsumerExplanation(refusal.declaration);
 }

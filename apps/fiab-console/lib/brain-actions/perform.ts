@@ -58,7 +58,7 @@ import {
   resolvePerformSubject,
 } from './guards';
 import { resolvePerformEntry } from './registry';
-import { declaredNonScalableToZero } from './scalability';
+import { refuseScaleToZero } from './scalability';
 import { recommendationStateStore, type RecommendationStateStore, type StateActor } from './state-store';
 import type {
   GuardRefusal,
@@ -194,7 +194,7 @@ export async function performRecommendation(
   const notScalable = guardScalableToZero(
     subject,
     executor,
-    declaredNonScalableToZero(subject.displayName),
+    refuseScaleToZero(subject.displayName),
   );
   if (notScalable) return { kind: 'refused', refusal: notScalable };
 

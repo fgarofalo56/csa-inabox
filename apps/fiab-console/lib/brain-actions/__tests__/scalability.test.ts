@@ -22,7 +22,9 @@ import {
   declarationsFromTemplate,
   declaredNonScalableToZero,
   nonScalableExplanation,
+  refuseScaleToZero,
   resolveDeclaredInt,
+  scaleToZeroRefusalReason,
   SCALABILITY_SOURCE,
 } from '../scalability';
 
@@ -58,6 +60,39 @@ function rootWith(inner: Record<string, unknown>, moduleName = 'loom-thing-modul
         properties: { template: inner },
       },
     ],
+  };
+}
+
+/** A second module whose app `env` wires a consumer to `targetFqdnName`. */
+function consumerModule(targetFqdnName: string): Record<string, unknown> {
+  return {
+    type: 'Microsoft.Resources/deployments',
+    name: 'admin-plane',
+    properties: {
+      template: {
+        resources: [
+          {
+            type: 'Microsoft.App/containerApps',
+            name: 'loom-console',
+            properties: {
+              template: {
+                scale: { minReplicas: 0, maxReplicas: 3 },
+                containers: [
+                  {
+                    env: [
+                      {
+                        name: 'LOOM_THING_URL',
+                        value: `https://${targetFqdnName}.internal.example.io`,
+                      },
+                    ],
+                  },
+                ],
+              },
+            },
+          },
+        ],
+      },
+    },
   };
 }
 
@@ -173,8 +208,14 @@ describe('EXPRESSION RESOLUTION — only the shapes the real template uses', () 
         }),
       ),
     );
-    expect(decls.has('loom-thing')).toBe(false);
+    // The declaration IS emitted (its consumers are still knowable — the #4261
+    // hole was dropping `loom-unity` entirely because its scale is conditional),
+    // but the SHAPE is `null` and the durability verdict is withheld.
+    expect(decls.get('loom-thing')!.declared).toBeNull();
+    expect(decls.get('loom-thing')!.reason).toContain('could NOT be established');
     expect(declaredNonScalableToZero('loom-thing', decls)).toBeNull();
+    // …and with no declared consumer either, nothing objects.
+    expect(refuseScaleToZero('loom-thing', decls)).toBeNull();
   });
 
   it('an app whose NAME is a runtime expression is not declared either', () => {
@@ -215,6 +256,135 @@ describe("the refusal quotes the module's OWN words when the module wrote any", 
     ).get('loom-thing')!;
     expect(d.declaredStatement).toBeUndefined();
     expect(d.scalableToZero).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// THE AVAILABILITY SIGNAL (#4261 review) — independent of replica shape
+// ---------------------------------------------------------------------------
+
+describe('THE SECOND SIGNAL — the deploy declares a consumer', () => {
+  /** `loom-unity` on the Postgres path: min 1 / max 3 / WITH rules = ELASTIC. */
+  const elasticShape = {
+    minReplicas: 1,
+    maxReplicas: 3,
+    rules: [{ name: 'catalog-http', http: { metadata: { concurrentRequests: '20' } } }],
+  };
+
+  function estate(wired: boolean): unknown {
+    return {
+      resources: [
+        {
+          type: 'Microsoft.Resources/deployments',
+          name: 'loom-thing-module',
+          properties: { template: moduleTemplate({ scale: elasticShape }) },
+        },
+        consumerModule(wired ? 'loom-thing' : 'something-else'),
+      ],
+    };
+  }
+
+  it('THE HOLE: an ELASTIC app the deploy WIRES is refused for AVAILABILITY', () => {
+    const decls = declarationsFromTemplate(estate(true));
+    const d = decls.get('loom-thing')!;
+    // The shape predicate CLEARS it — so this refusal cannot be coming from
+    // replica shape, which is the whole point of the second signal.
+    expect(d.scalableToZero).toBe(true);
+    expect(declaredNonScalableToZero('loom-thing', decls)).toBeNull();
+    expect(d.declaredConsumers.length).toBeGreaterThan(0);
+
+    const refusal = refuseScaleToZero('loom-thing', decls);
+    expect(refusal).not.toBeNull();
+    expect(refusal!.kind).toBe('declared-consumer');
+    const reason = scaleToZeroRefusalReason(refusal!);
+    expect(reason).toContain('the DEPLOY ITSELF wires');
+    expect(reason).toContain('AVAILABILITY refusal');
+    expect(reason).toContain('no data is lost');
+    // R7: it must NOT claim durability loss.
+    expect(reason).not.toMatch(/unrecoverable/);
+  });
+
+  it('THE CONTROL: the SAME elastic app with no declared consumer is performable', () => {
+    // One field away — the consumer module wires a different name. A signal
+    // that refused both would have disabled scale-to-zero outright.
+    const decls = declarationsFromTemplate(estate(false));
+    expect(decls.get('loom-thing')!.declaredConsumers).toEqual([]);
+    expect(refuseScaleToZero('loom-thing', decls)).toBeNull();
+  });
+
+  it('a service does not wire ITSELF — its own env is excluded', () => {
+    const inner = moduleTemplate({ scale: elasticShape });
+    (inner.resources as Array<Record<string, unknown>>)[0]!.properties = {
+      template: {
+        scale: elasticShape,
+        containers: [
+          { env: [{ name: 'SELF_URL', value: 'https://loom-thing.internal.example.io' }] },
+        ],
+      },
+    };
+    const decls = declarationsFromTemplate(rootWith(inner));
+    expect(decls.get('loom-thing')!.declaredConsumers).toEqual([]);
+    expect(refuseScaleToZero('loom-thing', decls)).toBeNull();
+  });
+
+  it('DURABILITY WINS when both apply — the stronger claim is not softened', () => {
+    const template = {
+      resources: [
+        {
+          type: 'Microsoft.Resources/deployments',
+          name: 'loom-thing-module',
+          properties: {
+            template: moduleTemplate({ scale: { minReplicas: 1, maxReplicas: 1 } }),
+          },
+        },
+        consumerModule('loom-thing'),
+      ],
+    };
+    const refusal = refuseScaleToZero('loom-thing', declarationsFromTemplate(template))!;
+    expect(refusal.kind).toBe('pinned-singleton');
+    expect(scaleToZeroRefusalReason(refusal)).toMatch(/unrecoverable loss/);
+  });
+
+  it('matches BOTH naming forms: a module reference as well as an FQDN literal', () => {
+    // The real template uses `reference('icebergCatalog').outputs.fqdn.value`
+    // for some wires and a literal `'https://loom-unity.internal.{0}'` for
+    // others. A matcher that read only one form would be blind to half the
+    // estate and report a confident zero.
+    const template = {
+      resources: {
+        thingModule: {
+          type: 'Microsoft.Resources/deployments',
+          name: 'thing-module',
+          properties: { template: moduleTemplate({ scale: elasticShape }) },
+        },
+        adminPlane: {
+          type: 'Microsoft.Resources/deployments',
+          name: 'admin-plane',
+          properties: {
+            template: {
+              resources: [
+                {
+                  type: 'Microsoft.App/containerApps',
+                  name: 'loom-console',
+                  properties: {
+                    template: {
+                      scale: { minReplicas: 0, maxReplicas: 3 },
+                      containers: [
+                        {
+                          env: "[createArray(createObject('name', 'X', 'value', reference('thingModule').outputs.fqdn.value))]",
+                        },
+                      ],
+                    },
+                  },
+                },
+              ],
+            },
+          },
+        },
+      },
+    };
+    const d = declarationsFromTemplate(template).get('loom-thing')!;
+    expect(d.declaredConsumers.map((c) => c.via)).toContain('module-reference');
   });
 });
 
@@ -263,7 +433,7 @@ describe(`the COMMITTED ${SCALABILITY_SOURCE}`, () => {
     }
   });
 
-  it('THE CONTROL: elastic Loom apps stay performable — the feature is not disabled', () => {
+  it('THE CONTROL: elastic Loom apps clear the DURABILITY predicate', () => {
     for (const name of [
       'loom-duckdb',
       'loom-trino',
@@ -276,6 +446,16 @@ describe(`the COMMITTED ${SCALABILITY_SOURCE}`, () => {
     }
   });
 
+  it('THE CONTROL: an elastic app the deploy wires NOTHING to stays performable', () => {
+    // The composite must not refuse everything. Presidio is declared elastic
+    // and carries no declared consumer, so it remains a real scale-to-zero
+    // candidate — measured, not assumed.
+    for (const name of ['loom-presidio-analyzer', 'loom-presidio-anonymizer']) {
+      expect(decls.get(name)!.declaredConsumers, name).toEqual([]);
+      expect(refuseScaleToZero(name, decls), name).toBeNull();
+    }
+  });
+
   it('an app the template does not statically declare is NOT reported as pinned', () => {
     // `loom-capacity-broker` and `loom-console` come from the generic `apps[]`
     // copy loop, whose replica counts live in a bicepparam. Treating them as
@@ -283,6 +463,31 @@ describe(`the COMMITTED ${SCALABILITY_SOURCE}`, () => {
     // declaration here and keep the rest of the guard chain.
     expect(declaredNonScalableToZero('loom-capacity-broker', decls)).toBeNull();
     expect(declaredNonScalableToZero('some-app-that-does-not-exist', decls)).toBeNull();
+    // And the composite agrees — the founding acceptance case stays performable.
+    expect(refuseScaleToZero('loom-capacity-broker', decls)).toBeNull();
+    expect(refuseScaleToZero('some-app-that-does-not-exist', decls)).toBeNull();
+  });
+
+  it('THE #4261 HOLE, on the real artifact: loom-unity is ELASTIC and still refused', () => {
+    const d = decls.get('loom-unity');
+    expect(d, 'loom-unity must be in the derived set').toBeDefined();
+    // Its shape does NOT trip the pinned predicate on the live template…
+    expect(declaredNonScalableToZero('loom-unity', decls)).toBeNull();
+    // …and the deploy wires consumers to it, so the composite refuses anyway.
+    expect(d!.declaredConsumers.length).toBeGreaterThan(0);
+    const refusal = refuseScaleToZero('loom-unity', decls);
+    expect(refusal).not.toBeNull();
+    expect(refusal!.kind).toBe('declared-consumer');
+    expect(scaleToZeroRefusalReason(refusal!)).toContain('AVAILABILITY refusal');
+  });
+
+  it('POPULATION: the availability signal is neither empty nor universal', () => {
+    // Both failure directions in one assertion. Zero declared consumers = a
+    // matcher that reads nothing; every app refused = a disabled feature.
+    const withConsumers = [...decls.values()].filter((x) => x.declaredConsumers.length > 0);
+    const refused = [...decls.keys()].filter((n) => refuseScaleToZero(n, decls) !== null);
+    expect(withConsumers.length).toBeGreaterThanOrEqual(5);
+    expect(refused.length).toBeLessThan(decls.size);
   });
 
   it('the lookup is case-insensitive, as ARM names are', () => {

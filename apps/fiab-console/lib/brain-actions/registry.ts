@@ -27,9 +27,9 @@
  */
 
 import {
-  declaredNonScalableToZero,
-  nonScalableExplanation,
-  type ScalabilityDeclaration,
+  refuseScaleToZero,
+  scaleToZeroRefusalReason,
+  type ScaleToZeroRefusal,
 } from './scalability';
 import type { PerformRegistryEntry } from './types';
 
@@ -200,19 +200,19 @@ export function resolvePerformEntry(detector: string): PerformRegistryEntry {
 export function resolvePerformEntryForSubject(
   detector: string,
   subjectDisplayName: string,
-  declaration: ScalabilityDeclaration | null = declaredNonScalableToZero(subjectDisplayName),
+  refusal: ScaleToZeroRefusal | null = refuseScaleToZero(subjectDisplayName),
 ): PerformRegistryEntry {
   const entry = resolvePerformEntry(detector);
   if (!entry.performable || entry.executor !== 'scale-to-zero') return entry;
-  // `null` (no declaration) and an ELASTIC declaration both leave the entry
-  // alone. Checking only for null would downgrade every app the template
-  // declares, which is a disabled feature wearing a guard's clothes.
-  if (declaration === null || declaration.scalableToZero) return entry;
+  // `null` covers "no declaration", "declared elastic with no declared
+  // consumer", and "no template in the image". Downgrading on anything else
+  // would be a disabled feature wearing a guard's clothes.
+  if (refusal === null) return entry;
   return {
     detector: entry.detector,
     performable: false,
     notPerformableReason:
-      `${nonScalableExplanation(declaration)} This finding stays REPORTED — an always-on floor ` +
+      `${scaleToZeroRefusalReason(refusal)} This finding stays REPORTED — an always-on floor ` +
       'the deploy declared on purpose is not waste, it is design — but no scale-to-zero action ' +
       'is offered for it. If the floor is genuinely wrong, the fix is the bicep module that ' +
       'declares it, not an out-of-band ARM write.',

@@ -81,7 +81,21 @@ describe('executeScaleToZero refuses a service the DEPLOY declares non-scalable'
     // Reaching this error at all means the guard chain did not refuse first,
     // and the message says so rather than presenting itself as routine.
     expect(err.message).toContain('#4257');
-    expect(err.declaration.scalableToZero).toBe(false);
+    expect(err.kind).toBe('pinned-singleton');
+  });
+
+  it('#4261 — loom-unity is ELASTIC and refused anyway, for AVAILABILITY', async () => {
+    // The review hole: its replica shape (min 1 / max 3 / with rules on the
+    // Postgres path) clears the pinned predicate, so only the declared-consumer
+    // signal can stop this write.
+    const err = await executeScaleToZero(subject('loom-unity'), BEFORE, IDS).catch(
+      (e: unknown) => e as NonScalableResourceError,
+    );
+    expect(err).toBeInstanceOf(NonScalableResourceError);
+    expect(err.kind).toBe('declared-consumer');
+    expect(err.message).toContain('AVAILABILITY refusal');
+    expect(err.message).not.toMatch(/unrecoverable/);
+    expect(arm.updateContainerAppScale).not.toHaveBeenCalled();
   });
 
   it('the other declared singletons are refused too', async () => {
@@ -93,11 +107,15 @@ describe('executeScaleToZero refuses a service the DEPLOY declares non-scalable'
     expect(arm.updateContainerAppScale).not.toHaveBeenCalled();
   });
 
-  it('THE CONTROL: an elastic app still gets its PATCH and a real receipt', async () => {
+  it('THE CONTROL: an elastic, UNWIRED app still gets its PATCH and a real receipt', async () => {
     // Without this, an executor that threw for every subject would satisfy every
     // spec above while having silently deleted the feature.
-    const receipt = await executeScaleToZero(subject('loom-duckdb'), BEFORE, IDS);
-    expect(arm.updateContainerAppScale).toHaveBeenCalledWith('loom-duckdb', { minReplicas: 0 });
+    // `loom-presidio-analyzer` is declared elastic (min 1 / max 4) and the
+    // deploy wires no consumer to it — measured on the committed template.
+    const receipt = await executeScaleToZero(subject('loom-presidio-analyzer'), BEFORE, IDS);
+    expect(arm.updateContainerAppScale).toHaveBeenCalledWith('loom-presidio-analyzer', {
+      minReplicas: 0,
+    });
     expect(receipt.executor).toBe('scale-to-zero');
     expect(receipt.mutatedAzure).toBe(true);
     expect(receipt.before.minReplicas).toBe(1);

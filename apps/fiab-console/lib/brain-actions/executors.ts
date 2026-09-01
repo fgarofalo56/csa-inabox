@@ -27,9 +27,9 @@ import {
 } from '@/lib/azure/container-apps-arm-client';
 import { armDeleteResource, BRAIN_ACTIONS_ACA_API } from './arm';
 import {
-  declaredNonScalableToZero,
-  nonScalableExplanation,
-  type ScalabilityDeclaration,
+  refuseScaleToZero,
+  scaleToZeroRefusalReason,
+  type ScaleToZeroRefusal,
 } from './scalability';
 import type { PerformReceipt, PerformSubject } from './types';
 
@@ -47,16 +47,20 @@ const CONTAINER_APPS_TYPE = 'microsoft.app/containerapps';
  * reaches the executor directly all end here instead of in ARM.
  */
 export class NonScalableResourceError extends Error {
-  readonly declaration: ScalabilityDeclaration;
-  constructor(declaration: ScalabilityDeclaration) {
+  readonly refusal: ScaleToZeroRefusal;
+  constructor(refusal: ScaleToZeroRefusal) {
     super(
-      `REFUSED BY THE EXECUTOR: ${nonScalableExplanation(declaration)} No ARM call was made — ` +
+      `REFUSED BY THE EXECUTOR: ${scaleToZeroRefusalReason(refusal)} No ARM call was made — ` +
         'this refusal happens before the PATCH, so nothing was changed in Azure. Reaching this ' +
         'error means the guard chain did not refuse first, which is itself a defect worth ' +
         'reporting (#4257).',
     );
     this.name = 'NonScalableResourceError';
-    this.declaration = declaration;
+    this.refusal = refusal;
+  }
+  /** Which claim this refusal makes — durability or availability. */
+  get kind(): ScaleToZeroRefusal['kind'] {
+    return this.refusal.kind;
   }
 }
 
@@ -114,8 +118,8 @@ export async function executeScaleToZero(
   before: ContainerAppInfo,
   finding: { readonly findingId: string; readonly detector: string },
 ): Promise<PerformReceipt> {
-  const pinned = declaredNonScalableToZero(subject.displayName);
-  if (pinned) throw new NonScalableResourceError(pinned);
+  const refused = refuseScaleToZero(subject.displayName);
+  if (refused) throw new NonScalableResourceError(refused);
 
   const after = await updateContainerAppScale(subject.displayName, { minReplicas: 0 });
   return {

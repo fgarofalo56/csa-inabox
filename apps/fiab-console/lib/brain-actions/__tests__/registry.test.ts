@@ -18,7 +18,7 @@ import {
   resolvePerformEntryForSubject,
   SECURITY_DETECTOR_PREFIX,
 } from '../registry';
-import type { ScalabilityDeclaration } from '../scalability';
+import type { ScaleToZeroRefusal } from '../scalability';
 
 const SECURITY_IDS = [
   'security.c1.unauthorized-inbound-edge',
@@ -102,19 +102,17 @@ describe('unknown detector kinds', () => {
 });
 
 describe('#4257 — performability is per SUBJECT, not only per class', () => {
-  const pinned: ScalabilityDeclaration = {
-    appName: 'loom-risingwave',
-    module: 'loom-risingwave',
-    scalableToZero: false,
-    declared: { minReplicas: 1, maxReplicas: 1, hasScaleRules: false },
-    reason: "the deploy PINS 'loom-risingwave' to exactly 1 replica(s).",
-    declaredStatement: 'CANNOT scale to zero: a stopped replica loses every materialized view',
-  };
-  const elastic: ScalabilityDeclaration = {
-    ...pinned,
-    appName: 'loom-duckdb',
-    scalableToZero: true,
-    declared: { minReplicas: 1, maxReplicas: 3, hasScaleRules: true },
+  const pinned: ScaleToZeroRefusal = {
+    kind: 'pinned-singleton',
+    declaration: {
+      appName: 'loom-risingwave',
+      module: 'loom-risingwave',
+      scalableToZero: false,
+      declared: { minReplicas: 1, maxReplicas: 1, hasScaleRules: false },
+      declaredConsumers: [],
+      reason: "the deploy PINS 'loom-risingwave' to exactly 1 replica(s).",
+      declaredStatement: 'CANNOT scale to zero: a stopped replica loses every materialized view',
+    },
   };
 
   it.each(['unreachable-always-on', 'unreachable-service', 'always-on-unused'])(
@@ -134,8 +132,8 @@ describe('#4257 — performability is per SUBJECT, not only per class', () => {
     },
   );
 
-  it('THE CONTROL: an ELASTIC subject keeps its executor', () => {
-    const entry = resolvePerformEntryForSubject('unreachable-always-on', 'loom-duckdb', elastic);
+  it('THE CONTROL: an ELASTIC subject with no declared consumer keeps its executor', () => {
+    const entry = resolvePerformEntryForSubject('unreachable-always-on', 'loom-duckdb', null);
     expect(entry.performable).toBe(true);
     expect(entry.executor).toBe('scale-to-zero');
   });
@@ -163,14 +161,28 @@ describe('#4257 — performability is per SUBJECT, not only per class', () => {
   });
 
   it('DERIVED, not injected: the default lookup refuses risingwave from the real template', () => {
-    // No declaration argument — this is the production call path, reading the
+    // No refusal argument — this is the production call path, reading the
     // committed compiled ARM. A resolver wired only to the test double would
     // pass every spec above and protect nothing.
     const entry = resolvePerformEntryForSubject('unreachable-always-on', 'loom-risingwave');
     expect(entry.performable).toBe(false);
-    expect(resolvePerformEntryForSubject('unreachable-always-on', 'loom-duckdb').performable).toBe(
-      true,
-    );
+  });
+
+  it('DERIVED: loom-unity is refused too — ELASTIC, but the deploy wires it', () => {
+    // The #4261 review hole. Its replica shape clears the pinned predicate, so
+    // this can only come from the declared-consumer signal.
+    const entry = resolvePerformEntryForSubject('unreachable-always-on', 'loom-unity');
+    expect(entry.performable).toBe(false);
+    expect(entry.notPerformableReason).toContain('AVAILABILITY refusal');
+  });
+
+  it('DERIVED CONTROL: an app the deploy wires nothing to stays performable', () => {
+    // `loom-capacity-broker`'s only wire is `LOOM_BROKER_URL: ''` — an empty
+    // value that names nothing — so it has no declared consumer and remains
+    // the founding acceptance case.
+    const entry = resolvePerformEntryForSubject('unreachable-always-on', 'loom-capacity-broker');
+    expect(entry.performable).toBe(true);
+    expect(entry.executor).toBe('scale-to-zero');
   });
 });
 
