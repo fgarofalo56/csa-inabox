@@ -90,12 +90,28 @@ function targets(fqdns: string[], resourceIds: string[] = []): EstateTargetIndex
   };
 }
 
+/**
+ * The binding-table name set, supplied under BOTH spellings.
+ *
+ * NOT redundancy — it is what makes these specs FAIL on the parent commit. The
+ * parent reads only `onlyNames`; a fixture that supplied the new
+ * `alwaysConsiderNames` alone left `only === null` there, so the parent admitted
+ * every entry and the defect specs went GREEN on the broken code. A spec that
+ * passes against the code it was written to indict proves nothing. Both
+ * spellings are unioned by the fix, so the post-fix behaviour is identical and
+ * the pre-fix filter is faithfully reproduced.
+ */
+const NAME_LIST = {
+  alwaysConsiderNames: BOUND_ENV_VAR_NAMES,
+  onlyNames: BOUND_ENV_VAR_NAMES,
+} as const;
+
 describe('a wire is found by its VALUE, not by its variable name', () => {
   it('THE DEFECT: a wire on a variable outside the name list now produces an edge', () => {
     const r = extractFromContainerAppEnv([
       {
         appResourceId: CONSOLE_ARM,
-        alwaysConsiderNames: BOUND_ENV_VAR_NAMES,
+        ...NAME_LIST,
         estateTargets: targets([RISINGWAVE_FQDN]),
         env: [{ name: 'LOOM_RISINGWAVE_URL', value: RISINGWAVE_WIRE }],
       },
@@ -115,7 +131,7 @@ describe('a wire is found by its VALUE, not by its variable name', () => {
     const env = extractFromContainerAppEnv([
       {
         appResourceId: CONSOLE_ARM,
-        alwaysConsiderNames: BOUND_ENV_VAR_NAMES,
+        ...NAME_LIST,
         estateTargets: targets([RISINGWAVE_FQDN]),
         env: [{ name: 'LOOM_RISINGWAVE_URL', value: RISINGWAVE_WIRE }],
       },
@@ -137,7 +153,7 @@ describe('a wire is found by its VALUE, not by its variable name', () => {
     const r = extractFromContainerAppEnv([
       {
         appResourceId: CONSOLE_ARM,
-        alwaysConsiderNames: BOUND_ENV_VAR_NAMES,
+        ...NAME_LIST,
         estateTargets: targets([], [RISINGWAVE_ARM]),
         env: [{ name: 'SOME_TARGET_ID', value: upper }],
       },
@@ -166,7 +182,7 @@ describe('a wire is found by its VALUE, not by its variable name', () => {
       const env = extractFromContainerAppEnv([
         {
           appResourceId: CONSOLE_ARM,
-          alwaysConsiderNames: BOUND_ENV_VAR_NAMES,
+          ...NAME_LIST,
           estateTargets: targets([RISINGWAVE_FQDN]),
           env: [{ name: 'UNLISTED_VAR', value }],
         },
@@ -181,7 +197,7 @@ describe('a wire is found by its VALUE, not by its variable name', () => {
 describe('the widening is BOUNDED — these still produce nothing', () => {
   const only = {
     appResourceId: CONSOLE_ARM,
-    alwaysConsiderNames: BOUND_ENV_VAR_NAMES,
+    ...NAME_LIST,
     estateTargets: targets([RISINGWAVE_FQDN], [RISINGWAVE_ARM]),
   } as const;
 
@@ -255,7 +271,7 @@ describe('nothing the name path used to produce is lost', () => {
     const r = extractFromContainerAppEnv([
       {
         appResourceId: CONSOLE_ARM,
-        alwaysConsiderNames: BOUND_ENV_VAR_NAMES,
+        ...NAME_LIST,
         estateTargets: targets([RISINGWAVE_FQDN]),
         envVarBindings: bindings,
         env: [{ name: 'LOOM_BROKER_URL', value: '' }],
@@ -275,7 +291,7 @@ describe('nothing the name path used to produce is lost', () => {
     const env = extractFromContainerAppEnv([
       {
         appResourceId: CONSOLE_ARM,
-        alwaysConsiderNames: BOUND_ENV_VAR_NAMES,
+        ...NAME_LIST,
         estateTargets: targets(['loom-directlake.internal.example.azurecontainerapps.io']),
         env: [{ name: 'LOOM_DIRECTLAKE_URL', value: wired }],
       },
