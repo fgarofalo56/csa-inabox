@@ -2,12 +2,35 @@ name: build-fiab-images-acr-tasks
 
 # CSA Loom — image build via Azure Container Registry Tasks.
 #
-# THE image producer for BOTH clouds. `boundary` selects the estate:
-#   Commercial (default) → AZURE_* secrets, rg-csa-loom-admin-eastus2
-#   GCC-High / IL5       → AZURE_GOV_* secrets + `az cloud set --name
-#                          AzureUSGovernment`, rg-csa-loom-admin-usgovvirginia
+# THE image producer for EVERY boundary. `boundary` selects the estate:
+#   Commercial (default) → AZURE_* secrets,     AzureCloud,        rg-csa-loom-admin-eastus2
+#   GCC                  → AZURE_GCC_* secrets, AzureCloud,        rg-csa-loom-admin-eastus
+#   GCC-High / IL5       → AZURE_GOV_* secrets, AzureUSGovernment, rg-csa-loom-admin-usgovvirginia
 # Everything else is identical, because the mechanism is identical: `az acr
 # build` runs SERVER-SIDE inside Azure.
+#
+# ── WHY GCC IS ITS OWN BRANCH AND NOT "the Gov branch" (#4071 / #3078) ───────
+# GCC is the boundary that is easiest to mis-wire, because it is Azure
+# COMMERCIAL under an M365 GCC identity: `params/gcc.bicepparam` sets
+# `environment = 'AzureCloud'` and `location = 'eastus'`, and its registry's
+# login server is `.azurecr.io`, not `.azurecr.us`. It is a DIFFERENT tenant and
+# a DIFFERENT subscription from the Commercial estate, so it needs its own
+# credential set — but it must NEVER run `az cloud set --name
+# AzureUSGovernment`, which is exactly what the old `BOUNDARY != 'Commercial'`
+# condition would have done to it.
+#
+# So the cloud selector is now written as an EXPLICIT three-way match rather
+# than "Commercial or not". #4191 records what the lazy shape costs on the
+# sibling lane gov-provision-runner-images.yml, where the `boundary` input is
+# read only by a `::notice::` and gcc-high and il5 resolve the same RG and the
+# same ACR — a selector that does not select, producing two receipts that are
+# indistinguishable from each other. THAT DEFECT IS NOT FIXED HERE AND IS NOT
+# EXTENDED HERE: GCC-High and IL5 still share `usgovvirginia` + AZURE_GOV_* in
+# this file too (same shared-Gov-estate question #4191 says needs Gov visibility
+# to answer), and the GCC path deliberately resolves distinctly on all three
+# axes — credentials, cloud, and region — so no GCC run can be confused for a
+# Gov one. The unknown-boundary case now fails closed instead of falling through
+# to an unauthenticated `az` (see "Verify the boundary's credential set").
 #
 # Why this exists alongside build-fiab-images.yml: the customer's
 # Loom ACR is provisioned with publicNetworkAccess=Disabled (private
@@ -41,11 +64,12 @@ on:
   workflow_dispatch:
     inputs:
       boundary:
-        description: 'Which cloud/boundary ACR to build into. Commercial uses the AZURE_* secret set; GCC-High / IL5 use AZURE_GOV_* + `az cloud set --name AzureUSGovernment`.'
+        description: 'Which cloud/boundary ACR to build into. Commercial uses the AZURE_* secret set. GCC uses AZURE_GCC_* and STAYS in Azure Commercial (GCC is Azure public under an M365 GCC identity — eastus, .azurecr.io). GCC-High / IL5 use AZURE_GOV_* + `az cloud set --name AzureUSGovernment` (usgovvirginia, .azurecr.us).'
         type: choice
         default: Commercial
         options:
           - Commercial
+          - GCC
           - GCC-High
           - IL5
       tag_override:
@@ -149,9 +173,16 @@ env:
   # inside Azure, which is the only mechanism that reaches a Gov ACR provisioned
   # with publicNetworkAccess=Disabled (a client-side `docker push` from a
   # GitHub-hosted runner cannot). Same mechanism gov-console-roll.yml and
-  # gov-provision-wrangler.yml have used in production.
+  # gov-provision-wrangler.yml have used in production. The same argument is why
+  # GCC uses this lane and not build-fiab-images.yml: the GCC ACR is likewise
+  # publicNetworkAccess=Disabled, so a client-side push cannot reach it either.
   BOUNDARY: ${{ inputs.boundary || 'Commercial' }}
-  AZURE_LOCATION: ${{ (inputs.boundary == 'GCC-High' || inputs.boundary == 'IL5') && 'usgovvirginia' || 'eastus2' }}
+  # GCC's region is READ FROM ITS OWN PARAM FILE, not assumed: platform/fiab/
+  # bicep/params/gcc.bicepparam sets `param location = 'eastus'` (Commercial
+  # sets eastus2, both Gov boundaries pin usgovvirginia). A wrong region here
+  # resolves the wrong admin RG, and `resolve` would then either fail or — the
+  # worse case — find a DIFFERENT estate's registry and build into it.
+  AZURE_LOCATION: ${{ (inputs.boundary == 'GCC-High' || inputs.boundary == 'IL5') && 'usgovvirginia' || (inputs.boundary == 'GCC' && 'eastus' || 'eastus2') }}
   # This workflow is the longest-lived holder (console compile + matrix builds +
   # Trivy scan + cosign sign). Size the lease so a legitimate run never expires
   # mid-push and gets its registry swept out from under it.
@@ -173,6 +204,14 @@ jobs:
       # Fail LOUDLY rather than silently building into the wrong cloud: a Gov
       # dispatch with no AZURE_GOV_* secret set would otherwise fall through to
       # an unauthenticated `az` and report a confusing "ACR not found".
+      # THE BOUNDARY LIST HERE AND THE LOGIN STEPS BELOW MUST AGREE. Every
+      # `case` arm names the credential set the matching login step reads, and
+      # the `*)` arm REFUSES an unrecognized value. Without that arm a new
+      # boundary option added to the `choice` above and forgotten here would
+      # skip every login `if:` and fall through to an unauthenticated `az`,
+      # surfacing as a confusing "Admin RG not found (prefix rg-csa-loom-admin)"
+      # in `resolve` — a wrong answer that reads like a missing estate rather
+      # than a missing credential (deploy-integrity.md R7).
       - name: Verify the boundary's credential set is configured
         env:
           GC: ${{ secrets.AZURE_GOV_CLIENT_ID }}
@@ -180,15 +219,41 @@ jobs:
           GT: ${{ secrets.AZURE_GOV_TENANT_ID }}
           GU: ${{ secrets.AZURE_GOV_SUBSCRIPTION_ID }}
           CC: ${{ secrets.AZURE_CLIENT_ID }}
+          KC: ${{ secrets.AZURE_GCC_CLIENT_ID }}
+          KS: ${{ secrets.AZURE_GCC_CLIENT_SECRET }}
+          KT: ${{ secrets.AZURE_GCC_TENANT_ID }}
+          KU: ${{ secrets.AZURE_GCC_SUBSCRIPTION_ID }}
         run: |
-          if [[ "$BOUNDARY" == "Commercial" ]]; then
-            [[ -n "$CC" ]] || { echo "::error::AZURE_CLIENT_ID is not configured."; exit 1; }
-          else
-            if [[ -z "$GC" || -z "$GS" || -z "$GT" || -z "$GU" ]]; then
-              echo "::error::boundary=$BOUNDARY needs the AZURE_GOV_* secret set (see docs/fiab/runbooks/secrets-bootstrap.md)."
+          case "$BOUNDARY" in
+            Commercial)
+              [[ -n "$CC" ]] || { echo "::error::AZURE_CLIENT_ID is not configured."; exit 1; }
+              ;;
+            GCC)
+              # NAME EVERY MISSING ONE, not just the first. This lane is the
+              # prerequisite for enabling deploy-fiab-gcc, and the whole point of
+              # #3219 was that a GCC path which cannot authenticate must say so
+              # precisely rather than skip and go green.
+              MISSING=""
+              [[ -z "$KC" ]] && MISSING="$MISSING AZURE_GCC_CLIENT_ID"
+              [[ -z "$KS" ]] && MISSING="$MISSING AZURE_GCC_CLIENT_SECRET"
+              [[ -z "$KT" ]] && MISSING="$MISSING AZURE_GCC_TENANT_ID"
+              [[ -z "$KU" ]] && MISSING="$MISSING AZURE_GCC_SUBSCRIPTION_ID"
+              if [[ -n "$MISSING" ]]; then
+                echo "::error::boundary=GCC needs the AZURE_GCC_* secret set and is missing:${MISSING}. These are DISTINCT from AZURE_* (Commercial) and AZURE_GOV_* (GCC-High/IL5) — GCC is a separate tenant and subscription that happens to run on Azure Commercial endpoints. See docs/fiab/runbooks/secrets-bootstrap.md."
+                exit 1
+              fi
+              ;;
+            GCC-High|IL5)
+              if [[ -z "$GC" || -z "$GS" || -z "$GT" || -z "$GU" ]]; then
+                echo "::error::boundary=$BOUNDARY needs the AZURE_GOV_* secret set (see docs/fiab/runbooks/secrets-bootstrap.md)."
+                exit 1
+              fi
+              ;;
+            *)
+              echo "::error::boundary='$BOUNDARY' is not one of Commercial | GCC | GCC-High | IL5, so no credential set and no cloud can be selected for it. Refusing rather than continuing with an unauthenticated az, which would report a missing resource group instead of a missing credential."
               exit 1
-            fi
-          fi
+              ;;
+          esac
       - name: Azure login (Commercial)
         if: env.BOUNDARY == 'Commercial'
         uses: azure/login@v2.3.0
@@ -200,12 +265,31 @@ jobs:
               "tenantId": "${{ secrets.AZURE_TENANT_ID }}",
               "subscriptionId": "${{ secrets.AZURE_SUBSCRIPTION_ID }}"
             }
+      # GCC. Azure COMMERCIAL endpoints (no `activeDirectoryEndpointUrl`
+      # override, no `environment:`, and deliberately NO `az cloud set` step
+      # after it) with the GCC estate's OWN service principal. Its registry's
+      # login server is `.azurecr.io`; switching this job to AzureUSGovernment
+      # would send every subsequent `az` call to management.usgovcloudapi.net,
+      # where this subscription does not exist.
+      - name: Azure login (GCC)
+        if: env.BOUNDARY == 'GCC'
+        uses: azure/login@v2.3.0
+        with:
+          creds: |
+            {
+              "clientId": "${{ secrets.AZURE_GCC_CLIENT_ID }}",
+              "clientSecret": "${{ secrets.AZURE_GCC_CLIENT_SECRET }}",
+              "tenantId": "${{ secrets.AZURE_GCC_TENANT_ID }}",
+              "subscriptionId": "${{ secrets.AZURE_GCC_SUBSCRIPTION_ID }}"
+            }
       # GCC-High / IL5. Same SP set every other gov-* workflow uses, with the
       # sovereign ARM/AAD endpoints; `az cloud set` afterwards so every plain
       # `az` call later in the job (acr build, acr repository show, acr login)
-      # targets the Government cloud too.
+      # targets the Government cloud too. MATCHED EXPLICITLY, not as
+      # "!= Commercial": that spelling would have swept GCC into the Government
+      # cloud (see the header).
       - name: Azure login (Gov)
-        if: env.BOUNDARY != 'Commercial'
+        if: env.BOUNDARY == 'GCC-High' || env.BOUNDARY == 'IL5'
         uses: azure/login@v2.3.0
         with:
           creds: |
@@ -222,7 +306,7 @@ jobs:
             }
           environment: AzureUSGovernment
       - name: Set Azure cloud to Gov
-        if: env.BOUNDARY != 'Commercial'
+        if: env.BOUNDARY == 'GCC-High' || env.BOUNDARY == 'IL5'
         run: az cloud set --name AzureUSGovernment
       - id: acr
         run: |
@@ -276,7 +360,25 @@ jobs:
               APP="$(echo "$APP" | tr -d '[:space:]')"
               [ -z "$APP" ] && continue
               FILE=""
-              if [ "$APP" = "loom-uat" ]; then
+              if [ "$APP" = "loom-script-runner" ]; then
+                # The sandboxed R/Python script-visual executor does NOT live
+                # under ./apps at all — its context is ./platform/runners/
+                # script-runner, and full-app-deploy-commercial.yml is the only
+                # other producer that knows that. Neither branch below could
+                # resolve it: `[ -d ./apps/loom-script-runner ]` is false and the
+                # STEM fallback produced ./apps/fiab-script-runner, which does not
+                # exist, so `apps: loom-script-runner` failed here with "check the
+                # app name" — a message that blames the caller for a mapping this
+                # file was missing.
+                #
+                # It matters MORE on a Commercial-cloud sovereign boundary than on
+                # Commercial. admin-plane/main.bicep gates it
+                # `scriptRunnerActive = … && boundary != 'GCC-High' && boundary != 'IL5'`,
+                # so GCC-High and IL5 never reference the image — but GCC DOES,
+                # and this lane is GCC's only image producer (#4071). Without the
+                # mapping the GCC image set was not producible from any workflow.
+                CTX="./platform/runners/script-runner"
+              elif [ "$APP" = "loom-uat" ]; then
                 # The Playwright UAT / synthetic-journey runner is a SECOND image
                 # out of the console context (Dockerfile.uat) — there is no
                 # ./apps/loom-uat directory. It is what the default-ON
@@ -330,12 +432,31 @@ jobs:
               "tenantId": "${{ secrets.AZURE_TENANT_ID }}",
               "subscriptionId": "${{ secrets.AZURE_SUBSCRIPTION_ID }}"
             }
+      # GCC. Azure COMMERCIAL endpoints (no `activeDirectoryEndpointUrl`
+      # override, no `environment:`, and deliberately NO `az cloud set` step
+      # after it) with the GCC estate's OWN service principal. Its registry's
+      # login server is `.azurecr.io`; switching this job to AzureUSGovernment
+      # would send every subsequent `az` call to management.usgovcloudapi.net,
+      # where this subscription does not exist.
+      - name: Azure login (GCC)
+        if: env.BOUNDARY == 'GCC'
+        uses: azure/login@v2.3.0
+        with:
+          creds: |
+            {
+              "clientId": "${{ secrets.AZURE_GCC_CLIENT_ID }}",
+              "clientSecret": "${{ secrets.AZURE_GCC_CLIENT_SECRET }}",
+              "tenantId": "${{ secrets.AZURE_GCC_TENANT_ID }}",
+              "subscriptionId": "${{ secrets.AZURE_GCC_SUBSCRIPTION_ID }}"
+            }
       # GCC-High / IL5. Same SP set every other gov-* workflow uses, with the
       # sovereign ARM/AAD endpoints; `az cloud set` afterwards so every plain
       # `az` call later in the job (acr build, acr repository show, acr login)
-      # targets the Government cloud too.
+      # targets the Government cloud too. MATCHED EXPLICITLY, not as
+      # "!= Commercial": that spelling would have swept GCC into the Government
+      # cloud (see the header).
       - name: Azure login (Gov)
-        if: env.BOUNDARY != 'Commercial'
+        if: env.BOUNDARY == 'GCC-High' || env.BOUNDARY == 'IL5'
         uses: azure/login@v2.3.0
         with:
           creds: |
@@ -352,7 +473,7 @@ jobs:
             }
           environment: AzureUSGovernment
       - name: Set Azure cloud to Gov
-        if: env.BOUNDARY != 'Commercial'
+        if: env.BOUNDARY == 'GCC-High' || env.BOUNDARY == 'IL5'
         run: az cloud set --name AzureUSGovernment
 
       - name: Stage Copilot RAG corpus (loom-console only)
@@ -598,12 +719,31 @@ jobs:
               "tenantId": "${{ secrets.AZURE_TENANT_ID }}",
               "subscriptionId": "${{ secrets.AZURE_SUBSCRIPTION_ID }}"
             }
+      # GCC. Azure COMMERCIAL endpoints (no `activeDirectoryEndpointUrl`
+      # override, no `environment:`, and deliberately NO `az cloud set` step
+      # after it) with the GCC estate's OWN service principal. Its registry's
+      # login server is `.azurecr.io`; switching this job to AzureUSGovernment
+      # would send every subsequent `az` call to management.usgovcloudapi.net,
+      # where this subscription does not exist.
+      - name: Azure login (GCC)
+        if: env.BOUNDARY == 'GCC'
+        uses: azure/login@v2.3.0
+        with:
+          creds: |
+            {
+              "clientId": "${{ secrets.AZURE_GCC_CLIENT_ID }}",
+              "clientSecret": "${{ secrets.AZURE_GCC_CLIENT_SECRET }}",
+              "tenantId": "${{ secrets.AZURE_GCC_TENANT_ID }}",
+              "subscriptionId": "${{ secrets.AZURE_GCC_SUBSCRIPTION_ID }}"
+            }
       # GCC-High / IL5. Same SP set every other gov-* workflow uses, with the
       # sovereign ARM/AAD endpoints; `az cloud set` afterwards so every plain
       # `az` call later in the job (acr build, acr repository show, acr login)
-      # targets the Government cloud too.
+      # targets the Government cloud too. MATCHED EXPLICITLY, not as
+      # "!= Commercial": that spelling would have swept GCC into the Government
+      # cloud (see the header).
       - name: Azure login (Gov)
-        if: env.BOUNDARY != 'Commercial'
+        if: env.BOUNDARY == 'GCC-High' || env.BOUNDARY == 'IL5'
         uses: azure/login@v2.3.0
         with:
           creds: |
@@ -620,7 +760,7 @@ jobs:
             }
           environment: AzureUSGovernment
       - name: Set Azure cloud to Gov
-        if: env.BOUNDARY != 'Commercial'
+        if: env.BOUNDARY == 'GCC-High' || env.BOUNDARY == 'IL5'
         run: az cloud set --name AzureUSGovernment
       - name: Acquire the ACR firewall lease (opens the registry)
         id: acquire
@@ -654,12 +794,31 @@ jobs:
               "tenantId": "${{ secrets.AZURE_TENANT_ID }}",
               "subscriptionId": "${{ secrets.AZURE_SUBSCRIPTION_ID }}"
             }
+      # GCC. Azure COMMERCIAL endpoints (no `activeDirectoryEndpointUrl`
+      # override, no `environment:`, and deliberately NO `az cloud set` step
+      # after it) with the GCC estate's OWN service principal. Its registry's
+      # login server is `.azurecr.io`; switching this job to AzureUSGovernment
+      # would send every subsequent `az` call to management.usgovcloudapi.net,
+      # where this subscription does not exist.
+      - name: Azure login (GCC)
+        if: env.BOUNDARY == 'GCC'
+        uses: azure/login@v2.3.0
+        with:
+          creds: |
+            {
+              "clientId": "${{ secrets.AZURE_GCC_CLIENT_ID }}",
+              "clientSecret": "${{ secrets.AZURE_GCC_CLIENT_SECRET }}",
+              "tenantId": "${{ secrets.AZURE_GCC_TENANT_ID }}",
+              "subscriptionId": "${{ secrets.AZURE_GCC_SUBSCRIPTION_ID }}"
+            }
       # GCC-High / IL5. Same SP set every other gov-* workflow uses, with the
       # sovereign ARM/AAD endpoints; `az cloud set` afterwards so every plain
       # `az` call later in the job (acr build, acr repository show, acr login)
-      # targets the Government cloud too.
+      # targets the Government cloud too. MATCHED EXPLICITLY, not as
+      # "!= Commercial": that spelling would have swept GCC into the Government
+      # cloud (see the header).
       - name: Azure login (Gov)
-        if: env.BOUNDARY != 'Commercial'
+        if: env.BOUNDARY == 'GCC-High' || env.BOUNDARY == 'IL5'
         uses: azure/login@v2.3.0
         with:
           creds: |
@@ -676,7 +835,7 @@ jobs:
             }
           environment: AzureUSGovernment
       - name: Set Azure cloud to Gov
-        if: env.BOUNDARY != 'Commercial'
+        if: env.BOUNDARY == 'GCC-High' || env.BOUNDARY == 'IL5'
         run: az cloud set --name AzureUSGovernment
       # #2603: THE fix. This job also runs when the workflow is CANCELLED, and
       # by then GitHub may already have started the next run — which is why the

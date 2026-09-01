@@ -40,10 +40,28 @@ run-name: >-
 #      an auth failure, a missing extension or a throttle into "no hub exists",
 #      so the what-if SUCCESS was the ABSENCE of a check (#3139, merged one hour
 #      before the disablement).
-#   3. IT DEPLOYS ZERO CONTAINER APPS. `deployAppsEnabled` is never set in
-#      gcc.bicepparam; GCC-High and IL5 both set it true (#3078, open).
+#   3. IT DEPLOYED ZERO CONTAINER APPS. `deployAppsEnabled` was never set in
+#      gcc.bicepparam; GCC-High and IL5 both set it true (#3078).
 #
 # So the disablement was deliberate and correct, not neglect.
+#
+# ── WHAT #4071 CHANGED, AND WHAT IT DID NOT ─────────────────────────────────
+# Reason (2) was fixed by #3139 (the hub probe fails closed) and reason (3) is
+# fixed now: gcc.bicepparam sets `deployAppsEnabled = true` and
+# `frontDoorEnabled = true`, build-fiab-images-acr-tasks.yml carries a `GCC`
+# boundary (AZURE_GCC_* credentials, Azure COMMERCIAL cloud, eastus) as this
+# boundary's image producer, and the `Image preflight` step below refuses the
+# apply when a deploy-referenced tag is absent instead of discovering it as a
+# MANIFEST_UNKNOWN over a live estate.
+#
+# REASON (1) IS UNCHANGED AND IS THE OPERATOR'S. The four AZURE_GCC_* secrets
+# still do not exist in this repository, and nothing in a pull request can
+# create them. Until they do, a SCHEDULED run of this lane fails at `precheck`
+# with an `::error::` naming all four — which is the correct, honest behaviour
+# (#3219) and the reason this lane must not be re-enabled before the secrets
+# are set. Everything below reason (1) is code that has never executed against
+# a real GCC subscription; per deploy-integrity.md R4 it is declared untested,
+# not implied working.
 #
 # STILL INFERRED, NOT MEASURED: that the 08:36:15Z state change was made BY the
 # actor who dispatched the final run at 08:36:07Z and FOR the #3139 reason. The
@@ -70,7 +88,7 @@ on:
   workflow_dispatch:
     inputs:
       run_mode:
-        description: 'whatif-only PREVIEWS the Bicep and applies NOTHING. full APPLIES the template: it provisions/reconciles the infrastructure and smokes it, and does NOT tear anything down (keep_resources defaults true). KNOWN GAP — on THIS boundary a full run deploys INFRASTRUCTURE ONLY: gcc.bicepparam leaves deployAppsEnabled unset because there is no GCC image producer, so ZERO Container Apps are created and no loom-console is stamped. A green run here does not mean GCC serves Loom. Tracked in #3078; the other three lanes deploy the app tier on full.'
+        description: 'whatif-only PREVIEWS the Bicep and applies NOTHING. full APPLIES the template: it provisions/reconciles the infrastructure AND the Container App tier (gcc.bicepparam now sets deployAppsEnabled=true — #3078), then smokes the public Front Door ingress, and does NOT tear anything down (keep_resources defaults true). PRECONDITION on a from-scratch estate: the app images must already be in this estate''s ACR — dispatch build-fiab-images-acr-tasks.yml with boundary=GCC first. The Image preflight step refuses the apply rather than failing every Container App PUT with MANIFEST_UNKNOWN.'
         type: choice
         default: whatif-only
         options:
@@ -118,20 +136,37 @@ jobs:
     outputs:
       configured: ${{ steps.check.outputs.configured }}
     steps:
+      # A FIFTH SECRET IS CHECKED HERE, and it was not before (#4071). This
+      # precheck watched the four AZURE_GCC_* credentials, but `Bicep what-if`
+      # and `Provision` ALSO interpolate `secrets.FIAB_GCC_ADMIN_GROUP_ID` into
+      # `--parameters adminEntraGroupId=` and `loomTenantAdminGroupId=`, and that
+      # secret does not exist in this repository either (measured: `gh secret
+      # list` shows FIAB_GOV_ADMIN_GROUP_ID and no FIAB_GCC_*). So the four-secret
+      # gate could have passed and the deploy still rendered an EMPTY admin group,
+      # which is the #3090 defect this file's own param-file comments describe:
+      # the console ships with /admin/* shut for every user.
+      #
+      # WHAT AN EMPTY VALUE ACTUALLY DOES IS NOT ASSERTED HERE. `az … --parameters
+      # adminEntraGroupId=` may be refused by the CLI or may bind an empty string;
+      # this was not measured, and deploy-integrity.md R7 forbids stating a cause
+      # that was not established. Both outcomes are wrong, and checking for the
+      # secret's presence is cheap, so the gate refuses rather than finding out.
       - id: check
         env:
           C: ${{ secrets.AZURE_GCC_CLIENT_ID }}
           S: ${{ secrets.AZURE_GCC_CLIENT_SECRET }}
           T: ${{ secrets.AZURE_GCC_TENANT_ID }}
           U: ${{ secrets.AZURE_GCC_SUBSCRIPTION_ID }}
+          G: ${{ secrets.FIAB_GCC_ADMIN_GROUP_ID }}
         run: |
-          if [[ -z "$C" || -z "$S" || -z "$T" || -z "$U" ]]; then
+          if [[ -z "$C" || -z "$S" || -z "$T" || -z "$U" || -z "$G" ]]; then
             echo "configured=false" >> $GITHUB_OUTPUT
             MISSING=""
             [[ -z "$C" ]] && MISSING="$MISSING AZURE_GCC_CLIENT_ID"
             [[ -z "$S" ]] && MISSING="$MISSING AZURE_GCC_CLIENT_SECRET"
             [[ -z "$T" ]] && MISSING="$MISSING AZURE_GCC_TENANT_ID"
             [[ -z "$U" ]] && MISSING="$MISSING AZURE_GCC_SUBSCRIPTION_ID"
+            [[ -z "$G" ]] && MISSING="$MISSING FIAB_GCC_ADMIN_GROUP_ID"
             # A CRON that can never do anything is not a no-op, it is a defect
             # that reports green every day (deploy-integrity.md R3). An explicit
             # dispatch is different: the operator asked, and gets the warning in
@@ -140,7 +175,7 @@ jobs:
               echo "::error::deploy-fiab-gcc is on a DAILY CRON and cannot authenticate — missing secret(s):${MISSING}. Every scheduled run since this cron was added has reported SUCCESS while skipping both real jobs, i.e. a green tick over a lane that has never deployed anything. Either bootstrap the secrets (docs/fiab/runbooks/secrets-bootstrap.md) or remove the schedule. Failing rather than reporting a green no-op."
               exit 1
             fi
-            echo "::warning::AZURE_GCC_* secrets not configured — skipping. Missing:${MISSING}"
+            echo "::warning::GCC deploy secrets not configured — skipping. Missing:${MISSING}"
             echo "::warning::Bootstrap per docs/fiab/runbooks/secrets-bootstrap.md. NOTE: this run will conclude SUCCESS having deployed NOTHING; that is why the scheduled path fails instead."
           else
             echo "configured=true" >> $GITHUB_OUTPUT
@@ -583,6 +618,128 @@ jobs:
             ${CSA_LOOM_TOPOLOGY:+--parameters topology="$CSA_LOOM_TOPOLOGY"} \
             ${CSA_LOOM_TARGET_SUBSCRIPTION:+--parameters targetSubscriptionId="$CSA_LOOM_TARGET_SUBSCRIPTION"}
 
+      # ── IMAGE PREFLIGHT — GCC now DEPLOYS APPS, so the tags must exist ──────
+      #
+      # WHY THIS STEP IS PART OF THE #3078 FIX AND NOT A SEPARATE NICETY. #3078
+      # held `deployAppsEnabled` false in gcc.bicepparam for a precise reason:
+      # "there is no GCC image producer, so flipping it blind converts a
+      # passing-but-empty deploy into ACA revisions failing on MANIFEST_UNKNOWN."
+      # The producer now exists (build-fiab-images-acr-tasks.yml boundary=GCC),
+      # but a producer that EXISTS is not evidence that it RAN — that is exactly
+      # the assumption scripts/ci/assert-acr-image-tags.sh was written to refuse
+      # after gov-provision-dataplane-images had never been executed. So the flip
+      # ships with the check that makes its failure mode unreachable silently.
+      #
+      # THE LIST IS DERIVED FROM THE MODULE SOURCE, not from a sibling lane's
+      # list. Read out of platform/fiab/bicep/modules/admin-plane/main.bicep at
+      # this SHA, these are the images an apps-enabled deploy references ON THIS
+      # BOUNDARY:
+      #   * unconditional `appDeployments` entries — loom-console, loom-mcp,
+      #     loom-mcp-bridge, loom-activator, loom-mirroring,
+      #     loom-direct-lake-shim.
+      #   * `var <x>Enabled = true` / `(loomBackends.?<x> ?? 'enabled')` and
+      #     gcc.bicepparam sets no loomBackends — loom-duckdb (duckdbTierEnabled),
+      #     loom-unity (loomUnityEnabled; ALSO the iceberg-catalog app's image),
+      #     loom-migrate, loom-risingwave, loom-directlake, loom-trino.
+      #   * setupOrchestratorEnabled=true in gcc.bicepparam.
+      #   * loom-script-runner + loom-wrangler-host, which are gated
+      #     `… && boundary != 'GCC-High' && boundary != 'IL5'` — i.e. they are ON
+      #     here and OFF on both Gov boundaries. This is the one place a GCC
+      #     preflight must NOT be a copy of the GCC-High one.
+      # Every tag is `v0.1` because gcc.bicepparam deliberately does not override
+      # `appImageTags`, so main.bicep's default object (all v0.1) governs — which
+      # is also what the producer stamps.
+      #
+      # --skip-if-registry-absent keeps the documented two-phase path working: no
+      # ACR yet means phase 1 has not run, and there is nothing to preflight.
+      # A registry that exists but cannot be READ still fails (exit 4) rather
+      # than passing — an unreadable registry is UNKNOWN, not empty (R7).
+      #
+      # SAME TRIGGER AS `Provision`, so a whatif-only dry run neither takes the
+      # ACR firewall lease nor touches the estate.
+      #
+      # WHAT THIS PROVES AND WHAT IT DOES NOT: that the tag resolves to a
+      # manifest. NOT that the image behind it is current, and not that the list
+      # stays complete as admin-plane grows. It is the floor that makes a missing
+      # image a named refusal instead of a failed nested deployment over a live
+      # estate.
+      - name: Image preflight — every deploy-referenced tag must exist in the GCC ACR (#3078)
+        if: github.event_name == 'schedule' || inputs.run_mode == 'full'
+        run: |
+          set -uo pipefail
+          # dlz-attach deploys no admin plane, so it references no app image.
+          if [ "${CSA_LOOM_TOPOLOGY:-}" = "dlz-attach" ]; then
+            echo "::notice::topology=dlz-attach deploys no admin-plane Container App; there is no image tag to preflight."
+            exit 0
+          fi
+          RG="rg-csa-loom-admin-${AZURE_LOCATION}"
+          # An UNREADABLE control plane is UNKNOWN, not "no registry" (R7, #3090).
+          # `az acr list` on a MISSING resource group exits non-zero; on an
+          # existing-but-empty one it exits 0. Keep the two facts apart.
+          set +e
+          ACR_OUT=$(az acr list -g "$RG" --query "[?starts_with(name,'acrloom')]|[0].name" -o tsv 2>&1)
+          ACR_RC=$?
+          set -e
+          if [ $ACR_RC -ne 0 ]; then
+            if node scripts/ci/deploy-classify.mjs --text "$ACR_OUT" \
+                 --assert-signal config.resource-group-not-found >/dev/null 2>&1; then
+              echo "::notice::image-preflight: ARM answered ResourceGroupNotFound for $RG — from-scratch deploy, no registry yet. Nothing to preflight."
+              exit 0
+            fi
+            echo "::error::image-preflight: could NOT enumerate registries in $RG, so whether this estate has an ACR is UNKNOWN — it is NOT 'none'. Refusing to skip the gate on an unreadable control plane. $(node scripts/ci/deploy-classify.mjs --text "$ACR_OUT" --query)"
+            exit 1
+          fi
+          ACR=$(printf '%s' "$ACR_OUT" | tr -d '\r' | head -1)
+          [ "$ACR" = "None" ] && ACR=""
+          if [ -z "$ACR" ]; then
+            echo "::notice::image-preflight: ARM ANSWERED and $RG contains no acrloom* registry — from-scratch deploy. Nothing to preflight."
+            exit 0
+          fi
+          echo "::notice::image-preflight: GCC registry = $ACR (rg=$RG). Producer for every tag below: build-fiab-images-acr-tasks.yml with boundary=GCC."
+          # THE HARDCODED v0.1 BELOW IS ONLY TRUE WHILE THE PARAM FILE STAYS
+          # SILENT ON appImageTags. If someone later adds an `appImageTags`
+          # override (or a LOOM_*_TAG read) to gcc.bicepparam, this list would go
+          # stale and the preflight would cheerfully prove the existence of tags
+          # the deploy is no longer going to pull — a gate that passes while
+          # watching the wrong thing. Assert the premise rather than assume it.
+          PARAMS="$GITHUB_WORKSPACE/platform/fiab/bicep/params/gcc.bicepparam"
+          if [ ! -r "$PARAMS" ]; then
+            echo "::error::image-preflight: cannot read $PARAMS, so which tags this deploy pulls is UNKNOWN. Refusing."
+            exit 1
+          fi
+          if grep -qE '^[[:space:]]*param[[:space:]]+appImageTags[[:space:]]*=' "$PARAMS"; then
+            echo "::error::image-preflight: gcc.bicepparam now sets appImageTags, so the tags this deploy pulls are no longer main.bicep's all-v0.1 default and the hardcoded v0.1 list in this step is STALE. Update this step to read the same values the deploy resolves (see deploy-fiab-gcch.yml's 'Adopt the image tags this estate is running' step and scripts/ci/check-bicepparam-env-reaches-deploy.mjs) before re-running."
+            exit 1
+          fi
+          bash scripts/ci/assert-acr-image-tags.sh --acr "$ACR" --rg "$RG" --lease \
+            --skip-if-registry-absent \
+            loom-console:v0.1 \
+            loom-mcp:v0.1 \
+            loom-mcp-bridge:v0.1 \
+            loom-activator:v0.1 \
+            loom-mirroring:v0.1 \
+            loom-direct-lake-shim:v0.1 \
+            loom-setup-orchestrator:v0.1 \
+            loom-script-runner:v0.1 \
+            loom-wrangler-host:v0.1 \
+            loom-unity:v0.1 \
+            loom-duckdb:v0.1 \
+            loom-migrate:v0.1 \
+            loom-risingwave:v0.1 \
+            loom-directlake:v0.1 \
+            loom-trino:v0.1
+          # RC ON THE NEXT LINE, and NOT inside an `if ! …; then` — there `$?`
+          # is the status of the INVERTED pipeline (always 0), which would have
+          # printed "exit 0" in a failure message and lost the script's whole
+          # exit-code contract (0 present / 3 missing / 4 unproven / 5 re-lock
+          # unconfirmed). Those codes are the reason this reports a distinct
+          # remediation instead of one sentence for four different facts.
+          RC=$?
+          if [ "$RC" -ne 0 ]; then
+            echo "::error::image-preflight FAILED (exit $RC — 3 = the registry ANSWERED and a tag is absent, 4 = the registry was not readable so the answer is UNPROVEN, 5 = verified but the firewall re-lock is unconfirmed). gcc.bicepparam sets deployAppsEnabled=true, so the apply below WILL create these Container Apps and each one's PUT fails MANIFEST_UNKNOWN on a missing image. REMEDIATION: dispatch .github/workflows/build-fiab-images-acr-tasks.yml with boundary=GCC and apps='loom-console,loom-mcp,loom-mcp-bridge,loom-activator,loom-mirroring,loom-direct-lake-shim,loom-setup-orchestrator,loom-script-runner,loom-wrangler-host,loom-unity,loom-duckdb,loom-migrate,loom-risingwave,loom-directlake,loom-trino' and tag=v0.1, then re-run this lane. Do NOT use build-fiab-images.yml: it authenticates with the COMMERCIAL service principal and pushes client-side, so it can neither reach this subscription nor a publicNetworkAccess=Disabled registry."
+            exit "$RC"
+          fi
+
       - name: Provision
         id: provision
         if: github.event_name == 'schedule' || inputs.run_mode == 'full'
@@ -683,14 +840,16 @@ jobs:
           # script as its console URL and every probe curled a nonsense address.
           # Guard: scripts/ci/check-workflow-env-substitution.mjs.
           #
-          # THIS LANE'S EXTRA STATE, stated rather than papered over:
-          # gcc.bicepparam deliberately never sets deployAppsEnabled (there is no
-          # GCC image producer — #3078), so this deploy stands up the hub and
-          # ZERO Container Apps. There is no Console to probe and no Front Door
-          # public ingress (frontDoorPublicUrl is gated on deployAppsEnabled).
-          # The expectation is READ FROM THE PARAM FILE rather than hardcoded, so
-          # the day #3078 lands and apps are enabled, a missing public URL fails
-          # this step instead of silently continuing to skip the smoke test.
+          # THE EXPECTATION IS READ FROM THE PARAM FILE, NEVER HARDCODED — and
+          # that is what makes this step correct across the #3078 flip rather
+          # than needing to be rewritten by it. gcc.bicepparam NOW sets
+          # `deployAppsEnabled = true` (and `frontDoorEnabled = true`, without
+          # which frontDoorPublicUrl would be empty and the resolver below would
+          # fail closed), so EXPECT_CONSOLE resolves true and a missing public
+          # URL after a successful provision FAILS this step — which is exactly
+          # what the previous revision of this comment said should happen "the
+          # day #3078 lands". It has landed; the branch below is now the live
+          # path, not the future one.
           PARAMS="$GITHUB_WORKSPACE/platform/fiab/bicep/params/gcc.bicepparam"
           # An UNREADABLE param file is UNKNOWN, not "apps are off": `grep` inside
           # an `if` is exempt from `set -e`, so a missing path would silently take
@@ -709,7 +868,7 @@ jobs:
             echo "::notice::topology=dlz-attach stamps no Console, so there is no endpoint to smoke-test."
           elif [ "$EXPECT_CONSOLE" != "true" ]; then
             echo "console_url=" >> "$GITHUB_OUTPUT"
-            echo "::warning::$(basename "$PARAMS") does not set deployAppsEnabled=true (#3078), so this deploy stands up no Console. The external smoke test is skipped and this run does NOT establish that the GCC boundary serves Loom."
+            echo "::warning::$(basename "$PARAMS") does not set deployAppsEnabled=true, so this deploy stands up no Console. The external smoke test is skipped and this run does NOT establish that the GCC boundary serves Loom. NOTE: as of #4071/#3078 the shipped gcc.bicepparam DOES set it true, so reaching this branch means the param file was changed or overridden — check that before reading this run as a normal infra-only pass."
           else
             # Two separate command substitutions, not a pipeline: each one's
             # failure is its own and `set -e` stops on either.
@@ -842,15 +1001,22 @@ jobs:
           echo "region=$AZURE_LOCATION" >> "$GITHUB_OUTPUT"
 
       # deploy-integrity forbids "a deploy workflow that exits 0 having produced no
-      # artifact". gcc.bicepparam deliberately never sets `deployAppsEnabled`
-      # (no GCC image producer — #3078), so this lane stands up the hub and ZERO
-      # Container Apps, then concludes SUCCESS. In `gh run list` that is
-      # indistinguishable from a boundary that is fully deployed, which is exactly
-      # the "green dashboard over a dead pipeline" shape R3 exists to prevent.
+      # artifact". This step counts what the run ACTUALLY stamped and says so in
+      # the log and the run summary, because in `gh run list` a hub with zero
+      # Container Apps is indistinguishable from a fully deployed boundary —
+      # exactly the "green dashboard over a dead pipeline" shape R3 exists to
+      # prevent.
       #
-      # This step does not fail the lane — infra-only is the DECIDED state, not a
-      # regression — but it makes the run say what it actually produced, both in
-      # the log and in the run summary the operator reads.
+      # ITS VERDICT INVERTED WITH #4071/#3078. While gcc.bicepparam left
+      # `deployAppsEnabled` unset, zero apps was the DECIDED state and this step
+      # only warned. The param file now sets it TRUE, so zero apps after a
+      # successful apply is no longer a declared state — it is a DEFECT, and this
+      # step FAILS on it. Reporting a green run over an app-less estate is the
+      # precise thing that made this lane's twenty successes hollow.
+      #
+      # UNKNOWN still does not fail: an unreadable control plane is not evidence
+      # of zero apps (R7), and it is reported as unknown rather than spent as a
+      # negative.
       - name: 'Declare what this deploy actually produced (infra-only vs apps)'
         if: ${{ !cancelled() && (github.event_name == 'schedule' || inputs.run_mode == 'full') }}
         run: |
@@ -871,26 +1037,30 @@ jobs:
             exit 0
           fi
           if [ "$APPS" -eq 0 ]; then
-            echo "::warning::GCC deployed INFRA ONLY — 0 Container Apps in $RG. gcc.bicepparam does not set deployAppsEnabled because there is no GCC image producer (#3078). A green run here does NOT mean the GCC boundary serves Loom."
+            echo "::error::GCC produced ZERO Container Apps in $RG after a successful apply. gcc.bicepparam sets deployAppsEnabled=true (#3078), so this is NOT the declared infra-only state it used to be — the app tier was requested and nothing exists. Failing rather than reporting a green run over an estate that does not serve Loom."
             {
-              echo "### ⚠️ GCC deploy — INFRA ONLY (0 Container Apps)"
+              echo "### ❌ GCC deploy — 0 Container Apps, but the apply asked for them"
               echo ""
-              echo "The hub deployed, but **no Container Apps** were stamped: no \`loom-console\`, \`loom-unity\`, \`loom-trino\`, or \`iceberg-catalog\`."
+              echo "The hub deployed and \`az deployment sub create\` succeeded, but **no Container Apps** exist: no \`loom-console\`, \`loom-unity\`, \`loom-trino\`, \`iceberg-catalog\`."
               echo ""
-              echo "\`gcc.bicepparam\` deliberately leaves \`deployAppsEnabled\` unset — there is no GCC image producer, so enabling it would fail every Container App PUT with \`MANIFEST_UNKNOWN\`. Tracked in #3078 (cloud-parity)."
+              echo "\`platform/fiab/bicep/params/gcc.bicepparam\` sets \`deployAppsEnabled = true\`, so zero apps is a defect, not a posture. Check whether \`containerPlatform\` or \`topology\` was overridden on the command line, and read the ARM deployment's nested operations."
               echo ""
-              echo "**A success on this lane does not mean the GCC boundary serves Loom.**"
+              echo "**This lane fails here on purpose.** Twenty of this lane's historical successes were hollow (#4071); a green tick over an app-less estate is the exact shape that produced them."
             } >> "$GITHUB_STEP_SUMMARY"
+            exit 1
           else
             echo "::notice::GCC deployed $APPS Container App(s) in $RG."
             echo "### GCC deploy — $APPS Container App(s) deployed" >> "$GITHUB_STEP_SUMMARY"
           fi
 
       - name: Smoke test (GCC-specific — no Direct Lake)
-        # Runs only when the Provision step RESOLVED a reachable target. Empty in
-        # exactly two DECLARED states — topology=dlz-attach, and gcc.bicepparam
-        # deploying no apps (#3078) — and the resolver FAILS the provision step
-        # in every other case, so this cannot silently absorb a resolution defect.
+        # Runs only when the Provision step RESOLVED a reachable target. Since
+        # #4071/#3078 there is exactly ONE declared state in which it is empty —
+        # topology=dlz-attach, which stamps no Console. (The second, "the param
+        # file does not enable apps", is no longer reachable from the shipped
+        # gcc.bicepparam; the provision step warns loudly if it ever is.) The
+        # resolver FAILS the provision step in every other case, so this cannot
+        # silently absorb a resolution defect.
         if: (github.event_name == 'schedule' || inputs.run_mode == 'full') && steps.provision.outputs.console_url != ''
         run: bash .github/scripts/fiab-smoke-test.sh
         env:

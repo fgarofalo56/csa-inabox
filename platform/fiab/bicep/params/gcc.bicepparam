@@ -2,7 +2,12 @@
 // GCC = M365 GCC tenant + Azure Commercial subscriptions
 // Critical GCC gate: F-SKU not supported → no Direct Lake parity in GCC
 //
-// Status: PARAMETER SCAFFOLDED
+// Status: APPS-ENABLED as of #4071/#3078 — this file deploys the Container App
+// tier (deployAppsEnabled = true, below) and a public Front Door ingress, the
+// same shape commercial-full / gcc-high / il5 / tenant-dmlz carry. It has NOT
+// yet produced a live receipt: deploy-fiab-gcc is disabled_manually and the
+// AZURE_GCC_* credential set does not exist, so nothing here is claimed to have
+// been verified against a real GCC subscription (deploy-integrity.md R4).
 
 using '../main.bicep'
 
@@ -106,22 +111,40 @@ param topology = 'tenant'
 
 // Compute (same as Commercial — GCC runs on Azure public)
 param containerPlatform = 'containerApps'
-// ── KNOWN PARITY GAP — tracked in #3078 (cloud-parity.md R1) ──────────────────
-// This file NEVER sets `deployAppsEnabled`, and main.bicep defaults it to
-// FALSE. So `containerPlatform = 'containerApps'` above buys nothing: with apps
-// disabled the `appDeployments` nested deployment is skipped and the GCC
-// boundary stands up ZERO Container Apps — no loom-console, no loom-unity, no
-// loom-trino, no iceberg-catalog. Every other apps-enabled boundary
-// (commercial-full, gcc-high, il5, tenant-dmlz) sets it `= true`.
+// Console AZURE_CLOUD discriminator, stated the way gcc-high.bicepparam:111 and
+// il5.bicepparam:108 state theirs. GCC runs on AZURE COMMERCIAL endpoints under
+// an M365 GCC identity, so the value is 'AzureCloud' — the SAME value
+// modules/admin-plane/main.bicep already derives when this param is empty
+// (`boundary == 'GCC-High' || boundary == 'IL5' ? 'AzureUSGovernment' :
+// 'AzureCloud'`). This changes no rendered value; it removes the dependence on
+// that derivation, which is the only reason the sovereign siblings state it.
+param loomAzureCloud = 'AzureCloud'
+// ── #3078 CLOSED HERE: THE GCC BOUNDARY NOW DEPLOYS ITS CONTAINER APPS ───────
+// This file used to leave `deployAppsEnabled` unset, and main.bicep defaults it
+// FALSE, so `containerPlatform = 'containerApps'` above bought nothing: the
+// `appDeployments` nested deployment was skipped and GCC stood up ZERO Container
+// Apps — no loom-console, no loom-unity, no loom-trino, no iceberg-catalog.
+// Every other apps-enabled boundary (commercial-full, gcc-high, il5,
+// tenant-dmlz) sets it `= true`; GCC was the odd one out, which cloud-parity.md
+// calls INCOMPLETE rather than "Commercial-first".
 //
-// NOT flipped here on purpose: there is no GCC image producer. gov-build-images
-// covers gcc-high / il5 only, and full-app-deploy-commercial targets the
-// Commercial estate — so setting this true would turn deploy-fiab-gcc.yml from
+// WHY IT WAS HELD FALSE, AND WHAT CHANGED. The hold was correct and its reason
+// was precise: there was no GCC image producer, so flipping this blind converts
 // a passing-but-empty deploy into one that fails every Container App PUT with
-// MANIFEST_UNKNOWN. The fix is a GCC image lane (or an explicit decision to mark
-// GCC unsupported), which is what #3078 tracks with an owner and a target.
-// Measured 2026-08-06 (FINISHLINE L-GOV); disclosed rather than silently left.
-// param deployAppsEnabled = true   // ← enable together with a GCC image lane (#3078)
+// MANIFEST_UNKNOWN. That is now addressed — build-fiab-images-acr-tasks.yml
+// carries a `GCC` boundary that logs in with the AZURE_GCC_* secret set, stays
+// in Azure Commercial (no `az cloud set`), resolves rg-csa-loom-admin-eastus and
+// server-side `az acr build`s every app image into the GCC estate's own ACR.
+//
+// ORDERING IS STILL LOAD-BEARING, and it is not a property of this file. The
+// documented two-phase image path (no-vaporware.md) still applies to a
+// GREENFIELD GCC subscription: provision infra with `deployAppsEnabled=false` on
+// the command line, run the producer, THEN apply with this file. A brownfield
+// reconcile is safe because deploy-fiab-gcc.yml now image-preflights every
+// deploy-referenced tag against the GCC ACR before the what-if and REFUSES on a
+// missing one, rather than discovering it as a failed nested deployment over a
+// live estate.
+param deployAppsEnabled = true
 // Setup Orchestrator — on by default (Container Apps boundary). The Console UAMI
 // gets Contributor on the target sub so the Setup Wizard's Deploy runs the real
 // subscription-scoped ARM deployment. LOOM_SETUP_TEMPLATE_URI = published main.json.
@@ -205,6 +228,32 @@ param loomTenantAdminOid = readEnvironmentVariable('LOOM_TENANT_ADMIN_OID', '')
 // main.bicep — set explicitly so the posture is visible (bicep+bootstrap sync).
 param apimEnabled = true
 param hubFirewallEnabled = true
+// ── PUBLIC INGRESS — REQUIRED, NOT COSMETIC, ONCE APPS ARE ON ────────────────
+// main.bicep defaults `frontDoorEnabled` FALSE and this file set it nowhere, so
+// GCC inherited false while commercial, commercial-full, gcc-high and
+// tenant-dmlz all set it true (il5 is the only deliberate false, and its stated
+// reason — Front Door is not certified at IL5 — does not apply to a boundary
+// running on Azure Commercial).
+//
+// It is COUPLED to deployAppsEnabled above, which is why it is flipped in the
+// same change rather than left for later. container-platform.bicep creates the
+// Container Apps environment with `internal: true`, so `output consoleUrl`
+// resolves only inside the hub VNet. scripts/ci/resolve-smoke-console-url.mjs
+// therefore accepts ONLY `vanityPublicUrl` / `frontDoorPublicUrl` and FAILS
+// CLOSED when neither exists — its own header names GCC-High's
+// frontDoorEnabled+deployAppsEnabled pair as the construction that guarantees
+// one. Enabling apps without this would give deploy-fiab-gcc.yml a Console it
+// provisions and then cannot honestly probe: a red smoke step over a healthy
+// estate, or (worse) a lane that reports green having measured nothing.
+//
+// The Front Door origin is the CAE over Private Link — NOT the Application
+// Gateway (admin-plane/main.bicep invokes front-door.bicep with `caeId` +
+// `consoleFqdn`), so this stands alone and does not imply appGatewayEnabled.
+// The FD -> CAE private-endpoint connection is AUTO-APPROVED here: the
+// `scriptIdentityId: (boundary == 'GCC-High' || boundary == 'IL5') ? '' : …`
+// branch passes the Console UAMI on this boundary, so a clean GCC deploy needs
+// no portal "Approve" step (auto-bind-by-default.md).
+param frontDoorEnabled = true
 
 // Multi-sub
 param dlzSubscriptionIds = []
@@ -251,3 +300,55 @@ param loomSelfHostedIrEnabled = true
 // (#4071), so this lane has not run. It would have fired on the first run after
 // re-enablement, which is the worst moment to find it.
 param loomMsalClientId = readEnvironmentVariable('LOOM_MSAL_CLIENT_ID', '')
+// The SECOND half of the same #4224 defect, and it was still open: every other
+// shipped params file (commercial-full:292, gcc-high:358, il5:335,
+// tenant-dmlz:193) reads LOOM_MSAL_CLIENT_SECRET and this file read it NOWHERE,
+// so main.bicep's `param loomMsalClientSecret string = ''` was the only value a
+// GCC deploy could ever render — no environment value could reach the template
+// and a resolver step in the workflow would have been inert, exactly as the
+// client-id half was. Strictly additive: with the variable unset this resolves
+// to the same '' it resolved to before. The VALUE is never committed and never
+// printed; it is supplied by the deploy job's environment only.
+param loomMsalClientSecret = readEnvironmentVariable('LOOM_MSAL_CLIENT_SECRET', '')
+
+// =====================================================================
+// DELIBERATELY INHERITED FROM main.bicep — stated so the posture is visible
+// rather than accidental, since GCC now deploys apps and these flags start
+// mattering. Each names what it resolves to and why that is the right answer
+// for a boundary that runs on AZURE COMMERCIAL under an M365 GCC identity.
+// =====================================================================
+// appImageTags        -> main.bicep's default object, i.e. `v0.1` for EVERY app.
+//   NOT overridden here on purpose. gcc-high/il5 override it with
+//   `readEnvironmentVariable('LOOM_<X>_TAG','v0.1')` reads, and #3161 is what
+//   that costs: a deploy step with those variables out of scope silently writes
+//   the mutable default over a SHA-pinned app. main.bicep's default already
+//   carries every key modules/admin-plane/main.bicep dereferences, and `v0.1`
+//   is exactly what build-fiab-images-acr-tasks.yml stamps, so the tag contract
+//   holds with no env surface to get out of sync.
+// aasEnabled          -> true. Analysis Services IS available on Azure
+//   Commercial; gcc-high/il5 pin it false because it is not available there.
+//   deploy-fiab-gcc.yml already carries the #3948 AAS settle/re-suspend pair
+//   for exactly this inherited true.
+// azureMapsEnabled    -> true. azure-maps.bicep gates on
+//   `boundary == Commercial || GCC`, so Maps is genuinely available here and
+//   gcc-high/il5's false does not transfer.
+// adxEnabled / aiFoundryEnabled / aiSearchEnabled / cosmosGraphVectorEnabled /
+// vpnGatewayEnabled   -> true, matching gcc-high.
+// atlasOnAksEnabled / copilotMafEnabled -> false, matching gcc-high.
+//
+// NEEDS AN OPERATOR VALUE — NOT decided here (see the PR body):
+//   appGatewayEnabled     inherits FALSE; commercial-full, gcc-high, il5 and
+//                         tenant-dmlz all set it TRUE. Cost-material (WAF_v2)
+//                         and NOT required for public ingress, because Front
+//                         Door originates on the CAE directly.
+//   postgresQuotaAvailable inherits TRUE (Commercial's posture). gcc-high/il5
+//                         hold it FALSE deliberately — see the long blast-radius
+//                         note in gcc-high.bicepparam: it turns on the OSS
+//                         Airflow metadata Postgres, whose image is an anonymous
+//                         Docker Hub pull and whose network posture is
+//                         publicNetworkAccess=Enabled + a 0.0.0.0 Azure-services
+//                         firewall rule. That is an accepted documented carve-out
+//                         in Commercial; whether it is acceptable in a CUI-low
+//                         M365 GCC boundary is a compliance decision.
+//   loomVersion           inherits main.bicep's '0.45.0' (the release-please
+//                         manifest version); the siblings pin it via LOOM_VERSION.
