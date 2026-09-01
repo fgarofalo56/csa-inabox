@@ -26,6 +26,28 @@
  * (C) exists because (A) and (B) only see what is rendered. A mutation reachable
  * from a keyboard shortcut, an effect, or a route the UI does not link would
  * pass both.
+ *
+ * ── RESCOPE, #4242 (explicit contract amendment, not an evasion) ───────────
+ * Execution now exists — behind the SEPARATE perform route this repo's own
+ * doc-blocks always said it would live behind. The contract this file asserts
+ * is therefore, precisely:
+ *
+ *   1. NO MUTATION CONTROL ON AN UNGUARDED FINDING: the review surface itself
+ *      still renders no Apply/Delete/Scale control and still reaches only the
+ *      review POST (the walks in A and B are UNCHANGED — they must stay green
+ *      as-is until the guarded Perform UI lands with its own controls and its
+ *      own tests).
+ *   2. THE PERFORM POST IS THE ONLY MUTATION PATH: the executors live in
+ *      `lib/brain-actions/**` — DELIBERATELY outside `lib/brain` and outside
+ *      the roots scanned below, so the Brain's own tree stays honestly
+ *      write-free — and the perform route in the scanned tree DELEGATES to
+ *      them, carrying no inline Azure verb, behind server-re-derived guards
+ *      (fresh snapshot, complete collection, fresh ownership tag read,
+ *      non-vacuous detector, fresh ARM GET, staged two-step confirm).
+ *
+ * The P4 type invariants (`_ProposalsCannotSelfApprove` / `_ProposalsCannotMutate`)
+ * and `assertInertRemediation` are untouched: a FINDING still cannot be an
+ * action. Performing is a separate record about a finding, never a field on one.
  */
 
 import { describe, expect, it } from 'vitest';
@@ -247,10 +269,44 @@ interface MutationRule {
 
 const MUTATING_VERB = /method:\s*['"`](PUT|PATCH|DELETE)['"`]/i;
 const POST_CALL = /method:\s*['"`]POST['"`]/i;
+const POST_CALL_G = /method:\s*['"`]POST['"`]/gi;
 const ALLOWED_POST_TARGETS = [
   'providers/Microsoft.ResourceGraph/resources', // ARG query API — no mutating op
   '/api/admin/brain/proposals', // the Brain's own review-decision route
+  // #4242 — THE ONE SANCTIONED MUTATION PATH. Guarded by the four-layer design:
+  // the executors live in lib/brain-actions/** (outside lib/brain and outside
+  // this scan's roots), the route delegates (asserted below — it carries no
+  // inline ARM verb), every guard is re-derived server-side at execute time,
+  // and destructive classes stage a two-step confirm. A client POSTing here is
+  // invoking that guarded path, not writing to Azure itself.
+  '/api/admin/brain/perform',
 ];
+
+/**
+ * The POST rule is bound to the CALL SITE, not the file (#4246 review — a
+ * measured bypass). The first version tested `src.includes(target)` over the
+ * WHOLE file, so any file whose doc-block happened to contain an allow-token
+ * (the perform route's header literally names `/api/admin/brain/perform`)
+ * could carry an unrelated inline ARM POST-*action* — `…/containerApps/x/
+ * restart`, `…/start`, `…/stop` are all POSTs — and stay green.
+ *
+ * Now the allowed target must appear WITHIN THE SAME CALL as the `method:
+ * 'POST'` key: a 400-chars-back / 200-forwards window around the match, sized
+ * from the real shapes in this tree (arg-collect.ts writes the URL ~100 chars
+ * before the method; the review-route fetches are single-line). A doc-block
+ * token elsewhere in the file no longer launders anything. The window is an
+ * approximation of "same statement" — its own control below proves a
+ * far-token + POST pair goes red.
+ */
+function postCallsOutsideAllowedTargets(src: string): number {
+  let offenders = 0;
+  for (const m of src.matchAll(POST_CALL_G)) {
+    const at = m.index ?? 0;
+    const window = src.slice(Math.max(0, at - 400), at + 200);
+    if (!ALLOWED_POST_TARGETS.some((t) => window.includes(t))) offenders += 1;
+  }
+  return offenders;
+}
 
 const MUTATION_RULES: readonly MutationRule[] = [
   {
@@ -259,9 +315,9 @@ const MUTATION_RULES: readonly MutationRule[] = [
     find: (src) => MUTATING_VERB.test(src),
   },
   {
-    name: 'POST to something other than the ARG query or the review route',
-    find: (src) =>
-      POST_CALL.test(src) && !ALLOWED_POST_TARGETS.some((t) => src.includes(t)),
+    name: 'POST whose own call site names no allowed target',
+    // POST_CALL is the cheap pre-filter; the per-call window does the work.
+    find: (src) => POST_CALL.test(src) && postCallsOutsideAllowedTargets(src) > 0,
   },
   {
     name: 'az CLI mutation',
@@ -323,6 +379,24 @@ describe('C — the Brain source contains no Azure write', () => {
     expect(scanForMutations(urlFirst)).not.toEqual([]);
   });
 
+  it('THE CONTROL for the call-site binding: a doc-block allow-token does NOT launder a distant POST', () => {
+    // The reviewer's measured bypass on #4246: perform/route.ts's header
+    // legitimately names /api/admin/brain/perform, and under the old
+    // file-scoped rule that token exempted an inline ARM POST-action appended
+    // hundreds of lines later. Reconstruct exactly that shape — allow-token
+    // far away, ARM restart POST at the end — and require it flagged.
+    const probe =
+      `// BFF — POST /api/admin/brain/perform — delegates to lib/brain-actions\n` +
+      `${'// padding line to separate the doc-block from the call site\n'.repeat(12)}` +
+      `const r = await doFetch(\n` +
+      `  \`\${base}/subscriptions/x/resourceGroups/y/providers/Microsoft.App/containerApps/z/restart?api-version=2024-03-01\`,\n` +
+      `  { method: 'POST' },\n` +
+      `);`;
+    expect(scanForMutations(probe)).not.toEqual([]);
+    // And the pre-filter alone would have passed it — the window is what bites.
+    expect(ALLOWED_POST_TARGETS.some((t) => probe.includes(t))).toBe(true);
+  });
+
   it('and does NOT flag the two legitimate POSTs', () => {
     // A scanner that flags everything is as useless as one that flags nothing.
     expect(
@@ -347,6 +421,24 @@ describe('C — the Brain source contains no Azure write', () => {
       if (hits.length > 0) offenders.push(`${f}: ${hits.join(', ')}`);
     }
     expect(offenders, `Azure write found in the Brain: ${offenders.join(' | ')}`).toEqual([]);
+  });
+
+  it('#4242: the perform route is IN the walked set and carries NO inline Azure verb', () => {
+    // The perform route is the one sanctioned mutation path, and the contract
+    // is that it DELEGATES: its executors live in lib/brain-actions/**,
+    // deliberately outside these roots and outside lib/brain, behind the
+    // server-re-derived guard chain. If someone inlines an ARM write into the
+    // route file itself, the walk above goes red — this spec additionally
+    // proves the file is actually in the walked population (a route that moved
+    // out of the scanned roots would otherwise pass silently) and that it
+    // still imports the guarded orchestrator rather than an ARM client.
+    const performRoute = files.find((f) =>
+      f.includes(join('api', 'admin', 'brain', 'perform', 'route.ts')),
+    );
+    expect(performRoute, 'perform/route.ts must be inside the scanned roots').toBeDefined();
+    const src = readFileSync(performRoute!, 'utf8');
+    expect(scanForMutations(src)).toEqual([]);
+    expect(src).toContain("@/lib/brain-actions/perform");
   });
 
   it('the only Azure call in the Brain is the Resource Graph QUERY', () => {

@@ -18,8 +18,8 @@
  *
  * ── THE THREE THINGS THAT MAKE THIS NOT A MUTATION ─────────────────────────
  *   1. Nothing in this module's dependency tree can reach an Azure write. The
- *      only sink is `emitAuditEvent`, which posts to the Log Analytics
- *      ingestion endpoint.
+ *      sinks are `emitAuditEvent` (Log Analytics ingestion) and the Cosmos
+ *      recommendation-state store — a decision record, not an Azure resource.
  *   2. `RemediationProposal` pins `mutatesAzure: false` and
  *      `requiresHumanApproval: true` as LITERAL types, so a "proposal" that
  *      executes is not constructible anywhere in the Brain.
@@ -27,9 +27,18 @@
  *      every rendered control on the surface and by checking this route's own
  *      module graph.
  *
- * If a future release adds execution, it does NOT belong in this handler. It
- * belongs behind a separate route, a separate capability, and its own review —
- * PRP §1 decision 1 is a measured decision about blast radius, not a phase.
+ * Execution EXISTS as of #4242 — and, exactly as this doc-block always said it
+ * must, it lives behind a SEPARATE route (`../perform`), a separate capability
+ * (`lib/brain-actions/**`, outside `lib/brain`), and its own guard chain +
+ * review. This handler still performs nothing: approving here records a
+ * decision, and the perform route re-derives every guard from scratch when —
+ * and only when — the operator explicitly invokes it.
+ *
+ * ── DECISIONS NOW PERSIST (the decision-amnesia fix, #4242) ────────────────
+ * This route used to fire-and-forget the audit event, so a page reload forgot
+ * every approved/dismissed. Decisions are now ALSO written to the per-finding
+ * recommendation-state store; when that store is not configured the response
+ * says so honestly (`persisted: false` + the reason) instead of pretending.
  *
  * ── AUTHORIZATION ──────────────────────────────────────────────────────────
  * `withTenantAdmin`, never an inline check. See the sibling `graph/route.ts`
@@ -40,6 +49,7 @@ import type { NextRequest } from 'next/server';
 import { withTenantAdmin } from '@/lib/api/route-toolkit';
 import { apiBadRequest, apiOk, apiServerError } from '@/lib/api/respond';
 import { emitAuditEvent } from '@/lib/admin/audit-stream';
+import { recommendationStateStore } from '@/lib/brain-actions/state-store';
 import type { ProposalDecision } from '../_lib/wire';
 
 export const dynamic = 'force-dynamic';
@@ -90,16 +100,37 @@ export const POST = withTenantAdmin(async (req: NextRequest, { session }) => {
       tenantId: session.claims.tid ?? session.claims.oid,
     });
 
+    // The decision-amnesia fix (#4242): persist the decision per finding so a
+    // reload still knows it. FAIL SOFT with disclosure — the audit row above is
+    // already written, and a deployment without the store keeps working while
+    // the response says exactly what did not persist (R7).
+    let persisted = true;
+    let persistError: string | undefined;
+    try {
+      await recommendationStateStore().recordDecision(
+        parsed.findingId,
+        parsed.decision,
+        { oid: session.claims.oid, upn: session.claims.upn },
+        parsed.note || undefined,
+      );
+    } catch (e) {
+      persisted = false;
+      persistError = e instanceof Error ? e.message : String(e);
+    }
+
     return apiOk({
       recorded: true,
+      persisted,
+      ...(persistError ? { persistError } : {}),
       findingId: parsed.findingId,
       decision: parsed.decision,
       // Returned so the CLIENT can render the guarantee rather than assert it.
       mutatedAzure: false,
       note:
         parsed.decision === 'approved'
-          ? 'Recorded. NOTHING was changed in Azure — the Brain is recommend-only. ' +
-            'Apply the proposed change yourself in the repository.'
+          ? 'Recorded. NOTHING was changed in Azure — recording an approval never ' +
+            'executes anything. Performing the change is a separate, explicit action ' +
+            'with its own guards (the perform route), or a repository edit you make.'
           : 'Recorded as dismissed. No change was made anywhere.',
     });
   } catch (e) {
