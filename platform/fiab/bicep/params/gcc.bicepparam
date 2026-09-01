@@ -312,6 +312,73 @@ param loomMsalClientId = readEnvironmentVariable('LOOM_MSAL_CLIENT_ID', '')
 param loomMsalClientSecret = readEnvironmentVariable('LOOM_MSAL_CLIENT_SECRET', '')
 
 // =====================================================================
+// POSTGRES POSTURE — PINNED FALSE, MATCHING GCC-HIGH AND IL5
+// =====================================================================
+// OPERATOR DECISION (2026-09-01, #4071). main.bicep declares
+// `param postgresQuotaAvailable bool = true`, so leaving this unset would have
+// given the GCC boundary COMMERCIAL's posture by inheritance. It is set here
+// EXPLICITLY, and false, so the posture is a decision on the record rather than
+// the residue of a default.
+//
+// THE REASON IS THE SHAPE OF THE BACKING SERVICE, NOT A SERVICE GAP. As
+// gcc-high.bicepparam:278-305 and il5.bicepparam state with Microsoft Learn
+// citations, PostgreSQL Flexible Server IS an available Azure service — this is
+// a deliberate posture hold, not a regional constraint. What the flag actually
+// turns on today is an OSS Airflow host whose `airflowImage` defaults to
+// `apache/airflow:2.10.5-python3.12` — an anonymous DOCKER HUB pull that nothing
+// mirrors, Trivy-scans or cosign-verifies on the way in — invoked with
+// `privateEndpointsEnabled: false`, which resolves to
+// `publicNetworkAccess: 'Enabled'` plus a `0.0.0.0`
+// (`AllowAllAzureServicesAndResourcesWithinAzureIps`) firewall rule on its
+// metadata Postgres. That is an accepted, documented carve-out in Commercial.
+// It is the wrong shape for a boundary whose own complianceTags below declare
+// `Data_Classification: CUI-low` / `FedRAMP_Level: High`, and BOTH stricter
+// sovereign boundaries already rejected it:
+//   platform/fiab/bicep/params/gcc-high.bicepparam:354
+//   platform/fiab/bicep/params/il5.bicepparam:397
+// Third boundary, same verdict, same reason.
+//
+// WHAT THIS COSTS ON GCC — MEASURED FROM THE MODULE SOURCE, not assumed.
+// This boundary runs `topology = 'tenant'`, so `useSingleDlz` is FALSE and every
+// main.bicep-level consumer (loomWeavePgFqdn, loomPostgresHost, the
+// deploy-planner Lakebase server) is ALREADY inert here regardless of this flag.
+// The live consumers are the three derived gates in admin-plane/main.bicep, and
+// gcc.bicepparam sets no `loomBackends`, so each inherits this value:
+//
+//   1. weavePgAllowed      (L1175) -> weavePgLocalActive (L1176)
+//        The Weave / Semantic Ontology graph store (Postgres + Apache AGE).
+//        LOOM_WEAVE_PG_FQDN and LOOM_PGVECTOR_HOST (L4378) both render empty, so
+//        svc-weave-ontology honest-gates and the pgvector / feature-store
+//        clients lose their host. TRACKED: #3788, which already owns exactly
+//        this gap for GCC-High and IL5 — GCC joins it rather than getting a
+//        duplicate issue.
+//   2. postgresStoresAllowed (L1285) -> ducklakeCatalogActive (L1286)
+//        The N8 DuckLake catalog store. The editor honest-gates with a Fix-it.
+//        This is the SAME registered-gate treatment both Gov boundaries already
+//        carry; no new gap is introduced by matching them.
+//   3. postgresStoresAllowed (L1285) -> loomUnityPostgresActive (L1416)
+//        Loom Unity's DURABLE metastore. Read the gate carefully: `loomUnityActive`
+//        does NOT depend on it, so the catalog still DEPLOYS — on an EmptyDir H2
+//        store (`dbEphemeral: true`), byte-identical to what Gov has run since
+//        2026-07-15. It is a FUNCTIONAL catalog whose METADATA DOES NOT SURVIVE A
+//        RESTART. That is the real cost of this line and it is not a honest-gate:
+//        nothing warns, registration returns 201, and the namespace is gone after
+//        the next scale-to-zero. TRACKED: #4264 — a cloud-parity defect across
+//        all THREE boundaries, not a GCC regression, and now named instead of
+//        implied. It is the one item here that is NOT an honest gate, which is
+//        why it got its own issue rather than a line in this comment.
+//   4. airflowPostgresAllowed (L1228) -> airflowHostActive (L1229)
+//        The OSS Airflow host itself — i.e. the thing being declined. Not a lost
+//        capability so much as the supply-chain and network posture above.
+//
+// TO REVERSE THIS FOR ONE CAPABILITY WITHOUT REVERSING THE POSTURE: set the
+// per-capability key rather than this flag — `loomBackends.weavePostgres`,
+// `loomBackends.postgresStores` or `loomBackends.airflowPostgres` = 'enabled'.
+// That is why those override keys exist, and it is the correct lever once the
+// ACR mirror + private endpoint work lands.
+param postgresQuotaAvailable = bool(readEnvironmentVariable('LOOM_POSTGRES_QUOTA_AVAILABLE', 'false'))
+
+// =====================================================================
 // DELIBERATELY INHERITED FROM main.bicep — stated so the posture is visible
 // rather than accidental, since GCC now deploys apps and these flags start
 // mattering. Each names what it resolves to and why that is the right answer
@@ -341,14 +408,9 @@ param loomMsalClientSecret = readEnvironmentVariable('LOOM_MSAL_CLIENT_SECRET', 
 //                         tenant-dmlz all set it TRUE. Cost-material (WAF_v2)
 //                         and NOT required for public ingress, because Front
 //                         Door originates on the CAE directly.
-//   postgresQuotaAvailable inherits TRUE (Commercial's posture). gcc-high/il5
-//                         hold it FALSE deliberately — see the long blast-radius
-//                         note in gcc-high.bicepparam: it turns on the OSS
-//                         Airflow metadata Postgres, whose image is an anonymous
-//                         Docker Hub pull and whose network posture is
-//                         publicNetworkAccess=Enabled + a 0.0.0.0 Azure-services
-//                         firewall rule. That is an accepted documented carve-out
-//                         in Commercial; whether it is acceptable in a CUI-low
-//                         M365 GCC boundary is a compliance decision.
 //   loomVersion           inherits main.bicep's '0.45.0' (the release-please
 //                         manifest version); the siblings pin it via LOOM_VERSION.
+//                         Cosmetic: /api/version reads the authoritative value
+//                         from the image's package.json (#1468), so this env is
+//                         a fallback label only. UNRESOLVED, deliberately — a
+//                         guessed pin would be a worse lie than an honest default.
