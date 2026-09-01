@@ -289,7 +289,13 @@ function runHealthStep({
       '      exit 1',
       '    fi',
       '    case "$pick" in HALF:*) pick="${pick#HALF:}" ;; esac',
-      '    emit "${pick%%,*}"',
+      '    hv="${pick%%,*}"',
+      '    # EMPTY reproduces the MEASURED shape of `az containerapp revision',
+      '    # show --query <path-that-does-not-resolve> -o tsv`: exit 0, and ZERO',
+      '    # BYTES on stdout. Not a hypothetical — this is what an ARM property',
+      '    # rename looks like to the step, and it had no fixture (#4238).',
+      '    if [ "$hv" = "EMPTY" ]; then exit 0; fi',
+      '    emit "$hv"',
       '    exit 0 ;;',
       '  *runningState*)',
       '    n=1',
@@ -300,7 +306,9 @@ function runHealthStep({
       '        echo "ERROR: (SubscriptionRequestsThrottled) stub: ARM refused the runningState half of this poll" >&2',
       '        exit 1 ;;',
       '    esac',
-      '    emit "${pick##*,}"',
+      '    rv="${pick##*,}"',
+      '    if [ "$rv" = "EMPTY" ]; then exit 0; fi',
+      '    emit "$rv"',
       '    exit 0 ;;',
       '  *containers*)',
       '    if [ "${STUB_IMAGE_READ_FAILS:-0}" = "1" ]; then',
@@ -379,6 +387,58 @@ function runHealthStep({
   return { code: res.status, out, verdict: verdicts.at(-1) ?? null };
 }
 
+// ── Does the ROLLBACK actually fire? EVALUATED, not eyeballed ───────────────
+//
+// A verdict in $GITHUB_OUTPUT matters through exactly one consumer: the `if:`
+// of the "Rollback on validation failure" step. Asserting the verdict string
+// alone leaves the thing that actually hurts — a good deploy being auto-
+// reverted — unproven. So the predicate is EXTRACTED from the shipped workflow
+// and EVALUATED. Nothing below restates it; if the expression changes, these
+// arms re-evaluate the new one rather than pinning the old one.
+const ROLLBACK_STEP = 'Rollback on validation failure';
+
+function rollbackPredicate() {
+  const body = stepBody(ROLLBACK_STEP);
+  const m = body.match(/\n\s*if: >-\n([\s\S]*?)\n\s*run: \|/);
+  assert.ok(m, `could not extract the \`if:\` of step "${ROLLBACK_STEP}"`);
+  return m[1]
+    .split('\n')
+    .map((l) => l.trim())
+    .join(' ')
+    .trim();
+}
+
+function rollbackFires(ctx) {
+  const js = rollbackPredicate()
+    .replace(/\bfailure\(\)/g, 'C.failure')
+    .replace(/steps\.([A-Za-z0-9_]+)\.outputs\.([A-Za-z0-9_]+)/g, 'C.out["$1.$2"]')
+    .replace(/steps\.([A-Za-z0-9_]+)\.outcome/g, 'C.outcome["$1"]')
+    .replace(/!=/g, '@NE@')
+    .replace(/==/g, '===')
+    .replace(/@NE@/g, '!==');
+  // Fail CLOSED on anything this translator does not model. `success()`, a new
+  // `steps.` reference, or any other GHA function would otherwise evaluate to
+  // `undefined` and make every arm below vacuously green — a guard that does
+  // not watch. Deliberately NOT modelling success() as !failure(): they are not
+  // the same predicate, and guessing is how this class of bug starts.
+  assert.doesNotMatch(
+    js,
+    /steps\.|[A-Za-z_]+\(\)/,
+    `unmodelled GitHub Actions syntax in the "${ROLLBACK_STEP}" if:: ${js}`,
+  );
+  // eslint-disable-next-line no-new-func
+  return Boolean(new Function('C', `return (${js});`)(ctx));
+}
+
+/** The post-roll context this suite produces: roll succeeded, health failed. */
+function rollbackFiresFor(verdict) {
+  return rollbackFires({
+    failure: true,
+    outcome: { roll: 'success', validate: 'skipped', uat: 'skipped', health: 'failure' },
+    out: { 'health.verdict': verdict ?? '' },
+  });
+}
+
 // ── The #4238 arm — GREEN BOTH WAYS, and that is the finding ────────────────
 // This is the behaviour the issue said was broken. It is not, and restoring the
 // old line does not move this test. Kept because it is the property that
@@ -450,7 +510,15 @@ test('a row whose RUNNING field carries the health token does NOT pass (cross-fi
       'The whole-row glob passed it because the token appeared in the OTHER field.\n' +
       r.out,
   );
-  assert.equal(r.verdict, 'unhealthy', r.out);
+  assert.equal(
+    r.verdict,
+    'unknown',
+    'CHANGED BY #4238: this was `unhealthy`. "RunningHealthy" is not a member of either enum, so ' +
+      'the poll is a statement about the --query, not about the revision — and an uninterpretable ' +
+      `value must never produce a rollback. The gate still REFUSES the row, which is the property ` +
+      `this arm exists to defend.\n${r.out}`,
+  );
+  assert.equal(rollbackFiresFor(r.verdict), false, r.out);
   assert.doesNotMatch(r.out, /matches the requested image/, r.out);
 });
 
@@ -537,7 +605,14 @@ test('a swapped read — healthState carrying the running token — FAILS', skip
     'healthState=Running is not a health verdict and runningState=Healthy is not a running ' +
       `state. Only a positional/whole-row read could accept this.\n${r.out}`,
   );
-  assert.equal(r.verdict, 'unhealthy', r.out);
+  assert.equal(
+    r.verdict,
+    'unknown',
+    'CHANGED BY #4238: this was `unhealthy`. Neither value is a member of the enum it was read ' +
+      'from, so the step established nothing about the revision — and must not revert it on the ' +
+      `strength of a query that has stopped resolving.\n${r.out}`,
+  );
+  assert.equal(rollbackFiresFor(r.verdict), false, r.out);
 });
 
 // A poll that reads only ONE of the two properties establishes NEITHER, so it
@@ -563,12 +638,114 @@ test('a half-refused poll followed by a clean one still PASSES', skipNoBash, () 
 // R7: if a --query ever stops resolving to the property it names, the step must
 // fail closed AND must not let the operator read "the revision is unhealthy"
 // out of a message about its own query.
+//
+// ── #4238 — THE ARM THAT HAD NO FIXTURE, AND THE DEFECT IT WAS HIDING ───────
+//
+// MEASURED against a stub that exits 0 printing zero bytes, on the step as it
+// shipped in the first round of this PR:
+//
+//     30/30 polls counted as SUCCESSFUL reads
+//     ODD_READS = 60   (100% unrecognised)
+//     verdict   = unhealthy      -> the rollback `if:` is TRUE
+//
+// So an ARM API change that moved or renamed `properties.healthState` would
+// have auto-reverted every healthy deploy. ODD_READS noticed it; nothing acted
+// on it, which is why a counter is not a control. The fix routes an
+// uninterpretable value away from SUCCESS_READS, so it reaches the
+// `SUCCESS_READS -eq 0` -> unknown path that #4231 D3 already proved suppresses
+// the rollback.
+test('30/30 zero-byte reads are UNKNOWN and DO NOT roll back (#4238)', skipNoBash, () => {
+  const r = runHealthStep({ probes: ['EMPTY,EMPTY'] });
+  assert.equal(r.code, 1, `an uninterpretable control plane must still fail closed\n${r.out}`);
+  assert.equal(
+    r.verdict,
+    'unknown',
+    'a value the step cannot interpret is not a reading of the revision. Counting it as one is ' +
+      `how a property rename becomes an auto-revert of every healthy deploy.\n${r.out}`,
+  );
+  assert.equal(
+    rollbackFiresFor(r.verdict),
+    false,
+    'THE INVARIANT: a value the code cannot interpret must never produce a rollback. Evaluated ' +
+      'against the shipped `if:` of the rollback step.',
+  );
+  assert.match(r.out, /NOT ONE poll returned a state this gate could interpret/, r.out);
+  assert.match(
+    r.out,
+    /EXITS 0 AND PRINTS NOTHING/,
+    'R7: the message must name the shape it actually saw — a query that stopped resolving — and ' +
+      `not assert a revision state it never read.\n${r.out}`,
+  );
+});
+
+// The counter-arm. Without it the assertion above is green for a predicate that
+// is false for EVERY verdict, i.e. for a rollback that never fires at all.
+test('a measured unhealthy DOES roll back — the predicate is not vacuously false', skipNoBash, () => {
+  const r = runHealthStep({ probes: ['Unhealthy,Running'] });
+  assert.equal(r.verdict, 'unhealthy', r.out);
+  assert.equal(
+    rollbackFiresFor(r.verdict),
+    true,
+    `the rollback must still fire on a revision the control plane called Unhealthy\n${r.out}`,
+  );
+});
+
+// Per FIELD, not per row: half a rename is still a rename. Neither half may be
+// converted into "the revision is unhealthy".
+test('an empty healthState with a good runningState is UNKNOWN', skipNoBash, () => {
+  const r = runHealthStep({ probes: ['EMPTY,Running'] });
+  assert.equal(r.verdict, 'unknown', r.out);
+  assert.equal(rollbackFiresFor(r.verdict), false, r.out);
+});
+
+test('an empty runningState with a Healthy healthState is UNKNOWN', skipNoBash, () => {
+  const r = runHealthStep({ probes: ['Healthy,EMPTY'] });
+  assert.equal(
+    r.verdict,
+    'unknown',
+    'the step cannot confirm Running, and it must not turn that into "unhealthy" and revert a ' +
+      `revision whose healthState it read as Healthy.\n${r.out}`,
+  );
+  assert.equal(rollbackFiresFor(r.verdict), false, r.out);
+});
+
+// …but an INTERPRETABLE `Unhealthy` is a measurement, and #4287 forbids
+// overwriting a measurement with `unknown`. The uninterpretable-value rule must
+// not become a way to suppress a rollback the control plane asked for.
+test('Unhealthy with an unrecognised runningState is STILL unhealthy (#4287)', skipNoBash, () => {
+  const r = runHealthStep({ probes: ['Unhealthy,eastus'] });
+  assert.equal(
+    r.verdict,
+    'unhealthy',
+    `an odd runningState must not suppress a healthState the control plane returned\n${r.out}`,
+  );
+  assert.equal(rollbackFiresFor(r.verdict), true, r.out);
+  assert.match(r.out, /not recognised members of RevisionHealthState/, r.out);
+  assert.match(r.out, /this failure is about the QUERY and not about the revision/, r.out);
+  // R7: the verdict is unhealthy while `interpretable reads: 0`. Without this
+  // sentence those two facts read as a contradiction and the operator cannot
+  // tell what the rollback stood on.
+  assert.match(r.out, /interpretable reads: 0/, r.out);
+  assert.match(
+    r.out,
+    /healthState WAS read as 'Unhealthy'/,
+    `the message must name the read the verdict actually rests on\n${r.out}`,
+  );
+});
+
 test('an unrecognised enum value is reported as a shape caveat, not as a revision state', skipNoBash, () => {
   const r = runHealthStep({ probes: ['Healthy,eastus'] });
   assert.equal(r.code, 1, `"eastus" is not a runningState — this must fail closed\n${r.out}`);
-  assert.equal(r.verdict, 'unhealthy', r.out);
-  assert.match(r.out, /not recognised members of RevisionHealthState/, r.out);
-  assert.match(r.out, /this failure is about the QUERY and not about the revision/, r.out);
+  assert.equal(
+    r.verdict,
+    'unknown',
+    'CHANGED BY #4238, deliberately. This arm used to expect `unhealthy` — i.e. it rolled the ' +
+      'estate back on a value the step could not interpret. "eastus" in runningState says the ' +
+      `--query stopped resolving; that is a claim about the query, not about the revision.\n${r.out}`,
+  );
+  assert.equal(rollbackFiresFor(r.verdict), false, r.out);
+  assert.match(r.out, /empty or unrecognised value/, r.out);
+  assert.match(r.out, /not about the revision/, r.out);
 });
 
 test('the shape caveat is ABSENT when every value was a known enum member', skipNoBash, () => {
@@ -655,7 +832,7 @@ test('successful Unhealthy reads interleaved with refusals are UNHEALTHY, not un
   );
   assert.match(
     r.out,
-    /successful reads: 12, failed reads: 18/,
+    /interpretable reads: 12, uninterpretable reads: 0, failed reads: 18/,
     'the failure must name what was actually read and what was not, so the operator can tell a ' +
       'measured verdict from a starved one',
   );
@@ -667,7 +844,7 @@ test('one successful read among refusals is still enough to deny `unknown` (#428
   const r = runHealthStep({ probes: ['Unhealthy,Running', 'FAIL'] });
   assert.equal(r.code, 1, r.out);
   assert.equal(r.verdict, 'unhealthy', r.out);
-  assert.match(r.out, /successful reads: 1, failed reads: 29/, r.out);
+  assert.match(r.out, /interpretable reads: 1, uninterpretable reads: 0, failed reads: 29/, r.out);
 });
 
 test('a healthy revision running a DIFFERENT image FAILS the gate (#2963)', skipNoBash, () => {
@@ -762,31 +939,154 @@ test('the health decision compares each field against its OWN enum', () => {
   );
 });
 
-// ── The sibling Gov roll, audited as #4238 asks ────────────────────────────
-// AUDIT RESULT: clean. gov-console-roll.yml already decides on a `case` over
-// the healthState value alone, whose patterns carry no globs, so it never had
-// the whole-row shape. Pinned here so the Commercial fix and the Gov lane
-// cannot drift apart — cloud-parity applies to the gate, not only the feature.
-test('gov-console-roll.yml decides health by EXACT match, not by substring', () => {
-  const gov = readFileSync(
-    path.join(REPO_ROOT, '.github', 'workflows', 'gov-console-roll.yml'),
+// ── The sibling Gov roll — cloud-parity, asserted BEHAVIOURALLY ─────────────
+//
+// THE PREVIOUS REVISION OF THIS TEST WAS AN OBSTRUCTION, NOT A GUARD, and this
+// PR introduced it. It asserted the LITERAL arms `^\s*Healthy\)` and
+// `^\s*Unhealthy\)` and called the Gov lane "clean". Those literals ARE the
+// defect: `case "$H" in Healthy) … Unhealthy)` with no default arm means a
+// lowercase `unhealthy` matches NEITHER arm and falls through, so THE GOV LANE
+// NEVER ROLLED BACK A BAD REVISION — the case-sensitivity half of #4287,
+// surviving in the sovereign boundary. Fixing the parity broke the test; a test
+// that has to be deleted to fix a bug was defending the bug.
+//
+// It now asserts BEHAVIOUR: the shipped `case` block is EXTRACTED from
+// gov-console-roll.yml and EXECUTED against each value, and the arm it takes is
+// observed — including whether `az containerapp update` (the rollback) is
+// actually invoked. Renaming an arm, reordering, or adding one re-runs against
+// the real block; only a change in what the lane DOES can fail it.
+//
+// cloud-parity.md is die-hard: a fix that lands in Commercial and leaves the
+// sovereign boundary broken is incomplete, not "Commercial-first".
+const GOV_PATH = path.join(REPO_ROOT, '.github', 'workflows', 'gov-console-roll.yml');
+const GOV = readFileSync(GOV_PATH, 'utf8').replace(/\r\n/g, '\n');
+
+function govHealthCaseBlock() {
+  const m = GOV.match(/^([ \t]*)case "\$\{H,,\}" in$[\s\S]*?^\1esac$/m);
+  assert.ok(
+    m,
+    'no case-FOLDED health `case` block in gov-console-roll.yml. Either it was renamed, or it ' +
+      'reverted to the case-SENSITIVE `case "$H" in Healthy) …` shape — which is the #4287 ' +
+      'defect: a lowercase `unhealthy` matches no arm, and Gov never rolls back a bad revision.',
+  );
+  return m[0];
+}
+
+/** Execute the SHIPPED Gov health `case` block for one healthState value. */
+function runGovHealthArm(h, { probeOk = true } = {}) {
+  const dir = mkdtempSync(path.join(tmpdir(), 'gov-health-'));
+  const bin = path.join(dir, 'bin');
+  mkdirSync(bin);
+  const marker = path.join(dir, 'rollback-invoked').replace(/\\/g, '/');
+  writeFileSync(
+    path.join(bin, 'az'),
+    `#!/usr/bin/env bash\nprintf '%s\\n' "$*" >> "${marker}"\nexit 0\n`,
     'utf8',
-  ).replace(/\r\n/g, '\n');
-  const body = gov
-    .split('\n')
+  );
+  chmodSync(path.join(bin, 'az'), 0o755);
+
+  const script = path.join(dir, 'arm.sh');
+  writeFileSync(
+    script,
+    [
+      'set -uo pipefail',
+      'APP=loom-console; RG=rg-loom; SHA=deadbeef; NEWREV=loom-console--0a1b2c3',
+      'IMG=acr.azurecr.us/loom-console:new; ROLLBACK_IMAGE=acr.azurecr.us/loom-console:old',
+      'i=1; READS=0; ODD=0; LAST_ODD=""',
+      `PROBE_OK=${probeOk ? 'true' : 'false'}`,
+      `H=${JSON.stringify(h)}`,
+      govHealthCaseBlock(),
+      'echo "FELL_THROUGH reads=$READS odd=$ODD"',
+    ].join('\n'),
+    'utf8',
+  );
+
+  const res = spawnSync('bash', ['-e', script], {
+    encoding: 'utf8',
+    env: { ...process.env, PATH: `${bin}${path.delimiter}${process.env.PATH}` },
+  });
+  const out = `${res.stdout ?? ''}${res.stderr ?? ''}`;
+  return {
+    code: res.status,
+    out,
+    rolledBack: existsSync(marker.replace(/\//g, path.sep)),
+    fellThrough: /FELL_THROUGH/.test(out),
+  };
+}
+
+test('Gov: Healthy in ANY casing exits 0 and does not roll back', skipNoBash, () => {
+  for (const h of ['Healthy', 'healthy', 'HEALTHY']) {
+    const r = runGovHealthArm(h);
+    assert.equal(r.code, 0, `Gov must accept healthState '${h}'\n${r.out}`);
+    assert.equal(r.rolledBack, false, `a healthy revision must not be rolled back ('${h}')\n${r.out}`);
+  }
+});
+
+test('Gov: unhealthy in ANY casing ROLLS BACK (#4287, the half that survived in Gov)', skipNoBash, () => {
+  for (const h of ['Unhealthy', 'unhealthy', 'UNHEALTHY']) {
+    const r = runGovHealthArm(h);
+    assert.equal(r.code, 1, `Gov must fail closed on healthState '${h}'\n${r.out}`);
+    assert.equal(
+      r.rolledBack,
+      true,
+      `MEASURED before this fix, for '${h}': the arms were the bare literals Healthy) and ` +
+        'Unhealthy) with NO default, so any other casing matched nothing, fell through, and the ' +
+        `sovereign lane left a bad revision live.\n${r.out}`,
+    );
+  }
+});
+
+test('Gov: an unrecognised value is NOT read as healthy and does NOT roll back', skipNoBash, () => {
+  const r = runGovHealthArm('eastus');
+  assert.equal(r.fellThrough, true, `an unrecognised state must keep polling, not decide\n${r.out}`);
+  assert.equal(r.rolledBack, false, `R7: an unrecognised value is a claim about the --query\n${r.out}`);
+  assert.match(r.out, /reads=0/, `an uninterpretable value must not reach READS\n${r.out}`);
+  assert.match(r.out, /odd=1/, `it must be counted as uninterpretable\n${r.out}`);
+});
+
+test('Gov: a zero-byte read is uninterpretable, not a read (#4238 parity)', skipNoBash, () => {
+  const r = runGovHealthArm('', { probeOk: true });
+  assert.equal(r.fellThrough, true, r.out);
+  assert.equal(r.rolledBack, false, r.out);
+  assert.match(r.out, /reads=0/, `an empty successful read must not advance READS\n${r.out}`);
+  assert.match(r.out, /odd=1/, r.out);
+  assert.match(
+    r.out,
+    /ZERO BYTES/,
+    `the log must name the shape: --query exited 0 and printed nothing\n${r.out}`,
+  );
+});
+
+test('Gov: a FAILED probe is distinguished from a zero-byte one', skipNoBash, () => {
+  const r = runGovHealthArm('', { probeOk: false });
+  assert.equal(r.fellThrough, true, r.out);
+  assert.equal(r.rolledBack, false, r.out);
+  assert.match(r.out, /reads=0/, r.out);
+  assert.match(
+    r.out,
+    /odd=0/,
+    'a failed probe is already reported by the read itself. Counting it as an uninterpretable ' +
+      `VALUE too would claim the --query is suspect when nothing was returned at all (R7).\n${r.out}`,
+  );
+});
+
+test('Gov: healthState None counts as a read but decides nothing', skipNoBash, () => {
+  const r = runGovHealthArm('None');
+  assert.equal(r.fellThrough, true, r.out);
+  assert.equal(r.rolledBack, false, r.out);
+  assert.match(r.out, /reads=1/, `None is a recognised member — it IS a reading of the revision\n${r.out}`);
+});
+
+test('Gov never decides health by substring (#4238)', () => {
+  const body = GOV.split('\n')
     .filter((l) => !/^\s*#/.test(l))
     .join('\n');
-
-  // Non-weakening: the file must actually still probe healthState, or this
-  // whole assertion is vacuous.
+  // Non-weakening: the file must actually still probe healthState, or every
+  // assertion above is about a lane that no longer reads anything.
   assert.match(body, /properties\.healthState/, 'gov-console-roll.yml no longer probes healthState');
-  // It uses `case "$H" in Healthy) … Unhealthy) …`, whose patterns carry no
-  // globs and therefore match the enum members exactly.
-  assert.match(body, /^\s*Healthy\)\s/m, 'the Gov roll must keep an exact-literal Healthy arm');
-  assert.match(body, /^\s*Unhealthy\)\s/m, 'the Gov roll must keep an exact-literal Unhealthy arm');
   assert.doesNotMatch(
     body,
-    /==\s*\*"?(Un)?Healthy"?\*|=\s*\*"?(Un)?Healthy"?\*/,
+    /==\s*\*"?(Un)?[Hh]ealthy"?\*|=\s*\*"?(Un)?[Hh]ealthy"?\*/,
     'the Gov roll must never adopt the #4238 substring shape',
   );
 });
