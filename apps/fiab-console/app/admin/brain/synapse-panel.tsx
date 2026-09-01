@@ -164,11 +164,12 @@ export function SynapsePanel({
               {prune.priced} of {prune.costly + prune.idle} prune candidate(s) carry a cost
               estimate, totalling roughly ${prune.derivedMonthlyUsd.toFixed(2)} per 30 days.
             </Body1>
-            <Caption1 className={s.note} data-testid="prune-cost-provenance">
-              DERIVED — a measured SKU multiplied by a published retail rate. NOT a bill. Node width
-              on the canvas scales with this figure, so the widest node is the most expensive thing
-              nothing is using.
-            </Caption1>
+            {/* One line, reading size (#4241 defects 1 + 2) — the provenance is
+                substance, not a footnote. */}
+            <Body1 data-testid="prune-cost-provenance">
+              DERIVED — measured SKU × published retail rate, NOT a bill. Node width on the canvas
+              scales with this figure.
+            </Body1>
           </>
         ) : (
           <MessageBar intent="warning" data-testid="prune-not-evaluated">
@@ -197,10 +198,8 @@ export function SynapsePanel({
               <MessageBarTitle>The risk lane could not be read.</MessageBarTitle>
               {riskError}
               <div>
-                <Caption1>
-                  NO risk verdict has been drawn. An empty lane here would look exactly like a clean
-                  estate, which is the failure this message exists to prevent.
-                </Caption1>
+                NO risk verdict has been drawn. An empty lane here would look exactly like a clean
+                estate, which is the failure this message exists to prevent.
               </div>
               <Button appearance="primary" size="small" onClick={onRetryRisk}>
                 Retry
@@ -305,7 +304,7 @@ export function SynapsePanel({
           </Badge>
         </div>
         {hot.collected ? (
-          <Caption1 className={s.note}>{hot.note}</Caption1>
+          <Body1>{hot.note}</Body1>
         ) : (
           <MessageBar intent="warning" data-testid="hot-not-collected">
             <MessageBarBody>
@@ -329,7 +328,7 @@ export function SynapsePanel({
                 {fresh.newEdges} new edge(s)
               </Badge>
             </div>
-            <Caption1 className={s.note}>{fresh.reason}</Caption1>
+            <Body1>{fresh.reason}</Body1>
           </>
         ) : (
           <MessageBar intent="warning" data-testid="new-not-available">
@@ -404,9 +403,12 @@ function RiskFindingCard({
             <pre className={s.pre}>{finding.evidence.query}</pre>
             <Caption1 className={s.note}>What the detector established</Caption1>
             <ul>
+              {/* The FACTS are the substance — reading size, default
+                  foreground; only the labels above stay Caption1 (#4241
+                  defect 1). */}
               {finding.evidence.facts.map((fact, i) => (
                 <li key={i}>
-                  <Caption1 className={s.note}>{fact}</Caption1>
+                  <Body1>{fact}</Body1>
                 </li>
               ))}
             </ul>
@@ -427,11 +429,9 @@ function RiskFindingCard({
                 {finding.remediation.proposedPatchDescription}
               </pre>
             )}
-            <Caption1 className={s.note}>
+            <Caption1>
               requiresHumanApproval={String(finding.remediation.requiresHumanApproval)} — the Brain
-              reports and drafts; it never patches an authorization path on its own, because a wrong
-              autonomous fix to authz is worse than the gap. There is no approve control on this
-              lane and there must never be one.
+              drafts; it never touches an authorization path on its own.
             </Caption1>
           </AccordionPanel>
         </AccordionItem>

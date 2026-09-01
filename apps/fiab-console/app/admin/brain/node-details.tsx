@@ -36,6 +36,7 @@ import {
   TableHeader,
   TableHeaderCell,
   TableRow,
+  Tooltip,
   makeStyles,
   tokens,
 } from '@fluentui/react-components';
@@ -120,7 +121,11 @@ export function NodeDetails({ node, snapshot }: NodeDetailsProps) {
             <Badge appearance="outline">{node.provisioningState}</Badge>
           )}
         </div>
-        <Caption1>{v.reason}</Caption1>
+        {/* Verdict first at reading size, the supporting detail under it —
+            the header previously carried a 25-45-word paragraph in Caption1
+            (#4241 defects 1 + 4). */}
+        <Body1>{v.reason}</Body1>
+        <Caption1>{v.detail}</Caption1>
       </div>
 
       <Divider />
@@ -139,8 +144,18 @@ export function NodeDetails({ node, snapshot }: NodeDetailsProps) {
                 <Caption1> (source: {node.scale.source})</Caption1>
               </>
             ) : (
-              // NOT "0 replicas". See the doc-block, point 1.
-              <em>NOT MEASURED — Resource Graph returned no scale block. This is indeterminate, not zero.</em>
+              // NOT "0 replicas". See the doc-block, point 1. A Badge + tooltip
+              // rather than a long italic sentence in the value cell (#4241
+              // defect 3) — the indeterminate-vs-zero distinction survives in
+              // the tooltip, at reading size on hover.
+              <Tooltip
+                content="Resource Graph returned no scale block. Indeterminate — not zero, and never shown as 'scales to zero'."
+                relationship="description"
+              >
+                <Badge appearance="tint" color="warning" data-testid="scale-not-measured">
+                  Not measured
+                </Badge>
+              </Tooltip>
             )}
           </Body1>
 
@@ -156,7 +171,14 @@ export function NodeDetails({ node, snapshot }: NodeDetailsProps) {
                 )}
               </>
             ) : (
-              <em>NOT MEASURED</em>
+              <Tooltip
+                content="Resource Graph returned no ingress block. Indeterminate — not 'no ingress'."
+                relationship="description"
+              >
+                <Badge appearance="tint" color="warning" data-testid="ingress-not-measured">
+                  Not measured
+                </Badge>
+              </Tooltip>
             )}
           </Body1>
 
@@ -170,12 +192,16 @@ export function NodeDetails({ node, snapshot }: NodeDetailsProps) {
           <Body1 className={s.val}>
             {node.tags === null ? (
               // NOT "no tags". See the doc-block, point 2.
-              <em>
-                could NOT be read{node.tagsError ? ` (${node.tagsError})` : ''} — indeterminate,
-                which is not the same as untagged
-              </em>
+              <Tooltip
+                content={`Indeterminate — not the same as untagged.${node.tagsError ? ` (${node.tagsError})` : ''}`}
+                relationship="description"
+              >
+                <Badge appearance="tint" color="warning" data-testid="tags-not-read">
+                  Could not be read
+                </Badge>
+              </Tooltip>
             ) : Object.keys(node.tags).length === 0 ? (
-              <em>read, and empty</em>
+              'read, and empty'
             ) : (
               <span className={s.mono}>
                 {Object.entries(node.tags)
@@ -191,10 +217,7 @@ export function NodeDetails({ node, snapshot }: NodeDetailsProps) {
 
       <div className={s.section}>
         <Body1Strong>Inbound edges (resolved only)</Body1Strong>
-        <Caption1>
-          Dangling wires are excluded here by construction — their target is null, which is exactly
-          what stops a broken wire counting as reachability.
-        </Caption1>
+        <Caption1>Dangling wires are excluded — a broken wire is not reachability.</Caption1>
         <div className={s.badges}>
           {(Object.entries(node.inboundByProvenance) as [string, number][]).map(([p, n]) => (
             <Badge
@@ -243,10 +266,9 @@ export function NodeDetails({ node, snapshot }: NodeDetailsProps) {
       <div className={s.section}>
         <Body1Strong>Findings ({findings.length})</Body1Strong>
         {findings.length === 0 ? (
-          <Caption1>
-            No detector flagged this node. Note what that does and does not mean: the detectors
-            that ran are listed under Coverage, and the ones that declined are named there too.
-          </Caption1>
+          <Body1>
+            No detector flagged this node — Coverage lists which detectors ran and which declined.
+          </Body1>
         ) : (
           findings.map((f) => <FindingSummary key={f.id} finding={f} />)
         )}
@@ -333,7 +355,9 @@ function FindingSummary({ finding }: { finding: WireFinding }) {
       </div>
       <Body1Strong>{finding.title}</Body1Strong>
       <Body1>{finding.summary}</Body1>
-      <Caption1 className={s.mono}>{finding.evidence.query}</Caption1>
+      {/* Content at reading size (#4241 defect 1) — the mono class carries the
+          code ramp; Caption1's tertiary foreground does not. */}
+      <Body1 className={s.mono}>{finding.evidence.query}</Body1>
     </div>
   );
 }

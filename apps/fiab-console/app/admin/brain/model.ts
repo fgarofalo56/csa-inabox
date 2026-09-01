@@ -65,8 +65,14 @@ export interface NodeVisual {
    * one; everything else belongs in the tooltip and the details panel.
    */
   readonly badge: string | null;
-  /** One-line reason, shown in the node tooltip and the details header. */
+  /**
+   * SHORT verdict phrase — the details-header lead and the tooltip's first
+   * clause. Split from `detail` (#4241 defect 4): a 25-45-word paragraph in a
+   * Caption/tooltip is unreadable at a glance; the verdict must land first.
+   */
   readonly reason: string;
+  /** The supporting explanation behind `reason` — tooltip body, details prose. */
+  readonly detail: string;
 }
 
 /**
@@ -89,6 +95,7 @@ export function nodeVisual(node: WireNode, coverageConfigured: boolean): NodeVis
       error: false,
       badge: null,
       reason: `${node.kind} node`,
+      detail: 'not an Azure resource — reachability and cost verdicts do not apply to it',
     };
   }
 
@@ -99,9 +106,10 @@ export function nodeVisual(node: WireNode, coverageConfigured: boolean): NodeVis
       status: 'idle',
       error: false,
       badge: null,
-      reason:
-        "reachability NOT EVALUATED — no 'configured' edges were collected, so calling this " +
-        'node unreachable would be vacuously true of every node in the graph',
+      reason: 'reachability NOT EVALUATED',
+      detail:
+        "no 'configured' edges were collected, so calling this node unreachable would be " +
+        'vacuously true of every node in the graph',
     };
   }
 
@@ -124,10 +132,11 @@ export function nodeVisual(node: WireNode, coverageConfigured: boolean): NodeVis
       status: 'idle',
       error: false,
       badge: 'External',
-      reason:
-        'no inbound configured edge, but this app has EXTERNAL ingress — its callers (browser, ' +
-        'Front Door, partner, webhook) are not edges in this graph, so reachability cannot be ' +
-        'evaluated here. Neither cleared nor flagged.',
+      reason: 'external ingress — not evaluable here',
+      detail:
+        'no inbound configured edge, but its callers (browser, Front Door, partner, webhook) ' +
+        'are not edges in this graph, so reachability cannot be evaluated. Neither cleared ' +
+        'nor flagged.',
     };
   }
 
@@ -144,9 +153,10 @@ export function nodeVisual(node: WireNode, coverageConfigured: boolean): NodeVis
       status: 'warning',
       error: false,
       badge: 'Scale unknown',
-      reason:
-        'no inbound configured edge, and its scale could NOT be read — this is indeterminate, ' +
-        'not "scales to zero", and it is neither cleared nor flagged as waste',
+      reason: 'scale NOT MEASURED — indeterminate',
+      detail:
+        'no inbound configured edge, and its scale could NOT be read — not "scales to zero", ' +
+        'and neither cleared nor flagged as waste',
     };
   }
 
@@ -157,9 +167,12 @@ export function nodeVisual(node: WireNode, coverageConfigured: boolean): NodeVis
       status: 'failed',
       error: true,
       badge: 'Unreachable',
-      reason:
-        `always-on (minReplicas ${node.scale?.minReplicas ?? '?'}) with ZERO inbound configured ` +
-        'edges — it bills every second and nothing in the live deployment points at it',
+      // The verdict names the predicate ("inbound configured") — the synapse
+      // prune mark reuses this string verbatim and its tests pin the phrase.
+      reason: 'always-on, ZERO inbound configured edges',
+      detail:
+        `minReplicas ${node.scale?.minReplicas ?? '?'} — it bills every second and nothing in ` +
+        'the live deployment points at it',
     };
   }
 
@@ -170,9 +183,10 @@ export function nodeVisual(node: WireNode, coverageConfigured: boolean): NodeVis
       status: 'warning',
       error: false,
       badge: 'No consumer',
-      reason:
-        'no inbound configured edge, but minReplicas is 0 — it scales to zero, so the cost is ' +
-        'near nil. Worth knowing, not worth interrupting for.',
+      reason: 'no consumer, but scales to zero',
+      detail:
+        'no inbound configured edge, and minReplicas is 0, so the cost is near nil. Worth ' +
+        'knowing, not worth interrupting for.',
     };
   }
 
@@ -183,7 +197,10 @@ export function nodeVisual(node: WireNode, coverageConfigured: boolean): NodeVis
       status: 'succeeded',
       error: false,
       badge: 'Always-on',
-      reason: `wired (${node.inboundByProvenance.configured} inbound configured) and always-on`,
+      reason: `wired (${node.inboundByProvenance.configured} inbound) and always-on`,
+      detail:
+        `${node.inboundByProvenance.configured} inbound configured edge(s) reach it, and it ` +
+        'runs continuously by design',
     };
   }
 
@@ -193,7 +210,8 @@ export function nodeVisual(node: WireNode, coverageConfigured: boolean): NodeVis
     status: 'succeeded',
     error: false,
     badge: null,
-    reason: `wired: ${node.inboundByProvenance.configured} inbound configured edge(s)`,
+    reason: `wired — ${node.inboundByProvenance.configured} inbound configured edge(s)`,
+    detail: 'live configuration points at it; nothing here flags it',
   };
 }
 

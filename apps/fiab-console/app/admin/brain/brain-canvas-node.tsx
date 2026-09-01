@@ -36,6 +36,7 @@ import * as React from 'react';
 // widening the icon type here.
 import type { JSX } from 'react';
 import { Handle, Position, type NodeProps } from '@xyflow/react';
+import { makeStyles, shorthands, tokens } from '@fluentui/react-components';
 import {
   Cloud20Regular,
   Database20Regular,
@@ -135,7 +136,9 @@ function BrainCanvasNodeImpl({ data, selected }: NodeProps) {
             'data-synapse-ring': String(syn.ring),
           }
         : {})}
-      title={syn ? syn.reason : v.reason}
+      // Verdict first, then the supporting detail (#4241 defect 4) — the hover
+      // reader gets the short phrase before the explanation, not a paragraph.
+      title={syn ? syn.reason : `${v.reason} — ${v.detail}`}
     >
       <Handle type="target" position={Position.Left} style={{ opacity: 0 }} />
       <CanvasNode
@@ -176,6 +179,29 @@ function BrainCanvasNodeImpl({ data, selected }: NodeProps) {
 
 export const BrainCanvasNode = React.memo(BrainCanvasNodeImpl);
 
+// Tokens only (#4241 defect 7) — the previous inline style hard-coded an
+// off-ramp `fontSize: '11px'`, a raw margin and a fallback radius. The width
+// stays a layout px like every canvas-node width (`ux-baseline.md` node
+// compactness prescribes px node widths); everything else rides the ramp.
+const useTerminusStyles = makeStyles({
+  root: {
+    width: '128px',
+    padding: tokens.spacingVerticalXXS,
+    ...shorthands.border(tokens.strokeWidthThin, 'dashed', 'var(--loom-accent-red)'),
+    borderRadius: tokens.borderRadiusMedium,
+    backgroundColor: 'transparent',
+    color: 'var(--loom-accent-red)',
+    fontSize: tokens.fontSizeBase200,
+    lineHeight: tokens.lineHeightBase200,
+    textAlign: 'center',
+    minWidth: 0,
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+    whiteSpace: 'nowrap',
+  },
+  icon: { verticalAlign: 'middle', marginRight: tokens.spacingHorizontalXXS },
+});
+
 /**
  * The terminus a DANGLING edge points at.
  *
@@ -186,29 +212,17 @@ export const BrainCanvasNode = React.memo(BrainCanvasNodeImpl);
  * explicit "nowhere" terminus, drawn so it cannot be mistaken for a resource.
  */
 function DanglingTerminusImpl({ data }: NodeProps) {
+  const s = useTerminusStyles();
   const d = data as { readonly reason?: string; readonly symbol?: string };
   return (
     <div
       data-brain-state="dangling-terminus"
       data-brain-dangling-reason={d.reason ?? ''}
       title={`This wire resolves to nothing (${d.reason ?? 'unresolved'}). It does NOT make its intended target reachable.`}
-      style={{
-        width: '128px',
-        padding: 'var(--loom-space-2)',
-        border: '1px dashed var(--loom-accent-red)',
-        borderRadius: 'var(--loom-radius-md, 6px)',
-        background: 'transparent',
-        color: 'var(--loom-accent-red)',
-        fontSize: '11px',
-        textAlign: 'center',
-        minWidth: 0,
-        overflow: 'hidden',
-        textOverflow: 'ellipsis',
-        whiteSpace: 'nowrap',
-      }}
+      className={s.root}
     >
       <Handle type="target" position={Position.Left} style={{ opacity: 0 }} />
-      <Cloud20Regular style={{ verticalAlign: 'middle', marginRight: '4px' }} />
+      <Cloud20Regular className={s.icon} />
       nothing
     </div>
   );

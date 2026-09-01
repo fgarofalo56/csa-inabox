@@ -84,7 +84,18 @@ const useStyles = makeStyles({
   grow: { flex: 1, minWidth: '160px' },
   badges: { display: 'flex', flexWrap: 'wrap', gap: tokens.spacingHorizontalXS, minWidth: 0 },
   note: { color: tokens.colorNeutralForeground3, minWidth: 0, overflowWrap: 'anywhere' },
-  split: { minHeight: 0, minWidth: 0 },
+  split: {
+    minHeight: 0,
+    minWidth: 0,
+    // #4241 defect 8: SplitPane reserves only 80px for its FLEXING pane, so a
+    // persisted `loom.splitpane.brain-graph-details` size could pin the details
+    // pane at ~80px forever. The flexing pane is the split's last child by
+    // construction (see `ordered` in split-pane.tsx); this floor outranks the
+    // pane's own `min-width: 0` on specificity, and the % arm keeps a narrow
+    // window from overflowing. Layout px, not spacing — split-pane.tsx's own
+    // layout-px note applies.
+    '> div:last-child': { minWidth: 'min(320px, 35%)' },
+  },
   detailPane: { minWidth: 0, height: '100%', overflow: 'hidden' },
 });
 
