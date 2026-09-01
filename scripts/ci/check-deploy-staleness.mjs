@@ -771,6 +771,13 @@ export const WATCHED = [
       // rather than trusted to ride along — the same argument the gcch entry
       // already makes for this file.
       'scripts/ci/_arm-absence.mjs',
+      // The image preflight this lane gained with #4071/#3078, when
+      // gcc.bicepparam started setting deployAppsEnabled=true. Same standing as
+      // on the Commercial entry above: it DECIDES WHETHER THE APPLY PROCEEDS AT
+      // ALL, so a change to it can flip this lane from applying to refusing —
+      // or, worse, from refusing to applying, onto an estate whose registry does
+      // not hold the tags the template pulls. Not CI_PLUMBING.
+      'scripts/ci/assert-acr-image-tags.sh',
       // Same import edge, second module (#3786): the shared az-failure classifier
       // that decides whether a failed read is transient (retry), denied, capacity
       // or unknown. It gates whether the preflight retries or fails the deploy.

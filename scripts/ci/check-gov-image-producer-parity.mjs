@@ -106,12 +106,28 @@ const EXTRA_SUBJECTS = [
  * Gov later ... with no dated owner", so every entry names what is missing and
  * where the fix is tracked. Do not add one to make this guard green.
  */
+// RETIRED ENTRY — `loom-script-runner`, removed by #4071/#3078.
+//
+// It read: "NOT a Gov gap. admin-plane/main.bicep deliberately excludes it from
+// GCC-High and IL5 (scriptRunnerActive carries `boundary != 'GCC-High' &&
+// boundary != 'IL5'`) … there is nothing for a Gov producer to serve.
+// Permanent, not pending."
+//
+// EVERY WORD OF THAT IS STILL TRUE, and the entry is still gone — because the
+// exemption's PREMISE was "no sovereign lane builds it", and that premise no
+// longer holds. Wiring the GCC boundary required mapping `loom-script-runner`
+// to its real build context (`platform/runners/script-runner`, outside `apps/`)
+// in build-fiab-images-acr-tasks.yml, which this guard classifies as a
+// Gov-capable producer. GCC pulls the image — `scriptRunnerActive` excludes
+// GCC-High and IL5 and NOT GCC — so the mapping is load-bearing, and it
+// incidentally makes the image producible for the two boundaries that do not
+// pull it.
+//
+// Keeping the entry would leave a loan against a gap that has closed, which is
+// what this guard's own message calls "cover" rather than a record. The subject
+// stays declared in EXTRA_SUBJECTS above (with its boundary gate stated), so it
+// remains VISIBLE to both checks — it is simply no longer exempt.
 const GOV_EXEMPT = new Map([
-  [
-    'loom-script-runner',
-    'NOT a Gov gap. admin-plane/main.bicep deliberately excludes it from GCC-High and IL5 (scriptRunnerActive carries `boundary != \'GCC-High\' && boundary != \'IL5\''
-    + '`), and gcc-high/il5.bicepparam say so in prose. No sovereign deploy pulls this image, so there is nothing for a Gov producer to serve. Permanent, not pending.',
-  ],
   [
     'loom-lineage-extractor',
     'SAME DEFECT AS #3416, NOT YET FIXED. Its only producer is scripts/csa-loom/deploy-lineage-extractor-job.sh, invoked by deploy-lineage-extractor.yml, which logs in with the COMMERCIAL SP. lineageExtractorActive has no boundary gate, so the ACA job IS deployed in Gov and its scheduled executions cannot pull an image. Needs a Gov producer of its own; recorded here rather than fixed in the #3416 PR so the two-image change stays reviewable.',
