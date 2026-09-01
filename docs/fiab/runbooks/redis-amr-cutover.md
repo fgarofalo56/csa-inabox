@@ -172,7 +172,7 @@ az containerapp list --subscription "$SUB" -g "$RG" \
 ```
 
 - **STOP if any app other than `loom-console` / `loom-capacity-broker` appears** —
-  update [§1.1](#11-client-inventory--every-binder-from-source) and [§6](#6-what-breaks-if-this-is-done-wrong) before proceeding.
+  update [§1.1](#11-client-inventory--every-binder-from-source) and [§6](#6-what-breaks-if-this-is-done-wrong-and-the-blast-radius) before proceeding.
 
 **2.3 — Confirm the AMR prerequisites exist.** Both were verified present on
 2026-09-01; verify again rather than assume.
