@@ -204,7 +204,21 @@ export function BrainPane({ initialSnapshot, submitDecision, loadSynapseLayers }
   const setTab = React.useCallback(
     (t: BrainTab) => {
       setTabState(t);
-      pendingTabRef.current = t;
+      // Latch ONLY when this selection actually changes the address.
+      //
+      // Fluent's `TabList` fires `onTabSelect` for the ALREADY-SELECTED tab, and
+      // re-selecting the current tab produces a `replace` that does not move
+      // `urlTab`. The effect above is keyed `[urlTab]`, so it would never run,
+      // so an unconditional latch would never be cleared — and from then on
+      // every external navigation is swallowed: the pane shows one view while
+      // the address bar names another.
+      //
+      // That is #4278's own defect reintroduced by its fix, and it is the worse
+      // form of it. The whole point of addressable tabs is that an operator can
+      // send a colleague a link before performing a destructive action; a URL
+      // that LIES about which view you are on is worse than no URL, because
+      // this one gets trusted.
+      pendingTabRef.current = t === urlTab ? null : t;
       const params = new URLSearchParams(searchParams?.toString() ?? '');
       params.set('tab', t);
       // REPLACE, not push: pushing would turn every tab click into a history
@@ -217,7 +231,7 @@ export function BrainPane({ initialSnapshot, submitDecision, loadSynapseLayers }
       // `realtime-intelligence-hub.tsx:54`, which do this same pattern.
       router.replace(`/admin/brain?${params.toString()}`, { scroll: false });
     },
-    [router, searchParams],
+    [router, searchParams, urlTab],
   );
 
   const load = React.useCallback(async () => {

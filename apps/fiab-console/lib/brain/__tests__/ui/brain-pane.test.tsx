@@ -335,6 +335,36 @@ describe('the tab is addressable (#4278)', () => {
     );
   });
 
+  it('re-selecting the CURRENT tab does not deafen the pane to Back', () => {
+    /**
+     * The latch must arm only when the selection actually MOVES the address.
+     *
+     * Fluent's `TabList` fires `onTabSelect` for the already-selected tab, and
+     * a same-tab click produces a `replace` that leaves `urlTab` unchanged — so
+     * the effect, keyed `[urlTab]`, never runs. An unconditional latch is
+     * therefore never cleared, and every later external navigation is dropped:
+     * the pane shows one view while the address bar names another.
+     *
+     * This shape had no fixture, which is why it survived review round 2.
+     */
+    const r = wrap(<BrainPane initialSnapshot={snapshot} />);
+
+    // Default is graph. Select Graph AGAIN. (Asserting the call also pins the
+    // Fluent behaviour this bug depends on — if TabList ever stops firing for
+    // the current tab, this line says so instead of the suite going quiet.)
+    fireEvent.click(screen.getByRole('tab', { name: /Graph/ }));
+    expect(nav.replace).toHaveBeenCalledTimes(1);
+
+    // Back lands somewhere else, with no click of ours. It must be followed.
+    nav.search = new URLSearchParams('tab=coverage');
+    rewrap(r, <BrainPane initialSnapshot={snapshot} />);
+    expect(screen.getByRole('tab', { name: /Coverage/ })).toHaveAttribute(
+      'aria-selected',
+      'true',
+    );
+    expect(screen.getByTestId('coverage-panel')).toBeInTheDocument();
+  });
+
   it('an EXTERNAL url change is still followed once the write has landed', () => {
     // The guard above must not deafen the pane to Back/forward. Once the
     // pending write settles, a later external change is honoured.
