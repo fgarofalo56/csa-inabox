@@ -1410,6 +1410,64 @@
           }
         },
         {
+          "id": "sec:authorizer:apps/fiab-console/app/api/admin/brain/perform/route.ts#POST",
+          "kind": "authorizer",
+          "provenance": "declared",
+          "label": "POST /api/admin/brain/perform",
+          "facet": {
+            "kind": "authorizer",
+            "fnName": "POST /api/admin/brain/perform",
+            "params": [],
+            "resourceScoped": true,
+            "callerNamedResourceInputs": [
+              "findingId"
+            ],
+            "allowPaths": [
+              {
+                "id": "post:admin-claim",
+                "conditionPredicates": [
+                  "isTenantAdmin"
+                ],
+                "scopeLiterals": [],
+                "mentionsVerdict": false,
+                "impliedByOwnsVerdict": false,
+                "ownsResolver": null
+              }
+            ],
+            "reachesPrivilegedSink": false,
+            "privilegedSinkKinds": []
+          }
+        },
+        {
+          "id": "sec:authorizer:apps/fiab-console/app/api/admin/brain/perform/route.ts#GET",
+          "kind": "authorizer",
+          "provenance": "declared",
+          "label": "GET /api/admin/brain/perform",
+          "facet": {
+            "kind": "authorizer",
+            "fnName": "GET /api/admin/brain/perform",
+            "params": [],
+            "resourceScoped": true,
+            "callerNamedResourceInputs": [
+              "findingId"
+            ],
+            "allowPaths": [
+              {
+                "id": "get:admin-claim",
+                "conditionPredicates": [
+                  "isTenantAdmin"
+                ],
+                "scopeLiterals": [],
+                "mentionsVerdict": false,
+                "impliedByOwnsVerdict": false,
+                "ownsResolver": null
+              }
+            ],
+            "reachesPrivilegedSink": false,
+            "privilegedSinkKinds": []
+          }
+        },
+        {
           "id": "sec:authorizer:apps/fiab-console/app/api/admin/brain/proposals/route.ts#POST",
           "kind": "authorizer",
           "provenance": "declared",
@@ -43885,6 +43943,16 @@
           "deployedAs": "loom-console"
         },
         {
+          "nodeId": "sec:authorizer:apps/fiab-console/app/api/admin/brain/perform/route.ts#POST",
+          "codeModuleId": "code:apps/fiab-console/app/api/admin/brain/perform/route.ts",
+          "deployedAs": "loom-console"
+        },
+        {
+          "nodeId": "sec:authorizer:apps/fiab-console/app/api/admin/brain/perform/route.ts#GET",
+          "codeModuleId": "code:apps/fiab-console/app/api/admin/brain/perform/route.ts",
+          "deployedAs": "loom-console"
+        },
+        {
           "nodeId": "sec:authorizer:apps/fiab-console/app/api/admin/brain/proposals/route.ts#POST",
           "codeModuleId": "code:apps/fiab-console/app/api/admin/brain/proposals/route.ts",
           "deployedAs": "loom-console"
@@ -48245,15 +48313,15 @@
     },
     "meta": {
       "generatorVersion": 1,
-      "generatedAt": "2026-08-31T22:46:48.475Z",
-      "commit": "7a92b58335671ee1e279ab67268b49127f032893",
-      "inputsDigest": "23592148e211465d",
-      "filesScanned": 2073,
+      "generatedAt": "2026-09-01T01:21:39.626Z",
+      "commit": "31a7b301cac52a54b2235d7426979cf269a1e6ca",
+      "inputsDigest": "2394839afc221fd0",
+      "filesScanned": 2074,
       "scanScopes": [
         {
           "scope": "app/**/route.ts (console BFF routes)",
-          "filesMatched": 1695,
-          "nodesEmitted": 703
+          "filesMatched": 1696,
+          "nodesEmitted": 705
         },
         {
           "scope": ".github/**, scripts/** (CI publication surfaces)",
