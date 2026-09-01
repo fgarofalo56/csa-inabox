@@ -345,29 +345,37 @@ param loomMsalClientSecret = readEnvironmentVariable('LOOM_MSAL_CLIENT_SECRET', 
 // The live consumers are the three derived gates in admin-plane/main.bicep, and
 // gcc.bicepparam sets no `loomBackends`, so each inherits this value:
 //
-//   1. weavePgAllowed      (L1175) -> weavePgLocalActive (L1176)
+//   1. weavePgAllowed      (L1227) -> weavePgLocalActive (L1228)
 //        The Weave / Semantic Ontology graph store (Postgres + Apache AGE).
-//        LOOM_WEAVE_PG_FQDN and LOOM_PGVECTOR_HOST (L4378) both render empty, so
+//        LOOM_WEAVE_PG_FQDN and LOOM_PGVECTOR_HOST (L4430) both render empty, so
 //        svc-weave-ontology honest-gates and the pgvector / feature-store
 //        clients lose their host. TRACKED: #3788, which already owns exactly
 //        this gap for GCC-High and IL5 — GCC joins it rather than getting a
 //        duplicate issue.
-//   2. postgresStoresAllowed (L1285) -> ducklakeCatalogActive (L1286)
+//   2. postgresStoresAllowed (L1337) -> ducklakeCatalogActive (L1338)
 //        The N8 DuckLake catalog store. The editor honest-gates with a Fix-it.
 //        This is the SAME registered-gate treatment both Gov boundaries already
 //        carry; no new gap is introduced by matching them.
-//   3. postgresStoresAllowed (L1285) -> loomUnityPostgresActive (L1416)
+//   3. postgresStoresAllowed (L1337) -> loomUnityPostgresActive (L1468)
 //        Loom Unity's DURABLE metastore. Read the gate carefully: `loomUnityActive`
-//        does NOT depend on it, so the catalog still DEPLOYS — on an EmptyDir H2
-//        store (`dbEphemeral: true`), byte-identical to what Gov has run since
-//        2026-07-15. It is a FUNCTIONAL catalog whose METADATA DOES NOT SURVIVE A
-//        RESTART. That is the real cost of this line and it is not a honest-gate:
+//        (L1456) does NOT depend on it, so the catalog still DEPLOYS — on an
+//        EmptyDir H2 store (`dbEphemeral: !loomUnityPostgresActive`, L7494),
+//        byte-identical to what Gov has run since 2026-07-15. It is a FUNCTIONAL
+//        catalog whose METADATA DOES NOT SURVIVE A RESTART.
+//        RE-VERIFIED AT THE MERGED HEAD: #4256 ("the catalog … forgot everything
+//        on every roll") landed on main while this PR was open and wires
+//        catalogDbUrl / catalogDbUser / catalogDbClientId into iceberg-catalog —
+//        but only `where loomUnityPostgresActive is true` (L6936-6938), and
+//        L6933 states outright that when it is false "all three stay empty and
+//        the module" runs H2. So that fix repairs the boundaries that HAVE a
+//        store and leaves this one exactly as described.
+//        That is the real cost of this line and it is not an honest-gate:
 //        nothing warns, registration returns 201, and the namespace is gone after
 //        the next scale-to-zero. TRACKED: #4264 — a cloud-parity defect across
 //        all THREE boundaries, not a GCC regression, and now named instead of
 //        implied. It is the one item here that is NOT an honest gate, which is
 //        why it got its own issue rather than a line in this comment.
-//   4. airflowPostgresAllowed (L1228) -> airflowHostActive (L1229)
+//   4. airflowPostgresAllowed (L1280) -> airflowHostActive (L1281)
 //        The OSS Airflow host itself — i.e. the thing being declined. Not a lost
 //        capability so much as the supply-chain and network posture above.
 //
