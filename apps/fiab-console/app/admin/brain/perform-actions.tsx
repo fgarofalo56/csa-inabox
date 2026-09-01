@@ -902,6 +902,72 @@ export function PerformControls({
 }
 
 /**
+ * What the confirm dialog says about ONE executor — an EXHAUSTIVE switch, not a
+ * ternary.
+ *
+ * ── WHY THIS IS A SWITCH (#4260 review round 4, nit 2) ─────────────────────
+ * This started as two `executor === 'delete-resource' ? … : …` ternaries: one
+ * for the action sentence, one gating the statefulness caveat. Under a ternary a
+ * THIRD `PerformExecutorKind` would silently take the else-branch and inherit
+ * the `minReplicas` sentence — a confident, specific, WRONG claim about the
+ * change, rendered directly above a typed confirm that then executes it. That
+ * is the exact defect this whole review round existed to fix, re-introduced
+ * later and silently, by an author who edited the registry and never opened
+ * this file.
+ *
+ * "Only two executors exist" is a weak guarantee. #4262 went looking for two
+ * known gate mismatches and its rewritten guard found TWELVE across six sites;
+ * latent-because-small is how this class survives. The `never` assignment in the
+ * default branch converts it from "a wrong sentence ships and an operator acts
+ * on it" into "the build fails" — adding a kind to `PerformExecutorKind`
+ * without a case here is a COMPILE error on that line, not a runtime surprise.
+ *
+ * The runtime default still has to do something, because a server could send a
+ * kind this bundle predates. It FAILS TOWARD WARNING: it refuses to describe the
+ * change, says so plainly, and keeps the statefulness caveat on. An unknown
+ * executor is the case where this page knows LEAST, so it is the last case that
+ * should sound reassuring.
+ *
+ * Exported so a spec can drive every arm — including the one the type system
+ * says is unreachable, which is precisely the arm no fixture would otherwise
+ * reach.
+ */
+export function confirmCopyFor(executor: PerformExecutorKind): {
+  /** The single sentence naming the change this will make. */
+  readonly action: string;
+  /** Whether the in-process-state caveat applies to this executor. */
+  readonly statefulnessCaveat: boolean;
+} {
+  switch (executor) {
+    case 'delete-resource':
+      return {
+        action:
+          'The platform will issue an ARM delete for this resource. It is not recoverable from this page.',
+        statefulnessCaveat: false,
+      };
+    case 'scale-to-zero':
+      return {
+        action: 'The platform will PATCH minReplicas to 0 on this Container App.',
+        statefulnessCaveat: true,
+      };
+    default: {
+      // COMPILE-TIME EXHAUSTIVENESS. Add a kind to `PerformExecutorKind`
+      // without a case above and `executor` is no longer narrowed to `never`
+      // here, so THIS LINE fails to typecheck. That is the point of the whole
+      // function.
+      const unhandled: never = executor;
+      return {
+        action:
+          `This console does not recognise the '${String(unhandled)}' executor, so it cannot ` +
+          'tell you what this change will do. Nothing about the effect is established here — ' +
+          'read the server’s registry entry for this executor before confirming.',
+        statefulnessCaveat: true,
+      };
+    }
+  }
+}
+
+/**
  * The typed-resource-name confirm.
  *
  * It opens only AFTER the server staged and returned a token, so the dialog can
@@ -930,6 +996,9 @@ function StagedConfirmDialog({
   onConfirm: () => void;
 }) {
   const s = useStyles();
+  // ONE derivation, read by both the sentence and the caveat. Two independent
+  // ternaries could disagree with each other; one exhaustive switch cannot.
+  const copy = confirmCopyFor(executor);
   return (
     <Dialog open modalType="alert" onOpenChange={(_, d) => !d.open && onCancel()}>
       <DialogSurface data-testid="perform-confirm-dialog">
@@ -937,11 +1006,7 @@ function StagedConfirmDialog({
           <DialogTitle>Confirm this change</DialogTitle>
           <DialogContent>
             <div className={s.dialogBlock}>
-              <Body1>
-                {executor === 'delete-resource'
-                  ? 'The platform will issue an ARM delete for this resource. It is not recoverable from this page.'
-                  : 'The platform will PATCH minReplicas to 0 on this Container App.'}
-              </Body1>
+              <Body1 data-testid="perform-confirm-action">{copy.action}</Body1>
               {/* ── #4260 review, BLOCKER ───────────────────────────────────
                   What stood here asserted, unconditionally and for EVERY
                   scale-to-zero subject, that "the app stays deployed and scales
@@ -960,8 +1025,13 @@ function StagedConfirmDialog({
                   does, this sentence is the last thing the operator reads before
                   a typed confirm — so it states what is established and names
                   what is not (`deploy-integrity.md` R7). Do not restore a
-                  reversibility claim here; a spec asserts its absence. */}
-              {executor === 'delete-resource' ? null : (
+                  reversibility claim here; a spec asserts its absence.
+
+                  Round 4: the gate is now `confirmCopyFor(executor)
+                  .statefulnessCaveat` rather than a second ternary, so an
+                  executor added without a case in that switch fails the build
+                  instead of silently landing on the wrong side of this. */}
+              {copy.statefulnessCaveat ? (
                 <MessageBar intent="warning" data-testid="perform-statefulness-caveat">
                   <MessageBarBody>
                     <MessageBarTitle>
@@ -975,7 +1045,7 @@ function StagedConfirmDialog({
                     the app&apos;s own deploy module before confirming.
                   </MessageBarBody>
                 </MessageBar>
-              )}
+              ) : null}
               <MessageBar intent="warning">
                 <MessageBarBody>
                   <MessageBarTitle>Staged. Nothing has changed yet.</MessageBarTitle>

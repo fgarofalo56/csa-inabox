@@ -37,6 +37,7 @@ import { FluentProvider, webLightTheme } from '@fluentui/react-components';
 import { Recommendations } from '../recommendations';
 import {
   PerformControls,
+  confirmCopyFor,
   interpretPerformResponse,
   subjectResourceName,
   type PerformOutcomeResult,
@@ -1026,6 +1027,41 @@ describe('the confirm dialog claims no reversibility it cannot establish (R7)', 
     await openDialog({ id: 'f-orphan-1', detector: 'orphan', subjects: [ORPHAN_SUBJECT] }, ORPHAN_PERFORMABLE);
     expect(screen.queryByTestId('perform-statefulness-caveat')).toBeNull();
     expect(screen.getByTestId('perform-confirm-dialog').textContent).toContain('ARM delete');
+  });
+
+  // ── round 4, nit 2 — the arm the TYPE SYSTEM says is unreachable ────────
+  it('an UNRECOGNISED executor refuses to describe the change and keeps the caveat on', () => {
+    // The two ternaries this replaced would have sent a third executor down the
+    // else-branch and printed "PATCH minReplicas to 0" — a confident, specific,
+    // WRONG claim immediately above a typed confirm that then executes it.
+    //
+    // The real guarantee is at COMPILE time: adding a kind to
+    // `PerformExecutorKind` without a case makes the `const unhandled: never`
+    // assignment fail to typecheck. That cannot be asserted from a passing
+    // test, so this covers the other half — the RUNTIME default, which a
+    // type-correct fixture can never reach and which would otherwise ship
+    // entirely unexercised. The cast is the point, not a shortcut.
+    const copy = confirmCopyFor('restart-app' as never);
+    expect(copy.action).toContain('does not recognise');
+    expect(copy.action).toContain('restart-app');
+    expect(copy.action).toContain('Nothing about the effect is established');
+    // It must NOT inherit the scale-to-zero sentence — the whole defect.
+    expect(copy.action).not.toContain('minReplicas');
+    // …and it FAILS TOWARD WARNING: least knowledge, loudest caveat.
+    expect(copy.statefulnessCaveat).toBe(true);
+  });
+
+  it('CONTROL: the two real executors are still distinguished, and only one warns', () => {
+    // Anti-vacuity. A switch that returned the unknown copy for everything
+    // would satisfy the spec above.
+    expect(confirmCopyFor('scale-to-zero')).toEqual({
+      action: 'The platform will PATCH minReplicas to 0 on this Container App.',
+      statefulnessCaveat: true,
+    });
+    const del = confirmCopyFor('delete-resource');
+    expect(del.action).toContain('ARM delete');
+    expect(del.action).toContain('not recoverable');
+    expect(del.statefulnessCaveat).toBe(false);
   });
 });
 
