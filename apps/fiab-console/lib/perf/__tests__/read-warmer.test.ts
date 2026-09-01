@@ -338,6 +338,107 @@ describe('read-warmer state is self-diagnosing', () => {
     expect(warn).toHaveBeenCalledWith(expect.stringContaining('[read-warmer] target-0 failed:'));
   });
 
+  it('emits ONE grouped cycle-summary line when it withheld or lost reads', async () => {
+    const clock = fakeClock();
+    const warn = vi.fn();
+    const w = createReadWarmer({
+      now: clock.now,
+      sleep: clock.sleep,
+      loadTargets: async () => fakeTargets(10),
+      runTarget: async () => ({}),
+      budget: BUDGET, // 3 of 10 run; 7 are skipped on budget
+      warn,
+    });
+
+    await w.runCycle();
+
+    const summaries = warn.mock.calls
+      .map((c) => String(c[0]))
+      .filter((m) => m.includes('cycle summary'));
+    expect(summaries).toHaveLength(1);
+    expect(summaries[0]).toContain('attempted 3');
+    expect(summaries[0]).toContain('skipped 7');
+    // Grouped by reason, not repeated once per target.
+    expect(summaries[0]).toContain('7x [target-3, target-4');
+    expect(summaries[0]).toContain('spent its warm read budget');
+  });
+
+  it('stays SILENT on a fully clean cycle (no healthy-case log noise)', async () => {
+    const clock = fakeClock();
+    const warn = vi.fn();
+    const w = createReadWarmer({
+      now: clock.now,
+      sleep: clock.sleep,
+      loadTargets: async () => fakeTargets(3),
+      runTarget: async () => ({}),
+      budget: { ...BUDGET, maxReadsPerWindow: 100 },
+      warn,
+    });
+
+    const r = await w.runCycle();
+    expect(r.succeeded).toBe(3);
+    expect(warn).not.toHaveBeenCalled();
+  });
+
+  it('a refused re-entrant cycle does not blank the last real cycle report', async () => {
+    const clock = fakeClock();
+    let release: (() => void) | null = null;
+    const gate = new Promise<void>((r) => { release = r; });
+    let block = false;
+    const w = createReadWarmer({
+      now: clock.now,
+      sleep: clock.sleep,
+      loadTargets: async () => fakeTargets(2),
+      runTarget: async () => { if (block) await gate; return {}; },
+      budget: { ...BUDGET, maxReadsPerWindow: 100 },
+      warn: () => {},
+    });
+
+    // A real cycle completes and owns `lastCycle`.
+    await w.runCycle();
+    expect(w.state().lastCycle?.succeeded).toBe(2);
+
+    // A second cycle is in flight; a third is refused. The refusal must not
+    // overwrite the completed cycle's evidence while the in-flight one runs.
+    block = true;
+    const inFlight = w.runCycle();
+    await w.runCycle(); // refused
+    expect(w.state().lastCycle?.succeeded).toBe(2);
+    expect(w.state().lastCycle?.attempted).toBe(2);
+
+    release?.();
+    await inFlight;
+  });
+
+  /**
+   * KNOWN GAP, measured 2026-09-01 — pinned so nobody reads the breaker as
+   * universal. `monitor-client.listResourceHealth()` swallows a total ARM 429
+   * and resolves `{}`, so the heaviest warm target cannot trip the breaker.
+   * The repair belongs in monitor-client.ts (out of scope here); this spec
+   * states the CURRENT contract truthfully rather than implying coverage the
+   * code does not have.
+   */
+  it('KNOWN GAP: a target that SWALLOWS its 429 and resolves cannot trip the breaker', async () => {
+    const clock = fakeClock();
+    // Exactly what listResourceHealth does under a total ARM 429: resolve {}.
+    const swallows = vi.fn(async () => ({ statuses: [] }));
+    const w = createReadWarmer({
+      now: clock.now,
+      sleep: clock.sleep,
+      loadTargets: async () => fakeTargets(3),
+      runTarget: swallows,
+      budget: { ...BUDGET, maxReadsPerWindow: 100 },
+      warn: () => {},
+    });
+
+    const r = await w.runCycle();
+    expect(r.abortedBy).toBeNull();
+    expect(r.succeeded).toBe(3);
+    expect(w.state().buckets[0].consecutiveThrottles).toBe(0);
+    // The budget and pacing DO still bound it — that is what remains load-bearing.
+    expect(w.state().buckets[0].readsUsedInWindow).toBe(3);
+  });
+
   it('a re-entrant cycle is refused rather than doubling the ARM spend', async () => {
     const clock = fakeClock();
     let release: (() => void) | null = null;

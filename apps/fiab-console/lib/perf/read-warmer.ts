@@ -52,10 +52,36 @@
  *      throttling persists.
  *   4. OBSERVABILITY — `getReadWarmerState()` reports what ran, what was
  *      skipped and WHY, so the next incident is diagnosable without a live log
- *      pull.
+ *      pull. Because nothing SERVES that accessor yet (see the scope note
+ *      below), a cycle that skipped/failed/aborted anything also emits ONE
+ *      structured `[read-warmer] cycle summary` line — a clean cycle stays
+ *      silent, so this costs nothing in the healthy case and is guaranteed to
+ *      exist in the incident case.
  *
  * deploy-integrity R7: every reason string states only what was established.
  * When ARM sent no Retry-After, the state says so rather than inventing one.
+ *
+ * ── MEASURED LIMIT OF THE BREAKER — READ THIS BEFORE TRUSTING IT ────────────
+ *
+ * The breaker can only fire on a warm read that THROWS. Measured 2026-09-01 by
+ * driving the real clients with an ARM transport that 429s everything:
+ *
+ *   listResourceHealth()    -> did NOT throw; resolved {}      <-- BLIND SPOT
+ *   getDiagnosticsCoverage() -> threw ('throttled')            <-- breaker works
+ *
+ * `monitor-client.listResourceHealth` catches bare (monitor-client.ts, the
+ * `resourceHealthViaResourceGraph` -> `resourceHealthViaCrawl` fallback) and
+ * degrades to `{}` rather than propagating. So `monitor/health` — the HEAVIEST
+ * warm target, a whole-subscription Resource Health walk whose 45s client memo
+ * is always expired by the 10-minute warm interval — cannot trip this breaker,
+ * and on a 429 from the cheap Resource Graph path it ESCALATES to the more
+ * expensive paginated crawl, i.e. it spends MORE ARM budget precisely while ARM
+ * is throttling. That is the most likely single source of the measured ~1,700
+ * lines / 30 min, and it is NOT fixed here: the repair belongs in
+ * `monitor-client.ts` (propagate 429 instead of swallowing it, and do not
+ * escalate to the crawl on a throttle), which is outside this change's scope.
+ * Tracked as a follow-up on #4244. `budget` + `pacing` DO still bound that
+ * target; only the breaker is blind to it.
  */
 
 import { buildScopedCacheKey, getOrComputeCached, resolveBackendTtl } from '@/lib/azure/query-result-cache';
@@ -485,6 +511,41 @@ export function createReadWarmer(deps: ReadWarmerDeps = {}): ReadWarmer {
     return Math.max(bounded, retryAfterMs ?? 0);
   }
 
+  /**
+   * ONE structured line per NOTABLE cycle (requirement 4).
+   *
+   * `getReadWarmerState()` is the richer diagnostic, but nothing serves it yet,
+   * so on its own it would leave a live incident exactly as hard to diagnose as
+   * 2026-08-31 was. A clean cycle logs NOTHING — this only speaks when the
+   * warmer actually withheld or lost a read, which is the case worth reading.
+   *
+   * Skip reasons are grouped by reason (every target in one cooldown shares one
+   * reason) so the line stays bounded rather than repeating the same sentence
+   * once per target.
+   */
+  function summarize(report: ReadWarmerCycleReport): void {
+    if (!report.skipped.length && !report.failed.length && !report.abortedBy) return;
+    const byReason = new Map<string, string[]>();
+    for (const s of report.skipped) {
+      const labels = byReason.get(s.reason);
+      if (labels) labels.push(s.label);
+      else byReason.set(s.reason, [s.label]);
+    }
+    const skips = [...byReason.entries()]
+      .map(([reason, labels]) => `${labels.length}x [${labels.join(', ')}] ${reason}`)
+      .join(' ; ');
+    const parts = [
+      `attempted ${report.attempted}`,
+      `succeeded ${report.succeeded}`,
+      `skipped ${report.skipped.length}`,
+      `failed ${report.failed.length}`,
+    ];
+    if (report.abortedBy) {
+      parts.push(`ABORTED by ${report.abortedBy.label} (cooldown until ${report.abortedBy.cooldownUntil})`);
+    }
+    warn(`[read-warmer] cycle summary — ${parts.join(', ')}${skips ? ` | skips: ${skips}` : ''}`);
+  }
+
   async function runCycle(): Promise<ReadWarmerCycleReport> {
     const startedAt = now();
     const report: ReadWarmerCycleReport = {
@@ -497,9 +558,14 @@ export function createReadWarmer(deps: ReadWarmerDeps = {}): ReadWarmer {
       abortedBy: null,
     };
     if (running) {
-      report.skipped.push({ label: '(cycle)', reason: 'a warm cycle was already running' });
+      const reason = 'a warm cycle was already running';
+      report.skipped.push({ label: '(cycle)', reason });
       report.finishedAt = iso(now());
-      lastCycle = report;
+      // Deliberately NOT `lastCycle = report`: the cycle still in flight owns
+      // that slot. Overwriting it would blank the last real cycle's evidence
+      // (what it warmed, what it skipped) for as long as the in-flight cycle
+      // runs — the opposite of what requirement 4 is for.
+      record('skipped', '(cycle)', reason);
       return report;
     }
     running = true;
@@ -590,6 +656,7 @@ export function createReadWarmer(deps: ReadWarmerDeps = {}): ReadWarmer {
       }
       report.finishedAt = iso(now());
       lastCycle = report;
+      summarize(report);
       return report;
     } finally {
       running = false;
