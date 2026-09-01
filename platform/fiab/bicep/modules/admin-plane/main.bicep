@@ -865,6 +865,58 @@ var icebergCatalogActive = icebergCatalogEnabled && containerPlatform == 'contai
 // honest-fails instead of pointing at an endpoint that does not answer.
 var icebergCatalogUrl = icebergCatalogActive ? 'https://${icebergCatalog!.outputs.fqdn}' : ''
 
+// ── N1/LU catalog AUDIENCE — a DEDICATED app registration (#3339) ─────────────
+// MEASURED 2026-08-31 (the #3339 root-cause read): this module passed
+// `entraClientId: effectiveMsalClientId` to BOTH the iceberg-catalog call below
+// and the loom-unity call further down — i.e. the Console's own interactive
+// SIGN-IN app registration. That registration carries `appRoles: []` and
+// `oauth2PermissionScopes: []`, and apps/loom-unity/bin/loom-entrypoint.sh
+// derives the catalog's accepted audiences as `api://<clientId>,<clientId>`.
+// Two consequences, both real defects:
+//
+//   1. ANY console sign-in token is also a valid catalog subject token. The
+//      authentication identity and the catalog's API audience were the same
+//      Entra object, so the catalog had no way to distinguish "a human who
+//      signed in to the console" from "a principal authorized to call the
+//      catalog". That is a trust-boundary collapse, not a naming smell.
+//   2. An API with zero exposed scopes and zero app roles cannot EXPRESS who
+//      may call it at all — there is no claim for the catalog to check.
+//
+// The fix is the shape N7e already uses for Trino (`trinoAudienceClientId`
+// above): an OPTIONAL pin on the existing loomBackends bag naming a DEDICATED
+// app registration, so this adds ZERO top-level ARM params (admin-plane is at
+// the 256-parameter ceiling).
+//
+//   loomBackends.unityAudienceClientId   client id of the dedicated catalog app
+//
+// The object is created by `scripts/csa-loom/bootstrap-catalog-app-reg.sh`,
+// which creates a NEW Entra application with its own App ID URI and its own
+// appRoles. It NEVER modifies the sign-in app: #3335 and the 2026-07-19 MSAL
+// outage are both recorded consequences of writing to that object.
+//
+// UNPINNED IT FALLS BACK to effectiveMsalClientId, which is byte-for-byte
+// today's behaviour — this change cannot make an existing estate worse, and it
+// is what keeps the catalog reachable on an estate that has not yet run the
+// bootstrap.
+//
+// ONE id for BOTH apps, deliberately: iceberg-catalog and loom-unity run the
+// SAME image and serve two surfaces of one catalog, so a principal authorized
+// for one is authorized for the other. Two audiences would be two different
+// answers to a single question.
+var unityAudienceOverride = string(loomBackends.?unityAudienceClientId ?? '')
+var unityAudienceClientId = !empty(unityAudienceOverride) ? unityAudienceOverride : effectiveMsalClientId
+// What the CONSOLE mints against on the upstream Iceberg hop
+// (lib/azure/iceberg-catalog-client.ts `resolveIcebergAuth`). `api://<clientId>`
+// is the audience the module pins on the catalog; `/.default` is the
+// client-credentials scope form.
+//
+// EMPTY when the catalog is not deployed, or when nothing is pinnable at all —
+// and empty is the CORRECT value there, not a gap: the client's own documented
+// fallback is `api://<LOOM_MSAL_CLIENT_ID>/.default`, so emitting a fabricated
+// value would assert an audience this deploy never established
+// (deploy-integrity.md R7). With a pin present the client stops guessing.
+var icebergConsoleAudience = icebergCatalogActive && !empty(unityAudienceClientId) ? 'api://${unityAudienceClientId}/.default' : ''
+
 // ── N7e Federated SQL engine (Trino) — DEFAULT-ON deploy toggle ───────────────
 // Deploys data-plane/loom-trino-aca.bicep: single-node Trino OSS (Apache-2.0)
 // as a scale-to-zero, INTERNAL-ingress Container App backing LOOM_TRINO_URL and
@@ -4805,6 +4857,23 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             // tab still writes Delta<->Iceberg dual metadata into the lake and
             // every catalog surface honest-gates with a Fix-it.
             { name: 'LOOM_ICEBERG_CATALOG_URL', value: icebergCatalogUrl }
+            // #3339 fix 1 — the Entra audience the BFF mints its SUBJECT token
+            // against before the RFC 8693 exchange at the catalog
+            // (lib/azure/iceberg-catalog-client.ts `resolveIcebergAuth`).
+            //
+            // NOTHING set this var, on any estate, ever: check-env-sync.mjs
+            // allowlisted it as a "runtime-only knob" and no bicep emitted it,
+            // so the client always took its documented fallback,
+            // `api://<LOOM_MSAL_CLIENT_ID>/.default` — the interactive SIGN-IN
+            // app. Emitting it here is what lets an estate move the catalog to a
+            // DEDICATED registration with real appRoles without the client
+            // silently guessing its way back to the sign-in app.
+            //
+            // Empty until a catalog is deployed AND an audience is pinnable, in
+            // which case the client's fallback applies exactly as it does today
+            // (an empty string is falsy in `resolveIcebergAuth`). Empty is not a
+            // gate: the value the deploy could not establish is not asserted.
+            { name: 'LOOM_ICEBERG_CATALOG_AUDIENCE', value: icebergConsoleAudience }
             // N8 lab 3 — the S3-compatible face over the governed lake. DEFAULT-ON
             // (#2682 / D16): the s3proxy Container App is deployed in this same
             // pass from the ACR-mirrored image, so the value is produced BY THE
@@ -4958,8 +5027,16 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             // bicep-only deploy): the catalog then deploys SEALED rather than
             // anonymous, and csa-loom-post-deploy-bootstrap.yml re-runs this
             // module with the resolved id + wires these three vars.
-            { name: 'LOOM_UNITY_CLIENT_ID', value: loomUnityActive ? effectiveMsalClientId : '' }
-            { name: 'LOOM_UNITY_AUDIENCE', value: loomUnityActive && !empty(effectiveMsalClientId) ? 'api://${effectiveMsalClientId}/.default' : '' }
+            //
+            // #3339 fix 1 — these now read unityAudienceClientId, which IS
+            // effectiveMsalClientId until an estate pins
+            // loomBackends.unityAudienceClientId. They are held in lockstep with
+            // the `entraClientId` the loom-unity module call receives: the
+            // audience the Console mints against and the audience the catalog
+            // accepts must be the same string by construction, never by
+            // coincidence.
+            { name: 'LOOM_UNITY_CLIENT_ID', value: loomUnityActive ? unityAudienceClientId : '' }
+            { name: 'LOOM_UNITY_AUDIENCE', value: loomUnityActive && !empty(unityAudienceClientId) ? 'api://${unityAudienceClientId}/.default' : '' }
             // The posture DECLARATION the Console acts on. 'entra' matches the
             // server half pinned at the module call. It is a hard literal — the
             // values `anonymous` / `disabled` / `none` / `off` are in the
@@ -6940,13 +7017,60 @@ module icebergCatalog '../data-plane/iceberg-catalog-aca.bicep' = if (icebergCat
       // WAREHOUSE-BIND, while its sibling loom-unity (same image, same DB mode)
       // ran minReplicas 1 and kept its state. iceberg-catalog-aca.bicep already
       // defaults this to 1 and documents 'never scale-to-zero' -- this call site
-      // was overriding its own module. The durable answer is still the Postgres
-      // store (data-plane/loom-unity-postgres.bicep); this only stops the amnesia.
+      // was overriding its own module.
+      //
+      // 2026-08-31 UPDATE (#3339 fix 2): the durable Postgres store IS now wired
+      // below, so the ephemeral premise of the paragraph above no longer holds
+      // where loomUnityPostgresActive is true. minReplicas STAYS 1 anyway, for a
+      // DIFFERENT reason that Postgres does not address: #3110 §2 measured a
+      // 23-30s cold start on this app against a hard 30s Front Door ceiling, so
+      // a scaled-to-zero catalog answers the first federation call with Front
+      // Door's own 504 page. Revisit only with a warm-up path in front of it.
       minReplicas: 1
       cpu: '1.0'
       memory: '2Gi'
-      entraClientId: effectiveMsalClientId
+      // #3339 fix 1 — the DEDICATED catalog audience when one is pinned, else
+      // the sign-in app exactly as before. See the unityAudienceClientId block.
+      entraClientId: unityAudienceClientId
       consolePrincipalId: identity.outputs.uamiConsolePrincipalId
+      // ── STATE DURABILITY (#3110 §1, #3339 fix 2) — the amnesiac catalog ─────
+      // Until now NOTHING passed catalogDbUrl, so this app took the module's
+      // `LOOM_UNITY_DB_LOCAL=1` branch: an H2 file DB under /tmp INSIDE the
+      // replica, plus the server's own signing key and its
+      // SecurityContext.createServiceTokenFile admin token. Every roll — not
+      // only a scale-to-zero — therefore discarded the warehouse, every
+      // namespace, every grant and every internal token the Console had been
+      // issued. minReplicas: 1 above stops the scale-to-zero half of that; it
+      // does nothing about a revision roll, which is the half that fires on
+      // every deploy.
+      //
+      // The durable store already exists: data-plane/loom-unity-postgres.bicep
+      // is deployed for the sibling loom-unity app and emits a ready-made
+      // `jdbcUrl`. The two apps SHARE it on purpose — they run the same image
+      // over two surfaces of one catalog (#3339: "one system to fix, not two"),
+      // so a table registered through the Iceberg REST surface is the same row
+      // the Unity surface reads.
+      //
+      // THREE VALUES, NOT ONE. The entrypoint fails CLOSED on a URL without a
+      // user (`die`: "LOOM_UNITY_DB_URL is set but LOOM_UNITY_DB_USER is
+      // empty"), and the pgjdbc Entra plugin cannot infer WHICH user-assigned
+      // identity to mint a token for. Passing the URL alone would have replaced
+      // an amnesiac catalog with a crash-looping one:
+      //   catalogDbUser     the PostgreSQL ROLE name — which IS the Entra
+      //                     principal NAME of the identity this app runs as
+      //                     (the Console UAMI; loom-unity uses its own).
+      //                     loomUnityPostgres receives that principal as an
+      //                     additionalAdministrator below, which is what
+      //                     creates the role.
+      //   catalogDbClientId AZURE_CLIENT_ID for the plugin.
+      //
+      // When Postgres is not deployed (the sovereign quota gate —
+      // loomUnityPostgresActive false) all three stay empty and the module
+      // keeps the ephemeral store, reporting metadataDurable=false. That is a
+      // measured, declared degradation, not a silent one.
+      catalogDbUrl: loomUnityPostgresActive ? loomUnityPostgres!.outputs.jdbcUrl : ''
+      catalogDbUser: loomUnityPostgresActive ? identity.outputs.uamiConsoleName : ''
+      catalogDbClientId: loomUnityPostgresActive ? identity.outputs.uamiConsoleClientId : ''
     }
     complianceTags: complianceTags
   }
@@ -7458,6 +7582,30 @@ module loomUnityPostgres '../data-plane/loom-unity-postgres.bicep' = if (loomUni
     privateDnsZoneId: ducklakeCatalogActive ? ducklakeCatalog!.outputs.privateDnsZoneId : ''
     unityPrincipalId: loomUnityUami!.properties.principalId
     unityPrincipalName: loomUnityUami!.name
+    // #3339 fix 2 — the iceberg-catalog app persists into THIS server too, and
+    // it runs as the CONSOLE UAMI (not uami-loom-unity: it also holds the lake
+    // read and the ACR pull for that container). Azure Database for PostgreSQL
+    // maps an Entra token to a role by principalNAME, so that identity needs a
+    // role here or the catalog authenticates as nobody and the boot dies with
+    // an opaque auth error minutes in.
+    //
+    // `principalName` MUST be the UAMI's display name — the same contract the
+    // pgAdmin resource uses for uami-loom-unity, and the same string this
+    // template hands the app as catalogDbUser above. The two cannot drift: both
+    // read identity.outputs.uamiConsoleName.
+    //
+    // EMPTY when the catalog is not deployed, so no unused administrator is
+    // created. The module serializes extra admins after the primary one
+    // (@batchSize(1) + dependsOn) because concurrent Entra-admin writes on a
+    // flexible server fail with AadAuthOperationCannotBePerformedWhenServerIsNot
+    // Accessible — measured live on the dlz-attach provision.
+    additionalAdministrators: icebergCatalogActive ? [
+      {
+        principalId: identity.outputs.uamiConsolePrincipalId
+        principalName: identity.outputs.uamiConsoleName
+        principalType: 'ServicePrincipal'
+      }
+    ] : []
     workspaceId: monitoring.outputs.lawId
     complianceTags: complianceTags
   }
@@ -7486,7 +7634,10 @@ module loomUnity '../compute/loom-unity-app.bicep' = if (loomUnityActive) {
     // With no pinnable audience the module deploys SEALED (minReplicas 0,
     // unroutable audience) rather than open — fail-closed, by construction.
     authMode: 'entra'
-    entraClientId: effectiveMsalClientId
+    // #3339 fix 1 — the DEDICATED catalog audience when one is pinned, else the
+    // sign-in app exactly as before. Kept in lockstep with the iceberg-catalog
+    // call above ON PURPOSE: same image, same catalog, one audience.
+    entraClientId: unityAudienceClientId
     // #2974 — the Console principal's OBJECT ID. An Entra app-only token carries
     // no `email` claim, and upstream AuthService resolves the caller as
     // claims.getOrDefault(EMAIL, claim(SUBJECT)), i.e. the object id. The
