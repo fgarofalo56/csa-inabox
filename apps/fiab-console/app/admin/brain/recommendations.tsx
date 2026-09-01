@@ -3,22 +3,39 @@
 /**
  * LOOM BRAIN VISUALIZER — the recommendations list.
  *
- * Ranked by DERIVED saving, each with its evidence chain and a proposal a human
- * can approve. Approval records a decision; it does not perform one.
+ * Ranked by DERIVED saving, each with its evidence chain, a proposal a human
+ * can approve — and, for the classes the SERVER says the platform can execute,
+ * a guarded Perform action (#4242).
  *
- * ── EVERY CONTROL ON THIS SURFACE IS INERT WITH RESPECT TO AZURE ───────────
- * There are exactly three actions: Approve, Dismiss, Copy. The first two POST
- * to `/api/admin/brain/proposals`, which writes an audit record and nothing
- * else. The third writes to the clipboard. There is no "Apply", no "Fix it",
- * no "Scale to zero" — and their absence is asserted, not assumed:
- * `__tests__/ui/no-mutation-controls.test.tsx` enumerates every rendered
- * button/link on the surface and fails on any label matching a mutation verb,
- * so adding one later trips a test rather than passing review on a glance.
+ * ── WHAT CHANGED IN #4242, AND WHAT DID NOT ────────────────────────────────
+ * Review still records a decision and performs nothing: Approve / Dismiss POST
+ * to `/api/admin/brain/proposals`, which writes a decision record. Execution is
+ * a SEPARATE capability behind a SEPARATE route — `POST /api/admin/brain/perform`
+ * — whose executors live outside `lib/brain` entirely (`lib/brain-actions/**`),
+ * behind a guard chain re-derived server-side at execute time and, for every
+ * phase-1 class, a staged two-step confirm. The Brain's four-layer inertness
+ * contract is untouched: `RemediationProposal` still pins `mutatesAzure: false`
+ * as a literal type, `assertInertRemediation` still rejects actuator keys, and a
+ * FINDING still cannot be an action. Performing is a separate record about one.
  *
- * PRP §1 decision 1 is why. Of the Container App environments visible across
- * these subscriptions, most are NOT Loom's — an autonomous mutation on a wrong
- * ownership inference destroys someone else's production. That is a measured
- * blast radius, not a caution.
+ * This file therefore decides NOTHING about performability. It renders the
+ * server's registry verdict: a Perform control where the server says an executor
+ * exists, and the server's own honest reason where it does not — never a
+ * disabled button with no explanation (`ux-baseline.md` G2).
+ *
+ * ── WHY THE HEADER BANNER IS DERIVED, NOT WRITTEN ──────────────────────────
+ * "Nothing on this page changes anything in Azure" was a standing claim. It is
+ * now COMPUTED from what this render actually offers: it is stated only while
+ * the surface carries no Perform control (registry unread, or nothing in a
+ * performable class), and replaced by the truth when it does. A hard-coded
+ * version of either sentence would be false half the time, which is exactly the
+ * R7 failure `deploy-integrity.md` names. `__tests__/perform-ui.test.tsx` holds
+ * both directions.
+ *
+ * PRP §1 decision 1 is still why the guards are as heavy as they are. Of the
+ * Container App environments visible across these subscriptions, most are NOT
+ * Loom's — an autonomous mutation on a wrong ownership inference destroys
+ * someone else's production. That is a measured blast radius, not a caution.
  *
  * ── WHY AN UNAPPROVABLE RECOMMENDATION IS STILL SHOWN ──────────────────────
  * When ownership is not established the proposal is withheld but the FINDING is
@@ -63,6 +80,20 @@ import {
 import { EmptyState } from '@/lib/components/empty-state';
 import { LearnPopover } from '@/lib/components/ui/learn-popover';
 import type { ProposalDecision, WireFinding } from '@/app/api/admin/brain/_lib/wire';
+import type { RecommendationStateRecord } from '@/lib/brain-actions/types';
+import {
+  PerformControls,
+  PerformStateDisclosure,
+  PersistedStateBanner,
+  RECOMMEND_ONLY_SENTENCE,
+  fetchPerformState,
+  performableCount,
+  postPerform,
+  recordsByFinding,
+  type PerformOutcomeResult,
+  type PerformRequestBody,
+  type PerformStateResult,
+} from './perform-actions';
 
 const useStyles = makeStyles({
   root: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, minWidth: 0 },
@@ -120,6 +151,16 @@ export interface RecommendationsProps {
     decision: ProposalDecision,
     note: string,
   ) => Promise<{ ok: boolean; error?: string }>;
+  /**
+   * The perform read-back (#4242): recorded per-finding states + the server's
+   * performability registry. Production passes nothing and the real BFF is
+   * used; a spec injects a resolved result so a render assertion never depends
+   * on a network stub returning a different shape (the seam `submitDecision`
+   * already established on this component).
+   */
+  readonly loadPerformState?: () => Promise<PerformStateResult>;
+  /** Injected so a spec can drive stage → confirm without a network. */
+  readonly performRecommendation?: (body: PerformRequestBody) => Promise<PerformOutcomeResult>;
 }
 
 async function postDecision(
@@ -194,9 +235,56 @@ export function costSourceClause(findings: readonly WireFinding[]): string {
     : 'every figure comes from a Cost Management billing export';
 }
 
-export function Recommendations({ findings, onFocusNode, submitDecision }: RecommendationsProps) {
+export function Recommendations({
+  findings,
+  onFocusNode,
+  submitDecision,
+  loadPerformState,
+  performRecommendation,
+}: RecommendationsProps) {
   const s = useStyles();
   const submit = submitDecision ?? postDecision;
+  const load = loadPerformState ?? fetchPerformState;
+  const perform = performRecommendation ?? postPerform;
+
+  // `null` is "not answered yet" and is NOT the same as "nothing performable" —
+  // the banner and the per-card controls both distinguish them.
+  const [performState, setPerformState] = React.useState<PerformStateResult | null>(null);
+  const [reloadTick, setReloadTick] = React.useState(0);
+
+  // The loader is held in a ref, and the effect depends on the tick alone. A
+  // caller passing an inline arrow would otherwise give the effect a new
+  // identity on every render and re-fetch forever.
+  const loadRef = React.useRef(load);
+  loadRef.current = load;
+
+  React.useEffect(() => {
+    let live = true;
+    void (async () => {
+      // `fetchPerformState` is written to RESOLVE rather than reject (a
+      // transport failure is an `unavailable` result), but an injected loader
+      // is not bound by that, so a rejection still becomes a rendered
+      // disclosure — never an unhandled rejection, and never a silently
+      // missing Perform action.
+      try {
+        const r = await loadRef.current();
+        if (live) setPerformState(r);
+      } catch (e) {
+        if (live) {
+          setPerformState({
+            kind: 'unavailable',
+            reason: `the read threw (${e instanceof Error ? e.message : String(e)}).`,
+          });
+        }
+      }
+    })();
+    return () => {
+      live = false;
+    };
+  }, [reloadTick]);
+
+  const records = recordsByFinding(performState);
+  const performable = performableCount(findings, performState);
 
   const totalDerived = findings.reduce((acc, f) => acc + (f.cost?.amountUsd ?? 0), 0);
   const priced = findings.filter((f) => f.cost).length;
@@ -219,11 +307,32 @@ export function Recommendations({ findings, onFocusNode, submitDecision }: Recom
     <div className={s.root} data-testid="recommendations">
       <Subtitle2>Recommendations ({findings.length})</Subtitle2>
 
-      <MessageBar intent="info" data-testid="recommend-only-banner">
+      {/* DERIVED, never asserted. `performable` counts the findings this render
+          actually offers a Perform control for, so the two sentences below can
+          never be false about the surface the operator is looking at. */}
+      <MessageBar intent="info" data-testid="recommend-only-banner" data-performable={performable}>
         <MessageBarBody>
-          <MessageBarTitle>Recommend-only.</MessageBarTitle>
-          Nothing on this page changes anything in Azure — approving records a decision; the change
-          itself is a repository edit you make.{' '}
+          <MessageBarTitle>
+            {performable > 0 ? 'Review, or perform.' : 'Recommend-only.'}
+          </MessageBarTitle>
+          {performable > 0 ? (
+            <>
+              {performable} of {findings.length} finding(s) are in a class the platform can execute
+              itself, behind a staged two-step confirm — performing one is a REAL change to Azure
+              with a real before/after receipt. Every other finding is recommend-only: approving
+              records a decision; the change itself is a repository edit you make.{' '}
+            </>
+          ) : (
+            <>
+              {RECOMMEND_ONLY_SENTENCE} — approving records a decision; the change itself is a
+              repository edit you make.{' '}
+              {performState === null
+                ? 'Checking which findings the platform can execute itself… '
+                : performState.kind === 'ready'
+                  ? 'No finding in this snapshot is in a class the platform can execute itself. '
+                  : ''}
+            </>
+          )}
           {priced > 0 && (
             <>
               {priced} of {findings.length} finding(s) are priced at roughly $
@@ -244,9 +353,22 @@ export function Recommendations({ findings, onFocusNode, submitDecision }: Recom
         </MessageBarBody>
       </MessageBar>
 
-      {findings.map((f) => (
-        <FindingCard key={f.id} finding={f} onFocusNode={onFocusNode} submit={submit} />
-      ))}
+      <PerformStateDisclosure state={performState} onRetry={() => setReloadTick((t) => t + 1)} />
+
+      {findings.map((f) => {
+        const record: RecommendationStateRecord | undefined = records.get(f.id);
+        return (
+          <FindingCard
+            key={f.id}
+            finding={f}
+            onFocusNode={onFocusNode}
+            submit={submit}
+            performState={performState}
+            perform={perform}
+            {...(record ? { record } : {})}
+          />
+        );
+      })}
     </div>
   );
 }
@@ -255,17 +377,28 @@ function FindingCard({
   finding,
   onFocusNode,
   submit,
+  performState,
+  perform,
+  record,
 }: {
   finding: WireFinding;
   onFocusNode: (id: string) => void;
   submit: (id: string, d: ProposalDecision, note: string) => Promise<{ ok: boolean; error?: string }>;
+  performState: PerformStateResult | null;
+  perform: (body: PerformRequestBody) => Promise<PerformOutcomeResult>;
+  record?: RecommendationStateRecord;
 }) {
   const s = useStyles();
   const [note, setNote] = React.useState('');
   const [busy, setBusy] = React.useState(false);
+  // A PERSISTED decision seeds this, so a reload no longer forgets that a human
+  // already reviewed the finding (the decision-amnesia the #4242 store cures).
+  const persistedDecision: ProposalDecision | null =
+    record?.state === 'approved' || record?.state === 'dismissed' ? record.state : null;
   const [outcome, setOutcome] = React.useState<{ decision: ProposalDecision } | { error: string } | null>(
     null,
   );
+  const decided = outcome ?? (persistedDecision ? { decision: persistedDecision } : null);
   const [copied, setCopied] = React.useState(false);
 
   const decide = React.useCallback(
@@ -398,6 +531,24 @@ function FindingCard({
         </AccordionItem>
       </Accordion>
 
+      {/* WHAT THE STORE REMEMBERS. Rendered from the persisted record, so a
+          reload shows the decision, the receipt or the real error — the
+          decision-amnesia #4242's state store exists to cure. */}
+      {record ? <PersistedStateBanner record={record} /> : null}
+
+      {/* THE PERFORM HALF. It decides nothing: performability, the executor
+          kind and every refusal reason come from the server's registry and its
+          guard chain. */}
+      <PerformControls
+        findingId={finding.id}
+        detector={finding.detector}
+        subjects={finding.subjects}
+        ownershipConfirmed={finding.ownershipConfirmed}
+        state={performState}
+        perform={perform}
+        {...(record ? { record } : {})}
+      />
+
       {finding.ownershipConfirmed ? (
         <>
           <Textarea
@@ -412,7 +563,7 @@ function FindingCard({
               appearance="primary"
               size="small"
               icon={<CheckmarkCircle20Regular />}
-              disabled={busy || outcome !== null}
+              disabled={busy || decided !== null}
               onClick={() => void decide('approved')}
               data-testid="approve"
             >
@@ -422,7 +573,7 @@ function FindingCard({
               appearance="secondary"
               size="small"
               icon={<DismissCircle20Regular />}
-              disabled={busy || outcome !== null}
+              disabled={busy || decided !== null}
               onClick={() => void decide('dismissed')}
               data-testid="dismiss"
             >
@@ -455,16 +606,16 @@ function FindingCard({
         </MessageBar>
       )}
 
-      {outcome !== null && 'decision' in outcome && (
+      {decided !== null && 'decision' in decided && (
         <MessageBar intent="success" data-testid="decision-recorded">
           <MessageBarBody>
-            Recorded as <strong>{outcome.decision}</strong>. Nothing in Azure was changed.
+            Recorded as <strong>{decided.decision}</strong>. Nothing in Azure was changed.
           </MessageBarBody>
         </MessageBar>
       )}
-      {outcome !== null && 'error' in outcome && (
+      {decided !== null && 'error' in decided && (
         <MessageBar intent="error" data-testid="decision-failed">
-          <MessageBarBody>Could not record the decision: {outcome.error}</MessageBarBody>
+          <MessageBarBody>Could not record the decision: {decided.error}</MessageBarBody>
         </MessageBar>
       )}
     </Card>
