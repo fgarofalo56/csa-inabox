@@ -72,6 +72,118 @@ export async function armGet<T = any>(path: string, timeoutMs?: number): Promise
   return jsonOrThrow<T>(await armFetch(path, undefined, timeoutMs), `GET ${path}`);
 }
 
+// ---------------------------------------------------------------------------
+// 429-aware GET — an OPT-IN wrapper. Nothing else in this file retries.
+//
+// ── WHY THIS IS A SEPARATE FUNCTION AND NOT A CHANGE TO armGet (#4243) ─────
+// This module is shared by dozens of consumers, several of which run inside
+// bounded BFF request budgets or poll loops that do their own pacing. Adding
+// retries to the default path would silently multiply their latency and their
+// call volume — the exact ARM-budget pressure that caused #4243 in the first
+// place. So `armGet`/`armPost`/… keep their existing single-shot semantics
+// bit-for-bit, and a caller that WANTS bounded throttle handling (the estate
+// pause path's discovery reads) opts in here.
+//
+// deploy-integrity R6: the retry is bounded and FAILS CLOSED — on exhaustion,
+// or when ARM demands a wait longer than the caller's budget, it throws an
+// `ArmThrottledError` that says exactly what was observed (R7: never converts
+// "I was throttled" into any other claim).
+// ---------------------------------------------------------------------------
+
+/**
+ * A GET that stayed throttled. Distinct from a generic ARM failure so callers
+ * can classify the affected row as "throttled", not generic indeterminate.
+ */
+export class ArmThrottledError extends Error {
+  readonly status = 429 as const;
+  readonly path: string;
+  /** How many requests were actually issued before giving up. */
+  readonly attempts: number;
+  /** The last Retry-After ARM sent, in seconds, when it sent one. */
+  readonly retryAfterSeconds?: number;
+  constructor(opts: { path: string; attempts: number; retryAfterSeconds?: number }) {
+    super(
+      `ARM GET ${opts.path} was throttled (429) and stayed throttled after ${opts.attempts} `
+        + `attempt(s)${opts.retryAfterSeconds !== undefined
+          ? ` (ARM last asked for a ${opts.retryAfterSeconds}s wait)`
+          : ''}. Nothing was read — this is a statement about the control plane's rate limit, `
+        + 'not about the resource.',
+    );
+    this.name = 'ArmThrottledError';
+    this.path = opts.path;
+    this.attempts = opts.attempts;
+    if (opts.retryAfterSeconds !== undefined) this.retryAfterSeconds = opts.retryAfterSeconds;
+  }
+}
+
+export interface ArmThrottleRetryOptions {
+  timeoutMs?: number;
+  /** Total attempts INCLUDING the first. Default 3. Must be >= 1. */
+  maxAttempts?: number;
+  /**
+   * Ceiling on any single wait, ms. Default 10s — a BFF request budget, not an
+   * ARM one. A Retry-After LONGER than this fails closed immediately rather
+   * than hanging the route: sleeping out a 600s penalty inside a request would
+   * just move the outage.
+   */
+  maxDelayMs?: number;
+  /** Injectable for tests. Defaults to a real setTimeout sleep. */
+  sleep?: (ms: number) => Promise<void>;
+}
+
+/** `Retry-After` is either delta-seconds or an HTTP-date. null = absent/bogus. */
+function retryAfterMs(header: string | null): number | null {
+  if (!header) return null;
+  const secs = Number(header);
+  if (Number.isFinite(secs) && secs >= 0) return Math.round(secs * 1000);
+  const at = Date.parse(header);
+  if (Number.isFinite(at)) return Math.max(0, at - Date.now());
+  return null;
+}
+
+/**
+ * GET with bounded 429 retry honoring `Retry-After`. Non-429 responses behave
+ * EXACTLY like `armGet` (same success shape, same thrown error text), so this
+ * is a superset, never a semantic fork.
+ */
+export async function armGetWithRetry<T = any>(
+  path: string,
+  opts: ArmThrottleRetryOptions = {},
+): Promise<T> {
+  const maxAttempts = Math.max(1, opts.maxAttempts ?? 3);
+  const maxDelayMs = opts.maxDelayMs ?? 10_000;
+  const sleep = opts.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
+
+  let lastRetryAfterSeconds: number | undefined;
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    const res = await armFetch(path, undefined, opts.timeoutMs);
+    if (res.status !== 429) return jsonOrThrow<T>(res, `GET ${path}`);
+
+    // Release the connection; the 429 body carries nothing we act on.
+    await res.text().catch(() => '');
+    const waitMs = retryAfterMs(res.headers.get('retry-after'));
+    if (waitMs !== null) lastRetryAfterSeconds = Math.round(waitMs / 1000);
+
+    if (attempt === maxAttempts) break;
+    if (waitMs !== null && waitMs > maxDelayMs) {
+      // ARM asked for more patience than this caller's budget. Fail closed NOW
+      // with the truth, rather than sleeping into a timeout.
+      throw new ArmThrottledError({
+        path,
+        attempts: attempt,
+        retryAfterSeconds: lastRetryAfterSeconds as number,
+      });
+    }
+    // Honor Retry-After when ARM sent one; otherwise a bounded default backoff.
+    await sleep(waitMs ?? Math.min(maxDelayMs, 1000 * 2 ** (attempt - 1)));
+  }
+  throw new ArmThrottledError({
+    path,
+    attempts: maxAttempts,
+    ...(lastRetryAfterSeconds !== undefined ? { retryAfterSeconds: lastRetryAfterSeconds } : {}),
+  });
+}
+
 /** PATCH an ARM resource by bare path. */
 export async function armPatch<T = any>(path: string, body: unknown): Promise<T> {
   return jsonOrThrow<T>(

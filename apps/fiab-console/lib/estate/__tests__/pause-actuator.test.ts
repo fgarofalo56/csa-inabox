@@ -482,7 +482,14 @@ describe(`${ESTATE_PAUSE_ENABLED_ENV} — the arming switch`, () => {
     LOOM_KUSTO_CLUSTER_NAME: 'adx1',            // admin-plane/main.bicep:4769
     LOOM_AAS_RG: 'rg-loom',
     LOOM_AAS_SERVER_NAME: 'aas1',               // (2 files)
-    LOOM_PURVIEW_SHIR_VMSS_NAME: 'vmss1',       // admin-plane/main.bicep:4374
+    LOOM_PURVIEW_SHIR_VMSS_NAME: 'vmss1',       // admin-plane/main.bicep (module output since #4243)
+    // #4243 — the deploy now emits the Purview SHIR's OWN resource group
+    // alongside its name (admin-plane/main.bicep, LOOM_PURVIEW_SHIR_RG), and
+    // the resolver REQUIRES coherent coordinates: a Purview SHIR name no
+    // longer borrows LOOM_DLZ_RG, because that mix addressed a VMSS that does
+    // not exist (measured ARM 404, the deterministic aggravator of the live
+    // pause failure).
+    LOOM_PURVIEW_SHIR_RG: 'rg-admin',
     // LOOM_ESTATE_ID is the ONLY one nothing sets — and resolveEstateId()
     // synthesizes it deterministically, so its absence changes nothing.
   } as unknown as NodeJS.ProcessEnv;

@@ -172,6 +172,10 @@ export {
 } from './pause-actuator';
 export type { ActuatorResult, EstateActuator, PowerRead, ServabilityProbe };
 
+// A LOCAL binding too — `export … from` re-exports without binding, and the
+// discovery tag reader below derives its api-version from the id's own type.
+import { armTypeFromId } from './pause-actuator';
+
 // ---------------------------------------------------------------------------
 // Planning — R-SCOPE-4
 // ---------------------------------------------------------------------------
@@ -1243,9 +1247,33 @@ export function resolveDeployManifest(env: NodeJS.ProcessEnv = process.env): {
   }
 
   // --- SHIR VM scale set ---------------------------------------------------
-  const shirSub = v('LOOM_SUBSCRIPTION_ID');
-  const shirRg = v('LOOM_PURVIEW_SHIR_RG') || v('LOOM_DLZ_RG') || v('LOOM_ADMIN_RG');
-  const shirName = v('LOOM_PURVIEW_SHIR_VMSS_NAME') || v('LOOM_SHIR_VMSS_NAME');
+  //
+  // ── #4243 — COORDINATES TRAVEL TOGETHER, OR NOT AT ALL ────────────────────
+  // The first version composed the NAME from one VMSS (Purview SHIR, falling
+  // back to the DLZ ADF SHIR) with an RG chain that preferred the OTHER one's
+  // home (`LOOM_DLZ_RG` before `LOOM_ADMIN_RG`) and a subscription pinned to
+  // the admin sub with no fallback at all. On the live estate that manufactured
+  // an id under `rg-csa-loom-admin-centralus` in the admin sub — MEASURED as an
+  // ARM 404; the real VMSS lives in the DLZ RG in the DLZ sub. Every plan then
+  // wasted a guaranteed-404 tag read and carried a permanently indeterminate
+  // row.
+  //
+  // The two SHIRs are DIFFERENT machines with different homes (a Purview SHIR
+  // cannot share a VMSS with the ADF SHIR — Microsoft constraint, see
+  // purview-shir.bicep): the Purview SHIR is deployed in the ADMIN RG of the
+  // admin sub; the DLZ ADF SHIR lives in the DLZ RG of the DLZ sub. So each
+  // candidate resolves with ITS OWN coordinates, and the subscription gets the
+  // same fallback pattern the Synapse entry has (`LOOM_SHIR_SUB`, then the
+  // canonical DLZ sub vars emitted by dlz-attach, then the admin sub).
+  const pvwShirName = v('LOOM_PURVIEW_SHIR_VMSS_NAME');
+  const dlzShirName = v('LOOM_SHIR_VMSS_NAME');
+  const shirName = pvwShirName || dlzShirName;
+  const shirRg = pvwShirName
+    ? v('LOOM_PURVIEW_SHIR_RG') || v('LOOM_ADMIN_RG')
+    : v('LOOM_DLZ_RG') || v('LOOM_ADMIN_RG');
+  const shirSub = pvwShirName
+    ? v('LOOM_SHIR_SUB') || v('LOOM_SUBSCRIPTION_ID')
+    : v('LOOM_SHIR_SUB') || v('LOOM_DLZ_SUBSCRIPTION_ID') || v('LOOM_DLZ_SUB') || v('LOOM_SUBSCRIPTION_ID');
   if (shirSub && shirRg && shirName) {
     entries.push({
       resourceId: `/subscriptions/${shirSub}/resourceGroups/${shirRg}/providers/Microsoft.Compute/virtualMachineScaleSets/${shirName}`,
@@ -1253,12 +1281,18 @@ export function resolveDeployManifest(env: NodeJS.ProcessEnv = process.env): {
       name: shirName,
       resourceGroup: shirRg,
       subscriptionId: shirSub,
-      fromEnv: ['LOOM_SUBSCRIPTION_ID', 'LOOM_PURVIEW_SHIR_RG', 'LOOM_PURVIEW_SHIR_VMSS_NAME'],
+      fromEnv: pvwShirName
+        ? ['LOOM_SHIR_SUB (or LOOM_SUBSCRIPTION_ID)', 'LOOM_PURVIEW_SHIR_RG (or LOOM_ADMIN_RG)', 'LOOM_PURVIEW_SHIR_VMSS_NAME']
+        : ['LOOM_SHIR_SUB (or LOOM_DLZ_SUBSCRIPTION_ID / LOOM_SUBSCRIPTION_ID)', 'LOOM_DLZ_RG (or LOOM_ADMIN_RG)', 'LOOM_SHIR_VMSS_NAME'],
     });
   } else {
     unresolved.push({
       label: 'Self-hosted integration runtime (VMSS)',
-      needs: ['LOOM_SUBSCRIPTION_ID', 'LOOM_PURVIEW_SHIR_RG (or LOOM_DLZ_RG / LOOM_ADMIN_RG)', 'LOOM_PURVIEW_SHIR_VMSS_NAME'],
+      needs: [
+        'LOOM_SHIR_SUB (or LOOM_DLZ_SUBSCRIPTION_ID / LOOM_SUBSCRIPTION_ID)',
+        'LOOM_PURVIEW_SHIR_RG for the Purview SHIR, LOOM_DLZ_RG for the ADF SHIR (or LOOM_ADMIN_RG)',
+        'LOOM_PURVIEW_SHIR_VMSS_NAME (or LOOM_SHIR_VMSS_NAME)',
+      ],
     });
   }
 
@@ -1391,27 +1425,49 @@ export async function savePauseSnapshot(snapshot: EstatePauseSnapshot): Promise<
 // Small helpers shared by the three BFF routes
 // ---------------------------------------------------------------------------
 
+// #4243 (+ review round 1) — the drift-token comparator and the discovery
+// classification layer live in their own bounded contexts, extracted
+// 2026-08-31 when this file crossed the 1500-LOC monolith ceiling
+// (scripts/ci/check-file-size.mjs) — the same seam treatment as
+// './pause-actuator'. Re-exported verbatim so the three BFF routes and every
+// `vi.mock('.../pause-orchestrator')` in the suite keep working unchanged.
+export { previewToken, parsePreviewToken, evaluateDrift } from './pause-drift-token';
+export type { PreviewTokenInput, ParsedPreviewToken, DriftVerdict } from './pause-drift-token';
+export { classifyTagReadFailure, partitionDiscovery } from './pause-discovery-classify';
+export type {
+  AbsentManifestResource,
+  DiscoveryPartition,
+  DiscoveryReadFailure,
+  TagReadObservationKind,
+} from './pause-discovery-classify';
+
 /**
- * A stable, order-independent digest of the resource ids in a preview.
+ * #4243 — the DISCOVERY tag reader: same read contract as the actuator's
+ * `readTags` (ARM omitting `tags` is a successful "no tags" -> `{}`; only a
+ * throw is a failed read), but routed through `armGetWithRetry`, so a
+ * transient 429 is retried honoring `Retry-After` and only a SUSTAINED
+ * throttle surfaces — as an `ArmThrottledError` whose message says
+ * "throttled", which `partitionDiscovery` (`./pause-discovery-classify`)
+ * classifies distinctly from a generic unreachable read.
  *
- * This is a DRIFT guard, not a security control — the caller is already a
- * tenant admin. Its job is the same as `/api/admin/updates/apply`'s
- * `confirmTag`: the operator confirmed a SPECIFIC set of resources, and if the
- * resolved set has changed since (a tag added, a resource re-created, an env
- * var rewired by a deploy), the confirm is refused with a 409 rather than
- * silently pausing something they never saw.
- *
- * FNV-1a over the sorted, lower-cased ids: dependency-free, deterministic, and
- * it changes when the SET changes rather than when its order does.
+ * Deliberately NOT wired into `createArmActuator` (`./pause-actuator`): the
+ * act-time re-verify must stay single-shot fail-safe — on any doubt it skips
+ * the mutation, which is cheaper and safer than retrying at the moment of
+ * acting. Discovery is the read whose transient failure was manufacturing
+ * drift refusals, so discovery is where the retry goes.
  */
-export function previewToken(resourceIds: readonly string[]): string {
-  const sorted = [...resourceIds].map((s) => s.toLowerCase()).sort();
-  let h = 0x811c9dc5;
-  for (const ch of sorted.join('|')) {
-    h ^= ch.charCodeAt(0);
-    h = Math.imul(h, 0x01000193) >>> 0;
-  }
-  return `${sorted.length}:${h.toString(16)}`;
+export function createManifestTagReader(): (
+  resourceId: string,
+) => Promise<Readonly<Record<string, string>> | null> {
+  return async (resourceId: string) => {
+    const { armGetWithRetry } = await import('@/lib/azure/arm-client');
+    const type = armTypeFromId(resourceId);
+    const version = pausableTypeSpec(type)?.armApiVersion ?? '2021-04-01';
+    const body = await armGetWithRetry<{ tags?: Record<string, string> }>(
+      `${resourceId}?api-version=${version}`,
+    );
+    return body?.tags ?? {};
+  };
 }
 
 /**

@@ -1554,8 +1554,8 @@ param purviewShirAdminPassword string = ''
 @maxValue(8)
 param purviewShirMaxNodes int = 4
 
-@description('Purview SHIR VMSS name — emitted to the Console as LOOM_PURVIEW_SHIR_VMSS_NAME so the BFF can scale it up before a SHIR-using scan. Must match purview-shir.bicep naming (vmss-loom-pvw-shir-<domain>).')
-param loomPurviewShirVmssName string = 'vmss-loom-pvw-shir-default'
+@description('BROWNFIELD OVERRIDE, not a prerequisite (#4243). Name of an EXISTING Purview SHIR VMSS deployed outside this template. When this template deploys the SHIR itself, LOOM_PURVIEW_SHIR_VMSS_NAME is bound from the purview-shir module OUTPUT and this param is ignored — the old default ("vmss-loom-pvw-shir-default") could name a VMSS the deploy never created, which handed the estate-pause manifest a guaranteed-404 resource.')
+param loomPurviewShirVmssName string = ''
 
 @description('Loom Azure Data Factory resource group. Empty defaults to LOOM_DLZ_RG.')
 param loomAdfRg string = ''
@@ -1876,7 +1876,10 @@ param existingFoundryRg string = ''
 //   cosmosAccount, cosmosRg, cosmosSub,
 //   adfFactory, adfRg, adfSub,
 //   eventHubNamespace, eventHubRg, eventHubSub,
-//   databricksWorkspace, databricksRg, databricksSub, databricksHostname
+//   databricksWorkspace, databricksRg, databricksSub, databricksHostname,
+//   dlzRg, dlzSubscriptionId   (#4243 — the ATTACHED DLZ's coordinates, so a
+//     re-render keeps LOOM_DLZ_RG / LOOM_DLZ_SUBSCRIPTION_ID pointed at the
+//     real DLZ instead of resetting them to the admin-RG default)
 @description('Bring-your-own existing-service overrides (cross-sub …Sub + Purview/Synapse/Cosmos/EventHubs/Databricks). See the key list in admin-plane/main.bicep; emitted by byo-wizard.sh.')
 param byoExisting object = {}
 
@@ -3851,7 +3854,12 @@ module catalog 'catalog.bicep' = {
 // stays off — purviewEnabled is false there.
 // =====================================================================
 
-module purviewShir 'purview-shir.bicep' = if (purviewShirEnabled && purviewEnabled && !empty(purviewIrAuthKey) && !empty(purviewShirAdminPassword)) {
+// #4243 — the ONE deploy condition, named, so the env bindings below cannot
+// drift from the module `if` (the old shape repeated the four-clause condition
+// and pointed the Console at a param default the module might never deploy).
+var purviewShirDeployed = purviewShirEnabled && purviewEnabled && !empty(purviewIrAuthKey) && !empty(purviewShirAdminPassword)
+
+module purviewShir 'purview-shir.bicep' = if (purviewShirDeployed) {
   name: 'purview-shir'
   params: {
     location: location
@@ -4191,7 +4199,22 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             { name: 'LOOM_MCP_FILES_RG', value: resourceGroup().name }
             { name: 'LOOM_MCP_STORAGE_NAME', value: mcpStorageRegistrationName }
             { name: 'LOOM_MCP_DATA_DIR', value: mcpMountPath }
-            { name: 'LOOM_DLZ_RG', value: loomDlzRg }
+            // #4243 — LOOM_DLZ_RG must name the ACTUAL DLZ resource group. On a
+            // single-sub estate `loomDlzRg` already does. On a MULTI-SUB estate
+            // the param is passed the ADMIN RG (see the azureConnectionsRbac
+            // comment above — measured on run 31563628416), the true DLZ RG is
+            // another deployment's fact, and only the dlz-attach path knows it
+            // (hub-console-dlz-env.bicep re-points this var out-of-band, which
+            // every re-render then DROPPED). The byoExisting carrier makes the
+            // corrected coordinates a first-class input this template preserves
+            // across re-renders; it cannot be self-derived here.
+            { name: 'LOOM_DLZ_RG', value: !empty(byoExisting.?dlzRg ?? '') ? byoExisting.dlzRg : loomDlzRg }
+            // The DLZ subscription — canonical name emitted by dlz-attach
+            // (hub-console-dlz-env.bicep). Declared here so a re-render no
+            // longer drops the value once it is carried on byoExisting; empty
+            // on a single-sub estate, where readers fall back to
+            // LOOM_SUBSCRIPTION_ID (lib/azure/loom-subscriptions.ts).
+            { name: 'LOOM_DLZ_SUBSCRIPTION_ID', value: byoExisting.?dlzSubscriptionId ?? '' }
             // AAS resource group for the datamart-migration server (aas.bicep
             // deploys it into the DLZ RG). The migrate route falls back to
             // LOOM_DLZ_RG / LOOM_ADMIN_RG when unset.
@@ -4530,7 +4553,21 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             // idle-stop workflow scales it back to 0. It lives in the admin RG
             // (LOOM_ADMIN_RG), NOT the DLZ — a Purview SHIR can't share a
             // machine with the ADF SHIR. Empty disables the surface (honest gate).
-            { name: 'LOOM_PURVIEW_SHIR_VMSS_NAME', value: (purviewShirEnabled && purviewEnabled && !empty(purviewIrAuthKey) && !empty(purviewShirAdminPassword)) ? loomPurviewShirVmssName : '' }
+            // #4243 — the NAME now comes from the module's own OUTPUT, never the
+            // `loomPurviewShirVmssName` param: the param could (and on the live
+            // estate did) name a VMSS the deploy never created, handing the
+            // estate-pause manifest a guaranteed-404 resource. The output exists
+            // only when the module deployed, so name and resource cannot drift.
+            { name: 'LOOM_PURVIEW_SHIR_VMSS_NAME', value: purviewShirDeployed ? purviewShir!.outputs.vmssName : loomPurviewShirVmssName }
+            // #4243 — its coordinates, produced BY the deploy (auto-bind §5):
+            // purview-shir.bicep deploys into this template's own RG in this
+            // template's own subscription. Empty when the module did not deploy,
+            // so the estate-pause manifest falls through to the DLZ ADF SHIR's
+            // coordinates (LOOM_DLZ_RG / LOOM_DLZ_SUBSCRIPTION_ID) instead of
+            // composing the Purview name with the DLZ home — the exact
+            // mismatched-coordinates 404 measured in #4243.
+            { name: 'LOOM_PURVIEW_SHIR_RG', value: purviewShirDeployed ? resourceGroup().name : '' }
+            { name: 'LOOM_SHIR_SUB', value: purviewShirDeployed ? subscription().subscriptionId : '' }
             // Capacity & compute → Scale & manage drawer → AKS node-pool scaling.
             // Only populated on the AKS container platform (GCC-High / IL5); on
             // Commercial / GCC these are empty and the drawer's AKS section

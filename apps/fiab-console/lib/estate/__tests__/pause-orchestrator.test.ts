@@ -39,11 +39,19 @@ import {
   applyResumePoll,
   resolveDeployManifest,
   discoverFromManifest,
+  createManifestTagReader,
   normalizePowerState,
   armTypeFromId,
   type EstateActuator,
   type PowerRead,
 } from '../pause-orchestrator';
+
+// #4243 — the discovery tag reader's transport. Lazy-imported by the reader,
+// so this hoisted mock intercepts it without giving THIS suite any Azure edge.
+const armGetWithRetry = vi.fn();
+vi.mock('@/lib/azure/arm-client', () => ({
+  armGetWithRetry: (...a: unknown[]) => armGetWithRetry(...a),
+}));
 import {
   armPowerReading,
   isResumeSuccess,
@@ -944,5 +952,111 @@ describe('applyResumePoll refuses a RUNNING write that the outcomes do not suppo
       reason: 'forged',
     };
     expect(() => applyResumePoll(started.snapshot, forged)).toThrow(/ZERO confirmation outcomes/);
+  });
+});
+
+// ===========================================================================
+// #4243 — the manifest tag reader and the SHIR coordinates
+// (the token comparator + discovery classification moved to
+//  pause-drift-token.test.ts / pause-discovery-classify.test.ts with their
+//  modules in the 2026-08-31 monolith split)
+// ===========================================================================
+
+
+describe('#4243 createManifestTagReader — discovery goes through the 429-retrying transport', () => {
+  it('GETs the resource by id with the per-type api-version through armGetWithRetry, and {} means "no tags"', async () => {
+    armGetWithRetry.mockResolvedValueOnce({ properties: {} }); // ARM omits `tags` when none
+    const read = createManifestTagReader();
+    const id = '/subscriptions/s/resourceGroups/r/providers/Microsoft.Kusto/clusters/adx';
+    const tags = await read(id);
+    expect(tags).toEqual({});
+    expect(armGetWithRetry).toHaveBeenCalledWith(`${id}?api-version=2023-08-15`);
+  });
+
+  it('returns the tags ARM reports, and lets an ArmThrottledError propagate so the row says THROTTLED', async () => {
+    armGetWithRetry.mockResolvedValueOnce({ tags: { 'loom-estate-id': ESTATE } });
+    const read = createManifestTagReader();
+    await expect(read('/subscriptions/s/resourceGroups/r/providers/Microsoft.Synapse/workspaces/w/sqlPools/p'))
+      .resolves.toEqual({ 'loom-estate-id': ESTATE });
+    expect(armGetWithRetry).toHaveBeenLastCalledWith(
+      '/subscriptions/s/resourceGroups/r/providers/Microsoft.Synapse/workspaces/w/sqlPools/p?api-version=2021-06-01',
+    );
+
+    const throttle = new Error('ARM GET x was throttled (429) and stayed throttled after 3 attempt(s).');
+    armGetWithRetry.mockRejectedValueOnce(throttle);
+    await expect(read('/subscriptions/s/resourceGroups/r/providers/Microsoft.Kusto/clusters/adx'))
+      .rejects.toBe(throttle);
+  });
+});
+
+describe('#4243 resolveDeployManifest — the SHIR entry gets COHERENT coordinates', () => {
+  const base = {
+    LOOM_SUBSCRIPTION_ID: 'admin-sub',
+    LOOM_ADMIN_RG: 'rg-admin',
+    LOOM_ESTATE_ID: ESTATE,
+  } as unknown as NodeJS.ProcessEnv;
+  const shirOf = (env: NodeJS.ProcessEnv) =>
+    resolveDeployManifest(env).entries.find((e) => e.resourceType === 'microsoft.compute/virtualmachinescalesets');
+
+  it('the Purview SHIR resolves with ITS home (LOOM_PURVIEW_SHIR_RG + LOOM_SHIR_SUB), never the DLZ RG', () => {
+    const entry = shirOf({
+      ...base,
+      LOOM_PURVIEW_SHIR_VMSS_NAME: 'vmss-loom-pvw-shir-default',
+      LOOM_PURVIEW_SHIR_RG: 'rg-admin',
+      LOOM_SHIR_SUB: 'admin-sub',
+      // The DLZ RG is set AND must not leak into the Purview SHIR's id — the
+      // name-from-one-VMSS + RG-from-the-other mix is the measured 404 shape.
+      LOOM_DLZ_RG: 'rg-dlz',
+    });
+    expect(entry).toBeDefined();
+    expect(entry!.resourceId).toBe(
+      '/subscriptions/admin-sub/resourceGroups/rg-admin/providers/Microsoft.Compute/virtualMachineScaleSets/vmss-loom-pvw-shir-default',
+    );
+  });
+
+  it('the DLZ ADF SHIR fallback resolves in the DLZ SUB (LOOM_DLZ_SUBSCRIPTION_ID), not the admin sub', () => {
+    // The live-estate shape: no Purview SHIR deployed, the ADF SHIR lives in
+    // the DLZ subscription's DLZ RG. Deleting the LOOM_SHIR_SUB /
+    // LOOM_DLZ_SUBSCRIPTION_ID fallback chain pins this back to admin-sub and
+    // this case goes red — that pin is the guaranteed-404 aggravator of #4243.
+    const entry = shirOf({
+      ...base,
+      LOOM_SHIR_VMSS_NAME: 'vmss-loom-shir-default',
+      LOOM_DLZ_RG: 'rg-dlz',
+      LOOM_DLZ_SUBSCRIPTION_ID: 'dlz-sub',
+    });
+    expect(entry).toBeDefined();
+    expect(entry!.subscriptionId).toBe('dlz-sub');
+    expect(entry!.resourceGroup).toBe('rg-dlz');
+    expect(entry!.name).toBe('vmss-loom-shir-default');
+  });
+
+  it('LOOM_SHIR_SUB wins over every fallback on both SHIR shapes', () => {
+    const entry = shirOf({
+      ...base,
+      LOOM_SHIR_VMSS_NAME: 'vmss-loom-shir-default',
+      LOOM_DLZ_RG: 'rg-dlz',
+      LOOM_DLZ_SUBSCRIPTION_ID: 'dlz-sub',
+      LOOM_SHIR_SUB: 'explicit-sub',
+    });
+    expect(entry!.subscriptionId).toBe('explicit-sub');
+  });
+
+  it('single-sub estate: the DLZ SHIR falls back to LOOM_SUBSCRIPTION_ID when no DLZ sub var exists', () => {
+    const entry = shirOf({
+      ...base,
+      LOOM_SHIR_VMSS_NAME: 'vmss-loom-shir-default',
+      LOOM_DLZ_RG: 'rg-dlz',
+    });
+    expect(entry!.subscriptionId).toBe('admin-sub');
+  });
+
+  it('NO SHIR env at all -> unresolved, naming the vars that would bring it into scope', () => {
+    const { entries, unresolved } = resolveDeployManifest(base);
+    expect(entries.find((e) => e.resourceType === 'microsoft.compute/virtualmachinescalesets')).toBeUndefined();
+    const u = unresolved.find((x) => x.label.includes('integration runtime'));
+    expect(u).toBeDefined();
+    expect(u!.needs.join(' ')).toContain('LOOM_SHIR_SUB');
+    expect(u!.needs.join(' ')).toContain('LOOM_PURVIEW_SHIR_VMSS_NAME');
   });
 });

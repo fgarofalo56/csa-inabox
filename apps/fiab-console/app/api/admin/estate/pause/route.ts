@@ -33,6 +33,10 @@
  *      absent token is refused too, because the previous `body.confirmToken &&
  *      …` shape let any caller skip the gate by omitting the field while the
  *      error text still promised the guarantee it was no longer providing.
+ *      #4243: the comparison is `evaluateDrift`, never a raw `!==` — a "the
+ *      set changed" refusal is issued ONLY on a positively-observed change;
+ *      a failed (throttled/unreachable) discovery read refuses with a RETRY
+ *      message instead, and every refusal on this gate writes an audit row.
  *   4. Re-verify per resource, inside the orchestrator, immediately before each
  *      ARM call (R-SCOPE-3), and actuate the VERIFIED id (`assertActuationTarget`).
  *
@@ -53,9 +57,12 @@ import { tenantScopeId } from '@/lib/auth/session';
 import {
   armGateMessage,
   createArmActuator,
+  createManifestTagReader,
   discoverFromManifest,
   ESTATE_PAUSE_ENABLED_ENV,
+  evaluateDrift,
   loadPauseSnapshot,
+  partitionDiscovery,
   planPause,
   previewToken,
   resolveDeployManifest,
@@ -112,10 +119,18 @@ export const POST = withTenantAdmin(async (req: NextRequest, { session }) => {
 
   // --- Resolve the set. Per RESOURCE, from the deploy manifest + the estate
   //     ownership tag. Never by subscription, never by resource-group name.
+  //     Discovery reads go through the 429-retrying manifest tag reader
+  //     (#4243) so one throttled read does not silently shrink the preview.
   const { manifest, entries, unresolved, manifestGated, namedByDeploy, gateReason } =
     resolveDeployManifest();
-  const discovered = await discoverFromManifest(entries, actuator.readTags);
-  const plan = planPause(discovered, {
+  const discovered = await discoverFromManifest(entries, createManifestTagReader());
+  // #4243 review round 1 — a deploy-named id ARM POSITIVELY reports absent
+  // (404/ResourceNotFound) is EXCLUDED from the population, symmetrically with
+  // GET /state, so the token stays coherent while the absence persists. It is
+  // surfaced (`absent` + audit row below), never silently dropped. Unreadable
+  // rows (throttled/timeout) stay IN the population and refuse below.
+  const { present, absent, readFailures } = partitionDiscovery(discovered, entries);
+  const plan = planPause(present, {
     scope: { kind: 'explicit-inventory', estateId: manifest.estateId },
     manifest,
     ...(gateReason ? { gateReason } : {}),
@@ -132,7 +147,14 @@ export const POST = withTenantAdmin(async (req: NextRequest, { session }) => {
     };
   }
   const risks = capacityPreflight(plan.inventory.pausable, live);
-  const token = previewToken(plan.dryRun.wouldPause.map((r) => r.resourceId));
+
+  // #4243 — the token is computed over the STABLE addressable population
+  // (deploy-named minus positively-absent) plus the positively-established
+  // set, with the read-failure count embedded. `evaluateDrift` below is the
+  // only comparator; the raw `!==` is gone.
+  const manifestIds = present.map((d) => d.resourceId);
+  const establishedIds = plan.dryRun.wouldPause.map((r) => r.resourceId);
+  const token = previewToken({ manifestIds, establishedIds, readFailures: readFailures.length });
 
   if (body.dryRun) {
     return apiOk({
@@ -146,6 +168,10 @@ export const POST = withTenantAdmin(async (req: NextRequest, { session }) => {
       risks,
       highRisk: highRiskCount(risks),
       confirmToken: token,
+      /** Discovery reads that failed — the preview may be partial when non-empty. */
+      readFailures,
+      /** Deploy-named ids ARM positively reports absent — excluded, with the env remediation. */
+      absent,
     });
   }
 
@@ -198,35 +224,104 @@ export const POST = withTenantAdmin(async (req: NextRequest, { session }) => {
   //
   // #3989 — THIS USED TO BE `if (body.confirmToken && body.confirmToken !== token)`,
   // and `confirmToken` is OPTIONAL, so the `&&` short-circuited: a caller that
-  // simply omitted the field skipped the gate entirely. A drift guard that the
-  // guarded party can switch off by leaving a field out is not a guard, and this
-  // is the same `X && X !== Y` fail-open family as #3943 / #3859 / #3824 / #3833.
+  // simply omitted the field skipped the gate entirely. A POSITIVE match is
+  // required.
   //
-  // The refusal text made it worse. It ended "Loom will not pause resources you
-  // have not seen" — a guarantee that was FALSE for exactly the callers the gate
-  // was not running for. That is the deploy-integrity R7 shape: an error stating
-  // as fact something the code did not establish.
-  //
-  // A POSITIVE MATCH IS NOW REQUIRED, and the two failures are reported
-  // separately because they are different events and have different remediations:
-  // "you sent no token" is not "your token is stale", and telling someone who
-  // never previewed to "re-open the preview and confirm the current set" reads as
-  // though they did something they did not.
-  if (!body.confirmToken) {
-    return apiConflict(
-      'This request carried no preview token, so Loom has NOT established that you have seen '
-        + `the set it would pause (the estate currently resolves ${token}). \`confirmToken\` is `
-        + 'REQUIRED, not optional — it is the only evidence that the set you approved is the set '
-        + 'that exists now. Preview first (POST this route with `dryRun:true`, or GET '
-        + '/api/admin/estate/state) and send back the `confirmToken` it returns.',
-    );
+  // #4243 — and the comparison itself lied. The token used to hash the
+  // TRANSIENTLY-READABLE set, so one throttled tag read (manufactured by the
+  // console's own read-warmer saturating the UAMI's ARM budget) changed the
+  // token over an UNCHANGED estate, and the refusal asserted "the set changed"
+  // — a cause the code never established (deploy-integrity R7). On 2026-08-31
+  // that was the live Pause failure, and because this branch wrote NO audit
+  // row it took an elimination proof to even identify. `evaluateDrift` is now
+  // the only comparator: it distinguishes positively-left-the-set (refuse as
+  // drift, honestly) from read-failed (refuse with retry — nothing established
+  // a change) from unchanged (proceed) — and EVERY refusal writes the same
+  // Cosmos audit row the other branches do.
+  const verdict = evaluateDrift({
+    confirmToken: body.confirmToken,
+    manifestIds,
+    establishedIds,
+    readFailures,
+  });
+  if (verdict.kind !== 'proceed') {
+    await audit(tenantId, who, `estate-pause.refused-${verdict.kind}`, {
+      estateId: manifest.estateId,
+      confirmToken: body.confirmToken ?? null,
+      currentToken: token,
+      ...(verdict.kind === 'reads-failed'
+        ? { failedReads: verdict.failures.map((f) => ({ id: f.resourceId, throttled: f.throttled, error: f.error })) }
+        : {}),
+      ...(verdict.kind === 'manifest-changed' || verdict.kind === 'set-changed'
+        ? { confirmedCount: verdict.confirmedCount, currentCount: verdict.currentCount }
+        : {}),
+      ...(verdict.kind === 'preview-degraded' ? { previewFailures: verdict.previewFailures } : {}),
+    });
+    switch (verdict.kind) {
+      case 'no-token':
+        // "You sent no token" is not "your token is stale": different events,
+        // different remediations, reported separately.
+        return apiConflict(
+          'This request carried no preview token, so Loom has NOT established that you have seen '
+            + `the set it would pause (the estate currently resolves ${token}). \`confirmToken\` is `
+            + 'REQUIRED, not optional — it is the only evidence that the set you approved is the set '
+            + 'that exists now. Preview first (POST this route with `dryRun:true`, or GET '
+            + '/api/admin/estate/state) and send back the `confirmToken` it returns.',
+        );
+      case 'stale-token':
+        return apiConflict(
+          'The preview token this request carried is not one this console can read (it may predate '
+            + 'a console update). That does NOT establish that the estate changed — it establishes '
+            + 'only that this token cannot vouch for the current set. Re-open the preview and '
+            + 'confirm the current set.',
+        );
+      case 'manifest-changed':
+        return apiConflict(
+          'The deploy-named population changed between the preview you confirmed and now '
+            + `(your preview covered ${verdict.confirmedCount} deploy-named resource(s); the estate `
+            + `now resolves ${verdict.currentCount}). This is a positively-observed change — the `
+            + 'population is the deploy-named set minus anything ARM positively reports absent, '
+            + 'never a failed-read artifact: either the deploy environment changed, or a named '
+            + 'resource appeared or was removed. Re-open the preview and confirm the current set — '
+            + 'Loom will not pause resources you have not seen.',
+        );
+      case 'reads-failed':
+        return apiError(
+          `${verdict.failures.length} tag read(s) failed (throttled/unreachable) — nothing `
+            + 'established the estate changed; retry. Loom will not compare a fully-read preview '
+            + 'against a partially-read present, and it will not pause while membership is only '
+            + `partially known. Affected: ${verdict.failures
+              .map((f) => `${f.name} (${f.throttled ? 'throttled' : 'unreachable'})`)
+              .join(', ')}. Nothing was paused.`,
+          409,
+          { readFailures: verdict.failures },
+        );
+      case 'preview-degraded':
+        return apiConflict(
+          `The preview you confirmed was computed while ${verdict.previewFailures} tag read(s) were `
+            + 'failing, so the set it showed you may have been incomplete. Nothing established that '
+            + 'the estate changed — but Loom will not pause against a preview it knows was partial. '
+            + 'Re-open the preview (its reads are succeeding now) and confirm the full set.',
+        );
+      case 'set-changed':
+        return apiConflict(
+          'The set of resources to pause changed between the preview you confirmed and now '
+            + `(you confirmed ${verdict.confirmedCount} resource(s), the estate now positively `
+            + `resolves ${verdict.currentCount} — both measured with every tag read succeeding). `
+            + 'Re-open the preview and confirm the current set — Loom will not pause resources you '
+            + 'have not seen.',
+        );
+    }
   }
-  if (body.confirmToken !== token) {
-    return apiConflict(
-      'The set of resources to pause changed between the preview you confirmed and now '
-        + `(you confirmed ${body.confirmToken}, the estate now resolves ${token}). Re-open the `
-        + 'preview and confirm the current set — Loom will not pause resources you have not seen.',
-    );
+
+  // --- #4243 review round 1: record every positive-absence exclusion the
+  //     moment the drift gate has passed, so a pause that proceeds without a
+  //     deploy-named resource leaves a trace naming the env values to fix.
+  if (absent.length > 0) {
+    await audit(tenantId, who, 'estate-pause.absent-excluded', {
+      estateId: manifest.estateId,
+      absent: absent.map((a) => ({ id: a.resourceId, fromEnv: a.fromEnv, error: a.error })),
+    });
   }
 
   // --- Nothing to do. Say so LOUDLY rather than reporting a successful pause
@@ -236,11 +331,13 @@ export const POST = withTenantAdmin(async (req: NextRequest, { session }) => {
       estateId: manifest.estateId,
       examined: plan.population.examined,
       tagCensus: plan.population.tagCensus,
+      absentExcluded: absent.length,
     });
     return apiError(plan.population.statement, 409, {
       population: plan.population,
       preview: plan.dryRun,
       unresolved,
+      absent,
       trackedBy: 3922,
     });
   }
@@ -289,10 +386,51 @@ export const POST = withTenantAdmin(async (req: NextRequest, { session }) => {
     );
   }
 
-  await savePauseSnapshot(run.snapshot);
-
   const dispatched = run.actions.filter((a) => a.status === 'dispatched');
   const failed = run.actions.filter((a) => a.status === 'failed');
+
+  // #4243 — the ZERO-DISPATCH shape. Every mutation was REJECTED and none was
+  // accepted: nothing is transitioning, so persisting a PAUSING snapshot would
+  // record an in-flight pause that does not exist — one that polls to "0 of N
+  // confirmed" forever and blocks a retry with "already PAUSING". The honest
+  // behaviour, pinned by test: save NOTHING, audit the failure, and return the
+  // per-resource states plainly. (Review round 1: the headline states COUNTS —
+  // it must not say "still RUNNING" when an already-paused row means one
+  // resource is physically stopped. All-already-paused with zero failures
+  // still saves: that snapshot settles to PAUSED on the first poll, truly.)
+  if (dispatched.length === 0 && failed.length > 0) {
+    const alreadyPaused = run.actions.filter((a) => a.status === 'already-paused').length;
+    const skipped = run.actions.filter((a) => a.status === 'skipped').length;
+    await audit(tenantId, who, 'estate-pause.all-dispatches-rejected', {
+      estateId: manifest.estateId,
+      actions: run.actions.map((a) => ({ id: a.resourceId, status: a.status, error: a.error })),
+    });
+    emitAuditEvent({
+      actorOid: session.claims.oid,
+      actorUpn: who,
+      action: 'platform.estate-pause',
+      targetType: 'loom-estate',
+      targetId: manifest.estateId,
+      tenantId: session.claims.tid || tenantId,
+      outcome: 'failure',
+      detail: {
+        dispatched: 0,
+        failed: failed.length,
+        resources: run.actions.map((a) => ({ id: a.resourceId, status: a.status })),
+      },
+    });
+    return apiError(
+      `Nothing was set in motion: of ${run.actions.length} action(s), ARM REJECTED ${failed.length}, `
+        + `${alreadyPaused} were already paused before Loom looked, ${skipped} were skipped, and NONE `
+        + 'was accepted. No snapshot was recorded and there is no in-flight pause to poll — each '
+        + 'resource keeps exactly the state reported in `actions`. Fix what the rejections name and '
+        + 'press Pause again.',
+      502,
+      { actions: run.actions, population: plan.population },
+    );
+  }
+
+  await savePauseSnapshot(run.snapshot);
 
   await audit(tenantId, who, failed.length ? 'estate-pause.partial' : 'estate-pause.dispatched', {
     estateId: manifest.estateId,
@@ -326,10 +464,16 @@ export const POST = withTenantAdmin(async (req: NextRequest, { session }) => {
       actions: run.actions,
       risks,
       population: plan.population,
+      /** Deploy-named ids ARM positively reports absent — excluded, with the env remediation. */
+      absent,
       monitorUrl: '/api/admin/estate/state',
       message:
         `Pause dispatched to ${dispatched.length} resource(s)`
         + (failed.length ? `; ${failed.length} were REJECTED by ARM (see actions).` : '.')
+        + (absent.length
+          ? ` ${absent.length} deploy-named resource(s) were EXCLUDED because ARM positively reports `
+            + 'they do not exist — see `absent` for the env values to fix.'
+          : '')
         + ' The estate is PAUSING — poll /api/admin/estate/state, which promotes it to PAUSED only '
         + 'once ARM confirms every resource stopped.',
     },

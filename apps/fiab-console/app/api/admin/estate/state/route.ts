@@ -43,8 +43,10 @@ import {
   applyResumePoll,
   armGateMessage,
   createArmActuator,
+  createManifestTagReader,
   discoverFromManifest,
   loadPauseSnapshot,
+  partitionDiscovery,
   planPause,
   pollPause,
   pollResume,
@@ -73,8 +75,14 @@ export const dynamic = 'force-dynamic';
 async function runningPayload(actuator: EstateActuator) {
   const { manifest, entries, unresolved, manifestGated, namedByDeploy, gateReason } =
     resolveDeployManifest();
-  const discovered = await discoverFromManifest(entries, actuator.readTags);
-  const plan = planPause(discovered, {
+  // #4243 — discovery goes through the 429-retrying manifest tag reader, so a
+  // transient throttle does not silently shrink the preview the operator sees.
+  // A deploy-named id ARM POSITIVELY reports absent is excluded here exactly
+  // as the pause POST excludes it, so the two sides mint the same token while
+  // the absence persists — and it is surfaced in `absent`, never dropped.
+  const discovered = await discoverFromManifest(entries, createManifestTagReader());
+  const { present, absent, readFailures } = partitionDiscovery(discovered, entries);
+  const plan = planPause(present, {
     scope: { kind: 'explicit-inventory', estateId: manifest.estateId },
     manifest,
     ...(gateReason ? { gateReason } : {}),
@@ -110,10 +118,22 @@ async function runningPayload(actuator: EstateActuator) {
      * The dry run is a REQUIREMENT before acting, so the pause route demands
      * this token back. It is not a security control (the caller is already a
      * tenant admin); it is a DRIFT control — the same shape as
-     * `/api/admin/updates/apply`'s `confirmTag`. If the resolved set changes
-     * between the preview and the confirm, the confirm is refused.
+     * `/api/admin/updates/apply`'s `confirmTag`. If the resolved set has
+     * POSITIVELY changed between the preview and the confirm, the confirm is
+     * refused. #4243: the token is computed over the STABLE manifest-named
+     * population plus the positively-established set, with this preview's
+     * read-failure count embedded — so a throttled read can no longer
+     * manufacture a "the set changed" refusal over an unchanged estate.
      */
-    confirmToken: previewToken(plan.dryRun.wouldPause.map((r) => r.resourceId)),
+    confirmToken: previewToken({
+      manifestIds: present.map((d) => d.resourceId),
+      establishedIds: plan.dryRun.wouldPause.map((r) => r.resourceId),
+      readFailures: readFailures.length,
+    }),
+    /** Discovery reads that failed — the preview may be partial when non-empty. */
+    readFailures,
+    /** Deploy-named ids ARM positively reports absent — excluded, with the env remediation. */
+    absent,
     typicalResumeSeconds: TYPICAL_RESUME_SECONDS,
   };
 }
