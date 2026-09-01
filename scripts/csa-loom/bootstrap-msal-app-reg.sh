@@ -739,6 +739,96 @@ if [ -n "${CONSOLE_RG:-}" ]; then
 fi
 
 # ---------------------------------------------------------------------
+# #3339 fix 1 — the DEDICATED catalog app registration.
+#
+# The section directly above ensures `api://<sign-in app>` exists, because that
+# is the audience the catalogs accept TODAY. That is the defect, not the fix:
+# admin-plane/main.bicep passed `entraClientId: effectiveMsalClientId` to BOTH
+# iceberg-catalog and loom-unity, the sign-in registration carries
+# `appRoles: []` / `oauth2PermissionScopes: []`, and
+# apps/loom-unity/bin/loom-entrypoint.sh derives the accepted audiences as
+# `api://<clientId>,<clientId>` — so ANY interactive console sign-in token is
+# also a valid catalog subject token, and the catalog has no claim with which to
+# express who may call it.
+#
+# The answer is a SECOND, dedicated Entra application with its own App ID URI
+# and its own appRoles. It is created by the sibling script, never here, and the
+# sign-in application object above is NEVER written to by it: every recorded
+# outage in this area (the 2026-07-19 MSAL secret outage, #3335's credential
+# sprawl) came from writing to that object, and the whole point of a dedicated
+# registration is that the two objects have independent lifecycles. The sibling
+# takes SIGN_IN_APP_ID purely as a REFUSAL GUARD — if what it resolved turns out
+# to be this same object it aborts without writing anything.
+#
+# ORDER. This runs AFTER every sign-in step and BEFORE the credential ceiling,
+# on purpose: sign-in is already wired by this point, so nothing here can affect
+# it, and a credential-hygiene backlog tripping the ceiling must not stop the
+# catalog registration from being provisioned.
+#
+# WHY THIS DOES NOT `exit 1` — deploy-integrity.md R7, not convenience. The only
+# caller (.github/workflows/csa-loom-post-deploy-bootstrap.yml) answers a
+# non-zero exit from this script with a fixed `::error::MSAL app-reg
+# provisioning FAILED … every sign-in returns AADSTS7000215`. That sentence
+# would be FALSE for a catalog-registration failure, and a false cause is what
+# sent two investigations down the wrong path in the incident that rule records.
+# So the outcome is CLASSIFIED and reported here in its own words, and it is
+# machine-readable on stdout — `LOOM_CATALOG_CLIENT_ID=<id>` on success,
+# `LOOM_CATALOG_APP_REG=failed` on failure — so a caller can branch on it
+# without inheriting the wrong error string. Nothing is discarded and nothing is
+# silenced: the sibling's own stdout and stderr pass straight through.
+#
+# Opt out with LOOM_CATALOG_APP_REG=0 (default-ON per loom_default_on_opt_out).
+# ---------------------------------------------------------------------
+CATALOG_APP_REG="${LOOM_CATALOG_APP_REG:-1}"
+case "$(printf '%s' "${CATALOG_APP_REG}" | tr '[:upper:]' '[:lower:]')" in
+  0|false|no|off) CATALOG_APP_REG=0 ;;
+  *)              CATALOG_APP_REG=1 ;;
+esac
+
+if [ "${CATALOG_APP_REG}" -eq 1 ]; then
+  echo "==> Provisioning the DEDICATED catalog app registration (#3339 fix 1)"
+  CATALOG_SCRIPT="$(dirname "$0")/bootstrap-catalog-app-reg.sh"
+  if [ ! -f "${CATALOG_SCRIPT}" ]; then
+    echo "    ERROR: ${CATALOG_SCRIPT} is not in this checkout, so the dedicated catalog app registration was NOT provisioned. Sign-in IS wired and unaffected. Until it is created and pinned as loomBackends.unityAudienceClientId, the catalogs keep accepting the SIGN-IN app's audience — the #3339 trust boundary stays collapsed." >&2
+    echo "LOOM_CATALOG_APP_REG=failed"
+  else
+    # The Console UAMI's OBJECT id, so the sibling can grant it
+    # Catalog.ReadWrite on the new resource app. Without that grant Entra
+    # refuses a client-credentials token for api://<catalog app>/.default
+    # altogether, and pinning the new audience would take the catalog from
+    # "wrongly reachable" to "not reachable at all". The sibling refuses to
+    # persist the client id when it cannot make the grant, so an unreadable
+    # identity here degrades to "app created, not pinnable" — never to a pin
+    # that breaks the estate.
+    CONSOLE_UAMI_OID=''
+    if [ -n "${UAMI_RESOURCE_ID:-}" ]; then
+      if UAMI_OID_OUT="$(az identity show --ids "${UAMI_RESOURCE_ID}" --query principalId -o tsv 2>&1)"; then
+        CONSOLE_UAMI_OID="$(printf '%s' "${UAMI_OID_OUT}" | tr -d ' \r')"
+      else
+        echo "    WARNING: could not read the principal id of ${UAMI_RESOURCE_ID}. This is an ARM read; it failing means the identity is unreadable from here, NOT that it does not exist. The catalog app will still be created, but with no app-role assignment — so it must not be pinned yet." >&2
+        printf '%s\n' "${UAMI_OID_OUT}" | head -3 >&2
+      fi
+    else
+      echo "    NOTE: UAMI_RESOURCE_ID was not supplied, so no Console identity can be granted the catalog role. The app registration is still created; it must not be pinned until the grant exists."
+    fi
+    if KEYVAULT_NAME="${KEYVAULT_NAME}" \
+       SIGN_IN_APP_ID="${APP_ID}" \
+       CONSOLE_UAMI_PRINCIPAL_ID="${CONSOLE_UAMI_OID}" \
+       bash "${CATALOG_SCRIPT}"; then
+      echo "    dedicated catalog app registration reconciled"
+    else
+      echo "    ERROR: the dedicated catalog app registration did NOT complete — read the sibling's output above for the specific step and its remediation. Sign-in IS wired and working; this failure is the #3339 trust boundary, not availability. Until the app exists, is granted to the Console identity, and is pinned as loomBackends.unityAudienceClientId, iceberg-catalog and loom-unity keep accepting the console SIGN-IN app's audience." >&2
+      echo "LOOM_CATALOG_APP_REG=failed"
+    fi
+  fi
+else
+  echo "==> Dedicated catalog app registration SKIPPED (LOOM_CATALOG_APP_REG=0)."
+  echo "    iceberg-catalog and loom-unity therefore keep accepting the console SIGN-IN app's"
+  echo "    audience: every interactive sign-in token stays a valid catalog subject token (#3339)."
+  echo "LOOM_CATALOG_APP_REG=skipped"
+fi
+
+# ---------------------------------------------------------------------
 # OPT-IN: grant admin consent for the Power BI delegated permissions and print
 # the env vars to wire. Admin consent here covers the whole app (Graph User.Read
 # + the 3 Power BI scopes). Requires the caller to be a Privileged Role /
