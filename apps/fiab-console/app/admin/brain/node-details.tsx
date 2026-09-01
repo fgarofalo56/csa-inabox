@@ -36,12 +36,14 @@ import {
   TableHeader,
   TableHeaderCell,
   TableRow,
+  Text,
   Tooltip,
   makeStyles,
   tokens,
 } from '@fluentui/react-components';
 import type { BrainSnapshot, WireEdge, WireFinding, WireNode } from '@/app/api/admin/brain/_lib/wire';
 import { nodeVisual } from './model';
+import { splitCostLabel } from './recommendations';
 
 const useStyles = makeStyles({
   root: {
@@ -71,6 +73,15 @@ const useStyles = makeStyles({
     overflowWrap: 'anywhere',
   },
   section: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS, minWidth: 0 },
+  // See `splitCostLabel` in ./recommendations — the basis is a paragraph and a
+  // fixed-height Badge cannot hold one.
+  costBasis: {
+    color: tokens.colorNeutralForeground3,
+    fontSize: tokens.fontSizeBase200,
+    lineHeight: tokens.lineHeightBase200,
+    minWidth: 0,
+    overflowWrap: 'anywhere',
+  },
 });
 
 function truncateId(id: string): string {
@@ -347,12 +358,19 @@ function FindingSummary({ finding }: { finding: WireFinding }) {
         </Badge>
         <Badge appearance="outline">confidence: {finding.confidence}</Badge>
         {finding.costLabel && (
-          // Always the labelled form. Never a bare dollar amount.
+          // Always the labelled form. Never a bare dollar amount — and only
+          // the amount + provenance marker: the basis is a paragraph and rides
+          // below (#4241 defect 11, measured live 2026-09-01).
           <Badge appearance="tint" color="warning" data-cost-source={finding.cost?.source}>
-            {finding.costLabel}
+            {splitCostLabel(finding.costLabel).chip}
           </Badge>
         )}
       </div>
+      {finding.costLabel && splitCostLabel(finding.costLabel).basis ? (
+        <Text className={s.costBasis} data-testid="cost-basis">
+          {splitCostLabel(finding.costLabel).basis}
+        </Text>
+      ) : null}
       <Body1Strong>{finding.title}</Body1Strong>
       <Body1>{finding.summary}</Body1>
       {/* Content at reading size (#4241 defect 1) — the mono class carries the
