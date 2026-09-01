@@ -16,6 +16,7 @@ export const AZURE_SERVICES_GATE_META: Record<string, GateMeta> = {
       { path: '/items/data-pipeline', label: 'Pipelines' },
       { path: '/api/items/warehouse/*', label: 'Warehouse BFF routes' },
       { path: '/admin/health?tab=spark', label: 'Spark pool health (Health hub, A10)' },
+      { path: '/api/apps/[id]/install', label: 'App install — warehouse / synapse-pipeline provisioners' },
     ],
     fixit: { kind: 'resource-picker' },
     loaders: { LOOM_SYNAPSE_WORKSPACE: L.synapse },
@@ -34,6 +35,7 @@ export const AZURE_SERVICES_GATE_META: Record<string, GateMeta> = {
       { path: '/items/eventhouse', label: 'Eventhouse editor' },
       { path: '/items/kql-dashboard', label: 'Real-Time dashboards' },
       { path: '/items/graph', label: 'Graph (ADX Kusto graph)' },
+      { path: '/api/apps/[id]/install', label: 'App install — kql-database / kql-dashboard / workspace-monitor provisioners' },
     ],
     fixit: { kind: 'resource-picker' },
     loaders: { LOOM_KUSTO_CLUSTER_URI: L.adxUri },
@@ -43,6 +45,7 @@ export const AZURE_SERVICES_GATE_META: Record<string, GateMeta> = {
     surfaces: [
       { path: '/items/eventstream', label: 'Eventstream editor' },
       { path: '/api/items/eventstream/*', label: 'Eventstream BFF routes' },
+      { path: '/api/apps/[id]/install', label: 'App install — eventstream provisioner' },
     ],
     fixit: { kind: 'resource-picker' },
     loaders: { LOOM_EVENTHUB_NAMESPACE: L.eventhubs },
@@ -53,6 +56,7 @@ export const AZURE_SERVICES_GATE_META: Record<string, GateMeta> = {
       { path: '/items/lakehouse', label: 'Lakehouse editor' },
       { path: '/onelake', label: 'OneLake catalog' },
       { path: '/api/onelake/*', label: 'OneLake storage routes' },
+      { path: '/api/apps/[id]/install', label: 'App install — mirrored-database Bronze sink' },
     ],
     fixit: { kind: 'resource-picker' },
     loaders: { LOOM_ADLS_ACCOUNT: L.storage },
@@ -62,6 +66,7 @@ export const AZURE_SERVICES_GATE_META: Record<string, GateMeta> = {
     surfaces: [
       { path: '/items/ai-search-index', label: 'AI Search index editor' },
       { path: '/api/search/*', label: 'RAG index routes' },
+      { path: '/api/apps/[id]/install', label: 'App install — ai-search provisioner' },
     ],
     fixit: { kind: 'resource-picker' },
     loaders: { LOOM_AI_SEARCH_SERVICE: L.aisearch },
@@ -91,6 +96,7 @@ export const AZURE_SERVICES_GATE_META: Record<string, GateMeta> = {
     surfaces: [
       { path: '/items/activator', label: 'Activator (alert rules)' },
       { path: '/monitor', label: 'Monitor hub — Alerts' },
+      { path: '/api/apps/[id]/install', label: 'App install — activator provisioner (alert scope + rule creation)' },
     ],
     fixit: { kind: 'resource-picker' },
     loaders: { LOOM_LOG_ANALYTICS_RESOURCE_ID: L.law },
@@ -100,6 +106,7 @@ export const AZURE_SERVICES_GATE_META: Record<string, GateMeta> = {
     surfaces: [
       { path: '/items/mirrored-database', label: 'Mirrored database (ADF CDC)' },
       { path: '/api/adf/*', label: 'ADF CDC routes' },
+      { path: '/api/apps/[id]/install', label: 'App install — adf-pipeline / mirrored-database provisioners' },
       // auto-bind-by-default: the pipeline editors PROVISION their backing ADF
       // pipeline on open (lib/azure/auto-bind-providers.adfPipelineAutoBind).
       // That provider only reports this gate after Resource Graph discovery
@@ -161,6 +168,7 @@ export const AZURE_SERVICES_GATE_META: Record<string, GateMeta> = {
       { path: '/items/notebook', label: 'Notebooks (Databricks backend)' },
       { path: '/items/sql-warehouse', label: 'Databricks SQL' },
       { path: '/admin/domains', label: 'Unity Catalog mirror' },
+      { path: '/api/apps/[id]/install', label: 'App install — databricks-job / ml-model provisioners' },
     ],
     fixit: { kind: 'resource-picker' },
     loaders: { LOOM_DATABRICKS_HOSTNAME: L.databricks },

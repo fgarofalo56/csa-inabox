@@ -385,6 +385,7 @@ export const workspaceMonitorProvisioner: Provisioner = async (input): Promise<P
     return {
       status: 'remediation',
       gate: {
+        gateId: 'svc-adx',
         reason: 'ADX cluster not configured for workspace monitoring.',
         remediation:
           // Cloud-aware example: a Gov operator shown a Commercial ADX host

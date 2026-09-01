@@ -11,8 +11,13 @@
  * in CREATE VIEW IF NOT EXISTS.
  *
  * Remediation gates:
- *   - Unknown LOOM_WAREHOUSE_BACKEND value → remediation with the env var to set.
+ *   - Synapse dedicated pool not configured → gate `svc-synapse` (inline Fix-it).
  *   - 401/403 on TDS → UAMI not added as a member of the warehouse DB.
+ *
+ * NOT a gate any more: an unknown LOOM_WAREHOUSE_BACKEND value. It coerces to
+ * the Azure-native default (see resolveWarehouseBackend) rather than asking the
+ * operator to set the value Loom already defaults to — per
+ * `.claude/rules/auto-bind-by-default.md` §5.
  */
 import { executeQuery as synapseExec, dedicatedTarget, type SynapseTarget } from '@/lib/azure/synapse-sql-client';
 import { getPoolState, resumePool } from '@/lib/azure/synapse-pool-arm';
@@ -20,7 +25,42 @@ import type { Provisioner, ProvisionResult, RemediationGate } from './types';
 import { resolveInfraResidual } from './types';
 import { escapeSqlLiteral, bracket } from '@/lib/sql/quoting';
 
-const BACKEND = process.env.LOOM_WAREHOUSE_BACKEND || 'synapse-dedicated';
+/**
+ * The only provisionable warehouse backend (see the module header +
+ * `.claude/rules/no-fabric-dependency.md`): Synapse dedicated SQL pool.
+ */
+export const AZURE_NATIVE_WAREHOUSE_BACKEND = 'synapse-dedicated';
+
+/**
+ * AUTO-BIND (`.claude/rules/auto-bind-by-default.md` §5) — resolve
+ * `LOOM_WAREHOUSE_BACKEND` to a backend we can actually provision.
+ *
+ * This function used to not exist: an UNSET value defaulted to
+ * `synapse-dedicated`, but any *unrecognized* value (a typo like
+ * `synapse_dedicated`, a stale `fabric`, a stray quote) fell through every
+ * branch to a terminal `status:'remediation'` whose remediation read "Set
+ * LOOM_WAREHOUSE_BACKEND=synapse-dedicated (the Azure-native default)".
+ *
+ * That is the forbidden shape verbatim: a remediation asking the operator to
+ * supply the exact value the platform ALREADY uses as its own default and
+ * ALREADY hard-codes one line above. Loom could have taken that action itself,
+ * so the honest gate was still a defect. It now coerces to the Azure-native
+ * default and records the coercion in the step log (inspectable, never
+ * guessed) instead of dead-ending the install.
+ *
+ * Case/whitespace are normalized too — `"Synapse-Dedicated "` was previously a
+ * dead end for the same reason.
+ */
+export function resolveWarehouseBackend(raw: string | undefined): {
+  backend: typeof AZURE_NATIVE_WAREHOUSE_BACKEND;
+  coercedFrom?: string;
+} {
+  const normalized = (raw || '').trim().toLowerCase();
+  if (!normalized || normalized === AZURE_NATIVE_WAREHOUSE_BACKEND) {
+    return { backend: AZURE_NATIVE_WAREHOUSE_BACKEND };
+  }
+  return { backend: AZURE_NATIVE_WAREHOUSE_BACKEND, coercedFrom: raw };
+}
 
 /**
  * A dedicated SQL pool refuses TDS connections while Paused — surfaced as
@@ -379,7 +419,17 @@ export const warehouseProvisioner: Provisioner = async (input): Promise<Provisio
     return { status: 'skipped', steps: ['No DDL, dbt models, or sample rows in bundle; nothing to provision.'] };
   }
 
-  if (BACKEND === 'synapse-dedicated') {
+  // Resolved per-request (not at module load) so a deploy that fixes the env
+  // var takes effect on the next install without a container restart.
+  const { backend, coercedFrom } = resolveWarehouseBackend(process.env.LOOM_WAREHOUSE_BACKEND);
+  if (coercedFrom !== undefined) {
+    steps.push(
+      `LOOM_WAREHOUSE_BACKEND='${coercedFrom}' is not a provisionable backend; ` +
+        `using the Azure-native default '${AZURE_NATIVE_WAREHOUSE_BACKEND}' (no Fabric required).`,
+    );
+  }
+
+  if (backend === AZURE_NATIVE_WAREHOUSE_BACKEND) {
     let target: SynapseTarget;
     try {
       target = dedicatedTarget();
@@ -387,6 +437,7 @@ export const warehouseProvisioner: Provisioner = async (input): Promise<Provisio
       return {
         status: 'remediation',
         gate: {
+          gateId: 'svc-synapse',
           reason: 'Synapse dedicated pool not configured.',
           remediation:
             'Set LOOM_SYNAPSE_WORKSPACE (e.g. mysyn-ondemand) and LOOM_SYNAPSE_DEDICATED_POOL (e.g. dwhpool01).',
@@ -522,12 +573,18 @@ export const warehouseProvisioner: Provisioner = async (input): Promise<Provisio
     };
   }
 
+  // UNREACHABLE by construction: resolveWarehouseBackend() only ever returns
+  // AZURE_NATIVE_WAREHOUSE_BACKEND, which the branch above handles and returns
+  // from. Kept as a typed exhaustiveness guard so that ADDING a second backend
+  // without giving it a branch fails loudly here instead of silently returning
+  // a misleading 'created'. This is NOT a config gate — there is no operator
+  // action, so it is a genuine `failed` (deploy-integrity R6/R7: never assert a
+  // cause we did not establish).
   return {
-    status: 'remediation',
-    gate: {
-      reason: `Unknown LOOM_WAREHOUSE_BACKEND='${BACKEND}'.`,
-      remediation: 'Set LOOM_WAREHOUSE_BACKEND=synapse-dedicated (the Azure-native default; no Fabric required).',
-    },
+    status: 'failed',
+    error:
+      `Internal: warehouse backend '${backend}' resolved but has no provisioning branch. ` +
+      'This is a Loom defect, not a configuration problem.',
     steps,
   };
 };

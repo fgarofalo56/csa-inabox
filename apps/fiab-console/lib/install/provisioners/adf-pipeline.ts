@@ -92,6 +92,7 @@ export const adfPipelineProvisioner: Provisioner = async (input): Promise<Provis
     return {
       status: 'remediation',
       gate: {
+        gateId: 'svc-adf',
         reason: 'Azure Data Factory is not configured for this deployment.',
         remediation:
           `Set ${gate.missing} (LOOM_SUBSCRIPTION_ID / LOOM_DLZ_RG / LOOM_ADF_NAME) so install can author + run the ADF pipeline. ` +

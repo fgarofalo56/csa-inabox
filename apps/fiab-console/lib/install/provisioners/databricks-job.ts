@@ -230,6 +230,7 @@ export const databricksJobProvisioner: Provisioner = async (input): Promise<Prov
     return {
       status: 'remediation',
       gate: {
+        gateId: 'svc-databricks',
         reason: 'Databricks workspace is not configured for this deployment.',
         remediation:
           `Set ${gate.missing} (the Databricks workspace hostname, e.g. adb-1234.5.azuredatabricks.net) so install can create + run the multi-task medallion job. ` +

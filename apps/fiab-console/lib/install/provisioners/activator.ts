@@ -185,6 +185,11 @@ async function provisionAzureMonitor(input: any, steps: string[]): Promise<Provi
     return {
       status: 'remediation',
       gate: {
+        // The scope is EITHER the Log Analytics workspace id (svc-monitor-alerts)
+        // OR the ADX cluster ARM id (svc-activator-adx-scope). Name the
+        // log-alert gate: it is the DEFAULT scope this provisioner picks, and its
+        // Fix-it sets LOOM_LOG_ANALYTICS_RESOURCE_ID, which alone unblocks this.
+        gateId: 'svc-monitor-alerts',
         reason: 'No Azure Monitor alert scope is configured for this deployment.',
         remediation: `Set ${scope.missing[0]} (Log Analytics workspace ARM resource id — the default log-alert scope) or ${scope.missing[1]} (ADX cluster ARM id — for Eventhouse/RTI rules) so the Activator can scope its scheduled-query rules. (No Microsoft Fabric required.)`,
         link: 'https://learn.microsoft.com/azure/azure-monitor/alerts/alerts-create-log-alert-rule',
@@ -288,6 +293,7 @@ async function provisionAzureMonitor(input: any, steps: string[]): Promise<Provi
         return {
           status: 'remediation',
           gate: {
+            gateId: 'svc-monitor-alerts',
             reason: 'Azure Monitor not configured for this deployment.',
             remediation: `Set ${e.missing.join(' / ')} so the Activator can create alert rules + action groups. (No Microsoft Fabric required.)`,
             link: 'https://learn.microsoft.com/azure/azure-monitor/alerts/alerts-create-log-alert-rule',

@@ -80,6 +80,28 @@ export interface RemediationGate {
   remediation: string;
   /** Optional URL to docs / portal blade. */
   link?: string;
+  /**
+   * G2 (`.claude/rules/ux-baseline.md`) — the canonical gate-registry id
+   * (`lib/gates/registry`) whose Fix-it resolves THIS remediation.
+   *
+   * Why this field exists: `HonestGate` already renders a real inline "Fix it"
+   * button + `GateFixitDialog` for any registry gate, and `/admin/gates` already
+   * lists every gate with its owning surfaces. But a provisioner's remediation
+   * had NO way to name the gate it belongs to, so all 114 install-time
+   * remediations resolved to NOTHING — no registry row, no Fix-it, invisible to
+   * Copilot. That is the same defect class `svc-databricks-system-tables` fixed
+   * for the UC system-tables error codes in #2624, and the same linking
+   * mechanism as `GateDef.legacyCodes` / `gateForLegacyCode()`.
+   *
+   * Populated ONLY where the named gate genuinely resolves the remediation —
+   * i.e. its `requiredSettings` are the very env vars the provisioner checked.
+   * A gate id that does not resolve the remediation would be a Fix-it button
+   * that cannot fix, which is worse than none.
+   *
+   * `lib/install/provisioners/__tests__/remediation-gate-registry.test.ts`
+   * asserts every id used here is a REAL registry gate, so the two cannot drift.
+   */
+  gateId?: string;
 }
 
 export interface ProvisionResult {

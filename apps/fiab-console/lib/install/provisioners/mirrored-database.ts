@@ -226,6 +226,7 @@ async function provisionAdfCdc(input: any, steps: string[]): Promise<ProvisionRe
     return {
       status: 'remediation',
       gate: {
+        gateId: 'svc-adf',
         reason: 'Azure Data Factory is not configured for this deployment.',
         remediation: `Set ${gate.missing} (LOOM_ADF_SUBSCRIPTION_ID / LOOM_ADF_RG / LOOM_ADF_FACTORY, or LOOM_SUBSCRIPTION_ID / LOOM_DLZ_RG) so the mirror can author the Bronze copy pipeline. No Microsoft Fabric required.`,
         link: 'https://learn.microsoft.com/azure/data-factory/quickstart-create-data-factory',
@@ -257,6 +258,7 @@ async function provisionAdfCdc(input: any, steps: string[]): Promise<ProvisionRe
     return {
       status: 'remediation',
       gate: {
+        gateId: 'svc-adls',
         reason: 'No ADLS Gen2 account configured for the Bronze sink.',
         remediation: 'Set LOOM_ADLS_ACCOUNT (and optionally LOOM_BRONZE_CONTAINER, default "bronze") so the copy pipeline can land the source tables as Bronze Parquet. No Microsoft Fabric required.',
         link: 'https://learn.microsoft.com/azure/data-factory/connector-azure-data-lake-storage',

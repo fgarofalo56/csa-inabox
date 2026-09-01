@@ -257,6 +257,7 @@ export const aiSearchProvisioner: Provisioner = async (input): Promise<Provision
     return {
       status: 'remediation',
       gate: {
+        gateId: 'svc-aisearch',
         reason: 'AI Search service not configured.',
         remediation: `Set LOOM_AI_SEARCH_SERVICE to the service name (without .${searchSuffix()}).`,
         link: 'https://learn.microsoft.com/azure/search/',
