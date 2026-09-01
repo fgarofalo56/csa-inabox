@@ -50,12 +50,67 @@ const credential = uamiClientId
 export class MonitorError extends Error {
   status: number;
   body?: unknown;
-  constructor(message: string, status: number, body?: unknown) {
+  /**
+   * ARM's own error code, verbatim from `json.error.code` — e.g.
+   * `SubscriptionRequestsThrottled`, `ResourceNotFound`, `AuthorizationFailed`.
+   *
+   * This used to be thrown away. The throw sites below build `message` as
+   * `json?.error?.message || …`, which for a real ARM error is ARM's PROSE
+   * sentence and nothing else, so every caller that only forwarded `.message`
+   * lost ARM's actual verdict. Callers that degrade a failure into a normal
+   * result (`monitor-client._getDiagnosticsCoverage`) then had nothing to
+   * record but a sentence, and anything downstream was reduced to grepping
+   * prose — measurably unreliable (PR #4271 review, findings 1-2) and the
+   * recorded "a bare substring signal misclassifies and blocks" defect class.
+   *
+   * Absent when ARM sent no code (an empty-body 429 is real).
+   */
+  code?: string;
+  /**
+   * The `Retry-After` ARM sent on this response, in seconds.
+   *
+   * Absent when ARM sent no header — deliberately NOT defaulted, so a caller
+   * can distinguish "ARM asked for 10s" from "ARM said nothing, so our own
+   * floor applies" and state only what was established (R7).
+   */
+  retryAfterSeconds?: number;
+  constructor(
+    message: string,
+    status: number,
+    body?: unknown,
+    detail?: { code?: string; retryAfterSeconds?: number },
+  ) {
     super(message);
     this.name = 'MonitorError';
     this.status = status;
     this.body = body;
+    if (detail?.code) this.code = detail.code;
+    if (detail?.retryAfterSeconds !== undefined) this.retryAfterSeconds = detail.retryAfterSeconds;
   }
+}
+
+/**
+ * Build the `MonitorError` for a non-OK ARM response, PRESERVING what ARM said.
+ *
+ * One helper for all five verbs so the five throw sites cannot drift: before
+ * this, each rebuilt the same `msg` expression by hand and each dropped the
+ * same two pieces of evidence.
+ */
+function armError(
+  verb: string,
+  res: { status: number; headers: Headers },
+  json: any,
+  text: string,
+): MonitorError {
+  const msg = (json?.error?.message || text || `ARM ${verb} failed (${res.status})`).toString();
+  const raw = res.headers.get('retry-after');
+  // `Number('')` and `Number(null)` are both 0 — an absent header must stay
+  // absent, not become "ARM asked for 0 seconds".
+  const seconds = raw !== null && raw.trim() !== '' ? Number(raw) : NaN;
+  return new MonitorError(msg, res.status, json || text, {
+    code: typeof json?.error?.code === 'string' ? json.error.code : undefined,
+    retryAfterSeconds: Number.isFinite(seconds) && seconds >= 0 ? seconds : undefined,
+  });
 }
 
 export class MonitorNotConfiguredError extends Error {
@@ -86,8 +141,7 @@ export async function armGet(path: string, timeoutMs?: number): Promise<any> {
   let json: any = null;
   try { json = text ? JSON.parse(text) : null; } catch { /* leave as text */ }
   if (!res.ok) {
-    const msg = (json?.error?.message || text || `ARM GET failed (${res.status})`).toString();
-    throw new MonitorError(msg, res.status, json || text);
+    throw armError('GET', res, json, text);
   }
   return json;
 }
@@ -120,8 +174,7 @@ export async function armPut(path: string, body: unknown): Promise<any> {
   let json: any = null;
   try { json = text ? JSON.parse(text) : null; } catch { /* leave as text */ }
   if (!res.ok) {
-    const msg = (json?.error?.message || text || `ARM PUT failed (${res.status})`).toString();
-    throw new MonitorError(msg, res.status, json || text);
+    throw armError('PUT', res, json, text);
   }
   return json;
 }
@@ -139,8 +192,7 @@ export async function armPost(path: string, body: unknown, timeoutMs?: number): 
   let json: any = null;
   try { json = text ? JSON.parse(text) : null; } catch { /* leave as text */ }
   if (!res.ok) {
-    const msg = (json?.error?.message || text || `ARM POST failed (${res.status})`).toString();
-    throw new MonitorError(msg, res.status, json || text);
+    throw armError('POST', res, json, text);
   }
   const operationLocation =
     res.headers.get('azure-asyncoperation') || res.headers.get('location') || undefined;
@@ -160,8 +212,7 @@ export async function armPatch(path: string, body: unknown): Promise<any> {
   let json: any = null;
   try { json = text ? JSON.parse(text) : null; } catch { /* leave as text */ }
   if (!res.ok) {
-    const msg = (json?.error?.message || text || `ARM PATCH failed (${res.status})`).toString();
-    throw new MonitorError(msg, res.status, json || text);
+    throw armError('PATCH', res, json, text);
   }
   return json;
 }
@@ -179,11 +230,9 @@ export async function armDelete(path: string): Promise<void> {
     const text = await res.text();
     let json: any = null;
     try { json = text ? JSON.parse(text) : null; } catch { /* leave as text */ }
-    const msg = (json?.error?.message || text || `ARM DELETE failed (${res.status})`).toString();
-    throw new MonitorError(msg, res.status, json || text);
+    throw armError('DELETE', res, json, text);
   }
 }
-
 // ----------------------------------------------------------------------------
 // TTL cache — server-side memo for the heavy Monitor read paths
 // ----------------------------------------------------------------------------

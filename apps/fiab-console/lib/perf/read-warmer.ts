@@ -50,8 +50,8 @@
  *      "log and continue") and puts that subscription into a cooldown that is
  *      never shorter than the Retry-After ARM asked for, escalating while
  *      throttling persists. The breaker trips on a warm read that THREW a 429
- *      AND on one that RESOLVED while carrying ARM's throttle words in its
- *      payload — see `findSwallowedThrottle` and the measurement below.
+ *      AND on one that RESOLVED while its payload records the 429 its client
+ *      caught — see `findSwallowedThrottle` and the measurement below.
  *   4. OBSERVABILITY — `getReadWarmerState()` reports what ran, what was
  *      skipped and WHY, so the next incident is diagnosable without a live log
  *      pull. Because nothing SERVES that accessor yet (see the scope note
@@ -78,8 +78,7 @@
  *   PARTIAL 429 (inventory SUCCEEDS, the per-resource `diagnosticSettings` GETs
  *   429 — the live shape behind `confirmed: 2 of 3` on 2026-09-01):
  *     getDiagnosticsCoverage()  -> did NOT throw; resolved a normal array whose
- *                                  rows carry `note: "ARM GET … failed 429: …
- *                                  SubscriptionRequestsThrottled …"`
+ *                                  failed rows carry ARM's 429 as a FIELD.
  *
  * `_getDiagnosticsCoverage` (monitor-client.ts) catches per resource and returns
  * `{...base, note: message}` for any status that is not 404/400/405, so a 429
@@ -87,13 +86,36 @@
  * `resourceHealthViaResourceGraph` -> `resourceHealthViaCrawl` fallback) and
  * degrades to `{}`.
  *
+ * WHAT THAT `note` ACTUALLY CONTAINS — the correction that forced this rewrite.
+ * A first attempt at the breaker below grepped the note for `failed 429` and for
+ * `SubscriptionRequestsThrottled`. A review (PR #4271, findings 1-2) measured
+ * that neither can appear. `monitor-arm.ts` builds its message as
+ * `json?.error?.message || text || 'ARM GET failed (<status>)'`, so:
+ *
+ *   real ARM 429 -> `json.error.message` is truthy, and the note is ONLY ARM's
+ *                   prose ("Number of 'read' requests for subscription '…'
+ *                   exceeded. Please try again after '10' seconds."). ARM's own
+ *                   verdict lives in `json.error.code` and was DISCARDED.
+ *   empty-body    -> the note is `ARM GET failed (429)`, whose parenthesis
+ *     429         defeats a `\bfailed 429\b` word boundary anyway.
+ *
+ * The `ARM GET … failed 429: …` prefix belongs to `arm-client.ts`, which no warm
+ * target uses (see the closing note). So the whole textual approach was reading
+ * for a string production does not emit — the recorded "a bare substring signal
+ * misclassifies and blocks" defect class, committed a second time.
+ *
  * WHAT THIS FILE CAN AND CANNOT DO ABOUT THAT, stated precisely:
  *
- *   • CLOSED HERE — a resolved payload that still quotes ARM's own throttle
- *     words IS positive evidence that ARM throttled this warm read, so
- *     `findSwallowedThrottle` scans each resolved result (bounded) and trips the
- *     same breaker. That covers the PARTIAL-429 diagnostics shape above, which
- *     the review measured as the production one.
+ *   • CLOSED HERE, STRUCTURALLY — the transport now PRESERVES what ARM said.
+ *     `monitor-arm.MonitorError` carries `status`, `code` and `retryAfterSeconds`
+ *     as fields, and the degrading catch in `_getDiagnosticsCoverage` attaches
+ *     them to the row it keeps, under the `SWALLOWED_ARM_ERROR` marker key
+ *     (`lib/azure/swallowed-arm-error.ts`). `findSwallowedThrottle` reads that
+ *     FIELD — same structural test the thrown path already used — so it covers
+ *     the PARTIAL-429 diagnostics shape the review measured as the production
+ *     one, and it does so without depending on any sentence ARM chooses to
+ *     write. Text is a bounded LAST-RESORT fallback for degrading clients that
+ *     have not been taught the marker yet, scoped to error-bearing keys only.
  *   • NOT CLOSED HERE — `listResourceHealth` resolving `{}` destroys the
  *     evidence, so nothing downstream can recover it, and an empty estate is
  *     indistinguishable from a throttled one. Worse, a 429 on the cheap Resource
@@ -117,6 +139,10 @@
 
 import { buildScopedCacheKey, getOrComputeCached, resolveBackendTtl } from '@/lib/azure/query-result-cache';
 import type { ArmThrottledError } from '@/lib/azure/arm-client';
+// A zero-dependency leaf module ON PURPOSE: reading the marker must not pull in
+// `monitor-arm.ts`, which builds an `@azure/identity` credential chain at module
+// scope. The warmer stays free of that edge.
+import { readSwallowedArmError, type SwallowedArmError } from '@/lib/azure/swallowed-arm-error';
 
 const SETTLE_MS = 90_000;
 const WARM_INTERVAL_MS = Number(process.env.LOOM_READ_WARMER_INTERVAL_MS) || 10 * 60_000;
@@ -208,15 +234,75 @@ const ARM_THROTTLE_CODES = [
 ];
 
 /**
- * Does this text state, in ARM's own words, that ARM throttled a read?
+ * ARM's prose sentence for a read throttle, e.g.
  *
- * Positive evidence only: the `ARM GET <path> failed 429:` shape
- * `arm-client.jsonOrThrow` produces, or a named ARM throttle code. The word
- * "throttled" on its own is NOT evidence — `ComputeBudgetExceededError`'s text
- * contains it and is a local timeout, not an ARM verdict (R7).
+ *   Number of 'read' requests for subscription '<guid>' actor '<oid>' exceeded
+ *   the limit of '<n>' for time interval '<t>'. Please try again after '10' seconds.
+ *
+ * This matters because it is the ONLY thing a degrading client that has not been
+ * taught the structural marker can carry: `monitor-arm.ts` builds its message as
+ * `json?.error?.message || …`, so for a real ARM 429 the code lives in a field
+ * that message never sees. Bounded quantifier on purpose — an unbounded lazy gap
+ * over an arbitrarily large payload is a backtracking hazard.
  */
-function statesArmThrottle(text: string): boolean {
-  return /\bfailed 429\b/.test(text) || ARM_THROTTLE_CODES.some((code) => text.includes(code));
+const ARM_THROTTLE_SENTENCE =
+  /Number of '[^']{1,40}' requests for (?:subscription|tenant|resource|resourcegroup)\b[\s\S]{0,240}?exceeded/i;
+
+/**
+ * The `ARM <VERB> failed (<status>)` fallback `monitor-arm.ts` emits when ARM
+ * returned NO body at all. An empty-body 429 is real, and the parenthesis in
+ * that string defeats a `\bfailed 429\b` word boundary — measured in the PR
+ * #4271 review as finding 2.
+ */
+const ARM_EMPTY_BODY_429 = /\bfailed \(429\)/;
+
+/** The `ARM GET <path> failed 429:` shape `arm-client.jsonOrThrow` produces. */
+const ARM_CLIENT_FAILED_429 = /\bfailed 429\b/;
+
+/**
+ * Where does this text FIRST state, in ARM's own words, that ARM throttled a
+ * read? Returns the index of the earliest such evidence, or -1 for none.
+ *
+ * Index rather than boolean so a caller can truncate AROUND the evidence
+ * instead of from the front of the string — a 600-char prefix of a long payload
+ * can drop the very sentence that proves the throttle and names the Retry-After,
+ * which would leave `message` contradicting `kind` (PR #4271 finding 4, R7).
+ *
+ * Positive evidence only. The word "throttled" on its own is NOT evidence —
+ * `ComputeBudgetExceededError`'s text contains it and is a local timeout, not an
+ * ARM verdict.
+ *
+ * This is the LAST-RESORT half of the detector. The primary signal is the
+ * structural `SWALLOWED_ARM_ERROR` marker; text only covers a degrading client
+ * that has not been taught to attach it.
+ */
+function armThrottleIndex(text: string): number {
+  let best = -1;
+  const note = (at: number) => { if (at >= 0 && (best < 0 || at < best)) best = at; };
+  note(text.search(ARM_CLIENT_FAILED_429));
+  note(text.search(ARM_EMPTY_BODY_429));
+  note(text.search(ARM_THROTTLE_SENTENCE));
+  for (const code of ARM_THROTTLE_CODES) note(text.indexOf(code));
+  return best;
+}
+
+/** Chars of context kept before the evidence when windowing a long payload. */
+const EVIDENCE_LOOKBACK = 120;
+/** Total window kept around the evidence. */
+const EVIDENCE_WINDOW = 600;
+
+/**
+ * Truncate `text` to a window CENTERED on the throttle evidence at `at`.
+ *
+ * ARM writes `{"error":{"code":"…Throttled","message":"Number of 'read' … after
+ * '10' seconds."}}`, so anchoring at the earliest evidence and reading forward
+ * keeps both the verdict and the spoken Retry-After. A front-truncation loses
+ * both whenever the payload has anything in front of the error.
+ */
+function armThrottleWindow(text: string, at: number): string {
+  if (text.length <= EVIDENCE_WINDOW) return text;
+  const start = Math.max(0, at - EVIDENCE_LOOKBACK);
+  return text.slice(start, start + EVIDENCE_WINDOW);
 }
 
 export type WarmFailureKind = 'throttled' | 'other';
@@ -238,20 +324,26 @@ function readNumber(v: unknown): number | null {
 
 /**
  * Classify a warm-read failure. `throttled` is asserted ONLY on positive
- * evidence: a 429 status carried structurally, the `ARM … failed 429:` shape
- * `arm-client.jsonOrThrow` produces, or a named ARM throttle code in the body.
- * Everything else is `other` — never guessed into `throttled`.
+ * evidence: a 429 status carried structurally, or ARM's own throttle words in
+ * the body (`armThrottleIndex`). Everything else is `other` — never guessed
+ * into `throttled`.
  */
 export function classifyWarmFailure(err: unknown): WarmFailure {
   const e = (err ?? {}) as Record<string, unknown>;
-  const message = String((e as { message?: unknown }).message ?? err ?? '').slice(0, 600);
+  const raw = String((e as { message?: unknown }).message ?? err ?? '');
 
   const status =
     readNumber(e['status'])
     ?? readNumber(e['statusCode'])
     ?? readNumber((e['response'] as Record<string, unknown> | undefined)?.['status']);
 
-  const throttled = status === 429 || statesArmThrottle(message);
+  const at = armThrottleIndex(raw);
+  const throttled = status === 429 || at >= 0;
+
+  // Window around the evidence when there is any; otherwise a plain prefix.
+  // Truncating from the front would let `message` drop the sentence that proves
+  // `kind` and names the Retry-After, so the record would contradict itself (R7).
+  const message = at >= 0 ? armThrottleWindow(raw, at) : raw.slice(0, EVIDENCE_WINDOW);
 
   if (!throttled) return { kind: 'other', retryAfterMs: null, message };
 
@@ -286,44 +378,138 @@ export function classifyWarmFailure(err: unknown): WarmFailure {
 const RESULT_SCAN_MAX_NODES = 20_000;
 
 /**
- * Find ARM's own throttle words inside a warm read's RESOLVED value.
+ * Keys whose value is, by convention, an error report rather than user content.
  *
- * WHY this exists: several warm targets' clients catch a 429 and degrade rather
- * than propagate, so `runTarget` resolves and the breaker never sees a failure.
- * Measured shape (monitor-client `_getDiagnosticsCoverage`, partial-429
- * transport): the row resolves as `{ …, note: "ARM GET … failed 429: {…
- * SubscriptionRequestsThrottled …}" }`. That note is ARM's verdict, carried
- * verbatim — treating it as evidence asserts nothing the payload did not say.
+ * The text half of the scan is scoped to these. WHY: `listAlertRules` carries
+ * operator-authored `name` and `description` for every rule in the subscription,
+ * and a rule described "Fires when ARM returns TooManyRequests for the console
+ * UAMI" would otherwise be read as ARM throttling us. That false positive is not
+ * self-clearing — the string is PERSISTENT, so it would trip on every cycle, and
+ * because a tripped cycle skips the escalation reset the cooldown would only
+ * grow. Steady state: one cycle an hour warming `monitor/cost` and nothing else,
+ * invisibly (PR #4271 finding 3).
  *
- * Returns the first matching string (truncated) or null. Bounded in nodes and
- * cycle-safe, so it cannot diverge on a self-referential result.
+ * Operator prose does not live under these keys; ARM's error reports do.
  */
-export function findSwallowedThrottle(value: unknown): string | null {
+const ERROR_BEARING_KEYS = new Set([
+  'note', 'error', 'errors', 'message', 'errormessage', 'detail', 'details',
+  'reason', 'exception', 'code', 'errorcode', 'statusmessage', 'faultmessage',
+]);
+
+/** How the swallowed throttle was established. */
+export type SwallowedThrottleSource = 'structured' | 'arm-words';
+
+export interface SwallowedThrottle {
+  /**
+   * `structured` — read off the `SWALLOWED_ARM_ERROR` marker a degrading client
+   * attached, i.e. ARM's own status/code/Retry-After as fields.
+   * `arm-words` — inferred from ARM's prose under an error-bearing key, because
+   * the client that swallowed it has not been taught the marker.
+   */
+  source: SwallowedThrottleSource;
+  failure: WarmFailure;
+}
+
+/** Turn a structural marker into the same verdict shape the thrown path uses. */
+function classifyArmMarker(m: SwallowedArmError): WarmFailure {
+  return classifyWarmFailure({
+    status: m.status,
+    retryAfterSeconds: m.retryAfterSeconds,
+    // Put ARM's code back in front of its prose. The code is what `monitor-arm`
+    // used to discard, and it is what makes the recorded message self-explaining
+    // instead of a bare sentence.
+    message: m.code ? `${m.code}: ${m.message}` : m.message,
+  });
+}
+
+/**
+ * Find a 429 that a warm target's client CAUGHT and degraded into a normal
+ * result, so `runTarget` resolved and the breaker never saw a failure.
+ *
+ * TWO signals, in strict priority order:
+ *
+ *  1. STRUCTURAL (authoritative). A degrading client attaches
+ *     `SWALLOWED_ARM_ERROR` — ARM's status, code and Retry-After as FIELDS
+ *     (`lib/azure/swallowed-arm-error.ts`). This is the same structural test the
+ *     thrown path uses, and it is immune to whatever sentence ARM chooses to
+ *     write. The scan always runs to completion looking for one, so a marker
+ *     anywhere in the payload beats a textual hit found earlier in the walk.
+ *
+ *  2. ARM'S WORDS (last resort). For a client that degrades without the marker,
+ *     ARM's prose under an ERROR-BEARING key still counts. Scoped to those keys
+ *     precisely so operator-authored content cannot masquerade as an ARM verdict
+ *     — see `ERROR_BEARING_KEYS`.
+ *
+ * Bounded in nodes AND in keys (each key tested charges the budget), and
+ * cycle-safe via a `WeakSet`, so it cannot diverge on a self-referential result.
+ * Hitting the cap is reported as "no evidence in the part I read" — which is
+ * what it is, never as "no throttle" (R7).
+ */
+export function findSwallowedThrottle(
+  value: unknown,
+  opts?: { scanText?: boolean },
+): SwallowedThrottle | null {
+  // Structural detection is unconditional. Only ARM's PROSE can be somebody
+  // else's history, so only the prose half is opt-out-able.
+  const scanText = opts?.scanText !== false;
   const seen = new WeakSet<object>();
-  const stack: unknown[] = [value];
+  // `errorField` marks a node reached through an error-bearing key. It is
+  // inherited: everything under `error:` is error context, however deep.
+  const stack: { node: unknown; errorField: boolean }[] = [{ node: value, errorField: false }];
   let visited = 0;
+  let textual: SwallowedThrottle | null = null;
+
   while (stack.length > 0 && visited < RESULT_SCAN_MAX_NODES) {
-    const node = stack.pop();
+    const { node, errorField } = stack.pop()!;
     visited += 1;
+
     if (typeof node === 'string') {
-      if (statesArmThrottle(node)) return node.slice(0, 600);
+      if (scanText && errorField && textual === null) {
+        const at = armThrottleIndex(node);
+        if (at >= 0) {
+          textual = {
+            source: 'arm-words',
+            failure: classifyWarmFailure({ message: armThrottleWindow(node, at) }),
+          };
+        }
+      }
       continue;
     }
     if (node === null || typeof node !== 'object') continue;
     if (seen.has(node)) continue;
     seen.add(node);
+
+    // Signal 1 — the structural marker wins outright, on any node.
+    const marker = readSwallowedArmError(node);
+    if (marker) {
+      const failure = classifyArmMarker(marker);
+      if (failure.kind === 'throttled') return { source: 'structured', failure };
+    }
+
     if (Array.isArray(node)) {
-      for (const item of node) stack.push(item);
+      for (const item of node) stack.push({ node: item, errorField });
       continue;
     }
-    // Keys can carry the evidence too (e.g. a map keyed by error text), and are
-    // far cheaper to test than the values, so test both.
     for (const [k, v] of Object.entries(node as Record<string, unknown>)) {
-      if (statesArmThrottle(k)) return k.slice(0, 600);
-      stack.push(v);
+      // Charge per key, not per object: a payload of few objects with very many
+      // keys would otherwise scan far past the ceiling this cap exists to impose.
+      visited += 1;
+      if (visited >= RESULT_SCAN_MAX_NODES) break;
+      // A map may be KEYED by the error (e.g. `{ errors: { …Throttled: 3 } }`),
+      // so the keys of a node already in error context are evidence too.
+      if (scanText && errorField && textual === null) {
+        const at = armThrottleIndex(k);
+        if (at >= 0) {
+          textual = {
+            source: 'arm-words',
+            failure: classifyWarmFailure({ message: armThrottleWindow(k, at) }),
+          };
+        }
+      }
+      stack.push({ node: v, errorField: errorField || ERROR_BEARING_KEYS.has(k.toLowerCase()) });
     }
   }
-  return null;
+  return textual;
 }
 
 // ---------------------------------------------------------------------------
@@ -398,14 +584,24 @@ export interface WarmTarget {
    */
   budgetKey?: string;
   /**
-   * Opt OUT of `findSwallowedThrottle` for a target whose payload legitimately
-   * QUOTES upstream error text it did not itself receive — for that target an
-   * ARM throttle string is somebody else's history, not this read's verdict, so
-   * scanning it would assert a cause that was not established (R7).
+   * Opt OUT of the TEXTUAL half of `findSwallowedThrottle` for a target whose
+   * payload legitimately QUOTES upstream error text it did not itself receive —
+   * for that target an ARM throttle string is somebody else's history, not this
+   * read's verdict, so reading it as one asserts a cause that was not
+   * established (R7).
    *
-   * Default is opt-IN (scan) on purpose: a false positive costs one skipped warm
-   * cycle, which is free because warming is an optimization; a false negative
-   * costs the incident this file exists for. Set this only with a stated reason.
+   * The STRUCTURAL half still runs: the `SWALLOWED_ARM_ERROR` marker is attached
+   * by the transport that actually made the call, so it cannot be somebody
+   * else's history. Opting out therefore does not blind this target to a throttle
+   * on its OWN transport — which the flag's first revision did.
+   *
+   * Default is opt-IN on purpose. Note the asymmetry is smaller than it looks
+   * now that the text scan is scoped to `ERROR_BEARING_KEYS`: a false positive
+   * used to be described here as "costs one skipped cycle, which is free", and
+   * that was WRONG for a persistent string — a stored alert-rule description
+   * would trip every cycle, and a tripped cycle skips the escalation reset, so
+   * the cooldown only grows (PR #4271 finding 3). Scoping is what makes the
+   * default safe; this flag is for the residual case.
    */
   resultQuotesUpstreamErrors?: boolean;
 }
@@ -472,7 +668,8 @@ async function targets(): Promise<WarmTarget[]> {
       // synapse on, arm off) — the shape the Monitor page first-paints with.
       // Rows carry ErrorCode/ErrorMessage copied out of pipeline-run history, so
       // an ARM throttle string here is a past pipeline's failure, not this
-      // read's — the only target where the payload scan could misattribute.
+      // read's — the only target where the TEXT scan could misattribute. Its own
+      // transport is still covered, structurally, by the marker.
       resultQuotesUpstreamErrors: true,
       key: buildScopedCacheKey('monitor/activities', { days: 30, limit: 200, includeSynapse: true, includeArmLog: false }),
       modelId: 'monitor',
@@ -698,19 +895,47 @@ export function createReadWarmer(deps: ReadWarmerDeps = {}): ReadWarmer {
       const cleanBuckets = new Set<string>();
 
       /**
-       * ARM said stop; the warmer stops. Shared by BOTH ways a throttle can
-       * reach us — the read that THREW, and the read that RESOLVED carrying
-       * ARM's throttle words. `origin` names which was actually observed, so
-       * the recorded state never implies a failure that did not occur (R7).
+       * ARM said stop; the warmer stops. Shared by all three ways a throttle can
+       * reach us — the read that THREW, the read that RESOLVED carrying a
+       * STRUCTURED record of the 429 its client caught, and the read whose
+       * payload only carries ARM's throttle WORDS. `origin` names which was
+       * actually observed, so the recorded state never implies a failure that
+       * did not occur (R7).
+       *
+       * `inferential` marks the third case — a conclusion drawn from prose we
+       * did not produce, not an observation. It changes two things:
+       *
+       *  1. **Escalation does not climb.** `Math.max(n, 1)` instead of `n + 1`.
+       *     A textual match trips the breaker once, at the base cooldown, and
+       *     stays there however many cycles it recurs. That matters because a
+       *     text match CAN be persistent: an operator-authored alert-rule
+       *     description containing ARM's throttle words would otherwise ratchet
+       *     the cooldown every cycle until the warmer ran hourly, invisibly
+       *     (PR #4271 review, finding 3). `max` and not `min`, so an inferential
+       *     trip also never ERASES escalation an observed 429 earned.
+       *  2. **The Retry-After sentence changes.** We cannot claim ARM sent no
+       *     header when we never saw a response — only that none was recoverable
+       *     from the text.
        */
-      const trip = (t: WarmTarget, id: string, b: BucketState, failure: WarmFailure, origin: string): void => {
-        b.consecutiveThrottles += 1;
+      const trip = (
+        t: WarmTarget,
+        id: string,
+        b: BucketState,
+        failure: WarmFailure,
+        origin: string,
+        opts?: { inferential?: boolean },
+      ): void => {
+        b.consecutiveThrottles = opts?.inferential
+          ? Math.max(b.consecutiveThrottles, 1)
+          : b.consecutiveThrottles + 1;
         const cooldown = cooldownMsFor(failure.retryAfterMs, b.consecutiveThrottles);
         b.cooldownUntil = now() + cooldown;
         b.lastThrottle = { at: now(), label: t.label, retryAfterMs: failure.retryAfterMs, message: failure.message };
-        const asked = failure.retryAfterMs === null
-          ? 'ARM did not state a Retry-After, so the configured minimum applies'
-          : `ARM asked for ${Math.round(failure.retryAfterMs / 1000)}s`;
+        const asked = failure.retryAfterMs !== null
+          ? `ARM asked for ${Math.round(failure.retryAfterMs / 1000)}s`
+          : opts?.inferential
+            ? 'no Retry-After was recoverable from that text, so the configured minimum applies'
+            : 'ARM did not state a Retry-After, so the configured minimum applies';
         const detail = `${origin}; ${asked}. Aborting the cycle and holding subscription ${id} out until ${iso(b.cooldownUntil)}.`;
         report.abortedBy = { label: t.label, retryAfterMs: failure.retryAfterMs, cooldownUntil: iso(b.cooldownUntil) };
         record('throttled', t.label, detail);
@@ -748,17 +973,33 @@ export function createReadWarmer(deps: ReadWarmerDeps = {}): ReadWarmer {
           // bypass:true recomputes + rewrites the tiers even when a fresh copy
           // exists — the warmer's job is keeping copies YOUNG, not reading them.
           const result = await runTarget(t);
-          // A client that CAUGHT its own 429 resolves normally, and ARM's
-          // verdict survives ONLY inside the payload (monitor-client's
-          // `note: "ARM GET … failed 429: …"`). Reading it is what makes the
+          // A client that CAUGHT its own 429 resolves normally, so the throttle
+          // never reaches the `catch` below — it survives only inside the
+          // payload. `findSwallowedThrottle` looks for it two ways, in priority
+          // order: the STRUCTURED marker a degrading client attaches
+          // (`SWALLOWED_ARM_ERROR`: the status ARM returned, the code ARM sent,
+          // the Retry-After ARM asked for) and, failing that, ARM's throttle
+          // words in an error-bearing string. Reading it is what makes the
           // breaker cover the partial-429 shape measured live on 2026-09-01.
-          const swallowed = t.resultQuotesUpstreamErrors ? null : findSwallowedThrottle(result);
+          //
+          // `scanText` — not the whole scan — is what a target opts out of, so
+          // a target that quotes OTHER services' errors is still covered
+          // structurally on its own transport (review, finding 6).
+          const swallowed = findSwallowedThrottle(result, { scanText: !t.resultQuotesUpstreamErrors });
           if (swallowed) {
-            const failure = classifyWarmFailure(new Error(swallowed));
+            // Use the failure the scan already built. Re-classifying its
+            // `message` here is what made the trip contradict itself: the
+            // message is a WINDOW around the evidence, and re-running the
+            // classifier over a window is at best a no-op and at worst a
+            // second, lossier verdict (review, finding 4).
+            const { failure, source } = swallowed;
             report.failed.push({ label: t.label, kind: failure.kind, message: failure.message });
             trip(
               t, id, b, failure,
-              'this warm read RESOLVED, but its payload carries ARM throttle text, so its client swallowed a 429',
+              source === 'structured'
+                ? 'this warm read RESOLVED, but its payload records the 429 its client caught'
+                : "this warm read RESOLVED, but an error field in its payload carries ARM's throttle words, so its client most likely swallowed a 429",
+              { inferential: source === 'arm-words' },
             );
             aborted = true;
             continue;
