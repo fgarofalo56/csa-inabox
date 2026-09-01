@@ -39,16 +39,10 @@ import {
   applyResumePoll,
   resolveDeployManifest,
   discoverFromManifest,
-  classifyTagReadFailure,
-  partitionDiscovery,
-  evaluateDrift,
   createManifestTagReader,
   normalizePowerState,
   armTypeFromId,
-  parsePreviewToken,
-  previewToken,
   type EstateActuator,
-  type ManifestEntry,
   type PowerRead,
 } from '../pause-orchestrator';
 
@@ -962,189 +956,12 @@ describe('applyResumePoll refuses a RUNNING write that the outcomes do not suppo
 });
 
 // ===========================================================================
-// #4243 — the preview token, the drift comparator, and the SHIR coordinates
+// #4243 — the manifest tag reader and the SHIR coordinates
+// (the token comparator + discovery classification moved to
+//  pause-drift-token.test.ts / pause-discovery-classify.test.ts with their
+//  modules in the 2026-08-31 monolith split)
 // ===========================================================================
 
-describe('#4243 previewToken / parsePreviewToken — stable under throttled reads', () => {
-  const MANIFEST = ['/subscriptions/s/resourceGroups/r/providers/Microsoft.Kusto/clusters/adx',
-    '/subscriptions/s/resourceGroups/r/providers/Microsoft.Synapse/workspaces/w/sqlPools/p'];
-
-  it('is computed over the MANIFEST population — a read failure that shrinks the established set does not change the m-part', () => {
-    const clean = previewToken({ manifestIds: MANIFEST, establishedIds: MANIFEST, readFailures: 0 });
-    const throttled = previewToken({ manifestIds: MANIFEST, establishedIds: [MANIFEST[0]], readFailures: 1 });
-    expect(parsePreviewToken(clean)!.manifestDigest).toBe(parsePreviewToken(throttled)!.manifestDigest);
-    // The tokens DO differ — via the f-count and p-part, which the comparator
-    // treats as "degraded", never as "the estate changed".
-    expect(clean).not.toBe(throttled);
-  });
-
-  it('is order- and case-insensitive over the SET, like ARM ids', () => {
-    const a = previewToken({ manifestIds: [MANIFEST[0], MANIFEST[1]], establishedIds: MANIFEST, readFailures: 0 });
-    const b = previewToken({
-      manifestIds: [MANIFEST[1].toUpperCase(), MANIFEST[0]],
-      establishedIds: [...MANIFEST].reverse(),
-      readFailures: 0,
-    });
-    expect(a).toBe(b);
-  });
-
-  it('round-trips through parsePreviewToken; the legacy count:hash shape parses as null (stale, not drift)', () => {
-    const t = previewToken({ manifestIds: MANIFEST, establishedIds: [MANIFEST[0]], readFailures: 2 });
-    const p = parsePreviewToken(t)!;
-    expect(p.manifestCount).toBe(2);
-    expect(p.establishedCount).toBe(1);
-    expect(p.readFailures).toBe(2);
-    expect(parsePreviewToken('2:abcd1234')).toBeNull();
-    expect(parsePreviewToken('')).toBeNull();
-    expect(parsePreviewToken(undefined)).toBeNull();
-  });
-
-  it('a NON-STRING value parses as null (stale), never throws — the token is untrusted JSON (review round 1)', () => {
-    // Measured: {"confirmToken": 5} crashed `.trim()` into a generic 500 with
-    // zero audit rows. The guard sends it to the audited stale-token refusal.
-    expect(parsePreviewToken(5 as never)).toBeNull();
-    expect(parsePreviewToken({} as never)).toBeNull();
-    expect(parsePreviewToken(null)).toBeNull();
-    expect(parsePreviewToken(true as never)).toBeNull();
-  });
-});
-
-describe('#4243 evaluateDrift — the three-way split the live incident demanded', () => {
-  const M = ['/subscriptions/s/resourceGroups/r/providers/Microsoft.Kusto/clusters/adx',
-    '/subscriptions/s/resourceGroups/r/providers/Microsoft.Synapse/workspaces/w/sqlPools/p'];
-  const fail = (id: string, throttled: boolean) => ({
-    resourceId: id,
-    name: id.split('/').pop()!,
-    error: throttled ? 'ARM GET x was throttled (429) and stayed throttled after 3 attempt(s).' : 'ARM GET x failed 403: forbidden',
-    kind: (throttled ? 'throttled' : 'unreachable') as 'throttled' | 'unreachable',
-    throttled,
-  });
-  const cleanToken = previewToken({ manifestIds: M, establishedIds: M, readFailures: 0 });
-
-  it('UNCHANGED estate, clean reads both sides -> proceed', () => {
-    expect(evaluateDrift({ confirmToken: cleanToken, manifestIds: M, establishedIds: M, readFailures: [] }))
-      .toEqual({ kind: 'proceed' });
-  });
-
-  it('THE LIVE SHAPE: clean preview + a throttled POST-time read over an UNCHANGED estate -> reads-failed, NEVER set-changed', () => {
-    // Deleting the reads-failed guard (comparing hashes anyway) turns this
-    // exact input into a false "set-changed" — the manufactured 409 of #4243.
-    const v = evaluateDrift({
-      confirmToken: cleanToken,
-      manifestIds: M,
-      establishedIds: [M[0]], // the throttled resource dropped out
-      readFailures: [fail(M[1], true)],
-    });
-    expect(v.kind).toBe('reads-failed');
-  });
-
-  it('a DEGRADED preview confirmed against a now-clean estate -> preview-degraded, never set-changed', () => {
-    const degraded = previewToken({ manifestIds: M, establishedIds: [M[0]], readFailures: 1 });
-    const v = evaluateDrift({ confirmToken: degraded, manifestIds: M, establishedIds: M, readFailures: [] });
-    expect(v.kind).toBe('preview-degraded');
-  });
-
-  it('REAL drift — both sides fully read, membership genuinely differs -> set-changed', () => {
-    const preview = previewToken({ manifestIds: M, establishedIds: [M[0]], readFailures: 0 });
-    const v = evaluateDrift({ confirmToken: preview, manifestIds: M, establishedIds: M, readFailures: [] });
-    expect(v).toEqual({ kind: 'set-changed', confirmedCount: 1, currentCount: 2 });
-  });
-
-  it('a MANIFEST change is positively observed even under total read failure', () => {
-    const oldDeploy = previewToken({ manifestIds: [M[0]], establishedIds: [M[0]], readFailures: 0 });
-    const v = evaluateDrift({
-      confirmToken: oldDeploy,
-      manifestIds: M,
-      establishedIds: [],
-      readFailures: [fail(M[0], true), fail(M[1], true)],
-    });
-    expect(v).toEqual({ kind: 'manifest-changed', confirmedCount: 1, currentCount: 2 });
-  });
-
-  it('no token / stale token are their own refusals, never drift', () => {
-    expect(evaluateDrift({ confirmToken: undefined, manifestIds: M, establishedIds: M, readFailures: [] }).kind)
-      .toBe('no-token');
-    expect(evaluateDrift({ confirmToken: '2:deadbeef', manifestIds: M, establishedIds: M, readFailures: [] }).kind)
-      .toBe('stale-token');
-  });
-});
-
-describe('#4243 classifyTagReadFailure — absent / throttled / unreachable, anchored on OUR error shapes', () => {
-  it('a 404 / NotFound-family answer is a POSITIVE absence, not a failed read (review round 1)', () => {
-    expect(classifyTagReadFailure('ARM GET /x?api-version=1 failed 404: {"error":{"code":"ResourceNotFound"}}')).toBe('absent');
-    expect(classifyTagReadFailure('code: ResourceGroupNotFound — Resource group rg-x could not be found')).toBe('absent');
-    expect(classifyTagReadFailure('SubscriptionNotFound: The subscription sub-x could not be found')).toBe('absent');
-    expect(classifyTagReadFailure('ParentResourceNotFound: parent workspace missing')).toBe('absent');
-  });
-
-  it('throttle is anchored on the message SHAPE, never a bare 429 substring', () => {
-    expect(classifyTagReadFailure('ARM GET /x was throttled (429) and stayed throttled after 3 attempt(s).')).toBe('throttled');
-    expect(classifyTagReadFailure('ARM GET /x failed 429: {"error":{"code":"TooManyRequests"}}')).toBe('throttled');
-    // A resource whose NAME contains 429 must not read as a throttle — the
-    // bare-substring misclassification is a recorded incident class here.
-    expect(classifyTagReadFailure('ARM GET /clusters/adx-429-lab failed 403: forbidden')).toBe('unreachable');
-  });
-
-  it('everything else — timeouts, 5xx, auth — establishes nothing: unreachable', () => {
-    expect(classifyTagReadFailure('ARM GET /x failed 403: forbidden')).toBe('unreachable');
-    expect(classifyTagReadFailure('ARM GET /x failed 503: upstream unavailable')).toBe('unreachable');
-    expect(classifyTagReadFailure('fetch timed out after 25000ms')).toBe('unreachable');
-  });
-});
-
-describe('#4243 partitionDiscovery — absent EXCLUDED and surfaced, unreadable kept and refused', () => {
-  const entryFor = (d: DiscoveredResource, fromEnv: string[]): ManifestEntry => ({
-    resourceId: d.resourceId,
-    resourceType: d.resourceType,
-    name: d.name,
-    resourceGroup: d.resourceGroup,
-    subscriptionId: d.subscriptionId,
-    fromEnv,
-  });
-
-  const ok = res({ name: 'adx-ok', rg: 'rg-a', type: 'Microsoft.Kusto/clusters', tags: {} });
-  const gone = res({ name: 'vmss-gone', rg: 'rg-a', type: 'Microsoft.Compute/virtualMachineScaleSets', tags: null,
-    tagsError: 'ARM GET /x failed 404: {"error":{"code":"ResourceNotFound"}}' });
-  const throttled = res({ name: 'adx-throttled', rg: 'rg-a', type: 'Microsoft.Kusto/clusters', tags: null,
-    tagsError: 'ARM GET /x was throttled (429) and stayed throttled after 3 attempt(s).' });
-  const entries = [
-    entryFor(ok, ['LOOM_KUSTO_CLUSTER_NAME']),
-    entryFor(gone, ['LOOM_DLZ_RG (or LOOM_ADMIN_RG)', 'LOOM_SHIR_VMSS_NAME']),
-    entryFor(throttled, ['LOOM_KUSTO_CLUSTER_NAME']),
-  ];
-
-  it('the ABSENT row leaves the population entirely — and is surfaced with the env values to fix, never dropped', () => {
-    // The mutation target: fold the 404 arm of classifyTagReadFailure into
-    // `unreachable` and this case goes red — `gone` lands in readFailures,
-    // which is the deterministic every-live-pause refusal the review measured.
-    const p = partitionDiscovery([ok, gone, throttled], entries);
-    expect(p.present.map((d) => d.name)).toEqual(['adx-ok', 'adx-throttled']);
-    expect(p.absent).toHaveLength(1);
-    expect(p.absent[0].resourceId).toBe(gone.resourceId);
-    expect(p.absent[0].fromEnv).toContain('LOOM_SHIR_VMSS_NAME');
-    expect(p.absent[0].statement).toMatch(/EXCLUDED/);
-    expect(p.absent[0].statement).toMatch(/LOOM_SHIR_VMSS_NAME/);
-    expect(p.absent[0].statement).toMatch(/pause\s+proceeds without it/i);
-    // …and the absent row is NOT a read failure.
-    expect(p.readFailures.map((f) => f.name)).toEqual(['adx-throttled']);
-    expect(p.readFailures[0].kind).toBe('throttled');
-    expect(p.readFailures[0].throttled).toBe(true);
-  });
-
-  it('an UNREADABLE row STAYS in the population (indeterminate, fail-safe) — never silently excluded', () => {
-    const p = partitionDiscovery([throttled], [entryFor(throttled, ['LOOM_KUSTO_CLUSTER_NAME'])]);
-    expect(p.present).toHaveLength(1);
-    expect(p.absent).toEqual([]);
-    expect(p.readFailures).toHaveLength(1);
-  });
-
-  it('clean reads partition clean: everything present, nothing absent, nothing failed', () => {
-    const p = partitionDiscovery([ok], [entryFor(ok, ['LOOM_KUSTO_CLUSTER_NAME'])]);
-    expect(p.present).toEqual([ok]);
-    expect(p.absent).toEqual([]);
-    expect(p.readFailures).toEqual([]);
-  });
-});
 
 describe('#4243 createManifestTagReader — discovery goes through the 429-retrying transport', () => {
   it('GETs the resource by id with the per-type api-version through armGetWithRetry, and {} means "no tags"', async () => {
