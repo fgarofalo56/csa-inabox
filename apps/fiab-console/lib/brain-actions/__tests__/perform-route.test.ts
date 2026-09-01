@@ -413,7 +413,10 @@ describe('#4257 — scale-to-zero REFUSES a service the deploy declares non-scal
     // This is the request that, before this guard, would have staged and then —
     // on the operator's re-affirm — destroyed every materialized view in the
     // streaming tier. Deleting the `guardScalableToZero` call from perform.ts
-    // makes this spec go 200-staged where it demands 409.
+    // turns this spec RED — but on the GUARD NAME, not on a 200: the request
+    // falls through to the next refusal in the chain (`evidence-fresh`) rather
+    // than reaching the staging arm. The measured mutation receipt shows
+    // exactly that, and the earlier comment here overstated what it proves.
     snap.loadSnapshot.mockResolvedValue(risingwaveSnapshot());
     const res = await POST(
       postReq({

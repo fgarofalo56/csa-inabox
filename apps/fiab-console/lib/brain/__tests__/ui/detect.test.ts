@@ -284,3 +284,74 @@ describe('ranking — by derived saving, with unpriced findings kept honest', ()
     }
   });
 });
+
+// ---------------------------------------------------------------------------
+// #4257 item 2 — the by-design branch has a PRODUCTION caller
+// ---------------------------------------------------------------------------
+
+/**
+ * The review of #4261 measured that `nonScalableSubject` existed only in the
+ * detector and its own test, and that `unreachable-always-on` therefore still
+ * gave `loom-risingwave` `severity: 'high'` and a live cost figure on the
+ * operator's savings list — #4257 item 2 unmet, described as delivered.
+ *
+ * These arms are keyed to the DEFAULT context: no `nonScalableSubject` is
+ * supplied, exactly as `snapshot.ts` builds it in production. Delete the
+ * `?? declaredAlwaysOnReason` default in `detect.ts` and the first arm goes RED,
+ * because the subject falls back to the costed `severity: 'high'` shape.
+ */
+describe('a declared non-scalable subject is never proposed as a saving (#4257 item 2)', () => {
+  /** `loom-risingwave` — always-on, wired by nothing in this fixture. */
+  function rowsWithRisingwave() {
+    return [
+      ...estateRows(),
+      containerAppRow({ name: 'loom-risingwave', minReplicas: 1, maxReplicas: 1 }),
+    ];
+  }
+  const RISINGWAVE_ID = azureResourceNodeId(appId(SUB_A, 'loom-risingwave')) as string;
+
+  function findingFor(ctx: DetectContext) {
+    const run = unreachableAlwaysOn(ctx);
+    return run.result.findings.find((f) => f.subjects.includes(RISINGWAVE_ID as never));
+  }
+
+  it('THE CONTROL: without the guard the fixture DOES produce a costed high finding', () => {
+    // Proves the arm below is not vacuous — this subject really is on the
+    // unreachable-always-on list and really would be priced.
+    const base = ctxFromRows(rowsWithRisingwave());
+    const unguarded = findingFor({ ...base, nonScalableSubject: () => null });
+    expect(unguarded, 'the fixture must actually reach this subject').toBeDefined();
+    expect(unguarded!.severity).toBe('high');
+    expect(unguarded!.cost).toBeDefined();
+  });
+
+  it('THE WIRING: the DEFAULT context downgrades it — no cost figure, severity info', () => {
+    // No `nonScalableSubject` — this is the production shape `snapshot.ts` uses.
+    const guarded = findingFor(ctxFromRows(rowsWithRisingwave()));
+    expect(guarded, 'the finding is still REPORTED, just not priced').toBeDefined();
+    expect(guarded!.severity).toBe('info');
+    // A finding with no cost figure cannot rank as a saving. That is the
+    // observable outcome #4257 item 2 asks for.
+    expect(guarded!.cost).toBeUndefined();
+    expect(guarded!.title).toMatch(/BY DESIGN/);
+    expect(guarded!.remediation.summary).toMatch(/NO ACTION/);
+  });
+
+  it('the omitted cost is RECORDED as a skip, never silently dropped', () => {
+    const run = unreachableAlwaysOn(ctxFromRows(rowsWithRisingwave()));
+    const costSkip = run.result.skipped.find((s) => s.subject.includes('(cost)'));
+    expect(costSkip, 'an unpriced subject must say why on the record').toBeDefined();
+    expect(costSkip!.reason).toMatch(/ON PURPOSE/);
+  });
+
+  it('THE CONTROL: a performable subject is untouched — the guard is not universal', () => {
+    // `loom-capacity-broker` is the founding acceptance case and is MEASURED
+    // performable (its only wire is an empty value). If this went info/uncosted
+    // too, the guard would be a disabled feature rather than a safety check.
+    const broker = unreachableAlwaysOn(ctxFromRows()).result.findings.find((f) =>
+      f.subjects.includes(BROKER_ID as never),
+    );
+    expect(broker).toBeDefined();
+    expect(broker!.severity).toBe('high');
+  });
+});

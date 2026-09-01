@@ -57,6 +57,7 @@ import {
   guardWriteScope,
   resolvePerformSubject,
 } from './guards';
+import { resolveEstateId } from '@/lib/estate/pause-orchestrator';
 import { resolvePerformEntry } from './registry';
 import { refuseScaleToZero } from './scalability';
 import { recommendationStateStore, type RecommendationStateStore, type StateActor } from './state-store';
@@ -128,6 +129,13 @@ export interface PerformDeps {
 /** The env var the deploy sets to bind this console to one estate (#3922). */
 export const ESTATE_ID_ENV = 'LOOM_ESTATE_ID';
 
+/**
+ * The sentinel `resolveEstateId` returns when it cannot identify the estate.
+ * Kept as a named constant so the refusal below and the resolver cannot drift
+ * apart over a string literal.
+ */
+export const UNBOUND_ESTATE_ID = 'loom:unbound';
+
 export async function performRecommendation(
   req: PerformRequest,
   actor: StateActor,
@@ -153,19 +161,40 @@ export async function performRecommendation(
   // sufficient for a cleanup recommendation, because it cannot tell two Loom
   // estates apart". Refusing is the fail-closed direction — running permissive
   // would widen ownership on the one path that writes.
-  const estateId = (deps.estateId ?? process.env[ESTATE_ID_ENV] ?? '').trim();
-  if (estateId === '') {
+  //
+  // ── RESOLVED, NOT READ RAW (review of #4261, finding 3) ─────────────────
+  // This used to read `process.env.LOOM_ESTATE_ID` directly and refuse on
+  // empty. MEASURED: `LOOM_ESTATE_ID` is emitted by NO bicep module, so that
+  // read refused EVERY perform on every current deployment — the Perform UI
+  // would ship a button that can only 409, and the #4257 guard beneath it would
+  // never execute in production until the day someone set the var by hand.
+  //
+  // Worse, a raw read DIVERGES from `resolveEstateId`, which is the id the scan
+  // writes findings and graph versions under. An operator setting the var to
+  // anything other than `loom:<sub8>:<rg>` would scope this mutating rebuild to
+  // a different estate than the findings being acted on.
+  //
+  // So: the SAME resolver the rest of the Brain uses (`lib/brain/run/cli.ts`'s
+  // `resolveScanEstateId` is a tested-agreeing duplicate of this one), and the
+  // refusal fires on its explicit unbound sentinel. Still fail-closed — an
+  // estate that cannot be identified is still refused — but a deployment that
+  // knows its subscription and resource group is no longer refused for want of
+  // a value nothing sets.
+  const estateId = (deps.estateId ?? resolveEstateId(process.env)).trim();
+  if (estateId === '' || estateId === UNBOUND_ESTATE_ID) {
     return {
       kind: 'refused',
       refusal: {
         guard: 'estate-scoped',
         reason:
-          `REFUSED: ${ESTATE_ID_ENV} is not set on this console, so the fresh rebuild cannot be ` +
-          'scoped to one estate. Ownership would then be resolved permissively — any resource ' +
-          "carrying ANY non-empty 'loom-estate-id' value would read as owned, including a " +
-          'sibling Loom estate sharing these subscriptions. A mutation is not performed from an ' +
-          'unscoped rebuild. The deploy stamping the estate id is tracked as #3922. Nothing was ' +
-          'changed in Azure.',
+          `REFUSED: this console cannot resolve which estate it manages, so the fresh rebuild ` +
+          `cannot be scoped to one. ${ESTATE_ID_ENV} is unset AND the fallback derivation is ` +
+          'unavailable — that needs LOOM_SUBSCRIPTION_ID plus one of LOOM_ADMIN_RG / ' +
+          'LOOM_ACA_RG / LOOM_DLZ_RG. Ownership would otherwise be resolved permissively — any ' +
+          "resource carrying ANY non-empty 'loom-estate-id' value would read as owned, " +
+          'including a sibling Loom estate sharing these subscriptions. A mutation is not ' +
+          'performed from an unscoped rebuild. The deploy stamping the estate id is tracked as ' +
+          '#3922. Nothing was changed in Azure.',
       },
     };
   }

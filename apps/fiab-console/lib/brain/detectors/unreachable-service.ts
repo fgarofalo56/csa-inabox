@@ -53,6 +53,24 @@
  * injected rather than read here because everything in this directory is PURE —
  * the derivation lives in `lib/brain-actions/scalability.ts`, which explains why
  * its source cannot drift from the bicep.
+ *
+ * ── WHICH PATH ACTUALLY SUPPLIES IT, STATED PLAINLY (review of #4261) ──────
+ * The console's operator-facing detector is NOT this one. `snapshot.ts` runs
+ * `app/api/admin/brain/_lib/detect.ts`'s `unreachableAlwaysOn`, and THAT is
+ * where the same by-design branch is wired with a production default
+ * (`declaredAlwaysOnReason`) — it is the finding the perform registry keys on
+ * and the one that was ranking `loom-risingwave` as a costed saving.
+ *
+ * THIS detector runs in exactly one place: the `loom-brain-scan` CLI, via
+ * `lib/brain/run/scan.ts`. MEASURED — no console route imports `lib/brain/run`.
+ * That CLI is compiled by `lib/brain/run/tsconfig.cli.json`, which deliberately
+ * declares NO `paths` mapping and is executed as plain `node …/cli.js`, so an
+ * `@/`-aliased import anywhere in its emit closure is a COMPILE ERROR by
+ * design. `lib/brain-actions/scalability.ts` reaches the template through
+ * `@/lib/setup/user-arm-deploy`, so wiring the derivation into that closure
+ * would break the nightly scan. Until the reader is split into an alias-free
+ * module, the CLI report still prices these subjects: tracked, not claimed
+ * fixed. `nonScalableSubject` is the seam that fix will use.
  */
 
 import {

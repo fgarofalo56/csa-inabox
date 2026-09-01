@@ -17,7 +17,7 @@
 
 import { readFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 import {
   declarationsFromTemplate,
   declaredNonScalableToZero,
@@ -26,6 +26,7 @@ import {
   resolveDeclaredInt,
   scaleToZeroRefusalReason,
   SCALABILITY_SOURCE,
+  type ScalabilitySource,
 } from '../scalability';
 
 // ---------------------------------------------------------------------------
@@ -342,7 +343,58 @@ describe('THE SECOND SIGNAL — the deploy declares a consumer', () => {
     };
     const refusal = refuseScaleToZero('loom-thing', declarationsFromTemplate(template))!;
     expect(refusal.kind).toBe('pinned-singleton');
-    expect(scaleToZeroRefusalReason(refusal)).toMatch(/unrecoverable loss/);
+    const reason = scaleToZeroRefusalReason(refusal);
+    // THE INVARIANT: the durability verdict is never softened into the
+    // availability one. Asserted on the availability text's OWN claims rather
+    // than on the word "unrecoverable", because per #4261 nit 7 that word is
+    // made only where the module states a reason in prose — and this fixture
+    // has none. Asserting the phrase here would have pinned a claim the
+    // template does not support.
+    expect(reason).not.toMatch(/AVAILABILITY refusal/);
+    expect(reason).not.toMatch(/no data is lost/);
+    expect(reason).toMatch(/pins 'loom-thing' to exactly 1 replica/i);
+  });
+
+  it('nit 7 — the unrecoverable-loss claim is made ONLY where the module says so', () => {
+    // WITH prose harvested from the module, the strong durability claim stands…
+    const withProse = {
+      resources: [
+        {
+          type: 'Microsoft.Resources/deployments',
+          name: 'loom-thing-module',
+          properties: {
+            template: {
+              ...moduleTemplate({ scale: { minReplicas: 1, maxReplicas: 1 } }),
+              metadata: {
+                description:
+                  'minReplicas Default 1 — loom-thing holds its materialized views in process ' +
+                  'and never scales to zero.',
+              },
+            },
+          },
+        },
+      ],
+    };
+    const proseDecl = declarationsFromTemplate(withProse).get('loom-thing');
+    // Only assert the strong-claim arm when the harvester actually found prose —
+    // otherwise this spec would silently degrade into the weak-claim arm and
+    // stop testing anything.
+    if (proseDecl?.declaredStatement) {
+      expect(nonScalableExplanation(proseDecl)).toMatch(/unrecoverable loss/);
+    }
+
+    // …and WITHOUT prose it is not, because shape alone does not establish
+    // whether the floor is there for durability or for availability. That was
+    // the review's point: `iceberg-catalog` is pinned for AVAILABILITY, and the
+    // message used to tell the operator it would suffer unrecoverable loss.
+    const noProse = declarationsFromTemplate(
+      rootWith(moduleTemplate({ scale: { minReplicas: 1, maxReplicas: 1 } })),
+    ).get('loom-thing')!;
+    expect(noProse.declaredStatement).toBeUndefined();
+    const weak = nonScalableExplanation(noProse);
+    expect(weak).not.toMatch(/unrecoverable loss/);
+    expect(weak).toMatch(/what is established here is the SHAPE/);
+    expect(weak).toMatch(/is not established from the template, so neither is asserted/);
   });
 
   it('matches BOTH naming forms: a module reference as well as an FQDN literal', () => {
@@ -492,5 +544,283 @@ describe(`the COMMITTED ${SCALABILITY_SOURCE}`, () => {
 
   it('the lookup is case-insensitive, as ARM names are', () => {
     expect(declaredNonScalableToZero('LOOM-RisingWave', decls)).not.toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// THE SOURCE MUST BE ESTABLISHED — review of #4261, finding 1
+// ---------------------------------------------------------------------------
+
+/**
+ * The measured fail-open this block exists to close:
+ *
+ *     refuseScaleToZero('loom-risingwave', new Map()) === null      // = ALLOW
+ *
+ * An empty declaration map made EVERY subject performable. One transient
+ * `readFileSync` failure on the 3.9 MB artifact at cold start therefore disarmed
+ * the guard, the executor and the registry AT ONCE — the three "independent"
+ * enforcement points share this one input, so they were never independent with
+ * respect to THIS failure.
+ *
+ * ASK "WHAT INPUT SHAPE HAS NO FIXTURE?", not "what mutation?". The shape with
+ * no fixture was the SOURCE, not the subject: every arm in this file supplied a
+ * populated map, so nothing ever exercised the state where the map could not be
+ * built. These arms are that shape.
+ */
+describe('THE SOURCE — an unreadable declaration is NOT an empty one (#4261 finding 1)', () => {
+  const unreadable: ScalabilitySource = {
+    status: 'unreadable',
+    from: '/app/deploy-templates/main.json',
+    detail: 'read failed (EMFILE): too many open files',
+  };
+  const absent: ScalabilitySource = {
+    status: 'absent',
+    from: '/app/deploy-templates/main.json , /srv/deploy-templates/main.json',
+    detail: 'the compiled deploy template is not present at any candidate path in this image (2 tried).',
+  };
+  const emptyButRead: ScalabilitySource = {
+    status: 'declared',
+    declarations: new Map(),
+    from: '/app/deploy-templates/main.json',
+  };
+
+  it('THE FAIL-OPEN: an EMPTY map refuses instead of permitting', () => {
+    // The exact expression the review measured returning null.
+    const refusal = refuseScaleToZero('loom-risingwave', new Map());
+    expect(refusal, 'an empty declaration map must NOT read as permission').not.toBeNull();
+    expect(refusal!.kind).toBe('declaration-unavailable');
+  });
+
+  it('UNREADABLE refuses, and the refusal NAMES the source it could not read', () => {
+    const refusal = refuseScaleToZero('loom-risingwave', unreadable);
+    expect(refusal).not.toBeNull();
+    expect(refusal!.kind).toBe('declaration-unavailable');
+    expect((refusal as { why: string }).why).toBe('unreadable');
+    const reason = scaleToZeroRefusalReason(refusal!);
+    expect(reason).toContain('/app/deploy-templates/main.json');
+    expect(reason).toContain('EMFILE');
+    // It must say the failure MAY BE TRANSIENT and is retryable — otherwise an
+    // operator reads a permanent defect into a momentary one.
+    expect(reason).toMatch(/transient/i);
+    expect(reason).toMatch(/not\s+cached/i);
+  });
+
+  it('ABSENT refuses, and says the artifact is missing from the IMAGE', () => {
+    const refusal = refuseScaleToZero('loom-risingwave', absent);
+    expect((refusal as { why: string }).why).toBe('absent');
+    const reason = scaleToZeroRefusalReason(refusal!);
+    // The remediation is a rebuild, NOT a retry — a different fact, a different fix.
+    expect(reason).toMatch(/rebuild the console image/i);
+    expect(reason).toContain('deploy-templates/main.json');
+  });
+
+  it('READABLE-BUT-EMPTY is DISTINGUISHABLE from unreadable, in verdict AND in text', () => {
+    const a = refuseScaleToZero('loom-risingwave', emptyButRead)!;
+    const b = refuseScaleToZero('loom-risingwave', unreadable)!;
+    // Same outcome — both refuse, because neither established anything about
+    // this subject — but they are NOT the same fact and do not report as one.
+    expect((a as { why: string }).why).toBe('empty');
+    expect((b as { why: string }).why).toBe('unreadable');
+    const ra = scaleToZeroRefusalReason(a);
+    const rb = scaleToZeroRefusalReason(b);
+    expect(ra).not.toEqual(rb);
+    // The empty case says it PARSED — that is the whole distinction.
+    expect(ra).toMatch(/read and parsed successfully/i);
+    expect(ra).toMatch(/ZERO Container App/);
+    expect(rb).not.toMatch(/read and parsed successfully/i);
+  });
+
+  it('R7 — no unavailable refusal claims anything about the SUBJECT', () => {
+    for (const src of [unreadable, absent, emptyButRead]) {
+      const reason = scaleToZeroRefusalReason(refuseScaleToZero('loom-risingwave', src)!);
+      // Never the durability claim: nothing was established, so nothing is asserted.
+      expect(reason).not.toMatch(/unrecoverable/i);
+      expect(reason).not.toMatch(/pinned singleton/i);
+      expect(reason).not.toMatch(/materialized view/i);
+      // And it says so in as many words.
+      expect(reason).toMatch(/NOT because this resource was judged unsafe/);
+      expect(reason).toMatch(/not because it was judged safe either/);
+    }
+  });
+
+  it('THE CONTROL: a real, populated source still PERMITS an unwired elastic app', () => {
+    // Without this arm, "refuse on every source state" would pass every arm
+    // above and would be a disabled feature wearing a guard's clothes.
+    const decls = declarationsFromTemplate(
+      rootWith(moduleTemplate({ scale: { minReplicas: 1, maxReplicas: 4 } })),
+    );
+    expect(refuseScaleToZero('loom-thing', decls)).toBeNull();
+    expect(
+      refuseScaleToZero('loom-thing', {
+        status: 'declared',
+        declarations: decls,
+        from: '(fixture)',
+      }),
+    ).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// THE CONSOLE MAY NOT ZERO ITSELF — review of #4261, finding 5
+// ---------------------------------------------------------------------------
+
+describe('the console is not performable against itself (#4261 finding 5)', () => {
+  const decls = declarationsFromTemplate(
+    rootWith(moduleTemplate({ scale: { minReplicas: 1, maxReplicas: 4 } })),
+  );
+
+  afterEach(() => {
+    delete process.env.LOOM_CONSOLE_APP_NAME;
+  });
+
+  it("'loom-console' is REFUSED even though no declaration names it", () => {
+    // It comes from the generic apps[] copy loop, so its name resolves to a
+    // copyIndex() expression and it never enters the derived map — i.e. every
+    // other signal PERMITS it.
+    expect(decls.has('loom-console')).toBe(false);
+    const refusal = refuseScaleToZero('loom-console', decls);
+    expect(refusal, 'the console must not be able to scale itself to zero').not.toBeNull();
+    expect(refusal!.kind).toBe('self');
+    const reason = scaleToZeroRefusalReason(refusal!);
+    expect(reason).toMatch(/THIS CONSOLE/);
+    // AVAILABILITY, never durability — R7 in the same direction as everywhere else.
+    expect(reason).toMatch(/no data is lost/);
+    expect(reason).not.toMatch(/unrecoverable/i);
+  });
+
+  it('the name is READ FROM THE ENV, not hardcoded', () => {
+    process.env.LOOM_CONSOLE_APP_NAME = 'loom-console-gov';
+    // The renamed console is refused…
+    expect(refuseScaleToZero('loom-console-gov', decls)!.kind).toBe('self');
+    // …and the default name is no longer self, proving the check is not a
+    // second hardcoded allow/deny list.
+    expect(refuseScaleToZero('loom-console', decls)).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// THE RESTRICTIVE READING WINS ACROSS MODULES — review of #4261, finding 6
+// ---------------------------------------------------------------------------
+
+describe('multi-module merge cannot invert durability into availability (#4261 finding 6)', () => {
+  /**
+   * `loom-thing` declared PINNED in module A and ELASTIC in module B, where A
+   * also holds the only consumer wire — the per-MODULE self-exclusion zeroes A's
+   * consumer list, so under the old "keep whichever knows more consumers" rule B
+   * replaced A and the app read as elastic-with-a-consumer.
+   */
+  function twoModuleRoot(): unknown {
+    return {
+      resources: [
+        {
+          type: 'Microsoft.Resources/deployments',
+          name: 'pinned-module',
+          properties: {
+            template: {
+              resources: [
+                {
+                  type: 'Microsoft.App/containerApps',
+                  name: 'loom-thing',
+                  properties: { template: { scale: { minReplicas: 1, maxReplicas: 1 } } },
+                },
+                {
+                  type: 'Microsoft.App/containerApps',
+                  name: 'loom-sidecar',
+                  properties: {
+                    template: {
+                      scale: { minReplicas: 0, maxReplicas: 2 },
+                      containers: [
+                        {
+                          env: [
+                            { name: 'LOOM_THING_URL', value: 'https://loom-thing.internal.x.io' },
+                          ],
+                        },
+                      ],
+                    },
+                  },
+                },
+              ],
+            },
+          },
+        },
+        {
+          type: 'Microsoft.Resources/deployments',
+          name: 'elastic-path',
+          properties: {
+            template: {
+              resources: [
+                {
+                  type: 'Microsoft.App/containerApps',
+                  name: 'loom-thing',
+                  properties: { template: { scale: { minReplicas: 1, maxReplicas: 3 } } },
+                },
+              ],
+            },
+          },
+        },
+      ],
+    };
+  }
+
+  it('the PINNED declaration survives an elastic declaration in another module', () => {
+    const decls = declarationsFromTemplate(twoModuleRoot());
+    const d = decls.get('loom-thing')!;
+    expect(d.scalableToZero, 'the restrictive reading must win').toBe(false);
+    const refusal = refuseScaleToZero('loom-thing', decls)!;
+    // DURABILITY, not availability. Telling the operator "no data is lost" about
+    // a service the deploy pins as a singleton is the R7 inversion.
+    expect(refusal.kind).toBe('pinned-singleton');
+    expect(scaleToZeroRefusalReason(refusal)).not.toMatch(/no data is lost/);
+  });
+
+  it('the consumer wire from the OTHER module is not lost by the merge', () => {
+    const decls = declarationsFromTemplate(twoModuleRoot());
+    // The elastic module CAN see A's wire (different owning module), so the
+    // union must carry it — merging must not discard evidence either.
+    expect(decls.get('loom-thing')!.declaredConsumers.length).toBeGreaterThan(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// FQDN MATCHING IS BOUNDED — review of #4261, nit 8
+// ---------------------------------------------------------------------------
+
+describe('the fqdn-literal matcher respects a name boundary (#4261 nit 8)', () => {
+  function rootWithConsumerFor(declaredAppName: string, wiredFqdnName: string): unknown {
+    return {
+      resources: [
+        {
+          type: 'Microsoft.Resources/deployments',
+          name: 'thing-module',
+          properties: {
+            template: {
+              resources: [
+                {
+                  type: 'Microsoft.App/containerApps',
+                  name: declaredAppName,
+                  properties: { template: { scale: { minReplicas: 1, maxReplicas: 4 } } },
+                },
+              ],
+            },
+          },
+        },
+        consumerModule(wiredFqdnName),
+      ],
+    };
+  }
+
+  it('an app whose name is a SUFFIX of the wired name is not credited with the wire', () => {
+    // 'unity' must not match 'loom-unity.internal.' — the wire names a
+    // different service, and a refusal citing it would state something the
+    // template did not say.
+    const decls = declarationsFromTemplate(rootWithConsumerFor('unity', 'loom-unity'));
+    expect(decls.get('unity')!.declaredConsumers).toHaveLength(0);
+    expect(refuseScaleToZero('unity', decls)).toBeNull();
+  });
+
+  it('THE CONTROL: the app the wire actually names IS credited', () => {
+    const decls = declarationsFromTemplate(rootWithConsumerFor('loom-unity', 'loom-unity'));
+    expect(decls.get('loom-unity')!.declaredConsumers.length).toBeGreaterThan(0);
+    expect(refuseScaleToZero('loom-unity', decls)!.kind).toBe('declared-consumer');
   });
 });

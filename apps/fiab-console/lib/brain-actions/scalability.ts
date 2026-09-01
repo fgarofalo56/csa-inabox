@@ -78,7 +78,7 @@
  * a parameter, so every arm is testable with no filesystem and no Azure.
  */
 
-import { resolveDlzTemplateInline } from '@/lib/setup/user-arm-deploy';
+import { resolveDlzTemplateInlineOutcome } from '@/lib/setup/user-arm-deploy';
 
 /** The replica shape the deploy template declares for one Container App. */
 export interface DeclaredScale {
@@ -326,11 +326,33 @@ function consumersFor(
       out.push({ consumerModule: blob.ownerSymbol, via: 'module-reference' });
       continue;
     }
-    if (blob.text.includes(fqdnLiteral)) {
+    if (includesAtNameBoundary(blob.text, fqdnLiteral)) {
       out.push({ consumerModule: blob.ownerSymbol, via: 'fqdn-literal' });
     }
   }
   return out;
+}
+
+/**
+ * `text` contains `needle` starting at a NAME BOUNDARY (review of #4261, nit 8).
+ *
+ * A bare `includes` made the FQDN form a substring match, so a hypothetical app
+ * named `unity` would match `loom-unity.internal.` and be refused for a wire
+ * that names a different service. Over-refusal rather than under-refusal, so it
+ * was never a safety hole — but a refusal that cites the wrong wire states
+ * something it did not establish, which is the R7 problem in miniature.
+ *
+ * The boundary is "the character before the match is not one an app name could
+ * continue through". App names are lowercase alphanumerics and hyphens.
+ */
+function includesAtNameBoundary(text: string, needle: string): boolean {
+  let from = 0;
+  for (;;) {
+    const at = text.indexOf(needle, from);
+    if (at < 0) return false;
+    if (at === 0 || !/[a-z0-9-]/i.test(text.charAt(at - 1))) return true;
+    from = at + 1;
+  }
 }
 
 function declarationFor(
@@ -447,24 +469,53 @@ export function declarationsFromTemplate(
       const decl = declarationFor(r, b.tmpl, b.label, consumers);
       if (!decl) continue;
       const existing = out.get(decl.appName);
-      // Prefer a pinned declaration; otherwise keep whichever knows more consumers.
-      if (
-        !existing ||
-        (existing.scalableToZero && !decl.scalableToZero) ||
-        (existing.declaredConsumers.length === 0 && decl.declaredConsumers.length > 0)
-      ) {
-        out.set(decl.appName, decl);
-      }
+      // ── THE RESTRICTIVE READING WINS (review of #4261, finding 6) ────────
+      // MERGE, never replace. The previous rule replaced a PINNED declaration
+      // with an ELASTIC one whenever the elastic module knew more consumers,
+      // which inverts the two claims: the operator would be told "no data is
+      // lost" (availability) about a service another module pins as a singleton
+      // (durability). That is the exact R7 inversion this file exists to
+      // prevent, and the merge is the one place the invariant can live.
+      //
+      // Reachable only when one app is declared in two modules — MEASURED: not
+      // true on today's artifact, so this is latent, not live. It is fixed
+      // anyway, because "not reachable today" is not an invariant.
+      out.set(
+        decl.appName,
+        existing
+          ? {
+              // The pinned declaration wins the durability verdict and keeps its
+              // own prose; consumers UNION, so neither module's wires are lost.
+              ...(existing.scalableToZero ? decl : existing),
+              scalableToZero: existing.scalableToZero && decl.scalableToZero,
+              declaredConsumers: dedupeConsumers([
+                ...existing.declaredConsumers,
+                ...decl.declaredConsumers,
+              ]),
+            }
+          : decl,
+      );
     }
   }
   return out;
+}
+
+/**
+ * Union of declared consumers across modules, keyed by the WHOLE wire so two
+ * genuinely distinct wires are never collapsed into one (which would understate
+ * the count the refusal text reports).
+ */
+function dedupeConsumers(all: readonly DeclaredConsumer[]): readonly DeclaredConsumer[] {
+  const seen = new Map<string, DeclaredConsumer>();
+  for (const c of all) seen.set(JSON.stringify(c), c);
+  return [...seen.values()];
 }
 
 // ---------------------------------------------------------------------------
 // The runtime lookup
 // ---------------------------------------------------------------------------
 
-let declarationCache: ReadonlyMap<string, ScalabilityDeclaration> | undefined;
+let declarationCache: ScalabilitySource | undefined;
 
 /** Reset the derived-declaration cache (test-only). */
 export function __resetScalabilityCache(): void {
@@ -472,18 +523,95 @@ export function __resetScalabilityCache(): void {
 }
 
 /**
- * The declarations derived from the BUNDLED compiled template.
+ * Where the declarations came from, and whether they were ESTABLISHED at all.
  *
- * Returns an EMPTY map when the artifact is not present in this image. That is
- * reported by {@link declaredNonScalableToZero} returning null — i.e. "the
- * declaration could not be established" — never as "everything is scalable"
- * dressed up as a fact.
+ * ── WHY A MAP IS NOT ENOUGH (review of #4261, finding 1) ────────────────────
+ * `deployDeclaredScalability()` used to return a bare `ReadonlyMap` and an EMPTY
+ * map for every failure. Measured on that shape:
+ *
+ *     refuseScaleToZero('loom-risingwave', new Map()) === null      // = ALLOW
+ *
+ * An empty map made EVERY subject performable, so a single `readFileSync` throw
+ * on the 3.9 MB artifact at cold start silently disarmed all three "independent"
+ * enforcement points at once — they share this one input, so with respect to
+ * THIS failure they were never independent. The module comment claimed the case
+ * was "reported ... never as everything is scalable dressed up as a fact", but
+ * null and allow are the same value and the same outcome, so the reporting was
+ * indistinguishable from permission. That comment was itself the R7 error.
+ *
+ * Three states, kept apart, because they are three different facts:
+ *
+ *   `declared`    the artifact was read and parsed. The map is what it says.
+ *                 An EMPTY map here is still an anomaly (see `refuseScaleToZero`).
+ *   `absent`      the artifact is not in this image at all. ESTABLISHED.
+ *   `unreadable`  the read or the parse FAILED. NOTHING was established.
+ */
+export type ScalabilitySource =
+  | {
+      readonly status: 'declared';
+      readonly declarations: ReadonlyMap<string, ScalabilityDeclaration>;
+      readonly from: string;
+    }
+  | {
+      readonly status: 'absent';
+      readonly from: string;
+      readonly detail: string;
+    }
+  | {
+      readonly status: 'unreadable';
+      readonly from: string;
+      readonly detail: string;
+    };
+
+/**
+ * The declarations derived from the BUNDLED compiled template, CLASSIFIED.
+ *
+ * Only an established outcome is cached — `resolveDlzTemplateInlineOutcome()`
+ * does not cache `unreadable`, so a transient failure is retried on the next
+ * call and the guard RECOVERS rather than staying disarmed for the life of the
+ * process.
+ */
+export function deployDeclaredScalabilitySource(): ScalabilitySource {
+  if (declarationCache !== undefined) return declarationCache;
+  const outcome = resolveDlzTemplateInlineOutcome();
+  if (outcome.status === 'unreadable') {
+    // NOT cached, deliberately — this is the retryable one.
+    return {
+      status: 'unreadable',
+      from: outcome.file,
+      detail: outcome.detail,
+    };
+  }
+  declarationCache =
+    outcome.status === 'ok'
+      ? {
+          status: 'declared',
+          declarations: declarationsFromTemplate(outcome.inline.template),
+          from: outcome.file,
+        }
+      : {
+          status: 'absent',
+          from: outcome.candidates.join(' , '),
+          detail:
+            `the compiled deploy template is not present at any candidate path in this image ` +
+            `(${outcome.candidates.length} tried). It is COPY'd by apps/fiab-console/Dockerfile; ` +
+            'an image built without it cannot establish any scalability declaration.',
+        };
+  return declarationCache;
+}
+
+/**
+ * The declarations as a plain map — EMPTY when the source could not be read.
+ *
+ * Kept for callers that only want the population (the tests that count
+ * declarations, the population floor). NEVER use this to decide whether a
+ * destructive action is permitted: an empty map from here does not say which of
+ * the three {@link ScalabilitySource} states produced it. Use
+ * {@link refuseScaleToZero}, which does.
  */
 export function deployDeclaredScalability(): ReadonlyMap<string, ScalabilityDeclaration> {
-  if (declarationCache !== undefined) return declarationCache;
-  const inline = resolveDlzTemplateInline();
-  declarationCache = inline ? declarationsFromTemplate(inline.template) : new Map();
-  return declarationCache;
+  const source = deployDeclaredScalabilitySource();
+  return source.status === 'declared' ? source.declarations : new Map();
 }
 
 /**
@@ -492,7 +620,10 @@ export function deployDeclaredScalability(): ReadonlyMap<string, ScalabilityDecl
  * Null covers three different states on purpose — not declared at all, declared
  * elastic, and no template in the image. None of them is a licence; they only
  * mean this particular check has nothing to say, and the rest of the guard chain
- * still applies.
+ * still applies. THE SOURCE-UNAVAILABLE CASE IS NOT HANDLED HERE — this function
+ * answers "is there a durability declaration", and there is no declaration to
+ * return when the source could not be read. {@link refuseScaleToZero} is the
+ * load-bearing check and it refuses that case; every guard uses that one.
  */
 export function declaredNonScalableToZero(
   appName: string,
@@ -505,18 +636,36 @@ export function declaredNonScalableToZero(
 /**
  * The refusal text. One writer, so the guard, the executor and the detector all
  * say the same true thing about the same resource.
+ *
+ * ── THE DURABILITY CLAIM IS CONDITIONAL ON EVIDENCE (review of #4261, nit 7) ─
+ * Of the three pinned apps only `loom-risingwave` yields a `declaredStatement`;
+ * `loom-airflow` and `iceberg-catalog` are `undefined`, and `iceberg-catalog`'s
+ * real reason is AVAILABILITY ("the catalog is on the metadata hot path",
+ * `iceberg-catalog-aca.bicep:86`), not durability. Asserting "unrecoverable
+ * loss" from the replica SHAPE alone would be the same proxy-for-property
+ * substitution the predicate itself was corrected for, relocated into the
+ * message. So the unrecoverable-loss claim is made only where the module said so
+ * in its own words; otherwise the text says what shape actually establishes.
  */
 export function nonScalableExplanation(decl: ScalabilityDeclaration): string {
-  return (
+  const head =
     `'${decl.appName}' CANNOT be scaled to zero: ${decl.reason}` +
     (decl.declaredStatement
       ? ` The module states it in its own words: "${decl.declaredStatement}."`
       : '') +
-    ` Source: ${SCALABILITY_SOURCE_NOTE}` +
-    ' Scaling a pinned singleton to zero destroys whatever state its single replica holds in ' +
-    'process, and the next deploy re-asserts the declared floor anyway — so the write is ' +
-    'unrecoverable loss in exchange for drift, not a saving (deploy-integrity.md R2).'
-  );
+    ` Source: ${SCALABILITY_SOURCE_NOTE}`;
+  return decl.declaredStatement
+    ? head +
+        ' Scaling a pinned singleton to zero destroys whatever state its single replica holds in ' +
+        'process, and the next deploy re-asserts the declared floor anyway — so the write is ' +
+        'unrecoverable loss in exchange for drift, not a saving (deploy-integrity.md R2).'
+    : head +
+        ' The module states NO reason in prose, so what is established here is the SHAPE: the ' +
+        'deploy pins this app to a single replica that never scales to zero. Whether that floor ' +
+        'exists for durability (state held in process) or for availability (a hot path that must ' +
+        'not cold-start) is not established from the template, so neither is asserted. Either way ' +
+        'the next deploy re-asserts the floor, so the write buys drift, not a saving ' +
+        '(deploy-integrity.md R2).';
 }
 
 // ---------------------------------------------------------------------------
@@ -539,7 +688,16 @@ export function nonScalableExplanation(decl: ScalabilityDeclaration): string {
  */
 export type ScaleToZeroRefusal =
   | { readonly kind: 'pinned-singleton'; readonly declaration: ScalabilityDeclaration }
-  | { readonly kind: 'declared-consumer'; readonly declaration: ScalabilityDeclaration };
+  | { readonly kind: 'declared-consumer'; readonly declaration: ScalabilityDeclaration }
+  | { readonly kind: 'self'; readonly appName: string }
+  | {
+      readonly kind: 'declaration-unavailable';
+      /** WHICH failure. `unreadable` may be transient; `absent` is a property of the image. */
+      readonly why: 'unreadable' | 'absent' | 'empty';
+      /** The path(s) the answer was sought at — so the refusal NAMES its unreadable source. */
+      readonly from: string;
+      readonly detail: string;
+    };
 
 /**
  * ── WHY A SECOND SIGNAL EXISTS, AND WHY IT IS NOT THE REPLICA SHAPE ────────
@@ -593,16 +751,84 @@ export function declaredConsumerExplanation(decl: ScalabilityDeclaration): strin
 }
 
 /**
+ * The name of THIS console's own Container App.
+ *
+ * Duplicated from `lib/admin/env-apply.ts`'s `consoleAppName()` rather than
+ * imported — the same reason `lib/azure/aks-arm-client.ts` duplicates it: that
+ * module drags the whole env-write path into this one's import closure, and this
+ * file is imported by the pure-ish guard chain.
+ */
+function consoleOwnAppName(): string {
+  return (process.env.LOOM_CONSOLE_APP_NAME || 'loom-console').trim().toLowerCase();
+}
+
+/**
  * The composite verdict for `scale-to-zero`, or null when nothing objects.
  *
  * DURABILITY IS REPORTED FIRST when both apply — it is the stronger claim and
  * the one an operator must not have softened into "it would just go offline".
+ *
+ * ── THE SOURCE IS CHECKED BEFORE THE SUBJECT (review of #4261, finding 1) ───
+ * Fail CLOSED when the declaration source could not be established. "I could not
+ * read the deploy template" and "the deploy template says this app is elastic"
+ * are different facts and MUST NOT share the `null` return, because null is
+ * allow. The three unavailable reasons are kept apart in the verdict AND in the
+ * text, so an operator reading the refusal can tell a missing artifact from a
+ * transient IO failure from a template that parsed but declares nothing.
+ *
+ * `unreadable` is not cached upstream, so a transient failure followed by a good
+ * read RECOVERS — the guard is not disarmed for the life of the process.
  */
 export function refuseScaleToZero(
   appName: string,
-  declarations: ReadonlyMap<string, ScalabilityDeclaration> = deployDeclaredScalability(),
+  source: ScalabilitySource | ReadonlyMap<string, ScalabilityDeclaration> =
+    deployDeclaredScalabilitySource(),
 ): ScaleToZeroRefusal | null {
-  const decl = declarations.get(appName.trim().toLowerCase());
+  const resolved: ScalabilitySource =
+    source instanceof Map
+      ? {
+          status: 'declared',
+          declarations: source,
+          from: '(declarations supplied by the caller)',
+        }
+      : (source as ScalabilitySource);
+
+  if (resolved.status !== 'declared') {
+    return {
+      kind: 'declaration-unavailable',
+      why: resolved.status,
+      from: resolved.from,
+      detail: resolved.detail,
+    };
+  }
+  if (resolved.declarations.size === 0) {
+    return {
+      kind: 'declaration-unavailable',
+      why: 'empty',
+      from: resolved.from,
+      detail:
+        'the source was read and parsed successfully, and it yielded ZERO Container App ' +
+        'scalability declarations. That is not a clean estate — this console is itself a ' +
+        'Container App, and the committed artifact carries a double-digit number of static ' +
+        'declarations — so an empty result means the artifact is not the one expected here ' +
+        '(a stub, a truncation, or a schema change this parser no longer matches).',
+    };
+  }
+
+  // ── THE CONSOLE MAY NOT ZERO ITSELF (review of #4261, finding 5) ──────────
+  // The console comes from the generic `apps[]` copy loop, so its name resolves
+  // to a `copyIndex()` expression and it never enters the derived map — i.e. it
+  // is PERMITTED by every signal above. `unreachable-always-on` needs only
+  // "always-on and no resolved inbound configured edge", and the console is the
+  // consumer of everything and the consumee of little, so with #4258's 20-name
+  // env allowlist that is a plausible finding, not a contrived one. The outcome
+  // is an operator-triggered outage of the very surface they clicked from.
+  const subject = appName.trim().toLowerCase();
+  if (subject !== '' && subject === consoleOwnAppName()) {
+    return { kind: 'self', appName: subject };
+  }
+
+  const decl = resolved.declarations.get(subject);
   if (!decl) return null;
   if (!decl.scalableToZero) return { kind: 'pinned-singleton', declaration: decl };
   if (decl.declaredConsumers.length > 0) {
@@ -613,7 +839,60 @@ export function refuseScaleToZero(
 
 /** The operator-facing text for a refusal, keyed to WHICH claim it is making. */
 export function scaleToZeroRefusalReason(refusal: ScaleToZeroRefusal): string {
-  return refusal.kind === 'pinned-singleton'
-    ? nonScalableExplanation(refusal.declaration)
-    : declaredConsumerExplanation(refusal.declaration);
+  switch (refusal.kind) {
+    case 'pinned-singleton':
+      return nonScalableExplanation(refusal.declaration);
+    case 'declared-consumer':
+      return declaredConsumerExplanation(refusal.declaration);
+    case 'self':
+      return (
+        `'${refusal.appName}' is THIS CONSOLE. Scaling it to zero removes the surface the ` +
+        'recommendation was read from and the API that would have to bring it back, so the ' +
+        'action cannot be undone from where it was taken. The console is reachable by EXTERNAL ' +
+        'ingress — a browser, Front Door, a webhook — and none of those is an edge in this ' +
+        "graph, so 'zero inbound configured edges' establishes nothing about whether it is " +
+        'used. This is an AVAILABILITY refusal, not a durability one: no data is lost. Set ' +
+        'LOOM_CONSOLE_APP_NAME if this console runs under a different app name.'
+      );
+    case 'declaration-unavailable':
+      return declarationUnavailableExplanation(refusal);
+  }
+}
+
+/**
+ * The refusal text for a source that could not be established.
+ *
+ * The three reasons say DIFFERENT things, because they are different facts and
+ * they have different remediations. R7: none of them asserts that the subject is
+ * or is not scalable — that was never established, and saying otherwise is the
+ * error this whole arm exists to prevent.
+ */
+export function declarationUnavailableExplanation(
+  refusal: Extract<ScaleToZeroRefusal, { kind: 'declaration-unavailable' }>,
+): string {
+  const head =
+    'REFUSED because the deploy template could not be consulted, NOT because this resource was ' +
+    `judged unsafe — and not because it was judged safe either. Nothing was established about ` +
+    'this subject at all. A destructive scale-to-zero is refused rather than performed blind.';
+  const tail =
+    ' This refusal is fail-CLOSED on purpose: an unreadable input is not an empty one, and ' +
+    'treating "I could not read the declaration" as "there is no declaration" would let one bad ' +
+    'read permit every scale-to-zero on the estate (deploy-integrity.md R7).';
+  switch (refusal.why) {
+    case 'unreadable':
+      return (
+        `${head} The artifact at '${refusal.from}' EXISTS and could not be read or parsed: ` +
+        `${refusal.detail} This may be transient (IO pressure at cold start), so it is NOT ` +
+        'cached — retry the action and it will re-read. If it persists, the bundled template is ' +
+        `corrupt in this image and the image must be rebuilt.${tail}`
+      );
+    case 'absent':
+      return (
+        `${head} ${refusal.detail} Paths tried: '${refusal.from}'. Remediation: rebuild the ` +
+        "console image with the deploy-templates/main.json COPY intact — it is what every " +
+        `scalability declaration is derived from.${tail}`
+      );
+    case 'empty':
+      return `${head} Source: '${refusal.from}'. ${refusal.detail}${tail}`;
+  }
 }

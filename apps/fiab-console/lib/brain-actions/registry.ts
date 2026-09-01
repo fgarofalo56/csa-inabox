@@ -204,9 +204,13 @@ export function resolvePerformEntryForSubject(
 ): PerformRegistryEntry {
   const entry = resolvePerformEntry(detector);
   if (!entry.performable || entry.executor !== 'scale-to-zero') return entry;
-  // `null` covers "no declaration", "declared elastic with no declared
-  // consumer", and "no template in the image". Downgrading on anything else
-  // would be a disabled feature wearing a guard's clothes.
+  // `null` covers "not declared at all" and "declared elastic with no declared
+  // consumer" — the two states where this check genuinely has nothing to say.
+  // It NO LONGER covers "no template in the image": since the review of #4261
+  // an unestablished source returns a `declaration-unavailable` REFUSAL, not
+  // null, because null is allow and "I could not read the declaration" is not
+  // permission. Downgrading on anything else would be a disabled feature
+  // wearing a guard's clothes.
   if (refusal === null) return entry;
   return {
     detector: entry.detector,

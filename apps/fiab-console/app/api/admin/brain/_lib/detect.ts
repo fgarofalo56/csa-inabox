@@ -58,6 +58,10 @@ import {
   type SkippedSubject,
 } from '@/lib/brain/graph';
 import { idleAlwaysOnCost } from './cost-model';
+import {
+  refuseScaleToZero,
+  scaleToZeroRefusalReason,
+} from '@/lib/brain-actions/scalability';
 import type { ProvenanceCoverage, WireDetectorRun, WireFinding } from './wire';
 
 const CONTAINER_APPS = 'Microsoft.App/containerApps';
@@ -76,6 +80,38 @@ export interface DetectContext {
   readonly coverage: Readonly<Record<EdgeProvenance, ProvenanceCoverage>>;
   /** Node ids carrying a resolved `owns` edge. Empty means ownership is blind. */
   readonly owned: ReadonlySet<string>;
+  /**
+   * #4257 — why this subject's always-on floor is DECLARED, or null.
+   *
+   * Injected so the detector stays testable, and DEFAULTED to the real
+   * derivation ({@link declaredAlwaysOnReason}) so the production path gets it
+   * without any caller having to remember. An earlier revision of #4261 added
+   * the by-design branch with no default and no production caller, which shipped
+   * the whole thing dark — the review measured `loom-risingwave` still carrying
+   * `severity: high` and a live cost figure on the operator's savings list.
+   */
+  readonly nonScalableSubject?: (displayName: string) => string | null;
+}
+
+/**
+ * The real by-design predicate: the deploy's own declaration for this app.
+ *
+ * ── WHY `declaration-unavailable` IS DELIBERATELY NOT A DOWNGRADE ──────────
+ * `refuseScaleToZero` fails CLOSED when the compiled template cannot be read,
+ * so it refuses EVERY subject in that state. That is right for the WRITE path
+ * (`guardScalableToZero`, the executor) — refusing to act on an unestablished
+ * fact is the whole point of #4261 finding 1.
+ *
+ * It is wrong HERE. This is the READ path. An unreadable template establishes
+ * nothing about this resource, so claiming "always-on BY DESIGN" over it would
+ * assert exactly what was not established — the R7 error, pointed the other way.
+ * The finding stays costed and truthful; the perform path refuses it separately,
+ * which is where fail-closed belongs.
+ */
+export function declaredAlwaysOnReason(displayName: string): string | null {
+  const refusal = refuseScaleToZero(displayName);
+  if (refusal === null || refusal.kind === 'declaration-unavailable') return null;
+  return scaleToZeroRefusalReason(refusal);
 }
 
 function emptyResult(
@@ -205,10 +241,70 @@ export function unreachableAlwaysOn(ctx: DetectContext): DetectorRun {
   }
 
   const findings: Finding[] = [];
+  const byDesignOf = ctx.nonScalableSubject ?? declaredAlwaysOnReason;
   for (const node of subjects) {
     const why = ctx.graph.danglingEdgesIntendedFor(node.id);
     const inbound = ctx.graph.inboundEdgesByProvenance(node.id);
     const cost = idleAlwaysOnCost(node.scale, { displayName: node.displayName });
+
+    // ── #4257 item 2 — ALWAYS-ON BY DESIGN. Reported, never priced. ────────
+    //
+    // The subject IS always-on and IS unwired, so the finding stands. What must
+    // not stand is the COST recommendation: this floor is what the deploy
+    // declared, and "scale it to zero" against a runtime that holds state in one
+    // process is unrecoverable loss dressed up as a saving. `loom-risingwave`
+    // was the highest-value row on the live list for exactly this reason.
+    //
+    // `severity: 'info'` and NO `cost` key — a finding with no cost figure
+    // cannot rank as a saving, which is the observable outcome #4257 asks for.
+    const byDesign = byDesignOf(node.displayName);
+    if (byDesign !== null) {
+      skipped.push({
+        subject: `${node.displayName} (cost)`,
+        reason:
+          'finding emitted WITHOUT a cost figure ON PURPOSE: the always-on floor is DECLARED by ' +
+          `the deploy for this resource, so it is not a saving to propose. ${byDesign}`,
+      });
+      findings.push({
+        id: `${detector}:${node.id}`,
+        detector,
+        severity: 'info',
+        title: `${node.displayName} is always-on BY DESIGN and nothing wires to it`,
+        summary:
+          `'${node.displayName}' runs ${node.scale?.minReplicas ?? '?'} always-on replica(s) and the ` +
+          "graph resolves ZERO inbound 'configured' edges for it — but its always-on floor is " +
+          'DECLARED by the deploy, so this is an OBSERVATION, not a cost recommendation. ' +
+          byDesign,
+        subjects: [node.id],
+        evidence: {
+          nodes: [node.id],
+          edges: [],
+          query: `refuseScaleToZero('${node.displayName}') over the compiled deploy template`,
+          notes: [
+            `minReplicas=${node.scale?.minReplicas ?? 'NOT MEASURED'}, maxReplicas=${node.scale?.maxReplicas ?? 'NOT MEASURED'}`,
+            'ALWAYS-ON BY DESIGN — the deploy declares this replica floor, so removing it is a ' +
+              'template change, not an estate cleanup.',
+            byDesign,
+            'NO cost figure is attached, deliberately: an always-on floor the deploy asked for is ' +
+              'not waste, and pricing it here would rank a destructive change to a stateful ' +
+              "runtime at the top of the operator's savings list. That is exactly what #4257 " +
+              'reports having happened.',
+          ],
+        },
+        population: unreachable.population,
+        confidence: 'high',
+        remediation: proposal(
+          `NO ACTION — '${node.displayName}' is always-on by design.`,
+          `# '${node.displayName}' is declared non-scalable by the deploy.\n` +
+            `# ${byDesign}\n` +
+            '#\n' +
+            '# Do NOT scale it to zero. If the floor is genuinely wrong, the change belongs in\n' +
+            '# the bicep module that declares it — an out-of-band ARM write would be reverted by\n' +
+            '# the next deploy anyway (deploy-integrity.md R2 — drift, not a fix).\n',
+        ),
+      });
+      continue;
+    }
 
     const notes: string[] = [
       `zero inbound RESOLVED edges of provenance 'configured' (dangling edges are excluded ` +
