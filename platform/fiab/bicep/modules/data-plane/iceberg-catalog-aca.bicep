@@ -83,6 +83,30 @@ Optional keys:
   warehouse              Unity Catalog catalog name backing the Loom namespaces (default 'loom').
   catalogDbUrl           Postgres JDBC URL for durable catalog metadata. Empty => the
                          container's local (ephemeral) store; set this for production.
+                         REQUIRES catalogDbUser — see below. Supplied alone it is IGNORED
+                         and metadataDurabilityBlocked is reported true.
+  catalogDbUser          The PostgreSQL ROLE name the container authenticates as, which on
+                         an Entra-only server IS the Entra principal NAME of the identity
+                         in `uamiId`. MANDATORY whenever catalogDbUrl is set:
+                         apps/loom-unity/bin/loom-entrypoint.sh fails CLOSED on a URL with
+                         no user ("Postgres persistence is wired (LOOM_UNITY_DB_URL) but
+                         LOOM_UNITY_DB_USER is empty"), so a URL on its own does not
+                         produce a durable catalog — it produces a container that exits at
+                         boot and restarts forever. That identity must already hold a role
+                         on the server (data-plane/loom-unity-postgres.bicep sets its Entra
+                         administrators; the orchestrator passes the Console UAMI as an
+                         additionalAdministrator for exactly this reason).
+  catalogDbClientId      CLIENT id (appId) of that same identity, surfaced as
+                         AZURE_CLIENT_ID so the pgjdbc Entra authentication plugin knows
+                         WHICH user-assigned identity to mint a token for. A Container App
+                         carrying a user-assigned identity cannot infer it — with it unset
+                         the plugin asks for a SYSTEM-assigned token and the connection
+                         fails. Optional only in the sense that the entrypoint warns rather
+                         than dies; pass it.
+  catalogDbAuth          'entra' (DEFAULT — passwordless, matching the Loom-provisioned
+                         server's passwordAuth=Disabled) | 'password' (BYO server only, and
+                         then the password must arrive as a Key Vault secretRef, never
+                         inline).
   minReplicas            Default 1 — the catalog is on the metadata hot path (never scale-to-zero).
   maxReplicas            Default 1 (single-writer local metadata store; raise with Postgres).
   cpu / memory           Container resources (default 1.0 vCPU / 2Gi).
@@ -125,6 +149,19 @@ var lakeStorageAccountName = catalogConfig.lakeStorageAccountName
 var targetPort = int(catalogConfig.?targetPort ?? 8080)
 var warehouse = string(catalogConfig.?warehouse ?? 'loom')
 var catalogDbUrl = string(catalogConfig.?catalogDbUrl ?? '')
+// ── Durable metadata store — the THREE values, not one (#3110 §1, #3339) ─────
+// `catalogDbUrl` alone is NOT a durable catalog. apps/loom-unity/bin/
+// loom-entrypoint.sh `render_hibernate` fails CLOSED when LOOM_UNITY_DB_URL is
+// present and LOOM_UNITY_DB_USER is empty — it `die`s, the container exits, and
+// ACA restarts it forever. So this module treats the pair as ONE decision:
+// Postgres is wired only when both are present, and a half-supplied config
+// keeps the (honest, working) ephemeral store and REPORTS that it did rather
+// than pretending the URL took effect.
+var catalogDbUser = string(catalogConfig.?catalogDbUser ?? '')
+var catalogDbClientId = string(catalogConfig.?catalogDbClientId ?? '')
+var catalogDbAuth = string(catalogConfig.?catalogDbAuth ?? 'entra')
+var catalogDbWired = !empty(catalogDbUrl) && !empty(catalogDbUser)
+var catalogDbHalfWired = !empty(catalogDbUrl) && empty(catalogDbUser)
 var minReplicas = int(catalogConfig.?minReplicas ?? 1)
 var maxReplicas = int(catalogConfig.?maxReplicas ?? 1)
 var cpu = string(catalogConfig.?cpu ?? '1.0')
@@ -197,14 +234,26 @@ var envVars = concat(
   (authEnabled && !empty(consolePrincipalId)) ? [
     { name: 'LOOM_UNITY_CONSOLE_PRINCIPAL_ID', value: consolePrincipalId }
   ] : [],
-  empty(catalogDbUrl) ? [
+  catalogDbWired ? [
+    { name: 'LOOM_UNITY_DB_URL', value: catalogDbUrl }
+    // MANDATORY alongside the URL — see the catalogDbWired derivation. On an
+    // Entra-only server this string is BOTH the PostgreSQL role name and the
+    // Entra principal name the token must have been minted for.
+    { name: 'LOOM_UNITY_DB_USER', value: catalogDbUser }
+    { name: 'LOOM_UNITY_DB_AUTH', value: catalogDbAuth }
+  ] : [
     // No Postgres wired: the container uses its LOCAL metadata store. Catalog
     // metadata is then NOT durable across restarts — honestly surfaced as the
     // output note below rather than silently assumed.
     { name: 'LOOM_UNITY_DB_LOCAL', value: '1' }
-  ] : [
-    { name: 'LOOM_UNITY_DB_URL', value: catalogDbUrl }
-  ]
+  ],
+  // AZURE_CLIENT_ID is meaningful ONLY on the Postgres path (it is read by
+  // apps/loom-unity/java/…/EntraPostgresAuthPlugin.java and by nothing else in
+  // this image), so it is emitted only there — an unused identity hint on the
+  // ephemeral path would be a claim about a code path that is not running.
+  (catalogDbWired && !empty(catalogDbClientId)) ? [
+    { name: 'AZURE_CLIENT_ID', value: catalogDbClientId }
+  ] : []
 )
 
 // Pinned to the same Container Apps api-version the sibling ACA modules use
@@ -287,8 +336,11 @@ output appId string = app.id
 @description('The Unity Catalog catalog name backing the Loom Iceberg namespaces (LOOM_ICEBERG_CATALOG_WAREHOUSE).')
 output warehouse string = warehouse
 
-@description('True when catalog metadata is durable (Postgres wired). False => the local store resets on restart; wire catalogConfig.catalogDbUrl for production.')
-output metadataDurable bool = !empty(catalogDbUrl)
+@description('True when catalog metadata is durable — BOTH catalogConfig.catalogDbUrl and catalogConfig.catalogDbUser supplied. False => the container runs its local H2 store and every restart (a roll, not only a scale-to-zero) discards the warehouse, its namespaces and every grant.')
+output metadataDurable bool = catalogDbWired
+
+@description('TRUE when catalogConfig.catalogDbUrl was supplied WITHOUT catalogConfig.catalogDbUser. The URL was deliberately NOT emitted: the loom-unity entrypoint fails closed on that pair and the container would restart forever, so this module kept the working ephemeral store instead. Supply catalogDbUser (the Entra principal NAME of the identity in uamiId, which must hold a role on the server) to complete the wiring. Emitted so a deploy receipt can assert the difference between "no Postgres" and "Postgres asked for and refused".')
+output metadataDurabilityBlocked bool = catalogDbHalfWired
 
 @description('svc-loom-unity-authz — TRUE when the catalog enforces Entra bearer authorization (authMode=entra). FALSE means catalogConfig.authMode=disabled was explicitly chosen and anything on the CAE VNet can read AND mutate catalog metadata.')
 output authorizationEnforced bool = authEnabled
