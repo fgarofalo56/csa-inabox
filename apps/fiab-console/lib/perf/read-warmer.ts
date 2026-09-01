@@ -49,7 +49,9 @@
  *   3. CIRCUIT BREAKER — the FIRST 429 aborts the whole cycle (it does not
  *      "log and continue") and puts that subscription into a cooldown that is
  *      never shorter than the Retry-After ARM asked for, escalating while
- *      throttling persists.
+ *      throttling persists. The breaker trips on a warm read that THREW a 429
+ *      AND on one that RESOLVED while carrying ARM's throttle words in its
+ *      payload — see `findSwallowedThrottle` and the measurement below.
  *   4. OBSERVABILITY — `getReadWarmerState()` reports what ran, what was
  *      skipped and WHY, so the next incident is diagnosable without a live log
  *      pull. Because nothing SERVES that accessor yet (see the scope note
@@ -63,25 +65,54 @@
  *
  * ── MEASURED LIMIT OF THE BREAKER — READ THIS BEFORE TRUSTING IT ────────────
  *
- * The breaker can only fire on a warm read that THROWS. Measured 2026-09-01 by
- * driving the real clients with an ARM transport that 429s everything:
+ * STATE THE TRANSPORT OR THE RESULT IS NOT A FACT. An earlier revision of this
+ * block asserted flatly that `getDiagnosticsCoverage()` throws and "the breaker
+ * works". A post-merge review (issue #4244, 2026-09-01) showed that conclusion
+ * held only for the transport it was measured on, which is exactly the R7
+ * mistake this file is about. Both measurements, each with its transport named:
  *
- *   listResourceHealth()    -> did NOT throw; resolved {}      <-- BLIND SPOT
- *   getDiagnosticsCoverage() -> threw ('throttled')            <-- breaker works
+ *   TOTAL 429 (every ARM call 429s, incl. the `listResources()` inventory GET):
+ *     listResourceHealth()      -> did NOT throw; resolved {}
+ *     getDiagnosticsCoverage()  -> THREW ('throttled')
  *
- * `monitor-client.listResourceHealth` catches bare (monitor-client.ts, the
+ *   PARTIAL 429 (inventory SUCCEEDS, the per-resource `diagnosticSettings` GETs
+ *   429 — the live shape behind `confirmed: 2 of 3` on 2026-09-01):
+ *     getDiagnosticsCoverage()  -> did NOT throw; resolved a normal array whose
+ *                                  rows carry `note: "ARM GET … failed 429: …
+ *                                  SubscriptionRequestsThrottled …"`
+ *
+ * `_getDiagnosticsCoverage` (monitor-client.ts) catches per resource and returns
+ * `{...base, note: message}` for any status that is not 404/400/405, so a 429
+ * becomes a field instead of a failure. `listResourceHealth` catches bare (the
  * `resourceHealthViaResourceGraph` -> `resourceHealthViaCrawl` fallback) and
- * degrades to `{}` rather than propagating. So `monitor/health` — the HEAVIEST
- * warm target, a whole-subscription Resource Health walk whose 45s client memo
- * is always expired by the 10-minute warm interval — cannot trip this breaker,
- * and on a 429 from the cheap Resource Graph path it ESCALATES to the more
- * expensive paginated crawl, i.e. it spends MORE ARM budget precisely while ARM
- * is throttling. That is the most likely single source of the measured ~1,700
- * lines / 30 min, and it is NOT fixed here: the repair belongs in
- * `monitor-client.ts` (propagate 429 instead of swallowing it, and do not
- * escalate to the crawl on a throttle), which is outside this change's scope.
- * Tracked as a follow-up on #4244. `budget` + `pacing` DO still bound that
- * target; only the breaker is blind to it.
+ * degrades to `{}`.
+ *
+ * WHAT THIS FILE CAN AND CANNOT DO ABOUT THAT, stated precisely:
+ *
+ *   • CLOSED HERE — a resolved payload that still quotes ARM's own throttle
+ *     words IS positive evidence that ARM throttled this warm read, so
+ *     `findSwallowedThrottle` scans each resolved result (bounded) and trips the
+ *     same breaker. That covers the PARTIAL-429 diagnostics shape above, which
+ *     the review measured as the production one.
+ *   • NOT CLOSED HERE — `listResourceHealth` resolving `{}` destroys the
+ *     evidence, so nothing downstream can recover it, and an empty estate is
+ *     indistinguishable from a throttled one. Worse, a 429 on the cheap Resource
+ *     Graph path makes it ESCALATE to the more expensive paginated crawl, i.e.
+ *     spend MORE ARM budget while ARM is saying stop. That repair belongs in
+ *     `monitor-client.ts` (propagate the 429; do not escalate on a throttle) and
+ *     is outside this file's ownership — tracked on #4244.
+ *   • ALSO NOT CLOSED HERE — the scan runs AFTER a target resolves, so the
+ *     amplification WITHIN one target (diagnostics' unbounded `Promise.all` of
+ *     one ARM GET per estate resource) still happens once. What the scan stops
+ *     is the rest of the cycle, and every cycle for the cooldown's duration.
+ *
+ * `budget` + `pacing` bound every target unconditionally, including the two the
+ * breaker cannot see.
+ *
+ * Note for anyone reaching for `armGetWithRetry` / `ArmThrottledError`
+ * (arm-client.ts, added for #4243): monitor-client and defender-client do NOT
+ * use arm-client — they carry their own transport in `lib/azure/monitor-arm.ts`
+ * over `fetchWithTimeout` — so that helper covers NO warm target today.
  */
 
 import { buildScopedCacheKey, getOrComputeCached, resolveBackendTtl } from '@/lib/azure/query-result-cache';
@@ -176,6 +207,18 @@ const ARM_THROTTLE_CODES = [
   'TooManyRequests',
 ];
 
+/**
+ * Does this text state, in ARM's own words, that ARM throttled a read?
+ *
+ * Positive evidence only: the `ARM GET <path> failed 429:` shape
+ * `arm-client.jsonOrThrow` produces, or a named ARM throttle code. The word
+ * "throttled" on its own is NOT evidence — `ComputeBudgetExceededError`'s text
+ * contains it and is a local timeout, not an ARM verdict (R7).
+ */
+function statesArmThrottle(text: string): boolean {
+  return /\bfailed 429\b/.test(text) || ARM_THROTTLE_CODES.some((code) => text.includes(code));
+}
+
 export type WarmFailureKind = 'throttled' | 'other';
 
 export interface WarmFailure {
@@ -208,10 +251,7 @@ export function classifyWarmFailure(err: unknown): WarmFailure {
     ?? readNumber(e['statusCode'])
     ?? readNumber((e['response'] as Record<string, unknown> | undefined)?.['status']);
 
-  const throttled =
-    status === 429
-    || /\bfailed 429\b/.test(message)
-    || ARM_THROTTLE_CODES.some((code) => message.includes(code));
+  const throttled = status === 429 || statesArmThrottle(message);
 
   if (!throttled) return { kind: 'other', retryAfterMs: null, message };
 
@@ -230,6 +270,60 @@ export function classifyWarmFailure(err: unknown): WarmFailure {
     return { kind: 'throttled', retryAfterMs: Math.max(0, Number(header[1]) * 1000), message };
   }
   return { kind: 'throttled', retryAfterMs: null, message };
+}
+
+// ---------------------------------------------------------------------------
+// Swallowed-throttle detection (#4244 post-merge review)
+// ---------------------------------------------------------------------------
+
+/**
+ * Node ceiling for the payload scan. The heaviest warm payload is one row per
+ * estate resource, so a few thousand nodes is the realistic worst case; the cap
+ * exists so an unexpectedly huge result can never turn a background optimization
+ * into a CPU cost. Hitting the cap means "found no evidence in the part I read",
+ * which is reported as no evidence — the honest reading (R7).
+ */
+const RESULT_SCAN_MAX_NODES = 20_000;
+
+/**
+ * Find ARM's own throttle words inside a warm read's RESOLVED value.
+ *
+ * WHY this exists: several warm targets' clients catch a 429 and degrade rather
+ * than propagate, so `runTarget` resolves and the breaker never sees a failure.
+ * Measured shape (monitor-client `_getDiagnosticsCoverage`, partial-429
+ * transport): the row resolves as `{ …, note: "ARM GET … failed 429: {…
+ * SubscriptionRequestsThrottled …}" }`. That note is ARM's verdict, carried
+ * verbatim — treating it as evidence asserts nothing the payload did not say.
+ *
+ * Returns the first matching string (truncated) or null. Bounded in nodes and
+ * cycle-safe, so it cannot diverge on a self-referential result.
+ */
+export function findSwallowedThrottle(value: unknown): string | null {
+  const seen = new WeakSet<object>();
+  const stack: unknown[] = [value];
+  let visited = 0;
+  while (stack.length > 0 && visited < RESULT_SCAN_MAX_NODES) {
+    const node = stack.pop();
+    visited += 1;
+    if (typeof node === 'string') {
+      if (statesArmThrottle(node)) return node.slice(0, 600);
+      continue;
+    }
+    if (node === null || typeof node !== 'object') continue;
+    if (seen.has(node)) continue;
+    seen.add(node);
+    if (Array.isArray(node)) {
+      for (const item of node) stack.push(item);
+      continue;
+    }
+    // Keys can carry the evidence too (e.g. a map keyed by error text), and are
+    // far cheaper to test than the values, so test both.
+    for (const [k, v] of Object.entries(node as Record<string, unknown>)) {
+      if (statesArmThrottle(k)) return k.slice(0, 600);
+      stack.push(v);
+    }
+  }
+  return null;
 }
 
 // ---------------------------------------------------------------------------
@@ -303,6 +397,17 @@ export interface WarmTarget {
    * which is the safe direction.
    */
   budgetKey?: string;
+  /**
+   * Opt OUT of `findSwallowedThrottle` for a target whose payload legitimately
+   * QUOTES upstream error text it did not itself receive — for that target an
+   * ARM throttle string is somebody else's history, not this read's verdict, so
+   * scanning it would assert a cause that was not established (R7).
+   *
+   * Default is opt-IN (scan) on purpose: a false positive costs one skipped warm
+   * cycle, which is free because warming is an optimization; a false negative
+   * costs the incident this file exists for. Set this only with a stated reason.
+   */
+  resultQuotesUpstreamErrors?: boolean;
 }
 
 async function targets(): Promise<WarmTarget[]> {
@@ -365,6 +470,10 @@ async function targets(): Promise<WarmTarget[]> {
       label: 'monitor/activities default',
       // Mirrors the route's DEFAULT param set (days=30, limit=200,
       // synapse on, arm off) — the shape the Monitor page first-paints with.
+      // Rows carry ErrorCode/ErrorMessage copied out of pipeline-run history, so
+      // an ARM throttle string here is a past pipeline's failure, not this
+      // read's — the only target where the payload scan could misattribute.
+      resultQuotesUpstreamErrors: true,
       key: buildScopedCacheKey('monitor/activities', { days: 30, limit: 200, includeSynapse: true, includeArmLog: false }),
       modelId: 'monitor',
       ttlMs: 3 * 60_000,
@@ -587,6 +696,27 @@ export function createReadWarmer(deps: ReadWarmerDeps = {}): ReadWarmer {
       let executed = 0;
       let aborted = false;
       const cleanBuckets = new Set<string>();
+
+      /**
+       * ARM said stop; the warmer stops. Shared by BOTH ways a throttle can
+       * reach us — the read that THREW, and the read that RESOLVED carrying
+       * ARM's throttle words. `origin` names which was actually observed, so
+       * the recorded state never implies a failure that did not occur (R7).
+       */
+      const trip = (t: WarmTarget, id: string, b: BucketState, failure: WarmFailure, origin: string): void => {
+        b.consecutiveThrottles += 1;
+        const cooldown = cooldownMsFor(failure.retryAfterMs, b.consecutiveThrottles);
+        b.cooldownUntil = now() + cooldown;
+        b.lastThrottle = { at: now(), label: t.label, retryAfterMs: failure.retryAfterMs, message: failure.message };
+        const asked = failure.retryAfterMs === null
+          ? 'ARM did not state a Retry-After, so the configured minimum applies'
+          : `ARM asked for ${Math.round(failure.retryAfterMs / 1000)}s`;
+        const detail = `${origin}; ${asked}. Aborting the cycle and holding subscription ${id} out until ${iso(b.cooldownUntil)}.`;
+        report.abortedBy = { label: t.label, retryAfterMs: failure.retryAfterMs, cooldownUntil: iso(b.cooldownUntil) };
+        record('throttled', t.label, detail);
+        warn(`[read-warmer] ${t.label} throttled: ${detail}`);
+      };
+
       for (const t of list) {
         if (aborted) {
           report.skipped.push({ label: t.label, reason: 'cycle aborted after ARM throttled an earlier read' });
@@ -617,7 +747,22 @@ export function createReadWarmer(deps: ReadWarmerDeps = {}): ReadWarmer {
         try {
           // bypass:true recomputes + rewrites the tiers even when a fresh copy
           // exists — the warmer's job is keeping copies YOUNG, not reading them.
-          await runTarget(t);
+          const result = await runTarget(t);
+          // A client that CAUGHT its own 429 resolves normally, and ARM's
+          // verdict survives ONLY inside the payload (monitor-client's
+          // `note: "ARM GET … failed 429: …"`). Reading it is what makes the
+          // breaker cover the partial-429 shape measured live on 2026-09-01.
+          const swallowed = t.resultQuotesUpstreamErrors ? null : findSwallowedThrottle(result);
+          if (swallowed) {
+            const failure = classifyWarmFailure(new Error(swallowed));
+            report.failed.push({ label: t.label, kind: failure.kind, message: failure.message });
+            trip(
+              t, id, b, failure,
+              'this warm read RESOLVED, but its payload carries ARM throttle text, so its client swallowed a 429',
+            );
+            aborted = true;
+            continue;
+          }
           report.succeeded += 1;
           cleanBuckets.add(id);
           record('warmed', t.label, `warmed (${b.readsUsed}/${budget.maxReadsPerWindow} of the window budget for ${id})`);
@@ -630,17 +775,7 @@ export function createReadWarmer(deps: ReadWarmerDeps = {}): ReadWarmer {
             continue;
           }
           // ── The circuit breaker. ARM said stop; the warmer stops. ──
-          b.consecutiveThrottles += 1;
-          const cooldown = cooldownMsFor(failure.retryAfterMs, b.consecutiveThrottles);
-          b.cooldownUntil = now() + cooldown;
-          b.lastThrottle = { at: now(), label: t.label, retryAfterMs: failure.retryAfterMs, message: failure.message };
-          const asked = failure.retryAfterMs === null
-            ? 'ARM did not state a Retry-After, so the configured minimum applies'
-            : `ARM asked for ${Math.round(failure.retryAfterMs / 1000)}s`;
-          const detail = `ARM throttled this warm read; ${asked}. Aborting the cycle and holding subscription ${id} out until ${iso(b.cooldownUntil)}.`;
-          report.abortedBy = { label: t.label, retryAfterMs: failure.retryAfterMs, cooldownUntil: iso(b.cooldownUntil) };
-          record('throttled', t.label, detail);
-          warn(`[read-warmer] ${t.label} throttled: ${detail}`);
+          trip(t, id, b, failure, 'ARM throttled this warm read');
           aborted = true;
         }
       }

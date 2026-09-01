@@ -15,6 +15,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   classifyWarmFailure,
   createReadWarmer,
+  findSwallowedThrottle,
   resolveReadWarmerBudget,
   type ReadWarmerBudget,
   type WarmTarget,
@@ -41,6 +42,32 @@ function armThrottledError(retryAfterSeconds?: number): Error {
   const e = new Error('ARM GET /x was throttled (429) and stayed throttled after 3 attempt(s).');
   e.name = 'ArmThrottledError';
   return Object.assign(e, { status: 429, ...(retryAfterSeconds !== undefined ? { retryAfterSeconds } : {}) });
+}
+
+/**
+ * The PARTIAL-429 production shape, measured by the #4244 post-merge review:
+ * `listResources()` (the inventory GET) SUCCEEDS, then the per-resource
+ * `diagnosticSettings` GETs are throttled. `_getDiagnosticsCoverage`
+ * (monitor-client.ts) catches per resource and returns `{...base, note: message}`
+ * for any status that is not 404/400/405 — so the read RESOLVES with a normal
+ * array and ARM's 429 survives only as a field. This is the exact object shape
+ * that function builds, not a convenient stand-in.
+ */
+function diagnosticsCoveragePartial429(): unknown {
+  const base = (name: string, type: string) => ({
+    id: `/subscriptions/e093f4fd-0000-0000-0000-000000000000/resourceGroups/rg-loom/providers/${type}/${name}`,
+    name,
+    type,
+    resourceGroup: 'rg-loom',
+    supported: true,
+    routesToLoomLaw: false,
+    settingNames: [] as string[],
+  });
+  return [
+    { ...base('stloomk6mvh5', 'Microsoft.Storage/storageAccounts'), routesToLoomLaw: true, settingNames: ['loom-diag'] },
+    { ...base('aasloomk6mvh5sm6z7do', 'Microsoft.AnalysisServices/servers'), note: armThrottled().message },
+    { ...base('synloomk6mvh5', 'Microsoft.Synapse/workspaces'), note: armThrottled().message },
+  ];
 }
 
 function fakeClock(start = Date.UTC(2026, 8, 1, 5, 57, 0)) {
@@ -411,14 +438,16 @@ describe('read-warmer state is self-diagnosing', () => {
   });
 
   /**
-   * KNOWN GAP, measured 2026-09-01 — pinned so nobody reads the breaker as
-   * universal. `monitor-client.listResourceHealth()` swallows a total ARM 429
-   * and resolves `{}`, so the heaviest warm target cannot trip the breaker.
-   * The repair belongs in monitor-client.ts (out of scope here); this spec
-   * states the CURRENT contract truthfully rather than implying coverage the
-   * code does not have.
+   * KNOWN GAP that REMAINS after the payload scan, measured 2026-09-01 —
+   * pinned so nobody reads the breaker as universal.
+   * `monitor-client.listResourceHealth()` catches bare and resolves `{}`, which
+   * DESTROYS the evidence: an empty estate and a throttled one are byte-identical
+   * at this boundary, so no downstream reader can recover ARM's verdict. The
+   * repair belongs in monitor-client.ts (out of this file's ownership). This spec
+   * states the CURRENT contract truthfully rather than implying coverage the code
+   * does not have.
    */
-  it('KNOWN GAP: a target that SWALLOWS its 429 and resolves cannot trip the breaker', async () => {
+  it('KNOWN GAP: a target that swallows its 429 and resolves NO evidence cannot trip the breaker', async () => {
     const clock = fakeClock();
     // Exactly what listResourceHealth does under a total ARM 429: resolve {}.
     const swallows = vi.fn(async () => ({ statuses: [] }));
@@ -437,6 +466,29 @@ describe('read-warmer state is self-diagnosing', () => {
     expect(w.state().buckets[0].consecutiveThrottles).toBe(0);
     // The budget and pacing DO still bound it — that is what remains load-bearing.
     expect(w.state().buckets[0].readsUsedInWindow).toBe(3);
+  });
+
+  it('a swallowed throttle is reported as a THROTTLE, not a success', async () => {
+    const clock = fakeClock();
+    const w = createReadWarmer({
+      now: clock.now,
+      sleep: clock.sleep,
+      loadTargets: async () => fakeTargets(3),
+      runTarget: async () => diagnosticsCoveragePartial429(),
+      budget: { ...BUDGET, maxReadsPerWindow: 100 },
+      warn: () => {},
+    });
+
+    const r = await w.runCycle();
+    expect(r.succeeded).toBe(0);
+    expect(r.failed).toEqual([
+      expect.objectContaining({ label: 'target-0', kind: 'throttled' }),
+    ]);
+    const detail = w.state().recentEvents.find((e) => e.kind === 'throttled')?.detail ?? '';
+    // R7: the state says the read RESOLVED. It must not claim the read threw.
+    expect(detail).toContain('RESOLVED');
+    expect(detail).toContain('swallowed a 429');
+    expect(detail).not.toContain('ARM throttled this warm read;');
   });
 
   it('a re-entrant cycle is refused rather than doubling the ARM spend', async () => {
@@ -460,5 +512,171 @@ describe('read-warmer state is self-diagnosing', () => {
     release?.();
     await inFlight;
     expect(runTarget).toHaveBeenCalledTimes(2);
+  });
+});
+
+// ── The PARTIAL-429 shape (#4244 post-merge review) ─────────────────────────
+//
+// The merged breaker could only fire on a warm read that THREW. The review
+// measured the live shape: the read RESOLVES and ARM's 429 survives only inside
+// the payload, so the breaker never tripped and the cycle marched on through the
+// rest of its targets. These specs drive that exact shape.
+
+describe('read-warmer breaks on a SWALLOWED 429', () => {
+  it('aborts the cycle on a payload that quotes ARM throttle text (it does not "succeed")', async () => {
+    const clock = fakeClock();
+    const runTarget = vi.fn(async () => diagnosticsCoveragePartial429());
+    const w = createReadWarmer({
+      now: clock.now,
+      sleep: clock.sleep,
+      loadTargets: async () => fakeTargets(5),
+      runTarget: runTarget,
+      budget: { ...BUDGET, maxReadsPerWindow: 100 },
+      warn: () => {},
+    });
+
+    const r = await w.runCycle();
+
+    expect(runTarget).toHaveBeenCalledTimes(1); // NOT 5
+    expect(r.succeeded).toBe(0);
+    expect(r.abortedBy?.label).toBe('target-0');
+    expect(r.skipped).toHaveLength(4);
+    for (const s of r.skipped) {
+      expect(s.reason).toContain('cycle aborted after ARM throttled');
+    }
+  });
+
+  it("honors the Retry-After the SWALLOWED payload quoted, not just the configured floor", async () => {
+    const clock = fakeClock();
+    const w = createReadWarmer({
+      now: clock.now,
+      sleep: clock.sleep,
+      loadTargets: async () => fakeTargets(4),
+      runTarget: async () => diagnosticsCoveragePartial429(),
+      // Floor deliberately SHORTER than the 10s the payload quotes, so only
+      // "never shorter than Retry-After" can make this assertion pass.
+      budget: { ...BUDGET, maxReadsPerWindow: 100, minCooldownMs: 1_000, maxCooldownMs: 2_000 },
+      warn: () => {},
+    });
+
+    await w.runCycle();
+    const b = w.state().buckets[0];
+    expect(b.lastThrottle?.retryAfterMs).toBe(10_000);
+    expect(Date.parse(b.cooldownUntil as string) - clock.now()).toBeGreaterThanOrEqual(10_000);
+  });
+
+  it('holds the subscription out of the NEXT cycles too, not just this one', async () => {
+    const clock = fakeClock();
+    let throttled = true;
+    const runTarget = vi.fn(async () => (throttled ? diagnosticsCoveragePartial429() : {}));
+    const w = createReadWarmer({
+      now: clock.now,
+      sleep: clock.sleep,
+      loadTargets: async () => fakeTargets(4),
+      runTarget: runTarget,
+      budget: { ...BUDGET, maxReadsPerWindow: 100, minCooldownMs: 60_000, maxCooldownMs: 240_000 },
+      warn: () => {},
+    });
+
+    await w.runCycle();
+    expect(runTarget).toHaveBeenCalledTimes(1);
+
+    throttled = false;
+    for (let i = 0; i < 5; i++) {
+      clock.advance(10_000);
+      const r = await w.runCycle();
+      expect(r.attempted).toBe(0);
+      expect(r.skipped.every((s) => s.reason.includes('warm cooldown until'))).toBe(true);
+    }
+    expect(runTarget).toHaveBeenCalledTimes(1); // ZERO extra ARM spend
+  });
+
+  it('does NOT scan a target whose payload legitimately quotes upstream error text', async () => {
+    const clock = fakeClock();
+    // The `monitor/activities` case: rows carry ErrorMessage copied out of past
+    // pipeline runs, so an ARM throttle string there is somebody else's history.
+    const quoting: WarmTarget[] = [{
+      label: 'monitor/activities default',
+      key: 'k',
+      modelId: 'monitor',
+      ttlMs: 1_000,
+      produce: async () => ({}),
+      resultQuotesUpstreamErrors: true,
+    }];
+    const w = createReadWarmer({
+      now: clock.now,
+      sleep: clock.sleep,
+      loadTargets: async () => quoting,
+      runTarget: async () => [{ Name: 'nightly-load', Status: 'Failed', ErrorMessage: armThrottled().message }],
+      budget: { ...BUDGET, maxReadsPerWindow: 100 },
+      warn: () => {},
+    });
+
+    const r = await w.runCycle();
+    expect(r.abortedBy).toBeNull();
+    expect(r.succeeded).toBe(1);
+    expect(w.state().buckets[0].consecutiveThrottles).toBe(0);
+  });
+});
+
+describe('findSwallowedThrottle', () => {
+  it('finds ARM\'s throttle text nested inside the real diagnostics-coverage payload', () => {
+    const found = findSwallowedThrottle(diagnosticsCoveragePartial429());
+    expect(found).not.toBeNull();
+    expect(found).toContain('SubscriptionRequestsThrottled');
+    // It must feed the SAME classifier, so the quoted Retry-After is recovered.
+    expect(classifyWarmFailure(new Error(found as string)).retryAfterMs).toBe(10_000);
+  });
+
+  it('finds evidence carried in an object KEY, not only a value', () => {
+    expect(findSwallowedThrottle({ errors: { 'SubscriptionRequestsThrottled': 3 } }))
+      .toContain('SubscriptionRequestsThrottled');
+  });
+
+  it('returns null for a healthy payload and for text that is NOT an ARM verdict (R7)', () => {
+    expect(findSwallowedThrottle({ statuses: [{ resourceId: '/x', availabilityState: 'Available' }] })).toBeNull();
+    expect(findSwallowedThrottle([])).toBeNull();
+    expect(findSwallowedThrottle(undefined)).toBeNull();
+    // Contains the WORD "throttled" — a local compute budget, not ARM.
+    expect(findSwallowedThrottle({ note: 'the backend is slow or throttled; a cached copy will serve' })).toBeNull();
+    expect(findSwallowedThrottle({ note: 'ARM GET /x failed 403: Forbidden' })).toBeNull();
+    // 429 in a resource NAME must not be read as a status.
+    expect(findSwallowedThrottle({ name: 'st429loom', id: '/subscriptions/429/x' })).toBeNull();
+  });
+
+  it('terminates on a self-referential payload instead of spinning', () => {
+    const cyclic: Record<string, unknown> = { note: 'ok' };
+    cyclic.self = cyclic;
+    cyclic.kids = [cyclic, { deeper: cyclic }];
+    expect(findSwallowedThrottle(cyclic)).toBeNull();
+  });
+
+  /**
+   * What the cycle guard actually BUYS, which mere termination does not test:
+   * the node cap alone makes a cyclic payload terminate, but an undeduped walk
+   * re-expands the loop forever and spends the whole budget on it, so evidence
+   * sitting BESIDE the loop is never reached. Deduping keeps the budget for real
+   * nodes. (Key order matters: `note` is pushed first and popped last, so the
+   * loop is walked before the evidence is.)
+   */
+  it('does not let a cyclic subtree eat the node budget that real evidence needs', () => {
+    const loop: Record<string, unknown> = {};
+    loop.a = loop;
+    loop.b = loop;
+    const payload = { note: armThrottled().message, loop };
+    expect(findSwallowedThrottle(payload)).toContain('SubscriptionRequestsThrottled');
+  });
+
+  /**
+   * Pins the node cap honestly. The scan reads a bounded prefix of the payload,
+   * so evidence past the cap is NOT found — and "no evidence in the part I read"
+   * is reported as no evidence rather than as a guess either way (R7). The cost
+   * of that miss is one un-skipped warm cycle; budget and pacing still bound it.
+   */
+  it('is bounded: evidence past the node cap is not found, and small payloads still are', () => {
+    const evidence = armThrottled().message;
+    const huge = [evidence, ...Array.from({ length: 30_000 }, (_, i) => `row-${i}`)];
+    expect(findSwallowedThrottle(huge)).toBeNull();
+    expect(findSwallowedThrottle([evidence, 'row-0'])).toContain('SubscriptionRequestsThrottled');
   });
 });
