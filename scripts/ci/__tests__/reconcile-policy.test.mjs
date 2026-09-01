@@ -352,6 +352,98 @@ test('#4064: a schedule reads the mid-roll pair as resolved — estate-wide conf
   assert.equal(d.upgraded, true);
 });
 
+// ---------------------------------------------------------------------------
+// resolveRunningImageTags — the FOLLOWER NOTE (#4240).
+//
+// Converging a follower is the declared model; converging it SILENTLY made two
+// very different estates read identically in the log — the benign ~25s mid-roll
+// straddle, and a follower stuck on the wrong image because its own roll keeps
+// failing. The note exists to leave a line. It must NEVER move a verdict, and
+// it must not claim which of the two estates it is looking at.
+// ---------------------------------------------------------------------------
+
+/** The same pair, converged — the control the note must stay silent on. */
+const UNITY_CONVERGED = [
+  { name: 'loom-unity', image: 'acr123.azurecr.io/loom-unity:2456cebb' },
+  { name: 'iceberg-catalog', image: 'acr123.azurecr.io/loom-unity:2456cebb' },
+];
+
+/** Everything the resolution decides, with the observation stripped off. */
+const verdictOf = ({ notes, ...rest }) => rest;
+
+test('#4240: a follower off the canonical tag EMITS a note naming both apps and both refs', () => {
+  const r = resolveRunningImageTags(UNITY_MID_ROLL);
+  const n = r.notes.find((x) => x.key === 'unity');
+  assert.ok(n, 'a follower divergence must leave a log line, not be converged away in silence');
+  assert.match(n.note, /iceberg-catalog runs loom-unity:4d4fd0b9/, 'the diverged app and the ref it runs must both be named');
+  assert.match(n.note, /canonical app loom-unity/, 'the app the pin follows must be named');
+  assert.match(n.note, /2456cebb/, 'the tag the key pinned to must be in the note — a divergence is a comparison');
+});
+
+test('#4240: the note CHANGES NO VERDICT — every decided field is identical to a CONVERGED pair', () => {
+  // The strongest available form: the diverged read and the converged read must
+  // agree on probed/pinned/absent/unknown and differ ONLY in `notes`.
+  const diverged = resolveRunningImageTags(UNITY_MID_ROLL);
+  const converged = resolveRunningImageTags(UNITY_CONVERGED);
+  assert.deepEqual(
+    verdictOf(diverged),
+    verdictOf(converged),
+    'a note that moved a verdict would be a behaviour change wearing an observation costume',
+  );
+  assert.equal(diverged.notes.length, 1, 'the divergence IS noted');
+  assert.deepEqual(converged.notes, [], 'a clean read emits NO note');
+});
+
+test('#4240: a schedule still upgrades with a noted divergence — decideDeployApps never reads notes', () => {
+  const d = decideDeployApps({
+    eventName: 'schedule',
+    baseValue: 'false',
+    resolution: resolveRunningImageTags([...LIVE, ...UNITY_MID_ROLL]),
+  });
+  assert.equal(d.value, 'true', 'the note must not re-freeze what #4064 unfroze');
+  assert.equal(d.upgraded, true);
+});
+
+test('#4240: a DIGEST-pinned follower is noted too — that shape converged most silently of all', () => {
+  const r = resolveRunningImageTags([
+    { name: 'loom-unity', image: 'acr123.azurecr.io/loom-unity:2456cebb' },
+    { name: 'iceberg-catalog', image: 'acr123.azurecr.io/loom-unity@sha256:beef' },
+  ]);
+  assert.equal(r.pinned.unity, '2456cebb', 'the verdict is unchanged (the deliberate sixth shape)');
+  const n = r.notes.find((x) => x.key === 'unity');
+  assert.ok(n, 'a follower on a digest differs from the canonical tag and must be noted');
+  assert.match(n.note, /sha256:beef/, 'the digest it is actually running must be reported, not elided');
+});
+
+test('#4240: NO note when the canonical itself is UNKNOWN — there is no tag to differ from', () => {
+  const r = resolveRunningImageTags([
+    { name: 'loom-unity', image: 'acr123.azurecr.io/loom-unity@sha256:beef' },
+    { name: 'iceberg-catalog', image: 'acr123.azurecr.io/loom-unity:4d4fd0b9' },
+  ]);
+  assert.ok(r.unknown.find((u) => u.key === 'unity'), 'precondition: the canonical is UNKNOWN');
+  assert.deepEqual(r.notes, [], 'claiming a divergence from a tag that was never read is the R7 shape');
+});
+
+test('#4240: the note does NOT assert WHICH estate it is — one read cannot tell a straddle from a stuck follower', () => {
+  const n = resolveRunningImageTags(UNITY_MID_ROLL).notes[0];
+  assert.doesNotMatch(
+    n.note,
+    /\b(is stuck|has failed|is failing|is broken|has been stuck)\b/i,
+    'a single instant cannot establish that a follower stopped converging',
+  );
+  assert.match(n.note, /cannot tell/i, 'the note must say what it cannot distinguish');
+  assert.match(n.note, /NEXT run/i, 'and must name the observation that WOULD distinguish it');
+});
+
+test('#4240: entries WITHOUT canonicalApp never note — the whole rest of the table is untouched', () => {
+  const r = resolveRunningImageTags(LIVE);
+  assert.deepEqual(r.notes, [], 'only a declared shared-repo entry can have a follower');
+});
+
+test('#4240: a FAILED probe notes nothing — nothing was measured, so nothing is observed', () => {
+  assert.deepEqual(resolveRunningImageTags(null).notes, []);
+});
+
 test('a FAILED probe is probed:false with everything UNKNOWN — never an empty estate', () => {
   const r = resolveRunningImageTags(null);
   assert.equal(r.probed, false);

@@ -9,8 +9,12 @@
  * The load-bearing assertions are the ones about ATOMICITY and about the
  * three-way live verdict, because those are the two places where a plausible
  * "simplification" silently reintroduces a real defect:
- *   - flattening the atomic group makes a half-roll possible, which turns the
- *     reconcile's `unity` key UNKNOWN and freezes estate-wide config;
+ *   - flattening the atomic group makes a half-roll possible, which leaves the
+ *     estate serving TWO builds of ONE image until some later admin-plane apply
+ *     converges the straggler (and, for a shared repository whose reconcile key
+ *     names no `canonicalApp`, ALSO turns that key UNKNOWN and freezes
+ *     estate-wide config — the `unity` key stopped having that consequence at
+ *     #4064 / PR #4237, so the CLI notice states it conditionally, #4240);
  *   - collapsing `unreadable` into `mismatch` (or into `ok`) is how an
  *     unverified roll starts reporting success.
  *
@@ -318,6 +322,34 @@ test('CLI announces the pulled-in pair mate on stderr, keeping stdout parseable'
   assert.match(r.stderr, /iceberg-catalog/);
   assert.match(r.stderr, /::notice::/);
   for (const line of r.stdout.trim().split('\n')) assert.equal(line.split('\t').length, 4);
+});
+
+test('#4240 CLI: the atomic-closure notice DERIVES the consequence from the real key table', () => {
+  const r = cli(['--apps', 'loom-unity', '--acr', 'a.azurecr.io', '--tag', 'sha9']);
+  assert.equal(r.code, 0);
+  // True of EVERY shared repository, canonicalApp or not.
+  assert.match(r.stderr, /TWO versions of ONE image/);
+  // The consequence is now LOOKED UP, not stated as a conditional the reader has
+  // to resolve. Naming the repository and the key is the tell that it was: a
+  // generic sentence cannot produce either.
+  assert.match(r.stderr, /Repository 'loom-unity' pins appImageTags\.unity from canonical app 'loom-unity'/);
+  assert.match(r.stderr, /does NOT freeze the estate-wide reconcile/);
+  assert.doesNotMatch(
+    r.stderr,
+    /Where the repository's appImageTags key does not name a canonicalApp/,
+    'a conditional makes the reader go and look up whether THEIR repo names one — which is the ' +
+      'lookup this notice exists to spare them (#4240 review nit)',
+  );
+  assert.doesNotMatch(
+    r.stderr,
+    /marks that key UNKNOWN|disables the estate-wide config reconcile/,
+    'the pre-#4064 consequence must not be asserted about a closure that pins from a canonical app',
+  );
+  // "converges the stragglers" was only ever true WITH a canonicalApp; here it
+  // is, so the convergence wording is allowed — and must name where the lag is
+  // now logged rather than implying it converges silently.
+  assert.match(r.stderr, /converges it onto the pinned tag/);
+  assert.match(r.stderr, /logged by both pin-refresh and reconcile-resolve/);
 });
 
 test('CLI warns on a mutable tag', () => {
