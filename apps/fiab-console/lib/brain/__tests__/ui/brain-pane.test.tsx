@@ -70,6 +70,11 @@ function wrap(ui: ReactElement) {
   return render(<FluentProvider theme={webLightTheme}>{ui}</FluentProvider>);
 }
 
+/** Re-render in place, so a changed `nav.search` reaches the mounted pane. */
+function rewrap(r: ReturnType<typeof wrap>, ui: ReactElement) {
+  r.rerender(<FluentProvider theme={webLightTheme}>{ui}</FluentProvider>);
+}
+
 describe('the pane renders the estate', () => {
   it('mounts with the filter bar and the view population', () => {
     wrap(<BrainPane initialSnapshot={snapshot} />);
@@ -285,6 +290,66 @@ describe('the tab is addressable (#4278)', () => {
     expect(String(nav.replace.mock.calls[0]?.[0])).toContain('tab=recommendations');
     // Push would make Back cycle through tabs instead of leaving the page.
     expect(nav.push).not.toHaveBeenCalled();
+    // Switching a tab is not a navigation to a new document; jumping to the top
+    // would discard the operator's scroll position. Matches the two sibling
+    // call sites (`loom-marketplace`, `realtime-intelligence-hub`).
+    expect(nav.replace.mock.calls[0]?.[1]).toEqual({ scroll: false });
+  });
+
+  it('A STALE SETTLE DOES NOT SNAP THE TAB BACKWARDS', () => {
+    /**
+     * `router.replace` is asynchronous and under `force-dynamic` carries a
+     * server RSC round-trip, so two fast switches can settle out of order. The
+     * regression this pins: click Recommendations, click Coverage, then let the
+     * FIRST navigation land. Before the `pendingTabRef` guard the effect
+     * accepted that stale URL and moved the operator off Coverage — off a view
+     * they had chosen — with no input from them.
+     */
+    const r = wrap(<BrainPane initialSnapshot={snapshot} />);
+    fireEvent.click(screen.getByRole('tab', { name: /Recommendations/ }));
+    fireEvent.click(screen.getByRole('tab', { name: /Coverage/ }));
+    expect(screen.getByRole('tab', { name: /Coverage/ })).toHaveAttribute(
+      'aria-selected',
+      'true',
+    );
+
+    // The FIRST replace() settles late — the URL now names the tab the operator
+    // already left.
+    nav.search = new URLSearchParams('tab=recommendations');
+    rewrap(r, <BrainPane initialSnapshot={snapshot} />);
+
+    // Latest intent wins.
+    expect(screen.getByRole('tab', { name: /Coverage/ })).toHaveAttribute(
+      'aria-selected',
+      'true',
+    );
+    expect(screen.getByTestId('coverage-panel')).toBeInTheDocument();
+
+    // And when the SECOND navigation finally lands, the view is unchanged and
+    // the pane is following the URL again.
+    nav.search = new URLSearchParams('tab=coverage');
+    rewrap(r, <BrainPane initialSnapshot={snapshot} />);
+    expect(screen.getByRole('tab', { name: /Coverage/ })).toHaveAttribute(
+      'aria-selected',
+      'true',
+    );
+  });
+
+  it('an EXTERNAL url change is still followed once the write has landed', () => {
+    // The guard above must not deafen the pane to Back/forward. Once the
+    // pending write settles, a later external change is honoured.
+    const r = wrap(<BrainPane initialSnapshot={snapshot} />);
+    fireEvent.click(screen.getByRole('tab', { name: /Coverage/ }));
+    nav.search = new URLSearchParams('tab=coverage');
+    rewrap(r, <BrainPane initialSnapshot={snapshot} />);
+
+    // Back lands on a different tab, with no click of ours.
+    nav.search = new URLSearchParams('tab=synapses');
+    rewrap(r, <BrainPane initialSnapshot={snapshot} />);
+    expect(screen.getByRole('tab', { name: /Synapses/ })).toHaveAttribute(
+      'aria-selected',
+      'true',
+    );
   });
 
   it('preserves any other search params already on the URL', () => {
@@ -338,9 +403,16 @@ describe('the canvas top strip is ONE flow (#4280)', () => {
     expect(within(strip).getByTestId('brain-canvas-provenance')).toBeInTheDocument();
   });
 
-  it('every provenance chip is present — the fix hid nothing to stop the overlap', () => {
-    // The cheap "fix" for an overlap is to delete one of the colliding rows.
-    // All five provenances must still be on screen.
+  /**
+   * ── THE TWO BELOW ARE DELETE GUARDS, NOT OVERLAP COVERAGE ─────────────────
+   * Named explicitly because the reviewer measured that they PASS on the
+   * panel-split mutant: they do not detect the overlap and must never be read
+   * as if they do. Their job is narrower and still worth having — the cheap
+   * "fix" for two rows colliding is to delete or truncate one of them, and
+   * that is what these catch. The structural guard is the first spec in this
+   * block; the browser receipt is the visual one.
+   */
+  it('DELETE GUARD (not overlap): every provenance chip is still rendered', () => {
     wrap(<BrainPane initialSnapshot={snapshot} />);
     const chips = screen.getByTestId('brain-canvas-provenance');
     for (const p of ['configured', 'declared', 'imports', 'observed', 'owns']) {
@@ -348,10 +420,10 @@ describe('the canvas top strip is ONE flow (#4280)', () => {
     }
   });
 
-  it('the destructive-class label is still rendered in full', () => {
+  it('DELETE GUARD (not overlap): the destructive-class label is not shortened', () => {
     // `Unreachable + always-on` labels the recommendation class whose executor
     // PATCHes minReplicas: 0. It was the worst-hit label in the receipt; it must
-    // not be shortened or dropped to make the row fit.
+    // not be abbreviated or dropped to make the row fit.
     wrap(<BrainPane initialSnapshot={snapshot} />);
     const legend = screen.getByRole('group', { name: 'Legend' });
     expect(legend.textContent).toContain('Unreachable + always-on');

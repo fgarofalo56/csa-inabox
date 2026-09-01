@@ -122,13 +122,21 @@ export type BrainTab = 'graph' | 'synapses' | 'recommendations' | 'coverage';
 
 const BRAIN_TABS: readonly BrainTab[] = ['graph', 'synapses', 'recommendations', 'coverage'];
 
+/** Narrowing guard, so `parseBrainTab` needs no assertion on the value itself. */
+function isBrainTab(raw: string | null | undefined): raw is BrainTab {
+  // Widening the tuple to `readonly string[]` is sound; asserting the narrow
+  // type onto an unvalidated input would be the thing this function exists to
+  // avoid.
+  return typeof raw === 'string' && (BRAIN_TABS as readonly string[]).includes(raw);
+}
+
 /**
  * Validate `?tab=` against the SAME union the renderer switches on. A stale
  * link, a hand-typed URL, or a renamed tab must not be able to select a view
  * that does not exist — every unrecognised value lands on the graph.
  */
 export function parseBrainTab(raw: string | null | undefined): BrainTab {
-  return BRAIN_TABS.includes(raw as BrainTab) ? (raw as BrainTab) : 'graph';
+  return isBrainTab(raw) ? raw : 'graph';
 }
 
 type LoadState =
@@ -164,22 +172,50 @@ export function BrainPane({ initialSnapshot, submitDecision, loadSynapseLayers }
   const urlTab = parseBrainTab(searchParams?.get('tab'));
   const [tab, setTabState] = React.useState<BrainTab>(urlTab);
 
+  /**
+   * The tab the OPERATOR last asked for, while its navigation is still in
+   * flight.
+   *
+   * `router.replace` is asynchronous, and under `force-dynamic` it carries a
+   * server RSC round-trip, so a fast second switch can have the FIRST
+   * navigation settle after it. Without this ref that stale settle re-entered
+   * the effect below and snapped the tab BACKWARDS to a view the operator had
+   * already left — measured as: click Recommendations, click Coverage, first
+   * `replace()` commits, Coverage goes `aria-selected=false`.
+   *
+   * So: while an intent is outstanding, only the settle that MATCHES it is
+   * allowed to write state. Every other settle in that window is our own stale
+   * echo and is dropped. The latest user intent wins.
+   */
+  const pendingTabRef = React.useRef<BrainTab | null>(null);
+
   // Follow the URL when it changes underneath us — a deep link, or Back landing
   // on a different `?tab=`. Keyed on the parsed value, so it is a no-op unless
   // the address actually names a different view.
   React.useEffect(() => {
+    if (pendingTabRef.current !== null) {
+      // Still waiting for our own write to land. Anything else is stale.
+      if (urlTab !== pendingTabRef.current) return;
+      pendingTabRef.current = null;
+    }
     setTabState(urlTab);
   }, [urlTab]);
 
   const setTab = React.useCallback(
     (t: BrainTab) => {
       setTabState(t);
+      pendingTabRef.current = t;
       const params = new URLSearchParams(searchParams?.toString() ?? '');
       params.set('tab', t);
       // REPLACE, not push: pushing would turn every tab click into a history
       // entry, so Back would cycle the operator through tabs instead of
       // leaving the page.
-      router.replace(`/admin/brain?${params.toString()}`);
+      //
+      // `scroll: false` because switching a tab is not a navigation to a new
+      // document — jumping to the top would throw away the operator's scroll
+      // position for no reason. Matches `loom-marketplace.tsx:57` and
+      // `realtime-intelligence-hub.tsx:54`, which do this same pattern.
+      router.replace(`/admin/brain?${params.toString()}`, { scroll: false });
     },
     [router, searchParams],
   );
