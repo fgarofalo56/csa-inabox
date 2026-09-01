@@ -90,7 +90,18 @@ export interface DetectContext {
    * the whole thing dark — the review measured `loom-risingwave` still carrying
    * `severity: high` and a live cost figure on the operator's savings list.
    */
-  readonly nonScalableSubject?: (displayName: string) => string | null;
+  readonly nonScalableSubject?: (displayName: string) => AlwaysOnVerdict | null;
+}
+
+/**
+ * WHY a subject's always-on floor is declared, and WHICH claim that is.
+ *
+ * The kind travels with the prose because the finding's wording depends on it —
+ * see {@link declaredAlwaysOnReason} and the round-2 review of #4261, B2.
+ */
+export interface AlwaysOnVerdict {
+  readonly kind: 'pinned-singleton' | 'declared-consumer' | 'self';
+  readonly reason: string;
 }
 
 /**
@@ -107,11 +118,21 @@ export interface DetectContext {
  * assert exactly what was not established — the R7 error, pointed the other way.
  * The finding stays costed and truthful; the perform path refuses it separately,
  * which is where fail-closed belongs.
+ *
+ * ── THE KIND TRAVELS WITH THE PROSE (round-2 review of #4261, B2) ───────────
+ * This returns non-null for THREE different claims, and the finding that quotes
+ * it used to be worded as if only `pinned-singleton` could reach it — so
+ * `loom-duckdb` got a finding TITLED "is always-on BY DESIGN and nothing wires
+ * to it" carrying a BODY that said the deploy wires a consumer to it. MEASURED:
+ * 13 of the 19 keyed apps refuse via `declared-consumer` and 1 via `self`, so
+ * the self-contradiction was the majority of what the detector emitted, not an
+ * edge case. It is the same R7 error this module invokes to justify NOT
+ * downgrading `declaration-unavailable`, applied to one arm and not the others.
  */
-export function declaredAlwaysOnReason(displayName: string): string | null {
+export function declaredAlwaysOnReason(displayName: string): AlwaysOnVerdict | null {
   const refusal = refuseScaleToZero(displayName);
   if (refusal === null || refusal.kind === 'declaration-unavailable') return null;
-  return scaleToZeroRefusalReason(refusal);
+  return { kind: refusal.kind, reason: scaleToZeroRefusalReason(refusal) };
 }
 
 function emptyResult(
@@ -259,22 +280,68 @@ export function unreachableAlwaysOn(ctx: DetectContext): DetectorRun {
     // cannot rank as a saving, which is the observable outcome #4257 asks for.
     const byDesign = byDesignOf(node.displayName);
     if (byDesign !== null) {
+      // ── THE WORDING FOLLOWS THE CLAIM (round-2 review of #4261, B2) ──────
+      // Only `pinned-singleton` establishes "always-on BY DESIGN". The other two
+      // arms establish something else entirely, and a title that asserts the
+      // deploy declares a floor — or that nothing wires to the service — over a
+      // `declared-consumer` verdict contradicts the body it carries.
+      const consumerCount = byDesign.reason.match(/wires (\d+) consumer\(s\)/)?.[1];
+      const wording = {
+        'pinned-singleton': {
+          title: `${node.displayName} is always-on BY DESIGN and nothing wires to it`,
+          claim:
+            'its always-on floor is DECLARED by the deploy, so this is an OBSERVATION, not a ' +
+            'cost recommendation.',
+          note:
+            'ALWAYS-ON BY DESIGN — the deploy declares this replica floor, so removing it is a ' +
+            'template change, not an estate cleanup.',
+          action: `NO ACTION — '${node.displayName}' is always-on by design.`,
+          headline: `'${node.displayName}' is declared non-scalable by the deploy.`,
+        },
+        'declared-consumer': {
+          title:
+            `${node.displayName} looks unwired in the graph, but the DEPLOY wires ` +
+            `${consumerCount ?? 'at least one'} consumer(s) to it`,
+          claim:
+            "the deployment template itself names a consumer of this service, so the finding's " +
+            'central claim — that nothing points at it — is contradicted at its source. The ' +
+            'missing edge is a graph gap, not an idle service.',
+          note:
+            'NOT "by design": this is an AVAILABILITY refusal. The deploy declares a consumer, ' +
+            'so the zero-inbound-edge measurement is contradicted by the template.',
+          action: `NO ACTION — the deploy wires ${consumerCount ?? 'a'} consumer(s) to '${node.displayName}'.`,
+          headline: `'${node.displayName}' has a consumer the deploy declares.`,
+        },
+        self: {
+          title: `${node.displayName} is THIS CONSOLE — it cannot be scaled to zero from here`,
+          claim:
+            'this is the console serving the page the recommendation is read from, and it is ' +
+            'reached by EXTERNAL ingress, which is not an edge in this graph — so zero inbound ' +
+            'edges establishes nothing about whether it is used.',
+          note:
+            'NOT "by design": this is the console itself. Its replica floor was not read from ' +
+            'the deploy template at all.',
+          action: `NO ACTION — '${node.displayName}' is this console.`,
+          headline: `'${node.displayName}' is the console this page is served from.`,
+        },
+      }[byDesign.kind];
+
       skipped.push({
         subject: `${node.displayName} (cost)`,
         reason:
-          'finding emitted WITHOUT a cost figure ON PURPOSE: the always-on floor is DECLARED by ' +
-          `the deploy for this resource, so it is not a saving to propose. ${byDesign}`,
+          'finding emitted WITHOUT a cost figure ON PURPOSE: scaling this resource to zero is ' +
+          `refused by the deploy-declared guard, so it is not a saving to propose. ${byDesign.reason}`,
       });
       findings.push({
         id: `${detector}:${node.id}`,
         detector,
         severity: 'info',
-        title: `${node.displayName} is always-on BY DESIGN and nothing wires to it`,
+        title: wording.title,
         summary:
           `'${node.displayName}' runs ${node.scale?.minReplicas ?? '?'} always-on replica(s) and the ` +
-          "graph resolves ZERO inbound 'configured' edges for it — but its always-on floor is " +
-          'DECLARED by the deploy, so this is an OBSERVATION, not a cost recommendation. ' +
-          byDesign,
+          "graph resolves ZERO inbound 'configured' edges for it — but " +
+          `${wording.claim} ` +
+          byDesign.reason,
         subjects: [node.id],
         evidence: {
           nodes: [node.id],
@@ -282,21 +349,19 @@ export function unreachableAlwaysOn(ctx: DetectContext): DetectorRun {
           query: `refuseScaleToZero('${node.displayName}') over the compiled deploy template`,
           notes: [
             `minReplicas=${node.scale?.minReplicas ?? 'NOT MEASURED'}, maxReplicas=${node.scale?.maxReplicas ?? 'NOT MEASURED'}`,
-            'ALWAYS-ON BY DESIGN — the deploy declares this replica floor, so removing it is a ' +
-              'template change, not an estate cleanup.',
-            byDesign,
-            'NO cost figure is attached, deliberately: an always-on floor the deploy asked for is ' +
-              'not waste, and pricing it here would rank a destructive change to a stateful ' +
-              "runtime at the top of the operator's savings list. That is exactly what #4257 " +
-              'reports having happened.',
+            wording.note,
+            byDesign.reason,
+            'NO cost figure is attached, deliberately: pricing a refused, destructive change ' +
+              "would rank it at the top of the operator's savings list. That is exactly what " +
+              '#4257 reports having happened.',
           ],
         },
         population: unreachable.population,
         confidence: 'high',
         remediation: proposal(
-          `NO ACTION — '${node.displayName}' is always-on by design.`,
-          `# '${node.displayName}' is declared non-scalable by the deploy.\n` +
-            `# ${byDesign}\n` +
+          wording.action,
+          `# ${wording.headline}\n` +
+            `# ${byDesign.reason}\n` +
             '#\n' +
             '# Do NOT scale it to zero. If the floor is genuinely wrong, the change belongs in\n' +
             '# the bicep module that declares it — an out-of-band ARM write would be reverted by\n' +

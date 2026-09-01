@@ -354,4 +354,67 @@ describe('a declared non-scalable subject is never proposed as a saving (#4257 i
     expect(broker).toBeDefined();
     expect(broker!.severity).toBe('high');
   });
+
+  // ── B2 (round-2 review of #4261) — the TITLE must not contradict the BODY ──
+  //
+  // `declaredAlwaysOnReason` returns non-null for three different claims. The
+  // finding used to be worded as if only `pinned-singleton` could reach it, so
+  // 13 of 19 real apps got a title asserting "nothing wires to it" over a body
+  // stating that the deploy wires a consumer to them.
+
+  const CONSUMER_REASON =
+    "'loom-risingwave' must NOT be scaled to zero: the DEPLOY ITSELF wires 2 consumer(s) to it " +
+    "(bicep module(s) 'adminplane', matched by module-reference), so the finding's central " +
+    'claim — that NOTHING in the deployment points at this service — is contradicted.';
+
+  it('B2 — a DECLARED-CONSUMER subject is not titled "nothing wires to it"', () => {
+    const base = ctxFromRows(rowsWithRisingwave());
+    const f = findingFor({
+      ...base,
+      nonScalableSubject: () => ({ kind: 'declared-consumer', reason: CONSUMER_REASON }),
+    })!;
+    expect(f).toBeDefined();
+    expect(f.severity).toBe('info');
+    expect(f.cost).toBeUndefined();
+    // The exact self-contradiction the review measured.
+    expect(f.title, 'the title must not deny the wire its own body reports').not.toMatch(
+      /nothing wires to it/i,
+    );
+    expect(f.title, 'this subject is not established as always-on BY DESIGN').not.toMatch(
+      /BY DESIGN/,
+    );
+    // …and it must say what WAS established, including the count.
+    expect(f.title).toMatch(/DEPLOY wires 2 consumer\(s\)/);
+    expect(f.summary).not.toMatch(/its always-on floor is DECLARED by the deploy/);
+    expect(f.evidence.notes.join(' ')).toMatch(/AVAILABILITY refusal/);
+  });
+
+  it('B2 — a SELF subject says it is this console, not that it is by design', () => {
+    const base = ctxFromRows(rowsWithRisingwave());
+    const f = findingFor({
+      ...base,
+      nonScalableSubject: () => ({
+        kind: 'self',
+        reason: "'loom-console' is THIS CONSOLE. Scaling it to zero removes the surface.",
+      }),
+    })!;
+    expect(f.title).toMatch(/THIS CONSOLE/);
+    expect(f.title).not.toMatch(/BY DESIGN/);
+    expect(f.evidence.notes.join(' ')).toMatch(/this is the console itself/i);
+  });
+
+  it('B2 — THE CONTROL: a PINNED-SINGLETON subject keeps the by-design wording', () => {
+    // The arm that would otherwise let "rewrite every title" pass the two above.
+    const base = ctxFromRows(rowsWithRisingwave());
+    const f = findingFor({
+      ...base,
+      nonScalableSubject: () => ({
+        kind: 'pinned-singleton',
+        reason: "the deploy PINS 'loom-risingwave' to exactly 1 replica(s).",
+      }),
+    })!;
+    expect(f.title).toMatch(/is always-on BY DESIGN and nothing wires to it/);
+    expect(f.summary).toMatch(/its always-on floor is DECLARED by the deploy/);
+    expect(f.remediation.summary).toMatch(/always-on by design/);
+  });
 });

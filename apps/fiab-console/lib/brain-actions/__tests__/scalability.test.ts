@@ -17,17 +17,40 @@
 
 import { readFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   declarationsFromTemplate,
   declaredNonScalableToZero,
+  deployDeclaredScalabilitySource,
+  deriveScalability,
   nonScalableExplanation,
   refuseScaleToZero,
   resolveDeclaredInt,
   scaleToZeroRefusalReason,
   SCALABILITY_SOURCE,
+  __resetScalabilityCache,
   type ScalabilitySource,
 } from '../scalability';
+
+/**
+ * A controllable stand-in for the template READ, defaulting to the real one.
+ *
+ * Round-2 review of #4261, should-fix 5: the non-caching of `unreadable` was
+ * specced at `resolveDlzTemplateInlineOutcome` but NOT at
+ * `deployDeclaredScalabilitySource`, which keeps its own module-level cache.
+ * Mutating that layer to cache the failure left 166/166 green — M6 one layer up,
+ * unfixtured. When `override.current` is null every other arm in this file sees
+ * the genuine implementation, so the mock changes nothing else.
+ */
+const override = vi.hoisted(() => ({ current: null as unknown }));
+vi.mock('@/lib/setup/user-arm-deploy', async (importActual) => {
+  const actual = await importActual<typeof import('@/lib/setup/user-arm-deploy')>();
+  return {
+    ...actual,
+    resolveDlzTemplateInlineOutcome: () =>
+      override.current ?? actual.resolveDlzTemplateInlineOutcome(),
+  };
+});
 
 // ---------------------------------------------------------------------------
 // Synthetic templates — one nested module declaring one Container App
@@ -52,13 +75,27 @@ function moduleTemplate(args: {
   };
 }
 
-function rootWith(inner: Record<string, unknown>, moduleName = 'loom-thing-module'): unknown {
+/**
+ * A root template wrapping ONE nested module.
+ *
+ * `passed` is the enclosing deployment's `properties.parameters` — the values
+ * the deploy actually hands the module. It was absent from this helper until the
+ * round-2 review, which is WHY no fixture could reach B1: every synthetic arm
+ * resolved a `defaultValue` that nothing had overridden, so the resolver's
+ * preference for the default over the passed value was unreachable by
+ * construction. Two shipped modules already pass replica values in.
+ */
+function rootWith(
+  inner: Record<string, unknown>,
+  moduleName = 'loom-thing-module',
+  passed?: Record<string, unknown>,
+): unknown {
   return {
     resources: [
       {
         type: 'Microsoft.Resources/deployments',
         name: moduleName,
-        properties: { template: inner },
+        properties: { template: inner, ...(passed ? { parameters: passed } : {}) },
       },
     ],
   };
@@ -168,24 +205,72 @@ describe('THE PREDICATE — a pinned singleton is the shape, not a name', () => 
 });
 
 describe('EXPRESSION RESOLUTION — only the shapes the real template uses', () => {
-  it('resolves `[variables(x)]` and the config-bag `coalesce(tryGet(...), N)` default', () => {
-    const decls = declarationsFromTemplate(
-      rootWith(
-        moduleTemplate({
-          name: "[parameters('name')]",
-          parameters: { name: { type: 'string', defaultValue: 'loom-risingwave' } },
-          variables: {
-            minReplicas: "[int(coalesce(tryGet(parameters('risingwaveConfig'), 'minReplicas'), 1))]",
-            maxReplicas: "[int(coalesce(tryGet(parameters('risingwaveConfig'), 'maxReplicas'), 1))]",
-          },
-          scale: { minReplicas: "[variables('minReplicas')]", maxReplicas: "[variables('maxReplicas')]" },
-        }),
-      ),
-    );
+  /** The real `loom-risingwave` shape: replicas via a variable over a config bag. */
+  function bagModule(fallbackMin: number, fallbackMax: number): Record<string, unknown> {
+    return moduleTemplate({
+      name: "[parameters('name')]",
+      parameters: {
+        name: { type: 'string', defaultValue: 'loom-risingwave' },
+        // MEASURED: every config-bag param in the real artifact defaults to null
+        // and is supplied by the parent.
+        risingwaveConfig: { type: 'object', defaultValue: null },
+      },
+      variables: {
+        minReplicas: `[int(coalesce(tryGet(parameters('risingwaveConfig'), 'minReplicas'), ${fallbackMin}))]`,
+        maxReplicas: `[int(coalesce(tryGet(parameters('risingwaveConfig'), 'maxReplicas'), ${fallbackMax}))]`,
+      },
+      scale: { minReplicas: "[variables('minReplicas')]", maxReplicas: "[variables('maxReplicas')]" },
+    });
+  }
+
+  it('resolves `[variables(x)]` and the config-bag `coalesce(tryGet(...), N)` fallback', () => {
+    // No bag passed and the bag defaults to null, so `tryGet` yields null and
+    // ARM's `coalesce` genuinely takes the fallback. Reading it is correct HERE.
+    const decls = declarationsFromTemplate(rootWith(bagModule(1, 1)));
     const d = decls.get('loom-risingwave');
     expect(d).toBeDefined();
-    expect(d!.declared.minReplicas).toBe(1);
+    expect(d!.declared).toEqual({ minReplicas: 1, maxReplicas: 1, hasScaleRules: false });
     expect(d!.scalableToZero).toBe(false);
+  });
+
+  it('B1/bag — a key the PARENT passes in the bag BEATS the coalesce fallback', () => {
+    // The same shape as `loom-risingwave`, but the deploy passes an ELASTIC bag
+    // over a PINNED fallback. Reading the fallback would refuse an app the
+    // deploy made elastic; reading the bag is what the deploy actually does.
+    const decls = declarationsFromTemplate(
+      rootWith(bagModule(1, 1), 'loom-thing-module', {
+        risingwaveConfig: { value: { minReplicas: 0, maxReplicas: 4 } },
+      }),
+    );
+    const d = decls.get('loom-risingwave')!;
+    expect(d.declared).toEqual({ minReplicas: 0, maxReplicas: 4, hasScaleRules: false });
+    expect(d.scalableToZero).toBe(true);
+  });
+
+  it('B1/bag — THE HAZARD: a PINNED bag over an ELASTIC fallback is REFUSED', () => {
+    // The direction that loses data. MEASURED on the artifact, `loom-risingwave`
+    // passes 1/1 over a 1/1 fallback — identical, so today it reads correctly by
+    // COINCIDENCE. Change either side and only the passed value is right.
+    const decls = declarationsFromTemplate(
+      rootWith(bagModule(0, 3), 'loom-thing-module', {
+        risingwaveConfig: { value: { minReplicas: 1, maxReplicas: 1 } },
+      }),
+    );
+    const d = decls.get('loom-risingwave')!;
+    expect(d.declared).toEqual({ minReplicas: 1, maxReplicas: 1, hasScaleRules: false });
+    expect(d.scalableToZero).toBe(false);
+    expect(refuseScaleToZero('loom-risingwave', decls)!.kind).toBe('pinned-singleton');
+  });
+
+  it('B1/bag — a bag passed as an EXPRESSION is unresolvable, NOT the fallback', () => {
+    // Whether the bag carries the key is unknowable, so BOTH coalesce branches
+    // are unestablished. Falling back would assert the branch ARM may not take.
+    const decls = declarationsFromTemplate(
+      rootWith(bagModule(1, 1), 'loom-thing-module', {
+        risingwaveConfig: { value: "[variables('someRuntimeBag')]" },
+      }),
+    );
+    expect(decls.get('loom-risingwave')!.declared).toBeNull();
   });
 
   it('resolves `[parameters(x)]` through its defaultValue', () => {
@@ -229,6 +314,290 @@ describe('EXPRESSION RESOLUTION — only the shapes the real template uses', () 
       ),
     );
     expect(decls.size).toBe(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// B1 — the value the PARENT passes beats the module's default (round-2 review)
+//
+// Nothing in this file could reach this shape before, because `rootWith()` never
+// set `properties.parameters`. Every arm below goes RED against a resolver that
+// reads `defaultValue` while the enclosing deployment overrides it.
+// ---------------------------------------------------------------------------
+
+describe('B1 — the parent-passed parameter beats the nested default', () => {
+  /** A minimal ELASTIC declaration, for populating a fixture map. */
+  const elasticDecl = {
+    appName: 'loom-other',
+    module: 'other-module',
+    scalableToZero: true,
+    declared: { minReplicas: 0, maxReplicas: 3, hasScaleRules: false },
+    declaredConsumers: [],
+    reason: 'fixture',
+  } as const;
+
+  /** A module whose replicas come from two named parameters, with defaults. */
+  function paramScaleModule(
+    defMin: number | null,
+    defMax: number | null,
+  ): Record<string, unknown> {
+    return moduleTemplate({
+      parameters: {
+        minReplicas:
+          defMin === null ? { type: 'int' } : { type: 'int', defaultValue: defMin },
+        maxReplicas:
+          defMax === null ? { type: 'int' } : { type: 'int', defaultValue: defMax },
+      },
+      scale: {
+        minReplicas: "[parameters('minReplicas')]",
+        maxReplicas: "[parameters('maxReplicas')]",
+      },
+    });
+  }
+
+  it('ARM 1 — a PINNED 1/1 passed over an ELASTIC default is REFUSED', () => {
+    // The #4257 hazard, reached through a pattern two shipped modules use. The
+    // reviewer demonstrated the un-fixed resolver reporting {min:1,max:3} and
+    // returning null = ALLOW for exactly this deploy.
+    const decls = declarationsFromTemplate(
+      rootWith(paramScaleModule(1, 3), 'loom-thing-module', {
+        maxReplicas: { value: 1 },
+      }),
+    );
+    const d = decls.get('loom-thing')!;
+    expect(d.declared).toEqual({ minReplicas: 1, maxReplicas: 1, hasScaleRules: false });
+    expect(d.scalableToZero).toBe(false);
+    const refusal = refuseScaleToZero('loom-thing', decls);
+    expect(refusal, 'a deploy-declared 1/1 singleton must not be performable').not.toBeNull();
+    expect(refusal!.kind).toBe('pinned-singleton');
+  });
+
+  it('ARM 2 — THE CONTROL: an ELASTIC value passed over a PINNED default PERFORMS', () => {
+    // Without this arm "refuse whenever the parent passes anything" would pass
+    // ARM 1 and disable the feature — a guard that refuses everything watches
+    // nothing. The default here is a pinned 1/1; the deploy overrides it.
+    const decls = declarationsFromTemplate(
+      rootWith(paramScaleModule(1, 1), 'loom-thing-module', {
+        maxReplicas: { value: 4 },
+      }),
+    );
+    const d = decls.get('loom-thing')!;
+    expect(d.declared).toEqual({ minReplicas: 1, maxReplicas: 4, hasScaleRules: false });
+    expect(d.scalableToZero).toBe(true);
+    expect(refuseScaleToZero('loom-thing', decls)).toBeNull();
+  });
+
+  it('ARM 3 — a param with NO default and NO parent value REFUSES, it does not drop', () => {
+    // `script-runner`'s `name` is this shape on the real artifact: no default,
+    // value supplied by the parent. With neither, the resource cannot be keyed —
+    // and a lookup miss against a map with a hole in it used to return null.
+    const derived = deriveScalability(
+      rootWith(
+        moduleTemplate({
+          name: "[parameters('name')]",
+          parameters: { name: { type: 'string' } },
+          scale: { minReplicas: 1, maxReplicas: 1 },
+        }),
+      ),
+    );
+    expect(derived.declarations.size).toBe(0);
+    expect(derived.unnamed).toHaveLength(1);
+    expect(derived.unnamed[0]!.nameExpr).toBe("[parameters('name')]");
+
+    const source: ScalabilitySource = {
+      status: 'declared',
+      declarations: new Map([['loom-other', elasticDecl]]),
+      from: '(fixture)',
+      unnamed: derived.unnamed,
+    };
+    const refusal = refuseScaleToZero('loom-thing', source);
+    expect(refusal, 'absent from an INCOMPLETE map must not read as permission').not.toBeNull();
+    expect(refusal!.kind).toBe('declaration-unavailable');
+    expect((refusal as { why: string }).why).toBe('name-unresolved');
+    const reason = scaleToZeroRefusalReason(refusal!);
+    // R7 — it must not claim the app is or is not scalable.
+    expect(reason).toContain('establishes nothing');
+    expect(reason).toContain("[parameters('name')]");
+  });
+
+  it('ARM 3b — THE CONTROL: with a COMPLETE population, an unlisted app still performs', () => {
+    // The incompleteness refusal must be keyed to the HOLE, not to the miss.
+    const source: ScalabilitySource = {
+      status: 'declared',
+      declarations: new Map([['loom-other', elasticDecl]]),
+      from: '(fixture)',
+      unnamed: [],
+    };
+    expect(refuseScaleToZero('loom-thing', source)).toBeNull();
+  });
+
+  it('ARM 3c — a BOUNDED hole shadows only the names it could produce', () => {
+    // The dlz-attach gateway's name is `[take(format('loom-s3-gateway-{0}', …))]`,
+    // so it can only ever be a `loom-s3-gateway-*`. Refusing every unlisted
+    // subject on account of it disables the executor for the whole estate —
+    // MEASURED: it took the perform happy path from 200 to 409.
+    const source: ScalabilitySource = {
+      status: 'declared',
+      declarations: new Map([['loom-other', elasticDecl]]),
+      from: '(fixture)',
+      unnamed: [
+        {
+          module: 'dlz-attach-s3-gateway',
+          nameExpr: "[take(format('loom-s3-gateway-{0}', parameters('dom')), 32)]",
+          namePrefix: 'loom-s3-gateway-',
+        },
+      ],
+    };
+    // In the shadow: could BE the unnamed resource, so it is refused.
+    const shadowed = refuseScaleToZero('loom-s3-gateway-tenant-b', source);
+    expect(shadowed).not.toBeNull();
+    expect((shadowed as { why: string }).why).toBe('name-unresolved');
+    // Out of the shadow: provably not that resource, so the hole says nothing.
+    expect(refuseScaleToZero('loom-thing', source)).toBeNull();
+  });
+
+  it('ARM 3d — the `apps[]` copy loop is EXPANDED, not left as an unbounded hole', () => {
+    // One resource, N apps. Left unexpanded it is a nameless hole that shadows
+    // everything; expanded it is six real declarations.
+    const derived = deriveScalability(
+      rootWith(
+        {
+          parameters: { apps: { type: 'array' } },
+          resources: [
+            {
+              type: 'Microsoft.App/containerApps',
+              copy: { name: 'caeApps', count: "[length(parameters('apps'))]" },
+              name: "[parameters('apps')[copyIndex()].name]",
+              properties: {
+                template: {
+                  scale: {
+                    minReplicas:
+                      "[if(contains(parameters('apps')[copyIndex()], 'minReplicas'), parameters('apps')[copyIndex()].minReplicas, 1)]",
+                    maxReplicas:
+                      "[if(contains(parameters('apps')[copyIndex()], 'maxReplicas'), parameters('apps')[copyIndex()].maxReplicas, 3)]",
+                  },
+                },
+              },
+            },
+          ],
+        },
+        'app-deployments',
+        {
+          apps: {
+            value: [
+              { name: 'loom-alpha', minReplicas: 2, maxReplicas: 6 },
+              // No replica keys at all — the `if(contains(…))` fallbacks apply.
+              { name: 'loom-beta' },
+              // A PINNED singleton smuggled in through the generic loop. Before
+              // expansion this was invisible; now the shape catches it.
+              { name: 'loom-gamma', minReplicas: 1, maxReplicas: 1 },
+            ],
+          },
+        },
+      ),
+    );
+    expect(derived.unnamed, 'a resolvable copy loop leaves no hole').toHaveLength(0);
+    expect([...derived.declarations.keys()].sort()).toEqual([
+      'loom-alpha',
+      'loom-beta',
+      'loom-gamma',
+    ]);
+    expect(derived.declarations.get('loom-alpha')!.declared).toEqual({
+      minReplicas: 2,
+      maxReplicas: 6,
+      hasScaleRules: false,
+    });
+    expect(derived.declarations.get('loom-beta')!.declared).toEqual({
+      minReplicas: 1,
+      maxReplicas: 3,
+      hasScaleRules: false,
+    });
+    expect(derived.declarations.get('loom-gamma')!.scalableToZero).toBe(false);
+    expect(refuseScaleToZero('loom-gamma', derived.declarations)!.kind).toBe('pinned-singleton');
+  });
+
+  it('ARM 3e — a copy loop whose COUNT does not resolve stays an honest hole', () => {
+    const derived = deriveScalability(
+      rootWith(
+        {
+          parameters: { apps: { type: 'array' } },
+          resources: [
+            {
+              type: 'Microsoft.App/containerApps',
+              copy: { name: 'caeApps', count: "[length(parameters('apps'))]" },
+              name: "[parameters('apps')[copyIndex()].name]",
+              properties: { template: { scale: { minReplicas: 1, maxReplicas: 1 } } },
+            },
+          ],
+        },
+        'app-deployments',
+        { apps: { value: "[variables('computedApps')]" } },
+      ),
+    );
+    expect(derived.declarations.size).toBe(0);
+    expect(derived.unnamed).toHaveLength(1);
+    // No literal prefix is derivable, so the hole is UNBOUNDED and refuses.
+    expect(derived.unnamed[0]!.namePrefix).toBeUndefined();
+  });
+
+  it('ARM 4 — a parent-passed ARM EXPRESSION is UNKNOWN, never the default', () => {
+    // `loom-trino` passes a computed `minReplicas` over a default of 0. Reading
+    // the 0 asserts an elastic floor the deploy explicitly overrode.
+    const decls = declarationsFromTemplate(
+      rootWith(paramScaleModule(0, 2), 'loom-thing-module', {
+        minReplicas: { value: "[if(equals(variables('mode'), 'ha'), 3, 1)]" },
+      }),
+    );
+    const d = decls.get('loom-thing')!;
+    expect(d.declared, 'a computed value must not resolve to the overridden default').toBeNull();
+    expect(d.reason).toContain('could NOT be established');
+    expect(declaredNonScalableToZero('loom-thing', decls)).toBeNull();
+  });
+
+  it('ARM 4b — a KeyVault `reference` parameter is unresolvable too, not a default', () => {
+    const decls = declarationsFromTemplate(
+      rootWith(paramScaleModule(1, 1), 'loom-thing-module', {
+        maxReplicas: { reference: { keyVault: { id: '/subscriptions/x' }, secretName: 's' } },
+      }),
+    );
+    expect(decls.get('loom-thing')!.declared).toBeNull();
+  });
+
+  it('ARM 5 — a NAME the parent overrides keys the declaration to the REAL name', () => {
+    // The dlz-attach gateway defaults to `loom-s3-gateway` — a name a DIFFERENT
+    // module's real app carries — and the parent passes something else. Keying
+    // on the default both invents an app and collides with a real one.
+    const decls = declarationsFromTemplate(
+      rootWith(
+        moduleTemplate({
+          name: "[parameters('name')]",
+          parameters: { name: { type: 'string', defaultValue: 'loom-s3-gateway' } },
+          scale: { minReplicas: 1, maxReplicas: 1 },
+        }),
+        'loom-thing-module',
+        { name: { value: 'loom-s3-gateway-tenant-b' } },
+      ),
+    );
+    expect(decls.get('loom-s3-gateway-tenant-b')).toBeDefined();
+    expect(decls.get('loom-s3-gateway'), 'the default must not invent an app').toBeUndefined();
+    expect(refuseScaleToZero('loom-s3-gateway-tenant-b', decls)!.kind).toBe('pinned-singleton');
+  });
+
+  it('ARM 5b — a name passed as an EXPRESSION is unnamed, not the default', () => {
+    const derived = deriveScalability(
+      rootWith(
+        moduleTemplate({
+          name: "[parameters('name')]",
+          parameters: { name: { type: 'string', defaultValue: 'loom-s3-gateway' } },
+          scale: { minReplicas: 1, maxReplicas: 1 },
+        }),
+        'dlz-attach-s3-gateway',
+        { name: { value: "[take(format('loom-s3-gateway-{0}', parameters('dom')), 32)]" } },
+      ),
+    );
+    expect(derived.declarations.has('loom-s3-gateway')).toBe(false);
+    expect(derived.unnamed).toHaveLength(1);
+    expect(derived.unnamed[0]!.module).toBe('dlz-attach-s3-gateway');
   });
 });
 
@@ -451,6 +820,55 @@ describe(`the COMMITTED ${SCALABILITY_SOURCE}`, () => {
   );
   const decls = declarationsFromTemplate(template);
 
+  it('CENSUS — the numbers this module documents are the numbers it derives', () => {
+    // Round-2 review, should-fix 3: the module header's own MEASURED block had
+    // drifted from the code (it claimed 19 entries, 16 elastic, and named apps
+    // as "still performable" that the consumer arm refuses). A prose measurement
+    // cannot be kept honest by review alone, so it is pinned here. If a bicep
+    // change moves any of these, update BOTH this arm and the header block.
+    const derived = deriveScalability(template);
+    const nameOf = (d: { appName: string }): string => d.appName;
+    const pinned = [...derived.declarations.values()].filter((d) => !d.scalableToZero);
+    const unresolvedShape = [...derived.declarations.values()].filter((d) => d.declared === null);
+    const elastic = [...derived.declarations.values()].filter(
+      (d) => d.scalableToZero && d.declared !== null,
+    );
+    const performable = [...derived.declarations.keys()]
+      .filter((n) => refuseScaleToZero(n, derived.declarations) === null)
+      .sort();
+
+    expect(derived.declarations.size).toBe(26);
+    expect(pinned.map(nameOf).sort()).toEqual([
+      'iceberg-catalog',
+      'loom-airflow',
+      'loom-risingwave',
+    ]);
+    expect(unresolvedShape.map(nameOf).sort()).toEqual(['loom-trino', 'loom-unity']);
+    expect(elastic).toHaveLength(21);
+    // 7 of 26 stay performable. The five apps from the generic `apps[]` loop are
+    // there because expanding that loop turned them from an UNBOUNDED population
+    // hole into real, elastic declarations. `loom-console` is NOT among them —
+    // the `self` arm refuses it. Over-refusal on a destructive action is the safe
+    // direction, but which apps it covers is recorded, never implied.
+    expect(performable).toEqual([
+      'loom-activator',
+      'loom-direct-lake-shim',
+      'loom-mcp',
+      'loom-mcp-bridge',
+      'loom-mirroring',
+      'loom-presidio-analyzer',
+      'loom-presidio-anonymizer',
+    ]);
+    expect(performable).not.toContain('loom-console');
+    // THE ONE REMAINING POPULATION HOLE, and it is BOUNDED: the dlz-attach
+    // gateway's name is built from a literal prefix, so it can only shadow
+    // `loom-s3-gateway-*` — not every unlisted subject on the estate. An
+    // UNBOUNDED hole here refuses the whole estate (measured: it did).
+    expect(derived.unnamed).toHaveLength(1);
+    expect(derived.unnamed[0]!.namePrefix).toBe('loom-s3-gateway-');
+    expect(derived.unnamed[0]!.nameExpr).toContain("format('loom-s3-gateway-{0}'");
+  });
+
   it('POPULATION: the derivation reads a real, non-trivial set of Container Apps', () => {
     // The assertion that stops this whole guard from being green and blind. A
     // resolver that understood none of the real ARM expressions would return an
@@ -582,6 +1000,7 @@ describe('THE SOURCE — an unreadable declaration is NOT an empty one (#4261 fi
     status: 'declared',
     declarations: new Map(),
     from: '/app/deploy-templates/main.json',
+    unnamed: [],
   };
 
   it('THE FAIL-OPEN: an EMPTY map refuses instead of permitting', () => {
@@ -655,6 +1074,7 @@ describe('THE SOURCE — an unreadable declaration is NOT an empty one (#4261 fi
         status: 'declared',
         declarations: decls,
         from: '(fixture)',
+        unnamed: [],
       }),
     ).toBeNull();
   });
@@ -822,5 +1242,90 @@ describe('the fqdn-literal matcher respects a name boundary (#4261 nit 8)', () =
     const decls = declarationsFromTemplate(rootWithConsumerFor('loom-unity', 'loom-unity'));
     expect(decls.get('loom-unity')!.declaredConsumers.length).toBeGreaterThan(0);
     expect(refuseScaleToZero('loom-unity', decls)!.kind).toBe('declared-consumer');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// THE RECOVERY PROPERTY, AT THE LAYER THE GUARDS ACTUALLY CALL
+// (round-2 review of #4261, should-fix 5)
+// ---------------------------------------------------------------------------
+
+describe('deployDeclaredScalabilitySource does not cache an UNREADABLE read', () => {
+  afterEach(() => {
+    override.current = null;
+    __resetScalabilityCache();
+  });
+
+  it('an unreadable read is NOT cached — the next call RECOVERS', () => {
+    __resetScalabilityCache();
+    override.current = {
+      status: 'unreadable',
+      file: '/app/deploy-templates/main.json',
+      detail: 'read failed (EMFILE): too many open files',
+    };
+    const first = deployDeclaredScalabilitySource();
+    expect(first.status).toBe('unreadable');
+
+    // The read succeeds this time. If the failure had been cached, the guard
+    // would stay disarmed for the life of the process — M6 one layer up.
+    override.current = {
+      status: 'ok',
+      file: '/app/deploy-templates/main.json',
+      inline: {
+        template: {
+          resources: [
+            {
+              type: 'Microsoft.Resources/deployments',
+              name: 'loom-thing-module',
+              properties: {
+                template: {
+                  resources: [
+                    {
+                      type: 'Microsoft.App/containerApps',
+                      name: 'loom-thing',
+                      properties: { template: { scale: { minReplicas: 1, maxReplicas: 1 } } },
+                    },
+                  ],
+                },
+              },
+            },
+          ],
+        },
+      },
+    };
+    const second = deployDeclaredScalabilitySource();
+    expect(second.status, 'a transient failure must not disarm the reader forever').toBe(
+      'declared',
+    );
+    expect(
+      second.status === 'declared' && second.declarations.get('loom-thing')?.scalableToZero,
+    ).toBe(false);
+  });
+
+  it('an ESTABLISHED read IS cached — the second call does not re-read', () => {
+    // The control: without it, "never cache anything" would pass the arm above
+    // and re-parse a 3.9 MB artifact on every guard call.
+    __resetScalabilityCache();
+    let reads = 0;
+    const ok = {
+      status: 'ok' as const,
+      file: '/app/deploy-templates/main.json',
+      inline: { template: { resources: [] } },
+    };
+    Object.defineProperty(override, 'current', {
+      configurable: true,
+      get() {
+        reads += 1;
+        return ok;
+      },
+      set() {
+        /* afterEach resets via the redefined property below */
+      },
+    });
+    deployDeclaredScalabilitySource();
+    deployDeclaredScalabilitySource();
+    delete (override as { current?: unknown }).current;
+    (override as { current: unknown }).current = null;
+    expect(reads, 'an established outcome must be read exactly once').toBe(1);
   });
 });

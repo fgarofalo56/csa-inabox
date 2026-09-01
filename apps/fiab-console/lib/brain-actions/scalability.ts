@@ -49,30 +49,56 @@
  * also unrecoverable data loss in the window before the revert.
  *
  * Keying on the SHAPE rather than on a name means the next stateful service is
- * covered the day its module lands, with no edit here. Keying on it rather than
- * on the prose ("cannot scale to zero") means a differently-worded comment
- * cannot silently un-protect a service — the repo's recorded lesson that a guard
- * keyed to a spelling loses to the next spelling.
+ * covered the day its module lands, with no edit here — PROVIDED the shape is
+ * read from the values the deploy actually passes. It was not until the round-2
+ * review of #4261: the resolver read each module's `defaultValue` and ignored
+ * the enclosing deployment's `properties.parameters`, so a module whose replica
+ * floor is passed in was judged on a number the deploy had overridden. See
+ * {@link effectiveParam}. Keying on the shape rather than on the prose ("cannot
+ * scale to zero") means a differently-worded comment cannot silently un-protect
+ * a service — the repo's recorded lesson that a guard keyed to a spelling loses
+ * to the next spelling.
  *
- * MEASURED over the committed template on 2026-09-01 — 22 Container App
- * declarations:
- *   3 PINNED     loom-risingwave (1/1), iceberg-catalog (1/1), loom-airflow (1/1)
- *   16 ELASTIC   loom-duckdb, loom-trino, loom-presidio-*, loom-dab-preview,
- *                loom-udf-runtime, loom-transform-runner, … — still performable
- *   3 UNRESOLVED the generic `apps[]` copy loop (whose replica counts come from
- *                a bicepparam, not the template), `script-runner`, `loom-unity`
- *                (a conditional scale object)
+ * MEASURED over the committed template on 2026-09-01 — 22 Container App resource
+ * declarations, one of which is a `copy` loop declaring 6 apps, giving 26 keyed
+ * declarations. PINNED BY THE TESTS (`CENSUS`), not by this comment, so the two
+ * cannot drift apart again:
+ *   3  PINNED      loom-risingwave (1/1), iceberg-catalog (1/1), loom-airflow (1/1)
+ *   21 ELASTIC     loom-duckdb (0/3), loom-directlake (1/2), loom-console (2/6),
+ *                  loom-presidio-*, loom-s3-gateway, loom-migrate, script-runner,
+ *                  loom-mcp, loom-activator, loom-mirroring, …
+ *   2  SHAPE       loom-unity (a conditional scale object) and loom-trino (its
+ *      UNRESOLVED  minReplicas is a computed expression the PARENT passes) — in
+ *                  the map, with the durability verdict withheld
+ *   1  UNNAMED     the dlz-attach s3-gateway, whose name is
+ *                  `[take(format('loom-s3-gateway-{0}', …), 32)]`. NOT in the map,
+ *                  and recorded as {@link UnnamedDeclaration} so its absence
+ *                  cannot be read as "undeclared" — see {@link refuseScaleToZero}.
+ *
+ * Of the 26 keyed apps, 7 remain performable (the five generic-loop apps that
+ * carry no declared consumer, plus `loom-presidio-analyzer` and
+ * `loom-presidio-anonymizer`); the availability arm refuses the rest because the
+ * deploy wires a consumer to them, and `loom-console` is refused as self. That
+ * is over-refusal on a destructive action, which is the safe direction, but it
+ * is stated here rather than implied — an executor that refuses nearly
+ * everything is close to a disabled feature wearing a guard's clothes.
  *
  * ── THE RESIDUAL, STATED PLAINLY (R7) ──────────────────────────────────────
- * UNRESOLVED means the declaration could NOT be established, and this module
- * says so rather than inventing one. An unresolved app is NOT reported as
- * non-scalable, because the generic `apps[]` loop is where `loom-console` and
- * `loom-capacity-broker` come from — treating it as pinned would disable the
- * feature rather than guard it. Those apps keep the rest of the guard chain and
- * nothing more. A stateful runtime added through the generic loop instead of its
- * own module would therefore not be covered; a stateful runtime needs volumes,
- * probes and a state store, so it gets its own module, which is exactly the
- * shape this reads.
+ * SHAPE-UNRESOLVED means the replica shape could NOT be established, and this
+ * module says so rather than inventing one — such an app is NOT reported as
+ * non-scalable. UNNAMED means the app could not even be identified; a subject
+ * missing from the map is REFUSED rather than permitted whenever an unnamed
+ * resource could have produced that name, because "absent from an incomplete
+ * population" establishes nothing.
+ *
+ * That shadow is kept as SMALL as the template allows, and the size matters:
+ * an UNBOUNDED hole refuses every unlisted subject, which MEASURED took the
+ * perform route's happy path from 200 to 409 — the guard would have disabled the
+ * feature it was written to protect. Two things bound it. The `apps[]` copy loop
+ * is EXPANDED (the parent passes a static 6-element array), which also means a
+ * stateful singleton added through the generic loop is now CAUGHT rather than
+ * invisible. And the dlz-attach gateway's name yields a literal prefix, so it
+ * shadows `loom-s3-gateway-*` and nothing else.
  *
  * Everything except {@link deployDeclaredScalability} is PURE — the template is
  * a parameter, so every arm is testable with no filesystem and no Azure.
@@ -138,12 +164,28 @@ export interface ScalabilityDeclaration {
 /** The artifact every declaration in this module is derived from. */
 export const SCALABILITY_SOURCE = 'apps/fiab-console/deploy-templates/main.json';
 
-/** How the source is kept honest. Quoted in refusals so the claim is checkable. */
+/**
+ * How the source is kept honest. Quoted in refusals so the claim is checkable.
+ *
+ * ── WHAT THIS DOES AND DOES NOT GUARANTEE (review of #4261, should-fix 6) ───
+ * The sync gate binds the COMMITTED artifact to the bicep at `main`. It says
+ * nothing about the copy baked into the image that is running: an image built
+ * three weeks ago carries the template as it was three weeks ago, and this
+ * repo's own R3 drift condition says the live console routinely trails `main`.
+ * A console older than the module that introduced a stateful app derives no
+ * declaration for it — and per {@link refuseScaleToZero} an unlisted subject is
+ * only refused because the population gap is now recorded. The previous wording
+ * here said "It cannot lag the bicep", asserting about THIS IMAGE something only
+ * established about the repo. That is the R7 error in a sentence shown to the
+ * operator, so it says what it actually guarantees.
+ */
 export const SCALABILITY_SOURCE_NOTE =
   `the COMPILED ARM of platform/fiab/bicep/main.bicep, committed at ${SCALABILITY_SOURCE} ` +
   'and kept byte-identical to a fresh `az bicep build` by ' +
   'scripts/ci/check-deploy-template-sync.mjs in the merge-blocking `guardrails` job (no path ' +
-  'filter). It cannot lag the bicep.';
+  'filter). That gate binds the COMMITTED artifact to the bicep at main; the copy consulted ' +
+  'here is the one baked into THIS image, so it is exactly as old as this image and may trail ' +
+  'main (deploy-integrity.md R3). Check /admin/readiness for how far behind this build is.';
 
 const CONTAINER_APPS_TYPE = 'microsoft.app/containerapps';
 
@@ -153,13 +195,125 @@ const CONTAINER_APPS_TYPE = 'microsoft.app/containerapps';
 
 const VAR_REF = /^\[variables\('([^']+)'\)\]$/;
 const PARAM_REF = /^\[parameters\('([^']+)'\)\]$/;
-/** `[int(coalesce(tryGet(parameters('xConfig'), 'minReplicas'), 1))]` — the config-bag default. */
-const COALESCE_DEFAULT = /^\[int\(coalesce\(tryGet\(parameters\('[^']+'\),\s*'[^']+'\),\s*(-?\d+)\)\)\]$/;
+/**
+ * `[int(coalesce(tryGet(parameters('xConfig'), 'minReplicas'), 1))]` — the
+ * config-BAG shape. Both the bag name and the key inside it are captured,
+ * because the literal at the end is only the FALLBACK: when the parent passes a
+ * bag that carries the key, ARM's `coalesce` takes the passed value and the
+ * fallback is never evaluated. Capturing only the fallback (as this did) reads
+ * a number the deploy does not use — see {@link effectiveParam}.
+ */
+const COALESCE_BAG =
+  /^\[int\(coalesce\(tryGet\(parameters\('([^']+)'\),\s*'([^']+)'\),\s*(-?\d+)\)\)\]$/;
+
+/**
+ * The generic `apps[]` copy loop — ONE resource declaring N Container Apps.
+ *
+ * `[parameters('apps')[copyIndex()].name]` and
+ * `[if(contains(parameters('apps')[copyIndex()], 'minReplicas'), …, 1)]`.
+ * MEASURED: the parent passes a STATIC 6-element array, so every one of these
+ * resolves. Before this, the whole loop was a single unnamed resource, which
+ * made the population hole UNBOUNDED — and an unbounded hole refuses every
+ * unlisted subject, which is a disabled feature rather than a guard.
+ */
+const COPY_ITEM = /^\[parameters\('([^']+)'\)\[copyIndex\(\)\]\.([A-Za-z0-9_]+)\]$/;
+const COPY_ITEM_OR = new RegExp(
+  String.raw`^\[if\(contains\(parameters\('([^']+)'\)\[copyIndex\(\)\],\s*'([^']+)'\),\s*` +
+    String.raw`parameters\('\1'\)\[copyIndex\(\)\]\.\2,\s*(-?\d+)\)\]$`,
+);
+/** `[length(parameters('apps'))]` — the copy count. */
+const COPY_COUNT = /^\[length\(parameters\('([^']+)'\)\)\]$/;
+/**
+ * A name built from a literal prefix, e.g.
+ * `[take(format('loom-s3-gateway-{0}', parameters('attachDomainName')), 32)]`.
+ * The prefix BOUNDS which subjects the unresolved name could possibly be.
+ */
+const FORMAT_PREFIX = /format\('([^'{]*)\{0\}/;
+
+/** One iteration of a `copy` loop, bound to the item it declares. */
+interface CopyBinding {
+  /** The array parameter the loop counts over. */
+  readonly param: string;
+  /** The item at this index, already resolved to a literal object. */
+  readonly item: Record<string, unknown>;
+}
 
 function asRecord(v: unknown): Record<string, unknown> {
   return typeof v === 'object' && v !== null && !Array.isArray(v)
     ? (v as Record<string, unknown>)
     : {};
+}
+
+/**
+ * True for an ARM expression. `[[` is ARM's escape for a LITERAL leading
+ * bracket, so it is a string, not an expression.
+ */
+function isArmExpression(v: string): boolean {
+  return v.startsWith('[') && !v.startsWith('[[') && v.endsWith(']');
+}
+
+/**
+ * What the DEPLOY actually passes for a nested template's parameter.
+ *
+ * ── THE PARENT'S VALUE BEATS THE MODULE'S DEFAULT (review of #4261, B1) ─────
+ * `properties.parameters` on the enclosing `Microsoft.Resources/deployments` is
+ * the value the deploy USES. A nested template's `defaultValue` is only what it
+ * would use if the parent passed nothing. Reading the default while the parent
+ * overrode it reports a replica shape the deploy never asked for, and null is
+ * allow, so it decides a destructive mutation on a number nothing established.
+ *
+ * MEASURED on the committed artifact, both shapes are already live:
+ *
+ *   direct   `loom-directlake` passes maxReplicas 2 over a default of 3;
+ *            `loom-trino` passes a COMPUTED minReplicas over a default of 0;
+ *            `script-runner` has NO default, so it dropped out of the map
+ *            entirely; the dlz-attach gateway passes a computed name over a
+ *            default (`loom-s3-gateway`) that collides with a different module's
+ *            real app.
+ *   bag      SIX modules resolve replicas through `coalesce(tryGet(bag, k), N)`
+ *            and the parent passes the bag in every one. `loom-duckdb` is
+ *            misread TODAY: the fallback says minReplicas 1, the deploy passes
+ *            0. `loom-risingwave` — the subject this guard exists for — passes
+ *            1/1 over a 1/1 fallback, so it reads correctly BY COINCIDENCE.
+ *            Change that module's fallback without changing the bag and the
+ *            guard silently starts reading a shape the deploy does not deploy.
+ *
+ * A parent value that is itself an ARM EXPRESSION is evaluated at deploy time in
+ * the PARENT's scope, which this static reader cannot enter. That is
+ * UNRESOLVABLE, and it must NOT fall back to the default: the default is exactly
+ * what the parent chose to override, so substituting it asserts the opposite of
+ * what the template says (deploy-integrity.md R7).
+ */
+type EffectiveParam =
+  | { readonly state: 'literal'; readonly value: unknown }
+  | {
+      readonly state: 'unresolvable';
+      /** WHICH way it could not be resolved — quoted where the gap is reported. */
+      readonly why: 'parent-expression' | 'parent-non-literal' | 'no-value';
+    };
+
+function effectiveParam(
+  key: string,
+  passed: Record<string, unknown>,
+  params: Record<string, unknown>,
+): EffectiveParam {
+  if (key in passed) {
+    const entry = asRecord(passed[key]);
+    // `{ reference: { keyVault … } }` — a deploy-time secret fetch, not a value.
+    if (!('value' in entry)) return { state: 'unresolvable', why: 'parent-non-literal' };
+    const v = entry.value;
+    if (typeof v === 'string' && isArmExpression(v)) {
+      return { state: 'unresolvable', why: 'parent-expression' };
+    }
+    return { state: 'literal', value: v };
+  }
+  const p = asRecord(params[key]);
+  // No parent value AND no default. `script-runner`'s name is this shape, and it
+  // is why that module vanished from the derived map rather than refusing.
+  if (!('defaultValue' in p)) return { state: 'unresolvable', why: 'no-value' };
+  // A default may itself be an expression in the NESTED scope (`[variables(…)]`),
+  // which the callers below CAN resolve — so it is handed back for resolution.
+  return { state: 'literal', value: p.defaultValue };
 }
 
 /**
@@ -169,45 +323,138 @@ function asRecord(v: unknown): Record<string, unknown> {
  * default. A guessed replica floor is exactly the "assert what you did not
  * establish" failure R7 names, and here it would decide whether a destructive
  * mutation is offered.
+ *
+ * `passed` is the enclosing deployment's `properties.parameters`. It is
+ * consulted BEFORE the nested template's defaults; see {@link effectiveParam}.
  */
 export function resolveDeclaredInt(
   expr: unknown,
   params: Record<string, unknown>,
   variables: Record<string, unknown>,
+  passed: Record<string, unknown> = {},
   depth = 0,
+  copy?: CopyBinding,
 ): number | null {
   if (typeof expr === 'number' && Number.isInteger(expr)) return expr;
   if (typeof expr !== 'string' || depth > 4) return null;
 
-  const coalesced = COALESCE_DEFAULT.exec(expr);
-  if (coalesced?.[1] !== undefined) return Number.parseInt(coalesced[1], 10);
+  if (copy) {
+    const item = COPY_ITEM.exec(expr);
+    if (item?.[1] === copy.param && item[2] !== undefined) {
+      return resolveDeclaredInt(copy.item[item[2]], params, variables, passed, depth + 1, copy);
+    }
+    // `if(contains(item, 'k'), item.k, N)` — present wins, absent takes N.
+    const guarded = COPY_ITEM_OR.exec(expr);
+    if (guarded?.[1] === copy.param && guarded[2] !== undefined && guarded[3] !== undefined) {
+      return guarded[2] in copy.item
+        ? resolveDeclaredInt(copy.item[guarded[2]], params, variables, passed, depth + 1, copy)
+        : Number.parseInt(guarded[3], 10);
+    }
+  }
+
+  const bag = COALESCE_BAG.exec(expr);
+  if (bag?.[1] !== undefined && bag[2] !== undefined && bag[3] !== undefined) {
+    const eff = effectiveParam(bag[1], passed, params);
+    // The bag itself is a runtime expression: whether it carries the key is
+    // unknowable here, so BOTH branches of the coalesce are unestablished.
+    if (eff.state !== 'literal') return null;
+    if (eff.value === null || eff.value === undefined) {
+      // `tryGet` on an absent bag yields null and `coalesce` takes the fallback.
+      return Number.parseInt(bag[3], 10);
+    }
+    if (typeof eff.value !== 'object' || Array.isArray(eff.value)) return null;
+    const carried = asRecord(eff.value);
+    // Key ABSENT: `tryGet` yields null, so the fallback is genuinely what runs.
+    if (!(bag[2] in carried)) return Number.parseInt(bag[3], 10);
+    return resolveDeclaredInt(carried[bag[2]], params, variables, passed, depth + 1, copy);
+  }
 
   const varRef = VAR_REF.exec(expr);
   if (varRef?.[1] !== undefined) {
-    return resolveDeclaredInt(variables[varRef[1]], params, variables, depth + 1);
+    return resolveDeclaredInt(variables[varRef[1]], params, variables, passed, depth + 1, copy);
   }
 
   const paramRef = PARAM_REF.exec(expr);
   if (paramRef?.[1] !== undefined) {
-    const p = asRecord(params[paramRef[1]]);
-    if (!('defaultValue' in p)) return null;
-    return resolveDeclaredInt(p.defaultValue, params, variables, depth + 1);
+    const eff = effectiveParam(paramRef[1], passed, params);
+    if (eff.state !== 'literal') return null;
+    return resolveDeclaredInt(eff.value, params, variables, passed, depth + 1, copy);
   }
 
   return null;
 }
 
-/** The app NAME a resource declares, or null when it is a runtime expression. */
+/**
+ * The literal prefix an unresolved name is known to start with, if any.
+ *
+ * `[take(format('loom-s3-gateway-{0}', …), 32)]` can only ever produce a name
+ * beginning `loom-s3-gateway-`, which BOUNDS the hole: every other subject is
+ * provably not this resource. Null means unbounded — the hole could be any name.
+ */
+function unresolvedNamePrefix(expr: string): string | undefined {
+  const m = FORMAT_PREFIX.exec(expr);
+  return m?.[1] !== undefined && m[1] !== '' ? m[1].toLowerCase() : undefined;
+}
+
+/**
+ * The app NAME a resource declares, or null when it is a runtime expression.
+ *
+ * A null here does NOT mean "no such app" — it means this reader could not
+ * establish which app the resource declares, so the derived map's POPULATION is
+ * incomplete. {@link deriveScalability} records every one of these and
+ * {@link refuseScaleToZero} refuses an unlisted subject that the hole could
+ * account for, because "absent from an incomplete map" is not evidence.
+ */
 function resolveDeclaredName(
   name: unknown,
   params: Record<string, unknown>,
+  passed: Record<string, unknown>,
+  copy?: CopyBinding,
 ): string | null {
   if (typeof name !== 'string' || name === '') return null;
-  if (!name.startsWith('[')) return name.toLowerCase();
+  if (!isArmExpression(name)) return name.toLowerCase();
+  if (copy) {
+    const item = COPY_ITEM.exec(name);
+    if (item?.[1] === copy.param && item[2] !== undefined) {
+      const v = copy.item[item[2]];
+      return typeof v === 'string' && v !== '' && !isArmExpression(v) ? v.toLowerCase() : null;
+    }
+  }
   const paramRef = PARAM_REF.exec(name);
   if (paramRef?.[1] === undefined) return null;
-  const dflt = asRecord(params[paramRef[1]]).defaultValue;
-  return typeof dflt === 'string' && dflt !== '' ? dflt.toLowerCase() : null;
+  const eff = effectiveParam(paramRef[1], passed, params);
+  if (eff.state !== 'literal') return null;
+  const v = eff.value;
+  // A default that is itself an expression is no more resolvable than a passed
+  // one — `[take(format('loom-s3-gateway-{0}', …), 32)]` names no static app.
+  if (typeof v !== 'string' || v === '' || isArmExpression(v)) return null;
+  return v.toLowerCase();
+}
+
+/**
+ * The name expression an unresolved resource would have to be judged by.
+ *
+ * For a `[parameters('x')]` name the operative expression is the VALUE the
+ * parent passed, not the reference — that is where the `format()` prefix that
+ * BOUNDS the hole lives. It is read here even though {@link effectiveParam}
+ * refuses it as a value: unusable for deciding a replica count is not the same
+ * as uninformative about which names it can produce.
+ */
+function unresolvedNameExpr(
+  name: unknown,
+  params: Record<string, unknown>,
+  passed: Record<string, unknown>,
+): string {
+  if (typeof name !== 'string') return JSON.stringify(name ?? null);
+  const paramRef = PARAM_REF.exec(name);
+  if (paramRef?.[1] === undefined) return name;
+  const key = paramRef[1];
+  if (key in passed) {
+    const v = asRecord(passed[key]).value;
+    return typeof v === 'string' ? v : name;
+  }
+  const dflt = asRecord(params[key]).defaultValue;
+  return typeof dflt === 'string' ? dflt : name;
 }
 
 /**
@@ -360,16 +607,18 @@ function declarationFor(
   template: Record<string, unknown>,
   moduleLabel: string,
   declaredConsumers: readonly DeclaredConsumer[],
+  passed: Record<string, unknown>,
+  copy?: CopyBinding,
 ): ScalabilityDeclaration | null {
   const params = asRecord(template.parameters);
   const variables = asRecord(template.variables);
 
-  const appName = resolveDeclaredName(resource.name, params);
+  const appName = resolveDeclaredName(resource.name, params, passed, copy);
   if (appName === null) return null;
 
   const scale = asRecord(asRecord(asRecord(resource.properties).template).scale);
-  const minReplicas = resolveDeclaredInt(scale.minReplicas, params, variables);
-  const maxReplicas = resolveDeclaredInt(scale.maxReplicas, params, variables);
+  const minReplicas = resolveDeclaredInt(scale.minReplicas, params, variables, passed, 0, copy);
+  const maxReplicas = resolveDeclaredInt(scale.maxReplicas, params, variables, passed, 0, copy);
 
   // SHAPE NOT ESTABLISHED. `loom-unity`'s scale is `[if(usePostgres, …, …)]` —
   // two different shapes depending on its backing store, so there is no static
@@ -422,11 +671,43 @@ interface TemplateBody {
   readonly symbol: string;
   /** The deployment's `name`, shown to operators. */
   readonly label: string;
+  /**
+   * The enclosing deployment's `properties.parameters` — the values the deploy
+   * PASSES into this body. Empty for the root, which has no enclosing
+   * deployment. See {@link effectiveParam}: these beat the body's own defaults.
+   */
+  readonly passed: Record<string, unknown>;
+}
+
+/**
+ * A Container App resource whose NAME could not be established.
+ *
+ * Its declaration cannot be keyed, so it is missing from the map — and a map
+ * with a hole in it cannot support "this subject is not declared". Recorded so
+ * {@link refuseScaleToZero} can refuse an unlisted subject rather than allow it.
+ */
+export interface UnnamedDeclaration {
+  /** The bicep module that declares it. */
+  readonly module: string;
+  /** The unresolved `name` expression, verbatim, so the gap is inspectable. */
+  readonly nameExpr: string;
+  /**
+   * The literal prefix every name this resource can produce must start with, or
+   * undefined when the hole is UNBOUNDED. A bounded hole only shadows subjects
+   * that match it; an unbounded one shadows every unlisted subject.
+   */
+  readonly namePrefix?: string;
+}
+
+/** The derivation's two halves: what was established, and what was not. */
+export interface ScalabilityDerivation {
+  readonly declarations: ReadonlyMap<string, ScalabilityDeclaration>;
+  readonly unnamed: readonly UnnamedDeclaration[];
 }
 
 /**
  * Every Container App declaration the compiled template carries, keyed by
- * lowercased app name.
+ * lowercased app name, PLUS the ones whose name could not be resolved.
  *
  * PURE — the parsed template is the input. A name that appears in more than one
  * module (the s3-gateway ships in both the admin plane and the dlz-attach path)
@@ -438,66 +719,120 @@ interface TemplateBody {
  * graph must be collected BEFORE any app is judged, because the consumer of a
  * data-plane app is usually the Console, whose module is walked later.
  */
-export function declarationsFromTemplate(
-  template: unknown,
-): ReadonlyMap<string, ScalabilityDeclaration> {
+export function deriveScalability(template: unknown): ScalabilityDerivation {
   const bodies: TemplateBody[] = [];
-  const collect = (tmpl: Record<string, unknown>, symbol: string, label: string): void => {
-    bodies.push({ tmpl, symbol, label });
+  const collect = (
+    tmpl: Record<string, unknown>,
+    symbol: string,
+    label: string,
+    passed: Record<string, unknown>,
+  ): void => {
+    bodies.push({ tmpl, symbol, label, passed });
     for (const { symbol: key, resource } of resourceEntries(tmpl)) {
       const r = asRecord(resource);
       if (r.type !== 'Microsoft.Resources/deployments') continue;
-      const inner = asRecord(r.properties).template;
+      const props = asRecord(r.properties);
+      const inner = props.template;
       if (typeof inner !== 'object' || inner === null) continue;
       const name = typeof r.name === 'string' ? r.name : '(unnamed module)';
-      collect(asRecord(inner), (key ?? name).toLowerCase(), name);
+      collect(asRecord(inner), (key ?? name).toLowerCase(), name, asRecord(props.parameters));
     }
   };
-  collect(asRecord(template), 'main.bicep', 'main.bicep');
+  collect(asRecord(template), 'main.bicep', 'main.bicep', {});
 
   const envBlobs: EnvBlob[] = [];
   for (const b of bodies) collectEnvBlobs(b.tmpl, b.symbol, envBlobs);
 
   const out = new Map<string, ScalabilityDeclaration>();
+  const unnamed: UnnamedDeclaration[] = [];
   for (const b of bodies) {
+    const params = asRecord(b.tmpl.parameters);
     for (const { resource } of resourceEntries(b.tmpl)) {
       const r = asRecord(resource);
       const type = r.type;
       if (typeof type !== 'string' || type.toLowerCase() !== CONTAINER_APPS_TYPE) continue;
-      const named = resolveDeclaredName(r.name, asRecord(b.tmpl.parameters));
-      const consumers = named === null ? [] : consumersFor(named, b.symbol, envBlobs);
-      const decl = declarationFor(r, b.tmpl, b.label, consumers);
-      if (!decl) continue;
-      const existing = out.get(decl.appName);
-      // ── THE RESTRICTIVE READING WINS (review of #4261, finding 6) ────────
-      // MERGE, never replace. The previous rule replaced a PINNED declaration
-      // with an ELASTIC one whenever the elastic module knew more consumers,
-      // which inverts the two claims: the operator would be told "no data is
-      // lost" (availability) about a service another module pins as a singleton
-      // (durability). That is the exact R7 inversion this file exists to
-      // prevent, and the merge is the one place the invariant can live.
-      //
-      // Reachable only when one app is declared in two modules — MEASURED: not
-      // true on today's artifact, so this is latent, not live. It is fixed
-      // anyway, because "not reachable today" is not an invariant.
-      out.set(
-        decl.appName,
-        existing
-          ? {
-              // The pinned declaration wins the durability verdict and keeps its
-              // own prose; consumers UNION, so neither module's wires are lost.
-              ...(existing.scalableToZero ? decl : existing),
-              scalableToZero: existing.scalableToZero && decl.scalableToZero,
-              declaredConsumers: dedupeConsumers([
-                ...existing.declaredConsumers,
-                ...decl.declaredConsumers,
-              ]),
-            }
-          : decl,
-      );
+
+      // ── ONE RESOURCE, N APPS (the generic `apps[]` loop) ──────────────────
+      // A `copy` block declares one Container App per array element. Left
+      // unexpanded it is a single UNBOUNDED hole in the population, which would
+      // shadow every unlisted subject and refuse the whole estate.
+      const bindings: Array<CopyBinding | undefined> = [undefined];
+      const copyBlock = asRecord(r.copy);
+      if (typeof copyBlock.count === 'string') {
+        const counted = COPY_COUNT.exec(copyBlock.count);
+        const eff =
+          counted?.[1] !== undefined ? effectiveParam(counted[1], b.passed, params) : null;
+        if (counted?.[1] !== undefined && eff?.state === 'literal' && Array.isArray(eff.value)) {
+          bindings.length = 0;
+          for (const item of eff.value) {
+            bindings.push({ param: counted[1], item: asRecord(item) });
+          }
+        }
+        // A copy whose count does NOT resolve stays a single unresolved
+        // resource below — it is not silently dropped.
+      }
+
+      for (const copy of bindings) {
+        const named = resolveDeclaredName(r.name, params, b.passed, copy);
+        if (named === null) {
+          const expr = unresolvedNameExpr(r.name, params, b.passed);
+          unnamed.push({
+            module: b.label,
+            nameExpr: expr,
+            ...(unresolvedNamePrefix(expr) !== undefined
+              ? { namePrefix: unresolvedNamePrefix(expr)! }
+              : {}),
+          });
+          continue;
+        }
+        const consumers = consumersFor(named, b.symbol, envBlobs);
+        const decl = declarationFor(r, b.tmpl, b.label, consumers, b.passed, copy);
+        if (!decl) continue;
+        const existing = out.get(decl.appName);
+        // ── THE RESTRICTIVE READING WINS (review of #4261, finding 6) ──────
+        // MERGE, never replace. The previous rule replaced a PINNED declaration
+        // with an ELASTIC one whenever the elastic module knew more consumers,
+        // which inverts the two claims: the operator would be told "no data is
+        // lost" (availability) about a service another module pins as a
+        // singleton (durability). That is the exact R7 inversion this file
+        // exists to prevent, and the merge is the one place the invariant lives.
+        //
+        // Reachable only when one app is declared in two modules — MEASURED:
+        // not true on today's artifact, so this is latent, not live. It is
+        // fixed anyway, because "not reachable today" is not an invariant.
+        out.set(
+          decl.appName,
+          existing
+            ? {
+                // The pinned declaration wins the durability verdict and keeps
+                // its own prose; consumers UNION, so no module's wires are lost.
+                ...(existing.scalableToZero ? decl : existing),
+                scalableToZero: existing.scalableToZero && decl.scalableToZero,
+                declaredConsumers: dedupeConsumers([
+                  ...existing.declaredConsumers,
+                  ...decl.declaredConsumers,
+                ]),
+              }
+            : decl,
+        );
+      }
     }
   }
-  return out;
+  return { declarations: out, unnamed };
+}
+
+/**
+ * The declarations only, keyed by app name.
+ *
+ * Convenience over {@link deriveScalability} for callers that genuinely only
+ * want the population. It DISCARDS `unnamed`, so a caller that uses this to
+ * decide whether a subject is declared is asserting the population is complete
+ * — which is the B1 hole in miniature. The production path does not use it.
+ */
+export function declarationsFromTemplate(
+  template: unknown,
+): ReadonlyMap<string, ScalabilityDeclaration> {
+  return deriveScalability(template).declarations;
 }
 
 /**
@@ -551,6 +886,13 @@ export type ScalabilitySource =
       readonly status: 'declared';
       readonly declarations: ReadonlyMap<string, ScalabilityDeclaration>;
       readonly from: string;
+      /**
+       * Container Apps whose NAME could not be resolved, so they are absent from
+       * `declarations`. While this is non-empty the map's population is
+       * INCOMPLETE and "not in the map" establishes nothing — see
+       * {@link refuseScaleToZero}.
+       */
+      readonly unnamed: readonly UnnamedDeclaration[];
     }
   | {
       readonly status: 'absent';
@@ -584,11 +926,15 @@ export function deployDeclaredScalabilitySource(): ScalabilitySource {
   }
   declarationCache =
     outcome.status === 'ok'
-      ? {
-          status: 'declared',
-          declarations: declarationsFromTemplate(outcome.inline.template),
-          from: outcome.file,
-        }
+      ? (() => {
+          const derived = deriveScalability(outcome.inline.template);
+          return {
+            status: 'declared' as const,
+            declarations: derived.declarations,
+            unnamed: derived.unnamed,
+            from: outcome.file,
+          };
+        })()
       : {
           status: 'absent',
           from: outcome.candidates.join(' , '),
@@ -692,8 +1038,12 @@ export type ScaleToZeroRefusal =
   | { readonly kind: 'self'; readonly appName: string }
   | {
       readonly kind: 'declaration-unavailable';
-      /** WHICH failure. `unreadable` may be transient; `absent` is a property of the image. */
-      readonly why: 'unreadable' | 'absent' | 'empty';
+      /**
+       * WHICH failure. `unreadable` may be transient; `absent` is a property of
+       * the image; `name-unresolved` means the artifact parsed but its
+       * population has a hole, so this subject's absence proves nothing.
+       */
+      readonly why: 'unreadable' | 'absent' | 'empty' | 'name-unresolved';
       /** The path(s) the answer was sought at — so the refusal NAMES its unreadable source. */
       readonly from: string;
       readonly detail: string;
@@ -790,6 +1140,11 @@ export function refuseScaleToZero(
           status: 'declared',
           declarations: source,
           from: '(declarations supplied by the caller)',
+          // A caller that hands over a bare Map is ASSERTING its population is
+          // complete — there is nowhere else for the gap to be recorded. The
+          // production path never does this; it goes through
+          // `deployDeclaredScalabilitySource()`, which carries the real list.
+          unnamed: [],
         }
       : (source as ScalabilitySource);
 
@@ -829,7 +1184,42 @@ export function refuseScaleToZero(
   }
 
   const decl = resolved.declarations.get(subject);
-  if (!decl) return null;
+  if (!decl) {
+    // ── AN INCOMPLETE MAP CANNOT SAY "NOT DECLARED" (review of #4261, B1) ────
+    // A Container App whose name is a runtime expression has no key, so it is
+    // missing from the map — and a lookup miss against a map with a hole in it
+    // is indistinguishable from "this app is genuinely undeclared". Returning
+    // null there is `absent -> allow`, the same shape as the round-1 fail-open.
+    //
+    // The hole is BOUNDED wherever it can be: only a hole that could actually
+    // produce THIS name shadows this subject. MEASURED on the committed
+    // artifact, after the `apps[]` copy loop is expanded the single remaining
+    // hole is the dlz-attach gateway, whose name is
+    // `[take(format('loom-s3-gateway-{0}', …), 32)]` — so it shadows
+    // `loom-s3-gateway-*` and nothing else. Refusing every unlisted subject on
+    // account of it would be a disabled feature wearing a guard's clothes.
+    const shadowing = resolved.unnamed.filter(
+      (u) => u.namePrefix === undefined || subject.startsWith(u.namePrefix),
+    );
+    if (shadowing.length > 0) {
+      const where = shadowing
+        .map((u) => `'${u.module}' (name expression ${u.nameExpr})`)
+        .join('; ');
+      return {
+        kind: 'declaration-unavailable',
+        why: 'name-unresolved',
+        from: resolved.from,
+        detail:
+          `the template parsed, but ${shadowing.length} Container App declaration(s) could not be ` +
+          'keyed because their app NAME is computed at deploy time, so the derived map is ' +
+          `INCOMPLETE and '${subject}' not being in it establishes nothing — it may be one of ` +
+          `them. Unresolved and capable of producing this name: ${where}. This is not a claim ` +
+          'that the app is undeclared; it is a claim that the question could not be answered ' +
+          'from this artifact.',
+      };
+    }
+    return null;
+  }
   if (!decl.scalableToZero) return { kind: 'pinned-singleton', declaration: decl };
   if (decl.declaredConsumers.length > 0) {
     return { kind: 'declared-consumer', declaration: decl };
@@ -894,5 +1284,12 @@ export function declarationUnavailableExplanation(
       );
     case 'empty':
       return `${head} Source: '${refusal.from}'. ${refusal.detail}${tail}`;
+    case 'name-unresolved':
+      return (
+        `${head} Source: '${refusal.from}'. ${refusal.detail} Remediation: this is a gap in the ` +
+        'reader, not in the estate — the module(s) named above declare their app name with an ' +
+        'expression this static resolver does not evaluate. Until it does, an unlisted subject is ' +
+        `refused rather than performed blind.${tail}`
+      );
   }
 }
