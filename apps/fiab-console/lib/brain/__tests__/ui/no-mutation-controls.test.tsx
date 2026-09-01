@@ -287,14 +287,53 @@ describe('B — no rendered control carries a mutation verb', () => {
 // ---------------------------------------------------------------------------
 
 /**
- * The two mutation-capable controls this surface is now allowed to carry, by
- * `data-testid`. An allowlist, not a ban: the point of the original contract was
- * "someone adds an Apply button in six months and nothing fails". With execution
- * legitimately on the page, a ban is no longer expressible — but an allowlist
- * is, and a THIRD control added later trips it whether or not its label happens
- * to contain a verb anyone thought of.
+ * TWO walks, because one of them was blind and claimed not to be.
+ *
+ * ── WHAT THE ROUND-4 REVIEW MEASURED, AND WHY IT WAS RIGHT ─────────────────
+ * The first version of this block had ONE walk — `mutationControlIds()` — and a
+ * doc-block claiming "a THIRD control added later trips it whether or not its
+ * label happens to contain a verb anyone thought of." That was FALSE. The walk
+ * pre-filters by `mutationVerbHits(c).length > 0` BEFORE the comparison, so a
+ * verbless control never reaches it at all. Measured on `be407a9`:
+ *
+ *   <Button data-testid="ship-it" onClick={onConfirm}>Go</Button>
+ *   added to DialogActions, primary, no `disabled` prop
+ *   -> 94 passed | 0 failed   GREEN
+ *
+ * That is a control wired to the REAL execute handler, bypassing the typed-name
+ * speed bump, invisible because "Go" contains no listed verb. Third independent
+ * blindness on this one feature, after the portal root and the missing `perform`
+ * verb — so the pattern, not any single spelling, is the thing to guard.
+ *
+ * ── THE SPLIT ──────────────────────────────────────────────────────────────
+ *   `mutationControlIds()`      VERB-based, WHOLE document. Catches a
+ *                               mutation-verb control ANYWHERE on the surface,
+ *                               including outside the execute subtrees — e.g. an
+ *                               "Apply" button dropped onto a finding card.
+ *                               Its filter is the point; it is not an allowlist.
+ *   `executeSubtreeControlIds()` UNFILTERED, execute subtrees ONLY. EVERY
+ *                               interactive control inside `perform-block` or
+ *                               `perform-confirm-dialog` must be named below —
+ *                               verb or no verb, label or no label. This is the
+ *                               one that has to be exhaustive, because the
+ *                               subtree is where the execute handler lives.
+ *
+ * Neither subsumes the other: the first covers the whole page but only known
+ * verbs; the second covers all controls but only where it matters most.
  */
 const ALLOWED_MUTATION_CONTROLS = ['perform', 'perform-confirm'];
+
+/**
+ * EVERY control the execute subtrees are allowed to contain, by `data-testid`.
+ * `perform-cancel` is in here because the walk is unfiltered, not because
+ * cancelling mutates anything — that is exactly the property being asserted:
+ * the set is CLOSED, so anything new must be added here deliberately.
+ */
+const ALLOWED_EXECUTE_SUBTREE_CONTROLS = ['perform', 'perform-cancel', 'perform-confirm'];
+
+/** The subtrees that can reach the execute handler. */
+const EXECUTE_SUBTREE_SELECTOR =
+  '[data-testid="perform-block"], [data-testid="perform-confirm-dialog"]';
 
 describe('B2 — a perform-enabled render carries EXACTLY the sanctioned controls', () => {
   function performEnabled(perform?: (b: PerformRequestBody) => Promise<PerformOutcomeResult>) {
@@ -308,7 +347,11 @@ describe('B2 — a perform-enabled render carries EXACTLY the sanctioned control
     );
   }
 
-  /** Testids of every mutation-verb-matching control, deduped and sorted. */
+  /**
+   * Testids of every mutation-verb-matching control, deduped and sorted.
+   * VERB-FILTERED and document-wide — see the block comment above. This one is
+   * NOT the exhaustive guard; `executeSubtreeControlIds` is.
+   */
   function mutationControlIds(): string[] {
     return [
       ...new Set(
@@ -319,6 +362,29 @@ describe('B2 — a perform-enabled render carries EXACTLY the sanctioned control
     ].sort();
   }
 
+  /**
+   * Testids of EVERY interactive control inside the execute subtrees. No verb
+   * filter, no label requirement: a control with no `data-testid` is reported
+   * by its label, and a control with neither is reported as `UNLABELLED:` —
+   * either way it lands in the comparison and fails the allowlist.
+   */
+  function executeSubtreeControlIds(): string[] {
+    const roots = Array.from(document.querySelectorAll(EXECUTE_SUBTREE_SELECTOR));
+    // POPULATION, inside the helper so no caller can forget it: an empty root
+    // set would make every assertion below pass over nothing.
+    expect(roots.length, 'no execute subtree rendered — this walk would be vacuous')
+      .toBeGreaterThan(0);
+    const ids: string[] = [];
+    for (const root of roots) {
+      for (const c of interactiveControls(root)) {
+        ids.push(
+          c.getAttribute('data-testid') ?? `UNLABELLED:${controlLabel(c).trim().slice(0, 60)}`,
+        );
+      }
+    }
+    return [...new Set(ids)].sort();
+  }
+
   it('idle: the only mutation-capable control is the staged Perform button', async () => {
     performEnabled();
     const buttons = await screen.findAllByTestId('perform');
@@ -326,6 +392,9 @@ describe('B2 — a perform-enabled render carries EXACTLY the sanctioned control
     // "nothing rendered".
     expect(buttons.length).toBeGreaterThan(0);
     expect(mutationControlIds()).toEqual(['perform']);
+    // …and UNFILTERED over the execute subtree: nothing else is in there at
+    // all, verb or no verb.
+    expect(executeSubtreeControlIds()).toEqual(['perform']);
   });
 
   it('staged: the confirm joins it, and nothing else does', async () => {
@@ -343,6 +412,17 @@ describe('B2 — a perform-enabled render carries EXACTLY the sanctioned control
     fireEvent.click((await screen.findAllByTestId('perform'))[0]!);
     await screen.findByTestId('perform-confirm-dialog');
     await waitFor(() => expect(mutationControlIds()).toEqual(ALLOWED_MUTATION_CONTROLS));
+    // THE ONE THAT HAS TO BE EXHAUSTIVE. Unfiltered over both execute subtrees,
+    // so a verbless control wired to `onConfirm` — the measured M12 bypass,
+    // `<Button data-testid="ship-it" onClick={onConfirm}>Go</Button>` — lands in
+    // this array and fails, where the verb-filtered walk above never sees it.
+    expect(executeSubtreeControlIds()).toEqual(ALLOWED_EXECUTE_SUBTREE_CONTROLS);
+    // Both subtrees really are in the walked set; otherwise the equality above
+    // could hold over the block alone with the dialog unexamined.
+    expect(document.querySelectorAll('[data-testid="perform-confirm-dialog"]').length).toBe(1);
+    expect(
+      document.querySelectorAll('[data-testid="perform-block"]').length,
+    ).toBeGreaterThan(0);
   });
 
   it('every allowlisted control is a REAL testid on the surface, not a dead string', async () => {
@@ -361,7 +441,7 @@ describe('B2 — a perform-enabled render carries EXACTLY the sanctioned control
     performEnabled(staged);
     fireEvent.click((await screen.findAllByTestId('perform'))[0]!);
     await screen.findByTestId('perform-confirm-dialog');
-    for (const id of ALLOWED_MUTATION_CONTROLS) {
+    for (const id of [...ALLOWED_MUTATION_CONTROLS, ...ALLOWED_EXECUTE_SUBTREE_CONTROLS]) {
       expect(screen.queryAllByTestId(id).length, `no control carries data-testid="${id}"`)
         .toBeGreaterThan(0);
     }
