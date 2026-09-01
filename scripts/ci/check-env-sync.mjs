@@ -590,6 +590,38 @@ const ALLOWLIST = new Set([
   // rejects an unregistered principal with the exact remediation text.
   'LOOM_OPENLINEAGE_POOL_PRINCIPALS',
   'LOOM_AGENT_MEMORY_TOPK',         // B-N14d/AIF-14 tuning knob: memories packed into one agent turn (default 8); unset = code default, never a gate
+
+  // ── NEXT_PUBLIC_LOOM_* — the 7 names widening the population made VISIBLE ──
+  //
+  // Widening ENV_READ_RE / ENV_NAME_RE to `(NEXT_PUBLIC_)?LOOM_*` (#3940, see the
+  // note above ENV_READ_RE) took the read population from 754 to 765 and flagged
+  // exactly these 7. NONE of them is a new defect and none is being silenced to
+  // make the widening look free: each read site was OPENED and the fallback read,
+  // and every one resolves to a working value with the var unset. The reasons
+  // below are what the code says, not what would be convenient — the other 4
+  // NEXT_PUBLIC_LOOM_* reads the widening surfaced (ASA_JOB_NAME, BI_BACKEND,
+  // COSMOS_GREMLIN_ENDPOINT, VERSION) are genuinely emitted and are deliberately
+  // NOT listed here, so the guard now enforces THEIR wiring.
+  //
+  // The load-bearing consequence is forward-looking: before this change a NEW
+  // `process.env.NEXT_PUBLIC_LOOM_*` read that the deploy never emits was
+  // invisible to this guard permanently. It is now RED. That is proved by
+  // mutation in scripts/ci/__tests__/env-sync-population.test.mjs, not asserted.
+  'NEXT_PUBLIC_LOOM_CONSOLE_URL',   // third choice in app/api/items/plan/[id]/approval/route.ts consoleBaseUrl(): LOOM_CONSOLE_BASE_URL first, this second, and with BOTH unset the base is derived from the request's x-forwarded-proto/host — which is the shape that actually runs behind the Container Apps ingress. Never a deploy dependency.
+  'NEXT_PUBLIC_LOOM_AZURE_SQL_DEFAULT_SERVER', // browser-side twin of LOOM_AZURE_SQL_DEFAULT_SERVER (already allowlisted as a sample-DB code default). app/api/sqldb/_shared.ts:106 reads `NEXT_PUBLIC_… || LOOM_… || ''` and only as a STANDALONE fallback after the item's own binding failed to resolve a server; lib/editors/azure-sql-editors.tsx:894 seeds an empty text field with it. Unset => the editor opens on the server picker and sqlConfigGate() honest-gates.
+  'NEXT_PUBLIC_LOOM_AZURE_SQL_DEFAULT_DB',     // the database half of the pair immediately above, same two call sites, same `|| ''` fallback.
+  'NEXT_PUBLIC_LOOM_DATABRICKS_HOSTNAME',      // COSMETIC ONLY. Both reads are display fallbacks in lib/editors/mirrored-databricks-editor.tsx — a `<Caption1>` whose final fallback is the literal '(uses LOOM_DATABRICKS_HOSTNAME)' and a text-field `placeholder`. The value the mirror actually connects with is the server-side LOOM_DATABRICKS_HOSTNAME, which IS emitted. Unset changes one caption, nothing else.
+  'NEXT_PUBLIC_LOOM_DOCS_BASE',     // lib/learn/content.ts:66 exports LOOM_DOCS_BASE with the literal default 'https://fgarofalo56.github.io/csa-inabox' — the real published docs site, so unset is the WORKING state. Same family as LOOM_DOCS_BASE_URL, already allowlisted.
+  'NEXT_PUBLIC_LOOM_ICON_BASE',     // opt-in CDN base for item-type glyphs. lib/components/ui/item-type-visual.ts:413 returns undefined when it is unset, and the caller then renders the BUNDLED icon — the deploy-planner's own test asserts exactly that ('iconUrl stays undefined (bundled fallback) when the base is unset'). An estate sets it only to serve icons from its own CDN.
+  // MEASURED, AND IT IS A REAL GAP — allowlisted because the fix is a bicep
+  // emission in a file this change does not own, NOT because it is fine.
+  // lib/editors/phase3/scorecard-editor.tsx:248 reads it with `??`, not `||`, and
+  // the comment on the line above says an EMPTY string is meaningful: it HIDES
+  // the Power BI link on GCC-High / IL5 where app.powerbi.com is not reachable.
+  // Unset therefore falls through to the hard-coded Commercial host on every
+  // sovereign boundary — a cloud-parity.md gap, filed rather than papered over.
+  // Remove this entry the day admin-plane/main.bicep emits it per boundary.
+  'NEXT_PUBLIC_LOOM_POWERBI_PORTAL',
 ]);
 
 // ── Filesystem helpers (no deps) ──
@@ -612,13 +644,39 @@ export function walk(dir, exts, out = []) {
   return out;
 }
 
-const ENV_READ_RE = /process\.env\.(LOOM_[A-Z0-9_]+)/g;
-const LOOM_TOKEN_RE = /LOOM_[A-Z0-9_]+/g;
+// ── POPULATION: `NEXT_PUBLIC_LOOM_*` IS IN SCOPE FOR EVERY LAYER (#3940) ──────
+//
+// #3940 was closed on the LAYER-3 half of the fix: parseEnvEntries() was widened
+// from `LOOM_*` to `(NEXT_PUBLIC_)?LOOM_*`. Layers 1 and 2 were not, and nothing
+// said so — so the issue read as done while two thirds of the guard kept the
+// exact blindness the issue is about. Re-measured at 5f1ee0d1 before this change:
+//
+//   process.env.LOOM_*             754   (the entire examined set of layer 1)
+//   process.env.NEXT_PUBLIC_LOOM_*  11   (UNEXAMINED — invisible to collectReads)
+//   name: 'NEXT_PUBLIC_LOOM_*' in admin-plane/main.bicep
+//                                   13   (UNEXAMINED — invisible to
+//                                        collectConsoleDelivered's ENV_NAME_RE,
+//                                        which anchors the quote directly onto
+//                                        `LOOM_`)
+//
+// `NEXT_PUBLIC_*` is the prefix that reaches the BROWSER. A read of one that the
+// deploy never emits produces a client-side feature that silently no-ops, which
+// is the hardest class to notice from the server side — so it is the LAST prefix
+// that should have been outside the population.
+//
+// LOOM_TOKEN_RE keeps adding the BARE name for a `NEXT_PUBLIC_LOOM_X` token as
+// well as the prefixed one. That is deliberate and is not a fail-open being
+// preserved out of laziness: layer 1 only asks "does this name appear in bicep
+// at all", it is superseded by layers 2 and 3 for anything that matters, and
+// narrowing it here would surface unrelated churn in files this change does not
+// own. This commit WIDENS what is examined; it narrows nothing.
+const ENV_READ_RE = /process\.env\.((?:NEXT_PUBLIC_)?LOOM_[A-Z0-9_]+)/g;
+const LOOM_TOKEN_RE = /(?:NEXT_PUBLIC_)?LOOM_[A-Z0-9_]+/g;
 // Written as a code point so the literal never has to survive a shell heredoc
 // or an editor that re-escapes it.
 const BACKSLASH = String.fromCharCode(92);
 
-/** Every LOOM_* name read under apps/fiab-console/{app,lib}. */
+/** Every LOOM_* / NEXT_PUBLIC_LOOM_* name read under apps/fiab-console/{app,lib}. */
 export function collectReads() {
   const reads = new Set();
   const files = [
@@ -770,7 +828,8 @@ const CONSOLE_APP_FILE = path.join(ADMIN_PLANE, 'main.bicep');
 /** The module that materialises apps[] and adds env applied to EVERY app. */
 const APP_DEPLOYMENTS_FILE = path.join(ADMIN_PLANE, 'app-deployments.bicep');
 
-const ENV_NAME_RE = /name:\s*'(LOOM_[A-Z0-9_]+)'/g;
+// `(?:NEXT_PUBLIC_)?` per #3940 — see the population note above ENV_READ_RE.
+const ENV_NAME_RE = /name:\s*'((?:NEXT_PUBLIC_)?LOOM_[A-Z0-9_]+)'/g;
 
 /** The balanced `open`..close slice of `text` beginning at index `start`. */
 function balancedSlice(text, start, openChar, closeChar) {
@@ -1501,6 +1560,15 @@ export const TRIAGED_INERT_BINDINGS = new Map([
       param: 'loomCloudTier',
       rootExpr: 'boundary',
       compiledValue: "[parameters('boundary')]",
+      // #3956 — THE INVARIANT THE `why` BELOW RESTS ON, not just the expression.
+      // The rationale is "`boundary` is @allowed([…]) so ARM itself constrains the
+      // value". Measured: removing that decorator from main.bicep compiles
+      // cleanly (`az bicep build` RC=0, 0 BCP errors) and left this guard at
+      // RC=0 — the registry pinned the expression while the property that makes
+      // the expression SAFE was unguarded. `boundary` reaching admin-plane
+      // unconstrained would let a typo'd or empty boundary reach the IL5
+      // Fabric-Admin-API compliance gate in domains-client.ts.
+      dependsOnAllowed: { param: 'boundary', values: ['Commercial', 'GCC', 'GCC-High', 'IL5'] },
       why:
         'The cloud AUTHORIZATION tier five console paths compare against, one of which ' +
         '(lib/azure/domains-client.ts) uses it to skip the Fabric Admin API on IL5 because ' +
@@ -1590,6 +1658,24 @@ export const PARAMS_ENV_BRIDGES = [
     // The param that binds an adopted account into the Console env. Only some
     // params files declare it; where it IS declared it must read the bridge.
     consoleParam: 'loomAzureMapsAccount',
+    // #3956 N-3 — the `if (p)` that used to wrap the consoleParam assertion made
+    // it STRUCTURALLY DEAD on 5 of 7 boundaries: measured, `adopt=true` on 7 and
+    // `param loomAzureMapsAccount =` present on 2, so deleting the line from
+    // gcc.bicepparam exited 0. This set makes the 2 a PINNED population instead
+    // of an accident of which files happen to declare it: a file listed here and
+    // missing the declaration is RED, and a file NOT listed here that grows one
+    // is also RED (add it here in the same diff, so the assertion is never
+    // silently unclaimed).
+    consoleParamFiles: ['commercial.bicepparam', 'gcc.bicepparam'],
+    // …and the REAL binding, which has a population of 7 rather than 2. The
+    // Console env value comes from the adopt MAP, not the param:
+    // platform/fiab/bicep/main.bicep passes this expression to `module adminPlane`
+    // and the `maps` adopt entry is present in 7 of 7 params files, so every
+    // boundary is bound whether or not it declares the param. Pinned by VALUE for
+    // the same reason TRIAGED_INERT_BINDINGS T3 is: `loomAzureMapsAccount:
+    // loomAzureMapsAccount` would drop the adopt path entirely while every
+    // name-presence check stayed green.
+    orchestratorArg: "!empty(adoptName(adopt, 'maps')) ? adoptName(adopt, 'maps') : loomAzureMapsAccount",
     roles: {
       // lib/deploy/adoption-catalog.ts (canonical) | lib/setup/scan-services.ts
       // | app/api/setup/discover-services/route.ts + scripts/csa-loom/scan-and-deploy.sh
@@ -1740,11 +1826,42 @@ export function runInertControl() {
  *
  * @returns {{failures: string[], checked: number, args: Map<string,string>}}
  */
+/**
+ * The `@allowed([…])` members declared on `param <name>` in bicep source, or null
+ * when the parameter has no such decorator.
+ *
+ * Exported and pure so the control can prove it distinguishes "constrained" from
+ * "unconstrained" — the whole point of T5 is that a MISSING decorator is the
+ * thing being detected, and a matcher that returns null for both shapes would be
+ * green on exactly the mutation it exists to catch.
+ *
+ * @param {string} src bicep source
+ * @param {string} paramName e.g. 'boundary'
+ * @returns {string[]|null}
+ */
+export function readAllowedValues(src, paramName) {
+  const clean = stripBicepDocs(src);
+  const decl = new RegExp(String.raw`^param\s+${paramName}\s`, 'm').exec(clean);
+  if (!decl) return null;
+  // Walk back over the decorator lines immediately above the declaration.
+  const before = clean.slice(0, decl.index);
+  const lines = before.split('\n');
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const ln = lines[i].trim();
+    if (ln === '') continue;
+    if (!ln.startsWith('@')) break; // hit non-decorator source: no @allowed
+    const m = /^@(?:sys\.)?allowed\(\s*\[(.*)\]\s*\)\s*$/.exec(ln);
+    if (m) return [...m[1].matchAll(/'([^']*)'/g)].map((x) => x[1]);
+  }
+  return null;
+}
+
 export function computeTriagedBindings() {
   const failures = [];
   const exprs = collectConsoleEnvExpressions();
   const args = collectAdminPlaneArgs();
   const compiledText = fs.readFileSync(COMPILED_TEMPLATE, 'utf8');
+  const rootSrc = fs.readFileSync(ROOT_ORCHESTRATOR, 'utf8');
 
   for (const [envName, spec] of TRIAGED_INERT_BINDINGS) {
     const tag = `${envName} (${spec.issue})`;
@@ -1818,8 +1935,49 @@ export function computeTriagedBindings() {
           'the check that does not.',
       );
     }
+
+    // T5 — the INVARIANT the spec's rationale rests on (#3956). Pinning the
+    // expression is not enough when the expression is only safe because ARM
+    // constrains the parameter it references.
+    failures.push(...checkAllowedInvariant(tag, spec, rootSrc));
   }
   return { failures, checked: TRIAGED_INERT_BINDINGS.size, args };
+}
+
+/**
+ * T5 — the `@allowed` union a triaged binding's rationale DEPENDS on (#3956).
+ *
+ * Pure and exported, for the same reason every other classifier in this file is:
+ * a check that can only be exercised by mutating the real tree is a check whose
+ * teeth nobody re-measures. Deleting the body must make a named spec go red.
+ *
+ * @param {string} tag display prefix
+ * @param {{param: string, dependsOnAllowed?: {param: string, values: string[]}}} spec
+ * @param {string} rootSrc source of the orchestrator that declares the parameter
+ * @returns {string[]}
+ */
+export function checkAllowedInvariant(tag, spec, rootSrc) {
+  if (!spec.dependsOnAllowed) return [];
+  const { param: guardedParam, values } = spec.dependsOnAllowed;
+  const actualAllowed = readAllowedValues(rootSrc, guardedParam);
+  if (actualAllowed === null) {
+    return [
+      `${tag}: platform/fiab/bicep/main.bicep no longer declares \`@allowed([…])\` on ` +
+        `\`param ${guardedParam}\`. This binding's rationale is "ARM itself constrains the ` +
+        'value", and without the decorator it does not — the template still COMPILES, which ' +
+        `is why nothing else catches it. Restore the decorator, or change ${spec.param}'s ` +
+        'entry here to a rationale that is actually true.',
+    ];
+  }
+  if (JSON.stringify(actualAllowed) !== JSON.stringify(values)) {
+    return [
+      `${tag}: \`@allowed\` on \`param ${guardedParam}\` is ` +
+        `${JSON.stringify(actualAllowed)}, expected ${JSON.stringify(values)}. Widening or ` +
+        'reordering the boundary union changes what values can reach the compliance gate ' +
+        'this binding feeds; update dependsOnAllowed in the same diff, with the reason.',
+    ];
+  }
+  return [];
 }
 
 /**
@@ -1891,19 +2049,40 @@ module adminPlane 'modules/admin-plane/main.bicep' = if (deployAdminPlane) {
     failures.push('a `loomCloudTier` argument in another module leaked into the adminPlane view');
   }
 
-  // The slicer must FAIL CLOSED rather than return an empty set on a rename.
-  let threw = false;
+  // The slicer must FAIL CLOSED rather than return an empty set on a rename —
+  // and it must fail with its OWN diagnostic. #3956: asserting only THAT it
+  // threw let a bare TypeError substitute for the explicit `throw`, so the
+  // property survived while the message that tells the next reader what broke
+  // did not. Assert the diagnostic, not merely the exception.
+  let thrownMessage = null;
   try {
     sliceModuleParamsBlock(mkSrc('boundary', 'unrelated: 1'), 'noSuchModule');
-  } catch {
-    threw = true;
+  } catch (e) {
+    thrownMessage = e && e.message ? e.message : String(e);
   }
-  if (!threw) failures.push('sliceModuleParamsBlock did not throw on a missing module declaration');
+  if (thrownMessage === null) {
+    failures.push('sliceModuleParamsBlock did not throw on a missing module declaration');
+  } else if (
+    !thrownMessage.includes('expected exactly ONE') ||
+    !thrownMessage.includes('noSuchModule')
+  ) {
+    failures.push(
+      'sliceModuleParamsBlock threw, but not its own diagnostic — a bare runtime error is ' +
+        `substituting for the explicit fail-closed throw: ${thrownMessage}`,
+    );
+  }
 
   // The compiled-template reader must be structural, not textual.
+  // #3956: this fixture used to contain ONLY `Microsoft.Resources/deployments`
+  // nodes, so relaxing compiledNestedParamRefs' type filter passed both the
+  // control and the real tree — the filter was unguarded by the thing that
+  // exists to guard it. The decoy below is a NON-deployment resource carrying a
+  // `properties.parameters.loomCloudTier`, which is the shape a relaxed filter
+  // would wrongly collect.
   const FAKE_TEMPLATE = JSON.stringify({
     resources: [
       { type: 'Microsoft.Resources/deployments', name: 'unrelated', properties: { parameters: { other: { value: "[parameters('boundary')]" } } } },
+      { type: 'Microsoft.App/containerApps', name: 'not-a-deployment', properties: { parameters: { loomCloudTier: { value: "[parameters('boundary')]" } } } },
       { type: 'Microsoft.Resources/deployments', name: 'admin-plane', properties: { parameters: { loomCloudTier: { value: "[parameters('boundary')]" } } } },
     ],
   });
@@ -1929,20 +2108,142 @@ module adminPlane 'modules/admin-plane/main.bicep' = if (deployAdminPlane) {
   if (compiledNestedParamRefs(FAKE_TEMPLATE, 'noSuchParam').length !== 0) {
     failures.push('compiledNestedParamRefs matched a parameter the template does not supply');
   }
+
+  // T5 (#3956) — the @allowed reader must tell CONSTRAINED from UNCONSTRAINED.
+  // A matcher that returned null for both would be green on exactly the mutation
+  // T5 exists to catch (removing the decorator, which still compiles).
+  const CONSTRAINED = `@description('Cloud boundary')
+@allowed(['Commercial', 'GCC', 'GCC-High', 'IL5'])
+param boundary string
+`;
+  const UNCONSTRAINED = `@description('Cloud boundary')
+param boundary string
+`;
+  const got = readAllowedValues(CONSTRAINED, 'boundary');
+  if (JSON.stringify(got) !== JSON.stringify(['Commercial', 'GCC', 'GCC-High', 'IL5'])) {
+    failures.push(`readAllowedValues read the constrained fixture as ${JSON.stringify(got)}`);
+  }
+  if (readAllowedValues(UNCONSTRAINED, 'boundary') !== null) {
+    failures.push(
+      'readAllowedValues reported an @allowed union for a param that has NO decorator — T5 ' +
+        'would then be green on the exact mutation it exists to catch',
+    );
+  }
+  if (readAllowedValues(CONSTRAINED, 'noSuchParam') !== null) {
+    failures.push('readAllowedValues returned a union for a param the source does not declare');
+  }
+  // The decorator must belong to THIS param, not to one further up the file.
+  const NEIGHBOUR = `@allowed(['a', 'b'])
+param somethingElse string
+
+param boundary string
+`;
+  if (readAllowedValues(NEIGHBOUR, 'boundary') !== null) {
+    failures.push(
+      "readAllowedValues attributed a NEIGHBOURING param's @allowed decorator to an " +
+        'unconstrained param — the union would then read as present when it is not',
+    );
+  }
   return failures;
 }
 
 // ── LAYER 5: every boundary's params file reads every BYO spelling ──────────
 
-/** The .bicepparam files that declare `param adopt =` — the derived population. */
-export function collectAdoptParamsFiles() {
+/** Every `*.bicepparam` under params/, whether or not it declares `param adopt =`. */
+export function collectAllParamsFiles() {
   const dir = path.join(BICEP_ROOT, 'params');
   return fs
     .readdirSync(dir)
     .filter((f) => f.endsWith('.bicepparam'))
-    .sort()
-    .map((f) => ({ file: f, src: stripBicepDocs(fs.readFileSync(path.join(dir, f), 'utf8')) }))
-    .filter(({ src }) => /^param\s+adopt\s*=/m.test(src));
+    .sort();
+}
+
+/** The .bicepparam files that declare `param adopt =` — the derived population. */
+export function collectAdoptParamsFiles() {
+  const dir = path.join(BICEP_ROOT, 'params');
+  return collectAdoptParamsFilesFrom(
+    collectAllParamsFiles().map((f) => ({
+      file: f,
+      src: stripBicepDocs(fs.readFileSync(path.join(dir, f), 'utf8')),
+    })),
+  );
+}
+
+/**
+ * The population filter, split from the file read so a test can drive it with
+ * synthetic sources. The filter IS the thing #3956 N-1 attacks, so it has to be
+ * exercisable without touching the tree.
+ */
+export function collectAdoptParamsFilesFrom(candidates) {
+  return candidates.filter(({ src }) => /^param\s+adopt\s*=/m.test(src));
+}
+
+/**
+ * GROW-ONLY FLOOR for layer 5's DERIVED population (#3956 N-1).
+ *
+ * THE DEFECT THIS CLOSES, measured at 5f1ee0d1. `collectAdoptParamsFiles()`
+ * filters on `/^param\s+adopt\s*=/m`. Indenting that declaration by ONE SPACE in
+ * platform/fiab/bicep/params/il5.bicepparam took the population from 7 to 6 and
+ * the guard exited **RC=0** — IL5 left the examined set entirely and the only
+ * trace was a printed number nothing asserted. `main()` checked `bridgeFiles === 0`
+ * and nothing else, so 7 -> 1 also passed silently.
+ *
+ * That is this repository's dominant evasion class — falling OUT of a population
+ * rather than failing a rule — and here it lands on a sovereign boundary, which
+ * makes it a cloud-parity.md exposure: the boundary that loses the BYO bridge is
+ * exactly the one whose operators have no Commercial path to fall back to.
+ *
+ * The docstring on PARAMS_ENV_BRIDGES defends the population being DERIVED, and
+ * that defence is still correct — it protects against ADDITION, so a new boundary
+ * file is covered the day it lands. Nothing protected against REMOVAL. This set
+ * is only the floor; derivation still governs the ceiling.
+ *
+ * A file listed here that stops matching the filter is RED and NAMED. Deleting a
+ * boundary for real means deleting it here too, in the same diff — a reviewable
+ * line, never a silent side effect.
+ */
+export const EXPECTED_ADOPT_PARAMS_FILES = Object.freeze([
+  'commercial-full.bicepparam',
+  'commercial.bicepparam',
+  'dlz-attach.bicepparam',
+  'gcc-high.bicepparam',
+  'gcc.bicepparam',
+  'il5.bicepparam',
+  'tenant-dmlz.bicepparam',
+]);
+
+/**
+ * Pure population assertion, exported so a test can drive it with synthetic file
+ * lists rather than by mutating the tree.
+ *
+ * @param {string[]} observed filenames that MATCHED the `param adopt =` filter
+ * @param {string[]} onDisk every `*.bicepparam` present under params/
+ * @param {readonly string[]} expected the grow-only floor
+ * @returns {string[]} failure descriptions; empty means the population held
+ */
+export function checkAdoptPopulation(observed, onDisk, expected = EXPECTED_ADOPT_PARAMS_FILES) {
+  const failures = [];
+  const seen = new Set(observed);
+  const present = new Set(onDisk);
+  for (const f of expected) {
+    if (seen.has(f)) continue;
+    if (present.has(f)) {
+      failures.push(
+        `params/${f} still exists but NO LONGER matches \`^param adopt =\`, so this boundary ` +
+          'silently left the BYO-bridge population and every assertion below stopped running ' +
+          'against it. Indentation, a rename of the `adopt` param, or a deleted declaration all ' +
+          'produce this. Restore the declaration — do not remove the file from ' +
+          'EXPECTED_ADOPT_PARAMS_FILES to make the guard quiet. (#3956 N-1)',
+      );
+    } else {
+      failures.push(
+        `params/${f} is gone from platform/fiab/bicep/params/ entirely. If that boundary was ` +
+          'genuinely retired, remove it from EXPECTED_ADOPT_PARAMS_FILES in the SAME diff and ' +
+          'say why; the floor is grow-only precisely so this is a reviewed line. (#3956 N-1)',
+      );
+    }
+  }
+  return failures;
 }
 
 /**
@@ -1968,13 +2269,181 @@ export function sliceVarDeclaration(src, id) {
  */
 export function computeParamsEnvBridges() {
   const files = collectAdoptParamsFiles();
-  const failures = [];
+  const onDisk = collectAllParamsFiles();
+  const failures = [...checkAdoptPopulation(files.map((f) => f.file), onDisk)];
   for (const { file, src } of files) {
     for (const bridge of PARAMS_ENV_BRIDGES) {
       failures.push(...checkOneBridge(file, src, bridge));
     }
   }
-  return { failures, files: files.length, bridges: PARAMS_ENV_BRIDGES.length };
+  // The REAL Console binding, asserted ONCE and covering all 7 boundaries
+  // (#3956 N-3). See PARAMS_ENV_BRIDGES.orchestratorArg.
+  failures.push(...checkBridgeOrchestratorArgs(collectAdminPlaneArgs()));
+  return { failures, files: files.length, bridges: PARAMS_ENV_BRIDGES.length, onDisk: onDisk.length };
+}
+
+/**
+ * The adopt-map → Console binding in the ROOT orchestrator, pinned by value.
+ *
+ * Population 1 (there is one `module adminPlane`), but coverage 7: the expression
+ * is boundary-independent, so this is the assertion that actually protects every
+ * params file — unlike `consoleParam`, which only 2 of them declare.
+ *
+ * @param {Map<string,string>} args the parsed `module adminPlane` argument list
+ * @returns {string[]}
+ */
+export function checkBridgeOrchestratorArgs(args) {
+  const out = [];
+  for (const bridge of PARAMS_ENV_BRIDGES) {
+    if (!bridge.orchestratorArg || !bridge.consoleParam) continue;
+    const actual = args.get(bridge.consoleParam);
+    if (actual === undefined) {
+      out.push(
+        `[${bridge.id}]: platform/fiab/bicep/main.bicep no longer passes \`${bridge.consoleParam}\` ` +
+          'to `module adminPlane`, so the adopted resource never reaches the Console env on ANY ' +
+          `boundary. ${bridge.issue}`,
+      );
+    } else if (actual !== bridge.orchestratorArg) {
+      out.push(
+        `[${bridge.id}]: main.bicep passes \`${bridge.consoleParam}: ${actual}\`, expected exactly ` +
+          `\`${bridge.consoleParam}: ${bridge.orchestratorArg}\`. Dropping the \`adoptName(adopt, ` +
+          `'${bridge.adoptKey}')\` preference binds the Console to the raw param and silently ` +
+          `ignores an adopted account on all 7 boundaries. ${bridge.issue}`,
+      );
+    }
+  }
+  return out;
+}
+
+/**
+ * The ORDERED preference chain of a bridge variable's declaration (#3956 N-2).
+ *
+ * WHY ORDER AND PAIRING, NOT PRESENCE. The role assertion used to be
+ * `decl.includes("readEnvironmentVariable('<SPELLING>'")` — a SUBSTRING test.
+ * Measured at 5f1ee0d1: transposing the two branches of il5.bicepparam's
+ * `mapsAdoptSub` ternary, so it reads
+ *
+ *     !empty(rEV('EXISTING_AZURE_MAPS_SUB')) ? rEV('EXISTING_MAPS_SUB') : rEV('EXISTING_AZURE_MAPS_SUB')
+ *
+ * keeps BOTH spellings present as substrings and exits **RC=0** — while an IL5
+ * operator who sets only EXISTING_MAPS_SUB is silently ignored, because the guard
+ * that decides whether to use it tests the OTHER variable. That is #3446's defect
+ * verbatim, restored on the boundary layer 5 exists to protect.
+ *
+ * presence != REACHABILITY. What makes a spelling reachable is that the `!empty()`
+ * test which selects it tests THAT SAME spelling, and that the last spelling sits
+ * in the terminal `else`. Those are the two properties asserted.
+ *
+ * @param {string} decl the text of one `var <id> = …` declaration
+ * @returns {{reads: string[], pairs: {guard: string, selects: string}[], guardCount: number}}
+ */
+export function parsePreferenceChain(decl) {
+  const reads = [...decl.matchAll(/readEnvironmentVariable\(\s*'([A-Za-z_][A-Za-z0-9_]*)'/g)].map(
+    (m) => m[1],
+  );
+  const pairs = [
+    ...decl.matchAll(
+      /!\s*empty\(\s*readEnvironmentVariable\(\s*'([A-Za-z_][A-Za-z0-9_]*)'[^)]*\)\s*\)\s*\?\s*\(?\s*readEnvironmentVariable\(\s*'([A-Za-z_][A-Za-z0-9_]*)'/g,
+    ),
+  ].map((m) => ({ guard: m[1], selects: m[2] }));
+  const guardCount = (decl.match(/!\s*empty\(\s*readEnvironmentVariable\(/g) || []).length;
+  return { reads, pairs, guardCount };
+}
+
+/**
+ * Assert that `decl` is a fallback chain over `accepted`, in order, with every
+ * spelling REACHABLE. Split out so a test can drive it directly.
+ *
+ * The pinned shape is the one all 7 params files carry today:
+ *
+ *     !empty(rEV('<A>', '')) ? rEV('<A>', '') : (!empty(rEV('<B>', '')) ? rEV('<B>', '') : rEV('<C>', ''))
+ *
+ * An equivalent-but-differently-spelled chain (`empty(x) ? y : x`) is REJECTED on
+ * purpose. Seven sovereign boundary files are written identically today, and the
+ * value of pinning the shape — that a one-token edit to any of them is loud — is
+ * worth more than tolerating a rewrite nobody has asked for. Reshaping them
+ * deliberately means updating this function in the same diff.
+ *
+ * @param {string} tag display prefix
+ * @param {string} role 'name' | 'rg' | 'sub'
+ * @param {string} id the bridge variable's identifier
+ * @param {string} decl the declaration text
+ * @param {string[]} accepted the accepted spellings, canonical FIRST, legacy LAST
+ * @param {string} issue issue reference for the remediation text
+ * @returns {string[]}
+ */
+export function checkPreferenceChain(tag, role, id, decl, accepted, issue) {
+  const out = [];
+  const { reads, pairs, guardCount } = parsePreferenceChain(decl);
+
+  // (1) PRESENCE — every accepted spelling is read at all. The pre-existing rule,
+  // kept because it is the one that catches an outright deletion.
+  for (const spelling of accepted) {
+    if (!decl.includes(`readEnvironmentVariable('${spelling}'`)) {
+      out.push(
+        `${tag}: \`${id}\` (target.${role}) never reads \`${spelling}\`. An operator who sets ` +
+          "that spelling — which one of Loom's own producers advertises — is silently ignored " +
+          `on this boundary. ${issue}`,
+      );
+    }
+  }
+
+  // (2) FAIL CLOSED — the chain must parse completely. If a `!empty(rEV(` guard
+  // exists that the pair matcher could not read, every reachability assertion
+  // below would be checking fewer branches than the file actually has.
+  if (pairs.length !== guardCount) {
+    out.push(
+      `${tag}: \`${id}\` (target.${role}) has ${guardCount} \`!empty(readEnvironmentVariable(\` ` +
+        `guard(s) but only ${pairs.length} parsed as \`!empty(rEV('X')) ? rEV('Y')\`. The ` +
+        'preference chain is in a shape this checker cannot read, so its reachability verdict ' +
+        `would be worthless. Restore the pinned shape or update checkPreferenceChain(). ${issue}`,
+    );
+    return out;
+  }
+  if (reads.length === 0) return out;
+
+  // (3) REACHABILITY — the test that selects a spelling must test THAT spelling.
+  // This is the #3956 N-2 tooth: a transposed ternary keeps both names present
+  // and makes one of them unreachable-when-set.
+  for (const { guard, selects } of pairs) {
+    if (guard !== selects) {
+      out.push(
+        `${tag}: \`${id}\` (target.${role}) tests \`!empty(${guard})\` but then selects ` +
+          `\`${selects}\`. Both names are still PRESENT in the file, so a substring check stays ` +
+          `green — but \`${selects}\` is only ever read when \`${guard}\` is already set, and an ` +
+          `operator who sets \`${selects}\` alone is silently ignored on this boundary. That is ` +
+          `${issue} restored by transposition. Each branch must test and select the same name.`,
+      );
+    }
+  }
+
+  // (4) POSITION — canonical first, legacy in the terminal `else`.
+  if (reads[0] !== accepted[0]) {
+    out.push(
+      `${tag}: \`${id}\` (target.${role}) reads \`${reads[0]}\` first, expected the canonical ` +
+        `spelling \`${accepted[0]}\`. Preference order decides which value WINS when an operator ` +
+        `sets more than one. ${issue}`,
+    );
+  }
+  const tail = accepted[accepted.length - 1];
+  if (reads[reads.length - 1] !== tail) {
+    out.push(
+      `${tag}: \`${id}\` (target.${role}) ends on \`${reads[reads.length - 1]}\`, expected the ` +
+        `legacy spelling \`${tail}\` in the terminal \`else\` branch. A spelling that is not the ` +
+        'tail and not its own guard is present-but-unreachable — the shape a name-presence check ' +
+        `cannot see. ${issue}`,
+    );
+  }
+
+  // (5) ARITY — an n-spelling chain needs exactly n-1 tests. Catches a spelling
+  // bolted on where nothing can reach it.
+  if (guardCount !== accepted.length - 1) {
+    out.push(
+      `${tag}: \`${id}\` (target.${role}) has ${guardCount} fallback test(s) for ` +
+        `${accepted.length} accepted spellings, expected ${accepted.length - 1}. ${issue}`,
+    );
+  }
+  return out;
 }
 
 /**
@@ -2026,23 +2495,30 @@ export function checkOneBridge(file, src, bridge) {
       out.push(`${tag}: adopt target.${role} references \`${id}\`, which this file does not declare.`);
       continue;
     }
-    for (const spelling of bridge.roles[role]) {
-      if (!decl.includes(`readEnvironmentVariable('${spelling}'`)) {
-        out.push(
-          `${tag}: \`${id}\` (target.${role}) never reads \`${spelling}\`. An operator who sets ` +
-            'that spelling — which one of Loom\'s own producers advertises — is silently ignored ' +
-            `on this boundary. ${bridge.issue}`,
-        );
-      }
-    }
+    out.push(...checkPreferenceChain(tag, role, id, decl, bridge.roles[role], bridge.issue));
   }
 
   // Where the file also binds the adopted resource into a Console param, that
   // param must read the bridge too — otherwise the adopt map is bridged and the
   // env binding is not, on that one boundary.
+  //
+  // #3956 N-3 — this used to be `if (p) { … }`, i.e. the whole assertion was
+  // skipped when the declaration was absent, which is 5 of the 7 boundaries.
+  // Deleting `param loomAzureMapsAccount = mapsAdoptName` from gcc.bicepparam
+  // therefore exited RC=0: the fix for the missing declaration was to delete the
+  // declaration. The population is now PINNED by consoleParamFiles, so absence
+  // and presence are both assertions rather than one being a silent skip.
   if (bridge.consoleParam) {
     const p = new RegExp(String.raw`^param\s+${bridge.consoleParam}\s*=\s*(.+)$`, 'm').exec(src);
+    const expectedHere = (bridge.consoleParamFiles || []).includes(file);
     if (p) {
+      if (!expectedHere) {
+        out.push(
+          `${tag}: declares \`param ${bridge.consoleParam} =\` but is not listed in this bridge's ` +
+            '`consoleParamFiles`. Add it there in the same diff so the binding is asserted rather ' +
+            'than merely present — an unclaimed declaration is one nothing would notice losing.',
+        );
+      }
       const rhs = p[1].trim();
       if (rhs !== nameExpr.trim()) {
         out.push(
@@ -2051,6 +2527,13 @@ export function checkOneBridge(file, src, bridge) {
             'spelling while the Console env binding honours one.',
         );
       }
+    } else if (expectedHere) {
+      out.push(
+        `${tag}: \`param ${bridge.consoleParam} =\` is GONE from this file, which ` +
+          "`consoleParamFiles` says declares it. Until #3956 this assertion sat behind an " +
+          '`if (declaration found)`, so deleting the line was indistinguishable from a boundary ' +
+          `that never had it. ${bridge.issue}`,
+      );
     }
   }
   return out;
@@ -2064,8 +2547,11 @@ export function checkOneBridge(file, src, bridge) {
  */
 export function runParamsBridgeControl() {
   const failures = [];
-  const BRIDGE = PARAMS_ENV_BRIDGES.find((b) => b.id === 'maps');
-  if (!BRIDGE) return ['the maps bridge spec is missing from PARAMS_ENV_BRIDGES'];
+  const REAL = PARAMS_ENV_BRIDGES.find((b) => b.id === 'maps');
+  if (!REAL) return ['the maps bridge spec is missing from PARAMS_ENV_BRIDGES'];
+  // Same spec, re-pointed at the synthetic filename so the consoleParamFiles
+  // population assertion is exercised rather than tripped by the fixture.
+  const BRIDGE = { ...REAL, consoleParamFiles: ['control.bicepparam'] };
 
   const good = `using '../main.bicep'
 var mapsAdoptName = !empty(readEnvironmentVariable('EXISTING_AZURE_MAPS_ACCOUNT', ''))
@@ -2113,6 +2599,40 @@ param loomAzureMapsAccount = mapsAdoptName
       1,
     ],
     ['BROAD: the whole adopt entry removed', good.replace(/empty\(mapsAdoptName\)[^\n]*\n/, ''), 1],
+    // ── #3956 N-2: PRESENT BUT UNREACHABLE ────────────────────────────────────
+    // The exact mutation review ran against il5.bicepparam. Both spellings stay
+    // in the file; the branch that selects the legacy one tests the canonical
+    // one, so setting the legacy one alone does nothing. RC=0 before this fix.
+    [
+      'N-2: the sub ternary is TRANSPOSED — both spellings present, one unreachable',
+      good.replace(
+        `var mapsAdoptSub = !empty(readEnvironmentVariable('EXISTING_AZURE_MAPS_SUB', ''))
+  ? readEnvironmentVariable('EXISTING_AZURE_MAPS_SUB', '')
+  : readEnvironmentVariable('EXISTING_MAPS_SUB', '')`,
+        `var mapsAdoptSub = !empty(readEnvironmentVariable('EXISTING_AZURE_MAPS_SUB', ''))
+  ? readEnvironmentVariable('EXISTING_MAPS_SUB', '')
+  : readEnvironmentVariable('EXISTING_AZURE_MAPS_SUB', '')`,
+      ),
+      1,
+    ],
+    [
+      'N-2: preference ORDER inverted — the legacy spelling wins over the canonical one',
+      good.replace(
+        `var mapsAdoptRg = !empty(readEnvironmentVariable('EXISTING_AZURE_MAPS_RG', ''))
+  ? readEnvironmentVariable('EXISTING_AZURE_MAPS_RG', '')
+  : readEnvironmentVariable('EXISTING_MAPS_RG', '')`,
+        `var mapsAdoptRg = !empty(readEnvironmentVariable('EXISTING_MAPS_RG', ''))
+  ? readEnvironmentVariable('EXISTING_MAPS_RG', '')
+  : readEnvironmentVariable('EXISTING_AZURE_MAPS_RG', '')`,
+      ),
+      1,
+    ],
+    // ── #3956 N-3: the consoleParam assertion used to be behind `if (found)` ──
+    [
+      'N-3: the Console param DECLARATION is deleted from a file that must carry it',
+      good.replace('param loomAzureMapsAccount = mapsAdoptName\n', ''),
+      1,
+    ],
   ];
 
   for (const [label, src, minFailures] of cases) {
@@ -2133,6 +2653,455 @@ param loomAzureMapsAccount = mapsAdoptName
   }
   if (sliceVarDeclaration(good, 'noSuchVar') !== null) {
     failures.push('sliceVarDeclaration returned a slice for a variable that is not declared');
+  }
+
+  // ── #3956 N-1: the DERIVED population must not be able to shrink silently ──
+  // Drive the real filter and the real floor comparison over synthetic inputs.
+  const EXPECT = ['a.bicepparam', 'b.bicepparam'];
+  const withAdopt = "using '../main.bicep'\nparam adopt = {}\n";
+  const indented = "using '../main.bicep'\n param adopt = {}\n"; // the ONE-SPACE evasion
+  const full = collectAdoptParamsFilesFrom([
+    { file: 'a.bicepparam', src: withAdopt },
+    { file: 'b.bicepparam', src: withAdopt },
+  ]).map((f) => f.file);
+  if (full.length !== 2) {
+    failures.push(`the adopt-population filter kept ${full.length} of 2 clean fixture files`);
+  }
+  if (checkAdoptPopulation(full, EXPECT, EXPECT).length !== 0) {
+    failures.push('checkAdoptPopulation flagged a population that matches its floor exactly');
+  }
+  // b.bicepparam still EXISTS but its declaration is indented one space.
+  const shrunk = collectAdoptParamsFilesFrom([
+    { file: 'a.bicepparam', src: withAdopt },
+    { file: 'b.bicepparam', src: indented },
+  ]).map((f) => f.file);
+  if (shrunk.length !== 1) {
+    failures.push(
+      `the one-space indent did not remove b.bicepparam from the derived population ` +
+        `(kept ${shrunk.length}) — the N-1 control is not exercising the real evasion`,
+    );
+  }
+  const shrunkFailures = checkAdoptPopulation(shrunk, EXPECT, EXPECT);
+  if (shrunkFailures.length !== 1) {
+    failures.push(
+      `checkAdoptPopulation reported ${shrunkFailures.length} failures for a boundary that left ` +
+        'the population while its file is still on disk, expected exactly 1',
+    );
+  } else if (!shrunkFailures[0].includes('still exists but NO LONGER matches')) {
+    failures.push(
+      'checkAdoptPopulation reported the wrong CAUSE for a file that is present but unmatched ' +
+        `(deploy-integrity R7): ${shrunkFailures[0]}`,
+    );
+  }
+  // …and a genuinely deleted file must give the OTHER diagnosis, not this one.
+  const deletedFailures = checkAdoptPopulation(['a.bicepparam'], ['a.bicepparam'], EXPECT);
+  if (deletedFailures.length !== 1 || !deletedFailures[0].includes('is gone from')) {
+    failures.push(
+      'checkAdoptPopulation did not distinguish a DELETED params file from one that merely ' +
+        'stopped matching the filter — two different causes, and R7 forbids asserting either blind',
+    );
+  }
+
+  // ── #3956 N-3: the orchestrator argument, population 7 rather than 2 ──
+  const argOk = new Map([[REAL.consoleParam, REAL.orchestratorArg]]);
+  if (checkBridgeOrchestratorArgs(argOk).length !== 0) {
+    failures.push('checkBridgeOrchestratorArgs flagged the exact expression it pins');
+  }
+  if (checkBridgeOrchestratorArgs(new Map()).length !== 1) {
+    failures.push('checkBridgeOrchestratorArgs did not flag a MISSING orchestrator argument');
+  }
+  const argReverted = new Map([[REAL.consoleParam, REAL.consoleParam]]);
+  if (checkBridgeOrchestratorArgs(argReverted).length !== 1) {
+    failures.push(
+      'checkBridgeOrchestratorArgs did not flag the argument reverted to the bare param — the ' +
+        'revert that drops the adopt-map preference on all 7 boundaries',
+    );
+  }
+  return failures;
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// LAYER 6 (#3344 criterion 2) — A PRESENCE VERDICT READ OFF `.value` IS A LIE.
+//
+// #3344 measured a flag that had to be flipped in FOUR places before it reached
+// the console, each layer swallowing it silently. Its second acceptance
+// criterion is the measurement half of that finding, verbatim:
+//
+//     "Guard: list env NAMES, never just values, when asserting presence."
+//
+// WHY. `az containerapp show --query "…env[?name=='X'].value | [0]" -o tsv`
+// prints the EMPTY STRING in two completely different situations:
+//
+//     the app has no `X` entry at all        -> [] -> null -> ""
+//     the app has `X` and its value is ''    ->            -> ""
+//
+// and `cond ? value : ''` in bicep emits exactly the second shape — which is
+// #3323, layer 4 of the original swallow. So a shell test of the form
+// `if [ -z "$X" ]; then echo "the app carries no X"` asserts a cause it did not
+// establish. That is deploy-integrity.md R7, and it is not hypothetical:
+// .github/workflows/loom-brain-scan.yml prints
+//
+//     "az succeeded but <app> carries no LOOM_COSMOS_ENDPOINT env entry.
+//      That is a mis-deployed console, not a missing setting"
+//
+// on an oracle that cannot tell those two apart. An operator sent to debug a
+// "mis-deployed console" when the truth is "the deploy emitted it empty" is the
+// R7 incident this repo already has on file.
+//
+// THE CORRECT SHAPE is to ask for the NAMES — `--query "…env[].name"`, or
+// `env[?name=='X'].name` — which distinguishes absent from empty, and to read
+// `.value` only once presence is settled.
+//
+// SCOPE, STATED. This layer polices the MEASUREMENT, not the wiring. A `.value`
+// read whose result is compared against a specific expected value
+// (`[ "$LIVE" = "$FUNC_URL" ]`) is NOT flagged: absent and empty both land in the
+// "not what we set" branch, so the verdict is correct either way. Only an
+// EMPTINESS test — `-z` / `-n` / `= ""` — is a presence verdict, and only that is
+// reported.
+// ══════════════════════════════════════════════════════════════════════════════
+
+const WORKFLOWS_ROOT = path.join(REPO_ROOT, '.github', 'workflows');
+const SHELL_SCRIPTS_ROOT = path.join(REPO_ROOT, 'scripts');
+
+/** `env[?name=='NAME'].value` — the JMESPath shape that cannot see absence. */
+const ENV_VALUE_QUERY_RE = /env\[\?name==\s*(?:'|")([A-Za-z_][A-Za-z0-9_]*)(?:'|")\s*\]\.value/g;
+/** `env[].name` / `env[?name=='X'].name` — the shape that CAN. */
+const ENV_NAME_QUERY_RE = /env\[[^\]]*\]\.name\b/;
+
+/**
+ * Classify ONE `.value` query site. Pure, exported so the control and the tests
+ * can drive it with synthetic shell text whose answers are known.
+ *
+ * @param {string} src full file text
+ * @param {number} at index of the `env[?name==…].value` match
+ * @returns {{variable: string|null, presenceTest: string|null, hasNameQuery: boolean}}
+ */
+export function classifyEnvQuerySite(src, at) {
+  // The captured shell variable: the nearest `VAR=$(` / `VAR="$(` at or before
+  // the match. A `--query` can sit several lines below its assignment, so this
+  // walks back rather than reading the current line.
+  //
+  // The `"?` is not cosmetic. Without it this matcher missed
+  // scripts/csa-loom/openlineage-pool-setup.sh:126 — `EXISTING="$(az containerapp
+  // show …)"` — and returned variable=null, which made the site unclassifiable
+  // and therefore SILENTLY UNFLAGGED. That site happens to be a value-use, so the
+  // verdict was right by luck; a `VAR="$(…)"` followed by `[ -z "$VAR" ]` would
+  // have been a presence assertion this layer could never see. An examined set
+  // smaller than the population is the defect this whole file exists to stop, so
+  // an unresolvable variable is now reported (below) rather than dropped.
+  const assign = /([A-Za-z_][A-Za-z0-9_]*)=\s*"?\$\(/g;
+  let variable = null;
+  let m;
+  while ((m = assign.exec(src)) !== null) {
+    if (m.index > at) break;
+    variable = m[1];
+  }
+
+  // The window in which a use of that variable still belongs to this read: up to
+  // the next YAML step boundary, capped at 45 lines so a `.sh` file (which has no
+  // step boundaries) cannot reach across an unrelated function.
+  const after = src.slice(at);
+  const capped = after.split('\n').slice(0, 45).join('\n');
+  const step = /\n\s{2,}-\s+(?:name|uses|id):/.exec(after);
+  const win = step && step.index < capped.length ? after.slice(0, step.index) : capped;
+
+  // TRACKED VARIABLES: the capture, plus anything trivially derived from it
+  // within the window. Two hops, because the real tree needs exactly that:
+  // scripts/csa-loom/resolve-msal-client-id.sh captures into `raw`, launders it
+  // with `CID="$(printf '%s' "$raw" | tr -d '\r')"`, and tests `[ -n "${CID:-}" ]`.
+  // Testing only the capture would have called that site clean — a false
+  // negative produced by looking at a smaller set than the code actually uses.
+  const tracked = new Set(variable ? [variable] : []);
+  for (let hop = 0; hop < 2; hop++) {
+    const alias = /^[ \t]*(?:export[ \t]+)?([A-Za-z_][A-Za-z0-9_]*)=(.+)$/gm;
+    let a;
+    while ((a = alias.exec(win)) !== null) {
+      if (tracked.has(a[1])) continue;
+      for (const t of tracked) {
+        if (new RegExp(`\\$\\{?${t}(?![A-Za-z0-9_])`).test(a[2])) {
+          tracked.add(a[1]);
+          break;
+        }
+      }
+    }
+  }
+
+  let presenceTest = null;
+  for (const t of tracked) {
+    const v = t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    // `(?![A-Za-z0-9_])` is load-bearing: without it `-z "$EXISTING"` matched
+    // `[ -n "$EXISTING_CONF" ]` 23 lines away in
+    // scripts/csa-loom/openlineage-pool-setup.sh and flagged a value-use site as
+    // a presence verdict. A guard that cries wolf on a correct site is spent.
+    const hit = new RegExp(
+      `-[zn]\\s+"?\\$\\{${v}(?::-[^}]*)?\\}"?` +
+        `|-[zn]\\s+"?\\$${v}(?![A-Za-z0-9_])"?` +
+        `|"\\$\\{?${v}(?::-[^}]*)?\\}?"\\s*[=!]=?\\s*(?:""|'')` +
+        `|(?:""|'')\\s*[=!]=?\\s*"\\$\\{?${v}(?::-[^}]*)?\\}?"`,
+    ).exec(win);
+    if (hit) {
+      presenceTest = hit[0];
+      break;
+    }
+  }
+
+  // The companion NAME query may sit on EITHER side of the `.value` read — the
+  // natural way to write it is to settle presence first and read the value
+  // second, which puts it BEFORE. Looking only forward would have called the
+  // documented remedy a violation, so the backward window is not optional.
+  const backFrom = Math.max(0, src.lastIndexOf('\n', at) - 1600);
+  const before = src.slice(backFrom, at);
+  const lastStep = /\n\s{2,}-\s+(?:name|uses|id):/g;
+  let backWin = before;
+  let b;
+  while ((b = lastStep.exec(before)) !== null) backWin = before.slice(b.index);
+  return {
+    variable,
+    presenceTest,
+    hasNameQuery: ENV_NAME_QUERY_RE.test(win) || ENV_NAME_QUERY_RE.test(backWin),
+  };
+}
+
+/**
+ * Every `env[?name=='…'].value` read across the workflows and shell scripts,
+ * classified. The POPULATION is the whole census — including the sites that are
+ * fine — because #3344 exists precisely because nothing could see these at all.
+ *
+ * @returns {{key: string, file: string, line: number, env: string, variable: string|null,
+ *            presenceTest: string|null, hasNameQuery: boolean}[]}
+ */
+export function collectEnvValueQuerySites() {
+  const files = [
+    ...walk(WORKFLOWS_ROOT, ['.yml', '.yaml']),
+    ...walk(SHELL_SCRIPTS_ROOT, ['.sh']),
+  ].sort();
+  const out = [];
+  for (const f of files) {
+    const src = fs.readFileSync(f, 'utf8');
+    const rel = path.relative(REPO_ROOT, f).split(path.sep).join('/');
+    ENV_VALUE_QUERY_RE.lastIndex = 0;
+    let m;
+    while ((m = ENV_VALUE_QUERY_RE.exec(src)) !== null) {
+      const line = src.slice(0, m.index).split('\n').length;
+      out.push({
+        key: `${rel}::${m[1]}`,
+        file: rel,
+        line,
+        env: m[1],
+        ...classifyEnvQuerySite(src, m.index),
+      });
+    }
+  }
+  return out;
+}
+
+/**
+ * PRE-EXISTING PRESENCE-FROM-VALUE SITES — a shrinking ratchet, keyed
+ * `<path>::<ENV_NAME>` (stable under line shifts) with the COUNT of sites, so a
+ * second one in the same file for the same var is still caught.
+ *
+ * MEASURED at 5f1ee0d1, and every one of them was opened and read: 23
+ * `env[?name==…].value` sites in total, 15 of which drive a presence verdict off
+ * an oracle that cannot distinguish "absent" from "emitted empty". They are NOT
+ * fixed here: the fix is in .github/workflows/** and scripts/csa-loom/**, which
+ * this change does not own, and a guard whose only effect is to block unrelated
+ * work is not a fix. They are ENUMERATED so they are visible, and so the 16th is
+ * red on the day it lands — which is the state #3344 asked for and the tree did
+ * not have.
+ *
+ * Adding a key here is NOT a fix. The fix is to query `env[].name` for presence
+ * and read `.value` only afterwards.
+ */
+export const KNOWN_VALUE_ONLY_PRESENCE_TESTS = new Map([
+  ['.github/workflows/csa-loom-post-deploy-bootstrap.yml::LOOM_REPORT_SUBSCRIPTIONS_FUNCTION', 1],
+  ['.github/workflows/deploy-copilot-evaluator.yml::LOOM_COSMOS_ENDPOINT', 1],
+  ['.github/workflows/deploy-lineage-extractor.yml::LOOM_COSMOS_ENDPOINT', 1],
+  ['.github/workflows/deploy-loom-uat.yml::LOOM_URL', 1],
+  ['.github/workflows/deploy-report-subscriptions.yml::LOOM_COSMOS_ENDPOINT', 1],
+  ['.github/workflows/deploy-secret-expiry.yml::LOOM_KEY_VAULT_URI', 1],
+  ['.github/workflows/gov-provision-dbx-sql.yml::LOOM_DATABRICKS_HOSTNAME', 1],
+  ['.github/workflows/gov-provision-trino.yml::LOOM_ADLS_ACCOUNT', 1],
+  ['.github/workflows/gov-uc-purview-wire.yml::LOOM_MSAL_CLIENT_ID', 1],
+  ['.github/workflows/gov-verify-facts.yml::LOOM_ADLS_ACCOUNT', 1],
+  ['.github/workflows/loom-brain-scan.yml::LOOM_COSMOS_ENDPOINT', 2],
+  ['.github/workflows/loom-brain-scan.yml::LOOM_UAMI_CLIENT_ID', 2],
+  ['scripts/csa-loom/resolve-msal-client-id.sh::LOOM_MSAL_CLIENT_ID', 1],
+]);
+
+/**
+ * GROW-ONLY floor for the layer-6 CENSUS. Not the failure count — the size of
+ * the population the layer examines. A refactor that moves every `az containerapp
+ * show --query env[…]` behind a helper this scanner cannot see would take the
+ * census to 0 and the layer would report a clean tree it never looked at.
+ */
+export const ENV_QUERY_CENSUS_FLOOR = 20;
+
+/**
+ * @returns {{failures: string[], census: number, flagged: number, stale: string[]}}
+ */
+export function computeEnvQueryPresence() {
+  const sites = collectEnvValueQuerySites();
+  const { failures, counted } = classifyPresenceSites(sites);
+  // The ratchet must stay attached to reality: a key that no longer corresponds
+  // to a flagged site is describing a tree that no longer exists, and leaving it
+  // is how a stale ratchet turns into silent coverage.
+  const stale = [...KNOWN_VALUE_ONLY_PRESENCE_TESTS.keys()].filter((k) => !counted.has(k)).sort();
+  return {
+    failures,
+    census: sites.length,
+    flagged: [...counted.values()].reduce((a, b) => a + b, 0),
+    stale,
+  };
+}
+
+/**
+ * The classification + ratchet comparison, split from the file scan so a test
+ * can drive it with synthetic sites. The UNRESOLVED-capture branch in particular
+ * has no live population once the assignment matcher is correct, and a branch
+ * with no population and no test is a branch nobody can prove still works.
+ *
+ * @param {{key: string, file: string, line: number, env: string, variable: string|null,
+ *          presenceTest: string|null, hasNameQuery: boolean}[]} sites
+ * @param {Map<string, number>} ratchet
+ * @returns {{failures: string[], counted: Map<string, number>}}
+ */
+export function classifyPresenceSites(sites, ratchet = KNOWN_VALUE_ONLY_PRESENCE_TESTS) {
+  const failures = [];
+  const counted = new Map();
+  for (const s of sites) {
+    // FAIL CLOSED on a site whose captured variable could not be resolved: the
+    // classifier cannot say whether it is a presence verdict, and "cannot say"
+    // must never render as "clean" (deploy-integrity R7).
+    if (s.variable === null) {
+      failures.push(
+        `${s.file}:${s.line} reads \`env[?name=='${s.env}'].value\` but classifyEnvQuerySite() ` +
+          'could not resolve which shell variable captures it, so it cannot tell whether the ' +
+          'result drives a presence verdict. That is an UNCLASSIFIED site, not a clean one. ' +
+          'Widen the assignment matcher in classifyEnvQuerySite(). (#3344)',
+      );
+      continue;
+    }
+    // A companion NAME query in the same window settles presence properly, so
+    // reading `.value` afterwards is fine.
+    if (!s.presenceTest || s.hasNameQuery) continue;
+    counted.set(s.key, (counted.get(s.key) || 0) + 1);
+  }
+  for (const [key, n] of [...counted].sort()) {
+    const allowed = ratchet.get(key) || 0;
+    if (n <= allowed) continue;
+    const s = sites.find((x) => x.key === key);
+    failures.push(
+      `${key} — ${n} site(s) derive a PRESENCE verdict from \`env[?name=='${s.env}'].value\` ` +
+        `(the test is \`${s.presenceTest}\` on \`$${s.variable}\`, ${s.file}:${s.line}), but the ` +
+        `ratchet allows ${allowed}. That query returns the empty string BOTH when the app has no ` +
+        `\`${s.env}\` entry AND when the deploy emitted it as '' — which is exactly what ` +
+        "`cond ? value : ''` produces — so any message this branch prints asserts a cause it did " +
+        'not establish (deploy-integrity R7). Fix: ask for the NAMES first ' +
+        `(\`--query "properties.template.containers[0].env[].name"\` or \`env[?name=='${s.env}'].name\`), ` +
+        'then read `.value`. Adding a key to KNOWN_VALUE_ONLY_PRESENCE_TESTS is NOT a fix. (#3344)',
+    );
+  }
+  return { failures, counted };
+}
+
+/**
+ * EMBEDDED CONTROL for layer 6. Drives the real classifier over synthetic shell
+ * text with known answers, so the layer cannot report a clean tree because its
+ * matcher broke.
+ *
+ * @returns {string[]}
+ */
+export function runEnvQueryControl() {
+  const failures = [];
+  const at = (src) => {
+    ENV_VALUE_QUERY_RE.lastIndex = 0;
+    const m = ENV_VALUE_QUERY_RE.exec(src);
+    return m ? m.index : -1;
+  };
+
+  const BAD = `          ACCT=$(az containerapp show -n "$APP" -g "$RG" \\
+            --query "properties.template.containers[0].env[?name=='LOOM_ADLS_ACCOUNT'].value | [0]" -o tsv)
+          if [ -z "\${ACCT:-}" ]; then echo "the app carries no LOOM_ADLS_ACCOUNT"; exit 0; fi
+`;
+  const bad = classifyEnvQuerySite(BAD, at(BAD));
+  if (bad.variable !== 'ACCT') failures.push(`control: read the variable as ${JSON.stringify(bad.variable)}, expected ACCT`);
+  if (!bad.presenceTest) failures.push('control: an `-z` emptiness test on the captured variable was NOT recognised as a presence verdict');
+  if (bad.hasNameQuery) failures.push('control: reported a companion NAME query where there is none');
+
+  // Comparing against a SPECIFIC expected value is correct and must NOT flag.
+  const OK_COMPARE = `          LIVE=$(az containerapp show -g "$RG" -n loom-console \\
+            --query "properties.template.containers[0].env[?name=='LOOM_POSTURE_FUNCTION_URL'].value | [0]" -o tsv)
+          if [ "$LIVE" = "$FUNC_URL" ]; then echo ok; else echo "::warning::read-back was '$LIVE'"; fi
+`;
+  const okc = classifyEnvQuerySite(OK_COMPARE, at(OK_COMPARE));
+  if (okc.presenceTest) {
+    failures.push(`control: a comparison against a specific expected value was WRONGLY read as a presence verdict (${okc.presenceTest})`);
+  }
+
+  // Settling presence off the NAMES first is the documented remedy and must clear.
+  const OK_NAMES = `          NAMES=$(az containerapp show -n "$APP" -g "$RG" --query "properties.template.containers[0].env[].name" -o tsv)
+          VAL=$(az containerapp show -n "$APP" -g "$RG" \\
+            --query "properties.template.containers[0].env[?name=='LOOM_ADLS_ACCOUNT'].value | [0]" -o tsv)
+          if [ -z "$VAL" ]; then echo "emitted empty (it IS present: $NAMES)"; fi
+`;
+  const okn = classifyEnvQuerySite(OK_NAMES, at(OK_NAMES));
+  if (!okn.presenceTest) failures.push('control: lost the emptiness test in the has-NAME-query fixture');
+  if (!okn.hasNameQuery) failures.push('control: did NOT see the companion `env[].name` query that makes a `.value` read sound');
+
+  // The QUOTED assignment form. Missing it returned variable=null, which made a
+  // site unclassifiable and therefore silently unflagged.
+  const QUOTED = `  EXISTING="$(az containerapp show --name "$APP" \\
+    --query "properties.template.containers[0].env[?name=='LOOM_OPENLINEAGE_POOL_PRINCIPALS'].value | [0]" -o tsv)"
+  if [ -z "$EXISTING" ]; then echo "absent"; fi
+`;
+  const q = classifyEnvQuerySite(QUOTED, at(QUOTED));
+  if (q.variable !== 'EXISTING') {
+    failures.push(`control: a \`VAR="$(…)"\` assignment resolved to ${JSON.stringify(q.variable)}, expected EXISTING`);
+  }
+  if (!q.presenceTest) failures.push('control: a presence verdict on a QUOTED-assignment capture was not flagged');
+
+  // A LAUNDERED capture: the test is on a variable DERIVED from the capture.
+  // scripts/csa-loom/resolve-msal-client-id.sh does exactly this, and testing
+  // only the capture called it clean.
+  const ALIASED = `raw="$(az containerapp show -n "$APP" -g "$RG" \\
+  --query "properties.template.containers[0].env[?name=='LOOM_MSAL_CLIENT_ID'].value | [0]" -o tsv)"
+CID="$(printf '%s' "$raw" | tr -d '\\r')"
+if [ -n "\${CID:-}" ]; then echo "resolved"; fi
+`;
+  if (!classifyEnvQuerySite(ALIASED, at(ALIASED)).presenceTest) {
+    failures.push(
+      'control: a presence verdict tested on a variable DERIVED from the capture was not seen — ' +
+        'the classifier is looking at a smaller set of variables than the code uses',
+    );
+  }
+
+  // WORD BOUNDARY. `-n "$EXISTING_CONF"` must NOT satisfy a test for `$EXISTING`;
+  // without the anchor it did, and flagged a correct value-use site.
+  const PREFIX = `  EXISTING="$(az containerapp show \\
+    --query "properties.template.containers[0].env[?name=='LOOM_OPENLINEAGE_POOL_PRINCIPALS'].value | [0]" -o tsv)"
+  case ",\${EXISTING}," in *) MERGED="\${EXISTING:+\${EXISTING},}x" ;; esac
+  EXISTING_CONF="$(az synapse spark pool show --query x -o tsv)"
+  [ -n "$EXISTING_CONF" ] && printf '%s' "$EXISTING_CONF"
+`;
+  const pfx = classifyEnvQuerySite(PREFIX, at(PREFIX));
+  if (pfx.presenceTest) {
+    failures.push(
+      `control: \`-n "$EXISTING_CONF"\` was matched as a presence test for \`$EXISTING\` ` +
+        `(${pfx.presenceTest}) — the variable name is not anchored, so unrelated longer names ` +
+        'produce false positives',
+    );
+  }
+
+  // `-n` and `= ""` are the same verdict in different spellings.
+  for (const [label, test] of [
+    ['-n', 'if [ -n "$CID" ]; then echo yes; fi'],
+    ['= ""', 'if [ "$CID" = "" ]; then echo no; fi'],
+    ['!= ""', 'if [ "$CID" != "" ]; then echo yes; fi'],
+  ]) {
+    const SRC = `          CID=$(az containerapp show --query "env[?name=='LOOM_MSAL_CLIENT_ID'].value | [0]" -o tsv)\n          ${test}\n`;
+    if (!classifyEnvQuerySite(SRC, at(SRC)).presenceTest) {
+      failures.push(`control: the \`${label}\` spelling of a presence verdict was not recognised`);
+    }
   }
   return failures;
 }
@@ -2311,11 +3280,21 @@ function main() {
     process.exit(1);
   }
 
-  const { failures: bridgeFailures, files: bridgeFiles, bridges } = computeParamsEnvBridges();
-  console.log(`[env-sync] params files carrying \`param adopt =\`: ${bridgeFiles}`);
+  const { failures: bridgeFailures, files: bridgeFiles, bridges, onDisk: paramsOnDisk } =
+    computeParamsEnvBridges();
+  console.log(
+    `[env-sync] params files carrying \`param adopt =\`: ${bridgeFiles} of ${paramsOnDisk} on disk ` +
+      `(floor ${EXPECTED_ADOPT_PARAMS_FILES.length})`,
+  );
   console.log(`[env-sync] BYO env bridges asserted per file: ${bridges}`);
   // SELF-CHECK: same fail-closed reasoning as the two above. A derived
   // population that collapses to zero is a guard that passes on nothing.
+  //
+  // `bridgeFiles === 0` was the ONLY floor until #3956, and it is the weakest one
+  // available: 7 -> 1 passed. checkAdoptPopulation() (folded into bridgeFailures
+  // above) is the real floor — it names the boundary that left. This stays as the
+  // catastrophic case, because a zero population would also make that comparison
+  // report seven separate failures with no headline.
   if (bridgeFiles === 0 || bridges === 0) {
     console.error(
       `::error::check-env-sync resolved ${bridgeFiles} params files and ${bridges} bridges. ` +
@@ -2323,6 +3302,13 @@ function main() {
         'PARAMS_ENV_BRIDGES was emptied. Fix it; do not let this check pass on an empty set.',
     );
     process.exit(1);
+  }
+  if (bridgeFiles < EXPECTED_ADOPT_PARAMS_FILES.length) {
+    console.error(
+      `::error::check-env-sync's BYO-bridge population is ${bridgeFiles}, below the grow-only ` +
+        `floor of ${EXPECTED_ADOPT_PARAMS_FILES.length}. A boundary left the examined set. The ` +
+        'per-file failures below name which one (#3956 N-1).',
+    );
   }
   if (bridgeFailures.length) {
     console.error('\n[env-sync] FAIL — a boundary\'s params file does not read every BYO env-var');
@@ -2334,6 +3320,61 @@ function main() {
     console.error('\nFix: restore the bridge in the named file. cloud-parity.md — the same');
     console.error('capability on every boundary — makes a per-boundary revert a defect, not');
     console.error('a Commercial-first tradeoff.');
+    process.exit(1);
+  }
+
+  // #3344 criterion 2 — LAYER 6. The control runs FIRST and unconditionally, for
+  // the same reason the layer-3/4/5 controls do.
+  const envQueryControl = runEnvQueryControl();
+  if (envQueryControl.length) {
+    console.error(
+      '\n::error::check-env-sync LAYER-6 CONTROL FAILED — the presence-verdict classifier no ' +
+        'longer behaves on shell fixtures with known answers, so its census of the real tree is ' +
+        'worthless. Fix it; do not let this check pass on a broken matcher.',
+    );
+    for (const f of envQueryControl) console.error(`  - ${f}`);
+    process.exit(1);
+  }
+
+  const {
+    failures: envQueryFailures,
+    census: envQueryCensus,
+    flagged: envQueryFlagged,
+    stale: envQueryStale,
+  } = computeEnvQueryPresence();
+  console.log(`[env-sync] \`env[?name==…].value\` sites scanned: ${envQueryCensus}`);
+  console.log(
+    `[env-sync] of those, deriving PRESENCE from a value: ${envQueryFlagged} ` +
+      `(ratcheted ${[...KNOWN_VALUE_ONLY_PRESENCE_TESTS.values()].reduce((a, b) => a + b, 0)})`,
+  );
+  // SELF-CHECK: a census that collapses is a layer reporting on a tree it never
+  // read — the same failure shape as `delivered.size < 100` above.
+  if (envQueryCensus < ENV_QUERY_CENSUS_FLOOR) {
+    console.error(
+      `::error::check-env-sync scanned only ${envQueryCensus} \`env[?name==…].value\` sites, ` +
+        `below the floor of ${ENV_QUERY_CENSUS_FLOOR}. Either the workflows genuinely stopped ` +
+        'reading container-app env this way — in which case lower the floor in the same diff — ' +
+        'or collectEnvValueQuerySites() has drifted off them and layer 6 is measuring nothing.',
+    );
+    process.exit(1);
+  }
+  if (envQueryStale.length) {
+    console.error(
+      '\n::error::check-env-sync ratcheted presence-from-value sites that are no longer flagged. ' +
+        'Either they were FIXED (delete the entry — the ratchet must shrink) or the classifier ' +
+        'stopped seeing them and this set is now describing nothing:',
+    );
+    for (const k of envQueryStale) console.error(`  - ${k}`);
+    process.exit(1);
+  }
+  if (envQueryFailures.length) {
+    console.error('\n[env-sync] FAIL — a workflow or script decides whether an env var is SET by');
+    console.error("reading its VALUE. `env[?name=='X'].value` returns '' both when the app has no");
+    console.error("X entry and when the deploy emitted X=''  — and `cond ? value : ''` in bicep");
+    console.error('produces exactly the second shape (#3344 layer 4). So the branch below that');
+    console.error('test states a cause it did not establish (deploy-integrity R7):');
+    for (const f of envQueryFailures) console.error(`  - ${f}`);
+    console.error('\nFix: query the env NAMES to settle presence, then read the value.');
     process.exit(1);
   }
 
