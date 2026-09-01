@@ -112,10 +112,26 @@ on:
 permissions:
   contents: read
 
-# Never cancel in flight: this holds the ACR firewall lease while the image
-# builds (#2603).
+# KEYED ON THE SHARED RESOURCE, NOT ON THIS WORKFLOW'S NAME.
+# `deploy-loom-uat.yml` carries this SAME group, and the reasoning is recorded
+# in full at its own concurrency block. In short: both lanes list their own
+# workflow file in `push: paths:` above, so one commit can start both, and both
+# scripts then acquire the same per-registry ACR firewall lease
+# (deploy-report-subscriptions-job.sh:108, deploy-loom-uat-job.sh:124 —
+# acr-firewall-lease.sh, one lease per registry). Workflow-name-keyed groups are
+# disjoint, so GitHub would not serialize them, and the loser would wait out
+# LOOM_ACR_LEASE_WAIT_MINUTES (25) and HARD-FAIL. Serialization belongs at the
+# contended resource. Region is a PROXY for the registry — it is the coarsest
+# key available at expression time (workflow-level `concurrency` is evaluated
+# before any step runs, and the ACR name is resolved at runtime) and it never
+# splits one registry into two groups.
+#
+# Never cancel in flight: a run in flight HOLDS the lease (#2603). A run still
+# QUEUED has executed no steps, so the only thing this group can lose — GitHub
+# keeps one pending run per group — touched nothing and reads as `cancelled`,
+# which check-deploy-staleness counts as no evidence rather than as a failure.
 concurrency:
-  group: deploy-report-subscriptions-${{ inputs.region || 'centralus' }}
+  group: acr-firewall-${{ inputs.region || 'centralus' }}
   cancel-in-progress: false
 
 env:

@@ -115,6 +115,42 @@ const PLACEHOLDER = /\b(tbd|todo|fixme|xxx|wip|n\/?a|unknown|placeholder|see abo
 const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
 
 /**
+ * The longest window a single disposition may cover, in days from `declaredOn`.
+ *
+ * Expiry is the ONLY thing separating this register from the allowlist it
+ * replaces, and an expiry with no ceiling is advisory: `reviewBy: '2099-12-31'`
+ * satisfied every other rule in this file and acknowledged for 73 years. An
+ * allowlist you can hide in for 73 years is an allowlist.
+ *
+ * 120 is deliberately generous — a quarter plus a month of slack. The three
+ * shipped entries sit 84-91 days out, so this costs nothing today, which is
+ * exactly when a cap is cheap to add and honest to choose. Re-dating an entry
+ * is one line; that re-dating is the review this register is named for.
+ */
+export const MAX_REVIEW_DAYS = 120;
+
+/**
+ * Whole days from `from` to `to` (both ISO calendar dates), or `null` if either
+ * is not a date at all.
+ *
+ * A DELIBERATE DEPARTURE from this file's idiom. Every other date rule here is a
+ * lexical string comparison, which is exact on the ISO shape and needs no
+ * parsing — but a *span* cannot be computed lexically, so this one guard parses.
+ * It fails closed on anything `Date` rejects, which also closes a hole the
+ * lexical rules leave open: '2026-13-45' matches ISO_DATE and compares greater
+ * than every real date in 2026, so it reads as a far-future expiry to every
+ * check above and as NaN here. (`Date` does still roll '2026-02-30' forward into
+ * March rather than rejecting it; that lands on a real instant a day or two off,
+ * so the cap still applies to it. The point is the ceiling, not the calendar.)
+ */
+function daysBetween(from, to) {
+  const a = Date.parse(`${from}T00:00:00Z`);
+  const b = Date.parse(`${to}T00:00:00Z`);
+  if (!Number.isFinite(a) || !Number.isFinite(b)) return null;
+  return Math.round((b - a) / 86_400_000);
+}
+
+/**
  * The conditions a disposition may acknowledge.
  *
  *   never-run  the lane has never executed for real. An operator can decide a
@@ -273,6 +309,28 @@ export function classifyDisposition({ register, workflow, today }) {
     return no(
       `the '${workflow}' disposition EXPIRED on ${entry.reviewBy} (today is ${today}) — NOT acknowledging. ` +
         'Re-date it with a fresh read of the lane, dispatch it, or retire it — but decide.',
+    );
+  }
+  // ...and teeth need a jaw. The rule above only fires once the date has passed,
+  // so without a ceiling on how far out it may be set, `reviewBy: '2099-12-31'`
+  // passes every rule in this function and acknowledges for 73 years.
+  //
+  // Measured from `declaredOn`, not from `today`, on purpose: the span is then a
+  // property of the entry itself, reproducible from its own two fields by anyone
+  // reading the file, and it cannot drift into compliance as the calendar moves.
+  const span = daysBetween(String(entry.declaredOn), String(entry.reviewBy));
+  if (span === null) {
+    return no(
+      `the '${workflow}' entry's dates are ISO-SHAPED but not real dates ` +
+        `(declaredOn '${entry.declaredOn}', reviewBy '${entry.reviewBy}') — NOT acknowledging. ` +
+        'Every other date rule here compares strings, so an impossible month reads as a far-future expiry.',
+    );
+  }
+  if (span > MAX_REVIEW_DAYS) {
+    return no(
+      `the '${workflow}' disposition runs ${span} days from ${entry.declaredOn} to ${entry.reviewBy}, ` +
+        `over the ${MAX_REVIEW_DAYS}-day cap — NOT acknowledging. A disposition is a decision to revisit, ` +
+        'not a permanent exemption; shorten `reviewBy` and re-date it when you next read the lane.',
     );
   }
 

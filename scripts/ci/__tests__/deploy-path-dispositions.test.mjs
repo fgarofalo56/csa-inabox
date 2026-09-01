@@ -29,9 +29,19 @@
  *
  * ── MUTATIONS THESE TESTS DIE UNDER ─────────────────────────────────────────
  *
- *   - drop `workflow_run` from deploy-loom-uat.yml → its WATCHED path
- *     `apps/fiab-console/e2e/**` becomes unreachable by any trigger and the
- *     coverage test goes red.
+ *   - narrow deploy-loom-uat.yml's `push: paths:` (e.g. drop the job script) →
+ *     that WATCHED path is reachable by no trigger, is not declared in
+ *     TRIGGER_GAPS, and the coverage test goes red.
+ *   - delete a TRIGGER_GAPS entry's reason, or shorten it below
+ *     MIN_REASON_CHARS → the coverage test goes red. A gap must say what was
+ *     MEASURED, not that it exists.
+ *   - ADD coverage for a declared gap (widen the push filter to include
+ *     `apps/fiab-console/e2e/**`) → the coverage test ALSO goes red, because
+ *     the exemption is now false. That inversion is deliberate: a `grep -l`
+ *     exemption rots silently, a `grep -L` one cannot.
+ *   - drop `workflow_run` from deploy-loom-verify.yml → the upstream-exists
+ *     test goes red (its image-equality assertion is only meaningful
+ *     immediately after a roll).
  *   - rename the upstream in a `workflow_run.workflows` list → the
  *     "upstream exists" test goes red (the whole point: GitHub does not error).
  *   - delete the `github.event.workflow_run.conclusion == 'success'` clause →
@@ -43,6 +53,8 @@
  *   - make applyDisposition return `stale:false` whenever an entry exists →
  *     the partial-acknowledgment test goes red.
  *   - make decide() ignore `findings` → the register-findings exit test goes red.
+ *   - raise or remove MAX_REVIEW_DAYS → the far-future `reviewBy` refusal goes
+ *     red (an entry you can hide in for 73 years is an allowlist).
  *
  * Run: node --test scripts/ci/__tests__/deploy-path-dispositions.test.mjs
  * (Auto-discovered by scripts/ci/check-node-test-suites.mjs, which the
@@ -59,6 +71,7 @@ import {
   classifyDisposition,
   DISPOSITION_PATH,
   DISPOSITIONS,
+  MAX_REVIEW_DAYS,
   MIN_REASON_CHARS,
   NEVER_ACKNOWLEDGEABLE,
 } from '../_deploy-path-disposition.mjs';
@@ -219,6 +232,15 @@ test('every malformed shape resolves to NOT-acknowledging, and says which rule f
     ['reviewBy not a date', '`reviewBy` is not an ISO date', reg(entry({ reviewBy: 'soon' }))],
     ['born expired', 'not after its `declaredOn`', reg(entry({ reviewBy: '2026-09-01' }))],
     ['expired', 'EXPIRED on', reg(entry({ declaredOn: '2026-01-01', reviewBy: '2026-02-01' }))],
+    // The far-future entry is the one that made expiry advisory: it satisfies
+    // EVERY other rule in the chain — real ISO dates, after declaredOn, not yet
+    // past — and acknowledged for 73 years. The cap is what makes the register
+    // an expiring decision rather than an allowlist with extra ceremony.
+    ['reviewBy past the cap', `over the ${MAX_REVIEW_DAYS}-day cap`, reg(entry({ reviewBy: '2099-12-31' }))],
+    // ISO-SHAPED but not a date. Every other date rule here compares strings, so
+    // month 13 sorts ABOVE every real date in 2026 and reads as a far expiry to
+    // all of them. Only the span check parses, so only the span check catches it.
+    ['impossible month', 'not real dates', reg(entry({ reviewBy: '2026-13-45' }))],
     ['no acknowledges', 'declares no `acknowledges`', reg(entry({ acknowledges: [] }))],
     ['unknown condition', 'unrecognised condition', reg(entry({ acknowledges: ['nevr-run'] }))],
     ['duplicate lanes', 'declared 2 times', reg(entry(), entry())],
@@ -228,7 +250,7 @@ test('every malformed shape resolves to NOT-acknowledging, and says which rule f
     assert.equal(v.declared, false, `${label}: MUST NOT acknowledge`);
     assert.ok(v.reason.includes(why), `${label}: reason should name the rule; got ${JSON.stringify(v.reason)}`);
   }
-  assert.ok(cases.length >= 14, 'the refusal table must not shrink silently');
+  assert.ok(cases.length >= 16, 'the refusal table must not shrink silently');
 });
 
 test('a bad `today` refuses rather than suppressing forever (an expiry that cannot fire)', () => {
@@ -387,6 +409,11 @@ test('every shipped register entry names a WATCHED lane and is structurally vali
     // caused. Expiry is the STALENESS CHECK's teeth — it turns the row red
     // there, where the operator is looking — and this only proves the entry was
     // well-formed and not born expired.
+    //
+    // It ALSO enforces MAX_REVIEW_DAYS on shipped data, and does so without
+    // reintroducing that time bomb: the cap is measured declaredOn→reviewBy, a
+    // property of the entry itself, so it reads the same on every day forever.
+    // Shortening the cap below any shipped entry's span turns this red.
     const v = classifyDisposition({ register: REGISTER, workflow: e.workflow, today: e.declaredOn });
     assert.equal(v.declared, true, `${e.workflow}: shipped entry is refused on its own declaredOn — ${v.reason}`);
   }
@@ -435,25 +462,69 @@ test('a WATCHED lane that has NEVER been able to run must be declared or trigger
 // THE TRIGGERS THEMSELVES
 // ===========================================================================
 
+/**
+ * WATCHED paths deliberately left WITHOUT an automatic trigger, and why.
+ *
+ * This is an exemption register, not an exemption list: the test below asserts
+ * each declared gap is STILL genuinely uncovered. Add coverage for one of these
+ * and the entry goes red, forcing the exemption to be deleted rather than
+ * quietly outliving its reason. That inversion is the point — a `grep -l`
+ * exemption rots silently, a `grep -L` one cannot.
+ */
+const TRIGGER_GAPS = Object.freeze({
+  'deploy-loom-uat.yml': Object.freeze({
+    'apps/fiab-console/Dockerfile.uat':
+      'inside build-fiab-images-acr-tasks.yml\'s own `apps/fiab-*/**` push filter, so any trigger here '
+      + 'co-fires this lane with the image builder. MEASURED 2026-09-01 over the builder\'s last 12 runs: it '
+      + 'holds the per-registry ACR firewall lease for a median of 37 minutes (range 24-94) against this '
+      + 'lane\'s 25-minute LOOM_ACR_LEASE_WAIT_MINUTES budget — so the loser hard-fails more often than not. '
+      + 'An automatic trigger here would go red on precisely the commits that fire it. Dispatch instead; the '
+      + 'staleness check still reports this lane STALE, which is a visible signal, not a void.',
+    'apps/fiab-console/e2e/**':
+      'same measurement, same filter: `apps/fiab-console/e2e/**` sits inside the image builder\'s '
+      + '`apps/fiab-*/**` push filter. deploy-loom-uat.yml\'s header has always cited ACR-lease collision as '
+      + 'the reason it declines to trigger on e2e/**; the numbers above are that argument, measured. Closing '
+      + 'this gap needs the lease wait raised past the builder\'s observed 94-minute maximum, not a new trigger.',
+  }),
+});
+
 test('each triggered lane can be reached by every source check-deploy-staleness watches', () => {
   // The claim the trigger makes: the drift this check MEASURES is now
   // self-clearing. A push filter narrowed below the WATCHED set silently
   // re-opens the gap, which is how deploy-loom-uat accumulated 28 days.
   let checked = 0;
+  let gapsSeen = 0;
   for (const wf of TRIGGERED) {
     const entryW = WATCHED.find((w) => w.workflow === wf);
     assert.ok(entryW, `${wf} must be WATCHED — a trigger on an unwatched lane proves nothing`);
     const filters = reachablePushFilters(wf).map(filterToRegExp);
     assert.ok(filters.length > 0, `${wf}: no push filter is reachable at all`);
+    const gaps = TRIGGER_GAPS[wf] || {};
     for (const p of entryW.paths) {
       const witness = witnessFor(p);
-      assert.ok(filters.some((re) => re.test(witness)),
+      const covered = filters.some((re) => re.test(witness));
+      if (Object.hasOwn(gaps, p)) {
+        // The exemption must stay TRUE. If coverage appears, delete the entry.
+        assert.ok(!covered,
+          `${wf}: WATCHED path ${p} is declared a trigger gap but IS now reachable by a push filter. `
+          + 'Delete the TRIGGER_GAPS entry — a stale exemption is how a real gap hides behind an old reason.');
+        assert.ok(String(gaps[p]).length >= MIN_REASON_CHARS,
+          `${wf}: the trigger gap for ${p} must say what was MEASURED, in at least ${MIN_REASON_CHARS} chars`);
+        gapsSeen++;
+        continue;
+      }
+      assert.ok(covered,
         `${wf}: WATCHED path ${p} (witness ${witness}) is not covered by any reachable push filter. `
-        + 'A change there would be undeployed with nothing to trigger a deploy.');
+        + 'A change there would be undeployed with nothing to trigger a deploy. If that is deliberate, '
+        + 'declare it in TRIGGER_GAPS with the measurement that justifies it.');
       checked++;
     }
+    // No exemption may name a path the register no longer watches.
+    assert.equal(Object.keys(gaps).length, Object.keys(gaps).filter((p) => entryW.paths.includes(p)).length,
+      `${wf}: a TRIGGER_GAPS entry names a path that is no longer in WATCHED — delete it`);
   }
-  assert.ok(checked >= 12, `expected every WATCHED path of all three lanes; only ${checked} were checked`);
+  assert.ok(checked >= 10, `expected every non-exempt WATCHED path of all three lanes; only ${checked} were checked`);
+  assert.equal(gapsSeen, 2, `exactly the two measured lease-collision gaps are expected; saw ${gapsSeen}`);
 });
 
 test('every workflow_run upstream names a workflow that EXISTS', () => {
@@ -469,13 +540,19 @@ test('every workflow_run upstream names a workflow that EXISTS', () => {
       refs++;
     }
   }
-  assert.ok(refs >= 2, `expected the loom-uat and loom-verify chains; found ${refs} workflow_run reference(s)`);
+  // Named, not counted: deploy-loom-verify is the ONE remaining chain. Its
+  // image-equality assertion (`$IMAGE != $CONSOLE_IMAGE`) is only meaningful
+  // immediately after a roll, so it is the one lane the chain genuinely buys
+  // something for — and it takes no ACR lease, so it cannot collide.
+  // deploy-loom-uat chained here too until the lease measurement below.
+  assert.ok(seq(docFor('deploy-loom-verify.yml').on?.workflow_run?.workflows).length > 0,
+    'deploy-loom-verify.yml must still chain off the roll — its image assertion is worthless on a push trigger');
+  assert.ok(refs >= 1, `expected the loom-verify chain; found ${refs} workflow_run reference(s)`);
 });
 
 test('a workflow_run consumer must gate on the upstream CONCLUSION', () => {
-  // Without it a FAILED roll chains a deploy: loom-uat would be rebuilt against
-  // a console that did not ship, and loom-verify re-pinned to an image that is
-  // not serving.
+  // Without it a FAILED roll chains a deploy: loom-verify would be re-pinned to
+  // an image that is not serving.
   let gated = 0;
   for (const wf of TRIGGERED) {
     const doc = docFor(wf);
@@ -488,7 +565,7 @@ test('a workflow_run consumer must gate on the upstream CONCLUSION', () => {
       gated++;
     }
   }
-  assert.ok(gated >= 2, `expected both workflow_run consumers to be gated; found ${gated}`);
+  assert.ok(gated >= 1, `expected the surviving workflow_run consumer to be gated; found ${gated}`);
 });
 
 test('no triggered lane runs in a protected ENVIRONMENT (the #4233 waiting-run trap)', () => {

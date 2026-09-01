@@ -60,43 +60,78 @@ run-name: >-
 # green on a suite that no longer matches the app. Reporting that daily into a
 # void is what #4144 is about; the fix is a trigger, not an acknowledgment.
 #
-# WHY `workflow_run` ON loom-roll-and-validate AND NOT A push ON e2e/**.
-# Both would clear the drift; only one is safe, and the difference was measured
-# rather than assumed:
+# WHY `push` AND NOT A `workflow_run` CHAIN OFF loom-roll-and-validate.
+# The first draft of this lane chained off every successful roll. That was
+# WITHDRAWN on review, on a measurement, not a preference:
 #
-#   1. THE ACR FIREWALL LEASE. `apps/fiab-console/e2e/**` is inside
-#      build-fiab-images-acr-tasks' own `apps/fiab-*/**` push filter, and that
-#      workflow takes the same per-registry lease this lane's script takes
-#      (acr-firewall-lease.sh, :636 acquire / :702 release). A push trigger here
-#      would put two lease claimants on the SAME push; the loser waits out
-#      LOOM_ACR_LEASE_WAIT_MINUTES (25) and then fails loudly. Chaining after a
-#      workflow that has already COMPLETED cannot collide with it.
-#   2. THE ROLL GATE OWNS THE JOB MID-RUN. loom-roll-and-validate sets
-#      UAT_GREP_INVERT on the loom-uat job immediately before each gate run, and
-#      the script below applies a FULL job YAML (see the carry-forward step). A
-#      redeploy racing the gate would rewrite the job the gate is configuring.
-#      Starting only once the roll has finished is the one moment in the cycle
-#      when nothing else is holding the job: the next roll needs a fresh push
-#      AND a full build-fiab-images run before it can begin.
-#   RESIDUAL, STATED NOT HIDDEN (deploy-integrity R7): that window is small, not
-#   zero. A second push landing while this build runs (~30-60min) can start a
-#   new roll before this finishes. Closing it properly needs a concurrency group
-#   SHARED with loom-roll-and-validate, which is a change to that file.
+#   THE CHAIN SCHEDULES THIS LANE, EVERY ~50 MINUTES, UNDER THE ONE WORKFLOW
+#   THAT OUT-HOLDS IT. MEASURED 2026-09-01 from `gh run list` durations — and
+#   measured on purpose, because the first draft of this block asserted a hold
+#   time it had inferred from the TTL constant, and the measurement inverted the
+#   direction of the harm (deploy-integrity R7):
+#
+#     build-fiab-images-acr-tasks   n=12   min 24   median 37   max 94  minutes
+#     deploy-loom-uat               n=2    13 and 1 minutes (one real run)
+#     deploy-report-subscriptions   n=1    1 minute
+#
+#   The lease is released by an EXIT trap (deploy-loom-uat-job.sh:151), so a hold
+#   is bounded by JOB DURATION; the 75-minute TTL is the crash-safety ceiling,
+#   not the normal hold. So this lane holds ~13 minutes, comfortably inside the
+#   25-minute LOOM_ACR_LEASE_WAIT_MINUTES budget, and does NOT starve the image
+#   builder. The builder holds a median 37 and a max 94 — it exceeds every other
+#   lane's ENTIRE wait budget more than half the time — so when the two co-fire,
+#   the lane that waits out 25 minutes and HARD-FAILS is this one.
+#
+#   loom-roll-and-validate ran 20 times in ~44 hours, successive rolls 41-66
+#   minutes apart, and build-fiab-images-acr-tasks fires within minutes of each
+#   merge. Chaining to every roll therefore drops this lane, repeatedly, into
+#   the window where the builder most likely holds the lease — a staleness fix
+#   that manufactures a red deploy lane (deploy-integrity R1). The mitigation
+#   HERE is to not create the collision at all: the `push:` paths below are
+#   confined to files OUTSIDE the builder's own `apps/fiab-*/**` filter, so no
+#   single commit can start both. The builder's own hold is tracked in #4285.
+#
+#   WHY NOT KEEP THE CHAIN AND THROTTLE IT TO ONE RUN PER N HOURS. Because in
+#   THIS checker a throttled run is indistinguishable from a real deploy. A
+#   gate-job + `needs:` + `if:` shape produces a run whose conclusion is
+#   `success` when the gate succeeded and the deploy skipped, and
+#   check-deploy-staleness.mjs has exactly two exclusion channels: the
+#   title-based DRY RUN marker and the paused-estate date filter. `run-name` is
+#   fixed before any step executes and cannot read a file (see its :1181
+#   comment), so a skipped run cannot mark its own title. pickLastRealSuccess
+#   would count it as a real success and CLEAR this lane's drift on a run that
+#   deployed nothing — the green-on-nothing shape this whole file exists to
+#   catch. A throttle here would defeat the instrument it is protecting.
+#
+# WHAT THE PUSH TRIGGERS DO AND DO NOT COVER — stated, not implied
+# (deploy-integrity R7). Three of this lane's five WATCHED sources are below.
+# The other two, `apps/fiab-console/Dockerfile.uat` and
+# `apps/fiab-console/e2e/**`, are deliberately NOT triggers: both sit inside
+# build-fiab-images-acr-tasks' own `apps/fiab-*/**` push filter (:83), and that
+# workflow takes the SAME per-registry lease this lane's script takes
+# (acr-firewall-lease.sh, :625 acquire / :698 release). Adding them would put
+# two lease claimants on one commit for a reason that has nothing to do with
+# serialization. So a change confined to e2e/** still reports STALE — which is
+# an honest signal into a report somebody now reads, not the void #4144 is
+# about. Closing that gap needs build-fiab-images-acr-tasks in the shared group
+# below, which is a change to a file this PR does not own: filed as #4285.
+#
+# THE ROLL GATE OWNS THE JOB MID-RUN, AND A PUSH CAN STILL RACE IT.
+# loom-roll-and-validate sets UAT_GREP_INVERT on the loom-uat job immediately
+# before each gate run, and the script below applies a FULL job YAML (see the
+# carry-forward step). A push landing mid-roll can rewrite the job the gate is
+# configuring. That window is REAL and is not closed here; closing it needs a
+# concurrency group shared with loom-roll-and-validate, which is again that
+# file, not this one. Also #4285.
 #
 # loom-uat is deliberately NOT in build-fiab-images-acr-tasks' "all" set (see
 # its :254 comment — a ~2GB Playwright image), so that lane never produces this
-# image and chaining off it directly would refresh a job whose image nothing had
-# rebuilt.
-#
-# The three `push` paths below are the WATCHED sources for this lane that are
-# NOT under apps/fiab-console/** — a change to them triggers no image build and
-# therefore no roll, so nothing would ever chain through to here. None of them
-# is inside any lease-taking workflow's path filter, so they cannot collide.
+# image.
 #
 # AN AUTOMATIC RUN IS A REAL DEPLOY. `dry_run` defaults true for a DISPATCH
 # (so a human exploring the lane deploys nothing by accident), and the `inputs`
-# context is empty on push/workflow_run, so `!inputs.dry_run` is true and the
-# deploy step runs. That is deliberate: an automatic run that deployed nothing
+# context is EMPTY on `push`, so `!inputs.dry_run` is true and the deploy step
+# runs. That is deliberate: an automatic run that deployed nothing
 # would clear this lane's drift while producing no artifact, which is the exact
 # green-on-nothing shape check-deploy-staleness' DRY RUN filter exists to catch.
 
@@ -120,16 +155,8 @@ on:
         type: boolean
         default: true
 
-  # After the console has ROLLED — not after its image was built. The harness
-  # this lane ships is graded against the console that is actually serving, and
-  # this is the point in the cycle where nothing else holds the loom-uat job.
-  workflow_run:
-    workflows: ['loom-roll-and-validate']
-    types: [completed]
-    branches: [main]
-
-  # The WATCHED sources that live outside apps/fiab-console/**, so no image
-  # build and no roll ever chains through to them.
+  # Three of this lane's five WATCHED sources. The other two are covered above:
+  # they sit inside a lease-taking workflow's own path filter.
   push:
     branches: [main]
     paths:
@@ -140,12 +167,32 @@ on:
 permissions:
   contents: read
 
-# Never cancel in flight: this holds the ACR firewall lease while the image
-# builds (#2603). It also matters more here than elsewhere — a cancelled run
-# can leave apps/fiab-console/.dockerignore rewritten if the script's EXIT trap
-# does not get to run.
+# KEYED ON THE SHARED RESOURCE, NOT ON THIS WORKFLOW'S NAME.
+# `deploy-report-subscriptions.yml` carries this SAME group. Both lanes list
+# their own workflow file in `push: paths:` above, so the commit that changes
+# either one can start both, and both scripts then acquire the same
+# per-registry ACR firewall lease (deploy-loom-uat-job.sh:124,
+# deploy-report-subscriptions-job.sh:108 — acr-firewall-lease.sh, one lease per
+# registry). A workflow-name-keyed group leaves those disjoint, GitHub does not
+# serialize them, and the loser waits out LOOM_ACR_LEASE_WAIT_MINUTES (25) and
+# HARD-FAILS. Serialization belongs at the contended resource, so the group is
+# named for the lease, not for the lane.
+#
+# The region is a PROXY for the registry, not the registry itself: workflow-level
+# `concurrency` is evaluated before any step runs, and the ACR name is resolved
+# at runtime from the target subscription. Region is the coarsest key that is
+# available at expression time and never splits one registry into two groups.
+#
+# `cancel-in-progress: false` because a run in flight HOLDS the lease (#2603),
+# and because a cancelled run here can leave apps/fiab-console/.dockerignore
+# rewritten if the script's EXIT trap does not get to run. A run that is still
+# QUEUED has executed no steps and carries neither hazard, so the one thing this
+# group can lose — GitHub keeps a single pending run per group and cancels an
+# older pending one — is a run that touched nothing. That reads as `cancelled`,
+# which check-deploy-staleness counts as NO EVIDENCE rather than as a failure,
+# so the lane stays honestly STALE instead of going falsely red.
 concurrency:
-  group: deploy-loom-uat-${{ inputs.region || 'centralus' }}
+  group: acr-firewall-${{ inputs.region || 'centralus' }}
   cancel-in-progress: false
 
 env:
@@ -156,13 +203,6 @@ env:
 jobs:
   deploy:
     name: Build UAT image + create/refresh the loom-uat job
-    # A FAILED roll must not chain a UAT refresh: the harness would be rebuilt
-    # against a console that did not ship. A dispatch and a push always proceed —
-    # those are the on-demand and source-changed paths, and neither has an
-    # upstream conclusion to read. Same shape as loom-dataplane-roll.yml:242.
-    if: >-
-      github.event_name != 'workflow_run'
-      || github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-latest
     # The UAT image carries the console build plus Playwright browsers; it is the
     # heaviest of the four job images.
