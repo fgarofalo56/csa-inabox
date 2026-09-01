@@ -91,7 +91,23 @@ param location string
 // only (Learn, "Azure Managed Redis planning FAQs"), with no announced Gov ETA
 // — so a sovereign caller MUST pass 'classic', which still creates fine today.
 // See modules/shared/managed-redis.bicep.
-@description('Which Redis provider backs the shared cache. "managed" = Azure Managed Redis (Microsoft.Cache/redisEnterprise) — the forward path, AZURE PUBLIC CLOUD ONLY. "classic" = the legacy Microsoft.Cache/redis Premium cache — required in Azure Government (GCC/GCC-High/IL5), where Azure Managed Redis does not exist, and the value to pass when redeploying against an EXISTING classic cache you do not want to migrate yet.')
+// SOVEREIGN FORWARD PATH — NOT SELECTED HERE (#2642, 2026-09-01).
+// 'classic' is a RETIRING provider: Microsoft turns off every remaining
+// Basic/Standard/Premium Azure Cache for Redis on 2028-10-01, and Azure Managed
+// Redis — the successor — is Azure Public cloud only with no announced Gov ETA.
+// The answer for GCC / GCC-High / IL5 is therefore neither of the two values
+// below: it is modules/shared/redis-oss-aca.bicep, a Valkey (BSD-3-Clause)
+// Container App that admin-plane/main.bicep DEPLOYS AND AUTO-BINDS on every
+// sovereign boundary (redisOssActive), publishing LOOM_RESULT_CACHE_REDIS /
+// _PASSWORD / _TLS on the Console with no operator step.
+// It is deliberately NOT plumbed in as a third value of THIS param. This module
+// is a standalone out-of-band entrypoint with ZERO invocations repo-wide, it
+// takes no CAE / ACR / Key Vault inputs, and an 'oss' branch here would be a
+// half-wired path nothing deploys — the exact vaporware shape #3291 and #3370
+// record. Callers wanting the OSS substrate invoke that module directly (or let
+// the orchestrator do it); this param keeps covering only the two Azure-managed
+// providers it can actually create.
+@description('Which Redis provider backs the shared cache. "managed" = Azure Managed Redis (Microsoft.Cache/redisEnterprise) — the forward path, AZURE PUBLIC CLOUD ONLY. "classic" = the legacy Microsoft.Cache/redis Premium cache — the only Azure-managed option in Azure Government (GCC/GCC-High/IL5), where Azure Managed Redis does not exist, and the value to pass when redeploying against an EXISTING classic cache you do not want to migrate yet. NOTE: classic is RETIRING (all caches off 2028-10-01) — for a sovereign estate the forward path is modules/shared/redis-oss-aca.bicep (OSS Valkey on Container Apps), which admin-plane/main.bicep deploys and auto-binds, not either value here.')
 @allowed(['managed', 'classic'])
 param redisBackend string = 'managed'
 

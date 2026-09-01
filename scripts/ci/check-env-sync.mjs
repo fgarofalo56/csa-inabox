@@ -282,12 +282,17 @@ const ALLOWLIST = new Set([
   'LOOM_SPARK_POOL_SHARED_MAX',     // opt-in tuning knob: max read-only leases sharing one warm session (PSR-3/FGC-10)
   'LOOM_SPARK_VCORE_BUDGET',        // opt-in tuning knob (A12): max estimated active Spark vCores before refusing a new session; default 400 in code (0 = unlimited)
   'LOOM_SPARK_TENANT_SESSION_MAX',  // opt-in tuning knob (A12): max concurrent active Spark sessions; default 50 in code (0 = unlimited)
-  // PSR-5/6 result cache — all opt-in: unset default = in-process LRU (no Redis,
-  // no behavior change). The shared Redis is the hband-shared.bicep instance
-  // deployed out-of-band (admin-plane at the 256-param ceiling).
-  'LOOM_RESULT_CACHE_REDIS',           // opt-in Redis host:port for the shared result-cache tier (PSR-5/6)
-  'LOOM_RESULT_CACHE_REDIS_PASSWORD',  // opt-in Redis access key (PSR-5/6); prefer KV/secretRef when wired into bicep
-  'LOOM_RESULT_CACHE_REDIS_TLS',       // opt-in TLS toggle for the Redis tier (default on for :6380)
+  // (The PSR-5/6 result-cache trio — LOOM_RESULT_CACHE_REDIS, _PASSWORD and
+  //  _TLS — used to be allowlisted here as "opt-in; the shared Redis is the
+  //  hband-shared.bicep instance deployed out-of-band". REMOVED in #2642:
+  //  admin-plane/main.bicep now DEPLOYS the sovereign OSS Valkey cache
+  //  (shared/redis-oss-aca.bicep, redisOssActive) and binds all three on the
+  //  Console — the endpoint, the Key-Vault-backed password secretRef, and the
+  //  TLS-off flag that plaintext ACA TCP ingress requires. The entries were
+  //  dropped DELIBERATELY so this guard fails if that wiring is ever regressed
+  //  away. The old note was also never followable: compute/hband-shared.bicep
+  //  has ZERO module invocations repo-wide, so the "deployed out-of-band"
+  //  instance it pointed at could not be produced by any shipped deploy path.)
   // Same H-band shared-Redis family as LOOM_RESULT_CACHE_REDIS above, and the
   // one member of it that was never allowlisted — it read as "emitted" only via
   // an @description in compute/hband-shared.bicep:423 and a comment in

@@ -60,6 +60,18 @@
       ]
     },
     {
+      "acrRepo": "valkey/valkey",
+      "tag": "8.1.10-alpine",
+      "sourceRegistry": "docker.io",
+      "sourceRepo": "valkey/valkey",
+      "digest": "sha256:b21fd94099dcd4bc6b2b9230daef69b6558b887ad4a2a1afe56ff6e745a88cdb",
+      "spdx": "BSD-3-Clause",
+      "notice": "github.com/valkey-io/valkey COPYING = BSD 3-Clause License (Linux Foundation fork of Redis 7.2.4). Deliberately NOT the `redis` image: Redis relicensed to RSALv2/SSPL in 2024 and to AGPLv3 in Redis 8, neither of which LIC0 admits on a deploy path.",
+      "consumers": [
+        "platform/fiab/bicep/modules/shared/redis-oss-aca.bicep (redisConfig.valkeyImage) — the SOVEREIGN shared Redis substrate (#2642). Azure Managed Redis is Azure Public cloud only, so GCC / GCC-High / IL5 get this OSS-on-ACA equivalent instead of riding the retiring Microsoft.Cache/redis to its 2028-10-01 turn-off."
+      ]
+    },
+    {
       "acrRepo": "curlimages/curl",
       "tag": "8.10.1",
       "sourceRegistry": "docker.io",

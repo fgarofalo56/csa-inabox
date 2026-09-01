@@ -154,7 +154,8 @@ export const DATA_PLANE_GATE_META: Record<string, GateMeta> = {
   'svc-redis-result-cache': {
     surfaces: [{ path: '/items/kql-database', label: 'Query result cache (scale-out)' }],
     fixit: { kind: 'env-picker' },
-    autoResolveNote: 'Unset → the built-in per-replica in-memory result cache serves everything with zero loss of function.',
+    autoResolveNote:
+      'DEFAULT-ON IN THE SOVEREIGN BOUNDARIES (#2642): admin-plane/main.bicep deploys the OSS Valkey cache (shared/redis-oss-aca.bicep) on GCC / GCC-High / IL5 and binds LOOM_RESULT_CACHE_REDIS, LOOM_RESULT_CACHE_REDIS_PASSWORD (a Key Vault secretRef) and LOOM_RESULT_CACHE_REDIS_TLS=0 on the Console, so a from-scratch sovereign deploy arrives wired with no operator step. Those boundaries get an OSS cache rather than Azure Managed Redis because AMR is Azure Public cloud only with no announced Government date, and their only Azure-managed alternative — the classic Azure Cache for Redis — is turned off on 2028-10-01. IN COMMERCIAL this is deliberately unset: the shared tier there is Azure Managed Redis, and binding it means migrating the live redis-loom-hband-* cache, which is a SCHEDULED CHANGE WINDOW rather than a config edit (docs/fiab/runbooks/redis-amr-cutover.md). Unset in EITHER boundary → the built-in per-replica in-memory result cache serves everything with zero loss of function; the shared tier only makes the cache coherent across Console replicas.',
   },
   // ── N8 lab 1 — DuckLake catalog option (Preview) ──
   'svc-ducklake-catalog': {
