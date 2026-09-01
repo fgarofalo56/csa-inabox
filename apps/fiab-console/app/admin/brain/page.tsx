@@ -26,7 +26,7 @@ export default function AdminBrainPage() {
         tips: [
           'Red, dashed edges are wires that exist and point at nothing — the evidence that something tried to connect a service and shipped a broken value.',
           'The Synapses tab paints the same graph with four layers: what to prune, what is risky, which paths carry real traffic, and what formed since the last version. A layer that could not be evaluated says so instead of showing a zero.',
-          'The Brain recommends and never acts. Approving a recommendation records your decision; the change itself is a repository edit you make.',
+          'The Brain never acts on its own. Analysis and approval mutate nothing — approving only records your decision. Performing a recommendation is a separate, explicit action behind server-side guards (fresh evidence, confirmed ownership, a complete estate pull), and destructive changes always require a second confirmation.',
           'Read the Coverage tab before reading a clean result as a clean estate: a detector whose data was never collected also reports zero findings, and it says so there.',
           'Cost figures are DERIVED — measured SKU multiplied by a published retail rate — never a bill.',
           'Cleanup proposals are withheld for any resource whose ownership is not established, because most Container App environments in these subscriptions are not Loom’s.',
