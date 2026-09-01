@@ -310,7 +310,12 @@ export function Recommendations({
   }, []);
 
   const records = recordsByFinding(performState);
-  const { offered, alreadyPerformed } = performOfferSummary(
+  // Two numbers, not one: `offeredFindings` is what the prose counts ("N of M
+  // finding(s)"); `offeredControls` is what `data-performable` publishes,
+  // because the render draws one button PER SUBJECT and a multi-subject finding
+  // would otherwise make the banner's number and the DOM's number disagree
+  // (#4260 review, should-fix 4).
+  const { offeredFindings, offeredControls, alreadyPerformed } = performOfferSummary(
     findings,
     performState,
     records,
@@ -350,21 +355,26 @@ export function Recommendations({
       <MessageBar
         intent="info"
         data-testid="recommend-only-banner"
-        data-performable={offered}
+        data-performable={offeredControls}
+        data-offered-findings={offeredFindings}
         data-already-performed={alreadyPerformed}
       >
         <MessageBarBody>
           <MessageBarTitle>
-            {offered > 0
+            {offeredFindings > 0
               ? 'Review, or perform.'
               : alreadyPerformed > 0
                 ? 'Recommend-only for what is left.'
                 : 'Recommend-only.'}
           </MessageBarTitle>
-          {offered > 0 ? (
+          {offeredFindings > 0 ? (
             <>
-              {offered} of {findings.length} finding(s) are offered for execution on this page,
-              behind a staged two-step confirm — performing one is a REAL change to Azure with a
+              {offeredFindings} of {findings.length} finding(s) are offered for execution on this
+              page
+              {offeredControls === offeredFindings
+                ? ''
+                : `, across ${offeredControls} subjects`}
+              , behind a staged two-step confirm — performing one is a REAL change to Azure with a
               real before/after receipt.{' '}
               {alreadyPerformed > 0
                 ? `Another ${alreadyPerformed} already carries a performed receipt and is not offered again. `
@@ -609,6 +619,7 @@ function FindingCard({
           guard chain. */}
       <PerformControls
         findingId={finding.id}
+        findingTitle={finding.title}
         detector={finding.detector}
         subjects={finding.subjects}
         ownershipConfirmed={finding.ownershipConfirmed}

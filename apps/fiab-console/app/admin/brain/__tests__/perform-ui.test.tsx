@@ -69,6 +69,14 @@ import type {
 const SUBJECT =
   'azure:/subscriptions/00000000-0000-0000-0000-000000000000/resourcegroups/rg-loom/providers/microsoft.app/containerapps/loom-console';
 
+/** A SECOND subject on the same finding — the shape S4 pins (see below). */
+const SUBJECT_2 =
+  'azure:/subscriptions/00000000-0000-0000-0000-000000000000/resourcegroups/rg-loom/providers/microsoft.app/containerapps/loom-api';
+
+/** An ORPHAN subject — the `delete-resource` executor's class (S3). */
+const ORPHAN_SUBJECT =
+  'azure:/subscriptions/00000000-0000-0000-0000-000000000000/resourcegroups/rg-loom/providers/microsoft.network/publicipaddresses/pip-abandoned';
+
 function finding(over: Partial<WireFinding> = {}): WireFinding {
   return {
     id: 'f-always-on-1',
@@ -112,6 +120,29 @@ const PERFORMABLE: PerformRegistryEntry = {
   destructive: true,
 };
 
+/**
+ * The OTHER performable executor, and the one with no coverage at all before
+ * #4260 round 3: `grep -c "delete-resource"` over the whole diff returned 1, and
+ * that hit was the dialog ternary itself. It is reachable —
+ * `lib/brain-actions/registry.ts` maps `detector:'orphan'` → `delete-resource`
+ * and `lib/brain/detectors/orphan.ts` emits those findings — so the branch that
+ * issues an ARM DELETE, its dialog copy, its badge and its receipt were all
+ * unexercised. This is the input SHAPE with no fixture, not a missing mutation.
+ */
+const ORPHAN_PERFORMABLE: PerformRegistryEntry = {
+  detector: 'orphan',
+  performable: true,
+  executor: 'delete-resource',
+  destructive: true,
+};
+
+/** A registry entry that OMITS `destructive` — the field is `?: true` (N1). */
+const UNCLASSIFIED: PerformRegistryEntry = {
+  detector: 'always-on-unused',
+  performable: true,
+  executor: 'scale-to-zero',
+};
+
 const NOT_PERFORMABLE_REASON =
   'The remediation for this finding is a REPOSITORY EDIT (the empty env wire is authored in bicep).';
 
@@ -140,6 +171,19 @@ const RECEIPT: PerformReceipt = {
   mutatedAzure: true,
 };
 
+/** The `delete-resource` receipt shape the executor actually records (S3). */
+const DELETE_RECEIPT: PerformReceipt = {
+  executor: 'delete-resource',
+  detector: 'orphan',
+  findingId: 'f-orphan-1',
+  resourceId:
+    '/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-loom/providers/Microsoft.Network/publicIPAddresses/pip-abandoned',
+  before: { exists: true, provisioningState: 'Succeeded' },
+  after: { exists: false },
+  performedAt: '2026-09-01T12:05:00.000Z',
+  mutatedAzure: true,
+};
+
 function wrap(ui: ReactElement) {
   return render(<FluentProvider theme={webLightTheme}>{ui}</FluentProvider>);
 }
@@ -153,20 +197,24 @@ const SENTENCE = 'Nothing on this page changes anything in Azure';
  * banner specs below drive the SAME flow and must not fork a second stub that
  * could drift from this one.
  */
-function stagingPerform() {
+function stagingPerform(
+  opts: { executor?: 'scale-to-zero' | 'delete-resource'; receipt?: PerformReceipt } = {},
+) {
+  const executor = opts.executor ?? 'scale-to-zero';
+  const receipt = opts.receipt ?? RECEIPT;
   const calls: PerformRequestBody[] = [];
   const perform = async (b: PerformRequestBody): Promise<PerformOutcomeResult> => {
     calls.push(b);
     if (!b.confirmToken) {
       return {
         kind: 'staged',
-        executor: 'scale-to-zero',
+        executor,
         confirmToken: 'server-minted-token-abc',
         expiresAt: '2026-09-01T12:10:00.000Z',
         note: 'Nothing was changed in Azure.',
       };
     }
-    return { kind: 'performed', receipt: RECEIPT, persisted: true };
+    return { kind: 'performed', receipt, persisted: true };
   };
   return { calls, perform };
 }
@@ -179,11 +227,11 @@ async function performOnce(outcome: PerformOutcomeResult) {
 }
 
 /** Drive stage → type → confirm to a real receipt. */
-async function stageTypeAndConfirm() {
+async function stageTypeAndConfirm(resourceName = 'loom-console') {
   fireEvent.click(await screen.findByTestId('perform'));
   await screen.findByTestId('perform-confirm-dialog');
   fireEvent.change(screen.getByTestId('perform-confirm-input'), {
-    target: { value: 'loom-console' },
+    target: { value: resourceName },
   });
   fireEvent.click(screen.getByTestId('perform-confirm'));
   await screen.findByTestId('perform-receipt');
@@ -340,6 +388,7 @@ describe('the perform-state read-back could not be read', () => {
     wrap(
       <PerformControls
         findingId="f-always-on-1"
+        findingTitle="loom-console is always-on and unreachable"
         detector="always-on-unused"
         subjects={[SUBJECT]}
         ownershipConfirmed
@@ -867,5 +916,331 @@ describe('the banner count comes from the same predicate the buttons do', () => 
       String(screen.queryAllByTestId('perform').length),
     );
     expect(banner.getAttribute('data-performable')).toBe('1');
+  });
+
+  // ── #4260 review, should-fix 4 ──────────────────────────────────────────
+  it('a MULTI-SUBJECT finding keeps the banner and the DOM in agreement', async () => {
+    // The equality above held only because every fixture finding carried ONE
+    // subject. `performOfferSummary` incremented once per FINDING while
+    // `PerformControls` renders one button per SUBJECT, so a two-subject
+    // finding made the two disagree — 1 vs 2 — while every spec stayed green.
+    // Latent rather than live (every currently-performable detector emits a
+    // single subject), but the render already HAS the multi-subject branch, so
+    // the invariant was accidental. Two subjects, pinned.
+    renderList({
+      findings: [finding({ subjects: [SUBJECT, SUBJECT_2] })],
+      state: ready(),
+    });
+    await screen.findByTestId('perform-block');
+    const banner = screen.getByTestId('recommend-only-banner');
+
+    // POPULATION first — two controls really rendered.
+    expect(screen.queryAllByTestId('perform')).toHaveLength(2);
+    expect(banner.getAttribute('data-performable')).toBe(
+      String(screen.queryAllByTestId('perform').length),
+    );
+    expect(banner.getAttribute('data-performable')).toBe('2');
+    // …and the PROSE still counts findings, because "2 of 1 finding(s)" would
+    // be the same error in the other direction.
+    expect(banner.getAttribute('data-offered-findings')).toBe('1');
+    expect(banner.textContent).toContain('1 of 1 finding(s) are offered');
+    expect(banner.textContent).toContain('across 2 subjects');
+    // The two buttons name their own subjects rather than both reading
+    // "Perform this recommendation".
+    const labels = screen.getAllByTestId('perform').map((b) => b.textContent);
+    expect(labels).toContain('Perform on loom-console');
+    expect(labels).toContain('Perform on loom-api');
+  });
+
+  it('a single-subject finding says nothing about subjects (the clause is not always-on)', async () => {
+    // Anti-vacuity: if the "across N subjects" clause rendered unconditionally
+    // the spec above would pass while the ordinary case read badly.
+    renderList({ state: ready() });
+    await screen.findByTestId('perform');
+    const banner = screen.getByTestId('recommend-only-banner');
+    expect(banner.getAttribute('data-performable')).toBe('1');
+    expect(banner.getAttribute('data-offered-findings')).toBe('1');
+    expect(banner.textContent).not.toContain('subjects');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The confirm dialog states only what this client can establish
+// (#4260 review round 3, BLOCKER)
+// ---------------------------------------------------------------------------
+
+describe('the confirm dialog claims no reversibility it cannot establish (R7)', () => {
+  /** Open the staged dialog for one finding and hand back its element. */
+  async function openDialog(over: Parameters<typeof finding>[0] = {}, entry = PERFORMABLE) {
+    const { perform } = stagingPerform({
+      executor: entry.executor === 'delete-resource' ? 'delete-resource' : 'scale-to-zero',
+    });
+    renderList({ findings: [finding(over)], state: ready([entry]), perform });
+    fireEvent.click(await screen.findByTestId('perform'));
+    return screen.findByTestId('perform-confirm-dialog');
+  }
+
+  it('does NOT promise the app scales back up — the shipped copy did, for every subject', async () => {
+    // MEASURED on the shipped code: the else-branch of the executor ternary read
+    // "The app stays deployed and scales back up on demand", unconditionally,
+    // over EVERY scale-to-zero subject. For the estate's own top-ranked finding
+    // the repo's bicep says the opposite verbatim —
+    // `loom-risingwave-aca.bicep`: "a scaled-to-zero replica loses every MV
+    // definition and its progress". This client knows the detector kind and the
+    // node id and nothing about in-process state, so the claim was one the code
+    // never established (`deploy-integrity.md` R7) — in the copy immediately
+    // before a destructive write, which is strictly worse than in an error
+    // string. These are the exact strings that must not come back.
+    const dialog = await openDialog();
+    expect(dialog.textContent).not.toContain('scales back up');
+    expect(dialog.textContent).not.toContain('stays deployed');
+    expect(dialog.textContent).not.toContain('on demand');
+  });
+
+  it('states the ARM change it WILL make, and that it cannot classify the workload', async () => {
+    const dialog = await openDialog();
+    // What is established: the exact PATCH.
+    expect(dialog.textContent).toContain('PATCH minReplicas to 0');
+    // What is NOT established, said plainly.
+    const caveat = screen.getByTestId('perform-statefulness-caveat');
+    expect(caveat.textContent).toContain('this page cannot tell which this is');
+    expect(caveat.textContent).toContain('IN-PROCESS');
+    expect(caveat.textContent).toContain('does NOT bring it back');
+    expect(caveat.textContent).toContain("deploy module");
+  });
+
+  it('names the FINDING next to the subject, so the confirm matches what was read', async () => {
+    const dialog = await openDialog();
+    expect(screen.getByTestId('perform-confirm-finding').textContent).toContain(
+      'loom-console is always-on and unreachable',
+    );
+    // The full node id is still shown — the typed name is only its last segment,
+    // and two same-named subjects in different resource groups would otherwise
+    // be indistinguishable in the dialog.
+    expect(dialog.textContent).toContain(SUBJECT);
+  });
+
+  it('the caveat is scoped to scale-to-zero — an ARM delete gets the delete copy, not this one', async () => {
+    // Anti-vacuity for the three specs above: a caveat rendered on every
+    // executor would satisfy them while saying the wrong thing on a delete.
+    await openDialog({ id: 'f-orphan-1', detector: 'orphan', subjects: [ORPHAN_SUBJECT] }, ORPHAN_PERFORMABLE);
+    expect(screen.queryByTestId('perform-statefulness-caveat')).toBeNull();
+    expect(screen.getByTestId('perform-confirm-dialog').textContent).toContain('ARM delete');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// delete-resource — the ARM DELETE branch, previously with ZERO coverage
+// (#4260 review, should-fix 3)
+// ---------------------------------------------------------------------------
+
+describe('the delete-resource executor (ARM DELETE) is exercised end to end', () => {
+  function orphanFinding() {
+    return finding({
+      id: 'f-orphan-1',
+      detector: 'orphan',
+      title: 'pip-abandoned is an orphan',
+      subjects: [ORPHAN_SUBJECT],
+    });
+  }
+
+  it('renders its own executor class badge, not scale-to-zero’s', async () => {
+    renderList({ findings: [orphanFinding()], state: ready([ORPHAN_PERFORMABLE]) });
+    const block = await screen.findByTestId('perform-block');
+    expect(block.getAttribute('data-executor')).toBe('delete-resource');
+    const badge = screen.getByTestId('perform-class');
+    expect(badge.textContent).toContain('delete-resource');
+    expect(badge.getAttribute('data-destructive')).toBe('true');
+  });
+
+  it('stages, requires the typed name, then confirms to a real DELETE receipt', async () => {
+    const { calls, perform } = stagingPerform({
+      executor: 'delete-resource',
+      receipt: DELETE_RECEIPT,
+    });
+    renderList({ findings: [orphanFinding()], state: ready([ORPHAN_PERFORMABLE]), perform });
+
+    fireEvent.click(await screen.findByTestId('perform'));
+    const dialog = await screen.findByTestId('perform-confirm-dialog');
+    // The copy the operator reads before an ARM DELETE.
+    expect(dialog.textContent).toContain('ARM delete');
+    expect(dialog.textContent).toContain('not recoverable');
+
+    // The speed bump is real on this branch too — and the name it asks for is
+    // the ORPHAN's, not the fixture's Container App.
+    expect((screen.getByTestId('perform-confirm') as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.change(screen.getByTestId('perform-confirm-input'), {
+      target: { value: 'loom-console' },
+    });
+    expect((screen.getByTestId('perform-confirm') as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.change(screen.getByTestId('perform-confirm-input'), {
+      target: { value: 'pip-abandoned' },
+    });
+    fireEvent.click(screen.getByTestId('perform-confirm'));
+
+    await screen.findByTestId('perform-receipt');
+    await waitFor(() => expect(calls.length).toBe(2));
+    expect(calls[1]!.confirmToken).toBe('server-minted-token-abc');
+    expect(calls[1]!.subjectNodeId).toBe(ORPHAN_SUBJECT);
+    // The receipt is the DELETE's, before/after and all.
+    expect(screen.getByTestId('perform-receipt').textContent).toContain('delete-resource');
+    expect(screen.getByTestId('perform-receipt-before').textContent).toContain('"exists": true');
+    expect(screen.getByTestId('perform-receipt-after').textContent).toContain('"exists": false');
+  });
+
+  it('and it is WITHDRAWN afterwards — an ARM delete is not offered twice', async () => {
+    const { perform } = stagingPerform({ executor: 'delete-resource', receipt: DELETE_RECEIPT });
+    renderList({ findings: [orphanFinding()], state: ready([ORPHAN_PERFORMABLE]), perform });
+    await stageTypeAndConfirm('pip-abandoned');
+    expect(screen.queryAllByTestId('perform')).toHaveLength(0);
+    expect(screen.getByTestId('perform-already').getAttribute('data-performed-via')).toBe('session');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// R7 the OTHER way — a status that establishes "nothing happened" must say so
+// (#4260 review, should-fix 1)
+// ---------------------------------------------------------------------------
+
+describe('400 / 401 / 403 establish that NOTHING was attempted', () => {
+  it.each([
+    [400, 'invalid request body'],
+    [401, 'sign-in required'],
+    [403, 'admin_only'],
+  ])('maps HTTP %i to `rejected`, never to indeterminate', (status, error) => {
+    // All three resolve ABOVE `performRecommendation`: 401/403 in
+    // `withTenantAdmin`, 400 at `route.ts:110` — four lines above the call at
+    // `:114`. The shipped client routed them to the indeterminate fallback,
+    // whose copy is "whether Azure was changed was NOT established by this
+    // call". An expired session on a long-open admin tab is the single most
+    // common failure on this surface, and it told that operator a destructive
+    // scale-to-zero MAY have landed on their estate.
+    const r = interpretPerformResponse(status, { ok: false, error });
+    expect(r.kind).toBe('rejected');
+    expect(r.kind === 'rejected' && r.reason).toContain(error);
+    expect(r.kind === 'rejected' && r.status).toBe(status);
+  });
+
+  it('a 500 is still INDETERMINATE — the narrowing is not blanket', () => {
+    // Anti-vacuity: routing every non-2xx to `rejected` would satisfy the
+    // spec above and would be the original error, inverted twice.
+    expect(interpretPerformResponse(500, { ok: false, error: 'boom' }).kind).toBe('indeterminate');
+    expect(interpretPerformResponse(504, { ok: false, error: 'gateway timeout' }).kind).toBe(
+      'indeterminate',
+    );
+  });
+
+  it('the rendered 401 does NOT say the outcome was not established', async () => {
+    await performOnce({ kind: 'rejected', status: 401, reason: 'sign-in required' });
+    const bar = await screen.findByTestId('perform-rejected');
+    expect(bar.getAttribute('data-status')).toBe('401');
+    expect(bar.textContent).toContain('Rejected before anything was attempted.');
+    expect(bar.textContent).toContain('nothing in Azure');
+    expect(bar.textContent).toContain('Sign in again');
+    // The claim this replaces, in the exact words the operator was reading.
+    expect(bar.textContent).not.toContain('NOT established');
+    expect(screen.queryByTestId('perform-indeterminate')).toBeNull();
+  });
+
+  it('a 400 is rendered as a body problem, not as a sign-in problem', async () => {
+    await performOnce({ kind: 'rejected', status: 400, reason: 'findingId is required' });
+    const bar = await screen.findByTestId('perform-rejected');
+    expect(bar.textContent).toContain('findingId is required');
+    expect(bar.textContent).toContain('request body was rejected');
+    expect(bar.textContent).not.toContain('Sign in again');
+  });
+
+  it('a rejection does NOT withdraw the control — nothing happened, so retry stays available', async () => {
+    await performOnce({ kind: 'rejected', status: 401, reason: 'sign-in required' });
+    await screen.findByTestId('perform-rejected');
+    expect(screen.queryAllByTestId('perform')).toHaveLength(1);
+    expect(screen.queryByTestId('perform-already')).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The executor-class badge is DERIVED (#4260 review, N1)
+// ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// G2 — the gate bars point at the REGISTERED gate; the ownership one does not
+// offer to remove the estate's last protection (#4260 review, should-fix 2)
+// ---------------------------------------------------------------------------
+
+describe('the gate-shaped bars route to the registry, with one deliberate exception', () => {
+  it('the read-back disclosure names cosmos-config and links to the registry', async () => {
+    renderList({ state: { kind: 'unavailable', reason: 'the read-back answered HTTP 503' } });
+    const bar = await screen.findByTestId('perform-state-disclosure');
+    expect(bar.textContent).toContain('cosmos-config');
+    expect(bar.textContent).toContain('LOOM_COSMOS_ENDPOINT');
+    const link = screen.getByTestId('perform-state-gate-registry');
+    expect(link.getAttribute('href')).toBe('/admin/gates');
+    // …and it still refuses to ASSERT the configuration cause: the sentence is
+    // conditional, because a 503 here is equally an estate-read failure.
+    expect(bar.textContent).toContain('When the cause IS a value the deploy did not set');
+  });
+
+  it('the 503 outcome bar links to the registry without claiming the cause', async () => {
+    await performOnce({
+      kind: 'gate',
+      reason: 'could not acquire an ARM token for the console identity',
+    });
+    const bar = await screen.findByTestId('perform-gate');
+    expect(screen.getByTestId('perform-gate-registry').getAttribute('href')).toBe('/admin/gates');
+    // The round-2 property must survive the new action row.
+    expect(bar.textContent).toContain('does not guess');
+    expect(bar.textContent).not.toContain('Not configured in this deployment');
+  });
+
+  it('the ownership bar explains the SEQUENCE and offers no way to stamp the tag', async () => {
+    // The one gate on this surface that deliberately has NO Fix-it. Its shipped
+    // copy — "Stamp the estate ownership tag in the deploy and this becomes
+    // available" — coached the operator toward removing the only thing that
+    // currently stands between this control and an unrecoverable scale-to-zero
+    // on a stateful singleton, with nothing saying so. A one-click version of
+    // that, while #4261's statefulness guard is unmerged, is worse than the
+    // paragraph.
+    renderList({ findings: [finding({ ownershipConfirmed: false })], state: ready() });
+    const bar = await screen.findByTestId('perform-withheld-ownership');
+    expect(bar.textContent).toContain('#4261');
+    expect(bar.textContent).toContain('last check');
+    expect(bar.textContent).toContain('Nothing here offers to stamp it for you');
+    // No control of ANY kind inside this bar — not a button, not a link.
+    expect(
+      bar.querySelectorAll('button, a[href], [role="button"], [role="link"]').length,
+      'the ownership bar must carry no actionable control until #4261 merges',
+    ).toBe(0);
+  });
+
+  it('CONTROL for the spec above: the OTHER gate bar DOES carry a control', async () => {
+    // Anti-vacuity. If gate bars simply never rendered actions, the assertion
+    // above would pass while saying nothing about the ownership bar in
+    // particular.
+    renderList({ state: { kind: 'unavailable', reason: 'HTTP 503' } });
+    const bar = await screen.findByTestId('perform-state-disclosure');
+    expect(bar.querySelectorAll('button, a[href]').length).toBeGreaterThan(0);
+  });
+});
+
+describe('the destructive badge reads the registry field rather than asserting it', () => {  it('says destructive when the entry says so', async () => {
+    renderList({ state: ready([PERFORMABLE]) });
+    const badge = await screen.findByTestId('perform-class');
+    expect(badge.getAttribute('data-destructive')).toBe('true');
+    expect(badge.textContent).toContain('destructive');
+  });
+
+  it('an entry that OMITS the optional flag is reported unclassified, never assumed safe', async () => {
+    // `PerformRegistryEntry.destructive` is `?: true`. The shipped badge printed
+    // the literal word "destructive" for every performable entry, so it was true
+    // by accident rather than by derivation — the same shape as round 2's
+    // blocker. An omitted flag now says the class is unknown.
+    renderList({ state: ready([UNCLASSIFIED]) });
+    const badge = await screen.findByTestId('perform-class');
+    expect(badge.getAttribute('data-destructive')).toBe('false');
+    expect(badge.textContent).toContain('class unclassified');
+    expect(badge.textContent).toContain('scale-to-zero');
+    // …and the control is still offered — an unclassified entry is not a
+    // refusal, it is an honestly-labelled one.
+    expect(screen.queryAllByTestId('perform')).toHaveLength(1);
   });
 });

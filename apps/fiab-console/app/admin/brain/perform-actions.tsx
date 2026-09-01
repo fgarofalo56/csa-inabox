@@ -128,6 +128,28 @@ export type PerformOutcomeResult =
    */
   | { readonly kind: 'not-performable'; readonly reason: string; readonly detector?: string }
   /**
+   * The request was REJECTED BEFORE the perform route ran — 400 / 401 / 403.
+   *
+   * R7 in the other direction (#4260 review, should-fix 1). These three used to
+   * fall through to `indeterminate`, which renders "whether Azure was changed
+   * was NOT established by this call" under an error bar. That is over-claiming
+   * uncertainty: every one of them resolves BEFORE `performRecommendation` is
+   * reached, so the code knows for certain that nothing was attempted.
+   *
+   *   401 / 403 — `withTenantAdmin` answers before the handler body runs
+   *               (`lib/api/route-toolkit.ts`). An expired session on a
+   *               long-open admin tab is by far the most common failure here,
+   *               and telling that operator a destructive scale-to-zero MAY
+   *               have landed is a worse error than any it prevents.
+   *   400       — `parseBody` → `apiBadRequest` at `route.ts:110`, four lines
+   *               ABOVE the `performRecommendation` call at `:114`.
+   *
+   * Kept distinct from `refused` deliberately: `refused` is a NAMED server guard
+   * that ran and declined, and its copy points at the Brain audit trail. Nothing
+   * reached the audit trail here, so it must not say so.
+   */
+  | { readonly kind: 'rejected'; readonly reason: string; readonly status: number }
+  /**
    * A 503 — the route stopped at a precondition and performed nothing.
    *
    * R7 WARNING, and the reason this arm is NOT called "not configured": the
@@ -279,6 +301,14 @@ export function interpretPerformResponse(
     };
   }
   if (status === 503) return { kind: 'gate', reason: error };
+  // 400 / 401 / 403 resolve BEFORE `performRecommendation` runs, so "nothing was
+  // attempted" is ESTABLISHED, not assumed — see the `rejected` arm's doc-block.
+  // These must never reach the indeterminate fallback below: doing so told an
+  // operator whose session had merely expired that a destructive write MIGHT
+  // have landed on their estate (`deploy-integrity.md` R7, inverted).
+  if (status === 400 || status === 401 || status === 403) {
+    return { kind: 'rejected', status, reason: error };
+  }
   if (status === 502) {
     return {
       kind: 'failed',
@@ -373,6 +403,20 @@ export interface PerformSubject {
   readonly ownershipConfirmed: boolean;
 }
 
+/**
+ * What the offer SUMMARY reads: a disposition subject PLUS the subject list the
+ * render draws buttons from.
+ *
+ * Deliberately a separate type rather than a field on `PerformSubject`:
+ * `performDisposition` decides per FINDING and must not be able to read
+ * `subjects` at all, or a future edit could quietly make performability depend
+ * on subject count. The summary is the only consumer that needs it, because it
+ * is the only one that has to agree with the DOM (#4260 review, should-fix 4).
+ */
+export interface PerformCountable extends PerformSubject {
+  readonly subjects: readonly string[];
+}
+
 export function performDisposition(
   finding: PerformSubject,
   state: PerformStateResult | null,
@@ -408,21 +452,44 @@ export function performDisposition(
  * What the header banner is allowed to say, counted from the SAME predicate the
  * buttons render from — so "computed from what the render actually offers" is a
  * measurable fact rather than a claim.
+ *
+ * ── TWO NUMBERS, BECAUSE THE RENDER DRAWS TWO SHAPES (#4260 review, S4) ────
+ * The round-2 fix counted `offered` once per FINDING and then asserted it equal
+ * to the number of rendered `data-testid="perform"` controls. `PerformControls`
+ * renders one button PER SUBJECT, so those two agreed only because every fixture
+ * finding carried exactly one subject. Reachability was checked before treating
+ * it as latent-not-live: every currently-performable detector emits a single
+ * subject (`always-on-unused.ts`, `unreachable-service.ts`, `orphan.ts`), and
+ * the multi-subject detectors (`config-drift.ts`, `dangling-wire.ts`) are all
+ * `performable:false`. But the render already HAS the multi-subject branch, so
+ * the invariant was accidental. It is now derived, with a two-subject fixture
+ * pinning it:
+ *
+ *   `offeredFindings`  — findings the page offers at all (the prose's "N of M").
+ *   `offeredControls`  — Perform buttons on screen (what `data-performable` is,
+ *                        and the number the equality spec compares to the DOM).
  */
 export function performOfferSummary(
-  findings: readonly PerformSubject[],
+  findings: readonly PerformCountable[],
   state: PerformStateResult | null,
   records: ReadonlyMap<string, RecommendationStateRecord>,
   performedInSession: ReadonlySet<string>,
-): { readonly offered: number; readonly alreadyPerformed: number } {
-  let offered = 0;
+): {
+  readonly offeredFindings: number;
+  readonly offeredControls: number;
+  readonly alreadyPerformed: number;
+} {
+  let offeredFindings = 0;
+  let offeredControls = 0;
   let alreadyPerformed = 0;
   for (const f of findings) {
     const d = performDisposition(f, state, records.get(f.id), performedInSession);
-    if (d.kind === 'offer') offered += 1;
-    else if (d.kind === 'already-performed') alreadyPerformed += 1;
+    if (d.kind === 'offer') {
+      offeredFindings += 1;
+      offeredControls += f.subjects.length;
+    } else if (d.kind === 'already-performed') alreadyPerformed += 1;
   }
-  return { offered, alreadyPerformed };
+  return { offeredFindings, offeredControls, alreadyPerformed };
 }
 
 /**
@@ -576,6 +643,12 @@ export function PersistedStateBanner({ record }: { record: RecommendationStateRe
 
 interface PerformControlsProps {
   readonly findingId: string;
+  /**
+   * The finding's own title, shown in the confirm dialog so the operator
+   * confirms against the same statement they read on the card rather than
+   * against a bare ARM id (#4260 review, blocker).
+   */
+  readonly findingTitle: string;
   readonly detector: string;
   readonly subjects: readonly string[];
   readonly ownershipConfirmed: boolean;
@@ -613,6 +686,7 @@ type Live =
 
 export function PerformControls({
   findingId,
+  findingTitle,
   detector,
   subjects,
   ownershipConfirmed,
@@ -721,8 +795,29 @@ export function PerformControls({
         <MessageBarBody>
           <MessageBarTitle>Performable class, withheld subject.</MessageBarTitle>
           An executor exists for this detector, but no resolved ownership edge covers the
-          subject, so the server would refuse at the ownership guard. Stamp the estate ownership
-          tag in the deploy and this becomes available.
+          subject, so the server would refuse at the ownership guard
+          (`guardOwnership`, 409).
+          {/* ── #4260 review, should-fix 2 — DELIBERATELY NOT A FIX-IT ──────
+              `ux-baseline.md` G2 asks for an inline Fix-it on a gate. This one
+              does not get one, and the reason is measured rather than stylistic.
+
+              Until #4261's `guardScalableToZero` merges, the ownership guard is
+              — by accident, not by design — the ONLY thing standing between a
+              click and an unrecoverable scale-to-zero on a stateful singleton
+              (#4261 measured three on the committed template). A one-click
+              button that stamps the tag would remove that protection in a
+              single gesture, from the surface that ranks findings by saving.
+
+              So this bar names the SEQUENCE instead of offering the shortcut.
+              The previous copy — "Stamp the estate ownership tag in the deploy
+              and this becomes available" — read as an instruction to do exactly
+              that, with nothing saying what it unlocks. */}
+          <br />
+          This is a data condition, not a configuration gate: the tag is stamped by the deploy
+          (#4274) and backfilled onto existing resources (#4267). Both are sequenced BEHIND the
+          statefulness guard in #4261 on purpose — while that guard is unmerged, ownership is
+          the last check between this control and a scale-to-zero on a runtime that holds state
+          in-process. Nothing here offers to stamp it for you.
         </MessageBarBody>
       </MessageBar>
     );
@@ -734,8 +829,19 @@ export function PerformControls({
   return (
     <div className={s.block} data-testid="perform-block" data-executor={entry.executor}>
       <div className={s.row}>
-        <Badge appearance="tint" color="danger" data-testid="perform-class">
-          destructive · {entry.executor}
+        {/* DERIVED from the registry entry, not asserted. `destructive` is
+            optional on `PerformRegistryEntry` (`?: true`), so the shipped
+            literal "destructive · {executor}" was true only by accident —
+            exactly the shape of round 2's blocker. An entry that omits the flag
+            now says the class is UNCLASSIFIED rather than silently calling it
+            destructive (or, worse, safe). */}
+        <Badge
+          appearance="tint"
+          color={entry.destructive === true ? 'danger' : 'warning'}
+          data-testid="perform-class"
+          data-destructive={String(entry.destructive === true)}
+        >
+          {entry.destructive === true ? 'destructive' : 'class unclassified'} · {entry.executor}
         </Badge>
         <Caption1 className={s.hint}>
           Two steps: the first click stages a single-use, time-bounded confirm server-side and
@@ -780,6 +886,7 @@ export function PerformControls({
         <StagedConfirmDialog
           executor={live.executor}
           expiresAt={live.expiresAt}
+          findingTitle={findingTitle}
           resourceName={subjectResourceName(live.subjectNodeId)}
           subjectNodeId={live.subjectNodeId}
           typed={typed}
@@ -804,6 +911,7 @@ export function PerformControls({
 function StagedConfirmDialog({
   executor,
   expiresAt,
+  findingTitle,
   resourceName,
   subjectNodeId,
   typed,
@@ -813,6 +921,7 @@ function StagedConfirmDialog({
 }: {
   executor: PerformExecutorKind;
   expiresAt: string;
+  findingTitle: string;
   resourceName: string;
   subjectNodeId: string;
   typed: string;
@@ -831,8 +940,42 @@ function StagedConfirmDialog({
               <Body1>
                 {executor === 'delete-resource'
                   ? 'The platform will issue an ARM delete for this resource. It is not recoverable from this page.'
-                  : 'The platform will drop this app’s always-on replica floor to zero. The app stays deployed and scales back up on demand; the always-on billing stops and a cold start returns.'}
+                  : 'The platform will PATCH minReplicas to 0 on this Container App.'}
               </Body1>
+              {/* ── #4260 review, BLOCKER ───────────────────────────────────
+                  What stood here asserted, unconditionally and for EVERY
+                  scale-to-zero subject, that "the app stays deployed and scales
+                  back up on demand". This client knows the detector kind and the
+                  node id. It knows NOTHING about whether the workload holds
+                  state in-process, and for the estate's own highest-value
+                  finding the repo's bicep says the opposite verbatim:
+
+                    "a scaled-to-zero replica loses every MV definition and its
+                     progress"
+                    — platform/fiab/bicep/modules/data-plane/loom-risingwave-aca.bicep
+
+                  #4261 measured THREE such pinned singletons on the committed
+                  template (loom-risingwave, iceberg-catalog, loom-airflow) and
+                  is where the server-side `guardScalableToZero` lands. Until it
+                  does, this sentence is the last thing the operator reads before
+                  a typed confirm — so it states what is established and names
+                  what is not (`deploy-integrity.md` R7). Do not restore a
+                  reversibility claim here; a spec asserts its absence. */}
+              {executor === 'delete-resource' ? null : (
+                <MessageBar intent="warning" data-testid="perform-statefulness-caveat">
+                  <MessageBarBody>
+                    <MessageBarTitle>
+                      What this costs depends on the workload, and this page cannot tell which
+                      this is.
+                    </MessageBarTitle>
+                    A stateless app cold-starts and resumes with nothing lost. A runtime that holds
+                    state IN-PROCESS — materialized views, catalog metadata, an in-memory index —
+                    loses that state when its last replica stops, and raising the floor again does
+                    NOT bring it back. Nothing available to this page distinguishes the two: read
+                    the app&apos;s own deploy module before confirming.
+                  </MessageBarBody>
+                </MessageBar>
+              )}
               <MessageBar intent="warning">
                 <MessageBarBody>
                   <MessageBarTitle>Staged. Nothing has changed yet.</MessageBarTitle>
@@ -840,6 +983,12 @@ function StagedConfirmDialog({
                   expires at {expiresAt}. Cancelling leaves the estate untouched.
                 </MessageBarBody>
               </MessageBar>
+              {/* The FINDING, next to its subject — so the operator confirms
+                  against the same statement they just read on the card rather
+                  than against a bare ARM id. */}
+              <Caption1 className={s.hint} data-testid="perform-confirm-finding">
+                Finding <strong>{findingTitle}</strong>
+              </Caption1>
               <Caption1 className={s.hint}>
                 Subject <span className={s.mono}>{subjectNodeId}</span>
               </Caption1>
@@ -934,6 +1083,26 @@ export function PerformOutcomeView({ outcome }: { outcome: PerformOutcomeResult 
           </MessageBarBody>
         </MessageBar>
       );
+    case 'rejected':
+      // R7, inverted (#4260 review, should-fix 1). A 400/401/403 is the ONE
+      // family of failures on this surface whose Azure outcome IS established:
+      // all three resolve above `performRecommendation`, so the honest claim is
+      // the strong one. Warning, not error — an expired session is ordinary and
+      // the estate is untouched.
+      return (
+        <MessageBar intent="warning" data-testid="perform-rejected" data-status={outcome.status}>
+          <MessageBarBody>
+            <MessageBarTitle>Rejected before anything was attempted.</MessageBarTitle>
+            {outcome.reason}
+            {` The route answered HTTP ${outcome.status}, which it does BEFORE the perform ` +
+              'handler runs — so nothing was staged, nothing was executed, and nothing in Azure ' +
+              'changed. '}
+            {outcome.status === 401 || outcome.status === 403
+              ? 'Sign in again (or with an account in the Loom admin group) and retry.'
+              : 'The request body was rejected; nothing about the estate is implied by this.'}
+          </MessageBarBody>
+        </MessageBar>
+      );
     case 'gate':
       return (
         <MessageBar intent="warning" data-testid="perform-gate">
@@ -951,6 +1120,33 @@ export function PerformOutcomeView({ outcome }: { outcome: PerformOutcomeResult 
             answer). The response carries no field separating them, so the server&apos;s message
             above is the only discriminator and this page does not guess between them.
           </MessageBarBody>
+          {/* G2, as far as this lane can honestly take it. The ONE day-one
+              configuration gate behind this status is `cosmos-config`, which is
+              already in the registry (`lib/gates/registry/data-plane.ts`) with a
+              real ARM resource-picker Fix-it for LOOM_COSMOS_ENDPOINT and a
+              wildcard surface that covers this page — so it is discoverable and
+              resolvable at /admin/gates today.
+
+              What is NOT shipped here is an INLINE `<HonestGate>`: its bar reads
+              "<surface> needs <gate> wired in this deployment", and rendering
+              that over a 503 which may equally be an ARG throttle would assert
+              the very cause this arm was just fixed to stop guessing at
+              (`deploy-integrity.md` R7). The honest inline Fix-it needs the
+              route to send a `gate` envelope (`lib/api/gate-envelope.ts`) so the
+              client can tell the two apart — a change to
+              `app/api/admin/brain/perform/route.ts`, which is the backend
+              lane's file. Tracked; see the PR body. */}
+          <MessageBarActions>
+            <Button
+              as="a"
+              size="small"
+              appearance="secondary"
+              href="/admin/gates"
+              data-testid="perform-gate-registry"
+            >
+              Open the gate registry
+            </Button>
+          </MessageBarActions>
         </MessageBar>
       );
     case 'failed':
@@ -1006,11 +1202,22 @@ export function PerformStateDisclosure({
         <MessageBarTitle>Recommendation state could not be read.</MessageBarTitle>
         {state.reason} Recorded decisions, receipts and performability are therefore not shown,
         and no Perform action is offered until this read succeeds — an unreadable registry is
-        not evidence that the platform cannot act.
+        not evidence that the platform cannot act. When the cause IS a value the deploy did not
+        set, it is the registered <code>cosmos-config</code> gate, whose Fix-it (an ARM
+        resource-picker for <code>LOOM_COSMOS_ENDPOINT</code>) lives in the gate registry.
       </MessageBarBody>
       <MessageBarActions>
         <Button size="small" appearance="secondary" onClick={onRetry} data-testid="perform-state-retry">
           Retry
+        </Button>
+        <Button
+          as="a"
+          size="small"
+          appearance="transparent"
+          href="/admin/gates"
+          data-testid="perform-state-gate-registry"
+        >
+          Open the gate registry
         </Button>
       </MessageBarActions>
     </MessageBar>

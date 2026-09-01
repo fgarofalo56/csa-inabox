@@ -57,6 +57,11 @@ import type { ReactElement } from 'react';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { FluentProvider, webLightTheme } from '@fluentui/react-components';
 import { Recommendations } from '@/app/admin/brain/recommendations';
+import type {
+  PerformOutcomeResult,
+  PerformRequestBody,
+  PerformStateResult,
+} from '@/app/admin/brain/perform-actions';
 import { snapshotFromCollection } from '@/app/api/admin/brain/_lib/snapshot';
 import { collection } from './estate-fixture';
 
@@ -65,6 +70,60 @@ const snapshot = snapshotFromCollection(collection());
 function wrap(ui: ReactElement) {
   return render(<FluentProvider theme={webLightTheme}>{ui}</FluentProvider>);
 }
+
+// ---------------------------------------------------------------------------
+// THE SEAM THAT MADE THIS SCAN BLIND (#4260 review, should-fix 5)
+// ---------------------------------------------------------------------------
+
+/**
+ * `Recommendations` defaults `loadPerformState` to the real `fetchPerformState`,
+ * which issues a `fetch()` on a relative URL. In jsdom that throws, the component
+ * lands `unavailable`, and NO perform control renders at all.
+ *
+ * So walks A and B below were examining a render in which the perform feature is
+ * STRUCTURALLY ABSENT — and #4260's body then cited their green as evidence that
+ * the mutation contract still held. A guard that cannot see its subject, offered
+ * as proof about that subject.
+ *
+ * Both states are now DECLARED rather than inherited from a failed fetch:
+ *
+ *   REVIEW_ONLY  — an empty performability registry. The list renders the honest
+ *                  "no executor for this class" bar per card and offers NO
+ *                  perform control, so walks A and B keep asserting exactly what
+ *                  their doc-block says: the review surface itself carries no
+ *                  mutation control. The absence is now a fact about the
+ *                  registry, not an artifact of jsdom.
+ *   PERFORM_ON   — the registry the server really ships for `always-on-unused`.
+ *                  Used by the allowlist walk at the bottom, which is the half
+ *                  that can actually see the feature.
+ */
+const REVIEW_ONLY: PerformStateResult = { kind: 'ready', performability: [], states: [] };
+
+const PERFORM_ON: PerformStateResult = {
+  kind: 'ready',
+  states: [],
+  performability: [
+    { detector: 'always-on-unused', performable: true, executor: 'scale-to-zero', destructive: true },
+    { detector: 'unreachable-always-on', performable: true, executor: 'scale-to-zero', destructive: true },
+    { detector: 'unreachable-service', performable: true, executor: 'scale-to-zero', destructive: true },
+    { detector: 'orphan', performable: true, executor: 'delete-resource', destructive: true },
+  ],
+};
+
+const reviewOnly = async (): Promise<PerformStateResult> => REVIEW_ONLY;
+
+/**
+ * The fixture's findings with ownership ESTABLISHED.
+ *
+ * The estate fixture stamps no ownership tag, so `performDisposition` returns
+ * `withheld-ownership` for every finding and no Perform control renders — which
+ * is the second half of why this scan could not see the feature, and is exactly
+ * the accidental protection #4274 (tag stamping) and #4267 (backfill) remove.
+ * The perform-enabled walks below therefore model the estate AFTER those land:
+ * a scan that can only see the pre-tag world is a scan that goes blind the day
+ * the tags arrive.
+ */
+const ownedFindings = snapshot.findings.map((f) => ({ ...f, ownershipConfirmed: true }));
 
 // ---------------------------------------------------------------------------
 // A + B — the rendered surface
@@ -76,6 +135,13 @@ function wrap(ui: ReactElement) {
  * `Copy` and `Show on graph` are deliberately NOT here: copying a proposed diff
  * to the clipboard and panning a canvas are not mutations. `Refresh` is not
  * here either — it re-reads.
+ *
+ * `perform` was added in #4260 round 3. Its absence was the OTHER half of this
+ * scan's blindness: the two controls the Perform UI adds are labelled "Perform
+ * this recommendation" and "Confirm and perform", and not one verb in the list
+ * matched either of them. The one string that did contain `scale` — the
+ * `destructive · scale-to-zero` badge — is a `Badge`, outside the scanned
+ * selector set. So even a render that DID show the feature would have passed.
  */
 const MUTATION_VERBS = [
   'apply',
@@ -93,7 +159,37 @@ const MUTATION_VERBS = [
   'terminate',
   'fix it',
   'remediate',
+  'perform',
 ];
+
+/**
+ * Every interactive element, not just `<button>` — see the note in walk B.
+ *
+ * Rooted at `document.body`, NOT at RTL's render container. Fluent renders
+ * `Dialog` through a PORTAL, so the staged confirm ("Confirm and perform") lands
+ * outside the container entirely. MEASURED while writing the allowlist walk
+ * below: a container-scoped enumeration reported `['perform']` with the confirm
+ * dialog open on screen. Any mutation control added inside a portal — dialog,
+ * popover, drawer, menu surface — was invisible to this scan.
+ */
+function interactiveControls(root: ParentNode = document.body): Element[] {
+  return Array.from(
+    root.querySelectorAll(
+      'button, a[href], input[type="submit"], input[type="button"], [role="button"], [role="link"], [role="menuitem"]',
+    ),
+  );
+}
+
+function controlLabel(c: Element): string {
+  return `${c.textContent ?? ''} ${c.getAttribute('aria-label') ?? ''} ${
+    c.getAttribute('href') ?? ''
+  }`.toLowerCase();
+}
+
+function mutationVerbHits(c: Element): string[] {
+  const label = controlLabel(c);
+  return MUTATION_VERBS.filter((v) => label.includes(v));
+}
 
 describe('B — no rendered control carries a mutation verb', () => {
   it('the fixture rendered findings (otherwise this scan is vacuous)', () => {
@@ -101,41 +197,61 @@ describe('B — no rendered control carries a mutation verb', () => {
   });
 
   it('enumerates every interactive control and finds no mutation verb', () => {
-    const { container } = wrap(
-      <Recommendations findings={snapshot.findings} onFocusNode={() => {}} />,
+    wrap(
+      <Recommendations
+        findings={snapshot.findings}
+        onFocusNode={() => {}}
+        loadPerformState={reviewOnly}
+      />,
     );
 
     // NOT just `getAllByRole('button')`. A mutation control added as a link, a
     // submit input, or a menu item would pass a button-only scan — and "add it
     // as an <a>" is exactly the narrow evasion that gets through a guard scoped
     // to one element type. Query the DOM for every interactive element instead.
-    const controls = Array.from(
-      container.querySelectorAll(
-        'button, a[href], input[type="submit"], input[type="button"], [role="button"], [role="link"], [role="menuitem"]',
-      ),
-    );
+    const controls = interactiveControls();
 
     // POPULATION: if this were 0 the scan would pass having examined nothing.
     expect(controls.length).toBeGreaterThan(0);
 
     const offenders: string[] = [];
     for (const c of controls) {
-      const label = `${c.textContent ?? ''} ${c.getAttribute('aria-label') ?? ''} ${
-        c.getAttribute('href') ?? ''
-      }`.toLowerCase();
-      for (const verb of MUTATION_VERBS) {
-        if (label.includes(verb)) offenders.push(`${label.trim().slice(0, 80)} (matched '${verb}')`);
+      for (const verb of mutationVerbHits(c)) {
+        offenders.push(`${controlLabel(c).trim().slice(0, 80)} (matched '${verb}')`);
       }
     }
     expect(offenders, `mutation-verb control(s) on the Brain surface: ${offenders.join('; ')}`)
       .toEqual([]);
   });
 
+  it('THE CONTROL FOR THE SEAM: the same walk over a PERFORM-ENABLED registry goes red', async () => {
+    // Without this, the spec above is green for the wrong reason and nobody can
+    // tell. It is the mutation receipt for #4260 should-fix 5, run in-suite:
+    // hand the SAME render the registry the server really ships, and the verb
+    // list + the seam together must now SEE the perform control that the old
+    // walk (defaulted loader → failed fetch → `unavailable`) could not.
+    wrap(
+      <Recommendations
+        findings={ownedFindings}
+        onFocusNode={() => {}}
+        loadPerformState={async () => PERFORM_ON}
+      />,
+    );
+    await screen.findAllByTestId('perform');
+    const offenders = interactiveControls().filter((c) => mutationVerbHits(c).length > 0);
+    expect(offenders.length).toBeGreaterThan(0);
+    expect(offenders.map((c) => c.getAttribute('data-testid'))).toContain('perform');
+  });
+
   it('there are no forms that could POST anywhere', () => {
     // A <form action=...> needs no button label at all and would evade the scan
     // above entirely.
     const { container } = wrap(
-      <Recommendations findings={snapshot.findings} onFocusNode={() => {}} />,
+      <Recommendations
+        findings={snapshot.findings}
+        onFocusNode={() => {}}
+        loadPerformState={reviewOnly}
+      />,
     );
     const forms = Array.from(container.querySelectorAll('form[action]'));
     expect(forms.map((f) => f.getAttribute('action'))).toEqual([]);
@@ -146,13 +262,109 @@ describe('B — no rendered control carries a mutation verb', () => {
     // surface forever and nothing would say so.
     const label = 'apply change'.toLowerCase();
     expect(MUTATION_VERBS.some((v) => label.includes(v))).toBe(true);
+    // …and the two labels the Perform UI actually ships, which nothing in the
+    // pre-#4260 list matched.
+    expect(MUTATION_VERBS.some((v) => 'perform this recommendation'.includes(v))).toBe(true);
+    expect(MUTATION_VERBS.some((v) => 'confirm and perform'.includes(v))).toBe(true);
   });
 
   it('renders the recommend-only banner so the guarantee is stated to the operator', () => {
-    wrap(<Recommendations findings={snapshot.findings} onFocusNode={() => {}} />);
+    wrap(
+      <Recommendations
+        findings={snapshot.findings}
+        onFocusNode={() => {}}
+        loadPerformState={reviewOnly}
+      />,
+    );
     expect(screen.getByTestId('recommend-only-banner').textContent).toContain(
       'Nothing on this page changes anything in Azure',
     );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// B2 — the ALLOWLIST over a perform-enabled render (#4260 review, should-fix 5)
+// ---------------------------------------------------------------------------
+
+/**
+ * The two mutation-capable controls this surface is now allowed to carry, by
+ * `data-testid`. An allowlist, not a ban: the point of the original contract was
+ * "someone adds an Apply button in six months and nothing fails". With execution
+ * legitimately on the page, a ban is no longer expressible — but an allowlist
+ * is, and a THIRD control added later trips it whether or not its label happens
+ * to contain a verb anyone thought of.
+ */
+const ALLOWED_MUTATION_CONTROLS = ['perform', 'perform-confirm'];
+
+describe('B2 — a perform-enabled render carries EXACTLY the sanctioned controls', () => {
+  function performEnabled(perform?: (b: PerformRequestBody) => Promise<PerformOutcomeResult>) {
+    return wrap(
+      <Recommendations
+        findings={ownedFindings}
+        onFocusNode={() => {}}
+        loadPerformState={async () => PERFORM_ON}
+        {...(perform ? { performRecommendation: perform } : {})}
+      />,
+    );
+  }
+
+  /** Testids of every mutation-verb-matching control, deduped and sorted. */
+  function mutationControlIds(): string[] {
+    return [
+      ...new Set(
+        interactiveControls()
+          .filter((c) => mutationVerbHits(c).length > 0)
+          .map((c) => c.getAttribute('data-testid') ?? `UNLABELLED:${controlLabel(c).trim().slice(0, 60)}`),
+      ),
+    ].sort();
+  }
+
+  it('idle: the only mutation-capable control is the staged Perform button', async () => {
+    performEnabled();
+    const buttons = await screen.findAllByTestId('perform');
+    // POPULATION — the feature really rendered, so "exactly one kind" is not
+    // "nothing rendered".
+    expect(buttons.length).toBeGreaterThan(0);
+    expect(mutationControlIds()).toEqual(['perform']);
+  });
+
+  it('staged: the confirm joins it, and nothing else does', async () => {
+    const staged = async (b: PerformRequestBody): Promise<PerformOutcomeResult> =>
+      b.confirmToken
+        ? { kind: 'refused', reason: 'not reached in this walk' }
+        : {
+            kind: 'staged',
+            executor: 'scale-to-zero',
+            confirmToken: 'tok',
+            expiresAt: '2026-09-01T12:10:00.000Z',
+            note: 'nothing changed',
+          };
+    performEnabled(staged);
+    fireEvent.click((await screen.findAllByTestId('perform'))[0]!);
+    await screen.findByTestId('perform-confirm-dialog');
+    await waitFor(() => expect(mutationControlIds()).toEqual(ALLOWED_MUTATION_CONTROLS));
+  });
+
+  it('every allowlisted control is a REAL testid on the surface, not a dead string', async () => {
+    // Anti-drift: an allowlist entry that no longer matches anything would let a
+    // renamed control disappear from the walk silently.
+    const staged = async (b: PerformRequestBody): Promise<PerformOutcomeResult> =>
+      b.confirmToken
+        ? { kind: 'refused', reason: 'not reached' }
+        : {
+            kind: 'staged',
+            executor: 'scale-to-zero',
+            confirmToken: 'tok',
+            expiresAt: 'later',
+            note: '',
+          };
+    performEnabled(staged);
+    fireEvent.click((await screen.findAllByTestId('perform'))[0]!);
+    await screen.findByTestId('perform-confirm-dialog');
+    for (const id of ALLOWED_MUTATION_CONTROLS) {
+      expect(screen.queryAllByTestId(id).length, `no control carries data-testid="${id}"`)
+        .toBeGreaterThan(0);
+    }
   });
 });
 
@@ -166,6 +378,7 @@ describe('A — the control walk makes no mutating call', () => {
       <Recommendations
         findings={findings}
         onFocusNode={() => {}}
+        loadPerformState={reviewOnly}
         submitDecision={async (id, decision) => {
           calls.push({ id, decision });
           return { ok: true };
@@ -189,6 +402,7 @@ describe('A — the control walk makes no mutating call', () => {
       <Recommendations
         findings={findings}
         onFocusNode={() => {}}
+        loadPerformState={reviewOnly}
         submitDecision={async () => ({ ok: true })}
       />,
     );
@@ -202,7 +416,7 @@ describe('A — the control walk makes no mutating call', () => {
 
   it('a finding with UNESTABLISHED ownership offers no approve control at all', () => {
     const unowned = snapshot.findings.map((f) => ({ ...f, ownershipConfirmed: false }));
-    wrap(<Recommendations findings={unowned} onFocusNode={() => {}} />);
+    wrap(<Recommendations findings={unowned} onFocusNode={() => {}} loadPerformState={reviewOnly} />);
     // Reported — reports cover all subscriptions...
     expect(screen.getAllByTestId('finding-card').length).toBeGreaterThan(0);
     expect(screen.getAllByTestId('ownership-withheld').length).toBeGreaterThan(0);
@@ -213,7 +427,7 @@ describe('A — the control walk makes no mutating call', () => {
 
   it('the proposed change is rendered as TEXT to copy, never executed', () => {
     const findings = snapshot.findings.map((f) => ({ ...f, ownershipConfirmed: true }));
-    wrap(<Recommendations findings={findings} onFocusNode={() => {}} />);
+    wrap(<Recommendations findings={findings} onFocusNode={() => {}} loadPerformState={reviewOnly} />);
 
     // The proposal is VISIBLE BY DEFAULT (#4241 defect 10) — no expansion
     // needed. This is itself an assertion: a card whose actual proposed change
