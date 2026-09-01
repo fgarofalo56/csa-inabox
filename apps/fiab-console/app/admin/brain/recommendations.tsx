@@ -60,6 +60,7 @@ import {
   DismissCircle20Regular,
 } from '@fluentui/react-icons';
 import { EmptyState } from '@/lib/components/empty-state';
+import { LearnPopover } from '@/lib/components/ui/learn-popover';
 import type { ProposalDecision, WireFinding } from '@/app/api/admin/brain/_lib/wire';
 
 const useStyles = makeStyles({
@@ -124,6 +125,24 @@ async function postDecision(
   return { ok: true };
 }
 
+/**
+ * The cost-provenance clause, DERIVED from the snapshot's own `CostFigure.source`
+ * values — never a baked literal. The previous banner hard-coded a stale
+ * 2026-08-23 measurement ("HTTP 429 on 11 consecutive attempts") as standing
+ * fact, which is exactly the R7 error `deploy-integrity.md` forbids: a claim
+ * about a past run rendered as the present tense of every future one.
+ */
+export function costSourceClause(findings: readonly WireFinding[]): string {
+  const sources = [...new Set(findings.flatMap((f) => (f.cost ? [f.cost.source] : [])))].sort();
+  if (sources.length === 0) return '';
+  if (sources.length === 2) {
+    return 'figures mix DERIVED estimates (measured SKU × published retail rate) and Cost Management billing-export data';
+  }
+  return sources[0] === 'derived'
+    ? 'every figure is DERIVED (measured SKU × published retail rate), not a bill'
+    : 'every figure comes from a Cost Management billing export';
+}
+
 export function Recommendations({ findings, onFocusNode, submitDecision }: RecommendationsProps) {
   const s = useStyles();
   const submit = submitDecision ?? postDecision;
@@ -131,15 +150,15 @@ export function Recommendations({ findings, onFocusNode, submitDecision }: Recom
   const totalDerived = findings.reduce((acc, f) => acc + (f.cost?.amountUsd ?? 0), 0);
   const priced = findings.filter((f) => f.cost).length;
   const approvable = findings.filter((f) => f.ownershipConfirmed).length;
+  const costClause = costSourceClause(findings);
 
   if (findings.length === 0) {
     return (
       <EmptyState
         title="No findings in this snapshot"
         body={
-          'No detector produced a finding over the estate that was read. Check the Coverage panel ' +
-          'before reading that as a clean estate: a detector that declined because its data was ' +
-          'never collected also reports zero.'
+          'No detector produced a finding. Before reading that as a clean estate, check ' +
+          'Coverage — a detector whose data was never collected also reports zero.'
         }
       />
     );
@@ -152,13 +171,25 @@ export function Recommendations({ findings, onFocusNode, submitDecision }: Recom
       <MessageBar intent="info" data-testid="recommend-only-banner">
         <MessageBarBody>
           <MessageBarTitle>Recommend-only.</MessageBarTitle>
-          Nothing on this page changes anything in Azure. Approving records that a person agreed
-          with the recommendation; the change itself is a repository edit you make. {priced} of{' '}
-          {findings.length} finding(s) carry a derived cost estimate totalling roughly $
-          {totalDerived.toFixed(2)} per 30 days — a DERIVED figure from measured SKU x published
-          retail rate, never a bill (the Cost Management API returned HTTP 429 on 11 consecutive
-          attempts). {approvable} of {findings.length} have established ownership and can be
-          approved.
+          Nothing on this page changes anything in Azure — approving records a decision; the change
+          itself is a repository edit you make.{' '}
+          {priced > 0 && (
+            <>
+              {priced} of {findings.length} finding(s) are priced at roughly $
+              {totalDerived.toFixed(2)} per 30 days ({costClause}).{' '}
+            </>
+          )}
+          {approvable} of {findings.length} can be approved (ownership established).{' '}
+          <LearnPopover
+            title="Recommendations"
+            content={
+              'Each card is a detector finding over the estate snapshot: its severity, the ' +
+              'evidence chain that established it, and a proposed change a person can approve. ' +
+              'Cost figures always carry their provenance — a DERIVED figure is a measured SKU ' +
+              'multiplied by a published retail rate, never a bill. Proposals are withheld until ' +
+              "the resource's ownership is established by the estate tag."
+            }
+          />
         </MessageBarBody>
       </MessageBar>
 
@@ -208,6 +239,12 @@ function FindingCard({
 
   return (
     <Card className={s.card} data-testid="finding-card" data-finding-id={finding.id}>
+      {/* WHAT the Brain recommends leads the card; the meta badges follow it
+          (#4241 defect 10). A five-badge row above the title buried the one
+          thing the operator opened this tab to read. */}
+      <Body1Strong>{finding.title}</Body1Strong>
+      <Body1>{finding.summary}</Body1>
+
       <div className={s.badges}>
         <Badge
           appearance="filled"
@@ -242,9 +279,6 @@ function FindingCard({
         )}
       </div>
 
-      <Body1Strong>{finding.title}</Body1Strong>
-      <Body1>{finding.summary}</Body1>
-
       <div className={s.actions}>
         {finding.subjects.map((id) => (
           <Button
@@ -259,27 +293,10 @@ function FindingCard({
         ))}
       </div>
 
-      <Accordion collapsible>
-        <AccordionItem value="evidence">
-          <AccordionHeader>Evidence ({finding.evidence.notes.length} established fact(s))</AccordionHeader>
-          <AccordionPanel>
-            <Caption1 className={s.note}>Query</Caption1>
-            <pre className={s.pre}>{finding.evidence.query}</pre>
-            <Caption1 className={s.note}>What the code established</Caption1>
-            <ul>
-              {finding.evidence.notes.map((n, i) => (
-                <li key={i}>
-                  <Caption1 className={s.note}>{n}</Caption1>
-                </li>
-              ))}
-            </ul>
-            <Caption1 className={s.note}>
-              Population examined: {finding.population.scope}
-              {finding.population.blind && ' — BLIND: the examined set was empty.'}
-            </Caption1>
-          </AccordionPanel>
-        </AccordionItem>
-
+      {/* The PROPOSAL is open by default — the actual proposed change is the
+          substance of the card, not a drawer to hunt for (#4241 defect 10).
+          Evidence stays collapsed until asked for. */}
+      <Accordion collapsible defaultOpenItems="proposal">
         <AccordionItem value="proposal">
           <AccordionHeader>Proposed change (not applied)</AccordionHeader>
           <AccordionPanel>
@@ -287,12 +304,34 @@ function FindingCard({
             <pre className={s.pre} data-testid="proposed-change">
               {finding.remediation.proposedChange}
             </pre>
-            <Caption1 className={s.note}>
+            <Caption1>
               requiresHumanApproval={String(finding.remediation.requiresHumanApproval)} ·
-              mutatesAzure={String(finding.remediation.mutatesAzure)} — both are literal types in
-              the Brain&apos;s contract, so a self-approving or self-applying proposal is not
-              constructible.
+              mutatesAzure={String(finding.remediation.mutatesAzure)} — pinned as literal types in
+              the Brain&apos;s contract.
             </Caption1>
+          </AccordionPanel>
+        </AccordionItem>
+
+        <AccordionItem value="evidence">
+          <AccordionHeader>Evidence ({finding.evidence.notes.length} established fact(s))</AccordionHeader>
+          <AccordionPanel>
+            <Caption1 className={s.note}>Query</Caption1>
+            <pre className={s.pre}>{finding.evidence.query}</pre>
+            <Caption1 className={s.note}>What the code established</Caption1>
+            <ul>
+              {/* The established facts are the substance — reading size,
+                  default foreground; only the labels stay Caption1 (#4241
+                  defect 1). */}
+              {finding.evidence.notes.map((n, i) => (
+                <li key={i}>
+                  <Body1>{n}</Body1>
+                </li>
+              ))}
+            </ul>
+            <Body1>
+              Population examined: {finding.population.scope}
+              {finding.population.blind && ' — BLIND: the examined set was empty.'}
+            </Body1>
           </AccordionPanel>
         </AccordionItem>
       </Accordion>
@@ -338,7 +377,7 @@ function FindingCard({
                 {copied ? 'Copied' : 'Copy change'}
               </Button>
             </Tooltip>
-            <Caption1 className={s.note}>
+            <Caption1>
               Approving records a decision. It does not scale, delete or modify anything.
             </Caption1>
           </div>

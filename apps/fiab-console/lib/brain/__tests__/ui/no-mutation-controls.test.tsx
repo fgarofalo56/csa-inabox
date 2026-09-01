@@ -134,7 +134,7 @@ describe('B — no rendered control carries a mutation verb', () => {
   });
 });
 
-describe('A — clicking every control makes no mutating call', () => {
+describe('A — the control walk makes no mutating call', () => {
   it('Approve reaches ONLY the review endpoint, with a review decision', async () => {
     const calls: Array<{ id: string; decision: string }> = [];
     const owned = snapshot.findings.filter((f) => f.ownershipConfirmed);
@@ -193,18 +193,26 @@ describe('A — clicking every control makes no mutating call', () => {
     const findings = snapshot.findings.map((f) => ({ ...f, ownershipConfirmed: true }));
     wrap(<Recommendations findings={findings} onFocusNode={() => {}} />);
 
-    // The proposal lives in a collapsed accordion — expand it, which is also a
-    // click-walk of a control that must remain non-mutating.
-    const headers = screen.getAllByRole('button', { name: /Proposed change/i });
-    expect(headers.length).toBeGreaterThan(0);
-    fireEvent.click(headers[0]!);
-
+    // The proposal is VISIBLE BY DEFAULT (#4241 defect 10) — no expansion
+    // needed. This is itself an assertion: a card whose actual proposed change
+    // is hidden behind a drawer is the hierarchy defect that shipped.
     const pres = screen.getAllByTestId('proposed-change');
     expect(pres.length).toBeGreaterThan(0);
     // It is a <pre>, not a form action, an href, or a button.
     expect(pres[0]!.tagName.toLowerCase()).toBe('pre');
-    // And the accordion header itself says the change is NOT applied.
+
+    // The accordion header still exists and says the change is NOT applied.
+    const headers = screen.getAllByRole('button', { name: /Proposed change/i });
+    expect(headers.length).toBeGreaterThan(0);
     expect(headers[0]!.textContent).toContain('not applied');
+
+    // Evidence is still collapsed by default — expand it, so the behavioral
+    // walk keeps one accordion toggle and confirms the toggle renders text
+    // rather than doing anything.
+    const evidence = screen.getAllByRole('button', { name: /Evidence/i });
+    expect(evidence.length).toBeGreaterThan(0);
+    fireEvent.click(evidence[0]!);
+    expect(screen.getAllByText(/What the code established/).length).toBeGreaterThan(0);
   });
 });
 

@@ -51,8 +51,10 @@ import {
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
 import { Badge, Caption1, makeStyles, tokens } from '@fluentui/react-components';
-import { CanvasRightRail } from '@/lib/components/canvas/canvas-node-kit';
+import { CanvasRightRail, accentTint } from '@/lib/components/canvas/canvas-node-kit';
 import { ResizableCanvasRegion } from '@/lib/components/canvas/resizable-canvas';
+import { readableAccent } from '@/lib/components/ui/item-type-visual';
+import { useTheme } from '@/lib/theme/theme-context';
 import type { WireEdge, WireNode } from '@/app/api/admin/brain/_lib/wire';
 import { BrainCanvasNode, DanglingTerminus, type BrainNodeData } from './brain-canvas-node';
 import {
@@ -199,7 +201,11 @@ selected: props.selectedId === n.id,
         target: tid,
         animated,
         label: label ?? undefined,
-        labelStyle: { fill: stroke, fontSize: 10 },
+        // Tokened ramp + a neutral label plate (#4241 defect 5). The previous
+        // `fontSize: 10` sat below the type ramp, and the accent-on-default-bg
+        // fill washed out over the canvas dots in dark mode.
+        labelStyle: { fill: stroke, fontSize: tokens.fontSizeBase200 },
+        labelBgStyle: { fill: tokens.colorNeutralBackground1, fillOpacity: 0.9 },
         style: { stroke, strokeWidth, strokeDasharray: syn?.dash ?? '6 4' },
         data: {
           provenance: e.provenance,
@@ -215,7 +221,15 @@ selected: props.selectedId === n.id,
       source: e.from,
       target: e.to,
       animated,
-      ...(label ? { label } : {}),
+      ...(label
+        ? {
+            label,
+            // Same ramp + plate as the dangling branch, so an overlay label on a
+            // resolved edge is equally readable in both themes.
+            labelStyle: { fill: stroke, fontSize: tokens.fontSizeBase200 },
+            labelBgStyle: { fill: tokens.colorNeutralBackground1, fillOpacity: 0.9 },
+          }
+        : {}),
       style: {
         stroke,
         strokeWidth,
@@ -235,6 +249,7 @@ selected: props.selectedId === n.id,
 function CanvasInner(props: BrainCanvasProps) {
   const s = useStyles();
   const rf = useReactFlow();
+  const { mode } = useTheme();
   const [zoom, setZoom] = React.useState(1);
   const { nodes, edges } = React.useMemo(() => buildFlow(props), [props]);
 
@@ -292,7 +307,25 @@ function CanvasInner(props: BrainCanvasProps) {
       aria-label={props.overlay ? 'Loom estate synapse graph' : 'Loom estate graph'}
     >
       <Background variant={BackgroundVariant.Dots} gap={16} size={1} />
-      <MiniMap pannable zoomable ariaLabel="Graph minimap" />
+      {/* Themed like every sibling minimap (one-canvas, lineage-canvas) — the
+          React Flow default is light-theme chrome, a bright panel in dark mode
+          (#4241 defect 9). Node fills carry the same accent the canvas shows. */}
+      <MiniMap
+        pannable
+        zoomable
+        ariaLabel="Graph minimap"
+        nodeStrokeColor={tokens.colorNeutralStroke2}
+        nodeColor={(n) => {
+          if (n.type === 'dangling') return 'var(--loom-accent-red)';
+          const d = n.data as unknown as BrainNodeData;
+          const accent = d.synapse
+            ? d.synapse.accent
+            : nodeVisual(d.node, d.coverageConfigured).accent;
+          return readableAccent(accent, mode === 'dark');
+        }}
+        maskColor={accentTint(tokens.colorNeutralBackground3, 70)}
+        style={{ backgroundColor: tokens.colorNeutralBackground1 }}
+      />
       <Panel position="top-left">
         {props.overlay ? (
           <div className={s.legend} role="group" aria-label="Synapse legend" data-testid="synapse-legend">
@@ -340,7 +373,21 @@ function CanvasInner(props: BrainCanvasProps) {
       <Panel position="top-right">
         <div className={s.colHead}>
           {(Object.keys(PROVENANCE_COLOR) as (keyof typeof PROVENANCE_COLOR)[]).map((p) => (
-            <Badge key={p} appearance="tint" size="small" style={{ color: PROVENANCE_COLOR[p] }}>
+            // The readable-accent pairing from the node kit's StatusChip
+            // (#4241 defect 6): accent tint behind, theme-aware accent in
+            // front — never an accent foreground over Fluent's default brand
+            // tint, which is exactly the accent-on-tint failure
+            // `loom_item_accent_readable_theme` records.
+            <Badge
+              key={p}
+              appearance="tint"
+              size="small"
+              style={{
+                backgroundColor: accentTint(PROVENANCE_COLOR[p], 14),
+                color: readableAccent(PROVENANCE_COLOR[p], mode === 'dark'),
+                borderColor: accentTint(PROVENANCE_COLOR[p], 28),
+              }}
+            >
               {p}
             </Badge>
           ))}
