@@ -33,8 +33,22 @@
  * No network: `fetch-with-timeout` is mocked, and the two refusal cases assert
  * it was never called at all — "no ARM request was sent" is the claim the
  * error string makes (deploy-integrity R7), so the test measures it.
+ *
+ * No AUTH either, and mocking the fetch alone does NOT get you that: `armFetch`
+ * builds its header object with `` `Bearer ${await token()}` ``, and JS evaluates
+ * that argument BEFORE it calls `fetchWithTimeout`. So every case that gets past
+ * the refusal and reaches the wire would acquire a REAL token — on a CI runner
+ * that is a `DefaultAzureCredential` walking its whole chain to an
+ * `AggregateAuthenticationError`, and the resolving cases below fail. Hence the
+ * `@azure/identity` stub, the same one `scaling-routes.test.ts` (the other suite
+ * that drives this module) and ~148 sibling suites under this directory use.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
+vi.mock('@azure/identity', () => {
+  class Cred { async getToken() { return { token: 'tk', expiresOnTimestamp: Date.now() + 3600_000 }; } }
+  return { DefaultAzureCredential: Cred, ManagedIdentityCredential: Cred, ChainedTokenCredential: Cred };
+});
 
 const fetchWithTimeout = vi.fn();
 vi.mock('@/lib/azure/fetch-with-timeout', () => ({
