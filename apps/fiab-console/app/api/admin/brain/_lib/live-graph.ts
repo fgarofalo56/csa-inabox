@@ -32,6 +32,26 @@
  * consulted by every detector before it emits anything. `detect.ts` refuses to
  * produce findings for an uncollected provenance and says so.
  *
+ * ── A COLLECTED PROVENANCE CAN STILL HAVE A BLIND POPULATION (#4258) ───────
+ * `configured` is collected, and that was not enough. Until 2026-09-01 the env
+ * entries handed to the extractor were filtered against `BOUND_ENV_VAR_NAMES` —
+ * a 20-row hand table — while `unreachable-always-on` judged all 65 Container
+ * Apps. An app whose inbound wire rode a variable outside that table could never
+ * gain an inbound edge and was therefore vacuously "unreachable + always-on".
+ * MEASURED: `loom-risingwave` is wired at `admin-plane/main.bicep:4859` and
+ * `LOOM_RISINGWAVE_URL` appears in no table in this repo, so its wire was
+ * discarded before resolution and the service became the estate's single
+ * largest cost finding — a false positive whose proposed remediation
+ * (scale-to-zero) destroys every materialized view it holds (#4257).
+ *
+ * The candidate set is now DERIVED FROM THE PULL, not from a name list: any env
+ * value naming an ARM id or ingress FQDN this pull discovered is a wire,
+ * whatever the variable is called. The binding table survives for the one job a
+ * value cannot do — telling an EMPTY wire who it was meant to reach. And where
+ * recall is still bounded (an app with no readable ingress FQDN cannot be named
+ * by a URL at all), the bound is COUNTED and stated on `coverage.configured`
+ * rather than left for a reader to infer from a zero.
+ *
  * ── NOTHING HERE MUTATES ANYTHING ──────────────────────────────────────────
  * Pure function of the rows in. The only I/O in this module's dependency tree is
  * the read-only ARG query in `arg-collect.ts`.
@@ -41,12 +61,14 @@ import {
   buildGraph,
   extractFromContainerAppEnv,
   extractFromResourceGraph,
+  namesADiscoveredTarget,
   LOOM_ESTATE_TAG_KEY,
   azureResourceNodeId,
   type BrainGraph,
   type ContainerAppEnvEntry,
   type ContainerAppEnvInput,
   type EdgeProvenance,
+  type EstateTargetIndex,
   type NodeId,
   type ResourceGraphRow,
 } from '@/lib/brain/graph';
@@ -112,8 +134,32 @@ export interface EnvReadStats {
   readonly entriesRead: number;
   readonly entriesEmpty: number;
   readonly entriesSecretRef: number;
-  /** Entries the `onlyNames` filter admitted — i.e. rows in the binding table. */
+  /** Entries whose NAME is in the wire-binding table. */
   readonly entriesConsidered: number;
+  /**
+   * Entries admitted because their VALUE names an ARM id or ingress FQDN this
+   * pull discovered, regardless of the variable's name (#4258). Before the fix
+   * this was structurally zero: every such wire was discarded on a name miss.
+   */
+  readonly entriesMatchedByValue: number;
+  /**
+   * Container App nodes the reachability query will RANGE OVER. The detector's
+   * denominator.
+   */
+  readonly appsJudged: number;
+  /**
+   * Of those, how many an env VALUE could actually name — i.e. carry a readable
+   * ingress FQDN in this pull.
+   *
+   * WHY THIS IS ON THE SNAPSHOT AND NOT DERIVED LATER: when it is smaller than
+   * {@link appsJudged}, "zero inbound configured edges" is partly a statement
+   * about the graph's reach and not only about the estate. An app with no
+   * readable ingress FQDN cannot be named by any URL-valued env var, so it
+   * cannot gain an inbound `configured` edge no matter how well it is wired.
+   * That shortfall is a fact a detector or a surface must be able to state; it
+   * is not something a reader should have to infer from a zero.
+   */
+  readonly appsAddressable: number;
 }
 
 export interface LiveGraphResult {
@@ -173,12 +219,41 @@ export function buildLiveGraph(
       );
   }
 
+  // ── THE TARGET INDEX: what this pull ACTUALLY discovered (#4258) ─────────
+  // Built from the resource extractor's OWN nodes, not from a second read of
+  // `rows` and not from a hand list. Two consequences, both load-bearing:
+  //
+  //   • It cannot drift from the deploy. Whatever the bicep wires, if the
+  //     resource exists in this pull its FQDN is in here, so a wire naming it is
+  //     found by its VALUE — no binding row, no env-var name list, nothing to
+  //     forget. That is what fixes `loom-risingwave`: `LOOM_RISINGWAVE_URL`
+  //     appears in no table in this repo, and the wire is now found anyway.
+  //   • It cannot disagree with the resolver. The keys are the same node ids and
+  //     ingress FQDNs `buildGraph` will resolve against, taken from the same
+  //     objects, so an admitted value resolves rather than dangling.
+  const fqdns = new Set<string>();
+  const resourceIds = new Set<string>();
+  let appsJudged = 0;
+  let appsAddressable = 0;
+  for (const n of resourceExtraction.nodes) {
+    if (n.kind !== 'azure-resource') continue;
+    resourceIds.add(n.id);
+    const fqdn = n.ingress?.fqdn;
+    if (fqdn) fqdns.add(fqdn.trim().toLowerCase());
+    if (n.resourceType.toLowerCase() === CONTAINER_APP_TYPE) {
+      appsJudged += 1;
+      if (fqdn) appsAddressable += 1;
+    }
+  }
+  const estateTargets: EstateTargetIndex = { fqdns, resourceIds };
+
   // ── live `configured` wires ──────────────────────────────────────────────
   const envInputs: ContainerAppEnvInput[] = [];
   let entriesRead = 0;
   let entriesEmpty = 0;
   let entriesSecretRef = 0;
   let entriesConsidered = 0;
+  let entriesMatchedByValue = 0;
   const boundNames = new Set(BOUND_ENV_VAR_NAMES);
 
   for (const row of rows) {
@@ -192,17 +267,30 @@ export function buildLiveGraph(
     for (const e of env) {
       if (e.secretRef !== undefined) entriesSecretRef += 1;
       else if (typeof e.value === 'string' && e.value.trim() === '') entriesEmpty += 1;
-      if (boundNames.has(e.name)) entriesConsidered += 1;
+      if (boundNames.has(e.name)) {
+        entriesConsidered += 1;
+      } else if (
+        e.secretRef === undefined &&
+        typeof e.value === 'string' &&
+        namesADiscoveredTarget(e.value, estateTargets) !== null
+      ) {
+        // Counted here only for REPORTING, using the extractor's own predicate
+        // rather than a second copy of the host-normalization rules. The
+        // extractor makes the same judgement over the same index; this loop
+        // decides nothing.
+        entriesMatchedByValue += 1;
+      }
     }
 
     envInputs.push({
       appResourceId: armId,
       env,
       envVarBindings: bindings,
-      // Without this filter every `LOOM_ENABLE_X=false` becomes an
-      // `unresolved-target` dangling edge and buries the wires that matter.
-      // Its effect on recall is reported in `EnvReadStats`, not hidden.
-      onlyNames: BOUND_ENV_VAR_NAMES,
+      // The binding table is the ALWAYS-CONSIDER set, not a filter. It is
+      // required for EMPTY values (which name nothing and so need `intendedTo`
+      // supplied); every other entry is admitted on the evidence of its VALUE.
+      alwaysConsiderNames: BOUND_ENV_VAR_NAMES,
+      estateTargets,
     });
   }
 
@@ -216,8 +304,27 @@ export function buildLiveGraph(
       collected: true,
       edgeCount: byProv.configured,
       note:
-        `live container env read from the same Azure Resource Graph pull, filtered to the ` +
-        `${BOUND_ENV_VAR_NAMES.length} env var(s) in the wire-binding table.`,
+        `live container env read from the same Azure Resource Graph pull. A wire is found by ` +
+        `its VALUE — any env value naming an ARM id or ingress FQDN this pull discovered — so ` +
+        `the candidate set is derived from the measured estate, not from a list of variable ` +
+        `names. ${entriesMatchedByValue} entr(ies) were found that way; the ` +
+        `${BOUND_ENV_VAR_NAMES.length}-row wire-binding table additionally covers ` +
+        `${entriesConsidered} entr(ies) by name, which is what lets an EMPTY value still name ` +
+        `its intended target. ` +
+        // THE POPULATION SHORTFALL, stated rather than implied (#4258). The
+        // detector ranges over every Container App; an app with no readable
+        // ingress FQDN cannot be named by any URL-valued env var, so for those
+        // "zero inbound edges" is partly a fact about this graph's reach.
+        (appsAddressable < appsJudged
+          ? `RECALL BOUND: of ${appsJudged} Container App(s) a reachability query will judge, ` +
+            `${appsAddressable} carry a readable ingress FQDN in this pull. The other ` +
+            `${appsJudged - appsAddressable} cannot be named by ANY env URL value, so a "zero ` +
+            'inbound configured edges" verdict for them describes this graph\'s reach and not ' +
+            'only the estate. Read it with that bound, and see the skipped list for the env ' +
+            'entries that named nothing discovered.'
+          : `RECALL: all ${appsJudged} Container App(s) a reachability query will judge carry a ` +
+            'readable ingress FQDN in this pull, so every one of them is nameable by an env ' +
+            'value.'),
     },
     owns: {
       // The extractor RAN, so the provenance is collected. Whether it FOUND
@@ -299,6 +406,9 @@ export function buildLiveGraph(
       entriesEmpty,
       entriesSecretRef,
       entriesConsidered,
+      entriesMatchedByValue,
+      appsJudged,
+      appsAddressable,
     },
     containerApps: count(CONTAINER_APP_TYPE),
     containerAppJobs: count(CONTAINER_APP_JOB_TYPE),

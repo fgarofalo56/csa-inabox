@@ -1,0 +1,472 @@
+/**
+ * LOOM BRAIN — THE EXTRACTOR'S POPULATION MUST CONTAIN ITS OWN SUBJECT (#4258).
+ *
+ * ── THE DEFECT THESE SPECS PIN ─────────────────────────────────────────────
+ * `extractFromContainerAppEnv` used to take `onlyNames` as a HARD FILTER and
+ * `continue` past every entry whose NAME was absent — without counting it. The
+ * console supplied a 20-row hand list; `unreachable-always-on` then judged all
+ * 65 Container Apps in the pull. An app whose inbound wire rode a variable
+ * outside that list could not gain an inbound edge under any circumstances, so
+ * it was VACUOUSLY "unreachable and always-on".
+ *
+ * MEASURED instance: `loom-risingwave` is wired at
+ * `platform/fiab/bicep/modules/admin-plane/main.bicep:4859` as
+ *
+ *     { name: 'LOOM_RISINGWAVE_URL',
+ *       value: 'loom-risingwave.internal.${caeDefaultDomain}:4566' }
+ *
+ * — a bare host:port with no scheme — and `LOOM_RISINGWAVE_URL` appears in NO
+ * table in this repository. The wire was discarded at extraction, before FQDN
+ * resolution would have matched it, and the service became the estate's single
+ * largest cost finding. The finding's own text ("zero inbound resolved
+ * 'configured' edges across 65 Container App(s) examined") was a true statement
+ * about the extractor's population and a FALSE statement about the estate.
+ *
+ * ── WHAT MAKES THESE SPECS DISCRIMINATING RATHER THAN AGREEABLE ────────────
+ * Every "it now resolves" assertion is paired with a "and this still does not"
+ * assertion over the same call:
+ *
+ *   • the risingwave-shaped wire RESOLVES (the fix), and
+ *   • a flag / a number / a bare token / an endpoint outside the pull still
+ *     produces NOTHING (the fix did not become "emit an edge for everything"),
+ *   • the pre-existing empty-wire and binding-table behaviour is unchanged (no
+ *     previously-resolved edge is lost).
+ *
+ * A widening that also admitted the second group would pass half of this file
+ * and fail the other half, which is the point.
+ */
+
+import { describe, expect, it } from 'vitest';
+import {
+  azureResourceNodeId,
+  buildGraph,
+  extractFromContainerAppEnv,
+  extractFromResourceGraph,
+  namesADiscoveredTarget,
+  nodesWithNoInboundEdge,
+  type EstateTargetIndex,
+  type NodeId,
+  type ResourceGraphRow,
+} from '../../graph';
+import { buildLiveGraph } from '@/app/api/admin/brain/_lib/live-graph';
+import { BOUND_ENV_VAR_NAMES } from '@/app/api/admin/brain/_lib/wire-bindings';
+import { appId, containerAppRow, managedEnvRow, SUB_A } from '../ui/estate-fixture';
+
+const CONSOLE_ARM = appId(SUB_A, 'loom-console');
+const RISINGWAVE_ARM = appId(SUB_A, 'loom-risingwave');
+const RISINGWAVE_ID = azureResourceNodeId(RISINGWAVE_ARM);
+const DIRECTLAKE_ARM = appId(SUB_A, 'loom-directlake');
+const DIRECTLAKE_ID = azureResourceNodeId(DIRECTLAKE_ARM);
+
+/** The real bicep shape: bare host, `.internal.` form, explicit TCP port, no scheme. */
+const RISINGWAVE_FQDN = 'loom-risingwave.internal.example.azurecontainerapps.io';
+const RISINGWAVE_WIRE = `${RISINGWAVE_FQDN}:4566`;
+
+/**
+ * `LOOM_RISINGWAVE_URL` is genuinely absent from the binding table. If a future
+ * change adds it, the fixtures below stop testing the defect (they would pass by
+ * the NAME path) — so the absence is asserted rather than assumed.
+ */
+describe('the premise: the wire-binding table does not cover this variable', () => {
+  it('LOOM_RISINGWAVE_URL is NOT in BOUND_ENV_VAR_NAMES', () => {
+    expect(BOUND_ENV_VAR_NAMES).not.toContain('LOOM_RISINGWAVE_URL');
+  });
+
+  it('and the table is small relative to the fleet it is asked to cover', () => {
+    // The measured shape of the defect: a 20-row list standing in for the wires
+    // of 35 declared Loom container apps.
+    expect(BOUND_ENV_VAR_NAMES.length).toBeLessThan(35);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Extractor level
+// ---------------------------------------------------------------------------
+
+function targets(fqdns: string[], resourceIds: string[] = []): EstateTargetIndex {
+  return {
+    fqdns: new Set(fqdns.map((f) => f.toLowerCase())),
+    resourceIds: new Set(resourceIds.map((r) => azureResourceNodeId(r) as string)),
+  };
+}
+
+describe('a wire is found by its VALUE, not by its variable name', () => {
+  it('THE DEFECT: a wire on a variable outside the name list now produces an edge', () => {
+    const r = extractFromContainerAppEnv([
+      {
+        appResourceId: CONSOLE_ARM,
+        alwaysConsiderNames: BOUND_ENV_VAR_NAMES,
+        estateTargets: targets([RISINGWAVE_FQDN]),
+        env: [{ name: 'LOOM_RISINGWAVE_URL', value: RISINGWAVE_WIRE }],
+      },
+    ]);
+    expect(r.edges).toHaveLength(1);
+    expect(r.edges[0]!.provenance).toBe('configured');
+    expect(r.edges[0]!.targetRef).toBe(RISINGWAVE_WIRE);
+    expect(r.edges[0]!.evidence.symbol).toBe('LOOM_RISINGWAVE_URL');
+  });
+
+  it('and it RESOLVES to the service, which is therefore not unreachable', () => {
+    const rows = [
+      containerAppRow({ name: 'loom-console', external: true, env: [{ name: 'LOOM_RISINGWAVE_URL', value: RISINGWAVE_WIRE }] }),
+      containerAppRow({ name: 'loom-risingwave', minReplicas: 1, fqdn: RISINGWAVE_FQDN }),
+    ];
+    const resources = extractFromResourceGraph(rows);
+    const env = extractFromContainerAppEnv([
+      {
+        appResourceId: CONSOLE_ARM,
+        alwaysConsiderNames: BOUND_ENV_VAR_NAMES,
+        estateTargets: targets([RISINGWAVE_FQDN]),
+        env: [{ name: 'LOOM_RISINGWAVE_URL', value: RISINGWAVE_WIRE }],
+      },
+    ]);
+    const g = buildGraph([resources, env]);
+
+    expect(g.inboundEdges(RISINGWAVE_ID, 'configured').result).toHaveLength(1);
+    expect(nodesWithNoInboundEdge(g, 'configured').result.map((n) => n.id)).not.toContain(
+      RISINGWAVE_ID,
+    );
+  });
+
+  it('an ARM-id value is admitted too — and the test is CASE-INSENSITIVE', () => {
+    // Written `startsWith('/subscriptions/')` this misses `/SUBSCRIPTIONS/…`,
+    // the value falls through to the host test, matches nothing, and the target
+    // silently loses an inbound edge. Same bug node-id.test.ts caught in the
+    // resolver; it must not be reintroduced on the admission side.
+    const upper = RISINGWAVE_ARM.replace('/subscriptions/', '/SUBSCRIPTIONS/');
+    const r = extractFromContainerAppEnv([
+      {
+        appResourceId: CONSOLE_ARM,
+        alwaysConsiderNames: BOUND_ENV_VAR_NAMES,
+        estateTargets: targets([], [RISINGWAVE_ARM]),
+        env: [{ name: 'SOME_TARGET_ID', value: upper }],
+      },
+    ]);
+    expect(r.edges).toHaveLength(1);
+    expect(r.edges[0]!.targetRef).toBe(upper);
+  });
+
+  it('scheme, port, path, case and a trailing dot all still RESOLVE end-to-end', () => {
+    // The admission side normalizes the host itself. If its rules ever disagree
+    // with the resolver's, an admitted value is emitted and then DANGLES — this
+    // asserts the resolved outcome, which is what fails when either side drifts.
+    const forms = [
+      RISINGWAVE_FQDN,
+      `https://${RISINGWAVE_FQDN}`,
+      `https://${RISINGWAVE_FQDN}:4566`,
+      `https://${RISINGWAVE_FQDN}/health?x=1#f`,
+      `HTTPS://${RISINGWAVE_FQDN.toUpperCase()}`,
+      `${RISINGWAVE_FQDN}.`,
+    ];
+    const resources = extractFromResourceGraph([
+      containerAppRow({ name: 'loom-console', external: true }),
+      containerAppRow({ name: 'loom-risingwave', minReplicas: 1, fqdn: RISINGWAVE_FQDN }),
+    ]);
+    for (const value of forms) {
+      const env = extractFromContainerAppEnv([
+        {
+          appResourceId: CONSOLE_ARM,
+          alwaysConsiderNames: BOUND_ENV_VAR_NAMES,
+          estateTargets: targets([RISINGWAVE_FQDN]),
+          env: [{ name: 'UNLISTED_VAR', value }],
+        },
+      ]);
+      expect(env.edges, `admission for ${value}`).toHaveLength(1);
+      const g = buildGraph([resources, env]);
+      expect(g.inboundEdges(RISINGWAVE_ID, 'configured').result, `resolution for ${value}`).toHaveLength(1);
+    }
+  });
+});
+
+describe('the widening is BOUNDED — these still produce nothing', () => {
+  const only = {
+    appResourceId: CONSOLE_ARM,
+    alwaysConsiderNames: BOUND_ENV_VAR_NAMES,
+    estateTargets: targets([RISINGWAVE_FQDN], [RISINGWAVE_ARM]),
+  } as const;
+
+  it('a flag, a number and free text on unlisted variables are not wires', () => {
+    const r = extractFromContainerAppEnv([
+      {
+        ...only,
+        env: [
+          { name: 'LOOM_ENABLE_SOMETHING', value: 'false' },
+          { name: 'LOOM_TIMEOUT_MS', value: '3000' },
+          { name: 'LOOM_LOG_LEVEL', value: 'info' },
+          { name: 'AZURE_CLIENT_ID', value: '00000000-0000-4000-8000-00000000000a' },
+        ],
+      },
+    ]);
+    expect(r.edges).toHaveLength(0);
+  });
+
+  it('a BARE TOKEN is never admitted by value, even when a resource carries that name', () => {
+    // `resolveTarget` can resolve an unambiguous bare name, but admitting one
+    // HERE would let `LOG_LEVEL=info` mint an edge the day something is named
+    // `info`. The value must name an FQDN or an ARM id the pull discovered.
+    const r = extractFromContainerAppEnv([
+      { ...only, env: [{ name: 'UNLISTED_VAR', value: 'loom-risingwave' }] },
+    ]);
+    expect(r.edges).toHaveLength(0);
+  });
+
+  it('an endpoint OUTSIDE the pull produces no edge — no fabricated dangling noise', () => {
+    const r = extractFromContainerAppEnv([
+      {
+        ...only,
+        env: [
+          { name: 'LOOM_AOAI_ENDPOINT', value: 'https://contoso.openai.azure.com/' },
+          { name: 'LOOM_COSMOS_ENDPOINT', value: 'https://contoso.documents.azure.com:443/' },
+        ],
+      },
+    ]);
+    expect(r.edges).toHaveLength(0);
+  });
+
+  it('an EMPTY value on an unlisted variable is NOT turned into a dangling edge', () => {
+    // `''` names nothing, so there is no evidence of intent to attach. Emitting
+    // one per unlisted empty var would bury the binding-table ones that DO carry
+    // an intended target.
+    const r = extractFromContainerAppEnv([
+      { ...only, env: [{ name: 'UNLISTED_EMPTY', value: '' }] },
+    ]);
+    expect(r.edges).toHaveLength(0);
+  });
+
+  it('a secretRef on an unlisted variable is still INDETERMINATE, never an empty wire', () => {
+    const r = extractFromContainerAppEnv([
+      { ...only, env: [{ name: 'UNLISTED_SECRET', secretRef: 's' }] },
+    ]);
+    expect(r.edges).toHaveLength(0);
+  });
+
+  it('namesADiscoveredTarget answers NOTHING when no index is supplied', () => {
+    expect(namesADiscoveredTarget(RISINGWAVE_WIRE, undefined)).toBeNull();
+    expect(namesADiscoveredTarget(RISINGWAVE_WIRE, targets([RISINGWAVE_FQDN]))).toBe('fqdn');
+    expect(namesADiscoveredTarget(RISINGWAVE_ARM, targets([], [RISINGWAVE_ARM]))).toBe('arm-id');
+    expect(namesADiscoveredTarget('', targets([RISINGWAVE_FQDN]))).toBeNull();
+  });
+});
+
+describe('nothing the name path used to produce is lost', () => {
+  const bindings: Record<string, NodeId> = { LOOM_BROKER_URL: DIRECTLAKE_ID };
+
+  it('an EMPTY binding-table wire is still a dangling edge carrying its intended target', () => {
+    const r = extractFromContainerAppEnv([
+      {
+        appResourceId: CONSOLE_ARM,
+        alwaysConsiderNames: BOUND_ENV_VAR_NAMES,
+        estateTargets: targets([RISINGWAVE_FQDN]),
+        envVarBindings: bindings,
+        env: [{ name: 'LOOM_BROKER_URL', value: '' }],
+      },
+    ]);
+    expect(r.edges).toHaveLength(1);
+    expect(r.edges[0]!.emptyValue).toBe(true);
+    expect(r.edges[0]!.intendedTo).toBe(DIRECTLAKE_ID);
+  });
+
+  it('a WIRED binding-table variable still resolves to its app', () => {
+    const wired = `https://${'loom-directlake.internal.example.azurecontainerapps.io'}`;
+    const resources = extractFromResourceGraph([
+      containerAppRow({ name: 'loom-console', external: true }),
+      containerAppRow({ name: 'loom-directlake', minReplicas: 1 }),
+    ]);
+    const env = extractFromContainerAppEnv([
+      {
+        appResourceId: CONSOLE_ARM,
+        alwaysConsiderNames: BOUND_ENV_VAR_NAMES,
+        estateTargets: targets(['loom-directlake.internal.example.azurecontainerapps.io']),
+        env: [{ name: 'LOOM_DIRECTLAKE_URL', value: wired }],
+      },
+    ]);
+    const g = buildGraph([resources, env]);
+    expect(g.inboundEdges(DIRECTLAKE_ID, 'configured').result).toHaveLength(1);
+  });
+
+  it('the legacy `onlyNames` spelling is still honoured, unioned with the new one', () => {
+    // `lib/brain/run/azure/arg-graph-source.ts` supplies it and is owned by
+    // another lane; removing the field would break that build.
+    const r = extractFromContainerAppEnv([
+      {
+        appResourceId: CONSOLE_ARM,
+        onlyNames: ['LOOM_BROKER_URL'],
+        env: [
+          { name: 'LOOM_BROKER_URL', value: '' },
+          { name: 'UNRELATED', value: 'x' },
+        ],
+      },
+    ]);
+    expect(r.edges).toHaveLength(1);
+    expect(r.edges[0]!.emptyValue).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The population must SAY what it could not reach
+// ---------------------------------------------------------------------------
+
+describe('the extractor reports its own recall bound', () => {
+  it('the population counts what it SAW, not only what it admitted', () => {
+    const r = extractFromContainerAppEnv([
+      {
+        appResourceId: CONSOLE_ARM,
+        alwaysConsiderNames: ['LOOM_BROKER_URL'],
+        estateTargets: targets([RISINGWAVE_FQDN]),
+        env: [
+          { name: 'LOOM_BROKER_URL', value: '' },
+          { name: 'LOOM_RISINGWAVE_URL', value: RISINGWAVE_WIRE },
+          { name: 'LOOM_AOAI_ENDPOINT', value: 'https://contoso.openai.azure.com/' },
+          { name: 'LOOM_LOG_LEVEL', value: 'info' },
+        ],
+      },
+    ]);
+    expect(r.population.scope).toMatch(/4 env entr\(ies\) SEEN/);
+    expect(r.population.scope).toMatch(/2 considered \(1 by name, 1 by VALUE/);
+    expect(r.population.scope).toMatch(/2 declined — value named nothing discovered/);
+  });
+
+  it('declined entries produce a NAMED skip record, never a silent `continue`', () => {
+    const r = extractFromContainerAppEnv([
+      {
+        appResourceId: CONSOLE_ARM,
+        alwaysConsiderNames: ['LOOM_BROKER_URL'],
+        estateTargets: targets([RISINGWAVE_FQDN]),
+        env: [{ name: 'LOOM_AOAI_ENDPOINT', value: 'https://contoso.openai.azure.com/' }],
+      },
+    ]);
+    const bound = r.skipped.find((s) => s.reason.includes('names NOTHING this pull discovered'));
+    expect(bound).toBeDefined();
+    expect(bound!.reason).toMatch(/bounded by what this pull discovered/);
+  });
+
+  it('a name list with NO estateTargets is reported as the #4258 blind configuration', () => {
+    const r = extractFromContainerAppEnv([
+      {
+        appResourceId: CONSOLE_ARM,
+        onlyNames: ['LOOM_BROKER_URL'],
+        env: [
+          { name: 'LOOM_BROKER_URL', value: '' },
+          { name: 'LOOM_RISINGWAVE_URL', value: RISINGWAVE_WIRE },
+        ],
+      },
+    ]);
+    const blind = r.skipped.find((s) => s.subject.includes('no estateTargets supplied'));
+    expect(blind).toBeDefined();
+    expect(blind!.reason).toMatch(/HARD FILTER/);
+    expect(blind!.reason).toMatch(/vacuously "unreachable"/);
+  });
+
+  it('and that record is ABSENT when the index IS supplied — it discriminates', () => {
+    const r = extractFromContainerAppEnv([
+      {
+        appResourceId: CONSOLE_ARM,
+        alwaysConsiderNames: ['LOOM_BROKER_URL'],
+        estateTargets: targets([RISINGWAVE_FQDN]),
+        env: [{ name: 'LOOM_BROKER_URL', value: '' }],
+      },
+    ]);
+    expect(r.skipped.find((s) => s.subject.includes('no estateTargets supplied'))).toBeUndefined();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// buildLiveGraph — the whole path the console actually runs
+// ---------------------------------------------------------------------------
+
+function risingwaveEstate(opts?: { readonly fqdn?: string | null }): ResourceGraphRow[] {
+  return [
+    managedEnvRow(SUB_A, 'loom-cae'),
+    containerAppRow({
+      name: 'loom-console',
+      minReplicas: 2,
+      external: true,
+      env: [
+        // The real bicep line, verbatim in shape.
+        { name: 'LOOM_RISINGWAVE_URL', value: RISINGWAVE_WIRE },
+        // The CONTROL: a binding-table variable, wired. Must keep resolving.
+        {
+          name: 'LOOM_DIRECTLAKE_URL',
+          value: 'https://loom-directlake.internal.example.azurecontainerapps.io',
+        },
+        // Noise that must remain noise.
+        { name: 'LOOM_ENABLE_SOMETHING', value: 'false' },
+        { name: 'LOOM_LOG_LEVEL', value: 'info' },
+      ],
+    }),
+    containerAppRow({
+      name: 'loom-risingwave',
+      minReplicas: 1,
+      external: false,
+      ...(opts?.fqdn === undefined ? {} : { fqdn: opts.fqdn }),
+    }),
+    containerAppRow({ name: 'loom-directlake', minReplicas: 1, external: false }),
+  ];
+}
+
+describe('buildLiveGraph — loom-risingwave is no longer a false positive', () => {
+  const live = buildLiveGraph(risingwaveEstate());
+
+  it('gains an inbound RESOLVED configured edge from the console', () => {
+    expect(live.graph.inboundEdges(RISINGWAVE_ID, 'configured').result).toHaveLength(1);
+  });
+
+  it('is ABSENT from the unreachable set the cost detector ranges over', () => {
+    const q = nodesWithNoInboundEdge(live.graph, 'configured', {
+      resourceType: 'Microsoft.App/containerApps',
+      describe: 'Container Apps',
+    });
+    expect(q.result.map((n) => n.id)).not.toContain(RISINGWAVE_ID);
+    // The query is not vacuous: it still finds the app nothing wires.
+    expect(q.population.examined).toBeGreaterThan(1);
+  });
+
+  it('the CONTROL still resolves — the change did not simply make everything reachable', () => {
+    expect(live.graph.inboundEdges(DIRECTLAKE_ID, 'configured').result).toHaveLength(1);
+  });
+
+  it('the console itself, which nothing wires, is STILL unreachable-by-configured', () => {
+    // Without this, "risingwave is reachable" would be satisfied by a change
+    // that made every node reachable.
+    const consoleId = azureResourceNodeId(CONSOLE_ARM);
+    expect(live.graph.inboundEdges(consoleId, 'configured').result).toHaveLength(0);
+  });
+
+  it('the value-matched wire is COUNTED, so the recall gain is visible', () => {
+    expect(live.env.entriesMatchedByValue).toBeGreaterThan(0);
+  });
+
+  it('coverage states how a wire is found — by VALUE, not by a list of names', () => {
+    expect(live.coverage.configured.collected).toBe(true);
+    expect(live.coverage.configured.note).toMatch(/found by its VALUE/);
+    expect(live.coverage.configured.note).toMatch(/derived from the measured estate/);
+  });
+});
+
+describe('buildLiveGraph reports the population shortfall rather than implying coverage', () => {
+  it('every app nameable: coverage says so, and appsAddressable equals appsJudged', () => {
+    const live = buildLiveGraph(risingwaveEstate());
+    expect(live.env.appsJudged).toBe(3);
+    expect(live.env.appsAddressable).toBe(3);
+    expect(live.coverage.configured.note).toMatch(/RECALL: all 3 Container App\(s\)/);
+  });
+
+  it('an app with NO readable ingress FQDN is declared UNNAMEABLE, not silently judged', () => {
+    // This is the honest half of the fix: the widening removes one bound, and
+    // where a bound REMAINS it is stated. An app with no ingress FQDN cannot be
+    // named by any URL-valued env var, so "zero inbound edges" for it is a fact
+    // about the graph's reach.
+    const live = buildLiveGraph(risingwaveEstate({ fqdn: null }));
+    expect(live.env.appsJudged).toBe(3);
+    expect(live.env.appsAddressable).toBe(2);
+    expect(live.coverage.configured.note).toMatch(/RECALL BOUND: of 3 Container App\(s\)/);
+    expect(live.coverage.configured.note).toMatch(
+      /cannot be named by ANY env URL value/,
+    );
+  });
+
+  it('the shortfall statement is ABSENT when there is no shortfall — it discriminates', () => {
+    const live = buildLiveGraph(risingwaveEstate());
+    expect(live.coverage.configured.note).not.toMatch(/RECALL BOUND/);
+  });
+});
