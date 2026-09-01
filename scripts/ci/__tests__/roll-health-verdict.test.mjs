@@ -35,6 +35,23 @@
  * on a non-unknown health failure it would AUTO-REVERT A GOOD DEPLOY (#4231
  * D3). The accepted set is therefore written out, and pinned by its own test.
  *
+ * ── #4287 — AND THE FIRST FIX FOR ALL OF THAT HAD THREE DEFECTS OF ITS OWN ──
+ * 1. CUMULATIVE FAILURE COUNT. `FAILED_READS -ge 12` promoted the verdict to
+ *    `unknown` over the whole 30-poll budget, however many polls had SUCCEEDED.
+ *    12 successful `Unhealthy` reads scattered among 12 refusals produced
+ *    `unknown`, which makes the rollback `if:` false — so a revision the
+ *    control plane called Unhealthy was left LIVE — while the error text
+ *    claimed "a revision state this step never read" about a state it had read
+ *    twelve times. `unknown` answers "did I learn anything?", so it is gated on
+ *    SUCCESS_READS -eq 0, exactly as gov-console-roll.yml has always done.
+ * 2. STILL CASE-DEPENDENT. The exact literals kept the dependence the PR title
+ *    named: `Healthy<TAB>RunningAtMaxscale` PASSED the old glob and FAILED the
+ *    new literal, i.e. the fix introduced an auto-revert of a good deploy. Both
+ *    sides are folded now; equality (not substring) still refuses "unhealthy".
+ * 3. STILL POSITIONAL. Splitting one multiselect row moved correctness from
+ *    the capital H onto the field order of a `{health:…, running:…}` hash.
+ *    Each enum now has its OWN scalar --query, naming its own property.
+ *
  * ── WHY THIS RUNS THE SHIPPED BASH ─────────────────────────────────────────
  * This repo has a recorded failure class of tests that model the CODE instead
  * of the thing: a substring/`includes` assertion over the step's text would
@@ -44,7 +61,7 @@
  * workflow verbatim, substitutes only the GitHub `${{ … }}` expressions —
  * failing loudly if any expression it does not know about survives — and
  * EXECUTES that text under `bash -e` (the runner's shell) with `az` and
- * `sleep` stubbed on PATH. The loop, the three-valued verdict, the failed-read
+ * `sleep` stubbed on PATH. The loop, the three-valued verdict, the read
  * counting, the side-file stderr handling and the image read-back are the
  * SHIPPED text, not a model of it.
  *
@@ -53,12 +70,15 @@
  * $GITHUB_OUTPUT and whether it exits non-zero — i.e. whether an unhealthy
  * revision reaches live validation, and whether the rollback's
  * `verdict != 'unknown'` guard sees the right value.
- * NOT PROVEN: that real `az containerapp revision show --query
- * "{health:…, running:…}" -o tsv` orders its two columns health-then-running.
- * az's tsv writer emits a dict's values ordered by key ("health" < "running"),
- * so it does — but that is taken from the CLI's documented behaviour, not
- * measured here. Also NOT proven: the job-level `if:` wiring, a real ACA
- * revision, and either cloud's live estate. Those need a live roll.
+ * MEASURED OUTSIDE THIS FILE (az 2.88.0, recorded because the previous revision
+ * of this docblock asserted the opposite from the CLI's documented behaviour
+ * rather than from a run): `--query "{zzz:'FIRST', aaa:'SECOND'}" -o tsv` emits
+ * `FIRST<TAB>SECOND`, i.e. WRITTEN order, not key order; and a top-level list
+ * multiselect emits one row PER ELEMENT, so `--query "[a, b]" -o tsv` is two
+ * LINES, not two fields. Neither fact is load-bearing any more — the step reads
+ * two scalars — but the wrong version of the first one was load-bearing before.
+ * NOT PROVEN: the job-level `if:` wiring, a real ACA revision, and either
+ * cloud's live estate. Those need a live roll.
  *
  * Run: node --test scripts/ci/__tests__/roll-health-verdict.test.mjs
  * (Discovered automatically by scripts/ci/check-node-test-suites.mjs, which the
@@ -186,16 +206,34 @@ function renderScript() {
 const bashOk = spawnSync('bash', ['-c', 'exit 0']).status === 0;
 const skipNoBash = { skip: !bashOk && 'bash unavailable' };
 
+// #4287 — A SUITE THAT SILENTLY SHRINKS TO ITS TWO STATIC TESTS IS A CONTROL
+// THAT IS GREEN BECAUSE ITS INPUT COULD NOT BE READ. Every behavioural arm here
+// runs the SHIPPED `run:` text under bash; without bash all of them skip and the
+// suite still reports PASS. That is latent on ubuntu runners and live the moment
+// this lane moves to windows-latest or the runner image changes. Under CI the
+// absence of bash is therefore a HARD failure of the suite, not a quiet skip.
+// The local-dev escape hatch stays, because a developer without bash should
+// still be able to run the two static assertions.
+test('the behavioural harness can actually run (a skipped suite is a vacuous suite)', () => {
+  assert.ok(
+    bashOk || !process.env.CI,
+    'bash is not on PATH, so every behavioural arm in this file would skip and the suite would ' +
+      'report PASS having executed nothing but its two static string checks. Under CI that is a ' +
+      'hollow control: fix the runner shell rather than accepting a green that measured nothing.',
+  );
+});
+
 /**
  * Execute the SHIPPED step against a stubbed control plane.
  *
  * @param {object} o
- * @param {string[]} [o.probes]  one entry per health poll: "<health>,<running>",
- *                               "FAIL" (the read itself is refused), or
- *                               "NOTAB:<value>" (a successful read whose row
- *                               carries no tab). The LAST entry repeats for
+ * @param {string[]} [o.probes]  one entry per health POLL: "<health>,<running>",
+ *                               "FAIL" (both reads of the poll are refused), or
+ *                               "HALF:<health>,<running>" (the healthState read
+ *                               succeeds and the runningState read of the same
+ *                               poll is refused). The LAST entry repeats for
  *                               every further poll.
- * @param {boolean} [o.crlf]     the control plane terminates the row with CR
+ * @param {boolean} [o.crlf]     the control plane terminates each value with CR
  * @param {string}  [o.image]    the image the revision reports running
  * @param {boolean} [o.imageReadFails] every image read-back is refused
  * @returns {{code:number, out:string, verdict:string|null}}
@@ -214,9 +252,12 @@ function runHealthStep({
   writeFileSync(ghOutput, '');
 
   // `az containerapp revision show … --query <q> -o tsv`, dispatching on the
-  // JMESPath the step asks for. Nothing here invents a response shape: the
-  // health query is a two-key multiselect, whose tsv rendering is ONE row of
-  // tab-separated values ordered by key (health, running).
+  // JMESPath the step asks for. Nothing here invents a response shape: since
+  // #4287 the step reads each enum with its OWN scalar --query, and a scalar
+  // `-o tsv` is one bare value on one line. The poll counter advances on the
+  // healthState read, which the step issues first; the runningState read of
+  // the SAME poll reads that counter without advancing it, so one probe entry
+  // describes one poll however many calls the poll makes.
   writeFileSync(
     path.join(bin, 'az'),
     [
@@ -226,27 +267,40 @@ function runHealthStep({
       '  if [ "$prev" = "--query" ]; then Q="$a"; fi',
       '  prev="$a"',
       'done',
+      'pick_for() {',
+      '  i=0; p=""',
+      '  for t in $STUB_PROBES; do',
+      '    i=$((i+1)); p="$t"',
+      '    if [ "$i" -ge "$1" ]; then break; fi',
+      '  done',
+      '  printf %s "$p"',
+      '}',
+      'emit() {',
+      '  if [ "${STUB_CRLF:-0}" = "1" ]; then printf "%s\\r\\n" "$1"; else printf "%s\\n" "$1"; fi',
+      '}',
       'case "$Q" in',
       '  *healthState*)',
       '    n=0',
       '    if [ -s "$STUB_COUNTER" ]; then n=$(cat "$STUB_COUNTER"); fi',
       '    n=$((n+1)); printf %s "$n" > "$STUB_COUNTER"',
-      '    i=0; pick=""',
-      '    for t in $STUB_PROBES; do',
-      '      i=$((i+1)); pick="$t"',
-      '      if [ "$i" -ge "$n" ]; then break; fi',
-      '    done',
+      '    pick=$(pick_for "$n")',
       '    if [ "$pick" = "FAIL" ]; then',
       '      echo "ERROR: (SubscriptionRequestsThrottled) stub: ARM refused this read" >&2',
       '      exit 1',
       '    fi',
+      '    case "$pick" in HALF:*) pick="${pick#HALF:}" ;; esac',
+      '    emit "${pick%%,*}"',
+      '    exit 0 ;;',
+      '  *runningState*)',
+      '    n=1',
+      '    if [ -s "$STUB_COUNTER" ]; then n=$(cat "$STUB_COUNTER"); fi',
+      '    pick=$(pick_for "$n")',
       '    case "$pick" in',
-      '      NOTAB:*)',
-      '        printf "%s\\n" "${pick#NOTAB:}"',
-      '        exit 0 ;;',
+      '      HALF:*)',
+      '        echo "ERROR: (SubscriptionRequestsThrottled) stub: ARM refused the runningState half of this poll" >&2',
+      '        exit 1 ;;',
       '    esac',
-      '    h="${pick%%,*}"; r="${pick##*,}"',
-      '    if [ "${STUB_CRLF:-0}" = "1" ]; then printf "%s\\t%s\\r\\n" "$h" "$r"; else printf "%s\\t%s\\n" "$h" "$r"; fi',
+      '    emit "${pick##*,}"',
       '    exit 0 ;;',
       '  *containers*)',
       '    if [ "${STUB_IMAGE_READ_FAILS:-0}" = "1" ]; then',
@@ -431,28 +485,102 @@ test('a CR-terminated control-plane row still PASSES (exactness must not become 
   assert.equal(r.verdict, 'healthy', r.out);
 });
 
-// ── A row that cannot be split is a PARSING failure, not a revision verdict ──
-// R7: if the --query shape ever drifts and the row arrives with no tab, the
-// step must fail closed (it established nothing) AND must not let the operator
-// read "the revision is unhealthy" out of a message about its own parsing.
-test('a tab-less row fails CLOSED and is reported as a shape problem, not a revision state', skipNoBash, () => {
-  const r = runHealthStep({ probes: ['NOTAB:Healthy'] });
+// ── #4287: THE CASING OF A SERIALIZED ENUM IS CONVENTION, NOT CONTRACT ──────
+// The exact-literal form this PR shipped kept the very dependence its title
+// named — it was right only by the capital H of Healthy, the capital R of
+// Running and the capital S of RunningAtMaxScale. `RunningAtMaxscale` PASSED
+// the old whole-row glob and FAILED the exact literal, i.e. the PR introduced
+// an auto-revert of a good deploy. Case-folding both sides keeps the compare an
+// EQUALITY, so "Unhealthy" still cannot satisfy "healthy".
+test('Healthy + RunningAtMaxscale (lowercase s) PASSES — casing must not auto-revert a good deploy', skipNoBash, () => {
+  const r = runHealthStep({ probes: ['Healthy,RunningAtMaxscale'] });
+  assert.equal(
+    r.code,
+    0,
+    'a revision at max scale whose enum arrived with different casing is a GOOD deploy. ' +
+      `Refusing it makes verdict=unhealthy, which FIRES the rollback (#4231 D3).\n${r.out}`,
+  );
+  assert.equal(r.verdict, 'healthy', r.out);
+});
+
+test('healthy + running (all lowercase) PASSES', skipNoBash, () => {
+  const r = runHealthStep({ probes: ['healthy,running'] });
+  assert.equal(r.code, 0, r.out);
+  assert.equal(r.verdict, 'healthy', r.out);
+});
+
+test('HEALTHY + RUNNINGATMAXSCALE (all upper) PASSES', skipNoBash, () => {
+  const r = runHealthStep({ probes: ['HEALTHY,RUNNINGATMAXSCALE'] });
+  assert.equal(r.code, 0, r.out);
+  assert.equal(r.verdict, 'healthy', r.out);
+});
+
+// The counter-arm: folding must not turn the equality back into something a
+// health-adjacent string can satisfy.
+test('unhealthy (lowercase) still FAILS — folding is an equality, not a substring', skipNoBash, () => {
+  const r = runHealthStep({ probes: ['unhealthy,running'] });
+  assert.equal(r.code, 1, `case-folding must not make "unhealthy" satisfy "healthy"\n${r.out}`);
+  assert.equal(r.verdict, 'unhealthy', r.out);
+});
+
+// ── #4287: the two enums are addressed BY NAME, not by position in a row ────
+// Each field now has its own scalar --query, so there is no row to split and no
+// column order to depend on. The pair of arms below is the proof that HEALTH is
+// fed by the healthState query and RUNNING by the runningState one: swap the
+// two values and the verdict flips. Were the assignments reversed in the
+// shipped step, the first arm would fail and the second would pass.
+test('a swapped read — healthState carrying the running token — FAILS', skipNoBash, () => {
+  const r = runHealthStep({ probes: ['Running,Healthy'] });
   assert.equal(
     r.code,
     1,
-    `a row that carries only one field cannot establish Healthy AND Running — it must fail closed\n${r.out}`,
+    'healthState=Running is not a health verdict and runningState=Healthy is not a running ' +
+      `state. Only a positional/whole-row read could accept this.\n${r.out}`,
   );
   assert.equal(r.verdict, 'unhealthy', r.out);
-  assert.match(r.out, /came back with NO tab separator/, r.out);
-  assert.match(r.out, /about the QUERY'S OUTPUT SHAPE and not about the revision/, r.out);
 });
 
-test('the shape caveat is ABSENT when every row split cleanly', skipNoBash, () => {
+// A poll that reads only ONE of the two properties establishes NEITHER, so it
+// must count as a failed read rather than be graded on a stale companion value.
+test('a poll whose runningState half is refused is a FAILED read, not a half-verdict', skipNoBash, () => {
+  const r = runHealthStep({ probes: ['HALF:Healthy,Running'] });
+  assert.equal(r.code, 1, `neither property was fully established\n${r.out}`);
+  assert.equal(
+    r.verdict,
+    'unknown',
+    `no poll ever read BOTH properties, so nothing about the revision was measured\n${r.out}`,
+  );
+  assert.match(r.out, /Cannot say whether revision/, r.out);
+});
+
+test('a half-refused poll followed by a clean one still PASSES', skipNoBash, () => {
+  const r = runHealthStep({ probes: ['HALF:Healthy,Running', 'Healthy,Running'] });
+  assert.equal(r.code, 0, r.out);
+  assert.equal(r.verdict, 'healthy', r.out);
+});
+
+// ── A value neither enum recognises is a QUERY problem until proven otherwise ─
+// R7: if a --query ever stops resolving to the property it names, the step must
+// fail closed AND must not let the operator read "the revision is unhealthy"
+// out of a message about its own query.
+test('an unrecognised enum value is reported as a shape caveat, not as a revision state', skipNoBash, () => {
+  const r = runHealthStep({ probes: ['Healthy,eastus'] });
+  assert.equal(r.code, 1, `"eastus" is not a runningState — this must fail closed\n${r.out}`);
+  assert.equal(r.verdict, 'unhealthy', r.out);
+  assert.match(r.out, /not recognised members of RevisionHealthState/, r.out);
+  assert.match(r.out, /this failure is about the QUERY and not about the revision/, r.out);
+});
+
+test('the shape caveat is ABSENT when every value was a known enum member', skipNoBash, () => {
   // A caveat printed on every failure is a caveat nobody reads. It must appear
-  // only when an unsplittable row was actually observed.
+  // only when an unrecognised value was actually observed.
   const r = runHealthStep({ probes: ['Unhealthy,Running'] });
   assert.equal(r.code, 1, r.out);
-  assert.doesNotMatch(r.out, /NO tab separator/, `a well-formed row must not raise a shape caveat\n${r.out}`);
+  assert.doesNotMatch(
+    r.out,
+    /not recognised members/,
+    `a well-formed pair of enum members must not raise a shape caveat\n${r.out}`,
+  );
 });
 
 // ── Everything #4231 added, still standing ─────────────────────────────────
@@ -466,6 +594,12 @@ test('twelve refused reads are UNKNOWN, never "unhealthy" (#4231 D1/D3, R7)', sk
       `would auto-revert a good deploy — measured in run 33429557771.\n${r.out}`,
   );
   assert.match(r.out, /Cannot say whether revision/, r.out);
+  assert.match(
+    r.out,
+    /NOT ONE succeeded/,
+    'the unknown branch is reachable ONLY when nothing was read, and the message must say so ' +
+      'rather than quoting a failure threshold (#4287)',
+  );
   assert.doesNotMatch(
     r.out,
     /never reached Healthy\+Running/,
@@ -477,7 +611,63 @@ test('transient read failures below the budget do not poison a healthy verdict',
   const r = runHealthStep({ probes: ['FAIL', 'FAIL', 'FAIL', 'Healthy,Running'] });
   assert.equal(r.code, 0, `3 refused reads then Healthy+Running is a GOOD roll\n${r.out}`);
   assert.equal(r.verdict, 'healthy', r.out);
-  assert.match(r.out, /control-plane read FAILED \(failed read 3\/12/, 'failed reads must be counted and named');
+  assert.match(
+    r.out,
+    /control-plane read FAILED \(failed reads: 3, successful reads so far: 0/,
+    'failed reads must be counted and named ALONGSIDE the successful count, since it is the ' +
+      'successful count that decides unknown-vs-unhealthy (#4287)',
+  );
+});
+
+// ── #4287 — THE ARM WITH NO FIXTURE, AND THE DEFECT IT WAS HIDING ───────────
+// `FAILED_READS` used to be cumulative over the whole 30-poll budget, so twelve
+// scattered refusals promoted the verdict to `unknown` no matter how many polls
+// had successfully read the revision. `unknown` makes the rollback `if:` false,
+// so a revision the control plane called Unhealthy was left LIVE — and the
+// error text claimed "a revision state this step never read" about a state it
+// had read twelve times. Both wrongs come from counting the wrong thing: the
+// question `unknown` answers is "did I learn anything?", which is a count of
+// SUCCESSES, not of failures. This is the shape the Gov sibling has always had.
+test('successful Unhealthy reads interleaved with refusals are UNHEALTHY, not unknown (#4287)', skipNoBash, () => {
+  // 12 successful `Unhealthy Running` reads alternating with 12 refusals; the
+  // remaining polls of the 30-budget repeat the last entry (a refusal), so the
+  // run ends on 12 successes and 18 failures — well past the old 12-failure
+  // give-up threshold.
+  const interleaved = Array.from({ length: 12 }, () => ['Unhealthy,Running', 'FAIL']).flat();
+  const r = runHealthStep({ probes: interleaved });
+  assert.equal(r.code, 1, r.out);
+  assert.equal(
+    r.verdict,
+    'unhealthy',
+    'the step READ this revision twelve times and every read said Unhealthy. Reporting that as ' +
+      '`unknown` suppresses the rollback and leaves the estate parked on a revision the control ' +
+      `plane called unhealthy — the exact outcome this gate exists to prevent.\n${r.out}`,
+  );
+  assert.match(
+    r.out,
+    /never reached Healthy\+Running/,
+    'a measured unhealthy must be reported as a measured unhealthy',
+  );
+  assert.doesNotMatch(
+    r.out,
+    /a revision state this step never read/,
+    'R7: the step must not deny a measurement it made twelve times',
+  );
+  assert.match(
+    r.out,
+    /successful reads: 12, failed reads: 18/,
+    'the failure must name what was actually read and what was not, so the operator can tell a ' +
+      'measured verdict from a starved one',
+  );
+});
+
+test('one successful read among refusals is still enough to deny `unknown` (#4287)', skipNoBash, () => {
+  // The boundary: exactly ONE poll established a state. That is information,
+  // so the verdict is a measurement — not an absence of one.
+  const r = runHealthStep({ probes: ['Unhealthy,Running', 'FAIL'] });
+  assert.equal(r.code, 1, r.out);
+  assert.equal(r.verdict, 'unhealthy', r.out);
+  assert.match(r.out, /successful reads: 1, failed reads: 29/, r.out);
 });
 
 test('a healthy revision running a DIFFERENT image FAILS the gate (#2963)', skipNoBash, () => {
@@ -518,19 +708,57 @@ test('the health decision compares each field against its OWN enum', () => {
   );
   assert.match(
     body,
-    /"\$HEALTH"\s*==\s*"Healthy"/,
-    'healthState must be tested exactly, against its own field',
+    /"\$\{HEALTH,,\}"\s*==\s*"healthy"/,
+    'healthState must be tested exactly, against its own field, and CASE-FOLDED — the exact ' +
+      'literal "Healthy" re-creates the capital-H dependence the fix was named for (#4287)',
   );
   assert.match(
     body,
-    /"\$RUNNING"\s*==\s*"Running"\s*\|\|\s*"\$RUNNING"\s*==\s*"RunningAtMaxScale"/,
-    'runningState must be tested against the ENUMERATED accepted set — narrowing it to the bare ' +
-      '"Running" literal auto-reverts a healthy revision that is at max scale (#4231 D3)',
+    /"\$\{RUNNING,,\}"\s*==\s*"running"\s*\|\|\s*"\$\{RUNNING,,\}"\s*==\s*"runningatmaxscale"/,
+    'runningState must be tested against the ENUMERATED accepted set, folded — narrowing it to ' +
+      'the bare "Running" literal, or leaving it case-sensitive, auto-reverts a healthy revision ' +
+      'that is at max scale (#4231 D3, #4287)',
+  );
+
+  // #4287 — separately ADDRESSED, not separately SLICED. Two scalar --query
+  // reads, each naming its own property; no multiselect, no positional split.
+  assert.match(
+    body,
+    /--query properties\.healthState -o tsv/,
+    'healthState must be read by its own name in its own scalar --query',
   );
   assert.match(
     body,
-    /HEALTH="\$\{STATE%%/,
-    'the two tsv fields must be split out of the single read — one az call, two fields',
+    /--query properties\.runningState -o tsv/,
+    'runningState must be read by its own name in its own scalar --query',
+  );
+  assert.doesNotMatch(
+    body,
+    /\{\s*health\s*:|\{\s*running\s*:/,
+    'a multiselect hash puts correctness back on FIELD ORDER. Measured on az 2.88.0, the tsv ' +
+      'writer emits a hash in WRITTEN order (not by key as the previous comment claimed), so the ' +
+      'gate would again be right for a reason nobody had verified (#4287)',
+  );
+  assert.doesNotMatch(
+    body,
+    /HEALTH="\$\{STATE%%|RUNNING="\$\{STATE##/,
+    'no positional split of a shared row may return',
+  );
+
+  // #4287 — the unknown promotion must be keyed on the absence of information,
+  // not on a count of failures. A cumulative failure count overwrote a MEASURED
+  // unhealthy with `unknown` and suppressed the rollback of a bad deploy.
+  assert.match(
+    body,
+    /SUCCESS_READS -eq 0/,
+    '`unknown` must be gated on having read NOTHING — the shape gov-console-roll.yml has always ' +
+      'had (`if [ "$READS" -eq 0 ]`). Gating it on FAILED_READS alone lets scattered throttling ' +
+      'suppress the rollback of a revision the control plane called Unhealthy (#4287)',
+  );
+  assert.doesNotMatch(
+    body,
+    /if \[\[ \$FAILED_READS -ge 12 \]\]; then\s*\n?\s*VERDICT=unknown/,
+    'the failure-count promotion to unknown must not come back',
   );
 });
 
