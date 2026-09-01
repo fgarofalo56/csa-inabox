@@ -7789,7 +7789,9 @@ module risingwave '../data-plane/loom-risingwave-aca.bicep' = if (risingwaveActi
 // #2642 — loom-redis-oss: the SOVEREIGN shared Redis substrate.
 //
 // Backs LOOM_RESULT_CACHE_REDIS for the PSR-5/6 shared query result cache in
-// GCC / GCC-High / IL5, where Azure Managed Redis does not exist and the classic
+// GCC-High / IL5 today — and in GCC once its apps lane lands (#3078), since
+// redisOssActive also requires deployAppsEnabled, which params/gcc.bicepparam
+// leaves unset. In all three, Azure Managed Redis does not exist and the classic
 // Azure Cache for Redis is on a hard 2028-10-01 turn-off. See the redisOssActive
 // derivation above for why this is sovereign-only and why that is cloud-parity
 // COMPLIANCE rather than a gap: same capability everywhere, a different

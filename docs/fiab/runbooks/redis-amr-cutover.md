@@ -70,7 +70,7 @@ empty-server footprint of a 6 GB P1, not stored data.
 `allconnectedclients` returning 5–6 from the *same query, same window* is the
 positive control: the zeros are real zeros, not a broken query.
 
-### 1.1 Client inventory — every binder, from source
+### 1.1 Client inventory: every binder, from source
 
 Five environment variables carry an H-band Redis `host:port` in this codebase.
 Here is every runtime read and every deployment binding:
