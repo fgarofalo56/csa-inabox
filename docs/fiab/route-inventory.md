@@ -13,11 +13,11 @@ verdict is DERIVED, not name-matched — see "How the owner column is decided".
 
 | Metric | Count |
 | --- | ---: |
-| Total routes | 1690 |
+| Total routes | 1691 |
 | Public (no session) | 59 |
 | Session-only | 648 |
 | Owner-scoped | 674 |
-| Admin | 309 |
+| Admin | 310 |
 | Unknown (generator fails) | 0 |
 | Gated (backend config) | 496 |
 | Areas | 122 |
@@ -206,6 +206,7 @@ dispatch is invisible to it. Full limits: `scripts/ci/_route-backends.mjs`.
 | `admin/bootstrap-catalogs/route.ts` | POST | admin |  | AI Search, Cosmos |
 | `admin/brain/graph/route.ts` | GET | admin |  | ARM, Container Apps, Resource Graph, Retail Prices API |
 | `admin/brain/history/route.ts` | GET POST | admin |  | ARM, Container Apps, Resource Graph |
+| `admin/brain/ownership-backfill/route.ts` | GET POST | admin |  | AAS, ADX, ARM, Azure Monitor, Compute, Cosmos, Synapse |
 | `admin/brain/perform/route.ts` | GET POST | admin |  | ARM, Azure Monitor, Container Apps, Cosmos, Resource Graph, Retail Prices API |
 | `admin/brain/proposals/route.ts` | POST | admin |  | Azure Monitor, Cosmos |
 | `admin/brain/synapses/route.ts` | GET | admin |  | — |
@@ -2527,7 +2528,7 @@ silently downgrading the route.
 
 ## Backend signals (derived)
 
-453 module(s) ORIGINATE a backend label — the derivation read an
+454 module(s) ORIGINATE a backend label — the derivation read an
 Azure identifier out of them. Every other route/module below inherits through the
 call graph. Nothing in this section is a Loom module name someone typed: the
 modules are derived, and only the Microsoft-owned identifier vocabulary is seeded.
@@ -3028,6 +3029,7 @@ caps the NUMBER of cuts at three; it does not bound what one cut can hide.
 | `apps/fiab-console/lib/azure/workspace-grants.ts` | Azure RBAC, Azure Storage, Cosmos, Event Hubs |
 | `apps/fiab-console/lib/azure/workspace-identity-client.ts` | Azure RBAC, Managed Identity |
 | `apps/fiab-console/lib/azure/workspace-roles-client.ts` | Azure RBAC, Fabric |
+| `apps/fiab-console/lib/brain-actions/arm-tags.ts` | ARM |
 | `apps/fiab-console/lib/brain-actions/executors.ts` | Container Apps |
 | `apps/fiab-console/lib/brain-actions/guards.ts` | Container Apps |
 | `apps/fiab-console/lib/brain-actions/state-store.ts` | Cosmos |

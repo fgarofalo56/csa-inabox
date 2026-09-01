@@ -10,9 +10,11 @@
  * The guard ORDER is load-bearing — cheapest and most categorical first:
  *
  *   registry        can this class be performed AT ALL? (security: never)
- *   snapshot        fresh rebuild; complete collection (#4015/#4016)
+ *   estate scope    WHICH estate is this console? (#4258 — a mutation scoped
+ *                   by a non-identity, or by no estate at all, is refused)
+ *   snapshot        fresh rebuild, ESTATE-SCOPED; complete collection (#4015/#4016)
  *   finding         the rebuild still produces this finding, subject matches
- *   ownership       fresh tag read still confirms it is OURS
+ *   ownership       fresh tag read still confirms it is OURS — and names THIS estate
  *   vacuity         the detector examined something real (P3)
  *   subject         Container App with full ARM coordinates, id derived here
  *   write scope     inside the credential's configured subscription + RG
@@ -30,6 +32,7 @@ import {
   AcaArmError,
   readAcaConfig,
 } from '@/lib/azure/container-apps-arm-client';
+import { resolveMutationEstateId } from './estate-scope';
 import {
   executeDeleteResource,
   executeScaleToZero,
@@ -94,10 +97,23 @@ export type PerformOutcome =
     };
 
 export interface PerformDeps {
-  /** Fresh snapshot rebuild — supplied by the route from the app's `_lib`. */
-  readonly loadSnapshot: () => Promise<BrainSnapshot>;
+  /**
+   * Fresh snapshot rebuild — supplied by the route from the app's `_lib`.
+   *
+   * The `estateId` argument is REQUIRED, in the type (#4258 item 4). This
+   * function used to call `loadSnapshot()` with no options at all, which
+   * `lib/brain/graph/extractors/resource-graph.ts` explicitly forbids for a
+   * mutating caller: without an estate id, ANY non-empty `loom-estate-id`
+   * counts as owned, so `guardOwnership` degrades to "carries SOME Loom estate
+   * tag" and only the write-scope guard bounds the blast radius. Making the
+   * argument mandatory means a future caller cannot re-introduce the permissive
+   * mode by omission — it would not compile.
+   */
+  readonly loadSnapshot: (opts: { readonly estateId: string }) => Promise<BrainSnapshot>;
   /** Overridable for tests; defaults to the Cosmos-backed singleton. */
   readonly store?: RecommendationStateStore;
+  /** Overridable for tests; defaults to `process.env`. */
+  readonly env?: NodeJS.ProcessEnv;
 }
 
 export async function performRecommendation(
@@ -118,8 +134,14 @@ export async function performRecommendation(
   const executor = entry.executor;
   const store = deps.store ?? recommendationStateStore();
 
-  // ── server-side re-derivation: the fresh snapshot ───────────────────────
-  const snapshot = await deps.loadSnapshot();
+  // ── estate scope: WHICH estate is this? (#4258 item 4) ──────────────────
+  // Resolved BEFORE the estate is read, because a console that cannot say
+  // which estate it is has no business reading one in order to change it.
+  const scope = resolveMutationEstateId(deps.env ?? process.env);
+  if ('refusal' in scope) return { kind: 'refused', refusal: scope.refusal };
+
+  // ── server-side re-derivation: the fresh, ESTATE-SCOPED snapshot ────────
+  const snapshot = await deps.loadSnapshot({ estateId: scope.estateId });
 
   const incomplete = guardSnapshotComplete(snapshot);
   if (incomplete) return { kind: 'refused', refusal: incomplete };
@@ -128,7 +150,7 @@ export async function performRecommendation(
   if ('refusal' in located) return { kind: 'refused', refusal: located.refusal };
   const { finding, node } = located;
 
-  const unowned = guardOwnership(finding);
+  const unowned = guardOwnership(finding, node, scope.estateId);
   if (unowned) return { kind: 'refused', refusal: unowned };
 
   const vacuous = guardDetectorNotVacuous(snapshot, finding);

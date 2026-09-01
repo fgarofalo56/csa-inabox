@@ -73,6 +73,95 @@ import { makePopulation } from '../graph';
 export const LOOM_ESTATE_TAG_KEY = 'loom-estate-id';
 
 /**
+ * THE OWNERSHIP VERDICT, as a first-class value (#4255 W3).
+ *
+ * The three states this extractor has always distinguished, given a name so a
+ * surface can SPLIT on them instead of re-deriving them:
+ *
+ *   owned          `loom-estate-id` is present AND names THIS estate. The only
+ *                  state in which Loom may propose or perform a mutation.
+ *   observed       the tag is absent, empty, or names a DIFFERENT estate. The
+ *                  resource is visible — reports cover all subscriptions (PRP
+ *                  §1 decision 4) — and is NOT ours to touch. `forzelite-*` and
+ *                  the `sentinel-*` services live here, and so does another
+ *                  Loom estate's console.
+ *   indeterminate  the tags could NOT be read. NOT the same as "no tags", and
+ *                  the difference is load-bearing: "I could not read it" must
+ *                  never be reported as "it is not Loom's" (deploy-integrity R7).
+ *
+ * ── THIS WIDENS NOTHING ────────────────────────────────────────────────────
+ * The signal is unchanged: `loom-estate-id`, and nothing else. RG name is still
+ * never read (measured wrong in BOTH directions on this estate — see the
+ * file header). `CSA_Loom`, `csa-loom`, `loom-next-level`, `loom-band` and
+ * `loom-item` still confer nothing. This type SURFACES the verdict the `owns`
+ * edge already encodes; it does not change what ownership MEANS.
+ *
+ * `classifyResourceOwnership` returns `owned` for EXACTLY the rows on which
+ * {@link extractFromResourceGraph} emits an `owns` edge —
+ * `resource-graph-extractor.test.ts` asserts that equivalence row-by-row, so
+ * the two cannot drift into two different answers about the same resource.
+ */
+export type OwnershipVerdict = 'owned' | 'observed' | 'indeterminate';
+
+/** Per-verdict counts, so a surface can say "N owned, M observed" honestly. */
+export interface OwnershipVerdictCounts {
+  readonly owned: number;
+  readonly observed: number;
+  readonly indeterminate: number;
+}
+
+/**
+ * Read `loom-estate-id` off a tag bag, case-insensitively (Azure tag keys are
+ * case-insensitive, and nothing guarantees the casing survived whatever
+ * produced the row). Returns `undefined` when absent or empty.
+ */
+export function readEstateTag(
+  tags: Readonly<Record<string, string>>,
+): string | undefined {
+  for (const [k, v] of Object.entries(tags)) {
+    if (k.toLowerCase() === LOOM_ESTATE_TAG_KEY) return str(v);
+  }
+  return undefined;
+}
+
+/**
+ * The ownership verdict for ONE resource.
+ *
+ * `estateId` scopes it. When OMITTED, any non-empty `loom-estate-id` reads as
+ * `owned` — right for an estate-wide report, and NOT sufficient for anything
+ * that will mutate, for the same reason
+ * {@link ResourceGraphExtractionOptions.estateId} documents: it cannot tell two
+ * Loom estates apart. Mutating callers pass it.
+ */
+export function classifyResourceOwnership(
+  facts: { readonly tags: Readonly<Record<string, string>> | null | undefined },
+  estateId?: string,
+): OwnershipVerdict {
+  // `undefined` and `null` both mean the tags were NOT read. The extractor
+  // normalizes `undefined` to `null` on the node for exactly this reason.
+  if (facts.tags === null || facts.tags === undefined) return 'indeterminate';
+  const value = readEstateTag(facts.tags);
+  if (!value) return 'observed';
+  if (estateId !== undefined && value !== estateId) return 'observed';
+  return 'owned';
+}
+
+/** Tally verdicts. Zero-filled, so an empty input reports zeros, not absence. */
+export function tallyOwnershipVerdicts(
+  verdicts: Iterable<OwnershipVerdict>,
+): OwnershipVerdictCounts {
+  let owned = 0;
+  let observed = 0;
+  let indeterminate = 0;
+  for (const v of verdicts) {
+    if (v === 'owned') owned += 1;
+    else if (v === 'observed') observed += 1;
+    else indeterminate += 1;
+  }
+  return { owned, observed, indeterminate };
+}
+
+/**
  * One row as Azure Resource Graph returns it.
  *
  * Accepts BOTH the ARG-native field names (`id`, `type`) and the
@@ -259,15 +348,11 @@ export function extractFromResourceGraph(
       continue;
     }
 
-    // Tag keys are case-insensitive in Azure; look the key up case-insensitively
-    // rather than assuming the casing survived whatever produced the row.
-    let estateValue: string | undefined;
-    for (const [k, v] of Object.entries(node.tags)) {
-      if (k.toLowerCase() === LOOM_ESTATE_TAG_KEY) {
-        estateValue = str(v);
-        break;
-      }
-    }
+    // Tag keys are case-insensitive in Azure; `readEstateTag` looks the key up
+    // case-insensitively rather than assuming the casing survived whatever
+    // produced the row. It is the SAME read `classifyResourceOwnership` uses —
+    // one implementation, so the verdict and the `owns` edge cannot disagree.
+    const estateValue = readEstateTag(node.tags);
     if (!estateValue) continue; // Not Loom's. Still a node; no owns edge. Correct.
 
     if (options.estateId !== undefined && estateValue !== options.estateId) {

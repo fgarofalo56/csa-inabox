@@ -18,6 +18,7 @@ import type {
   CollectionReport,
   ProvenanceCoverage,
   WireDetectorRun,
+  WireEdge,
   WireFinding,
   WireNode,
 } from '@/app/api/admin/brain/_lib/wire';
@@ -26,6 +27,15 @@ import type { Population } from '@/lib/brain/graph';
 export const SUB = '00000000-0000-4000-8000-000000000001';
 export const RG = 'rg-loom';
 export const APP_NAME = 'loom-capacity-broker';
+/**
+ * The estate this fixture's resources are tagged for.
+ *
+ * #4258 item 4: `guardOwnership` now re-derives the estate id and compares it
+ * to the subject's own `loom-estate-id` value, so a suite exercising the happy
+ * path must set `LOOM_ESTATE_ID` (or pass `deps.env`) to THIS string. A fixture
+ * whose tag named a different estate would be refused — which is the point.
+ */
+export const ESTATE_ID = 'estate-1';
 /** Node ids are `azure:` + the lowercased ARM id (lib/brain/graph/node-id). */
 export const NODE_ID =
   `azure:/subscriptions/${SUB}/resourcegroups/${RG}` +
@@ -57,14 +67,39 @@ export function wireNode(overrides: Partial<WireNode> = {}): WireNode {
     provisioningState: 'Succeeded',
     scale: { minReplicas: 2, maxReplicas: 5, cpu: 0.5, memory: '1Gi', source: 'resource-graph' },
     ingress: { external: false, fqdn: 'broker.internal.example', targetPort: 8080 },
-    tags: { 'loom-estate-id': 'estate-1' },
+    tags: { 'loom-estate-id': ESTATE_ID },
     inboundByProvenance: { declared: 0, configured: 0, imports: 0, observed: 0, owns: 1 },
     outboundTotal: 0,
     unreachableConfigured: true,
     alwaysOn: true,
     scaleMeasured: true,
     ownershipConfirmed: true,
+    // #4255 W3 — the verdict travels as data. `owned` is the only value
+    // consistent with `ownershipConfirmed: true` and the estate tag above.
+    ownership: 'owned',
     danglingIntendedFor: 1,
+    ...overrides,
+  };
+}
+
+/**
+ * A RESOLVED `configured` edge, defaulting to one that lands somewhere other
+ * than the subject (so the subject stays unreachable while the GRAPH is not
+ * vacuous — the exact distinction #4258 item 3's guard fix turns on).
+ */
+export function wireEdge(overrides: Partial<WireEdge> = {}): WireEdge {
+  return {
+    id: 'edge:configured:1',
+    provenance: 'configured',
+    from: `azure:/subscriptions/${SUB}/resourcegroups/${RG}/providers/microsoft.app/containerapps/loom-console`,
+    to: `azure:/subscriptions/${SUB}/resourcegroups/${RG}/providers/microsoft.app/containerapps/loom-catalog`,
+    resolution: 'resolved',
+    evidence: {
+      artifact: `/subscriptions/${SUB}/resourceGroups/${RG}/providers/Microsoft.App/containerApps/loom-console`,
+      symbol: 'LOOM_CATALOG_URL',
+      rawValue: 'https://loom-catalog.internal.example',
+      extractor: 'container-app-env',
+    },
     ...overrides,
   };
 }
@@ -134,7 +169,16 @@ export function brainSnapshot(overrides: Partial<BrainSnapshot> = {}): BrainSnap
   return {
     generatedAt: '2026-08-31T00:00:00.000Z',
     nodes: [wireNode()],
-    edges: [],
+    // #4258 item 3 — the vacuity guard counts RESOLVED configured edges out of
+    // this list, not the finding's `byProvenance` tally (which includes
+    // dangling edges and therefore passed in exactly the degenerate state it
+    // was built to catch). The default snapshot must carry real resolved
+    // configured edges or every happy-path arm would now refuse.
+    edges: [
+      wireEdge(),
+      wireEdge({ id: 'edge:configured:2', evidence: { ...wireEdge().evidence, symbol: 'LOOM_UNITY_URL' } }),
+      wireEdge({ id: 'edge:configured:3', evidence: { ...wireEdge().evidence, symbol: 'LOOM_BROKER_URL' } }),
+    ],
     findings: [wireFinding()],
     detectors: [detectorRun()],
     coverage: {
@@ -149,6 +193,8 @@ export function brainSnapshot(overrides: Partial<BrainSnapshot> = {}): BrainSnap
       examined: 4,
       indeterminate: 0,
       blind: false,
+      // #4255 W3 — owned + observed + indeterminate === examined, always.
+      byVerdict: { owned: 1, observed: 3, indeterminate: 0 },
       note: 'owns edges present for this estate',
     },
     collection: collectionReport(),

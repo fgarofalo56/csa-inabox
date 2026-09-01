@@ -1410,6 +1410,60 @@
           }
         },
         {
+          "id": "sec:authorizer:apps/fiab-console/app/api/admin/brain/ownership-backfill/route.ts#GET",
+          "kind": "authorizer",
+          "provenance": "declared",
+          "label": "GET /api/admin/brain/ownership-backfill",
+          "facet": {
+            "kind": "authorizer",
+            "fnName": "GET /api/admin/brain/ownership-backfill",
+            "params": [],
+            "resourceScoped": false,
+            "callerNamedResourceInputs": [],
+            "allowPaths": [
+              {
+                "id": "get:admin-claim",
+                "conditionPredicates": [
+                  "isTenantAdmin"
+                ],
+                "scopeLiterals": [],
+                "mentionsVerdict": false,
+                "impliedByOwnsVerdict": false,
+                "ownsResolver": null
+              }
+            ],
+            "reachesPrivilegedSink": false,
+            "privilegedSinkKinds": []
+          }
+        },
+        {
+          "id": "sec:authorizer:apps/fiab-console/app/api/admin/brain/ownership-backfill/route.ts#POST",
+          "kind": "authorizer",
+          "provenance": "declared",
+          "label": "POST /api/admin/brain/ownership-backfill",
+          "facet": {
+            "kind": "authorizer",
+            "fnName": "POST /api/admin/brain/ownership-backfill",
+            "params": [],
+            "resourceScoped": false,
+            "callerNamedResourceInputs": [],
+            "allowPaths": [
+              {
+                "id": "post:admin-claim",
+                "conditionPredicates": [
+                  "isTenantAdmin"
+                ],
+                "scopeLiterals": [],
+                "mentionsVerdict": false,
+                "impliedByOwnsVerdict": false,
+                "ownsResolver": null
+              }
+            ],
+            "reachesPrivilegedSink": false,
+            "privilegedSinkKinds": []
+          }
+        },
+        {
           "id": "sec:authorizer:apps/fiab-console/app/api/admin/brain/perform/route.ts#POST",
           "kind": "authorizer",
           "provenance": "declared",
@@ -43943,6 +43997,16 @@
           "deployedAs": "loom-console"
         },
         {
+          "nodeId": "sec:authorizer:apps/fiab-console/app/api/admin/brain/ownership-backfill/route.ts#GET",
+          "codeModuleId": "code:apps/fiab-console/app/api/admin/brain/ownership-backfill/route.ts",
+          "deployedAs": "loom-console"
+        },
+        {
+          "nodeId": "sec:authorizer:apps/fiab-console/app/api/admin/brain/ownership-backfill/route.ts#POST",
+          "codeModuleId": "code:apps/fiab-console/app/api/admin/brain/ownership-backfill/route.ts",
+          "deployedAs": "loom-console"
+        },
+        {
           "nodeId": "sec:authorizer:apps/fiab-console/app/api/admin/brain/perform/route.ts#POST",
           "codeModuleId": "code:apps/fiab-console/app/api/admin/brain/perform/route.ts",
           "deployedAs": "loom-console"
@@ -48313,15 +48377,15 @@
     },
     "meta": {
       "generatorVersion": 1,
-      "generatedAt": "2026-09-01T01:21:39.626Z",
-      "commit": "31a7b301cac52a54b2235d7426979cf269a1e6ca",
-      "inputsDigest": "2394839afc221fd0",
-      "filesScanned": 2074,
+      "generatedAt": "2026-09-01T16:05:03.004Z",
+      "commit": "5f1ee0d15d5e9ed22f6489d516529d0ecd506763",
+      "inputsDigest": "d369c78046c9d828",
+      "filesScanned": 2075,
       "scanScopes": [
         {
           "scope": "app/**/route.ts (console BFF routes)",
-          "filesMatched": 1696,
-          "nodesEmitted": 705
+          "filesMatched": 1697,
+          "nodesEmitted": 707
         },
         {
           "scope": ".github/**, scripts/** (CI publication surfaces)",

@@ -39,10 +39,13 @@
 
 import {
   buildGraph,
+  classifyResourceOwnership,
   extractFromContainerAppEnv,
   extractFromResourceGraph,
   LOOM_ESTATE_TAG_KEY,
+  tallyOwnershipVerdicts,
   azureResourceNodeId,
+  type AzureResourceNode,
   type BrainGraph,
   type ContainerAppEnvEntry,
   type ContainerAppEnvInput,
@@ -267,11 +270,23 @@ export function buildLiveGraph(
     (n) => n.kind === 'azure-resource' && n.tags === null,
   ).length;
 
+  // #4255 W3 — the SAME single signal, counted three ways so a surface can
+  // split "Your Loom estate" from "Also visible in these subscriptions"
+  // without walking the node list and re-deriving the verdict. The verdict
+  // comes from `classifyResourceOwnership`, the one implementation the `owns`
+  // edge is also built from, so the split and the edges cannot disagree.
+  const byVerdict = tallyOwnershipVerdicts(
+    azureNodes.map((n) =>
+      classifyResourceOwnership(n as AzureResourceNode, opts?.estateId),
+    ),
+  );
+
   const ownership: OwnershipCoverage = {
     confirmed: owned.size,
     examined: azureNodes.length,
     indeterminate,
     blind: owned.size === 0,
+    byVerdict,
     note:
       owned.size === 0
         ? `ZERO of ${azureNodes.length} resource(s) carry the '${LOOM_ESTATE_TAG_KEY}' tag. ` +
@@ -281,7 +296,9 @@ export function buildLiveGraph(
           'none can tell two Loom estates apart, and a wrong ownership inference on this ' +
           'estate reaches non-Loom Container App environments. The fix is the deploy ' +
           'stamping the tag.'
-        : `${owned.size} of ${azureNodes.length} resource(s) carry '${LOOM_ESTATE_TAG_KEY}'` +
+        : `${owned.size} of ${azureNodes.length} resource(s) carry '${LOOM_ESTATE_TAG_KEY}' ` +
+          `and are OWNED; ${byVerdict.observed} are OBSERVED ONLY (the tag is absent or names ` +
+          'another estate — visible because reports cover all subscriptions, never actionable)' +
           (indeterminate > 0
             ? `; ${indeterminate} had UNREADABLE tags (indeterminate, not unowned).`
             : '.'),

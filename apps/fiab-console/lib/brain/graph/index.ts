@@ -56,8 +56,13 @@ export {
 } from './graph';
 
 export {
+  classifyResourceOwnership,
   extractFromResourceGraph,
   LOOM_ESTATE_TAG_KEY,
+  readEstateTag,
+  tallyOwnershipVerdicts,
+  type OwnershipVerdict,
+  type OwnershipVerdictCounts,
   type ResourceGraphExtractionOptions,
   type ResourceGraphRow,
 } from './extractors/resource-graph';
