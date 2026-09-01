@@ -62,6 +62,7 @@ import {
   extractFromContainerAppEnv,
   extractFromResourceGraph,
   namesADiscoveredTarget,
+  namesSelf,
   LOOM_ESTATE_TAG_KEY,
   azureResourceNodeId,
   type BrainGraph,
@@ -137,9 +138,19 @@ export interface EnvReadStats {
   /** Entries whose NAME is in the wire-binding table. */
   readonly entriesConsidered: number;
   /**
-   * Entries admitted because their VALUE names an ARM id or ingress FQDN this
-   * pull discovered, regardless of the variable's name (#4258). Before the fix
-   * this was structurally zero: every such wire was discarded on a name miss.
+   * Entries ADMITTED because their VALUE names an ARM id or ingress FQDN this
+   * pull discovered — some OTHER resource than the app the entry was read from
+   * — regardless of the variable's name (#4258). Before the fix this was
+   * structurally zero: every such wire was discarded on a name miss.
+   *
+   * SELF-REFERENCE IS EXCLUDED, and that exclusion is not cosmetic. An app
+   * advertising its own address (`RW_ADVERTISE_ADDR`, `KAFKA_ADVERTISED_LISTENERS`,
+   * `TRINO_DISCOVERY_URI`) names something this pull discovered and so passes
+   * {@link namesADiscoveredTarget}, but the extractor then DECLINES it — it is
+   * not an inbound wire. Counting it here published a number that disagreed
+   * with the edges: measured, `1` on an estate that emitted ZERO edges, with
+   * the coverage note asserting "1 entr(ies) were found that way". A published
+   * count must mean what its name says, so this one counts admissions.
    */
   readonly entriesMatchedByValue: number;
   /**
@@ -148,16 +159,26 @@ export interface EnvReadStats {
    */
   readonly appsJudged: number;
   /**
-   * Of those, how many an env VALUE could actually name — i.e. carry a readable
-   * ingress FQDN in this pull.
+   * Of those, how many an env URL/host VALUE could actually name — i.e. carry a
+   * readable ingress FQDN in this pull.
    *
    * WHY THIS IS ON THE SNAPSHOT AND NOT DERIVED LATER: when it is smaller than
    * {@link appsJudged}, "zero inbound configured edges" is partly a statement
-   * about the graph's reach and not only about the estate. An app with no
-   * readable ingress FQDN cannot be named by any URL-valued env var, so it
-   * cannot gain an inbound `configured` edge no matter how well it is wired.
-   * That shortfall is a fact a detector or a surface must be able to state; it
-   * is not something a reader should have to infer from a zero.
+   * about the graph's reach and not only about the estate. That shortfall is a
+   * fact a detector or a surface must be able to state; it is not something a
+   * reader should have to infer from a zero.
+   *
+   * THE BOUND IS PARTIAL, NOT TOTAL — stated precisely because a stronger claim
+   * here would be FALSE. An app with no readable ingress FQDN cannot be named by
+   * a HOST-valued env var, but it can still be named by an ARM-RESOURCE-ID-valued
+   * one: `resourceIds` below is populated from every azure-resource node
+   * regardless of ingress. Measured on a `fqdn: null` fixture, such an app held
+   * ONE resolved inbound `configured` edge while counting against this
+   * shortfall. So the correct reading is "the hostname half of the scan is
+   * structurally blind to it", NOT "it cannot gain an inbound configured edge no
+   * matter how well it is wired." The distinction matters downstream: #4258
+   * item 2 will carry this bound onto every finding, and a finding that
+   * overstates it would be the #4258 lie in a new coat.
    */
   readonly appsAddressable: number;
 }
@@ -271,6 +292,11 @@ export function buildLiveGraph(
     const env = readEnvEntries(row.properties);
     if (env.length === 0) continue;
 
+    // This app's OWN ingress FQDN. `EstateTargetIndex` is two flat sets with no
+    // node attribution, so it can say a value names SOMETHING discovered but not
+    // WHICH something; self-reference needs the latter.
+    const selfFqdn = fqdnByNodeId.get(azureResourceNodeId(armId));
+
     entriesRead += env.length;
     for (const e of env) {
       if (e.secretRef !== undefined) entriesSecretRef += 1;
@@ -280,9 +306,15 @@ export function buildLiveGraph(
       } else if (
         e.secretRef === undefined &&
         typeof e.value === 'string' &&
-        namesADiscoveredTarget(e.value, estateTargets) !== null
+        namesADiscoveredTarget(e.value, estateTargets) !== null &&
+        // ...and the target is NOT this same app. `namesADiscoveredTarget` says
+        // the value names SOMETHING discovered; it cannot say WHICH. The
+        // extractor declines a self-advertised address, so counting it here
+        // would publish an admission that never happened — measured as
+        // `entriesMatchedByValue = 1` against ZERO emitted edges (R7).
+        !namesSelf(e.value, azureResourceNodeId(armId), selfFqdn)
       ) {
-        // Counted here only for REPORTING, using the extractor's own predicate
+        // Counted here only for REPORTING, using the extractor's own predicates
         // rather than a second copy of the host-normalization rules. The
         // extractor makes the same judgement over the same index; this loop
         // decides nothing.
@@ -303,7 +335,7 @@ export function buildLiveGraph(
       // KAFKA_ADVERTISED_LISTENERS, TRINO_DISCOVERY_URI) is DECLINED instead of
       // becoming a `from === to` edge that clears the unreachable-service
       // detector on the strength of the app pointing at itself.
-      selfFqdn: fqdnByNodeId.get(azureResourceNodeId(armId)),
+      selfFqdn,
     });
   }
 
@@ -320,7 +352,8 @@ export function buildLiveGraph(
         `live container env read from the same Azure Resource Graph pull. A wire is found by ` +
         `its VALUE — any env value naming an ARM id or ingress FQDN this pull discovered — so ` +
         `the candidate set is derived from the measured estate, not from a list of variable ` +
-        `names. ${entriesMatchedByValue} entr(ies) were found that way; the ` +
+        `names. ${entriesMatchedByValue} entr(ies) were ADMITTED that way (a value naming the ` +
+        `app it was read FROM is not an inbound wire and is excluded); the ` +
         `${BOUND_ENV_VAR_NAMES.length}-row wire-binding table additionally covers ` +
         `${entriesConsidered} entr(ies) by name, which is what lets an EMPTY value still name ` +
         `its intended target. ` +

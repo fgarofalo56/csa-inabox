@@ -43,6 +43,7 @@ import {
   extractFromContainerAppEnv,
   extractFromResourceGraph,
   namesADiscoveredTarget,
+  namesSelf,
   nodesWithNoInboundEdge,
   type EstateTargetIndex,
   type NodeId,
@@ -600,5 +601,112 @@ describe('a node pointing at ITSELF is not inbound reachability', () => {
     expect(
       graph.report.skipped.some((s) => /source and target are the SAME node/.test(s.subject)),
     ).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// ...and the extractor declines it at the SOURCE, so the accounting is local
+// ---------------------------------------------------------------------------
+
+/**
+ * The graph-level guard above keys on the SHAPE (`from === to`) and therefore
+ * covers every extractor. This block covers the FIRST layer: `container-app-env`
+ * declines a value naming the app it was read FROM, counts it in a
+ * `selfReference` tally, and emits a named skip record — so the decline is
+ * stated where the evidence is, not inferred two layers later from a graph
+ * report. Deleting that block must redden these specs.
+ *
+ * The scheme/port/case variants are here because `hostOf` normalization is what
+ * makes the check work at all: the real wires are bare `host:port`
+ * (`RW_ADVERTISE_ADDR`), scheme+path (`TRINO_DISCOVERY_URI`), and comma-free
+ * `host:port` lists (`KAFKA_ADVERTISED_LISTENERS`). A self-check that only
+ * matched an exact string would pass a spec written with one spelling and let
+ * every other spelling through.
+ */
+describe('the extractor declines a SELF-advertised address at the source', () => {
+  const SELF_TARGETS = targets([RISINGWAVE_FQDN], [RISINGWAVE_ARM]);
+
+  const SPELLINGS: readonly (readonly [string, string])[] = [
+    ['bare host:port — the RW_ADVERTISE_ADDR shape', RISINGWAVE_WIRE],
+    ['scheme + host', `https://${RISINGWAVE_FQDN}`],
+    ['scheme + host + port + path — the TRINO_DISCOVERY_URI shape', `http://${RISINGWAVE_FQDN}:8080/v1/info`],
+    ['UPPERCASE with a trailing dot', `HTTPS://${RISINGWAVE_FQDN.toUpperCase()}./`],
+  ];
+
+  for (const [label, value] of SPELLINGS) {
+    it(`declines it, and COUNTS the decline: ${label}`, () => {
+      const r = extractFromContainerAppEnv([
+        {
+          appResourceId: RISINGWAVE_ARM,
+          estateTargets: SELF_TARGETS,
+          selfFqdn: RISINGWAVE_FQDN,
+          env: [{ name: 'RW_ADVERTISE_ADDR', value }],
+        },
+      ]);
+      expect(r.edges).toHaveLength(0);
+      expect(r.population.scope).toMatch(/1 declined — value named the app it was read FROM/);
+      expect(r.skipped.some((s) => /read FROM/.test(s.subject))).toBe(true);
+    });
+  }
+
+  it('the ARM-id spelling is declined even when `selfFqdn` is NOT supplied', () => {
+    // That branch compares against `from`, so it needs no extra input. This is
+    // the half of the guard a caller cannot accidentally disable.
+    const r = extractFromContainerAppEnv([
+      {
+        appResourceId: RISINGWAVE_ARM,
+        estateTargets: SELF_TARGETS,
+        env: [{ name: 'SELF_RESOURCE_ID', value: RISINGWAVE_ARM }],
+      },
+    ]);
+    expect(r.edges).toHaveLength(0);
+    expect(r.population.scope).toMatch(/1 declined — value named the app it was read FROM/);
+  });
+
+  it('DISCRIMINATES: the SAME value read from a DIFFERENT app is still a wire', () => {
+    // Otherwise the assertions above would pass on a guard that simply refused
+    // every value in the index.
+    const r = extractFromContainerAppEnv([
+      {
+        appResourceId: CONSOLE_ARM,
+        estateTargets: SELF_TARGETS,
+        selfFqdn: 'loom-console.example.azurecontainerapps.io',
+        env: [{ name: 'RW_ADVERTISE_ADDR', value: RISINGWAVE_WIRE }],
+      },
+    ]);
+    expect(r.edges).toHaveLength(1);
+    expect(r.edges[0]!.targetRef).toBe(RISINGWAVE_WIRE);
+    expect(r.population.scope).not.toMatch(/1 declined — value named the app it was read FROM/);
+  });
+
+  it('namesSelf normalizes scheme, port, path, case and a trailing dot', () => {
+    const id = RISINGWAVE_ID;
+    expect(namesSelf(RISINGWAVE_WIRE, id, RISINGWAVE_FQDN)).toBe(true);
+    expect(namesSelf(`https://${RISINGWAVE_FQDN.toUpperCase()}./x?q=1`, id, RISINGWAVE_FQDN)).toBe(true);
+    expect(namesSelf(RISINGWAVE_ARM, id, undefined)).toBe(true);
+    // ...and it is not a prefix match, nor true for an unrelated host.
+    expect(namesSelf(`https://not-${RISINGWAVE_FQDN}`, id, RISINGWAVE_FQDN)).toBe(false);
+    expect(namesSelf('', id, RISINGWAVE_FQDN)).toBe(false);
+  });
+
+  it('buildLiveGraph supplies each app its own FQDN, so the guard fires on the LIVE path', () => {
+    const live = buildLiveGraph([
+      managedEnvRow(SUB_A, 'loom-cae'),
+      containerAppRow({ name: 'loom-console', minReplicas: 2, external: true }),
+      containerAppRow({
+        name: 'loom-risingwave',
+        minReplicas: 1,
+        fqdn: RISINGWAVE_FQDN,
+        env: [{ name: 'RW_ADVERTISE_ADDR', value: RISINGWAVE_WIRE }],
+      }),
+    ]);
+    // Without `selfFqdn` reaching the extractor this decline cannot happen —
+    // `namesSelf`'s host branch returns false with no self address in hand.
+    expect(live.graph.report.skipped.some((s) => /read FROM/.test(s.subject))).toBe(true);
+    expect(live.graph.inboundEdges(RISINGWAVE_ID, 'configured').result).toHaveLength(0);
+    // And the PUBLISHED count agrees with the edges (R7). The value passes
+    // `namesADiscoveredTarget`, so a count that ignored self-reference would
+    // report 1 admission on an estate that admitted none.
+    expect(live.env.entriesMatchedByValue).toBe(0);
   });
 });
