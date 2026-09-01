@@ -89,12 +89,16 @@ const useStyles = makeStyles({
     minWidth: 0,
     // #4241 defect 8: SplitPane reserves only 80px for its FLEXING pane, so a
     // persisted `loom.splitpane.brain-graph-details` size could pin the details
-    // pane at ~80px forever. The flexing pane is the split's last child by
-    // construction (see `ordered` in split-pane.tsx); this floor outranks the
-    // pane's own `min-width: 0` on specificity, and the % arm keeps a narrow
-    // window from overflowing. Layout px, not spacing — split-pane.tsx's own
+    // pane at ~80px forever. The fix CAPS THE PRIMARY (the graph pane, the
+    // split's first child per `ordered` in split-pane.tsx) rather than flooring
+    // the details pane: the primary renders with an inline `flex: 0 0 <px>` —
+    // shrink 0 — so a min-width on the flexing pane cannot take space back from
+    // it and would only clip/overflow. Flexbox DOES honor max-width over a flex
+    // basis, and the freed space flows to the grow-1 details pane, which
+    // therefore always gets at least min(320px, 35%). The 6px term is the
+    // divider's fixed hit area. Layout px, not spacing — split-pane.tsx's own
     // layout-px note applies.
-    '> div:last-child': { minWidth: 'min(320px, 35%)' },
+    '> div:first-child': { maxWidth: 'calc(100% - min(320px, 35%) - 6px)' },
   },
   detailPane: { minWidth: 0, height: '100%', overflow: 'hidden' },
 });

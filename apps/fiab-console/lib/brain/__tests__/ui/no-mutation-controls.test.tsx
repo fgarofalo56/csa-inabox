@@ -134,7 +134,7 @@ describe('B — no rendered control carries a mutation verb', () => {
   });
 });
 
-describe('A — clicking every control makes no mutating call', () => {
+describe('A — the control walk makes no mutating call', () => {
   it('Approve reaches ONLY the review endpoint, with a review decision', async () => {
     const calls: Array<{ id: string; decision: string }> = [];
     const owned = snapshot.findings.filter((f) => f.ownershipConfirmed);
@@ -205,6 +205,14 @@ describe('A — clicking every control makes no mutating call', () => {
     const headers = screen.getAllByRole('button', { name: /Proposed change/i });
     expect(headers.length).toBeGreaterThan(0);
     expect(headers[0]!.textContent).toContain('not applied');
+
+    // Evidence is still collapsed by default — expand it, so the behavioral
+    // walk keeps one accordion toggle and confirms the toggle renders text
+    // rather than doing anything.
+    const evidence = screen.getAllByRole('button', { name: /Evidence/i });
+    expect(evidence.length).toBeGreaterThan(0);
+    fireEvent.click(evidence[0]!);
+    expect(screen.getAllByText(/What the code established/).length).toBeGreaterThan(0);
   });
 });
 
