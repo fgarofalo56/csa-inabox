@@ -1133,6 +1133,57 @@ test('CLI pin-refresh: the incident state exports the RUNNING tag to $GITHUB_ENV
   assert.match(r.logs, /::warning::\[pin-refresh\] MOVED loom-console/);
 });
 
+// ---------------------------------------------------------------------------
+// #4240 — the follower note has to reach a LOG, not merely a return value.
+// pin-refresh is the live consumer (deploy-fiab-commercial step 27, and the
+// same command on the GCC-High / IL5 lanes), so the CLI is where it is proven.
+// The control arm below is what makes the assertion falsifiable: same command,
+// same env, follower converged, and the ONLY difference must be the note.
+// ---------------------------------------------------------------------------
+
+/** The unity pair mid-roll, alongside the rest of the estate. */
+const estateWithFollowerAt = (icebergTag) => [
+  ...estateAt(ROLLED).filter((c) => c.name !== 'loom-unity'),
+  { name: 'loom-unity', image: `acr1.azurecr.io/loom-unity:${ROLLED}` },
+  { name: 'iceberg-catalog', image: `acr1.azurecr.io/loom-unity:${icebergTag}` },
+];
+
+const PIN_ENV = { LOOM_CONSOLE_TAG: ROLLED, LOOM_MCP_TAG: '0.80.0', LOOM_UNITY_TAG: ROLLED };
+
+test('#4240 CLI pin-refresh: a follower off the canonical tag LOGS a FOLLOWER note, and the run still proceeds', () => {
+  const r = runCli(
+    ['pin-refresh', '--deploy-apps-enabled', 'true', '--containers', 'c.json'],
+    { env: PIN_ENV, files: { 'c.json': estateWithFollowerAt('0.80.0') } },
+  );
+  assert.equal(r.code, 0, 'an observation must never change the exit code');
+  assert.match(r.logs, /::notice::\[pin-refresh\] FOLLOWER /, 'the divergence must reach the run log');
+  assert.match(r.logs, /iceberg-catalog runs loom-unity:0\.80\.0/, 'naming the app and the ref it actually runs');
+  assert.ok(
+    r.envLines.includes(`LOOM_UNITY_TAG=${ROLLED}`),
+    `the pin still follows the canonical; got ${JSON.stringify(r.envLines)}`,
+  );
+});
+
+test('#4240 CONTROL CLI: the SAME command with the follower CONVERGED logs no FOLLOWER line, and everything else matches', () => {
+  const diverged = runCli(
+    ['pin-refresh', '--deploy-apps-enabled', 'true', '--containers', 'c.json'],
+    { env: PIN_ENV, files: { 'c.json': estateWithFollowerAt('0.80.0') } },
+  );
+  const converged = runCli(
+    ['pin-refresh', '--deploy-apps-enabled', 'true', '--containers', 'c.json'],
+    { env: PIN_ENV, files: { 'c.json': estateWithFollowerAt(ROLLED) } },
+  );
+  assert.doesNotMatch(converged.logs, /FOLLOWER/, 'a converged pair must produce no note at all');
+  assert.equal(converged.code, diverged.code, 'the note moves no exit code');
+  assert.deepEqual(converged.envLines, diverged.envLines, 'the note moves no $GITHUB_ENV write');
+  assert.deepEqual(converged.outLines, diverged.outLines, 'the note moves no step output');
+  assert.equal(
+    diverged.logs.replace(/^.*FOLLOWER.*$/gm, '').trim(),
+    converged.logs.trim(),
+    'strip the FOLLOWER line and the two runs must log identically — the note adds, it does not alter',
+  );
+});
+
 test('CLI pin-refresh: --read-error exits 1 and exports NOTHING', () => {
   const r = runCli(['pin-refresh', '--deploy-apps-enabled', 'true', '--read-error', 'AuthorizationFailed'], {
     env: { LOOM_CONSOLE_TAG: STALE },

@@ -16,14 +16,33 @@
  * success while leaving the estate inconsistent:
  *
  *   1. A THIRD app is deployed on the loom-unity image and nobody adds it to the
- *      registry. The roll then ships two of three. reconcile-policy.mjs
- *      `resolveRunningImageTags()` groups the live estate BY REPOSITORY and
- *      marks a repo running at two tags UNKNOWN — one `appImageTags` key cannot
- *      hold two values — and `decideDeployApps()` refuses to enable
- *      `deployAppsEnabled` while anything is unknown. So a forgotten third app
- *      does not merely lag: it freezes ENV/CONFIG reconciliation for the whole
- *      estate, and the next admin-plane deploy rewrites the pair back to the
- *      `?? 'v0.1'` default.
+ *      registry. The roll then ships two of three, and the estate serves TWO
+ *      versions of ONE binary — while this guard's own read-back verification
+ *      never touches the app the roll skipped.
+ *
+ *      What happens NEXT depends on whether the repository's `appImageTags`
+ *      entry names a `canonicalApp`, and the difference is worth stating
+ *      because the old form of this comment asserted only the first half:
+ *
+ *        NO canonicalApp — reconcile-policy.mjs `resolveRunningImageTags()`
+ *          groups the live estate BY REPOSITORY and marks a repo running at two
+ *          tags UNKNOWN (one `appImageTags` key cannot hold two values), and
+ *          `decideDeployApps()` refuses to enable `deployAppsEnabled` while
+ *          anything is unknown. So the forgotten app does not merely lag: it
+ *          freezes ENV/CONFIG reconciliation for the whole estate, and a
+ *          dispatch that forces the flag exports no pin, so the next
+ *          admin-plane deploy rewrites every app on that repo back to the
+ *          `?? 'v0.1'` default.
+ *        WITH canonicalApp (`unity` since #4064 / PR #4237) — the key pins from
+ *          the canonical app alone, so nothing freezes and the pin is exported
+ *          normally; the forgotten app is treated as a FOLLOWER and converges
+ *          onto the pinned tag whenever an admin-plane apply next runs. The lag
+ *          is real and unbounded in time, but it is not a frozen reconcile.
+ *          (#4240 added a NOTE naming a follower that is off the canonical's
+ *          tag, so the lag at least reaches the log.)
+ *
+ *      Either way the registry must carry the app: the ratchet below is what
+ *      keeps the split window zero-length instead of "until someone deploys".
  *   2. A module is repointed at a different repository (or renamed) and the
  *      registry keeps the old value. The roll then updates an app to an image
  *      the next bicep deploy immediately overwrites — merged, deployed, and
@@ -508,9 +527,19 @@ export function decide({
       if (!registryRepos.has(repo)) continue;
       if (registered.has(r.app)) continue;
       const mates = targets.filter((t) => t.repo === repo).map((t) => t.app);
+      // The CONSEQUENCE of a split differs by whether this repository's
+      // reconcile key names a canonicalApp (#4064 / PR #4237), so it is derived
+      // from the key table rather than asserted. Printing the frozen-reconcile
+      // half at a key that pins from a canonical app would be this guard
+      // telling the reader a cause it did not establish (deploy-integrity R7) —
+      // and would send the fix at the reconcile instead of at the registry.
+      const keyEntry = imageTags.find((e) => e.repo === repo);
+      const consequence = keyEntry && keyEntry.canonicalApp
+        ? `Its appImageTags key '${keyEntry.key}' pins from canonical app '${keyEntry.canonicalApp}', so a partial roll does NOT freeze the reconcile — instead '${r.app}' is a FOLLOWER serving a DIFFERENT build of one image until some later admin-plane apply converges it onto the pinned tag, and the roll never reads back the app it skipped.`
+        : `Its appImageTags key ${keyEntry ? `'${keyEntry.key}' ` : ''}names no canonicalApp, so reconcile-policy.mjs cannot pin one key to two different tags: a partial roll marks that key UNKNOWN and freezes the estate-wide config reconcile.`;
       problems.push(
         `${ORCHESTRATOR}:${r.line} deploys container app '${r.app}' from repository '${repo}', which the roll registry already carries for ${mates.join(', ')} — but '${r.app}' is NOT in the registry. `
-        + 'Apps sharing an image repository must roll together: reconcile-policy.mjs cannot pin one appImageTags key to two different tags, so a partial roll marks that key UNKNOWN and freezes the estate-wide config reconcile. '
+        + `Apps sharing an image repository must roll together. ${consequence} `
         + `Add '${r.app}' to ROLL_TARGETS in scripts/ci/roll-plan.mjs.`,
       );
     }

@@ -9,8 +9,12 @@
  * The load-bearing assertions are the ones about ATOMICITY and about the
  * three-way live verdict, because those are the two places where a plausible
  * "simplification" silently reintroduces a real defect:
- *   - flattening the atomic group makes a half-roll possible, which turns the
- *     reconcile's `unity` key UNKNOWN and freezes estate-wide config;
+ *   - flattening the atomic group makes a half-roll possible, which leaves the
+ *     estate serving TWO builds of ONE image until some later admin-plane apply
+ *     converges the straggler (and, for a shared repository whose reconcile key
+ *     names no `canonicalApp`, ALSO turns that key UNKNOWN and freezes
+ *     estate-wide config — the `unity` key stopped having that consequence at
+ *     #4064 / PR #4237, so the CLI notice states it conditionally, #4240);
  *   - collapsing `unreadable` into `mismatch` (or into `ok`) is how an
  *     unverified roll starts reporting success.
  *
@@ -318,6 +322,22 @@ test('CLI announces the pulled-in pair mate on stderr, keeping stdout parseable'
   assert.match(r.stderr, /iceberg-catalog/);
   assert.match(r.stderr, /::notice::/);
   for (const line of r.stdout.trim().split('\n')) assert.equal(line.split('\t').length, 4);
+});
+
+test('#4240 CLI: the atomic-closure notice states the freeze CONDITIONALLY — the unity pair no longer has it', () => {
+  const r = cli(['--apps', 'loom-unity', '--acr', 'a.azurecr.io', '--tag', 'sha9']);
+  assert.equal(r.code, 0);
+  // True of EVERY shared repository, canonicalApp or not.
+  assert.match(r.stderr, /TWO versions of ONE image/);
+  // The frozen estate-wide reconcile is true only where the reconcile key names
+  // no canonicalApp — and the unity pair, the only closure this CLI computes
+  // today, DOES name one since #4064. So the claim must carry its condition.
+  assert.match(r.stderr, /does not name a canonicalApp/);
+  assert.doesNotMatch(
+    r.stderr,
+    /so a split pair makes that key UNKNOWN and disables the estate-wide config reconcile/,
+    'the pre-#4064 consequence must not be asserted as a fact about this closure',
+  );
 });
 
 test('CLI warns on a mutable tag', () => {
