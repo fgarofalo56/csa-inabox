@@ -155,6 +155,44 @@ test('N-1 the floor is the LIVE set of boundary params files, not a stale list',
   assert.deepEqual(observed, [...EXPECTED_ADOPT_PARAMS_FILES].sort());
 });
 
+test('N-1 CEILING: a params file in NEITHER the matched set NOR the floor is RED', () => {
+  // The floor catches a boundary that LEFT the population. Nothing caught one
+  // that never JOINED it: `onDisk` was computed and printed (`7 of 7 on disk`)
+  // but compared against nothing, which is verbatim what N-1's own docstring
+  // condemns — "the only trace was a printed number nothing compared against
+  // anything". Someone lands params/il6-dod.bicepparam for a new sovereign
+  // boundary, forgets `param adopt =`, and ZERO N-2 reachability assertions and
+  // ZERO N-3 consoleParam assertions ever run against it while the guard exits 0.
+  const floor = [...EXPECTED_ADOPT_PARAMS_FILES];
+  const withNew = [...floor, 'il6-dod.bicepparam'];
+
+  // Before the ceiling existed this returned []. It is the whole point of the arm.
+  const failures = checkAdoptPopulation(floor, withNew, floor);
+  assert.equal(failures.length, 1, 'a new unmatched params file must be reported, not absorbed');
+  assert.match(failures[0], /il6-dod\.bicepparam/);
+  assert.match(failures[0], /NEITHER the examined population NOR the declared floor/);
+
+  // …and the ceiling must not fire on the two legitimate shapes: a file that
+  // matched the filter (covered by derivation) and one already in the floor.
+  assert.deepEqual(checkAdoptPopulation(withNew, withNew, floor), []);
+  assert.deepEqual(checkAdoptPopulation(floor, floor, floor), []);
+});
+
+test('N-1 CEILING holds against the LIVE tree — every params file is accounted for', () => {
+  // The synthetic arm proves the predicate; this proves it is pointed at the
+  // real population. Both ends pinned, so neither a removal nor an addition can
+  // pass silently.
+  const onDisk = collectAllParamsFiles();
+  const observed = collectAdoptParamsFiles().map((f) => f.file);
+  assert.deepEqual(checkAdoptPopulation(observed, onDisk), []);
+  for (const f of onDisk) {
+    assert.ok(
+      observed.includes(f) || EXPECTED_ADOPT_PARAMS_FILES.includes(f),
+      `${f} is on disk but in neither the matched population nor the floor`,
+    );
+  }
+});
+
 // ── N-2: presence is not reachability ────────────────────────────────────────
 
 test('N-2 the TRANSPOSED ternary is caught even though both spellings are present', () => {

@@ -54,6 +54,7 @@ import {
   computeEnvQueryPresence,
   runEnvQueryControl,
   KNOWN_VALUE_ONLY_PRESENCE_TESTS,
+  KNOWN_VALUE_ONLY_VALUE_USES,
   ENV_QUERY_CENSUS_FLOOR,
 } from '../check-env-sync.mjs';
 
@@ -133,6 +134,13 @@ test('POSITIVE CONTROL: the widened populations leave the real tree clean', () =
 // ══════════════════════════════════════════════════════════════════════════════
 
 const at = (src) => src.indexOf("env[?name=='");
+
+// THE `\${…}` ESCAPES IN THE FIXTURES BELOW ARE LOAD-BEARING — DO NOT REMOVE.
+// Each fixture is a TEMPLATE LITERAL holding literal shell text, and the
+// backslash suppresses JS interpolation so the classifier receives the six
+// characters `${VAR:-}`. CodeQL reports these as unnecessary escapes; removing
+// them is a SyntaxError, not a cleanup, because `${MSAL:-}` is not a valid JS
+// expression. Dismiss the finding with this reason rather than editing the code.
 
 test('LAYER 6: an emptiness test on the captured value IS a presence verdict', () => {
   const src = `          ACCT=$(az containerapp show -n "$APP" -g "$RG" \\
@@ -304,7 +312,7 @@ test('LAYER 6: the census sees the real tree and the ratchet describes it exactl
   assert.ok(flagged > 0 && flagged < sites.length);
 });
 
-test('LAYER 6: a NEW presence-from-value site is RED (the 16th, not the 15 ratcheted)', () => {
+test('LAYER 6: a NEW presence-from-value site is RED (the 18th, not the 17 ratcheted)', () => {
   // MUTATION over the real predicate: add one site under a key the ratchet does
   // not carry, and confirm it is reported rather than absorbed.
   const { failures } = computeEnvQueryPresence();
@@ -350,4 +358,220 @@ test('LAYER 6: a FIXED site makes the ratchet stale, which is itself reported', 
 
 test('POSITIVE CONTROL: the embedded layer-6 control holds', () => {
   assert.deepEqual(runEnvQueryControl(), []);
+});
+
+// ══════════════════════════════════════════════════════════════════════════════
+// F1 — JOB SCOPE. The input shape that had NO FIXTURE, which is why an
+// 18-mutation sweep over this suite found no survivor: every arm above separates
+// a capture from its test by at most a few lines INSIDE ONE STEP. `>> "$GITHUB_ENV"`
+// makes the variable job-scoped, and a step-scoped window then examines a
+// smaller set than it polices — the #3956 N-1 defect, inside the fix for it.
+// Ask what INPUT SHAPE has no fixture, not what mutation survives.
+// ══════════════════════════════════════════════════════════════════════════════
+
+/** Capture, export by `exportLines`, then test SIX STEPS later. */
+const jobScopedFixture = (exportLines) => `      - name: capture
+        run: |
+          MSAL=$(az containerapp show -n "$APP" -g "$RG" \\
+            --query "properties.template.containers[0].env[?name=='LOOM_MSAL_CLIENT_ID'].value | [0]" -o tsv)
+${exportLines}
+      - name: step two
+        run: echo two
+
+      - name: step three
+        run: echo three
+
+      - name: step four
+        run: echo four
+
+      - name: step five
+        run: echo five
+
+      - name: six steps later
+        run: |
+          if [ -n "\${MSAL:-}" ]; then
+            echo "audience pinned"
+          else
+            echo "::warning::the live console has no LOOM_MSAL_CLIENT_ID, so it was deployed SEALED"
+          fi
+`;
+
+test('LAYER 6: a capture exported to $GITHUB_ENV and tested SIX STEPS later is FLAGGED', () => {
+  // Before the window followed the variable this returned presenceTest=null and
+  // the site rendered CLEAN — while the else-branch asserted a cause the oracle
+  // cannot establish (deploy-integrity R7).
+  for (const [label, exportLines] of [
+    ['brace block', '          { echo "RG=$RG"; echo "MSAL=\${MSAL:-}"; } >> "$GITHUB_ENV"\n'],
+    ['same-line echo', '          echo "MSAL=$MSAL" >> "$GITHUB_ENV"\n'],
+    ['heredoc', '          cat >> "$GITHUB_ENV" <<EOF\n          MSAL=$MSAL\n          EOF\n'],
+  ]) {
+    const src = jobScopedFixture(exportLines);
+    const r = classifyEnvQuerySite(src, at(src));
+    assert.equal(r.variable, 'MSAL', `${label}: lost the capture`);
+    assert.ok(r.exportedToJobScope, `${label}: the export to $GITHUB_ENV was not recognised`);
+    assert.ok(
+      r.presenceTest,
+      `${label}: the presence test six steps after the capture was invisible — the window is ` +
+        'step-scoped while the variable is job-scoped',
+    );
+  }
+});
+
+test('LAYER 6: a capture that never reaches $GITHUB_ENV is NOT widened', () => {
+  // The counterfactual. Without it, "flagged" could just mean the window grew
+  // for everything, and a guard that cries wolf on correct sites is spent.
+  const src = jobScopedFixture('          echo "MSAL stays local to this step"\n');
+  const r = classifyEnvQuerySite(src, at(src));
+  assert.equal(r.exportedToJobScope, false);
+  assert.equal(
+    r.presenceTest,
+    null,
+    'a step-local capture was matched against a test in a LATER step — the widening is not ' +
+      'keyed to the export, it is unconditional',
+  );
+});
+
+test('LAYER 6: a widened window still STOPS at the next job', () => {
+  // `$GITHUB_ENV` promotes to JOB scope, not file scope. The `$MSAL` in another
+  // job is a different variable and must not be attributed to this read.
+  const src = `      - name: capture
+        run: |
+          MSAL=$(az containerapp show \\
+            --query "properties.template.containers[0].env[?name=='LOOM_MSAL_CLIENT_ID'].value | [0]" -o tsv)
+          echo "MSAL=$MSAL" >> "$GITHUB_ENV"
+
+  second-job:
+    runs-on: ubuntu-latest
+    steps:
+      - name: a different job entirely
+        run: |
+          if [ -z "\${MSAL:-}" ]; then echo "not this one"; fi
+`;
+  const r = classifyEnvQuerySite(src, at(src));
+  assert.ok(r.exportedToJobScope);
+  assert.equal(r.presenceTest, null, 'the widened window ran past the job boundary');
+});
+
+test('LAYER 6: the two LIVE Gov sites the step window could not see are now flagged', () => {
+  // Not synthetic. These are the misses, and both are Gov — under cloud-parity
+  // a guard blind exactly where the sovereign boundary needs it is incomplete,
+  // not a Commercial-first tradeoff. gov-provision-trino is the worse of the
+  // two: it prints the R7 assertion verbatim, and it is a STRONGER instance
+  // than loom-brain-scan.yml, the example this layer was written for.
+  const sites = collectEnvValueQuerySites();
+  for (const [file, env, variable] of [
+    ['.github/workflows/gov-provision-trino.yml', 'LOOM_MSAL_CLIENT_ID', 'MSAL_CLIENT_ID'],
+    ['.github/workflows/gov-provision-streaming-migrate.yml', 'LOOM_ADLS_ACCOUNT', 'LAKE'],
+  ]) {
+    const s = sites.find((x) => x.file === file && x.env === env);
+    assert.ok(s, `${file}::${env} left the census entirely`);
+    assert.equal(s.variable, variable);
+    assert.ok(s.exportedToJobScope, `${file}::${env} is exported to $GITHUB_ENV and must widen`);
+    assert.ok(
+      s.presenceTest,
+      `${file}::${env} still reads as clean — it derives presence from a value, several steps ` +
+        'after the capture, and that is the miss F1 exists to close',
+    );
+    assert.ok(
+      KNOWN_VALUE_ONLY_PRESENCE_TESTS.has(`${file}::${env}`),
+      `${file}::${env} is flagged but not ratcheted — re-baseline the ratchet`,
+    );
+  }
+});
+
+// ══════════════════════════════════════════════════════════════════════════════
+// F1 — FAIL CLOSED. "No test found" is not "no test exists".
+// ══════════════════════════════════════════════════════════════════════════════
+
+test('LAYER 6: a RESOLVED capture with no presence test anywhere is FLAGGED, not clean', () => {
+  // Only `variable === null` used to fail closed. A resolved variable with no
+  // in-window test rendered CLEAN — absence of evidence reported as evidence of
+  // absence, which is what this layer's own docstring forbids.
+  const s = {
+    key: 'wf.yml::LOOM_X',
+    file: 'wf.yml',
+    line: 1,
+    env: 'LOOM_X',
+    variable: 'X',
+    presenceTest: null,
+    hasNameQuery: false,
+    exportedToJobScope: false,
+  };
+  const { failures, countedValueUses } = classifyPresenceSites([s], new Map(), new Map());
+  assert.equal(failures.length, 1, 'an untested-but-resolved site rendered as a clean pass');
+  assert.match(failures[0], /NO presence test was found/);
+  assert.equal(countedValueUses.get('wf.yml::LOOM_X'), 1);
+
+  // A DECLARED value-use clears — the exemption is explicit and reviewable…
+  assert.deepEqual(
+    classifyPresenceSites([s], new Map(), new Map([['wf.yml::LOOM_X', 1]])).failures,
+    [],
+  );
+  // …and it is a COUNT, so a second site under the same key is still caught.
+  assert.equal(
+    classifyPresenceSites([s, s], new Map(), new Map([['wf.yml::LOOM_X', 1]])).failures.length,
+    1,
+  );
+  // A companion NAME query settles presence properly and is counted in neither.
+  const sound = classifyPresenceSites([{ ...s, hasNameQuery: true }], new Map(), new Map());
+  assert.deepEqual(sound.failures, []);
+  assert.equal(sound.countedValueUses.size, 0);
+});
+
+test('LAYER 6: the census is FULLY accounted for — no site is silently clean', () => {
+  // The printed accounting used to read as complete while two sites sat in
+  // neither column. Every site is now in exactly one bucket, and the two
+  // ratchets sum to the census.
+  const { census, flagged, valueUses, failures, stale } = computeEnvQueryPresence();
+  assert.deepEqual(failures, []);
+  assert.deepEqual(stale, []);
+  assert.equal(
+    flagged + valueUses,
+    census,
+    `${census} sites but only ${flagged + valueUses} accounted for — the residual is the set ` +
+      'nobody is looking at',
+  );
+  assert.equal(flagged, [...KNOWN_VALUE_ONLY_PRESENCE_TESTS.values()].reduce((a, b) => a + b, 0));
+  assert.equal(valueUses, [...KNOWN_VALUE_ONLY_VALUE_USES.values()].reduce((a, b) => a + b, 0));
+  assert.ok(census >= ENV_QUERY_CENSUS_FLOOR);
+});
+
+test('LAYER 6: a NEW value-only site is RED until it is READ and declared', () => {
+  // MUTATION over the real population: an undeclared value-use must not be
+  // absorbed. `stale` cannot surface a site that was never counted, so the
+  // ceiling is the only thing standing between a new site and silence.
+  const sites = collectEnvValueQuerySites();
+  const novel = {
+    key: '.github/workflows/brand-new.yml::LOOM_SOMETHING',
+    file: '.github/workflows/brand-new.yml',
+    line: 1,
+    env: 'LOOM_SOMETHING',
+    variable: 'V',
+    presenceTest: null,
+    hasNameQuery: false,
+    exportedToJobScope: true,
+  };
+  assert.ok(!KNOWN_VALUE_ONLY_VALUE_USES.has(novel.key));
+  const { failures } = classifyPresenceSites([...sites, novel]);
+  assert.equal(failures.length, 1);
+  assert.match(failures[0], /brand-new\.yml/);
+  assert.match(failures[0], /JOB-scoped via/);
+});
+
+test('LAYER 6: a FIXED value-only site makes its ceiling entry stale too', () => {
+  // Both ratchets shrink. An entry in KNOWN_VALUE_ONLY_VALUE_USES asserts that a
+  // site was READ; leaving one that describes nothing is how a ceiling becomes
+  // silent coverage.
+  const counted = new Set();
+  for (const s of collectEnvValueQuerySites()) {
+    if (s.variable === null || s.hasNameQuery || s.presenceTest) continue;
+    counted.add(s.key);
+  }
+  const victim = [...KNOWN_VALUE_ONLY_VALUE_USES.keys()][0];
+  assert.ok(counted.has(victim), 'the ceiling names a site the classifier no longer produces');
+  counted.delete(victim);
+  assert.deepEqual(
+    [...KNOWN_VALUE_ONLY_VALUE_USES.keys()].filter((k) => !counted.has(k)),
+    [victim],
+  );
 });

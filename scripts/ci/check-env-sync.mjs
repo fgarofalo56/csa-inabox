@@ -2215,7 +2215,9 @@ export const EXPECTED_ADOPT_PARAMS_FILES = Object.freeze([
 
 /**
  * Pure population assertion, exported so a test can drive it with synthetic file
- * lists rather than by mutating the tree.
+ * lists rather than by mutating the tree. Pins BOTH ends: the floor (a declared
+ * boundary that stopped matching or vanished) and the ceiling (a params file on
+ * disk that is in neither the matched population nor the floor).
  *
  * @param {string[]} observed filenames that MATCHED the `param adopt =` filter
  * @param {string[]} onDisk every `*.bicepparam` present under params/
@@ -2243,6 +2245,27 @@ export function checkAdoptPopulation(observed, onDisk, expected = EXPECTED_ADOPT
           'say why; the floor is grow-only precisely so this is a reviewed line. (#3956 N-1)',
       );
     }
+  }
+  // …and the CEILING. The floor above catches a boundary that LEFT the
+  // population; nothing caught one that never joined it. `onDisk` was already
+  // computed and printed (`7 of 7 on disk`) but compared against nothing —
+  // which is verbatim what N-1's own docstring condemns, so it was the same
+  // defect one layer up. A new `params/il6-dod.bicepparam` that forgets its
+  // `adopt` declaration used to produce ZERO failures: no N-2 reachability
+  // assertion and no N-3 consoleParam assertion would ever run against it, the
+  // guard would exit 0, and the only trace would be the printed line quietly
+  // changing from `7 of 7` to `7 of 8`.
+  for (const f of present) {
+    if (seen.has(f) || expected.includes(f)) continue;
+    failures.push(
+      `params/${f} exists under platform/fiab/bicep/params/ but matches neither \`^param adopt =\` ` +
+        'nor EXPECTED_ADOPT_PARAMS_FILES, so it is in NEITHER the examined population NOR the ' +
+        'declared floor — every BYO-bridge assertion below silently skips it. If it is a real ' +
+        'boundary, give it the `adopt` declaration and add it to EXPECTED_ADOPT_PARAMS_FILES; if ' +
+        'it is deliberately outside this contract, say so in the same diff. A params file that no ' +
+        'assertion runs against is the shrunken-population defect this check exists to stop. ' +
+        '(#3956 N-1)',
+    );
   }
   return failures;
 }
@@ -2774,6 +2797,101 @@ const ENV_NAME_QUERY_RE = /env\[[^\]]*\]\.name\b/;
  * recognised as the boundary rather than being swallowed into the window.
  */
 const YAML_STEP_BOUNDARY = /^\s{2,}-\s+(?:name|uses|id):/;
+/**
+ * The start of the next JOB — where a JOB-scoped variable's window ends.
+ *
+ * `$GITHUB_ENV` promotes to job scope, not file scope, so a widened window still
+ * has to stop somewhere: a `[ -z "$LAKE" ]` in an unrelated job is a different
+ * `LAKE`. Job keys sit at exactly two spaces under `jobs:`; a step key is at
+ * four or more and a `run:` body deeper still, so once we are already inside a
+ * job's steps an exact-two-space key is unambiguously the next job.
+ */
+const YAML_JOB_BOUNDARY = /^ {2}[A-Za-z_][A-Za-z0-9_-]*:\s*(?:#.*)?$/;
+/** `>> "$GITHUB_ENV"` in every spelling — the promotion from STEP to JOB scope. */
+const GITHUB_ENV_APPEND_RE = />>\s*"?\$\{?GITHUB_ENV\}?"?/;
+
+/**
+ * Does this window promote `name` out of STEP scope by appending it to
+ * `$GITHUB_ENV`?
+ *
+ * THIS IS THE F1 DEFECT, and it is the defect this whole file exists to stop,
+ * reproduced inside the fix for it. A read's window ended at the next YAML step,
+ * which is correct for a variable that dies with its step — but `>> "$GITHUB_ENV"`
+ * makes the variable live for EVERY LATER STEP IN THE JOB. So the set layer 6
+ * EXAMINED was one step while the set it POLICED was the whole job, and the
+ * examined set being smaller than the population is precisely N-1's shape.
+ *
+ * Two live sites classified CLEAN because of it, both Gov — which under
+ * cloud-parity.md is not a Commercial-first tradeoff, it is an incomplete guard
+ * blind exactly where the sovereign boundary needed it:
+ *
+ *   * gov-provision-trino.yml captures MSAL_CLIENT_ID at :175, exports it at
+ *     :194, tests `[ -n "${MSAL_CLIENT_ID:-}" ]` at :389 — SIX STEPS later —
+ *     and then prints "the live console has no LOOM_MSAL_CLIENT_ID, so
+ *     loom-trino was deployed SEALED". That asserts a cause the oracle cannot
+ *     establish (deploy-integrity R7) and it is a STRONGER instance than
+ *     loom-brain-scan.yml:337, the example this layer was written for.
+ *   * gov-provision-streaming-migrate.yml captures LAKE at :178, exports at
+ *     :189, tests `[ -n "${LAKE:-}" ]` at :335, and silently skips the
+ *     RisingWave sink's Storage Blob Data Contributor grant when the deploy
+ *     emitted the account name as ''.
+ *
+ * Three spellings, all live in this tree:
+ *
+ *   echo "VAR=$X" >> "$GITHUB_ENV"                    — the redirect line itself
+ *   { echo "A=$a"; echo "VAR=$X"; } >> "$GITHUB_ENV"  — a brace block ABOVE it
+ *   cat >> "$GITHUB_ENV" <<EOF … VAR=… … EOF          — a heredoc BELOW it
+ *
+ * PRIOR ART CHECKED, and this is deliberately not an adoption gap. The shared
+ * `_github-env-producers.mjs` table exists for a DIFFERENT question: NODE
+ * scripts that append to `$GITHUB_ENV` via `appendFileSync`, which no shell-text
+ * scanner can see. Its own docstring records that each consuming guard detects
+ * the LITERAL shell form itself, and both siblings do
+ * (check-bicepparam-env-reaches-deploy.mjs works line by line). This matcher
+ * follows that convention and additionally spans the brace-block and heredoc
+ * forms, which a per-line test cannot.
+ *
+ * RESIDUAL, stated rather than left to be rediscovered: a capture exported by a
+ * NODE producer instead of by shell text would still read as step-scoped. No
+ * such site exists in the census today — all 23 are shell captures from
+ * `az containerapp show` — but if one lands, this is where it would hide, and
+ * the fix is to consult GITHUB_ENV_PRODUCERS here.
+ *
+ * @param {string[]} lines logical lines of the step-scoped window
+ * @param {string} name the tracked shell variable
+ * @returns {boolean}
+ */
+function exportsToJobScope(lines, name) {
+  const v = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  // `VAR=` as EMITTED TEXT, never as its own capture. Without the lookahead,
+  // `MSAL_CLIENT_ID=$(az …)` sitting within a few lines of ANY `>> "$GITHUB_ENV"`
+  // would read as its own export, every such variable would widen, and a guard
+  // that cries wolf on correct sites is spent.
+  const emits = new RegExp(`(?:^|[\\s"'{;(])${v}=(?!\\s*"?\\$\\()`);
+  for (let i = 0; i < lines.length; i++) {
+    if (!GITHUB_ENV_APPEND_RE.test(lines[i])) continue;
+    let from = i;
+    let to = i + 1;
+    // A brace block puts the emission ABOVE the redirect: walk back, bounded,
+    // to the line that opens it.
+    if (/\}\s*>>/.test(lines[i])) {
+      for (let j = i; j >= Math.max(0, i - 20); j--) {
+        if (/(?:^|[\s;])\{(?:\s|$)/.test(lines[j])) {
+          from = j;
+          break;
+        }
+      }
+    }
+    // A heredoc puts it BELOW: the body runs to the terminator.
+    const here = /<<-?\s*'?"?([A-Za-z_][A-Za-z0-9_]*)'?"?/.exec(lines[i]);
+    if (here) {
+      const end = new RegExp(`^\\s*${here[1]}\\s*$`);
+      while (to < lines.length && to < i + 41 && !end.test(lines[to])) to++;
+    }
+    if (emits.test(lines.slice(from, to).join('\n'))) return true;
+  }
+  return false;
+}
 
 /**
  * Classify ONE `.value` query site. Pure, exported so the control and the tests
@@ -2781,7 +2899,8 @@ const YAML_STEP_BOUNDARY = /^\s{2,}-\s+(?:name|uses|id):/;
  *
  * @param {string} src full file text
  * @param {number} at index of the `env[?name==…].value` match
- * @returns {{variable: string|null, presenceTest: string|null, hasNameQuery: boolean}}
+ * @returns {{variable: string|null, presenceTest: string|null, hasNameQuery: boolean,
+ *            exportedToJobScope: boolean}}
  */
 export function classifyEnvQuerySite(src, at) {
   // The captured shell variable: the nearest `VAR=$(` / `VAR="$(` at or before
@@ -2796,6 +2915,12 @@ export function classifyEnvQuerySite(src, at) {
   // have been a presence assertion this layer could never see. An examined set
   // smaller than the population is the defect this whole file exists to stop, so
   // an unresolvable variable is now reported (below) rather than dropped.
+  //
+  // CODEQL, do not "fix" this: `\$` here is inside a REGEX LITERAL, where
+  // escaping the dollar is the correct way to match a literal `$` before `$(`.
+  // The rule that flags it reads the pattern as a template literal. Verified
+  // behaviourally rather than by argument — runEnvQueryControl() resolves
+  // `ACCT`, `EXISTING` and `raw` from real fixtures and returns 0 failures.
   const assign = /([A-Za-z_][A-Za-z0-9_]*)=\s*"?\$\(/g;
   let variable = null;
   let m;
@@ -2838,6 +2963,21 @@ export function classifyEnvQuerySite(src, at) {
     }
   }
   const win = stepAt >= 0 && stepAt < 45 ? after.slice(0, stepAt).join('\n') : capped;
+  const stepLines = stepAt >= 0 && stepAt < 45 ? after.slice(0, stepAt) : after.slice(0, 45);
+
+  // The JOB-scoped window, used instead of the step-scoped one for any variable
+  // that `>> "$GITHUB_ENV"` promoted out of its step (see exportsToJobScope).
+  // Bounded at the next job key rather than end-of-file, because a `$GITHUB_ENV`
+  // export does not cross jobs. A `.sh` file has no job key and so runs to the
+  // end — correct, since a script a step invokes shares that step's job.
+  let jobAt = -1;
+  for (let i = 1; i < after.length; i++) {
+    if (YAML_JOB_BOUNDARY.test(after[i])) {
+      jobAt = i;
+      break;
+    }
+  }
+  const jobWin = (jobAt >= 0 ? after.slice(0, jobAt) : after).join('\n');
 
   // TRACKED VARIABLES: the capture, plus anything trivially derived from it
   // within the window. Two hops, because the real tree needs exactly that:
@@ -2860,6 +3000,15 @@ export function classifyEnvQuerySite(src, at) {
     }
   }
 
+  // Where this site's presence test may legitimately live. A capture that never
+  // leaves its step is fully described by the step window; one appended to
+  // `$GITHUB_ENV` is job-scoped and must be searched at job scope, or the guard
+  // examines a smaller set than it polices. Alias derivation deliberately stays
+  // step-scoped: widening it too would let an unrelated later assignment that
+  // merely mentions `$VAR` drag a foreign emptiness test into this verdict.
+  const exportedToJobScope = [...tracked].some((t) => exportsToJobScope(stepLines, t));
+  const searchWin = exportedToJobScope ? jobWin : win;
+
   let presenceTest = null;
   for (const t of tracked) {
     const v = t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -2872,7 +3021,7 @@ export function classifyEnvQuerySite(src, at) {
         `|-[zn]\\s+"?\\$${v}(?![A-Za-z0-9_])"?` +
         `|"\\$\\{?${v}(?::-[^}]*)?\\}?"\\s*[=!]=?\\s*(?:""|'')` +
         `|(?:""|'')\\s*[=!]=?\\s*"\\$\\{?${v}(?::-[^}]*)?\\}?"`,
-    ).exec(win);
+    ).exec(searchWin);
     if (hit) {
       presenceTest = hit[0];
       break;
@@ -2895,7 +3044,10 @@ export function classifyEnvQuerySite(src, at) {
   return {
     variable,
     presenceTest,
-    hasNameQuery: ENV_NAME_QUERY_RE.test(win) || ENV_NAME_QUERY_RE.test(backWin),
+    // Searched over the SAME window the presence test was: if this variable's
+    // scope is the job, then so is the scope of the remedy that would excuse it.
+    hasNameQuery: ENV_NAME_QUERY_RE.test(searchWin) || ENV_NAME_QUERY_RE.test(backWin),
+    exportedToJobScope,
   };
 }
 
@@ -2938,13 +3090,19 @@ export function collectEnvValueQuerySites() {
  * second one in the same file for the same var is still caught.
  *
  * MEASURED at 5f1ee0d1, and every one of them was opened and read: 23
- * `env[?name==…].value` sites in total, 15 of which drive a presence verdict off
+ * `env[?name==…].value` sites in total, 17 of which drive a presence verdict off
  * an oracle that cannot distinguish "absent" from "emitted empty". They are NOT
  * fixed here: the fix is in .github/workflows/** and scripts/csa-loom/**, which
  * this change does not own, and a guard whose only effect is to block unrelated
- * work is not a fix. They are ENUMERATED so they are visible, and so the 16th is
+ * work is not a fix. They are ENUMERATED so they are visible, and so the 18th is
  * red on the day it lands — which is the state #3344 asked for and the tree did
  * not have.
+ *
+ * The count was 15 until the window was corrected to job scope. It was never 15
+ * in the tree — two Gov sites were being MISSED, which is why "re-baseline the
+ * ratchet" is part of the F1 fix and not a separate bookkeeping chore: freezing
+ * a number the measurement could not see cements the undercount, and the `stale`
+ * check can never surface a site that was never counted in the first place.
  *
  * Adding a key here is NOT a fix. The fix is to query `env[].name` for presence
  * and read `.value` only afterwards.
@@ -2957,7 +3115,17 @@ export const KNOWN_VALUE_ONLY_PRESENCE_TESTS = new Map([
   ['.github/workflows/deploy-report-subscriptions.yml::LOOM_COSMOS_ENDPOINT', 1],
   ['.github/workflows/deploy-secret-expiry.yml::LOOM_KEY_VAULT_URI', 1],
   ['.github/workflows/gov-provision-dbx-sql.yml::LOOM_DATABRICKS_HOSTNAME', 1],
+  // JOB-SCOPED, invisible until the window was widened. The `.value` read is at
+  // :178, the `>> "$GITHUB_ENV"` at :189, the `[ -n "${LAKE:-}" ]` at :335 — and
+  // an empty emission silently skips the RisingWave sink's Storage Blob Data
+  // Contributor grant, because the warning at :343 sits in the inner else.
+  ['.github/workflows/gov-provision-streaming-migrate.yml::LOOM_ADLS_ACCOUNT', 1],
   ['.github/workflows/gov-provision-trino.yml::LOOM_ADLS_ACCOUNT', 1],
+  // JOB-SCOPED, and the worst instance in the tree: capture :175, export :194,
+  // test :389, and then :395 prints "the live console has no LOOM_MSAL_CLIENT_ID,
+  // so loom-trino was deployed SEALED" — a cause the oracle cannot establish
+  // (deploy-integrity R7), on a path that leaves the engine accepting no caller.
+  ['.github/workflows/gov-provision-trino.yml::LOOM_MSAL_CLIENT_ID', 1],
   ['.github/workflows/gov-uc-purview-wire.yml::LOOM_MSAL_CLIENT_ID', 1],
   ['.github/workflows/gov-verify-facts.yml::LOOM_ADLS_ACCOUNT', 1],
   ['.github/workflows/loom-brain-scan.yml::LOOM_COSMOS_ENDPOINT', 2],
@@ -2966,27 +3134,67 @@ export const KNOWN_VALUE_ONLY_PRESENCE_TESTS = new Map([
 ]);
 
 /**
+ * DECLARED VALUE-ONLY USES — the CEILING on the other half of the census.
+ *
+ * A site whose variable resolved but where no presence test was found used to
+ * render CLEAN. That is absence of evidence reported as evidence of absence: the
+ * classifier had not established that the value is only ever USED, it had merely
+ * failed to find a test. Every one of these six was opened and read, and the
+ * reason each is a genuine value-use is recorded per entry. A seventh lands RED
+ * until someone reads it and declares it here, which is the difference between a
+ * reviewed exemption and a silent pass.
+ *
+ * Together with KNOWN_VALUE_ONLY_PRESENCE_TESTS this accounts for the WHOLE
+ * population: 17 presence verdicts + 6 declared value-uses = 23 = the census.
+ * No site in this layer is silently clean any more.
+ */
+export const KNOWN_VALUE_ONLY_VALUE_USES = new Map([
+  // `$CURRENT` is compared against `$CID`, a specific value — not emptiness.
+  ['.github/workflows/csa-loom-post-deploy-bootstrap.yml::LOOM_UNITY_ENTRA_CLIENT_ID', 1],
+  // `$LIVE_URL` is compared against `$FUNC_URL`.
+  ['.github/workflows/csa-loom-post-deploy-bootstrap.yml::LOOM_POSTURE_FUNCTION_URL', 1],
+  // `$CURRENT` is compared against the computed FQDN.
+  ['.github/workflows/deploy-loom-sharing.yml::LOOM_SHARING_URL', 1],
+  // `$AI_CONN` is forwarded as a value into the deployment; never tested.
+  ['.github/workflows/gov-provision-dbt.yml::APPLICATIONINSIGHTS_CONNECTION_STRING', 1],
+  ['.github/workflows/gov-provision-maps.yml::APPLICATIONINSIGHTS_CONNECTION_STRING', 1],
+  // `$EXISTING` is dispatched on by `case`, not tested for emptiness.
+  ['scripts/csa-loom/openlineage-pool-setup.sh::LOOM_OPENLINEAGE_POOL_PRINCIPALS', 1],
+]);
+
+/**
  * GROW-ONLY floor for the layer-6 CENSUS. Not the failure count — the size of
  * the population the layer examines. A refactor that moves every `az containerapp
  * show --query env[…]` behind a helper this scanner cannot see would take the
  * census to 0 and the layer would report a clean tree it never looked at.
+ *
+ * Pinned at the MEASURED census, not below it. At 20 against a live 23 there
+ * were three sites of silent slack, and "a helper swallowed three of them" is
+ * exactly the scenario this constant exists to catch.
  */
-export const ENV_QUERY_CENSUS_FLOOR = 20;
+export const ENV_QUERY_CENSUS_FLOOR = 23;
 
 /**
- * @returns {{failures: string[], census: number, flagged: number, stale: string[]}}
+ * @returns {{failures: string[], census: number, flagged: number, valueUses: number,
+ *            stale: string[]}}
  */
 export function computeEnvQueryPresence() {
   const sites = collectEnvValueQuerySites();
-  const { failures, counted } = classifyPresenceSites(sites);
-  // The ratchet must stay attached to reality: a key that no longer corresponds
-  // to a flagged site is describing a tree that no longer exists, and leaving it
-  // is how a stale ratchet turns into silent coverage.
-  const stale = [...KNOWN_VALUE_ONLY_PRESENCE_TESTS.keys()].filter((k) => !counted.has(k)).sort();
+  const { failures, counted, countedValueUses } = classifyPresenceSites(sites);
+  // BOTH ratchets must stay attached to reality: a key that no longer
+  // corresponds to a site it describes is describing a tree that no longer
+  // exists, and leaving it is how a stale ratchet turns into silent coverage.
+  // The value-use ceiling needs this every bit as much as the presence one —
+  // more so, since an entry there is an assertion that a site was READ.
+  const stale = [
+    ...[...KNOWN_VALUE_ONLY_PRESENCE_TESTS.keys()].filter((k) => !counted.has(k)),
+    ...[...KNOWN_VALUE_ONLY_VALUE_USES.keys()].filter((k) => !countedValueUses.has(k)),
+  ].sort();
   return {
     failures,
     census: sites.length,
     flagged: [...counted.values()].reduce((a, b) => a + b, 0),
+    valueUses: [...countedValueUses.values()].reduce((a, b) => a + b, 0),
     stale,
   };
 }
@@ -2998,13 +3206,21 @@ export function computeEnvQueryPresence() {
  * with no population and no test is a branch nobody can prove still works.
  *
  * @param {{key: string, file: string, line: number, env: string, variable: string|null,
- *          presenceTest: string|null, hasNameQuery: boolean}[]} sites
- * @param {Map<string, number>} ratchet
- * @returns {{failures: string[], counted: Map<string, number>}}
+ *          presenceTest: string|null, hasNameQuery: boolean,
+ *          exportedToJobScope?: boolean}[]} sites
+ * @param {Map<string, number>} ratchet presence-from-value allowance
+ * @param {Map<string, number>} valueUses declared value-only allowance
+ * @returns {{failures: string[], counted: Map<string, number>,
+ *            countedValueUses: Map<string, number>}}
  */
-export function classifyPresenceSites(sites, ratchet = KNOWN_VALUE_ONLY_PRESENCE_TESTS) {
+export function classifyPresenceSites(
+  sites,
+  ratchet = KNOWN_VALUE_ONLY_PRESENCE_TESTS,
+  valueUses = KNOWN_VALUE_ONLY_VALUE_USES,
+) {
   const failures = [];
   const counted = new Map();
+  const countedValueUses = new Map();
   for (const s of sites) {
     // FAIL CLOSED on a site whose captured variable could not be resolved: the
     // classifier cannot say whether it is a presence verdict, and "cannot say"
@@ -3020,8 +3236,17 @@ export function classifyPresenceSites(sites, ratchet = KNOWN_VALUE_ONLY_PRESENCE
     }
     // A companion NAME query in the same window settles presence properly, so
     // reading `.value` afterwards is fine.
-    if (!s.presenceTest || s.hasNameQuery) continue;
-    counted.set(s.key, (counted.get(s.key) || 0) + 1);
+    if (s.hasNameQuery) continue;
+    if (s.presenceTest) {
+      counted.set(s.key, (counted.get(s.key) || 0) + 1);
+      continue;
+    }
+    // RESOLVED BUT NEVER TESTED. The classifier did not establish that this
+    // value is only ever USED — it merely failed to find a test, which is a
+    // different statement and used to render as CLEAN. That is the same
+    // absence-of-evidence-as-evidence-of-absence that this layer condemns, so
+    // the state is now COUNTED against a declared ceiling instead of skipped.
+    countedValueUses.set(s.key, (countedValueUses.get(s.key) || 0) + 1);
   }
   for (const [key, n] of [...counted].sort()) {
     const allowed = ratchet.get(key) || 0;
@@ -3029,7 +3254,8 @@ export function classifyPresenceSites(sites, ratchet = KNOWN_VALUE_ONLY_PRESENCE
     const s = sites.find((x) => x.key === key);
     failures.push(
       `${key} — ${n} site(s) derive a PRESENCE verdict from \`env[?name=='${s.env}'].value\` ` +
-        `(the test is \`${s.presenceTest}\` on \`$${s.variable}\`, ${s.file}:${s.line}), but the ` +
+        `(the test is \`${s.presenceTest}\` on \`$${s.variable}\`, ${s.file}:${s.line}` +
+        `${s.exportedToJobScope ? ', JOB-scoped via `>> "$GITHUB_ENV"`' : ''}), but the ` +
         `ratchet allows ${allowed}. That query returns the empty string BOTH when the app has no ` +
         `\`${s.env}\` entry AND when the deploy emitted it as '' — which is exactly what ` +
         "`cond ? value : ''` produces — so any message this branch prints asserts a cause it did " +
@@ -3038,13 +3264,40 @@ export function classifyPresenceSites(sites, ratchet = KNOWN_VALUE_ONLY_PRESENCE
         'then read `.value`. Adding a key to KNOWN_VALUE_ONLY_PRESENCE_TESTS is NOT a fix. (#3344)',
     );
   }
-  return { failures, counted };
+  for (const [key, n] of [...countedValueUses].sort()) {
+    const allowed = valueUses.get(key) || 0;
+    if (n <= allowed) continue;
+    const s = sites.find((x) => x.key === key);
+    failures.push(
+      `${key} — ${n} site(s) read \`env[?name=='${s.env}'].value\` into \`$${s.variable}\` ` +
+        `(${s.file}:${s.line}` +
+        `${s.exportedToJobScope ? ', JOB-scoped via `>> "$GITHUB_ENV"`' : ''}) and NO presence ` +
+        `test was found anywhere in that variable's scope, but the declared ceiling is ` +
+        `${allowed}. This is NOT a clean verdict — it is an unproven one. Either the value is ` +
+        'genuinely only USED (compared against a specific value, dispatched on, forwarded into a ' +
+        'deployment), in which case read it and declare it in KNOWN_VALUE_ONLY_VALUE_USES with ' +
+        'the reason; or it IS tested somewhere classifyEnvQuerySite() cannot see, in which case ' +
+        'the window is too narrow and THAT is the bug — the job-scope widening exists because ' +
+        'exactly this shape hid two live Gov sites behind a step boundary. (#3344)',
+    );
+  }
+  return { failures, counted, countedValueUses };
 }
 
 /**
  * EMBEDDED CONTROL for layer 6. Drives the real classifier over synthetic shell
  * text with known answers, so the layer cannot report a clean tree because its
  * matcher broke.
+ *
+ * THE `\${…}` ESCAPES BELOW ARE LOAD-BEARING — DO NOT REMOVE THEM.
+ *
+ * Every fixture in this function is a TEMPLATE LITERAL holding literal shell
+ * text. `\${ACCT:-}` must reach the classifier as the six characters `${ACCT:-}`,
+ * so the backslash suppresses JS interpolation. CodeQL flags these as
+ * "unnecessary escapes"; deleting them is not a no-op and not a style fix — it
+ * is a SyntaxError, because `${ACCT:-}` is not a valid JS expression. The same
+ * applies to the fixtures in scripts/ci/__tests__/env-sync-population.test.mjs.
+ * If the finding is noisy, dismiss it with this reason; do not edit the code.
  *
  * @returns {string[]}
  */
@@ -3139,6 +3392,144 @@ if [ -n "\${CID:-}" ]; then echo "resolved"; fi
     if (!classifyEnvQuerySite(SRC, at(SRC)).presenceTest) {
       failures.push(`control: the \`${label}\` spelling of a presence verdict was not recognised`);
     }
+  }
+
+  // ── JOB SCOPE (F1) ──────────────────────────────────────────────────────────
+  // `>> "$GITHUB_ENV"` promotes a capture out of its step. A step-scoped window
+  // classified gov-provision-trino.yml::LOOM_MSAL_CLIENT_ID CLEAN while the
+  // workflow tested it six steps later and printed a cause it had not
+  // established. All three export spellings are exercised, and — just as
+  // importantly — the three shapes that must NOT widen, because a window that
+  // grows unconditionally would flag correct sites and a guard that cries wolf
+  // is spent.
+  const jobScoped = (exportLines) => `      - name: capture
+        run: |
+          MSAL=$(az containerapp show -n "$APP" -g "$RG" \\
+            --query "properties.template.containers[0].env[?name=='LOOM_MSAL_CLIENT_ID'].value | [0]" -o tsv)
+${exportLines}
+      - name: an unrelated step
+        run: echo hello
+
+      - name: six steps later
+        run: |
+          if [ -n "\${MSAL:-}" ]; then echo pinned; else echo "the live console has no LOOM_MSAL_CLIENT_ID"; fi
+`;
+  for (const [label, exportLines] of [
+    ['brace-block', '          { echo "OTHER=1"; echo "MSAL=\${MSAL:-}"; } >> "$GITHUB_ENV"\n'],
+    ['same-line echo', '          echo "MSAL=$MSAL" >> "$GITHUB_ENV"\n'],
+    ['heredoc', '          cat >> "$GITHUB_ENV" <<EOF\n          MSAL=$MSAL\n          EOF\n'],
+  ]) {
+    const SRC = jobScoped(exportLines);
+    const r = classifyEnvQuerySite(SRC, at(SRC));
+    if (!r.exportedToJobScope) {
+      failures.push(
+        `control: the ${label} form of \`>> "$GITHUB_ENV"\` was not recognised as promoting the ` +
+          'capture to JOB scope, so its window still ends at the next step',
+      );
+    }
+    if (!r.presenceTest) {
+      failures.push(
+        `control: a presence verdict on a JOB-scoped variable (${label} export) tested SIX STEPS ` +
+          'after the capture was not seen — the examined window is smaller than the scope it ' +
+          'polices, which is the #3956 N-1 defect reproduced inside layer 6',
+      );
+    }
+  }
+
+  // NOT exported: the identical text minus the redirect. The later-step test
+  // must stay invisible, proving the widening is keyed to the EXPORT and is not
+  // merely a bigger window applied to everything.
+  const NOEXPORT = jobScoped('          echo "MSAL is local to this step"\n');
+  const nx = classifyEnvQuerySite(NOEXPORT, at(NOEXPORT));
+  if (nx.exportedToJobScope || nx.presenceTest) {
+    failures.push(
+      `control: a capture that never reaches \`$GITHUB_ENV\` was widened anyway ` +
+        `(exported=${nx.exportedToJobScope}, test=${JSON.stringify(nx.presenceTest)}) — the ` +
+        'window grew unconditionally instead of following the variable',
+    );
+  }
+
+  // Exported, but the test is in the NEXT JOB. `$GITHUB_ENV` does not cross
+  // jobs, so that `$MSAL` is a different variable and must not be attributed.
+  const NEXTJOB = `      - name: capture
+        run: |
+          MSAL=$(az containerapp show \\
+            --query "properties.template.containers[0].env[?name=='LOOM_MSAL_CLIENT_ID'].value | [0]" -o tsv)
+          echo "MSAL=$MSAL" >> "$GITHUB_ENV"
+
+  second-job:
+    runs-on: ubuntu-latest
+    steps:
+      - name: unrelated job
+        run: |
+          if [ -z "\${MSAL:-}" ]; then echo "not this one"; fi
+`;
+  const nj = classifyEnvQuerySite(NEXTJOB, at(NEXTJOB));
+  if (nj.presenceTest) {
+    failures.push(
+      `control: a test in the NEXT JOB was attributed to a \`$GITHUB_ENV\` export from this one ` +
+        `(${nj.presenceTest}) — the widened window does not stop at the job boundary`,
+    );
+  }
+
+  // A capture sitting next to an export of a DIFFERENT variable must not widen:
+  // without the `(?!\\s*"?\\$\\()` lookahead, `AI_CONN=$(az …)` reads as its own
+  // export and every capture near any redirect would widen.
+  const OTHERVAR = `      - name: capture
+        run: |
+          AI_CONN=$(az containerapp show \\
+            --query "properties.template.containers[0].env[?name=='APPLICATIONINSIGHTS_CONNECTION_STRING'].value | [0]" -o tsv)
+          echo "SOMETHING_ELSE=1" >> "$GITHUB_ENV"
+
+      - name: later
+        run: |
+          if [ -z "\${AI_CONN:-}" ]; then echo "not visible from the capture's step"; fi
+`;
+  const ov = classifyEnvQuerySite(OTHERVAR, at(OTHERVAR));
+  if (ov.exportedToJobScope || ov.presenceTest) {
+    failures.push(
+      `control: a capture adjacent to an export of a DIFFERENT variable was treated as exported ` +
+        `(exported=${ov.exportedToJobScope}, test=${JSON.stringify(ov.presenceTest)})`,
+    );
+  }
+
+  // ── VALUE-USE CEILING (F1, fail closed) ─────────────────────────────────────
+  // A resolved variable with no presence test anywhere in its scope is an
+  // UNPROVEN verdict, not a clean one. It must be counted against a declared
+  // ceiling; rendering it clean is absence of evidence reported as evidence of
+  // absence.
+  const site = (over) => ({
+    key: 'wf.yml::LOOM_X',
+    file: 'wf.yml',
+    line: 1,
+    env: 'LOOM_X',
+    variable: 'X',
+    presenceTest: null,
+    hasNameQuery: false,
+    exportedToJobScope: false,
+    ...over,
+  });
+  const undeclared = classifyPresenceSites([site({})], new Map(), new Map());
+  if (undeclared.failures.length !== 1) {
+    failures.push(
+      `control: a resolved-but-never-tested site produced ${undeclared.failures.length} failures ` +
+        'against an empty ceiling, expected 1 — "cannot say" is rendering as "clean"',
+    );
+  }
+  const declared = classifyPresenceSites([site({})], new Map(), new Map([['wf.yml::LOOM_X', 1]]));
+  if (declared.failures.length !== 0) {
+    failures.push('control: a DECLARED value-only use was flagged despite its ceiling entry');
+  }
+  const twice = classifyPresenceSites(
+    [site({}), site({})],
+    new Map(),
+    new Map([['wf.yml::LOOM_X', 1]]),
+  );
+  if (twice.failures.length !== 1) {
+    failures.push(
+      'control: a SECOND value-only site under a ceiling of 1 was not flagged — the ceiling ' +
+        'counts keys rather than sites',
+    );
   }
   return failures;
 }
@@ -3377,12 +3768,23 @@ function main() {
     failures: envQueryFailures,
     census: envQueryCensus,
     flagged: envQueryFlagged,
+    valueUses: envQueryValueUses,
     stale: envQueryStale,
   } = computeEnvQueryPresence();
+  const envQuerySum = envQueryFlagged + envQueryValueUses;
   console.log(`[env-sync] \`env[?name==…].value\` sites scanned: ${envQueryCensus}`);
   console.log(
     `[env-sync] of those, deriving PRESENCE from a value: ${envQueryFlagged} ` +
       `(ratcheted ${[...KNOWN_VALUE_ONLY_PRESENCE_TESTS.values()].reduce((a, b) => a + b, 0)})`,
+  );
+  // The accounting is printed WHOLE, because a partial one reads as complete.
+  // `deriving PRESENCE: 15` looked like the finished sum while the true figure
+  // was 17 and two Gov sites were in neither column — so every site is now in
+  // exactly one bucket and the residual is named rather than left implicit.
+  console.log(
+    `[env-sync] declared VALUE-ONLY uses: ${envQueryValueUses} ` +
+      `(ceiling ${[...KNOWN_VALUE_ONLY_VALUE_USES.values()].reduce((a, b) => a + b, 0)}); ` +
+      `settled by a companion NAME query: ${envQueryCensus - envQuerySum}`,
   );
   // SELF-CHECK: a census that collapses is a layer reporting on a tree it never
   // read — the same failure shape as `delivered.size < 100` above.
@@ -3397,9 +3799,10 @@ function main() {
   }
   if (envQueryStale.length) {
     console.error(
-      '\n::error::check-env-sync ratcheted presence-from-value sites that are no longer flagged. ' +
-        'Either they were FIXED (delete the entry — the ratchet must shrink) or the classifier ' +
-        'stopped seeing them and this set is now describing nothing:',
+      '\n::error::check-env-sync has ratchet entries — presence-from-value or declared ' +
+        'value-only — that no longer correspond to any site they describe. Either they were ' +
+        'FIXED (delete the entry — both ratchets must shrink) or the classifier stopped seeing ' +
+        'them and this set is now describing nothing:',
     );
     for (const k of envQueryStale) console.error(`  - ${k}`);
     process.exit(1);
