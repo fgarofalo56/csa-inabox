@@ -21,13 +21,48 @@
  * the PR body says so in those words.
  */
 
-import { describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { render, screen, fireEvent, within } from '@testing-library/react';
 import { FluentProvider, webLightTheme } from '@fluentui/react-components';
 import type { ReactElement } from 'react';
-import { BrainPane } from '@/app/admin/brain/brain-pane';
+import { BrainPane, parseBrainTab } from '@/app/admin/brain/brain-pane';
 import { snapshotFromCollection } from '@/app/api/admin/brain/_lib/snapshot';
 import { collection, estateRows } from './estate-fixture';
+
+/**
+ * #4278 — the tab is an ADDRESS, so the router is part of the subject.
+ *
+ * The global `vitest.setup.ts` stub returns a fresh throwaway router and an
+ * always-empty `URLSearchParams`, which cannot express "arrive at
+ * `?tab=recommendations`" or observe what the pane wrote back. This file-scoped
+ * mock makes both readable: `nav.search` is the incoming URL, `nav.replace` and
+ * `nav.push` are the outgoing writes.
+ */
+const nav = vi.hoisted(() => ({
+  search: new URLSearchParams(''),
+  replace: vi.fn(),
+  push: vi.fn(),
+}));
+
+vi.mock('next/navigation', () => ({
+  useRouter: () => ({
+    push: nav.push,
+    replace: nav.replace,
+    back: vi.fn(),
+    forward: vi.fn(),
+    refresh: vi.fn(),
+    prefetch: vi.fn(),
+  }),
+  usePathname: () => '/admin/brain',
+  useSearchParams: () => nav.search,
+  useParams: () => ({}),
+}));
+
+beforeEach(() => {
+  nav.search = new URLSearchParams('');
+  nav.replace.mockClear();
+  nav.push.mockClear();
+});
 
 const snapshot = snapshotFromCollection(collection());
 
@@ -181,5 +216,144 @@ describe('an INCOMPLETE read is never rendered as an estate', () => {
     wrap(<BrainPane initialSnapshot={snapshot} />);
     fireEvent.click(screen.getByRole('tab', { name: /Coverage/ }));
     expect(screen.queryByTestId('incomplete-collection')).toBeNull();
+  });
+});
+
+// ──────────────────────────────────────────────────────────────────────────
+// #4278 — the four views have an address
+// ──────────────────────────────────────────────────────────────────────────
+
+describe('parseBrainTab — the URL cannot name a view that does not exist', () => {
+  it('round-trips every value the renderer switches on', () => {
+    for (const t of ['graph', 'synapses', 'recommendations', 'coverage'] as const) {
+      expect(parseBrainTab(t)).toBe(t);
+    }
+  });
+
+  it('falls back to graph on anything unrecognised', () => {
+    // A renamed tab, a hand-typed URL, a stale bookmark, a trailing-space
+    // paste. None of these may select an undefined view.
+    for (const junk of ['perform', 'Graph', 'graph ', '', '../coverage', '1', null, undefined]) {
+      expect(parseBrainTab(junk)).toBe('graph');
+    }
+  });
+});
+
+describe('the tab is addressable (#4278)', () => {
+  const CASES = [
+    { tab: 'graph', tabName: /Graph/, testId: 'brain-canvas' },
+    { tab: 'synapses', tabName: /Synapses/, testId: 'synapse-view' },
+    { tab: 'recommendations', tabName: /Recommendations/, testId: 'recommendations' },
+    { tab: 'coverage', tabName: /Coverage/, testId: 'coverage-panel' },
+  ] as const;
+
+  for (const c of CASES) {
+    it(`?tab=${c.tab} opens the ${c.tab} view`, () => {
+      nav.search = new URLSearchParams(`tab=${c.tab}`);
+      wrap(<BrainPane initialSnapshot={snapshot} />);
+      expect(screen.getByRole('tab', { name: c.tabName })).toHaveAttribute(
+        'aria-selected',
+        'true',
+      );
+      expect(screen.getByTestId(c.testId)).toBeInTheDocument();
+    });
+  }
+
+  it('THE RECEIPT ROUTE: /admin/brain?tab=recommendations lands on the findings', () => {
+    // This is the case that structurally blocked the G1 receipt.
+    // `loom-ui-verify.yml` navigates to a `target_route`; with no route to this
+    // view a receipt attempt captured the GRAPH and reported it as the
+    // Recommendations surface — verifying something nobody asked about.
+    nav.search = new URLSearchParams('tab=recommendations');
+    wrap(<BrainPane initialSnapshot={snapshot} />);
+    expect(screen.getByTestId('recommendations')).toBeInTheDocument();
+    expect(screen.queryByTestId('brain-canvas')).toBeNull();
+  });
+
+  it('an unrecognised ?tab= renders the graph rather than nothing', () => {
+    nav.search = new URLSearchParams('tab=perform');
+    wrap(<BrainPane initialSnapshot={snapshot} />);
+    expect(screen.getByRole('tab', { name: /Graph/ })).toHaveAttribute('aria-selected', 'true');
+    expect(screen.getByTestId('brain-canvas')).toBeInTheDocument();
+  });
+
+  it('selecting a tab writes it back with REPLACE, never push', () => {
+    wrap(<BrainPane initialSnapshot={snapshot} />);
+    fireEvent.click(screen.getByRole('tab', { name: /Recommendations/ }));
+
+    expect(nav.replace).toHaveBeenCalledTimes(1);
+    expect(String(nav.replace.mock.calls[0]?.[0])).toContain('tab=recommendations');
+    // Push would make Back cycle through tabs instead of leaving the page.
+    expect(nav.push).not.toHaveBeenCalled();
+  });
+
+  it('preserves any other search params already on the URL', () => {
+    nav.search = new URLSearchParams('tab=graph&focusId=abc');
+    wrap(<BrainPane initialSnapshot={snapshot} />);
+    fireEvent.click(screen.getByRole('tab', { name: /Coverage/ }));
+    const url = String(nav.replace.mock.calls[0]?.[0]);
+    expect(url).toContain('tab=coverage');
+    expect(url).toContain('focusId=abc');
+  });
+});
+
+// ──────────────────────────────────────────────────────────────────────────
+// #4280 — the legend and the provenance chips cannot overlap
+// ──────────────────────────────────────────────────────────────────────────
+
+describe('the canvas top strip is ONE flow (#4280)', () => {
+  /**
+   * ── WHAT THIS PROVES, AND WHAT IT DOES NOT ────────────────────────────────
+   * jsdom performs NO layout: every box measures 0x0, so `getBoundingClientRect`
+   * cannot see two elements painting over each other. This suite therefore does
+   * NOT prove the pixels are fixed — the re-captured browser receipt is the only
+   * evidence that can, exactly as `cost-badge-overflow.test.ts` records for the
+   * same class of defect.
+   *
+   * What it DOES prove is that the STRUCTURAL CAUSE is gone and stays gone. The
+   * overlap existed because the legend and the chips were two absolutely
+   * positioned React Flow `Panel`s (`top-left` and `top-right`) — width-unbounded,
+   * so the legend never wrapped, it just grew until it ran under the chips. The
+   * assertion below is that they now share ONE panel, i.e. one wrapping flex
+   * flow. Split them back into two panels and this goes red.
+   */
+  it('the legend and the provenance chips live in the SAME react-flow panel', () => {
+    wrap(<BrainPane initialSnapshot={snapshot} />);
+
+    const legend = screen.getByRole('group', { name: 'Legend' });
+    const chips = screen.getByTestId('brain-canvas-provenance');
+
+    const legendPanel = legend.closest('.react-flow__panel');
+    const chipsPanel = chips.closest('.react-flow__panel');
+
+    expect(legendPanel).not.toBeNull();
+    // Two separately-positioned panels is the defect. One shared panel is the fix.
+    expect(legendPanel).toBe(chipsPanel);
+  });
+
+  it('both rows are children of the one wrapping strip', () => {
+    wrap(<BrainPane initialSnapshot={snapshot} />);
+    const strip = screen.getByTestId('brain-canvas-top-strip');
+    expect(within(strip).getByRole('group', { name: 'Legend' })).toBeInTheDocument();
+    expect(within(strip).getByTestId('brain-canvas-provenance')).toBeInTheDocument();
+  });
+
+  it('every provenance chip is present — the fix hid nothing to stop the overlap', () => {
+    // The cheap "fix" for an overlap is to delete one of the colliding rows.
+    // All five provenances must still be on screen.
+    wrap(<BrainPane initialSnapshot={snapshot} />);
+    const chips = screen.getByTestId('brain-canvas-provenance');
+    for (const p of ['configured', 'declared', 'imports', 'observed', 'owns']) {
+      expect(chips.textContent).toContain(p);
+    }
+  });
+
+  it('the destructive-class label is still rendered in full', () => {
+    // `Unreachable + always-on` labels the recommendation class whose executor
+    // PATCHes minReplicas: 0. It was the worst-hit label in the receipt; it must
+    // not be shortened or dropped to make the row fit.
+    wrap(<BrainPane initialSnapshot={snapshot} />);
+    const legend = screen.getByRole('group', { name: 'Legend' });
+    expect(legend.textContent).toContain('Unreachable + always-on');
   });
 });

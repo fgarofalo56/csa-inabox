@@ -75,6 +75,36 @@ import {
 
 const useStyles = makeStyles({
   wrap: { display: 'flex', flexDirection: 'column', minHeight: 0, height: '100%' },
+  /**
+   * #4280 — ONE FLOW, NOT TWO OVERLAYS.
+   *
+   * The legend and the provenance chips used to be two separate React Flow
+   * `Panel`s — `top-left` and `top-right`. A Panel is absolutely positioned and
+   * width-unbounded, so the legend never wrapped: it just grew rightwards until
+   * it ran underneath the chips, and `Unreachable + always-on` — the label for
+   * the most destructive recommendation class on this surface — came out partly
+   * illegible in BOTH themes at the default capture width.
+   *
+   * `flexWrap` on the legend alone could not fix that, because nothing bounded
+   * the legend's width. Pinning `right: 0` alongside the inherited `left: 0`
+   * turns the panel into a full-width top strip, which makes the two rows
+   * SIBLINGS IN ONE WRAPPING FLEX FLOW. They cannot overlap at any width now —
+   * they wrap. An offset nudge was the alternative and it fixes exactly one
+   * viewport width (`ux-baseline.md`: "Overlap at any width is a defect").
+   *
+   * `pointerEvents: 'none'` on the strip is load-bearing: a full-width panel
+   * would otherwise swallow canvas pan/zoom drags across the whole top band.
+   * The two content boxes opt back in.
+   */
+  topStripPanel: { right: 0, pointerEvents: 'none' },
+  topStrip: {
+    display: 'flex',
+    flexWrap: 'wrap',
+    alignItems: 'flex-start',
+    justifyContent: 'space-between',
+    gap: tokens.spacingHorizontalS,
+    minWidth: 0,
+  },
   legend: {
     display: 'flex',
     flexWrap: 'wrap',
@@ -85,8 +115,11 @@ const useStyles = makeStyles({
     borderRadius: tokens.borderRadiusMedium,
     backgroundColor: tokens.colorNeutralBackground1,
     boxShadow: tokens.shadow4,
+    pointerEvents: 'auto',
   },
   swatch: { display: 'inline-flex', alignItems: 'center', gap: tokens.spacingHorizontalXXS, minWidth: 0 },
+  /** Keeps a label on one line and ellipsises it rather than forcing overflow. */
+  label: { minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
   dot: { width: '10px', height: '10px', borderRadius: tokens.borderRadiusCircular, flexShrink: 0 },
   dash: { width: '18px', height: 0, borderTop: '2px dashed var(--loom-accent-red)', flexShrink: 0 },
   solid: { width: '18px', height: 0, borderTop: '2px solid var(--loom-accent-blue)', flexShrink: 0 },
@@ -95,6 +128,8 @@ const useStyles = makeStyles({
     gap: tokens.spacingHorizontalS,
     minWidth: 0,
     flexWrap: 'wrap',
+    alignItems: 'center',
+    pointerEvents: 'auto',
   },
 });
 
@@ -326,71 +361,74 @@ function CanvasInner(props: BrainCanvasProps) {
         maskColor={accentTint(tokens.colorNeutralBackground3, 70)}
         style={{ backgroundColor: tokens.colorNeutralBackground1 }}
       />
-      <Panel position="top-left">
-        {props.overlay ? (
-          <div className={s.legend} role="group" aria-label="Synapse legend" data-testid="synapse-legend">
-            {synapseNodeLegend.map(([layer, accent]) => (
-              <span key={layer} className={s.swatch} data-legend-synapse-node={layer}>
-                <span className={s.dot} style={{ backgroundColor: accent }} />
-                <Caption1>{SYNAPSE_NODE_LABEL[layer]}</Caption1>
+      <Panel position="top-left" className={s.topStripPanel}>
+        {/* #4280: legend and provenance chips are SIBLINGS here, in one
+            wrapping flow. They were two absolutely-positioned Panels and the
+            legend ran underneath the chips. See `topStripPanel` above. */}
+        <div className={s.topStrip} data-testid="brain-canvas-top-strip">
+          {props.overlay ? (
+            <div className={s.legend} role="group" aria-label="Synapse legend" data-testid="synapse-legend">
+              {synapseNodeLegend.map(([layer, accent]) => (
+                <span key={layer} className={s.swatch} data-legend-synapse-node={layer}>
+                  <span className={s.dot} style={{ backgroundColor: accent }} />
+                  <Caption1 className={s.label}>{SYNAPSE_NODE_LABEL[layer]}</Caption1>
+                </span>
+              ))}
+              {synapseEdgeLegend.map(([layer, style]) => (
+                <span key={layer} className={s.swatch} data-legend-synapse-edge={layer}>
+                  <span
+                    className={s.solid}
+                    style={{
+                      borderTopColor: style.stroke,
+                      borderTopStyle: style.dash ? 'dashed' : 'solid',
+                    }}
+                  />
+                  <Caption1 className={s.label}>{SYNAPSE_EDGE_LABEL[layer]}</Caption1>
+                </span>
+              ))}
+            </div>
+          ) : (
+            <div className={s.legend} role="group" aria-label="Legend">
+              {[...statesPresent].map((st) => (
+                <span key={st} className={s.swatch} data-legend-state={st}>
+                  <span
+                    className={s.dot}
+                    style={{ backgroundColor: stateAccent.get(st) ?? tokens.colorNeutralStroke1 }}
+                  />
+                  <Caption1 className={s.label}>{STATE_LABEL[st]}</Caption1>
+                </span>
+              ))}
+              <span className={s.swatch}>
+                <span className={s.solid} />
+                <Caption1 className={s.label}>resolved wire</Caption1>
               </span>
-            ))}
-            {synapseEdgeLegend.map(([layer, style]) => (
-              <span key={layer} className={s.swatch} data-legend-synapse-edge={layer}>
-                <span
-                  className={s.solid}
-                  style={{
-                    borderTopColor: style.stroke,
-                    borderTopStyle: style.dash ? 'dashed' : 'solid',
-                  }}
-                />
-                <Caption1>{SYNAPSE_EDGE_LABEL[layer]}</Caption1>
+              <span className={s.swatch} data-legend-edge="dangling">
+                <span className={s.dash} />
+                <Caption1 className={s.label}>dangling wire (points at nothing)</Caption1>
               </span>
+            </div>
+          )}
+          <div className={s.colHead} data-testid="brain-canvas-provenance">
+            {(Object.keys(PROVENANCE_COLOR) as (keyof typeof PROVENANCE_COLOR)[]).map((p) => (
+              // The readable-accent pairing from the node kit's StatusChip
+              // (#4241 defect 6): accent tint behind, theme-aware accent in
+              // front — never an accent foreground over Fluent's default brand
+              // tint, which is exactly the accent-on-tint failure
+              // `loom_item_accent_readable_theme` records.
+              <Badge
+                key={p}
+                appearance="tint"
+                size="small"
+                style={{
+                  backgroundColor: accentTint(PROVENANCE_COLOR[p], 14),
+                  color: readableAccent(PROVENANCE_COLOR[p], mode === 'dark'),
+                  borderColor: accentTint(PROVENANCE_COLOR[p], 28),
+                }}
+              >
+                {p}
+              </Badge>
             ))}
           </div>
-        ) : (
-          <div className={s.legend} role="group" aria-label="Legend">
-            {[...statesPresent].map((st) => (
-              <span key={st} className={s.swatch} data-legend-state={st}>
-                <span
-                  className={s.dot}
-                  style={{ backgroundColor: stateAccent.get(st) ?? tokens.colorNeutralStroke1 }}
-                />
-                <Caption1>{STATE_LABEL[st]}</Caption1>
-              </span>
-            ))}
-            <span className={s.swatch}>
-              <span className={s.solid} />
-              <Caption1>resolved wire</Caption1>
-            </span>
-            <span className={s.swatch} data-legend-edge="dangling">
-              <span className={s.dash} />
-              <Caption1>dangling wire (points at nothing)</Caption1>
-            </span>
-          </div>
-        )}
-      </Panel>
-      <Panel position="top-right">
-        <div className={s.colHead}>
-          {(Object.keys(PROVENANCE_COLOR) as (keyof typeof PROVENANCE_COLOR)[]).map((p) => (
-            // The readable-accent pairing from the node kit's StatusChip
-            // (#4241 defect 6): accent tint behind, theme-aware accent in
-            // front — never an accent foreground over Fluent's default brand
-            // tint, which is exactly the accent-on-tint failure
-            // `loom_item_accent_readable_theme` records.
-            <Badge
-              key={p}
-              appearance="tint"
-              size="small"
-              style={{
-                backgroundColor: accentTint(PROVENANCE_COLOR[p], 14),
-                color: readableAccent(PROVENANCE_COLOR[p], mode === 'dark'),
-                borderColor: accentTint(PROVENANCE_COLOR[p], 28),
-              }}
-            >
-              {p}
-            </Badge>
-          ))}
         </div>
       </Panel>
       <Panel position="bottom-right">

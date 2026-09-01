@@ -27,9 +27,23 @@ const useStyles = makeStyles({
     ':hover': { backgroundColor: 'rgba(255,255,255,0.15)' },
     ':focus-within': { backgroundColor: 'rgba(255,255,255,0.18)', ...shorthands.borderColor('rgba(255,255,255,0.4)') },
   },
+  /**
+   * #4280 — the Ctrl-K chip painted over the placeholder.
+   *
+   * `contentAfter` is a flex sibling of the `<input>`, and a flex item's
+   * default `min-width: auto` resolves for an input to its intrinsic `size`
+   * width. So the input refused to shrink, overflowed the field, and the chip
+   * came down on top of the placeholder text on FIRST PAINT with no
+   * interaction, in both themes. `minWidth: 0` lets the input shrink and
+   * ellipsise instead — the `minWidth: 0` half of the `ux-baseline.md` badge
+   * rule — and `flexShrink: 0` keeps the chip itself from being squeezed.
+   */
+  inputEl: { minWidth: 0 },
   shortcut: {
-    fontSize: '11px',
-    padding: '2px 6px',
+    flexShrink: 0,
+    whiteSpace: 'nowrap',
+    fontSize: tokens.fontSizeBase100,
+    padding: `${tokens.spacingVerticalXXS} ${tokens.spacingHorizontalXS}`,
     borderRadius: tokens.borderRadiusMedium,
     border: '1px solid rgba(255,255,255,0.25)',
     color: 'rgba(255,255,255,0.7)',
@@ -68,14 +82,15 @@ export function TopbarSearch() {
       <Input
         ref={ref}
         className={s.input}
+        input={{ className: s.inputEl }}
         contentBefore={<Search20Regular style={{ color: 'rgba(255,255,255,0.85)' }} />}
         contentAfter={<span className={s.shortcut}>Ctrl K</span>}
-        placeholder="Search items, settings, item types…   (press / )"
+        placeholder="Search items, settings, item types…"
         value={val}
         onChange={(_, d) => setVal(d.value)}
         onClick={open}
         onKeyDown={(e) => { if (e.key === 'Enter') open(); }}
-        aria-label="Search CSA Loom"
+        aria-label="Search CSA Loom (press / to focus, Ctrl+K for the command palette)"
       />
     </div>
   );
