@@ -43,7 +43,9 @@ import {
   applyResumePoll,
   armGateMessage,
   createArmActuator,
+  createManifestTagReader,
   discoverFromManifest,
+  discoveryReadFailures,
   loadPauseSnapshot,
   planPause,
   pollPause,
@@ -73,7 +75,9 @@ export const dynamic = 'force-dynamic';
 async function runningPayload(actuator: EstateActuator) {
   const { manifest, entries, unresolved, manifestGated, namedByDeploy, gateReason } =
     resolveDeployManifest();
-  const discovered = await discoverFromManifest(entries, actuator.readTags);
+  // #4243 — discovery goes through the 429-retrying manifest tag reader, so a
+  // transient throttle does not silently shrink the preview the operator sees.
+  const discovered = await discoverFromManifest(entries, createManifestTagReader());
   const plan = planPause(discovered, {
     scope: { kind: 'explicit-inventory', estateId: manifest.estateId },
     manifest,
@@ -91,6 +95,7 @@ async function runningPayload(actuator: EstateActuator) {
     };
   }
   const risks = capacityPreflight(plan.inventory.pausable, live);
+  const readFailures = discoveryReadFailures(discovered);
 
   return {
     state: 'RUNNING' as const,
@@ -110,10 +115,20 @@ async function runningPayload(actuator: EstateActuator) {
      * The dry run is a REQUIREMENT before acting, so the pause route demands
      * this token back. It is not a security control (the caller is already a
      * tenant admin); it is a DRIFT control — the same shape as
-     * `/api/admin/updates/apply`'s `confirmTag`. If the resolved set changes
-     * between the preview and the confirm, the confirm is refused.
+     * `/api/admin/updates/apply`'s `confirmTag`. If the resolved set has
+     * POSITIVELY changed between the preview and the confirm, the confirm is
+     * refused. #4243: the token is computed over the STABLE manifest-named
+     * population plus the positively-established set, with this preview's
+     * read-failure count embedded — so a throttled read can no longer
+     * manufacture a "the set changed" refusal over an unchanged estate.
      */
-    confirmToken: previewToken(plan.dryRun.wouldPause.map((r) => r.resourceId)),
+    confirmToken: previewToken({
+      manifestIds: entries.map((e) => e.resourceId),
+      establishedIds: plan.dryRun.wouldPause.map((r) => r.resourceId),
+      readFailures: readFailures.length,
+    }),
+    /** Discovery reads that failed — the preview may be partial when non-empty. */
+    readFailures,
     typicalResumeSeconds: TYPICAL_RESUME_SECONDS,
   };
 }

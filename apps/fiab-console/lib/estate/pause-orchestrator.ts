@@ -172,6 +172,10 @@ export {
 } from './pause-actuator';
 export type { ActuatorResult, EstateActuator, PowerRead, ServabilityProbe };
 
+// A LOCAL binding too — `export … from` re-exports without binding, and the
+// discovery tag reader below derives its api-version from the id's own type.
+import { armTypeFromId } from './pause-actuator';
+
 // ---------------------------------------------------------------------------
 // Planning — R-SCOPE-4
 // ---------------------------------------------------------------------------
@@ -1243,9 +1247,33 @@ export function resolveDeployManifest(env: NodeJS.ProcessEnv = process.env): {
   }
 
   // --- SHIR VM scale set ---------------------------------------------------
-  const shirSub = v('LOOM_SUBSCRIPTION_ID');
-  const shirRg = v('LOOM_PURVIEW_SHIR_RG') || v('LOOM_DLZ_RG') || v('LOOM_ADMIN_RG');
-  const shirName = v('LOOM_PURVIEW_SHIR_VMSS_NAME') || v('LOOM_SHIR_VMSS_NAME');
+  //
+  // ── #4243 — COORDINATES TRAVEL TOGETHER, OR NOT AT ALL ────────────────────
+  // The first version composed the NAME from one VMSS (Purview SHIR, falling
+  // back to the DLZ ADF SHIR) with an RG chain that preferred the OTHER one's
+  // home (`LOOM_DLZ_RG` before `LOOM_ADMIN_RG`) and a subscription pinned to
+  // the admin sub with no fallback at all. On the live estate that manufactured
+  // an id under `rg-csa-loom-admin-centralus` in the admin sub — MEASURED as an
+  // ARM 404; the real VMSS lives in the DLZ RG in the DLZ sub. Every plan then
+  // wasted a guaranteed-404 tag read and carried a permanently indeterminate
+  // row.
+  //
+  // The two SHIRs are DIFFERENT machines with different homes (a Purview SHIR
+  // cannot share a VMSS with the ADF SHIR — Microsoft constraint, see
+  // purview-shir.bicep): the Purview SHIR is deployed in the ADMIN RG of the
+  // admin sub; the DLZ ADF SHIR lives in the DLZ RG of the DLZ sub. So each
+  // candidate resolves with ITS OWN coordinates, and the subscription gets the
+  // same fallback pattern the Synapse entry has (`LOOM_SHIR_SUB`, then the
+  // canonical DLZ sub vars emitted by dlz-attach, then the admin sub).
+  const pvwShirName = v('LOOM_PURVIEW_SHIR_VMSS_NAME');
+  const dlzShirName = v('LOOM_SHIR_VMSS_NAME');
+  const shirName = pvwShirName || dlzShirName;
+  const shirRg = pvwShirName
+    ? v('LOOM_PURVIEW_SHIR_RG') || v('LOOM_ADMIN_RG')
+    : v('LOOM_DLZ_RG') || v('LOOM_ADMIN_RG');
+  const shirSub = pvwShirName
+    ? v('LOOM_SHIR_SUB') || v('LOOM_SUBSCRIPTION_ID')
+    : v('LOOM_SHIR_SUB') || v('LOOM_DLZ_SUBSCRIPTION_ID') || v('LOOM_DLZ_SUB') || v('LOOM_SUBSCRIPTION_ID');
   if (shirSub && shirRg && shirName) {
     entries.push({
       resourceId: `/subscriptions/${shirSub}/resourceGroups/${shirRg}/providers/Microsoft.Compute/virtualMachineScaleSets/${shirName}`,
@@ -1253,12 +1281,18 @@ export function resolveDeployManifest(env: NodeJS.ProcessEnv = process.env): {
       name: shirName,
       resourceGroup: shirRg,
       subscriptionId: shirSub,
-      fromEnv: ['LOOM_SUBSCRIPTION_ID', 'LOOM_PURVIEW_SHIR_RG', 'LOOM_PURVIEW_SHIR_VMSS_NAME'],
+      fromEnv: pvwShirName
+        ? ['LOOM_SHIR_SUB (or LOOM_SUBSCRIPTION_ID)', 'LOOM_PURVIEW_SHIR_RG (or LOOM_ADMIN_RG)', 'LOOM_PURVIEW_SHIR_VMSS_NAME']
+        : ['LOOM_SHIR_SUB (or LOOM_DLZ_SUBSCRIPTION_ID / LOOM_SUBSCRIPTION_ID)', 'LOOM_DLZ_RG (or LOOM_ADMIN_RG)', 'LOOM_SHIR_VMSS_NAME'],
     });
   } else {
     unresolved.push({
       label: 'Self-hosted integration runtime (VMSS)',
-      needs: ['LOOM_SUBSCRIPTION_ID', 'LOOM_PURVIEW_SHIR_RG (or LOOM_DLZ_RG / LOOM_ADMIN_RG)', 'LOOM_PURVIEW_SHIR_VMSS_NAME'],
+      needs: [
+        'LOOM_SHIR_SUB (or LOOM_DLZ_SUBSCRIPTION_ID / LOOM_SUBSCRIPTION_ID)',
+        'LOOM_PURVIEW_SHIR_RG for the Purview SHIR, LOOM_DLZ_RG for the ADF SHIR (or LOOM_ADMIN_RG)',
+        'LOOM_PURVIEW_SHIR_VMSS_NAME (or LOOM_SHIR_VMSS_NAME)',
+      ],
     });
   }
 
@@ -1391,20 +1425,9 @@ export async function savePauseSnapshot(snapshot: EstatePauseSnapshot): Promise<
 // Small helpers shared by the three BFF routes
 // ---------------------------------------------------------------------------
 
-/**
- * A stable, order-independent digest of the resource ids in a preview.
- *
- * This is a DRIFT guard, not a security control — the caller is already a
- * tenant admin. Its job is the same as `/api/admin/updates/apply`'s
- * `confirmTag`: the operator confirmed a SPECIFIC set of resources, and if the
- * resolved set has changed since (a tag added, a resource re-created, an env
- * var rewired by a deploy), the confirm is refused with a 409 rather than
- * silently pausing something they never saw.
- *
- * FNV-1a over the sorted, lower-cased ids: dependency-free, deterministic, and
- * it changes when the SET changes rather than when its order does.
- */
-export function previewToken(resourceIds: readonly string[]): string {
+/** FNV-1a over the sorted, lower-cased ids: dependency-free, deterministic,
+ *  and it changes when the SET changes rather than when its order does. */
+function idsDigest(resourceIds: readonly string[]): string {
   const sorted = [...resourceIds].map((s) => s.toLowerCase()).sort();
   let h = 0x811c9dc5;
   for (const ch of sorted.join('|')) {
@@ -1412,6 +1435,195 @@ export function previewToken(resourceIds: readonly string[]): string {
     h = Math.imul(h, 0x01000193) >>> 0;
   }
   return `${sorted.length}:${h.toString(16)}`;
+}
+
+/** What a preview token is computed FROM. See `previewToken`. */
+export interface PreviewTokenInput {
+  /** The MANIFEST-NAMED population: env-derived ids, stable across throttled
+   *  reads. `resolveDeployManifest().entries` — never a read result. */
+  manifestIds: readonly string[];
+  /** The POSITIVELY-ESTABLISHED pause set (`dryRun.wouldPause`) — meaningful
+   *  only when `readFailures` is 0, and compared only then. */
+  establishedIds: readonly string[];
+  /** How many discovery tag reads FAILED when this preview was computed. */
+  readFailures: number;
+}
+
+/**
+ * A stable, order-independent digest of a preview — a DRIFT guard, not a
+ * security control (the caller is already a tenant admin). Same job as
+ * `/api/admin/updates/apply`'s `confirmTag`: the operator confirmed a SPECIFIC
+ * set, and if that set has genuinely changed since, the confirm is refused.
+ *
+ * ── #4243 — WHY THIS IS STRUCTURED, NOT ONE HASH ───────────────────────────
+ * The first version hashed `wouldPause` — the TRANSIENTLY-READABLE set. One
+ * throttled (429) tag read silently dropped a resource into `indeterminate`,
+ * the count-embedding token changed, and the drift gate fired over an estate
+ * that had NOT changed — with a refusal asserting "the set changed", a cause
+ * the code never established (deploy-integrity R7). The live 2026-08-31 pause
+ * failure was exactly this, manufactured by the console's own read-warmer
+ * saturating the UAMI's ARM budget.
+ *
+ * So the token now carries THREE facts, each compared only against its own
+ * population (never a token built from a different one):
+ *
+ *   m — the manifest-named ids. Env-derived, immune to read failures. A
+ *       mismatch here is a POSITIVELY-observed change (a deploy rewired the
+ *       env) and refuses as real drift.
+ *   p — the positively-established pause set. Compared ONLY when BOTH sides
+ *       resolved with zero read failures; a mismatch then is a positively-
+ *       observed membership change (a tag moved) and refuses as real drift.
+ *   f — how many reads failed at preview time. Non-zero marks the preview
+ *       itself as degraded, so a later confirm of it is refused with the
+ *       honest "retry" message, never a drift claim.
+ *
+ * `evaluateDrift` is the only sanctioned comparator.
+ */
+export function previewToken(input: PreviewTokenInput): string {
+  return `v2.m${idsDigest(input.manifestIds)}.p${idsDigest(input.establishedIds)}.f${input.readFailures}`;
+}
+
+export interface ParsedPreviewToken {
+  manifestDigest: string;
+  manifestCount: number;
+  establishedDigest: string;
+  establishedCount: number;
+  readFailures: number;
+}
+
+/** Parse a v2 preview token. `null` for anything else — including the legacy
+ *  single-hash format, which a caller must treat as stale, never as drift. */
+export function parsePreviewToken(token: string | undefined | null): ParsedPreviewToken | null {
+  const m = /^v2\.m(\d+):([0-9a-f]+)\.p(\d+):([0-9a-f]+)\.f(\d+)$/.exec((token ?? '').trim());
+  if (!m) return null;
+  return {
+    manifestCount: Number(m[1]),
+    manifestDigest: `${m[1]}:${m[2]}`,
+    establishedCount: Number(m[3]),
+    establishedDigest: `${m[3]}:${m[4]}`,
+    readFailures: Number(m[5]),
+  };
+}
+
+/** One discovery read that failed, with the throttle classification exposed. */
+export interface DiscoveryReadFailure {
+  resourceId: string;
+  name: string;
+  error: string;
+  /** True when the failure is 429-shaped (ArmThrottledError / "429" text). */
+  throttled: boolean;
+}
+
+/** The rows of `discovered` whose tag read FAILED, throttle-classified. */
+export function discoveryReadFailures(
+  discovered: readonly DiscoveredResource[],
+): DiscoveryReadFailure[] {
+  return discovered
+    .filter((d) => d.tagsError != null)
+    .map((d) => ({
+      resourceId: d.resourceId,
+      name: d.name,
+      error: d.tagsError as string,
+      throttled: /throttled|\b429\b/i.test(d.tagsError as string),
+    }));
+}
+
+/** The three-way (plus refusal-shape) verdict of the drift gate. */
+export type DriftVerdict =
+  /** Token matches a fully-established, unchanged estate. Act. */
+  | { kind: 'proceed' }
+  /** #3989 — no token at all. The gate is not opt-in. */
+  | { kind: 'no-token' }
+  /** Unparseable / pre-v2 token. Stale, NOT evidence of drift. */
+  | { kind: 'stale-token' }
+  /** POSITIVELY observed: the env-derived manifest population changed. */
+  | { kind: 'manifest-changed'; confirmedCount: number; currentCount: number }
+  /** Discovery reads failed NOW — nothing established the estate changed. */
+  | { kind: 'reads-failed'; failures: DiscoveryReadFailure[] }
+  /** The PREVIEW was computed while reads were failing — its set may be short. */
+  | { kind: 'preview-degraded'; previewFailures: number }
+  /** POSITIVELY observed: both sides fully read, and the pause set differs. */
+  | { kind: 'set-changed'; confirmedCount: number; currentCount: number };
+
+/**
+ * THE ONLY SANCTIONED TOKEN COMPARATOR (#4243).
+ *
+ * The invariant: a "the set changed" refusal is issued ONLY on a positively-
+ * observed change — a manifest (env-derived) difference, or an established-set
+ * difference measured with zero read failures on BOTH sides. Every other
+ * non-match is reported as what it is: a missing token, a stale token, or
+ * reads that failed — with a retry remediation, because nothing established
+ * that the estate changed (deploy-integrity R7).
+ */
+export function evaluateDrift(args: {
+  confirmToken: string | undefined | null;
+  manifestIds: readonly string[];
+  establishedIds: readonly string[];
+  readFailures: DiscoveryReadFailure[];
+}): DriftVerdict {
+  if (!args.confirmToken) return { kind: 'no-token' };
+  const parsed = parsePreviewToken(args.confirmToken);
+  if (!parsed) return { kind: 'stale-token' };
+
+  // (1) The stable population. Env-derived on both sides, so this comparison
+  //     is valid even when every read failed — same population by construction.
+  const manifestNow = idsDigest(args.manifestIds);
+  if (parsed.manifestDigest !== manifestNow) {
+    return {
+      kind: 'manifest-changed',
+      confirmedCount: parsed.manifestCount,
+      currentCount: args.manifestIds.length,
+    };
+  }
+
+  // (2) Reads failed NOW -> the current membership is only partially known.
+  //     Refuse with retry; never compare a full population against a partial one.
+  if (args.readFailures.length > 0) return { kind: 'reads-failed', failures: args.readFailures };
+
+  // (3) The PREVIEW was partial -> the operator confirmed a possibly-short set.
+  //     Also not drift: nothing says the estate changed, only that the preview
+  //     must be retaken now that reads succeed.
+  if (parsed.readFailures > 0) return { kind: 'preview-degraded', previewFailures: parsed.readFailures };
+
+  // (4) Both sides fully established. A difference HERE is real drift.
+  const establishedNow = idsDigest(args.establishedIds);
+  if (parsed.establishedDigest !== establishedNow) {
+    return {
+      kind: 'set-changed',
+      confirmedCount: parsed.establishedCount,
+      currentCount: args.establishedIds.length,
+    };
+  }
+  return { kind: 'proceed' };
+}
+
+/**
+ * #4243 — the DISCOVERY tag reader: same read contract as the actuator's
+ * `readTags` (ARM omitting `tags` is a successful "no tags" -> `{}`; only a
+ * throw is a failed read), but routed through `armGetWithRetry`, so a
+ * transient 429 is retried honoring `Retry-After` and only a SUSTAINED
+ * throttle surfaces — as an `ArmThrottledError` whose message says
+ * "throttled", which `discoveryReadFailures` classifies distinctly from a
+ * generic unreachable read.
+ *
+ * Deliberately NOT wired into `createArmActuator` (`./pause-actuator`): the
+ * act-time re-verify must stay single-shot fail-safe — on any doubt it skips
+ * the mutation, which is cheaper and safer than retrying at the moment of
+ * acting. Discovery is the read whose transient failure was manufacturing
+ * drift refusals, so discovery is where the retry goes.
+ */
+export function createManifestTagReader(): (
+  resourceId: string,
+) => Promise<Readonly<Record<string, string>> | null> {
+  return async (resourceId: string) => {
+    const { armGetWithRetry } = await import('@/lib/azure/arm-client');
+    const type = armTypeFromId(resourceId);
+    const version = pausableTypeSpec(type)?.armApiVersion ?? '2021-04-01';
+    const body = await armGetWithRetry<{ tags?: Record<string, string> }>(
+      `${resourceId}?api-version=${version}`,
+    );
+    return body?.tags ?? {};
+  };
 }
 
 /**

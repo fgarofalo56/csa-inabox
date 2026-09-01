@@ -52,6 +52,12 @@ const createArmActuator = vi.fn();
 const loadPauseSnapshot = vi.fn(async () => null as unknown);
 const savePauseSnapshot = vi.fn(async (_snap?: unknown) => {});
 const resolveDeployManifest = vi.fn();
+// #4243 — the DISCOVERY tag reader is a second network edge (it goes through
+// arm-client's 429-retrying armGetWithRetry, which these tests must not reach).
+// The default shim in beforeEach delegates to the current fake actuator's
+// readTags, so every existing per-id tag fixture keeps steering discovery AND
+// the act-time re-verify through one mock, in the same call order as live.
+const createManifestTagReader = vi.fn();
 vi.mock('@/lib/estate/pause-orchestrator', async (importOriginal) => {
   const real = await importOriginal<typeof import('@/lib/estate/pause-orchestrator')>();
   return {
@@ -60,6 +66,7 @@ vi.mock('@/lib/estate/pause-orchestrator', async (importOriginal) => {
     loadPauseSnapshot: (...a: unknown[]) => loadPauseSnapshot(...(a as [])),
     savePauseSnapshot: (...a: unknown[]) => savePauseSnapshot(...(a as [])),
     resolveDeployManifest: (...a: unknown[]) => resolveDeployManifest(...a),
+    createManifestTagReader: (...a: unknown[]) => createManifestTagReader(...a),
   };
 });
 
@@ -180,6 +187,23 @@ const post = (body: unknown = {}) =>
   ({ json: async () => body, nextUrl: new URL('http://x/api/admin/estate/pause') }) as never;
 const get = () => ({ nextUrl: new URL('http://x/api/admin/estate/state') }) as never;
 
+/**
+ * #4243 — a v2 preview token for THIS suite's fixtures. Defaults describe the
+ * standard two-resource estate with every read succeeding: manifest = what the
+ * deploy names, established = what positively resolved, f = read failures at
+ * preview time. Override per case to mint drifted / degraded tokens.
+ */
+const tok = (over: {
+  manifestIds?: string[];
+  establishedIds?: string[];
+  readFailures?: number;
+} = {}) =>
+  previewToken({
+    manifestIds: over.manifestIds ?? [POOL_ID, ADX_ID],
+    establishedIds: over.establishedIds ?? over.manifestIds ?? [POOL_ID, ADX_ID],
+    readFailures: over.readFailures ?? 0,
+  });
+
 function pausedSnapshotFixture(over?: Partial<EstatePauseSnapshot>): EstatePauseSnapshot {
   return {
     id: 'snap-1',
@@ -215,6 +239,13 @@ beforeEach(() => {
   loadPauseSnapshot.mockResolvedValue(null);
   resolveDeployManifest.mockReturnValue(manifestFixture());
   createArmActuator.mockResolvedValue(fakeActuator().actuator);
+  // Discovery reads delegate to the CURRENT fake actuator's readTags (set per
+  // test via createArmActuator.mockResolvedValue), preserving the single-mock
+  // call ordering the scope cases below count on.
+  createManifestTagReader.mockImplementation(() => async (id: string) => {
+    const actuator = (await createArmActuator()) as { readTags: (id: string) => Promise<Readonly<Record<string, string>> | null> };
+    return actuator.readTags(id);
+  });
 });
 
 // ===========================================================================
@@ -282,7 +313,7 @@ describe('GET /api/admin/estate/state', () => {
     expect(j.state).toBe('RUNNING');
     expect(j.preview.wouldPause).toHaveLength(2);
     expect(j.population.pausable).toBe(2);
-    expect(j.confirmToken).toBe(previewToken([POOL_ID, ADX_ID]));
+    expect(j.confirmToken).toBe(tok());
     // The envelope SPREADS its fields — it does not nest them under `data`.
     expect(j.data).toBeUndefined();
   });
@@ -448,6 +479,11 @@ describe('POST /api/admin/estate/pause', () => {
     // The thing that actually matters: nothing was touched, nothing was recorded.
     expect(fake.touched).toEqual([]);
     expect(savePauseSnapshot).not.toHaveBeenCalled();
+    // #4243 — this refusal used to leave ZERO trace, which is why the live
+    // incident took an elimination proof to identify. It now writes the same
+    // Cosmos audit row every other refusal branch does.
+    expect(auditCreate.mock.calls.map((c) => (c[0] as { kind: string }).kind))
+      .toContain('estate-pause.refused-no-token');
   });
 
   it('409s when the resolved set DRIFTED from the preview the operator confirmed', async () => {
@@ -455,13 +491,173 @@ describe('POST /api/admin/estate/pause', () => {
     createArmActuator.mockResolvedValue(fake.actuator);
     const { POST } = await import('../pause/route');
     const res = await POST(
-      post({ confirm: ESTATE, confirmToken: previewToken(['/some/other/resource']) }),
+      post({ confirm: ESTATE, confirmToken: tok({ establishedIds: [POOL_ID] }) }),
       { params: Promise.resolve({}) } as never,
     );
     expect(res.status).toBe(409);
     const j = await res.json();
     expect(j.error).toMatch(/changed between the preview you confirmed and now/);
     expect(fake.touched).toEqual([]);
+    // #4243 — the drift refusal is audited too (it never was, and that
+    // zero-trace property is what made the live 409 undiagnosable from logs).
+    expect(auditCreate.mock.calls.map((c) => (c[0] as { kind: string }).kind))
+      .toContain('estate-pause.refused-set-changed');
+  });
+
+  /**
+   * ── #4243 — THE MANUFACTURED-DRIFT FAMILY ─────────────────────────────────
+   * The live 2026-08-31 Pause failure: the console's own read-warmer saturated
+   * the UAMI's ARM read budget, one 429'd tag read silently shrank the preview
+   * population, the count-embedding token changed, and the drift gate 409'd
+   * over an estate that had NOT changed — asserting "the set changed", which
+   * the code never established (deploy-integrity R7). These cases pin the
+   * three-way split: read-failed refuses with RETRY, real drift still refuses
+   * as drift, unchanged proceeds.
+   */
+  describe('#4243 — throttled reads must not manufacture drift', () => {
+    it('THE LIVE SHAPE: a 429-throwing tag read between GET and POST over an UNCHANGED estate '
+      + 'refuses with the throttle message, NEVER the drift message', async () => {
+      // The preview was clean (both resources established, zero failures)…
+      const cleanPreviewToken = tok();
+      // …and at POST time the ADX tag read throws 429-shaped, exactly what
+      // arm-client's ArmThrottledError surfaces after bounded retry exhaustion.
+      const fake = fakeActuator();
+      fake.actuator.readTags = vi.fn(async (id: string) => {
+        if (id === ADX_ID) {
+          throw new Error(
+            `ARM GET ${ADX_ID}?api-version=2023-08-15 was throttled (429) and stayed throttled after 3 attempt(s).`,
+          );
+        }
+        return { 'loom-estate-id': ESTATE };
+      }) as never;
+      createArmActuator.mockResolvedValue(fake.actuator);
+      const { POST } = await import('../pause/route');
+      const res = await POST(
+        post({ confirm: ESTATE, confirmToken: cleanPreviewToken }),
+        { params: Promise.resolve({}) } as never,
+      );
+      expect(res.status).toBe(409);
+      const j = await res.json();
+      // The honest message — and NOT the R7 lie the live estate produced.
+      expect(j.error).toMatch(/1 tag read\(s\) failed \(throttled\/unreachable\)/);
+      expect(j.error).toMatch(/nothing established the estate changed; retry/i);
+      expect(j.error).not.toMatch(/changed between the preview you confirmed and now/);
+      // The row says THROTTLED, not generic indeterminate.
+      expect(j.readFailures).toEqual([
+        expect.objectContaining({ resourceId: ADX_ID, throttled: true }),
+      ]);
+      expect(fake.touched).toEqual([]);
+      expect(savePauseSnapshot).not.toHaveBeenCalled();
+      expect(auditCreate.mock.calls.map((c) => (c[0] as { kind: string }).kind))
+        .toContain('estate-pause.refused-reads-failed');
+    });
+
+    it('a DEGRADED preview (minted while reads were failing) is refused honestly, not as drift', async () => {
+      // The GET side of the same incident: the preview itself was computed
+      // while a read was failing, so its token carries f=1. Confirming it
+      // against a now-clean estate must NOT pause (the operator saw a short
+      // set) and must NOT claim the set changed (nothing established that).
+      const degraded = tok({ establishedIds: [POOL_ID], readFailures: 1 });
+      const fake = fakeActuator();
+      createArmActuator.mockResolvedValue(fake.actuator);
+      const { POST } = await import('../pause/route');
+      const res = await POST(
+        post({ confirm: ESTATE, confirmToken: degraded }),
+        { params: Promise.resolve({}) } as never,
+      );
+      expect(res.status).toBe(409);
+      const j = await res.json();
+      expect(j.error).toMatch(/while 1 tag read\(s\) were failing/);
+      expect(j.error).toMatch(/Nothing established that the estate changed/i);
+      expect(j.error).not.toMatch(/changed between the preview you confirmed and now/);
+      expect(fake.touched).toEqual([]);
+      expect(auditCreate.mock.calls.map((c) => (c[0] as { kind: string }).kind))
+        .toContain('estate-pause.refused-preview-degraded');
+    });
+
+    it('REAL drift — the mock set actually changes between preview and POST — still refuses as drift', async () => {
+      // Preview taken while ADX belonged to estate-b (established = pool only,
+      // all reads clean)…
+      const previewWhenAdxWasForeign = tok({ establishedIds: [POOL_ID] });
+      // …then ADX is re-tagged to THIS estate before the POST. Both reads
+      // succeed, both sides fully established, and the sets genuinely differ:
+      // that IS drift, and the drift message is now true when it fires.
+      const fake = fakeActuator();
+      createArmActuator.mockResolvedValue(fake.actuator);
+      const { POST } = await import('../pause/route');
+      const res = await POST(
+        post({ confirm: ESTATE, confirmToken: previewWhenAdxWasForeign }),
+        { params: Promise.resolve({}) } as never,
+      );
+      expect(res.status).toBe(409);
+      const j = await res.json();
+      expect(j.error).toMatch(/changed between the preview you confirmed and now/);
+      expect(j.error).toMatch(/every tag read succeeding/);
+      expect(fake.touched).toEqual([]);
+      expect(savePauseSnapshot).not.toHaveBeenCalled();
+    });
+
+    it('a MANIFEST population change (env rewired by a deploy) refuses as drift — positively observed', async () => {
+      // The preview covered a deploy that named only the pool; the deploy now
+      // names pool + ADX. That comparison is env-derived on both sides — valid
+      // even under total read failure — and it is a REAL change.
+      const oldDeployToken = tok({ manifestIds: [POOL_ID] });
+      const fake = fakeActuator();
+      createArmActuator.mockResolvedValue(fake.actuator);
+      const { POST } = await import('../pause/route');
+      const res = await POST(
+        post({ confirm: ESTATE, confirmToken: oldDeployToken }),
+        { params: Promise.resolve({}) } as never,
+      );
+      expect(res.status).toBe(409);
+      const j = await res.json();
+      expect(j.error).toMatch(/deploy names changed between the preview you confirmed and now/i);
+      expect(fake.touched).toEqual([]);
+      expect(auditCreate.mock.calls.map((c) => (c[0] as { kind: string }).kind))
+        .toContain('estate-pause.refused-manifest-changed');
+    });
+
+    it('a STALE (pre-v2) token is refused as stale — never as drift', async () => {
+      const fake = fakeActuator();
+      createArmActuator.mockResolvedValue(fake.actuator);
+      const { POST } = await import('../pause/route');
+      const res = await POST(
+        // The legacy `count:hash` shape every pre-#4243 preview handed out.
+        post({ confirm: ESTATE, confirmToken: '2:abcd1234' }),
+        { params: Promise.resolve({}) } as never,
+      );
+      expect(res.status).toBe(409);
+      const j = await res.json();
+      expect(j.error).toMatch(/not one this console can read/);
+      expect(j.error).not.toMatch(/changed between the preview you confirmed and now/);
+      expect(fake.touched).toEqual([]);
+      expect(auditCreate.mock.calls.map((c) => (c[0] as { kind: string }).kind))
+        .toContain('estate-pause.refused-stale-token');
+    });
+
+    it('dryRun during a throttle reports the failure per row AND keeps indeterminate distinct', async () => {
+      const fake = fakeActuator();
+      fake.actuator.readTags = vi.fn(async (id: string) => {
+        if (id === ADX_ID) throw new Error('ARM GET x was throttled (429) and stayed throttled after 3 attempt(s).');
+        return { 'loom-estate-id': ESTATE };
+      }) as never;
+      createArmActuator.mockResolvedValue(fake.actuator);
+      const { POST } = await import('../pause/route');
+      const j = await (await POST(post({ dryRun: true }), { params: Promise.resolve({}) } as never)).json();
+      expect(j.dryRun).toBe(true);
+      expect(j.readFailures).toEqual([
+        expect.objectContaining({ resourceId: ADX_ID, throttled: true }),
+      ]);
+      // Indeterminate stays its OWN population class, not folded into
+      // "no Loom tag": one is an error worth surfacing, the other is the
+      // ordinary correct answer for unrelated resources.
+      expect(j.population.indeterminate).toBe(1);
+      expect(j.population.notLoomOwned).toBe(0);
+      // And the token it mints CARRIES the degradation, so confirming it later
+      // hits the preview-degraded refusal rather than pausing a short set.
+      expect(j.confirmToken).toMatch(/\.f1$/);
+      expect(fake.touched).toEqual([]);
+    });
   });
 
   it('dispatches the pause and returns 202 PAUSING — never PAUSED', async () => {
@@ -469,7 +665,7 @@ describe('POST /api/admin/estate/pause', () => {
     createArmActuator.mockResolvedValue(fake.actuator);
     const { POST } = await import('../pause/route');
     const res = await POST(
-      post({ confirm: ESTATE, confirmToken: previewToken([POOL_ID, ADX_ID]) }),
+      post({ confirm: ESTATE, confirmToken: tok() }),
       { params: Promise.resolve({}) } as never,
     );
     expect(res.status).toBe(202);
@@ -479,6 +675,59 @@ describe('POST /api/admin/estate/pause', () => {
     expect(fake.touched.sort()).toEqual([POOL_ID, ADX_ID].sort());
     expect(savePauseSnapshot).toHaveBeenCalledTimes(1);
     expect(j.monitorUrl).toBe('/api/admin/estate/state');
+  });
+
+  it('#4243 ZERO-DISPATCH: when ARM rejects EVERY dispatch, no PAUSING snapshot is saved and the '
+    + 'response is a failure, not a 202', async () => {
+    // Pre-#4243 (`pause/route.ts:292-337`) this shape SAVED a PAUSING snapshot
+    // with zero accepted dispatches and returned 202 "Pause dispatched to 0
+    // resource(s)" — a stuck-PAUSING estate that polls to 0-of-N forever and
+    // refuses a retry with "already PAUSING". The pinned honest behaviour:
+    // nothing was set in motion, so nothing is recorded and the caller is told
+    // the truth. Delete the guard and this case goes 202-with-snapshot again.
+    const fake = fakeActuator({ pauseOk: false, pauseError: 'ARM 500 InternalServerError' });
+    createArmActuator.mockResolvedValue(fake.actuator);
+    const { POST } = await import('../pause/route');
+    const res = await POST(
+      post({ confirm: ESTATE, confirmToken: tok() }),
+      { params: Promise.resolve({}) } as never,
+    );
+    expect(res.status).toBe(502);
+    const j = await res.json();
+    expect(j.ok).toBe(false);
+    expect(j.error).toMatch(/Nothing is pausing/);
+    expect(j.error).toMatch(/still RUNNING/);
+    expect(j.error).not.toMatch(/Pause dispatched/);
+    // BOTH mutations were attempted and rejected — visible per resource…
+    expect(j.actions).toHaveLength(2);
+    expect(j.actions.every((a: { status: string }) => a.status === 'failed')).toBe(true);
+    // …and NO snapshot was persisted, so the estate cannot get stuck PAUSING.
+    expect(savePauseSnapshot).not.toHaveBeenCalled();
+    // The failure is audited in Cosmos AND on the SIEM stream.
+    expect(auditCreate.mock.calls.map((c) => (c[0] as { kind: string }).kind))
+      .toContain('estate-pause.all-dispatches-rejected');
+    expect(emitAuditEvent).toHaveBeenCalledWith(
+      expect.objectContaining({ action: 'platform.estate-pause', outcome: 'failure' }),
+    );
+  });
+
+  it('#4243 ZERO-DISPATCH boundary: an estate that is ALREADY fully paused still records its '
+    + 'snapshot (that snapshot settles to PAUSED truthfully)', async () => {
+    // dispatched=0 with zero FAILURES is not the stuck shape: every resource
+    // was already stopped, the snapshot records that, and the first poll
+    // promotes it to PAUSED from authoritative reads. The guard must key on
+    // "rejected", not on "nothing dispatched".
+    const fake = fakeActuator({ power: () => 'Paused' });
+    createArmActuator.mockResolvedValue(fake.actuator);
+    const { POST } = await import('../pause/route');
+    const res = await POST(
+      post({ confirm: ESTATE, confirmToken: tok() }),
+      { params: Promise.resolve({}) } as never,
+    );
+    expect(res.status).toBe(202);
+    const j = await res.json();
+    expect(j.actions.every((a: { status: string }) => a.status === 'already-paused')).toBe(true);
+    expect(savePauseSnapshot).toHaveBeenCalledTimes(1);
   });
 
   it('SCOPE: a resource re-tagged BETWEEN discovery and the mutation is NOT paused', async () => {
@@ -499,7 +748,7 @@ describe('POST /api/admin/estate/pause', () => {
     // Both resources are ours at PLAN time (the tag flips only on the re-verify),
     // so the preview token covers both. #3989 made `confirmToken` REQUIRED.
     const res = await POST(
-      post({ confirm: ESTATE, confirmToken: previewToken([POOL_ID, ADX_ID]) }),
+      post({ confirm: ESTATE, confirmToken: tok() }),
       { params: Promise.resolve({}) } as never,
     );
     const j = await res.json();
@@ -524,7 +773,7 @@ describe('POST /api/admin/estate/pause', () => {
     // #3989 token — covers the pool alone.
     const j = await (
       await POST(
-        post({ confirm: ESTATE, confirmToken: previewToken([POOL_ID]) }),
+        post({ confirm: ESTATE, confirmToken: tok({ establishedIds: [POOL_ID] }) }),
         { params: Promise.resolve({}) } as never,
       )
     ).json();
@@ -547,7 +796,7 @@ describe('POST /api/admin/estate/pause', () => {
     const { POST } = await import('../pause/route');
     const j = await (
       await POST(
-        post({ confirm: ESTATE, confirmToken: previewToken([POOL_ID, ADX_ID]) }),
+        post({ confirm: ESTATE, confirmToken: tok() }),
         { params: Promise.resolve({}) } as never,
       )
     ).json();
@@ -570,7 +819,7 @@ describe('POST /api/admin/estate/pause', () => {
     const { POST } = await import('../pause/route');
     const j = await (
       await POST(
-        post({ confirm: ESTATE, confirmToken: previewToken([POOL_ID]) }),
+        post({ confirm: ESTATE, confirmToken: tok({ establishedIds: [POOL_ID] }) }),
         { params: Promise.resolve({}) } as never,
       )
     ).json();
@@ -580,7 +829,12 @@ describe('POST /api/admin/estate/pause', () => {
     expect(saved.resources.map((r) => r.resourceId)).toEqual([POOL_ID]);
   });
 
-  it('SCOPE: an UNREADABLE tag set leaves the resource RUNNING (never act on uncertainty)', async () => {
+  it('SCOPE: an UNREADABLE tag set REFUSES the pause — never act on uncertainty (#4243)', async () => {
+    // Pre-#4243 this case paused the readable resource and left the unreadable
+    // one running. #4243 strengthened it: a failed discovery read means the
+    // membership of the CURRENT estate is only partially known, so the route
+    // refuses the whole pause with a retry remediation instead of acting on
+    // the half it could read — and instead of calling the difference "drift".
     const fake = fakeActuator();
     fake.actuator.readTags = vi.fn(async (id: string) => {
       if (id === ADX_ID) throw new Error('ARM 403 Forbidden on the tag read');
@@ -588,17 +842,20 @@ describe('POST /api/admin/estate/pause', () => {
     }) as never;
     createArmActuator.mockResolvedValue(fake.actuator);
     const { POST } = await import('../pause/route');
-    const j = await (
-      await POST(
-        post({ confirm: ESTATE, confirmToken: previewToken([POOL_ID]) }),
-        { params: Promise.resolve({}) } as never,
-      )
-    ).json();
-    expect(fake.touched).toEqual([POOL_ID]);
-    expect(j.population.indeterminate).toBe(1);
-    // Indeterminate is reported as its OWN class, not folded into "no Loom tag":
-    // one is an error worth surfacing, the other is the ordinary correct answer.
-    expect(j.population.notLoomOwned).toBe(0);
+    const res = await POST(
+      post({ confirm: ESTATE, confirmToken: tok({ establishedIds: [POOL_ID] }) }),
+      { params: Promise.resolve({}) } as never,
+    );
+    expect(res.status).toBe(409);
+    const j = await res.json();
+    expect(j.error).toMatch(/tag read\(s\) failed \(throttled\/unreachable\)/);
+    expect(j.error).toMatch(/nothing established the estate changed; retry/i);
+    // A 403 is unreachable, not throttled — the classification is per row.
+    expect(j.readFailures).toEqual([
+      expect.objectContaining({ resourceId: ADX_ID, throttled: false }),
+    ]);
+    expect(fake.touched).toEqual([]);
+    expect(savePauseSnapshot).not.toHaveBeenCalled();
   });
 
   it('NOT ARMED: refuses with 409 and names the env var, before the typed confirmation', async () => {
@@ -627,7 +884,7 @@ describe('POST /api/admin/estate/pause', () => {
     createArmActuator.mockResolvedValue(fake.actuator);
     const { POST } = await import('../pause/route');
     const res = await POST(
-      post({ confirm: ESTATE, confirmToken: previewToken([POOL_ID, ADX_ID]) }),
+      post({ confirm: ESTATE, confirmToken: tok() }),
       { params: Promise.resolve({}) } as never,
     );
     expect(res.status).toBe(409);
@@ -693,7 +950,7 @@ describe('POST /api/admin/estate/pause', () => {
       createArmActuator.mockResolvedValue(fake.actuator);
       const { POST } = await import('../pause/route');
       const res = await POST(
-        post({ confirm: ESTATE, confirmToken: previewToken(ids) }),
+        post({ confirm: ESTATE, confirmToken: tok({ manifestIds: ids }) }),
         { params: Promise.resolve({}) } as never,
       );
       const j = await res.json();
@@ -716,7 +973,7 @@ describe('POST /api/admin/estate/pause', () => {
     // the EMPTY set. Sending it proves this 409 is the population statement and
     // not the token gate one step earlier.
     const res = await POST(
-      post({ confirm: ESTATE, confirmToken: previewToken([]) }),
+      post({ confirm: ESTATE, confirmToken: tok({ manifestIds: [] }) }),
       { params: Promise.resolve({}) } as never,
     );
     expect(res.status).toBe(409);
@@ -735,7 +992,7 @@ describe('POST /api/admin/estate/pause', () => {
     // A matching token, so the 409 under test is the already-PAUSED refusal and
     // not #3989's token gate two steps earlier.
     const res = await POST(
-      post({ confirm: ESTATE, confirmToken: previewToken([POOL_ID, ADX_ID]) }),
+      post({ confirm: ESTATE, confirmToken: tok() }),
       { params: Promise.resolve({}) } as never,
     );
     expect(res.status).toBe(409);
@@ -748,7 +1005,7 @@ describe('POST /api/admin/estate/pause', () => {
     createArmActuator.mockResolvedValue(fakeActuator().actuator);
     const { POST } = await import('../pause/route');
     await POST(
-      post({ confirm: ESTATE, confirmToken: previewToken([POOL_ID, ADX_ID]) }),
+      post({ confirm: ESTATE, confirmToken: tok() }),
       { params: Promise.resolve({}) } as never,
     );
     const kinds = auditCreate.mock.calls.map((c) => (c[0] as { kind: string }).kind);
