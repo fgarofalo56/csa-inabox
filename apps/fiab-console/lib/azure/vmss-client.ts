@@ -61,33 +61,145 @@ export interface VmssStatus {
   nodes: { name: string; provisioningState?: string }[];
 }
 
+/** Trimmed env read — an all-whitespace value is as absent as an unset one. */
+function v(env: NodeJS.ProcessEnv, k: string): string {
+  return (env[k] || '').trim();
+}
+
 /**
- * Resolve the SHIR VMSS config from env. The bicep wires LOOM_SHIR_VMSS_NAME +
- * reuses LOOM_DLZ_RG / LOOM_SUBSCRIPTION_ID. Returns null when not configured so
- * callers can surface an honest gate (no SHIR deployed) instead of throwing.
+ * ── #4248 — COORDINATES TRAVEL TOGETHER, OR NOT AT ALL ──────────────────────
+ *
+ * Both resolvers below used to compose a VMSS **name** from one deployment with
+ * a **home** (RG + subscription) taken from another's assumptions:
+ *
+ *     purviewShirVmssConfig  name: LOOM_PURVIEW_SHIR_VMSS_NAME
+ *                              rg: LOOM_ADMIN_RG          <- assumed
+ *                             sub: LOOM_SUBSCRIPTION_ID   <- assumed, no fallback
+ *     shirVmssConfig         name: LOOM_SHIR_VMSS_NAME
+ *                             sub: LOOM_SUBSCRIPTION_ID   <- admin sub, always
+ *
+ * That is the same mismatched-coordinates family that produced the deterministic
+ * ARM 404 in the estate-pause manifest (#4243): the id resolved, ARM accepted the
+ * request, and the resource it addressed did not exist. Here the blast radius is
+ * larger than a wasted read — `scaleVmss` PATCHes `sku.capacity`, so a wrong-home
+ * id either 404s the scale verb or, if a same-named VMSS exists in the assumed
+ * RG, scales SOMEONE ELSE'S machine.
+ *
+ * PR #4247 made the deploy emit the authoritative coordinates for exactly this
+ * resource. Verified at 71c5bf2426 in
+ * `platform/fiab/bicep/modules/admin-plane/main.bicep` (grep the var names — the
+ * line numbers drift, the bindings do not):
+ *
+ *     LOOM_PURVIEW_SHIR_RG = purviewShirDeployed ? resourceGroup().name : ''
+ *     LOOM_SHIR_SUB        = purviewShirDeployed ? subscription().subscriptionId : ''
+ *
+ * — i.e. bound ONLY when the template actually deploys the Purview SHIR;
+ * otherwise both are the EMPTY STRING. That is why every chain below falls
+ * through an empty value rather than treating "set" as "set to something".
+ *
+ * The chains are the ones `lib/estate/pause-orchestrator.ts`
+ * `resolveDeployManifest()` already established (lines 1268-1276) — deliberately
+ * the same convention, not a second one:
+ *
+ *     Purview SHIR   rg  = LOOM_PURVIEW_SHIR_RG || LOOM_ADMIN_RG
+ *                    sub = LOOM_SHIR_SUB || LOOM_SUBSCRIPTION_ID
+ *     DLZ ADF SHIR   rg  = LOOM_DLZ_RG
+ *                    sub = LOOM_SHIR_SUB || LOOM_DLZ_SUBSCRIPTION_ID
+ *                          || LOOM_DLZ_SUB || LOOM_SUBSCRIPTION_ID
+ *
+ * ONE deliberate narrowing vs. the pause path: it also allows `LOOM_ADMIN_RG` as
+ * a last-resort RG for the DLZ ADF SHIR. This module does not, and the #4248 fix
+ * sketch says the same ("keeping `LOOM_DLZ_RG`"). The same bicep emits
+ * `LOOM_DLZ_RG` UNCONDITIONALLY, from a param whose default is non-empty
+ * (`rg-csa-loom-dlz-single-${location}`), so that fallback cannot fire on a
+ * Loom-deployed console — and if it ever did it would compose a DLZ VMSS name
+ * with the admin RG, which is precisely the shape this comment exists to
+ * prevent, on a MUTATING path. Returning null instead yields the caller's honest
+ * "not configured" gate, which is a safe outcome; scaling the wrong VMSS is not.
+ *
+ * KNOWN LIMITATION, inherited deliberately, NOT introduced here (#4248 audit).
+ * `LOOM_SHIR_SUB` is bound from the *Purview* SHIR's deployment context, yet it
+ * is FIRST in the *DLZ ADF* SHIR's subscription chain — in `resolveDeployManifest`
+ * and therefore here. On an estate where the Purview SHIR is deployed (so
+ * `LOOM_SHIR_SUB` = the admin sub) AND the DLZ ADF SHIR is deployed AND
+ * `LOOM_DLZ_SUBSCRIPTION_ID` names a different sub, `shirVmssConfig()` resolves
+ * the DLZ SHIR into the ADMIN sub. Diverging here would give the pause manifest
+ * and the scaling surface two different ids for one machine — a worse instance
+ * of the very family this fixes — so both paths keep the one convention and the
+ * chain is corrected in ONE place when it is. Reported on #4248, not fixed here.
  */
-export function shirVmssConfig(): VmssConfig | null {
-  const subscriptionId = process.env.LOOM_SUBSCRIPTION_ID;
-  const resourceGroup = process.env.LOOM_DLZ_RG;
-  const name = process.env.LOOM_SHIR_VMSS_NAME;
+
+/**
+ * Resolve the DLZ ADF SHIR VMSS config from the deploy-emitted env.
+ *
+ * Returns null when the estate does not name this VMSS, so callers can surface
+ * an honest gate (no SHIR deployed) instead of throwing.
+ */
+export function shirVmssConfig(env: NodeJS.ProcessEnv = process.env): VmssConfig | null {
+  const name = v(env, 'LOOM_SHIR_VMSS_NAME');
+  const resourceGroup = v(env, 'LOOM_DLZ_RG');
+  // The DLZ RG lives in the DLZ subscription on a multi-sub estate; pairing it
+  // with the admin sub is the measured `ResourceGroupNotFound` shape that
+  // lib/azure/loom-subscriptions.ts exists to prevent. LOOM_DLZ_SUB is the
+  // legacy alias some partially-migrated deploys still emit.
+  const subscriptionId = v(env, 'LOOM_SHIR_SUB')
+    || v(env, 'LOOM_DLZ_SUBSCRIPTION_ID')
+    || v(env, 'LOOM_DLZ_SUB')
+    || v(env, 'LOOM_SUBSCRIPTION_ID');
   if (!subscriptionId || !resourceGroup || !name) return null;
   return { subscriptionId, resourceGroup, name };
 }
 
 /**
- * Resolve the SHARED admin-zone Purview SHIR VMSS config from env. The bicep
- * wires LOOM_PURVIEW_SHIR_VMSS_NAME and the VMSS lives in the ADMIN RG
- * (LOOM_ADMIN_RG) — a Purview SHIR cannot share a machine with the DLZ ADF SHIR
- * (Microsoft constraint), so it is a separate VMSS in a different RG. Returns
- * null when not configured so callers surface an honest gate instead of
+ * Resolve the SHARED admin-zone Purview SHIR VMSS config from the deploy-emitted
+ * env. A Purview SHIR cannot share a machine with the DLZ ADF SHIR (Microsoft
+ * constraint — see purview-shir.bicep), so it is a SEPARATE VMSS with its own
+ * home, and it resolves with its own coordinates: LOOM_PURVIEW_SHIR_RG /
+ * LOOM_SHIR_SUB, both bound from the purview-shir module's deployment context.
+ * LOOM_DLZ_RG must never leak in here.
+ *
+ * Returns null when not configured so callers surface an honest gate instead of
  * throwing (e.g. Purview not deployed, or no Purview IR auth key supplied).
  */
-export function purviewShirVmssConfig(): VmssConfig | null {
-  const subscriptionId = process.env.LOOM_SUBSCRIPTION_ID;
-  const resourceGroup = process.env.LOOM_ADMIN_RG;
-  const name = process.env.LOOM_PURVIEW_SHIR_VMSS_NAME;
+export function purviewShirVmssConfig(env: NodeJS.ProcessEnv = process.env): VmssConfig | null {
+  const name = v(env, 'LOOM_PURVIEW_SHIR_VMSS_NAME');
+  const resourceGroup = v(env, 'LOOM_PURVIEW_SHIR_RG') || v(env, 'LOOM_ADMIN_RG');
+  const subscriptionId = v(env, 'LOOM_SHIR_SUB') || v(env, 'LOOM_SUBSCRIPTION_ID');
   if (!subscriptionId || !resourceGroup || !name) return null;
   return { subscriptionId, resourceGroup, name };
+}
+
+/**
+ * Refuse to address a VMSS whose coordinates are incomplete, and NAME what is
+ * missing (deploy-integrity R7: the message states only what was established).
+ *
+ * The resolvers above return null rather than a partial config, but callers may
+ * hand-build a `VmssConfig` (shir-autoscale, the register-purview-shir route,
+ * anything reading a stored binding). Without this, an empty coordinate composes
+ * a syntactically valid but semantically wrong ARM path — `/subscriptions//
+ * resourceGroups/rg/...` — which ARM answers with a generic error that names
+ * neither the missing value nor this deployment. Failing here converts a silent
+ * wrong-target into a specific, actionable one. Sibling of `assertActuationTarget`
+ * in lib/estate/pause-actuator.ts.
+ */
+export function assertVmssTarget(c: VmssConfig): void {
+  const missing: string[] = [];
+  if (!c?.subscriptionId?.trim()) {
+    missing.push('subscriptionId (LOOM_SHIR_SUB, or LOOM_DLZ_SUBSCRIPTION_ID / LOOM_SUBSCRIPTION_ID)');
+  }
+  if (!c?.resourceGroup?.trim()) {
+    missing.push('resourceGroup (LOOM_PURVIEW_SHIR_RG for the Purview SHIR, LOOM_DLZ_RG for the ADF SHIR)');
+  }
+  if (!c?.name?.trim()) {
+    missing.push('name (LOOM_PURVIEW_SHIR_VMSS_NAME or LOOM_SHIR_VMSS_NAME)');
+  }
+  if (missing.length === 0) return;
+  throw new VmssError(
+    `Refusing to address a SHIR VM scale set with incomplete coordinates: ${missing.join('; ')} `
+      + `${missing.length === 1 ? 'is' : 'are'} empty. Which scale set would be read or scaled was `
+      + 'NOT established, so no ARM request was sent.',
+    400,
+  );
 }
 
 async function token(): Promise<string> {
@@ -97,6 +209,7 @@ async function token(): Promise<string> {
 }
 
 function basePath(c: VmssConfig): string {
+  assertVmssTarget(c);
   return `/subscriptions/${c.subscriptionId}/resourceGroups/${c.resourceGroup}/providers/Microsoft.Compute/virtualMachineScaleSets/${encodeURIComponent(c.name)}`;
 }
 
