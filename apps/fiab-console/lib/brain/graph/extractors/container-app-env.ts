@@ -160,6 +160,23 @@ export interface ContainerAppEnvInput {
    * #4258.
    */
   readonly estateTargets?: EstateTargetIndex;
+  /**
+   * This app's OWN ingress FQDN, when it has one.
+   *
+   * Required to reject SELF-REFERENCE. {@link EstateTargetIndex} is two flat
+   * sets with no node attribution, so `namesADiscoveredTarget` can tell that a
+   * value names *something* discovered but not *which* something — and an app
+   * advertising its own address (`RW_ADVERTISE_ADDR`,
+   * `KAFKA_ADVERTISED_LISTENERS`, `TRINO_DISCOVERY_URI`) would otherwise be
+   * admitted, resolve to itself, and clear the unreachable-service detector on
+   * the strength of an edge that points nowhere. The ARM-id form of the same
+   * value is caught without this field, by comparing against `from`.
+   *
+   * Omitting it is legitimate (a unit test, a caller with no ingress in hand)
+   * and only weakens the FQDN half of the check; `graph.ts` refuses to index a
+   * `from === to` edge regardless, so the detector cannot be fooled either way.
+   */
+  readonly selfFqdn?: string;
 }
 
 /**
@@ -236,6 +253,39 @@ export function namesADiscoveredTarget(
 }
 
 /**
+ * Does this VALUE name the app it was read FROM?
+ *
+ * A self-advertised address is a real, extremely common configuration —
+ * `RW_ADVERTISE_ADDR`, `KAFKA_ADVERTISED_LISTENERS`, `TRINO_DISCOVERY_URI`,
+ * `<X>_NODE_URL` are standard for the distributed-systems images this estate
+ * runs — and it is NOT an inbound wire. Admitting it mints a `from === to` edge
+ * that resolves, lands in `inbound`, and clears `unreachable-service` with the
+ * ledger reason "a resolved `configured` edge in the live deployment points at
+ * it" — where the thing pointing at it is itself. That is the same lie as the
+ * bug this extractor exists to fix, inverted: #4258 was a false POSITIVE from a
+ * wire nobody saw; this is a false NEGATIVE from a wire that is not real.
+ *
+ * Both address forms are covered:
+ *   • ARM id — canonicalized and compared to `from`, needs nothing extra.
+ *   • FQDN   — compared to `selfFqdn`, because {@link EstateTargetIndex} is a
+ *     flat set with no node attribution and therefore cannot say WHICH app a
+ *     matched host belongs to.
+ *
+ * Normalization goes through the same {@link hostOf} the resolver uses, so a
+ * value that WOULD have resolved to this app is the same set this rejects.
+ */
+export function namesSelf(value: string, from: NodeId, selfFqdn: string | undefined): boolean {
+  const v = value.trim();
+  if (v === '') return false;
+  if (/^\/subscriptions\//i.test(v)) return azureResourceNodeId(v) === from;
+  if (selfFqdn === undefined) return false;
+  const self = hostOf(selfFqdn);
+  if (self === null) return false;
+  const host = hostOf(v);
+  return host !== null && host === self;
+}
+
+/**
  * What the extractor RANGED OVER, including everything it declined.
  *
  * Carried on `population.scope` and as aggregate skip records so a detector or a
@@ -259,6 +309,12 @@ interface EnvScanTally {
   declinedEmptyUnnamed: number;
   /** NOT admitted: value set, outside the name list, and naming nothing this pull discovered. */
   declinedValueOutsideEstate: number;
+  /**
+   * NOT admitted: the value named the app it was read FROM. A self-advertised
+   * address is not an inbound wire, and an edge for it would clear the
+   * unreachable-service detector on evidence that points nowhere.
+   */
+  selfReference: number;
   secretRef: number;
   indeterminate: number;
 }
@@ -277,6 +333,7 @@ export function extractFromContainerAppEnv(
     notAWire: 0,
     declinedEmptyUnnamed: 0,
     declinedValueOutsideEstate: 0,
+    selfReference: 0,
     secretRef: 0,
     indeterminate: 0,
   };
@@ -287,8 +344,24 @@ export function extractFromContainerAppEnv(
     const from = azureResourceNodeId(app.appResourceId);
     const bindings = app.envVarBindings ?? {};
     const nameList = [...(app.alwaysConsiderNames ?? []), ...(app.onlyNames ?? [])];
-    const always = nameList.length > 0 ? new Set(nameList) : null;
-    if (always) {
+    // SEMANTICS, decided deliberately: the name list is keyed on whether the
+    // caller SUPPLIED one, never on whether it happens to be non-empty. An
+    // explicit `onlyNames: []` therefore means "consider NOTHING by name" — an
+    // empty Set, which admits nothing — and NOT "consider everything". Keying on
+    // `nameList.length > 0` would invert it: `[]` would collapse to `null`, every
+    // entry would be admitted by default, and each URL-shaped value with no
+    // `estateTargets` would emit a DANGLING `unresolved-target` edge. Those
+    // inflate `byProvenance.configured` (dangling-inclusive, `graph.ts`
+    // `countByProvenance`), which is the exact counter the vacuity guard in
+    // `lib/brain-actions/guards.ts` reads — i.e. the inversion would make #4258
+    // item 3's failure mode EASIER to reach, from a type-legal caller input.
+    // `arg-graph-source.ts` derives its list from a caller-supplied array where
+    // empty is type-legal, so this is reachable, not theoretical.
+    const always =
+      app.alwaysConsiderNames !== undefined || app.onlyNames !== undefined
+        ? new Set(nameList)
+        : null;
+    if (always !== null) {
       appsWithNameList += 1;
       if (!app.estateTargets) appsWithNameListAndNoTargets += 1;
     }
@@ -313,6 +386,27 @@ export function extractFromContainerAppEnv(
           if (entry.value.trim() === '') tally.declinedEmptyUnnamed += 1;
           else tally.declinedValueOutsideEstate += 1;
         }
+        continue;
+      }
+
+      // ── SELF-REFERENCE ───────────────────────────────────────────────────
+      // An app advertising its OWN address (`RW_ADVERTISE_ADDR`,
+      // `KAFKA_ADVERTISED_LISTENERS`, `TRINO_DISCOVERY_URI`, `<X>_NODE_URL` —
+      // standard for the distributed-systems images this estate runs) is not an
+      // INBOUND wire. Admitting it mints a resolved `from === to` edge, which
+      // `unreachable-service` counts as "a resolved configured edge points at
+      // it" and CLEARS the app — on the strength of the app pointing at itself.
+      // That is the same lie as #4258 inverted: #4258 was a false positive from
+      // an edge we could not see; this is a false negative from an edge that is
+      // not real. Declined here, and COUNTED, so it is reported rather than
+      // silent. Checked for BOTH admission paths, since a variable that is in
+      // the name list and holds the app's own address is equally a self-edge.
+      if (
+        entry.secretRef === undefined &&
+        typeof entry.value === 'string' &&
+        namesSelf(entry.value, from, app.selfFqdn)
+      ) {
+        tally.selfReference += 1;
         continue;
       }
 
@@ -437,6 +531,19 @@ export function extractFromContainerAppEnv(
     });
   }
 
+  if (tally.selfReference > 0) {
+    skipped.push({
+      subject: `${apps.length} container app(s) — env entries naming the app they were read FROM`,
+      reason:
+        `${tally.selfReference} entr(ies) carried a value resolving to the SAME app (a self-advertised ` +
+        'address such as RW_ADVERTISE_ADDR / KAFKA_ADVERTISED_LISTENERS / TRINO_DISCOVERY_URI). ' +
+        'That is not an inbound wire, so NO edge was emitted. Had one been, it would have been a ' +
+        'resolved `from === to` edge and the unreachable-service detector would have cleared the ' +
+        'app because "a resolved configured edge points at it" — where the thing pointing at it is ' +
+        'itself. Counted here so the decline is stated rather than silent.',
+    });
+  }
+
   return {
     source: 'container-app-env',
     // No nodes: the apps themselves come from Resource Graph, which reads their
@@ -455,6 +562,7 @@ export function extractFromContainerAppEnv(
         `${tally.admittedByValue} by VALUE naming a discovered target); ` +
         `${tally.declinedValueOutsideEstate} declined — value named nothing discovered; ` +
         `${tally.declinedEmptyUnnamed} declined — EMPTY and unbound; ` +
+        `${tally.selfReference} declined — value named the app it was read FROM; ` +
         `${tally.notAWire} not a wire; ${tally.secretRef} secretRef (INDETERMINATE); ` +
         `${tally.indeterminate} with no value field; ` +
         `${appsWithNameList} app(s) scanned with an always-consider name list` +

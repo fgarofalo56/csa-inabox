@@ -48,6 +48,7 @@ import {
   type NodeId,
   type ResourceGraphRow,
 } from '../../graph';
+import { unreachableService } from '../../detectors';
 import { buildLiveGraph } from '@/app/api/admin/brain/_lib/live-graph';
 import { BOUND_ENV_VAR_NAMES } from '@/app/api/admin/brain/_lib/wire-bindings';
 import { appId, containerAppRow, managedEnvRow, SUB_A } from '../ui/estate-fixture';
@@ -316,6 +317,37 @@ describe('nothing the name path used to produce is lost', () => {
     expect(r.edges).toHaveLength(1);
     expect(r.edges[0]!.emptyValue).toBe(true);
   });
+
+  it('an EXPLICIT `onlyNames: []` considers NOTHING by name — the field is keyed on SUPPLIED, not on non-empty', () => {
+    // SEMANTICS, decided deliberately: `[]` means "consider nothing by name",
+    // NOT "consider everything". Keying admission on `nameList.length > 0` would
+    // invert it — `[]` collapses to `null`, `byName` becomes true for every
+    // entry, and each URL-shaped value with no `estateTargets` emits a DANGLING
+    // `unresolved-target` edge. Those inflate `byProvenance.configured` (which
+    // is dangling-inclusive), the exact counter the vacuity guard in
+    // `lib/brain-actions/guards.ts` reads. `arg-graph-source.ts` derives its
+    // list from a caller-supplied array where empty is type-legal, so an
+    // inverted `[]` is reachable from a type-correct caller, not theoretical.
+    const explicitlyEmpty = extractFromContainerAppEnv([
+      {
+        appResourceId: CONSOLE_ARM,
+        onlyNames: [],
+        env: [{ name: 'SOME_URL', value: 'https://not-in-this-pull.example.com' }],
+      },
+    ]);
+    expect(explicitlyEmpty.edges).toHaveLength(0);
+
+    // ...and this DISCRIMINATES: omitting the field entirely is a different
+    // input, and still admits by default. If both cases returned 0 the
+    // assertion above would be passing on an unrelated property.
+    const omitted = extractFromContainerAppEnv([
+      {
+        appResourceId: CONSOLE_ARM,
+        env: [{ name: 'SOME_URL', value: 'https://not-in-this-pull.example.com' }],
+      },
+    ]);
+    expect(omitted.edges).toHaveLength(1);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -484,5 +516,89 @@ describe('buildLiveGraph reports the population shortfall rather than implying c
   it('the shortfall statement is ABSENT when there is no shortfall — it discriminates', () => {
     const live = buildLiveGraph(risingwaveEstate());
     expect(live.coverage.configured.note).not.toMatch(/RECALL BOUND/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The inverse lie: an edge that is not real
+// ---------------------------------------------------------------------------
+
+/**
+ * #4258 was a FALSE POSITIVE from an edge the extractor could not see. Widening
+ * admission by VALUE opens the mirror-image failure: an always-on internal app
+ * carrying its OWN ingress FQDN in an env var — `RW_ADVERTISE_ADDR`,
+ * `KAFKA_ADVERTISED_LISTENERS`, `TRINO_DISCOVERY_URI`, `<X>_NODE_URL`, standard
+ * for the distributed-systems images this estate runs — now names something the
+ * pull discovered, is admitted, and resolves to ITSELF. `unreachable-service`
+ * asks only `inbound(graph, id, 'configured').length === 0`, so that one
+ * `from === to` edge would CLEAR the app on the strength of the app pointing at
+ * itself: a FALSE NEGATIVE from an edge that is not real.
+ *
+ * The fixture deliberately OMITS `selfFqdn`, which disables the extractor's own
+ * self-reference decline. What is under test here is the graph-level guard —
+ * `BrainGraph` refuses to index a resolved `from === to` edge into `inbound` —
+ * which keys on the SHAPE rather than on one extractor's spelling, so every
+ * other extractor and every caller that omits `selfFqdn` inherits it.
+ */
+describe('a node pointing at ITSELF is not inbound reachability', () => {
+  const SELF_VAR = 'RW_ADVERTISE_ADDR';
+  const DIRECTLAKE_FQDN = 'loom-directlake.internal.example.azurecontainerapps.io';
+
+  function selfAdvertisingGraph() {
+    const resources = extractFromResourceGraph([
+      managedEnvRow(SUB_A, 'loom-cae'),
+      containerAppRow({ name: 'loom-console', minReplicas: 2, external: true }),
+      containerAppRow({ name: 'loom-risingwave', minReplicas: 1, fqdn: RISINGWAVE_FQDN }),
+      containerAppRow({ name: 'loom-directlake', minReplicas: 1 }),
+    ]);
+    const env = extractFromContainerAppEnv([
+      {
+        // THE SUBJECT: always-on, internal, wired by nothing, and advertising
+        // its own address. `selfFqdn` is omitted on purpose (see above).
+        appResourceId: RISINGWAVE_ARM,
+        alwaysConsiderNames: ['A_NAME_THAT_IS_NOT_PRESENT'],
+        estateTargets: targets([RISINGWAVE_FQDN, DIRECTLAKE_FQDN]),
+        env: [{ name: SELF_VAR, value: RISINGWAVE_WIRE }],
+      },
+      {
+        // A REAL wire, so the graph holds at least one resolved `configured`
+        // edge. Without it the detector is VACUOUS and reports nothing at all —
+        // the assertions below would then pass for the wrong reason.
+        appResourceId: CONSOLE_ARM,
+        estateTargets: targets([DIRECTLAKE_FQDN]),
+        env: [{ name: 'LOOM_DIRECTLAKE_URL', value: `https://${DIRECTLAKE_FQDN}` }],
+      },
+    ]);
+    return { env, graph: buildGraph([resources, env]) };
+  }
+
+  it('the extractor DID mint the self-edge — the graph is what refuses it', () => {
+    const { env } = selfAdvertisingGraph();
+    // The premise. If this ever goes false the spec below stops testing the
+    // graph guard and starts passing because no edge existed to reject.
+    expect(env.edges.some((e) => e.from === RISINGWAVE_ID && e.targetRef === RISINGWAVE_WIRE)).toBe(true);
+  });
+
+  it('a self-advertised address does NOT clear the unreachable-always-on detector', () => {
+    const { graph } = selfAdvertisingGraph();
+
+    // It resolved to itself...
+    expect(graph.edges.some((e) => e.resolution === 'resolved' && e.from === RISINGWAVE_ID && e.to === RISINGWAVE_ID)).toBe(true);
+    // ...and the reachability index still shows ZERO inbound configured edges.
+    expect(graph.inboundEdges(RISINGWAVE_ID, 'configured').result).toHaveLength(0);
+
+    const findings = unreachableService(graph).findings;
+    expect(findings.some((f) => f.subjects.includes(RISINGWAVE_ID))).toBe(true);
+
+    // DISCRIMINATING: the app the console genuinely wires is still cleared, so
+    // the guard suppressed a self-edge rather than suppressing edges generally.
+    expect(findings.some((f) => f.subjects.includes(DIRECTLAKE_ID))).toBe(false);
+  });
+
+  it('the refusal is REPORTED, not silent', () => {
+    const { graph } = selfAdvertisingGraph();
+    expect(
+      graph.report.skipped.some((s) => /source and target are the SAME node/.test(s.subject)),
+    ).toBe(true);
   });
 });

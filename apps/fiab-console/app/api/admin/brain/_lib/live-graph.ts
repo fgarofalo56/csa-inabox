@@ -233,13 +233,21 @@ export function buildLiveGraph(
   //     objects, so an admitted value resolves rather than dangling.
   const fqdns = new Set<string>();
   const resourceIds = new Set<string>();
+  // Node id -> that node's OWN ingress FQDN. `EstateTargetIndex.fqdns` is a flat
+  // set with no attribution, so it can say a value names SOMETHING discovered but
+  // not WHICH something. The extractor needs the latter to reject SELF-reference,
+  // so the attribution is kept here, keyed on the same node ids the resolver uses.
+  const fqdnByNodeId = new Map<string, string>();
   let appsJudged = 0;
   let appsAddressable = 0;
   for (const n of resourceExtraction.nodes) {
     if (n.kind !== 'azure-resource') continue;
     resourceIds.add(n.id);
     const fqdn = n.ingress?.fqdn;
-    if (fqdn) fqdns.add(fqdn.trim().toLowerCase());
+    if (fqdn) {
+      fqdns.add(fqdn.trim().toLowerCase());
+      fqdnByNodeId.set(n.id, fqdn.trim().toLowerCase());
+    }
     if (n.resourceType.toLowerCase() === CONTAINER_APP_TYPE) {
       appsJudged += 1;
       if (fqdn) appsAddressable += 1;
@@ -291,6 +299,11 @@ export function buildLiveGraph(
       // supplied); every other entry is admitted on the evidence of its VALUE.
       alwaysConsiderNames: BOUND_ENV_VAR_NAMES,
       estateTargets,
+      // This app's OWN address, so a self-advertised value (RW_ADVERTISE_ADDR,
+      // KAFKA_ADVERTISED_LISTENERS, TRINO_DISCOVERY_URI) is DECLINED instead of
+      // becoming a `from === to` edge that clears the unreachable-service
+      // detector on the strength of the app pointing at itself.
+      selfFqdn: fqdnByNodeId.get(azureResourceNodeId(armId)),
     });
   }
 
