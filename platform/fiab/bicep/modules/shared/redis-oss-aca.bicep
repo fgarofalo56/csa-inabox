@@ -2,10 +2,22 @@
 // ============================================================================
 // WHY THIS MODULE EXISTS
 // ---------------------------------------------------------------------------
-// Loom needs ONE shared, cross-replica Redis substrate per estate: the PSR-5/6
-// query result cache (LOOM_RESULT_CACHE_REDIS), the PSR-3 Spark warm-lease store
-// (LOOM_SPARK_POOL_REDIS) and the HYP-9 Capacity Broker timepoint ledger
-// (LOOM_BROKER_REDIS) all speak the same `host:port` contract.
+// Loom needs ONE shared, cross-replica Redis substrate per estate. THIS MODULE
+// BACKS EXACTLY ONE CONSUMER TODAY: the PSR-5/6 query result cache
+// (LOOM_RESULT_CACHE_REDIS), which admin-plane/main.bicep binds when
+// `redisOssActive` (see main.bicep:5142 / :5153 / :6403).
+//
+// It does NOT back the PSR-3 Spark warm-lease store (LOOM_SPARK_POOL_REDIS) or
+// the HYP-9 Capacity Broker timepoint ledger (LOOM_BROKER_REDIS). Nothing binds
+// either of those to this cache — main.bicep:5112 emits LOOM_BROKER_REDIS as the
+// empty string, and LOOM_SPARK_POOL_REDIS is emitted by no bicep at all. Do not
+// read this header as a promise that pointing a broker at the endpoint below
+// will work: this module sets `requirepass`, and the broker's Go client cannot
+// authenticate to a bare `host:port` — it needs the credential IN the connection
+// string (`host:6379,password=…`, see docs/fiab/runbooks/redis-amr-cutover.md
+// §6.2 trap 3) AND a non-LRU eviction policy, because a lease/ledger key evicted
+// under memory pressure is silent data loss, not a cache miss. Wiring either
+// consumer here is a real change with those two prerequisites, not a rename.
 //
 // Commercial gets that from **Azure Managed Redis** (modules/shared/managed-redis.bicep).
 // SOVEREIGN BOUNDARIES CANNOT: Azure Managed Redis is Azure Public cloud only —
@@ -322,8 +334,34 @@ resource aofStorage 'Microsoft.Storage/storageAccounts@2024-01-01' = if (useAof)
   properties: {
     minimumTlsVersion: 'TLS1_2'
     allowBlobPublicAccess: false
+    // SMB from the Container Apps environment authenticates with the account
+    // key, so shared-key access cannot be turned off here without breaking the
+    // mount. It is the reason the AOF path is opt-in rather than the default.
     allowSharedKeyAccess: true
     supportsHttpsTrafficOnly: true
+    allowCrossTenantReplication: false
+    // #4265 — this account holds the AOF journal, i.e. CACHED QUERY RESULTS at
+    // rest, and until now it declared NO network posture at all. It now declares
+    // one explicitly, matching admin-plane/main.bicep:3245-3254 (the loom-mcp SMB
+    // account): `Allow` + AzureServices bypass, and NOT `publicNetworkAccess:
+    // 'Disabled'`.
+    //
+    // The omission is deliberate and is the strictly safer ordering, for the same
+    // reason recorded there: the platform Azure Policy assignment
+    // `StorageAccount_PublicNetwork_Modify` (effect: modify) performs the seal on
+    // the next ARM write. Writing 'Disabled' from here would make Loom the actor
+    // for a cut-over that cannot be rehearsed without a deploy.
+    //
+    // STATED HONESTLY, because it is a real residual gap: unlike the loom-mcp
+    // account, this one has NO `file` private endpoint (this module takes no
+    // subnet parameter), so if policy seals it the SMB mount loses its network
+    // path and the AOF branch fails. That is a second reason `persistence: 'aof'`
+    // is opt-in and unproven — do not enable it without adding the private
+    // endpoint first. Nothing in Loom's shipped params sets it today.
+    networkAcls: {
+      defaultAction: 'Allow'
+      bypass: 'AzureServices'
+    }
   }
 }
 

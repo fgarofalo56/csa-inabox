@@ -5139,7 +5139,15 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             // per-replica LRU, which is exactly what Commercial does TODAY (the
             // var has never been set on the live console), so this changes
             // nothing there and regresses nothing.
-            { name: 'LOOM_RESULT_CACHE_REDIS', value: redisOssActive ? 'loom-redis-oss.internal.${containerPlatformModule.outputs.caeDefaultDomain}:6379' : '' }
+            // The value is the MODULE'S OWN `endpoint` output, never a
+            // hand-composed `<host>:<port>` — redis-oss-aca.bicep publishes that
+            // output precisely so the port cannot be coupled by hand here (#4265
+            // nit 1). The three Redis backends listen on three different ports
+            // (OSS 6379, classic 6380, AMR 10000); a hard-coded 6379 beside a
+            // `targetPort:` param that could move is a SILENT degrade — the
+            // result cache would fall back to its per-replica LRU and the estate
+            // would look healthy while the shared cache was unreachable.
+            { name: 'LOOM_RESULT_CACHE_REDIS', value: redisOssActive ? redisOss.outputs.endpoint : '' }
             // '0' == TLS OFF, and this is load-bearing rather than a relaxation.
             // ACA `transport: tcp` ingress does NOT terminate TLS, so the OSS
             // cache speaks plaintext RESP on the CAE VNet hop (the same posture

@@ -298,7 +298,23 @@ describe('#2642 — SOVEREIGN FORWARD PATH: OSS Redis (Valkey) on Container Apps
     const code = readCode(OSS);
     expect(code).toMatch(/var acrLoginServer = redisConfig\.acrLoginServer/);
     expect(code).toMatch(/var image = '\$\{acrLoginServer\}\/\$\{valkeyImage\}'/);
-    expect(code).not.toMatch(/docker\.io|index\.docker\.io|ghcr\.io|quay\.io/);
+    // Belt-and-braces only — the STRUCTURAL guarantee is the two assertions
+    // above (the ref is composed from a required, defaultless coordinate, so
+    // there is no branch a public registry could be reached through). This line
+    // just catches a literal someone pastes in later.
+    //
+    // DELIBERATELY UNANCHORED, and it must stay that way. This is a `not.toMatch`
+    // SUBSTRING SEARCH over a whole multi-line file, not host validation. Anchor
+    // it (^…$) and it can never match a multi-line string, so the negative
+    // assertion would pass unconditionally — a control that cannot fail. The
+    // CodeQL `js/regex/missing-regexp-anchor` hit here is a false positive for
+    // exactly that reason.
+    //
+    // `index.docker.io` is dropped: `docker\.io` already matches it as a
+    // substring. `gcr.io`, `registry.k8s.io` and `public.ecr.aws` added — they
+    // are the public registries a Valkey/Redis image is most plausibly pasted
+    // from after Docker Hub.
+    expect(code).not.toMatch(/docker\.io|ghcr\.io|quay\.io|gcr\.io|registry\.k8s\.io|public\.ecr\.aws/);
   });
 
   it('is digest-pinned in the upstream-image mirror manifest', () => {
@@ -380,6 +396,114 @@ describe('#2642 — SOVEREIGN FORWARD PATH: OSS Redis (Valkey) on Container Apps
     expect(code).toMatch(/var maxmemoryMb = int\(redisConfig\.\?maxmemoryMb \?\? \d+\)/);
     expect(read(OSS)).toMatch(/maxmemory \$\{LOOM_REDIS_MAXMEMORY_MB\}mb/);
     expect(read(OSS)).toMatch(/maxmemory-policy \$LOOM_REDIS_MAXMEMORY_POLICY/);
+  });
+});
+
+describe("#2642 — the persistence: 'aof' BRANCH (opt-in, and unexercised by any deploy)", () => {
+  // #4265 review F7: this branch had NO fixture at all. It creates four Azure
+  // resources, mounts an SMB share into the cache container, and changes where
+  // the AOF is written — and not one line of it was pinned, while the only
+  // shipped call site (admin-plane/main.bicep) passes `persistence: 'none'`.
+  //
+  // So nothing deploys it today and nothing tested it. These assertions pin the
+  // shape so the branch cannot rot silently between now and the first estate
+  // that turns it on. They are STATIC-SHAPE assertions over the bicep, not a
+  // deploy receipt: per deploy-integrity.md R2 this branch remains UNPROVEN
+  // until an estate actually stands it up. The fixture makes it *reviewable*,
+  // not *verified*.
+
+  it('is genuinely opt-in: the default is ephemeral and no call site opts in', () => {
+    const code = readCode(OSS);
+    expect(code).toMatch(/var persistence = string\(redisConfig\.\?persistence \?\? 'none'\)/);
+    expect(code).toMatch(/var useAof = persistence == 'aof'/);
+    // The single shipped consumer passes 'none' explicitly. If this assertion
+    // ever fails it means an estate started deploying the AOF path — at which
+    // point the private-endpoint gap recorded in the module header stops being
+    // theoretical and must be closed before the change ships.
+    expect(readCode(ADMIN)).toMatch(/persistence: 'none'/);
+    expect(readCode(ADMIN)).not.toMatch(/persistence: 'aof'/);
+  });
+
+  it('gates ALL FOUR AOF resources on useAof, so the default deploys none of them', () => {
+    // Population completeness, not spot-check: an unconditional member of this
+    // quartet would create (and bill) a storage account on every ephemeral
+    // sovereign deploy, and `aofCaeStorage` would additionally fail because it
+    // calls listKeys() on an account the ephemeral path has no reason to have.
+    const code = readCode(OSS);
+    const gated = [
+      /resource aofStorage 'Microsoft\.Storage\/storageAccounts@[\d-]+' = if \(useAof\)/,
+      /resource aofFileSvc 'Microsoft\.Storage\/storageAccounts\/fileServices@[\d-]+' = if \(useAof\)/,
+      /resource aofShare 'Microsoft\.Storage\/storageAccounts\/fileServices\/shares@[\d-]+' = if \(useAof\)/,
+      /resource aofCaeStorage 'Microsoft\.App\/managedEnvironments\/storages@[\d-]+' = if \(useAof\)/,
+    ];
+    for (const re of gated) expect(code).toMatch(re);
+    // And the count is the guard against a fifth AOF resource being added
+    // later without a condition: every `resource aof*` line must carry one.
+    const aofResourceLines = code
+      .split('\n')
+      .filter((l) => /^resource aof\w+ '/.test(l));
+    expect(aofResourceLines.length).toBe(gated.length);
+    for (const l of aofResourceLines) expect(l).toMatch(/= if \(useAof\)/);
+  });
+
+  it('actually writes the AOF to the mount — the share is not mounted and ignored', () => {
+    // The hollow shape this catches: share created, volume mounted, and valkey
+    // still writing its append file to the container's own /tmp, so the deploy
+    // looks durable and loses every key on the next revision anyway.
+    const code = readCode(OSS);
+    expect(code).toMatch(/var aofMountPath = '\/data'/);
+    expect(code).toMatch(/var dataDir = useAof \? aofMountPath : '\/tmp\/loom-redis'/);
+    expect(code).toMatch(/\{ name: 'LOOM_REDIS_DIR', value: dataDir \}/);
+    // appendonly follows the same switch, both directions: 'yes' only on the
+    // AOF path, and provably 'no' on the default (an appendonly cache writing
+    // to ephemeral /tmp is the worst of both).
+    expect(code).toMatch(/\{ name: 'LOOM_REDIS_APPENDONLY', value: useAof \? 'yes' : 'no' \}/);
+    expect(read(OSS)).toMatch(/echo "appendonly \$LOOM_REDIS_APPENDONLY"/);
+    expect(read(OSS)).toMatch(/echo "dir \$LOOM_REDIS_DIR"/);
+  });
+
+  it('wires the volume end-to-end: share -> env storage link -> volume -> mount', () => {
+    // Four names have to agree across three resources and the container spec.
+    // A mismatch in any one of them is a deploy-time failure at best and a
+    // silently unmounted volume at worst, so they are pinned as a chain.
+    const code = readCode(OSS);
+    expect(code).toMatch(/var aofShareName = 'loom-redis-aof'/);
+    expect(code).toMatch(/var aofStorageLink = 'loom-redis-aof'/);
+    expect(code).toMatch(/name: aofShareName/);
+    expect(code).toMatch(/shareName: aofShareName/);
+    expect(code).toMatch(/name: aofStorageLink/);
+    expect(code).toMatch(/accountName: aofStorage\.name/);
+    expect(code).toMatch(
+      /volumeMounts: useAof \? \[\s*\{ volumeName: 'redis-aof', mountPath: aofMountPath \}\s*\] : \[\]/,
+    );
+    expect(code).toMatch(
+      /volumes: useAof \? \[\s*\{ name: 'redis-aof', storageType: 'AzureFile', storageName: aofStorageLink \}\s*\] : \[\]/,
+    );
+  });
+
+  it('declares a network posture on the account that holds cached query results', () => {
+    // #4265 review F7: this account holds the AOF journal — i.e. real query
+    // results at rest — and previously declared NO networkAcls at all.
+    const code = readCode(OSS);
+    expect(code).toMatch(/minimumTlsVersion: 'TLS1_2'/);
+    expect(code).toMatch(/allowBlobPublicAccess: false/);
+    expect(code).toMatch(/supportsHttpsTrafficOnly: true/);
+    expect(code).toMatch(/allowCrossTenantReplication: false/);
+    expect(code).toMatch(/networkAcls: \{\s*defaultAction: 'Allow'\s*bypass: 'AzureServices'\s*\}/);
+    // publicNetworkAccess is deliberately NOT written here, matching
+    // admin-plane/main.bicep's loom-mcp SMB account: the platform policy
+    // assignment performs the seal, and this module has no subnet parameter
+    // with which to add the `file` private endpoint that would survive it.
+    // That residual gap is disclosed in-source rather than papered over, and
+    // the disclosure is part of the contract — if someone deletes it, this
+    // fails.
+    expect(read(OSS)).toMatch(/NO `file` private endpoint/);
+    expect(code).not.toMatch(/publicNetworkAccess: 'Disabled'/);
+    // Shared-key access cannot be turned off: ACA's SMB mount authenticates
+    // with the account key. It is true, it is load-bearing, and it is why the
+    // AOF path is opt-in — so the reason must stay next to the property.
+    expect(code).toMatch(/allowSharedKeyAccess: true/);
+    expect(read(OSS)).toMatch(/authenticates with the account/);
   });
 });
 
@@ -497,3 +621,70 @@ describe('#2642 — CONTROL: things that must NOT change', () => {
     expect(read(HBAND)).toMatch(/Microsoft\.Cache\/redis@/);
   });
 });
+
+describe('#4265 nit 1 — the result-cache endpoint is DERIVED, never hand-composed', () => {
+  // The three Redis backends listen on three DIFFERENT ports (OSS 6379,
+  // classic 6380, Azure Managed Redis 10000). main.bicep used to pass
+  // `targetPort: 6379` into redis-oss-aca.bicep AND separately hand-compose
+  // `loom-redis-oss.internal.<domain>:6379` into LOOM_RESULT_CACHE_REDIS. Two
+  // copies of one fact: move the param and the env var still advertises the old
+  // port, the result cache silently falls back to its per-replica in-process
+  // LRU, and the estate looks healthy while the shared cache is unreachable.
+  //
+  // Measured consequence of the old form, beyond the coupling: because nothing
+  // in appDeployments REFERENCED the redisOss module, ARM emitted no dependency
+  // edge — appDeployments.dependsOn was 46 entries and did not contain
+  // redisOss. Consuming the module's own output raises it to 47 and adds the
+  // edge, so the Console can no longer be created pointing at a Valkey app that
+  // has not been deployed yet.
+
+  // Capture to end-of-LINE, not to the first `}`. A `[^}]*}` capture looks
+  // right and is hollow: the likeliest reintroduction of a hand-composed
+  // endpoint is an interpolated `'...${module.outputs.domain}:6379'`, whose
+  // FIRST `}` closes the interpolation — so the capture would stop before the
+  // port and the negative assertion below would pass unconditionally. Caught by
+  // running the positive control, which is why it is here.
+  const envLine = (src: string) =>
+    src.split('\n').find((l) => l.includes("name: 'LOOM_RESULT_CACHE_REDIS'")) ?? '';
+
+  it('binds LOOM_RESULT_CACHE_REDIS to the module output, with no literal port', () => {
+    const line = envLine(readCode(ADMIN));
+    expect(line).not.toBe(''); // the env var must still exist at all
+    expect(line).toMatch(/redisOss\.outputs\.endpoint/);
+    // Unanchored is correct here and is NOT the hollow shape: the subject is a
+    // single captured line, not a multi-line file, so a negative substring
+    // search over it genuinely can fail. The positive control below proves it.
+    expect(line).not.toMatch(/:\d{4,5}/);
+  });
+
+  it('POSITIVE CONTROL: the same assertion rejects the old hand-composed form', () => {
+    // Single-quoted on purpose — `${...}` must stay literal, not interpolate.
+    const oldForm =
+      "{ name: 'LOOM_RESULT_CACHE_REDIS', value: redisOssActive ? 'loom-redis-oss.internal.${containerPlatformModule.outputs.caeDefaultDomain}:6379' : '' }";
+    expect(envLine(oldForm)).not.toBe('');
+    expect(envLine(oldForm)).toMatch(/:\d{4,5}/); // would FAIL the test above
+    expect(envLine(oldForm)).not.toMatch(/redisOss\.outputs\.endpoint/);
+  });
+
+  it('redis-oss-aca.bicep is the single producer of the <host>:<port> contract', () => {
+    const code = readCode(OSS);
+    // The output must compose the port from the SAME var the ingress uses, so
+    // the two cannot diverge inside the module either.
+    expect(code).toMatch(
+      /output endpoint string = '\$\{app\.properties\.configuration\.ingress\.fqdn\}:\$\{targetPort\}'/,
+    );
+    expect(code).toMatch(/var targetPort = int\(redisConfig\.\?targetPort \?\? 6379\)/);
+  });
+
+  it('POPULATION: main.bicep declares the Valkey port exactly ONCE', () => {
+    // One declaration (the module param), zero re-compositions. This is the
+    // guard that actually catches a future hand-composed endpoint anywhere in
+    // the file, not just on the line the test above happens to look at.
+    const lines = readCode(ADMIN)
+      .split('\n')
+      .filter((l) => l.includes('6379'));
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toMatch(/^\s*targetPort: 6379$/);
+  });
+});
+

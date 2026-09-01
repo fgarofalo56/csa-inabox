@@ -612,10 +612,49 @@ jobs:
           # were ever skipped or errored — and an empty expansion would send
           # `loom-duckdb:` to the registry probe. The `:?` form fails CLOSED and
           # names the producer that should have run (deploy-integrity R6).
+          # VALKEY JOINED THIS LIST IN #4265 BECAUSE #2642 PUT IT ON THIS LANE.
+          # admin-plane/main.bicep:1122-1123 computes
+          #   redisOssEnabled = (loomBackends.?redisOss ?? 'enabled') != 'disabled'
+          #   redisOssActive  = redisOssEnabled && boundary != 'Commercial'
+          #                     && containerPlatform == 'containerApps' && deployAppsEnabled
+          # params/il5.bicepparam sets `deployAppsEnabled = true` and does NOT
+          # set redisOss, so it takes the opt-OUT default: redisOssActive is TRUE
+          # here. This deploy therefore PUTs a `loom-redis-oss` Container App
+          # pulling <acr>/valkey/valkey:<tag>, and an app that cannot pull fails
+          # its nested deployment and takes the surrounding live-estate-adopting
+          # deployment with it.
+          #
+          # The only thing that puts that tag in this registry is
+          # gov-provision-dataplane-images.yml (it runs
+          # scripts/ci/mirror-upstream-images.sh over the whole manifest). That
+          # workflow is NOT a dependency of this lane and, per the header of
+          # assert-acr-image-tags.sh, has never been executed. Without this line
+          # the first IL5 deploy after #2642 merges is exactly the R1 shape: the
+          # Console is bound to loom-redis-oss's endpoint by the same template
+          # that cannot pull its image.
+          #
+          # DERIVED, never hard-coded. platform/fiab/images/upstream-images.json
+          # is the single source of truth the mirror reads, and
+          # scripts/ci/check-upstream-image-mirror.mjs (MIR0 rule 1) already
+          # fails CI when a bicep-pinned ref has no matching manifest entry — so
+          # reading the manifest here cannot drift from what gets mirrored OR
+          # from what the template pulls. A literal would be a fourth place to
+          # bump.
+          set +e
+          VALKEY_REF=$(node -e 'const{readFileSync}=require("node:fs");const m=JSON.parse(readFileSync("platform/fiab/images/upstream-images.json","utf8"));const e=(m.images||[]).find(i=>i.acrRepo==="valkey/valkey");if(!e||!e.tag){console.error("upstream-images.json has no valkey/valkey entry carrying a tag");process.exit(1)}process.stdout.write(e.acrRepo+":"+e.tag)')
+          VALKEY_RC=$?
+          set -e
+          VALKEY_REF="$(printf '%s' "$VALKEY_REF" | tr -d '\r')"
+          if [ $VALKEY_RC -ne 0 ] || [ -z "$VALKEY_REF" ]; then
+            echo "::error::image-preflight: could NOT derive the Valkey image ref from platform/fiab/images/upstream-images.json (node exit $VALKEY_RC). This boundary deploys loom-redis-oss, so the gate refuses rather than silently checking two of three images — skipping the ONE image whose producer has never run is the failure this check exists to prevent."
+            exit 1
+          fi
+          echo "::notice::image-preflight: valkey ref derived from the mirror manifest = $VALKEY_REF"
           bash scripts/ci/assert-acr-image-tags.sh --acr "$ACR" --rg "$RG" --lease \
             --skip-if-registry-absent \
             "loom-duckdb:${LOOM_DUCKDB_TAG:?not exported — the 'Adopt the image tags this estate is running' step must run before this preflight (#3449)}" \
-            "loom-unity:${LOOM_UNITY_TAG:?not exported — the 'Adopt the image tags this estate is running' step must run before this preflight (#3449)}"
+            "loom-unity:${LOOM_UNITY_TAG:?not exported — the 'Adopt the image tags this estate is running' step must run before this preflight (#3449)}" \
+            "$VALKEY_REF"
 
       # svc-loom-unity-authz (round 2) — DURABILITY. IL5 already passes
       # LOOM_GOV_MSAL_CLIENT_ID, but that secret can be unset/stale while the

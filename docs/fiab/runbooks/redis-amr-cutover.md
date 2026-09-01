@@ -8,9 +8,14 @@
 **Scope:** Commercial only. Sovereign boundaries do **not** follow this runbook —
 Azure Managed Redis is Azure Public cloud only
 ([AMR planning FAQ](https://learn.microsoft.com/azure/redis/planning-faq)), so
-GCC / GCC-High / IL5 get the OSS Valkey substrate
+**GCC-High / IL5** get the OSS Valkey substrate
 (`platform/fiab/bicep/modules/shared/redis-oss-aca.bicep`), which
-`admin-plane/main.bicep` deploys and auto-binds with no operator step. See
+`admin-plane/main.bicep` deploys and auto-binds with no operator step.
+**GCC does not, yet:** `redisOssActive` also requires `deployAppsEnabled`, which
+`platform/fiab/bicep/params/gcc.bicepparam` deliberately leaves unset because GCC
+has no image-producer lane (#3078) — a GCC deploy stands up zero Container Apps,
+so no cache is deployed and `LOOM_RESULT_CACHE_REDIS` is expected to be unset
+there. GCC gains the cache with its apps lane, not by editing config. See
 [§9](#9-what-the-platform-does-automatically-and-what-needs-you).
 
 **This runbook is not the fix.** The template migrated in #2851/#2940; the *live
@@ -139,11 +144,20 @@ CACHE=redis-loom-hband-k6mvh5sm6z7do
 SUB=$(az account list --query "[].id" -o tsv | tr -d '\r' | while read -r s; do
         az group show --subscription "$s" -n "$RG" --query id -o tsv > /dev/null 2>>/tmp/rg-probe.err && echo "$s"
       done | head -1)
-RC=$?
-[ -n "$SUB" ] || { echo "STOP: $RG not found in any subscription this identity can see. Check the tenant (az login --tenant), not the resource."; }
+# NOTE: no `RC=$?` here on purpose. After a pipeline `$?` is the LAST stage's
+# status (`head`, which succeeds on empty input), so it would report success for
+# a subscription that was never found. The emptiness of $SUB is the real signal.
 
-RID="/subscriptions/$SUB/resourceGroups/$RG/providers/Microsoft.Cache/Redis/$CACHE"
+if [ -z "$SUB" ]; then
+  echo "STOP: $RG not found in any subscription this identity can see. Check the tenant (az login --tenant), not the resource. Nothing below will work — $RID would be composed from an empty subscription id and every az call would fail with a misleading 'not found'."
+else
+  RID="/subscriptions/$SUB/resourceGroups/$RG/providers/Microsoft.Cache/Redis/$CACHE"
+  echo "Resolved: SUB=$SUB"
+fi
 ```
+
+Every step below assumes `$SUB` and `$RID` are set. If the STOP above fired, do
+not continue — resolve the subscription first.
 
 **2.1 — Confirm the traffic picture still holds.**
 
@@ -152,6 +166,7 @@ MSYS_NO_PATHCONV=1 az monitor metrics list --subscription "$SUB" --resource "$RI
   --metric getcommands setcommands totalkeys allconnectedclients \
   --aggregation Total Maximum --interval P1D --offset 7d -o json > /tmp/redis-pre.json
 RC=$?
+[ "$RC" -eq 0 ] || echo "STOP: metrics query failed (rc=$RC). Do NOT read /tmp/redis-pre.json — a failed query leaves it empty or partial, and an empty file is not 'zero traffic'."
 ```
 
 - **STOP if `totalkeys` > 0 or `getcommands`/`setcommands` > 0.** Something started
@@ -167,8 +182,12 @@ RC=$?
 **2.2 — Confirm the consumer set has not grown.**
 
 ```bash
+# `containers[]` — NOT `containers[0]`. A REDIS var injected on a SIDECAR is
+# invisible to a containers[0] query, and this step's whole job is population
+# completeness: a consumer it cannot see is a consumer that breaks at cutover
+# with no warning.
 az containerapp list --subscription "$SUB" -g "$RG" \
-  --query "[?length(properties.template.containers[0].env[?contains(name,'REDIS')])>\`0\`].{name:name,env:properties.template.containers[0].env[?contains(name,'REDIS')]}" -o json
+  --query "[?length(properties.template.containers[].env[?contains(name,'REDIS')])>\`0\`].{name:name,env:properties.template.containers[].env[?contains(name,'REDIS')]}" -o json
 ```
 
 - **STOP if any app other than `loom-console` / `loom-capacity-broker` appears** —
@@ -210,11 +229,25 @@ az resource list --subscription "$SUB" --resource-type Microsoft.Cache/redisEnte
 configuration so [§5](#5-rollback) is a restore, not a reconstruction:
 
 ```bash
+# Create the directory FIRST — a `>` redirect into a missing directory fails
+# ("No such file or directory") and the shell writes nothing, so you would enter
+# the change window believing you had an anchor you do not have.
+ROLLBACK_DIR=./temp/rollback
+mkdir -p "$ROLLBACK_DIR"
+STAMP=$(date +%Y%m%d)
+
 az containerapp show --subscription "$SUB" -g "$RG" -n loom-console \
-  --query "properties.template.containers[0].env" -o json > ./rollback/console-env-$(date +%Y%m%d).json
+  --query "properties.template.containers[].env" -o json > "$ROLLBACK_DIR/console-env-$STAMP.json"
+RC=$?
+[ "$RC" -eq 0 ] || echo "STOP: console anchor capture failed (rc=$RC). Do not start the cutover without it."
+
 az containerapp show --subscription "$SUB" -g "$RG" -n loom-capacity-broker \
-  --query "{env:properties.template.containers[0].env,rev:properties.latestRevisionName}" -o json \
-  > ./rollback/broker-$(date +%Y%m%d).json
+  --query "{env:properties.template.containers[].env,rev:properties.latestRevisionName}" -o json \
+  > "$ROLLBACK_DIR/broker-$STAMP.json"
+RC=$?
+[ "$RC" -eq 0 ] || echo "STOP: broker anchor capture failed (rc=$RC). Do not start the cutover without it."
+
+ls -l "$ROLLBACK_DIR"   # both files present and non-empty before you proceed
 ```
 
 These capture *names and secret references*, never secret values — an
@@ -360,20 +393,39 @@ command performs.
 
 If the decision was **"AMR with access keys"**, the deployment must set
 `accessKeysAuthentication: 'Enabled'` on the database (the module defaults it to
-`Disabled`), and the broker's connection string must be an explicit `rediss://`
-URL — a bare `host:10000` will **not** enable TLS, because the Go client's
-auto-TLS heuristic only fires on a `:6380` suffix
-(`apps/loom-capacity-broker/internal/ledger/redis_ledger.go:124-126`):
+`Disabled`), and the broker's connection string must enable TLS **explicitly** —
+a bare `host:10000` will **not**, because the Go client's auto-TLS heuristic only
+fires on a `:6380` suffix
+(`apps/loom-capacity-broker/internal/ledger/redis_ledger.go:124-126`).
+
+**Use the `host:port,password=…,ssl=True` form — NOT a `rediss://` URL.** Both
+reach `parseConn` (`redis_ledger.go:71-127`), but only the comma form is safe for
+an AMR access key. This is [§6.2 trap 3](#62-the-four-traps-that-produce-a-green-but-broken-cutover),
+and it is the difference between a working ledger and a silent one:
 
 ```bash
 AMR_RID="/subscriptions/$SUB/resourceGroups/$RG/providers/Microsoft.Cache/redisEnterprise/$AMR"
 
-# The key never appears in a shell variable, a log, or this document: it is read
-# and written in one expression, straight into the Container App secret.
-az containerapp secret set --subscription "$SUB" -g "$RG" -n loom-capacity-broker \
-  --secrets "redis-conn=rediss://:$(MSYS_NO_PATHCONV=1 az rest --method post \
-      --url "https://management.azure.com${AMR_RID}/databases/default/listKeys?api-version=2025-07-01" \
-      --query primaryKey -o tsv | tr -d '\r')@$AMR_EP"
+# Read the key into a variable so its exit status is CHECKABLE. Inlining the
+# `az rest` inside --secrets makes a failed call yield an EMPTY password, and
+# the broker then falls back to its in-process ledger without saying so.
+KEY=$(MSYS_NO_PATHCONV=1 az rest --method post \
+  --url "https://management.azure.com${AMR_RID}/databases/default/listKeys?api-version=2025-07-01" \
+  --query primaryKey -o tsv)
+RC=$?
+KEY=$(printf '%s' "$KEY" | tr -d '\r')
+[ "$RC" -eq 0 ] && [ -n "$KEY" ] || echo "STOP: listKeys failed (rc=$RC) or returned empty. Confirm accessKeysAuthentication is Enabled on the database, then re-run. Do NOT set the secret."
+
+# Comma form, never rediss://. An AMR key is standard base64, whose alphabet
+# includes `/`, and an RFC 3986 authority ends at the first `/` — so a URL is
+# unparseable for ~48% of keys (measured), and Go's url.Parse then reports a
+# bogus "invalid port" rather than the truth. `parseConn`'s comma branch splits
+# on `,` then SplitN(p,"=",2), so both `/` and `=` padding survive intact, and
+# ssl=True sets TLS outright instead of relying on the :6380 heuristic.
+[ -n "$KEY" ] && az containerapp secret set --subscription "$SUB" -g "$RG" -n loom-capacity-broker \
+  --secrets "redis-conn=$AMR_EP,password=$KEY,ssl=True"
+unset KEY   # never echoed, never written to a file, never in this document
+
 az containerapp revision restart --subscription "$SUB" -g "$RG" -n loom-capacity-broker \
   --revision "$(az containerapp show --subscription "$SUB" -g "$RG" -n loom-capacity-broker --query properties.latestRevisionName -o tsv | tr -d '\r')"
 ```
@@ -509,7 +561,7 @@ Console half of the cutover is low risk.
 # Restore the previous revision wholesale — it still carries the old redis-conn
 # secret pointing at the classic cache, which is still running.
 az containerapp revision activate --subscription "$SUB" -g "$RG" -n loom-capacity-broker \
-  --revision "$(python -c "import json;print(json.load(open('./rollback/broker-<date>.json'))['rev'])")"
+  --revision "$(python -c "import json;print(json.load(open('./temp/rollback/broker-<date>.json'))['rev'])")"
 ```
 
 If §3.5 cleared `LOOM_BROKER_REDIS` instead, restore it from the captured env
@@ -549,10 +601,23 @@ separate change on a separate day.
 2. **Port 6380.** AMR is **10000**. Any consumer or script that appends a
    hard-coded `:6380` to the host output points at a closed port. Always publish
    the module's `redisEndpoint` output verbatim.
-3. **TLS on the broker.** The Go client only auto-enables TLS when the address
-   ends `:6380` (`redis_ledger.go:124-126`). A bare `host:10000` connects in
-   **plaintext** to a TLS-only listener and fails. It needs an explicit
-   `rediss://` scheme or `,ssl=True`.
+3. **TLS on the broker — and never a `rediss://` URL.** The Go client only
+   auto-enables TLS when the address ends `:6380` (`redis_ledger.go:124-126`),
+   so a bare `host:10000` connects in **plaintext** to a TLS-only listener and
+   fails. TLS must be set explicitly — and it must be set with the comma form
+   `host:10000,password=KEY,ssl=True`, **not** with `rediss://:KEY@host:10000`.
+   An AMR access key is standard base64, whose alphabet includes `/`, and an RFC
+   3986 authority ends at the **first** `/`. Measured with an RFC-3986 parser:
+   `ab/cd==` yields `Port could not be cast to integer value as 'ab'`, and
+   **48.4%** of keys derived from 32 random bytes contain at least one `/`
+   (n=100000). Go's `url.Parse` truncates the authority the same way — before
+   `parseAuthority` looks for the last `@` — so it reports a bogus `invalid
+   port`, and `ledger.go:67-71` turns that error into a **silent** fallback to
+   the in-process ledger. `parseConn`'s comma branch (`redis_ledger.go:95-115`)
+   splits on `,` then `SplitN(p,"=",2)`, so both `/` and `=` padding survive
+   intact. The executable step is
+   [§3.5](#35-decide-and-apply-the-capacity-brokers-ledger); keep the two in
+   step if either changes.
 4. **Access-policy granularity.** AMR accepts exactly one policy name —
    `default`, which is full data access. Classic's
    Data Owner / Contributor / Reader split does not exist. Every principal you
@@ -577,7 +642,7 @@ before the window:
 
 | Option | What it costs | What it gives up |
 |---|---|---|
-| **A. Enable access keys on the AMR database** and hand the broker a `rediss://:KEY@host:10000` secret | A shared key exists again — the thing `accessKeysAuthentication: 'Disabled'` was set to avoid. Key rotation becomes a standing obligation. | Nothing functionally. Fastest path. |
+| **A. Enable access keys on the AMR database** and hand the broker a `host:10000,password=KEY,ssl=True` secret (comma form — never `rediss://`, see [§6.2 trap 3](#62-the-four-traps-that-produce-a-green-but-broken-cutover)) | A shared key exists again — the thing `accessKeysAuthentication: 'Disabled'` was set to avoid. Key rotation becomes a standing obligation. | Nothing functionally. Fastest path. |
 | **B. Leave the broker on its in-process ledger** (clear `LOOM_BROKER_REDIS`) | Cross-replica LCU coherence, whenever the broker is scaled above 1 replica. | Nothing today — it runs 0 replicas. Costs nothing, defers the problem. |
 | **C. Teach the Go client Entra auth** (`AUTH <oid> <token>` + background token refresh, mirroring `redis-cache-client.ts:331-347`) | Engineering work + a broker image rebuild. Note `loom-capacity-broker` currently has **no CI image producer** (#3370), so this needs an image lane first. | Nothing. The correct end state. |
 
