@@ -15,8 +15,10 @@ import { collection } from '@/lib/brain/__tests__/ui/estate-fixture';
 import {
   performRegistryEntries,
   resolvePerformEntry,
+  resolvePerformEntryForSubject,
   SECURITY_DETECTOR_PREFIX,
 } from '../registry';
+import type { ScalabilityDeclaration } from '../scalability';
 
 const SECURITY_IDS = [
   'security.c1.unauthorized-inbound-edge',
@@ -96,6 +98,79 @@ describe('unknown detector kinds', () => {
     const entry = resolvePerformEntry('made-up-detector');
     expect(entry.performable).toBe(false);
     expect(entry.notPerformableReason).toContain('No executor is registered');
+  });
+});
+
+describe('#4257 — performability is per SUBJECT, not only per class', () => {
+  const pinned: ScalabilityDeclaration = {
+    appName: 'loom-risingwave',
+    module: 'loom-risingwave',
+    scalableToZero: false,
+    declared: { minReplicas: 1, maxReplicas: 1, hasScaleRules: false },
+    reason: "the deploy PINS 'loom-risingwave' to exactly 1 replica(s).",
+    declaredStatement: 'CANNOT scale to zero: a stopped replica loses every materialized view',
+  };
+  const elastic: ScalabilityDeclaration = {
+    ...pinned,
+    appName: 'loom-duckdb',
+    scalableToZero: true,
+    declared: { minReplicas: 1, maxReplicas: 3, hasScaleRules: true },
+  };
+
+  it.each(['unreachable-always-on', 'unreachable-service', 'always-on-unused'])(
+    '%s stops offering scale-to-zero for a declared non-scalable subject',
+    (detector) => {
+      // The class is performable and stays right about the class; the SUBJECT
+      // downgrades it. Before this existed, `loom-risingwave` was the
+      // highest-value performable finding on the live list.
+      expect(resolvePerformEntry(detector).performable).toBe(true);
+      const entry = resolvePerformEntryForSubject(detector, 'loom-risingwave', pinned);
+      expect(entry.performable).toBe(false);
+      expect(entry.executor).toBeUndefined();
+      expect(entry.notPerformableReason).toContain('CANNOT be scaled to zero');
+      expect(entry.notPerformableReason).toMatch(/materialized view/i);
+      // Reported, not hidden — #4257 asks for a report-only observation.
+      expect(entry.notPerformableReason).toContain('stays REPORTED');
+    },
+  );
+
+  it('THE CONTROL: an ELASTIC subject keeps its executor', () => {
+    const entry = resolvePerformEntryForSubject('unreachable-always-on', 'loom-duckdb', elastic);
+    expect(entry.performable).toBe(true);
+    expect(entry.executor).toBe('scale-to-zero');
+  });
+
+  it('a subject with no declaration keeps its executor', () => {
+    const entry = resolvePerformEntryForSubject(
+      'unreachable-always-on',
+      'loom-capacity-broker',
+      null,
+    );
+    expect(entry.performable).toBe(true);
+    expect(entry.executor).toBe('scale-to-zero');
+  });
+
+  it('the downgrade is scoped to scale-to-zero — orphan/delete is untouched', () => {
+    const entry = resolvePerformEntryForSubject('orphan', 'loom-risingwave', pinned);
+    expect(entry.performable).toBe(true);
+    expect(entry.executor).toBe('delete-resource');
+  });
+
+  it('a class that is already not performable keeps ITS reason, not this one', () => {
+    const entry = resolvePerformEntryForSubject('dangling-empty-wire', 'loom-risingwave', pinned);
+    expect(entry.performable).toBe(false);
+    expect(entry.notPerformableReason).toContain('REPOSITORY EDIT');
+  });
+
+  it('DERIVED, not injected: the default lookup refuses risingwave from the real template', () => {
+    // No declaration argument — this is the production call path, reading the
+    // committed compiled ARM. A resolver wired only to the test double would
+    // pass every spec above and protect nothing.
+    const entry = resolvePerformEntryForSubject('unreachable-always-on', 'loom-risingwave');
+    expect(entry.performable).toBe(false);
+    expect(resolvePerformEntryForSubject('unreachable-always-on', 'loom-duckdb').performable).toBe(
+      true,
+    );
   });
 });
 

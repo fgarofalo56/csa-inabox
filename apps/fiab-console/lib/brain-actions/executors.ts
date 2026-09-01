@@ -26,9 +26,39 @@ import {
   type ContainerAppInfo,
 } from '@/lib/azure/container-apps-arm-client';
 import { armDeleteResource, BRAIN_ACTIONS_ACA_API } from './arm';
+import {
+  declaredNonScalableToZero,
+  nonScalableExplanation,
+  type ScalabilityDeclaration,
+} from './scalability';
 import type { PerformReceipt, PerformSubject } from './types';
 
 const CONTAINER_APPS_TYPE = 'microsoft.app/containerapps';
+
+/**
+ * Thrown by {@link executeScaleToZero} when the subject is declared a pinned
+ * singleton by the deploy (#4257).
+ *
+ * DEFENSE IN DEPTH, and the phrasing is load-bearing: this is raised BEFORE the
+ * ARM PATCH, so nothing was written. `guardScalableToZero` should already have
+ * refused; this exists because the guard chain must not be the ONLY thing
+ * standing between a click and unrecoverable data loss. A registry entry
+ * mis-edited, a guard call dropped in a refactor, or a future caller that
+ * reaches the executor directly all end here instead of in ARM.
+ */
+export class NonScalableResourceError extends Error {
+  readonly declaration: ScalabilityDeclaration;
+  constructor(declaration: ScalabilityDeclaration) {
+    super(
+      `REFUSED BY THE EXECUTOR: ${nonScalableExplanation(declaration)} No ARM call was made — ` +
+        'this refusal happens before the PATCH, so nothing was changed in Azure. Reaching this ' +
+        'error means the guard chain did not refuse first, which is itself a defect worth ' +
+        'reporting (#4257).',
+    );
+    this.name = 'NonScalableResourceError';
+    this.declaration = declaration;
+  }
+}
 
 /**
  * Rebuild the subject's ARM resource id from the SERVER's own node fields.
@@ -71,12 +101,22 @@ export async function freshContainerAppRead(subject: PerformSubject): Promise<Co
  * `before` is the fresh ARM reading the guard chain just validated — passed in
  * rather than re-read so the receipt shows exactly the state the guards
  * approved, with no window for a second drift between guard and receipt.
+ *
+ * ── THE INDEPENDENT STATEFULNESS REFUSAL (#4257) ───────────────────────────
+ * The FIRST statement re-derives the deploy's declaration and throws on a pinned
+ * singleton. It is not a duplicate of `guardScalableToZero` in any useful sense —
+ * it is the arm that still holds when the guard is not called. For a mutation
+ * whose failure mode is "every materialized view in the streaming tier is gone,
+ * unrecoverably", one enforcement point is one too few.
  */
 export async function executeScaleToZero(
   subject: PerformSubject,
   before: ContainerAppInfo,
   finding: { readonly findingId: string; readonly detector: string },
 ): Promise<PerformReceipt> {
+  const pinned = declaredNonScalableToZero(subject.displayName);
+  if (pinned) throw new NonScalableResourceError(pinned);
+
   const after = await updateContainerAppScale(subject.displayName, { minReplicas: 0 });
   return {
     executor: 'scale-to-zero',

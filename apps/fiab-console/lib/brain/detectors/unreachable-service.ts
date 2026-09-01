@@ -37,10 +37,27 @@
  *      Loom's. Every proposal carries the ownership state, and today that state
  *      is `not-established` for everything because nothing carries
  *      `loom-estate-id`.
+ *
+ * ── ALWAYS-ON BY DESIGN IS NOT WASTE (#4257) ───────────────────────────────
+ * Some always-on floors are DECLARED by the deploy on purpose: a runtime that
+ * holds state in a single process cannot scale to zero without losing it.
+ * `loom-risingwave` is the measured case — its own bicep says a scaled-to-zero
+ * replica "loses every MV definition and its progress" — and this detector used
+ * to report it as a HIGH-severity costed saving, which is what put an
+ * unrecoverable destructive action at the top of the operator's list.
+ *
+ * So `nonScalableSubject` may be injected. A subject it names still gets a
+ * finding (hiding it would be its own dishonesty, and the always-on cost is
+ * real) but an `info`, COST-FREE, report-only one whose remediation says the
+ * floor is by design and names the module that declares it. The predicate is
+ * injected rather than read here because everything in this directory is PURE —
+ * the derivation lives in `lib/brain-actions/scalability.ts`, which explains why
+ * its source cannot drift from the bicep.
  */
 
 import {
   formatCostFigure,
+  type AzureResourceNode,
   type BrainGraphView,
   type CostFigure,
   type Detector,
@@ -74,7 +91,23 @@ const QUERY =
   "alwaysOnNodes(graph) INTERSECT nodesWithNoInboundEdge(graph, 'configured') " +
   '— over azure-resource nodes carrying measured ScaleFacts';
 
-export const unreachableService: Detector = (graph: BrainGraphView): DetectorResult => {
+/** Options this detector accepts. Every one is DATA — nothing is read from I/O. */
+export interface UnreachableServiceOptions {
+  /**
+   * Names the subjects the DEPLOY declares as pinned singletons, returning the
+   * reason verbatim (or null when the resource is not declared non-scalable, or
+   * when the declaration could not be established at all).
+   *
+   * Injected so this module stays pure. `lib/brain-actions/scalability.ts`
+   * derives it from the compiled deploy template.
+   */
+  readonly nonScalableSubject?: (node: AzureResourceNode) => string | null;
+}
+
+export function unreachableService(
+  graph: BrainGraphView,
+  options: UnreachableServiceOptions = {},
+): DetectorResult {
   const skipped: SkippedSubject[] = [];
   const azure = azureResources(graph.nodes);
 
@@ -175,6 +208,72 @@ export const unreachableService: Detector = (graph: BrainGraphView): DetectorRes
       continue;
     }
     ledger.finding(node.id);
+
+    // ── #4257 — ALWAYS-ON BY DESIGN. Reported, never proposed as a saving. ──
+    //
+    // The subject is genuinely always-on and genuinely has no inbound wire, so
+    // the finding stands. What must NOT stand is the COST recommendation: this
+    // floor is what the deploy declared, and "scale it to zero" against a
+    // runtime that holds its state in one process is unrecoverable loss dressed
+    // up as a saving. `severity: 'info'`, no `cost` figure, and a remediation
+    // that points at the module rather than at an ARM write.
+    const byDesign = options.nonScalableSubject?.(node) ?? null;
+    if (byDesign !== null) {
+      // The contract suite requires either a cost figure or a recorded `(cost)`
+      // skip for every priceable subject. This is the second: the omission is
+      // deliberate and its reason is on the record, not silent.
+      skipped.push(
+        skip(
+          `${node.id} (cost)`,
+          'finding emitted WITHOUT a cost figure ON PURPOSE: the always-on floor is DECLARED by ' +
+            `the deploy for this resource, so it is not a saving to propose. ${byDesign}`,
+        ),
+      );
+      findings.push({
+        id: findingId(UNREACHABLE_SERVICE, node.id),
+        detector: UNREACHABLE_SERVICE,
+        severity: 'info',
+        title: `${node.displayName} is always-on BY DESIGN (declared non-scalable) and nothing wires to it`,
+        summary:
+          `'${node.displayName}' runs ${node.scale!.minReplicas} replica(s) that never scale to zero and ` +
+          "the graph resolves ZERO inbound 'configured' edges for it — but its always-on floor is " +
+          'DECLARED by the deploy, so this is an observation, NOT a cost recommendation. ' +
+          byDesign,
+        subjects: [node.id],
+        evidence: evidence({
+          nodes: [node.id],
+          edges: [],
+          query: QUERY,
+          notes: [
+            `minReplicas=${node.scale!.minReplicas}, maxReplicas=${node.scale!.maxReplicas ?? 'unset'}` +
+              ` (scale read by extractor '${node.scale!.source}')`,
+            'ALWAYS-ON BY DESIGN — the deploy declares this replica floor, so removing it is a ' +
+              'template change, not an estate cleanup.',
+            byDesign,
+            'NO cost figure is attached, deliberately: an always-on floor the deploy asked for is ' +
+              'not waste, and pricing it here would rank a destructive change to a stateful ' +
+              "runtime at the top of the operator's savings list. That is exactly what #4257 " +
+              'reports having happened.',
+          ],
+        }),
+        population,
+        confidence: 'high',
+        remediation: scopedProposal(
+          `NO ACTION — '${node.displayName}' is always-on by design.`,
+          `# '${node.displayName}' is declared non-scalable by the deploy.\n` +
+            `# ${byDesign}\n` +
+            '#\n' +
+            '# Do NOT scale it to zero. If the floor is genuinely wrong, the change belongs in the\n' +
+            '# bicep module that declares it, and the next deploy would revert an out-of-band ARM\n' +
+            '# write anyway (deploy-integrity.md R2 — drift, not a fix).\n' +
+            '#\n' +
+            '# If nothing is supposed to reach this service, the question is whether it should be\n' +
+            '# DEPLOYED at all — a disable toggle in the module, not a replica count.',
+          ownership(graph, node.id),
+        ),
+      });
+      continue;
+    }
 
     const dangling = danglingFor(graph, node.id);
     const declared = inbound(graph, node.id, 'declared');
@@ -289,4 +388,13 @@ export const unreachableService: Detector = (graph: BrainGraphView): DetectorRes
     ledger,
     requiresResolved: ['configured'],
   });
-};
+}
+
+/**
+ * Build-checked: the options parameter is OPTIONAL, so this function is still a
+ * plain {@link Detector} and `ALL_DETECTORS` keeps working unchanged. Written in
+ * the source (not a test) because `tsconfig.build.json` excludes `__tests__` —
+ * the pattern `lib/brain/types.ts` established for its own literal assertions.
+ */
+const _unreachableServiceIsADetector: Detector = unreachableService;
+void _unreachableServiceIsADetector;

@@ -17,6 +17,12 @@
  * `lib/brain/run/azure/arm-probe.ts`), so the confirmation comes from ARM, the
  * authoritative plane.
  *
+ * ── THE STATEFULNESS RULE (#4257) ──────────────────────────────────────────
+ * `guardScalableToZero` refuses a subject the DEPLOY declares as a pinned
+ * singleton. It is the guard whose absence made the Brain's highest-value
+ * recommendation a one-click, unrecoverable destruction of `loom-risingwave`'s
+ * materialized views — every other guard in this file passed on it.
+ *
  * Guards return `GuardRefusal | null` (null = pass) so each one is
  * independently testable and independently deletable — and the tests in
  * `__tests__/guards.test.ts` are written so that deleting any one of them turns
@@ -31,6 +37,7 @@ import type {
 } from '@/app/api/admin/brain/_lib/wire';
 import type { ContainerAppInfo } from '@/lib/azure/container-apps-arm-client';
 import { deriveArmResourceId, isContainerAppType } from './executors';
+import { nonScalableExplanation, type ScalabilityDeclaration } from './scalability';
 import type {
   GuardRefusal,
   PerformExecutorKind,
@@ -169,15 +176,71 @@ export function guardDetectorNotVacuous(
         'nothing. Nothing was changed in Azure.',
     );
   }
-  if (finding.population.byProvenance.configured === 0) {
+  // ── #4258 item 2: COUNT ONLY RESOLVED, NON-DANGLING EDGES ────────────────
+  //
+  // This read used to be `finding.population.byProvenance.configured`, and that
+  // count INCLUDES DANGLING edges — `graph.ts`'s `countByProvenance` ranges over
+  // every edge the extractor emitted, and a dangling edge is emitted on purpose
+  // so its evidence survives (`to: null`, which is what keeps it out of
+  // reachability). So the exact state this guard exists to catch — every app
+  // looks unreachable because the only `configured` edges in the graph are
+  // broken ones — SATISFIED it. A graph of nothing but empty wires read as a
+  // graph with three configured edges and sailed through.
+  //
+  // The count is therefore re-derived from the snapshot's own edge list, over
+  // the same resolved/dangling discriminator the reachability verdict uses. It
+  // is not read from a summary that answers a different question.
+  const resolvedConfigured = snapshot.edges.filter(
+    (e) => e.provenance === 'configured' && e.resolution === 'resolved',
+  ).length;
+  if (resolvedConfigured === 0) {
+    const dangling = snapshot.edges.filter(
+      (e) => e.provenance === 'configured' && e.resolution !== 'resolved',
+    ).length;
     return refusal(
       'population-not-blind',
-      "REFUSED: the fresh graph holds ZERO 'configured' edges, so \"no inbound " +
-        'configured edge" is vacuously true of every node — the vacuous-truth case ' +
-        '`Population.byProvenance` exists to expose. Nothing was changed in Azure.',
+      "REFUSED: the fresh graph holds ZERO RESOLVED 'configured' edges" +
+        (dangling > 0
+          ? ` (${dangling} 'configured' edge(s) exist and are DANGLING — they carry no target, so ` +
+            'they confer no reachability on anything)'
+          : '') +
+        ', so "no inbound configured edge" is vacuously true of every node — the vacuous-truth ' +
+        'case `Population.byProvenance` exists to expose. Nothing was changed in Azure.',
     );
   }
   return null;
+}
+
+/**
+ * G4b — THE STATEFULNESS REFUSAL (#4257). The blocking guard.
+ *
+ * `scale-to-zero` must never reach a service the DEPLOY declares as a pinned
+ * singleton. `loom-risingwave` is the measured case: its bicep says a
+ * scaled-to-zero replica "loses every MV definition and its progress", and until
+ * this guard existed the whole chain passed — the operator's highest-value
+ * recommendation was a one-click, unrecoverable destruction of the streaming
+ * tier's materialized views, presented as a cost saving.
+ *
+ * The declaration is INJECTED rather than read here, so this stays pure and each
+ * arm is testable; `./scalability` derives it from the compiled deploy template
+ * and explains why that source cannot drift from the bicep.
+ *
+ * `delete-resource` is deliberately NOT gated by this guard: deleting a pinned
+ * singleton is destructive for its own reasons, which the orphan detector's
+ * evidence and the staged confirm already speak to. This guard makes exactly one
+ * claim — that a declared singleton must not have its replica floor removed.
+ */
+export function guardScalableToZero(
+  subject: PerformSubject,
+  executor: PerformExecutorKind,
+  declaration: ScalabilityDeclaration | null,
+): GuardRefusal | null {
+  if (executor !== 'scale-to-zero') return null;
+  if (declaration === null || declaration.scalableToZero) return null;
+  return refusal(
+    'scalable-to-zero',
+    `REFUSED: ${nonScalableExplanation(declaration)} Nothing was changed in Azure.`,
+  );
 }
 
 /**

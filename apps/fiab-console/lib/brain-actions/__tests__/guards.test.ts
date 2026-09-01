@@ -16,19 +16,23 @@ import {
   guardEvidenceFresh,
   guardFindingPresent,
   guardOwnership,
+  guardScalableToZero,
   guardSnapshotComplete,
   guardWriteScope,
   resolvePerformSubject,
 } from '../guards';
+import type { ScalabilityDeclaration } from '../scalability';
 import type { PerformSubject } from '../types';
 import {
   APP_NAME,
   brainSnapshot,
   collectionReport,
+  danglingConfiguredEdge,
   detectorRun,
   FINDING_ID,
   NODE_ID,
   population,
+  resolvedConfiguredEdge,
   RG,
   SUB,
   wireFinding,
@@ -158,17 +162,96 @@ describe('guardDetectorNotVacuous — P3 at the moment of execution', () => {
     expect(refusal!.guard).toBe('population-not-blind');
   });
 
-  it("refuses the vacuous-truth case: zero 'configured' edges in scope", () => {
-    const refusal = guardDetectorNotVacuous(
-      brainSnapshot(),
-      wireFinding({
-        population: population({
-          byProvenance: { declared: 0, configured: 0, imports: 0, observed: 0, owns: 2 },
+  it("refuses the vacuous-truth case: zero RESOLVED 'configured' edges in the graph", () => {
+    const refusal = guardDetectorNotVacuous(brainSnapshot({ edges: [] }), wireFinding());
+    expect(refusal).not.toBeNull();
+    expect(refusal!.guard).toBe('population-not-blind');
+    expect(refusal!.reason).toContain('vacuously true');
+  });
+
+  it('#4258 item 2 — DANGLING configured edges do NOT satisfy the vacuity guard', () => {
+    // THE BUG ARM. The guard used to read `population.byProvenance.configured`,
+    // and `graph.ts`'s `countByProvenance` folds DANGLING edges into that number.
+    // So the degenerate state the guard exists to catch — a graph whose only
+    // `configured` edges are broken ones, which makes EVERY app look unreachable
+    // — reported three configured edges and sailed straight through.
+    //
+    // Reverting the guard to the population read turns THIS spec red while
+    // leaving every other spec in the file green.
+    const danglingOnly = brainSnapshot({
+      edges: [danglingConfiguredEdge(), danglingConfiguredEdge({ id: 'edge:configured:2' })],
+      // The summary count still says 2, exactly as the real one would.
+      findings: [
+        wireFinding({
+          population: population({
+            byProvenance: { declared: 0, configured: 2, imports: 0, observed: 0, owns: 2 },
+          }),
         }),
-      }),
+      ],
+    });
+    const refusal = guardDetectorNotVacuous(danglingOnly, danglingOnly.findings[0]!);
+    expect(refusal).not.toBeNull();
+    expect(refusal!.reason).toContain('ZERO RESOLVED');
+    // The receipt names the dangling ones rather than hiding them (R7).
+    expect(refusal!.reason).toContain('DANGLING');
+  });
+
+  it('THE CONTROL: one RESOLVED configured edge is enough to pass', () => {
+    // One field away from the arm above — a guard that refused both would be as
+    // useless as the one that passed both.
+    expect(
+      guardDetectorNotVacuous(
+        brainSnapshot({ edges: [resolvedConfiguredEdge(), danglingConfiguredEdge()] }),
+        wireFinding(),
+      ),
+    ).toBeNull();
+  });
+});
+
+describe('guardScalableToZero — the #4257 statefulness refusal', () => {
+  function declaration(overrides: Partial<ScalabilityDeclaration> = {}): ScalabilityDeclaration {
+    return {
+      appName: 'loom-risingwave',
+      module: 'loom-risingwave',
+      scalableToZero: false,
+      declared: { minReplicas: 1, maxReplicas: 1, hasScaleRules: false },
+      reason: "the deploy PINS 'loom-risingwave' to exactly 1 replica(s).",
+      declaredStatement:
+        'CANNOT scale to zero: a stopped replica loses every materialized view and its progress',
+      ...overrides,
+    };
+  }
+
+  it('REFUSES scale-to-zero on a declared non-scalable subject', () => {
+    const refusal = guardScalableToZero(
+      subject({ displayName: 'loom-risingwave' }),
+      'scale-to-zero',
+      declaration(),
     );
     expect(refusal).not.toBeNull();
-    expect(refusal!.reason).toContain('vacuously true');
+    expect(refusal!.guard).toBe('scalable-to-zero');
+    expect(refusal!.reason).toContain('CANNOT be scaled to zero');
+    // The module's own sentence reaches the operator.
+    expect(refusal!.reason).toMatch(/materialized view/i);
+    expect(refusal!.reason).toContain('Nothing was changed in Azure');
+  });
+
+  it('THE CONTROL: an ELASTIC declaration passes — the feature still works', () => {
+    expect(
+      guardScalableToZero(
+        subject(),
+        'scale-to-zero',
+        declaration({ scalableToZero: true, appName: APP_NAME }),
+      ),
+    ).toBeNull();
+  });
+
+  it('passes when the deploy declares NOTHING about this app (null, not a licence)', () => {
+    expect(guardScalableToZero(subject(), 'scale-to-zero', null)).toBeNull();
+  });
+
+  it('makes exactly ONE claim: delete-resource is not gated by it', () => {
+    expect(guardScalableToZero(subject(), 'delete-resource', declaration())).toBeNull();
   });
 });
 
