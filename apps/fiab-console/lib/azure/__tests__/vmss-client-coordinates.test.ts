@@ -128,12 +128,15 @@ describe('#4248 purviewShirVmssConfig — the Purview SHIR resolves with ITS OWN
     // The brownfield-override shape: LOOM_PURVIEW_SHIR_VMSS_NAME names an
     // EXISTING VMSS, so purviewShirDeployed was false and the bicep bound both
     // coordinate vars to ''. The old pair is the only information available and
-    // remains the honest fallback — this case must stay green.
+    // remains the honest fallback — this case must stay green. It is MARKED,
+    // though: the name has external provenance and the RG is this template's,
+    // assumed, which scaleVmss refuses (see the mutating-path describe below).
     const cfg = purviewShirVmssConfig({ ...base, LOOM_PURVIEW_SHIR_VMSS_NAME: 'vmss-pvw' });
     expect(cfg).toEqual({
       subscriptionId: 'admin-sub',
       resourceGroup: 'rg-admin',
       name: 'vmss-pvw',
+      resourceGroupAssumed: true,
     });
   });
 
@@ -167,6 +170,7 @@ describe('#4248 purviewShirVmssConfig — the Purview SHIR resolves with ITS OWN
       subscriptionId: 'admin-sub',
       resourceGroup: 'rg-admin',
       name: 'vmss-pvw',
+      resourceGroupAssumed: true,
     });
   });
 
@@ -406,5 +410,122 @@ describe('#4248 basePath is guarded — the MUTATING verb never reaches ARM half
     await expect(scaleVmss({ subscriptionId: 's', resourceGroup: 'rg', name: 'v' }, 9))
       .rejects.toThrow(/capacity must be an integer 0-8/);
     expect(fetchWithTimeout).not.toHaveBeenCalled();
+  });
+});
+
+// ───────────────────────────────────────────────────────────────────────────
+describe('#4248 the NAME coordinate is pinned to its own deployment', () => {
+  // The RG and subscription chains are pinned hard above. The NAME was not —
+  // and the name is the coordinate this issue is about. On an estate that
+  // deploys BOTH SHIRs every name var is populated, so cross-wiring one
+  // resolver to the other's name variable yields a complete, plausible config.
+  //
+  // MUTATION TARGET (purview): read LOOM_SHIR_VMSS_NAME in purviewShirVmssConfig.
+  // MUTATION TARGET (dlz):     read LOOM_PURVIEW_SHIR_VMSS_NAME in shirVmssConfig.
+  // Either one composes the OTHER machine's name with this one's home — the
+  // exact mismatched-coordinates shape this file exists to prevent, and the one
+  // direction the original spec left unmeasured.
+  const bothDeployed = {
+    ...base,
+    LOOM_PURVIEW_SHIR_VMSS_NAME: 'vmss-pvw-shir',
+    LOOM_PURVIEW_SHIR_RG: 'rg-purview-shir',
+    LOOM_SHIR_VMSS_NAME: 'vmss-dlz-shir',
+    LOOM_DLZ_RG: 'rg-dlz',
+    LOOM_DLZ_SUBSCRIPTION_ID: 'dlz-sub',
+  } as unknown as NodeJS.ProcessEnv;
+
+  it('purviewShirVmssConfig reads LOOM_PURVIEW_SHIR_VMSS_NAME, never the DLZ name', () => {
+    const cfg = purviewShirVmssConfig(bothDeployed)!;
+    expect(cfg.name).toBe('vmss-pvw-shir');
+    expect(cfg.name).not.toBe('vmss-dlz-shir');
+  });
+
+  it('shirVmssConfig reads LOOM_SHIR_VMSS_NAME, never the Purview name', () => {
+    const cfg = shirVmssConfig(bothDeployed)!;
+    expect(cfg.name).toBe('vmss-dlz-shir');
+    expect(cfg.name).not.toBe('vmss-pvw-shir');
+  });
+
+  it('each resolver gates on ITS OWN name — the other being set does not make one resolvable', () => {
+    // Without this, a resolver reading the wrong name var would still return a
+    // config here rather than the honest null, and the two tests above would be
+    // the only thing standing between a populated env and a wrong PATCH.
+    const onlyDlzName = { ...bothDeployed, LOOM_SHIR_VMSS_NAME: 'vmss-dlz-shir' } as Record<string, string>;
+    delete onlyDlzName.LOOM_PURVIEW_SHIR_VMSS_NAME;
+    expect(purviewShirVmssConfig(onlyDlzName as NodeJS.ProcessEnv)).toBeNull();
+
+    const onlyPvwName = { ...bothDeployed } as Record<string, string>;
+    delete onlyPvwName.LOOM_SHIR_VMSS_NAME;
+    expect(shirVmssConfig(onlyPvwName as NodeJS.ProcessEnv)).toBeNull();
+  });
+});
+
+// ───────────────────────────────────────────────────────────────────────────
+describe('#4248 an ASSUMED resource group is refused on the MUTATING path', () => {
+  // MUTATION TARGET (resolver): drop the `...(declaredRg ? {} : {resourceGroupAssumed:true})`
+  // spread from purviewShirVmssConfig — every case below goes green-to-red in the
+  // refusal direction (the PATCH is sent with a guessed home).
+  // MUTATION TARGET (verb): delete the `if (c?.resourceGroupAssumed)` block in
+  // scaleVmss — same result, one layer later.
+  const brownfield = { ...base, LOOM_PURVIEW_SHIR_VMSS_NAME: 'vmss-existing-pvw-shir' } as unknown as NodeJS.ProcessEnv;
+
+  const ok = () => ({ ok: true, status: 200, text: async () => '{"sku":{"capacity":0}}' });
+
+  it('flags the config the bicep leaves half-emitted (name external, RG assumed)', () => {
+    expect(purviewShirVmssConfig(brownfield)!.resourceGroupAssumed).toBe(true);
+  });
+
+  it('scaleVmss refuses it and sends NOTHING', async () => {
+    const cfg = purviewShirVmssConfig(brownfield)!;
+    await expect(scaleVmss(cfg, 4)).rejects.toBeInstanceOf(VmssError);
+    expect(fetchWithTimeout).not.toHaveBeenCalled();
+  });
+
+  it('the refusal states what it assumed and what to set — never ARM’s "does not exist"', async () => {
+    const cfg = purviewShirVmssConfig(brownfield)!;
+    let msg = '';
+    let status = 0;
+    try {
+      await scaleVmss(cfg, 4);
+    } catch (e) {
+      msg = (e as VmssError).message;
+      status = (e as VmssError).status;
+    }
+    expect(msg).toContain('ASSUMED from LOOM_ADMIN_RG');
+    expect(msg).toContain('rg-admin');
+    expect(msg).toContain('vmss-existing-pvw-shir');
+    expect(msg).toContain('Set LOOM_PURVIEW_SHIR_RG');
+    expect(msg).toContain('no PATCH was sent');
+    expect(msg).not.toMatch(/does not exist/i);
+    expect(status).toBe(409);
+  });
+
+  it('the READ path is untouched — the metrics tile keeps reporting on the same config', async () => {
+    const cfg = purviewShirVmssConfig(brownfield)!;
+    fetchWithTimeout.mockResolvedValue(ok());
+    await expect(getVmssStatus(cfg)).resolves.toMatchObject({ name: 'vmss-existing-pvw-shir' });
+    expect(fetchWithTimeout).toHaveBeenCalled();
+  });
+
+  it('a DECLARED LOOM_PURVIEW_SHIR_RG is not a guess, so the PATCH goes through', async () => {
+    const cfg = purviewShirVmssConfig({
+      ...brownfield,
+      LOOM_PURVIEW_SHIR_RG: 'rg-purview-shir',
+    } as unknown as NodeJS.ProcessEnv)!;
+    expect(cfg.resourceGroupAssumed).toBeUndefined();
+    fetchWithTimeout.mockResolvedValue(ok());
+    await expect(scaleVmss(cfg, 4)).resolves.toBeUndefined();
+    const [url, init] = fetchWithTimeout.mock.calls[0] as [string, RequestInit];
+    expect(url).toContain('/resourceGroups/rg-purview-shir/');
+    expect(init.method).toBe('PATCH');
+  });
+
+  it('a caller-supplied config is never treated as a guess', async () => {
+    // shir-autoscale, the register route and the stored-binding paths hand-build
+    // VmssConfig. An explicit resourceGroup is a declaration by construction.
+    fetchWithTimeout.mockResolvedValue(ok());
+    const hand: VmssConfig = { subscriptionId: 's', resourceGroup: 'rg', name: 'vmss' };
+    await expect(scaleVmss(hand, 0)).resolves.toBeUndefined();
+    expect(fetchWithTimeout).toHaveBeenCalled();
   });
 });

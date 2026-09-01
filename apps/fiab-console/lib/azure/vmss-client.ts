@@ -49,6 +49,15 @@ export interface VmssConfig {
   subscriptionId: string;
   resourceGroup: string;
   name: string;
+  /**
+   * True when `resourceGroup` was NOT emitted by the deploy for THIS scale set and
+   * was substituted from a neighbouring deployment's RG. The coordinates are then
+   * complete but only the name has known provenance — reads tolerate that (a wrong
+   * GET is a wasted request), `scaleVmss` refuses it (a wrong PATCH scales someone
+   * else's machine). Absent/false = every coordinate came from this VMSS's own
+   * deploy output or was supplied explicitly by a caller.
+   */
+  resourceGroupAssumed?: boolean;
 }
 
 export interface VmssStatus {
@@ -117,6 +126,14 @@ function v(env: NodeJS.ProcessEnv, k: string): string {
  * prevent, on a MUTATING path. Returning null instead yields the caller's honest
  * "not configured" gate, which is a safe outcome; scaling the wrong VMSS is not.
  *
+ * The Purview SHIR's `|| LOOM_ADMIN_RG` is the SAME shape and gets the same answer
+ * in a different place. It cannot simply be deleted — it is the only RG available
+ * when the SHIR was deployed outside this template — so the resolver keeps it,
+ * MARKS it (`resourceGroupAssumed`), and `scaleVmss` refuses to PATCH on a marked
+ * config. Reads still resolve, so the metrics tile keeps reporting; the mutation
+ * says what it assumed and what to set, rather than handing back ARM's own "does
+ * not exist" as if the coordinates had been established (R7).
+ *
  * KNOWN LIMITATION, inherited deliberately, NOT introduced here (#4248 audit).
  * `LOOM_SHIR_SUB` is bound from the *Purview* SHIR's deployment context, yet it
  * is FIRST in the *DLZ ADF* SHIR's subscription chain — in `resolveDeployManifest`
@@ -163,10 +180,26 @@ export function shirVmssConfig(env: NodeJS.ProcessEnv = process.env): VmssConfig
  */
 export function purviewShirVmssConfig(env: NodeJS.ProcessEnv = process.env): VmssConfig | null {
   const name = v(env, 'LOOM_PURVIEW_SHIR_VMSS_NAME');
-  const resourceGroup = v(env, 'LOOM_PURVIEW_SHIR_RG') || v(env, 'LOOM_ADMIN_RG');
+  // `LOOM_PURVIEW_SHIR_RG` is emitted ONLY when this template deployed the SHIR
+  // (admin-plane/main.bicep:4621 — `purviewShirDeployed ? resourceGroup().name : ''`).
+  // In the same false branch the NAME falls back to `loomPurviewShirVmssName`, the
+  // BROWNFIELD OVERRIDE documented at :1609 as "an EXISTING Purview SHIR VMSS
+  // deployed outside this template" — and there is no matching RG override param.
+  // So the `|| LOOM_ADMIN_RG` below fires in exactly one shape: the name has
+  // EXTERNAL provenance and the home is this template's own RG, assumed. That is
+  // a complete config `assertVmssTarget` passes, so it is flagged instead —
+  // reads keep working, `scaleVmss` refuses (R7: the guess is disclosed, not
+  // laundered into ARM's "does not exist").
+  const declaredRg = v(env, 'LOOM_PURVIEW_SHIR_RG');
+  const resourceGroup = declaredRg || v(env, 'LOOM_ADMIN_RG');
   const subscriptionId = v(env, 'LOOM_SHIR_SUB') || v(env, 'LOOM_SUBSCRIPTION_ID');
   if (!subscriptionId || !resourceGroup || !name) return null;
-  return { subscriptionId, resourceGroup, name };
+  return {
+    subscriptionId,
+    resourceGroup,
+    name,
+    ...(declaredRg ? {} : { resourceGroupAssumed: true }),
+  };
 }
 
 /**
@@ -263,6 +296,24 @@ export async function getVmssStatus(c: VmssConfig): Promise<VmssStatus> {
 export async function scaleVmss(c: VmssConfig, capacity: number): Promise<void> {
   if (!Number.isInteger(capacity) || capacity < 0 || capacity > 8) {
     throw new VmssError(`capacity must be an integer 0-8 (got ${capacity})`, 400);
+  }
+  // An ASSUMED resource group is refused HERE and not in getVmssStatus: a GET
+  // against the wrong home is a wasted request, a PATCH against it either 404s or
+  // scales a same-named stranger. This is the same call the sibling resolver makes
+  // one function up — `shirVmssConfig` returns null rather than pair a DLZ VMSS
+  // name with the admin RG — applied at the verb instead of the resolver, so the
+  // read surfaces stay informative. Recoverable in one value: setting
+  // LOOM_PURVIEW_SHIR_RG turns the guess into a declaration and this passes.
+  if (c?.resourceGroupAssumed) {
+    throw new VmssError(
+      `Refusing to scale the scale set '${c.name}': its resource group '${c.resourceGroup}' was `
+        + 'ASSUMED from LOOM_ADMIN_RG, because this deployment did not create that scale set and '
+        + 'so emitted no LOOM_PURVIEW_SHIR_RG for it. Where it actually lives was NOT established, '
+        + 'so no PATCH was sent — a wrong home either fails or scales a same-named scale set that '
+        + 'belongs to something else. Set LOOM_PURVIEW_SHIR_RG to the resource group that holds '
+        + `'${c.name}' and this scales.`,
+      409,
+    );
   }
   await armFetch(`${basePath(c)}?api-version=${VMSS_API}`, {
     method: 'PATCH',
