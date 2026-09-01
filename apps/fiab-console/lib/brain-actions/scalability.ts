@@ -40,13 +40,19 @@
  * ── THE PREDICATE IS A SHAPE, NOT A NAME AND NOT A PHRASE ──────────────────
  * A Container App the deploy declares as
  *
- *     minReplicas >= 1   AND   maxReplicas === minReplicas   AND   no scale.rules
+ *     minReplicas >= 1   AND   maxReplicas === minReplicas
  *
  * is a PINNED SINGLETON: the template has deliberately removed elasticity from
  * it and fixed its replica count. Scaling it to zero contradicts the deployed
  * template, so per `deploy-integrity.md` R2 the next deploy reverts the write —
  * that is drift, not a fix — and for a runtime that holds state in-process it is
  * also unrecoverable data loss in the window before the revert.
+ *
+ * The predicate does NOT exempt an app that carries a scale rule. It did until
+ * the round-3 review, and that exemption was a hole: a rule cannot fire when the
+ * floor and the ceiling are the same number, and the real `apps[]` copy loop
+ * attaches a rule to EVERY app it declares, so a 1/1 stateful runtime added
+ * through that array read as elastic and was permitted.
  *
  * Keying on the SHAPE rather than on a name means the next stateful service is
  * covered the day its module lands, with no edit here — PROVIDED the shape is
@@ -317,6 +323,33 @@ function effectiveParam(
 }
 
 /**
+ * Resolve a value taken from a container the PARENT supplied — a config bag or
+ * a copy-loop item.
+ *
+ * ── ONE LEVEL DOWN IS STILL THE PARENT'S SCOPE (round-3 review) ─────────────
+ * {@link effectiveParam} rejects a parent-passed value that is an ARM
+ * expression, but it only sees the TOP-LEVEL string. An expression nested
+ * INSIDE a passed bag or array item was handed to the resolver, which evaluated
+ * it against THIS template's `variables` — a different template's numbers.
+ * MEASURED at review: a bag carrying `[variables('minReplicas')]` returned 9.
+ *
+ * Latent today (all six real bags and all six array items carry integer
+ * literals), but it fails in the reads-ELASTIC-where-the-deploy-PINS direction,
+ * which is the data-loss direction. Unresolvable, therefore, and never a guess.
+ */
+function fromParentContainer(
+  value: unknown,
+  params: Record<string, unknown>,
+  variables: Record<string, unknown>,
+  passed: Record<string, unknown>,
+  depth: number,
+  copy?: CopyBinding,
+): number | null {
+  if (typeof value === 'string' && isArmExpression(value)) return null;
+  return resolveDeclaredInt(value, params, variables, passed, depth + 1, copy);
+}
+
+/**
  * Resolve an ARM `minReplicas` / `maxReplicas` expression to a literal.
  *
  * Returns `null` for anything this resolver does not UNDERSTAND — never a
@@ -341,13 +374,13 @@ export function resolveDeclaredInt(
   if (copy) {
     const item = COPY_ITEM.exec(expr);
     if (item?.[1] === copy.param && item[2] !== undefined) {
-      return resolveDeclaredInt(copy.item[item[2]], params, variables, passed, depth + 1, copy);
+      return fromParentContainer(copy.item[item[2]], params, variables, passed, depth, copy);
     }
     // `if(contains(item, 'k'), item.k, N)` — present wins, absent takes N.
     const guarded = COPY_ITEM_OR.exec(expr);
     if (guarded?.[1] === copy.param && guarded[2] !== undefined && guarded[3] !== undefined) {
       return guarded[2] in copy.item
-        ? resolveDeclaredInt(copy.item[guarded[2]], params, variables, passed, depth + 1, copy)
+        ? fromParentContainer(copy.item[guarded[2]], params, variables, passed, depth, copy)
         : Number.parseInt(guarded[3], 10);
     }
   }
@@ -366,7 +399,7 @@ export function resolveDeclaredInt(
     const carried = asRecord(eff.value);
     // Key ABSENT: `tryGet` yields null, so the fallback is genuinely what runs.
     if (!(bag[2] in carried)) return Number.parseInt(bag[3], 10);
-    return resolveDeclaredInt(carried[bag[2]], params, variables, passed, depth + 1, copy);
+    return fromParentContainer(carried[bag[2]], params, variables, passed, depth, copy);
   }
 
   const varRef = VAR_REF.exec(expr);
@@ -651,7 +684,23 @@ function declarationFor(
   const rules = scale.rules;
   const hasScaleRules = Array.isArray(rules) ? rules.length > 0 : rules !== undefined;
 
-  const pinned = minReplicas >= 1 && maxReplicas === minReplicas && !hasScaleRules;
+  // ── A RULE THAT CANNOT FIRE IS NOT ELASTICITY (round-3 review, B3) ────────
+  // This predicate used to carry `&& !hasScaleRules`, on the reading that a
+  // scale rule expresses an intent to scale. It does not when `min === max`:
+  // KEDA has no room to move between a floor and a ceiling that are the same
+  // number, so the rule is inert and the app is a singleton with a vestigial
+  // rule attached.
+  //
+  // And that is exactly the shape the real `apps[]` loop emits — its `rules`
+  // field is
+  //   [if(contains(item,'scaleRules'), item.scaleRules, createArray(createObject(…)))]
+  // so EVERY app in the generic array carries a rule. A stateful runtime added
+  // there at 1/1 read as ELASTIC and was PERMITTED, and with the per-module
+  // self-exclusion documented in `consumersFor` its wires are uncounted too, so
+  // nothing else would have caught it. MEASURED census-neutral: no app besides
+  // the three already pinned has `min === max`, so this refuses nothing that
+  // was previously permitted — it only closes the hole.
+  const pinned = minReplicas >= 1 && maxReplicas === minReplicas;
   const declaredStatement = pinned ? declaredStatementFrom(template) : undefined;
 
   return {
@@ -662,8 +711,12 @@ function declarationFor(
     declaredConsumers,
     reason: pinned
       ? `the deploy PINS '${appName}' to exactly ${minReplicas} replica(s) ` +
-        `(minReplicas ${minReplicas} = maxReplicas ${maxReplicas}, no scale rules) in bicep module ` +
-        `'${moduleLabel}'. A template that fixes a replica count and attaches no autoscale rule has ` +
+        `(minReplicas ${minReplicas} = maxReplicas ${maxReplicas}` +
+        (hasScaleRules
+          ? ', and the scale rule(s) attached to it CANNOT fire — a floor and a ceiling that ' +
+            'are the same number leave nothing to scale between'
+          : ', no scale rules') +
+        `) in bicep module '${moduleLabel}'. A template that fixes a replica count has ` +
         'deliberately removed elasticity from that app: it is a singleton runtime, not an elastic one.'
       : `the deploy declares '${appName}' as ELASTIC (minReplicas ${minReplicas}, maxReplicas ` +
         `${maxReplicas}${hasScaleRules ? ', with scale rule(s)' : ''}) in bicep module ` +

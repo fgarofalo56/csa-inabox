@@ -157,7 +157,12 @@ describe('THE PREDICATE — a pinned singleton is the shape, not a name', () => 
     expect(declaredNonScalableToZero('loom-thing', decls)).toBeNull();
   });
 
-  it('a fixed replica count WITH a scale rule is elastic — the rule is the intent', () => {
+  it('B3 — a fixed 1/1 WITH a scale rule is STILL pinned: the rule cannot fire', () => {
+    // This arm asserted the OPPOSITE until the round-3 review ("the rule is the
+    // intent"). It was wrong, and it was wrong in the shape production emits:
+    // the real `apps[]` loop attaches a rule to EVERY app it declares, so a 1/1
+    // stateful runtime added there read as elastic and was PERMITTED. KEDA has
+    // nothing to scale between a floor and a ceiling that are equal.
     const decls = declarationsFromTemplate(
       rootWith(
         moduleTemplate({
@@ -169,7 +174,31 @@ describe('THE PREDICATE — a pinned singleton is the shape, not a name', () => 
         }),
       ),
     );
+    const d = decls.get('loom-thing')!;
+    expect(d.declared).toEqual({ minReplicas: 1, maxReplicas: 1, hasScaleRules: true });
+    expect(d.scalableToZero).toBe(false);
+    expect(refuseScaleToZero('loom-thing', decls)!.kind).toBe('pinned-singleton');
+    // R7 — the refusal must not claim "no scale rules" when there is one.
+    expect(d.reason).not.toContain('no scale rules');
+    expect(d.reason).toContain('CANNOT fire');
+  });
+
+  it('B3 CONTROL: a rule DOES keep an app elastic when min and max differ', () => {
+    // Without this arm, "pin everything with equal-or-unequal replicas" would
+    // pass the arm above. The rule is only inert when there is no room to move.
+    const decls = declarationsFromTemplate(
+      rootWith(
+        moduleTemplate({
+          scale: {
+            minReplicas: 1,
+            maxReplicas: 3,
+            rules: [{ name: 'http', http: { metadata: { concurrentRequests: '20' } } }],
+          },
+        }),
+      ),
+    );
     expect(decls.get('loom-thing')!.scalableToZero).toBe(true);
+    expect(refuseScaleToZero('loom-thing', decls)).toBeNull();
   });
 
   it('minReplicas 0 is never pinned, whatever the max says', () => {
@@ -271,6 +300,25 @@ describe('EXPRESSION RESOLUTION — only the shapes the real template uses', () 
       }),
     );
     expect(decls.get('loom-risingwave')!.declared).toBeNull();
+  });
+
+  it('B1/bag — an expression INSIDE a passed bag is parent-scope, so unresolvable', () => {
+    // Round-3 should-fix. `effectiveParam` only checks the TOP-LEVEL string, so
+    // a nested expression was resolved against THIS template's `variables` — a
+    // different template's numbers. Measured at review: it returned 9. Here the
+    // nested module defines `minReplicas: 9`, which is what a scope-confused
+    // resolver reads; the deploy's real value lives in the parent and is not
+    // knowable from here.
+    const bagMod = bagModule(1, 1);
+    (bagMod.variables as Record<string, unknown>).parentMin = 9;
+    const decls = declarationsFromTemplate(
+      rootWith(bagMod, 'loom-thing-module', {
+        risingwaveConfig: { value: { minReplicas: "[variables('parentMin')]", maxReplicas: 1 } },
+      }),
+    );
+    const d = decls.get('loom-risingwave')!;
+    expect(d.declared, 'a parent-scope expression must not resolve here').toBeNull();
+    expect(d.reason).toContain('could NOT be established');
   });
 
   it('resolves `[parameters(x)]` through its defaultValue', () => {
@@ -475,6 +523,15 @@ describe('B1 — the parent-passed parameter beats the nested default', () => {
                       "[if(contains(parameters('apps')[copyIndex()], 'minReplicas'), parameters('apps')[copyIndex()].minReplicas, 1)]",
                     maxReplicas:
                       "[if(contains(parameters('apps')[copyIndex()], 'maxReplicas'), parameters('apps')[copyIndex()].maxReplicas, 3)]",
+                    // THE REAL SHAPE (round-3 review, B3). The generic loop
+                    // ALWAYS attaches a rule — the `else` branch of this `if`
+                    // synthesises one — so every app it declares has
+                    // `hasScaleRules: true`. The earlier version of this fixture
+                    // omitted `rules` entirely, which made it shaped like the
+                    // mutation under test rather than like production, and that
+                    // is precisely why the 1/1-with-a-rule hole survived it.
+                    rules:
+                      "[if(contains(parameters('apps')[copyIndex()], 'scaleRules'), parameters('apps')[copyIndex()].scaleRules, createArray(createObject('name','http-rule','http',createObject('metadata',createObject('concurrentRequests','20')))))]",
                   },
                 },
               },
@@ -505,12 +562,23 @@ describe('B1 — the parent-passed parameter beats the nested default', () => {
     expect(derived.declarations.get('loom-alpha')!.declared).toEqual({
       minReplicas: 2,
       maxReplicas: 6,
-      hasScaleRules: false,
+      hasScaleRules: true,
     });
     expect(derived.declarations.get('loom-beta')!.declared).toEqual({
       minReplicas: 1,
       maxReplicas: 3,
-      hasScaleRules: false,
+      hasScaleRules: true,
+    });
+    // Both are elastic DESPITE the rule, because min !== max.
+    expect(derived.declarations.get('loom-alpha')!.scalableToZero).toBe(true);
+    expect(derived.declarations.get('loom-beta')!.scalableToZero).toBe(true);
+    // …and the 1/1 one is pinned DESPITE the rule, because min === max. This is
+    // the B3 arm on the real production shape: the app carries a scale rule,
+    // and it is still a singleton.
+    expect(derived.declarations.get('loom-gamma')!.declared).toEqual({
+      minReplicas: 1,
+      maxReplicas: 1,
+      hasScaleRules: true,
     });
     expect(derived.declarations.get('loom-gamma')!.scalableToZero).toBe(false);
     expect(refuseScaleToZero('loom-gamma', derived.declarations)!.kind).toBe('pinned-singleton');
