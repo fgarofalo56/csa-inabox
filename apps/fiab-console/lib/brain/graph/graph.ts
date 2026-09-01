@@ -261,6 +261,24 @@ class BrainGraph implements BrainGraphView {
 
     for (const e of edges) {
       if (e.resolution === 'resolved') {
+        // A SELF-EDGE IS NEVER INDEXED. A node pointing at ITSELF is not inbound
+        // reachability — nothing external reaches it — but `unreachable-service`
+        // asks only `inbound(graph, id, 'configured').length === 0`, so a single
+        // `from === to` edge would CLEAR an always-on app on the strength of the
+        // app pointing at itself. That is the #4258 lie inverted: #4258 was a
+        // false POSITIVE from an edge we could not see; this would be a false
+        // NEGATIVE from an edge that is not real.
+        //
+        // The primary guard is in the extractor — `container-app-env.ts` declines
+        // a value naming the app it was read FROM and COUNTS the decline, so the
+        // accounting stays local. THIS is the second layer, covering every other
+        // extractor and any caller that omits `selfFqdn`: it keys on the
+        // graph-level SHAPE (`from === to`) rather than on one extractor's
+        // spelling of self-reference, so a new extractor inherits it for free.
+        // The edge stays in `this.edges` — evidence is never destroyed — and
+        // `buildGraph` records the drop in `report.skipped` rather than letting
+        // it be silent.
+        if (e.from === e.to) continue;
         // `to` is NodeId here by the discriminated union — a dangling edge
         // cannot reach this branch, which is precisely the reachability
         // property that finds `loom-capacity-broker`.
@@ -424,9 +442,29 @@ export function buildGraph(extractions: readonly ExtractionResult[]): BrainGraph
 
   let resolved = 0;
   let dangling = 0;
+  let selfEdges = 0;
   for (const e of edges) {
-    if (e.resolution === 'resolved') resolved += 1;
-    else dangling += 1;
+    if (e.resolution === 'resolved') {
+      resolved += 1;
+      if (e.from === e.to) selfEdges += 1;
+    } else dangling += 1;
+  }
+
+  // The constructor refuses to index a resolved `from === to` edge into
+  // `inbound`/`outbound` (see the comment there). Report the refusal here so it
+  // is stated rather than silent — an extractor minting self-edges is a defect
+  // in that extractor, and the count is how it becomes visible.
+  if (selfEdges > 0) {
+    skipped.push({
+      subject: `${selfEdges} resolved edge(s) whose source and target are the SAME node`,
+      reason:
+        'Not indexed as inbound reachability: a node pointing at itself is not something REACHING it. ' +
+        'Indexing it would let `unreachable-service` clear an always-on app because "a resolved ' +
+        'configured edge points at it" — where the thing pointing at it is itself. The edges are still ' +
+        'present in `graph.edges` and in `edgesByProvenance`; only the reachability index excludes them. ' +
+        'A non-zero count here means an extractor admitted a self-advertised address (e.g. ' +
+        'RW_ADVERTISE_ADDR / KAFKA_ADVERTISED_LISTENERS) and should decline it at the source.',
+    });
   }
 
   const report: GraphBuildReport = {

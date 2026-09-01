@@ -6,10 +6,18 @@
  * the same product rather than as a new one (`web3-ui.md` §4).
  */
 
+import { Suspense } from 'react';
 import { AdminShell } from '@/lib/components/admin-shell';
 import { BrainPane } from './brain-pane';
 
 export const metadata = { title: 'Loom Brain' };
+
+/**
+ * `BrainPane` reads `?tab=` via `useSearchParams` (#4278). Next requires that be
+ * wrapped in Suspense, and a surface that reads the LIVE estate must never be
+ * statically prerendered anyway — the same pairing `admin/landing-zones` uses.
+ */
+export const dynamic = 'force-dynamic';
 
 export default function AdminBrainPage() {
   return (
@@ -33,7 +41,12 @@ export default function AdminBrainPage() {
         ],
       }}
     >
-      <BrainPane />
+      {/* `BrainPane` reads `?tab=` via `useSearchParams` (#4278), which Next
+          requires be wrapped in a Suspense boundary — the same shape
+          `governance/lineage` and `governance/govern` already use. */}
+      <Suspense fallback={null}>
+        <BrainPane />
+      </Suspense>
     </AdminShell>
   );
 }
