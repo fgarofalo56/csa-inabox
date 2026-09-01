@@ -324,20 +324,32 @@ test('CLI announces the pulled-in pair mate on stderr, keeping stdout parseable'
   for (const line of r.stdout.trim().split('\n')) assert.equal(line.split('\t').length, 4);
 });
 
-test('#4240 CLI: the atomic-closure notice states the freeze CONDITIONALLY — the unity pair no longer has it', () => {
+test('#4240 CLI: the atomic-closure notice DERIVES the consequence from the real key table', () => {
   const r = cli(['--apps', 'loom-unity', '--acr', 'a.azurecr.io', '--tag', 'sha9']);
   assert.equal(r.code, 0);
   // True of EVERY shared repository, canonicalApp or not.
   assert.match(r.stderr, /TWO versions of ONE image/);
-  // The frozen estate-wide reconcile is true only where the reconcile key names
-  // no canonicalApp — and the unity pair, the only closure this CLI computes
-  // today, DOES name one since #4064. So the claim must carry its condition.
-  assert.match(r.stderr, /does not name a canonicalApp/);
+  // The consequence is now LOOKED UP, not stated as a conditional the reader has
+  // to resolve. Naming the repository and the key is the tell that it was: a
+  // generic sentence cannot produce either.
+  assert.match(r.stderr, /Repository 'loom-unity' pins appImageTags\.unity from canonical app 'loom-unity'/);
+  assert.match(r.stderr, /does NOT freeze the estate-wide reconcile/);
   assert.doesNotMatch(
     r.stderr,
-    /so a split pair makes that key UNKNOWN and disables the estate-wide config reconcile/,
-    'the pre-#4064 consequence must not be asserted as a fact about this closure',
+    /Where the repository's appImageTags key does not name a canonicalApp/,
+    'a conditional makes the reader go and look up whether THEIR repo names one — which is the ' +
+      'lookup this notice exists to spare them (#4240 review nit)',
   );
+  assert.doesNotMatch(
+    r.stderr,
+    /marks that key UNKNOWN|disables the estate-wide config reconcile/,
+    'the pre-#4064 consequence must not be asserted about a closure that pins from a canonical app',
+  );
+  // "converges the stragglers" was only ever true WITH a canonicalApp; here it
+  // is, so the convergence wording is allowed — and must name where the lag is
+  // now logged rather than implying it converges silently.
+  assert.match(r.stderr, /converges it onto the pinned tag/);
+  assert.match(r.stderr, /logged by both pin-refresh and reconcile-resolve/);
 });
 
 test('CLI warns on a mutable tag', () => {

@@ -73,8 +73,15 @@
  * roll; the roll's own read-back verification never touches the app it skipped.
  * Rolling them together is what makes the split window zero-length instead of
  * unbounded. (Since #4240 `resolveRunningImageTags` also emits a NOTE naming a
- * follower that is off the canonical's tag, so the window is at least visible
- * in the log rather than converged away in silence.)
+ * follower that is off the canonical's tag. Naming WHERE, because "it reaches
+ * the log" was asserted once already without checking: the `pin-refresh` CLI
+ * prints it — `reconcile-policy.mjs` `cliMain`, so deploy-fiab-commercial,
+ * -gcch and -il5 — and so does the estate-wide reconcile,
+ * `reconcile-resolve.mjs`, in its log and its step summary. `adopt-image-tags`
+ * and `assert-no-silent-image-tag-revert` call the same resolver and do NOT
+ * read `notes`; neither of them is a surface an operator reads for estate
+ * state. The window is therefore visible where it is looked for, rather than
+ * converged away in silence.)
  *
  * Hence: apps sharing an image repository are rolled together or not at all.
  * The groups are DERIVED from the repo field rather than declared, so a fourth
@@ -100,6 +107,11 @@
  *
  * Tests: node --test scripts/ci/__tests__/roll-plan.test.mjs
  */
+// The reconcile's key table, imported rather than restated: the CLI derives the
+// CONSEQUENCE of a split from it, exactly as check-roll-atomicity.mjs does
+// (#4240). reconcile-policy.mjs has no imports of its own beyond node:fs and
+// its CLI is argv-guarded, so this introduces neither a cycle nor a side effect.
+import { APP_IMAGE_TAGS } from './reconcile-policy.mjs';
 
 /**
  * Every Container App this roll path ships, with its IMAGE REPOSITORY stated
@@ -417,14 +429,32 @@ function main(argv) {
   // tsv: one row per app, consumed by the roll loop. Notices go to stderr so
   // stdout stays machine-parseable.
   if (plan.added.length) {
+    // #4240 — DERIVE the consequence, do not state it as a conditional. The
+    // sibling guard (check-roll-atomicity.mjs) already reads it off the key
+    // table; stating it here as "where the repository's key does not name a
+    // canonicalApp…" made the reader go look up whether THEIR repository does,
+    // which is precisely the lookup this notice exists to spare them. It also
+    // said a later apply "converges the stragglers", which is true only WITH a
+    // canonicalApp — without one the apply exports no pin at all and rewrites
+    // the repository DOWN to v0.1, which is a revert, not a convergence.
+    const addedRepos = [
+      ...new Set(plan.rows.filter((r) => plan.added.includes(r.app)).map((r) => r.repo)),
+    ];
+    const consequences = addedRepos.map((repo) => {
+      const entry = APP_IMAGE_TAGS.find((e) => e.repo === repo);
+      if (!entry) {
+        return `Repository '${repo}' has NO appImageTags entry (scripts/ci/reconcile-policy.mjs), so the reconcile does not track it in either direction: a split is invisible to it, and the next admin-plane apply resets every app on the repository to the bicep 'v0.1' default.`;
+      }
+      if (entry.canonicalApp) {
+        return `Repository '${repo}' pins appImageTags.${entry.key} from canonical app '${entry.canonicalApp}', so a split does NOT freeze the estate-wide reconcile: the skipped app serves a DIFFERENT build of the same image until a later admin-plane apply converges it onto the pinned tag, and since #4240 the divergence is logged by both pin-refresh and reconcile-resolve rather than converged away in silence.`;
+      }
+      return `Repository '${repo}' names no canonicalApp on appImageTags.${entry.key}, so a split marks that key UNKNOWN — one key cannot hold two tags — which disables the estate-wide config reconcile; and an operator dispatch forcing deploy_apps_enabled=true exports no pin at all, so bicep's readEnvironmentVariable(${entry.envVar}, 'v0.1') rewrites the whole repository DOWN to v0.1. That is a revert, not a convergence.`;
+    });
     console.error(
       `::notice::roll-plan pulled in ${plan.added.join(', ')} because they share an image `
       + 'repository with an app you asked for. Apps sharing a repository MUST roll together: a '
-      + 'split leaves the estate serving TWO versions of ONE image until some later admin-plane '
-      + 'apply converges the stragglers, and this roll never reads back the app it skipped. Where '
-      + 'the repository\'s appImageTags key does not name a canonicalApp, the split additionally '
-      + 'marks that key UNKNOWN in scripts/ci/reconcile-policy.mjs — one key cannot hold two tags '
-      + '— which disables the estate-wide config reconcile until the tags agree again.',
+      + 'split leaves the estate serving TWO versions of ONE image, and this roll never reads back '
+      + `the app it skipped. ${consequences.join(' ')}`,
     );
   }
   if (plan.mutableTag) {

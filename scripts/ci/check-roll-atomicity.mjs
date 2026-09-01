@@ -39,7 +39,14 @@
  *          onto the pinned tag whenever an admin-plane apply next runs. The lag
  *          is real and unbounded in time, but it is not a frozen reconcile.
  *          (#4240 added a NOTE naming a follower that is off the canonical's
- *          tag, so the lag at least reaches the log.)
+ *          tag. Naming the surfaces rather than saying "the log", because the
+ *          first version of this sentence asserted a reach it did not have:
+ *          the `pin-refresh` CLI in reconcile-policy.mjs prints it, and so
+ *          does the estate-wide reconcile, reconcile-resolve.mjs, in its log
+ *          and its step summary. adopt-image-tags.mjs and
+ *          assert-no-silent-image-tag-revert.mjs call the same resolver and
+ *          deliberately do not read `notes` — neither is a surface read for
+ *          estate state.)
  *
  *      Either way the registry must carry the app: the ratchet below is what
  *      keeps the split window zero-length instead of "until someone deploys".
@@ -533,10 +540,26 @@ export function decide({
       // half at a key that pins from a canonical app would be this guard
       // telling the reader a cause it did not establish (deploy-integrity R7) —
       // and would send the fix at the reconcile instead of at the registry.
+      //
+      // THREE arms, not two. A two-arm ternary put the UNRESOLVABLE input — no
+      // APP_IMAGE_TAGS entry for this repository at all — into the else, where
+      // it asserted "a partial roll marks that key UNKNOWN and freezes the
+      // estate-wide config reconcile". With no entry, resolveRunningImageTags()
+      // never iterates this repository: nothing is marked UNKNOWN and nothing
+      // freezes. That is R7 inside the guard's own message, on precisely the
+      // branch where the guard could not resolve its input — and it aimed the
+      // reader at the reconcile instead of at the missing key. (Check C below
+      // reports the missing entry separately, but only for repositories the
+      // registry already targets.)
       const keyEntry = imageTags.find((e) => e.repo === repo);
-      const consequence = keyEntry && keyEntry.canonicalApp
-        ? `Its appImageTags key '${keyEntry.key}' pins from canonical app '${keyEntry.canonicalApp}', so a partial roll does NOT freeze the reconcile — instead '${r.app}' is a FOLLOWER serving a DIFFERENT build of one image until some later admin-plane apply converges it onto the pinned tag, and the roll never reads back the app it skipped.`
-        : `Its appImageTags key ${keyEntry ? `'${keyEntry.key}' ` : ''}names no canonicalApp, so reconcile-policy.mjs cannot pin one key to two different tags: a partial roll marks that key UNKNOWN and freezes the estate-wide config reconcile.`;
+      let consequence;
+      if (!keyEntry) {
+        consequence = `Repository '${repo}' has NO appImageTags entry at all (scripts/ci/reconcile-policy.mjs), so reconcile-policy.mjs does not track it: the split is invisible to the estate-wide reconcile in either direction — it is neither pinned nor marked UNKNOWN — and every app on this repository is reset to the bicepparam default by the next apply. Fix the missing key as well as the registry.`;
+      } else if (keyEntry.canonicalApp) {
+        consequence = `Its appImageTags key '${keyEntry.key}' pins from canonical app '${keyEntry.canonicalApp}', so a partial roll does NOT freeze the reconcile — instead '${r.app}' is a FOLLOWER serving a DIFFERENT build of one image until some later admin-plane apply converges it onto the pinned tag, and the roll never reads back the app it skipped.`;
+      } else {
+        consequence = `Its appImageTags key '${keyEntry.key}' names no canonicalApp, so reconcile-policy.mjs cannot pin one key to two different tags: a partial roll marks that key UNKNOWN and freezes the estate-wide config reconcile.`;
+      }
       problems.push(
         `${ORCHESTRATOR}:${r.line} deploys container app '${r.app}' from repository '${repo}', which the roll registry already carries for ${mates.join(', ')} — but '${r.app}' is NOT in the registry. `
         + `Apps sharing an image repository must roll together. ${consequence} `

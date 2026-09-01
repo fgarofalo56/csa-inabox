@@ -463,6 +463,59 @@ test('#4240 B — against the REAL key table the unity repo takes the canonical 
   assert.doesNotMatch(problems[0], /freezes the estate-wide config reconcile/);
 });
 
+// ── THE UNRESOLVABLE INPUT — the arm the two-branch ternary had no fixture for ─
+test('#4240 B — a repository with NO appImageTags entry is not described as freezing the reconcile', () => {
+  // `imageTags: []` means resolveRunningImageTags() never iterates this
+  // repository at all: nothing is pinned, nothing is marked UNKNOWN, and
+  // nothing can freeze. The previous two-branch ternary put this — the branch
+  // where the guard could NOT resolve its input — into the no-canonicalApp arm
+  // and asserted a frozen estate-wide reconcile that is guaranteed impossible.
+  // That is deploy-integrity R7 inside the guard's own message.
+  const { problems } = decide(base({
+    inlineApps: [{ app: 'a1', repo: 'r1', line: 7 }, { app: 'a2', repo: 'r1', line: 9 }],
+    imageTags: [],
+  }));
+  // TWO problems about one repository, by design: check C reports the missing
+  // key entry independently. That is exactly why the ratchet's own message must
+  // not name a DIFFERENT cause — the reader would take the wrong one.
+  assert.equal(problems.length, 2, `expected the ratchet AND check C\n${problems.join('\n')}`);
+  const ratchet = problems.find((p) => p.includes('is NOT in the registry'));
+  assert.ok(ratchet, `the ratchet must still FAIL — only the explanation changes\n${problems.join('\n')}`);
+  assert.ok(
+    problems.some((p) => p.includes('has no entry in APP_IMAGE_TAGS')),
+    'check C must still report the missing key entry',
+  );
+  assert.match(ratchet, /'a2' is NOT in the registry/);
+  assert.match(ratchet, /has NO appImageTags entry at all/);
+  assert.doesNotMatch(
+    ratchet,
+    /marks that key UNKNOWN and freezes the estate-wide config reconcile/,
+    'with no key entry there is no key to mark UNKNOWN and no reconcile to freeze',
+  );
+  assert.doesNotMatch(
+    ratchet,
+    /pins from canonical app/,
+    'nor may it claim a canonical pin it has no entry to read',
+  );
+  // The tell that the old else-arm was written for the entry-present case: it
+  // rendered "key  names no canonicalApp" with a doubled space.
+  assert.doesNotMatch(ratchet, /key {2,}names/, 'no empty interpolation left behind');
+  assert.match(ratchet, /ROLL_TARGETS/);
+});
+
+test('#4240 B — a repository whose key EXISTS but names no canonicalApp still gets the freeze consequence', () => {
+  // The counter-arm to the one above: the freeze half must not be lost for the
+  // case where it is genuinely true, which is what a blanket softening would do.
+  const { problems } = decide(base({
+    inlineApps: [{ app: 'a1', repo: 'r1', line: 7 }, { app: 'a2', repo: 'r1', line: 9 }],
+    imageTags: [{ key: 'k1', repo: 'r1', envVar: 'LOOM_K1_TAG' }],
+  }));
+  assert.equal(problems.length, 1);
+  assert.match(problems[0], /key 'k1' names no canonicalApp/);
+  assert.match(problems[0], /marks that key UNKNOWN and freezes the estate-wide config reconcile/);
+  assert.doesNotMatch(problems[0], /has NO appImageTags entry at all/);
+});
+
 test('B — an app on an UNTARGETED repository is none of the ratchet\'s business', () => {
   const { problems } = decide(base({
     inlineApps: [{ app: 'a1', repo: 'r1', line: 7 }, { app: 'a2', repo: 'unrelated', line: 9 }],

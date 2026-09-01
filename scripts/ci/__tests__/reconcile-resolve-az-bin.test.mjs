@@ -62,14 +62,14 @@ const STUB_REGION = 'westus3';
  * needed, so the control has to exercise the Windows arm too — which is the
  * `.cmd` extension the script's `shell:` predicate keys on.
  */
-function writeStubAz(dir) {
+function writeStubAz(dir, containers = []) {
   const impl = path.join(dir, 'stub-az.mjs');
   fs.writeFileSync(impl, [
     'const a = process.argv.slice(2).join(" ");',
     'if (a.includes("group") && a.includes("list")) {',
     `  process.stdout.write(JSON.stringify(["rg-csa-loom-admin-${STUB_REGION}"]));`,
     '} else if (a.includes("containerapp") && a.includes("list")) {',
-    '  process.stdout.write(JSON.stringify([]));',
+    `  process.stdout.write(${JSON.stringify(JSON.stringify(containers))});`,
     '} else {',
     '  process.stderr.write("stub-az: unexpected args: " + a);',
     '  process.exit(2);',
@@ -132,8 +132,9 @@ function runResolver(scriptPath, extraEnv = {}) {
     }),
   );
   const envLines = fs.readFileSync(envFile, 'utf8');
+  const summaryText = fs.existsSync(summary) ? fs.readFileSync(summary, 'utf8') : '';
   fs.rmSync(dir, { recursive: true, force: true });
-  return { status: res.status, out: `${res.stdout || ''}${res.stderr || ''}`, outputs, envLines };
+  return { status: res.status, out: `${res.stdout || ''}${res.stderr || ''}`, outputs, envLines, summaryText };
 }
 
 /**
@@ -265,6 +266,72 @@ test('#3704 a failed az read stays UNKNOWN — it never becomes "no hub"', () =>
     // R7 — the warning quotes the CLI/spawn failure rather than inventing one.
     assert.match(r.out, /admin-RG list failed/, r.out);
     assert.equal(r.outputs.region, undefined, 'a refused run must emit no region');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+/* ── #4240 — THE FOLLOWER DIVERGENCE HAS TO REACH *THIS* SURFACE ───────────
+ *
+ * `resolveRunningImageTags()` has emitted a NOTE for a shared-repo follower off
+ * its canonical's tag since #4240, and the `pin-refresh` CLI logs it. This
+ * script — the ESTATE-WIDE reconcile, the step at deploy-fiab-commercial.yml —
+ * did NOT: `grep -n notes scripts/ci/reconcile-resolve.mjs` returned nothing.
+ * So the surface an operator actually reads for estate state printed
+ * `PIN unity loom-unity:<tag>` and `UNKNOWN: (none)` whether the pair was
+ * mid-roll or a follower stuck for a week — byte-identical output for two very
+ * different estates, which is #4240's literal title, unfixed.
+ *
+ * These run the SHIPPED script against a stubbed `az`, and the second is the
+ * control: same script, same code path, converged pair, no line. Without the
+ * control the first arm could be satisfied by a notice printed unconditionally.
+ */
+const UNITY_CANONICAL = { name: 'loom-unity', image: 'x.azurecr.io/loom-unity:2456cebb' };
+
+test('#4240 a half-rolled shared-repo pair is NAMED by the estate-wide reconcile', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'reconcile-follower-'));
+  try {
+    const stub = writeStubAz(dir, [
+      UNITY_CANONICAL,
+      { name: 'iceberg-catalog', image: 'x.azurecr.io/loom-unity:4d4fd0b9' },
+    ]);
+    const r = runResolver(SCRIPT, { LOOM_AZ_BIN: stub, INPUT_REGION: '' });
+    assert.equal(r.status, 0, `a follower divergence must not fail the reconcile:\n${r.out}`);
+
+    // It is an OBSERVATION: the decided fields must be untouched by it.
+    assert.equal(r.outputs.unknown_count, '0', `a follower must not manufacture UNKNOWN:\n${r.out}`);
+    assert.match(r.envLines, /LOOM_UNITY_TAG=2456cebb/, `the pin still follows the canonical app:\n${r.envLines}`);
+
+    // And it must be VISIBLE — the whole point of #4240.
+    assert.match(r.out, /::notice::\[reconcile\] FOLLOWER/, `no follower line reached the log:\n${r.out}`);
+    assert.match(r.out, /iceberg-catalog runs loom-unity:4d4fd0b9/, r.out);
+    assert.equal(r.outputs.follower_count, '1', r.out);
+    assert.equal(r.outputs.follower_keys, 'unity', r.out);
+    assert.match(
+      r.summaryText,
+      /shared-repo followers not on their canonical's tag: unity pins to 2456cebb/,
+      r.summaryText,
+    );
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('#4240 CONTROL — a CONVERGED pair prints no follower line at all', () => {
+  // A notice that fires on every run is a notice nobody reads, and it would
+  // make the arm above green for the wrong reason.
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'reconcile-converged-'));
+  try {
+    const stub = writeStubAz(dir, [
+      UNITY_CANONICAL,
+      { name: 'iceberg-catalog', image: 'x.azurecr.io/loom-unity:2456cebb' },
+    ]);
+    const r = runResolver(SCRIPT, { LOOM_AZ_BIN: stub, INPUT_REGION: '' });
+    assert.equal(r.status, 0, r.out);
+    assert.match(r.envLines, /LOOM_UNITY_TAG=2456cebb/, 'the same pin either way');
+    assert.doesNotMatch(r.out, /FOLLOWER/, `a converged estate must be silent:\n${r.out}`);
+    assert.equal(r.outputs.follower_count, '0', r.out);
+    assert.match(r.summaryText, /followers not on their canonical's tag: \(none\)/, r.summaryText);
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
