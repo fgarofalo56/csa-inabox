@@ -59,10 +59,10 @@ import {
   createArmActuator,
   createManifestTagReader,
   discoverFromManifest,
-  discoveryReadFailures,
   ESTATE_PAUSE_ENABLED_ENV,
   evaluateDrift,
   loadPauseSnapshot,
+  partitionDiscovery,
   planPause,
   previewToken,
   resolveDeployManifest,
@@ -124,7 +124,13 @@ export const POST = withTenantAdmin(async (req: NextRequest, { session }) => {
   const { manifest, entries, unresolved, manifestGated, namedByDeploy, gateReason } =
     resolveDeployManifest();
   const discovered = await discoverFromManifest(entries, createManifestTagReader());
-  const plan = planPause(discovered, {
+  // #4243 review round 1 — a deploy-named id ARM POSITIVELY reports absent
+  // (404/ResourceNotFound) is EXCLUDED from the population, symmetrically with
+  // GET /state, so the token stays coherent while the absence persists. It is
+  // surfaced (`absent` + audit row below), never silently dropped. Unreadable
+  // rows (throttled/timeout) stay IN the population and refuse below.
+  const { present, absent, readFailures } = partitionDiscovery(discovered, entries);
+  const plan = planPause(present, {
     scope: { kind: 'explicit-inventory', estateId: manifest.estateId },
     manifest,
     ...(gateReason ? { gateReason } : {}),
@@ -142,12 +148,12 @@ export const POST = withTenantAdmin(async (req: NextRequest, { session }) => {
   }
   const risks = capacityPreflight(plan.inventory.pausable, live);
 
-  // #4243 — the token is computed over the STABLE manifest-named population
-  // plus the positively-established set, with the read-failure count embedded.
-  // `evaluateDrift` below is the only comparator; the raw `!==` is gone.
-  const manifestIds = entries.map((e) => e.resourceId);
+  // #4243 — the token is computed over the STABLE addressable population
+  // (deploy-named minus positively-absent) plus the positively-established
+  // set, with the read-failure count embedded. `evaluateDrift` below is the
+  // only comparator; the raw `!==` is gone.
+  const manifestIds = present.map((d) => d.resourceId);
   const establishedIds = plan.dryRun.wouldPause.map((r) => r.resourceId);
-  const readFailures = discoveryReadFailures(discovered);
   const token = previewToken({ manifestIds, establishedIds, readFailures: readFailures.length });
 
   if (body.dryRun) {
@@ -164,6 +170,8 @@ export const POST = withTenantAdmin(async (req: NextRequest, { session }) => {
       confirmToken: token,
       /** Discovery reads that failed — the preview may be partial when non-empty. */
       readFailures,
+      /** Deploy-named ids ARM positively reports absent — excluded, with the env remediation. */
+      absent,
     });
   }
 
@@ -269,11 +277,13 @@ export const POST = withTenantAdmin(async (req: NextRequest, { session }) => {
         );
       case 'manifest-changed':
         return apiConflict(
-          'The set of resources the DEPLOY NAMES changed between the preview you confirmed and now '
-            + `(your preview covered ${verdict.confirmedCount} deploy-named resource(s); the deploy `
-            + `now names ${verdict.currentCount}). This is a positively-observed change — the `
-            + 'manifest is built from the console environment, not from reads. Re-open the preview '
-            + 'and confirm the current set — Loom will not pause resources you have not seen.',
+          'The deploy-named population changed between the preview you confirmed and now '
+            + `(your preview covered ${verdict.confirmedCount} deploy-named resource(s); the estate `
+            + `now resolves ${verdict.currentCount}). This is a positively-observed change — the `
+            + 'population is the deploy-named set minus anything ARM positively reports absent, '
+            + 'never a failed-read artifact: either the deploy environment changed, or a named '
+            + 'resource appeared or was removed. Re-open the preview and confirm the current set — '
+            + 'Loom will not pause resources you have not seen.',
         );
       case 'reads-failed':
         return apiError(
@@ -304,6 +314,16 @@ export const POST = withTenantAdmin(async (req: NextRequest, { session }) => {
     }
   }
 
+  // --- #4243 review round 1: record every positive-absence exclusion the
+  //     moment the drift gate has passed, so a pause that proceeds without a
+  //     deploy-named resource leaves a trace naming the env values to fix.
+  if (absent.length > 0) {
+    await audit(tenantId, who, 'estate-pause.absent-excluded', {
+      estateId: manifest.estateId,
+      absent: absent.map((a) => ({ id: a.resourceId, fromEnv: a.fromEnv, error: a.error })),
+    });
+  }
+
   // --- Nothing to do. Say so LOUDLY rather than reporting a successful pause
   //     of zero resources, which is the vaporware shape.
   if (plan.population.empty) {
@@ -311,11 +331,13 @@ export const POST = withTenantAdmin(async (req: NextRequest, { session }) => {
       estateId: manifest.estateId,
       examined: plan.population.examined,
       tagCensus: plan.population.tagCensus,
+      absentExcluded: absent.length,
     });
     return apiError(plan.population.statement, 409, {
       population: plan.population,
       preview: plan.dryRun,
       unresolved,
+      absent,
       trackedBy: 3922,
     });
   }
@@ -371,11 +393,14 @@ export const POST = withTenantAdmin(async (req: NextRequest, { session }) => {
   // accepted: nothing is transitioning, so persisting a PAUSING snapshot would
   // record an in-flight pause that does not exist — one that polls to "0 of N
   // confirmed" forever and blocks a retry with "already PAUSING". The honest
-  // behaviour, pinned by test: save NOTHING (the estate genuinely is still
-  // RUNNING), audit the failure, and return the per-resource rejections.
-  // (All-already-paused with zero failures still saves: that snapshot settles
-  // to PAUSED on the first poll, which is true.)
+  // behaviour, pinned by test: save NOTHING, audit the failure, and return the
+  // per-resource states plainly. (Review round 1: the headline states COUNTS —
+  // it must not say "still RUNNING" when an already-paused row means one
+  // resource is physically stopped. All-already-paused with zero failures
+  // still saves: that snapshot settles to PAUSED on the first poll, truly.)
   if (dispatched.length === 0 && failed.length > 0) {
+    const alreadyPaused = run.actions.filter((a) => a.status === 'already-paused').length;
+    const skipped = run.actions.filter((a) => a.status === 'skipped').length;
     await audit(tenantId, who, 'estate-pause.all-dispatches-rejected', {
       estateId: manifest.estateId,
       actions: run.actions.map((a) => ({ id: a.resourceId, status: a.status, error: a.error })),
@@ -395,10 +420,11 @@ export const POST = withTenantAdmin(async (req: NextRequest, { session }) => {
       },
     });
     return apiError(
-      `Nothing is pausing: ARM rejected every dispatch (${failed.length} of ${run.actions.length} `
-        + 'action(s) failed; none was accepted). No snapshot was recorded — the estate is still '
-        + 'RUNNING and there is no in-flight pause to poll. See `actions` for the per-resource '
-        + 'rejection, fix what it names, and press Pause again.',
+      `Nothing was set in motion: of ${run.actions.length} action(s), ARM REJECTED ${failed.length}, `
+        + `${alreadyPaused} were already paused before Loom looked, ${skipped} were skipped, and NONE `
+        + 'was accepted. No snapshot was recorded and there is no in-flight pause to poll — each '
+        + 'resource keeps exactly the state reported in `actions`. Fix what the rejections name and '
+        + 'press Pause again.',
       502,
       { actions: run.actions, population: plan.population },
     );
@@ -438,10 +464,16 @@ export const POST = withTenantAdmin(async (req: NextRequest, { session }) => {
       actions: run.actions,
       risks,
       population: plan.population,
+      /** Deploy-named ids ARM positively reports absent — excluded, with the env remediation. */
+      absent,
       monitorUrl: '/api/admin/estate/state',
       message:
         `Pause dispatched to ${dispatched.length} resource(s)`
         + (failed.length ? `; ${failed.length} were REJECTED by ARM (see actions).` : '.')
+        + (absent.length
+          ? ` ${absent.length} deploy-named resource(s) were EXCLUDED because ARM positively reports `
+            + 'they do not exist — see `absent` for the env values to fix.'
+          : '')
         + ' The estate is PAUSING — poll /api/admin/estate/state, which promotes it to PAUSED only '
         + 'once ARM confirms every resource stopped.',
     },

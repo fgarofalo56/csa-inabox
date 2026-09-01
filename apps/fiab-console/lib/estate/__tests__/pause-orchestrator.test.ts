@@ -39,7 +39,8 @@ import {
   applyResumePoll,
   resolveDeployManifest,
   discoverFromManifest,
-  discoveryReadFailures,
+  classifyTagReadFailure,
+  partitionDiscovery,
   evaluateDrift,
   createManifestTagReader,
   normalizePowerState,
@@ -47,6 +48,7 @@ import {
   parsePreviewToken,
   previewToken,
   type EstateActuator,
+  type ManifestEntry,
   type PowerRead,
 } from '../pause-orchestrator';
 
@@ -996,6 +998,15 @@ describe('#4243 previewToken / parsePreviewToken — stable under throttled read
     expect(parsePreviewToken('')).toBeNull();
     expect(parsePreviewToken(undefined)).toBeNull();
   });
+
+  it('a NON-STRING value parses as null (stale), never throws — the token is untrusted JSON (review round 1)', () => {
+    // Measured: {"confirmToken": 5} crashed `.trim()` into a generic 500 with
+    // zero audit rows. The guard sends it to the audited stale-token refusal.
+    expect(parsePreviewToken(5 as never)).toBeNull();
+    expect(parsePreviewToken({} as never)).toBeNull();
+    expect(parsePreviewToken(null)).toBeNull();
+    expect(parsePreviewToken(true as never)).toBeNull();
+  });
 });
 
 describe('#4243 evaluateDrift — the three-way split the live incident demanded', () => {
@@ -1005,6 +1016,7 @@ describe('#4243 evaluateDrift — the three-way split the live incident demanded
     resourceId: id,
     name: id.split('/').pop()!,
     error: throttled ? 'ARM GET x was throttled (429) and stayed throttled after 3 attempt(s).' : 'ARM GET x failed 403: forbidden',
+    kind: (throttled ? 'throttled' : 'unreachable') as 'throttled' | 'unreachable',
     throttled,
   });
   const cleanToken = previewToken({ manifestIds: M, establishedIds: M, readFailures: 0 });
@@ -1057,19 +1069,80 @@ describe('#4243 evaluateDrift — the three-way split the live incident demanded
   });
 });
 
-describe('#4243 discoveryReadFailures — throttle classified DISTINCTLY', () => {
-  it('separates throttled from unreachable, and a successful read appears in neither', () => {
-    const rows: DiscoveredResource[] = [
-      res({ name: 'adx-ok', rg: 'rg-a', type: 'Microsoft.Kusto/clusters', tags: {} }),
-      res({ name: 'adx-throttled', rg: 'rg-a', type: 'Microsoft.Kusto/clusters', tags: null,
-        tagsError: 'ARM GET x was throttled (429) and stayed throttled after 3 attempt(s).' }),
-      res({ name: 'adx-forbidden', rg: 'rg-a', type: 'Microsoft.Kusto/clusters', tags: null,
-        tagsError: 'ARM GET x failed 403: forbidden' }),
-    ];
-    const failures = discoveryReadFailures(rows);
-    expect(failures).toHaveLength(2);
-    expect(failures.find((f) => f.name === 'adx-throttled')!.throttled).toBe(true);
-    expect(failures.find((f) => f.name === 'adx-forbidden')!.throttled).toBe(false);
+describe('#4243 classifyTagReadFailure — absent / throttled / unreachable, anchored on OUR error shapes', () => {
+  it('a 404 / NotFound-family answer is a POSITIVE absence, not a failed read (review round 1)', () => {
+    expect(classifyTagReadFailure('ARM GET /x?api-version=1 failed 404: {"error":{"code":"ResourceNotFound"}}')).toBe('absent');
+    expect(classifyTagReadFailure('code: ResourceGroupNotFound — Resource group rg-x could not be found')).toBe('absent');
+    expect(classifyTagReadFailure('SubscriptionNotFound: The subscription sub-x could not be found')).toBe('absent');
+    expect(classifyTagReadFailure('ParentResourceNotFound: parent workspace missing')).toBe('absent');
+  });
+
+  it('throttle is anchored on the message SHAPE, never a bare 429 substring', () => {
+    expect(classifyTagReadFailure('ARM GET /x was throttled (429) and stayed throttled after 3 attempt(s).')).toBe('throttled');
+    expect(classifyTagReadFailure('ARM GET /x failed 429: {"error":{"code":"TooManyRequests"}}')).toBe('throttled');
+    // A resource whose NAME contains 429 must not read as a throttle — the
+    // bare-substring misclassification is a recorded incident class here.
+    expect(classifyTagReadFailure('ARM GET /clusters/adx-429-lab failed 403: forbidden')).toBe('unreachable');
+  });
+
+  it('everything else — timeouts, 5xx, auth — establishes nothing: unreachable', () => {
+    expect(classifyTagReadFailure('ARM GET /x failed 403: forbidden')).toBe('unreachable');
+    expect(classifyTagReadFailure('ARM GET /x failed 503: upstream unavailable')).toBe('unreachable');
+    expect(classifyTagReadFailure('fetch timed out after 25000ms')).toBe('unreachable');
+  });
+});
+
+describe('#4243 partitionDiscovery — absent EXCLUDED and surfaced, unreadable kept and refused', () => {
+  const entryFor = (d: DiscoveredResource, fromEnv: string[]): ManifestEntry => ({
+    resourceId: d.resourceId,
+    resourceType: d.resourceType,
+    name: d.name,
+    resourceGroup: d.resourceGroup,
+    subscriptionId: d.subscriptionId,
+    fromEnv,
+  });
+
+  const ok = res({ name: 'adx-ok', rg: 'rg-a', type: 'Microsoft.Kusto/clusters', tags: {} });
+  const gone = res({ name: 'vmss-gone', rg: 'rg-a', type: 'Microsoft.Compute/virtualMachineScaleSets', tags: null,
+    tagsError: 'ARM GET /x failed 404: {"error":{"code":"ResourceNotFound"}}' });
+  const throttled = res({ name: 'adx-throttled', rg: 'rg-a', type: 'Microsoft.Kusto/clusters', tags: null,
+    tagsError: 'ARM GET /x was throttled (429) and stayed throttled after 3 attempt(s).' });
+  const entries = [
+    entryFor(ok, ['LOOM_KUSTO_CLUSTER_NAME']),
+    entryFor(gone, ['LOOM_DLZ_RG (or LOOM_ADMIN_RG)', 'LOOM_SHIR_VMSS_NAME']),
+    entryFor(throttled, ['LOOM_KUSTO_CLUSTER_NAME']),
+  ];
+
+  it('the ABSENT row leaves the population entirely — and is surfaced with the env values to fix, never dropped', () => {
+    // The mutation target: fold the 404 arm of classifyTagReadFailure into
+    // `unreachable` and this case goes red — `gone` lands in readFailures,
+    // which is the deterministic every-live-pause refusal the review measured.
+    const p = partitionDiscovery([ok, gone, throttled], entries);
+    expect(p.present.map((d) => d.name)).toEqual(['adx-ok', 'adx-throttled']);
+    expect(p.absent).toHaveLength(1);
+    expect(p.absent[0].resourceId).toBe(gone.resourceId);
+    expect(p.absent[0].fromEnv).toContain('LOOM_SHIR_VMSS_NAME');
+    expect(p.absent[0].statement).toMatch(/EXCLUDED/);
+    expect(p.absent[0].statement).toMatch(/LOOM_SHIR_VMSS_NAME/);
+    expect(p.absent[0].statement).toMatch(/pause\s+proceeds without it/i);
+    // …and the absent row is NOT a read failure.
+    expect(p.readFailures.map((f) => f.name)).toEqual(['adx-throttled']);
+    expect(p.readFailures[0].kind).toBe('throttled');
+    expect(p.readFailures[0].throttled).toBe(true);
+  });
+
+  it('an UNREADABLE row STAYS in the population (indeterminate, fail-safe) — never silently excluded', () => {
+    const p = partitionDiscovery([throttled], [entryFor(throttled, ['LOOM_KUSTO_CLUSTER_NAME'])]);
+    expect(p.present).toHaveLength(1);
+    expect(p.absent).toEqual([]);
+    expect(p.readFailures).toHaveLength(1);
+  });
+
+  it('clean reads partition clean: everything present, nothing absent, nothing failed', () => {
+    const p = partitionDiscovery([ok], [entryFor(ok, ['LOOM_KUSTO_CLUSTER_NAME'])]);
+    expect(p.present).toEqual([ok]);
+    expect(p.absent).toEqual([]);
+    expect(p.readFailures).toEqual([]);
   });
 });
 

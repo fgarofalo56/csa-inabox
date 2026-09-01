@@ -1467,9 +1467,12 @@ export interface PreviewTokenInput {
  * So the token now carries THREE facts, each compared only against its own
  * population (never a token built from a different one):
  *
- *   m — the manifest-named ids. Env-derived, immune to read failures. A
- *       mismatch here is a POSITIVELY-observed change (a deploy rewired the
- *       env) and refuses as real drift.
+ *   m — the ADDRESSABLE manifest population: the env-derived deploy-named ids
+ *       MINUS any id ARM positively reports absent (`partitionDiscovery`).
+ *       Built from the environment plus positive observations only — never
+ *       from a failed read, so a throttled read cannot move it. A mismatch
+ *       here is a POSITIVELY-observed change (a deploy rewired the env, or a
+ *       named resource appeared/was removed) and refuses as real drift.
  *   p — the positively-established pause set. Compared ONLY when BOTH sides
  *       resolved with zero read failures; a mismatch then is a positively-
  *       observed membership change (a tag moved) and refuses as real drift.
@@ -1492,9 +1495,13 @@ export interface ParsedPreviewToken {
 }
 
 /** Parse a v2 preview token. `null` for anything else — including the legacy
- *  single-hash format, which a caller must treat as stale, never as drift. */
-export function parsePreviewToken(token: string | undefined | null): ParsedPreviewToken | null {
-  const m = /^v2\.m(\d+):([0-9a-f]+)\.p(\d+):([0-9a-f]+)\.f(\d+)$/.exec((token ?? '').trim());
+ *  single-hash format AND any non-string value (the token arrives from an
+ *  untrusted JSON body, so `{"confirmToken": 5}` must land in the audited
+ *  stale-token refusal, never crash `.trim()` into a generic 500 — #4243
+ *  review round 1). Stale is never reported as drift. */
+export function parsePreviewToken(token: unknown): ParsedPreviewToken | null {
+  if (typeof token !== 'string') return null;
+  const m = /^v2\.m(\d+):([0-9a-f]+)\.p(\d+):([0-9a-f]+)\.f(\d+)$/.exec(token.trim());
   if (!m) return null;
   return {
     manifestCount: Number(m[1]),
@@ -1505,27 +1512,133 @@ export function parsePreviewToken(token: string | undefined | null): ParsedPrevi
   };
 }
 
-/** One discovery read that failed, with the throttle classification exposed. */
+/**
+ * What ONE failed manifest read OBSERVED (#4243 review round 1).
+ *
+ *   absent      ARM ANSWERED and said the named resource does not exist. That
+ *               is a POSITIVE observation, not a failed read.
+ *   throttled   ARM refused to answer (429, stayed throttled through the
+ *               bounded retry). Nothing was established.
+ *   unreachable Any other failure — timeout, 5xx, auth, network. Nothing was
+ *               established.
+ */
+export type TagReadObservationKind = 'absent' | 'throttled' | 'unreachable';
+
+// Anchored on OUR OWN error formats, never a bare numeric substring — a bare
+// `\b429\b` matches a resource name or a body byte-count and misclassifies
+// (recorded incident class in this repo: a bare substring signal blocked two
+// retryables). `armGetWithRetry` throws "… was throttled (429) …"; single-shot
+// arm-client errors are "ARM <verb> <path> failed <status>: <body>".
+const THROTTLED_SHAPE = /was throttled \(429\)|failed 429\b/;
+// The 404 family: the transport-level status from arm-client's format, plus
+// ARM's NotFound error codes for injected readers that surface the body only.
+const ABSENT_SHAPE =
+  /failed 404\b|\b(?:Parent)?ResourceNotFound\b|\bResourceGroupNotFound\b|\bSubscriptionNotFound\b/;
+
+/** Classify a tag-read error string. See `TagReadObservationKind`. */
+export function classifyTagReadFailure(error: string): TagReadObservationKind {
+  if (THROTTLED_SHAPE.test(error)) return 'throttled';
+  if (ABSENT_SHAPE.test(error)) return 'absent';
+  return 'unreachable';
+}
+
+/** One discovery read that FAILED (throttled/unreachable — never `absent`). */
 export interface DiscoveryReadFailure {
   resourceId: string;
   name: string;
   error: string;
-  /** True when the failure is 429-shaped (ArmThrottledError / "429" text). */
+  kind: 'throttled' | 'unreachable';
+  /** Convenience mirror of `kind === 'throttled'` for display code. */
   throttled: boolean;
 }
 
-/** The rows of `discovered` whose tag read FAILED, throttle-classified. */
-export function discoveryReadFailures(
+/** A deploy-named id ARM POSITIVELY reports does not exist. */
+export interface AbsentManifestResource {
+  resourceId: string;
+  name: string;
+  /** The raw ARM answer that established the absence. */
+  error: string;
+  /** The env vars that composed the id — the remediation names them. */
+  fromEnv: string[];
+  /** Shown verbatim in the UI, the 202 payload, and the audit row. */
+  statement: string;
+}
+
+export interface DiscoveryPartition {
+  /** Rows that exist (read OK) or whose readability is merely UNKNOWN. The
+   *  unknown ones STAY here so they surface as `indeterminate` in the
+   *  population and trip the reads-failed refusal — fail-safe, never silent. */
+  present: DiscoveredResource[];
+  /** Positively absent — excluded from the population on BOTH the GET and the
+   *  POST side, so the preview token stays coherent across the two. */
+  absent: AbsentManifestResource[];
+  /** Reads that FAILED without establishing anything. */
+  readFailures: DiscoveryReadFailure[];
+}
+
+/**
+ * #4243 review round 1 — split discovery into PRESENT / ABSENT / UNREADABLE.
+ *
+ * ── WHY ABSENT IS ITS OWN CLASS AND NOT A READ FAILURE ─────────────────────
+ * The live estate composes a SHIR id from mismatched env coordinates
+ * (LOOM_DLZ_RG = the admin RG, no DLZ sub var yet), so ARM answers 404 on that
+ * id DETERMINISTICALLY. Treating that 404 as a "failed read" made the strict
+ * reads-failed gate refuse EVERY live pause with a "retry" remediation a
+ * permanent 404 can never satisfy — strictly worse than the old behaviour,
+ * which proceeded with the row silently indeterminate.
+ *
+ * A 404 is not uncertainty. ARM answered: THERE IS NO RESOURCE AT THIS ID.
+ * Nothing at a nonexistent id can be paused, so the honest treatment is to
+ * EXCLUDE the entry from the population (symmetrically, GET and POST, so the
+ * token's m-part agrees while the absence persists), surface a NAMED warning
+ * that says which env values to fix, and let the pause proceed over the
+ * resources that do exist. If the resource later APPEARS, the m-part changes
+ * and the drift gate refuses with the population-changed message — also a
+ * positive observation. Throttled/timeout/5xx stay strict: they establish
+ * nothing and still refuse with the retry message.
+ */
+export function partitionDiscovery(
   discovered: readonly DiscoveredResource[],
-): DiscoveryReadFailure[] {
-  return discovered
-    .filter((d) => d.tagsError != null)
-    .map((d) => ({
+  entries: readonly ManifestEntry[],
+): DiscoveryPartition {
+  const byId = new Map(entries.map((e) => [e.resourceId.toLowerCase(), e]));
+  const present: DiscoveredResource[] = [];
+  const absent: AbsentManifestResource[] = [];
+  const readFailures: DiscoveryReadFailure[] = [];
+  for (const d of discovered) {
+    if (d.tagsError == null) {
+      present.push(d);
+      continue;
+    }
+    const kind = classifyTagReadFailure(d.tagsError);
+    if (kind === 'absent') {
+      const fromEnv = byId.get(d.resourceId.toLowerCase())?.fromEnv ?? [];
+      absent.push({
+        resourceId: d.resourceId,
+        name: d.name,
+        error: d.tagsError,
+        fromEnv,
+        statement:
+          `${d.name} is EXCLUDED from the pause set: the deploy environment names it`
+          + `${fromEnv.length ? ` (${fromEnv.join(', ')})` : ''}, but ARM positively reports that no `
+          + 'resource exists at that id. Nothing at a nonexistent id can be paused, so the pause '
+          + 'proceeds without it. Fix those env values so they address the real resource. '
+          + `Raw: ${d.tagsError.slice(0, 200)}`,
+      });
+      continue;
+    }
+    // Unreadable rows STAY in the population — they render as indeterminate
+    // and trip the reads-failed refusal. Never silently dropped.
+    present.push(d);
+    readFailures.push({
       resourceId: d.resourceId,
       name: d.name,
-      error: d.tagsError as string,
-      throttled: /throttled|\b429\b/i.test(d.tagsError as string),
-    }));
+      error: d.tagsError,
+      kind,
+      throttled: kind === 'throttled',
+    });
+  }
+  return { present, absent, readFailures };
 }
 
 /** The three-way (plus refusal-shape) verdict of the drift gate. */
@@ -1556,7 +1669,8 @@ export type DriftVerdict =
  * that the estate changed (deploy-integrity R7).
  */
 export function evaluateDrift(args: {
-  confirmToken: string | undefined | null;
+  /** From an untrusted JSON body — a non-string parses as stale, never throws. */
+  confirmToken: unknown;
   manifestIds: readonly string[];
   establishedIds: readonly string[];
   readFailures: DiscoveryReadFailure[];

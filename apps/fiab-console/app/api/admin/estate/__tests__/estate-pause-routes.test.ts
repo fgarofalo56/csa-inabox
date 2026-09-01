@@ -611,7 +611,7 @@ describe('POST /api/admin/estate/pause', () => {
       );
       expect(res.status).toBe(409);
       const j = await res.json();
-      expect(j.error).toMatch(/deploy names changed between the preview you confirmed and now/i);
+      expect(j.error).toMatch(/deploy-named population changed between the preview you confirmed and now/i);
       expect(fake.touched).toEqual([]);
       expect(auditCreate.mock.calls.map((c) => (c[0] as { kind: string }).kind))
         .toContain('estate-pause.refused-manifest-changed');
@@ -660,6 +660,118 @@ describe('POST /api/admin/estate/pause', () => {
     });
   });
 
+  /**
+   * ── #4243 REVIEW ROUND 1 — POSITIVE ABSENCE IS NOT A FAILED READ ──────────
+   * The live estate composes the SHIR id from mismatched env coordinates, so
+   * ARM answers 404 on it DETERMINISTICALLY. Under the first cut of the strict
+   * gate that 404 counted as a read failure and refused EVERY live pause with
+   * a "retry" a permanent 404 can never satisfy. A 404 is a POSITIVE
+   * observation — there is no resource at that id — so the entry is EXCLUDED
+   * (symmetrically with GET, keeping the token coherent), surfaced with the
+   * env remediation, audited, and the pause PROCEEDS. Throttled stays strict.
+   */
+  describe('#4243 review — a deploy-named resource ARM positively reports ABSENT', () => {
+    const notFound = (id: string) =>
+      new Error(
+        `ARM GET ${id}?api-version=2023-08-15 failed 404: {"error":{"code":"ResourceNotFound",`
+          + `"message":"The Resource was not found."}}`,
+      );
+
+    it('404 on a manifest-named id: the pause PROCEEDS with that entry EXCLUDED, warned, and audited', async () => {
+      const fake = fakeActuator();
+      fake.actuator.readTags = vi.fn(async (id: string) => {
+        if (id === ADX_ID) throw notFound(ADX_ID);
+        return { 'loom-estate-id': ESTATE };
+      }) as never;
+      createArmActuator.mockResolvedValue(fake.actuator);
+      const { POST } = await import('../pause/route');
+      // The preview saw the same absence (symmetric exclusion), so its token
+      // covers the pool alone with ZERO read failures.
+      const res = await POST(
+        post({ confirm: ESTATE, confirmToken: tok({ manifestIds: [POOL_ID] }) }),
+        { params: Promise.resolve({}) } as never,
+      );
+      expect(res.status).toBe(202);
+      const j = await res.json();
+      // NOT the retry refusal, NOT the drift refusal — the pause ran.
+      expect(fake.touched).toEqual([POOL_ID]);
+      expect(j.absent).toEqual([
+        expect.objectContaining({ resourceId: ADX_ID }),
+      ]);
+      expect(j.absent[0].statement).toMatch(/EXCLUDED/);
+      expect(j.absent[0].statement).toMatch(/no\s+resource exists at that id/i);
+      expect(j.absent[0].statement).toMatch(/LOOM_SUBSCRIPTION_ID/); // the env values to fix
+      expect(j.message).toMatch(/1 deploy-named resource\(s\) were EXCLUDED/);
+      // The exclusion left a trace — the zero-trace property is the incident.
+      expect(auditCreate.mock.calls.map((c) => (c[0] as { kind: string }).kind))
+        .toContain('estate-pause.absent-excluded');
+      // The snapshot holds only the resource that exists.
+      const saved = savePauseSnapshot.mock.calls[0]?.[0] as unknown as EstatePauseSnapshot;
+      expect(saved.resources.map((r) => r.resourceId)).toEqual([POOL_ID]);
+    });
+
+    it('dryRun under the same 404: `absent` is surfaced, the token carries f0, and nothing is indeterminate', async () => {
+      const fake = fakeActuator();
+      fake.actuator.readTags = vi.fn(async (id: string) => {
+        if (id === ADX_ID) throw notFound(ADX_ID);
+        return { 'loom-estate-id': ESTATE };
+      }) as never;
+      createArmActuator.mockResolvedValue(fake.actuator);
+      const { POST } = await import('../pause/route');
+      const j = await (await POST(post({ dryRun: true }), { params: Promise.resolve({}) } as never)).json();
+      expect(j.dryRun).toBe(true);
+      expect(j.absent).toHaveLength(1);
+      // Positively absent ≠ unreadable: the population is CLEAN, not degraded.
+      expect(j.readFailures).toEqual([]);
+      expect(j.population.examined).toBe(1);
+      expect(j.population.indeterminate).toBe(0);
+      expect(j.confirmToken).toMatch(/\.f0$/);
+      expect(j.confirmToken).toBe(tok({ manifestIds: [POOL_ID] }));
+      expect(fake.touched).toEqual([]);
+    });
+
+    it('UNREADABLE (throttled) stays strict — absence never leaks into the throttle class', async () => {
+      // The guard boundary: delete the 404-classifier arm (folding absent into
+      // unreachable) and the two cases above go red; widen it (folding 429
+      // into absent) and THIS case goes red by pausing through a throttle.
+      const fake = fakeActuator();
+      fake.actuator.readTags = vi.fn(async (id: string) => {
+        if (id === ADX_ID) {
+          throw new Error(`ARM GET ${ADX_ID}?api-version=2023-08-15 was throttled (429) and stayed throttled after 3 attempt(s).`);
+        }
+        return { 'loom-estate-id': ESTATE };
+      }) as never;
+      createArmActuator.mockResolvedValue(fake.actuator);
+      const { POST } = await import('../pause/route');
+      const res = await POST(
+        post({ confirm: ESTATE, confirmToken: tok() }),
+        { params: Promise.resolve({}) } as never,
+      );
+      expect(res.status).toBe(409);
+      const j = await res.json();
+      expect(j.error).toMatch(/tag read\(s\) failed \(throttled\/unreachable\)/);
+      expect(fake.touched).toEqual([]);
+    });
+
+    it('a NON-STRING confirmToken lands in the audited stale-token refusal, never a 500', async () => {
+      // Review round 1 measured: {"confirmToken": 5} crashed parsePreviewToken
+      // (.trim on a number) into a generic 500 with ZERO audit rows.
+      const fake = fakeActuator();
+      createArmActuator.mockResolvedValue(fake.actuator);
+      const { POST } = await import('../pause/route');
+      const res = await POST(
+        post({ confirm: ESTATE, confirmToken: 5 }),
+        { params: Promise.resolve({}) } as never,
+      );
+      expect(res.status).toBe(409);
+      const j = await res.json();
+      expect(j.error).toMatch(/not one this console can read/);
+      expect(fake.touched).toEqual([]);
+      expect(auditCreate.mock.calls.map((c) => (c[0] as { kind: string }).kind))
+        .toContain('estate-pause.refused-stale-token');
+    });
+  });
+
   it('dispatches the pause and returns 202 PAUSING — never PAUSED', async () => {
     const fake = fakeActuator();
     createArmActuator.mockResolvedValue(fake.actuator);
@@ -695,8 +807,12 @@ describe('POST /api/admin/estate/pause', () => {
     expect(res.status).toBe(502);
     const j = await res.json();
     expect(j.ok).toBe(false);
-    expect(j.error).toMatch(/Nothing is pausing/);
-    expect(j.error).toMatch(/still RUNNING/);
+    // Review round 1: the headline states COUNTS, and never claims a global
+    // state ("still RUNNING") that an already-paused row would contradict.
+    expect(j.error).toMatch(/Nothing was set in motion/);
+    expect(j.error).toMatch(/ARM REJECTED 2/);
+    expect(j.error).toMatch(/NONE was accepted/);
+    expect(j.error).not.toMatch(/still RUNNING/);
     expect(j.error).not.toMatch(/Pause dispatched/);
     // BOTH mutations were attempted and rejected — visible per resource…
     expect(j.actions).toHaveLength(2);

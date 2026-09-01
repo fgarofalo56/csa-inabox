@@ -45,8 +45,8 @@ import {
   createArmActuator,
   createManifestTagReader,
   discoverFromManifest,
-  discoveryReadFailures,
   loadPauseSnapshot,
+  partitionDiscovery,
   planPause,
   pollPause,
   pollResume,
@@ -77,8 +77,12 @@ async function runningPayload(actuator: EstateActuator) {
     resolveDeployManifest();
   // #4243 — discovery goes through the 429-retrying manifest tag reader, so a
   // transient throttle does not silently shrink the preview the operator sees.
+  // A deploy-named id ARM POSITIVELY reports absent is excluded here exactly
+  // as the pause POST excludes it, so the two sides mint the same token while
+  // the absence persists — and it is surfaced in `absent`, never dropped.
   const discovered = await discoverFromManifest(entries, createManifestTagReader());
-  const plan = planPause(discovered, {
+  const { present, absent, readFailures } = partitionDiscovery(discovered, entries);
+  const plan = planPause(present, {
     scope: { kind: 'explicit-inventory', estateId: manifest.estateId },
     manifest,
     ...(gateReason ? { gateReason } : {}),
@@ -95,7 +99,6 @@ async function runningPayload(actuator: EstateActuator) {
     };
   }
   const risks = capacityPreflight(plan.inventory.pausable, live);
-  const readFailures = discoveryReadFailures(discovered);
 
   return {
     state: 'RUNNING' as const,
@@ -123,12 +126,14 @@ async function runningPayload(actuator: EstateActuator) {
      * manufacture a "the set changed" refusal over an unchanged estate.
      */
     confirmToken: previewToken({
-      manifestIds: entries.map((e) => e.resourceId),
+      manifestIds: present.map((d) => d.resourceId),
       establishedIds: plan.dryRun.wouldPause.map((r) => r.resourceId),
       readFailures: readFailures.length,
     }),
     /** Discovery reads that failed — the preview may be partial when non-empty. */
     readFailures,
+    /** Deploy-named ids ARM positively reports absent — excluded, with the env remediation. */
+    absent,
     typicalResumeSeconds: TYPICAL_RESUME_SECONDS,
   };
 }
