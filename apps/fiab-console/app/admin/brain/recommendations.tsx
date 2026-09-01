@@ -49,6 +49,7 @@ import {
   MessageBarBody,
   MessageBarTitle,
   Subtitle2,
+  Text,
   Textarea,
   Tooltip,
   makeStyles,
@@ -97,6 +98,17 @@ const useStyles = makeStyles({
     backgroundColor: tokens.colorNeutralBackground3,
   },
   note: { color: tokens.colorNeutralForeground3, minWidth: 0, overflowWrap: 'anywhere' },
+  // The cost basis: a paragraph, so it WRAPS. `minWidth: 0` + `overflowWrap`
+  // keep it inside its flex parent at every width — the badge it came out of
+  // had neither, which is how ~650 characters ended up painted across the
+  // rows above and below it on the live console.
+  costBasis: {
+    color: tokens.colorNeutralForeground3,
+    fontSize: tokens.fontSizeBase200,
+    lineHeight: tokens.lineHeightBase200,
+    minWidth: 0,
+    overflowWrap: 'anywhere',
+  },
 });
 
 export interface RecommendationsProps {
@@ -123,6 +135,45 @@ async function postDecision(
   const json = (await res.json().catch(() => null)) as { ok?: boolean; error?: string } | null;
   if (!res.ok || !json?.ok) return { ok: false, error: json?.error ?? `HTTP ${res.status}` };
   return { ok: true };
+}
+
+/**
+ * Split a server-rendered cost label into the part a BADGE can hold and the
+ * part it cannot.
+ *
+ * ── WHY THIS EXISTS (measured live, 2026-09-01) ────────────────────────────
+ * `formatCostFigure` returns `"$46.66 (DERIVED estimate — not a bill; <basis>)"`
+ * and `basis` is a full pricing methodology — on the live estate, ~650
+ * characters naming the meters, the retail-rate source, the excluded free
+ * grant, and the scale-fact provenance. That whole string was being passed as
+ * the children of a Fluent `Badge`, which is a FIXED-HEIGHT (20px) chip with
+ * `overflow: visible`. Measured on the live console: the badge's box stayed
+ * 20px tall while its text laid out 1330px wide, painting straight over the
+ * badge row above it and the "ownership NOT established" badge below. The
+ * operator's report was "loom brain is not readeable" and THIS was the worst
+ * instance of it — invisible to jsdom (no layout) and to the code-reading
+ * audit that produced the other ten fixes, because the fixtures carry short
+ * bases and only real estate data is long enough to overflow.
+ *
+ * The split is deliberate about WHAT stays in the badge: the amount and the
+ * provenance marker. `DERIVED_MARKER` is a load-bearing contract — a derived
+ * estimate must never read as a bill — so it must remain visible at a glance,
+ * never demoted into a tooltip. The basis is reference detail and moves to
+ * wrapping body text beneath the row, where a paragraph belongs. Nothing is
+ * hidden: the full label still renders, and it stays selectable and readable
+ * by assistive tech (a tooltip-only treatment would fail both).
+ */
+export function splitCostLabel(label: string): { chip: string; basis: string } {
+  const open = label.indexOf('(');
+  const semi = label.indexOf(';', open);
+  if (open === -1 || semi === -1 || !label.endsWith(')')) {
+    // Shape we do not recognise: keep it whole rather than guess at a split.
+    return { chip: label, basis: '' };
+  }
+  return {
+    chip: `${label.slice(0, semi)})`,
+    basis: label.slice(semi + 1, -1).trim(),
+  };
 }
 
 /**
@@ -261,8 +312,10 @@ function FindingCard({
         <Badge appearance="outline">{finding.detector}</Badge>
         <Badge appearance="outline">confidence: {finding.confidence}</Badge>
         {finding.costLabel ? (
+          // Only the amount + provenance marker rides in the chip; the basis
+          // renders as body text below the row (see `splitCostLabel`).
           <Badge appearance="tint" color="warning" data-cost-source={finding.cost?.source}>
-            {finding.costLabel}
+            {splitCostLabel(finding.costLabel).chip}
           </Badge>
         ) : (
           // NOT "$0". An unpriced finding is unpriced.
@@ -278,6 +331,15 @@ function FindingCard({
           </Badge>
         )}
       </div>
+
+      {finding.costLabel && splitCostLabel(finding.costLabel).basis ? (
+        // The pricing methodology, as WRAPPING body text. It is reference
+        // detail, so it reads at caption scale — but it is never truncated and
+        // never tooltip-only: how a figure was derived is the claim's evidence.
+        <Text className={s.costBasis} data-testid="cost-basis">
+          {splitCostLabel(finding.costLabel).basis}
+        </Text>
+      ) : null}
 
       <div className={s.actions}>
         {finding.subjects.map((id) => (
