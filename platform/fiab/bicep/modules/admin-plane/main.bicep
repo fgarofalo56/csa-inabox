@@ -2514,11 +2514,17 @@ param loomBackends object = {
   // `boundary != 'Commercial'`, because Commercial's forward path is Azure
   // Managed Redis via a scheduled cutover of the live cache
   // (docs/fiab/runbooks/redis-amr-cutover.md), not a second cache stood up
-  // beside it. On GCC / GCC-High / IL5 'enabled' (the default) deploys
+  // beside it. On GCC-High / IL5 'enabled' (the default) deploys
   // shared/redis-oss-aca.bicep — a Valkey (BSD-3-Clause) Container App pulled
   // from the estate's own ACR mirror — and binds LOOM_RESULT_CACHE_REDIS /
   // _PASSWORD / _TLS on the Console, which is what turns the PSR-5/6 result
-  // cache from per-replica into cross-replica. Azure Managed Redis is Azure
+  // cache from per-replica into cross-replica. NOT GCC, despite it being
+  // sovereign: `redisOssActive` ALSO requires `containerPlatform ==
+  // 'containerApps'` AND `deployAppsEnabled`, and params/gcc.bicepparam
+  // deliberately leaves deployAppsEnabled unset because GCC has no image
+  // producer lane yet (#3078) — a GCC deploy stands up zero Container Apps, so
+  // nothing is deployed and nothing is bound there. GCC gains this with its
+  // apps lane, not by flipping this default. Azure Managed Redis is Azure
   // Public cloud only with no announced Government date, and the classic Azure
   // Cache for Redis is turned off 2028-10-01, so this is those boundaries' only
   // non-dated answer. Set 'disabled' to skip the app; the result cache then runs

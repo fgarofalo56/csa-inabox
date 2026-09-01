@@ -191,7 +191,7 @@ az containerapp list --subscription "$SUB" -g "$RG" \
 ```
 
 - **STOP if any app other than `loom-console` / `loom-capacity-broker` appears** —
-  update [§1.1](#11-client-inventory--every-binder-from-source) and [§6](#6-what-breaks-if-this-is-done-wrong-and-the-blast-radius) before proceeding.
+  update [§1.1](#11-client-inventory-every-binder-from-source) and [§6](#6-what-breaks-if-this-is-done-wrong-and-the-blast-radius) before proceeding.
 
 **2.3 — Confirm the AMR prerequisites exist.** Both were verified present on
 2026-09-01; verify again rather than assume.
@@ -399,7 +399,7 @@ fires on a `:6380` suffix
 (`apps/loom-capacity-broker/internal/ledger/redis_ledger.go:124-126`).
 
 **Use the `host:port,password=…,ssl=True` form — NOT a `rediss://` URL.** Both
-reach `parseConn` (`redis_ledger.go:71-127`), but only the comma form is safe for
+reach `parseConn` (`redis_ledger.go:72-128`), but only the comma form is safe for
 an AMR access key. This is [§6.2 trap 3](#62-the-four-traps-that-produce-a-green-but-broken-cutover),
 and it is the difference between a working ledger and a silent one:
 
@@ -414,20 +414,31 @@ KEY=$(MSYS_NO_PATHCONV=1 az rest --method post \
   --query primaryKey -o tsv)
 RC=$?
 KEY=$(printf '%s' "$KEY" | tr -d '\r')
-[ "$RC" -eq 0 ] && [ -n "$KEY" ] || echo "STOP: listKeys failed (rc=$RC) or returned empty. Confirm accessKeysAuthentication is Enabled on the database, then re-run. Do NOT set the secret."
+if [ "$RC" -ne 0 ] || [ -z "$KEY" ]; then
+  unset KEY
+  echo "STOP: listKeys failed (rc=$RC) or returned empty. Confirm accessKeysAuthentication is Enabled on the database, then re-run. Do NOT set the secret, and do NOT restart the broker — restarting without the secret is precisely the silent fall-back to the in-process ledger that this step exists to prevent."
+else
+  # Comma form, never rediss://. An AMR key is standard base64, whose alphabet
+  # includes `/`, and an RFC 3986 authority ends at the first `/` — so a URL is
+  # unparseable for ~48% of keys (measured), and Go's url.Parse then reports a
+  # bogus "invalid port" rather than the truth. `parseConn`'s comma branch splits
+  # on `,` then SplitN(p,"=",2), so both `/` and `=` padding survive intact, and
+  # ssl=True sets TLS outright instead of relying on the :6380 heuristic.
+  az containerapp secret set --subscription "$SUB" -g "$RG" -n loom-capacity-broker \
+    --secrets "redis-conn=$AMR_EP,password=$KEY,ssl=True"
+  SET_RC=$?
+  unset KEY   # never echoed, never written to a file, never in this document
 
-# Comma form, never rediss://. An AMR key is standard base64, whose alphabet
-# includes `/`, and an RFC 3986 authority ends at the first `/` — so a URL is
-# unparseable for ~48% of keys (measured), and Go's url.Parse then reports a
-# bogus "invalid port" rather than the truth. `parseConn`'s comma branch splits
-# on `,` then SplitN(p,"=",2), so both `/` and `=` padding survive intact, and
-# ssl=True sets TLS outright instead of relying on the :6380 heuristic.
-[ -n "$KEY" ] && az containerapp secret set --subscription "$SUB" -g "$RG" -n loom-capacity-broker \
-  --secrets "redis-conn=$AMR_EP,password=$KEY,ssl=True"
-unset KEY   # never echoed, never written to a file, never in this document
-
-az containerapp revision restart --subscription "$SUB" -g "$RG" -n loom-capacity-broker \
-  --revision "$(az containerapp show --subscription "$SUB" -g "$RG" -n loom-capacity-broker --query properties.latestRevisionName -o tsv | tr -d '\r')"
+  # The restart is INSIDE this branch on purpose. A restart that runs after a
+  # failed secret write brings the broker up on the old (or absent) value and it
+  # reports green on its in-process ledger — the exact failure mode above.
+  if [ "$SET_RC" -ne 0 ]; then
+    echo "STOP: secret set failed (rc=$SET_RC). The broker was NOT restarted, so it is still running its previous configuration. Fix the write, then re-run this step."
+  else
+    az containerapp revision restart --subscription "$SUB" -g "$RG" -n loom-capacity-broker \
+      --revision "$(az containerapp show --subscription "$SUB" -g "$RG" -n loom-capacity-broker --query properties.latestRevisionName -o tsv | tr -d '\r')"
+  fi
+fi
 ```
 
 If the decision was **"leave the broker on its in-process ledger"** (defensible
@@ -627,7 +638,8 @@ separate change on a separate day.
 
 ### 6.3 The Capacity Broker cannot speak to AMR under the module defaults
 
-**This is a blocking design decision, not a step.** Two facts collide:
+**This is a blocking design decision, not a step.** It is tracked as **#4270**.
+Two facts collide:
 
 - `managed-redis.bicep:155` sets `accessKeysAuthentication: 'Disabled'` by
   default — deliberately, so there is no shared key to leak; Loom connects with
