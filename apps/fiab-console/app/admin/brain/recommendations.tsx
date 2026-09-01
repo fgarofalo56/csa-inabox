@@ -25,12 +25,18 @@
  *
  * ── WHY THE HEADER BANNER IS DERIVED, NOT WRITTEN ──────────────────────────
  * "Nothing on this page changes anything in Azure" was a standing claim. It is
- * now COMPUTED from what this render actually offers: it is stated only while
- * the surface carries no Perform control (registry unread, or nothing in a
- * performable class), and replaced by the truth when it does. A hard-coded
- * version of either sentence would be false half the time, which is exactly the
- * R7 failure `deploy-integrity.md` names. `__tests__/perform-ui.test.tsx` holds
- * both directions.
+ * now COMPUTED from what this render actually offers — and computed by the SAME
+ * function the buttons render from (`performDisposition`, summed by
+ * `performOfferSummary`), because the first attempt computed it independently
+ * and was measurably wrong: a finding with a persisted `performed` record
+ * rendered zero Perform controls while the banner still read "Review, or
+ * perform. 1 of 1 finding(s)…" (#4260 review).
+ *
+ * It has THREE branches, not two, because two could not be honest about a
+ * finding that has ALREADY been performed: that finding offers no control, so
+ * it must not be counted as offered — but Azure was changed for it, so the
+ * recommend-only sentence is not true of it either. `__tests__/perform-ui.test.tsx`
+ * holds all three directions.
  *
  * PRP §1 decision 1 is still why the guards are as heavy as they are. Of the
  * Container App environments visible across these subscriptions, most are NOT
@@ -87,7 +93,8 @@ import {
   PersistedStateBanner,
   RECOMMEND_ONLY_SENTENCE,
   fetchPerformState,
-  performableCount,
+  performOfferSummary,
+  performStateNoticeShown,
   postPerform,
   recordsByFinding,
   type PerformOutcomeResult,
@@ -283,8 +290,33 @@ export function Recommendations({
     };
   }, [reloadTick]);
 
+  /**
+   * Findings performed in THIS session, held here rather than in each card so
+   * the banner and the buttons read one set through one predicate
+   * (`performDisposition`). Lifting it is what lets the count drop the instant
+   * the control is withdrawn, instead of the two disagreeing — the #4260
+   * review measured both halves of that disagreement.
+   */
+  const [performedInSession, setPerformedInSession] = React.useState<ReadonlySet<string>>(
+    () => new Set<string>(),
+  );
+  const markPerformed = React.useCallback((findingId: string) => {
+    setPerformedInSession((prev) => {
+      if (prev.has(findingId)) return prev;
+      const next = new Set(prev);
+      next.add(findingId);
+      return next;
+    });
+  }, []);
+
   const records = recordsByFinding(performState);
-  const performable = performableCount(findings, performState);
+  const { offered, alreadyPerformed } = performOfferSummary(
+    findings,
+    performState,
+    records,
+    performedInSession,
+  );
+  const stateNoticeShown = performStateNoticeShown(performState);
 
   const totalDerived = findings.reduce((acc, f) => acc + (f.cost?.amountUsd ?? 0), 0);
   const priced = findings.filter((f) => f.cost).length;
@@ -307,20 +339,45 @@ export function Recommendations({
     <div className={s.root} data-testid="recommendations">
       <Subtitle2>Recommendations ({findings.length})</Subtitle2>
 
-      {/* DERIVED, never asserted. `performable` counts the findings this render
-          actually offers a Perform control for, so the two sentences below can
-          never be false about the surface the operator is looking at. */}
-      <MessageBar intent="info" data-testid="recommend-only-banner" data-performable={performable}>
+      {/* DERIVED, never asserted — and derived from the SAME predicate the
+          buttons render from (`performDisposition` via `performOfferSummary`),
+          so "computed from what the render actually offers" is measurable
+          rather than claimed. It counts three states, because two was one too
+          few: a finding already performed offers no control and must not be
+          counted as offered — but the page did (or a previous session did)
+          change Azure for it, so the recommend-only sentence is not true of it
+          either. That case gets its own branch. */}
+      <MessageBar
+        intent="info"
+        data-testid="recommend-only-banner"
+        data-performable={offered}
+        data-already-performed={alreadyPerformed}
+      >
         <MessageBarBody>
           <MessageBarTitle>
-            {performable > 0 ? 'Review, or perform.' : 'Recommend-only.'}
+            {offered > 0
+              ? 'Review, or perform.'
+              : alreadyPerformed > 0
+                ? 'Recommend-only for what is left.'
+                : 'Recommend-only.'}
           </MessageBarTitle>
-          {performable > 0 ? (
+          {offered > 0 ? (
             <>
-              {performable} of {findings.length} finding(s) are in a class the platform can execute
-              itself, behind a staged two-step confirm — performing one is a REAL change to Azure
-              with a real before/after receipt. Every other finding is recommend-only: approving
-              records a decision; the change itself is a repository edit you make.{' '}
+              {offered} of {findings.length} finding(s) are offered for execution on this page,
+              behind a staged two-step confirm — performing one is a REAL change to Azure with a
+              real before/after receipt.{' '}
+              {alreadyPerformed > 0
+                ? `Another ${alreadyPerformed} already carries a performed receipt and is not offered again. `
+                : ''}
+              Every other finding is recommend-only: approving records a decision; the change
+              itself is a repository edit you make.{' '}
+            </>
+          ) : alreadyPerformed > 0 ? (
+            <>
+              Nothing is offered for execution right now: {alreadyPerformed} of {findings.length}{' '}
+              finding(s) already carry a performed receipt, and every other finding is
+              recommend-only — approving records a decision; the change itself is a repository
+              edit you make.{' '}
             </>
           ) : (
             <>
@@ -329,7 +386,9 @@ export function Recommendations({
               {performState === null
                 ? 'Checking which findings the platform can execute itself… '
                 : performState.kind === 'ready'
-                  ? 'No finding in this snapshot is in a class the platform can execute itself. '
+                  ? 'Nothing in this snapshot is offered for execution: a finding is offered ' +
+                    'only when the server registers an executor for its detector kind and the ' +
+                    "subject's ownership is established. "
                   : ''}
             </>
           )}
@@ -365,6 +424,9 @@ export function Recommendations({
             submit={submit}
             performState={performState}
             perform={perform}
+            performedInSession={performedInSession}
+            onPerformed={markPerformed}
+            stateNoticeShown={stateNoticeShown}
             {...(record ? { record } : {})}
           />
         );
@@ -379,6 +441,9 @@ function FindingCard({
   submit,
   performState,
   perform,
+  performedInSession,
+  onPerformed,
+  stateNoticeShown,
   record,
 }: {
   finding: WireFinding;
@@ -386,6 +451,9 @@ function FindingCard({
   submit: (id: string, d: ProposalDecision, note: string) => Promise<{ ok: boolean; error?: string }>;
   performState: PerformStateResult | null;
   perform: (body: PerformRequestBody) => Promise<PerformOutcomeResult>;
+  performedInSession: ReadonlySet<string>;
+  onPerformed: (findingId: string) => void;
+  stateNoticeShown: boolean;
   record?: RecommendationStateRecord;
 }) {
   const s = useStyles();
@@ -546,6 +614,9 @@ function FindingCard({
         ownershipConfirmed={finding.ownershipConfirmed}
         state={performState}
         perform={perform}
+        performedInSession={performedInSession}
+        onPerformed={onPerformed}
+        stateNoticeShownAtListLevel={stateNoticeShown}
         {...(record ? { record } : {})}
       />
 

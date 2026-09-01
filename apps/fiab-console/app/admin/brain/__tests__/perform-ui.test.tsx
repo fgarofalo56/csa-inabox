@@ -36,6 +36,7 @@ import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { FluentProvider, webLightTheme } from '@fluentui/react-components';
 import { Recommendations } from '../recommendations';
 import {
+  PerformControls,
   interpretPerformResponse,
   subjectResourceName,
   type PerformOutcomeResult,
@@ -141,6 +142,51 @@ const RECEIPT: PerformReceipt = {
 
 function wrap(ui: ReactElement) {
   return render(<FluentProvider theme={webLightTheme}>{ui}</FluentProvider>);
+}
+
+/** The claim the long-standing `no-mutation-controls` contract reads. */
+const SENTENCE = 'Nothing on this page changes anything in Azure';
+
+/**
+ * A perform seam that stages on the tokenless leg and performs on the token
+ * leg — i.e. the real two-step shape. Module-scope because the withdrawal and
+ * banner specs below drive the SAME flow and must not fork a second stub that
+ * could drift from this one.
+ */
+function stagingPerform() {
+  const calls: PerformRequestBody[] = [];
+  const perform = async (b: PerformRequestBody): Promise<PerformOutcomeResult> => {
+    calls.push(b);
+    if (!b.confirmToken) {
+      return {
+        kind: 'staged',
+        executor: 'scale-to-zero',
+        confirmToken: 'server-minted-token-abc',
+        expiresAt: '2026-09-01T12:10:00.000Z',
+        note: 'Nothing was changed in Azure.',
+      };
+    }
+    return { kind: 'performed', receipt: RECEIPT, persisted: true };
+  };
+  return { calls, perform };
+}
+
+/** Render one performable finding and land `outcome` on the first click. */
+async function performOnce(outcome: PerformOutcomeResult) {
+  const perform = async (): Promise<PerformOutcomeResult> => outcome;
+  renderList({ perform });
+  fireEvent.click(await screen.findByTestId('perform'));
+}
+
+/** Drive stage → type → confirm to a real receipt. */
+async function stageTypeAndConfirm() {
+  fireEvent.click(await screen.findByTestId('perform'));
+  await screen.findByTestId('perform-confirm-dialog');
+  fireEvent.change(screen.getByTestId('perform-confirm-input'), {
+    target: { value: 'loom-console' },
+  });
+  fireEvent.click(screen.getByTestId('perform-confirm'));
+  await screen.findByTestId('perform-receipt');
 }
 
 /** Render the list with the perform seams injected. */
@@ -268,17 +314,43 @@ describe('the honest not-performable state (G2 — never a dead button)', () => 
 });
 
 describe('the perform-state read-back could not be read', () => {
-  it('discloses the failure and offers no Perform action', async () => {
-    renderList({
-      state: { kind: 'unavailable', reason: 'the read-back answered HTTP 503' },
-    });
+  it('discloses the failure ONCE for the whole list, and offers no Perform action', async () => {
+    // #4260 review, should-fix 4: every card also rendered its own copy of this
+    // warning, so a 30-finding estate showed 31 identical warning MessageBars.
+    const findings = [finding(), finding({ id: 'f-2' }), finding({ id: 'f-3' })];
+    renderList({ findings, state: { kind: 'unavailable', reason: 'the read-back answered HTTP 503' } });
+
     const bar = await screen.findByTestId('perform-state-disclosure');
     expect(bar.textContent).toContain('HTTP 503');
     expect(screen.queryAllByTestId('perform')).toHaveLength(0);
-    // And it does NOT collapse "unreadable" into "not performable".
-    expect(screen.getByTestId('perform-state-unavailable').textContent).toContain(
-      'not evidence that the platform cannot act',
+    // And it does NOT collapse "unreadable" into "not performable" — the
+    // sentence moved here with the bar rather than being dropped.
+    expect(bar.textContent).toContain('not evidence that the platform cannot act');
+
+    // POPULATION first: three cards rendered, so "zero per-card bars" is not
+    // zero because nothing rendered.
+    expect(screen.getAllByTestId('finding-card')).toHaveLength(3);
+    expect(screen.queryAllByTestId('perform-state-disclosure')).toHaveLength(1);
+    expect(screen.queryAllByTestId('perform-state-unavailable')).toHaveLength(0);
+  });
+
+  it('the per-card bar still exists for a consumer that shows NO list-level disclosure', () => {
+    // Anti-vacuity for the spec above: the suppression must be a suppression,
+    // not a deletion. A standalone `PerformControls` still discloses.
+    wrap(
+      <PerformControls
+        findingId="f-always-on-1"
+        detector="always-on-unused"
+        subjects={[SUBJECT]}
+        ownershipConfirmed
+        state={{ kind: 'unavailable', reason: 'the read-back answered HTTP 503' }}
+        perform={async () => ({ kind: 'indeterminate', reason: 'not reached' })}
+        performedInSession={new Set<string>()}
+        onPerformed={() => {}}
+        stateNoticeShownAtListLevel={false}
+      />,
     );
+    expect(screen.getByTestId('perform-state-unavailable').textContent).toContain('HTTP 503');
   });
 
   it('Retry re-invokes the loader', async () => {
@@ -305,24 +377,6 @@ describe('the perform-state read-back could not be read', () => {
 // ---------------------------------------------------------------------------
 
 describe('the staged confirm — NOTHING executes without the typed confirm', () => {
-  function stagingPerform() {
-    const calls: PerformRequestBody[] = [];
-    const perform = async (b: PerformRequestBody): Promise<PerformOutcomeResult> => {
-      calls.push(b);
-      if (!b.confirmToken) {
-        return {
-          kind: 'staged',
-          executor: 'scale-to-zero',
-          confirmToken: 'server-minted-token-abc',
-          expiresAt: '2026-09-01T12:10:00.000Z',
-          note: 'Nothing was changed in Azure.',
-        };
-      }
-      return { kind: 'performed', receipt: RECEIPT, persisted: true };
-    };
-    return { calls, perform };
-  }
-
   it('the first click STAGES: one call, no token, and the dialog says nothing changed yet', async () => {
     const { calls, perform } = stagingPerform();
     renderList({ perform });
@@ -390,6 +444,80 @@ describe('the staged confirm — NOTHING executes without the typed confirm', ()
     await waitFor(() => expect(screen.queryByTestId('perform-confirm-dialog')).toBeNull());
     expect(calls.length).toBe(1);
   });
+
+  it('re-staging RESETS the typed confirm — a cancel never leaves the speed bump pre-satisfied', async () => {
+    // #4260 review, M8: the reviewer deleted `setTyped('')` from `stage()` and
+    // this suite stayed 35/35 green. The live code was correct and completely
+    // unguarded, so a later edit could have removed it in silence. What it
+    // protects: type the name, cancel, re-stage — without the reset the dialog
+    // reopens carrying the previous text and "Confirm and perform" is already
+    // live with zero typing, which is no second gate at all.
+    const { perform } = stagingPerform();
+    renderList({ perform });
+    fireEvent.click(await screen.findByTestId('perform'));
+    await screen.findByTestId('perform-confirm-dialog');
+    fireEvent.change(screen.getByTestId('perform-confirm-input'), {
+      target: { value: 'loom-console' },
+    });
+    // Precondition — otherwise this spec could pass over a dialog that never
+    // accepted the text in the first place.
+    expect((screen.getByTestId('perform-confirm') as HTMLButtonElement).disabled).toBe(false);
+
+    fireEvent.click(screen.getByTestId('perform-cancel'));
+    await waitFor(() => expect(screen.queryByTestId('perform-confirm-dialog')).toBeNull());
+
+    fireEvent.click(screen.getByTestId('perform'));
+    await screen.findByTestId('perform-confirm-dialog');
+    expect((screen.getByTestId('perform-confirm-input') as HTMLInputElement).value).toBe('');
+    expect((screen.getByTestId('perform-confirm') as HTMLButtonElement).disabled).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The control is WITHDRAWN once it has been performed (#4260 review, blocker 1)
+// ---------------------------------------------------------------------------
+
+describe('a performed control is withdrawn, never re-armed under its own receipt', () => {
+  it('an IN-SESSION perform withdraws the Perform button and says why', async () => {
+    // MEASURED on the shipped code: after a successful in-session perform the
+    // button was still rendered and ENABLED (`buttons=1 disabled=false`), and a
+    // re-click issued a fresh staging call with `token=undefined`. The server
+    // refuses the second attempt — every guard is re-derived from a fresh
+    // snapshot — so this was never a hole, but it invited a click that lands on
+    // a red refusal directly beneath a receipt saying it already succeeded.
+    const { calls, perform } = stagingPerform();
+    renderList({ perform });
+    await stageTypeAndConfirm();
+
+    // GONE, not merely disabled: a disabled button is one someone re-enables.
+    expect(screen.queryAllByTestId('perform')).toHaveLength(0);
+    const already = screen.getByTestId('perform-already');
+    expect(already.getAttribute('data-performed-via')).toBe('session');
+    expect(already.textContent).toContain('withdrawn');
+    // Two calls total — the staging and the confirm. No third could be issued.
+    expect(calls.length).toBe(2);
+  });
+
+  it('a FAILED outcome does NOT withdraw it — the withdrawal is not blanket', async () => {
+    // Anti-vacuity for the spec above: if `settle` withdrew on every outcome,
+    // that one would still pass and the operator would lose the retry on a
+    // write that never landed.
+    await performOnce({
+      kind: 'failed',
+      error: 'ARM status 429: too many requests',
+      executor: 'scale-to-zero',
+    });
+    await screen.findByTestId('perform-failed');
+    expect(screen.queryAllByTestId('perform')).toHaveLength(1);
+    expect(screen.queryByTestId('perform-already')).toBeNull();
+  });
+
+  it('a persisted PERFORMED record withdraws it too, and says the receipt is above', async () => {
+    renderList({ state: ready([PERFORMABLE], [record({ state: 'performed', receipt: RECEIPT })]) });
+    const already = await screen.findByTestId('perform-already');
+    expect(already.getAttribute('data-performed-via')).toBe('record');
+    expect(screen.queryAllByTestId('perform')).toHaveLength(0);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -397,13 +525,6 @@ describe('the staged confirm — NOTHING executes without the typed confirm', ()
 // ---------------------------------------------------------------------------
 
 describe('outcomes are rendered honestly', () => {
-  async function performOnce(outcome: PerformOutcomeResult) {
-    const perform = async (b: PerformRequestBody): Promise<PerformOutcomeResult> =>
-      b.confirmToken ? outcome : outcome;
-    renderList({ perform });
-    fireEvent.click(await screen.findByTestId('perform'));
-  }
-
   it('a guard refusal shows the guard and the server reason', async () => {
     await performOnce({
       kind: 'refused',
@@ -454,6 +575,96 @@ describe('outcomes are rendered honestly', () => {
     await performOnce({ kind: 'performed', receipt: RECEIPT, persisted: true });
     expect(await screen.findByTestId('perform-receipt')).toBeTruthy();
     expect(screen.queryByTestId('perform-not-persisted')).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// R7 — a TITLE is an assertion too (#4260 review, should-fix 1)
+// ---------------------------------------------------------------------------
+
+describe('R7 — the MessageBar titles assert only what the response established', () => {
+  it('splits the route’s TWO 409s on the field the route already sends', () => {
+    // `route.ts` answers 409 twice over: `refused` carries `performable:true` +
+    // `guard`; `not-performable` carries `performable:false` + `detector` and
+    // NO guard, because no guard was ever reached. The discriminator was on
+    // the wire the whole time and this client ignored it.
+    expect(
+      interpretPerformResponse(409, {
+        ok: false,
+        error: 'REFUSED: no resolved ownership edge covers the subject',
+        performable: true,
+        guard: 'ownership-confirmed',
+      }),
+    ).toMatchObject({ kind: 'refused', guard: 'ownership-confirmed' });
+
+    expect(
+      interpretPerformResponse(409, {
+        ok: false,
+        error: "No executor is registered for detector kind 'dangling-empty-wire'.",
+        performable: false,
+        detector: 'dangling-empty-wire',
+      }),
+    ).toMatchObject({ kind: 'not-performable', detector: 'dangling-empty-wire' });
+  });
+
+  it('a not-performable 409 is NOT headlined as a guard refusal', async () => {
+    // MEASURED on the shipped code: the rendered string was the nonsense
+    // "Refused by a server guard.No executor is registered for detector kind x".
+    await performOnce({
+      kind: 'not-performable',
+      reason: "No executor is registered for detector kind 'x'.",
+      detector: 'x',
+    });
+    const bar = await screen.findByTestId('perform-response-not-performable');
+    expect(bar.textContent).toContain('No executor for this class.');
+    expect(bar.textContent).toContain('No guard was reached');
+    expect(bar.textContent).not.toContain('Refused by');
+    expect(screen.queryByTestId('perform-refused')).toBeNull();
+  });
+
+  it('a guard refusal names THAT guard in the title', async () => {
+    await performOnce({
+      kind: 'refused',
+      guard: 'snapshot-complete',
+      reason: 'REFUSED: the fresh estate pull is INCOMPLETE',
+    });
+    expect((await screen.findByTestId('perform-refused')).textContent).toContain(
+      'Refused by the snapshot-complete guard.',
+    );
+  });
+
+  it('a 409 that names no guard does not invent one', async () => {
+    await performOnce({ kind: 'refused', reason: 'REFUSED: something the body did not attribute' });
+    const bar = await screen.findByTestId('perform-refused');
+    expect(bar.getAttribute('data-guard')).toBe('');
+    expect(bar.textContent).toContain('not established');
+  });
+
+  it('a 503 does not assert a configuration gap it did not establish', async () => {
+    // The 503 arm also carries every `ResourceGraphCollectionError`:
+    // `arg-collect.ts` throws it when the console identity cannot get an ARM
+    // token AND on any non-OK ARG response — a throttle, a 403, a 500. None of
+    // those is "not configured in this deployment", which is what the shipped
+    // title said over all of them. `apiHonestError` emits only
+    // `{ok:false, error}`, so there is nothing in the body to split on and the
+    // honest move is to defer to the server's own message.
+    await performOnce({
+      kind: 'gate',
+      reason:
+        'could not acquire an ARM token for the console identity; NO query was issued, so ' +
+        'nothing is known about the estate',
+    });
+    const bar = await screen.findByTestId('perform-gate');
+    expect(bar.textContent).toContain('NO query was issued');
+    expect(bar.textContent).not.toContain('Not configured in this deployment');
+    expect(bar.textContent).toContain('does not guess');
+  });
+
+  it('…and the same title serves a genuine missing-deploy-value 503, without renaming it', async () => {
+    await performOnce({ kind: 'gate', reason: 'LOOM_COSMOS_ENDPOINT is not set' });
+    const bar = await screen.findByTestId('perform-gate');
+    expect(bar.textContent).toContain('Stopped at a precondition');
+    expect(bar.textContent).toContain('LOOM_COSMOS_ENDPOINT');
   });
 });
 
@@ -539,8 +750,6 @@ describe('persisted recommendation state survives a reload', () => {
 // ---------------------------------------------------------------------------
 
 describe('the recommend-only banner is DERIVED, so it is true in both directions', () => {
-  const SENTENCE = 'Nothing on this page changes anything in Azure';
-
   it('states it while the read-back has not answered (no Perform control exists yet)', () => {
     // A loader that never settles: the banner must be honest about THIS render.
     wrap(
@@ -578,5 +787,85 @@ describe('the recommend-only banner is DERIVED, so it is true in both directions
     const banner = screen.getByTestId('recommend-only-banner');
     expect(banner.getAttribute('data-performable')).toBe('0');
     expect(banner.textContent).toContain(SENTENCE);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The banner counts THE BUTTON'S predicate (#4260 review, blocker 2)
+// ---------------------------------------------------------------------------
+
+describe('the banner count comes from the same predicate the buttons do', () => {
+  it('a persisted PERFORMED record is not counted as offered', async () => {
+    // MEASURED on the shipped code: this exact render produced ZERO Perform
+    // controls and `data-performable=1`, dropped the recommend-only sentence,
+    // and read "Review, or perform. 1 of 1 finding(s)…". It over-warned rather
+    // than under-warned, so it was never dangerous — but the claim the PR asked
+    // a reviewer to trust ("computed from what the render actually offers") was
+    // measurably false.
+    renderList({ state: ready([PERFORMABLE], [record({ state: 'performed', receipt: RECEIPT })]) });
+    await screen.findByTestId('perform-already');
+    const banner = screen.getByTestId('recommend-only-banner');
+
+    expect(screen.queryAllByTestId('perform')).toHaveLength(0);
+    expect(banner.getAttribute('data-performable')).toBe('0');
+    expect(banner.getAttribute('data-already-performed')).toBe('1');
+    expect(banner.textContent).not.toContain('Review, or perform.');
+    // …and it does NOT swing to the recommend-only claim either. Azure WAS
+    // changed for this finding; "nothing on this page changes anything in
+    // Azure" would be the same error in the other direction.
+    expect(banner.textContent).not.toContain(SENTENCE);
+    expect(banner.textContent).toContain('already carry a performed receipt');
+  });
+
+  it('an IN-SESSION perform drops the count in the same render that withdraws the button', async () => {
+    const { perform } = stagingPerform();
+    renderList({ perform });
+    await screen.findByTestId('perform');
+    expect(screen.getByTestId('recommend-only-banner').getAttribute('data-performable')).toBe('1');
+
+    await stageTypeAndConfirm();
+
+    const banner = screen.getByTestId('recommend-only-banner');
+    expect(screen.queryAllByTestId('perform')).toHaveLength(0);
+    expect(banner.getAttribute('data-performable')).toBe('0');
+    expect(banner.getAttribute('data-already-performed')).toBe('1');
+    expect(banner.textContent).not.toContain(SENTENCE);
+  });
+
+  it('mixed: one still offered, one already performed — both counted, separately', async () => {
+    renderList({
+      findings: [finding(), finding({ id: 'f-always-on-2' })],
+      state: ready([PERFORMABLE], [record({ state: 'performed', receipt: RECEIPT })]),
+    });
+    await screen.findByTestId('perform-already');
+    const banner = screen.getByTestId('recommend-only-banner');
+    expect(screen.queryAllByTestId('perform')).toHaveLength(1);
+    expect(banner.getAttribute('data-performable')).toBe('1');
+    expect(banner.getAttribute('data-already-performed')).toBe('1');
+    expect(banner.textContent).toContain('1 of 2 finding(s) are offered for execution');
+    expect(banner.textContent).toContain('Another 1 already carries a performed receipt');
+  });
+
+  it('the offered count is the number of rendered Perform controls, on a 3-finding list', async () => {
+    // The property in one assertion: the banner's number and the DOM's number
+    // are the same number, over a list where they could differ (one offered,
+    // one performed, one whose class has no executor).
+    renderList({
+      findings: [
+        finding(),
+        finding({ id: 'f-perf-2' }),
+        finding({ id: 'f-wire', detector: 'dangling-empty-wire' }),
+      ],
+      state: ready(
+        [PERFORMABLE, NOT_PERFORMABLE],
+        [record({ findingId: 'f-perf-2', state: 'performed', receipt: RECEIPT })],
+      ),
+    });
+    await screen.findByTestId('perform-not-performable');
+    const banner = screen.getByTestId('recommend-only-banner');
+    expect(banner.getAttribute('data-performable')).toBe(
+      String(screen.queryAllByTestId('perform').length),
+    );
+    expect(banner.getAttribute('data-performable')).toBe('1');
   });
 });
