@@ -1683,6 +1683,25 @@ module adminPlane 'modules/admin-plane/main.bicep' = if (deployAdminPlane) {
     // THIS orchestrator is at 251/256 ARM params, so the R0 rule forbids a new
     // top-level param; riding the existing settable bag is the sanctioned lever.
     // Per loom_default_on_opt_out.md this is an opt-OUT: unset ⇒ enabled.
+    //
+    // The bag also carries the AUDIENCE PINS, which are not enable/disable
+    // toggles and therefore have no default here — an unset pin means "use the
+    // console sign-in app", which is what every estate did before the pin
+    // existed. Both name a DEDICATED Entra app registration created by the
+    // post-deploy bootstrap, never a value ARM could compute:
+    //     param observabilityConfig = { backendOverrides: {
+    //       trinoAudienceClientId: '<app id>'   // N7e Federated SQL engine
+    //       unityAudienceClientId: '<app id>'   // #3339 iceberg-catalog + loom-unity
+    //     } }
+    // `unityAudienceClientId` is produced by
+    // scripts/csa-loom/bootstrap-catalog-app-reg.sh (invoked from
+    // bootstrap-msal-app-reg.sh) and recorded as the `loom-catalog-client-id`
+    // Key Vault secret. UNPINNED, admin-plane/main.bicep falls back to the
+    // console sign-in app — byte-for-byte the pre-#3339 behaviour — so an
+    // estate that has not run the bootstrap is never made worse by the pin
+    // existing. PIN IT ONLY once the Console identity holds Catalog.ReadWrite
+    // on that app: the bootstrap refuses to record the id otherwise, because a
+    // pin without the grant stops the Console minting a catalog token at all.
     loomBackends: union({
       event: 'eventhubs'
       activator: 'azure-monitor'
