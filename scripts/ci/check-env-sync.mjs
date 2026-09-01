@@ -43,6 +43,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { readLogicalLines } from './_logical-lines.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 export const REPO_ROOT = path.resolve(__dirname, '..', '..');
@@ -2767,6 +2768,12 @@ const SHELL_SCRIPTS_ROOT = path.join(REPO_ROOT, 'scripts');
 const ENV_VALUE_QUERY_RE = /env\[\?name==\s*(?:'|")([A-Za-z_][A-Za-z0-9_]*)(?:'|")\s*\]\.value/g;
 /** `env[].name` / `env[?name=='X'].name` — the shape that CAN. */
 const ENV_NAME_QUERY_RE = /env\[[^\]]*\]\.name\b/;
+/**
+ * The start of the next YAML step — where one read's window ends. Anchored at
+ * the start of a LOGICAL line, so a step that follows a folded command is still
+ * recognised as the boundary rather than being swallowed into the window.
+ */
+const YAML_STEP_BOUNDARY = /^\s{2,}-\s+(?:name|uses|id):/;
 
 /**
  * Classify ONE `.value` query site. Pure, exported so the control and the tests
@@ -2800,10 +2807,37 @@ export function classifyEnvQuerySite(src, at) {
   // The window in which a use of that variable still belongs to this read: up to
   // the next YAML step boundary, capped at 45 lines so a `.sh` file (which has no
   // step boundaries) cannot reach across an unrelated function.
-  const after = src.slice(at);
-  const capped = after.split('\n').slice(0, 45).join('\n');
-  const step = /\n\s{2,}-\s+(?:name|uses|id):/.exec(after);
-  const win = step && step.index < capped.length ? after.slice(0, step.index) : capped;
+  //
+  // LOGICAL lines, not physical (#3420). This layer's corpus is
+  // `.github/workflows/**` and `scripts/**/*.sh`, where an `az` invocation folds
+  // across a trailing `\` as a matter of house style — and BOTH judgements below
+  // need a SECOND token after the one that anchors them:
+  //
+  //   * the emptiness matcher keys on `-[zn]` and then requires `"$VAR"`, and
+  //     `\s` does not match a backslash, so `[ -z \` + newline + `"$X" ]` reads
+  //     as no presence test at all;
+  //   * the alias walk is `^…=(.+)$`-anchored, so a physical reading truncates a
+  //     folded right-hand side at the seam and the second hop never sees the
+  //     variable the site actually tests.
+  //
+  // Both failures are SILENT — they subtract from the flagged count and the
+  // census still prints a confident number. That is #3417's exact shape (eleven
+  // live `|| echo` sites read as zero, every one on a continuation), which is
+  // why `_logical-lines.mjs` exists and why check-guard-logical-lines.mjs makes
+  // reading it the default for anything in this directory that judges shell.
+  const after = readLogicalLines(src.slice(at)).map((l) => l.text);
+  const capped = after.slice(0, 45).join('\n');
+  // Index 0 is the tail of the line the `.value` match itself sits on; the
+  // physical predicate this replaces required a preceding `\n` and so could not
+  // match there either.
+  let stepAt = -1;
+  for (let i = 1; i < after.length; i++) {
+    if (YAML_STEP_BOUNDARY.test(after[i])) {
+      stepAt = i;
+      break;
+    }
+  }
+  const win = stepAt >= 0 && stepAt < 45 ? after.slice(0, stepAt).join('\n') : capped;
 
   // TRACKED VARIABLES: the capture, plus anything trivially derived from it
   // within the window. Two hops, because the real tree needs exactly that:
@@ -2849,12 +2883,15 @@ export function classifyEnvQuerySite(src, at) {
   // natural way to write it is to settle presence first and read the value
   // second, which puts it BEFORE. Looking only forward would have called the
   // documented remedy a violation, so the backward window is not optional.
+  // Folded for the same reason as the forward one: `env[].name` is itself part
+  // of a `--query` argument that regularly lands on a continuation.
   const backFrom = Math.max(0, src.lastIndexOf('\n', at) - 1600);
-  const before = src.slice(backFrom, at);
-  const lastStep = /\n\s{2,}-\s+(?:name|uses|id):/g;
-  let backWin = before;
-  let b;
-  while ((b = lastStep.exec(before)) !== null) backWin = before.slice(b.index);
+  const beforeLines = readLogicalLines(src.slice(backFrom, at)).map((l) => l.text);
+  let backAt = 0;
+  for (let i = 1; i < beforeLines.length; i++) {
+    if (YAML_STEP_BOUNDARY.test(beforeLines[i])) backAt = i;
+  }
+  const backWin = beforeLines.slice(backAt).join('\n');
   return {
     variable,
     presenceTest,

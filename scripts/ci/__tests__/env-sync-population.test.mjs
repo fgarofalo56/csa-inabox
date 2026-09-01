@@ -183,6 +183,50 @@ if [ -n "\${CID:-}" ] && [ "\${CID}" != "None" ]; then echo resolved; fi
   assert.ok(c.presenceTest, 'the test on the DERIVED variable was not seen');
 });
 
+test('LAYER 6: a presence test FOLDED across a `\\` continuation is still seen (#3420)', () => {
+  // The corpus is .github/workflows/** and scripts/**/*.sh, where an `az`
+  // invocation folds as a matter of house style. This layer's two judgements
+  // both need a SECOND token after the one that anchors them, and on physical
+  // lines neither can reach it:
+  //
+  //   * `-[zn]\s+"?\$VAR` — `\s` does not match a backslash, so `[ -z \` +
+  //     newline + `"$X" ]` matched nothing;
+  //   * the alias walk is `^…=(.+)$`-anchored, so a folded right-hand side was
+  //     truncated at the seam and the second hop never reached the variable the
+  //     site actually tests.
+  //
+  // MEASURED on this exact pair before `_logical-lines.mjs` was adopted here:
+  // BOTH returned presenceTest=null — i.e. the guard called a live presence
+  // verdict CLEAN and subtracted it from the flagged count, with the census
+  // still printing a confident number. That is #3417's shape (eleven live
+  // `|| echo` sites read as zero, every one on a continuation).
+  const foldedTest = [
+    '          ACCT=$(az containerapp show -n "$APP" -g "$RG" \\',
+    `            --query "properties.template.containers[0].env[?name=='LOOM_ADLS_ACCOUNT'].value | [0]" -o tsv)`,
+    '          if [ -z \\',
+    '               "${ACCT:-}" ]; then echo "no LOOM_ADLS_ACCOUNT"; exit 0; fi',
+    '',
+  ].join('\n');
+  const c1 = classifyEnvQuerySite(foldedTest, at(foldedTest));
+  assert.equal(c1.variable, 'ACCT');
+  assert.ok(c1.presenceTest, 'a `-z` split across a continuation read as no presence test at all');
+
+  // The same blindness one hop further out: the LAUNDERING assignment folds, so
+  // a physical read truncates its RHS and never learns that `CID` derives from
+  // the captured `raw`.
+  const foldedAlias = [
+    'raw="$(az containerapp show -n "$APP" -g "$RG" \\',
+    `  --query "properties.template.containers[0].env[?name=='LOOM_MSAL_CLIENT_ID'].value | [0]" -o tsv)"`,
+    "CID=\"$(printf '%s' \\",
+    "  \"$raw\" | tr -d '\\r')\"",
+    'if [ -n "${CID:-}" ]; then echo resolved; fi',
+    '',
+  ].join('\n');
+  const c2 = classifyEnvQuerySite(foldedAlias, at(foldedAlias));
+  assert.equal(c2.variable, 'raw');
+  assert.ok(c2.presenceTest, 'a folded alias RHS hid the derived variable that carries the test');
+});
+
 test('LAYER 6: a longer variable sharing a prefix does NOT satisfy the test', () => {
   // `-n "$EXISTING_CONF"` must not read as a presence test for `$EXISTING`.
   // Without the word boundary it did, and flagged a correct value-use site.
