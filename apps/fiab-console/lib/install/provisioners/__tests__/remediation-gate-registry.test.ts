@@ -33,6 +33,7 @@ import { describe, it, expect } from 'vitest';
 import { readFileSync, readdirSync, existsSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { getGate, GATES } from '@/lib/gates/registry';
+import { trimEdges } from '@/lib/util/trim';
 
 const APP_ROOT = process.cwd();
 const PROVISIONER_DIR = join(APP_ROOT, 'lib/install/provisioners');
@@ -219,7 +220,7 @@ function demandGroups(body: string, src: string, path: string, depth: number): s
       groups.push(keys);
       continue;
     }
-    const id = raw.trim().replace(/[;,)]+$/, '');
+    const id = trimEdges(raw.trim(), ';,)');
     const loop = loops.find((l) => l.name === id);
     if (loop) {
       for (const k of loop.keys) groups.push([k]);
