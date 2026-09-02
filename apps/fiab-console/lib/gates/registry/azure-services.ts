@@ -131,7 +131,17 @@ export const AZURE_SERVICES_GATE_META: Record<string, GateMeta> = {
       { path: '/items/adf-pipeline', label: 'ADF pipeline editor (auto-bound ADF pipeline)' },
     ],
     fixit: { kind: 'resource-picker' },
-    loaders: { LOOM_ADF_FACTORY: L.adf },
+    // WRITES THE CANONICAL KEY. `L.adf` discovers
+    // `Microsoft.DataFactory/factories` with `valueFrom: 'name'` — i.e. exactly
+    // the value `adfName()` wants — so the picker must deposit it in
+    // LOOM_ADF_NAME, the spelling adf-client resolves FIRST. It previously wrote
+    // LOOM_ADF_FACTORY, which at the time nothing consumed: the operator picked
+    // their factory, the gate flipped to `configured`, and `adfConfigGate()`
+    // still returned `{missing:'LOOM_ADF_NAME'}` with the install still gated —
+    // a Fix-it button that cannot fix. The alias is now honoured by the client
+    // as well (for the bicep- and gov-discover-written estates), so either
+    // spelling works at runtime; this one writes the canonical.
+    loaders: { LOOM_ADF_NAME: L.adf },
     // `adf_pipeline_seed_incomplete` (#3549): auto-bind CREATED the pipeline but
     // the estate refused the write that authors its activity graph, so the item
     // is bound to a real-but-EMPTY pipeline. This gate is the right home for it

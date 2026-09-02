@@ -63,7 +63,8 @@ grant), `wizard` (multi-setting flow).
 
 | gate id | required settings | surfaces | fix-it | auto |
 |---|---|---|---|---|
-| `svc-synapse` | `LOOM_SYNAPSE_WORKSPACE` (+dedicated pool) | warehouse, notebooks, pipelines, serverless SQL (~20 routes) | resource-picker | deploy |
+| `svc-synapse` | `LOOM_SYNAPSE_WORKSPACE` + `LOOM_DLZ_RG` (+ `LOOM_SYNAPSE_SUB`, else `LOOM_SUBSCRIPTION_ID`) | warehouse, notebooks, pipelines, serverless SQL (~20 routes) | resource-picker | deploy |
+| `svc-synapse-dedicated-pool` | `LOOM_SYNAPSE_WORKSPACE` + `LOOM_SYNAPSE_DEDICATED_POOL` | dedicated-pool warehouse backend (split out of `svc-synapse` — a serverless-only estate is legitimate and must not report this gate unmet) | env-picker | deploy |
 | `svc-synapse-spark-pool` | `LOOM_SYNAPSE_SPARK_POOL` | ML predict, scheduled runs | env-picker | deploy |
 | `svc-adx` | `LOOM_KUSTO_CLUSTER_URI` (+default DB) | KQL DB, eventhouse, RT dashboards, graph (~8) | resource-picker | deploy (adxEnabled) |
 | `svc-eventhubs` | `LOOM_EVENTHUB_NAMESPACE` | eventstream, EH navigator (~4) | resource-picker | deploy |
@@ -76,7 +77,7 @@ grant), `wizard` (multi-setting flow).
 | `svc-ai-enrich` | per-service cognitive endpoints | pipeline AI activities | env-picker | **yes** (shared Foundry account fallback) |
 | `svc-databricks` | `LOOM_DATABRICKS_HOSTNAME` | Databricks navigator, notebooks, UC (~6) | resource-picker | deploy |
 | `svc-databricks-sql` | `LOOM_DATABRICKS_SQL_WAREHOUSE_ID` | DQ monitor, MDM, DLP schemas (~5) | env-picker | — |
-| `svc-adf` | `LOOM_ADF_FACTORY` / `LOOM_ADF_NAME` | mirror CDC, triggers, dataflows (~10) | resource-picker | deploy |
+| `svc-adf` | `LOOM_ADF_NAME` (alias `LOOM_ADF_FACTORY`) + `LOOM_ADF_RG`/`LOOM_DLZ_RG` + `LOOM_ADF_SUB`/`LOOM_SUBSCRIPTION_ID` | mirror CDC, triggers, dataflows (~10) | resource-picker | deploy |
 | `svc-monitor-alerts` | `LOOM_LOG_ANALYTICS_RESOURCE_ID` + alert RG | Activator, Monitor hub | resource-picker | deploy (auto-derived) |
 | `svc-aas` | `LOOM_AAS_SERVER` \| XMLA endpoint | semantic-model fast path, DAX (~8) | resource-picker | — (not in Gov) |
 | `svc-aml` | `LOOM_AML_WORKSPACE` (+region) | AutoML, ML models (~3) | resource-picker | deploy (mlWorkspace module) |

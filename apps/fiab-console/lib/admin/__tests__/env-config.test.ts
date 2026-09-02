@@ -339,7 +339,23 @@ describe('admin/env-config registry', () => {
     // field for and the Fix-it could not write. Listing them in the specs that
     // actually demand them fixes both surfaces at once. Nothing was REMOVED —
     // the diff is +5/-0.
-    expect(EDITABLE_ENV.length).toBe(203);
+    //
+    // Then to 204 by the review of that same work, +2/-1:
+    //
+    //   + LOOM_ADF_SUB       - LOOM_ADF_SUBSCRIPTION_ID       + LOOM_SYNAPSE_SUB
+    //
+    // This is the first REMOVAL this catalog has seen, and it matters more than
+    // the count. `LOOM_ADF_SUBSCRIPTION_ID` was added above from svc-adf's
+    // remediation PROSE; it has zero reads anywhere in the tree, because the
+    // spelling `adf-client.ts sub()` reads is `LOOM_ADF_SUB`. A dead key in a
+    // multi-member `anyOf` is not inert: `aliasSatisfiedKeys()` marks every
+    // OTHER member of a satisfied group as satisfied, so setting it would have
+    // reported the live `LOOM_SUBSCRIPTION_ID` green while nothing worked.
+    // `LOOM_SYNAPSE_SUB` is the opposite error on svc-synapse — genuinely read
+    // by `synapseConfigGate()` and absent from the spec, so an estate using it
+    // got a false RED with no field to clear it. Both were derived from prose;
+    // both are now derived from the predicate.
+    expect(EDITABLE_ENV.length).toBe(204);
   });
 
   it('surfaces the wave-2 env vars as settable (previously dropped by the whitelist)', () => {

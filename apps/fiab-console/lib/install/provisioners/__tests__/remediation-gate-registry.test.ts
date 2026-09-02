@@ -537,6 +537,85 @@ describe('#3513 — provisioner remediation gates link to the registry', () => {
     expect(violations, `Fix-it cannot set what the predicate demands:\n  ${violations.join('\n  ')}`).toEqual([]);
   });
 
+  it('every env var a gate OFFERS as satisfying it is read by some runtime path', () => {
+    // THE INVERSE OF THE GUARD ABOVE, and the one that was missing. That spec
+    // checks `predicate-demanded ⊆ writable`; nothing checked
+    // `writable ⊆ actually-read`, and `scripts/ci/check-env-sync.mjs` only goes
+    // read → bicep. So the whole advertised → read direction was unwatched, and
+    // two dead keys shipped through CI green: `LOOM_ADF_SUBSCRIPTION_ID` (zero
+    // reads; the real spelling is LOOM_ADF_SUB) and `LOOM_ADF_FACTORY` as the
+    // Fix-it's write target (at the time read only as a display fallback, while
+    // adfName() required LOOM_ADF_NAME).
+    //
+    // This direction is not cosmetic. `env-config.ts` builds ENV_ALIAS_GROUPS
+    // from every multi-member `anyOf`, and `aliasSatisfiedKeys()` marks every
+    // OTHER member of a satisfied group as satisfied. So a dead key does not
+    // merely fail to help — setting it reports its LIVE siblings green on
+    // /admin/env-config while the runtime still refuses. Green dashboard, dead
+    // path, which is the failure this whole file exists to make impossible.
+    //
+    // "Read" means a real value read — `process.env.X`, `env('X')`,
+    // `required('X')` — NOT a mention in remediation prose. Prose is exactly
+    // what both defects were derived from, so prose cannot be the evidence.
+    //
+    // SCOPED TO THE INSTALL-TIME GATES, i.e. the ones a provisioner actually
+    // links via gateId (collectGateIdUsages), which is this file's subject.
+    // Registry-wide it currently reports 18 more, and they are NOT all real:
+    // the honest read set for a key can live in a sibling app, a
+    // scripts/csa-loom/*.sh deploy job, or the e2e harness (measured:
+    // LOOM_ALERT_ACTION_GROUP_ID in deploy-secret-expiry-job.sh,
+    // SYNTHETIC_LOGIN_UPN in e2e/_lib/msal-login.ts), so a console-only walker
+    // would call them dead and be wrong. Three do look genuinely dead
+    // (LOOM_SHIR_VMSS_NAME, LOOM_ALERT_WEBHOOK_URL,
+    // LOOM_SYNTHETIC_MONITOR_ENABLED). Widening this to the whole registry
+    // needs a cross-language read detector and is filed separately — a guard
+    // that is right about its own scope beats a wider one that cries wolf.
+    const READ_ROOTS = ['lib', 'app'];
+    const reads = new Set<string>();
+    const READ_FORMS = [
+      /process\.env\.([A-Z][A-Z0-9_]*)/g,
+      /process\.env\[\s*['"]([A-Z][A-Z0-9_]*)['"]\s*\]/g,
+      /\b(?:env|required|envVar|readEnv)\(\s*['"]([A-Z][A-Z0-9_]*)['"]/g,
+    ];
+    const walkForReads = (dir: string): void => {
+      for (const e of readdirSync(dir, { withFileTypes: true })) {
+        const p = join(dir, e.name);
+        if (e.isDirectory()) {
+          if (e.name === 'node_modules' || e.name === '__tests__' || e.name === '.next') continue;
+          walkForReads(p);
+          continue;
+        }
+        if (!/\.tsx?$/.test(e.name)) continue;
+        const src = stripComments(readFileSync(p, 'utf8'));
+        for (const re of READ_FORMS) {
+          re.lastIndex = 0;
+          for (let m = re.exec(src); m; m = re.exec(src)) reads.add(m[1]);
+        }
+      }
+    };
+    for (const root of READ_ROOTS) walkForReads(join(APP_ROOT, root));
+
+    // Guard the guard: if the walker silently matched nothing, every assertion
+    // below would pass vacuously. A repo this size reads hundreds of LOOM_ keys.
+    const loomReads = [...reads].filter((k) => k.startsWith('LOOM_'));
+    expect(loomReads.length, 'the source walker found almost no env reads — it is broken, not the specs')
+      .toBeGreaterThan(100);
+
+    const installGateIds = new Set(collectGateIdUsages().map((u) => u.gateId));
+    expect(installGateIds.size, 'no install-time gates found — the scanner is broken').toBeGreaterThanOrEqual(6);
+
+    const dead: string[] = [];
+    for (const gateId of installGateIds) {
+      for (const key of writableSettings(gateId)) {
+        if (!reads.has(key)) dead.push(`${gateId} offers '${key}', which no runtime path reads`);
+      }
+    }
+    expect(
+      dead,
+      `install gates advertising keys nothing consumes (a Fix-it that cannot fix):\n  ${dead.join('\n  ')}`,
+    ).toEqual([]);
+  });
+
   it('gate ids are still unique in the registry (no duplicate claim)', () => {
     const ids = GATES.map((g) => g.id);
     expect(new Set(ids).size).toBe(ids.length);

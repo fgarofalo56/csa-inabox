@@ -11,7 +11,6 @@ export const AZURE_SERVICES_ENV_CHECKS: EnvSpec[] = [
   // ── azure services (optional workloads → warn, not fail) ──
   {
     id: 'svc-synapse', category: 'azure-services', title: 'Synapse (warehouse / notebooks / pipelines)', severity: 'recommended',
-    required: ['LOOM_SYNAPSE_WORKSPACE'],
     // #3513 — the ARM coordinates are LISTED, not merely implied by the prose.
     // `/api/admin/gates/[id]/resolve` 400s any key outside a gate's own
     // requiredSettings ∪ aliasOf, so a var the provisioner's predicate demands
@@ -19,9 +18,25 @@ export const AZURE_SERVICES_ENV_CHECKS: EnvSpec[] = [
     // button opens, saves nothing that matters, and the install stays gated.
     // MEASURED: synapse-pipeline.ts:96 demands LOOM_SUBSCRIPTION_ID and
     // LOOM_DLZ_RG and neither was in this spec.
-    anyOf: [['LOOM_SUBSCRIPTION_ID'], ['LOOM_DLZ_RG']],
+    //
+    // The subscription axis has TWO spellings and the spec listed one.
+    // `synapseConfigGate()` (synapse-dev-client.ts:1430) is
+    // `!LOOM_SYNAPSE_SUB && !LOOM_SUBSCRIPTION_ID`, so an estate pinned to a
+    // Synapse workspace in another subscription satisfies the predicate, and
+    // yet this gate reported it blocked and its Fix-it could not write the key
+    // that actually cleared it — a false RED, the mirror of the false GREEN the
+    // svc-adf group had. Both came from deriving the group from prose instead
+    // of from the predicate.
+    //
+    // `required` rather than single-member `anyOf` groups: the two are
+    // identical to `evalEnv`, but `settingsFor()` reports an `anyOf` member as
+    // `required: false`, so spelling a genuinely-mandatory key as a one-member
+    // group understates it on /admin/gates. The RG axis really is single —
+    // the gate reads LOOM_DLZ_RG and nothing else.
+    required: ['LOOM_SYNAPSE_WORKSPACE', 'LOOM_DLZ_RG'],
+    anyOf: [['LOOM_SYNAPSE_SUB', 'LOOM_SUBSCRIPTION_ID']],
     warnOnMiss: true,
-    remediation: 'Set LOOM_SYNAPSE_WORKSPACE (+ LOOM_SUBSCRIPTION_ID / LOOM_DLZ_RG for the ARM coordinates) to enable Synapse-backed warehouse, notebook, and pipeline items. The dedicated SQL pool is a separate capability with its own gate (svc-synapse-dedicated-pool).',
+    remediation: 'Set LOOM_SYNAPSE_WORKSPACE (+ LOOM_DLZ_RG and LOOM_SYNAPSE_SUB, else LOOM_SUBSCRIPTION_ID, for the ARM coordinates) to enable Synapse-backed warehouse, notebook, and pipeline items. The dedicated SQL pool is a separate capability with its own gate (svc-synapse-dedicated-pool).',
     provisionedBy: 'modules/landing-zone/synapse.bicep → admin-plane forwards loomSynapseWorkspace / loomSynapseDedicatedPool',
     role: 'Synapse Administrator (UAMI) on the workspace',
   },
@@ -144,18 +159,37 @@ export const AZURE_SERVICES_ENV_CHECKS: EnvSpec[] = [
     // #3513 — the old shape was `anyOf: [['LOOM_ADF_FACTORY', 'LOOM_ADF_RG']]`,
     // which reads "factory OR resource group is enough". Neither the ADF ARM
     // path nor adf-pipeline.ts:95 agrees: it needs a factory name, a resource
-    // group AND a subscription, each of which has an ADF-specific spelling that
-    // falls back to the platform-wide one. Three axis-groups say that, and they
-    // make every member writable through the Fix-it — LOOM_ADF_NAME,
-    // LOOM_DLZ_RG and LOOM_SUBSCRIPTION_ID were all demanded and none was
-    // listed.
+    // group AND a subscription. Three axis-groups say that, and every member is
+    // writable through the Fix-it.
+    //
+    // EACH GROUP IS DERIVED FROM adf-client.ts, NOT FROM A REMEDIATION STRING.
+    // The first revision of this block was read off mirrored-database.ts:231's
+    // prose and shipped two keys the runtime never consumed —
+    // `LOOM_ADF_SUBSCRIPTION_ID` (zero reads anywhere in the tree; the spelling
+    // `sub()` reads is `LOOM_ADF_SUB`) and `LOOM_ADF_FACTORY` (then read only as
+    // a display fallback in health-probes.ts:246). Because `env-config.ts`
+    // builds ENV_ALIAS_GROUPS from every multi-member `anyOf` and
+    // `aliasSatisfiedKeys()` marks every OTHER member of a satisfied group as
+    // satisfied, that mistake did not merely fail to help — setting the dead key
+    // would have reported the LIVE key green on /admin/env-config. A false
+    // green on a Fix-it is worse than no Fix-it.
+    //
+    // So: the subscription axis is `LOOM_ADF_SUB || LOOM_SUBSCRIPTION_ID`
+    // (adf-client.ts sub()), the RG axis is `LOOM_ADF_RG || LOOM_DLZ_RG` (rg()),
+    // and the factory axis is `LOOM_ADF_NAME || LOOM_ADF_FACTORY` (adfName()).
+    // The factory alias is now genuinely read — hub-console-dlz-env.bicep:228
+    // writes both spellings and gov-discover.yml:84 suggests the alias to
+    // brownfield operators, so it had to be either honoured or removed; it is
+    // honoured, and `adfConfigGate()` mirrors all three axes so the gate and the
+    // caller cannot disagree. Canonical key first in each group: that is the one
+    // the Fix-it loader writes.
     anyOf: [
-      ['LOOM_ADF_FACTORY', 'LOOM_ADF_NAME'],
+      ['LOOM_ADF_NAME', 'LOOM_ADF_FACTORY'],
       ['LOOM_ADF_RG', 'LOOM_DLZ_RG'],
-      ['LOOM_ADF_SUBSCRIPTION_ID', 'LOOM_SUBSCRIPTION_ID'],
+      ['LOOM_ADF_SUB', 'LOOM_SUBSCRIPTION_ID'],
     ],
     warnOnMiss: true,
-    remediation: 'Set LOOM_ADF_FACTORY (or LOOM_ADF_NAME) plus its resource group (LOOM_ADF_RG, else LOOM_DLZ_RG) and subscription (LOOM_ADF_SUBSCRIPTION_ID, else LOOM_SUBSCRIPTION_ID) to enable the ADF-CDC mirrored-database backend (source SQL → ADLS Bronze).',
+    remediation: 'Set LOOM_ADF_NAME (or the LOOM_ADF_FACTORY alias) plus its resource group (LOOM_ADF_RG, else LOOM_DLZ_RG) and subscription (LOOM_ADF_SUB, else LOOM_SUBSCRIPTION_ID) to enable the ADF-CDC mirrored-database backend (source SQL → ADLS Bronze).',
     provisionedBy: 'modules/landing-zone (ADF factory) → apps[] env',
     role: 'Data Factory Contributor (UAMI) on the factory',
   },

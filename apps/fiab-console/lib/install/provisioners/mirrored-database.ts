@@ -228,7 +228,7 @@ async function provisionAdfCdc(input: any, steps: string[]): Promise<ProvisionRe
       gate: {
         gateId: 'svc-adf',
         reason: 'Azure Data Factory is not configured for this deployment.',
-        remediation: `Set ${gate.missing} (LOOM_ADF_SUBSCRIPTION_ID / LOOM_ADF_RG / LOOM_ADF_FACTORY, or LOOM_SUBSCRIPTION_ID / LOOM_DLZ_RG) so the mirror can author the Bronze copy pipeline. No Microsoft Fabric required.`,
+        remediation: `Set ${gate.missing} (ADF-specific spellings LOOM_ADF_SUB / LOOM_ADF_RG / LOOM_ADF_NAME, else the platform-wide LOOM_SUBSCRIPTION_ID / LOOM_DLZ_RG) so the mirror can author the Bronze copy pipeline. No Microsoft Fabric required.`,
         link: 'https://learn.microsoft.com/azure/data-factory/quickstart-create-data-factory',
       },
       steps,

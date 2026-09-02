@@ -155,3 +155,62 @@ describe('adfConfigGate honors a full selection over the env default', () => {
     expect(adfConfigGate()).toBeNull();
   });
 });
+
+describe('#3513 review — the gate reads exactly what the resolvers read', () => {
+  const KEYS = [
+    'LOOM_SUBSCRIPTION_ID', 'LOOM_ADF_SUB',
+    'LOOM_DLZ_RG', 'LOOM_ADF_RG',
+    'LOOM_ADF_NAME', 'LOOM_ADF_FACTORY',
+  ];
+  beforeEach(() => { for (const k of KEYS) delete process.env[k]; });
+  afterEach(() => { for (const k of KEYS) delete process.env[k]; });
+
+  it('accepts the ADF-SPECIFIC spelling on every axis (was a false RED)', () => {
+    // sub() and rg() have always preferred LOOM_ADF_SUB / LOOM_ADF_RG, but the
+    // gate demanded the platform-wide spelling, so an estate pinned to a reused
+    // factory in another subscription resolved every coordinate correctly and
+    // was still told it was unconfigured.
+    process.env.LOOM_ADF_SUB = 'adf-sub-2222';
+    process.env.LOOM_ADF_RG = 'adf-rg';
+    process.env.LOOM_ADF_NAME = 'adf-pinned';
+    expect(adfConfigGate()).toBeNull();
+    expect(resolveFactoryCoords()).toEqual({
+      subscriptionId: 'adf-sub-2222', resourceGroup: 'adf-rg', factoryName: 'adf-pinned',
+    });
+  });
+
+  it('LOOM_ADF_FACTORY is a REAL alias, not decoration (was a false GREEN)', () => {
+    // hub-console-dlz-env.bicep:228 writes both spellings and gov-discover.yml:84
+    // suggests the alias to brownfield operators. Until the client read it, the
+    // svc-adf Fix-it wrote a key nothing consumed: the gate flipped to
+    // configured and the install stayed blocked.
+    process.env.LOOM_SUBSCRIPTION_ID = ENV.sub;
+    process.env.LOOM_DLZ_RG = ENV.rg;
+    process.env.LOOM_ADF_FACTORY = 'adf-via-alias';
+    expect(adfConfigGate()).toBeNull();
+    expect(resolveFactoryCoords().factoryName).toBe('adf-via-alias');
+  });
+
+  it('the canonical spelling WINS when both are set', () => {
+    process.env.LOOM_SUBSCRIPTION_ID = ENV.sub;
+    process.env.LOOM_DLZ_RG = ENV.rg;
+    process.env.LOOM_ADF_NAME = 'canonical';
+    process.env.LOOM_ADF_FACTORY = 'alias';
+    expect(resolveFactoryCoords().factoryName).toBe('canonical');
+  });
+
+  it('still gates — and names the CANONICAL key — when an axis is wholly absent', () => {
+    // Fail-closed is the property that must survive widening. The missing-key
+    // string stays the canonical spelling so the remediation never sends an
+    // operator to the alias.
+    process.env.LOOM_SUBSCRIPTION_ID = ENV.sub;
+    process.env.LOOM_DLZ_RG = ENV.rg;
+    expect(adfConfigGate()).toEqual({ missing: 'LOOM_ADF_NAME' });
+
+    delete process.env.LOOM_DLZ_RG;
+    expect(adfConfigGate()).toEqual({ missing: 'LOOM_DLZ_RG' });
+
+    delete process.env.LOOM_SUBSCRIPTION_ID;
+    expect(adfConfigGate()).toEqual({ missing: 'LOOM_SUBSCRIPTION_ID' });
+  });
+});

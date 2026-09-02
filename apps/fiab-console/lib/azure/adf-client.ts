@@ -66,7 +66,21 @@ function required(k: string): string {
 export interface AdfArmTarget { subscriptionId?: string; resourceGroup?: string; factoryName?: string; }
 function sub(t?: AdfArmTarget): string { return (t?.subscriptionId || '').trim() || process.env.LOOM_ADF_SUB || required('LOOM_SUBSCRIPTION_ID'); }
 function rg(t?: AdfArmTarget):  string { return (t?.resourceGroup || '').trim() || process.env.LOOM_ADF_RG || required('LOOM_DLZ_RG'); }
-function adfName(t?: AdfArmTarget): string { return (t?.factoryName || '').trim() || required('LOOM_ADF_NAME'); }
+// LOOM_ADF_FACTORY is a REAL alias for LOOM_ADF_NAME, not decoration (#3513).
+// `hub-console-dlz-env.bicep:228` writes BOTH spellings to the same value and
+// its :225 comment says "the LOOM_ADF_FACTORY alias the adf-client also reads"
+// — which was false until this line existed, so the deploy was setting a key
+// nothing consumed while a comment asserted otherwise (deploy-integrity R7).
+// `gov-discover.yml:84` also prints `suggest LOOM_ADF_FACTORY=<name>` to
+// brownfield operators, so under cloud-parity a Gov estate configured by
+// following that suggestion has to work. LOOM_ADF_NAME stays canonical and
+// wins; the throw names it, never the alias.
+function adfName(t?: AdfArmTarget): string {
+  return (t?.factoryName || '').trim()
+    || process.env.LOOM_ADF_NAME
+    || process.env.LOOM_ADF_FACTORY
+    || required('LOOM_ADF_NAME');
+}
 
 /**
  * The factory coordinates a call should target: the EXPLICIT `target` arg wins
@@ -109,8 +123,21 @@ export function adfConfigGate(target?: AdfArmTarget): { missing: string } | null
   // effective coords are still partial (no selection, or a partial one).
   const eff = effectiveTarget(target);
   if (eff?.subscriptionId && eff?.resourceGroup && eff?.factoryName) return null;
-  for (const k of ['LOOM_SUBSCRIPTION_ID', 'LOOM_DLZ_RG', 'LOOM_ADF_NAME']) {
-    if (!process.env[k]) return { missing: k };
+  // MIRRORS THE RESOLVERS ABOVE, AXIS BY AXIS (#3513). This loop used to demand
+  // the platform-wide spelling on every axis — `LOOM_SUBSCRIPTION_ID`,
+  // `LOOM_DLZ_RG`, `LOOM_ADF_NAME` — while `sub()` and `rg()` already accepted
+  // the ADF-specific `LOOM_ADF_SUB` / `LOOM_ADF_RG` first. So an estate pinned
+  // to a reused factory in another subscription resolved every coordinate
+  // correctly and was still told it was unconfigured: a FALSE RED on a gate
+  // whose whole job is to say whether the next call can succeed. A gate that
+  // does not read what the caller reads is not a gate, it is a second opinion.
+  const AXES: { keys: string[]; missing: string }[] = [
+    { keys: ['LOOM_ADF_SUB', 'LOOM_SUBSCRIPTION_ID'], missing: 'LOOM_SUBSCRIPTION_ID' },
+    { keys: ['LOOM_ADF_RG', 'LOOM_DLZ_RG'], missing: 'LOOM_DLZ_RG' },
+    { keys: ['LOOM_ADF_NAME', 'LOOM_ADF_FACTORY'], missing: 'LOOM_ADF_NAME' },
+  ];
+  for (const axis of AXES) {
+    if (!axis.keys.some((k) => process.env[k])) return { missing: axis.missing };
   }
   return null;
 }

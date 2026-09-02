@@ -87,7 +87,7 @@ export const POST = withSession(async (req, { session: s, params }) => {
           reason: 'This pipeline is not yet backed by a live Azure Data Factory pipeline.',
           remediation:
             'Open the pipeline in the editor and click Save/Publish to deploy its activities to ADF, then Run. ' +
-            'If ADF is not configured in this deployment, set LOOM_ADF_FACTORY / LOOM_ADF_RESOURCE_GROUP and grant the console UAMI the Data Factory Contributor role.',
+            'If ADF is not configured in this deployment, set LOOM_ADF_NAME (or the LOOM_ADF_FACTORY alias) and LOOM_ADF_RG (else LOOM_DLZ_RG), then grant the console UAMI the Data Factory Contributor role.',
         },
         error: 'Pipeline has no ADF backing yet — publish it to ADF before running.',
       }, { status: 409 });
