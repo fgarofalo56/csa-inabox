@@ -23,6 +23,13 @@
  *    lag does not cry wolf. A workflow that has NEVER run always fails.
  *  - Read-only. Never dispatches anything: deciding to run a multi-hour Gov
  *    deploy is an operator call, not a CI side effect.
+ *  - A path can be DECLARED deliberately dormant (#4144) in
+ *    scripts/ci/deploy-path-dispositions.json. Such a row reports ACK — printed
+ *    every run with its owner, reason and expiry — instead of failing. Only
+ *    `never-run` and `drift` are declarable; a FAILING lane, a DISABLED one, an
+ *    UNKNOWN workflow state and an UNREADABLE run history can never be signed
+ *    off, and the register itself is audited so an entry that no longer
+ *    describes reality is a finding rather than a shrug.
  *
  * Usage:  GITHUB_TOKEN=… node scripts/ci/check-deploy-staleness.mjs [--json]
  * Env:    GITHUB_REPOSITORY (owner/repo) — defaults to the CSA Loom repo.
@@ -43,6 +50,11 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { CLOUD_ESTATES, parseBuildMarker } from './_estate-registry.mjs';
 import { classifyPauseDeclaration, PAUSE_DECLARATION_PATH } from './_estate-pause-declaration.mjs';
+import {
+  auditDispositionRegister,
+  classifyDisposition,
+  DISPOSITION_PATH,
+} from './_deploy-path-disposition.mjs';
 
 /** Repo root, for resolving the estate-pause register. */
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
@@ -1765,6 +1777,77 @@ export function classifyDrift({ codeAt, run, maxDays }) {
 }
 
 /**
+ * Everything WRONG with one row, as machine-readable condition names. PURE.
+ *
+ * The report has always printed these as prose (`reasonsFor`), and the exit
+ * decision has always folded them into one boolean. Naming them is what lets a
+ * disposition acknowledge ONE of them without acknowledging the rest — and, more
+ * importantly, what lets {@link applyDisposition} refuse to acknowledge the
+ * three that must never be signed off.
+ *
+ * The order mirrors reasonsFor(): the drift family is mutually exclusive
+ * (query-failed OR never-run OR drift), and the workflow-state facts stack on
+ * top of it because a lane can be both behind AND switched off, with different
+ * fixes for each.
+ *
+ * @param {{queryFailed?:boolean, neverRan?:boolean, stale?:boolean, driftDays?:number}} drift
+ * @param {{failing?:boolean}} health
+ * @param {{disabled?:boolean, unknown?:boolean}} wf
+ * @returns {string[]} condition names, [] when the row is genuinely clean
+ */
+export function conditionsOf(drift, health, wf) {
+  const out = [];
+  if (drift?.queryFailed) out.push('query-failed');
+  else if (drift?.neverRan) out.push('never-run');
+  else if (drift?.stale) out.push('drift');
+  if (health?.failing) out.push('failing');
+  if (wf?.disabled) out.push('disabled');
+  if (wf?.unknown) out.push('state-unknown');
+  return out;
+}
+
+/**
+ * Fold a declared disposition into one row's conditions. PURE (#4144).
+ *
+ * THE ASYMMETRY THAT MATTERS. A row is stale iff it has at least one condition
+ * the disposition does NOT acknowledge. So:
+ *
+ *   - no disposition          → unchanged behaviour, byte for byte.
+ *   - acknowledges everything → `stale: false`, `acknowledged: true`. The row is
+ *                               still PRINTED, with its owner, reason and
+ *                               expiry — reported, never omitted, never "ok".
+ *   - acknowledges SOME       → still stale, on the remainder. A `never-run`
+ *                               sign-off cannot cover a failure streak that
+ *                               appears beside it.
+ *
+ * The forbidden conditions (`failing` / `disabled` / `state-unknown` /
+ * `query-failed`) are already unreachable one layer down — classifyDisposition
+ * refuses an entry that names one — so this function needs no special case for
+ * them, and a test drives BOTH layers rather than trusting either alone.
+ *
+ * @param {{conditions:string[], disposition:{declared?:boolean, acknowledges?:string[]}}} p
+ * @returns {{stale:boolean, acknowledged:boolean, acknowledgedConditions:string[], unacknowledged:string[]}}
+ */
+export function applyDisposition({ conditions, disposition }) {
+  const all = Array.isArray(conditions) ? conditions : [];
+  const acks = disposition?.declared === true && Array.isArray(disposition.acknowledges)
+    ? disposition.acknowledges
+    : [];
+  const acknowledgedConditions = all.filter((c) => acks.includes(c));
+  const unacknowledged = all.filter((c) => !acks.includes(c));
+  return {
+    stale: unacknowledged.length > 0,
+    // "Acknowledged" means EVERY condition this row has was signed off — not
+    // that an entry exists. A row with an entry that covers half of what is
+    // wrong is a stale row, and calling it acknowledged would be the report
+    // asserting more than it established (R7).
+    acknowledged: all.length > 0 && unacknowledged.length === 0,
+    acknowledgedConditions,
+    unacknowledged,
+  };
+}
+
+/**
  * The exit decision over classified rows. PURE. Any stale row ⇒ exit 1.
  *
  * `stale` is the union of ALL the ways a deploy path can be broken, not just
@@ -1775,17 +1858,67 @@ export function classifyDrift({ codeAt, run, maxDays }) {
  * be wired into the exit code — a control that computes a verdict and discards
  * it is the "gate that cannot fail" shape.
  *
+ * `findings` (#4144) is that same rule applied to the disposition register
+ * itself. An entry for an unwatched lane, a duplicate, or a `never-run`
+ * sign-off on a lane that has since run, describes a world that no longer
+ * exists — and a register nobody drains stops describing reality
+ * (`stale_audit_items_propagate`). Folding them in HERE rather than beside
+ * main()'s console.error is deliberate: this is the one place the exit code is
+ * decided, so a signal cannot be added and then forgotten to be wired to it.
+ *
  * @param {{stale:boolean}[]} rows
- * @returns {{stale:object[], code:number}}
+ * @param {{kind:string, subject:string, why:string}[]} [findings]
+ * @returns {{stale:object[], findings:object[], code:number}}
  */
-export function decide(rows) {
+export function decide(rows, findings = []) {
   const stale = rows.filter((r) => r.stale);
-  return { stale, code: stale.length ? 1 : 0 };
+  const bad = Array.isArray(findings) ? findings : [];
+  return { stale, findings: bad, code: stale.length || bad.length ? 1 : 0 };
 }
 
-/** Build the classified rows from the live IO (gh run-history + git log). */
+/**
+ * The declared-dormancy register (#4144), or null when it is absent/unreadable.
+ *
+ * Null is not an error — the common case is a repo where nothing is dormant.
+ * classifyDisposition treats null as "nothing is declared", so an unreadable
+ * register acknowledges nothing and every row is judged exactly as it was
+ * before the register existed.
+ *
+ * ABSENT AND CORRUPT ARE DIFFERENT FACTS, so they are returned separately. Both
+ * yield `register: null` and therefore the same fail-closed suppression
+ * behaviour, but only one of them is a defect somebody has to fix: a file that
+ * is not there declares nothing, while a file that is there and does not parse
+ * declares things nobody is honouring. Collapsing them into one silent `null`
+ * meant a bad merge into the JSON produced no signal in any channel.
+ *
+ * @returns {{register: unknown, parseError: string|null}}
+ */
+function loadDispositions() {
+  let raw;
+  try {
+    raw = readFileSync(path.join(REPO_ROOT, DISPOSITION_PATH), 'utf8');
+  } catch (e) {
+    // ENOENT is the ordinary "nothing is dormant" case. Anything else — a
+    // permission denial, a directory where the file should be — is NOT an
+    // absence, and per deploy-integrity R7 must not be reported as one.
+    if (e && e.code === 'ENOENT') return { register: null, parseError: null };
+    return { register: null, parseError: `${e?.code || 'read failed'}: ${e?.message || String(e)}` };
+  }
+  try {
+    return { register: JSON.parse(raw), parseError: null };
+  } catch (e) {
+    return { register: null, parseError: e?.message || String(e) };
+  }
+}
+
+/**
+ * Build the classified rows from the live IO (gh run-history + git log), plus
+ * the disposition register's own findings.
+ */
 function buildRows() {
   const states = workflowStates();
+  const { register, parseError: registerParseError } = loadDispositions();
+  const today = new Date().toISOString().slice(0, 10);
   const rows = [];
   for (const entry of WATCHED) {
     const run = lastSuccessfulRun(entry.workflow, declaredPauseSince(entry.boundary));
@@ -1795,6 +1928,12 @@ function buildRows() {
     const history = recentRuns(entry.workflow);
     const health = classifyRunHealth(history.rows, entry.maxFailureStreak || FAILING_STREAK);
     const wf = classifyWorkflowState(states.get(entry.workflow));
+    // Any ONE of these is enough to fail. Drift already had teeth; the workflow
+    // -state ones are what six weeks of red full-app-deploy-commercial and eight
+    // consecutive red nightly reconciles needed and did not have.
+    const conditions = conditionsOf(drift, health, wf);
+    const disposition = classifyDisposition({ register, workflow: entry.workflow, today });
+    const verdict = applyDisposition({ conditions, disposition });
     rows.push({
       ...entry,
       codeAt,
@@ -1803,13 +1942,26 @@ function buildRows() {
       workflowState: wf.state,
       disabled: wf.disabled,
       stateUnknown: wf.unknown,
-      // Any ONE of the three is enough to fail. Drift already had teeth; the
-      // other two are what six weeks of red full-app-deploy-commercial and
-      // eight consecutive red nightly reconciles needed and did not have.
-      stale: drift.stale || health.failing || wf.disabled || wf.unknown,
+      conditions,
+      // Carried on the row so a --json consumer can tell a signed-off row from a
+      // clean one without re-parsing prose, and so the REASON a declaration was
+      // refused travels with the row that is still red because of it.
+      dispositionDeclared: disposition.declared,
+      dispositionHasEntry: disposition.hasEntry === true,
+      dispositionReason: disposition.reason,
+      disposition: disposition.entry,
+      acknowledged: verdict.acknowledged,
+      acknowledgedConditions: verdict.acknowledgedConditions,
+      unacknowledged: verdict.unacknowledged,
+      stale: verdict.stale,
     });
   }
-  return rows;
+  const findings = auditDispositionRegister({
+    register,
+    parseError: registerParseError,
+    rows: rows.map((r) => ({ workflow: r.workflow, conditions: r.conditions })),
+  });
+  return { rows, findings };
 }
 
 /** One line per row, for both the ok and the fail report. */
@@ -1831,7 +1983,13 @@ function describeRow(r) {
     : '';
   const fail = r.failureStreak ? `  [${r.failureStreak} consecutive FAILURE(s) since]` : '';
   const off = r.stateUnknown ? '  [workflow state UNKNOWN]' : r.disabled ? `  [workflow ${r.workflowState}]` : '';
-  return `${when}${drift}${dry}${paused}${fail}${off}`;
+  // #4144 — a signed-off row must never read as a clean one. The verdict column
+  // says ACK rather than ok, and this says by whom and until when, on the same
+  // line, every run.
+  const ack = r.acknowledged
+    ? `  [ACKNOWLEDGED ${r.acknowledgedConditions.join('+')} by ${r.disposition?.owner ?? '?'} until ${r.disposition?.reviewBy ?? '?'}]`
+    : '';
+  return `${when}${drift}${dry}${paused}${fail}${off}${ack}`;
 }
 
 /** Everything wrong with one row, as operator-readable lines. */
@@ -1843,16 +2001,28 @@ function reasonsFor(r) {
   if (r.failing) out.push(`THE DEPLOY PATH IS FAILING — ${r.failureStreak} consecutive failed run(s), newest conclusion "${r.lastConclusion}". A recent last-success does NOT mean this path works.`);
   if (r.disabled) out.push(`THE WORKFLOW IS SWITCHED OFF (state "${r.workflowState}") — it cannot run on its schedule or on dispatch until re-enabled: gh workflow enable ${r.workflow}`);
   if (r.stateUnknown) out.push('workflow state UNKNOWN — it was not in the `gh workflow list` page we read, so we cannot say whether it is enabled. Not the same as active.');
+  // A REFUSED declaration is printed beside the red row it failed to cover.
+  // Silence here would be the worst of both: the operator believes the path is
+  // signed off in the register and cannot see why the report is still red
+  // (deploy-integrity R7 — say what was actually established).
+  if (r.dispositionHasEntry && !r.dispositionDeclared) {
+    out.push(`its ${DISPOSITION_PATH} entry was REFUSED and acknowledges NOTHING — ${r.dispositionReason}`);
+  } else if (r.dispositionDeclared && r.unacknowledged?.length) {
+    out.push(
+      `its ${DISPOSITION_PATH} entry acknowledges ${r.acknowledgedConditions.join(', ') || 'nothing here'} `
+      + `but NOT ${r.unacknowledged.join(', ')} — a disposition covers only what it names.`,
+    );
+  }
   return out;
 }
 
 async function main() {
-  const rows = buildRows();
+  const { rows, findings } = buildRows();
   const estates = [];
   for (const e of ESTATES) estates.push(await probeEstate(e));
 
   if (process.argv.includes('--json')) {
-    console.log(JSON.stringify({ rows, estates }, null, 2));
+    console.log(JSON.stringify({ rows, estates, dispositionFindings: findings }, null, 2));
   }
 
   // ── the LIVE estate, first: it is the fact the operator was missing ───────
@@ -1876,14 +2046,45 @@ async function main() {
 
   console.log('[deploy-staleness] watched deploy paths:');
   for (const r of rows) {
-    console.log(`  ${r.stale ? 'STALE' : 'ok   '}  ${r.workflow.padEnd(38)} ${describeRow(r)}`);
+    // THREE words, not two. `ACK` is a declared, owned, expiring decision that
+    // this path is deliberately dormant — it is NOT `ok`, and conflating them
+    // would make the register the allowlist it refuses to be (#4144).
+    const verdict = r.stale ? 'STALE' : r.acknowledged ? 'ACK  ' : 'ok   ';
+    console.log(`  ${verdict}  ${r.workflow.padEnd(38)} ${describeRow(r)}`);
   }
 
-  const { stale, code } = decide(rows);
+  const { stale, code } = decide(rows, findings);
   const badEstates = estates.filter((e) => e.stale);
-  if (stale.length === 0 && badEstates.length === 0) {
+  const acked = rows.filter((r) => r.acknowledged);
+
+  // The acknowledged block prints on EVERY run — before the pass/fail branch —
+  // so a deliberately dormant deploy path can never become invisible. That is
+  // the whole difference between this and an allowlist: an allowlisted row
+  // disappears, an acknowledged one is restated, with its owner and its expiry,
+  // until somebody drains it or the review lapses.
+  if (acked.length) {
+    console.log(`\n[deploy-staleness] ${acked.length} deploy path(s) are DECLARED deliberately dormant `
+      + `(${DISPOSITION_PATH}) — reported, not failed:\n`);
+    for (const r of acked) {
+      console.log(`  ${r.workflow}  [${r.disposition?.disposition}]  owner ${r.disposition?.owner}  review by ${r.disposition?.reviewBy}`);
+      console.log(`    acknowledges: ${r.acknowledgedConditions.join(', ')}`);
+      console.log(`    ${r.disposition?.reason}\n`);
+    }
+  }
+
+  if (findings.length) {
+    console.error(`\n[deploy-staleness] FAIL — ${findings.length} disposition-register finding(s). `
+      + 'A register nobody drains stops describing reality.\n');
+    for (const f of findings) {
+      console.error(`  ${f.subject}  [${f.kind}]`);
+      console.error(`      ${f.why}\n`);
+    }
+  }
+
+  if (stale.length === 0 && badEstates.length === 0 && findings.length === 0) {
     console.log('[deploy-staleness] OK — every watched deploy path has run since its code last');
-    console.log('  changed, none is failing or disabled, and every measured estate is current.');
+    console.log('  changed, none is failing or disabled, every measured estate is current, and');
+    console.log(`  every dormant path is declared in ${DISPOSITION_PATH}.`);
     return 0;
   }
 
@@ -1906,7 +2107,10 @@ async function main() {
     }
     console.error('  A merged fix is not a deployed fix. If the drift is intentional, raise maxDays');
     console.error('  for that entry WITH a reason — that is a deployment review, not a config tweak.');
-    console.error('  A FAILING or DISABLED path is never signed off that way: fix or re-enable it.\n');
+    console.error(`  If the path is DELIBERATELY dormant, declare it in ${DISPOSITION_PATH}`);
+    console.error('  with an owner, a measured reason and an expiring reviewBy; it then reports as');
+    console.error('  ACK rather than failing. Only `never-run` and `drift` can be declared that way.');
+    console.error('  A FAILING or DISABLED path is never signed off at all: fix or re-enable it.\n');
   }
   return code || 1;
 }
