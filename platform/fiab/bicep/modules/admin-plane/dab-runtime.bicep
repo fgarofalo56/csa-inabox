@@ -55,6 +55,14 @@ param hostMode string = 'development'
 @description('CORS origins allowed to call the preview runtime (the Loom console origin).')
 param corsOrigins array = []
 
+// #3922 — this module previously declared NO `tags:` at all, so the DAB preview
+// Container App reached ARM untagged and could never be proven Loom's. It is a
+// Container App, i.e. exactly the tier the Brain scans and the pause path
+// costs. The parent already folds `loom-estate-id` into this bag; declaring the
+// param is all that was missing.
+@description('Compliance tags (incl. the loom-estate-id ownership tag folded in by main.bicep).')
+param complianceTags object = {}
+
 // AAD Managed-Identity connection string — no secret material, the UAMI is the principal.
 var connectionString = 'Server=tcp:${sqlServerFqdn},1433;Database=${sqlDatabase};Authentication=Active Directory Managed Identity;User Id=${uamiClientId};Encrypt=True;TrustServerCertificate=False;Connection Timeout=30;'
 
@@ -81,6 +89,7 @@ var dabConfig = {
 resource dab 'Microsoft.App/containerApps@2024-03-01' = {
   name: 'loom-dab-preview'
   location: location
+  tags: complianceTags
   identity: {
     type: 'UserAssigned'
     userAssignedIdentities: { '${uamiResourceId}': {} }

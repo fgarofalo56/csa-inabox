@@ -354,6 +354,69 @@ param hubVnetCidr string = '10.0.0.0/16'
 @description('Compliance tags applied to every resource')
 param complianceTags object
 
+// ═══════════════════════════════════════════════════════════════════════════
+// #3922 / #4255 — ESTATE OWNERSHIP. The tag the Brain and the pause path read.
+// ═══════════════════════════════════════════════════════════════════════════
+//
+// `loom-estate-id` is the ONLY signal that proves a resource belongs to THIS
+// Loom install. Nothing else confers ownership, deliberately:
+//
+//   • Resource-group NAME is never read — measured wrong in BOTH directions on
+//     the live estate (`rg-dlz-aiml-stack-dev` holds a genuine Loom component
+//     and contains no "loom"; a customer called Loomis matches `/loom/i`).
+//   • `CSA_Loom` / `loom-next-level` / `csa-loom` / `loom-band` / `loom-item`
+//     are NOT estate-scoped and must not be widened into ownership —
+//     `loom-item` was measured claiming ONE resource for TWO unrelated estates.
+//
+// Until this landed, NOTHING stamped it. Measured 2026-08-23 across six
+// subscriptions: 105 container-tier resources, ZERO carrying `loom-estate-id`.
+// The consequences were not cosmetic — `dryRunPause` returned `wouldPause: []`
+// against a ~$3k/mo pausable estate, and all 17 Brain recommendations were
+// unapprovable because `guardOwnership` could not prove even Loom's OWN
+// `loom-risingwave` was Loom's.
+//
+// THE VALUE FORMAT IS NOT A CHOICE MADE HERE. It is dictated by the consumers,
+// which already agree on one algorithm and match the tag by EXACT STRING
+// EQUALITY (`lib/estate/pause-inventory.ts:432/445`):
+//
+//   lib/estate/pause-orchestrator.ts   resolveEstateId()
+//   lib/brain/run/cli.ts               resolveScanEstateId()
+//       LOOM_ESTATE_ID when set, else `loom:<first 8 of sub id>:<admin RG>`
+//
+// So the derived form below is `loom:<sub8>:<adminPlaneRgName>` — byte-for-byte
+// what those two functions synthesize from the `LOOM_SUBSCRIPTION_ID` +
+// `LOOM_ADMIN_RG` this template already emits. A DIFFERENT format here would
+// not error; it would silently produce zero owned resources, which is
+// indistinguishable from the bug this fixes.
+//
+// The SUBSCRIPTION half is `effHubSubscriptionId`, not `subscription()`,
+// because in the `dlz-attach` topology this deployment runs in the DLZ's
+// subscription while the console (and therefore the estate identity) lives in
+// the HUB's. Using the deployment sub there would stamp DLZ resources with an
+// estate id the console never computes — the same silent-zero failure.
+@description('Estate identity stamped as the `loom-estate-id` tag on every resource this deployment creates, and emitted to the Console as LOOM_ESTATE_ID so the tag and the reader can never disagree. EMPTY (default) DERIVES it as `loom:<first 8 chars of the hub subscription id>:<admin-plane RG name>` — byte-identical to what lib/estate/pause-orchestrator.ts#resolveEstateId and lib/brain/run/cli.ts#resolveScanEstateId synthesize from LOOM_SUBSCRIPTION_ID + LOOM_ADMIN_RG. Set it ONLY to pin an existing estate id (a brownfield estate already carrying the tag, or a #4255 backfill); an arbitrary value silently yields zero owned resources rather than an error.')
+param loomEstateId string = ''
+
+// Derived unless pinned. `substring` is safe unconditionally: an ARM
+// subscription id is always a 36-char GUID, and `effHubSubscriptionId`
+// bottoms out at `subscription().subscriptionId`.
+var effectiveLoomEstateId = !empty(loomEstateId) ? loomEstateId : 'loom:${substring(effHubSubscriptionId, 0, 8)}:${adminPlaneRgName}'
+
+// THE ONE TAG BAG. Every `tags:` and every `complianceTags:` pass-through in
+// this file uses this, so a module reached from here carries the estate id
+// through the `complianceTags` parameter it ALREADY declares — no second
+// mechanism, and no per-resource sprinkle to drift out of date.
+//
+// `union` ADDS: the caller's compliance bag (Environment / CSA_Loom /
+// FedRAMP_Level / Data_Classification, per params/*.bicepparam) survives intact.
+// The estate key is placed second so it wins a collision, which is the correct
+// precedence — a param file cannot accidentally redefine estate identity.
+//
+// GUARD: scripts/ci/check-estate-tag-coverage.mjs compiles main.bicep and fails
+// if ANY taggable top-level resource reaches ARM without this key. That guard is
+// what keeps the next resource from landing untagged.
+var loomTags = union(complianceTags, { 'loom-estate-id': effectiveLoomEstateId })
+
 @description('Skip role-assignment grants — set true when re-provisioning an environment that already has the grants, to avoid RoleAssignmentExists.')
 param skipRoleGrants bool = false
 
@@ -1158,7 +1221,7 @@ var databricksAccountHost = (boundary == 'GCC-High' || boundary == 'IL5') ? 'acc
 resource adminPlaneRg 'Microsoft.Resources/resourceGroups@2024-03-01' = if (deployAdminPlane) {
   name: adminPlaneRgName
   location: location
-  tags: complianceTags
+  tags: loomTags
 }
 
 // =====================================================================
@@ -1225,7 +1288,12 @@ module adminPlane 'modules/admin-plane/main.bicep' = if (deployAdminPlane) {
     loomTenantAdminGroupId: loomTenantAdminGroupId
     loomTenantAdminOid: loomTenantAdminOid
     hubVnetCidr: hubVnetCidr
-    complianceTags: complianceTags
+    // #3922 — `loomTags` carries `loom-estate-id`, and admin-plane/main.bicep
+    // READS THE CONSOLE'S `LOOM_ESTATE_ID` BACK OUT OF THIS BAG rather than
+    // taking it as a second parameter. One value, one path: the tag on every
+    // resource and the env the console matches it against cannot drift apart,
+    // and a drift there does not error — it silently owns nothing.
+    complianceTags: loomTags
     skipRoleGrants: skipRoleGrants
     recycleRetentionDays: recycleRetentionDays
     // DR0/CMK1 — narrowed to the hub-relevant properties (enableBlobPitr rides
@@ -1888,7 +1956,7 @@ var topologyManifestDlzs = useSingleDlz ? topologyManifestDlzsSingle : (deployLa
 resource singleDlzRg 'Microsoft.Resources/resourceGroups@2024-03-01' = if (useSingleDlz) {
   name: 'rg-csa-loom-dlz-single-${location}'
   location: location
-  tags: complianceTags
+  tags: loomTags
 }
 
 // =====================================================================
@@ -1933,7 +2001,7 @@ module singleDlz 'modules/landing-zone/main.bicep' = if (useSingleDlz) {
     databricksUcScriptUamiId: hub.consoleUamiResourceId
     storageRequireCmk: storageRequireCmk
     powerBiSku: powerBiSku
-    complianceTags: complianceTags
+    complianceTags: loomTags
     skipRoleGrants: skipRoleGrants
     consolePrincipalNeedsLifecycleWrite: consolePrincipalNeedsLifecycleWrite
     consolePrincipalNeedsCmkBind: consolePrincipalNeedsCmkBind
@@ -2101,7 +2169,7 @@ module dlz 'modules/landing-zone/main.bicep' = [for (subId, i) in dlzSubscriptio
     databricksUcScriptUamiId: hub.consoleUamiResourceId
     storageRequireCmk: storageRequireCmk
     powerBiSku: powerBiSku
-    complianceTags: complianceTags
+    complianceTags: loomTags
     skipRoleGrants: skipRoleGrants
     consolePrincipalNeedsLifecycleWrite: consolePrincipalNeedsLifecycleWrite
     consolePrincipalNeedsCmkBind: consolePrincipalNeedsCmkBind
@@ -2311,7 +2379,7 @@ module dlzLakeGrantPass 'modules/data-plane/dlz-lake-grant-pass.bicep' = if (cro
 resource dlzAttachRg 'Microsoft.Resources/resourceGroups@2024-03-01' = if (topology == 'dlz-attach') {
   name: 'rg-csa-loom-dlz-${attachDomainName}-${location}'
   location: location
-  tags: complianceTags
+  tags: loomTags
 }
 
 module dlzAttach 'modules/landing-zone/main.bicep' = if (topology == 'dlz-attach') {
@@ -2360,7 +2428,7 @@ module dlzAttach 'modules/landing-zone/main.bicep' = if (topology == 'dlz-attach
     databricksUcScriptUamiId: effHubConsoleUamiId
     storageRequireCmk: storageRequireCmk
     powerBiSku: powerBiSku
-    complianceTags: complianceTags
+    complianceTags: loomTags
     skipRoleGrants: skipRoleGrants
     consolePrincipalNeedsLifecycleWrite: consolePrincipalNeedsLifecycleWrite
     consolePrincipalNeedsCmkBind: consolePrincipalNeedsCmkBind
@@ -2510,7 +2578,7 @@ module dlzAttachHubConsoleEnv 'modules/landing-zone/hub-console-dlz-env.bicep' =
     // Console redeploy. Empty when the gateway was skipped for a missing hub
     // ACR/CAE coordinate (the var is then not set and the editor honest-gates).
     dlzS3GatewayUrl: (dlzAttachHasHubAcr && dlzAttachHasHubCae) ? dlzAttachS3Gateway!.outputs.internalEndpoint : ''
-    complianceTags: complianceTags
+    complianceTags: loomTags
   }
 }
 // =====================================================================
@@ -2559,7 +2627,7 @@ module dlzAttachS3Gateway 'modules/data-plane/s3-gateway-aca.bicep' = if (topolo
       acrLoginServer: effHubAcrLoginServer
     }
     keyVaultId: effHubKeyVaultId
-    complianceTags: complianceTags
+    complianceTags: loomTags
   }
 }
 
@@ -2646,7 +2714,7 @@ module dpPostgres 'modules/deploy-planner/postgres.bicep' = if (useSingleDlz && 
     storageSizeGB: postgresStorageSizeGB
     entraAdminObjectId: dpConsolePrincipalId
     entraAdminName: hub.consoleUamiName
-    complianceTags: complianceTags
+    complianceTags: loomTags
   }
 }
 
@@ -2659,7 +2727,7 @@ module dpMysql 'modules/deploy-planner/mysql.bicep' = if (useSingleDlz && mysqlE
     storageSizeGB: mysqlStorageSizeGB
     entraAdminObjectId: dpConsolePrincipalId
     entraAdminName: hub.consoleUamiName
-    complianceTags: complianceTags
+    complianceTags: loomTags
   }
 }
 
@@ -2673,7 +2741,7 @@ module dpRedis 'modules/deploy-planner/redis.bicep' = if (useSingleDlz && redisE
     skuFamily: redisSkuFamily
     skuCapacity: redisSkuCapacity
     consolePrincipalId: dpConsolePrincipalId
-    complianceTags: complianceTags
+    complianceTags: loomTags
   }
 }
 
@@ -2684,7 +2752,7 @@ module dpEventGrid 'modules/deploy-planner/event-grid.bicep' = if (useSingleDlz 
     location: location
     consolePrincipalId: dpConsolePrincipalId
     skipRoleGrants: skipRoleGrants
-    complianceTags: complianceTags
+    complianceTags: loomTags
   }
 }
 
@@ -2696,7 +2764,7 @@ module dpServiceBus 'modules/deploy-planner/service-bus.bicep' = if (useSingleDl
     skuName: serviceBusSkuName
     consolePrincipalId: dpConsolePrincipalId
     skipRoleGrants: skipRoleGrants
-    complianceTags: complianceTags
+    complianceTags: loomTags
   }
 }
 
@@ -2709,7 +2777,7 @@ module dpSignalr 'modules/deploy-planner/signalr.bicep' = if (useSingleDlz && si
     skuCapacity: signalrSkuCapacity
     consolePrincipalId: dpConsolePrincipalId
     skipRoleGrants: skipRoleGrants
-    complianceTags: complianceTags
+    complianceTags: loomTags
   }
 }
 
@@ -2720,7 +2788,7 @@ module dpStorageQueues 'modules/deploy-planner/storage-queues.bicep' = if (useSi
     location: location
     consolePrincipalId: dpConsolePrincipalId
     skipRoleGrants: skipRoleGrants
-    complianceTags: complianceTags
+    complianceTags: loomTags
   }
 }
 
@@ -2733,7 +2801,7 @@ module dpAiServices 'modules/deploy-planner/cognitive-account.bicep' = if (useSi
     nameFragment: 'aiservices'
     consolePrincipalId: dpConsolePrincipalId
     skipRoleGrants: skipRoleGrants
-    complianceTags: complianceTags
+    complianceTags: loomTags
   }
 }
 
@@ -2746,7 +2814,7 @@ module dpDocIntel 'modules/deploy-planner/cognitive-account.bicep' = if (useSing
     nameFragment: 'docintel'
     consolePrincipalId: dpConsolePrincipalId
     skipRoleGrants: skipRoleGrants
-    complianceTags: complianceTags
+    complianceTags: loomTags
   }
 }
 
@@ -2759,7 +2827,7 @@ module dpContentSafety 'modules/deploy-planner/cognitive-account.bicep' = if (us
     nameFragment: 'contentsafety'
     consolePrincipalId: dpConsolePrincipalId
     skipRoleGrants: skipRoleGrants
-    complianceTags: complianceTags
+    complianceTags: loomTags
   }
 }
 
@@ -2772,7 +2840,7 @@ module dpAppService 'modules/deploy-planner/app-service.bicep' = if (useSingleDl
     linuxFxVersion: appServiceLinuxFxVersion
     consolePrincipalId: dpConsolePrincipalId
     skipRoleGrants: skipRoleGrants
-    complianceTags: complianceTags
+    complianceTags: loomTags
   }
 }
 
@@ -2785,7 +2853,7 @@ module dpFunctions 'modules/deploy-planner/functions.bicep' = if (useSingleDlz &
     linuxFxVersion: functionsLinuxFxVersion
     consolePrincipalId: dpConsolePrincipalId
     skipRoleGrants: skipRoleGrants
-    complianceTags: complianceTags
+    complianceTags: loomTags
   }
 }
 
@@ -2798,7 +2866,7 @@ module dpContainerInstances 'modules/deploy-planner/container-instances.bicep' =
     memoryInGB: containerInstancesMemoryInGB
     consolePrincipalId: dpConsolePrincipalId
     skipRoleGrants: skipRoleGrants
-    complianceTags: complianceTags
+    complianceTags: loomTags
   }
 }
 
@@ -2810,7 +2878,7 @@ module dpStreamAnalytics 'modules/deploy-planner/stream-analytics.bicep' = if (u
     startingStreamingUnits: streamAnalyticsStreamingUnits
     consolePrincipalId: dpConsolePrincipalId
     skipRoleGrants: skipRoleGrants
-    complianceTags: complianceTags
+    complianceTags: loomTags
   }
 }
 
@@ -2821,7 +2889,7 @@ module dpDataFactory 'modules/deploy-planner/data-factory.bicep' = if (useSingle
     location: location
     consolePrincipalId: dpConsolePrincipalId
     skipRoleGrants: skipRoleGrants
-    complianceTags: complianceTags
+    complianceTags: loomTags
   }
 }
 
@@ -2834,7 +2902,7 @@ module dpVm 'modules/deploy-planner/virtual-machine.bicep' = if (useSingleDlz &&
     adminSshPublicKey: vmAdminSshPublicKey
     consolePrincipalId: dpConsolePrincipalId
     skipRoleGrants: skipRoleGrants
-    complianceTags: complianceTags
+    complianceTags: loomTags
   }
 }
 
@@ -2845,7 +2913,7 @@ module dpBatch 'modules/deploy-planner/batch.bicep' = if (useSingleDlz && batchE
     location: location
     consolePrincipalId: dpConsolePrincipalId
     skipRoleGrants: skipRoleGrants
-    complianceTags: complianceTags
+    complianceTags: loomTags
   }
 }
 
@@ -2856,7 +2924,7 @@ module dpLogicApps 'modules/deploy-planner/logic-app.bicep' = if (useSingleDlz &
     location: location
     consolePrincipalId: dpConsolePrincipalId
     skipRoleGrants: skipRoleGrants
-    complianceTags: complianceTags
+    complianceTags: loomTags
   }
 }
 
@@ -2868,7 +2936,7 @@ module dpStaticWebApps 'modules/deploy-planner/static-web-app.bicep' = if (useSi
     skuName: staticWebAppsSkuName
     consolePrincipalId: dpConsolePrincipalId
     skipRoleGrants: skipRoleGrants
-    complianceTags: complianceTags
+    complianceTags: loomTags
   }
 }
 
@@ -2880,7 +2948,7 @@ module dpCdn 'modules/deploy-planner/cdn.bicep' = if (useSingleDlz && cdnEnabled
     skuName: cdnSkuName
     consolePrincipalId: dpConsolePrincipalId
     skipRoleGrants: skipRoleGrants
-    complianceTags: complianceTags
+    complianceTags: loomTags
   }
 }
 
@@ -2891,7 +2959,7 @@ module dpLoadBalancer 'modules/deploy-planner/load-balancer.bicep' = if (useSing
     location: location
     consolePrincipalId: dpConsolePrincipalId
     skipRoleGrants: skipRoleGrants
-    complianceTags: complianceTags
+    complianceTags: loomTags
   }
 }
 
@@ -2903,7 +2971,7 @@ module dpFirewall 'modules/deploy-planner/firewall.bicep' = if (useSingleDlz && 
     firewallTier: firewallTier
     consolePrincipalId: dpConsolePrincipalId
     skipRoleGrants: skipRoleGrants
-    complianceTags: complianceTags
+    complianceTags: loomTags
   }
 }
 
@@ -2916,7 +2984,7 @@ module dpVision 'modules/deploy-planner/cognitive-account.bicep' = if (useSingle
     nameFragment: 'vision'
     consolePrincipalId: dpConsolePrincipalId
     skipRoleGrants: skipRoleGrants
-    complianceTags: complianceTags
+    complianceTags: loomTags
   }
 }
 
@@ -2929,7 +2997,7 @@ module dpSpeech 'modules/deploy-planner/cognitive-account.bicep' = if (useSingle
     nameFragment: 'speech'
     consolePrincipalId: dpConsolePrincipalId
     skipRoleGrants: skipRoleGrants
-    complianceTags: complianceTags
+    complianceTags: loomTags
   }
 }
 
@@ -2942,7 +3010,7 @@ module dpLanguage 'modules/deploy-planner/cognitive-account.bicep' = if (useSing
     nameFragment: 'language'
     consolePrincipalId: dpConsolePrincipalId
     skipRoleGrants: skipRoleGrants
-    complianceTags: complianceTags
+    complianceTags: loomTags
   }
 }
 
@@ -2957,7 +3025,7 @@ module dpTranslator 'modules/deploy-planner/cognitive-account.bicep' = if (useSi
     nameFragment: 'translator'
     consolePrincipalId: dpConsolePrincipalId
     skipRoleGrants: skipRoleGrants
-    complianceTags: complianceTags
+    complianceTags: loomTags
   }
 }
 
@@ -2970,7 +3038,7 @@ module dpMlWorkspace 'modules/deploy-planner/ml-workspace.bicep' = if (useSingle
     mlComputeIdleTtl: mlComputeIdleTtl
     consolePrincipalId: dpConsolePrincipalId
     skipRoleGrants: skipRoleGrants
-    complianceTags: complianceTags
+    complianceTags: loomTags
     // Route AML workspace diagnostics (AmlComputeJobEvent / AmlComputeClusterEvent /
     // Spark job telemetry) to the central Loom LAW — universal Spark telemetry.
     // Empty in dlz-attach with no hub LAW coordinate → diag skipped honestly.
@@ -3159,6 +3227,13 @@ output mcpServerUrl string = deployAdminPlane ? adminPlane!.outputs.mcpServerUrl
 output adminPlaneHubVnetId string = hub.hubVnetId
 output adminPlaneRgName string = adminPlaneRgName
 
+// #3922 / #4255 — the estate id this deployment stamped on every resource it
+// created, and set as the Console's LOOM_ESTATE_ID. Output rather than left
+// implicit because the #4255 BACKFILL needs the exact string to tag resources
+// that predate this change, and re-deriving it by hand from the RG name is the
+// guess that produces a second, silently-empty estate.
+output loomEstateId string = effectiveLoomEstateId
+
 // Access-pattern outputs (empty unless their flag is on / admin plane deployed)
 output vpnGatewayPublicIp string = deployAdminPlane ? adminPlane!.outputs.vpnGatewayPublicIp : ''
 output appGatewayPublicFqdn string = deployAdminPlane ? adminPlane!.outputs.appGatewayPublicFqdn : ''
@@ -3184,6 +3259,12 @@ output topologyManifest object = {
   adminPlaneDeployed: deployAdminPlane
   adminPlaneSubId: adminPlaneSubId
   adminPlaneRgName: adminPlaneRgName
+  // #3922 — carried in the manifest so a later dlz-attach can echo it back as
+  // `loomEstateId` and tag its DLZ resources into the HUB's estate. Without it
+  // an attach in a different subscription derives a different `loom:<sub8>:…`
+  // and its resources belong, correctly but uselessly, to nobody the console
+  // is looking for.
+  loomEstateId: effectiveLoomEstateId
   landingZonesDeployed: deployLandingZones
   // Hub coordinates downstream dlz-attach deployments must echo back as params.
   hub: {

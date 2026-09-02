@@ -53,12 +53,41 @@
 # -----------------------------------------------------------------------------
 #   apply-acr-compliance-tags.sh --acr <name> [--subscription <id>]
 #                                (--params-file <x.bicepparam> | --tags-json <json>)
+#                                [--estate-id <loom:...>]
 #
 #   --params-file  derive the tags from a bicepparam's `complianceTags` via
 #                  `az bicep build-params`. THE PREFERRED FORM: the param file
 #                  is the single source of truth the ARM deployment also used,
 #                  so the tags cannot drift from the template's own idea of them.
 #   --tags-json    an explicit JSON object, for callers with no param file.
+#   --estate-id    pin the `loom-estate-id` value. Normally OMITTED — see below.
+#
+# -----------------------------------------------------------------------------
+# THE `loom-estate-id` TAG (#3922, #4255) — ADDED HERE, DERIVED, NEVER TYPED
+# -----------------------------------------------------------------------------
+# `main.bicep` folds `loom-estate-id` into the compliance bag it hands every
+# resource it declares (`var loomTags`). This registry is the ONE resource that
+# cannot take it that way — for the two reasons above — so it is merged here
+# with everything else, and `scripts/ci/check-estate-tag-coverage.mjs` exempts
+# the registry ONLY while this script is the thing that supplies it.
+#
+# The value is DERIVED from the registry's own ARM resource id:
+#
+#     loom:<first 8 chars of the subscription id>:<the registry's resource group>
+#
+# which is byte-identical to what `main.bicep` computes, because registry.bicep
+# is deployed at the admin-plane RG scope — so `<rg>` here IS the
+# `adminPlaneRgName` bicep interpolates, and it is also the `LOOM_ADMIN_RG` the
+# Console reads back. That is the point: three producers, one algorithm, no
+# literal anywhere. `lib/estate/pause-orchestrator.ts#resolveEstateId` and
+# `lib/brain/run/cli.ts#resolveScanEstateId` compare the tag to their own
+# synthesis of the same string by EXACT EQUALITY, so a hand-typed value that
+# differed by one character would not error — it would silently mean the Brain
+# and the pause path own nothing here.
+#
+# Precedence, highest first: --estate-id · the param file's `loomEstateId` (the
+# same override the ARM deploy honours) · the derivation. A pinned bicepparam
+# and this script therefore agree without the caller doing anything.
 #
 # Exit codes: 0 applied+verified · 1 usage/precondition · 2 could not resolve the
 # registry · 3 the tag write failed · 4 the write reported success but the
@@ -82,6 +111,12 @@ ACR_NAME=""
 SUB_ID=""
 PARAMS_FILE=""
 TAGS_JSON=""
+ESTATE_ID=""
+
+# The ownership tag key. Same literal as
+# apps/fiab-console/lib/brain/graph/extractors/resource-graph.ts LOOM_ESTATE_TAG_KEY
+# and apps/fiab-console/lib/estate/pause-inventory.ts LOOM_ESTATE_TAG_KEY.
+ESTATE_TAG_KEY="loom-estate-id"
 
 _err() { printf '::error::[acr-compliance-tags] %s\n' "$*" >&2; }
 _note() { printf '[acr-compliance-tags] %s\n' "$*"; }
@@ -92,7 +127,8 @@ while [ $# -gt 0 ]; do
     --subscription) SUB_ID="${2:-}"; shift 2 ;;
     --params-file) PARAMS_FILE="${2:-}"; shift 2 ;;
     --tags-json) TAGS_JSON="${2:-}"; shift 2 ;;
-    -h|--help) sed -n '1,64p' "$0"; exit 0 ;;
+    --estate-id) ESTATE_ID="${2:-}"; shift 2 ;;
+    -h|--help) sed -n '1,95p' "$0"; exit 0 ;;
     *) _err "unknown argument '$1'"; exit 1 ;;
   esac
 done
@@ -131,6 +167,17 @@ if [ -n "$PARAMS_FILE" ]; then
   # applying nothing while reporting success is how an untagged estate reads as
   # a tagged one.
   TAGS_JSON="$(jq -c '.parameters.complianceTags.value // empty' "$BP_OUT")"
+  # #3922 — honour a PINNED estate id from the same param file the ARM deploy
+  # read, so a brownfield estate that pins `loomEstateId` gets the identical
+  # value on the registry as on every declaratively-tagged resource. Absent
+  # (the normal case, and every shipped bicepparam today) leaves it derived
+  # below — which is what main.bicep does too.
+  if [ -z "$ESTATE_ID" ]; then
+    ESTATE_ID="$(jq -r '.parameters.loomEstateId.value // empty' "$BP_OUT" | tr -d '\r')"
+    if [ -n "$ESTATE_ID" ]; then
+      _note "estate id PINNED by '$PARAMS_FILE': $ESTATE_ID"
+    fi
+  fi
   rm -f "$BP_OUT" "$BP_ERR"
   if [ -z "$TAGS_JSON" ]; then
     _err "'$PARAMS_FILE' declares no \`complianceTags\` parameter. Refusing to apply an empty tag set — that would leave the registry untagged while this step reported success."
@@ -156,13 +203,11 @@ if ! printf '%s' "$TAGS_JSON" | jq -e 'type == "object" and length > 0' >/dev/nu
   _err "the compliance tag set is not a non-empty JSON object (got: $TAGS_JSON). Refusing to report success having applied nothing."
   exit 1
 fi
-mapfile -t TAG_PAIRS < <(printf '%s' "$TAGS_JSON" | jq -r 'to_entries[] | "\(.key)=\(.value)"' | tr -d '\r')
-if [ "${#TAG_PAIRS[@]}" -eq 0 ]; then
-  _err "the compliance tag set rendered to zero key=value pairs. Refusing."
-  exit 1
-fi
 
-_note "tags to merge: ${TAG_PAIRS[*]}"
+# NOTE ON ORDER: the tag pairs are rendered AFTER step 2, not here, because the
+# `loom-estate-id` value is derived from the registry's own resource id and that
+# id is not known until `az acr show` has answered. Rendering early and patching
+# the array afterwards is the shape that drops a key when someone edits it later.
 
 # ── 2. Resolve the registry's ARM resource id ────────────────────────────────
 # R7 — the error must state only what was established. `az acr show` failing is
@@ -184,6 +229,41 @@ if [ -z "$ACR_ID" ]; then
 fi
 rm -f "$SHOW_ERR"
 _note "registry resource id: $ACR_ID"
+
+# ── 2b. The ownership tag (#3922) — DERIVED from the id just resolved ─────────
+# `loom:<sub8>:<rg>`, read straight out of the ARM id so it cannot disagree with
+# what main.bicep stamped or what the Console reads back. registry.bicep is
+# deployed at the admin-plane RG scope, so `<rg>` here IS the `adminPlaneRgName`
+# bicep interpolates and the `LOOM_ADMIN_RG` the Console emits.
+#
+# FAIL CLOSED on a malformed id: an empty or short subscription segment would
+# produce a truncated estate id, and a truncated estate id matches nothing while
+# looking entirely plausible in the receipt.
+if [ -z "$ESTATE_ID" ]; then
+  ACR_SUB="$(printf '%s' "$ACR_ID" | sed -n 's#^/subscriptions/\([^/]*\)/.*#\1#p')"
+  ACR_RG="$(printf '%s' "$ACR_ID" | sed -n 's#^/subscriptions/[^/]*/resourceGroups/\([^/]*\)/.*#\1#p')"
+  if [ "${#ACR_SUB}" -lt 8 ] || [ -z "$ACR_RG" ]; then
+    _err "could not derive the ${ESTATE_TAG_KEY} value from the registry's resource id '$ACR_ID' (subscription segment '${ACR_SUB}', resource group '${ACR_RG}'). Refusing to write a truncated estate id — it would match nothing while looking correct."
+    exit 2
+  fi
+  ESTATE_ID="loom:$(printf '%s' "$ACR_SUB" | cut -c1-8):${ACR_RG}"
+  _note "estate id DERIVED from the registry resource id: $ESTATE_ID"
+fi
+
+TAGS_JSON="$(printf '%s' "$TAGS_JSON" | jq -c --arg k "$ESTATE_TAG_KEY" --arg v "$ESTATE_ID" '. + {($k): $v}')"
+if ! printf '%s' "$TAGS_JSON" | jq -e --arg k "$ESTATE_TAG_KEY" 'has($k) and (.[$k] | length) > 0' >/dev/null 2>&1; then
+  _err "failed to fold '${ESTATE_TAG_KEY}' into the tag set. Refusing to tag this registry without the ownership key — the Brain and estate pause would not be able to prove it is Loom's."
+  exit 1
+fi
+
+# Render the JSON object into the `key=value` pairs `az tag update` takes.
+# See the `tr -d '\r'` note above — it is load-bearing on a Git-Bash host.
+mapfile -t TAG_PAIRS < <(printf '%s' "$TAGS_JSON" | jq -r 'to_entries[] | "\(.key)=\(.value)"' | tr -d '\r')
+if [ "${#TAG_PAIRS[@]}" -eq 0 ]; then
+  _err "the compliance tag set rendered to zero key=value pairs. Refusing."
+  exit 1
+fi
+_note "tags to merge: ${TAG_PAIRS[*]}"
 
 # What is on the registry BEFORE the merge — captured so the receipt can SHOW
 # that an out-of-band lease survived rather than merely asserting that it did.
