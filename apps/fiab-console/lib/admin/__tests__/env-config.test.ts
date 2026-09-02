@@ -325,7 +325,21 @@ describe('admin/env-config registry', () => {
     // unset, every adopting surface still works through the picker's validated
     // manual object-id entry, so a push-button deploy needs ZERO operator input
     // and the gate scores neutral rather than "unconfigured forever".
-    expect(EDITABLE_ENV.length).toBe(198);
+    // Bumped to 203 by the Fix-it writability work (#3513), +5. MEASURED as a
+    // set difference against the previous catalog, not counted by hand:
+    //
+    //   LOOM_ADF_NAME  LOOM_ADF_SUBSCRIPTION_ID  LOOM_EVENTHUB_RG
+    //   LOOM_EVENTHUB_SUB  LOOM_SYNAPSE_DEDICATED_POOL
+    //
+    // All five were already NAMED in the remediation prose of svc-adf,
+    // svc-eventhubs and svc-synapse — and none of them was editable anywhere in
+    // the product. `/api/admin/gates/[id]/resolve` 400s any key outside a gate's
+    // requiredSettings ∪ aliasOf, and this catalog is derived from the same
+    // specs, so the operator was being told to set a variable the console had no
+    // field for and the Fix-it could not write. Listing them in the specs that
+    // actually demand them fixes both surfaces at once. Nothing was REMOVED —
+    // the diff is +5/-0.
+    expect(EDITABLE_ENV.length).toBe(203);
   });
 
   it('surfaces the wave-2 env vars as settable (previously dropped by the whitelist)', () => {
