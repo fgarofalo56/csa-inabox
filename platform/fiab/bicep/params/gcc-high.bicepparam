@@ -445,3 +445,65 @@ param loomSharepointShortcutsEnabled = true
 // Built-in Loom tool surface exposed to external agents via Bearer auth; no
 // external resource required.
 param loomIqMcpEnabled = true
+
+// =====================================================================
+// #4051 — IN-BOUNDARY GitHub Actions runner (gh-aca-runner Container App Job).
+//
+// WHY this boundary needs it: there is no local Azure Government `az` from a
+// workstation, so every Gov receipt cloud-parity.md asks for must come from a
+// GitHub Actions run — and a Commercial-hosted runner cannot reach the PE-only
+// Gov estate (lake, Purview, ADF, Synapse, the private ACR/KV). An in-boundary
+// runner is the ONLY way this boundary can produce its own receipt.
+//
+// Rides observabilityConfig (the R0 settable bag) rather than a new top-level
+// param: the orchestrator sits at 251/256 ARM params, and that bag's own
+// @description names itself as the sanctioned lever.
+//
+// TRIGGER MODE — 'Manual' deliberately, NOT 'Event'. Whether the KEDA
+// `github-runner` scaler type exists in Azure Government Container Apps is
+// UNVERIFIED. Manual mode emits no scale rules and no scaler type at all, so a
+// first in-boundary receipt (`az containerapp job start` → the runner registers
+// → the execution log shows a successful registration) cannot be blocked behind
+// that unknown. Flip to 'Event' only once the scaler is confirmed present here.
+// Outbound reachability from the Gov ACA subnet to the GitHub API is likewise
+// UNVERIFIED; if egress is blocked the entrypoint fails on registration and
+// says so rather than idling.
+//
+// THE SECRET: ghRunnerPatSecretUri is a Key Vault secret *URI* (a pointer, not
+// a secret) supplied at deploy time via GH_RUNNER_PAT_SECRET_URI. The PAT value
+// itself never enters this file, bicep, a log, or a deployment history — it is
+// resolved at runtime by the console UAMI. Until that URI is supplied the job
+// is NOT deployed (ACA validates a Key Vault secretRef at DEPLOY time, so
+// deploying against an absent secret would fail the whole admin plane): the
+// deploy is a no-op that emits the `ghRunnerGate` output naming exactly which
+// secret to create and where to point it.
+// LABEL — 'loom-aca-gcch', NOT the bare 'loom-aca' the Commercial runner uses,
+// and this is a correctness fix rather than a naming preference. The runner
+// registers against the SAME repo in every boundary (entrypoint.sh configures
+// against ${GH_OWNER}/${GH_REPO}, and both param files point at
+// https://api.github.com), so the label is the ONLY thing that decides which
+// boundary a queued job lands in. Measured 2026-09-02 on
+// fgarofalo56/csa-inabox: `gh api …/actions/runners` returns total_count=0 —
+// there is no registered runner of any kind today — while 10 workflows already
+// declare `runs-on: [self-hosted, loom-aca]`, several of which act on
+// COMMERCIAL resources (ops-kv-secret-sync, csa-loom-grant-warehouse-use,
+// loom-ui-verify). A Gov runner registering as bare `loom-aca` would therefore
+// not merely compete for those jobs, it would be the only claimant for them:
+// every one of those Commercial lanes would execute inside the GCC-High
+// boundary, against Gov identity and Gov network, on the first activation.
+// A boundary-distinct label makes that impossible by construction.
+//
+// CONSEQUENCE, STATED PLAINLY: no workflow targets 'loom-aca-gcch' today, so a
+// runner registered here idles until a lane is deliberately repointed at it.
+// That is the intended state. The first receipt does not need a queued job —
+// it is `az containerapp job start -n gh-aca-runner -g <admin-rg>` plus the
+// execution log showing registration succeeded. Repointing lanes is a separate,
+// deliberate change, not something that should happen by label collision.
+// =====================================================================
+param observabilityConfig = {
+  ghRunnerEnabled: true
+  ghRunnerTriggerMode: 'Manual'
+  ghRunnerLabels: 'loom-aca-gcch,linux,x64'
+  ghRunnerApiUrl: 'https://api.github.com'
+  ghRunnerPatSecretUri: readEnvironmentVariable('GH_RUNNER_PAT_SECRET_URI', '')
+}

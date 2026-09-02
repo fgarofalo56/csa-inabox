@@ -1,10 +1,11 @@
 name: gov-provision-runner-images
-# CSA Loom — GOV IMAGE PRODUCER for the transformation runner + Copilot evaluator.
+# CSA Loom — GOV IMAGE PRODUCER for the transformation runner, the Copilot
+# evaluator, and the in-boundary GitHub Actions runner.
 #
-# WHY THIS EXISTS (#3416). Two images had a Commercial producer and NO Gov
-# producer of any kind, so the capability behind each worked in Commercial and
-# could not work in Azure Government. `.claude/rules/cloud-parity.md` names that
-# exact shape: "a capability that works in Commercial and not in Gov is
+# WHY THIS EXISTS (#3416, extended by #4051). Three images had a Commercial
+# producer and NO Gov producer of any kind, so the capability behind each worked
+# in Commercial and could not work in Azure Government. `.claude/rules/cloud-parity.md`
+# names that exact shape: "a capability that works in Commercial and not in Gov is
 # INCOMPLETE, not Commercial-first".
 #
 #   loom-transform-runner    apps/loom-transform-runner
@@ -20,6 +21,23 @@ name: gov-provision-runner-images
 #     now. (#3416 also listed full-app-deploy-commercial.yml as a producer of
 #     this image — it is not. That lane only DISPATCHES eval runs against an
 #     already-deployed job; it contains no build for it.)
+#
+#   gh-aca-runner            platform/runners/github-actions/Dockerfile
+#     The IN-BOUNDARY self-hosted GitHub Actions runner (#4051) — an Ubuntu
+#     22.04 image carrying the runner agent, azure-cli + az bicep, Node 20 +
+#     pnpm, gh, and a baked Playwright/chromium layer, run as a Container App
+#     Job inside the VNet-integrated CAE. Commercial producer:
+#     scripts/csa-loom/provision-gh-runner.sh, a HAND-RUN script that no
+#     workflow dispatches. Gov producer: NONE until now.
+#
+#     THE GOV CASE IS STRONGER THAN THE COMMERCIAL ONE, and it is why this image
+#     is worth a lane rather than a script. There is no local Azure Government
+#     `az` from the workstation, so every Gov verification has to come from a
+#     GitHub Actions run — and every such run today executes on a
+#     Commercial-hosted runner outside the boundary. Until this image exists in
+#     the Gov ACR, the in-boundary receipt cloud-parity.md asks for ("parity is
+#     claimed only with a per-cloud receipt") cannot be produced at all: it is
+#     permanently owed, not merely late.
 #
 # THIS IS NOT A COSMETIC GAP FOR loom-transform-runner. On `main` today:
 #   platform/fiab/bicep/main.bicep            dbtRunnerEnabled = true
@@ -48,6 +66,20 @@ name: gov-provision-runner-images
 # deploy. Degrading silently is still the defect: nightly Copilot quality
 # scoring simply never runs in Gov.
 #
+# gh-aca-runner is ALSO a Container App Job (admin-plane/main.bicep ->
+# gh-runner-job.bicep), so it too degrades rather than blocks. It is the only
+# job in that bag that is OFF by default, and deliberately: it needs a GitHub
+# PAT — the one credential the platform cannot mint for itself — and ACA
+# resolves a Key Vault secretRef at DEPLOY time, so a default-ON job pointing at
+# an absent secret would fail every estate deploy with an opaque ACA error.
+# Both gcc-high.bicepparam and il5.bicepparam already set
+# observabilityConfig.ghRunnerEnabled = true, but activation ALSO requires a
+# non-empty observabilityConfig.ghRunnerPatSecretUri; without it admin-plane
+# deploys nothing and emits the `ghRunnerGate` output naming exactly the missing
+# secret. So an in-boundary runner has TWO independent preconditions and this
+# lane satisfies exactly one of them — the image. The PAT secret is the other,
+# and no workflow can create it.
+#
 # ── MECHANISM ────────────────────────────────────────────────────────────────
 # `az acr build` runs SERVER-SIDE inside Azure. It is the ONLY mechanism that
 # reaches a Gov ACR provisioned with publicNetworkAccess=Disabled — a
@@ -57,8 +89,8 @@ name: gov-provision-runner-images
 #
 # ── WHAT THIS LANE DELIBERATELY DOES NOT DO ─────────────────────────────────
 # It PRODUCES IMAGES ONLY. It creates no Container App and no Container App Job,
-# and it writes no env var. Both consumers are deployed by the ORCHESTRATOR
-# (admin-plane/main.bicep), and creating either out of band would be state a
+# and it writes no env var. All three consumers are deployed by the ORCHESTRATOR
+# (admin-plane/main.bicep), and creating any of them out of band would be state a
 # later `az deployment sub create` re-render silently drops. Ordering is:
 #   Phase 1  az deployment sub create … deployAppsEnabled=false   (infra only)
 #   Phase 2  THIS WORKFLOW (+ the sibling gov image producers)    (build images)
@@ -82,6 +114,52 @@ name: gov-provision-runner-images
 #                          practice — pinning it is a bicep change and belongs in
 #                          its own PR. The short SHA is pushed alongside both
 #                          images purely as provenance.
+#   gh-aca-runner          gh-runner-job.bicep declares
+#                          `param runnerImage string = '${acrLoginServer}/gh-aca-runner:latest'`
+#                          and admin-plane/main.bicep does NOT pass runnerImage,
+#                          so the default stands and the deploy-referenced tag is
+#                          the FLOATING `latest` — same shape as the evaluator,
+#                          and the same caveat applies. Measured by grep at this
+#                          SHA: `runnerImage` appears TWICE in the module (the
+#                          param declaration on line 79 and its single use as
+#                          `image:` on line 222) and ZERO times in the
+#                          orchestrator, so nothing overrides the default.
+#
+# ── WHY gh-aca-runner IS BUILT LAST ─────────────────────────────────────────
+# It is by far the heaviest of the three (an apt toolchain, azure-cli, Node 20,
+# the runner tarball, plus a ~600MB baked Playwright/chromium layer) and by far
+# the most egress-dependent. deploy-retry.mjs enforces a 90m wall clock per
+# step; building the heaviest image FIRST would risk consuming that budget
+# before loom-transform-runner — the ONE image whose absence fails a Container
+# App's ARM PUT with MANIFEST_UNKNOWN and takes the whole apps-enabled deploy
+# down. Last means a runner-image failure leaves the deploy-blocking image
+# already in the registry. It is still asserted by the BLOCKING preflight below:
+# ordering changes what is lost on failure, not whether failure is reported.
+#
+# ── TWO THINGS THIS LANE DOES NOT AND CANNOT ESTABLISH (#4051) ──────────────
+# Both are genuinely UNKNOWN in Azure Government. Neither is asserted anywhere
+# in this file, and building the image proves neither:
+#
+#   (a) Whether the KEDA `github-runner` scaler type is supported in Azure
+#       Government Container Apps. No in-boundary run has ever exercised it.
+#       This is why gh-runner-job.bicep defaults triggerMode to 'Manual' and why
+#       both Gov param files set ghRunnerTriggerMode: 'Manual' — a Manual job
+#       proves registration end-to-end with NO KEDA dependency, so the first
+#       in-boundary receipt is achievable even if the scaler turns out to be
+#       absent. Event/KEDA autoscale is an addition on top, never a prerequisite.
+#
+#   (b) Whether the Gov CAE subnet has outbound reachability to api.github.com /
+#       github.com. A registered runner long-polls GitHub continuously, so
+#       without that egress the job starts and then simply never registers.
+#       NOTE that this is a DIFFERENT question from whether THIS lane succeeds:
+#       the Dockerfile's downloads (the runner tarball from github.com, the
+#       NodeSource and Microsoft and GitHub-CLI apt repos, the Playwright CDN)
+#       are fetched by the ACR Tasks BUILD agent inside Azure, not by the CAE
+#       subnet. A green build here says the BUILD agent has egress. It says
+#       nothing whatsoever about the subnet the runner will execute in.
+#
+# The first `az containerapp job start` on the deployed job is the measurement
+# for both. Read its execution log; do not infer either from a green build.
 #
 # ── STATUS: THIS WORKFLOW HAS NEVER BEEN EXECUTED (honest disclosure) ───────
 # It is new in the #3416 fix and has zero runs. No CI job dispatches it and
@@ -144,17 +222,17 @@ on:
 permissions:
   contents: read
 
-# Both builds take the SAME per-registry ACR firewall lease, so two concurrent
-# runs against one boundary would fight over it. Queue instead of cancelling —
-# a cancelled run still releases the lease from its `always()` step, and dropping
-# a run silently is how an image quietly never gets built.
+# All three builds take the SAME per-registry ACR firewall lease, so two
+# concurrent runs against one boundary would fight over it. Queue instead of
+# cancelling — a cancelled run still releases the lease from its `always()` step,
+# and dropping a run silently is how an image quietly never gets built.
 concurrency:
   group: gov-provision-runner-images-${{ inputs.boundary }}
   cancel-in-progress: false
 
 jobs:
   provision:
-    name: Produce loom-transform-runner + loom-copilot-evaluator in the ${{ inputs.boundary }} ACR
+    name: Produce loom-transform-runner + loom-copilot-evaluator + gh-aca-runner in the ${{ inputs.boundary }} ACR
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
@@ -239,27 +317,40 @@ jobs:
           [ -n "$ACR_LOGIN" ] || { echo "::error::registry '$ACR' resolved but has no login server — it may be mid-delete."; exit 1; }
 
           # TAG CONTRACT (see the header). TAG is what the Gov template pulls for
-          # loom-transform-runner; EVAL_TAG is fixed at `latest` because
-          # copilot-evaluator-job.bicep hard-pins that and admin-plane does not
-          # override it. SHA_TAG is provenance only — nothing resolves it.
+          # loom-transform-runner; EVAL_TAG and GH_RUNNER_TAG are both fixed at
+          # `latest` because copilot-evaluator-job.bicep and gh-runner-job.bicep
+          # each hard-default that and admin-plane overrides neither. SHA_TAG is
+          # provenance only — nothing resolves it.
+          #
+          # GH_RUNNER_TAG, NOT `RUNNER_TAG`. GitHub's own variables reference
+          # says of the default env vars: "You can't overwrite the value of the
+          # default environment variables named GITHUB_* and RUNNER_*… If you
+          # attempt to override the value of one of these default variables, the
+          # assignment is ignored." A name in that reserved prefix risks being
+          # silently dropped from $GITHUB_ENV, which would leave the build step
+          # asking for `gh-aca-runner:` — a malformed reference, from a step that
+          # looked fine. Cheaper to sidestep the prefix than to find out.
           TAG="${{ inputs.image_tag }}"
           [ -n "$TAG" ] || TAG=v0.1
           EVAL_TAG=latest
+          GH_RUNNER_TAG=latest
           SHA_TAG=$(git rev-parse --short=8 HEAD)
 
           {
             echo "RG=$RG"; echo "ACR=$ACR"; echo "ACR_LOGIN=$ACR_LOGIN"
-            echo "TAG=$TAG"; echo "EVAL_TAG=$EVAL_TAG"; echo "SHA_TAG=$SHA_TAG"
+            echo "TAG=$TAG"; echo "EVAL_TAG=$EVAL_TAG"; echo "GH_RUNNER_TAG=$GH_RUNNER_TAG"
+            echo "SHA_TAG=$SHA_TAG"
           } >> "$GITHUB_ENV"
 
           echo "::notice::boundary=${{ inputs.boundary }} rg=$RG acr=$ACR location=$LOC apply=${{ inputs.apply }}"
           echo "::notice::TEMPLATE PULLS   $ACR_LOGIN/loom-transform-runner:$TAG   (admin-plane appImageTags.transformRunner)"
           echo "::notice::TEMPLATE PULLS   $ACR_LOGIN/loom-copilot-evaluator:$EVAL_TAG   (copilot-evaluator-job.bicep image default)"
-          echo "::notice::THIS LANE PUSHES both of the above, plus :$SHA_TAG on each for provenance — tags match."
+          echo "::notice::TEMPLATE PULLS   $ACR_LOGIN/gh-aca-runner:$GH_RUNNER_TAG   (gh-runner-job.bicep runnerImage default)"
+          echo "::notice::THIS LANE PUSHES all three of the above, plus :$SHA_TAG on each for provenance — tags match."
 
       # ── BUILD ────────────────────────────────────────────────────────────────
-      # One firewall lease covers both builds; the release step below runs
-      # `if: always()` and covers both, exactly like the three builds in
+      # One firewall lease covers all three builds; the release step below runs
+      # `if: always()` and covers them all, exactly like the three builds in
       # gov-provision-dataplane-images.yml share one lease.
       - name: Build loom-transform-runner on the Gov ACR
         if: ${{ inputs.apply == 'true' }}
@@ -336,6 +427,60 @@ jobs:
             --image "loom-copilot-evaluator:$SHA_TAG" \
             --file azure-functions/copilot-evaluator/Dockerfile \
             .
+
+      # #4051 — THE IN-BOUNDARY RUNNER IMAGE.
+      #
+      # Build context is platform/runners/github-actions ITSELF, not the repo
+      # root. The Dockerfile's last COPY is a bare relative `entrypoint.sh`,
+      # which resolves against the context root — so a repo-root context would
+      # fail with "entrypoint.sh: not found" after paying for every layer above
+      # it. This mirrors the Commercial producer
+      # (scripts/csa-loom/provision-gh-runner.sh), which `cd`s into that
+      # directory and passes `--file Dockerfile .` for the same reason.
+      #
+      # `--file Dockerfile` IS RELATIVE TO THE POSITIONAL CONTEXT, NOT TO THE
+      # RUNNER'S CWD. az's own reference for `az acr build --file` reads "the
+      # relative path of the docker file to the source code root folder", and
+      # the source root here is the positional argument. That is why this line
+      # is `--file Dockerfile platform/runners/github-actions` and NOT
+      # `--file platform/runners/github-actions/Dockerfile …`, which would make
+      # ACR look for platform/runners/github-actions/platform/runners/github-actions/Dockerfile.
+      # The evaluator step above passes the long path precisely because ITS
+      # context is `.` — the two are the same rule, not two conventions.
+      # It is stated explicitly rather than relying on az's `Dockerfile` default
+      # so that a future edit to the context cannot silently change which file
+      # is built.
+      #
+      # NO --build-arg IS PASSED, deliberately. The Dockerfile already pins
+      # RUNNER_VERSION=2.328.0 and the matching RUNNER_SHA256 as ARG defaults and
+      # verifies the tarball with `sha256sum -c`, which fails the build loudly on
+      # a mismatch. The Commercial script passes RUNNER_VERSION explicitly with
+      # the SAME value the Dockerfile already defaults to — a second place for
+      # the pin to drift out of, with no benefit. One pin, in the Dockerfile.
+      #
+      # THIS BUILD REACHING github.com PROVES NOTHING ABOUT THE RUNNER REACHING
+      # IT. See unknown (b) in the header: the tarball, apt repos and Playwright
+      # CDN are fetched by the ACR Tasks build agent inside Azure; the runner
+      # long-polls api.github.com from the CAE subnet at EXECUTION time. Those
+      # are different network positions and this step measures only the first.
+      #
+      # Reuses the firewall lease acquired two steps above — do NOT acquire a
+      # second one; the release step below covers all three builds.
+      - name: Build gh-aca-runner on the Gov ACR
+        if: ${{ inputs.apply == 'true' }}
+        run: |
+          set -euo pipefail
+          echo "::notice::TEMPLATE PULLS $ACR_LOGIN/gh-aca-runner:$GH_RUNNER_TAG"
+          node scripts/ci/deploy-retry.mjs \
+            --class-allow transient \
+            --max-attempts 3 --backoff 45 --jitter 0.3 --wall-clock 90m \
+            --step "az acr build (gh-aca-runner)" \
+            --artifact "$GITHUB_WORKSPACE/deploy-failure.json" \
+            -- az acr build --registry "$ACR" --no-logs \
+            --image "gh-aca-runner:$GH_RUNNER_TAG" \
+            --image "gh-aca-runner:$SHA_TAG" \
+            --file Dockerfile \
+            platform/runners/github-actions
 
       # ── #3416 — MAKE AN ACR-SIDE BUILD FAILURE SELF-DIAGNOSING (R6) ─────────
       #
@@ -519,7 +664,8 @@ jobs:
         continue-on-error: true
         run: |
           bash scripts/ci/assert-acr-image-tags.sh --acr "$ACR" --rg "$RG" --lease \
-            "loom-transform-runner:$TAG" "loom-copilot-evaluator:$EVAL_TAG"
+            "loom-transform-runner:$TAG" "loom-copilot-evaluator:$EVAL_TAG" \
+            "gh-aca-runner:$GH_RUNNER_TAG"
 
       # Apply mode: HARD GATE, and it is the whole point of the lane.
       # `az acr build` exiting 0 is NOT proof the tag resolves — that gap is
@@ -527,14 +673,23 @@ jobs:
       # (see gov-provision-dataplane-images.yml's TAG CONTRACT header), and on
       # the Gov `loombuild` agent pool a build has been observed to exit 0 having
       # pushed NOTHING (#2706). Read the registry back or claim nothing.
+      #
+      # gh-aca-runner is asserted here on the SAME terms as the other two. It is
+      # not deploy-blocking (its consumer is a Job, and a Job PUT survives a
+      # missing manifest), but "not deploy-blocking" is not "not worth
+      # asserting": an absent runner image is precisely the state in which the
+      # in-boundary receipt silently stays impossible, which is the #4051 defect.
       - name: Image preflight — assert every referenced tag exists (BLOCKING)
         if: ${{ inputs.apply == 'true' }}
         run: |
           bash scripts/ci/assert-acr-image-tags.sh --acr "$ACR" --rg "$RG" --lease \
-            "loom-transform-runner:$TAG" "loom-copilot-evaluator:$EVAL_TAG"
+            "loom-transform-runner:$TAG" "loom-copilot-evaluator:$EVAL_TAG" \
+            "gh-aca-runner:$GH_RUNNER_TAG"
 
       - name: Report what still needs the subscription-scoped deploy
         if: ${{ inputs.apply == 'true' }}
         run: |
-          echo "::notice::Images only. The transform-runner Container App and the copilot-evaluator Container App Job are deployed by admin-plane/main.bicep on the apps-enabled deploy — run that next."
+          echo "::notice::Images only. The transform-runner Container App and the copilot-evaluator / gh-aca-runner Container App Jobs are deployed by admin-plane/main.bicep on the apps-enabled deploy — run that next."
           echo "::notice::Then re-run gov-gates to confirm svc-transform-runner and svc-copilot-evaluator move off the blocked list."
+          echo "::notice::#4051 — gh-aca-runner needs ONE MORE THING this lane cannot supply: observabilityConfig.ghRunnerPatSecretUri must point at a Key Vault secret holding a fine-grained GitHub PAT (repo scope on the target repo: Administration read+write for runner registration, Actions read). Until it is set, ghRunnerEnabled=true in gcc-high/il5.bicepparam deploys NOTHING and the deploy emits the ghRunnerGate output naming that secret. Set it via the GH_RUNNER_PAT_SECRET_URI environment variable both param files read."
+          echo "::notice::#4051 — after the deploy, the FIRST measurement is: az containerapp job start -n gh-aca-runner -g <admin-rg>, then read that execution's log. It is the only thing that establishes (a) whether the runner can reach api.github.com from the CAE subnet and (b) that registration under the 'loom-aca' label works. A green build in THIS lane establishes neither."

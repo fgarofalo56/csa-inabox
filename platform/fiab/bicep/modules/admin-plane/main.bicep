@@ -401,6 +401,21 @@ type observabilityConfigT = {
 
   @description('N5 — per-pass dispatch bound (LOOM_ASSET_MAX_TRIGGERS). 0 (default) uses the code default of 25. A pass can never dispatch more materializations than this.')
   assetReconcilerMaxTriggers: int?
+
+  @description('#4051 — deploy the IN-BOUNDARY GitHub Actions runner (gh-aca-runner Container App Job). Default OFF, and deliberately so: this is the ONE ACA Job in the bag whose deployment DEPENDS ON A SECRET THE PLATFORM CANNOT MINT (a GitHub PAT). ACA validates a Key Vault secretRef at DEPLOY time, so defaulting it ON would break every existing estate deploy the moment the secret is absent — an R6/R7 violation. Activation additionally requires ghRunnerPatSecretUri (see below); enabling this WITHOUT that URI deploys nothing and emits the ghRunnerGate output naming exactly the missing secret.')
+  ghRunnerEnabled: bool?
+
+  @description('#4051 — Key Vault secret URI holding the fine-grained GitHub PAT the runner registers with (e.g. https://<kv>.vault.azure.net/secrets/gh-actions-pat). Resolved AT RUNTIME by the console UAMI; the value NEVER enters bicep, a param file, a log, or a deployment history. Empty (default) = the honest gate: the job is not deployed and ghRunnerGate says which secret is missing.')
+  ghRunnerPatSecretUri: string?
+
+  @description('#4051 — runner trigger mode. "Manual" (DEFAULT) = a Manual-trigger Job started on demand (az containerapp job start) — this is the mode that proves registration works with NO dependency on KEDA, because KEDA github-runner scaler support in Azure Government Container Apps is UNVERIFIED. "Event" = the KEDA github-runner scaler (queue-driven autoscale); switch to it only once the scaler is confirmed available in the target boundary.')
+  ghRunnerTriggerMode: ('Manual' | 'Event')?
+
+  @description('#4051 — labels the runner registers with (comma list, matched by runs-on). Default loom-aca,linux,x64.')
+  ghRunnerLabels: string?
+
+  @description('#4051 — GitHub REST API base the runner registers against. Commercial GitHub: https://api.github.com. A GitHub Enterprise Server instance reachable from the boundary: that instance API URL. NOTE: outbound reachability from the Gov ACA subnet to this host is UNVERIFIED (see docs on #4051) — if egress is blocked the runner cannot register and says so.')
+  ghRunnerApiUrl: string?
 }
 
 @description('Observability settings bag (R0) — V1 synthetic-journey monitor + RUM1 client-RUM settings live here (+ the COST0 program-budget props, consumed at the top-level orchestrator); V5 bicep-drift and O1 alert-dispatch add properties to observabilityConfigT — never a new top-level param.')
@@ -539,6 +554,18 @@ var lineageGcCron = observabilityConfig.?lineageGcCron ?? '30 4 * * *'
 var assetReconcilerEnabled = observabilityConfig.?assetReconcilerEnabled ?? true
 var assetReconcilerCron = observabilityConfig.?assetReconcilerCron ?? '*/15 * * * *'
 var assetReconcilerMaxTriggers = observabilityConfig.?assetReconcilerMaxTriggers ?? 0
+// #4051 (observabilityConfig bag) — in-boundary GitHub Actions runner shims.
+// DEFAULT OFF, unlike every sibling in this bag. The siblings are default-ON
+// because the platform can deploy them unaided; this one cannot — it needs a
+// GitHub PAT, which is the one credential Loom has no way to mint. ACA resolves
+// a Key Vault secretRef AT DEPLOY TIME, so a default-ON job pointing at an
+// absent secret would fail every existing estate deploy with an opaque ACA
+// error. Off-by-default + an explicit gate output is the R6/R7-honest shape.
+var ghRunnerEnabled = observabilityConfig.?ghRunnerEnabled ?? false
+var ghRunnerPatSecretUri = observabilityConfig.?ghRunnerPatSecretUri ?? ''
+var ghRunnerTriggerMode = observabilityConfig.?ghRunnerTriggerMode ?? 'Manual'
+var ghRunnerLabels = observabilityConfig.?ghRunnerLabels ?? 'loom-aca,linux,x64'
+var ghRunnerApiUrl = observabilityConfig.?ghRunnerApiUrl ?? 'https://api.github.com'
 // I1 (workspaceIdentityConfig bag) — per-workspace identity shims (default off).
 var workspaceIdentityMode = workspaceIdentityConfig.?workspaceIdentityMode ?? 'off'
 var wsIdentitySub = workspaceIdentityConfig.?wsIdentitySub ?? ''
@@ -8302,6 +8329,67 @@ module copilotEvaluator 'copilot-evaluator-job.bicep' = if (copilotEvaluatorActi
   }
 }
 
+// #4051 — IN-BOUNDARY GitHub Actions runner (gh-aca-runner Container App Job).
+//
+// WHY it exists: there is no local Azure Government `az` from the workstation,
+// so EVERY Gov receipt has to come from a GitHub Actions run — and those runs
+// are Commercial-hosted today. A runner executing inside the Gov CAE (which is
+// VNet-integrated and peered to the DLZ) is what makes an in-boundary receipt
+// possible at all, and is what cloud-parity.md's "per-cloud receipt" requires.
+//
+// WHY it is OFF by default, alone among the jobs in this bag: it needs a GitHub
+// PAT. That is the one credential the platform cannot mint for itself, so
+// auto-bind-by-default.md's "the platform should have done it" does not reach
+// it — this is the narrowly-allowed disclosed opt-in. ACA resolves a Key Vault
+// secretRef at DEPLOY time, so a default-ON job pointing at a secret that does
+// not exist would fail EVERY existing estate deploy with an opaque ACA error.
+// Instead: deploy nothing, and emit ghRunnerGate naming exactly what is missing.
+//
+// WHY Manual is the default trigger: KEDA `github-runner` scaler support in
+// Azure Government Container Apps is UNVERIFIED (no in-boundary run has ever
+// exercised it). A Manual-trigger job proves registration end-to-end with no
+// KEDA dependency at all; Event/KEDA autoscale is an addition on top, selected
+// via observabilityConfig.ghRunnerTriggerMode, not a prerequisite for the first
+// receipt. The job-scoped Contributor grant in the module is what lets an
+// on-demand `az containerapp job start` (or the Console) begin an execution.
+var ghRunnerActive = ghRunnerEnabled && containerPlatform == 'containerApps' && deployAppsEnabled && !empty(ghRunnerPatSecretUri)
+
+module ghRunnerJob 'gh-runner-job.bicep' = if (ghRunnerActive) {
+  name: 'gh-runner-job'
+  params: {
+    location: location
+    environmentId: containerPlatformModule.outputs.caeId
+    consoleUamiId: identity.outputs.uamiConsoleId
+    consoleUamiPrincipalId: identity.outputs.uamiConsolePrincipalId
+    acrLoginServer: registry.outputs.acrLoginServer
+    triggerMode: ghRunnerTriggerMode
+    githubAPIURL: ghRunnerApiUrl
+    runnerLabels: ghRunnerLabels
+    // KEDA counts queued runs carrying THIS label, and it must track whatever
+    // the runner actually registers as or Event mode scales on a signal no job
+    // will ever produce. The module's own default is the literal 'loom-aca',
+    // which was correct only while every boundary registered as 'loom-aca' —
+    // the Gov param files now use boundary-distinct labels (loom-aca-gcch /
+    // loom-aca-il5) so that a Gov runner cannot claim a Commercial lane's job,
+    // and an unwired default would have silently desynchronised from them.
+    // Deriving it here keeps the two coupled under any future rename.
+    //
+    // FIRST element only, not the whole list: the scaler's `labels` metadata is
+    // an ALL-of match against what a workflow requests, and a workflow says
+    // `runs-on: [self-hosted, <label>]` — it does not request `linux` or `x64`
+    // explicitly. Passing the full 'x,linux,x64' list would match nothing. This
+    // reproduces the module default's intent ('loom-aca' is the first element of
+    // 'loom-aca,linux,x64') rather than changing it.
+    scalerLabels: trim(split(ghRunnerLabels, ',')[0])
+    // The PAT reaches the job ONLY as a Key Vault secret reference resolved by
+    // the console UAMI at runtime. No literal value is passed from here, so the
+    // secret never enters a param file, a template, or a deployment history.
+    githubPatKeyVaultSecretUri: ghRunnerPatSecretUri
+    skipRoleGrants: skipRoleGrants
+    complianceTags: complianceTags
+  }
+}
+
 // SCC sensitivity-label + DLP CRUD sidecar (PowerShell). Performs New-/Set-/
 // Remove-Label and *-LabelPolicy AND Get/New/Set/Remove-DlpCompliancePolicy
 // via Security & Compliance PowerShell — the only API that can create/edit/
@@ -8787,3 +8875,28 @@ output s3GatewayStorageUamiPrincipalId string = s3GatewayActive ? s3Gateway!.out
 // alerting consumers at the top-level orchestrator — COST0's program-budget
 // notifications — route through the SAME group. Empty when skipDefaultAlerts.
 output alertActionGroupId string = defaultAlerts.outputs.actionGroupId
+
+// #4051 — the in-boundary runner's HONEST GATE, in one string.
+//
+// Every branch below asserts ONLY what template evaluation actually
+// established (deploy-integrity.md R7): whether the switch is on, whether the
+// boundary is on Container Apps with apps enabled, and whether a PAT secret URI
+// was supplied. It deliberately does NOT claim the secret exists, that the PAT
+// is valid, that the KEDA github-runner scaler is available in this boundary,
+// or that the subnet can reach GitHub — bicep cannot know any of those, so it
+// does not say them. The runtime half of the gate lives in the runner image's
+// entrypoint, which refuses on a missing GITHUB_PAT and names the secretRef.
+output ghRunnerGate string = !ghRunnerEnabled
+  ? 'disabled — observabilityConfig.ghRunnerEnabled is false (default). The in-boundary GitHub Actions runner was not deployed.'
+  : (containerPlatform != 'containerApps'
+      ? 'BLOCKED — observabilityConfig.ghRunnerEnabled is true but containerPlatform is "${containerPlatform}". The runner is a Container Apps Job and deploys only on containerPlatform=containerApps. Nothing was deployed.'
+      : (!deployAppsEnabled
+          ? 'BLOCKED — observabilityConfig.ghRunnerEnabled is true but deployAppsEnabled is false, so the app tier (and this Job with it) was skipped on this run. Nothing was deployed. Re-run with deployAppsEnabled=true.'
+          : (empty(ghRunnerPatSecretUri)
+              ? 'BLOCKED — MISSING SECRET: observabilityConfig.ghRunnerPatSecretUri is empty. The gh-aca-runner Job was NOT deployed, deliberately: Container Apps resolves a Key Vault secret reference at deploy time, so deploying it against an absent secret would fail the whole admin-plane deployment with an opaque ACA error instead of this message. FIX: store the fine-grained GitHub PAT (repo scope on fgarofalo56/csa-inabox: Administration read+write for runner registration, Actions read) as a Key Vault secret, then set observabilityConfig.ghRunnerPatSecretUri to that secret\'s full URI, e.g. https://<keyvault>.vault.azure.net/secrets/gh-actions-pat. The PAT value is never placed in bicep, a param file, or a deployment history.'
+              : 'deployed — gh-aca-runner Job created in ${ghRunnerTriggerMode} trigger mode, registering labels "${ghRunnerLabels}" against ${ghRunnerApiUrl}. NOT YET PROVEN by this template: that the PAT secret resolves, that the runner can reach GitHub from this subnet, or (in Event mode) that the KEDA github-runner scaler is available in this boundary. Start one execution and read its log before relying on it.')))
+
+// #4051 — the Job resource id, empty when the gate above blocked. Consumers
+// (the Console's runner panel, `az containerapp job start`) need the id and
+// must not have to guess a name that may not exist.
+output ghRunnerJobId string = ghRunnerActive ? ghRunnerJob!.outputs.jobId : ''
