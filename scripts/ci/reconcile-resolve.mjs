@@ -240,6 +240,19 @@ if (resolution.absent.length) {
 for (const u of resolution.unknown) {
   console.log(`::warning::[reconcile] UNKNOWN ${u.key}: ${u.why}`);
 }
+// #4240 — THE SURFACE THE TITLE IS ABOUT. A shared-repo follower that is not on
+// its canonical's tag does NOT freeze this reconcile: the key still pins from
+// the canonical app, `unknown` stays empty, and `deployAppsEnabled` is
+// unaffected. That is the correct behaviour and it is why the old prose here
+// was wrong. But it is also exactly why the divergence has to be PRINTED: a
+// benign ~25s mid-roll straddle and a follower stuck for a week on a failing
+// roll produce a byte-identical summary otherwise, and this — the estate-wide
+// reconcile at deploy-fiab-commercial.yml — is the surface an operator reads.
+// `pin-refresh` logging it is not enough; the two lanes report on different
+// runs. An observation, never a verdict: nothing below reads `notes`.
+for (const n of resolution.notes) {
+  console.log(`::notice::[reconcile] FOLLOWER ${n.note}`);
+}
 
 const lines = tagEnvLines(resolution.pinned);
 for (const line of lines) setEnv(line);
@@ -269,6 +282,12 @@ setOutput('unknown_count', String(resolution.unknown.length));
 // deploy-input-safety.mjs refuses on exactly this and needs the names to say
 // which apps are at risk.
 setOutput('unknown_keys', resolution.unknown.map((u) => u.key).join(','));
+// Parity with unknown_count (#4240): a follower divergence is not a refusal and
+// must never become one, but a count of zero versus non-zero is the difference
+// between "the estate agrees with itself" and "it does not", which no other
+// output carries.
+setOutput('follower_count', String(resolution.notes.length));
+setOutput('follower_keys', resolution.notes.map((n) => n.key).join(','));
 
 if (env.GITHUB_STEP_SUMMARY) {
   const rows = [
@@ -278,6 +297,9 @@ if (env.GITHUB_STEP_SUMMARY) {
     `- images pinned to their RUNNING tag: **${lines.length}**`,
     `- not deployed (would be created): ${resolution.absent.join(', ') || '(none)'}`,
     `- UNKNOWN: ${resolution.unknown.map((u) => u.key).join(', ') || '(none)'}`,
+    `- shared-repo followers not on their canonical's tag: ${
+      resolution.notes.map((n) => n.note).join(' — ') || '(none)'
+    }`,
     `- \`deployAppsEnabled\` = **${decision.value}** — ${decision.reason}`,
     '',
   ].join('\n');

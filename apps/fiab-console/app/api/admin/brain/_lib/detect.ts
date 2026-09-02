@@ -58,6 +58,10 @@ import {
   type SkippedSubject,
 } from '@/lib/brain/graph';
 import { idleAlwaysOnCost } from './cost-model';
+import {
+  refuseScaleToZero,
+  scaleToZeroRefusalReason,
+} from '@/lib/brain-actions/scalability';
 import type { ProvenanceCoverage, WireDetectorRun, WireFinding } from './wire';
 
 const CONTAINER_APPS = 'Microsoft.App/containerApps';
@@ -76,6 +80,59 @@ export interface DetectContext {
   readonly coverage: Readonly<Record<EdgeProvenance, ProvenanceCoverage>>;
   /** Node ids carrying a resolved `owns` edge. Empty means ownership is blind. */
   readonly owned: ReadonlySet<string>;
+  /**
+   * #4257 — why this subject's always-on floor is DECLARED, or null.
+   *
+   * Injected so the detector stays testable, and DEFAULTED to the real
+   * derivation ({@link declaredAlwaysOnReason}) so the production path gets it
+   * without any caller having to remember. An earlier revision of #4261 added
+   * the by-design branch with no default and no production caller, which shipped
+   * the whole thing dark — the review measured `loom-risingwave` still carrying
+   * `severity: high` and a live cost figure on the operator's savings list.
+   */
+  readonly nonScalableSubject?: (displayName: string) => AlwaysOnVerdict | null;
+}
+
+/**
+ * WHY a subject's always-on floor is declared, and WHICH claim that is.
+ *
+ * The kind travels with the prose because the finding's wording depends on it —
+ * see {@link declaredAlwaysOnReason} and the round-2 review of #4261, B2.
+ */
+export interface AlwaysOnVerdict {
+  readonly kind: 'pinned-singleton' | 'declared-consumer' | 'self';
+  readonly reason: string;
+}
+
+/**
+ * The real by-design predicate: the deploy's own declaration for this app.
+ *
+ * ── WHY `declaration-unavailable` IS DELIBERATELY NOT A DOWNGRADE ──────────
+ * `refuseScaleToZero` fails CLOSED when the compiled template cannot be read,
+ * so it refuses EVERY subject in that state. That is right for the WRITE path
+ * (`guardScalableToZero`, the executor) — refusing to act on an unestablished
+ * fact is the whole point of #4261 finding 1.
+ *
+ * It is wrong HERE. This is the READ path. An unreadable template establishes
+ * nothing about this resource, so claiming "always-on BY DESIGN" over it would
+ * assert exactly what was not established — the R7 error, pointed the other way.
+ * The finding stays costed and truthful; the perform path refuses it separately,
+ * which is where fail-closed belongs.
+ *
+ * ── THE KIND TRAVELS WITH THE PROSE (round-2 review of #4261, B2) ───────────
+ * This returns non-null for THREE different claims, and the finding that quotes
+ * it used to be worded as if only `pinned-singleton` could reach it — so
+ * `loom-duckdb` got a finding TITLED "is always-on BY DESIGN and nothing wires
+ * to it" carrying a BODY that said the deploy wires a consumer to it. MEASURED:
+ * 13 of the 19 keyed apps refuse via `declared-consumer` and 1 via `self`, so
+ * the self-contradiction was the majority of what the detector emitted, not an
+ * edge case. It is the same R7 error this module invokes to justify NOT
+ * downgrading `declaration-unavailable`, applied to one arm and not the others.
+ */
+export function declaredAlwaysOnReason(displayName: string): AlwaysOnVerdict | null {
+  const refusal = refuseScaleToZero(displayName);
+  if (refusal === null || refusal.kind === 'declaration-unavailable') return null;
+  return { kind: refusal.kind, reason: scaleToZeroRefusalReason(refusal) };
 }
 
 function emptyResult(
@@ -205,10 +262,114 @@ export function unreachableAlwaysOn(ctx: DetectContext): DetectorRun {
   }
 
   const findings: Finding[] = [];
+  const byDesignOf = ctx.nonScalableSubject ?? declaredAlwaysOnReason;
   for (const node of subjects) {
     const why = ctx.graph.danglingEdgesIntendedFor(node.id);
     const inbound = ctx.graph.inboundEdgesByProvenance(node.id);
     const cost = idleAlwaysOnCost(node.scale, { displayName: node.displayName });
+
+    // ── #4257 item 2 — ALWAYS-ON BY DESIGN. Reported, never priced. ────────
+    //
+    // The subject IS always-on and IS unwired, so the finding stands. What must
+    // not stand is the COST recommendation: this floor is what the deploy
+    // declared, and "scale it to zero" against a runtime that holds state in one
+    // process is unrecoverable loss dressed up as a saving. `loom-risingwave`
+    // was the highest-value row on the live list for exactly this reason.
+    //
+    // `severity: 'info'` and NO `cost` key — a finding with no cost figure
+    // cannot rank as a saving, which is the observable outcome #4257 asks for.
+    const byDesign = byDesignOf(node.displayName);
+    if (byDesign !== null) {
+      // ── THE WORDING FOLLOWS THE CLAIM (round-2 review of #4261, B2) ──────
+      // Only `pinned-singleton` establishes "always-on BY DESIGN". The other two
+      // arms establish something else entirely, and a title that asserts the
+      // deploy declares a floor — or that nothing wires to the service — over a
+      // `declared-consumer` verdict contradicts the body it carries.
+      const consumerCount = byDesign.reason.match(/wires (\d+) consumer\(s\)/)?.[1];
+      const wording = {
+        'pinned-singleton': {
+          title: `${node.displayName} is always-on BY DESIGN and nothing wires to it`,
+          claim:
+            'its always-on floor is DECLARED by the deploy, so this is an OBSERVATION, not a ' +
+            'cost recommendation.',
+          note:
+            'ALWAYS-ON BY DESIGN — the deploy declares this replica floor, so removing it is a ' +
+            'template change, not an estate cleanup.',
+          action: `NO ACTION — '${node.displayName}' is always-on by design.`,
+          headline: `'${node.displayName}' is declared non-scalable by the deploy.`,
+        },
+        'declared-consumer': {
+          title:
+            `${node.displayName} looks unwired in the graph, but the DEPLOY wires ` +
+            `${consumerCount ?? 'at least one'} consumer(s) to it`,
+          claim:
+            "the deployment template itself names a consumer of this service, so the finding's " +
+            'central claim — that nothing points at it — is contradicted at its source. The ' +
+            'missing edge is a graph gap, not an idle service.',
+          note:
+            'NOT "by design": this is an AVAILABILITY refusal. The deploy declares a consumer, ' +
+            'so the zero-inbound-edge measurement is contradicted by the template.',
+          action: `NO ACTION — the deploy wires ${consumerCount ?? 'a'} consumer(s) to '${node.displayName}'.`,
+          headline: `'${node.displayName}' has a consumer the deploy declares.`,
+        },
+        self: {
+          title: `${node.displayName} is THIS CONSOLE — it cannot be scaled to zero from here`,
+          claim:
+            'this is the console serving the page the recommendation is read from, and it is ' +
+            'reached by EXTERNAL ingress, which is not an edge in this graph — so zero inbound ' +
+            'edges establishes nothing about whether it is used.',
+          note:
+            'NOT "by design": this is the console itself. Its replica floor was not read from ' +
+            'the deploy template at all.',
+          action: `NO ACTION — '${node.displayName}' is this console.`,
+          headline: `'${node.displayName}' is the console this page is served from.`,
+        },
+      }[byDesign.kind];
+
+      skipped.push({
+        subject: `${node.displayName} (cost)`,
+        reason:
+          'finding emitted WITHOUT a cost figure ON PURPOSE: scaling this resource to zero is ' +
+          `refused by the deploy-declared guard, so it is not a saving to propose. ${byDesign.reason}`,
+      });
+      findings.push({
+        id: `${detector}:${node.id}`,
+        detector,
+        severity: 'info',
+        title: wording.title,
+        summary:
+          `'${node.displayName}' runs ${node.scale?.minReplicas ?? '?'} always-on replica(s) and the ` +
+          "graph resolves ZERO inbound 'configured' edges for it — but " +
+          `${wording.claim} ` +
+          byDesign.reason,
+        subjects: [node.id],
+        evidence: {
+          nodes: [node.id],
+          edges: [],
+          query: `refuseScaleToZero('${node.displayName}') over the compiled deploy template`,
+          notes: [
+            `minReplicas=${node.scale?.minReplicas ?? 'NOT MEASURED'}, maxReplicas=${node.scale?.maxReplicas ?? 'NOT MEASURED'}`,
+            wording.note,
+            byDesign.reason,
+            'NO cost figure is attached, deliberately: pricing a refused, destructive change ' +
+              "would rank it at the top of the operator's savings list. That is exactly what " +
+              '#4257 reports having happened.',
+          ],
+        },
+        population: unreachable.population,
+        confidence: 'high',
+        remediation: proposal(
+          wording.action,
+          `# ${wording.headline}\n` +
+            `# ${byDesign.reason}\n` +
+            '#\n' +
+            '# Do NOT scale it to zero. If the floor is genuinely wrong, the change belongs in\n' +
+            '# the bicep module that declares it — an out-of-band ARM write would be reverted by\n' +
+            '# the next deploy anyway (deploy-integrity.md R2 — drift, not a fix).\n',
+        ),
+      });
+      continue;
+    }
 
     const notes: string[] = [
       `zero inbound RESOLVED edges of provenance 'configured' (dangling edges are excluded ` +

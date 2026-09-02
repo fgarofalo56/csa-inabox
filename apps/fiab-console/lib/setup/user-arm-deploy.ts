@@ -242,26 +242,64 @@ export function resolveDlzTemplateSource(): DlzTemplateSource | null {
 }
 
 /**
- * Module-level cache for the parsed inline template so the ~3.4 MB main.json is
- * read + JSON.parse'd only once per process. `undefined` = not yet attempted;
- * `null` = attempted and the file is not present in this image.
+ * The outcome of trying to resolve the bundled compiled template.
+ *
+ * ── WHY THIS IS THREE STATES AND NOT TWO (review of #4261, finding 1) ──────
+ * The previous shape was `DlzTemplateInline | null`, produced by a try with an
+ * EMPTY catch. That collapsed two facts an operator must never see collapsed:
+ *
+ *   ABSENT      every candidate path returned ENOENT. The artifact is genuinely
+ *               not in this image. ESTABLISHED — a stable property of the image.
+ *   UNREADABLE  the artifact is there (or the filesystem could not say), and the
+ *               read or the JSON.parse FAILED. NOTHING was established. A single
+ *               transient EMFILE/EIO under cold-start IO pressure lands here.
+ *
+ * Callers that derive a SAFETY property from this template (`lib/brain-actions/
+ * scalability.ts`) must fail CLOSED on `unreadable` — "I could not read the
+ * declaration" is not "there is no declaration", and treating it as the latter
+ * is the exact R7 inversion `deploy-integrity.md` names: an error that asserts
+ * as fact something it did not establish.
  */
-let inlineTemplateCache: DlzTemplateInline | null | undefined;
+export type DlzTemplateInlineOutcome =
+  | { readonly status: 'ok'; readonly inline: DlzTemplateInline; readonly file: string }
+  | { readonly status: 'absent'; readonly candidates: readonly string[] }
+  | { readonly status: 'unreadable'; readonly file: string; readonly detail: string };
+
+/**
+ * Module-level cache so the ~3.9 MB main.json is read + JSON.parse'd only once
+ * per process. `undefined` = not yet attempted.
+ *
+ * ONLY `ok` and `absent` are cached — both are established facts about this
+ * image and cannot change under it. An `unreadable` outcome is deliberately NOT
+ * cached: it is the one outcome that may be transient, and caching it would turn
+ * a single bad moment at cold start into a permanently mis-answered question for
+ * the life of the process.
+ */
+let inlineTemplateCache: DlzTemplateInlineOutcome | undefined;
 
 /** Reset the inline-template cache (test-only). */
 export function __resetInlineTemplateCache(): void {
   inlineTemplateCache = undefined;
 }
 
+/** True for the error codes that mean "nothing is at this path", and only those. */
+function isNotFound(err: unknown): boolean {
+  const code = (err as { code?: unknown } | null)?.code;
+  return code === 'ENOENT' || code === 'ENOTDIR';
+}
+
 /**
  * FS-read (cached): resolve the BUNDLED compiled ARM template
  * (`deploy-templates/main.json`, committed + COPY'd into the image next to
- * server.js) as an inline template object for `properties.template`, or null
- * when the file isn't present. Read + parsed ONCE (module-level cache). Tries
- * `<cwd>/deploy-templates/main.json` first (the standalone runtime cwd), then a
- * path relative to this module's directory as a fallback.
+ * server.js), CLASSIFIED — see {@link DlzTemplateInlineOutcome}.
+ *
+ * Tries `<cwd>/deploy-templates/main.json` first (the standalone runtime cwd),
+ * then a path relative to this module's directory. A candidate that is simply
+ * not there falls through to the next; a candidate that EXISTS and cannot be
+ * read or parsed stops the walk and is reported as such, because falling
+ * through would let a corrupt artifact masquerade as an absent one.
  */
-export function resolveDlzTemplateInline(): DlzTemplateInline | null {
+export function resolveDlzTemplateInlineOutcome(): DlzTemplateInlineOutcome {
   if (inlineTemplateCache !== undefined) return inlineTemplateCache;
   const candidates: string[] = [path.join(process.cwd(), 'deploy-templates', 'main.json')];
   // __dirname is defined in CJS (Next standalone output + vitest) but not ESM —
@@ -271,16 +309,51 @@ export function resolveDlzTemplateInline(): DlzTemplateInline | null {
     candidates.push(path.join(__dirname, '..', '..', 'deploy-templates', 'main.json'));
   }
   for (const file of candidates) {
+    let raw: string;
     try {
-      const raw = readFileSync(file, 'utf8');
-      inlineTemplateCache = { template: JSON.parse(raw) };
+      raw = readFileSync(file, 'utf8');
+    } catch (err) {
+      if (isNotFound(err)) continue; // Not at this path — try the next candidate.
+      // NOT cached: EACCES / EMFILE / EIO may be transient, and a permanent
+      // cache of a transient failure is how one bad moment becomes a standing
+      // condition.
+      return {
+        status: 'unreadable',
+        file,
+        detail: `read failed (${(err as { code?: string })?.code ?? 'no errno'}): ${String(
+          (err as Error)?.message ?? err,
+        )}`,
+      };
+    }
+    try {
+      inlineTemplateCache = { status: 'ok', inline: { template: JSON.parse(raw) }, file };
       return inlineTemplateCache;
-    } catch {
-      // Not at this path — try the next candidate.
+    } catch (err) {
+      // The file IS there and is not valid JSON — truncated, half-written, or
+      // the wrong artifact. Establishes nothing, so it is not cached either.
+      return {
+        status: 'unreadable',
+        file,
+        detail: `JSON.parse failed over ${raw.length} byte(s): ${String((err as Error)?.message ?? err)}`,
+      };
     }
   }
-  inlineTemplateCache = null;
+  inlineTemplateCache = { status: 'absent', candidates };
   return inlineTemplateCache;
+}
+
+/**
+ * FS-read (cached): the bundled compiled ARM template as an inline template
+ * object for `properties.template`, or null when it could not be resolved.
+ *
+ * NOTE the collapse: this returns null for BOTH `absent` and `unreadable`. That
+ * is fine for the DEPLOY callers below — they fall back to the published
+ * templateLink either way — and it is NOT fine for a caller deriving a safety
+ * property. Those must use {@link resolveDlzTemplateInlineOutcome}.
+ */
+export function resolveDlzTemplateInline(): DlzTemplateInline | null {
+  const outcome = resolveDlzTemplateInlineOutcome();
+  return outcome.status === 'ok' ? outcome.inline : null;
 }
 
 /**

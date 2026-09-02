@@ -39,9 +39,6 @@
  *
  * ── THE ATOMIC-GROUP RULE (the part that is not obvious) ───────────────────
  *
- * Rolling loom-unity WITHOUT iceberg-catalog does not merely leave one app
- * behind — it disables the estate-wide configuration reconcile.
- *
  * scripts/ci/reconcile-policy.mjs `resolveRunningImageTags()` groups the live
  * Container Apps BY IMAGE REPOSITORY and refuses to pin a key when one
  * repository is running at two different tags:
@@ -49,17 +46,42 @@
  *     `${hits.length} container(s) run ${entry.repo} at ${tags.length}
  *      different tags (…); one appImageTags key cannot preserve both`
  *
- * That is a correct refusal — there is exactly one `unity` key in
- * `appImageTags` and it cannot hold two values. But the consequence is that a
- * split pair makes the `unity` key UNKNOWN, and `decideDeployApps()` refuses to
- * upgrade `deployAppsEnabled` while anything is unknown. So a half-roll:
+ * That is a correct refusal — one `appImageTags` key cannot hold two values —
+ * and for a shared repository with NO `canonicalApp` declaration it is still
+ * the whole story: the key goes UNKNOWN, `decideDeployApps()` refuses to
+ * upgrade `deployAppsEnabled` while anything is unknown, and a half-roll then
+ * (1) blocks the scheduled reconcile from applying ANY env/config change to the
+ * whole estate, not just to the split apps, and (2) on an operator dispatch
+ * forcing `deploy_apps_enabled=true`, exports no pin at all, so the bicep
+ * `readEnvironmentVariable(<var>,'v0.1')` default rewrites every app on that
+ * repository DOWN to `v0.1`.
  *
- *   1. blocks the scheduled reconcile from applying ANY env/config change to
- *      the whole estate, not just to these two apps; and
- *   2. on an operator dispatch that forces `deploy_apps_enabled=true`, exports
- *      no `LOOM_UNITY_TAG` pin at all, so
- *      `readEnvironmentVariable('LOOM_UNITY_TAG','v0.1')` falls back and the
- *      next admin-plane deploy rewrites BOTH apps DOWN to `v0.1`.
+ * FOR THE UNITY PAIR THAT IS NO LONGER THE CONSEQUENCE (#4064, PR #4237). The
+ * `unity` entry now declares `canonicalApp: 'loom-unity'`, so the key's pin
+ * follows that app ALONE: a split pair pins to whatever `loom-unity` runs, the
+ * reconcile is NOT frozen, `LOOM_UNITY_TAG` IS exported, and `iceberg-catalog`
+ * — a follower running the same image by design — converges onto the pinned tag
+ * on the next apply. Any comment (here or elsewhere) still claiming a unity
+ * half-roll freezes estate-wide config is describing behaviour this repo
+ * removed.
+ *
+ * The atomic-group rule survives that change intact, for the reason that was
+ * always underneath it: these two apps ARE one binary, and a half-roll leaves
+ * the estate serving two versions of it — the Unity metastore on the new code,
+ * the Iceberg REST catalog on the old — until an admin-plane apply happens to
+ * run. Convergence is eventual and is driven by a DIFFERENT workflow than the
+ * roll; the roll's own read-back verification never touches the app it skipped.
+ * Rolling them together is what makes the split window zero-length instead of
+ * unbounded. (Since #4240 `resolveRunningImageTags` also emits a NOTE naming a
+ * follower that is off the canonical's tag. Naming WHERE, because "it reaches
+ * the log" was asserted once already without checking: the `pin-refresh` CLI
+ * prints it — `reconcile-policy.mjs` `cliMain`, so deploy-fiab-commercial,
+ * -gcch and -il5 — and so does the estate-wide reconcile,
+ * `reconcile-resolve.mjs`, in its log and its step summary. `adopt-image-tags`
+ * and `assert-no-silent-image-tag-revert` call the same resolver and do NOT
+ * read `notes`; neither of them is a surface an operator reads for estate
+ * state. The window is therefore visible where it is looked for, rather than
+ * converged away in silence.)
  *
  * Hence: apps sharing an image repository are rolled together or not at all.
  * The groups are DERIVED from the repo field rather than declared, so a fourth
@@ -85,6 +107,11 @@
  *
  * Tests: node --test scripts/ci/__tests__/roll-plan.test.mjs
  */
+// The reconcile's key table, imported rather than restated: the CLI derives the
+// CONSEQUENCE of a split from it, exactly as check-roll-atomicity.mjs does
+// (#4240). reconcile-policy.mjs has no imports of its own beyond node:fs and
+// its CLI is argv-guarded, so this introduces neither a cycle nor a side effect.
+import { APP_IMAGE_TAGS } from './reconcile-policy.mjs';
 
 /**
  * Every Container App this roll path ships, with its IMAGE REPOSITORY stated
@@ -402,11 +429,32 @@ function main(argv) {
   // tsv: one row per app, consumed by the roll loop. Notices go to stderr so
   // stdout stays machine-parseable.
   if (plan.added.length) {
+    // #4240 — DERIVE the consequence, do not state it as a conditional. The
+    // sibling guard (check-roll-atomicity.mjs) already reads it off the key
+    // table; stating it here as "where the repository's key does not name a
+    // canonicalApp…" made the reader go look up whether THEIR repository does,
+    // which is precisely the lookup this notice exists to spare them. It also
+    // said a later apply "converges the stragglers", which is true only WITH a
+    // canonicalApp — without one the apply exports no pin at all and rewrites
+    // the repository DOWN to v0.1, which is a revert, not a convergence.
+    const addedRepos = [
+      ...new Set(plan.rows.filter((r) => plan.added.includes(r.app)).map((r) => r.repo)),
+    ];
+    const consequences = addedRepos.map((repo) => {
+      const entry = APP_IMAGE_TAGS.find((e) => e.repo === repo);
+      if (!entry) {
+        return `Repository '${repo}' has NO appImageTags entry (scripts/ci/reconcile-policy.mjs), so the reconcile does not track it in either direction: a split is invisible to it, and the next admin-plane apply resets every app on the repository to the bicep 'v0.1' default.`;
+      }
+      if (entry.canonicalApp) {
+        return `Repository '${repo}' pins appImageTags.${entry.key} from canonical app '${entry.canonicalApp}', so a split does NOT freeze the estate-wide reconcile: the skipped app serves a DIFFERENT build of the same image until a later admin-plane apply converges it onto the pinned tag, and since #4240 the divergence is logged by both pin-refresh and reconcile-resolve rather than converged away in silence.`;
+      }
+      return `Repository '${repo}' names no canonicalApp on appImageTags.${entry.key}, so a split marks that key UNKNOWN — one key cannot hold two tags — which disables the estate-wide config reconcile; and an operator dispatch forcing deploy_apps_enabled=true exports no pin at all, so bicep's readEnvironmentVariable(${entry.envVar}, 'v0.1') rewrites the whole repository DOWN to v0.1. That is a revert, not a convergence.`;
+    });
     console.error(
       `::notice::roll-plan pulled in ${plan.added.join(', ')} because they share an image `
-      + 'repository with an app you asked for. Apps sharing a repository MUST roll together: '
-      + 'scripts/ci/reconcile-policy.mjs cannot pin one appImageTags key to two different tags, '
-      + 'so a split pair makes that key UNKNOWN and disables the estate-wide config reconcile.',
+      + 'repository with an app you asked for. Apps sharing a repository MUST roll together: a '
+      + 'split leaves the estate serving TWO versions of ONE image, and this roll never reads back '
+      + `the app it skipped. ${consequences.join(' ')}`,
     );
   }
   if (plan.mutableTag) {

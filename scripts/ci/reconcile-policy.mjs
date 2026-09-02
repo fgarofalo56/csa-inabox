@@ -349,6 +349,24 @@ export function parseImageRef(image) {
  *
  * Entries WITHOUT `canonicalApp` behave exactly as before.
  *
+ * FOLLOWER OBSERVABILITY (#4240). Converging a follower is the declared model,
+ * but converging it SILENTLY makes two different estates look identical: the
+ * benign ~25s mid-roll straddle, and a follower that has been stuck on the
+ * wrong image for days because its own roll keeps failing. Both used to leave
+ * no trace at all. So a divergence now emits a NOTE — an observation, never a
+ * verdict: `notes` is not read by decideDeployApps(), decidePinRefresh(), or
+ * any other consumer, and a key that pins with a diverged follower pins
+ * identically to one whose followers agree. The note states only what was
+ * MEASURED (which app runs which reference, versus the canonical's tag) and
+ * does NOT claim which of the two estates it is — the read is a single instant
+ * and cannot distinguish them (deploy-integrity R7).
+ *
+ * A note is emitted ONLY where the divergence is established: the canonical
+ * resolved to exactly one tag, and a non-canonical container on the same
+ * repository runs something else (a different tag, or a digest). When the
+ * canonical itself is UNKNOWN there is no tag to differ FROM, so nothing is
+ * claimed.
+ *
  * @param {Array<{name?:string, image?:string}>|null} containers
  *        `az containerapp list` projection. null = the query FAILED (UNKNOWN),
  *        which is deliberately NOT the same as an empty estate.
@@ -361,6 +379,7 @@ export function parseImageRef(image) {
  *   pinned: Record<string,string>,
  *   absent: string[],
  *   unknown: Array<{key:string, why:string}>,
+ *   notes: Array<{key:string, note:string}>,
  * }}
  */
 export function resolveRunningImageTags(containers, table = APP_IMAGE_TAGS) {
@@ -373,6 +392,8 @@ export function resolveRunningImageTags(containers, table = APP_IMAGE_TAGS) {
         key: e.key,
         why: 'the container-app query failed, so no running tag could be read',
       })),
+      // Nothing was measured, so nothing can be observed about a follower.
+      notes: [],
     };
   }
 
@@ -391,9 +412,13 @@ export function resolveRunningImageTags(containers, table = APP_IMAGE_TAGS) {
   const pinned = {};
   const absent = [];
   const unknown = [];
+  /** Observations only — never consulted by any verdict (#4240). */
+  const notes = [];
 
   for (const entry of table) {
     let hits = byRepo.get(entry.repo) || [];
+    /** Non-canonical containers on this repo, kept for the divergence note. */
+    let followers = [];
     if (hits.length === 0) {
       // Nothing is running this repository. Deploying it CREATES an app; it
       // cannot change a running image, so the invariant is untouched.
@@ -421,6 +446,7 @@ export function resolveRunningImageTags(containers, table = APP_IMAGE_TAGS) {
         });
         continue;
       }
+      followers = hits.filter((h) => h.name !== entry.canonicalApp);
       hits = canonical;
     }
     const digestPinned = hits.filter((h) => h.ref.digest);
@@ -440,9 +466,24 @@ export function resolveRunningImageTags(containers, table = APP_IMAGE_TAGS) {
       continue;
     }
     pinned[entry.key] = tags[0];
+
+    // The key is pinned. If a follower on this repository is running something
+    // OTHER than that tag, say so — the pin is unchanged either way (#4240).
+    const diverged = followers.filter((h) => h.ref.digest || h.ref.tag !== tags[0]);
+    if (diverged.length) {
+      notes.push({
+        key: entry.key,
+        note:
+          `${entry.key} pins to ${tags[0]} from its canonical app ${entry.canonicalApp}; ` +
+          `${diverged.map((h) => `${h.name} runs ${h.ref.digest ? `${entry.repo}@${h.ref.digest}` : `${entry.repo}:${h.ref.tag}`}`).join(', ')}. ` +
+          'These apps share one image by design, so the next apply writes the pinned tag to all of them. ' +
+          'A single read cannot tell a mid-roll straddle (converges on the next apply) from a follower that is no longer converging at all — ' +
+          'if this same divergence appears on the NEXT run too, it is the latter.',
+      });
+    }
   }
 
-  return { probed: true, pinned, absent, unknown };
+  return { probed: true, pinned, absent, unknown, notes };
 }
 
 /**
@@ -1734,6 +1775,13 @@ export function cliMain(argv, io) {
     }
     for (const m of verdict.comparison.vanished) {
       log(`::notice::[pin-refresh] GONE ${m.repo}: was running ${m.was}, no longer deployed. The apply will CREATE it at that tag; that is not a revert.`);
+    }
+    // Shared-repo followers that are not on the canonical's tag (#4240). This
+    // is printed AFTER the comparison and BEFORE the verdict deliberately: it
+    // is an observation about an estate the resolution already converged, and
+    // it must be readable whichever way the verdict goes. It changes nothing.
+    for (const n of resolution?.notes || []) {
+      log(`::notice::[pin-refresh] FOLLOWER ${n.note}`);
     }
 
     if (verdict.decision === 'refuse') {
