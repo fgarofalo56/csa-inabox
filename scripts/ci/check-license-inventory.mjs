@@ -273,6 +273,22 @@ const REVIEWED_BICEP_IMAGES = {
     // environment). Pulled unmodified — a NOTICE row, not a redistribution.
     notice: 'github.com/apache/airflow LICENSE = Apache License, Version 2.0',
   },
+  'valkey/valkey': {
+    license: 'BSD-3-Clause',
+    manifestKey: 'valkey/valkey',
+    // Valkey is the Linux Foundation fork of Redis 7.2.4, distributed under the
+    // BSD 3-Clause License (COPYING at github.com/valkey-io/valkey), and the
+    // `valkey/valkey` Docker Hub image is the project's own publication of that
+    // tree. Deployed by modules/shared/redis-oss-aca.bicep as the SOVEREIGN
+    // shared Redis substrate (#2642): Azure Managed Redis is Azure Public cloud
+    // only, so GCC-High / IL5 get this today — and GCC once its apps lane lands
+    // (#3078), since redisOssActive also requires deployAppsEnabled — instead of
+    // riding the retiring Microsoft.Cache/redis to its 2028-10-01 turn-off. Deliberately NOT the
+    // `redis` image — Redis relicensed to RSALv2/SSPL in 2024 and to AGPLv3 in
+    // Redis 8, and neither belongs on a federal deploy path. Pulled unmodified —
+    // a NOTICE row, not a redistribution.
+    notice: 'github.com/valkey-io/valkey COPYING = BSD 3-Clause License',
+  },
   'curlimages/curl': {
     license: 'curl',
     manifestKey: 'curlimages/curl',

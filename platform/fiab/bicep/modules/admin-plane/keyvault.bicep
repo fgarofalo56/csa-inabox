@@ -79,6 +79,16 @@ param risingwaveRootPasswordSecretName string = ''
 @secure()
 param risingwaveRootPassword string = ''
 
+@description('loom-redis-oss UAMI principalId (#2642) — granted "Key Vault Secrets User" so the sovereign Valkey cache can resolve its MANDATORY `requirepass` value via an ACA keyVaultUrl secretRef at revision start. Empty skips the grant. Exactly the boundary that keeps the cache credential away from the code-execution apps (loom-script-runner / loom-udf-runtime) that share the Container Apps environment: they hold no role on this vault, and every app in a CAE draws its pod IP from the SAME infrastructure subnet, so no CIDR rule could have separated them.')
+param redisOssPrincipalId string = ''
+
+@description('KV secret name holding the loom-redis-oss Valkey `requirepass` value (#2642). Empty skips the secret (the sovereign OSS cache is then either not deployed, or deployed with the module\'s @secure() inline parameter instead).')
+param redisOssPasswordSecretName string = ''
+
+@description('The loom-redis-oss `requirepass` value (UNPREDICTABLE, derived by the orchestrator from loomGeneratedSecretSeed = newGuid()). @secure() so ARM redacts it from deployment history, outputs and logs. Written here so BOTH the cache and the Console resolve the same value through a Key-Vault-backed Container Apps secretRef instead of a plain env literal.')
+@secure()
+param redisOssPassword string = ''
+
 var kvName = take('kv-loom-${uniqueString(resourceGroup().id)}', 24)
 
 resource keyVault 'Microsoft.KeyVault/vaults@2024-11-01' = {
@@ -322,6 +332,35 @@ resource risingwaveKvSecretsUserRole 'Microsoft.Authorization/roleAssignments@20
     principalId: risingwavePrincipalId
     principalType: 'ServicePrincipal'
     description: 'loom-risingwave UAMI: read its own Postgres-wire root password at revision start.'
+  }
+}
+
+// loom-redis-oss (#2642) — the sovereign Valkey cache's MANDATORY `requirepass`
+// value. Valkey, like Redis, ships with NO authentication, so the module's
+// entrypoint refuses to bind its port without one (fail closed). The secret is
+// written here, and BOTH the cache and the Console bind it as a Key-Vault-backed
+// Container Apps secretRef — the value never becomes an env literal on either.
+resource redisOssPasswordSecret 'Microsoft.KeyVault/vaults/secrets@2024-11-01' = if (!empty(redisOssPasswordSecretName)) {
+  parent: keyVault
+  name: empty(redisOssPasswordSecretName) ? 'placeholder-redis-oss' : redisOssPasswordSecretName
+  properties: {
+    value: redisOssPassword
+  }
+}
+
+// loom-redis-oss UAMI gets "Key Vault Secrets User" (read secret values) so the
+// cache's revision can resolve the password above. Role 4633458b-… is built-in
+// and a global GUID (all clouds). Same deliberate narrowness as the risingwave
+// grant directly above: it is the ONLY thing standing between the shared cache
+// and the code-execution apps that share its Container Apps environment.
+resource redisOssKvSecretsUserRole 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (!empty(redisOssPrincipalId) && !skipRoleGrants) {
+  scope: keyVault
+  name: guid(keyVault.id, redisOssPrincipalId, '4633458b-17de-408a-b874-0445c86b69e6')
+  properties: {
+    roleDefinitionId: resourceId('Microsoft.Authorization/roleDefinitions', '4633458b-17de-408a-b874-0445c86b69e6')
+    principalId: redisOssPrincipalId
+    principalType: 'ServicePrincipal'
+    description: 'loom-redis-oss UAMI: read its own Valkey requirepass value at revision start.'
   }
 }
 
