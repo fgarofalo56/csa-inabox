@@ -437,7 +437,7 @@ export const warehouseProvisioner: Provisioner = async (input): Promise<Provisio
       return {
         status: 'remediation',
         gate: {
-          gateId: 'svc-synapse',
+          gateId: 'svc-synapse-dedicated-pool',
           reason: 'Synapse dedicated pool not configured.',
           remediation:
             'Set LOOM_SYNAPSE_WORKSPACE (e.g. mysyn-ondemand) and LOOM_SYNAPSE_DEDICATED_POOL (e.g. dwhpool01).',
