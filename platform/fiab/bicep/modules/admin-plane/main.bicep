@@ -125,6 +125,34 @@ param hubVnetCidr string
 @description('Compliance tags')
 param complianceTags object
 
+// #3922 / #4255 — ESTATE IDENTITY, READ BACK OUT OF THE TAG BAG.
+//
+// See the long-form note at the `loomEstateId` param in
+// platform/fiab/bicep/main.bicep for why this exists and why the value format
+// is not a free choice.
+//
+// The parent folds `loom-estate-id` into the `complianceTags` bag it passes
+// here (`var loomTags`), so every resource reached from this module already
+// carries the tag with no further threading. This line supplies the OTHER half
+// — the Console's `LOOM_ESTATE_ID` — and it READS THE VALUE OUT OF THE SAME BAG
+// rather than taking it as a second parameter.
+//
+// THAT IS THE POINT, not a saving. A parameter would let the tag and the env
+// drift apart, and a drift between them does not error: it silently resolves
+// ZERO owned resources, which reads exactly like the unstamped estate this
+// change fixes. Reading the bag makes them the same string by construction.
+// (It also costs no ARM parameter, which matters — this module sits at 240 of
+// the 256 cap, per scripts/ci/check-bicep-param-cap.mjs.)
+//
+// The fallback covers a caller that passes a bag without the key (a hand-run
+// `az deployment group create` against this module alone). It is the SAME
+// `loom:<sub8>:<rg>` algorithm `lib/estate/pause-orchestrator.ts`'s
+// `resolveEstateId()` applies — and here `subscription().subscriptionId` /
+// `resourceGroup().name` are LITERALLY the expressions emitted below as
+// `LOOM_SUBSCRIPTION_ID` / `LOOM_ADMIN_RG`, so the fallback agrees with the
+// reader by construction rather than by matching comments.
+var effectiveLoomEstateId = string(complianceTags[?'loom-estate-id'] ?? 'loom:${substring(subscription().subscriptionId, 0, 8)}:${resourceGroup().name}')
+
 @description('Skip role-assignment grants — set true when re-provisioning an environment that already has the grants, to avoid RoleAssignmentExists.')
 param skipRoleGrants bool = false
 
@@ -3534,6 +3562,7 @@ module dabRuntime 'dab-runtime.bicep' = if (dabRuntimeEnabled && !empty(dabSqlSe
     uamiClientId: identity.outputs.uamiConsoleClientId
     sqlServerFqdn: dabSqlServerFqdn
     sqlDatabase: dabSqlDatabase
+    complianceTags: complianceTags
   }
 }
 
@@ -3558,6 +3587,7 @@ module udfRuntime 'udf-runtime.bicep' = if (udfRuntimeEnabled) {
     consoleAllowedCidrs: empty(containerPlatformModule.outputs.infrastructureSubnetPrefix)
       ? []
       : [ containerPlatformModule.outputs.infrastructureSubnetPrefix ]
+    complianceTags: complianceTags
   }
 }
 
@@ -4185,6 +4215,34 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             { name: 'NEXT_PUBLIC_LOOM_VERSION', value: loomVersion }
             { name: 'LOOM_SUBSCRIPTION_ID', value: subscription().subscriptionId }
             { name: 'LOOM_ADMIN_RG', value: resourceGroup().name }
+            // #3922 / #4255 — ESTATE OWNERSHIP, the reader half.
+            //
+            // The value is `effectiveLoomEstateId`, which is READ OUT OF the
+            // `complianceTags` bag this module was handed — i.e. literally the
+            // string stamped as `loom-estate-id` on every resource the deploy
+            // creates. Not a parallel derivation of it; the same one.
+            //
+            // Placed DIRECTLY BELOW these two on purpose: they are its
+            // FALLBACK. When the bag carries no estate key,
+            // `effectiveLoomEstateId` synthesizes `loom:<sub8>:<rg>` from
+            // exactly these two expressions — the same algorithm
+            // `resolveEstateId()` applies to these two env vars — so any future
+            // edit to them is visibly an edit to this.
+            //
+            // Three readers match this string against the `loom-estate-id`
+            // RESOURCE TAG by exact equality — lib/estate/pause-inventory.ts
+            // (which resources may be paused), lib/brain/graph/extractors/
+            // resource-graph.ts (which resources get an `owns` edge, and so
+            // which Brain recommendations are approvable at all), and
+            // lib/brain-actions/state-store.ts (the Cosmos partition findings
+            // are written to — `'unscoped'` when this is absent, which is a
+            // partition nothing else reads).
+            //
+            // Emitting this WITHOUT the tag would narrow ownership to a key
+            // nothing carries; that is why scripts/ci/check-env-sync.mjs
+            // allowlisted it until now, and why this line and the tag stamping
+            // in main.bicep land in the same change.
+            { name: 'LOOM_ESTATE_ID', value: effectiveLoomEstateId }
             // Setup Orchestrator URL — the Setup Wizard's Deploy POSTs the captured
             // config here to run the real multi-sub az deployment sub create. Empty
             // until the orchestrator Container App is deployed (setupOrchestratorActive);
