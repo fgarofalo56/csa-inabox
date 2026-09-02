@@ -65,11 +65,15 @@
  * a service — the repo's recorded lesson that a guard keyed to a spelling loses
  * to the next spelling.
  *
- * MEASURED over the committed template on 2026-09-01 — 22 Container App resource
- * declarations, one of which is a `copy` loop declaring 6 apps, giving 26 keyed
+ * MEASURED over the committed template on 2026-09-02 — 23 Container App resource
+ * declarations, one of which is a `copy` loop declaring 6 apps, giving 27 keyed
  * declarations. PINNED BY THE TESTS (`CENSUS`), not by this comment, so the two
  * cannot drift apart again:
- *   3  PINNED      loom-risingwave (1/1), iceberg-catalog (1/1), loom-airflow (1/1)
+ *   4  PINNED      loom-risingwave (1/1), iceberg-catalog (1/1), loom-airflow (1/1),
+ *                  loom-redis-oss (1/1) — the sovereign-boundary OSS Redis added
+ *                  by #2642. It is derived as pinned with no change to this
+ *                  module: the bicep declares min=max=1, and a cache zeroed is a
+ *                  cache emptied, which is the #4257 shape exactly.
  *   21 ELASTIC     loom-duckdb (0/3), loom-directlake (1/2), loom-console (2/6),
  *                  loom-presidio-*, loom-s3-gateway, loom-migrate, script-runner,
  *                  loom-mcp, loom-activator, loom-mirroring, …
@@ -81,7 +85,7 @@
  *                  and recorded as {@link UnnamedDeclaration} so its absence
  *                  cannot be read as "undeclared" — see {@link refuseScaleToZero}.
  *
- * Of the 26 keyed apps, 7 remain performable (the five generic-loop apps that
+ * Of the 27 keyed apps, 7 remain performable (the five generic-loop apps that
  * carry no declared consumer, plus `loom-presidio-analyzer` and
  * `loom-presidio-anonymizer`); the availability arm refuses the rest because the
  * deploy wires a consumer to them, and `loom-console` is refused as self. That
