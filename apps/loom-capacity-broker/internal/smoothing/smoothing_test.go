@@ -10,9 +10,9 @@ import (
 
 type goldenFile struct {
 	SpreadCases []struct {
-		Name                string  `json:"name"`
-		TotalLcu            float64 `json:"totalLcu"`
-		Class               string  `json:"class"`
+		Name                 string  `json:"name"`
+		TotalLcu             float64 `json:"totalLcu"`
+		Class                string  `json:"class"`
 		ExpectedPerTimepoint float64 `json:"expectedPerTimepoint"`
 	} `json:"spreadCases"`
 	DecideCases []struct {

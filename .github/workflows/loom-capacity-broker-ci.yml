@@ -30,6 +30,24 @@
 # the tests are pure parsers and in-memory ledgers, so the whole lane is
 # hermetic.
 #
+# EVERY VERDICT STEP CARRIES `if: ${{ !cancelled() }}`, and that is load-bearing.
+# The first run of this lane (PR #4303, run 33674044142) went red on gofmt — a
+# one-space struct-field alignment in internal/smoothing/smoothing_test.go — and
+# because gofmt sits ahead of the compiler, `go build ./...`, `go vet ./...`,
+# `go test ./... -count=1`, the Dockerfile-flags build AND the binary
+# confirmation were all reported `skipped`. So the lane whose entire stated
+# purpose is "get a real compiler verdict on Go nothing has ever compiled"
+# produced NO compiler verdict on its very first run, and `--log-failed` showed
+# only the gofmt step — the five skipped ones are invisible there, you have to
+# pull `.steps[]` from the jobs API to see that nothing else ran. A hollow lane
+# that looks like a normal red.
+#
+# `!cancelled()` is the opposite of result-discarding: a failed step still fails
+# the job, exactly as before. It only stops one independent verdict from
+# suppressing five others, so a single run reports every problem instead of one
+# per push. The confirmation step is the deliberate exception — it consumes
+# /tmp/broker, so it is gated on its producer's outcome, not on the job's.
+#
 # THIS LANE IS NOT REQUIRED-STATUS-CHECK MATERIAL YET — it produces no context
 # listed in release-please.yml's REQUIRED manifest. It is still shaped as if it
 # were (per-SHA concurrency, no result-discarding), because the cheap moment to
@@ -112,6 +130,7 @@ jobs:
       # over crypto/tls + net in internal/resp); this step makes that comment
       # enforceable.
       - name: go.mod declares no external dependencies (the Dockerfile has no go.sum)
+        if: ${{ !cancelled() }}
         run: |
           set -euo pipefail
           requires=$(go mod edit -json | jq -r '(.Require // []) | length')
@@ -135,6 +154,7 @@ jobs:
       # sync with its Dockerfile — a divergence between the CI build and the
       # image build is how a green lane ships an unbuildable image.
       - name: All Go source lives under cmd/ or internal/ (the Dockerfile's COPY set)
+        if: ${{ !cancelled() }}
         run: |
           set -euo pipefail
           stray=$(find . -name '*.go' -not -path './cmd/*' -not -path './internal/*' | sort)
@@ -149,6 +169,7 @@ jobs:
       # gofmt -l prints the files that WOULD change. It exits 0 either way, so
       # the emptiness of its output — not its exit code — is the verdict.
       - name: gofmt
+        if: ${{ !cancelled() }}
         run: |
           set -euo pipefail
           unformatted=$(gofmt -l .)
@@ -160,9 +181,11 @@ jobs:
           echo "gofmt clean"
 
       - name: go build ./...
+        if: ${{ !cancelled() }}
         run: go build ./...
 
       - name: go vet ./...
+        if: ${{ !cancelled() }}
         run: go vet ./...
 
       # -count=1 is load-bearing, not decoration: it disables the test result
@@ -171,6 +194,7 @@ jobs:
       # is precisely the "control that measures nothing" shape this repo keeps
       # being bitten by. Same flag, same reason, as sdk-contract.yml's Go job.
       - name: go test ./... -count=1
+        if: ${{ !cancelled() }}
         run: go test ./... -count=1 -v
 
       # The compile the IMAGE performs, with the image's exact flags. Cheap
@@ -180,6 +204,8 @@ jobs:
       # app's image has never been built by anything (KNOWN_UNBUILT), so no
       # other lane would notice it breaking.
       - name: go build with the Dockerfile's flags (static, trimmed, stripped)
+        id: image-build
+        if: ${{ !cancelled() }}
         env:
           CGO_ENABLED: '0'
           GOOS: linux
@@ -193,7 +219,14 @@ jobs:
       # setup-go just installed it — and it prints the embedded build settings,
       # which is the stronger claim anyway: it shows CGO_ENABLED=0 and the
       # -trimpath/-ldflags the image build depends on actually took effect.
+      # The ONE step that must not carry a bare `!cancelled()`: it reads
+      # /tmp/broker, which only exists if the step above produced it. Gating it
+      # on that step's own outcome — rather than on the job's accumulated status
+      # — keeps it honest in both directions: it still runs when an unrelated
+      # earlier verdict (gofmt, vet) failed, and it does NOT run, reporting a
+      # confusing "no such file", when its own producer failed.
       - name: Confirm the binary was produced with the image's build settings
+        if: ${{ !cancelled() && steps.image-build.outcome == 'success' }}
         run: |
           set -euo pipefail
           ls -l /tmp/broker
