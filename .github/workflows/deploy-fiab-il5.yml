@@ -10,6 +10,35 @@ name: deploy-fiab-il5
 #
 # Manual approval gate (il5-deploy environment protection) since this deploys
 # into an IL5 Gov subscription.
+#
+# ── DISPATCH-ONLY BY DESIGN, AND DECLARED (#4144) ──────────────────────────
+# THIS LANE HAS NEVER RUN. `node scripts/ci/check-deploy-staleness.mjs` reports
+# it as NEVER RUN on every execution, and until this declaration existed it
+# reported that into a void: nothing in the repo said whether IL5 was dormant on
+# purpose or dormant because nobody looked. cloud-parity.md requires an untested
+# boundary to be NAMED as untested, so it is named, here and in the register:
+#
+#   scripts/ci/deploy-path-dispositions.json → deploy-fiab-il5.yml
+#   disposition dispatch-only · owner fgarofalo56 · acknowledges never-run
+#
+# That entry makes this row report ACK — printed every run with its owner,
+# reason and expiry — instead of failing. It is NOT an allowlist: the row is
+# still printed, the entry EXPIRES on its reviewBy, and it can acknowledge only
+# `never-run`; a failing or disabled lane can never be signed off there.
+#
+# WHY NO SCHEDULE, MEASURED NOT ASSUMED. `gh api repos/fgarofalo56/csa-inabox/
+# environments` on 2026-09-01 reports `il5-deploy` carrying a required_reviewers
+# protection rule, and the `deploy-validate` job below runs in that environment.
+# A cron on a reviewer-gated environment produces runs that park at `waiting`
+# and execute nothing, one per day, forever — that is happening to
+# deploy-fiab-gcch right now (#4233). Adding one here would convert an honest
+# never-run row into a queue of runs that also deploy nothing.
+#
+# TO CHANGE THIS: dispatch the lane (run_mode=whatif-only first — the default
+# already applies nothing and carries the DRY RUN marker below, so it cannot
+# clear the row falsely), then drain the register entry once a real apply has
+# run. auditDispositionRegister turns that drain into a hard finding the moment
+# the lane runs for real, so it cannot be forgotten.
 
 # The `Teardown -> redeploy -> smoke` step below is gated `if: inputs.run_mode ==
 # 'full'`, and run_mode DEFAULTS to whatif-only — so the DEFAULT dispatch of this
