@@ -69,6 +69,13 @@ param corsOrigin string = '*'
 @description('CIDR ranges allowed to reach this app on top of internal-ingress isolation — normally ONLY the Container Apps environment infrastructure subnet the Console runs in. Empty => no IP rules, meaning ANY workload on the CAE VNet can reach a host that executes caller-supplied Python (the py/code-injection finding, #2653). ACA supports Allow-only or Deny-only rule sets; these are emitted as Allow rules, so anything outside them is denied. Mirrors loom-unity-app.bicep consoleAllowedCidrs.')
 param consoleAllowedCidrs array = []
 
+// #3922 — this module previously declared NO `tags:` at all, so the UDF runtime
+// Container App reached ARM untagged and could never be proven Loom's. The
+// parent already folds `loom-estate-id` into this bag; declaring the param is
+// all that was missing.
+@description('Compliance tags (incl. the loom-estate-id ownership tag folded in by main.bicep).')
+param complianceTags object = {}
+
 // Host code delivered as base64 secrets and materialised by the init container.
 // Source of truth is udf-runtime/*.py — reviewable, testable, real (see README).
 var appPyB64 = base64(loadTextContent('udf-runtime/app.py'))
@@ -107,6 +114,7 @@ var ingressConfig = empty(consoleAllowedCidrs) ? ingressBase : union(ingressBase
 resource udf 'Microsoft.App/containerApps@2024-03-01' = if (udfRuntimeEnabled) {
   name: 'loom-udf-runtime'
   location: location
+  tags: complianceTags
   identity: {
     type: 'UserAssigned'
     userAssignedIdentities: { '${uamiResourceId}': {} }
