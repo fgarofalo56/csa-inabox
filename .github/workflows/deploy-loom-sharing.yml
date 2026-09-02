@@ -58,6 +58,27 @@ run-name: >-
 # allow-list and is never the recipient-facing endpoint. See
 # docs/fiab/security/loom-sharing-threat-model.md.
 #
+# ── DISPATCH-ONLY BY DESIGN, AND DECLARED (#4144) ──────────────────────────
+# `node scripts/ci/check-deploy-staleness.mjs` reported this lane STALE (last
+# success 2026-08-12, code 2026-08-31, +19d) on every run, into a void. It is
+# dispatch-only ON PURPOSE, and that is now recorded where the check can read
+# it rather than living in this comment alone:
+#
+#   scripts/ci/deploy-path-dispositions.json → deploy-loom-sharing.yml
+#   disposition dispatch-only · owner fgarofalo56 · acknowledges drift
+#
+# THE REASON IS THE GATE DIRECTLY ABOVE. Shipping this image requires a per-run
+# human security acceptance that no trigger can supply: `accept_upstream_cves`
+# defaults false, and on a push or schedule event the `inputs` context is empty,
+# so the input would ALWAYS be empty and the verdict step would ALWAYS refuse —
+# after `az acr build` had already pushed the image. That is not a lane that
+# deploys; it is a lane that is red by construction, whose redness says nothing
+# about drift. Accepting 38 unfixable upstream CRITICALs is a reviewed operator
+# decision, not a workflow default.
+#
+# TO CHANGE THIS: an upstream rebuild that clears the findings, or a Loom-built
+# server image, removes the acceptance and with it this disposition.
+#
 # ── AUTH ───────────────────────────────────────────────────────────────────
 # Service-principal `creds:` login, matching deploy-copilot-evaluator.yml (the
 # #2815 template) and every gov-provision-* sibling. NOT OIDC: this repo's
