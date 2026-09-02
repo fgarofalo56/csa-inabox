@@ -162,7 +162,18 @@ function skipBalanced(src: string, open: number): number {
 type Def = { body: string; kind: 'fn' | 'var' | 'class'; src: string; path: string };
 
 function findDef(src: string, path: string, name: string): Def | null {
-  const esc = name.replace(/[$]/g, '\\$&');
+  // FULL regex escape, not just `$`. CodeQL flagged the previous
+  // `name.replace(/[$]/g, …)` as `js/incomplete-sanitization` — "does not escape
+  // backslash characters in the input" — and it is right about the code even
+  // though it cannot see the input domain: `name` is always a JS identifier
+  // harvested from a provisioner's own source, so `$` really is the only
+  // regex-special character it can contain today.
+  //
+  // Fixed rather than argued, because unlike a narrowing this costs nothing: a
+  // complete escape is a strict superset that still matches every identifier,
+  // so there is no input it newly rejects. An incomplete escape that is only
+  // safe by an unstated invariant is one refactor away from being wrong.
+  const esc = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   const fn = new RegExp(`(?:export\\s+)?(?:async\\s+)?function\\s+${esc}\\s*[(<]`).exec(src);
   if (fn) return { body: functionBody(src, fn.index), kind: 'fn', src, path };
   const cls = new RegExp(`(?:export\\s+)?class\\s+${esc}\\b`).exec(src);
