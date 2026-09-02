@@ -331,6 +331,29 @@ describe('POST /api/admin/scaling/container-apps — scale-to-zero (#4279)', () 
     expect(seen).toEqual([]);
   });
 
+  it('REFUSES a declared CONSUMER (loom-trino) — the kind that carries 16 of the 19 apps', async () => {
+    // WHY THIS ARM EXISTS. `pinned-singleton` above is a DURABILITY refusal and
+    // it had a fixture; `declared-consumer` is the AVAILABILITY refusal and it
+    // had none. MEASURED against the real committed template, the split is:
+    //
+    //   loom-risingwave  -> pinned-singleton     loom-trino -> declared-consumer
+    //   iceberg-catalog  -> pinned-singleton     loom-unity -> declared-consumer
+    //
+    // `declared-consumer` accounts for 16 of the 19 newly-refused apps, and it
+    // is the ONLY thing protecting loom-trino and loom-unity — the two this PR
+    // names as the mitigation for defect 4293. Deleting that branch
+    // (`if (refusal && refusal.kind !== 'declared-consumer')`) left the suite
+    // 41/41 GREEN, so the mitigation the PR claims had no control at all.
+    const seen = forbidArm();
+    const { POST } = await import('@/app/api/admin/scaling/container-apps/route');
+    const r = await POST(makeReq('POST', { name: 'loom-trino', minReplicas: 0 }));
+    expect(r.status).toBe(409);
+    const j = await r.json();
+    expect(j.ok).toBe(false);
+    expect(j.refusal).toBe('declared-consumer');
+    expect(seen).toEqual([]);
+  });
+
   it('THE CONTROL: an elastic app the deploy wires nothing to is still PERMITTED', async () => {
     // Without this arm, a guard that refused EVERYTHING would be
     // indistinguishable from a correct one — and on an estate that already
@@ -365,6 +388,16 @@ describe('POST /api/admin/scaling/container-apps — scale-to-zero (#4279)', () 
     // is unsafe, and it does not claim it is safe either.
     expect(j.error).toMatch(/could not be consulted/);
     expect(j.error).toMatch(/fail-CLOSED/);
+    // …and it names WHICH of the four unavailable reasons this is. Without this
+    // line the arm passed for an ACCIDENTAL reason and it was MEASURED: mutate
+    // the route to `refuseScaleToZero(body.name, deployDeclaredScalability())`
+    // — dropping the SOURCE for a bare Map, which discards `unnamed` and
+    // disarms the `name-unresolved` refusal entirely — and the failed read
+    // arrives as an EMPTY map instead, producing `why:'empty'`. Both branches
+    // share `head` and `tail`, so both matched every assertion above and the
+    // mutation left 41/41 green. `EXISTS and could not be read` appears only in
+    // the `unreadable` branch, so it is what makes this a control.
+    expect(j.error).toMatch(/EXISTS and could not be read or parsed/);
     expect(seen).toEqual([]);
     vi.doUnmock('@/lib/setup/user-arm-deploy');
   });
@@ -414,6 +447,168 @@ describe('POST /api/admin/scaling/container-apps — scale-to-zero (#4279)', () 
     const r = await POST(makeReq('POST', { name: 'loom-risingwave', minReplicas: 1, maxReplicas: 1 }));
     expect(r.status).toBe(200);
     expect((await r.json()).ok).toBe(true);
+  });
+
+  it('REFUSES a subject SHADOWED by an app name the reader could not resolve', async () => {
+    // The fourth `declaration-unavailable` reason, and the only one reachable on
+    // a HEALTHY template: the dlz-attach gateway declares its name as
+    // `[take(format('loom-s3-gateway-{0}', …), 32)]`, so it has no key in the
+    // derived map and `loom-s3-gateway-*` not being there establishes nothing.
+    //
+    // This arm is what makes the SOURCE argument load-bearing rather than
+    // stylistic. `refuseScaleToZero` accepts either a ScalabilitySource or a
+    // bare Map, and the bare-Map path hard-codes `unnamed: []` — so passing
+    // `deployDeclaredScalability()` instead of the source silently deletes this
+    // refusal while leaving every other arm green.
+    const seen = forbidArm();
+    const { POST } = await import('@/app/api/admin/scaling/container-apps/route');
+    const r = await POST(makeReq('POST', { name: 'loom-s3-gateway-abc123', minReplicas: 0 }));
+    expect(r.status).toBe(409);
+    const j = await r.json();
+    expect(j.refusal).toBe('declaration-unavailable');
+    // R7 again, and this branch's own words — NOT the `unreadable` ones.
+    expect(j.error).toMatch(/app NAME is computed at deploy time/);
+    expect(j.error).toMatch(/is a claim that the question could not be answered/);
+    // …and it names the module that shadows this subject, so the operator can
+    // see WHY the answer was unavailable rather than being told it just was.
+    expect(j.error).toMatch(/loom-s3-gateway-\{0\}/);
+    expect(seen).toEqual([]);
+  });
+
+  // ── REVIEW FINDING 1 — THE GUARD JUDGED A NAME THE TRANSPORT REWROTE ───────
+  //
+  // `refuseScaleToZero` decides on `name.trim().toLowerCase()`; the same string
+  // is then interpolated into an ARM URL and handed to `fetch`, whose WHATWG URL
+  // parser resolves `.`/`..` segments before the request leaves. MEASURED on the
+  // pre-fix code with fetch stubbed:
+  //
+  //   { name: 'loom-x/../loom-risingwave', minReplicas: 0 } -> 200,
+  //     PATCH …/containerApps/loom-risingwave {"scale":{"minReplicas":0,…}}
+  //   { name: 'loom-risingwave',           minReplicas: 0 } -> 409, 0 ARM calls
+  //
+  // Same resource, opposite outcome. Every arm above asserts something about a
+  // name-keyed decision, so without these two the whole file was pinning a guard
+  // that could be addressed around.
+
+  it('a PATH-TRAVERSAL name cannot reach the app it canonicalizes to', async () => {
+    const seen = forbidArm();
+    const { POST } = await import('@/app/api/admin/scaling/container-apps/route');
+    const r = await POST(makeReq('POST', { name: 'loom-x/../loom-risingwave', minReplicas: 0, maxReplicas: 1 }));
+    expect(r.status).toBe(400);
+    expect((await r.json()).error).toMatch(/letters, digits or hyphens/);
+    expect(seen).toEqual([]);
+  });
+
+  it('a PERCENT-ESCAPED name is refused here rather than decoded downstream', async () => {
+    // Deliberately NOT asserting what ARM does with `%2D`. Whether the service
+    // percent-decodes the segment was never verified, and the guard does not
+    // need it to be: a name that is not byte-identical to what the refusal table
+    // was keyed on is refused because the equivalence is UNESTABLISHED, which is
+    // the same fail-closed posture as `declaration-unavailable` above.
+    //
+    // This arm is keyed to the OUTCOME, not to a layer, and that is deliberate —
+    // it is the one arm here that survives removing EITHER the route gate or the
+    // `appUrl` guard alone, because the other layer still catches it. It dies
+    // only when both are gone (MEASURED: mutation M5). A layer-keyed assertion
+    // would have gone red on a refactor that moved the check without weakening
+    // it, and would have gone green on one that moved it somewhere unreachable.
+    const seen = forbidArm();
+    const { POST } = await import('@/app/api/admin/scaling/container-apps/route');
+    const r = await POST(makeReq('POST', { name: 'loom%2Drisingwave', minReplicas: 0 }));
+    expect(r.status).toBe(400);
+    expect(seen).toEqual([]);
+  });
+
+  it('a TRUTHY NON-STRING name is a 400, not an unhandled 500', async () => {
+    // `if (!body?.name)` only caught a FALSY name. `123` passed it, reached
+    // `.trim()` inside `refuseScaleToZero` — which runs OUTSIDE this handler's
+    // try/catch — and threw unhandled. A malformed request answered with a 500
+    // tells the operator the platform broke; it did not.
+    const seen = forbidArm();
+    const { POST } = await import('@/app/api/admin/scaling/container-apps/route');
+    for (const name of [123, {}, ['loom-risingwave'], true]) {
+      const r = await POST(makeReq('POST', { name, minReplicas: 0 }));
+      expect(r.status, `name: ${JSON.stringify(name)}`).toBe(400);
+    }
+    expect(seen).toEqual([]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// THE SAME INVARIANT AT THE CHOKE POINT (#4279 review, finding 1 + finding 5)
+//
+// The route gate above stops this ONE door. `appUrl` in
+// container-apps-arm-client.ts is where the URL is actually built, and EIGHT
+// functions reach it with a caller-supplied name — including
+// `deployMcpContainerApp` and `createMcpContainerApp`, which issue full-resource
+// PUTs, strictly worse than the scale PATCH this PR is about. Only
+// `getMcpContainerAppStatus` and `deleteMcpContainerApp` were guarded.
+//
+// This block is what distinguishes "the route was fixed" from "the class was
+// closed": delete the guard inside `appUrl` and the route arms above stay green.
+// ---------------------------------------------------------------------------
+describe('container-apps ARM client — the app name cannot be canonicalized away', () => {
+  const TRAVERSAL = 'loom-x/../loom-risingwave';
+
+  /** Stub `fetch` so ANY ARM call is recorded and fails the assertion below. */
+  function forbidArmCalls(): string[] {
+    const seen: string[] = [];
+    vi.stubGlobal('fetch', vi.fn(async (u: any) => {
+      seen.push(String(u));
+      throw new Error('no ARM call may be made for a name that cannot be trusted');
+    }));
+    return seen;
+  }
+
+  it('updateContainerAppScale refuses a traversal name before any ARM call', async () => {
+    const seen = forbidArmCalls();
+    const { updateContainerAppScale, AcaArmError } = await import('@/lib/azure/container-apps-arm-client');
+    await expect(updateContainerAppScale(TRAVERSAL, { minReplicas: 0, maxReplicas: 1 }))
+      .rejects.toMatchObject({ constructor: AcaArmError, status: 400 });
+    expect(seen).toEqual([]);
+  });
+
+  it('the PUT paths inherit it — createMcpContainerApp refuses the same name', async () => {
+    // The two full-resource PUTs are why the guard belongs in `appUrl` rather
+    // than in `updateContainerAppScale`: a per-caller fix would have left them.
+    //
+    // The opts here are COMPLETE on purpose. An earlier draft of this arm called
+    // `createMcpContainerApp(TRAVERSAL, {...})` — the wrong arity, since it takes
+    // a single opts object — so `opts.secrets.map` threw a TypeError and the arm
+    // passed on `.rejects.toThrow()` without ever reaching `appUrl`. It survived
+    // the mutation it claims to kill, which is the whole failure mode this file
+    // exists to prevent. Asserting the STATUS is what closed it.
+    const seen = forbidArmCalls();
+    const { createMcpContainerApp, AcaArmError } = await import('@/lib/azure/container-apps-arm-client');
+    await expect(createMcpContainerApp({
+      name: TRAVERSAL,
+      image: 'acr.azurecr.io/mcp-x:1',
+      location: 'centralus',
+      environmentId: ACA_ENV_ID,
+      uamiId: '/subscriptions/sub-1/resourceGroups/rg-admin/providers/Microsoft.ManagedIdentity/userAssignedIdentities/uami',
+      targetPort: 8080,
+      env: [],
+      secrets: [],
+    } as any)).rejects.toMatchObject({ constructor: AcaArmError, status: 400 });
+    expect(seen).toEqual([]);
+  });
+
+  it('THE CONTROL: an ordinary name is NOT refused — the guard is a charset, not a denylist', async () => {
+    // Over-refusal control. `appUrl` deliberately does not re-implement Azure's
+    // 2-32/lowercase/ends-alphanumeric naming rule: ARM owns that, and forking it
+    // here would create the second source of truth `cloud-parity.md` warns about.
+    // The guard's only job is that raw and canonical are the same string.
+    const seen: string[] = [];
+    vi.stubGlobal('fetch', vi.fn(async (u: any) => {
+      seen.push(String(u));
+      return new Response(JSON.stringify({ name: 'x' }), { status: 500 });
+    }));
+    const { updateContainerAppScale } = await import('@/lib/azure/container-apps-arm-client');
+    // It fails — the stub answers 500 — but it fails HAVING CALLED ARM, which is
+    // what proves the name was admitted rather than rejected by the guard.
+    await expect(updateContainerAppScale('loom-presidio-analyzer', { minReplicas: 1, maxReplicas: 2 })).rejects.toThrow();
+    expect(seen.length).toBeGreaterThan(0);
+    expect(seen[0]).toContain('/containerApps/loom-presidio-analyzer');
   });
 });
 
