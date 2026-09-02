@@ -112,7 +112,47 @@ export function readAcaConfig(): AcaConfig {
   return { subscriptionId, resourceGroup };
 }
 
+/**
+ * CANONICALIZATION GUARD for the app-name path segment (#4279 review finding 1).
+ *
+ * The name is interpolated into an ARM URL and handed to `fetch`, whose WHATWG
+ * URL parser resolves `.` and `..` segments BEFORE the request goes out. Any
+ * caller that decides something about a name — a refusal table, an allowlist, a
+ * lookup keyed on the string — decides it about the RAW string, while ARM
+ * receives the CANONICALIZED one. MEASURED against this module with `fetch`
+ * stubbed: `loom-x/../loom-risingwave` produced a PATCH to
+ * `…/containerApps/loom-risingwave` while every string-keyed check upstream saw
+ * a name it had no opinion about.
+ *
+ * So the invariant this guard establishes is narrow and exact: THE NAME THE
+ * CALLER JUDGED IS THE NAME ARM RECEIVES. A charset with no `/`, `\`, `.`, `%`,
+ * `?`, `#`, or whitespace cannot be rewritten by the URL parser, so raw and
+ * canonical are the same string.
+ *
+ * It is deliberately NOT a re-implementation of Azure's container-app naming
+ * rules (2–32 chars, lowercase, ends alphanumeric). ARM validates those, and
+ * duplicating them here would fork a second source of truth that drifts — the
+ * exact shape `cloud-parity.md` warns about for the workload-profile list above.
+ * A name this guard admits and ARM rejects still gets ARM's own error; a name
+ * this guard admits can only ever address the resource it spells.
+ *
+ * `appUrl` is the choke point on purpose: eight functions in this module reach
+ * it with a caller-supplied name (`getContainerApp`, `getContainerAppRaw`,
+ * `updateContainerAppEnv`, `updateContainerAppScale`, `updateContainerAppImage`,
+ * `getContainerAppImage`, `deployMcpContainerApp`, `createMcpContainerApp` — the
+ * last two issuing full-resource PUTs). Guarding one of them would leave the
+ * class open; guarding here covers callers 3..n by construction.
+ */
+const ACA_URL_SAFE_NAME_RE = /^[A-Za-z0-9][A-Za-z0-9-]{0,62}$/;
+
 function appUrl(cfg: AcaConfig, name: string): string {
+  if (typeof name !== 'string' || !ACA_URL_SAFE_NAME_RE.test(name)) {
+    throw new AcaArmError(
+      400,
+      undefined,
+      `Invalid container-app name. A name must be 1–63 characters of letters, digits and hyphens, starting with a letter or digit — the request named ${JSON.stringify(String(name)).slice(0, 80)}. Names outside that set can be rewritten by URL canonicalization, so the resource acted on would not be the one named.`,
+    );
+  }
   return `${armBase()}/subscriptions/${cfg.subscriptionId}/resourceGroups/${cfg.resourceGroup}/providers/Microsoft.App/containerApps/${name}`;
 }
 

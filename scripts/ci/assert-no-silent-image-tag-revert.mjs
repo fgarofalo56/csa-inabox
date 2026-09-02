@@ -54,12 +54,33 @@
  *
  * ── THE DIGEST CASE, RESOLVED RATHER THAN GUESSED (#3449) ───────────────────
  *
- * `gov-build-images.yml` sets Gov Container Apps to `<acr>/<app>@sha256:…`, so
- * on GCC-High `loom-unity` — the sovereign catalog, which has no Databricks
- * Unity Catalog to fall back to — runs by digest permanently, and this guard
- * refused every scheduled run because of it (#3449). "Set LOOM_UNITY_TAG to the
- * tag you intend" was not a remedy either: the operator does not know which tag
- * names that digest any more than this script did.
+ * On GCC-High `loom-unity` — the sovereign catalog, which has no Databricks
+ * Unity Catalog to fall back to — RUNS BY DIGEST (`<acr>/loom-unity@sha256:…`),
+ * and this guard refused a scheduled run because of it (#3449, and again in run
+ * 33519232492). "Set LOOM_UNITY_TAG to the tag you intend" was not a remedy
+ * either: the operator does not know which tag names that digest any more than
+ * this script did.
+ *
+ * WHERE THAT DIGEST REF COMES FROM IS NOT ESTABLISHED, and this file used to say
+ * it was — "gov-build-images.yml sets Gov Container Apps to <acr>/<app>@sha256:…"
+ * was asserted here, cited as authority by gov-console-roll.yml, and is FALSE.
+ * Measured: gov-build-images.yml contains no `az containerapp update` at all
+ * (zero `containerapp` matches); every image ref the templates compose is
+ * `${acrLoginServer}/<repo>:${appImageTags.<key>}`, colon-and-tag, so an apply
+ * cannot emit a digest; and the only `@sha256:` references in the repository are
+ * cosign SIGNING subjects. So no code path here produces a digest-pinned
+ * Container App — the pin is OUT-OF-BAND state. Stating a mechanism this code
+ * never established is the R7 collapse this very file exists to refuse, and it
+ * cost a full investigation branch chasing a workflow that does no such thing.
+ *
+ * WHY THE REFUSAL THEN REPEATS FOREVER. gov-build-images.yml pushes `:v0.1`,
+ * `:<8-hex-sha>` and `:latest` onto the SAME manifest on every nightly build, so
+ * `:v0.1` is a DECLARED MOVING POINTER, not a fixed release. A digest-pinned app
+ * therefore drifts further from `:v0.1` every night: the candidate resolves to a
+ * digest that is not the one running, and the answer is `different` on this run
+ * and on every run after it. That is a standing condition, not a transient — so
+ * the remedy has to change the ESTATE (re-point the tag onto the running digest,
+ * or roll the app back onto a tag). No amount of re-running fixes it.
  *
  * So ASK THE REGISTRY — but ask the question that can actually be answered.
  * "Which tag names this digest?" has no unique answer (a digest may carry none,
@@ -77,6 +98,29 @@
  *
  * Nothing here invents a tag. The candidate is the tag the deploy was already
  * going to write; the registry only says whether writing it is a content no-op.
+ *
+ * ── THE REMEDIATION IS DERIVED, NOT RECITED ─────────────────────────────────
+ *
+ * Every refusal used to print ONE paragraph: "adoption did not happen or could
+ * not establish what is live — fix that, or set the repo variable X". Measured
+ * against run 33519232492 that paragraph was wrong twice over.
+ *
+ *   - It asserted the estate "did not answer". The estate answered perfectly:
+ *     `az containerapp list` returned loom-unity running a digest, and this
+ *     script had that digest IN THE ROW it was printing the advice for.
+ *     Adoption ran, worked (console and wrangler adopted live 8-hex SHAs), and
+ *     correctly reported that a tag cannot be derived from a digest — which is
+ *     its documented, deliberate limit, not a failure to fix.
+ *   - For an `unmapped` row it advised setting the repo variable. That row is
+ *     pushed with verdict 'unmapped' REGARDLESS of source, so setting the
+ *     variable provably cannot clear it. A remediation that cannot work is the
+ *     same defect class as one that is untrue (deploy-integrity R6/R7).
+ *
+ * So the advice is now a pure function of the row's own `cause` — the same
+ * discriminant the verdict was decided from — and every branch of it is
+ * fixtured. The decision logic was always tested; the SENTENCE THE OPERATOR
+ * READS was the shape with no fixture, which is exactly why both defects
+ * survived in a file this heavily self-tested.
  *
  * ── WHAT IT PRINTS EVEN WHEN IT PASSES ──────────────────────────────────────
  *
@@ -177,7 +221,10 @@ export function digestPinsByKey(containers) {
  * @param {Record<string,{status:'same'|'different'|'unknown', running?:string, candidate?:string, detail?:string}>} [a.digestChecks]
  *        key -> what the REGISTRY said about writing the candidate tag over a
  *        digest-pinned app. Absent = the question was never asked, which is not
- *        the same as "unknown" and is reported the same way (refuse) either way.
+ *        the same as "unknown". Both still refuse — an unanswered question is not
+ *        permission to proceed — but they are recorded distinctly on the row
+ *        (`registryConsulted`) so the remediation names the subsystem that actually
+ *        failed instead of blaming the registry for a probe that never ran.
  * @param {boolean} [a.allowRevert]
  * @returns {{rows: Array, refusals: Array, decision:'proceed'|'refuse'}}
  */
@@ -195,7 +242,7 @@ export function decideTagWrites({ declared, env = {}, resolution, digestChecks =
     if (!key) {
       rows.push({
         envVar, repo: null, value: env[envVar] ?? dflt, source: 'fallback',
-        running: 'unmappable', verdict: 'unmapped',
+        running: 'unmappable', verdict: 'unmapped', cause: 'unmapped',
         why: `${envVar} is not in APP_IMAGE_TAGS, so no running container can be matched to it. ` +
              'Add it to scripts/ci/reconcile-policy.mjs.',
       });
@@ -212,12 +259,13 @@ export function decideTagWrites({ declared, env = {}, resolution, digestChecks =
     if (!probed) {
       rows.push({
         envVar, repo, value, source, running: 'UNKNOWN', verdict: source === 'pin' ? 'move' : 'REFUSE',
+        cause: 'probe-failed',
         why: 'the running images could not be read, so it is not established whether this write reverts a pin',
       });
       continue;
     }
     if (absent.has(key)) {
-      rows.push({ envVar, repo, value, source, running: '(not deployed)', verdict: 'create', why: 'nothing is running this repository; deploying it creates the app' });
+      rows.push({ envVar, repo, value, source, running: '(not deployed)', verdict: 'create', cause: 'create', why: 'nothing is running this repository; deploying it creates the app' });
       continue;
     }
     if (unknownByKey.has(key)) {
@@ -230,6 +278,7 @@ export function decideTagWrites({ declared, env = {}, resolution, digestChecks =
       if (dc && dc.status === 'same') {
         rows.push({
           envVar, repo, value, source, running: `digest ${String(dc.running).slice(0, 19)}…`, verdict: 'no-op',
+          cause: 'digest-same', runningDigest: dc.running,
           why: `${repo} runs a digest-pinned image, and '${value}' resolves in ACR to that SAME digest ` +
                `(${dc.running}), so writing it cannot change what the app runs`,
         });
@@ -239,6 +288,7 @@ export function decideTagWrites({ declared, env = {}, resolution, digestChecks =
         rows.push({
           envVar, repo, value, source, running: `digest ${String(dc.running).slice(0, 19)}…`,
           verdict: source === 'pin' ? 'move' : 'REFUSE',
+          cause: 'digest-different', runningDigest: dc.running, candidateDigest: dc.candidate,
           why: source === 'pin'
             ? `an explicit pin moves ${repo} from digest ${dc.running} to '${value}' (${dc.candidate})`
             : `${repo} runs digest ${dc.running} and '${value}' resolves in ACR to a DIFFERENT digest ` +
@@ -249,6 +299,15 @@ export function decideTagWrites({ declared, env = {}, resolution, digestChecks =
       }
       rows.push({
         envVar, repo, value, source, running: 'UNKNOWN', verdict: source === 'pin' ? 'move' : 'REFUSE',
+        cause: 'unresolved', runningDigest: dc ? dc.running : undefined,
+        // Two different failures land on cause:'unresolved' and they need different
+        // remedies. `dc` present means the REGISTRY was consulted and could not settle
+        // it; `dc` absent means the question was never asked, because the estate probe
+        // itself was ambiguous (digestPinsByKey drops any key whose containers disagree
+        // on the digest). Carry that distinction EXPLICITLY rather than leaving
+        // remediationFor to infer it from runningDigest being undefined — that coupling
+        // is implicit and the next edit to this row would silently break it.
+        registryConsulted: Boolean(dc),
         why: dc && dc.status === 'unknown'
           ? `${unknownByKey.get(key)}; and the registry could not be read to settle it — ${dc.detail}`
           : unknownByKey.get(key),
@@ -257,12 +316,13 @@ export function decideTagWrites({ declared, env = {}, resolution, digestChecks =
     }
     const running = pinned[key];
     if (running === value) {
-      rows.push({ envVar, repo, value, source, running, verdict: 'no-op', why: 'the tag about to be written is the tag already running' });
+      rows.push({ envVar, repo, value, source, running, verdict: 'no-op', cause: 'no-op', why: 'the tag about to be written is the tag already running' });
       continue;
     }
     rows.push({
       envVar, repo, value, source, running,
       verdict: source === 'pin' ? 'move' : 'REFUSE',
+      cause: 'tag-mismatch',
       why: source === 'pin'
         ? `an explicit pin moves ${repo} from '${running}' to '${value}'`
         : `${repo} is running '${running}' and this deploy would write '${value}', which is only the param file's ` +
@@ -272,6 +332,112 @@ export function decideTagWrites({ declared, env = {}, resolution, digestChecks =
 
   const refusals = rows.filter((r) => r.verdict === 'REFUSE' || r.verdict === 'unmapped');
   return { rows, refusals, decision: refusals.length > 0 && !allowRevert ? 'refuse' : 'proceed' };
+}
+
+/**
+ * The remedy for ONE refusal, derived from the row's `cause`.
+ *
+ * Pure, and separated from `main()` on purpose: the decision logic in
+ * decideTagWrites has been fixtured since #3161, and the sentence the operator
+ * actually reads never was — which is how it came to assert a cause the code had
+ * disproved and to advise an action that provably cannot clear the refusal. Every
+ * branch below has a control in silent-image-tag-revert.test.mjs.
+ *
+ * NEVER says "adoption did not happen" for a digest row. adopt-image-tags.mjs
+ * cannot derive a tag from a digest — that is its documented, deliberate limit,
+ * so on a digest-pinned app it did not fail, it correctly declined. Naming it as
+ * the culprit sends the reader to a script that is working as designed.
+ *
+ * @param {{cause?:string, envVar:string, repo?:string|null, value?:string,
+ *          runningDigest?:string, candidateDigest?:string, running?:string}} row
+ * @param {{digestTags?: Record<string, {tags?:string[], detail?:string}>}} [ctx]
+ *        Observations only — the tags ACR reported for the RUNNING digest. Never
+ *        consulted by any verdict; it only makes the advice concrete.
+ * @returns {string}
+ */
+export function remediationFor(row, ctx = {}) {
+  const key = KEY_BY_ENV_VAR[row.envVar];
+  const obs = (ctx.digestTags || {})[key];
+  switch (row.cause) {
+    case 'unmapped':
+      // Deliberately does NOT offer the repo variable: this row is pushed with
+      // verdict 'unmapped' regardless of source, so setting it changes nothing.
+      return `add ${row.envVar} to APP_IMAGE_TAGS in scripts/ci/reconcile-policy.mjs so it names a repository. ` +
+        `Setting the repo variable ${row.envVar} will NOT clear this — an unmapped tag is refused whatever its value.`;
+    case 'probe-failed':
+      return `the Container Apps in this resource group could not be listed, so nothing about the running images was ` +
+        'established. Fix the container-app read (credentials, subscription, resource-group name) and re-run. ' +
+        'Until it answers, every key is UNKNOWN and no deploy can prove it is not reverting a pin.';
+    case 'digest-different': {
+      const tags = obs && Array.isArray(obs.tags) ? obs.tags : null;
+      // A digest may carry none, one, or several tags. Offer a tag ONLY when
+      // there is exactly one, because picking among several would invent intent.
+      const tagAdvice = tags && tags.length === 1
+        ? ` ACR reports the running digest carries exactly one tag, '${tags[0]}', so setting the repo variable ` +
+          `${row.envVar}=${tags[0]} would pin what is already running.`
+        : tags && tags.length > 1
+          ? ` ACR reports the running digest carries ${tags.length} tags (${tags.join(', ')}); this script will not ` +
+            'choose among them, because picking one would be inventing an intent nobody stated.'
+          : tags && tags.length === 0
+            ? ' ACR reports the running digest carries NO tags, so there is no tag to pin it to — the estate action is the only route.'
+            : obs && obs.detail
+              ? ` The tags on the running digest could not be read (${obs.detail}), so no tag can be offered.`
+              : '';
+      // R7: the previous text made two claims this code never established. (1) "no
+      // workflow or template in this repository writes a digest ref" is false as an
+      // absolute — dab-runtime.bicep and udf-runtime.bicep both do — so it is scoped
+      // here to the population this guard actually polices: app images in the estate
+      // ACR. The MCR base-image pins are deliberate, have their own bump procedure,
+      // and are enforced by check-mcr-image-pins.mjs. (2) the nightly GOV build was
+      // named as the guaranteed cause while this runs on Commercial and IL5 too, and
+      // ':v0.1' was hardcoded regardless of the tag actually in hand. Neither the
+      // boundary nor the re-pointing mechanism is known here, so neither is asserted.
+      return `${row.repo} is pinned to a digest OUT OF BAND — no workflow or template in this repository writes a ` +
+        `digest ref for an app image in the estate ACR — and '${row.value}' now names different content than the app ` +
+        `is running. Re-running this deploy will not change that: nothing in it re-points the tag. The fix is ` +
+        `an ESTATE action, not a code change: either re-point ${row.repo}:${row.value} onto the digest the app is ` +
+        `running (${row.runningDigest}) with an in-registry \`az acr import --force\` — the step ` +
+        `loom-dataplane-roll.yml already performs after a roll — or deliberately roll ${row.repo} forward onto the ` +
+        `current ${row.value} (${row.candidateDigest}) once that image has been verified, which also returns the app ` +
+        `to a TAG and back into the supported model. Read \`az acr repository show-manifests --repository ` +
+        `${row.repo}\` from an in-boundary runner to decide which.${tagAdvice}`;
+    }
+    case 'unresolved':
+      // R7: do not assert a registry failure that may never have happened. When the
+      // estate probe was ambiguous the registry was never consulted at all, and an
+      // "resolve the ACR read" remedy sends the reader at the wrong subsystem.
+      if (!row.registryConsulted) {
+        // R7 again, and this arm nearly repeated the defect it was written to fix.
+        // `registryConsulted:false` establishes ONE thing: no digestCheck was
+        // supplied for this key. It does NOT establish why, and the two reasons
+        // want opposite actions — either digestPinsByKey dropped the key because
+        // containers on this repo disagree (an estate problem), or the repo runs
+        // one digest and the resolve step never ran at all (a pipeline problem).
+        // decideTagWrites cannot tell them apart: digestPinsByKey runs in the
+        // caller and its output is not passed in. So name both and hand back the
+        // observation that settles it, rather than asserting the one that reads
+        // better. `az containerapp list` is the discriminator, not a formality.
+        return `what ${row.repo} is running could not be established, and the registry was NOT consulted — ` +
+          `no digest check was supplied for it. Two things produce that and they need opposite fixes, and ` +
+          `which one this is has NOT been established here: either more than one container serves ${row.repo} ` +
+          `at different digests (an ESTATE disagreement — there is no single running digest to compare a tag ` +
+          `against), or ${row.repo} runs one digest and the ACR resolve step never ran (a PIPELINE gap). ` +
+          `Run \`az containerapp list --query "[?contains(properties.template.containers[0].image, ` +
+          `'${row.repo}')].{app:name,image:properties.template.containers[0].image}"\` from an in-boundary ` +
+          `runner: more than one distinct digest means roll the stragglers onto the canonical image; exactly ` +
+          `one means the resolve step is what to fix. Either way an unanswered question is not permission ` +
+          `to proceed.`;
+      }
+      return `what ${row.repo} is running could not be established${row.runningDigest ? ` (it runs digest ${row.runningDigest})` : ''}, ` +
+        'and the registry did not settle it either. An unreadable registry is not permission to proceed. Resolve the ' +
+        'ACR read — most often the firewall lease could not be taken from this runner — and re-run; the answer this ' +
+        'needs is whether the tag about to be written names the content already running.';
+    case 'tag-mismatch':
+    default:
+      return `scripts/ci/adopt-image-tags.mjs is what normally makes this unnecessary by exporting the tag the ` +
+        `estate is running (${row.running}); if it ran and this key is still on the param default, adoption did not ` +
+        `cover it — fix that, or set the repo variable ${row.envVar} to state the tag you intend.`;
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -339,6 +505,51 @@ function discoverAcr(rg, subscription) {
   } catch {
     return null;
   }
+}
+
+/**
+ * Which tags, if any, ACR reports on the digest an app is RUNNING.
+ *
+ * PURELY DIAGNOSTIC. Nothing here reaches a verdict — it is passed to
+ * remediationFor() and to the log, never to decideTagWrites(). That separation
+ * is the whole safety argument: a refusal cannot be talked out of by this call
+ * succeeding, and — the direction that actually matters — a run that passes
+ * today cannot be turned red by it failing. Every failure resolves to a detail
+ * string, never a throw and never a non-zero contribution.
+ *
+ * It costs no new lease and no new security surface: it runs inside the lease
+ * resolveDigestChecks already holds, so the registry is open exactly as long as
+ * it already was. Adding a SECOND lease acquisition — as adopting digests into
+ * adopt-image-tags.mjs would have — is what this deliberately avoids.
+ *
+ * "Which tag names this digest?" has no unique answer, which is why it can never
+ * be a verdict input. It is still the single most useful thing to TELL someone
+ * staring at a digest they cannot act on.
+ *
+ * @returns {Record<string,{tags?:string[], detail?:string}>}
+ */
+function readTagsOnRunningDigest({ pins, acr, repoByKey, az = 'az' }) {
+  const out = {};
+  for (const [key, pin] of pins) {
+    const repo = repoByKey[key];
+    if (!repo || !pin?.digest) continue;
+    try {
+      // stderr CAPTURED, not discarded: if this cannot be read the reason is
+      // reported as the reason, never collapsed into "there are no tags" (R7).
+      const raw = execFileSync(
+        az,
+        ['acr', 'repository', 'show', '--name', acr, '--image', `${repo}@${pin.digest}`, '-o', 'json'],
+        { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] },
+      );
+      const parsed = JSON.parse(raw);
+      out[key] = Array.isArray(parsed?.tags)
+        ? { tags: parsed.tags.map(String) }
+        : { detail: 'the registry answered but reported no "tags" array for this manifest' };
+    } catch (e) {
+      out[key] = { detail: `${String(e?.stderr || e?.message || e)}`.replace(/\s+/g, ' ').slice(0, 300) };
+    }
+  }
+  return out;
 }
 
 /**
@@ -413,6 +624,11 @@ function resolveDigestChecks({ pins, candidates, acr, repoByKey }) {
           : `resolve-acr-digest exited ${code} for ${repo}:${tag}, which is not one of its documented outcomes (0/3/4); an unrecognised verdict is not a pass`,
       };
     }
+    // DIAGNOSTIC ONLY, and last — the lease is already held, so this asks the
+    // registry the question the operator will ask next ("what tag names the
+    // thing that is running?") without opening it for a second window. Its
+    // result reaches remediationFor() and the log; it reaches no verdict.
+    checks.__digestTags = readTagsOnRunningDigest({ pins, acr, repoByKey });
   } finally {
     if (held) {
       // No `|| true`: a lease that cannot be verified re-locked means the
@@ -474,6 +690,8 @@ function main() {
   const firstPass = decideTagWrites({ declared, env: process.env, resolution, allowRevert });
   const pins = digestPinsByKey(probe.error ? null : probe.containers);
   let digestChecks = {};
+  /** Observations only — passed to remediationFor(), never to decideTagWrites(). */
+  let digestTags = {};
   let leaseReleaseFailed = false;
   if (pins.size > 0) {
     const candidates = Object.fromEntries(
@@ -497,8 +715,20 @@ function main() {
       });
       leaseReleaseFailed = digestChecks.__leaseReleaseFailed === true;
       delete digestChecks.__leaseReleaseFailed;
+      // Lifted OUT of digestChecks before it is handed to the decision, so the
+      // diagnostic cannot be read as a check even by accident.
+      digestTags = digestChecks.__digestTags || {};
+      delete digestChecks.__digestTags;
       for (const [key, c] of Object.entries(digestChecks)) {
         console.log(`[image-tag] digest ${key.padEnd(18)} ${c.status}${c.detail ? ` — ${c.detail}` : ''}`);
+      }
+      for (const [key, t] of Object.entries(digestTags)) {
+        console.log(
+          `[image-tag] running-digest tags ${key.padEnd(12)} ` +
+            (Array.isArray(t.tags)
+              ? (t.tags.length ? t.tags.join(', ') : '(none — this digest carries no tag)')
+              : `(unreadable — ${t.detail})`),
+        );
       }
     }
   }
@@ -544,9 +774,7 @@ function main() {
   for (const r of refusals) {
     console.error(
       `::error::image-tag-revert: ${r.envVar} — ${r.why}. This deploy resolves it to '${r.value}'. ` +
-        'scripts/ci/adopt-image-tags.mjs is what normally makes this unnecessary by exporting the tag the estate ' +
-        'is running; if it ran and this key is still unresolved, the estate did not answer for it — fix that, or ' +
-        `set the repo variable ${r.envVar} to state the tag you intend.`,
+        `REMEDY: ${remediationFor(r, { digestTags })}`,
     );
   }
   if (allowRevert) {
@@ -556,11 +784,19 @@ function main() {
     );
     return leaseReleaseFailed ? 1 : 0;
   }
+  // Summarise BY CAUSE. The single paragraph this replaced asserted that
+  // adoption "did not happen or could not establish what is live" for every
+  // refusal alike — which on run 33519232492 was false: adoption ran, adopted
+  // two live SHAs, and correctly declined the digest-pinned key it cannot
+  // derive a tag for. Naming a cause the run disproved is the R7 collapse.
+  const byCause = refusals.reduce((m, r) => m.set(r.cause, (m.get(r.cause) || 0) + 1), new Map());
+  const causeSummary = [...byCause].map(([c, n]) => `${n}×${c}`).join(', ');
   console.error(
     `::error::image-tag-revert: REFUSING. ${refusals.length} image tag(s) would be written from the param file's own ` +
-      'default over a live app running something else — the exact silent revert #3161 describes. The deploy is ' +
-      'supposed to ADOPT what is running (scripts/ci/adopt-image-tags.mjs, #3449) so no human input is needed; a ' +
-      'refusal here means adoption did not happen or could not establish what is live.',
+      `default over a live app running something else — the exact silent revert #3161 describes (${causeSummary}). ` +
+      'Each refusal above carries its own REMEDY; they are not the same remedy. In particular a `digest-different` ' +
+      'refusal is NOT an adoption failure and re-running will not clear it — the app is digest-pinned out of band ' +
+      'and the tag has moved, which needs an estate action.',
   );
   return 1;
 }
