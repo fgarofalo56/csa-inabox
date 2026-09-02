@@ -35,14 +35,21 @@ beforeEach(() => {
 
 afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); vi.resetModules(); });
 
-function captureFetch(impl: (url: string, init?: RequestInit) => { status?: number; body?: unknown }) {
+function captureFetch(
+  impl: (url: string, init?: RequestInit) => {
+    status?: number;
+    body?: unknown;
+    /** Extra response headers — ARM's `Retry-After` on a 429 is read from here. */
+    headers?: Record<string, string>;
+  },
+) {
   const calls: Array<{ url: string; init?: RequestInit }> = [];
   const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
     calls.push({ url: String(url), init });
     const r = impl(String(url), init);
     return new Response(JSON.stringify(r.body ?? {}), {
       status: r.status ?? 200,
-      headers: { 'content-type': 'application/json' },
+      headers: { 'content-type': 'application/json', ...(r.headers ?? {}) },
     });
   });
   vi.stubGlobal('fetch', fetchMock);
@@ -212,6 +219,130 @@ describe('Monitor TTL cache', () => {
     expect(calls.filter((c) => c.url.includes('/diagnosticSettings') && c.init?.method !== 'PUT').length).toBeGreaterThan(beforeRefetch);
     clearMonitorCache();
     delete process.env.LOOM_LOG_ANALYTICS_RESOURCE_ID;
+  });
+
+  // The four-hop repair for #4244 is monitor-arm (capture) -> MonitorError (carry)
+  // -> monitor-client (attach) -> read-warmer (read). read-warmer.test.ts covers
+  // the last hop only; these two specs enter the swallowing catch itself, which
+  // no spec did before — without them, deleting the marker attachment or dropping
+  // `error.code` / `Retry-After` in `armError()` is a silent revert to pre-PR
+  // behaviour with a fully green suite.
+  it('a swallowed ARM 429 carries code + Retry-After as STRUCTURE, not just prose', async () => {
+    process.env.LOOM_LOG_ANALYTICS_RESOURCE_ID =
+      '/subscriptions/sub-1/resourceGroups/rg-admin/providers/Microsoft.OperationalInsights/workspaces/loom-law';
+    // The envelope ARM actually returns for a read-throttle: the machine-readable
+    // verdict is in `error.code`, and `error.message` is prose that does NOT
+    // contain it. That asymmetry is the whole defect.
+    captureFetch((url) => {
+      if (url.includes('/resourceGroups/rg-admin/resources')) {
+        return { body: { value: [{ id: '/subscriptions/sub-1/resourceGroups/rg-admin/providers/Microsoft.App/containerApps/aca1', name: 'aca1', type: 'Microsoft.App/containerApps', location: 'eastus2' }] } };
+      }
+      if (url.includes('/resourceGroups/rg-aca/resources')) return { body: { value: [] } };
+      if (url.includes('/diagnosticSettings')) {
+        return {
+          status: 429,
+          headers: { 'retry-after': '57' },
+          body: {
+            error: {
+              code: 'SubscriptionRequestsThrottled',
+              message: "Number of 'Microsoft.Insights' requests for subscription 'sub-1' exceeded the limit. Please try again later.",
+            },
+          },
+        };
+      }
+      return { body: {} };
+    });
+    const { getDiagnosticsCoverage, clearMonitorCache } = await import('../monitor-client');
+    const { readSwallowedArmError } = await import('../swallowed-arm-error');
+    const rows = await getDiagnosticsCoverage();
+    const row = rows.find((r) => r.name === 'aca1')!;
+
+    // The probe reached ARM and ARM refused — that is NOT an "absent" observation.
+    expect(row.supported).toBe(true);
+    expect(row.note).toContain('exceeded the limit');
+    // ...and the prose alone genuinely cannot answer "was this a throttle?" —
+    // this is the measurement that made a textual fix wrong.
+    expect(row.note).not.toContain('SubscriptionRequestsThrottled');
+
+    const armError = readSwallowedArmError(row);
+    expect(armError).not.toBeNull();
+    expect(armError!.status).toBe(429);
+    expect(armError!.code).toBe('SubscriptionRequestsThrottled');
+    expect(armError!.retryAfterSeconds).toBe(57);
+    clearMonitorCache();
+    delete process.env.LOOM_LOG_ANALYTICS_RESOURCE_ID;
+  });
+
+  it('a 404 probe stays a POSITIVE absent observation — no marker, no note (#4243)', async () => {
+    process.env.LOOM_LOG_ANALYTICS_RESOURCE_ID =
+      '/subscriptions/sub-1/resourceGroups/rg-admin/providers/Microsoft.OperationalInsights/workspaces/loom-law';
+    captureFetch((url) => {
+      if (url.includes('/resourceGroups/rg-admin/resources')) {
+        return { body: { value: [{ id: '/subscriptions/sub-1/resourceGroups/rg-admin/providers/Microsoft.App/containerApps/aca1', name: 'aca1', type: 'Microsoft.App/containerApps', location: 'eastus2' }] } };
+      }
+      if (url.includes('/resourceGroups/rg-aca/resources')) return { body: { value: [] } };
+      if (url.includes('/diagnosticSettings')) {
+        return { status: 404, body: { error: { code: 'ResourceNotFound', message: 'not found' } } };
+      }
+      return { body: {} };
+    });
+    const { getDiagnosticsCoverage, clearMonitorCache } = await import('../monitor-client');
+    const { readSwallowedArmError } = await import('../swallowed-arm-error');
+    const rows = await getDiagnosticsCoverage();
+    const row = rows.find((r) => r.name === 'aca1')!;
+
+    // "This type cannot take diagnostic settings" is something we LEARNED, not a
+    // failure to reach ARM. Collapsing it into the unreachable branch is what
+    // manufactured the false pause refusal in #4243 — so it must carry neither a
+    // note nor a marker, or the warmer would count an answer as an outage.
+    expect(row.supported).toBe(false);
+    expect(row.note).toBeUndefined();
+    expect(readSwallowedArmError(row)).toBeNull();
+    clearMonitorCache();
+    delete process.env.LOOM_LOG_ANALYTICS_RESOURCE_ID;
+  });
+
+  // Hop 1 of the chain, asserted directly on the thrown MonitorError. Going
+  // through getDiagnosticsCoverage cannot test it: `describeArmError` falls back
+  // to the raw response body for `code`, so dropping the capture in `armError()`
+  // stays invisible downstream. This is the only spec that touches monitor-arm.
+  it('armGet CAPTURES ARM error.code and Retry-After onto MonitorError', async () => {
+    captureFetch(() => ({
+      status: 429,
+      headers: { 'retry-after': '57' },
+      body: { error: { code: 'SubscriptionRequestsThrottled', message: 'too many requests' } },
+    }));
+    const { armGet, MonitorError } = await import('../monitor-arm');
+    const err = await armGet('/subscriptions/sub-1/x?api-version=2021-01-01').then(
+      () => null,
+      (e: unknown) => e,
+    );
+    expect(err).toBeInstanceOf(MonitorError);
+    expect((err as InstanceType<typeof MonitorError>).status).toBe(429);
+    expect((err as InstanceType<typeof MonitorError>).code).toBe('SubscriptionRequestsThrottled');
+    expect((err as InstanceType<typeof MonitorError>).retryAfterSeconds).toBe(57);
+  });
+
+  it('an ABSENT Retry-After stays absent — never 0 seconds (R7)', async () => {
+    // `Number(null)` and `Number('')` are both 0. Letting that through would make
+    // trip() report "ARM asked for 0s" when ARM asked for nothing at all — an
+    // error message asserting something the code never established.
+    for (const headers of [undefined, { 'retry-after': '' }, { 'retry-after': 'not-a-number' }, { 'retry-after': '-5' }]) {
+      captureFetch(() => ({
+        status: 429,
+        ...(headers ? { headers } : {}),
+        body: { error: { code: 'SubscriptionRequestsThrottled', message: 'too many requests' } },
+      }));
+      const { armGet, MonitorError } = await import('../monitor-arm');
+      const err = await armGet('/subscriptions/sub-1/x?api-version=2021-01-01').then(
+        () => null,
+        (e: unknown) => e,
+      );
+      expect(err).toBeInstanceOf(MonitorError);
+      // undefined, NOT 0 — "we don't know" must not become "immediately".
+      expect((err as InstanceType<typeof MonitorError>).retryAfterSeconds).toBeUndefined();
+      vi.resetModules();
+    }
   });
 });
 
