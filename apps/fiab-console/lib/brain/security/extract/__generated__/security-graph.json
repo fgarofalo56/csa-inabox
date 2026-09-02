@@ -23067,16 +23067,6 @@
             "declaredSinkCount": 65,
             "sinks": [
               {
-                "id": "console:member:2142",
-                "surface": "console",
-                "accessPath": "member",
-                "wholeExpressionBounded": false,
-                "boundary": null,
-                "unredactedByDesign": false,
-                "carriesSensitive": false,
-                "childProvenRedacting": null
-              },
-              {
                 "id": "console:member:2143",
                 "surface": "console",
                 "accessPath": "member",
@@ -23097,7 +23087,7 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "console:member:2149",
+                "id": "console:member:2145",
                 "surface": "console",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -23107,7 +23097,7 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "console:member:2154",
+                "id": "console:member:2150",
                 "surface": "console",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -23117,7 +23107,7 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "console:member:2163",
+                "id": "console:member:2155",
                 "surface": "console",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -23187,7 +23177,7 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "console:member:2173",
+                "id": "console:member:2170",
                 "surface": "console",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -23277,7 +23267,7 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "console:member:2190",
+                "id": "console:member:2182",
                 "surface": "console",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -23287,7 +23277,7 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "console:member:2195",
+                "id": "console:member:2191",
                 "surface": "console",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -23297,7 +23287,7 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "console:member:2206",
+                "id": "console:member:2196",
                 "surface": "console",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -23317,7 +23307,7 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "console:member:2212",
+                "id": "console:member:2208",
                 "surface": "console",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -23327,7 +23317,7 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "console:member:2228",
+                "id": "console:member:2213",
                 "surface": "console",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -23337,7 +23327,7 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "console:member:2233",
+                "id": "console:member:2229",
                 "surface": "console",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -23347,7 +23337,7 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "console:member:2249",
+                "id": "console:member:2234",
                 "surface": "console",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -23357,7 +23347,7 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "console:member:2257",
+                "id": "console:member:2250",
                 "surface": "console",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -23467,7 +23457,7 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "console:member:2278",
+                "id": "console:member:2268",
                 "surface": "console",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -23477,7 +23467,7 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "console:member:2283",
+                "id": "console:member:2279",
                 "surface": "console",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -23487,7 +23477,7 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "console:member:2289",
+                "id": "console:member:2284",
                 "surface": "console",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -23507,7 +23497,7 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "console:member:2295",
+                "id": "console:member:2291",
                 "surface": "console",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -23517,7 +23507,7 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "console:member:2304",
+                "id": "console:member:2296",
                 "surface": "console",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -23587,7 +23577,7 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "console:member:2315",
+                "id": "console:member:2311",
                 "surface": "console",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -23607,7 +23597,7 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "console:member:2320",
+                "id": "console:member:2317",
                 "surface": "console",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -23617,7 +23607,7 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "console:member:2328",
+                "id": "console:member:2321",
                 "surface": "console",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -23707,7 +23697,90 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "console:member:2340",
+                "id": "console:member:2337",
+                "surface": "console",
+                "accessPath": "member",
+                "wholeExpressionBounded": false,
+                "boundary": null,
+                "unredactedByDesign": false,
+                "carriesSensitive": false,
+                "childProvenRedacting": null
+              },
+              {
+                "id": "console:member:2341",
+                "surface": "console",
+                "accessPath": "member",
+                "wholeExpressionBounded": false,
+                "boundary": null,
+                "unredactedByDesign": false,
+                "carriesSensitive": false,
+                "childProvenRedacting": null
+              }
+            ]
+          }
+        },
+        {
+          "id": "sec:publication:scripts/ci/check-estate-tag-coverage.mjs#module",
+          "kind": "publication",
+          "provenance": "declared",
+          "label": "scripts/ci/check-estate-tag-coverage.mjs",
+          "facet": {
+            "kind": "publication",
+            "module": "scripts/ci/check-estate-tag-coverage.mjs",
+            "declaredSinkCount": 6,
+            "sinks": [
+              {
+                "id": "console:member:696",
+                "surface": "console",
+                "accessPath": "member",
+                "wholeExpressionBounded": false,
+                "boundary": null,
+                "unredactedByDesign": false,
+                "carriesSensitive": false,
+                "childProvenRedacting": null
+              },
+              {
+                "id": "console:member:700",
+                "surface": "console",
+                "accessPath": "member",
+                "wholeExpressionBounded": false,
+                "boundary": null,
+                "unredactedByDesign": false,
+                "carriesSensitive": false,
+                "childProvenRedacting": null
+              },
+              {
+                "id": "console:member:709",
+                "surface": "console",
+                "accessPath": "member",
+                "wholeExpressionBounded": false,
+                "boundary": null,
+                "unredactedByDesign": false,
+                "carriesSensitive": false,
+                "childProvenRedacting": null
+              },
+              {
+                "id": "console:member:728",
+                "surface": "console",
+                "accessPath": "member",
+                "wholeExpressionBounded": false,
+                "boundary": null,
+                "unredactedByDesign": false,
+                "carriesSensitive": false,
+                "childProvenRedacting": null
+              },
+              {
+                "id": "console:member:729",
+                "surface": "console",
+                "accessPath": "member",
+                "wholeExpressionBounded": false,
+                "boundary": null,
+                "unredactedByDesign": false,
+                "carriesSensitive": false,
+                "childProvenRedacting": null
+              },
+              {
+                "id": "console:member:730",
                 "surface": "console",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -47656,6 +47729,11 @@
           "reason": "CI guard script — executes on a GitHub Actions runner, not in any deployed Azure resource. Painting it onto a Container App would assert an edge that does not exist."
         },
         {
+          "nodeId": "sec:publication:scripts/ci/check-estate-tag-coverage.mjs#module",
+          "codeModuleId": "code:scripts/ci/check-estate-tag-coverage.mjs",
+          "reason": "CI guard script — executes on a GitHub Actions runner, not in any deployed Azure resource. Painting it onto a Container App would assert an edge that does not exist."
+        },
+        {
           "nodeId": "sec:publication:scripts/ci/check-external-origin-urls.mjs#module",
           "codeModuleId": "code:scripts/ci/check-external-origin-urls.mjs",
           "reason": "CI guard script — executes on a GitHub Actions runner, not in any deployed Azure resource. Painting it onto a Container App would assert an edge that does not exist."
@@ -48439,10 +48517,10 @@
     },
     "meta": {
       "generatorVersion": 1,
-      "generatedAt": "2026-09-02T15:03:40.626Z",
+      "generatedAt": "2026-09-02T18:52:43.651Z",
       "commit": "78f941306c32edbab72cc6d1e21ee9de937f40f2",
-      "inputsDigest": "d66945f543b73465",
-      "filesScanned": 2078,
+      "inputsDigest": "9c29a880316bb6f9",
+      "filesScanned": 2080,
       "scanScopes": [
         {
           "scope": "app/**/route.ts (console BFF routes)",
@@ -48451,8 +48529,8 @@
         },
         {
           "scope": ".github/**, scripts/** (CI publication surfaces)",
-          "filesMatched": 382,
-          "nodesEmitted": 224
+          "filesMatched": 384,
+          "nodesEmitted": 225
         }
       ],
       "skipped": [
@@ -48863,6 +48941,10 @@
         {
           "subject": "scripts/ci/check-env-sync.mjs",
           "reason": "module declares no PUBLICATION-SINKS marker, so C4's declared-count drift check is INERT for it (declaredSinkCount is set to the observed 65). Recorded so the inertness is countable rather than invisible — a check that cannot fail must not be mistaken for a check that passed."
+        },
+        {
+          "subject": "scripts/ci/check-estate-tag-coverage.mjs",
+          "reason": "module declares no PUBLICATION-SINKS marker, so C4's declared-count drift check is INERT for it (declaredSinkCount is set to the observed 6). Recorded so the inertness is countable rather than invisible — a check that cannot fail must not be mistaken for a check that passed."
         },
         {
           "subject": "scripts/ci/check-external-origin-urls.mjs",
@@ -49494,7 +49576,7 @@
         },
         {
           "subject": "C4 expression arm (carriesSensitive)",
-          "reason": "matched 0 of 2320 non-spawn publication sink(s), so every C4 finding on this tree comes from the spawn-stdio arm. The expression arm is INERT here and its correctness is therefore unexercised by the real corpus — C4 output is not evidence that no unbounded sensitive write exists."
+          "reason": "matched 0 of 2326 non-spawn publication sink(s), so every C4 finding on this tree comes from the spawn-stdio arm. The expression arm is INERT here and its correctness is therefore unexercised by the real corpus — C4 output is not evidence that no unbounded sensitive write exists."
         }
       ]
     }
