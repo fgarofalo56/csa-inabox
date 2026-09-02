@@ -381,11 +381,34 @@ export function classifyDisposition({ register, workflow, today }) {
  * @param {object} p
  * @param {unknown} p.register parsed register, or null.
  * @param {{workflow:string, conditions:string[]}[]} p.rows measured rows.
+ * @param {string|null} [p.parseError] the message from a register that EXISTS but
+ *   could not be parsed. Absent/null means "no register file", which is not a
+ *   finding; a string means the file is there and unreadable, which is.
  * @returns {{kind:string, subject:string, why:string}[]} findings, [] when clean
  */
-export function auditDispositionRegister({ register, rows }) {
+export function auditDispositionRegister({ register, rows, parseError = null }) {
   const findings = [];
   const push = (kind, subject, why) => findings.push({ kind, subject, why });
+
+  // A register that EXISTS but does not parse is invisible in every other
+  // channel. classifyDisposition gets `null`, so it reports hasEntry:false and
+  // its computed "no register was readable" reason is never printed (reasonsFor
+  // only prints under hasEntry && !declared). The net effect is that a bad merge
+  // into the JSON silently flips every ACK row back to STALE with nothing
+  // anywhere saying why — the exact "a declaration that is silently ignored is
+  // worse than none" failure this file's header names. Suppression still fails
+  // closed, so this is a reporting defect rather than a safety one, but it is
+  // the one an operator cannot diagnose.
+  if (parseError) {
+    push(
+      'register-unreadable',
+      DISPOSITION_PATH,
+      `exists but could not be parsed (${parseError}). Nothing in it is being honoured, so every declared ` +
+        'lane has silently reverted to its undeclared verdict. This is NOT the same as having no register: ' +
+        'the decisions are still written down, they are just unreadable. Fix the JSON — do not delete the file.',
+    );
+    return findings;
+  }
 
   if (register === null || register === undefined) return findings; // nothing declared, nothing to drain
   if (typeof register !== 'object' || Array.isArray(register) || !Array.isArray(register.dispositions)) {
@@ -431,7 +454,20 @@ export function auditDispositionRegister({ register, rows }) {
 
     const conditions = measured.get(wf);
     const acks = Array.isArray(entry?.acknowledges) ? entry.acknowledges.map(String) : [];
-    if (acks.includes('never-run') && !conditions.includes('never-run')) {
+    // `conditionsOf` makes the drift family mutually exclusive — `query-failed`
+    // is emitted INSTEAD OF `never-run`, not alongside it. So a lane whose run
+    // history could not be read at all presents as `['query-failed']`, and the
+    // absence of `never-run` there means "not measured", NOT "has now run".
+    // Draining the entry on that evidence would delete a valid declaration on
+    // the strength of a query that never happened (deploy-integrity R7: an
+    // error must not assert a cause it did not establish). `disabled` and
+    // `state-unknown` stack BESIDE the drift family rather than replacing it,
+    // so `query-failed` is the only condition that can mask `never-run`.
+    if (
+      acks.includes('never-run') &&
+      !conditions.includes('never-run') &&
+      !conditions.includes('query-failed')
+    ) {
       push(
         'never-run-drained',
         wf,

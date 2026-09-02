@@ -1883,12 +1883,31 @@ export function decide(rows, findings = []) {
  * classifyDisposition treats null as "nothing is declared", so an unreadable
  * register acknowledges nothing and every row is judged exactly as it was
  * before the register existed.
+ *
+ * ABSENT AND CORRUPT ARE DIFFERENT FACTS, so they are returned separately. Both
+ * yield `register: null` and therefore the same fail-closed suppression
+ * behaviour, but only one of them is a defect somebody has to fix: a file that
+ * is not there declares nothing, while a file that is there and does not parse
+ * declares things nobody is honouring. Collapsing them into one silent `null`
+ * meant a bad merge into the JSON produced no signal in any channel.
+ *
+ * @returns {{register: unknown, parseError: string|null}}
  */
 function loadDispositions() {
+  let raw;
   try {
-    return JSON.parse(readFileSync(path.join(REPO_ROOT, DISPOSITION_PATH), 'utf8'));
-  } catch {
-    return null;
+    raw = readFileSync(path.join(REPO_ROOT, DISPOSITION_PATH), 'utf8');
+  } catch (e) {
+    // ENOENT is the ordinary "nothing is dormant" case. Anything else — a
+    // permission denial, a directory where the file should be — is NOT an
+    // absence, and per deploy-integrity R7 must not be reported as one.
+    if (e && e.code === 'ENOENT') return { register: null, parseError: null };
+    return { register: null, parseError: `${e?.code || 'read failed'}: ${e?.message || String(e)}` };
+  }
+  try {
+    return { register: JSON.parse(raw), parseError: null };
+  } catch (e) {
+    return { register: null, parseError: e?.message || String(e) };
   }
 }
 
@@ -1898,7 +1917,7 @@ function loadDispositions() {
  */
 function buildRows() {
   const states = workflowStates();
-  const register = loadDispositions();
+  const { register, parseError: registerParseError } = loadDispositions();
   const today = new Date().toISOString().slice(0, 10);
   const rows = [];
   for (const entry of WATCHED) {
@@ -1939,6 +1958,7 @@ function buildRows() {
   }
   const findings = auditDispositionRegister({
     register,
+    parseError: registerParseError,
     rows: rows.map((r) => ({ workflow: r.workflow, conditions: r.conditions })),
   });
   return { rows, findings };

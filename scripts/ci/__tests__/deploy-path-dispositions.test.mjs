@@ -355,6 +355,41 @@ test('a never-run sign-off on a lane that HAS now run must be drained', () => {
   assert.equal(f[0].kind, 'never-run-drained');
 });
 
+test('a FAILED QUERY must not be read as "the lane has now run" (R7)', () => {
+  // conditionsOf() makes the drift family mutually exclusive: when `gh run list`
+  // fails it emits ['query-failed'] INSTEAD OF ['never-run']. Reading that
+  // absence as evidence the lane ran would print "this lane HAS now run for
+  // real" — a cause the code never established — and instruct the operator to
+  // delete a valid declaration. The finding must stay silent when we did not
+  // measure.
+  const f = auditDispositionRegister({
+    register: reg(entry({ acknowledges: ['never-run'] })),
+    rows: [{ workflow: 'deploy-fiab-il5.yml', conditions: ['query-failed'] }],
+  });
+  assert.deepEqual(f, [],
+    'an unread run history is "not measured", never "has now run"');
+});
+
+test('CONTROL: query-failed is the ONLY condition that masks never-run', () => {
+  // `disabled` and `state-unknown` stack BESIDE the drift family rather than
+  // replacing it, so a lane reporting ['disabled'] alone genuinely did run and
+  // is not drifting — the never-run sign-off there really is obsolete. This
+  // pins the R7 fix as narrow; a blanket "any condition suppresses the drain"
+  // would let a stale entry hide behind an unrelated flag.
+  const stillFires = auditDispositionRegister({
+    register: reg(entry({ acknowledges: ['never-run'] })),
+    rows: [{ workflow: 'deploy-fiab-il5.yml', conditions: ['disabled'] }],
+  });
+  assert.deepEqual(stillFires.map((x) => x.kind), ['never-run-drained']);
+
+  // And a lane that is BOTH never-run and disabled is still honestly never-run.
+  const quiet = auditDispositionRegister({
+    register: reg(entry({ acknowledges: ['never-run'] })),
+    rows: [{ workflow: 'deploy-fiab-il5.yml', conditions: ['never-run', 'disabled'] }],
+  });
+  assert.deepEqual(quiet, []);
+});
+
 test('CONTROL: a `drift` sign-off on a lane that is no longer drifting is NOT a finding', () => {
   // Drift oscillates; demanding a drain the moment it clears would make the
   // register churn. That entry expires on reviewBy instead.
@@ -377,6 +412,38 @@ test('a duplicate entry, and a malformed register, are findings', () => {
 
   assert.deepEqual(auditDispositionRegister({ register: null, rows: [] }), [],
     'no register is not a finding — the common case is a repo with nothing dormant');
+});
+
+test('a register that EXISTS but does not PARSE is a finding, not silence', () => {
+  // The dangerous asymmetry: a corrupt register yields register:null, which is
+  // byte-identical in behaviour to "no register" — every ACK row silently
+  // reverts to STALE and classifyDisposition's computed "no register was
+  // readable" reason is discarded by reasonsFor (it only prints under
+  // hasEntry && !declared, and hasEntry is false for a null register). So the
+  // ONLY channel that can say the decisions were dropped is this finding.
+  const f = auditDispositionRegister({
+    register: null,
+    rows: [{ workflow: 'deploy-fiab-il5.yml', conditions: ['never-run'] }],
+    parseError: 'Unexpected token } in JSON at position 412',
+  });
+  assert.deepEqual(f.map((x) => x.kind), ['register-unreadable']);
+  assert.match(f[0].why, /could not be parsed/);
+  assert.match(f[0].why, /do not delete the file/,
+    'the remediation must not tell an operator to destroy the decision record');
+});
+
+test('CONTROL: absent and corrupt are distinguished, and only corrupt is a finding', () => {
+  // Both fail closed for SUPPRESSION — that part was never broken. The defect
+  // was that they were indistinguishable in the REPORT.
+  const absent = auditDispositionRegister({ register: null, rows: [], parseError: null });
+  assert.deepEqual(absent, []);
+
+  const corrupt = auditDispositionRegister({ register: null, rows: [], parseError: 'boom' });
+  assert.equal(corrupt.length, 1);
+
+  // And a corrupt register short-circuits: it must not ALSO emit per-entry
+  // findings, because there are no entries to audit.
+  assert.deepEqual(corrupt.map((x) => x.kind), ['register-unreadable']);
 });
 
 test('decide(): a register finding fails the check even when EVERY row is clean', () => {

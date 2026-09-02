@@ -140,6 +140,22 @@ run-name: >-
 # build-fiab-images-acr-tasks in the shared group below, which is a change to a
 # file this PR does not own: filed as #4285.
 #
+# EXCLUDING THOSE THREE REDUCES THE COLLISION RATE. IT DOES NOT ELIMINATE THE
+# CLASS, and this file will not claim that it does. The path set is a property of
+# the TRIGGERS, not of the COMMIT: nothing stops one commit from touching a
+# trigger path above AND some other path under `apps/fiab-*/**`, and such a
+# commit starts both lanes in disjoint groups exactly as the excluded three
+# would have. The commit that MERGED this register is itself an instance —
+# measured, not hypothesized: it carries `.github/workflows/deploy-loom-uat.yml`
+# (a trigger above) and a re-derived
+# `apps/fiab-console/lib/brain/security/extract/__generated__/security-graph.json`
+# (inside the builder's filter). So the first automatic run of this lane may lose
+# the lease, wait out LOOM_ACR_LEASE_WAIT_MINUTES (25) and hard-fail; by the
+# measured builder hold time (median ~37 min, max ~94) that is more likely than
+# not. That first red is a LEASE CONFLICT, not a deploy defect, and it needs a
+# re-dispatch rather than an investigation. #4285 is what actually closes it, by
+# bringing the builder into the shared group below.
+#
 # THE ROLL GATE OWNS THE JOB MID-RUN, AND A PUSH CAN STILL RACE IT.
 # loom-roll-and-validate sets UAT_GREP_INVERT on the loom-uat job immediately
 # before each gate run, and the script below applies a FULL job YAML (see the
@@ -215,6 +231,18 @@ permissions:
 # older pending one — is a run that touched nothing. That reads as `cancelled`,
 # which check-deploy-staleness counts as NO EVIDENCE rather than as a failure,
 # so the lane stays honestly STALE instead of going falsely red.
+#
+# THIS GROUP COVERS TWO LANES OUT OF TWENTY-THREE. Measured: 23 workflows invoke
+# acr-firewall-lease.sh and 10 of them carry no `concurrency:` block at all, so
+# the group below serializes this lane against `deploy-report-subscriptions.yml`
+# and against nothing else. The one that matters most is
+# `deploy-fiab-commercial.yml` — no concurrency block, acquires the same lease at
+# :1731, and runs UNATTENDED on `cron: '0 6 * * *'` against the same Commercial
+# registry. A merge landing near 06:00 UTC that touches either trigger path above
+# races the daily Commercial deploy on the same 25-minute budget, and this group
+# cannot see it. (The gov-provision-* lanes in that same uncovered set target the
+# sovereign registry, so they do not contend for THIS lease.) That residual is
+# real, is not closed here, and belongs to #4285 along with the builder.
 concurrency:
   group: acr-firewall-${{ inputs.region || 'centralus' }}
   cancel-in-progress: false
