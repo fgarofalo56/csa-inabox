@@ -87,9 +87,31 @@ run-name: >-
 #   merge. Chaining to every roll therefore drops this lane, repeatedly, into
 #   the window where the builder most likely holds the lease — a staleness fix
 #   that manufactures a red deploy lane (deploy-integrity R1). The mitigation
-#   HERE is to not create the collision at all: the `push:` paths below are
-#   confined to files OUTSIDE the builder's own `apps/fiab-*/**` filter, so no
-#   single commit can start both. The builder's own hold is tracked in #4285.
+#   HERE is to not create the collision at all: every path in `push:` below is
+#   chosen so that a commit touching it cannot ALSO start the builder. The
+#   builder's own hold is tracked in #4285.
+#
+#   THAT CLAIM COST A THIRD TRIGGER, and the reason is worth stating because it
+#   is not obvious from the path strings (review of this PR, round 2). Being
+#   outside `apps/fiab-*/**` is NECESSARY and NOT SUFFICIENT: a file can be
+#   COUPLED to something inside that filter. `scripts/ci/resolve-automation-oid.mjs`
+#   was listed here and is exactly that case — it is a node in the committed
+#   security graph, and its node encodes LINE-NUMBERED sinks, so any ordinary
+#   edit to it shifts them and forces `security-graph.json` to be regenerated in
+#   the SAME commit (the drift gate is merge-blocking). That artifact lives under
+#   `apps/fiab-console/**`, so such a commit DOES match the builder's filter and
+#   DOES start both — this lane under `acr-firewall-<region>` and the builder
+#   under `build-fiab-images-acr-tasks-<boundary>`, two DISJOINT groups that
+#   GitHub will not serialize. The loser waits out the 25-minute budget against a
+#   holder whose median is 37 and hard-fails. So the file is not a trigger, and
+#   a change to it reports STALE — the same honest-signal trade already made for
+#   `e2e/**` and `Dockerfile.uat` below, for the same reason.
+#
+#   It stays a trigger on `deploy-loom-verify.yml`, deliberately and not by
+#   oversight: that lane takes NO ACR lease (`grep acr_lease_acquire` over
+#   `deploy-loom-verify-job.sh` returns zero), so co-firing with the builder
+#   costs it nothing. Dropping it there "for symmetry" would delete real coverage
+#   to prevent a collision that cannot happen.
 #
 #   WHY NOT KEEP THE CHAIN AND THROTTLE IT TO ONE RUN PER N HOURS. Because in
 #   THIS checker a throttled run is indistinguishable from a real deploy. A
@@ -104,17 +126,19 @@ run-name: >-
 #   catch. A throttle here would defeat the instrument it is protecting.
 #
 # WHAT THE PUSH TRIGGERS DO AND DO NOT COVER — stated, not implied
-# (deploy-integrity R7). Three of this lane's five WATCHED sources are below.
-# The other two, `apps/fiab-console/Dockerfile.uat` and
-# `apps/fiab-console/e2e/**`, are deliberately NOT triggers: both sit inside
-# build-fiab-images-acr-tasks' own `apps/fiab-*/**` push filter (:83), and that
-# workflow takes the SAME per-registry lease this lane's script takes
-# (acr-firewall-lease.sh, :625 acquire / :698 release). Adding them would put
-# two lease claimants on one commit for a reason that has nothing to do with
-# serialization. So a change confined to e2e/** still reports STALE — which is
-# an honest signal into a report somebody now reads, not the void #4144 is
-# about. Closing that gap needs build-fiab-images-acr-tasks in the shared group
-# below, which is a change to a file this PR does not own: filed as #4285.
+# (deploy-integrity R7). TWO of this lane's five WATCHED sources are below. The
+# other three — `apps/fiab-console/Dockerfile.uat`, `apps/fiab-console/e2e/**`,
+# and `scripts/ci/resolve-automation-oid.mjs` — are deliberately NOT triggers.
+# The first two sit inside build-fiab-images-acr-tasks' own `apps/fiab-*/**`
+# push filter (:83); the third is graph-coupled to that filter for the reason
+# given above. All three would put two lease claimants, in disjoint concurrency
+# groups, on one commit — for a reason that has nothing to do with
+# serialization. That workflow takes the SAME per-registry lease this lane's
+# script takes (acr-firewall-lease.sh, :625 acquire / :698 release). So a change
+# confined to e2e/** still reports STALE — which is an honest signal into a
+# report somebody now reads, not the void #4144 is about. Closing that gap needs
+# build-fiab-images-acr-tasks in the shared group below, which is a change to a
+# file this PR does not own: filed as #4285.
 #
 # THE ROLL GATE OWNS THE JOB MID-RUN, AND A PUSH CAN STILL RACE IT.
 # loom-roll-and-validate sets UAT_GREP_INVERT on the loom-uat job immediately
@@ -155,14 +179,14 @@ on:
         type: boolean
         default: true
 
-  # Three of this lane's five WATCHED sources. The other two are covered above:
-  # they sit inside a lease-taking workflow's own path filter.
+  # Two of this lane's five WATCHED sources. The other three are covered above:
+  # two sit inside the image builder's own path filter, and the third is coupled
+  # to it through the committed security graph.
   push:
     branches: [main]
     paths:
       - '.github/workflows/deploy-loom-uat.yml'
       - 'scripts/csa-loom/deploy-loom-uat-job.sh'
-      - 'scripts/ci/resolve-automation-oid.mjs'
 
 permissions:
   contents: read

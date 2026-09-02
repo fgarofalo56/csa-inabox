@@ -485,6 +485,17 @@ const TRIGGER_GAPS = Object.freeze({
       + '`apps/fiab-*/**` push filter. deploy-loom-uat.yml\'s header has always cited ACR-lease collision as '
       + 'the reason it declines to trigger on e2e/**; the numbers above are that argument, measured. Closing '
       + 'this gap needs the lease wait raised past the builder\'s observed 94-minute maximum, not a new trigger.',
+    'scripts/ci/resolve-automation-oid.mjs':
+      'the same collision reached INDIRECTLY, which is why it survived the first two entries. Being outside '
+      + '`apps/fiab-*/**` is necessary and NOT sufficient: this file is a node in the committed security graph '
+      + 'and its node encodes LINE-NUMBERED sinks (console:member:456/459/465/471), so any ordinary edit shifts '
+      + 'them and forces `apps/fiab-console/lib/brain/security/extract/__generated__/security-graph.json` to be '
+      + 'regenerated in the SAME commit — the drift gate is merge-blocking. That artifact IS inside the builder\'s '
+      + 'filter. So a commit touching this file starts this lane under `acr-firewall-<region>` AND the builder '
+      + 'under `build-fiab-images-acr-tasks-<boundary>` — two DISJOINT groups GitHub will not serialize — and the '
+      + 'loser waits out the same 25-minute budget against the same median-37-minute holder. It was a trigger '
+      + 'until the round-2 review of #4266 measured the coupling. It remains a trigger on deploy-loom-verify.yml, '
+      + 'which takes no ACR lease at all, so co-firing there costs nothing.',
   }),
 });
 
@@ -523,8 +534,20 @@ test('each triggered lane can be reached by every source check-deploy-staleness 
     assert.equal(Object.keys(gaps).length, Object.keys(gaps).filter((p) => entryW.paths.includes(p)).length,
       `${wf}: a TRIGGER_GAPS entry names a path that is no longer in WATCHED — delete it`);
   }
-  assert.ok(checked >= 10, `expected every non-exempt WATCHED path of all three lanes; only ${checked} were checked`);
-  assert.equal(gapsSeen, 2, `exactly the two measured lease-collision gaps are expected; saw ${gapsSeen}`);
+  // POPULATION, pinned two ways. The floor alone was not enough: moving a path
+  // from `checked` into `TRIGGER_GAPS` lowers it by one, which reads as "the
+  // floor still holds" rather than as "a source stopped being covered". So the
+  // TOTAL is pinned as well — a path may move between the buckets only with
+  // both numbers edited, and it can never leave the population unnoticed.
+  //
+  // 12 = 10 covered + 2 exempt until the round-2 review of #4266, which measured
+  // that `scripts/ci/resolve-automation-oid.mjs` reaches the image builder's
+  // path filter INDIRECTLY, through the line-numbered security-graph artifact it
+  // forces to be regenerated. It is now 9 + 3.
+  assert.equal(checked + gapsSeen, 12,
+    `every WATCHED path of the triggered lanes must be either covered or exempt; saw ${checked} + ${gapsSeen}`);
+  assert.ok(checked >= 9, `expected every non-exempt WATCHED path of all three lanes; only ${checked} were checked`);
+  assert.equal(gapsSeen, 3, `exactly the three measured lease-collision gaps are expected; saw ${gapsSeen}`);
 });
 
 test('every workflow_run upstream names a workflow that EXISTS', () => {
