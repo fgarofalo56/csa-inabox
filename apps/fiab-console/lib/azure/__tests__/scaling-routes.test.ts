@@ -294,6 +294,129 @@ describe('POST /api/admin/scaling/container-apps', () => {
   });
 });
 
+// ---------------------------------------------------------------------------
+// #4279 — SCALE-TO-ZERO THROUGH THIS ROUTE, DECIDED BY THE DEPLOY TEMPLATE
+//
+// The route accepted `minReplicas: 0` for ANY app: the only replica check was
+// `< 0`, so zero — the one destructive value — passed straight to an ARM PATCH.
+// That is the same unrecoverable loss the Brain executor was guarded against in
+// #4257/#4261, reached through a door that predates the executor.
+//
+// These arms exercise the REAL committed deploy-templates/main.json (vitest cwd
+// is apps/fiab-console, which is where `resolveDlzTemplateInlineOutcome` looks),
+// so they are a real-data receipt, not a fixture agreeing with itself.
+// ---------------------------------------------------------------------------
+describe('POST /api/admin/scaling/container-apps — scale-to-zero (#4279)', () => {
+  /** Stub `fetch` so ANY ARM call fails the test AND is recorded. */
+  function forbidArm(): string[] {
+    const seen: string[] = [];
+    vi.stubGlobal('fetch', vi.fn(async (u: any) => {
+      seen.push(String(u));
+      throw new Error('no ARM call may be made for a refused scale-to-zero');
+    }));
+    return seen;
+  }
+
+  it('REFUSES a declared non-scalable app (loom-risingwave) before any ARM call', async () => {
+    const seen = forbidArm();
+    const { POST } = await import('@/app/api/admin/scaling/container-apps/route');
+    const r = await POST(makeReq('POST', { name: 'loom-risingwave', minReplicas: 0, maxReplicas: 1 }));
+    expect(r.status).toBe(409);
+    const j = await r.json();
+    expect(j.ok).toBe(false);
+    expect(j.refusal).toBe('pinned-singleton');
+    // The bicep's OWN words reach the operator, not a paraphrase.
+    expect(j.error).toMatch(/materialized view/i);
+    // Nothing was attempted in Azure.
+    expect(seen).toEqual([]);
+  });
+
+  it('THE CONTROL: an elastic app the deploy wires nothing to is still PERMITTED', async () => {
+    // Without this arm, a guard that refused EVERYTHING would be
+    // indistinguishable from a correct one — and on an estate that already
+    // refuses plenty for other reasons, that failure mode is invisible.
+    stubAcaEstate(['Consumption', 'D4']);
+    const { POST } = await import('@/app/api/admin/scaling/container-apps/route');
+    const r = await POST(makeReq('POST', { name: 'loom-presidio-analyzer', minReplicas: 0, maxReplicas: 3 }));
+    expect(r.status).toBe(200);
+    expect((await r.json()).ok).toBe(true);
+  });
+
+  it('REFUSES when the declaration source cannot be READ — fail closed', async () => {
+    // The DIFFERENTIAL that makes this arm mean something: the subject is the
+    // very app the control above PERMITS. The only thing changed is that the
+    // template read fails, so a refusal here can only have come from that.
+    vi.resetModules();
+    vi.doMock('@/lib/setup/user-arm-deploy', async (importOriginal) => ({
+      ...(await importOriginal<Record<string, unknown>>()),
+      resolveDlzTemplateInlineOutcome: () => ({
+        status: 'unreadable',
+        file: '/app/deploy-templates/main.json',
+        detail: 'read failed (EIO): simulated transient IO failure',
+      }),
+    }));
+    const seen = forbidArm();
+    const { POST } = await import('@/app/api/admin/scaling/container-apps/route');
+    const r = await POST(makeReq('POST', { name: 'loom-presidio-analyzer', minReplicas: 0 }));
+    expect(r.status).toBe(409);
+    const j = await r.json();
+    expect(j.refusal).toBe('declaration-unavailable');
+    // R7: it says it could not establish the fact — it does NOT claim the app
+    // is unsafe, and it does not claim it is safe either.
+    expect(j.error).toMatch(/could not be consulted/);
+    expect(j.error).toMatch(/fail-CLOSED/);
+    expect(seen).toEqual([]);
+    vi.doUnmock('@/lib/setup/user-arm-deploy');
+  });
+
+  it('the console may not scale ITSELF to zero', async () => {
+    const seen = forbidArm();
+    const { POST } = await import('@/app/api/admin/scaling/container-apps/route');
+    const r = await POST(makeReq('POST', { name: 'loom-console', minReplicas: 0 }));
+    expect(r.status).toBe(409);
+    const j = await r.json();
+    expect(j.refusal).toBe('self');
+    expect(j.error).toMatch(/THIS CONSOLE/);
+    expect(seen).toEqual([]);
+  });
+
+  it('honours LOOM_CONSOLE_APP_NAME for the self-refusal', async () => {
+    process.env.LOOM_CONSOLE_APP_NAME = 'loom-console-gov';
+    try {
+      const seen = forbidArm();
+      const { POST } = await import('@/app/api/admin/scaling/container-apps/route');
+      const r = await POST(makeReq('POST', { name: 'loom-console-gov', minReplicas: 0 }));
+      expect(r.status).toBe(409);
+      expect((await r.json()).refusal).toBe('self');
+      expect(seen).toEqual([]);
+    } finally {
+      delete process.env.LOOM_CONSOLE_APP_NAME;
+    }
+  });
+
+  it('a STRING minReplicas cannot step around the guard', async () => {
+    // The narrow bypass the old `typeof === 'number'` shape check left open:
+    // '0' is not a number, so it missed BOTH the negative test and a `=== 0`
+    // guard, and reached ARM as a scale-to-zero in string clothing.
+    const seen = forbidArm();
+    const { POST } = await import('@/app/api/admin/scaling/container-apps/route');
+    const r = await POST(makeReq('POST', { name: 'loom-risingwave', minReplicas: '0' }));
+    expect(r.status).toBe(400);
+    expect((await r.json()).error).toMatch(/non-negative integer/);
+    expect(seen).toEqual([]);
+  });
+
+  it('the guard is keyed to ZERO, not to the app: min 1 on the pinned app still works', async () => {
+    // Over-refusal control. Raising or holding the floor on loom-risingwave is
+    // a legitimate operation and must remain one — only zero is refused.
+    stubAcaEstate(['Consumption', 'D4']);
+    const { POST } = await import('@/app/api/admin/scaling/container-apps/route');
+    const r = await POST(makeReq('POST', { name: 'loom-risingwave', minReplicas: 1, maxReplicas: 1 }));
+    expect(r.status).toBe(200);
+    expect((await r.json()).ok).toBe(true);
+  });
+});
+
 describe('unauthenticated', () => {
   it('returns 401 from every POST when session missing', async () => {
     vi.doMock('@/lib/auth/session', () => ({ getSession: vi.fn(() => null) }));

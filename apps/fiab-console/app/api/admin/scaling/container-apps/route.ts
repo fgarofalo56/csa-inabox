@@ -24,11 +24,36 @@
  * per-cloud. Reading it is the only implementation that is correct in
  * Commercial and in every sovereign boundary at once — a second hard-coded list
  * would have re-created the defect there.
+ *
+ * ── #4279: THIS ROUTE WAS A SECOND DOOR TO AN UNRECOVERABLE SCALE-TO-ZERO ───
+ *
+ * `minReplicas: 0` was accepted for ANY app. The only replica check was
+ * `minReplicas < 0`, so zero — the one value that is destructive rather than
+ * merely small — sailed through to an ARM PATCH. The console's own spinner on
+ * /admin/scaling lets an operator type it, so this was reachable from the UI,
+ * not only from a hand-crafted request.
+ *
+ * `loom-risingwave-aca.bicep` states the consequence in the deploy's own words:
+ * "a scaled-to-zero replica loses every MV definition and its progress". The
+ * Brain's executor was guarded against exactly this in #4257/#4261; this route
+ * predates that executor and had NONE of its scaffolding.
+ *
+ * The fix reuses that SAME derivation — `refuseScaleToZero`, which reads the
+ * compiled deploy template rather than a hand-maintained name list. It is
+ * deliberately NOT a second parallel check: a hand list here would drift from
+ * the bicep the day someone adds a stateful service, which is the failure mode
+ * deriving from the template exists to prevent. One derivation, every caller.
+ *
+ * It FAILS CLOSED. Per #4261's review rounds every "I could not establish this"
+ * state refuses — an unreadable template is not an empty one, and treating it as
+ * empty would let one bad read permit every scale-to-zero on the estate
+ * (deploy-integrity.md R7).
  */
 import { NextRequest, NextResponse } from 'next/server';
 import {
   listContainerAppsWithProfiles, updateContainerAppScale, AcaNotConfiguredError,
 } from '@/lib/azure/container-apps-arm-client';
+import { refuseScaleToZero, scaleToZeroRefusalReason } from '@/lib/brain-actions/scalability';
 import { withDlzAccess } from '@/lib/api/route-toolkit';
 
 export const runtime = 'nodejs';
@@ -75,11 +100,38 @@ export const POST = withDlzAccess('scaling', async (req: NextRequest) => {
         + 'per app as `availableProfiles` by GET on this route.',
     }, { status: 400 });
   }
-  if (typeof body.minReplicas === 'number' && body.minReplicas < 0) {
-    return NextResponse.json({ ok: false, error: 'minReplicas must be >= 0' }, { status: 400 });
+  // The TYPE gate is load-bearing for the #4279 guard below, not hygiene. The
+  // previous `typeof === 'number' && < 0` test let a STRING pass untouched, so
+  // `minReplicas: '0'` missed both the negative check and a `=== 0` guard and
+  // would still have reached ARM as a scale-to-zero. Narrowing to a
+  // non-negative INTEGER here means the guard below sees only real numbers and
+  // cannot be stepped around with a type.
+  if (body.minReplicas !== undefined
+      && (typeof body.minReplicas !== 'number' || !Number.isInteger(body.minReplicas) || body.minReplicas < 0)) {
+    return NextResponse.json({ ok: false, error: 'minReplicas must be a non-negative integer' }, { status: 400 });
   }
   if (typeof body.maxReplicas === 'number' && (body.maxReplicas < 1 || body.maxReplicas > 1000)) {
     return NextResponse.json({ ok: false, error: 'maxReplicas must be 1-1000' }, { status: 400 });
+  }
+  // ── #4279 — the DEPLOY decides scale-to-zero, and it decides BEFORE ARM ────
+  // Zero is not "a small number": for a service whose state lives in-process it
+  // is unrecoverable data loss, and the deploy template is the only source that
+  // knows which services those are. `refuseScaleToZero` is the same derivation
+  // the Brain executor uses (#4257/#4261) — reused, never re-implemented, so a
+  // new stateful service is covered here the day its bicep pins it.
+  //
+  // It fails CLOSED: an unreadable/absent/empty template, and a subject shadowed
+  // by an unresolved app name, all REFUSE rather than fall through to allow.
+  if (body.minReplicas === 0) {
+    const refusal = refuseScaleToZero(body.name);
+    if (refusal) {
+      return NextResponse.json({
+        ok: false,
+        refusal: refusal.kind,
+        error: `REFUSED: ${scaleToZeroRefusalReason(refusal)} No ARM call was made — `
+          + 'nothing was changed in Azure.',
+      }, { status: 409 });
+    }
   }
   try {
     const app = await updateContainerAppScale(body.name, {
