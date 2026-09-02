@@ -1,0 +1,200 @@
+# loom-capacity-broker CI — compile + vet + test the HYP-9 admission broker
+#
+# WHY THIS EXISTS (#4270). `apps/loom-capacity-broker` shipped 12 Go source
+# files, a Dockerfile, a bicep module (compute/loom-capacity-broker-app.bicep)
+# and 538 lines of unit tests across five `_test.go` files — and NOTHING in this
+# repository had ever compiled or run any of it. Measured on 2026-09-01, before
+# this file existed:
+#
+#   grep -rln "loom-capacity-broker" .github/workflows/   ->  0 files
+#   grep -rlE "setup-go|go (build|test|vet)" .github/workflows/
+#         ->  loom-directlake-ci.yml  (false positive: `cargo build` prose)
+#             sdk-contract.yml        (a DIFFERENT module, sdk/terraform-provider-loom)
+#
+# So the only two hits were a prose match and an unrelated Go module. The broker
+# had zero coverage of any kind: no compile, no vet, no test. Its image is not
+# built either — it is an entry in scripts/ci/check-image-producer-coverage.mjs
+# KNOWN_UNBUILT, tolerated only because admin-plane/main.bicep does not yet
+# invoke its bicep module. That means there was no lane ANYWHERE — CI, image
+# build, or deploy — in which a Go compile error could surface. A test suite
+# that never executes is not coverage; it is 538 lines of unverified assertion.
+#
+# This is the Go-side twin of loom-directlake-ci.yml (#3291), which closed the
+# identical gap for the Rust crate, and it is deliberately the same shape: get a
+# real compiler verdict on every PR that touches the app, BEFORE the service is
+# wired into the orchestrator and a build failure becomes a failed deploy.
+#
+# SCOPE: `go build ./...`, `go vet ./...`, `go test ./...` plus two invariant
+# checks the Dockerfile silently depends on (see the steps). It needs no
+# network, no Azure and no Redis: the module has ZERO external dependencies and
+# the tests are pure parsers and in-memory ledgers, so the whole lane is
+# hermetic.
+#
+# THIS LANE IS NOT REQUIRED-STATUS-CHECK MATERIAL YET — it produces no context
+# listed in release-please.yml's REQUIRED manifest. It is still shaped as if it
+# were (per-SHA concurrency, no result-discarding), because the cheap moment to
+# get that right is before anyone depends on it.
+
+name: loom-capacity-broker CI (go build + vet + test)
+
+on:
+  pull_request:
+    paths:
+      - 'apps/loom-capacity-broker/**'
+      - '.github/workflows/loom-capacity-broker-ci.yml'
+  push:
+    branches:
+      - main
+    paths:
+      - 'apps/loom-capacity-broker/**'
+      - '.github/workflows/loom-capacity-broker-ci.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# DELIBERATELY NOT the `<workflow>-${{ github.ref }}` + `cancel-in-progress:
+# true` shape that loom-directlake-ci.yml carries. Every push to main shares
+# `refs/heads/main`, so that group makes each merge CANCEL the previous commit's
+# run — and a cancelled run is not a pass and not a failure, it is an ABSENCE
+# that renders in `gh run list` as an unremarkable grey row. That is the defect
+# scripts/ci/check-required-lane-concurrency.mjs was written for (#3426/#3423),
+# which measured 11 cancelled main runs out of the last 30 on test.yml alone.
+# Putting the SHA in the group on push gives every main commit its own verdict;
+# PRs still supersede, which is where cancelling is genuinely free. Same shape
+# as test.yml and validate.yml.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}-${{ github.event_name == 'pull_request' && 'pr' || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  build-vet-test:
+    name: go build + vet + test
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: apps/loom-capacity-broker
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # SHA-pinned, unlike sdk-contract.yml's `actions/setup-go@v7`. That file's
+      # comment says it was left unpinned because "no other workflow in this
+      # repo uses setup-go, so there is no verified digest to copy" — this lane
+      # is the second consumer, and the digest below was resolved from the API
+      # rather than copied from memory:
+      #   gh api repos/actions/setup-go/tags --jq '.[] | select(.name|startswith("v7"))'
+      #   -> v7.0.0  b7ad1dad31e06c5925ef5d2fc7ad053ef454303e
+      #      v7      b7ad1dad31e06c5925ef5d2fc7ad053ef454303e   (same commit)
+      #
+      # go-version-file, NOT a hard-coded version: go.mod says `go 1.23` and the
+      # Dockerfile builds on golang:1.23-alpine. Reading the toolchain from the
+      # module is the only form that cannot drift from what the image compiles.
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: apps/loom-capacity-broker/go.mod
+          # There is no go.sum (zero external deps), so this caches the build
+          # cache keyed on go.mod. If it restores nothing the lane is merely
+          # slower — every verdict-bearing step below still runs and still
+          # decides. No step here may be skipped by a cache hit.
+          cache-dependency-path: apps/loom-capacity-broker/go.mod
+
+      # INVARIANT 1 — the module must stay dependency-free.
+      #
+      # This is not style policing; it is what keeps the image buildable. The
+      # Dockerfile copies `go.mod` and NO go.sum (there is none, verified: `ls
+      # apps/loom-capacity-broker/go.sum` -> No such file), and runs `go build`
+      # with no `go mod download`. The first external dependency anyone adds
+      # therefore breaks `az acr build` with a missing-go.sum error while a
+      # plain local `go build` still succeeds — a divergence that would surface
+      # as a failed deploy, not as a failed test. go.mod's own header states the
+      # zero-dependency design (the Redis client is a hand-rolled RESP2 client
+      # over crypto/tls + net in internal/resp); this step makes that comment
+      # enforceable.
+      - name: go.mod declares no external dependencies (the Dockerfile has no go.sum)
+        run: |
+          set -euo pipefail
+          requires=$(go mod edit -json | jq -r '(.Require // []) | length')
+          echo "direct+indirect requires: ${requires}"
+          if [ "${requires}" != "0" ]; then
+            go mod edit -json | jq -r '.Require[] | "  " + .Path + " " + .Version'
+            echo "::error file=apps/loom-capacity-broker/go.mod::The broker gained an external dependency."
+            echo "The Dockerfile copies go.mod only and never runs 'go mod download', so this breaks the image build."
+            echo "Either drop the dependency or add go.sum + a download step to apps/loom-capacity-broker/Dockerfile in the SAME change."
+            exit 1
+          fi
+
+      # INVARIANT 2 — all Go source must live under cmd/ or internal/.
+      #
+      # The Dockerfile's build stage copies exactly `go.mod`, `cmd` and
+      # `internal`. A package added at any other path compiles fine here and
+      # under `go build ./...` but is simply ABSENT from the image build
+      # context, so `az acr build` fails on an unresolvable import. Measured at
+      # the time of writing: 12 .go files, 0 of them outside cmd/ or internal/.
+      # Same reasoning as loom-directlake-ci.yml keeping its apt packages in
+      # sync with its Dockerfile — a divergence between the CI build and the
+      # image build is how a green lane ships an unbuildable image.
+      - name: All Go source lives under cmd/ or internal/ (the Dockerfile's COPY set)
+        run: |
+          set -euo pipefail
+          stray=$(find . -name '*.go' -not -path './cmd/*' -not -path './internal/*' | sort)
+          if [ -n "${stray}" ]; then
+            echo "${stray}"
+            echo "::error::Go source outside cmd/ and internal/ is not copied by apps/loom-capacity-broker/Dockerfile."
+            echo "Add the directory to the Dockerfile's COPY set, or move the package under cmd/ or internal/."
+            exit 1
+          fi
+          echo "no stray packages; Dockerfile COPY set is complete"
+
+      # gofmt -l prints the files that WOULD change. It exits 0 either way, so
+      # the emptiness of its output — not its exit code — is the verdict.
+      - name: gofmt
+        run: |
+          set -euo pipefail
+          unformatted=$(gofmt -l .)
+          if [ -n "${unformatted}" ]; then
+            echo "::error::gofmt needed on:"
+            echo "${unformatted}"
+            exit 1
+          fi
+          echo "gofmt clean"
+
+      - name: go build ./...
+        run: go build ./...
+
+      - name: go vet ./...
+        run: go vet ./...
+
+      # -count=1 is load-bearing, not decoration: it disables the test result
+      # cache. Without it Go can replay a cached PASS for an unchanged package
+      # and print "(cached)" — a green step that executed no assertions, which
+      # is precisely the "control that measures nothing" shape this repo keeps
+      # being bitten by. Same flag, same reason, as sdk-contract.yml's Go job.
+      - name: go test ./... -count=1
+        run: go test ./... -count=1 -v
+
+      # The compile the IMAGE performs, with the image's exact flags. Cheap
+      # (seconds, same source), and it closes the last gap between "CI is green"
+      # and "az acr build succeeds": -trimpath and a static CGO_ENABLED=0 link
+      # are a different code path from the default `go build` above, and this
+      # app's image has never been built by anything (KNOWN_UNBUILT), so no
+      # other lane would notice it breaking.
+      - name: go build with the Dockerfile's flags (static, trimmed, stripped)
+        env:
+          CGO_ENABLED: '0'
+          GOOS: linux
+        run: go build -trimpath -ldflags="-s -w" -o /tmp/broker ./cmd/broker
+
+      # `go version -m` and not `file`: nothing else in this repo's 127
+      # workflows invokes `file` (grep -rn '^\s\+file ' .github/workflows -> only
+      # this lane), so its presence on the runner image is an assumption, and a
+      # verdict step resting on an unverified tool is how a lane goes red for a
+      # reason that has nothing to do with its subject. `go` is guaranteed here —
+      # setup-go just installed it — and it prints the embedded build settings,
+      # which is the stronger claim anyway: it shows CGO_ENABLED=0 and the
+      # -trimpath/-ldflags the image build depends on actually took effect.
+      - name: Confirm the binary was produced with the image's build settings
+        run: |
+          set -euo pipefail
+          ls -l /tmp/broker
+          go version -m /tmp/broker
