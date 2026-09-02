@@ -170,3 +170,25 @@ the observed bucket — visible, never actionable, never tagged.
 | 2026-09-01 | #4284 | 0 red, 0 pending | closed #4278 + #4280, both intended |
 | 2026-09-02 | #4261 | 15/15 required SUCCESS | #4257 kept open — merged is not deployed |
 | 2026-09-02 | #4273 | 15/15 required SUCCESS | closed #4238 only; #4287 kept open, still live on main |
+| 2026-09-02 | #4281 | 33 SUCCESS / 3 SKIPPED, 0 red, 0 pending | docs-only; registers the 2026-09-01 drain round |
+| 2026-09-02 | #4286 | 35 SUCCESS / 3 SKIPPED, 0 red, 0 pending | dependabot: browserslist 4.28.6 -> 4.28.8 (portal) |
+| 2026-09-02 | #4289 | 71 SUCCESS / 3 SKIPPED, 0 red, 0 pending | dependabot: pypdf 6.15.0 -> 6.16.1 (platform locks) |
+
+### Close audit for that batch
+
+One issue closed inside the merge window and it was checked rather than
+assumed, because the row two lines above says the opposite:
+
+- **#4257** (RisingWave scale-to-zero destroys MVs) closed 2026-09-02T02:14:14Z.
+  The #4261 row records it as deliberately KEPT OPEN on the grounds that
+  merged is not deployed. That was true when written and is no longer true.
+  MEASURED: #4261 merged as `5454ae7f468b` at 01:14:15; the live estate
+  marker reads `sha=e9df9169 stamp=20260902T014744Z`, and
+  `git merge-base --is-ancestor 5454ae7f468b e9df9169` succeeds — so the fix
+  was rolled 33 minutes before the close. The close satisfies
+  `deploy-integrity.md` R2 and stands. The estate trails `main` by 3 commits.
+
+Recording the check itself, not only its outcome: an issue closing near a
+merge is the shape of an unclaimed-issue auto-close, and the timeline showed
+no `commit_id` on the close event, which rules that mechanism out. Had the
+ancestry check failed, the correct action would have been to reopen.
