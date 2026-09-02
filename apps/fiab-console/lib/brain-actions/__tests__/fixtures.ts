@@ -18,6 +18,7 @@ import type {
   CollectionReport,
   ProvenanceCoverage,
   WireDetectorRun,
+  WireEdge,
   WireFinding,
   WireNode,
 } from '@/app/api/admin/brain/_lib/wire';
@@ -65,6 +66,57 @@ export function wireNode(overrides: Partial<WireNode> = {}): WireNode {
     scaleMeasured: true,
     ownershipConfirmed: true,
     danglingIntendedFor: 1,
+    ...overrides,
+  };
+}
+
+/** Another app in the graph, so the estate's `configured` wires have somewhere to land. */
+export const PEER_NODE_ID =
+  `azure:/subscriptions/${SUB}/resourcegroups/${RG}` +
+  '/providers/microsoft.app/containerapps/loom-console';
+
+/**
+ * A RESOLVED `configured` edge — the shape the vacuity guard counts (#4258 item 2).
+ *
+ * The default snapshot carries one, because the guard now derives the count from
+ * `snapshot.edges` rather than from `population.byProvenance` (which folds
+ * DANGLING edges into the same number and so could not see the degenerate state
+ * it existed to catch). Use {@link danglingConfiguredEdge} for the arm that
+ * proves it.
+ */
+export function resolvedConfiguredEdge(overrides: Partial<WireEdge> = {}): WireEdge {
+  return {
+    id: 'edge:configured:console->broker',
+    provenance: 'configured',
+    from: PEER_NODE_ID,
+    to: NODE_ID,
+    resolution: 'resolved',
+    evidence: {
+      artifact: `/subscriptions/${SUB}/resourceGroups/${RG}/providers/Microsoft.App/containerApps/loom-console`,
+      symbol: 'LOOM_SOME_URL',
+      rawValue: 'https://broker.internal.example',
+      extractor: 'container-app-env',
+    },
+    ...overrides,
+  };
+}
+
+/** A `configured` edge that EXISTS and carries `''` — evidence, never reachability. */
+export function danglingConfiguredEdge(overrides: Partial<WireEdge> = {}): WireEdge {
+  return {
+    id: 'edge:configured:console->nothing',
+    provenance: 'configured',
+    from: PEER_NODE_ID,
+    to: null,
+    resolution: 'dangling',
+    danglingReason: 'empty-value',
+    intendedTo: NODE_ID,
+    evidence: {
+      artifact: `/subscriptions/${SUB}/resourceGroups/${RG}/providers/Microsoft.App/containerApps/loom-console`,
+      symbol: 'LOOM_BROKER_URL',
+      rawValue: '',
+      extractor: 'container-app-env',
+    },
     ...overrides,
   };
 }
@@ -134,7 +186,11 @@ export function brainSnapshot(overrides: Partial<BrainSnapshot> = {}): BrainSnap
   return {
     generatedAt: '2026-08-31T00:00:00.000Z',
     nodes: [wireNode()],
-    edges: [],
+    // ONE resolved `configured` edge and one dangling one — the healthy default.
+    // `edges: []` used to be the default and the vacuity guard still passed,
+    // because it read a summary count that included dangling edges instead of
+    // the edge list. That is #4258 item 2, and the guard now reads this array.
+    edges: [resolvedConfiguredEdge(), danglingConfiguredEdge()],
     findings: [wireFinding()],
     detectors: [detectorRun()],
     coverage: {

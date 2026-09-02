@@ -16796,6 +16796,39 @@
           }
         },
         {
+          "id": "sec:publication:scripts/ci/__tests__/roll-health-verdict.test.mjs#module",
+          "kind": "publication",
+          "provenance": "declared",
+          "label": "scripts/ci/__tests__/roll-health-verdict.test.mjs",
+          "facet": {
+            "kind": "publication",
+            "module": "scripts/ci/__tests__/roll-health-verdict.test.mjs",
+            "declaredSinkCount": 2,
+            "sinks": [
+              {
+                "id": "console:member:383",
+                "surface": "console",
+                "accessPath": "member",
+                "wholeExpressionBounded": false,
+                "boundary": null,
+                "unredactedByDesign": false,
+                "carriesSensitive": false,
+                "childProvenRedacting": null
+              },
+              {
+                "id": "console:member:384",
+                "surface": "console",
+                "accessPath": "member",
+                "wholeExpressionBounded": false,
+                "boundary": null,
+                "unredactedByDesign": false,
+                "carriesSensitive": false,
+                "childProvenRedacting": null
+              }
+            ]
+          }
+        },
+        {
           "id": "sec:publication:scripts/ci/__tests__/roll-race.test.mjs#module",
           "kind": "publication",
           "provenance": "declared",
@@ -47260,6 +47293,11 @@
           "reason": "CI guard script — executes on a GitHub Actions runner, not in any deployed Azure resource. Painting it onto a Container App would assert an edge that does not exist."
         },
         {
+          "nodeId": "sec:publication:scripts/ci/__tests__/roll-health-verdict.test.mjs#module",
+          "codeModuleId": "code:scripts/ci/__tests__/roll-health-verdict.test.mjs",
+          "reason": "CI guard script — executes on a GitHub Actions runner, not in any deployed Azure resource. Painting it onto a Container App would assert an edge that does not exist."
+        },
+        {
           "nodeId": "sec:publication:scripts/ci/__tests__/roll-race.test.mjs#module",
           "codeModuleId": "code:scripts/ci/__tests__/roll-race.test.mjs",
           "reason": "CI guard script — executes on a GitHub Actions runner, not in any deployed Azure resource. Painting it onto a Container App would assert an edge that does not exist."
@@ -48323,10 +48361,10 @@
     },
     "meta": {
       "generatorVersion": 1,
-      "generatedAt": "2026-09-01T20:32:58.816Z",
-      "commit": "438a543cd89ac65063d4ffef05c127f104065ce2",
-      "inputsDigest": "12e6956049b5d257",
-      "filesScanned": 2074,
+      "generatedAt": "2026-09-01T23:48:54.664Z",
+      "commit": "a5f78512c9e72a1849762c5c19fae613a3251567",
+      "inputsDigest": "b0fcfeca6c954db1",
+      "filesScanned": 2075,
       "scanScopes": [
         {
           "scope": "app/**/route.ts (console BFF routes)",
@@ -48335,8 +48373,8 @@
         },
         {
           "scope": ".github/**, scripts/** (CI publication surfaces)",
-          "filesMatched": 378,
-          "nodesEmitted": 222
+          "filesMatched": 379,
+          "nodesEmitted": 223
         }
       ],
       "skipped": [
@@ -48515,6 +48553,10 @@
         {
           "subject": "scripts/ci/__tests__/release-please-dispatch-decision.test.mjs",
           "reason": "module declares no PUBLICATION-SINKS marker, so C4's declared-count drift check is INERT for it (declaredSinkCount is set to the observed 1). Recorded so the inertness is countable rather than invisible — a check that cannot fail must not be mistaken for a check that passed."
+        },
+        {
+          "subject": "scripts/ci/__tests__/roll-health-verdict.test.mjs",
+          "reason": "module declares no PUBLICATION-SINKS marker, so C4's declared-count drift check is INERT for it (declaredSinkCount is set to the observed 2). Recorded so the inertness is countable rather than invisible — a check that cannot fail must not be mistaken for a check that passed."
         },
         {
           "subject": "scripts/ci/__tests__/roll-race.test.mjs",
@@ -49370,7 +49412,7 @@
         },
         {
           "subject": "C4 expression arm (carriesSensitive)",
-          "reason": "matched 0 of 2312 non-spawn publication sink(s), so every C4 finding on this tree comes from the spawn-stdio arm. The expression arm is INERT here and its correctness is therefore unexercised by the real corpus — C4 output is not evidence that no unbounded sensitive write exists."
+          "reason": "matched 0 of 2314 non-spawn publication sink(s), so every C4 finding on this tree comes from the spawn-stdio arm. The expression arm is INERT here and its correctness is therefore unexercised by the real corpus — C4 output is not evidence that no unbounded sensitive write exists."
         }
       ]
     }
