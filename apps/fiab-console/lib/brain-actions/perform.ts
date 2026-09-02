@@ -17,6 +17,7 @@
  *   ownership       fresh tag read still confirms it is OURS — and names THIS estate
  *   vacuity         the detector examined something real (P3)
  *   subject         Container App with full ARM coordinates, id derived here
+ *   statefulness    the deploy does not declare this a pinned singleton (#4257)
  *   write scope     inside the credential's configured subscription + RG
  *   ARM freshness   authoritative GET still matches the evidence
  *   staged confirm  the two-step re-affirm gate (auto-tune's ARM_CLASSES
@@ -25,6 +26,16 @@
  * `loadSnapshot` is injected by the route rather than imported here so this
  * package has no runtime dependency on `app/**` (the wire types are imported
  * type-only and erase at compile time).
+ *
+ * ── THE MUTATION PATH IS ESTATE-SCOPED (#4258 item 2) ──────────────────────
+ * `loadSnapshot()` used to be called with NO arguments here, which
+ * `lib/brain/graph/extractors/resource-graph.ts` explicitly forbids for a
+ * mutating caller: with no `estateId`, ANY non-empty `loom-estate-id` tag value
+ * counts as owned. That is fine for the estate-wide report the graph route
+ * serves and is not fine for a write — once #4255's backfill stamps tags,
+ * `guardOwnership` would have degraded to "carries some Loom estate tag", with
+ * only the write-scope guard bounding the blast radius. The estate id is now
+ * resolved here and REQUIRED: unresolvable means refuse, never run permissive.
  */
 
 import type { BrainSnapshot } from '@/app/api/admin/brain/_lib/wire';
@@ -43,11 +54,14 @@ import {
   guardEvidenceFresh,
   guardFindingPresent,
   guardOwnership,
+  guardScalableToZero,
   guardSnapshotComplete,
   guardWriteScope,
   resolvePerformSubject,
 } from './guards';
+import { resolveEstateId } from '@/lib/estate/pause-orchestrator';
 import { resolvePerformEntry } from './registry';
+import { refuseScaleToZero } from './scalability';
 import { recommendationStateStore, type RecommendationStateStore, type StateActor } from './state-store';
 import type {
   GuardRefusal,
@@ -116,6 +130,16 @@ export interface PerformDeps {
   readonly env?: NodeJS.ProcessEnv;
 }
 
+/** The env var the deploy sets to bind this console to one estate (#3922). */
+export const ESTATE_ID_ENV = 'LOOM_ESTATE_ID';
+
+/**
+ * The sentinel `resolveEstateId` returns when it cannot identify the estate.
+ * Kept as a named constant so the refusal below and the resolver cannot drift
+ * apart over a string literal.
+ */
+export const UNBOUND_ESTATE_ID = 'loom:unbound';
+
 export async function performRecommendation(
   req: PerformRequest,
   actor: StateActor,
@@ -159,6 +183,14 @@ export async function performRecommendation(
   const resolved = resolvePerformSubject(node);
   if ('refusal' in resolved) return { kind: 'refused', refusal: resolved.refusal };
   const { subject } = resolved;
+
+  // ── #4257: the deploy's own declaration, BEFORE any ARM read or write ────
+  const notScalable = guardScalableToZero(
+    subject,
+    executor,
+    refuseScaleToZero(subject.displayName),
+  );
+  if (notScalable) return { kind: 'refused', refusal: notScalable };
 
   const outOfScope = guardWriteScope(subject, readAcaConfig());
   if (outOfScope) return { kind: 'refused', refusal: outOfScope };

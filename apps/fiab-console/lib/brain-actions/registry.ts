@@ -26,6 +26,11 @@
  * follow-up on #4242.
  */
 
+import {
+  refuseScaleToZero,
+  scaleToZeroRefusalReason,
+  type ScaleToZeroRefusal,
+} from './scalability';
 import type { PerformRegistryEntry } from './types';
 
 /** Security detectors are matched on this prefix — the shape, not a list. */
@@ -169,5 +174,51 @@ export function resolvePerformEntry(detector: string): PerformRegistryEntry {
       'than guessing: an executor chosen by heuristic is exactly the wrong-inference ' +
       'blast radius PRP §1 decision 1 exists to prevent. Register the kind in ' +
       'lib/brain-actions/registry.ts with either a real executor or an honest reason.',
+  };
+}
+
+/**
+ * Resolve performability for a detector kind AND A NAMED SUBJECT (#4257).
+ *
+ * ── WHY PERFORMABILITY CANNOT BE A PROPERTY OF THE DETECTOR ALONE ──────────
+ * `unreachable-always-on` is a genuinely performable class — that is the whole
+ * point of the `scale-to-zero` executor. But it ranges over every Container App
+ * on the estate, and some of those the DEPLOY ITSELF declares as pinned
+ * singletons whose single replica holds state in process. `loom-risingwave` is
+ * one, and it was the highest-value finding on the live list: the class was
+ * performable, the subject was not, and nothing in this registry could tell
+ * those apart.
+ *
+ * So the class-level answer is kept (it is right about the class) and the
+ * SUBJECT downgrades it, with the deploy's own declaration as the reason. A
+ * resource that cannot scale to zero is never offered a cost action here — at
+ * most it is reported, which is what #4257 asked for.
+ *
+ * The declaration is derived, never listed: see `./scalability` for the source
+ * and why it cannot drift from the bicep.
+ */
+export function resolvePerformEntryForSubject(
+  detector: string,
+  subjectDisplayName: string,
+  refusal: ScaleToZeroRefusal | null = refuseScaleToZero(subjectDisplayName),
+): PerformRegistryEntry {
+  const entry = resolvePerformEntry(detector);
+  if (!entry.performable || entry.executor !== 'scale-to-zero') return entry;
+  // `null` covers "not declared at all" and "declared elastic with no declared
+  // consumer" — the two states where this check genuinely has nothing to say.
+  // It NO LONGER covers "no template in the image": since the review of #4261
+  // an unestablished source returns a `declaration-unavailable` REFUSAL, not
+  // null, because null is allow and "I could not read the declaration" is not
+  // permission. Downgrading on anything else would be a disabled feature
+  // wearing a guard's clothes.
+  if (refusal === null) return entry;
+  return {
+    detector: entry.detector,
+    performable: false,
+    notPerformableReason:
+      `${scaleToZeroRefusalReason(refusal)} This finding stays REPORTED — an always-on floor ` +
+      'the deploy declared on purpose is not waste, it is design — but no scale-to-zero action ' +
+      'is offered for it. If the floor is genuinely wrong, the fix is the bicep module that ' +
+      'declares it, not an out-of-band ARM write.',
   };
 }

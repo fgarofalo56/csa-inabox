@@ -896,36 +896,213 @@ jobs:
           # false mismatch that auto-reverts a good deploy. Same pattern as
           # gov-console-roll.yml's probe; the `if VAR=$(…)` shape is also
           # errexit-exempt.
+          #
+          # #4238 — A GATE THAT IS ONLY CORRECT BY COINCIDENCE.
+          #
+          # The decision below used to be made against the whole tsv ROW:
+          #
+          #     if [[ "$STATE" == *"Healthy"* && "$STATE" == *"Running"* ]]
+          #
+          # #4238 read that as fail-OPEN, on the grounds that *"Healthy"*
+          # matches "Unhealthy". MEASURED, that is NOT true: `[[ ]]` globbing
+          # is case-SENSITIVE (nocasematch is off on the runner), and
+          # "Unhealthy" contains "healthy" with a lowercase h, not "Healthy".
+          # `Unhealthy<TAB>Running` therefore FAILED the old predicate, and an
+          # unhealthy revision was never passed by it. The mutation receipt in
+          # the PR is the proof: restoring that exact line leaves the
+          # "Unhealthy + Running FAILS the gate" spec GREEN.
+          #
+          # What IS wrong with it is subtler and still worth removing. It
+          # matched two enums against ONE concatenated row, so each test could
+          # be satisfied by the OTHER field. It came out right only because no
+          # member of RevisionHealthState (Healthy | Unhealthy | None) and no
+          # member of RevisionRunningState (Running | Processing | Stopped |
+          # Degraded | Failed | Unknown, plus RunningAtMaxScale / ScaledToZero
+          # in practice) happens to contain the other's token. Both are
+          # ExpandableStringEnum — Microsoft explicitly reserves the right to
+          # add values — so a future runningState carrying "Healthy" would make
+          # this gate pass a revision the control plane called unhealthy, with
+          # nothing in CI to notice. A roll gate whose correctness rests on the
+          # capital H of an enum member is not one a reviewer can verify by
+          # reading, which is how it produced a P0-shaped bug report.
+          #
+          # So: read each field by ITS OWN NAME and compare it against ITS OWN
+          # enum.
+          #
+          # #4287 — AND THE FIRST ATTEMPT AT THAT ONLY MOVED THE COINCIDENCE.
+          # It read both enums out of ONE two-key multiselect and split the row
+          # POSITIONALLY, on the stated grounds that "az's tsv writer emits a
+          # dict's values ordered by KEY". MEASURED on az 2.88.0, that is not
+          # what it does — it emits them in WRITTEN order:
+          #
+          #     az version --query "{zzz:'FIRST', aaa:'SECOND'}" -o tsv
+          #         ->  FIRST<TAB>SECOND          (written order, NOT sorted)
+          #     az version --query "{running:'R', health:'H'}"   -o tsv
+          #         ->  R<TAB>H                   (again written order)
+          #
+          # The gate was therefore right for a reason its own comment got
+          # wrong, and a reviewer checking the stated reason would have been
+          # misled. A JMESPath LIST multiselect is not the fix either: az
+          # renders a top-level list as one row PER ELEMENT, so
+          # `--query "[properties.healthState, properties.runningState]" -o tsv`
+          # emits TWO LINES, not two fields. Measured:
+          #
+          #     az version --query "['azure-cli','azure-cli-core']" -o tsv
+          #         ->  azure-cli\nazure-cli-core
+          #
+          # Each field now gets its own scalar --query, exactly as the Gov
+          # sibling does (.github/workflows/gov-console-roll.yml, its
+          # `--query properties.healthState -o tsv` read). There is
+          # no row to split, no field order to depend on, and no way for one
+          # enum's value to be graded against the other's accepted set. Both
+          # reads must succeed for the poll to count as read; a poll that reads
+          # only one of the two establishes neither.
+          #
+          # THE ACCEPTED runningState SET IS PRESERVED EXACTLY, and this is the
+          # part a naive `[[ "$RUNNING" == "Running" ]]` gets wrong: the old
+          # *"Running"* glob also accepted RunningAtMaxScale, which is a real
+          # observed state on THIS estate — `iceberg-catalog` reached it about
+          # 60s into a cold start on 2026-08-07 (recorded in
+          # apps/fiab-console/lib/azure/uc-token-exchange.ts). Narrowing to the
+          # bare literal would fail a perfectly healthy revision that happened
+          # to be at max scale, and — because the rollback fires on
+          # `steps.health.outcome == 'failure'` with a non-unknown verdict —
+          # would AUTO-REVERT A GOOD DEPLOY. That is the #4231 D3 failure mode,
+          # and it is why the set is written out rather than tightened.
+          # ScaledToZero stays OUT, exactly as before: it did not contain
+          # "Running", and a revision with no replicas is not serving the
+          # validation this gate is clearing the way for.
+          #
+          # THE COMPARISON IS CASE-FOLDED, and that is the other half of #4287.
+          # The PR title said the old gate "was right only by the capital H in
+          # Healthy" — and then kept exactly that dependence, on the capital H
+          # of Healthy, the capital R of Running and the capital S of
+          # RunningAtMaxScale. Measured: `Healthy<TAB>RunningAtMaxscale`
+          # (lowercase s) PASSED the old whole-row glob and FAILED the exact
+          # literal, i.e. verdict=unhealthy, i.e. AUTO-REVERT OF A GOOD DEPLOY
+          # — the #4231 D3 shape this step exists to avoid. These are
+          # ExpandableStringEnums; the CASING of a serialized enum member is
+          # convention, not contract. Folding both sides keeps the comparison
+          # an EQUALITY (so "unhealthy" still cannot satisfy "healthy" — that
+          # is what killed the substring form) while no longer resting on a
+          # capital letter.
+          #
+          # A value that is not a recognised member of either enum is COUNTED,
+          # so the failure below can say the read may be about the QUERY rather
+          # than assert a revision state it never really established (R7).
+          # Unrecognised is reported as unrecognised — not as wrong — because
+          # an ExpandableStringEnum may legitimately gain a member.
+          #
+          # UNKNOWN vs UNHEALTHY is decided by whether ANY read SUCCEEDED, not
+          # by how many failed. #4287 measured the failure-count form live on
+          # main: 12 successful reads of `Unhealthy Running` interleaved with
+          # 12 refused reads produced verdict=unknown, which makes the rollback
+          # `if:` below false — so a genuinely bad deploy was NOT rolled back —
+          # while the error text claimed "a revision state this step never
+          # read" about a state it had read twelve times (an R7 lie in the
+          # message that fires only when the verdict is already wrong). The
+          # intent behind `unknown` is right and is preserved: an inconclusive
+          # read is not evidence a revision is bad, so a timeout must never
+          # auto-revert. But that intent is about the ABSENCE OF INFORMATION,
+          # which is `SUCCESS_READS -eq 0` — the shape the Gov sibling has had
+          # all along (gov-console-roll.yml, its `if [ "$READS" -eq 0 ]`).
           PROBE_ERR=$(mktemp)
           OK=false
-          VERDICT=unhealthy
+          SUCCESS_READS=0
           FAILED_READS=0
+          ODD_READS=0
           LAST_READ=""
+          LAST_ODD=""
+          MEASURED_UNHEALTHY=false
+          HEALTH=""
+          RUNNING=""
           for i in $(seq 1 30); do
-            if STATE=$(az containerapp revision show -n ${{ env.APP_NAME }} -g ${{ env.RG_NAME }} \
-              --revision "$REV" \
-              --query "{health:properties.healthState, running:properties.runningState}" -o tsv 2>"$PROBE_ERR"); then
-              STATE=$(printf '%s' "$STATE" | tr -d '\r')
-              LAST_READ="$STATE"
-              echo "[$i] $STATE"
-              if [[ "$STATE" == *"Healthy"* && "$STATE" == *"Running"* ]]; then OK=true; break; fi
+            READ_OK=true
+            if ! HEALTH=$(az containerapp revision show -n ${{ env.APP_NAME }} -g ${{ env.RG_NAME }} \
+              --revision "$REV" --query properties.healthState -o tsv 2>"$PROBE_ERR"); then
+              READ_OK=false
+            elif ! RUNNING=$(az containerapp revision show -n ${{ env.APP_NAME }} -g ${{ env.RG_NAME }} \
+              --revision "$REV" --query properties.runningState -o tsv 2>"$PROBE_ERR"); then
+              READ_OK=false
+            fi
+            if [[ "$READ_OK" == "true" ]]; then
+              HEALTH=$(printf '%s' "$HEALTH" | tr -d '\r\n')
+              RUNNING=$(printf '%s' "$RUNNING" | tr -d '\r\n')
+              # #4238 — A VALUE THIS STEP CANNOT INTERPRET IS NOT A READING OF
+              # THE REVISION'S STATE, and must never be counted as one.
+              #
+              # `az containerapp revision show --query properties.healthState
+              # -o tsv` EXITS 0 AND PRINTS ZERO BYTES when that path stops
+              # resolving. Before this, an empty value took the success branch,
+              # so an ARM property rename produced 30 "successful" reads of a
+              # revision that never looked Healthy -> verdict=unhealthy -> the
+              # rollback below AUTO-REVERTING EVERY HEALTHY DEPLOY. Measured
+              # against a stub that exits 0 with no output: 30/30 counted as
+              # successful reads, ODD_READS=60, verdict=unhealthy. ODD_READS
+              # noticed it and nothing acted on it.
+              #
+              # Counting only INTERPRETABLE polls routes that shape to
+              # `SUCCESS_READS -eq 0` -> unknown, and the rollback `if:` is
+              # false on unknown. R7: an uninterpretable value is a statement
+              # about the QUERY, never about the revision.
+              HEALTH_OK=false
+              RUNNING_OK=false
+              case "${HEALTH,,}" in healthy|unhealthy|none) HEALTH_OK=true ;; esac
+              case "${RUNNING,,}" in running|runningatmaxscale|processing|stopped|degraded|failed|unknown|scaledtozero|none) RUNNING_OK=true ;; esac
+              # EXCEPT: an interpretable healthState of `Unhealthy` is by itself
+              # a reading of the revision — the control plane said so. #4287
+              # forbids overwriting a MEASURED unhealthy with `unknown`, so it
+              # must survive an unrecognised runningState in the same poll.
+              if [[ "${HEALTH,,}" == "unhealthy" ]]; then MEASURED_UNHEALTHY=true; fi
+              if [[ "$HEALTH_OK" == "true" && "$RUNNING_OK" == "true" ]]; then
+                SUCCESS_READS=$((SUCCESS_READS+1))
+                LAST_READ="health='$HEALTH' running='$RUNNING'"
+                echo "[$i] $LAST_READ"
+                if [[ "${HEALTH,,}" == "healthy" ]] && [[ "${RUNNING,,}" == "running" || "${RUNNING,,}" == "runningatmaxscale" ]]; then OK=true; break; fi
+              else
+                ODD_READS=$((ODD_READS+1))
+                LAST_ODD="health='$HEALTH' running='$RUNNING'"
+                echo "[$i] UNINTERPRETABLE read (health='$HEALTH' running='$RUNNING') — NOT counted as a read of the revision's state (uninterpretable polls: $ODD_READS). An empty value here is what a --query that no longer resolves looks like."
+              fi
             else
               FAILED_READS=$((FAILED_READS+1))
-              echo "[$i] control-plane read FAILED (failed read $FAILED_READS/12; this is not a health verdict): $(head -c 300 "$PROBE_ERR" | tr -d '\r')"
-              if [[ $FAILED_READS -ge 12 ]]; then
-                VERDICT=unknown
-                break
-              fi
+              echo "[$i] control-plane read FAILED (failed reads: $FAILED_READS, successful reads so far: $SUCCESS_READS; this is not a health verdict): $(head -c 300 "$PROBE_ERR" | tr -d '\r')"
+              # Give up early ONLY while nothing has ever been read. Once even
+              # one poll has returned a state, the budget is spent polling —
+              # the revision may still go Healthy, and a failure count can no
+              # longer overwrite a measurement (#4287).
+              if [[ $SUCCESS_READS -eq 0 && $FAILED_READS -ge 12 ]]; then break; fi
             fi
             if [[ $i -lt 30 ]]; then sleep 10; fi
           done
-          if [[ "$OK" == "true" ]]; then VERDICT=healthy; fi
+          if [[ "$OK" == "true" ]]; then
+            VERDICT=healthy
+          elif [[ $SUCCESS_READS -eq 0 && "$MEASURED_UNHEALTHY" != "true" ]]; then
+            VERDICT=unknown
+          else
+            VERDICT=unhealthy
+          fi
           echo "verdict=$VERDICT" >> "$GITHUB_OUTPUT"
           if [[ "$OK" != "true" ]]; then
             if [[ "$VERDICT" == "unknown" ]]; then
-              echo "::error::Cannot say whether revision $REV is healthy: 12 control-plane reads failed (last read error: $(head -c 300 "$PROBE_ERR" | tr -d '\r')). That is an UNKNOWN, not a measured unhealthy — failing closed WITHOUT asserting a revision state this step never read (R7). The rollback below deliberately does not fire on an unknown: in run 33429557771 a rollback triggered by exactly this shape would have reverted a GOOD deploy (#4231 D3)."
+              if [[ $ODD_READS -gt 0 ]]; then
+                echo "::error::Cannot say whether revision $REV is healthy: NOT ONE poll returned a state this gate could interpret — $ODD_READS poll(s) returned an empty or unrecognised value (last: ${LAST_ODD:-<none>}) and $FAILED_READS read(s) failed outright. \`az containerapp revision show --query properties.healthState -o tsv\` EXITS 0 AND PRINTS NOTHING when that path stops resolving, so this is precisely what an ARM property rename looks like: a statement about the QUERY, not about the revision (R7). Check the two --query expressions above. Failing closed WITHOUT asserting a revision state, and the rollback below deliberately does NOT fire on an unknown — otherwise a rename would auto-revert every healthy deploy (#4238)."
+              else
+                echo "::error::Cannot say whether revision $REV is healthy: $FAILED_READS control-plane read(s) failed and NOT ONE succeeded, so no revision state was ever read (last read error: $(head -c 300 "$PROBE_ERR" | tr -d '\r')). That is an UNKNOWN, not a measured unhealthy — failing closed WITHOUT asserting a revision state this step never read (R7). The rollback below deliberately does not fire on an unknown: in run 33429557771 a rollback triggered by exactly this shape would have reverted a GOOD deploy (#4231 D3)."
+              fi
             else
-              echo "::error::Revision $REV never reached Healthy+Running after ~300s (last successfully read state: ${LAST_READ:-<none — no probe ever succeeded>}). The most common cause is an image the revision cannot pull. NOT proceeding to validation on an unhealthy roll."
+              SHAPE_NOTE=""
+              if [[ $ODD_READS -gt 0 ]]; then
+                SHAPE_NOTE=" CAVEAT: $ODD_READS poll(s) returned value(s) that were not recognised members of RevisionHealthState / RevisionRunningState (last such: ${LAST_ODD:-<none>}); those polls were NOT counted as reads of the revision's state. Both are ExpandableStringEnums so that may simply be a NEW member — but it is equally what a --query that no longer resolves to the property it names looks like, in which case this failure is about the QUERY and not about the revision (R7). Check the two --query expressions above before concluding the revision is unhealthy."
+              fi
+              # R7: with the #4287 carve-out the verdict can be a MEASURED
+              # unhealthy while no poll was FULLY interpretable, and "0
+              # interpretable reads" next to "unhealthy" would read as a
+              # contradiction. Say which read the verdict actually stands on.
+              if [[ "$MEASURED_UNHEALTHY" == "true" && $SUCCESS_READS -eq 0 ]]; then
+                SHAPE_NOTE=" NOTE: no poll was fully interpretable, but healthState WAS read as 'Unhealthy' (last such poll: ${LAST_ODD:-<none>}). #4287 forbids overwriting a measured unhealthy with 'unknown', so this verdict — and the rollback — stand on that healthState read alone.$SHAPE_NOTE"
+              fi
+              echo "::error::Revision $REV never reached Healthy+Running — i.e. healthState 'Healthy' with runningState 'Running' or 'RunningAtMaxScale' — after ~300s (last interpretable state: ${LAST_READ:-<none — no poll was ever interpretable>}; interpretable reads: $SUCCESS_READS, uninterpretable reads: $ODD_READS, failed reads: $FAILED_READS). The most common cause is an image the revision cannot pull. NOT proceeding to validation on an unhealthy roll.$SHAPE_NOTE"
             fi
             exit 1
           fi

@@ -284,3 +284,137 @@ describe('ranking — by derived saving, with unpriced findings kept honest', ()
     }
   });
 });
+
+// ---------------------------------------------------------------------------
+// #4257 item 2 — the by-design branch has a PRODUCTION caller
+// ---------------------------------------------------------------------------
+
+/**
+ * The review of #4261 measured that `nonScalableSubject` existed only in the
+ * detector and its own test, and that `unreachable-always-on` therefore still
+ * gave `loom-risingwave` `severity: 'high'` and a live cost figure on the
+ * operator's savings list — #4257 item 2 unmet, described as delivered.
+ *
+ * These arms are keyed to the DEFAULT context: no `nonScalableSubject` is
+ * supplied, exactly as `snapshot.ts` builds it in production. Delete the
+ * `?? declaredAlwaysOnReason` default in `detect.ts` and the first arm goes RED,
+ * because the subject falls back to the costed `severity: 'high'` shape.
+ */
+describe('a declared non-scalable subject is never proposed as a saving (#4257 item 2)', () => {
+  /** `loom-risingwave` — always-on, wired by nothing in this fixture. */
+  function rowsWithRisingwave() {
+    return [
+      ...estateRows(),
+      containerAppRow({ name: 'loom-risingwave', minReplicas: 1, maxReplicas: 1 }),
+    ];
+  }
+  const RISINGWAVE_ID = azureResourceNodeId(appId(SUB_A, 'loom-risingwave')) as string;
+
+  function findingFor(ctx: DetectContext) {
+    const run = unreachableAlwaysOn(ctx);
+    return run.result.findings.find((f) => f.subjects.includes(RISINGWAVE_ID as never));
+  }
+
+  it('THE CONTROL: without the guard the fixture DOES produce a costed high finding', () => {
+    // Proves the arm below is not vacuous — this subject really is on the
+    // unreachable-always-on list and really would be priced.
+    const base = ctxFromRows(rowsWithRisingwave());
+    const unguarded = findingFor({ ...base, nonScalableSubject: () => null });
+    expect(unguarded, 'the fixture must actually reach this subject').toBeDefined();
+    expect(unguarded!.severity).toBe('high');
+    expect(unguarded!.cost).toBeDefined();
+  });
+
+  it('THE WIRING: the DEFAULT context downgrades it — no cost figure, severity info', () => {
+    // No `nonScalableSubject` — this is the production shape `snapshot.ts` uses.
+    const guarded = findingFor(ctxFromRows(rowsWithRisingwave()));
+    expect(guarded, 'the finding is still REPORTED, just not priced').toBeDefined();
+    expect(guarded!.severity).toBe('info');
+    // A finding with no cost figure cannot rank as a saving. That is the
+    // observable outcome #4257 item 2 asks for.
+    expect(guarded!.cost).toBeUndefined();
+    expect(guarded!.title).toMatch(/BY DESIGN/);
+    expect(guarded!.remediation.summary).toMatch(/NO ACTION/);
+  });
+
+  it('the omitted cost is RECORDED as a skip, never silently dropped', () => {
+    const run = unreachableAlwaysOn(ctxFromRows(rowsWithRisingwave()));
+    const costSkip = run.result.skipped.find((s) => s.subject.includes('(cost)'));
+    expect(costSkip, 'an unpriced subject must say why on the record').toBeDefined();
+    expect(costSkip!.reason).toMatch(/ON PURPOSE/);
+  });
+
+  it('THE CONTROL: a performable subject is untouched — the guard is not universal', () => {
+    // `loom-capacity-broker` is the founding acceptance case and is MEASURED
+    // performable (its only wire is an empty value). If this went info/uncosted
+    // too, the guard would be a disabled feature rather than a safety check.
+    const broker = unreachableAlwaysOn(ctxFromRows()).result.findings.find((f) =>
+      f.subjects.includes(BROKER_ID as never),
+    );
+    expect(broker).toBeDefined();
+    expect(broker!.severity).toBe('high');
+  });
+
+  // ── B2 (round-2 review of #4261) — the TITLE must not contradict the BODY ──
+  //
+  // `declaredAlwaysOnReason` returns non-null for three different claims. The
+  // finding used to be worded as if only `pinned-singleton` could reach it, so
+  // 13 of 19 real apps got a title asserting "nothing wires to it" over a body
+  // stating that the deploy wires a consumer to them.
+
+  const CONSUMER_REASON =
+    "'loom-risingwave' must NOT be scaled to zero: the DEPLOY ITSELF wires 2 consumer(s) to it " +
+    "(bicep module(s) 'adminplane', matched by module-reference), so the finding's central " +
+    'claim — that NOTHING in the deployment points at this service — is contradicted.';
+
+  it('B2 — a DECLARED-CONSUMER subject is not titled "nothing wires to it"', () => {
+    const base = ctxFromRows(rowsWithRisingwave());
+    const f = findingFor({
+      ...base,
+      nonScalableSubject: () => ({ kind: 'declared-consumer', reason: CONSUMER_REASON }),
+    })!;
+    expect(f).toBeDefined();
+    expect(f.severity).toBe('info');
+    expect(f.cost).toBeUndefined();
+    // The exact self-contradiction the review measured.
+    expect(f.title, 'the title must not deny the wire its own body reports').not.toMatch(
+      /nothing wires to it/i,
+    );
+    expect(f.title, 'this subject is not established as always-on BY DESIGN').not.toMatch(
+      /BY DESIGN/,
+    );
+    // …and it must say what WAS established, including the count.
+    expect(f.title).toMatch(/DEPLOY wires 2 consumer\(s\)/);
+    expect(f.summary).not.toMatch(/its always-on floor is DECLARED by the deploy/);
+    expect(f.evidence.notes.join(' ')).toMatch(/AVAILABILITY refusal/);
+  });
+
+  it('B2 — a SELF subject says it is this console, not that it is by design', () => {
+    const base = ctxFromRows(rowsWithRisingwave());
+    const f = findingFor({
+      ...base,
+      nonScalableSubject: () => ({
+        kind: 'self',
+        reason: "'loom-console' is THIS CONSOLE. Scaling it to zero removes the surface.",
+      }),
+    })!;
+    expect(f.title).toMatch(/THIS CONSOLE/);
+    expect(f.title).not.toMatch(/BY DESIGN/);
+    expect(f.evidence.notes.join(' ')).toMatch(/this is the console itself/i);
+  });
+
+  it('B2 — THE CONTROL: a PINNED-SINGLETON subject keeps the by-design wording', () => {
+    // The arm that would otherwise let "rewrite every title" pass the two above.
+    const base = ctxFromRows(rowsWithRisingwave());
+    const f = findingFor({
+      ...base,
+      nonScalableSubject: () => ({
+        kind: 'pinned-singleton',
+        reason: "the deploy PINS 'loom-risingwave' to exactly 1 replica(s).",
+      }),
+    })!;
+    expect(f.title).toMatch(/is always-on BY DESIGN and nothing wires to it/);
+    expect(f.summary).toMatch(/its always-on floor is DECLARED by the deploy/);
+    expect(f.remediation.summary).toMatch(/always-on by design/);
+  });
+});

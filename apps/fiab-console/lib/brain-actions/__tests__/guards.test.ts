@@ -16,20 +16,24 @@ import {
   guardEvidenceFresh,
   guardFindingPresent,
   guardOwnership,
+  guardScalableToZero,
   guardSnapshotComplete,
   guardWriteScope,
   resolvePerformSubject,
 } from '../guards';
+import type { ScalabilityDeclaration, ScaleToZeroRefusal } from '../scalability';
 import type { PerformSubject } from '../types';
 import {
   APP_NAME,
   brainSnapshot,
   collectionReport,
+  danglingConfiguredEdge,
   detectorRun,
   ESTATE_ID,
   FINDING_ID,
   NODE_ID,
   population,
+  resolvedConfiguredEdge,
   RG,
   SUB,
   wireEdge,
@@ -208,17 +212,131 @@ describe('guardDetectorNotVacuous — P3 at the moment of execution', () => {
     expect(refusal!.guard).toBe('population-not-blind');
   });
 
-  it("refuses the vacuous-truth case: zero 'configured' edges in scope", () => {
-    const refusal = guardDetectorNotVacuous(
-      brainSnapshot({ edges: [] }),
-      wireFinding({
-        population: population({
-          byProvenance: { declared: 0, configured: 0, imports: 0, observed: 0, owns: 2 },
+  it("refuses the vacuous-truth case: zero RESOLVED 'configured' edges in the graph", () => {
+    const refusal = guardDetectorNotVacuous(brainSnapshot({ edges: [] }), wireFinding());
+    expect(refusal).not.toBeNull();
+    expect(refusal!.guard).toBe('population-not-blind');
+    expect(refusal!.reason).toContain('vacuously true');
+  });
+
+  it('#4258 item 2 — DANGLING configured edges do NOT satisfy the vacuity guard', () => {
+    // THE BUG ARM. The guard used to read `population.byProvenance.configured`,
+    // and `graph.ts`'s `countByProvenance` folds DANGLING edges into that number.
+    // So the degenerate state the guard exists to catch — a graph whose only
+    // `configured` edges are broken ones, which makes EVERY app look unreachable
+    // — reported three configured edges and sailed straight through.
+    //
+    // Reverting the guard to the population read turns THIS spec red while
+    // leaving every other spec in the file green.
+    const danglingOnly = brainSnapshot({
+      edges: [danglingConfiguredEdge(), danglingConfiguredEdge({ id: 'edge:configured:2' })],
+      // The summary count still says 2, exactly as the real one would.
+      findings: [
+        wireFinding({
+          population: population({
+            byProvenance: { declared: 0, configured: 2, imports: 0, observed: 0, owns: 2 },
+          }),
         }),
-      }),
+      ],
+    });
+    const refusal = guardDetectorNotVacuous(danglingOnly, danglingOnly.findings[0]!);
+    expect(refusal).not.toBeNull();
+    expect(refusal!.reason).toContain('ZERO RESOLVED');
+    // The receipt names the dangling ones rather than hiding them (R7).
+    expect(refusal!.reason).toContain('DANGLING');
+  });
+
+  it('THE CONTROL: one RESOLVED configured edge is enough to pass', () => {
+    // One field away from the arm above — a guard that refused both would be as
+    // useless as the one that passed both.
+    expect(
+      guardDetectorNotVacuous(
+        brainSnapshot({ edges: [resolvedConfiguredEdge(), danglingConfiguredEdge()] }),
+        wireFinding(),
+      ),
+    ).toBeNull();
+  });
+});
+
+describe('guardScalableToZero — the #4257 statefulness refusal', () => {
+  function declaration(overrides: Partial<ScalabilityDeclaration> = {}): ScalabilityDeclaration {
+    return {
+      appName: 'loom-risingwave',
+      module: 'loom-risingwave',
+      scalableToZero: false,
+      declared: { minReplicas: 1, maxReplicas: 1, hasScaleRules: false },
+      declaredConsumers: [],
+      reason: "the deploy PINS 'loom-risingwave' to exactly 1 replica(s).",
+      declaredStatement:
+        'CANNOT scale to zero: a stopped replica loses every materialized view and its progress',
+      ...overrides,
+    };
+  }
+
+  const pinned: ScaleToZeroRefusal = { kind: 'pinned-singleton', declaration: declaration() };
+
+  /** `loom-unity` on the Postgres path: ELASTIC, and wired by the deploy. */
+  const hotPath: ScaleToZeroRefusal = {
+    kind: 'declared-consumer',
+    declaration: declaration({
+      appName: 'loom-unity',
+      module: 'loom-unity',
+      scalableToZero: true,
+      declared: { minReplicas: 1, maxReplicas: 3, hasScaleRules: true },
+      declaredConsumers: [{ consumerModule: 'adminplane', via: 'fqdn-literal' }],
+      declaredStatement: undefined,
+    }),
+  };
+
+  it('REFUSES scale-to-zero on a declared non-scalable subject (DURABILITY)', () => {
+    const refusal = guardScalableToZero(
+      subject({ displayName: 'loom-risingwave' }),
+      'scale-to-zero',
+      pinned,
     );
     expect(refusal).not.toBeNull();
-    expect(refusal!.reason).toContain('vacuously true');
+    expect(refusal!.guard).toBe('scalable-to-zero');
+    expect(refusal!.reason).toContain('CANNOT be scaled to zero');
+    // The module's own sentence reaches the operator.
+    expect(refusal!.reason).toMatch(/materialized view/i);
+    expect(refusal!.reason).toContain('unrecoverable loss');
+    expect(refusal!.reason).toContain('Nothing was changed in Azure');
+  });
+
+  it('REFUSES an ELASTIC subject the deploy wires consumers to (AVAILABILITY)', () => {
+    // THE #4261 REVIEW HOLE. The shape predicate clears `loom-unity` on the
+    // Postgres path (min 1 / max 3 / with rules), so this refusal cannot come
+    // from replica shape — it comes from the deploy declaring a consumer.
+    const refusal = guardScalableToZero(
+      subject({ displayName: 'loom-unity' }),
+      'scale-to-zero',
+      hotPath,
+    );
+    expect(refusal).not.toBeNull();
+    expect(refusal!.guard).toBe('scalable-to-zero');
+    expect(refusal!.reason).toContain('the DEPLOY ITSELF wires');
+    expect(refusal!.reason).toContain('AVAILABILITY refusal');
+  });
+
+  it('the two claims are DISTINCT — availability never says "would lose data"', () => {
+    // R7 in the other direction: telling an operator their federated catalog
+    // would lose data, when it would only go offline, is a false claim.
+    const durability = guardScalableToZero(subject(), 'scale-to-zero', pinned)!.reason;
+    const availability = guardScalableToZero(subject(), 'scale-to-zero', hotPath)!.reason;
+    expect(durability).toMatch(/unrecoverable loss/);
+    expect(availability).not.toMatch(/unrecoverable/);
+    expect(availability).toContain('no data is lost');
+    expect(availability).toContain('cold-starts');
+    expect(durability).not.toContain('AVAILABILITY refusal');
+  });
+
+  it('THE CONTROL: no refusal verdict passes — the feature still works', () => {
+    expect(guardScalableToZero(subject(), 'scale-to-zero', null)).toBeNull();
+  });
+
+  it('makes exactly ONE claim: delete-resource is not gated by it', () => {
+    expect(guardScalableToZero(subject(), 'delete-resource', pinned)).toBeNull();
+    expect(guardScalableToZero(subject(), 'delete-resource', hotPath)).toBeNull();
   });
 
   // ── #4258 item 3 — THE BYPASS THIS GUARD USED TO HAVE ───────────────────
@@ -249,12 +367,20 @@ describe('guardDetectorNotVacuous — P3 at the moment of execution', () => {
     expect(refusal).not.toBeNull();
     expect(refusal!.guard).toBe('population-not-blind');
     expect(refusal!.reason).toContain('ZERO RESOLVED');
-    expect(refusal!.reason).toContain('DANGLES');
+    // Wording reconciled at the #4267 x main merge: both branches fixed #4258's
+    // vacuity read independently and landed on the same behaviour with different
+    // prose. main's message — which is the one that shipped — says the edges
+    // "exist and are DANGLING"; this branch's said "every one of them DANGLES".
+    // The assertion still measures the same thing: that the refusal DISCLOSES
+    // the dangling edges rather than reporting a bare zero.
+    expect(refusal!.reason).toContain('DANGLING');
   });
 
   it('POSITIVE CONTROL: a graph with real resolved configured edges passes', () => {
     // A guard that refuses everything is as useless as one that refuses
-    // nothing. The default fixture carries three RESOLVED configured edges.
+    // nothing. The default fixture carries a RESOLVED configured edge alongside
+    // a dangling one — the merge kept main's two-helper default, so the count is
+    // one resolved, not the three this branch's own fixture used to supply.
     expect(guardDetectorNotVacuous(brainSnapshot(), wireFinding())).toBeNull();
   });
 });

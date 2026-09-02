@@ -141,7 +141,12 @@ describe('extractFromContainerAppEnv', () => {
     expect(r.skipped[0]!.reason).toMatch(/does not name a target/);
   });
 
-  it('onlyNames narrows the scan, and the population says so', () => {
+  it('a name list narrows the scan, and the population reports BOTH sides of it', () => {
+    // #4258 changed what this asserts, on purpose. The old scope string said
+    // "1 env entr(ies) examined (name-filtered)" and never mentioned the entry
+    // it had dropped — the filter's effect on recall was invisible in the very
+    // field that exists to report the population. It now states what was SEEN,
+    // what was admitted and by which path, and what was declined and why.
     const r = extractFromContainerAppEnv([
       {
         appResourceId: CONSOLE_ARM,
@@ -153,7 +158,11 @@ describe('extractFromContainerAppEnv', () => {
       },
     ]);
     expect(r.edges).toHaveLength(1);
-    expect(r.population.scope).toMatch(/1 env entr\(ies\) examined \(name-filtered\)/);
+    expect(r.population.scope).toMatch(/2 env entr\(ies\) SEEN/);
+    expect(r.population.scope).toMatch(/1 considered \(1 by name, 0 by VALUE/);
+    expect(r.population.scope).toMatch(/1 declined — value named nothing discovered/);
+    // And the blind call shape — a name list with no estateTargets — is named.
+    expect(r.population.scope).toMatch(/NO estateTargets/);
   });
 
   it('EMPTY input is BLIND', () => {
