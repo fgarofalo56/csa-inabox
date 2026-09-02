@@ -50,7 +50,7 @@ import {
 } from '@/lib/api/respond';
 import { emitAuditEvent } from '@/lib/admin/audit-stream';
 import { performRecommendation, type PerformOutcome } from '@/lib/brain-actions/perform';
-import { performRegistryEntries } from '@/lib/brain-actions/registry';
+import { performRegistryEntries, resolvePerformEntryForSubject } from '@/lib/brain-actions/registry';
 import {
   BrainActionsNotConfiguredError,
   recommendationStateStore,
@@ -242,14 +242,28 @@ export const POST = withTenantAdmin(async (req: NextRequest, { session }) => {
  * record is `open`) plus the registry's performability map, so the UI can
  * render Perform actions and honest not-performable reasons from server truth
  * rather than guessing.
+ *
+ * ── SUBJECT-LEVEL PERFORMABILITY (review of #4261, finding 2) ──────────────
+ * `performability` is CLASS-level: `unreachable-always-on` is a performable
+ * class, which is true of the class and wrong about `loom-risingwave`. Pass
+ * `?subject=<displayName>` and the answer is resolved for THAT subject, so the
+ * UI can disable the button with the deploy's own reason instead of enabling it
+ * and collecting a 409. Without this the subject resolver had no production
+ * caller at all and the outcome the PR body claimed was observable only in a
+ * test.
  */
 export const GET = withTenantAdmin(async (req: NextRequest) => {
   try {
     const findingId = req.nextUrl.searchParams.get('findingId')?.trim() || undefined;
+    const subject = req.nextUrl.searchParams.get('subject')?.trim() || undefined;
+    const detector = req.nextUrl.searchParams.get('detector')?.trim() || undefined;
     const states = await recommendationStateStore().read(findingId);
     return apiOk({
       states,
       performability: performRegistryEntries(),
+      ...(subject && detector
+        ? { subjectPerformability: resolvePerformEntryForSubject(detector, subject) }
+        : {}),
     });
   } catch (e) {
     if (e instanceof BrainActionsNotConfiguredError) return apiHonestError(e, 503);

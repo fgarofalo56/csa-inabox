@@ -27,9 +27,37 @@ const useStyles = makeStyles({
     ':hover': { backgroundColor: 'rgba(255,255,255,0.15)' },
     ':focus-within': { backgroundColor: 'rgba(255,255,255,0.18)', ...shorthands.borderColor('rgba(255,255,255,0.4)') },
   },
+  /**
+   * #4280 — the Ctrl-K chip painted over the placeholder.
+   *
+   * MEASURED in `@fluentui/react-input@9.8.2`: the `contentAfter` wrapper is
+   * `.r1572tok{…display:flex}` with no `flex-shrink`, so both it and the chip
+   * `<span>` inside it were ordinary SHRINKABLE flex items of the 540px-max,
+   * 32px-tall root. Squeezed by an over-long placeholder, `Ctrl K` broke to two
+   * lines and bulged out of the root, landing on top of the placeholder text on
+   * first paint with no interaction, in both themes.
+   *
+   * `flexShrink: 0` + `whiteSpace: 'nowrap'` is the operative fix: the chip
+   * keeps one line and its natural width, and the input yields instead.
+   *
+   * NOT the fix, recorded so it is not re-added: `minWidth: 0` on the `input`
+   * slot. Fluent's own reset class already carries it —
+   * `useInputStyles.styles.js:175` declares `.r12stul0{…flex-grow:1;min-width:0;…}`
+   * and `:245` merges it into `state.input.className` unconditionally. Setting
+   * it again from the caller is inert.
+   *
+   * CONTRIBUTING, and named because an unnamed width nudge is how this defect
+   * class comes back: the placeholder below is 14 characters shorter than it
+   * was (the `(press / )` tail moved into the `aria-label`). That is a real
+   * width change. It reduces the pressure that produced the squeeze — it does
+   * NOT replace `flexShrink: 0`, which is what makes the chip safe at any
+   * width. `topbar-search-chip.test.tsx` pins the property, not the string.
+   */
   shortcut: {
-    fontSize: '11px',
-    padding: '2px 6px',
+    flexShrink: 0,
+    whiteSpace: 'nowrap',
+    fontSize: tokens.fontSizeBase100,
+    padding: `${tokens.spacingVerticalXXS} ${tokens.spacingHorizontalXS}`,
     borderRadius: tokens.borderRadiusMedium,
     border: '1px solid rgba(255,255,255,0.25)',
     color: 'rgba(255,255,255,0.7)',
@@ -69,13 +97,17 @@ export function TopbarSearch() {
         ref={ref}
         className={s.input}
         contentBefore={<Search20Regular style={{ color: 'rgba(255,255,255,0.85)' }} />}
-        contentAfter={<span className={s.shortcut}>Ctrl K</span>}
-        placeholder="Search items, settings, item types…   (press / )"
+        contentAfter={
+          <span className={s.shortcut} data-testid="topbar-search-shortcut">
+            Ctrl K
+          </span>
+        }
+        placeholder="Search items, settings, item types…"
         value={val}
         onChange={(_, d) => setVal(d.value)}
         onClick={open}
         onKeyDown={(e) => { if (e.key === 'Enter') open(); }}
-        aria-label="Search CSA Loom"
+        aria-label="Search CSA Loom (press / to focus, Ctrl+K for the command palette)"
       />
     </div>
   );

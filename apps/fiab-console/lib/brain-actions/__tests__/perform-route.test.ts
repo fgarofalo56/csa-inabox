@@ -17,7 +17,7 @@
  * everything fails THAT one).
  */
 
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { NextResponse } from 'next/server';
 import {
   APP_NAME,
@@ -29,6 +29,7 @@ import {
   RG,
   SUB,
   wireFinding,
+  wireNode,
 } from './fixtures';
 
 // ── the two authz leaves, and ONLY these ───────────────────────────────────
@@ -185,6 +186,7 @@ import { GET, POST } from '@/app/api/admin/brain/perform/route';
 import { ResourceGraphCollectionError } from '@/app/api/admin/brain/_lib/arg-collect';
 import { getSession } from '@/lib/auth/session';
 import { requireTenantAdmin } from '@/lib/auth/feature-gate';
+import { __resetScalabilityCache } from '@/lib/brain-actions/scalability';
 
 const ADMIN = {
   claims: { oid: 'oid-1', upn: 'admin@example.test', tid: 'tid-1', name: 'Admin' },
@@ -220,15 +222,25 @@ const APP_INFO = {
   provisioningState: 'Succeeded',
 };
 
+const ESTATE_ID = 'loom-estate-under-test';
+
 beforeEach(() => {
   vi.clearAllMocks();
   mem.reset();
+  __resetScalabilityCache();
+  // #4258 item 2 — the mutation path REFUSES an unscoped rebuild, so the
+  // deploy-set estate id is part of the healthy fixture now.
+  process.env.LOOM_ESTATE_ID = ESTATE_ID;
   (getSession as unknown as ReturnType<typeof vi.fn>).mockReturnValue(ADMIN);
   (requireTenantAdmin as unknown as ReturnType<typeof vi.fn>).mockReturnValue(null);
   snap.loadSnapshot.mockResolvedValue(brainSnapshot());
   arm.readAcaConfig.mockReturnValue({ subscriptionId: SUB, resourceGroup: RG });
   arm.getContainerApp.mockResolvedValue({ ...APP_INFO });
   arm.updateContainerAppScale.mockResolvedValue({ ...APP_INFO, minReplicas: 0 });
+});
+
+afterEach(() => {
+  delete process.env.LOOM_ESTATE_ID;
 });
 
 async function stageThenConfirm(): Promise<Response> {
@@ -365,6 +377,105 @@ describe('guard refusals — server-side, re-derived, ARM never touched', () => 
     const res = await POST(postReq(BODY), { params: Promise.resolve({}) } as never);
     expect(res.status).toBe(409);
     expect(((await res.json()) as { guard: string }).guard).toBe('write-scope');
+    expect(arm.updateContainerAppScale).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// #4257 — the statefulness guard, WIRED
+// ---------------------------------------------------------------------------
+
+/** The live finding, retargeted at the app the deploy declares non-scalable. */
+const RISINGWAVE_ID =
+  `azure:/subscriptions/${SUB}/resourcegroups/${RG}` +
+  '/providers/microsoft.app/containerapps/loom-risingwave';
+
+function risingwaveSnapshot() {
+  return brainSnapshot({
+    nodes: [
+      wireNode({
+        id: RISINGWAVE_ID,
+        displayName: 'loom-risingwave',
+        scale: { minReplicas: 1, maxReplicas: 1, cpu: 2, memory: '4Gi', source: 'resource-graph' },
+      }),
+    ],
+    findings: [
+      wireFinding({
+        id: `unreachable-always-on:${RISINGWAVE_ID}`,
+        subjects: [RISINGWAVE_ID],
+      }),
+    ],
+  });
+}
+
+describe('#4257 — scale-to-zero REFUSES a service the deploy declares non-scalable', () => {
+  it('THE HAZARD: loom-risingwave is refused, and ARM is never even READ', async () => {
+    // This is the request that, before this guard, would have staged and then —
+    // on the operator's re-affirm — destroyed every materialized view in the
+    // streaming tier. Deleting the `guardScalableToZero` call from perform.ts
+    // turns this spec RED — but on the GUARD NAME, not on a 200: the request
+    // falls through to the next refusal in the chain (`evidence-fresh`) rather
+    // than reaching the staging arm. The measured mutation receipt shows
+    // exactly that, and the earlier comment here overstated what it proves.
+    snap.loadSnapshot.mockResolvedValue(risingwaveSnapshot());
+    const res = await POST(
+      postReq({
+        findingId: `unreachable-always-on:${RISINGWAVE_ID}`,
+        detector: 'unreachable-always-on',
+        subjectNodeId: RISINGWAVE_ID,
+      }),
+      { params: Promise.resolve({}) } as never,
+    );
+    expect(res.status).toBe(409);
+    const json = (await res.json()) as { guard: string; error: string };
+    expect(json.guard).toBe('scalable-to-zero');
+    expect(json.error).toContain('CANNOT be scaled to zero');
+    expect(json.error).toMatch(/materialized view/i);
+    // Nothing was staged, nothing was read from ARM, nothing was written.
+    expect(mem.calls.stage).toHaveLength(0);
+    expect(arm.getContainerApp).not.toHaveBeenCalled();
+    expect(arm.updateContainerAppScale).not.toHaveBeenCalled();
+    // Audited as a denial with mutatedAzure false — truthfully.
+    const ev = audit.emitAuditEvent.mock.calls.at(-1)![0] as {
+      outcome: string;
+      detail: { guard: string; mutatedAzure: unknown };
+    };
+    expect(ev.outcome).toBe('denied');
+    expect(ev.detail.guard).toBe('scalable-to-zero');
+    expect(ev.detail.mutatedAzure).toBe(false);
+  });
+
+  it('THE CONTROL: the elastic default subject still stages — the feature works', async () => {
+    // One subject away from the arm above. A guard that refused everything
+    // would pass that spec and have silently disabled scale-to-zero.
+    const res = await POST(postReq(BODY), { params: Promise.resolve({}) } as never);
+    expect(res.status).toBe(200);
+    expect(((await res.json()) as { staged: boolean }).staged).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// #4258 item 2 — the mutation path is estate-scoped
+// ---------------------------------------------------------------------------
+
+describe('#4258 item 2 — the mutating rebuild must be scoped to ONE estate', () => {
+  it('the snapshot is rebuilt WITH the estate id, not without one', async () => {
+    await POST(postReq(BODY), { params: Promise.resolve({}) } as never);
+    expect(snap.loadSnapshot).toHaveBeenCalledWith({ estateId: ESTATE_ID });
+  });
+
+  it('REFUSES when LOOM_ESTATE_ID is unset — never a permissive ownership read', async () => {
+    // Without an estate id, `resource-graph.ts` resolves ownership as "carries
+    // ANY non-empty loom-estate-id", which cannot tell two Loom estates apart.
+    // On the one path that WRITES, that is refused rather than degraded.
+    delete process.env.LOOM_ESTATE_ID;
+    const res = await POST(postReq(BODY), { params: Promise.resolve({}) } as never);
+    expect(res.status).toBe(409);
+    const json = (await res.json()) as { guard: string; error: string };
+    expect(json.guard).toBe('estate-scoped');
+    expect(json.error).toContain('LOOM_ESTATE_ID');
+    // The refusal happens BEFORE the estate is even read.
+    expect(snap.loadSnapshot).not.toHaveBeenCalled();
     expect(arm.updateContainerAppScale).not.toHaveBeenCalled();
   });
 });

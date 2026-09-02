@@ -13,6 +13,7 @@ import {
   BROKER_ARM,
   BROKER_ID,
   DIRECTLAKE_ID,
+  ENV_DOMAIN,
   RG,
   SUB,
   appRow,
@@ -137,6 +138,105 @@ describe('unreachable-service — cost and ownership are stated, never assumed',
     const result = unreachableService(graph);
     const f = result.findings.find((x) => x.subjects[0] === BROKER_ID)!;
     expect(f.remediation.proposedChange).toMatch(/carries the `loom-estate-id` tag/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// #4257 — ALWAYS-ON BY DESIGN is reported, never proposed as a saving
+// ---------------------------------------------------------------------------
+
+describe('unreachable-service — a service the DEPLOY declares non-scalable', () => {
+  const DECLARED =
+    "the deploy PINS 'loom-capacity-broker' to exactly 2 replica(s) (minReplicas 2 = " +
+    'maxReplicas 2, no scale rules). CANNOT scale to zero: a stopped replica loses every ' +
+    'materialized view and its progress.';
+
+  /** Names ONLY the broker, so the second finding below is the control. */
+  const nonScalableSubject = (n: { id: string }) => (n.id === BROKER_ID ? DECLARED : null);
+
+  /**
+   * The base fixture produces exactly ONE finding, and a one-finding population
+   * cannot tell "the option changed the named subject" from "the option changed
+   * everything". A second always-on, unwired app is added so both readings are
+   * distinguishable.
+   */
+  const OTHER_ARM = `/subscriptions/${SUB}/resourceGroups/${RG}/providers/Microsoft.App/containerApps/loom-elastic`;
+  const buildTwoFindingGraph = () =>
+    buildFixtureGraph({
+      extraRows: [
+        appRow({
+          armId: OTHER_ARM,
+          name: 'loom-elastic',
+          minReplicas: 1,
+          cpu: 0.5,
+          memory: '1Gi',
+          fqdn: `loom-elastic.internal.${ENV_DOMAIN}`,
+        }),
+      ],
+    });
+
+  const baseline = unreachableService(buildTwoFindingGraph());
+  const guarded = unreachableService(buildTwoFindingGraph(), { nonScalableSubject });
+
+  it('POPULATION: the same subject IS a finding in both runs — nothing is hidden', () => {
+    // The always-on floor and the missing wire are both real. Suppressing the
+    // finding would be its own dishonesty; what changes is what is PROPOSED.
+    expect(baseline.findings.map((f) => f.subjects[0])).toContain(BROKER_ID);
+    expect(guarded.findings.map((f) => f.subjects[0])).toContain(BROKER_ID);
+    expect(guarded.findings.length).toBe(baseline.findings.length);
+  });
+
+  it('THE FIX: the costed HIGH-severity waste finding becomes an INFO observation', () => {
+    const before = baseline.findings.find((f) => f.subjects[0] === BROKER_ID)!;
+    const after = guarded.findings.find((f) => f.subjects[0] === BROKER_ID)!;
+
+    // Baseline: a priced saving, ranked by dollars, at the top of the list.
+    expect(before.cost).toBeDefined();
+    expect(before.severity).not.toBe('info');
+    expect(before.remediation.summary).toMatch(/Wire or retire/);
+
+    // Guarded: no cost figure at all, so it cannot be ranked as a saving, and
+    // the remediation says NO ACTION rather than "scale it to zero".
+    expect(after.cost).toBeUndefined();
+    expect(after.severity).toBe('info');
+    expect(after.title).toMatch(/BY DESIGN/);
+    expect(after.remediation.summary).toMatch(/NO ACTION/);
+    expect(after.remediation.proposedChange).toMatch(/Do NOT scale it to zero/);
+    // The deploy's own reason travels with it.
+    expect(after.summary).toContain('materialized view');
+  });
+
+  it('the dropped cost is RECORDED as a skip, not silently omitted', () => {
+    // The cross-detector contract requires a `(cost)` skip for any priceable
+    // subject with no figure. An omission with no record is indistinguishable
+    // from the computed-and-dropped bug that contract exists to catch.
+    const costSkip = guarded.skipped.find(
+      (s) => s.subject.includes(BROKER_ID) && s.subject.includes('(cost)'),
+    );
+    expect(costSkip).toBeDefined();
+    expect(costSkip!.reason).toMatch(/ON PURPOSE/);
+    expect(costSkip!.reason).toContain(DECLARED);
+  });
+
+  it('THE CONTROL: an undeclared subject is untouched by the option', () => {
+    // A predicate that named everything would satisfy the specs above while
+    // having disabled the detector, so the fixture must carry a SECOND finding
+    // the predicate does not name — and it does.
+    const otherBaseline = baseline.findings.find((f) => f.subjects[0] !== BROKER_ID);
+    expect(otherBaseline, 'the fixture must produce a second, undeclared finding').toBeDefined();
+    const other = guarded.findings.find((f) => f.subjects[0] === otherBaseline!.subjects[0]);
+    expect(other).toBeDefined();
+    expect(other!.severity).toBe(otherBaseline!.severity);
+    expect(other!.cost).toEqual(otherBaseline!.cost);
+    expect(other!.title).not.toMatch(/BY DESIGN/);
+    expect(other!.remediation.summary).toBe(otherBaseline!.remediation.summary);
+  });
+
+  it('the default detector (no option) behaves exactly as before', () => {
+    // `ALL_DETECTORS` passes no options, so the library pass is unchanged.
+    expect(baseline.findings.map((f) => f.id)).toEqual(
+      unreachableService(buildTwoFindingGraph()).findings.map((f) => f.id),
+    );
   });
 });
 

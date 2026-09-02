@@ -8,10 +8,38 @@
  * scenario) without a live subscription.
  */
 import { describe, it, expect, afterEach, vi } from 'vitest';
+
+/**
+ * Fault injection for `readFileSync`, PASS-THROUGH by default.
+ *
+ * `readFailure` is null for every pre-existing arm in this file, so they keep
+ * reading the real committed artifact. Only the #4261 arms set it, and each
+ * clears it via `afterEach`. A blanket `vi.mock('node:fs')` would have broken
+ * the real-artifact arms above, which are the control that this resolver
+ * actually understands the shipped template.
+ */
+const fault = vi.hoisted(() => ({ readFailure: null as null | (() => string) }));
+
+vi.mock('node:fs', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:fs')>();
+  return {
+    ...actual,
+    default: actual,
+    readFileSync: (...args: unknown[]) =>
+      fault.readFailure
+        ? fault.readFailure()
+        : (actual.readFileSync as (...a: unknown[]) => unknown)(...args),
+  };
+});
+
+/** Alias so the specs below read as `fail.readFailure = …`. */
+const fail = fault;
+
 import {
   buildDlzDeploymentParameters,
   resolveDlzTemplateSource,
   resolveDlzTemplateInline,
+  resolveDlzTemplateInlineOutcome,
   resolveDlzTemplate,
   __resetInlineTemplateCache,
   submitDlzDeployment,
@@ -25,6 +53,7 @@ const SUB = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee';
 afterEach(() => {
   delete process.env[DLZ_TEMPLATE_ENV];
   delete process.env.LOOM_DLZ_TEMPLATE_QUERY_STRING;
+  fault.readFailure = null;
   __resetInlineTemplateCache();
   vi.restoreAllMocks();
 });
@@ -246,6 +275,100 @@ describe('resolveDlzTemplateInline / resolveDlzTemplate (bundled compiled templa
     expect(resolved).not.toBeNull();
     expect((resolved as any).template).toBeDefined();
     expect((resolved as any).templateLink).toBeUndefined();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// THE THREE OUTCOMES — review of #4261, finding 1
+// ---------------------------------------------------------------------------
+
+/**
+ * `lib/brain-actions/scalability.ts` derives a SAFETY property from this
+ * resolver, so "I could not read the template" and "the template is not here"
+ * must not arrive as the same value — and neither may be cached if it might be
+ * transient. The old shape was `T | null` from a try with an EMPTY catch, which
+ * collapsed both into null and then cached that null at module scope FOREVER.
+ *
+ * The input shape that had no fixture was a READ THAT FAILS. Every existing arm
+ * above reads the real committed artifact successfully, so nothing exercised the
+ * failure path at all — and the failure path was the data-loss path.
+ */
+describe('resolveDlzTemplateInlineOutcome — read failure is not absence (#4261 finding 1)', () => {
+  it('a healthy image reports ok, and names the file it read', () => {
+    const outcome = resolveDlzTemplateInlineOutcome();
+    expect(outcome.status).toBe('ok');
+    expect((outcome as { file: string }).file).toContain('main.json');
+  });
+
+  it('an IO failure is UNREADABLE — not absent — and names the file and the errno', () => {
+    __resetInlineTemplateCache();
+    fail.readFailure = () => {
+      const e: NodeJS.ErrnoException = new Error('too many open files');
+      e.code = 'EMFILE';
+      throw e;
+    };
+    const outcome = resolveDlzTemplateInlineOutcome();
+    expect(outcome.status, 'an unreadable artifact must NOT report as absent').toBe('unreadable');
+    expect((outcome as { detail: string }).detail).toContain('EMFILE');
+    expect((outcome as { file: string }).file).toContain('main.json');
+  });
+
+  it('THE RECOVERY ARM: a transient failure is NOT cached — the next read succeeds', () => {
+    __resetInlineTemplateCache();
+    let calls = 0;
+    fail.readFailure = () => {
+      calls += 1;
+      const e: NodeJS.ErrnoException = new Error('i/o error');
+      e.code = 'EIO';
+      throw e;
+    };
+    expect(resolveDlzTemplateInlineOutcome().status).toBe('unreadable');
+    expect(calls).toBeGreaterThan(0);
+
+    // The pressure lifts. Nothing was reset except the fault injector — if the
+    // failure had been cached (the old behaviour: `inlineTemplateCache = null`
+    // at module scope, cleared only by a test-only helper), this would still
+    // report unreadable for the life of the process.
+    fail.readFailure = null;
+    const after = resolveDlzTemplateInlineOutcome();
+    expect(after.status, 'a transient failure must not disarm the reader forever').toBe('ok');
+  });
+
+  it('every candidate ENOENT is ABSENT — a different fact with a different fix', () => {
+    __resetInlineTemplateCache();
+    fail.readFailure = () => {
+      const e: NodeJS.ErrnoException = new Error('no such file or directory');
+      e.code = 'ENOENT';
+      throw e;
+    };
+    const outcome = resolveDlzTemplateInlineOutcome();
+    expect(outcome.status).toBe('absent');
+    expect((outcome as { candidates: readonly string[] }).candidates.length).toBeGreaterThan(0);
+  });
+
+  it('a file that EXISTS and is not JSON is UNREADABLE, and does not fall through', () => {
+    // Falling through to the next candidate would let a truncated artifact
+    // masquerade as an absent one — and absence is cached.
+    __resetInlineTemplateCache();
+    fail.readFailure = () => '{ "resources": [ truncated';
+    const outcome = resolveDlzTemplateInlineOutcome();
+    expect(outcome.status).toBe('unreadable');
+    expect((outcome as { detail: string }).detail).toMatch(/JSON\.parse failed/);
+  });
+
+  it('ABSENT is cached (it cannot change under a running image); UNREADABLE is not', () => {
+    __resetInlineTemplateCache();
+    let reads = 0;
+    fail.readFailure = () => {
+      reads += 1;
+      const e: NodeJS.ErrnoException = new Error('nope');
+      e.code = 'ENOENT';
+      throw e;
+    };
+    resolveDlzTemplateInlineOutcome();
+    const afterFirst = reads;
+    resolveDlzTemplateInlineOutcome();
+    expect(reads, 'absence is established once').toBe(afterFirst);
   });
 });
 

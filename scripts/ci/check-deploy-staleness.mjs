@@ -1057,6 +1057,15 @@ export const WATCHED = [
       '.github/workflows/loom-dataplane-roll.yml',
       'scripts/ci/resolve-acr-digest.sh',
       'scripts/ci/roll-plan.mjs',
+      // #4240 — roll-plan.mjs IMPORTS this to derive the consequence of an
+      // atomic-closure split from the reconcile's own key table (whether the
+      // repository names a canonicalApp) instead of stating it as a conditional
+      // the reader has to resolve. An imported module is invisible to every
+      // execution-based coverage guard, so it must be listed wherever its
+      // importer is — deploy-watched-completeness.test.mjs enforces exactly
+      // that, and dropping `canonicalApp` from APP_IMAGE_TAGS now changes what
+      // this lane prints.
+      'scripts/ci/reconcile-policy.mjs',
       // refs #3230 — the ACR data-plane token exchange has its own propagation
       // window after the firewall opens, so this lane retries `az acr login`
       // through a shared helper. Editing it changes whether the lane can

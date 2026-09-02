@@ -31,13 +31,31 @@ name: Loom data-plane roll (unity / iceberg / trino)
 #    read back off the LIVE app, never inferred.
 #
 # 2. THE UNITY PAIR IS ATOMIC.
-#    loom-unity and iceberg-catalog run the SAME repository (loom-unity), and
+#    loom-unity and iceberg-catalog run the SAME repository (loom-unity), so a
+#    half-roll leaves the estate serving TWO builds of ONE binary — the Unity
+#    metastore on the new code, the Iceberg REST catalog on the old — and this
+#    workflow's read-back verification never touches the app it skipped.
+#    roll-plan.mjs computes the atomic closure, so asking for either member
+#    always rolls both, which makes that window zero-length.
+#
+#    WHAT THIS USED TO SAY, AND WHY IT NO LONGER DOES (#4064 / PR #4237):
 #    reconcile-policy.mjs::resolveRunningImageTags groups the live estate BY
-#    REPOSITORY. A repo running at two different tags resolves to UNKNOWN, and
-#    decideDeployApps() then refuses deployAppsEnabled while anything is
-#    unknown. So a half-roll does not merely split a pair — it freezes
-#    estate-wide config reconciliation. roll-plan.mjs computes the atomic
-#    closure, so asking for either member always rolls both.
+#    REPOSITORY, so a repo at two tags used to resolve to UNKNOWN and
+#    decideDeployApps() then refused deployAppsEnabled while anything was
+#    unknown — a half-roll froze estate-wide config reconciliation. The `unity`
+#    key now declares canonicalApp: 'loom-unity', so it pins from that app
+#    alone: the reconcile is NOT frozen, LOOM_UNITY_TAG IS still exported, and
+#    iceberg-catalog converges onto the pinned tag on the next admin-plane
+#    apply. (#4240 makes that lag visible: resolveRunningImageTags emits a NOTE
+#    naming a follower that is off the canonical's tag, and BOTH surfaces an
+#    operator reads print it — the pin-refresh step on deploy-fiab-commercial /
+#    -gcch / -il5, and the estate-wide reconcile step, reconcile-resolve.mjs,
+#    in its log and its job summary. The other two callers of that resolver,
+#    adopt-image-tags.mjs and assert-no-silent-image-tag-revert.mjs, do not
+#    read `notes`; neither reports estate state to a human.) The freeze
+#    consequence
+#    still applies verbatim to any shared repository whose key names no
+#    canonicalApp — loom-trino would be one if a second app ever ran it.
 #
 # 3. THE TAG BICEP SETS IS MUTABLE, SO A SHA ROLL CAN BE REVERTED BY A DEPLOY.
 #    admin-plane/main.bicep sets these images to
@@ -455,7 +473,7 @@ jobs:
           fi
           ADDED=$(jq -r '.added | join(", ")' .roll/plan.json)
           if [ -n "$ADDED" ]; then
-            echo "::notice::Atomic closure pulled in: $ADDED — these apps share one image, and leaving them on different tags resolves the repository to UNKNOWN in reconcile-policy.mjs, which freezes estate-wide config reconciliation."
+            echo "::notice::Atomic closure pulled in: $ADDED — these apps share one image, and leaving them on different tags leaves the estate serving TWO builds of ONE binary until some later admin-plane apply converges them. Where the repository's appImageTags key names no canonicalApp it also resolves that key to UNKNOWN in reconcile-policy.mjs, which freezes estate-wide config reconciliation; where it does name one (the unity pair since #4064) the key still pins, and the straggler is a follower that converges on the next apply."
           fi
 
       # ── 5. Every planned app must EXIST as a Container App before anything is
