@@ -23880,6 +23880,79 @@
           }
         },
         {
+          "id": "sec:publication:scripts/ci/check-estate-tag-coverage.mjs#module",
+          "kind": "publication",
+          "provenance": "declared",
+          "label": "scripts/ci/check-estate-tag-coverage.mjs",
+          "facet": {
+            "kind": "publication",
+            "module": "scripts/ci/check-estate-tag-coverage.mjs",
+            "declaredSinkCount": 6,
+            "sinks": [
+              {
+                "id": "console:member:696",
+                "surface": "console",
+                "accessPath": "member",
+                "wholeExpressionBounded": false,
+                "boundary": null,
+                "unredactedByDesign": false,
+                "carriesSensitive": false,
+                "childProvenRedacting": null
+              },
+              {
+                "id": "console:member:700",
+                "surface": "console",
+                "accessPath": "member",
+                "wholeExpressionBounded": false,
+                "boundary": null,
+                "unredactedByDesign": false,
+                "carriesSensitive": false,
+                "childProvenRedacting": null
+              },
+              {
+                "id": "console:member:709",
+                "surface": "console",
+                "accessPath": "member",
+                "wholeExpressionBounded": false,
+                "boundary": null,
+                "unredactedByDesign": false,
+                "carriesSensitive": false,
+                "childProvenRedacting": null
+              },
+              {
+                "id": "console:member:728",
+                "surface": "console",
+                "accessPath": "member",
+                "wholeExpressionBounded": false,
+                "boundary": null,
+                "unredactedByDesign": false,
+                "carriesSensitive": false,
+                "childProvenRedacting": null
+              },
+              {
+                "id": "console:member:729",
+                "surface": "console",
+                "accessPath": "member",
+                "wholeExpressionBounded": false,
+                "boundary": null,
+                "unredactedByDesign": false,
+                "carriesSensitive": false,
+                "childProvenRedacting": null
+              },
+              {
+                "id": "console:member:730",
+                "surface": "console",
+                "accessPath": "member",
+                "wholeExpressionBounded": false,
+                "boundary": null,
+                "unredactedByDesign": false,
+                "carriesSensitive": false,
+                "childProvenRedacting": null
+              }
+            ]
+          }
+        },
+        {
           "id": "sec:publication:scripts/ci/check-external-origin-urls.mjs#module",
           "kind": "publication",
           "provenance": "declared",
@@ -47753,6 +47826,11 @@
           "reason": "CI guard script — executes on a GitHub Actions runner, not in any deployed Azure resource. Painting it onto a Container App would assert an edge that does not exist."
         },
         {
+          "nodeId": "sec:publication:scripts/ci/check-estate-tag-coverage.mjs#module",
+          "codeModuleId": "code:scripts/ci/check-estate-tag-coverage.mjs",
+          "reason": "CI guard script — executes on a GitHub Actions runner, not in any deployed Azure resource. Painting it onto a Container App would assert an edge that does not exist."
+        },
+        {
           "nodeId": "sec:publication:scripts/ci/check-external-origin-urls.mjs#module",
           "codeModuleId": "code:scripts/ci/check-external-origin-urls.mjs",
           "reason": "CI guard script — executes on a GitHub Actions runner, not in any deployed Azure resource. Painting it onto a Container App would assert an edge that does not exist."
@@ -48531,10 +48609,10 @@
     },
     "meta": {
       "generatorVersion": 1,
-      "generatedAt": "2026-09-02T17:56:06.880Z",
+      "generatedAt": "2026-09-02T18:31:13.606Z",
       "commit": "78f941306c32edbab72cc6d1e21ee9de937f40f2",
-      "inputsDigest": "3f57cbdc9c8cd0a3",
-      "filesScanned": 2077,
+      "inputsDigest": "4463dc6585febd5c",
+      "filesScanned": 2079,
       "scanScopes": [
         {
           "scope": "app/**/route.ts (console BFF routes)",
@@ -48543,8 +48621,8 @@
         },
         {
           "scope": ".github/**, scripts/** (CI publication surfaces)",
-          "filesMatched": 381,
-          "nodesEmitted": 223
+          "filesMatched": 383,
+          "nodesEmitted": 224
         }
       ],
       "skipped": [
@@ -48955,6 +49033,10 @@
         {
           "subject": "scripts/ci/check-env-sync.mjs",
           "reason": "module declares no PUBLICATION-SINKS marker, so C4's declared-count drift check is INERT for it (declaredSinkCount is set to the observed 81). Recorded so the inertness is countable rather than invisible — a check that cannot fail must not be mistaken for a check that passed."
+        },
+        {
+          "subject": "scripts/ci/check-estate-tag-coverage.mjs",
+          "reason": "module declares no PUBLICATION-SINKS marker, so C4's declared-count drift check is INERT for it (declaredSinkCount is set to the observed 6). Recorded so the inertness is countable rather than invisible — a check that cannot fail must not be mistaken for a check that passed."
         },
         {
           "subject": "scripts/ci/check-external-origin-urls.mjs",
@@ -49582,7 +49664,7 @@
         },
         {
           "subject": "C4 expression arm (carriesSensitive)",
-          "reason": "matched 0 of 2331 non-spawn publication sink(s), so every C4 finding on this tree comes from the spawn-stdio arm. The expression arm is INERT here and its correctness is therefore unexercised by the real corpus — C4 output is not evidence that no unbounded sensitive write exists."
+          "reason": "matched 0 of 2337 non-spawn publication sink(s), so every C4 finding on this tree comes from the spawn-stdio arm. The expression arm is INERT here and its correctness is therefore unexercised by the real corpus — C4 output is not evidence that no unbounded sensitive write exists."
         }
       ]
     }
