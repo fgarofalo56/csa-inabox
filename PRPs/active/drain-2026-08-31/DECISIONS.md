@@ -173,6 +173,35 @@ the observed bucket — visible, never actionable, never tagged.
 | 2026-09-02 | #4281 | 33 SUCCESS / 3 SKIPPED, 0 red, 0 pending | docs-only; registers the 2026-09-01 drain round |
 | 2026-09-02 | #4286 | 35 SUCCESS / 3 SKIPPED, 0 red, 0 pending | dependabot: browserslist 4.28.6 -> 4.28.8 (portal) |
 | 2026-09-02 | #4289 | 71 SUCCESS / 3 SKIPPED, 0 red, 0 pending | dependabot: pypdf 6.15.0 -> 6.16.1 (platform locks) |
+| 2026-09-02 | #4268 | 34 SUCCESS / 3 SKIPPED, 1 advisory red (CodeQL), 0 pending | `merge-eligible.py`: MISSING none · RED none · INCOMPLETE none. Sole blocker was `REVIEW_REQUIRED` |
+
+### #4268 — why it merged first, and why its one red did not block
+
+Merged **first of the three ready PRs deliberately**, not by convenience. #4268
+is the guard fix (`check-env-sync` went green on a shrunken population). A guard
+belongs on `main` **before** the PRs it would validate, so that if #4262 or #4266
+then fails the stricter check, that failure is a genuine finding. Merging them
+first would have let them pass under the guard they were fixing and hidden it.
+
+Its single red is **CodeQL**, which is advisory in this repo — not among the 15
+contexts that can block. It was **judged, not waived**: the 11 `useless-escape`
+alerts were disproved by execution (`temp/prove-useless-escape.mjs`), where the
+suggested fix threw `SyntaxError: Missing } in template expression` on the
+template-literal shell fixtures and silently **stopped matching** on the regex
+literals. Disposition posted to the PR before merge.
+
+### Close audit for #4268
+
+**Zero issues auto-closed.** Verified by measurement rather than assumed: 25
+closed issues scanned (positive control — non-zero proves the query path works),
+0 falling inside the merge window.
+
+That is the intended outcome and not luck. #4268's own body states that `#3956`,
+`#3344` and `#3940` **stay OPEN on merge**, because the 17 `env[?name==].value`
+sites it found live in `.github/workflows/**` and `scripts/csa-loom/**` — files
+that lane does not own. They are **ratcheted and enumerated, not fixed**. Per
+`deploy-integrity.md` R2 this is a CI-guard change with no deployed artifact and
+no runtime behaviour on any estate: **merged, not deployed.**
 
 ### Close audit for that batch
 
