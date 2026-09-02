@@ -29,6 +29,20 @@ export const AZURE_SERVICES_GATE_META: Record<string, GateMeta> = {
       'synapse_pipeline_seed_incomplete',
     ],
   },
+  'svc-synapse-dedicated-pool': {
+    // #3513 — split out of svc-synapse. warehouse.ts refuses on a missing
+    // dedicated pool, but notebooks and pipelines run fine against a
+    // serverless-only workspace, so folding the pool into svc-synapse would
+    // have made every serverless estate newly report that gate unmet.
+    surfaces: [
+      { path: '/items/warehouse', label: 'Warehouse editor — dedicated-pool backend' },
+      { path: '/api/items/warehouse/*', label: 'Warehouse BFF routes (dedicated pool)' },
+      { path: '/api/apps/[id]/install', label: 'App install — warehouse provisioner (dedicated pool)' },
+    ],
+    fixit: { kind: 'resource-picker' },
+    loaders: { LOOM_SYNAPSE_WORKSPACE: L.synapse },
+    legacyCodes: ['not_configured:LOOM_SYNAPSE_DEDICATED_POOL'],
+  },
   'svc-adx': {
     surfaces: [
       { path: '/items/kql-database', label: 'KQL database editor' },
