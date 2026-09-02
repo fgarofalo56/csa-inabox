@@ -32,7 +32,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { decideTagWrites, declaredTagDefaults, digestPinsByKey, KEY_BY_ENV_VAR } from '../assert-no-silent-image-tag-revert.mjs';
+import { decideTagWrites, declaredTagDefaults, digestPinsByKey, remediationFor, KEY_BY_ENV_VAR } from '../assert-no-silent-image-tag-revert.mjs';
 import { resolveRunningImageTags } from '../reconcile-policy.mjs';
 
 const ACR = 'acrloomxxxx.azurecr.us';
@@ -194,11 +194,16 @@ test('LOOM_ALLOW_IMAGE_TAG_REVERT proceeds but the refusals are still ENUMERATED
 // THE DIGEST CASE, RESOLVED RATHER THAN GUESSED (#3449)
 // ---------------------------------------------------------------------------
 //
-// gov-build-images.yml sets Gov Container Apps to `<acr>/<app>@sha256:…`, so on
-// GCC-High loom-unity runs by digest permanently and the tag comparison above
-// has nothing to compare. The registry can still answer the ONE question that
-// decides the invariant: does the tag this deploy would write resolve, right
-// now, to the digest the app is running?
+// On GCC-High loom-unity RUNS BY DIGEST (measured, run 33519232492), so the tag
+// comparison above has nothing to compare. This file used to attribute that pin
+// to gov-build-images.yml "setting Gov Container Apps to <acr>/<app>@sha256:…".
+// That is FALSE — that workflow has no `az containerapp update` at all, and every
+// image the templates compose is `<acr>/<repo>:${tag}` — so the pin is OUT-OF-BAND
+// state whose origin is not established. The shape is real; the mechanism was not.
+//
+// The registry can still answer the ONE question that decides the invariant: does
+// the tag this deploy would write resolve, right now, to the digest the app is
+// running?
 //
 // Mutations these controls kill:
 //   - treat any digestCheck as permission to proceed -> the `different` control
@@ -309,4 +314,176 @@ test('declaredTagDefaults reads the REAL Gov param files, and every tag maps to 
       assert.ok(KEY_BY_ENV_VAR[envVar], `${file} reads ${envVar}, which APP_IMAGE_TAGS cannot map to an image`);
     }
   }
+});
+
+// ---------------------------------------------------------------------------
+// THE REMEDIATION — the shape that had NO FIXTURE
+// ---------------------------------------------------------------------------
+//
+// decideTagWrites has been fixtured since #3161. The SENTENCE THE OPERATOR READS
+// never was, and that is precisely where two defects survived into production:
+// it asserted a cause run 33519232492 disproved ("the estate did not answer"),
+// and it advised an action that provably cannot clear an `unmapped` row.
+//
+// Every row below is DERIVED FROM decideTagWrites, never hand-built. A literal
+// `{cause:'digest-different'}` would be type-correct and would still pass if the
+// producer forgot to set `cause` at all — the exact fixture-shaped-like-the-
+// mutation trap. Deriving it means a missing `cause` kills these controls.
+//
+// Mutations these kill:
+//   - drop `cause` from any row in decideTagWrites  -> the cause-coverage control
+//     and whichever branch lost it go red.
+//   - make remediationFor return one string for everything (the old behaviour)
+//     -> the adoption-blame, unmapped, and estate-action controls go red.
+//   - let the digest-tag diagnostic reach the verdict -> the isolation control
+//     goes red.
+//   - offer a tag when the digest carries SEVERAL -> the ambiguity control goes
+//     red (choosing one invents an intent nobody stated).
+
+/** The GCC-High run-33519232492 shape: unity digest-pinned, :v0.1 since moved. */
+const run33519232492 = () => decideTagWrites({
+  declared,
+  env: { LOOM_UNITY_TAG: 'v0.1', LOOM_TRINO_TAG: 'v0.1' },
+  resolution: digestEstate(),
+  digestChecks: { unity: { status: 'different', running: DIG_A, candidate: DIG_B } },
+});
+
+test('CONTROL: every refusal row carries a `cause`, so no branch falls through to generic advice', () => {
+  // The producer, not a literal. A branch that forgets `cause` is caught here
+  // rather than silently taking remediationFor's default arm.
+  for (const r of [
+    run33519232492(),
+    decideTagWrites({ declared, env: {}, resolution: resolveRunningImageTags(null) }),
+    decideTagWrites({ declared: new Map([['LOOM_NOT_A_REAL_TAG', 'v0.1']]), env: {}, resolution: running([]) }),
+    decideTagWrites({
+      declared,
+      env: { LOOM_UNITY_TAG: 'v0.1', LOOM_TRINO_TAG: 'v0.1' },
+      resolution: running([['loom-unity', `${ACR}/loom-unity:5f9edba7`], ['loom-trino', `${ACR}/loom-trino:v0.1`]]),
+    }),
+  ]) {
+    assert.ok(r.refusals.length > 0, 'fixture should produce a refusal to have a remedy for');
+    for (const row of r.refusals) {
+      assert.ok(row.cause, `${row.envVar} (${row.verdict}) has no cause, so its remedy would be the default arm`);
+    }
+  }
+});
+
+test('CONTROL: a digest-pinned refusal does NOT blame adoption — adoption declined correctly, it did not fail', () => {
+  // Run 33519232492: adoption RAN and adopted console+wrangler live SHAs. It
+  // cannot derive a tag from a digest, which is its documented limit. The old
+  // message sent the reader to a script that is working as designed.
+  const row = run33519232492().refusals.find((x) => x.envVar === 'LOOM_UNITY_TAG');
+  const remedy = remediationFor(row);
+  assert.doesNotMatch(remedy, /adopt-image-tags/, 'a digest refusal must not name adoption as the culprit');
+  assert.doesNotMatch(remedy, /did not (happen|answer)/i, 'must not assert a cause the run disproved');
+  // and it must name the action that actually clears it
+  assert.match(remedy, /out of band/i);
+  assert.match(remedy, /az acr import --force/);
+  assert.match(remedy, new RegExp(DIG_A), 'the remedy must carry the digest the app is actually running');
+});
+
+test('CONTROL: the digest remedy says re-running will NOT help — it is a standing condition, not a transient', () => {
+  // The nightly Gov build re-points :v0.1 onto each new manifest, so the answer
+  // is `different` today and every day after. Advice that implies "try again"
+  // would burn a run per night forever.
+  const row = run33519232492().refusals.find((x) => x.envVar === 'LOOM_UNITY_TAG');
+  assert.match(remediationFor(row), /[Rr]e-running will not change this/);
+});
+
+test('CONTROL: an `unmapped` row is NOT told to set the repo variable — that provably cannot clear it', () => {
+  // The row is pushed with verdict 'unmapped' regardless of source, so setting
+  // the variable changes nothing. The old advice offered exactly that.
+  const r = decideTagWrites({ declared: new Map([['LOOM_NOT_A_REAL_TAG', 'v0.1']]), env: {}, resolution: running([]) });
+  const remedy = remediationFor(r.refusals[0]);
+  assert.match(remedy, /APP_IMAGE_TAGS/, 'the real remedy is to map the tag to a repository');
+  assert.match(remedy, /will NOT clear this/, 'and it must say the variable route does not work');
+});
+
+test('a tag-vs-tag revert DOES still point at adoption — that advice was right for this shape', () => {
+  // Not every refusal changed. Where the app runs a TAG and the deploy would
+  // write the default, adoption exporting the running tag is genuinely the fix.
+  const r = decideTagWrites({
+    declared,
+    env: { LOOM_UNITY_TAG: 'v0.1', LOOM_TRINO_TAG: 'v0.1' },
+    resolution: running([['loom-unity', `${ACR}/loom-unity:5f9edba7`], ['loom-trino', `${ACR}/loom-trino:v0.1`]]),
+  });
+  const remedy = remediationFor(r.refusals.find((x) => x.envVar === 'LOOM_UNITY_TAG'));
+  assert.match(remedy, /adopt-image-tags/);
+  assert.match(remedy, /5f9edba7/, 'and it names the tag that is actually running');
+});
+
+test('a FAILED probe is told to fix the container-app read, not to set a tag', () => {
+  const r = decideTagWrites({ declared, env: {}, resolution: resolveRunningImageTags(null) });
+  const remedy = remediationFor(r.refusals[0]);
+  assert.match(remedy, /could not be listed/);
+  assert.doesNotMatch(remedy, /az acr import/, 'nothing about the registry is established when the probe failed');
+});
+
+// --- the running-digest tag diagnostic -------------------------------------
+
+test('exactly ONE tag on the running digest is offered as a pin', () => {
+  const row = run33519232492().refusals.find((x) => x.envVar === 'LOOM_UNITY_TAG');
+  const remedy = remediationFor(row, { digestTags: { unity: { tags: ['a1b2c3d4'] } } });
+  assert.match(remedy, /LOOM_UNITY_TAG=a1b2c3d4/);
+});
+
+test('CONTROL: SEVERAL tags on the running digest are ENUMERATED, never chosen between', () => {
+  // loom-unity is a slow-moving OSS image, so two nightly builds can produce
+  // identical layers and one digest can carry several 8-hex tags. Picking one
+  // would be inventing an intent nobody stated.
+  const row = run33519232492().refusals.find((x) => x.envVar === 'LOOM_UNITY_TAG');
+  const remedy = remediationFor(row, { digestTags: { unity: { tags: ['a1b2c3d4', 'e5f6a7b8', 'v0.1-rc'] } } });
+  assert.match(remedy, /3 tags/);
+  assert.doesNotMatch(remedy, /LOOM_UNITY_TAG=/, 'must not offer one of several as though it were the answer');
+});
+
+test('ZERO tags and an UNREADABLE lookup are reported DIFFERENTLY — absence is not failure to observe', () => {
+  const row = run33519232492().refusals.find((x) => x.envVar === 'LOOM_UNITY_TAG');
+  assert.match(remediationFor(row, { digestTags: { unity: { tags: [] } } }), /carries NO tags/);
+  const unreadable = remediationFor(row, { digestTags: { unity: { detail: 'firewall lease denied' } } });
+  assert.match(unreadable, /could not be read/);
+  assert.doesNotMatch(unreadable, /carries NO tags/, 'an unreadable registry must never be reported as "no tags" (R7)');
+});
+
+test('CONTROL: the digest-tag diagnostic cannot change the DECISION — it reaches advice only', () => {
+  // The one direction that would be unsafe: a run that refuses today must still
+  // refuse whatever the diagnostic says, and a run that passes today must not be
+  // turned red by it. decideTagWrites has no parameter for it at all, which is
+  // the structural guarantee — this control pins that the wiring never grows one.
+  const base = run33519232492();
+  assert.equal(base.decision, 'refuse');
+  for (const digestTags of [
+    {}, { unity: { tags: ['a1b2c3d4'] } }, { unity: { tags: [] } }, { unity: { detail: 'unreadable' } },
+  ]) {
+    const again = run33519232492();
+    assert.equal(again.decision, base.decision, 'the decision is computed without the diagnostic');
+    assert.equal(again.refusals.length, base.refusals.length);
+    // and the remedy is the only thing that varies
+    assert.ok(remediationFor(again.refusals[0], { digestTags }).length > 0);
+  }
+  // A passing shape stays passing with every diagnostic value.
+  const pass = decideTagWrites({
+    declared,
+    env: { LOOM_UNITY_TAG: 'v0.1', LOOM_TRINO_TAG: 'v0.1' },
+    resolution: digestEstate(),
+    digestChecks: { unity: { status: 'same', running: DIG_A, candidate: DIG_A } },
+  });
+  assert.equal(pass.decision, 'proceed');
+  assert.equal(pass.refusals.length, 0);
+});
+
+// --- the claim this file itself used to get wrong ---------------------------
+
+test('CONTROL: no workflow or template in this repo writes a DIGEST-pinned container image', () => {
+  // The header of the guard, and this file, both asserted gov-build-images.yml
+  // "sets Gov Container Apps to <acr>/<app>@sha256:…". It does not, and that
+  // false mechanism was cited as authority by gov-console-roll.yml and cost a
+  // full investigation branch. Pin the measurement so the claim cannot come back.
+  const gbi = readFileSync('.github/workflows/gov-build-images.yml', 'utf8');
+  assert.doesNotMatch(gbi, /\bcontainerapp\b/, 'gov-build-images.yml must not be described as updating Container Apps');
+  // Every image the admin-plane template composes is colon-and-tag, so an apply
+  // cannot emit a digest ref.
+  const bicep = readFileSync('platform/fiab/bicep/modules/admin-plane/main.bicep', 'utf8');
+  const digestRefs = bicep.match(/^\s*image: .*@sha256:/gm) || [];
+  assert.deepEqual(digestRefs, [], 'a template that composed a digest ref would make the pin in-band');
 });

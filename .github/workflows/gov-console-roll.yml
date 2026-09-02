@@ -688,12 +688,17 @@ jobs:
           # to run fail. A remediation that cannot be followed is the same defect
           # class as one that is untrue (deploy-integrity R6/R7).
           #
-          # Digest-pinned refs are a REAL shape on Gov, not a hypothetical: a Gov
-          # apply can set `<acr>/<app>@sha256:…` (see
-          # scripts/ci/assert-no-silent-image-tag-revert.mjs). `${VAR##*:}` on one
-          # of those returns the hex digest, which is not a tag either — so that
-          # case is detected and gets different advice rather than a confident
-          # wrong answer.
+          # Digest-pinned refs are a REAL shape on Gov, not a hypothetical:
+          # loom-unity was measured running `<acr>/loom-unity@sha256:…` in run
+          # 33519232492. This comment used to attribute that to "a Gov apply",
+          # citing scripts/ci/assert-no-silent-image-tag-revert.mjs — whose own
+          # header asserted gov-build-images.yml set it. That was FALSE and has
+          # been corrected there: no workflow or template in this repository
+          # writes a digest ref, so the pin arrives out of band and its origin
+          # is not established. The SHAPE is what this code must handle, and
+          # that is unchanged. `${VAR##*:}` on one of those returns the hex
+          # digest, which is not a tag either — so that case is detected and
+          # gets different advice rather than a confident wrong answer.
           case "$ROLLBACK_IMAGE" in
             *@sha256:*)
               LASTGOOD_HINT=""
