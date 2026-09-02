@@ -479,7 +479,7 @@ describe('#3513 — provisioner remediation gates link to the registry', () => {
     ['mirrored-database.ts', 'svc-adls', 'LOOM_ADLS_ACCOUNT'],
     ['ml-model.ts', 'svc-databricks', 'LOOM_DATABRICKS_HOSTNAME'],
     ['synapse-pipeline.ts', 'svc-synapse', 'LOOM_SYNAPSE_WORKSPACE'],
-    ['warehouse.ts', 'svc-synapse', 'LOOM_SYNAPSE_WORKSPACE + dedicated pool'],
+    ['warehouse.ts', 'svc-synapse-dedicated-pool', 'LOOM_SYNAPSE_WORKSPACE + LOOM_SYNAPSE_DEDICATED_POOL'],
     ['activator.ts', 'svc-monitor-alerts', 'LOOM_LOG_ANALYTICS_RESOURCE_ID'],
     ['data-product.ts', 'svc-purview-uc', 'LOOM_PURVIEW_UC_ENDPOINT'],
   ];
