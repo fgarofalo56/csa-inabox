@@ -31,7 +31,7 @@
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
 import { decideTagWrites, declaredTagDefaults, digestPinsByKey, remediationFor, KEY_BY_ENV_VAR } from '../assert-no-silent-image-tag-revert.mjs';
 import { resolveRunningImageTags } from '../reconcile-policy.mjs';
 
@@ -256,6 +256,96 @@ test('CONTROL: a registry that could not be READ leaves the digest case UNKNOWN 
   assert.match(row(r, 'LOOM_UNITY_TAG').why, /could not be read/);
 });
 
+// ---------------------------------------------------------------------------
+// THE TWO `unresolved` REMEDIES (deploy-integrity R7)
+//
+// Both of these land on cause:'unresolved', and before #4297 both got the SAME
+// remedy: "resolve the ACR read". On the path below where registryConsulted is
+// false the registry was never consulted at all, so that sentence asserted a
+// failure that may never have happened and aimed the reader at the wrong
+// subsystem. Splitting the arm fixed that — and then very nearly repeated it in
+// the other direction, by asserting a multi-container ESTATE disagreement on a
+// path where decideTagWrites knows only that no digest check was supplied.
+// digestPinsByKey runs in the CALLER and its output is not passed in, so the
+// decision function structurally cannot tell "probe was ambiguous" from "the
+// resolve step never ran". The control for that is the byte-identity assertion:
+// a ONE-container estate and a TWO-container estate are indistinguishable here,
+// so any remedy that names one of them as the cause is lying about one of them.
+//
+// Dies under: collapsing the arms back into one (the ACR-blame assertion), and
+// under rewording either arm to assert a cause instead of naming both.
+// ---------------------------------------------------------------------------
+
+test('CONTROL: the un-consulted `unresolved` remedy does not blame the registry, and does not assert a cause it never established', () => {
+  // Same repo, same cause, two estates the decision function cannot tell apart.
+  const oneContainer = decideTagWrites({
+    declared,
+    env: { LOOM_UNITY_TAG: 'v0.1', LOOM_TRINO_TAG: 'v0.1' },
+    resolution: running([
+      ['loom-unity', `${ACR}/loom-unity@${DIG_A}`],
+      ['loom-trino', `${ACR}/loom-trino:v0.1`],
+    ]),
+  });
+  const twoContainers = decideTagWrites({
+    declared,
+    env: { LOOM_UNITY_TAG: 'v0.1', LOOM_TRINO_TAG: 'v0.1' },
+    resolution: running([
+      ['loom-unity', `${ACR}/loom-unity@${DIG_A}`],
+      ['iceberg-catalog', `${ACR}/loom-unity@${DIG_B}`],
+      ['loom-trino', `${ACR}/loom-trino:v0.1`],
+    ]),
+  });
+
+  const a = row(oneContainer, 'LOOM_UNITY_TAG');
+  const b = row(twoContainers, 'LOOM_UNITY_TAG');
+  assert.equal(a.cause, 'unresolved');
+  assert.equal(b.cause, 'unresolved');
+  assert.equal(a.registryConsulted, false, 'no digestChecks were supplied, so the registry was not consulted');
+  assert.equal(b.registryConsulted, false);
+
+  const remedyOne = remediationFor(a);
+  const remedyTwo = remediationFor(b);
+
+  // The load-bearing control. One container and two containers at different
+  // digests produce the SAME row here. If a future edit asserts either estate
+  // shape as the cause, it is asserting it for the fixture where it is false —
+  // and the only honest way to make these diverge is to carry real evidence of
+  // which shape it is, which is a genuine fix rather than better prose.
+  assert.equal(remedyOne, remedyTwo,
+    'the decision function cannot distinguish these two estates, so the remedy must not claim to');
+
+  // Finding 1: never send the reader at the ACR read on a path that never read it.
+  assert.doesNotMatch(remedyOne, /Resolve the ACR read/i,
+    'the registry was never consulted on this path — blaming it is the #4291 defect');
+  assert.match(remedyOne, /was NOT consulted/,
+    'the remedy must say the registry was not consulted, not imply it failed');
+
+  // R7: where the code does not know, the message says it does not know, and
+  // hands back the observation that settles it.
+  assert.match(remedyOne, /not been established/i, 'the unknown sub-cause must be stated as unknown');
+  assert.match(remedyOne, /\beither\b[\s\S]*\bor\b/, 'both candidate causes must be named, neither asserted');
+  assert.match(remedyOne, /containerapp list/, 'the remedy must name the observation that discriminates');
+});
+
+test('CONTROL: the CONSULTED `unresolved` remedy does name the registry read as the thing to fix', () => {
+  const r = decideTagWrites({
+    declared,
+    env: { LOOM_UNITY_TAG: 'v0.1', LOOM_TRINO_TAG: 'v0.1' },
+    resolution: digestEstate(),
+    digestChecks: { unity: { status: 'unknown', running: DIG_A, detail: 'resolve-acr-digest exit 4' } },
+  });
+  const r0 = row(r, 'LOOM_UNITY_TAG');
+  assert.equal(r0.cause, 'unresolved');
+  assert.equal(r0.registryConsulted, true, 'a digestCheck WAS supplied, so the registry was consulted');
+
+  const remedy = remediationFor(r0);
+  // Here the blame IS established: the check ran and came back unknown.
+  assert.match(remedy, /Resolve the ACR read/i);
+  assert.match(remedy, new RegExp(DIG_A), 'the running digest is known on this path and belongs in the remedy');
+  // Still not permission to proceed — the collapse R7 forbids.
+  assert.match(remedy, /not permission to proceed/i);
+});
+
 test('an EXPLICIT pin onto a different digest is a MOVE, not a revert — intent is still honoured', () => {
   const r = decideTagWrites({
     declared,
@@ -340,12 +430,18 @@ test('declaredTagDefaults reads the REAL Gov param files, and every tag maps to 
 //   - offer a tag when the digest carries SEVERAL -> the ambiguity control goes
 //     red (choosing one invents an intent nobody stated).
 
-/** The GCC-High run-33519232492 shape: unity digest-pinned, :v0.1 since moved. */
-const run33519232492 = () => decideTagWrites({
+/**
+ * The GCC-High run-33519232492 shape: unity digest-pinned, :v0.1 since moved.
+ * `extra` is spread into the call so a control can attempt to feed the decision
+ * a field it should not consult. Without it every invocation is byte-identical
+ * and any comparison between two of them is f() === f() — a tautology.
+ */
+const run33519232492 = (extra = {}) => decideTagWrites({
   declared,
   env: { LOOM_UNITY_TAG: 'v0.1', LOOM_TRINO_TAG: 'v0.1' },
   resolution: digestEstate(),
   digestChecks: { unity: { status: 'different', running: DIG_A, candidate: DIG_B } },
+  ...extra,
 });
 
 test('CONTROL: every refusal row carries a `cause`, so no branch falls through to generic advice', () => {
@@ -383,11 +479,19 @@ test('CONTROL: a digest-pinned refusal does NOT blame adoption — adoption decl
 });
 
 test('CONTROL: the digest remedy says re-running will NOT help — it is a standing condition, not a transient', () => {
-  // The nightly Gov build re-points :v0.1 onto each new manifest, so the answer
-  // is `different` today and every day after. Advice that implies "try again"
-  // would burn a run per night forever.
+  // Whatever re-points the tag, this deploy is not it: the tag already names
+  // different content than the app runs, and re-running does not re-point it.
+  // Advice that implies "try again" would burn a run per attempt forever.
+  //
+  // The regex is deliberately loose about the words BETWEEN "re-running" and
+  // "will not change" — this control is about the CLAIM, and the previous form
+  // pinned one exact sentence, so a truthful rewording went red for no reason.
+  // It stays tight on both halves so unrelated prose cannot satisfy it.
   const row = run33519232492().refusals.find((x) => x.envVar === 'LOOM_UNITY_TAG');
-  assert.match(remediationFor(row), /[Rr]e-running will not change this/);
+  const remedy = remediationFor(row);
+  assert.match(remedy, /[Rr]e-running[^.]{0,32}will not change/);
+  assert.doesNotMatch(remedy, /try again|retry the (run|deploy)|re-?run and see/i,
+    'the remedy must not invite a retry that provably cannot clear this');
 });
 
 test('CONTROL: an `unmapped` row is NOT told to set the repo variable — that provably cannot clear it', () => {
@@ -448,16 +552,27 @@ test('ZERO tags and an UNREADABLE lookup are reported DIFFERENTLY — absence is
 test('CONTROL: the digest-tag diagnostic cannot change the DECISION — it reaches advice only', () => {
   // The one direction that would be unsafe: a run that refuses today must still
   // refuse whatever the diagnostic says, and a run that passes today must not be
-  // turned red by it. decideTagWrites has no parameter for it at all, which is
-  // the structural guarantee — this control pins that the wiring never grows one.
+  // turned red by it.
+  //
+  // This control used to call run33519232492() with no arguments on BOTH sides of
+  // the comparison, so `base` and `again` were byte-identical recomputations and
+  // `again.decision === base.decision` was f() === f() — a tautology no mutation
+  // could fail. The diagnostic was varied only in the argument to remediationFor,
+  // which is the advice side, i.e. not the thing the control is about. It now
+  // actually feeds digestTags INTO decideTagWrites, so if someone plumbs the
+  // diagnostic into the decision the claim in this header goes red.
   const base = run33519232492();
   assert.equal(base.decision, 'refuse');
   for (const digestTags of [
     {}, { unity: { tags: ['a1b2c3d4'] } }, { unity: { tags: [] } }, { unity: { detail: 'unreadable' } },
   ]) {
-    const again = run33519232492();
+    const again = run33519232492({ digestTags });
     assert.equal(again.decision, base.decision, 'the decision is computed without the diagnostic');
     assert.equal(again.refusals.length, base.refusals.length);
+    assert.deepEqual(
+      again.refusals.map((r) => r.cause), base.refusals.map((r) => r.cause),
+      'the diagnostic must not even change WHICH refusal is reported',
+    );
     // and the remedy is the only thing that varies
     assert.ok(remediationFor(again.refusals[0], { digestTags }).length > 0);
   }
@@ -474,16 +589,36 @@ test('CONTROL: the digest-tag diagnostic cannot change the DECISION — it reach
 
 // --- the claim this file itself used to get wrong ---------------------------
 
-test('CONTROL: no workflow or template in this repo writes a DIGEST-pinned container image', () => {
+test('CONTROL: no template in this repo writes a DIGEST-pinned ESTATE-ACR image', () => {
   // The header of the guard, and this file, both asserted gov-build-images.yml
   // "sets Gov Container Apps to <acr>/<app>@sha256:…". It does not, and that
   // false mechanism was cited as authority by gov-console-roll.yml and cost a
   // full investigation branch. Pin the measurement so the claim cannot come back.
   const gbi = readFileSync('.github/workflows/gov-build-images.yml', 'utf8');
   assert.doesNotMatch(gbi, /\bcontainerapp\b/, 'gov-build-images.yml must not be described as updating Container Apps');
-  // Every image the admin-plane template composes is colon-and-tag, so an apply
-  // cannot emit a digest ref.
-  const bicep = readFileSync('platform/fiab/bicep/modules/admin-plane/main.bicep', 'utf8');
-  const digestRefs = bicep.match(/^\s*image: .*@sha256:/gm) || [];
-  assert.deepEqual(digestRefs, [], 'a template that composed a digest ref would make the pin in-band');
+
+  // This half of the control used to read ONE file and match only a LITERAL digest
+  // on an `image:` line — blind twice over. It could not see dab-runtime.bicep at
+  // all, and even inside that file it would have missed `image: dabImage` (:123)
+  // because the digest lives in the param default (:43). Both blindnesses are
+  // fixed here: every admin-plane template, and every digest anywhere in it.
+  //
+  // The claim is deliberately SCOPED to estate-ACR images, because the unqualified
+  // absolute is false: dab-runtime and udf-runtime DO pin digests, on purpose, for
+  // MCR base images (data-api-builder, azure-functions, busybox) — a different
+  // population with its own documented bump procedure and its own enforcing gate,
+  // scripts/ci/check-mcr-image-pins.mjs. A digest on a Loom app image is what would
+  // make the out-of-band pin in-band, and that is what this watches for.
+  const dir = 'platform/fiab/bicep/modules/admin-plane';
+  const offenders = [];
+  for (const file of readdirSync(dir).filter((n) => n.endsWith('.bicep'))) {
+    const src = readFileSync(`${dir}/${file}`, 'utf8');
+    const lines = src.split('\n');
+    lines.forEach((text, i) => {
+      if (!/@sha256:[0-9a-f]{64}/.test(text)) return;
+      if (/mcr\.microsoft\.com/.test(text)) return; // deliberate base-image pin
+      offenders.push(`${file}:${i + 1} ${text.trim()}`);
+    });
+  }
+  assert.deepEqual(offenders, [], 'a template that composed a digest ref for an estate-ACR app image would make the pin in-band');
 });
