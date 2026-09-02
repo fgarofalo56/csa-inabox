@@ -477,6 +477,26 @@ jobs:
       - name: deploy-template-sync (the compiled ARM template that SHIPS must match its bicep — #2945)
         if: ${{ !cancelled() }}
         run: node scripts/ci/check-deploy-template-sync.mjs
+      # OWNERSHIP (#3922, #4255). `loom-estate-id` is the ONLY signal that proves
+      # a resource is a given Loom install's, and until #3922 NOTHING stamped it:
+      # measured 2026-08-23 across six subscriptions, 105 container-tier
+      # resources, ZERO carrying it. The visible consequences were `dryRunPause`
+      # returning `wouldPause: []` against a ~$3k/mo pausable estate while the
+      # button rendered and accepted a click, and 0 of 17 Brain recommendations
+      # being approvable because `guardOwnership` could not prove even Loom's own
+      # `loom-risingwave` was Loom's.
+      #
+      # Stamping it once is a merge. Keeping it stamped is this. One new resource
+      # that lands without the tag gives a PARTIALLY owned estate, which is worse
+      # than an unowned one: the Brain then reports a confident inventory that
+      # silently omits whatever landed last.
+      #
+      # Like its sibling above this COMPILES (no Azure API call, no credentials)
+      # and is deliberately NOT path-filtered — main.bicep's transitive closure
+      # is ~200 modules and any filter would be the way this gate goes quiet.
+      - name: estate-tag-coverage (every resource the deploy creates carries loom-estate-id — #3922)
+        if: ${{ !cancelled() }}
+        run: node scripts/ci/check-estate-tag-coverage.mjs
       # ARM SELF-REFERENCE (#3714). #3691 declared a
       # `Microsoft.Resources/tags` resource whose scope expression WAS its own
       # resource id, so ARM refused the whole template — "Circular dependency
