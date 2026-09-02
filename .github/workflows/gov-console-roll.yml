@@ -688,12 +688,17 @@ jobs:
           # to run fail. A remediation that cannot be followed is the same defect
           # class as one that is untrue (deploy-integrity R6/R7).
           #
-          # Digest-pinned refs are a REAL shape on Gov, not a hypothetical: a Gov
-          # apply can set `<acr>/<app>@sha256:…` (see
-          # scripts/ci/assert-no-silent-image-tag-revert.mjs). `${VAR##*:}` on one
-          # of those returns the hex digest, which is not a tag either — so that
-          # case is detected and gets different advice rather than a confident
-          # wrong answer.
+          # Digest-pinned refs are a REAL shape on Gov, not a hypothetical:
+          # loom-unity was measured running `<acr>/loom-unity@sha256:…` in run
+          # 33519232492. This comment used to attribute that to "a Gov apply",
+          # citing scripts/ci/assert-no-silent-image-tag-revert.mjs — whose own
+          # header asserted gov-build-images.yml set it. That was FALSE and has
+          # been corrected there: no workflow or template in this repository
+          # writes a digest ref, so the pin arrives out of band and its origin
+          # is not established. The SHAPE is what this code must handle, and
+          # that is unchanged. `${VAR##*:}` on one of those returns the hex
+          # digest, which is not a tag either — so that case is detected and
+          # gets different advice rather than a confident wrong answer.
           case "$ROLLBACK_IMAGE" in
             *@sha256:*)
               LASTGOOD_HINT=""
@@ -722,27 +727,82 @@ jobs:
           # kept and printed instead, and an unreadable probe is named as such.
           PROBE_ERR=$(mktemp)
           READS=0
+          ODD=0
+          LAST_ODD=""
           for i in $(seq 1 24); do
+            PROBE_OK=true
             if H=$(az containerapp revision show -n "$APP" -g "$RG" --revision "$NEWREV" \
                      --query properties.healthState -o tsv 2>"$PROBE_ERR"); then
               H=$(printf '%s' "$H" | tr -d '\r\n')
-              READS=$((READS + 1))
             else
+              PROBE_OK=false
               H=""
               echo "  [$i/24] health probe FAILED (this is not a health verdict): $(head -c 300 "$PROBE_ERR" | tr -d '\r\n')"
             fi
             echo "$(date -u +%H:%M:%S) $NEWREV=${H:-<unread>}"
-            case "$H" in
-              Healthy) echo "::notice::GOV-CONSOLE-ROLL $SHA HEALTHY"; exit 0 ;;
-              Unhealthy) echo "::error::Revision $NEWREV came up Unhealthy on $IMG — rolling back to $ROLLBACK_IMAGE"; az containerapp update -n "$APP" -g "$RG" --image "$ROLLBACK_IMAGE" -o none; exit 1 ;;
+            # #4238/#4287 — CASE-FOLDED, WITH A DEFAULT ARM, AND ONLY
+            # INTERPRETABLE VALUES COUNT AS READS. cloud-parity: this lane must
+            # decide health the same way the Commercial lane does.
+            #
+            # Two defects lived in the three lines this replaces:
+            #   1. `case "$H" in Healthy) … Unhealthy) …` matched the enum
+            #      CASING, not the enum. RevisionHealthState is an
+            #      ExpandableStringEnum, so a lowercase `unhealthy` matched
+            #      NEITHER arm and fell through — meaning THE GOV LANE NEVER
+            #      ROLLED BACK A BAD REVISION. That is the #4287 defect
+            #      surviving in the sovereign boundary.
+            #   2. There was no default arm, and `READS` advanced on any az
+            #      exit 0 — including the ZERO-BYTE output that
+            #      `--query properties.healthState -o tsv` produces when that
+            #      path stops resolving. An ARM property rename therefore read
+            #      as 24 successful probes and reported a health TIMEOUT about a
+            #      state this loop never read (deploy-integrity R7).
+            #
+            # A value this loop cannot interpret is not a reading of the
+            # revision's state, so it does not reach READS: it falls through to
+            # the `READS -eq 0` branch, which says nothing was established
+            # rather than asserting a timeout. Gov does not auto-revert on that
+            # branch, so an unrecognised state can never be read as healthy.
+            case "${H,,}" in
+              healthy)
+                READS=$((READS + 1))
+                echo "::notice::GOV-CONSOLE-ROLL $SHA HEALTHY"
+                exit 0 ;;
+              unhealthy)
+                READS=$((READS + 1))
+                echo "::error::Revision $NEWREV came up Unhealthy on $IMG — rolling back to $ROLLBACK_IMAGE"
+                az containerapp update -n "$APP" -g "$RG" --image "$ROLLBACK_IMAGE" -o none
+                exit 1 ;;
+              none)
+                READS=$((READS + 1)) ;;
+              "")
+                # Distinguish a probe that FAILED (already logged above, and not
+                # a statement about the revision) from one that SUCCEEDED and
+                # returned nothing — the latter is the --query-stopped-resolving
+                # shape and must be named as such.
+                if [ "$PROBE_OK" = true ]; then
+                  ODD=$((ODD + 1))
+                  LAST_ODD="<empty>"
+                  echo "  [$i/24] the health read SUCCEEDED but returned ZERO BYTES — which is exactly what \`--query properties.healthState\` does when that path no longer resolves. NOT counted as a read of the revision's state (R7)."
+                fi
+                ;;
+              *)
+                ODD=$((ODD + 1))
+                LAST_ODD="$H"
+                echo "  [$i/24] health probe returned a value this loop cannot interpret ('$H'). NOT counted as a read of the revision's state — an unrecognised healthState is a statement about the --query, not about the revision (R7)."
+                ;;
             esac
             sleep 30
           done
           if [ "$READS" -eq 0 ]; then
-            echo "::error::The health probe for revision $NEWREV NEVER returned an answer in 24 attempts (see the per-attempt stderr above), so this run established NOTHING about whether the new Gov revision is healthy — it is not 'unhealthy', it is unmeasured. The roll DID happen; investigate the Gov control-plane read (token, RBAC, throttling) before concluding anything about the image. If the estate is degraded, roll back deliberately: $ROLLBACK_ADVICE."
+            if [ "$ODD" -gt 0 ]; then
+              echo "::error::The health probe for revision $NEWREV never returned a value this lane could INTERPRET in 24 attempts ($ODD uninterpretable value(s), last: '${LAST_ODD}'). \`az containerapp revision show --query properties.healthState -o tsv\` exits 0 and prints NOTHING when that path does not resolve, so this is what an ARM property rename looks like — a statement about the QUERY, not about the revision (R7). This run established NOTHING about whether the new Gov revision is healthy, and did NOT roll back on it. Check the --query above first; if the estate is degraded, roll back deliberately: $ROLLBACK_ADVICE."
+            else
+              echo "::error::The health probe for revision $NEWREV NEVER returned an answer in 24 attempts (see the per-attempt stderr above), so this run established NOTHING about whether the new Gov revision is healthy — it is not 'unhealthy', it is unmeasured. The roll DID happen; investigate the Gov control-plane read (token, RBAC, throttling) before concluding anything about the image. If the estate is degraded, roll back deliberately: $ROLLBACK_ADVICE."
+            fi
             exit 1
           fi
-          echo "::error::Revision $NEWREV never reached Healthy within ~12 minutes (last state read: ${H:-<unread>}, successful probes: $READS/24). NOT rolling back automatically on a timeout — an inconclusive health read is not evidence the new revision is bad, and traffic stays on the previous revision until this one goes Healthy. If the estate is degraded, roll back deliberately: $ROLLBACK_ADVICE."
+          echo "::error::Revision $NEWREV never reached Healthy within ~12 minutes (last state read: ${H:-<unread>}, interpretable probes: $READS/24, uninterpretable: $ODD). NOT rolling back automatically on a timeout — an inconclusive health read is not evidence the new revision is bad, and traffic stays on the previous revision until this one goes Healthy. If the estate is degraded, roll back deliberately: $ROLLBACK_ADVICE."
           exit 1
 
       # ── #3844 — A FAILED GOV ROLL MUST LEAVE A RECORD SOMEONE RECEIVES ──────

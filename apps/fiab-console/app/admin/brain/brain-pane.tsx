@@ -50,6 +50,7 @@ import {
   tokens,
 } from '@fluentui/react-components';
 import { ArrowClockwise20Regular } from '@fluentui/react-icons';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { SplitPane } from '@/lib/components/shared/split-pane';
 import { EmptyState } from '@/lib/components/empty-state';
 import type { BrainSnapshot } from '@/app/api/admin/brain/_lib/wire';
@@ -105,6 +106,39 @@ const useStyles = makeStyles({
 
 const ALL_PROVENANCES: EdgeProvenance[] = ['configured', 'declared', 'imports', 'observed', 'owns'];
 
+/**
+ * #4278 — the four views, and their ADDRESS.
+ *
+ * The tab used to be local `useState` only, so `/admin/brain` always rendered
+ * the Graph and Synapses / Recommendations / Coverage had no URL at all. That
+ * is not cosmetic: `loom-ui-verify.yml` captures a G1 receipt by navigating to
+ * a `target_route`, so no route could reach three of the four views, and a
+ * receipt attempted against Recommendations silently captured the Graph
+ * instead — verifying a surface nobody asked about. It also meant an operator
+ * wanting a second opinion before performing a destructive action had no link
+ * to send, and any reload dropped them back to Graph.
+ */
+export type BrainTab = 'graph' | 'synapses' | 'recommendations' | 'coverage';
+
+const BRAIN_TABS: readonly BrainTab[] = ['graph', 'synapses', 'recommendations', 'coverage'];
+
+/** Narrowing guard, so `parseBrainTab` needs no assertion on the value itself. */
+function isBrainTab(raw: string | null | undefined): raw is BrainTab {
+  // Widening the tuple to `readonly string[]` is sound; asserting the narrow
+  // type onto an unvalidated input would be the thing this function exists to
+  // avoid.
+  return typeof raw === 'string' && (BRAIN_TABS as readonly string[]).includes(raw);
+}
+
+/**
+ * Validate `?tab=` against the SAME union the renderer switches on. A stale
+ * link, a hand-typed URL, or a renamed tab must not be able to select a view
+ * that does not exist — every unrecognised value lands on the graph.
+ */
+export function parseBrainTab(raw: string | null | undefined): BrainTab {
+  return isBrainTab(raw) ? raw : 'graph';
+}
+
 type LoadState =
   | { readonly phase: 'loading' }
   | { readonly phase: 'ready'; readonly snapshot: BrainSnapshot }
@@ -129,7 +163,76 @@ export function BrainPane({ initialSnapshot, submitDecision, loadSynapseLayers }
   );
   const [filters, setFilters] = React.useState<BrainFilters>(DEFAULT_FILTERS);
   const [selectedId, setSelectedId] = React.useState<string | null>(null);
-  const [tab, setTab] = React.useState<'graph' | 'synapses' | 'recommendations' | 'coverage'>('graph');
+
+  // #4278: the tab lives in the URL. Read it through `useSearchParams` (the
+  // pattern `governance/lineage` already uses), validated by `parseBrainTab` so
+  // an unrecognised value can never select a view that does not exist.
+  const router = useRouter();
+  const searchParams = useSearchParams();
+  const urlTab = parseBrainTab(searchParams?.get('tab'));
+  const [tab, setTabState] = React.useState<BrainTab>(urlTab);
+
+  /**
+   * The tab the OPERATOR last asked for, while its navigation is still in
+   * flight.
+   *
+   * `router.replace` is asynchronous, and under `force-dynamic` it carries a
+   * server RSC round-trip, so a fast second switch can have the FIRST
+   * navigation settle after it. Without this ref that stale settle re-entered
+   * the effect below and snapped the tab BACKWARDS to a view the operator had
+   * already left — measured as: click Recommendations, click Coverage, first
+   * `replace()` commits, Coverage goes `aria-selected=false`.
+   *
+   * So: while an intent is outstanding, only the settle that MATCHES it is
+   * allowed to write state. Every other settle in that window is our own stale
+   * echo and is dropped. The latest user intent wins.
+   */
+  const pendingTabRef = React.useRef<BrainTab | null>(null);
+
+  // Follow the URL when it changes underneath us — a deep link, or Back landing
+  // on a different `?tab=`. Keyed on the parsed value, so it is a no-op unless
+  // the address actually names a different view.
+  React.useEffect(() => {
+    if (pendingTabRef.current !== null) {
+      // Still waiting for our own write to land. Anything else is stale.
+      if (urlTab !== pendingTabRef.current) return;
+      pendingTabRef.current = null;
+    }
+    setTabState(urlTab);
+  }, [urlTab]);
+
+  const setTab = React.useCallback(
+    (t: BrainTab) => {
+      setTabState(t);
+      // Latch ONLY when this selection actually changes the address.
+      //
+      // Fluent's `TabList` fires `onTabSelect` for the ALREADY-SELECTED tab, and
+      // re-selecting the current tab produces a `replace` that does not move
+      // `urlTab`. The effect above is keyed `[urlTab]`, so it would never run,
+      // so an unconditional latch would never be cleared — and from then on
+      // every external navigation is swallowed: the pane shows one view while
+      // the address bar names another.
+      //
+      // That is #4278's own defect reintroduced by its fix, and it is the worse
+      // form of it. The whole point of addressable tabs is that an operator can
+      // send a colleague a link before performing a destructive action; a URL
+      // that LIES about which view you are on is worse than no URL, because
+      // this one gets trusted.
+      pendingTabRef.current = t === urlTab ? null : t;
+      const params = new URLSearchParams(searchParams?.toString() ?? '');
+      params.set('tab', t);
+      // REPLACE, not push: pushing would turn every tab click into a history
+      // entry, so Back would cycle the operator through tabs instead of
+      // leaving the page.
+      //
+      // `scroll: false` because switching a tab is not a navigation to a new
+      // document — jumping to the top would throw away the operator's scroll
+      // position for no reason. Matches `loom-marketplace.tsx:57` and
+      // `realtime-intelligence-hub.tsx:54`, which do this same pattern.
+      router.replace(`/admin/brain?${params.toString()}`, { scroll: false });
+    },
+    [router, searchParams, urlTab],
+  );
 
   const load = React.useCallback(async () => {
     setState({ phase: 'loading' });
@@ -223,8 +326,8 @@ function ReadySurface({
   setFilters: React.Dispatch<React.SetStateAction<BrainFilters>>;
   selectedId: string | null;
   setSelectedId: (id: string | null) => void;
-  tab: 'graph' | 'synapses' | 'recommendations' | 'coverage';
-  setTab: (t: 'graph' | 'synapses' | 'recommendations' | 'coverage') => void;
+  tab: BrainTab;
+  setTab: (t: BrainTab) => void;
   onRefresh: () => void;
   styles: ReturnType<typeof useStyles>;
   submitDecision?: React.ComponentProps<typeof Recommendations>['submitDecision'];
@@ -361,7 +464,7 @@ function ReadySurface({
         </MessageBar>
       )}
 
-      <TabList selectedValue={tab} onTabSelect={(_, d) => setTab(d.value as typeof tab)}>
+      <TabList selectedValue={tab} onTabSelect={(_, d) => setTab(parseBrainTab(String(d.value)))}>
         <Tab value="graph">Graph</Tab>
         <Tab value="synapses">Synapses</Tab>
         <Tab value="recommendations">Recommendations ({snapshot.findings.length})</Tab>

@@ -49,6 +49,11 @@ import {
   cached,
   clearMonitorCache,
 } from './monitor-arm';
+import {
+  SWALLOWED_ARM_ERROR,
+  describeArmError,
+  type SwallowedArmError,
+} from './swallowed-arm-error';
 
 export { MonitorError, MonitorNotConfiguredError, clearMonitorCache };
 
@@ -1254,6 +1259,21 @@ export interface DiagCoverage {
   settingNames: string[];
   /** Set when the per-resource probe failed for a non-"unsupported" reason. */
   note?: string;
+  /**
+   * The STRUCTURED form of `note`, when the probe failed against ARM.
+   *
+   * `note` is ARM's prose and nothing more — `monitor-arm.ts` builds its message
+   * from `json.error.message`, so the status and `json.error.code` never reach a
+   * reader of the string. A consumer that needs to know WHAT failed (the read
+   * warmer's throttle breaker does) would otherwise have to grep the sentence,
+   * which measurably did not work on the shape production emits (#4271).
+   *
+   * Present only when the probe actually reached ARM and ARM answered with a
+   * status. Absent for a "supported: false" row — that is a positive "this type
+   * cannot take diagnostic settings" observation, NOT a failure, and collapsing
+   * absent into unreachable is the #4243 defect.
+   */
+  [SWALLOWED_ARM_ERROR]?: SwallowedArmError;
 }
 
 /** Resource types that never support diagnostic settings — skip the probe. */
@@ -1309,8 +1329,19 @@ async function _getDiagnosticsCoverage(loomLaw: string): Promise<DiagCoverage[]>
     } catch (e) {
       const status = e instanceof MonitorError ? e.status : 0;
       // 404 / NotSupported / BadRequest → the type can't take diag settings.
+      // That is a POSITIVE "absent" observation, not "unreachable" — keep the
+      // two apart (#4243 collapsed them and manufactured a false refusal).
       if (status === 404 || status === 400 || status === 405) return { ...base, supported: false };
-      return { ...base, note: (e as Error).message };
+      // Non-absent: the probe reached ARM and ARM refused. Keep ARM's prose for
+      // humans AND its structured verdict for machines — forwarding only
+      // `.message` here is what left the read warmer grepping a sentence that
+      // does not contain the code it was looking for (#4271 findings 1-2).
+      const armError = describeArmError(e);
+      return {
+        ...base,
+        note: (e as Error).message,
+        ...(armError ? { [SWALLOWED_ARM_ERROR]: armError } : {}),
+      };
     }
   });
 

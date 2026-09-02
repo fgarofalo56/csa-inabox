@@ -25,6 +25,32 @@ This file is maintained automatically by
 [Conventional Commits](https://www.conventionalcommits.org/). See
 [RELEASE.md](RELEASE.md) for the release process.
 
+## [0.104.0](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.103.5...csa-inabox-v0.104.0) (2026-09-01)
+
+
+### Features
+
+* **brain:** Perform backend — guarded executor registry, perform route, recommendation state store ([#4242](https://github.com/fgarofalo56/csa-inabox/issues/4242)) ([#4246](https://github.com/fgarofalo56/csa-inabox/issues/4246)) ([de53b6f](https://github.com/fgarofalo56/csa-inabox/commit/de53b6f213e5128bc479de2acbe7a6cfbba98323))
+* **lineage:** LIN-GC-2 — the scheduled half of lineage garbage collection ([#4226](https://github.com/fgarofalo56/csa-inabox/issues/4226)) ([0001897](https://github.com/fgarofalo56/csa-inabox/commit/00018977aa96052dd58b5f43527766828d213caa))
+
+
+### Bug Fixes
+
+* **brain:** make recommendations and the node-select detail readable ([#4241](https://github.com/fgarofalo56/csa-inabox/issues/4241)) ([#4245](https://github.com/fgarofalo56/csa-inabox/issues/4245)) ([3e32598](https://github.com/fgarofalo56/csa-inabox/commit/3e32598d00bc630319c9d08f84f28af12101f3eb))
+* **brain:** the cost badge painted a 650-character paragraph over its neighbours ([#4241](https://github.com/fgarofalo56/csa-inabox/issues/4241) defect 11) ([#4250](https://github.com/fgarofalo56/csa-inabox/issues/4250)) ([5f1ee0d](https://github.com/fgarofalo56/csa-inabox/commit/5f1ee0d15d5e9ed22f6489d516529d0ecd506763))
+* **deploy:** roll health poll survives ARM throttle, ~300s budget, rollback never asserts a state it did not read ([#4231](https://github.com/fgarofalo56/csa-inabox/issues/4231)) ([#4236](https://github.com/fgarofalo56/csa-inabox/issues/4236)) ([e1a6701](https://github.com/fgarofalo56/csa-inabox/commit/e1a670105bfbb5182a1ae10bd4ccfc443ff1f46e))
+* **deploy:** the unity/iceberg shared-repo pair manufactured UNKNOWN at the pin-refresh ([#4064](https://github.com/fgarofalo56/csa-inabox/issues/4064)) ([#4237](https://github.com/fgarofalo56/csa-inabox/issues/4237)) ([c3f4a3b](https://github.com/fgarofalo56/csa-inabox/commit/c3f4a3b726e7500c4bf7340855cd48f8d8cc6e42))
+* **estate:** the Pause drift refusal was manufactured by the console's own throttled reads ([#4243](https://github.com/fgarofalo56/csa-inabox/issues/4243)) ([#4247](https://github.com/fgarofalo56/csa-inabox/issues/4247)) ([6b94182](https://github.com/fgarofalo56/csa-inabox/commit/6b94182ecb7b95ff935c2a9cf32f96b37e3efe77))
+* **iceberg:** the catalog accepted the console SIGN-IN app as its audience, and forgot everything on every roll ([#4256](https://github.com/fgarofalo56/csa-inabox/issues/4256)) ([71c5bf2](https://github.com/fgarofalo56/csa-inabox/commit/71c5bf2426db7abc2d6b33642976d4c0a43a41bf))
+* **perf:** the read-warmer never stopped when ARM said stop, so it ate the UAMI's whole read budget ([#4244](https://github.com/fgarofalo56/csa-inabox/issues/4244)) ([#4254](https://github.com/fgarofalo56/csa-inabox/issues/4254)) ([9d04fcf](https://github.com/fgarofalo56/csa-inabox/commit/9d04fcf13226b3c623d741c89bf78e75ee466828))
+
+
+### Documentation
+
+* **prp:** land the backlog-drain register of record (247-issue ledger + reproducible generator) ([#4232](https://github.com/fgarofalo56/csa-inabox/issues/4232)) ([dba610b](https://github.com/fgarofalo56/csa-inabox/commit/dba610b4d882dcdd7640d2d95d6beac377153a3c))
+* **prp:** register the W1 operator-report round — 254 rows ([#4249](https://github.com/fgarofalo56/csa-inabox/issues/4249)) ([656247a](https://github.com/fgarofalo56/csa-inabox/commit/656247a7b1c0e785d1513a37b596bfb5c2e393af))
+* **prp:** W0 re-measurement sweep — five deploy rows re-verdicted, 4238 registered (248 rows) ([#4239](https://github.com/fgarofalo56/csa-inabox/issues/4239)) ([53498f0](https://github.com/fgarofalo56/csa-inabox/commit/53498f0c7002930be1283ca2acd22a53f6e4791c))
+
 ## [0.103.5](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.103.4...csa-inabox-v0.103.5) (2026-08-31)
 
 

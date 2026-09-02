@@ -66,8 +66,11 @@ export { extractFromBicep, type BicepFileInput } from './extractors/bicep';
 
 export {
   extractFromContainerAppEnv,
+  namesADiscoveredTarget,
+  namesSelf,
   type ContainerAppEnvEntry,
   type ContainerAppEnvInput,
+  type EstateTargetIndex,
 } from './extractors/container-app-env';
 
 export {
