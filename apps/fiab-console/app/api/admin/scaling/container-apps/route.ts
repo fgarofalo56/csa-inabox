@@ -85,7 +85,41 @@ export const POST = withDlzAccess('scaling', async (req: NextRequest) => {
     minReplicas?: number;
     maxReplicas?: number;
   };
-  if (!body?.name) return NextResponse.json({ ok: false, error: 'name required' }, { status: 400 });
+  // The NAME gate, and why it is a shape check rather than `if (!name)`.
+  //
+  // Review finding on this PR: `refuseScaleToZero` decides on the string it is
+  // handed (it `.trim().toLowerCase()`s it and looks the result up in the
+  // template-derived map), but the name then travels into an ARM URL and through
+  // `fetch`, whose WHATWG URL parser RESOLVES `.` and `..` path segments before
+  // the request leaves. MEASURED with fetch stubbed, on the pre-fix code:
+  //
+  //   POST { name: 'loom-x/../loom-risingwave', minReplicas: 0, maxReplicas: 1 }
+  //     -> 200, PATCH …/containerApps/loom-risingwave  {"scale":{"minReplicas":0,…}}
+  //   POST { name: 'loom-risingwave',           minReplicas: 0, maxReplicas: 1 }
+  //     -> 409, zero ARM calls
+  //
+  // Same resource, opposite outcome, because the guard judged a name the
+  // transport then rewrote. Restricting the charset to one the URL parser cannot
+  // rewrite makes "the name the guard judged" and "the name ARM receives" the
+  // same string — which is what makes every check below mean anything.
+  //
+  // The `typeof` half is load-bearing too: `!body?.name` only catches a FALSY
+  // name, so `name: 123` or `name: {}` passed it, reached `.trim()` inside
+  // `refuseScaleToZero` — which sits OUTSIDE the try/catch below — and threw
+  // unhandled, returning a 500 where a 400 belongs.
+  //
+  // `container-apps-arm-client.ts` now enforces the same invariant inside
+  // `appUrl`, so the eight other callers that build that URL inherit it. This
+  // check is not that one duplicated: it is here so the refusal is THIS route's,
+  // with no ARM call attempted at all.
+  if (typeof body?.name !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9-]{0,62}$/.test(body.name)) {
+    return NextResponse.json({
+      ok: false,
+      error: 'name must be 1-63 characters of letters, digits or hyphens, starting with a letter or digit. '
+        + 'Names outside that set can be rewritten by URL canonicalization, so the app acted on '
+        + 'would not be the app named.',
+    }, { status: 400 });
+  }
   // #3895 — the profile is validated against the app's ENVIRONMENT, inside
   // `updateContainerAppScale`, because only the environment knows the answer.
   // What is checked here is the SHAPE, so a free-form string never reaches an
