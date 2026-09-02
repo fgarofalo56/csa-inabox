@@ -11,10 +11,34 @@ export const AZURE_SERVICES_ENV_CHECKS: EnvSpec[] = [
   // ── azure services (optional workloads → warn, not fail) ──
   {
     id: 'svc-synapse', category: 'azure-services', title: 'Synapse (warehouse / notebooks / pipelines)', severity: 'recommended',
-    required: ['LOOM_SYNAPSE_WORKSPACE'], warnOnMiss: true,
-    remediation: 'Set LOOM_SYNAPSE_WORKSPACE (+ LOOM_SYNAPSE_DEDICATED_POOL for warehouse) to enable Synapse-backed warehouse, notebook, and pipeline items.',
+    required: ['LOOM_SYNAPSE_WORKSPACE'],
+    // #3513 — the ARM coordinates are LISTED, not merely implied by the prose.
+    // `/api/admin/gates/[id]/resolve` 400s any key outside a gate's own
+    // requiredSettings ∪ aliasOf, so a var the provisioner's predicate demands
+    // but the spec never names is literally UNWRITABLE through the Fix-it: the
+    // button opens, saves nothing that matters, and the install stays gated.
+    // MEASURED: synapse-pipeline.ts:96 demands LOOM_SUBSCRIPTION_ID and
+    // LOOM_DLZ_RG and neither was in this spec.
+    anyOf: [['LOOM_SUBSCRIPTION_ID'], ['LOOM_DLZ_RG']],
+    warnOnMiss: true,
+    remediation: 'Set LOOM_SYNAPSE_WORKSPACE (+ LOOM_SUBSCRIPTION_ID / LOOM_DLZ_RG for the ARM coordinates) to enable Synapse-backed warehouse, notebook, and pipeline items. The dedicated SQL pool is a separate capability with its own gate (svc-synapse-dedicated-pool).',
     provisionedBy: 'modules/landing-zone/synapse.bicep → admin-plane forwards loomSynapseWorkspace / loomSynapseDedicatedPool',
     role: 'Synapse Administrator (UAMI) on the workspace',
+  },
+  {
+    // #3513 — SPLIT OUT of svc-synapse rather than folded into it. warehouse.ts
+    // refuses on a missing LOOM_SYNAPSE_DEDICATED_POOL, but a serverless-only
+    // Synapse estate is a legitimate, fully-working configuration for
+    // notebooks and pipelines. Adding the pool to svc-synapse's own conditions
+    // would have made every such estate newly report that gate unmet — a
+    // behaviour regression bought purely to make a button writable. A distinct
+    // capability gets a distinct gate, which is also what G2 wants: the Fix-it
+    // sets exactly the thing that is missing.
+    id: 'svc-synapse-dedicated-pool', category: 'azure-services', title: 'Synapse dedicated SQL pool (warehouse backend)', severity: 'recommended',
+    required: ['LOOM_SYNAPSE_WORKSPACE', 'LOOM_SYNAPSE_DEDICATED_POOL'], warnOnMiss: true,
+    remediation: 'Set LOOM_SYNAPSE_WORKSPACE (e.g. mysyn) and LOOM_SYNAPSE_DEDICATED_POOL (e.g. dwhpool01) to enable the Synapse dedicated-pool warehouse backend. Notebooks and pipelines do NOT need this — they run against the workspace itself (svc-synapse). No Microsoft Fabric required.',
+    provisionedBy: 'modules/landing-zone/synapse.bicep (dedicatedSqlPoolEnabled) → admin-plane forwards loomSynapseDedicatedPool → apps[] env',
+    role: 'Synapse Administrator (UAMI) on the workspace + db_owner on the pool',
   },
   {
     id: 'svc-adx', category: 'azure-services', title: 'Azure Data Explorer (KQL / Real-Time)', severity: 'recommended',
@@ -25,8 +49,17 @@ export const AZURE_SERVICES_ENV_CHECKS: EnvSpec[] = [
   },
   {
     id: 'svc-eventhubs', category: 'azure-services', title: 'Event Hubs (eventstream)', severity: 'recommended',
-    required: ['LOOM_EVENTHUB_NAMESPACE'], warnOnMiss: true,
-    remediation: 'Set LOOM_EVENTHUB_NAMESPACE (+ LOOM_EVENTHUB_RG/SUB) to enable the Azure-native eventstream backend.',
+    required: ['LOOM_EVENTHUB_NAMESPACE'],
+    // #3513 — eventstream.ts:212 falls back to the platform-wide pair when the
+    // Event Hubs-specific one is unset, so the OR is the predicate's own shape,
+    // not a convenience. Listing both members of each axis is what makes them
+    // writable through the Fix-it.
+    anyOf: [
+      ['LOOM_EVENTHUB_SUB', 'LOOM_SUBSCRIPTION_ID'],
+      ['LOOM_EVENTHUB_RG', 'LOOM_DLZ_RG'],
+    ],
+    warnOnMiss: true,
+    remediation: 'Set LOOM_EVENTHUB_NAMESPACE (+ LOOM_EVENTHUB_SUB / LOOM_EVENTHUB_RG, or the platform-wide LOOM_SUBSCRIPTION_ID / LOOM_DLZ_RG) to enable the Azure-native eventstream backend.',
     provisionedBy: 'modules/landing-zone (Event Hubs namespace) → apps[] env',
     role: 'Azure Event Hubs Data Owner (UAMI) on the namespace',
   },
@@ -97,15 +130,32 @@ export const AZURE_SERVICES_ENV_CHECKS: EnvSpec[] = [
   },
   {
     id: 'svc-monitor-alerts', category: 'azure-services', title: 'Azure Monitor (Activator alerts)', severity: 'recommended',
-    required: ['LOOM_LOG_ANALYTICS_RESOURCE_ID'], anyOf: [['LOOM_ALERT_RG', 'LOOM_ADMIN_RG']], warnOnMiss: true,
+    // #3513 — activator.ts:296 demands LOOM_SUBSCRIPTION_ID (alert rules are
+    // created at a subscription-scoped ARM path). It was absent here, so the
+    // Fix-it could write the LAW id and the RG and still leave the install
+    // gated on the one key it could not set.
+    required: ['LOOM_LOG_ANALYTICS_RESOURCE_ID', 'LOOM_SUBSCRIPTION_ID'], anyOf: [['LOOM_ALERT_RG', 'LOOM_ADMIN_RG']], warnOnMiss: true,
     remediation: 'Set LOOM_LOG_ANALYTICS_RESOURCE_ID (alert query scope) + LOOM_ALERT_RG so the Azure-native Activator can create scheduled-query alert rules. A push-button deploy wires both day-one (LOOM_ALERT_RG defaults to the admin RG) and provisions a default alert set — Console availability, 5xx errors, replica restarts — plus a default action group (modules/admin-plane/monitoring-default-alerts.bicep), so /monitor Alerts shows a real default set out of the box.',
     provisionedBy: 'modules/admin-plane/main.bicep (monitoring module → apps[] env, auto-derived) + modules/admin-plane/monitoring-default-alerts.bicep (default alert rules + action group)',
     role: 'Monitoring Contributor (UAMI) on the alert resource group',
   },
   {
     id: 'svc-adf', category: 'azure-services', title: 'Azure Data Factory (mirror CDC)', severity: 'recommended',
-    anyOf: [['LOOM_ADF_FACTORY', 'LOOM_ADF_RG']], warnOnMiss: true,
-    remediation: 'Set LOOM_ADF_FACTORY (+ LOOM_ADF_RG / LOOM_ADF_SUBSCRIPTION_ID) to enable the ADF-CDC mirrored-database backend (source SQL → ADLS Bronze).',
+    // #3513 — the old shape was `anyOf: [['LOOM_ADF_FACTORY', 'LOOM_ADF_RG']]`,
+    // which reads "factory OR resource group is enough". Neither the ADF ARM
+    // path nor adf-pipeline.ts:95 agrees: it needs a factory name, a resource
+    // group AND a subscription, each of which has an ADF-specific spelling that
+    // falls back to the platform-wide one. Three axis-groups say that, and they
+    // make every member writable through the Fix-it — LOOM_ADF_NAME,
+    // LOOM_DLZ_RG and LOOM_SUBSCRIPTION_ID were all demanded and none was
+    // listed.
+    anyOf: [
+      ['LOOM_ADF_FACTORY', 'LOOM_ADF_NAME'],
+      ['LOOM_ADF_RG', 'LOOM_DLZ_RG'],
+      ['LOOM_ADF_SUBSCRIPTION_ID', 'LOOM_SUBSCRIPTION_ID'],
+    ],
+    warnOnMiss: true,
+    remediation: 'Set LOOM_ADF_FACTORY (or LOOM_ADF_NAME) plus its resource group (LOOM_ADF_RG, else LOOM_DLZ_RG) and subscription (LOOM_ADF_SUBSCRIPTION_ID, else LOOM_SUBSCRIPTION_ID) to enable the ADF-CDC mirrored-database backend (source SQL → ADLS Bronze).',
     provisionedBy: 'modules/landing-zone (ADF factory) → apps[] env',
     role: 'Data Factory Contributor (UAMI) on the factory',
   },
