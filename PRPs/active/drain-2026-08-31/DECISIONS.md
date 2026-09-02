@@ -173,11 +173,81 @@ the observed bucket — visible, never actionable, never tagged.
 | 2026-09-02 | #4281 | 33 SUCCESS / 3 SKIPPED, 0 red, 0 pending | docs-only; registers the 2026-09-01 drain round |
 | 2026-09-02 | #4286 | 35 SUCCESS / 3 SKIPPED, 0 red, 0 pending | dependabot: browserslist 4.28.6 -> 4.28.8 (portal) |
 | 2026-09-02 | #4289 | 71 SUCCESS / 3 SKIPPED, 0 red, 0 pending | dependabot: pypdf 6.15.0 -> 6.16.1 (platform locks) |
+| 2026-09-02 | #4268 | 34 SUCCESS / 3 SKIPPED, 1 advisory red (CodeQL), 0 pending | `merge-eligible.py`: MISSING none · RED none · INCOMPLETE none. Sole blocker was `REVIEW_REQUIRED`, cleared with **`gh pr merge --admin`** (`enforce_admins:false`, `required_approving_review_count:1`, zero formal reviews). No required context was red, so #4047 acceptance item 3 is not triggered |
+| 2026-09-02 | #4266 | 34 SUCCESS / 3 SKIPPED, 0 red, 0 pending | Sole blocker was `REVIEW_REQUIRED`, cleared with **`gh pr merge --squash --admin`**. Review blocker fixed first (drain audit asserted a lane "HAS now run" from a `gh run list` that never returned — R7). `#4144`, `#4285`, `#4233` all kept OPEN: the three newly-automatic lanes have never fired, so merged is not deployed |
 
-### Close audit for that batch
+### #4268 — why it merged first, and why its one red did not block
+
+Merged **first of the three ready PRs deliberately**, not by convenience. #4268
+is the guard fix (`check-env-sync` went green on a shrunken population). A guard
+belongs on `main` **before** the PRs it would validate, so that if #4262 or #4266
+then fails the stricter check, that failure is a genuine finding.
+
+Stated as the ordering principle, which is what was actually established:
+merging #4262 or #4266 first **could** have let them pass under the older,
+weaker guard — neither fixes `check-env-sync`; **#4268** is the guard fix — and
+a pass under the weaker guard would have said nothing. What was verified
+materially is that the stricter guard genuinely applies to both: #4262 touches
+`apps/fiab-console/lib/**` env reads and #4266 touches `.github/workflows/**` +
+`scripts/ci/**`, all inside `check-env-sync`'s examined population. What was
+**not** run is the counterfactual itself — neither PR has been re-evaluated
+against the merged guard, so this record does not claim they *would* have
+passed.
+
+Its single red is **CodeQL**, which is advisory in this repo — not among the 15
+contexts that can block. It was **judged, not waived**: the 11 `useless-escape`
+alerts were disproved by execution (`temp/prove-useless-escape.mjs`), where the
+suggested fix threw `SyntaxError: Missing } in template expression` on the
+template-literal shell fixtures and silently **stopped matching** on the regex
+literals. Disposition posted to the PR before merge.
+
+### Close audit for #4268
+
+**Zero issues auto-closed.** Verified by measurement rather than assumed.
+Window: base `4175977dd30` → merge commit `0bfeb7765795`, merged
+**2026-09-02T19:26:42Z**; the scan covered issues closed between that merge and
+the audit, with 25 closed issues read as a positive control (a non-zero
+population proves the query path works, so the zero below is a measurement and
+not an empty response).
+
+Confirmed three independent ways, because a timestamp window alone is weaker
+than this file's own bar — the sibling audit below uses the close event's
+`commit_id`:
+
+1. The repo's own closing-keyword parser over the merge commit message —
+   `node scripts/ci/neutralize-release-close-keywords.mjs --check` → "0 closing
+   keywords remain", rc=0. Same result over #4268's body. This is the check that
+   matters, because it is the parser that makes "Does not close #N" close #N.
+2. GraphQL `closingIssuesReferences` → `[]`.
+3. `gh issue list --state closed` over the window → empty, against the 25-issue
+   positive control above.
+
+That is the intended outcome and not luck. #4268 **ratchets and enumerates**
+rather than fixes: the 17 `env[?name==].value` sites it found live in
+`.github/workflows/**` and `scripts/csa-loom/**`, files that lane does not own.
+
+`#3956` and `#3344` are therefore still **OPEN**, correctly.
+
+**Correction to an earlier draft of this record.** It also listed `#3940` as
+staying open on merge, taking that from #4268's closing paragraph. That is
+false: **#3940 was already CLOSED at 2026-08-30T22:37:42Z**, three days before
+this merge. #4268's body is self-contradictory on the point — its own
+"#3940 — CLOSED, but only one third fixed" section says so — and this record
+propagated the wrong half without checking issue state, which is exactly the R7
+failure (asserting a state it did not establish) in exactly the kind of document
+that gets cited later as evidence. The **conclusion is unaffected** — zero is
+still the correct close-audit result, and #3940 was not closed *by* this merge —
+but the supporting sentence was wrong and is corrected here rather than quietly
+edited away.
+
+Per `deploy-integrity.md` R2 this is a CI-guard change with no deployed artifact
+and no runtime behaviour on any estate: **merged, not deployed.**
+
+### Close audit for the 2026-09-02 #4261 batch
 
 One issue closed inside the merge window and it was checked rather than
-assumed, because the row two lines above says the opposite:
+assumed, because the **#4261 row in the override-log table above** says the
+opposite:
 
 - **#4257** (RisingWave scale-to-zero destroys MVs) closed 2026-09-02T02:14:14Z.
   The #4261 row records it as deliberately KEPT OPEN on the grounds that

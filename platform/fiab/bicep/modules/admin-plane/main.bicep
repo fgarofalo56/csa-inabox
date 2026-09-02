@@ -1110,6 +1110,46 @@ var loomMigrateActive = loomMigrateEnabled && containerPlatform == 'containerApp
 var risingwaveEnabled = (loomBackends.?risingwave ?? 'enabled') != 'disabled'
 var risingwaveActive = risingwaveEnabled && containerPlatform == 'containerApps' && deployAppsEnabled
 
+// ── #2642 loom-redis-oss — the SOVEREIGN shared Redis substrate ───────────────
+// Backs LOOM_RESULT_CACHE_REDIS (the PSR-5/6 shared query result cache).
+//
+// WHY IT IS SOVEREIGN-ONLY BY DEFAULT, and why that is not a parity failure.
+// Loom's forward Redis path in the PUBLIC cloud is Azure Managed Redis
+// (Microsoft.Cache/redisEnterprise, modules/shared/managed-redis.bicep) — a
+// first-party managed service, and the right answer where it exists. It does NOT
+// exist in Azure Government: Learn's AMR planning FAQ says *"Azure Managed Redis
+// is only available in the global Azure cloud"*, and Microsoft Q&A
+// (learn.microsoft.com/answers/a/12551338) states there is no announced ETA for
+// any sovereign cloud. The sovereign alternative Azure DOES offer is the classic
+// Azure Cache for Redis, which Microsoft turns off on 2028-10-01. Waiting for an
+// AMR-in-Gov date that does not exist would leave GCC / GCC-High / IL5 with a
+// dated dead end, so cloud-parity.md §3 applies — "where a cloud genuinely lacks
+// a dependency, Loom supplies the Azure-native/OSS equivalent" — and the
+// equivalent is a Valkey (BSD-3-Clause) Container App on the estate's own CAE,
+// pulled from the estate's own ACR mirror, which runs in a disconnected IL5
+// enclave. Same CAPABILITY in every boundary; different implementation where the
+// platform forces one.
+//
+// COMMERCIAL DELIBERATELY DOES NOT GET THIS. Its path is the AMR cutover of the
+// live `redis-loom-hband-*` cache, which is a SCHEDULED OPERATOR ACTION with its
+// own change window — see docs/fiab/runbooks/redis-amr-cutover.md. Standing up a
+// second, OSS cache next to it here would be the "just deploy new alongside it"
+// shape deploy-integrity.md R5 forbids.
+//
+// AUTO-BIND (auto-bind-by-default.md §5): when active, the deploy PROVISIONS the
+// cache, mints its credential into Key Vault, and SETS LOOM_RESULT_CACHE_REDIS /
+// _PASSWORD / _TLS on the Console. There is no "set LOOM_X yourself" step.
+//
+// COST: ACA Consumption, 0.5 vCPU / 1.0Gi, minReplicas 1 (a cache that scales to
+// zero loses every key each idle window, which is worse than no cache — it looks
+// warm and never is). Budget the ACTIVE rate, roughly $35-40/mo/boundary.
+// ADMIN OPT-OUT: loomBackends.redisOss = 'disabled' → the app is skipped,
+// LOOM_RESULT_CACHE_REDIS is emitted empty, and the result cache runs on its
+// in-process per-replica LRU with zero loss of function (it is a latency
+// optimisation, never a correctness or availability dependency).
+var redisOssEnabled = (loomBackends.?redisOss ?? 'enabled') != 'disabled'
+var redisOssActive = redisOssEnabled && boundary != 'Commercial' && containerPlatform == 'containerApps' && deployAppsEnabled
+
 // ── HYP-5 loom-directlake columnar scan/frame tier — DEFAULT-ON deploy toggle ─
 // Backs LOOM_DIRECTLAKE_URL (/api/directlake/{scan,frame} + the semantic layer's
 // columnar-cache-query.ts import-class path).
@@ -1509,6 +1549,23 @@ var loomUnityPostgresActive = loomUnityActive && postgresStoresAllowed
 var risingwaveRootPasswordSecretName = 'loom-risingwave-root-password'
 var risingwaveRootPassword = 'Rw7${uniqueString(loomGeneratedSecretSeed, 'loom-risingwave-root-v1')}!Qz'
 var risingwaveRootPasswordSecretUri = '${keyvault.outputs.keyVaultUri}secrets/${risingwaveRootPasswordSecretName}'
+
+// loom-redis-oss `requirepass` credential (#2642). Same construction and the
+// same reasoning as risingwaveRootPassword above: UNPREDICTABLE, derived from
+// loomGeneratedSecretSeed (newGuid()), NEVER guid(rg.id, <public-const>) — a
+// public-constant salt is derivable by anyone holding Reader on the RG.
+// WHY IT IS MANDATORY: Valkey, like Redis, ships with NO authentication, and a
+// Container Apps environment gives every app a pod IP in the SAME infrastructure
+// subnet — so loom-script-runner and loom-udf-runtime, whose purpose is running
+// user-supplied code, would sit one TCP connect away from the shared cache. That
+// is the identical exposure that shipped on loom-risingwave (2026-07-29) and
+// loom-unity (#2643). No ACA ipSecurityRestrictions rule can separate CAE
+// siblings; only a credential they do not hold can. It is written to Key Vault
+// (below) and bound on BOTH the cache and the Console as a KEY-VAULT-BACKED
+// Container Apps secretRef — never a plain env literal, and never an output.
+var redisOssPasswordSecretName = 'loom-redis-oss-password'
+var redisOssPassword = 'Rd7${uniqueString(loomGeneratedSecretSeed, 'loom-redis-oss-v1')}!Qz'
+var redisOssPasswordSecretUri = '${keyvault.outputs.keyVaultUri}secrets/${redisOssPasswordSecretName}'
 
 @description('Whether THIS deployment should attempt Microsoft.DBforPostgreSQL/flexibleServers. Forwarded from main.bicep (same name, same meaning). When false, every Postgres-backed component in this module is SKIPPED so the core app-tier still deploys — the airflow-job editor honest-gates on LOOM_AIRFLOW_ENDPOINT, the Weave ontology editor on LOOM_WEAVE_PG_FQDN, and Loom Unity falls back to its EmptyDir H2 store. WHY a given boundary sets it false is recorded in that boundary\'s .bicepparam next to the assignment — read it there rather than assuming a quota restriction; both shipped Gov param files state, with Microsoft Learn citations, that PostgreSQL Flexible Server IS available in Azure Government and pin it false as a deliberate posture hold. If a subscription genuinely IS quota-restricted, https://aka.ms/postgres-request-quota-increase is the request path. NOT a Fabric dependency.')
 param postgresQuotaAvailable bool = true
@@ -2480,6 +2537,27 @@ param loomBackends object = {
   // Synapse-Serverless cold path, exactly as it does today. NOT scale-to-zero —
   // see the cost disclosure on directLakeSvcActive.
   directLake: 'enabled'
+  // #2642 loom-redis-oss — the SOVEREIGN shared Redis substrate. DEFAULT-ON,
+  // opt-OUT, and SOVEREIGN-ONLY: `redisOssActive` additionally requires
+  // `boundary != 'Commercial'`, because Commercial's forward path is Azure
+  // Managed Redis via a scheduled cutover of the live cache
+  // (docs/fiab/runbooks/redis-amr-cutover.md), not a second cache stood up
+  // beside it. On GCC-High / IL5 'enabled' (the default) deploys
+  // shared/redis-oss-aca.bicep — a Valkey (BSD-3-Clause) Container App pulled
+  // from the estate's own ACR mirror — and binds LOOM_RESULT_CACHE_REDIS /
+  // _PASSWORD / _TLS on the Console, which is what turns the PSR-5/6 result
+  // cache from per-replica into cross-replica. NOT GCC, despite it being
+  // sovereign: `redisOssActive` ALSO requires `containerPlatform ==
+  // 'containerApps'` AND `deployAppsEnabled`, and params/gcc.bicepparam
+  // deliberately leaves deployAppsEnabled unset because GCC has no image
+  // producer lane yet (#3078) — a GCC deploy stands up zero Container Apps, so
+  // nothing is deployed and nothing is bound there. GCC gains this with its
+  // apps lane, not by flipping this default. Azure Managed Redis is Azure
+  // Public cloud only with no announced Government date, and the classic Azure
+  // Cache for Redis is turned off 2028-10-01, so this is those boundaries' only
+  // non-dated answer. Set 'disabled' to skip the app; the result cache then runs
+  // on its in-process per-replica LRU with zero loss of function.
+  redisOss: 'enabled'
   pipeline: 'synapse'
   // Model-strategy M4 — OPT-IN APIM AI-gateway for AOAI/Foundry traffic. Folded
   // here (NOT standalone params) to stay under the ARM 256-param ceiling, the
@@ -2913,6 +2991,12 @@ module keyvault 'keyvault.bicep' = {
     risingwavePrincipalId: risingwaveActive ? risingwaveUami!.properties.principalId : ''
     risingwaveRootPasswordSecretName: risingwaveActive ? risingwaveRootPasswordSecretName : ''
     risingwaveRootPassword: risingwaveActive ? risingwaveRootPassword : ''
+    // loom-redis-oss's MANDATORY `requirepass` credential (#2642), on exactly the
+    // same terms: written only when the sovereign OSS cache is actually deployed,
+    // and its UAMI is the only workload identity granted read on it.
+    redisOssPrincipalId: redisOssActive ? redisOssUami!.properties.principalId : ''
+    redisOssPasswordSecretName: redisOssActive ? redisOssPasswordSecretName : ''
+    redisOssPassword: redisOssActive ? redisOssPassword : ''
   }
 }
 
@@ -5100,6 +5184,86 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             { name: 'LOOM_DIRECTLAKE_URL', value: directLakeSvcActive ? 'https://${loomDirectLake!.outputs.fqdn}' : '' }
             { name: 'LOOM_BROKER_URL', value: '' }
             { name: 'LOOM_BROKER_REDIS', value: '' }
+            // ── #2642 — the PSR-5/6 SHARED result cache, AUTO-BOUND ──
+            // Until this change LOOM_RESULT_CACHE_REDIS was emitted by NO bicep
+            // at all, and the svc-redis-result-cache env-check told the operator
+            // to "set LOOM_RESULT_CACHE_REDIS to the shared H-band Redis
+            // endpoint … from compute/hband-shared.bicep" — a module that has
+            // ZERO invocations repo-wide. auto-bind-by-default.md §5 is explicit
+            // that a value the deploy could produce must not be a user step, and
+            // an unreachable remediation is the defect, not an honest gate.
+            //
+            // Sovereign boundaries now get the value from the deploy, read from
+            // the module's own `endpoint` output.
+            //
+            // THIS COUPLES THE APP TIER TO THE CACHE MODULE, DELIBERATELY, AND
+            // THE COST IS A GOV ONE. An earlier revision of this comment claimed
+            // the value was "CONSTRUCTED rather than read from
+            // `redisOss!.outputs.endpoint`" specifically to keep ARM from
+            // emitting a dependency — the LOOM_RISINGWAVE_URL / LOOM_UNITY_URL
+            // blast-radius argument above. That claim was FALSE for the shipped
+            // code and the compiled artifact proves it: main.json carries
+            // `reference('redisOss').outputs.endpoint.value` and `'redisOss'` in
+            // `appDeployments.dependsOn`. It is deleted rather than softened
+            // (deploy-integrity R7 — a shipped assertion the code did not
+            // establish), and the real trade-off is stated here instead.
+            //
+            // What the coupling actually means: on GCC-High and IL5 a
+            // valkey/valkey image that cannot be pulled fails the `redisOss`
+            // nested deployment and therefore blocks the ENTIRE app tier, not
+            // just the cache. That is a worse blast radius than the risingwave
+            // pattern accepts, and it is chosen anyway because the alternative is
+            // worse HERE: a hand-composed `<host>:<port>` couples the port by
+            // hand across three backends that listen on three different ports
+            // (OSS 6379, classic 6380, AMR 10000), and a stale hard-coded 6379
+            // beside a `targetPort:` param that could move is a SILENT degrade —
+            // the result cache falls back to its per-replica LRU and the estate
+            // looks healthy while the shared cache is unreachable. A loud
+            // deployment failure beats a silent cache outage. redis-oss-aca.bicep
+            // publishes `endpoint` precisely so the port cannot be composed by
+            // hand here (#4265 nit 1).
+            //
+            // MEASURED RISK AT MERGE, not a hypothetical: this PR is what ADDS
+            // the `valkey/valkey` entry to platform/fiab/images/upstream-images.json,
+            // so although the Gov mirror lane
+            // (gov-provision-dataplane-images.yml → scripts/ci/mirror-upstream-images.sh,
+            // which mirrors the manifest data-driven rather than by name) HAS
+            // executed successfully (2026-08-07, 2026-08-11), every one of those
+            // runs predates the entry. The image has therefore NEVER been
+            // mirrored into a sovereign ACR, and the first GCC-High/IL5 deploy
+            // after this merges will refuse until that lane is dispatched.
+            // The refusal is the designed behaviour, not a surprise: both Gov
+            // lanes preflight the ref through scripts/ci/assert-acr-image-tags.sh,
+            // and `--skip-if-registry-absent` downgrades ONLY the
+            // registry-does-not-exist-at-all case (a genuine from-scratch
+            // deploy) — a registry that exists but lacks the tag still fails.
+            // So the gate holds; the operator action is "run the mirror first".
+            //
+            // ACA's documented internal FQDN for a TCP ingress app is
+            // `<app>.internal.<env-default-domain>`, reached by name + exposed
+            // port; the wildcard `*.<env-id>` record in the CAE private DNS zone
+            // resolves it.
+            //
+            // COMMERCIAL IS EMPTY ON PURPOSE. Its forward path is Azure Managed
+            // Redis via the cutover of the live `redis-loom-hband-*` cache — a
+            // scheduled operator action with its own change window
+            // (docs/fiab/runbooks/redis-amr-cutover.md), not a second cache stood
+            // up beside it. Empty => the result cache runs on its in-process
+            // per-replica LRU, which is exactly what Commercial does TODAY (the
+            // var has never been set on the live console), so this changes
+            // nothing there and regresses nothing.
+            { name: 'LOOM_RESULT_CACHE_REDIS', value: redisOssActive ? redisOss.outputs.endpoint : '' }
+            // '0' == TLS OFF, and this is load-bearing rather than a relaxation.
+            // ACA `transport: tcp` ingress does NOT terminate TLS, so the OSS
+            // cache speaks plaintext RESP on the CAE VNet hop (the same posture
+            // the estate already accepts for the loom-risingwave Postgres wire).
+            // redis-cache-client.ts defaults TLS ON for the classic :6380 case;
+            // left at the default it would attempt a TLS handshake against a
+            // plaintext listener, fail, trip its circuit breaker and degrade
+            // SILENTLY to the local tiers — a cache that is configured, green,
+            // and never used. Emitted empty (=> client default ON) when the tier
+            // is off, which is correct: there is then no endpoint to reach.
+            { name: 'LOOM_RESULT_CACHE_REDIS_TLS', value: redisOssActive ? '0' : '' }
             // Governance → Data quality (run/results/monitors) and Master data
             // management (match/merge → golden records) REUSE the Databricks /
             // Synapse / Kusto bindings above (LOOM_DATABRICKS_SQL_WAREHOUSE_ID,
@@ -6341,6 +6505,16 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
           risingwaveActive ? [
             { name: 'LOOM_RISINGWAVE_PASSWORD', secretRef: 'loom-risingwave-password' }
           ] : [],
+          // #2642 — the sovereign OSS cache's `requirepass` value. A secretRef,
+          // NEVER `value:`, and present ONLY when the tier is deployed: the KV
+          // secret does not exist otherwise, and a dangling keyVaultUrl secretRef
+          // fails the CONSOLE revision rather than just the feature. With it set,
+          // redis-cache-client.ts takes its access-key AUTH branch instead of the
+          // Entra one — Valkey has no Entra data plane, so that selection is the
+          // difference between a working tier and a silent auth failure.
+          redisOssActive ? [
+            { name: 'LOOM_RESULT_CACHE_REDIS_PASSWORD', secretRef: 'loom-redis-oss-password' }
+          ] : [],
           // MCP stdio→HTTP/SSE bridge (apps/fiab-mcp-bridge). Deployed alongside
           // the other Loom apps; the External-MCP panel reads this to offer the
           // bridged npx/uvx servers for one-click registration. Empty when the
@@ -6389,6 +6563,12 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
           // is deployed (see the matching env entry above).
           risingwaveActive ? [
             { name: 'loom-risingwave-password', keyVaultUrl: risingwaveRootPasswordSecretUri, identity: identity.outputs.uamiConsoleId }
+          ] : [],
+          // #2642 — the SAME Key Vault secret the cache resolves, so the two can
+          // never drift. Present only when the tier is deployed (see the matching
+          // env entry above).
+          redisOssActive ? [
+            { name: 'loom-redis-oss-password', keyVaultUrl: redisOssPasswordSecretUri, identity: identity.outputs.uamiConsoleId }
           ] : [],
           !empty(effectiveMsalClientId) ? [
             // MSAL client secret — KV-backed when the entra-app-registration
@@ -7700,6 +7880,99 @@ module risingwave '../data-plane/loom-risingwave-aca.bicep' = if (risingwaveActi
   // LOOM_RW_ROOT_PASSWORD and the container fails closed by design.
   dependsOn: [
     risingwaveAcrPull
+    keyvault
+  ]
+}
+
+// =====================================================================
+// #2642 — loom-redis-oss: the SOVEREIGN shared Redis substrate.
+//
+// Backs LOOM_RESULT_CACHE_REDIS for the PSR-5/6 shared query result cache in
+// GCC-High / IL5 today — and in GCC once its apps lane lands (#3078), since
+// redisOssActive also requires deployAppsEnabled, which params/gcc.bicepparam
+// leaves unset. In all three, Azure Managed Redis does not exist and the classic
+// Azure Cache for Redis is on a hard 2028-10-01 turn-off. See the redisOssActive
+// derivation above for why this is sovereign-only and why that is cloud-parity
+// COMPLIANCE rather than a gap: same capability everywhere, a different
+// implementation only where the Azure platform forces one.
+//
+// AUTO-BIND (auto-bind-by-default.md §5). This is the whole point of deploying it
+// from the orchestrator rather than shipping another out-of-band entrypoint: the
+// deploy PROVISIONS the cache, MINTS its credential into Key Vault, and SETS
+// LOOM_RESULT_CACHE_REDIS / _PASSWORD / _TLS on the Console below. "Set
+// LOOM_RESULT_CACHE_REDIS to the shared H-band Redis endpoint" as a terminal
+// user-facing state is exactly what that rule forbids, and it is what the
+// svc-redis-result-cache env-check remediation says today.
+//
+// LEAST-PRIVILEGE identity: a dedicated uami-loom-redis-oss holding AcrPull on
+// the ACR and "Key Vault Secrets User" on the vault — and NOTHING else. The
+// cache stores derived query results and lease markers; it needs no data-plane
+// role anywhere. Reusing the broadly-permissioned Console UAMI here would be an
+// unnecessary grant AND would defeat the credential boundary, since the point of
+// the KV grant is that only this app and the Console can read the password.
+// =====================================================================
+resource redisOssUami 'Microsoft.ManagedIdentity/userAssignedIdentities@2024-11-30' = if (redisOssActive) {
+  name: 'uami-loom-redis-oss-${location}'
+  location: location
+  tags: complianceTags
+}
+
+resource redisOssAcrPull 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (redisOssActive && !skipRoleGrants) {
+  scope: acrForScriptRunner
+  name: guid(acrForScriptRunner.id, redisOssUami!.id, '7f951dda-4ed3-4680-a7ca-43fe172d538d')
+  properties: {
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '7f951dda-4ed3-4680-a7ca-43fe172d538d')
+    principalId: redisOssUami!.properties.principalId
+    principalType: 'ServicePrincipal'
+  }
+  dependsOn: [
+    registry
+  ]
+}
+
+module redisOss '../shared/redis-oss-aca.bicep' = if (redisOssActive) {
+  name: 'loom-redis-oss'
+  params: {
+    name: 'loom-redis-oss'
+    location: location
+    redisConfig: {
+      environmentId: containerPlatformModule.outputs.caeId
+      uamiId: redisOssUami.id
+      // The estate ACR mirror, always — the module composes
+      // `<acrLoginServer>/valkey/valkey:<tag>` and has no public-registry branch,
+      // so an air-gapped enclave can pull it (#2682).
+      acrLoginServer: registry.outputs.acrLoginServer
+      targetPort: 6379
+      // ACA Consumption accepts ONLY pairs where memory == 2 x vCPU GiB. maxmemory
+      // is ~70% of the container, leaving headroom for fragmentation and COW — an
+      // unbounded Valkey grows until the container is OOM-killed, which reads as a
+      // mystery restart loop rather than as the capacity problem it is.
+      cpu: '0.5'
+      memory: '1.0Gi'
+      maxmemoryMb: 700
+      maxmemoryPolicy: 'allkeys-lru'
+      // EPHEMERAL BY DESIGN, and stated rather than implied: this is a CACHE, and
+      // every Loom consumer of it degrades honestly (the result cache falls back
+      // to its in-process LRU and then a direct query). A revision roll therefore
+      // drops every key, which is correct here and is published on the module's
+      // `dataDurable` output so no deploy receipt can imply otherwise. Switch to
+      // persistence: 'aof' only for an estate that needs the keys to survive a
+      // roll — it adds an Azure Files share and SMB-latency writes.
+      persistence: 'none'
+      // MANDATORY credential, Key-Vault-backed. The cache resolves this with its
+      // own UAMI at revision start; the value never enters the template, the ARM
+      // deployment history, or `az containerapp show`. With no password the
+      // container's entrypoint exits before binding the port (fail closed).
+      passwordSecretUri: redisOssPasswordSecretUri
+      workspaceId: monitoring.outputs.lawId
+    }
+    complianceTags: complianceTags
+  }
+  // AcrPull before the first revision, AND the Key Vault secret + its Secrets
+  // User grant before it — without them the revision cannot resolve
+  // LOOM_REDIS_PASSWORD and the container fails closed by design.
+  dependsOn: [
+    redisOssAcrPull
     keyvault
   ]
 }

@@ -195,10 +195,19 @@ export const DATA_PLANE_ENV_CHECKS: EnvSpec[] = [
   {
     id: 'svc-redis-result-cache', category: 'data-plane', title: 'Result-cache Redis (ADX / query result cache)', severity: 'recommended',
     required: ['LOOM_RESULT_CACHE_REDIS'], warnOnMiss: true, optionalDefault: true,
-    optionalDefaultDetail: 'query result caching runs on the built-in in-memory per-replica cache with zero loss of function. Set LOOM_RESULT_CACHE_REDIS (the shared Redis host) only to make the cache shared across Console replicas.',
-    remediation: 'Set LOOM_RESULT_CACHE_REDIS to the shared H-band Redis endpoint to upgrade the per-replica in-memory result cache to a shared cross-replica cache. Use the redisEndpoint output of compute/hband-shared.bicep verbatim — it is <host>:10000 on Azure Managed Redis (Commercial) and <host>:6380 on the retiring Azure Cache for Redis (Azure Government, where Managed Redis is unavailable), so do not hard-code a port. Optional scale-out — the in-memory default is fully functional.',
-    provisionedBy: 'modules/compute/hband-shared.bicep (shared Redis) → LOOM_RESULT_CACHE_REDIS on the Console app',
-    role: 'Redis access key from Key Vault (LOOM_RESULT_CACHE_REDIS_PASSWORD secretRef) or AAD data-plane per module wiring',
+    optionalDefaultDetail: 'query result caching runs on the built-in in-memory per-replica cache with zero loss of function. A shared Redis tier only makes the cache coherent ACROSS Console replicas — it is a latency optimisation, never a correctness or availability dependency.',
+    // #2642 — this remediation used to say "Set LOOM_RESULT_CACHE_REDIS … use the
+    // redisEndpoint output of compute/hband-shared.bicep", which was an
+    // auto-bind-by-default.md §5 violation twice over: it asked the OPERATOR to
+    // perform a binding the platform can perform, and it pointed at a module that
+    // has ZERO invocations repo-wide, so the instruction was not even followable.
+    // GCC-High / IL5 now get the value FROM THE DEPLOY. GCC does NOT yet — see
+    // params/gcc.bicepparam (deployAppsEnabled left unset pending #3078) — so this
+    // text must name GCC's real state rather than claim an auto-bind that a GCC
+    // deploy does not perform (cloud-parity.md + deploy-integrity.md R7).
+    remediation: 'GCC-HIGH / IL5: nothing to do — admin-plane/main.bicep deploys the OSS Valkey cache (shared/redis-oss-aca.bicep) and SETS LOOM_RESULT_CACHE_REDIS, LOOM_RESULT_CACHE_REDIS_PASSWORD (Key Vault secretRef) and LOOM_RESULT_CACHE_REDIS_TLS=0 on the Console itself. Unset there means the tier was opted out (loomBackends.redisOss = "disabled") or the deploy has not rolled yet. GCC: the cache is NOT deployed today and this var is expected to be unset — redisOssActive additionally requires deployAppsEnabled, which params/gcc.bicepparam deliberately leaves unset because GCC has no image producer yet (#3078), so a GCC deploy stands up zero Container Apps. GCC gains the cache with its apps lane, not by editing config here. COMMERCIAL: the shared tier is Azure Managed Redis, and binding it is a SCHEDULED change window, not a config edit — follow docs/fiab/runbooks/redis-amr-cutover.md, which provisions the AMR cluster and sets this var from its endpoint output (<host>:10000, NOT the classic 6380 and NOT the OSS 6379 — never hard-code a port). In every boundary the in-memory default is fully functional in the meantime.',
+    provisionedBy: 'GCC-HIGH / IL5: modules/shared/redis-oss-aca.bicep (OSS Valkey on Container Apps), deployed + auto-bound by modules/admin-plane/main.bicep (redisOssActive) → LOOM_RESULT_CACHE_REDIS / _PASSWORD / _TLS on the Console app. GCC: same module, but redisOssActive is false there until deployAppsEnabled is turned on with a GCC image lane (#3078) — nothing is deployed and nothing is bound. COMMERCIAL: modules/shared/managed-redis.bicep (Azure Managed Redis) via the cutover runbook — Azure Managed Redis is Azure Public cloud only, which is why the boundaries take different backends.',
+    role: 'GCC-HIGH / IL5: Valkey requirepass, resolved from Key Vault by the Console UAMI (LOOM_RESULT_CACHE_REDIS_PASSWORD secretRef) — Key Vault Secrets User on the estate vault. COMMERCIAL: Entra data-plane on the Azure Managed Redis database (access-policy assignment for the Console UAMI); no access key is minted.',
   },
   // ── DR0 + CMK1 — restore/at-rest posture (loom-next-level ws-verification-dr) ──
   {

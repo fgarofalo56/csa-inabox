@@ -64,6 +64,10 @@ const DP_REDIS = 'platform/fiab/bicep/modules/deploy-planner/redis.bicep';
 const MAIN = 'platform/fiab/bicep/main.bicep';
 const NETWORK = 'platform/fiab/bicep/modules/admin-plane/network.bicep';
 const BUNDLED_ARM = 'apps/fiab-console/deploy-templates/main.json';
+const OSS = 'platform/fiab/bicep/modules/shared/redis-oss-aca.bicep';
+const ADMIN = 'platform/fiab/bicep/modules/admin-plane/main.bicep';
+const KEYVAULT = 'platform/fiab/bicep/modules/admin-plane/keyvault.bicep';
+const IMAGE_MANIFEST = 'platform/fiab/images/upstream-images.json';
 
 describe('#2642 — an Azure Managed Redis module exists at all', () => {
   it('creates the redisEnterprise cluster + its mandatory default database', () => {
@@ -264,6 +268,335 @@ describe('#2642 — the SHIPPED artifact carries the change, not just the source
   });
 });
 
+describe('#2642 — SOVEREIGN FORWARD PATH: OSS Redis (Valkey) on Container Apps', () => {
+  // The residual half of #2642. Commercial's answer is Azure Managed Redis;
+  // sovereign boundaries have no AMR and no announced ETA, and their only
+  // Azure-managed option is a provider Microsoft turns off on 2028-10-01. Under
+  // cloud-parity.md §3 the answer is the Azure-native/OSS equivalent, deployed
+  // now rather than waiting on a date that does not exist.
+  it('deploys a Container App, not another Microsoft.Cache resource', () => {
+    const code = readCode(OSS);
+    expect(code).toMatch(/resource app 'Microsoft\.App\/containerApps@2025-02-02-preview'/);
+    // The whole point is to stop creating the retiring provider in sovereign
+    // estates — this module must never reach for either Azure Redis provider.
+    expect(code).not.toMatch(/Microsoft\.Cache\/redis/);
+  });
+
+  it('runs VALKEY, not the relicensed Redis image', () => {
+    // Redis moved to RSALv2/SSPL in 2024 and AGPLv3 in Redis 8; both are on the
+    // LIC0 forbidden list. Valkey is the Linux Foundation fork under BSD-3-Clause.
+    const code = readCode(OSS);
+    expect(code).toMatch(/'valkey\/valkey:[\d.]+-alpine'/);
+    expect(code).not.toMatch(/'redis:[\d.]/);
+  });
+
+  it('pulls ONLY from the estate ACR mirror — no public-registry branch exists', () => {
+    // #2682: `acrLoginServer` is required with no '' default and the ref is
+    // COMPOSED from it, so a caller that forgets the coordinate fails template
+    // validation instead of silently egressing to Docker Hub (the exact shape
+    // that withdrew the s3-gateway in PR #2640 round 4).
+    const code = readCode(OSS);
+    expect(code).toMatch(/var acrLoginServer = redisConfig\.acrLoginServer/);
+    expect(code).toMatch(/var image = '\$\{acrLoginServer\}\/\$\{valkeyImage\}'/);
+    // Belt-and-braces only — the STRUCTURAL guarantee is the two assertions
+    // above (the ref is composed from a required, defaultless coordinate, so
+    // there is no branch a public registry could be reached through). This line
+    // just catches a literal someone pastes in later.
+    //
+    // DELIBERATELY UNANCHORED, and it must stay that way. This is a `not.toMatch`
+    // SUBSTRING SEARCH over a whole multi-line file, not host validation. Anchor
+    // it (^…$) and it can never match a multi-line string, so the negative
+    // assertion would pass unconditionally — a control that cannot fail. The
+    // CodeQL `js/regex/missing-regexp-anchor` hit here is a false positive for
+    // exactly that reason.
+    //
+    // `index.docker.io` is dropped: `docker\.io` already matches it as a
+    // substring. `gcr.io`, `registry.k8s.io` and `public.ecr.aws` added — they
+    // are the public registries a Valkey/Redis image is most plausibly pasted
+    // from after Docker Hub.
+    expect(code).not.toMatch(/docker\.io|ghcr\.io|quay\.io|gcr\.io|registry\.k8s\.io|public\.ecr\.aws/);
+  });
+
+  it('is digest-pinned in the upstream-image mirror manifest', () => {
+    // A bicep ref with no manifest entry means nothing imports that tag into the
+    // estate ACR and the revision can never activate. MIR0 enforces this
+    // generally; this pins THIS image specifically.
+    const manifest = JSON.parse(read(IMAGE_MANIFEST)) as {
+      images: { acrRepo: string; tag: string; digest: string; spdx: string }[];
+    };
+    const entry = manifest.images.find((i) => i.acrRepo === 'valkey/valkey');
+    expect(entry).toBeDefined();
+    expect(entry!.digest).toMatch(/^sha256:[0-9a-f]{64}$/);
+    expect(entry!.spdx).toBe('BSD-3-Clause');
+    // The bicep-pinned tag and the manifest tag must be the same string — the
+    // module composes `${acr}/${repo}:${tag}`.
+    expect(readCode(OSS)).toContain(`'valkey/valkey:${entry!.tag}'`);
+  });
+
+  it('FAILS CLOSED without a password instead of serving an open cache', () => {
+    // Valkey ships with NO authentication, and every app in a Container Apps
+    // environment draws a pod IP from the SAME infrastructure subnet — so
+    // loom-script-runner and loom-udf-runtime, which execute user-supplied code,
+    // are one TCP connect away. That is precisely how loom-risingwave shipped an
+    // unauthenticated root superuser (2026-07-29) and loom-unity an anonymously
+    // writable catalog (#2643). The guard must live in the ENTRYPOINT, so an
+    // empty Key Vault resolution fails too — not only a missing bicep param.
+    const src = read(OSS);
+    expect(src).toMatch(/if \[ -z "\$LOOM_REDIS_PASSWORD" \]; then/);
+    expect(src).toMatch(/FAIL CLOSED/);
+    expect(src).toMatch(/exit 1/);
+    expect(src).toMatch(/requirepass \$LOOM_REDIS_PASSWORD/);
+  });
+
+  it('binds the credential as a secretRef and never as an env literal or output', () => {
+    const code = readCode(OSS);
+    expect(code).toMatch(/keyVaultUrl: passwordSecretUri, identity: uamiId/);
+    expect(code).toMatch(/\{ name: 'LOOM_REDIS_PASSWORD', secretRef: 'redis-password' \}/);
+    // No `value:` binding of the password onto the container env, and no output
+    // can carry it — an output lands in deployment history and CI logs.
+    expect(code).not.toMatch(/name: 'LOOM_REDIS_PASSWORD', value:/);
+    expect(code).not.toMatch(/^output .*(password|Password)[^A-Za-z]*string = (password|redisConfig)/m);
+  });
+
+  it('never exposes the cache publicly and speaks TCP, not HTTP', () => {
+    const code = readCode(OSS);
+    expect(code).toMatch(/external: false/);
+    expect(code).toMatch(/transport: 'tcp'/);
+    expect(code).not.toMatch(/external: true/);
+  });
+
+  it('FORCES maxReplicas to 1 — two replicas would be two different caches', () => {
+    // ACA ingress load-balances across replicas, and two Valkey processes behind
+    // one ingress are two INDEPENDENT, non-replicating datasets: a client's GET
+    // hits whichever process its connection landed on. A "shared" cache that
+    // answers differently per connection, with no error anywhere. The cap must
+    // be a literal, NOT a config-bag key that an operator can raise.
+    const code = readCode(OSS);
+    expect(code).toMatch(/minReplicas: 1\s*\n\s*maxReplicas: 1/);
+    expect(code).not.toMatch(/maxReplicas: (int\(|maxReplicas)/);
+  });
+
+  it('states its durability posture honestly instead of implying persistence', () => {
+    // The recorded amnesiac-service shape: a stateful tier on an ephemeral ACA
+    // filesystem that loses everything on a roll while the deploy reads green.
+    // The default here IS ephemeral — that is correct for a cache — but it must
+    // be DECLARED, and RDB must be off so nothing half-promises durability.
+    const code = readCode(OSS);
+    expect(code).toMatch(/output dataDurable bool = useAof/);
+    expect(code).toMatch(/output persistenceMode string = persistence/);
+    expect(code).toMatch(/var persistence = string\(redisConfig\.\?persistence \?\? 'none'\)/);
+    expect(read(OSS)).toMatch(/echo 'save ""'/);
+    // And the ephemeral consequence is spelled out in the output description a
+    // deploy receipt actually prints, not only in a header comment.
+    expect(read(OSS)).toMatch(/DROPS EVERY KEY/);
+  });
+
+  it('bounds memory so an unbounded cache cannot OOM-kill its own container', () => {
+    const code = readCode(OSS);
+    expect(code).toMatch(/var maxmemoryMb = int\(redisConfig\.\?maxmemoryMb \?\? \d+\)/);
+    expect(read(OSS)).toMatch(/maxmemory \$\{LOOM_REDIS_MAXMEMORY_MB\}mb/);
+    expect(read(OSS)).toMatch(/maxmemory-policy \$LOOM_REDIS_MAXMEMORY_POLICY/);
+  });
+});
+
+describe("#2642 — the persistence: 'aof' BRANCH (opt-in, and unexercised by any deploy)", () => {
+  // #4265 review F7: this branch had NO fixture at all. It creates four Azure
+  // resources, mounts an SMB share into the cache container, and changes where
+  // the AOF is written — and not one line of it was pinned, while the only
+  // shipped call site (admin-plane/main.bicep) passes `persistence: 'none'`.
+  //
+  // So nothing deploys it today and nothing tested it. These assertions pin the
+  // shape so the branch cannot rot silently between now and the first estate
+  // that turns it on. They are STATIC-SHAPE assertions over the bicep, not a
+  // deploy receipt: per deploy-integrity.md R2 this branch remains UNPROVEN
+  // until an estate actually stands it up. The fixture makes it *reviewable*,
+  // not *verified*.
+
+  it('is genuinely opt-in: the default is ephemeral and no call site opts in', () => {
+    const code = readCode(OSS);
+    expect(code).toMatch(/var persistence = string\(redisConfig\.\?persistence \?\? 'none'\)/);
+    expect(code).toMatch(/var useAof = persistence == 'aof'/);
+    // The single shipped consumer passes 'none' explicitly. If this assertion
+    // ever fails it means an estate started deploying the AOF path — at which
+    // point the private-endpoint gap recorded in the module header stops being
+    // theoretical and must be closed before the change ships.
+    expect(readCode(ADMIN)).toMatch(/persistence: 'none'/);
+    expect(readCode(ADMIN)).not.toMatch(/persistence: 'aof'/);
+  });
+
+  it('gates ALL FOUR AOF resources on useAof, so the default deploys none of them', () => {
+    // Population completeness, not spot-check: an unconditional member of this
+    // quartet would create (and bill) a storage account on every ephemeral
+    // sovereign deploy, and `aofCaeStorage` would additionally fail because it
+    // calls listKeys() on an account the ephemeral path has no reason to have.
+    const code = readCode(OSS);
+    const gated = [
+      /resource aofStorage 'Microsoft\.Storage\/storageAccounts@[\d-]+' = if \(useAof\)/,
+      /resource aofFileSvc 'Microsoft\.Storage\/storageAccounts\/fileServices@[\d-]+' = if \(useAof\)/,
+      /resource aofShare 'Microsoft\.Storage\/storageAccounts\/fileServices\/shares@[\d-]+' = if \(useAof\)/,
+      /resource aofCaeStorage 'Microsoft\.App\/managedEnvironments\/storages@[\d-]+' = if \(useAof\)/,
+    ];
+    for (const re of gated) expect(code).toMatch(re);
+    // And the count is the guard against a fifth AOF resource being added
+    // later without a condition: every `resource aof*` line must carry one.
+    const aofResourceLines = code
+      .split('\n')
+      .filter((l) => /^resource aof\w+ '/.test(l));
+    expect(aofResourceLines.length).toBe(gated.length);
+    for (const l of aofResourceLines) expect(l).toMatch(/= if \(useAof\)/);
+  });
+
+  it('actually writes the AOF to the mount — the share is not mounted and ignored', () => {
+    // The hollow shape this catches: share created, volume mounted, and valkey
+    // still writing its append file to the container's own /tmp, so the deploy
+    // looks durable and loses every key on the next revision anyway.
+    const code = readCode(OSS);
+    expect(code).toMatch(/var aofMountPath = '\/data'/);
+    expect(code).toMatch(/var dataDir = useAof \? aofMountPath : '\/tmp\/loom-redis'/);
+    expect(code).toMatch(/\{ name: 'LOOM_REDIS_DIR', value: dataDir \}/);
+    // appendonly follows the same switch, both directions: 'yes' only on the
+    // AOF path, and provably 'no' on the default (an appendonly cache writing
+    // to ephemeral /tmp is the worst of both).
+    expect(code).toMatch(/\{ name: 'LOOM_REDIS_APPENDONLY', value: useAof \? 'yes' : 'no' \}/);
+    expect(read(OSS)).toMatch(/echo "appendonly \$LOOM_REDIS_APPENDONLY"/);
+    expect(read(OSS)).toMatch(/echo "dir \$LOOM_REDIS_DIR"/);
+  });
+
+  it('wires the volume end-to-end: share -> env storage link -> volume -> mount', () => {
+    // Four names have to agree across three resources and the container spec.
+    // A mismatch in any one of them is a deploy-time failure at best and a
+    // silently unmounted volume at worst, so they are pinned as a chain.
+    const code = readCode(OSS);
+    expect(code).toMatch(/var aofShareName = 'loom-redis-aof'/);
+    expect(code).toMatch(/var aofStorageLink = 'loom-redis-aof'/);
+    expect(code).toMatch(/name: aofShareName/);
+    expect(code).toMatch(/shareName: aofShareName/);
+    expect(code).toMatch(/name: aofStorageLink/);
+    expect(code).toMatch(/accountName: aofStorage\.name/);
+    expect(code).toMatch(
+      /volumeMounts: useAof \? \[\s*\{ volumeName: 'redis-aof', mountPath: aofMountPath \}\s*\] : \[\]/,
+    );
+    expect(code).toMatch(
+      /volumes: useAof \? \[\s*\{ name: 'redis-aof', storageType: 'AzureFile', storageName: aofStorageLink \}\s*\] : \[\]/,
+    );
+  });
+
+  it('declares a network posture on the account that holds cached query results', () => {
+    // #4265 review F7: this account holds the AOF journal — i.e. real query
+    // results at rest — and previously declared NO networkAcls at all.
+    const code = readCode(OSS);
+    expect(code).toMatch(/minimumTlsVersion: 'TLS1_2'/);
+    expect(code).toMatch(/allowBlobPublicAccess: false/);
+    expect(code).toMatch(/supportsHttpsTrafficOnly: true/);
+    expect(code).toMatch(/allowCrossTenantReplication: false/);
+    expect(code).toMatch(/networkAcls: \{\s*defaultAction: 'Allow'\s*bypass: 'AzureServices'\s*\}/);
+    // publicNetworkAccess is deliberately NOT written here, matching
+    // admin-plane/main.bicep's loom-mcp SMB account: the platform policy
+    // assignment performs the seal, and this module has no subnet parameter
+    // with which to add the `file` private endpoint that would survive it.
+    // That residual gap is disclosed in-source rather than papered over, and
+    // the disclosure is part of the contract — if someone deletes it, this
+    // fails.
+    expect(read(OSS)).toMatch(/NO `file` private endpoint/);
+    expect(code).not.toMatch(/publicNetworkAccess: 'Disabled'/);
+    // Shared-key access cannot be turned off: ACA's SMB mount authenticates
+    // with the account key. It is true, it is load-bearing, and it is why the
+    // AOF path is opt-in — so the reason must stay next to the property.
+    expect(code).toMatch(/allowSharedKeyAccess: true/);
+    expect(read(OSS)).toMatch(/authenticates with the account/);
+  });
+});
+
+describe('#2642 — AUTO-BIND: the deploy produces the value, the operator does not', () => {
+  // auto-bind-by-default.md §5. Before this change LOOM_RESULT_CACHE_REDIS was
+  // emitted by NO bicep, and the env-check told the operator to take the
+  // endpoint from compute/hband-shared.bicep — a module with ZERO invocations
+  // repo-wide, so the instruction was not even followable.
+  it('the orchestrator DEPLOYS the module (it is not another out-of-band entrypoint)', () => {
+    const src = read(ADMIN);
+    expect(src).toMatch(/module redisOss '\.\.\/shared\/redis-oss-aca\.bicep' = if \(redisOssActive\)/);
+    expect(src).toMatch(/var redisOssActive = redisOssEnabled && boundary != 'Commercial' && containerPlatform == 'containerApps' && deployAppsEnabled/);
+  });
+
+  it('emits all three client vars on the Console — endpoint, password, TLS flag', () => {
+    const src = read(ADMIN);
+    expect(src).toMatch(/name: 'LOOM_RESULT_CACHE_REDIS', value: redisOssActive \?/);
+    expect(src).toMatch(/name: 'LOOM_RESULT_CACHE_REDIS_PASSWORD', secretRef: 'loom-redis-oss-password'/);
+    expect(src).toMatch(/name: 'LOOM_RESULT_CACHE_REDIS_TLS', value: redisOssActive \? '0' : ''/);
+  });
+
+  it('sets TLS OFF, because ACA tcp ingress does not terminate TLS', () => {
+    // THE SILENT-DEGRADATION TRAP, and the sibling of the OSSCluster one above.
+    // redis-cache-client.ts defaults TLS ON (the classic :6380 case). Left at the
+    // default it would attempt a TLS handshake against a plaintext listener,
+    // fail, trip its circuit breaker, and fall back to the local tiers — a cache
+    // that is configured, green, and never used.
+    const client = read('apps/fiab-console/lib/azure/redis-cache-client.ts');
+    expect(client).toMatch(/LOOM_RESULT_CACHE_REDIS_TLS \?\? '1'\) !== '0'/);
+    expect(read(ADMIN)).toMatch(/LOOM_RESULT_CACHE_REDIS_TLS', value: redisOssActive \? '0'/);
+    // …and the module says so in an output rather than leaving it implicit.
+    expect(readCode(OSS)).toMatch(/output tlsOnTheWire bool = false/);
+  });
+
+  it('selects the client\'s access-key AUTH branch, which Valkey can actually serve', () => {
+    // Valkey has no Entra data plane. redis-cache-client.ts prefers Entra
+    // (`AUTH <oid> <token>`) and only takes the password branch when
+    // LOOM_RESULT_CACHE_REDIS_PASSWORD is set — so emitting that var is not a
+    // convenience, it is what makes the tier authenticate at all.
+    const client = read('apps/fiab-console/lib/azure/redis-cache-client.ts');
+    expect(client).toMatch(/const password = \(process\.env\.LOOM_RESULT_CACHE_REDIS_PASSWORD \?\? ''\)\.trim\(\);/);
+    expect(client).toMatch(/if \(password\) \{[\s\S]{0,200}send\(\['AUTH', password\]\)/);
+  });
+
+  it('mints the credential into Key Vault and grants ONLY the two identities that need it', () => {
+    const kv = read(KEYVAULT);
+    expect(kv).toMatch(/resource redisOssPasswordSecret 'Microsoft\.KeyVault\/vaults\/secrets@/);
+    expect(kv).toMatch(/resource redisOssKvSecretsUserRole 'Microsoft\.Authorization\/roleAssignments@/);
+    // 4633458b-… = Key Vault Secrets User (read values), a global built-in GUID.
+    expect(kv).toMatch(/4633458b-17de-408a-b874-0445c86b69e6/);
+    const src = read(ADMIN);
+    // UNPREDICTABLE: seeded from newGuid(), never guid(rg.id, <public-const>) —
+    // a public-constant salt is recomputable by anyone holding Reader on the RG.
+    expect(src).toMatch(/var redisOssPassword = 'Rd7\$\{uniqueString\(loomGeneratedSecretSeed, 'loom-redis-oss-v1'\)\}!Qz'/);
+    // The Console resolves the SAME Key Vault secret, so the two cannot drift.
+    expect(src).toMatch(/name: 'loom-redis-oss-password', keyVaultUrl: redisOssPasswordSecretUri/);
+  });
+
+  it('gives the cache a dedicated least-privilege identity, not the Console UAMI', () => {
+    const src = read(ADMIN);
+    expect(src).toMatch(/resource redisOssUami 'Microsoft\.ManagedIdentity\/userAssignedIdentities@[\d-]+' = if \(redisOssActive\)/);
+    expect(src).toMatch(/resource redisOssAcrPull 'Microsoft\.Authorization\/roleAssignments@[\d-]+' = if \(redisOssActive && !skipRoleGrants\)/);
+  });
+
+  it('COMMERCIAL is deliberately excluded — its path is the AMR cutover', () => {
+    // deploy-integrity.md R5 forbids "just deploy new alongside it". Commercial
+    // already has a live classic cache; standing up a second, OSS one next to it
+    // instead of migrating would be exactly that shape. Its migration is a
+    // scheduled operator action with a documented runbook.
+    const src = read(ADMIN);
+    expect(src).toMatch(/boundary != 'Commercial'/);
+    expect(src).toMatch(/docs\/fiab\/runbooks\/redis-amr-cutover\.md/);
+  });
+
+  it('the SHIPPED ARM artifact carries the sovereign wiring, not just the bicep', () => {
+    // The #2945 inert-fix class: deploy-templates/main.json is COPY'd into the
+    // production image and submitted INLINE to ARM by lib/setup/user-arm-deploy.ts.
+    const bundled = read(BUNDLED_ARM);
+    expect(bundled).toContain('loom-redis-oss');
+    expect(bundled).toContain('LOOM_RESULT_CACHE_REDIS');
+    expect(bundled).toContain('valkey/valkey:8.1.10-alpine');
+    // Compiled, not asserted from a comment: the boundary exclusion and the
+    // KV-backed secret must exist in the artifact that actually deploys. The
+    // variable lives in the NESTED admin-plane template (main.bicep invokes it as
+    // a module), so this reads the emitted expression out of the raw bytes rather
+    // than off `tpl.variables`, where it does not appear.
+    expect(bundled).toContain(
+      "[and(and(and(variables('redisOssEnabled'), not(equals(parameters('boundary'), 'Commercial'))), equals(parameters('containerPlatform'), 'containerApps')), parameters('deployAppsEnabled'))]",
+    );
+    expect(bundled).toContain('loom-redis-oss-password');
+  });
+});
+
 describe('#2642 — CONTROL: things that must NOT change', () => {
   // These pass on BOTH sides of the fix. If an over-broad edit trips one of
   // them, the migration went further than it should have.
@@ -288,3 +621,140 @@ describe('#2642 — CONTROL: things that must NOT change', () => {
     expect(read(HBAND)).toMatch(/Microsoft\.Cache\/redis@/);
   });
 });
+
+describe('#4265 nit 1 — the result-cache endpoint is DERIVED, never hand-composed', () => {
+  // The three Redis backends listen on three DIFFERENT ports (OSS 6379,
+  // classic 6380, Azure Managed Redis 10000). main.bicep used to pass
+  // `targetPort: 6379` into redis-oss-aca.bicep AND separately hand-compose
+  // `loom-redis-oss.internal.<domain>:6379` into LOOM_RESULT_CACHE_REDIS. Two
+  // copies of one fact: move the param and the env var still advertises the old
+  // port, the result cache silently falls back to its per-replica in-process
+  // LRU, and the estate looks healthy while the shared cache is unreachable.
+  //
+  // Measured consequence of the old form, beyond the coupling: because nothing
+  // in appDeployments REFERENCED the redisOss module, ARM emitted no dependency
+  // edge — appDeployments.dependsOn was 46 entries and did not contain
+  // redisOss. Consuming the module's own output raises it to 47 and adds the
+  // edge, so the Console can no longer be created pointing at a Valkey app that
+  // has not been deployed yet.
+
+  // Capture to end-of-LINE, not to the first `}`. A `[^}]*}` capture looks
+  // right and is hollow: the likeliest reintroduction of a hand-composed
+  // endpoint is an interpolated `'...${module.outputs.domain}:6379'`, whose
+  // FIRST `}` closes the interpolation — so the capture would stop before the
+  // port and the negative assertion below would pass unconditionally. Caught by
+  // running the positive control, which is why it is here.
+  const envLine = (src: string) =>
+    src.split('\n').find((l) => l.includes("name: 'LOOM_RESULT_CACHE_REDIS'")) ?? '';
+
+  it('binds LOOM_RESULT_CACHE_REDIS to the module output, with no literal port', () => {
+    const line = envLine(readCode(ADMIN));
+    expect(line).not.toBe(''); // the env var must still exist at all
+    expect(line).toMatch(/redisOss\.outputs\.endpoint/);
+    // Unanchored is correct here and is NOT the hollow shape: the subject is a
+    // single captured line, not a multi-line file, so a negative substring
+    // search over it genuinely can fail. The positive control below proves it.
+    expect(line).not.toMatch(/:\d{4,5}/);
+  });
+
+  it('POSITIVE CONTROL: the same assertion rejects the old hand-composed form', () => {
+    // Single-quoted on purpose — `${...}` must stay literal, not interpolate.
+    const oldForm =
+      "{ name: 'LOOM_RESULT_CACHE_REDIS', value: redisOssActive ? 'loom-redis-oss.internal.${containerPlatformModule.outputs.caeDefaultDomain}:6379' : '' }";
+    expect(envLine(oldForm)).not.toBe('');
+    expect(envLine(oldForm)).toMatch(/:\d{4,5}/); // would FAIL the test above
+    expect(envLine(oldForm)).not.toMatch(/redisOss\.outputs\.endpoint/);
+  });
+
+  it('redis-oss-aca.bicep is the single producer of the <host>:<port> contract', () => {
+    const code = readCode(OSS);
+    // The output must compose the port from the SAME var the ingress uses, so
+    // the two cannot diverge inside the module either.
+    expect(code).toMatch(
+      /output endpoint string = '\$\{app\.properties\.configuration\.ingress\.fqdn\}:\$\{targetPort\}'/,
+    );
+    expect(code).toMatch(/var targetPort = int\(redisConfig\.\?targetPort \?\? 6379\)/);
+  });
+
+  it('POPULATION: main.bicep declares the Valkey port exactly ONCE', () => {
+    // One declaration (the module param), zero re-compositions. This is the
+    // guard that actually catches a future hand-composed endpoint anywhere in
+    // the file, not just on the line the test above happens to look at.
+    const lines = readCode(ADMIN)
+      .split('\n')
+      .filter((l) => l.includes('6379'));
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toMatch(/^\s*targetPort: 6379$/);
+  });
+});
+
+describe('#4265 review — the runbook rollback and the module comment must be TRUE', () => {
+  const RUNBOOK = 'docs/fiab/runbooks/redis-amr-cutover.md';
+
+  it('§5.2 rolls back the SECRET, never by activating a revision', () => {
+    // Container Apps secrets are app-scoped, not revision-scoped: a revision
+    // stores the secretRef NAME and resolves whatever the app currently holds.
+    // §3.5 has already overwritten app-level `redis-conn` with the AMR string,
+    // so `revision activate` brings the old revision up STILL ON AMR — and
+    // ledger.go:70's honest fallback means the broker then serves on its
+    // in-process ledger while every surface reads green. The step meant to undo
+    // the cutover would have silently completed it.
+    const doc = read(RUNBOOK);
+    expect(doc).not.toMatch(/az containerapp revision activate/);
+    // And the replacement must actually write the classic value back.
+    expect(doc).toMatch(/az redis list-keys/);
+    expect(doc).toMatch(/az containerapp secret set/);
+    expect(doc).toContain('redis-conn=${CLASSIC_HOST}:6380');
+  });
+
+  it('§5.2 re-derives the classic credential rather than parking it on disk', () => {
+    // §2.5 deliberately captures no secret values. The fix must not "solve"
+    // the rollback by adding a --show-values capture that leaves a live
+    // credential at rest on the operator's workstation for the whole window.
+    const doc = read(RUNBOOK);
+    expect(doc).not.toMatch(/secret list[^\n]*--show-values/);
+    expect(doc).toMatch(/unset CLASSIC_KEY/);
+  });
+
+  it('no copy-pasteable command carries an unresolved placeholder', () => {
+    // A literal <placeholder> inside a fenced command is a copy-paste failure on
+    // a path that has to work first time. consolePrincipalId was the live case:
+    // hband-shared.bicep defaults it to '', so a pasted empty value deploys AMR
+    // with NO Entra grant for the Console and still reports success.
+    const doc = read(RUNBOOK);
+    expect(doc).not.toMatch(/consolePrincipalId="<[^"]*>"/);
+    expect(doc).not.toContain('broker-<date>.json');
+  });
+
+  it('the LOOM_RESULT_CACHE_REDIS comment does not claim the value is CONSTRUCTED', () => {
+    // R7. The shipped line reads redisOss.outputs.endpoint, which makes ARM
+    // emit `redisOss` into appDeployments.dependsOn — the compiled artifact
+    // proves it. A comment claiming the opposite is a shipped assertion the
+    // code does not establish, and readCode() strips `//` so no other fixture
+    // in this file can see it.
+    //
+    // Asserted as REFUTED rather than ABSENT, deliberately. The corrected
+    // comment QUOTES the old claim in order to record that it was wrong, which
+    // is the more useful artifact — a bare `not.toMatch` would forbid the
+    // repo from ever naming its own retired mistake. So: if the phrase is
+    // present it must be immediately refuted, never left standing as fact.
+    const raw = read(ADMIN);
+    const CLAIM = 'CONSTRUCTED rather than read from';
+    const at = raw.indexOf(CLAIM);
+    if (at !== -1) {
+      const window = raw.slice(at, at + 600);
+      expect(window, 'the retired claim is quoted but never refuted').toMatch(/claim was FALSE/);
+      expect(raw.indexOf(CLAIM, at + 1), 'quoted more than once — one of them is standing as fact').toBe(-1);
+    }
+    // The real trade-off has to be stated, not merely un-stated.
+    expect(raw).toContain('appDeployments.dependsOn');
+  });
+
+  it('the compiled artifact still shows the dependency the comment now admits to', () => {
+    // If a later change DOES decouple them, this test fails and the comment
+    // above has to be rewritten with it — the two cannot drift apart again.
+    const arm = read(BUNDLED_ARM);
+    expect(arm).toContain("reference('redisOss').outputs.endpoint.value");
+  });
+});
+
