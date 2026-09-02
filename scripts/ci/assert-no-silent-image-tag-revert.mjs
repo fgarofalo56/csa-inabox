@@ -221,7 +221,10 @@ export function digestPinsByKey(containers) {
  * @param {Record<string,{status:'same'|'different'|'unknown', running?:string, candidate?:string, detail?:string}>} [a.digestChecks]
  *        key -> what the REGISTRY said about writing the candidate tag over a
  *        digest-pinned app. Absent = the question was never asked, which is not
- *        the same as "unknown" and is reported the same way (refuse) either way.
+ *        the same as "unknown". Both still refuse — an unanswered question is not
+ *        permission to proceed — but they are recorded distinctly on the row
+ *        (`registryConsulted`) so the remediation names the subsystem that actually
+ *        failed instead of blaming the registry for a probe that never ran.
  * @param {boolean} [a.allowRevert]
  * @returns {{rows: Array, refusals: Array, decision:'proceed'|'refuse'}}
  */
@@ -297,6 +300,14 @@ export function decideTagWrites({ declared, env = {}, resolution, digestChecks =
       rows.push({
         envVar, repo, value, source, running: 'UNKNOWN', verdict: source === 'pin' ? 'move' : 'REFUSE',
         cause: 'unresolved', runningDigest: dc ? dc.running : undefined,
+        // Two different failures land on cause:'unresolved' and they need different
+        // remedies. `dc` present means the REGISTRY was consulted and could not settle
+        // it; `dc` absent means the question was never asked, because the estate probe
+        // itself was ambiguous (digestPinsByKey drops any key whose containers disagree
+        // on the digest). Carry that distinction EXPLICITLY rather than leaving
+        // remediationFor to infer it from runningDigest being undefined — that coupling
+        // is implicit and the next edit to this row would silently break it.
+        registryConsulted: Boolean(dc),
         why: dc && dc.status === 'unknown'
           ? `${unknownByKey.get(key)}; and the registry could not be read to settle it — ${dc.detail}`
           : unknownByKey.get(key),
@@ -372,9 +383,18 @@ export function remediationFor(row, ctx = {}) {
             : obs && obs.detail
               ? ` The tags on the running digest could not be read (${obs.detail}), so no tag can be offered.`
               : '';
+      // R7: the previous text made two claims this code never established. (1) "no
+      // workflow or template in this repository writes a digest ref" is false as an
+      // absolute — dab-runtime.bicep and udf-runtime.bicep both do — so it is scoped
+      // here to the population this guard actually polices: app images in the estate
+      // ACR. The MCR base-image pins are deliberate, have their own bump procedure,
+      // and are enforced by check-mcr-image-pins.mjs. (2) the nightly GOV build was
+      // named as the guaranteed cause while this runs on Commercial and IL5 too, and
+      // ':v0.1' was hardcoded regardless of the tag actually in hand. Neither the
+      // boundary nor the re-pointing mechanism is known here, so neither is asserted.
       return `${row.repo} is pinned to a digest OUT OF BAND — no workflow or template in this repository writes a ` +
-        `digest ref — and '${row.value}' has since moved to different content, which the nightly Gov build guarantees ` +
-        `will keep happening (it re-points :v0.1 onto each new manifest). Re-running will not change this. The fix is ` +
+        `digest ref for an app image in the estate ACR — and '${row.value}' now names different content than the app ` +
+        `is running. Re-running this deploy will not change that: nothing in it re-points the tag. The fix is ` +
         `an ESTATE action, not a code change: either re-point ${row.repo}:${row.value} onto the digest the app is ` +
         `running (${row.runningDigest}) with an in-registry \`az acr import --force\` — the step ` +
         `loom-dataplane-roll.yml already performs after a roll — or deliberately roll ${row.repo} forward onto the ` +
@@ -383,6 +403,31 @@ export function remediationFor(row, ctx = {}) {
         `${row.repo}\` from an in-boundary runner to decide which.${tagAdvice}`;
     }
     case 'unresolved':
+      // R7: do not assert a registry failure that may never have happened. When the
+      // estate probe was ambiguous the registry was never consulted at all, and an
+      // "resolve the ACR read" remedy sends the reader at the wrong subsystem.
+      if (!row.registryConsulted) {
+        // R7 again, and this arm nearly repeated the defect it was written to fix.
+        // `registryConsulted:false` establishes ONE thing: no digestCheck was
+        // supplied for this key. It does NOT establish why, and the two reasons
+        // want opposite actions — either digestPinsByKey dropped the key because
+        // containers on this repo disagree (an estate problem), or the repo runs
+        // one digest and the resolve step never ran at all (a pipeline problem).
+        // decideTagWrites cannot tell them apart: digestPinsByKey runs in the
+        // caller and its output is not passed in. So name both and hand back the
+        // observation that settles it, rather than asserting the one that reads
+        // better. `az containerapp list` is the discriminator, not a formality.
+        return `what ${row.repo} is running could not be established, and the registry was NOT consulted — ` +
+          `no digest check was supplied for it. Two things produce that and they need opposite fixes, and ` +
+          `which one this is has NOT been established here: either more than one container serves ${row.repo} ` +
+          `at different digests (an ESTATE disagreement — there is no single running digest to compare a tag ` +
+          `against), or ${row.repo} runs one digest and the ACR resolve step never ran (a PIPELINE gap). ` +
+          `Run \`az containerapp list --query "[?contains(properties.template.containers[0].image, ` +
+          `'${row.repo}')].{app:name,image:properties.template.containers[0].image}"\` from an in-boundary ` +
+          `runner: more than one distinct digest means roll the stragglers onto the canonical image; exactly ` +
+          `one means the resolve step is what to fix. Either way an unanswered question is not permission ` +
+          `to proceed.`;
+      }
       return `what ${row.repo} is running could not be established${row.runningDigest ? ` (it runs digest ${row.runningDigest})` : ''}, ` +
         'and the registry did not settle it either. An unreadable registry is not permission to proceed. Resolve the ' +
         'ACR read — most often the firewall lease could not be taken from this runner — and re-run; the answer this ' +
