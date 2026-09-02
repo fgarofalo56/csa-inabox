@@ -5183,17 +5183,56 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             // that a value the deploy could produce must not be a user step, and
             // an unreachable remediation is the defect, not an honest gate.
             //
-            // Sovereign boundaries now get the value from the deploy. It is
-            // CONSTRUCTED rather than read from `redisOss!.outputs.endpoint`, for
-            // the same blast-radius reason as LOOM_RISINGWAVE_URL /
-            // LOOM_UNITY_URL above: reading the output makes ARM emit
-            // `appDeployments dependsOn [... loom-redis-oss ...]`, so a
-            // valkey/valkey image missing from a boundary's ACR mirror would stop
-            // loom-console from deploying at all — turning a degraded cache tier
-            // into a Console outage. ACA's documented internal FQDN for a TCP
-            // ingress app is `<app>.internal.<env-default-domain>`, reached by
-            // name + exposed port; the wildcard `*.<env-id>` record in the CAE
-            // private DNS zone resolves it.
+            // Sovereign boundaries now get the value from the deploy, read from
+            // the module's own `endpoint` output.
+            //
+            // THIS COUPLES THE APP TIER TO THE CACHE MODULE, DELIBERATELY, AND
+            // THE COST IS A GOV ONE. An earlier revision of this comment claimed
+            // the value was "CONSTRUCTED rather than read from
+            // `redisOss!.outputs.endpoint`" specifically to keep ARM from
+            // emitting a dependency — the LOOM_RISINGWAVE_URL / LOOM_UNITY_URL
+            // blast-radius argument above. That claim was FALSE for the shipped
+            // code and the compiled artifact proves it: main.json carries
+            // `reference('redisOss').outputs.endpoint.value` and `'redisOss'` in
+            // `appDeployments.dependsOn`. It is deleted rather than softened
+            // (deploy-integrity R7 — a shipped assertion the code did not
+            // establish), and the real trade-off is stated here instead.
+            //
+            // What the coupling actually means: on GCC-High and IL5 a
+            // valkey/valkey image that cannot be pulled fails the `redisOss`
+            // nested deployment and therefore blocks the ENTIRE app tier, not
+            // just the cache. That is a worse blast radius than the risingwave
+            // pattern accepts, and it is chosen anyway because the alternative is
+            // worse HERE: a hand-composed `<host>:<port>` couples the port by
+            // hand across three backends that listen on three different ports
+            // (OSS 6379, classic 6380, AMR 10000), and a stale hard-coded 6379
+            // beside a `targetPort:` param that could move is a SILENT degrade —
+            // the result cache falls back to its per-replica LRU and the estate
+            // looks healthy while the shared cache is unreachable. A loud
+            // deployment failure beats a silent cache outage. redis-oss-aca.bicep
+            // publishes `endpoint` precisely so the port cannot be composed by
+            // hand here (#4265 nit 1).
+            //
+            // MEASURED RISK AT MERGE, not a hypothetical: this PR is what ADDS
+            // the `valkey/valkey` entry to platform/fiab/images/upstream-images.json,
+            // so although the Gov mirror lane
+            // (gov-provision-dataplane-images.yml → scripts/ci/mirror-upstream-images.sh,
+            // which mirrors the manifest data-driven rather than by name) HAS
+            // executed successfully (2026-08-07, 2026-08-11), every one of those
+            // runs predates the entry. The image has therefore NEVER been
+            // mirrored into a sovereign ACR, and the first GCC-High/IL5 deploy
+            // after this merges will refuse until that lane is dispatched.
+            // The refusal is the designed behaviour, not a surprise: both Gov
+            // lanes preflight the ref through scripts/ci/assert-acr-image-tags.sh,
+            // and `--skip-if-registry-absent` downgrades ONLY the
+            // registry-does-not-exist-at-all case (a genuine from-scratch
+            // deploy) — a registry that exists but lacks the tag still fails.
+            // So the gate holds; the operator action is "run the mirror first".
+            //
+            // ACA's documented internal FQDN for a TCP ingress app is
+            // `<app>.internal.<env-default-domain>`, reached by name + exposed
+            // port; the wildcard `*.<env-id>` record in the CAE private DNS zone
+            // resolves it.
             //
             // COMMERCIAL IS EMPTY ON PURPOSE. Its forward path is Azure Managed
             // Redis via the cutover of the live `redis-loom-hband-*` cache — a
@@ -5203,14 +5242,6 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             // per-replica LRU, which is exactly what Commercial does TODAY (the
             // var has never been set on the live console), so this changes
             // nothing there and regresses nothing.
-            // The value is the MODULE'S OWN `endpoint` output, never a
-            // hand-composed `<host>:<port>` — redis-oss-aca.bicep publishes that
-            // output precisely so the port cannot be coupled by hand here (#4265
-            // nit 1). The three Redis backends listen on three different ports
-            // (OSS 6379, classic 6380, AMR 10000); a hard-coded 6379 beside a
-            // `targetPort:` param that could move is a SILENT degrade — the
-            // result cache would fall back to its per-replica LRU and the estate
-            // would look healthy while the shared cache was unreachable.
             { name: 'LOOM_RESULT_CACHE_REDIS', value: redisOssActive ? redisOss.outputs.endpoint : '' }
             // '0' == TLS OFF, and this is load-bearing rather than a relaxation.
             // ACA `transport: tcp` ingress does NOT terminate TLS, so the OSS

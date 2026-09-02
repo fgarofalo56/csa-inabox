@@ -36,8 +36,18 @@
  *                                      windows.net:6380`). Unset ⇒ tier off.
  *   LOOM_RESULT_CACHE_REDIS_PASSWORD   access key (secretRef). When set, AUTHs
  *                                      with the key. Optional.
- *   LOOM_RESULT_CACHE_REDIS_TLS        `0` to disable TLS (dev only). Default on
- *                                      (Azure Cache for Redis requires TLS 6380).
+ *   LOOM_RESULT_CACHE_REDIS_TLS        `0` disables TLS. NOT dev-only: `0` is the
+ *                                      SHIPPED value on GCC-High and IL5 (#2642),
+ *                                      where the cache is Valkey behind an ACA
+ *                                      `transport: tcp` ingress, which does not
+ *                                      terminate TLS — so the hop speaks
+ *                                      plaintext RESP inside the CAE VNet, the
+ *                                      same posture the estate already accepts
+ *                                      for the loom-risingwave Postgres wire.
+ *                                      Default on (Azure Cache for Redis
+ *                                      requires TLS 6380); leaving the default
+ *                                      against a plaintext listener trips the
+ *                                      breaker and degrades SILENTLY.
  *   LOOM_RESULT_CACHE_REDIS_SCOPE      Entra token scope override for AAD auth
  *                                      (default `https://redis.azure.com/.default`;
  *                                      set the sovereign-cloud value in Gov).

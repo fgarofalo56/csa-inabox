@@ -688,3 +688,73 @@ describe('#4265 nit 1 — the result-cache endpoint is DERIVED, never hand-compo
   });
 });
 
+describe('#4265 review — the runbook rollback and the module comment must be TRUE', () => {
+  const RUNBOOK = 'docs/fiab/runbooks/redis-amr-cutover.md';
+
+  it('§5.2 rolls back the SECRET, never by activating a revision', () => {
+    // Container Apps secrets are app-scoped, not revision-scoped: a revision
+    // stores the secretRef NAME and resolves whatever the app currently holds.
+    // §3.5 has already overwritten app-level `redis-conn` with the AMR string,
+    // so `revision activate` brings the old revision up STILL ON AMR — and
+    // ledger.go:70's honest fallback means the broker then serves on its
+    // in-process ledger while every surface reads green. The step meant to undo
+    // the cutover would have silently completed it.
+    const doc = read(RUNBOOK);
+    expect(doc).not.toMatch(/az containerapp revision activate/);
+    // And the replacement must actually write the classic value back.
+    expect(doc).toMatch(/az redis list-keys/);
+    expect(doc).toMatch(/az containerapp secret set/);
+    expect(doc).toContain('redis-conn=${CLASSIC_HOST}:6380');
+  });
+
+  it('§5.2 re-derives the classic credential rather than parking it on disk', () => {
+    // §2.5 deliberately captures no secret values. The fix must not "solve"
+    // the rollback by adding a --show-values capture that leaves a live
+    // credential at rest on the operator's workstation for the whole window.
+    const doc = read(RUNBOOK);
+    expect(doc).not.toMatch(/secret list[^\n]*--show-values/);
+    expect(doc).toMatch(/unset CLASSIC_KEY/);
+  });
+
+  it('no copy-pasteable command carries an unresolved placeholder', () => {
+    // A literal <placeholder> inside a fenced command is a copy-paste failure on
+    // a path that has to work first time. consolePrincipalId was the live case:
+    // hband-shared.bicep defaults it to '', so a pasted empty value deploys AMR
+    // with NO Entra grant for the Console and still reports success.
+    const doc = read(RUNBOOK);
+    expect(doc).not.toMatch(/consolePrincipalId="<[^"]*>"/);
+    expect(doc).not.toContain('broker-<date>.json');
+  });
+
+  it('the LOOM_RESULT_CACHE_REDIS comment does not claim the value is CONSTRUCTED', () => {
+    // R7. The shipped line reads redisOss.outputs.endpoint, which makes ARM
+    // emit `redisOss` into appDeployments.dependsOn — the compiled artifact
+    // proves it. A comment claiming the opposite is a shipped assertion the
+    // code does not establish, and readCode() strips `//` so no other fixture
+    // in this file can see it.
+    //
+    // Asserted as REFUTED rather than ABSENT, deliberately. The corrected
+    // comment QUOTES the old claim in order to record that it was wrong, which
+    // is the more useful artifact — a bare `not.toMatch` would forbid the
+    // repo from ever naming its own retired mistake. So: if the phrase is
+    // present it must be immediately refuted, never left standing as fact.
+    const raw = read(ADMIN);
+    const CLAIM = 'CONSTRUCTED rather than read from';
+    const at = raw.indexOf(CLAIM);
+    if (at !== -1) {
+      const window = raw.slice(at, at + 600);
+      expect(window, 'the retired claim is quoted but never refuted').toMatch(/claim was FALSE/);
+      expect(raw.indexOf(CLAIM, at + 1), 'quoted more than once — one of them is standing as fact').toBe(-1);
+    }
+    // The real trade-off has to be stated, not merely un-stated.
+    expect(raw).toContain('appDeployments.dependsOn');
+  });
+
+  it('the compiled artifact still shows the dependency the comment now admits to', () => {
+    // If a later change DOES decouple them, this test fails and the comment
+    // above has to be rewritten with it — the two cannot drift apart again.
+    const arm = read(BUNDLED_ARM);
+    expect(arm).toContain("reference('redisOss').outputs.endpoint.value");
+  });
+});
+

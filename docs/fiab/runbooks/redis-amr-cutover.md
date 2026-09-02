@@ -31,6 +31,33 @@ job. Re-run the measurements in [§2](#2-pre-cutover-checks) on the day; if they
 have changed, the risk profile changes with them and [§7](#7-window-estimate)
 tells you how.
 
+> ## ⛔ DO NOT SCHEDULE THIS CUTOVER UNTIL #4270 LANDS
+>
+> Two code-level defects in the Capacity Broker — the only component in the
+> estate that actually binds a cache — are tracked as **[#4270](https://github.com/fgarofalo56/csa-inabox/issues/4270)**:
+>
+> 1. **It cannot authenticate to Azure Managed Redis at all.**
+>    `shared/managed-redis.bicep:155` provisions AMR **Entra-only** (no access
+>    keys); `internal/ledger/redis_ledger.go:151-162` has **no Entra path** — it
+>    speaks access keys only. It does not fail loudly: it **falls back to its
+>    in-memory ledger and keeps serving**, so the estate reads healthy while the
+>    cross-replica ledger silently is not shared.
+> 2. **Its auto-TLS heuristic only fires on port `:6380`**
+>    (`redis_ledger.go:124-126`). AMR is `:10000`, so it would connect
+>    **plaintext to a TLS-only listener** and fail for a reason that reads as a
+>    network problem rather than a protocol mismatch.
+>
+> **Both would surface at exactly the moment someone declared the cutover
+> done** — the first time the broker is brought up against AMR. Running this
+> runbook before #4270 lands produces a migration that looks complete and is
+> not. §3.5 and [§6.3](#63-the-capacity-broker-cannot-speak-to-amr-under-the-module-defaults)
+> carry the interim options; none of them is a substitute for the fix.
+>
+> Everything before §3.5 (provision, verify, probe, point the Console) is safe
+> to run and is genuinely independent of #4270 — the Console client *does* have
+> an Entra path and *does* default TLS on. It is the **broker** half that is
+> gated.
+
 **Two blocking decisions are buried in the detail and neither is optional.** Read
 [§6.3](#63-the-capacity-broker-cannot-speak-to-amr-under-the-module-defaults)
 before you schedule anything.
@@ -282,14 +309,35 @@ az deployment group create --subscription "$SUB" -g "$RG" \
      workspaceId="$(az monitor log-analytics workspace show --subscription "$SUB" -g "$RG" -n law-csa-loom-centralus --query id -o tsv | tr -d '\r')" \
      privateEndpointSubnetId="/subscriptions/$SUB/resourceGroups/$RG/providers/Microsoft.Network/virtualNetworks/vnet-csa-loom-hub-centralus/subnets/snet-private-endpoints" \
      privateDnsZoneRedisManagedId="$(az network private-dns zone show --subscription "$SUB" -g "$RG" -n privatelink.redis.azure.net --query id -o tsv | tr -d '\r')" \
-     consolePrincipalId="<uami-loom-console principalId>" \
+     consolePrincipalId="$(az identity show --subscription "$SUB" -g "$RG" -n uami-loom-console --query principalId -o tsv | tr -d '\r')" \
   -o json > /tmp/amr-deploy.json
 RC=$?
+if [ "$RC" -ne 0 ] || [ ! -s /tmp/amr-deploy.json ]; then
+  echo "STOP: AMR provisioning failed (rc=$RC, output $( [ -s /tmp/amr-deploy.json ] && echo 'present' || echo 'EMPTY' )). Do NOT continue to §3.2 — every step below reads this file, and a partial or empty file is not 'no outputs', it is 'no measurement' (§2.1)."
+  echo "Classify before retrying — the four that actually happen here:"
+  echo "  QUOTA / SKU unavailable in region -> the error names Microsoft.Cache and the SKU. Balanced_B5 is not offered in every region; re-check with 'az redis-enterprise list-skus -l centralus' (or pick B0 per the cost note below) rather than retrying the same request."
+  echo "  PRIVATE-ENDPOINT SUBNET -> the error names the subnet or a delegation/policy conflict. snet-private-endpoints must have privateEndpointNetworkPolicies Disabled; confirm before re-running."
+  echo "  DNS ZONE -> privatelink.redis.azure.net must exist AND be linked to vnet-csa-loom-hub-centralus. A zone that exists but is unlinked resolves nothing and fails later, at §3.4, looking like an auth problem."
+  echo "  ROLE -> you need Contributor on $RG plus 'Private DNS Zone Contributor' on the zone. An AuthorizationFailed here is about YOUR principal, not the Console UAMI."
+  echo "This step is the one genuine unknown in the window (20-45 min, §7). A failure here costs nothing except time: nothing has been pointed at AMR yet, so there is no rollback to run."
+else
+  echo "AMR deployment returned rc=0 with a non-empty output document. Verify the outputs below before trusting it."
+fi
 ```
 
 > `tr -d '\r'` is not decoration: `az ... -o tsv` emits a trailing carriage
 > return on Windows, and a CR inside a resource id produces an error that names
 > the wrong thing.
+
+> **`consolePrincipalId` is resolved, not typed.** It used to be the one
+> placeholder in an otherwise copy-pasteable command, and `hband-shared.bicep:167`
+> defaults it to `''` — so a run that left the placeholder in, or pasted an empty
+> value, deploys AMR **with no Entra data grant for the Console** and still
+> reports success. The failure then surfaces two steps later at §3.4 as an AUTH
+> error, which §4.1 diagnoses as "the Console never connected" — the right
+> symptom attributed to the wrong cause. If the `az identity show` above returns
+> empty, STOP and fix that before deploying; an empty grant is not a degraded
+> deploy, it is a silent one.
 
 `managedRedisSku=Balanced_B5` is the module's default and the closest small
 Balanced size to the P1 being replaced. It is a **cost decision, not a technical
@@ -465,23 +513,53 @@ work, not merely the app to stay up.
 
 ### 4.1 loom-console result cache — the authoritative check
 
+**Resolve the metric names first — do not paste them.** §1 and §2 queried the
+*classic* cache (`Microsoft.Cache/Redis`) and used `cachehits` / `cachemisses`
+**plural**; AMR is a different resource type (`Microsoft.Cache/redisEnterprise`)
+and its metric names are not guaranteed to match. This matters more here than
+anywhere else in the document: a **wrong metric name returns a null series**,
+and a null series is visually identical to the documented FAIL below. The step
+that decides whether the cutover worked must not be able to confuse "the cache
+did no work" with "I asked for a metric that does not exist".
+
+```bash
+MSYS_NO_PATHCONV=1 az monitor metrics list-definitions --subscription "$SUB" \
+  --resource "$AMR_RID" --query "[].name.value" -o tsv | tr -d '\r' | sort
+# Pick the hit/miss/clients names FROM THIS OUTPUT. If it is empty, STOP: an
+# empty definition list means the resource id or your access is wrong, not that
+# the cache has no metrics.
+HIT=<the hit metric from the list>
+MISS=<the miss metric from the list>
+CLIENTS=<the connected-clients metric from the list>
+```
+
 ```bash
 AMR_RID="/subscriptions/$SUB/resourceGroups/$RG/providers/Microsoft.Cache/redisEnterprise/$AMR"   # if not already set in §3.5
 MSYS_NO_PATHCONV=1 az monitor metrics list --subscription "$SUB" --resource "$AMR_RID" \
-  --metric cachehit cachemiss connectedclients --aggregation Total Maximum \
+  --metric "$HIT" "$MISS" "$CLIENTS" --aggregation Total Maximum \
   --interval PT5M --offset 30m -o json
 ```
 
-**PASS:** `cachemiss` **> 0** within ~15 minutes of driving traffic (open a
+**STOP before reading PASS/FAIL — carry §2.1's rule forward: `null` is not
+zero.** If every series comes back `null`/absent, you have measured nothing, and
+nothing below applies. `$CLIENTS` is the **positive control** for exactly this,
+the same role `allconnectedclients` played in §1: the Console holds connections
+whether or not it is getting cache hits, so a non-null `$CLIENTS` is what proves
+the query path works and licenses you to believe a zero in the other two. A zero
+hit/miss beside a *null* `$CLIENTS` is an unanswered question, not a failure.
+
+**PASS:** `$MISS` **> 0** within ~15 minutes of driving traffic (open a
 Console surface that runs a cached query — the Data Explorer / query result
-grid — twice), then `cachehit` **> 0** on the second run. `connectedclients` > 0.
+grid — twice), then `$HIT` **> 0** on the second run. `$CLIENTS` > 0.
 
-**FAIL — and this is the failure mode that looks like success:** `connectedclients`
-climbs but `cachehit`/`cachemiss` stay 0. That is the `OSSCluster` /
-wrong-port / auth-rejected signature. Go back to §3.2.
+**FAIL — and this is the failure mode that looks like success:** `$CLIENTS`
+climbs (so the query path is proven live) but `$HIT`/`$MISS` stay 0. That is the
+`OSSCluster` / wrong-port / auth-rejected signature. Go back to §3.2. Note the
+positive control is what makes this diagnosis available at all — without it this
+reading and "wrong metric name" are the same picture.
 
-**FAIL:** all three flat at 0 ⇒ the Console never connected. Check the revision
-picked up the env var:
+**FAIL:** `$CLIENTS` non-null and 0, with hit/miss also 0 ⇒ the Console never
+connected. Check the revision picked up the env var:
 
 ```bash
 az containerapp show --subscription "$SUB" -g "$RG" -n loom-console \
@@ -552,6 +630,20 @@ there is no data to lose.** The classic cache keeps running untouched throughout
 
 **Trigger:** any FAIL in §4, or any Console latency regression, or any doubt.
 
+**Re-export the §2 anchors first.** A rollback is frequently run in a *new*
+shell — a fresh terminal, a different operator, the next morning — and §2's
+variables do not survive that. Every command below assumes all five:
+
+```bash
+RG=rg-csa-loom-admin-centralus
+CACHE=redis-loom-hband-k6mvh5sm6z7do
+SUB=<the subscription id resolved in §2>
+ROLLBACK_DIR=./temp/rollback
+STAMP=<the YYYYMMDD stamp §2.5 wrote; ls "$ROLLBACK_DIR" if unsure>
+
+ls -l "$ROLLBACK_DIR/broker-$STAMP.json"   # must exist before you rely on §5.2's fallback branch
+```
+
 **5.1 — Console (≈2 minutes, one revision roll):**
 
 ```bash
@@ -566,17 +658,81 @@ runbook**, since the var was never set on the live console. There is no
 degradation relative to the pre-cutover baseline. This is the whole reason the
 Console half of the cutover is low risk.
 
-**5.2 — Capacity broker (≈2 minutes), only if §3.5 changed it:**
+**5.2 — Capacity broker (≈3 minutes), only if §3.5 changed it:**
+
+> **Do NOT roll this back by activating the previous revision.** Container Apps
+> secrets are **app-scoped, not revision-scoped**: a revision stores the
+> `secretRef` *name*, and the value it resolves is whatever the app currently
+> holds. §3.5 has already overwritten app-level `redis-conn` with the AMR
+> string, so activating the pre-cutover revision brings it up **still pointing
+> at AMR** — and the broker's honest fallback (`ledger.go:70`) means it then
+> serves happily on its in-process ledger while every surface reads green. That
+> is the precise failure §3.5 exists to prevent, reached by the step meant to
+> undo it. Roll back the **secret**, then restart.
+>
+> §2.5 deliberately captured no secret values, so the classic string is not on
+> disk — by design, and it does not need to be. The classic cache is still
+> running (§5.3 refuses to tear it down mid-incident), so the value is
+> **re-derivable**, which is both safer than holding a live credential on the
+> operator's workstation for the length of the window and immune to going stale.
 
 ```bash
-# Restore the previous revision wholesale — it still carries the old redis-conn
-# secret pointing at the classic cache, which is still running.
-az containerapp revision activate --subscription "$SUB" -g "$RG" -n loom-capacity-broker \
-  --revision "$(python -c "import json;print(json.load(open('./temp/rollback/broker-<date>.json'))['rev'])")"
+# Re-derive the CLASSIC connection string. Same comma form §3.5 explains — never
+# rediss://, because a Redis key is standard base64 and `/` terminates an RFC
+# 3986 authority.
+CLASSIC_HOST=$(az redis show --subscription "$SUB" -g "$RG" -n "$CACHE" \
+  --query hostName -o tsv | tr -d '\r')
+RC=$?
+CLASSIC_KEY=$(az redis list-keys --subscription "$SUB" -g "$RG" -n "$CACHE" \
+  --query primaryKey -o tsv | tr -d '\r')
+KEY_RC=$?
+
+if [ "$RC" -ne 0 ] || [ -z "$CLASSIC_HOST" ] || [ "$KEY_RC" -ne 0 ] || [ -z "$CLASSIC_KEY" ]; then
+  unset CLASSIC_KEY
+  echo "STOP: could not re-derive the classic connection string (show rc=$RC host='${CLASSIC_HOST:-empty}', list-keys rc=$KEY_RC). This is NOT 'the cache is gone' — an empty result is equally consistent with an expired login, a wrong subscription, or a missing role. Confirm the cache still exists and that you hold 'Redis Cache Contributor' on it, then re-run. Do NOT restart the broker: it is currently on AMR, and restarting without fixing the secret changes nothing except which minute it fails in."
+else
+  az containerapp secret set --subscription "$SUB" -g "$RG" -n loom-capacity-broker \
+    --secrets "redis-conn=${CLASSIC_HOST}:6380,password=$CLASSIC_KEY,ssl=True"
+  SET_RC=$?
+  unset CLASSIC_KEY   # never echoed, never written to a file, never in this document
+
+  # Restart INSIDE the success branch, exactly as §3.5 does and for the same
+  # reason: a restart after a failed write brings the broker up on the AMR value
+  # and it reports green on its in-process ledger.
+  if [ "$SET_RC" -ne 0 ]; then
+    echo "STOP: secret set failed (rc=$SET_RC). The broker was NOT restarted, so it is still running the AMR configuration. Fix the write, then re-run this step. The rollback is NOT complete."
+  else
+    az containerapp revision restart --subscription "$SUB" -g "$RG" -n loom-capacity-broker \
+      --revision "$(az containerapp show --subscription "$SUB" -g "$RG" -n loom-capacity-broker --query properties.latestRevisionName -o tsv | tr -d '\r')"
+  fi
+fi
 ```
 
-If §3.5 cleared `LOOM_BROKER_REDIS` instead, restore it from the captured env
-JSON (the value is a `secretRef` name, not a secret).
+**Confirm the rollback actually landed** — a green revision proves nothing here,
+because the broker stays green on the in-process ledger either way:
+
+```bash
+az containerapp show --subscription "$SUB" -g "$RG" -n loom-capacity-broker \
+  --query "properties.template.containers[].env[?name=='LOOM_BROKER_REDIS']" -o json
+# Expect: the secretRef binding present. Then confirm the broker logged a REDIS
+# ledger rather than the memory fallback (ledger.go:69-70 logs the error
+# upstream on fallback) — an absent error line is the only positive signal that
+# the classic string was accepted.
+```
+
+**Residual, stated rather than glossed (same class as §3.5):** `--secrets`
+places the credential on argv, so it is visible in the container-app control
+plane's process table for the life of the call. The Valkey module in this same
+PR avoids argv for exactly this class of value. The CLI offers no stdin form for
+`secret set`, so this is a real gap in the runbook, not a solved problem —
+rotate the classic key after any rollback that used this step.
+
+If §3.5 cleared `LOOM_BROKER_REDIS` instead of setting the secret, restore it
+from the captured env JSON (the value is a `secretRef` name, not a secret):
+
+```bash
+python -c "import json;print(json.load(open('$ROLLBACK_DIR/broker-$STAMP.json'))['env'])"
+```
 
 **5.3 — Infrastructure:** leave the AMR cluster in place. It costs money but it
 is idle, and tearing it down mid-incident removes your ability to retry. Delete
@@ -738,7 +894,7 @@ split.
 | Pin `EnterpriseCluster` so the non-cluster-aware clients work | `managed-redis.bicep:138` |
 | Create the AMR private endpoint with the right `redisEnterprise` group id and bind the `privatelink.redis.azure.net` zone group | `managed-redis.bicep:229-255` |
 | Assign the Console UAMI Entra data access on the database | `managed-redis.bicep:212-224` |
-| Publish `host:10000` as a single `endpoint` output so no caller composes a port | `managed-redis.bicep:296`, `hband-shared.bicep:424` |
+| Publish `host:10000` as a single `endpoint` output so no caller composes a port | `managed-redis.bicep:296`, `hband-shared.bicep:441` |
 | Wire diagnostics to the estate LAW | `managed-redis.bicep:261` |
 | Select the backend per boundary (Commercial → managed, sovereign → classic) | `platform/fiab/bicep/main.bicep:933` |
 | **Sovereign only:** deploy the OSS Valkey cache *and set all three client vars on the Console* | `modules/shared/redis-oss-aca.bicep`, invoked by `admin-plane/main.bicep` (`redisOssActive`) |
