@@ -159,6 +159,43 @@ the observed bucket — visible, never actionable, never tagged.
 
 ---
 
+## 2026-09-03 — drain continuation, operator answers
+
+Asked with options and a recommendation; the operator picked in each case.
+
+### Lane width for the backlog fan-out
+**Chosen: 8 concurrent implementation lanes** (raised from the standing rule of
+4). Each lane is one agent in its own git worktree on a branch from `origin/main`
+with `apps/fiab-console/node_modules` junctioned to the main checkout (a parallel
+`pnpm install` corrupts the shared store), one batched PR per lane, an
+independent reviewer agent that POSTS its verdict on the PR, and one fix round.
+Merges still serialize on the generated artifacts. Read-only triage ran wider
+(35 batches of 5 issues, re-measured at head `dc40ac2c94b2`).
+
+### #4259 — the GCC wiring PR
+**Chosen: close #4259; open a docs-correction lane.** Consistent with the #4071 +
+#3078 entry above: no GCC tenant exists, the lane has never deployed, and its
+failing `check-workflow-lane-states` is correct. The branch stays on the remote;
+the correction lane records GCC as *supported-in-code, never exercised* and
+amends `cloud-parity.md` to distinguish the two. Closed 2026-09-03 with the
+reasoning posted on the PR.
+
+### HouseGarofalo/atlas — hung `redeploy.cmd`
+**Chosen: kill the stuck process tree.** Measured: `cmd.exe /c
+atlas\backend\scripts\redeploy.cmd` → `git pull --ff-only` → `git fetch
+--update-head-ok` → `git-remote-https` → `git credential-manager get`, all
+started 05:19:00 and parked on an interactive credential prompt. `taskkill /T`
+on the root ended ten processes; a fetch waiting on auth had written nothing.
+The redeploy was **not** re-run — that is the operator's, in that repo.
+
+### Issues the triage confirms STALE
+**Chosen: close with evidence.** Each close carries the file:line at head that
+shows the fix, the merged PR where found, and the estate marker — both
+boundaries read `dc40ac2c94b2` on 2026-09-02, so "fixed at head" is also
+"deployed" for anything merged by then (`deploy-integrity.md` R2).
+
+---
+
 ## Override log
 
 | date | PR | preflight at merge | note |
@@ -175,6 +212,9 @@ the observed bucket — visible, never actionable, never tagged.
 | 2026-09-02 | #4289 | 71 SUCCESS / 3 SKIPPED, 0 red, 0 pending | dependabot: pypdf 6.15.0 -> 6.16.1 (platform locks) |
 | 2026-09-02 | #4268 | 34 SUCCESS / 3 SKIPPED, 1 advisory red (CodeQL), 0 pending | `merge-eligible.py`: MISSING none · RED none · INCOMPLETE none. Sole blocker was `REVIEW_REQUIRED`, cleared with **`gh pr merge --admin`** (`enforce_admins:false`, `required_approving_review_count:1`, zero formal reviews). No required context was red, so #4047 acceptance item 3 is not triggered |
 | 2026-09-02 | #4266 | 34 SUCCESS / 3 SKIPPED, 0 red, 0 pending | Sole blocker was `REVIEW_REQUIRED`, cleared with **`gh pr merge --squash --admin`**. Review blocker fixed first (drain audit asserted a lane "HAS now run" from a `gh run list` that never returned — R7). `#4144`, `#4285`, `#4233` all kept OPEN: the three newly-automatic lanes have never fired, so merged is not deployed |
+| 2026-09-02 | #4304 | 32 SUCCESS / 3 SKIPPED, 1 advisory CANCELLED (Copilot evals, queue-displaced), 0 pending | docs-only: the #4268 override record + zero-closure audit. Sole blocker `REVIEW_REQUIRED`, cleared with **`gh pr merge --squash --admin`**. `closingIssuesReferences`: none. Merged 23:44:57Z as `31352275ef11` |
+| 2026-09-02 | #4265 | 54 SUCCESS / 4 SKIPPED, 0 red, 0 pending | AMR cutover runbook (Commercial) + OSS Redis on ACA (sovereign). Review blockers fixed first: §5.2 rollback written as an **operator step** (a credential is involved; nothing was executed, no value echoed) and a false bicep comment corrected (R7). `--squash --admin`; closing refs none. Merged 23:46:14Z as `dc40ac2c94b2`. **DEPLOYED**: both estate markers read `dc40ac2c94b2` (Gov 23:50:09Z, Commercial 23:58:07Z) |
+| 2026-09-03 | #4262 | 15/15 required SUCCESS; `merge-eligible.py`: MISSING none · RED none · INCOMPLETE none · HOLLOW none; hollow-control PASSED; 1 advisory red (Copilot evals) + 1 advisory CANCELLED (Link Check) | The two **REQUIRED** `guardrails` reds on the prior tip were **self-inflicted, not flake**: the `LOOM_ADF_FACTORY` env row in `admin-plane/main.bicep` left the committed compiled ARM template stale, and `adf-client.ts` grew 2028 > 2001. Fixed in `32c6702fd51d` (regenerated with the pinned bicep 0.45.15; comments compressed to 2014 and the ceiling re-baselined at the exact LOC). Advisory Copilot-evals red assessed on the PR before merge: estate-side (`loom-docs` reindex stale with no job visible for 909 s), not the diff; Link Check CANCELLED is its 10-minute job timeout. `--squash --admin`; closing refs none; close audit **0** (positive control: 5 closures in the prior 24 h). `#3513` kept OPEN — **merged, not deployed** (markers still `dc40ac2c` at 03:20Z). Merged 03:02:43Z as `ad1184ec899c` |
 
 ### #4268 — why it merged first, and why its one red did not block
 
