@@ -252,6 +252,7 @@ export const dataProductProvisioner: Provisioner = async (input): Promise<Provis
     return {
       status: 'remediation',
       gate: {
+        gateId: 'svc-purview-uc',
         reason: 'Purview Unified Catalog endpoint not configured.',
         remediation:
           'Set LOOM_PURVIEW_UC_ENDPOINT to the Unified Catalog data-plane endpoint (e.g. https://api.purview-service.microsoft.com), OR set LOOM_PURVIEW_ACCOUNT to your Purview account name (resolves to https://<account>.purview.azure.com).',

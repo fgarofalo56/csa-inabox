@@ -4641,6 +4641,16 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             // the Console identity "App Configuration Data Reader" to enable.
             { name: 'LOOM_PARAM_APPCONFIG', value: loomParamAppConfigEndpoint }
             { name: 'LOOM_ADF_NAME', value: effAdfName }
+            // The alias, delivered ON THE CONSOLE APP rather than only by the
+            // DLZ env script (#3513). adf-client's adfName() reads
+            // LOOM_ADF_NAME first and LOOM_ADF_FACTORY second, so once the
+            // console READS the alias the deploy has to SET it here —
+            // hub-console-dlz-env.bicep:228 writes both spellings, but that is a
+            // different delivery path and check-env-sync measures what lands in
+            // loom-console's own apps[] env. Same value by construction: an
+            // alias that could resolve to a different factory than its canonical
+            // is worse than no alias.
+            { name: 'LOOM_ADF_FACTORY', value: effAdfName }
             { name: 'LOOM_ADF_RG', value: effAdfRg }
             { name: 'LOOM_ADF_SUB', value: byoAdfSub }
             // Public Console base URL baked into the materialized-lake-view

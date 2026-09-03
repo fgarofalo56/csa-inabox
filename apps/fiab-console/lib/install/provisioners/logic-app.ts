@@ -231,6 +231,7 @@ export const logicAppProvisioner: Provisioner = async (input): Promise<Provision
     return {
       status: 'remediation',
       gate: {
+        gateId: 'svc-logic-apps',
         reason: 'Azure Logic Apps target not configured in this deployment.',
         remediation:
           `Set ${missing.join(', ')} on the Console container app so the ` +

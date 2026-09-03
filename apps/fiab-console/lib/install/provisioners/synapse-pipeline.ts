@@ -93,6 +93,7 @@ export const synapsePipelineProvisioner: Provisioner = async (input): Promise<Pr
     return {
       status: 'remediation',
       gate: {
+        gateId: 'svc-synapse',
         reason: 'Synapse workspace is not configured for this deployment.',
         remediation:
           `Set ${gate.missing} (and LOOM_SUBSCRIPTION_ID / LOOM_DLZ_RG / LOOM_SYNAPSE_WORKSPACE) so install can author + run the Synapse pipeline. ` +
