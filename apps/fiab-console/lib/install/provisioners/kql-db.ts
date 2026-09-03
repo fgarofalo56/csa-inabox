@@ -80,6 +80,7 @@ export const kqlDatabaseProvisioner: Provisioner = async (input): Promise<Provis
     return {
       status: 'remediation',
       gate: {
+        gateId: 'svc-adx',
         reason: 'ADX cluster not configured.',
         remediation:
           'Set LOOM_KUSTO_CLUSTER_URI (e.g. https://adx-csa-loom-shared.eastus2.kusto.<cloud-suffix>) and LOOM_KUSTO_CLUSTER_NAME on the Console.',
