@@ -25,6 +25,39 @@ This file is maintained automatically by
 [Conventional Commits](https://www.conventionalcommits.org/). See
 [RELEASE.md](RELEASE.md) for the release process.
 
+## [0.105.0](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.104.0...csa-inabox-v0.105.0) (2026-09-03)
+
+
+### Features
+
+* **brain:** a recommendation the platform can execute now has a Perform button, staged confirm and a real receipt ([#4242](https://github.com/fgarofalo56/csa-inabox/issues/4242) UI lane) ([#4260](https://github.com/fgarofalo56/csa-inabox/issues/4260)) ([6829488](https://github.com/fgarofalo56/csa-inabox/commit/68294885d3bb6e36fa06c15a48cf6bedc1f46b75))
+* **brain:** manifest-derived ownership backfill + owned/observed as a first-class verdict ([#4255](https://github.com/fgarofalo56/csa-inabox/issues/4255)) ([#4267](https://github.com/fgarofalo56/csa-inabox/issues/4267)) ([c1e1940](https://github.com/fgarofalo56/csa-inabox/commit/c1e194010b950e2fc265fdf1ecf6ac9198a0b504))
+* **deploy:** stamp loom-estate-id on every deployed resource — the Brain's only ownership signal ([#3922](https://github.com/fgarofalo56/csa-inabox/issues/3922)) ([#4274](https://github.com/fgarofalo56/csa-inabox/issues/4274)) ([a8f8180](https://github.com/fgarofalo56/csa-inabox/commit/a8f8180ce74732fb3cc462b93885d2ce758cb20f))
+* **redis:** AMR cutover runbook for Commercial + OSS Redis on ACA for the sovereign boundaries ([#2642](https://github.com/fgarofalo56/csa-inabox/issues/2642)) ([#4265](https://github.com/fgarofalo56/csa-inabox/issues/4265)) ([dc40ac2](https://github.com/fgarofalo56/csa-inabox/commit/dc40ac2c94b22c0cdc8d56eaabc89841280323d7))
+
+
+### Bug Fixes
+
+* **brain:** scale-to-zero must refuse a service whose own deploy says it cannot scale to zero ([#4257](https://github.com/fgarofalo56/csa-inabox/issues/4257)) ([#4261](https://github.com/fgarofalo56/csa-inabox/issues/4261)) ([5454ae7](https://github.com/fgarofalo56/csa-inabox/commit/5454ae7f468baa4a1e338a2f783c33bbd92babc7))
+* **brain:** the four Brain views had no address, and the legend ran under the provenance chips ([#4278](https://github.com/fgarofalo56/csa-inabox/issues/4278), [#4280](https://github.com/fgarofalo56/csa-inabox/issues/4280)) ([#4284](https://github.com/fgarofalo56/csa-inabox/issues/4284)) ([c67a220](https://github.com/fgarofalo56/csa-inabox/commit/c67a2200eb7f6aa3597b06204252bde6bad42320))
+* **brain:** the graph extractor discarded real wires through a 20-name allowlist, so loom-risingwave was a FALSE POSITIVE ([#4258](https://github.com/fgarofalo56/csa-inabox/issues/4258) item 1) ([#4263](https://github.com/fgarofalo56/csa-inabox/issues/4263)) ([1ddec2f](https://github.com/fgarofalo56/csa-inabox/commit/1ddec2ffe66b681f4144bc6f36ade45e492c1226))
+* **ci:** check-env-sync went green on a shrunken population, an unreachable spelling, an assertion dead on 5 of 7 boundaries, and a measurement that cannot see absence ([#3956](https://github.com/fgarofalo56/csa-inabox/issues/3956), [#3344](https://github.com/fgarofalo56/csa-inabox/issues/3344)) ([#4268](https://github.com/fgarofalo56/csa-inabox/issues/4268)) ([0bfeb77](https://github.com/fgarofalo56/csa-inabox/commit/0bfeb7765795f1f02a48b374837671ec14da3532))
+* **ci:** four places still told the reader a unity half-roll freezes the estate-wide reconcile, and a stuck follower left no log line ([#4240](https://github.com/fgarofalo56/csa-inabox/issues/4240)) ([#4269](https://github.com/fgarofalo56/csa-inabox/issues/4269)) ([ab9279a](https://github.com/fgarofalo56/csa-inabox/commit/ab9279a4994bdbbedaba5ee84618450060e63bc0))
+* **ci:** six deploy paths reported stale into a void — three now run, three say why ([#4144](https://github.com/fgarofalo56/csa-inabox/issues/4144)) ([#4266](https://github.com/fgarofalo56/csa-inabox/issues/4266)) ([8bc9377](https://github.com/fgarofalo56/csa-inabox/commit/8bc93773222799dc315c537c142c6d42d64c1a41))
+* **ci:** the image-tag revert gate named a cause the run had disproved ([#4291](https://github.com/fgarofalo56/csa-inabox/issues/4291)) ([#4297](https://github.com/fgarofalo56/csa-inabox/issues/4297)) ([0e95b08](https://github.com/fgarofalo56/csa-inabox/commit/0e95b080c9026494feb2c8e4f6da6a4a530bb3a9))
+* **estate:** the SHIR scaling surface addressed a VMSS name with another deployment's home ([#4248](https://github.com/fgarofalo56/csa-inabox/issues/4248)) ([#4272](https://github.com/fgarofalo56/csa-inabox/issues/4272)) ([2f4ae81](https://github.com/fgarofalo56/csa-inabox/commit/2f4ae81540ca9352de9b639645ae1d9bbff668d3))
+* **install:** install-time remediation gates could never reach a Fix-it, because RemediationGate had no way to name its gate ([#3513](https://github.com/fgarofalo56/csa-inabox/issues/3513)) ([#4262](https://github.com/fgarofalo56/csa-inabox/issues/4262)) ([ad1184e](https://github.com/fgarofalo56/csa-inabox/commit/ad1184ec899cde70917dfb1275787dfb47215ab6))
+* **perf:** the warmer's breaker could not see the throttle shape production actually measured ([#4244](https://github.com/fgarofalo56/csa-inabox/issues/4244)) ([#4271](https://github.com/fgarofalo56/csa-inabox/issues/4271)) ([e52b55d](https://github.com/fgarofalo56/csa-inabox/commit/e52b55dc944ed6fab53fad4898801d39499f38f6))
+* **roll:** the health gate matched two enums against one row, so it was right only by the capital H in Healthy ([#4238](https://github.com/fgarofalo56/csa-inabox/issues/4238)) ([#4273](https://github.com/fgarofalo56/csa-inabox/issues/4273)) ([e9df916](https://github.com/fgarofalo56/csa-inabox/commit/e9df9169500423f03711eb6a884a719d398be615))
+* **scaling:** the container-apps route was a second door to an unrecoverable scale-to-zero ([#4279](https://github.com/fgarofalo56/csa-inabox/issues/4279)) ([#4295](https://github.com/fgarofalo56/csa-inabox/issues/4295)) ([dac8741](https://github.com/fgarofalo56/csa-inabox/commit/dac8741ae43c419010286a0da07f68fe917e0e1b))
+
+
+### Documentation
+
+* **drain:** record the [#4268](https://github.com/fgarofalo56/csa-inabox/issues/4268) override, its advisory red, and the close audit ([#4047](https://github.com/fgarofalo56/csa-inabox/issues/4047)) ([#4304](https://github.com/fgarofalo56/csa-inabox/issues/4304)) ([3135227](https://github.com/fgarofalo56/csa-inabox/commit/31352275ef11706cd1449d1cd3ee7aacab1175c1))
+* **prp:** record the twelve operator decisions and the admin-override log ([#4296](https://github.com/fgarofalo56/csa-inabox/issues/4296)) ([78f9413](https://github.com/fgarofalo56/csa-inabox/commit/78f941306c32edbab72cc6d1e21ee9de937f40f2))
+* **prp:** register the 2026-09-01 drain round — safety chain, eight new issues, seven review verdicts ([#4281](https://github.com/fgarofalo56/csa-inabox/issues/4281)) ([e329882](https://github.com/fgarofalo56/csa-inabox/commit/e3298820301b7466799aee4d983c7183f8a74474))
+
 ## [0.104.0](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.103.5...csa-inabox-v0.104.0) (2026-09-01)
 
 
