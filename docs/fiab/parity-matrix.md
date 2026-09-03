@@ -277,9 +277,11 @@ requires.
 Bottom line: **Azure Commercial is GA for CSA Loom. GCC is
 supported-in-code, never exercised — no tenant.** Measured 2026-09-01/03
 (#3078, #4071): no GCC tenant exists to authenticate against; the lane's
-four `AZURE_GCC_*` secrets have never been set; all 20 recorded runs of
-`deploy-fiab-gcc.yml` concluded `success` with both deploy jobs skipped at
-0 steps; `gcc.bicepparam` never sets `deployAppsEnabled`, so even a
+four `AZURE_GCC_*` secrets have never been set; **0 of the 75 recorded runs
+(2026-05-23 → 2026-08-08) of `deploy-fiab-gcc.yml` ever executed a deploy
+step** — 63 concluded `success` with both deploy jobs skipped at 0 steps and
+12 were `startup_failure` with no jobs at all; `gcc.bicepparam` never sets
+`deployAppsEnabled`, so even a
 credentialed run would deploy zero Container Apps; and the lane is
 `disabled_manually` with that reason recorded in
 [`workflow-lane-states-allowlist.json`](https://github.com/fgarofalo56/csa-inabox/blob/main/scripts/ci/workflow-lane-states-allowlist.json).

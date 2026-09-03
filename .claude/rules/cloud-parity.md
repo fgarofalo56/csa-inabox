@@ -81,6 +81,10 @@ supported-in-code (`platform/fiab/bicep/params/gcc.bicepparam`,
 - Its last 20 runs are 20/20 `success`; on all 20 the
   `Deploy + validate CSA Loom in GCC` and `Post-deploy bootstrap (GCC)` jobs
   were `skipped` with `steps=0` (jobs API, 2026-09-03). Green over nothing.
+  Over the WHOLE population — 75 recorded runs, 2026-05-23 → 2026-08-08 — the
+  count that matters is the same: **0 runs ever executed a deploy step** (63
+  `success` with both jobs skipped at 0 steps, 12 `startup_failure` with no
+  jobs at all). Quote the population, not just the last page of it.
 - `gcc.bicepparam` never sets `deployAppsEnabled` (main.bicep defaults it
   false), so even a credentialed run would stand up zero Container Apps
   (#3078) — disclosed in the param file and deliberately not flipped without
