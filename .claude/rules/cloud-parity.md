@@ -83,8 +83,11 @@ supported-in-code (`platform/fiab/bicep/params/gcc.bicepparam`,
   were `skipped` with `steps=0` (jobs API, 2026-09-03). Green over nothing.
   Over the WHOLE population — 75 recorded runs, 2026-05-23 → 2026-08-08 — the
   count that matters is the same: **0 runs ever executed a deploy step** (63
-  `success` with both jobs skipped at 0 steps, 12 `startup_failure` with no
-  jobs at all). Quote the population, not just the last page of it.
+  `success` with every deploy job present skipped at 0 steps — only the 21
+  runs from 2026-07-16 on carry BOTH, since `Post-deploy bootstrap (GCC)` did
+  not exist before then — and 12 `startup_failure` with no jobs at all).
+  Quote the population, not just the last page of it, and check that a job
+  you are counting existed across the whole window.
 - `gcc.bicepparam` never sets `deployAppsEnabled` (main.bicep defaults it
   false), so even a credentialed run would stand up zero Container Apps
   (#3078) — disclosed in the param file and deliberately not flipped without

@@ -27,7 +27,9 @@ public cloud under a government-community M365 identity
 (`deploy-fiab-gcc.yml:106` `AZURE_CLOUD: AzureCloud`); the lane's
 `AZURE_GCC_*` secrets have never existed, **0 of its 75 recorded runs
 (2026-05-23 → 2026-08-08) ever executed a deploy step** — 63 concluded
-`success` with both deploy jobs skipped at 0 steps and 12 were
+`success` with every deploy job present skipped at 0 steps (only the 21 runs
+from 2026-07-16 on carry both jobs; `Post-deploy bootstrap (GCC)` did not
+exist before then) and 12 were
 `startup_failure` with no jobs at all — and it is
 `disabled_manually` with that reason on record. Every "Commercial/GCC"
 branch note below describes the code path, not a deploy receipt. See
