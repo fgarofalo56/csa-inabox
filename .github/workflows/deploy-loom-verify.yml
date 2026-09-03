@@ -44,6 +44,38 @@ run-name: >-
 # The SP additionally needs ARM read on the console app's secrets
 # (Microsoft.App/containerApps/listSecrets). Contributor on the admin RG covers
 # it; a narrower role may not.
+#
+# ── WHY IT NOW RUNS BY ITSELF (#4144) ──────────────────────────────────────
+# This lane was dispatch-only and nobody dispatched it. MEASURED 2026-09-01 by
+# `node scripts/ci/check-deploy-staleness.mjs`:
+#
+#   STALE  deploy-loom-verify.yml  last success 2026-08-03, code 2026-08-20 (+17d)
+#
+# scripts/csa-loom/loom-verify.js is base64-embedded into the job at deploy
+# time, so this lane is the ONLY way that file reaches the estate. 17 days stale
+# means the production API verifier was probing a route list 17 days out of date
+# and passing — a gate that measures a shrinking surface, not a red X.
+#
+# THERE IS A SECOND DRIFT SOURCE THAT NOTHING WAS WATCHING. This job does not
+# build an image: it RUNS THE CONSOLE'S OWN IMAGE with an overridden command,
+# and the `Verify the job reflects what was just deployed` step below fails if
+# the job's image is not the one the console is serving. So every console roll
+# leaves this job pinned to the previous console build, and no `paths` entry can
+# express that — the drifting artifact is a live container image, not a file.
+# `workflow_run` on loom-roll-and-validate is the only trigger that tracks it:
+# the console rolls, then the verifier is re-pinned to what actually shipped.
+#
+# WHY THIS LANE CAN SAFELY CHAIN OFF EVERY ROLL AND THE UAT SIBLING CANNOT.
+# Measured: this workflow appears in NO acr-firewall-lease.sh call site (there
+# is no `az acr build` here at all — see the NOTE above), and loom-roll-and-
+# validate's gates read the loom-uat job, never loom-verify. So there is no
+# lease to contend for and no job the roll is configuring underneath it.
+#
+# AN AUTOMATIC RUN IS A REAL DEPLOY. `dry_run` defaults true for a DISPATCH; the
+# `inputs` context is empty on push/workflow_run, so `!inputs.dry_run` is true
+# and the deploy step runs. An automatic run that deployed nothing would clear
+# this lane's drift while writing no job — the green-on-nothing shape
+# check-deploy-staleness' DRY RUN filter exists to catch.
 
 on:
   workflow_dispatch:
@@ -65,6 +97,23 @@ on:
         type: boolean
         default: true
 
+  # Every console roll re-pins the verifier to the image that actually shipped.
+  # This is the drift no `paths` filter can express.
+  workflow_run:
+    workflows: ['loom-roll-and-validate']
+    types: [completed]
+    branches: [main]
+
+  # The WATCHED sources for this lane. loom-verify.js is embedded into the job
+  # at deploy time, so a change to it is undeployed until this runs.
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/deploy-loom-verify.yml'
+      - 'scripts/csa-loom/loom-verify.js'
+      - 'scripts/csa-loom/deploy-loom-verify-job.sh'
+      - 'scripts/ci/resolve-automation-oid.mjs'
+
 permissions:
   contents: read
 
@@ -80,6 +129,12 @@ env:
 jobs:
   deploy:
     name: Create/refresh the loom-verify job
+    # A FAILED roll must not chain a re-pin: the console it would pin to did not
+    # ship. A dispatch and a push always proceed — neither has an upstream
+    # conclusion to read. Same shape as loom-dataplane-roll.yml:242.
+    if: >-
+      github.event_name != 'workflow_run'
+      || github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-latest
     # No image build — this only renders a YAML and applies it.
     timeout-minutes: 30

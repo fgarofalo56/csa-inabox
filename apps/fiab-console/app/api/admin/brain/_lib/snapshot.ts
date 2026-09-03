@@ -21,6 +21,7 @@
  */
 
 import {
+  classifyResourceOwnership,
   EDGE_PROVENANCES,
   isDanglingEdge,
   type AzureResourceNode,
@@ -121,6 +122,15 @@ export function snapshotFromCollection(
       alwaysOn: azure?.scale !== undefined && azure.scale.minReplicas > 0,
       scaleMeasured: azure?.scale !== undefined,
       ownershipConfirmed: owned.has(key),
+      // #4255 W3 — owned / observed / indeterminate as DATA. A non-azure node
+      // (the estate owner artifact) has no ARM tag bag, so `azure` is
+      // undefined and `classifyResourceOwnership` reads that as
+      // `indeterminate` — the honest answer for a subject with no tags to read,
+      // rather than a fabricated "not ours".
+      ownership: classifyResourceOwnership(
+        { tags: azure?.tags },
+        opts?.estateId,
+      ),
       danglingIntendedFor: danglingFor.get(key) ?? 0,
     };
   });

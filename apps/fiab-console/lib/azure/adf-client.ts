@@ -66,7 +66,12 @@ function required(k: string): string {
 export interface AdfArmTarget { subscriptionId?: string; resourceGroup?: string; factoryName?: string; }
 function sub(t?: AdfArmTarget): string { return (t?.subscriptionId || '').trim() || process.env.LOOM_ADF_SUB || required('LOOM_SUBSCRIPTION_ID'); }
 function rg(t?: AdfArmTarget):  string { return (t?.resourceGroup || '').trim() || process.env.LOOM_ADF_RG || required('LOOM_DLZ_RG'); }
-function adfName(t?: AdfArmTarget): string { return (t?.factoryName || '').trim() || required('LOOM_ADF_NAME'); }
+// LOOM_ADF_FACTORY is a REAL alias of LOOM_ADF_NAME (#3513): hub-console-dlz-env.bicep
+// emits both spellings and gov-discover.yml suggests the alias to brownfield operators,
+// yet nothing read it (deploy-integrity R7). Canonical LOOM_ADF_NAME wins; the throw names it.
+function adfName(t?: AdfArmTarget): string {
+  return (t?.factoryName || '').trim() || process.env.LOOM_ADF_NAME || process.env.LOOM_ADF_FACTORY || required('LOOM_ADF_NAME');
+}
 
 /**
  * The factory coordinates a call should target: the EXPLICIT `target` arg wins
@@ -109,8 +114,16 @@ export function adfConfigGate(target?: AdfArmTarget): { missing: string } | null
   // effective coords are still partial (no selection, or a partial one).
   const eff = effectiveTarget(target);
   if (eff?.subscriptionId && eff?.resourceGroup && eff?.factoryName) return null;
-  for (const k of ['LOOM_SUBSCRIPTION_ID', 'LOOM_DLZ_RG', 'LOOM_ADF_NAME']) {
-    if (!process.env[k]) return { missing: k };
+  // Mirror the resolvers above axis by axis (#3513): sub()/rg()/adfName() accept the
+  // ADF-specific spelling first, so a gate demanding only the platform-wide one was a
+  // FALSE RED on an estate pinned to a reused factory in another subscription.
+  const AXES: { keys: string[]; missing: string }[] = [
+    { keys: ['LOOM_ADF_SUB', 'LOOM_SUBSCRIPTION_ID'], missing: 'LOOM_SUBSCRIPTION_ID' },
+    { keys: ['LOOM_ADF_RG', 'LOOM_DLZ_RG'], missing: 'LOOM_DLZ_RG' },
+    { keys: ['LOOM_ADF_NAME', 'LOOM_ADF_FACTORY'], missing: 'LOOM_ADF_NAME' },
+  ];
+  for (const axis of AXES) {
+    if (!axis.keys.some((k) => process.env[k])) return { missing: axis.missing };
   }
   return null;
 }

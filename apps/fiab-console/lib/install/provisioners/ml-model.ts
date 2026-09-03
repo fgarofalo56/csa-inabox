@@ -191,6 +191,7 @@ export const mlModelProvisioner: Provisioner = async (input): Promise<ProvisionR
     return {
       status: 'remediation',
       gate: {
+        gateId: 'svc-databricks',
         reason: 'Databricks workspace is not configured for this deployment.',
         remediation: `Set ${cfg.missing} (the Databricks workspace hostname) so install can import + run the training notebook that trains and registers the ${content.algorithm || 'model'}.`,
         link: 'https://learn.microsoft.com/azure/databricks/mlflow/end-to-end-example',

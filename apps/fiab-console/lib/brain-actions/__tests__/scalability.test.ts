@@ -905,15 +905,23 @@ describe(`the COMMITTED ${SCALABILITY_SOURCE}`, () => {
       .filter((n) => refuseScaleToZero(n, derived.declarations) === null)
       .sort();
 
-    expect(derived.declarations.size).toBe(26);
+    // #2642 moved these: the sovereign-boundary OSS Redis Container App adds one
+    // resource declaration (22 -> 23; the copy loop is unchanged), so the keyed
+    // count goes 26 -> 27 and `loom-redis-oss` joins the PINNED bucket. It lands
+    // there with NO change to the derivation — `redis-oss-aca.bicep` declares
+    // min=max=1, and a cache scaled to zero is a cache emptied, which is the
+    // #4257 shape. Elastic stays 21 and performable stays the same 7, which is
+    // the check that this is one new pinned app and not a shift in the rest.
+    expect(derived.declarations.size).toBe(27);
     expect(pinned.map(nameOf).sort()).toEqual([
       'iceberg-catalog',
       'loom-airflow',
+      'loom-redis-oss',
       'loom-risingwave',
     ]);
     expect(unresolvedShape.map(nameOf).sort()).toEqual(['loom-trino', 'loom-unity']);
     expect(elastic).toHaveLength(21);
-    // 7 of 26 stay performable. The five apps from the generic `apps[]` loop are
+    // 7 of 27 stay performable. The five apps from the generic `apps[]` loop are
     // there because expanding that loop turned them from an UNBOUNDED population
     // hole into real, elastic declarations. `loom-console` is NOT among them —
     // the `self` arm refuses it. Over-refusal on a destructive action is the safe

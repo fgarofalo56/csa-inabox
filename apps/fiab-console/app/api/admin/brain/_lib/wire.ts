@@ -46,11 +46,19 @@ import type {
   FindingSeverity,
   IngressFacts,
   NodeKind,
+  OwnershipVerdict,
+  OwnershipVerdictCounts,
   Population,
   RemediationProposal,
   ScaleFacts,
   SkippedSubject,
 } from '@/lib/brain/graph';
+
+/**
+ * Re-exported so a client component can name the verdict without importing
+ * from `lib/brain/graph` (type-only, so nothing is emitted into the bundle).
+ */
+export type { OwnershipVerdict, OwnershipVerdictCounts };
 
 /**
  * A node as the canvas draws it.
@@ -104,6 +112,27 @@ export interface WireNode {
    * is reported rather than assumed — see {@link OwnershipCoverage}.
    */
   readonly ownershipConfirmed: boolean;
+  /**
+   * THE OWNED / OBSERVED / INDETERMINATE VERDICT (#4255 W3).
+   *
+   * `ownershipConfirmed` is a boolean, and a boolean cannot carry the third
+   * state. It collapses "the tag is absent — this is someone else's resource,
+   * visible but not ours to touch" and "the tags could NOT be read" into one
+   * `false`, and those are different facts with different consequences. On the
+   * live estate that collapse is exactly what the operator saw: `loom-risingwave`
+   * (Loom's) and `forzelite-dev-pgdb` (not Loom's) rendered identically.
+   *
+   * So the verdict travels as DATA, computed once on the server by
+   * `classifyResourceOwnership`, and a surface splits on it rather than
+   * re-deriving it from `tags` — the same reason `unreachableConfigured` and
+   * `alwaysOn` are server-computed. Non-`azure-resource` nodes (the estate
+   * owner artifact) carry `indeterminate`: they have no ARM tag bag at all, and
+   * claiming a verdict for them would be a verdict about nothing.
+   *
+   * `ownership === 'owned'` iff `ownershipConfirmed` — asserted in
+   * `snapshot-ownership.test.ts`, so the two cannot drift.
+   */
+  readonly ownership: OwnershipVerdict;
   /** Dangling edges whose `intendedTo` is this node — the evidence chain. */
   readonly danglingIntendedFor: number;
 }
@@ -173,6 +202,17 @@ export interface OwnershipCoverage {
    * withheld in that state, and the UI says so.
    */
   readonly blind: boolean;
+  /**
+   * The same population, split three ways (#4255 W3), so a surface can render
+   * "N owned, M observed" WITHOUT walking `nodes` and re-deriving the verdict.
+   *
+   * `owned + observed + indeterminate === examined`, always — asserted in
+   * `snapshot-ownership.test.ts`. `confirmed` above counts `owns` EDGES and
+   * `byVerdict.owned` counts the TAG verdict; they are equal by construction
+   * (one implementation feeds both) and the test proves it rather than assuming
+   * it.
+   */
+  readonly byVerdict: OwnershipVerdictCounts;
   readonly note: string;
 }
 
