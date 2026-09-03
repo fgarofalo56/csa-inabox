@@ -37385,10 +37385,10 @@
           "facet": {
             "kind": "publication",
             "module": "scripts/ci/report-stranded-roll.mjs",
-            "declaredSinkCount": 5,
+            "declaredSinkCount": 6,
             "sinks": [
               {
-                "id": "console:member:59",
+                "id": "console:member:67",
                 "surface": "console",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -37408,7 +37408,7 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "console:member:99",
+                "id": "console:member:129",
                 "surface": "console",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -37418,7 +37418,7 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "console:member:104",
+                "id": "console:member:134",
                 "surface": "console",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -37428,7 +37428,17 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "console:member:107",
+                "id": "console:member:139",
+                "surface": "console",
+                "accessPath": "member",
+                "wholeExpressionBounded": false,
+                "boundary": null,
+                "unredactedByDesign": false,
+                "carriesSensitive": false,
+                "childProvenRedacting": null
+              },
+              {
+                "id": "console:member:142",
                 "surface": "console",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -48517,9 +48527,9 @@
     },
     "meta": {
       "generatorVersion": 1,
-      "generatedAt": "2026-09-02T18:52:43.651Z",
-      "commit": "78f941306c32edbab72cc6d1e21ee9de937f40f2",
-      "inputsDigest": "9c29a880316bb6f9",
+      "generatedAt": "2026-09-03T03:39:10.936Z",
+      "commit": "3319f171da4d312851cebbefad905599cf365146",
+      "inputsDigest": "721b25fc9b4f3d00",
       "filesScanned": 2080,
       "scanScopes": [
         {
@@ -49368,7 +49378,7 @@
         },
         {
           "subject": "scripts/ci/report-stranded-roll.mjs",
-          "reason": "module declares no PUBLICATION-SINKS marker, so C4's declared-count drift check is INERT for it (declaredSinkCount is set to the observed 5). Recorded so the inertness is countable rather than invisible — a check that cannot fail must not be mistaken for a check that passed."
+          "reason": "module declares no PUBLICATION-SINKS marker, so C4's declared-count drift check is INERT for it (declaredSinkCount is set to the observed 6). Recorded so the inertness is countable rather than invisible — a check that cannot fail must not be mistaken for a check that passed."
         },
         {
           "subject": "scripts/ci/resolve-automation-oid.mjs",
@@ -49576,7 +49586,7 @@
         },
         {
           "subject": "C4 expression arm (carriesSensitive)",
-          "reason": "matched 0 of 2326 non-spawn publication sink(s), so every C4 finding on this tree comes from the spawn-stdio arm. The expression arm is INERT here and its correctness is therefore unexercised by the real corpus — C4 output is not evidence that no unbounded sensitive write exists."
+          "reason": "matched 0 of 2327 non-spawn publication sink(s), so every C4 finding on this tree comes from the spawn-stdio arm. The expression arm is INERT here and its correctness is therefore unexercised by the real corpus — C4 output is not evidence that no unbounded sensitive write exists."
         }
       ]
     }

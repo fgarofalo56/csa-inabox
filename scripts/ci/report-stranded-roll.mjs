@@ -21,6 +21,15 @@
  * shape deploy-integrity R7 exists to forbid and which this repo has already
  * paid for twice.
  *
+ * A 'failure' SUCCESSOR IS READ, NOT ASSUMED (#4300 review). The producer is a
+ * matrix, and the gate rolls a run that concluded 'failure' when its
+ * loom-console job succeeded (#3260). So for every newer run that concluded
+ * 'failure' — `runsNeedingConsoleLookup` names the set — this runner reads the
+ * loom-console job conclusion(s) with the SAME query the gate's
+ * `console_conclusions()` uses (loom-roll-and-validate.yml), and passes them in
+ * as `console_conclusions`. A failed lookup is `null`, never `[]`, for the same
+ * reason as above; the decision reports it as unknown naming the run.
+ *
  * Env:
  *   GITHUB_REPOSITORY      owner/repo
  *   UPSTREAM_CONCLUSION    github.event.workflow_run.conclusion
@@ -33,7 +42,7 @@
  */
 import { execFileSync } from 'node:child_process';
 import { appendFileSync } from 'node:fs';
-import { decideStranded, shouldFail } from './stranded-roll-decision.mjs';
+import { decideStranded, runsNeedingConsoleLookup, shouldFail } from './stranded-roll-decision.mjs';
 
 const repo = process.env.GITHUB_REPOSITORY || '';
 const producer = process.env.PRODUCER_WORKFLOW || 'build-fiab-images-acr-tasks.yml';
@@ -41,30 +50,54 @@ const conclusion = process.env.UPSTREAM_CONCLUSION || '';
 const createdAt = process.env.UPSTREAM_CREATED_AT || '';
 const headSha = process.env.UPSTREAM_HEAD_SHA || '';
 
-/** Producer runs, or null when the query itself failed. NEVER [] for a failure. */
-function readProducerRuns() {
+/** One `gh api --jq` call parsed as JSON, or null when it failed. The reason is
+ *  kept and printed — a swallowed stderr is how "I could not reach the registry"
+ *  once became "the tag does not exist". */
+function ghApiJson(what, endpoint, jq) {
   try {
     const out = execFileSync(
       'gh',
-      ['api', `repos/${repo}/actions/workflows/${producer}/runs?per_page=50`,
-        '--jq', '[.workflow_runs[] | {id, status, conclusion, created_at, head_sha}]'],
+      ['api', endpoint, '--jq', jq],
       { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] },
     );
     const parsed = JSON.parse(out);
     return Array.isArray(parsed) ? parsed : null;
   } catch (e) {
-    // The reason is kept and printed — a swallowed stderr is how "I could not
-    // reach the registry" once became "the tag does not exist".
     const detail = (e && (e.stderr?.toString() || e.message)) || String(e);
-    console.log(`::notice::Could not read ${producer} runs: ${detail.slice(0, 400)}`);
+    console.log(`::notice::Could not read ${what}: ${detail.slice(0, 400)}`);
     return null;
   }
+}
+
+/** Producer runs, or null when the query itself failed. NEVER [] for a failure. */
+function readProducerRuns() {
+  return ghApiJson(
+    `${producer} runs`,
+    `repos/${repo}/actions/workflows/${producer}/runs?per_page=50`,
+    '[.workflow_runs[] | {id, status, conclusion, created_at, head_sha}]',
+  );
+}
+
+/** The loom-console job conclusion(s) of one producer run — the gate's
+ *  `console_conclusions()` query, verbatim — or null when the lookup failed. */
+function readConsoleConclusions(runId) {
+  return ghApiJson(
+    `the jobs of producer run ${runId}`,
+    `repos/${repo}/actions/runs/${runId}/jobs?per_page=100`,
+    '[.jobs[] | select(.name | test("loom-console")) | .conclusion]',
+  );
+}
+
+const producerRuns = readProducerRuns();
+for (const r of runsNeedingConsoleLookup({ upstreamCreatedAt: createdAt, producerRuns })) {
+  r.console_conclusions = readConsoleConclusions(r.id);
+  console.log(`producer run ${r.id} concluded 'failure'; loom-console conclusion(s): ${r.console_conclusions === null ? '(unreadable)' : JSON.stringify(r.console_conclusions)}`);
 }
 
 const verdict = decideStranded({
   upstreamConclusion: conclusion,
   upstreamCreatedAt: createdAt,
-  producerRuns: readProducerRuns(),
+  producerRuns,
   producerWorkflow: producer,
 });
 
@@ -85,7 +118,9 @@ const lines = [
   `**Verdict: \`${verdict.verdict}\`.** ${verdict.why}`,
 ];
 if (verdict.carrier) {
-  lines.push('', `Carrier run: [\`${verdict.carrier.id}\`](https://github.com/${repo}/actions/runs/${verdict.carrier.id}) (\`${verdict.carrier.status}\`/\`${verdict.carrier.conclusion || '-'}\`).`);
+  const c = verdict.carrier;
+  const consoleNote = Array.isArray(c.console_conclusions) ? `, loom-console: \`${c.console_conclusions.join(',')}\`` : '';
+  lines.push('', `Carrier run: [\`${c.id}\`](https://github.com/${repo}/actions/runs/${c.id}) (\`${c.status}\`/\`${c.conclusion || '-'}\`${consoleNote}).`);
 }
 if (verdict.remediation) {
   lines.push('', 'Remediation:', '', '```', verdict.remediation, '```');
@@ -101,7 +136,7 @@ if (process.env.GITHUB_STEP_SUMMARY) {
 }
 
 if (shouldFail(verdict.verdict)) {
-  console.log(`::error title=${title}::${verdict.why} ${verdict.remediation ? `Remediation: ${verdict.remediation}` : ''}`);
+  console.log(`::error title=${title}::${verdict.why} ${verdict.remediation ? `Remediation: ${verdict.remediation.replace(/\n/g, ' ; ')}` : ''}`);
   process.exit(1);
 }
 console.log(`::notice title=${title}::${verdict.why}`);

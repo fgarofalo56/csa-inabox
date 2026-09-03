@@ -18,6 +18,11 @@
  *     rescue it.
  *   - make shouldFail() return false for 'unknown' -> the fail-closed control
  *     goes red.
+ *   - judge a 'failure' successor from the run list alone (the #4300 review's
+ *     R7 finding) -> the sibling-image control goes red: a producer run that
+ *     failed on a sibling image but built loom-console DID roll (#3260), and
+ *     calling that "the chain is broken" sends the operator to dispatch a build
+ *     that already happened.
  *
  * The fixtures are shaped from the REAL 2026-09-02 incident (run ids, statuses
  * and the ordering are the measured ones), not invented, so a fixture that
@@ -27,11 +32,18 @@
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { decideStranded, shouldFail } from '../stranded-roll-decision.mjs';
+import { decideStranded, runsNeedingConsoleLookup, shouldFail } from '../stranded-roll-decision.mjs';
 
 const SKIPPED_AT = '2026-09-02T04:02:23Z';
 
 const run = (id, status, conclusion, created_at) => ({ id, status, conclusion, created_at });
+
+// A producer run that concluded 'failure' with its loom-console job conclusions
+// already read (the runner does that lookup; see runsNeedingConsoleLookup).
+const failed = (id, created_at, console_conclusions) => ({
+  ...run(id, 'completed', 'failure', created_at),
+  ...(console_conclusions === undefined ? {} : { console_conclusions }),
+});
 
 // The measured estate at 04:04 on 2026-09-02, newest last.
 const TRAIN = [
@@ -72,6 +84,140 @@ test('CONTROL: a cancelled build whose successor already SUCCEEDED is BENIGN —
 });
 
 // ---------------------------------------------------------------------------
+// A 'failure' SUCCESSOR IS NOT "NOTHING WAS PRODUCED" (#4300 review, R7)
+//
+// loom-roll-and-validate.yml's gate rolls the console when the producer run
+// failed on a SIBLING image but the loom-console job succeeded (#3260,
+// console_build=success, proceed=true). So a newer run that concluded
+// 'failure' may well have rolled this work, and the run list alone cannot
+// tell. The module must either see the loom-console conclusions and decide,
+// or say it did not establish the answer — never assert "the chain is broken".
+// ---------------------------------------------------------------------------
+
+test('CONTROL (#4300): a newer FAILURE whose loom-console job SUCCEEDED is a carrier — its own roll fired (#3260)', () => {
+  // The reviewer's concrete state: build A cancelled, build B concludes
+  // 'failure' with loom-console green. B's own roll shipped the console.
+  const d = decideStranded({
+    upstreamConclusion: 'cancelled',
+    upstreamCreatedAt: SKIPPED_AT,
+    producerRuns: [
+      ...TRAIN.slice(0, 3),
+      failed(33589500000, '2026-09-02T04:20:00Z', ['success']),
+    ],
+  });
+  assert.equal(d.verdict, 'benign');
+  assert.equal(d.carrier.id, 33589500000);
+  assert.match(d.why, /loom-console/);
+  assert.match(d.why, /#3260/);
+  // It must NOT tell the operator to dispatch a build that already happened.
+  assert.doesNotMatch(d.why, /chain is broken/);
+  assert.equal(d.remediation, undefined);
+  assert.equal(shouldFail(d.verdict), false);
+});
+
+test('#4300: a newer FAILURE whose loom-console outcome was NOT established is UNKNOWN — never stranded', () => {
+  const shapes = [
+    ['not looked up', undefined],
+    ['lookup FAILED', null],
+    ['no loom-console job reported', []],
+  ];
+  for (const [label, cc] of shapes) {
+    const d = decideStranded({
+      upstreamConclusion: 'cancelled',
+      upstreamCreatedAt: SKIPPED_AT,
+      producerRuns: [
+        ...TRAIN.slice(0, 3),
+        run(33589400933, 'completed', 'cancelled', '2026-09-02T04:04:25Z'),
+        failed(33589500000, '2026-09-02T04:20:00Z', cc),
+      ],
+    });
+    assert.equal(d.verdict, 'unknown', label);
+    // It names the run whose roll gate holds the answer (R7: say what was not established).
+    assert.match(d.why, /33589500000/, label);
+    assert.match(d.why, /not established/i, label);
+    assert.doesNotMatch(d.why, /chain is broken/, label);
+    assert.doesNotMatch(d.why, /every newer producer run also ended/, label);
+    assert.match(d.remediation, /33589500000/, label);
+    assert.equal(shouldFail(d.verdict), true, label);
+  }
+});
+
+test('#4300: a FAILURE whose loom-console job did NOT succeed fired no roll — that one IS established', () => {
+  // The gate sets proceed=false on this (loom-roll-and-validate.yml:320-323),
+  // so counting it toward "stranded" states only what was read.
+  const d = decideStranded({
+    upstreamConclusion: 'cancelled',
+    upstreamCreatedAt: SKIPPED_AT,
+    producerRuns: [
+      ...TRAIN.slice(0, 3),
+      failed(33589500000, '2026-09-02T04:20:00Z', ['failure']),
+    ],
+  });
+  assert.equal(d.verdict, 'stranded');
+  assert.match(d.why, /33589500000:failure\(loom-console: failure\)/);
+});
+
+test('#4300: with SEVERAL loom-console jobs, every one must be success to carry', () => {
+  const d = decideStranded({
+    upstreamConclusion: 'cancelled',
+    upstreamCreatedAt: SKIPPED_AT,
+    producerRuns: [
+      ...TRAIN.slice(0, 3),
+      failed(33589500000, '2026-09-02T04:20:00Z', ['success', 'cancelled']),
+    ],
+  });
+  assert.equal(d.verdict, 'stranded');
+  assert.match(d.why, /33589500000:failure\(loom-console: success,cancelled\)/);
+});
+
+test('#4300: loom-console conclusions on a CANCELLED run do not carry — the gate declines cancelled outright', () => {
+  // A cancelled producer run skips every roll job whatever its matrix did, so
+  // a green loom-console job inside it is an image with no roll — the estate
+  // is exactly as stranded. Only a 'failure' run is judged by its jobs.
+  const d = decideStranded({
+    upstreamConclusion: 'cancelled',
+    upstreamCreatedAt: SKIPPED_AT,
+    producerRuns: [
+      ...TRAIN.slice(0, 3),
+      { ...run(33589400933, 'completed', 'cancelled', '2026-09-02T04:04:25Z'), console_conclusions: ['success'] },
+    ],
+  });
+  assert.equal(d.verdict, 'stranded');
+  assert.equal(d.carrier, null);
+});
+
+test('#4300: a PENDING newer run still wins over an unresolved failure — the train is coming', () => {
+  const d = decideStranded({
+    upstreamConclusion: 'cancelled',
+    upstreamCreatedAt: SKIPPED_AT,
+    producerRuns: [
+      ...TRAIN.slice(0, 3),
+      failed(33589500000, '2026-09-02T04:20:00Z', undefined),
+      run(33589600000, 'in_progress', null, '2026-09-02T04:30:00Z'),
+    ],
+  });
+  assert.equal(d.verdict, 'benign');
+  assert.equal(d.carrier.id, 33589600000);
+});
+
+test('#4300: runsNeedingConsoleLookup names exactly the NEWER failure runs — the set the runner must read', () => {
+  const runs = [
+    run(1, 'completed', 'failure', '2026-09-02T03:00:00Z'), // older: cannot carry, not looked up
+    run(2, 'completed', 'cancelled', '2026-09-02T04:10:00Z'), // newer but not a failure
+    run(3, 'completed', 'failure', '2026-09-02T04:20:00Z'),
+    run(4, 'completed', 'failure', '2026-09-02T04:30:00Z'),
+  ];
+  assert.deepEqual(
+    runsNeedingConsoleLookup({ upstreamCreatedAt: SKIPPED_AT, producerRuns: runs }).map((r) => r.id),
+    [3, 4],
+  );
+  // The same predicate decideStranded uses: an unreadable list or timestamp
+  // means nothing to look up, and decideStranded says 'unknown' on its own.
+  assert.deepEqual(runsNeedingConsoleLookup({ upstreamCreatedAt: SKIPPED_AT, producerRuns: null }), []);
+  assert.deepEqual(runsNeedingConsoleLookup({ upstreamCreatedAt: 'not-a-date', producerRuns: runs }), []);
+});
+
+// ---------------------------------------------------------------------------
 // STRANDED — the tail case, which is the one that actually bit
 // ---------------------------------------------------------------------------
 
@@ -91,21 +237,23 @@ test('THE #4298 TAIL: cancelled with NO newer run at all is STRANDED', () => {
   assert.equal(shouldFail(d.verdict), true);
 });
 
-test('newer runs that ALSO produced nothing do not rescue it — the chain is broken, not delayed', () => {
+test('newer runs that ALSO fired no roll do not rescue it — the chain is broken, not delayed', () => {
   const d = decideStranded({
     upstreamConclusion: 'cancelled',
     upstreamCreatedAt: SKIPPED_AT,
     producerRuns: [
       ...TRAIN.slice(0, 3),
       run(33589400933, 'completed', 'cancelled', '2026-09-02T04:04:25Z'),
-      run(33589500000, 'completed', 'failure', '2026-09-02T04:20:00Z'),
+      // Its loom-console conclusions were READ and were not success, so the
+      // gate declined it (#4300 review: a bare 'failure' would be UNKNOWN).
+      failed(33589500000, '2026-09-02T04:20:00Z', ['failure']),
     ],
   });
   assert.equal(d.verdict, 'stranded');
-  assert.match(d.why, /every newer producer run also ended without/);
+  assert.match(d.why, /every newer producer run also ended/);
   // The receipt NAMES them rather than asserting a bare negative (R7).
   assert.match(d.why, /33589400933:cancelled/);
-  assert.match(d.why, /33589500000:failure/);
+  assert.match(d.why, /33589500000:failure\(loom-console: failure\)/);
 });
 
 test('an OLDER run in any state cannot rescue it — only newer runs carry this work', () => {
