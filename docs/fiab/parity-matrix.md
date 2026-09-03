@@ -249,7 +249,8 @@ planned Azure-native path.
 
 | Boundary | Microsoft Fabric | CSA Loom |
 |---|---|---|
-| **Azure Commercial / GCC** ([note](#gcc-runs-on-azure-commercial)) | **GA** (Commercial only) | **GA** |
+| **Azure Commercial** | **GA** (Commercial only) | **GA** |
+| GCC ([note](#gcc-runs-on-azure-commercial)) | **GA** via Commercial regions (identity flows need the Loom bridge) | **Supported-in-code, never exercised — no tenant** ([recorded decision](https://github.com/fgarofalo56/csa-inabox/blob/main/PRPs/active/drain-2026-08-31/DECISIONS.md#4071--3078--gcc-disabled-deploys-zero-container-apps)) |
 | GCC-High / IL4 | `Forecasted` | **Available v1** |
 | DoD IL5 | `Forecasted` | **v1.1** |
 | Azure Government Secret / IL6 | `Forecasted` | Not authorized (out of scope) |
@@ -266,12 +267,26 @@ they do *not* sit on Azure Government. That means a GCC customer's
 audit boundary covers Azure Commercial resources, and the
 Microsoft Fabric Commercial GA covers them. **However**, the M365 GCC
 tenant identity rules block direct use of Fabric's tenant-level SP
-flows that customers in pure Commercial enjoy. Loom is the bridge:
-the same Bicep that deploys against Azure Commercial deploys against
-the same regions under GCC identity, and the post-deploy bootstrap
-issues the AAD app-roles that the GCC identity boundary requires.
-Bottom line: **Azure Commercial and GCC are both GA for CSA Loom,**
-because both audit boundaries are FedRAMP-High-on-Commercial.
+flows that customers in pure Commercial enjoy. Loom is designed as the bridge:
+the same Bicep that deploys against Azure Commercial is parameterized for
+the same regions under GCC identity (`gcc.bicepparam`, `boundary = 'GCC'`),
+a dedicated lane exists (`deploy-fiab-gcc.yml`), and the post-deploy
+bootstrap is wired to issue the AAD app-roles the GCC identity boundary
+requires.
+
+Bottom line: **Azure Commercial is GA for CSA Loom. GCC is
+supported-in-code, never exercised — no tenant.** Measured 2026-09-01/03
+(#3078, #4071): no GCC tenant exists to authenticate against; the lane's
+four `AZURE_GCC_*` secrets have never been set; all 20 recorded runs of
+`deploy-fiab-gcc.yml` concluded `success` with both deploy jobs skipped at
+0 steps; `gcc.bicepparam` never sets `deployAppsEnabled`, so even a
+credentialed run would deploy zero Container Apps; and the lane is
+`disabled_manually` with that reason recorded in
+[`workflow-lane-states-allowlist.json`](https://github.com/fgarofalo56/csa-inabox/blob/main/scripts/ci/workflow-lane-states-allowlist.json).
+Both audit boundaries are FedRAMP-High-on-Commercial, which is why the code
+path is shared — that is a statement about the code, not a deploy receipt.
+Recorded decision (2026-09-03): [DECISIONS.md § #4071 + #3078](https://github.com/fgarofalo56/csa-inabox/blob/main/PRPs/active/drain-2026-08-31/DECISIONS.md#4071--3078--gcc-disabled-deploys-zero-container-apps)
+· [PR #4259 closing comment](https://github.com/fgarofalo56/csa-inabox/pull/4259#issuecomment-5519608115).
 
 ## Summary by parity grade
 
