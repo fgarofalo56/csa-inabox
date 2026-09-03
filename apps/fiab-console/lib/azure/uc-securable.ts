@@ -43,7 +43,7 @@
  *
  * ## What makes this a CHOKE POINT and not merely a convention
  *
- * A facade nobody is obliged to use is a comment. Two mechanical controls, both
+ * A facade nobody is obliged to use is a comment. Three mechanical controls, all
  * in `scripts/ci/check-unity-audit-chokepoint.mjs`, make this one load-bearing:
  *
  *   1. **check 1 (AUDITED_TRANSPORTS)** — this file is an entry, so the guard
@@ -56,6 +56,13 @@
  *      ALLOWLIST of the two non-catalog exports (`getKeyVaultSecret`,
  *      `keyVaultConfigGate`), not a denylist of today's five, so a NEW export
  *      added to that file cannot be consumed anywhere without failing the build.
+ *   3. **check 9 (SUPPRESSOR CHOKE POINT)** — no module except this one may
+ *      import `withSecurableRecordedByCaller`. De-duplicating two audit layers
+ *      necessarily creates a way to turn the transport's row OFF, and that
+ *      exception needs guarding at least as much as the surface does: held
+ *      anywhere else — above all inside `shortcut-credentials.ts`, where no
+ *      replacement row is ever written — it is an off switch for the securable
+ *      trail. Demonstrated by review, hence the check.
  *
  * Check 8 is retained even though the transport is now audited: an audited call
  * is not the same as an AUTHORIZED one, and routing every consumer through one

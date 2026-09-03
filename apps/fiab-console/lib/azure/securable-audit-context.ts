@@ -40,6 +40,27 @@
  *
  * Same primitive, same directory, same reason as `lib/azure/adf-factory-context.ts`.
  *
+ * ## Why this module has an import CHOKE POINT (check 9)
+ *
+ * De-duplicating two audit layers means one of them can be turned off, so
+ * {@link withSecurableRecordedByCaller} is by construction a SUPPRESSOR of the
+ * transport's row — and the replacement row exists only because `ucSecurable` is
+ * the thing running it. Held by anyone else it is an off switch for the
+ * securable trail, and the worst place to hold it is inside
+ * `shortcut-credentials.ts` itself, where the facade never writes a replacement
+ * and where the guard's check 8 (which polices imports OF that module) does not
+ * look. That was measured, not imagined: a review defeated the transport's
+ * instrumentation with one import line while the guard exited 0.
+ *
+ * So the exception is guarded like the rule. `scripts/ci/check-unity-audit-chokepoint.mjs`
+ * check 9 pins ONE permitted importer per export —
+ * `withSecurableRecordedByCaller` to `lib/azure/uc-securable.ts`,
+ * `securableRecordedByCaller` to `lib/azure/shortcut-credentials.ts` — counts a
+ * namespace / dynamic / star re-export as `*` and permits it to nobody, and
+ * fails the build if the transport stops taking its suppression signal from
+ * here. A second consumer is a security review: it has to record a row of its
+ * own first.
+ *
  * Server-only (imports node:async_hooks). Never import from a client component.
  */
 
@@ -51,8 +72,11 @@ const store = new AsyncLocalStorage<true>();
  * Run `fn` marked as already-audited by an enclosing recorder, suppressing the
  * `shortcut-credentials` transport's own row for every securable call `fn` makes.
  *
- * The ONLY intended caller is `ucSecurable`. It exists so that one row is written
- * per call by the layer that describes it best — never to turn auditing off.
+ * The ONLY permitted caller is `ucSecurable` — mechanically, not by convention:
+ * check 9 of `scripts/ci/check-unity-audit-chokepoint.mjs` fails the build on an
+ * import of this symbol from any other module. It exists so that one row is
+ * written per call by the layer that describes it best — never to turn auditing
+ * off, which is precisely what it would be anywhere else.
  */
 export function withSecurableRecordedByCaller<T>(fn: () => T): T {
   return store.run(true, fn);
