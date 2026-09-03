@@ -21,6 +21,21 @@ single `boundary` param (`Commercial | GCC | GCC-High | IL5`) with ~50
 `api.fabric.microsoft.com` / `api.powerbi.com` reference in `app/api/**` is a
 comment asserting the default path does **not** call it.
 
+Of the four `boundary` values, **GCC is supported-in-code only —
+never exercised, no tenant** (recorded 2026-09-03, #3078 / #4071). GCC is Azure
+public cloud under a government-community M365 identity
+(`deploy-fiab-gcc.yml:106` `AZURE_CLOUD: AzureCloud`); the lane's
+`AZURE_GCC_*` secrets have never existed, **0 of its 75 recorded runs
+(2026-05-23 → 2026-08-08) ever executed a deploy step** — 63 concluded
+`success` with every deploy job present skipped at 0 steps (only the 21 runs
+from 2026-07-16 on carry both jobs; `Post-deploy bootstrap (GCC)` did not
+exist before then) and 12 were
+`startup_failure` with no jobs at all — and it is
+`disabled_manually` with that reason on record. Every "Commercial/GCC"
+branch note below describes the code path, not a deploy receipt. See
+[DECISIONS.md § #4071 + #3078](https://github.com/fgarofalo56/csa-inabox/blob/main/PRPs/active/drain-2026-08-31/DECISIONS.md#4071--3078--gcc-disabled-deploys-zero-container-apps)
+· [PR #4259 closing comment](https://github.com/fgarofalo56/csa-inabox/pull/4259#issuecomment-5519608115).
+
 What is **not** done:
 
 1. **Databricks Unity Catalog does not exist in Azure Government** (verified,
