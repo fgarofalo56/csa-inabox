@@ -74,6 +74,7 @@ vi.mock('@/lib/azure/adls-client', () => ({
 }));
 
 import { lakehouseProvisioner } from '../lakehouse';
+import { decodeIdList } from '@/lib/install/secondary-id-list';
 
 const TABLE = (name: string) => ({
   name,
@@ -108,7 +109,7 @@ describe('lakehouse provisioner — the status reflects the outcome', () => {
       input({ folders: [{ path: 'Files/raw' }], deltaTables: [TABLE('orders'), TABLE('returns')] }) as any,
     );
     expect(r.status).toBe('created');
-    expect(r.secondaryIds?.seededTables).toBe('orders,returns');
+    expect(decodeIdList(r.secondaryIds?.seededTables)).toEqual(['orders', 'returns']);
     expect(r.secondaryIds?.failedTables).toBeUndefined();
   });
 
@@ -121,7 +122,7 @@ describe('lakehouse provisioner — the status reflects the outcome', () => {
     expect(r.error).toMatch(/all 2 declared Delta table seed\(s\) failed/);
     // The receipt still names what WAS created — a failure is not a black hole.
     expect(r.resourceId).toMatch(/^landing\//);
-    expect(r.secondaryIds?.failedTables).toBe('orders,returns');
+    expect(decodeIdList(r.secondaryIds?.failedTables)).toEqual(['orders', 'returns']);
   });
 
   it('fails when ONE table of several failed', async () => {
@@ -134,8 +135,8 @@ describe('lakehouse provisioner — the status reflects the outcome', () => {
     expect(r.status).toBe('failed');
     expect(r.error).toMatch(/INCOMPLETE/);
     expect(r.error).toMatch(/returns/);
-    expect(r.secondaryIds?.seededTables).toBe('orders');
-    expect(r.secondaryIds?.failedTables).toBe('returns');
+    expect(decodeIdList(r.secondaryIds?.seededTables)).toEqual(['orders']);
+    expect(decodeIdList(r.secondaryIds?.failedTables)).toEqual(['returns']);
   });
 
   it('surfaces a non-auth folder failure in the receipt without failing the install', async () => {
@@ -151,8 +152,8 @@ describe('lakehouse provisioner — the status reflects the outcome', () => {
       input({ folders: [{ path: 'Files/raw' }, { path: 'Files/curated' }], deltaTables: [TABLE('orders')] }) as any,
     );
     expect(r.status).toBe('created');
-    expect(r.secondaryIds?.failedFolders).toBe('Files/curated');
-    expect(r.secondaryIds?.folders).toBe('Files/raw');
+    expect(decodeIdList(r.secondaryIds?.failedFolders)).toEqual(['Files/curated']);
+    expect(decodeIdList(r.secondaryIds?.folders)).toEqual(['Files/raw']);
   });
 
   it('still reports created for a bundle that declares tables with no sample rows', async () => {
@@ -162,7 +163,7 @@ describe('lakehouse provisioner — the status reflects the outcome', () => {
       input({ folders: [], deltaTables: [{ name: 'skeleton', ddl: 'CREATE TABLE skeleton ( id BIGINT )' }] }) as any,
     );
     expect(r.status).toBe('created');
-    expect(r.secondaryIds?.emptyTables).toBe('skeleton');
+    expect(decodeIdList(r.secondaryIds?.emptyTables)).toEqual(['skeleton']);
   });
 
   it('still reports the precise RBAC remediation on a 403, not a bare failure', async () => {
@@ -224,7 +225,7 @@ describe('lakehouse provisioner — the seed CSV path is RECORDED, not re-deriva
     expect(r.status).toBe('created');
     expect(recorded(r).orders).toMatch(/\/Files\/_seed\/orders\.csv$/);
     // …and the Synapse view really was registered, so the hook ran to the end.
-    expect(r.secondaryIds?.synapseViews).toBe('lakehouse.orders');
+    expect(decodeIdList(r.secondaryIds?.synapseViews)).toEqual(['lakehouse.orders']);
   });
 
   it('records a path that a blob ACTUALLY EXISTS at', async () => {
@@ -273,5 +274,67 @@ describe('lakehouse provisioner — the seed CSV path is RECORDED, not re-deriva
       input({ deltaTables: [{ name: 'skeleton', ddl: 'CREATE TABLE skeleton ( id BIGINT )' }] }) as any,
     );
     expect(r.secondaryIds?.seedCsvPaths).toBeUndefined();
+  });
+});
+
+/**
+ * #3920 — the list-valued `secondaryIds` keys must survive a comma in a name.
+ *
+ * `seededTables` (and its 13 siblings) were `array.join(',')`, and both readers
+ * — `app/api/apps/[id]/install/route.ts` and
+ * `lib/editors/lakehouse/lakehouse-editor-shell.tsx` — were `split(',')`. The
+ * values are table/folder/view names that pass through `safeAdlsRelPath`, which
+ * is STRUCTURAL and does not touch commas (the sibling `seedCsvPaths` key says
+ * so in its own comment, which is why IT is JSON). So one table called
+ * `Sales, EMEA` made the install route's `seededNames` set contain the two
+ * names `Sales` and `EMEA`, neither of which exists — and the editor's seeded
+ * pane listed the same two ghosts.
+ *
+ * MUTATION PROOF (break the subject, watch these go red, restore):
+ *   a) In `lib/install/secondary-id-list.ts` change `encodeIdList` back to
+ *      `values.join(',')` -> RED:
+ *        "a comma inside a table name is not a delimiter"
+ *        "the install route's seededNames set counts ONE table, not two"
+ *   b) In `decodeIdList` delete the `s.startsWith('[')` JSON branch -> RED on
+ *      the same two (the encoder is unambiguous but the reader re-splits it).
+ *   c) Delete the trailing legacy `s.split(',')` return -> RED:
+ *        "a legacy comma-joined value already in Cosmos still decodes"
+ *      which is the arm a JSON-only reader silently breaks: Cosmos is not
+ *      migrated, so every pre-#3920 item carries the old shape.
+ */
+describe('lakehouse provisioner — list-valued secondaryIds survive a comma (#3920)', () => {
+  it('a comma inside a table name is not a delimiter', async () => {
+    const r = await lakehouseProvisioner(
+      input({ deltaTables: [TABLE('orders'), TABLE('Sales, EMEA')] }) as any,
+    );
+    expect(r.status).toBe('created');
+    // The RECEIPT round-trips to the two names the bundle declared…
+    expect(decodeIdList(r.secondaryIds?.seededTables)).toEqual(['orders', 'Sales, EMEA']);
+    // …and the raw stored value is self-delimiting, so no reader can re-split it.
+    expect(r.secondaryIds?.seededTables).toBe(JSON.stringify(['orders', 'Sales, EMEA']));
+  });
+
+  it("the install route's seededNames set counts ONE table, not two", async () => {
+    // The exact expression `app/api/apps/[id]/install/route.ts` runs over the
+    // provisioner receipt. At head this Set had size 2 ('Sales' and 'EMEA') for
+    // a single declared table, so the auto-bound report was built against a
+    // table name that does not exist.
+    const r = await lakehouseProvisioner(input({ deltaTables: [TABLE('Sales, EMEA')] }) as any);
+    const seededNames = new Set(decodeIdList((r.secondaryIds || {}).seededTables));
+    expect(seededNames.size).toBe(1);
+    expect(seededNames.has('Sales, EMEA')).toBe(true);
+  });
+
+  it('a legacy comma-joined value already in Cosmos still decodes to its entries', () => {
+    // Cosmos is NOT migrated: every item provisioned before this change carries
+    // `a,b`. The decoder must keep reading it — including the legacy ambiguity,
+    // because the intent of a stored `a,b` is unrecoverable and inventing one
+    // would be worse than reproducing the old behaviour for old data.
+    expect(decodeIdList('orders,returns')).toEqual(['orders', 'returns']);
+    expect(decodeIdList('Files/raw')).toEqual(['Files/raw']);
+    expect(decodeIdList(undefined)).toEqual([]);
+    expect(decodeIdList('')).toEqual([]);
+    // A malformed value that merely STARTS with '[' falls back rather than throwing.
+    expect(decodeIdList('[not json')).toEqual(['[not json']);
   });
 });

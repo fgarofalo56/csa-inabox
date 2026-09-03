@@ -94,6 +94,9 @@ import { createShortcut, type ShortcutKind, type ShortcutTargetType } from '@/li
 import { readRepoDataset } from '@/lib/apps/repo-datasets';
 import { escapeSqlLiteral } from '@/lib/sql/quoting';
 import { buildCsv, columnsFromDdl, seedLakehouseAdls } from './_seed-lakehouse-adls';
+// #3920 — the ONE encoder for list-valued `secondaryIds` keys, shared with the
+// install route and the lakehouse editor (which both decode it).
+import { encodeIdList } from '../secondary-id-list';
 
 const FABRIC_BASE = process.env.LOOM_FABRIC_BASE || 'https://api.fabric.microsoft.com/v1';
 const FABRIC_SCOPE = 'https://api.fabric.microsoft.com/.default';
@@ -809,30 +812,31 @@ async function provisionAzureNative(
     container,
     rootPath: root,
     ...(abfssRoot ? { adlsRoot: abfssRoot } : {}),
-    ...(createdFolders.length ? { folders: createdFolders.join(',') } : {}),
-    ...(seeded.length ? { seededTables: seeded.join(',') } : {}),
-    ...(emptyTables.length ? { emptyTables: emptyTables.join(',') } : {}),
+    ...(createdFolders.length ? { folders: encodeIdList(createdFolders) } : {}),
+    ...(seeded.length ? { seededTables: encodeIdList(seeded) } : {}),
+    ...(emptyTables.length ? { emptyTables: encodeIdList(emptyTables) } : {}),
     // The seed CSVs' REAL paths, recorded rather than re-derivable — a JSON
     // object mapping `<schema>.<table>` (or `<table>` when schemas are off) to
     // the container-relative path. Consumers MUST read this instead of
     // rebuilding a path; see the recording hook above for why.
     //
-    // JSON, not the `k=v,k=v` shape the sibling keys use, because that encoding
-    // would be AMBIGUOUS here and I checked rather than assumed:
-    // `safeAdlsRelPath` (backing-name.ts) is structural, not charset-based — it
-    // normalises separators and drops `.`/`..`/empty segments and nothing else
-    // — so a `,` or `=` in a table name or display name survives into both the
-    // key and the path. A lakehouse called "Sales, EMEA" is enough to break a
-    // comma-split. (The pre-existing `seededTables` key has that latent flaw;
-    // this change does not add a second one.)
+    // JSON, not a `k=v,k=v` shape, because that encoding would be AMBIGUOUS
+    // here and I checked rather than assumed: `safeAdlsRelPath`
+    // (backing-name.ts) is structural, not charset-based — it normalises
+    // separators and drops `.`/`..`/empty segments and nothing else — so a `,`
+    // or `=` in a table name or display name survives into both the key and
+    // the path. A lakehouse called "Sales, EMEA" is enough to break a
+    // comma-split. #3920 closed the same latent flaw on the sibling list keys
+    // above/below: they now go through `encodeIdList` (JSON array), whose
+    // decoder still reads the legacy `a,b` values already in Cosmos.
     ...(seedCsvPaths.size ? { seedCsvPaths: JSON.stringify(Object.fromEntries(seedCsvPaths)) } : {}),
-    ...(failedFolders.length ? { failedFolders: failedFolders.join(',') } : {}),
-    ...(failedTables.length ? { failedTables: failedTables.join(',') } : {}),
-    ...(arityMismatches.length ? { arityMismatchTables: arityMismatches.join(',') } : {}),
-    ...(externalViews.length ? { synapseViews: externalViews.join(',') } : {}),
-    ...(shortcutOutcome.active.length ? { shortcutsActive: shortcutOutcome.active.join(',') } : {}),
-    ...(shortcutOutcome.pending.length ? { shortcutsPending: shortcutOutcome.pending.join(',') } : {}),
-    ...(shortcutOutcome.failed.length ? { shortcutsFailed: shortcutOutcome.failed.join(',') } : {}),
+    ...(failedFolders.length ? { failedFolders: encodeIdList(failedFolders) } : {}),
+    ...(failedTables.length ? { failedTables: encodeIdList(failedTables) } : {}),
+    ...(arityMismatches.length ? { arityMismatchTables: encodeIdList(arityMismatches) } : {}),
+    ...(externalViews.length ? { synapseViews: encodeIdList(externalViews) } : {}),
+    ...(shortcutOutcome.active.length ? { shortcutsActive: encodeIdList(shortcutOutcome.active) } : {}),
+    ...(shortcutOutcome.pending.length ? { shortcutsPending: encodeIdList(shortcutOutcome.pending) } : {}),
+    ...(shortcutOutcome.failed.length ? { shortcutsFailed: encodeIdList(shortcutOutcome.failed) } : {}),
   };
 
   // ── OUTCOME GATE (#3905) ────────────────────────────────────────────────
@@ -1071,12 +1075,12 @@ export const lakehouseProvisioner: Provisioner = async (input): Promise<Provisio
     resourceId: lakehouseId,
     secondaryIds: {
       fabricWorkspaceId: ws,
-      ...(folderRefs.length ? { tableFolders: folderRefs.join(',') } : {}),
-      ...(seeded.length ? { seededTables: seeded.join(',') } : {}),
+      ...(folderRefs.length ? { tableFolders: encodeIdList(folderRefs) } : {}),
+      ...(seeded.length ? { seededTables: encodeIdList(seeded) } : {}),
       ...(inProgress.length || acceptedNoOp.length
-        ? { seedingTables: [...inProgress, ...acceptedNoOp].join(',') }
+        ? { seedingTables: encodeIdList([...inProgress, ...acceptedNoOp]) }
         : {}),
-      ...(failed.size ? { seedFailedTables: [...failed].join(',') } : {}),
+      ...(failed.size ? { seedFailedTables: encodeIdList([...failed]) } : {}),
     },
     steps,
   };

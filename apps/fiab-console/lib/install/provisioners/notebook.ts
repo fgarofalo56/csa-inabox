@@ -46,6 +46,82 @@ import type { Provisioner, ProvisionResult } from './types';
 import { resolveInfraResidual } from './types';
 import { trimEdges } from '@/lib/util/trim';
 
+/**
+ * #3530 — PREPEND a `%pip install` bootstrap cell for the packages the bundle
+ * declares in `content.requiredLibraries`.
+ *
+ * The defect this closes: an app-installed notebook whose cells import
+ * `azure.search.documents` / `openai` landed on a Spark pool whose stock image
+ * has neither, so Run-all stopped at the first import with
+ * `ModuleNotFoundError` and the editor's environment selector said "No
+ * environment attached". Nothing in the install path used the session-package
+ * mechanism that already existed on BOTH ends: the run route
+ * (`app/api/items/notebook/[id]/run/route.ts`) detects an inline
+ * `%pip install` and forces it onto the pyspark session, and the Synapse pools
+ * bicep already sets `sessionLevelPackagesEnabled: true`. So the missing piece
+ * was a cell, not a capability.
+ *
+ * Per `auto-bind-by-default.md` the platform installs what the content it
+ * shipped needs — telling the user to attach an environment first is the
+ * user-performed plumbing that rule forbids.
+ *
+ * IDEMPOTENT, and it has to be: install is re-runnable and the same content is
+ * handed to the Synapse / Databricks / Fabric artifact builders. The marker
+ * comment on the first line is the identity check, so re-provisioning does not
+ * stack N bootstrap cells on the same notebook.
+ *
+ * Package names are filtered to the pip-safe charset before they reach a magic
+ * line: this string is executed by the kernel, so a name carrying a shell/magic
+ * metacharacter is dropped rather than escaped. Nothing legitimate is lost —
+ * PEP 508 distribution names are `[A-Za-z0-9._-]`, and a version pin
+ * (`openai==1.2.3`) or an extra (`pkg[all]`) stays within the allowed set.
+ */
+export const PIP_BOOTSTRAP_MARKER = '# loom:required-libraries';
+
+/** PEP 508 distribution name + the pin/extra syntax pip accepts on a bare argument. */
+const PIP_SAFE = /^[A-Za-z0-9][A-Za-z0-9._[\]<>=!~,+-]*$/;
+
+/** The packages from `content.requiredLibraries` that are safe to pass to pip. */
+export function pipPackagesFor(content: unknown): string[] {
+  const raw = (content as any)?.requiredLibraries;
+  if (!Array.isArray(raw)) return [];
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const p of raw) {
+    const s = String(p).trim();
+    if (!s || !PIP_SAFE.test(s) || seen.has(s)) continue;
+    seen.add(s);
+    out.push(s);
+  }
+  return out;
+}
+
+/**
+ * Return `content` with a `%pip install` bootstrap cell as its FIRST cell when
+ * the bundle declares packages, or `content` unchanged when it declares none
+ * (or already carries the bootstrap).
+ */
+export function withRequiredLibraryBootstrap<T>(content: T): T {
+  const pkgs = pipPackagesFor(content);
+  if (pkgs.length === 0) return content;
+  const cells: any[] = Array.isArray((content as any)?.cells) ? (content as any).cells : [];
+  const first = cells[0];
+  const firstSource = typeof first?.source === 'string'
+    ? first.source
+    : Array.isArray(first?.source) ? first.source.join('') : '';
+  if (firstSource.includes(PIP_BOOTSTRAP_MARKER)) return content;
+  const bootstrap = {
+    type: 'code',
+    lang: 'pyspark',
+    source:
+      `${PIP_BOOTSTRAP_MARKER} — installed by Loom because this notebook imports them.\n` +
+      `# Session-scoped: it runs on the live Spark session, so no pool restart and no\n` +
+      `# environment to attach by hand. Re-running it is a no-op once satisfied.\n` +
+      `%pip install ${pkgs.join(' ')}`,
+  };
+  return { ...(content as any), cells: [bootstrap, ...cells] } as T;
+}
+
 /** Normalize a bundle cell to { type, lang, sourceLines[] } regardless of the
  * legacy alias used (`type`/`kind`, `lang`/`language`, string|string[] source). */
 function normalizeCell(c: any): { isMarkdown: boolean; lang?: string; sourceLines: string[] } {
@@ -231,7 +307,15 @@ async function provisionAzureNative(
   input: { content: unknown; displayName: string; appId: string },
   steps: string[],
 ): Promise<ProvisionResult | null> {
-  const cellCount = (input.content as any)?.cells?.length || 0;
+  // #3530 — the artifact that lands in Synapse / Databricks carries the
+  // `%pip install` bootstrap, so Run-all works on the ENGINE too, not only in
+  // the Loom editor.
+  const content = withRequiredLibraryBootstrap(input.content);
+  const pkgs = pipPackagesFor(input.content);
+  if (pkgs.length) {
+    steps.push(`Prepended a session-scoped '%pip install ${pkgs.join(' ')}' bootstrap cell (declared requiredLibraries).`);
+  }
+  const cellCount = (content as any)?.cells?.length || 0;
 
   // Explicit Databricks opt-in. The Azure-native DEFAULT precedence is Synapse
   // Spark (Hive) first, then Databricks — so a Loom with BOTH configured runs
@@ -250,7 +334,7 @@ async function provisionAzureNative(
     // Synapse artifact names disallow spaces and several punctuation chars;
     // normalize to a safe artifact name while keeping it human-readable.
     const safeName = trimEdges(input.displayName.replace(/[^A-Za-z0-9_]+/g, '_'), '_') || 'loom_notebook';
-    const artifact = buildSynapseNotebook(input.content, safeName, input.appId);
+    const artifact = buildSynapseNotebook(content, safeName, input.appId);
     steps.push(`Built Synapse notebook artifact '${safeName}' with ${cellCount} cells.`);
     try {
       const saved = await upsertSynapseNotebook(safeName, artifact);
@@ -258,7 +342,10 @@ async function provisionAzureNative(
       return {
         status: 'created',
         resourceId: saved.id || `synapse:${ws}/notebooks/${safeName}`,
-        secondaryIds: { synapseWorkspace: ws, synapseNotebook: safeName, backend: 'synapse' },
+        secondaryIds: {
+          synapseWorkspace: ws, synapseNotebook: safeName, backend: 'synapse',
+          ...(pkgs.length ? { sessionPackages: pkgs.join(' ') } : {}),
+        },
         steps,
       };
     } catch (e: any) {
@@ -303,7 +390,7 @@ async function provisionAzureNative(
   if (!databricksConfigGate()) {
     const host = process.env.LOOM_DATABRICKS_HOSTNAME!;
     steps.push(`No Fabric workspace or Synapse configured — importing into Databricks '${host}'.`);
-    const { source, language } = buildDatabricksSource(input.content, input.displayName);
+    const { source, language } = buildDatabricksSource(content, input.displayName);
     const safeName = input.displayName.replace(/[\/]+/g, '_').trim() || 'loom-notebook';
     const dir = '/Shared/loom-installs';
     const path = `${dir}/${safeName}`;
@@ -315,7 +402,10 @@ async function provisionAzureNative(
       return {
         status: 'created',
         resourceId: `databricks:${host}${path}`,
-        secondaryIds: { databricksHost: host, databricksPath: path, backend: 'databricks' },
+        secondaryIds: {
+          databricksHost: host, databricksPath: path, backend: 'databricks',
+          ...(pkgs.length ? { sessionPackages: pkgs.join(' ') } : {}),
+        },
         steps,
       };
     } catch (e: any) {
@@ -370,8 +460,15 @@ export const notebookProvisioner: Provisioner = async (input): Promise<Provision
   }
   steps.push(`Fabric workspace (opt-in via LOOM_NOTEBOOK_BACKEND=fabric): ${ws}`);
 
-  const definition = buildDefinition(input.content, input.displayName);
-  steps.push(`Built notebook definition with ${(input.content as any)?.cells?.length || 0} cells.`);
+  // #3530 — the opt-in Fabric arm gets the same bootstrap cell as the two
+  // Azure-native arms; a notebook that only runs on one backend is not parity.
+  const fabricContent = withRequiredLibraryBootstrap(input.content);
+  const fabricPkgs = pipPackagesFor(input.content);
+  if (fabricPkgs.length) {
+    steps.push(`Prepended a session-scoped '%pip install ${fabricPkgs.join(' ')}' bootstrap cell (declared requiredLibraries).`);
+  }
+  const definition = buildDefinition(fabricContent, input.displayName);
+  steps.push(`Built notebook definition with ${(fabricContent as any)?.cells?.length || 0} cells.`);
 
   try {
     // Idempotency: see if a notebook with the same displayName already

@@ -51,6 +51,7 @@ import { deleteIndex } from '@/lib/azure/search-index-client';
 import { deletePromptFlow } from '@/lib/azure/foundry-client';
 import { executeQuery as synapseExec, serverlessTarget } from '@/lib/azure/synapse-sql-client';
 import { escapeSqlLiteral } from '@/lib/sql/quoting';
+import { decodeIdList } from '@/lib/install/secondary-id-list'; // #3920 — list-valued secondaryIds decoder.
 
 // ---------------------------------------------------------------------------
 // Public shapes
@@ -222,12 +223,16 @@ export async function teardownItemBackend(
         push(skip('adls-path', rootPath, 'No ADLS container recorded on the item state; data left in place.'));
       }
       // Best-effort: drop the Synapse serverless OPENROWSET views this lakehouse
-      // registered (state.provisioning.secondaryIds.synapseViews = "a,b,c").
-      const views = sid(item, 'synapseViews');
-      if (views && process.env.LOOM_SYNAPSE_WORKSPACE) {
+      // registered (state.provisioning.secondaryIds.synapseViews). #3920 — that
+      // value is now a JSON array; `decodeIdList` reads both it and the legacy
+      // `"a,b,c"` form still persisted on pre-#3920 items. Reading it with a
+      // bare `split(',')` after the encoding change would hand `["lakehouse` to
+      // the `DROP VIEW ${v}` interpolation below and orphan every real view.
+      const views = decodeIdList(sid(item, 'synapseViews'));
+      if (views.length && process.env.LOOM_SYNAPSE_WORKSPACE) {
         const db = (process.env.LOOM_SYNAPSE_LAKEHOUSE_DB || 'loom_lakehouse').replace(/[^A-Za-z0-9_]/g, '_');
         const target = serverlessTarget(db);
-        for (const v of views.split(',').map((x) => x.trim()).filter(Boolean)) {
+        for (const v of views) {
           push(
             await attempt('synapse-view', `${db}.${v}`, () =>
               synapseExec(target, `IF OBJECT_ID('${escapeSqlLiteral(v)}','V') IS NOT NULL DROP VIEW ${v};`),

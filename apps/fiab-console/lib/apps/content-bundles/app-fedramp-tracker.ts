@@ -220,6 +220,113 @@ const bundle: AppBundle = {
         ],
       },
     },
+    // ─── KQL: the cyber medallion the dashboard's tiles query (#3537) ──────
+    //
+    // Until this item existed the bundle shipped a dashboard and NO database.
+    // The provisioner had nothing to bind to and fell back to
+    // LOOM_KUSTO_DEFAULT_DB, which the tutorial then had to document as a
+    // prerequisite ("this app does not create the cyber tables… the tiles
+    // return a Kusto 'table not found' error"). That is a documented dead
+    // dashboard, and `auto-bind-by-default.md` puts the work on the platform:
+    // the app now provisions the medallion its own tiles read.
+    //
+    // The table NAMES carry a literal '.' because that is how the dbt medallion
+    // in `examples/cybersecurity/domains/{bronze,silver,gold}` names them and
+    // what the tiles reference. ADX has no schemas, so these are single table
+    // names containing a dot — `kusto-client.qName()` brackets them on create
+    // (`.create table ["bronze.stg_sentinel_alerts"] (…)`) and the tile KQL
+    // below brackets them on read (`['bronze.stg_sentinel_alerts']`), which is
+    // the ADX syntax for a name that is not a bare identifier. An UNBRACKETED
+    // `bronze.stg_sentinel_alerts` in a query body does not parse as a table
+    // reference at all — so the tiles would have failed to resolve even in a
+    // database that held these tables.
+    {
+      itemType: 'kql-database',
+      displayName: 'Compliance Events',
+      description:
+        'ADX database holding the Sentinel cyber medallion the compliance dashboard '
+        + 'reads: bronze.stg_sentinel_alerts (raw alert ingest), silver.fct_security_alerts '
+        + '(scored fact), silver.dim_mitre_techniques (ATT&CK dimension) and '
+        + 'gold.rpt_compliance_posture (NIST control-family rollup). Seeded with sample rows '
+        + 'so the dashboard renders on a fresh install; repoint or re-ingest from your own '
+        + 'Sentinel workspace to make it live.',
+      learnDoc: 'examples/cybersecurity',
+      content: {
+        kind: 'kql-database',
+        tables: [
+          {
+            name: 'bronze.stg_sentinel_alerts',
+            columns: [
+              { name: 'alert_id',       type: 'string'   },
+              { name: 'time_generated', type: 'datetime' },
+              { name: 'alert_name',     type: 'string'   },
+              { name: 'severity_label', type: 'string'   },
+              { name: 'provider_name',  type: 'string'   },
+            ],
+            sample: [
+              ['alert-0001', '2026-06-02T08:14:00Z', 'Suspicious sign-in from unfamiliar location', 'High',     'Microsoft Sentinel'],
+              ['alert-0002', '2026-06-02T09:41:00Z', 'Mass download from SharePoint',               'Medium',   'Microsoft Sentinel'],
+              ['alert-0003', '2026-06-02T11:07:00Z', 'Privilege escalation via role assignment',    'Critical', 'Microsoft Sentinel'],
+            ],
+          },
+          {
+            name: 'silver.fct_security_alerts',
+            columns: [
+              { name: 'alert_id',             type: 'string'   },
+              { name: 'time_generated',       type: 'datetime' },
+              { name: 'processed_at',         type: 'datetime' },
+              { name: 'severity_level',       type: 'int'      },
+              { name: 'severity_label',       type: 'string'   },
+              { name: 'status',               type: 'string'   },
+              { name: 'technique_id',         type: 'string'   },
+              { name: 'tactic_name',          type: 'string'   },
+              { name: 'composite_risk_score', type: 'real'     },
+              { name: 'account_entities',     type: 'dynamic'  },
+            ],
+            sample: [
+              ['alert-0001', '2026-06-02T08:14:00Z', '2026-06-02T08:19:00Z', 3, 'High',     'InProgress',    'T1078', 'Initial Access',      74.5, [{ Name: 'j.doe@agency.gov' }]],
+              ['alert-0002', '2026-06-02T09:41:00Z', '2026-06-02T09:48:00Z', 2, 'Medium',   'New',           'T1530', 'Collection',          51.0, [{ Name: 'a.smith@agency.gov' }]],
+              ['alert-0003', '2026-06-02T11:07:00Z', '2026-06-02T11:10:00Z', 4, 'Critical', 'Investigating', 'T1098', 'Persistence',         92.3, [{ Name: 'svc-deploy@agency.gov' }]],
+            ],
+          },
+          {
+            name: 'silver.dim_mitre_techniques',
+            columns: [
+              { name: 'technique_id',   type: 'string' },
+              { name: 'technique_name', type: 'string' },
+              { name: 'tactic_name',    type: 'string' },
+            ],
+            sample: [
+              ['T1078', 'Valid Accounts',            'Initial Access'],
+              ['T1530', 'Data from Cloud Storage',   'Collection'],
+              ['T1098', 'Account Manipulation',      'Persistence'],
+            ],
+          },
+          {
+            name: 'gold.rpt_compliance_posture',
+            columns: [
+              { name: 'control_family_id',   type: 'string'   },
+              { name: 'control_family_name', type: 'string'   },
+              { name: 'control_id',          type: 'string'   },
+              { name: 'control_name',        type: 'string'   },
+              { name: 'associated_tactic',   type: 'string'   },
+              { name: 'alert_count_30d',     type: 'long'     },
+              { name: 'max_severity',        type: 'string'   },
+              { name: 'avg_risk_score',      type: 'real'     },
+              { name: 'compliance_status',   type: 'string'   },
+              { name: 'remediation_priority', type: 'real'    },
+              { name: 'latest_alert',        type: 'datetime' },
+            ],
+            sample: [
+              ['AC', 'Access Control',            'AC-2',  'Account Management',         'Persistence',    3, 'Critical', 92.3, 'At Risk',      9.2, '2026-06-02T11:07:00Z'],
+              ['AC', 'Access Control',            'AC-17', 'Remote Access',              'Initial Access', 1, 'High',     74.5, 'Needs Review', 5.1, '2026-06-02T08:14:00Z'],
+              ['SC', 'System & Comms Protection', 'SC-7',  'Boundary Protection',        'Collection',     1, 'Medium',   51.0, 'Monitored',    2.4, '2026-06-02T09:41:00Z'],
+              ['AU', 'Audit & Accountability',    'AU-6',  'Audit Record Review',        'Discovery',      0, '',          0.0, 'No Activity',  0.0, '2026-06-02T00:00:00Z'],
+            ],
+          },
+        ],
+      },
+    },
     {
       itemType: 'kql-dashboard',
       displayName: 'Compliance Events Dashboard',
@@ -236,7 +343,7 @@ const bundle: AppBundle = {
             title: 'Total alerts (last 24h)',
             viz: 'card',
             kql:
-              "bronze.stg_sentinel_alerts\n" +
+              "['bronze.stg_sentinel_alerts']\n" +
               "| where time_generated > ago(24h)\n" +
               "| summarize TotalAlerts = dcount(alert_id)",
           },
@@ -244,7 +351,7 @@ const bundle: AppBundle = {
             title: 'Open high/critical incidents',
             viz: 'card',
             kql:
-              "silver.fct_security_alerts\n" +
+              "['silver.fct_security_alerts']\n" +
               "| where time_generated > ago(30d)\n" +
               "| where severity_level >= 3\n" +
               "| where status in ('New', 'InProgress', 'Investigating')\n" +
@@ -254,7 +361,7 @@ const bundle: AppBundle = {
             title: 'Mean time to detect (minutes)',
             viz: 'card',
             kql:
-              "silver.fct_security_alerts\n" +
+              "['silver.fct_security_alerts']\n" +
               "| where time_generated > ago(30d)\n" +
               "| extend detect_delay_min = datetime_diff('minute', processed_at, time_generated)\n" +
               "| summarize MTTD_minutes = round(avg(detect_delay_min), 1)",
@@ -263,10 +370,10 @@ const bundle: AppBundle = {
             title: 'Alerts by MITRE technique (top 15, 30d)',
             viz: 'bar',
             kql:
-              "silver.fct_security_alerts\n" +
+              "['silver.fct_security_alerts']\n" +
               "| where time_generated > ago(30d)\n" +
               "| where isnotempty(technique_id)\n" +
-              "| join kind=leftouter (silver.dim_mitre_techniques) on technique_id\n" +
+              "| join kind=leftouter (['silver.dim_mitre_techniques']) on technique_id\n" +
               "| summarize AlertCount = dcount(alert_id), AvgRisk = round(avg(composite_risk_score), 2)\n" +
               "    by technique_id, technique_name, tactic_name\n" +
               "| top 15 by AlertCount desc\n" +
@@ -276,7 +383,7 @@ const bundle: AppBundle = {
             title: 'Alert trend — daily (30d, severity stacked)',
             viz: 'line',
             kql:
-              "silver.fct_security_alerts\n" +
+              "['silver.fct_security_alerts']\n" +
               "| where time_generated > ago(30d)\n" +
               "| summarize AlertCount = dcount(alert_id)\n" +
               "    by bin(time_generated, 1d), severity_label\n" +
@@ -287,7 +394,7 @@ const bundle: AppBundle = {
             title: 'Top 10 risk users (30d)',
             viz: 'table',
             kql:
-              "silver.fct_security_alerts\n" +
+              "['silver.fct_security_alerts']\n" +
               "| where time_generated > ago(30d)\n" +
               "| where array_length(account_entities) > 0\n" +
               "| mv-expand entity = account_entities\n" +
@@ -305,7 +412,7 @@ const bundle: AppBundle = {
             title: 'Compliance posture by NIST control family (30d)',
             viz: 'pie',
             kql:
-              "gold.rpt_compliance_posture\n" +
+              "['gold.rpt_compliance_posture']\n" +
               "| summarize\n" +
               "    ControlsAtRisk = countif(compliance_status == 'At Risk'),\n" +
               "    ControlsNeedingReview = countif(compliance_status == 'Needs Review'),\n" +
@@ -318,7 +425,7 @@ const bundle: AppBundle = {
             title: 'Top 10 remediation priorities (30d)',
             viz: 'table',
             kql:
-              "gold.rpt_compliance_posture\n" +
+              "['gold.rpt_compliance_posture']\n" +
               "| where alert_count_30d > 0\n" +
               "| project\n" +
               "    control_family_id,\n" +

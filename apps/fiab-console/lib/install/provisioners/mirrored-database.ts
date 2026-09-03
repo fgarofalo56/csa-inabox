@@ -45,6 +45,21 @@ import {
 } from '@/lib/azure/fabric-client';
 import type { Provisioner, ProvisionResult } from './types';
 import { resolveInfraResidual } from './types';
+// #3511 — the source-catalog enumerator the mirror already uses at RUN time
+// (mirror-engine.ts:1219) and on the per-item tables route; install-time
+// discovery calls the same one so the two cannot disagree about the source.
+import { listTablesWithAuth } from '@/lib/azure/sql-objects-client';
+import { encodeIdList } from '../secondary-id-list';
+
+/**
+ * Upper bound on AUTO-DISCOVERED source tables (#3511). An explicit list is
+ * never truncated — this caps only the set the platform chose for the user, so
+ * a 4000-table source cannot silently author a 4000-activity ADF pipeline (ADF
+ * has its own per-pipeline activity limit, and a pipeline that large would fail
+ * at deploy time rather than at review time). Truncation is REPORTED in the
+ * steps and on `secondaryIds.tableSource`, never silent.
+ */
+const MAX_DISCOVERED_TABLES = 200;
 
 /** ADF object name: letters/digits/_ only, ≤ 260; first char a letter. */
 function adfName(s: string): string {
@@ -303,7 +318,59 @@ async function provisionAdfCdc(input: any, steps: string[]): Promise<ProvisionRe
     steps.push(`Linked service '${sinkLs}' → ${dfsUrl(adlsAccount)} (factory MI auth).`);
 
     // 3. One source+sink dataset + copy activity per mounted table.
-    const useTables = tables.length ? tables : ['dbo.*'];
+    //
+    // #3511 — AUTO-DISCOVER the source tables rather than requiring a
+    // hand-typed list.
+    //
+    // Until this change the list came from `content.source.tables` and nothing
+    // else: an empty list became the single wildcard `dbo.*`, the loop below
+    // SKIPPED every wildcard, `activities` stayed empty, and the item ended on
+    // the gate "No explicit source tables to copy to Bronze." So the terminal
+    // state of a mirror created without a table list was a form asking the user
+    // to type the catalog of a database Loom is already connected to — exactly
+    // the user-performed plumbing `auto-bind-by-default.md` forbids, since the
+    // platform can read `sys.tables` itself over the connection it just built.
+    //
+    // The wildcard is now a SCHEMA FILTER instead of a skip: `dbo.*` means
+    // "every table in dbo", `*.*` (or an empty list, which keeps the historical
+    // `dbo.*` default) means what it says. Explicit entries still win outright —
+    // discovery runs ONLY when nothing explicit was named, so an author who
+    // listed three tables still gets exactly three.
+    const explicitTables = tables.filter((t) => !String(t).endsWith('.*'));
+    const wildcards = (tables.length ? tables : ['dbo.*']).filter((t) => String(t).endsWith('.*'));
+    let useTables = explicitTables;
+    let discovered: string[] = [];
+    let discoveryError: string | null = null;
+    let discoveryTruncated = false;
+    if (useTables.length === 0 && wildcards.length > 0) {
+      // `*.*` (schema part `*`) means every schema; anything else is a filter.
+      const wantSchemas = new Set(
+        wildcards
+          .map((w) => splitTable(w).schema.trim().toLowerCase())
+          .filter((s) => s && s !== '*'),
+      );
+      try {
+        const rows = await listTablesWithAuth(server, database, src.auth);
+        const matched = rows
+          .filter((r) => wantSchemas.size === 0 || wantSchemas.has(String(r.schema).toLowerCase()))
+          .map((r) => `${r.schema}.${r.name}`);
+        discoveryTruncated = matched.length > MAX_DISCOVERED_TABLES;
+        discovered = matched.slice(0, MAX_DISCOVERED_TABLES);
+        useTables = discovered;
+        steps.push(
+          `Discovered ${matched.length} table(s) in ${server}/${database}` +
+          `${wantSchemas.size ? ` matching schema(s) ${[...wantSchemas].join(', ')}` : ' (all user schemas)'}` +
+          ` from the SQL catalog — no hand-typed list required.` +
+          (discoveryTruncated ? ` Mirroring the first ${MAX_DISCOVERED_TABLES}; list tables explicitly on the item to choose a different set.` : ''),
+        );
+      } catch (e: any) {
+        // R7 — record WHAT WAS PROBED and the verbatim error. This block does
+        // not know whether the catalog is empty or unreachable, so it does not
+        // say; the gate below reports the probe failure as a probe failure.
+        discoveryError = e?.message || String(e);
+        steps.push(`Source table discovery against ${server}/${database} did not complete: ${discoveryError}`);
+      }
+    }
     const activities: any[] = [];
     let made = 0;
     for (const t of useTables) {
@@ -352,11 +419,34 @@ async function provisionAdfCdc(input: any, steps: string[]): Promise<ProvisionRe
     }
 
     if (activities.length === 0) {
+      // #3511 — the gate survives ONLY for the cases discovery cannot resolve,
+      // and it now says which one it is instead of blaming the user's list.
+      if (discoveryError) {
+        return {
+          status: 'remediation',
+          gate: {
+            reason:
+              `Could not read the source table catalog of ${server}/${database} as the Console managed identity, so there is nothing to copy to Bronze yet. ` +
+              `The probe failed with: ${discoveryError}`,
+            remediation:
+              `Grant the Console managed identity db_datareader on ${server}/${database} so Loom can enumerate the source tables itself:\n` +
+              `  CREATE USER [<console-uami-name>] FROM EXTERNAL PROVIDER;\n` +
+              `  ALTER ROLE db_datareader ADD MEMBER [<console-uami-name>];\n` +
+              `Then re-run the install. If the source is reachable only from a private network, confirm the Console can reach ${server} first. Listing the source tables (schema.table) explicitly on the mirrored-database item also unblocks it without the grant.`,
+            link: 'https://learn.microsoft.com/azure/data-factory/connector-azure-sql-database',
+          },
+          steps,
+        };
+      }
+      const probed = wildcards.length ? wildcards.join(', ') : 'dbo.*';
       return {
         status: 'remediation',
         gate: {
-          reason: 'No explicit source tables to copy to Bronze.',
-          remediation: 'List the source tables (schema.table) on the mirrored-database item so the ADF copy pipeline can replicate them.',
+          reason:
+            `The source catalog of ${server}/${database} was read successfully and returned no user tables matching ${probed}, ` +
+            `so the Bronze copy pipeline would have no activities.`,
+          remediation:
+            `Create the source tables in ${database}, widen the mirror's scope (use '*.*' to mirror every schema), or list the source tables (schema.table) explicitly on the mirrored-database item. Then re-run the install.`,
           link: 'https://learn.microsoft.com/azure/data-factory/connector-azure-sql-database',
         },
         steps,
@@ -461,6 +551,13 @@ async function provisionAdfCdc(input: any, steps: string[]): Promise<ProvisionRe
     }
 
     const secondaryIds: Record<string, string> = { backend: 'adf-cdc', pipeline: pipelineName, bronze: `${adlsAccount}/${bronzeContainer}` };
+    // #3511 / auto-bind §2 — when the table list was DISCOVERED rather than
+    // supplied, record exactly which tables the platform chose so the mapping
+    // is inspectable on the item instead of being a name nobody can account for.
+    if (discovered.length) {
+      secondaryIds.discoveredTables = encodeIdList(discovered);
+      secondaryIds.tableSource = discoveryTruncated ? 'auto-discovered-truncated' : 'auto-discovered';
+    }
     if (runId) secondaryIds.lastRunId = runId;
     // Publish the abfss Bronze root for THIS mirror so the install engine's
     // pairing rule (registry.ts) can auto-create a paired
