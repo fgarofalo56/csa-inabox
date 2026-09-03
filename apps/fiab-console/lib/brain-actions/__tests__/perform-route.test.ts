@@ -24,6 +24,7 @@ import {
   brainSnapshot,
   collectionReport,
   detectorRun,
+  ESTATE_ID,
   FINDING_ID,
   NODE_ID,
   RG,
@@ -222,7 +223,13 @@ const APP_INFO = {
   provisioningState: 'Succeeded',
 };
 
-const ESTATE_ID = 'loom-estate-under-test';
+/**
+ * #4258 item 4 — the perform path now RESOLVES the estate id from env before
+ * it reads the estate, and `guardOwnership` compares the subject's own
+ * `loom-estate-id` value against it. So the suite has to name an estate, and
+ * it must be the one the fixture's tag carries.
+ */
+let savedEstateId: string | undefined;
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -230,6 +237,7 @@ beforeEach(() => {
   __resetScalabilityCache();
   // #4258 item 2 — the mutation path REFUSES an unscoped rebuild, so the
   // deploy-set estate id is part of the healthy fixture now.
+  savedEstateId = process.env.LOOM_ESTATE_ID;
   process.env.LOOM_ESTATE_ID = ESTATE_ID;
   (getSession as unknown as ReturnType<typeof vi.fn>).mockReturnValue(ADMIN);
   (requireTenantAdmin as unknown as ReturnType<typeof vi.fn>).mockReturnValue(null);
@@ -240,7 +248,8 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  delete process.env.LOOM_ESTATE_ID;
+  if (savedEstateId === undefined) delete process.env.LOOM_ESTATE_ID;
+  else process.env.LOOM_ESTATE_ID = savedEstateId;
 });
 
 async function stageThenConfirm(): Promise<Response> {
@@ -366,6 +375,60 @@ describe('guard refusals — server-side, re-derived, ARM never touched', () => 
     const json = (await res.json()) as { guard: string; error: string };
     expect(json.guard).toBe('evidence-fresh');
     expect(json.error).toContain('could NOT be read');
+    expect(arm.updateContainerAppScale).not.toHaveBeenCalled();
+  });
+
+  // ── #4258 item 4 — THE PERMISSIVE-OWNERSHIP DEFECT, at the route ────────
+  //
+  // MUTATION CONTROL for the threading: remove `{ estateId: scope.estateId }`
+  // from `../perform.ts`'s `loadSnapshot(...)` call and the first spec goes
+  // red. Remove the `resolveMutationEstateId` guard and the second goes red
+  // (the request reaches the staging arm and answers 200).
+  it('loads the fresh snapshot ESTATE-SCOPED — never with the permissive default', async () => {
+    await POST(postReq(BODY), { params: Promise.resolve({}) } as never);
+    expect(snap.loadSnapshot).toHaveBeenCalledTimes(1);
+    expect(snap.loadSnapshot).toHaveBeenCalledWith({ estateId: ESTATE_ID });
+  });
+
+  it('refuses BEFORE reading the estate when the console cannot say which estate it is', async () => {
+    delete process.env.LOOM_ESTATE_ID;
+    delete process.env.LOOM_SUBSCRIPTION_ID;
+    const res = await POST(postReq(BODY), { params: Promise.resolve({}) } as never);
+    expect(res.status).toBe(409);
+    const json = (await res.json()) as { guard: string; error: string };
+    expect(json.guard).toBe('estate-scoped');
+    expect(json.error).toContain('loom:unbound');
+    expect(snap.loadSnapshot).not.toHaveBeenCalled();
+    expect(arm.updateContainerAppScale).not.toHaveBeenCalled();
+  });
+
+  it("a subject tagged for ANOTHER estate refuses even when the snapshot says confirmed", async () => {
+    // What a permissively-built snapshot hands the guard chain once the
+    // backfill in this same PR makes tags real.
+    snap.loadSnapshot.mockResolvedValue(
+      brainSnapshot({
+        nodes: [
+          wireNode({
+            tags: { 'loom-estate-id': 'someone-elses-loom' },
+            ownership: 'observed',
+            ownershipConfirmed: true,
+          }),
+        ],
+      }),
+    );
+    const res = await POST(postReq(BODY), { params: Promise.resolve({}) } as never);
+    expect(res.status).toBe(409);
+    const json = (await res.json()) as { guard: string; error: string };
+    expect(json.guard).toBe('ownership-confirmed');
+    expect(json.error).toContain('someone-elses-loom');
+    expect(arm.updateContainerAppScale).not.toHaveBeenCalled();
+  });
+
+  it('every configured edge DANGLING refuses — the vacuity bypass (#4258 item 3)', async () => {
+    snap.loadSnapshot.mockResolvedValue(brainSnapshot({ edges: [] }));
+    const res = await POST(postReq(BODY), { params: Promise.resolve({}) } as never);
+    expect(res.status).toBe(409);
+    expect(((await res.json()) as { guard: string }).guard).toBe('population-not-blind');
     expect(arm.updateContainerAppScale).not.toHaveBeenCalled();
   });
 

@@ -10,10 +10,11 @@
  * The guard ORDER is load-bearing — cheapest and most categorical first:
  *
  *   registry        can this class be performed AT ALL? (security: never)
- *   estate scope    the mutation path is bound to ONE estate id (#4258 item 2)
- *   snapshot        fresh rebuild; complete collection (#4015/#4016)
+ *   estate scope    WHICH estate is this console? (#4258 — a mutation scoped
+ *                   by a non-identity, or by no estate at all, is refused)
+ *   snapshot        fresh rebuild, ESTATE-SCOPED; complete collection (#4015/#4016)
  *   finding         the rebuild still produces this finding, subject matches
- *   ownership       fresh tag read still confirms it is OURS
+ *   ownership       fresh tag read still confirms it is OURS — and names THIS estate
  *   vacuity         the detector examined something real (P3)
  *   subject         Container App with full ARM coordinates, id derived here
  *   statefulness    the deploy does not declare this a pinned singleton (#4257)
@@ -42,6 +43,7 @@ import {
   AcaArmError,
   readAcaConfig,
 } from '@/lib/azure/container-apps-arm-client';
+import { resolveMutationEstateId } from './estate-scope';
 import {
   executeDeleteResource,
   executeScaleToZero,
@@ -112,18 +114,20 @@ export interface PerformDeps {
   /**
    * Fresh snapshot rebuild — supplied by the route from the app's `_lib`.
    *
-   * Takes the estate id, and this module SUPPLIES it: a mutating caller that
-   * rebuilds without one gets ownership resolved permissively (#4258 item 2).
-   * The parameter is required here so a caller cannot omit it by accident.
+   * The `estateId` argument is REQUIRED, in the type (#4258 item 4). This
+   * function used to call `loadSnapshot()` with no options at all, which
+   * `lib/brain/graph/extractors/resource-graph.ts` explicitly forbids for a
+   * mutating caller: without an estate id, ANY non-empty `loom-estate-id`
+   * counts as owned, so `guardOwnership` degrades to "carries SOME Loom estate
+   * tag" and only the write-scope guard bounds the blast radius. Making the
+   * argument mandatory means a future caller cannot re-introduce the permissive
+   * mode by omission — it would not compile.
    */
   readonly loadSnapshot: (opts: { readonly estateId: string }) => Promise<BrainSnapshot>;
   /** Overridable for tests; defaults to the Cosmos-backed singleton. */
   readonly store?: RecommendationStateStore;
-  /**
-   * The estate this mutation is scoped to. Defaults to `LOOM_ESTATE_ID`;
-   * overridable so the estate-scope arm is testable without touching env.
-   */
-  readonly estateId?: string;
+  /** Overridable for tests; defaults to `process.env`. */
+  readonly env?: NodeJS.ProcessEnv;
 }
 
 /** The env var the deploy sets to bind this console to one estate (#3922). */
@@ -154,53 +158,14 @@ export async function performRecommendation(
   const executor = entry.executor;
   const store = deps.store ?? recommendationStateStore();
 
-  // ── estate scope: a mutating rebuild MUST be bound to one estate ────────
-  //
-  // `resource-graph.ts` states the rule this enforces: without an estate id,
-  // any non-empty `loom-estate-id` value counts as owned, which "is NOT
-  // sufficient for a cleanup recommendation, because it cannot tell two Loom
-  // estates apart". Refusing is the fail-closed direction — running permissive
-  // would widen ownership on the one path that writes.
-  //
-  // ── RESOLVED, NOT READ RAW (review of #4261, finding 3) ─────────────────
-  // This used to read `process.env.LOOM_ESTATE_ID` directly and refuse on
-  // empty. MEASURED: `LOOM_ESTATE_ID` is emitted by NO bicep module, so that
-  // read refused EVERY perform on every current deployment — the Perform UI
-  // would ship a button that can only 409, and the #4257 guard beneath it would
-  // never execute in production until the day someone set the var by hand.
-  //
-  // Worse, a raw read DIVERGES from `resolveEstateId`, which is the id the scan
-  // writes findings and graph versions under. An operator setting the var to
-  // anything other than `loom:<sub8>:<rg>` would scope this mutating rebuild to
-  // a different estate than the findings being acted on.
-  //
-  // So: the SAME resolver the rest of the Brain uses (`lib/brain/run/cli.ts`'s
-  // `resolveScanEstateId` is a tested-agreeing duplicate of this one), and the
-  // refusal fires on its explicit unbound sentinel. Still fail-closed — an
-  // estate that cannot be identified is still refused — but a deployment that
-  // knows its subscription and resource group is no longer refused for want of
-  // a value nothing sets.
-  const estateId = (deps.estateId ?? resolveEstateId(process.env)).trim();
-  if (estateId === '' || estateId === UNBOUND_ESTATE_ID) {
-    return {
-      kind: 'refused',
-      refusal: {
-        guard: 'estate-scoped',
-        reason:
-          `REFUSED: this console cannot resolve which estate it manages, so the fresh rebuild ` +
-          `cannot be scoped to one. ${ESTATE_ID_ENV} is unset AND the fallback derivation is ` +
-          'unavailable — that needs LOOM_SUBSCRIPTION_ID plus one of LOOM_ADMIN_RG / ' +
-          'LOOM_ACA_RG / LOOM_DLZ_RG. Ownership would otherwise be resolved permissively — any ' +
-          "resource carrying ANY non-empty 'loom-estate-id' value would read as owned, " +
-          'including a sibling Loom estate sharing these subscriptions. A mutation is not ' +
-          'performed from an unscoped rebuild. The deploy stamping the estate id is tracked as ' +
-          '#3922. Nothing was changed in Azure.',
-      },
-    };
-  }
+  // ── estate scope: WHICH estate is this? (#4258 item 4) ──────────────────
+  // Resolved BEFORE the estate is read, because a console that cannot say
+  // which estate it is has no business reading one in order to change it.
+  const scope = resolveMutationEstateId(deps.env ?? process.env);
+  if ('refusal' in scope) return { kind: 'refused', refusal: scope.refusal };
 
-  // ── server-side re-derivation: the fresh snapshot ───────────────────────
-  const snapshot = await deps.loadSnapshot({ estateId });
+  // ── server-side re-derivation: the fresh, ESTATE-SCOPED snapshot ────────
+  const snapshot = await deps.loadSnapshot({ estateId: scope.estateId });
 
   const incomplete = guardSnapshotComplete(snapshot);
   if (incomplete) return { kind: 'refused', refusal: incomplete };
@@ -209,7 +174,7 @@ export async function performRecommendation(
   if ('refusal' in located) return { kind: 'refused', refusal: located.refusal };
   const { finding, node } = located;
 
-  const unowned = guardOwnership(finding);
+  const unowned = guardOwnership(finding, node, scope.estateId);
   if (unowned) return { kind: 'refused', refusal: unowned };
 
   const vacuous = guardDetectorNotVacuous(snapshot, finding);

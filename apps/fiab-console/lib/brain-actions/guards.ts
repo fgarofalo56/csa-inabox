@@ -35,6 +35,7 @@ import type {
   WireFinding,
   WireNode,
 } from '@/app/api/admin/brain/_lib/wire';
+import { LOOM_ESTATE_TAG_KEY, readEstateTag } from '@/lib/brain/graph';
 import type { ContainerAppInfo } from '@/lib/azure/container-apps-arm-client';
 import { deriveArmResourceId, isContainerAppType } from './executors';
 import { scaleToZeroRefusalReason, type ScaleToZeroRefusal } from './scalability';
@@ -127,16 +128,63 @@ export function guardFindingPresent(
  * force at the moment of execution: most Container App environments visible
  * across these subscriptions are NOT Loom's.
  */
-export function guardOwnership(finding: WireFinding): GuardRefusal | null {
-  if (finding.ownershipConfirmed === true) return null;
-  return refusal(
-    'ownership-confirmed',
-    'REFUSED: ownership of the subject is NOT established on a fresh tag read — no ' +
-      "resolved 'owns' edge covers it in the rebuilt snapshot. A mutation scoped by a " +
-      'guessed owner can reach an estate that is not Loom’s, which is the blast radius ' +
-      'the recommend-only decision exists to prevent. Stamp the ownership tag in the ' +
-      'deploy and re-run. Nothing was changed in Azure.',
-  );
+export function guardOwnership(
+  finding: WireFinding,
+  node: WireNode,
+  estateId: string,
+): GuardRefusal | null {
+  if (finding.ownershipConfirmed !== true) {
+    return refusal(
+      'ownership-confirmed',
+      'REFUSED: ownership of the subject is NOT established on a fresh tag read — no ' +
+        "resolved 'owns' edge covers it in the rebuilt snapshot. A mutation scoped by a " +
+        'guessed owner can reach an estate that is not Loom’s, which is the blast radius ' +
+        'the recommend-only decision exists to prevent. Stamp the ownership tag in the ' +
+        'deploy and re-run. Nothing was changed in Azure.',
+    );
+  }
+
+  // ── #4258 item 4 — THE ESTATE-SCOPE RE-DERIVATION ────────────────────────
+  //
+  // `ownershipConfirmed` and `node.ownership` are both computed by whoever
+  // BUILT the snapshot, and both are permissive when the snapshot was built
+  // WITHOUT an estate id: `resource-graph.ts` documents that omitting it makes
+  // ANY non-empty `loom-estate-id` count as owned, and explicitly forbids that
+  // mode for callers that will mutate. `perform.ts` was calling `loadSnapshot()`
+  // with none. That was harmless only because nothing on the estate carries the
+  // tag — an accident the ownership backfill in this same PR removes.
+  //
+  // So the guard does NOT take the snapshot's word for it. It re-reads the
+  // subject's own `loom-estate-id` value out of the tag bag the snapshot
+  // carries and compares it to the estate id THIS console resolved. A snapshot
+  // built with no estate scope therefore cannot satisfy this guard for a
+  // foreign estate's resource no matter what its `ownershipConfirmed` says,
+  // and an unreadable tag bag (`tags === null`) is refused rather than
+  // inherited as a `true`.
+  const tagged = node.tags === null ? undefined : readEstateTag(node.tags);
+  if (tagged === undefined) {
+    return refusal(
+      'ownership-confirmed',
+      `REFUSED: the fresh snapshot marks '${node.displayName}' ownership-confirmed, but the ` +
+        `snapshot's own tag bag for it carries no readable '${LOOM_ESTATE_TAG_KEY}' value ` +
+        (node.tags === null
+          ? '(its tags could NOT be read at all — indeterminate, which is not ownership). '
+          : '(the tag is absent). ') +
+        'A confirmation the underlying evidence does not support is not acted on. Nothing ' +
+        'was changed in Azure.',
+    );
+  }
+  if (tagged !== estateId) {
+    return refusal(
+      'ownership-confirmed',
+      `REFUSED: '${node.displayName}' carries ${LOOM_ESTATE_TAG_KEY}='${tagged}', which names ` +
+        `a DIFFERENT Loom estate from this console's ('${estateId}'). A snapshot built ` +
+        'without an estate scope counts ANY Loom estate tag as owned — which is fine for an ' +
+        'estate-wide report and forbidden for a mutation — so the estate id is re-derived and ' +
+        'compared here rather than inherited. Nothing was changed in Azure.',
+    );
+  }
+  return null;
 }
 
 /**

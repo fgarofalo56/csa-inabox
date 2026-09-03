@@ -29,12 +29,14 @@ import {
   collectionReport,
   danglingConfiguredEdge,
   detectorRun,
+  ESTATE_ID,
   FINDING_ID,
   NODE_ID,
   population,
   resolvedConfiguredEdge,
   RG,
   SUB,
+  wireEdge,
   wireFinding,
   wireNode,
 } from './fixtures';
@@ -121,15 +123,63 @@ describe('guardFindingPresent — the fresh rebuild must still say so', () => {
 });
 
 describe('guardOwnership — re-checked from the fresh tag read', () => {
-  it('passes a confirmed finding (positive control)', () => {
-    expect(guardOwnership(wireFinding())).toBeNull();
+  it('passes a confirmed finding whose subject carries THIS estate (positive control)', () => {
+    expect(guardOwnership(wireFinding(), wireNode(), ESTATE_ID)).toBeNull();
   });
 
   it('refuses when ownership is not established', () => {
-    const refusal = guardOwnership(wireFinding({ ownershipConfirmed: false }));
+    const refusal = guardOwnership(
+      wireFinding({ ownershipConfirmed: false }),
+      wireNode(),
+      ESTATE_ID,
+    );
     expect(refusal).not.toBeNull();
     expect(refusal!.guard).toBe('ownership-confirmed');
     expect(refusal!.reason).toContain('NOT established');
+  });
+
+  // ── #4258 item 4 — the PERMISSIVE-OWNERSHIP defect ──────────────────────
+  //
+  // `resource-graph.ts` states that a snapshot built with NO estate id counts
+  // ANY non-empty `loom-estate-id` as owned, and forbids that mode for a
+  // mutating caller. `perform.ts` was calling `loadSnapshot()` with none. The
+  // shape below is exactly what that produced: a snapshot that marks ANOTHER
+  // Loom estate's resource `ownershipConfirmed: true`. The guard must refuse
+  // it on its own re-derivation, not inherit the snapshot's verdict.
+  //
+  // MUTATION CONTROL: delete the `tagged !== estateId` branch from
+  // `../guards.ts` and this spec goes red (the refusal becomes null).
+  it("refuses a subject tagged for a DIFFERENT estate even when the snapshot says confirmed", () => {
+    const foreign = wireNode({
+      tags: { 'loom-estate-id': 'someone-elses-loom' },
+      ownership: 'observed',
+      ownershipConfirmed: true, // what a permissively-built snapshot would say
+    });
+    const refusal = guardOwnership(wireFinding(), foreign, ESTATE_ID);
+    expect(refusal).not.toBeNull();
+    expect(refusal!.guard).toBe('ownership-confirmed');
+    expect(refusal!.reason).toContain('someone-elses-loom');
+    expect(refusal!.reason).toContain('DIFFERENT Loom estate');
+  });
+
+  it('refuses a confirmed subject whose tag bag carries no estate value at all', () => {
+    const refusal = guardOwnership(
+      wireFinding(),
+      wireNode({ tags: { CSA_Loom: 'true' }, ownership: 'observed' }),
+      ESTATE_ID,
+    );
+    expect(refusal).not.toBeNull();
+    expect(refusal!.reason).toContain('the tag is absent');
+  });
+
+  it('refuses a confirmed subject whose tags could NOT be read — indeterminate is not ownership', () => {
+    const refusal = guardOwnership(
+      wireFinding(),
+      wireNode({ tags: null, ownership: 'indeterminate' }),
+      ESTATE_ID,
+    );
+    expect(refusal).not.toBeNull();
+    expect(refusal!.reason).toContain('could NOT be read at all');
   });
 });
 
@@ -287,6 +337,51 @@ describe('guardScalableToZero — the #4257 statefulness refusal', () => {
   it('makes exactly ONE claim: delete-resource is not gated by it', () => {
     expect(guardScalableToZero(subject(), 'delete-resource', pinned)).toBeNull();
     expect(guardScalableToZero(subject(), 'delete-resource', hotPath)).toBeNull();
+  });
+
+  // ── #4258 item 3 — THE BYPASS THIS GUARD USED TO HAVE ───────────────────
+  //
+  // The check read `finding.population.byProvenance.configured`, and
+  // `countByProvenance` (`lib/brain/graph/graph.ts`) tallies EVERY edge of a
+  // provenance, DANGLING INCLUDED. A dangling edge resolved to no node, so it
+  // contributes to no node's reachability — which means the exact degenerate
+  // state this guard exists to catch ("every configured wire dangles, so every
+  // app looks unreachable") had a NON-ZERO count and sailed through.
+  //
+  // MUTATION CONTROL: revert `../guards.ts` to read
+  // `finding.population.byProvenance.configured` and this spec goes red — the
+  // count is 3, the guard passes, and `refusal` is null where the spec demands
+  // a refusal naming the dangling edges.
+  it('refuses when every configured edge DANGLES, though byProvenance counts three', () => {
+    const dangling = brainSnapshot({
+      edges: [
+        wireEdge({ id: 'd1', to: null, resolution: 'dangling', danglingReason: 'empty-value' }),
+        wireEdge({ id: 'd2', to: null, resolution: 'dangling', danglingReason: 'empty-value' }),
+        wireEdge({ id: 'd3', to: null, resolution: 'dangling', danglingReason: 'unresolved-target' }),
+      ],
+    });
+    // The OLD signal is non-zero — this is what made the bypass invisible.
+    expect(wireFinding().population.byProvenance.configured).toBe(3);
+
+    const refusal = guardDetectorNotVacuous(dangling, wireFinding());
+    expect(refusal).not.toBeNull();
+    expect(refusal!.guard).toBe('population-not-blind');
+    expect(refusal!.reason).toContain('ZERO RESOLVED');
+    // Wording reconciled at the #4267 x main merge: both branches fixed #4258's
+    // vacuity read independently and landed on the same behaviour with different
+    // prose. main's message — which is the one that shipped — says the edges
+    // "exist and are DANGLING"; this branch's said "every one of them DANGLES".
+    // The assertion still measures the same thing: that the refusal DISCLOSES
+    // the dangling edges rather than reporting a bare zero.
+    expect(refusal!.reason).toContain('DANGLING');
+  });
+
+  it('POSITIVE CONTROL: a graph with real resolved configured edges passes', () => {
+    // A guard that refuses everything is as useless as one that refuses
+    // nothing. The default fixture carries a RESOLVED configured edge alongside
+    // a dangling one — the merge kept main's two-helper default, so the count is
+    // one resolved, not the three this branch's own fixture used to supply.
+    expect(guardDetectorNotVacuous(brainSnapshot(), wireFinding())).toBeNull();
   });
 });
 
