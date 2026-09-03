@@ -57,7 +57,11 @@
  *      `keyVaultConfigGate`), not a denylist of today's five, so a NEW export
  *      added to that file cannot be consumed anywhere without failing the build.
  *   3. **check 9 (SUPPRESSOR CHOKE POINT)** — no module except this one may
- *      import `withSecurableRecordedByCaller`. De-duplicating two audit layers
+ *      import `withSecurableRecordedByCaller` by a specifier that RESOLVES to
+ *      `securable-audit-context.ts` (alias or relative, at any depth). A module
+ *      that re-implements the suppressor instead of importing it issues no
+ *      import and is not seen; that limit is stated in the guard's LIMITS block.
+ *      De-duplicating two audit layers
  *      necessarily creates a way to turn the transport's row OFF, and that
  *      exception needs guarding at least as much as the surface does: held
  *      anywhere else — above all inside `shortcut-credentials.ts`, where no

@@ -74,7 +74,10 @@ const store = new AsyncLocalStorage<true>();
  *
  * The ONLY permitted caller is `ucSecurable` — mechanically, not by convention:
  * check 9 of `scripts/ci/check-unity-audit-chokepoint.mjs` fails the build on an
- * import of this symbol from any other module. It exists so that one row is
+ * import of this symbol from any other module whose specifier RESOLVES here
+ * (alias or relative, at any depth). What it does not see is a module that
+ * re-implements the suppressor rather than importing it — see the LIMITS block
+ * in that guard. It exists so that one row is
  * written per call by the layer that describes it best — never to turn auditing
  * off, which is precisely what it would be anywhere else.
  */

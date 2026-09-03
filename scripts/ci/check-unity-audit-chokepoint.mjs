@@ -266,7 +266,18 @@
  *     is that the suppressor which EXISTS cannot spread quietly, and that the
  *     transport's suppression signal keeps coming from a module whose importers
  *     are enumerated. Whether the transport HONOURS that signal is a runtime
- *     property, pinned by `lib/azure/__tests__/unity-audit-securable.test.ts`.
+ *     property, pinned by `lib/azure/__tests__/unity-audit-securable.test.ts`;
+ *   - checks 8 and 9 match a module by its import SPECIFIER, not by resolving
+ *     it. The alias arm is derived from the module's own directory and the
+ *     relative arm now admits any depth (`../azure/x`, `../../azure/x`), which
+ *     is what the repo actually writes — a cross-directory relative specifier
+ *     used to resolve to the guarded module and be invisible, measured on
+ *     2026-09-03 and closed with a counterfactual (pre-fix pattern + planted
+ *     bypass = RC 0; fixed pattern, same bypass = RC 1). What remains outside
+ *     the vocabulary is a specifier that reaches the module by a route these
+ *     two arms do not spell — a tsconfig path alias other than `@/`, or a
+ *     re-export barrel that launders it. Those are SPELLINGS, and keying a
+ *     control to a spelling is what this bullet exists to disclose.
  *
  * The un-bypassable half of this control is the transport itself: there is one
  * credential resolver (uc-backend.ts) and two audited transports, and code that
@@ -926,7 +937,7 @@ function specifierPatterns(rel) {
   if (cached) return cached;
   const basename = path.basename(rel, '.ts');
   const dir = path.dirname(rel).replace(/\\/g, '/');
-  const spec = `(?:@/${dir}/${basename}|(?:\\.{1,2}/)+${basename})`;
+  const spec = `(?:@/${dir}/${basename}|(?:\\.{1,2}/)+(?:[\\w.-]+/)*${basename})`;
   cached = {
     basename,
     namespaceRe: new RegExp(`\\bimport\\s+\\*\\s+as\\s+\\w+\\s+from\\s*['"]${spec}['"]`),
