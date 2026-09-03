@@ -35,6 +35,34 @@ import {
   loadSecurityGraph,
 } from '@/app/api/admin/brain/_lib/security-source';
 import { NO_EDGE_HISTORY_REASON, loadEdgeHistory } from '@/app/api/admin/brain/_lib/edge-history';
+import { InMemoryGraphHistoryStore } from '@/lib/brain/history';
+import {
+  BASELINE,
+  ESTATE,
+  fqdnOf,
+  versionFrom,
+  type EstateSpec,
+} from '@/lib/brain/history/__tests__/fixtures';
+
+/**
+ * The baseline estate plus one app and the wire that reaches it.
+ *
+ * Exists so the "previous version" assertion has a CONTROL: the head's edge set
+ * differs from the baseline's, so a `loadEdgeHistory` that returned the head — or
+ * the union, or an empty set — would be visible rather than coincidentally right.
+ */
+const GREW: EstateSpec = {
+  apps: [...BASELINE.apps, { name: 'loom-new-thing', minReplicas: 1 }],
+  wires: [
+    ...BASELINE.wires,
+    {
+      onApp: 'loom-console',
+      envVar: 'LOOM_NEW_THING_URL',
+      value: `https://${fqdnOf('loom-new-thing')}`,
+      boundTo: 'loom-new-thing',
+    },
+  ],
+};
 
 /**
  * An authorizer carrying the admin-bypass shape C1 exists to find.
@@ -116,22 +144,87 @@ describe('no security graph ⇒ NOT EVALUATED, never an empty findings array', (
     expect(layer.reason).toMatch(/this is not a clean result/i);
   });
 
-  it('the shipped source is unavailable today, and says why', () => {
-    // A live measurement of the seam, not a restatement of it: if someone wires
-    // a real extractor, this flips and the sibling assertions above start
-    // exercising the evaluated branch instead.
+  it('the SHIPPED source is now the extracted artifact, and it is usable', () => {
+    // A LIVE measurement of the seam, not a restatement of it (#3934). Until
+    // this landed, `loadSecurityGraph()` returned a hard-coded refusal and this
+    // assertion read `available === false`. It now proves the committed
+    // build-time artifact resolves: an absent, malformed, stale, zero-node or
+    // wrong-version artifact is refused by `resolveSecurityGraph`, so a green
+    // here is evidence the risk lane actually has a population to range over.
     const src = loadSecurityGraph();
-    expect(src.available).toBe(false);
-    if (src.available) throw new Error('unreachable');
-    expect(src.reason).toMatch(/build-time artifact/i);
+    if (!src.available) {
+      throw new Error(
+        `the shipped security graph did not resolve, so the risk lane ships NOT EVALUATED: ${src.reason}`,
+      );
+    }
+    expect(src.graph.source).toBe('extracted');
+    expect(src.graph.nodes.length).toBeGreaterThan(0);
   });
 
-  it('the edge history is unavailable today, and names the work item', () => {
-    const h = loadEdgeHistory();
+  it('the risk layer built from the SHIPPED source is evaluated, not blind', () => {
+    // The end-to-end claim #3934 asks for: the committed artifact, through the
+    // real seam, through the real nine detectors. `evaluated: false` here would
+    // mean the surface renders NOT EVALUATED in production.
+    const shipped = buildRiskLayer(loadSecurityGraph());
+    expect(shipped.evaluated).toBe(true);
+    if (!shipped.evaluated) throw new Error('unreachable');
+    expect(shipped.graphSource).toBe('extracted');
+  });
+
+  it('the edge history is honestly unavailable when the store holds ONE version', async () => {
+    // The store is INJECTED, so this asserts the refusal branch rather than
+    // whatever the ambient environment happens to have. A single retained
+    // version has no version before the head, so there is no baseline at all.
+    const store = new InMemoryGraphHistoryStore();
+    await store.append(versionFrom(BASELINE, '2026-09-01T00:00:00.000Z', { estateId: ESTATE }));
+    const h = await loadEdgeHistory({ store, estateId: ESTATE });
     expect(h.available).toBe(false);
     if (h.available) throw new Error('unreachable');
     expect(h.reason).toBe(NO_EDGE_HISTORY_REASON);
-    expect(h.reason).toMatch(/#3935/);
+    expect(h.reason).toMatch(/fewer than two graph versions/i);
+  });
+
+  it('the edge history RETURNS the previous version once two are retained', async () => {
+    const store = new InMemoryGraphHistoryStore();
+    const older = versionFrom(BASELINE, '2026-09-01T00:00:00.000Z', { estateId: ESTATE });
+    const newer = versionFrom(GREW, '2026-09-02T00:00:00.000Z', { estateId: ESTATE });
+    await store.append(older);
+    await store.append(newer);
+    const h = await loadEdgeHistory({ store, estateId: ESTATE });
+    expect(h.available).toBe(true);
+    if (!h.available) throw new Error('unreachable');
+    // The version BEFORE the head — `edgesAddedSincePrevious`'s baseline — so
+    // the canvas and /api/admin/brain/history answer the same question.
+    expect(h.previousGeneratedAt).toBe(older.capturedAt);
+    expect(h.previousEdgeIds.length).toBeGreaterThan(0);
+    expect([...h.previousEdgeIds].sort()).toEqual(
+      older.content.edges.map((e) => e.id as string).sort(),
+    );
+    // The CONTROL that makes the assertion above mean something: the head's
+    // edge set differs, so returning the wrong version would be visible.
+    expect(newer.content.edges.length).not.toBe(older.content.edges.length);
+  });
+
+  it('a store FAILURE is reported as a failure, never as "no changes"', async () => {
+    const store = new InMemoryGraphHistoryStore();
+    const h = await loadEdgeHistory({
+      store: {
+        policy: store.policy,
+        listSummaries: async () => [],
+        loadRecent: async () => {
+          throw new Error('cosmos unreachable');
+        },
+        load: async () => null,
+        append: async () => {},
+        remove: async () => {},
+        observe: async () => {},
+      },
+      estateId: ESTATE,
+    });
+    expect(h.available).toBe(false);
+    if (h.available) throw new Error('unreachable');
+    expect(h.reason).toMatch(/cosmos unreachable/);
+    expect(h.reason).toMatch(/NOT "no changes"/);
   });
 
   it('the registry helper agrees with the shipped registry', () => {

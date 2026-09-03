@@ -220,7 +220,7 @@ export class CosmosGraphHistoryStore implements GraphHistoryStore {
       .query<GraphVersionSummary>({
         query:
           'SELECT c.id, c.estateId, c.capturedAt, c.formatVersion, c.digest, c.counts, ' +
-          'c.collectedProvenances, c.source, c.observedCount, c.lastObservedAt ' +
+          'c.collectedProvenances, c.source, c.observedCount, c.lastObservedAt, c.collection ' +
           'FROM c WHERE c.estateId = @estateId ORDER BY c.capturedAt ASC',
         parameters: [{ name: '@estateId', value: estateId }],
       })

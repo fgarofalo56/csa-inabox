@@ -424,6 +424,120 @@ export interface Positioned {
 }
 
 /**
+ * The node box, in layout px.
+ *
+ * `NODE_WIDTH` is the shared compact canvas width (`CANVAS_NODE_WIDTH`, 180) that
+ * `ux-baseline.md`'s node-compactness rule prescribes; `NODE_HEIGHT` is the
+ * two-row rendered height measured live on 2026-09-01 (36x15 css px at the 20%
+ * zoom `fitView` had chosen, i.e. 180x75). They are exported because SPREAD is
+ * not computable from positions alone — the rightmost node's x is its LEFT edge
+ * — and a legibility assertion that ignored the box would be off by one column.
+ */
+export const NODE_WIDTH = 180;
+export const NODE_HEIGHT = 76;
+
+/**
+ * The dangling-terminus chip, and the lane it lives in (#4251).
+ *
+ * The chip is 128px wide (`brain-canvas-node.tsx`'s terminus style) and roughly
+ * one text row tall. It is placed in the GUTTER to the right of its source, so
+ * the column pitch has to be wide enough to hold a node AND a terminus without
+ * either touching the next column — `NODE_WIDTH + INSET + TERMINUS_WIDTH` is
+ * 312 against a 320 pitch, which leaves 8px of clearance. The old pitch was 260,
+ * a 80px gutter for a 128px chip, so every terminus overhung the next column.
+ *
+ * `STEP` is the vertical pitch between two termini in the same lane. It was 4px
+ * against a ~28px chip, i.e. a 24px overlap between every adjacent pair —
+ * measured live as 6 overlapping pairs on the default view. 40px clears the box.
+ */
+export const DANGLING_TERMINUS_WIDTH = 128;
+export const DANGLING_TERMINUS_HEIGHT = 28;
+export const DANGLING_TERMINUS_INSET = 4;
+export const DANGLING_TERMINUS_STEP = 40;
+
+/**
+ * The LEGIBILITY FLOOR for the initial fit (#4251).
+ *
+ * `fitView` scales to whatever makes the whole spread visible, and on the live
+ * estate that was 0.2 — 112 nodes rendered at 36x15 css px, with the label
+ * unreadable and the status dot below one device pixel. A graph the operator
+ * cannot read is not a graph they can act on.
+ *
+ * This bounds only the INITIAL fit. The manual zoom floor stays at 0.2 so a
+ * deliberate zoom-out to see the whole shape is still possible — the two are
+ * different questions and collapsing them would take away a control that works.
+ */
+export const MIN_LEGIBLE_ZOOM = 0.55;
+
+/** Default column pitch and row pitch. Pitch, not size — the gap is the remainder. */
+const DEFAULT_COLUMN_WIDTH =
+  NODE_WIDTH + DANGLING_TERMINUS_INSET + DANGLING_TERMINUS_WIDTH + 8;
+const DEFAULT_ROW_HEIGHT = 96;
+
+export interface LayoutOptions {
+  readonly columnWidth?: number;
+  readonly rowHeight?: number;
+  /**
+   * The canvas viewport, when it is known.
+   *
+   * Supplied, the layout WRAPS each state bucket into as many sub-columns as it
+   * takes for the whole spread to approximate the container's aspect ratio.
+   * Omitted, the layout is the original one-column-per-state grid — so every
+   * existing caller and every server-side render behaves exactly as before.
+   */
+  readonly container?: { readonly width: number; readonly height: number };
+}
+
+/** The bounding box of a laid-out set, INCLUDING the node boxes themselves. */
+export function layoutSpread(positions: readonly Positioned[]): {
+  readonly width: number;
+  readonly height: number;
+} {
+  if (positions.length === 0) return { width: 0, height: 0 };
+  let maxX = 0;
+  let maxY = 0;
+  for (const p of positions) {
+    if (p.x > maxX) maxX = p.x;
+    if (p.y > maxY) maxY = p.y;
+  }
+  return { width: maxX + NODE_WIDTH, height: maxY + NODE_HEIGHT };
+}
+
+/**
+ * How many rows to wrap each bucket at, for a given container.
+ *
+ * Chosen by MEASUREMENT rather than by formula: for every candidate row count it
+ * computes the spread the layout would actually produce and keeps the one whose
+ * fit-to-container scale is largest. A closed form would have to model the
+ * per-bucket `ceil`, which is where the aspect actually goes wrong — one bucket
+ * of 100 and six of 2 do not wrap like seven of 16.
+ *
+ * Ties break toward MORE rows (fewer columns), because a tall spread scrolls
+ * naturally on a canvas and a wide one does not.
+ */
+function bestRowCount(
+  bucketSizes: readonly number[],
+  container: { readonly width: number; readonly height: number },
+  columnWidth: number,
+  rowHeight: number,
+): number {
+  const largest = Math.max(...bucketSizes, 1);
+  let bestRows = largest;
+  let bestScale = -1;
+  for (let rows = largest; rows >= 1; rows -= 1) {
+    const columns = bucketSizes.reduce((n, size) => n + Math.max(1, Math.ceil(size / rows)), 0);
+    const spreadW = (columns - 1) * columnWidth + NODE_WIDTH;
+    const spreadH = (Math.min(rows, largest) - 1) * rowHeight + NODE_HEIGHT;
+    const scale = Math.min(container.width / spreadW, container.height / spreadH);
+    if (scale > bestScale) {
+      bestScale = scale;
+      bestRows = rows;
+    }
+  }
+  return bestRows;
+}
+
+/**
  * Deterministic column layout, keyed on the visual state.
  *
  * Not a force simulation: a force layout moves every node whenever any node
@@ -431,14 +545,28 @@ export interface Positioned {
  * two screenshots of the SAME estate look different, which makes visual
  * comparison useless. Columns are stable, and grouping by state puts every
  * unreachable always-on node in one column where they can be counted by eye.
+ *
+ * ── WHY IT WRAPS INTO SUB-COLUMNS (#4251) ────────────────────────────────
+ *
+ * One column per state is correct at nine nodes and illegible at 112. Measured
+ * live on the estate: seven columns against a bucket 60 deep produced a spread
+ * whose fit-to-viewport scale was 0.2, so `fitView` rendered every node at
+ * 36x15 css px — the label unreadable, the status dot sub-pixel. The state
+ * GROUPING is what carries meaning here, not the single file, so a bucket wraps
+ * into `ceil(size / rows)` adjacent sub-columns and stays contiguous and
+ * leftmost-first. Reading order is unchanged; the aspect ratio is not.
+ *
+ * Still deterministic: `rows` is a pure function of the bucket sizes and the
+ * container, and the container is quantised by the caller's ResizeObserver, so
+ * two renders at the same size place every node identically.
  */
 export function layoutNodes(
   nodes: readonly WireNode[],
   coverageConfigured: boolean,
-  opts?: { readonly columnWidth?: number; readonly rowHeight?: number },
+  opts?: LayoutOptions,
 ): Positioned[] {
-  const columnWidth = opts?.columnWidth ?? 260;
-  const rowHeight = opts?.rowHeight ?? 96;
+  const columnWidth = opts?.columnWidth ?? DEFAULT_COLUMN_WIDTH;
+  const rowHeight = opts?.rowHeight ?? DEFAULT_ROW_HEIGHT;
   const order: NodeVisualState[] = [
     'unreachable-always-on',
     'unreachable-idle',
@@ -454,17 +582,31 @@ export function layoutNodes(
     const v = nodeVisual(n, coverageConfigured);
     buckets.get(v.state)!.push(n);
   }
+
+  const nonEmpty = order.map((s) => buckets.get(s)!).filter((b) => b.length > 0);
+  const rows =
+    opts?.container && opts.container.width > 0 && opts.container.height > 0
+      ? bestRowCount(
+          nonEmpty.map((b) => b.length),
+          opts.container,
+          columnWidth,
+          rowHeight,
+        )
+      : Number.POSITIVE_INFINITY;
+
   const out: Positioned[] = [];
   let column = 0;
-  for (const s of order) {
-    const bucket = buckets.get(s)!;
-    if (bucket.length === 0) continue;
+  for (const bucket of nonEmpty) {
     // Stable within a column: sort by name so a re-fetch does not reshuffle.
     bucket.sort((a, b) => a.displayName.localeCompare(b.displayName));
     bucket.forEach((n, i) => {
-      out.push({ id: n.id, x: column * columnWidth, y: i * rowHeight });
+      // Column-major inside the bucket, so a sub-column is a contiguous run of
+      // the sorted order and the eye reads down-then-right, as it did before.
+      const sub = Number.isFinite(rows) ? Math.floor(i / rows) : 0;
+      const row = Number.isFinite(rows) ? i % rows : i;
+      out.push({ id: n.id, x: (column + sub) * columnWidth, y: row * rowHeight });
     });
-    column += 1;
+    column += Number.isFinite(rows) ? Math.max(1, Math.ceil(bucket.length / rows)) : 1;
   }
   return out;
 }

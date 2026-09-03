@@ -189,18 +189,74 @@ function checkNoEvidence(f: Finding): Refutation | null {
  * Azure subjects, identified by the id prefix the node-id module MINTS
  * ({@link AZURE_NODE_ID_PREFIX}) — not by a literal re-typed here (#3967).
  *
- * WHAT THIS DOES NOT COVER, stated because a half-guard read as a whole one is
- * the shape this repo keeps finding. Sharing the constant defeats a RENAME. It
- * does NOT defeat a filter written INSIDE this predicate that is keyed to a
- * production-only value — #3967 measured exactly that: keep the prefix test and
- * additionally drop any subject whose subscription segment is 36 chars (a real
- * GUID), and the whole brain suite stays green, because every fixture uses a
- * short non-GUID placeholder subscription segment. Closing that needs a
- * GUID-shaped fixture in `lib/brain/__tests__/agents/fixtures.ts`, which is not
- * added here. Do not read this comment as coverage of that mutation.
+ * Sharing the constant defeats a RENAME. It does NOT by itself defeat a filter
+ * written INSIDE this predicate and keyed to a production-only value — #3967
+ * measured exactly that (mutation N5: additionally drop any subject whose
+ * subscription segment is 36 characters, i.e. a real GUID) and the whole brain
+ * suite stayed green, because every fixture used a short placeholder segment.
+ *
+ * TWO things now close that, and they are independent:
+ *   - `__tests__/agents/fixtures.ts` carries a GUID-SHAPED subject
+ *     ({@link guidShapedSubject}) so the mutation is reachable by the suite;
+ *   - {@link droppedAzureSubjects} below cross-checks this predicate against the
+ *     GRAPH, which is an oracle this function cannot influence.
  */
 function azureSubjects(f: Finding): NodeId[] {
   return f.subjects.filter((s) => String(s).startsWith(AZURE_NODE_ID_PREFIX));
+}
+
+/**
+ * Subjects the GRAPH says are Azure resources and {@link azureSubjects} did NOT
+ * return (#3967 item 3).
+ *
+ * ── WHY AN INDEPENDENT ORACLE, NOT A SUBJECT-COUNT TEST ──────────────────
+ *
+ * The issue asks whether an empty `azureSubjects()` on a finding that names
+ * subjects should be `indeterminate` rather than a silent `null`. Keyed to
+ * `f.subjects.length > 0` it would fire on every genuinely non-Azure finding —
+ * a code-module subject from a security detector has no Azure ownership
+ * question, and manufacturing an indeterminate for it would be noise that
+ * trains a reader to ignore the code.
+ *
+ * Keyed to the graph it fires on exactly the failure: a subject the graph
+ * resolves to an `azure-resource` node that this predicate nonetheless dropped.
+ * That is the only way the population can be silently zeroed, and no filter
+ * written inside `azureSubjects` can hide from it, because the answer comes from
+ * somewhere else entirely.
+ *
+ * Returns an empty array when no graph was supplied — the checks below already
+ * report THAT state as indeterminate on their own terms.
+ */
+function droppedAzureSubjects(f: Finding, graph: BrainGraphView | undefined): NodeId[] {
+  if (!graph) return [];
+  const kept = new Set<string>(azureSubjects(f).map((s) => String(s)));
+  return f.subjects.filter((s) => {
+    if (kept.has(String(s))) return false;
+    return graph.node(s)?.kind === 'azure-resource';
+  });
+}
+
+/**
+ * The refutation for the state above. Shared by both checks so they cannot drift
+ * into two paraphrases of one fact.
+ */
+function droppedSubjectsRefutation(
+  code: Refutation['code'],
+  dropped: readonly NodeId[],
+  total: number,
+): Refutation {
+  return {
+    code,
+    severity: 'indeterminate',
+    statement:
+      `${dropped.length} of ${total} subject(s) resolve to azure-resource nodes in the graph but ` +
+      `were NOT recognised as Azure subjects by their node-id prefix ('${AZURE_NODE_ID_PREFIX}'). ` +
+      `This check therefore ranged over a SMALLER population than the finding names, and a ` +
+      `smaller population cannot be read as a pass. Either the prefix the graph mints and the ` +
+      `prefix this check reads have drifted apart, or a filter inside the predicate is dropping ` +
+      `subjects. NOT a clean result.`,
+    establishedBy: 'finding.subjects, BrainGraphView.node(id).kind',
+  };
 }
 
 /**
@@ -213,6 +269,10 @@ function azureSubjects(f: Finding): NodeId[] {
 function checkUnmeasuredScale(f: Finding, graph: BrainGraphView | undefined): Refutation | null {
   if (!f.cost) return null;
   const azure = azureSubjects(f);
+  const dropped = droppedAzureSubjects(f, graph);
+  if (dropped.length > 0) {
+    return droppedSubjectsRefutation('unmeasured-scale', dropped, f.subjects.length);
+  }
   if (azure.length === 0) return null;
   if (!graph) {
     return {
@@ -257,6 +317,10 @@ function checkUnmeasuredScale(f: Finding, graph: BrainGraphView | undefined): Re
  */
 function checkOwnership(f: Finding, graph: BrainGraphView | undefined): Refutation | null {
   const azure = azureSubjects(f);
+  const dropped = droppedAzureSubjects(f, graph);
+  if (dropped.length > 0) {
+    return droppedSubjectsRefutation('ownership-unestablished', dropped, f.subjects.length);
+  }
   if (azure.length === 0) return null;
   if (!graph) {
     return {

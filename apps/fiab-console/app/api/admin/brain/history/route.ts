@@ -9,7 +9,8 @@
  * `GET` is SAFE — it never writes, not even an observation. A read endpoint that
  * appends is a read endpoint that a prefetch, a retry or a health probe silently
  * drives, and the resulting history records the polling schedule rather than the
- * estate. `POST` is the only writer.
+ * estate. `POST` is the only writer, and it REFUSES to write a version built
+ * from an incomplete Resource Graph pull (#4016) — see the handler.
  *
  * The consequence is stated rather than hidden: nothing in the deployed console
  * calls `POST` yet, so on a fresh estate this endpoint honestly reports an EMPTY
@@ -377,6 +378,46 @@ export const POST = withTenantAdmin(async () => {
   try {
     const estateId = resolveEstateId();
     const collection = await collectEstate();
+
+    // ── AN INCOMPLETE PULL IS NOT WRITTEN (#4016) ──────────────────────────
+    //
+    // `collectEstate` returns `complete: false` without throwing when it hits
+    // its page cap or when `totalRecords` disagrees with the rows it read. This
+    // used to capture anyway and attach a `warning` string to the RESPONSE —
+    // which is read once, by whoever made the call, and is gone forever
+    // afterwards. The VERSION outlives it, and every later diff against it
+    // reports the unread remainder as added or removed. So the refusal moves to
+    // the write, mirroring W10's arg-graph-source refusal: nothing is stored, and
+    // the answer says exactly what was and was not established.
+    //
+    // The retained history is unaffected — this is a refusal to APPEND, not a
+    // failure of the endpoint's read side, and `GET` still answers.
+    if (!collection.stats.complete) {
+      return apiError('incomplete_collection', 409, {
+        detail:
+          'REFUSING to record a graph version: the Azure Resource Graph pull was INCOMPLETE. ' +
+          `${collection.stats.rowsFetched} row(s) were read` +
+          (collection.stats.totalRecords !== null && collection.stats.totalRecords > 0
+            ? ` of ${collection.stats.totalRecords} the service reported`
+            : ', and the service did not report a total') +
+          `; ${collection.stats.subscriptionsSeen} subscription(s) were seen. A version built ` +
+          'from a partial pull records a PARTIAL ESTATE, and the next complete pull would diff ' +
+          'against it and report every resource in the unread remainder as an ADDITION — a ' +
+          'change in what was read, rendered as a change in the estate. NOTHING was written and ' +
+          'the retained history is unchanged. Retry: a page cap or a throttled pull is usually ' +
+          'transient; a persistent shortfall means the console identity cannot read every ' +
+          'subscription in scope.',
+        collection: {
+          rowsFetched: collection.stats.rowsFetched,
+          totalRecords: collection.stats.totalRecords,
+          complete: collection.stats.complete,
+          subscriptionsSeen: collection.stats.subscriptionsSeen,
+          cloud: collection.stats.cloud,
+        },
+        mutatedAzure: false,
+      });
+    }
+
     const live = buildLiveGraph(collection.rows, { estateId });
 
     const result = await captureGraphVersion({
@@ -385,6 +426,15 @@ export const POST = withTenantAdmin(async () => {
       estateId,
       collectedProvenances: collectedFrom(live.coverage),
       source: 'api:POST /api/admin/brain/history',
+      // Recorded on the version even though only a COMPLETE pull can reach this
+      // line today. The refusal above is the route's; a version has to be able
+      // to state its own provenance so `nodeUnreachableForConsecutiveVersions`
+      // can refuse over anything a different caller — or an older build — wrote.
+      collection: {
+        complete: collection.stats.complete,
+        rowsFetched: collection.stats.rowsFetched,
+        totalRecords: collection.stats.totalRecords,
+      },
     });
 
     return apiOk({
@@ -403,13 +453,6 @@ export const POST = withTenantAdmin(async () => {
         subscriptionsSeen: collection.stats.subscriptionsSeen,
         cloud: collection.stats.cloud,
       },
-      // An INCOMPLETE pull must never be silently recorded as the estate: every
-      // resource in the unread remainder would look deleted on the next diff.
-      warning: collection.stats.complete
-        ? null
-        : 'the Resource Graph pull was INCOMPLETE, so this version records a partial estate. ' +
-          'A later complete pull will diff against it and report the missing resources as ' +
-          'ADDITIONS. Treat the next diff with suspicion.',
       mutatedAzure: false,
     });
   } catch (e) {

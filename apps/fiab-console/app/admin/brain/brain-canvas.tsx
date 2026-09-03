@@ -58,8 +58,12 @@ import { useTheme } from '@/lib/theme/theme-context';
 import type { WireEdge, WireNode } from '@/app/api/admin/brain/_lib/wire';
 import { BrainCanvasNode, DanglingTerminus, type BrainNodeData } from './brain-canvas-node';
 import {
+  DANGLING_TERMINUS_INSET,
+  DANGLING_TERMINUS_STEP,
   edgeVisual,
   layoutNodes,
+  MIN_LEGIBLE_ZOOM,
+  NODE_WIDTH,
   nodeVisual,
   PROVENANCE_COLOR,
   STATE_LABEL,
@@ -75,6 +79,8 @@ import {
 
 const useStyles = makeStyles({
   wrap: { display: 'flex', flexDirection: 'column', minHeight: 0, height: '100%' },
+  /** Fills the resizable region so the ResizeObserver measures the real viewport. */
+  measure: { width: '100%', height: '100%', minWidth: 0, minHeight: 0 },
   /**
    * #4280 — ONE FLOW, NOT TWO OVERLAYS.
    *
@@ -157,6 +163,77 @@ export interface BrainCanvasProps {
   readonly testId?: string;
   /** Distinct persisted size per tab — two views of one graph size independently. */
   readonly resizeStorageKey?: string;
+  /**
+   * The measured canvas viewport, fed by {@link BrainCanvas}'s ResizeObserver.
+   *
+   * Optional so `buildFlow` stays a pure function testable without a DOM. When
+   * absent the layout falls back to one column per state, which is the pre-#4251
+   * behaviour and is correct at small node counts.
+   */
+  readonly container?: { readonly width: number; readonly height: number };
+}
+
+/**
+ * WHERE EACH DANGLING TERMINUS GOES (#4251).
+ *
+ * ── THE DEFECT THIS REPLACES ─────────────────────────────────────────────
+ *
+ * One GLOBAL counter, `(src.x + 200, src.y + 34 + index * 4)`. Two problems, and
+ * the second is the visible one:
+ *   - the offset ignored WHICH source the edge came from, so two termini from
+ *     different sources were displaced from each other for no reason;
+ *   - the step was 4px against a chip ~28px tall, so every adjacent pair in one
+ *     fan-out overlapped by 24px. Measured live on the default view: 6
+ *     overlapping pairs. `ux-baseline.md` — "overlap at any width is a defect".
+ *
+ * ── WHY ALLOCATION UP FRONT, NOT A COUNTER INLINE ────────────────────────
+ *
+ * A per-source counter fixes the fan-out and NOT the collision between one
+ * source's stack and the next row's, because a stack deeper than the row pitch
+ * runs into the source below it. Allocating per LANE with a monotonic cursor
+ * removes the whole class: within a column's gutter lane, consecutive termini
+ * are always {@link DANGLING_TERMINUS_STEP} apart, whichever source they belong
+ * to. Sources are visited in (x, y, id) order so the result is deterministic —
+ * `props.edges` order is not.
+ *
+ * A terminus never intersects a NODE box by construction: the lanes are disjoint
+ * in x. The node occupies `[x, x + NODE_WIDTH]` and the lane starts at
+ * `x + NODE_WIDTH + DANGLING_TERMINUS_INSET`, ending clear of the next column.
+ */
+export function allocateTerminusPositions(
+  edges: readonly WireEdge[],
+  positions: ReadonlyMap<string, { readonly x: number; readonly y: number }>,
+): Map<string, { x: number; y: number }> {
+  const bySource = new Map<string, WireEdge[]>();
+  for (const e of edges) {
+    if (e.resolution !== 'dangling') continue;
+    const list = bySource.get(e.from);
+    if (list) list.push(e);
+    else bySource.set(e.from, [e]);
+  }
+
+  const sources = [...bySource.keys()].sort((a, b) => {
+    const pa = positions.get(a);
+    const pb = positions.get(b);
+    return (
+      (pa?.x ?? 0) - (pb?.x ?? 0) || (pa?.y ?? 0) - (pb?.y ?? 0) || (a < b ? -1 : a > b ? 1 : 0)
+    );
+  });
+
+  const out = new Map<string, { x: number; y: number }>();
+  const laneCursor = new Map<number, number>();
+  for (const src of sources) {
+    const p = positions.get(src);
+    const x = (p?.x ?? 0) + NODE_WIDTH + DANGLING_TERMINUS_INSET;
+    // Never ABOVE its source, never on top of what the lane already holds.
+    let y = Math.max(p?.y ?? 0, laneCursor.get(x) ?? Number.NEGATIVE_INFINITY);
+    for (const e of bySource.get(src)!) {
+      out.set(e.id, { x, y });
+      y += DANGLING_TERMINUS_STEP;
+    }
+    laneCursor.set(x, y);
+  }
+  return out;
 }
 
 /**
@@ -177,7 +254,9 @@ export interface BrainCanvasProps {
  */
 export function buildFlow(props: BrainCanvasProps): { nodes: Node[]; edges: Edge[] } {
   const positions = new Map(
-    layoutNodes(props.nodes, props.coverageConfigured).map((p) => [p.id, p]),
+    layoutNodes(props.nodes, props.coverageConfigured, {
+      ...(props.container ? { container: props.container } : {}),
+    }).map((p) => [p.id, p]),
   );
 
   const flowNodes: Node[] = props.nodes.map((n) => {
@@ -203,7 +282,7 @@ selected: props.selectedId === n.id,
 
   const flowEdges: Edge[] = [];
   const termini: Node[] = [];
-  let terminusIndex = 0;
+  const terminusPosition = allocateTerminusPositions(props.edges, positions);
 
   for (const e of props.edges) {
     const v = edgeVisual(e);
@@ -218,18 +297,19 @@ selected: props.selectedId === n.id,
 
     if (e.resolution === 'dangling') {
       // Give the wire somewhere to land so it can be SEEN. One terminus per
-      // dangling edge, placed beside its source.
-      const src = positions.get(e.from);
+      // dangling edge, in the gutter lane beside its source — see
+      // `allocateTerminusPositions` for why the placement is allocated up front
+      // rather than counted inline.
       const tid = `dangling:${e.id}`;
+      const at = terminusPosition.get(e.id) ?? { x: 0, y: 0 };
       termini.push({
         id: tid,
         type: 'dangling',
-        position: { x: (src?.x ?? 0) + 200, y: (src?.y ?? 0) + 34 + terminusIndex * 4 },
+        position: at,
         data: { reason: e.danglingReason, symbol: e.evidence.symbol },
         draggable: true,
         selectable: false,
       });
-      terminusIndex += 1;
       flowEdges.push({
         id: e.id,
         source: e.from,
@@ -333,6 +413,9 @@ function CanvasInner(props: BrainCanvasProps) {
       edges={edges}
       nodeTypes={nodeTypes}
       fitView
+      // The initial fit stops shrinking at the legibility floor; the manual
+      // floor below stays at 0.2 so a deliberate zoom-out still works (#4251).
+      fitViewOptions={{ minZoom: MIN_LEGIBLE_ZOOM }}
       minZoom={0.2}
       maxZoom={2}
       proOptions={{ hideAttribution: true }}
@@ -444,8 +527,38 @@ function CanvasInner(props: BrainCanvasProps) {
   );
 }
 
+/**
+ * How coarsely the observed viewport is quantised before it reaches the layout.
+ *
+ * The layout must be DETERMINISTIC — `visual-distinction.test.tsx` asserts two
+ * runs place every node identically, and two screenshots of one estate have to
+ * be comparable. A raw ResizeObserver reading changes by a pixel on any scroll
+ * bar or zoom, which would re-flow the graph under the operator's cursor. Rounded
+ * to a 32px grid, the same window produces the same layout.
+ */
+const VIEWPORT_QUANTUM = 32;
+
 export function BrainCanvas(props: BrainCanvasProps) {
   const s = useStyles();
+  const measureRef = React.useRef<HTMLDivElement | null>(null);
+  const [container, setContainer] = React.useState<{ width: number; height: number } | null>(null);
+
+  React.useEffect(() => {
+    const el = measureRef.current;
+    if (!el || typeof ResizeObserver === 'undefined') return;
+    const quantise = (n: number) => Math.max(VIEWPORT_QUANTUM, Math.round(n / VIEWPORT_QUANTUM) * VIEWPORT_QUANTUM);
+    const observer = new ResizeObserver((entries) => {
+      const box = entries[0]?.contentRect;
+      if (!box || box.width === 0 || box.height === 0) return;
+      const next = { width: quantise(box.width), height: quantise(box.height) };
+      setContainer((prev) =>
+        prev && prev.width === next.width && prev.height === next.height ? prev : next,
+      );
+    });
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, []);
+
   return (
     <div className={s.wrap} data-testid={props.testId ?? 'brain-canvas'}>
       <ResizableCanvasRegion
@@ -455,9 +568,11 @@ export function BrainCanvas(props: BrainCanvasProps) {
         fill
         ariaLabel="Resize the estate graph"
       >
-        <ReactFlowProvider>
-          <CanvasInner {...props} />
-        </ReactFlowProvider>
+        <div ref={measureRef} className={s.measure}>
+          <ReactFlowProvider>
+            <CanvasInner {...props} {...(container ? { container } : {})} />
+          </ReactFlowProvider>
+        </div>
       </ResizableCanvasRegion>
     </div>
   );

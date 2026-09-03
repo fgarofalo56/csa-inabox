@@ -162,6 +162,39 @@ export function costedFinding(over: Partial<Finding> = {}): Finding {
 }
 
 /**
+ * A subject whose subscription segment is GUID-SHAPED — the #3967 N5 arm.
+ *
+ * Every other fixture here uses `sub-a`, five characters long. A predicate
+ * filter keyed to the PRODUCTION shape (`segment.length === 36`) is invisible to
+ * all of them and drives `azureSubjects()` to zero on the real estate. This is
+ * the subject that makes the mutation reachable by the suite.
+ */
+export function guidShapedSubject(name = 'app-alpha'): NodeId {
+  return azureNodeId('rg-brain-test', name, GUID_SHAPED_SUBSCRIPTION);
+}
+
+/** A finding over {@link guidShapedSubject}. */
+export function guidShapedFinding(over: Partial<Finding> = {}): Finding {
+  return makeFinding({ ...over, subjects: [guidShapedSubject()] });
+}
+
+/** The same, carrying a cost figure — the population `checkUnmeasuredScale` reads. */
+export function guidShapedCostedFinding(over: Partial<Finding> = {}): Finding {
+  return makeFinding({
+    ...over,
+    subjects: [guidShapedSubject()],
+    cost: derivedCost(41.5, '2 replicas x 0.5 vCPU x list rate', '2026-08-23T00:00:00.000Z'),
+  });
+}
+
+/** The graph the subject above resolves in — same apps, GUID-shaped ids. */
+export function guidShapedGraph(
+  apps: readonly { name: string; minReplicas?: number; tags?: Record<string, string> | null }[],
+): BrainGraphView {
+  return makeGraph(apps, { subscriptionId: GUID_SHAPED_SUBSCRIPTION });
+}
+
+/**
  * The #3893 shape: nine findings that are ONE dead gate.
  *
  * All nine cite the same deploy-artifact node — `landing-zone/main.bicep`, the
@@ -214,15 +247,40 @@ export function blindDetectorResult(detector = 'empty-detector'): DetectorResult
 // Node ids and graphs
 // ---------------------------------------------------------------------------
 
+/**
+ * A GUID-SHAPED subscription segment, assembled at runtime (#3967).
+ *
+ * ── WHY THIS EXISTS ──────────────────────────────────────────────────────
+ *
+ * `azureSubjects()` is the population for two of the Critic's measured checks.
+ * #3967 measured mutation N5 against it: keep `startsWith(AZURE_NODE_ID_PREFIX)`
+ * and additionally drop any subject whose subscription segment is 36 characters
+ * — a real GUID. The whole brain suite stayed green at 231/231, because every
+ * fixture used the short `sub-a` placeholder, so the population could be driven
+ * to ZERO in production with no test able to see it. A rename guard does not
+ * cover that; only a GUID-SHAPED subject does.
+ *
+ * ── WHY IT IS ASSEMBLED RATHER THAN WRITTEN ──────────────────────────────
+ *
+ * `csa-inabox` is a PUBLIC repository. Joining the parts at runtime gives the
+ * 36-character shape the mutation keys on without a GUID-looking literal
+ * appearing anywhere in the source — so a grep for a leaked subscription id
+ * cannot match this file, and `no-real-ids.test.ts`-style scans stay clean.
+ * The value is all zeros but one, which is not allocatable and names nothing.
+ */
+export const GUID_SHAPED_SUBSCRIPTION = ['00000000', '0000', '0000', '0000', '000000000001'].join(
+  '-',
+);
+
 /** A placeholder ARM-shaped node id. `sub-a` is not a GUID and never was one. */
-export function azureNodeId(rg: string, name: string): NodeId {
+export function azureNodeId(rg: string, name: string, subscriptionId = 'sub-a'): NodeId {
   return nodeIdFromPersisted(
-    `azure:/subscriptions/sub-a/resourcegroups/${rg}/providers/microsoft.app/containerapps/${name}`.toLowerCase(),
+    `azure:/subscriptions/${subscriptionId}/resourcegroups/${rg}/providers/microsoft.app/containerapps/${name}`.toLowerCase(),
   );
 }
 
-function armId(rg: string, name: string): string {
-  return `/subscriptions/sub-a/resourceGroups/${rg}/providers/Microsoft.App/containerApps/${name}`;
+function armId(rg: string, name: string, subscriptionId = 'sub-a'): string {
+  return `/subscriptions/${subscriptionId}/resourceGroups/${rg}/providers/Microsoft.App/containerApps/${name}`;
 }
 
 /**
@@ -234,13 +292,15 @@ function armId(rg: string, name: string): string {
  */
 export function makeGraph(
   apps: readonly { name: string; minReplicas?: number; tags?: Record<string, string> | null }[],
+  opts?: { readonly subscriptionId?: string },
 ): BrainGraphView {
+  const subscriptionId = opts?.subscriptionId ?? 'sub-a';
   const rows: ResourceGraphRow[] = apps.map((a) => ({
-    id: armId('rg-brain-test', a.name),
+    id: armId('rg-brain-test', a.name, subscriptionId),
     type: 'Microsoft.App/containerApps',
     name: a.name,
     resourceGroup: 'rg-brain-test',
-    subscriptionId: 'sub-a',
+    subscriptionId,
     location: 'centralus',
     tags: a.tags === undefined ? {} : a.tags,
     properties:

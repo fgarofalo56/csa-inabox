@@ -254,6 +254,106 @@ export function buildEdgelessGraph(): BrainGraph {
   ]);
 }
 
+// ---------------------------------------------------------------------------
+// #4258 — THE MUTUALLY-REFERENCING ISLAND
+// ---------------------------------------------------------------------------
+
+export const PEER_A_ARM = `/subscriptions/${SUB}/resourceGroups/${RG}/providers/Microsoft.App/containerApps/loom-peer-a`;
+export const PEER_B_ARM = `/subscriptions/${SUB}/resourceGroups/${RG}/providers/Microsoft.App/containerApps/loom-peer-b`;
+export const PEER_A_FQDN = `loom-peer-a.internal.${ENV_DOMAIN}`;
+export const PEER_B_FQDN = `loom-peer-b.internal.${ENV_DOMAIN}`;
+export const PEER_A_ID = azureResourceNodeId(PEER_A_ARM);
+export const PEER_B_ID = azureResourceNodeId(PEER_B_ARM);
+
+/**
+ * TWO ALWAYS-ON INTERNAL APPS THAT NAME EACH OTHER, AND NOTHING ELSE.
+ *
+ * The shape an inbound-edge COUNT cannot see (#4258). Each peer has exactly one
+ * inbound resolved `configured` edge — from the other peer — so
+ * `inboundEdges(id,'configured').length === 0` is FALSE for both and the old
+ * predicate cleared them. Nothing outside the pair can reach either: the console
+ * is the only externally-ingressed app here and it wires only `loom-direct-lake`.
+ *
+ * The island bills continuously and is unreachable, which is precisely the class
+ * the founding finding exists to catch.
+ *
+ * `peerAExternal` is the CONTROL arm. Give A external ingress and A becomes a
+ * root of the walk, so B is genuinely reachable from outside and must be
+ * CLEARED — which proves the walk is doing the work, rather than the test
+ * passing because every node in a small graph happens to be flagged.
+ */
+export function buildMutualIslandGraph(
+  options: { readonly peerAExternal?: boolean } = {},
+): BrainGraph {
+  const rg = extractFromResourceGraph(
+    [
+      appRow({
+        armId: PEER_A_ARM,
+        name: 'loom-peer-a',
+        minReplicas: 1,
+        maxReplicas: 3,
+        cpu: 0.5,
+        memory: '1Gi',
+        external: options.peerAExternal === true,
+        fqdn: PEER_A_FQDN,
+      }),
+      appRow({
+        armId: PEER_B_ARM,
+        name: 'loom-peer-b',
+        minReplicas: 1,
+        maxReplicas: 3,
+        cpu: 0.5,
+        memory: '1Gi',
+        fqdn: PEER_B_FQDN,
+      }),
+      // The CONTROL pair: an externally-ingressed console that wires
+      // `loom-direct-lake`. `loom-direct-lake` must be CLEARED on both arms —
+      // without it, a walk that reached nothing would look identical to a walk
+      // that reached the right things.
+      appRow({
+        armId: DIRECTLAKE_ARM,
+        name: 'loom-direct-lake',
+        minReplicas: 1,
+        maxReplicas: 3,
+        cpu: 0.5,
+        memory: '1Gi',
+        fqdn: DIRECTLAKE_FQDN,
+      }),
+      appRow({
+        armId: CONSOLE_ARM,
+        name: 'loom-console',
+        minReplicas: 2,
+        maxReplicas: 10,
+        cpu: 1,
+        memory: '2Gi',
+        external: true,
+        fqdn: CONSOLE_FQDN,
+      }),
+    ],
+    { estateId: ESTATE },
+  );
+
+  const live = extractFromContainerAppEnv([
+    {
+      appResourceId: PEER_A_ARM,
+      envVarBindings: { LOOM_PEER_B_URL: PEER_B_ID },
+      env: [{ name: 'LOOM_PEER_B_URL', value: `https://${PEER_B_FQDN}` }],
+    },
+    {
+      appResourceId: PEER_B_ARM,
+      envVarBindings: { LOOM_PEER_A_URL: PEER_A_ID },
+      env: [{ name: 'LOOM_PEER_A_URL', value: `https://${PEER_A_FQDN}` }],
+    },
+    {
+      appResourceId: CONSOLE_ARM,
+      envVarBindings: { LOOM_DIRECTLAKE_URL: DIRECTLAKE_ID },
+      env: [{ name: 'LOOM_DIRECTLAKE_URL', value: `https://${DIRECTLAKE_FQDN}` }],
+    },
+  ]);
+
+  return buildGraph([rg, live]);
+}
+
 /**
  * THE ESTATE-SCALE GRAPH — 63 container apps and NO ownership tag.
  *

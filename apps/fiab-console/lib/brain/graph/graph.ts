@@ -642,6 +642,88 @@ export function nodesWithNoInboundEdge(
 }
 
 /**
+ * The root set of a reachability walk — the nodes a caller can enter the graph
+ * at.
+ *
+ * `describe` is REQUIRED, not optional like {@link ReachabilityFilter}'s. The
+ * root set is the entire content of the claim `nodesNotReachableFrom` makes: the
+ * same graph answers differently for different roots, so a population that does
+ * not name them reports a verdict nobody can check.
+ */
+export interface ReachabilityRoots {
+  readonly where: (n: BrainNode) => boolean;
+  readonly describe: string;
+}
+
+/**
+ * Nodes the walk CANNOT REACH from `roots`, following resolved edges of
+ * `provenance`.
+ *
+ * ── WHY THIS EXISTS ALONGSIDE {@link nodesWithNoInboundEdge} (#4258) ──────
+ *
+ * `nodesWithNoInboundEdge` answers a LOCAL question — does anything point at
+ * this node? — and the unreachable-service detectors were reading its answer as
+ * if it were the GLOBAL one. Those differ, and the gap is not hypothetical: two
+ * internal always-on apps whose env vars name each other each have an inbound
+ * `configured` edge, so the local query clears both, while nothing outside them
+ * can reach either. That is a mutually-referencing island billing every second,
+ * and it is exactly the class the founding finding exists to catch.
+ *
+ * The inverse error is why the root set is a parameter rather than a constant:
+ * an app with external ingress, or any node whose callers this graph does not
+ * model, is an ENTRY POINT. Walking from nothing would flag the entire estate.
+ *
+ * READ THE POPULATION BEFORE THE RESULT. `scope` names the root set, how many
+ * nodes matched it, and how many the walk reached, because a root set that
+ * matched nothing makes every candidate trivially unreachable — a LOUD failure,
+ * but a failure, not a finding.
+ */
+export function nodesNotReachableFrom(
+  graph: BrainGraphView,
+  roots: ReachabilityRoots,
+  provenance: EdgeProvenance,
+  filter?: ReachabilityFilter,
+): QueryResult<readonly BrainNode[]> {
+  const rootNodes = graph.nodes.filter((n) => roots.where(n));
+
+  // BFS over RESOLVED outbound edges only. `outboundEdges` excludes dangling
+  // edges by construction (their `to` is null), which IS the reachability
+  // property: a wire that points at nothing carries no caller to its intended
+  // target, and counting it would clear the very node the dangling edge is
+  // evidence against.
+  const reached = new Set<string>(rootNodes.map((n) => n.id as string));
+  const queue: string[] = [...reached];
+  while (queue.length > 0) {
+    const id = queue.shift()!;
+    for (const e of graph.outboundEdges(id as NodeId, provenance).result) {
+      const to = e.to as string;
+      if (reached.has(to)) continue;
+      reached.add(to);
+      queue.push(to);
+    }
+  }
+
+  const candidates = applyFilter(graph.nodes, filter);
+  const result = candidates.filter((n) => !reached.has(n.id as string));
+  return {
+    result,
+    population: makePopulation({
+      subject: 'nodes',
+      nodes: candidates,
+      edges: graph.edges,
+      scope:
+        `${candidates.length} node(s)` +
+        (filter?.describe ? ` matching ${filter.describe}` : '') +
+        (filter?.kind ? ` of kind '${filter.kind}'` : '') +
+        (filter?.resourceType ? ` of type '${filter.resourceType}'` : '') +
+        `, tested for REACHABILITY over resolved '${provenance}' edges from ` +
+        `${rootNodes.length} root(s) (${roots.describe}); the walk reached ${reached.size} ` +
+        'node(s) in total',
+    }),
+  };
+}
+
+/**
  * Nodes that have an inbound edge of `present` but NONE of `absent`.
  *
  * This is the shape behind the two headline findings from `../types.ts`:

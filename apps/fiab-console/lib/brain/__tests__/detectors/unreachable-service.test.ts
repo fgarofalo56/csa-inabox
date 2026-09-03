@@ -10,15 +10,22 @@
 import { describe, it, expect } from 'vitest';
 import { unreachableService } from '../../detectors';
 import {
+  unreachableAlwaysOn,
+  type DetectContext,
+} from '@/app/api/admin/brain/_lib/detect';
+import {
   BROKER_ARM,
   BROKER_ID,
   DIRECTLAKE_ID,
   ENV_DOMAIN,
+  PEER_A_ID,
+  PEER_B_ID,
   RG,
   SUB,
   appRow,
   buildEdgelessGraph,
   buildFixtureGraph,
+  buildMutualIslandGraph,
 } from './fixtures';
 
 describe('unreachable-service — POSITIVE and NEGATIVE', () => {
@@ -249,5 +256,110 @@ describe('unreachable-service — the finding id is deterministic', () => {
     expect(a).toEqual(b);
     expect(a.length).toBeGreaterThan(0);
     expect(a[0]).toContain(BROKER_ARM.toLowerCase());
+  });
+});
+
+describe('#4258 — REACHABILITY, not inbound-edge count: the mutual island', () => {
+  // THE DEFECT, as a test. Two always-on internal apps whose env vars name each
+  // other each carry ONE inbound resolved `configured` edge, so the predicate
+  // this detector used to run — `inbound(graph, id, 'configured').length === 0`
+  // — is FALSE for both and cleared them. Nothing outside the pair can reach
+  // either: the console is the only externally-ingressed app in the fixture and
+  // it wires only `loom-direct-lake`.
+  //
+  // Measured before the fix: 0 findings over this graph. That is the whole
+  // finding — an always-on island billing continuously, invisible to the query
+  // whose entire purpose is to see it.
+
+  it('EMBEDDED CONTROL: each peer really does have an inbound configured edge', () => {
+    // Without this, "the old predicate missed them" is an assertion about the
+    // fixture rather than about the detector.
+    const graph = buildMutualIslandGraph();
+    expect(graph.inboundEdges(PEER_A_ID, 'configured').result).toHaveLength(1);
+    expect(graph.inboundEdges(PEER_B_ID, 'configured').result).toHaveLength(1);
+  });
+
+  it('BOTH peers are flagged — the inbound-edge count cleared them', () => {
+    const result = unreachableService(buildMutualIslandGraph());
+    const subjects = result.findings.map((f) => f.subjects[0]);
+    expect(subjects).toContain(PEER_A_ID);
+    expect(subjects).toContain(PEER_B_ID);
+  });
+
+  it('CONTROL: the wired app reached from the external console is CLEARED', () => {
+    // The walk has to actually reach things. A walk that reached nothing would
+    // flag every node and pass the assertion above for the wrong reason.
+    const result = unreachableService(buildMutualIslandGraph());
+    expect(result.findings.map((f) => f.subjects[0])).not.toContain(DIRECTLAKE_ID);
+  });
+
+  it('CONTROL: give peer A external ingress and peer B is CLEARED', () => {
+    // A becomes a ROOT, so B is genuinely reachable from outside the graph and
+    // must not be flagged. A itself is skipped as externally ingressed.
+    const result = unreachableService(buildMutualIslandGraph({ peerAExternal: true }));
+    const subjects = result.findings.map((f) => f.subjects[0]);
+    expect(subjects).not.toContain(PEER_B_ID);
+    expect(subjects).not.toContain(PEER_A_ID);
+  });
+
+  it('the population NAMES the root set, so the verdict can be checked', () => {
+    const result = unreachableService(buildMutualIslandGraph());
+    expect(result.population.scope).toMatch(/NOT REACHABLE/);
+    expect(result.population.scope).toMatch(/EXTERNAL ingress/);
+  });
+});
+
+describe('#4258 — THE RUNTIME PATH: unreachableAlwaysOn over the same island', () => {
+  // The library detector above is not what the console executes. The BFF runs
+  // `unreachableAlwaysOn` from `app/api/admin/brain/_lib/detect.ts`, which
+  // carried the same inbound-edge-count shape at its own line. Covering only the
+  // library twin would leave the surface the operator actually reads uncovered —
+  // the exact split that lets a fix look complete and change nothing live.
+
+  function ctxOver(graph: ReturnType<typeof buildMutualIslandGraph>): DetectContext {
+    const owned = new Set<string>();
+    for (const e of graph.edges) {
+      if (e.provenance === 'owns' && e.resolution === 'resolved') owned.add(e.to as string);
+    }
+    // `configured` MUST be marked collected or `refuseIfUncollected` short-
+    // circuits and the test would pass over a detector that never ran.
+    const coverage = {
+      configured: { collected: true, edgeCount: graph.edges.filter((e) => e.provenance === 'configured').length, note: 'container app env (fixture)' },
+      declared: { collected: false, edgeCount: 0, note: 'bicep is not in this fixture' },
+      observed: { collected: false, edgeCount: 0, note: 'no telemetry extractor' },
+      imports: { collected: false, edgeCount: 0, note: 'no source extractor' },
+      owns: { collected: true, edgeCount: graph.edges.filter((e) => e.provenance === 'owns').length, note: 'estate tag (fixture)' },
+    } as unknown as DetectContext['coverage'];
+    return { graph, coverage, owned };
+  }
+
+  it('EMBEDDED CONTROL: the detector actually ran — it is not the vacuity skip', () => {
+    const run = unreachableAlwaysOn(ctxOver(buildMutualIslandGraph()));
+    expect(run.vacuous).toBe(false);
+  });
+
+  it('BOTH peers are flagged on the runtime path too', () => {
+    const run = unreachableAlwaysOn(ctxOver(buildMutualIslandGraph()));
+    const subjects = run.result.findings.map((f) => f.subjects[0]);
+    expect(subjects).toContain(PEER_A_ID);
+    expect(subjects).toContain(PEER_B_ID);
+  });
+
+  it('CONTROL: the app wired from the external console is CLEARED', () => {
+    const run = unreachableAlwaysOn(ctxOver(buildMutualIslandGraph()));
+    expect(run.result.findings.map((f) => f.subjects[0])).not.toContain(DIRECTLAKE_ID);
+  });
+
+  it('CONTROL: peer A external ⇒ peer B cleared', () => {
+    const run = unreachableAlwaysOn(ctxOver(buildMutualIslandGraph({ peerAExternal: true })));
+    const subjects = run.result.findings.map((f) => f.subjects[0]);
+    expect(subjects).not.toContain(PEER_B_ID);
+    expect(subjects).not.toContain(PEER_A_ID);
+  });
+
+  it('the externally-ingressed apps are DISCLOSED as skipped, not silently dropped', () => {
+    const run = unreachableAlwaysOn(ctxOver(buildMutualIslandGraph()));
+    const reasons = run.result.skipped.map((s) => s.reason).join(' ');
+    expect(reasons).toMatch(/EXTERNAL ingress/);
   });
 });
