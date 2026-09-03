@@ -1,0 +1,371 @@
+# loom-capacity-broker CI — compile + vet + test the HYP-9 admission broker
+#
+# WHY THIS EXISTS (#4270). `apps/loom-capacity-broker` shipped 12 Go source
+# files, a Dockerfile, a bicep module (compute/loom-capacity-broker-app.bicep)
+# and 538 lines of unit tests across five `_test.go` files — and NOTHING in this
+# repository had ever compiled or run any of it. Measured on 2026-09-01, before
+# this file existed:
+#
+#   grep -rln "loom-capacity-broker" .github/workflows/   ->  0 files
+#   grep -rlE "setup-go|go (build|test|vet)" .github/workflows/
+#         ->  loom-directlake-ci.yml  (false positive: `cargo build` prose)
+#             sdk-contract.yml        (a DIFFERENT module, sdk/terraform-provider-loom)
+#
+# So the only two hits were a prose match and an unrelated Go module. The broker
+# had zero coverage of any kind: no compile, no vet, no test. Its image is not
+# built either — it is an entry in scripts/ci/check-image-producer-coverage.mjs
+# KNOWN_UNBUILT, tolerated only because admin-plane/main.bicep does not yet
+# invoke its bicep module. That means there was no lane ANYWHERE — CI, image
+# build, or deploy — in which a Go compile error could surface. A test suite
+# that never executes is not coverage; it is 538 lines of unverified assertion.
+#
+# This is the Go-side twin of loom-directlake-ci.yml (#3291), which closed the
+# identical gap for the Rust crate, and it is deliberately the same shape: get a
+# real compiler verdict on every PR that touches the app, BEFORE the service is
+# wired into the orchestrator and a build failure becomes a failed deploy.
+#
+# SCOPE: `go build ./...`, `go vet ./...`, `go test ./...` plus three invariant
+# checks the Dockerfile silently depends on (see the steps). It needs no
+# network, no Azure and no Redis: the module has ZERO external dependencies and
+# the tests are pure parsers and in-memory ledgers, so the whole lane is
+# hermetic.
+#
+# EVERY VERDICT STEP CARRIES `if: ${{ !cancelled() }}`, and that is load-bearing.
+# The first run of this lane (PR #4303, run 33674044142) went red on gofmt — a
+# one-space struct-field alignment in internal/smoothing/smoothing_test.go — and
+# because gofmt sits ahead of the compiler, `go build ./...`, `go vet ./...`,
+# `go test ./... -count=1`, the Dockerfile-flags build AND the binary
+# confirmation were all reported `skipped`. So the lane whose entire stated
+# purpose is "get a real compiler verdict on Go nothing has ever compiled"
+# produced NO compiler verdict on its very first run, and `--log-failed` showed
+# only the gofmt step — the five skipped ones are invisible there, you have to
+# pull `.steps[]` from the jobs API to see that nothing else ran. A hollow lane
+# that looks like a normal red.
+#
+# `!cancelled()` is the opposite of result-discarding: a failed step still fails
+# the job, exactly as before. It only stops one independent verdict from
+# suppressing five others, so a single run reports every problem instead of one
+# per push. The confirmation step is the deliberate exception — it consumes
+# /tmp/broker, so it is gated on its producer's outcome, not on the job's.
+#
+# THIS LANE IS NOT REQUIRED-STATUS-CHECK MATERIAL YET — it produces no context
+# listed in release-please.yml's REQUIRED manifest. It is still shaped as if it
+# were (per-SHA concurrency, no result-discarding), because the cheap moment to
+# get that right is before anyone depends on it.
+
+name: loom-capacity-broker CI (go build + vet + test)
+
+on:
+  pull_request:
+    paths:
+      - 'apps/loom-capacity-broker/**'
+      - '.github/workflows/loom-capacity-broker-ci.yml'
+  push:
+    branches:
+      - main
+    paths:
+      - 'apps/loom-capacity-broker/**'
+      - '.github/workflows/loom-capacity-broker-ci.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# DELIBERATELY NOT the `<workflow>-${{ github.ref }}` + `cancel-in-progress:
+# true` shape that loom-directlake-ci.yml carries. Every push to main shares
+# `refs/heads/main`, so that group makes each merge CANCEL the previous commit's
+# run — and a cancelled run is not a pass and not a failure, it is an ABSENCE
+# that renders in `gh run list` as an unremarkable grey row. That is the defect
+# scripts/ci/check-required-lane-concurrency.mjs was written for (#3426/#3423),
+# which measured 11 cancelled main runs out of the last 30 on test.yml alone.
+# Putting the SHA in the group on push gives every main commit its own verdict;
+# PRs still supersede, which is where cancelling is genuinely free. Same shape
+# as test.yml and validate.yml.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}-${{ github.event_name == 'pull_request' && 'pr' || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  build-vet-test:
+    name: go build + vet + test
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    # CI MUST RESOLVE IMPORTS AND SELECT A TOOLCHAIN THE WAY THE IMAGE DOES.
+    # The image is the artifact that has to build; a lane that resolves either
+    # one more permissively than `az acr build` can be green over a tree the
+    # image cannot compile. Both values below are what `golang:1.23-alpine`
+    # itself reports (`go env GOTOOLCHAIN` -> `local`, measured in the
+    # container), and each closes a bypass measured on THIS tree:
+    #
+    #   GOWORK: off  — a `go.work` pulls sibling modules into `go build ./...`
+    #     that the Dockerfile's `COPY go.mod cmd internal` never copies. In
+    #     golang:1.23-alpine, a go.work + an import of a sibling module passed
+    #     all 8 verdict steps gofmt-clean (RC=0 each) while `docker build` on the
+    #     same tree failed `cmd/broker/main.go:32:2: package sharedmod is not in
+    #     std`. Two placements were measured — go.work in the module directory,
+    #     and go.work in its PARENT — and both bypassed the lane; only the first
+    #     is visible to a file test, which is why this env var, and not the
+    #     INVARIANT 2 assertion below, is the load-bearing half of the fix. With
+    #     GOWORK=off both arms failed `go build ./...` with the image's exact
+    #     message, and the unmutated tree still built (`go env GOWORK` -> `off`).
+    #   GOTOOLCHAIN: local — the official golang images set this, so the image
+    #     cannot download a newer toolchain to satisfy a bumped `go` directive.
+    #     Setting it here means CI cannot either. See INVARIANT 3.
+    #
+    # BOTH VALUES ARE QUOTED, and that is not cosmetic: YAML 1.1 reads a bare
+    # `off` as the boolean false, which reaches the toolchain as `GOWORK=false`
+    # and makes every go command fail `go: invalid GOWORK: not an absolute
+    # path` — measured in golang:1.23-alpine while writing this step, on a tree
+    # that is otherwise green.
+    env:
+      GOWORK: 'off'
+      GOTOOLCHAIN: 'local'
+    defaults:
+      run:
+        working-directory: apps/loom-capacity-broker
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # THE TOOLCHAIN COMES FROM THE DOCKERFILE, NOT FROM go.mod.
+      #
+      # This lane first used `go-version-file: apps/loom-capacity-broker/go.mod`
+      # with a comment claiming that reading the toolchain from the module was
+      # "the only form that cannot drift from what the image compiles". That was
+      # wrong, and measurably so: go.mod's `go` directive and the Dockerfile's
+      # `FROM golang:<version>-alpine` are two independent sources of truth.
+      # Measured on this tree, changing go.mod's `go 1.23` to `go 1.24` — a
+      # routine bump — left all 8 verdict steps RC=0 on the go1.24.13 that
+      # go-version-file installs, while `docker build` on the same tree failed
+      # `go: go.mod requires go >= 1.24 (running go 1.23.12; GOTOOLCHAIN=local)`.
+      #
+      # Deriving the version from the Dockerfile removes the second source of
+      # truth: setup-go installs the minor release the image compiles with, so
+      # anything that needs a newer toolchain fails HERE for the same reason it
+      # fails there. INVARIANT 3 below then names both versions explicitly
+      # instead of leaving a raw toolchain error as the only explanation.
+      - name: Read the Go toolchain the image compiles with (Dockerfile FROM)
+        id: image-go
+        run: |
+          set -euo pipefail
+          if ! from_line=$(grep -m1 -E '^FROM golang:' Dockerfile); then
+            echo "::error file=apps/loom-capacity-broker/Dockerfile::No 'FROM golang:<version>' line found. This lane derives its Go toolchain from that line."
+            exit 1
+          fi
+          image_go=${from_line#*golang:}
+          image_go=${image_go%% *}
+          image_go=${image_go%%-*}
+          case "${image_go}" in
+            [0-9]*.[0-9]*) ;;
+            *)
+              echo "::error file=apps/loom-capacity-broker/Dockerfile::Could not read a <major>.<minor> Go version from: ${from_line}"
+              exit 1
+              ;;
+          esac
+          echo "image builds on go ${image_go}  (from: ${from_line})"
+          echo "go-version=${image_go}" >> "${GITHUB_OUTPUT}"
+
+      # SHA-pinned, unlike sdk-contract.yml's `actions/setup-go@v7`. That file's
+      # comment says it was left unpinned because "no other workflow in this
+      # repo uses setup-go, so there is no verified digest to copy" — this lane
+      # is the second consumer, and the digest below was resolved from the API
+      # rather than copied from memory:
+      #   gh api repos/actions/setup-go/tags --jq '.[] | select(.name|startswith("v7"))'
+      #   -> v7.0.0  b7ad1dad31e06c5925ef5d2fc7ad053ef454303e
+      #      v7      b7ad1dad31e06c5925ef5d2fc7ad053ef454303e   (same commit)
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: ${{ steps.image-go.outputs.go-version }}
+          # There is no go.sum (zero external deps), so this caches the build
+          # cache keyed on go.mod. If it restores nothing the lane is merely
+          # slower — every verdict-bearing step below still runs and still
+          # decides. No step here may be skipped by a cache hit.
+          cache-dependency-path: apps/loom-capacity-broker/go.mod
+
+      # INVARIANT 1 — the module must stay dependency-free.
+      #
+      # This is not style policing; it is what keeps the image buildable. The
+      # Dockerfile copies `go.mod` and NO go.sum (there is none, verified: `ls
+      # apps/loom-capacity-broker/go.sum` -> No such file), and runs `go build`
+      # with no `go mod download`. The first external dependency anyone adds
+      # therefore breaks `az acr build` with a missing-go.sum error while a
+      # plain local `go build` still succeeds — a divergence that would surface
+      # as a failed deploy, not as a failed test. go.mod's own header states the
+      # zero-dependency design (the Redis client is a hand-rolled RESP2 client
+      # over crypto/tls + net in internal/resp); this step makes that comment
+      # enforceable.
+      - name: go.mod declares no external dependencies (the Dockerfile has no go.sum)
+        if: ${{ !cancelled() }}
+        run: |
+          set -euo pipefail
+          requires=$(go mod edit -json | jq -r '(.Require // []) | length')
+          echo "direct+indirect requires: ${requires}"
+          if [ "${requires}" != "0" ]; then
+            go mod edit -json | jq -r '.Require[] | "  " + .Path + " " + .Version'
+            echo "::error file=apps/loom-capacity-broker/go.mod::The broker gained an external dependency."
+            echo "The Dockerfile copies go.mod only and never runs 'go mod download', so this breaks the image build."
+            echo "Either drop the dependency or add go.sum + a download step to apps/loom-capacity-broker/Dockerfile in the SAME change."
+            exit 1
+          fi
+
+      # INVARIANT 2 — all Go source must live under cmd/ or internal/, and there
+      # must be no go.work in the module directory.
+      #
+      # The Dockerfile's build stage copies exactly `go.mod`, `cmd` and
+      # `internal`. A package added at any other path compiles fine here and
+      # under `go build ./...` but is simply ABSENT from the image build
+      # context, so `az acr build` fails on an unresolvable import. Measured at
+      # the time of writing: 12 .go files, 0 of them outside cmd/ or internal/.
+      # Same reasoning as loom-directlake-ci.yml keeping its apt packages in
+      # sync with its Dockerfile — a divergence between the CI build and the
+      # image build is how a green lane ships an unbuildable image.
+      #
+      # A `go.work` is the same defect wearing a different hat: it is not in the
+      # COPY set either, and it makes `go build ./...` resolve imports the image
+      # cannot. `GOWORK: off` at job level is what actually neutralises it (and
+      # it covers a go.work in any ANCESTOR directory, which this file test
+      # cannot see). This assertion exists so the in-module case fails by NAME
+      # rather than as `package <x> is not in std` several steps later.
+      - name: All Go source lives under cmd/ or internal/ (the Dockerfile's COPY set)
+        if: ${{ !cancelled() }}
+        run: |
+          set -euo pipefail
+          stray=$(find . -name '*.go' -not -path './cmd/*' -not -path './internal/*' | sort)
+          if [ -n "${stray}" ]; then
+            echo "${stray}"
+            echo "::error::Go source outside cmd/ and internal/ is not copied by apps/loom-capacity-broker/Dockerfile."
+            echo "Add the directory to the Dockerfile's COPY set, or move the package under cmd/ or internal/."
+            exit 1
+          fi
+          if [ -f go.work ]; then
+            echo "::error file=apps/loom-capacity-broker/go.work::apps/loom-capacity-broker/go.work is not copied by apps/loom-capacity-broker/Dockerfile."
+            echo "A workspace can pull sibling modules into 'go build ./...' that the image build cannot resolve."
+            echo "Remove it, or move the shared code under apps/loom-capacity-broker/internal/."
+            exit 1
+          fi
+          echo "no stray packages and no go.work; Dockerfile COPY set is complete"
+
+      # INVARIANT 3 — go.mod must not require a newer Go than the image ships.
+      #
+      # The Dockerfile builds on `FROM golang:1.23-alpine`, and the official
+      # golang images set GOTOOLCHAIN=local (`go env GOTOOLCHAIN` -> `local`,
+      # printed by the container), so the image CANNOT download a newer
+      # toolchain to satisfy a bumped `go` directive. Measured on this tree:
+      # changing go.mod's `go 1.23` to `go 1.24` left every verdict step RC=0 on
+      # go1.24.13, while `docker build` on the same tree failed
+      # `go: go.mod requires go >= 1.24 (running go 1.23.12; GOTOOLCHAIN=local)`.
+      #
+      # setup-go now installs the Dockerfile's version, so that bump would also
+      # fail `go build` here. This step runs ahead of it so the failure names
+      # BOTH versions and the file to change, instead of leaving a raw toolchain
+      # error as the only explanation. `go mod edit -json` is a pure parse and
+      # still succeeds when the directive outruns the running toolchain
+      # (measured: RC=0, prints `1.24`, on go1.23.12 with GOTOOLCHAIN=local).
+      #
+      # SCOPE OF THE COMPARISON: <major>.<minor> only. A `golang:1.23-alpine`
+      # tag resolves to whichever 1.23 patch is current and the tag does not
+      # state which, so a patch-level directive (`go 1.23.4`) is NOT decided
+      # here. Integer comparison in POSIX shell rather than `sort -V`: busybox
+      # sort has no `-C`, and this lane already avoids resting a verdict on a
+      # tool it has not verified (see the `file` note further down).
+      - name: INVARIANT 3 — go.mod's Go version does not exceed the Dockerfile's
+        if: ${{ !cancelled() }}
+        env:
+          IMAGE_GO: ${{ steps.image-go.outputs.go-version }}
+        run: |
+          set -euo pipefail
+          gomod_go=$(go mod edit -json | jq -r '.Go // empty')
+          if [ -z "${gomod_go}" ]; then
+            echo "::error file=apps/loom-capacity-broker/go.mod::go.mod declares no 'go' directive, so the toolchain it needs cannot be compared with the image's."
+            exit 1
+          fi
+          gomod_mm=$(printf '%s' "${gomod_go}" | cut -d. -f1,2)
+          image_mm=$(printf '%s' "${IMAGE_GO}" | cut -d. -f1,2)
+          echo "go.mod: go ${gomod_go} (${gomod_mm})   Dockerfile: golang:${IMAGE_GO} (${image_mm})"
+          gomod_maj=${gomod_mm%%.*}
+          gomod_min=${gomod_mm#*.}
+          image_maj=${image_mm%%.*}
+          image_min=${image_mm#*.}
+          if [ "${gomod_maj}" -gt "${image_maj}" ] || { [ "${gomod_maj}" -eq "${image_maj}" ] && [ "${gomod_min}" -gt "${image_min}" ]; }; then
+            echo "::error file=apps/loom-capacity-broker/go.mod::go.mod requires go ${gomod_go}, but apps/loom-capacity-broker/Dockerfile builds on golang:${IMAGE_GO}."
+            echo "The official golang images set GOTOOLCHAIN=local, so the image build cannot fetch a newer toolchain and fails with a 'go.mod requires go >= ...; GOTOOLCHAIN=local' error."
+            echo "Raise the Dockerfile's FROM to golang:${gomod_mm}-alpine in the SAME change, or lower the go directive."
+            exit 1
+          fi
+          echo "go.mod's Go version is within what golang:${IMAGE_GO} provides"
+
+      # gofmt -l prints the files that WOULD change. It exits 0 either way, so
+      # the emptiness of its output — not its exit code — is the verdict.
+      - name: gofmt
+        if: ${{ !cancelled() }}
+        run: |
+          set -euo pipefail
+          unformatted=$(gofmt -l .)
+          if [ -n "${unformatted}" ]; then
+            echo "::error::gofmt needed on:"
+            echo "${unformatted}"
+            exit 1
+          fi
+          echo "gofmt clean"
+
+      - name: go build ./...
+        if: ${{ !cancelled() }}
+        run: go build ./...
+
+      - name: go vet ./...
+        if: ${{ !cancelled() }}
+        run: go vet ./...
+
+      # -count=1 is load-bearing, not decoration: it disables the test result
+      # cache. Without it Go can replay a cached PASS for an unchanged package
+      # and print "(cached)" — a green step that executed no assertions, which
+      # is precisely the "control that measures nothing" shape this repo keeps
+      # being bitten by. Same flag, same reason, as sdk-contract.yml's Go job.
+      - name: go test ./... -count=1
+        if: ${{ !cancelled() }}
+        run: go test ./... -count=1 -v
+
+      # The compile the IMAGE performs, with the image's exact flags. Cheap
+      # (seconds, same source): -trimpath and a static CGO_ENABLED=0 link are a
+      # different code path from the default `go build` above, and this app's
+      # image has never been built by anything (KNOWN_UNBUILT), so no other lane
+      # would notice it breaking.
+      #
+      # WHAT THIS STEP DOES NOT ESTABLISH. It is not a stand-in for the image
+      # build and does not make CI green imply `az acr build` succeeds. It
+      # compiles the WORKING TREE; the image compiles only what the Dockerfile
+      # COPYs (go.mod, cmd, internal). setup-go now takes its version from the
+      # same FROM line, so the toolchain minor matches on both sides — the
+      # source set still does not. Two bypasses were measured that this step
+      # alone rated RC=0 while `docker build` on the same tree failed: a go.mod
+      # bumped past the FROM line, and a go.work pulling in a sibling module.
+      # INVARIANT 2, INVARIANT 3 and the job-level GOWORK/GOTOOLCHAIN settings
+      # are what close those two; the general claim — that no divergence between
+      # the two contexts remains — is not one this lane has established.
+      - name: go build with the Dockerfile's flags (static, trimmed, stripped)
+        id: image-build
+        if: ${{ !cancelled() }}
+        env:
+          CGO_ENABLED: '0'
+          GOOS: linux
+        run: go build -trimpath -ldflags="-s -w" -o /tmp/broker ./cmd/broker
+
+      # `go version -m` and not `file`: nothing else in this repo's 127
+      # workflows invokes `file` (grep -rn '^\s\+file ' .github/workflows -> only
+      # this lane), so its presence on the runner image is an assumption, and a
+      # verdict step resting on an unverified tool is how a lane goes red for a
+      # reason that has nothing to do with its subject. `go` is guaranteed here —
+      # setup-go just installed it — and it prints the embedded build settings,
+      # which is the stronger claim anyway: it shows CGO_ENABLED=0 and the
+      # -trimpath/-ldflags the image build depends on actually took effect.
+      # The ONE step that must not carry a bare `!cancelled()`: it reads
+      # /tmp/broker, which only exists if the step above produced it. Gating it
+      # on that step's own outcome — rather than on the job's accumulated status
+      # — keeps it honest in both directions: it still runs when an unrelated
+      # earlier verdict (gofmt, vet) failed, and it does NOT run, reporting a
+      # confusing "no such file", when its own producer failed.
+      - name: Confirm the binary was produced with the image's build settings
+        if: ${{ !cancelled() && steps.image-build.outcome == 'success' }}
+        run: |
+          set -euo pipefail
+          ls -l /tmp/broker
+          go version -m /tmp/broker
