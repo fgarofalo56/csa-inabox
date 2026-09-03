@@ -209,6 +209,7 @@ async function provisionEventHubs(input: any, steps: string[]): Promise<Provisio
       return {
         status: 'remediation',
         gate: {
+          gateId: 'svc-eventhubs',
           reason: 'Azure Event Hubs namespace is not configured for this deployment.',
           remediation: `Set ${e.missing} (and LOOM_EVENTHUB_SUB / LOOM_EVENTHUB_RG, or LOOM_SUBSCRIPTION_ID / LOOM_DLZ_RG) so the eventstream can create its Event Hub. No Microsoft Fabric required.`,
           link: 'https://learn.microsoft.com/azure/event-hubs/event-hubs-create',

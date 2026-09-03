@@ -41,6 +41,43 @@ run-name: >-
 # template). NOT OIDC: this repo's federated credential is scoped to
 # `repo:...:ref:refs/heads/main`, so an OIDC login would authenticate only on a
 # main-ref dispatch and fail for a branch dispatch during a fix.
+#
+# ── WHY IT NOW RUNS BY ITSELF (#4144) ──────────────────────────────────────
+# THIS LANE HAD NEVER RUN FOR REAL. MEASURED 2026-09-01 by
+# `node scripts/ci/check-deploy-staleness.mjs`:
+#
+#   STALE  deploy-report-subscriptions.yml   NEVER RUN  [1 dry run(s) ignored]
+#
+# deploy-integrity.md R3 calls a deploy path that has never run "the loudest
+# case of drift, not a silent pass", and here the consequence is concrete rather
+# than theoretical: bicep (modules/admin-plane/report-subscriptions-job.bicep)
+# CREATES the loom-report-subscriptions job and gives it a schedule, and nothing
+# has ever built the image that job pulls. The delivery runtime exists on the
+# estate and has never had an artifact. Subscriptions keep saving to Cosmos and
+# the editor keeps listing them as enabled while nothing is delivered — the same
+# silent shape as the retired Y1 Function, whose host indexed zero functions.
+#
+# So the disposition here is NOT "declare it deliberately dormant". A dormancy
+# declaration would be a lie about a capability the product already advertises.
+# The trigger below IS the fix, and merging it produces this lane's first real
+# run — see the PR that added it, which states that consequence rather than
+# letting it be discovered.
+#
+# WHY A `push` FILTER AND NOT A SCHEDULE OR A CHAIN. A schedule would rebuild an
+# unchanged image nightly and hold the ACR firewall lease to do it. There is
+# nothing upstream to chain from: MEASURED — none of this lane's WATCHED sources
+# (azure-functions/report-subscriptions/**, the deploy script, this file) is
+# inside build-fiab-images-acr-tasks' `apps/fiab-*/**` push filter, so no image
+# build and no roll is triggered by the same push, and therefore no other
+# workflow is holding the per-registry lease this lane's script takes. A
+# change-driven deploy is also the literal deploy-integrity R2 contract: what is
+# merged is what is deployed.
+#
+# AN AUTOMATIC RUN IS A REAL DEPLOY. `dry_run` defaults true for a DISPATCH; the
+# `inputs` context is empty on push, so `!inputs.dry_run` is true and the deploy
+# step runs. An automatic dry run would clear this lane's NEVER-RUN row while
+# building nothing — precisely the false receipt check-deploy-staleness already
+# refuses by discounting dry runs.
 
 on:
   workflow_dispatch:
@@ -62,13 +99,39 @@ on:
         type: boolean
         default: true
 
+  # Exactly this lane's WATCHED sources in check-deploy-staleness.mjs. Keeping
+  # the two lists identical is what makes the drift this check measures
+  # self-clearing rather than a row somebody has to notice.
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/deploy-report-subscriptions.yml'
+      - 'azure-functions/report-subscriptions/**'
+      - 'scripts/csa-loom/deploy-report-subscriptions-job.sh'
+
 permissions:
   contents: read
 
-# Never cancel in flight: this holds the ACR firewall lease while the image
-# builds (#2603).
+# KEYED ON THE SHARED RESOURCE, NOT ON THIS WORKFLOW'S NAME.
+# `deploy-loom-uat.yml` carries this SAME group, and the reasoning is recorded
+# in full at its own concurrency block. In short: both lanes list their own
+# workflow file in `push: paths:` above, so one commit can start both, and both
+# scripts then acquire the same per-registry ACR firewall lease
+# (deploy-report-subscriptions-job.sh:108, deploy-loom-uat-job.sh:124 —
+# acr-firewall-lease.sh, one lease per registry). Workflow-name-keyed groups are
+# disjoint, so GitHub would not serialize them, and the loser would wait out
+# LOOM_ACR_LEASE_WAIT_MINUTES (25) and HARD-FAIL. Serialization belongs at the
+# contended resource. Region is a PROXY for the registry — it is the coarsest
+# key available at expression time (workflow-level `concurrency` is evaluated
+# before any step runs, and the ACR name is resolved at runtime) and it never
+# splits one registry into two groups.
+#
+# Never cancel in flight: a run in flight HOLDS the lease (#2603). A run still
+# QUEUED has executed no steps, so the only thing this group can lose — GitHub
+# keeps one pending run per group — touched nothing and reads as `cancelled`,
+# which check-deploy-staleness counts as no evidence rather than as a failure.
 concurrency:
-  group: deploy-report-subscriptions-${{ inputs.region || 'centralus' }}
+  group: acr-firewall-${{ inputs.region || 'centralus' }}
   cancel-in-progress: false
 
 env:

@@ -61,6 +61,7 @@ export const BUILDERS_GATE_META: Record<string, GateMeta> = {
     surfaces: [
       { path: '/items/logic-app', label: 'Workflow designer — save / run / run history' },
       { path: '/api/items/logic-app/*', label: 'Workflow BFF (auto-bind, PUT definition, trigger run, runs)' },
+      { path: '/api/apps/[id]/install', label: 'App install — logic-app provisioner' },
     ],
     fixit: { kind: 'env-picker' },
     autoResolveNote:

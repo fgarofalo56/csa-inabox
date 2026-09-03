@@ -390,9 +390,17 @@ if [ "${#MISSING[@]}" -gt 0 ]; then
 ::error::  IL5        : .github/workflows/gov-provision-dataplane-images.yml
 ::error::               boundary=il5  apply=true  resource_group=<il5-admin-rg>
 ::error::
-::error::The tag the TEMPLATE pulls is appImageTags.duckdb (LOOM_DUCKDB_TAG, default v0.1)
+::error::FOR A LOOM-BUILT IMAGE (loom-duckdb, loom-unity — no '/' in the repo): the tag the
+::error::TEMPLATE pulls is appImageTags.<app> (LOOM_DUCKDB_TAG / LOOM_UNITY_TAG, default v0.1)
 ::error::in platform/fiab/bicep/params/<boundary>.bicepparam. The producer's image_tag input
 ::error::defaults to the SAME v0.1 — if you override one you must override the other.
+::error::
+::error::FOR A THIRD-PARTY MIRRORED IMAGE (a repo carrying a '/', e.g. valkey/valkey:<tag>):
+::error::there is no image_tag input and nothing to override. That tag is pinned in
+::error::platform/fiab/images/upstream-images.json and reaches this registry ONLY when
+::error::scripts/ci/mirror-upstream-images.sh runs — in Gov that is inside
+::error::gov-provision-dataplane-images.yml (apply=true) and nowhere else. Run that producer;
+::error::do not bump a param.
 REMEDIATION
   exit 3
 fi

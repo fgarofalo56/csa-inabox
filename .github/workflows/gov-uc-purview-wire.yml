@@ -41,6 +41,30 @@ name: gov-uc-purview-wire
 #
 # Non-interactive: uses the same Gov deploy SP + endpoints as gov-console-roll.
 # Safe to re-run (idempotent bicep + env upserts).
+#
+# ── DISPATCH-ONLY BY DESIGN, AND DECLARED (#4144) ──────────────────────────
+# `node scripts/ci/check-deploy-staleness.mjs` reported this lane STALE (last
+# success 2026-08-11, code 2026-08-31, +20d) on every run, into a void: nothing
+# in the repo said whether the lag was a decision or an oversight. It is a
+# decision, and it is now recorded where the check can read it:
+#
+#   scripts/ci/deploy-path-dispositions.json → gov-uc-purview-wire.yml
+#   disposition dispatch-only · owner fgarofalo56 · acknowledges drift
+#
+# WHY, MEASURED. This lane builds loom-unity on the Gov ACR and deploys it plus
+# the Purview wiring into the GCC-High estate, and that estate is DELIBERATELY
+# STOPPED: scripts/ci/estate-pause-declaration.json declares boundary GCC-High
+# paused by fgarofalo56, declaredOn 2026-08-26, reviewBy 2026-11-24, on the
+# strength of deploy-fiab-gcch failing 17 consecutive runs at the ADX preflight
+# with byte-identical output. An automatic trigger would build and deploy into a
+# stopped estate from an unattended run — the outcome the pause mandate exists
+# to prevent.
+#
+# The register entry's `reviewBy` is deliberately the pause declaration's own
+# date, so the two cannot drift apart: when the pause is lifted or renewed, this
+# decision is re-made with it. TO CHANGE THIS: resume the Gov estate, dispatch
+# this lane once to land the accumulated wiring, then re-decide whether it earns
+# an automatic trigger.
 on:
   workflow_dispatch:
     inputs:

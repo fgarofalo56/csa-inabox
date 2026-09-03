@@ -211,7 +211,19 @@ export const VALUE_HINT: Record<string, string> = {
   // loom-default-alerts action group from monitoring-default-alerts.bicep.
   LOOM_ALERT_ACTION_GROUP_ID: '/subscriptions/<sub>/resourceGroups/<admin-rg>/providers/Microsoft.Insights/actionGroups/loom-default-alerts',
   LOOM_SECRET_EXPIRY_WARN_DAYS: '60',
+  // #3513 review — a key that is EDITABLE but has no VALUE_HINT renders the gate
+  // TITLE in its Input placeholder (honest-gate.tsx:475 falls back to
+  // `setting.description`), so the operator is shown "Azure Data Factory (mirror
+  // CDC)" where a shape hint belongs. Every key made writable by the Fix-it work
+  // needs one. LOOM_ADF_NAME is the canonical factory spelling; LOOM_ADF_FACTORY
+  // is its alias and keeps the same hint.
+  LOOM_ADF_NAME: '<data-factory-name>',
   LOOM_ADF_FACTORY: '<data-factory-name>',
+  LOOM_ADF_SUB: '<subscription-guid (defaults to LOOM_SUBSCRIPTION_ID)>',
+  LOOM_ADF_RG: '<data-factory-resource-group (defaults to LOOM_DLZ_RG)>',
+  LOOM_SYNAPSE_SUB: '<subscription-guid (defaults to LOOM_SUBSCRIPTION_ID)>',
+  LOOM_EVENTHUB_SUB: '<subscription-guid (defaults to LOOM_SUBSCRIPTION_ID)>',
+  LOOM_EVENTHUB_RG: '<event-hubs-resource-group (defaults to LOOM_DLZ_RG)>',
   LOOM_PURVIEW_ACCOUNT: '<purview-account-name>',
   LOOM_GRAPH_USERS_ENABLED: 'true',
   // Usage analytics embed (F21) + Govern embed (F2) — per-cloud report backend.

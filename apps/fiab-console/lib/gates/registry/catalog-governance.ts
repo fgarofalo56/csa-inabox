@@ -18,7 +18,10 @@ export const CATALOG_GOVERNANCE_GATE_META: Record<string, GateMeta> = {
     fixit: { kind: 'env-picker' },
   },
   'svc-purview-uc': {
-    surfaces: [{ path: '/governance/catalog', label: 'Unified catalog (Purview UC)' }],
+    surfaces: [
+      { path: '/governance/catalog', label: 'Unified catalog (Purview UC)' },
+      { path: '/api/apps/[id]/install', label: 'App install — data-product provisioner (UC endpoint)' },
+    ],
     fixit: { kind: 'resource-picker' },
     loaders: { LOOM_PURVIEW_UC_ENDPOINT: L.purview },
   },
