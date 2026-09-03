@@ -684,6 +684,30 @@ export function EvaluationEditor({ item, id }: { item: FabricItemType; id: strin
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
 
+  // ── AUTO-BIND (#3543) — dataset + model deployment are PICKED, not typed ───
+  // Both were free `<Input>`s (an `azureml://…` URI and a deployment name),
+  // i.e. loom_no_freeform_config + auto-bind-by-default §5: Loom enumerates
+  // both, so it asks the backend. dataset → GET /api/items/dataset[?project=]
+  // (registered assets) + the same AdlsBrowseDialog the Dataset editor uses,
+  // for a path not registered yet; deployment → GET
+  // /api/foundry/model-deployments (real ARM CognitiveServices deployments).
+  const [assets] = useApi<{ assets: any[] }>(
+    `/api/items/dataset${project ? `?project=${encodeURIComponent(project)}` : ''}`, [project]);
+  const [deployments] = useApi<{ deployments: { name: string; modelName?: string }[] }>('/api/foundry/model-deployments');
+  const [browseOpen, setBrowseOpen] = useState(false);
+  const datasetOptions: { uri: string; label: string }[] = useMemo(() => {
+    const rows = (assets.data?.assets || [])
+      .filter((a: any) => typeof a?.dataUri === 'string' && a.dataUri)
+      .map((a: any) => ({ uri: String(a.dataUri), label: `${a.name || a.dataUri}${a.dataType ? ` · ${a.dataType}` : ''}` }));
+    // A browsed URI is not (yet) a registered asset — keep it selectable so the
+    // Dropdown never holds a value it cannot represent.
+    if (form.datasetId && !rows.some((r: { uri: string }) => r.uri === form.datasetId)) {
+      rows.unshift({ uri: form.datasetId, label: `${form.datasetId} · browsed` });
+    }
+    return rows;
+  }, [assets.data, form.datasetId]);
+  const deploymentOptions = deployments.data?.deployments || [];
+
   const create = async () => {
     if (!project) { setMsg('Pick a project first.'); return; }
     setBusy(true); setMsg(null);
@@ -741,12 +765,46 @@ export function EvaluationEditor({ item, id }: { item: FabricItemType; id: strin
         <Subtitle2>New evaluation</Subtitle2>
         <div className={s.formRow}>
           <span>Display name</span><Input value={form.displayName} onChange={(_, d) => setForm((f) => ({ ...f, displayName: d.value }))} />
-          <span>Dataset ID</span><Input value={form.datasetId} onChange={(_, d) => setForm((f) => ({ ...f, datasetId: d.value }))} placeholder="azureml://datastores/.../paths/..." />
-          <span>Model deployment</span><Input value={form.modelDeployment} onChange={(_, d) => setForm((f) => ({ ...f, modelDeployment: d.value }))} placeholder="gpt-4o-mini" />
+          <span>Dataset</span>
+          <div className={s.toolbar} style={{ gap: tokens.spacingHorizontalS }}>
+            <Dropdown style={{ flex: 1, minWidth: 240 }} aria-label="Dataset"
+              value={form.datasetId} selectedOptions={form.datasetId ? [form.datasetId] : []}
+              placeholder={assets.loading ? 'Loading data assets…' : datasetOptions.length ? 'Select a registered data asset' : 'No data assets — use Browse…'}
+              onOptionSelect={(_, d) => d.optionValue && setForm((f) => ({ ...f, datasetId: d.optionValue! }))}>
+              {datasetOptions.map((o) => <Option key={o.uri} value={o.uri} text={o.uri}>{o.label}</Option>)}
+            </Dropdown>
+            <Button icon={<FolderOpen20Regular />} onClick={() => setBrowseOpen(true)}>Browse…</Button>
+          </div>
+          <span>Model deployment</span>
+          <Dropdown aria-label="Model deployment"
+            value={form.modelDeployment} selectedOptions={form.modelDeployment ? [form.modelDeployment] : []}
+            placeholder={deployments.loading ? 'Loading deployments…' : deploymentOptions.length ? 'Select a model deployment (optional)' : 'None deployed'}
+            disabled={!deploymentOptions.length}
+            onOptionSelect={(_, d) => setForm((f) => ({ ...f, modelDeployment: d.optionValue || '' }))}>
+            {deploymentOptions.map((d) => (
+              <Option key={d.name} value={d.name} text={d.name}>{d.name}{d.modelName ? ` · ${d.modelName}` : ''}</Option>
+            ))}
+          </Dropdown>
           <span>Evaluators</span><Input value={form.evaluators} onChange={(_, d) => setForm((f) => ({ ...f, evaluators: d.value }))} placeholder="comma-separated" />
         </div>
+        {form.datasetId && <Caption1>Dataset URI: <code>{form.datasetId}</code></Caption1>}
+        {!deployments.loading && !deploymentOptions.length && (
+          // ux-baseline G2: the gate carries the action that resolves it. The
+          // field is optional, so the evaluation still submits without one.
+          <MessageBar intent="info">
+            <MessageBarBody>
+              <MessageBarTitle>No model deployments in this account</MessageBarTitle>
+              {deployments.error
+                ? `${deployments.error}${deployments.hint ? ` — ${deployments.hint}` : ''}`
+                : 'An evaluation can run on a dataset alone; deploy a model to score generations against it.'}
+              <div className={s.toolbar} style={{ marginTop: tokens.spacingVerticalXS }}>
+                <Button as="a" href="/items/ai-foundry-hub/new" size="small">Deploy a model</Button>
+              </div>
+            </MessageBarBody>
+          </MessageBar>
+        )}
         <div className={s.toolbar} style={{ marginTop: tokens.spacingVerticalS }}>
-          <Button appearance="primary" onClick={create} disabled={busy}>{busy ? 'Submitting…' : 'Create evaluation'}</Button>
+          <Button appearance="primary" onClick={create} disabled={busy || !form.displayName || !form.datasetId}>{busy ? 'Submitting…' : 'Create evaluation'}</Button>
           {msg && <Caption1>{msg}</Caption1>}
         </div>
       </div>
@@ -767,6 +825,10 @@ export function EvaluationEditor({ item, id }: { item: FabricItemType; id: strin
         </div>
       )}
     </div>
+    {/* Same real ADLS Gen2 browser the Dataset editor uses (function
+        declaration, hoisted — defined below this component). */}
+    <AdlsBrowseDialog open={browseOpen} onClose={() => setBrowseOpen(false)}
+      onPick={(uri) => { setForm((f) => ({ ...f, datasetId: uri })); setBrowseOpen(false); }} />
   </Shell>;
 }
 
@@ -1557,6 +1619,23 @@ function VectorSearchDesigner({
   const algoNames = useMemo(() => algorithms.map((a) => a.name).filter(Boolean), [algorithms]);
   const vecNames = useMemo(() => vectorizers.map((v) => v.name).filter(Boolean), [vectorizers]);
 
+  // AUTO-BIND (#3543, boy-scout on this file) — the vectorizer's Azure OpenAI
+  // endpoint was a hand-typed `https://<name>.openai.azure.com`. Loom already
+  // enumerates those accounts (ARM Accounts_List) for the Foundry hub picker,
+  // so it is CHOSEN. A saved endpoint outside the discovered list stays
+  // selectable so an index written elsewhere still shows its real value.
+  const [aoaiAccounts] = useApi<{ accounts: { name: string; endpoint?: string }[] }>('/api/foundry/accounts');
+  const aoaiEndpoints = useMemo(() => {
+    const rows = (aoaiAccounts.data?.accounts || [])
+      .filter((a) => typeof a.endpoint === 'string' && a.endpoint)
+      .map((a) => ({ uri: String(a.endpoint), label: `${a.name} · ${a.endpoint}` }));
+    for (const v of vectorizers) {
+      const cur = v.azureOpenAIParameters?.resourceUri;
+      if (cur && !rows.some((r) => r.uri === cur)) rows.push({ uri: cur, label: `${cur} · not in this subscription` });
+    }
+    return rows;
+  }, [aoaiAccounts.data, vectorizers]);
+
   // AIF-2 — pre-flight the vectorizer/field consistency (dimension mismatch +
   // dangling refs) against the live index fields so the classic
   // integrated-vectorization footgun surfaces here, not as an opaque PUT 400.
@@ -1744,7 +1823,16 @@ function VectorSearchDesigner({
             {vectorizers.map((v, i) => (
               <TableRow key={i}>
                 <TableCell><Input size="small" value={v.name} aria-label={`vectorizer-${i}-name`} onChange={(_, d) => patchVectorizerName(i, d.value)} className={s.fdInput} /></TableCell>
-                <TableCell><Input size="small" value={v.azureOpenAIParameters.resourceUri} aria-label={`vectorizer-${i}-uri`} placeholder="https://<name>.openai.azure.com" onChange={(_, d) => patchVectorizer(i, { resourceUri: d.value })} className={s.fdInput} /></TableCell>
+                <TableCell>
+                  <Dropdown size="small" className={s.fdInput} aria-label={`vectorizer-${i}-endpoint`}
+                    value={v.azureOpenAIParameters.resourceUri || ''}
+                    selectedOptions={v.azureOpenAIParameters.resourceUri ? [v.azureOpenAIParameters.resourceUri] : []}
+                    placeholder={aoaiAccounts.loading ? 'Loading accounts…' : aoaiEndpoints.length ? 'Select an Azure OpenAI account' : 'No accounts found'}
+                    disabled={!aoaiEndpoints.length}
+                    onOptionSelect={(_, d) => patchVectorizer(i, { resourceUri: d.optionValue || '' })}>
+                    {aoaiEndpoints.map((e) => <Option key={e.uri} value={e.uri} text={e.uri}>{e.label}</Option>)}
+                  </Dropdown>
+                </TableCell>
                 <TableCell><Input size="small" value={v.azureOpenAIParameters.deploymentId} aria-label={`vectorizer-${i}-deployment`} placeholder="text-embedding-3-large" onChange={(_, d) => patchVectorizer(i, { deploymentId: d.value })} className={s.fdInput} /></TableCell>
                 <TableCell>
                   <Dropdown size="small" value={v.azureOpenAIParameters.modelName || ''} selectedOptions={v.azureOpenAIParameters.modelName ? [v.azureOpenAIParameters.modelName] : []} placeholder="model" aria-label={`vectorizer-${i}-model`}
@@ -3169,9 +3257,17 @@ export function DatasetEditor({ item, id }: { item: FabricItemType; id: string }
               <Option value="mltable">mltable</Option>
             </Dropdown>
             <span>URI</span>
+            {/* AUTO-BIND (#3543, boy-scout on this file): the data URI is PICKED
+                from the real DLZ ADLS Gen2 containers via AdlsBrowseDialog and
+                is read-only here, so an `abfss://…` address is never typed by
+                hand. Registering a path outside the containers Loom enumerates
+                is therefore no longer possible from this form — the intended
+                trade under loom_no_freeform_config. */}
             <div className={s.toolbar} style={{ gap: tokens.spacingHorizontalS }}>
-              <Input value={form.dataUri} onChange={(_, d) => setForm((f) => ({ ...f, dataUri: d.value }))} placeholder="azureml:// or abfss://..." style={{ flex: 1, minWidth: 240 }} />
+              <Input readOnly value={form.dataUri} aria-label="Data asset URI"
+                placeholder="Pick a file or folder with Browse…" style={{ flex: 1, minWidth: 240 }} />
               <Button icon={<FolderOpen20Regular />} onClick={() => setBrowseOpen(true)}>Browse…</Button>
+              {form.dataUri && <Button appearance="subtle" onClick={() => setForm((f) => ({ ...f, dataUri: '' }))}>Clear</Button>}
             </div>
             <span>Version</span><Input value={form.version} onChange={(_, d) => setForm((f) => ({ ...f, version: d.value }))} />
             <span>Description</span><Input value={form.description} onChange={(_, d) => setForm((f) => ({ ...f, description: d.value }))} />
