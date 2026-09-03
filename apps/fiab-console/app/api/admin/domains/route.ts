@@ -30,7 +30,8 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { tenantScopeId } from '@/lib/auth/session';
 import { pdpCheck } from '@/lib/auth/pdp/enforce';
-import { tenantSettingsContainer, workspacesContainer } from '@/lib/azure/cosmos-client';
+import { tenantSettingsContainer } from '@/lib/azure/cosmos-client';
+import { listTenantWorkspaceTags } from '@/lib/clients/workspaces-client';
 import {
   mirrorDomainUpsert,
   mirrorDomainMove,
@@ -71,21 +72,27 @@ async function loadOrSeed(tenantId: string, who: string): Promise<DomainsDoc> {
 }
 
 /**
- * Workspace counts per domain — a Cosmos GROUP BY over the workspaces
- * container's `domain` field, scoped to the tenant partition. Returns an
- * empty map (never throws) when the workspaces container is unreachable so
- * the domain list still renders. Matches the count Fabric shows beside each
- * domain on the Domains tab.
+ * Workspace counts per domain, TENANT-WIDE (#3747).
+ *
+ * Delegates to the ONE shared counter, `listTenantWorkspaceTags`, which the
+ * "Federated data-mesh" panel also uses — so the two surfaces cannot report
+ * different numbers for the same estate again.
+ *
+ * It used to run its own `WHERE c.tenantId = @t` with `{ partitionKey: tenantId }`
+ * where `tenantId` was `tenantScopeId(session)`. `Workspace.tenantId` is the
+ * partition key and holds the CREATOR's oid, never an Entra tid, so on any
+ * session that carries a `tid` claim that query addressed a partition holding no
+ * documents and reported 0 for every domain — while the mesh panel counted the
+ * caller's own workspaces and showed a different number.
+ *
+ * Returns an empty map (never throws) when the workspaces container is
+ * unreachable so the domain list still renders.
  */
-async function workspaceCounts(tenantId: string): Promise<Record<string, number>> {
+async function workspaceCounts(callerTid: string | undefined): Promise<Record<string, number>> {
   try {
-    const wsC = await workspacesContainer();
-    const { resources } = await wsC.items.query<{ domain?: string; n: number }>({
-      query: 'SELECT c.domain AS domain, COUNT(1) AS n FROM c WHERE c.tenantId = @t GROUP BY c.domain',
-      parameters: [{ name: '@t', value: tenantId }],
-    }, { partitionKey: tenantId }).fetchAll();
+    const res = await listTenantWorkspaceTags({ callerTid });
     const out: Record<string, number> = {};
-    for (const r of resources) if (r.domain) out[r.domain] = r.n;
+    for (const w of res.workspaces) if (w.domain) out[w.domain] = (out[w.domain] || 0) + 1;
     return out;
   } catch {
     return {};
@@ -128,7 +135,7 @@ export const GET = withSession(async (_req, { session: s }) => {
     // fetches GET /api/admin/domains/purview-status LAZILY after the list renders
     // and marks `purviewLinked` / shows the honest mirror gate from that result.
     const [counts, unity] = await Promise.all([
-      workspaceCounts(tenantId), unityLinkStatus(domainCatalogs),
+      workspaceCounts(s.claims.tid), unityLinkStatus(domainCatalogs),
     ]);
     // D2 tier per domain for the calling session: tenant-admin / domain-admin /
     // domain-contributor / null. Drives the tier badge on /admin/permissions and

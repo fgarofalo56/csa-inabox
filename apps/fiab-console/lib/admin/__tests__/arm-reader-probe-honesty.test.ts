@@ -33,6 +33,9 @@ vi.mock('@/lib/azure/arm-client', () => armMock);
 import {
   runExtraProbes,
   classifyArmFailure,
+  classifyProbeFailure,
+  probeDenied,
+  probeCauseNote,
   armStatusFromMessage,
   ARM_PROBE_BUDGET_MS,
   ARM_PROBE_RETRY_BUDGET_MS,
@@ -201,5 +204,90 @@ describe('probe-arm-reader — an unfinished check establishes nothing', () => {
 
   it('the retry budget is strictly larger than the first attempt', () => {
     expect(ARM_PROBE_RETRY_BUDGET_MS).toBeGreaterThan(ARM_PROBE_BUDGET_MS);
+  });
+});
+
+/**
+ * #3793 — the SHARED classifier the other ~19 probes use.
+ *
+ * `probeArmReader` was converted to a status parse by #3729; the remaining
+ * probes kept `const DENIED = /401|403|forbidden|…/i`, so the exact same
+ * false positive survived everywhere else: any failure message that carries
+ * the subscription id classified as an authorization denial on an estate whose
+ * subscription contains those digits, and `/admin/readiness` then rendered a
+ * role-grant script for a timeout.
+ */
+describe('classifyProbeFailure — the shared probe classifier (#3793)', () => {
+  const SUB_MSG = (tail: string) =>
+    `GET https://management.azure.com/subscriptions/${SUB_WITH_403}/resourceGroups/${RG}?api-version=2021-04-01 ${tail}`;
+
+  it('does NOT classify a 500 as denied just because the subscription id contains 403', () => {
+    const e = new Error(SUB_MSG('failed 500: timeout'));
+    expect(classifyProbeFailure(e)).toBe('inconclusive');
+    expect(probeDenied(e)).toBe(false);
+  });
+
+  it('does NOT classify a bare transport error carrying the 403 subscription as denied', () => {
+    const e = Object.assign(new Error(SUB_MSG('socket hang up')), { code: 'ECONNRESET' });
+    expect(classifyProbeFailure(e)).toBe('inconclusive');
+    expect(probeDenied(e)).toBe(false);
+  });
+
+  it('does NOT classify an api-version containing 401 as denied', () => {
+    const e = new Error('GET https://x/y?api-version=2024-01-401 request timed out after 6000ms');
+    expect(probeDenied(e)).toBe(false);
+  });
+
+  it('DOES classify a structured RestError statusCode 403 as denied', () => {
+    const e = Object.assign(new Error('operation not permitted'), { statusCode: 403 });
+    expect(classifyProbeFailure(e)).toBe('denied');
+  });
+
+  it('DOES classify a Cosmos-shaped numeric code 401 as denied', () => {
+    const e = Object.assign(new Error('request blocked'), { code: 401 });
+    expect(classifyProbeFailure(e)).toBe('denied');
+  });
+
+  it('DOES classify anchored status wording as denied', () => {
+    expect(probeDenied(new Error(SUB_MSG('failed 403: AuthorizationFailed')))).toBe(true);
+    expect(probeDenied(new Error('Kusto request rejected — Status: 401 (Unauthorized)'))).toBe(true);
+    expect(probeDenied(new Error('The request is not authorized to perform this operation.'))).toBe(true);
+    expect(probeDenied(new Error('Server responded 403 (Forbidden)'))).toBe(true);
+  });
+
+  it('classifies a completed non-auth answer as not-denied, never inconclusive', () => {
+    expect(classifyProbeFailure(Object.assign(new Error('gone'), { statusCode: 404 }))).toBe('not-denied');
+    expect(classifyProbeFailure(new Error(SUB_MSG('failed 404: ResourceGroupNotFound')))).toBe('not-denied');
+  });
+
+  it('a throttle is inconclusive, not denied and not a config fault', () => {
+    expect(classifyProbeFailure(Object.assign(new Error('too many'), { statusCode: 429 }))).toBe('inconclusive');
+  });
+
+  it('probeCauseNote says "not established" only for the inconclusive case', () => {
+    expect(probeCauseNote(new Error(SUB_MSG('failed 500: timeout')))).toMatch(/cause not established/i);
+    expect(probeCauseNote(new Error(SUB_MSG('failed 500: timeout')))).not.toMatch(/grant|role assignment/i);
+    expect(probeCauseNote(Object.assign(new Error('nope'), { statusCode: 403 }))).toBe('');
+  });
+});
+
+/**
+ * The classifier is only worth having if the PROBES use it. These exercise a
+ * sample of the converted probes end-to-end: a 500 whose message carries the
+ * 403-bearing subscription must not produce a role-grant remediation.
+ */
+describe('converted probes no longer manufacture a denial from a subscription id (#3793)', () => {
+  it('the Azure SQL probe reports a 500 as warn with no role-grant script', async () => {
+    process.env.LOOM_AZURE_SQL_DEFAULT_SERVER = 'sql-loom';
+    armMock.armGet.mockRejectedValue(
+      new Error(`ARM GET /subscriptions/${SUB_WITH_403}/providers/Microsoft.Sql/servers failed 500: InternalServerError`),
+    );
+    const all = await runExtraProbes(h);
+    const r = all.find((c) => c.id === 'probe-azure-sql');
+    expect(r, 'probe-azure-sql did not run').toBeTruthy();
+    expect(r!.status).toBe('warn');
+    expect(r!.fixScript, 'a role-grant script was offered for a 500').toBeUndefined();
+    expect(r!.remediation || '').not.toMatch(/Grant the Console UAMI/i);
+    delete process.env.LOOM_AZURE_SQL_DEFAULT_SERVER;
   });
 });

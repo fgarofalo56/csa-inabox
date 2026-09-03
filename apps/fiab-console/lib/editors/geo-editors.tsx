@@ -105,9 +105,15 @@ function useGeoItemState<T extends Record<string, unknown>>(slug: string, id: st
           setLoad('error');
           return;
         }
-        if (j?.ok && j.item?.state) {
-          setState((prev) => ({ ...prev, ...(j.item.state as T) }));
-          setSavedAt(j.item.updatedAt || null);
+        // #3878 — `/api/cosmos-items/<type>/<id>` GET answers the item DOC bare
+        // (`NextResponse.json(access.item)`), NOT `{ok, item}`. Reading `j.ok`
+        // here was always undefined, so a successfully-read record with real
+        // saved state fell to 'absent' and the canvas opened empty. Accept both
+        // shapes: the sibling POST on `/api/cosmos-items/<type>` DOES wrap.
+        const doc = (j && typeof j === 'object' && 'item' in j ? (j as any).item : j) as any;
+        if (doc?.state) {
+          setState((prev) => ({ ...prev, ...(doc.state as T) }));
+          setSavedAt(doc.updatedAt || null);
           setLoad('loaded');
         } else {
           setLoad('absent');
@@ -132,8 +138,13 @@ function useGeoItemState<T extends Record<string, unknown>>(slug: string, id: st
         body: JSON.stringify({ state }),
       });
       const j = await r.json();
-      if (!j?.ok) { setError(j?.error || `HTTP ${r.status}`); return false; }
-      setSavedAt(j.item?.updatedAt || new Date().toISOString());
+      // #3878 — PATCH answers the updated resource BARE. `!j?.ok` was true on
+      // every successful save, so the editor showed an error banner and stayed
+      // dirty over a write that had in fact landed. Judge the HTTP status, and
+      // an explicit `ok:false` when a route sends one.
+      if (!r.ok || j?.ok === false) { setError(j?.error || `HTTP ${r.status}`); return false; }
+      const saved = (j && typeof j === 'object' && 'item' in j ? (j as any).item : j) as any;
+      setSavedAt(saved?.updatedAt || new Date().toISOString());
       setDirty(false);
       // The server now holds what we hold, so later saves are safe.
       setLoad('loaded');

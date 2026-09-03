@@ -118,6 +118,62 @@ export interface AdminWorkspaceScope {
   callerTid: string | undefined;
 }
 
+/** One tenant-wide workspace row, id + domain tag only. */
+export interface TenantWorkspaceTag {
+  id: string;
+  domain?: string;
+}
+
+export interface TenantWorkspaceTagsResult {
+  workspaces: TenantWorkspaceTag[];
+  degraded: boolean;
+  degradedReasons: string[];
+}
+
+/**
+ * Every workspace IN THE CALLER'S TENANT, id + domain tag only (#3747).
+ *
+ * THE ONE counter behind both Domains panels. Before this existed the
+ * "Federated data-mesh" summary and the domain List each computed their own
+ * workspace count from a DIFFERENT wrong scope, and disagreed on screen:
+ *
+ *   - `domain-mesh.readWorkspaceTags` queried `WHERE c.tenantId = @t` with
+ *     `{ partitionKey: ownerOid }` — `Workspace.tenantId` holds the CREATOR's
+ *     oid, so that is one creator's workspaces, not the tenant's.
+ *   - `/api/admin/domains workspaceCounts` did the same with
+ *     `tenantScopeId(session)`, which is the real Entra tid when the claim is
+ *     present — and no workspace doc is partitioned by a tid, so it read an
+ *     empty partition and reported 0 for every domain.
+ *
+ * The correct tenant-wide shape is `WHERE c.tid = @tid` with NO `partitionKey`
+ * option (cross-partition fan-out), exactly as `listAllWorkspacesAdmin` does:
+ * `tid` is the stamped Entra tenant, `tenantId` is the partition key holding a
+ * creator oid. Passing a `partitionKey` here is the bug, not an optimisation.
+ *
+ * Fails CLOSED on an unconfirmed tenancy, mirroring `listAllWorkspacesAdmin`:
+ * with no caller tid there is no positive match to make, so the result is empty
+ * with a named reason rather than an unscoped read.
+ */
+export async function listTenantWorkspaceTags(
+  scope: AdminWorkspaceScope,
+): Promise<TenantWorkspaceTagsResult> {
+  if (!scope.callerTid) {
+    return { workspaces: [], degraded: true, degradedReasons: ['tenant-scope-unconfirmed'] };
+  }
+  const wsC = await workspacesContainer();
+  const { resources } = await wsC.items
+    .query<TenantWorkspaceTag>({
+      query: 'SELECT c.id, c.domain FROM c WHERE c.tid = @tid',
+      parameters: [{ name: '@tid', value: scope.callerTid }],
+    })
+    .fetchAll();
+  return {
+    workspaces: (resources || []).filter((w) => !!w?.id),
+    degraded: false,
+    degradedReasons: [],
+  };
+}
+
 /**
  * Enumerate every workspace IN THE CALLER'S TENANT with live item counts,
  * last-activity, and resolved owners. Cross-partition Cosmos reads only.

@@ -29,7 +29,8 @@
  *
  * Loom (Cosmos) stays authoritative; this module only READS and never mutates.
  */
-import { workspacesContainer, itemsContainer } from '@/lib/azure/cosmos-client';
+import { itemsContainer } from '@/lib/azure/cosmos-client';
+import { listTenantWorkspaceTags } from '@/lib/clients/workspaces-client';
 import { loadOrSeedDomains, type DomainItem } from '@/lib/azure/domain-registry';
 import { rootAncestorId } from '@/lib/azure/domain-hierarchy';
 import { unityName, unityLinkStatus } from '@/lib/azure/unified-domain-mapper';
@@ -90,27 +91,36 @@ export interface DomainMeshResult {
 /**
  * workspaceId → domain id, plus a per-domain direct workspace count.
  *
- * `ownerOid` is the CREATOR's Entra oid, not a tenant scope: the `workspaces`
- * container is partitioned on `/tenantId` and `Workspace.tenantId` holds the
- * creator's oid. See the note on {@link getDomainMesh}.
+ * TENANT-WIDE (#3747). Delegates to the one shared counter,
+ * `listTenantWorkspaceTags`, so this panel and the Domains list cannot report
+ * different numbers for the same estate. It used to run its own
+ * `WHERE c.tenantId = @t` with `{ partitionKey: ownerOid }` — that is the
+ * CREATOR's partition, so the mesh only ever counted the caller's own
+ * workspaces while the sibling list counted (an empty) tid partition.
+ *
+ * `callerTid` is `session.claims.tid`, never `tenantScopeId()`: an unconfirmed
+ * tenancy must fail closed rather than fall back to an oid that would silently
+ * re-introduce the per-creator scope.
  */
 async function readWorkspaceTags(
-  ownerOid: string,
+  callerTid: string | undefined,
 ): Promise<{ configured: boolean; wsToDomain: Map<string, string>; total: number; hint?: string }> {
   try {
-    const c = await workspacesContainer();
-    const { resources } = await c.items
-      .query<{ id: string; domain?: string }>(
-        {
-          query: 'SELECT c.id, c.domain FROM c WHERE c.tenantId = @t',
-          parameters: [{ name: '@t', value: ownerOid }],
-        },
-        { partitionKey: ownerOid },
-      )
-      .fetchAll();
+    const res = await listTenantWorkspaceTags({ callerTid });
+    if (res.degraded) {
+      return {
+        configured: false,
+        wsToDomain: new Map(),
+        total: 0,
+        hint:
+          'Workspace rollup unavailable: your sign-in session carries no Entra tenant (`tid`) claim, so ' +
+          'Loom cannot scope the tenant-wide workspace count and will not run it unscoped. Sign out and ' +
+          'sign in again to mint a session that carries `tid`.',
+      };
+    }
     const wsToDomain = new Map<string, string>();
-    for (const w of resources) if (w.id && w.domain) wsToDomain.set(w.id, w.domain);
-    return { configured: true, wsToDomain, total: resources.length };
+    for (const w of res.workspaces) if (w.id && w.domain) wsToDomain.set(w.id, w.domain);
+    return { configured: true, wsToDomain, total: res.workspaces.length };
   } catch (e: any) {
     return { configured: false, wsToDomain: new Map(), total: 0, hint: `Workspace store unreachable: ${e?.message || String(e)}.` };
   }
@@ -177,31 +187,36 @@ function depthOf(items: DomainItem[], id: string): number {
  * Reads only (never mutates). Each surface degrades to an honest gate when its
  * back-end is unconfigured.
  *
- * TWO SCOPES, DELIBERATELY SEPARATE (#3753). They are different partition keys
- * over different containers and collapsing them is the bug this signature exists
- * to prevent:
+ * TWO SCOPES, DELIBERATELY SEPARATE (#3753). They are different containers and
+ * collapsing them is the bug this signature exists to prevent:
  *
  *   • `tenantScope` — `tenantScopeId(session)` (= `tid || oid`). Keys the
  *     per-TENANT domains document in `tenant-settings`. #3282 moved
  *     `/api/admin/domains` onto this scope; anything still reading that document
  *     with a raw `claims.oid` gets a PRIVATE copy, auto-seeded with the starter
  *     set, and silently disagrees with the authoritative list.
- *   • `ownerOid` — `session.claims.oid`. Keys the `workspaces` container, which
- *     is partitioned on `/tenantId` where `Workspace.tenantId` stores the
- *     CREATOR's oid (see `lib/auth/workspace-access.ts`). `tenantScopeId()` is
- *     explicitly NOT valid here — `lib/auth/session.ts` says so at the
- *     definition — so passing the tenant scope returns ZERO rows.
+ *   • `callerTid` — `session.claims.tid`, the stamped Entra tenant used to scope
+ *     the `workspaces` rollup (#3747). NOT `tenantScopeId()`: that falls back to
+ *     the caller's oid when the tid claim is absent, and an oid is exactly the
+ *     per-creator scope whose disagreement with the Domains list this fix
+ *     removes. `undefined` FAILS CLOSED — an empty rollup with a named hint,
+ *     never an unscoped read.
+ *
+ * The `workspaces` container is partitioned on `/tenantId`, which holds the
+ * CREATOR's oid, while `tid` holds the Entra tenant — so the tenant-wide count
+ * is a CROSS-PARTITION query on `tid` with no partitionKey option, which is
+ * what `listTenantWorkspaceTags` does for both this panel and the list route.
  */
 export async function getDomainMesh(
   tenantScope: string,
-  ownerOid: string,
+  callerTid: string | undefined,
   who: string,
 ): Promise<DomainMeshResult> {
   const doc = await loadOrSeedDomains(tenantScope, who);
   const items = doc.items;
 
   const [wsTags, itemCounts, unity] = await Promise.all([
-    readWorkspaceTags(ownerOid),
+    readWorkspaceTags(callerTid),
     readItemCounts(),
     unityLinkStatus(Array.from(new Set(items.map((d) => unityName(rootAncestorId(items, d.id)))))),
   ]);

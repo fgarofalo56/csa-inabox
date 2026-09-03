@@ -9,7 +9,7 @@
  * (no-vaporware.md). No Fabric dependency — every surface is Azure-native.
  *
  * SCOPES (#3747 / #3753). This route hands `getDomainMesh` TWO different scopes
- * because they address two containers with two partitioning schemes:
+ * because they address two containers with two different keys:
  *
  *   • the domains document lives in `tenant-settings` under `domains:<scope>`
  *     and is per-TENANT, so it is keyed with `tenantScopeId(s)` — the same scope
@@ -18,14 +18,16 @@
  *     route; the claim was false from the moment #3282 landed, and the effect
  *     was that the mesh read a private, auto-seeded copy of the domain list
  *     instead of the tenant's authoritative one.
- *   • the workspace rollup reads the `workspaces` container, which is
- *     partitioned by the CREATOR's oid (`lib/auth/session.ts` documents that
- *     `tenantScopeId()` is NOT valid for it), so it keeps `s.claims.oid`.
+ *   • the workspace rollup is TENANT-WIDE and is keyed with `s.claims.tid`
+ *     (#3747), the stamped Entra tenant. It used to pass `s.claims.oid` and
+ *     query the creator's partition, so this panel counted only the caller's own
+ *     workspaces while the Domains list queried a tid partition that holds no
+ *     documents at all and reported 0 — the two panels disagreed on screen.
  *
- * NOTE: that second scope is why this panel and the Domains list still disagree
- * on workspace counts. Both enumerate `workspaces` by a single partition key, so
- * neither is a tenant-wide count. That is a SEPARATE defect from the domain-doc
- * scope fixed here and it is NOT fixed by this change — see the PR for #3753.
+ * Both counts now come from the ONE shared counter,
+ * `listTenantWorkspaceTags`, so they cannot drift apart again. A session with
+ * no `tid` claim yields an empty rollup with a named hint, never an unscoped
+ * read.
  */
 import { NextResponse } from 'next/server';
 import { tenantScopeId } from '@/lib/auth/session';
@@ -38,7 +40,7 @@ export const dynamic = 'force-dynamic';
 
 export const GET = withTenantAdmin(async (_req, { session: s }) => {
   try {
-    const mesh = await getDomainMesh(tenantScopeId(s), s.claims.oid, s.claims.upn || s.claims.oid);
+    const mesh = await getDomainMesh(tenantScopeId(s), s.claims.tid, s.claims.upn || s.claims.oid);
     return NextResponse.json({ ok: true, mesh });
   } catch (e: any) {
     return apiServerError(e, 'Domain mesh read failed');

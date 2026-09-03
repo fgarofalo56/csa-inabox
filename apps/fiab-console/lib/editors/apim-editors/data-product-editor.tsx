@@ -269,7 +269,12 @@ export function DataProductEditor({ item, id }: { item: FabricItemType; id: stri
         body: JSON.stringify({ state: snapshot, displayName }),
       });
       const j = await r.json();
-      if (!j.ok) { setStatus({ kind: 'err', msg: j.error || `HTTP ${r.status}` }); return; }
+      // #3878 — PATCH on `/api/cosmos-items/<type>/<id>` answers the resource
+      // BARE, so `!j.ok` was true on every successful save: the editor reported
+      // an error and never cleared `dirty` over a write that had landed. The
+      // POST above is a DIFFERENT route (`/api/cosmos-items/<type>`) that does
+      // wrap as `{ok, item}`, which is why it correctly reads `j.ok`.
+      if (!r.ok || j?.ok === false) { setStatus({ kind: 'err', msg: j?.error || `HTTP ${r.status}` }); return; }
       setDirty(false);
       setStatus({ kind: 'ok', msg: snapshot.purviewDataProductId
         ? 'Saved to Cosmos. Re-register with Purview to propagate edits to the Unified Catalog.'

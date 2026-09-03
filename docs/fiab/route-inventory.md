@@ -19,7 +19,7 @@ verdict is DERIVED, not name-matched — see "How the owner column is decided".
 | Owner-scoped | 674 |
 | Admin | 310 |
 | Unknown (generator fails) | 0 |
-| Gated (backend config) | 496 |
+| Gated (backend config) | 497 |
 | Areas | 122 |
 
 **Auth scope** — `public`: no session check; `session-only`: signed-in but
@@ -1574,7 +1574,7 @@ dispatch is invisible to it. Full limits: `scripts/ci/_route-backends.mjs`.
 | `items/mirrored-databricks/[id]/route.ts` | GET PATCH DELETE | owner-scoped |  | Cosmos, Microsoft Graph |
 | `items/mirrored-databricks/[id]/sql-endpoint/route.ts` | GET | owner-scoped |  | Azure SQL, Cosmos, Microsoft Graph, Synapse SQL |
 | `items/mirrored-databricks/catalogs/route.ts` | GET | session-only |  | Azure Monitor, Cosmos |
-| `items/mirrored-databricks/route.ts` | GET POST | owner-scoped |  | ADF, ADLS, ADX, AI Search, ARM, Azure Monitor, Azure SQL, Azure Storage, Compute, Cosmos, Managed Identity, Microsoft Graph, PostgreSQL, Purview, Resource Graph, Synapse, Synapse SQL |
+| `items/mirrored-databricks/route.ts` | GET POST | owner-scoped | ● | ADF, ADLS, ADX, AI Search, ARM, Azure Monitor, Azure SQL, Azure Storage, Compute, Cosmos, Managed Identity, Microsoft Graph, PostgreSQL, Purview, Resource Graph, Synapse, Synapse SQL |
 | `items/ml-experiment/[id]/assist/route.ts` | — | public |  | — |
 | `items/ml-experiment/[id]/register/route.ts` | POST | session-only |  | AML, ARM |
 | `items/ml-experiment/[id]/route.ts` | GET | session-only |  | AML, ARM |
