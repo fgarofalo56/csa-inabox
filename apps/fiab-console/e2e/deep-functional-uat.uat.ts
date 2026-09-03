@@ -25,6 +25,7 @@
 
 import { test, expect, type Page } from '@playwright/test';
 import { FABRIC_ITEM_TYPES } from '../lib/catalog/fabric-item-types';
+import { waitForEditorInteractive } from './_lib/editor-readiness';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 
@@ -195,12 +196,12 @@ test.describe.serial('Deep functional UAT — every catalog item', () => {
       page.on('console', m => { if (m.type() === 'error') consoleErrors.push(m.text().slice(0, 200)); });
 
       await page.goto(`${BASE_URL}/items/${item.slug}/new`, { waitUntil: 'domcontentloaded' });
-      // Wait for the editor to actually hydrate — poll for a ribbon button to
-      // appear (up to 12s) instead of a fixed 3s. The fixed wait caused false
-      // F grades on slow-hydrating editors (e.g. lakehouse at 7.6s nav).
-      await page.locator('main button').first().waitFor({ state: 'visible', timeout: 12_000 }).catch(() => {});
-      await page.waitForTimeout(1500); // settle after first button paints
-      const navMs = Date.now() - t0;
+      // #3167 — the poll that used to live inline here is now the SHARED helper
+      // catalog-uat.uat.ts also imports. It was already the correct measurement
+      // (poll to 12s, then a 1.5s settle, `navMs` taken BEFORE the settle);
+      // extracting it verbatim is what stops the other grader from drifting back
+      // to a fixed wait and manufacturing 26 F-grades again.
+      const { ttiMs: navMs } = await waitForEditorInteractive(page, t0);
 
       const enabled = await page.locator('main button:not([disabled])').allTextContents()
         .then(arr => arr.map(s => s.trim()).filter(s => s && s !== 'Learn about this item'));
