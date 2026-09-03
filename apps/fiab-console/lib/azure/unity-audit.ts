@@ -26,14 +26,14 @@
  * DROP are audited, but into a DIFFERENT trail (`logIcebergAccess` →
  * `_auditLog itemType:'iceberg-catalog'`).
  *
- * `lib/azure/shortcut-credentials.ts` still holds its OWN private transport, and
- * the recorder could not be added INSIDE it (repo-level credential-path write
- * deny). Its storage-credential + external-location exits are nonetheless
- * audited as of #2622 gap 1 — see § 3d: `lib/azure/uc-securable.ts` wraps every
- * one of them, and the guard's import check makes that facade the ONLY module
- * permitted to consume them, so no un-audited call path to those securables
- * remains. The file stays declared in the guard's `KNOWN_UNAUDITED` because the
- * transport itself is still un-instrumented.
+ * `lib/azure/shortcut-credentials.ts` holds its OWN transport for the
+ * storage-credential + external-location surface, and as of #2622's residual that
+ * transport (`securableFetch`) records here from its own `finally` — the recorder
+ * could not previously be added inside the file, which is why the instrumentation
+ * first landed one layer up. `lib/azure/uc-securable.ts` REMAINS the audited
+ * facade over its five UC exports and is still the only module the guard permits
+ * to import them; it passes `recordedByCaller`, so the two layers write exactly
+ * ONE row per call — see § 3d. The guard's `KNOWN_UNAUDITED` list is now empty.
  *
  * ### What it DOES cover beyond UC REST (2026-08-02, issue #2622)
  *
@@ -1093,21 +1093,24 @@ export function unitySecurableErrorStatus(err: unknown): number {
 }
 
 /**
- * The storage-credential / external-location half of the choke point, called
- * from the `finally` of `ucSecurable` (lib/azure/uc-securable.ts).
+ * The storage-credential / external-location half of the choke point, called from
+ * the `finally` of BOTH `ucSecurable` (lib/azure/uc-securable.ts) and
+ * `securableFetch` (lib/azure/shortcut-credentials.ts).
  *
- * WHY THIS EXISTS: `lib/azure/shortcut-credentials.ts` keeps its OWN private
- * transport and issues `POST`/`DELETE` on
- * `/api/2.1/unity-catalog/storage-credentials` and `/external-locations` — the
- * securables that hand a workload access to a storage account, and the
- * highest-value pair in the whole surface after a grant. Neither `ucFetch` nor
- * `dbxFetch` can see them, and that file sits under a repo-level credential-path
- * write deny so the recorder cannot be added inside it (issue #2622, gap 1).
+ * WHY THIS EXISTS: `lib/azure/shortcut-credentials.ts` keeps its OWN transport
+ * and issues `POST`/`DELETE` on `/api/2.1/unity-catalog/storage-credentials` and
+ * `/external-locations` — the securables that hand a workload access to a storage
+ * account, and the highest-value pair in the whole surface after a grant. Neither
+ * `ucFetch` nor `dbxFetch` can see them (issue #2622, gap 1).
  *
- * The fix is therefore an audited FACADE: `lib/azure/uc-securable.ts` wraps each
- * un-audited export, and the guard's import check makes that facade the only
- * module allowed to consume them, so the un-audited functions are unreachable
- * from the rest of the app.
+ * TWO CALLERS, ONE ROW. `ucSecurable` wraps each UC export and therefore sees the
+ * post-response outcome the transport cannot (a 409 ALREADY_EXISTS is a
+ * successful idempotent re-create; a DELETE tolerates 404). It passes
+ * `recordedByCaller` down, which is the only thing that suppresses the
+ * transport's own record. The transport is instrumented anyway so that an export
+ * added to that file later is audited by DEFAULT rather than by having been
+ * wrapped, and the guard's import check keeps the facade the only permitted
+ * consumer of the five that exist today.
  *
  * Never throws — same fire-and-forget contract as {@link recordUnityAccess}.
  */

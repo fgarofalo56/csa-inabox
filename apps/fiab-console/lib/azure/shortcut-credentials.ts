@@ -26,9 +26,46 @@
  *
  * Every call hits a real Azure backend. No mock data. Per
  * .claude/rules/no-vaporware.md.
+ *
+ * ## The Unity Catalog exits here are AUDITED — at this transport (#2622)
+ *
+ * `securableFetch` below issues the storage-credential + external-location
+ * CREATE/DELETE. Those are the securables that hand a workload the right to read
+ * a cloud storage account, so every one of them records a Unity Catalog audit row
+ * via `recordUnitySecurableAccess` from a `finally` — success, failure, or
+ * DENIED. A `catch`-shaped implementation would drop exactly the 403 an ATO
+ * reviewer hunts for, which is why it is a `finally`.
+ *
+ * For three rounds this instrumentation lived one layer up, in the
+ * `lib/azure/uc-securable.ts` FACADE, because the recorder could not be added
+ * inside this file. That facade REMAINS, and is still the only module permitted
+ * to import a UC-mutating symbol from here (guard check 8). The two do not
+ * double-record: the facade runs each call inside the async context in
+ * `lib/azure/securable-audit-context.ts`, and this transport suppresses its own
+ * row inside that context. Suppression is opt-IN, so a future export added here
+ * is audited by DEFAULT rather than by having been anticipated — which is the
+ * entire reason the transport is instrumented at all. See that module for why it
+ * is an async context rather than a parameter or a flag.
+ *
+ * WHY BOTH LAYERS EXIST. The facade wraps the whole export and therefore sees
+ * the POST-RESPONSE outcome: `ucJsonOrThrow` treats a 409 ALREADY_EXISTS as a
+ * successful idempotent re-create, and a DELETE tolerates 404. This transport
+ * cannot know either without reading the response body, and reading it would
+ * consume the stream the caller is about to parse. So the facade's row is the
+ * higher-fidelity one and it wins where it applies; this transport's row is the
+ * floor that catches everything else.
+ *
+ * NOTHING FROM AN UPSTREAM ERROR BODY REACHES THE ROW. A Unity Catalog 400
+ * routinely echoes the request that caused it, and `ensureUcGcpStorageCredential`
+ * POSTs a service-account `private_key`. A mutation row fans out to
+ * tenant-registered outbound webhooks (third-party URLs), so
+ * `recordUnitySecurableAccess` stamps the extracted STATUS CODE only — see
+ * `lib/azure/unity-audit.ts` § 3d.
  */
 
 import { fetchWithTimeout } from '@/lib/azure/fetch-with-timeout';
+import { recordUnitySecurableAccess } from '@/lib/azure/unity-audit';
+import { securableRecordedByCaller } from '@/lib/azure/securable-audit-context';
 import {
   DefaultAzureCredential,
   ManagedIdentityCredential,
@@ -113,16 +150,50 @@ async function dbxToken(): Promise<string> {
   return t.token;
 }
 
-async function ucFetch(path: string, init?: RequestInit): Promise<Response> {
-  const token = await dbxToken();
-  return fetchWithTimeout(`https://${dbxHost()}${path}`, {
-    ...init,
-    headers: {
-      ...(init?.headers || {}),
-      authorization: `Bearer ${token}`,
-      'content-type': 'application/json',
-    },
-  });
+/**
+ * The Unity Catalog transport for this module — and the audited choke point for
+ * its securable exits (issue #2622, gap 1 residual).
+ *
+ * The recorder is called from `finally`, so a refusal produces a row even though
+ * this function's caller re-throws. `fetchWithTimeout` resolves on a 4xx/5xx
+ * rather than throwing, so a non-ok response is reported here as the failure —
+ * carrying ONLY the status code, which is the one thing this layer actually
+ * established about it. Nothing is read from the body: the caller has not parsed
+ * it yet, and it may echo a posted credential.
+ *
+ * `target` is the securable NAME from the caller's structured params. A CREATE
+ * POSTs to the COLLECTION, so the path carries no name and this is the only place
+ * the target can come from — it is never parsed out of a response or an error.
+ */
+async function securableFetch(path: string, init: RequestInit | undefined, target: string): Promise<Response> {
+  const startedAt = Date.now();
+  let res: Response | undefined;
+  let failure: unknown;
+  try {
+    const token = await dbxToken();
+    res = await fetchWithTimeout(`https://${dbxHost()}${path}`, {
+      ...init,
+      headers: {
+        ...(init?.headers || {}),
+        authorization: `Bearer ${token}`,
+        'content-type': 'application/json',
+      },
+    });
+    return res;
+  } catch (e) {
+    failure = e;
+    throw e;
+  } finally {
+    if (!securableRecordedByCaller()) {
+      recordUnitySecurableAccess({
+        path,
+        method: init?.method || 'GET',
+        target,
+        durationMs: Date.now() - startedAt,
+        error: failure ?? (res && !res.ok ? { status: res.status } : undefined),
+      });
+    }
+  }
 }
 
 async function ucJsonOrThrow<T>(res: Response, op: string): Promise<T> {
@@ -162,10 +233,11 @@ export async function ensureUcAwsStorageCredential(spec: UcAwsStorageCredentialS
     skip_validation: false,
   };
   if (spec.comment) body.comment = spec.comment;
-  const res = await ucFetch('/api/2.1/unity-catalog/storage-credentials', {
-    method: 'POST',
-    body: JSON.stringify(body),
-  });
+  const res = await securableFetch(
+    '/api/2.1/unity-catalog/storage-credentials',
+    { method: 'POST', body: JSON.stringify(body) },
+    spec.name,
+  );
   await ucJsonOrThrow<unknown>(res, 'createUcStorageCredential(aws)');
   return { name: spec.name };
 }
@@ -205,10 +277,11 @@ export async function ensureUcGcpStorageCredential(spec: UcGcpStorageCredentialS
     skip_validation: false,
   };
   if (spec.comment) body.comment = spec.comment;
-  const res = await ucFetch('/api/2.1/unity-catalog/storage-credentials', {
-    method: 'POST',
-    body: JSON.stringify(body),
-  });
+  const res = await securableFetch(
+    '/api/2.1/unity-catalog/storage-credentials',
+    { method: 'POST', body: JSON.stringify(body) },
+    spec.name,
+  );
   await ucJsonOrThrow<unknown>(res, 'createUcStorageCredential(gcp)');
   return { name: spec.name };
 }
@@ -228,16 +301,16 @@ export async function ensureUcExternalLocation(args: {
 }): Promise<{ name: string }> {
   const body: Record<string, unknown> = {
     name: args.name,
-    url: args.url,
-    credential_name: args.credentialName,
+    url: args.url,    credential_name: args.credentialName,
     read_only: args.readOnly ?? true,
     skip_validation: false,
   };
   if (args.comment) body.comment = args.comment;
-  const res = await ucFetch('/api/2.1/unity-catalog/external-locations', {
-    method: 'POST',
-    body: JSON.stringify(body),
-  });
+  const res = await securableFetch(
+    '/api/2.1/unity-catalog/external-locations',
+    { method: 'POST', body: JSON.stringify(body) },
+    args.name,
+  );
   await ucJsonOrThrow<unknown>(res, 'createUcExternalLocation');
   return { name: args.name };
 }
@@ -245,9 +318,10 @@ export async function ensureUcExternalLocation(args: {
 /** Best-effort delete a UC external location (drop a shortcut). Never deletes source bytes. */
 export async function deleteUcExternalLocation(name: string, force = true): Promise<void> {
   const qs = force ? '?force=true' : '';
-  const res = await ucFetch(
+  const res = await securableFetch(
     `/api/2.1/unity-catalog/external-locations/${encodeURIComponent(name)}${qs}`,
     { method: 'DELETE' },
+    name,
   );
   if (!res.ok && res.status !== 404) {
     const text = await res.text();
@@ -258,9 +332,10 @@ export async function deleteUcExternalLocation(name: string, force = true): Prom
 /** Best-effort delete a UC storage credential. */
 export async function deleteUcStorageCredential(name: string, force = true): Promise<void> {
   const qs = force ? '?force=true' : '';
-  const res = await ucFetch(
+  const res = await securableFetch(
     `/api/2.1/unity-catalog/storage-credentials/${encodeURIComponent(name)}${qs}`,
     { method: 'DELETE' },
+    name,
   );
   if (!res.ok && res.status !== 404) {
     const text = await res.text();

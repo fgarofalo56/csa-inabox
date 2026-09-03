@@ -2,12 +2,13 @@
  * ISSUE #2622, GAP 1 — the LAST un-audited Unity Catalog exit.
  *
  * `lib/azure/shortcut-credentials.ts` issues storage-credential and
- * external-location CREATE/DELETE from its own private transport. Those are the
+ * external-location CREATE/DELETE from its own transport. Those are the
  * securables that hand a workload access to a storage account — the closest
- * thing in Unity Catalog to minting access — and until now they produced no Loom
- * audit row. The file cannot be instrumented in place (repo-level
- * credential-path read/write deny), so the audit lives in a FACADE,
- * `lib/azure/uc-securable.ts`, which is now the only permitted importer.
+ * thing in Unity Catalog to minting access — and until #2622 they produced no
+ * Loom audit row. The audit first landed in a FACADE, `lib/azure/uc-securable.ts`,
+ * because the file could not be instrumented in place; the #2622 residual
+ * instrumented `securableFetch` itself, so BOTH layers record and the facade
+ * remains the only permitted importer.
  *
  * ## What this spec is FOR, and why it is not redundant with the CI guard
  *
@@ -35,6 +36,12 @@
  *   - a DENIED mint attempt dropped because the recorder sat on the success path;
  *   - a CREATE recorded at collection scope ('*') because the POST goes to the
  *     collection URL and carries no name.
+ *
+ * The final block covers the #2622 RESIDUAL: the transport's OWN row. It imports
+ * the REAL `shortcut-credentials` module via `vi.importActual` (the module-level
+ * `vi.mock` below only replaces it for the facade's consumers) with just
+ * `fetchWithTimeout` stubbed, so the assertions are still on bytes that reached
+ * the sinks — never on a spy.
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 
@@ -48,6 +55,7 @@ const H = vi.hoisted(() => ({
   rawEnsureLoc: vi.fn(),
   rawDeleteLoc: vi.fn(),
   rawDeleteCred: vi.fn(),
+  fetchWithTimeout: vi.fn(),
   session: {
     claims: { oid: 'oid-alice', upn: 'alice@contoso.com', tid: 'tenant-1' },
     exp: Math.floor(Date.now() / 1000) + 3600,
@@ -68,6 +76,13 @@ vi.mock('@/lib/azure/cosmos-client', () => ({
 vi.mock('@/lib/admin/audit-stream', () => ({ emitAuditEvent: H.emitAuditEvent }));
 vi.mock('@/lib/auth/session', () => ({ getSession: () => H.session }));
 
+// Stubbed for the REAL transport exercised in the last block. `fetchWithTimeout`
+// resolves on a 4xx — it does not throw — which is exactly why the transport has
+// to read `res.ok` to know it failed.
+vi.mock('@/lib/azure/fetch-with-timeout', () => ({
+  fetchWithTimeout: (...a: unknown[]) => H.fetchWithTimeout(...a),
+}));
+
 // ONLY the raw transport is stubbed. The recorder underneath the facade is the
 // REAL one — that is what makes these tests proof of an emit rather than proof
 // that a spy was called.
@@ -82,6 +97,7 @@ vi.mock('../shortcut-credentials', () => ({
 }));
 
 import { flushUnityAudit, unitySecurableErrorStatus, UNITY_SECURABLE_ALL } from '../unity-audit';
+import { withSecurableRecordedByCaller } from '../securable-audit-context';
 import {
   ucSecurable,
   ensureUcAwsStorageCredential,
@@ -102,6 +118,7 @@ function reset() {
   H.rawEnsureLoc.mockReset().mockResolvedValue({ name: 'loc' });
   H.rawDeleteLoc.mockReset().mockResolvedValue(undefined);
   H.rawDeleteCred.mockReset().mockResolvedValue(undefined);
+  H.fetchWithTimeout.mockReset();
   H.session = {
     claims: { oid: 'oid-alice', upn: 'alice@contoso.com', tid: 'tenant-1' },
     exp: Math.floor(Date.now() / 1000) + 3600,
@@ -390,5 +407,199 @@ describe('unitySecurableErrorStatus', () => {
     const out = unitySecurableErrorStatus(new Error('failed 403: private_key=abc'));
     expect(out).toBe(403);
     expect(typeof out).toBe('number');
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// #2622 RESIDUAL — the TRANSPORT records, and the two layers write ONE row
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * For three rounds the recorder lived only in the facade, and the guard carried a
+ * `KNOWN_UNAUDITED` entry saying so: "a future export added inside this file
+ * could reach the catalog without a row of its own". That is what this block
+ * closes, and it is the half a lexical guard cannot reach — the guard proves
+ * `recordUnitySecurableAccess(` sits inside `securableFetch`'s `finally`, not
+ * that a call REACHES it, nor that exactly one row comes out.
+ *
+ * The real module is pulled in with `importActual`, so these run against the
+ * shipped transport rather than the stub the facade tests use.
+ */
+describe('#2622 residual — securableFetch records its OWN row', () => {
+  type RawModule = typeof import('../shortcut-credentials');
+  let raw: RawModule;
+
+  const priorEnv = { ...process.env };
+
+  beforeEach(async () => {
+    process.env.LOOM_DATABRICKS_HOSTNAME = 'adb-123.4.azuredatabricks.net';
+    raw = await vi.importActual<RawModule>('../shortcut-credentials');
+  });
+  afterEach(() => { process.env = { ...priorEnv }; });
+
+  /** A `fetchWithTimeout` result: it RESOLVES on a 4xx, it does not throw. */
+  function response(status: number, body = '{}'): Response {
+    return {
+      ok: status >= 200 && status < 300,
+      status,
+      text: async () => body,
+      json: async () => JSON.parse(body),
+    } as unknown as Response;
+  }
+
+  it('records a CREATE issued WITHOUT the facade — the hole the KNOWN_UNAUDITED entry named', async () => {
+    H.fetchWithTimeout.mockResolvedValue(response(200));
+
+    // Called directly, exactly as a NEW export inside that file would call it.
+    await raw.ensureUcAwsStorageCredential({
+      name: 'loom_sc_direct',
+      roleArn: 'arn:aws:iam::123456789012:role/loom-read',
+    });
+    await flushUnityAudit();
+
+    expect(auditCreate).toHaveBeenCalledTimes(1);
+    expect(auditCreate.mock.calls[0][0]).toMatchObject({
+      action: 'unity.storage_credential.create',
+      securableFqn: 'loom_sc_direct',
+      method: 'POST',
+      path: UC_STORAGE_CREDENTIALS_PATH,
+      outcome: 'success',
+      status: 200,
+      actorOid: 'oid-alice',
+      tenantId: 'tenant-1',
+      mutation: true,
+    });
+  });
+
+  it('records a DENIED direct mint — a 403 RESOLVES here, so `res.ok` is what catches it', async () => {
+    // The failure mode this pins: `fetchWithTimeout` does not throw on a 4xx, so
+    // a transport that only recorded from `catch` — or that passed `error:
+    // failure` alone — would file the 403 as a SUCCESS. That row is the one an
+    // ATO reviewer hunts for.
+    H.fetchWithTimeout.mockResolvedValue(response(403, '{"error_code":"PERMISSION_DENIED"}'));
+
+    await expect(raw.ensureUcExternalLocation({
+      name: 'loom_el_direct',
+      url: 's3://bucket/prefix',
+      credentialName: 'loom_sc_direct',
+    })).rejects.toThrow();
+    await flushUnityAudit();
+
+    expect(auditCreate).toHaveBeenCalledTimes(1);
+    expect(auditCreate.mock.calls[0][0]).toMatchObject({
+      action: 'unity.external_location.create',
+      securableFqn: 'loom_el_direct',
+      outcome: 'denied',
+      status: 403,
+    });
+  });
+
+  it('records a direct DELETE, with the securable name off the caller params', async () => {
+    H.fetchWithTimeout.mockResolvedValue(response(200));
+    await raw.deleteUcStorageCredential('loom_sc_direct');
+    await flushUnityAudit();
+
+    expect(auditCreate).toHaveBeenCalledTimes(1);
+    expect(auditCreate.mock.calls[0][0]).toMatchObject({
+      method: 'DELETE',
+      securableFqn: 'loom_sc_direct',
+      outcome: 'success',
+    });
+  });
+
+  it('records when the TOKEN acquisition fails, before any request leaves', async () => {
+    delete process.env.LOOM_DATABRICKS_HOSTNAME;
+    // dbxHost() throws inside the try, so the finally is the only thing that can
+    // file this — a `catch`-shaped recorder placed after the fetch would not.
+    await expect(raw.deleteUcExternalLocation('loom_el_direct')).rejects.toThrow(/LOOM_DATABRICKS_HOSTNAME/);
+    await flushUnityAudit();
+
+    expect(auditCreate).toHaveBeenCalledTimes(1);
+    expect(auditCreate.mock.calls[0][0]).toMatchObject({ securableFqn: 'loom_el_direct', outcome: 'failure' });
+    expect(H.fetchWithTimeout).not.toHaveBeenCalled();
+  });
+
+  it('writes exactly ONE row when the FACADE calls it — not two', async () => {
+    // The de-duplication, asserted end to end rather than by reading the flag.
+    // The facade path is the one production uses, so a regression here would
+    // double every securable row AND double the third-party webhook fan-out.
+    H.fetchWithTimeout.mockResolvedValue(response(200));
+    const { ensureUcAwsStorageCredential: viaFacade } = await import('../uc-securable');
+
+    // Route the facade at the REAL raw module for this one call: the module-level
+    // vi.mock replaced it with spies for every other test in this file. The
+    // suppression rides on an async context, not on an argument, so forwarding
+    // the spec alone is enough — which is the property being asserted.
+    H.rawEnsureAws.mockImplementation(
+      (spec: Parameters<RawModule['ensureUcAwsStorageCredential']>[0]) =>
+        raw.ensureUcAwsStorageCredential(spec),
+    );
+
+    await viaFacade({ name: 'loom_sc_once', roleArn: 'arn:aws:iam::123456789012:role/r' } as never);
+    await flushUnityAudit();
+
+    expect(auditCreate).toHaveBeenCalledTimes(1);
+    expect(emitAuditEvent).toHaveBeenCalledTimes(1);
+    expect(auditCreate.mock.calls[0][0]).toMatchObject({ securableFqn: 'loom_sc_once', outcome: 'success' });
+  });
+
+  it('CONTROL — the suppression is opt-IN: OUTSIDE the context the same call records', async () => {
+    // Without this, the test above is satisfied by a transport that never records
+    // at all. The mutation is the context wrapper alone, and it must flip the count.
+    H.fetchWithTimeout.mockResolvedValue(response(200));
+    const spec = { name: 'loom_sc_once', roleArn: 'arn:aws:iam::123456789012:role/r' };
+
+    await raw.ensureUcAwsStorageCredential(spec);
+    await flushUnityAudit();
+    expect(auditCreate).toHaveBeenCalledTimes(1);
+
+    auditCreate.mockClear();
+    await withSecurableRecordedByCaller(() => raw.ensureUcAwsStorageCredential(spec));
+    await flushUnityAudit();
+    expect(auditCreate).toHaveBeenCalledTimes(0);
+  });
+
+  it('the context does NOT leak to a concurrent call outside it', async () => {
+    // Why an AsyncLocalStorage and not a module-level flag. With a flag, the
+    // suppressed call below would be in flight across the other call's await and
+    // would swallow ITS row — a dropped securable row that appears only under
+    // concurrency, which is the shape that never reproduces in a test written
+    // after the fact. Both calls are started before either resolves.
+    H.fetchWithTimeout.mockImplementation(
+      async () => new Promise((r) => setTimeout(() => r(response(200)), 5)),
+    );
+
+    await Promise.all([
+      withSecurableRecordedByCaller(() => raw.deleteUcStorageCredential('suppressed')),
+      raw.deleteUcStorageCredential('recorded'),
+    ]);
+    await flushUnityAudit();
+
+    expect(auditCreate).toHaveBeenCalledTimes(1);
+    expect(auditCreate.mock.calls[0][0]).toMatchObject({ securableFqn: 'recorded' });
+  });
+
+  it('the upstream 400 body still never reaches the row on the DIRECT path either', async () => {
+    // The facade half of this is asserted above. The transport is a second door
+    // to the same sink, so it gets the same assertion: a UC 400 echoes the
+    // request, and the GCP variant's request carries a service-account
+    // private_key. `detail` is the extracted status code and nothing else.
+    const echoed = '{"message":"invalid: {\\"private_key\\":\\"-----BEGIN PRIVATE KEY-----AAAA\\"}"}';
+    H.fetchWithTimeout.mockResolvedValue(response(400, echoed));
+
+    await expect(raw.ensureUcGcpStorageCredential({
+      name: 'loom_sc_gcp_direct',
+      serviceAccountJson: {
+        client_email: 'sa@p.iam.gserviceaccount.com',
+        private_key_id: 'kid',
+        private_key: '-----BEGIN PRIVATE KEY-----AAAA',
+      },
+    })).rejects.toThrow();
+    await flushUnityAudit();
+
+    const written = JSON.stringify({ cosmos: auditCreate.mock.calls, siem: emitAuditEvent.mock.calls });
+    expect(written).not.toContain('PRIVATE KEY');
+    expect(written).not.toContain('private_key');
+    expect(auditCreate.mock.calls[0][0]).toMatchObject({ detail: 'http_status=400', status: 400 });
   });
 });

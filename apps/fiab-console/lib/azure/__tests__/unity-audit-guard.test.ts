@@ -299,10 +299,15 @@ describe('ATTACK: round-3 reviewer bypasses (all three exited 0 against round 2)
     expect(isClientComponent('export default async function Page() {}')).toBe(false);
   });
 
-  it('#5 — fails when a DECLARED-GAP file grows a new un-audited catalog call', () => {
+  it('#5 — fails when the EXEMPTED shortcut-credentials file grows a new catalog call', () => {
     const s = realSources();
     const gap = 'lib/azure/shortcut-credentials.ts';
-    expect(KNOWN_UNAUDITED.has(gap)).toBe(true);
+    // It moved from KNOWN_UNAUDITED to CHOKEPOINT_FILES in the #2622 residual
+    // (its transport now records). Check 2 ranges over BOTH maps, so the ceiling
+    // that makes this attack fail is unchanged — which is why the new membership
+    // is asserted here rather than the test being deleted with the entry.
+    expect(KNOWN_UNAUDITED.has(gap)).toBe(false);
+    expect(CHOKEPOINT_FILES.has(gap)).toBe(true);
     // Round 2's check 4 did `if (KNOWN_UNAUDITED.has(r)) continue;` with no
     // per-file ceiling, so a declared file could grow ARBITRARY new privilege
     // mutations silently. The reviewer appended exactly this.
@@ -449,10 +454,21 @@ describe('ATTACK: quieter regressions', () => {
     expect(analyzeUnityChokepoint(s).join('\n')).toMatch(/health-probes\.ts: allowlisted/);
   });
 
-  it('fails when a KNOWN_UNAUDITED entry goes stale', () => {
+  it('has NO declared gaps left, and the file that was the last one still fails loudly if it vanishes', () => {
+    // Check 4b (the stale-entry check) was the control while KNOWN_UNAUDITED had
+    // an entry. #2622's residual emptied the map by instrumenting the transport,
+    // so 4b now ranges over nothing — asserting it here would be an assertion
+    // that cannot fail. What replaced it is STRICTLY stronger: the same file is a
+    // CHOKEPOINT_FILES + MUST_AUDIT + AUDITED_TRANSPORTS member, so its
+    // disappearance trips two checks instead of one.
+    expect(KNOWN_UNAUDITED.size).toBe(0);
     const s = realSources();
     s.delete('lib/azure/shortcut-credentials.ts');
-    expect(analyzeUnityChokepoint(s).join('\n')).toMatch(/listed in KNOWN_UNAUDITED but not present/);
+    const found = analyzeUnityChokepoint(s).join('\n');
+    expect(found).toMatch(/MISSING CHOKE POINT: lib\/azure\/shortcut-credentials\.ts does not exist/);
+    expect(found).toMatch(/shortcut-credentials\.ts: allowlisted in CHOKEPOINT_FILES but missing/);
+    // …and NOT the 4b message, because there is no entry left to go stale.
+    expect(found).not.toMatch(/listed in KNOWN_UNAUDITED but not present/);
   });
 });
 
@@ -498,7 +514,7 @@ export function rogueGrant2(host: string, fq: string) {
   it('#17 — fails on axios appended to the DECLARED-GAP shortcut-credentials', () => {
     const s = realSources();
     const gap = 'lib/azure/shortcut-credentials.ts';
-    expect(KNOWN_UNAUDITED.has(gap)).toBe(true);
+    expect(CHOKEPOINT_FILES.has(gap)).toBe(true);
     s.set(gap, `${s.get(gap)!}
 import axios from 'axios';
 export async function rogueCred(host: string, token: string, name: string) {
@@ -703,16 +719,16 @@ describe('ROUND 5 — every audited transport must record from its finally', () 
   const DISAMBIGUABLE = (AUDITED_TRANSPORTS as Array<{ file: string; fn: string; recorder: string }>)
     .filter((t) => MUST_AUDIT.has(t.file));
 
-  it('covers all five transports from ONE table', () => {
+  it('covers all six transports from ONE table', () => {
     expect(AUDITED_TRANSPORTS.map((t: { fn: string }) => t.fn).sort())
-      .toEqual(['acctFetch', 'dbxFetch', 'ucFetch', 'ucSecurable', 'ucSql']);
+      .toEqual(['acctFetch', 'dbxFetch', 'securableFetch', 'ucFetch', 'ucSecurable', 'ucSql']);
     for (const t of AUDITED_TRANSPORTS as Array<{ file: string; fn: string; recorder: string; why: string }>) {
       expect(typeof t.why, `${t.fn} has no explanation`).toBe('string');
       expect(t.why.length).toBeGreaterThan(40);
     }
   });
 
-  it('fails for EVERY transport whose finally stops recording (one scan, five attacks)', () => {
+  it('fails for EVERY transport whose finally stops recording (one scan, six attacks)', () => {
     const s = realSources();
     for (const t of AUDITED_TRANSPORTS as Array<{ file: string; recorder: string }>) {
       const src = s.get(t.file);
@@ -744,7 +760,8 @@ describe('ROUND 5 — every audited transport must record from its finally', () 
    * thing it denies COULD have happened, so this proves capability per member —
    * one mutation per transport, each flipping that transport's verdict alone.
    *
-   * Costs 3 whole-tree scans (~0.18 s each). The budget prose at the top of this
+   * Costs one whole-tree scan per DISAMBIGUABLE transport (~0.18 s each; four as
+   * of the #2622 residual). The budget prose at the top of this
    * file applies: the cliff is 60 s of synchronous CPU and the file's upper bound
    * was 6.1 s, so the five scans this round adds are inside the headroom, and
    * `MASK_BUDGET_BYTES` — not this comment — is what holds the line.
@@ -754,7 +771,13 @@ describe('ROUND 5 — every audited transport must record from its finally', () 
       DISAMBIGUABLE.length,
       'the .not.toMatch above now ranges over NOTHING — it cannot fail for any transport',
     ).toBeGreaterThan(0);
-    expect(DISAMBIGUABLE.map((t) => t.fn).sort()).toEqual(['acctFetch', 'dbxFetch', 'ucSql']);
+    // `securableFetch` joined this list automatically when the #2622 residual
+    // gave shortcut-credentials.ts a MUST_AUDIT entry — the tripwire described
+    // in the sibling test below firing as designed, not a hand-edit. It costs
+    // one more whole-tree scan (~0.18 s); MASK_BUDGET_BYTES is what holds the
+    // cost line, not this count.
+    expect(DISAMBIGUABLE.map((t) => t.fn).sort())
+      .toEqual(['acctFetch', 'dbxFetch', 'securableFetch', 'ucSql']);
 
     for (const t of DISAMBIGUABLE) {
       const s = realSources();
@@ -898,10 +921,14 @@ export async function rogueAssign(host: string, token: string, ws: string, ms: s
 describe('ROUND 6 — the securable IMPORT choke point (check 8)', () => {
   it('is wired: the facade is an audited transport and the raw module stays declared', () => {
     expect(AUDITED_TRANSPORTS.some((t: { file: string }) => t.file === SECURABLE_CHOKEPOINT)).toBe(true);
-    // The entry is deliberately KEPT: no un-audited call PATH remains, but the
-    // transport itself is still un-instrumented, and the honest statement of
-    // that is the entry, not its removal.
-    expect(KNOWN_UNAUDITED.has(SECURABLE_RAW)).toBe(true);
+    // Round 6 KEPT the KNOWN_UNAUDITED entry because the transport was still
+    // un-instrumented. The #2622 residual instrumented it, so the entry is gone
+    // and the raw file is a full audited-transport member instead. BOTH halves
+    // are asserted: a removal without the promotion is exactly the "declared gap
+    // quietly downgraded to an untracked amnesty" this list exists to prevent.
+    expect(KNOWN_UNAUDITED.has(SECURABLE_RAW)).toBe(false);
+    expect(AUDITED_TRANSPORTS.some((t: { file: string }) => t.file === SECURABLE_RAW)).toBe(true);
+    expect(MUST_AUDIT.get(SECURABLE_RAW)).toBe('recordUnitySecurableAccess');
     // The allowlist is the two NON-catalog exports — stated in the affirmative,
     // so anything new in that unreadable file is denied by default.
     expect([...SECURABLE_RAW_PUBLIC].sort()).toEqual(['getKeyVaultSecret', 'keyVaultConfigGate']);
