@@ -41,6 +41,7 @@ import { SlateAppBuilder, type SlateQueryDef, type SlateWidgetDef, type SlateVar
 import { WorkshopAppBuilder, type WorkshopWidget, type WorkshopVariable } from '../workshop/workshop-app-builder';
 import { deriveObjectProperties } from '../_palantir-codegen';
 import { TileGrid } from '@/lib/components/ui/tile-grid';
+import { AzureBackedField } from '@/lib/components/azure/azure-backed-field';
 import {
   CHECK_TYPE_LIBRARY, CHECK_FAMILY_META, COMPARISON_OPERATORS, AGGREGATIONS,
   buildCheckQuery, type CheckTypeDef, type CheckFamily, type CheckField,
@@ -799,9 +800,19 @@ function HealthCheckNotifications({ id, itemName }: { id: string; itemName: stri
         <Caption1 className={s.hint}>The workflow's callback URL is resolved from its resource id via ARM listCallbackUrl on save.</Caption1>
         {logicApps.map((r, i) => (
           <div key={i} style={rowStyle}>
-            <Field label={i === 0 ? 'Logic App resource id' : ''} style={{ flex: 1, minWidth: 320 }}>
-              <Input value={r.resourceId} onChange={(_, d) => setLogicApps((arr) => arr.map((x, j) => (j === i ? { ...x, resourceId: d.value } : x)))} placeholder="/subscriptions/…/providers/Microsoft.Logic/workflows/notify" />
-            </Field>
+            <div style={{ flex: 1, minWidth: 320 }}>
+              {/* #3541 — the resource id is DISCOVERED (Resource Graph over
+                  Microsoft.Logic/workflows), never hand-typed. Same picker and
+                  same `logic-app` kind the activator action uses, so the two
+                  surfaces cannot store differently shaped values. */}
+              <AzureBackedField
+                kind="logic-app"
+                value={r.resourceId}
+                label="Logic App"
+                surface="Health check notification"
+                onChange={(v) => setLogicApps((arr) => arr.map((x, j) => (j === i ? { ...x, resourceId: v || '' } : x)))}
+              />
+            </div>
             <Switch checked={r.useCommonAlertSchema !== false} label="Common Alert Schema" onChange={(_, d) => setLogicApps((arr) => arr.map((x, j) => (j === i ? { ...x, useCommonAlertSchema: d.checked } : x)))} />
             <Button size="small" appearance="subtle" icon={<Dismiss16Regular />} onClick={() => setLogicApps((arr) => arr.filter((_, j) => j !== i))}>Remove</Button>
           </div>
