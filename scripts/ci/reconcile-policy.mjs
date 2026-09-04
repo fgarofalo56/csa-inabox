@@ -1876,6 +1876,105 @@ export function selectWatchedApps({ containers = null, pinned = {}, table = APP_
 }
 
 /**
+ * Say — precisely — WHY an app's revision history did not become a usable
+ * array, without asserting anything the caller did not establish.
+ *
+ * WHY THIS IS A FUNCTION AND NOT A TERNARY (deploy-integrity R7)
+ * -------------------------------------------------------------
+ * The first cut of this branch had two arms: "az wrote a reason" and, for
+ * everything else, "neither file exists, so the history was never read". The
+ * gate step that feeds it writes
+ *   az containerapp revision list ... > "$REVDIR/$APP.json" 2> "$REVDIR/$APP.err"
+ * so whenever az RUNS, BOTH files exist. An az that exits 0 having written
+ * empty, truncated or non-JSON stdout therefore landed on the second arm and
+ * the run log said "this step never asked" about a step that asked and got an
+ * answer it could not read. That is the 2026-08-05 collapse again — an
+ * UNREADABLE answer rendered as an ABSENT question — and it points any reader
+ * at the wrong half of the system.
+ *
+ * The states are kept apart because their next actions differ: unparseable
+ * stdout is an az/query defect to inspect, a non-empty stderr is az's own
+ * refusal to quote, and a genuinely absent pair is the DNS-label `continue`
+ * branch upstream, which never invoked az at all.
+ *
+ * Every arm still yields an UNKNOWN verdict and exit 1 — this changes what the
+ * log SAYS, never whether the gate fails closed.
+ *
+ * @param {object}  o
+ * @param {string}  o.revDir     directory the two files live in
+ * @param {string}  o.app        Container App name
+ * @param {'absent'|'unreadable'|'unparseable'} o.jsonState  what `<app>.json` was
+ * @param {number}  [o.jsonBytes]   size of `<app>.json` when it was read
+ * @param {string}  [o.jsonDetail]  the parse / read error text
+ * @param {'absent'|'unreadable'|'empty'|'text'} o.errState  what `<app>.err` was
+ * @param {string}  [o.errText]     `<app>.err` contents when non-empty
+ * @param {string}  [o.errDetail]   the read error text when `<app>.err` is unreadable
+ * @returns {string} one sentence-group stating only established facts
+ */
+export function describeRevisionReadFailure({
+  revDir = '',
+  app = '',
+  jsonState = 'absent',
+  jsonBytes = 0,
+  jsonDetail = '',
+  errState = 'absent',
+  errText = '',
+  errDetail = '',
+} = {}) {
+  const jsonName = `${app}.json`;
+  const errName = `${app}.err`;
+  const detail = String(jsonDetail || '').slice(0, 120);
+  // The discriminating clause is placed FIRST in every arm on purpose: the
+  // composed verdict truncates this detail at 400 characters, and a sentence
+  // whose distinguishing half can be cut off is a sentence that can still be
+  // misread. Paths and supporting notes come after it.
+  const stderrNote =
+    errState === 'text'
+      ? `az also wrote to stderr: ${String(errText).slice(0, 200)}.`
+      : errState === 'empty'
+        ? `${errName} is present and EMPTY.`
+        : errState === 'unreadable'
+          ? `${errName} could not be read (${String(errDetail || '').slice(0, 120)}).`
+          : `${errName} is absent.`;
+
+  if (jsonState === 'unparseable') {
+    return (
+      `${jsonName} EXISTS (${jsonBytes} byte(s)) and is not parseable JSON (${detail}) — the history WAS read ` +
+      `and the answer was unusable, which is NOT "never asked". ${stderrNote} Directory: ${revDir}. Nothing ` +
+      `about which image ${app} runs is established.`
+    );
+  }
+  if (jsonState === 'unreadable') {
+    return (
+      `${jsonName} EXISTS but could not be read (${detail}) — the history was requested and could not be ` +
+      `retrieved, which is NOT "never asked". ${stderrNote} Directory: ${revDir}. Nothing was established about ` +
+      `this app.`
+    );
+  }
+  // From here `<app>.json` is genuinely absent — either az failed and the gate
+  // step removed the partial stdout, or az was never invoked for this app.
+  if (errState === 'text') {
+    return `az containerapp revision list for ${app} did not produce a readable history: ${String(errText).slice(0, 400)}`;
+  }
+  if (errState === 'empty') {
+    return (
+      `${jsonName} is ABSENT and ${errName} is present but EMPTY — neither a history nor a failure reason was ` +
+      `recorded for ${app}. Directory: ${revDir}. Nothing was established about this app.`
+    );
+  }
+  if (errState === 'unreadable') {
+    return (
+      `${jsonName} is ABSENT and ${errName} could not be read (${String(errDetail || '').slice(0, 120)}) — ` +
+      `whether az was asked about ${app} at all is unestablished. Directory: ${revDir}.`
+    );
+  }
+  return (
+    `neither ${jsonName} nor ${errName} exists, so the revision history for ${app} was never read — this step ` +
+    `never asked az about it. Directory: ${revDir}. Nothing was established about this app.`
+  );
+}
+
+/**
  * The verdict for the WHOLE estate, from one per-app verdict each.
  *
  * PRECEDENCE IS regression > drifted > unknown > ok, and the reason it is not
@@ -2367,25 +2466,64 @@ export function cliMain(argv, io) {
 
     const perApp = [];
     for (const w of watched.apps) {
-      // Two files, two meanings, and a missing PAIR is a third: `<app>.json` is
+      // Two files, two meanings, and their ABSENCE is a third: `<app>.json` is
       // a history az returned, `<app>.err` is az saying why it could not, and
       // neither present means this step never asked — which establishes
       // nothing and must not read as an empty history.
-      let revisions;
+      //
+      // The read is spelled out rather than routed through readJson() because
+      // the DISTINCTION between "absent" (ENOENT), "present but unreadable"
+      // and "present but unparseable" is the whole point: the gate step's own
+      // redirection creates BOTH files whenever az runs, so collapsing them
+      // would report an unreadable ANSWER as an unasked QUESTION
+      // (deploy-integrity R7). See describeRevisionReadFailure().
+      let revisions = null;
       let revisionsError = '';
+      // 'ok' | 'absent' | 'unreadable' | 'unparseable'
+      let jsonState = 'ok';
+      let jsonBytes = 0;
+      let jsonDetail = '';
       try {
-        revisions = readJson(`${revDir}/${w.app}.json`);
+        const raw = String(readFile(`${revDir}/${w.app}.json`) ?? '');
+        jsonBytes = Buffer.byteLength(raw, 'utf8');
+        try {
+          revisions = JSON.parse(raw);
+        } catch (e) {
+          revisions = null;
+          jsonState = 'unparseable';
+          jsonDetail = String(e?.message || e);
+        }
       } catch (e) {
         revisions = null;
+        jsonState = e?.code === 'ENOENT' ? 'absent' : 'unreadable';
+        jsonDetail = String(e?.message || e);
+      }
+
+      if (jsonState !== 'ok') {
+        let errState = 'absent';
         let errText = '';
+        let errDetail = '';
         try {
-          errText = String(readFile(`${revDir}/${w.app}.err`) || '').trim();
-        } catch {
-          errText = '';
+          errText = String(readFile(`${revDir}/${w.app}.err`) ?? '').trim();
+          errState = errText ? 'text' : 'empty';
+        } catch (e) {
+          if (e?.code === 'ENOENT') {
+            errState = 'absent';
+          } else {
+            errState = 'unreadable';
+            errDetail = String(e?.message || e);
+          }
         }
-        revisionsError = errText
-          ? `az containerapp revision list for ${w.app} did not produce a readable history: ${errText.slice(0, 400)}`
-          : `neither ${revDir}/${w.app}.json nor ${revDir}/${w.app}.err exists, so the revision history for ${w.app} was never read (and JSON parse detail, if any: ${String(e?.message || e).slice(0, 160)}). Nothing was established about this app.`;
+        revisionsError = describeRevisionReadFailure({
+          revDir,
+          app: w.app,
+          jsonState,
+          jsonBytes,
+          jsonDetail,
+          errState,
+          errText,
+          errDetail,
+        });
       }
       let revisionSelection = selectRevisionOverwrite(revisions, {
         measuredAt,

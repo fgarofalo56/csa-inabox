@@ -93,6 +93,7 @@ import {
   decideEstateRegression,
   decideEstateRegressionAll,
   decidePinRefresh,
+  describeRevisionReadFailure,
   parseRollRunTitle,
   pinsFromEnv,
   resolveRunningImageTags,
@@ -1635,6 +1636,159 @@ test('CLI serving-tag: a missing flag is a USAGE error (2), never a silent empty
   const r = runCli(['serving-tag', '--revisions', 'revs.json'], { files: { 'revs.json': [] } });
   assert.equal(r.code, 2);
   assert.match(r.logs, /both --revisions <file> and --out <file> are required/);
+});
+
+// ---------------------------------------------------------------------------
+// R7 — an UNREADABLE answer must never be reported as an UNASKED question.
+//
+// The gate step writes BOTH files on every az invocation:
+//   az containerapp revision list ... > "$REVDIR/$APP.json" 2> "$REVDIR/$APP.err"
+// so "az ran and returned something unparseable" and "az was never invoked"
+// are DIFFERENT states that both reach the same catch. Collapsing them is the
+// 2026-08-05 `2>/dev/null` shape — a permission denial rendered as "the tag
+// does not exist" — and it sends the reader at the wrong half of the system.
+//
+// Every arm below must still fail CLOSED (unknown, exit 1). The control at the
+// bottom is what makes these assertions falsifiable: same command, same fixture
+// directory, a PARSEABLE history, exit 0 and no failure sentence at all.
+// ---------------------------------------------------------------------------
+
+/**
+ * Drive the roll-all CLI against a real `--app-revisions` DIRECTORY.
+ *
+ * `revs` maps a filename to its contents, written verbatim — `''` is a
+ * zero-byte file that EXISTS, and an omitted name is a file that does not.
+ * That distinction is the entire subject of these tests, so it is expressed in
+ * the fixture rather than mocked.
+ */
+function runRollAll({ revs = {}, containers = null, rolls = [], env = {} } = {}) {
+  const dir = mkdtempSync(join(tmpdir(), 'roll-all-'));
+  try {
+    const revDir = join(dir, 'revs');
+    mkdirSync(revDir, { recursive: true });
+    for (const [name, body] of Object.entries(revs)) {
+      writeFileSync(join(revDir, name), typeof body === 'string' ? body : JSON.stringify(body));
+    }
+    const containersFile = join(dir, 'containers.json');
+    writeFileSync(containersFile, JSON.stringify(containers ?? [
+      { name: 'loom-console', image: `acr1.azurecr.io/loom-console:${ROLLED}` },
+    ]));
+    const rollsFile = join(dir, 'rolls.json');
+    writeFileSync(rollsFile, JSON.stringify(rolls));
+
+    const logs = [];
+    const outLines = [];
+    const code = cliMain(
+      [
+        'assert-estate-not-behind-roll-all',
+        '--measured-at', AUG19_MEASURED_AT,
+        '--containers', containersFile,
+        '--app-revisions', revDir,
+        '--rolls', rollsFile,
+        '--boundary', 'commercial',
+      ],
+      {
+        readFile: (p) => readFileSync(p, 'utf8'),
+        writeFile: () => {},
+        writeEnv: () => {},
+        writeOutput: (l) => outLines.push(l),
+        log: (s) => logs.push(s),
+        env: { LOOM_CONSOLE_TAG: ROLLED, ...env },
+      },
+    );
+    return { code, logs: logs.join('\n'), outLines, revDir };
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+test('R7 roll-all: a PRESENT but zero-byte <app>.json is reported as READ-AND-UNPARSEABLE, never as "never read"', () => {
+  // The exact state an `az` that exits 0 with empty stdout leaves behind: both
+  // files created by the step's own redirection, both zero bytes.
+  const r = runRollAll({ revs: { 'loom-console.json': '', 'loom-console.err': '' } });
+
+  assert.equal(r.code, 1, 'an unreadable history must still fail CLOSED');
+  assert.ok(r.outLines.includes('verdict=unknown'), `expected unknown; got ${JSON.stringify(r.outLines)}`);
+  assert.match(
+    r.logs, /loom-console\.json EXISTS \(0 byte\(s\)\) and is not parseable JSON/,
+    'the log must say the history was READ and the answer was unusable, with the byte count that proves it',
+  );
+  assert.doesNotMatch(
+    r.logs, /was never read/,
+    'the step DID ask — az wrote both files. Saying it never asked is a false statement about this run ' +
+      '(deploy-integrity R7) and points the reader at the workflow instead of at az.',
+  );
+  assert.doesNotMatch(
+    r.logs, /neither loom-console\.json nor loom-console\.err exists/,
+    'both files are present; asserting neither exists is the collapse this test exists to prevent',
+  );
+});
+
+test('R7 roll-all: a NON-EMPTY <app>.err with no <app>.json quotes az\'s own failure', () => {
+  const r = runRollAll({
+    revs: { 'loom-console.err': 'az containerapp revision list -n loom-console -g rg exited 3: (ResourceNotFound)' },
+  });
+  assert.equal(r.code, 1);
+  assert.match(r.logs, /did not produce a readable history: az containerapp revision list .*ResourceNotFound/);
+  assert.doesNotMatch(r.logs, /was never read/, 'az answered — with a failure. That is not "never asked".');
+});
+
+test('R7 roll-all: a GENUINELY absent pair still reads as "never read" — the DNS-label refusal path', () => {
+  // Upstream the step `continue`s without invoking az when the name is not a
+  // DNS label, leaving no files at all. That IS "this step never asked", and
+  // the wording must survive the fix for the other states.
+  const r = runRollAll({ revs: {} });
+  assert.equal(r.code, 1);
+  assert.match(r.logs, /neither loom-console\.json nor loom-console\.err exists/);
+  assert.match(r.logs, /was never read/);
+});
+
+test('R7 roll-all: an absent <app>.json beside an EMPTY <app>.err claims neither a history nor a reason', () => {
+  const r = runRollAll({ revs: { 'loom-console.err': '' } });
+  assert.equal(r.code, 1);
+  assert.match(
+    r.logs, /loom-console\.json is ABSENT and loom-console\.err is present but EMPTY/,
+    'this state establishes nothing either way, and the log must not pick a side',
+  );
+  assert.doesNotMatch(r.logs, /was never read/, 'a present .err means the step reached az; only the reason is missing');
+});
+
+test('R7 roll-all CONTROL: a PARSEABLE history over the same fixture directory exits 0 and states no read failure', () => {
+  const r = runRollAll({
+    revs: { 'loom-console.json': [rev('loom-console--0000900', '2026-08-19T07:10:19+00:00', ROLLED, 100)] },
+  });
+  assert.equal(r.code, 0, 'the healthy path must survive the R7 fix — otherwise the four tests above prove nothing');
+  assert.ok(r.outLines.includes('verdict=ok'), `expected ok; got ${JSON.stringify(r.outLines)}`);
+  assert.doesNotMatch(r.logs, /not parseable JSON|was never read|present but EMPTY/);
+});
+
+test('R7 describeRevisionReadFailure: the four states produce four DISTINCT sentences', () => {
+  const base = { revDir: '/t/revs', app: 'loom-console' };
+  const sentences = [
+    describeRevisionReadFailure({ ...base, jsonState: 'unparseable', jsonBytes: 0, jsonDetail: 'Unexpected end of JSON input', errState: 'empty' }),
+    describeRevisionReadFailure({ ...base, jsonState: 'absent', errState: 'text', errText: 'exited 3: ResourceNotFound' }),
+    describeRevisionReadFailure({ ...base, jsonState: 'absent', errState: 'empty' }),
+    describeRevisionReadFailure({ ...base, jsonState: 'absent', errState: 'absent' }),
+  ];
+  assert.equal(new Set(sentences).size, 4, `four states must not share a sentence; got ${JSON.stringify(sentences, null, 2)}`);
+  assert.match(sentences[0], /EXISTS \(0 byte\(s\)\) and is not parseable JSON/);
+  assert.match(sentences[1], /ResourceNotFound/);
+  assert.match(sentences[2], /is ABSENT and loom-console\.err is present but EMPTY/);
+  assert.match(sentences[3], /never read/);
+  // Only the genuinely-absent pair may claim the question was never asked.
+  assert.equal(
+    sentences.filter((s) => /never read/.test(s)).length, 1,
+    '"never read" is a claim about the WORKFLOW, and exactly one state establishes it',
+  );
+});
+
+test('R7 describeRevisionReadFailure: an UNREADABLE file is not an ABSENT one', () => {
+  const s = describeRevisionReadFailure({
+    revDir: '/t/revs', app: 'loom-console', jsonState: 'unreadable',
+    jsonDetail: 'EACCES: permission denied', errState: 'unreadable', errDetail: 'EACCES: permission denied',
+  });
+  assert.match(s, /EXISTS but could not be read \(EACCES: permission denied\)/);
+  assert.doesNotMatch(s, /never read/, 'a permission denial is not an absent question — the 2026-08-05 shape exactly');
 });
 
 // ---------------------------------------------------------------------------
