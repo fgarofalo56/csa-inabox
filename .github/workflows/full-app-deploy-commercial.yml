@@ -94,7 +94,7 @@ jobs:
       region: ${{ steps.acr.outputs.region }}
       contract_refs: ${{ steps.contract.outputs.contract_refs }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@v7.0.1
       - name: Azure login
         uses: Azure/login@v2
         with:
@@ -261,7 +261,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       # Needed for scripts/csa-loom/acr-firewall-lease.sh (#2603).
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@v7.0.1
       - name: Azure login
         uses: Azure/login@v2
         with:
@@ -498,7 +498,7 @@ jobs:
           - app: loom-directlake
             ctx: ./apps/loom-directlake
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@v7.0.1
       - name: Azure login
         uses: Azure/login@v2
         with:
@@ -727,7 +727,7 @@ jobs:
       # scripts/ci/assert-acr-image-tags.sh — the gates below distinguish
       # "the registry answered: absent" from "I could not read the registry",
       # and must never skip an image on the strength of the second.
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@v7.0.1
       - name: Azure login
         uses: Azure/login@v2
         with:
@@ -950,7 +950,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       # Needed for scripts/csa-loom/acr-firewall-lease.sh (#2603).
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@v7.0.1
       - name: Azure login
         uses: Azure/login@v2
         with:
@@ -1014,7 +1014,7 @@ jobs:
     if: ${{ !cancelled() && inputs.enable_apps_after && (needs.close-acr.result == 'success' || inputs.skip_build) && (needs.verify-images.result == 'success' || inputs.skip_build) }}
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@v7.0.1
       - name: Azure login
         uses: Azure/login@v2
         with:
@@ -1121,7 +1121,7 @@ jobs:
     if: ${{ always() && inputs.enable_apps_after && needs.redeploy-with-apps.result == 'success' }}
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@v7.0.1
       - name: Azure login
         uses: Azure/login@v2
         with:
@@ -1241,7 +1241,7 @@ jobs:
     runs-on: ubuntu-latest
     continue-on-error: true
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@v7.0.1
       - name: Azure login
         uses: Azure/login@v2
         with:
@@ -1285,7 +1285,7 @@ jobs:
     if: always()
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@v7.0.1
       # Was: a comment on `issue_number: 279` - a CLOSED roadmap issue with 289
       # comments. Every run, success or failure, was appended there, which is
       # why nobody noticed this workflow had been failing for weeks

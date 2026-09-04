@@ -481,7 +481,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 2
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@v7.0.1
       - name: Evaluate results
         env:
           CFG_RESULT: ${{ needs.trivy-config.result }}
