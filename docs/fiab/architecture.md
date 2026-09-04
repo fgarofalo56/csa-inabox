@@ -243,6 +243,19 @@ sequenceDiagram
 This table drives every Bicep parameter, every Console runtime
 configuration, every documentation note.
 
+> **GCC shares the Commercial column but is not an exercised boundary.** GCC
+> is Azure public cloud under a government-community M365 identity, so its
+> dispatch values are Commercial's (`gcc.bicepparam`, `deploy-fiab-gcc.yml`).
+> It is **supported-in-code, never exercised — no tenant**: no GCC tenant
+> exists to authenticate against, the lane's `AZURE_GCC_*` secrets have never
+> been set, **0 of its 75 recorded runs (2026-05-23 → 2026-08-08) ever executed
+> a deploy step** — 63 concluded `success` with every deploy job present
+> skipped at 0 steps (only the 21 runs from 2026-07-16 on carry both jobs;
+> `Post-deploy bootstrap (GCC)` did not exist before then) and 12 were
+> `startup_failure` with no jobs at all — and the lane is
+> `disabled_manually` with that reason on record. Recorded decision (2026-09-03): [DECISIONS.md § #4071 + #3078](https://github.com/fgarofalo56/csa-inabox/blob/main/PRPs/active/drain-2026-08-31/DECISIONS.md#4071--3078--gcc-disabled-deploys-zero-container-apps)
+> · [PR #4259 closing comment](https://github.com/fgarofalo56/csa-inabox/pull/4259#issuecomment-5519608115).
+
 | Component | Commercial / GCC | GCC-High / IL4 | DoD IL5 (v1.1) |
 |---|---|---|---|
 | Compute — Spark | Databricks Premium (Photon on clusters) | Databricks Premium classic (no UC) | Databricks Premium classic (no UC) |
