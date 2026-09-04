@@ -33,7 +33,10 @@ import {
   SECURABLE_CHOKEPOINT,
   SECURABLE_RAW,
   SECURABLE_RAW_PUBLIC,
+  SECURABLE_CONTEXT,
+  SECURABLE_CONTEXT_IMPORTERS,
   securableRawImports,
+  securableContextImports,
   AUDITED_TRANSPORTS,
   OUTBOUND_BASELINE,
   CHOKEPOINT_FILES,
@@ -299,10 +302,15 @@ describe('ATTACK: round-3 reviewer bypasses (all three exited 0 against round 2)
     expect(isClientComponent('export default async function Page() {}')).toBe(false);
   });
 
-  it('#5 — fails when a DECLARED-GAP file grows a new un-audited catalog call', () => {
+  it('#5 — fails when the EXEMPTED shortcut-credentials file grows a new catalog call', () => {
     const s = realSources();
     const gap = 'lib/azure/shortcut-credentials.ts';
-    expect(KNOWN_UNAUDITED.has(gap)).toBe(true);
+    // It moved from KNOWN_UNAUDITED to CHOKEPOINT_FILES in the #2622 residual
+    // (its transport now records). Check 2 ranges over BOTH maps, so the ceiling
+    // that makes this attack fail is unchanged — which is why the new membership
+    // is asserted here rather than the test being deleted with the entry.
+    expect(KNOWN_UNAUDITED.has(gap)).toBe(false);
+    expect(CHOKEPOINT_FILES.has(gap)).toBe(true);
     // Round 2's check 4 did `if (KNOWN_UNAUDITED.has(r)) continue;` with no
     // per-file ceiling, so a declared file could grow ARBITRARY new privilege
     // mutations silently. The reviewer appended exactly this.
@@ -449,10 +457,21 @@ describe('ATTACK: quieter regressions', () => {
     expect(analyzeUnityChokepoint(s).join('\n')).toMatch(/health-probes\.ts: allowlisted/);
   });
 
-  it('fails when a KNOWN_UNAUDITED entry goes stale', () => {
+  it('has NO declared gaps left, and the file that was the last one still fails loudly if it vanishes', () => {
+    // Check 4b (the stale-entry check) was the control while KNOWN_UNAUDITED had
+    // an entry. #2622's residual emptied the map by instrumenting the transport,
+    // so 4b now ranges over nothing — asserting it here would be an assertion
+    // that cannot fail. What replaced it is STRICTLY stronger: the same file is a
+    // CHOKEPOINT_FILES + MUST_AUDIT + AUDITED_TRANSPORTS member, so its
+    // disappearance trips two checks instead of one.
+    expect(KNOWN_UNAUDITED.size).toBe(0);
     const s = realSources();
     s.delete('lib/azure/shortcut-credentials.ts');
-    expect(analyzeUnityChokepoint(s).join('\n')).toMatch(/listed in KNOWN_UNAUDITED but not present/);
+    const found = analyzeUnityChokepoint(s).join('\n');
+    expect(found).toMatch(/MISSING CHOKE POINT: lib\/azure\/shortcut-credentials\.ts does not exist/);
+    expect(found).toMatch(/shortcut-credentials\.ts: allowlisted in CHOKEPOINT_FILES but missing/);
+    // …and NOT the 4b message, because there is no entry left to go stale.
+    expect(found).not.toMatch(/listed in KNOWN_UNAUDITED but not present/);
   });
 });
 
@@ -498,7 +517,7 @@ export function rogueGrant2(host: string, fq: string) {
   it('#17 — fails on axios appended to the DECLARED-GAP shortcut-credentials', () => {
     const s = realSources();
     const gap = 'lib/azure/shortcut-credentials.ts';
-    expect(KNOWN_UNAUDITED.has(gap)).toBe(true);
+    expect(CHOKEPOINT_FILES.has(gap)).toBe(true);
     s.set(gap, `${s.get(gap)!}
 import axios from 'axios';
 export async function rogueCred(host: string, token: string, name: string) {
@@ -703,16 +722,16 @@ describe('ROUND 5 — every audited transport must record from its finally', () 
   const DISAMBIGUABLE = (AUDITED_TRANSPORTS as Array<{ file: string; fn: string; recorder: string }>)
     .filter((t) => MUST_AUDIT.has(t.file));
 
-  it('covers all five transports from ONE table', () => {
+  it('covers all six transports from ONE table', () => {
     expect(AUDITED_TRANSPORTS.map((t: { fn: string }) => t.fn).sort())
-      .toEqual(['acctFetch', 'dbxFetch', 'ucFetch', 'ucSecurable', 'ucSql']);
+      .toEqual(['acctFetch', 'dbxFetch', 'securableFetch', 'ucFetch', 'ucSecurable', 'ucSql']);
     for (const t of AUDITED_TRANSPORTS as Array<{ file: string; fn: string; recorder: string; why: string }>) {
       expect(typeof t.why, `${t.fn} has no explanation`).toBe('string');
       expect(t.why.length).toBeGreaterThan(40);
     }
   });
 
-  it('fails for EVERY transport whose finally stops recording (one scan, five attacks)', () => {
+  it('fails for EVERY transport whose finally stops recording (one scan, six attacks)', () => {
     const s = realSources();
     for (const t of AUDITED_TRANSPORTS as Array<{ file: string; recorder: string }>) {
       const src = s.get(t.file);
@@ -744,7 +763,8 @@ describe('ROUND 5 — every audited transport must record from its finally', () 
    * thing it denies COULD have happened, so this proves capability per member —
    * one mutation per transport, each flipping that transport's verdict alone.
    *
-   * Costs 3 whole-tree scans (~0.18 s each). The budget prose at the top of this
+   * Costs one whole-tree scan per DISAMBIGUABLE transport (~0.18 s each; four as
+   * of the #2622 residual). The budget prose at the top of this
    * file applies: the cliff is 60 s of synchronous CPU and the file's upper bound
    * was 6.1 s, so the five scans this round adds are inside the headroom, and
    * `MASK_BUDGET_BYTES` — not this comment — is what holds the line.
@@ -754,7 +774,13 @@ describe('ROUND 5 — every audited transport must record from its finally', () 
       DISAMBIGUABLE.length,
       'the .not.toMatch above now ranges over NOTHING — it cannot fail for any transport',
     ).toBeGreaterThan(0);
-    expect(DISAMBIGUABLE.map((t) => t.fn).sort()).toEqual(['acctFetch', 'dbxFetch', 'ucSql']);
+    // `securableFetch` joined this list automatically when the #2622 residual
+    // gave shortcut-credentials.ts a MUST_AUDIT entry — the tripwire described
+    // in the sibling test below firing as designed, not a hand-edit. It costs
+    // one more whole-tree scan (~0.18 s); MASK_BUDGET_BYTES is what holds the
+    // cost line, not this count.
+    expect(DISAMBIGUABLE.map((t) => t.fn).sort())
+      .toEqual(['acctFetch', 'dbxFetch', 'securableFetch', 'ucSql']);
 
     for (const t of DISAMBIGUABLE) {
       const s = realSources();
@@ -898,10 +924,14 @@ export async function rogueAssign(host: string, token: string, ws: string, ms: s
 describe('ROUND 6 — the securable IMPORT choke point (check 8)', () => {
   it('is wired: the facade is an audited transport and the raw module stays declared', () => {
     expect(AUDITED_TRANSPORTS.some((t: { file: string }) => t.file === SECURABLE_CHOKEPOINT)).toBe(true);
-    // The entry is deliberately KEPT: no un-audited call PATH remains, but the
-    // transport itself is still un-instrumented, and the honest statement of
-    // that is the entry, not its removal.
-    expect(KNOWN_UNAUDITED.has(SECURABLE_RAW)).toBe(true);
+    // Round 6 KEPT the KNOWN_UNAUDITED entry because the transport was still
+    // un-instrumented. The #2622 residual instrumented it, so the entry is gone
+    // and the raw file is a full audited-transport member instead. BOTH halves
+    // are asserted: a removal without the promotion is exactly the "declared gap
+    // quietly downgraded to an untracked amnesty" this list exists to prevent.
+    expect(KNOWN_UNAUDITED.has(SECURABLE_RAW)).toBe(false);
+    expect(AUDITED_TRANSPORTS.some((t: { file: string }) => t.file === SECURABLE_RAW)).toBe(true);
+    expect(MUST_AUDIT.get(SECURABLE_RAW)).toBe('recordUnitySecurableAccess');
     // The allowlist is the two NON-catalog exports — stated in the affirmative,
     // so anything new in that unreadable file is denied by default.
     expect([...SECURABLE_RAW_PUBLIC].sort()).toEqual(['getKeyVaultSecret', 'keyVaultConfigGate']);
@@ -1034,5 +1064,147 @@ describe('ROUND 6 — the securable IMPORT choke point (check 8)', () => {
       [SECURABLE_RAW, 'export async function deleteUcStorageCredential() {}\n'],
     ])).join('\n');
     expect(failures).toMatch(/MISSING CHOKE POINT: lib\/azure\/uc-securable\.ts does not exist/);
+  });
+});
+
+/**
+ * ROUND 7 — the SUPPRESSOR choke point (check 9).
+ *
+ * Instrumenting the transport (history #14) could not be done without creating a
+ * de-duplicator between the two layers, and a de-duplicator is a SUPPRESSOR:
+ * inside `withSecurableRecordedByCaller` the transport writes no row, and the
+ * replacement row exists only because the facade is the thing running it.
+ *
+ * It shipped as a plain export. An adversarial review then defeated the whole of
+ * #14 with ONE import line — a helper inside `shortcut-credentials.ts` wrapping
+ * `securableFetch` in the suppressor, reached from an export on the
+ * `SECURABLE_RAW_PUBLIC` allowlist — and measured the guard exiting 0 with its
+ * banner unchanged and 73/73 specs green while that path wrote zero rows. Check 8
+ * cannot see it: the import is INSIDE the module check 8 polices imports OF.
+ *
+ * So these are the same attacks as ROUND 6, aimed at the exception rather than at
+ * the rule. Two whole-tree scans for the block (~0.4 s of the file's 53.9 s of
+ * headroom), because the planted rogues have to be found among 5,470 real files —
+ * the configuration CI actually runs.
+ */
+describe('ROUND 7 — the securable SUPPRESSOR choke point (check 9)', () => {
+  it('is wired: one permitted importer per export, matching what ships', () => {
+    // Keyed per SYMBOL, not per file: the two exports are opposites and a
+    // file-level allowlist would have to name the transport, which is exactly
+    // the file that must never hold the suppressor.
+    expect([...SECURABLE_CONTEXT_IMPORTERS]).toEqual([
+      ['withSecurableRecordedByCaller', SECURABLE_CHOKEPOINT],
+      ['securableRecordedByCaller', SECURABLE_RAW],
+    ]);
+    const s = realSources();
+    expect(s.has(SECURABLE_CONTEXT)).toBe(true);
+    // The facade holds ONLY the suppressor; the transport holds ONLY the reader.
+    expect(securableContextImports(s.get(SECURABLE_CHOKEPOINT)!)).toEqual(['withSecurableRecordedByCaller']);
+    expect(securableContextImports(s.get(SECURABLE_RAW)!)).toEqual(['securableRecordedByCaller']);
+    // …and no third module holds either one. A pure pass over the map, so this
+    // costs nothing beyond the read already cached above.
+    for (const [rel, src] of s) {
+      if (rel === SECURABLE_CHOKEPOINT || rel === SECURABLE_RAW) continue;
+      if (/(^|[\\/])__tests__[\\/]/.test(rel) || /\.(test|spec)\.tsx?$/.test(rel)) continue;
+      expect(securableContextImports(src), `${rel} holds the suppression context`).toEqual([]);
+    }
+  });
+
+  it('fails on the reviewer fixture — the suppressor imported INSIDE the transport', () => {
+    // THE REGRESSION, verbatim in shape: a mint helper wrapping the transport in
+    // the suppressor, added to the very file whose row it turns off. Appended to
+    // the REAL source, so if check 9 could not fail on this, history #14's
+    // instrumentation would be defeasible by one line and the PR that added it
+    // would be claiming a control it does not have.
+    const s = realSources();
+    s.set(SECURABLE_RAW, [
+      s.get(SECURABLE_RAW)!,
+      "import { withSecurableRecordedByCaller } from '@/lib/azure/securable-audit-context';",
+      'export async function rogueMint(init) {',
+      '  return withSecurableRecordedByCaller(() => securableFetch(init));',
+      '}',
+    ].join('\n'));
+    const found = analyzeUnityChokepoint(s).join('\n');
+    expect(found, 'the suppressor was imported into the transport and nothing saw it')
+      .toMatch(/shortcut-credentials\.ts: imports `withSecurableRecordedByCaller` from lib\/azure\/securable-audit-context\.ts/);
+    // …and the message routes the reader to WHY, not merely to WHAT.
+    expect(found).toMatch(/Only lib\/azure\/uc-securable\.ts may import `withSecurableRecordedByCaller`/);
+  });
+
+  it('fails on every evasion a name scan invites (one scan, five attacks)', () => {
+    const s = realSources();
+    // (a) a THIRD module holding the suppressor — the plain case.
+    s.set('lib/azure/rogue-sup-a.ts',
+      "import { withSecurableRecordedByCaller } from './securable-audit-context';\nexport const off = withSecurableRecordedByCaller;\n");
+    // (b) RENAMED on import — the exported name is what is matched.
+    s.set('lib/azure/rogue-sup-b.ts',
+      "import { withSecurableRecordedByCaller as quiet } from '@/lib/azure/securable-audit-context';\nexport const off = quiet;\n");
+    // (c) NAMESPACE import — hands over every export, so it can never be
+    //     permitted by name even for the two files that are permitted one each.
+    s.set('lib/azure/rogue-sup-c.ts',
+      "import * as ctx from './securable-audit-context';\nexport const off = ctx;\n");
+    // (d) DYNAMIC import — same, deferred.
+    s.set('lib/azure/rogue-sup-d.ts',
+      "export async function off() { return import('@/lib/azure/securable-audit-context'); }\n");
+    // (e) RE-EXPORT laundering: a one-line module that hands the suppressor out
+    //     under a specifier neither check knows. This is the arm that had to be
+    //     added to the shared import parser, and it closes the same hole in
+    //     check 8 (see the control below).
+    s.set('lib/azure/rogue-sup-e.ts',
+      "export { withSecurableRecordedByCaller } from './securable-audit-context';\n");
+
+    const found = analyzeUnityChokepoint(s).join('\n');
+    expect(found, 'a third holder walked past').toMatch(/rogue-sup-a\.ts: imports `withSecurableRecordedByCaller`/);
+    expect(found, 'a renamed import walked past').toMatch(/rogue-sup-b\.ts: imports `withSecurableRecordedByCaller`/);
+    expect(found, 'a namespace import walked past').toMatch(/rogue-sup-c\.ts: imports `\*`/);
+    expect(found, 'a dynamic import walked past').toMatch(/rogue-sup-d\.ts: imports `\*`/);
+    expect(found, 'a re-export walked past').toMatch(/rogue-sup-e\.ts: imports `withSecurableRecordedByCaller`/);
+    // NON-VACUOUS: the two legitimate holders are NOT among the failures.
+    expect(found).not.toMatch(/uc-securable\.ts: imports `withSecurableRecordedByCaller`/);
+    expect(found).not.toMatch(/shortcut-credentials\.ts: imports `securableRecordedByCaller`/);
+  });
+
+  it('closes the same re-export hole in CHECK 8 (one parser, two consumers)', () => {
+    // The re-export arm is in the SHARED parser, so check 8 gained it too — a
+    // module re-exporting a UC-mutating symbol was previously a one-line bypass
+    // of the import choke point, since every consumer would then import from a
+    // specifier the scan does not know. Pure calls, no scan.
+    expect(securableRawImports("export { deleteUcStorageCredential } from './shortcut-credentials';"))
+      .toEqual(['deleteUcStorageCredential']);
+    expect(securableRawImports("export * from '@/lib/azure/shortcut-credentials';")).toEqual(['*']);
+    expect(securableContextImports("export * as ctx from './securable-audit-context';")).toEqual(['*']);
+    // …and prose about a re-export is still not a re-export.
+    expect(securableContextImports("// export { withSecurableRecordedByCaller } from './securable-audit-context';"))
+      .toEqual([]);
+    // A different module in the same directory must not be swept in.
+    expect(securableContextImports("import { x } from './securable-audit-contextual';").length).toBe(0);
+  });
+
+  it('fails when the suppression context disappears while both layers remain', () => {
+    const failures = analyzeUnityChokepoint(new Map([
+      [SECURABLE_RAW, 'export async function deleteUcStorageCredential() {}\n'],
+      [SECURABLE_CHOKEPOINT, 'export async function ucSecurable() {}\n'],
+    ])).join('\n');
+    expect(failures).toMatch(/MISSING SUPPRESSOR CONTEXT: lib\/azure\/securable-audit-context\.ts does not exist/);
+  });
+
+  it('fails when the transport stops taking its suppression signal from that module', () => {
+    // The other way to defeat check 9: leave the context module in place and
+    // grow a suppressor inside the transport instead. This does not prove the
+    // transport HONOURS the signal — that half is unity-audit-securable.test.ts
+    // — only that the signal still comes from the module whose importers are
+    // enumerated.
+    const s = realSources();
+    const before = s.get(SECURABLE_RAW)!;
+    const after = before.replace(
+      "import { securableRecordedByCaller } from '@/lib/azure/securable-audit-context';",
+      '',
+    );
+    // NON-VACUOUS: a fixture that failed to mutate would make the assertion
+    // below pass for the wrong reason.
+    expect(after, 'the import line moved — update this fixture').not.toBe(before);
+    s.set(SECURABLE_RAW, after);
+    expect(analyzeUnityChokepoint(s).join('\n'))
+      .toMatch(/shortcut-credentials\.ts: no longer imports `securableRecordedByCaller`/);
   });
 });

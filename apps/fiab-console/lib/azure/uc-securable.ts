@@ -2,12 +2,10 @@
  * `ucSecurable` — the AUDITED facade for the Unity Catalog **storage-credential**
  * and **external-location** surface (issue #2622, gap 1 — the last of the three).
  *
- * ## Why this module exists, and why it is a FACADE rather than a `try/finally`
+ * ## Why this module exists
  *
- * LU-3 gave the Console a Unity Catalog access trail. Four transports now record
- * into it (`ucFetch`, `dbxFetch`, `ucSql`, `acctFetch`). One surface was left
- * out, and it is arguably the most consequential one:
- * `lib/azure/shortcut-credentials.ts` keeps its OWN private transport and issues
+ * LU-3 gave the Console a Unity Catalog access trail. `lib/azure/shortcut-credentials.ts`
+ * keeps its OWN transport and issues
  *
  *     POST   /api/2.1/unity-catalog/storage-credentials
  *     DELETE /api/2.1/unity-catalog/storage-credentials/{name}
@@ -19,36 +17,60 @@
  * prefix. Creating one is the closest thing in Unity Catalog to minting access,
  * and none of it produced a Loom row.
  *
- * The obvious fix — wrap that file's transport in a `try/finally` like `ucSql`
- * did for the SQL half — is not available: the path is covered by a repo-level
- * credential-path read/write deny (the glob that protects `.env` and `secrets/`
- * also matches `*credentials*`), so the file cannot be edited here. Two previous
- * passes at #2622 recorded that as the reason gap 1 stayed open.
+ * For three rounds this facade was the ONLY place the recorder could live: the
+ * raw file sits under a repo-level credential-path deny (the glob that protects
+ * `.env` and `secrets/` also matches `*credentials*`), so the `try/finally`
+ * `ucSql` got for the SQL half could not be added inside it. **That is no longer
+ * true** — #2622's residual instrumented `securableFetch` in place, so the
+ * TRANSPORT records too and the guard's last `KNOWN_UNAUDITED` entry is retired.
  *
- * A facade closes it WITHOUT touching the denied file, and the substitution is
- * exact because of a fact about the call graph: those five exports have exactly
- * ONE production consumer, `lib/azure/shortcut-engines.ts`. Re-pointing that one
- * import at this module puts every real call site behind the recorder.
+ * ## Why BOTH layers exist, and why they do not double-record
+ *
+ * The transport's row is the FLOOR: it fires for anything issued from that file,
+ * including an export added later that nobody wrapped here. This facade's row is
+ * the HIGHER-FIDELITY one, because it wraps the whole export and therefore sees
+ * the post-response outcome — `ucJsonOrThrow` treats a 409 `ALREADY_EXISTS` as a
+ * successful idempotent re-create and a DELETE tolerates a 404, neither of which
+ * the transport can know without consuming the response body the caller is about
+ * to parse.
+ *
+ * So exactly one row is written per call, and the more accurate layer wins: every
+ * call below runs inside `withSecurableRecordedByCaller`
+ * (`lib/azure/securable-audit-context.ts`), which is the ONLY thing that
+ * suppresses the transport's own row. Suppression is opt-IN — outside that
+ * context the transport records — so the de-duplication cannot silently become a
+ * hole. See that module for why it is an async context and not a flag.
  *
  * ## What makes this a CHOKE POINT and not merely a convention
  *
- * A facade nobody is obliged to use is a comment. Two mechanical controls, both
+ * A facade nobody is obliged to use is a comment. Three mechanical controls, all
  * in `scripts/ci/check-unity-audit-chokepoint.mjs`, make this one load-bearing:
  *
- *   1. **check 1 (AUDITED_TRANSPORTS)** — this file is the FIFTH entry, so the
- *      guard brace-matches the `finally` of {@link ucSecurable} and fails the
- *      build if `recordUnitySecurableAccess(` ever leaves it. Recording outside
- *      the `finally` would drop exactly the DENIED calls, which on this surface
- *      means "who was refused permission to mint storage access".
+ *   1. **check 1 (AUDITED_TRANSPORTS)** — this file is an entry, so the guard
+ *      brace-matches the `finally` of {@link ucSecurable} and fails the build if
+ *      `recordUnitySecurableAccess(` ever leaves it. Recording outside the
+ *      `finally` would drop exactly the DENIED calls, which on this surface means
+ *      "who was refused permission to mint storage access".
  *   2. **check 8 (SECURABLE IMPORT CHOKE POINT)** — no module except this one
  *      may import a UC-mutating symbol from `shortcut-credentials.ts`. It is an
  *      ALLOWLIST of the two non-catalog exports (`getKeyVaultSecret`,
- *      `keyVaultConfigGate`), not a denylist of today's five, so a NEW
- *      un-audited export added to that write-denied file cannot be consumed
- *      anywhere without failing the build.
+ *      `keyVaultConfigGate`), not a denylist of today's five, so a NEW export
+ *      added to that file cannot be consumed anywhere without failing the build.
+ *   3. **check 9 (SUPPRESSOR CHOKE POINT)** — no module except this one may
+ *      import `withSecurableRecordedByCaller` by a specifier that RESOLVES to
+ *      `securable-audit-context.ts` (alias or relative, at any depth). A module
+ *      that re-implements the suppressor instead of importing it issues no
+ *      import and is not seen; that limit is stated in the guard's LIMITS block.
+ *      De-duplicating two audit layers
+ *      necessarily creates a way to turn the transport's row OFF, and that
+ *      exception needs guarding at least as much as the surface does: held
+ *      anywhere else — above all inside `shortcut-credentials.ts`, where no
+ *      replacement row is ever written — it is an off switch for the securable
+ *      trail. Demonstrated by review, hence the check.
  *
- * Together those mean the un-audited functions still exist but are unreachable
- * from the rest of the app, which is the same end state as instrumenting them.
+ * Check 8 is retained even though the transport is now audited: an audited call
+ * is not the same as an AUTHORIZED one, and routing every consumer through one
+ * module is what keeps the securable surface reviewable.
  *
  * ## The one rule you must not break here
  *
@@ -75,6 +97,7 @@ import {
   deleteUcStorageCredential as rawDeleteUcStorageCredential,
 } from './shortcut-credentials';
 import { recordUnitySecurableAccess } from './unity-audit';
+import { withSecurableRecordedByCaller as recordedHere } from './securable-audit-context';
 
 /**
  * The two Unity Catalog REST collections this module covers.
@@ -136,9 +159,11 @@ export async function ucSecurable<T>(call: UcSecurableCall, run: () => Promise<T
 /**
  * Parameter and return types are derived from the wrapped functions with
  * `Parameters` / `Awaited<ReturnType>` rather than re-declared. A re-declaration
- * would be a second copy of a contract that lives in a file this module cannot
- * read, and the two would drift silently; derived types make a signature change
- * upstream a COMPILE error here instead.
+ * would be a second copy of a contract that lives in another module, and the two
+ * would drift silently; derived types make a signature change upstream a COMPILE
+ * error here instead. The audit de-duplication deliberately does NOT ride on
+ * these signatures — it is an async context — so wrapping stays transparent to
+ * every caller and spy of the raw exports.
  */
 type Arg0<F extends (...a: never[]) => unknown> = Parameters<F>[0];
 type Result<F extends (...a: never[]) => unknown> = Awaited<ReturnType<F>>;
@@ -149,7 +174,7 @@ export function ensureUcAwsStorageCredential(
 ): Promise<Result<typeof rawEnsureUcAwsStorageCredential>> {
   return ucSecurable(
     { path: UC_STORAGE_CREDENTIALS_PATH, method: 'POST', target: spec?.name },
-    () => rawEnsureUcAwsStorageCredential(spec),
+    () => recordedHere(() => rawEnsureUcAwsStorageCredential(spec)),
   );
 }
 
@@ -159,7 +184,7 @@ export function ensureUcGcpStorageCredential(
 ): Promise<Result<typeof rawEnsureUcGcpStorageCredential>> {
   return ucSecurable(
     { path: UC_STORAGE_CREDENTIALS_PATH, method: 'POST', target: spec?.name },
-    () => rawEnsureUcGcpStorageCredential(spec),
+    () => recordedHere(() => rawEnsureUcGcpStorageCredential(spec)),
   );
 }
 
@@ -169,7 +194,7 @@ export function ensureUcExternalLocation(
 ): Promise<Result<typeof rawEnsureUcExternalLocation>> {
   return ucSecurable(
     { path: UC_EXTERNAL_LOCATIONS_PATH, method: 'POST', target: args?.name },
-    () => rawEnsureUcExternalLocation(args),
+    () => recordedHere(() => rawEnsureUcExternalLocation(args)),
   );
 }
 
@@ -180,7 +205,7 @@ export function deleteUcExternalLocation(
 ): Promise<Result<typeof rawDeleteUcExternalLocation>> {
   return ucSecurable(
     { path: `${UC_EXTERNAL_LOCATIONS_PATH}/${encodeURIComponent(name)}`, method: 'DELETE', target: name },
-    () => rawDeleteUcExternalLocation(name, force),
+    () => recordedHere(() => rawDeleteUcExternalLocation(name, force)),
   );
 }
 
@@ -191,6 +216,6 @@ export function deleteUcStorageCredential(
 ): Promise<Result<typeof rawDeleteUcStorageCredential>> {
   return ucSecurable(
     { path: `${UC_STORAGE_CREDENTIALS_PATH}/${encodeURIComponent(name)}`, method: 'DELETE', target: name },
-    () => rawDeleteUcStorageCredential(name, force),
+    () => recordedHere(() => rawDeleteUcStorageCredential(name, force)),
   );
 }

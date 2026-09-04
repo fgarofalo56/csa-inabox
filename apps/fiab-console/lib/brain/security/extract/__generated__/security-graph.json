@@ -34233,10 +34233,10 @@
           "facet": {
             "kind": "publication",
             "module": "scripts/ci/check-unity-audit-chokepoint.mjs",
-            "declaredSinkCount": 7,
+            "declaredSinkCount": 9,
             "sinks": [
               {
-                "id": "console:member:1276",
+                "id": "console:member:1509",
                 "surface": "console",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -34246,7 +34246,7 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "console:member:1277",
+                "id": "console:member:1510",
                 "surface": "console",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -34256,7 +34256,7 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "console:member:1278",
+                "id": "console:member:1511",
                 "surface": "console",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -34266,7 +34266,7 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "console:member:1284",
+                "id": "console:member:1517",
                 "surface": "console",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -34276,7 +34276,7 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "console:member:1290",
+                "id": "console:member:1526",
                 "surface": "console",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -34286,7 +34286,7 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "console:member:1291",
+                "id": "console:member:1532",
                 "surface": "console",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -34296,7 +34296,27 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "console:member:1292",
+                "id": "console:member:1533",
+                "surface": "console",
+                "accessPath": "member",
+                "wholeExpressionBounded": false,
+                "boundary": null,
+                "unredactedByDesign": false,
+                "carriesSensitive": false,
+                "childProvenRedacting": null
+              },
+              {
+                "id": "console:member:1534",
+                "surface": "console",
+                "accessPath": "member",
+                "wholeExpressionBounded": false,
+                "boundary": null,
+                "unredactedByDesign": false,
+                "carriesSensitive": false,
+                "childProvenRedacting": null
+              },
+              {
+                "id": "console:member:1540",
                 "surface": "console",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -48861,9 +48881,9 @@
     },
     "meta": {
       "generatorVersion": 1,
-      "generatedAt": "2026-09-03T21:50:12.962Z",
-      "commit": "cd18dd6a3573ea33e962774213a2d13b74a7dcb5",
-      "inputsDigest": "abdac7521533e1db",
+      "generatedAt": "2026-09-04T19:07:01.260Z",
+      "commit": "e1b9d07d950bb7d7ecd2388054767846792393d6",
+      "inputsDigest": "8f7c053a1d734e81",
       "filesScanned": 2086,
       "scanScopes": [
         {
@@ -49584,7 +49604,7 @@
         },
         {
           "subject": "scripts/ci/check-unity-audit-chokepoint.mjs",
-          "reason": "module declares no PUBLICATION-SINKS marker, so C4's declared-count drift check is INERT for it (declaredSinkCount is set to the observed 7). Recorded so the inertness is countable rather than invisible — a check that cannot fail must not be mistaken for a check that passed."
+          "reason": "module declares no PUBLICATION-SINKS marker, so C4's declared-count drift check is INERT for it (declaredSinkCount is set to the observed 9). Recorded so the inertness is countable rather than invisible — a check that cannot fail must not be mistaken for a check that passed."
         },
         {
           "subject": "scripts/ci/check-upstream-image-mirror.mjs",
@@ -49920,7 +49940,7 @@
         },
         {
           "subject": "C4 expression arm (carriesSensitive)",
-          "reason": "matched 0 of 2354 non-spawn publication sink(s), so every C4 finding on this tree comes from the spawn-stdio arm. The expression arm is INERT here and its correctness is therefore unexercised by the real corpus — C4 output is not evidence that no unbounded sensitive write exists."
+          "reason": "matched 0 of 2356 non-spawn publication sink(s), so every C4 finding on this tree comes from the spawn-stdio arm. The expression arm is INERT here and its correctness is therefore unexercised by the real corpus — C4 output is not evidence that no unbounded sensitive write exists."
         }
       ]
     }

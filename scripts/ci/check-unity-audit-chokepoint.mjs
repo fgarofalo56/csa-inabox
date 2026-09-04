@@ -6,7 +6,7 @@
  *   EVERY Unity Catalog call the Console BFF makes must go through an AUDITED
  *   transport whose `finally` writes the WHO / WHAT / WHEN / OUTCOME (including
  *   DENIALS) row to the Cosmos `_auditLog` trail and the `LoomAudit_CL` SIEM
- *   stream. There are exactly FIVE such transports ({@link AUDITED_TRANSPORTS}):
+ *   stream. There are exactly SIX such transports ({@link AUDITED_TRANSPORTS}):
  *
  *     apps/fiab-console/lib/azure/unity-catalog-client.ts  →  ucFetch
  *         the backend-agnostic UC REST client (Loom Unity / OSS UC in Gov,
@@ -29,11 +29,16 @@
  *     apps/fiab-console/lib/azure/uc-securable.ts          →  ucSecurable
  *         the audited FACADE over storage-credential + external-location
  *         CREATE/DELETE — the securables that hand a workload access to a
- *         storage account. Records via `recordUnitySecurableAccess(...)`. It is
- *         a facade rather than a `try/finally` because the module that holds the
- *         transport (`shortcut-credentials.ts`) is covered by a repo-level
- *         credential-path read/write deny and cannot be edited; check 8 makes
- *         the facade the only door to it.
+ *         storage account. Records via `recordUnitySecurableAccess(...)`. It sees
+ *         the POST-RESPONSE outcome the transport below cannot (409
+ *         ALREADY_EXISTS is a successful re-create; DELETE tolerates 404), and
+ *         check 8 keeps it the only door to those five exports.
+ *     apps/fiab-console/lib/azure/shortcut-credentials.ts  →  securableFetch
+ *         the TRANSPORT under that facade. It records the same way, and
+ *         suppresses its own row only inside the async context the facade runs
+ *         each call in — so exactly one row is written per call, and an export
+ *         added to this file WITHOUT going through the facade is still audited.
+ *         Instrumenting it retired the last `KNOWN_UNAUDITED` entry (#2622).
  *
  * WHY A GUARD AND NOT JUST A COMMENT:
  *   An audit choke point is only a choke point if bypassing it is HARD. A
@@ -171,7 +176,8 @@
  *      — puts every real call site behind the recorder without touching the
  *      denied file. FIXED: `ucSecurable` is the fifth {@link AUDITED_TRANSPORTS}
  *      entry, so check 1 holds its `finally` to the same brace-accurate standard
- *      as the other four.
+ *      as the other four. SUPERSEDED IN PART by history #14: the transport is now
+ *      instrumented too, and the facade is kept for the fidelity it adds.
  *  13. A FACADE NOBODY MUST USE IS A COMMENT. #12 on its own is a convention:
  *      any module could keep importing the raw functions, and the audit row
  *      would simply not happen — the "audit call that is added but never
@@ -179,14 +185,56 @@
  *      facade the ONLY module allowed to import a UC-mutating symbol from
  *      {@link SECURABLE_RAW}. It is stated as an ALLOWLIST of the two non-catalog
  *      exports ({@link SECURABLE_RAW_PUBLIC}) rather than a denylist of today's
- *      five, because this is the one file in the tree the guard's author cannot
- *      READ: a new un-audited export added to it by someone who does have write
- *      access must be denied by DEFAULT, not by having been anticipated.
- *      {@link securableRawImports} counts namespace and dynamic imports as `*`,
- *      since either hands over every export at once.
- *      The `KNOWN_UNAUDITED` entry is deliberately KEPT: no un-audited call PATH
- *      remains, but the transport is still un-instrumented, and the honest
- *      statement of that is the entry, not its removal.
+ *      five, because that module's own source was not readable by the guard's
+ *      author at the time (see #14 for what that turned out to mean): a new
+ *      un-audited export added to it by someone who does have write access must
+ *      be denied by DEFAULT, not by having been anticipated.
+ *      {@link securableRawImports} counts namespace, dynamic, and star-re-export
+ *      imports as `*`, since each hands over every export at once.
+ *      The `KNOWN_UNAUDITED` entry was deliberately KEPT at the time: no
+ *      un-audited call PATH remained, but the transport was still
+ *      un-instrumented, and the honest statement of that was the entry, not its
+ *      removal.
+ *
+ * ## HISTORY — the #2622 residual. The declared-gap list reaches ZERO.
+ *
+ *  14. THE DENY WAS ON A PATH, NOT ON THE FILE'S CONTENT. Rounds 2–6 recorded
+ *      that the recorder could not be added INSIDE {@link SECURABLE_RAW}. Read
+ *      literally that was a claim about a tool boundary, not about the code, and
+ *      it was carried forward three times without being re-measured. It no longer
+ *      holds. FIXED: `securableFetch` wraps the transport in a `try/finally` and
+ *      records, so it is a full CHOKEPOINT_FILES + MUST_AUDIT +
+ *      AUDITED_TRANSPORTS member and `KNOWN_UNAUDITED` is EMPTY.
+ *      Why both layers stay: the facade is the only layer that can see the
+ *      post-response outcome, and the transport is the only layer a NEW export
+ *      cannot avoid. The two do not double-record — the facade passes
+ *      each call inside an AsyncLocalStorage that is the sole suppressor, and it
+ *      is opt-IN, so being outside it records rather than dropping the row.
+ *      An empty `KNOWN_UNAUDITED` is not a deleted list: check 4's ratchet still
+ *      fails the build for a NEW un-audited path rather than letting it be added
+ *      here quietly, and the CLI prints the zero rather than printing nothing.
+ *  15. INSTRUMENTING THE TRANSPORT CREATED AN OFF SWITCH, AND SHIPPED IT
+ *      UNGUARDED. #14 put a recorder in the transport and, necessarily, a
+ *      de-duplicator between the two layers — `withSecurableRecordedByCaller` in
+ *      {@link SECURABLE_CONTEXT}. That is a SUPPRESSOR: inside it the
+ *      transport's row is not written, and the replacement row exists only
+ *      because {@link SECURABLE_CHOKEPOINT} is the thing running it. It shipped
+ *      as a plain export with no import choke point, so the control #14 added
+ *      was defeasible by one import line — and the worst place to add that line
+ *      was INSIDE {@link SECURABLE_RAW}, where check 8 does not look and no
+ *      facade row is ever written. DEMONSTRATED by an adversarial review: a
+ *      helper wrapping `securableFetch` in the suppressor, reached from an
+ *      export on the {@link SECURABLE_RAW_PUBLIC} allowlist, left the CLI banner
+ *      unchanged and 73/73 specs green while writing zero rows.
+ *      FIXED: check 9 gives the suppressor the same mechanical control check 8
+ *      gives the surface — per SYMBOL, exactly one permitted importer
+ *      ({@link SECURABLE_CONTEXT_IMPORTERS}), namespace / dynamic / star
+ *      re-export counted as `*` and never permitted. The re-export arm was added
+ *      to {@link moduleImports} at the same time, because `export { x } from`
+ *      was a one-line laundering bypass of check 8 as well.
+ *      Lesson worth keeping: a control that needs an exception mechanism has
+ *      shipped a second control surface, and the exception needs guarding at
+ *      least as much as the thing it excepts.
  *
  * ## LIMITS — what this guard is NOT *
  * READ THIS BEFORE CITING THE GUARD AS COVERAGE. It is a lexical scan over the
@@ -211,7 +259,25 @@
  *     dropping every denied call — demonstrated, and caught instead by
  *     `lib/azure/__tests__/unity-audit-sql.test.ts` ("records the DENIED row
  *     even though it re-throws"). Guard and spec cover different halves; citing
- *     either alone as coverage is the mistake this section exists to prevent.
+ *     either alone as coverage is the mistake this section exists to prevent;
+ *   - check 9 enumerates IMPORTS of the DECLARED suppressor. A module that
+ *     re-implements one from scratch — a second `AsyncLocalStorage`, or a
+ *     module-level flag — issues no import and is not seen. What the check buys
+ *     is that the suppressor which EXISTS cannot spread quietly, and that the
+ *     transport's suppression signal keeps coming from a module whose importers
+ *     are enumerated. Whether the transport HONOURS that signal is a runtime
+ *     property, pinned by `lib/azure/__tests__/unity-audit-securable.test.ts`;
+ *   - checks 8 and 9 match a module by its import SPECIFIER, not by resolving
+ *     it. The alias arm is derived from the module's own directory and the
+ *     relative arm now admits any depth (`../azure/x`, `../../azure/x`), which
+ *     is what the repo actually writes — a cross-directory relative specifier
+ *     used to resolve to the guarded module and be invisible, measured on
+ *     2026-09-03 and closed with a counterfactual (pre-fix pattern + planted
+ *     bypass = RC 0; fixed pattern, same bypass = RC 1). What remains outside
+ *     the vocabulary is a specifier that reaches the module by a route these
+ *     two arms do not spell — a tsconfig path alias other than `@/`, or a
+ *     re-export barrel that launders it. Those are SPELLINGS, and keying a
+ *     control to a spelling is what this bullet exists to disclose.
  *
  * The un-bypassable half of this control is the transport itself: there is one
  * credential resolver (uc-backend.ts) and two audited transports, and code that
@@ -220,13 +286,6 @@
  *
  * ## STILL NOT COVERED BY THE TRAIL (declared, not fixed)
  *
- *   - `lib/azure/shortcut-credentials.ts` — its storage-credential +
- *     external-location exits ARE audited as of round 6 (every one is wrapped by
- *     {@link SECURABLE_CHOKEPOINT}, and check 8 makes that the only door), but
- *     the file's own TRANSPORT is still un-instrumented, so it remains in
- *     KNOWN_UNAUDITED. What is genuinely left of #2622 gap 1 is moving the
- *     `try/finally` inside the file, which needs write access to a
- *     credential-path-denied path.
  *   - `lib/azure/iceberg-catalog-client.ts`'s `ircFetch` namespace/table
  *     CREATE + DROP: audited, but into a DIFFERENT trail
  *     (`logIcebergAccess` → `_auditLog itemType:'iceberg-catalog'`), so they do
@@ -255,7 +314,17 @@
  *   8. SECURABLE IMPORT CHOKE POINT — only {@link SECURABLE_CHOKEPOINT} may
  *      import a UC-mutating symbol from {@link SECURABLE_RAW} (allowlist:
  *      {@link SECURABLE_RAW_PUBLIC}). This is what makes the facade in history
- *      #12 a control rather than a convention (#13).
+ *      #12 a control rather than a convention (#13). RETAINED after history #14:
+ *      an AUDITED call is not an AUTHORIZED one, and one consumer is what keeps
+ *      the securable surface reviewable.
+ *   9. SUPPRESSOR CHOKE POINT — the off switch history #14 created gets the same
+ *      treatment as the surface: each export of {@link SECURABLE_CONTEXT} has
+ *      exactly ONE permitted importer ({@link SECURABLE_CONTEXT_IMPORTERS}), a
+ *      namespace / dynamic / star re-export is `*` and is never permitted, and
+ *      {@link SECURABLE_RAW} must still take its suppression signal from that
+ *      module. It establishes WHERE the signal comes from, never that the
+ *      transport honours it — that half is pinned by
+ *      `lib/azure/__tests__/unity-audit-securable.test.ts`.
  *
  * ALLOWLIST — a file that legitimately needs the catalog address AND makes
  *   requests must be added to CHOKEPOINT_FILES below WITH a justification, and
@@ -290,16 +359,53 @@ export const SQL_CHOKEPOINT = 'lib/azure/uc-sql.ts';
 export const ACCOUNT_CHOKEPOINT = 'lib/azure/unity-catalog-account-client.ts';
 /** The AUDITED facade over the storage-credential / external-location surface. */
 export const SECURABLE_CHOKEPOINT = 'lib/azure/uc-securable.ts';
-/** The write-denied module whose UC exports the facade above is the only door to. */
+/**
+ * The module holding the storage-credential / external-location transport. The
+ * facade above is still the only door to its UC exports (check 8), and as of
+ * #2622's residual its OWN transport (`securableFetch`) records too — so a new
+ * export added inside it reaches the catalog with a row rather than without one.
+ */
 export const SECURABLE_RAW = 'lib/azure/shortcut-credentials.ts';
+/**
+ * The suppression context — the ONE thing that can turn the transport's row off.
+ *
+ * Two layers audit the same securable call and exactly one row may come out, so
+ * something has to de-duplicate them. That something is an `AsyncLocalStorage`
+ * in this module: the facade runs each call inside it, and the transport records
+ * only outside it. Which makes `withSecurableRecordedByCaller` an OFF SWITCH for
+ * the transport row, and an off switch needs the same mechanical control the
+ * surface it protects has (check 9) — otherwise the instrumentation added in
+ * history #14 is defeated by one import line, including one added INSIDE
+ * {@link SECURABLE_RAW} itself. See history #15.
+ */
+export const SECURABLE_CONTEXT = 'lib/azure/securable-audit-context.ts';
+/**
+ * `exported symbol -> the ONE file permitted to import it` from
+ * {@link SECURABLE_CONTEXT}. Keyed per SYMBOL rather than per file because the
+ * two exports are opposites and their permitted importers are different files:
+ *
+ *   `withSecurableRecordedByCaller`  the SUPPRESSOR (writes the context). Only
+ *                                    the facade may hold it — it is the layer
+ *                                    that writes the replacement row.
+ *   `securableRecordedByCaller`      the READER (asks whether a caller already
+ *                                    recorded). Only the transport may hold it —
+ *                                    it is the layer whose row is suppressed.
+ *
+ * A file-level allowlist would have to name both files, which would hand the
+ * transport the suppressor and re-open exactly the hole this check closes.
+ */
+export const SECURABLE_CONTEXT_IMPORTERS = new Map([
+  ['withSecurableRecordedByCaller', SECURABLE_CHOKEPOINT],
+  ['securableRecordedByCaller', SECURABLE_RAW],
+]);
 /** The recorder both choke points delegate to. */
 export const RECORDER = 'lib/azure/unity-audit.ts';
 
 /**
- * The four audited transports, as `[file, transport function, recorder symbol]`.
+ * The audited transports, as `[file, transport function, recorder symbol]`.
  *
- * The integrity check is the SAME brace-accurate `finally` match for all four —
- * pasting a fifth transport in here is what wires it up, so a new choke point
+ * The integrity check is the SAME brace-accurate `finally` match for every one —
+ * pasting a new transport in here is what wires it up, so a new choke point
  * cannot be added with a weaker check than the existing ones.
  */
 export const AUDITED_TRANSPORTS = [
@@ -343,10 +449,22 @@ export const AUDITED_TRANSPORTS = [
     recorder: 'recordUnitySecurableAccess',
     why:
       'Storage-credential and external-location CREATE/DELETE are the securables that hand a workload '
-      + 'access to a storage account — the closest thing in Unity Catalog to minting access. They issue from '
-      + `${SECURABLE_RAW}'s OWN private transport, which no other choke point can see and which cannot be `
-      + 'instrumented in place (repo-level credential-path write deny), so this facade is the audited door to '
-      + 'them. Recording outside the finally would drop exactly the DENIED mint attempts.',
+      + 'access to a storage account — the closest thing in Unity Catalog to minting access. This facade is the '
+      + `ONLY module permitted to import them from ${SECURABLE_RAW} (check 8), and it is the layer that sees the `
+      + 'POST-RESPONSE outcome: the raw exports treat 409 ALREADY_EXISTS as success and a 404 on DELETE as a '
+      + 'no-op, which the transport underneath cannot know without consuming the response body. Recording '
+      + 'outside the finally would drop exactly the DENIED mint attempts.',
+  },
+  {
+    file: SECURABLE_RAW,
+    fn: 'securableFetch',
+    recorder: 'recordUnitySecurableAccess',
+    why:
+      'The #2622 residual. The facade above audits the five exports that exist TODAY; this audits the '
+      + 'TRANSPORT, so a future export added inside this file reaches the catalog with a row rather than '
+      + 'without one. It suppresses its own row ONLY inside withSecurableRecordedByCaller (an AsyncLocalStorage '
+      + 'the facade runs each call in), which is why the two do not double-record. Outside that context it '
+      + 'records: a new export is audited by DEFAULT, not by having been anticipated.',
   },
 ];
 
@@ -455,9 +573,9 @@ export const OUTBOUND_BASELINE = new Map([
   // v0.5.1 server overlay is the cause), and it fires ONLY on that exact error
   // signature.
   ['lib/azure/iceberg-catalog-client.ts', 3],
-  // DECLARED GAP: its own private ucFetch + one sibling. Its UC exits are now
-  // audited at the facade (check 8), but the pin stays so the un-audited
-  // TRANSPORT cannot grow new exits (issue #2622).
+  // Its own securableFetch + the Key Vault read in getKeyVaultSecret. The UC
+  // exit is audited by securableFetch's own finally as of #2622's residual; the
+  // pin stays so the file cannot grow a THIRD exit that skips that transport.
   [SECURABLE_RAW, 2],
   // NOT pinned: SECURABLE_CHOKEPOINT. It is deliberately NOT exempted from
   // check 4 — it references the two UC REST paths but issues no request of its
@@ -527,6 +645,16 @@ export const CHOKEPOINT_FILES = new Map([
     + 'the IRC server with the Iceberg auth header — it cannot use the Databricks-credentialed ucFetch. It records '
     + 'its own row via recordDatabricksUnityAccess on both the success and the unreachable path.',
   ],
+  [
+    SECURABLE_RAW,
+    'THE securable transport (#2622 gap 1, residual) — `securableFetch` issues the storage-credential and '
+    + 'external-location CREATE/DELETE and records via recordUnitySecurableAccess from a finally, so a DENIED '
+    + 'mint produces a row. It was previously in KNOWN_UNAUDITED because the recorder could not be added inside '
+    + 'the file; it now can be and has been, so the declared gap is closed rather than merely described. '
+    + 'It NEVER copies the upstream error TEXT onto the row: a UC 400 echoes the request body, which for the GCP '
+    + 'variant carries a service-account private_key, and a mutation row egresses to tenant-registered '
+    + 'third-party webhooks — `recordUnitySecurableAccess` stamps the extracted STATUS CODE only.',
+  ],
 ]);
 
 /**
@@ -540,31 +668,32 @@ export const MUST_AUDIT = new Map([
   [ACCOUNT_CHOKEPOINT, 'recordUnityAccountAccess'],
   ['lib/azure/dq-monitor-client.ts', 'recordDatabricksUnityAccess'],
   ['lib/azure/iceberg-catalog-client.ts', 'recordDatabricksUnityAccess'],
+  [SECURABLE_RAW, 'recordUnitySecurableAccess'],
 ]);
 
 /**
  * KNOWN, DECLARED GAPS — files that reach Unity Catalog outside an audited
- * transport and are NOT yet fixed. This list exists so the hole is LOUD instead
- * of invisible: the guard prints every entry on a passing run, and FAILS if a
- * file joins the list without being declared here (the ratchet). It is not an
- * excuse list — every entry names the issue tracking its removal.
+ * transport and are NOT yet fixed. This list exists so a hole is LOUD instead of
+ * invisible: the guard prints every entry on a passing run, and FAILS if a file
+ * joins the list without being declared here (the ratchet). It is not an excuse
+ * list — every entry names the issue tracking its removal.
  *
  * An entry here is strictly worse than an entry in CHOKEPOINT_FILES. Removing
  * one (by adding the recorder) is always in scope.
+ *
+ * IT IS NOW EMPTY, and that is a measurement rather than an aspiration: the sole
+ * entry was `shortcut-credentials.ts`, kept for three rounds because the recorder
+ * could not be added INSIDE the file. It has been (#2622 residual) —
+ * `securableFetch` records from its own `finally` and the file is a full
+ * CHOKEPOINT_FILES + MUST_AUDIT + AUDITED_TRANSPORTS member, held to the same
+ * brace-accurate check as its four siblings.
+ *
+ * An empty map is deliberately NOT the same as deleting this list. The ratchet in
+ * check 4 is what makes a NEW un-audited catalog path fail the build instead of
+ * being quietly added here, and `analyzeUnityChokepoint` prints the count either
+ * way — zero is asserted, not assumed.
  */
-export const KNOWN_UNAUDITED = new Map([
-  [
-    SECURABLE_RAW,
-    'Its own private ucFetch issues storage-credential + external-location CREATE/DELETE '
-    + '(POST/DELETE /api/2.1/unity-catalog/storage-credentials|external-locations). The file sits under a '
-    + 'repo-level credential-path read/write deny, so the recorder could NOT be added inside it. '
-    + 'STATUS (#2622 round 6): those exits ARE now audited — every one of them is wrapped by '
-    + `${SECURABLE_CHOKEPOINT}'s ucSecurable, and check 8 makes that facade the ONLY module permitted to import a `
-    + 'UC-mutating symbol from here, so no un-audited call path remains. This entry stays because the TRANSPORT '
-    + 'itself is still un-instrumented: a future export added inside this file could reach the catalog without a '
-    + 'row of its own. Removing the entry requires the try/finally to move INTO the file. TRACKED: issue #2622.',
-  ],
-]);
+export const KNOWN_UNAUDITED = new Map([]);
 
 /** Directories scanned for bypasses. */
 const SCAN_DIRS = [
@@ -769,40 +898,75 @@ export function referencesCatalogAddress(rel, src) {
  * A denylist (`ensureUcAwsStorageCredential`, `ensureUcGcpStorageCredential`,
  * `ensureUcExternalLocation`, `deleteUcExternalLocation`,
  * `deleteUcStorageCredential`) would be exactly as strong as the guard author's
- * memory on the day it was written, and this is the one file in the tree the
- * guard's author CANNOT READ — it is covered by a repo-level credential-path
- * read/write deny. A new un-audited UC export could be added to it (by someone
- * who does have write access) and consumed anywhere, and a denylist would say
- * nothing. Stated in the affirmative, the default for anything new is DENIED:
- * either it is not a catalog call and belongs on this list after a review, or it
- * is, and it belongs behind {@link SECURABLE_CHOKEPOINT}.
+ * memory on the day it was written. Stated in the affirmative instead, the
+ * default for anything NEW in that module is DENIED: either it is not a catalog
+ * call and belongs on this list after a review, or it is, and it belongs behind
+ * {@link SECURABLE_CHOKEPOINT}.
+ *
+ * The margin matters most here because that module is the one this guard's
+ * author is least able to inspect: its path matches the repo-level
+ * credential-path deny (the glob that protects `.env` and `secrets/` also
+ * matches `*credentials*`), so agent tooling is refused a read of it at most
+ * paths. History #14 established that the deny is a TOOL-PATH boundary and not a
+ * property of the code — the transport was instrumented in place once the file
+ * was granted at a worktree path — but the guard still cannot assume it has seen
+ * that module's export list, and an allowlist is the shape that does not need
+ * to.
  *
  * This is the same lesson as history #10 — "the scan found nothing" is not
  * "there is nothing" when the vocabulary cannot express the surface — applied to
- * a file whose surface cannot be read at all.
+ * a file whose surface the scanner may not be able to enumerate at all.
  */
 export const SECURABLE_RAW_PUBLIC = new Set(['getKeyVaultSecret', 'keyVaultConfigGate']);
 
 /**
- * The module BASENAME every specifier that resolves to {@link SECURABLE_RAW}
- * must contain. DERIVED from {@link SECURABLE_RAW} rather than re-typed, so the
- * specifier pattern below and the cheap pre-filter in
- * {@link securableRawImports} have ONE definition and cannot drift apart — the
- * same rule this file applies to {@link TRANSPORTS}. Renaming the raw module
- * therefore moves both at once.
+ * The module BASENAME every specifier that resolves to a guarded module must
+ * contain. DERIVED from the module path rather than re-typed, so the specifier
+ * pattern and the cheap pre-filter in {@link moduleImports} have ONE definition
+ * and cannot drift apart — the same rule this file applies to
+ * {@link TRANSPORTS}. Renaming a guarded module therefore moves both at once.
+ *
+ * Compiled patterns are memoised per module path.
+ *
+ * The alias arm is derived from the module's own directory (`@/lib/azure/…`),
+ * so a guarded module that moves takes its pattern with it.
  */
-const SECURABLE_RAW_BASENAME = path.basename(SECURABLE_RAW, '.ts');
-
-/** Module specifiers that resolve to {@link SECURABLE_RAW}. */
-const SECURABLE_RAW_SPECIFIER =
-  `(?:@/lib/azure/${SECURABLE_RAW_BASENAME}|(?:\\.{1,2}/)+${SECURABLE_RAW_BASENAME})`;
+const SPECIFIER_CACHE = new Map();
+function specifierPatterns(rel) {
+  let cached = SPECIFIER_CACHE.get(rel);
+  if (cached) return cached;
+  const basename = path.basename(rel, '.ts');
+  const dir = path.dirname(rel).replace(/\\/g, '/');
+  const spec = `(?:@/${dir}/${basename}|(?:\\.{1,2}/)+(?:[\\w.-]+/)*${basename})`;
+  cached = {
+    basename,
+    namespaceRe: new RegExp(`\\bimport\\s+\\*\\s+as\\s+\\w+\\s+from\\s*['"]${spec}['"]`),
+    dynamicRe: new RegExp(`(?:\\bimport\\s*\\(|\\brequire\\s*\\()\\s*['"]${spec}['"]`),
+    starReexportRe: new RegExp(`\\bexport\\s+\\*(?:\\s+as\\s+\\w+)?\\s+from\\s*['"]${spec}['"]`),
+    namedRe: new RegExp(
+      `\\b(?:import|export)\\s+(?:type\\s+)?\\{([^}]*)\\}\\s*from\\s*['"]${spec}['"]`,
+      'g',
+    ),
+  };
+  SPECIFIER_CACHE.set(rel, cached);
+  return cached;
+}
 
 /**
- * Every binding a file imports from {@link SECURABLE_RAW}.
+ * Every binding a file takes from the guarded module `rel` — whether it IMPORTS
+ * it for its own use or RE-EXPORTS it for someone else's.
  *
- * Returns `['*']` for a namespace or dynamic import, because both hand the
- * importer EVERY export including the un-audited ones — a `import * as creds`
- * would otherwise be a one-token bypass of the named-import scan.
+ * Returns `['*']` for a namespace import, a dynamic import, or an
+ * `export * from`, because all three hand over EVERY export including the ones
+ * the allowlist exists to deny — any of them would otherwise be a one-token
+ * bypass of the named scan.
+ *
+ * `export { x } from '…'` is counted with `import { x } from '…'` deliberately:
+ * a re-export is the laundering form of the same act. Without that arm, a
+ * one-line module could re-export a denied symbol and every consumer would
+ * import it from a specifier this scan does not know, which is a bypass of
+ * check 8 AND check 9 at once. Measured on the shipped tree: zero re-exports of
+ * either guarded module today, so the arm adds coverage without adding noise.
  *
  * Read against comments-masked source with STRING BODIES INTACT (the specifier
  * only exists inside a string), so a doc comment naming the module is not an
@@ -811,35 +975,35 @@ const SECURABLE_RAW_SPECIFIER =
  * ## Why the pre-filter is safe (#2944)
  *
  * Check 8 runs this over EVERY file in the tree, and 14 of ~5,345 import from
- * that module — so ~5,331 files were paying a full {@link maskComments} pass
- * (one single-character string allocated per source byte) to be told `[]`.
+ * `shortcut-credentials` — so ~5,331 files were paying a full {@link maskComments}
+ * pass (one single-character string allocated per source byte) to be told `[]`.
  *
  * Skipping the mask when the RAW source does not contain the basename cannot
  * change any answer, because {@link maskSource} only ever REPLACES characters
  * with spaces; it never inserts one. So a substring absent from `src` is absent
- * from `maskComments(src)` too, and every pattern below embeds
- * {@link SECURABLE_RAW_SPECIFIER}, which embeds the basename — no match was
- * reachable. Proven empirically as well: identical output on all 5,345 real
- * files plus 21 synthetic payloads (renamed / namespace / dynamic / require /
- * type-only / in-comment / look-alike-module / empty).
+ * from `maskComments(src)` too, and every pattern above embeds the specifier,
+ * which embeds the basename — no match was reachable. Proven empirically as
+ * well: identical output on all 5,345 real files plus 21 synthetic payloads
+ * (renamed / namespace / dynamic / require / type-only / in-comment /
+ * look-alike-module / empty).
  *
- * Measured: check 8 over one whole-tree scan, ~1.8 s -> ~0.03 s.
+ * Measured: check 8 over one whole-tree scan, ~1.8 s -> ~0.03 s. Check 9 reuses
+ * the same pre-filter over a basename held by 3 files, so it adds ~0 masked
+ * bytes — asserted by {@link MASK_BUDGET_BYTES}, not assumed.
  */
-export function securableRawImports(src) {
-  if (!src.includes(SECURABLE_RAW_BASENAME)) return [];
+export function moduleImports(src, rel) {
+  const pat = specifierPatterns(rel);
+  if (!src.includes(pat.basename)) return [];
   const masked = maskComments(src);
   const names = [];
 
-  const namespaceRe = new RegExp(`\\bimport\\s+\\*\\s+as\\s+\\w+\\s+from\\s*['"]${SECURABLE_RAW_SPECIFIER}['"]`);
-  const dynamicRe = new RegExp(`(?:\\bimport\\s*\\(|\\brequire\\s*\\()\\s*['"]${SECURABLE_RAW_SPECIFIER}['"]`);
-  if (namespaceRe.test(masked) || dynamicRe.test(masked)) names.push('*');
+  if (pat.namespaceRe.test(masked) || pat.dynamicRe.test(masked) || pat.starReexportRe.test(masked)) {
+    names.push('*');
+  }
 
-  const namedRe = new RegExp(
-    `\\bimport\\s+(?:type\\s+)?\\{([^}]*)\\}\\s*from\\s*['"]${SECURABLE_RAW_SPECIFIER}['"]`,
-    'g',
-  );
+  pat.namedRe.lastIndex = 0;
   let m;
-  while ((m = namedRe.exec(masked)) !== null) {
+  while ((m = pat.namedRe.exec(masked)) !== null) {
     for (const raw of m[1].split(',')) {
       // `foo as bar` / `type foo` — the EXPORTED name is what matters, and a
       // rename is exactly how an author would try to slip one past a name scan.
@@ -848,6 +1012,16 @@ export function securableRawImports(src) {
     }
   }
   return names;
+}
+
+/** Every binding a file takes from {@link SECURABLE_RAW}. See {@link moduleImports}. */
+export function securableRawImports(src) {
+  return moduleImports(src, SECURABLE_RAW);
+}
+
+/** Every binding a file takes from {@link SECURABLE_CONTEXT}. See {@link moduleImports}. */
+export function securableContextImports(src) {
+  return moduleImports(src, SECURABLE_CONTEXT);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1175,15 +1349,18 @@ export function analyzeUnityChokepoint(sources, opts = {}) {
   }
 
   // ── 8. SECURABLE IMPORT CHOKE POINT (#2622 gap 1) ─────────────────────────
-  // `shortcut-credentials.ts` cannot be instrumented in place (credential-path
-  // write deny), so the audit lives in a FACADE. A facade nobody is obliged to
-  // use is a comment — this is what obliges them. Stated as an allowlist of the
-  // two non-catalog exports, so a NEW un-audited export added to that file
-  // (which this guard's author cannot even read) is denied by DEFAULT.
+  // The audit lives in BOTH layers now: `securableFetch` records from its own
+  // finally (history #14) and the FACADE records the higher-fidelity row. So
+  // this check is no longer about an un-audited call — it is about an UNREVIEWED
+  // one. An audited call is not an authorized one, and one declared consumer is
+  // what keeps the storage-credential + external-location surface reviewable.
+  // Stated as an allowlist of the two non-catalog exports, so a NEW export added
+  // to that file is denied by DEFAULT rather than by having been anticipated.
   if (sources.has(SECURABLE_RAW) && !sources.has(SECURABLE_CHOKEPOINT)) {
     failures.push(
       `MISSING CHOKE POINT: ${SECURABLE_CHOKEPOINT} does not exist, but ${SECURABLE_RAW} does. Its ucSecurable is the `
-      + `only audited door to the storage-credential + external-location surface.`,
+      + `only declared consumer of the storage-credential + external-location surface, and the only layer that sees `
+      + `the post-response outcome.`,
     );
   }
   for (const [r, src] of sources) {
@@ -1192,14 +1369,70 @@ export function analyzeUnityChokepoint(sources, opts = {}) {
     for (const name of securableRawImports(src)) {
       if (SECURABLE_RAW_PUBLIC.has(name)) continue;
       failures.push(
-        `${r}: imports \`${name}\` from ${SECURABLE_RAW}. That module writes NO Loom audit row — its private `
-        + `transport issues storage-credential + external-location CREATE/DELETE, the securables that hand a workload `
-        + `access to a storage account. Import it from ${SECURABLE_CHOKEPOINT} instead (same signature, audited via `
-        + `recordUnitySecurableAccess from a finally). If \`${name}\` genuinely does not touch Unity Catalog, add it to `
-        + `SECURABLE_RAW_PUBLIC in this guard — that is a security review, not a formality.`
+        `${r}: imports \`${name}\` from ${SECURABLE_RAW}. Its transport records a row of its own, so this is not an `
+        + `UN-AUDITED call — it is an UNREVIEWED one, on the securables that hand a workload access to a storage `
+        + `account. ${SECURABLE_CHOKEPOINT} is the single declared consumer of that surface, and the only layer that `
+        + `sees the post-response outcome (ucJsonOrThrow treats a 409 ALREADY_EXISTS as a successful idempotent `
+        + `re-create and a DELETE tolerates 404), so its row is the accurate one and the transport's is the floor. `
+        + `Import it from ${SECURABLE_CHOKEPOINT} instead — same signature, same result, same thrown error. If `
+        + `\`${name}\` genuinely does not touch Unity Catalog, add it to SECURABLE_RAW_PUBLIC in this guard — that is `
+        + `a security review, not a formality.`
         + (name === '*'
-          ? ' (A namespace or dynamic import hands over EVERY export, so it can never be allowlisted by name.)'
+          ? ' (A namespace, dynamic, or star re-export hands over EVERY export, so it can never be allowlisted by name.)'
           : ''),
+      );
+    }
+  }
+
+  // ── 9. SUPPRESSOR CHOKE POINT (the #2622 residual's own off switch) ────────
+  // Instrumenting the transport created something that did not exist before it:
+  // an exported way to turn the transport's row OFF. Two layers audit the same
+  // call and exactly one row may come out, so the de-duplicator is by
+  // construction a suppressor — and an unguarded suppressor defeats the
+  // instrumentation with one import line, including one added INSIDE
+  // SECURABLE_RAW itself, where check 8 does not look and where the facade's
+  // replacement row is never written. This gives it the same mechanical control
+  // check 8 gives the surface: per SYMBOL, exactly one permitted importer.
+  if (sources.has(SECURABLE_RAW) && sources.has(SECURABLE_CHOKEPOINT) && !sources.has(SECURABLE_CONTEXT)) {
+    failures.push(
+      `MISSING SUPPRESSOR CONTEXT: ${SECURABLE_CONTEXT} does not exist, but both securable layers do. That module is `
+      + `the ONE declared de-duplicator between them. Without it either both layers record (two rows per call) or the `
+      + `suppressor has been relocated somewhere this check does not enumerate — restore it, or retire one layer and `
+      + `delete this check in the same commit.`,
+    );
+  }
+  if (sources.has(SECURABLE_CONTEXT)) {
+    for (const [r, src] of sources) {
+      if (isTestFile(r)) continue; // specs exercise the context directly, by design
+      for (const name of securableContextImports(src)) {
+        const permitted = SECURABLE_CONTEXT_IMPORTERS.get(name);
+        if (permitted === r) continue;
+        failures.push(
+          `${r}: imports \`${name}\` from ${SECURABLE_CONTEXT}. `
+          + (name === '*'
+            ? 'A namespace, dynamic, or star re-export hands over EVERY export of that module, including '
+              + '`withSecurableRecordedByCaller`, so it can never be permitted by name. '
+            : permitted == null
+              ? `\`${name}\` is not a declared export of that module — add it to SECURABLE_CONTEXT_IMPORTERS in this `
+                + `guard with its one permitted importer, or drop it. `
+              : `Only ${permitted} may import \`${name}\`. `)
+          + `\`withSecurableRecordedByCaller\` SUPPRESSES the ${SECURABLE_RAW} transport's audit row for every `
+          + `securable call made inside it; the row it suppresses is only replaced when ${SECURABLE_CHOKEPOINT} is the `
+          + `one running it. Held anywhere else — most of all inside ${SECURABLE_RAW}, where check 8 does not look — `
+          + `it is an off switch for the securable trail. If a second consumer genuinely needs it, that is a security `
+          + `review: it must record a row of its own first.`,
+        );
+      }
+    }
+    const rawSrc = sources.get(SECURABLE_RAW);
+    if (rawSrc != null && !securableContextImports(rawSrc).includes('securableRecordedByCaller')) {
+      failures.push(
+        `${SECURABLE_RAW}: no longer imports \`securableRecordedByCaller\` from ${SECURABLE_CONTEXT}. Its transport `
+        + `either stopped consulting the one declared suppressor — which double-records every call the facade makes — `
+        + `or it now consults one of its own that this guard does not enumerate. Either way the de-duplication is no `
+        + `longer a property this check can hold. NOTE the limit: this establishes where the suppression SIGNAL comes `
+        + `from, never that the transport honours it — that is pinned by the specs in `
+        + `lib/azure/__tests__/unity-audit-securable.test.ts.`,
       );
     }
   }
@@ -1286,9 +1519,24 @@ if (invokedDirectly) {
     + `(${AUDITED_TRANSPORTS.map((t) => t.fn).join(', ')}) record from a finally, `
     + 'no bypass, sinks reachable, raw SQL exits ratcheted.',
   );
+  // Named rather than folded into "no bypass": the securable suppressor is the
+  // one control here that can turn an audit row OFF, so its state is worth a
+  // line of its own. An adversarial review defeated the transport's
+  // instrumentation with one import of it while this banner printed unchanged.
+  console.log(
+    `  suppressor: ${[...SECURABLE_CONTEXT_IMPORTERS]
+      .map(([sym, file]) => `${sym} <- ${file}`)
+      .join(', ')} (check 9 — one permitted importer each).`,
+  );
   if (KNOWN_UNAUDITED.size) {
     console.log(`\n  ! ${KNOWN_UNAUDITED.size} DECLARED, UN-AUDITED catalog path(s) remain — the trail is NOT complete:`);
     for (const [file, why] of KNOWN_UNAUDITED) console.log(`      - ${file}: ${why}`);
     console.log('    These are ratcheted: a NEW un-audited path fails the build.\n');
+  } else {
+    // Printed rather than omitted: "no warning" and "zero declared gaps" look
+    // identical on a terminal, and the difference is the whole claim. The last
+    // entry (shortcut-credentials.ts) was retired in #2622's residual by
+    // instrumenting its own transport, not by dropping the declaration.
+    console.log('\n  0 declared un-audited catalog paths — every known exit records. A NEW un-audited path fails the build.\n');
   }
 }

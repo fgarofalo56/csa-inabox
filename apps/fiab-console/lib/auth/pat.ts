@@ -88,6 +88,29 @@ export interface PatTokenDoc {
   createdByOid: string;
   createdByUpn: string;
   createdByName: string;
+  /**
+   * Creator `tid`, snapshotted at mint time. `claimsFromDoc` copies it straight
+   * back onto the resumed session's claims, so THIS FIELD IS THE PERSISTENCE
+   * CHAIN for tenancy: whatever the minting session carried, every future
+   * request authenticated with this token carries too.
+   *
+   * OPTIONAL, DELIBERATELY — and this is the field #3845 named as what let an
+   * absence persist silently. It is NOT made required, because the only value
+   * available to fill it would be the creator's `oid` (as {@link PatTokenDoc.tenantId}
+   * above does), and `oid` is not a tenant: writing it here would hand the
+   * resumed session a `claims.tid` that Loom never established, turning an
+   * honest absence into a false assertion at exactly the boundary
+   * `resolveWorkspaceAccessByOid` steps 4 and 6 read. An absent `tid` is
+   * `unconfirmed` per `tenant-boundary.ts`, which is a refusal, never a grant —
+   * so the optional shape fails CLOSED and the fabricated one would not.
+   *
+   * A PAT minted from a session that HAS a tid records it; the generator that
+   * produced tid-less sessions (`POST /api/auth/cli-session`,
+   * `flow:'service-principal'`) was closed by #3845. Tokens minted before that
+   * still resume without a tid until they expire ({@link PAT_MAX_TTL_DAYS} days)
+   * or are revoked. Both halves are pinned by the persistence-chain spec in
+   * `app/api/auth/cli-session/__tests__/sp-session-tid.test.ts`.
+   */
   createdByTid?: string;
   /** Group snapshot at create time — feeds the admin-scope check on resolve. */
   createdByGroups?: string[];

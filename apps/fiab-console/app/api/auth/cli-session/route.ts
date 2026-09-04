@@ -21,8 +21,25 @@
  *  2. Service principal (non-interactive / CI).  Single JSON response:
  *       { ok:true, cookie, expiresAt, claims }
  *     Body: { flow:"service-principal", clientId, clientSecret, tenantId }.
- *     A client-credentials token is acquired and its `oid` (the SP object id)
- *     becomes the tenant partition key — identical model to a user sign-in.
+ *     A client-credentials token is acquired and the session is stamped with
+ *     BOTH the SP object id (`oid`) and the Entra tenant (`tid`) — the same
+ *     shape a user sign-in produces.
+ *
+ * TENANCY, PER BRANCH — the two chains are DIFFERENT, and conflating them is
+ * what hid #3845 for as long as it lived:
+ *
+ *   device code        `tid` = idTokenClaims.tid → account.tenantId → homeAccountId[1]
+ *   service principal  `tid` = access-token `tid` → the request's `tenantId`
+ *
+ * The SP branch has no id token and no MSAL account object, so it shares none of
+ * the device-code fallbacks; it reads the claim off the access token Entra just
+ * issued, and falls back to the tenant the client-credentials grant was made
+ * against. Until #3845 it stamped no `tid` at all, and THIS DOCBLOCK SAID THE
+ * SP `oid` "becomes the tenant partition key", which made the absence read as a
+ * design rather than as the defect it was. It is not the partition key:
+ * `tenantScopeId(session)` is `claims.tid ?? claims.oid`, so the `oid` is only
+ * reached when `tid` is absent — a state this branch no longer produces, and one
+ * every tenant-boundary consumer treats as `unconfirmed`, i.e. a refusal.
  *
  * Security: this only re-uses the existing session crypto + Entra app; it adds
  * no new secret and no new Azure resource. The cookie is returned in the body

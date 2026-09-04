@@ -441,9 +441,22 @@ export async function resolveWorkspaceAccessByOid(
   // manufactures `role:'Admin', canWrite:true` out of the admin flag alone. So a
   // boundary that decides NOTHING when either tid is absent left this open in
   // two documented, supported states — a pre-rel-T11 workspace doc with no
-  // `tid`, and a pre-rel-T11 session (or PAT) with no `tid` claim. Both are
-  // reachable today. The admin bypass therefore fires ONLY when Loom can show
-  // the workspace is in the admin's OWN tenant.
+  // `tid`, and a session (or PAT) with no `tid` claim. Both are reachable today.
+  //
+  // THOSE TWO STATES HAVE DIFFERENT PROVENANCE, and #3845 is why the distinction
+  // matters. The workspace-doc half is genuinely a pre-rel-T11 tail that
+  // `scripts/csa-loom/backfill-workspace-tid.mjs` drains. The SESSION half was
+  // NOT: `POST /api/auth/cli-session` with `flow:'service-principal'` minted
+  // tid-less sessions on every CI login until #3845 closed it, so that half was
+  // being REFILLED post-rel-T11, not shrinking. What remains of it now is
+  // post-rel-T11 RESIDUE rather than a live source — PATs minted from one of
+  // those sessions persisted `createdByTid: undefined`, and `resolvePat` rebuilds
+  // claims from the stored doc, so a token issued before #3845 still resumes
+  // without a `tid` until it expires (max 90 days by `clampTtlDays`) or is
+  // revoked. Calling both halves "pre-rel-T11" understates the second one.
+  //
+  // The admin bypass therefore fires ONLY when Loom can show the workspace is in
+  // the admin's OWN tenant.
   // #3840 — SINCE STEP 4 NOW REQUIRES A POSITIVE MATCH, THIS CHECK IS REDUNDANT
   // BY CONSTRUCTION: reaching this line already means `sameTenantConfirmed` was
   // true, so the condition below cannot be false and the refusal branch under it
