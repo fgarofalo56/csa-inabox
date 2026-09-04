@@ -210,7 +210,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 25
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@v7.0.1
 
       - name: Fail if a scan job is still queued after the budget
         env:
@@ -253,7 +253,7 @@ jobs:
       # session, so nothing in this job needs them in the environment.
       AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@v7.0.1
 
       - uses: actions/setup-node@v7
         with:
@@ -548,7 +548,7 @@ jobs:
       # which would be a completely misleading answer.
       AZURE_AUTHORITY_HOST: https://login.microsoftonline.us
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@v7.0.1
 
       - uses: actions/setup-node@v7
         with:
