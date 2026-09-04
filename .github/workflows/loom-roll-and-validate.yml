@@ -327,6 +327,55 @@ jobs:
             echo "console_build=success" >> "$GITHUB_OUTPUT"
           fi
 
+  # ── #4298 — A SKIPPED ROLL MUST SAY WHAT IT MEANS ──────────────────────────
+  #
+  # The `gate` job above is guarded on the producer concluding success or
+  # failure. Anything else skips EVERY job in this workflow, and GitHub records
+  # `conclusion: skipped` with `steps: []` — neither red nor green, and nothing
+  # anywhere says the estate did not move.
+  #
+  # MEASURED 2026-09-02. Five PRs merged between 03:38 and 04:21 UTC. The image
+  # builder's concurrency group cancelled three of their builds as the next
+  # merge arrived, so three rolls skipped, and the live console stayed on
+  # `e9df9169` — EIGHT commits behind main — for over four hours with no signal.
+  # `check-deploy-staleness.mjs` could not see it either: that measures lanes
+  # that have NOT RUN, and this lane ran. It ran and did nothing.
+  #
+  # This job runs on exactly the path the gate declines, and it draws the one
+  # distinction that matters: a cancelled build is USUALLY benign, because
+  # during a merge train the LAST build carries every earlier merge. It is NOT
+  # benign when no newer build is coming — which is precisely what happens when
+  # the commit that cancelled it does not match the producer's `paths:` filter.
+  # A docs-only merge does that, and #4296 was one.
+  #
+  # The judgement lives in scripts/ci/stranded-roll-decision.mjs, pure and
+  # unit-tested with six mutations, for the same reason the roll gates do
+  # (#2819): a decision buried in inline YAML cannot be exercised. This job only
+  # does the I/O.
+  stranded-check:
+    name: Did a skipped roll strand the estate?
+    runs-on: ubuntu-latest
+    # Deliberately NOT `needs: gate` — gate is skipped on this path, and a
+    # `needs` on a skipped job would skip this one too, which is the silence
+    # being fixed.
+    if: >-
+      ${{ github.event_name == 'workflow_run'
+       && github.event.workflow_run.conclusion != 'success'
+       && github.event.workflow_run.conclusion != 'failure' }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 20
+      - name: Is the estate stranded, or is a build still coming?
+        env:
+          GH_TOKEN: ${{ github.token }}
+          UPSTREAM_CONCLUSION: ${{ github.event.workflow_run.conclusion }}
+          UPSTREAM_CREATED_AT: ${{ github.event.workflow_run.created_at }}
+          UPSTREAM_HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+          PRODUCER_WORKFLOW: build-fiab-images-acr-tasks.yml
+        run: node scripts/ci/report-stranded-roll.mjs
+
   roll-and-validate:
     # THIS JOB'S NAME IS ALSO A CONTRACT (#3676). A roll run can conclude
     # SUCCESS having rolled NOTHING — when `gate` sets proceed=false this job is

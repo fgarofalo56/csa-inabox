@@ -196,7 +196,7 @@ Short, accurate answers to the most common questions:
 |---|---|---|
 | LD-1 | Public brand | **CSA Loom** (repo-internal nickname: `fiab`) |
 | LD-2 | Primary compute | Azure Databricks + Synapse Serverless + Azure Data Explorer + Azure Analysis Services (Power BI opt-in for Direct Lake parity) |
-| LD-3 | Cloud boundaries (v1) | Azure Commercial + GCC + GCC-High |
+| LD-3 | Cloud boundaries (v1) | Azure Commercial + GCC + GCC-High — GCC is **supported-in-code, never exercised — no tenant** ([recorded decision, 2026-09-03](https://github.com/fgarofalo56/csa-inabox/blob/main/PRPs/active/drain-2026-08-31/DECISIONS.md#4071--3078--gcc-disabled-deploys-zero-container-apps)) |
 | LD-4 | Deployment shape | Two-tier (azd CLI + `az deployment sub create`); Marketplace listing deferred to backlog |
 | LD-5 | Console framework | Next.js 14 + Fluent UI v9 + MSAL BFF |
 | LD-6 | Tenancy | Single-sub + multi-sub modes |
