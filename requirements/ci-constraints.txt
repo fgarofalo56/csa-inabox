@@ -20,7 +20,7 @@
 # Three parties in this environment constrain protobuf, and they are not all
 # satisfiable together:
 #
-#   dbt-core==1.8.9                 protobuf<6.0,>=5.0
+#   dbt-core==1.8.9                 protobuf>=7.36.1,<8.0
 #     (apps/fiab-dbt-runner, apps/loom-transform-runner — the fence is
 #      documented at length in apps/loom-transform-runner/requirements.txt;
 #      dbt-core cannot move past 1.8.x without also moving dbt-synapse, whose
@@ -74,4 +74,4 @@
 # protobuf>=6 AND dbt-synapse has a matching release. That is the coordinated
 # four-adapter change described in apps/loom-transform-runner/requirements.txt.
 # Tracked by #4077.
-protobuf<6.0,>=5.0
+protobuf>=7.36.1,<8.0
