@@ -39,7 +39,17 @@ export const EDITOR_INTERACTIVE_TIMEOUT_MS = 12_000;
 export const EDITOR_SETTLE_MS = 1_500;
 
 export interface EditorReadiness {
-  /** goto → first visible `main` button. Equals the timeout when none appeared. */
+  /**
+   * goto → first visible `main` button. Equals the timeout when none appeared.
+   *
+   * EXCLUDES `EDITOR_SETTLE_MS` — the clock is read before the settle starts.
+   * Written down because it is the one number that CHANGED when
+   * `deep-functional-uat.uat.ts` adopted this helper: its inline predecessor
+   * read the clock after the settle, so that spec's historical Nav times are
+   * ~1.5s higher than anything reported from here on. The settle is the harness
+   * sleeping so the ribbon finishes painting before it is counted, not the
+   * editor loading, so it does not belong in a time-to-interactive.
+   */
   ttiMs: number;
   /** False when no `main` button became visible within the timeout. */
   interactive: boolean;

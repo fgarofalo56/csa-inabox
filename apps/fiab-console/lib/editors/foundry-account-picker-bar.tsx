@@ -25,6 +25,7 @@ import {
 } from '@fluentui/react-components';
 import { History24Regular } from '@fluentui/react-icons';
 import { AzureResourcePicker } from '@/lib/components/azure/azure-resource-picker';
+import { clientFetch } from '@/lib/client-fetch';
 
 export interface FoundryAccount { id?: string; name: string; endpoint?: string; location?: string; kind?: string; resourceGroup?: string }
 
@@ -47,6 +48,16 @@ interface AccountsState {
  * selector in the URL, no nonce, and an error is kept DISTINCT from an empty
  * list (deploy-integrity R7) so "no accounts provisioned" and "I could not list
  * accounts" render differently below.
+ *
+ * The transport is `clientFetch`, NOT a bare `fetch`. That is not stylistic:
+ * a bare browser→BFF call omits `credentials:'include'` (so the encrypted
+ * loom_session cookie does not reach the route behind Front Door and the caller
+ * gets a spurious 401), has no client-side timeout (a stalled route pins the
+ * "Loading accounts…" placeholder forever), and has no one-shot 401 refresh
+ * retry. The pre-extraction `useLazyFetch` was also a bare fetch, but on a
+ * VARIABLE url that `scripts/ci/check-no-bare-client-fetch.mjs` cannot see;
+ * moving to a string literal is what surfaced it, and routing it through
+ * clientFetch is what fixes the three defects the guard exists to prevent.
  */
 function useAccounts(): AccountsState {
   const [state, setState] = useState<AccountsState>({ loading: true, data: null });
@@ -54,7 +65,7 @@ function useAccounts(): AccountsState {
     let cancelled = false;
     (async () => {
       try {
-        const r = await fetch('/api/foundry/accounts');
+        const r = await clientFetch('/api/foundry/accounts');
         const j = await r.json();
         if (cancelled) return;
         if (!j?.ok) {

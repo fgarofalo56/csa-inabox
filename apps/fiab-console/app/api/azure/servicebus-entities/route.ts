@@ -33,14 +33,19 @@
  * CLOUD PARITY: every ARM call goes through `arm-client`, which resolves the
  * sovereign ARM base — the same code path serves Commercial, GCC, GCC-High and
  * IL5 with no per-cloud branch here (`cloud-parity.md`).
+ *
+ * Route-toolkit: withSession (R1/R3). The session prologue is the toolkit's,
+ * not a hand-rolled copy — `apiUnauthorized()` emits the same
+ * `{ ok:false, error:'unauthenticated' }` at 401, and the toolkit is what
+ * `scripts/ci/check-route-toolkit.mjs` requires of a net-new BFF route.
  */
 
 import { NextRequest, NextResponse } from 'next/server';
-import { getSession } from '@/lib/auth/session';
 import {
   listQueuesIn, listTopicsIn, parseNamespaceId, resolveNamespaceByName,
   type NamespaceRef,
 } from '@/lib/azure/servicebus-client';
+import { withSession } from '@/lib/api/route-toolkit';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -58,10 +63,7 @@ function statusOf(e: any): number {
   return m ? Number(m[1]) : 502;
 }
 
-export async function GET(req: NextRequest) {
-  const session = getSession();
-  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
-
+export const GET = withSession(async (req: NextRequest) => {
   const sp = req.nextUrl.searchParams;
   const namespaceId = (sp.get('namespaceId') || '').trim();
   const namespaceName = (sp.get('namespace') || '').trim();
@@ -118,4 +120,4 @@ export async function GET(req: NextRequest) {
       hint,
     }, { status });
   }
-}
+});

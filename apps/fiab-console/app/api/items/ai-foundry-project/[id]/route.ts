@@ -1,10 +1,17 @@
 /**
  * GET    /api/items/ai-foundry-project/[id] — project detail
  * DELETE /api/items/ai-foundry-project/[id] — delete project
+ *
+ * Route-toolkit: withSession (R1/R3). Migrated by
+ * `scripts/codemods/migrate-route-toolkit.mjs` under the route-toolkit guard's
+ * boy-scout rule — this PR edited `lookupScope()` in a baselined hand-rolled
+ * route, and the rule is that you migrate it while you are here. The 401 is
+ * unchanged in shape: `apiUnauthorized()` emits the same
+ * `{ ok:false, error:'unauthenticated' }` at 401 the hand-rolled prologue did.
  */
 import { NextRequest, NextResponse } from 'next/server';
-import { getSession } from '@/lib/auth/session';
 import { getProject, deleteProject, FoundryError, NotDeployedError } from '@/lib/azure/foundry-client';
+import { withSession } from '@/lib/api/route-toolkit';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -36,11 +43,9 @@ function lookupScope(): string {
   ].join(' in ');
 }
 
-export async function GET(_req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
-  const session = getSession();
-  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+export const GET = withSession<{ id: string }>(async (_req: NextRequest, { params }) => {
   try {
-    const id = (await ctx.params).id;
+    const id = params.id;
     const project = await getProject(id);
     if (!project) {
       // #3565 — a bare 'not found' left the operator with no way to tell a
@@ -59,13 +64,11 @@ export async function GET(_req: NextRequest, ctx: { params: Promise<{ id: string
     }
     return NextResponse.json({ ok: true, project });
   } catch (e: any) { return err(e); }
-}
+});
 
-export async function DELETE(_req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
-  const session = getSession();
-  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+export const DELETE = withSession<{ id: string }>(async (_req: NextRequest, { params }) => {
   try {
-    await deleteProject((await ctx.params).id);
+    await deleteProject(params.id);
     return NextResponse.json({ ok: true });
   } catch (e: any) { return err(e); }
-}
+});
