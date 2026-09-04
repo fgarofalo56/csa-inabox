@@ -313,6 +313,29 @@ export async function captureFailures<T>(page: Page, fn: () => Promise<T>, opts:
  */
 export { loomIdFailures, assertNoLoomIdFailures } from './loom-id-failures';
 
+/**
+ * Console-error classification (#3528). Same reasoning as the re-export above:
+ * the predicates live in a dependency-free sibling so vitest (which excludes
+ * `e2e/`) can still import and assert them, and are re-exported here so specs
+ * keep one import. `isReauthGate` used to be a local const inside ONE journey in
+ * `synthetic-journeys.uat.ts`, which is why `use-case-apps-uat.uat.ts` — the
+ * spec that collects `consoleErrors` and then asserts nothing about them —
+ * could not reuse it.
+ */
+export {
+  REAUTH_BEACONS, isReauthGate, isHydrationError,
+  realConsoleErrors, reauthGatedErrors, formatConsoleErrors,
+} from './console-error-filters';
+
+/**
+ * Editor readiness (#3167). One poll, imported by every catalog-walking spec,
+ * so two graders cannot silently measure different things again.
+ */
+export {
+  waitForEditorInteractive, EDITOR_INTERACTIVE_TIMEOUT_MS, EDITOR_SETTLE_MS,
+  type EditorReadiness,
+} from './editor-readiness';
+
 /** Write a tutorial markdown for a passed editor with screenshots + steps. */
 export interface TutorialStep {
   description: string;

@@ -37,7 +37,7 @@ import {
   type APIRequestContext,
   type APIResponse,
 } from '@playwright/test';
-import { BASE, mintSession, recordVerdict, cleanupWorkspaces, signIn, captureFailures } from './_lib/uat';
+import { BASE, mintSession, recordVerdict, cleanupWorkspaces, signIn, captureFailures, REAUTH_BEACONS, realConsoleErrors, reauthGatedErrors, isReauthGate } from './_lib/uat';
 import { loginViaMsal } from './_lib/msal-login';
 
 // Serial — the journeys share one seeded workspace and ordered teardown.
@@ -222,11 +222,13 @@ test('synthetic J3 — open editor + primary action (lakehouse tables → ADLS)'
       // and only when nothing else went wrong: any other console error, any
       // 5xx, or a 401 anywhere else still FAILS. A blanket "ignore 401s" would
       // hide exactly the sign-in outage J1 exists to catch (#2191, AADSTS7000215).
-      const REAUTH_BEACONS = ['/api/auth/refresh', '/api/telemetry/rum'];
-      const isReauthGate = (e: string) =>
-        /\b401\b/.test(e) && REAUTH_BEACONS.some((p) => e.includes(p));
-      const gatedErrors = consoleErrors.filter(isReauthGate);
-      const realErrors = consoleErrors.filter((e) => !isReauthGate(e));
+      //
+      // #3528 — the predicate was a local const here, which is why the app-install
+      // spec (which collects consoleErrors and asserted nothing about them) could
+      // not reuse it. It now lives in e2e/_lib/console-error-filters.ts, is unit
+      // tested, and is imported at the top of this file.
+      const gatedErrors = reauthGatedErrors(consoleErrors);
+      const realErrors = realConsoleErrors(consoleErrors);
 
       if (realErrors.length > 0 || fiveHundreds.length > 0) {
         // Print the FULL lists before truncating them into the verdict note.
