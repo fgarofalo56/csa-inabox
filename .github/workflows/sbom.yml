@@ -105,7 +105,7 @@ jobs:
       # points it at one. No cataloger configuration — see the header for why
       # that is the whole design.
       - name: Generate CycloneDX SBOM
-        uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0
+        uses: anchore/sbom-action@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26 # v0.24.2
         with:
           file: requirements/locks/${{ matrix.extra }}/requirements.txt
           format: cyclonedx-json
@@ -121,7 +121,7 @@ jobs:
         run: node scripts/ci/check-lock-scan-coverage.mjs --sbom sbom-python-${{ matrix.extra }}-cyclonedx.json --extra ${{ matrix.extra }}
 
       - name: Generate SPDX SBOM
-        uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0
+        uses: anchore/sbom-action@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26 # v0.24.2
         with:
           file: requirements/locks/${{ matrix.extra }}/requirements.txt
           format: spdx-json
@@ -181,7 +181,7 @@ jobs:
           cache-to: type=gha,mode=max
 
       - name: Generate CycloneDX SBOM for image
-        uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0
+        uses: anchore/sbom-action@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26 # v0.24.2
         with:
           image: csa/${{ matrix.component }}:sbom-${{ github.sha }}
           format: cyclonedx-json
@@ -191,7 +191,7 @@ jobs:
           upload-artifact-retention: 90
 
       - name: Generate SPDX SBOM for image
-        uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0
+        uses: anchore/sbom-action@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26 # v0.24.2
         with:
           image: csa/${{ matrix.component }}:sbom-${{ github.sha }}
           format: spdx-json
