@@ -20,6 +20,10 @@ import {
   billedWithoutExportFinding,
   blindFinding,
   costedFinding,
+  guidShapedCostedFinding,
+  guidShapedFinding,
+  guidShapedGraph,
+  guidShapedSubject,
   makeFinding,
   makeGraph,
   noEvidenceFinding,
@@ -28,6 +32,7 @@ import {
   throwingClient,
   vacuousFinding,
 } from './fixtures';
+import { nodeIdFromPersisted } from '@/lib/brain/graph';
 
 const codes = (rs: readonly { code: string }[]) => rs.map((r) => r.code);
 const bySeverity = (rs: readonly { code: string; severity: string }[], s: string) =>
@@ -299,5 +304,99 @@ describe('critic — verdict composition', () => {
     });
     expect(out.result[0]!.verdict).toBe('survives');
     expect(out.result[0]!.resultingConfidence).toBe('high');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// #3967 — the `azure:` population, and the mutation that could zero it
+// ---------------------------------------------------------------------------
+
+describe("#3967 — azureSubjects' population is reachable at PRODUCTION shape", () => {
+  // THE MEASURED GAP. `azureSubjects()` is the population for `checkOwnership`
+  // and `checkUnmeasuredScale`, and an empty population makes both return null —
+  // a PASS, not an indeterminate. Mutation N5 (keep the prefix test, drop any
+  // subject whose subscription segment is 36 chars) left the whole brain suite
+  // green at 231/231, because every fixture used the 5-char `sub-a` placeholder.
+  // These arms use a GUID-SHAPED subject, so the mutation is now visible.
+
+  it('EMBEDDED CONTROL: the subject really does carry a 36-char subscription segment', () => {
+    // Without this the arms below would pass over a fixture that never had the
+    // shape the mutation keys on — a test of nothing, indistinguishable from a
+    // test that works.
+    const id = String(guidShapedSubject());
+    expect(id.startsWith('azure:')).toBe(true);
+    expect(id.split('/')[2]).toHaveLength(36);
+    // …and the ORIGINAL fixture does not, which is why it could not see N5.
+    expect(String(azureNodeId('rg-brain-test', 'app-alpha')).split('/')[2]).not.toHaveLength(36);
+  });
+
+  it('checkOwnership DOWNGRADES over a GUID-shaped subject', () => {
+    // No `owns` edge and no estate tag in this graph, so ownership is not
+    // established and the guard between a wrong inference and someone else's
+    // production must fire.
+    const rs = measuredRefutations(
+      guidShapedFinding(),
+      guidShapedGraph([{ name: 'app-alpha', minReplicas: 2 }]),
+    );
+    expect(bySeverity(rs, 'downgrades')).toContain('ownership-unestablished');
+  });
+
+  it('checkUnmeasuredScale DOWNGRADES over a GUID-shaped subject with no scale facts', () => {
+    const rs = measuredRefutations(
+      guidShapedCostedFinding(),
+      // `minReplicas` omitted ⇒ no ScaleFacts, which is NOT MEASURED.
+      guidShapedGraph([{ name: 'app-alpha' }]),
+    );
+    expect(bySeverity(rs, 'downgrades')).toContain('unmeasured-scale');
+  });
+
+  it('CONTROL: a GUID-shaped subject that IS owned and IS measured trips neither', () => {
+    // Proves the two arms above are about the PREDICATE rather than about the
+    // GUID shape tripping something unconditionally.
+    const rs = measuredRefutations(
+      guidShapedCostedFinding(),
+      guidShapedGraph([
+        { name: 'app-alpha', minReplicas: 2, tags: { 'loom-estate-id': 'loom-test-estate' } },
+      ]),
+    );
+    expect(bySeverity(rs, 'downgrades')).not.toContain('ownership-unestablished');
+    expect(bySeverity(rs, 'downgrades')).not.toContain('unmeasured-scale');
+  });
+});
+
+describe('#3967 item 3 — a DROPPED Azure subject is indeterminate, never a pass', () => {
+  // The independent oracle. If a subject resolves in the GRAPH to an
+  // azure-resource node and the prefix predicate did not return it, the
+  // population this check ranged over is smaller than the finding's — and a
+  // smaller population is not a clean result. No filter written inside
+  // `azureSubjects` can hide from this, because the answer comes from the graph.
+
+  it('a subject the graph calls azure-resource but the prefix missed ⇒ indeterminate', () => {
+    const graph = guidShapedGraph([{ name: 'app-alpha', minReplicas: 2 }]);
+    const real = graph.nodes.find((n) => n.kind === 'azure-resource')!;
+    // A subject that IS that node, addressed without the minted prefix — the
+    // observable shape of a prefix drift or a predicate-internal filter.
+    const disguised = String(real.id).replace(/^azure:/, '') as unknown as typeof real.id;
+    const patched = {
+      ...graph,
+      node: (id: typeof real.id) => (String(id) === String(disguised) ? real : graph.node(id)),
+    } as typeof graph;
+
+    const rs = measuredRefutations(makeFinding({ subjects: [disguised] }), patched);
+    expect(bySeverity(rs, 'indeterminate')).toContain('ownership-unestablished');
+    const stmt = rs.find((r) => r.code === 'ownership-unestablished')!.statement;
+    expect(stmt).toMatch(/SMALLER population/);
+    expect(stmt).toMatch(/NOT a clean result/);
+  });
+
+  it('CONTROL: a genuinely NON-Azure subject stays a silent pass, not noise', () => {
+    // A code-module or deploy-artifact subject has no Azure ownership question.
+    // Keying the indeterminate to `subjects.length > 0` would fire here and
+    // train a reader to ignore the code.
+    const rs = measuredRefutations(
+      makeFinding({ subjects: [nodeIdFromPersisted('deploy:platform/fiab/bicep/main.bicep')] }),
+      makeGraph([{ name: 'app-alpha', minReplicas: 2 }]),
+    );
+    expect(codes(rs)).not.toContain('ownership-unestablished');
   });
 });

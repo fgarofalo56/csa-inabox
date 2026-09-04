@@ -99,7 +99,11 @@ describe('acceptance — the founding measured example', () => {
     const run = snapshot.detectors.find((d) => d.detector === 'unreachable-always-on')!;
     const skipText = run.skipped.map((s) => `${s.subject} ${s.reason}`).join(' ');
     expect(skipText).toContain('EXTERNAL ingress');
-    expect(skipText).toContain('Not evaluated');
+    // #4258 changed WHY it is excluded, so the assertion follows the claim: it
+    // is now a ROOT of the reachability walk rather than a post-filter on the
+    // walk's output. The disclosure still has to say it was not evaluated —
+    // "not evaluated" must never read as "evaluated and clean".
+    expect(skipText).toContain('not evaluated, neither cleared nor flagged');
   });
 });
 
@@ -143,7 +147,11 @@ describe('acceptance — THE EVIDENCE CHAIN (asserted separately from the verdic
     const f = snapshot.findings.find(
       (x) => x.detector === 'unreachable-always-on' && x.subjects.includes(BROKER_ID),
     );
-    expect(f!.evidence.query).toContain('nodesWithNoInboundEdge');
+    // #4258: the query is now the REACHABILITY one. Asserting the old name
+    // would pin the evidence chain to a query the detector no longer runs, which
+    // is worse than no assertion — the chain has to be re-runnable BY HAND.
+    expect(f!.evidence.query).toContain('nodesNotReachableFrom');
+    expect(f!.evidence.query).toContain('roots=');
     expect(f!.evidence.query).toContain("'configured'");
     expect(f!.evidence.edges.length).toBeGreaterThan(0);
   });

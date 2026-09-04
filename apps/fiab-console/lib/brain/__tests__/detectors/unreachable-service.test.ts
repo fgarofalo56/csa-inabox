@@ -10,15 +10,26 @@
 import { describe, it, expect } from 'vitest';
 import { unreachableService } from '../../detectors';
 import {
+  unreachableAlwaysOn,
+  type DetectContext,
+} from '@/app/api/admin/brain/_lib/detect';
+import {
   BROKER_ARM,
   BROKER_ID,
+  CONSOLE_ID,
   DIRECTLAKE_ID,
   ENV_DOMAIN,
+  LEAF_ID,
+  PEER_A_ID,
+  PEER_B_ID,
+  RELAY_ID,
   RG,
   SUB,
   appRow,
   buildEdgelessGraph,
   buildFixtureGraph,
+  buildMutualIslandGraph,
+  buildTransitiveChainGraph,
 } from './fixtures';
 
 describe('unreachable-service — POSITIVE and NEGATIVE', () => {
@@ -249,5 +260,179 @@ describe('unreachable-service — the finding id is deterministic', () => {
     expect(a).toEqual(b);
     expect(a.length).toBeGreaterThan(0);
     expect(a[0]).toContain(BROKER_ARM.toLowerCase());
+  });
+});
+
+describe('#4258 — REACHABILITY, not inbound-edge count: the mutual island', () => {
+  // THE DEFECT, as a test. Two always-on internal apps whose env vars name each
+  // other each carry ONE inbound resolved `configured` edge, so the predicate
+  // this detector used to run — `inbound(graph, id, 'configured').length === 0`
+  // — is FALSE for both and cleared them. Nothing outside the pair can reach
+  // either: the console is the only externally-ingressed app in the fixture and
+  // it wires only `loom-direct-lake`.
+  //
+  // Measured before the fix: 0 findings over this graph. That is the whole
+  // finding — an always-on island billing continuously, invisible to the query
+  // whose entire purpose is to see it.
+
+  it('EMBEDDED CONTROL: each peer really does have an inbound configured edge', () => {
+    // Without this, "the old predicate missed them" is an assertion about the
+    // fixture rather than about the detector.
+    const graph = buildMutualIslandGraph();
+    expect(graph.inboundEdges(PEER_A_ID, 'configured').result).toHaveLength(1);
+    expect(graph.inboundEdges(PEER_B_ID, 'configured').result).toHaveLength(1);
+  });
+
+  it('BOTH peers are flagged — the inbound-edge count cleared them', () => {
+    const result = unreachableService(buildMutualIslandGraph());
+    const subjects = result.findings.map((f) => f.subjects[0]);
+    expect(subjects).toContain(PEER_A_ID);
+    expect(subjects).toContain(PEER_B_ID);
+  });
+
+  it('CONTROL: the wired app reached from the external console is CLEARED', () => {
+    // The walk has to actually reach things. A walk that reached nothing would
+    // flag every node and pass the assertion above for the wrong reason.
+    const result = unreachableService(buildMutualIslandGraph());
+    expect(result.findings.map((f) => f.subjects[0])).not.toContain(DIRECTLAKE_ID);
+  });
+
+  it('CONTROL: give peer A external ingress and peer B is CLEARED', () => {
+    // A becomes a ROOT, so B is genuinely reachable from outside the graph and
+    // must not be flagged. A itself is skipped as externally ingressed.
+    const result = unreachableService(buildMutualIslandGraph({ peerAExternal: true }));
+    const subjects = result.findings.map((f) => f.subjects[0]);
+    expect(subjects).not.toContain(PEER_B_ID);
+    expect(subjects).not.toContain(PEER_A_ID);
+  });
+
+  it('the population NAMES the root set, so the verdict can be checked', () => {
+    const result = unreachableService(buildMutualIslandGraph());
+    expect(result.population.scope).toMatch(/NOT REACHABLE/);
+    expect(result.population.scope).toMatch(/EXTERNAL ingress/);
+  });
+});
+
+/**
+ * The `DetectContext` the BFF builds, over an arbitrary fixture graph.
+ *
+ * Module-scoped so every runtime-path block shares ONE construction. A second
+ * hand-rolled copy is how the two halves of a split drift until only one of
+ * them is really under test.
+ */
+function ctxOver(graph: ReturnType<typeof buildMutualIslandGraph>): DetectContext {
+  const owned = new Set<string>();
+  for (const e of graph.edges) {
+    if (e.provenance === 'owns' && e.resolution === 'resolved') owned.add(e.to as string);
+  }
+  // `configured` MUST be marked collected or `refuseIfUncollected` short-
+  // circuits and the test would pass over a detector that never ran.
+  const coverage = {
+    configured: { collected: true, edgeCount: graph.edges.filter((e) => e.provenance === 'configured').length, note: 'container app env (fixture)' },
+    declared: { collected: false, edgeCount: 0, note: 'bicep is not in this fixture' },
+    observed: { collected: false, edgeCount: 0, note: 'no telemetry extractor' },
+    imports: { collected: false, edgeCount: 0, note: 'no source extractor' },
+    owns: { collected: true, edgeCount: graph.edges.filter((e) => e.provenance === 'owns').length, note: 'estate tag (fixture)' },
+  } as unknown as DetectContext['coverage'];
+  return { graph, coverage, owned };
+}
+
+describe('#4258 — THE RUNTIME PATH: unreachableAlwaysOn over the same island', () => {
+  // The library detector above is not what the console executes. The BFF runs
+  // `unreachableAlwaysOn` from `app/api/admin/brain/_lib/detect.ts`, which
+  // carried the same inbound-edge-count shape at its own line. Covering only the
+  // library twin would leave the surface the operator actually reads uncovered —
+  // the exact split that lets a fix look complete and change nothing live.
+
+  it('EMBEDDED CONTROL: the detector actually ran — it is not the vacuity skip', () => {
+    const run = unreachableAlwaysOn(ctxOver(buildMutualIslandGraph()));
+    expect(run.vacuous).toBe(false);
+  });
+
+  it('BOTH peers are flagged on the runtime path too', () => {
+    const run = unreachableAlwaysOn(ctxOver(buildMutualIslandGraph()));
+    const subjects = run.result.findings.map((f) => f.subjects[0]);
+    expect(subjects).toContain(PEER_A_ID);
+    expect(subjects).toContain(PEER_B_ID);
+  });
+
+  it('CONTROL: the app wired from the external console is CLEARED', () => {
+    const run = unreachableAlwaysOn(ctxOver(buildMutualIslandGraph()));
+    expect(run.result.findings.map((f) => f.subjects[0])).not.toContain(DIRECTLAKE_ID);
+  });
+
+  it('CONTROL: peer A external ⇒ peer B cleared', () => {
+    const run = unreachableAlwaysOn(ctxOver(buildMutualIslandGraph({ peerAExternal: true })));
+    const subjects = run.result.findings.map((f) => f.subjects[0]);
+    expect(subjects).not.toContain(PEER_B_ID);
+    expect(subjects).not.toContain(PEER_A_ID);
+  });
+
+  it('the externally-ingressed apps are DISCLOSED as skipped, not silently dropped', () => {
+    const run = unreachableAlwaysOn(ctxOver(buildMutualIslandGraph()));
+    const reasons = run.result.skipped.map((s) => s.reason).join(' ');
+    expect(reasons).toMatch(/EXTERNAL ingress/);
+  });
+});
+
+describe('TRANSITIVITY — reachability is a WALK, not a one-hop expansion', () => {
+  // THE MUTATION THIS BLOCK EXISTS FOR. Deleting `queue.push(to)` from the BFS
+  // in `nodesNotReachableFrom` degrades it to a one-hop expansion of the root
+  // set. Measured before this block existed: `vitest run
+  // lib/brain/__tests__/detectors/unreachable-service.test.ts
+  // lib/brain/__tests__/graph` still returned RC=0 at 206/206 across 11 files.
+  //
+  // Transitivity is the whole difference between this query and the
+  // `inbound(graph, id, 'configured').length === 0` proxy #4258 replaced, so
+  // that mutation surviving means the fix's defining property was unpinned.
+  //
+  // The failure direction matters: the roots are every externally-ingressed
+  // node plus every non-Container-App node, so under the degradation a real
+  // chain (external console → internal relay → internal leaf) leaves the leaf
+  // unreached and the detector proposes DELETING a live, reachable service.
+
+  const graph = buildTransitiveChainGraph();
+  const result = unreachableService(graph);
+  const subjects = result.findings.map((f) => f.subjects[0]);
+
+  it('EMBEDDED CONTROL: the leaf is reachable ONLY through the relay — two hops', () => {
+    // Without this, "the leaf is cleared" could be true because something else
+    // reached it directly, and the mutation would survive again.
+    const inboundLeaf = graph.inboundEdges(LEAF_ID, 'configured').result;
+    expect(inboundLeaf).toHaveLength(1);
+    expect(inboundLeaf[0]!.from as string).toBe(RELAY_ID as string);
+    // …and the relay's own single inbound edge is the console, which is the
+    // only root here. So the leaf sits at distance 2 and nowhere nearer.
+    const inboundRelay = graph.inboundEdges(RELAY_ID, 'configured').result;
+    expect(inboundRelay).toHaveLength(1);
+    expect(inboundRelay[0]!.from as string).toBe(CONSOLE_ID as string);
+  });
+
+  it('EMBEDDED CONTROL: the detector is willing to flag — the island IS reported', () => {
+    // A detector that found nothing would satisfy every "not.toContain" below.
+    expect(subjects).toContain(PEER_A_ID);
+    expect(subjects).toContain(PEER_B_ID);
+  });
+
+  it('ONE-HOP CONTROL: the relay is cleared', () => {
+    // True under the degradation too — which is exactly why it cannot be the
+    // only assertion here.
+    expect(subjects).not.toContain(RELAY_ID);
+  });
+
+  it('THE POINT: the TWO-HOP leaf is CLEARED, not proposed for deletion', () => {
+    expect(subjects).not.toContain(LEAF_ID);
+  });
+
+  it('THE RUNTIME PATH: the same two-hop leaf is cleared by unreachableAlwaysOn', () => {
+    // The console executes `_lib/detect.ts`, not the library twin. A fix or a
+    // regression that lands on only one of the two is the split that lets a
+    // change look complete and alter nothing live.
+    const run = unreachableAlwaysOn(ctxOver(graph));
+    expect(run.vacuous).toBe(false);
+    const runtimeSubjects = run.result.findings.map((f) => f.subjects[0]);
+    expect(runtimeSubjects).toContain(PEER_A_ID);
+    expect(runtimeSubjects).not.toContain(RELAY_ID);
+    expect(runtimeSubjects).not.toContain(LEAF_ID);
   });
 });

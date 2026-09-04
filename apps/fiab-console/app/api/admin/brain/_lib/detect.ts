@@ -46,11 +46,12 @@ import {
   formatCostFigure,
   hasInboundOnly,
   makePopulation,
-  nodesWithNoInboundEdge,
+  nodesNotReachableFrom,
   proposal,
   scaleUnknownCount,
   type AzureResourceNode,
   type BrainGraphView,
+  type BrainNode,
   type DetectorResult,
   type EdgeProvenance,
   type Finding,
@@ -215,12 +216,41 @@ export function unreachableAlwaysOn(ctx: DetectContext): DetectorRun {
     describe: 'Container Apps',
   } as const;
 
-  const unreachable = nodesWithNoInboundEdge(ctx.graph, 'configured', filter);
+  // ── REACHABILITY, NOT INBOUND-EDGE COUNT (#4258) ─────────────────────────
+  //
+  // This used to be `nodesWithNoInboundEdge(graph, 'configured', filter)`, which
+  // answers a LOCAL question: does anything point at this node? The finding this
+  // detector exists to make is the GLOBAL one — can anything OUTSIDE reach it —
+  // and the two come apart on a mutually-referencing island. Two internal
+  // always-on apps whose env vars name each other each have an inbound
+  // `configured` edge, so the local query CLEARS both, while nothing outside
+  // them can call either. That is waste billing every second and the old shape
+  // could not see it.
+  //
+  // The roots are the entry points this graph cannot see through, so a walk
+  // from them is the honest boundary of what `configured` edges can establish:
+  //   - EXTERNAL INGRESS. Addressable from the internet — a browser, Front Door,
+  //     a partner, a webhook. None of those is an edge here.
+  //   - ANY NON-CONTAINER-APP NODE. The estate holds Function Apps, Logic Apps,
+  //     Data Factories, deploy artifacts and code modules whose outbound calls
+  //     no extractor models. Treating them as roots is the conservative
+  //     direction: it can only CLEAR a node, never flag one, and this
+  //     detector's output is a deletion proposal.
+  const roots = {
+    where: (n: BrainNode) =>
+      n.kind !== 'azure-resource' ||
+      n.ingress?.external === true ||
+      n.resourceType.toLowerCase() !== CONTAINER_APPS.toLowerCase(),
+    describe:
+      'nodes with EXTERNAL ingress, plus every non-Container-App node — the callers this graph ' +
+      'cannot see through',
+  } as const;
+  const unreachable = nodesNotReachableFrom(ctx.graph, roots, 'configured', filter);
   const alwaysOn = alwaysOnNodes(ctx.graph, filter);
   const unknownScale = scaleUnknownCount(ctx.graph, filter);
 
   const alwaysOnIds = new Set(alwaysOn.result.map((n) => n.id as string));
-  const candidates = unreachable.result.filter(
+  const subjects = unreachable.result.filter(
     (n): n is AzureResourceNode => n.kind === 'azure-resource' && alwaysOnIds.has(n.id as string),
   );
 
@@ -229,27 +259,32 @@ export function unreachableAlwaysOn(ctx: DetectContext): DetectorRun {
   // ── EXTERNAL INGRESS IS A REACHABILITY PATH THIS GRAPH CANNOT SEE ────────
   // An app with `external: true` is addressable from the public internet — by a
   // browser, Front Door, a partner, a webhook. NONE of those are edges in this
-  // graph, which only observes intra-estate `configured` wires. So "zero inbound
-  // configured edges" says nothing about whether an externally-ingressed app is
-  // used, and reporting one as unreachable is a FALSE POSITIVE by construction.
+  // graph, which only observes intra-estate `configured` wires. So no query over
+  // those wires says anything about whether an externally-ingressed app is used,
+  // and reporting one as unreachable is a FALSE POSITIVE by construction.
   //
   // Found by the acceptance suite rather than by review: `loom-console` came
   // out flagged, and it is the surface the operator was reading the finding on.
   // A rule that indicts the console is a rule nobody will trust about anything
   // else.
   //
-  // These are SKIPPED, not silently dropped — the population says how many and
-  // why, because "not evaluated" must never look like "evaluated and clean".
-  const subjects = candidates.filter((n) => n.ingress?.external !== true);
-  const externallyReachable = candidates.filter((n) => n.ingress?.external === true);
+  // They are now ROOTS of the walk rather than a post-filter on its output
+  // (#4258), which is strictly stronger: an app they reach is cleared too. The
+  // disclosure is therefore computed from the ALWAYS-ON set rather than from the
+  // walk's leftovers — the walk no longer returns them, and a skip list derived
+  // from it would silently empty. "Not evaluated" must never look like
+  // "evaluated and clean".
+  const externallyReachable = alwaysOn.result.filter((n) => n.ingress?.external === true);
   if (externallyReachable.length > 0) {
     skipped.push({
       subject: externallyReachable.map((n) => n.displayName).join(', '),
       reason:
         `${externallyReachable.length} always-on app(s) have EXTERNAL ingress, so they are ` +
         'addressable from outside this graph (browser, Front Door, partner, webhook). None of ' +
-        'those callers is an edge here, so zero inbound configured edges establishes NOTHING ' +
-        'about whether they are used. Not evaluated — neither cleared nor flagged.',
+        'those callers is an edge here, so no configured-edge query establishes ANYTHING ' +
+        'about whether they are used. They are entry points for the reachability walk, so a ' +
+        'node they reach is CLEARED — but they themselves are not evaluated, neither cleared ' +
+        'nor flagged.',
     });
   }
   if (unknownScale > 0) {
@@ -433,7 +468,7 @@ export function unreachableAlwaysOn(ctx: DetectContext): DetectorRun {
       evidence: {
         nodes: [node.id],
         edges: why.result.map((d) => d.id),
-        query: `nodesWithNoInboundEdge(graph, 'configured', { resourceType: '${CONTAINER_APPS}' }) INTERSECT alwaysOnNodes(graph, same filter)`,
+        query: `nodesNotReachableFrom(graph, roots={external ingress OR non-'${CONTAINER_APPS}'}, 'configured', { resourceType: '${CONTAINER_APPS}' }) INTERSECT alwaysOnNodes(graph, same filter)`,
         notes,
       },
       population: unreachable.population,

@@ -52,6 +52,17 @@ const H = vi.hoisted(() => ({
   store: null as InMemoryGraphHistoryStore | null,
   collectCalls: 0,
   storeReads: 0,
+  /** #4016 — whether the mocked Resource Graph pull reports itself complete. */
+  collectionComplete: true,
+  /**
+   * What the mocked pull says the service reported, `null` for "it did not say".
+   *
+   * DRIVABLE, because the refusal's message branches on it and a fixture pinned
+   * to a single non-zero value cannot reach either of the other two arms. A
+   * REPORTED 0 and an UNREPORTED total are different facts and the refusal has
+   * to say which one it saw.
+   */
+  collectionTotalRecords: 2 as number | null,
 }));
 
 vi.mock('@/lib/brain/history/cosmos-store', () => ({
@@ -83,14 +94,17 @@ vi.mock('@/app/api/admin/brain/_lib/arg-collect', async () => {
           fixtures.appRow({ name: 'loom-capacity-broker', minReplicas: 2 }),
         ],
         stats: {
-          rowsFetched: 2,
-          totalRecords: 2,
+          rowsFetched: H.collectionComplete ? 2 : 1,
+          totalRecords: H.collectionTotalRecords,
           pages: 1,
-          complete: true,
+          // #4016: drivable, so the INCOMPLETE arm is reachable. A stat the
+          // fixture pins to `true` makes the refusal below untestable, which is
+          // how the old post-hoc `warning` shipped with no coverage at all.
+          complete: H.collectionComplete,
           subscriptionsSeen: 1,
           durationMs: 5,
           cloud: 'Commercial',
-          truncatedByPageCap: false,
+          truncatedByPageCap: !H.collectionComplete,
         },
       };
     },
@@ -136,6 +150,8 @@ beforeEach(() => {
   H.store = new InMemoryGraphHistoryStore();
   H.collectCalls = 0;
   H.storeReads = 0;
+  H.collectionComplete = true;
+  H.collectionTotalRecords = 2;
   asMock(requireTenantAdmin).mockReturnValue(null);
   asMock(getSession).mockReturnValue(ADMIN);
 });
@@ -421,5 +437,102 @@ describe('a base OUTSIDE the read window — deploy-integrity R7', () => {
     // Fail closed: no diff is fabricated from an unresolvable base.
     expect((body as unknown as { diff?: unknown }).diff).toBeUndefined();
     expect(versions).toHaveLength(RETAINED);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// #4016 — an INCOMPLETE Resource Graph pull is never stored as a version
+// ---------------------------------------------------------------------------
+
+describe('#4016 — POST REFUSES to record a partial estate', () => {
+  it('EMBEDDED CONTROL: with a COMPLETE pull the same call WRITES a version', () => {
+    // Without this the refusal below is indistinguishable from a route that
+    // never writes at all.
+    return (async () => {
+      const res = await POST(req('', 'POST'), ctx);
+      const body = await res.json();
+      expect(res.status).toBe(200);
+      expect(body.ok).toBe(true);
+      expect(body.status).toBe('created');
+      expect((await H.store!.listSummaries(ESTATE)).length).toBe(1);
+    })();
+  });
+
+  it('an INCOMPLETE pull returns ok:false and writes NOTHING', async () => {
+    H.collectionComplete = false;
+    const before = (await H.store!.listSummaries(ESTATE)).length;
+    const res = await POST(req('', 'POST'), ctx);
+    const body = await res.json();
+
+    expect(res.status).toBe(409);
+    expect(body.ok).toBe(false);
+    expect(body.error).toBe('incomplete_collection');
+    // THE POINT: the store is untouched. A version that recorded a partial
+    // estate would make every later diff report the unread remainder as a change.
+    expect((await H.store!.listSummaries(ESTATE)).length).toBe(before);
+  });
+
+  it('the refusal states the NUMBERS it established, not a generic failure', async () => {
+    H.collectionComplete = false;
+    const body = await (await POST(req('', 'POST'), ctx)).json();
+    expect(body.detail).toMatch(/1 row\(s\) were read of 2/);
+    expect(body.detail).toMatch(/NOTHING was written/);
+    expect(body.collection.complete).toBe(false);
+    expect(body.mutatedAzure).toBe(false);
+  });
+
+  // ── R7: A REPORTED 0 IS NOT AN UNREPORTED TOTAL ──────────────────────────
+  //
+  // The refusal's message branches on `totalRecords`, and the three arms are
+  // different FACTS: the service said N, the service said 0, the service said
+  // nothing. A guard of `!== null && > 0` collapses the middle arm into the
+  // last one and makes the message assert an absence the code never
+  // established — while throwing away the most diagnostic thing it knows.
+  //
+  // Pinned here because the arms are only reachable now that the mock's
+  // `totalRecords` is drivable: with it frozen at 2, the reported-0 and
+  // unreported branches had no coverage at all and the false claim shipped.
+
+  it('a REPORTED total of 0 is stated as 0 — never as "did not report a total"', async () => {
+    H.collectionComplete = false;
+    H.collectionTotalRecords = 0;
+    const body = await (await POST(req('', 'POST'), ctx)).json();
+
+    // THE POINT: the service DID report, and it reported 0. Saying otherwise is
+    // an R7 message-truth violation, and it drops the whole diagnosis — we read
+    // rows the service says do not exist.
+    expect(body.detail).toMatch(/1 row\(s\) were read of 0 the service reported/);
+    expect(body.detail).not.toMatch(/did not report a total/);
+    expect(body.collection.totalRecords).toBe(0);
+    expect(body.collection.complete).toBe(false);
+  });
+
+  it('an UNREPORTED total says so, and quotes no number', async () => {
+    // The other side of the same coin, and the reason the fix is `!== null`
+    // rather than a different threshold: this arm must keep working.
+    H.collectionComplete = false;
+    H.collectionTotalRecords = null;
+    const body = await (await POST(req('', 'POST'), ctx)).json();
+
+    expect(body.detail).toMatch(/1 row\(s\) were read, and the service did not report a total/);
+    expect(body.detail).not.toMatch(/the service reported/);
+    expect(body.collection.totalRecords).toBeNull();
+  });
+
+  it('a COMPLETE pull records its completeness ON the version', async () => {
+    // The flag has to outlive the response. The old implementation put it in a
+    // `warning` string that only the caller of that one POST ever saw.
+    await POST(req('', 'POST'), ctx);
+    const [summary] = await H.store!.listSummaries(ESTATE);
+    expect(summary.collection).toEqual({ complete: true, rowsFetched: 2, totalRecords: 2 });
+  });
+
+  it('GET still answers after a refused POST — the read side is unaffected', async () => {
+    H.collectionComplete = false;
+    await POST(req('', 'POST'), ctx);
+    const res = await GET(req('', 'GET'), ctx);
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.ok).toBe(true);
   });
 });
