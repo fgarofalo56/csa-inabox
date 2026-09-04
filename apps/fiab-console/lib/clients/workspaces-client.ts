@@ -118,6 +118,145 @@ export interface AdminWorkspaceScope {
   callerTid: string | undefined;
 }
 
+/** One tenant-wide workspace row, id + domain tag only. */
+export interface TenantWorkspaceTag {
+  id: string;
+  domain?: string;
+}
+
+export interface TenantWorkspaceTagsResult {
+  workspaces: TenantWorkspaceTag[];
+  /**
+   * TRUE when the caller's tenancy could not be established, so NO read ran and
+   * `workspaces` is empty by REFUSAL rather than because the tenant is empty.
+   *
+   * This is a STRUCTURAL discriminator on purpose. Consumers that must fail
+   * closed (the mesh panel zeroes its rollup and shows a gate) previously had to
+   * branch on `degraded`, which now also goes true for a merely INCOMPLETE
+   * answer — a legacy estate with unstamped rows. Keying that branch on the
+   * spelling of a `degradedReasons` entry would put the fail-closed path one
+   * string rename away from silently reading a partial rollup as authoritative.
+   */
+  scopeUnconfirmed: boolean;
+  degraded: boolean;
+  degradedReasons: string[];
+  /**
+   * How many workspace records carry NO `tid` and are therefore excluded from
+   * this tenant-scoped answer. Mirrors {@link AdminWorkspacesResult}; see
+   * {@link countUnstampedWorkspaces} for why it must travel with the count.
+   */
+  legacyUnstampedExcluded: number;
+  /** The remediation for a non-zero {@link legacyUnstampedExcluded}. */
+  legacyRemediation?: string;
+}
+
+/**
+ * How many workspace records exist that NO tenant can claim.
+ *
+ * Every tenant-scoped read in this file uses `WHERE c.tid = @tid`, and Cosmos
+ * `=` does not match a property that is not defined — so a workspace created
+ * before rel-T11 (which stamps `tid`) is silently absent from the result. A
+ * count that excludes rows it cannot attribute is HONEST only if it says so;
+ * without this disclosure a caller reports a shorter number as complete.
+ *
+ * Best-effort by design: this is a disclosure ABOUT the answer, not the answer.
+ * A failure here degrades to 0 and the caller reports what it did establish —
+ * it must never fail the inventory it annotates.
+ */
+async function countUnstampedWorkspaces(
+  wsC: Awaited<ReturnType<typeof workspacesContainer>>,
+): Promise<number> {
+  try {
+    const { resources } = await wsC.items
+      .query<{ n: number }>({ query: 'SELECT VALUE COUNT(1) FROM c WHERE NOT IS_DEFINED(c.tid)' })
+      .fetchAll();
+    return Number(resources?.[0] ?? 0) || 0;
+  } catch {
+    return 0;
+  }
+}
+
+/** The one remediation text for a non-zero unstamped count. */
+function unstampedRemediation(n: number): string | undefined {
+  return n
+    ? `${n} workspace record(s) record no Entra tenant (workspaces created ` +
+      'before rel-T11 were not stamped) and are therefore excluded from every tenant-scoped ' +
+      'inventory — Loom will not show a record it cannot positively attribute to your tenant. ' +
+      'Run `node scripts/csa-loom/backfill-workspace-tid.mjs` to see what it would change (it is ' +
+      'DRY-RUN by default), then re-run it with `--apply`.'
+    : undefined;
+}
+
+/**
+ * Every workspace IN THE CALLER'S TENANT, id + domain tag only (#3747).
+ *
+ * THE ONE counter behind both Domains panels. Before this existed the
+ * "Federated data-mesh" summary and the domain List each computed their own
+ * workspace count from a DIFFERENT wrong scope, and disagreed on screen:
+ *
+ *   - `domain-mesh.readWorkspaceTags` queried `WHERE c.tenantId = @t` with
+ *     `{ partitionKey: ownerOid }` — `Workspace.tenantId` holds the CREATOR's
+ *     oid, so that is one creator's workspaces, not the tenant's.
+ *   - `/api/admin/domains workspaceCounts` did the same with
+ *     `tenantScopeId(session)`, which is the real Entra tid when the claim is
+ *     present — and no workspace doc is partitioned by a tid, so it read an
+ *     empty partition and reported 0 for every domain.
+ *
+ * The correct tenant-wide shape is `WHERE c.tid = @tid` with NO `partitionKey`
+ * option (cross-partition fan-out), exactly as `listAllWorkspacesAdmin` does:
+ * `tid` is the stamped Entra tenant, `tenantId` is the partition key holding a
+ * creator oid. Passing a `partitionKey` here is the bug, not an optimisation.
+ *
+ * Fails CLOSED on an unconfirmed tenancy, mirroring `listAllWorkspacesAdmin`:
+ * with no caller tid there is no positive match to make, so the result is empty
+ * with a named reason rather than an unscoped read.
+ *
+ * CARRIES THE LEGACY DISCLOSURE. `WHERE c.tid = @tid` cannot match a record
+ * that has no `tid`, and workspaces created before rel-T11 have none — so this
+ * counter, like `listAllWorkspacesAdmin`, answers a SHORTER list than the
+ * container holds. `/admin/workspaces` already discloses that; when this
+ * function did not, the two Domains panels reported the shorter number with no
+ * notice and disagreed with the workspace inventory — the same cross-surface
+ * disagreement this shared counter exists to remove, one surface over. The
+ * count travels WITH the result so no consumer can report it as complete.
+ */
+export async function listTenantWorkspaceTags(
+  scope: AdminWorkspaceScope,
+): Promise<TenantWorkspaceTagsResult> {
+  if (!scope.callerTid) {
+    return {
+      workspaces: [],
+      scopeUnconfirmed: true,
+      degraded: true,
+      degradedReasons: ['tenant-scope-unconfirmed'],
+      // No read ran, so nothing was EXCLUDED by a tenant predicate — reporting a
+      // legacy count here would assert something this call did not establish.
+      legacyUnstampedExcluded: 0,
+    };
+  }
+  const wsC = await workspacesContainer();
+  const [tagged, legacyUnstampedExcluded] = await Promise.all([
+    wsC.items
+      .query<TenantWorkspaceTag>({
+        query: 'SELECT c.id, c.domain FROM c WHERE c.tid = @tid',
+        parameters: [{ name: '@tid', value: scope.callerTid }],
+      })
+      .fetchAll(),
+    countUnstampedWorkspaces(wsC),
+  ]);
+  const legacyRemediation = unstampedRemediation(legacyUnstampedExcluded);
+  return {
+    workspaces: (tagged.resources || []).filter((w) => !!w?.id),
+    scopeUnconfirmed: false,
+    // An answer that excludes records it cannot attribute is INCOMPLETE, and
+    // every consumer must be able to see that without knowing this query's text.
+    degraded: legacyUnstampedExcluded > 0,
+    degradedReasons: legacyUnstampedExcluded > 0 ? ['legacy-unstamped-excluded'] : [],
+    legacyUnstampedExcluded,
+    ...(legacyRemediation ? { legacyRemediation } : {}),
+  };
+}
+
 /**
  * Enumerate every workspace IN THE CALLER'S TENANT with live item counts,
  * last-activity, and resolved owners. Cross-partition Cosmos reads only.
@@ -178,24 +317,10 @@ export async function listAllWorkspacesAdmin(scope: AdminWorkspaceScope): Promis
     .fetchAll();
 
   // How many records exist that NO tenant can claim, so a legacy estate does not
-  // silently read as a shorter list. Best-effort and admin-gated; a failure here
-  // must not fail the inventory.
-  let legacyUnstampedExcluded = 0;
-  try {
-    const { resources: legacy } = await wsC.items
-      .query<{ n: number }>({ query: 'SELECT VALUE COUNT(1) FROM c WHERE NOT IS_DEFINED(c.tid)' })
-      .fetchAll();
-    legacyUnstampedExcluded = Number(legacy?.[0] ?? 0) || 0;
-  } catch {
-    legacyUnstampedExcluded = 0;
-  }
-  const legacyRemediation = legacyUnstampedExcluded
-    ? `${legacyUnstampedExcluded} workspace record(s) record no Entra tenant (workspaces created ` +
-      'before rel-T11 were not stamped) and are therefore excluded from every tenant-scoped ' +
-      'inventory — Loom will not show a record it cannot positively attribute to your tenant. ' +
-      'Run `node scripts/csa-loom/backfill-workspace-tid.mjs` to see what it would change (it is ' +
-      'DRY-RUN by default), then re-run it with `--apply`.'
-    : undefined;
+  // silently read as a shorter list. Shared with `listTenantWorkspaceTags` so
+  // the two surfaces cannot disclose different numbers for the same container.
+  const legacyUnstampedExcluded = await countUnstampedWorkspaces(wsC);
+  const legacyRemediation = unstampedRemediation(legacyUnstampedExcluded);
 
   if (docs.length === 0) {
     return {

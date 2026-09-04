@@ -163,4 +163,53 @@ describe('#3549/#3551 loadModelContext — bundle content is reachable by the BA
     const mctx = await loadModelContext(BARE_ITEM_ID, null, TENANT);
     expect(mctx.tables).toHaveLength(0);
   });
+
+  /**
+   * #3801 — the item EXISTS and its definition is in Loom storage; its PARENT
+   * WORKSPACE does not resolve for this caller. Measured on the live Commercial
+   * estate: 24 of 32 content-bearing semantic models were in this state,
+   * created by an automation principal that has since been purged.
+   *
+   * Before the fix `readContentBackedItem` collapsed that onto `'not-found'`,
+   * `contextFromContentItem` returned null, and `loadModelContext` fell through
+   * to the live Power BI branch — which, with no workspace bound, told the
+   * operator to "Select a Power BI workspace to load live tables" for a model
+   * that needs no Power BI at all. That is a Fabric-flavoured gate on the
+   * Azure-native default path (no-fabric-dependency.md), reached by reporting
+   * one negative as a different negative.
+   */
+  describe('parent workspace unresolved (#3801)', () => {
+    it('names the parent workspace and never mentions Power BI, when the ws read is empty', async () => {
+      workspaceRead.mockResolvedValue({ resource: undefined } as never);
+      const mctx = await loadModelContext(BARE_ITEM_ID, null, TENANT);
+      expect(mctx.notice, 'no notice was produced').toBeTruthy();
+      expect(mctx.notice!).toContain(WORKSPACE);
+      expect(mctx.notice!).toMatch(/could not be resolved for your account/i);
+      expect(mctx.notice!, 'still asking for a Power BI workspace').not.toMatch(/Select a Power BI workspace/i);
+      expect(mctx.notice!).toMatch(/No Power BI workspace is required/i);
+      // R7: state what it IS (owned elsewhere or deleted), not a guess.
+      expect(mctx.notice!).toMatch(/owned by another principal or has been deleted/i);
+      // The Power BI branch must not have been entered at all.
+      expect(mctx.liveDataset).toBe(false);
+      expect(listDatasetTables).not.toHaveBeenCalled();
+    });
+
+    it('does the same for a FOREIGN parent workspace, and still serves no content', async () => {
+      workspaceRead.mockResolvedValue({ resource: { id: WORKSPACE, tenantId: 'someone-else' } } as never);
+      const mctx = await loadModelContext(BARE_ITEM_ID, null, TENANT);
+      // The cross-tenant guard still holds: zero tables, zero measures.
+      expect(mctx.tables).toHaveLength(0);
+      expect(mctx.measures).toHaveLength(0);
+      expect(mctx.notice!).toContain(WORKSPACE);
+      expect(mctx.liveDataset).toBe(false);
+      expect(listDatasetTables).not.toHaveBeenCalled();
+    });
+
+    it('positive control — a genuinely absent item STILL falls through to Power BI', async () => {
+      itemQuery.mockResolvedValue({ resources: [] } as never);
+      const mctx = await loadModelContext('11111111-2222-3333-4444-555555555555', 'pbi-group-1', TENANT);
+      expect(mctx.liveDataset).toBe(true);
+      expect(listDatasetTables).toHaveBeenCalled();
+    });
+  });
 });

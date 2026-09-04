@@ -153,9 +153,13 @@ function pbiRelToCanvas(rels: PbiRelationship[]): ModelRelationship[] {
 async function contextFromContentItem(
   cosmosItemId: string,
   tenantId: string,
-): Promise<ModelContext | { readFailed: string } | null> {
+): Promise<ModelContext | { readFailed: string } | { parentUnresolved: string } | null> {
   const res = await readContentBackedItem(cosmosItemId, 'semantic-model', tenantId);
   if (res.outcome === 'read-failed') return { readFailed: res.error };
+  // #3801 — the item EXISTS; its parent workspace does not resolve for this
+  // caller. That is not "no Loom item here", and it must not fall through to
+  // the Power BI branch: this model needs no Power BI workspace at all.
+  if (res.outcome === 'parent-unresolved') return { parentUnresolved: res.workspaceId };
   if (res.outcome === 'not-found') return null;
   const item = res.item;
   const built = semanticModelDetailFromContent(item);
@@ -218,6 +222,25 @@ export async function loadModelContext(id: string, workspaceId: string | null, t
         + `This is a storage read failure, not an empty model: ${contentCtx.readFailed}. Retry in a moment; if it `
         + 'persists, check the Console managed identity\'s Cosmos data-plane role. (No Power BI / Fabric workspace '
         + 'is required for this model.)',
+    };
+  }
+  if (contentCtx && 'parentUnresolved' in contentCtx) {
+    // #3801 — R7: say exactly what could not be resolved and what it is NOT.
+    // The old behaviour collapsed this onto "no Loom item", fell through to the
+    // Power BI branch and told the operator to select a Power BI workspace for
+    // a model whose definition lives in Loom storage and needs no Power BI.
+    // 24 of 32 content-bearing semantic models on the live Commercial estate
+    // were in this state, all of them created by a purged automation principal.
+    return {
+      modelName: 'Semantic model',
+      tables: [], baseRels: [], measures: [],
+      liveDataset: false,
+      notice:
+        'This model\'s definition is in Loom storage, but its parent workspace '
+        + `(${contentCtx.parentUnresolved}) could not be resolved for your account — it is owned by another `
+        + 'principal or has been deleted. Its tables and measures are not shown for that reason. '
+        + 'No Power BI workspace is required for this model; move it to a workspace you can read, or ask a '
+        + 'tenant admin to reassign the parent workspace.',
     };
   }
   if (contentCtx) return contentCtx;
