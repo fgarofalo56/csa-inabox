@@ -21,8 +21,9 @@ import { clientFetch } from '@/lib/client-fetch';
 
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
 import {
-  Subtitle2, Body1, Caption1, Badge, Button, Input, Textarea, SkeletonItem, Field, Dropdown, Option, OptionGroup,
+  Subtitle2, Body1, Caption1, Badge, Button, Input, Textarea, SkeletonItem, Field, Dropdown, Combobox, Option, OptionGroup,
   Checkbox,
+  MessageBarActions,
   Table, TableHeader, TableRow, TableHeaderCell, TableBody, TableCell,
   Tab, TabList,
   Dialog, DialogSurface, DialogBody, DialogTitle, DialogContent, DialogActions, Breadcrumb, BreadcrumbItem, BreadcrumbButton,
@@ -38,6 +39,7 @@ import {
 } from '@fluentui/react-icons';
 import { DeltaPreviewGrid, type ColStat } from './components/delta-preview-grid';
 import { EmptyState } from '@/lib/components/empty-state';
+import { HonestGate } from '@/lib/components/shared/honest-gate';
 import { ItemEditorChrome } from './item-editor-chrome';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
@@ -684,6 +686,30 @@ export function EvaluationEditor({ item, id }: { item: FabricItemType; id: strin
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
 
+  // ── AUTO-BIND (#3543) — dataset + model deployment are PICKED, not typed ───
+  // Both were free `<Input>`s (an `azureml://…` URI and a deployment name),
+  // i.e. loom_no_freeform_config + auto-bind-by-default §5: Loom enumerates
+  // both, so it asks the backend. dataset → GET /api/items/dataset[?project=]
+  // (registered assets) + the same DataUriPickDialog the Dataset editor uses,
+  // for a path not registered yet; deployment → GET
+  // /api/foundry/model-deployments (real ARM CognitiveServices deployments).
+  const [assets] = useApi<{ assets: any[] }>(
+    `/api/items/dataset${project ? `?project=${encodeURIComponent(project)}` : ''}`, [project]);
+  const [deployments] = useApi<{ deployments: { name: string; modelName?: string }[] }>('/api/foundry/model-deployments');
+  const [browseOpen, setBrowseOpen] = useState(false);
+  const datasetOptions: { uri: string; label: string }[] = useMemo(() => {
+    const rows = (assets.data?.assets || [])
+      .filter((a: any) => typeof a?.dataUri === 'string' && a.dataUri)
+      .map((a: any) => ({ uri: String(a.dataUri), label: `${a.name || a.dataUri}${a.dataType ? ` · ${a.dataType}` : ''}` }));
+    // A browsed URI is not (yet) a registered asset — keep it selectable so the
+    // Dropdown never holds a value it cannot represent.
+    if (form.datasetId && !rows.some((r: { uri: string }) => r.uri === form.datasetId)) {
+      rows.unshift({ uri: form.datasetId, label: `${form.datasetId} · browsed` });
+    }
+    return rows;
+  }, [assets.data, form.datasetId]);
+  const deploymentOptions = deployments.data?.deployments || [];
+
   const create = async () => {
     if (!project) { setMsg('Pick a project first.'); return; }
     setBusy(true); setMsg(null);
@@ -741,12 +767,46 @@ export function EvaluationEditor({ item, id }: { item: FabricItemType; id: strin
         <Subtitle2>New evaluation</Subtitle2>
         <div className={s.formRow}>
           <span>Display name</span><Input value={form.displayName} onChange={(_, d) => setForm((f) => ({ ...f, displayName: d.value }))} />
-          <span>Dataset ID</span><Input value={form.datasetId} onChange={(_, d) => setForm((f) => ({ ...f, datasetId: d.value }))} placeholder="azureml://datastores/.../paths/..." />
-          <span>Model deployment</span><Input value={form.modelDeployment} onChange={(_, d) => setForm((f) => ({ ...f, modelDeployment: d.value }))} placeholder="gpt-4o-mini" />
+          <span>Dataset</span>
+          <div className={s.toolbar} style={{ gap: tokens.spacingHorizontalS }}>
+            <Dropdown style={{ flex: 1, minWidth: 240 }} aria-label="Dataset"
+              value={form.datasetId} selectedOptions={form.datasetId ? [form.datasetId] : []}
+              placeholder={assets.loading ? 'Loading data assets…' : datasetOptions.length ? 'Select a registered data asset' : 'No data assets — use Browse…'}
+              onOptionSelect={(_, d) => d.optionValue && setForm((f) => ({ ...f, datasetId: d.optionValue! }))}>
+              {datasetOptions.map((o) => <Option key={o.uri} value={o.uri} text={o.uri}>{o.label}</Option>)}
+            </Dropdown>
+            <Button icon={<FolderOpen20Regular />} onClick={() => setBrowseOpen(true)}>Browse…</Button>
+          </div>
+          <span>Model deployment</span>
+          <Dropdown aria-label="Model deployment"
+            value={form.modelDeployment} selectedOptions={form.modelDeployment ? [form.modelDeployment] : []}
+            placeholder={deployments.loading ? 'Loading deployments…' : deploymentOptions.length ? 'Select a model deployment (optional)' : 'None deployed'}
+            disabled={!deploymentOptions.length}
+            onOptionSelect={(_, d) => setForm((f) => ({ ...f, modelDeployment: d.optionValue || '' }))}>
+            {deploymentOptions.map((d) => (
+              <Option key={d.name} value={d.name} text={d.name}>{d.name}{d.modelName ? ` · ${d.modelName}` : ''}</Option>
+            ))}
+          </Dropdown>
           <span>Evaluators</span><Input value={form.evaluators} onChange={(_, d) => setForm((f) => ({ ...f, evaluators: d.value }))} placeholder="comma-separated" />
         </div>
+        {form.datasetId && <Caption1>Dataset URI: <code>{form.datasetId}</code></Caption1>}
+        {!deployments.loading && !deploymentOptions.length && (
+          // ux-baseline G2: the gate carries the action that resolves it. The
+          // field is optional, so the evaluation still submits without one.
+          <MessageBar intent="info">
+            <MessageBarBody>
+              <MessageBarTitle>No model deployments in this account</MessageBarTitle>
+              {deployments.error
+                ? `${deployments.error}${deployments.hint ? ` — ${deployments.hint}` : ''}`
+                : 'An evaluation can run on a dataset alone; deploy a model to score generations against it.'}
+              <div className={s.toolbar} style={{ marginTop: tokens.spacingVerticalXS }}>
+                <Button as="a" href="/items/ai-foundry-hub/new" size="small">Deploy a model</Button>
+              </div>
+            </MessageBarBody>
+          </MessageBar>
+        )}
         <div className={s.toolbar} style={{ marginTop: tokens.spacingVerticalS }}>
-          <Button appearance="primary" onClick={create} disabled={busy}>{busy ? 'Submitting…' : 'Create evaluation'}</Button>
+          <Button appearance="primary" onClick={create} disabled={busy || !form.displayName || !form.datasetId}>{busy ? 'Submitting…' : 'Create evaluation'}</Button>
           {msg && <Caption1>{msg}</Caption1>}
         </div>
       </div>
@@ -767,6 +827,12 @@ export function EvaluationEditor({ item, id }: { item: FabricItemType; id: strin
         </div>
       )}
     </div>
+    {/* Same real location picker the Dataset editor uses — the ADLS Gen2
+        browser AND the workspace-datastore browser, so an evaluation can
+        target either address family (function declaration, hoisted — defined
+        below this component). */}
+    <DataUriPickDialog open={browseOpen} onClose={() => setBrowseOpen(false)}
+      onPick={(uri) => { setForm((f) => ({ ...f, datasetId: uri })); setBrowseOpen(false); }} />
   </Shell>;
 }
 
@@ -1537,7 +1603,11 @@ function SemanticConfigDesigner({
  * only). Profiles bind a name to an algorithm. Save issues a real PUT
  * /indexes/{name}. Parity with the portal's vector-profile authoring.
  */
-function VectorSearchDesigner({
+// EXPORTED for `__tests__/foundry-picker-failure-paths-4313.test.tsx`, which
+// drives the vectorizer endpoint control against a FAILING /api/foundry/accounts.
+// Reaching it through AiSearchIndexEditor would require a live service tree +
+// index selection first, so the spec would be testing the tree, not this.
+export function VectorSearchDesigner({
   idx, indexBase, onSaved,
 }: { idx: any; indexBase: string; onSaved: () => void }) {
   const s = useStyles();
@@ -1556,6 +1626,44 @@ function VectorSearchDesigner({
 
   const algoNames = useMemo(() => algorithms.map((a) => a.name).filter(Boolean), [algorithms]);
   const vecNames = useMemo(() => vectorizers.map((v) => v.name).filter(Boolean), [vectorizers]);
+
+  // AUTO-BIND (#3543, boy-scout on this file) — the vectorizer's Azure OpenAI
+  // endpoint was a hand-typed `https://<name>.openai.azure.com`. Loom already
+  // enumerates those accounts (ARM Accounts_List) for the Foundry hub picker,
+  // so it is CHOSEN. A saved endpoint outside the discovered list stays
+  // selectable so an index written elsewhere still shows its real value.
+  const [aoaiAccounts, reloadAoaiAccounts] = useApi<{ accounts: { name: string; endpoint?: string }[] }>('/api/foundry/accounts');
+  const aoaiEndpoints = useMemo(() => {
+    const rows = (aoaiAccounts.data?.accounts || [])
+      .filter((a) => typeof a.endpoint === 'string' && a.endpoint)
+      .map((a) => ({ uri: String(a.endpoint), label: `${a.name} · ${a.endpoint}` }));
+    for (const v of vectorizers) {
+      const cur = v.azureOpenAIParameters?.resourceUri;
+      if (cur && !rows.some((r) => r.uri === cur)) rows.push({ uri: cur, label: `${cur} · not in this subscription` });
+    }
+    return rows;
+  }, [aoaiAccounts.data, vectorizers]);
+
+  // R7 — AN EMPTY LIST AND A FAILED CALL ARE DIFFERENT FACTS. `/api/foundry/accounts`
+  // answers 401 (no session), 502 (ARM error) and 503 (CsNotConfiguredError) with
+  // `{ ok:false }`, and `useApi` flattens every one of those to `{ data:null, error }`.
+  // A list derived from `data?.accounts || []` is therefore `[]` on EVERY failure
+  // path as well as on a genuinely empty subscription. Saying "No accounts found"
+  // there asserts absence the code never established (deploy-integrity R7), and a
+  // control DISABLED on it is a dead end with no action — auto-bind-by-default
+  // §Explicitly-forbidden ("'No … found' + a disabled button") and ux-baseline G2.
+  // So: the picker is offered only when discovery SUCCEEDED and returned rows;
+  // on failure or on a real zero the endpoint stays enterable (freeform Combobox)
+  // and the failure is stated separately with a Fix-it / Retry.
+  const aoaiDiscoveryFailed = !aoaiAccounts.loading && !!aoaiAccounts.error;
+  const aoaiPickable = !aoaiAccounts.loading && !aoaiAccounts.error && aoaiEndpoints.length > 0;
+  const aoaiEndpointPlaceholder = aoaiAccounts.loading
+    ? 'Loading accounts…'
+    : aoaiDiscoveryFailed
+      ? 'Enter the Azure OpenAI endpoint (discovery failed)'
+      : aoaiPickable
+        ? 'Select an Azure OpenAI account'
+        : 'No Azure OpenAI accounts in this subscription — enter an endpoint';
 
   // AIF-2 — pre-flight the vectorizer/field consistency (dimension mismatch +
   // dangling refs) against the live index fields so the classic
@@ -1731,6 +1839,32 @@ function VectorSearchDesigner({
           </MessageBarBody>
         </MessageBar>
       )}
+      {/* Discovery FAILED — say that, never "no accounts". The 503
+          (CsNotConfiguredError) is a registered gate, so it renders the shared
+          G2 surface with its inline Fix-it wizard; any other failure gets an
+          honest error carrying the route's own error + hint and a Retry. Both
+          branches leave the endpoint enterable below, so the vectorizer is
+          still savable while discovery is broken. */}
+      {aoaiDiscoveryFailed && (aoaiAccounts.notDeployed ? (
+        <HonestGate
+          gateId="svc-aoai"
+          surface="AI Search vectorizers"
+          detail={`${aoaiAccounts.error}${aoaiAccounts.hint ? ` — ${aoaiAccounts.hint}` : ''}`}
+          onResolved={reloadAoaiAccounts}
+        />
+      ) : (
+        <MessageBar intent="error">
+          <MessageBarBody>
+            <MessageBarTitle>Could not list Azure OpenAI accounts</MessageBarTitle>
+            {aoaiAccounts.error}{aoaiAccounts.hint ? ` — ${aoaiAccounts.hint}` : ''}
+            {' '}Loom established only that the listing call failed — not that this subscription has no
+            Azure OpenAI account. Retry, or type the endpoint below to finish the vectorizer meanwhile.
+          </MessageBarBody>
+          <MessageBarActions>
+            <Button size="small" icon={<ArrowClockwise20Regular />} onClick={reloadAoaiAccounts}>Retry</Button>
+          </MessageBarActions>
+        </MessageBar>
+      ))}
       <div className={s.tableWrap}>
         <Table size="small" aria-label="Vectorizers">
           <TableHeader><TableRow>
@@ -1744,7 +1878,31 @@ function VectorSearchDesigner({
             {vectorizers.map((v, i) => (
               <TableRow key={i}>
                 <TableCell><Input size="small" value={v.name} aria-label={`vectorizer-${i}-name`} onChange={(_, d) => patchVectorizerName(i, d.value)} className={s.fdInput} /></TableCell>
-                <TableCell><Input size="small" value={v.azureOpenAIParameters.resourceUri} aria-label={`vectorizer-${i}-uri`} placeholder="https://<name>.openai.azure.com" onChange={(_, d) => patchVectorizer(i, { resourceUri: d.value })} className={s.fdInput} /></TableCell>
+                <TableCell>
+                  {aoaiPickable ? (
+                    <Dropdown size="small" className={s.fdInput} aria-label={`vectorizer-${i}-endpoint`}
+                      value={v.azureOpenAIParameters.resourceUri || ''}
+                      selectedOptions={v.azureOpenAIParameters.resourceUri ? [v.azureOpenAIParameters.resourceUri] : []}
+                      placeholder={aoaiEndpointPlaceholder}
+                      onOptionSelect={(_, d) => patchVectorizer(i, { resourceUri: d.optionValue || '' })}>
+                      {aoaiEndpoints.map((e) => <Option key={e.uri} value={e.uri} text={e.uri}>{e.label}</Option>)}
+                    </Dropdown>
+                  ) : (
+                    // ESCAPE HATCH — never a disabled control asserting absence.
+                    // Discovery is still loading, failed, or genuinely returned
+                    // nothing; the endpoint stays enterable so `save()` (which
+                    // refuses an empty resourceUri) can complete either way. Any
+                    // rows discovery DID return are still offered as options.
+                    <Combobox size="small" freeform className={s.fdInput} aria-label={`vectorizer-${i}-endpoint`}
+                      value={v.azureOpenAIParameters.resourceUri || ''}
+                      selectedOptions={v.azureOpenAIParameters.resourceUri ? [v.azureOpenAIParameters.resourceUri] : []}
+                      placeholder={aoaiEndpointPlaceholder}
+                      onChange={(ev) => patchVectorizer(i, { resourceUri: ev.target.value })}
+                      onOptionSelect={(_, d) => patchVectorizer(i, { resourceUri: d.optionValue || '' })}>
+                      {aoaiEndpoints.map((e) => <Option key={e.uri} value={e.uri} text={e.uri}>{e.label}</Option>)}
+                    </Combobox>
+                  )}
+                </TableCell>
                 <TableCell><Input size="small" value={v.azureOpenAIParameters.deploymentId} aria-label={`vectorizer-${i}-deployment`} placeholder="text-embedding-3-large" onChange={(_, d) => patchVectorizer(i, { deploymentId: d.value })} className={s.fdInput} /></TableCell>
                 <TableCell>
                   <Dropdown size="small" value={v.azureOpenAIParameters.modelName || ''} selectedOptions={v.azureOpenAIParameters.modelName ? [v.azureOpenAIParameters.modelName] : []} placeholder="model" aria-label={`vectorizer-${i}-model`}
@@ -2896,6 +3054,16 @@ export function ComputeEditor({ item, id }: { item: FabricItemType; id: string }
 // the account-scoped route, but Spark profiling (table-stats) is gated to these.
 const DLZ_KNOWN_CONTAINERS = ['bronze', 'silver', 'gold', 'landing', 'csv-imports'];
 
+/** One row of GET /api/foundry/datastores (shapeDatastore in foundry-client.ts). */
+interface FoundryDatastoreRow {
+  name: string;
+  datastoreType?: string;
+  isDefault?: boolean;
+  description?: string;
+  accountName?: string;
+  containerName?: string;
+}
+
 interface ParsedAdls { account: string; container: string; path: string; }
 
 /**
@@ -2919,14 +3087,59 @@ function crumbsFor(prefix: string): string[] {
 }
 
 /**
- * AdlsBrowseDialog — modal ADLS Gen2 file browser for picking a dataset URI.
- * Lists the real DLZ containers (/api/lakehouse/containers) then walks paths
- * (/api/lakehouse/paths); selecting a file → uri_file, a folder → uri_folder.
- * Emits the abfss URI the new-asset form posts. Honest gate when no container
- * is reachable. Parity with the portal "Browse" picker when registering data.
+ * DataUriPickDialog — the data-asset location picker, with ONE field written by
+ * TWO source tabs, one per address family AML accepts:
+ *
+ *   • "ADLS Gen2"      → `abfss://<container>@<host>/<path>` — walks the real
+ *                        DLZ containers (/api/lakehouse/containers + /paths).
+ *   • "Datastore path" → `azureml://datastores/<name>/paths/<path>` — walks the
+ *                        workspace's REGISTERED datastores (/api/foundry/datastores)
+ *                        and browses the account/container each one points at
+ *                        (/api/storage/[account]/containers/[container]/paths).
+ *
+ * Both tabs are PICKERS: no URI is composed by hand (loom_no_freeform_config),
+ * and neither family can be registered only via the other. Making the ADLS
+ * browser the sole writer of the field had removed the azureml:// family
+ * outright and, because that browser gates entirely when the DLZ containers are
+ * unreachable, made data-asset registration impossible in a gated deployment —
+ * the affordance-removal shortcut ui-parity.md forbids.
  */
-function AdlsBrowseDialog({ open, onClose, onPick }: {
+function DataUriPickDialog({ open, onClose, onPick }: {
   open: boolean; onClose: () => void;
+  onPick: (uri: string, dataType: 'uri_file' | 'uri_folder') => void;
+}) {
+  const [source, setSource] = useState<'adls' | 'datastore'>('adls');
+  useEffect(() => { if (open) setSource('adls'); }, [open]);
+  return (
+    <Dialog open={open} onOpenChange={(_, d) => { if (!d.open) onClose(); }}>
+      <DialogSurface style={{ maxWidth: 720 }}>
+        <DialogBody>
+          <DialogTitle>Pick a data URI</DialogTitle>
+          <DialogContent>
+            <TabList selectedValue={source} onTabSelect={(_, d) => setSource(d.value as 'adls' | 'datastore')}>
+              <Tab value="adls">ADLS Gen2</Tab>
+              <Tab value="datastore">Datastore path</Tab>
+            </TabList>
+            {source === 'adls'
+              ? <AdlsBrowsePanel open={open} onPick={onPick} />
+              : <DatastoreBrowsePanel onPick={onPick} />}
+          </DialogContent>
+          <DialogActions><Button appearance="secondary" onClick={onClose}>Close</Button></DialogActions>
+        </DialogBody>
+      </DialogSurface>
+    </Dialog>
+  );
+}
+
+/**
+ * AdlsBrowsePanel — ADLS Gen2 file browser body. Lists the real DLZ containers
+ * (/api/lakehouse/containers) then walks paths (/api/lakehouse/paths); selecting
+ * a file → uri_file, a folder → uri_folder. Emits the abfss URI. Honest gate
+ * when no container is reachable — and the sibling "Datastore path" tab stays
+ * usable in that state, so the gate is not a dead end for the whole dialog.
+ */
+function AdlsBrowsePanel({ open, onPick }: {
+  open: boolean;
   onPick: (uri: string, dataType: 'uri_file' | 'uri_folder') => void;
 }) {
   const s = useStyles();
@@ -2970,64 +3183,201 @@ function AdlsBrowseDialog({ open, onClose, onPick }: {
   const goUp = () => { const next = prefix.split('/').slice(0, -1).join('/'); setPrefix(next); loadPaths(container, next); };
 
   return (
-    <Dialog open={open} onOpenChange={(_, d) => { if (!d.open) onClose(); }}>
-      <DialogSurface style={{ maxWidth: 720 }}>
-        <DialogBody>
-          <DialogTitle>Browse ADLS Gen2 for a data URI</DialogTitle>
-          <DialogContent>
-            {gate ? <ErrorBar msg={gate} notDeployed /> : !container ? (
-              containers === null ? <TableSkeleton rows={4} /> : (
-                <div className={s.tableWrap}>
-                  <Table size="small"><TableHeader><TableRow><TableHeaderCell>Container</TableHeaderCell><TableHeaderCell>Account</TableHeaderCell></TableRow></TableHeader>
-                    <TableBody>
-                      {containers.map((c) => (
-                        <TableRow key={c.name} onClick={() => enterContainer(c)} style={{ cursor: 'pointer' }}>
-                          <TableCell className={s.cell}><FolderOpen20Regular /> <strong>{c.name}</strong></TableCell>
-                          <TableCell className={s.cell}>{(c.url.match(/^https:\/\/([^./]+)\./i) || [])[1] || '—'}</TableCell>
-                        </TableRow>
-                      ))}
-                    </TableBody></Table>
-                </div>
-              )
-            ) : (
-              <>
-                <div className={s.toolbar}>
-                  <Breadcrumb>
-                    <BreadcrumbItem><BreadcrumbButton onClick={() => { setContainer(''); setPrefix(''); }}>{container}</BreadcrumbButton></BreadcrumbItem>
-                    {crumbsFor(prefix).map((seg) => (<BreadcrumbItem key={seg}><BreadcrumbButton>{seg}</BreadcrumbButton></BreadcrumbItem>))}
-                  </Breadcrumb>
-                  {prefix && <Button size="small" icon={<ArrowUp20Regular />} onClick={goUp}>Up</Button>}
-                  <Button size="small" appearance="primary" onClick={() => onPick(pickUri(prefix), 'uri_folder')}>Use this folder</Button>
-                </div>
-                {err && <ErrorBar msg={err} />}
-                {loading ? <TableSkeleton rows={4} /> : (
-                  <div className={s.tableWrap}>
-                    <Table size="small"><TableBody>
-                      {entries.length === 0 && <TableRow><TableCell className={s.cell}>Empty.</TableCell></TableRow>}
-                      {entries.map((e) => {
-                        const leaf = e.name.split('/').pop() || e.name;
-                        return (
-                          <TableRow key={e.name}>
-                            <TableCell className={s.cell}>
-                              {e.isDirectory
-                                ? <Button size="small" appearance="subtle" icon={<Folder20Regular />} onClick={() => openDir(e.name)}>{leaf}</Button>
-                                : <span><Document20Regular /> {leaf}</span>}
-                            </TableCell>
-                            <TableCell className={s.cell}>{e.isDirectory ? 'folder' : `${(e.size / 1024).toFixed(1)} KB`}</TableCell>
-                            <TableCell className={s.cell}><Button size="small" onClick={() => onPick(pickUri(e.name), e.isDirectory ? 'uri_folder' : 'uri_file')}>Select</Button></TableCell>
-                          </TableRow>
-                        );
-                      })}
-                    </TableBody></Table>
-                  </div>
-                )}
-              </>
-            )}
-          </DialogContent>
-          <DialogActions><Button appearance="secondary" onClick={onClose}>Close</Button></DialogActions>
-        </DialogBody>
-      </DialogSurface>
-    </Dialog>
+    <>
+      {gate ? (
+        <>
+          <ErrorBar msg={gate} notDeployed />
+          <Caption1>
+            The <strong>Datastore path</strong> tab does not depend on the DLZ containers — a data asset can still
+            be registered against a workspace datastore while this is unreachable.
+          </Caption1>
+        </>
+      ) : !container ? (
+        containers === null ? <TableSkeleton rows={4} /> : (
+          <div className={s.tableWrap}>
+            <Table size="small"><TableHeader><TableRow><TableHeaderCell>Container</TableHeaderCell><TableHeaderCell>Account</TableHeaderCell></TableRow></TableHeader>
+              <TableBody>
+                {containers.map((c) => (
+                  <TableRow key={c.name} onClick={() => enterContainer(c)} style={{ cursor: 'pointer' }}>
+                    <TableCell className={s.cell}><FolderOpen20Regular /> <strong>{c.name}</strong></TableCell>
+                    <TableCell className={s.cell}>{(c.url.match(/^https:\/\/([^./]+)\./i) || [])[1] || '—'}</TableCell>
+                  </TableRow>
+                ))}
+              </TableBody></Table>
+          </div>
+        )
+      ) : (
+        <>
+          <div className={s.toolbar}>
+            <Breadcrumb>
+              <BreadcrumbItem><BreadcrumbButton onClick={() => { setContainer(''); setPrefix(''); }}>{container}</BreadcrumbButton></BreadcrumbItem>
+              {crumbsFor(prefix).map((seg) => (<BreadcrumbItem key={seg}><BreadcrumbButton>{seg}</BreadcrumbButton></BreadcrumbItem>))}
+            </Breadcrumb>
+            {prefix && <Button size="small" icon={<ArrowUp20Regular />} onClick={goUp}>Up</Button>}
+            <Button size="small" appearance="primary" onClick={() => onPick(pickUri(prefix), 'uri_folder')}>Use this folder</Button>
+          </div>
+          {err && <ErrorBar msg={err} />}
+          {loading ? <TableSkeleton rows={4} /> : (
+            <div className={s.tableWrap}>
+              <Table size="small"><TableBody>
+                {entries.length === 0 && <TableRow><TableCell className={s.cell}>Empty.</TableCell></TableRow>}
+                {entries.map((e) => {
+                  const leaf = e.name.split('/').pop() || e.name;
+                  return (
+                    <TableRow key={e.name}>
+                      <TableCell className={s.cell}>
+                        {e.isDirectory
+                          ? <Button size="small" appearance="subtle" icon={<Folder20Regular />} onClick={() => openDir(e.name)}>{leaf}</Button>
+                          : <span><Document20Regular /> {leaf}</span>}
+                      </TableCell>
+                      <TableCell className={s.cell}>{e.isDirectory ? 'folder' : `${(e.size / 1024).toFixed(1)} KB`}</TableCell>
+                      <TableCell className={s.cell}><Button size="small" onClick={() => onPick(pickUri(e.name), e.isDirectory ? 'uri_folder' : 'uri_file')}>Select</Button></TableCell>
+                    </TableRow>
+                  );
+                })}
+              </TableBody></Table>
+            </div>
+          )}
+        </>
+      )}
+    </>
+  );
+}
+
+/**
+ * DatastoreBrowsePanel — the `azureml://datastores/<name>/paths/<path>` half of
+ * the picker. Datastores come from GET /api/foundry/datastores (the real AML
+ * `/datastores` list); the path inside one is BROWSED through
+ * /api/storage/[account]/containers/[container]/paths, the generic ADLS lister
+ * that takes an arbitrary account — so the URI is picked, never typed.
+ *
+ * A datastore whose ARM record carries no accountName/containerName (a type
+ * this listing does not project a blob address for) cannot be walked: that is
+ * stated as what it is — Loom does not have the address, NOT "the datastore is
+ * empty" (deploy-integrity R7) — and its ROOT stays selectable, so the asset is
+ * still registerable.
+ */
+function DatastoreBrowsePanel({ onPick }: {
+  onPick: (uri: string, dataType: 'uri_file' | 'uri_folder') => void;
+}) {
+  const s = useStyles();
+  const [stores, reloadStores] = useApi<{ datastores: FoundryDatastoreRow[] }>('/api/foundry/datastores');
+  const [picked, setPicked] = useState<FoundryDatastoreRow | null>(null);
+  const [prefix, setPrefix] = useState('');
+  const [entries, setEntries] = useState<{ name: string; isDirectory: boolean; size: number }[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  /** `azureml://datastores/<name>/paths/<path>` — the AML datastore address. */
+  const dsUri = (name: string, path: string) => `azureml://datastores/${name}/paths/${path.replace(/^\/+/, '')}`;
+
+  const loadPaths = useCallback(async (ds: FoundryDatastoreRow, p: string) => {
+    if (!ds.accountName || !ds.containerName) return;
+    setLoading(true); setErr(null);
+    const r = await clientFetch(
+      `/api/storage/${encodeURIComponent(ds.accountName)}/containers/${encodeURIComponent(ds.containerName)}/paths`
+      + `?prefix=${encodeURIComponent(p)}`);
+    const j = await r.json();
+    if (!j.ok) { setErr(j.error || 'List failed'); setEntries([]); } else setEntries(j.paths || []);
+    setLoading(false);
+  }, []);
+
+  const enter = (ds: FoundryDatastoreRow) => { setPicked(ds); setPrefix(''); setEntries([]); setErr(null); loadPaths(ds, ''); };
+  const openDir = (name: string) => { if (picked) { setPrefix(name); loadPaths(picked, name); } };
+  const goUp = () => {
+    const next = prefix.split('/').slice(0, -1).join('/');
+    setPrefix(next); if (picked) loadPaths(picked, next);
+  };
+
+  if (stores.loading) return <TableSkeleton rows={4} />;
+  if (stores.error) {
+    return (
+      <>
+        <ErrorBar msg={stores.error} hint={stores.hint} notDeployed={stores.notDeployed} />
+        <Button size="small" icon={<ArrowClockwise20Regular />} onClick={reloadStores}>Retry</Button>
+      </>
+    );
+  }
+  const rows = stores.data?.datastores || [];
+  if (!picked) {
+    if (!rows.length) {
+      return (
+        <EmptyState icon={<Database20Regular />} title="No datastores registered"
+          body="The Foundry/AML workspace returned no datastores. Register one in the workspace, or use the ADLS Gen2 tab to point the asset straight at a lake path." />
+      );
+    }
+    return (
+      <div className={s.tableWrap}>
+        <Table size="small">
+          <TableHeader><TableRow>
+            <TableHeaderCell>Datastore</TableHeaderCell><TableHeaderCell>Type</TableHeaderCell><TableHeaderCell>Backing store</TableHeaderCell>
+          </TableRow></TableHeader>
+          <TableBody>
+            {rows.map((d) => (
+              <TableRow key={d.name} onClick={() => enter(d)} style={{ cursor: 'pointer' }}>
+                <TableCell className={s.cell}>
+                  <FolderOpen20Regular /> <strong>{d.name}</strong>
+                  {d.isDefault && <Badge appearance="tint" color="brand" size="small">default</Badge>}
+                </TableCell>
+                <TableCell className={s.cell}>{d.datastoreType || '—'}</TableCell>
+                <TableCell className={s.cell}>{d.accountName && d.containerName ? `${d.accountName}/${d.containerName}` : '—'}</TableCell>
+              </TableRow>
+            ))}
+          </TableBody>
+        </Table>
+      </div>
+    );
+  }
+
+  const walkable = !!(picked.accountName && picked.containerName);
+  return (
+    <>
+      <div className={s.toolbar}>
+        <Breadcrumb>
+          <BreadcrumbItem><BreadcrumbButton onClick={() => { setPicked(null); setPrefix(''); setEntries([]); setErr(null); }}>{picked.name}</BreadcrumbButton></BreadcrumbItem>
+          {crumbsFor(prefix).map((seg) => (<BreadcrumbItem key={seg}><BreadcrumbButton>{seg}</BreadcrumbButton></BreadcrumbItem>))}
+        </Breadcrumb>
+        {prefix && <Button size="small" icon={<ArrowUp20Regular />} onClick={goUp}>Up</Button>}
+        <Button size="small" appearance="primary" onClick={() => onPick(dsUri(picked.name, prefix), 'uri_folder')}>
+          {prefix ? 'Use this folder' : 'Use datastore root'}
+        </Button>
+      </div>
+      {!walkable && (
+        <MessageBar intent="warning">
+          <MessageBarBody>
+            <MessageBarTitle>Loom cannot browse inside this datastore</MessageBarTitle>
+            The AML datastore record for <strong>{picked.name}</strong>
+            {picked.datastoreType ? ` (${picked.datastoreType})` : ''} carries no storage account / container,
+            so there is no address to list. Loom established only that — not that the datastore is empty.
+            Its root is selectable above, or use the ADLS Gen2 tab.
+          </MessageBarBody>
+        </MessageBar>
+      )}
+      {err && <ErrorBar msg={err} />}
+      {walkable && (loading ? <TableSkeleton rows={4} /> : (
+        <div className={s.tableWrap}>
+          <Table size="small"><TableBody>
+            {entries.length === 0 && !err && <TableRow><TableCell className={s.cell}>Empty.</TableCell></TableRow>}
+            {entries.map((e) => {
+              const leaf = e.name.split('/').pop() || e.name;
+              return (
+                <TableRow key={e.name}>
+                  <TableCell className={s.cell}>
+                    {e.isDirectory
+                      ? <Button size="small" appearance="subtle" icon={<Folder20Regular />} onClick={() => openDir(e.name)}>{leaf}</Button>
+                      : <span><Document20Regular /> {leaf}</span>}
+                  </TableCell>
+                  <TableCell className={s.cell}>{e.isDirectory ? 'folder' : `${(e.size / 1024).toFixed(1)} KB`}</TableCell>
+                  <TableCell className={s.cell}>
+                    <Button size="small" onClick={() => onPick(dsUri(picked.name, e.name), e.isDirectory ? 'uri_folder' : 'uri_file')}>Select</Button>
+                  </TableCell>
+                </TableRow>
+              );
+            })}
+          </TableBody></Table>
+        </div>
+      ))}
+    </>
   );
 }
 
@@ -3169,9 +3519,18 @@ export function DatasetEditor({ item, id }: { item: FabricItemType; id: string }
               <Option value="mltable">mltable</Option>
             </Dropdown>
             <span>URI</span>
+            {/* AUTO-BIND (#3543, boy-scout on this file): the data URI is PICKED
+                — never typed — from EITHER address family AML accepts, through
+                DataUriPickDialog's two source tabs: the real DLZ ADLS Gen2
+                containers (`abfss://…`) and the workspace's registered
+                datastores (`azureml://datastores/<ds>/paths/<p>`). The field
+                stays read-only; both families stay registerable, and neither
+                tab's gate can block the other. */}
             <div className={s.toolbar} style={{ gap: tokens.spacingHorizontalS }}>
-              <Input value={form.dataUri} onChange={(_, d) => setForm((f) => ({ ...f, dataUri: d.value }))} placeholder="azureml:// or abfss://..." style={{ flex: 1, minWidth: 240 }} />
+              <Input readOnly value={form.dataUri} aria-label="Data asset URI"
+                placeholder="Pick a lake path or datastore path with Browse…" style={{ flex: 1, minWidth: 240 }} />
               <Button icon={<FolderOpen20Regular />} onClick={() => setBrowseOpen(true)}>Browse…</Button>
+              {form.dataUri && <Button appearance="subtle" onClick={() => setForm((f) => ({ ...f, dataUri: '' }))}>Clear</Button>}
             </div>
             <span>Version</span><Input value={form.version} onChange={(_, d) => setForm((f) => ({ ...f, version: d.value }))} />
             <span>Description</span><Input value={form.description} onChange={(_, d) => setForm((f) => ({ ...f, description: d.value }))} />
@@ -3203,7 +3562,7 @@ export function DatasetEditor({ item, id }: { item: FabricItemType; id: string }
           </div>
         )}
       </div>
-      <AdlsBrowseDialog open={browseOpen} onClose={() => setBrowseOpen(false)}
+      <DataUriPickDialog open={browseOpen} onClose={() => setBrowseOpen(false)}
         onPick={(uri, dataType) => { setForm((f) => ({ ...f, dataUri: uri, dataType })); setBrowseOpen(false); }} />
     </Shell>;
   }

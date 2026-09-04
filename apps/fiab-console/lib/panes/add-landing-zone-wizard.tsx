@@ -661,7 +661,7 @@ export function AddLandingZoneWizardPane() {
               </div>
             )}
             {!failed && (deployStatus === 'running' || deployStatus === 'submitting') && (
-              <ProgressBar value={deployProgress} thickness="large" />
+              <ProgressBar value={deployProgress} thickness="large" aria-label={deployStage || 'Deployment running…'} />
             )}
             {failed && deployError && (
               <MessageBar intent="error">
@@ -804,7 +804,7 @@ export function AddLandingZoneWizardPane() {
           </div>
           {!deployError && (
             <>
-              <ProgressBar value={deployProgress} thickness="large" />
+              <ProgressBar value={deployProgress} thickness="large" aria-label={deployStage || 'Attach progress'} />
               <div className={styles.inlineLoad}><Spinner size="tiny" /><Body1>{deployStage}</Body1></div>
             </>
           )}

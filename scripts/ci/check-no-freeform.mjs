@@ -293,8 +293,15 @@
  *     definition, and never at its ~9 call sites. Cross-file resolution is not
  *     attempted.
  *   - A FLUENT `<Combobox freeform>`, which accepts typed text while looking
- *     like a picker. Zero in the tree today; recorded because it is the one
- *     way a compliant-looking element is not one.
+ *     like a picker. ONE in the tree as of #4313: the AI Search vectorizer's
+ *     Azure OpenAI endpoint in `lib/editors/foundry-sub-editors.tsx`, rendered
+ *     ONLY on the branch where `/api/foundry/accounts` FAILED or genuinely
+ *     returned zero accounts — the discovered-rows branch is a plain
+ *     `<Dropdown>`. It is the ux-baseline G2 escape hatch (the alternative
+ *     measured there was a DISABLED control asserting "No accounts found" over
+ *     a failed call), not a config surface that asks for an address by default.
+ *     Recorded here because this guard cannot see it, so the count staying at
+ *     baseline says nothing about this site either way.
  *   - A LABEL THAT LIVES SOMEWHERE ELSE — a `<Label htmlFor>` earlier in the
  *     file, a label from a translation table, or a column header above a grid
  *     of inputs. Only the enclosing `<Field>` and an immediately-adjacent

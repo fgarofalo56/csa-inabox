@@ -113,7 +113,6 @@ test('the six operator-filed surfaces are flagged in the LIVE tree, not only as 
     ['lib/editors/palantir/health-check-editor.tsx', 'Logic App ARM id'],
     ['lib/editors/databricks/uc-dialogs.tsx', 'Databricks UC credential dialog'],
     ['app/catalog/unity/page.tsx', 'UC storage credential ARM id'],
-    ['lib/editors/foundry-sub-editors.tsx', 'New evaluation azureml:// dataset id'],
     ['lib/editors/copilot-studio-editors.tsx', 'Copilot Studio knowledge-source URI'],
     ['lib/components/pipeline/manage-panel.tsx', 'descriptor-driven AccountKey= connection strings'],
   ];
@@ -125,6 +124,7 @@ test('the six operator-filed surfaces are flagged in the LIVE tree, not only as 
   // that leaves a site behind fails here as loudly as a blind guard would.
   const remediated = [
     ['lib/editors/phase3/activator-editor.tsx', 'Wave 1A — ADX cluster URI + Logic App ARM id are now AzureBackedField pickers'],
+    ['lib/editors/foundry-sub-editors.tsx', '#4313 — the "New evaluation" azureml:// dataset id and the data-asset URI are now written ONLY by DataUriPickDialog (ADLS Gen2 + workspace-datastore tabs), and the vectorizer endpoint by the discovered-account Dropdown'],
   ];
   for (const [file, why] of remediated) {
     assert.equal(at(file).length, 0, `${file} still has a hand-typed infrastructure site (${why})`);

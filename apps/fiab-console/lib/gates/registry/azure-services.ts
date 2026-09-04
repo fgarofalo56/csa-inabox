@@ -93,6 +93,7 @@ export const AZURE_SERVICES_GATE_META: Record<string, GateMeta> = {
       { path: '/api/copilot/*', label: 'Copilot orchestrate/complete routes' },
       { path: '/items/report', label: 'Report Copilot' },
       { path: '/items/notebook', label: 'Notebook assist' },
+      { path: '/items/ai-search-index', label: 'AI Search — integrated-vectorization endpoint' },
     ],
     fixit: { kind: 'resource-picker' },
     loaders: { LOOM_AOAI_ENDPOINT: L.aoaiEndpoint, LOOM_AOAI_DEPLOYMENT: L.aoaiDeployment },

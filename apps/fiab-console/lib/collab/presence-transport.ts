@@ -42,6 +42,33 @@ import {
 
 const MIN_HEARTBEAT_MS = 5_000;
 const DEFAULT_TTL_MS = 45_000;
+/**
+ * Re-probe cadence after a SETTLED refusal (see {@link isSettledRefusal}) —
+ * the same 60s ceiling the push backoff tops out at, so a refused surface
+ * costs one request a minute instead of one every 5-15s.
+ */
+const SETTLED_REPROBE_MS = PUSH_RETRY_MAX_MS;
+
+/**
+ * Statuses that will NOT become a different answer within seconds, so retrying
+ * on the fast ramp is pure noise (#3697 — every canvas open produced a 404
+ * storm against canvas-presence / collab/stream while `loadOwnedItem` refused
+ * the item):
+ *
+ *   503 — the `a14-collab-push` kill-switch is OFF server-side.
+ *   401 — the caller is not authenticated for this route. clientFetch already
+ *         handles a SESSION-EXPIRY 401 itself (refresh + reauth); a 401 that
+ *         reaches here is the authorization kind, which a retry cannot fix.
+ *   403 — the caller has no access to this item.
+ *   404 — the item lookup refused (wrong type, deleted, or no access path).
+ *
+ * These are RE-PROBED, never abandoned: an access grant or a flag flip made
+ * out-of-band self-heals on the next slow probe, per auto-bind-by-default §3.
+ * Anything else (5xx, network, a proxy hiccup) stays on the fast ramp.
+ */
+function isSettledRefusal(status: number): boolean {
+  return status === 503 || status === 401 || status === 403 || status === 404;
+}
 
 export interface PresenceTransportOptions {
   itemType: string;
@@ -52,7 +79,8 @@ export interface PresenceTransportOptions {
    * runtime kill-switch is enforced SERVER-side: with the flag OFF the stream
    * route answers 503 and this transport settles into a slow (60s) re-probe
    * while the poll carries presence — no client-side flag read, so mounting a
-   * presence surface never requires a react-query provider.
+   * presence surface never requires a react-query provider. The same slow
+   * re-probe covers a 401/403/404 refusal (see {@link isSettledRefusal}).
    */
   pushEnabled?: boolean;
   /** Live peer list sink (called from both the poll and the push path). */
@@ -91,6 +119,12 @@ export function createPresenceTransport(opts: PresenceTransportOptions): Presenc
   let ttlMs = DEFAULT_TTL_MS;
   let streamAbort: AbortController | undefined;
   let pushAttempt = 0;
+  /**
+   * The poll's own settled-refusal latch. Set when a heartbeat POST is refused
+   * with a settled status, cleared by the next accepted beat — so a repaired
+   * grant restores the normal TTL/3 cadence with no reload.
+   */
+  let pollSettled = false;
 
   // ── Poll loop (heartbeat write + peers read — the always-on fallback) ─────
   const beat = async (): Promise<void> => {
@@ -103,14 +137,21 @@ export function createPresenceTransport(opts: PresenceTransportOptions): Presenc
       const j: unknown = await r.json().catch(() => ({}));
       const body = j as { ok?: boolean; peers?: unknown; ttlMs?: number };
       if (!stopped && r.ok && body?.ok) {
+        pollSettled = false;
         onPeers(Array.isArray(body.peers) ? (body.peers as PresencePeer[]) : []);
         if (Number.isFinite(body.ttlMs) && (body.ttlMs as number) > 0) ttlMs = body.ttlMs as number;
+      } else if (!r.ok && isSettledRefusal(r.status)) {
+        // The BFF refused this beacon for a reason a 15s retry cannot change.
+        // Slow to the re-probe cadence rather than re-POSTing every TTL/3.
+        pollSettled = true;
       }
     } catch {
       /* transient — next tick retries */
     } finally {
       if (!stopped) {
-        const interval = Math.max(MIN_HEARTBEAT_MS, Math.floor(ttlMs / 3));
+        const interval = pollSettled
+          ? SETTLED_REPROBE_MS
+          : Math.max(MIN_HEARTBEAT_MS, Math.floor(ttlMs / 3));
         heartbeatTimer = setTimeout(() => { void beat(); }, interval);
       }
     }
@@ -126,7 +167,7 @@ export function createPresenceTransport(opts: PresenceTransportOptions): Presenc
     // proxy that swallows the server close can't leave a zombie reader.
     const lifetimeCap = setTimeout(() => streamAbort?.abort(), STREAM_MAX_LIFETIME_MS + 10_000);
     let sawReconnect = false;
-    let flagDisabled = false;
+    let settled = false;
     try {
       const res = await doFetch(streamUrl(itemType, itemId, canvasKey), {
         headers: { accept: 'text/event-stream' },
@@ -135,9 +176,10 @@ export function createPresenceTransport(opts: PresenceTransportOptions): Presenc
         cache: 'no-store',
       });
       if (!res.ok || !res.body) {
-        // 503 = the a14-collab-push kill-switch is OFF server-side — settle
-        // into the slow re-probe; the poll path carries presence meanwhile.
-        flagDisabled = res.status === 503;
+        // A settled refusal (kill-switch OFF, or the item is not readable by
+        // this caller) — drop to the slow re-probe; the poll carries presence
+        // meanwhile. Anything else keeps the fast ramp.
+        settled = isSettledRefusal(res.status);
         throw new Error(`stream HTTP ${res.status}`);
       }
       const reader = res.body.getReader();
@@ -180,7 +222,7 @@ export function createPresenceTransport(opts: PresenceTransportOptions): Presenc
       void openStream();
       return;
     }
-    const delay = flagDisabled ? PUSH_RETRY_MAX_MS : nextPushRetryMs(pushAttempt++);
+    const delay = settled ? SETTLED_REPROBE_MS : nextPushRetryMs(pushAttempt++);
     retryTimer = setTimeout(() => { void openStream(); }, delay);
   };
 
