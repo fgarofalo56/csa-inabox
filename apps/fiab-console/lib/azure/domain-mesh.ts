@@ -76,7 +76,18 @@ export interface DomainMeshResult {
   domainCount: number;
   /** Fabric-wide surface configuration (drives the top-level honest gates). */
   surfaces: {
-    catalog: { configured: boolean; workspaces: number; items: number; hint?: string };
+    catalog: {
+      configured: boolean;
+      workspaces: number;
+      items: number;
+      hint?: string;
+      /**
+       * Workspace records excluded from `workspaces` because they carry no
+       * Entra tenant. Non-zero means the count above is a FLOOR, not a total —
+       * the panel must say so rather than render a shorter number as complete.
+       */
+      legacyUnstampedExcluded: number;
+    };
     purview: { configured: boolean; hint?: string };
     unity: { configured: boolean; hint?: string };
     lineage: { configured: boolean; sources: string[]; hint?: string };
@@ -101,17 +112,31 @@ export interface DomainMeshResult {
  * `callerTid` is `session.claims.tid`, never `tenantScopeId()`: an unconfirmed
  * tenancy must fail closed rather than fall back to an oid that would silently
  * re-introduce the per-creator scope.
+ *
+ * The fail-closed branch keys on `scopeUnconfirmed`, NOT on `degraded`: a
+ * legacy estate makes the shared counter's answer INCOMPLETE (rows with no
+ * `tid` cannot match `WHERE c.tid = @tid`) without making it unscoped. Those
+ * two states need different treatment — an unconfirmed tenancy zeroes the
+ * rollup, an incomplete one reports what it counted and discloses what it could
+ * not attribute, exactly as `/admin/workspaces` does.
  */
 async function readWorkspaceTags(
   callerTid: string | undefined,
-): Promise<{ configured: boolean; wsToDomain: Map<string, string>; total: number; hint?: string }> {
+): Promise<{
+  configured: boolean;
+  wsToDomain: Map<string, string>;
+  total: number;
+  hint?: string;
+  legacyUnstampedExcluded: number;
+}> {
   try {
     const res = await listTenantWorkspaceTags({ callerTid });
-    if (res.degraded) {
+    if (res.scopeUnconfirmed) {
       return {
         configured: false,
         wsToDomain: new Map(),
         total: 0,
+        legacyUnstampedExcluded: 0,
         hint:
           'Workspace rollup unavailable: your sign-in session carries no Entra tenant (`tid`) claim, so ' +
           'Loom cannot scope the tenant-wide workspace count and will not run it unscoped. Sign out and ' +
@@ -120,9 +145,15 @@ async function readWorkspaceTags(
     }
     const wsToDomain = new Map<string, string>();
     for (const w of res.workspaces) if (w.id && w.domain) wsToDomain.set(w.id, w.domain);
-    return { configured: true, wsToDomain, total: res.workspaces.length };
+    return {
+      configured: true,
+      wsToDomain,
+      total: res.workspaces.length,
+      legacyUnstampedExcluded: res.legacyUnstampedExcluded,
+      ...(res.legacyRemediation ? { hint: res.legacyRemediation } : {}),
+    };
   } catch (e: any) {
-    return { configured: false, wsToDomain: new Map(), total: 0, hint: `Workspace store unreachable: ${e?.message || String(e)}.` };
+    return { configured: false, wsToDomain: new Map(), total: 0, legacyUnstampedExcluded: 0, hint: `Workspace store unreachable: ${e?.message || String(e)}.` };
   }
 }
 
@@ -313,6 +344,7 @@ export async function getDomainMesh(
         workspaces: wsTags.total,
         items: Array.from(itemCounts.values()).reduce((a, b) => a + b, 0),
         hint: wsTags.hint,
+        legacyUnstampedExcluded: wsTags.legacyUnstampedExcluded,
       },
       purview: { configured: purviewConfigured, hint: purviewHint },
       unity: { configured: unity.configured, hint: unityHint },

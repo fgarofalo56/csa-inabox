@@ -36,7 +36,7 @@ interface MeshRow {
 interface MeshResult {
   ranAt: string; domainCount: number;
   surfaces: {
-    catalog: { configured: boolean; workspaces: number; items: number; hint?: string };
+    catalog: { configured: boolean; workspaces: number; items: number; hint?: string; legacyUnstampedExcluded?: number };
     purview: { configured: boolean; hint?: string };
     unity: { configured: boolean; hint?: string };
     lineage: { configured: boolean; sources: string[]; hint?: string };
@@ -136,6 +136,11 @@ export function DomainMeshPanel() {
               <div className={s.metrics}>
                 <Badge appearance="outline">{mesh.surfaces.catalog.workspaces} workspaces</Badge>
                 <Badge appearance="outline">{mesh.surfaces.catalog.items} items</Badge>
+                {!!mesh.surfaces.catalog.legacyUnstampedExcluded && (
+                  <Badge appearance="outline" color="warning">
+                    {mesh.surfaces.catalog.legacyUnstampedExcluded} excluded
+                  </Badge>
+                )}
               </div>
               <Caption1 className={s.ran}>Workspaces + data items federated by domain (subtree rollup).</Caption1>
             </Card>
@@ -181,6 +186,26 @@ export function DomainMeshPanel() {
           </div>
 
           {/* Honest gates for any unconfigured mesh surface. */}
+          {/*
+            The catalog rollup carries TWO distinct non-complete states and the
+            panel must not collapse them. `configured:false` means the count
+            could not be scoped at all (no `tid` claim) — the numbers above are
+            zero by refusal. A non-zero `legacyUnstampedExcluded` means the count
+            RAN but excluded records that carry no Entra tenant, so the number
+            above is a floor. Before this, neither hint was rendered anywhere and
+            the tile showed a shorter number as if it were the total, while
+            /admin/workspaces disclosed the same exclusion.
+          */}
+          {!mesh.surfaces.catalog.configured && mesh.surfaces.catalog.hint && (
+            <MessageBar intent="warning" layout="multiline">
+              <MessageBarBody><MessageBarTitle>Workspace rollup unavailable</MessageBarTitle>{mesh.surfaces.catalog.hint}</MessageBarBody>
+            </MessageBar>
+          )}
+          {mesh.surfaces.catalog.configured && !!mesh.surfaces.catalog.legacyUnstampedExcluded && mesh.surfaces.catalog.hint && (
+            <MessageBar intent="warning" layout="multiline">
+              <MessageBarBody><MessageBarTitle>Workspace counts exclude untagged records</MessageBarTitle>{mesh.surfaces.catalog.hint}</MessageBarBody>
+            </MessageBar>
+          )}
           {!mesh.surfaces.purview.configured && mesh.surfaces.purview.hint && (
             <MessageBar intent="warning" layout="multiline">
               <MessageBarBody><MessageBarTitle>Purview mirror inactive</MessageBarTitle>{mesh.surfaces.purview.hint}</MessageBarBody>

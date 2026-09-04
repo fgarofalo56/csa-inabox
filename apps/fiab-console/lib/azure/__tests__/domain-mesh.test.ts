@@ -51,12 +51,23 @@ const OTHER_OID = 'oid-22222222-2222-2222-2222-222222222222';
  * Workspace docs as the estate actually stores them: `tenantId` = the CREATOR's
  * oid (the partition key), `tid` = the Entra tenant, stamped by
  * POST /api/workspaces. Two creators, one tenant.
+ *
+ * `ws-legacy` is a PRE-rel-T11 record: it has a `tenantId` (there has always
+ * been a partition key) but NO `tid`, because the stamp did not exist yet.
+ * Cosmos `=` does not match an undefined property, so `WHERE c.tid = @tid`
+ * cannot see it — which is exactly why the shared counter has to disclose it.
+ * Without this row in the fixture, a counter that reports its answer as
+ * complete is indistinguishable from one that discloses the gap.
  */
-const WS_DOCS = [
+const WS_DOCS: Array<{ id: string; domain: string; tenantId: string; tid?: string }> = [
   { id: 'ws-a', domain: 'agency', tenantId: OWNER_OID, tid: CALLER_TID },
   { id: 'ws-o', domain: 'office', tenantId: OTHER_OID, tid: CALLER_TID },
   { id: 'ws-l', domain: 'lone', tenantId: OTHER_OID, tid: CALLER_TID },
+  { id: 'ws-legacy', domain: 'lone', tenantId: OWNER_OID },
 ];
+
+/** The rows a tenant-scoped predicate CAN match — i.e. everything but legacy. */
+const WS_STAMPED = WS_DOCS.filter((w) => w.tid !== undefined);
 
 /** What each backing store was actually addressed with. */
 const seen: {
@@ -74,9 +85,12 @@ vi.mock('../domain-registry', () => ({
 /**
  * A workspaces container that HONORS the query it is given, so a scoping bug
  * shows up as a different row count rather than passing on a fixture that
- * returns everything regardless. Supports the two shapes at issue:
+ * returns everything regardless. Supports the shapes at issue:
  * `WHERE c.tid = @tid` (tenant-wide) and `WHERE c.tenantId = @t` (per-creator),
- * plus the `{ partitionKey }` option, which additionally narrows.
+ * plus the `{ partitionKey }` option, which additionally narrows — and the
+ * `SELECT VALUE COUNT(1) … NOT IS_DEFINED(c.tid)` disclosure count, answered
+ * with the real Cosmos shape (a bare scalar in `resources[0]`, not a document),
+ * so a reader that mis-parses it reads 0 and the gap goes unreported.
  */
 vi.mock('../cosmos-client', () => ({
   workspacesContainer: async () => ({
@@ -85,8 +99,13 @@ vi.mock('../cosmos-client', () => ({
         const params: Record<string, unknown> = {};
         for (const p of spec?.parameters || []) params[p.name] = p.value;
         seen.wsQueries.push({ query: String(spec?.query || ''), params, partitionKey: opts?.partitionKey });
-        let rows = WS_DOCS;
         const q = String(spec?.query || '');
+        if (/NOT\s+IS_DEFINED\(c\.tid\)/i.test(q)) {
+          return {
+            fetchAll: async () => ({ resources: [WS_DOCS.filter((w) => w.tid === undefined).length] }),
+          };
+        }
+        let rows = WS_DOCS;
         if (/c\.tid\s*=\s*@tid/.test(q)) rows = rows.filter((w) => w.tid === params['@tid']);
         if (/c\.tenantId\s*=\s*@t\b/.test(q)) rows = rows.filter((w) => w.tenantId === params['@t']);
         if (opts?.partitionKey !== undefined) rows = rows.filter((w) => w.tenantId === opts.partitionKey);
@@ -148,13 +167,20 @@ describe('getDomainMesh (federated read)', () => {
   // the defect: it narrows a tenant-wide count to one creator's partition.
   it('reads workspaces TENANT-WIDE: predicate on tid, and NO partitionKey', async () => {
     await getDomainMesh(TENANT_SCOPE, CALLER_TID, 'me');
-    expect(seen.wsQueries).toHaveLength(1);
-    const q = seen.wsQueries[0];
-    expect(q.query).toMatch(/c\.tid\s*=\s*@tid/);
+    // Assert over the SCOPED read specifically, not over the total number of
+    // queries: the disclosure count (`NOT IS_DEFINED(c.tid)`) is a second,
+    // deliberate query and a bare length assertion would forbid it.
+    const scoped = seen.wsQueries.filter((x) => /c\.tid\s*=\s*@tid/.test(x.query));
+    expect(scoped).toHaveLength(1);
+    const q = scoped[0];
     expect(q.query, 'still scoping by the creator-oid partition key').not.toMatch(/c\.tenantId/);
     expect(q.params['@tid']).toBe(CALLER_TID);
-    // A cross-partition fan-out is exactly the absence of this option.
-    expect(q.partitionKey, 'a partitionKey narrows the count to one creator').toBeUndefined();
+    // A cross-partition fan-out is exactly the absence of this option — on
+    // EVERY query this counter issues, not just the scoped one.
+    expect(
+      seen.wsQueries.every((x) => x.partitionKey === undefined),
+      'a partitionKey narrows the count to one creator',
+    ).toBe(true);
   });
 
   it('counts workspaces from EVERY creator in the tenant, not just the caller', async () => {
@@ -176,7 +202,64 @@ describe('getDomainMesh (federated read)', () => {
       mesh.rows.filter((r) => r.directWorkspaces).map((r) => [r.id, r.directWorkspaces]),
     );
     expect(listCounts).toEqual(meshDirect);
-    expect(Object.values(listCounts).reduce((a, b) => a + b, 0)).toBe(WS_DOCS.length);
+    expect(Object.values(listCounts).reduce((a, b) => a + b, 0)).toBe(WS_STAMPED.length);
+  });
+
+  /**
+   * The regression the shared counter itself introduced (review of PR #4316).
+   *
+   * `listTenantWorkspaceTags` inherited `listAllWorkspacesAdmin`'s
+   * `WHERE c.tid = @tid` predicate but not its legacy disclosure, so an estate
+   * with pre-rel-T11 records answered `degraded:false, degradedReasons:[]` and
+   * the mesh turned that into `configured:true` with a `total` it had not
+   * established was complete. /admin/workspaces showed "N record(s) excluded"
+   * for the same container while both Domains surfaces showed a shorter number
+   * silently — a NEW cross-surface disagreement, created by the fix whose whole
+   * purpose was that the panels cannot drift apart.
+   */
+  it('discloses workspace records it could not attribute, instead of reporting a short count as complete', async () => {
+    const tags = await listTenantWorkspaceTags({ callerTid: CALLER_TID });
+    const unstamped = WS_DOCS.filter((w) => w.tid === undefined).length;
+    expect(unstamped, 'fixture must contain a legacy record or this proves nothing').toBeGreaterThan(0);
+
+    // The count travels with the answer …
+    expect(tags.legacyUnstampedExcluded).toBe(unstamped);
+    // … the answer is not claimed to be complete …
+    expect(tags.degraded).toBe(true);
+    expect(tags.degradedReasons).toContain('legacy-unstamped-excluded');
+    // … it is still a SCOPED answer, not a refusal (the mesh must not zero out) …
+    expect(tags.scopeUnconfirmed).toBe(false);
+    expect(tags.workspaces).toHaveLength(WS_STAMPED.length);
+    // … and it names the same remediation /admin/workspaces names.
+    expect(tags.legacyRemediation).toMatch(/backfill-workspace-tid\.mjs/);
+  });
+
+  it('carries that disclosure onto the mesh panel, without zeroing the rollup', async () => {
+    const mesh = await getDomainMesh(TENANT_SCOPE, CALLER_TID, 'me');
+    expect(mesh.surfaces.catalog.configured, 'an incomplete count is not an unscoped one').toBe(true);
+    expect(mesh.surfaces.catalog.workspaces).toBe(WS_STAMPED.length);
+    expect(mesh.surfaces.catalog.legacyUnstampedExcluded).toBe(
+      WS_DOCS.filter((w) => w.tid === undefined).length,
+    );
+    expect(mesh.surfaces.catalog.hint).toMatch(/backfill-workspace-tid\.mjs/);
+  });
+
+  it('reports ZERO excluded — and no hint — on an estate where every record is stamped', async () => {
+    const legacy = WS_DOCS.filter((w) => w.tid === undefined);
+    for (const w of legacy) w.tid = CALLER_TID; // stamp them, as the backfill would
+    try {
+      const tags = await listTenantWorkspaceTags({ callerTid: CALLER_TID });
+      expect(tags.legacyUnstampedExcluded).toBe(0);
+      expect(tags.degraded, 'a complete answer must not report itself degraded').toBe(false);
+      expect(tags.degradedReasons).toEqual([]);
+      expect(tags.legacyRemediation).toBeUndefined();
+      const mesh = await getDomainMesh(TENANT_SCOPE, CALLER_TID, 'me');
+      expect(mesh.surfaces.catalog.legacyUnstampedExcluded).toBe(0);
+      expect(mesh.surfaces.catalog.hint, 'a hint on a complete count is a false warning').toBeUndefined();
+      expect(mesh.surfaces.catalog.workspaces).toBe(WS_DOCS.length);
+    } finally {
+      for (const w of legacy) delete w.tid;
+    }
   });
 
   it('fails CLOSED on a session with no tid — empty rollup with a named hint, never unscoped', async () => {

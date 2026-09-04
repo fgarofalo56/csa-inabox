@@ -86,16 +86,51 @@ async function loadOrSeed(tenantId: string, who: string): Promise<DomainsDoc> {
  * caller's own workspaces and showed a different number.
  *
  * Returns an empty map (never throws) when the workspaces container is
- * unreachable so the domain list still renders.
+ * unreachable so the domain list still renders — and says so, rather than
+ * letting an unreadable store render as "0 workspaces" for every domain.
+ *
+ * ALSO RETURNS THE INTEGRITY OF THE COUNT. The shared counter matches on
+ * `WHERE c.tid = @tid`, and Cosmos `=` cannot match a property that is not
+ * defined, so workspaces created before rel-T11 (which stamps `tid`) are
+ * excluded. `/admin/workspaces` already discloses that exclusion; this route
+ * did not, so the same estate rendered a full count on one page and a shorter,
+ * unannotated one here.
  */
-async function workspaceCounts(callerTid: string | undefined): Promise<Record<string, number>> {
+async function workspaceCounts(callerTid: string | undefined): Promise<{
+  counts: Record<string, number>;
+  integrity: {
+    scopeUnconfirmed: boolean;
+    legacyUnstampedExcluded: number;
+    remediation?: string;
+    storeUnreadable?: string;
+  };
+}> {
   try {
     const res = await listTenantWorkspaceTags({ callerTid });
-    const out: Record<string, number> = {};
-    for (const w of res.workspaces) if (w.domain) out[w.domain] = (out[w.domain] || 0) + 1;
-    return out;
-  } catch {
-    return {};
+    const counts: Record<string, number> = {};
+    for (const w of res.workspaces) if (w.domain) counts[w.domain] = (counts[w.domain] || 0) + 1;
+    return {
+      counts,
+      integrity: {
+        scopeUnconfirmed: res.scopeUnconfirmed,
+        legacyUnstampedExcluded: res.legacyUnstampedExcluded,
+        ...(res.legacyRemediation ? { remediation: res.legacyRemediation } : {}),
+      },
+    };
+  } catch (e: any) {
+    // The counts are unknown, not zero. Say which of the two this is: rendering
+    // 0 for every domain off an unreadable store asserts an emptiness the code
+    // never established.
+    return {
+      counts: {},
+      integrity: {
+        scopeUnconfirmed: false,
+        legacyUnstampedExcluded: 0,
+        storeUnreadable:
+          'Workspace counts could not be read from Cosmos, so every domain below shows 0 — that is an ' +
+          `unknown count, not an empty one. Underlying error: ${e?.message || String(e)}`,
+      },
+    };
   }
 }
 
@@ -134,9 +169,10 @@ export const GET = withSession(async (_req, { session: s }) => {
     // live in Cosmos and are fast; they must never block on Purview. The page
     // fetches GET /api/admin/domains/purview-status LAZILY after the list renders
     // and marks `purviewLinked` / shows the honest mirror gate from that result.
-    const [counts, unity] = await Promise.all([
+    const [wsCounts, unity] = await Promise.all([
       workspaceCounts(s.claims.tid), unityLinkStatus(domainCatalogs),
     ]);
+    const counts = wsCounts.counts;
     // D2 tier per domain for the calling session: tenant-admin / domain-admin /
     // domain-contributor / null. Drives the tier badge on /admin/permissions and
     // the domain-picker filtering on /workspaces. The Graph fallback inside
@@ -158,6 +194,11 @@ export const GET = withSession(async (_req, { session: s }) => {
     }));
     return NextResponse.json({
       ok: true, domains, updatedAt: doc.updatedAt, unity,
+      // What the workspaceCount column above is and is NOT: whether the count
+      // could be scoped, and how many records it had to exclude. The page
+      // renders this as a MessageBar so a shorter number is never read as a
+      // complete one (the /admin/workspaces inventory discloses the same thing).
+      workspaceCountIntegrity: wsCounts.integrity,
       isTenantAdmin: isTenantAdminTier(s),
       domainGroupProvisioning: domainGroupProvisioningEnabled(),
       imageStorageConfigured: !!process.env.LOOM_DOMAIN_IMAGE_STORAGE,

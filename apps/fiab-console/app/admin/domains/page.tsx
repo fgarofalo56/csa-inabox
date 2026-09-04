@@ -61,6 +61,20 @@ type PurviewStatus =
   | { configured: true; domains: Array<{ id?: string; name: string }> }
   | { configured: false; gated: boolean; hint: string };
 
+/**
+ * The honesty envelope around the Workspaces column, as returned by
+ * GET /api/admin/domains. Exactly one of the three states is actionable at a
+ * time and they mean different things: the count could not be scoped, the count
+ * ran but excluded records it could not attribute, or the store could not be
+ * read at all (0 means unknown, not empty).
+ */
+interface WorkspaceCountIntegrity {
+  scopeUnconfirmed: boolean;
+  legacyUnstampedExcluded: number;
+  remediation?: string;
+  storeUnreadable?: string;
+}
+
 const useStyles = makeStyles({
   nameCell: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS, minWidth: 0 },
   createGrid: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM },
@@ -83,6 +97,14 @@ export default function DomainsPage() {
   const [domains, setDomains] = useState<Domain[] | null>(null);
   const [purview, setPurview] = useState<PurviewStatus | null>(null);
   const [isTenantAdmin, setIsTenantAdmin] = useState(true);
+  /**
+   * What the Workspaces column is and is NOT. The tenant-wide counter matches
+   * `WHERE c.tid = @tid`, so records created before rel-T11 carry no `tid` and
+   * cannot match — the count is a floor, not a total, and /admin/workspaces
+   * already says so for the same estate. Rendering the shorter number here with
+   * no notice is the cross-surface disagreement, one page over.
+   */
+  const [wsIntegrity, setWsIntegrity] = useState<WorkspaceCountIntegrity | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [q, setQ] = useState('');
@@ -133,6 +155,7 @@ export default function DomainsPage() {
       const j = await r.json();
       if (!j.ok) { setError(j.error || 'failed'); return; }
       setDomains(j.domains || []);
+      setWsIntegrity(j.workspaceCountIntegrity || null);
       setIsTenantAdmin(j.isTenantAdmin !== false);
     } catch (e: any) { setError(e?.message || String(e)); }
     finally { setLoading(false); }
@@ -382,6 +405,38 @@ export default function DomainsPage() {
       {actionErr && (
         <MessageBar intent="error" className={a.messageBar}>
           <MessageBarBody>{actionErr}</MessageBarBody>
+        </MessageBar>
+      )}
+      {/*
+        The Workspaces column's own honesty. /admin/workspaces discloses the
+        legacy-unstamped exclusion for the same container; before this, the
+        Domains list rendered the shorter number with no notice and the two
+        pages disagreed about the same estate.
+      */}
+      {wsIntegrity?.storeUnreadable && (
+        <MessageBar intent="warning" className={a.messageBar}>
+          <MessageBarBody>
+            <MessageBarTitle>Workspace counts unavailable</MessageBarTitle>
+            {wsIntegrity.storeUnreadable}
+          </MessageBarBody>
+        </MessageBar>
+      )}
+      {wsIntegrity?.scopeUnconfirmed && (
+        <MessageBar intent="warning" className={a.messageBar}>
+          <MessageBarBody>
+            <MessageBarTitle>Workspace counts not scoped</MessageBarTitle>
+            Your sign-in session carries no Entra tenant (<code>tid</code>) claim, so Loom cannot scope the
+            tenant-wide workspace count and will not run it unscoped — every domain below shows 0. Sign out and
+            sign in again to mint a session that carries <code>tid</code>.
+          </MessageBarBody>
+        </MessageBar>
+      )}
+      {!!wsIntegrity?.legacyUnstampedExcluded && wsIntegrity.remediation && (
+        <MessageBar intent="warning" className={a.messageBar}>
+          <MessageBarBody>
+            <MessageBarTitle>Workspace counts exclude untagged records</MessageBarTitle>
+            {wsIntegrity.remediation}
+          </MessageBarBody>
         </MessageBar>
       )}
 
