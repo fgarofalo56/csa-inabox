@@ -133,7 +133,7 @@ jobs:
       # Attach to the GitHub Release when this run was triggered by one.
       - name: Attach SBOM to release
         if: github.event_name == 'release'
-        uses: softprops/action-gh-release@7b4da11513bf3f43f9999e90eabced41ab8bb048 # v2.2.0
+        uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
         with:
           files: |
             sbom-python-${{ matrix.extra }}-cyclonedx.json
@@ -202,7 +202,7 @@ jobs:
 
       - name: Attach image SBOM to release
         if: github.event_name == 'release'
-        uses: softprops/action-gh-release@7b4da11513bf3f43f9999e90eabced41ab8bb048 # v2.2.0
+        uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
         with:
           files: |
             sbom-image-${{ matrix.component }}-cyclonedx.json
