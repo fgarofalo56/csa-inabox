@@ -397,7 +397,19 @@ export const POST = withTenantAdmin(async () => {
         detail:
           'REFUSING to record a graph version: the Azure Resource Graph pull was INCOMPLETE. ' +
           `${collection.stats.rowsFetched} row(s) were read` +
-          (collection.stats.totalRecords !== null && collection.stats.totalRecords > 0
+          // KEYED ON `!== null` ALONE. A `> 0` conjunct here would route a
+          // REPORTED total of 0 into the did-not-report branch and assert an
+          // absence the code never established — while discarding the single
+          // most diagnostic fact the message has, that the service said 0 and
+          // we read N. `null` is NOT zero (`history/model.ts`
+          // CollectionCompleteness), and the state is reachable: `arg-collect`
+          // sets `complete` from `totalRecords !== null && totalRecords ===
+          // rows.length`, so totalRecords=0 with rowsFetched>0 is exactly an
+          // INCOMPLETE pull and lands right here. The four siblings that read
+          // this field get it right (`_lib/snapshot.ts`, `coverage-panel.tsx`
+          // test `=== null`; `history/diff.ts`, `history/queries.ts` use `??`,
+          // and `0 ?? x` yields 0) — this is now the fifth.
+          (collection.stats.totalRecords !== null
             ? ` of ${collection.stats.totalRecords} the service reported`
             : ', and the service did not report a total') +
           `; ${collection.stats.subscriptionsSeen} subscription(s) were seen. A version built ` +

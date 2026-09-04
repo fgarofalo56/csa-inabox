@@ -54,6 +54,15 @@ const H = vi.hoisted(() => ({
   storeReads: 0,
   /** #4016 — whether the mocked Resource Graph pull reports itself complete. */
   collectionComplete: true,
+  /**
+   * What the mocked pull says the service reported, `null` for "it did not say".
+   *
+   * DRIVABLE, because the refusal's message branches on it and a fixture pinned
+   * to a single non-zero value cannot reach either of the other two arms. A
+   * REPORTED 0 and an UNREPORTED total are different facts and the refusal has
+   * to say which one it saw.
+   */
+  collectionTotalRecords: 2 as number | null,
 }));
 
 vi.mock('@/lib/brain/history/cosmos-store', () => ({
@@ -86,7 +95,7 @@ vi.mock('@/app/api/admin/brain/_lib/arg-collect', async () => {
         ],
         stats: {
           rowsFetched: H.collectionComplete ? 2 : 1,
-          totalRecords: 2,
+          totalRecords: H.collectionTotalRecords,
           pages: 1,
           // #4016: drivable, so the INCOMPLETE arm is reachable. A stat the
           // fixture pins to `true` makes the refusal below untestable, which is
@@ -142,6 +151,7 @@ beforeEach(() => {
   H.collectCalls = 0;
   H.storeReads = 0;
   H.collectionComplete = true;
+  H.collectionTotalRecords = 2;
   asMock(requireTenantAdmin).mockReturnValue(null);
   asMock(getSession).mockReturnValue(ADMIN);
 });
@@ -469,6 +479,44 @@ describe('#4016 — POST REFUSES to record a partial estate', () => {
     expect(body.detail).toMatch(/NOTHING was written/);
     expect(body.collection.complete).toBe(false);
     expect(body.mutatedAzure).toBe(false);
+  });
+
+  // ── R7: A REPORTED 0 IS NOT AN UNREPORTED TOTAL ──────────────────────────
+  //
+  // The refusal's message branches on `totalRecords`, and the three arms are
+  // different FACTS: the service said N, the service said 0, the service said
+  // nothing. A guard of `!== null && > 0` collapses the middle arm into the
+  // last one and makes the message assert an absence the code never
+  // established — while throwing away the most diagnostic thing it knows.
+  //
+  // Pinned here because the arms are only reachable now that the mock's
+  // `totalRecords` is drivable: with it frozen at 2, the reported-0 and
+  // unreported branches had no coverage at all and the false claim shipped.
+
+  it('a REPORTED total of 0 is stated as 0 — never as "did not report a total"', async () => {
+    H.collectionComplete = false;
+    H.collectionTotalRecords = 0;
+    const body = await (await POST(req('', 'POST'), ctx)).json();
+
+    // THE POINT: the service DID report, and it reported 0. Saying otherwise is
+    // an R7 message-truth violation, and it drops the whole diagnosis — we read
+    // rows the service says do not exist.
+    expect(body.detail).toMatch(/1 row\(s\) were read of 0 the service reported/);
+    expect(body.detail).not.toMatch(/did not report a total/);
+    expect(body.collection.totalRecords).toBe(0);
+    expect(body.collection.complete).toBe(false);
+  });
+
+  it('an UNREPORTED total says so, and quotes no number', async () => {
+    // The other side of the same coin, and the reason the fix is `!== null`
+    // rather than a different threshold: this arm must keep working.
+    H.collectionComplete = false;
+    H.collectionTotalRecords = null;
+    const body = await (await POST(req('', 'POST'), ctx)).json();
+
+    expect(body.detail).toMatch(/1 row\(s\) were read, and the service did not report a total/);
+    expect(body.detail).not.toMatch(/the service reported/);
+    expect(body.collection.totalRecords).toBeNull();
   });
 
   it('a COMPLETE pull records its completeness ON the version', async () => {

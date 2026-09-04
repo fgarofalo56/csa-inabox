@@ -354,6 +354,130 @@ export function buildMutualIslandGraph(
   return buildGraph([rg, live]);
 }
 
+// ---------------------------------------------------------------------------
+// TRANSITIVITY — the property that separates a WALK from a one-hop expansion
+// ---------------------------------------------------------------------------
+
+export const RELAY_ARM = `/subscriptions/${SUB}/resourceGroups/${RG}/providers/Microsoft.App/containerApps/loom-relay`;
+export const LEAF_ARM = `/subscriptions/${SUB}/resourceGroups/${RG}/providers/Microsoft.App/containerApps/loom-leaf`;
+export const RELAY_FQDN = `loom-relay.internal.${ENV_DOMAIN}`;
+export const LEAF_FQDN = `loom-leaf.internal.${ENV_DOMAIN}`;
+export const RELAY_ID = azureResourceNodeId(RELAY_ARM);
+export const LEAF_ID = azureResourceNodeId(LEAF_ARM);
+
+/**
+ * A TWO-HOP INTERNAL CHAIN: external console → `loom-relay` → `loom-leaf`.
+ *
+ * ── WHY THIS FIXTURE EXISTS ────────────────────────────────────────────────
+ * Every other arm in this file is ONE HOP from a root. The roots of
+ * `nodesNotReachableFrom` are every externally-ingressed node plus every
+ * non-Container-App node, so the only non-roots are internal container apps —
+ * and in the island fixture the console wires `loom-direct-lake` directly, and
+ * the `peerAExternal` arm makes A a root wiring B directly. Both clear at one
+ * hop.
+ *
+ * That left the walk's DEFINING property unpinned. Deleting the single line
+ * `queue.push(to)` from the BFS degrades it to a one-hop expansion of the root
+ * set — measured: the whole suite still returned RC=0 at 206/206. Transitivity
+ * is the entire difference between this function and the
+ * `inbound(graph, id, 'configured').length === 0` proxy that #4258 replaced, so
+ * a suite that cannot see the difference cannot defend the fix.
+ *
+ * `loom-leaf` has exactly ONE inbound resolved `configured` edge, from
+ * `loom-relay`, and no other path in. It is therefore reachable ONLY via two
+ * hops from the console. Under the degradation it is left unreached and the
+ * detector emits a DELETION PROPOSAL against a live, genuinely-reachable
+ * service — the expensive failure direction.
+ *
+ * `loom-relay` is the ONE-HOP CONTROL: it clears under the degradation too, so
+ * asserting only on it would prove nothing. The mutual island is carried along
+ * so the graph produces real findings — without it, "leaf is cleared" would be
+ * satisfied by a detector that flagged nothing at all.
+ */
+export function buildTransitiveChainGraph(): BrainGraph {
+  const rg = extractFromResourceGraph(
+    [
+      appRow({
+        armId: CONSOLE_ARM,
+        name: 'loom-console',
+        minReplicas: 2,
+        maxReplicas: 10,
+        cpu: 1,
+        memory: '2Gi',
+        external: true,
+        fqdn: CONSOLE_FQDN,
+      }),
+      appRow({
+        armId: RELAY_ARM,
+        name: 'loom-relay',
+        minReplicas: 1,
+        maxReplicas: 3,
+        cpu: 0.5,
+        memory: '1Gi',
+        fqdn: RELAY_FQDN,
+      }),
+      appRow({
+        armId: LEAF_ARM,
+        name: 'loom-leaf',
+        minReplicas: 1,
+        maxReplicas: 3,
+        cpu: 0.5,
+        memory: '1Gi',
+        fqdn: LEAF_FQDN,
+      }),
+      // The POSITIVE population: an always-on island nothing can reach. Its
+      // findings prove the detector ran and is willing to flag, so the leaf's
+      // clearance is a verdict rather than an empty result.
+      appRow({
+        armId: PEER_A_ARM,
+        name: 'loom-peer-a',
+        minReplicas: 1,
+        maxReplicas: 3,
+        cpu: 0.5,
+        memory: '1Gi',
+        fqdn: PEER_A_FQDN,
+      }),
+      appRow({
+        armId: PEER_B_ARM,
+        name: 'loom-peer-b',
+        minReplicas: 1,
+        maxReplicas: 3,
+        cpu: 0.5,
+        memory: '1Gi',
+        fqdn: PEER_B_FQDN,
+      }),
+    ],
+    { estateId: ESTATE },
+  );
+
+  const live = extractFromContainerAppEnv([
+    // HOP 1 — from the only root in the graph.
+    {
+      appResourceId: CONSOLE_ARM,
+      envVarBindings: { LOOM_RELAY_URL: RELAY_ID },
+      env: [{ name: 'LOOM_RELAY_URL', value: `https://${RELAY_FQDN}` }],
+    },
+    // HOP 2 — the ONLY inbound edge the leaf has. Nothing else names it.
+    {
+      appResourceId: RELAY_ARM,
+      envVarBindings: { LOOM_LEAF_URL: LEAF_ID },
+      env: [{ name: 'LOOM_LEAF_URL', value: `https://${LEAF_FQDN}` }],
+    },
+    {
+      appResourceId: PEER_A_ARM,
+      envVarBindings: { LOOM_PEER_B_URL: PEER_B_ID },
+      env: [{ name: 'LOOM_PEER_B_URL', value: `https://${PEER_B_FQDN}` }],
+    },
+    {
+      appResourceId: PEER_B_ARM,
+      envVarBindings: { LOOM_PEER_A_URL: PEER_A_ID },
+      env: [{ name: 'LOOM_PEER_A_URL', value: `https://${PEER_A_FQDN}` }],
+    },
+  ]);
+
+  return buildGraph([rg, live]);
+}
+
 /**
  * THE ESTATE-SCALE GRAPH — 63 container apps and NO ownership tag.
  *
