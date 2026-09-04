@@ -47,19 +47,34 @@ import type { Provisioner, ProvisionResult } from './types';
 import { resolveInfraResidual } from './types';
 // #3511 — the source-catalog enumerator the mirror already uses at RUN time
 // (mirror-engine.ts:1219) and on the per-item tables route; install-time
-// discovery calls the same one so the two cannot disagree about the source.
+// discovery calls the same one, against the same catalog.
 import { listTablesWithAuth } from '@/lib/azure/sql-objects-client';
+// #4315 — and it must truncate with the same cap. Calling the same client is
+// NOT enough to make the two agree: discovery records its result to
+// `secondaryIds.discoveredTables` and never to `content.source.tables`, so
+// mirror-engine.ts:1215 finds `src.tables` empty on every Run, re-enumerates,
+// and re-slices to MAX_TABLES. An install-time cap larger than MAX_TABLES is
+// therefore not a harmless superset — above the run cap it is a GUARANTEED
+// disagreement: the item would record N tables and author an N-activity
+// pipeline while a Run mirrors only MAX_TABLES of them, so the recorded
+// provenance overstates what is mirrored. Sharing the constant also means an
+// operator who sets LOOM_MIRROR_MAX_TABLES is honoured at install, not only at
+// run.
+import { MAX_TABLES } from '@/lib/azure/mirror-adf-shared';
 import { encodeIdList } from '../secondary-id-list';
 
 /**
- * Upper bound on AUTO-DISCOVERED source tables (#3511). An explicit list is
- * never truncated — this caps only the set the platform chose for the user, so
- * a 4000-table source cannot silently author a 4000-activity ADF pipeline (ADF
- * has its own per-pipeline activity limit, and a pipeline that large would fail
- * at deploy time rather than at review time). Truncation is REPORTED in the
- * steps and on `secondaryIds.tableSource`, never silent.
+ * Upper bound on AUTO-DISCOVERED source tables (#3511, #4315). An explicit list
+ * is never truncated — this caps only the set the platform chose for the user,
+ * so a 4000-table source cannot silently author a 4000-activity ADF pipeline
+ * (ADF has its own per-pipeline activity limit, and a pipeline that large would
+ * fail at deploy time rather than at review time). The bound is the RUN-time
+ * cap itself, for the reason given on the import above; it is deliberately an
+ * alias rather than a second literal, so the two cannot drift apart again.
+ * Truncation is REPORTED in the steps and on `secondaryIds.tableSource`, never
+ * silent.
  */
-const MAX_DISCOVERED_TABLES = 200;
+const MAX_DISCOVERED_TABLES = MAX_TABLES;
 
 /** ADF object name: letters/digits/_ only, ≤ 260; first char a letter. */
 function adfName(s: string): string {

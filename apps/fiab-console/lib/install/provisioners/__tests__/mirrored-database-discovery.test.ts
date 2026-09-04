@@ -28,6 +28,12 @@
  *   c) Move the discovery block BELOW the `explicitTables.length === 0` guard's
  *      effect by discovering unconditionally -> RED: "an explicit list is used
  *      verbatim and never re-discovered".
+ *   d) In `mirrored-database.ts` replace `const MAX_DISCOVERED_TABLES =
+ *      MAX_TABLES` with any literal above the run cap (e.g. the 200 it carried
+ *      at head) -> RED: "the install-time cap IS the run-time cap, and the
+ *      pipeline it authors matches" and "truncates a very large discovered set
+ *      and SAYS it truncated" — the arm where the item's recorded provenance
+ *      overstates what a Run actually mirrors (#4315).
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 
@@ -73,6 +79,10 @@ vi.mock('@/lib/azure/fabric-client', () => ({
 
 import { mirroredDatabaseProvisioner } from '../mirrored-database';
 import { decodeIdList } from '@/lib/install/secondary-id-list';
+// #4315 — the RUN-time cap. The install-time discovery bound is an alias of it,
+// so these assertions move together with `LOOM_MIRROR_MAX_TABLES` instead of
+// pinning a second literal that could drift away from what a Run mirrors.
+import { MAX_TABLES } from '@/lib/azure/mirror-adf-shared';
 
 const row = (schema: string, name: string) => ({
   objectId: 1, schema, name, fullName: `${schema}.${name}`, type: 'U',
@@ -184,12 +194,35 @@ describe('mirrored-database — the source table list is discovered, not demande
 
   it('truncates a very large discovered set and SAYS it truncated', async () => {
     h.listTablesWithAuth.mockImplementation(async () =>
-      Array.from({ length: 250 }, (_, i) => row('dbo', `t${i}`)));
+      Array.from({ length: MAX_TABLES + 50 }, (_, i) => row('dbo', `t${i}`)));
     const r = await mirroredDatabaseProvisioner(input([]));
 
     expect(r.status).toBe('created');
-    expect(decodeIdList(r.secondaryIds?.discoveredTables)).toHaveLength(200);
+    expect(decodeIdList(r.secondaryIds?.discoveredTables)).toHaveLength(MAX_TABLES);
     expect(r.secondaryIds?.tableSource).toBe('auto-discovered-truncated');
-    expect((r.steps || []).join('\n')).toMatch(/Mirroring the first 200/);
+    expect((r.steps || []).join('\n')).toMatch(new RegExp(`Mirroring the first ${MAX_TABLES}`));
+  });
+
+  it('the install-time cap IS the run-time cap, and the pipeline it authors matches', async () => {
+    // #4315 — the arm a divergent literal breaks. Discovery persists to
+    // `secondaryIds.discoveredTables`, NEVER to `content.source.tables`, so
+    // mirror-engine.ts re-enumerates and re-slices to MAX_TABLES on every Run.
+    // A larger install cap is a guaranteed disagreement above the run cap: the
+    // item would claim N tables and the pipeline would carry N Copy activities
+    // while a Run mirrors MAX_TABLES. Assert the OUTCOME (recorded set and
+    // authored activity count), not the constant, so a re-introduced literal
+    // cannot pass by coincidence.
+    h.listTablesWithAuth.mockImplementation(async () =>
+      Array.from({ length: MAX_TABLES * 4 }, (_, i) => row('dbo', `t${i}`)));
+    const r = await mirroredDatabaseProvisioner(input([]));
+
+    expect(r.status).toBe('created');
+    const recorded = decodeIdList(r.secondaryIds?.discoveredTables);
+    expect(recorded).toHaveLength(MAX_TABLES);
+    // What a Run would mirror, computed the way mirror-engine.ts computes it.
+    const runWouldMirror = Array.from({ length: MAX_TABLES * 4 }, (_, i) => `dbo.t${i}`).slice(0, MAX_TABLES);
+    expect(recorded).toEqual(runWouldMirror);
+
+    expect(copiedTables()).toHaveLength(MAX_TABLES);
   });
 });

@@ -41,6 +41,19 @@ vi.mock('@/lib/azure/fabric-client', () => ({
 }));
 
 import { kqlDashboardProvisioner } from '../kql-dashboard';
+// #4315 — STATIC, deliberately. As `await import('../../provisioning-engine')`
+// inside the test body this cost 18130ms of on-demand TS transform (the engine
+// pulls in every provisioner and its Azure clients) against vitest's 30s
+// testTimeout, measured with the import and the call timed separately:
+//   TIMING import=18130ms runProvisioning=2ms
+// — i.e. essentially none of it was the engine RUN. That is the exact hazard
+// `vitest.config.ts` documents, and it put a new flake in a required gate
+// (observed: one 30s timeout, then 11.7s and 10.9s passes). Hoisted, the
+// transform happens at module load, which testTimeout does not bound, and the
+// test itself measures single-digit ms. Do not turn this back into a dynamic
+// import to "keep the file light" — the cost does not go away, it just moves
+// onto the deadline.
+import { runProvisioning } from '../../provisioning-engine';
 import { safeAdxDatabaseName } from '@/lib/azure/backing-name';
 import federalDataMesh from '@/lib/apps/content-bundles/app-federal-data-mesh';
 import finopsCost from '@/lib/apps/content-bundles/app-finops-cost';
@@ -246,7 +259,10 @@ describe('provisioning-engine — the sibling hand-off is actually wired (#3537)
     // The kql-database item is included WITHOUT an id, so the engine counts it
     // as a sibling (which is all this assertion needs) and short-circuits its
     // own provisioning without touching ARM.
-    const { runProvisioning } = await import('../../provisioning-engine');
+    //
+    // `runProvisioning` is imported STATICALLY at the top of this file — see the
+    // note there; as a dynamic import inside this body it cost 18.1s of module
+    // transform against the 30s testTimeout and flaked (#4315).
     const report = await runProvisioning(
       { claims: { oid: 'o' } } as any,
       'app-federal-data-mesh',
