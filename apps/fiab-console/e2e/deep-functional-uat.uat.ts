@@ -25,6 +25,7 @@
 
 import { test, expect, type Page } from '@playwright/test';
 import { FABRIC_ITEM_TYPES } from '../lib/catalog/fabric-item-types';
+import { waitForEditorInteractive, EDITOR_SETTLE_MS } from './_lib/editor-readiness';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 
@@ -195,12 +196,25 @@ test.describe.serial('Deep functional UAT — every catalog item', () => {
       page.on('console', m => { if (m.type() === 'error') consoleErrors.push(m.text().slice(0, 200)); });
 
       await page.goto(`${BASE_URL}/items/${item.slug}/new`, { waitUntil: 'domcontentloaded' });
-      // Wait for the editor to actually hydrate — poll for a ribbon button to
-      // appear (up to 12s) instead of a fixed 3s. The fixed wait caused false
-      // F grades on slow-hydrating editors (e.g. lakehouse at 7.6s nav).
-      await page.locator('main button').first().waitFor({ state: 'visible', timeout: 12_000 }).catch(() => {});
-      await page.waitForTimeout(1500); // settle after first button paints
-      const navMs = Date.now() - t0;
+      // #3167 — the poll that used to live inline here is now the SHARED helper
+      // catalog-uat.uat.ts also imports, which is what stops the other grader
+      // from drifting back to a fixed wait and manufacturing 26 F-grades again.
+      //
+      // ONE MEASURED VALUE CHANGED WHEN IT MOVED, and it is not left silent.
+      // The inline code read the clock AFTER the 1.5s settle; the helper reads
+      // it BEFORE. This spec's Nav time is therefore ~1500ms LOWER than in every
+      // run before this commit, and a report from one side of it cannot be
+      // compared with one from the other without that offset. The per-item
+      // report below names the boundary in the line itself rather than leaving a
+      // reader to discover the step by noticing every editor "got faster".
+      //
+      // The helper's boundary is the one worth keeping: EDITOR_SETTLE_MS is the
+      // harness deliberately sleeping so the ribbon finishes painting before it
+      // is COUNTED, so folding it in would publish 1.5s of our own sleep as if
+      // it were the editor's latency. No grade moves either way — the ladder
+      // below reads button, tab and action counts and never navMs — so no
+      // verdict in any historical report is affected by the shift.
+      const { ttiMs: navMs } = await waitForEditorInteractive(page, t0);
 
       const enabled = await page.locator('main button:not([disabled])').allTextContents()
         .then(arr => arr.map(s => s.trim()).filter(s => s && s !== 'Learn about this item'));
@@ -317,7 +331,7 @@ test.describe.serial('Deep functional UAT — every catalog item', () => {
           ``,
           `- Category: ${item.category}`,
           `- URL: \`/items/${item.slug}/new\``,
-          `- Nav time: ${navMs}ms`,
+          `- Nav time (goto → first visible ribbon button; excludes the ${EDITOR_SETTLE_MS}ms settle, so reports written before #3167 read ~${EDITOR_SETTLE_MS}ms higher): ${navMs}ms`,
           `- **Verdict: ${verdict}**`,
           `- Ribbon enabled (${enabled.length}): ${enabled.slice(0, 15).join(' · ')}`,
           `- Ribbon disabled (${disabled.length}): ${disabled.slice(0, 15).join(' · ')}`,
