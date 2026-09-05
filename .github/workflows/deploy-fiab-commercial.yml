@@ -2157,7 +2157,7 @@ jobs:
       #     than the one this apply wrote, and this apply's revision is the
       #     newest — i.e. we overwrote another writer (the incident);
       #   - the estate is not on the SHA the last effective roll shipped;
-      #   - loom-console's running image cannot be read;
+      #   - a watched app's running image cannot be read;
       #   - the revision history cannot be read, or a revision inside the window
       #     cannot be placed in time or carries no comparable tag;
       #   - the roll history cannot be read, or the run that shipped cannot be
@@ -2165,6 +2165,46 @@ jobs:
       # Every "cannot" above is UNKNOWN, and UNKNOWN fails the step. "I could
       # not look" spent as "nothing is wrong" is the collapse deploy-integrity
       # R7 forbids, and it is what the empty population above silently did.
+      #
+      # ── AND IT WATCHED ONE APP OUT OF TWENTY (#3676, 2026-09-03) ───────────
+      #
+      # Every witness above used to be hard-coded `-n loom-console` — the two
+      # `az` reads, the three error strings, and the auto-heal's verification
+      # poll. `APP_IMAGE_TAGS` in scripts/ci/reconcile-policy.mjs carries TWENTY
+      # entries, and this apply writes `containers[0].image` for every one of
+      # them that is running. So nineteen image writers were unwatched, and a
+      # roll of any of them landing inside the ~11-minute apply window was
+      # overwritten with BOTH lanes green and no heal — this issue's original
+      # shape, verbatim, still live for 95% of the estate.
+      #
+      # It is now estate-wide. The apps compared are DERIVED, not listed: the
+      # pins this run exported to $GITHUB_ENV are exactly the images
+      # commercial.bicepparam resolves at bicep-compile time, so they ARE what
+      # the apply wrote; each is matched onto the post-apply
+      # `az containerapp list` by image repository, and each matched app gets
+      # its own timestamped revision history. An app running a repository this
+      # run pinned nothing for is reported out-of-scope rather than dropped.
+      #
+      # THE ACTIONS-API ARM IS STILL CONSOLE-ONLY, AND SAYS SO. CONSOLE_ROLL_SOURCES
+      # matches roll runs by EXACT job name; the only lane that rolls a
+      # data-plane app names its job dynamically (loom-dataplane-roll.yml:
+      # "Roll ${{ inputs.apps }} on ${{ inputs.boundary }}"). Rather than invent
+      # a matcher nobody has measured, the other apps declare that population
+      # ABSENT and rest on the estate's own revision history — the witness that
+      # caught the 2026-08-19 miss, and the only one that can tell "never moved"
+      # from "moved forward and was moved back".
+      #
+      # NO SHARED `concurrency:` GROUP, DELIBERATELY. Serialising this lane with
+      # loom-roll-and-validate and build-fiab-images-acr-tasks is the obvious
+      # elimination and it is a TRAP: GitHub keeps only ONE pending run per
+      # group and CANCELS the previously pending one, even with
+      # cancel-in-progress: false. That converts a visible, ~6-minute,
+      # self-healing revert into a SILENTLY DROPPED roll at a specific SHA —
+      # strictly worse than the bug, and a failure mode this repo has already
+      # been bitten by (bc102712). It would also destroy the roll lane's own
+      # per-app exclusion (its group is keyed `rg + app`), serialising unrelated
+      # app rolls and cancelling one of any two that queue. Elimination needs a
+      # LEASE, which does not cancel; detection + heal is what ships here.
       #
       # IT ASKS THE JOBS, NOT THE RUN. A roll run can conclude SUCCESS having
       # rolled NOTHING — run 32006479915 (2026-08-17T07:35Z) is eight seconds
@@ -2184,15 +2224,16 @@ jobs:
       # exact roll dispatch that puts the estate back.
       #
       # Decision logic + tests: scripts/ci/reconcile-policy.mjs
-      # (selectRevisionOverwrite / selectLastConsoleRoll / decideEstateRegression
-      # / parseRollRunTitle) and scripts/ci/__tests__/roll-race.test.mjs.
+      # (selectWatchedApps / selectRevisionOverwrite / selectLastConsoleRoll /
+      # decideEstateRegression / decideEstateRegressionAll / buildHealRequests /
+      # parseRollRunTitle) and scripts/ci/__tests__/roll-race.test.mjs.
       - name: Estate must not be BEHIND the last successful roll (#3676)
         id: estate_behind
         if: always() && steps.provision.conclusion != 'skipped'
         env:
           GH_TOKEN: ${{ github.token }}
           DEPLOY_SUB: ${{ steps.topology_guard.outputs.deploy_sub }}
-          APPLIED_TAG: ${{ steps.repin.outputs.console_tag }}
+          DEPLOY_APPS_ENABLED: ${{ steps.reconcile.outputs.deploy_apps_enabled }}
           MEASURED_AT: ${{ steps.repin.outputs.measured_at }}
         run: |
           set -uo pipefail
@@ -2200,59 +2241,102 @@ jobs:
           TMP="$RUNNER_TEMP"
           ROLLS="$TMP/console-rolls.json"
           ROLL_ERR="$TMP/console-rolls.err"
-          SHOW_ERR="$TMP/console-show.err"
-          REVS="$TMP/console-revisions.json"
-          REV_ERR="$TMP/console-revisions.err"
+          LIST="$TMP/estate-apps.json"
+          LIST_ERR="$TMP/estate-apps.err"
+          APPLIED="$TMP/estate-applied-tags.txt"
+          WATCHED="$TMP/estate-watched-apps.txt"
+          # ONE FILE PER APP, and the PAIR is the vocabulary: <app>.json is a
+          # history az returned, <app>.err is az saying why it could not, and
+          # NEITHER present means this step never asked. The policy file treats
+          # that third state as UNKNOWN rather than as an empty history, so an
+          # app that is silently skipped here fails the gate instead of passing
+          # it. The directory is recreated per run so a file cannot survive from
+          # a previous attempt on the same runner and be read as this run's.
+          REVDIR="$TMP/estate-revisions"
+          rm -rf "$REVDIR"
+          mkdir -p "$REVDIR"
           # WHERE THE AUTO-HEAL STEP LOOKS (#3799). Truncated here, before any
           # verdict, so a request can only ever describe THIS run — and so the
           # heal step's "no request" branch is reached by an empty file rather
           # than by a missing one.
-          HEAL_REQ="$TMP/estate-heal-request.txt"
+          HEAL_REQ="$TMP/estate-heal-request.ndjson"
           : > "$ROLL_ERR"
-          : > "$SHOW_ERR"
-          : > "$REV_ERR"
+          : > "$LIST_ERR"
           : > "$HEAL_REQ"
           trim400() { local s; s="$(tr '\n' ' ' < "$1")"; printf '%s' "${s:0:400}"; }
 
-          # A run that wrote no console image cannot have moved the estate, and
-          # the verdict below says so on its own. Short-circuiting here keeps a
-          # whatif-only dispatch from making ~60 Actions API calls to answer a
-          # question its own first clause already answers. The step still RUNS
+          # A run that renders no Container App writes no image and cannot have
+          # moved one backwards. Short-circuiting here keeps a whatif-only
+          # dispatch from making one `az containerapp list`, up to twenty
+          # `az containerapp revision list` and ~60 Actions API calls to answer
+          # a question its own first clause already answers. The step still RUNS
           # and still prints a verdict — a skipped gate reads as a passed one.
-          if [ -z "${APPLIED_TAG:-}" ]; then
-            node scripts/ci/reconcile-policy.mjs assert-estate-not-behind-roll \
-              --applied-tag "" \
+          if [ "${DEPLOY_APPS_ENABLED:-}" != "true" ]; then
+            echo "::notice::estate-vs-roll: the resolver reported deployAppsEnabled as '${DEPLOY_APPS_ENABLED:-(empty)}', so app-deployments.bicep rendered no Container App on this run and no image tag was written. Nothing this run wrote can have gone backwards."
+            node scripts/ci/reconcile-policy.mjs assert-estate-not-behind-roll-all \
               --measured-at "${MEASURED_AT:-}" \
-              --read-error "not read: this run applied no loom-console image tag" \
-              --rolls-error "not read: this run applied no loom-console image tag" \
-              --revisions-error "not read: this run applied no loom-console image tag" \
-              --heal-request "$HEAL_REQ"
+              --containers-error "not read: this run rendered no Container App (the resolver reported deployAppsEnabled as '${DEPLOY_APPS_ENABLED:-(empty)}')" \
+              --app-revisions "$REVDIR" \
+              --rolls-error "not read: this run rendered no Container App (the resolver reported deployAppsEnabled as '${DEPLOY_APPS_ENABLED:-(empty)}')" \
+              --heal-request "$HEAL_REQ" --boundary commercial
             exit $?
           fi
 
-          # ---- what is loom-console running RIGHT NOW? ------------------------
-          set +e
-          IMAGE=$(az containerapp show -n loom-console -g "$RG" ${DEPLOY_SUB:+--subscription "$DEPLOY_SUB"} \
-                    --query "properties.template.containers[0].image" -o tsv 2> "$SHOW_ERR")
-          SHOW_RC=$?
-          set -e
-          IMAGE="$(printf '%s' "$IMAGE" | tr -d '\r')"
-          IMAGE="${IMAGE%%$'\n'*}"
+          # The same guard again, from the OTHER direction: deployAppsEnabled
+          # can be true while the re-pin exported nothing (a from-scratch estate
+          # where no app is running yet). `applied-tags` reads the pins out of
+          # the environment rather than restating the twenty LOOM_*_TAG names in
+          # shell, where they would be a second list that can drift.
+          node scripts/ci/reconcile-policy.mjs applied-tags --out "$APPLIED"
+          if [ ! -s "$APPLIED" ]; then
+            node scripts/ci/reconcile-policy.mjs assert-estate-not-behind-roll-all \
+              --measured-at "${MEASURED_AT:-}" \
+              --containers-error "not read: this run exported no appImageTags pin, so it applied no image tag" \
+              --app-revisions "$REVDIR" \
+              --rolls-error "not read: this run exported no appImageTags pin, so it applied no image tag" \
+              --heal-request "$HEAL_REQ" --boundary commercial
+            exit $?
+          fi
 
-          # ---- WHAT DID THE ESTATE ITSELF DO DURING THE APPLY? ----------------
-          # THE READ THAT WAS MISSING ON 2026-08-19. `az containerapp show`
-          # answers "what is running now", which is a two-point sample: it
-          # cannot distinguish "never moved" from "moved forward and was moved
-          # back". The revision list carries a TIMESTAMP PER INTERMEDIATE STATE,
-          # so the round trip is visible in it and nowhere else. It is also the
-          # only source here that is not a third-party index — a revision exists
-          # the moment ARM creates it, with no consistency window to lose a
-          # writer in, which is precisely how the Actions-API population below
-          # came back empty three minutes fifty after the roll it was missing.
+          # ---- what is the estate running RIGHT NOW, app by app? --------------
+          # stdout and stderr stay separate and neither is discarded: `2>&1`
+          # would splice az's warnings into the JSON, and `2>/dev/null` is what
+          # once turned a permission denial into an empty string and then into a
+          # false claim (deploy-integrity R7, #3090).
+          set +e
+          az containerapp list -g "$RG" ${DEPLOY_SUB:+--subscription "$DEPLOY_SUB"} \
+            --query '[].{name:name, image:properties.template.containers[0].image}' \
+            -o json > "$LIST" 2> "$LIST_ERR"
+          LIST_RC=$?
+          set -e
+          if [ $LIST_RC -ne 0 ]; then
+            LIST_ARGS=(--containers-error "az containerapp list -g ${RG} exited ${LIST_RC}: $(trim400 "$LIST_ERR")")
+          else
+            LIST_ARGS=(--containers "$LIST")
+            if [ -s "$LIST_ERR" ]; then
+              echo "::warning::estate-vs-roll: az wrote to stderr while SUCCEEDING on the container-app list; recording it rather than hiding it: $(trim400 "$LIST_ERR")"
+            fi
+          fi
+
+          # WHICH apps did this apply write to? Derived by the policy file from
+          # the pins + the live list, never listed here. It exits 0 even when
+          # the list was unreadable — that read failure is spent ONCE, by the
+          # verdict below, which turns it into UNKNOWN.
+          node scripts/ci/reconcile-policy.mjs watched-apps "${LIST_ARGS[@]}" --out "$WATCHED"
+
+          # ---- WHAT DID EACH APP ITSELF DO DURING THE APPLY? ------------------
+          # THE READ THAT WAS MISSING ON 2026-08-19, now taken per watched app.
+          # `az containerapp show` answers "what is running now", which is a
+          # two-point sample: it cannot distinguish "never moved" from "moved
+          # forward and was moved back". The revision list carries a TIMESTAMP
+          # PER INTERMEDIATE STATE, so the round trip is visible in it and
+          # nowhere else. It is also the only source here that is not a
+          # third-party index — a revision exists the moment ARM creates it,
+          # with no consistency window to lose a writer in, which is precisely
+          # how the Actions-API population below came back empty three minutes
+          # fifty after the roll it was missing.
           #
-          # Same RBAC as the `show` above, so it adds no permission surface.
-          # stdout and stderr stay separate and neither is discarded: an
-          # unreadable history is UNKNOWN and fails the step, never a quiet pass.
+          # Same RBAC as the list above, so it adds no permission surface.
           #
           # THE PROJECTION CARRIES trafficWeight (#3798). Without it the gate
           # reads "newest revision" as "what is serving", which is true only
@@ -2262,23 +2346,40 @@ jobs:
           # a roll can create a NEWER revision at WEIGHT 0 while the deploy's
           # revision keeps 100% of the traffic — and recency would report
           # `ahead`, i.e. "this apply did not leave the estate behind", about an
-          # estate serving the stale image. Measured on this estate 2026-08-21:
-          # 54 revisions, 53 at weight 0 and exactly one at 100, so the field is
-          # populated and the split is readable without a second call.
-          set +e
-          az containerapp revision list -n loom-console -g "$RG" ${DEPLOY_SUB:+--subscription "$DEPLOY_SUB"} \
-            --query "[].{name:name, createdTime:properties.createdTime, trafficWeight:properties.trafficWeight, image:properties.template.containers[0].image}" \
-            -o json > "$REVS" 2> "$REV_ERR"
-          REV_RC=$?
-          set -e
-          if [ $REV_RC -ne 0 ]; then
-            REV_ARGS=(--revisions-error "az containerapp revision list -n loom-console -g ${RG} exited ${REV_RC}: $(trim400 "$REV_ERR")")
-          else
-            REV_ARGS=(--revisions "$REVS")
-            if [ -s "$REV_ERR" ]; then
-              echo "::warning::estate-vs-roll: az wrote to stderr while SUCCEEDING on the revision list; recording it rather than hiding it: $(trim400 "$REV_ERR")"
+          # estate serving the stale image.
+          while IFS= read -r APP; do
+            if [ -z "$APP" ]; then
+              continue
             fi
-          fi
+            # ARM constrains a Container App name to a DNS label. A value that
+            # is not one did not come from `az containerapp list` as this step
+            # understands it, and interpolating it into a path would be a second
+            # defect on top of the first. Refusing to READ it leaves the app
+            # with neither file, which the verdict below reports as UNKNOWN —
+            # it fails the gate rather than quietly dropping the app.
+            case "$APP" in
+              *[!a-z0-9-]*|-*|'')
+                echo "::warning::estate-vs-roll: refusing to read a revision history for ${APP} — that is not a Container App DNS label, so this step did not ask az about it. The verdict below reports it as UNKNOWN, which fails closed."
+                continue
+                ;;
+            esac
+            set +e
+            az containerapp revision list -n "$APP" -g "$RG" ${DEPLOY_SUB:+--subscription "$DEPLOY_SUB"} \
+              --query "[].{name:name, createdTime:properties.createdTime, trafficWeight:properties.trafficWeight, image:properties.template.containers[0].image}" \
+              -o json > "$REVDIR/$APP.json" 2> "$REVDIR/$APP.err"
+            REV_RC=$?
+            set -e
+            if [ $REV_RC -ne 0 ]; then
+              REV_DETAIL="az containerapp revision list -n ${APP} -g ${RG} exited ${REV_RC}: $(trim400 "$REVDIR/$APP.err")"
+              printf '%s' "$REV_DETAIL" > "$REVDIR/$APP.err"
+              # A partial or empty stdout from a FAILED az is not a history.
+              # Removing it makes the pair unambiguous: .err alone means az
+              # answered with a failure, and the verdict reports that failure.
+              rm -f "$REVDIR/$APP.json"
+            elif [ -s "$REVDIR/$APP.err" ]; then
+              echo "::warning::estate-vs-roll: az wrote to stderr while SUCCEEDING on ${APP}'s revision list; recording it rather than hiding it: $(trim400 "$REVDIR/$APP.err")"
+            fi
+          done < "$WATCHED"
 
           # ---- which console-writing run last actually SHIPPED an image? ------
           # `updated_at` on a COMPLETED run is when it finished; GitHub returns
@@ -2338,30 +2439,10 @@ jobs:
             ROLL_ARGS=(--rolls-error "gh could not read the console-rolling workflow runs: $(trim400 "$ROLL_ERR")")
           fi
 
-          # TWO DIFFERENT FACTS, TWO DIFFERENT SENTENCES (deploy-integrity R7).
-          # This branch used to report `az … exited ${SHOW_RC}` for both, so an
-          # az that SUCCEEDED and returned an empty image was reported as
-          # "exited 0: " — an error string naming a cause it had not
-          # established, which is the exact shape that sent two investigations
-          # the wrong way on 2026-08-05.
-          if [ $SHOW_RC -ne 0 ]; then
-            SHOW_DETAIL="az containerapp show -n loom-console -g ${RG} exited ${SHOW_RC}: $(trim400 "$SHOW_ERR")"
-          else
-            SHOW_DETAIL="az containerapp show -n loom-console -g ${RG} SUCCEEDED (exit 0) and returned an EMPTY image reference, so the running image is unestablished — that is not the same as az failing, and no failure is being claimed. Anything it wrote to stderr: $(trim400 "$SHOW_ERR")"
-          fi
-          if [ $SHOW_RC -ne 0 ] || [ -z "$IMAGE" ]; then
-            node scripts/ci/reconcile-policy.mjs assert-estate-not-behind-roll \
-              --applied-tag "${APPLIED_TAG}" \
-              --measured-at "${MEASURED_AT:-}" \
-              --read-error "$SHOW_DETAIL" \
-              "${ROLL_ARGS[@]}" "${REV_ARGS[@]}" --heal-request "$HEAL_REQ"
-            exit $?
-          fi
-          node scripts/ci/reconcile-policy.mjs assert-estate-not-behind-roll \
-            --applied-tag "${APPLIED_TAG}" \
+          node scripts/ci/reconcile-policy.mjs assert-estate-not-behind-roll-all \
             --measured-at "${MEASURED_AT:-}" \
-            --estate-image "$IMAGE" \
-            "${ROLL_ARGS[@]}" "${REV_ARGS[@]}" --heal-request "$HEAL_REQ"
+            "${LIST_ARGS[@]}" --app-revisions "$REVDIR" \
+            "${ROLL_ARGS[@]}" --heal-request "$HEAL_REQ" --boundary commercial
 
       # ── #3799 — DETECTION IS NOT RECOVERY ─────────────────────────────────
       #
@@ -2418,7 +2499,7 @@ jobs:
           set -uo pipefail
           RG="rg-csa-loom-admin-${AZURE_LOCATION}"
           TMP="$RUNNER_TEMP"
-          HEAL_REQ="$TMP/estate-heal-request.txt"
+          HEAL_REQ="$TMP/estate-heal-request.ndjson"
           DISPATCH_ERR="$TMP/heal-dispatch.err"
           REVS="$TMP/heal-revisions.json"
           REV_ERR="$TMP/heal-revisions.err"
@@ -2434,18 +2515,16 @@ jobs:
             echo "::notice::auto-heal: the estate gate failed but left NO roll-forward request, so this step dispatches NOTHING. That is the correct outcome for an UNKNOWN (nothing was established) or a DRIFTED verdict (no direction is claimed, and rolling to a guessed SHA could move a healthy estate backwards). Read the gate's own error above for what it did establish."
             exit 0
           fi
-          TARGET="$(tr -d '[:space:]' < "$HEAL_REQ")"
-          if ! printf '%s' "$TARGET" | grep -Eq '^[0-9a-f]{40}$'; then
-            echo "::error::auto-heal: the roll-forward request contains '${TARGET}', which is not a 40-hex commit SHA. Refusing to dispatch a roll at a tag that does not name a commit — the roll's live-URL gate validates against a build marker and cannot check a floating tag (#2963). This is a defect in the gate that wrote the request, not an estate condition."
-            exit 1
-          fi
 
-          # WHICH ESTATE DOES THE ROLL LANE TARGET? It is hard-pinned to one
-          # resource group; this deploy's region is ADOPTED from whatever hub
-          # exists. Dispatching it while reconciling a different region would
+          # WHICH ESTATE DOES THE CONSOLE ROLL LANE TARGET? It is hard-pinned to
+          # one resource group; this deploy's region is ADOPTED from whatever
+          # hub exists. Dispatching it while reconciling a different region would
           # roll an estate this run never touched, so the two are compared
           # instead of assumed, and read out of the roll lane itself rather
           # than restated here (a restated literal is a second thing to drift).
+          # loom-dataplane-roll.yml needs no equivalent check: it takes a
+          # `location` input, so the dispatch below NAMES this run's region
+          # rather than inheriting one.
           #
           # `set +e` around it deliberately: under `pipefail` + `bash -e` a
           # MISSING workflow file makes awk exit 2, the pipeline exit 2, and the
@@ -2457,28 +2536,88 @@ jobs:
           ROLL_RG="$(awk '/^  RG_NAME:/ {print $2; exit}' "$ROLL_WF" | tr -d '[:space:]')"
           ROLL_RG_RC=$?
           set -e
-          if [ $ROLL_RG_RC -ne 0 ] || [ -z "$ROLL_RG" ]; then
-            echo "::error::auto-heal: could not read RG_NAME out of ${ROLL_WF} (awk exited ${ROLL_RG_RC}, value '${ROLL_RG}'), so the estate that lane would roll is UNKNOWN. Refusing to dispatch it — this says the workflow file could not be read or no longer declares RG_NAME, NOT that the roll lane is wrong. Roll forward by hand: gh workflow run loom-roll-and-validate.yml --ref ${GITHUB_REF_NAME} -f image_tag=${TARGET}."
-            exit 1
-          fi
-          if [ "$ROLL_RG" != "$RG" ]; then
-            echo "::error::auto-heal: ${ROLL_WF} rolls ${ROLL_RG}, but this deploy reconciled ${RG}. Dispatching it would roll an estate this run never applied to. Refusing. Roll ${RG} forward to ${TARGET} with the lane that owns it."
-            exit 1
-          fi
 
-          echo "::notice::auto-heal: dispatching loom-roll-and-validate.yml (ref ${GITHUB_REF_NAME}) with image_tag=${TARGET} — the image this apply overwrote, read off ${RG}'s own revision history. The deploy stays RED regardless; this restores the estate, it does not excuse the regression."
-          set +e
-          gh workflow run loom-roll-and-validate.yml --repo "${GITHUB_REPOSITORY}" --ref "${GITHUB_REF_NAME}" \
-            -f image_tag="${TARGET}" 2> "$DISPATCH_ERR"
-          DISPATCH_RC=$?
-          set -e
-          if [ $DISPATCH_RC -ne 0 ]; then
-            echo "::error::auto-heal: the dispatch FAILED (gh exited ${DISPATCH_RC}): $(trim400 "$DISPATCH_ERR"). The estate is STILL running the overwritten image. Dispatch it by hand: gh workflow run loom-roll-and-validate.yml --ref ${GITHUB_REF_NAME} -f image_tag=${TARGET}."
+          # ── ONE REQUEST PER LINE, ONE DISPATCH PER REQUEST (#3676) ──────────
+          # The gate now watches every app this apply wrote, so the request is
+          # NDJSON rather than a bare SHA: {"workflow":…,"kind":…,"sha":…,
+          # "boundary":…,"apps":[…],"why":…}. A `workflow` of null means the app
+          # regressed and this repository has NO lane that can roll it forward
+          # to a named SHA — that is reported loudly and NOT papered over by
+          # dispatching a lane that would roll something else
+          # (loom-roll-and-validate.yml hard-codes APP_NAME: loom-console, so
+          # aiming it at loom-unity would roll the CONSOLE and then report a
+          # healed estate — a false receipt is worse than no repair).
+          FAILED=0
+          DISPATCHED=0
+          VERIFY_LIST="$TMP/heal-verify.txt"
+          : > "$VERIFY_LIST"
+          while IFS= read -r LINE; do
+            if [ -z "$LINE" ]; then
+              continue
+            fi
+            WF="$(printf '%s' "$LINE" | jq -r '.workflow // ""')"
+            KIND="$(printf '%s' "$LINE" | jq -r '.kind // ""')"
+            TARGET="$(printf '%s' "$LINE" | jq -r '.sha // ""')"
+            APPS="$(printf '%s' "$LINE" | jq -r '(.apps // []) | join(",")')"
+            WHY="$(printf '%s' "$LINE" | jq -r '.why // ""')"
+
+            if ! printf '%s' "$TARGET" | grep -Eq '^[0-9a-f]{40}$'; then
+              echo "::error::auto-heal: the roll-forward request for ${APPS} contains '${TARGET}', which is not a 40-hex commit SHA. Refusing to dispatch a roll at a tag that does not name a commit — the roll's live-URL gate validates against a build marker and cannot check a floating tag (#2963). This is a defect in the gate that wrote the request, not an estate condition."
+              FAILED=1
+              continue
+            fi
+            if [ -z "$WF" ]; then
+              echo "::error::auto-heal: ${APPS} regressed to ${TARGET} and CANNOT be auto-healed. ${WHY} Roll it forward by hand once a lane exists for it, and confirm against the container app rather than /build-marker.txt."
+              FAILED=1
+              continue
+            fi
+
+            if [ "$KIND" = "console" ]; then
+              if [ $ROLL_RG_RC -ne 0 ] || [ -z "$ROLL_RG" ]; then
+                echo "::error::auto-heal: could not read RG_NAME out of ${ROLL_WF} (awk exited ${ROLL_RG_RC}, value '${ROLL_RG}'), so the estate that lane would roll is UNKNOWN. Refusing to dispatch it — this says the workflow file could not be read or no longer declares RG_NAME, NOT that the roll lane is wrong. Roll forward by hand: gh workflow run loom-roll-and-validate.yml --ref ${GITHUB_REF_NAME} -f image_tag=${TARGET}."
+                FAILED=1
+                continue
+              fi
+              if [ "$ROLL_RG" != "$RG" ]; then
+                echo "::error::auto-heal: ${ROLL_WF} rolls ${ROLL_RG}, but this deploy reconciled ${RG}. Dispatching it would roll an estate this run never applied to. Refusing. Roll ${RG} forward to ${TARGET} with the lane that owns it."
+                FAILED=1
+                continue
+              fi
+              DISPATCH_ARGS=(-f "image_tag=${TARGET}")
+            else
+              # loom-dataplane-roll.yml takes the admin RG explicitly, so the
+              # estate is NAMED here rather than re-derived from a region by
+              # the other lane (its own default is a literal `centralus`, which
+              # this deploy's ADOPTED region need not equal). `boundary` is the
+              # literal this file IS — deploy-fiab-commercial has no boundary
+              # input, and the sovereign lanes carry their own copy (#3683).
+              DISPATCH_ARGS=(-f "boundary=commercial" -f "apps=${APPS}" -f "tag=${TARGET}" -f "resource_group=${RG}")
+            fi
+
+            echo "::notice::auto-heal: dispatching ${WF} (ref ${GITHUB_REF_NAME}) for ${APPS} at ${TARGET} — the image this apply overwrote, read off ${RG}'s own revision history. The deploy stays RED regardless; this restores the estate, it does not excuse the regression."
+            set +e
+            gh workflow run "$WF" --repo "${GITHUB_REPOSITORY}" --ref "${GITHUB_REF_NAME}" \
+              "${DISPATCH_ARGS[@]}" 2> "$DISPATCH_ERR"
+            DISPATCH_RC=$?
+            set -e
+            if [ $DISPATCH_RC -ne 0 ]; then
+              echo "::error::auto-heal: the dispatch of ${WF} for ${APPS} FAILED (gh exited ${DISPATCH_RC}): $(trim400 "$DISPATCH_ERR"). The estate is STILL running the overwritten image. Dispatch it by hand: gh workflow run ${WF} --ref ${GITHUB_REF_NAME} ${DISPATCH_ARGS[*]}."
+              FAILED=1
+              continue
+            fi
+            DISPATCHED=$((DISPATCHED + 1))
+            for A in ${APPS//,/ }; do
+              printf '%s\t%s\n' "$A" "$TARGET" >> "$VERIFY_LIST"
+            done
+          done < "$HEAL_REQ"
+
+          if [ "$DISPATCHED" = "0" ]; then
+            echo "::error::AUTO-HEAL DISPATCHED NOTHING (#3799) — every roll-forward request in this run was refused for the reason printed above it. The estate is STILL running the overwritten image(s)."
             exit 1
           fi
 
           # ---- did it actually heal? ASK THE ESTATE. -------------------------
-          # Bounded, and the bound is stated. THE DISPATCH ALREADY HAPPENED
+          # Bounded, and the bound is stated. THE DISPATCHES ALREADY HAPPENED
           # ABOVE — that ordering is the mitigation for the one way this can be
           # cut short: the job's own `timeout-minutes: 90` is shared with an
           # apply that has run as long as 75 minutes on a dispatch, so a job
@@ -2486,6 +2625,12 @@ jobs:
           # happens the recovery has still been requested; only this verdict is
           # lost, and the `timeout-minutes` on this step bounds how much of the
           # remaining budget it can consume. It never delays the repair.
+          #
+          # Recovery is verified against the ESTATE, not assumed from the
+          # dispatch: the revision history is re-read and what is SERVING is
+          # resolved through the same tested code the gate used (serving-tag),
+          # rather than asking the Actions API whether a run appeared — that
+          # index is exactly the source whose lag produced the 2026-08-19 miss.
           #
           # The knobs exist so the extracted-step tests run this loop in
           # milliseconds. Nothing in CI sets them (a contract test asserts the
@@ -2499,35 +2644,64 @@ jobs:
           # whenever the test is false, and this body runs under `bash -e` —
           # i.e. the healthy case would kill the step with no message at all.
           if [ "$POLLS" -lt 1 ]; then POLLS=1; fi
-          LAST_SEEN=""
-          LAST_WHY=""
+          PENDING="$TMP/heal-pending.txt"
+          cp "$VERIFY_LIST" "$PENDING"
+          # THE TAB IS COMPUTED ONCE, ON ITS OWN LINE, ON PURPOSE. Written
+          # inline as `while IFS="$(printf '\t')" read -r APP TARGET`, the
+          # command substitution sits BEFORE `read` on the same logical line and
+          # check-workflow-unset-vars.mjs then reports `$APP` as a
+          # never-assigned read: its command scanner matches the `printf` first
+          # and its argument capture swallows the `read` that follows, so the
+          # loop variables are never recorded as assigned. The step is correct
+          # either way, but a DEPLOY-CRITICAL guard held at zero cannot be left
+          # red over a parse, and hoisting it is also one fewer subshell per
+          # polled app.
+          TAB="$(printf '\t')"
           for i in $(seq 1 "$POLLS"); do
+            if [ ! -s "$PENDING" ]; then
+              break
+            fi
             sleep "$SLEEP_S"
-            set +e
-            az containerapp revision list -n loom-console -g "$RG" ${DEPLOY_SUB:+--subscription "$DEPLOY_SUB"} \
-              --query "[].{name:name, createdTime:properties.createdTime, trafficWeight:properties.trafficWeight, image:properties.template.containers[0].image}" \
-              -o json > "$REVS" 2> "$REV_ERR"
-            REV_RC=$?
-            set -e
-            if [ $REV_RC -ne 0 ]; then
-              LAST_WHY="az containerapp revision list exited ${REV_RC}: $(trim400 "$REV_ERR")"
-              echo "::warning::auto-heal probe ${i}/${POLLS}: the revision history could not be read, so this probe establishes NOTHING about recovery — ${LAST_WHY}"
-              continue
-            fi
-            set +e
-            node scripts/ci/reconcile-policy.mjs serving-tag --revisions "$REVS" --out "$SERVING"
-            SERVING_RC=$?
-            set -e
-            LAST_SEEN="$(tr -d '[:space:]' < "$SERVING")"
-            if [ $SERVING_RC -eq 0 ] && [ "$LAST_SEEN" = "$TARGET" ]; then
-              echo "::notice::AUTO-HEAL VERIFIED (#3799) — ${RG}/loom-console is serving ${TARGET} again after ${i} probe(s). The deploy still reports FAILURE: the regression happened, and a healed estate does not unmake it."
-              exit 0
-            fi
-            LAST_WHY="serving-tag exited ${SERVING_RC}; serving '${LAST_SEEN:-(not established)}'"
-            echo "auto-heal probe ${i}/${POLLS}: ${RG}/loom-console is serving '${LAST_SEEN:-(not established)}', waiting for ${TARGET}."
+            NEXT="$TMP/heal-pending-next.txt"
+            : > "$NEXT"
+            while IFS="$TAB" read -r APP TARGET; do
+              if [ -z "$APP" ]; then
+                continue
+              fi
+              set +e
+              az containerapp revision list -n "$APP" -g "$RG" ${DEPLOY_SUB:+--subscription "$DEPLOY_SUB"} \
+                --query "[].{name:name, createdTime:properties.createdTime, trafficWeight:properties.trafficWeight, image:properties.template.containers[0].image}" \
+                -o json > "$REVS" 2> "$REV_ERR"
+              REV_RC=$?
+              set -e
+              if [ $REV_RC -ne 0 ]; then
+                echo "::warning::auto-heal probe ${i}/${POLLS} [${APP}]: the revision history could not be read, so this probe establishes NOTHING about recovery — az containerapp revision list exited ${REV_RC}: $(trim400 "$REV_ERR")"
+                printf '%s\t%s\n' "$APP" "$TARGET" >> "$NEXT"
+                continue
+              fi
+              set +e
+              node scripts/ci/reconcile-policy.mjs serving-tag --revisions "$REVS" --out "$SERVING" --app "$APP"
+              SERVING_RC=$?
+              set -e
+              LAST_SEEN="$(tr -d '[:space:]' < "$SERVING")"
+              if [ $SERVING_RC -eq 0 ] && [ "$LAST_SEEN" = "$TARGET" ]; then
+                echo "::notice::AUTO-HEAL VERIFIED (#3799) — ${RG}/${APP} is serving ${TARGET} again after ${i} probe(s). The deploy still reports FAILURE: the regression happened, and a healed estate does not unmake it."
+                continue
+              fi
+              echo "auto-heal probe ${i}/${POLLS} [${APP}]: serving '${LAST_SEEN:-(not established)}' (serving-tag exited ${SERVING_RC}), waiting for ${TARGET}."
+              printf '%s\t%s\n' "$APP" "$TARGET" >> "$NEXT"
+            done < "$PENDING"
+            cp "$NEXT" "$PENDING"
           done
-          echo "::error::AUTO-HEAL NOT VERIFIED (#3799) — loom-roll-and-validate.yml was dispatched with image_tag=${TARGET} and the dispatch itself succeeded, but after ${POLLS} probe(s) over ~$((POLLS * SLEEP_S))s the estate has NOT come back to it. Last observation: ${LAST_WHY}. This says the recovery was not OBSERVED in the budget — a roll that is still gating (vitest, cosign, UAT) looks exactly like this — it does not say the roll failed. Check the loom-roll-and-validate run, and confirm against the container app, not /build-marker.txt."
-          exit 1
+
+          if [ -s "$PENDING" ]; then
+            echo "::error::AUTO-HEAL NOT VERIFIED (#3799) — the roll-forward dispatch(es) themselves succeeded, but after ${POLLS} probe(s) over ~$((POLLS * SLEEP_S))s these apps have NOT come back to the image they were rolled to: $(tr '\n' ' ' < "$PENDING"). This says the recovery was not OBSERVED in the budget — a roll that is still gating (vitest, cosign, UAT) looks exactly like this — it does not say the roll failed. Check the roll runs, and confirm against the container app, not /build-marker.txt."
+            exit 1
+          fi
+          if [ "$FAILED" = "1" ]; then
+            echo "::error::AUTO-HEAL PARTIAL (#3799) — every dispatch that was made has been verified against the estate, but at least one regressed app was REFUSED a dispatch for the reason printed above it, and is still running the overwritten image."
+            exit 1
+          fi
 
       - name: Export bootstrap coordinates (for the chained bootstrap)
         id: bootstrap_coords
