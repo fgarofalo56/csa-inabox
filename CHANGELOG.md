@@ -25,6 +25,22 @@ This file is maintained automatically by
 [Conventional Commits](https://www.conventionalcommits.org/). See
 [RELEASE.md](RELEASE.md) for the release process.
 
+## [0.105.1](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.105.0...csa-inabox-v0.105.1) (2026-09-05)
+
+
+### Bug Fixes
+
+* **console:** freeform infra inputs become pickers, the Copilot Studio admission gate gets its Fix-it, and two UAT graders stop disagreeing ([#3541](https://github.com/fgarofalo56/csa-inabox/issues/3541), [#3544](https://github.com/fgarofalo56/csa-inabox/issues/3544), [#3565](https://github.com/fgarofalo56/csa-inabox/issues/3565), [#3526](https://github.com/fgarofalo56/csa-inabox/issues/3526), [#3528](https://github.com/fgarofalo56/csa-inabox/issues/3528), [#3167](https://github.com/fgarofalo56/csa-inabox/issues/3167)) ([#4314](https://github.com/fgarofalo56/csa-inabox/issues/4314)) ([e1b9d07](https://github.com/fgarofalo56/csa-inabox/commit/e1b9d07d950bb7d7ecd2388054767846792393d6))
+* **deploy:** a skipped roll now says whether the estate is stranded or a build is still coming ([#4298](https://github.com/fgarofalo56/csa-inabox/issues/4298)) ([#4300](https://github.com/fgarofalo56/csa-inabox/issues/4300)) ([5047395](https://github.com/fgarofalo56/csa-inabox/commit/504739547ab8a6bc15acf4fe2e0219d7d6e890b9))
+* **deploy:** the post-apply estate gate watched one Container App out of twenty, so nineteen image writers could be reverted mid-apply in silence ([#3676](https://github.com/fgarofalo56/csa-inabox/issues/3676)) ([#4318](https://github.com/fgarofalo56/csa-inabox/issues/4318)) ([8cdba0e](https://github.com/fgarofalo56/csa-inabox/commit/8cdba0e47acb1da45ec203e6ecfbff6c4c57b67b))
+* **deps:** clear the six high Dependabot alerts on main (browserslist 4.28.8, fast-uri 3.1.7) ([#4308](https://github.com/fgarofalo56/csa-inabox/issues/4308)) ([5544b94](https://github.com/fgarofalo56/csa-inabox/commit/5544b94dc3bb60ad64262b4a72b900b831ba14c6))
+
+
+### Documentation
+
+* **cloud-parity:** record GCC as supported-in-code, never exercised — no tenant ([#3078](https://github.com/fgarofalo56/csa-inabox/issues/3078)) ([#4305](https://github.com/fgarofalo56/csa-inabox/issues/4305)) ([cd18dd6](https://github.com/fgarofalo56/csa-inabox/commit/cd18dd6a3573ea33e962774213a2d13b74a7dcb5))
+* **drain:** override-log rows for [#4304](https://github.com/fgarofalo56/csa-inabox/issues/4304), [#4265](https://github.com/fgarofalo56/csa-inabox/issues/4265), [#4262](https://github.com/fgarofalo56/csa-inabox/issues/4262), [#4267](https://github.com/fgarofalo56/csa-inabox/issues/4267) and the 2026-09-03 operator decisions ([#4307](https://github.com/fgarofalo56/csa-inabox/issues/4307)) ([e265a43](https://github.com/fgarofalo56/csa-inabox/commit/e265a438e26b43e0bf523b49f92b61b9e39d8552))
+
 ## [0.105.0](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.104.0...csa-inabox-v0.105.0) (2026-09-03)
 
 
