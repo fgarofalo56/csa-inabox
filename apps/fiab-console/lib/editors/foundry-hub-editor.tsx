@@ -59,6 +59,7 @@ import { useRegisterRibbonCommands } from '@/lib/components/shared/ribbon-comman
 import { ToolbarCrossLinks } from '@/lib/components/shared/item-tab-strip';
 import { ModelCatalogPanel, ChatPlaygroundPanel, PlaygroundsLandingPanel, ImagesPlaygroundPanel, AudioPlaygroundPanel } from './foundry-playground';
 import { AzureResourcePicker } from '@/lib/components/azure/azure-resource-picker';
+import { AccountPickerBar, type FoundryAccount } from './foundry-account-picker-bar';
 import { FoundryAccountTree } from '@/lib/components/foundry/foundry-tree';
 import { FoundryAgentsPanel } from '@/lib/components/foundry/foundry-agents';
 import { LineChart, BarChart, StatTile, type LineSeries, type Bar } from '@/lib/components/foundry/foundry-charts';
@@ -184,7 +185,10 @@ const useStyles = makeStyles({
 type LoadState<T> = { loading: boolean; data: T | null; error?: string; hint?: string; notDeployed?: boolean };
 
 // ---- Selected AI Foundry / Azure OpenAI account (drives every tab) ----
-export interface FoundryAccount { id?: string; name: string; endpoint?: string; location?: string; kind?: string; resourceGroup?: string }
+// `FoundryAccount` and `AccountPickerBar` live in ./foundry-account-picker-bar
+// (imported at the top of this file). Re-exported here so existing importers of
+// this module keep resolving the type from where it used to be declared.
+export type { FoundryAccount } from './foundry-account-picker-bar';
 
 /** Append the selected account selector to a URL as `?account=&rg=` (or `&…`). */
 function withAccount(url: string, acct: FoundryAccount | null): string {
@@ -2371,99 +2375,11 @@ function FineTuningPanel({ active, nonce, acct }: { active: boolean; nonce: numb
 }
 
 // ---------- Account picker (drives every tab) ----------
-
-const usePickerStyles = makeStyles({
-  bar: {
-    display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalM, flexWrap: 'wrap',
-    padding: `${tokens.spacingVerticalS} ${tokens.spacingHorizontalL}`, borderBottom: `1px solid ${tokens.colorNeutralStroke2}`,
-    backgroundColor: tokens.colorNeutralBackground2,
-  },
-  grow: { flex: 1 },
-});
-
-/**
- * Azure AI Foundry / Azure OpenAI account picker. Lists the subscription's
- * Microsoft.CognitiveServices accounts (kind AIServices/OpenAI) via
- * /api/foundry/accounts and drives the selected account into every tab. The
- * env-var/discovery default (LOOM_AOAI_ACCOUNT) is preselected when present.
- */
-function AccountPickerBar({ acct, onSelect, onHub }: { acct: FoundryAccount | null; onSelect: (a: FoundryAccount | null) => void; onHub?: (h: { id: string; name: string } | null) => void }) {
-  const s = usePickerStyles();
-  const [st] = useLazyFetch<{ ok: boolean; accounts: FoundryAccount[]; defaultAccount?: string }>(`/api/foundry/accounts`, true, 0);
-  const accounts = Array.isArray(st.data?.accounts) ? st.data!.accounts : [];
-  const defaultName = st.data?.defaultAccount;
-
-  // Cross-subscription, user-RBAC selection (Azure Resource Graph). Lets the
-  // operator pick an Azure OpenAI / AI Services account OR an AI Foundry
-  // hub/project that lives in ANY subscription they can see — not just the
-  // single LOOM_SUBSCRIPTION_ID the /api/foundry/accounts lister covers.
-  const [hubId, setHubId] = useState<string>('');
-
-  // Preselect the env-var/discovery default once accounts load.
-  useEffect(() => {
-    if (acct || !accounts.length) return;
-    const def = (defaultName && accounts.find((a) => a.name === defaultName)) || accounts[0];
-    if (def) onSelect(def);
-  }, [accounts, defaultName, acct, onSelect]);
-
-  return (
-    <div className={s.bar} style={{ flexDirection: 'column', alignItems: 'stretch' }}>
-      <div className={s.bar} style={{ padding: tokens.spacingVerticalNone, border: 'none', background: 'transparent' }}>
-        <Field label="AI Foundry account (this subscription)" orientation="horizontal">
-          <Dropdown
-            style={{ minWidth: 280 }}
-            value={acct ? `${acct.name}${acct.location ? ` · ${acct.location}` : ''}` : ''}
-            selectedOptions={acct ? [acct.name] : []}
-            placeholder={st.loading ? 'Loading accounts…' : (accounts.length ? 'Select an AI Foundry / Azure OpenAI account' : 'No accounts found')}
-            disabled={st.loading || !!st.error}
-            onOptionSelect={(_, d) => {
-              const next = accounts.find((a) => a.name === d.optionValue) || null;
-              if (next) onSelect(next);
-            }}
-          >
-            {accounts.map((a) => (
-              <Option key={a.id || a.name} value={a.name} text={a.name}>
-                {`${a.name}${a.kind ? ` (${a.kind})` : ''}${a.location ? ` · ${a.location}` : ''}`}
-              </Option>
-            ))}
-          </Dropdown>
-        </Field>
-        {acct?.endpoint && <Badge appearance="outline" title={acct.endpoint}>endpoint set</Badge>}
-        {defaultName && acct?.name === defaultName && <Badge appearance="tint" color="brand">default</Badge>}
-        <div className={s.grow} />
-        {st.error && (
-          <MessageBar intent={st.notDeployed ? 'warning' : 'error'}>
-            <MessageBarBody>
-              <MessageBarTitle>{st.notDeployed ? 'No AI Foundry account provisioned' : 'Could not list accounts'}</MessageBarTitle>
-              {st.error}{st.hint ? <><br /><Caption1>{st.hint}</Caption1></> : null}
-            </MessageBarBody>
-          </MessageBar>
-        )}
-      </div>
-      {/* Cross-subscription pickers — span every sub the user has RBAC for. */}
-      <div className={s.bar} style={{ padding: tokens.spacingVerticalNone, border: 'none', background: 'transparent', alignItems: 'flex-start' }}>
-        <AzureResourcePicker
-          type="Microsoft.CognitiveServices/accounts"
-          label="Azure OpenAI / AI Services (any subscription)"
-          placeholder="Select an Azure OpenAI / AI Services account across all subs"
-          value={acct?.id}
-          onChange={(r) => {
-            if (!r) return;
-            // Drive every tab at the cross-sub account. Tabs key off name+rg.
-            onSelect({ id: r.id, name: r.name, resourceGroup: r.resourceGroup, location: r.location });
-          }}
-        />
-        <AzureResourcePicker
-          type="Microsoft.MachineLearningServices/workspaces"
-          label="AI Foundry hub / project (any subscription)"
-          placeholder="Select an AI Foundry hub or project across all subs"
-          value={hubId}
-          onChange={(r) => { setHubId(r?.id || ''); onHub?.(r ? { id: r.id, name: r.name } : null); }}
-        />
-      </div>
-    </div>
-  );
-}
+//
+// Moved to ./foundry-account-picker-bar (imported at the top of this file) so
+// this module stays under its check-file-size ceiling. `FoundryAccount` moved
+// with it and is re-exported near the top; the edge is one-way, because madge
+// counts type-only imports and the reverse edge would register a cycle.
 
 // ---------- Editor shell ----------
 
