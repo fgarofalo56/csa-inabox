@@ -260,6 +260,54 @@ const SYNAPSE_MINTED_SCHEMAS: readonly string[] = [SYNAPSE_SHORTCUT_SCHEMA, 'lak
 /** The ONE Unity Catalog catalog Databricks shortcut tables are created in. */
 const UC_CATALOG = 'loom';
 
+/**
+ * Schemas that exist inside EVERY Unity Catalog catalog (or that UC reserves)
+ * and that `ucObject` therefore cannot mint (#3960). Refused on the UC arm
+ * regardless of whether the caller supplied a scope, because the previous
+ * revision constrained only `parts[0] === 'loom'` and so accepted
+ * `loom.information_schema.tables` — a real, readable UC view of every table in
+ * the catalog, handed straight to `SELECT * FROM … LIMIT 1` as the Console UAMI.
+ */
+const UC_RESERVED_SCHEMAS: ReadonlySet<string> = new Set([
+  'information_schema', 'system', 'default', 'global_temp', 'sys', 'dbo',
+]);
+
+/**
+ * The Unity Catalog SCHEMA a given lakehouse / namespace id mints into.
+ * Extracted so `ucObject` (the mint) and `isMintedEngineObject` (the guard)
+ * cannot drift — the same reason `SYNAPSE_MINTED_SCHEMAS` exists.
+ */
+function ucSchemaFor(lakehouseId: string): string {
+  return lakehouseId.replace(/[^a-z0-9_]+/gi, '_').toLowerCase() || 'shortcuts';
+}
+
+/**
+ * Does this leaf belong to the shortcut item `id8` identifies (#3960)?
+ *
+ * `registerTablesObject` mints the leaf as `${id.slice(0,8)}_${displayName}`,
+ * then each engine sanitizes it: Synapse via `[^a-z0-9_]+ → _` (case
+ * preserved), UC via the same expression plus `.toLowerCase()`. The id prefix
+ * survives both — it is already `[A-Za-z0-9]`-only — so a case-insensitive
+ * prefix test recognises the object on either engine without needing to know
+ * which one produced it.
+ */
+function leafBelongsTo(leaf: string, id8: string): boolean {
+  return leaf.toLowerCase().startsWith(`${id8.toLowerCase()}_`);
+}
+
+/**
+ * Which shortcut item / lakehouse a persisted `engineObject` is claimed to
+ * belong to. Supplying either field tightens the name-space check to the
+ * objects THAT id mints; supplying neither leaves the pre-#3960 name-space
+ * check, which is what the mint paths with no such id still need.
+ */
+export interface EngineObjectScope {
+  /** The shortcut ITEM's Cosmos id (routes under /api/items/lakehouse-shortcut). */
+  itemId?: string;
+  /** The owning lakehouse id, for the lakehouse-scoped UC mint. */
+  lakehouseId?: string;
+}
+
 /** Synapse Serverless external-table / view object name (2-part: schema.object). */
 function synapseObject(name: string): string {
   const safe = name.replace(/[^a-z0-9_]+/gi, '_');
@@ -344,13 +392,28 @@ async function ensureServerlessDb(): Promise<void> {
  *                  catalog is the LITERAL `loom`; both remaining parts are
  *                  `.replace(/[^a-z0-9_]+/gi,'_').toLowerCase()`.
  *
- * KNOWN BOUND, stated because a green test here does not establish it away: on
- * the Databricks arm only `parts[0]` is constrained, so any `loom.<x>.<y>` is
- * accepted — including `loom.information_schema.tables`. The schema part is
- * derived from a caller-independent lakehouse id at mint time, so constraining
- * it needs that id at the sink, which these functions do not receive. Tracked
- * in #3960 (with the missing item-id scoping, which has the same cause), not
- * closed here.
+ * FORMER KNOWN BOUND, kept with its history because a green test does not
+ * establish a bound away and the next reader needs to know what changed. Until
+ * 2026-09 only `parts[0]` was constrained on the Databricks arm, so any
+ * `loom.<x>.<y>` was accepted — including `loom.information_schema.tables`.
+ * CLOSED 2026-09 (#3960). Two separate tightenings, because the bound had two
+ * halves:
+ *
+ *   1. The half needing NO caller input: `ucObject` cannot mint a UC schema
+ *      named `information_schema` / `system` / `default` / `global_temp` /
+ *      `sys` / `dbo` (it derives the schema from a Cosmos item id), so those
+ *      are now refused outright. `loom.information_schema.tables` — a readable
+ *      UC view of every table in the catalog — no longer passes.
+ *   2. The half needing the id: `isMintedEngineObject` now takes an optional
+ *      `EngineObjectScope`. Given `itemId` it requires the leaf to carry that
+ *      item's own `${id8}_` mint prefix and, on the UC arm, the schema to be
+ *      `sc_${id8}`; given `lakehouseId` it requires the schema that id mints.
+ *      `dropShortcutObject` and `testEngineObject` accept and forward it, and
+ *      the lakehouse-shortcut DELETE sink passes the item id it already holds.
+ *      It stays OPTIONAL because two mint paths genuinely have no shortcut item
+ *      id (the content-install `lakehouse.<leaf>` mint and the lakehouse-scoped
+ *      `/api/lakehouse/shortcuts` routes) — a scope is strictly tighter, never
+ *      looser, so an un-scoped caller is no weaker than it was.
  *
  * WHY A NAME-SPACE CHECK AND NOT AN IDENTIFIER CHECK. The previous revision of
  * this guard tested only "is this a well-formed 1–3 part identifier", and the
@@ -368,7 +431,11 @@ async function ensureServerlessDb(): Promise<void> {
  * a value inside EITHER engine's name-space is accepted, because either is a
  * name this platform could have minted. Passing the engine is strictly tighter.
  */
-export function isMintedEngineObject(v: unknown, engine?: ShortcutEngine | 'none' | string): v is string {
+export function isMintedEngineObject(
+  v: unknown,
+  engine?: ShortcutEngine | 'none' | string,
+  scope?: EngineObjectScope,
+): v is string {
   if (typeof v !== 'string' || v.length === 0 || v.length > 260) return false;
   const parts = v.split('.');
   if (parts.length < 2 || parts.length > 3) return false;
@@ -379,15 +446,58 @@ export function isMintedEngineObject(v: unknown, engine?: ShortcutEngine | 'none
   const wantSynapse = !engine || engine === 'synapse';
   const wantDatabricks = !engine || engine === 'databricks';
 
+  // #3960 — ITEM SCOPING. When the caller knows WHICH shortcut item this object
+  // belongs to, the leaf must carry that item's own prefix. `registerTablesObject`
+  // mints `${id.slice(0,8)}_${displayName}` for exactly this reason ("so two
+  // shortcuts of the same display name never collide … and never leak across
+  // tenants"), but nothing downstream checked it — so shortcut A's persisted
+  // `engineObject` could name shortcut B's table and the DROP/SELECT sinks would
+  // execute it as the Console UAMI.
+  //
+  // SCOPED TO THE MINTS THAT CARRY THE PREFIX, and only those. This is not a
+  // detail: `SYNAPSE_MINTED_SCHEMAS` holds TWO mints, and only one of them is
+  // this route's. `lakehouse.<leaf>` comes from
+  // `lib/install/provisioners/lakehouse.ts`, which has no shortcut item id and
+  // mints `shortcut_<name>` with no prefix at all. Applying the prefix rule to
+  // that arm would refuse an object Loom itself created and orphan it at the
+  // DROP sink — the precise failure `SYNAPSE_MINTED_SCHEMAS`'s own docblock
+  // warns about, and the one `vault-destruction-primitive.test.ts` pins with
+  // "the provisioner mint now takes the SUCCESS branch (this was the live
+  // orphan)". So the check applies to the `shortcuts` schema and the `loom` UC
+  // catalog, which is where the prefixed mint lands.
+  const leaf = parts[parts.length - 1];
+  const id8 = scope?.itemId ? String(scope.itemId).slice(0, 8) : '';
+
   if (wantSynapse) {
     // 3-part `<serverlessDb()>.<minted schema>.<leaf>`, or a legacy/provisioner
     // 2-part `<minted schema>.<leaf>` that resolves to the same DB.
-    if (parts.length === 3 && parts[0] === serverlessDb() && SYNAPSE_MINTED_SCHEMAS.includes(parts[1])) return true;
-    if (parts.length === 2 && SYNAPSE_MINTED_SCHEMAS.includes(parts[0])) return true;
+    const schema = parts.length === 3 ? parts[1] : parts[0];
+    const dbOk = parts.length === 2 || parts[0] === serverlessDb();
+    if (dbOk && SYNAPSE_MINTED_SCHEMAS.includes(schema)) {
+      if (id8 && schema === SYNAPSE_SHORTCUT_SCHEMA && !leafBelongsTo(leaf, id8)) return false;
+      return true;
+    }
   }
   if (wantDatabricks) {
     // 3-part `loom.<schema>.<table>`, lower-cased by ucObject.
-    if (parts.length === 3 && parts[0] === UC_CATALOG) return true;
+    if (parts.length === 3 && parts[0] === UC_CATALOG) {
+      const schema = parts[1].toLowerCase();
+      // The half of the KNOWN BOUND that needs NO caller-supplied id: `ucObject`
+      // derives the schema as `lakehouseId.replace(/[^a-z0-9_]+/gi,'_')
+      // .toLowerCase() || 'shortcuts'`, so a Loom-minted schema equals a
+      // sanitized Cosmos item id (or `sc_<id8>`). For any of the names below to
+      // be minted, an item id would have to BE that literal string — measured,
+      // not assumed: `git grep -n "lakehouseId:" app/api` shows every caller
+      // passes a Cosmos item id or an `sc_`-prefixed derivation of one. Refusing
+      // them costs nothing real and closes `loom.information_schema.tables`,
+      // which the previous revision accepted.
+      if (UC_RESERVED_SCHEMAS.has(schema)) return false;
+      // When the caller knows the owning lakehouse/item, the schema must be the
+      // one THAT id mints — not merely "some schema under the loom catalog".
+      if (scope?.lakehouseId) return schema === ucSchemaFor(scope.lakehouseId);
+      if (id8) return schema === `sc_${id8}`.toLowerCase() && leafBelongsTo(leaf, id8);
+      return true;
+    }
   }
   return false;
 }
@@ -416,8 +526,12 @@ export class EngineObjectNamespaceError extends Error {
   }
 }
 
-export function assertMintedEngineObject(v: unknown, engine?: ShortcutEngine | 'none' | string): asserts v is string {
-  if (!isMintedEngineObject(v, engine)) {
+export function assertMintedEngineObject(
+  v: unknown,
+  engine?: ShortcutEngine | 'none' | string,
+  scope?: EngineObjectScope,
+): asserts v is string {
+  if (!isMintedEngineObject(v, engine, scope)) {
     throw new EngineObjectNamespaceError(typeof v === 'string' ? v : String(v));
   }
 }
@@ -425,7 +539,7 @@ export function assertMintedEngineObject(v: unknown, engine?: ShortcutEngine | '
 /** Databricks UC fully-qualified table for a shortcut. */
 function ucObject(lakehouseId: string, name: string): string {
   const cat = UC_CATALOG;
-  const sch = lakehouseId.replace(/[^a-z0-9_]+/gi, '_').toLowerCase() || 'shortcuts';
+  const sch = ucSchemaFor(lakehouseId);
   const tbl = name.replace(/[^a-z0-9_]+/gi, '_').toLowerCase();
   return `${cat}.${sch}.${tbl}`;
 }
@@ -693,9 +807,16 @@ export async function createTablesShortcut(args: {
 export async function dropShortcutObject(args: {
   engine?: ShortcutEngine;
   engineObject?: string;
+  /**
+   * #3960 — which shortcut item / lakehouse this object is claimed to belong
+   * to. When supplied, the name-space check additionally requires the object to
+   * be one THAT id mints, so item A's persisted `engineObject` cannot name item
+   * B's table and have this sink DROP it as the Console UAMI.
+   */
+  scope?: EngineObjectScope;
 }): Promise<void> {
   if (!args.engine || args.engine === 'none' || !args.engineObject) return;
-  assertMintedEngineObject(args.engineObject, args.engine);
+  assertMintedEngineObject(args.engineObject, args.engine, args.scope);
   if (args.engine === 'synapse') {
     // engineObject is `<db>.schema.object`; DROP VIEW can't take a cross-db
     // 3-part name, so connect to the owning DB and drop the 2-part name there.
@@ -725,8 +846,12 @@ export async function dropShortcutObject(args: {
  * an arbitrary READ of anything that principal can see. Refused here, before
  * the string is built.
  */
-export async function testEngineObject(engine: ShortcutEngine, engineObject: string): Promise<void> {
-  assertMintedEngineObject(engineObject, engine);
+export async function testEngineObject(
+  engine: ShortcutEngine,
+  engineObject: string,
+  scope?: EngineObjectScope,
+): Promise<void> {
+  assertMintedEngineObject(engineObject, engine, scope);
   if (engine === 'synapse') {
     await executeQuery(serverlessTarget('master'), `SELECT TOP 1 * FROM ${engineObject};`);
     return;

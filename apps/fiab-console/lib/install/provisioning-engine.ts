@@ -50,6 +50,8 @@ import { materializedLakeViewProvisioner } from './provisioners/materialized-lak
 import { ITEM_PAIRING_RULES } from '@/lib/items/registry';
 import { createOwnedItem } from '@/app/api/items/_lib/item-crud';
 import { getPoolState, resumePool } from '@/lib/azure/synapse-pool-arm';
+// #3537 — the SHARED Loom→ADX database-name mapping kql-db.ts provisions with.
+import { safeAdxDatabaseName } from '@/lib/azure/backing-name';
 
 /** Mapping from editor item type → provisioner.  Item types not listed
  * here are Cosmos-only (no Phase-2 backend side-effect). Exported so the
@@ -204,6 +206,7 @@ async function provisionOne(
   appId: string,
   workspaceId: string,
   target: ProvisionTarget,
+  siblingKqlDatabases: string[] = [],
 ): Promise<ProvisionStep> {
   const p = PROVISIONERS[it.itemType];
   if (!p) {
@@ -228,7 +231,25 @@ async function provisionOne(
     cosmosItemId: it.id,
     workspaceId,
     displayName: it.displayName,
-    content: it.content || {},
+    // #3537 — hand a kql-dashboard the BACKING NAMES of the kql-database
+    // siblings this same install provisions.
+    //
+    // The engine provisions in concurrent batches with no cross-item hand-off,
+    // so the dashboard provisioner had no way to learn what its sibling DB was
+    // actually called: it fell back to LOOM_KUSTO_DEFAULT_DB, or to a SLUG of
+    // its own displayName that nothing creates, and every tile then failed with
+    // "table not resolved" even though the same KQL ran fine against the real
+    // database. The mapping is DETERMINISTIC — `kql-db.ts` names the ARM
+    // database `safeAdxDatabaseName(item.displayName)` — so the engine can
+    // compute it here without waiting for that item's provisioner to finish,
+    // which is what makes this safe inside the concurrent fan-out.
+    //
+    // Passed on `content` (a transient input, never written back to Cosmos)
+    // rather than on `ProvisionTarget`, so the whole resolution POLICY stays in
+    // the dashboard provisioner where it is directly testable.
+    content: it.itemType === 'kql-dashboard'
+      ? { ...(it.content as any || {}), siblingKqlDatabases }
+      : it.content || {},
     appId,
   };
   const result = await runWithRetry(p, input);
@@ -403,6 +424,14 @@ export async function runProvisioning(
   const prewarmSteps: string[] = [];
   await prewarmDedicatedPool(installed, prewarmSteps);
 
+  // #3537 — the deterministic backing names of every kql-database item in THIS
+  // install, computed once before the fan-out and handed to each kql-dashboard.
+  // `safeAdxDatabaseName` is the same mapping `kql-db.ts` uses to create the
+  // ARM database, so this is the name that will exist, not a guess about it.
+  const siblingKqlDatabases = installed
+    .filter((it) => it.itemType === 'kql-database')
+    .map((it) => safeAdxDatabaseName(it.displayName));
+
   // Provision items CONCURRENTLY in bounded batches. Serial provisioning of a
   // 10-12 item app blew the ~30s gateway timeout (504); fanning out
   // PROVISION_CONCURRENCY at a time cuts wall-clock to roughly the slowest
@@ -413,7 +442,7 @@ export async function runProvisioning(
   for (let start = 0; start < installed.length; start += PROVISION_CONCURRENCY) {
     const batch = installed.slice(start, start + PROVISION_CONCURRENCY);
     const settled = await Promise.all(
-      batch.map((it) => provisionOne(it, session, appId, workspaceId, target)),
+      batch.map((it) => provisionOne(it, session, appId, workspaceId, target, siblingKqlDatabases)),
     );
     settled.forEach((step, j) => {
       out[start + j] = step;

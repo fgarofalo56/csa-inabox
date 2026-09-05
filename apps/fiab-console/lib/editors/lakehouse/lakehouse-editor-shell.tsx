@@ -54,8 +54,8 @@ import { EntityDiagram } from '@/lib/components/shared/entity-diagram';
 import { DeltaMaintenanceDialog } from '../components/delta-maintenance-dialog';
 import { TierDialog, type BlobAccessTier } from '@/lib/components/onelake/tier-dialog';
 import { parseDdlColumns } from '@/lib/azure/delta-maintenance';
-// #3919 — the ONE reader of `secondaryIds.seedCsvPaths`, shared with the install route.
-import { seedCsvPathLookup } from '@/lib/install/report-binding';
+import { seedCsvPathLookup } from '@/lib/install/report-binding'; // #3919 — the ONE reader of secondaryIds.seedCsvPaths.
+import { decodeIdList } from '@/lib/install/secondary-id-list'; // #3920 — the ONE decoder for list-valued secondaryIds.
 import { LoadToTableWizard } from '../components/load-to-table-wizard';
 import { OneLakeSecurityTab } from '../components/onelake-security-tab';
 import { ConnectTab } from '@/lib/components/shared/connect-tab';
@@ -119,14 +119,14 @@ export function LakehouseEditor({ item, id }: Props) {
   const bundleShortcuts = lhContent?.shortcuts ?? [];
   const hasBundle = bundleFolders.length > 0 || bundleDeltaTables.length > 0 || bundleShortcuts.length > 0;
 
-  // #3919 — READ the recorded CSV location (see seedCsvPathLookup), never rebuild it:
-  // the old `<root>/Tables/<n>/<n>.csv` moved to `<root>/Files/_seed/` in #3913, so this
-  // pane showed — and its "Query CSV" button read — a blob that does not exist.
+  // #3919 — READ the recorded CSV location (see seedCsvPathLookup), never rebuild it: the old
+  // `<root>/Tables/<n>/<n>.csv` moved to `<root>/Files/_seed/` in #3913, so this pane showed —
+  // and its "Query CSV" button read — a blob that does not exist.
   const seededTableInfo = useMemo(() => {
     const prov = (itemQ.data?.state as any)?.provisioning;
     const sec = (prov?.secondaryIds || {}) as Record<string, string>;
     const container = typeof sec.container === 'string' ? sec.container : null;
-    const seeded = String(sec.seededTables || '').split(',').map((x) => x.trim()).filter(Boolean);
+    const seeded = decodeIdList(sec.seededTables); // #3920 — a `,` in a table name is not a delimiter.
     if (!container || !seeded.length) return null;
     const recordedCsvPath = seedCsvPathLookup(sec);
     const rows = seeded.flatMap((name) => {

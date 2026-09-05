@@ -127,10 +127,24 @@ function mayDeleteShortcutSecret(name: unknown): name is string {
  * DATABASE out of `parts[0]`; and `state` is caller-supplied at create time
  * (`createOwnedItem` takes it wholesale). Separator-escaping was never the whole
  * problem — WHICH OBJECT is, and only the name-space answers that.
+ * #3960 — IT NOW ALSO CARRIES THE ITEM ID. Both call sites below know which
+ * shortcut ITEM the stored `engineObject` came off, and `registerTablesObject`
+ * mints the leaf as `${id.slice(0,8)}_${displayName}` precisely so two
+ * shortcuts cannot collide. Passing that id makes the guard check the mint
+ * prefix it already promises, so item A's state naming item B's table is
+ * refused rather than DROPped / SELECTed as the Console UAMI.
  */
-function isSafeEngineObject(v: unknown, engine?: string): v is string {
-  return isMintedEngineObject(v, engine);
+function isSafeEngineObject(v: unknown, engine?: string, itemId?: string): v is string {
+  return isMintedEngineObject(v, engine, itemId ? { itemId } : undefined);
 }
+
+/**
+ * Longest `displayName` a Tables shortcut may be created with (#3960).
+ * 8 (the `id.slice(0,8)` mint prefix) + 1 (the `_`) + 119 = 128, the T-SQL
+ * identifier limit. Enforced at POST, where the mint is decided — see the check
+ * itself for why an uncapped name fails silently rather than loudly.
+ */
+const MAX_SHORTCUT_DISPLAY_NAME = 119;
 
 /**
  * Register a Tables shortcut as a REAL zero-copy external table/view on the
@@ -421,7 +435,7 @@ export async function POST(req: NextRequest) {
       // supplied item state. Anything outside the name-space Loom registers
       // into is refused before it reaches the engine, so this cannot become an
       // arbitrary-read surface over every object that principal can see.
-      if (!isSafeEngineObject(stt.engineObject, stt.engine)) {
+      if (!isSafeEngineObject(stt.engineObject, stt.engine, id)) {
         // R7 — say only what was established. The check proves the stored name
         // is OUTSIDE the name-space Loom registers into; it does not establish
         // who wrote it, so it must not claim "Loom did not create this".
@@ -469,6 +483,29 @@ export async function POST(req: NextRequest) {
 
     const displayName = String(body?.displayName || '').trim();
     if (!displayName) return err('displayName required', 400);
+    // #3960 — CAP IT AT CREATE, where the mint is decided.
+    //
+    // `registerTablesObject` mints the engine leaf as
+    // `${id.slice(0,8)}_${displayName}`, so the leaf is 9 + displayName.length
+    // characters. Two hard bounds sit downstream and neither was checked here:
+    // Synapse/T-SQL identifiers stop at 128 characters, and
+    // `isMintedEngineObject` refuses any engineObject longer than 260. An
+    // uncapped 235-character displayName therefore minted a name the ENGINE
+    // truncates (so the DROP sink later targets a name that does not exist) or
+    // that Loom's own guard refuses (so the object is orphaned and the shortcut
+    // reads as `error`). Both are silent at create time — the POST returned 200.
+    //
+    // 119 is arithmetic, not a round number: 8 (id prefix) + 1 ('_') + 119 =
+    // 128, the T-SQL identifier limit exactly.
+    if (displayName.length > MAX_SHORTCUT_DISPLAY_NAME) {
+      return err(
+        `displayName is ${displayName.length} characters; the maximum is ${MAX_SHORTCUT_DISPLAY_NAME}. ` +
+        `The Tables engine object is named "<first 8 chars of the item id>_<displayName>", and a SQL ` +
+        `identifier stops at 128 characters — a longer name would be truncated by the engine or refused ` +
+        `by Loom's own name-space guard, leaving the registered table orphaned.`,
+        400, { code: 'display_name_too_long', max: MAX_SHORTCUT_DISPLAY_NAME },
+      );
+    }
 
     const needsSecret = SECRET_REQUIRED.has(sourceType);
     if (needsSecret && !secret.trim()) return err('This source requires a credential.', 400, { code: 'needs_credential' });
@@ -628,9 +665,9 @@ export async function DELETE(req: NextRequest) {
       // orphan instead of a silent one. (`lakehouse.<leaf>`, minted by the
       // install provisioner, was exactly that miss.)
       if (st.engine && st.engine !== 'none' && st.engineObject) {
-        if (isSafeEngineObject(st.engineObject, st.engine)) {
+        if (isSafeEngineObject(st.engineObject, st.engine, id)) {
           try {
-            await dropShortcutObject({ engine: st.engine, engineObject: st.engineObject });
+            await dropShortcutObject({ engine: st.engine, engineObject: st.engineObject, scope: { itemId: id } });
             engineObjectDropped = true;
           } catch {
             // Already-dropped/missing/transient must not block the pointer

@@ -615,6 +615,18 @@ Write the grounded answer per the system rules. End with a "Citations:" block li
       content: {
         kind: 'notebook',
         defaultLang: 'pyspark',
+        // #3530 — the cells below `from azure.search.documents import …` and
+        // `from openai import AzureOpenAI`. Neither distribution is in the
+        // Synapse Spark or Databricks stock image, so Run-all used to stop at
+        // the first import with ModuleNotFoundError on a fresh install.
+        // Declaring them makes the notebook provisioner prepend a
+        // session-scoped `%pip install` bootstrap cell (auto-bind: the platform
+        // installs what the content it shipped needs).
+        //
+        // `azure-identity` is deliberately NOT listed: it IS in the Synapse
+        // Spark runtime image, and `pip install`ing it on top of the runtime's
+        // copy is a needless minute on every Run-all.
+        requiredLibraries: ['azure-search-documents', 'openai'],
         cells: [
           {
             id: 'cell-md-intro',

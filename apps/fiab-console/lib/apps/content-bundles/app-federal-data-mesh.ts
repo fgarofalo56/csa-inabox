@@ -187,6 +187,21 @@ display(df)
 
 // ─── FederationAudit KQL — cross-DLZ access + cost + Sentinel detections ──
 
+/**
+ * The ADX database name the `FederationAudit (ADX)` kql-database item in this
+ * bundle actually provisions (#3537).
+ *
+ * `lib/install/provisioners/kql-db.ts` names the ARM database
+ * `safeAdxDatabaseName(item.displayName)`, which replaces every character
+ * outside `[A-Za-z0-9_]` with `_`. So `'FederationAudit (ADX)'` becomes
+ * `'FederationAudit__ADX_'`. This constant exists so the dashboard's data
+ * source and the pipeline's ADX sinks reference the SAME name the provisioner
+ * creates, instead of the plain `'FederationAudit'` they used to hard-code —
+ * a database this bundle never creates, which is why the dashboard's tiles and
+ * the cost-ingest sink both pointed at nothing.
+ */
+const FEDERATION_AUDIT_DB = 'FederationAudit__ADX_';
+
 const KQL_FN_DOMAIN_COST_ROLLUP = `// Cross-DLZ cost rollup for the Department CIO "Monitoring -> Cost" pane.
 // Aggregates per-agency Azure consumption into a department-level view and
 // shows MACC (pre-purchased commit) burn-down.
@@ -997,6 +1012,16 @@ const bundle: AppBundle = {
       learnDoc: 'fiab/use-cases/federal-data-mesh',
       content: {
         kind: 'kql-dashboard',
+        // #3537 — the ADX database name the kql-database item at `displayName:
+        // 'FederationAudit (ADX)'` ACTUALLY provisions. `kql-db.ts` names the
+        // ARM database `safeAdxDatabaseName(displayName)`, i.e. every character
+        // outside [A-Za-z0-9_] becomes '_': "FederationAudit (ADX)" →
+        // "FederationAudit__ADX_". Nothing in this bundle creates a database
+        // called plain "FederationAudit", which is why every tile below failed
+        // to resolve its table. The provisioner now derives the same name from
+        // the sibling item, so this declaration is belt-and-braces — it agrees
+        // with what is provisioned instead of contradicting it.
+        database: FEDERATION_AUDIT_DB,
         tiles: [
           { title: 'Active Agency Domains',         viz: 'card',  kql: TILE_TOTAL_DOMAINS },
           { title: 'MTD Cross-DLZ Cost (USD)',      viz: 'card',  kql: TILE_MTD_COST },
@@ -1137,7 +1162,7 @@ const bundle: AppBundle = {
               sink: {
                 type: 'AzureDataExplorerSink',
                 description: 'Ingest into FederationAudit.DomainCost (ADX).',
-                database: 'FederationAudit',
+                database: FEDERATION_AUDIT_DB,
                 table: 'DomainCost',
                 ingestionMappingName: 'DomainCostCsvMapping',
               },
@@ -1156,7 +1181,7 @@ const bundle: AppBundle = {
             type: 'AzureDataExplorerCommand',
             dependsOn: ['CopyCostExport'],
             config: {
-              database: 'FederationAudit',
+              database: FEDERATION_AUDIT_DB,
               command: '.set-or-replace DomainCostRollup30d <| DomainCostRollup(30)',
               description:
                 'Materialize the 30-day cross-DLZ rollup the CIO dashboard reads.',

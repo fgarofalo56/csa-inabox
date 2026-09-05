@@ -197,12 +197,17 @@ describe('#3611 — engineObject may not carry SQL into DROP', () => {
   });
 
   it('DOES drop the shape Loom mints (the guard has a non-empty allow-set)', async () => {
-    seedShortcut('sc8', { kind: 'tables', engine: 'synapse', engineObject: 'loom_lakehouse.shortcuts.sc_abc12345' });
+    // #3960 — the leaf carries the ITEM's own `${id.slice(0,8)}_` prefix,
+    // because that is what `registerTablesObject` really mints and the DELETE
+    // sink now checks it. The previous fixture paired item `sc8` with a leaf
+    // (`sc_abc12345`) no mint could have produced for it, which is exactly the
+    // cross-item shape the scoped guard exists to refuse.
+    seedShortcut('sc8', { kind: 'tables', engine: 'synapse', engineObject: 'loom_lakehouse.shortcuts.sc8_orders' });
 
     await DELETE(delReq('workspaceId=ws1&id=sc8'));
 
     expect(dropShortcutObject).toHaveBeenCalledWith({
-      engine: 'synapse', engineObject: 'loom_lakehouse.shortcuts.sc_abc12345',
+      engine: 'synapse', engineObject: 'loom_lakehouse.shortcuts.sc8_orders', scope: { itemId: 'sc8' },
     });
   });
 
@@ -223,7 +228,7 @@ describe('#3611 — engineObject may not carry SQL into DROP', () => {
   });
 
   it('DOES query a well-formed engine object', async () => {
-    seedShortcut('sc10', { kind: 'tables', engine: 'synapse', engineObject: 'loom_lakehouse.shortcuts.sc_ok' });
+    seedShortcut('sc10', { kind: 'tables', engine: 'synapse', engineObject: 'loom_lakehouse.shortcuts.sc10_ok' });
 
     const res = await POST(postReq({ action: 'query', id: 'sc10' }));
 
@@ -292,7 +297,7 @@ describe('#3611 — the allow-set is DERIVED from the mint, not hand-typed', () 
 
     await DELETE(delReq(`workspaceId=ws1&id=${id}`));
 
-    expect(dropShortcutObject).toHaveBeenCalledWith({ engine: 'synapse', engineObject });
+    expect(dropShortcutObject).toHaveBeenCalledWith({ engine: 'synapse', engineObject, scope: { itemId: id } });
   });
 
   it('DOES query a digit-headed object that Loom itself minted', async () => {
@@ -312,7 +317,7 @@ describe('#3611 — the allow-set is DERIVED from the mint, not hand-typed', () 
 
     await DELETE(delReq(`workspaceId=ws1&id=${id}`));
 
-    expect(dropShortcutObject).toHaveBeenCalledWith({ engine: 'synapse', engineObject });
+    expect(dropShortcutObject).toHaveBeenCalledWith({ engine: 'synapse', engineObject, scope: { itemId: id } });
   });
 
   it('still refuses injection when the object is digit-headed (widening the head class widened NOTHING else)', async () => {
@@ -387,12 +392,15 @@ describe('#3611 — engineObject must be inside the name-space Loom registers in
   it('DOES accept the Databricks minted name-space (loom.<schema>.<table>)', async () => {
     // Positive control for the OTHER engine: without it, a guard that simply
     // refused everything non-Synapse would pass every case above.
-    seedShortcut('n3', { kind: 'tables', engine: 'databricks', engineObject: 'loom.sc_abc12345.mytable' });
+    // #3960 — schema `sc_<id8>` and leaf `<id8>_…`, the pair `ucObject` really
+    // mints for item `n3`; the old fixture's `sc_abc12345` belonged to no item
+    // here at all.
+    seedShortcut('n3', { kind: 'tables', engine: 'databricks', engineObject: 'loom.sc_n3.n3_mytable' });
 
     await DELETE(delReq('workspaceId=ws1&id=n3'));
 
     expect(dropShortcutObject).toHaveBeenCalledWith({
-      engine: 'databricks', engineObject: 'loom.sc_abc12345.mytable',
+      engine: 'databricks', engineObject: 'loom.sc_n3.n3_mytable', scope: { itemId: 'n3' },
     });
   });
 
@@ -422,12 +430,12 @@ describe('#3611 — engineObject must be inside the name-space Loom registers in
     // bug this file already records, so it gets its own control.
     process.env.LOOM_SERVERLESS_DB = 'custom_lh';
     try {
-      seedShortcut('n6', { kind: 'tables', engine: 'synapse', engineObject: 'custom_lh.shortcuts.sc_x' });
-      seedShortcut('n7', { kind: 'tables', engine: 'synapse', engineObject: 'loom_lakehouse.shortcuts.sc_x' });
+      seedShortcut('n6', { kind: 'tables', engine: 'synapse', engineObject: 'custom_lh.shortcuts.n6_x' });
+      seedShortcut('n7', { kind: 'tables', engine: 'synapse', engineObject: 'loom_lakehouse.shortcuts.n7_x' });
 
       await DELETE(delReq('workspaceId=ws1&id=n6'));
       expect(dropShortcutObject).toHaveBeenCalledWith({
-        engine: 'synapse', engineObject: 'custom_lh.shortcuts.sc_x',
+        engine: 'synapse', engineObject: 'custom_lh.shortcuts.n6_x', scope: { itemId: 'n6' },
       });
 
       // ...and the DEFAULT name is no longer in the name-space once overridden.
@@ -562,7 +570,7 @@ describe('#3611 — the secret guard is an allow-list, not a deny-list', () => {
  */
 describe('#3611 — DELETE reports whether the engine object was actually dropped', () => {
   it('says nothing extra when the drop SUCCEEDED', async () => {
-    seedShortcut('h1', { kind: 'tables', engine: 'synapse', engineObject: 'loom_lakehouse.shortcuts.sc_ok' });
+    seedShortcut('h1', { kind: 'tables', engine: 'synapse', engineObject: 'loom_lakehouse.shortcuts.h1_ok' });
 
     const res = await DELETE(delReq('workspaceId=ws1&id=h1'));
     const body = await res.json();
@@ -594,7 +602,7 @@ describe('#3611 — DELETE reports whether the engine object was actually droppe
     // reached, but the engine call failed. Both must be reported, and an earlier
     // revision reported neither.
     (dropShortcutObject as any).mockRejectedValueOnce(new Error('engine unreachable'));
-    seedShortcut('h3', { kind: 'tables', engine: 'synapse', engineObject: 'loom_lakehouse.shortcuts.sc_ok' });
+    seedShortcut('h3', { kind: 'tables', engine: 'synapse', engineObject: 'loom_lakehouse.shortcuts.h3_ok' });
 
     const res = await DELETE(delReq('workspaceId=ws1&id=h3'));
     const body = await res.json();
@@ -625,7 +633,7 @@ describe('#3611 — DELETE reports whether the engine object was actually droppe
     const body = await res.json();
 
     expect(dropShortcutObject).toHaveBeenCalledWith({
-      engine: 'synapse', engineObject: 'lakehouse.shortcut_nyc_taxi',
+      engine: 'synapse', engineObject: 'lakehouse.shortcut_nyc_taxi', scope: { itemId: 'h5' },
     });
     expect(body).not.toHaveProperty('engineObjectDropped');
   });

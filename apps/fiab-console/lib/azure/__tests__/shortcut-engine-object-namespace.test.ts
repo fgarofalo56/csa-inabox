@@ -245,8 +245,19 @@ describe('#3611 — isMintedEngineObject, the one definition of the policy', () 
     expect(isMintedEngineObject('loom_lakehouse.shortcuts.x', 'databricks')).toBe(false);
     // With the engine UNKNOWN either minted space is accepted — strictly wider
     // than passing the engine, which is why the callers all pass it.
-    expect(isMintedEngineObject('loom.dbo.payroll')).toBe(true);
+    //
+    // #3960 changed the WITNESS here, not this claim. This line used to read
+    // `isMintedEngineObject('loom.dbo.payroll')` and expect `true`, which was
+    // the hole the file's own docblock named: `dbo` is a schema that exists in
+    // every catalog and `ucObject` cannot mint it, so it is now refused on the
+    // UC arm regardless of engine. `loom.sc_abc12345.orders` is a name the mint
+    // really does produce, so it still makes the "engine unknown is wider" point
+    // without asserting the hole back open.
+    expect(isMintedEngineObject('loom.sc_abc12345.orders')).toBe(true);
     expect(isMintedEngineObject('loom_lakehouse.shortcuts.x')).toBe(true);
+    // …and the old witness is now refused, on both the unknown and the UC arm.
+    expect(isMintedEngineObject('loom.dbo.payroll')).toBe(false);
+    expect(isMintedEngineObject('loom.dbo.payroll', 'databricks')).toBe(false);
   });
 });
 
@@ -346,5 +357,123 @@ describe('#3611 — a non-identifier LOOM_SERVERLESS_DB cannot desync mint and g
         delete process.env.LOOM_SERVERLESS_DB;
       }
     }
+  });
+});
+
+/**
+ * #3960 — the two residuals the #3611 guard deliberately left open, and which
+ * this file's own docblock recorded as a KNOWN BOUND rather than closing.
+ *
+ * RESIDUAL 1 — no ITEM SCOPING. `registerTablesObject` mints the leaf as
+ * `${id.slice(0,8)}_${displayName}` "so two shortcuts of the same display name
+ * (across workspaces) never collide … and never leak across tenants". Nothing
+ * downstream checked that prefix, and `state` is caller-supplied at create time
+ * (`createOwnedItem` takes it wholesale) — so shortcut A's `engineObject` could
+ * name shortcut B's minted table and the DROP / SELECT sinks executed it as the
+ * Console UAMI. The name-space guard said "yes, Loom mints names like that",
+ * which was true and not the question.
+ *
+ * RESIDUAL 2 — the UC arm constrained only the CATALOG. `parts[0] === 'loom'`
+ * accepted `loom.information_schema.tables`: a real, readable Unity Catalog
+ * view listing every table in the catalog, handed to
+ * `SELECT * FROM … LIMIT 1`.
+ *
+ * MUTATION PROOF (break the subject, watch these go red, restore):
+ *   a) In `shortcut-engines.ts` delete the `UC_RESERVED_SCHEMAS.has(schema)`
+ *      refusal -> RED:
+ *        "loom.information_schema.tables is refused with NO scope at all"
+ *        "every catalog-wide UC schema is refused, not just information_schema"
+ *   b) Delete the `if (id8 && !leafBelongsTo(...)) return false` line -> RED:
+ *        "an engineObject minted for ANOTHER item is refused when the item id is known"
+ *        "the sinks refuse a cross-item object before any SQL is built"
+ *   c) Delete the `if (scope?.itemId) return schema === sc_${id8}` UC arm ->
+ *      RED: "on UC the SCHEMA must be the one this item mints, not just any"
+ *      — the arm a leaf-only fix leaves open, since `loom.sc_OTHER.<id8>_x`
+ *      carries the right leaf prefix in the wrong namespace.
+ */
+describe('#3960 — item scoping and the UC schema residual', () => {
+  const ID_A = 'abc12345-1111-2222-3333-444455556666';
+  const ID_B = 'def67890-1111-2222-3333-444455556666';
+  const a8 = ID_A.slice(0, 8);
+  const b8 = ID_B.slice(0, 8);
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('loom.information_schema.tables is refused with NO scope at all', () => {
+    // The half that needs no caller input: `ucObject` derives the schema from a
+    // Cosmos item id, so it cannot mint this name. Refusing it costs nothing.
+    expect(isMintedEngineObject('loom.information_schema.tables', 'databricks')).toBe(false);
+    expect(isMintedEngineObject('loom.information_schema.tables')).toBe(false);
+  });
+
+  it('every catalog-wide UC schema is refused, not just information_schema', () => {
+    for (const schema of ['information_schema', 'system', 'default', 'global_temp', 'sys', 'dbo']) {
+      expect(isMintedEngineObject(`loom.${schema}.anything`, 'databricks'), schema).toBe(false);
+      // Case is not a bypass — UC lower-cases, and so does the check.
+      expect(isMintedEngineObject(`loom.${schema.toUpperCase()}.anything`, 'databricks'), schema).toBe(false);
+    }
+  });
+
+  it('a real minted UC name still passes — the tightening is not a blanket refusal', () => {
+    expect(isMintedEngineObject(`loom.sc_${a8}.${a8}_orders`, 'databricks')).toBe(true);
+    expect(isMintedEngineObject(`loom.sc_${a8}.${a8}_orders`, 'databricks', { itemId: ID_A })).toBe(true);
+  });
+
+  it('an engineObject minted for ANOTHER item is refused when the item id is known', () => {
+    const bsObject = `loom_lakehouse.shortcuts.${b8}_payroll`;
+    // Un-scoped it is inside the name-space — that claim was true, and is why
+    // the name-space check alone could never answer this question.
+    expect(isMintedEngineObject(bsObject, 'synapse')).toBe(true);
+    // Scoped to item A it is refused.
+    expect(isMintedEngineObject(bsObject, 'synapse', { itemId: ID_A })).toBe(false);
+    // …and item B's own object is still accepted for item B.
+    expect(isMintedEngineObject(bsObject, 'synapse', { itemId: ID_B })).toBe(true);
+  });
+
+  it('on UC the SCHEMA must be the one this item mints, not just any', () => {
+    // The leaf prefix alone is not enough: `sc_<other>` is a different item's
+    // namespace even when the leaf carries this item's prefix.
+    expect(isMintedEngineObject(`loom.sc_${b8}.${a8}_orders`, 'databricks', { itemId: ID_A })).toBe(false);
+    expect(isMintedEngineObject(`loom.sc_${a8}.${a8}_orders`, 'databricks', { itemId: ID_A })).toBe(true);
+  });
+
+  it('a lakehouse-scoped UC object is checked against THAT lakehouse', () => {
+    // `/api/lakehouse/shortcuts` mints `loom.<sanitized lakehouseId>.<table>`;
+    // that arm has no shortcut item id but does know the lakehouse.
+    expect(isMintedEngineObject('loom.lh_primary.orders', 'databricks', { lakehouseId: 'lh-primary' })).toBe(true);
+    expect(isMintedEngineObject('loom.lh_other.orders', 'databricks', { lakehouseId: 'lh-primary' })).toBe(false);
+  });
+
+  it('the sinks refuse a cross-item object before any SQL is built', async () => {
+    const bsObject = `loom_lakehouse.shortcuts.${b8}_payroll`;
+
+    await expect(dropShortcutObject({ engine: 'synapse', engineObject: bsObject, scope: { itemId: ID_A } }))
+      .rejects.toBeInstanceOf(EngineObjectNamespaceError);
+    await expect(testEngineObject('databricks', `loom.sc_${b8}.${b8}_payroll`, { itemId: ID_A }))
+      .rejects.toBeInstanceOf(EngineObjectNamespaceError);
+    await expect(testEngineObject('databricks', 'loom.information_schema.tables'))
+      .rejects.toBeInstanceOf(EngineObjectNamespaceError);
+
+    // No SQL was built on ANY of the three — the refusal is before the string,
+    // not a filter on the result.
+    expect(executeQuery).not.toHaveBeenCalled();
+    expect(executeStatement).not.toHaveBeenCalled();
+  });
+
+  it("passing a scope never LOOSENS the check", async () => {
+    // A scope is strictly tighter. An object outside the name-space is refused
+    // whether or not its leaf happens to carry the right item prefix.
+    expect(isMintedEngineObject(`master.sys.${a8}_sql_logins`, 'synapse', { itemId: ID_A })).toBe(false);
+    expect(isMintedEngineObject(`finance_db.dbo.${a8}_payroll`, 'synapse', { itemId: ID_A })).toBe(false);
+  });
+
+  it('the un-scoped mint paths still work — the scope is opt-in', () => {
+    // The content-install provisioner mints `lakehouse.<leaf>` with NO shortcut
+    // item id. Making the prefix mandatory would refuse Loom's own objects and
+    // orphan them, which is the failure `SYNAPSE_MINTED_SCHEMAS` documents.
+    expect(isMintedEngineObject('lakehouse.shortcut_nyc_taxi', 'synapse')).toBe(true);
+    expect(isMintedEngineObject('loom_lakehouse.lakehouse.shortcut_sales', 'synapse')).toBe(true);
   });
 });
