@@ -38,7 +38,7 @@
 import { test, expect } from '@playwright/test';
 import path from 'node:path';
 import fs from 'node:fs';
-import { BASE, signIn, captureFailures, recordVerdict, createWorkspace, pollInstallJob, cleanupWorkspaces } from './_lib/uat';
+import { BASE, signIn, captureFailures, recordVerdict, createWorkspace, pollInstallJob, cleanupWorkspaces, realConsoleErrors, isHydrationError, formatConsoleErrors } from './_lib/uat';
 
 // Disposable namespace (rel-T09c): every workspace this suite mints is tracked
 // and deleted at suite end so the tenant isn't left with `uat-app-*` debris.
@@ -325,6 +325,34 @@ for (const appId of APP_IDS) {
     expect(installed.length, `no items installed for ${appId}`).toBeGreaterThan(0);
     expect(empties, `EMPTY objects in ${appId} (opened as placeholders, not built-out)`).toHaveLength(0);
     expect(crashes, `CRASHED editors in ${appId}`).toHaveLength(0);
+
+    // ── #3528 — console errors were COLLECTED and never ASSERTED ────────────
+    // `captureFailures` has recorded every console.error since this file was
+    // written, and the header above promises the editor "renders without a
+    // crash or console error". Every expect() in this file ignored the second
+    // half of that: `consoleErrors` was only ever written into recordVerdict's
+    // note. So a React hydration failure on /apps/[id] — the root cause of the
+    // click-dead workspace Dropdown in the install dialog — produced a clean
+    // green run with the evidence sitting in an artifact nobody reads.
+    //
+    // The HYDRATION assertion is separate and first on purpose: "console errors
+    // during install" names a symptom, "Minified React error #418" names the
+    // defect. A regression that reintroduces it should say so in the failure
+    // message rather than making the next reader diff two artifacts.
+    const realErrors = realConsoleErrors(consoleErrors);
+    const hydrationErrors = realErrors.filter(isHydrationError);
+    expect(
+      hydrationErrors,
+      `REACT HYDRATION failure during ${appId} install/open — this is the #3528 root cause `
+      + `(a hydration mismatch leaves the Fluent Dropdown mounted but unbound, so the workspace `
+      + `picker looks fine and does nothing):\n${formatConsoleErrors(consoleErrors)}`,
+    ).toHaveLength(0);
+    expect(
+      realErrors,
+      `console errors during ${appId} install/open (reauth-gated beacons excluded):\n`
+      + formatConsoleErrors(consoleErrors),
+    ).toHaveLength(0);
+
     await ctx.close();
   });
 }

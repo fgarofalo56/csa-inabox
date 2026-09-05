@@ -75,26 +75,32 @@
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync, readdirSync, mkdtempSync, mkdirSync, writeFileSync, chmodSync, rmSync } from 'node:fs';
+import { readFileSync, readdirSync, mkdtempSync, mkdirSync, writeFileSync, chmodSync, rmSync, existsSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { delimiter, dirname, join, resolve } from 'node:path';
 import {
   APP_IMAGE_TAGS,
+  CONSOLE_APP_NAME,
   CONSOLE_IMAGE_KEY,
   CONSOLE_ROLL_SOURCES,
+  ESTATE_ROLL_LANES,
   SHA_TAG_RE,
+  buildHealRequests,
   cliMain,
   comparePins,
   decideEstateRegression,
+  decideEstateRegressionAll,
   decidePinRefresh,
+  describeRevisionReadFailure,
   parseRollRunTitle,
   pinsFromEnv,
   resolveRunningImageTags,
   selectLastConsoleRoll,
   selectRevisionOverwrite,
   selectServingRevision,
+  selectWatchedApps,
 } from '../reconcile-policy.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -854,6 +860,141 @@ test('MUTATION CONTROL for #3797: the same unreadable history with a CLEAN Actio
   );
 });
 
+// ---------------------------------------------------------------------------
+// ESTATE-WIDE (#3676) — the population, the roll-up, and the dispatch plan.
+//
+// These three functions are what turn a one-app gate into a twenty-app one, so
+// each is tested on the states the workflow cannot cheaply reproduce: an
+// unreadable list, an app nothing is running yet, an app no lane can roll.
+// ---------------------------------------------------------------------------
+
+const listAt = (pairs) => pairs.map(([name, repo, tag]) => ({ name, image: `acr1.azurecr.io/${repo}:${tag}` }));
+
+test('selectWatchedApps derives the population from the PINS x the live list, not from a hand-kept table', () => {
+  const sel = selectWatchedApps({
+    containers: listAt([
+      ['loom-console', 'loom-console', ROLLED],
+      ['loom-mirroring', 'loom-mirroring', '0.80.0'],
+      ['loom-mcp', 'loom-mcp', '0.80.0'],
+    ]),
+    pinned: { console: ROLLED, mirroring: '0.80.0' },
+  });
+  assert.equal(sel.status, 'ok');
+  assert.deepEqual(sel.apps.map((a) => a.app), ['loom-console', 'loom-mirroring']);
+  assert.deepEqual(
+    sel.unwatched.map((u) => u.app), ['loom-mcp'],
+    'an app running a repository this run pinned nothing for is REPORTED out of scope, never dropped silently',
+  );
+});
+
+test('selectWatchedApps: an UNREADABLE list is UNKNOWN — it is not an estate with no apps in it', () => {
+  for (const bad of [null, undefined, 'not json', { name: 'x' }]) {
+    const sel = selectWatchedApps({ containers: bad, pinned: { console: ROLLED } });
+    assert.equal(sel.status, 'unknown', `containers=${JSON.stringify(bad)} must be UNKNOWN`);
+    assert.deepEqual(sel.apps, [], 'and it must compare nothing rather than compare an invented empty population');
+    assert.match(sel.reason, /could not be read as a JSON array/);
+  }
+});
+
+test('selectWatchedApps: a pinned repo nothing is running yet is CREATED, not compared', () => {
+  // The apply WRITES this tag, but writing it creates the app. A creation
+  // cannot have overwritten another writer, so folding it into `apps` would
+  // manufacture an UNKNOWN every time a new app lands.
+  const sel = selectWatchedApps({
+    containers: listAt([['loom-console', 'loom-console', ROLLED]]),
+    pinned: { console: ROLLED, duckdb: '0.1.0' },
+  });
+  assert.equal(sel.status, 'ok');
+  assert.deepEqual(sel.apps.map((a) => a.app), ['loom-console']);
+  assert.deepEqual(sel.created.map((c) => c.repo), ['loom-duckdb']);
+});
+
+test('decideEstateRegressionAll: precedence is regression > drifted > unknown > ok, so the SHA is never buried', () => {
+  const all = decideEstateRegressionAll([
+    { app: 'loom-console', verdict: 'unknown', reason: 'u' },
+    { app: 'loom-mirroring', verdict: 'regression', reason: 'r', rollForwardTo: AUG19_ROLLED },
+  ]);
+  assert.equal(
+    all.verdict, 'regression',
+    'all four failing states exit 1 identically; what differs is the NEXT ACTION. Letting an unrelated app\'s ' +
+      'unknown outrank a regression throws away the only verdict that carries a roll-forward SHA.',
+  );
+  assert.deepEqual(all.failing.map((f) => f.app).sort(), ['loom-console', 'loom-mirroring'],
+    'and every failing app is still carried out — the headline must not hide the others');
+});
+
+test('decideEstateRegressionAll: ALL ok is ok, and an EMPTY population says so rather than implying health', () => {
+  const ok = decideEstateRegressionAll([
+    { app: 'loom-console', verdict: 'ok', reason: 'o' },
+    { app: 'loom-mirroring', verdict: 'ok', reason: 'o' },
+  ]);
+  assert.equal(ok.verdict, 'ok');
+  assert.deepEqual(ok.failing, []);
+  const none = decideEstateRegressionAll([]);
+  assert.equal(none.verdict, 'ok');
+  assert.match(none.reason, /\S/, 'an empty comparison must still SAY it compared nothing');
+});
+
+test('buildHealRequests routes each app to the lane that can actually roll IT — console vs data plane', () => {
+  const reqs = buildHealRequests([
+    { app: 'loom-console', verdict: 'regression', rollForwardTo: AUG19_ROLLED },
+    { app: 'loom-unity', verdict: 'regression', rollForwardTo: AUG19_ROLLED },
+  ]);
+  const byWf = Object.fromEntries(reqs.map((r) => [r.workflow, r]));
+  assert.equal(byWf['loom-roll-and-validate.yml'].kind, 'console');
+  assert.deepEqual(byWf['loom-roll-and-validate.yml'].apps, ['loom-console']);
+  assert.equal(byWf['loom-dataplane-roll.yml'].kind, 'dataplane');
+  assert.deepEqual(byWf['loom-dataplane-roll.yml'].apps, ['loom-unity']);
+  for (const r of reqs) assert.equal(r.sha, AUG19_ROLLED);
+});
+
+test('buildHealRequests: an app with NO lane gets workflow:null and a stated reason — never a mis-aimed dispatch', () => {
+  const [req] = buildHealRequests([
+    { app: 'loom-mirroring', verdict: 'regression', rollForwardTo: AUG19_ROLLED },
+  ]);
+  assert.equal(
+    req.workflow, null,
+    'loom-roll-and-validate hard-codes APP_NAME: loom-console. Dispatching it for loom-mirroring would roll the ' +
+      'CONSOLE and report a healed estate — a false receipt is worse than an admitted gap.',
+  );
+  assert.match(req.why, /NO automated roll lane exists/);
+  assert.deepEqual(req.apps, ['loom-mirroring']);
+});
+
+test('buildHealRequests: only a definite regression carrying a 40-hex SHA may ever reach a dispatch', () => {
+  const reqs = buildHealRequests([
+    { app: 'loom-console', verdict: 'ok', rollForwardTo: AUG19_ROLLED },
+    { app: 'loom-unity', verdict: 'drifted', rollForwardTo: AUG19_ROLLED },
+    { app: 'loom-trino', verdict: 'unknown', rollForwardTo: AUG19_ROLLED },
+    { app: 'iceberg-catalog', verdict: 'regression', rollForwardTo: 'latest' },
+  ]);
+  assert.deepEqual(
+    reqs, [],
+    'a floating tag cannot be validated against a build marker (#2963), and a non-regression verdict names no ' +
+      'direction — rolling to a guessed SHA could move a HEALTHY estate backwards',
+  );
+});
+
+test('buildHealRequests groups apps that share one lane AND one SHA into a SINGLE dispatch', () => {
+  // loom-unity and loom-trino are rolled by the same lane, which takes a comma
+  // list. Two dispatches would race each other on the same Container Apps.
+  const reqs = buildHealRequests([
+    { app: 'loom-unity', verdict: 'regression', rollForwardTo: AUG19_ROLLED },
+    { app: 'loom-trino', verdict: 'regression', rollForwardTo: AUG19_ROLLED },
+  ]);
+  assert.equal(reqs.length, 1, JSON.stringify(reqs));
+  assert.deepEqual(reqs[0].apps, ['loom-trino', 'loom-unity']);
+  assert.equal(reqs[0].boundary, 'commercial', 'the boundary travels with the request — the sovereign lanes reuse this (#3683)');
+});
+
+test('buildHealRequests: the SAME lane at DIFFERENT SHAs stays two dispatches, never one merged guess', () => {
+  const reqs = buildHealRequests([
+    { app: 'loom-unity', verdict: 'regression', rollForwardTo: AUG19_ROLLED },
+    { app: 'loom-trino', verdict: 'regression', rollForwardTo: ROLLED },
+  ]);
+  assert.equal(reqs.length, 2, `two SHAs cannot be collapsed into one roll: ${JSON.stringify(reqs)}`);
+});
+
 test('MUTATION CONTROL for #3797: a DRIFTED Actions verdict does not survive it either — no direction is claimed', () => {
   const v = decideEstateRegression({
     appliedTag: AUG19_APPLIED,
@@ -1498,6 +1639,159 @@ test('CLI serving-tag: a missing flag is a USAGE error (2), never a silent empty
 });
 
 // ---------------------------------------------------------------------------
+// R7 — an UNREADABLE answer must never be reported as an UNASKED question.
+//
+// The gate step writes BOTH files on every az invocation:
+//   az containerapp revision list ... > "$REVDIR/$APP.json" 2> "$REVDIR/$APP.err"
+// so "az ran and returned something unparseable" and "az was never invoked"
+// are DIFFERENT states that both reach the same catch. Collapsing them is the
+// 2026-08-05 `2>/dev/null` shape — a permission denial rendered as "the tag
+// does not exist" — and it sends the reader at the wrong half of the system.
+//
+// Every arm below must still fail CLOSED (unknown, exit 1). The control at the
+// bottom is what makes these assertions falsifiable: same command, same fixture
+// directory, a PARSEABLE history, exit 0 and no failure sentence at all.
+// ---------------------------------------------------------------------------
+
+/**
+ * Drive the roll-all CLI against a real `--app-revisions` DIRECTORY.
+ *
+ * `revs` maps a filename to its contents, written verbatim — `''` is a
+ * zero-byte file that EXISTS, and an omitted name is a file that does not.
+ * That distinction is the entire subject of these tests, so it is expressed in
+ * the fixture rather than mocked.
+ */
+function runRollAll({ revs = {}, containers = null, rolls = [], env = {} } = {}) {
+  const dir = mkdtempSync(join(tmpdir(), 'roll-all-'));
+  try {
+    const revDir = join(dir, 'revs');
+    mkdirSync(revDir, { recursive: true });
+    for (const [name, body] of Object.entries(revs)) {
+      writeFileSync(join(revDir, name), typeof body === 'string' ? body : JSON.stringify(body));
+    }
+    const containersFile = join(dir, 'containers.json');
+    writeFileSync(containersFile, JSON.stringify(containers ?? [
+      { name: 'loom-console', image: `acr1.azurecr.io/loom-console:${ROLLED}` },
+    ]));
+    const rollsFile = join(dir, 'rolls.json');
+    writeFileSync(rollsFile, JSON.stringify(rolls));
+
+    const logs = [];
+    const outLines = [];
+    const code = cliMain(
+      [
+        'assert-estate-not-behind-roll-all',
+        '--measured-at', AUG19_MEASURED_AT,
+        '--containers', containersFile,
+        '--app-revisions', revDir,
+        '--rolls', rollsFile,
+        '--boundary', 'commercial',
+      ],
+      {
+        readFile: (p) => readFileSync(p, 'utf8'),
+        writeFile: () => {},
+        writeEnv: () => {},
+        writeOutput: (l) => outLines.push(l),
+        log: (s) => logs.push(s),
+        env: { LOOM_CONSOLE_TAG: ROLLED, ...env },
+      },
+    );
+    return { code, logs: logs.join('\n'), outLines, revDir };
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+test('R7 roll-all: a PRESENT but zero-byte <app>.json is reported as READ-AND-UNPARSEABLE, never as "never read"', () => {
+  // The exact state an `az` that exits 0 with empty stdout leaves behind: both
+  // files created by the step's own redirection, both zero bytes.
+  const r = runRollAll({ revs: { 'loom-console.json': '', 'loom-console.err': '' } });
+
+  assert.equal(r.code, 1, 'an unreadable history must still fail CLOSED');
+  assert.ok(r.outLines.includes('verdict=unknown'), `expected unknown; got ${JSON.stringify(r.outLines)}`);
+  assert.match(
+    r.logs, /loom-console\.json EXISTS \(0 byte\(s\)\) and is not parseable JSON/,
+    'the log must say the history was READ and the answer was unusable, with the byte count that proves it',
+  );
+  assert.doesNotMatch(
+    r.logs, /was never read/,
+    'the step DID ask — az wrote both files. Saying it never asked is a false statement about this run ' +
+      '(deploy-integrity R7) and points the reader at the workflow instead of at az.',
+  );
+  assert.doesNotMatch(
+    r.logs, /neither loom-console\.json nor loom-console\.err exists/,
+    'both files are present; asserting neither exists is the collapse this test exists to prevent',
+  );
+});
+
+test('R7 roll-all: a NON-EMPTY <app>.err with no <app>.json quotes az\'s own failure', () => {
+  const r = runRollAll({
+    revs: { 'loom-console.err': 'az containerapp revision list -n loom-console -g rg exited 3: (ResourceNotFound)' },
+  });
+  assert.equal(r.code, 1);
+  assert.match(r.logs, /did not produce a readable history: az containerapp revision list .*ResourceNotFound/);
+  assert.doesNotMatch(r.logs, /was never read/, 'az answered — with a failure. That is not "never asked".');
+});
+
+test('R7 roll-all: a GENUINELY absent pair still reads as "never read" — the DNS-label refusal path', () => {
+  // Upstream the step `continue`s without invoking az when the name is not a
+  // DNS label, leaving no files at all. That IS "this step never asked", and
+  // the wording must survive the fix for the other states.
+  const r = runRollAll({ revs: {} });
+  assert.equal(r.code, 1);
+  assert.match(r.logs, /neither loom-console\.json nor loom-console\.err exists/);
+  assert.match(r.logs, /was never read/);
+});
+
+test('R7 roll-all: an absent <app>.json beside an EMPTY <app>.err claims neither a history nor a reason', () => {
+  const r = runRollAll({ revs: { 'loom-console.err': '' } });
+  assert.equal(r.code, 1);
+  assert.match(
+    r.logs, /loom-console\.json is ABSENT and loom-console\.err is present but EMPTY/,
+    'this state establishes nothing either way, and the log must not pick a side',
+  );
+  assert.doesNotMatch(r.logs, /was never read/, 'a present .err means the step reached az; only the reason is missing');
+});
+
+test('R7 roll-all CONTROL: a PARSEABLE history over the same fixture directory exits 0 and states no read failure', () => {
+  const r = runRollAll({
+    revs: { 'loom-console.json': [rev('loom-console--0000900', '2026-08-19T07:10:19+00:00', ROLLED, 100)] },
+  });
+  assert.equal(r.code, 0, 'the healthy path must survive the R7 fix — otherwise the four tests above prove nothing');
+  assert.ok(r.outLines.includes('verdict=ok'), `expected ok; got ${JSON.stringify(r.outLines)}`);
+  assert.doesNotMatch(r.logs, /not parseable JSON|was never read|present but EMPTY/);
+});
+
+test('R7 describeRevisionReadFailure: the four states produce four DISTINCT sentences', () => {
+  const base = { revDir: '/t/revs', app: 'loom-console' };
+  const sentences = [
+    describeRevisionReadFailure({ ...base, jsonState: 'unparseable', jsonBytes: 0, jsonDetail: 'Unexpected end of JSON input', errState: 'empty' }),
+    describeRevisionReadFailure({ ...base, jsonState: 'absent', errState: 'text', errText: 'exited 3: ResourceNotFound' }),
+    describeRevisionReadFailure({ ...base, jsonState: 'absent', errState: 'empty' }),
+    describeRevisionReadFailure({ ...base, jsonState: 'absent', errState: 'absent' }),
+  ];
+  assert.equal(new Set(sentences).size, 4, `four states must not share a sentence; got ${JSON.stringify(sentences, null, 2)}`);
+  assert.match(sentences[0], /EXISTS \(0 byte\(s\)\) and is not parseable JSON/);
+  assert.match(sentences[1], /ResourceNotFound/);
+  assert.match(sentences[2], /is ABSENT and loom-console\.err is present but EMPTY/);
+  assert.match(sentences[3], /never read/);
+  // Only the genuinely-absent pair may claim the question was never asked.
+  assert.equal(
+    sentences.filter((s) => /never read/.test(s)).length, 1,
+    '"never read" is a claim about the WORKFLOW, and exactly one state establishes it',
+  );
+});
+
+test('R7 describeRevisionReadFailure: an UNREADABLE file is not an ABSENT one', () => {
+  const s = describeRevisionReadFailure({
+    revDir: '/t/revs', app: 'loom-console', jsonState: 'unreadable',
+    jsonDetail: 'EACCES: permission denied', errState: 'unreadable', errDetail: 'EACCES: permission denied',
+  });
+  assert.match(s, /EXISTS but could not be read \(EACCES: permission denied\)/);
+  assert.doesNotMatch(s, /never read/, 'a permission denial is not an absent question — the 2026-08-05 shape exactly');
+});
+
+// ---------------------------------------------------------------------------
 // BEHAVIOURAL — the REAL step bodies, extracted from the workflow and run with
 // a stubbed `az` / `gh` and the REAL jq.
 //
@@ -1596,6 +1890,22 @@ const AZ_STUB = [
   'if [ "$1" = "containerapp" ] && [ "$2" = "revision" ] && [ "$3" = "list" ]; then',
   '  N=$(cat "$AZ_REV_COUNT"); N=$((N + 1)); printf "%s" "$N" > "$AZ_REV_COUNT"',
   '  if [ -n "${AZ_REV_ERR:-}" ]; then printf "%s\\n" "$AZ_REV_ERR" >&2; exit 1; fi',
+  // ── PER-APP MODE (#3676). The gate now reads ONE history per watched app,
+  // so a stub that answers identically for every `-n` cannot tell a healthy
+  // console apart from a reverted loom-mirroring — i.e. it could not observe
+  // the defect this change exists for. `-n` is parsed out of the real argv,
+  // and a `<app>.fail` fixture makes THAT app's read fail while the others
+  // succeed, which is the state the per-app UNKNOWN path is built around.
+  '  APPN=""; PREV=""',
+  '  for A in "$@"; do if [ "$PREV" = "-n" ]; then APPN="$A"; break; fi; PREV="$A"; done',
+  '  if [ -n "${AZ_REV_DIR:-}" ] && [ -n "$APPN" ]; then',
+  '    if [ -f "$AZ_REV_DIR/$APPN.fail" ]; then cat "$AZ_REV_DIR/$APPN.fail" >&2; exit 1; fi',
+  '    if [ -n "${AZ_REV_SWITCH_AT:-}" ] && [ "$N" -ge "${AZ_REV_SWITCH_AT}" ] && [ -f "$AZ_REV_DIR/$APPN.2.json" ]; then',
+  '      cat "$AZ_REV_DIR/$APPN.2.json"; exit 0',
+  '    fi',
+  '    if [ -f "$AZ_REV_DIR/$APPN.json" ]; then cat "$AZ_REV_DIR/$APPN.json"; exit 0; fi',
+  '    echo "az stub: no per-app revision fixture for $APPN in $AZ_REV_DIR" >&2; exit 1',
+  '  fi',
   '  FILE="$AZ_REV_FILE"',
   '  if [ -n "${AZ_REV_FILE2:-}" ] && [ "$N" -ge "${AZ_REV_SWITCH_AT:-2}" ]; then FILE="$AZ_REV_FILE2"; fi',
   '  cat "$FILE"; exit 0',
@@ -1627,7 +1937,7 @@ function newStepCtx() {
   return { dir, binDir, fixDir, runnerTemp, dispose: () => rmSync(dir, { recursive: true, force: true }) };
 }
 
-function runStep(namePrefix, { env = {}, fixtures = {}, azList = null, azRevisions = null, azRevisions2 = null, ctx = null } = {}) {
+function runStep(namePrefix, { env = {}, fixtures = {}, azList = null, azRevisions = null, azRevisions2 = null, azRevisionsByApp = null, ctx = null } = {}) {
   const yaml = readNorm(DEPLOY_WORKFLOW);
   const body = runBodyOf(yaml, namePrefix);
   const declared = envKeysOf(yaml, namePrefix);
@@ -1657,6 +1967,28 @@ function runStep(namePrefix, { env = {}, fixtures = {}, azList = null, azRevisio
     if (azRevisions2) writeFileSync(azRevFile2, JSON.stringify(azRevisions2));
     const azRevCount = join(dir, 'az-revisions.count');
     writeFileSync(azRevCount, '0');
+    // PER-APP fixtures (#3676). `{ 'loom-console': [...], 'loom-mirroring': {
+    // fail: 'text' }, 'loom-x': { revisions: [...], then: [...] } }` — an array
+    // is the history, `.fail` makes THAT app's az call fail while the rest
+    // succeed, and `.then` is what the SECOND read onwards returns (the heal
+    // poll's recovery, which is a state that must CHANGE for a two-point sample
+    // to mean anything).
+    const azRevDir = join(dir, 'az-revisions-by-app');
+    if (azRevisionsByApp) {
+      mkdirSync(azRevDir, { recursive: true });
+      for (const [app, spec] of Object.entries(azRevisionsByApp)) {
+        if (Array.isArray(spec)) {
+          writeFileSync(join(azRevDir, `${app}.json`), JSON.stringify(spec));
+          continue;
+        }
+        if (spec && typeof spec.fail === 'string') {
+          writeFileSync(join(azRevDir, `${app}.fail`), spec.fail);
+          continue;
+        }
+        if (spec && spec.revisions) writeFileSync(join(azRevDir, `${app}.json`), JSON.stringify(spec.revisions));
+        if (spec && spec.then) writeFileSync(join(azRevDir, `${app}.2.json`), JSON.stringify(spec.then));
+      }
+    }
     const dispatchLog = join(dir, 'gh-dispatch.log');
     writeFileSync(dispatchLog, '');
 
@@ -1685,6 +2017,7 @@ function runStep(namePrefix, { env = {}, fixtures = {}, azList = null, azRevisio
         AZ_LIST_FILE: azListFile,
         AZ_REV_FILE: azRevFile,
         ...(azRevisions2 ? { AZ_REV_FILE2: azRevFile2 } : {}),
+        ...(azRevisionsByApp ? { AZ_REV_DIR: azRevDir } : {}),
         AZ_REV_COUNT: azRevCount,
       },
     });
@@ -1787,25 +2120,57 @@ const rollRunsPayload = (runs) => ({ workflow_runs: runs });
  */
 const cleanRevisions = (tag) => [rev('loom-console--0000756', '2026-08-17T07:19:48Z', tag, 100)];
 
+/**
+ * A revision for an app OTHER than the console (#3676).
+ *
+ * `rev()` bakes `loom-console` into the image reference, which was harmless
+ * while the gate watched exactly one app and is actively misleading now: a
+ * fixture whose image says `loom-console` cannot be matched onto
+ * `loom-mirroring` by `selectWatchedApps`, so a test built on it would exercise
+ * the console path under another app's name.
+ */
+const revOf = (app, name, createdTime, tag, trafficWeight) => ({
+  name, createdTime, trafficWeight,
+  image: `acrloomk6mvh5sm6z7do.azurecr.io/${app}:${tag}`,
+});
+
+/**
+ * The env the ESTATE gate needs in its post-#3676 shape.
+ *
+ * The applied tag is no longer one `APPLIED_TAG` scalar. The step reads the
+ * pins out of the ENVIRONMENT (`pinsFromEnv`), because that $GITHUB_ENV record
+ * is what `commercial.bicepparam` resolves at bicep-compile time and therefore
+ * IS what the apply wrote — a second scalar would be a copy that can drift.
+ * Passing `consoleTag` here writes `LOOM_CONSOLE_TAG`, which is the same
+ * variable the re-pin step exports in CI.
+ */
+const estateEnv = ({ consoleTag = null, measuredAt = '', pins = {}, ...over } = {}) => ({
+  GH_TOKEN: 'x',
+  DEPLOY_SUB: '',
+  DEPLOY_APPS_ENABLED: 'true',
+  MEASURED_AT: measuredAt,
+  AZURE_LOCATION: 'centralus',
+  GITHUB_REPOSITORY: 'acme/csa-inabox',
+  ...(consoleTag ? { LOOM_CONSOLE_TAG: consoleTag } : {}),
+  ...pins,
+  ...over,
+});
+
+/** The two Actions-API populations the gate reads, both empty. */
+const noRolls = () => ({
+  'roll-runs.json': rollRunsPayload([]),
+  'full-runs.json': rollRunsPayload([]),
+});
+
 test('SHELL: THE 2026-08-19 MISS end to end — the revision history reddens what the Actions API missed', { skip: shellSkip }, () => {
   // Every input is the live shape: the Actions API returns an EMPTY listing
   // (which is what it did at 07:14:52Z) and the revision history carries the
   // round trip. The old step body had no second witness and went green here.
   const r = runStep(ESTATE_STEP, {
-    azRevisions: AUG19_REVISIONS_WEIGHTED,
-    env: {
-      GH_TOKEN: 'x',
-      DEPLOY_SUB: '',
-      APPLIED_TAG: AUG19_APPLIED,
-      MEASURED_AT: AUG19_MEASURED_AT,
-      AZURE_LOCATION: 'centralus',
-      GITHUB_REPOSITORY: 'acme/csa-inabox',
-      AZ_SHOW_IMAGE: `acrloomk6mvh5sm6z7do.azurecr.io/loom-console:${AUG19_APPLIED}`,
-    },
-    fixtures: {
-      'roll-runs.json': rollRunsPayload([]),
-      'full-runs.json': rollRunsPayload([]),
-    },
+    azList: estateAt(AUG19_APPLIED),
+    azRevisionsByApp: { 'loom-console': AUG19_REVISIONS_WEIGHTED },
+    env: estateEnv({ consoleTag: AUG19_APPLIED, measuredAt: AUG19_MEASURED_AT }),
+    fixtures: noRolls(),
   });
   assert.equal(
     r.status, 1,
@@ -1813,69 +2178,63 @@ test('SHELL: THE 2026-08-19 MISS end to end — the revision history reddens wha
   );
   assert.match(r.out, /ESTATE REGRESSION \(#3676\)/);
   assert.match(r.out, /ITS OWN REVISION HISTORY RECORDS IT/);
-  assert.match(r.out, new RegExp(`image_tag=${AUG19_ROLLED}`), 'and must name the SHA read off the estate');
+  assert.match(
+    r.out,
+    new RegExp(`roll-forward requested — loom-roll-and-validate\\.yml for loom-console at ${AUG19_ROLLED}`),
+    'and must name the SHA read off the estate, AND the lane that can actually roll that app forward',
+  );
   assert.match(r.out, /loom-console--0000782/);
 });
 
-test('SHELL: MUTATION CONTROL — feed the same step an EMPTY revision list and it goes green again', { skip: shellSkip }, () => {
-  // The needle is the revision history, not the fixtures around it. With the
-  // estate's own witness removed, the identical Actions-API payload, applied
-  // tag and running image produce exit 0 — which is precisely what CI recorded.
+test('SHELL: MUTATION CONTROL — withhold the revision history and the gate has NOTHING left, so it fails CLOSED', { skip: shellSkip }, () => {
+  // This control changed meaning with #3676, and the change is the point.
+  //
+  // It used to assert exit 0: the single-app gate had a SECOND witness (`az
+  // containerapp show`), so removing the revision history left it comparing the
+  // Actions API alone — the configuration that reported OK across the
+  // 2026-08-19 revert. The estate-wide form deleted that fallback (the serving
+  // image is derived from the SAME revision payload, per #3798), so withholding
+  // the history now leaves NOTHING established and the gate refuses.
+  //
+  // The "it would have gone green" control is not lost — it lives at the policy
+  // level, where the evidence can be withheld from `decideEstateRegression`
+  // without also removing the witness: see 'MUTATION CONTROL: with the revision
+  // evidence withheld, the very same state passes — which is what shipped'.
   const r = runStep(ESTATE_STEP, {
-    azRevisions: [],
-    env: {
-      GH_TOKEN: 'x',
-      DEPLOY_SUB: '',
-      APPLIED_TAG: AUG19_APPLIED,
-      MEASURED_AT: AUG19_MEASURED_AT,
-      AZURE_LOCATION: 'centralus',
-      GITHUB_REPOSITORY: 'acme/csa-inabox',
-      AZ_SHOW_IMAGE: `acrloomk6mvh5sm6z7do.azurecr.io/loom-console:${AUG19_APPLIED}`,
-    },
-    fixtures: {
-      'roll-runs.json': rollRunsPayload([]),
-      'full-runs.json': rollRunsPayload([]),
-    },
+    azList: estateAt(AUG19_APPLIED),
+    azRevisionsByApp: { 'loom-console': [] },
+    env: estateEnv({ consoleTag: AUG19_APPLIED, measuredAt: AUG19_MEASURED_AT }),
+    fixtures: noRolls(),
   });
-  assert.equal(r.status, 0, `CONTROL: without the revision evidence the state is indistinguishable:\n${r.out}`);
-  assert.match(r.out, /estate-vs-roll: OK/);
+  assert.equal(
+    r.status, 1,
+    `with no revision history there is no witness at all, and "I could not look" must not read as "nothing ` +
+      `happened":\n${r.out}`,
+  );
+  assert.match(r.out, /ESTATE UNKNOWN \(#3676\)/);
+  assert.match(r.out, /trafficWeight/,
+    'and it must say WHICH fact was missing, not merely that something was');
 });
 
 test('SHELL: an unreadable revision history fails CLOSED even when everything else is clean', { skip: shellSkip }, () => {
   const r = runStep(ESTATE_STEP, {
-    azRevisions: [],
-    env: {
-      GH_TOKEN: 'x',
-      DEPLOY_SUB: '',
-      APPLIED_TAG: ROLLED,
-      MEASURED_AT: '2026-08-17T07:03:40Z',
-      AZURE_LOCATION: 'centralus',
-      GITHUB_REPOSITORY: 'acme/csa-inabox',
-      AZ_SHOW_IMAGE: `acrloom.azurecr.io/loom-console:${ROLLED}`,
-      AZ_REV_ERR: 'ERROR: (AuthorizationFailed) The client does not have authorization to perform action',
+    azList: estateAt(ROLLED),
+    azRevisionsByApp: {
+      'loom-console': { fail: 'ERROR: (AuthorizationFailed) The client does not have authorization to perform action' },
     },
-    fixtures: {
-      'roll-runs.json': rollRunsPayload([]),
-      'full-runs.json': rollRunsPayload([]),
-    },
+    env: estateEnv({ consoleTag: ROLLED, measuredAt: '2026-08-17T07:03:40Z' }),
+    fixtures: noRolls(),
   });
   assert.equal(r.status, 1, `an unreadable estate history is UNKNOWN, not a pass:\n${r.out}`);
-  assert.match(r.out, /UNKNOWN, which fails closed/);
+  assert.match(r.out, /UNKNOWN/);
   assert.match(r.out, /AuthorizationFailed/, 'the refusal must quote the control plane, not invent a cause (R7)');
 });
 
 test('SHELL: THE INCIDENT end to end — stale image + a newer shipped roll exits 1', { skip: shellSkip }, () => {
   const r = runStep(ESTATE_STEP, {
-    azRevisions: cleanRevisions(STALE),
-    env: {
-      GH_TOKEN: 'x',
-      DEPLOY_SUB: '',
-      APPLIED_TAG: STALE,
-      MEASURED_AT: '2026-08-17T07:03:40Z',
-      AZURE_LOCATION: 'centralus',
-      GITHUB_REPOSITORY: 'acme/csa-inabox',
-      AZ_SHOW_IMAGE: `acrloom.azurecr.io/loom-console:${STALE}`,
-    },
+    azList: estateAt(STALE),
+    azRevisionsByApp: { 'loom-console': cleanRevisions(STALE) },
+    env: estateEnv({ consoleTag: STALE, measuredAt: '2026-08-17T07:03:40Z' }),
     fixtures: {
       'roll-runs.json': rollRunsPayload([
         { id: 32004219673, display_title: `roll ${ROLLED} (build-triggered)`, head_sha: 'deadbeef', updated_at: '2026-08-17T07:15:30Z' },
@@ -1888,23 +2247,15 @@ test('SHELL: THE INCIDENT end to end — stale image + a newer shipped roll exit
   assert.equal(r.status, 1, `expected a RED gate on the live incident state; got ${r.status}:\n${r.out}`);
   assert.match(r.out, /ESTATE REGRESSION \(#3676\)/);
   assert.match(r.out, new RegExp(ROLLED));
-  assert.match(r.out, /REMEDIATION: dispatch/);
 });
 
 test('SHELL: a roll that concluded success with its roll job SKIPPED does not clear the gate', { skip: shellSkip }, () => {
   // Run 32006479915's real shape. If the step read the RUN conclusion instead
   // of the JOB conclusion this would report the estate as correct.
   const r = runStep(ESTATE_STEP, {
-    azRevisions: cleanRevisions(STALE),
-    env: {
-      GH_TOKEN: 'x',
-      DEPLOY_SUB: '',
-      APPLIED_TAG: STALE,
-      MEASURED_AT: '2026-08-17T07:03:40Z',
-      AZURE_LOCATION: 'centralus',
-      GITHUB_REPOSITORY: 'acme/csa-inabox',
-      AZ_SHOW_IMAGE: `acrloom.azurecr.io/loom-console:${STALE}`,
-    },
+    azList: estateAt(STALE),
+    azRevisionsByApp: { 'loom-console': cleanRevisions(STALE) },
+    env: estateEnv({ consoleTag: STALE, measuredAt: '2026-08-17T07:03:40Z' }),
     fixtures: {
       'roll-runs.json': rollRunsPayload([
         { id: 32006479915, display_title: 'roll 66bb26e705a17796d639a9752990c6e70ab96c35 (build-triggered)', head_sha: 'deadbeef', updated_at: '2026-08-17T07:35:30Z' },
@@ -1922,16 +2273,9 @@ test('SHELL: a roll that concluded success with its roll job SKIPPED does not cl
 
 test('SHELL: the healthy path exits 0', { skip: shellSkip }, () => {
   const r = runStep(ESTATE_STEP, {
-    azRevisions: cleanRevisions(ROLLED),
-    env: {
-      GH_TOKEN: 'x',
-      DEPLOY_SUB: '',
-      APPLIED_TAG: ROLLED,
-      MEASURED_AT: '2026-08-17T07:03:40Z',
-      AZURE_LOCATION: 'centralus',
-      GITHUB_REPOSITORY: 'acme/csa-inabox',
-      AZ_SHOW_IMAGE: `acrloom.azurecr.io/loom-console:${ROLLED}`,
-    },
+    azList: estateAt(ROLLED),
+    azRevisionsByApp: { 'loom-console': cleanRevisions(ROLLED) },
+    env: estateEnv({ consoleTag: ROLLED, measuredAt: '2026-08-17T07:03:40Z' }),
     fixtures: {
       'roll-runs.json': rollRunsPayload([
         { id: 32004219673, display_title: `roll ${ROLLED} (build-triggered)`, head_sha: 'deadbeef', updated_at: '2026-08-17T07:15:30Z' },
@@ -1941,66 +2285,166 @@ test('SHELL: the healthy path exits 0', { skip: shellSkip }, () => {
     },
   });
   assert.equal(r.status, 0, r.out);
-  assert.match(r.out, /estate-vs-roll: OK/);
+  assert.match(r.out, /estate-vs-roll \(all apps\): OK/);
 });
 
 test('SHELL: an unreadable Actions API fails CLOSED rather than passing quietly', { skip: shellSkip }, () => {
   const r = runStep(ESTATE_STEP, {
-    azRevisions: cleanRevisions(ROLLED),
-    env: {
-      GH_TOKEN: 'x',
-      DEPLOY_SUB: '',
-      APPLIED_TAG: ROLLED,
-      MEASURED_AT: '2026-08-17T07:03:40Z',
-      AZURE_LOCATION: 'centralus',
-      GITHUB_REPOSITORY: 'acme/csa-inabox',
-      AZ_SHOW_IMAGE: `acrloom.azurecr.io/loom-console:${ROLLED}`,
-      GH_FAIL: '1',
-    },
-    fixtures: { 'roll-runs.json': rollRunsPayload([]), 'full-runs.json': rollRunsPayload([]) },
+    azList: estateAt(ROLLED),
+    azRevisionsByApp: { 'loom-console': cleanRevisions(ROLLED) },
+    env: estateEnv({ consoleTag: ROLLED, measuredAt: '2026-08-17T07:03:40Z', GH_FAIL: '1' }),
+    fixtures: noRolls(),
   });
   assert.equal(r.status, 1, r.out);
-  assert.match(r.out, /UNKNOWN, which fails closed/);
+  assert.match(r.out, /UNKNOWN/);
   assert.match(r.out, /403/, 'the failure must carry what gh actually said');
 });
 
-test('SHELL: an unreadable container app fails CLOSED', { skip: shellSkip }, () => {
+test('SHELL: an unreadable container app LIST fails CLOSED', { skip: shellSkip }, () => {
+  // The estate-wide gate reads `az containerapp list` to learn WHICH apps this
+  // apply wrote. An unreadable list is not an empty estate: it leaves every app
+  // unestablished, and must fail the whole gate rather than compare nothing.
   const r = runStep(ESTATE_STEP, {
-    azRevisions: cleanRevisions(ROLLED),
-    env: {
-      GH_TOKEN: 'x',
-      DEPLOY_SUB: '',
-      APPLIED_TAG: ROLLED,
-      MEASURED_AT: '2026-08-17T07:03:40Z',
-      AZURE_LOCATION: 'centralus',
-      GITHUB_REPOSITORY: 'acme/csa-inabox',
-      AZ_SHOW_IMAGE: '',
-      AZ_SHOW_ERR: 'ERROR: (ResourceNotFound) loom-console was not found',
-    },
-    fixtures: {
-      'roll-runs.json': rollRunsPayload([]),
-      'full-runs.json': rollRunsPayload([]),
-    },
+    azList: estateAt(ROLLED),
+    env: estateEnv({
+      consoleTag: ROLLED,
+      measuredAt: '2026-08-17T07:03:40Z',
+      AZ_LIST_ERR: 'ERROR: (ResourceGroupNotFound) Resource group not found',
+    }),
+    fixtures: noRolls(),
   });
   assert.equal(r.status, 1, r.out);
-  assert.match(r.out, /ResourceNotFound/);
+  assert.match(r.out, /ResourceGroupNotFound/);
+  assert.match(r.out, /UNKNOWN/);
 });
 
-test('SHELL: a whatif run that applied no tag passes without touching the Actions API', { skip: shellSkip }, () => {
+test('SHELL: a whatif run that rendered no Container App passes without touching the Actions API', { skip: shellSkip }, () => {
   const r = runStep(ESTATE_STEP, {
-    env: {
-      GH_TOKEN: 'x',
-      DEPLOY_SUB: '',
-      APPLIED_TAG: '',
-      MEASURED_AT: '',
-      AZURE_LOCATION: 'centralus',
-      GITHUB_REPOSITORY: 'acme/csa-inabox',
-      // No fixtures at all: reaching gh or az here would exit 99.
-      AZ_SHOW_IMAGE: '',
-    },
+    // No fixtures and no az fixtures at all: reaching gh or az here exits 99.
+    env: estateEnv({ DEPLOY_APPS_ENABLED: 'false', measuredAt: '' }),
   });
   assert.equal(r.status, 0, r.out);
-  assert.match(r.out, /applied no loom-console image tag/);
+  assert.match(r.out, /rendered no Container App/);
+});
+
+test('SHELL: deployAppsEnabled=true with NO pin exported still short-circuits, and says which fact it used', { skip: shellSkip }, () => {
+  // The other direction of the same guard: a from-scratch estate can render
+  // apps while the re-pin exported nothing. Reaching az here would exit 99.
+  const r = runStep(ESTATE_STEP, {
+    env: estateEnv({ measuredAt: '' }),
+  });
+  assert.equal(r.status, 0, r.out);
+  assert.match(r.out, /exported no appImageTags pin/);
+});
+
+// ---------------------------------------------------------------------------
+// THE #3676 HEADLINE: the gate watched ONE app out of TWENTY.
+//
+// Everything above this line exercises loom-console, which is the app the gate
+// has always watched. The tests below are the ones that discriminate: a
+// NON-console app is overwritten mid-apply while the console is perfectly
+// healthy. At head that is exit 0 with no signal — both lanes green, no heal,
+// which is this issue's original shape verbatim. The mutation control below
+// (`only the console pinned`) reproduces the head configuration through the
+// SAME step body, so the RED and the GREEN differ by the population watched
+// and nothing else.
+// ---------------------------------------------------------------------------
+
+/** A non-console estate: console healthy, loom-mirroring reverted under it. */
+const MIRRORING_ROLLED = '150d2937336415545a771fe12f0d7b2fba2093d8';
+const MIRRORING_APPLIED = '83e7cab61e8c978de3352b21b05551e4bb85d7a6';
+
+const mixedEstate = () => [
+  { name: 'loom-console', image: `acr1.azurecr.io/loom-console:${ROLLED}` },
+  { name: 'loom-mirroring', image: `acr1.azurecr.io/loom-mirroring:${MIRRORING_APPLIED}` },
+];
+
+/** loom-mirroring's own history: roll lands, the apply puts the old tag back. */
+const MIRRORING_REVERTED = [
+  revOf('loom-mirroring', 'loom-mirroring--0000041', '2026-08-19T05:46:46+00:00', MIRRORING_APPLIED, 0),
+  revOf('loom-mirroring', 'loom-mirroring--0000042', '2026-08-19T07:04:56+00:00', MIRRORING_ROLLED, 0),
+  revOf('loom-mirroring', 'loom-mirroring--0000043', '2026-08-19T07:10:19+00:00', MIRRORING_APPLIED, 100),
+];
+
+const healthyConsoleRolls = () => ({
+  'roll-runs.json': rollRunsPayload([
+    { id: 32004219673, display_title: `roll ${ROLLED} (build-triggered)`, head_sha: 'deadbeef', updated_at: '2026-08-19T07:15:30Z' },
+  ]),
+  'full-runs.json': rollRunsPayload([]),
+  'jobs-32004219673.json': { jobs: [{ name: 'Roll image + validate live URL', conclusion: 'success' }] },
+});
+
+test('SHELL #3676: a NON-console app overwritten mid-apply is RED — the silent half, estate-wide', { skip: shellSkip }, () => {
+  const r = runStep(ESTATE_STEP, {
+    azList: mixedEstate(),
+    azRevisionsByApp: {
+      'loom-console': [rev('loom-console--0000756', '2026-08-19T07:19:48+00:00', ROLLED, 100)],
+      'loom-mirroring': MIRRORING_REVERTED,
+    },
+    env: estateEnv({
+      consoleTag: ROLLED,
+      measuredAt: AUG19_MEASURED_AT,
+      pins: { LOOM_MIRRORING_TAG: MIRRORING_APPLIED },
+    }),
+    fixtures: healthyConsoleRolls(),
+  });
+  assert.equal(
+    r.status, 1,
+    `loom-mirroring's own revision history records roll -> revert inside the window; the gate must go RED on it ` +
+      `even though loom-console is healthy. Got ${r.status}:\n${r.out}`,
+  );
+  assert.match(r.out, /loom-mirroring/, 'the verdict must NAME the app that regressed');
+  assert.match(r.out, new RegExp(MIRRORING_ROLLED), 'and the SHA it was overwritten from');
+  assert.match(
+    r.out, /estate-vs-roll \[loom-console\] OK/,
+    'the healthy app must still be reported OK by name — a single estate-wide red that does not say WHICH app ' +
+      'sends the reader to the wrong container',
+  );
+});
+
+test('SHELL #3676 MUTATION CONTROL: the SAME estate with only the console pinned goes GREEN — that is head', { skip: shellSkip }, () => {
+  // The needle is the WATCHED POPULATION, nothing else. Identical az list,
+  // identical revision histories, identical Actions API. Dropping
+  // LOOM_MIRRORING_TAG makes loom-mirroring out-of-scope, which is exactly what
+  // the head gate's hard-coded `-n loom-console` did to nineteen apps — and the
+  // reverted app sails through with the run green.
+  const r = runStep(ESTATE_STEP, {
+    azList: mixedEstate(),
+    azRevisionsByApp: {
+      'loom-console': [rev('loom-console--0000756', '2026-08-19T07:19:48+00:00', ROLLED, 100)],
+      'loom-mirroring': MIRRORING_REVERTED,
+    },
+    env: estateEnv({ consoleTag: ROLLED, measuredAt: AUG19_MEASURED_AT }),
+    fixtures: healthyConsoleRolls(),
+  });
+  assert.equal(
+    r.status, 0,
+    `CONTROL: with loom-mirroring outside the watched population the identical revert is invisible — if this ` +
+      `ever fails, the test above is no longer discriminating:\n${r.out}`,
+  );
+  assert.match(r.out, /loom-mirroring is out of scope/,
+    'and it must SAY it is not looking, rather than dropping the app silently');
+});
+
+test('SHELL #3676: an app whose history could not be read fails the WHOLE gate, even with a healthy console', { skip: shellSkip }, () => {
+  // Per-app UNKNOWN. "I could not look at loom-mirroring" must not be spent as
+  // "loom-mirroring is fine" just because loom-console read cleanly.
+  const r = runStep(ESTATE_STEP, {
+    azList: mixedEstate(),
+    azRevisionsByApp: {
+      'loom-console': [rev('loom-console--0000756', '2026-08-19T07:19:48+00:00', ROLLED, 100)],
+      'loom-mirroring': { fail: 'ERROR: (AuthorizationFailed) no authorization to read loom-mirroring' },
+    },
+    env: estateEnv({
+      consoleTag: ROLLED,
+      measuredAt: AUG19_MEASURED_AT,
+      pins: { LOOM_MIRRORING_TAG: MIRRORING_APPLIED },
+    }),
+    fixtures: healthyConsoleRolls(),
+  });
+  assert.equal(r.status, 1, `an unread app is UNKNOWN, which fails closed:\n${r.out}`);
+  assert.match(r.out, /AuthorizationFailed/, 'R7: it must quote az rather than invent a cause');
+  assert.match(r.out, /loom-mirroring/);
 });
 
 // ---------------------------------------------------------------------------
@@ -2012,6 +2456,18 @@ test('SHELL: a whatif run that applied no tag passes without touching the Action
 // ---------------------------------------------------------------------------
 
 const HEAL_STEP = 'Roll the estate FORWARD to the image this apply overwrote';
+
+/**
+ * A roll-forward request line, in the NDJSON shape the gate now writes (#3676).
+ *
+ * It used to be a bare SHA, which could only ever describe ONE app and one
+ * lane. Tests write it through this helper rather than by hand so a change to
+ * the contract breaks in one place instead of seven.
+ */
+const healRequest = ({ workflow = 'loom-roll-and-validate.yml', kind = 'console', sha, apps = ['loom-console'], boundary = 'commercial', why = 'test fixture' }) =>
+  `${JSON.stringify({ workflow, kind, sha, boundary, apps, why })}\n`;
+
+const HEAL_REQ_FILE = 'estate-heal-request.ndjson';
 
 /** The env the heal step needs; the harness asserts the declared keys are here. */
 const healEnv = (over = {}) => ({
@@ -2032,17 +2488,10 @@ test('SHELL #3799 END TO END: the gate writes the request, the heal step dispatc
   try {
     const gate = runStep(ESTATE_STEP, {
       ctx,
-      azRevisions: AUG19_REVISIONS_WEIGHTED,
-      env: {
-        GH_TOKEN: 'x',
-        DEPLOY_SUB: '',
-        APPLIED_TAG: AUG19_APPLIED,
-        MEASURED_AT: AUG19_MEASURED_AT,
-        AZURE_LOCATION: 'centralus',
-        GITHUB_REPOSITORY: 'acme/csa-inabox',
-        AZ_SHOW_IMAGE: `acrloomk6mvh5sm6z7do.azurecr.io/loom-console:${AUG19_APPLIED}`,
-      },
-      fixtures: { 'roll-runs.json': rollRunsPayload([]), 'full-runs.json': rollRunsPayload([]) },
+      azList: estateAt(AUG19_APPLIED),
+      azRevisionsByApp: { 'loom-console': AUG19_REVISIONS_WEIGHTED },
+      env: estateEnv({ consoleTag: AUG19_APPLIED, measuredAt: AUG19_MEASURED_AT }),
+      fixtures: noRolls(),
     });
     assert.equal(gate.status, 1, `the gate must detect the revert first:\n${gate.out}`);
     assert.deepEqual(gate.dispatches, [], 'the GATE never dispatches — it detects; the heal step acts');
@@ -2050,12 +2499,16 @@ test('SHELL #3799 END TO END: the gate writes the request, the heal step dispatc
     const heal = runStep(HEAL_STEP, {
       ctx,
       // Poll 1 still sees the reverted estate; poll 2 sees the roll landed.
-      azRevisions: AUG19_REVISIONS_WEIGHTED,
-      azRevisions2: [
-        ...AUG19_REVISIONS_WEIGHTED.map((r) => ({ ...r, trafficWeight: 0 })),
-        rev('loom-console--0000784', '2026-08-19T07:40:00+00:00', AUG19_ROLLED, 100),
-      ],
-      env: healEnv(),
+      azRevisionsByApp: {
+        'loom-console': {
+          revisions: AUG19_REVISIONS_WEIGHTED,
+          then: [
+            ...AUG19_REVISIONS_WEIGHTED.map((r) => ({ ...r, trafficWeight: 0 })),
+            rev('loom-console--0000784', '2026-08-19T07:40:00+00:00', AUG19_ROLLED, 100),
+          ],
+        },
+      },
+      env: healEnv({ AZ_REV_SWITCH_AT: '2' }),
     });
     assert.equal(heal.status, 0, `recovery was observed, so the heal step itself succeeded:\n${heal.out}`);
     assert.equal(heal.dispatches.length, 1, `exactly ONE dispatch, no loop; got ${JSON.stringify(heal.dispatches)}`);
@@ -2090,10 +2543,10 @@ test('SHELL #3799 MUTATION CONTROL: with NO request file the heal step dispatche
 test('SHELL #3799: recovery that is never observed is reported NOT VERIFIED — and dispatched exactly once', { skip: shellSkip }, () => {
   const ctx = newStepCtx();
   try {
-    writeFileSync(join(ctx.runnerTemp, 'estate-heal-request.txt'), `${AUG19_ROLLED}\n`);
+    writeFileSync(join(ctx.runnerTemp, HEAL_REQ_FILE), healRequest({ sha: AUG19_ROLLED }));
     const r = runStep(HEAL_STEP, {
       ctx,
-      azRevisions: AUG19_REVISIONS_WEIGHTED, // never heals
+      azRevisionsByApp: { 'loom-console': AUG19_REVISIONS_WEIGHTED }, // never heals
       env: healEnv(),
     });
     assert.equal(r.status, 1, `an unobserved recovery must not read as success:\n${r.out}`);
@@ -2112,14 +2565,14 @@ test('SHELL #3799: recovery that is never observed is reported NOT VERIFIED — 
 test('SHELL #3799: a dispatch that FAILS quotes gh and never claims the estate was healed', { skip: shellSkip }, () => {
   const ctx = newStepCtx();
   try {
-    writeFileSync(join(ctx.runnerTemp, 'estate-heal-request.txt'), `${AUG19_ROLLED}\n`);
+    writeFileSync(join(ctx.runnerTemp, HEAL_REQ_FILE), healRequest({ sha: AUG19_ROLLED }));
     const r = runStep(HEAL_STEP, {
       ctx,
-      azRevisions: AUG19_REVISIONS_WEIGHTED,
+      azRevisionsByApp: { 'loom-console': AUG19_REVISIONS_WEIGHTED },
       env: healEnv({ GH_DISPATCH_FAIL: '1' }),
     });
     assert.equal(r.status, 1, r.out);
-    assert.match(r.out, /the dispatch FAILED/);
+    assert.match(r.out, /the dispatch of loom-roll-and-validate\.yml for loom-console FAILED/);
     assert.match(r.out, /Resource not accessible by integration/, 'it must quote gh, not invent a cause (R7)');
     assert.match(r.out, /STILL running the overwritten image/);
     assert.doesNotMatch(r.out, /AUTO-HEAL VERIFIED/);
@@ -2135,7 +2588,7 @@ test('SHELL #3799: it REFUSES to dispatch when the roll lane targets a different
   // touched — a heal that damages a different estate is worse than no heal.
   const ctx = newStepCtx();
   try {
-    writeFileSync(join(ctx.runnerTemp, 'estate-heal-request.txt'), `${AUG19_ROLLED}\n`);
+    writeFileSync(join(ctx.runnerTemp, HEAL_REQ_FILE), healRequest({ sha: AUG19_ROLLED }));
     const r = runStep(HEAL_STEP, { ctx, env: healEnv({ AZURE_LOCATION: 'eastus2' }) });
     assert.equal(r.status, 1, r.out);
     assert.deepEqual(r.dispatches, [], 'nothing may be dispatched at an estate this run did not apply to');
@@ -2149,7 +2602,7 @@ test('SHELL #3799: it REFUSES to dispatch when the roll lane targets a different
 test('SHELL #3799: a request that is not a 40-hex SHA is refused before any dispatch', { skip: shellSkip }, () => {
   const ctx = newStepCtx();
   try {
-    writeFileSync(join(ctx.runnerTemp, 'estate-heal-request.txt'), 'latest\n');
+    writeFileSync(join(ctx.runnerTemp, HEAL_REQ_FILE), healRequest({ sha: 'latest' }));
     const r = runStep(HEAL_STEP, { ctx, env: healEnv() });
     assert.equal(r.status, 1, r.out);
     assert.deepEqual(r.dispatches, []);
@@ -2159,10 +2612,75 @@ test('SHELL #3799: a request that is not a 40-hex SHA is refused before any disp
   }
 });
 
+test('SHELL #3676: a regressed app with NO roll lane is reported loudly and NEVER mis-dispatched', { skip: shellSkip }, () => {
+  // The defect this replaces: the heal step dispatched loom-roll-and-validate
+  // unconditionally, and that lane hard-codes APP_NAME: loom-console. Aiming it
+  // at loom-mirroring would have rolled the CONSOLE and then reported a healed
+  // estate — a false receipt is strictly worse than an admitted gap.
+  const ctx = newStepCtx();
+  try {
+    writeFileSync(
+      join(ctx.runnerTemp, HEAL_REQ_FILE),
+      healRequest({
+        workflow: null, kind: null, sha: MIRRORING_ROLLED, apps: ['loom-mirroring'],
+        why: 'NO automated roll lane exists in this repository for this app.',
+      }),
+    );
+    const r = runStep(HEAL_STEP, { ctx, env: healEnv() });
+    assert.equal(r.status, 1, `an un-healable regression is not a pass:\n${r.out}`);
+    assert.deepEqual(
+      r.dispatches, [],
+      'NOTHING may be dispatched for an app no lane can roll — a mis-aimed heal invents a receipt',
+    );
+    assert.match(r.out, /loom-mirroring/);
+    assert.match(r.out, /CANNOT be auto-healed/);
+  } finally {
+    ctx.dispose();
+  }
+});
+
+test('SHELL #3676: a data-plane regression dispatches loom-dataplane-roll with the app NAMED', { skip: shellSkip }, () => {
+  // loom-unity IS rollable, by a different lane with different inputs. The
+  // dispatch must carry apps/tag/boundary/resource_group — an `image_tag` here
+  // would silently do nothing, and the poll would then report NOT VERIFIED for
+  // a reason that has nothing to do with the estate.
+  const ctx = newStepCtx();
+  try {
+    writeFileSync(
+      join(ctx.runnerTemp, HEAL_REQ_FILE),
+      healRequest({
+        workflow: 'loom-dataplane-roll.yml', kind: 'dataplane',
+        sha: AUG19_ROLLED, apps: ['loom-unity'],
+      }),
+    );
+    const r = runStep(HEAL_STEP, {
+      ctx,
+      azRevisionsByApp: {
+        'loom-unity': {
+          revisions: [revOf('loom-unity', 'loom-unity--0000010', '2026-08-19T07:10:19+00:00', AUG19_APPLIED, 100)],
+          then: [revOf('loom-unity', 'loom-unity--0000011', '2026-08-19T07:40:00+00:00', AUG19_ROLLED, 100)],
+        },
+      },
+      env: healEnv({ AZ_REV_SWITCH_AT: '2' }),
+    });
+    assert.equal(r.status, 0, `the roll landed on the second poll, so the heal step succeeded:\n${r.out}`);
+    assert.equal(r.dispatches.length, 1, JSON.stringify(r.dispatches));
+    assert.match(r.dispatches[0], /workflow run loom-dataplane-roll\.yml/);
+    assert.match(r.dispatches[0], /apps=loom-unity/);
+    assert.match(r.dispatches[0], new RegExp(`tag=${AUG19_ROLLED}`));
+    assert.match(r.dispatches[0], /resource_group=rg-csa-loom-admin-centralus/,
+      'the data-plane lane defaults to a literal centralus; this deploy ADOPTS its region, so it must be NAMED');
+    assert.doesNotMatch(r.dispatches[0], /image_tag=/,
+      'image_tag is the CONSOLE lane input — sending it here would be silently ignored');
+  } finally {
+    ctx.dispose();
+  }
+});
+
 test('SHELL #3799: an unreadable revision history during the poll never reads as recovery', { skip: shellSkip }, () => {
   const ctx = newStepCtx();
   try {
-    writeFileSync(join(ctx.runnerTemp, 'estate-heal-request.txt'), `${AUG19_ROLLED}\n`);
+    writeFileSync(join(ctx.runnerTemp, HEAL_REQ_FILE), healRequest({ sha: AUG19_ROLLED }));
     const r = runStep(HEAL_STEP, {
       ctx,
       env: healEnv({ AZ_REV_ERR: 'ERROR: (AuthorizationFailed) The client does not have authorization' }),
@@ -2199,7 +2717,10 @@ test('CONTRACT #3799: the heal step is wired to the gate, and to the file the ga
   );
   // Same literal path on both sides. `$RUNNER_TEMP/x` in one step and
   // `$RUNNER_TEMP/y` in the other is a hand-off that silently never happens.
-  const path = /estate-heal-request\.txt/;
+  // It became NDJSON when the gate went estate-wide (#3676): one dispatch per
+  // line, because a single bare SHA cannot say WHICH app regressed and the heal
+  // lane differs per app.
+  const path = /estate-heal-request\.ndjson/;
   assert.match(gate, path, 'the gate must truncate + name the request file');
   assert.match(heal, path, 'and the heal step must read the same one');
   assert.match(gate, /--heal-request "\$HEAL_REQ"/, 'the CLI needs the path or it writes no request at all');
@@ -2210,8 +2731,12 @@ test('CONTRACT #3799: the heal step is wired to the gate, and to the file the ga
   );
   assert.match(gate, /: > "\$HEAL_REQ"/, 'and it must be truncated first, so a request can only describe THIS run');
 
-  assert.match(heal, /gh workflow run loom-roll-and-validate\.yml/, 'it must dispatch the lane that owns the roll');
-  assert.match(heal, /image_tag="\$\{TARGET\}"/, 'with the recovered SHA');
+  assert.match(heal, /gh workflow run "\$WF"/, 'it must dispatch the lane the REQUEST names, not one lane for every app');
+  assert.match(
+    heal, /loom-roll-and-validate\.yml/,
+    'and the console lane must still be reachable — it is the writer of the app the incident happened to',
+  );
+  assert.match(heal, /image_tag=\$\{TARGET\}/, 'with the recovered SHA');
   assert.match(heal, /serving-tag/, 'and verify recovery through the same tested serving logic the gate used');
   for (const re of [/continue-on-error/, /\|\|\s*true/, /2>\s*\/dev\/null/]) {
     assert.ok(!re.test(heal), `the auto-heal step discards a result (${re}); a heal that cannot fail is not a heal`);
@@ -2690,9 +3215,20 @@ test('CONTRACT: the estate gate reads the REVISION HISTORY, and every CLI call c
   assert.ok(body, 'estate gate step not found by exact name');
 
   assert.match(
-    body, /az containerapp revision list -n loom-console/,
+    body, /az containerapp revision list -n "\$APP"/,
     'without this read the gate is back to asking the Actions API alone — the configuration that reported OK ' +
-      'while revisions 0000782 -> 0000783 recorded the revert on 2026-08-19',
+      'while revisions 0000782 -> 0000783 recorded the revert on 2026-08-19. It must be read PER APP (#3676): a ' +
+      'literal -n loom-console here is the single-app gate that left nineteen image writers unwatched',
+  );
+  assert.doesNotMatch(
+    body, /az containerapp (show|revision list) -n loom-console/,
+    'a hard-coded console witness is exactly the defect #3676 is about — the app under test comes from the ' +
+      'watched-apps list, never from a literal',
+  );
+  assert.match(
+    body, /az containerapp list -g "\$RG"/,
+    'the watched population is DERIVED from the post-apply container-app list; without it the gate would need a ' +
+      'second hand-maintained copy of APP_IMAGE_TAGS in shell, which is a thing that can drift',
   );
   assert.match(body, /--query "\[\]\.\{name:name, createdTime:properties\.createdTime, trafficWeight:properties\.trafficWeight, image:properties\.template\.containers\[0\]\.image\}"/,
     'the projection must carry name + createdTime + trafficWeight + image. Without the timestamp there is no ' +
@@ -2700,29 +3236,31 @@ test('CONTRACT: the estate gate reads the REVISION HISTORY, and every CLI call c
       'false green — and the code falls back to recency SILENTLY enough that only this assertion keeps the real ' +
       'lane off that path.');
 
-  // Every reachable invocation must hand the CLI one of the two revision flags
-  // — literally, or via the REV_ARGS array the two live call sites expand. The
-  // CLI makes their absence a usage error, but a call site that omits them
-  // would then fail for a reason nobody reads as "the gate lost its witness".
-  const calls = body.split('node scripts/ci/reconcile-policy.mjs assert-estate-not-behind-roll').slice(1);
-  assert.equal(calls.length, 3, `expected 3 CLI call sites (no-tag, unreadable-estate, healthy); found ${calls.length}`);
+  // Every reachable invocation must hand the CLI the per-app revision
+  // directory. The CLI makes its absence a usage error, but a call site that
+  // omits it would then fail for a reason nobody reads as "the gate lost its
+  // witness".
+  const calls = body.split('node scripts/ci/reconcile-policy.mjs assert-estate-not-behind-roll-all').slice(1);
+  assert.equal(calls.length, 3, `expected 3 CLI call sites (no-apps, no-pin, healthy); found ${calls.length}`);
   for (const [i, c] of calls.entries()) {
     // The argument list is the run of backslash-continued lines that follows.
     const args = c.split('\n').reduce((acc, l) => (acc.done ? acc : (acc.lines.push(l), acc.done = !l.trimEnd().endsWith('\\'), acc)), { lines: [], done: false }).lines.join('\n');
-    assert.ok(
-      /--revisions[ "]/.test(args) || /--revisions-error/.test(args) || /\$\{REV_ARGS\[@\]\}/.test(args),
-      `CLI call site ${i} passes no revision evidence; its args were:\n${args}`,
+    assert.match(
+      args, /--app-revisions "\$REVDIR"/,
+      `CLI call site ${i} passes no per-app revision evidence; its args were:\n${args}`,
     );
     assert.match(args, /--measured-at/, `CLI call site ${i} passes no --measured-at, so its window is unbounded`);
+    assert.match(args, /--heal-request "\$HEAL_REQ"/, `CLI call site ${i} writes no heal request, so a regression it finds cannot be repaired`);
   }
   assert.equal(
-    (body.match(/\$\{REV_ARGS\[@\]\}/g) || []).length, 2,
-    'the two call sites that reach az must expand REV_ARGS; the third short-circuits before any az call and ' +
-      'passes --revisions-error inline',
+    (body.match(/\$\{LIST_ARGS\[@\]\}/g) || []).length, 2,
+    'the container-app list result must reach BOTH watched-apps and the assert; the two short-circuit call ' +
+      'sites pass --containers-error inline because they never ran az at all',
   );
 
   assert.match(body, /REV_RC=\$\?/, 'the revision read must capture its own exit code rather than infer one');
-  assert.match(body, /2> "\$REV_ERR"/, 'stderr goes to a file; merging it would splice az warnings into the JSON');
+  assert.match(body, /LIST_RC=\$\?/, 'and so must the container-app list — an unreadable list is UNKNOWN, not an empty estate');
+  assert.match(body, /2> "\$REVDIR\/\$APP\.err"/, 'stderr goes to a per-app file; merging it would splice az warnings into the JSON');
   for (const re of [/continue-on-error/, /\|\|\s*true/, /2>\s*\/dev\/null/]) {
     assert.ok(!re.test(body), `the estate gate discards a result (${re}) — a gate that cannot fail is not a gate`);
   }
@@ -2885,6 +3423,40 @@ test('[commercial] the ACR firewall lease is taken BEFORE the re-pin, not betwee
   );
 });
 
+test('CONTRACT #3676: every lane ESTATE_ROLL_LANES names EXISTS and takes the inputs the heal step sends it', () => {
+  // A dispatch at a workflow that does not exist, or with an input it does not
+  // declare, fails at the API — and the failure text ("workflow does not have
+  // input X") reads as a repository defect long after the estate has been left
+  // on the overwritten image. The table is checked against the files here so
+  // that drift breaks a test rather than a 3am heal.
+  const wfNames = new Set(Object.values(ESTATE_ROLL_LANES).map((l) => l.workflow));
+  assert.ok(wfNames.size >= 2, 'both a console lane and a data-plane lane must be reachable');
+
+  for (const wf of wfNames) {
+    const p = join(WORKFLOW_DIR, wf);
+    assert.ok(existsSync(p), `ESTATE_ROLL_LANES points at ${wf}, which does not exist — the heal would 404`);
+  }
+
+  // The console lane takes `image_tag`; the data-plane lane takes
+  // apps/tag/boundary/resource_group. These are the exact flags the heal step
+  // builds in DISPATCH_ARGS, so the two lists must agree.
+  const consoleWf = readNorm(join(WORKFLOW_DIR, ESTATE_ROLL_LANES[CONSOLE_APP_NAME].workflow));
+  assert.match(consoleWf, /^ {6}image_tag:/m, 'the console roll lane must still take image_tag');
+
+  const dpLane = Object.entries(ESTATE_ROLL_LANES).find(([, l]) => l.kind === 'dataplane');
+  assert.ok(dpLane, 'a data-plane lane must be declared, or a loom-unity revert can never be healed');
+  const dpWf = readNorm(join(WORKFLOW_DIR, dpLane[1].workflow));
+  for (const input of ['boundary', 'apps', 'tag', 'resource_group']) {
+    assert.match(
+      dpWf, new RegExp(`^ {6}${input}:`, 'm'),
+      `${dpLane[1].workflow} declares no '${input}' input, but the heal step sends -f ${input}=… for a data-plane regression`,
+    );
+  }
+  // `boundary` is a choice; `commercial` is the literal this deploy lane sends.
+  assert.match(dpWf, /^ {10}- commercial$/m,
+    "the heal step sends boundary=commercial; a choice input that does not offer it would reject the dispatch");
+});
+
 test('the deploy lane still runs the post-apply estate-vs-roll gate, and it cannot be skipped away', () => {
   const yaml = readNorm(DEPLOY_WORKFLOW);
   const i = yaml.indexOf('- name: Estate must not be BEHIND the last successful roll');
@@ -2897,8 +3469,15 @@ test('the deploy lane still runs the post-apply estate-vs-roll gate, and it cann
   assert.match(step, /^\s+if: always\(\) && steps\.provision\.conclusion != 'skipped'\s*$/m,
     'the gate must run even when the apply FAILED (a failed apply can still have written the container app), and ' +
       'on EXACTLY that condition — an extra ANDed term can scope it away from a whole trigger class');
-  assert.ok(!/continue-on-error/.test(step), 'a gate whose result is discarded is not a gate');
-  assert.match(step, /assert-estate-not-behind-roll/);
+  // The BODY, not a fixed-width slice. The first draft of this assertion read
+  // `yaml.slice(i, i + 2500)` and went RED the moment #3676 added comments to
+  // the step, because the CLI invocation moved past character 2500 — a test
+  // that fails when a COMMENT is added is measuring the wrong thing.
+  const body = stepBodyByName(yaml, 'Estate must not be BEHIND the last successful roll (#3676)');
+  assert.ok(body, 'estate gate step not found by exact name');
+  assert.ok(!/continue-on-error/.test(body), 'a gate whose result is discarded is not a gate');
+  assert.match(body, /assert-estate-not-behind-roll-all/,
+    'the gate must run the ESTATE-WIDE form — the single-app form watched one writer out of twenty (#3676)');
 });
 
 /**

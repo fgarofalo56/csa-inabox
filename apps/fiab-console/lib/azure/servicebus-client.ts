@@ -67,6 +67,114 @@ function nsPath(cfg: ServiceBusConfig): string {
   return `/subscriptions/${cfg.subscriptionId}/resourceGroups/${encodeURIComponent(cfg.resourceGroup)}/providers/Microsoft.ServiceBus/namespaces/${encodeURIComponent(cfg.namespace)}`;
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// #3526 — NAMESPACE-SCOPED listing.
+//
+// Everything above this block is pinned to the DEPLOYMENT namespace
+// (`readServiceBusConfig`, i.e. LOOM_SERVICEBUS_NAMESPACE). That is correct for
+// the `service-bus-namespace` item, which navigates exactly that namespace.
+//
+// It is WRONG for any surface that lets the user pick a namespace: the
+// activation-sync destination editor has a namespace picker one field above the
+// entity field, and listing `LOOM_SERVICEBUS_NAMESPACE`'s queues there would
+// offer entities from a namespace the user did not choose. So the entity fetch
+// takes the namespace it was ASKED about, and the deployment env is never a
+// silent fallback — a caller that supplies no namespace gets a refusal, not the
+// wrong list.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** A namespace addressed explicitly, rather than read from the environment. */
+export interface NamespaceRef {
+  subscriptionId: string;
+  resourceGroup: string;
+  namespace: string;
+}
+
+/**
+ * Parse a Microsoft.ServiceBus/namespaces ARM id into its parts.
+ *
+ * Returns null — never a partially-filled ref — when the id is not one. A ref
+ * assembled from a half-match would produce an ARM path that 404s, and the
+ * caller would report "no queues" for what is really "you gave me a malformed
+ * id" (`deploy-integrity.md` R7).
+ */
+export function parseNamespaceId(armId: string | null | undefined): NamespaceRef | null {
+  if (!armId) return null;
+  const m = String(armId).match(
+    /^\/subscriptions\/([^/]+)\/resourceGroups\/([^/]+)\/providers\/Microsoft\.ServiceBus\/namespaces\/([^/?]+)/i,
+  );
+  if (!m) return null;
+  return {
+    subscriptionId: decodeURIComponent(m[1]),
+    resourceGroup: decodeURIComponent(m[2]),
+    namespace: decodeURIComponent(m[3]),
+  };
+}
+
+function refPath(ref: NamespaceRef): string {
+  return `/subscriptions/${encodeURIComponent(ref.subscriptionId)}/resourceGroups/${encodeURIComponent(ref.resourceGroup)}/providers/Microsoft.ServiceBus/namespaces/${encodeURIComponent(ref.namespace)}`;
+}
+
+/**
+ * Resolve a namespace NAME to a full ref by listing the subscription's
+ * namespaces — the round-trip path.
+ *
+ * The activation destination stores the namespace NAME (not the ARM id), which
+ * is what keeps it working across sovereign boundaries: `serviceBusFqdn()`
+ * appends the per-cloud suffix, so a stored FQDN would be Commercial-only
+ * (`cloud-parity.md`). The cost is that a RELOADED editor holds a name with no
+ * subscription/resource group, so this walks the subscription once to recover
+ * them rather than asking the user to re-pick — `auto-bind-by-default.md`: the
+ * platform figures the binding out, the user does not.
+ *
+ * `subscriptionId` is the one the picker reported when a resource was just
+ * chosen, else LOOM_SERVICEBUS_SUB / LOOM_SUBSCRIPTION_ID. There is no silent
+ * fallback to LOOM_SERVICEBUS_NAMESPACE: a missing subscription throws.
+ */
+export async function resolveNamespaceByName(
+  namespace: string,
+  subscriptionId?: string,
+): Promise<NamespaceRef> {
+  const name = (namespace || '').trim();
+  if (!name) throw new Error('No Service Bus namespace was supplied.');
+  const sub = (subscriptionId || process.env.LOOM_SERVICEBUS_SUB || process.env.LOOM_SUBSCRIPTION_ID || '').trim();
+  if (!sub) {
+    throw new Error(
+      'Cannot resolve a Service Bus namespace by name: no subscription is known. '
+      + 'Set LOOM_SERVICEBUS_SUB (or LOOM_SUBSCRIPTION_ID) on the Console, or re-pick the namespace '
+      + 'so the picker supplies its subscription.',
+    );
+  }
+  const body = await armGet<any>(`/subscriptions/${encodeURIComponent(sub)}/providers/Microsoft.ServiceBus/namespaces?api-version=${SB_API}`);
+  const rows: any[] = Array.isArray(body?.value) ? body.value : [];
+  const hit = rows.find((r) => String(r?.name || '').toLowerCase() === name.toLowerCase());
+  if (!hit) {
+    // States what was searched and where. It does NOT claim the namespace does
+    // not exist — it may live in another subscription this identity can see
+    // through Resource Graph but that this control-plane list does not cover.
+    throw new Error(
+      `No Service Bus namespace named '${name}' in subscription ${sub} (${rows.length} namespace(s) listed).`,
+    );
+  }
+  const ref = parseNamespaceId(hit.id);
+  if (!ref) {
+    throw new Error(`Service Bus namespace '${name}' returned an ARM id this client could not parse: ${hit.id}`);
+  }
+  return ref;
+}
+
+/** Queues of the namespace the caller named — not the deployment-pinned one. */
+export async function listQueuesIn(ref: NamespaceRef): Promise<QueueEntity[]> {
+  const body = await armGet<any>(`${refPath(ref)}/queues?api-version=${SB_API}`);
+  return Array.isArray(body?.value) ? body.value.map(shapeQueue) : [];
+}
+
+/** Topics of the namespace the caller named — not the deployment-pinned one. */
+export async function listTopicsIn(ref: NamespaceRef): Promise<TopicEntity[]> {
+  const body = await armGet<any>(`${refPath(ref)}/topics?api-version=${SB_API}`);
+  return Array.isArray(body?.value) ? body.value.map(shapeTopic) : [];
+}
+
 /**
  * Relative ARM resource id (no host) of the deployment-pinned Service Bus
  * namespace — the scope for Azure Monitor metrics (Microsoft.Insights/metrics).
