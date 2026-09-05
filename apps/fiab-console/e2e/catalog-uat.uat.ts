@@ -16,6 +16,7 @@
 
 import { test, expect, type Page } from '@playwright/test';
 import { FABRIC_ITEM_TYPES } from '../lib/catalog/fabric-item-types';
+import { waitForEditorInteractive } from './_lib/editor-readiness';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 
@@ -43,15 +44,29 @@ interface ItemVerdict {
   tabs: number;
   errorBanners: number;
   has404Marker: boolean;
+  /**
+   * #3167 — goto → first visible `main` button, per slug.
+   *
+   * The 20 F-grades this spec used to publish were a TIMING artifact: it waited
+   * a fixed 2.5s while its sibling polled to 12s, so every editor whose ribbon
+   * painted in between graded F here and fine there. The real finding underneath
+   * — "TTI exceeds 2.5s on 26 editors" — was unreportable because nobody
+   * recorded a number. This column is that number.
+   */
+  ttiMs: number;
   verdict: 'A' | 'B' | 'C' | 'D' | 'F' | 'unknown';
   notes: string;
 }
 
 async function evaluateItem(page: Page, slug: string, displayName: string, category: string): Promise<ItemVerdict> {
   const url = `${BASE_URL}/items/${slug}/new`;
+  const t0 = Date.now();
   const resp = await page.goto(url, { waitUntil: 'domcontentloaded' });
   const httpStatus = resp?.status() ?? 0;
-  await page.waitForTimeout(2500); // hydration
+  // #3167 — POLL for a painted ribbon button, do not guess a duration. This is
+  // the SAME helper deep-functional-uat.uat.ts uses, so the two graders cannot
+  // disagree about readiness again without someone editing e2e/_lib/editor-readiness.ts.
+  const { ttiMs } = await waitForEditorInteractive(page, t0);
 
   const ribbonEnabled = await page.locator('main button:not([disabled])').count();
   const ribbonDisabled = await page.locator('main button[disabled]').count();
@@ -79,11 +94,12 @@ async function evaluateItem(page: Page, slug: string, displayName: string, categ
 - Ribbon: ${ribbonEnabled} enabled / ${ribbonDisabled} disabled
 - Tabs: ${tabs}
 - Error banners: ${errorBanners}
+- TTI (goto → first visible ribbon button): ${ttiMs} ms
 - Verdict: **${verdict}** ${notes}
 - Captured: ${new Date().toISOString()}
 `;
   fs.writeFileSync(path.join(OUT_DIR, `${slug}.md`), report);
-  return { slug, displayName, category, url, httpStatus, renderOk, ribbonEnabled, ribbonDisabled, tabs, errorBanners, has404Marker, verdict, notes };
+  return { slug, displayName, category, url, httpStatus, renderOk, ribbonEnabled, ribbonDisabled, tabs, errorBanners, has404Marker, ttiMs, verdict, notes };
 }
 
 /** RFC4180 cell — quote only when the value could break the row. */
@@ -92,13 +108,13 @@ function csvCell(v: string | number): string {
   return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
 }
 
-const CSV_HEADER = 'slug,displayName,category,url,httpStatus,ribbonEnabled,ribbonDisabled,tabs,errorBanners,verdict,notes';
+const CSV_HEADER = 'slug,displayName,category,url,httpStatus,ribbonEnabled,ribbonDisabled,tabs,errorBanners,ttiMs,verdict,notes';
 
 /** One CSV row. Shares its column order with CSV_HEADER so the two cannot drift. */
 function csvRow(v: ItemVerdict): string {
   return [
     v.slug, v.displayName, v.category, v.url, v.httpStatus,
-    v.ribbonEnabled, v.ribbonDisabled, v.tabs, v.errorBanners, v.verdict, v.notes,
+    v.ribbonEnabled, v.ribbonDisabled, v.tabs, v.errorBanners, v.ttiMs, v.verdict, v.notes,
   ].map(csvCell).join(',');
 }
 
