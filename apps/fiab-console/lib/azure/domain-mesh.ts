@@ -87,6 +87,12 @@ export interface DomainMeshResult {
        * the panel must say so rather than render a shorter number as complete.
        */
       legacyUnstampedExcluded: number;
+      /**
+       * TRUE when the exclusion aggregate did not answer, so
+       * `legacyUnstampedExcluded: 0` above means UNCOUNTED rather than
+       * "nothing excluded". Structural so the panel can say which it is.
+       */
+      legacyCountUnavailable: boolean;
     };
     purview: { configured: boolean; hint?: string };
     unity: { configured: boolean; hint?: string };
@@ -128,6 +134,7 @@ async function readWorkspaceTags(
   total: number;
   hint?: string;
   legacyUnstampedExcluded: number;
+  legacyCountUnavailable: boolean;
 }> {
   try {
     const res = await listTenantWorkspaceTags({ callerTid });
@@ -137,6 +144,7 @@ async function readWorkspaceTags(
         wsToDomain: new Map(),
         total: 0,
         legacyUnstampedExcluded: 0,
+        legacyCountUnavailable: false,
         hint:
           'Workspace rollup unavailable: your sign-in session carries no Entra tenant (`tid`) claim, so ' +
           'Loom cannot scope the tenant-wide workspace count and will not run it unscoped. Sign out and ' +
@@ -150,10 +158,11 @@ async function readWorkspaceTags(
       wsToDomain,
       total: res.workspaces.length,
       legacyUnstampedExcluded: res.legacyUnstampedExcluded,
+      legacyCountUnavailable: res.legacyCountUnavailable,
       ...(res.legacyRemediation ? { hint: res.legacyRemediation } : {}),
     };
   } catch (e: any) {
-    return { configured: false, wsToDomain: new Map(), total: 0, legacyUnstampedExcluded: 0, hint: `Workspace store unreachable: ${e?.message || String(e)}.` };
+    return { configured: false, wsToDomain: new Map(), total: 0, legacyUnstampedExcluded: 0, legacyCountUnavailable: false, hint: `Workspace store unreachable: ${e?.message || String(e)}.` };
   }
 }
 
@@ -345,6 +354,7 @@ export async function getDomainMesh(
         items: Array.from(itemCounts.values()).reduce((a, b) => a + b, 0),
         hint: wsTags.hint,
         legacyUnstampedExcluded: wsTags.legacyUnstampedExcluded,
+        legacyCountUnavailable: wsTags.legacyCountUnavailable,
       },
       purview: { configured: purviewConfigured, hint: purviewHint },
       unity: { configured: unity.configured, hint: unityHint },

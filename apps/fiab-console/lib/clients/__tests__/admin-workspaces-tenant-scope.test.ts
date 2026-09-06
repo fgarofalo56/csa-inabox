@@ -191,4 +191,51 @@ describe('#3826 — excluded legacy records are DISCLOSED, not silently dropped'
     expect(out.workspaces).toEqual([]);
     expect(out.legacyUnstampedExcluded).toBe(1);
   });
+
+  /**
+   * BLOCKER 1 of the round-2 review of PR #4316, on the sibling call site.
+   *
+   * The disclosure aggregate used to answer its own failure with `0`, which
+   * every caller then reported as "nothing excluded". Here the scoped scan
+   * succeeds and only the `NOT IS_DEFINED(c.tid)` count rejects — the split
+   * that a wholesale store-failure test does not reach.
+   */
+  it('an UNREADABLE exclusion count degrades the inventory instead of reading as zero', async () => {
+    wireStore([MINE], 0);
+    const scoped = wsFetchAll.getMockImplementation()!;
+    wsFetchAll.mockImplementation(async (spec: any) => {
+      if (/COUNT\(1\)/.test(spec.query)) throw new Error('Request rate is large (429)');
+      return scoped(spec);
+    });
+    const out = await listAllWorkspacesAdmin({ callerTid: HOME_TID });
+    // The inventory it DID establish is still returned — the disclosure must
+    // never fail the answer it annotates.
+    expect(out.workspaces.map((w) => w.id)).toEqual(['ws-mine']);
+    // But it is not presented as complete.
+    expect(out.degraded).toBe(true);
+    expect(out.degradedReasons).toContain('legacy-count-unavailable');
+    expect(out.legacyCountUnavailable).toBe(true);
+    expect(out.legacyUnstampedExcluded).toBe(0); // UNCOUNTED, per the flag above
+    expect(out.legacyRemediation).toMatch(/UNKNOWN, not zero/);
+  });
+
+  /**
+   * The same failure on an EMPTY tenant. This one has its own return statement
+   * in `listAllWorkspacesAdmin`, and before the fix that branch hard-coded
+   * `degraded:false` — so an unread disclosure over an empty tenant read as a
+   * clean, complete "you have no workspaces".
+   */
+  it('an EMPTY tenant with an unreadable exclusion count is still degraded', async () => {
+    wireStore([THEIRS], 0);
+    const scoped = wsFetchAll.getMockImplementation()!;
+    wsFetchAll.mockImplementation(async (spec: any) => {
+      if (/COUNT\(1\)/.test(spec.query)) throw new Error('Request rate is large (429)');
+      return scoped(spec);
+    });
+    const out = await listAllWorkspacesAdmin({ callerTid: HOME_TID });
+    expect(out.workspaces).toEqual([]);
+    expect(out.degraded, 'an empty tenant with an unread disclosure is not a clean answer').toBe(true);
+    expect(out.degradedReasons).toContain('legacy-count-unavailable');
+    expect(out.legacyCountUnavailable).toBe(true);
+  });
 });

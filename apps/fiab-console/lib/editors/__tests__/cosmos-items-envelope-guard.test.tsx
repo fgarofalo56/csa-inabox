@@ -22,6 +22,18 @@
  * Part 1 exercises the behaviour through the real editors against the real
  * (bare) response shape. Part 2 is a source guard: no truthy `j.ok` read may
  * reappear within 20 lines of a cosmos-items GET/PATCH.
+ *
+ * PART 1 NOW COVERS ALL FOUR GUARDED FILES, and that is deliberate. The round-2
+ * review of PR #4316 measured the round-2 guard being defeated by ONE ordinary
+ * idiom — `const payload = (await r.json()) as any`, whose parenthesised
+ * `await` the body-binding regex does not match — restoring the #3878 defect in
+ * `graph-editors.tsx` with the whole suite still 11/11 green. Hardening the
+ * regex again would be the THIRD narrowing enumeration of the same rule, and
+ * this repo has already recorded that each such round buys less than the last.
+ * So the property is pinned by BEHAVIOUR instead: the regex stays as the cheap
+ * first line, and every covered file now has a fixture that asserts the
+ * rendered OUTCOME of a successful bare response — which no rewrite of the read
+ * can evade, because it is the outcome, not the spelling, that is asserted.
  */
 import { describe, it, expect, afterEach, vi } from 'vitest';
 import { render, screen, waitFor, cleanup, fireEvent } from '@testing-library/react';
@@ -29,6 +41,8 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { GeoMapEditor } from '../geo-editors';
 import { DataProductInstanceEditor } from '../data-product-editors';
+import { GqlGraphEditor, VectorStoreEditor } from '../graph-editors';
+import { DataProductEditor } from '../apim-editors';
 import { makeItem, installFetchMock } from './test-helpers';
 
 const EDITORS_DIR = join(process.cwd(), 'lib', 'editors');
@@ -114,6 +128,159 @@ describe('cosmos-items envelope — editors read the BARE document (#3878)', () 
       screen.queryByText('Unknown'),
       'a fresh component read from a successful bare GET rendered as Unknown — classifyHealth was unreachable',
     ).toBeNull();
+  });
+
+  /**
+   * THIRD covered file — `graph-editors.tsx`, the persist-only save path.
+   *
+   * This is the file the round-2 reviewer used to defeat the source guard: they
+   * rewrote the read as `const payload = (await r.json()) as any;` … `r.ok &&
+   * payload.ok`, which the `BODY_BINDING` regex cannot see (it requires `await`
+   * immediately after `=`), and the suite stayed 11/11 green while a successful
+   * bare PATCH rendered `{ok:false, error:'HTTP 200'}`.
+   *
+   * The assertion here is on the RENDERED OUTCOME: a PATCH that landed shows
+   * the persisted confirmation, not the "Query failed" bar. Any read of the
+   * envelope that treats `undefined` as failure fails this, under any
+   * identifier, in any binding form, cast or not.
+   */
+  it('renders the persisted confirmation from a BARE cosmos-items PATCH, not an HTTP error', async () => {
+    const { calls } = installFetchMock({
+      // Exactly what `NextResponse.json(updated)` puts on the wire: no `ok`.
+      '/api/cosmos-items/gql-graph/': () => ({
+        id: 'gg-1',
+        itemType: 'gql-graph',
+        displayName: 'Fraud ring',
+        state: { query: 'MATCH (a)-[:PAYS]->(b) RETURN a, b', backend: 'persist-only' },
+        updatedAt: '2026-09-01T00:00:00.000Z',
+      }),
+    });
+    render(<GqlGraphEditor item={makeItem('gql-graph', 'GQL graph')} id="gg-1" />);
+    await waitFor(() => expect(screen.getByTestId('chrome')).toBeInTheDocument(), { timeout: 5000 });
+
+    // persist-only is the backend whose Run IS the cosmos-items PATCH.
+    fireEvent.click(screen.getByRole('combobox', { name: /Backend/i }));
+    fireEvent.click(await screen.findByRole('option', { name: /Persist-only/i }, { timeout: 5000 }));
+    await waitFor(
+      () => expect(screen.getAllByRole('button', { name: /Save query/i }).length).toBeGreaterThan(0),
+      { timeout: 5000 },
+    );
+    const saveButtons = screen.getAllByRole('button', { name: /Save query/i });
+    fireEvent.click(saveButtons[saveButtons.length - 1]);
+
+    // The write actually went to the BARE route (not the wrapped sibling).
+    await waitFor(
+      () => expect(
+        calls.some((c) => c.url.includes('/api/cosmos-items/gql-graph/') && c.init?.method === 'PATCH'),
+      ).toBe(true),
+      { timeout: 5000 },
+    );
+    // …and the editor reports what happened: persisted.
+    await waitFor(
+      () => expect(document.body.textContent || '').toMatch(/Query persisted to item state/),
+      { timeout: 5000 },
+    );
+    const body = document.body.textContent || '';
+    expect(body, 'a PATCH that LANDED rendered as a failure').not.toMatch(/Query failed/);
+    expect(body, 'a 200 was reported as an HTTP error — the #3878 shape').not.toMatch(/HTTP 200/);
+  });
+
+  /**
+   * `graph-editors.tsx` again, the OTHER envelope read in that file: the
+   * vector-store spec loader (a bare GET).
+   *
+   * The #3878 shape here is a data-loss class, not a cosmetic one — judging the
+   * bare document by `j.ok` made a saved spec read as 'absent', the editor
+   * rendered its defaults over a real stored configuration, and the next save
+   * PATCHed those defaults back over it.
+   */
+  it('loads a saved vector-store spec from a BARE cosmos-items GET instead of showing defaults', async () => {
+    installFetchMock({
+      '/api/cosmos-items/vector-store/': () => ({
+        id: 'vs-1',
+        itemType: 'vector-store',
+        displayName: 'Contoso docs',
+        // Deliberately DIFFERENT from every editor default (docs-vec / 1536) so
+        // "loaded" and "fell back" are distinguishable.
+        state: { backend: 'ai-search', indexName: 'contoso-index', dim: 768, metric: 'cosine', algorithm: 'hnsw' },
+        updatedAt: '2026-09-01T00:00:00.000Z',
+      }),
+    });
+    render(<VectorStoreEditor item={makeItem('vector-store', 'Vector store')} id="vs-1" />);
+    await waitFor(() => expect(screen.getByTestId('chrome')).toBeInTheDocument(), { timeout: 5000 });
+
+    await waitFor(
+      () => expect(
+        Array.from(document.querySelectorAll('input')).map((i) => (i as HTMLInputElement).value),
+        'the stored index name never reached the form — the bare read was judged a failure',
+      ).toContain('contoso-index'),
+      { timeout: 5000 },
+    );
+    expect(document.body.textContent || '', 'a successful bare read rendered as an error')
+      .not.toMatch(/could not be read/i);
+  });
+});
+
+describe('cosmos-items envelope — the APIM data-product editor (#3878)', () => {
+  afterEach(() => { cleanup(); vi.restoreAllMocks(); });
+
+  /**
+   * FOURTH covered file — `apim-editors/data-product-editor.tsx`, the last one
+   * the source guard protected by regex alone.
+   *
+   * The defect: `!j.ok` was true on every successful PATCH, so the editor
+   * reported "Save failed" and never cleared `dirty` over a write that had
+   * landed — the user's next action was to save again, or to abandon edits that
+   * were already persisted. Asserted on both halves of the outcome: the success
+   * bar renders AND the unsaved badge clears.
+   */
+  it('a BARE cosmos-items PATCH clears the unsaved badge and reports Saved', async () => {
+    const { calls } = installFetchMock({
+      // One handler serves both the GET (hydrate) and the PATCH (save); both
+      // answer the resource BARE, which is what the real route does.
+      '/api/cosmos-items/data-product/': () => ({
+        id: 'dp-1',
+        itemType: 'data-product',
+        workspaceId: 'ws-1',
+        displayName: 'Revenue 360',
+        state: { displayName: 'Revenue 360', description: 'Quarterly revenue product' },
+        updatedAt: '2026-09-01T00:00:00.000Z',
+      }),
+    });
+    render(<DataProductEditor item={makeItem('data-product', 'Data product')} id="dp-1" />);
+    await waitFor(() => expect(screen.getByTestId('chrome')).toBeInTheDocument(), { timeout: 5000 });
+
+    // The bare GET must hydrate the form before a save can mean anything.
+    const nameInput = await waitFor(
+      () => {
+        const el = Array.from(document.querySelectorAll('input')).find(
+          (i) => (i as HTMLInputElement).value === 'Revenue 360',
+        ) as HTMLInputElement | undefined;
+        expect(el, 'the stored display name never hydrated from the bare GET').toBeTruthy();
+        return el!;
+      },
+      { timeout: 5000 },
+    );
+
+    fireEvent.change(nameInput, { target: { value: 'Revenue 361' } });
+    await waitFor(() => expect(document.body.textContent || '').toMatch(/unsaved/i), { timeout: 5000 });
+
+    const saveButtons = screen.getAllByRole('button', { name: /^Save$/i });
+    fireEvent.click(saveButtons[saveButtons.length - 1]);
+
+    await waitFor(
+      () => expect(
+        calls.some((c) => c.url.includes('/api/cosmos-items/data-product/') && c.init?.method === 'PATCH'),
+      ).toBe(true),
+      { timeout: 5000 },
+    );
+    await waitFor(
+      () => expect(document.body.textContent || '').toMatch(/Saved to Cosmos/i),
+      { timeout: 5000 },
+    );
+    const body = document.body.textContent || '';
+    expect(body, 'a PATCH that LANDED rendered as Save failed').not.toMatch(/Save failed/i);
+    expect(body, 'the editor stayed dirty over a write that had persisted').not.toMatch(/unsaved/i);
   });
 });
 

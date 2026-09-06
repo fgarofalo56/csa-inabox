@@ -63,14 +63,16 @@ type PurviewStatus =
 
 /**
  * The honesty envelope around the Workspaces column, as returned by
- * GET /api/admin/domains. Exactly one of the three states is actionable at a
+ * GET /api/admin/domains. Exactly one of the four states is actionable at a
  * time and they mean different things: the count could not be scoped, the count
- * ran but excluded records it could not attribute, or the store could not be
- * read at all (0 means unknown, not empty).
+ * ran but excluded records it could not attribute, the exclusion count itself
+ * could not be read (so 0 excluded is UNKNOWN, not established), or the store
+ * could not be read at all (0 means unknown, not empty).
  */
 interface WorkspaceCountIntegrity {
   scopeUnconfirmed: boolean;
   legacyUnstampedExcluded: number;
+  legacyCountUnavailable?: boolean;
   remediation?: string;
   storeUnreadable?: string;
 }
@@ -435,6 +437,19 @@ export default function DomainsPage() {
         <MessageBar intent="warning" className={a.messageBar}>
           <MessageBarBody>
             <MessageBarTitle>Workspace counts exclude untagged records</MessageBarTitle>
+            {wsIntegrity.remediation}
+          </MessageBarBody>
+        </MessageBar>
+      )}
+      {/*
+        #4316 review — the DISCLOSURE can fail while the count succeeds. That
+        used to arrive here as `legacyUnstampedExcluded: 0`, which renders
+        nothing at all, so an unread exclusion count showed as a complete one.
+      */}
+      {wsIntegrity?.legacyCountUnavailable && wsIntegrity.remediation && (
+        <MessageBar intent="warning" className={a.messageBar}>
+          <MessageBarBody>
+            <MessageBarTitle>Workspace exclusion count unavailable</MessageBarTitle>
             {wsIntegrity.remediation}
           </MessageBarBody>
         </MessageBar>

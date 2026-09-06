@@ -101,6 +101,7 @@ async function workspaceCounts(callerTid: string | undefined): Promise<{
   integrity: {
     scopeUnconfirmed: boolean;
     legacyUnstampedExcluded: number;
+    legacyCountUnavailable: boolean;
     remediation?: string;
     storeUnreadable?: string;
   };
@@ -114,6 +115,11 @@ async function workspaceCounts(callerTid: string | undefined): Promise<{
       integrity: {
         scopeUnconfirmed: res.scopeUnconfirmed,
         legacyUnstampedExcluded: res.legacyUnstampedExcluded,
+        // #4316 review: a disclosure aggregate that did not answer must travel
+        // as its own state. Without this the page reads `legacyUnstampedExcluded:0`
+        // and renders NO MessageBar, i.e. asserts the count is complete on a
+        // read that never established anything.
+        legacyCountUnavailable: res.legacyCountUnavailable,
         ...(res.legacyRemediation ? { remediation: res.legacyRemediation } : {}),
       },
     };
@@ -126,6 +132,7 @@ async function workspaceCounts(callerTid: string | undefined): Promise<{
       integrity: {
         scopeUnconfirmed: false,
         legacyUnstampedExcluded: 0,
+        legacyCountUnavailable: false,
         storeUnreadable:
           'Workspace counts could not be read from Cosmos, so every domain below shows 0 — that is an ' +
           `unknown count, not an empty one. Underlying error: ${e?.message || String(e)}`,

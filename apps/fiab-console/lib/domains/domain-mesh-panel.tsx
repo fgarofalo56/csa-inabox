@@ -36,7 +36,7 @@ interface MeshRow {
 interface MeshResult {
   ranAt: string; domainCount: number;
   surfaces: {
-    catalog: { configured: boolean; workspaces: number; items: number; hint?: string; legacyUnstampedExcluded?: number };
+    catalog: { configured: boolean; workspaces: number; items: number; hint?: string; legacyUnstampedExcluded?: number; legacyCountUnavailable?: boolean };
     purview: { configured: boolean; hint?: string };
     unity: { configured: boolean; hint?: string };
     lineage: { configured: boolean; sources: string[]; hint?: string };
@@ -141,6 +141,12 @@ export function DomainMeshPanel() {
                     {mesh.surfaces.catalog.legacyUnstampedExcluded} excluded
                   </Badge>
                 )}
+                {/* An UNREAD exclusion count is not zero excluded (#4316 review). */}
+                {mesh.surfaces.catalog.legacyCountUnavailable && (
+                  <Badge appearance="outline" color="warning">
+                    excluded: unknown
+                  </Badge>
+                )}
               </div>
               <Caption1 className={s.ran}>Workspaces + data items federated by domain (subtree rollup).</Caption1>
             </Card>
@@ -187,14 +193,18 @@ export function DomainMeshPanel() {
 
           {/* Honest gates for any unconfigured mesh surface. */}
           {/*
-            The catalog rollup carries TWO distinct non-complete states and the
+            The catalog rollup carries THREE distinct non-complete states and the
             panel must not collapse them. `configured:false` means the count
             could not be scoped at all (no `tid` claim) — the numbers above are
             zero by refusal. A non-zero `legacyUnstampedExcluded` means the count
             RAN but excluded records that carry no Entra tenant, so the number
-            above is a floor. Before this, neither hint was rendered anywhere and
-            the tile showed a shorter number as if it were the total, while
-            /admin/workspaces disclosed the same exclusion.
+            above is a floor. `legacyCountUnavailable` means the exclusion
+            aggregate itself did not answer, so how much the number above
+            excludes is UNKNOWN — that state used to arrive as a plain 0 and
+            rendered nothing, i.e. as completeness (#4316 review). Before this,
+            neither hint was rendered anywhere and the tile showed a shorter
+            number as if it were the total, while /admin/workspaces disclosed
+            the same exclusion.
           */}
           {!mesh.surfaces.catalog.configured && mesh.surfaces.catalog.hint && (
             <MessageBar intent="warning" layout="multiline">
@@ -204,6 +214,11 @@ export function DomainMeshPanel() {
           {mesh.surfaces.catalog.configured && !!mesh.surfaces.catalog.legacyUnstampedExcluded && mesh.surfaces.catalog.hint && (
             <MessageBar intent="warning" layout="multiline">
               <MessageBarBody><MessageBarTitle>Workspace counts exclude untagged records</MessageBarTitle>{mesh.surfaces.catalog.hint}</MessageBarBody>
+            </MessageBar>
+          )}
+          {mesh.surfaces.catalog.configured && mesh.surfaces.catalog.legacyCountUnavailable && mesh.surfaces.catalog.hint && (
+            <MessageBar intent="warning" layout="multiline">
+              <MessageBarBody><MessageBarTitle>Workspace exclusion count unavailable</MessageBarTitle>{mesh.surfaces.catalog.hint}</MessageBarBody>
             </MessageBar>
           )}
           {!mesh.surfaces.purview.configured && mesh.surfaces.purview.hint && (

@@ -75,6 +75,16 @@ const seen: {
   wsQueries: Array<{ query: string; params: Record<string, unknown>; partitionKey: unknown }>;
 } = { domainsDocScope: [], wsQueries: [] };
 
+/**
+ * Injected store failures, per query shape.
+ *
+ * `countQuery` makes ONLY the `NOT IS_DEFINED(c.tid)` disclosure aggregate
+ * reject while the scoped read keeps succeeding — the exact split the reviewer
+ * of PR #4316 measured. It is a mutable property rather than a `let` so the
+ * hoisted `vi.mock` factory reads it at CALL time, like `seen`.
+ */
+const failure: { countQuery: Error | null } = { countQuery: null };
+
 vi.mock('../domain-registry', () => ({
   loadOrSeedDomains: async (tenantId: string) => {
     seen.domainsDocScope.push(tenantId);
@@ -102,7 +112,10 @@ vi.mock('../cosmos-client', () => ({
         const q = String(spec?.query || '');
         if (/NOT\s+IS_DEFINED\(c\.tid\)/i.test(q)) {
           return {
-            fetchAll: async () => ({ resources: [WS_DOCS.filter((w) => w.tid === undefined).length] }),
+            fetchAll: async () => {
+              if (failure.countQuery) throw failure.countQuery;
+              return { resources: [WS_DOCS.filter((w) => w.tid === undefined).length] };
+            },
           };
         }
         let rows = WS_DOCS;
@@ -244,8 +257,51 @@ describe('getDomainMesh (federated read)', () => {
     expect(mesh.surfaces.catalog.hint).toMatch(/backfill-workspace-tid\.mjs/);
   });
 
-  it('reports ZERO excluded — and no hint — on an estate where every record is stamped', async () => {
-    const legacy = WS_DOCS.filter((w) => w.tid === undefined);
+  /**
+   * BLOCKER 1 of the round-2 review of PR #4316, pinned.
+   *
+   * `countUnstampedWorkspaces` used to answer a failed aggregate with a bare
+   * `0`, and `listTenantWorkspaceTags` derived its completeness claim SOLELY
+   * from that number — so an aggregate that rejected while the scoped read
+   * succeeded produced `{degraded:false, legacyUnstampedExcluded:0}`: an
+   * assertion that the answer is COMPLETE, from a query that established
+   * nothing. `/admin/domains` then rendered no MessageBar and the mesh tile no
+   * badge, while `/admin/workspaces` — whose `degraded` does not derive from
+   * this count — kept showing its own number. The cross-surface disagreement
+   * the shared counter exists to remove, reached through the swallow.
+   *
+   * This is not a corner: the aggregate is a cross-partition `COUNT(1)` that
+   * runs on every `/admin/domains` load and every mesh load, which is where
+   * RU-pressure 429s come from.
+   */
+  it('an UNREADABLE exclusion count is reported as unread, never as zero excluded', async () => {
+    failure.countQuery = new Error('Request rate is large (429)');
+    try {
+      const tags = await listTenantWorkspaceTags({ callerTid: CALLER_TID });
+      // The scoped read SUCCEEDED — this is the split that made the swallow
+      // dangerous; a wholesale store failure was already handled.
+      expect(tags.workspaces).toHaveLength(WS_STAMPED.length);
+      expect(tags.scopeUnconfirmed, 'an unread disclosure is not an unscoped read').toBe(false);
+      // … and the answer is NOT claimed complete.
+      expect(tags.degraded, 'a count whose exclusions are unknown is not complete').toBe(true);
+      expect(tags.degradedReasons).toContain('legacy-count-unavailable');
+      expect(tags.legacyCountUnavailable).toBe(true);
+      // 0 here means UNCOUNTED, and the structural flag above is what says so.
+      expect(tags.legacyUnstampedExcluded).toBe(0);
+      // The disclosure says what the code established — that it could not read
+      // the number — and never how many were excluded, which is the unknown.
+      expect(tags.legacyRemediation).toMatch(/UNKNOWN, not zero/);
+
+      const mesh = await getDomainMesh(TENANT_SCOPE, CALLER_TID, 'me');
+      expect(mesh.surfaces.catalog.configured, 'an unread disclosure must not zero the rollup').toBe(true);
+      expect(mesh.surfaces.catalog.legacyCountUnavailable).toBe(true);
+      expect(mesh.surfaces.catalog.hint).toMatch(/UNKNOWN, not zero/);
+    } finally {
+      failure.countQuery = null;
+    }
+  });
+
+  it('reports ZERO excluded — and no hint — on an estate where every record is stamped', async () => {    const legacy = WS_DOCS.filter((w) => w.tid === undefined);
     for (const w of legacy) w.tid = CALLER_TID; // stamp them, as the backfill would
     try {
       const tags = await listTenantWorkspaceTags({ callerTid: CALLER_TID });
