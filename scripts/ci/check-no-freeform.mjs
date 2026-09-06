@@ -1983,6 +1983,38 @@ export const TOUCH_EXEMPT = new Map([
     'apps/fiab-console/lib/editors/foundry-hub-editor.tsx',
     '#3565 fixed the account picker here; the 2 sites are Key Vault secret identifiers needing a new keyvault-secret picker kind',
   ],
+  // ── console-api-1 drain (#3878) ────────────────────────────────────────────
+  // Both files were touched ONLY to fix the cosmos-items response-envelope
+  // reads — a dead `j.ok` on a route that returns a bare body, which made a
+  // failed save look successful. 7 changed lines in one, 34 in the other, none
+  // of them near a free-text box.
+  //
+  // The three baselined sites are pre-existing and each needs a discovery call
+  // that does not exist yet, so clearing them here would be product work
+  // smuggled into an envelope bug-fix — and reviewing the two halves together
+  // is strictly harder:
+  //   data-product-editor.tsx:945   a Purview businessDomainId GUID, typed by
+  //                                 hand when LOOM_PURVIEW_ACCOUNT is unset;
+  //                                 the picker needs a Purview domains list
+  //   data-product-editor.tsx:1024  an asset qualified name — addressable only
+  //                                 once the domain above is resolved
+  //   graph-editors.tsx:1355        a source Delta table URI; the picker needs
+  //                                 the same lakehouse-table enumeration #3511
+  //                                 is building for mirrored-database
+  //
+  // NOT amnesty and NOT --update-baseline: that flag does not clear the
+  // boy-scout rule at all (measured 2026-09-06 — it reports "baseline updated"
+  // and writes a byte-identical file, RC=0, while the guard stays RC=1). This
+  // is the documented escape hatch, with named acceptance: delete these two
+  // entries when the Purview-domain and lakehouse-table pickers land.
+  [
+    'apps/fiab-console/lib/editors/apim-editors/data-product-editor.tsx',
+    '#3878 fixed the envelope reads here (7 lines); :945/:1024 are a Purview domain GUID + asset qualified name needing a Purview domains discovery call',
+  ],
+  [
+    'apps/fiab-console/lib/editors/graph-editors.tsx',
+    '#3878 fixed the envelope reads here (34 lines); :1355 is a source Delta table URI needing the lakehouse-table enumeration #3511 is building',
+  ],
 ]);
 
 // ═══════════════════════════════════════════════════════════════════════════
