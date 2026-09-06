@@ -293,15 +293,35 @@
  *     definition, and never at its ~9 call sites. Cross-file resolution is not
  *     attempted.
  *   - A FLUENT `<Combobox freeform>`, which accepts typed text while looking
- *     like a picker. ONE in the tree as of #4313: the AI Search vectorizer's
- *     Azure OpenAI endpoint in `lib/editors/foundry-sub-editors.tsx`, rendered
- *     ONLY on the branch where `/api/foundry/accounts` FAILED or genuinely
- *     returned zero accounts — the discovered-rows branch is a plain
- *     `<Dropdown>`. It is the ux-baseline G2 escape hatch (the alternative
- *     measured there was a DISABLED control asserting "No accounts found" over
- *     a failed call), not a config surface that asks for an address by default.
- *     Recorded here because this guard cannot see it, so the count staying at
- *     baseline says nothing about this site either way.
+ *     like a picker. SIX in the tree as of #4313, measured — `grep -rn
+ *     "<Combobox" apps/fiab-console/{lib,app} --include=*.tsx` returns 14
+ *     occurrences, of which these six carry `freeform`:
+ *       lib/components/ai-search/ai-search-tree.tsx:167    analyzer language ("en")
+ *       lib/components/pipeline/copy/mapping-tab.tsx:479   source column type ("String")
+ *       lib/components/pipeline/copy/mapping-tab.tsx:492   sink column name ("order_id")
+ *       lib/components/pipeline/copy/mapping-tab.tsx:509   sink column type ("String")
+ *       lib/editors/foundry-sub-editors.tsx:1896           Azure OpenAI ENDPOINT
+ *       lib/panes/git-integration.tsx:623                  git branch ("main")
+ *     ONE of the six carries an infrastructure address — the vectorizer endpoint
+ *     at foundry-sub-editors.tsx:1896. The other five name a column, a type, a
+ *     branch or a language: values that live in the user's own data or repo, not
+ *     addresses the platform could have bound (auto-bind-by-default.md §5), so
+ *     they are outside what this rule asks about. Five of the six pre-date
+ *     #4313; the endpoint is the one this PR added.
+ *
+ *     That endpoint is rendered ONLY on the branch where `/api/foundry/accounts`
+ *     FAILED or genuinely returned zero accounts — the discovered-rows branch is
+ *     a plain `<Dropdown>`. It is the ux-baseline G2 escape hatch (the
+ *     alternative measured there was a DISABLED control asserting "No accounts
+ *     found" over a failed call), not a config surface that asks for an address
+ *     by default. All six are recorded here because this guard cannot see any
+ *     `<Combobox>` at all, so the count staying at baseline says nothing about
+ *     these sites either way.
+ *
+ *     A prior revision of this note said "Zero in the tree today" and the
+ *     revision after it said "ONE"; both were false by the grep above. The count
+ *     is stated with the command that produces it so the next reader can re-run
+ *     it rather than inherit it.
  *   - A LABEL THAT LIVES SOMEWHERE ELSE — a `<Label htmlFor>` earlier in the
  *     file, a label from a translation table, or a column header above a grid
  *     of inputs. Only the enclosing `<Field>` and an immediately-adjacent

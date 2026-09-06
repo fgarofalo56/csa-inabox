@@ -3298,7 +3298,16 @@ function DatastoreBrowsePanel({ onPick }: {
       </>
     );
   }
-  const rows = stores.data?.datastores || [];
+  // `stores.data` is the read-success evidence, not a convenience: `useApi` writes
+  // `data: null` on the not-ok branch AND on the throw branch, so it is non-null
+  // ONLY after /api/foundry/datastores answered `ok:true`. Requiring it before
+  // anything below means the emptiness this panel can report is an answer Loom
+  // received, never an inference from a read that did not land (R7). It also
+  // covers the first commit, where `useApi` has set neither `data` nor `loading`
+  // yet. Dominating early return on purpose: nested inside `if (!picked)` the
+  // read-evidence ratchet cannot see the condition at all.
+  if (!stores.data) return <TableSkeleton rows={4} />;
+  const rows = stores.data.datastores || [];
   if (!picked) {
     if (!rows.length) {
       return (
