@@ -311,6 +311,33 @@ describe('#4258 — REACHABILITY, not inbound-edge count: the mutual island', ()
     expect(result.population.scope).toMatch(/NOT REACHABLE/);
     expect(result.population.scope).toMatch(/EXTERNAL ingress/);
   });
+
+  it('R7 — the prose states what the WALK established, carrying the REAL inbound count', () => {
+    // #4258 widened the PREDICATE from "zero inbound configured edges" to "not
+    // reachable from roots". The operator-facing text has to widen with it: on
+    // this island each peer holds ONE inbound resolved `configured` edge, so any
+    // sentence asserting zero inbound edges asserts an absence THIS VERY GRAPH
+    // disproves — a message-truth violation (deploy-integrity.md R7), and
+    // precisely on the shape the widened predicate exists to catch.
+    const result = unreachableService(buildMutualIslandGraph());
+    const peer = result.findings.find((f) => f.subjects[0] === PEER_A_ID);
+    expect(peer).toBeDefined();
+    const blob = [peer!.title, peer!.summary, ...peer!.evidence.notes].join('\n');
+
+    expect(blob).toContain("NOT REACHABLE from the graph's ingress roots");
+    expect(blob).toContain(
+      "1 inbound resolved 'configured' edge(s), every one of them from a node that is itself unreachable",
+    );
+    expect(blob).toContain('inbound resolved edges: configured=1');
+
+    // The retired proxy's literals must not survive anywhere in the finding.
+    expect(blob).not.toContain('configured=0');
+    expect(blob).not.toMatch(/ZERO inbound/i);
+    expect(blob).not.toContain("no inbound resolved 'configured' edge at all");
+    // The `configuredIn === 0` arm of the dangling note would be a lie here:
+    // something DID attempt to wire this node — from inside the island.
+    expect(blob).not.toContain('even ATTEMPTED to wire it');
+  });
 });
 
 /**
@@ -372,6 +399,32 @@ describe('#4258 — THE RUNTIME PATH: unreachableAlwaysOn over the same island',
     const run = unreachableAlwaysOn(ctxOver(buildMutualIslandGraph()));
     const reasons = run.result.skipped.map((s) => s.reason).join(' ');
     expect(reasons).toMatch(/EXTERNAL ingress/);
+  });
+
+  it('R7 — the RUNTIME prose states what the walk established, with the real count', () => {
+    // The surface the operator actually reads. Covering only the library twin
+    // would let the retired zero-inbound claim survive on the live path.
+    const run = unreachableAlwaysOn(ctxOver(buildMutualIslandGraph()));
+    const peer = run.result.findings.find((f) => f.subjects[0] === PEER_A_ID);
+    expect(peer).toBeDefined();
+    const blob = [peer!.title, peer!.summary, ...peer!.evidence.notes].join('\n');
+
+    expect(blob).toContain("NOT REACHABLE from the graph's ingress roots");
+    expect(blob).toContain(
+      "1 inbound resolved 'configured' edge(s), every one of them from a node that is itself unreachable",
+    );
+
+    // "No wire ... names it at all" is FALSE on an island — two wires name these
+    // peers, they just start somewhere equally unreachable. It may only be
+    // emitted when there is genuinely neither a dangling wire nor an inbound
+    // configured edge.
+    expect(blob).not.toContain('No wire in the collected artifacts names it at all.');
+    expect(blob).toContain('Every wire that names it starts somewhere equally unreachable.');
+
+    expect(blob).not.toContain('configured=0');
+    expect(blob).not.toMatch(/ZERO inbound/i);
+    expect(blob).not.toContain("no inbound resolved 'configured' edge at all");
+    expect(blob).not.toContain('even ATTEMPTED to wire it');
   });
 });
 
