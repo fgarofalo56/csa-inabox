@@ -40,6 +40,7 @@ import { TeachingBanner } from '@/lib/components/shared/teaching-toast';
 import { useRegisterRibbonCommands } from '@/lib/components/shared/ribbon-commands';
 import { useRuntimeFlag } from '@/lib/components/ui/use-runtime-flag';
 import { AzureBackedField } from '@/lib/components/azure/azure-backed-field';
+import { LoomObjectPicker, type LoomObjectLoad } from '@/lib/components/pickers/loom-object-picker';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
 import {
@@ -275,13 +276,64 @@ function SourcePicker({ spec, onChange }: { spec: ActivationSyncSpec; onChange: 
 interface EnvDTO { name: string; displayName: string }
 interface TableDTO { LogicalName: string; EntitySetName?: string; DisplayName?: { UserLocalizedLabel?: { Label?: string } } }
 
-function DestinationPicker({ spec, onChange }: { spec: ActivationSyncSpec; onChange: (s: ActivationSyncSpec) => void }) {
+/**
+ * #3526 — the queues and topics of ONE namespace, as picker options.
+ *
+ * The namespace ARM id is preferred (the picker hands one back the moment the
+ * user chooses); the NAME is the fallback the route resolves for itself on a
+ * reload, when the stored spec carries only a name. Either way the user does no
+ * plumbing (`auto-bind-by-default.md`).
+ *
+ * AN ERROR IS NEVER FLATTENED TO AN EMPTY LIST (`deploy-integrity.md` R7).
+ * `LoomObjectLoad.error` is surfaced verbatim by the picker, so "this namespace
+ * has no entities" stays distinguishable from "I could not read it".
+ *
+ * With NO namespace chosen this returns an empty list and NO error — that is
+ * the honest state of a cascade whose parent is unset, and calling the route
+ * with an empty namespace would 400 and surface as a failure the user did not
+ * cause.
+ */
+function loadServiceBusEntities(namespace: string, namespaceId: string): () => Promise<LoomObjectLoad> {
+  return async () => {
+    const id = (namespaceId || '').trim();
+    const name = (namespace || '').trim();
+    if (!id && !name) return { options: [] };
+    const qs = id ? `namespaceId=${encodeURIComponent(id)}` : `namespace=${encodeURIComponent(name)}`;
+    const r = await clientFetch(`/api/azure/servicebus-entities?${qs}`);
+    const j = await r.json().catch(() => ({}));
+    if (!j?.ok) {
+      return {
+        options: [],
+        error: j?.error || `Could not list queues and topics (HTTP ${r.status}).`,
+        hint: j?.hint,
+      };
+    }
+    return {
+      options: (j.entities || [])
+        .filter((e: any) => e?.name)
+        .map((e: any) => ({ id: String(e.name), name: String(e.name), caption: e.kind === 'topic' ? 'topic' : 'queue' })),
+    };
+  };
+}
+
+/** Exported for the #3526 contract test (the entity cascade). */
+export function DestinationPicker({ spec, onChange }: { spec: ActivationSyncSpec; onChange: (s: ActivationSyncSpec) => void }) {
   const styles = useStyles();
   const dest = spec.destination;
   const kind: ActivationDestinationKind = dest?.kind || 'dataverse';
   const [envs, setEnvs] = useState<EnvDTO[]>([]);
   const [tables, setTables] = useState<TableDTO[]>([]);
   const [gate, setGate] = useState<string | null>(null);
+  /**
+   * The namespace's ARM id, captured from the picker's second callback
+   * argument. NOT persisted: the spec stores the namespace NAME on purpose, so
+   * the destination keeps working in every sovereign boundary
+   * (`serviceBusFqdn()` appends the per-cloud suffix — a stored FQDN or ARM id
+   * would be Commercial-shaped). This is a within-session shortcut that saves
+   * the entity route a subscription walk; when it is empty the route resolves
+   * the name itself, so a reload still lists.
+   */
+  const [nsArmId, setNsArmId] = useState<string>('');
 
   const dv = dest?.kind === 'dataverse' ? dest : undefined;
 
@@ -416,17 +468,52 @@ function DestinationPicker({ spec, onChange }: { spec: ActivationSyncSpec; onCha
               value={dest?.kind === 'service-bus' ? dest.namespace : ''}
               label="Namespace"
               surface="Activation destination"
-              onChange={(v) => setDest({
-                kind: 'service-bus',
-                namespace: v || '',
-                entity: dest?.kind === 'service-bus' ? dest.entity : '',
-              })}
+              onChange={(v, resource) => {
+                const nextNs = v || '';
+                const prevNs = dest?.kind === 'service-bus' ? dest.namespace : '';
+                setNsArmId(resource?.id || '');
+                setDest({
+                  kind: 'service-bus',
+                  namespace: nextNs,
+                  // Changing the namespace invalidates the entity: a queue name
+                  // from the old namespace almost certainly does not exist in
+                  // the new one, and leaving it would send activations at a
+                  // destination the user never chose.
+                  entity: nextNs === prevNs && dest?.kind === 'service-bus' ? dest.entity : '',
+                });
+              }}
             />
           </div>
-          <Field label="Queue / topic" className={styles.grow}>
-            <Input value={dest?.kind === 'service-bus' ? dest.entity : ''} placeholder="activation-queue"
-              onChange={(_, d) => setDest({ kind: 'service-bus', namespace: dest?.kind === 'service-bus' ? dest.namespace : '', entity: d.value })} />
-          </Field>
+          <div className={styles.grow}>
+            {/* #3526 — the entity is PICKED from the namespace chosen to the
+                left, never typed. Queues and topics are ARM child resources, so
+                Resource Graph (which every other picker here uses) cannot serve
+                them; /api/azure/servicebus-entities makes the control-plane
+                call against the PICKED namespace. */}
+            <LoomObjectPicker
+              label="Queue / topic"
+              value={dest?.kind === 'service-bus' ? dest.entity : ''}
+              onChange={(v) => setDest({
+                kind: 'service-bus',
+                namespace: dest?.kind === 'service-bus' ? dest.namespace : '',
+                entity: v,
+              })}
+              load={loadServiceBusEntities(
+                dest?.kind === 'service-bus' ? dest.namespace : '',
+                nsArmId,
+              )}
+              loadKey={`sb-entities:${nsArmId || (dest?.kind === 'service-bus' ? dest.namespace : '')}`}
+              placeholder={dest?.kind === 'service-bus' && dest.namespace ? 'Select a queue or topic…' : 'Pick a namespace first'}
+              emptyTitle={dest?.kind === 'service-bus' && dest.namespace
+                ? `No queues or topics in '${dest.namespace}'`
+                : 'Pick a namespace first'}
+              emptyBody={dest?.kind === 'service-bus' && dest.namespace
+                ? 'That namespace reports no queues and no topics the console identity can read. Create one from the Service Bus namespace item, or grant the console identity Reader on the namespace.'
+                : 'Queues and topics are listed for the namespace selected on the left.'}
+              unresolvedCaption="stored value — not returned by this namespace's entity list"
+              data-testid="activation-sync-sb-entity"
+            />
+          </div>
         </div>
       )}
       {kind !== 'dataverse' && (

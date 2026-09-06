@@ -52,10 +52,13 @@
  *      `finally` would drop exactly the DENIED calls, which on this surface means
  *      "who was refused permission to mint storage access".
  *   2. **check 8 (SECURABLE IMPORT CHOKE POINT)** — no module except this one
- *      may import a UC-mutating symbol from `shortcut-credentials.ts`. It is an
+ *      may import a UC-mutating symbol from `shortcut-credentials.ts` by a
+ *      specifier that RESOLVES to it (alias or relative, at any depth, in
+ *      quotes). It is an
  *      ALLOWLIST of the two non-catalog exports (`getKeyVaultSecret`,
  *      `keyVaultConfigGate`), not a denylist of today's five, so a NEW export
  *      added to that file cannot be consumed anywhere without failing the build.
+ *      The spellings it does NOT reach are stated in the guard's LIMITS block.
  *   3. **check 9 (SUPPRESSOR CHOKE POINT)** — no module except this one may
  *      import `withSecurableRecordedByCaller` by a specifier that RESOLVES to
  *      `securable-audit-context.ts` (alias or relative, at any depth). A module

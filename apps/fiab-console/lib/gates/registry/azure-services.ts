@@ -466,8 +466,8 @@ export const AZURE_SERVICES_GATE_META: Record<string, GateMeta> = {
       // #3544 — Copilot Studio agents, knowledge, topics and templates are
       // Dataverse rows. The "Use template" action that surfaced the admission
       // refusal live on 2026-08-15 writes one.
-      { path: '/items/copilot-studio-agent', label: 'Copilot Studio agents (Dataverse rows) — not yet wired (#3544)' },
-      { path: '/items/copilot-template-library', label: 'Copilot Studio template library — not yet wired (#3544)' },
+      { path: '/items/copilot-studio-agent', label: 'Copilot Studio agents (Dataverse rows)' },
+      { path: '/items/copilot-template-library', label: 'Copilot Studio template library' },
       { path: '/api/items/copilot-studio-*', label: 'Copilot Studio BFF routes' },
     ],
     fixit: { kind: 'wizard', grantNote: 'Requires the operator-run Power Platform SP grant (scripts/csa-loom/grant-powerplatform-sp.sh) — the S2S app must be added as an application user in the environment.' },
@@ -484,22 +484,18 @@ export const AZURE_SERVICES_GATE_META: Record<string, GateMeta> = {
     surfaces: [
       { path: '/items/power-app', label: 'Power Platform control plane (power-* items)' },
       // #3544 — the SEVEN Copilot Studio item editors share one error surface
-      // (`ErrorBar` in lib/editors/copilot-studio-editors.tsx), and an admission
-      // refusal there SHOULD render this gate. IT DOES NOT YET — that half is
-      // tracked in #3544 and is not in this diff.
-      //
-      // The surfaces are listed anyway so /admin/gates names where the gate
-      // BELONGS, and the labels below say "not yet wired" so the admin page
-      // cannot be read as asserting the gate already fires there. A registry
-      // entry that claimed a live control here would be an admin dashboard
-      // green over something that does not run (deploy-integrity R7).
-      { path: '/items/copilot-studio-agent', label: 'Copilot Studio agent editor — not yet wired (#3544)' },
-      { path: '/items/copilot-knowledge', label: 'Copilot Studio knowledge editor — not yet wired (#3544)' },
-      { path: '/items/copilot-topic', label: 'Copilot Studio topic editor — not yet wired (#3544)' },
-      { path: '/items/copilot-action', label: 'Copilot Studio action editor — not yet wired (#3544)' },
-      { path: '/items/copilot-channel', label: 'Copilot Studio channel editor — not yet wired (#3544)' },
-      { path: '/items/copilot-analytics', label: 'Copilot Studio analytics — not yet wired (#3544)' },
-      { path: '/items/copilot-template-library', label: 'Copilot Studio template library — not yet wired (#3544)' },
+      // (`ErrorBar` in lib/editors/copilot-studio-editors.tsx). An admission
+      // refusal there NOW renders this gate: `isPowerPlatformAdmissionError`
+      // classifies the prose and `ErrorBar` returns <HonestGate
+      // gateId="svc-powerplatform">, so the role-grant Fix-it below reaches the
+      // UI on every one of these paths.
+      { path: '/items/copilot-studio-agent', label: 'Copilot Studio agent editor' },
+      { path: '/items/copilot-knowledge', label: 'Copilot Studio knowledge editor' },
+      { path: '/items/copilot-topic', label: 'Copilot Studio topic editor' },
+      { path: '/items/copilot-action', label: 'Copilot Studio action editor' },
+      { path: '/items/copilot-channel', label: 'Copilot Studio channel editor' },
+      { path: '/items/copilot-analytics', label: 'Copilot Studio analytics' },
+      { path: '/items/copilot-template-library', label: 'Copilot Studio template library' },
     ],
     fixit: { kind: 'role-grant', grantNote: 'A Power Platform admin must register the Console UAMI as a management app (scripts/csa-loom/grant-powerplatform-sp.sh, or New-PowerAppManagementApp in PowerShell) — a one-time tenant action, not an env write. Where the failure names Dataverse ("not a member of the organization", "tenant isolation", "principal not found"), the SAME grant script also adds the identity as a Dataverse application user with a maker role in the target environment.' },
     // NO legacyCodes here on purpose. Power Platform / Dataverse do not return a
@@ -508,11 +504,14 @@ export const AZURE_SERVICES_GATE_META: Record<string, GateMeta> = {
     // lookup `gateForCode` uses and its entries must be unique across gates, so
     // putting prose (or re-claiming `powerplatform_not_configured`, which
     // `svc-dataverse` above already owns) would break that map rather than help.
-    // Classifying that prose where it arrives — an `isPowerPlatformAdmissionError`
-    // in lib/editors/copilot-studio-editors.tsx that renders THIS gate — is the
-    // REMAINING half of #3544 and is NOT in this diff. No such function exists in
-    // the tree today; an earlier draft of this comment asserted it did, which was
-    // an R7 claim about code that had been reverted out of the change.
+    // The prose is classified where it ARRIVES instead:
+    // `isPowerPlatformAdmissionError` in lib/editors/copilot-studio-editors.tsx
+    // matches the three phrases named in the grantNote above (case-insensitively)
+    // and renders THIS gate. That classifier is asserted by
+    // lib/editors/__tests__/copilot-studio-admission-gate-3544.test.tsx, which
+    // also asserts a NON-admission error still renders the plain error bar — a
+    // role-grant Fix-it over a 400 would be a remediation the code never
+    // established (deploy-integrity R7).
   },
   'svc-stream-analytics': {
     surfaces: [{ path: '/items/eventstream', label: 'Eventstream processing (ASA jobs)' }],

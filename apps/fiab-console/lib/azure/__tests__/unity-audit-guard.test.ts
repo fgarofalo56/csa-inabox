@@ -993,6 +993,23 @@ describe('ROUND 6 — the securable IMPORT choke point (check 8)', () => {
     s.set('app/api/rogue-sec/route.ts',
       "import { rotateUcStorageCredential } from '@/lib/azure/shortcut-credentials';\n"
       + 'export async function POST() { await rotateUcStorageCredential(); return new Response(); }\n');
+    // (e) a CROSS-DIRECTORY RELATIVE specifier. Every arm above is either
+    //     `@/`-aliased or relative with NO intervening segment, so all of them
+    //     pass under a SIBLING-ONLY relative pattern — which is what this guard
+    //     shipped with until 2026-09-05. A round-2 review measured 334
+    //     cross-directory relative imports under apps/fiab-console/{lib,app}, 62
+    //     of them into an azure/ directory, so this is the repo's own idiom and
+    //     was the one shape the choke point could not see.
+    //
+    //     This arm is what makes the widened pattern a RATCHET rather than an
+    //     edit: revert specifierPatterns' relative arm to the sibling-only form
+    //     and THIS assertion goes red. Without it the revert is silent — the
+    //     round-3 review demonstrated exactly that, running the guard's own
+    //     exported readers over all six pre-existing fixtures under both
+    //     patterns and getting IDENTICAL output.
+    s.set('lib/install/provisioners/rogue-sec-e.ts',
+      "import { deleteUcStorageCredential } from '../../azure/shortcut-credentials';\n"
+      + 'export const go = deleteUcStorageCredential;\n');
 
     const found = analyzeUnityChokepoint(s).join('\n');
     for (const sym of [
@@ -1129,6 +1146,46 @@ describe('ROUND 7 — the securable SUPPRESSOR choke point (check 9)', () => {
       .toMatch(/shortcut-credentials\.ts: imports `withSecurableRecordedByCaller` from lib\/azure\/securable-audit-context\.ts/);
     // …and the message routes the reader to WHY, not merely to WHAT.
     expect(found).toMatch(/Only lib\/azure\/uc-securable\.ts may import `withSecurableRecordedByCaller`/);
+  });
+
+  it('fails on a CROSS-DIRECTORY relative specifier — the ratchet on the widened pattern', () => {
+    // Every other fixture in ROUND 6 and ROUND 7 is either `@/`-aliased or
+    // relative with NO intervening path segment, so all of them pass under the
+    // SIBLING-ONLY relative pattern this guard shipped with until 2026-09-05.
+    // A round-2 review measured 334 cross-directory relative imports under
+    // apps/fiab-console/{lib,app} — 62 into an azure/ directory — so the one
+    // shape the choke point could not see was the shape the repo actually
+    // writes.
+    //
+    // This arm exists so the widening is a RATCHET and not an edit. Revert
+    // specifierPatterns' relative arm to `(?:\.{1,2}/)+<basename>` and THIS
+    // assertion goes red; without it the revert is silent, which the round-3
+    // review demonstrated by running the guard's own exported readers over all
+    // six pre-existing fixtures under both patterns and getting IDENTICAL
+    // output.
+    const s = realSources();
+    s.set('lib/brain/run/azure/rogue-suppressor.ts', [
+      "import { withSecurableRecordedByCaller } from '../../../azure/securable-audit-context';",
+      'export const go = withSecurableRecordedByCaller;',
+    ].join('\n'));
+    const found = analyzeUnityChokepoint(s).join('\n');
+    expect(found, 'a cross-directory relative import of the suppressor was invisible')
+      .toMatch(/rogue-suppressor\.ts: imports `withSecurableRecordedByCaller` from lib\/azure\/securable-audit-context\.ts/);
+  });
+
+  it('does NOT fire on a basename that merely CONTAINS the guarded one', () => {
+    // The widened arm admits `(?:[\w.-]+/)*` between the dots and the basename,
+    // which is a place an over-match could hide. A neighbouring module whose
+    // name is a superstring of the guarded one is a different module and must
+    // stay invisible to check 9 — otherwise the widening trades a false
+    // negative for a false positive and the guard becomes the thing people
+    // route around.
+    const s = realSources();
+    s.set('lib/brain/run/azure/near-miss.ts', [
+      "import { somethingElse } from '../../../azure/securable-audit-context-v2';",
+      'export const go = somethingElse;',
+    ].join('\n'));
+    expect(analyzeUnityChokepoint(s).join('\n')).not.toMatch(/near-miss\.ts/);
   });
 
   it('fails on every evasion a name scan invites (one scan, five attacks)', () => {

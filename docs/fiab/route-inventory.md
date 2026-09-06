@@ -13,9 +13,9 @@ verdict is DERIVED, not name-matched — see "How the owner column is decided".
 
 | Metric | Count |
 | --- | ---: |
-| Total routes | 1691 |
+| Total routes | 1692 |
 | Public (no session) | 59 |
-| Session-only | 648 |
+| Session-only | 649 |
 | Owner-scoped | 674 |
 | Admin | 310 |
 | Unknown (generator fails) | 0 |
@@ -558,6 +558,7 @@ dispatch is invisible to it. Full limits: `scripts/ci/_route-backends.mjs`.
 | `azure/function-apps/route.ts` | GET | session-only | ● | ARM, App Service |
 | `azure/iothub/policies/route.ts` | GET | session-only |  | ARM, Cosmos, IoT Hub |
 | `azure/resources/route.ts` | GET | session-only |  | ADF, ARM, App Service, Azure Networking, Cosmos, Cost Management, Management Groups, Resource Graph |
+| `azure/servicebus-entities/route.ts` | GET | session-only |  | ARM, Service Bus |
 
 ## business-events
 
@@ -2528,7 +2529,7 @@ silently downgrading the route.
 
 ## Backend signals (derived)
 
-455 module(s) ORIGINATE a backend label — the derivation read an
+458 module(s) ORIGINATE a backend label — the derivation read an
 Azure identifier out of them. Every other route/module below inherits through the
 call graph. Nothing in this section is a Loom module name someone typed: the
 modules are derived, and only the Microsoft-owned identifier vocabulary is seeded.
@@ -2790,6 +2791,7 @@ caps the NUMBER of cuts at three; it does not bound what one cut can hide.
 | `apps/fiab-console/app/api/azure/function-apps/route.ts` | App Service |
 | `apps/fiab-console/app/api/azure/iothub/policies/route.ts` | IoT Hub |
 | `apps/fiab-console/app/api/azure/resources/route.ts` | ADF, App Service, Azure Networking, Cost Management, Management Groups, Resource Graph |
+| `apps/fiab-console/app/api/azure/servicebus-entities/route.ts` | Service Bus |
 | `apps/fiab-console/app/api/business-events/channels/route.ts` | Event Grid, Event Hubs |
 | `apps/fiab-console/app/api/catalog/domains/route.ts` | Purview |
 | `apps/fiab-console/app/api/catalog/metastores/route.ts` | Databricks |
@@ -2806,6 +2808,7 @@ caps the NUMBER of cuts at three; it does not bound what one cut can hide.
 | `apps/fiab-console/app/api/items/[type]/[id]/security-roles/route.ts` | Fabric |
 | `apps/fiab-console/app/api/items/_lib/sql-server-scope.ts` | Azure SQL, PostgreSQL |
 | `apps/fiab-console/app/api/items/activator/[id]/history/route.ts` | Azure Monitor |
+| `apps/fiab-console/app/api/items/ai-foundry-project/[id]/route.ts` | AML |
 | `apps/fiab-console/app/api/items/azure-sql-database/[id]/queries/route.ts` | Cosmos |
 | `apps/fiab-console/app/api/items/copilot-template-library/[id]/route.ts` | Cosmos |
 | `apps/fiab-console/app/api/items/copilot-template-library/route.ts` | Cosmos |
@@ -3137,7 +3140,8 @@ caps the NUMBER of cuts at three; it does not bound what one cut can hide.
 | `apps/fiab-console/lib/editors/databricks/uc-dialogs.tsx` | ADLS, Azure SQL, Databricks |
 | `apps/fiab-console/lib/editors/dataflow-gen2-editor.tsx` | Azure SQL |
 | `apps/fiab-console/lib/editors/eventstream/geo-reference.ts` | Azure Storage |
-| `apps/fiab-console/lib/editors/foundry-hub-editor.tsx` | AML, Azure AI Services, Key Vault |
+| `apps/fiab-console/lib/editors/foundry-account-picker-bar.tsx` | AML, Azure AI Services |
+| `apps/fiab-console/lib/editors/foundry-hub-editor.tsx` | Key Vault |
 | `apps/fiab-console/lib/editors/foundry-playground.tsx` | AI Foundry, AI Search |
 | `apps/fiab-console/lib/editors/foundry-sub-editors.tsx` | ADLS, AI Foundry, AI Search, Azure AI Services |
 | `apps/fiab-console/lib/editors/geo-editors.tsx` | Azure Maps |
@@ -3153,7 +3157,7 @@ caps the NUMBER of cuts at three; it does not bound what one cut can hide.
 | `apps/fiab-console/lib/editors/ml-experiment-editor.tsx` | AML |
 | `apps/fiab-console/lib/editors/model-serving-endpoint-editor.tsx` | AML |
 | `apps/fiab-console/lib/editors/mounted-adf-editor.tsx` | ADF |
-| `apps/fiab-console/lib/editors/palantir/health-check-editor.tsx` | Azure Monitor, Logic Apps |
+| `apps/fiab-console/lib/editors/palantir/health-check-editor.tsx` | Azure Monitor |
 | `apps/fiab-console/lib/editors/palantir/release-environment-editor.tsx` | ACR, App Service |
 | `apps/fiab-console/lib/editors/palantir/slate-app-editor.tsx` | App Service |
 | `apps/fiab-console/lib/editors/palantir/workshop-app-editor.tsx` | App Service |
