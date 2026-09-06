@@ -293,21 +293,28 @@
  *     definition, and never at its ~9 call sites. Cross-file resolution is not
  *     attempted.
  *   - A FLUENT `<Combobox freeform>`, which accepts typed text while looking
- *     like a picker. SIX in the tree as of #4313, measured — `grep -rn
- *     "<Combobox" apps/fiab-console/{lib,app} --include=*.tsx` returns 14
- *     occurrences, of which these six carry `freeform`:
- *       lib/components/ai-search/ai-search-tree.tsx:167    analyzer language ("en")
- *       lib/components/pipeline/copy/mapping-tab.tsx:479   source column type ("String")
- *       lib/components/pipeline/copy/mapping-tab.tsx:492   sink column name ("order_id")
- *       lib/components/pipeline/copy/mapping-tab.tsx:509   sink column type ("String")
- *       lib/editors/foundry-sub-editors.tsx:1896           Azure OpenAI ENDPOINT
- *       lib/panes/git-integration.tsx:623                  git branch ("main")
- *     ONE of the six carries an infrastructure address — the vectorizer endpoint
- *     at foundry-sub-editors.tsx:1896. The other five name a column, a type, a
- *     branch or a language: values that live in the user's own data or repo, not
- *     addresses the platform could have bound (auto-bind-by-default.md §5), so
- *     they are outside what this rule asks about. Five of the six pre-date
- *     #4313; the endpoint is the one this PR added.
+ *     like a picker. NO COUNT IS GIVEN HERE, deliberately — this note has
+ *     carried three different wrong numbers (Zero, then ONE, then SIX) across
+ *     three review rounds, each one measured with a LINE-ANCHORED grep. That is
+ *     the bug: every `<Combobox>` in this tree opens multi-line, so
+ *     `grep -rn "<Combobox"` sees the prop only when `freeform` happens to land
+ *     on the same physical line as the tag. A whole-opening-tag scan finds
+ *     roughly twice as many. Reproduce it rather than trusting a number that
+ *     rots:
+ *
+ *         rg -U '<Combobox[^>]*\bfreeform\b' apps/fiab-console --glob '*.tsx'
+ *
+ *     Two of the hits are INFRASTRUCTURE ADDRESSES in the sense
+ *     `auto-bind-by-default.md` §5 means, and are called out because they are
+ *     the ones this rule would otherwise be expected to cover:
+ *       lib/editors/foundry-sub-editors.tsx  the Azure OpenAI vectorizer ENDPOINT
+ *       lib/components/shared/honest-gate.tsx  an arbitrary `LOOM_*` value, typed
+ *                                            into the G2 Fix-it wizard itself
+ *     Others name a column, a type, a branch or a language — values that live in
+ *     the user's own data or repo, not addresses the platform could have bound —
+ *     so they are outside what this rule asks about. That split is a JUDGEMENT
+ *     per site, not a property the scan can compute, which is the second reason
+ *     a single number here was always going to mislead.
  *
  *     That endpoint is rendered ONLY on the branch where `/api/foundry/accounts`
  *     FAILED or genuinely returned zero accounts — the discovered-rows branch is
