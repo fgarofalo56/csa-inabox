@@ -16,22 +16,30 @@ dashboard** over your Sentinel-backed cyber medallion. **~20 minutes.**
 | --- | --- | --- |
 | A Loom workspace | Apps install into a workspace | [Tutorial 01 — First workspace](../01-first-workspace.md) |
 | `LOOM_KUSTO_CLUSTER_URI` set | The dashboard tiles need a queryable ADX data source | The dashboard installs with a remediation gate naming the variable |
-| A cyber medallion in ADX (`bronze.stg_sentinel_alerts`, `silver.fct_security_alerts`, `silver.dim_mitre_techniques`, `gold.rpt_compliance_posture`) | The eight tiles query **these** tables by name | See the honest caveat below |
+| A cyber medallion in ADX (`bronze.stg_sentinel_alerts`, `silver.fct_security_alerts`, `silver.dim_mitre_techniques`, `gold.rpt_compliance_posture`) | The eight tiles query **these** tables by name | The app now creates them — see below |
 
-!!! warning "This app does not create the cyber tables"
-    The bundle ships a scorecard and a dashboard — it does **not** provision the
-    Sentinel medallion the tiles read. The tile KQL is grounded in the
+!!! success "This app creates the cyber tables (changed 2026-09, #3537)"
+    The bundle ships a **`Compliance Events` kql-database item** alongside the
+    dashboard. Installing the app provisions the ADX database and all four
+    medallion tables, seeded with sample rows, so the dashboard renders on a
+    fresh install instead of returning a Kusto "table not found" per tile.
+    Re-ingest from your own Sentinel workspace (or repoint the tables at the
     [Cybersecurity (MITRE ATT&CK) example](../../examples/cybersecurity.md)
-    (`examples/cybersecurity/domains/{bronze,silver,gold}`). Until those tables exist
-    in the ADX database the dashboard resolves to, the tiles return a Kusto
-    "table not found" error rather than fabricated rows. That is the honest state, and
-    it is the one thing to plan for before you install.
+    medallion in `examples/cybersecurity/domains/{bronze,silver,gold}`) to make
+    it live.
 
-    The dashboard's database is resolved in this order: `content.database` on the
-    bundle (not set here) → the install's resolved target DB (`LOOM_KUSTO_DEFAULT_DB`)
-    → a slug of the dashboard's own name. In practice it lands on
-    **`LOOM_KUSTO_DEFAULT_DB`** — put the cyber medallion tables there, or repoint the
-    tiles after install.
+    The dashboard's database is resolved from **the kql-database item this same
+    install provisions** — the deterministic
+    `safeAdxDatabaseName(displayName)` mapping `kql-db.ts` creates the ARM
+    database with — then from `content.database` on the bundle. It no longer
+    falls back to `LOOM_KUSTO_DEFAULT_DB` or to a slug of the dashboard's own
+    name: both bound the tiles to a database that does not hold their tables,
+    and reported `created` while doing it. A dashboard that can resolve
+    neither now returns an honest remediation naming what to add.
+
+    ADX has no schemas, so a dotted name is a single table name and the tile
+    KQL brackets it — `['bronze.stg_sentinel_alerts']`. An unbracketed
+    `bronze.stg_sentinel_alerts` does not parse as a table reference.
 
 ## 1. Install the app
 
