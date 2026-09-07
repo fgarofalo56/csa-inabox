@@ -405,32 +405,131 @@ test('#3317 single-sub keeps its convention fallback — the fix is additive, no
 });
 
 // ── ties: the model above must describe the template that actually deploys ───
+//
+// PR #4343 review: the first revision of these ties asserted TOKEN PRESENCE, so
+// they were keyed to a spelling rather than to the composed expression. Two
+// one-token mutations restored the whole of #3317 under a green suite:
+//
+//   M1  main.bicep  `? adoptName(adopt, 'servicebus')` → `? ''`
+//       — the token survives in the `!empty(...)` test, so /adoptName\(adopt,
+//         'servicebus'\)/ still matched. 29/29 pass, RC=0, and
+//         LOOM_SERVICEBUS_NAMESPACE is empty on every boundary again.
+//   M2  admin-plane  `? loomServiceBusRgIn : loomDlzRg` → `? loomDlzRg : loomDlzRg`
+//       — the doesNotMatch(/^var effServiceBusRg\s+= loomDlzRg$/m) guard does
+//         not fire (the line is no longer bare) and the match(/!empty\(
+//         loomServiceBusRgIn\)/) guard still sees its token. 29/29, RC=0.
+//
+// check-deploy-template-sync does not cover this either: it proves main.json
+// was re-derived from main.bicep, not that the expression means anything.
+//
+// So the assertions below pin the COMPOSED TERNARY — condition AND the branch
+// it selects — and each one is exercised against its own mutant in the same
+// test, so "it passed" is evidence that it can also fail.
+
+/**
+ * Assert `re` matches `source`, and that it STOPS matching once `real` is
+ * rewritten to `mutant`. Without the second half a regex that is merely present
+ * in the file proves nothing about what the file computes.
+ *
+ * Uses assert.ok rather than assert.match/doesNotMatch on purpose: these
+ * sources are 220KB and 620KB, and node's match diff prints the whole haystack
+ * into the CI log, which buries the one line that actually failed.
+ */
+function pinsExpression(source, re, { real, mutant, what }) {
+  assert.ok(re.test(source), `${what}\n  expected to find: ${re}`);
+  assert.ok(source.includes(real), `precondition: '${real}' must be in the source verbatim`);
+  const mutated = source.replace(real, mutant);
+  assert.ok(mutated !== source, 'precondition: the mutation must actually change the source');
+  assert.ok(
+    !re.test(mutated),
+    `${what}\n  the assertion ${re} survives '${real}' -> '${mutant}',`
+    + '\n  so it is keyed to a spelling, not to the composed expression',
+  );
+}
 
 test('#3317 TIE: main.bicep composes both coordinates adopt-first', () => {
-  for (const key of ['servicebus', 'batch']) {
-    assert.match(
-      MAIN_BICEP,
-      new RegExp(`adoptName\\(adopt, '${key}'\\)`),
-      `main.bicep must read the adopt plan for '${key}' — without it the binding is convention-only and renders '' on every shipped boundary`,
-    );
-  }
-  // The RG must travel with the name, or the console names a real resource in
-  // the wrong resource group.
-  assert.match(MAIN_BICEP, /adoptRg\(adopt, 'servicebus'\)/);
-  assert.match(MAIN_BICEP, /adoptSub\(adopt, 'servicebus'\)/);
-  assert.match(MAIN_BICEP, /adoptRg\(adopt, 'batch'\)/);
+  // The CONSEQUENT of the ternary must be the adopted name, not merely the
+  // token appearing somewhere in the condition (M1).
+  pinsExpression(
+    MAIN_BICEP,
+    /serviceBusNamespace:\s*!empty\(adoptName\(adopt, 'servicebus'\)\)\s*\?\s*adoptName\(adopt, 'servicebus'\)/,
+    {
+      real: "        ? adoptName(adopt, 'servicebus')",
+      mutant: "        ? ''",
+      what: "main.bicep must SELECT the adopted Service Bus name — a condition that tests the plan and then "
+        + "returns something else renders LOOM_SERVICEBUS_NAMESPACE empty on every shipped boundary (#3317)",
+    },
+  );
+  pinsExpression(
+    MAIN_BICEP,
+    /batchAccount:\s*!empty\(adoptName\(adopt, 'batch'\)\)\s*\?\s*adoptName\(adopt, 'batch'\)/,
+    {
+      real: "        ? adoptName(adopt, 'batch')",
+      mutant: "        ? ''",
+      what: 'main.bicep must SELECT the adopted Batch account name (LOOM_BATCH_ACCOUNT)',
+    },
+  );
+  // The RG/sub must travel with the name, or the console names a real resource
+  // in the wrong resource group. These are plain assignments, so the composed
+  // form is `<property>: <expression>` — a mutant value breaks the pair.
+  pinsExpression(MAIN_BICEP, /serviceBusRg:\s*adoptRg\(adopt, 'servicebus'\)/, {
+    real: "      serviceBusRg: adoptRg(adopt, 'servicebus')",
+    mutant: '      serviceBusRg: \'\'',
+    what: 'LOOM_SERVICEBUS_RG must carry the adopted namespace\'s own resource group',
+  });
+  pinsExpression(MAIN_BICEP, /serviceBusSub:\s*adoptSub\(adopt, 'servicebus'\)/, {
+    real: "      serviceBusSub: adoptSub(adopt, 'servicebus')",
+    mutant: '      serviceBusSub: \'\'',
+    what: 'LOOM_SERVICEBUS_SUB must carry the adopted namespace\'s own subscription',
+  });
+  pinsExpression(
+    MAIN_BICEP,
+    /batchRg:\s*!empty\(adoptName\(adopt, 'batch'\)\)\s*\?\s*adoptRg\(adopt, 'batch'\)/,
+    {
+      real: "        ? adoptRg(adopt, 'batch')",
+      mutant: "        ? ''",
+      what: "LOOM_BATCH_RG must SELECT the adopted account's resource group when the plan carries one",
+    },
+  );
 });
 
 test('#3317 TIE: admin-plane honours the adopted Service Bus RG/sub instead of assuming the DLZ', () => {
+  // The bare-assignment form stays pinned as a second edge…
   assert.doesNotMatch(
     ADMIN_PLANE_BICEP,
     /^var effServiceBusRg\s+= loomDlzRg$/m,
     'effServiceBusRg must not be an unconditional loomDlzRg — an adopted namespace lives where the plan says',
   );
-  assert.match(ADMIN_PLANE_BICEP, /var effServiceBusRg\s+= !empty\(loomServiceBusRgIn\)/);
-  assert.match(ADMIN_PLANE_BICEP, /var effServiceBusSub\s+= !empty\(loomServiceBusSubIn\)/);
-  // Batch already honoured byoExisting.batchRg; pin that it still does.
-  assert.match(ADMIN_PLANE_BICEP, /var loomBatchRg\s+= !empty\(byoExisting\.\?batchRg \?\? ''\)/);
+  // …but the load-bearing assertion is that the ternary SELECTS the incoming
+  // value, which is what M2 defeated by collapsing both branches to loomDlzRg.
+  pinsExpression(
+    ADMIN_PLANE_BICEP,
+    /var effServiceBusRg\s+=\s*!empty\(loomServiceBusRgIn\)\s*\?\s*loomServiceBusRgIn\b/,
+    {
+      real: '!empty(loomServiceBusRgIn) ? loomServiceBusRgIn : loomDlzRg',
+      mutant: '!empty(loomServiceBusRgIn) ? loomDlzRg : loomDlzRg',
+      what: 'effServiceBusRg must RESOLVE TO the adopted RG, not merely mention it in the condition',
+    },
+  );
+  pinsExpression(
+    ADMIN_PLANE_BICEP,
+    /var effServiceBusSub\s+=\s*!empty\(loomServiceBusSubIn\)\s*\?\s*loomServiceBusSubIn\b/,
+    {
+      real: '!empty(loomServiceBusSubIn) ? loomServiceBusSubIn : subscription().subscriptionId',
+      mutant: '!empty(loomServiceBusSubIn) ? subscription().subscriptionId : subscription().subscriptionId',
+      what: 'effServiceBusSub must RESOLVE TO the adopted subscription',
+    },
+  );
+  // Batch already honoured byoExisting.batchRg; pin that it still SELECTS it.
+  pinsExpression(
+    ADMIN_PLANE_BICEP,
+    /var loomBatchRg\s+=\s*!empty\(byoExisting\.\?batchRg \?\? ''\)\s*\?\s*byoExisting\.batchRg\b/,
+    {
+      real: "!empty(byoExisting.?batchRg ?? '') ? byoExisting.batchRg : loomDlzRg",
+      mutant: "!empty(byoExisting.?batchRg ?? '') ? loomDlzRg : loomDlzRg",
+      what: 'loomBatchRg must RESOLVE TO the adopted Batch RG',
+    },
+  );
 });
 
 test('#3317 TIE: the discovery script emits both keys, read BY RESOURCE TYPE', () => {

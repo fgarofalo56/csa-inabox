@@ -23,6 +23,17 @@
  *        - a rule path may carry `*` for an ARM array index; `*` matches ONLY
  *          digits (`.0` or `[0]`), never a property name, so it cannot be used
  *          to blanket a subtree
+ *        - a rule whose `reason` justifies suppression with the value the
+ *          property was MEASURED to hold must ALSO carry a value predicate
+ *          (`whenBeforeEquals` / `whenBeforeIn`), which this matcher checks
+ *          against the delta's own `before`. Without it a path-only match
+ *          suppresses the property at EVERY value, including the one the reason
+ *          says it can never hold — e.g. the APIM legacy-protocol toggles are
+ *          allowlisted because ARM defaults them to the SECURE 'False', and a
+ *          path-only rule would have hidden a live 'True' (SSL 3.0 actually
+ *          ENABLED) just as quietly. That is both a detection regression and a
+ *          deploy-integrity R7 violation: the reason would assert a condition
+ *          the code never established.
  *        - every suppressed delta is still printed, so it is auditable
  *
  *   2. COVERAGE — what-if silently gives up on nested deployments whose
@@ -155,6 +166,28 @@ function ruleMatchesPath(rulePath, entryPath) {
   return re.test(entryPath);
 }
 
+/**
+ * Structural equality between a delta's `before` and a rule's expected literal.
+ *
+ * Deliberately STRICT: no coercion (0 !== '0', false !== 'false'), and objects
+ * must have exactly the same key set. A rule that cites a measured value is
+ * making a claim about a specific shape, so anything else must fall through to
+ * "not suppressed". The failure direction is the safe one — a shape this does
+ * not recognise stays in the drift verdict, visible, rather than being hidden.
+ */
+function valueEquals(actual, expected) {
+  if (actual === expected) return true;
+  if (actual === null || expected === null) return false;
+  if (typeof actual !== 'object' || typeof expected !== 'object') return false;
+  if (Array.isArray(actual) !== Array.isArray(expected)) return false;
+  const ka = Object.keys(actual);
+  const kb = Object.keys(expected);
+  if (ka.length !== kb.length) return false;
+  return ka.every(
+    (k) => Object.prototype.hasOwnProperty.call(expected, k) && valueEquals(actual[k], expected[k]),
+  );
+}
+
 /** @returns {{suppressed: boolean, reason?: string}} */
 function classifyDelta(resourceType, entry) {
   if (!SUPPRESSIBLE_PROPERTY_CHANGE_TYPES.has(entry.propertyChangeType)) return { suppressed: false };
@@ -162,6 +195,14 @@ function classifyDelta(resourceType, entry) {
   if (!rules) return { suppressed: false };
   for (const rule of rules) {
     if (!ruleMatchesPath(rule.path, entry.path)) continue;
+    // VALUE PREDICATE — the path matched, but a rule whose reason rests on the
+    // property holding a particular server default only applies AT that value.
+    if (Object.prototype.hasOwnProperty.call(rule, 'whenBeforeEquals')) {
+      if (!valueEquals(entry.before, rule.whenBeforeEquals)) continue;
+    }
+    if (Array.isArray(rule.whenBeforeIn)) {
+      if (!rule.whenBeforeIn.some((candidate) => valueEquals(entry.before, candidate))) continue;
+    }
     if (Array.isArray(rule.whenBeforeKeysSubsetOf)) {
       const before = entry.before;
       if (!before || typeof before !== 'object' || Array.isArray(before)) continue;

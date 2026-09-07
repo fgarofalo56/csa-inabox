@@ -25,6 +25,23 @@
     "     digits, in either shape what-if emits (`.0` or `[0]`) — never a property",
     "     name — so it cannot blanket a subtree. Add the element form only when a",
     "     real what-if run has actually emitted it.",
+    "  6. VALUE PREDICATE. If the `reason` justifies suppression with the value",
+    "     the property was MEASURED to hold — 'Measured before=0', 'Server-",
+    "     defaulted to False' — the rule MUST carry `whenBeforeEquals` (one",
+    "     literal, compared structurally and without coercion) or `whenBeforeIn`",
+    "     (a list of them). Without it the rule matches on PATH ONLY and",
+    "     suppresses that property at every value, including the value the reason",
+    "     says it can never hold: the APIM legacy-protocol toggles are allowlisted",
+    "     precisely BECAUSE ARM defaults them to the secure 'False', and a",
+    "     path-only rule hid a live 'True' — SSL 3.0 actually ENABLED — just as",
+    "     quietly. That is a detection regression and a deploy-integrity R7",
+    "     violation (the reason asserts a condition the code never established).",
+    "     The whatif-drift-verdict self-test enforces this: a reason that cites a",
+    "     measured value with no predicate FAILS the suite. Read-only ARM metadata",
+    "     with no fixed value (privateDnsZoneConfigs id/etag/type, RP-assigned",
+    "     endpoints) legitimately carries no predicate — its reason cites no value.",
+    "     A predicate that does not match live is the SAFE direction: the delta",
+    "     stays in the drift verdict, visible, instead of being hidden.",
     "",
     "Seeded 2026-07-28 from run 30259654971 (issue #2540): 11/11 Modify deltas",
     "were this class — 9 identical UAMI deltas plus Grafana + the UDF Container",
@@ -38,7 +55,17 @@
     "those 357 deltas. The rest — AAS asAdministrators, APIM policy bodies,",
     "diagnosticSettings whole log categories, ACR networkRuleSet, KV createMode,",
     "the managedEnvironments block — are REAL template-vs-live conflicts and are",
-    "deliberately left in the verdict for a reconciling bicep change."
+    "deliberately left in the verdict for a reconciling bicep change.",
+    "",
+    "Hardened 2026-09-07 (PR #4343 review). Those entries were added with the",
+    "measured `before` value written into the reason but never checked by the",
+    "matcher, which matched on PATH ALONE. Measured inversion: a synthetic APIM",
+    "Delete on Gateway.Security.Protocols.Ssl30 carrying before='True' — SSL 3.0",
+    "actually ENABLED in live — was suppressed to '0 real delta(s), 1 what-if",
+    "noise suppressed', exit 0, drift list empty. Same for retentionPolicy.days",
+    "with before=365. Rule 6 (the value predicate) closes that: 19 of the 35",
+    "rules now pin the value their reason cites, and the self-test fails any",
+    "reason that cites a measured value without one."
   ],
   "resourceTypes": {
     "Microsoft.ManagedIdentity/userAssignedIdentities": [
@@ -49,7 +76,8 @@
       },
       {
         "path": "properties.isolationScope",
-        "reason": "Same as above when what-if reports the leaf rather than the parent object. 'None' is the server default; a redeploy that omits it is a no-op."
+        "whenBeforeEquals": "None",
+        "reason": "Same as above when what-if reports the leaf rather than the parent object. Server-defaulted to 'None' (the default of the None|Regional enum); a redeploy that omits it is a no-op. The predicate means a UAMI whose live isolationScope is 'Regional' — a value the template does not declare and a redeploy WOULD reset — stays real drift."
       }
     ],
     "Microsoft.Dashboard/grafana": [
@@ -77,19 +105,23 @@
       },
       {
         "path": "properties.workloadProfileName",
-        "reason": "Server-defaulted to 'Consumption' on a Consumption-only managed environment; udf-runtime.bicep omits it deliberately so the same template works on Consumption and workload-profile environments."
+        "whenBeforeEquals": "Consumption",
+        "reason": "Server-defaulted to 'Consumption' on a Consumption-only managed environment; udf-runtime.bicep omits it deliberately so the same template works on Consumption and workload-profile environments. The predicate matters because the property IS settable: an app live on a dedicated profile ('D4', 'E8') that the template omits WOULD be moved back to Consumption by a redeploy, so that shape stays real drift."
       },
       {
         "path": "properties.configuration.maxInactiveRevisions",
-        "reason": "Server-defaulted (100). Omitted by template; a redeploy re-applies the same default."
+        "whenBeforeEquals": 100,
+        "reason": "Server-defaulted to 100. Omitted by template; a redeploy re-applies the same default. Settable, so the predicate keeps a live non-default (an app deliberately pinned to 5) in the verdict rather than hiding the reset a redeploy would perform."
       },
       {
         "path": "properties.configuration.ingress.traffic",
-        "reason": "Server-defaulted to [{latestRevision:true, weight:100}] under activeRevisionsMode 'Single'. Declaring it would fight the roll workflows that shift traffic."
+        "whenBeforeEquals": [{ "latestRevision": true, "weight": 100 }],
+        "reason": "Server-defaulted to [{latestRevision:true, weight:100}] under activeRevisionsMode 'Single'. Declaring it would fight the roll workflows that shift traffic — which is exactly why the predicate is pinned to the all-on-latest shape: a live traffic SPLIT (a stuck blue/green weight distribution the template does not describe) is a real estate state and stays in the verdict."
       },
       {
         "path": "properties.configuration.ingress.exposedPort",
-        "reason": "Server-defaulted to 0 for non-TCP transports."
+        "whenBeforeEquals": 0,
+        "reason": "Server-defaulted to 0 for non-TCP transports. A live non-zero exposedPort is a TCP ingress the template does not declare, so it stays real drift."
       },
       {
         "path": "properties.configuration.ingress.fqdn",
@@ -123,13 +155,15 @@
     "Microsoft.Network/privateDnsZones/virtualNetworkLinks": [
       {
         "path": "properties.resolutionPolicy",
-        "reason": "Server-defaulted. `resolutionPolicy` was added in the 2024-06-01 privateDnsZones schema as a Default|NxDomainRedirect enum; the RP stamps 'Default' on every link, including the ~27 links private-dns.bicep creates without expressing an opinion. Measured before='Default' on every occurrence in run 33406666389 — a redeploy that omits it re-applies the same value. If Loom ever needs NxDomainRedirect, set it in bicep and DELETE this entry."
+        "whenBeforeEquals": "Default",
+        "reason": "Server-defaulted. `resolutionPolicy` was added in the 2024-06-01 privateDnsZones schema as a Default|NxDomainRedirect enum; the RP stamps 'Default' on every link, including the ~27 links private-dns.bicep creates without expressing an opinion. Measured before='Default' on every occurrence in run 33406666389 — a redeploy that omits it re-applies the same value. The predicate holds the suppression to that measurement: a link live on 'NxDomainRedirect' would be RESET by a redeploy, so it stays real drift. If Loom ever needs NxDomainRedirect, set it in bicep and DELETE this entry."
       }
     ],
     "Microsoft.Network/privateEndpoints": [
       {
         "path": "properties.isIPv6EnabledPrivateEndpoint",
-        "reason": "Server-defaulted to false. A dual-stack flag the RP stamps on every private endpoint under the newer network API versions; private-endpoint.bicep declares only IPv4 subnets, so what-if reports the RP's own false as a deletion. Measured before=false on every occurrence in run 33406666389."
+        "whenBeforeEquals": false,
+        "reason": "Server-defaulted to false. A dual-stack flag the RP stamps on every private endpoint under the newer network API versions; private-endpoint.bicep declares only IPv4 subnets, so what-if reports the RP's own false as a deletion. Measured before=false on every occurrence in run 33406666389. The predicate is what keeps this from hiding the inverse: an endpoint live with IPv6 ENABLED that the template does not declare would be turned off by a redeploy, and that stays real drift."
       }
     ],
     "Microsoft.Network/privateEndpoints/privateDnsZoneGroups": [
@@ -153,51 +187,62 @@
     "Microsoft.Insights/diagnosticSettings": [
       {
         "path": "properties.logs.*.retentionPolicy.days",
-        "reason": "Server-defaulted remnant of a RETIRED feature. Diagnostic-setting-level retention was retired in favour of Log Analytics workspace / storage lifecycle retention; the RP still materializes `retentionPolicy:{enabled:false,days:0}` on every category. Measured before=0 on every occurrence in run 33406666389, so a redeploy that omits it re-applies the same zero. NOTE: this suppresses ONLY the retention leaf — a Delete of a whole `properties.logs.N` category (the template declaring fewer categories than live) stays real drift and keeps the resource in the verdict."
+        "whenBeforeEquals": 0,
+        "reason": "Server-defaulted remnant of a RETIRED feature. Diagnostic-setting-level retention was retired in favour of Log Analytics workspace / storage lifecycle retention; the RP still materializes `retentionPolicy:{enabled:false,days:0}` on every category. Measured before=0 on every occurrence in run 33406666389, so a redeploy that omits it re-applies the same zero. The predicate is load-bearing: on a category that still carries a real retention (before=365, a legacy setting from before the retirement) a redeploy WOULD drop it to 0, so that shape stays real drift. NOTE: this suppresses ONLY the retention leaf — a Delete of a whole `properties.logs.N` category (the template declaring fewer categories than live) stays real drift and keeps the resource in the verdict."
       },
       {
         "path": "properties.metrics.*.retentionPolicy.days",
-        "reason": "Server-defaulted remnant of the same retired retention feature, on the metrics side: the RP materializes `retentionPolicy:{enabled:false,days:0}` on every metric category. Measured before=0 on every occurrence in run 33406666389."
+        "whenBeforeEquals": 0,
+        "reason": "Server-defaulted remnant of the same retired retention feature, on the metrics side: the RP materializes `retentionPolicy:{enabled:false,days:0}` on every metric category. Measured before=0 on every occurrence in run 33406666389; same predicate, same reason, so a non-zero live retention stays visible."
       }
     ],
     "Microsoft.DocumentDB/databaseAccounts/sqlDatabases/containers": [
       {
         "path": "properties.resource.indexingPolicy.includedPaths",
-        "reason": "Cosmos DB's documented default indexing policy. A container created without an explicit indexingPolicy is stamped with includedPaths=[{path:'/*'}] — measured verbatim as the before value in run 33406666389. Because only a Delete is ever suppressible (rule 1), this can only fire when the template declares no indexing policy for that container, in which case live IS the server default by construction."
+        "whenBeforeEquals": [{ "path": "/*" }],
+        "reason": "Cosmos DB's documented default indexing policy. A container created without an explicit indexingPolicy is stamped with includedPaths=[{path:'/*'}] — measured verbatim as the before value in run 33406666389, and pinned here as the predicate. Because only a Delete is ever suppressible (rule 1), this can only fire when the template declares no indexing policy for that container; the predicate adds the second half — live must ALSO still be the server default. A container someone hand-tuned to index a narrower path set stays real drift, because a redeploy would widen it back to '/*'."
       },
       {
         "path": "properties.resource.indexingPolicy.excludedPaths",
-        "reason": "The other half of Cosmos DB's default indexing policy: excludedPaths=[{path:'/\"_etag\"/?'}], the system-managed _etag exclusion. Measured verbatim as the before value in run 33406666389."
+        "whenBeforeEquals": [{ "path": "/\"_etag\"/?" }],
+        "reason": "The other half of Cosmos DB's default indexing policy: excludedPaths=[{path:'/\"_etag\"/?'}], the system-managed _etag exclusion. Measured verbatim as the before value in run 33406666389 and pinned as the predicate — a live exclusion list with anything MORE than the _etag entry is a hand-tuned policy a redeploy would discard, so it stays real drift."
       },
       {
         "path": "properties.resource.indexingPolicy.excludedPaths.*",
-        "reason": "Same default _etag exclusion, for the containers where what-if reported the array ELEMENT rather than the whole array. Both granularities occur in run 33406666389 and which one ARM emits is not stable."
+        "whenBeforeEquals": { "path": "/\"_etag\"/?" },
+        "reason": "Same default _etag exclusion, for the containers where what-if reported the array ELEMENT rather than the whole array. Both granularities occur in run 33406666389 and which one ARM emits is not stable; the predicate is the same measured shape, one element deep."
       },
       {
         "path": "properties.resource.backupPolicy",
-        "reason": "Read-only projection of the ACCOUNT-level backup policy onto the container. backupPolicy is settable on Microsoft.DocumentDB/databaseAccounts, not on a container; the RP echoes the account's policy ({type:1} = Continuous, measured in run 33406666389) into every container's resource body. cosmos.bicep sets it once on the account, which is the correct place."
+        "whenBeforeEquals": { "type": 1 },
+        "reason": "Read-only projection of the ACCOUNT-level backup policy onto the container. backupPolicy is settable on Microsoft.DocumentDB/databaseAccounts, not on a container; the RP echoes the account's policy ({type:1} = Continuous, measured in run 33406666389) into every container's resource body. cosmos.bicep sets it once on the account, which is the correct place. The predicate pins the Continuous shape: if the account's policy is ever something else, the echo changes with it and the delta surfaces rather than being silently absorbed here."
       },
       {
         "path": "properties.resource.conflictResolutionPolicy.conflictResolutionPath",
-        "reason": "Server-defaulted. Under the default LastWriterWins conflict-resolution mode Cosmos stamps conflictResolutionPath='/_ts' — measured verbatim in run 33406666389. The templates declare no conflict-resolution policy, so the RP default is re-applied on redeploy."
+        "whenBeforeEquals": "/_ts",
+        "reason": "Server-defaulted. Under the default LastWriterWins conflict-resolution mode Cosmos stamps conflictResolutionPath='/_ts' — measured verbatim in run 33406666389. The templates declare no conflict-resolution policy, so the RP default is re-applied on redeploy. A container whose live path is a custom property (a deliberate LWW tiebreaker) would be reset to /_ts by that redeploy, so the predicate keeps it in the verdict."
       }
     ],
     "Microsoft.ApiManagement/service": [
       {
         "path": "properties.customProperties.Microsoft.WindowsAzure.ApiManagement.Gateway.Security.Protocols.Ssl30",
-        "reason": "Server-defaulted, and defaulted to the SECURE value. APIM stamps the legacy-protocol toggles as 'False' (disabled) when the template does not mention them — measured before='False' in run 33406666389 — so omitting it neither enables SSL 3.0 nor changes anything on redeploy. Suppressing it does NOT drop the APIM service from the verdict: that resource also carries Modify deltas (developerPortalStatus, legacyPortalStatus, natGatewayState) which rule 1 never suppresses."
+        "whenBeforeIn": ["False", "false"],
+        "reason": "Server-defaulted, and defaulted to the SECURE value. APIM stamps the legacy-protocol toggles as 'False' (disabled) when the template does not mention them — measured before='False' in run 33406666389 — so omitting it neither enables SSL 3.0 nor changes anything on redeploy. THE PREDICATE IS THE WHOLE POINT: the justification is the VALUE, not the path, so the rule only applies at that value. A live 'True' means SSL 3.0 is actually ENABLED on the gateway, which is real drift the lane must show — and a path-only rule would have suppressed exactly that. Suppressing the secure case does NOT drop the APIM service from the verdict: that resource also carries Modify deltas (developerPortalStatus, legacyPortalStatus, natGatewayState) which rule 1 never suppresses."
       },
       {
         "path": "properties.customProperties.Microsoft.WindowsAzure.ApiManagement.Gateway.Security.Backend.Protocols.Ssl30",
-        "reason": "Same legacy-protocol toggle on the backend (gateway-to-backend) side. Measured before='False' — the secure default — in run 33406666389."
+        "whenBeforeIn": ["False", "false"],
+        "reason": "Same legacy-protocol toggle on the backend (gateway-to-backend) side. Measured before='False' — the secure default — in run 33406666389, and the predicate holds the suppression to that value: a live 'True' is SSL 3.0 enabled toward backends and stays real drift."
       },
       {
         "path": "properties.customProperties.Microsoft.WindowsAzure.ApiManagement.Gateway.Security.Backend.Protocols.Tls10",
-        "reason": "Same legacy-protocol toggle on the backend side. Measured before='False' — the secure default — in run 33406666389."
+        "whenBeforeIn": ["False", "false"],
+        "reason": "Same legacy-protocol toggle on the backend side. Measured before='False' — the secure default — in run 33406666389; a live 'True' is TLS 1.0 actually enabled and is never suppressed."
       },
       {
         "path": "properties.customProperties.Microsoft.WindowsAzure.ApiManagement.Gateway.Security.Backend.Protocols.Tls11",
-        "reason": "Same legacy-protocol toggle on the backend side. Measured before='False' — the secure default — in run 33406666389."
+        "whenBeforeIn": ["False", "false"],
+        "reason": "Same legacy-protocol toggle on the backend side. Measured before='False' — the secure default — in run 33406666389; a live 'True' is TLS 1.1 actually enabled and is never suppressed."
       }
     ]
   }
