@@ -117,6 +117,32 @@ export function EnvironmentPanel(props: EnvironmentPanelProps) {
   const [jarInput, setJarInput] = useState('');
   const [jarBusy, setJarBusy] = useState(false);
 
+  // #3530 — SESSION packages this notebook's content declares
+  // (`state.content.requiredLibraries`). These are installed by the `%pip
+  // install` bootstrap cell the install path prepends, so they are live on the
+  // Spark session WITHOUT an AML environment. Before this the header said "No
+  // environment attached" for a notebook whose packages Loom had already
+  // arranged to install, which read as "nothing is set up" when the truth was
+  // "set up by a different, lighter mechanism".
+  const [sessionPkgs, setSessionPkgs] = useState<string[]>([]);
+  useEffect(() => {
+    if (!notebookId || notebookId === 'new') { setSessionPkgs([]); return; }
+    let cancelled = false;
+    (async () => {
+      try {
+        const r = await clientFetch(`/api/cosmos-items/notebook/${encodeURIComponent(notebookId)}`);
+        const j = await r.json();
+        const declared = (j?.state as any)?.content?.requiredLibraries;
+        if (!cancelled) setSessionPkgs(Array.isArray(declared) ? declared.map((p: unknown) => String(p)) : []);
+      } catch {
+        // A read failure means we cannot say what is declared — so we say
+        // nothing, rather than rendering a claim we did not establish.
+        if (!cancelled) setSessionPkgs([]);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [notebookId]);
+
   const loadEnvs = useCallback(async () => {
     setLoading(true); setLoadErr(null); setLoadHint(null); setNotDeployed(false);
     try {
@@ -261,8 +287,28 @@ export function EnvironmentPanel(props: EnvironmentPanelProps) {
         <div style={{ flex: 1 }} />
         {attached
           ? <Badge appearance="filled" color="brand">{attached.name}:{attached.version}</Badge>
-          : <Badge appearance="outline" color="informative">No environment attached</Badge>}
+          : sessionPkgs.length
+            ? (
+              <Badge appearance="filled" color="success" icon={<Box20Regular />}>
+                {sessionPkgs.length} session package{sessionPkgs.length === 1 ? '' : 's'}
+              </Badge>
+            )
+            : <Badge appearance="outline" color="informative">No environment attached</Badge>}
       </div>
+
+      {!attached && sessionPkgs.length > 0 && (
+        // #3530 — an honest, positive statement of what IS set up. Not a
+        // warning: nothing is missing and there is nothing for the user to do.
+        <MessageBar intent="success">
+          <MessageBarBody>
+            <MessageBarTitle>Session packages installed automatically</MessageBarTitle>
+            This notebook declares {sessionPkgs.join(', ')}. Loom prepended a{' '}
+            <code>%pip install</code> bootstrap cell that installs them onto the live Spark
+            session on Run — no environment to attach and no pool restart. Attach an Azure ML
+            environment below only if you want them baked into a reusable image.
+          </MessageBarBody>
+        </MessageBar>
+      )}
 
       <TabList selectedValue={tab} onTabSelect={(_, d) => setTab(d.value as typeof tab)}>
         <Tab value="envs">Environments</Tab>
@@ -339,6 +385,20 @@ export function EnvironmentPanel(props: EnvironmentPanelProps) {
 
       {tab === 'packages' && (
         <div className={s.section}>
+          {sessionPkgs.length > 0 && (
+            // #3530 — the packages the notebook's own content declares, listed
+            // where a user looking for "what is installed" looks. Distinct from
+            // the attached-environment list below because they are installed by
+            // a different mechanism (session-scoped %pip, not a baked image).
+            <div className={s.section}>
+              <Caption1>Declared by this notebook · installed into the session on Run</Caption1>
+              <div className={s.chips}>
+                {sessionPkgs.map((p) => (
+                  <Badge key={p} appearance="tint" color="success" icon={<Box20Regular />}>{p}</Badge>
+                ))}
+              </div>
+            </div>
+          )}
           {!attached && <Caption1>Attach an environment to see its packages, or install a package inline below.</Caption1>}
           <div className={s.row}>
             <div className={s.grow}>

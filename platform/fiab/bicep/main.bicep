@@ -1455,7 +1455,28 @@ module adminPlane 'modules/admin-plane/main.bicep' = if (deployAdminPlane) {
       // (main.bicep:2456+24, gated `useSingleDlz && serviceBusEnabled`) — both
       // unreachable per the block above. admin-plane/aas.bicep declares a third,
       // but that one is the AAS namespace and is not what this item binds.
-      serviceBusNamespace: (useSingleDlz && deployServiceBus) ? 'sbns-loom-default-${location}' : ''
+      // ADOPT-FIRST (#3317, mirroring the #3327 lake precedent above). The
+      // convention branch below is retained as the fallback, but it is NOT the
+      // binding mechanism and never was: `useSingleDlz` is false on every
+      // shipped params file (topology='tenant' in commercial, commercial-full,
+      // gcc, gcc-high, il5), so this rendered '' on every boundary and
+      // svc-servicebus honest-gated everywhere. Worse, the convention is not
+      // even self-consistent — deploy-planner/service-bus.bicep names its
+      // namespace `sb-loom-<uniqueString(rg.id)>`, not the
+      // `sbns-loom-default-<region>` spelled here — so on the one topology
+      // where the branch DOES fire it would name a namespace that module did
+      // not create. The adopt plan (discover-dlz-adopt-plan.sh, which reads
+      // Microsoft.ServiceBus/namespaces by TYPE) is the only source that knows
+      // the real name.
+      serviceBusNamespace: !empty(adoptName(adopt, 'servicebus'))
+        ? adoptName(adopt, 'servicebus')
+        : ((useSingleDlz && deployServiceBus) ? 'sbns-loom-default-${location}' : '')
+      // The namespace's own RG/sub travel WITH the name, so LOOM_SERVICEBUS_RG /
+      // _SUB address where it actually lives instead of assuming the DLZ RG in
+      // the deployment subscription. Empty on the convention path — admin-plane
+      // then falls back to loomDlzRg / subscription() exactly as before.
+      serviceBusRg: adoptRg(adopt, 'servicebus')
+      serviceBusSub: adoptSub(adopt, 'servicebus')
       // Always-on default AML Compute Instance name (LOOM_AML_DEFAULT_COMPUTE) +
       // its idle TTL (LOOM_AML_COMPUTE_IDLE_TTL). Name is derived the SAME way as
       // ml-workspace.bicep's defaultCiName (take('ci-loom-<uniqueString(rg.id)>',24))
@@ -1485,8 +1506,26 @@ module adminPlane 'modules/admin-plane/main.bicep' = if (deployAdminPlane) {
       // `= if (useSingleDlz)`. There is no Batch account on any shipped
       // deployment, so "even when the account was deployed" described a state
       // that does not exist. The gate is honest; what is missing is the deploy.
-      batchAccount: (useSingleDlz && batchEnabled) ? take('batchloom${uniqueString(singleDlzRg.id)}', 24) : ''
-      batchRg: (useSingleDlz && batchEnabled) ? singleDlzRg.name : ''
+      // ADOPT-FIRST (#3317). Same shape as serviceBusNamespace above and the
+      // #3327 lake: the convention branch stays as a fallback, but on every
+      // shipped params file `useSingleDlz` is false, so it rendered '' and
+      // svc-batch honest-gated on every boundary. The adopt plan reads
+      // Microsoft.Batch/batchAccounts by TYPE, so it binds the account that
+      // actually exists rather than the one the naming convention predicts.
+      batchAccount: !empty(adoptName(adopt, 'batch'))
+        ? adoptName(adopt, 'batch')
+        : ((useSingleDlz && batchEnabled) ? take('batchloom${uniqueString(singleDlzRg.id)}', 24) : '')
+      // The account's RG travels with the name. NOTE, honestly: there is no
+      // LOOM_BATCH_SUB in the admin-plane env array today, so an adopted Batch
+      // account in a DIFFERENT subscription from the deployment would be named
+      // and RG-addressed correctly but resolved against LOOM_SUBSCRIPTION_ID by
+      // lib/azure/batch-client.ts (which already reads LOOM_BATCH_SUB when it is
+      // present). Emitting it needs a matching entry in the console's env-check
+      // catalog, which is outside this change; the same-subscription DLZ case —
+      // what discover-dlz-adopt-plan.sh produces today — is fully bound.
+      batchRg: !empty(adoptName(adopt, 'batch'))
+        ? adoptRg(adopt, 'batch')
+        : ((useSingleDlz && batchEnabled) ? singleDlzRg.name : '')
       // Slate-app / Workshop-app Publish → Azure Static Web Apps target RG
       // (LOOM_SWA_RESOURCE_GROUP; empty → the admin RG) + the BYO
       // user-data-function Functions host (LOOM_UDF_FUNCTION_BASE; empty →

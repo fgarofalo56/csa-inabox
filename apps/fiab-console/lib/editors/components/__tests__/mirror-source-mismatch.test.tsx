@@ -206,6 +206,185 @@ describe('an ALREADY-SAVED mismatch is surfaced with a Fix-it, not silently rewr
   });
 });
 
+describe('the mismatch blocks the WRITE, not just the button (#4039 R4)', () => {
+  /**
+   * WHAT WAS MISSING. Every assertion above this block reads `toBeDisabled()`,
+   * which is a claim about an ATTRIBUTE. Two things stop a mismatched mirror
+   * being written from this wizard, and only the first was witnessed:
+   *
+   *   mirror-source-wizard.tsx  Button `disabled={… || !!connMismatch}`   ← pinned
+   *   mirror-source-wizard.tsx  submit()  `if (… || connMismatch) return;` ← not
+   *
+   * WHY THE OBVIOUS TEST DOES NOT WORK, MEASURED. #4039 proposed stripping the
+   * `disabled` attribute from the DOM and clicking, on the theory that
+   * `submit()` is the reachable second line of defence. It is not: React decides
+   * whether to dispatch `onClick` from the FIBER's props, never from the DOM
+   * attribute —
+   *
+   *     react-dom/cjs/react-dom-client.development.js:3292
+   *       (props = !props.disabled) || … "button" === inst …
+   *
+   * so while `disabled` is still in the React props the handler cannot run, no
+   * matter what the attribute says. Measured when this was written: deleting
+   * `|| connMismatch` from `submit()` leaves this whole file GREEN (mutation R4,
+   * RC=0, 12/12 passed). That is recorded here rather than hidden — a suite that
+   * claims to witness a line it cannot reach is worse than one that says so.
+   *
+   * WHAT THESE TESTS DO ESTABLISH: with a mismatch on screen, NO write leaves
+   * the wizard — through the affordance, or with the affordance stripped out of
+   * the DOM by devtools or automation — and the positive control proves the same
+   * click DOES write once the mismatch is repaired, so the absence is the guard
+   * and not a wizard that could never write.
+   *
+   * The enforcement a DOM-bypassing client actually meets is server-side, and it
+   * IS witnessed, in the two suites written alongside this one:
+   *   app/api/items/mirrored-database/[id]/__tests__/patch-effective-pair.test.ts
+   *   app/api/items/mirrored-database/[id]/sources/__tests__/post-effective-connection.test.ts
+   */
+  /** A `generic-sql` connection has SEVERAL homes, so the wizard leaves the
+   *  source type alone and the mismatch survives into create mode. */
+  const GENERIC_SQL_CONN = {
+    id: 'conn-gen', name: 'onprem-sqlserver', type: 'generic-sql',
+    authMethod: 'sql-password', hasSecret: true, host: 'sql.contoso.local', database: 'appdb',
+  };
+
+  it('a mismatched CREATE writes nothing even with the disabled attribute removed', async () => {
+    const { calls } = installFetchMock({
+      '/api/connections': () => ({ ok: true, connections: [GENERIC_SQL_CONN] }),
+      '/api/items/mirrored-database': () => ({ ok: true, mirroredDatabase: { id: 'must-not-exist' } }),
+    });
+    mountNew();
+    await waitFor(() => expect(screen.getByText(/Choose a source/i)).toBeInTheDocument());
+    fireEvent.click(screen.getByText('Snowflake'));
+    await waitFor(() => expect(screen.getByPlaceholderText('myorg-account123')).toBeInTheDocument());
+    await pickConnection('onprem-sqlserver');
+    await waitFor(() => expect(screen.getByText(/Source type does not match this connection/i)).toBeInTheDocument());
+
+    // A NAME is required by submit() independently of the mismatch, so without
+    // this the absence of a write below would prove only that the name was
+    // blank. The positive control at the end of this block re-checks that.
+    fireEvent.change(screen.getByPlaceholderText('prod-sales-mirror'), { target: { value: 'snow-mirror' } });
+
+    const create = screen.getByRole('button', { name: /Create mirror/i });
+    expect(create).toBeDisabled();
+
+    // The mutation this test is built to catch, performed on the DOM instead of
+    // on the source: take the affordance away and see whether anything else is
+    // holding the line.
+    create.removeAttribute('disabled');
+    expect(create).toBeEnabled();
+    fireEvent.click(create);
+
+    // Give any dispatched submit a turn to reach fetch before asserting absence.
+    await waitFor(() => expect(screen.getByText(/Source type does not match this connection/i)).toBeInTheDocument());
+    const writes = calls.filter(
+      (c) => c.url.includes('/api/items/mirrored-database')
+        && ['POST', 'PATCH'].includes(String(c.init?.method || '').toUpperCase()),
+    );
+    expect(writes).toEqual([]);
+  });
+
+  it('POSITIVE CONTROL: the same click DOES write once the mismatch is repaired', async () => {
+    // Without this arm the test above would still pass if the wizard could not
+    // write at all — "nothing happened" is not evidence that the guard is what
+    // stopped it. Same fixture, same click, mismatch resolved.
+    const { calls } = installFetchMock({
+      '/api/connections': () => ({ ok: true, connections: [GENERIC_SQL_CONN] }),
+      '/api/items/mirrored-database': () => ({ ok: true, mirroredDatabase: { id: 'm-new' } }),
+    });
+    mountNew();
+    await waitFor(() => expect(screen.getByText(/Choose a source/i)).toBeInTheDocument());
+    fireEvent.click(screen.getByText('Snowflake'));
+    await waitFor(() => expect(screen.getByPlaceholderText('myorg-account123')).toBeInTheDocument());
+    await pickConnection('onprem-sqlserver');
+    await waitFor(() => expect(screen.getByText(/Source type does not match this connection/i)).toBeInTheDocument());
+    fireEvent.change(screen.getByPlaceholderText('prod-sales-mirror'), { target: { value: 'snow-mirror' } });
+
+    fireEvent.click(screen.getAllByRole('button', { name: /^Switch to / })[0]);
+    await waitFor(() => expect(screen.queryByText(/Source type does not match this connection/i)).toBeNull());
+
+    fireEvent.click(screen.getByRole('button', { name: /Create mirror/i }));
+    await waitFor(() =>
+      expect(
+        calls.some((c) => c.url.includes('/api/items/mirrored-database')
+          && String(c.init?.method || '').toUpperCase() === 'POST'),
+      ).toBe(true));
+  });
+
+  it('a mismatched EDIT saves nothing either, disabled attribute removed', async () => {
+    const { calls } = installFetchMock({
+      '/api/connections': () => ({ ok: true, connections: [SNOWFLAKE_CONN] }),
+      '/api/items/mirrored-database': () => ({ ok: true, mirroredDatabase: { id: 'm-broken' } }),
+    });
+    render(
+      <MirrorSourceWizard
+        open
+        editing
+        workspaceId="ws-1"
+        mirrorId="m-broken"
+        initialSrc={{
+          sourceType: 'AzureSqlDatabase',
+          server: 'fakeorg-fakeacct999',
+          database: 'SALES_DB',
+          connectionId: SNOWFLAKE_CONN.id,
+          displayName: 'snow-mirror',
+        }}
+        onClose={() => {}}
+        onCreated={() => {}}
+        onUpdated={() => {}}
+      />,
+    );
+    await waitFor(() => expect(screen.getByText(/Source type does not match this connection/i)).toBeInTheDocument());
+
+    const save = screen.getByRole('button', { name: /Save changes/i });
+    expect(save).toBeDisabled();
+    save.removeAttribute('disabled');
+    fireEvent.click(save);
+
+    await waitFor(() => expect(screen.getByText(/Source type does not match this connection/i)).toBeInTheDocument());
+    expect(
+      calls.filter((c) => String(c.init?.method || '').toUpperCase() === 'PATCH'),
+    ).toEqual([]);
+  });
+
+  it('POSITIVE CONTROL: with the mismatch repaired, the same click DOES write', async () => {
+    // Without this arm the two tests above would still pass if the wizard could
+    // never write at all — "nothing happened" is not evidence that the guard is
+    // what stopped it.
+    const { calls } = installFetchMock({
+      '/api/connections': () => ({ ok: true, connections: [SNOWFLAKE_CONN] }),
+      '/api/items/mirrored-database': () => ({ ok: true, mirroredDatabase: { id: 'm-broken' } }),
+    });
+    render(
+      <MirrorSourceWizard
+        open
+        editing
+        workspaceId="ws-1"
+        mirrorId="m-broken"
+        initialSrc={{
+          sourceType: 'AzureSqlDatabase',
+          server: 'fakeorg-fakeacct999',
+          database: 'SALES_DB',
+          connectionId: SNOWFLAKE_CONN.id,
+          displayName: 'snow-mirror',
+        }}
+        onClose={() => {}}
+        onCreated={() => {}}
+        onUpdated={() => {}}
+      />,
+    );
+    await waitFor(() => expect(screen.getByText(/Source type does not match this connection/i)).toBeInTheDocument());
+    fireEvent.click(screen.getByRole('button', { name: /Switch to Snowflake/i }));
+    await waitFor(() => expect(screen.queryByText(/Source type does not match this connection/i)).toBeNull());
+
+    fireEvent.click(screen.getByRole('button', { name: /Save changes/i }));
+    await waitFor(() =>
+      expect(
+        calls.some((c) => String(c.init?.method || '').toUpperCase() === 'PATCH'),
+      ).toBe(true));
+  });
+});
+
 describe('"Load tables" cannot dial a mismatch', () => {
   it('shows the real cause instead of calling the enumerator', async () => {
     const { calls } = installFetchMock({

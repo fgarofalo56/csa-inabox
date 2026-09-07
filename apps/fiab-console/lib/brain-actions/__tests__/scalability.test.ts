@@ -348,8 +348,14 @@ describe('EXPRESSION RESOLUTION — only the shapes the real template uses', () 
     expect(decls.get('loom-thing')!.declared).toBeNull();
     expect(decls.get('loom-thing')!.reason).toContain('could NOT be established');
     expect(declaredNonScalableToZero('loom-thing', decls)).toBeNull();
-    // …and with no declared consumer either, nothing objects.
-    expect(refuseScaleToZero('loom-thing', decls)).toBeNull();
+    // …and with no declared consumer either, the composite REFUSES anyway
+    // (#4293). This assertion read `.toBeNull()` — allow — until #4293: a
+    // withheld verdict is not a permissive one, and this was the last path in
+    // `refuseScaleToZero` from "could not establish" to allow.
+    const refusal = refuseScaleToZero('loom-thing', decls);
+    expect(refusal, 'an unevaluated replica shape must NOT read as permission').not.toBeNull();
+    expect(refusal!.kind).toBe('declaration-unavailable');
+    expect((refusal as { why: string }).why).toBe('shape-unresolved');
   });
 
   it('an app whose NAME is a runtime expression is not declared either', () => {
@@ -1154,6 +1160,138 @@ describe('THE SOURCE — an unreadable declaration is NOT an empty one (#4261 fi
       }),
     ).toBeNull();
   });
+});
+
+// ---------------------------------------------------------------------------
+// #4293 — AN UNEVALUATED SHAPE IS NOT A PERMISSION
+//
+// The source could be established perfectly and ONE subject inside it still be
+// unanswerable: `declarationFor` emits an unresolvable replica expression as
+// `declared: null` WITH `scalableToZero: true`, which skipped the pinned arm and
+// — absent a declared consumer — fell through to `return null` = ALLOW. Same
+// class as the empty-map fail-open closed in #4261, one layer further in: the
+// one subject the module had nothing to say about was the one subject it
+// permitted a destructive action on.
+//
+// These arms are that shape. Deleting the `decl.declared === null` arm from
+// `refuseScaleToZero` turns the first three RED.
+// ---------------------------------------------------------------------------
+
+describe('an unevaluated replica shape refuses on its own (#4293)', () => {
+  /** `loom-thing` with a replica expression this reader does not evaluate. */
+  const unresolvedShape = declarationsFromTemplate(
+    rootWith(
+      moduleTemplate({
+        scale: { minReplicas: "[parameters('apps')[copyIndex()].minReplicas]", maxReplicas: 1 },
+      }),
+    ),
+  );
+
+  it('THE PRECONDITION: the fixture really is shape-unresolved, elastic-looking, unwired', () => {
+    // Without this the arms below could pass for the wrong reason — a fixture
+    // that was pinned, or absent, or wired, is refused by an OLDER arm and says
+    // nothing about the new one.
+    const d = unresolvedShape.get('loom-thing');
+    expect(d, 'the declaration must be IN the map — this is not the absent case').toBeDefined();
+    expect(d!.declared).toBeNull();
+    expect(d!.scalableToZero, 'it must skip the pinned arm, as the real shape does').toBe(true);
+    expect(d!.declaredConsumers, 'and carry no consumer, so the availability arm is silent').toEqual([]);
+  });
+
+  it('REFUSES, and names WHICH failure it is', () => {
+    const refusal = refuseScaleToZero('loom-thing', unresolvedShape);
+    expect(refusal, 'a withheld verdict must not read as a permissive one').not.toBeNull();
+    expect(refusal!.kind).toBe('declaration-unavailable');
+    expect((refusal as { why: string }).why).toBe('shape-unresolved');
+  });
+
+  it('R7 — the text says the question was NOT ANSWERED, and claims nothing else', () => {
+    const reason = scaleToZeroRefusalReason(refuseScaleToZero('loom-thing', unresolvedShape)!);
+    // It carries `declarationFor`'s own words rather than inventing new ones.
+    expect(reason).toContain('could NOT be established');
+    // It must NOT borrow the DURABILITY claim…
+    expect(reason).not.toMatch(/unrecoverable/i);
+    expect(reason).not.toMatch(/materialized view/i);
+    // …nor the AVAILABILITY one: no consumer was found, so none may be implied.
+    expect(reason).not.toContain('AVAILABILITY refusal');
+    expect(reason).not.toMatch(/the deploy wires/i);
+    // …nor the SOURCE-failure head, which would assert a read that did not fail.
+    expect(reason).not.toContain('the deploy template could not be consulted');
+    expect(reason).toMatch(/was read and parsed/);
+    // And it says, in as many words, that neither verdict was reached.
+    expect(reason).toMatch(/NOT because this resource was judged unsafe/);
+    expect(reason).toMatch(/not because it was judged safe either/);
+    // The remediation is a READER change, not an estate change.
+    expect(reason).toMatch(/gap in the READER/);
+  });
+
+  it('DISTINGUISHABLE from the four source-level unavailabilities, in text', () => {
+    // Five kinds that all refuse are worth nothing to an operator if they read
+    // the same. This is the anti-collapse control.
+    const mine = scaleToZeroRefusalReason(refuseScaleToZero('loom-thing', unresolvedShape)!);
+    for (const src of [
+      { status: 'unreadable', from: '/app/x.json', detail: 'read failed (EMFILE)' },
+      { status: 'absent', from: '/app/x.json', detail: 'not present in this image' },
+      { status: 'declared', declarations: new Map(), from: '/app/x.json', unnamed: [] },
+    ] as ScalabilitySource[]) {
+      expect(mine).not.toEqual(scaleToZeroRefusalReason(refuseScaleToZero('loom-thing', src)!));
+    }
+  });
+
+  it('CENSUS-NEUTRAL: an app that IS wired still refuses on the AVAILABILITY fact', () => {
+    // The ordering control. `loom-trino` and `loom-unity` carry this shape on
+    // the real template AND have declared consumers; putting the new arm before
+    // the consumer check would have re-labelled both and left the #4261
+    // availability regression spec unable to observe its own subject. Here the
+    // established fact still wins.
+    const decls = declarationsFromTemplate(rootWithUnresolvedShapeAndConsumer());
+    const d = decls.get('loom-thing')!;
+    expect(d.declared, 'same unresolvable shape as the arm above').toBeNull();
+    expect(d.declaredConsumers.length).toBeGreaterThan(0);
+    const refusal = refuseScaleToZero('loom-thing', decls);
+    expect(refusal!.kind).toBe('declared-consumer');
+  });
+
+  it('THE CONTROL: a RESOLVED, unwired, elastic shape is still PERMITTED', () => {
+    // Anti-vacuity. Without this, "refuse everything" would pass every arm
+    // above — a disabled feature wearing a guard's clothes.
+    const decls = declarationsFromTemplate(
+      rootWith(moduleTemplate({ scale: { minReplicas: 0, maxReplicas: 4 } })),
+    );
+    expect(decls.get('loom-thing')!.declared).not.toBeNull();
+    expect(refuseScaleToZero('loom-thing', decls)).toBeNull();
+  });
+
+  /** A module whose app has an unresolvable shape AND a declared consumer. */
+  function rootWithUnresolvedShapeAndConsumer(): unknown {
+    return {
+      resources: [
+        {
+          type: 'Microsoft.Resources/deployments',
+          name: 'thing-module',
+          properties: {
+            template: {
+              resources: [
+                {
+                  type: 'Microsoft.App/containerApps',
+                  name: 'loom-thing',
+                  properties: {
+                    template: {
+                      scale: {
+                        minReplicas: "[parameters('apps')[copyIndex()].minReplicas]",
+                        maxReplicas: 1,
+                      },
+                    },
+                  },
+                },
+              ],
+            },
+          },
+        },
+        consumerModule('loom-thing'),
+      ],
+    };
+  }
 });
 
 // ---------------------------------------------------------------------------

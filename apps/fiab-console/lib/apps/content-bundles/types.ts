@@ -21,6 +21,27 @@ export interface NotebookContent {
   kind: 'notebook';
   defaultLang: 'pyspark' | 'sparksql' | 'spark' | 'sparkr';
   cells: NotebookCell[];
+  /**
+   * PyPI packages this notebook's cells `import` that are NOT in the Spark
+   * runtime's stock image (#3530).
+   *
+   * Declare them and the notebook provisioner PREPENDS a `%pip install <pkgs>`
+   * bootstrap cell, so Run-all works on a fresh install instead of stopping on
+   * `ModuleNotFoundError` at the first import. The bootstrap is executed
+   * session-scoped by the notebook run route, which routes an inline
+   * `%pip install` into the running Livy session (Synapse Spark pools ship with
+   * `sessionLevelPackagesEnabled: true` — see synapse-spark-pools.bicep), and
+   * Databricks PYTHON notebooks support the magic natively.
+   *
+   * `auto-bind-by-default.md`: the platform installs what the content it
+   * shipped needs. Leaving the user to discover the missing package from a
+   * stack trace and hand-attach an environment is the user-performed plumbing
+   * that rule forbids.
+   *
+   * Use PyPI DISTRIBUTION names (`azure-search-documents`), not module names
+   * (`azure.search.documents`) — the bootstrap passes them to `pip` verbatim.
+   */
+  requiredLibraries?: string[];
 }
 
 export interface KqlDatabaseContent {

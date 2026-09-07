@@ -761,6 +761,137 @@ describe('infra-gate 503s are audited, fail-soft (#4246 nit)', () => {
   });
 });
 
+// ---------------------------------------------------------------------------
+// #4283 — WHICH 503 IS THIS? The route must say, or say that it cannot.
+//
+// All three 503 classes used to leave here as `{ok:false, error}`, a body with
+// nothing to discriminate on. The client could therefore never render an inline
+// Fix-it (`ux-baseline.md` G2) without asserting a cause nobody established:
+// "needs Cosmos wired" over an ARG throttle is the R7 error. The fix is to
+// classify HERE, where the class is known — and to classify NOTHING where it is
+// not, which is the half that keeps this honest.
+// ---------------------------------------------------------------------------
+
+describe('the 503 body names its gate when — and only when — the class IS one (#4283)', () => {
+  it('the Cosmos-store class carries the cosmos-config envelope', async () => {
+    const { BrainActionsNotConfiguredError } = await import('@/lib/brain-actions/state-store');
+    snap.loadSnapshot.mockRejectedValue(new BrainActionsNotConfiguredError());
+    const res = await POST(postReq(BODY), { params: Promise.resolve({}) } as never);
+    expect(res.status).toBe(503);
+    const body = (await res.json()) as {
+      ok: boolean;
+      gated?: boolean;
+      error: string;
+      gate?: { id: string; fixItHref: string; missing: string[] };
+    };
+    expect(body.ok).toBe(false);
+    expect(body.gated).toBe(true);
+    expect(body.gate?.id).toBe('cosmos-config');
+    // The Fix-it deep link is the whole point — it is what the client renders.
+    expect(body.gate?.fixItHref).toBe('/admin/gates?gate=cosmos-config');
+    expect(body.gate?.missing).toContain('LOOM_COSMOS_ENDPOINT');
+    // R7: the envelope ADDS a remediation; it does not replace what happened.
+    expect(body.error).toContain('LOOM_COSMOS_ENDPOINT');
+  });
+
+  it('the ACA class carries the subscription envelope for the gap that gate resolves', async () => {
+    const { AcaNotConfiguredError } = await import('@/lib/azure/container-apps-arm-client');
+    snap.loadSnapshot.mockRejectedValue(new AcaNotConfiguredError(['LOOM_SUBSCRIPTION_ID']));
+    const res = await POST(postReq(BODY), { params: Promise.resolve({}) } as never);
+    expect(res.status).toBe(503);
+    const body = (await res.json()) as { gated?: boolean; gate?: { id: string; missing: string[] } };
+    expect(body.gated).toBe(true);
+    expect(body.gate?.id).toBe('subscription');
+    // The reported gaps travel verbatim — the error's own list, not the gate's.
+    expect(body.gate?.missing).toEqual(['LOOM_SUBSCRIPTION_ID']);
+  });
+
+  it('the ACA RESOURCE-GROUP gap gets NO envelope — that gate does not close it (#4342)', async () => {
+    // Measured in the #4342 review: the 'subscription' gate is
+    // `required:['LOOM_SUBSCRIPTION_ID']` + `anyOf:[['LOOM_DLZ_RG','LOOM_ADMIN_RG']]`
+    // and never mentions LOOM_ACA_RG, while `readAcaConfig` reads
+    // `LOOM_ACA_RG || LOOM_ADMIN_RG` and never reads LOOM_DLZ_RG. On an estate
+    // with LOOM_SUBSCRIPTION_ID + LOOM_DLZ_RG the gate evaluates 'configured'
+    // with `missing:[]` while readAcaConfig still throws — so the Fix-it poll
+    // (honest-gate.tsx) would fire onResolved() and this route would 503 again
+    // with an identical envelope. The bare 503 is the honest answer.
+    // The registry-level proof lives in
+    // app/api/admin/brain/_lib/__tests__/config-gate.test.ts.
+    const { AcaNotConfiguredError } = await import('@/lib/azure/container-apps-arm-client');
+    snap.loadSnapshot.mockRejectedValue(
+      new AcaNotConfiguredError(['LOOM_SUBSCRIPTION_ID', 'LOOM_ACA_RG (or LOOM_ADMIN_RG)']),
+    );
+    const res = await POST(postReq(BODY), { params: Promise.resolve({}) } as never);
+    expect(res.status).toBe(503);
+    const body = (await res.json()) as { ok: boolean; gated?: boolean; gate?: unknown; error: string };
+    expect(body.ok).toBe(false);
+    expect(body.gated).toBeUndefined();
+    expect(body.gate).toBeUndefined();
+    // R7 — the message still states exactly what the error established.
+    expect(body.error).toContain('LOOM_ACA_RG (or LOOM_ADMIN_RG)');
+  });
+
+  it('an ACA gap that gate CANNOT resolve gets no envelope, not a Fix-it that would not work', async () => {
+    // `readAcaConfig` is not the only thrower of this class: `upsertEnvStorage`
+    // raises it for a missing LOOM_ACA_ENVIRONMENT, which the 'subscription'
+    // gate does not set. Attaching that gate would print a remediation that
+    // cannot close the stated gap — an R7 failure wearing a Fix-it button.
+    const { AcaNotConfiguredError } = await import('@/lib/azure/container-apps-arm-client');
+    snap.loadSnapshot.mockRejectedValue(
+      new AcaNotConfiguredError(['LOOM_ACA_ENVIRONMENT (managed environment name)']),
+    );
+    const res = await POST(postReq(BODY), { params: Promise.resolve({}) } as never);
+    expect(res.status).toBe(503);
+    const body = (await res.json()) as { ok: boolean; gated?: boolean; gate?: unknown };
+    expect(body.gated).toBeUndefined();
+    expect(body.gate).toBeUndefined();
+  });
+
+  it('THE CONTROL: the ARG-collection class stays a BARE honest 503', async () => {
+    // Without this, "put an envelope on every 503" would satisfy the arms above
+    // while re-introducing the exact false claim #4283 exists to remove. ARG
+    // throws this on a token failure and on ANY non-OK response — a throttle, a
+    // 403, a 500 — none of which is a value the deploy did not set.
+    snap.loadSnapshot.mockRejectedValue(
+      new ResourceGraphCollectionError('ARG refused the query', 403, 'forbidden'),
+    );
+    const res = await POST(postReq(BODY), { params: Promise.resolve({}) } as never);
+    expect(res.status).toBe(503);
+    const body = (await res.json()) as { ok: boolean; gated?: boolean; gate?: unknown; error: string };
+    expect(body.ok).toBe(false);
+    expect(body.gated).toBeUndefined();
+    expect(body.gate).toBeUndefined();
+    expect(body.error).toContain('ARG refused the query');
+  });
+
+  it('the audit row is unchanged by the envelope — the refusal is still recorded', async () => {
+    const { BrainActionsNotConfiguredError } = await import('@/lib/brain-actions/state-store');
+    snap.loadSnapshot.mockRejectedValue(new BrainActionsNotConfiguredError());
+    await POST(postReq(BODY), { params: Promise.resolve({}) } as never);
+    const ev = audit.emitAuditEvent.mock.calls.at(-1)![0] as {
+      outcome: string;
+      detail: { stage: string; gate: string; mutatedAzure: unknown };
+    };
+    expect(ev.outcome).toBe('failure');
+    expect(ev.detail.stage).toBe('infra-gate');
+    expect(ev.detail.gate).toBe('BrainActionsNotConfiguredError');
+    expect(ev.detail.mutatedAzure).toBe(false);
+  });
+
+  it('GET — the read-back 503 carries the same envelope', async () => {
+    const { BrainActionsNotConfiguredError } = await import('@/lib/brain-actions/state-store');
+    const read = vi.spyOn(mem.store, 'read').mockRejectedValueOnce(
+      new BrainActionsNotConfiguredError(),
+    );
+    const res = await GET(getReq(), { params: Promise.resolve({}) } as never);
+    expect(res.status).toBe(503);
+    const body = (await res.json()) as { gated?: boolean; gate?: { id: string } };
+    expect(body.gated).toBe(true);
+    expect(body.gate?.id).toBe('cosmos-config');
+    read.mockRestore();
+  });
+});
+
 describe('request validation — confirmToken bound (#4246 nit)', () => {
   it('rejects an oversized confirmToken before any work happens', async () => {
     const res = await POST(
