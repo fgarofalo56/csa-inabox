@@ -13,6 +13,12 @@ Source UI:
   https://learn.microsoft.com/graph/api/subscribedsku-list ,
   https://learn.microsoft.com/graph/api/user-list
 
+Grade: **B+** (see [Revision history](#revision-history) — all 11 inventory rows
+built with one honest ⚠️ Graph gate, and no in-browser G1 receipt for this
+revision)
+Run date: 2026-09-07 (rev. 6 — re-baselined against current `main`; see
+[Revision history](#revision-history))
+
 Loom builds this **1:1 on Azure-native backends** — Cosmos (workspaces / items /
 workspace-permissions / F5 workspace-roles) for the Loom-access view, and
 Microsoft Graph (Directory.Read.All + User.Read.All on the Console UAMI) for the
@@ -80,13 +86,41 @@ Cosmos-derived users, activity, and legacy roles — never an empty/error surfac
 | M365 admin host                 | admin.microsoft.com     | admin.microsoft.us     | admin.apps.mil            |
 | Per-user M365 deep-link         | `#/users/:/UserDetails/{oid}` | same             | falls back to `#/users` (no published per-user path) |
 
+## Beyond the source inventory
+
+`app/admin/users/page.tsx` also ships three columns the M365 grid has no
+equivalent for, because they answer a Loom question rather than a directory one:
+**Workspaces** (owned), **Items created**, and **Last activity** — all derived
+from the tenant-scoped Cosmos read, not from Graph. They are listed here so a
+future reader does not mistake them for undocumented drift.
+
 ## Verification
 
-- `tsc --noEmit` clean for the four touched files.
-- `vitest run lib/azure/__tests__/graph-identity-client.test.ts` — 11 passing
-  (6 new: subscribedSkus shaping, gate, error-swallow; user chunking, $count +
-  ConsistencyLevel, lowercase keying, short-circuit).
-- Live walk (operator): `/admin/users` with `LOOM_GRAPH_USERS_ENABLED=true` +
+- **What THIS revision verified:** every one of the 11 inventory rows was
+  re-read against the current source. The grid is `LoomDataTable` with the
+  columns `user`, `department`, `account`, `licenses`, `roles`,
+  `workspacesOwned`, `itemsCreated`, `lastActivity`, `admin`
+  (`app/admin/users/page.tsx`); the ws-roles `Popover`, the Entra and M365
+  deep-links, and the `LOOM_GRAPH_USERS_ENABLED` honest-gate `MessageBar` are
+  all still present. No row moved from ✅.
+- **What THIS revision did NOT verify, stated rather than implied:** no live
+  in-browser click-walk and no test run were performed for this revision, so the
+  `ux-baseline.md` G1 receipt is still owed. The two bullets below are the
+  receipts from the ORIGINAL run and are kept as history, not re-asserted as
+  current:
+  - (rev. 5) `tsc --noEmit` clean for the four touched files.
+  - (rev. 5) `vitest run lib/azure/__tests__/graph-identity-client.test.ts` —
+    11 passing (6 new: subscribedSkus shaping, gate, error-swallow; user
+    chunking, `$count` + ConsistencyLevel, lowercase keying, short-circuit).
+- The walk still owed: `/admin/users` with `LOOM_GRAPH_USERS_ENABLED=true` +
   the UAMI grant shows real tenant users, real `subscribedSkus` cards, real
   per-user license SKUs, the ws-roles Popover from the F5 store, and the M365
   deep-link — all with `LOOM_DEFAULT_FABRIC_WORKSPACE` UNSET.
+
+## Revision history
+
+| Rev | Date | What changed |
+|---|---|---|
+| 5 | 2026-06-09 | Original doc. Carried **no Grade line and no Run date at all**, so nothing recorded when it was last true — which is why #3725 could not tell whether it was stale. |
+| 6 | 2026-09-07 | **Re-baselined (#3725).** Grade + Run date added. Re-verified against `0bc47c0b4c2` (#1827, 2026-07-10, UX-Wave 8), which rebuilt this page after rev. 5 was written: all 11 inventory rows survive that rebuild and stay ✅, and the three Loom-only columns it added are now documented rather than silent. Grade recorded as **B+** — unchanged from the MASTER-SCORECARD's rev.-5 entry, because nothing about this re-verification earns a raise: it is a source read, not the in-browser G1 receipt an A requires. |
+

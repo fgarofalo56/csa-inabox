@@ -24,9 +24,11 @@
  */
 
 import { trimEdges } from '@/lib/util/trim';
+import { authorizeItemWorkspace } from '@/lib/auth/workspace-guard';
+import type { SessionPayload } from '@/lib/auth/session';
 import { NextRequest, NextResponse } from 'next/server';
-import { itemsContainer, workspacesContainer } from '@/lib/azure/cosmos-client';
-import type { Workspace, WorkspaceItem } from '@/lib/types/workspace';
+import { itemsContainer } from '@/lib/azure/cosmos-client';
+import type { WorkspaceItem } from '@/lib/types/workspace';
 import {
   buildPbids,
   serializePbids,
@@ -60,8 +62,19 @@ function gate(missing: string, error: string) {
   return NextResponse.json({ ok: false, code: 'endpoint_not_resolvable', missing, error }, { status: 412 });
 }
 
-/** Find an item by id (cross-partition) + verify the caller's tenant owns its workspace. */
-async function loadItem(itemId: string, type: string, tenantId: string): Promise<WorkspaceItem | null> {
+/**
+ * Find an item by id (cross-partition) + AUTHORIZE the caller against its parent
+ * workspace through the canonical ladder (#3941). Read-scoped for GET, write-
+ * scoped for every mutating verb. This REPLACES an owner-only partition point
+ * read that admitted only the workspace CREATOR, so the admitted set strictly
+ * GROWS: tenant admins and shared-ACL members with the right role now pass.
+ */
+async function loadItem(
+  itemId: string,
+  type: string,
+  session: SessionPayload,
+  allowReadRoles: boolean,
+): Promise<{ item: WorkspaceItem | null; denied: NextResponse | null }> {
   const items = await itemsContainer();
   const { resources } = await items.items
     .query<WorkspaceItem>({
@@ -73,16 +86,29 @@ async function loadItem(itemId: string, type: string, tenantId: string): Promise
     })
     .fetchAll();
   const item = resources[0];
-  if (!item) return null;
-  const ws = await workspacesContainer();
-  try {
-    const { resource } = await ws.item(item.workspaceId, tenantId).read<Workspace>();
-    if (!resource || resource.tenantId !== tenantId) return null;
-  } catch (e: any) {
-    if (e?.code === 404) return null;
-    throw e;
-  }
-  return item;
+  if (!item) return { item: null, denied: null };
+  // #3941 - the canonical ladder, replacing the owner-only partition point read
+  // this helper used to do. `workspaces` is partitioned on `/tenantId`, which
+  // holds the workspace CREATOR's oid, so `ws.item(workspaceId, callerOid)`
+  // could only answer "did YOU create this workspace?" - it refused tenant
+  // admins and shared-ACL members on every item type with no dedicated route
+  // (the #2941/#2942 defect). `authorizeItemWorkspace` answers "may you ACCESS
+  // it?", scoped: read roles for GET, write-capable only for the mutations.
+  const denied = await authorizeItemWorkspace(session, {
+    workspaceId: item.workspaceId,
+    itemId,
+    itemType: type,
+    allowReadRoles,
+    notFound: 'Item not found',
+  });
+  // An ORDINARY refusal (404) collapses to `null` so the route keeps its own
+  // not-found wording, which is what its clients already render. The 409
+  // `tenant_unconfirmed` refusal does NOT: flattening it into "item not found"
+  // would state that the item does not exist, which the code did not establish
+  // - the workspace document WAS read and the admin rights ARE real
+  // (deploy-integrity.md R7). It is handed back for the route to return.
+  if (denied) return { item: null, denied: denied.status === 404 ? null : denied };
+  return { item, denied: null };
 }
 
 function pick(state: any, keys: string[]): string {
@@ -190,7 +216,9 @@ export const GET = withSession<{ type: string; id: string }>(async (req: NextReq
 
   let item: WorkspaceItem | null;
   try {
-    item = await loadItem(id, type, session.claims.oid);
+    const loaded = await loadItem(id, type, session, true);
+    if (loaded.denied) return loaded.denied;
+    item = loaded.item;
   } catch (e: any) {
     return apiServerError(e, 'Failed to load item');
   }

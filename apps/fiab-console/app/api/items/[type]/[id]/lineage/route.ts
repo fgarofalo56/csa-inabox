@@ -33,7 +33,8 @@
  * click-through are correct).
  */
 import { NextRequest, NextResponse } from 'next/server';
-import { getSession } from '@/lib/auth/session';
+import { authorizeItemWorkspace } from '@/lib/auth/workspace-guard';
+import { getSession, type SessionPayload } from '@/lib/auth/session';
 import { detectLoomCloud, type LoomCloud } from '@/lib/azure/cloud-endpoints';
 import {
   UnityCatalogNotConfiguredError,
@@ -45,9 +46,9 @@ import {
   type PurviewLineageGraph,
 } from '@/lib/azure/purview-client';
 import { getUnifiedLineage } from '@/lib/azure/unified-lineage';
-import { itemsContainer, workspacesContainer } from '@/lib/azure/cosmos-client';
+import { itemsContainer } from '@/lib/azure/cosmos-client';
 import { AcaManagedIdentityCredential } from '@/lib/azure/aca-managed-identity';
-import type { Workspace, WorkspaceItem } from '@/lib/types/workspace';
+import type { WorkspaceItem } from '@/lib/types/workspace';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -145,12 +146,19 @@ async function atlasAksFetch(guid: string, depth: number): Promise<AtlasLineageR
 // Item + lineage-key resolution
 // ------------------------------------------------------------------
 
-/** Load an item by id (cross-partition) and verify the caller's tenant owns it. */
+/**
+ * Find an item by id (cross-partition) + AUTHORIZE the caller against its parent
+ * workspace through the canonical ladder (#3941). Read-scoped for GET, write-
+ * scoped for every mutating verb. This REPLACES an owner-only partition point
+ * read that admitted only the workspace CREATOR, so the admitted set strictly
+ * GROWS: tenant admins and shared-ACL members with the right role now pass.
+ */
 async function loadItem(
   itemId: string,
   type: string,
-  tenantId: string,
-): Promise<WorkspaceItem | null> {
+  session: SessionPayload,
+  allowReadRoles: boolean,
+): Promise<{ item: WorkspaceItem | null; denied: NextResponse | null }> {
   const items = await itemsContainer();
   const { resources } = await items.items
     .query<WorkspaceItem>({
@@ -162,16 +170,29 @@ async function loadItem(
     })
     .fetchAll();
   const item = resources[0];
-  if (!item) return null;
-  const ws = await workspacesContainer();
-  try {
-    const { resource } = await ws.item(item.workspaceId, tenantId).read<Workspace>();
-    if (!resource || resource.tenantId !== tenantId) return null;
-  } catch (e: any) {
-    if (e?.code === 404) return null;
-    throw e;
-  }
-  return item;
+  if (!item) return { item: null, denied: null };
+  // #3941 - the canonical ladder, replacing the owner-only partition point read
+  // this helper used to do. `workspaces` is partitioned on `/tenantId`, which
+  // holds the workspace CREATOR's oid, so `ws.item(workspaceId, callerOid)`
+  // could only answer "did YOU create this workspace?" - it refused tenant
+  // admins and shared-ACL members on every item type with no dedicated route
+  // (the #2941/#2942 defect). `authorizeItemWorkspace` answers "may you ACCESS
+  // it?", scoped: read roles for GET, write-capable only for the mutations.
+  const denied = await authorizeItemWorkspace(session, {
+    workspaceId: item.workspaceId,
+    itemId,
+    itemType: type,
+    allowReadRoles,
+    notFound: 'Item not found',
+  });
+  // An ORDINARY refusal (404) collapses to `null` so the route keeps its own
+  // not-found wording, which is what its clients already render. The 409
+  // `tenant_unconfirmed` refusal does NOT: flattening it into "item not found"
+  // would state that the item does not exist, which the code did not establish
+  // - the workspace document WAS read and the admin rights ARE real
+  // (deploy-integrity.md R7). It is handed back for the route to return.
+  if (denied) return { item: null, denied: denied.status === 404 ? null : denied };
+  return { item, denied: null };
 }
 
 /** Resolve the Unity Catalog `catalog.schema.table` lineage key from item state. */
@@ -265,7 +286,12 @@ export async function GET(
   // lineage key (UC full_name / Atlas GUID) there is no Cosmos row.
   let item: WorkspaceItem | null = null;
   try {
-    item = await loadItem(id, type, session.claims.oid);
+    // Best-effort, and DELIBERATELY dropping the authorization refusal: this
+    // lookup only supplies a display name and resolves lineage keys from item
+    // state. The lineage answer itself is tenant-scoped inside
+    // `getUnifiedLineage`, so a refusal here is the same outcome as "no Cosmos
+    // row" — the raw-lineage-key path this try/catch already exists for.
+    item = (await loadItem(id, type, session, true)).item;
   } catch {
     item = null;
   }

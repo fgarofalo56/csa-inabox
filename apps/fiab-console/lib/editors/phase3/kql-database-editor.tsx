@@ -164,6 +164,35 @@ function serializeFnParams(params: FnParam[]): string {
     .join(', ');
 }
 
+/** One row of `.show database ingestion mappings` (GET /api/adx/ingestion-mappings). */
+export type IngestionMappingRef = { name: string; kind?: string; table?: string };
+
+/**
+ * The mapping names offerable for a given target table.
+ *
+ * Kusto scopes an ingestion mapping to a table, so a mapping built for `Events`
+ * is not a legal `ingestionMappingReference` when ingesting into `Alerts`. A
+ * mapping whose `table` is empty came back database-scoped and stays offered
+ * for every table. With NO table picked yet (the data connection's per-event
+ * routing case) every mapping is in scope, because the routing decides the
+ * table per event.
+ *
+ * Names are deduped: `.show` returns one row per (table, mapping) pair, and a
+ * duplicated <option value> is indistinguishable in the picked result.
+ */
+export function ingestionMappingOptions(mappings: IngestionMappingRef[], table: string): string[] {
+  const t = (table || '').trim().toLowerCase();
+  const names = mappings
+    .filter((m) => {
+      if (!m?.name) return false;
+      if (!t) return true;
+      const mt = (m.table || '').trim().toLowerCase();
+      return !mt || mt === t;
+    })
+    .map((m) => m.name);
+  return Array.from(new Set(names));
+}
+
 export function KqlDatabaseEditor({ item, id }: { item: FabricItemType; id: string }) {
   const s = useStyles();
   const [info, setInfo] = useState<KqlDbInfo | null>(null);
@@ -208,6 +237,12 @@ export function KqlDatabaseEditor({ item, id }: { item: FabricItemType; id: stri
   const [wizIngestMapping, setWizIngestMapping] = useState('');
   // Ingestion mapping wizard (format selector + auto-detect column grid)
   const [mappingWizOpen, setMappingWizOpen] = useState(false);
+  // Live ingestion-mapping catalogue for BOTH mapping-name pickers (ingest +
+  // Event Hub data-connection). Enumerable from the bound database, so the
+  // analyst picks rather than types (#3519).
+  const [wizMappings, setWizMappings] = useState<IngestionMappingRef[]>([]);
+  const [wizMappingsLoading, setWizMappingsLoading] = useState(false);
+  const [wizMappingsError, setWizMappingsError] = useState<string | null>(null);
   // Event Hub data-connection wizard
   const [wizDcHub, setWizDcHub] = useState('');
   const [wizDcConsumerGroup, setWizDcConsumerGroup] = useState('');
@@ -531,6 +566,51 @@ export function KqlDatabaseEditor({ item, id }: { item: FabricItemType; id: stri
       .catch(() => { /* leave empty — the wizard surfaces the gate */ })
       .finally(() => setWizDcLoading(false));
   }, [wizardKind, id]);
+
+  // The ingest + data-connection wizards both reference an ingestion mapping by
+  // NAME. That name is enumerable off the bound database, so it is PICKED, not
+  // typed (#3519): `.show database ingestion mappings` via the same route the
+  // Ingestion mapping wizard POSTs to.
+  useEffect(() => {
+    if ((wizardKind !== 'ingest' && wizardKind !== 'data-connection') || !id || id === 'new') return;
+    let cancelled = false;
+    setWizMappingsLoading(true); setWizMappingsError(null); setWizMappings([]);
+    clientFetch(`/api/adx/ingestion-mappings?id=${encodeURIComponent(id)}`)
+      .then((r) => r.json())
+      .then((j: any) => {
+        if (cancelled) return;
+        if (j?.ok && Array.isArray(j.mappings)) setWizMappings(j.mappings as IngestionMappingRef[]);
+        // An `ok:false` body carries the route's own reason; do NOT restate it
+        // as "no mappings exist" — that is a claim this code did not establish.
+        else setWizMappingsError(j?.error || 'the mapping list could not be read');
+      })
+      .catch((e: any) => { if (!cancelled) setWizMappingsError(e?.message || String(e)); })
+      .finally(() => { if (!cancelled) setWizMappingsLoading(false); });
+    return () => { cancelled = true; };
+  }, [wizardKind, id]);
+
+  const wizIngestMappingOptions = useMemo(
+    () => ingestionMappingOptions(wizMappings, wizSource),
+    [wizMappings, wizSource],
+  );
+  const wizDcMappingOptions = useMemo(
+    () => ingestionMappingOptions(wizMappings, wizDcTargetTable),
+    [wizMappings, wizDcTargetTable],
+  );
+  // Changing the target table can move the picked mapping out of scope (Kusto
+  // rejects a mapping bound to a different table). Drop it rather than submit a
+  // reference the cluster will refuse. Only when a picker is actually showing —
+  // a value typed into the empty-list fallback is the user's, not ours.
+  useEffect(() => {
+    if (wizIngestMapping && wizIngestMappingOptions.length > 0 && !wizIngestMappingOptions.includes(wizIngestMapping)) {
+      setWizIngestMapping('');
+    }
+  }, [wizIngestMapping, wizIngestMappingOptions]);
+  useEffect(() => {
+    if (wizDcMappingRule && wizDcMappingOptions.length > 0 && !wizDcMappingOptions.includes(wizDcMappingRule)) {
+      setWizDcMappingRule('');
+    }
+  }, [wizDcMappingRule, wizDcMappingOptions]);
 
   // Refresh the dedicated consumer-group list when the selected hub changes
   // (each ADX data connection needs its OWN consumer group, per Azure docs).
@@ -1922,7 +2002,33 @@ export function KqlDatabaseEditor({ item, id }: { item: FabricItemType; id: stri
                           ))}
                         </Select>
                         <Caption1>Ingestion mapping name (optional — blank uses the table&apos;s identity mapping)</Caption1>
-                        <Input value={wizIngestMapping} onChange={(_: unknown, d: any) => setWizIngestMapping(d.value)} placeholder="EventMapping" />
+                        {wizIngestMappingOptions.length > 0 ? (
+                          <Select
+                            value={wizIngestMapping}
+                            onChange={(_: unknown, d: any) => setWizIngestMapping(d.value)}
+                            aria-label="Ingestion mapping name"
+                            disabled={wizMappingsLoading}
+                          >
+                            <option value="">— none (identity mapping) —</option>
+                            {wizIngestMappingOptions.map((m) => <option key={m} value={m}>{m}</option>)}
+                          </Select>
+                        ) : (
+                          <>
+                            <Input
+                              value={wizIngestMapping}
+                              onChange={(_: unknown, d: any) => setWizIngestMapping(d.value)}
+                              aria-label="Ingestion mapping name"
+                              placeholder="EventMapping"
+                            />
+                            <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
+                              {wizMappingsLoading
+                                ? 'Reading the database’s ingestion mappings…'
+                                : wizMappingsError
+                                  ? `The mapping list could not be read (${wizMappingsError}) — this does not mean none exist; type the name if you know it.`
+                                  : `No ingestion mapping is defined${wizSource.trim() ? ` for ${wizSource.trim()}` : ''} on this database yet — leave blank for the identity mapping, or build one with Home → New → Ingestion mapping.`}
+                            </Caption1>
+                          </>
+                        )}
                         <Caption1>
                           File ({['parquet', 'avro', 'orc'].includes(wizIngestFormat)
                             ? 'binary — generates a blob ingest command'
@@ -1998,8 +2104,34 @@ export function KqlDatabaseEditor({ item, id }: { item: FabricItemType; id: stri
                             {wizDcTables.map((t) => <option key={t} value={t}>{t}</option>)}
                           </Select>
                         </Field>
-                        <Field label="Ingestion mapping name (optional)">
-                          <Input value={wizDcMappingRule} onChange={(_: unknown, d: any) => setWizDcMappingRule(d.value)} placeholder="myMapping" />
+                        <Field
+                          label="Ingestion mapping name (optional)"
+                          hint={wizMappingsLoading
+                            ? 'Reading the database’s ingestion mappings…'
+                            : wizMappingsError
+                              ? `The mapping list could not be read (${wizMappingsError}) — this does not mean none exist; type the name if you know it.`
+                              : wizDcMappingOptions.length === 0
+                                ? `No ingestion mapping is defined${wizDcTargetTable ? ` for ${wizDcTargetTable}` : ''} on this database yet — build one with Home → New → Ingestion mapping, or leave blank.`
+                                : undefined}
+                        >
+                          {wizDcMappingOptions.length > 0 ? (
+                            <Select
+                              value={wizDcMappingRule}
+                              onChange={(_: unknown, d: any) => setWizDcMappingRule(d.value)}
+                              aria-label="Ingestion mapping name"
+                              disabled={wizMappingsLoading}
+                            >
+                              <option value="">— none —</option>
+                              {wizDcMappingOptions.map((m) => <option key={m} value={m}>{m}</option>)}
+                            </Select>
+                          ) : (
+                            <Input
+                              value={wizDcMappingRule}
+                              onChange={(_: unknown, d: any) => setWizDcMappingRule(d.value)}
+                              aria-label="Ingestion mapping name"
+                              placeholder="myMapping"
+                            />
+                          )}
                         </Field>
                       </>
                     )}

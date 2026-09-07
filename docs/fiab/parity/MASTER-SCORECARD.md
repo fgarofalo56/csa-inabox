@@ -336,19 +336,19 @@ yet built and are intentionally **not** documented here as parity.
 
 | Surface | Doc | Grade | Default backend | Gate |
 |---|---|:--:|---|---|
-| AdminShell layout / chrome | `admin-shell.md` | **A** | none (pure client) | — |
+| AdminShell layout / chrome | `admin-shell.md` | **A−** (re-verified 2026-09-07, #3725) | none (pure client) | — |
 | Tenant settings | `tenant-settings.md` | **A** | Cosmos `tenant-settings` | — |
 | Capacity inventory + Scale by SKU (11 services) | `capacity.md` | **A** | ARM (UAMI) + per-service PATCH | cost ⚠️ |
 | Workspaces (user browser + admin) | `workspaces.md` | **A** | Cosmos `workspaces` + `items` | — |
 | Workspace create | `workspace-create.md` | **A** | Cosmos + PBI capacities | Purview ⚠️ |
 | Workspace roles (Manage access) | `workspace-roles.md` | **A** | Cosmos `workspace-roles` + ARM RBAC | RBAC-admin ⚠️ / Fabric opt-in ⚠️ |
-| Folders (+ task flows) | `folders-taskflows.md` | **A−** | Cosmos `folders` | task flows ⚠️ |
+| Folders (+ task flows) | `folders-taskflows.md` | **A−** (re-verified 2026-09-07, #3725) | Cosmos `folders` + Cosmos `task-flows` | — |
 | Git integration (SCM binding) | `git-integration.md` | **B+** | Cosmos `workspace-git` | Git-exec ⚠️ |
 | Spark compute (notebook backend) | `spark-compute.md` | **A** | AML Serverless Spark (Com/GCC) / Synapse Livy (GovH/IL5) | config ⚠️ |
 | CMK encryption | `cmk.md` | **A** | `storage.bicep` + `keyvault.bicep` | key-URI ⚠️ / no-blade ⚠️ |
 | Network & Private DNS | `networking.md` | **A** | ARM network-discovery + `network.bicep` | Reader ⚠️ |
 | Azure Connections | `azure-connections.md` | **A** | Cosmos + Key Vault (`kv-secrets-client.ts`) | KV role ⚠️ |
-| Users & licenses | `users-licenses.md` | **B+** | Cosmos derivation + Graph (gated) | Graph ⚠️ / license ⚠️ |
+| Users & licenses | `users-licenses.md` | **B+** (re-verified 2026-09-07, #3725) | Cosmos derivation + Graph (gated) | Graph ⚠️ (covers the license + account + objectId columns) |
 | Domains | `domains.md` | **A** | Cosmos `tenant-settings` + Purview (gated) | Purview ⚠️ |
 | Audit logs | `audit-logs.md` | **A** | Cosmos `audit-log` | — |
 | Refresh summary & schedule | `refresh-summary.md` | **A** | Power BI REST (opt-in) | PBI-bound ⚠️ |
@@ -356,9 +356,42 @@ yet built and are intentionally **not** documented here as parity.
 | Embed codes | `embed-codes.md` | **B** | PBI REST GenerateToken + `powerbi-client-react` | PBI-bound ⚠️ / Publish-to-web admin ⚠️ |
 | Org visuals & branding | `org-visuals.md` | **B+** | Cosmos `tenant-themes` + ADLS (domain images) | custom `.pbiviz` ⚠️ |
 
-**Grade distribution (rev.5, amended 2026-08-29):** 13 × A / A−, 6 × B+ / B.
+**Grade distribution (rev.5, amended 2026-08-29 and 2026-09-07):** 14 × A / A−,
+5 × B+ / B, over the 19 rows above.
 **Zero D, zero F. Zero ❌ in any of the 19 docs** (grep-clean),
 backend-per-control on every row.
+
+> The distribution line previously read "13 × A / A−, 6 × B+ / B". That was off
+> by one against the table it summarises — COUNTED row by row on 2026-09-07, the
+> table holds 14 and 5. None of the #3725 re-verifications below moves a row
+> between the two buckets; the correction is to the tally, not to a grade.
+
+> **Amendment, 2026-09-07 (#3725).** Three more rev.5 docs re-verified against
+> current `main`. Each carries its own `## Revision history` table now, so the
+> next reader can tell what a grade was measured on.
+>
+> - `admin-shell.md` **A → A−**. Rev.5 described a FLAT 17-entry `SECTIONS[]`
+>   declared inside `admin-shell.tsx`. `449b97a83d0` (#2551, 2026-07-28) moved
+>   that data to `lib/nav/admin-sections.ts` and regrouped it; today it is 8
+>   labeled groups over 42 destinations plus 11 folded-route redirect stubs. The
+>   surface is fully built — the demotion is purely evidentiary: this
+>   re-verification is a source read, not the G1 browser receipt.
+> - `folders-taskflows.md` **A− stays A−, for a different reason.** The rev.5
+>   ⚠️ row — which described the task-flow canvas as unbuilt and the feature as
+>   having no backend — is FALSE against this
+>   tree: `lib/panes/task-flows.tsx` is a real `@xyflow/react` canvas, the three
+>   `…/task-flows` BFF routes persist to the Cosmos `task-flows` container, and
+>   `lib/taskflow/step-runner.ts` + `launch-item.ts` actually EXECUTE a flow —
+>   which Fabric task flows cannot do. That gate is removed; the missing G1
+>   receipt now holds the grade.
+> - `users-licenses.md` **B+, unchanged, but datable at last.** It carried no
+>   Grade line and no Run date at all, which is precisely why nobody could tell
+>   whether it was stale. All 11 rows re-verified as still built after
+>   `0bc47c0b4c2` (#1827, 2026-07-10) rebuilt the page.
+>
+> None of the three was walked in a browser for this amendment, and none claims
+> to have been. `workspace-create.md` was already re-baselined 2026-08-06
+> (#3064) and is untouched here.
 
 > **Amendment, 2026-08-29 (#3738).** `usage-adoption.md` moved A → B on
 > re-verification: the rev.5 doc described six capabilities and claimed "zero ⚠️

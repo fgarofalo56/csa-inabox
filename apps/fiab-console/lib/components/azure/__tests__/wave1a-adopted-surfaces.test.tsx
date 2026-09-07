@@ -22,7 +22,7 @@
  * hand-typed ARM box fails here as well as in the ratchet.
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { render, screen, fireEvent, cleanup, waitFor } from '@testing-library/react';
+import { render, screen, fireEvent, cleanup, waitFor, within } from '@testing-library/react';
 import { FluentProvider, webLightTheme } from '@fluentui/react-components';
 import { spawnSync } from 'node:child_process';
 import path from 'node:path';
@@ -184,6 +184,107 @@ describe('Catalog lineage — the Databricks workspace host was typed', () => {
     fireEvent.click(await screen.findByRole('button', { name: /enter manually/i }));
     const manual = await screen.findByLabelText('Workspace URL');
     expect((manual as HTMLInputElement).disabled).toBe(false);
+  });
+});
+
+/**
+ * Wave 1A residue — the ADX wizards' ingestion-mapping NAME (#3519).
+ *
+ * The cluster/leader ids on this editor were adopted in #3587, but two boxes
+ * kept asking for a value that is fully enumerable off the bound database:
+ * `.show database ingestion mappings`, already served by
+ * `GET /api/adx/ingestion-mappings`. Typing it is not a cosmetic annoyance —
+ * a mapping is TABLE-SCOPED in Kusto, so a name that is valid for one target
+ * table is rejected by the cluster for another, and the free box could not
+ * tell the analyst that.
+ *
+ * Both directions are asserted, because only asserting the picker would let a
+ * "picker with zero options over an empty database" regression pass: with no
+ * mapping on the database the typed box must still be REACHABLE
+ * (`auto-bind-by-default.md` forbids the dead end).
+ */
+describe('KQL database wizards — the ingestion mapping name was typed', () => {
+  const ITEM = {
+    slug: 'kql-database', displayName: 'KQL Database', restType: 'KQLDatabase',
+    category: 'Real-Time Intelligence', description: 'fixture',
+  } as any;
+
+  /** `fetchJson` (lib/api/workspaces) reads `res.ok`, so the stub must carry it. */
+  function okRes(body: unknown) {
+    return { ok: true, status: 200, json: async () => body } as any;
+  }
+
+  const DB = {
+    ok: true, cluster: 'https://adx-loom.eastus2.kusto.windows.net', database: 'loomdb',
+    details: {}, tables: [{ name: 'T1' }, { name: 'T2' }], tableCount: 2,
+  };
+
+  /** Route by URL, with the mapping list swapped per test. */
+  function routeEditor(mappingsBody: unknown) {
+    fetchMock.mockImplementation((url: any) => {
+      const u = String(url);
+      if (/\/api\/adx\/ingestion-mappings/.test(u)) return Promise.resolve(okRes(mappingsBody));
+      if (/\/api\/adx\/tables/.test(u)) return Promise.resolve(okRes({ ok: true, tables: [{ name: 'T1' }, { name: 'T2' }] }));
+      if (/\/data-connections/.test(u)) return Promise.resolve(okRes({ ok: true, namespace: 'ns', eventHubs: ['h1'], tables: ['T1', 'T2'], connections: [] }));
+      if (/\/api\/items\/kql-database\//.test(u)) return Promise.resolve(okRes(DB));
+      return Promise.resolve(okRes({ ok: true }));
+    });
+  }
+
+  async function openGetData() {
+    const { KqlDatabaseEditor } = await import('@/lib/editors/phase3/kql-database-editor');
+    const { QueryClient, QueryClientProvider } = await import('@tanstack/react-query');
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 }, mutations: { retry: false } } });
+    render(
+      <QueryClientProvider client={qc}>
+        <FluentProvider theme={webLightTheme}><KqlDatabaseEditor item={ITEM} id="kqldb-1" /></FluentProvider>
+      </QueryClientProvider>,
+    );
+    fireEvent.click(await screen.findByRole('button', { name: 'Get data' }));
+    return screen.findByText(/Get data — ingest a file/);
+  }
+
+  it('offers the database’s mappings for the picked table instead of a free-text box', async () => {
+    routeEditor({ ok: true, mappings: [{ name: 'm1', table: 'T1', kind: 'json' }, { name: 'm2', table: 'T2', kind: 'csv' }] });
+    await openGetData();
+
+    const picker = await screen.findByLabelText('Ingestion mapping name');
+    // A <select>, not an <input> — this is the assertion that is RED at head.
+    expect(picker.tagName, 'the mapping name is still a free-text box').toBe('SELECT');
+    // The blank "identity mapping" choice survives: a mapping is optional.
+    expect(within(picker as HTMLElement).getByRole('option', { name: /identity mapping/i })).toBeInTheDocument();
+
+    // Target table drives the list — a mapping bound to T2 is not a legal
+    // reference when ingesting into T1.
+    fireEvent.change(screen.getByPlaceholderText('events'), { target: { value: 'T1' } });
+    await waitFor(() => {
+      const names = Array.from((picker as HTMLSelectElement).options).map((o) => o.value);
+      expect(names).toContain('m1');
+      expect(names, 'a mapping scoped to another table was offered').not.toContain('m2');
+    });
+    expect(screen.queryByPlaceholderText('EventMapping'), 'the free-text mapping box is still rendered').toBeNull();
+  });
+
+  it('still lets the name be typed when the database has no mapping at all', async () => {
+    routeEditor({ ok: true, mappings: [] });
+    await openGetData();
+    const box = await screen.findByLabelText('Ingestion mapping name');
+    expect(box.tagName).toBe('INPUT');
+    expect((box as HTMLInputElement).disabled).toBe(false);
+  });
+
+  /**
+   * R7: an unreadable list is not an empty list. The route answers `ok:false`
+   * on a real 403/503 from the cluster, and the copy under the box must not
+   * convert that into "none exist" — the same substitution
+   * `deploy-integrity.md` R7 was written for.
+   */
+  it('does not claim the database has no mappings when the list could not be READ', async () => {
+    routeEditor({ ok: false, error: 'Forbidden (principal lacks Database Viewer)' });
+    await openGetData();
+    await screen.findByLabelText('Ingestion mapping name');
+    expect(await screen.findByText(/could not be read/i)).toBeInTheDocument();
+    expect(screen.queryByText(/No ingestion mapping is defined/i)).toBeNull();
   });
 });
 
