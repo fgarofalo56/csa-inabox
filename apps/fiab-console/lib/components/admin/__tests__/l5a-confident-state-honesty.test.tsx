@@ -413,7 +413,13 @@ describe('#3742 TokenBudgetPanel — the budget scope is picked from real data, 
     expect(within(dialog).queryByDisplayValue('ws-1')).toBeNull();
   });
 
-  it('HONEST FALLBACK — when the workspace list cannot be read the dialog is not a dead end', async () => {
+  it('HONEST FALLBACK — a genuinely EMPTY workspace list is not a dead end', async () => {
+    // NOTE the fixture: `ok:true` with an empty array. That is an estate with no
+    // workspaces — an absence the route DID establish. It is a different state
+    // from a list that could not be READ (403/500), which after PR #4348 no
+    // longer renders as this one; that pair is held in
+    // __tests__/token-budget-scope-picker.test.tsx. The title used to say
+    // "cannot be read", which this fixture never modelled.
     routeMock({
       '/api/admin/copilot-quality/budgets': { status: 200, body: DASHBOARD },
       '/api/admin/workspaces': { status: 200, body: { ok: true, workspaces: [] } },
@@ -427,8 +433,9 @@ describe('#3742 TokenBudgetPanel — the budget scope is picked from real data, 
     // auto-bind-by-default forbids "no items found" + a disabled control. With
     // no real options the operator can still proceed, and is told why.
     await waitFor(() =>
-      expect(within(dialog).getByText(/Enter the id directly/i)).toBeInTheDocument(),
+      expect(within(dialog).getByText(/No workspace is available/i)).toBeInTheDocument(),
     );
+    expect(within(dialog).getByText(/Enter the workspace id directly/i)).toBeInTheDocument();
     expect(within(dialog).getByRole('textbox', { name: /Workspace/i })).toBeEnabled();
   });
 });

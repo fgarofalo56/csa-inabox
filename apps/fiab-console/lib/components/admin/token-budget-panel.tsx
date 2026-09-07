@@ -378,6 +378,31 @@ interface ScopeOption { id: string; label: string }
  */
 const ENTER_ID_OPTION = '__loom:enter-id__';
 
+/**
+ * The message a FAILED scope-list read must carry.
+ *
+ * `error` alone is NOT it. Both routes behind these pickers answer a denial
+ * with `error:'forbidden'` and put the actionable text in `reason` (and, for
+ * `requireTenantAdmin`, `remediation`). `/api/admin/workspaces`'s 403 reason is
+ * that the deployment shipped without a bootstrap-admin binding — a DEPLOY
+ * defect the platform must fix (auto-bind-by-default §5), not something the
+ * operator can act on from the word "forbidden".
+ *
+ * When the body carries neither, the STATUS is reported as the status. It is
+ * never converted into a claim about what does or does not exist: a read that
+ * failed established nothing about the estate (deploy-integrity R7).
+ */
+function listReadFailure(body: unknown, status: number, what: string): string {
+  const b = (body ?? {}) as { error?: unknown; reason?: unknown; remediation?: unknown };
+  const str = (v: unknown) => (typeof v === 'string' ? v.trim() : '');
+  const specific = [str(b.reason), str(b.remediation)].filter(Boolean).join(' ');
+  if (specific) return specific;
+  const generic = str(b.error);
+  return generic
+    ? `${what} read failed: ${generic} (HTTP ${status}).`
+    : `${what} read failed (HTTP ${status}).`;
+}
+
 function BudgetDialog({
   row, knownAgents, onClose, onDone, onError,
 }: { row: DashboardRow | null; knownAgents: ScopeOption[]; onClose: () => void; onDone: (msg: string) => void; onError: (msg: string) => void }) {
@@ -414,6 +439,17 @@ function BudgetDialog({
     queryFn: async (): Promise<ScopeOption[]> => {
       const r = await clientFetch('/api/admin/workspaces');
       const d: unknown = await r.json();
+      // #4348 review — A FAILED READ IS NOT AN EMPTY ESTATE. Repointing this at
+      // the admin route made 403 (no bootstrap-admin binding) and 500
+      // (apiServerError) REACHABLE, and both fell straight through the
+      // `Array.isArray` line below as `raw = []`. `wsQ.isError` therefore stayed
+      // false and the Field asserted "No workspace is available" — an absence
+      // nothing had established (deploy-integrity R7) — while the route's own
+      // `reason`, which names a deploy defect, was discarded. The sibling agent
+      // query already checked this; the asymmetry WAS the bug.
+      if ((d as { ok?: boolean } | null)?.ok === false) {
+        throw new Error(listReadFailure(d, r.status, 'Workspace list'));
+      }
       const raw = Array.isArray(d) ? d : ((d as { workspaces?: unknown[] })?.workspaces || []);
       return (raw as Record<string, string>[])
         // `/api/admin/workspaces` returns `WorkspaceAdminRecord[]`, whose display
@@ -459,7 +495,7 @@ function BudgetDialog({
         error?: string;
         agents?: { configured?: boolean; list?: Array<{ name?: string; description?: string }>; gate?: { error?: string } };
       };
-      if (d?.ok === false) throw new Error(d?.error || `agent registry read failed (${r.status})`);
+      if (d?.ok === false) throw new Error(listReadFailure(d, r.status, 'Agent registry'));
       const reg = d?.agents;
       const list = Array.isArray(reg?.list) ? reg.list : [];
       return {
@@ -495,7 +531,16 @@ function BudgetDialog({
   // The honest fallback, exactly as EntraGroupPicker documents it: a picker that
   // cannot populate must not become a dead end (auto-bind-by-default forbids
   // "no items found" + a disabled control).
-  const listUnavailable = !row && !optionsLoading && (!!optionsError || options.length === 0);
+  //
+  // #4348 review — AN ERROR IS NOT AN EMPTY LIST, and ORing the two here was a
+  // regression this PR introduced. `agentOptions` is the registry UNIONED with
+  // the attribution ledger, so a failed registry read leaves the ledger agents
+  // loaded and correct; ORing `optionsError` in replaced that populated picker
+  // with a bare <Input>, and the "Pick from the list instead" escape is gated on
+  // `typedIdMode`, so the rows that HAD loaded were unreachable without closing
+  // the dialog. The failure is still disclosed — it rides `optionsError` into
+  // the hint below — but it no longer suppresses data that is on hand.
+  const listUnavailable = !row && !optionsLoading && options.length === 0;
   /**
    * #3742 round 2 — A TYPED ID STAYS REACHABLE WHEN THE LIST IS NON-EMPTY.
    * The previous revision rendered the <Input> ONLY when the list was entirely
@@ -508,6 +553,44 @@ function BudgetDialog({
   const [typedIdMode, setTypedIdMode] = useState(false);
   const mustTypeId = listUnavailable || typedIdMode;
   const selectedLabel = options.find((o) => o.id === scopeId)?.label ?? scopeId;
+
+  /**
+   * #4348 review — THE HINT, RESOLVED AS ORDERED STATES rather than a nested
+   * ternary.
+   *
+   * As a ternary the registry-gate arm sat BELOW `listUnavailable`, so it was
+   * unreachable in the exact state it was written for: an unconfigured Foundry
+   * with nothing in the ledger yet has zero options, `listUnavailable` won, and
+   * the Field said "No agent is registered or has been attributed any spend
+   * yet" — contradicting the gate the SAME response carried. That is the
+   * cloud-parity case (`cloud-parity.md`): a boundary with no Foundry agent
+   * service must read as a registry that is unavailable, never as an estate
+   * that has no agents.
+   *
+   * Order is by what the operator must know first — a real failure, then a
+   * gate, then their own choice to type, then a genuine emptiness — and the
+   * "no agents exist" sentence is now reachable ONLY when nothing failed and
+   * nothing is gated, which is the only state that establishes it. The
+   * instruction suffix follows whichever CONTROL is actually on screen, so it
+   * never tells the operator to type while a Dropdown is rendered.
+   */
+  const idHint: string = (() => {
+    const noun = scope === 'workspace' ? 'workspace' : 'agent';
+    const exact = 'it must match the id the attribution ledger records, exactly.';
+    const howToProceed = mustTypeId
+      ? `Enter the ${noun} id directly — ${exact}`
+      : `The ${noun}s that did load are listed; pick "Enter an id…" for any other — ${exact}`;
+    if (optionsError) return `${optionsError} ${howToProceed}`;
+    if (registryGate) return `${registryGate} ${howToProceed}`;
+    if (typedIdMode) return `Entering the ${noun} id by hand — ${exact}`;
+    if (listUnavailable) {
+      const absence = noun === 'workspace'
+        ? 'No workspace is available'
+        : 'No agent is registered or has been attributed any spend yet';
+      return `${absence}. ${howToProceed}`;
+    }
+    return 'Enforcement joins on this exact id, so it is picked, never typed.';
+  })();
 
   const save = useMutation({
     mutationFn: async () => {
@@ -547,17 +630,7 @@ function BudgetDialog({
               </Field>
               <Field
                 label={scope === 'workspace' ? 'Workspace' : 'Agent'}
-                hint={
-                  listUnavailable
-                    ? (optionsError
-                      ? `${optionsError} Enter the ${scope} id directly — it must match the id the attribution ledger records, exactly.`
-                      : `No ${scope === 'workspace' ? 'workspace is available' : 'agent is registered or has been attributed any spend yet'}. Enter the id directly — it must match the id the attribution ledger records, exactly.`)
-                    : typedIdMode
-                      ? `Entering the ${scope} id by hand — it must match the id the attribution ledger records, exactly.`
-                      : registryGate
-                        ? `${registryGate} Only agents the ledger has already attributed are listed; pick "Enter an id…" for any other.`
-                        : 'Enforcement joins on this exact id, so it is picked, never typed.'
-                }
+                hint={idHint}
                 validationState={optionsError ? 'warning' : 'none'}
               >
                 {mustTypeId || row ? (
