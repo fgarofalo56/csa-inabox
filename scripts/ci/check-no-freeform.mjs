@@ -305,17 +305,32 @@
  *
  *         rg -U '<Combobox[^>]*\bfreeform\b' apps/fiab-console --glob '*.tsx'
  *
+ *     That command is a LOWER BOUND, not an exact count, and it can only
+ *     UNDER-report. `[^>]*` stops at the first `>`, so any prop carrying one —
+ *     an arrow handler `onChange={(e) => …}`, a nested `<Spinner />` in
+ *     `expandIcon` — hides the site when it sits BEFORE `freeform` in the
+ *     opening tag. Measured with a paired control, same component and same
+ *     props, order the only difference: `freeform` first → 1 match; the arrow
+ *     handler first → 0 matches. So treat a hit list as "at least these".
+ *
  *     Two of the hits are INFRASTRUCTURE ADDRESSES in the sense
  *     `auto-bind-by-default.md` §5 means, and are called out because they are
  *     the ones this rule would otherwise be expected to cover:
  *       lib/editors/foundry-sub-editors.tsx  the Azure OpenAI vectorizer ENDPOINT
  *       lib/components/shared/honest-gate.tsx  an arbitrary `LOOM_*` value, typed
  *                                            into the G2 Fix-it wizard itself
- *     Others name a column, a type, a branch or a language — values that live in
- *     the user's own data or repo, not addresses the platform could have bound —
- *     so they are outside what this rule asks about. That split is a JUDGEMENT
- *     per site, not a property the scan can compute, which is the second reason
- *     a single number here was always going to mislead.
+ *     The rest name something that lives in the USER's own data, directory or
+ *     repo rather than an address the platform could have bound — read at head
+ *     as: a source/sink column and its type (pipeline copy mapping-tab), a git
+ *     branch (git-integration), a language code and a skillset document path
+ *     (ai-search-tree), a notebook widget value (dbx-widgets-bar), a Unity
+ *     Catalog PRINCIPAL (uc-dialogs), and a share SCHEMA ALIAS as the recipient
+ *     sees it (data-shares). The last two are named explicitly because an
+ *     earlier revision of this note wrote the clause as "a column, a type, a
+ *     branch or a language", which did not cover them. That split is a
+ *     JUDGEMENT per site, not a property the scan can compute, which is the
+ *     second reason a single number here was always going to mislead — and it
+ *     is why this enumeration is dated to head rather than asserted as durable.
  *
  *     That endpoint is rendered ONLY on the branch where `/api/foundry/accounts`
  *     FAILED or genuinely returned zero accounts — the discovered-rows branch is
