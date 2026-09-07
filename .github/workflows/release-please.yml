@@ -253,14 +253,20 @@ jobs:
           set -euo pipefail
           REPO="${GITHUB_REPOSITORY}"
 
-          mapfile -t RELEASE_PRS < <(
-            gh pr list --repo "${REPO}" --state open --author 'app/github-actions' --json number,headRefName \
-              | jq -r '.[] | select(.headRefName | startswith("release-please--")) | .number'
-          )
-          if [ "${#RELEASE_PRS[@]}" -eq 0 ]; then
-            echo "No open release-please PRs — nothing to neutralize."
+          # Captured, NOT `mapfile < <(...)`: `set -e` does not inspect a process
+          # substitution and mapfile returns 0 having read 0 lines, so a failed
+          # `gh pr list` would print "nothing to neutralize" and exit 0 with the
+          # closing keywords still live in the body. This step already refuses a
+          # zero-byte BODY for that reason; the LIST needs the same treatment.
+          LIST_JSON="$(gh pr list --repo "${REPO}" --state open --author 'app/github-actions' --json number,headRefName)"
+          OPEN_COUNT="$(printf '%s' "${LIST_JSON}" | jq -r 'length')"
+          NUMS="$(printf '%s' "${LIST_JSON}" | jq -r '.[] | select(.headRefName | startswith("release-please--")) | .number')"
+          if [ -z "${NUMS}" ]; then
+            echo "gh pr list succeeded and returned ${OPEN_COUNT} open github-actions PR(s), none on a"
+            echo "release-please-- head — a measured zero. Nothing to neutralize."
             exit 0
           fi
+          mapfile -t RELEASE_PRS <<< "${NUMS}"
 
           for num in "${RELEASE_PRS[@]}"; do
             echo "=== PR #${num}: closing-keyword sweep ==="
@@ -407,15 +413,21 @@ jobs:
           # Find every open PR opened by github-actions[bot] whose head branch
           # matches the release-please naming scheme. Resolve each to its
           # *current* head SHA at runtime — never a cached value.
-          mapfile -t RELEASE_PRS < <(
-            gh pr list --repo "${REPO}" --state open --author 'app/github-actions' --json number,headRefName \
-              | jq -r '.[] | select(.headRefName | startswith("release-please--")) | .number'
-          )
+          #
+          # Captured, NOT `mapfile < <(...)`: `set -e` does not inspect a process
+          # substitution and mapfile returns 0 having read 0 lines, so a failed
+          # `gh pr list` would print "nothing to do" and exit 0 with the required
+          # contexts never bridged — a read failure reported as an absence.
+          LIST_JSON="$(gh pr list --repo "${REPO}" --state open --author 'app/github-actions' --json number,headRefName)"
+          OPEN_COUNT="$(printf '%s' "${LIST_JSON}" | jq -r 'length')"
+          NUMS="$(printf '%s' "${LIST_JSON}" | jq -r '.[] | select(.headRefName | startswith("release-please--")) | .number')"
 
-          if [ "${#RELEASE_PRS[@]}" -eq 0 ]; then
-            echo "No open release-please PRs found — nothing to do."
+          if [ -z "${NUMS}" ]; then
+            echo "gh pr list succeeded and returned ${OPEN_COUNT} open github-actions PR(s), none on a"
+            echo "release-please-- head — a measured zero. Nothing to do."
             exit 0
           fi
+          mapfile -t RELEASE_PRS <<< "${NUMS}"
 
           # THE ONE SOURCE OF EVIDENCE. name <TAB> status <TAB> conclusion <TAB>
           # url for every CHECK RUN on a SHA.
@@ -895,16 +907,29 @@ jobs:
         run: |
           set -euo pipefail
           REPO="${GITHUB_REPOSITORY}"
-          mapfile -t RELEASE_PRS < <(
-            gh pr list --repo "${REPO}" --state open --author 'app/github-actions' --json number,headRefName \
-              | jq -r '.[] | select(.headRefName | startswith("release-please--")) | .number'
-          )
-          if [ "${#RELEASE_PRS[@]}" -eq 0 ]; then
-            echo "No open release-please PRs — running the audit's controls alone so this step is not"
-            echo "a hollow green: a pass here still proves the check-run query path is alive."
+          # The producer is captured, NOT read through `mapfile < <(...)`.
+          # `set -e` does not inspect a process substitution, and mapfile
+          # returns 0 having read 0 lines, so a rate-limited or 403'd
+          # `gh pr list` would read as "no release PRs" and this step would
+          # exit 0 having measured nothing. That is the #4046 shape recurring
+          # inside the guard written for #4046, and it is a live risk here:
+          # `gh pr list` takes the GraphQL/search path, which carries its own
+          # tighter secondary rate limit than the `gh api` calls the audit's
+          # controls make — so the controls can pass while the list fails.
+          # A command substitution IS inspected by `set -e`, so a failed list
+          # now aborts the step instead of being reported as an absence.
+          LIST_JSON="$(gh pr list --repo "${REPO}" --state open --author 'app/github-actions' --json number,headRefName)"
+          OPEN_COUNT="$(printf '%s' "${LIST_JSON}" | jq -r 'length')"
+          NUMS="$(printf '%s' "${LIST_JSON}" | jq -r '.[] | select(.headRefName | startswith("release-please--")) | .number')"
+          if [ -z "${NUMS}" ]; then
+            echo "gh pr list succeeded and returned ${OPEN_COUNT} open github-actions PR(s), none of them on a"
+            echo "release-please-- head. That is a MEASURED zero, not an unread one. Running the audit's"
+            echo "controls alone so this step is not a hollow green: a pass here still proves the"
+            echo "check-run query path is alive."
             node scripts/ci/check-merged-prs-had-check-runs.mjs --controls-only
             exit 0
           fi
+          mapfile -t RELEASE_PRS <<< "${NUMS}"
           for num in "${RELEASE_PRS[@]}"; do
             node scripts/ci/check-merged-prs-had-check-runs.mjs --pr "${num}"
           done

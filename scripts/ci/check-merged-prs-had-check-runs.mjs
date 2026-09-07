@@ -240,8 +240,24 @@ export function report(results) {
   return 0;
 }
 
-function main() {
-  const argv = process.argv.slice(2);
+/**
+ * The driver, exported and fully injectable.
+ *
+ * Both parameters exist for ONE reason: so a test can drive this function
+ * itself rather than a helper it calls. The independent review of #4347 landed
+ * a mutation narrower than any the PR body recorded — `runControls` untouched,
+ * only main's REACTION to it deleted (the `process.exitCode = 1; return;`
+ * below) — and the 7-test suite still passed 7/7 while the guard printed
+ * "embedded control(s) passed" over 992 bytes of control FAILURES and exited 0.
+ * A refusal that nothing drives is a refusal nothing witnesses, which is the
+ * same 'correct and unwitnessed' gap this guard exists to close for #4046.
+ *
+ * @param {(sha: string) => number} read the check-run reader; a test injects a
+ *   broken one to make the controls fail without the network.
+ * @param {string[]} argv CLI arguments, so a test can select `--controls-only`
+ *   instead of inheriting `node --test`'s own argv.
+ */
+export function main(read = checkRunCount, argv = process.argv.slice(2)) {
   const flag = (name) => {
     const i = argv.indexOf(name);
     return i >= 0 && i + 1 < argv.length ? argv[i + 1] : null;
@@ -249,7 +265,7 @@ function main() {
 
   // CONTROLS FIRST, ALWAYS — including on `--controls-only`. A verdict from an
   // unproven query path is not a verdict.
-  const controlFailures = runControls();
+  const controlFailures = runControls(read);
   if (controlFailures.length) {
     console.error(
       '::error::merged-prs-had-check-runs: the embedded controls FAILED, so this run cannot tell a real ' +
