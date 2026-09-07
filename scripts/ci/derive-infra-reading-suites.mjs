@@ -202,8 +202,20 @@ const CONSOLE_DIR = 'apps/fiab-console';
  *
  * That was NOT cosmetic, and an earlier review that called it harmless was
  * wrong: `lib/__tests__/api-route-typing.test.ts` IS selected once it is
- * visible (the derived set goes 41 -> 42, confirmed by reverting only `INCLUDE`
+ * visible (the derived set goes 58 -> 59, confirmed by reverting only `INCLUDE`
  * and diffing — the single lost line is exactly that file).
+ *
+ * The delta and the named file are right. The ABSOLUTES were not: an earlier
+ * revision of this paragraph said "41 -> 42", and review round 2 of #4349
+ * (2026-09-07) measured 59. Re-derived here on this tip, rc=0 and stderr 0 B:
+ * `node scripts/ci/derive-infra-reading-suites.mjs --suites` emits 59 unique
+ * sorted suites, and with only `INCLUDE` reverted it emits 58, the one lost
+ * line being exactly the file named above. That 59 was measured WITH
+ * `apps/fiab-console/node_modules` present and round 2 measured 59 WITHOUT it,
+ * so the old figure was simply stale rather than environment-dependent. The
+ * consequence worth stating: `MIN_SUITES = 38` sits 21 suites below what the
+ * deriver actually selects, not 4 — the floor is further from its subject than
+ * the number it used to be quoted with implied.
  *
  * WHAT THAT SUITE ACTUALLY COVERS, stated precisely because the first version of
  * this paragraph overstated it (#3819 nit 1). It type-checks fixtures against
@@ -257,9 +269,17 @@ const INCLUDE = [
  *    arm alone loses 16 files") read as if this floor caught that case. IT DOES
  *    NOT (#3819 nit 3a). Measured arm sensitivity: `lib` 1179 · `app` 356 ·
  *    console-root 16. Dropping the root arm leaves 1535 matches, which is ABOVE
- *    the floor of 1400, so this control stays green; it is caught one stage
- *    later by `MIN_SUITES` (36 < 38), verified by mutation. The floor's real
- *    subject is a LARGE arm — dropping `lib` or `app` takes it far below 1400.
+ *    the floor of 1400, so this control stays green.
+ *
+ *    Which stage DOES catch it was re-measured on 2026-09-07 by dropping the
+ *    root arm and re-running: the deriver exits 1 on `REQUIRED_TRIGGER_DIRS`
+ *    ("the emitted trigger is MISSING required directory/ies: azure-functions",
+ *    stderr 620 B) over 52 derived suites. `MIN_SUITES` is silent there — 52 is
+ *    well above 38. An earlier revision of this paragraph credited `MIN_SUITES`
+ *    with the catch ("36 < 38"); that was true of a smaller console and is not
+ *    true at this tip, so the credit moves to the control that actually fires.
+ *    The match-count floor's real subject is a LARGE arm: with `lib` or `app`
+ *    dropped the count falls to 372 or 1195, both far below 1400.
  *
  * NEITHER CATCHES A SMALL SEMANTIC DRIFT, and that is worth saying plainly
  * because it is the exact bug that got here: the config never moved (so part 1

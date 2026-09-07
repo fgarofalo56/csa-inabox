@@ -235,29 +235,71 @@ test('#3857 — no ::error:: is emitted on a branch that ends in success', () =>
 });
 
 test('#3857 — the fold step cannot claim a prepend it did not perform', () => {
-  // Measured on review of this PR (2026-09-07): the fold step ran `set -uo
-  // pipefail` — no `-e` — with `cat a b > tmp` and `mv tmp b` on SEPARATE lines,
-  // then unconditionally echoed "prepended ... (N bytes)". A failing `cat` still
-  // reached the `mv`, which clobbered eval-summary.md with the partial or empty
-  // tmp; the step exited 0 and asserted a prepend that never happened. That is
-  // the deploy-integrity R7 shape this suite exists to keep out, introduced in
-  // the step this PR added. Both halves of the fix are pinned, so removing
-  // either one alone fails HERE by name.
+  // Measured on review of this PR, round 1 (2026-09-07): the fold step ran
+  // `set -uo pipefail` — no `-e` — with `cat a b > tmp` and `mv tmp b` on
+  // SEPARATE lines, then unconditionally echoed "prepended ... (N bytes)". A
+  // failing `cat` still reached the `mv`, which clobbered eval-summary.md with
+  // the partial or empty tmp; the step exited 0 and asserted a prepend that
+  // never happened — the deploy-integrity R7 shape this suite exists to keep
+  // out, introduced in the step this PR added.
+  //
+  // Measured again on review round 2 (2026-09-07): the round-1 fix — add `-e`
+  // and join the two with `&&` — does NOT fail closed either, and this test
+  // pinned that broken shape as if it did. Bash exempts a failing command
+  // inside an `&&` list from `-e` unless it is the one following the FINAL
+  // `&&`; here that is the `mv`, which never runs. Run verbatim with a failing
+  // `cat` (corpus-provenance.md a directory, eval-summary.md a real file):
+  // rc=0, eval-summary.md still `ORIGINAL SUMMARY BODY`, and stdout still
+  // `prepended corpus-provenance.md to eval-summary.md (21 bytes)`.
+  //
+  // What is pinned is the PROPERTY, not a spelling. Round 1's ratchet pinned a
+  // literal `&&` one-liner and would therefore have gone RED on a working fix,
+  // which is how the broken shape survived a review. Both shapes measured to
+  // fail CLOSED are accepted here:
+  //
+  //   * the `cat` alone on its line under `set -e`  — rc=1, no clobber, no claim
+  //   * `if ! cat …; then echo "::error::…"; exit 1; fi`
+  //                                                 — rc=1 both with `-e` and
+  //                                                   with `-e` removed
+  //
+  // and the shape measured to fail OPEN is rejected: a `cat` joined to another
+  // command by `&&` or `||`, where `set -e` does not apply to it.
   const fold = steps[indexOfStep('Fold the provenance banner')];
   assert.ok(fold, 'the fold step is gone — the sticky comment lost the provenance banner');
 
   assert.match(
     fold.body,
     /set -euo pipefail/,
-    'the fold step no longer runs under `set -e`, so a failed `cat` continues into the `mv` and the ' +
+    'the fold step no longer runs under `set -e`, so a failed `mv` would fall through to the ' +
       'success message below it',
   );
-  assert.match(
-    fold.body,
-    /cat corpus-provenance\.md eval-summary\.md > eval-summary\.tmp && mv eval-summary\.tmp eval-summary\.md/,
-    'the `&&` between the cat and the mv is gone: a failed cat would still let the mv overwrite ' +
-      'eval-summary.md with the partial tmp',
+
+  const catLine = fold.body
+    .split('\n')
+    .find((l) => l.includes('cat corpus-provenance.md eval-summary.md > eval-summary.tmp'));
+  assert.ok(
+    catLine,
+    'the fold step no longer merges corpus-provenance.md into eval-summary.md — the claim below ' +
+      'it would then describe a write that does not exist',
   );
+  assert.doesNotMatch(
+    catLine,
+    /(&&|\|\|)/,
+    'the `cat` is inside an `&&`/`||` list, where `set -e` does not apply to it: a failing cat is ' +
+      'skipped over, the `mv` never runs, and the step exits 0 having claimed a prepend it did ' +
+      'not make (measured rc=0 on review round 2)',
+  );
+
+  // If the failure is handled explicitly rather than left to `-e`, the handler
+  // must actually exit non-zero — an arm that only warns fails open again.
+  if (/^\s*if ! cat corpus-provenance\.md/.test(catLine)) {
+    assert.match(
+      fold.body,
+      /if ! cat corpus-provenance\.md eval-summary\.md > eval-summary\.tmp; then\n[^]*?\n\s*exit 1\n\s*fi\n/,
+      'the `cat` has an explicit failure arm that does not exit non-zero, so a failed merge still ' +
+        'reaches the "prepended ..." claim below it',
+    );
+  }
 
   // And the message must sit AFTER the write it describes, not before it.
   const wroteAt = fold.body.indexOf('mv eval-summary.tmp eval-summary.md');
