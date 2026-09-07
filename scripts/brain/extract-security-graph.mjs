@@ -61,7 +61,7 @@ function repoRelative(absolute) {
 }
 
 /** Recursively collect files under `dir` matching `predicate`. */
-function walk(dir, predicate, out = []) {
+function walk(dir, predicate, out = [], repoRoot = REPO_ROOT) {
   let entries;
   try {
     entries = readdirSync(dir, { withFileTypes: true });
@@ -73,14 +73,84 @@ function walk(dir, predicate, out = []) {
     const full = path.join(dir, entry.name);
     if (entry.isDirectory()) {
       if (entry.name === 'node_modules' || entry.name === '.next' || entry.name === '.git') continue;
-      walk(full, predicate, out);
+      walk(full, predicate, out, repoRoot);
       continue;
     }
-    const rel = repoRelative(full);
+    const rel = path.relative(repoRoot, full).split(path.sep).join('/');
     if (predicate(rel)) out.push(full);
   }
   return out;
 }
+
+/**
+ * The repo-relative paths git actually carries under `roots` — TRACKED plus
+ * UNTRACKED-BUT-NOT-IGNORED.
+ *
+ * ── WHY THE WALK ALONE WAS WRONG (#4216) ─────────────────────────────────
+ *
+ * The scan used to be a bare `readdirSync` recursion that skipped only
+ * `node_modules`, `.next` and `.git`, so it read whatever happened to be sitting
+ * on the developer's disk. Measured on this tree: `git status --porcelain`
+ * reporting ZERO lines while `--check` exited 1, because one `.gitignore`d
+ * `.yml` under `scripts/` had moved `meta.skipped[].fileCount` 187 → 188 and
+ * added `*.yml` to that scope's extension list. The gate was then unsatisfiable
+ * in both directions — regenerating locally BAKED the ignored file into the
+ * artifact, which is drift the moment CI (which never sees it) re-derives.
+ *
+ * `--cached` alone would be wrong in the other direction: a file that has been
+ * written but not yet `git add`ed is genuinely part of the change under review
+ * and must be scanned, or a new publication surface could be introduced and
+ * certified clean in the same commit. `--others --exclude-standard` covers
+ * exactly that case and nothing more.
+ *
+ * Intersecting the result with the filesystem walk (rather than reading git's
+ * list directly) keeps one behaviour that matters: a path still in the INDEX but
+ * deleted from the worktree is listed by `--cached` and would throw on read.
+ *
+ * FAILS CLOSED. Without git this cannot establish what is ignored, and guessing
+ * would reintroduce the exact defect above — so it exits non-zero naming git's
+ * own error rather than falling back to an unfiltered walk (deploy-integrity
+ * R6/R7: classify the failure, and say only what was established).
+ */
+function gitVisibleFiles(roots, cwd = REPO_ROOT) {
+  let raw;
+  try {
+    raw = execFileSync(
+      'git',
+      ['ls-files', '-z', '--cached', '--others', '--exclude-standard', '--', ...roots],
+      { cwd, encoding: 'utf8', maxBuffer: 256 * 1024 * 1024 },
+    );
+  } catch (e) {
+    const detail = (e && (e.stderr || e.message)) ? String(e.stderr || e.message).trim() : 'no error text';
+    console.error(
+      '[security-extract] REFUSING TO SCAN: `git ls-files` failed, so this run cannot establish which ' +
+        'files under the scan roots are gitignored. Reading the filesystem directly would let an ignored ' +
+        'file into the artifact, which is #4216 — a gate that is then unsatisfiable both locally and in ' +
+        `CI. git said: ${detail}`,
+    );
+    process.exit(1);
+  }
+  return new Set(raw.split('\0').filter(Boolean));
+}
+
+/**
+ * The enumeration EVERY scan root goes through: the filesystem walk, intersected
+ * with what git carries. Exported (with `gitVisibleFiles`) so the ignore filter
+ * can be exercised against a throwaway fixture repository — the #4216 regression
+ * is not reachable from this repo's own tree, because this repo has no ignored
+ * file under a scan root today, and a filter that is only ever handed inputs it
+ * accepts has not been shown to reject anything.
+ */
+export function scanFiles(repoRoot, root, predicate, visible) {
+  return walk(
+    path.join(repoRoot, root),
+    (rel) => predicate(rel) && visible.has(rel),
+    [],
+    repoRoot,
+  );
+}
+
+export { gitVisibleFiles };
 
 /**
  * Compile the extractor to CommonJS in a temp dir and return its `build.js`.
@@ -138,11 +208,6 @@ function currentCommit() {
 function main() {
   const check = process.argv.includes('--check');
 
-  const routeFiles = walk(
-    path.join(CONSOLE_DIR, 'app'),
-    (rel) => /\/route\.tsx?$/.test(rel),
-  );
-
   // ── THE PUBLICATION SCOPE, WALKED AND DECLARED FROM ONE PLACE ──────────
   //
   // These roots are passed into `buildSecurityGraphArtifact`, which derives BOTH
@@ -165,13 +230,19 @@ function main() {
    */
   const PUBLICATION_UNMODELED = /\.(?:sh|ps1|psm1|py|yml|yaml)$/;
 
+  // EVERY scan root's enumeration is filtered through this (#4216) — the routes
+  // walk included, so a gitignored `route.ts` cannot mint a node either.
+  const ROUTE_ROOT = 'apps/fiab-console/app';
+  const visible = gitVisibleFiles([ROUTE_ROOT, ...PUBLICATION_ROOTS]);
+
+  const routeFiles = scanFiles(REPO_ROOT, ROUTE_ROOT, (rel) => /\/route\.tsx?$/.test(rel), visible);
+
   const scriptFiles = [];
   const unmodeledPublicationSurfaces = [];
   for (const root of PUBLICATION_ROOTS) {
-    const absRoot = path.join(REPO_ROOT, root);
-    scriptFiles.push(...walk(absRoot, (rel) => PUBLICATION_INCLUDE.test(rel)));
+    scriptFiles.push(...scanFiles(REPO_ROOT, root, (rel) => PUBLICATION_INCLUDE.test(rel), visible));
 
-    const unread = walk(absRoot, (rel) => PUBLICATION_UNMODELED.test(rel));
+    const unread = scanFiles(REPO_ROOT, root, (rel) => PUBLICATION_UNMODELED.test(rel), visible);
     unmodeledPublicationSurfaces.push({
       root: `${root}/`,
       fileCount: unread.length,
@@ -283,11 +354,26 @@ function main() {
     const CAP = 20;
     const differences = driftDifferences(a, artifact, CAP);
     if (differences.length > 0) {
+      // R7. The sentence that stood here read "Either the source changed or the
+      // extractor did", and #4216 falsified it: NEITHER had changed — one
+      // gitignored file under a scanned root had been read, and `git status`
+      // showed a clean tree while this exited 1. An error must assert only what
+      // it established, so the cause is now DIAGNOSED from the differences
+      // themselves and the residual case says plainly that it cannot tell.
+      const graphHeld = a.graph.nodes.length === nodes && a.graph.edges.length === edges;
+      const onlySkipped = differences.every((d) => String(d.path).startsWith('meta.skipped'));
+      const diagnosis = graphHeld && onlySkipped
+        ? 'Every difference is under `meta.skipped` and the node/edge counts are identical, so no modelled '
+          + 'construct moved: the SET OF FILES under a scanned root did. That is a file this extractor does '
+          + 'not lex being added or removed. (Before #4216 a GITIGNORED file could produce exactly this '
+          + 'shape; enumeration now comes from `git ls-files`, so a file git does not carry cannot.)'
+        : 'This check establishes only that the committed bytes and the bytes produced from this tree '
+          + 'differ; it does not establish WHICH of the source, the extractor or the scanned file set moved.';
       console.error(
         '[security-extract] DRIFT: the committed artifact does not match what the extractor ' +
           `produces from this tree (committed ${a.graph.nodes.length} nodes / ` +
-          `${a.graph.edges.length} edges, current ${nodes} / ${edges}). Either the source ` +
-          'changed or the extractor did. Run: node scripts/brain/extract-security-graph.mjs',
+          `${a.graph.edges.length} edges, current ${nodes} / ${edges}). ${diagnosis} ` +
+          'Run: node scripts/brain/extract-security-graph.mjs',
       );
       console.error(
         `[security-extract] ${differences.length} differing field(s)` +
@@ -325,4 +411,17 @@ function main() {
   console.log(`[security-extract] wrote ${repoRelative(OUT_FILE)}`);
 }
 
-main();
+// The default is UNCONDITIONAL: every CLI shape — `node <path>`, a relative
+// path, a symlink, an npm script — runs the extraction, so there is no
+// invocation that can silently exit 0 having produced nothing. The single
+// opt-out exists so `gitVisibleFiles`/`scanFiles` can be imported by a test
+// without the whole extraction running, and it announces itself on stderr so a
+// run that took it cannot be mistaken for a run that extracted.
+if (process.env.LOOM_SECURITY_EXTRACT_IMPORT_ONLY === '1') {
+  console.error(
+    '[security-extract] main() NOT RUN: LOOM_SECURITY_EXTRACT_IMPORT_ONLY=1 — this process imported the ' +
+      'module for its enumeration helpers and extracted nothing.',
+  );
+} else {
+  main();
+}
