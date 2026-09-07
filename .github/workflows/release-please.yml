@@ -237,8 +237,9 @@ jobs:
 
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
         with:
-          # The neutralizer below is a repo script, so the tree has to be here
-          # before it runs. Nothing else in this job needs the checkout.
+          # The neutralizer below is a repo script, as is the #4046 check-run
+          # audit near the end of this job, so the tree has to be here before
+          # either runs.
           persist-credentials: false
 
       - name: A release merge must close NOTHING — strip closing keywords from the PR body
@@ -337,6 +338,36 @@ jobs:
           # An EMPTY producer means "no workflow in this repo publishes this
           # context". Those — and ONLY those — still get a synthetic status, and
           # each one is named in a ::warning:: so the residue cannot go quiet.
+          #
+          # WHAT THIS MIRROR DELIBERATELY DOES NOT CONTAIN, AND WHY (#4029).
+          # Measured 2026-09-06 against the live protection:
+          #   .required_status_checks.contexts | length -> 15
+          #   this array                                -> 14
+          # The 15th is `changelog parser can read every commit message`, and it
+          # is ABSENT ON PURPOSE, not by drift. Its producer,
+          # commit-message-parses.yml, computes its job `name:` from the event
+          # (see that file, `name: >-` under the guard job): on `pull_request`
+          # and `merge_group` it publishes the required string, but on
+          # `workflow_dispatch` it renames itself to `guard health only — no PR
+          # range scanned (dispatch)`. Listing it here with that producer would
+          # make this job dispatch a workflow that CANNOT publish the context it
+          # is waiting for — the deadlock the header above records for #3447 —
+          # and listing it with an EMPTY producer would post a SYNTHETIC status
+          # for a context that a real run does publish, which is the #3393
+          # defect. Neither is a mirror; both are worse than the gap. A release
+          # PR is a pull_request, so the real run publishes it unprompted.
+          #
+          # Two further contexts are candidates but are NOT required by
+          # protection today, so adding them here would manufacture drift in the
+          # opposite direction. Both need the branch-protection PATCH first
+          # (admin-only, so this workflow's token cannot read or make it):
+          #   `brain security graph — committed artifact matches the tree`
+          #       fiab-console-ci.yml:710, no `if:`, not path-filtered — #4029
+          #   `jest (node 20.x)`   frontend-test.yml:24 — #4234
+          # When protection takes either one, add it here in the SAME change
+          # with `fiab-console-ci.yml` / `frontend-test.yml` as its producer.
+          # Last reconciled against protection: 2026-09-06 (15 required, 14
+          # mirrored, 1 documented exclusion above).
           REQUIRED_CHECKS=(
             "PowerShell Lint|validate.yml"
             "Python Lint|validate.yml"
@@ -843,6 +874,40 @@ jobs:
             echo "::error::visible in the run list instead of showing as a green release lane."
             exit 1
           fi
+
+      # A release PR is the exact shape #4046 measured: authored by
+      # github-actions[bot], so its `pull_request` workflows are suppressed or
+      # held at `action_required` and publish no check run at all. #3678 merged
+      # that way — head 6b27f125, `total_count = 0`. The step above bridges the
+      # REQUIRED contexts; this one asks the blunter question the required-check
+      # bridge cannot, because a synthetic status IS a check run and would
+      # satisfy a coverage count that only looked at names.
+      #
+      # It runs AFTER the bridge deliberately: before it, a zero would be a
+      # timing artefact rather than a defect. Its own embedded controls (a
+      # known-blind head and a known-covered one) run first on every invocation,
+      # so a 403 or a rate limit fails loudly instead of reading as "no checks".
+      - name: No release PR may be mergeable with ZERO check runs (#4046)
+        if: ${{ !cancelled() }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          REPO="${GITHUB_REPOSITORY}"
+          mapfile -t RELEASE_PRS < <(
+            gh pr list --repo "${REPO}" --state open --author 'app/github-actions' --json number,headRefName \
+              | jq -r '.[] | select(.headRefName | startswith("release-please--")) | .number'
+          )
+          if [ "${#RELEASE_PRS[@]}" -eq 0 ]; then
+            echo "No open release-please PRs — running the audit's controls alone so this step is not"
+            echo "a hollow green: a pass here still proves the check-run query path is alive."
+            node scripts/ci/check-merged-prs-had-check-runs.mjs --controls-only
+            exit 0
+          fi
+          for num in "${RELEASE_PRS[@]}"; do
+            node scripts/ci/check-merged-prs-had-check-runs.mjs --pr "${num}"
+          done
 
       - name: Log release info
         if: ${{ steps.release.outputs.release_created }}

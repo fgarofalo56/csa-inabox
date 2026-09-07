@@ -601,7 +601,37 @@ export function conditionRegions(text) {
 
 const BLOCK_OPEN = /(?:^|[;&|(){}]|\s)(?:if|case|do)\b/g;
 const BLOCK_CLOSE = /(?:^|[;&|(){}]|\s)(?:fi|esac|done)\b/g;
-const EARLY_EXIT = /(?:^|[;&|(){}]|\s)(?:exit|return|continue|break)\b/;
+const EARLY_EXIT_WORD = /\b(?:exit|return|continue|break)\b/g;
+
+/** A logical line that is entirely a shell comment executes nothing. */
+export function isCommentLine(text) {
+  return /^\s*#/.test(text);
+}
+
+/**
+ * Does this line carry an early-exit that could genuinely stop the flow before
+ * the create — `exit`/`return`/`continue`/`break` standing in COMMAND POSITION,
+ * outside quotes, on a line that is not a comment?
+ *
+ * The predicate this replaces (#3958) was `/(?:^|[;&|(){}]|\s)(?:exit|return|
+ * continue|break)\b/` over the RAW text, and its own docblock recorded the two
+ * measured holes: `echo "will not break here"` satisfied it, and so did
+ * `az tag create --name break-glass` — a word in an argument, not a builtin.
+ * Both answered `gated: true` over a create that nothing gated. Masking the
+ * quoted regions and demanding command position closes both; the controls B2
+ * and B3c below are those two exact lines.
+ */
+export function hasEarlyExit(text) {
+  if (isCommentLine(text)) return false;
+  const masked = maskQuoted(text);
+  EARLY_EXIT_WORD.lastIndex = 0;
+  let m = EARLY_EXIT_WORD.exec(masked);
+  while (m !== null) {
+    if (COMMAND_POSITION.test(masked.slice(0, m.index))) return true;
+    m = EARLY_EXIT_WORD.exec(masked);
+  }
+  return false;
+}
 
 /**
  * Net block-nesting change of one logical line. A conditional that opens AND
@@ -611,6 +641,32 @@ const EARLY_EXIT = /(?:^|[;&|(){}]|\s)(?:exit|return|continue|break)\b/;
 export function blockDelta(text) {
   const count = (re) => (text.match(re) || []).length;
   return count(BLOCK_OPEN) - count(BLOCK_CLOSE);
+}
+
+/**
+ * Is the block opened by `lines[k]` STILL OPEN when the create is reached?
+ *
+ * `blockDelta` alone answers only "did this one line open more than it closed",
+ * and #3958 recorded the consequence: an `if …; then` on one line, its `fi` two
+ * lines later, and the create AFTER the `fi` scored `gated: true` for the
+ * remaining window — the create sat outside the block that supposedly gated it.
+ * `lines` here is the window from the probe up to (not including) the create, so
+ * running the delta forward to the end of that window answers the real question.
+ * The moment the running sum reaches zero the block has closed, and a later
+ * re-open is a DIFFERENT block that this condition does not control.
+ *
+ * Comment lines are skipped on both sides: a commented-out `fi` closes nothing,
+ * and a commented-out `if` opens nothing.
+ */
+export function blockOpenThroughCreate(lines, k) {
+  if (blockDelta(lines[k].text) <= 0) return false;
+  let sum = 0;
+  for (let j = k; j < lines.length; j += 1) {
+    if (isCommentLine(lines[j].text)) continue;
+    sum += blockDelta(lines[j].text);
+    if (sum <= 0) return false;
+  }
+  return true;
 }
 
 /**
@@ -639,30 +695,31 @@ export function blockDelta(text) {
  *            not, and neither does `[ "$N" = 0 ]; az … create`, where the test's
  *            exit status is discarded by the `;`.
  *        (b) on a PRECEDING line, that condition's line must additionally either
- *            have a POSITIVE NET BLOCK DELTA (more `if`/`case`/`do` than
- *            `fi`/`esac`/`done` on that one line) or carry an early-exit
- *            keyword (`exit`/`return`/`continue`/`break`).
+ *            open a block that is STILL OPEN when the create is reached (the
+ *            running `blockDelta` from that line forward never returns to zero),
+ *            or carry an early-exit keyword (`exit`/`return`/`continue`/`break`)
+ *            standing in COMMAND POSITION outside quotes.
  *
- * STATED LIMITS (R7). Path (b) is a LINE READ, not a parse, and the round-2
- * review of #3928 measured exactly how far that falls short. Each of these is a
- * known FALSE-NEGATIVE — (b) answers `gated: true` and the create is in fact
- * unconditional. They are recorded here because the guard must not be read as
- * claiming more than it establishes; they are tracked in #3958, NOT fixed here:
+ * STATED LIMITS (R7). Path (b) is a LINE READ, not a parse. #3958 closed the
+ * five holes the round-2 review of #3928 had measured and left recorded here —
+ * each was a FALSE NEGATIVE where (b) answered `gated: true` over a create that
+ * nothing gated, and each is now pinned as a control (B1, B2, B3, B3b, B3c, B6):
+ *   - `blockDelta` was PER LINE and never accumulated, so a block that opened
+ *     AND closed before the create still read as gating it (B1, B6);
+ *   - `EARLY_EXIT` matched the keyword anywhere on the line, including inside a
+ *     quoted string (B2) and inside an argument such as `--name break-glass`,
+ *     where it is not the builtin at all (B3c);
+ *   - path (b) did not skip COMMENT lines, so a commented-out conditional
+ *     contributed a positive block delta (B3) and a commented-out early-exit
+ *     satisfied the keyword test (B3b).
+ *
+ * What it still does NOT claim, and these are not fixed:
  *   - it does not verify the probe targets the SAME (assignee, scope, role)
  *     triple as the create it guards. That needs the shell variables resolved
  *     across the file; it is reported by `--list` as residue instead.
- *   - `blockDelta` is PER LINE and never accumulated across the window, so an
- *     `if …; then` / `fi` block that OPENS AND CLOSES before the create still
- *     reads as gating it, for the remaining 12 logical lines.
- *   - it does not establish that the create sits inside THAT block rather than a
- *     sibling `else` arm. Full block scoping is a parse, not a line read.
- *   - `EARLY_EXIT` matches the keyword ANYWHERE on the line, INCLUDING inside a
- *     quoted string: `echo "will not break here"` and `echo "grant absent,
- *     continue"` both satisfy it. It is not required to stand in command
- *     position, nor on the branch that does NOT reach the create.
- *   - path (b) does not skip COMMENT lines, so a commented-out conditional
- *     (`# if [ "$N" = "0" ]; then …`) still contributes a positive block delta.
- *     `isExecuted` skips comments for the create side; this read does not.
+ *   - it does not establish that the create sits inside the OPEN block rather
+ *     than a sibling `else` arm. Full block scoping is a parse, not a line read,
+ *     and the running delta cannot distinguish the two arms.
  *   - `conditionRegions` treats `{` as opening a command position, so a `{` in
  *     an `echo` ARGUMENT (`echo {[ $N ] && …`) can open a condition region.
  */
@@ -699,10 +756,15 @@ export function probeGates(logical, i) {
     if (HANDOFF.test(own.slice(r.end, createIdx))) return { gated: true };
   }
 
-  // (b) a PRECEDING line, between the probe and the create.
-  for (const l of window.slice(probeIdx + 1)) {
+  // (b) a PRECEDING line, between the probe and the create. `tail` ends at the
+  //     line BEFORE the create, which is what makes the running block delta
+  //     answer "is this block still open when the create runs".
+  const tail = window.slice(probeIdx + 1);
+  for (let k = 0; k < tail.length; k += 1) {
+    const l = tail[k];
+    if (isCommentLine(l.text)) continue;
     if (!conditionRegions(l.text).some((r) => readsVar(r.text))) continue;
-    if (blockDelta(l.text) > 0 || EARLY_EXIT.test(l.text)) return { gated: true };
+    if (blockOpenThroughCreate(tail, k) || hasEarlyExit(l.text)) return { gated: true };
   }
 
   return {
@@ -937,6 +999,93 @@ export const D3_CONTROLS = [
       `echo run test $N && az role assignment create --assignee-object-id "$PID" --role ${CONTROL_ROLE} --scope "$ACR_ID"`,
     ],
     expectFindings: 1,
+  },
+
+  // ── the path-(b) FALSE NEGATIVES the #3928 docblock recorded (#3958) ──────
+  //
+  // Every shape below was MEASURED `gated: true` at the parent of this change,
+  // over a create that nothing gates. They are the guard's own stated limits,
+  // turned from prose into controls: a docblock that lists a hole is a record,
+  // not a defence, and this repo has lost to exactly that distinction before.
+  {
+    why: 'B1: a block that OPENS and CLOSES before the create does not gate it',
+    lines: [
+      PROBE_CONTROL_LINE,
+      'if [ "$N" = "0" ]; then',
+      '  echo creating',
+      'fi',
+      `az role assignment create --assignee-object-id "$PID" --role ${CONTROL_ROLE} --scope "$ACR_ID"`,
+    ],
+    expectFindings: 1,
+  },
+  {
+    why: 'B2: an early-exit keyword INSIDE A QUOTED STRING (`echo "will not break here"`) is not an exit',
+    lines: [
+      PROBE_CONTROL_LINE,
+      '[ "$N" = "0" ] && echo "will not break here"',
+      `az role assignment create --assignee-object-id "$PID" --role ${CONTROL_ROLE} --scope "$ACR_ID"`,
+    ],
+    expectFindings: 1,
+  },
+  {
+    why: 'B3: a COMMENTED-OUT conditional contributes no block delta',
+    lines: [
+      PROBE_CONTROL_LINE,
+      '# if [ "$N" = "0" ]; then',
+      `az role assignment create --assignee-object-id "$PID" --role ${CONTROL_ROLE} --scope "$ACR_ID"`,
+    ],
+    expectFindings: 1,
+  },
+  {
+    why: 'B3b: a COMMENTED-OUT early-exit gate executes nothing',
+    lines: [
+      PROBE_CONTROL_LINE,
+      '# elif [ "$N" != "0" ]; then continue',
+      `az role assignment create --assignee-object-id "$PID" --role ${CONTROL_ROLE} --scope "$ACR_ID"`,
+    ],
+    expectFindings: 1,
+  },
+  {
+    why: 'B3c: `break` inside an ARGUMENT (`--name break-glass`) is not the shell builtin',
+    lines: [
+      PROBE_CONTROL_LINE,
+      '[ "$N" = "0" ] && az tag create --name break-glass',
+      `az role assignment create --assignee-object-id "$PID" --role ${CONTROL_ROLE} --scope "$ACR_ID"`,
+    ],
+    expectFindings: 1,
+  },
+  {
+    why: 'B6: a `while … do` LOOP closed by `done` before the create does not gate it either',
+    lines: [
+      PROBE_CONTROL_LINE,
+      'while [ "$N" = "0" ]; do',
+      '  echo waiting',
+      'done',
+      `az role assignment create --assignee-object-id "$PID" --role ${CONTROL_ROLE} --scope "$ACR_ID"`,
+    ],
+    expectFindings: 1,
+  },
+  {
+    // The other direction of B1/B6: the accumulation must not start reporting a
+    // create that IS inside a still-open block as unguarded.
+    why: 'POSITIVE: a block that opens and STAYS OPEN through the create IS a gate',
+    lines: [
+      PROBE_CONTROL_LINE,
+      'if [ "$N" = "0" ]; then',
+      '  echo creating',
+      `  az role assignment create --assignee-object-id "$PID" --role ${CONTROL_ROLE} --scope "$ACR_ID"`,
+      'fi',
+    ],
+    expectFindings: 0,
+  },
+  {
+    why: 'POSITIVE: an `exit` gate in COMMAND POSITION on a preceding line IS a gate',
+    lines: [
+      PROBE_CONTROL_LINE,
+      '[ "$N" != "0" ] && exit 0',
+      `az role assignment create --assignee-object-id "$PID" --role ${CONTROL_ROLE} --scope "$ACR_ID"`,
+    ],
+    expectFindings: 0,
   },
 
   // ── and the genuine gates that must NOT start failing (no over-tightening) ─
