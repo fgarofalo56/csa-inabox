@@ -95,6 +95,41 @@ describe('the ARM shapes Resource Graph needs a different table for', () => {
   });
 });
 
+describe('ARM `kind` is a comma LIST, not an enum', () => {
+  /**
+   * REGRESSION GUARD (review 2026-09-07). `function-app-id` shipped as a bare
+   * `kind: 'functionapp'`, which `/api/azure/resources` renders as
+   * `| where kind =~ 'functionapp'` — case-insensitive EQUALITY. Loom's own
+   * bicep declares 8 of its 11 `Microsoft.Web/sites` as `functionapp,linux`, so
+   * that predicate matched none of them and the Event Grid destination picker —
+   * which DEFAULTS to `AzureFunction` — opened on a list that could never
+   * return a row.
+   */
+  it('the Function App source asks for CONTAINS, so a `functionapp,linux` site is not excluded', () => {
+    const [src] = AZURE_BACKED_FIELDS['function-app-id'].sources;
+    expect(src.type).toBe('Microsoft.Web/sites');
+    expect(src.kind).toBe('functionapp');
+    // The load-bearing half: equality here is the dead end, so it is asserted
+    // rather than left to the comment.
+    expect(src.kindMatch).toBe('contains');
+  });
+
+  it('and the request the picker actually issues carries kindMatch=contains', async () => {
+    wrap(<AzureBackedField kind="function-app-id" onChange={() => {}} />);
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+    const url = String(fetchMock.mock.calls[0][0]);
+    expect(url).toContain('type=Microsoft.Web%2Fsites');
+    expect(url).toContain('kind=functionapp');
+    expect(url).toContain('kindMatch=contains');
+  });
+
+  it('a source with no kindMatch sends no kindMatch, so every other picker is unchanged', async () => {
+    wrap(<AzureBackedField kind="adxUri" onChange={() => {}} />);
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+    expect(String(fetchMock.mock.calls[0][0])).not.toContain('kindMatch');
+  });
+});
+
 describe('cloud parity', () => {
   it('the catalog endpoint queries Databricks AND Loom Unity, so Gov is not empty', () => {
     const types = AZURE_BACKED_FIELDS['catalog-endpoint'].sources.map((s) => s.type);

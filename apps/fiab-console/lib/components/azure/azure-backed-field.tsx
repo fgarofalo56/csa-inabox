@@ -269,13 +269,38 @@ const EXTRA_FIELDS: Record<string, AzureBackedFieldDef> = {
    * surface that needs `…/sites/{app}/functions/{fn}` picks the app HERE and
    * composes the function name onto it, rather than asking for the whole id.
    *
-   * `kind: 'functionapp'` matches what `/api/azure/function-apps` already
-   * filters on, so the two agree about what a Function App is.
+   * ── WHY `kindMatch: 'contains'` AND NOT A BARE `kind` (review, 2026-09-07) ──
+   * This first shipped as `kind: 'functionapp'` with a comment claiming that
+   * matched what `/api/azure/function-apps` filters on. It does not, and the
+   * narrowing EMPTIED the picker on Loom's own estate. The two predicates are
+   * different operators over the same token:
+   *
+   *   /api/azure/resources     `| where kind =~ '<kind>'` — Resource Graph `=~`
+   *                            is case-insensitive EQUALITY.
+   *   /api/azure/function-apps `s.kind.toLowerCase().includes('functionapp')`
+   *                            — a SUBSTRING test.
+   *
+   * ARM `kind` on `Microsoft.Web/sites` is a COMMA LIST, so they disagree on
+   * every row whose list has more than one token: `functionapp` → both true;
+   * `functionapp,linux` → equality FALSE, substring true;
+   * `functionapp,linux,container` → equality FALSE, substring true. Loom's own
+   * bicep declares 8 of its 11 `Microsoft.Web/sites` as `functionapp,linux`
+   * (only `scc-labels-function.bicep` is bare `functionapp`), and Event Grid's
+   * destination picker DEFAULTS to `AzureFunction` — so the equality form gave
+   * a first-open dead end on the platform's own Function Apps, which is an
+   * `auto-bind-by-default.md` violation as well as a false comment.
+   *
+   * `kindMatch: 'contains'` emits `| where kind contains 'functionapp'`, KQL's
+   * case-insensitive substring operator, which is the same predicate the
+   * function-apps route applies in JS. The agreement is now a property of the
+   * operators and not an assertion: both admit every `functionapp*` list,
+   * including Logic App Standard sites (`functionapp,workflowapp`), which that
+   * route also returns.
    */
   'function-app-id': {
     label: 'Function App',
     valueFrom: 'id',
-    sources: [{ type: 'Microsoft.Web/sites', kind: 'functionapp' }],
+    sources: [{ type: 'Microsoft.Web/sites', kind: 'functionapp', kindMatch: 'contains' }],
     manualLabel: 'Function App resource ID',
   },
   /**

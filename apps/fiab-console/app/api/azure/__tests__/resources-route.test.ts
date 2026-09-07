@@ -28,7 +28,7 @@ vi.mock('@/lib/azure/arm-credential', () => ({
   uamiArmCredential: () => ({ getToken: uamiGetToken }),
 }));
 
-import { GET, buildQuery, tableForType, unsupportedReason, isSafeSelectPath } from '../resources/route';
+import { GET, buildQuery, tableForType, unsupportedReason, isSafeSelectPath, isKindMatch } from '../resources/route';
 import { getSession } from '@/lib/auth/session';
 import { getUserArmToken } from '@/lib/azure/user-token-store';
 
@@ -103,6 +103,47 @@ describe('query construction', () => {
     expect(isSafeSelectPath('properties.uri')).toBe(true); // control: helper reachable
     const res = buildQuery('Microsoft.App/containerApps', undefined, undefined, 'loom-unity');
     expect(res).toContain("where name =~ 'loom-unity'");
+  });
+
+  /**
+   * `=~` IS EQUALITY, NOT CONTAINMENT (review 2026-09-07). ARM `kind` on
+   * `Microsoft.Web/sites` is a comma LIST, so the two predicates split:
+   *
+   *   kind value                    `=~ 'functionapp'`   `contains 'functionapp'`
+   *   functionapp                   true                 true
+   *   functionapp,linux             FALSE                true
+   *   functionapp,linux,container   FALSE                true
+   *
+   * Loom's own bicep declares 8 of its 11 `Microsoft.Web/sites` as
+   * `functionapp,linux`, so the equality form returned nothing for them.
+   */
+  it('kindMatch=contains emits KQL `contains`; equality remains the default', () => {
+    const contains = buildQuery('Microsoft.Web/sites', 'functionapp', undefined, undefined, 'contains');
+    expect(contains).toContain("| where kind contains 'functionapp'");
+    expect(contains).not.toContain("| where kind =~ 'functionapp'");
+
+    // Every existing caller is byte-identical to before: the default and an
+    // explicit `equals` produce the same string, and neither mentions contains.
+    const dflt = buildQuery('Microsoft.CognitiveServices/accounts', 'OpenAI');
+    expect(dflt).toContain("| where kind =~ 'OpenAI'");
+    expect(dflt).toBe(
+      buildQuery('Microsoft.CognitiveServices/accounts', 'OpenAI', undefined, undefined, 'equals'),
+    );
+    expect(dflt).not.toContain('contains');
+
+    // With no kind there is no kind predicate under either mode.
+    expect(buildQuery('Microsoft.Web/sites', undefined, undefined, undefined, 'contains'))
+      .not.toContain('where kind ');
+  });
+
+  it('the contains form is the SAME validated literal, not a second escape path', () => {
+    // Both branches interpolate the `isSafeArgLiteral`-checked literal; only the
+    // operator differs, so `contains` cannot widen what reaches the query.
+    expect(isKindMatch('equals')).toBe(true);
+    expect(isKindMatch('contains')).toBe(true);
+    for (const bad of ['CONTAINS', 'has', "' or '1'='1", '', 'contains_cs']) {
+      expect(isKindMatch(bad), bad).toBe(false);
+    }
   });
 
   it('resource groups come from `resourcecontainers`, not `resources`', () => {
@@ -208,6 +249,25 @@ describe('GET', () => {
       expect(j.error.length).toBeGreaterThan(40); // a reason, not a code
     }
     expect(unsupportedReason('Microsoft.Kusto/clusters')).toBeNull();
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('sends the contains predicate to ARG when the caller asks for it', async () => {
+    fetchMock.mockResolvedValue(argPage([row(1)]));
+    const res = await GET(req('type=Microsoft.Web/sites&kind=functionapp&kindMatch=contains'), {} as any);
+    expect((await res.json()).ok).toBe(true);
+    const body = JSON.parse(String((fetchMock.mock.calls[0][1] as any).body));
+    expect(body.query).toContain("| where kind contains 'functionapp'");
+  });
+
+  it('REJECTS an unrecognized kindMatch rather than silently falling back to equality', async () => {
+    // Defaulting would answer a DIFFERENT question than was asked and give no
+    // sign of it — the wrong-answer-reported-confidently shape.
+    const res = await GET(req('type=Microsoft.Web/sites&kind=functionapp&kindMatch=has'), {} as any);
+    const j = await res.json();
+    expect(res.status).toBe(400);
+    expect(j.ok).toBe(false);
+    expect(j.error).toContain('kindMatch');
     expect(fetchMock).not.toHaveBeenCalled();
   });
 

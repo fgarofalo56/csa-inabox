@@ -84,6 +84,15 @@ export interface AzureResourceSource {
   type: string;
   /** Optional ARM `kind` filter, e.g. 'Hub' | 'Project' | 'OpenAI'. */
   kind?: string;
+  /**
+   * How `kind` is compared. Default `equals` is Resource Graph `=~` —
+   * case-insensitive EQUALITY. Use `contains` where ARM `kind` is a COMMA LIST
+   * rather than a single token: a Function App is `functionapp` on Windows but
+   * `functionapp,linux` on Linux and `functionapp,linux,container` in a
+   * container, so `kind: 'functionapp'` under `equals` matches none of the
+   * Linux ones. Only meaningful alongside `kind`.
+   */
+  kindMatch?: 'equals' | 'contains';
   /** Resource Graph property path projected into `value` (the derived endpoint). */
   select?: string;
   /**
@@ -336,6 +345,9 @@ export function AzureResourcePicker({
       const results = await Promise.all(list.map(async (src, srcIdx) => {
         const qs = new URLSearchParams({ type: src.type });
         if (src.kind) qs.set('kind', src.kind);
+        // Sent only alongside `kind` and only when it is not the default, so
+        // every existing call site's request URL is byte-identical to before.
+        if (src.kind && src.kindMatch && src.kindMatch !== 'equals') qs.set('kindMatch', src.kindMatch);
         if (src.select) qs.set('select', src.select);
         if (src.name) qs.set('name', src.name);
         const { j, status } = await fetchSource(`/api/azure/resources?${qs.toString()}`);

@@ -32,9 +32,29 @@
  *             appearing while the fixed one regresses.
  *
  * MUTATION RECEIPT (how each assertion was proven to fail): revert any one
- * picker to its `<Input>` and the corresponding case goes red — the DRAINED
- * file reappears as an un-accepted line, an ACCEPTED file gains one, and a
- * PARTIAL file's forbidden shape comes back.
+ * picker to a PLACEHOLDER-SHAPED `<Input>` — the shape it had before this wave,
+ * e.g. `placeholder="https://<cluster>.<region>.kusto.windows.net"` — and the
+ * corresponding case goes red: the DRAINED file reappears as an un-accepted
+ * line, an ACCEPTED file gains one, and a PARTIAL file's forbidden shape comes
+ * back.
+ *
+ * ── WHAT THIS DOES NOT GUARD (measured, review 2026-09-07) ──────────────────
+ * The claim above is deliberately narrower than "the picker stays". The
+ * classifier keys on the placeholder and label SHAPE of an ask, not on the
+ * presence of a picker, so a revert that asks for the same value WITHOUT a
+ * recognizable placeholder is invisible to it. Measured on
+ * `stream-analytics-editor.tsx`: replacing the `adxUri` AzureBackedField with a
+ * placeholder-free, generically-labelled `<Field label="Cluster" required>
+ * <Input value={outForm.cluster || ''} …/></Field>` left
+ * `check-no-freeform.mjs` at RC=0 ("OK — no new violations", the ACCEPTED entry
+ * still reading 2 sites) and this whole file at 7/7 green, #3517 included.
+ *
+ * That is a property of the classifier, not a hole to patch here: adding tags
+ * until this particular revert is caught only moves the boundary, since the
+ * next unlabelled shape walks through it (memory: the narrow-bypass treadmill).
+ * So these cases guard "a placeholder-shaped infrastructure ask does not come
+ * back", and the picker's continued presence is guarded by the surface's own
+ * behavioural specs, not by this file.
  */
 import { describe, it, expect } from 'vitest';
 import { spawnSync } from 'node:child_process';
