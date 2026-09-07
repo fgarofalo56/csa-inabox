@@ -42,6 +42,7 @@ import { AzureBackedField } from '@/lib/components/azure/azure-backed-field';
 import { AdxRbacPanel } from '@/lib/components/adx/adx-rbac-panel';
 import { AdxClusterEditor } from '@/lib/components/adx/adx-cluster-editor';
 import { IngestionMappingWizardDialog } from '@/lib/components/adx/ingestion-mapping-wizard';
+import { IngestionMappingPicker } from '@/lib/components/adx/ingestion-mapping-picker';
 import {
   ColumnGridDesigner, toKustoSchema, parseKustoSchema, validateColumns,
   type ColumnDef,
@@ -1921,8 +1922,13 @@ export function KqlDatabaseEditor({ item, id }: { item: FabricItemType; id: stri
                             <option key={fmt} value={fmt}>{fmt.toUpperCase()}</option>
                           ))}
                         </Select>
-                        <Caption1>Ingestion mapping name (optional — blank uses the table&apos;s identity mapping)</Caption1>
-                        <Input value={wizIngestMapping} onChange={(_: unknown, d: any) => setWizIngestMapping(d.value)} placeholder="EventMapping" />
+                        <IngestionMappingPicker
+                          itemId={id}
+                          table={wizSource}
+                          value={wizIngestMapping}
+                          onChange={setWizIngestMapping}
+                          label="Ingestion mapping name (optional — blank uses the table’s identity mapping)"
+                        />
                         <Caption1>
                           File ({['parquet', 'avro', 'orc'].includes(wizIngestFormat)
                             ? 'binary — generates a blob ingest command'
@@ -1998,9 +2004,13 @@ export function KqlDatabaseEditor({ item, id }: { item: FabricItemType; id: stri
                             {wizDcTables.map((t) => <option key={t} value={t}>{t}</option>)}
                           </Select>
                         </Field>
-                        <Field label="Ingestion mapping name (optional)">
-                          <Input value={wizDcMappingRule} onChange={(_: unknown, d: any) => setWizDcMappingRule(d.value)} placeholder="myMapping" />
-                        </Field>
+                        <IngestionMappingPicker
+                          itemId={id}
+                          table={wizDcTargetTable}
+                          value={wizDcMappingRule}
+                          onChange={setWizDcMappingRule}
+                          label="Ingestion mapping name (optional)"
+                        />
                       </>
                     )}
                     {wizardKind === 'follower' && (

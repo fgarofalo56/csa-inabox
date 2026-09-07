@@ -25,6 +25,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { render, screen, fireEvent, cleanup, waitFor } from '@testing-library/react';
 import { FluentProvider, webLightTheme } from '@fluentui/react-components';
 import { spawnSync } from 'node:child_process';
+import fs from 'node:fs';
 import path from 'node:path';
 
 const fetchMock = vi.fn();
@@ -33,6 +34,7 @@ vi.mock('@/lib/client-fetch', () => ({ clientFetch: (...a: any[]) => fetchMock(.
 import { MonitorActionBuilder } from '@/lib/components/monitor/monitor-action-builder';
 import { DEFAULT_MONITOR_ACTION } from '@/lib/components/monitor/monitor-action-model';
 import CatalogLineagePage from '@/app/catalog/lineage/page';
+import { IngestionMappingPicker } from '@/lib/components/adx/ingestion-mapping-picker';
 
 function wrap(ui: React.ReactElement) {
   return render(<FluentProvider theme={webLightTheme}>{ui}</FluentProvider>);
@@ -184,6 +186,103 @@ describe('Catalog lineage — the Databricks workspace host was typed', () => {
     fireEvent.click(await screen.findByRole('button', { name: /enter manually/i }));
     const manual = await screen.findByLabelText('Workspace URL');
     expect((manual as HTMLInputElement).disabled).toBe(false);
+  });
+});
+
+/**
+ * #3519 — the ADX ingestion-mapping NAME, in both KQL-database wizards.
+ *
+ * The title's ask (a hand-typed cluster ARM id / leader URI) was drained by
+ * #3587. What survived it were two free `<Input>`s for the ingestion-mapping
+ * NAME: `placeholder="EventMapping"` in the ingest wizard and
+ * `placeholder="myMapping"` in the Event Hub data-connection wizard. Kusto
+ * resolves a mapping by exact name, so a typo there is accepted by the form and
+ * fails at the cluster.
+ *
+ * WHY THE PICKER IS TESTED DIRECTLY AND THE EDITOR STRUCTURALLY. Mounting
+ * `KqlDatabaseEditor` pulls Monaco and React Flow, neither of which renders in
+ * jsdom — a spec built on it would be testing the harness. The BEHAVIOUR (fetch,
+ * per-table filter, blank option, freeform escape hatch) is therefore exercised
+ * on the extracted component, and the WIRING (that the editor mounts it twice
+ * and no longer renders either typed box) is asserted against the editor's
+ * source, in the same idiom as the guard control at the bottom of this file.
+ * Both halves fail on the pre-fix tree: the import does not resolve, and both
+ * placeholders are present.
+ */
+describe('#3519 KQL ingestion mapping — picked from the live database, never typed', () => {
+  const MAPPINGS = [
+    { name: 'm1', table: 'T1', kind: 'json' },
+    { name: 'other-table-only', table: 'T2', kind: 'csv' },
+    { name: 'db-scoped', kind: 'json' },
+  ];
+
+  it('offers the mappings for the SELECTED table plus the database-scoped ones, and no others', async () => {
+    routeFetch([[/\/api\/adx\/ingestion-mappings/, { ok: true, mappings: MAPPINGS }]]);
+    wrap(
+      <IngestionMappingPicker
+        itemId="kdb-1" table="T1" value="" onChange={() => {}}
+        label="Ingestion mapping name (optional)"
+      />,
+    );
+    await waitFor(() => expect(fetchMock).toHaveBeenCalled());
+    expect(String(fetchMock.mock.calls[0][0])).toContain('/api/adx/ingestion-mappings?id=kdb-1');
+
+    fireEvent.click(await screen.findByRole('combobox', { name: /Ingestion mapping/i }));
+    expect(await screen.findByRole('option', { name: 'm1' })).toBeTruthy();
+    // A database-scoped mapping applies to any table, so it stays offered...
+    expect(screen.getByRole('option', { name: 'db-scoped' })).toBeTruthy();
+    // ...while another table's mapping is not a legal choice here and is gone.
+    expect(screen.queryByRole('option', { name: 'other-table-only' })).toBeNull();
+    // The blank identity-mapping option survives — this field is optional.
+    expect(screen.getByRole('option', { name: /identity mapping/i })).toBeTruthy();
+  });
+
+  it('a name the list does not carry can STILL be typed — the picker is not a dead end', async () => {
+    // Swapping a text box for a CLOSED list is how a "no items found" dead end
+    // gets introduced — the shape `auto-bind-by-default.md` forbids by name
+    // ("'No pipelines found' + a disabled Bind button"). Freeform is the escape.
+    routeFetch([[/\/api\/adx\/ingestion-mappings/, { ok: true, mappings: [] }]]);
+    const onChange = vi.fn();
+    wrap(
+      <IngestionMappingPicker
+        itemId="kdb-1" table="T1" value="" onChange={onChange}
+        label="Ingestion mapping name (optional)"
+      />,
+    );
+    await waitFor(() => expect(fetchMock).toHaveBeenCalled());
+    const box = await screen.findByRole('combobox', { name: /Ingestion mapping/i });
+    expect((box as HTMLInputElement).disabled).toBe(false);
+    fireEvent.change(box, { target: { value: 'NotYetDiscovered' } });
+    expect(onChange).toHaveBeenCalledWith('NotYetDiscovered');
+  });
+
+  it('a FAILED read says the read failed — it never renders as "this database has none"', async () => {
+    // deploy-integrity R7: an empty list and an unreadable list are different
+    // facts, and only one of them means "go create a mapping".
+    routeFetch([[/\/api\/adx\/ingestion-mappings/, { ok: false, error: 'ADX cluster not configured' }]]);
+    wrap(
+      <IngestionMappingPicker
+        itemId="kdb-1" table="T1" value="" onChange={() => {}}
+        label="Ingestion mapping name (optional)"
+      />,
+    );
+    expect(await screen.findByText(/ADX cluster not configured/)).toBeTruthy();
+    expect(screen.queryByText(/has no ingestion mappings yet/)).toBeNull();
+  });
+
+  it('the KQL editor mounts the picker in BOTH wizards and no longer renders either typed box', () => {
+    const src = fs.readFileSync(
+      path.resolve(process.cwd(), 'lib/editors/phase3/kql-database-editor.tsx'),
+      'utf8',
+    );
+    // The two free-text asks, by their own placeholders.
+    expect(src).not.toMatch(/placeholder="myMapping"/);
+    expect(src).not.toMatch(/placeholder="EventMapping"/);
+    // Both wizards mount the picker (plus the import line = 3 occurrences).
+    expect(src.match(/IngestionMappingPicker/g)?.length).toBe(3);
+    // A live negative: the file DOES still carry other placeholders, so the two
+    // assertions above are not passing over a file the read failed to load.
+    expect(src).toMatch(/placeholder="events"/);
   });
 });
 
