@@ -570,7 +570,7 @@ export function buildTransitiveChainGraph(): BrainGraph {
  *     ingressed apps, so each disposition branch has a real population.
  */
 export function buildEstateScaleGraph(
-  options: Pick<FixtureOptions, 'observedCalls' | 'extraExtractions'> = {},
+  options: Pick<FixtureOptions, 'observedCalls' | 'extraExtractions' | 'extraRows'> = {},
 ): BrainGraph {
   const filler: ResourceGraphRow[] = [];
   // 58 filler apps + the 5 named ones above = 63, the measured container-app count.
@@ -596,7 +596,16 @@ export function buildEstateScaleGraph(
       }),
     );
   }
-  return buildFixtureGraph({ withoutOwnershipTag: true, extraRows: filler, ...options });
+  return buildFixtureGraph({
+    withoutOwnershipTag: true,
+    ...options,
+    // MERGED, never overwritten. `extraRows` from the caller is an ADDITION to
+    // the 58 filler apps, not a replacement: spreading `options` after a plain
+    // `extraRows: filler` would silently drop the filler and collapse the graph
+    // back below estate cardinality — which is the exact condition every
+    // assertion built on this fixture exists to reach.
+    extraRows: [...filler, ...(options.extraRows ?? [])],
+  });
 }
 
 /**
@@ -615,7 +624,7 @@ export function buildEstateScaleGraph(
  * clears them all visible as a count.
  */
 export function buildEstateScaleTelemetryGraph(
-  extra: Pick<FixtureOptions, 'extraExtractions'> = {},
+  extra: Pick<FixtureOptions, 'extraExtractions' | 'extraRows'> = {},
 ): BrainGraph {
   // Every 4th filler app is `mode === 0` — always-on and unwired. Give inbound
   // telemetry to a KNOWN SUBSET of them so both arms of the predicate have a

@@ -628,7 +628,8 @@ describe('#3963 — the detectors hold at PRODUCTION cardinality, not only in fi
  *
  * Vitest transpiles without type-checking, so nothing in this block can turn
  * red under `vitest run` — it is red under the `tsc --noEmit` step that
- * `fiab-console-ci.yml` runs over `lib/brain/**\/__tests__`. That step exists
+ * `fiab-console-ci.yml` runs over `lib/brain/**\/__tests__` and
+ * `app/**\/brain/**\/__tests__`. That step exists
  * because `tsconfig.build.json` EXCLUDES `__tests__`, so until it was added no
  * compiler ever read these files and a `@ts-expect-error` here was decoration.
  * Stated rather than implied: if that CI step is removed, this block proves

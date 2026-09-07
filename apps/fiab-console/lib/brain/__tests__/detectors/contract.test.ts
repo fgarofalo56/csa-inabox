@@ -35,6 +35,7 @@ import type { AzureResourceNode, BrainGraphView, DanglingEdge, Finding } from '.
 import {
   CONSOLE_ID,
   DIRECTLAKE_FQDN,
+  ENV_DOMAIN,
   RG,
   SUB,
   appRow,
@@ -355,6 +356,18 @@ describe('CONTRACT — the suite actually reaches production cardinality', () =>
  *      depends on graph SIZE rather than graph CONTENT answers differently
  *      across the pair — which is the definition of the whole class, not just
  *      of the two mutations that were measured.
+ *
+ * SCOPE, STATED SO IT IS NOT OVERREAD. This section's population is
+ * `ALL_DETECTORS` — the six detectors in `lib/brain/detectors`, which are what
+ * `lib/brain/run/scan.ts` runs for `loom-brain-scan.yml`. There is a SECOND,
+ * parallel detector implementation at `app/api/admin/brain/_lib/detect.ts`
+ * (`DETECTORS`: `unreachableAlwaysOn`, `danglingEmptyWires`,
+ * `declaredButNotConfigured`, `reachableButUnobserved`) behind the
+ * `/admin/brain` route. It has no ledger at all — `grep -c
+ * 'makeLedger|finalizeResult|ledger\.'` over that file returns 0 — so the
+ * N3/N4 class is UNGUARDED there and nothing in this file would see it. Closing
+ * that is follow-up work in that file, tracked as #4379, not something this
+ * section claims.
  */
 
 /** Azure resources, re-derived here rather than read from the detector kit. */
@@ -398,7 +411,7 @@ const UNIVERSE_OF: Readonly<Record<string, (g: BrainGraphView) => number>> = {
   orphan: (g) => g.nodes.length,
 };
 
-describe('CONTRACT — every detector reports DISPOSITIONS over a graph-derived universe (#3964)', () => {
+describe('CONTRACT — every ALL_DETECTORS detector reports DISPOSITIONS over a graph-derived universe (#3964)', () => {
   const graphs = [
     { name: 'estate-scale', graph: buildEstateScaleGraph() },
     { name: 'estate-scale + telemetry', graph: buildEstateScaleTelemetryGraph() },
@@ -421,9 +434,15 @@ describe('CONTRACT — every detector reports DISPOSITIONS over a graph-derived 
 
   describe.each(graphs)('over the $name graph', ({ graph }) => {
     it('every result CARRIES `dispositions` and `clearedReasons`', () => {
-      // The fields are optional on DetectorResult (the security detectors build
-      // results by another path). "Optional in the type" must not become
+      // The fields are optional on DetectorResult, and the reason is measured:
+      // making them required fails `tsc -p tsconfig.build.json` at five sites,
+      // ALL in `app/api/admin/brain/_lib/detect.ts` — the parallel detector
+      // implementation behind the /admin/brain route, which has no ledger. (NOT
+      // the security detectors: `lib/brain/security/population.ts` declares its
+      // own unrelated `DetectorResult`.) "Optional in the type" must not become
       // "absent in practice" for the estate detectors, so it is asserted here.
+      // This suite's population is ALL_DETECTORS; the route's four detectors are
+      // outside it and are NOT covered by this guard.
       for (const r of runDetectors(graph).results) {
         expect(r.dispositions, `${r.detector} carries no dispositions`).toBeDefined();
         expect(r.clearedReasons, `${r.detector} carries no clearedReasons`).toBeDefined();
@@ -605,31 +624,42 @@ describe('CONTRACT — the DIFFERENTIAL: verdicts follow graph CONTENT, never gr
     }
   });
 
-  it('CONTROL: the differential CAN fail — a graph with different CONTENT differs', () => {
+  it('CONTROL: the differential CAN fail — the SAME padded estate PLUS one real app differs', () => {
     // Without this, the four assertions above pass just as well against two
-    // identical runs or a comparison that compares nothing. Adding a REAL
-    // always-on azure resource (not inert padding) must move the dispositions.
-    const withExtraApp = buildEstateScaleTelemetryGraph({
+    // identical runs or a comparison that compares nothing.
+    //
+    // The counterfactual has to be MINIMAL to say anything. An earlier revision
+    // compared the 63-app padded graph against a six-app `buildFixtureGraph` and
+    // called that "adding a real always-on azure resource" — those two graphs
+    // differ in every way, so the pass was trivially true and much weaker than
+    // the comment claimed. `plusOneApp` here is `padded` itself — same fixture,
+    // same telemetry, same 60 inert padding modules — with exactly ONE extra
+    // always-on container app. So the ONLY difference between the two runs is
+    // graph CONTENT, which is precisely what the identity assertions above
+    // require to move the dispositions when it changes.
+    const plusOneApp = buildEstateScaleTelemetryGraph({
       extraExtractions: [inertPaddingExtraction(60)],
+      extraRows: [
+        appRow({
+          armId: `/subscriptions/${SUB}/resourceGroups/${RG}/providers/Microsoft.App/containerApps/loom-new-idle`,
+          name: 'loom-new-idle',
+          minReplicas: 3,
+          maxReplicas: 5,
+          cpu: 0.5,
+          memory: '1Gi',
+          fqdn: `loom-new-idle.internal.${ENV_DOMAIN}`,
+          tags: {},
+        }),
+      ],
     });
-    const a = runDetectors(withExtraApp).results.find((r) => r.detector === 'unreachable-service')!;
-    const b = runDetectors(
-      buildFixtureGraph({
-        withoutOwnershipTag: true,
-        extraRows: [
-          appRow({
-            armId: `/subscriptions/${SUB}/resourceGroups/${RG}/providers/Microsoft.App/containerApps/loom-new-idle`,
-            name: 'loom-new-idle',
-            minReplicas: 3,
-            maxReplicas: 5,
-            cpu: 0.5,
-            memory: '1Gi',
-            fqdn: 'loom-new-idle.internal.examplegreenfield-00000000.centralus.azurecontainerapps.io',
-            tags: {},
-          }),
-        ],
-      }),
-    ).results.find((r) => r.detector === 'unreachable-service')!;
+    // POPULATION: "the same estate plus one app" is checked, not asserted in
+    // prose. Exactly one node more, and it is an azure resource — otherwise the
+    // control would be comparing two different estates again.
+    expect(plusOneApp.nodes.length).toBe(padded.nodes.length + 1);
+    expect(azureNodesOf(plusOneApp).length).toBe(azureNodesOf(padded).length + 1);
+
+    const a = paddedRun.results.find((r) => r.detector === 'unreachable-service')!;
+    const b = runDetectors(plusOneApp).results.find((r) => r.detector === 'unreachable-service')!;
     expect(b.dispositions).not.toEqual(a.dispositions);
   });
 });

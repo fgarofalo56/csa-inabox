@@ -482,7 +482,8 @@ export interface Population {
    * `edgesExamined` are graph-wide totals. They answer "did the extractor for
    * this provenance produce anything at all", NOT "how many such edges touch
    * the filtered nodes". The detector kit's edge-subject populations
-   * (`edgePopulation`) are the exception: there the edges ARE the candidates.
+   * (`edgeDetectorPopulation`, `detectors/detector-kit.ts:236`) are the
+   * exception: there the edges ARE the candidates.
    *
    * Present on EVERY population, so even a caller that asked for "all edges"
    * cannot read an undifferentiated total — a graph with zero `declared` edges
@@ -720,13 +721,33 @@ export interface DetectorResult {
    * totals against a count derived from the GRAPH can see that — and until this
    * field existed, no caller could, because the ledger was a local.
    *
-   * OPTIONAL, and the reason is stated rather than left to be discovered: the
-   * estate detectors build their result through `finalizeResult`, which always
-   * populates it. The `lib/brain/security` detectors assemble results through
-   * their own `population.ts` path, which does not carry a ledger. Making the
-   * field required would have forced an untrue value into those results. The
-   * cross-detector contract suite asserts it is PRESENT for every detector in
-   * `ALL_DETECTORS`, so "optional" is not "absent in practice" there.
+   * OPTIONAL, and the reason is MEASURED rather than asserted. Making both
+   * fields required and running `tsc --noEmit -p tsconfig.build.json` exits 2
+   * with exactly five errors, all in ONE file:
+   * `app/api/admin/brain/_lib/detect.ts` at 146,3 / 510,5 / 653,5 / 715,5 /
+   * 764,5 (TS2739, "missing the following properties: dispositions,
+   * clearedReasons"). That file is a SECOND, parallel detector implementation —
+   * the four detectors behind the `/admin/brain` API route — and a
+   * `grep -c 'makeLedger|finalizeResult|ledger\.'` over it returns 0. It has no
+   * ledger, so four of those five sites emit real findings with no disposition
+   * counts in existence; a required field there could only be filled with a
+   * fabricated `cleared: 0, skipped: 0`, which is the untrue value this
+   * optionality exists to avoid. Giving that path a real ledger is follow-up
+   * work in that file, tracked as #4379, not a type change here.
+   *
+   * NOT the reason, though an earlier revision of this comment said so: the
+   * `lib/brain/security` detectors are unaffected. `lib/brain/security/
+   * population.ts:128` declares its OWN `DetectorResult` (`findings` +
+   * `population` only) and does not import this one, so it produced zero of
+   * those five errors and cannot be constrained by this type at all.
+   *
+   * WHAT IS AND IS NOT COVERED. The cross-detector contract suite asserts both
+   * fields are PRESENT for every detector in `ALL_DETECTORS` (the six in
+   * `lib/brain/detectors`, which `lib/brain/run/scan.ts` runs), so "optional" is
+   * not "absent in practice" THERE. The route's four detectors in `detect.ts`
+   * are outside that population and outside the #3964 guard entirely: a
+   * cardinality-conditioned bypass planted in `detect.ts` is still invisible.
+   * Tracked as #4379.
    */
   readonly dispositions?: DispositionTotals;
   /**

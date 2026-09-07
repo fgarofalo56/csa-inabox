@@ -440,9 +440,11 @@ jobs:
         #
         # THREE CONTROLS, because a type-check is trivially made green-and-blind:
         #
-        #   1. POPULATION. `--listFilesOnly` first, and the run REFUSES below ~104
-        #      spec files. A tsconfig whose globs matched nothing compiles clean
-        #      and exits 0 — indistinguishable from a clean codebase.
+        #   1. POPULATION. `--listFilesOnly` first, and the run REFUSES below
+        #      100 spec files — the number in the code, stated here as the same
+        #      number. Measured at 106 on the branch that added this step. A
+        #      tsconfig whose globs matched nothing compiles clean and exits 0 —
+        #      indistinguishable from a clean codebase.
         #   2. KNOWN-RED BY FILE, NEVER BY DIRECTORY. Seven files do not compile
         #      at head (fixture typing, plus a missing @types/mssql two lib/azure
         #      modules pull in transitively). They are named one by one, so a NEW
@@ -453,9 +455,23 @@ jobs:
         #      outlives its cause is a permanent hole, and chasing a guard's
         #      SILENCE is the only way that hole ever gets found.
         #
-        # MEASURED on this branch: 104 spec files read; 36 errors, all inside the
-        # seven named files; a deliberate `const x: number = 'str'` appended to
-        # graph.test.ts -> triage exit 1 naming the file and line.
+        # AND A FOURTH, on the step's OWN failure mode: if tsc exits non-zero
+        # having produced no parseable diagnostic it did not RUN, and the triage
+        # below would then report every known-red file as newly clean. That is a
+        # confident claim about a thing the code established the opposite of, so
+        # it refuses first — see the guard on `tsc_rc`.
+        #
+        # POPULATION SCOPE, stated because the step NAME would otherwise overread
+        # it: "the brain specs" means every spec under `lib/brain/**/__tests__`
+        # AND under `app/**/brain/**/__tests__` — the latter is
+        # `app/admin/brain/__tests__/perform-ui.test.tsx` and
+        # `app/api/admin/brain/_lib/__tests__/config-gate.test.ts`, which
+        # `tsconfig.build.json` also excludes and which no compiler read either.
+        #
+        # MEASURED on this branch: 106 spec files read (104 under lib/brain, 2
+        # under app/**/brain); 36 errors, all inside the seven named files; a
+        # deliberate `const x: number = 'str'` appended to graph.test.ts ->
+        # triage exit 1 naming the file and line.
         run: |
           set -euo pipefail
           cfg="tsconfig.brain-specs.generated.json"
@@ -467,28 +483,47 @@ jobs:
               "next-env.d.ts",
               "vitest.setup.ts",
               "lib/brain/**/__tests__/**/*.ts",
-              "lib/brain/**/__tests__/**/*.tsx"
+              "lib/brain/**/__tests__/**/*.tsx",
+              "app/**/brain/**/__tests__/**/*.ts",
+              "app/**/brain/**/__tests__/**/*.tsx"
             ],
             "exclude": ["node_modules", ".next", "out", "dist"]
           }
           JSON
           tmp="${RUNNER_TEMP:-/tmp}"
+          # `node_modules/.bin/tsc`, matching `loom-brain-scan.yml` — the same
+          # binary the repo already invokes in CI, and the same line that can be
+          # run locally without a package-manager wrapper in between.
           # POPULATION FIRST — see control 1 above.
-          pnpm exec tsc -p "$cfg" --listFilesOnly > "$tmp/brain-spec-files.txt"
+          node_modules/.bin/tsc -p "$cfg" --listFilesOnly > "$tmp/brain-spec-files.txt"
           n=$(grep -c '__tests__' "$tmp/brain-spec-files.txt" || true)
-          echo "tsc read $n file(s) under lib/brain/**/__tests__."
-          if [ "$n" -lt 90 ]; then
-            echo "::error::the brain-spec tsconfig matched only $n spec files (measured at 104 on the branch that added this step). A type-check over a shrunken population is green and blind, so this refuses rather than reporting success."
+          echo "tsc read $n brain spec file(s) (lib/brain/**/__tests__ + app/**/brain/**/__tests__)."
+          if [ "$n" -lt 100 ]; then
+            echo "::error::the brain-spec tsconfig matched only $n spec files, below the floor of 100 (measured at 106 on the branch that added this step). A type-check over a shrunken population is green and blind, so this refuses rather than reporting success."
             exit 1
           fi
           # tsc's own exit code is NOT the verdict — seven files are known red.
           # Captured on the NEXT line, never after a pipe.
           set +e
-          pnpm exec tsc --noEmit -p "$cfg" > "$tmp/brain-spec-tsc.txt" 2>&1
+          node_modules/.bin/tsc --noEmit -p "$cfg" > "$tmp/brain-spec-tsc.txt" 2>&1
           tsc_rc=$?
           set -e
           echo "tsc exited $tsc_rc"
           cat "$tmp/brain-spec-tsc.txt"
+          # R7 — `tsc_rc` used to be echoed and then never read, and that let the
+          # step assert a cause it had established the opposite of. A tsc that
+          # fails to RUN emits no `path(line,col): error TSnnnn` diagnostics at
+          # all; every KNOWN_RED file is then absent from the parse and control 3
+          # fires with a confident, false story ("these files now COMPILE
+          # CLEAN"). MEASURED: with the generated tsconfig missing, tsc printed
+          # `error TS5058: The specified path does not exist` and the triage
+          # named all seven files as newly clean. It failed closed, but the
+          # annotation a human reads was wrong. So: refuse here, and say only
+          # what is known.
+          if [ "$tsc_rc" -ne 0 ] && ! grep -qE '^.+\([0-9]+,[0-9]+\): error TS[0-9]+' "$tmp/brain-spec-tsc.txt"; then
+            echo "::error::tsc exited $tsc_rc without emitting a single parseable diagnostic, which means it did not type-check the brain specs at all (missing or invalid config, OOM, or a crash — see the output above). This is NOT a verdict on the specs, and the known-red triage would be reporting on an empty parse rather than on a compile, so it is not run. Fix the invocation, then re-read this step."
+            exit 1
+          fi
           cat > "$tmp/brain-spec-triage.mjs" <<'TRIAGE'
           import fs from 'node:fs';
           /**
