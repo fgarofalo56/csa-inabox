@@ -35,6 +35,8 @@ import {
   stripComments,
   unboundedWrites,
   CONTROL_SOURCE_CRLF,
+  CONTROL_WRITE_COUNT,
+  CONTROL_VIOLATION_COUNT,
 } from '../../ci/__tests__/_publication-surfaces.mjs';
 
 import { EXIT_USAGE, decide, formatStdout, run } from '../converge-role-assignment.mjs';
@@ -111,13 +113,24 @@ test('SELF-DEFENCE — the enumerator can actually detect an unbounded write', (
     CONTROL_SOURCE_CRLF,
     BOUNDARIES.concat('formatStderr', 'unredactedByDesign'),
   );
-  assert.equal(found.length, 2, `expected the control's 2 violations, found ${found.length}`);
+  assert.equal(found.length, CONTROL_VIOLATION_COUNT, `expected the control's ${CONTROL_VIOLATION_COUNT} violations, found ${found.length}`);
   assert.ok(found.some((w) => w.arg.startsWith('`deploy:')), 'a bare template-literal write was not detected');
   assert.ok(
     found.some((w) => w.arg.startsWith('redact(')),
     'a PER-SITE redact() at a write was not detected — that is the #3861 shape itself',
   );
-  assert.equal(streamWrites(CONTROL_SOURCE_CRLF).length, 5, 'the control source lost a write to CRLF handling');
+  // #3876 — the four bypasses. This file's boundary is only load-bearing if the
+  // enumerator can still SEE a write that reaches the stream by another name.
+  assert.deepEqual(
+    [...new Set(found.map((w) => w.accessPath))].sort(),
+    ['alias', 'bracket', 'dotted'],
+    'the enumerator lost an ACCESS PATH — a write it cannot see reports as no write at all (#3876)',
+  );
+  assert.ok(
+    found.some((w) => w.arg.startsWith('formatStdout(') && w.arg.includes('+')),
+    'a boundary call CONCATENATED with a raw value was accepted — the classifier is prefix-only again (#3876 bypass 1)',
+  );
+  assert.equal(streamWrites(CONTROL_SOURCE_CRLF).length, CONTROL_WRITE_COUNT, 'the control source lost a write to CRLF handling or to a narrowed enumerator');
 
   // The comment stripper is load-bearing here too: this file's own header names
   // `process.stdout.write` in prose, and counting that would inflate every
