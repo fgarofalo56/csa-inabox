@@ -475,11 +475,35 @@ function BudgetDialog({
    * only offer an agent that had already burned tokens — and a budget's whole
    * purpose is to cap an agent BEFORE it spends. The Foundry agent registry
    * (`/api/admin/agent-quality` → `listAgents(projectId)`) is the set of agents
-   * that exist, and `FoundryAgent.name` is the identity Loom's own deploy routes
-   * write as `agentId` (items/data-agent/[id]/deploy/route.ts:130,
-   * items/aip-logic/[id]/deploy/route.ts:129), which is the value
-   * `scopesOf(attribution)` charges spend against. Same key, so the union is
-   * joinable rather than decorative.
+   * that exist.
+   *
+   * WHICH KEY THIS UNION IS ON, stated to the limit of what is established
+   * (deploy-integrity R7 — an earlier draft of this comment claimed a live join
+   * and #4348 review falsified both halves of it):
+   *
+   *  - `FoundryAgent.name` is the identity those deploy routes REPORT as
+   *    `agentId` — `return NextResponse.json({ ok: true, agentId: agentName, … })`
+   *    at items/data-agent/[id]/deploy/route.ts:130 and
+   *    items/aip-logic/[id]/deploy/route.ts:129. It is a response field. What
+   *    those routes PERSIST on the item is `foundryAgentId`; neither writes an
+   *    `agentId` anywhere.
+   *  - `scopesOf(attribution)` is the function that would charge spend against
+   *    that key, and it is NOT REACHED FROM ANY PRODUCTION TURN today.
+   *    `enforceTokenBudget` / `recordTurnSpend` are called only from
+   *    lib/azure/aoai-chat-client.ts (:438, :470, :493, :524, :551, :605, :723),
+   *    always via `resolveAttribution(opts.attribution)`; no production caller
+   *    passes `attribution`, and the sole `withTokenAttribution` CALL in the repo
+   *    is lib/copilot/__tests__/token-budget.test.ts:239. So `resolveAttribution`
+   *    returns undefined and both functions early-return on `if (!attribution)`
+   *    (lib/copilot/token-budget.ts:223, :267).
+   *
+   * That second point is a PRE-EXISTING defect of the token-budget subsystem —
+   * it enforces nothing and charges nothing because nothing populates a
+   * `TokenAttribution` — tracked as #4378, NOT introduced or fixed here. The
+   * honest claim for this union is therefore: the registry name is the INTENDED
+   * budget scope key and the one those routes report, so offering it is right;
+   * it is not a join against a live spend ledger, because no such ledger is
+   * being written.
    *
    * A NOT-CONFIGURED FOUNDRY IS NOT AN ERROR (deploy-integrity R7). That route
    * answers 200 with `agents.configured:false` and a `gate`; this reports the

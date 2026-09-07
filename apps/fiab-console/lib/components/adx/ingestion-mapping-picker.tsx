@@ -31,9 +31,11 @@
  * mapping (those apply to any table).
  *
  * HONESTY (deploy-integrity R7). The hint below states only what the response
- * established. A failed read says the read failed and shows the route's own
- * error; it never renders as "this database has no mappings", which is a
- * different fact and the one an operator would act on.
+ * established, across FOUR distinct states: an unsaved item (nothing was read
+ * and nothing can be), a read in flight, a read that failed — which shows the
+ * route's own error — and a read that succeeded and found nothing. Only the
+ * last of those is allowed to say "this database has no mappings", because that
+ * is a different fact and the one an operator would act on.
  */
 
 import { useEffect, useState } from 'react';
@@ -62,6 +64,17 @@ export interface IngestionMappingPickerProps {
 
 const NONE_TEXT = '— none (the table’s identity mapping) —';
 
+/**
+ * The literal id an editor carries before its item's first save. Re-declared
+ * rather than imported: the canonical `UNSAVED_ITEM_ID` lives in
+ * `app/api/items/_lib/synapse-item-scope.ts`, which imports `next/server`, the
+ * session helper and the Cosmos client — pulling that into a `'use client'`
+ * component would drag the server bundle across the boundary. The two values
+ * are pinned together by `__tests__/ingestion-mapping-picker.test.tsx`.
+ */
+const UNSAVED_ITEM_ID = 'new';
+
+
 /** Table-scoped mappings for `table`, plus every database-scoped one, deduped by name. */
 export function selectMappings(all: AdxIngestionMapping[], table?: string): AdxIngestionMapping[] {
   const t = (table || '').trim();
@@ -85,9 +98,15 @@ export function IngestionMappingPicker({
   // database has none" are never rendered as the same statement.
   const [mappings, setMappings] = useState<AdxIngestionMapping[] | null>(null);
   const [readError, setReadError] = useState<string | null>(null);
+  // #4348 review — AN UNSAVED ITEM IS A THIRD STATE, not an empty database.
+  // This branch used to `setMappings([])`, which made the hint read "This
+  // database has no ingestion mappings yet" for an item nothing was ever read
+  // for: an absence the code had not established (deploy-integrity R7), and the
+  // exact distinction the rest of this component gets right via `null`.
+  const unsaved = !itemId || itemId === UNSAVED_ITEM_ID;
 
   useEffect(() => {
-    if (!itemId || itemId === 'new') { setMappings([]); setReadError(null); return; }
+    if (!itemId || itemId === UNSAVED_ITEM_ID) { setMappings(null); setReadError(null); return; }
     let cancelled = false;
     setMappings(null); setReadError(null);
     clientFetch(`/api/adx/ingestion-mappings?id=${encodeURIComponent(itemId)}`)
@@ -113,17 +132,19 @@ export function IngestionMappingPicker({
   const options = selectMappings(mappings ?? [], table);
   const t = (table || '').trim();
 
-  const hint = mappings === null
-    ? 'Reading the database’s ingestion mappings…'
-    : readError
-      ? `${readError} Type the mapping name if you know it, or leave it blank for the identity mapping.`
-      : options.length === 0
-        ? (t
-          ? `No ingestion mapping is defined for ${t} (and none database-wide). Leave this blank for the table’s identity mapping, or create one with Home → New → Ingestion mapping.`
-          : 'This database has no ingestion mappings yet. Leave this blank for the table’s identity mapping, or create one with Home → New → Ingestion mapping.')
-        : (t
-          ? `Mappings defined on ${t}, plus every database-scoped mapping.`
-          : 'Every ingestion mapping on this database. Pick a target table above to narrow the list.');
+  const hint = unsaved
+    ? 'Save this database first — its ingestion mappings are read from the cluster once the item exists.'
+    : mappings === null
+      ? 'Reading the database’s ingestion mappings…'
+      : readError
+        ? `${readError} Type the mapping name if you know it, or leave it blank for the identity mapping.`
+        : options.length === 0
+          ? (t
+            ? `No ingestion mapping is defined for ${t} (and none database-wide). Leave this blank for the table’s identity mapping, or create one with Home → New → Ingestion mapping.`
+            : 'This database has no ingestion mappings yet. Leave this blank for the table’s identity mapping, or create one with Home → New → Ingestion mapping.')
+          : (t
+            ? `Mappings defined on ${t}, plus every database-scoped mapping.`
+            : 'Every ingestion mapping on this database. Pick a target table above to narrow the list.');
 
   return (
     <Field label={label} hint={hint}>
@@ -132,7 +153,7 @@ export function IngestionMappingPicker({
         disabled={disabled}
         value={value}
         selectedOptions={value ? [value] : []}
-        placeholder={mappings === null ? 'Loading…' : NONE_TEXT}
+        placeholder={!unsaved && mappings === null ? 'Loading…' : NONE_TEXT}
         onOptionSelect={(_, d) => onChange(d.optionValue ?? '')}
         onChange={(e) => onChange((e.target as HTMLInputElement).value)}
         style={{ minWidth: 0 }}
