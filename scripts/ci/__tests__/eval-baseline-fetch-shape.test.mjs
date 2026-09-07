@@ -121,7 +121,11 @@ test('#4277 --previous is ground truth: a stated-absent status cannot mute a rea
 });
 
 test('#4277 a --previous that does not exist is a REFUSAL, not a silent floor-only run', () => {
-  const r = gate(['--previous', join(tmpdir(), 'no-such-baseline-4277.json')]);
+  // The path must not exist AND must not be pre-creatable by another local user,
+  // so it is a name under a private mkdtemp dir rather than a constant under the
+  // world-writable temp root (check-temp-artifact-safety.mjs).
+  const scratch = mkdtempSync(join(tmpdir(), 'eval-baseline-4277-'));
+  const r = gate(['--previous', join(scratch, 'no-such-baseline.json')]);
   assert.equal(r.code, 2, 'exit 2 = usage; running floors-only here would disable half the gate silently');
   assert.match(r.stderr, /does not exist/);
   assert.match(r.stderr, /FLOOR-ONLY/);

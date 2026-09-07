@@ -201,7 +201,8 @@ jobs:
           #   * reports the NestedDeploymentShortCircuited coverage gap so a
           #     "clean" verdict never silently covers unexpanded modules.
           # Writes status/counts/drift_count/suppressed_count/
-          # shortcircuit_count/evaluated_count/coverage_note/*_list to
+          # unresolved_count/shortcircuit_count/evaluated_count/coverage_note/
+          # *_list to
           # $GITHUB_OUTPUT + the markdown block to $GITHUB_STEP_SUMMARY, and
           # exits 1 on REAL drift.
           node scripts/ci/whatif-drift-verdict.mjs whatif.json --out-dir . --label "$CLOUD_LABEL"
