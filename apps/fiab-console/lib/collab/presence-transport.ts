@@ -149,7 +149,11 @@ export function createPresenceTransport(opts: PresenceTransportOptions): Presenc
         //   401/403 — no session / not authorized for this item.
         //   404 — the route or the item is not reachable for this caller.
         // Retrying any of those on the 5s ramp is a request storm that cannot
-        // succeed (#3697); the 60s re-probe still recovers once it is fixed.
+        // succeed (#3697). This makes the storm QUIET, not absent: the request
+        // is still issued and still 404s, once per open and then once per 60s.
+        // Where the 404 is a route that does not exist at all, the re-probe
+        // will not recover it — clearing #3697 needs the route implemented or
+        // the call removed, neither of which happens here.
         settled = NON_RETRYABLE_STREAM_STATUS.has(res.status);
         throw new Error(`stream HTTP ${res.status}`);
       }
