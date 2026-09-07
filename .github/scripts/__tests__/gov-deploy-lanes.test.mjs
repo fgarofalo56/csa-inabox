@@ -1322,11 +1322,48 @@ test('#3844 RATCHET — no lane may gate its only failure notice on a repo varia
   // go unrecorded, and it is the reason this assertion is separate from the
   // absence one above. Being a caller also enrols deploy-fiab-il5.yml in the
   // FAMILY RATCHET above, which is what checks its GH_TOKEN and its --result.
-  const il5 = stripComments(readWorkflow('deploy-fiab-il5.yml'));
+  //
+  // THE PREDICATES ARE THE SAME TWO gov-console-roll USES, not `includes()`.
+  // The first cut here was `stripComments(...).includes(NOTIFIER_SCRIPT)` —
+  // mere string presence — and two mutations walked straight through it with
+  // both suites at RC=0:
+  //   * `if: failure()` -> `if: false` at deploy-fiab-il5.yml:993. The step is
+  //     still there, still spelled correctly, and can never run. The FAMILY
+  //     RATCHET does not close this: it enumerates call sites and checks the
+  //     credential and the --result VALUE, never the condition.
+  //   * deleting `issues: write` at deploy-fiab-il5.yml:99. The filer then 403s
+  //     on the issue write and the lane records nothing — #3844's end state
+  //     restored, with the invocation intact.
+  // `filesOnFailure` also pins `--workflow deploy-fiab-il5` with a right
+  // boundary (so `deploy-fiab-il5x` fails) and a non-empty `--result`, neither
+  // of which a substring check can see.
+  const il5Src = readWorkflow('deploy-fiab-il5.yml');
   assert.ok(
-    il5.includes(NOTIFIER_SCRIPT),
-    `deploy-fiab-il5.yml does not invoke ${NOTIFIER_SCRIPT}. Its failure notice was converted from a vars.FIAB_GOV_DEPLOY_TRACKING_ISSUE gate onto the chokepoint under #3844; a revert, or a deletion of the step, leaves an IL5 deploy failure recorded nowhere`,
+    filesOnFailure(il5Src, 'deploy-fiab-il5'),
+    `deploy-fiab-il5.yml has no \`if: failure()\` step invoking ${NOTIFIER_SCRIPT} with \`--workflow deploy-fiab-il5\` and a non-empty --result. Its failure notice was converted from a vars.FIAB_GOV_DEPLOY_TRACKING_ISSUE gate onto the chokepoint under #3844; a revert, a deletion of the step, or a condition that can never be true leaves an IL5 deploy failure recorded nowhere`,
   );
+  assert.ok(
+    grantsIssuesWrite(il5Src),
+    'deploy-fiab-il5.yml has no `issues: write`; the filer would 403 on the issue write and the IL5 failure would stay silent — the exact end state #3844 exists to remove (#3844)',
+  );
+
+  // AND THE GRANT MUST SURVIVE JOB-LEVEL RESOLUTION. Actions REPLACES the
+  // workflow-level `permissions:` with a job-level one rather than merging it,
+  // so a `permissions:` block on the job that hosts the notifier turns
+  // `issues: write` into `issues: none` while `grantsIssuesWrite()` — which
+  // reads only the top-level block — stays green. Same bypass already closed
+  // for gov-console-roll above.
+  const il5Jobs = splitJobs(il5Src);
+  assert.ok(il5Jobs.length > 0, 'no jobs parsed out of deploy-fiab-il5.yml — the job splitter drifted, and the assertion below would be vacuous');
+  const il5NotifierJobs = il5Jobs.filter((j) => j.text.includes(NOTIFIER_SCRIPT));
+  assert.ok(il5NotifierJobs.length > 0, 'no job in deploy-fiab-il5.yml hosts the notifier; the permissions assertion below would be vacuous');
+  for (const j of il5NotifierJobs) {
+    assert.equal(
+      jobDeclaresOwnPermissions(j.text),
+      false,
+      `job '${j.name}' in deploy-fiab-il5.yml hosts the failure notifier AND declares its own \`permissions:\` block, which REPLACES the workflow-level grant instead of merging it — \`issues: write\` becomes \`issues: none\` and the filer 403s (#3844). Delete the job-level block, or add \`issues: write\` to it`,
+    );
+  }
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
