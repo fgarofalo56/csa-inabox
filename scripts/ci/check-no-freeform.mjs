@@ -321,14 +321,14 @@
  *     a plain `<Dropdown>`. It is the ux-baseline G2 escape hatch (the
  *     alternative measured there was a DISABLED control asserting "No accounts
  *     found" over a failed call), not a config surface that asks for an address
- *     by default. All six are recorded here because this guard cannot see any
+ *     by default. Both are recorded here because this guard cannot see any
  *     `<Combobox>` at all, so the count staying at baseline says nothing about
  *     these sites either way.
  *
- *     A prior revision of this note said "Zero in the tree today" and the
- *     revision after it said "ONE"; both were false by the grep above. The count
- *     is stated with the command that produces it so the next reader can re-run
- *     it rather than inherit it.
+ *     Each of the three earlier revisions published a LINE-ANCHORED grep to
+ *     support its number, and each number was wrong for that reason. The command
+ *     above scans the whole opening tag instead. No count is asserted here on
+ *     purpose — run it.
  *   - A LABEL THAT LIVES SOMEWHERE ELSE — a `<Label htmlFor>` earlier in the
  *     file, a label from a translation table, or a column header above a grid
  *     of inputs. Only the enclosing `<Field>` and an immediately-adjacent
