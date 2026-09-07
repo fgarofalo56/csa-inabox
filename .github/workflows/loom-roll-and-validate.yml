@@ -391,6 +391,13 @@ jobs:
     runs-on: ubuntu-latest
     needs: gate
     if: ${{ needs.gate.outputs.proceed == 'true' }}
+    # Published for the `reindex-loom-docs` job at the bottom of this file: the
+    # console URL THIS run actually rolled and probed, so the reindex targets
+    # the estate that just changed rather than a repo variable that may name a
+    # different one. See that job's note.
+    outputs:
+      console_url: ${{ steps.vars.outputs.url }}
+      rolled_tag: ${{ steps.vars.outputs.tag }}
     steps:
       - uses: actions/checkout@v7.0.1
 
@@ -1741,3 +1748,85 @@ jobs:
                 owner: context.repo.owner, repo: context.repo.repo, issue_number: iss.number, state: 'closed',
               });
             }
+
+  # ── Refresh the Copilot retrieval index on the revision that just shipped ───
+  #
+  # #4276 — THE LIVE ROLL LANE HAD NO REINDEX AT ALL. Measured at head before
+  # this job existed: `grep -c reindex .github/workflows/loom-roll-and-validate.yml`
+  # returned 0 over 1743 lines. The only roll workflow that DOES refresh the
+  # index is console-bluegreen-roll.yml:677, and its last four runs are all
+  # `failure` (all workflow_dispatch, newest 30635466301 on 2026-07-31). THIS
+  # workflow is the one that actually runs — it is `workflow_run`-triggered off
+  # build-fiab-images-acr-tasks and rolls loom-console on every merge. So the
+  # docs corpus baked into each new image reached the estate while the index
+  # over that corpus did not, and Copilot retrieval kept answering from whatever
+  # was indexed last — often many rolls ago, at best whatever the nightly
+  # loom-docs-reindex.yml schedule happened to catch. That is the stale-index
+  # condition copilot-quality-evals then measures and fails PRs on (#3472).
+  #
+  # A SEPARATE JOB, DELIBERATELY. This is where it diverges from the
+  # console-bluegreen-roll copy, which is an ordinary step inside its roll job.
+  # That is safe THERE because console-bluegreen-roll.yml is not one of the
+  # `CONSOLE_ROLL_SOURCES` (scripts/ci/reconcile-policy.mjs). It is NOT safe
+  # here: as the block on `roll-and-validate` records, that job's NAME is a
+  # contract, and two consumers read the CONCLUSION of the job named
+  # `Roll image + validate live URL` to answer "did the estate actually get
+  # rolled?" — `selectLastConsoleRoll` keeps only runs whose
+  # `jobConclusion === 'success'`, and deploy-fiab-commercial.yml's post-apply
+  # gate asks for that job by name via the jobs API. A failed reindex INSIDE
+  # that job would flip its conclusion and make both of them report that a roll
+  # which did ship the image shipped nothing. Out here the reindex reds the RUN
+  # — the honest signal that the roll half-shipped — while the roll job goes on
+  # reporting only what it itself did.
+  #
+  # IT DOES NOT ROLL BACK, AND MUST NOT. `Rollback on validation failure` keys
+  # on the validate / uat / health outcomes, none of which this job touches. A
+  # stale index is not evidence that the new revision is bad, and reverting a
+  # healthy revision over it would be a cure worse than the disease.
+  #
+  # FATAL is left at its default (true), matching every call site except the
+  # post-deploy bootstrap: a roll that leaves the Copilot index unrefreshed is a
+  # roll that half-shipped, and saying so out loud is the entire point. An UNSET
+  # LOOM_INTERNAL_TOKEN is not a failure — the shared driver skips with a
+  # warning and exits 0, which is an honest gate rather than a broken index.
+  #
+  # COMMERCIAL ONLY BY CONSTRUCTION, NOT BY CHOICE (cloud-parity.md). This whole
+  # workflow is hard-wired to the Commercial estate — env RG_NAME / ACR_NAME
+  # above, and the `url` input's Commercial vanity default — so there is no Gov
+  # branch here to scope, and a `cloud != commercial` notice step would be a
+  # control that can never be reached. The Gov roll is gov-console-roll.yml and
+  # it has no reindex either; it cannot get one yet for a MEASURED reason rather
+  # than an oversight: the Gov console has never held an internal token
+  # (loom-internal-token-drift's Gov job is 24/24 failures, #3430), so
+  # reindex-loom-docs.sh would 401 on every Gov call. Until #3430 lands, Gov
+  # refreshes by dispatching loom-docs-reindex.yml with `console_url` set to the
+  # Gov console base URL. Stated here rather than left implied.
+  reindex-loom-docs:
+    name: Reindex loom-docs on the rolled revision
+    runs-on: ubuntu-latest
+    needs: roll-and-validate
+    # Explicit rather than relying on the implicit `success()` a `needs` job
+    # carries, because the state being excluded is easy to get wrong: `result`
+    # is 'skipped' when the gate refused to roll, and a run that shipped nothing
+    # must not reindex — reconcile-policy.mjs records run 32006479915, which
+    # concluded `success` having rolled nothing at all.
+    if: ${{ needs.roll-and-validate.result == 'success' }}
+    # The poll below is capped at 900s; this bounds the job around it rather
+    # than letting a wedged runner sit on the default 6h.
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v7.0.1
+
+      - name: Reindex loom-docs + wait for cross-replica freshness
+        env:
+          # The URL this run actually rolled and probed, published by the roll
+          # job — NOT `vars.LOOM_VERIFY_URL`, which can name a different console
+          # than the one that just changed. There is deliberately no `||`
+          # fallback: an empty value here means the roll job's output broke, and
+          # reindex-loom-docs.sh fails closed on an empty CONSOLE_URL rather
+          # than reindexing a URL this run never established (R7).
+          CONSOLE_URL: ${{ needs.roll-and-validate.outputs.console_url }}
+          INTERNAL_TOKEN: ${{ secrets.LOOM_INTERNAL_TOKEN }}
+          POLL_TIMEOUT_S: '900'
+          POLL_INTERVAL_S: '15'
+        run: bash scripts/ci/reindex-loom-docs.sh

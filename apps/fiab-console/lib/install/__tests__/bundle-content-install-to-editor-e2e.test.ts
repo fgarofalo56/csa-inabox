@@ -150,7 +150,15 @@ describe('#3549/#3551 install → provision → editor, end to end on one Cosmos
     expect(code).toMatch(/\.\.\.\(\s*bundle\?\.content\s*\?\s*\{\s*content:\s*bundle\.content\s*\}/);
     // …and the dedup path backfills it onto a name-matched item that has none,
     // which is what makes the provisioner's remediation text true.
-    expect(code).toMatch(/content:\s*bundle\.content,\s*sourceApp:\s*app\.id/);
+    //
+    // #3530 changed WHICH expression carries the value, not whether it is
+    // written: the backfill now writes `state.content`, which is
+    // `bundle.content` for every item type and `bundle.content` plus the
+    // prepended `%pip install` bootstrap cell for a notebook that declares
+    // `requiredLibraries`. Pinning the literal `bundle.content` here would have
+    // forced the backfill to write a DIFFERENT definition than the one the
+    // create path stamps two lines above — the drift this pin exists to catch.
+    expect(code).toMatch(/content:\s*state\.content,\s*sourceApp:\s*app\.id/);
   });
 
   it('the receipt counts and the editor counts are THE SAME numbers', async () => {
