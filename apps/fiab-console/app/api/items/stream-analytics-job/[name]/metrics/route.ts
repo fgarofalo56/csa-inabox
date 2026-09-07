@@ -11,9 +11,9 @@
  *   Honest gate: 501 + hint when ASA env (LOOM_ASA_RG / sub) is unset.
  */
 import { NextResponse } from 'next/server';
-import { getSession } from '@/lib/auth/session';
 import { getJob, AsaNotConfiguredError, AsaJobNotFoundError } from '@/lib/azure/stream-analytics-client';
 import { fetchMetrics, type MetricResult } from '@/lib/azure/monitor-client';
+import { withSession } from '@/lib/api/route-toolkit';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -39,10 +39,8 @@ const HINT =
 const AVG_METRICS = ['ResourceUtilization', 'OutputWatermarkDelaySeconds', 'InputEventsSourcesBacklogged'];
 const TOTAL_METRICS = ['InputEvents', 'OutputEvents'];
 
-export async function GET(_req: Request, ctx: { params: { name: string } }) {
-  const s = getSession();
-  if (!s) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
-  const name = ctx.params?.name;
+export const GET = withSession<{ name: string }>(async (_req: Request, { params }) => {
+  const name = params?.name;
   if (!name) return NextResponse.json({ ok: false, error: 'name required' }, { status: 400 });
   try {
     const job = await getJob(name);
@@ -94,4 +92,4 @@ export async function GET(_req: Request, ctx: { params: { name: string } }) {
       { status: 502 },
     );
   }
-}
+});

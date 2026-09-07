@@ -79,7 +79,9 @@ import { POST as statePOST } from '../[name]/state/route';
 import { getSession } from '@/lib/auth/session';
 
 const SESSION = { claims: { oid: 'oid-1' } } as any;
-const params = { params: { name: 'orders-stream' } };
+const params = { params: Promise.resolve({ name: 'orders-stream' }) };
+/** The list route takes no `[name]` segment — route-toolkit still hands it a ctx. */
+const noParams = { params: Promise.resolve({}) } as any;
 
 /** A 403 on a deployment whose ASA env vars are set correctly. */
 const ARM_403 = () => new Error('ASA get failed 403: AuthorizationFailed');
@@ -101,7 +103,7 @@ beforeEach(() => {
 const ROUTES: Array<{ name: string; run: (err: Error) => Promise<Response> }> = [
   {
     name: 'GET /stream-analytics-job (list)',
-    run: async (err) => { client.listJobs.mockRejectedValue(err); return (await listGET()) as any; },
+    run: async (err) => { client.listJobs.mockRejectedValue(err); return (await listGET(jsonReq(null), noParams)) as any; },
   },
   {
     name: 'PUT /[name]/inputs',

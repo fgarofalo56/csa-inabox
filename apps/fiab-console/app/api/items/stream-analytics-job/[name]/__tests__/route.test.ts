@@ -75,7 +75,7 @@ beforeEach(() => {
 describe('GET — the three failure branches are told apart (#3573)', () => {
   it('501 NOT-CONFIGURED still carries the env-var hint', async () => {
     getJob.mockRejectedValue(new AsaNotConfiguredError(['LOOM_ASA_RG (or LOOM_DLZ_RG)']));
-    const r = await GET(req(), { params: { name: 'anything' } });
+    const r = await GET(req(), { params: Promise.resolve({ name: 'anything' }) });
     const j = await r.json();
     expect(r.status).toBe(501);
     expect(j.hint).toContain('LOOM_ASA_RG');
@@ -85,7 +85,7 @@ describe('GET — the three failure branches are told apart (#3573)', () => {
     // At head this reached the generic catch: 502, plus a hint asserting ASA
     // was not configured. Both were wrong.
     getJob.mockRejectedValue(new AsaJobNotFoundError('item-1', 'rgAsa', 'sub1'));
-    const r = await GET(req(), { params: { name: 'item-1' } });
+    const r = await GET(req(), { params: Promise.resolve({ name: 'item-1' }) });
     const j = await r.json();
     expect(r.status).toBe(404);
     expect(j.hint).toBeUndefined();
@@ -94,7 +94,7 @@ describe('GET — the three failure branches are told apart (#3573)', () => {
 
   it('502 UNCLASSIFIED asserts no cause at all (R7)', async () => {
     getJob.mockRejectedValue(new Error('ASA get failed 429: TooManyRequests'));
-    const r = await GET(req(), { params: { name: 'j' } });
+    const r = await GET(req(), { params: Promise.resolve({ name: 'j' }) });
     const j = await r.json();
     expect(r.status).toBe(502);
     expect(j.hint).toBeUndefined();
@@ -109,7 +109,7 @@ describe('GET — an item id resolves to the job the provisioner recorded (#3573
       if (n === 'Rides-Telemetry') return { name: n, id: '/x', location: 'eastus' } as any;
       throw new AsaJobNotFoundError(n, 'rgAsa', 'sub1');
     });
-    const r = await GET(req(), { params: { name: 'item-1' } });
+    const r = await GET(req(), { params: Promise.resolve({ name: 'item-1' }) });
     const j = await r.json();
     expect(r.status).toBe(200);
     expect(j.ok).toBe(true);
@@ -120,7 +120,7 @@ describe('GET — an item id resolves to the job the provisioner recorded (#3573
   it('offers an inline Fix it when the item exists but its job does not', async () => {
     loadOwnedItem.mockResolvedValue(ITEM);
     getJob.mockRejectedValue(new AsaJobNotFoundError('item-1', 'rgAsa', 'sub1'));
-    const r = await GET(req(), { params: { name: 'item-1' } });
+    const r = await GET(req(), { params: Promise.resolve({ name: 'item-1' }) });
     const j = await r.json();
     expect(r.status).toBe(404);
     expect(j.code).toBe('asa-job-not-provisioned');
@@ -134,7 +134,7 @@ describe('GET — an item id resolves to the job the provisioner recorded (#3573
   it('says only what it established when the segment is neither a job nor a visible item', async () => {
     loadOwnedItem.mockResolvedValue(null);
     getJob.mockRejectedValue(new AsaJobNotFoundError('ghost', 'rgAsa', 'sub1'));
-    const r = await GET(req(), { params: { name: 'ghost' } });
+    const r = await GET(req(), { params: Promise.resolve({ name: 'ghost' }) });
     const j = await r.json();
     expect(r.status).toBe(404);
     expect(j.code).toBe('asa-job-not-found');
@@ -146,7 +146,7 @@ describe('GET — an item id resolves to the job the provisioner recorded (#3573
 describe('POST — the Fix-it runs the REAL provisioner (#3573)', () => {
   it('provisions the backing job for the item and reports its name', async () => {
     loadOwnedItem.mockResolvedValue(ITEM);
-    const r = await POST(req('https://loom.test/api/items/stream-analytics-job/item-1?provision=1'), { params: { name: 'item-1' } });
+    const r = await POST(req('https://loom.test/api/items/stream-analytics-job/item-1?provision=1'), { params: Promise.resolve({ name: 'item-1' }) });
     const j = await r.json();
     expect(r.status).toBe(200);
     expect(streamAnalyticsJobProvisioner).toHaveBeenCalledTimes(1);
@@ -158,7 +158,7 @@ describe('POST — the Fix-it runs the REAL provisioner (#3573)', () => {
 
   it('is write-scoped — a caller the write ladder denies gets 404 and NO ARM call', async () => {
     loadOwnedItem.mockResolvedValue(null);
-    const r = await POST(req('https://loom.test/api/items/stream-analytics-job/item-1?provision=1'), { params: { name: 'item-1' } });
+    const r = await POST(req('https://loom.test/api/items/stream-analytics-job/item-1?provision=1'), { params: Promise.resolve({ name: 'item-1' }) });
     expect(r.status).toBe(404);
     expect(streamAnalyticsJobProvisioner).not.toHaveBeenCalled();
     // `allowReadRoles` is NOT passed, so a read-only Viewer cannot create Azure
@@ -167,7 +167,7 @@ describe('POST — the Fix-it runs the REAL provisioner (#3573)', () => {
   });
 
   it('requires provision=1 rather than mutating on any POST', async () => {
-    const r = await POST(req(), { params: { name: 'item-1' } });
+    const r = await POST(req(), { params: Promise.resolve({ name: 'item-1' }) });
     expect(r.status).toBe(400);
     expect(streamAnalyticsJobProvisioner).not.toHaveBeenCalled();
   });
@@ -177,7 +177,7 @@ describe('POST — the Fix-it runs the REAL provisioner (#3573)', () => {
     streamAnalyticsJobProvisioner.mockResolvedValue({
       status: 'remediation', gate: { reason: 'ASA not configured', remediation: 'Set LOOM_ASA_RG' }, steps: [],
     } as any);
-    const r = await POST(req('https://loom.test/api/items/stream-analytics-job/item-1?provision=1'), { params: { name: 'item-1' } });
+    const r = await POST(req('https://loom.test/api/items/stream-analytics-job/item-1?provision=1'), { params: Promise.resolve({ name: 'item-1' }) });
     const j = await r.json();
     expect(r.status).toBe(501);
     expect(j.ok).toBe(false);

@@ -5,8 +5,8 @@
  *   from Azure; we surface as { ok: true } once accepted.
  */
 import { NextRequest, NextResponse } from 'next/server';
-import { getSession } from '@/lib/auth/session';
 import { startJob, stopJob, AsaNotConfiguredError } from '@/lib/azure/stream-analytics-client';
+import { withSession } from '@/lib/api/route-toolkit';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -25,10 +25,8 @@ const HINT =
   'Provision an ASA job (bicep: platform/fiab/bicep/modules/landing-zone/stream-analytics.bicep, ' +
   'flag enableStreamAnalytics=true) and set LOOM_ASA_RG (and LOOM_ASA_SUB if different).';
 
-export async function POST(req: NextRequest, ctx: { params: { name: string } }) {
-  const s = getSession();
-  if (!s) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
-  const name = ctx.params?.name;
+export const POST = withSession<{ name: string }>(async (req: NextRequest, { params }) => {
+  const name = params?.name;
   if (!name) return NextResponse.json({ ok: false, error: 'name required' }, { status: 400 });
   const body = await req.json().catch(() => null) as { action?: string } | null;
   if (!body || (body.action !== 'start' && body.action !== 'stop')) {
@@ -50,4 +48,4 @@ export async function POST(req: NextRequest, ctx: { params: { name: string } }) 
       { status: 502 },
     );
   }
-}
+});

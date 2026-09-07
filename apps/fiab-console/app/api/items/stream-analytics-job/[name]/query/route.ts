@@ -4,8 +4,8 @@
  *   Persists a new ASA query (transformation) via ARM. Real PUT, no mocks.
  */
 import { NextRequest, NextResponse } from 'next/server';
-import { getSession } from '@/lib/auth/session';
 import { saveTransformation, AsaNotConfiguredError } from '@/lib/azure/stream-analytics-client';
+import { withSession } from '@/lib/api/route-toolkit';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -24,10 +24,8 @@ const HINT =
   'Provision an ASA job (bicep: platform/fiab/bicep/modules/landing-zone/stream-analytics.bicep, ' +
   'flag enableStreamAnalytics=true) and set LOOM_ASA_RG (and LOOM_ASA_SUB if different).';
 
-export async function PUT(req: NextRequest, ctx: { params: { name: string } }) {
-  const s = getSession();
-  if (!s) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
-  const name = ctx.params?.name;
+export const PUT = withSession<{ name: string }>(async (req: NextRequest, { params }) => {
+  const name = params?.name;
   if (!name) return NextResponse.json({ ok: false, error: 'name required' }, { status: 400 });
   const body = await req.json().catch(() => null) as { query?: string } | null;
   if (!body || typeof body.query !== 'string') {
@@ -45,4 +43,4 @@ export async function PUT(req: NextRequest, ctx: { params: { name: string } }) {
       { status: 502 },
     );
   }
-}
+});

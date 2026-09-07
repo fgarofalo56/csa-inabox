@@ -53,7 +53,7 @@ import { getSession } from '@/lib/auth/session';
 
 const SESSION = { claims: { oid: 'oid-1' } } as any;
 /** The editor opens on the Loom item id, not the ARM job name. */
-const params = { params: { name: 'item-1' } };
+const params = { params: Promise.resolve({ name: 'item-1' }) };
 const ITEM = {
   id: 'item-1',
   workspaceId: 'ws-1',

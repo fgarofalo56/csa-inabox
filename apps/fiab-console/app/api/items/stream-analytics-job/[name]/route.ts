@@ -24,7 +24,6 @@
  * had established nothing of the kind.
  */
 import { NextRequest, NextResponse } from 'next/server';
-import { getSession } from '@/lib/auth/session';
 import {
   getJob,
   AsaNotConfiguredError,
@@ -34,6 +33,7 @@ import { loadOwnedItem } from '../../_lib/item-crud';
 import { resolveTarget } from '@/lib/install/provisioning-engine';
 import { streamAnalyticsJobProvisioner, asaJobNameFor } from '@/lib/install/provisioners/stream-analytics-job';
 import type { WorkspaceItem } from '@/lib/types/workspace';
+import { withSession } from '@/lib/api/route-toolkit';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -67,10 +67,8 @@ async function itemForSegment(segment: string, tenantId: string): Promise<Worksp
   }
 }
 
-export async function GET(_req: NextRequest, ctx: { params: { name: string } }) {
-  const s = getSession();
-  if (!s) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
-  const name = ctx.params?.name;
+export const GET = withSession<{ name: string }>(async (_req: NextRequest, { session: s, params }) => {
+  const name = params?.name;
   if (!name) return NextResponse.json({ ok: false, error: 'name required' }, { status: 400 });
   try {
     const job = await getJob(name);
@@ -142,7 +140,7 @@ export async function GET(_req: NextRequest, ctx: { params: { name: string } }) 
     // attached, because the code established no cause (R7).
     return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 502 });
   }
-}
+});
 
 /**
  * Create the item's backing streaming job — the Fix-it the 404 above hands
@@ -153,10 +151,8 @@ export async function GET(_req: NextRequest, ctx: { params: { name: string } }) 
  * Owner/Admin/Member ladder, so a read-only Viewer cannot create Azure
  * resources through this route.
  */
-export async function POST(req: NextRequest, ctx: { params: { name: string } }) {
-  const s = getSession();
-  if (!s) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
-  const name = ctx.params?.name;
+export const POST = withSession<{ name: string }>(async (req: NextRequest, { session: s, params }) => {
+  const name = params?.name;
   if (!name) return NextResponse.json({ ok: false, error: 'name required' }, { status: 400 });
   if (req.nextUrl.searchParams.get('provision') !== '1') {
     return NextResponse.json({ ok: false, error: 'provision=1 required' }, { status: 400 });
@@ -195,4 +191,4 @@ export async function POST(req: NextRequest, ctx: { params: { name: string } }) 
     { ok: false, error: result.error || 'Provisioning failed.', steps: result.steps || [] },
     { status: 502 },
   );
-}
+});

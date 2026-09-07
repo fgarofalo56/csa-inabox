@@ -21,13 +21,13 @@
  * No mocks — real ARM. Returns { ok, mode, ... } per no-vaporware.md.
  */
 import { NextRequest, NextResponse } from 'next/server';
-import { getSession } from '@/lib/auth/session';
 import {
   compileQuery,
   testTransformation,
   AsaNotConfiguredError,
   AsaTestNotAvailableError,
 } from '@/lib/azure/stream-analytics-client';
+import { withSession } from '@/lib/api/route-toolkit';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -58,10 +58,8 @@ interface TestBody {
   inputNames?: string[];
 }
 
-export async function POST(req: NextRequest, ctx: { params: { name: string } }) {
-  const s = getSession();
-  if (!s) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
-  const name = ctx.params?.name;
+export const POST = withSession<{ name: string }>(async (req: NextRequest, { params }) => {
+  const name = params?.name;
   if (!name) return NextResponse.json({ ok: false, error: 'name required' }, { status: 400 });
 
   const body = (await req.json().catch(() => null)) as TestBody | null;
@@ -106,4 +104,4 @@ export async function POST(req: NextRequest, ctx: { params: { name: string } }) 
       { status: 502 },
     );
   }
-}
+});

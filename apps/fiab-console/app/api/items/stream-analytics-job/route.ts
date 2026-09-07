@@ -8,8 +8,8 @@
  * that as a Fluent MessageBar — no mock arrays.
  */
 import { NextResponse } from 'next/server';
-import { getSession } from '@/lib/auth/session';
 import { listJobs, AsaNotConfiguredError } from '@/lib/azure/stream-analytics-client';
+import { withSession } from '@/lib/api/route-toolkit';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -29,9 +29,7 @@ const HINT =
   'flag enableStreamAnalytics=true) and set LOOM_ASA_RG (and LOOM_ASA_SUB if different from LOOM_SUBSCRIPTION_ID). ' +
   'Grant the Loom Console UAMI the "Stream Analytics Contributor" role on the RG.';
 
-export async function GET() {
-  const s = getSession();
-  if (!s) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+export const GET = withSession(async () => {
   try {
     const jobs = await listJobs();
     return NextResponse.json({ ok: true, jobs });
@@ -47,4 +45,4 @@ export async function GET() {
       { status: 502 },
     );
   }
-}
+});

@@ -9,7 +9,7 @@
  * No mock arrays. Honest 501 gate when ASA env vars are unset.
  */
 import { NextRequest, NextResponse } from 'next/server';
-import { getSession } from '@/lib/auth/session';
+import { withSession } from '@/lib/api/route-toolkit';
 import {
   createOrUpdateOutput,
   deleteOutput,
@@ -38,10 +38,8 @@ function bad(status: number, error: string, hint?: string) {
   return NextResponse.json({ ok: false, error, hint }, { status });
 }
 
-export async function PUT(req: NextRequest, ctx: { params: { name: string } }) {
-  const s = getSession();
-  if (!s) return bad(401, 'unauthenticated');
-  const jobName = ctx.params?.name;
+export const PUT = withSession<{ name: string }>(async (req: NextRequest, { params }) => {
+  const jobName = params?.name;
   if (!jobName) return bad(400, 'job name required');
 
   let spec: AsaOutputCreateSpec;
@@ -62,12 +60,10 @@ export async function PUT(req: NextRequest, ctx: { params: { name: string } }) {
     }
     return bad(502, e?.message || String(e));
   }
-}
+});
 
-export async function DELETE(req: NextRequest, ctx: { params: { name: string } }) {
-  const s = getSession();
-  if (!s) return bad(401, 'unauthenticated');
-  const jobName = ctx.params?.name;
+export const DELETE = withSession<{ name: string }>(async (req: NextRequest, { params }) => {
+  const jobName = params?.name;
   const outputName = new URL(req.url).searchParams.get('outputName');
   if (!jobName) return bad(400, 'job name required');
   if (!outputName) return bad(400, 'outputName query param required');
@@ -81,4 +77,4 @@ export async function DELETE(req: NextRequest, ctx: { params: { name: string } }
     }
     return bad(502, e?.message || String(e));
   }
-}
+});
