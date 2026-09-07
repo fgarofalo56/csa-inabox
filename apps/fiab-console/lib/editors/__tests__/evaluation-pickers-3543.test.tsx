@@ -16,6 +16,22 @@
  * What is asserted, deliberately, is the CONTROL KIND plus the REAL fetched
  * values: a control that is a combobox but populated from a hard-coded array
  * would satisfy the first half alone and would be vaporware.
+ *
+ * ── SCOPE CORRECTION (#4313 round 7) ────────────────────────────────────────
+ * These specs cover the HAPPY path only, and the header above used to imply
+ * more than that. Since round 7 the deployment control is a plain `<Dropdown>`
+ * ONLY when discovery answered `ok:true` with rows; while the listing is in
+ * flight, has FAILED, or genuinely returned zero it is a freeform `<Combobox>`
+ * escape hatch, because `disabled={!deploymentOptions.length}` asserted absence
+ * over calls that never answered and removed an affordance `main` had. That is
+ * deliberate and is covered by `foundry-picker-failure-paths-4313.test.tsx`.
+ * So: "never a free text box" below means "never a free text box once discovery
+ * has succeeded" — not "never, in any state".
+ *
+ * The same change makes the control SWAP NODES mid-render, so every query here
+ * is re-issued after the swap; a reference captured from the first
+ * `findByRole` stays detached forever and reads as "element could not be found
+ * in the document" (it did, on this file's first run against round 7).
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { render, screen, waitFor, fireEvent } from '@testing-library/react';
@@ -45,9 +61,20 @@ describe('EvaluationEditor — New evaluation pickers (#3543)', () => {
   beforeEach(() => { installEvaluationMocks(); });
   afterEach(() => { vi.restoreAllMocks(); });
 
+  /** Wait past the escape-hatch → Dropdown swap and return the SETTLED node. */
+  async function settledDeploymentCombo(): Promise<HTMLElement> {
+    await screen.findByRole('combobox', { name: 'Model deployment' }, { timeout: 5000 });
+    await waitFor(() => {
+      // A Fluent Dropdown's combobox is never an <input>; the freeform Combobox
+      // escape hatch always is. So this is the swap having landed.
+      expect(screen.getByRole('combobox', { name: 'Model deployment' }).tagName).not.toBe('INPUT');
+    }, { timeout: 5000 });
+    return screen.getByRole('combobox', { name: 'Model deployment' });
+  }
+
   it('offers the model deployment as a combobox, never a free text box', async () => {
     render(<EvaluationEditor item={makeItem('evaluation', 'Foundry evaluation')} id="new" />);
-    const combo = await screen.findByRole('combobox', { name: 'Model deployment' }, { timeout: 5000 });
+    const combo = await settledDeploymentCombo();
     expect(combo).toBeInTheDocument();
     // The regression this guards: a plain <Input> renders role=textbox.
     expect(screen.queryByRole('textbox', { name: 'Model deployment' })).toBeNull();
@@ -56,9 +83,10 @@ describe('EvaluationEditor — New evaluation pickers (#3543)', () => {
   it('populates the deployment list from the real ARM deployments call', async () => {
     installEvaluationMocks();
     render(<EvaluationEditor item={makeItem('evaluation', 'Foundry evaluation')} id="new" />);
-    const combo = await screen.findByRole('combobox', { name: 'Model deployment' }, { timeout: 5000 });
-    // Enabled only once the fetch landed — `disabled={!deploymentOptions.length}`.
-    await waitFor(() => expect(combo.getAttribute('aria-disabled')).not.toBe('true'));
+    const combo = await settledDeploymentCombo();
+    // Enabled — and reached only because discovery ANSWERED, which is what the
+    // swap encodes; a failed listing would still be the enterable Combobox.
+    expect(combo.getAttribute('aria-disabled')).not.toBe('true');
     fireEvent.click(combo);
     for (const d of DEPLOYMENTS) {
       expect(await screen.findByRole('option', { name: new RegExp(d.name) })).toBeInTheDocument();

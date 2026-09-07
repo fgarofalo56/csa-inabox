@@ -693,9 +693,9 @@ export function EvaluationEditor({ item, id }: { item: FabricItemType; id: strin
   // (registered assets) + the same DataUriPickDialog the Dataset editor uses,
   // for a path not registered yet; deployment → GET
   // /api/foundry/model-deployments (real ARM CognitiveServices deployments).
-  const [assets] = useApi<{ assets: any[] }>(
+  const [assets, reloadAssets] = useApi<{ assets: any[] }>(
     `/api/items/dataset${project ? `?project=${encodeURIComponent(project)}` : ''}`, [project]);
-  const [deployments] = useApi<{ deployments: { name: string; modelName?: string }[] }>('/api/foundry/model-deployments');
+  const [deployments, reloadDeployments] = useApi<{ deployments: { name: string; modelName?: string }[] }>('/api/foundry/model-deployments');
   const [browseOpen, setBrowseOpen] = useState(false);
   const datasetOptions: { uri: string; label: string }[] = useMemo(() => {
     const rows = (assets.data?.assets || [])
@@ -709,6 +709,29 @@ export function EvaluationEditor({ item, id }: { item: FabricItemType; id: strin
     return rows;
   }, [assets.data, form.datasetId]);
   const deploymentOptions = deployments.data?.deployments || [];
+
+  // R7 — AN EMPTY LIST AND A FAILED CALL ARE DIFFERENT FACTS. Both routes above
+  // answer 401 / 502 / 503 with `{ ok:false }` and `useApi` flattens each to
+  // `{ data:null, error }`, so a list from `data?.x || []` is `[]` on EVERY
+  // failure path, not only on an empty account. "No model deployments in this
+  // account" / "No data assets" there asserts absence the code never established
+  // (deploy-integrity R7), and `disabled={!deploymentOptions.length}` on top of
+  // it is the dead end auto-bind-by-default §Explicitly-forbidden names verbatim
+  // ("'No … found' + a disabled button"). Same split as the vectorizer endpoint
+  // ~900 lines below: pick only when discovery SUCCEEDED and returned rows;
+  // otherwise state what failed and keep the value suppliable.
+  const deploymentsDiscoveryFailed = !deployments.loading && !!deployments.error;
+  const deploymentsPickable = !deployments.loading && !deployments.error && deploymentOptions.length > 0;
+  const deploymentPlaceholder = deployments.loading ? 'Loading deployments…'
+    : deploymentsDiscoveryFailed ? 'Enter the model deployment name (discovery failed)'
+      : deploymentsPickable ? 'Select a model deployment (optional)'
+        : 'No model deployments in this account — enter a name';
+  const assetsDiscoveryFailed = !assets.loading && !!assets.error;
+  const assetsPickable = !assets.loading && !assets.error && datasetOptions.length > 0;
+  const datasetPlaceholder = assets.loading ? 'Loading data assets…'
+    : assetsDiscoveryFailed ? 'Could not list data assets — use Browse…'
+      : assetsPickable ? 'Select a registered data asset'
+        : 'No registered data assets — use Browse…';
 
   const create = async () => {
     if (!project) { setMsg('Pick a project first.'); return; }
@@ -771,40 +794,97 @@ export function EvaluationEditor({ item, id }: { item: FabricItemType; id: strin
           <div className={s.toolbar} style={{ gap: tokens.spacingHorizontalS }}>
             <Dropdown style={{ flex: 1, minWidth: 240 }} aria-label="Dataset"
               value={form.datasetId} selectedOptions={form.datasetId ? [form.datasetId] : []}
-              placeholder={assets.loading ? 'Loading data assets…' : datasetOptions.length ? 'Select a registered data asset' : 'No data assets — use Browse…'}
+              placeholder={datasetPlaceholder}
               onOptionSelect={(_, d) => d.optionValue && setForm((f) => ({ ...f, datasetId: d.optionValue! }))}>
               {datasetOptions.map((o) => <Option key={o.uri} value={o.uri} text={o.uri}>{o.label}</Option>)}
             </Dropdown>
             <Button icon={<FolderOpen20Regular />} onClick={() => setBrowseOpen(true)}>Browse…</Button>
           </div>
           <span>Model deployment</span>
-          <Dropdown aria-label="Model deployment"
-            value={form.modelDeployment} selectedOptions={form.modelDeployment ? [form.modelDeployment] : []}
-            placeholder={deployments.loading ? 'Loading deployments…' : deploymentOptions.length ? 'Select a model deployment (optional)' : 'None deployed'}
-            disabled={!deploymentOptions.length}
-            onOptionSelect={(_, d) => setForm((f) => ({ ...f, modelDeployment: d.optionValue || '' }))}>
-            {deploymentOptions.map((d) => (
-              <Option key={d.name} value={d.name} text={d.name}>{d.name}{d.modelName ? ` · ${d.modelName}` : ''}</Option>
-            ))}
-          </Dropdown>
+          {deploymentsPickable ? (
+            <Dropdown aria-label="Model deployment"
+              value={form.modelDeployment} selectedOptions={form.modelDeployment ? [form.modelDeployment] : []}
+              placeholder={deploymentPlaceholder}
+              onOptionSelect={(_, d) => setForm((f) => ({ ...f, modelDeployment: d.optionValue || '' }))}>
+              {deploymentOptions.map((d) => (
+                <Option key={d.name} value={d.name} text={d.name}>{d.name}{d.modelName ? ` · ${d.modelName}` : ''}</Option>
+              ))}
+            </Dropdown>
+          ) : (
+            // ESCAPE HATCH — never a disabled control asserting absence. While
+            // discovery is loading, failed, or genuinely empty the name stays
+            // enterable, so a model-scored evaluation is still creatable; `main`
+            // had a free `<Input>` here, so disabling it REMOVED an affordance.
+            // Rows discovery DID return are still offered as options.
+            <Combobox freeform aria-label="Model deployment"
+              value={form.modelDeployment} selectedOptions={form.modelDeployment ? [form.modelDeployment] : []}
+              placeholder={deploymentPlaceholder}
+              onChange={(ev) => setForm((f) => ({ ...f, modelDeployment: ev.target.value }))}
+              onOptionSelect={(_, d) => setForm((f) => ({ ...f, modelDeployment: d.optionValue || '' }))}>
+              {deploymentOptions.map((d) => (
+                <Option key={d.name} value={d.name} text={d.name}>{d.name}{d.modelName ? ` · ${d.modelName}` : ''}</Option>
+              ))}
+            </Combobox>
+          )}
           <span>Evaluators</span><Input value={form.evaluators} onChange={(_, d) => setForm((f) => ({ ...f, evaluators: d.value }))} placeholder="comma-separated" />
         </div>
         {form.datasetId && <Caption1>Dataset URI: <code>{form.datasetId}</code></Caption1>}
-        {!deployments.loading && !deploymentOptions.length && (
+        {/* Data-asset DISCOVERY FAILED — say that, never "no data assets". NO
+            gateId is asserted: `listDataAssets` resolves its workspace through
+            `hubName()`, which has a literal default and cannot throw, so Loom
+            never established that a named env var is the cause (R7). Browse… —
+            a picker over both address families — stays the escape hatch; the
+            dataset URI is deliberately NOT re-opened to free text (#3543). */}
+        {assetsDiscoveryFailed && (
+          <MessageBar intent="error">
+            <MessageBarBody>
+              <MessageBarTitle>Could not list registered data assets</MessageBarTitle>
+              {assets.error}{assets.hint ? ` — ${assets.hint}` : ''}
+              {' '}Loom established only that the listing call failed — not that this workspace has no
+              data asset. Retry, or pick the location with Browse…, which sets the dataset URI directly.
+            </MessageBarBody>
+            <MessageBarActions>
+              <Button size="small" icon={<ArrowClockwise20Regular />} onClick={reloadAssets}>Retry</Button>
+            </MessageBarActions>
+          </MessageBar>
+        )}
+        {/* Deployment DISCOVERY FAILED — the 503 (CsNotConfiguredError) is a
+            registered gate, so it renders the shared G2 surface with its Fix-it
+            wizard; any other failure gets an honest error carrying the route's
+            own error + hint and a Retry. The info bar below now renders ONLY
+            when discovery succeeded and genuinely returned zero. */}
+        {deploymentsDiscoveryFailed ? (deployments.notDeployed ? (
+          <HonestGate
+            gateId="svc-aoai"
+            surface="Evaluation — model deployment"
+            detail={`${deployments.error}${deployments.hint ? ` — ${deployments.hint}` : ''}`}
+            onResolved={reloadDeployments}
+          />
+        ) : (
+          <MessageBar intent="error">
+            <MessageBarBody>
+              <MessageBarTitle>Could not list model deployments</MessageBarTitle>
+              {deployments.error}{deployments.hint ? ` — ${deployments.hint}` : ''}
+              {' '}Loom established only that the listing call failed — not that this account has no
+              model deployment. Retry, or type the deployment name above to score this evaluation meanwhile.
+            </MessageBarBody>
+            <MessageBarActions>
+              <Button size="small" icon={<ArrowClockwise20Regular />} onClick={reloadDeployments}>Retry</Button>
+            </MessageBarActions>
+          </MessageBar>
+        )) : (!deployments.loading && !deploymentOptions.length && (
           // ux-baseline G2: the gate carries the action that resolves it. The
           // field is optional, so the evaluation still submits without one.
           <MessageBar intent="info">
             <MessageBarBody>
               <MessageBarTitle>No model deployments in this account</MessageBarTitle>
-              {deployments.error
-                ? `${deployments.error}${deployments.hint ? ` — ${deployments.hint}` : ''}`
-                : 'An evaluation can run on a dataset alone; deploy a model to score generations against it.'}
+              An evaluation can run on a dataset alone; deploy a model to score generations against it.
               <div className={s.toolbar} style={{ marginTop: tokens.spacingVerticalXS }}>
                 <Button as="a" href="/items/ai-foundry-hub/new" size="small">Deploy a model</Button>
               </div>
             </MessageBarBody>
           </MessageBar>
-        )}
+        ))}
         <div className={s.toolbar} style={{ marginTop: tokens.spacingVerticalS }}>
           <Button appearance="primary" onClick={create} disabled={busy || !form.displayName || !form.datasetId}>{busy ? 'Submitting…' : 'Create evaluation'}</Button>
           {msg && <Caption1>{msg}</Caption1>}

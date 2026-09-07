@@ -22,6 +22,15 @@
  *     entirely when /api/lakehouse/containers is unreachable, in a gated
  *     deployment NO data asset could be registered by any route.
  *
+ *  3. The SAME defect, unfixed, in the two pickers #3543 actually introduced —
+ *     EvaluationEditor's "Dataset" and "Model deployment". `/api/items/dataset`
+ *     and `/api/foundry/model-deployments` answer 401 / 502 / 503 with
+ *     `{ ok:false }` too, so "No data assets" / "No model deployments in this
+ *     account" rendered over a FAILED call (R7), the dataset half swallowed
+ *     `assets.error` entirely, and `disabled={!deploymentOptions.length}` made
+ *     the deployment field unsuppliable on every failure path where `main` had
+ *     a free `<Input>`.
+ *
  * These specs are the regression fence. They drive the REAL components against
  * REAL route shapes (the fetch mock returns exactly what the routes return),
  * and assert behaviour — is it enterable, does the honest text appear, does the
@@ -29,7 +38,7 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { render, screen, waitFor, fireEvent } from '@testing-library/react';
-import { VectorSearchDesigner, DatasetEditor } from '../foundry-sub-editors';
+import { VectorSearchDesigner, DatasetEditor, EvaluationEditor } from '../foundry-sub-editors';
 import { makeItem, installFetchMock } from './test-helpers';
 
 /** An index carrying one algorithm, one profile, and one UNCONFIGURED vectorizer. */
@@ -147,8 +156,16 @@ describe('DatasetEditor URI picker — both address families (#4313)', () => {
 
     // Real datastores, from the real route.
     fireEvent.click(await screen.findByText('workspaceblobstore', {}, { timeout: 5000 }));
+    // WAIT FOR THE DATA, NOT A TIMEOUT. Clicking the datastore starts a SECOND
+    // round-trip (the storage path listing); the `Select` button only exists
+    // once its rows render. Jumping straight to `findByRole('button', /^Select$/)`
+    // was racing that under full-suite load — observed 1 red in 2 local runs of
+    // the four suites together, green alone and green in CI, i.e. exactly the
+    // load-dependent shape test-helpers' `selectOptionValue` header describes.
+    // Awaiting the row removes the timing constant instead of enlarging it.
+    await screen.findByText('golden.jsonl', {}, { timeout: 15000 });
     // Real paths, browsed through the generic storage lister — not typed.
-    fireEvent.click(await screen.findByRole('button', { name: /^Select$/ }, { timeout: 5000 }));
+    fireEvent.click(await screen.findByRole('button', { name: /^Select$/ }, { timeout: 15000 }));
 
     const uri = await screen.findByLabelText('Data asset URI');
     expect((uri as HTMLInputElement).value)
@@ -165,5 +182,118 @@ describe('DatasetEditor URI picker — both address families (#4313)', () => {
     fireEvent.click(await screen.findByRole('button', { name: /Browse/ }, { timeout: 5000 }));
     expect(await screen.findByText(/Set LOOM_BRONZE_URL/, {}, { timeout: 5000 })).toBeInTheDocument();
     expect(screen.getByRole('tab', { name: /Datastore path/ })).toBeInTheDocument();
+  });
+});
+
+/**
+ * The two pickers #3543 introduced, on their failure paths. Same class as the
+ * vectorizer above; the fixes must be the same shape or the class is only
+ * half-closed.
+ */
+describe('EvaluationEditor pickers — the listing routes FAILED (#4313)', () => {
+  const ASSET = { name: 'golden', dataUri: 'azureml://datastores/ws/paths/golden.jsonl', dataType: 'uri_file' };
+  const DEPLOYMENTS = [{ name: 'gpt-4o-mini', modelName: 'gpt-4o-mini' }];
+  const evalItem = () => makeItem('evaluation', 'Evaluation');
+
+  afterEach(() => { vi.restoreAllMocks(); });
+
+  it('states the deployment listing failed instead of asserting the account has none', async () => {
+    // Exactly the 502 shape app/api/foundry/model-deployments/route.ts returns.
+    const { calls } = installFetchMock({
+      '/api/foundry/model-deployments': () => ({ ok: false, error: 'ARM returned 500 listing deployments' }),
+      '/api/items/dataset': () => ({ ok: true, assets: [ASSET], scope: 'hub' }),
+    });
+    render(<EvaluationEditor item={evalItem()} id="new" />);
+
+    expect(await screen.findByText(/Could not list model deployments/, {}, { timeout: 5000 })).toBeInTheDocument();
+    expect(screen.getByText(/ARM returned 500 listing deployments/)).toBeInTheDocument();
+    // R7: absence must NOT be claimed from a failure.
+    expect(screen.queryByText(/No model deployments in this account/)).toBeNull();
+    // G2 / auto-bind: the failure carries an action, never a bare bar — and the
+    // action really re-issues the call it offers to retry.
+    const before = calls.filter((c) => c.url.includes('/api/foundry/model-deployments')).length;
+    fireEvent.click(screen.getByRole('button', { name: /Retry/ }));
+    await waitFor(() => {
+      expect(calls.filter((c) => c.url.includes('/api/foundry/model-deployments')).length)
+        .toBeGreaterThan(before);
+    }, { timeout: 5000 });
+  });
+
+  it('leaves the model deployment enterable so a model-scored evaluation is still creatable', async () => {
+    installFetchMock({
+      '/api/foundry/model-deployments': () => ({ ok: false, error: 'ARM returned 500 listing deployments' }),
+      '/api/items/dataset': () => ({ ok: true, assets: [ASSET], scope: 'hub' }),
+    });
+    render(<EvaluationEditor item={evalItem()} id="new" />);
+
+    const dep = await screen.findByRole('combobox', { name: 'Model deployment' }, { timeout: 5000 });
+    expect(dep).toBeInTheDocument();
+    // SETTLE FIRST. `useApi` starts at `{loading:false, data:null}`, so there is
+    // a pre-fetch paint before the loading paint before the answered paint —
+    // asserting on the first node found reads a TRANSIENT state and passes even
+    // against the pre-fix predicates. The failure bar exists only once the call
+    // has answered, so waiting on it pins the settled render.
+    await screen.findByText(/Could not list model deployments/, {}, { timeout: 5000 });
+    const settled = screen.getByRole('combobox', { name: 'Model deployment' });
+    // The regression: `disabled={!deploymentOptions.length}` on every failure path.
+    expect(settled.getAttribute('aria-disabled')).not.toBe('true');
+    expect((settled as HTMLInputElement).disabled).toBe(false);
+    // Freeform Combobox renders a real <input>; a Dropdown does not.
+    expect(settled.tagName).toBe('INPUT');
+
+    // The PROOF the dead end is gone: the field is CONTROLLED by
+    // `form.modelDeployment`, so it only shows the typed value if setForm ran —
+    // i.e. the evaluation can still carry a deployment while listing is broken.
+    fireEvent.change(settled, { target: { value: 'gpt-4o-mini' } });
+    await waitFor(() => expect((settled as HTMLInputElement).value).toBe('gpt-4o-mini'), { timeout: 5000 });
+  });
+
+  it('states the data-asset listing failed instead of swallowing the error', async () => {
+    // Exactly the 403 shape app/api/items/dataset/route.ts returns for a
+    // FoundryError — the arm whose `assets.error` was rendered NOWHERE.
+    installFetchMock({
+      '/api/items/dataset': () => ({ ok: false, error: 'AML returned 403 listing data assets' }),
+      '/api/foundry/model-deployments': () => ({ ok: true, deployments: DEPLOYMENTS }),
+    });
+    render(<EvaluationEditor item={evalItem()} id="new" />);
+
+    expect(await screen.findByText(/Could not list registered data assets/, {}, { timeout: 5000 })).toBeInTheDocument();
+    expect(screen.getByText(/AML returned 403 listing data assets/)).toBeInTheDocument();
+    expect(screen.queryByText(/No data assets/)).toBeNull();
+    expect(screen.getByRole('button', { name: /Retry/ })).toBeInTheDocument();
+    // Not a dead end: the Browse… picker is still the writer of the URI.
+    expect(screen.getByRole('button', { name: /Browse/ })).toBeInTheDocument();
+  });
+
+  it('offers a plain picker (no free text) once deployment discovery SUCCEEDS', async () => {
+    installFetchMock({
+      '/api/foundry/model-deployments': () => ({ ok: true, deployments: DEPLOYMENTS }),
+      '/api/items/dataset': () => ({ ok: true, assets: [ASSET], scope: 'hub' }),
+    });
+    render(<EvaluationEditor item={evalItem()} id="new" />);
+
+    // Re-query inside the wait — the swap REPLACES the node, so a reference
+    // captured before it would stay the detached <input> forever.
+    await screen.findByRole('combobox', { name: 'Model deployment' }, { timeout: 5000 });
+    await waitFor(() => {
+      expect(screen.getByRole('combobox', { name: 'Model deployment' }).tagName).not.toBe('INPUT');
+    }, { timeout: 5000 });
+    expect(screen.queryByText(/Could not list model deployments/)).toBeNull();
+    fireEvent.click(screen.getByRole('combobox', { name: 'Model deployment' }));
+    expect(await screen.findByRole('option', { name: /gpt-4o-mini/ })).toBeInTheDocument();
+  });
+
+  it('still says "no model deployments" when discovery SUCCEEDED and returned zero', async () => {
+    // The positive control for the R7 split: the honest-absence bar must not
+    // have been deleted along with the dishonest one.
+    installFetchMock({
+      '/api/foundry/model-deployments': () => ({ ok: true, deployments: [] }),
+      '/api/items/dataset': () => ({ ok: true, assets: [ASSET], scope: 'hub' }),
+    });
+    render(<EvaluationEditor item={evalItem()} id="new" />);
+
+    expect(await screen.findByText(/No model deployments in this account/, {}, { timeout: 5000 })).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: /Deploy a model/ })).toBeInTheDocument();
+    expect(screen.queryByText(/Could not list model deployments/)).toBeNull();
   });
 });

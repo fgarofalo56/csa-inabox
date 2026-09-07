@@ -15,8 +15,24 @@
  * carries 3 baselined free-text sites, and the no-freeform ratchet is
  * all-or-nothing per file — editing it to remove one function obliges fixing
  * all three, which is a different work item's job. This file is the shared
- * component that item (and the ~33 others) adopts; the private copy is deleted
- * by whichever wave next opens that editor.
+ * component that item (and the ~33 others) adopts.
+ *
+ * ── CORRECTION (#4313, 2026-09-07) ──────────────────────────────────────────
+ * The paragraph above used to end "…the private copy is deleted by whichever
+ * wave next opens that editor." #4313 IS that wave — it cleared all three sites
+ * and deleted the file's no-freeform key — and it did NOT delete the private
+ * copy; it grew it into a two-tab `DataUriPickDialog`. That sentence is now
+ * false and is removed rather than left to imply work that happened.
+ *
+ * WHY the adoption did not happen there, stated so the next reader does not
+ * re-derive it: `AdlsBrowseDialog` is a whole `<Dialog>`, and that site needs a
+ * PANEL BODY inside an existing two-tab dialog writing one field from two
+ * address families (`abfss://` and `azureml://datastores/…`), so it is not a
+ * drop-in. Adopting it would also swap that editor's DLZ-containers-first
+ * first-open for an account-picker-first one — a behaviour change with its own
+ * tests. Promoting the body of this dialog to an exported `AdlsBrowsePanel` and
+ * deleting the private ~112-line copy is tracked as #4381, with an owner,
+ * instead of as an assumption about a future wave.
  *
  * ── WHAT IT ADDS OVER THE PRIVATE ONE ───────────────────────────────────────
  *   - ANY storage account, not just the four DLZ containers. The private dialog
