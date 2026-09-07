@@ -30,6 +30,25 @@ import { checkExportProtection } from '@/lib/azure/label-protection';
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
+/**
+ * #3941 review - A ROUTE CEILING ABOVE THE GROUP WALK.
+ *
+ * This route's authorization moved from an owner-only point read to
+ * `authorizeItemWorkspace`. The owner fast path short-circuits, so a caller who
+ * created the workspace pays nothing new - but the population this migration
+ * newly ADMITS (non-owner ACL members and tenant admins) is exactly the one
+ * that falls through to `resolveEffectiveRole`, which walks group assignments
+ * SEQUENTIALLY with no walk-wide ceiling (#3834). 71 other console routes
+ * declare a bound; not one of these ten did, so the widening landed on the
+ * routes with no ceiling at all.
+ *
+ * WHAT THIS DOES AND DOES NOT ESTABLISH (deploy-integrity.md R7): it bounds the
+ * REQUEST. It does NOT bound the walk - #3834 is still open, and a slow walk
+ * still consumes the whole budget before the request is cut off. This turns an
+ * unbounded hang into a bounded failure; it is not a fix for #3834.
+ */
+export const maxDuration = 60;
+
 
 
 /**
@@ -43,7 +62,13 @@ async function loadItem(
   itemId: string,
   type: string,
   session: SessionPayload,
-  allowReadRoles: boolean,
+  // #3941 review - NAMED, not a bare positional boolean. This argument
+  // selects the AUTHORIZATION scope: `true` admits read-only workspace
+  // roles, `false` restricts to the write-capable ones. As a positional
+  // `boolean` a transposed argument would silently widen a mutation with no
+  // compiler complaint, and every call site read `..., session, { allowReadRoles: false })` with
+  // nothing on screen saying which way `false` pointed.
+  { allowReadRoles }: { allowReadRoles: boolean },
 ): Promise<{ item: WorkspaceItem | null; denied: NextResponse | null }> {
   const items = await itemsContainer();
   const { resources } = await items.items
@@ -89,7 +114,7 @@ export async function POST(req: NextRequest, props: { params: Promise<{ type: st
   if (!format) return apiError('format is required', 400);
 
   try {
-    const { item, denied } = await loadItem(params.id, params.type, session, false);
+    const { item, denied } = await loadItem(params.id, params.type, session, { allowReadRoles: false });
     if (denied) return denied;
     if (!item) return apiError('Item not found', 404);
 

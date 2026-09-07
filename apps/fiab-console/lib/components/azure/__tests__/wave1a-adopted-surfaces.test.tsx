@@ -286,6 +286,48 @@ describe('KQL database wizards — the ingestion mapping name was typed', () => 
     expect(await screen.findByText(/could not be read/i)).toBeInTheDocument();
     expect(screen.queryByText(/No ingestion mapping is defined/i)).toBeNull();
   });
+
+  /**
+   * The IN-FLIGHT window (#4357 review nit).
+   *
+   * `wizIngestMappingOptions` is empty for two completely different reasons —
+   * the database has no mapping, and the read has not answered yet — and the
+   * fallback `<Input>` renders for both. While the read is still open a typed
+   * value is not the user's to keep: the reset effect clears any value that is
+   * not in the options list as soon as a non-empty list lands, and it has no
+   * way to tell a just-typed name from a pick left over from another table.
+   * So the box is closed for exactly as long as the answer is unknown, and
+   * opens again the moment an EMPTY answer makes typing the right move.
+   */
+  it('closes the typed fallback while the list is in flight, and reopens it on a genuinely empty answer', async () => {
+    let release!: (v: unknown) => void;
+    const held = new Promise((r) => { release = r; });
+    fetchMock.mockImplementation((url: any) => {
+      const u = String(url);
+      // Held open: the component stays in `wizMappingsLoading`.
+      if (/\/api\/adx\/ingestion-mappings/.test(u)) return held;
+      if (/\/api\/adx\/tables/.test(u)) return Promise.resolve(okRes({ ok: true, tables: [{ name: 'T1' }] }));
+      if (/\/api\/items\/kql-database\//.test(u)) return Promise.resolve(okRes(DB));
+      return Promise.resolve(okRes({ ok: true }));
+    });
+    await openGetData();
+
+    const box = await screen.findByLabelText('Ingestion mapping name');
+    expect(box.tagName).toBe('INPUT');
+    expect(
+      (box as HTMLInputElement).disabled,
+      'a name typed while the list is still loading is silently discarded when it arrives',
+    ).toBe(true);
+    // The operator is told WHY it is briefly unavailable — not left guessing.
+    expect(await screen.findByText(/Reading the database’s ingestion mappings/i)).toBeInTheDocument();
+
+    // An answer of "none" is a real absence, and typing is then the only path
+    // forward — auto-bind-by-default.md forbids leaving it a dead end.
+    release(okRes({ ok: true, mappings: [] }));
+    await waitFor(() =>
+      expect((screen.getByLabelText('Ingestion mapping name') as HTMLInputElement).disabled).toBe(false),
+    );
+  });
 });
 
 /**

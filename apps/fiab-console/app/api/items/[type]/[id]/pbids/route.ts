@@ -45,6 +45,25 @@ import { withSession } from '@/lib/api/route-toolkit';
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
+/**
+ * #3941 review - A ROUTE CEILING ABOVE THE GROUP WALK.
+ *
+ * This route's authorization moved from an owner-only point read to
+ * `authorizeItemWorkspace`. The owner fast path short-circuits, so a caller who
+ * created the workspace pays nothing new - but the population this migration
+ * newly ADMITS (non-owner ACL members and tenant admins) is exactly the one
+ * that falls through to `resolveEffectiveRole`, which walks group assignments
+ * SEQUENTIALLY with no walk-wide ceiling (#3834). 71 other console routes
+ * declare a bound; not one of these ten did, so the widening landed on the
+ * routes with no ceiling at all.
+ *
+ * WHAT THIS DOES AND DOES NOT ESTABLISH (deploy-integrity.md R7): it bounds the
+ * REQUEST. It does NOT bound the walk - #3834 is still open, and a slow walk
+ * still consumes the whole budget before the request is cut off. This turns an
+ * unbounded hang into a bounded failure; it is not a fix for #3834.
+ */
+export const maxDuration = 60;
+
 /** Item types this route can emit a .pbids for, mapped to a PBIDS kind. */
 const SUPPORTED: Record<string, PbidsItemKind> = {
   lakehouse: 'lakehouse',
@@ -73,7 +92,13 @@ async function loadItem(
   itemId: string,
   type: string,
   session: SessionPayload,
-  allowReadRoles: boolean,
+  // #3941 review - NAMED, not a bare positional boolean. This argument
+  // selects the AUTHORIZATION scope: `true` admits read-only workspace
+  // roles, `false` restricts to the write-capable ones. As a positional
+  // `boolean` a transposed argument would silently widen a mutation with no
+  // compiler complaint, and every call site read `..., session, { allowReadRoles: false })` with
+  // nothing on screen saying which way `false` pointed.
+  { allowReadRoles }: { allowReadRoles: boolean },
 ): Promise<{ item: WorkspaceItem | null; denied: NextResponse | null }> {
   const items = await itemsContainer();
   const { resources } = await items.items
@@ -216,7 +241,7 @@ export const GET = withSession<{ type: string; id: string }>(async (req: NextReq
 
   let item: WorkspaceItem | null;
   try {
-    const loaded = await loadItem(id, type, session, true);
+    const loaded = await loadItem(id, type, session, { allowReadRoles: true });
     if (loaded.denied) return loaded.denied;
     item = loaded.item;
   } catch (e: any) {

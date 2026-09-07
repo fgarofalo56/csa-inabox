@@ -33,7 +33,7 @@ import {
   CheckmarkCircle20Regular, DataUsage24Regular,
 } from '@fluentui/react-icons';
 import NextLink from 'next/link';
-import { clientFetch } from '@/lib/client-fetch';
+import { clientFetch, describeNonJsonResponse } from '@/lib/client-fetch';
 import { EmptyState } from '@/lib/components/empty-state';
 import { LoomChart } from '@/lib/components/charts/loom-chart';
 
@@ -376,6 +376,67 @@ interface ScopeOption { id: string; label: string }
 const TYPE_ID_SENTINEL = '__loom_enter_id__';
 const TYPE_ID_SENTINEL_LABEL = 'Enter an id…';
 
+/**
+ * What a scope-population read ACTUALLY established (deploy-integrity.md R7).
+ *
+ * The three states are NOT interchangeable and the picker's copy differs for
+ * each, because "there are none" and "I could not find out" are different
+ * sentences:
+ *
+ *   `unread`     — the population was never established. An empty `options` here
+ *                  means NOTHING about the tenant. Claiming absence over it is
+ *                  the R7 violation this type exists to make unrepresentable.
+ *   `incomplete` — the read succeeded but the route itself says the list is not
+ *                  the whole truth (`degraded`, `legacyUnstampedExcluded`,
+ *                  `legacyCountUnavailable`). Options are real; absence is not
+ *                  claimable and a short list must not read as complete.
+ *   neither      — the read succeeded and is authoritative. An empty `options`
+ *                  is a genuine, claimable absence.
+ */
+interface ScopeSource {
+  options: ScopeOption[];
+  unread?: string;
+  incomplete?: string;
+}
+
+const EMPTY_SOURCE: ScopeSource = { options: [] };
+
+/**
+ * Read a BFF response ONCE and classify it, without ever letting a failure
+ * decay into an empty list.
+ *
+ * `clientFetch` resolves on a non-2xx (it is a thin `fetch` wrapper — only a
+ * timeout/abort rejects), so `!r.ok` is invisible to react-query's `isError`.
+ * This is the exact narrow bypass the header of
+ * `__tests__/l5a-confident-state-honesty.test.tsx` documents for #3739: a
+ * failure test written against `q.isError` passes while the surface still
+ * renders a confident empty state. So the verdict is carried in the RESOLVED
+ * value, where the failure actually is.
+ *
+ * `reason` is preferred over `error` when present: `/api/admin/workspaces`
+ * answers a non-admin with `error:'forbidden'` (which tells the operator
+ * nothing) plus a `reason` carrying the actual remediation. A body that is not
+ * JSON is never echoed — `describeNonJsonResponse` states only what the status
+ * establishes.
+ */
+async function readScopeResponse(
+  r: Response,
+  service: string,
+): Promise<{ body: Record<string, unknown> } | { failure: string }> {
+  let raw = '';
+  try { raw = await r.text(); } catch { /* body unreadable — treated as non-JSON */ }
+  let parsed: unknown;
+  try { parsed = raw ? JSON.parse(raw) : undefined; } catch { parsed = undefined; }
+  const o = (parsed && typeof parsed === 'object') ? parsed as Record<string, unknown> : null;
+  if (!r.ok || o?.ok === false) {
+    const reason = [o?.reason, o?.error, o?.message]
+      .find((v) => typeof v === 'string' && v.trim()) as string | undefined;
+    return { failure: reason ? `${reason} (HTTP ${r.status})` : describeNonJsonResponse(r.status, service) };
+  }
+  if (!o) return { failure: describeNonJsonResponse(r.status, service) };
+  return { body: o };
+}
+
 function BudgetDialog({
   row, knownAgents, onClose, onDone, onError,
 }: { row: DashboardRow | null; knownAgents: ScopeOption[]; onClose: () => void; onDone: (msg: string) => void; onError: (msg: string) => void }) {
@@ -397,19 +458,33 @@ function BudgetDialog({
    *
    * The route is the ADMIN inventory, not `/api/workspaces`. This dialog only
    * ever renders behind `requireTenantAdmin` (admin → Copilot quality), and
-   * `/api/workspaces` answers `listAccessibleWorkspaces()` — the workspaces the
-   * SIGNED-IN ADMIN belongs to, which without `LOOM_MULTIUSER_ACL` is the ones
-   * they own (lib/auth/workspace-access.ts). A tenant admin budgeting someone
-   * else's workspace found it simply absent from the list, with the "no
-   * workspace is available" copy over a tenant that has plenty.
+   * `/api/workspaces` answers `listAccessibleWorkspaces()`, which returns the
+   * caller's OWN workspaces (partition-keyed on their oid) plus the ones they
+   * hold a direct, non-group workspace-role assignment on — and nothing else.
+   *
+   * CORRECTED (review): an earlier draft of this note blamed `LOOM_MULTIUSER_ACL`
+   * being unset. That was the wrong reason — `multiUserAclEnabled()` DEFAULTS TO
+   * `'on'` (lib/auth/workspace-access.ts:100). The flag is not the cause, and
+   * turning it on does not fix this: `listAccessibleWorkspaces` has no
+   * tenant-admin branch at ANY flag setting. So a tenant admin budgeting a
+   * workspace they neither own nor are assigned to found it simply absent from
+   * the list, with "no workspace is available" over a tenant that has plenty.
    */
   const wsQ = useQuery({
     queryKey: ['budget-scope-workspaces'],
-    queryFn: async (): Promise<ScopeOption[]> => {
+    queryFn: async (): Promise<ScopeSource> => {
       const r = await clientFetch('/api/admin/workspaces');
-      const d: unknown = await r.json();
+      const read = await readScopeResponse(r, 'The tenant workspace inventory');
+      // R7 — a 403/500/non-JSON is NOT "no workspace is available". The route's
+      // failure is first-class and by design: a non-admin gets a structured 403
+      // (`code:'admin_only'`, `gateId:'bootstrap-admin'`) whose `reason` names
+      // the remediation, and which the FIRST cut of this query discarded into an
+      // empty array. Report it as unread; the picker will say so instead of
+      // asserting an absence over a tenant it never looked at.
+      if ('failure' in read) return { options: [], unread: read.failure };
+      const d = read.body;
       const raw = Array.isArray(d) ? d : ((d as { workspaces?: unknown[] })?.workspaces || []);
-      return (raw as Record<string, string>[])
+      const options = (raw as Record<string, string>[])
         // `/api/admin/workspaces` returns `{ workspaces: WorkspaceAdminRecord[] }`,
         // whose display field is `name` (lib/clients/workspaces-client.ts) — so
         // `w.name` is the operand that actually runs here, and `w.id` is the
@@ -419,6 +494,25 @@ function BudgetDialog({
         // with every assertion green.
         .map((w) => ({ id: w.id, label: w.displayName || w.name || w.id }))
         .filter((w) => !!w.id);
+      // The route emits these three fields precisely so a SHORT list is not
+      // presented as the truth (#3826, rel-T108, #4316). Discarding them and
+      // rendering the remainder as the tenant inventory is the same R7 error in
+      // a quieter form, so each one is carried through in the route's own words.
+      const caveats: string[] = [];
+      if (d.degraded) {
+        const why = Array.isArray(d.degradedReasons) ? d.degradedReasons.filter((x) => typeof x === 'string').join('; ') : '';
+        caveats.push(`Enrichment fell back to defaults${why ? `: ${why}` : ''}.`);
+      }
+      if (typeof d.legacyUnstampedExcluded === 'number' && d.legacyUnstampedExcluded > 0) {
+        caveats.push(`${d.legacyUnstampedExcluded} legacy workspace(s) are excluded from this list.`);
+      }
+      if (d.legacyCountUnavailable) {
+        caveats.push('The number of excluded legacy workspaces could not be read, so it is unknown — not zero.');
+      }
+      if (caveats.length && typeof d.legacyRemediation === 'string' && d.legacyRemediation.trim()) {
+        caveats.push(d.legacyRemediation.trim());
+      }
+      return { options, ...(caveats.length ? { incomplete: caveats.join(' ') } : {}) };
     },
     // Editing an existing budget cannot change its scope id, so do not spend a
     // round-trip resolving a list the dialog will render disabled.
@@ -441,12 +535,36 @@ function BudgetDialog({
    */
   const agentQ = useQuery({
     queryKey: ['budget-scope-agents'],
-    queryFn: async (): Promise<ScopeOption[]> => {
+    queryFn: async (): Promise<ScopeSource> => {
       const r = await clientFetch('/api/admin/agent-quality');
-      const d = (await r.json()) as { agents?: { list?: Array<{ name?: string; description?: string }> } };
-      return (d?.agents?.list || [])
+      const read = await readScopeResponse(r, 'The Foundry agent registry');
+      if ('failure' in read) return { options: [], unread: read.failure };
+      const agents = (read.body as { agents?: { configured?: boolean; list?: Array<{ name?: string }>; gate?: { code?: string; error?: string; hint?: string; missing?: string } } }).agents;
+      // R7 — the route reports an UNREADABLE registry as HTTP 200 with
+      // `agents.gate` set and `list: []` (app/api/admin/agent-quality/route.ts).
+      // `!r.ok` never fires and react-query's `isError` stays false, so reading
+      // only `agents.list` converts "Foundry answered 403" and "Foundry is not
+      // configured" alike into "no agent is registered". Both are reported as
+      // unread; only `configured` with no gate can claim absence.
+      const gate = agents?.gate;
+      if (gate?.code) {
+        const detail = String(gate.error || '').trim();
+        const unread = gate.code === 'not_configured'
+          // Not an outage: Foundry simply is not wired in this deployment. Still
+          // not absence — there is no registry to have been empty. The route
+          // names the env var, so the copy can too.
+          ? `Foundry is not configured in this deployment${gate.missing ? ` (${gate.missing} is unset)` : ''}, so its agent registry was not read.${gate.hint ? ` ${gate.hint}` : ''}`
+          : `The Foundry agent registry could not be read${detail ? `: ${detail}` : '.'}`;
+        return { options: [], unread };
+      }
+      const options = (agents?.list || [])
         .map((a) => ({ id: String(a?.name || '').trim(), label: String(a?.name || '').trim() }))
         .filter((a) => !!a.id);
+      // `configured: false` with no gate is a shape the route does not emit
+      // today. Rather than assume which side of the line it falls on, say so.
+      return agents?.configured === false
+        ? { options, unread: 'The Foundry agent registry reported itself unconfigured without saying why, so it was not read.' }
+        : { options };
     },
     enabled: !row && scope === 'agent',
   });
@@ -456,21 +574,45 @@ function BudgetDialog({
     // id keeps a registry row from shadowing it.
     const byId = new Map<string, ScopeOption>();
     for (const a of knownAgents) if (a.id) byId.set(a.id, a);
-    for (const a of agentQ.data ?? []) if (!byId.has(a.id)) byId.set(a.id, a);
+    for (const a of agentQ.data?.options ?? []) if (!byId.has(a.id)) byId.set(a.id, a);
     return [...byId.values()];
   }, [knownAgents, agentQ.data]);
 
-  const options: ScopeOption[] = scope === 'workspace' ? (wsQ.data ?? []) : agentOptions;
+  const source: ScopeSource = scope === 'workspace' ? (wsQ.data ?? EMPTY_SOURCE) : (agentQ.data ?? EMPTY_SOURCE);
+  const options: ScopeOption[] = scope === 'workspace' ? source.options : agentOptions;
   const optionsLoading = scope === 'workspace' ? wsQ.isLoading : agentQ.isLoading;
-  const optionsError = scope === 'workspace'
-    ? (wsQ.isError ? ((wsQ.error as Error)?.message || 'Could not list workspaces.') : null)
-    // An unreadable Foundry registry is only a WARNING here: the ledger half of
-    // the union may still have populated. Say which half failed rather than
-    // implying the whole list is empty.
-    : (agentQ.isError ? ((agentQ.error as Error)?.message || 'Could not list Foundry agents.') : null);
+  /**
+   * TWO sources, and the RESOLVED one is primary — the narrow bypass (#3739).
+   *
+   * `clientFetch` RESOLVES on a non-2xx, and `/api/admin/agent-quality` reports
+   * an unreadable registry as a 200 with `agents.gate.code:'error'`. In both of
+   * those — the two shapes that actually occur in production — react-query's
+   * `isError` is FALSE. So `source.unread`, computed from the resolved body, is
+   * the primary verdict; keying this on `isError` alone was the defect, and it
+   * left the "could not be read" copy below permanently unreachable.
+   *
+   * `isError` is still read, second, because it is the ONLY signal for what
+   * genuinely rejects: a `clientFetch` timeout/abort never produces a body to
+   * classify. Each query is named EXPLICITLY rather than through a
+   * `scope === 'workspace' ? wsQ : agentQ` alias — an alias hides the reference
+   * from `scripts/ci/check-editor-read-failure-honesty.mjs` rule 2, which
+   * greps for `<queryVar>.isError`. That guard went red on the alias during
+   * this fix, correctly: a reader auditing "does wsQ have an error branch?"
+   * could not answer it either.
+   */
+  const rejected = (qq: { isError: boolean; error: unknown }, what: string): string | null =>
+    (qq.isError ? ((qq.error as Error)?.message || `Could not list ${what}.`) : null);
+  const optionsUnread: string | null = scope === 'workspace'
+    ? (source.unread ?? rejected({ isError: wsQ.isError, error: wsQ.error }, 'workspaces'))
+    : (source.unread ?? rejected({ isError: agentQ.isError, error: agentQ.error }, 'Foundry agents'));
+  // Distinct from `unread`: the read WORKED and returned real options, but the
+  // route says the list is not the whole inventory. Never suppresses options,
+  // never claims absence — it only stops a short list from reading as complete.
+  const optionsIncomplete: string | null = source.incomplete ?? null;
   // The honest fallback, exactly as EntraGroupPicker documents it: a picker that
   // cannot populate must not become a dead end (auto-bind-by-default forbids
-  // "no items found" + a disabled control).
+  // "no items found" + a disabled control). Reached by BOTH a genuine absence
+  // and an unread population — what differs is the sentence, below.
   const mustTypeId = !row && !optionsLoading && options.length === 0;
   // ...and a NON-empty list is not proof the id is in it. Neither half of the
   // agent union is authoritative, and the workspace inventory can come back
@@ -479,6 +621,43 @@ function BudgetDialog({
   const [typingId, setTypingId] = useState(false);
   const typeIdShown = mustTypeId || typingId;
   const selectedLabel = options.find((o) => o.id === scopeId)?.label ?? scopeId;
+
+  const TYPE_IT = `Enter the ${scope} id directly — it must match the id the attribution ledger records, exactly.`;
+  /**
+   * FOUR states, and the difference between two of them is the whole point.
+   *
+   * An empty list reached by a FAILED read and an empty list reached by a
+   * SUCCESSFUL read look identical to the renderer and mean opposite things.
+   * "No agent is registered in Foundry or attributed any spend yet" is a
+   * statement of fact about the tenant; over a 403 from the Foundry project, or
+   * over a 403 from `/api/admin/workspaces`, it is a fabrication
+   * (deploy-integrity.md R7). So the absence sentence is reachable ONLY when
+   * `optionsUnread` is null — i.e. only when a read actually established it.
+   */
+  const scopeHint = mustTypeId
+    ? (optionsUnread
+      ? `${optionsUnread} ${TYPE_IT}`
+      // `incomplete` over an EMPTY list is still not absence: the route said the
+      // inventory it returned is partial, and a partial view of nothing is not
+      // "there is nothing". Report the caveat instead of the claim.
+      : optionsIncomplete
+        ? `This list came back empty and the inventory reported itself incomplete, so no ${scope} could be established. ${optionsIncomplete} ${TYPE_IT}`
+        : `No ${scope === 'workspace' ? 'workspace is available' : 'agent is registered in Foundry or attributed any spend yet'}. ${TYPE_IT}`)
+    : typingId
+      ? TYPE_IT
+      : [
+        scope === 'agent'
+          // R7: name what the list IS. It is the union of the spend ledger and
+          // the Foundry registry, and neither establishes the ledger's agent id
+          // for an agent that has not spent yet — hence the escape hatch below.
+          ? `Agents with attributed spend plus the agents registered in Foundry. Enforcement joins on the exact id the ledger records; pick “${TYPE_ID_SENTINEL_LABEL}” if the agent is known by another id.`
+          : 'Enforcement joins on this exact id, so it is picked, never typed.',
+        // A list that IS populated can still be partial — the other half of the
+        // agent union failed, or the workspace route flagged itself degraded.
+        // Say so on the list, not only on the empty state.
+        optionsUnread ? `(${optionsUnread})` : '',
+        optionsIncomplete ? `(This list may be incomplete. ${optionsIncomplete})` : '',
+      ].filter(Boolean).join(' ');
 
   const save = useMutation({
     mutationFn: async () => {
@@ -516,22 +695,8 @@ function BudgetDialog({
               </Field>
               <Field
                 label={scope === 'workspace' ? 'Workspace' : 'Agent'}
-                hint={
-                  mustTypeId
-                    ? (optionsError
-                      ? `${optionsError} Enter the ${scope} id directly — it must match the id the attribution ledger records, exactly.`
-                      : `No ${scope === 'workspace' ? 'workspace is available' : 'agent is registered in Foundry or attributed any spend yet'}. Enter the id directly — it must match the id the attribution ledger records, exactly.`)
-                    : typingId
-                      ? `Enter the ${scope} id directly — it must match the id the attribution ledger records, exactly.`
-                      : scope === 'agent'
-                        // R7: name what the list IS. It is the union of the
-                        // spend ledger and the Foundry registry, and neither
-                        // establishes the ledger's agent id for an agent that
-                        // has not spent yet — hence the escape hatch below.
-                        ? `Agents with attributed spend plus the agents registered in Foundry. Enforcement joins on the exact id the ledger records; pick “${TYPE_ID_SENTINEL_LABEL}” if the agent is known by another id.${optionsError ? ` (The Foundry registry could not be read: ${optionsError})` : ''}`
-                        : 'Enforcement joins on this exact id, so it is picked, never typed.'
-                }
-                validationState={optionsError ? 'warning' : 'none'}
+                hint={scopeHint}
+                validationState={optionsUnread || optionsIncomplete ? 'warning' : 'none'}
               >
                 {typeIdShown || row ? (
                   <Input value={scopeId} disabled={!!row} onChange={(_, d) => setScopeId(d.value)} />

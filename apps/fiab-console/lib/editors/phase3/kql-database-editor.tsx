@@ -2019,6 +2019,17 @@ export function KqlDatabaseEditor({ item, id }: { item: FabricItemType; id: stri
                               onChange={(_: unknown, d: any) => setWizIngestMapping(d.value)}
                               aria-label="Ingestion mapping name"
                               placeholder="EventMapping"
+                              // Review nit (#4357): while the read is still in flight
+                              // the options array is empty, so THIS fallback renders
+                              // even though a picker is about to replace it. Left
+                              // enabled, anything typed here was erased the moment the
+                              // list resolved non-empty — the reset effect above fires
+                              // on a value it cannot tell apart from a stale pick.
+                              // Closing that window is what makes the effect's own
+                              // comment ("a value typed into the empty-list fallback is
+                              // the user's, not ours") true. The caption below already
+                              // says the read is running, so this is not a dead end.
+                              disabled={wizMappingsLoading}
                             />
                             <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
                               {wizMappingsLoading
@@ -2130,6 +2141,12 @@ export function KqlDatabaseEditor({ item, id }: { item: FabricItemType; id: stri
                               onChange={(_: unknown, d: any) => setWizDcMappingRule(d.value)}
                               aria-label="Ingestion mapping name"
                               placeholder="myMapping"
+                              // Same in-flight window as the Get-data box above: an
+                              // empty options array DURING the fetch is not evidence
+                              // the database has no mapping, and a value typed into it
+                              // was dropped when the list arrived. The Field hint
+                              // already says the read is running.
+                              disabled={wizMappingsLoading}
                             />
                           )}
                         </Field>
