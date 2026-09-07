@@ -168,6 +168,43 @@ interface Call {
 }
 
 /**
+ * Does this call site GRANT read roles?
+ *
+ * NOT a bare `/allowReadRoles/` substring test — that was the defect this
+ * function replaces (#4357 round 2, found by CI, not by review). A call site
+ * that writes `{ allowReadRoles: false }` MENTIONS the flag while explicitly
+ * REFUSING it, and the substring form counted that as a grant. Ten write-scoped
+ * mutations across `items/[type]/[id]/**` went red for being MORE explicit than
+ * the ones that simply omit the key. A guard that punishes the auditable
+ * spelling teaches people to write the unauditable one, which is the opposite
+ * of what this file is for.
+ *
+ * So: read the VALUE, and FAIL CLOSED on anything that is not a literal `false`.
+ *
+ *   absent                                → false, no grant
+ *   `allowReadRoles: false`               → false, explicitly refused
+ *   `allowReadRoles: true`                → TRUE
+ *   `allowReadRoles: someVar` / `o.flag`  → TRUE — statically unknowable, assume the worst
+ *   `{ allowReadRoles }` shorthand        → TRUE — a forwarded value, same reason
+ *   `...(opts?.allowReadRoles ? … : …)`   → TRUE — the GHSA-hf73-rp4q-66pf helper idiom
+ *
+ * The only behaviour that changed versus the substring test is the literal
+ * `false` case, which is provably write-scoped. Every other shape stays a grant,
+ * so this is strictly no weaker — pinned by the two specs below that mutate a
+ * mutating handler to `true` and to a variable and require both to go red.
+ */
+function grantsReadRoles(args: string): boolean {
+  if (!/allowReadRoles/.test(args)) return false;
+  const values = Array.from(
+    args.matchAll(/allowReadRoles\s*:\s*([A-Za-z0-9_$.?![\]]+)/g),
+    (m) => m[1],
+  );
+  // A mention with no resolvable `key: value` — shorthand, or the conditional
+  // spread — is a forwarded value this static scan cannot evaluate. Grant.
+  if (values.length === 0) return true;
+  return values.some((v) => v !== 'false');
+}
+/**
  * Split a route file into exported-handler regions and collect every
  * authorize*Workspace call with whether it passes `allowReadRoles`.
  *
@@ -194,7 +231,8 @@ interface Call {
  * `allowReadRoles` is read from the HELPER CALL SITE, not the helper body. The
  * body necessarily mentions the flag (it forwards it conditionally), so reading
  * it there would mark every caller read-scoped — including the mutations, which
- * is precisely backwards. The call site is where the decision is actually made.
+ * is precisely backwards. The call site is where the decision is actually made,
+ * and `grantsReadRoles` above decides what that site actually says.
  */
 function callsIn(abs: string): Call[] {
   const rel = path.relative(path.resolve(API_ROOT, '..', '..'), abs).replace(/\\/g, '/');
@@ -242,7 +280,7 @@ function callsIn(abs: string): Call[] {
           }
         }
         const args = region.slice(at, j + 1);
-        out.push({ file: rel, verb: b.verb, fn, allowReadRoles: /allowReadRoles/.test(args) });
+        out.push({ file: rel, verb: b.verb, fn, allowReadRoles: grantsReadRoles(args) });
         at = region.indexOf(`${token}(`, j);
       }
     };
@@ -359,5 +397,53 @@ describe('#2947 read-only roles are never admitted to a mutation', () => {
       (c) => c.verb === 'GET' && c.allowReadRoles && !MUTATING_GETS.includes(c.file),
     );
     expect(readScoped.length).toBeGreaterThan(25);
+  });
+});
+
+/**
+ * The scanner's own discriminator, asserted directly.
+ *
+ * The suites above measure the REPO. They would all stay green if
+ * `grantsReadRoles` were quietly relaxed to `() => false`, because a scanner
+ * that grants nothing reports no violations — the classic hollow control. These
+ * assert the function itself, so the relaxation that fixed the false positive
+ * cannot be widened into a real hole without a test going red.
+ */
+describe('grantsReadRoles — the value is read, and everything unresolvable FAILS CLOSED', () => {
+  it('a literal false is NOT a grant — the false positive this replaced', () => {
+    expect(grantsReadRoles('loadItem(id, type, session, { allowReadRoles: false })')).toBe(false);
+    expect(grantsReadRoles('authorizeItemWorkspace(s, { workspaceId, allowReadRoles : false })')).toBe(false);
+  });
+
+  it('a literal true IS a grant', () => {
+    expect(grantsReadRoles('authorizeItemWorkspace(s, { workspaceId, allowReadRoles: true })')).toBe(true);
+  });
+
+  it('no mention at all is not a grant', () => {
+    expect(grantsReadRoles('authorizeItemWorkspace(s, { workspaceId, itemId })')).toBe(false);
+  });
+
+  it('FAILS CLOSED on every shape it cannot evaluate', () => {
+    // A forwarded variable — the value lives at another call site.
+    expect(grantsReadRoles('guard(s, { allowReadRoles: allowReadRoles })')).toBe(true);
+    expect(grantsReadRoles('guard(s, { allowReadRoles: opts.allowReadRoles })')).toBe(true);
+    expect(grantsReadRoles('guard(s, { allowReadRoles: opts?.readOk })')).toBe(true);
+    // ES shorthand.
+    expect(grantsReadRoles('guard(s, { workspaceId, allowReadRoles })')).toBe(true);
+    // The GHSA-hf73-rp4q-66pf conditional-spread helper idiom.
+    expect(grantsReadRoles('guard(s, { ...(opts?.allowReadRoles ? { allowReadRoles: true } : {}) })')).toBe(true);
+  });
+
+  it('ANY grant in a multi-flag call site wins', () => {
+    // A call passing two option objects must not be excused by the false one.
+    expect(
+      grantsReadRoles('guard(s, { allowReadRoles: false }, { allowReadRoles: true })'),
+    ).toBe(true);
+  });
+
+  it('POSITIVE CONTROL — the real repo scan still finds grants, so the fix did not empty it', () => {
+    // If `grantsReadRoles` regressed to always-false, every suite above would go
+    // green over a scanner watching nothing. This is the population check.
+    expect(ALL_CALLS.filter((c) => c.allowReadRoles).length).toBeGreaterThan(25);
   });
 });
