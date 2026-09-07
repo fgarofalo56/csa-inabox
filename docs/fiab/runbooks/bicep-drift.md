@@ -78,13 +78,81 @@ The filter is deliberately hard to abuse:
 3. Entries may carry `whenBeforeKeysSubsetOf` so that suppressing a whole
    `properties` object cannot hide a future settable property (this is how the
    UAMI entry is scoped to `isolationScope` + the read-only ids).
-4. Every suppression is printed — step summary, `suppressed-list.txt` in the
+4. A rule `path` may carry `*` for an ARM **array index** — and only that. `*`
+   expands to `\d+`, so it matches `properties.logs.0.retentionPolicy.days`
+   through `properties.logs.11.…` (and the bracket form, `subnets[3].type`) but
+   **never** a property name. `properties.*` cannot be used to blanket a
+   resource type. `whatif-drift-verdict.test.mjs` pins that narrowness — the
+   `NARROWNESS` case asserts `properties.logs.AuditEvent.retentionPolicy.days`
+   stays real drift.
+5. Every suppression is printed — step summary, `suppressed-list.txt` in the
    artifact, and a collapsed section on the dedup issue.
 
 **Adding an entry requires a reason grounded in the resource's ARM schema
 (read-only, server-defaulted, or service-managed).** If a property is settable
 and you want a specific value, encode it in bicep — do not allowlist it. When
 bicep starts pinning a property, DELETE its allowlist entry in the same PR.
+
+<a id="census"></a>
+### The 2026-09-07 census of run 33406666389 (#3191)
+
+The Commercial lane had been reporting a rising real-delta count — 124 (08-12),
+126 (08-17), **128** (08-31) — with no per-property analysis behind it. The
+number alone was not actionable, and the drift-list display made it worse (see
+below), so the raw `whatif.json` from run 33406666389 was censused property by
+property rather than read off the truncated summary.
+
+Those 128 resources carried **357 unmatched property deltas.** The largest
+families were all one shape — an RP-applied default repeated once per array
+element or once per resource — and each was confirmed against its recorded
+`before` value, not assumed:
+
+| Deltas | Resource type | Path | Measured `before` |
+|---|---|---|---|
+| 27 | `privateDnsZones/virtualNetworkLinks` | `properties.resolutionPolicy` | `"Default"` |
+| 33 | `Insights/diagnosticSettings` | `properties.{logs,metrics}.*.retentionPolicy.days` | `0` |
+| 50 | `DocumentDB/…/containers` | `indexingPolicy.{included,excluded}Paths`, `backupPolicy`, `conflictResolutionPolicy.conflictResolutionPath` | `[{path:"/*"}]`, `[{path:"/\"_etag\"/?"}]`, `{type:1}`, `"/_ts"` |
+| 40 | `privateEndpoints/privateDnsZoneGroups` | `privateDnsZoneConfigs.*.{id,etag,type,properties.provisioningState}` | read-only ARM metadata |
+| 8 | `Network/privateEndpoints` | `properties.isIPv6EnabledPrivateEndpoint` | `false` |
+| 4 | `ApiManagement/service` | `customProperties.…Security.[Backend.]Protocols.{Ssl30,Tls10,Tls11}` | `"False"` (the secure default) |
+
+Allowlisting those took the verdict from **128 → 67 real resources** (11 → 72
+suppressed). The Cosmos and diagnosticSettings families are the reason the
+index wildcard had to exist: enumerating each index would have silently stopped
+matching the day the estate grew one more container or log category.
+
+**The display bug this exposed is worth more than the count.** `drift-list.txt`
+shows at most six property paths per resource. On the APIM service those six
+slots were entirely consumed by the four allowlistable `customProperties`
+deltas, so the line read as four TLS toggles and two portal-status changes —
+while `natGatewayState`, `publicNetworkAccess` and `releaseChannel`, all real,
+were pushed off the end and had never been visible on any drift issue. Filtering
+the noise at the source is what makes the residual list trustworthy; the count
+is secondary. Regression-pinned by the `residual list stops hiding real deltas`
+case in `whatif-drift-verdict.test.mjs`.
+
+**What the remaining 67 are — and are NOT.** They are *not* uniformly real
+drift, and this runbook does not claim they are:
+
+- **28 resources carry at least one never-suppressible delta** (a `Create` or
+  `Modify` on a property, or a whole-resource `Create`). These are genuine
+  template-vs-live conflicts: AAS `asAdministrators`, the APIM policy bodies and
+  `products/apis`, ACR `networkRuleSet.defaultAction`, KV `createMode`, the
+  `managedEnvironments` block, 6 subnets' `privateEndpointNetworkPolicies`, a
+  `virtualNetworkGateways` Create. Triage each per
+  [Triage a drift finding](#triage-a-drift-finding); they need a reconciling
+  change across many bicep modules, which is deliberately NOT bundled with the
+  verdict-script change.
+- **39 resources have a Delete-only residue** — further noise *candidates*
+  (read-only properties on ML workspaces, NICs, bastion, `searchServices.endpoint`,
+  `CognitiveServices/…/deployments.currentCapacity`). They are left in the
+  verdict because no one has yet checked each against its ARM schema. **A
+  candidate is not a finding**: do not allowlist them in bulk to make the number
+  go down — that is exactly how a drift lane becomes a guard that cannot go red.
+- One family in the residue is definitely real and must not be mistaken for the
+  retention noise: `Delete:properties.logs.N` on 19 diagnosticSettings is a whole
+  log *category* the template does not declare. Rule 2 keeps those resources in
+  the verdict even though their retention leaves are now suppressed.
 
 <a id="coverage"></a>
 ### Coverage — what-if does not see the whole estate

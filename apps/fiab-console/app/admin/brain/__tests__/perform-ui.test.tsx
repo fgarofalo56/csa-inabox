@@ -1228,23 +1228,35 @@ describe('the gate-shaped bars route to the registry, with one deliberate except
     expect(bar.textContent).not.toContain('Not configured in this deployment');
   });
 
-  it('the ownership bar explains the SEQUENCE and offers no way to stamp the tag', async () => {
+  it('the ownership bar explains why the tag is not this console\'s to stamp, and offers no control', async () => {
     // The one gate on this surface that deliberately has NO Fix-it. Its shipped
     // copy — "Stamp the estate ownership tag in the deploy and this becomes
-    // available" — coached the operator toward removing the only thing that
-    // currently stands between this control and an unrecoverable scale-to-zero
-    // on a stateful singleton, with nothing saying so. A one-click version of
-    // that, while #4261's statefulness guard is unmerged, is worse than the
-    // paragraph.
+    // available" — coached the operator toward a one-gesture ownership claim
+    // from a list ranked by cost saving, with nothing saying so.
+    //
+    // RE-KEYED with #4283. This spec's justification used to expire on "#4261
+    // merges", and #4261 HAS merged (5454ae7f46) — as have #4295 (the second
+    // scaling door) and, in the same PR as this re-keying, #4293 (the guard's
+    // last unestablished-shape path). A developer who read the old assertion
+    // message, checked 4261 and found it green would have concluded the spec
+    // had lapsed. It has not: the reason is now the durable one, that
+    // `loom-estate-id` is stamped by the DEPLOY (#4274) and backfilled from the
+    // manifest (#4267), so per `auto-bind-by-default.md` the platform already
+    // performs it and there is nothing here for a Fix-it to fix.
     renderList({ findings: [finding({ ownershipConfirmed: false })], state: ready() });
     const bar = await screen.findByTestId('perform-withheld-ownership');
-    expect(bar.textContent).toContain('#4261');
-    expect(bar.textContent).toContain('last check');
+    expect(bar.textContent).toContain('#4274');
+    expect(bar.textContent).toContain('#4267');
+    expect(bar.textContent).toContain('not this console');
     expect(bar.textContent).toContain('Nothing here offers to stamp it for you');
+    // The stale precondition must be GONE, in both directions: the copy may
+    // still cite #4261, but never as something still to come.
+    expect(bar.textContent).not.toMatch(/until #4261/i);
+    expect(bar.textContent).not.toMatch(/unmerged/i);
     // No control of ANY kind inside this bar — not a button, not a link.
     expect(
       bar.querySelectorAll('button, a[href], [role="button"], [role="link"]').length,
-      'the ownership bar must carry no actionable control until #4261 merges',
+      'ownership is a deploy-stamped data condition, not a config gate: this bar carries no control',
     ).toBe(0);
   });
 
@@ -1255,6 +1267,123 @@ describe('the gate-shaped bars route to the registry, with one deliberate except
     renderList({ state: { kind: 'unavailable', reason: 'HTTP 503' } });
     const bar = await screen.findByTestId('perform-state-disclosure');
     expect(bar.querySelectorAll('button, a[href]').length).toBeGreaterThan(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// #4283 — G2 ON THE 503, WITHOUT GUESSING WHICH 503 IT IS
+//
+// The route answers 503 for three classes: two configuration gaps and one
+// estate-READ failure (ARG token acquisition, a throttle, a 403, a 500). Until
+// #4283 all three arrived as `{ok:false, error}` and this client could only
+// print the sentence, because rendering "<surface> needs <gate> wired" over a
+// throttle asserts a cause nobody established (R7).
+//
+// The route now DISCRIMINATES and sends the normalized gate envelope for the two
+// configuration classes only. So the rule here is symmetric and both halves are
+// specced: envelope present -> the shared HonestGate with its inline Fix-it;
+// envelope absent -> exactly today's non-guessing bar, no Fix-it.
+// ---------------------------------------------------------------------------
+
+describe('a 503 that NAMES its gate renders the inline Fix-it; one that does not, does not', () => {
+  const COSMOS_GATE = {
+    id: 'cosmos-config',
+    title: 'Cosmos DB (Loom store)',
+    remediation: 'Set LOOM_COSMOS_ENDPOINT (and LOOM_COSMOS_DATABASE).',
+    fixItHref: '/admin/gates?gate=cosmos-config',
+    missing: ['LOOM_COSMOS_ENDPOINT'],
+  } as const;
+
+  it('WITH the envelope: the bar carries an inline Fix-it for the named gate', async () => {
+    await performOnce({
+      kind: 'gate',
+      reason: 'LOOM_COSMOS_ENDPOINT is not set, so recommendation states have nowhere to persist.',
+      gate: { ...COSMOS_GATE, missing: [...COSMOS_GATE.missing] },
+    });
+    const bar = await screen.findByTestId('perform-gate');
+    expect(bar.getAttribute('data-gate-id')).toBe('cosmos-config');
+    // The G2 control itself — the thing that did not exist before #4283.
+    const fixIt = [...bar.querySelectorAll('button')].find((b) =>
+      (b.textContent ?? '').includes('Fix it'),
+    );
+    expect(fixIt, 'a 503 that named its gate must offer the inline Fix-it (G2)').toBeTruthy();
+    // …driven by the SERVER's block, not by anything re-derived here.
+    expect(bar.textContent).toContain('Cosmos DB (Loom store)');
+    expect(bar.textContent).toContain('LOOM_COSMOS_ENDPOINT');
+    // The server's own sentence still travels with it — the envelope adds a
+    // remediation, it does not replace what happened.
+    expect(bar.textContent).toContain('nowhere to persist');
+  });
+
+  it('WITHOUT the envelope: no Fix-it, and the non-guessing copy is unchanged', async () => {
+    await performOnce({
+      kind: 'gate',
+      reason:
+        'could not acquire an ARM token for the console identity; NO query was issued, so ' +
+        'nothing is known about the estate',
+    });
+    const bar = await screen.findByTestId('perform-gate');
+    expect(bar.getAttribute('data-gate-id')).toBeNull();
+    expect(
+      [...bar.querySelectorAll('button')].some((b) => (b.textContent ?? '').includes('Fix it')),
+      'a 503 the server did not classify must NOT be dressed as a configuration gate',
+    ).toBe(false);
+    expect(bar.textContent).toContain('does not guess');
+    expect(bar.textContent).toContain('NO query was issued');
+    expect(bar.textContent).not.toContain('Not configured in this deployment');
+    // The registry link survives: every gate behind this status is still
+    // discoverable there, which is what keeps this branch from being a dead end.
+    expect(screen.getByTestId('perform-gate-registry').getAttribute('href')).toBe('/admin/gates');
+  });
+
+  it('the READ-BACK 503 gets the same treatment, both directions', async () => {
+    renderList({
+      state: {
+        kind: 'unavailable',
+        reason: 'LOOM_COSMOS_ENDPOINT is not set',
+        gate: { ...COSMOS_GATE, missing: [...COSMOS_GATE.missing] },
+      },
+    });
+    const bar = await screen.findByTestId('perform-state-disclosure');
+    expect(bar.getAttribute('data-gate-id')).toBe('cosmos-config');
+    expect(
+      [...bar.querySelectorAll('button')].some((b) => (b.textContent ?? '').includes('Fix it')),
+    ).toBe(true);
+    // Retry stays: resolving the gate does not itself re-run the read.
+    expect(screen.getByTestId('perform-state-retry')).toBeTruthy();
+  });
+
+  it('THE MAPPING: interpretPerformResponse reads the envelope, and only a real one', async () => {
+    // The R7 risk lives in the mapping, so it is specced without a DOM.
+    const withGate = interpretPerformResponse(503, {
+      ok: false,
+      gated: true,
+      error: 'LOOM_COSMOS_ENDPOINT is not set',
+      missing: ['LOOM_COSMOS_ENDPOINT'],
+      gate: { id: 'cosmos-config', title: 'Cosmos DB (Loom store)' },
+    });
+    expect(withGate.kind).toBe('gate');
+    expect((withGate as { gate?: { id: string } }).gate?.id).toBe('cosmos-config');
+
+    // A bare honest 503 — the ARG class — states no gate.
+    const bare = interpretPerformResponse(503, { ok: false, error: 'ARG refused the query' });
+    expect(bare.kind).toBe('gate');
+    expect((bare as { gate?: unknown }).gate).toBeUndefined();
+
+    // HALF-BUILT BLOCKS ARE NOT GATES. A body with `gated:true` and no usable
+    // id must read as "no gate stated", never as a gate with an empty id — that
+    // would deep-link the operator to a registry row that is not there.
+    for (const half of [
+      { ok: false, gated: true, error: 'x' },
+      { ok: false, gated: true, error: 'x', gate: null },
+      { ok: false, gated: true, error: 'x', gate: { id: '  ' } },
+      { ok: false, error: 'x', gate: { id: 'cosmos-config' } }, // no `gated` discriminant
+    ]) {
+      expect(
+        (interpretPerformResponse(503, half) as { gate?: unknown }).gate,
+        `half-built envelope must not read as a gate: ${JSON.stringify(half)}`,
+      ).toBeUndefined();
+    }
   });
 });
 

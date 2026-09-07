@@ -106,6 +106,27 @@ DBX_H="$(q databricks workspace list --subscription "$DLZ_SUB" -g "$DLZ_RG" --qu
 # Adopting the factory here is what makes `main.bicep`'s `adoptedAdfKeyVaultRbac`
 # reachable with the checked-in param files.
 ADF="$(q resource list --subscription "$DLZ_SUB" -g "$DLZ_RG" --resource-type Microsoft.DataFactory/factories --query "[0].name" -o tsv)"
+# Service Bus namespace + Azure Batch account (#3317). Both are read by
+# RESOURCE TYPE, never by a derived name, and that distinction is the whole
+# point of these two entries.
+#
+# WHY THEY WERE MISSING, AND WHAT IT COST (auto-bind-by-default.md §5).
+# main.bicep derived both coordinates from the single-sub naming convention
+# alone — `(useSingleDlz && deployServiceBus) ? 'sbns-loom-default-<region>' : ''`
+# and the matching `take('batchloom<hash>',24)` for Batch. `useSingleDlz` is
+# `deployLandingZones && effectiveTopology == 'single-sub'`, and every shipped
+# params file pins `topology='tenant'` (commercial, commercial-full, gcc,
+# gcc-high, il5), so BOTH expressions evaluate to '' on every boundary Loom
+# ships. LOOM_SERVICEBUS_NAMESPACE and LOOM_BATCH_ACCOUNT therefore rendered
+# empty everywhere and svc-servicebus / svc-batch honest-gated on every cloud.
+#
+# Even on a `single-sub` estate the Service Bus convention would not have
+# matched: deploy-planner/service-bus.bicep names its namespace
+# `sb-loom-<uniqueString(rg.id)>`, not `sbns-loom-default-<region>`. A convention
+# that two modules spell differently cannot be the binding mechanism — which is
+# exactly why these are DISCOVERED, like the lake in #3327.
+SB="$(q resource list --subscription "$DLZ_SUB" -g "$DLZ_RG" --resource-type Microsoft.ServiceBus/namespaces --query "[0].name" -o tsv)"
+BATCH="$(q resource list --subscription "$DLZ_SUB" -g "$DLZ_RG" --resource-type Microsoft.Batch/batchAccounts --query "[0].name" -o tsv)"
 
 entries=""
 add() { # add <key> <name> [extraJson]
@@ -123,6 +144,8 @@ add "eventhubs"    "$EH"
 add "synapse"      "$SYN"
 add "databricks"   "$DBX_N" "${DBX_H:+{\"hostname\":\"$DBX_H\"}}"
 add "adf"          "$ADF"
+add "servicebus"   "$SB"
+add "batch"        "$BATCH"
 
 if [ -z "$entries" ]; then
   echo "[discover-dlz-adopt] DLZ RG exists but held none of the adoptable services — empty plan" >&2

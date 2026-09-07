@@ -1651,10 +1651,14 @@ var deAdfEnabled = byoExisting.?deAdf ?? true
 var deShirEnabled = byoExisting.?deShir ?? true
 // Service Bus namespace name (service-bus-namespace navigator). Carried on the
 // byoExisting object — NOT a new scalar param — to stay under admin-plane's
-// 256-param ceiling. main.bicep sets it to the deterministic single-sub name
-// (sbns-loom-default-<region>) when Service Bus is provisioned, else '' so the
-// editor honest-gates. SUB/RG fall back to the deployment sub / LOOM_DLZ_RG.
+// 256-param ceiling. main.bicep prefers the ADOPT plan's discovered namespace
+// (#3317) and falls back to the deterministic single-sub name
+// (sbns-loom-default-<region>), else '' so the editor honest-gates. SUB/RG come
+// from the adopt plan when it supplied them, else the deployment sub /
+// LOOM_DLZ_RG (see effServiceBusRg/Sub below).
 var loomServiceBusNamespace = byoExisting.?serviceBusNamespace ?? ''
+var loomServiceBusRgIn = byoExisting.?serviceBusRg ?? ''
+var loomServiceBusSubIn = byoExisting.?serviceBusSub ?? ''
 
 // Always-on default AML Compute Instance (LOOM_AML_DEFAULT_COMPUTE) + its idle
 // TTL (LOOM_AML_COMPUTE_IDLE_TTL). Carried on byoExisting — NOT new scalar
@@ -1667,11 +1671,14 @@ var loomAmlComputeIdleTtl = byoExisting.?amlComputeIdleTtl ?? 'PT30M'
 
 // Azure Batch account (SVC-5) — the Batch pool/jobs/tasks navigator +
 // BatchExecute pipeline activity. Carried on byoExisting — NOT new scalar
-// params — to stay under admin-plane's 256-param ceiling. The Batch account is
-// an opt-in deploy-planner resource (batch.bicep); set batchAccount to its name
-// to wire the editor. Empty '' → the batch-pool editor honest-gates (naming
-// LOOM_BATCH_ACCOUNT). RG/SUB fall back client-side to LOOM_DLZ_RG /
-// LOOM_SUBSCRIPTION_ID. Azure-native — no Microsoft Fabric dependency.
+// params — to stay under admin-plane's 256-param ceiling. main.bicep prefers
+// the ADOPT plan's discovered account (#3317) and falls back to the opt-in
+// deploy-planner resource (batch.bicep) on a single-sub estate. Empty '' → the
+// batch-pool editor honest-gates (naming LOOM_BATCH_ACCOUNT). RG comes from the
+// adopt plan when it supplied one, else LOOM_DLZ_RG; SUB still falls back
+// client-side to LOOM_SUBSCRIPTION_ID (there is no LOOM_BATCH_SUB in this env
+// array — see the note on batchRg in main.bicep). Azure-native — no Microsoft
+// Fabric dependency.
 var loomBatchAccount = byoExisting.?batchAccount ?? ''
 var loomBatchRg      = !empty(byoExisting.?batchRg ?? '') ? byoExisting.batchRg : loomDlzRg
 
@@ -2188,8 +2195,16 @@ var effEventGridSub      = !empty(loomEventGridSub) ? loomEventGridSub : subscri
 // the Event Hub navigator fallbacks). The servicebus-client reads
 // LOOM_SERVICEBUS_SUB||LOOM_SUBSCRIPTION_ID and LOOM_SERVICEBUS_RG||LOOM_DLZ_RG;
 // these explicit values keep the navigator correct without relying on fallbacks.
-var effServiceBusRg      = loomDlzRg
-var effServiceBusSub     = subscription().subscriptionId
+//
+// #3317: when the namespace came from the ADOPT plan, its coordinates travel
+// with the name (main.bicep sets serviceBusRg/serviceBusSub from
+// adoptRg/adoptSub). Defaulting to loomDlzRg unconditionally, as this did,
+// would have named the adopted namespace while pointing the navigator at a
+// resource group it is not in — a binding that resolves to a 404 is worse than
+// an honest gate. Empty on the create/convention path, so the previous
+// behaviour is unchanged there.
+var effServiceBusRg      = !empty(loomServiceBusRgIn) ? loomServiceBusRgIn : loomDlzRg
+var effServiceBusSub     = !empty(loomServiceBusSubIn) ? loomServiceBusSubIn : subscription().subscriptionId
 // Databricks navigator — reuse hostname > provisioned/patched hostname.
 var existingDatabricksHostname = byoExisting.?databricksHostname ?? ''
 var effDatabricksHostname = !empty(existingDatabricksHostname) ? existingDatabricksHostname : (deDatabricksEnabled ? loomDatabricksHostname : '')
