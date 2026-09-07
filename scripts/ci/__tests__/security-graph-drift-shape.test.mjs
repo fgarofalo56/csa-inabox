@@ -37,8 +37,10 @@
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync, existsSync } from 'node:fs';
-import { dirname, resolve } from 'node:path';
+import { execFileSync } from 'node:child_process';
+import { readFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { dirname, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import {
@@ -367,4 +369,79 @@ test('the census-drift fixture exists and emits NO node, so the counterfactual h
 test('the COMMITTED artifact clears the population floor', () => {
   const artifact = JSON.parse(readFileSync(ARTIFACT, 'utf8')).artifact;
   assert.deepEqual(populationRefusals(artifact, 'the committed artifact'), []);
+});
+
+// ── THE SCAN ENUMERATION: A GITIGNORED FILE IS NOT A SOURCE FILE (#4216) ───
+//
+// The extractor used to enumerate its scan roots with a bare `readdirSync`
+// recursion, so it read whatever sat on disk. Measured on this repo on
+// 2026-09-06: with one `.gitignore`d `.yml` planted under `scripts/`,
+// `git status --porcelain` printed ZERO lines while `--check` exited 1 —
+// `meta.skipped[].fileCount` 187 -> 188, and `*.yml` appended to that scope's
+// extension list. The gate was unsatisfiable in both directions: regenerating
+// locally baked the ignored file in, and CI (which never sees it) re-derived
+// something else.
+//
+// Both arms run over ONE throwaway repository in one process, for the same
+// reason PARENT_NORM exists above: a fix to an enumeration is indistinguishable
+// from no fix unless the pre-fix enumeration is shown to disagree with it.
+
+/** The PRE-FIX walk, copied in shape from the parent: no ignore filter at all. */
+function parentWalk(dir, repoRoot, out = []) {
+  for (const e of readdirSync(dir, { withFileTypes: true })) {
+    const full = join(dir, e.name);
+    if (e.isDirectory()) {
+      if (e.name === 'node_modules' || e.name === '.next' || e.name === '.git') continue;
+      parentWalk(full, repoRoot, out);
+      continue;
+    }
+    out.push(relative(repoRoot, full).split(sep).join('/'));
+  }
+  return out;
+}
+
+function fixtureRepo() {
+  const repo = mkdtempSync(join(tmpdir(), 'loom-sg-ignore-'));
+  execFileSync('git', ['init', '-q'], { cwd: repo });
+  mkdirSync(join(repo, 'scripts', 'generated'), { recursive: true });
+  writeFileSync(join(repo, '.gitignore'), 'scripts/generated/\n', 'utf8');
+  writeFileSync(join(repo, 'scripts', 'tracked.mjs'), 'console.log(1);\n', 'utf8');
+  writeFileSync(join(repo, 'scripts', 'not-yet-added.mjs'), 'console.log(2);\n', 'utf8');
+  writeFileSync(join(repo, 'scripts', 'generated', 'ignored.mjs'), 'console.log(3);\n', 'utf8');
+  execFileSync('git', ['add', '.gitignore', 'scripts/tracked.mjs'], { cwd: repo });
+  return repo;
+}
+
+test('the scan enumeration DROPS a gitignored file and KEEPS an unadded one (#4216)', async () => {
+  // Imported for the enumeration helpers only. The module announces on stderr
+  // that it extracted nothing, so this import cannot be mistaken for a run.
+  process.env.LOOM_SECURITY_EXTRACT_IMPORT_ONLY = '1';
+  const { gitVisibleFiles, scanFiles } = await import('../../brain/extract-security-graph.mjs');
+
+  const repo = fixtureRepo();
+  try {
+    const visible = gitVisibleFiles(['scripts'], repo);
+    const tip = scanFiles(repo, 'scripts', (rel) => rel.endsWith('.mjs'), visible)
+      .map((f) => relative(repo, f).split(sep).join('/'))
+      .sort();
+
+    // TIP ARM. The ignored file is gone; the written-but-not-`git add`ed file
+    // stays, because it IS part of the change under review — a new publication
+    // surface must not be able to arrive and be certified in the same commit.
+    assert.deepEqual(tip, ['scripts/not-yet-added.mjs', 'scripts/tracked.mjs']);
+
+    // PARENT ARM, same fixture: the unfiltered walk read all three.
+    const parent = parentWalk(join(repo, 'scripts'), repo).filter((r) => r.endsWith('.mjs')).sort();
+    assert.deepEqual(parent, [
+      'scripts/generated/ignored.mjs',
+      'scripts/not-yet-added.mjs',
+      'scripts/tracked.mjs',
+    ]);
+    assert.ok(
+      parent.includes('scripts/generated/ignored.mjs') && !tip.includes('scripts/generated/ignored.mjs'),
+      'the ignore filter is what changed the answer, not the fixture',
+    );
+  } finally {
+    rmSync(repo, { recursive: true, force: true });
+  }
 });

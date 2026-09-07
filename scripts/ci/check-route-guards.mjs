@@ -3044,22 +3044,70 @@ export function readOnlyClaimingPrefixes() {
  */
 const CHECK_3B_PREFIX_FLOOR = 2;
 
-function assertPrefixPremisePopulation() {
+/**
+ * …and WHICH two. A count is an ORACLE the author of the next reason controls:
+ * #3958 measured that stripping "read-only" from `copilot/` while ANY other
+ * prefix gained a read-only-claiming reason keeps the count at 2 and the guard
+ * at RC=0, with half the population silently swapped for a different half. The
+ * floor answers "how many"; only membership answers "the ones this check was
+ * built over".
+ *
+ * Re-pointing is legitimate — the docblock above says so — but it is an EDIT
+ * HERE, made deliberately, not a side effect of rewording a reason elsewhere.
+ */
+const CHECK_3B_REQUIRED_PREFIXES = [
+  'apps/fiab-console/app/api/setup/',
+  'apps/fiab-console/app/api/copilot/',
+];
+
+/**
+ * …and that each counted prefix is NON-VACUOUS. A prefix matching zero routes
+ * contributes a number to the floor and nothing to the check: it is the cheapest
+ * way to satisfy a population contract while shrinking the population, which is
+ * this repo's most-recorded guard failure. Membership alone does not close it —
+ * a THIRD claiming prefix over an empty directory still tops the count up.
+ */
+function assertPrefixPremisePopulation(routeFiles) {
   const claiming = readOnlyClaimingPrefixes();
+  const present = new Set(claiming.map(([p]) => p));
+  const missing = CHECK_3B_REQUIRED_PREFIXES.filter((p) => !present.has(p));
+  const routes = routeFiles.map((f) => rel(f));
+  const vacuous = claiming
+    .map(([p]) => p)
+    .filter((p) => !routes.some((r) => r.startsWith(p)));
+
+  const bad = [];
   if (claiming.length < CHECK_3B_PREFIX_FLOOR) {
-    console.error(
-      `\n[route-guards] FAIL — CHECK 3B's population fell to ${claiming.length} `
-      + `read-only-claiming class prefix(es); the floor is ${CHECK_3B_PREFIX_FLOOR}. A check that reaches `
-      + 'nothing reports 0 findings and means nothing by it. Re-point the probe at a prefix that still '
-      + 'claims the posture; do NOT lower this floor.',
+    bad.push(
+      `CHECK 3B's population fell to ${claiming.length} read-only-claiming class prefix(es); the floor `
+      + `is ${CHECK_3B_PREFIX_FLOOR}. A check that reaches nothing reports 0 findings and means nothing by it.`,
     );
+  }
+  if (missing.length) {
+    bad.push(
+      `CHECK 3B no longer reaches ${missing.join(', ')} — the prefix(es) it was built over. The COUNT can `
+      + 'be held at the floor by another reason gaining the vocabulary, so the count alone would not have '
+      + 'said this. Re-point the probe and edit CHECK_3B_REQUIRED_PREFIXES deliberately; do not let a '
+      + 'reword swap the population.',
+    );
+  }
+  if (vacuous.length) {
+    bad.push(
+      `these read-only-claiming class prefix(es) match ZERO routes under app/api, so they satisfy the floor `
+      + `without adding anything for CHECK 3B to judge: ${vacuous.join(', ')}.`,
+    );
+  }
+  if (bad.length) {
+    console.error('\n[route-guards] FAIL — CHECK 3B\'s premise population is not what this check claims:');
+    for (const b of bad) console.error(`  - ${b}`);
+    console.error('  Do NOT lower the floor or delete a required prefix to make this pass.');
     for (const [p, reason] of ALLOWLIST_PREFIXES) console.error(`  - ${p} :: ${reason}`);
     process.exit(1);
   }
   console.log(
     `[route-guards] CHECK 3B population: ${claiming.length} read-only-claiming class prefix(es) of `
-    + `${ALLOWLIST_PREFIXES.length} (floor ${CHECK_3B_PREFIX_FLOOR}) — `
-    + claiming.map(([p]) => p).join(', '),
+    + `${ALLOWLIST_PREFIXES.length} (floor ${CHECK_3B_PREFIX_FLOOR}, required ${CHECK_3B_REQUIRED_PREFIXES.length} `
+    + `present, 0 vacuous) — ` + claiming.map(([p]) => p).join(', '),
   );
 }
 
@@ -3213,7 +3261,7 @@ function main() {
   // premise test re-keys itself the moment a sibling adopts an owner check.
   const scopedTypes = itemTypesWithOwnedIdSiblings(uniqueFiles);
   assertPremiseTestIsSensitive(scopedTypes);
-  assertPrefixPremisePopulation();
+  assertPrefixPremisePopulation(uniqueFiles);
   assertPrefixPremiseTestIsSensitive();
   let scanned = 0;
   let allowlistedHits = 0;

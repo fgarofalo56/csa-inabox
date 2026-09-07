@@ -195,7 +195,7 @@ export function helperModules(dir = HERE, guards = null) {
 }
 
 /**
- * POPULATION FLOOR for the UNION (independent review of #3928).
+ * POPULATION FLOOR for the UNION (independent review of #3928, tightened #3958).
  *
  * The docblock above argues at length that neither half is sufficient alone —
  * "renaming a helper is a one-character bypass of a glob-only rule" — but
@@ -204,41 +204,131 @@ export function helperModules(dir = HERE, guards = null) {
  * dropped it to 139 (11 helpers), also RC=0. Half the argument's premise could
  * be deleted in silence.
  *
- * So both halves must contribute something the other does not. These floors are
- * an assertion about the DIRECTORY, not about a desired number: if the last
- * non-`_` helper genuinely disappears, that is a real change in the tree and the
- * remedy is to say so here — never to lower the floor to match a reading.
+ * The first fix asserted only that each half contributes AT LEAST ONE subject
+ * the other does not. #3958 measured what that still allows: the glob half
+ * could lose four of its five unique modules and the import half two of its
+ * three, and the guard stayed at RC=0 with the union quietly two-thirds gone.
+ * "Not zero" is not a population contract; it is the weakest possible one.
+ *
+ * So each half is floored at its MEASURED CARDINALITY. The numbers below are
+ * readings of this directory, not targets:
+ *
+ *   glob-only (`_*.mjs` no guard imports) .... 4 when #3438 closed, 5 today
+ *                                              (`_az-failure-class.mjs` arrived
+ *                                              after the issue was written)
+ *   import-only (no `_` prefix, imported) .... 3, unchanged
+ *
+ * The floor is set to the number the docblock's own argument was measured on
+ * (4 / 3), so today's reading of 5 carries one module of headroom. If a guard
+ * legitimately ADOPTS a `_`-module the glob-only count drops, and that is a real
+ * change in the tree: say so HERE, with the new reading and why — never lower
+ * the floor to match a number that arrived by accident.
  */
-function assertUnionHalvesContribute(halves) {
+export const GLOB_ONLY_FLOOR = 4;
+export const IMPORT_ONLY_FLOOR = 3;
+
+/**
+ * @returns {string[]} one message per half that is below its floor; empty when
+ * both halves carry their measured contribution. Exported so the floors are
+ * witnessed by controls rather than only by the live directory — a floor that
+ * only ever sees a passing input has never been shown to reject anything.
+ */
+export function unionHalfShortfalls(halves) {
   const globOnly = halves.glob.filter((f) => !halves.imported.includes(f));
   const importOnly = halves.imported.filter((f) => !halves.glob.includes(f));
   const bad = [];
-  if (!importOnly.length) {
+  if (importOnly.length < IMPORT_ONLY_FLOOR) {
     bad.push(
-      'the IMPORT-FOLLOWING half now contributes NOTHING the `_*.mjs` glob does not already reach. '
-      + 'A helper without a `_` prefix would then be invisible, which is the one-character bypass the '
-      + 'subject-discovery note above exists to close (#3438).',
+      `the IMPORT-FOLLOWING half now contributes ${importOnly.length} subject(s) the \`_*.mjs\` glob does `
+      + `not already reach; the measured floor is ${IMPORT_ONLY_FLOOR}. A helper without a \`_\` prefix `
+      + 'would then be invisible, which is the one-character bypass the subject-discovery note above '
+      + `exists to close (#3438).${importOnly.length ? ` Still unique: ${importOnly.join(', ')}.` : ''}`,
     );
   }
-  if (!globOnly.length) {
+  if (globOnly.length < GLOB_ONLY_FLOOR) {
     bad.push(
-      'the `_*.mjs` GLOB half now contributes NOTHING import-following does not already reach. A '
-      + '`_`-module that no guard imports YET would then never have been judged when one adopts it.',
+      `the \`_*.mjs\` GLOB half now contributes ${globOnly.length} subject(s) import-following does not `
+      + `already reach; the measured floor is ${GLOB_ONLY_FLOOR}. A \`_\`-module that no guard imports YET `
+      + 'would then never have been judged when one adopts it.'
+      + `${globOnly.length ? ` Still unique: ${globOnly.join(', ')}.` : ''}`,
     );
   }
+  return bad;
+}
+
+/**
+ * Fixtures the floors MUST reject, and one they must not. A4 and A5 are the
+ * shapes the pre-#3958 rule ("at least one each") passed: a half stripped down
+ * to a single surviving module, which is where a population contract stops
+ * being one.
+ */
+export const UNION_FLOOR_CONTROLS = [
+  {
+    why: 'A4: the GLOB half stripped to 3 unique modules is below its measured contribution',
+    halves: { glob: ['_a.mjs', '_b.mjs', '_c.mjs', '_shared.mjs'], imported: ['_shared.mjs', 'x.mjs', 'y.mjs', 'z.mjs'] },
+    expectFlagged: true,
+  },
+  {
+    why: 'A5: the IMPORT half stripped to 2 unique modules is below its measured contribution',
+    halves: { glob: ['_a.mjs', '_b.mjs', '_c.mjs', '_d.mjs'], imported: ['x.mjs', 'y.mjs'] },
+    expectFlagged: true,
+  },
+  {
+    why: 'A6: one unique module per half — the shape the PREVIOUS rule accepted — is still a collapse',
+    halves: { glob: ['_a.mjs', '_shared.mjs'], imported: ['_shared.mjs', 'x.mjs'] },
+    expectFlagged: true,
+  },
+  {
+    why: 'NEGATIVE: both halves at their measured cardinality are accepted',
+    halves: {
+      glob: ['_a.mjs', '_b.mjs', '_c.mjs', '_d.mjs', '_shared.mjs'],
+      imported: ['_shared.mjs', 'x.mjs', 'y.mjs', 'z.mjs'],
+    },
+    expectFlagged: false,
+  },
+];
+
+/** Runs the floor controls in memory. Returns failures. */
+export function runUnionFloorControls() {
+  const failures = [];
+  for (const c of UNION_FLOOR_CONTROLS) {
+    const flagged = unionHalfShortfalls(c.halves).length > 0;
+    if (flagged !== c.expectFlagged) {
+      failures.push(`expected flagged=${c.expectFlagged}, got ${flagged} — ${c.why}`);
+    }
+  }
+  return failures;
+}
+
+function assertUnionHalvesContribute(halves) {
+  const controlFailures = runUnionFloorControls();
+  if (controlFailures.length) {
+    process.stderr.write(
+      '::error::guard-logical-lines: the UNION-half floors failed their own embedded controls, so their '
+      + 'verdict about this directory is worth nothing.\n',
+    );
+    for (const f of controlFailures) process.stderr.write(`   - ${f}\n`);
+    process.exit(1);
+  }
+
+  const globOnly = halves.glob.filter((f) => !halves.imported.includes(f));
+  const importOnly = halves.imported.filter((f) => !halves.glob.includes(f));
+  const bad = unionHalfShortfalls(halves);
   if (bad.length) {
-    process.stderr.write('::error::guard-logical-lines: the subject UNION has collapsed to one half.\n');
+    process.stderr.write('::error::guard-logical-lines: the subject UNION has collapsed toward one half.\n');
     for (const b of bad) process.stderr.write(`   - ${b}\n`);
     process.stderr.write(
-      `   glob half: ${halves.glob.length} (${globOnly.length} unique) | `
-      + `import half: ${halves.imported.length} (${importOnly.length} unique)\n`,
+      `   glob half: ${halves.glob.length} (${globOnly.length} unique, floor ${GLOB_ONLY_FLOOR}) | `
+      + `import half: ${halves.imported.length} (${importOnly.length} unique, floor ${IMPORT_ONLY_FLOOR})\n`,
     );
     process.exit(1);
   }
   console.log(
     `guard-logical-lines subject union: glob ${halves.glob.length} (${globOnly.length} reached ONLY by the `
-    + `glob) + imports ${halves.imported.length} (${importOnly.length} reached ONLY by import-following) — `
-    + 'both halves contribute, so neither can be removed in silence',
+    + `glob, floor ${GLOB_ONLY_FLOOR}) + imports ${halves.imported.length} (${importOnly.length} reached `
+    + `ONLY by import-following, floor ${IMPORT_ONLY_FLOOR}) — both halves carry their measured `
+    + `contribution, so neither can be hollowed out in silence; ${UNION_FLOOR_CONTROLS.length} embedded `
+    + 'control(s) passed first',
   );
 }
 
