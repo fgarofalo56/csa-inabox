@@ -206,6 +206,148 @@ describe('an ALREADY-SAVED mismatch is surfaced with a Fix-it, not silently rewr
   });
 });
 
+describe('the refusal is in submit(), not only in the disabled attribute (#4039)', () => {
+  /**
+   * WHAT THIS PINS, AND WHY GETTING TO IT TOOK THREE ATTEMPTS.
+   *
+   * `submit()` opens with `if (… || connMismatch) return;` — a real guard on the
+   * write path, and the LAST one: everything above it is presentation. Every
+   * other test in this file asserts `toBeDisabled()` on the Save button, so
+   * deleting `|| connMismatch` from submit() leaves the whole suite green. That
+   * clause was correct and completely unwitnessed (#4039).
+   *
+   * Reaching it turned out to be the hard part, and both dead ends are recorded
+   * because each looks like it should work:
+   *
+   *   1. `fireEvent.click(save)` — jsdom does not dispatch click on a `disabled`
+   *      button at all.
+   *   2. `save.removeAttribute('disabled')` and then click — MEASURED with the
+   *      guard deleted, and the test still passed: `disabled=false` on the node,
+   *      and nothing but `/api/connections` in the fetch log. React's
+   *      `getListener` refuses mouse events for form elements whose FIBER PROPS
+   *      say `disabled`, whatever the DOM attribute says. An assertion that
+   *      passes identically with and without the code under test measures
+   *      nothing.
+   *   3. Calling the DOM node's `__reactProps$.onClick` — that is not `submit`,
+   *      it is Fluent's `useARIAButtonProps` wrapper, which short-circuits to
+   *      `preventDefault()` when `isDisabled` and never calls through.
+   *
+   * So the handler is read off the `<Button>` ELEMENT's own props, one fiber
+   * above the host node — the `onClick={submit}` the wizard actually wrote. That
+   * is the real closure over the real component state in the real mismatch
+   * condition, and it is the only vantage point from which submit()'s own guard
+   * is observable at all.
+   *
+   * Worth stating plainly: with those two interception layers, submit() is
+   * DEFENCE IN DEPTH rather than the only thing standing between a mismatch and
+   * a write. It is still the clause that has to hold if the button is ever
+   * enabled, re-used, or driven from a keyboard path, and it is now witnessed.
+   */
+  const mismatched = () =>
+    render(
+      <MirrorSourceWizard
+        open
+        editing
+        workspaceId="ws-1"
+        mirrorId="m-broken"
+        initialSrc={{
+          sourceType: 'AzureSqlDatabase',
+          server: 'fakeorg-fakeacct999',
+          database: 'SALES_DB',
+          connectionId: SNOWFLAKE_CONN.id,
+          displayName: 'snow-mirror',
+        }}
+        onClose={() => {}}
+        onCreated={() => {}}
+        onUpdated={() => {}}
+      />,
+    );
+
+  /**
+   * The `onClick` the WIZARD passed to `<Button appearance="primary">` — i.e.
+   * `submit` itself, not Fluent's disabled-aware wrapper around it.
+   *
+   * React keeps TWO fiber trees and `node.__reactFiber$` can point at the stale
+   * one, whose `memoizedProps.onClick` is a `useCallback` closure from an
+   * earlier render — measured here, and it silently inverted the result: the
+   * captured `submit` had been created before the connections fetch resolved, so
+   * its `connMismatch` was still null and it wrote happily. Both trees are
+   * therefore searched and the props are DISAMBIGUATED by `disabled`, which must
+   * agree with what the button is rendering right now. Ambiguity throws rather
+   * than picking one.
+   */
+  function wizardSubmitHandler(el: HTMLElement): () => unknown {
+    const fiberKey = Object.keys(el).find((k) => k.startsWith('__reactFiber$'));
+    expect(fiberKey, 'no React fiber on the Save button — this probe would be inert').toBeTruthy();
+    const domDisabled = (el as HTMLButtonElement).disabled;
+
+    const candidates: any[] = [];
+    let fiber: any = (el as any)[fiberKey!];
+    while (fiber) {
+      for (const f of [fiber, fiber.alternate]) {
+        const props = f && f.memoizedProps;
+        if (props && props.appearance === 'primary' && typeof props.onClick === 'function') {
+          candidates.push(props);
+        }
+      }
+      fiber = fiber.return;
+    }
+    expect(candidates.length, 'the primary Button carrying onClick={submit} was not found').toBeGreaterThan(0);
+
+    const live = candidates.filter((p) => !!p.disabled === domDisabled);
+    expect(
+      live.length,
+      `no Button fiber agrees with the rendered disabled=${domDisabled}; the closure this would ` +
+        'capture is from some other render and the assertion below would be meaningless',
+    ).toBeGreaterThan(0);
+    return live[0].onClick;
+  }
+
+  /** Any request that would PERSIST the mirror. */
+  const writes = (calls: { url: string; init?: RequestInit }[]) =>
+    calls.filter(
+      (c) =>
+        /\/api\/items\/mirrored-database/.test(c.url) &&
+        ['POST', 'PATCH', 'PUT'].includes(String(c.init?.method || 'GET').toUpperCase()),
+    );
+
+  it('invoking submit() while the mismatch is live writes NOTHING', async () => {
+    const { calls } = installFetchMock({
+      '/api/connections': () => ({ ok: true, connections: [SNOWFLAKE_CONN] }),
+      '/api/items/mirrored-database': () => ({ ok: true, mirroredDatabase: { id: 'm-broken' } }),
+    });
+    mismatched();
+
+    await waitFor(() => expect(screen.getByText(/Source type does not match this connection/i)).toBeInTheDocument());
+    const save = screen.getByRole('button', { name: /Save changes/i });
+    expect(save).toBeDisabled();
+
+    await wizardSubmitHandler(save)();
+
+    expect(writes(calls)).toEqual([]);
+  });
+
+  it('CONTROL — once the mismatch is repaired, the SAME handler DOES write', async () => {
+    // Without this arm the assertion above would also pass if the wizard could
+    // never write at all — a broken fetch mock, a handler that never binds, or
+    // a probe that resolved to something inert.
+    const { calls } = installFetchMock({
+      '/api/connections': () => ({ ok: true, connections: [SNOWFLAKE_CONN] }),
+      '/api/items/mirrored-database': () => ({ ok: true, mirroredDatabase: { id: 'm-broken' } }),
+    });
+    mismatched();
+
+    await waitFor(() => expect(screen.getByText(/Source type does not match this connection/i)).toBeInTheDocument());
+    fireEvent.click(screen.getByRole('button', { name: /Switch to Snowflake/i }));
+    await waitFor(() => expect(screen.getByRole('button', { name: /Save changes/i })).toBeEnabled());
+
+    await wizardSubmitHandler(screen.getByRole('button', { name: /Save changes/i }))();
+
+    await waitFor(() => expect(writes(calls).length).toBeGreaterThan(0));
+    expect(writes(calls)[0].init?.method).toBe('PATCH');
+  });
+});
+
 describe('"Load tables" cannot dial a mismatch', () => {
   it('shows the real cause instead of calling the enumerator', async () => {
     const { calls } = installFetchMock({

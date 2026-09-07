@@ -345,6 +345,12 @@ jobs:
             "Python Tests (3.12)|test.yml"
             "Repo Hygiene|validate.yml"
             "Secret Scan|validate.yml"
+            # #4029 — the brain security-graph drift gate. It runs on every PR
+            # and is NOT path-filtered (fiab-console-ci.yml `on:` has no paths
+            # block), so requiring it cannot deadlock a docs-only PR. Its
+            # producer is already dispatched for `next build`/`vitest`, so this
+            # entry adds a context to WAIT for, not a workflow to start.
+            "brain security graph — committed artifact matches the tree|fiab-console-ci.yml"
             "dbt Compile (finance)|test.yml"
             "dbt Compile (inventory)|test.yml"
             "dbt Compile (sales)|test.yml"

@@ -37,8 +37,10 @@
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync, existsSync } from 'node:fs';
-import { dirname, resolve } from 'node:path';
+import { execFileSync } from 'node:child_process';
+import { mkdtempSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync, existsSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { dirname, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import {
@@ -48,6 +50,8 @@ import {
   driftDifferences,
   populationRefusals,
 } from '../../brain/_artifact-drift.mjs';
+import { gitVisiblePaths, driftDiagnosis } from '../../brain/extract-security-graph.mjs';
+import { parseRequired } from '../check-release-please-integrity.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = resolve(HERE, '..', '..', '..');
@@ -367,4 +371,202 @@ test('the census-drift fixture exists and emits NO node, so the counterfactual h
 test('the COMMITTED artifact clears the population floor', () => {
   const artifact = JSON.parse(readFileSync(ARTIFACT, 'utf8')).artifact;
   assert.deepEqual(populationRefusals(artifact, 'the committed artifact'), []);
+});
+
+// ── THE ENUMERATION: A GITIGNORED FILE IS NOT PART OF THE POPULATION (#4216) ─
+//
+// The extractor walked the DISK. The artifact it is compared against was
+// committed from a CI checkout, which carries only what git tracks. So any
+// IGNORED file a contributor happens to have under a scanned root was read HERE
+// and never read THERE, and `--check` could not be satisfied from a working
+// copy at all — measured 2026-09-02: one planted `.yml` under `.github/` and
+// RC=1 on a tree with no source change.
+//
+// Both arms run over ONE fixture repo, so the fix is shown to move something:
+// the pre-fix `readdirSync` walk is reproduced verbatim and DOES pick the
+// ignored files up.
+
+/** THE PRE-FIX ENUMERATION, copied from extract-security-graph.mjs at 27ba44ee. */
+function readdirWalk(root, dir, out = []) {
+  let entries;
+  try {
+    entries = readdirSync(dir, { withFileTypes: true });
+  } catch (e) {
+    if (e && e.code === 'ENOENT') return out;
+    throw e;
+  }
+  for (const entry of entries) {
+    const full = join(dir, entry.name);
+    if (entry.isDirectory()) {
+      if (entry.name === 'node_modules' || entry.name === '.next' || entry.name === '.git') continue;
+      readdirWalk(root, full, out);
+      continue;
+    }
+    out.push(relative(root, full).split(sep).join('/'));
+  }
+  return out;
+}
+
+/**
+ * A throwaway git repo shaped like the real one: a scanned root holding one
+ * TRACKED file, one UNTRACKED-but-not-ignored file (which must still count —
+ * that is the property the disk walk had and the fix keeps), and two IGNORED
+ * files, one of them inside an ignored directory.
+ */
+function fixtureRepo() {
+  const dir = mkdtempSync(join(tmpdir(), 'loom-sg-ignore-'));
+  const git = (...args) => execFileSync('git', args, { cwd: dir, encoding: 'utf8', stdio: 'pipe' });
+  git('init', '-q');
+  git('config', 'user.email', 'fixture@example.test');
+  git('config', 'user.name', 'fixture');
+  git('config', 'commit.gpgsign', 'false');
+
+  writeFileSync(join(dir, '.gitignore'), 'env/\nscratch-*.yml\n', 'utf8');
+  mkdirSync(join(dir, 'scripts', 'env'), { recursive: true });
+  writeFileSync(join(dir, 'scripts', 'tracked.mjs'), 'console.log(1);\n', 'utf8');
+  writeFileSync(join(dir, 'scripts', 'brand-new.mjs'), 'console.log(2);\n', 'utf8');
+  writeFileSync(join(dir, 'scripts', 'scratch-local.yml'), 'on: push\n', 'utf8');
+  writeFileSync(join(dir, 'scripts', 'env', 'leaked.mjs'), 'console.log(3);\n', 'utf8');
+
+  git('add', '.gitignore', 'scripts/tracked.mjs');
+  git('commit', '-q', '-m', 'fixture');
+  return dir;
+}
+
+test('PARENT arm: the readdirSync walk DOES read the ignored files (the defect is real)', () => {
+  const dir = fixtureRepo();
+  try {
+    const seen = readdirWalk(dir, join(dir, 'scripts'));
+    assert.ok(
+      seen.includes('scripts/scratch-local.yml'),
+      `the pre-fix walk must read the ignored .yml, got: ${seen.join(', ')}`,
+    );
+    assert.ok(seen.includes('scripts/env/leaked.mjs'), 'and the file inside the ignored directory');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('TIP arm: git-visible enumeration excludes ignored files and keeps untracked ones', () => {
+  const dir = fixtureRepo();
+  try {
+    const { paths, why } = gitVisiblePaths(dir, ['scripts']);
+    assert.ok(paths, `enumeration should have succeeded in a real git repo (${why})`);
+    const seen = [...(paths || [])].sort();
+
+    assert.ok(paths.has('scripts/tracked.mjs'), `tracked file missing: ${seen.join(', ')}`);
+    // The untracked-but-not-ignored case is the one a bare `git ls-files` would
+    // have dropped. A suite you have not `git add`ed yet must still be scanned.
+    assert.ok(paths.has('scripts/brand-new.mjs'), `untracked-not-ignored file missing: ${seen.join(', ')}`);
+
+    assert.ok(!paths.has('scripts/scratch-local.yml'), `ignored .yml leaked in: ${seen.join(', ')}`);
+    assert.ok(!paths.has('scripts/env/leaked.mjs'), `file under an ignored dir leaked in: ${seen.join(', ')}`);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('a directory git cannot answer for REFUSES the filter rather than returning an empty set', () => {
+  // Filtering the walk by an empty set would scan zero files and trip the
+  // zero-file refusal for a reason that has nothing to do with the tree. The
+  // caller has to be able to tell "nothing is visible" from "I could not look"
+  // (deploy-integrity R7), so this returns null plus a reason.
+  const dir = mkdtempSync(join(tmpdir(), 'loom-sg-nogit-'));
+  try {
+    const { paths, why } = gitVisiblePaths(dir, ['scripts']);
+    assert.equal(paths, null, 'a non-repo must not produce a filter set');
+    assert.ok(typeof why === 'string' && why.length > 0, 'and must say why it could not answer');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('the extractor filters EVERY scanned root, not just the one in the repro', () => {
+  // The issue was reproduced by planting a file under `.github/`. A fix applied
+  // only to the root that happened to be in the repro is the narrower
+  // enumeration this repo loses to every time, so the console route walk and
+  // both publication walks are asserted to carry the filter.
+  const source = readFileSync(resolve(HERE, '..', '..', 'brain', 'extract-security-graph.mjs'), 'utf8');
+  const filtered = source.match(/gitVisible\(rel\)/g) || [];
+  assert.ok(
+    filtered.length >= 3,
+    `expected the route walk and both publication walks to be filtered, found ${filtered.length}`,
+  );
+});
+
+// ── THE DRIFT MESSAGE SAYS ONLY WHAT IT ESTABLISHED (R7) ───────────────────
+
+test('a skipped-only difference is NOT reported as "the source changed"', () => {
+  const committed = baseArtifact();
+  const current = baseArtifact();
+  current.meta.skipped[0].reason = '119 file(s) were seen and NOT read by this extractor.';
+
+  const diagnosis = driftDiagnosis(committed, current, driftDifferences(committed, current));
+  assert.ok(
+    !diagnosis.includes('Either the source changed'),
+    `the graph is identical here, so that disjunction was never established: ${diagnosis}`,
+  );
+  assert.ok(/meta\.skipped/.test(diagnosis), `the diagnosis must name what actually moved: ${diagnosis}`);
+});
+
+test('a difference that DOES move the graph keeps the honest disjunction', () => {
+  const committed = baseArtifact();
+  const current = baseArtifact();
+  current.graph.nodes = [];
+  assert.equal(
+    driftDiagnosis(committed, current, driftDifferences(committed, current)),
+    'Either the source changed or the extractor did.',
+  );
+});
+
+// ── THE GATE MUST BE ABLE TO BLOCK (#4029) ─────────────────────────────────
+//
+// The drift gate above runs on every PR and reports. It is not a REQUIRED
+// context, so a PR carrying a stale artifact can merge past a red one. Branch
+// protection itself is an admin action outside any PR, but release-please.yml
+// carries the repo's in-tree MIRROR of the required set (`REQUIRED_CHECKS`),
+// and that mirror is what dispatches producers for a release PR. A context
+// absent from the mirror is a context release PRs never wait for.
+
+const WORKFLOWS = resolve(REPO_ROOT, '.github', 'workflows');
+const SECURITY_GRAPH_CONTEXT = 'brain security graph — committed artifact matches the tree';
+
+test('fiab-console-ci.yml still publishes the drift context under that exact name', () => {
+  const ci = readFileSync(join(WORKFLOWS, 'fiab-console-ci.yml'), 'utf8');
+  assert.ok(
+    ci.includes(`name: '${SECURITY_GRAPH_CONTEXT}'`),
+    'the job name moved — the mirror below would then be pinning a context nothing publishes',
+  );
+});
+
+test('the drift context is mirrored into release-please.yml REQUIRED_CHECKS', () => {
+  const required = parseRequired(readFileSync(join(WORKFLOWS, 'release-please.yml'), 'utf8'));
+  const entry = required.find((r) => r.context === SECURITY_GRAPH_CONTEXT);
+  assert.ok(
+    entry,
+    `'${SECURITY_GRAPH_CONTEXT}' is absent from REQUIRED_CHECKS, so a release PR never waits for ` +
+      `the drift gate. Present: ${required.map((r) => r.context).join(', ')}`,
+  );
+  assert.equal(entry.workflow, 'fiab-console-ci.yml', 'and it must name its real producer');
+});
+
+test('every producer named in REQUIRED_CHECKS can actually be dispatched', () => {
+  // THE TEETH, and the reason `jest (node 20.x)` is NOT in that list. The
+  // release lane dispatches each producer with `gh workflow run`, which FAILS
+  // for a workflow that declares no `workflow_dispatch:` trigger — and the step
+  // treats that failure as fatal. Adding a non-dispatchable producer would
+  // break the release lane rather than strengthen it. frontend-test.yml, the
+  // `jest (node 20.x)` producer, has no `workflow_dispatch:` and is
+  // path-filtered to portal/react-webapp/**.
+  const required = parseRequired(readFileSync(join(WORKFLOWS, 'release-please.yml'), 'utf8'));
+  assert.ok(required.length > 0, 'an empty manifest would make this vacuous');
+  for (const { context, workflow } of required) {
+    const file = join(WORKFLOWS, workflow);
+    assert.ok(existsSync(file), `${context} names ${workflow}, which does not exist`);
+    assert.ok(
+      /^\s*workflow_dispatch:\s*$/m.test(readFileSync(file, 'utf8')),
+      `${context} is produced by ${workflow}, which declares no \`workflow_dispatch:\` trigger — ` +
+        'the release lane dispatches every producer and treats a failed dispatch as fatal',
+    );
+  }
 });

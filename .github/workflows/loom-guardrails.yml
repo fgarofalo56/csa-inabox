@@ -1602,3 +1602,48 @@ jobs:
         run: |
           node scripts/ci/check-guardrails-observability.mjs --self-test
           node scripts/ci/check-guardrails-observability.mjs
+
+  # ── POST-MERGE AUDIT: did the PR that produced this commit get GRADED? ──
+  #
+  # #4046 — 78 PRs merged into this repo carrying ZERO check runs. Not a failing
+  # context that was overridden: `commits/<head>/check-runs` returned
+  # `total_count: 0`, so nothing in CI had a say. Measured 2026-09-02: #3678
+  # (head 6b27f125) = 0, #4082 (head 904ae9ae) = 72, #4288 (head e30cd576) = 28.
+  # The class looks closed at #3679 and nothing guards it.
+  #
+  # WHY THIS IS A SEPARATE JOB AND NOT A STEP IN `guardrails`. It has to run on
+  # a push to main and nowhere else. On a `pull_request` event the guardrails job
+  # IS a check run on the head it would be counting, so it could never observe a
+  # zero — and on the bot-authored PRs this class is actually about, it does not
+  # run at all. The only honest vantage point is after the merge, looking back at
+  # the head that was (or was not) graded. Keeping it out of `guardrails` also
+  # keeps that REQUIRED context free of a network call it does not need.
+  #
+  # It is therefore a DETECTOR, not a blocker: it cannot stop the blind merge, it
+  # fails the push run that follows. Release PRs are covered BEFORE the merge by
+  # release-please.yml, whose verify loop refuses to auto-merge until every
+  # context in REQUIRED_CHECKS has a real check run on the head SHA.
+  merged-pr-check-runs:
+    name: 'merged-pr-check-runs (no commit lands from an ungraded PR — #4046)'
+    if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      # `commits/<sha>/pulls` needs pull-requests:read; `commits/<sha>/check-runs`
+      # needs checks:read. Without either the API 403s — which this guard reports
+      # as UNREADABLE and fails on, never as "zero, therefore fine" (R7).
+      pull-requests: read
+      checks: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Set up Node.js 20
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "20"
+      - name: 'merged-pr-check-runs (the PR behind this commit had a real verdict)'
+        if: ${{ !cancelled() }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: node scripts/ci/check-merged-prs-had-check-runs.mjs

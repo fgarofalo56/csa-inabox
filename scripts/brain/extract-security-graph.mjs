@@ -46,7 +46,7 @@ import { createRequire } from 'node:module';
 import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { driftDifferences, populationRefusals } from './_artifact-drift.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -58,6 +58,62 @@ const OUT_FILE = path.join(EXTRACT_DIR, '__generated__', 'security-graph.json');
 /** Repo-relative, forward slashes — the path format the extractor's ids embed. */
 function repoRelative(absolute) {
   return path.relative(REPO_ROOT, absolute).split(path.sep).join('/');
+}
+
+/**
+ * The set of repo-relative paths GIT can see under `roots` — tracked, plus
+ * untracked-but-not-ignored.
+ *
+ * WHY THIS EXISTS (#4216). The walk below reads the DISK. The drift gate
+ * compares what it reads against an artifact committed from a CI checkout,
+ * where the only files present are the ones git tracks. So any IGNORED file a
+ * contributor happens to have under a scanned root — `env/`, a scratch
+ * `.yml`, an editor backup — is read HERE and was not read THERE, and the two
+ * populations can never agree. Measured on 2026-09-02: planting one ignored
+ * `.yml` under `.github/` moved `meta.skipped[].fileCount` and made
+ * `--check` exit 1 locally on a tree with no source change at all. The gate
+ * became unsatisfiable from a working copy — and an unsatisfiable gate teaches
+ * people to stop believing it.
+ *
+ * `--cached` keeps files that are tracked, `--others --exclude-standard` keeps
+ * files that are new but not ignored (so a suite you have not `git add`ed yet
+ * still counts, which is the property the walk had and is worth keeping).
+ *
+ * THIS IS AN INTERSECTION, NOT A REPLACEMENT, and that is deliberate. Listing
+ * the index alone would hand the extractor paths that no longer exist on disk
+ * (`git ls-files` still lists a tracked file whose deletion is unstaged — the
+ * measured objection recorded in check-node-test-suites.mjs), and it would
+ * reorder the population. Intersecting leaves the walk's order and its
+ * on-disk-only guarantee untouched, and removes exactly one thing: ignored
+ * files.
+ *
+ * @param {string} repoRoot
+ * @param {string[]} roots repo-relative directories to enumerate
+ * @returns {{paths:Set<string>}|{paths:null, why:string}} `paths:null` when git
+ *   could not answer — the caller must then say so rather than pretend the
+ *   filter was applied (deploy-integrity R7).
+ */
+export function gitVisiblePaths(repoRoot, roots) {
+  let stdout;
+  try {
+    stdout = execFileSync(
+      'git',
+      ['ls-files', '-z', '--cached', '--others', '--exclude-standard', '--', ...roots],
+      { cwd: repoRoot, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 },
+    );
+  } catch (e) {
+    return { paths: null, why: e?.message ? String(e.message).split('\n')[0] : String(e) };
+  }
+  const paths = new Set(stdout.split('\0').filter((p) => p.length > 0));
+  if (paths.size === 0) {
+    // A repo-shaped answer of ZERO under these roots is not a clean result; it
+    // means the query matched nothing (wrong cwd, no git context, a sparse
+    // checkout). Filtering the walk by an empty set would scan zero files and
+    // trip the zero-file refusal for the wrong reason, so refuse the FILTER and
+    // let the caller disclose it.
+    return { paths: null, why: `git ls-files matched no path under ${roots.join(', ')}` };
+  }
+  return { paths };
 }
 
 /** Recursively collect files under `dir` matching `predicate`. */
@@ -125,8 +181,50 @@ function compileExtractor() {
   return { entry, outDir };
 }
 
-function currentCommit() {
-  try {
+/**
+ * Say what the difference set ACTUALLY establishes about the cause (R7).
+ *
+ * The message this replaced asserted, on every drift, "Either the source
+ * changed or the extractor did". That is a true disjunction when the GRAPH
+ * moved. It is not what the code established when the graph is byte-identical
+ * and the only differing fields are the counts of files the extractor SAW AND
+ * DID NOT READ — the shape #4216 produced from a single ignored file on disk.
+ * Two investigations were sent looking for a source change that had not
+ * happened, so the diagnosis is now derived rather than asserted.
+ *
+ * @param {any} committed
+ * @param {any} current
+ * @param {{path:string}[]} differences
+ * @returns {string} the sentence that follows the counts
+ */
+export function driftDiagnosis(committed, current, differences) {
+  const sameGraph =
+    committed?.graph?.nodes?.length === current?.graph?.nodes?.length &&
+    committed?.graph?.edges?.length === current?.graph?.edges?.length;
+  const paths = differences.map((d) => String(d.path || ''));
+  const allUnder = (prefix) => paths.length > 0 && paths.every((p) => p.startsWith(prefix));
+
+  if (sameGraph && allUnder('meta.skipped')) {
+    return (
+      'The graph is identical on both sides and every differing field is under `meta.skipped` — ' +
+      'the population of files this extractor SAW AND DID NOT READ moved, and nothing it models ' +
+      'did. The usual cause is a file present in this working copy that a clean checkout does not ' +
+      'carry. Ignored files are already excluded (#4216); an UNTRACKED, un-ignored file under a ' +
+      'scanned root is counted here and absent from CI, so `git status` on the scanned roots is ' +
+      'the first thing to read.'
+    );
+  }
+  if (sameGraph && allUnder('meta.')) {
+    return (
+      'The graph is identical on both sides and every differing field is under `meta.` — the ' +
+      'POPULATION moved without moving what the extractor models (the #4128 shape). Re-derive; ' +
+      'the artifact is stale even though its graph is current.'
+    );
+  }
+  return 'Either the source changed or the extractor did.';
+}
+
+function currentCommit() {  try {
     return execFileSync('git', ['rev-parse', 'HEAD'], { cwd: REPO_ROOT, encoding: 'utf8' }).trim();
   } catch {
     // A shallow/absent git context is a legitimate build environment. `null` is
@@ -137,11 +235,6 @@ function currentCommit() {
 
 function main() {
   const check = process.argv.includes('--check');
-
-  const routeFiles = walk(
-    path.join(CONSOLE_DIR, 'app'),
-    (rel) => /\/route\.tsx?$/.test(rel),
-  );
 
   // ── THE PUBLICATION SCOPE, WALKED AND DECLARED FROM ONE PLACE ──────────
   //
@@ -155,6 +248,32 @@ function main() {
   // job is publishing to a public issue and a public run log, sat outside a
   // population the artifact claimed to cover.
   const PUBLICATION_ROOTS = ['scripts', '.github'];
+  /** The console route root — the other half of the scanned population. */
+  const ROUTE_ROOT = 'apps/fiab-console/app';
+
+  // ── THE IGNORE FILTER (#4216) ──────────────────────────────────────────
+  //
+  // Every walk below is intersected with what git can see, so an ignored file
+  // sitting under a scanned root on a contributor's disk cannot enter a
+  // population the committed artifact was never able to contain. When git
+  // cannot answer, the filter is NOT applied and that is SAID — a run that
+  // silently degraded to the old behaviour would be the R7 defect in miniature.
+  const visible = gitVisiblePaths(REPO_ROOT, [ROUTE_ROOT, ...PUBLICATION_ROOTS]);
+  if (!visible.paths) {
+    console.error(
+      `[security-extract] could not enumerate git-visible files (${visible.why}). Scanning the ` +
+        'raw filesystem instead, so any IGNORED file under a scanned root WILL be read and this ' +
+        "run's population may not match a clean checkout's.",
+    );
+  }
+  /** True when git can see `rel` — or when git could not be asked at all. */
+  const gitVisible = (rel) => (visible.paths ? visible.paths.has(rel) : true);
+
+  const routeFiles = walk(
+    path.join(REPO_ROOT, ROUTE_ROOT),
+    (rel) => gitVisible(rel) && /\/route\.tsx?$/.test(rel),
+  );
+
   /** What this extractor can lex. */
   const PUBLICATION_INCLUDE = /\.(?:mjs|cjs|js)$/;
   /**
@@ -169,9 +288,9 @@ function main() {
   const unmodeledPublicationSurfaces = [];
   for (const root of PUBLICATION_ROOTS) {
     const absRoot = path.join(REPO_ROOT, root);
-    scriptFiles.push(...walk(absRoot, (rel) => PUBLICATION_INCLUDE.test(rel)));
+    scriptFiles.push(...walk(absRoot, (rel) => gitVisible(rel) && PUBLICATION_INCLUDE.test(rel)));
 
-    const unread = walk(absRoot, (rel) => PUBLICATION_UNMODELED.test(rel));
+    const unread = walk(absRoot, (rel) => gitVisible(rel) && PUBLICATION_UNMODELED.test(rel));
     unmodeledPublicationSurfaces.push({
       root: `${root}/`,
       fileCount: unread.length,
@@ -286,8 +405,9 @@ function main() {
       console.error(
         '[security-extract] DRIFT: the committed artifact does not match what the extractor ' +
           `produces from this tree (committed ${a.graph.nodes.length} nodes / ` +
-          `${a.graph.edges.length} edges, current ${nodes} / ${edges}). Either the source ` +
-          'changed or the extractor did. Run: node scripts/brain/extract-security-graph.mjs',
+          `${a.graph.edges.length} edges, current ${nodes} / ${edges}). ` +
+          `${driftDiagnosis(a, artifact, differences)} ` +
+          'Run: node scripts/brain/extract-security-graph.mjs',
       );
       console.error(
         `[security-extract] ${differences.length} differing field(s)` +
@@ -325,4 +445,10 @@ function main() {
   console.log(`[security-extract] wrote ${repoRelative(OUT_FILE)}`);
 }
 
-main();
+// Run only when INVOKED, so `gitVisiblePaths` and `driftDiagnosis` can be
+// imported and tested without regenerating (or re-comparing) the artifact as a
+// side effect of the import. Every workflow and Makefile entry point invokes
+// this file directly, so the executable behaviour is unchanged.
+const INVOKED_DIRECTLY =
+  process.argv[1] != null && import.meta.url === pathToFileURL(process.argv[1]).href;
+if (INVOKED_DIRECTLY) main();
