@@ -364,12 +364,26 @@ test('every KNOWN_DORMANT entry records why it is dormant and where it is tracke
 //      the deployment itself mints, because a pre-existing (scope, principal,
 //      role) tuple makes ARM reject a second assignment under a different
 //      guid() name and FAILS THE WHOLE DEPLOYMENT. Not a guess: this repo has
-//      paid for it three times (main.bicep:2288 — the app-resources leaf
-//      "failed RoleAssignmentExists on EVERY deploy in BOTH topologies";
-//      main.bicep:3113; admin-plane/main.bicep:9095), and the Console UAMI
-//      already holds Storage Blob Data Contributor on the live Commercial lake
-//      from an out-of-band grant (measured 2026-08-13, recorded in the pass's
-//      own header). #3338 asked for exactly that principal at exactly that role.
+//      paid for it three times — main.bicep's `adminAppResourcesRbac` gating
+//      note (the app-resources leaf "failed RoleAssignmentExists on EVERY
+//      deploy in BOTH topologies"), main.bicep's monitoring-reader-rbac
+//      `digestPrincipalId: ''` note, and admin-plane/main.bicep's note on the
+//      REMOVED `reportSubscriptionsPrincipalId` output. Those are cited by
+//      SYMBOL, not by line: an earlier revision of this block cited
+//      admin-plane/main.bicep:9095 and its own diff moved the line.
+//      The Console UAMI already holds Storage Blob Data Contributor on the live
+//      Commercial lake from an out-of-band grant (measured 2026-08-13, recorded
+//      in the pass's own header). #3338 asked for exactly that principal at
+//      exactly that role.
+//
+// HOW EACH GUARD IS KEYED. GUARD 2 is keyed to the ROLE ASSIGNMENT — the
+// principalId expression of every `Microsoft.Authorization/roleAssignments`
+// declaration — never to the set of param names. An earlier revision keyed it to
+// `principalParams()` (the regex /PrincipalId$/) and the whole refusal could be
+// bypassed by naming the param `consoleUamiObjectId`; that bypass is now itself a
+// mutation control below. GUARD 1 keeps the name check (it is the precise
+// signal for "threaded and ungranted") but adds a spelling-independent
+// unreferenced-param check alongside it.
 //
 // WHAT THESE TESTS ARE AND ARE NOT. They are GREEN at head — head carries
 // neither break. They are trap guards, not the fix for a red, and each carries
@@ -401,6 +415,13 @@ function grantedPrincipalExprs(source) {
   return out;
 }
 
+/** The granted principal expressions, trimmed and sorted. */
+function grantedPrincipals(source) {
+  return grantedPrincipalExprs(source)
+    .map((e) => e.trim())
+    .sort();
+}
+
 /** `param …PrincipalId string` names declared by a source. */
 function principalParams(source) {
   return [...parseBicep(source).params].filter((p) => /PrincipalId$/.test(p)).sort();
@@ -415,6 +436,32 @@ function ungrantedPrincipalParams(source) {
 }
 
 /**
+ * Params the file declares that NOTHING else in the file references — neither a
+ * var, a resource, nor an output.
+ *
+ * This is the SPELLING-INDEPENDENT half of GUARD 1. `ungrantedPrincipalParams`
+ * only sees names ending `PrincipalId`, so on its own it would miss a threaded-
+ * and-forgotten `consoleUamiObjectId`. A param nothing reads is dead weight
+ * regardless of what it is called, and threading a principal in without wiring
+ * it produces exactly that shape.
+ */
+function unreferencedParams(source) {
+  const declared = [...parseBicep(source).params];
+  const lines = blankComments(source).split(/\r?\n/);
+  return declared
+    .filter((p) => {
+      const ref = new RegExp(`\\b${p}\\b`);
+      const decl = new RegExp(`^param\\s+${p}\\b`);
+      return !lines.some((l) => {
+        const t = l.trimStart();
+        if (t.startsWith('@') || decl.test(t)) return false; // its own declaration / decorator
+        return ref.test(t);
+      });
+    })
+    .sort();
+}
+
+/**
  * Every principal the cross-sub pass is allowed to grant, and why it is safe.
  *
  * The entry bar is STRUCTURAL, not "we have not seen a collision": the identity
@@ -422,6 +469,12 @@ function ungrantedPrincipalParams(source) {
  * assignment. Adding a row for a long-lived identity (the Console UAMI, a
  * customer-supplied SP, anything created out-of-band) is the #3338 trap and is
  * refused in the module header with the measurement behind it.
+ *
+ * `param` is matched against the principalId EXPRESSION of a real
+ * `Microsoft.Authorization/roleAssignments` declaration — never against the set
+ * of declared param names. Keying on the name would make the whole guard a
+ * spelling check: the identical grant under a param called `consoleUamiObjectId`
+ * would sail through, which is precisely the bypass this list exists to refuse.
  */
 const SELF_MINTED_PASS_PRINCIPALS = [
   {
@@ -430,6 +483,19 @@ const SELF_MINTED_PASS_PRINCIPALS = [
     why: 'An identity minted on this run cannot already hold a role assignment, so a duplicate-tuple RoleAssignmentExists is structurally impossible rather than merely unobserved. Verified on the live Commercial estate 2026-08-13: no uami-loom-s3gw-* identity exists at all.',
   },
 ];
+
+/**
+ * Principal expressions that RECEIVE a grant in the pass and that no
+ * SELF_MINTED_PASS_PRINCIPALS row justifies.
+ *
+ * Fail-closed on shape as well as on identity: a compound expression
+ * (`empty(a) ? b : c`) does not literally match an allowlist row, so it lands
+ * here and must be justified explicitly rather than inferred.
+ */
+function unjustifiedGrantedPrincipals(source) {
+  const allowed = new Set(SELF_MINTED_PASS_PRINCIPALS.map((p) => p.param));
+  return grantedPrincipals(source).filter((expr) => !allowed.has(expr));
+}
 
 /**
  * Activation vars in admin-plane that gate their DEPLOY on
@@ -481,28 +547,95 @@ test('#3338 GUARD 1: every principal param the cross-sub pass declares actually 
     [],
     'a principal threaded into the cross-sub pass with no roleAssignments resource consuming it is bound-and-ungranted — the #3338 defect, re-created',
   );
+  // Same defect, spelling-independent: a param nothing in the file reads was
+  // threaded in and forgotten, whatever it is called.
+  assert.deepEqual(
+    unreferencedParams(source),
+    [],
+    'a param is declared by the cross-sub pass and referenced by nothing in it — threaded in and never wired, the #3338 defect under a name the PrincipalId check cannot see',
+  );
 });
 
 test('#3338 GUARD 1 — MUTATION control: threading a principal without its assignment goes RED', () => {
   const head = readBicep(GRANT_PASS_REL);
-  const mutated = head.replace(
-    "param s3GatewayPrincipalId string = ''",
-    "param s3GatewayPrincipalId string = ''\n\nparam consolePrincipalId string = ''",
-  );
-  assert.notEqual(mutated, head, 'the mutation must actually apply');
-  assert.deepEqual(ungrantedPrincipalParams(mutated), ['consolePrincipalId']);
+  // BOTH spellings: the `PrincipalId` one the name check sees, and one it does
+  // not. The unreferenced-param half must catch the second on its own.
+  for (const [name, expectedUngranted] of [
+    ['consolePrincipalId', ['consolePrincipalId']],
+    ['consoleUamiObjectId', []],
+  ]) {
+    const mutated = head.replace(
+      "param s3GatewayPrincipalId string = ''",
+      `param s3GatewayPrincipalId string = ''\n\nparam ${name} string = ''`,
+    );
+    assert.notEqual(mutated, head, 'the mutation must actually apply');
+    assert.deepEqual(ungrantedPrincipalParams(mutated), expectedUngranted);
+    assert.deepEqual(unreferencedParams(mutated), [name]);
+  }
 });
 
 test('#3338 GUARD 2: the cross-sub pass grants ONLY identities the deployment itself mints', () => {
-  const declared = principalParams(readBicep(GRANT_PASS_REL));
-  assert.deepEqual(
-    declared,
-    SELF_MINTED_PASS_PRINCIPALS.map((p) => p.param).sort(),
-    'a principal param was added to dlz-lake-grant-pass.bicep without a self-minted justification. A long-lived identity (the Console UAMI above all) may already hold the tuple, and ARM then fails the deployment with RoleAssignmentExists — see the module header and main.bicep:2288.',
+  const source = readBicep(GRANT_PASS_REL);
+  // Non-vacuity: this guard reads role assignments, so zero of them would make
+  // the assertion below trivially true while measuring nothing.
+  assert.ok(
+    grantedPrincipals(source).length > 0,
+    'the pass must contain at least one role assignment for this guard to measure',
   );
+  assert.deepEqual(
+    unjustifiedGrantedPrincipals(source),
+    [],
+    'dlz-lake-grant-pass.bicep grants a principal with no self-minted justification. A long-lived identity (the Console UAMI above all) may already hold the tuple, and ARM then fails the deployment with RoleAssignmentExists — see the module header and main.bicep\'s adminAppResourcesRbac gating note.',
+  );
+  // The allowlist must not rot in the other direction either: a row for a
+  // principal the pass no longer declares is stale and must be removed.
+  const declared = new Set(parseBicep(source).params);
   for (const p of SELF_MINTED_PASS_PRINCIPALS) {
+    assert.ok(declared.has(p.param), `${p.param} is allowlisted but the pass no longer declares it`);
     assert.ok(p.mintedBy && p.mintedBy.length > 20, `${p.param} must name what mints it`);
     assert.ok(p.why && p.why.length > 40, `${p.param} needs a measured reason, not an assertion`);
+  }
+});
+
+/**
+ * Applies the FULL fix #3338 asks for to an in-memory copy of the real pass: the
+ * Console UAMI param AND a real Storage Blob Data Contributor
+ * (ba92f5b4-2d11-453d-a403-e96b0029c9fe) roleAssignments resource for it. The
+ * param name is a parameter of the mutation because the name is exactly what a
+ * spelling-keyed guard would be fooled by.
+ */
+function withConsoleUamiGrant(head, paramName) {
+  const roleId = 'ba92f5b4-2d11-453d-a403-e96b0029c9fe';
+  const withParam = head.replace(
+    "param s3GatewayPrincipalId string = ''",
+    `param s3GatewayPrincipalId string = ''\n\nparam ${paramName} string = ''`,
+  );
+  assert.notEqual(withParam, head, 'the param half of the mutation must actually apply');
+  return (
+    `${withParam}\n` +
+    `resource consoleLakeWrite 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (!empty(${paramName})) {\n` +
+    `  name: guid(lake.id, ${paramName}, '${roleId}')\n` +
+    `  scope: lake\n` +
+    `  properties: {\n` +
+    `    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '${roleId}')\n` +
+    `    principalId: ${paramName}\n` +
+    `    principalType: 'ServicePrincipal'\n` +
+    `  }\n` +
+    `}\n`
+  );
+}
+
+test('#3338 GUARD 2 — MUTATION control: the full Console-UAMI grant goes RED under EITHER param name', () => {
+  const head = readBicep(GRANT_PASS_REL);
+  for (const paramName of ['consolePrincipalId', 'consoleUamiObjectId']) {
+    const mutated = withConsoleUamiGrant(head, paramName);
+    // The mutation is the COMPLETE #3338 change, so GUARD 1 is correctly silent:
+    // the param is granted and referenced. Only GUARD 2 owns this shape, and it
+    // must not care what the param is called.
+    assert.deepEqual(ungrantedPrincipalParams(mutated), []);
+    assert.deepEqual(unreferencedParams(mutated), []);
+    assert.deepEqual(grantedPrincipals(mutated), [paramName, 's3GatewayPrincipalId'].sort());
+    assert.deepEqual(unjustifiedGrantedPrincipals(mutated), [paramName]);
   }
 });
 

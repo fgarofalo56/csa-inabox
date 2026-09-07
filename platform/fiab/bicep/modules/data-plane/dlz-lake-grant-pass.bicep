@@ -90,9 +90,14 @@
 // recorded above as ALREADY ASSIGNED out-of-band on the live Commercial lake.
 // Taking it would trade an unreachable 403 for a RoleAssignmentExists that fails
 // the whole deployment: the #3329 / #3333 P0 class this file exists to avoid.
-// The repo has paid for that shape three times already — main.bicep:2288 (the
-// app-resources leaf "failed RoleAssignmentExists on EVERY deploy in BOTH
-// topologies"), main.bicep:3113, admin-plane/main.bicep:9095.
+// The repo has paid for that shape three times already, cited by SYMBOL because
+// line numbers rot (an earlier revision of this header cited
+// admin-plane/main.bicep:9095 and this file's own sibling diff moved that line):
+// main.bicep's `adminAppResourcesRbac` gating note (the app-resources leaf
+// "failed RoleAssignmentExists on EVERY deploy in BOTH topologies"),
+// main.bicep's monitoring-reader-rbac `digestPrincipalId: ''` note, and
+// admin-plane/main.bicep's note on the REMOVED `reportSubscriptionsPrincipalId`
+// output.
 //
 // It is refused on a second, independent ground: the 403 is not reachable at
 // head, so the grant would enable nothing while risking the estate. Measured
@@ -104,10 +109,16 @@
 // artifact-persistence path in that app, which does not exist yet.
 //
 // Two guards in scripts/ci/__tests__/module-existing-scope.test.mjs hold the
-// line: every principal param declared in this file must actually carry a role
-// assignment (so the half-applied form of that fix — param threaded, assignment
-// forgotten — cannot merge reading green), and any principal param added here
-// must be declared self-minted with a reason.
+// line. GUARD 1: every principal param declared in this file must actually carry
+// a role assignment, AND no param declared here may go unreferenced — so the
+// half-applied form of that fix (param threaded, assignment forgotten) cannot
+// merge reading green under any param name. GUARD 2: every principal that
+// ACTUALLY RECEIVES a role assignment here must be on a self-minted allowlist
+// with a measured reason. GUARD 2 is keyed to the `principalId` expression of
+// the roleAssignments declaration, NOT to the param's name — an earlier revision
+// keyed it to a /PrincipalId$/ name match, and the identical Console-UAMI grant
+// under a param called `consoleUamiObjectId` read green. Both spellings are now
+// mutation controls in that file.
 
 targetScope = 'resourceGroup'
 
