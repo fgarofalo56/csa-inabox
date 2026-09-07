@@ -892,6 +892,14 @@ test('#3844 FAMILY RATCHET — every notifier caller binds a credential AND pass
   // full-app-deploy-commercial, gov-console-roll, loom-dataplane-roll. Nothing
   // outside .github/workflows invokes the filer (no composite action does),
   // verified rather than assumed.
+  //
+  // Re-measured 2026-09-07: SEVEN, across seven workflows — deploy-fiab-il5
+  // joined when its `vars.FIAB_GOV_DEPLOY_TRACKING_ISSUE`-gated github-script
+  // notifier was converted onto this chokepoint (#3844, second half). The floor
+  // below stays at >=6 deliberately: it is a matcher-drift detector, not a
+  // census, and raising it to 7 would make deleting a genuinely-retired lane
+  // look like a guard failure. The per-file assertions above are what cover the
+  // seventh site, and they cover an eighth automatically.
   assert.ok(
     sites.length >= 6,
     `expected >=6 deploy-notify-failure call sites, found ${sites.length} — the matcher drifted, it is not that the callers vanished`,
@@ -1196,37 +1204,129 @@ test('#3844 FAMILY SELF-DEFENCE — the credential predicate fires on the verbat
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
-// #3844 (second half) — a notification gated on an UNSET repo variable is inert
+// #3844 (second half) — a notification whose target is a repo variable is inert
+// when the variable is unset, and a time bomb when it is set to an issue that
+// can close. Neither state is visible to any structural check on the workflow.
 // ─────────────────────────────────────────────────────────────────────────────
 
 /**
  * Lanes whose failure notice degrades to `core.warning` when a repo variable is
- * unset. Measured 2026-08-23: `gh variable list` returns 10 variables and
- * FIAB_GOV_DEPLOY_TRACKING_ISSUE is not among them, so every lane below posts
- * NOTHING today.
+ * unset. THE LIST IS NOW EMPTY, and the previous entry's own removal condition
+ * is what emptied it.
  *
- * deploy-fiab-il5.yml is recorded, not fixed, for one reason and it is checkable:
- * this batch does not own that file (batch L0-B owns gov-console-roll.yml,
- * gov-provision-runner-images.yml, loom-dataplane-roll.yml and
- * deploy-notify-failure.mjs). The routing request is #3844. If the entry is
- * still here when that file has moved onto the deploy-notify-failure chokepoint,
- * the shrink assertion below goes red and forces its removal — the entry cannot
- * outlive its reason.
+ * The earlier revision of this comment asserted, as measured fact, that
+ * `gh variable list` returned 10 variables with FIAB_GOV_DEPLOY_TRACKING_ISSUE
+ * "not among them". That was WRONG, and wrong in the direction that made the
+ * debt look smaller than it was. Re-measured 2026-09-07 on this repository:
+ * `gh variable list --json name` returns 11 names and
+ * FIAB_GOV_DEPLOY_TRACKING_ISSUE IS one of them — set 2026-08-23 to the string
+ * "3844", which is issue #3844 itself (state OPEN at the time of writing).
+ *
+ * So the gated notifier had BOTH failure modes available to it, not one:
+ *   * unset  -> `core.warning(...)`, a coloured line in the log of a run that
+ *     already failed, delivered to nobody; and
+ *   * set to #3844 -> the notice lands on the very issue whose closure is the
+ *     event that stops anyone reading it. That is #279 ("CSA Loom — v1 build
+ *     roadmap", CLOSED, 289 comments) rebuilt one repo variable later — the
+ *     exact mechanism deploy-notify-failure.mjs exists to remove.
+ *
+ * deploy-fiab-il5.yml was the single entry, recorded-not-fixed because the
+ * batch that wrote this guard did not own that file. It has since been moved
+ * onto the deploy-notify-failure.mjs chokepoint (this file's sibling change),
+ * so the entry was deleted rather than left carrying a reason that is no longer
+ * true — the shrink assertion below is what forces that, and it is retained.
+ *
+ * OPERATOR STEP, not something this test can do: the repo variable
+ * FIAB_GOV_DEPLOY_TRACKING_ISSUE is now read by NOTHING
+ * (`grep -rn "FIAB_GOV_DEPLOY_TRACKING_ISSUE" .github/` returns only this
+ * comment block), and should be deleted with
+ * `gh variable delete FIAB_GOV_DEPLOY_TRACKING_ISSUE` BEFORE #3844 is closed.
+ * Leaving it is inert today; the ordering matters only if the workflow is ever
+ * reverted.
  */
-export const VARIABLE_GATED_NOTIFIER_BASELINE = ['deploy-fiab-il5.yml'];
+export const VARIABLE_GATED_NOTIFIER_BASELINE = [];
 
 export function usesVariableGatedNotifier(src) {
   const code = stripComments(src);
   return /vars\.FIAB_GOV_DEPLOY_TRACKING_ISSUE/.test(code) && /core\.warning\(/.test(code);
 }
 
-test('#3844 RATCHET — no NEW lane may gate its only failure notice on a repo variable', () => {
-  const found = workflowNames().filter((f) => usesVariableGatedNotifier(readWorkflow(f)));
-  assert.ok(found.length >= 1, `expected >=1 variable-gated notifier (the known deploy-fiab-il5 one), found ${found.length} — the matcher drifted, it is not that the debt was paid`);
+/**
+ * The pre-fix deploy-fiab-il5.yml notifier, verbatim in shape. Kept as a
+ * FIXTURE because the live population this guard walks is now empty, and a
+ * matcher exercised only against an empty population is green whether it works
+ * or not — including if someone narrows it to `/never-matches/`. The previous
+ * revision held this floor with `found.length >= 1` over the REAL workflows,
+ * which is unsatisfiable the moment the debt is actually paid: it would have
+ * forced the last offender to stay broken to keep the guard honest.
+ */
+const GATED_NOTIFIER_FIXTURE = [
+  '      - name: Notify on failure',
+  '        if: failure()',
+  '        uses: actions/github-script@v9',
+  '        env:',
+  '          TRACKING_ISSUE: ${{ vars.FIAB_GOV_DEPLOY_TRACKING_ISSUE }}',
+  '        with:',
+  '          script: |',
+  "            const issue = parseInt(process.env.TRACKING_ISSUE || '', 10);",
+  '            if (Number.isInteger(issue) && issue > 0) {',
+  '              await github.rest.issues.createComment({ issue_number: issue, body });',
+  '            } else {',
+  "              core.warning('FIAB_GOV_DEPLOY_TRACKING_ISSUE repo variable not set — skipping issue comment. ' + body);",
+  '            }',
+].join('\n');
+
+/** The shape it was converted TO — the chokepoint every other deploy lane uses. */
+const CHOKEPOINT_NOTIFIER_FIXTURE = [
+  '      - name: Notify on failure (#3844)',
+  '        if: failure()',
+  '        env:',
+  '          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}',
+  '        run: |',
+  '          node .github/scripts/deploy-notify-failure.mjs \\',
+  '            --workflow deploy-fiab-il5 --result "${{ job.status }}"',
+].join('\n');
+
+/**
+ * The variable named ONLY in a whole-line comment, with a real `core.warning(`
+ * elsewhere. Pins that the matcher strips comments first: without that, this
+ * very file's explanatory comment block above would make any workflow quoting
+ * the variable name look like a live gate.
+ */
+const COMMENT_ONLY_FIXTURE = [
+  '      # historical: this lane once read vars.FIAB_GOV_DEPLOY_TRACKING_ISSUE',
+  '      - name: Something else',
+  '        run: node -e "core.warning(1)"',
+].join('\n');
+
+test('#3844 RATCHET — no lane may gate its only failure notice on a repo variable', () => {
+  // POSITIVE CONTROL BEFORE THE POPULATION. The population is expected to be
+  // empty now, so these three are the only assertions here that can distinguish
+  // a working matcher from one that returns false for everything.
+  assert.equal(usesVariableGatedNotifier(GATED_NOTIFIER_FIXTURE), true, 'the matcher no longer recognises the exact shape it was written to catch (the pre-fix deploy-fiab-il5 notifier), so the empty result below means nothing');
+  assert.equal(usesVariableGatedNotifier(CHOKEPOINT_NOTIFIER_FIXTURE), false, 'the matcher flags the deploy-notify-failure.mjs chokepoint shape — it would then report every compliant lane and could not discriminate');
+  assert.equal(usesVariableGatedNotifier(COMMENT_ONLY_FIXTURE), false, 'the matcher counts a whole-line COMMENT mentioning the variable as a live gate; it must strip comments first');
+
+  const names = workflowNames();
+  assert.ok(names.length >= 100, `only ${names.length} workflows were scanned — this repository had 127 on 2026-09-07, so the walk is reading the wrong directory and the empty result below is measuring nothing`);
+
+  const found = names.filter((f) => usesVariableGatedNotifier(readWorkflow(f)));
   const unexpected = found.filter((f) => !VARIABLE_GATED_NOTIFIER_BASELINE.includes(f));
-  assert.deepEqual(unexpected, [], 'a lane notifies failure only when a repo variable happens to be set; when it is not, the step logs a warning and posts nothing. Use .github/scripts/deploy-notify-failure.mjs instead');
+  assert.deepEqual(unexpected, [], 'a lane notifies failure only when a repo variable happens to be set; when it is not, the step logs a warning and posts nothing, and when it IS set it points at whatever issue someone typed — including one that later closes. Use .github/scripts/deploy-notify-failure.mjs instead');
   const stale = VARIABLE_GATED_NOTIFIER_BASELINE.filter((f) => !found.includes(f));
   assert.deepEqual(stale, [], 'a baseline entry no longer matches — delete it rather than leaving a reason that is no longer true');
+
+  // AND THE LANE THAT WAS THE ENTRY MUST BE ON THE CHOKEPOINT, not merely
+  // no-longer-matching. Deleting the notifier step outright would also empty
+  // `found`; that is the other way to make this guard green while IL5 failures
+  // go unrecorded, and it is the reason this assertion is separate from the
+  // absence one above. Being a caller also enrols deploy-fiab-il5.yml in the
+  // FAMILY RATCHET above, which is what checks its GH_TOKEN and its --result.
+  const il5 = stripComments(readWorkflow('deploy-fiab-il5.yml'));
+  assert.ok(
+    il5.includes(NOTIFIER_SCRIPT),
+    `deploy-fiab-il5.yml does not invoke ${NOTIFIER_SCRIPT}. Its failure notice was converted from a vars.FIAB_GOV_DEPLOY_TRACKING_ISSUE gate onto the chokepoint under #3844; a revert, or a deletion of the step, leaves an IL5 deploy failure recorded nowhere`,
+  );
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
