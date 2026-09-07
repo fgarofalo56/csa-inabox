@@ -244,6 +244,30 @@ export function diffVersions(
     );
   }
 
+  // ── COMPLETENESS (#4016) ─────────────────────────────────────────────────
+  //
+  // A version captured from a PARTIAL Resource Graph pull is missing whatever
+  // the collector never read. Diffed against a complete one, the unread
+  // remainder renders as a mass of additions or — when the partial version is
+  // the HEAD — as a mass of removals, which looks exactly like an outage. The
+  // diff is still produced (the caller may genuinely want it), but it is never
+  // produced SILENTLY: the note says which side was partial and how partial.
+  for (const [label, v] of [
+    ['base', base],
+    ['head', head],
+  ] as const) {
+    if (v.collection?.complete === false) {
+      notes.push(
+        `the ${label} version '${v.id}' was captured from an INCOMPLETE Resource Graph pull ` +
+          `(${v.collection.rowsFetched} of ` +
+          `${v.collection.totalRecords ?? 'an unreported number of'} row(s) read). Resources ` +
+          'the collector never reached are ABSENT from it rather than deleted, so ' +
+          `${label === 'base' ? 'ADDITIONS' : 'REMOVALS'} below may be an artefact of the pull ` +
+          'rather than a change in the estate. Read this diff with that in mind.',
+      );
+    }
+  }
+
   // ── nodes ────────────────────────────────────────────────────────────────
   const baseNodes = new Map<string, VersionNode>();
   for (const n of base.content.nodes) baseNodes.set(n.id, n);

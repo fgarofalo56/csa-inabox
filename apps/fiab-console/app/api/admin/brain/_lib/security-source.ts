@@ -1,46 +1,44 @@
 /**
- * LOOM BRAIN — WHERE THE SECURITY GRAPH COMES FROM, AND WHY IT DOES NOT YET.
+ * LOOM BRAIN — WHERE THE SECURITY GRAPH COMES FROM.
  *
  * `lib/brain/security/**` is nine pure detectors of the shape
- * `SecurityGraph -> { findings, population }`. They are complete, tested, and
- * inert. What does not exist anywhere in this repo is a producer of their INPUT:
+ * `SecurityGraph -> { findings, population }`. Their INPUT is a graph of the
+ * SOURCE — `route-toolkit#withTenantAdmin`, a publication sink in a CI script, a
+ * tenant-comparison implementation. The deployed console can read Azure Resource
+ * Graph; it cannot read the repository it was built from, so that graph has to be
+ * produced at BUILD time and shipped inside the image.
  *
- *     $ grep -rn "SecurityGraph" apps/fiab-console --include=*.ts \
- *         | grep -v "lib/brain/security/"
- *     (no matches, measured 2026-08-24)
+ * ── WHAT THIS FILE USED TO SAY, AND WHY IT NO LONGER DOES ────────────────
  *
- * A `SecurityGraph` node is `route-toolkit#withTenantAdmin`, a publication sink
- * in a CI script, a tenant-comparison implementation — i.e. facts about SOURCE.
- * The deployed console can read Azure Resource Graph; it cannot read the
- * repository it was built from. So the extractor is a build-time or CI-time
- * artifact, and building one is a different work item than rendering its output
- * (this one, #3934, explicitly "renders, does not re-derive").
+ * It carried a measurement — "no producer of their input exists, measured
+ * 2026-08-24" — and returned `{ available: false }` unconditionally on the
+ * strength of it. That producer landed: `lib/brain/security/extract` walks the
+ * tree in `scripts/brain/extract-security-graph.mjs`, commits
+ * `extract/__generated__/security-graph.json`, and `runtime.ts` imports it
+ * statically so Next.js file tracing ships it. The doc-block claim outlived the
+ * fact it described, which is the stale-comment form of the same defect the
+ * module was written to avoid — so it is deleted rather than softened.
  *
- * ── WHY THIS FILE RETURNS "UNAVAILABLE" INSTEAD OF AN EMPTY GRAPH ─────────
+ * ── WHY THIS IS STILL A WRAPPER TYPE AND NOT A BARE `SecurityGraph` ──────
  *
- * An empty `SecurityGraph` is constructible and it is TEMPTING, because the
- * detectors handle it beautifully: every one of the nine would synthesise a
- * `POP-population-integrity` finding reading "examined an EMPTY population —
- * green and blind", which is exactly the right sentiment.
+ * `SecurityGraph.source` has three members — `'modelled' | 'extracted' |
+ * 'observed'` — and none of them means "there is no graph". An artifact can be
+ * absent, malformed, stale, zero-node, or produced by a different extractor
+ * version, and every one of those must render as NOT EVALUATED rather than as a
+ * sweep that found nothing: a consumer counting SECURITY findings gets zero
+ * either way, and zero is indistinguishable from clean. `resolveSecurityGraph`
+ * in `lib/brain/security/extract/artifact.ts` owns every one of those refusals
+ * and each is reachable from `extract/__tests__/artifact.test.ts`.
  *
- * It is still refused, on R7 grounds. `SecurityGraph.source` has three members —
- * `'modelled' | 'extracted' | 'observed'` — and an empty graph is none of them.
- * Claiming `'extracted'` asserts an extraction that never ran; claiming
- * `'modelled'` asserts a model nobody authored. The type has no member for "there
- * is no graph", so the honest answer is to not produce one, and to say so in the
- * layer above where "not evaluated" IS a representable state.
+ * ── CLOUD PARITY ─────────────────────────────────────────────────────────
  *
- * ── WHAT MUST LAND FOR THIS TO GO LIVE ───────────────────────────────────
- *
- * One producer, anywhere, that emits a `SecurityGraph` with `source:
- * 'extracted'`. The natural home is a CI job that walks the repo and publishes
- * the graph as a build artifact the console reads at start-up. When it exists,
- * the ONLY change here is that {@link loadSecurityGraph} returns it — every
- * consumer downstream (`buildRiskLayer`, the route, the whole synapse view)
- * already handles the `available: true` branch and is tested against a real
- * sweep over a real graph.
+ * The artifact is a static import resolved at BUILD time, in the image, before
+ * any cloud exists. There is no endpoint, no suffix, no ARM call and no
+ * filesystem layout that could differ between Commercial, GCC, GCC-High, IL5 and
+ * DoD — this lane is cloud-neutral by construction rather than by testing.
  */
 
+import { loadExtractedSecurityGraph } from '@/lib/brain/security/extract';
 import type { SecurityGraph } from '@/lib/brain/security';
 
 export type SecurityGraphSource =
@@ -48,24 +46,30 @@ export type SecurityGraphSource =
   | { readonly available: false; readonly reason: string };
 
 /**
- * The reason, as one string, so the route, the UI and the tests all quote the
- * same sentence rather than three paraphrases that drift.
+ * The reason quoted when NO artifact shipped at all.
+ *
+ * Retained as a named export because the risk layer's tests and the surface both
+ * quote it, and because it is only ONE of the refusals `resolveSecurityGraph`
+ * can return — a caller must read `source.reason`, never assume this string.
  */
 export const NO_SECURITY_GRAPH_REASON =
   'No security graph is available to this deployment, so NO risk verdict has been drawn — ' +
   'this is not a clean result. The nine detectors in lib/brain/security run over a graph of ' +
   'the SOURCE (authorizers, verdict calls, publication sinks, predicate implementations), and ' +
-  'nothing in this repository produces one yet: the console reads Azure Resource Graph, not the ' +
-  'repository it was built from, so the extractor has to be a build-time artifact. Until it ' +
-  'lands, the risk lane below reports what WOULD have been examined and refuses to report a ' +
-  'count of zero as an absence of risk.';
+  'the console reads Azure Resource Graph, not the repository it was built from, so the ' +
+  'extractor is a build-time artifact. When it is missing, stale, or produced by a different ' +
+  'extractor version, the risk lane below reports what WOULD have been examined and refuses to ' +
+  'report a count of zero as an absence of risk.';
 
 /**
  * Load the security graph for this deployment.
  *
- * Always unavailable today — see the module doc-block for the measurement and
- * for the single change that makes it live.
+ * Delegates to the extraction package's runtime half, which re-validates the
+ * committed artifact — version, provenance, node count, age, join coverage —
+ * before handing it over. It never throws: every failure degrades to a refusal
+ * carrying its own specific reason, because a 500 here would hide which of the
+ * five it was.
  */
 export function loadSecurityGraph(): SecurityGraphSource {
-  return { available: false, reason: NO_SECURITY_GRAPH_REASON };
+  return loadExtractedSecurityGraph();
 }

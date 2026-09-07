@@ -222,6 +222,52 @@ export interface GraphVersionCounts {
 }
 
 /**
+ * HOW COMPLETE THE PULL THAT PRODUCED THIS VERSION WAS (#4016).
+ *
+ * ── WHY IT LIVES ON THE VERSION ──────────────────────────────────────────
+ *
+ * `arg-collect.ts` returns `complete: false` without throwing when it hits its
+ * page cap or when `totalRecords` disagrees with the rows it actually read. A
+ * version captured from such a pull records a PARTIAL estate, and the next
+ * complete pull diffs against it and reports every resource in the unread
+ * remainder as an ADDITION — or, worse, an earlier complete version diffed
+ * against a later partial one reports them as REMOVALS, which reads exactly like
+ * an outage. The route now refuses to write a partial version at all, but a
+ * store that predates that refusal can still hold one, and a predicate whose
+ * output is a deletion proposal must be able to SEE that.
+ *
+ * ── WHY IT IS OPTIONAL, AND WHY `undefined` IS NOT `false` ───────────────
+ *
+ * Versions written before this field existed carry nothing. `undefined` means
+ * NOT RECORDED, which is a different fact from "recorded as incomplete", and
+ * treating it as `false` would retroactively refuse every historical answer on
+ * evidence that was never gathered. Only an explicit `complete === false`
+ * triggers the refusals in `./queries`.
+ *
+ * ── WHY IT IS NOT IN THE DIGEST ──────────────────────────────────────────
+ *
+ * The digest is the CONTENT address, over the projected graph. Completeness is
+ * metadata about the READ, not about the graph. Folding it in would mean an
+ * incomplete pull followed by a complete pull of an unchanged estate hashed
+ * differently, minting a version that records no change — the exact defect
+ * `capture.ts`'s two-stage dedupe exists to prevent.
+ */
+export interface CollectionCompleteness {
+  /** `false` iff the collector established it did not read the whole estate. */
+  readonly complete: boolean;
+  readonly rowsFetched: number;
+  /**
+   * What the source said existed, or `null` when it did not say.
+   *
+   * `null` is NOT zero. Azure Resource Graph omits `totalRecords` on some
+   * responses, and coercing that to 0 would make a complete pull of an empty
+   * estate indistinguishable from a pull whose total was never reported —
+   * exactly the unknown-as-negative substitution this field exists to prevent.
+   */
+  readonly totalRecords: number | null;
+}
+
+/**
  * A version's metadata — everything except the graph itself.
  *
  * The list endpoint reads THESE (a projected Cosmos query), so showing 50
@@ -260,6 +306,13 @@ export interface GraphVersionSummary {
   readonly observedCount: number;
   /** ISO-8601 of the most recent capture that produced this digest. */
   readonly lastObservedAt: string;
+  /**
+   * How complete the Resource Graph pull behind this version was.
+   *
+   * `undefined` on versions written before {@link CollectionCompleteness}
+   * existed — NOT RECORDED, which is not the same as recorded-incomplete.
+   */
+  readonly collection?: CollectionCompleteness;
 }
 
 /** A version with its graph. */
