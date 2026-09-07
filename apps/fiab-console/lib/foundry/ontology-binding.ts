@@ -276,6 +276,100 @@ export function clampTop(top: number | undefined, def = 100): number {
 
 /** A SQL object reference: bracketed or bare `schema.table` / `db.schema.table`. */
 const SQL_REF_RE = /^[A-Za-z0-9_.$#[\]]+$/;
+
+/**
+ * ── #4219 — SHAPE IS NOT AUTHORIZATION ──────────────────────────────────────
+ *
+ * `SQL_REF_RE` above is the ONLY thing that stood between an ontology binding's
+ * `source.ref` and `SELECT TOP 100 * FROM <ref>` on the Synapse Serverless /
+ * Dedicated endpoints. It is an INJECTION guard and it is a good one: it proves
+ * the string cannot break out of the FROM clause. It proves nothing whatever
+ * about WHICH object the string names, and `master.sys.sql_logins` satisfies it
+ * completely — every character is in `[A-Za-z0-9_.$#[\]]`.
+ *
+ * That matters because the Console UAMI is a Synapse SQL admin, so the engine
+ * will happily serve `sys` catalog views and cross-database refs to it. #3959
+ * closed exactly this on the `shortcut` sink (`isMintedEngineObject`, the
+ * resolver's `case 'shortcut'`); `lakehouse-table` and `warehouse-table` reach
+ * the same `buildSqlSelect` sink and were never given the equivalent.
+ *
+ * These two helpers are the SHAPE half of the answer, kept pure and here beside
+ * the regex they qualify so the next reader cannot mistake the regex for the
+ * whole policy. The AUTHORIZATION half — "is this ref actually one of the
+ * objects the binding's item exposes?" — needs live catalog enumeration and is
+ * DEFERRED, for the reason recorded in `ontology-resolver.ts`. So be precise
+ * about the residual: this closes the engine-metadata and cross-database class,
+ * and a ref naming a real user table in the binding's OWN database that the
+ * caller was never meant to read is still resolved.
+ */
+
+/** SQL schemas that are ENGINE METADATA, never user data. Refused on every
+ *  ontology SQL binding regardless of what the enumerator says, because a
+ *  Serverless/Dedicated catalog scan does not list them and their absence would
+ *  otherwise read as "not found yet" rather than "not allowed". */
+const FORBIDDEN_SQL_SCHEMAS: ReadonlySet<string> = new Set([
+  'sys', 'information_schema', 'guest', 'db_owner', 'db_accessadmin',
+]);
+
+/** Split a SQL ref into its dotted parts with brackets stripped. Naive on
+ *  purpose: `SQL_REF_RE` has already excluded quotes, spaces and escapes, so a
+ *  dot here is always a separator. */
+function sqlRefParts(ref: string): string[] {
+  return (ref || '').trim().split('.').map((p) => p.replace(/^\[|\]$/g, ''));
+}
+
+/**
+ * Why this ontology SQL ref is REFUSED before it reaches the query engine, or
+ * null when the shape policy has no objection.
+ *
+ * `ownDatabase` is the binding's own `source.database` (the Serverless database
+ * the resolver is about to target, or the Dedicated pool name). A 3-part ref
+ * naming anything else is a cross-database read the binding did not declare.
+ *
+ * STATES ONLY WHAT IT ESTABLISHED (R7). "Outside the name-space this binding may
+ * address" — not "does not exist", not "you lack permission", neither of which
+ * is knowable from a string.
+ */
+export function ontologySqlRefViolation(ref: string, ownDatabase?: string): string | null {
+  const parts = sqlRefParts(ref);
+  if (parts.length === 0 || parts.some((p) => p === '')) {
+    return `"${ref}" is not a usable SQL object reference — use \`schema.table\`.`;
+  }
+  if (parts.length > 3) {
+    return `"${ref}" has more than three name parts, so it is not a \`db.schema.table\` reference.`;
+  }
+  if (parts.length >= 2) {
+    const schema = parts[parts.length - 2].toLowerCase();
+    if (FORBIDDEN_SQL_SCHEMAS.has(schema)) {
+      return `"${ref}" addresses the \`${parts[parts.length - 2]}\` schema, which is SQL engine metadata `
+        + 'rather than data an ontology object type can be bound to. Bind a user table or view.';
+    }
+  }
+  if (parts.length === 3) {
+    const db = parts[0].toLowerCase();
+    const own = (ownDatabase || '').trim().toLowerCase();
+    if (!own || db !== own) {
+      return `"${ref}" names database \`${parts[0]}\`, which is not the database this binding declares`
+        + `${ownDatabase ? ` (\`${ownDatabase}\`)` : ''}. A binding may only address objects in its own database.`;
+    }
+  }
+  return null;
+}
+
+/**
+ * Typed refusal for an ontology SQL ref, mirroring
+ * `EngineObjectNamespaceError` (lib/azure/shortcut-engines.ts) so the three SQL
+ * sinks in the resolver refuse in one recognisable shape.
+ */
+export class OntologySqlRefError extends Error {
+  status = 400;
+  code = 'ontology_sql_ref_namespace';
+  constructor(public readonly ref: string, reason: string) {
+    super(reason);
+    this.name = 'OntologySqlRefError';
+  }
+}
+
 /** A KQL / DAX table identifier (bare or single-token). */
 const KQL_IDENT_RE = /^[A-Za-z_][\w]{0,127}$/;
 /** A DAX table/measure identifier (letters, digits, spaces, underscore). */

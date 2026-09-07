@@ -1973,9 +1973,26 @@ jobs:
             # The script's exit status was previously discarded with `|| true`, so a
             # failed registration was indistinguishable from a clean run and the
             # operator was told (in the runbook) to go do it by hand. Capture the
-            # status and SURFACE it instead — still non-fatal, because a tenant with
-            # no Dataverse environment is a legitimate no-op, but never silent
-            # (deploy-integrity.md: a discarded result is a gate that cannot fail).
+            # status and SURFACE it (deploy-integrity.md: a discarded result is a
+            # gate that cannot fail).
+            #
+            # #3688 — SURFACING WAS NOT ENOUGH, BECAUSE THE SCRIPT COULD NOT TELL
+            # THE TWO CASES APART. Discovery used `curl -s` with no status check,
+            # so a 401/403 from the BAP admin API produced an empty environment
+            # list, printed "(no envs with Dataverse found)" and exited 0. This
+            # step then read 0 and reported completion. Run 31572941870
+            # (2026-08-12) did exactly that on an estate with a live Dataverse
+            # org, and the whole Power Platform item family stayed blocked on a
+            # grant the deploy believed it had performed.
+            #
+            # The script now separates the two: exit 3 means "could not ESTABLISH
+            # the environment list" (token failure, non-2xx, or a body with no
+            # `value` array), exit 0 with the parsed-empty message means the
+            # tenant genuinely has no Dataverse environment. Only the first is
+            # fatal here — the genuine no-op stays a legitimate pass, and a
+            # PER-ENVIRONMENT failure (exit 1, e.g. one env still needs its
+            # one-time Promote To Admin) stays a warning because the other
+            # environments were registered.
             set +e
             LOOM_MSAL_CLIENT_ID="$LOOM_MSAL_CLIENT_ID" \
               bash scripts/csa-loom/dataverse-add-appuser.sh
@@ -1983,8 +2000,11 @@ jobs:
             set -e
             if [ "$DV_RC" -eq 0 ]; then
               echo "  Dataverse Application User registration completed (idempotent)."
+            elif [ "$DV_RC" -eq 3 ]; then
+              echo "::error title=Dataverse environment discovery REFUSED (exit 3)::dataverse-add-appuser.sh could not establish the tenant's Power Platform environment list — the BAP admin API refused the call or returned an unparseable body (its exact HTTP code and response are in the step output above). NOTHING WAS REGISTERED, and this is NOT the same as a tenant with no Dataverse. Most likely the bootstrap identity lacks Power Platform Administrator / Global Administrator. Until this succeeds the whole Power Platform + Copilot Studio item family stays blocked on the svc-dataverse gate. See docs/fiab/dataverse-app-user.md."
+              exit 1
             else
-              echo "::warning title=Dataverse Application User registration incomplete (exit $DV_RC)::dataverse-add-appuser.sh did not complete. Most common cause: the bootstrap identity is not yet Dataverse System Administrator on an environment where Dataverse was added AFTER the environment was created (the one-time 'Promote To Admin' click — docs/fiab/dataverse-app-user.md Step 1). The Dataverse-backed editors keep their honest gate until this succeeds; re-run this job after the promotion."
+              echo "::warning title=Dataverse Application User registration incomplete (exit $DV_RC)::dataverse-add-appuser.sh reached the environment list but did not complete every registration (see registered=/failed= in the step output). Most common cause: the bootstrap identity is not yet Dataverse System Administrator on an environment where Dataverse was added AFTER the environment was created (the one-time 'Promote To Admin' click — docs/fiab/dataverse-app-user.md Step 1). The Dataverse-backed editors keep their honest gate for those environments until this succeeds; re-run this job after the promotion."
             fi
           fi
 

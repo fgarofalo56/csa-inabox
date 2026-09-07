@@ -357,6 +357,127 @@ export function pipelineDefinitionFromContent(
 }
 
 /**
+ * The keys ADF/Synapse read at an ACTIVITY ROOT. Everything else an activity
+ * carries belongs under `typeProperties`, and the service IGNORES it where it
+ * sits.
+ *
+ * Grounded in the Microsoft ADF activity schema (Activity / ExecutionActivity /
+ * ControlActivity): `name` and `type` identify it, `dependsOn`, `policy`,
+ * `linkedServiceName`, `inputs`, `outputs`, `description` and `userProperties`
+ * are the well-known siblings, and `typeProperties` is the per-activity-type
+ * body (`notebookPath`, `source`/`sink`, `expression`, `items`, nested
+ * `activities`, …).
+ *
+ * `state` and `onInactiveMarkAs` are NOT in this set on purpose: they are newer
+ * root-level fields and a wrong guess here MOVES a real root key into
+ * `typeProperties`, which is the same class of silent breakage this function
+ * exists to fix. They are absent from the canvas shape (nothing in Loom writes
+ * them), so leaving them out costs nothing today; add them WITH a fixture when
+ * something starts producing them.
+ */
+const ADF_ACTIVITY_ROOT_KEYS: ReadonlySet<string> = new Set([
+  'name', 'type', 'dependsOn', 'policy', 'linkedServiceName',
+  'inputs', 'outputs', 'description', 'userProperties', 'typeProperties',
+]);
+
+/** Control-flow containers nest child activities INSIDE `typeProperties`. Each
+ *  child is itself an activity and needs the same normalization. */
+const NESTED_ACTIVITY_KEYS = ['activities', 'ifTrueActivities', 'ifFalseActivities', 'defaultActivities'];
+
+function normalizeActivity(raw: unknown): unknown {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return raw;
+  const a = raw as Record<string, unknown>;
+  const root: Record<string, unknown> = {};
+  const moved: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(a)) {
+    if (k === 'typeProperties') continue;
+    if (ADF_ACTIVITY_ROOT_KEYS.has(k)) root[k] = v;
+    else moved[k] = v;
+  }
+  const existing = (a.typeProperties && typeof a.typeProperties === 'object' && !Array.isArray(a.typeProperties))
+    ? (a.typeProperties as Record<string, unknown>)
+    : undefined;
+  // ON CONFLICT THE EXISTING `typeProperties` WINS. A definition that already
+  // carries one is already wire-shaped for that key, and letting a stray root
+  // key overwrite it would let a half-migrated document silently downgrade.
+  const typeProperties: Record<string, unknown> = { ...moved, ...(existing ?? {}) };
+
+  for (const key of NESTED_ACTIVITY_KEYS) {
+    const nested = typeProperties[key];
+    if (Array.isArray(nested)) typeProperties[key] = nested.map(normalizeActivity);
+  }
+  // Switch: `cases: [{ value, activities[] }]`.
+  if (Array.isArray(typeProperties.cases)) {
+    typeProperties.cases = (typeProperties.cases as unknown[]).map((c) => {
+      if (!c || typeof c !== 'object') return c;
+      const cc = c as Record<string, unknown>;
+      return Array.isArray(cc.activities)
+        ? { ...cc, activities: (cc.activities as unknown[]).map(normalizeActivity) }
+        : cc;
+    });
+  }
+
+  // Only emit `typeProperties` when there is something in it OR the input had
+  // one — an activity type with no body (e.g. a bare Wait built by hand) should
+  // not gain an empty object it did not have.
+  const out: Record<string, unknown> = { ...root };
+  if (Object.keys(typeProperties).length > 0 || existing !== undefined) out.typeProperties = typeProperties;
+  return out;
+}
+
+/**
+ * Coerce a pipeline definition into the ADF/Synapse WIRE shape at the WRITE
+ * BOUNDARY (#3700).
+ *
+ * THE DEFECT. `pipelineDefinitionFromContent`'s default `'canvas'` target
+ * spreads each activity's config onto the activity ROOT, because that is where
+ * `extractActivities()` and the node inspectors look. The data-pipeline EDITOR
+ * therefore holds, saves to Cosmos, and POSTs that root shape — and three write
+ * paths PUT it to ADF verbatim:
+ *
+ *   1. `POST [id]/publish` with `body.definition` (the canvas spec the editor's
+ *      Publish button sends),
+ *   2. `POST [id]/publish` falling through to `state.definition` (which branch 1
+ *      persisted), and
+ *   3. `PUT [id]` — "Save = publish" — with `body.definition.properties`.
+ *
+ * ADF reads `typeProperties` and IGNORES root-level keys, so the PUT returned
+ * 200 and authored a pipeline whose `DatabricksNotebook` activity carried
+ * `notebookPath` where the service never looks: a pipeline that publishes
+ * successfully and does nothing. Only branch 4 (bundle content, no saved
+ * definition) passed `target: 'adf'` and got the nesting right.
+ *
+ * WHY AT THE BOUNDARY AND NOT IN THE EDITOR. The canvas shape is CORRECT for the
+ * canvas — `extractActivities()` depends on it — and Cosmos holds what the
+ * editor last showed. Translating on the way out is the one place both the
+ * editor's shape and the service's shape can be true at once, and it also
+ * repairs the ~13 items already persisted in the root shape without a migration.
+ *
+ * IDEMPOTENT on wire-shaped input: an activity that already has `typeProperties`
+ * and no stray root keys is returned with the same keys and the same values, so
+ * a definition read back FROM ADF (export, round-trip) survives this unchanged.
+ * That property is pinned by `__tests__/pipeline-binding.test.ts`, because
+ * "idempotent" asserted in a comment is how the second translator got written.
+ *
+ * NOT CLAIMED: this does not VALIDATE the definition. A `typeProperties` body
+ * that is wrong for its activity type is still wrong after this runs — ADF
+ * rejects it at commit, which is the honest outcome. This only puts each key
+ * where the service looks for it.
+ *
+ * Accepts either a full definition (`{ name?, properties }`) or a bare
+ * `properties` object; returns the same shape it was given.
+ */
+export function toAdfWireShape<T>(definition: T): T {
+  if (!definition || typeof definition !== 'object' || Array.isArray(definition)) return definition;
+  const d = definition as Record<string, unknown>;
+  if (d.properties && typeof d.properties === 'object' && !Array.isArray(d.properties)) {
+    return { ...d, properties: toAdfWireShape(d.properties) } as T;
+  }
+  if (!Array.isArray(d.activities)) return definition;
+  return { ...d, activities: d.activities.map(normalizeActivity) } as T;
+}
+
+/**
  * Map a binding/lookup error to an HTTP status + structured body shape.
  * Routes use this so the editor always gets `{ ok:false, code, error }`.
  */

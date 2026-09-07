@@ -31,9 +31,47 @@
  *     mirroring the Microsoft Purview Unified Catalog "Delete data products"
  *     procedure — see DELETE below. They drive the delete-dialog preflight.
  *
- *     GET is NOT ownership gated — published data products are discoverable to
- *     any catalog reader (Purview Unified Catalog model). It resolves the owning
- *     workspace's tenantId so the caller is told whether they own it (isOwner).
+ *     ── #3580 — GET IS DISCOVERY-GATED, AND RETURNS LESS TO A CATALOG READER ──
+ *     This docblock used to say "GET is NOT ownership gated — published data
+ *     products are discoverable to any catalog reader (Purview Unified Catalog
+ *     model)". The second clause was the intent; the first was the whole
+ *     implementation. `findItem` is an unscoped cross-partition
+ *     `SELECT * FROM c WHERE c.id = @id AND c.itemType = @t` — no workspace, no
+ *     tid, no lifecycle — so nothing established that a product was PUBLISHED or
+ *     even in the CALLER'S TENANT, and the response handed back the raw
+ *     `WorkspaceItem`. `state.ports` rides in that item, and a port `ref` is an
+ *     infrastructure ADDRESS (`abfss://` container path, Synapse `schema.table`,
+ *     ADX database) — the exact disclosure the sibling `[id]/ports` route was
+ *     fixed for under GHSA-hf73-rp4q-66pf. That fix was keyed to one route file
+ *     and this one, running the identical query, inherited none of it.
+ *
+ *     The decision now comes from `lib/dataproducts/discoverability.ts`, shared
+ *     with `[id]/ports`, and it has THREE outcomes rather than two:
+ *       - 'member'       (authorized on the owning workspace, any role) → the
+ *                        full payload above, byte-for-byte as before.
+ *       - 'discoverable' (not a member; the product is published/deprecated AND
+ *                        positively confirmed to be in the caller's own Entra
+ *                        tenant) → the CATALOG projection: `product`, plus a
+ *                        redacted `item` carrying only the identity/description
+ *                        fields the read-only consumer view renders. No `doc`
+ *                        (the owner edit-dialog projection), no `state` (so no
+ *                        port `ref`s, no bound-contract internals, no
+ *                        `purviewDataProductId`), no delete preconditions.
+ *       - 'denied'       → 404, worded identically to "no such product".
+ *
+ *     WHY A REDACTED `item` AND NOT NO `item`. `ConsumerDataProductDetail`
+ *     (lib/editors/data-product-detail.tsx) renders `item.displayName`,
+ *     `item.description` and `state.displayName` and bails to a blank page on a
+ *     null item — dropping the field outright would have turned the documented
+ *     Purview-UC consumer read view into an empty screen, i.e. traded a
+ *     disclosure for a broken surface. The redaction is an ALLOWLIST
+ *     (`catalogItemProjection`), so a field added to `state` later is excluded by
+ *     default rather than newly disclosed.
+ *
+ *     WHAT THIS DOES NOT CLOSE: the refusal is content-identical to a miss but
+ *     costs one to three more Cosmos round-trips, so a timing side-channel
+ *     remains (stated, not implied away — `id` is a GUID, so this is not an
+ *     enumeration surface).
  *
  *   PATCH /api/data-products/[id]   → owner-only merge of the supplied fields
  *     into the same Cosmos WorkspaceItem. Loads via the tenant-scoped path
@@ -105,6 +143,7 @@ import {
   resolveLifecycleState, setLifecycleState, toStatus, type LifecycleState,
 } from '@/lib/dataproducts/lifecycle';
 import { sanitizePorts, portsSummary } from '@/lib/dataproducts/ports';
+import { resolveDiscoveryAccess, NOT_FOUND } from '@/lib/dataproducts/discoverability';
 import { apiError } from '@/lib/api/respond';
 import { recordListingView } from '@/lib/marketplace/listing-analytics';
 import { withSession } from '@/lib/api/route-toolkit';
@@ -325,8 +364,43 @@ function itemToProduct(item: WithEtag, tenantId: string | null): DataProductDoc 
 }
 
 /**
- * Find the data-product item by id+itemType (cross-partition). NOT ownership
- * gated — the F15 consumer view returns any discoverable data product.
+ * The CATALOG projection of an item — what a caller admitted by discovery
+ * (published/deprecated + confirmed same tenant) but NOT authorized on the
+ * owning workspace may see of the raw record.
+ *
+ * An ALLOWLIST, deliberately, and not a `delete item.state.ports` denylist: the
+ * disclosure this closes (#3580) arrived because `state` is an open bag that
+ * grew a port `ref` — an `abfss://` / Synapse / ADX infrastructure ADDRESS —
+ * long after the route decided to return the whole record. A denylist would have
+ * to be edited every time `state` grows a field; this excludes new fields by
+ * default and its omissions are visible in one screen.
+ *
+ * `state.displayName` is the ONLY state key that survives, because
+ * `ConsumerDataProductDetail` reads it (`state.displayName || item.displayName`)
+ * and it is the same name the marketplace list already shows this caller.
+ */
+function catalogItemProjection(item: WithEtag): Partial<WorkspaceItem> {
+  const st = (item.state ?? {}) as Record<string, unknown>;
+  const displayName = typeof st.displayName === 'string' ? st.displayName : undefined;
+  return {
+    id: item.id,
+    itemType: item.itemType,
+    workspaceId: item.workspaceId,
+    displayName: item.displayName,
+    description: item.description,
+    createdAt: item.createdAt,
+    updatedAt: item.updatedAt,
+    state: displayName ? { displayName } : {},
+  } as Partial<WorkspaceItem>;
+}
+
+/**
+ * Find the data-product item by id+itemType (cross-partition). NOT authorization
+ * — every caller of this MUST then run `resolveDiscoveryAccess`. It was the
+ * absence of that second step, not this query, that made GET a cross-tenant read
+ * (#3580); the query is deliberately unscoped because the discovery model admits
+ * readers from outside the owning workspace and the scoping decision is the
+ * shared one in `lib/dataproducts/discoverability.ts`.
  */
 async function findItem(itemId: string): Promise<WithEtag | null> {
   const items = await itemsContainer();
@@ -462,21 +536,44 @@ export const GET = withSession<{ id: string }>(async (_req: NextRequest, { sessi
   const { id } = params;
   try {
     const item = await findItem(id);
-    if (!item) return err('Data product not found', 404, 'not_found');
+    if (!item) return err(NOT_FOUND, 404, 'not_found');
+    // #3580 — the discovery decision, shared with [id]/ports. 'denied' is worded
+    // identically to "no such product" so this is not an existence oracle.
+    const access = await resolveDiscoveryAccess(session, item);
+    if (access === 'denied') return err(NOT_FOUND, 404, 'not_found');
     const ownerTenantId = await resolveOwnerTenantId(item.workspaceId);
     const isOwner = ownerTenantId !== null && ownerTenantId === session.claims.oid;
     // W18 — count a real consumer view (owner self-views excluded so the
     // publisher-analytics number reflects genuine demand). Fire-and-forget.
     if (!isOwner) void recordListingView(id);
+
+    if (access === 'discoverable') {
+      // CATALOG READER. Not a member of the owning workspace; admitted only
+      // because the product is published/deprecated in this caller's own tenant.
+      // The marketplace projection + a redacted item — no `doc`, no raw `state`
+      // (so no port `ref`s), no destructive-delete preconditions, and no
+      // subscriber/DQ internals. `isOwner` is false by construction here: a
+      // 'member' would not be on this branch.
+      return NextResponse.json({
+        ok: true,
+        item: catalogItemProjection(item),
+        product: itemToProduct(item, ownerTenantId),
+        ownerTenantId,
+        isOwner: false,
+        displayName: item.displayName,
+        workspaceId: item.workspaceId,
+      });
+    }
+
     const [subscriberCount, gates] = await Promise.all([
       countSubscribers(id),
       computePreconditions(item, id),
     ]);
-    // PURE read of the last persisted measurement. This GET is NOT ownership
-    // gated and takes any product id, so executing the tenant's DQ rules here
-    // (one live ADX query PER RULE, unbounded) let any authenticated user
-    // amplify a Cosmos point-read into serial KQL fan-out — #3493. Measurement
-    // happens on the owner-gated writes that persist it.
+    // PURE read of the last persisted measurement. This GET takes any product id
+    // the caller can discover, so executing the tenant's DQ rules here (one live
+    // ADX query PER RULE, unbounded) let a user amplify a Cosmos point-read into
+    // serial KQL fan-out — #3493. Measurement happens on the owner-gated writes
+    // that persist it.
     const { dqScore, dqGate, dqGateId, dqMissing, measuredAt, stale } = readCertificationDq(item);
     return NextResponse.json(
       {

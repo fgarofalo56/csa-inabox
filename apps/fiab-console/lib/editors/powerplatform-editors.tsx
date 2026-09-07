@@ -37,6 +37,14 @@ import {
 import { ItemEditorChrome } from './item-editor-chrome';
 import { EmptyState } from '@/lib/components/empty-state';
 import { QueryErrorBar } from '@/lib/components/ui/query-error-bar';
+import { HonestGate } from '@/lib/components/shared/honest-gate';
+// #3688 — the ONE classifier for a Power Platform / Dataverse admission refusal.
+// Imported from the Copilot Studio family rather than re-implemented: BAP and
+// Dataverse return no Loom error CODE for these, only prose, so the decision is
+// a phrase list and a second copy of a phrase list is a guarantee of drift. It
+// would sit better in a shared `lib/azure/power-platform-auth.ts`; that file is
+// outside this change's ownership and the move is noted, not silently skipped.
+import { isPowerPlatformAdmissionError } from './copilot-studio-editors';
 import { PowerPlatformTree } from '@/lib/components/powerplatform/powerplatform-tree';
 import { SolutionsAlmPanel } from '@/lib/components/powerplatform/solutions-alm-panel';
 import { PowerAppsStudioTab } from '@/lib/power-platform/power-apps-editor';
@@ -126,7 +134,63 @@ function baseRibbon(onReload: () => void, makerHref?: string, extra?: RibbonTab[
   ];
 }
 
-function ErrorBar({ msg, hint }: { msg: string; hint?: string }) {
+/**
+ * The gate id every Dataverse admission refusal on THIS family routes to.
+ *
+ * `svc-dataverse`, not `svc-powerplatform`: the two registry entries name two
+ * different one-time actions, and pointing at the wrong one is the
+ * false-remediation class R7 forbids. `svc-powerplatform` is the BAP MANAGEMENT
+ * APP registration (New-PowerAppManagementApp); `svc-dataverse` is the
+ * per-environment DATAVERSE APPLICATION USER grant, which is the thing
+ * "not a member of the organization" / "principal not found" actually reports
+ * missing and the thing `scripts/csa-loom/dataverse-add-appuser.sh` performs.
+ */
+const DATAVERSE_ADMISSION_GATE_ID = 'svc-dataverse';
+
+/**
+ * #3688 — an admission refusal is a GATE, not a red bar.
+ *
+ * WHAT THIS WAS. A bare `<MessageBar intent="error">` reading "Power Platform
+ * error — <prose>". Every one of the six Power Platform surfaces plus the
+ * Dataverse-backed Copilot Studio surfaces funnels through it, and the single
+ * most common message it ever showed is the Dataverse Application User refusal:
+ * a one-time grant the platform can perform (`dataverse-add-appuser.sh`, run by
+ * the post-deploy bootstrap). Rendering that as an error with no Fix-it left the
+ * operator with prose and no route out — `ux-baseline.md` G2, and this file had
+ * zero HonestGate mounts. The Copilot Studio family already made exactly this
+ * move (#3544); this is the same decision applied to its sibling.
+ *
+ * DELIBERATELY NARROW. Only the three admission phrases route to the gate. A 404
+ * on a table, a 400 on a bad column payload and a 429 are NOT admission
+ * refusals, and a grant Fix-it over one of those would send the operator at a
+ * grant that was never the problem.
+ *
+ * `firstOpen` is the ux-baseline "new-item first-open is clean" rule: a freshly
+ * created, untouched item must not greet the user with a red banner. The failure
+ * is still SHOWN — suppressing it outright would be a different defect — but as
+ * a guided warning, and it reverts to the error styling the moment the user acts.
+ *
+ * Exported for the #3688 contract test: the admission→gate decision IS the
+ * change, and asserting it through one of the six editors would measure that
+ * editor's fetch plumbing instead.
+ */
+export function ErrorBar({
+  msg, hint, surface = 'Power Platform', firstOpen = false,
+}: { msg: string; hint?: string; surface?: string; firstOpen?: boolean }) {
+  if (!msg) return null;
+  if (isPowerPlatformAdmissionError(msg)) {
+    return <HonestGate gateId={DATAVERSE_ADMISSION_GATE_ID} surface={surface} detail={msg} />;
+  }
+  if (firstOpen) {
+    return (
+      <MessageBar intent="warning">
+        <MessageBarBody>
+          <MessageBarTitle>Not connected yet</MessageBarTitle>
+          {msg}{hint ? ` — ${hint}` : ''}
+        </MessageBarBody>
+      </MessageBar>
+    );
+  }
   return (
     <MessageBar intent="error">
       <MessageBarBody>
@@ -709,6 +773,16 @@ export function DataverseTableEditor({ item, id }: { item: FabricItemType; id: s
     [env.selected],
   );
   const [selectedTable, setSelectedTable] = useState<string | null>(id !== 'new' ? id : null);
+  // #3688 / ux-baseline "new-item first-open is clean". `useEnvironments`
+  // auto-selects the default environment, which immediately fires the table
+  // list — so a freshly created dataverse-table opened on an estate whose
+  // Application User grant has not run yet greeted the user with a red banner
+  // before they had touched anything. The failure is still shown (suppressing it
+  // would be its own defect), but as a guided warning until the user acts.
+  // A genuine ADMISSION refusal is unaffected: it renders as the svc-dataverse
+  // HonestGate on either path, because that IS the guided state.
+  const [touched, setTouched] = useState(false);
+  const firstOpen = id === 'new' && !touched;
   const [tab, setTab] = useState<DvTab>('columns');
   const tableEnc = selectedTable ? encodeURIComponent(selectedTable) : '';
 
@@ -892,10 +966,14 @@ export function DataverseTableEditor({ item, id }: { item: FabricItemType; id: s
           </MessageBar>
         )}
         <div className={s.toolbar}>
-          <EnvPicker envs={env.envs} selected={env.selected} setSelected={env.setSelected} />
-          <Button appearance="secondary" onClick={reloadActive}>Reload</Button>
+          <EnvPicker
+            envs={env.envs}
+            selected={env.selected}
+            setSelected={(n) => { setTouched(true); env.setSelected(n); }}
+          />
+          <Button appearance="secondary" onClick={() => { setTouched(true); reloadActive(); }}>Reload</Button>
           {env.selected && !selectedTable && (
-            <Button appearance="primary" icon={<Add20Regular />} onClick={() => { resetTbl(); setTblOpen(true); }}>New table</Button>
+            <Button appearance="primary" icon={<Add20Regular />} onClick={() => { setTouched(true); resetTbl(); setTblOpen(true); }}>New table</Button>
           )}
           {tblMsg && !selectedTable && (
             <Caption1 style={{ color: tblMsg.kind === 'error' ? tokens.colorStatusDangerForeground1 : tokens.colorStatusSuccessForeground1 }}>{tblMsg.text}</Caption1>
@@ -912,7 +990,7 @@ export function DataverseTableEditor({ item, id }: { item: FabricItemType; id: s
             >Open in Maker</Button>
           )}
         </div>
-        {env.error && <ErrorBar msg={env.error} hint={env.hint} />}
+        {env.error && <ErrorBar msg={env.error} hint={env.hint} surface="Dataverse table editor" firstOpen={firstOpen} />}
         {!env.selected && !env.loading && (
           <EmptyState
             icon={<Earth24Regular />}
@@ -921,7 +999,7 @@ export function DataverseTableEditor({ item, id }: { item: FabricItemType; id: s
           />
         )}
         {tablesState.loading && <Spinner size="small" label="Loading tables…" labelPosition="after" />}
-        {tablesState.error && <ErrorBar msg={tablesState.error} hint={tablesState.hint} />}
+        {tablesState.error && <ErrorBar msg={tablesState.error} hint={tablesState.hint} surface="Dataverse tables" firstOpen={firstOpen} />}
         {!selectedTable && !tablesState.loading && !tablesState.error && env.selected && tablesState.data && filtered.length === 0 && (
           <EmptyState
             icon={<Table24Regular />}

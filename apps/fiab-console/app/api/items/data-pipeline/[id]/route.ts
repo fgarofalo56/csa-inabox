@@ -12,7 +12,7 @@ import { getSession } from '@/lib/auth/session';
 import { authorizeItemWorkspace } from '@/lib/auth/workspace-guard';
 import { itemsContainer } from '@/lib/azure/cosmos-client';
 import { getPipeline, upsertPipeline, deletePipeline, adfConfigGate, type AdfPipeline } from '@/lib/azure/adf-client';
-import { pipelineDefinitionFromContent } from '@/lib/azure/pipeline-binding';
+import { pipelineDefinitionFromContent, toAdfWireShape } from '@/lib/azure/pipeline-binding';
 import type { WorkspaceItem } from '@/lib/types/workspace';
 
 export const runtime = 'nodejs';
@@ -105,7 +105,13 @@ export async function PUT(req: NextRequest, ctx: { params: Promise<{ id: string 
         adfName = `${base}_${(existing.id || '').replace(/[^A-Za-z0-9]/g, '').slice(-6) || 'loom'}`;
       }
       try {
-        await upsertPipeline(adfName, { name: adfName, properties: props });
+        // #3700 — the "Save = publish" WRITE BOUNDARY. `props` is
+        // `body.definition.properties`, i.e. the CANVAS shape the designer holds
+        // (activity config spread onto the activity root). ADF reads
+        // `typeProperties` and ignores root keys, so PUT raw this authored a
+        // pipeline that saved green and did nothing. `state.definition` below
+        // keeps the CANVAS shape deliberately — that is what the editor reloads.
+        await upsertPipeline(adfName, { name: adfName, properties: toAdfWireShape(props) });
       } catch (e: any) { return apiError(`ADF write failed: ${e?.message || e}`, 502); }
     }
     const next: WorkspaceItem = {
