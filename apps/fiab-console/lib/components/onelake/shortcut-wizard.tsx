@@ -82,6 +82,9 @@ import {
   Link20Regular,
 } from '@fluentui/react-icons';
 import type { ShortcutTargetType } from '@/lib/azure/lakehouse-shortcuts';
+import { AzureBackedField } from '@/lib/components/azure/azure-backed-field';
+import { BlobContainerPicker } from '@/lib/components/storage/blob-container-picker';
+import { AdlsPathPicker } from '@/lib/components/storage/adls-path-picker';
 
 // ---------------------------------------------------------------------------
 // Types (mirrors lib/azure/lakehouse-shortcuts.ts — kept local to avoid a
@@ -1029,12 +1032,27 @@ export function ExternalCredsForm({ sourceType, lakehouseId, shortcutName, value
       {sourceType === 'adls' && (
         <>
           <div style={{ display: 'flex', gap: tokens.spacingHorizontalS }}>
-            <Field label="Storage account" required style={{ flex: 1 }} hint="Account name (browse runs on the Console UAMI)">
-              <Input value={value.account || ''} onChange={(_, d) => set({ account: d.value })} placeholder="contosolake" />
-            </Field>
-            <Field label="Container / filesystem" required style={{ flex: 1 }}>
-              <Input value={value.container || ''} onChange={(_, d) => set({ container: d.value })} placeholder="landing" />
-            </Field>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <AzureBackedField
+                kind="storage"
+                label="Storage account"
+                value={value.account || ''}
+                surface="OneLake shortcut — ADLS source"
+                onChange={(v) => set({ account: v || '' })}
+              />
+            </div>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <BlobContainerPicker
+                account={value.account || ''}
+                value={value.container || ''}
+                label="Container / filesystem"
+                surface="OneLake shortcut — ADLS source"
+                required
+                disabled={!value.account}
+                onChange={(c) => set({ container: c })}
+                hint={value.account ? undefined : 'Pick a storage account first.'}
+              />
+            </div>
           </div>
           <Field label="SAS token (optional)" hint="Only needed for accounts the UAMI cannot reach — stored in Key Vault, never echoed.">
             <Input type={showSecret ? 'text' : 'password'} value={sasToken} onChange={(_, d) => setSasToken(d.value)} disabled={!!value.secretName}
@@ -1044,9 +1062,13 @@ export function ExternalCredsForm({ sourceType, lakehouseId, shortcutName, value
       )}
 
       {sourceType === 'dataverse' && (
-        <Field label="Synapse-Link export path" required hint="abfss://<container>@<account>.dfs.core.windows.net/<path> that Azure Synapse Link for Dataverse writes tables to — stored in Key Vault.">
-          <Input value={dvPath} onChange={(_, d) => setDvPath(d.value)} placeholder="abfss://dataverse@contosolake.dfs.core.windows.net/exports" disabled={!!value.secretName} />
-        </Field>
+        <AdlsPathPicker
+          label="Synapse-Link export path"
+          mode="folder"
+          value={dvPath}
+          onChange={(loc) => setDvPath(loc?.uri || '')}
+          hint="The ADLS Gen2 folder Azure Synapse Link for Dataverse writes tables to. Browse runs on the Console identity."
+        />
       )}
 
       {/* Stash / stashed status */}

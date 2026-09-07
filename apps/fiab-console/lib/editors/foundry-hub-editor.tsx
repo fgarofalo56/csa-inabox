@@ -59,6 +59,7 @@ import { useRegisterRibbonCommands } from '@/lib/components/shared/ribbon-comman
 import { ToolbarCrossLinks } from '@/lib/components/shared/item-tab-strip';
 import { ModelCatalogPanel, ChatPlaygroundPanel, PlaygroundsLandingPanel, ImagesPlaygroundPanel, AudioPlaygroundPanel } from './foundry-playground';
 import { AzureResourcePicker } from '@/lib/components/azure/azure-resource-picker';
+import { AzureBackedField, type AzureBackedKind } from '@/lib/components/azure/azure-backed-field';
 import { AccountPickerBar, type FoundryAccount } from './foundry-account-picker-bar';
 import { FoundryAccountTree } from '@/lib/components/foundry/foundry-tree';
 import { FoundryAgentsPanel } from '@/lib/components/foundry/foundry-agents';
@@ -532,9 +533,19 @@ function CreateConnectionDialog({
                   {CONNECTION_CATEGORIES.map((c) => (<Option key={c.value} value={c.value} text={c.label}>{c.label}</Option>))}
                 </Dropdown>
               </Field>
-              <Field label="Target endpoint" required>
-                <Input value={target} onChange={(_, d) => setTarget(d.value)} placeholder={catRow.targetPlaceholder} />
-              </Field>
+              {catRow.kind ? (
+                <AzureBackedField
+                  kind={catRow.kind as AzureBackedKind}
+                  label="Target endpoint"
+                  value={target}
+                  surface="AI Foundry hub connection"
+                  onChange={(v) => setTarget(v || '')}
+                />
+              ) : (
+                <Field label="Target endpoint" required>
+                  <Input value={target} onChange={(_, d) => setTarget(d.value)} placeholder={catRow.targetPlaceholder} />
+                </Field>
+              )}
               <Field label="Authentication" required>
                 <Dropdown value={authMode === 'AAD' ? 'Microsoft Entra ID (managed identity)' : authMode === 'ApiKey' ? 'API key (Key Vault reference)' : 'Custom keys (Key Vault references)'}
                   selectedOptions={[authMode]}

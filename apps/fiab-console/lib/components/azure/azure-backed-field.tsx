@@ -254,6 +254,30 @@ const EXTRA_FIELDS: Record<string, AzureBackedFieldDef> = {
     sources: [{ type: 'Microsoft.EventHub/namespaces' }],
     manualLabel: 'Event Hubs namespace resource ID',
   },
+  'servicebus-namespace-id': {
+    label: 'Service Bus namespace',
+    valueFrom: 'id',
+    sources: [{ type: 'Microsoft.ServiceBus/namespaces' }],
+    manualLabel: 'Service Bus namespace resource ID',
+  },
+  /**
+   * A Function App (the SITE), not a function inside it. The distinction is not
+   * pedantry: `/api/azure/resources` DECLINES
+   * `Microsoft.Web/sites/functions` outright (UNSUPPORTED_TYPES in
+   * app/api/azure/resources/route.ts) because an individual function is a child
+   * of the site's own ARM/data plane and is not a Resource Graph row. So a
+   * surface that needs `…/sites/{app}/functions/{fn}` picks the app HERE and
+   * composes the function name onto it, rather than asking for the whole id.
+   *
+   * `kind: 'functionapp'` matches what `/api/azure/function-apps` already
+   * filters on, so the two agree about what a Function App is.
+   */
+  'function-app-id': {
+    label: 'Function App',
+    valueFrom: 'id',
+    sources: [{ type: 'Microsoft.Web/sites', kind: 'functionapp' }],
+    manualLabel: 'Function App resource ID',
+  },
   /**
    * The cluster's ARM id, WITH its URI projected alongside. `valueFrom: 'id'`
    * decides what is stored; the `select` costs nothing extra (it is a column in
@@ -266,6 +290,45 @@ const EXTRA_FIELDS: Record<string, AzureBackedFieldDef> = {
     valueFrom: 'id',
     sources: [{ type: 'Microsoft.Kusto/clusters', select: 'properties.uri' }],
     manualLabel: 'Cluster resource ID',
+  },
+  /**
+   * The identity a Unity Catalog storage credential vends. TWO sources, and the
+   * second is `cloud-parity.md` doing real work rather than a nicety.
+   *
+   * On Commercial the answer is an Azure Databricks **Access Connector**
+   * (`Microsoft.Databricks/accessConnectors`) — the resource whose managed
+   * identity Databricks assumes to reach ADLS. In Azure Government there is no
+   * Databricks, so that type can never return a row there: a picker that knew
+   * only it would be PERMANENTLY EMPTY in the boundary that needs Loom Unity
+   * most, which is the exact inversion `catalog-endpoint` above exists to
+   * prevent. Gov's Loom Unity vends credentials for a user-assigned managed
+   * identity instead, so `Microsoft.ManagedIdentity/userAssignedIdentities` is
+   * listed alongside and whichever exists in the active boundary populates.
+   *
+   * Both sources are grouped and labelled distinctly by the picker, so a
+   * Commercial operator is never offered a bare identity where a connector is
+   * meant without being told which is which.
+   */
+  'databricks-access-connector': {
+    label: 'Access connector / identity',
+    valueFrom: 'id',
+    sources: [
+      {
+        type: 'Microsoft.Databricks/accessConnectors',
+        label: 'Databricks Access Connector (Commercial)',
+      },
+      {
+        type: 'Microsoft.ManagedIdentity/userAssignedIdentities',
+        label: 'User-assigned managed identity (Loom Unity — Gov + Commercial)',
+      },
+    ],
+    manualLabel: 'Access connector or identity resource ID',
+  },
+  'user-assigned-identity': {
+    label: 'User-assigned managed identity',
+    valueFrom: 'id',
+    sources: [{ type: 'Microsoft.ManagedIdentity/userAssignedIdentities' }],
+    manualLabel: 'Managed identity resource ID',
   },
 
   // ── DERIVED-ENDPOINT kinds with no loader, because no gate asks for them. ──
@@ -280,6 +343,25 @@ const EXTRA_FIELDS: Record<string, AzureBackedFieldDef> = {
     valueFrom: 'properties.primaryEndpoints.dfs',
     sources: [{ type: 'Microsoft.Storage/storageAccounts', select: 'properties.primaryEndpoints.dfs' }],
     manualLabel: 'DFS endpoint',
+  },
+  /**
+   * The BLOB endpoint of the same account — the sibling `storage-dfs-endpoint`
+   * was missing, and an AI Foundry `AzureBlob` connection targets
+   * `https://<account>.blob.<suffix>/<container>`, not the DFS host.
+   *
+   * Taken from ARM (`properties.primaryEndpoints.blob`) rather than composed
+   * from the account name, which is what makes it correct in every boundary:
+   * the sovereign suffix comes back WITH the row. Composing it in the browser
+   * could not work — `detectLoomCloud()` reads `LOOM_CLOUD`, which is not a
+   * `NEXT_PUBLIC_` variable and is therefore `undefined` in the client bundle,
+   * so a client-side suffix would emit the Commercial host in Gov
+   * (`cloud-parity.md`).
+   */
+  'storage-blob-endpoint': {
+    label: 'Blob storage endpoint',
+    valueFrom: 'properties.primaryEndpoints.blob',
+    sources: [{ type: 'Microsoft.Storage/storageAccounts', select: 'properties.primaryEndpoints.blob' }],
+    manualLabel: 'Blob endpoint',
   },
   /**
    * A T-SQL host. THREE sources on purpose: the surfaces that ask for one

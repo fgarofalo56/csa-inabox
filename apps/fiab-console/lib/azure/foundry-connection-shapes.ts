@@ -30,13 +30,34 @@ export const CONNECTION_CATEGORIES: {
   label: string;
   /** Placeholder for the endpoint/target field. */
   targetPlaceholder: string;
+  /**
+   * The `AzureBackedField` kind that DISCOVERS this category's target endpoint,
+   * where one exists (#3518). Present ⇒ the dialog renders a picker instead of
+   * a free-text box; absent ⇒ the endpoint is genuinely not enumerable and the
+   * Input stays.
+   *
+   * Every kind here projects the endpoint from ARM (`properties.endpoint`,
+   * `properties.primaryEndpoints.blob`), so the sovereign host comes back WITH
+   * the row and is right in every boundary (`cloud-parity.md`).
+   *
+   * `CognitiveSearch` deliberately has NO kind. An Azure AI Search service does
+   * not carry its endpoint as an ARM property — the URL is
+   * `https://<name>.<search-suffix>` — and the suffix is boundary-dependent
+   * (`getSearchSuffix()`: `search.windows.net` vs `search.azure.us`). That
+   * helper resolves `LOOM_CLOUD`, which is not a `NEXT_PUBLIC_` variable and so
+   * reads as `undefined` in the browser, meaning a client-side composition
+   * would emit the COMMERCIAL host on a Gov estate. A wrong endpoint is worse
+   * than a typed one, so this row keeps its Input until the value can be
+   * derived where the boundary is actually known.
+   */
+  kind?: string;
   /** Auth modes valid for this category (first is the default). */
   authModes: ConnectionAuthMode[];
 }[] = [
-  { value: 'AzureOpenAI', label: 'Azure OpenAI', targetPlaceholder: 'https://<name>.openai.azure.com', authModes: ['AAD', 'ApiKey'] },
+  { value: 'AzureOpenAI', label: 'Azure OpenAI', targetPlaceholder: 'https://<name>.openai.azure.com', kind: 'aoaiEndpoint', authModes: ['AAD', 'ApiKey'] },
   { value: 'CognitiveSearch', label: 'Azure AI Search', targetPlaceholder: 'https://<name>.search.windows.net', authModes: ['AAD', 'ApiKey'] },
-  { value: 'AIServices', label: 'Azure AI Services', targetPlaceholder: 'https://<name>.cognitiveservices.azure.com', authModes: ['AAD', 'ApiKey'] },
-  { value: 'AzureBlob', label: 'Azure Blob storage', targetPlaceholder: 'https://<account>.blob.core.windows.net/<container>', authModes: ['AAD'] },
+  { value: 'AIServices', label: 'Azure AI Services', targetPlaceholder: 'https://<name>.cognitiveservices.azure.com', kind: 'aoaiEndpoint', authModes: ['AAD', 'ApiKey'] },
+  { value: 'AzureBlob', label: 'Azure Blob storage', targetPlaceholder: 'https://<account>.blob.core.windows.net/<container>', kind: 'storage-blob-endpoint', authModes: ['AAD'] },
   { value: 'ApiKey', label: 'Custom (API key)', targetPlaceholder: 'https://<endpoint>', authModes: ['ApiKey'] },
   { value: 'CustomKeys', label: 'Custom (multiple keys)', targetPlaceholder: 'https://<endpoint>', authModes: ['CustomKeys'] },
 ];

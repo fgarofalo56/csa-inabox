@@ -28,6 +28,8 @@ import {
   Add24Regular, Flash24Regular, MailInbox24Regular,
 } from '@fluentui/react-icons';
 import { ItemEditorChrome } from './item-editor-chrome';
+import { AzureBackedField, type AzureBackedKind } from '@/lib/components/azure/azure-backed-field';
+import { BlobContainerPicker } from '@/lib/components/storage/blob-container-picker';
 import { MessagingMetricsTab } from '@/lib/components/messaging/metrics-tab';
 import { GuidedEmptyState } from '@/lib/components/shared/guided-empty-state';
 import { PreviewTable } from '@/lib/components/shared/preview-table';
@@ -52,13 +54,127 @@ const useStyles = makeStyles({
 });
 
 const DESTINATIONS: { key: DestType; label: string; needs: 'resourceId' | 'endpointUrl' | 'storageQueue'; hint: string }[] = [
-  { key: 'AzureFunction', label: 'Azure Function', needs: 'resourceId', hint: 'Function resource ID: …/sites/{app}/functions/{fn}' },
+  { key: 'AzureFunction', label: 'Azure Function', needs: 'resourceId', hint: 'Pick the Function App, then name the function inside it that handles the event.' },
   { key: 'WebHook', label: 'Web Hook', needs: 'endpointUrl', hint: 'HTTPS endpoint URL (Event Grid performs a validation handshake)' },
-  { key: 'EventHub', label: 'Event Hub', needs: 'resourceId', hint: 'Event Hub resource ID: …/namespaces/{ns}/eventhubs/{hub}' },
-  { key: 'ServiceBusQueue', label: 'Service Bus queue', needs: 'resourceId', hint: 'Queue resource ID: …/namespaces/{ns}/queues/{q}' },
-  { key: 'ServiceBusTopic', label: 'Service Bus topic', needs: 'resourceId', hint: 'Topic resource ID: …/namespaces/{ns}/topics/{t}' },
-  { key: 'StorageQueue', label: 'Storage queue', needs: 'storageQueue', hint: 'Storage account resource ID + queue name' },
+  { key: 'EventHub', label: 'Event Hub', needs: 'resourceId', hint: 'Pick the Event Hubs namespace, then name the hub events are delivered to.' },
+  { key: 'ServiceBusQueue', label: 'Service Bus queue', needs: 'resourceId', hint: 'Pick the Service Bus namespace, then the queue — both are discovered, neither is typed.' },
+  { key: 'ServiceBusTopic', label: 'Service Bus topic', needs: 'resourceId', hint: 'Pick the Service Bus namespace, then the topic — both are discovered, neither is typed.' },
+  { key: 'StorageQueue', label: 'Storage queue', needs: 'storageQueue', hint: 'Events are enqueued to the queue you choose below.' },
 ];
+
+/**
+ * The ARM child segment each destination composes onto its picked parent.
+ *
+ * Event Grid wants a FULL child resource id — `…/namespaces/{ns}/queues/{q}`,
+ * `…/sites/{app}/functions/{fn}` — and none of those child types can be
+ * offered by a picker: Service Bus queues/topics and Event Hubs hubs are ARM
+ * children of a namespace and are not Resource Graph rows (which is why
+ * `/api/azure/servicebus-entities` exists as a separate control-plane call),
+ * and `Microsoft.Web/sites/functions` is DECLINED outright by
+ * `/api/azure/resources`. So the PARENT is always picked and the child is
+ * appended here — the operator never composes an id by hand.
+ */
+const DEST_CHILD_SEGMENT: Partial<Record<DestType, string>> = {
+  AzureFunction: 'functions',
+  EventHub: 'eventhubs',
+  ServiceBusQueue: 'queues',
+  ServiceBusTopic: 'topics',
+};
+
+/** Which `AzureBackedField` kind supplies the parent for each destination. */
+const DEST_PARENT_KIND: Partial<Record<DestType, string>> = {
+  AzureFunction: 'function-app-id',
+  EventHub: 'eventhubs-namespace-id',
+  ServiceBusQueue: 'servicebus-namespace-id',
+  ServiceBusTopic: 'servicebus-namespace-id',
+  StorageQueue: 'storage-account-id',
+};
+
+/** Label for the child name box, per destination. */
+const DEST_CHILD_LABEL: Partial<Record<DestType, string>> = {
+  AzureFunction: 'Function name',
+  EventHub: 'Event Hub name',
+  ServiceBusQueue: 'Queue',
+  ServiceBusTopic: 'Topic',
+};
+
+/**
+ * The queues (or topics) of the namespace picked above, from the control-plane
+ * call `/api/azure/servicebus-entities` — the route #3526 added for exactly
+ * this cascade, and the only thing in this app that can answer it (Resource
+ * Graph has no rows for a namespace's children).
+ *
+ * A FAILURE IS NOT AN EMPTY LIST. The route distinguishes "this namespace has
+ * no queues" from "I could not read this namespace", and so does this: the
+ * first renders as an empty Dropdown with that caption, the second as the
+ * error the route returned. Flattening them would tell an operator who lacks
+ * Reader on the namespace that it is empty (`deploy-integrity.md` R7).
+ */
+function ServiceBusEntityPicker({
+  namespaceId, wanted, value, onChange,
+}: {
+  namespaceId: string;
+  wanted: 'queue' | 'topic';
+  value: string;
+  onChange: (v: string) => void;
+}) {
+  const [names, setNames] = useState<string[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    const id = (namespaceId || '').trim();
+    if (!id) { setNames([]); setError(null); return; }
+    let cancelled = false;
+    setLoading(true); setError(null);
+    void (async () => {
+      try {
+        const r = await clientFetch(`/api/azure/servicebus-entities?namespaceId=${encodeURIComponent(id)}`);
+        const j = await r.json().catch(() => ({}));
+        if (cancelled) return;
+        if (!j?.ok) {
+          setNames([]);
+          setError(j?.error || `Could not list ${wanted}s (HTTP ${r.status}).`);
+        } else {
+          setNames((j.entities || []).filter((e: any) => e?.kind === wanted && e?.name).map((e: any) => String(e.name)));
+          setError(null);
+        }
+      } catch (e: any) {
+        if (!cancelled) { setNames([]); setError(e?.message || String(e)); }
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [namespaceId, wanted]);
+
+  const label = wanted === 'queue' ? 'Queue' : 'Topic';
+  return (
+    <Field
+      label={label}
+      required
+      validationState={error ? 'error' : 'none'}
+      validationMessage={error || undefined}
+      hint={
+        !namespaceId
+          ? 'Pick a Service Bus namespace first.'
+          : loading
+            ? `Reading the ${wanted}s in this namespace…`
+            : (!error && names.length === 0 ? `This namespace has no ${wanted}s.` : undefined)
+      }
+    >
+      <Dropdown
+        value={value}
+        selectedOptions={value ? [value] : []}
+        disabled={!namespaceId || loading}
+        placeholder={namespaceId ? `Select a ${wanted}` : ''}
+        onOptionSelect={(_, d) => onChange(d.optionValue || '')}
+      >
+        {names.map((n) => <Option key={n} value={n} text={n}>{n}</Option>)}
+      </Dropdown>
+    </Field>
+  );
+}
 
 const ADV_OPERATORS = [
   'StringIn', 'StringNotIn', 'StringBeginsWith', 'StringEndsWith', 'StringContains',
@@ -113,7 +229,10 @@ export function EventGridTopicEditor({ item, id }: Props) {
   const [subBusy, setSubBusy] = useState(false);
   const [subName, setSubName] = useState('');
   const [destType, setDestType] = useState<DestType>('AzureFunction');
-  const [destResourceId, setDestResourceId] = useState('');
+  // The PICKED parent (namespace / Function App / storage account) and the
+  // child entity name. `destResourceId` below is derived from them, never typed.
+  const [destParentId, setDestParentId] = useState('');
+  const [destChildName, setDestChildName] = useState('');
   const [destEndpointUrl, setDestEndpointUrl] = useState('');
   const [destQueueName, setDestQueueName] = useState('');
   const [subjectBeginsWith, setSubjectBeginsWith] = useState('');
@@ -180,8 +299,23 @@ export function EventGridTopicEditor({ item, id }: Props) {
     } catch (e: any) { setMsg({ intent: 'error', text: e?.message || String(e) }); }
   }, [load, selected]);
 
+  /**
+   * The destination ARM id Event Grid is given, COMPOSED from the picked parent
+   * and the child entity name. Empty while either half is missing, which is
+   * what the submit guard below checks — so a half-filled destination is
+   * refused here rather than by ARM.
+   */
+  const destResourceId = useMemo(() => {
+    const parent = destParentId.trim().replace(/\/+$/, '');
+    if (!parent) return '';
+    const seg = DEST_CHILD_SEGMENT[destType];
+    if (!seg) return parent; // StorageQueue: the account id IS the resource id.
+    const child = destChildName.trim();
+    return child ? `${parent}/${seg}/${child}` : '';
+  }, [destType, destParentId, destChildName]);
+
   const resetSubForm = useCallback(() => {
-    setSubName(''); setDestType('AzureFunction'); setDestResourceId(''); setDestEndpointUrl('');
+    setSubName(''); setDestType('AzureFunction'); setDestParentId(''); setDestChildName(''); setDestEndpointUrl('');
     setDestQueueName(''); setSubjectBeginsWith(''); setSubjectEndsWith(''); setIncludedEventTypes('');
     setCaseSensitive(false); setAdvFilters([]); setDlResourceId(''); setDlContainer('');
     setMaxAttempts('30'); setTtlMinutes('1440'); setDeliverySchema('CloudEventSchemaV1_0');
@@ -192,8 +326,8 @@ export function EventGridTopicEditor({ item, id }: Props) {
     const meta = DESTINATIONS.find((d) => d.key === destType);
     // Client-side guard mirrors the server so the user gets an inline error fast.
     if (meta?.needs === 'endpointUrl' && !destEndpointUrl.trim()) { setMsg({ intent: 'error', text: 'Endpoint URL is required for a Web Hook destination.' }); return; }
-    if (meta?.needs === 'resourceId' && !destResourceId.trim()) { setMsg({ intent: 'error', text: 'A resource ID is required for this destination.' }); return; }
-    if (meta?.needs === 'storageQueue' && (!destResourceId.trim() || !destQueueName.trim())) { setMsg({ intent: 'error', text: 'Storage queue destination needs a storage account resource ID and a queue name.' }); return; }
+    if (meta?.needs === 'resourceId' && !destResourceId.trim()) { setMsg({ intent: 'error', text: `Pick a ${DEST_PARENT_KIND[destType] === 'function-app-id' ? 'Function App' : 'namespace'} and name the ${(DEST_CHILD_LABEL[destType] || 'entity').toLowerCase()} for this destination.` }); return; }
+    if (meta?.needs === 'storageQueue' && (!destResourceId.trim() || !destQueueName.trim())) { setMsg({ intent: 'error', text: 'Storage queue destination needs a storage account and a queue name.' }); return; }
     setSubBusy(true); setMsg(null);
     try {
       const subscription: any = {
@@ -471,9 +605,37 @@ export function EventGridTopicEditor({ item, id }: Props) {
                       <Input value={destEndpointUrl} onChange={(_, d) => setDestEndpointUrl(d.value)} placeholder="https://my-func.azurewebsites.net/runtime/webhooks/eventgrid?..." />
                     </Field>
                   ) : (
-                    <Field label={destType === 'StorageQueue' ? 'Storage account resource ID' : 'Handler resource ID'} required>
-                      <Input value={destResourceId} onChange={(_, d) => setDestResourceId(d.value)} placeholder="/subscriptions/…/resourceGroups/…/providers/…" />
-                    </Field>
+                    <>
+                      <AzureBackedField
+                        kind={(DEST_PARENT_KIND[destType] || 'storage-account-id') as AzureBackedKind}
+                        value={destParentId}
+                        surface="Event Grid event subscription"
+                        onChange={(v) => setDestParentId(v || '')}
+                      />
+                      {destType === 'ServiceBusQueue' || destType === 'ServiceBusTopic' ? (
+                        <ServiceBusEntityPicker
+                          namespaceId={destParentId}
+                          wanted={destType === 'ServiceBusQueue' ? 'queue' : 'topic'}
+                          value={destChildName}
+                          onChange={setDestChildName}
+                        />
+                      ) : DEST_CHILD_SEGMENT[destType] ? (
+                        <Field
+                          label={DEST_CHILD_LABEL[destType] || 'Name'}
+                          required
+                          hint={
+                            destType === 'AzureFunction'
+                              ? 'The function inside the app above. Individual functions are children of the site\'s own ARM plane and are not Resource Graph rows, so this one is named rather than picked.'
+                              : 'The hub inside the namespace above. Hubs are ARM children of a namespace and have no namespace-scoped discovery route in this app yet, so this one is named rather than picked.'
+                          }
+                        >
+                          <Input value={destChildName} onChange={(_, d) => setDestChildName(d.value)} />
+                        </Field>
+                      ) : null}
+                      {destResourceId && (
+                        <Caption1 className={s.mono}>{destResourceId}</Caption1>
+                      )}
+                    </>
                   )}
                   {destType === 'StorageQueue' && (
                     <Field label="Queue name" required>
@@ -529,8 +691,22 @@ export function EventGridTopicEditor({ item, id }: Props) {
 
                   <Divider />
                   <div className={s.sectionHead}><Subtitle2>Dead-letter (optional)</Subtitle2><Caption1>Undeliverable events are written to a Storage blob container.</Caption1></div>
-                  <Field label="Storage account resource ID"><Input value={dlResourceId} onChange={(_, d) => setDlResourceId(d.value)} placeholder="/subscriptions/…/storageAccounts/…" /></Field>
-                  <Field label="Blob container name"><Input value={dlContainer} onChange={(_, d) => setDlContainer(d.value)} placeholder="eventgrid-deadletter" /></Field>
+                  <AzureBackedField
+                    kind="storage-account-id"
+                    label="Dead-letter storage account"
+                    value={dlResourceId}
+                    surface="Event Grid dead-letter destination"
+                    onChange={(v) => setDlResourceId(v || '')}
+                  />
+                  <BlobContainerPicker
+                    account={dlResourceId}
+                    value={dlContainer}
+                    label="Blob container"
+                    surface="Event Grid dead-letter destination"
+                    disabled={!dlResourceId}
+                    onChange={setDlContainer}
+                    hint={dlResourceId ? undefined : 'Pick a storage account first — the container list is read from it.'}
+                  />
 
                   <Divider />
                   <div className={s.sectionHead}><Subtitle2>Retry policy</Subtitle2></div>

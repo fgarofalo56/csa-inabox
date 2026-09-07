@@ -264,6 +264,15 @@ describe('the ARM-id field kinds Wave 1A added', () => {
       // A cloud-parity composite: the Databricks workspace URL is both its own
       // kind and the Commercial half of `catalog-endpoint`.
       'catalog-endpoint + databricks :: Microsoft.Databricks/workspaces||properties.workspaceUrl|properties.workspaceUrl',
+      // The SAME cloud-parity shape one layer down (#3540). A Unity Catalog
+      // storage credential is an Access Connector on Commercial and a
+      // user-assigned managed identity in Gov, where Databricks does not
+      // exist — so `databricks-access-connector` lists BOTH, and its second
+      // source is by construction the whole of `user-assigned-identity`. The
+      // two kinds are not interchangeable at the call site: one asks "which
+      // identity vends this credential", the other "which user-assigned
+      // identity", and the UC dialog renders them as two separate fields.
+      'databricks-access-connector + user-assigned-identity :: Microsoft.ManagedIdentity/userAssignedIdentities|||id',
       // `sql-host` is the multi-backend composite; its Azure SQL leg is by
       // construction the same query as the `sqlServer` loader.
       'sql-host + sqlServer :: Microsoft.Sql/servers||properties.fullyQualifiedDomainName|properties.fullyQualifiedDomainName',
