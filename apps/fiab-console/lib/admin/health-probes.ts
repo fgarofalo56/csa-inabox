@@ -41,18 +41,96 @@ async function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
 }
 
 /**
- * Word/substring test for an authorization denial, shared by the probes below.
- *
- * KNOWN LIMITATION, deliberately not widened here (#3729). The bare `401|403`
- * alternatives match those digits ANYWHERE in the message — including inside a
- * subscription GUID or an api-version — so on an estate whose subscription id
- * contains '403' any probe failure classifies as a denial. `probeArmReader`
- * no longer uses this: it parses ARM's actual HTTP status (see
- * `armStatusFromMessage`). The remaining ~20 probes still do, and each carries
- * a differently-shaped upstream error message, so converting them is its own
- * change with its own evidence rather than a silent widening of this one.
+ * Authorization-denial wording. Words only — the bare `401|403` alternatives
+ * that used to live here matched those digits ANYWHERE in the message,
+ * including inside a subscription GUID or an api-version (#3793). Numeric
+ * classification is `classifyProbeFailure`, which reads a structured status
+ * first and falls back to a POSITION-ANCHORED numeric match.
  */
-const DENIED = /401|403|forbidden|unauthoriz|not authorized|access denied/i;
+const DENIED_WORDS = /forbidden|unauthoriz|not authorized|access denied|authorizationfailed|insufficient privileges/i;
+
+/**
+ * Numeric 401/403 anchored to a keyword that makes it a STATUS rather than
+ * three digits that happen to appear in an id.
+ *
+ * Matches "failed 403", "status: 401", "HTTP 403", "returned 401", "(403)" —
+ * the shapes @azure/identity, the ARM client, the Kusto SDK and fetch wrappers
+ * actually emit. Does NOT match `/subscriptions/40312345-…` or
+ * `api-version=2021-04-01`, which is the whole point.
+ */
+const DENIED_STATUS_ANCHORED = /(?:\b(?:failed|status|statuscode|status code|code|http|response|returned|error|rejected|with)\b\s*[:=]?\s*\(?|\()(401|403)\b/i;
+
+/**
+ * Three-valued classification of a probe failure (#3793).
+ *
+ *   'denied'       — an authorization denial was ESTABLISHED (structured 401/403,
+ *                    or an anchored status, or explicit denial wording).
+ *   'not-denied'   — the call completed and answered something else (404, 400,
+ *                    409 …). Not a permission problem.
+ *   'inconclusive' — nothing was established: a timeout, a throttle, a 5xx, a
+ *                    transport error, or an unrecognised message. Per
+ *                    deploy-integrity R7 this must NOT be reported as either a
+ *                    denial or a configuration fault.
+ *
+ * Reads a STRUCTURED status before it reads any text: @azure/core-rest-pipeline
+ * RestError carries `statusCode`, the Cosmos SDK carries a numeric-ish `code`,
+ * fetch Responses carry `status`. Text is the fallback, never the first source.
+ */
+export function classifyProbeFailure(e: unknown): 'denied' | 'not-denied' | 'inconclusive' {
+  const status = probeStatusFrom(e);
+  if (status !== null) {
+    if (status === 401 || status === 403) return 'denied';
+    // 408 / 429 / 5xx are the upstream saying "not now", never "no".
+    if (status === 408 || status === 429 || status >= 500) return 'inconclusive';
+    return 'not-denied';
+  }
+  const msg = messageOf(e);
+  if (!msg) return 'inconclusive';
+  // The ARM client embeds its own status as `… failed <status>: <body>`.
+  const armStatus = armStatusFromMessage(msg);
+  if (armStatus !== null) {
+    if (armStatus === 401 || armStatus === 403) return 'denied';
+    if (armStatus === 408 || armStatus === 429 || armStatus >= 500) return 'inconclusive';
+    return 'not-denied';
+  }
+  if (DENIED_WORDS.test(msg) || DENIED_STATUS_ANCHORED.test(msg)) return 'denied';
+  return 'inconclusive';
+}
+
+function messageOf(e: unknown): string {
+  if (e == null) return '';
+  const m = (e as any)?.message;
+  return typeof m === 'string' && m ? m : String(e);
+}
+
+/** A numeric HTTP status carried on the error OBJECT, or null if it has none. */
+function probeStatusFrom(e: unknown): number | null {
+  if (e == null || typeof e !== 'object') return null;
+  const anyE = e as any;
+  for (const v of [anyE.statusCode, anyE.status, anyE.response?.status, anyE.response?.statusCode, anyE.code]) {
+    // `code` is a string on Node transport errors ('ENOTFOUND') and a number
+    // on the Cosmos SDK; only an all-digit value is a status.
+    const n = typeof v === 'number' ? v : (typeof v === 'string' && /^\d{3}$/.test(v) ? Number(v) : NaN);
+    if (Number.isFinite(n) && n >= 100 && n <= 599) return n;
+  }
+  return null;
+}
+
+/** True only when a denial was ESTABLISHED. Inconclusive is never a denial. */
+export function probeDenied(e: unknown): boolean {
+  return classifyProbeFailure(e) === 'denied';
+}
+
+/**
+ * Suffix appended to a probe's `detail` when the cause was not established, so
+ * the surface does not read as a proven configuration fault (R7). Empty for a
+ * denial or a definite non-denial, which have real diagnoses of their own.
+ */
+export function probeCauseNote(e: unknown): string {
+  return classifyProbeFailure(e) === 'inconclusive'
+    ? ' — cause not established (no HTTP status was returned; this is a timeout, a throttle, a transport error or an unrecognised failure, not evidence of a permission or configuration problem).'
+    : '';
+}
 
 /** Pre-filled role-grant script for the Console UAMI on a resource scope. */
 function grantScript(h: ProbeHelpers, role: string, scopeHint: string): string {
@@ -91,10 +169,10 @@ async function probeAdls(h: ProbeHelpers): Promise<CheckResult> {
     return { ...base, status: 'pass', detail: `Lake reachable + authorized (${getAccountName()}): ${containers.length} container(s) listed (${containers.slice(0, 5).map((c) => c.name).join(', ')}).` };
   } catch (e: any) {
     const msg = e?.message || String(e);
-    const denied = DENIED.test(msg);
+    const denied = probeDenied(e);
     return {
       ...base, status: denied ? 'fail' : 'warn',
-      detail: `ADLS probe failed: ${msg}`,
+      detail: `ADLS probe failed: ${msg}${probeCauseNote(e)}`,
       remediation: denied
         ? 'Grant the Console UAMI "Storage Blob Data Contributor" on the DLZ storage account (modules/landing-zone/storage.bicep wires this on a push-button deploy).'
         : 'Verify LOOM_ADLS_ACCOUNT / the container URLs and network reachability (private endpoint / firewall) from the Console subnet.',
@@ -124,10 +202,10 @@ async function probeSynapse(h: ProbeHelpers): Promise<CheckResult> {
     return { ...base, status: 'pass', detail: `Synapse dev endpoint reachable + authorized (${env('LOOM_SYNAPSE_WORKSPACE')}): ${pools.length} Spark pool(s).` };
   } catch (e: any) {
     const msg = e?.message || String(e);
-    const denied = DENIED.test(msg);
+    const denied = probeDenied(e);
     return {
       ...base, status: 'warn',
-      detail: `Synapse probe failed: ${msg}`,
+      detail: `Synapse probe failed: ${msg}${probeCauseNote(e)}`,
       remediation: denied
         ? 'Grant the Console UAMI "Synapse Administrator" on the workspace (Synapse Studio → Manage → Access control), and Synapse SQL Admin for serverless DDL (scripts/csa-loom/grant-synapse-sql.sh).'
         : 'Verify LOOM_SYNAPSE_WORKSPACE and network reachability of the <workspace>.dev endpoint from the Console subnet.',
@@ -161,10 +239,10 @@ async function probeKusto(h: ProbeHelpers): Promise<CheckResult> {
     return { ...base, status: 'pass', detail: `ADX reachable + authorized (${clusterUri()}): .show version returned ${r.rowCount} row(s) in ${r.executionMs}ms.` };
   } catch (e: any) {
     const msg = e?.message || String(e);
-    const denied = DENIED.test(msg);
+    const denied = probeDenied(e);
     return {
       ...base, status: 'warn',
-      detail: `ADX probe failed: ${msg}`,
+      detail: `ADX probe failed: ${msg}${probeCauseNote(e)}`,
       remediation: denied
         ? 'Grant the Console UAMI "AllDatabasesViewer" (or Database Admin) on the ADX cluster.'
         : 'Verify LOOM_KUSTO_CLUSTER_URI, that the cluster is RUNNING (not stopped), and network reachability from the Console subnet. A missing default database is runtime-fixable (Heal).',
@@ -212,10 +290,10 @@ async function probeEventHubs(h: ProbeHelpers): Promise<CheckResult> {
     return { ...base, status: 'pass', detail: `Event Hubs namespace reachable + authorized (${env('LOOM_EVENTHUB_NAMESPACE')}): ${hubs.length} event hub(s).` };
   } catch (e: any) {
     const msg = e?.message || String(e);
-    const denied = DENIED.test(msg);
+    const denied = probeDenied(e);
     return {
       ...base, status: 'warn',
-      detail: `Event Hubs probe failed: ${msg}`,
+      detail: `Event Hubs probe failed: ${msg}${probeCauseNote(e)}`,
       remediation: denied
         ? 'Grant the Console UAMI "Azure Event Hubs Data Owner" on the namespace (control-plane reads additionally need Reader on the RG).'
         : 'Verify LOOM_EVENTHUB_NAMESPACE (+ LOOM_EVENTHUB_RG/SUB) and network reachability. A missing hub / consumer group is runtime-fixable (Heal).',
@@ -246,10 +324,10 @@ async function probeAdf(h: ProbeHelpers): Promise<CheckResult> {
     return { ...base, status: 'pass', detail: `Data Factory reachable + authorized (${f?.name || env('LOOM_ADF_FACTORY') || 'factory'}, ${f?.properties?.provisioningState || 'state n/a'}).` };
   } catch (e: any) {
     const msg = e?.message || String(e);
-    const denied = DENIED.test(msg);
+    const denied = probeDenied(e);
     return {
       ...base, status: 'warn',
-      detail: `ADF probe failed: ${msg}`,
+      detail: `ADF probe failed: ${msg}${probeCauseNote(e)}`,
       remediation: denied
         ? 'Grant the Console UAMI "Data Factory Contributor" on the factory.'
         : 'Verify LOOM_ADF_FACTORY / LOOM_ADF_RG name a factory in this subscription.',
@@ -458,10 +536,10 @@ async function probeLogAnalytics(h: ProbeHelpers): Promise<CheckResult> {
     return { ...base, status: 'pass', detail: `Log Analytics query executed as the Console UAMI (print returned ${r.rowCount} row(s)).` };
   } catch (e: any) {
     const msg = e?.message || String(e);
-    const denied = DENIED.test(msg);
+    const denied = probeDenied(e);
     return {
       ...base, status: 'warn',
-      detail: `Log Analytics probe failed: ${msg}`,
+      detail: `Log Analytics probe failed: ${msg}${probeCauseNote(e)}`,
       remediation: denied
         ? 'Grant the Console UAMI "Log Analytics Reader" on the workspace.'
         : 'Verify LOOM_LOG_ANALYTICS_WORKSPACE_ID is the workspace customerId GUID and the api.loganalytics endpoint is reachable.',
@@ -491,7 +569,7 @@ async function probeGraphDirectory(h: ProbeHelpers): Promise<CheckResult> {
     const msg = e?.message || String(e);
     return {
       ...base, status: 'warn',
-      detail: `Graph directory probe failed: ${msg}`,
+      detail: `Graph directory probe failed: ${msg}${probeCauseNote(e)}`,
       remediation: 'Grant the Console UAMI the Microsoft Graph Directory.Read.All application role + admin consent (see the "Microsoft Graph user enrichment" check for the exact script), then re-run.',
       redeploy: true,
       docs: 'https://learn.microsoft.com/graph/permissions-reference#directoryreadall',
@@ -516,7 +594,7 @@ async function probePowerPlatform(h: ProbeHelpers): Promise<CheckResult> {
     return { ...base, status: 'pass', detail: `Power Platform BAP API reachable + authorized: ${envs.length} environment(s).` };
   } catch (e: any) {
     const msg = e?.message || String(e);
-    const denied = DENIED.test(msg);
+    const denied = probeDenied(e);
     return {
       ...base, status: 'warn',
       detail: denied ? `Power Platform rejected the call (the known SP-not-allowed 403): ${msg}` : `Power Platform probe failed: ${msg}`,
@@ -556,10 +634,10 @@ async function probeServiceBus(h: ProbeHelpers): Promise<CheckResult> {
     return { ...base, status: 'pass', detail: `Service Bus namespace reachable + authorized (${ns.name || env('LOOM_SERVICEBUS_NAMESPACE')}, sku ${ns.sku || 'n/a'}, status ${ns.status || 'n/a'}).` };
   } catch (e: any) {
     const msg = e?.message || String(e);
-    const denied = DENIED.test(msg);
+    const denied = probeDenied(e);
     return {
       ...base, status: 'warn',
-      detail: `Service Bus probe failed: ${msg}`,
+      detail: `Service Bus probe failed: ${msg}${probeCauseNote(e)}`,
       remediation: denied
         ? 'Grant the Console UAMI "Azure Service Bus Data Owner" (data plane) + Reader (control plane) on the namespace.'
         : 'Verify LOOM_SERVICEBUS_NAMESPACE and network reachability.',
@@ -596,10 +674,10 @@ async function probeApim(h: ProbeHelpers): Promise<CheckResult> {
     return { ...base, status: 'pass', detail: `APIM reachable + authorized (${(svc as any)?.name || t.name}, sku ${(svc as any)?.sku?.name || 'n/a'}).` };
   } catch (e: any) {
     const msg = e?.message || String(e);
-    const denied = DENIED.test(msg);
+    const denied = probeDenied(e);
     return {
       ...base, status: 'warn',
-      detail: `APIM probe failed: ${msg}`,
+      detail: `APIM probe failed: ${msg}${probeCauseNote(e)}`,
       remediation: denied ? 'Grant the Console UAMI "API Management Service Contributor" on the APIM service.' : 'Verify the APIM target (LOOM_APIM_NAME / LOOM_APIM_RG) and ARM reachability.',
       redeploy: true,
       portalSteps: denied ? grantPortalSteps(h, 'the API Management service', 'API Management Service Contributor') : undefined,
@@ -714,8 +792,8 @@ async function probeAas(h: ProbeHelpers): Promise<CheckResult> {
     if (paused) return { ...base, status: 'warn', detail: `AAS server is PAUSED (${states}) — semantic-model fast-path queries fail until it is resumed.`, remediation: `Resume the server: az analysis-services server resume --name "${paused.name}" --resource-group "${rg}". Or set an auto-resume policy.`, redeploy: false };
     return { ...base, status: 'pass', detail: `Analysis Services reachable + running (${states}).` };
   } catch (e: any) {
-    const msg = e?.message || String(e); const denied = DENIED.test(msg);
-    return { ...base, status: denied ? 'fail' : 'warn', detail: `AAS probe failed: ${msg}`, remediation: denied ? 'Grant the Console UAMI "Reader" (+ "Analysis Services Admin" for XMLA) on the AAS server.' : 'Verify LOOM_AAS_SERVER / LOOM_AAS_RG and Console network reachability.', redeploy: true, portalSteps: denied ? grantPortalSteps(h, 'the Analysis Services server', 'Reader') : undefined, fixScript: denied ? grantScript(h, 'Reader', `/subscriptions/${env('LOOM_SUBSCRIPTION_ID')}/resourceGroups/${env('LOOM_AAS_RG') || h.ctx.adminRg}/providers/Microsoft.AnalysisServices/servers/<aas-server>`) : undefined };
+    const msg = e?.message || String(e); const denied = probeDenied(e);
+    return { ...base, status: denied ? 'fail' : 'warn', detail: `AAS probe failed: ${msg}${probeCauseNote(e)}`, remediation: denied ? 'Grant the Console UAMI "Reader" (+ "Analysis Services Admin" for XMLA) on the AAS server.' : 'Verify LOOM_AAS_SERVER / LOOM_AAS_RG and Console network reachability.', redeploy: true, portalSteps: denied ? grantPortalSteps(h, 'the Analysis Services server', 'Reader') : undefined, fixScript: denied ? grantScript(h, 'Reader', `/subscriptions/${env('LOOM_SUBSCRIPTION_ID')}/resourceGroups/${env('LOOM_AAS_RG') || h.ctx.adminRg}/providers/Microsoft.AnalysisServices/servers/<aas-server>`) : undefined };
   }
 }
 
@@ -741,8 +819,8 @@ async function probeAml(h: ProbeHelpers): Promise<CheckResult> {
     const r: any = await withTimeout(armGet(`${amlWorkspaceArmPath(target)}?api-version=${AML_ARM_API_VERSION}`), 6000);
     return { ...base, status: 'pass', detail: `Azure ML workspace reachable + authorized (${target.workspace} in ${target.resourceGroup}, ${r?.properties?.provisioningState || 'state n/a'}).` };
   } catch (e: any) {
-    const msg = e?.message || String(e); const denied = DENIED.test(msg); const notFound = /404|not found/i.test(msg);
-    return { ...base, status: denied ? 'fail' : 'warn', detail: `AML probe failed: ${msg}`, remediation: denied ? 'Grant the Console UAMI "AzureML Data Scientist" + "Reader" on the AML workspace.' : notFound ? 'The configured LOOM_AML_WORKSPACE does not exist in that resource group — deploy it or correct the name.' : 'Verify LOOM_AML_WORKSPACE / LOOM_AML_RESOURCE_GROUP and reachability.', redeploy: true, portalSteps: denied ? grantPortalSteps(h, 'the Azure ML workspace', 'AzureML Data Scientist') : undefined, fixScript: denied ? grantScript(h, 'AzureML Data Scientist', `/subscriptions/${env('LOOM_SUBSCRIPTION_ID')}/resourceGroups/${env('LOOM_AML_RESOURCE_GROUP') || h.ctx.adminRg}/providers/Microsoft.MachineLearningServices/workspaces/${env('LOOM_AML_WORKSPACE') || '<aml-workspace>'}`) : undefined };
+    const msg = e?.message || String(e); const denied = probeDenied(e); const notFound = /404|not found/i.test(msg);
+    return { ...base, status: denied ? 'fail' : 'warn', detail: `AML probe failed: ${msg}${probeCauseNote(e)}`, remediation: denied ? 'Grant the Console UAMI "AzureML Data Scientist" + "Reader" on the AML workspace.' : notFound ? 'The configured LOOM_AML_WORKSPACE does not exist in that resource group — deploy it or correct the name.' : 'Verify LOOM_AML_WORKSPACE / LOOM_AML_RESOURCE_GROUP and reachability.', redeploy: true, portalSteps: denied ? grantPortalSteps(h, 'the Azure ML workspace', 'AzureML Data Scientist') : undefined, fixScript: denied ? grantScript(h, 'AzureML Data Scientist', `/subscriptions/${env('LOOM_SUBSCRIPTION_ID')}/resourceGroups/${env('LOOM_AML_RESOURCE_GROUP') || h.ctx.adminRg}/providers/Microsoft.MachineLearningServices/workspaces/${env('LOOM_AML_WORKSPACE') || '<aml-workspace>'}`) : undefined };
   }
 }
 
@@ -758,8 +836,8 @@ async function probeAzureSql(h: ProbeHelpers): Promise<CheckResult> {
     const dflt = env('LOOM_AZURE_SQL_DEFAULT_SERVER');
     return { ...base, status: 'pass', detail: `Azure SQL ARM readable as the Console UAMI: ${servers.length} logical server(s)${dflt ? ` (default: ${dflt})` : ''}${servers.length ? ` — ${servers.slice(0, 5).map((s: any) => s.name).join(', ')}` : ''}.` };
   } catch (e: any) {
-    const msg = e?.message || String(e); const denied = DENIED.test(msg);
-    return { ...base, status: denied ? 'fail' : 'warn', detail: `Azure SQL probe failed: ${msg}`, remediation: denied ? 'Grant the Console UAMI "Reader" on the subscription/RG for ARM reads (+ an AAD login with db_owner on target servers for mirroring change-feed DDL).' : 'Verify LOOM_SUBSCRIPTION_ID / LOOM_AZURE_SQL_DEFAULT_SERVER and reachability.', redeploy: true, portalSteps: denied ? grantPortalSteps(h, 'the subscription or SQL resource group', 'Reader') : undefined, fixScript: denied ? grantScript(h, 'Reader', `/subscriptions/${env('LOOM_SUBSCRIPTION_ID')}`) : undefined };
+    const msg = e?.message || String(e); const denied = probeDenied(e);
+    return { ...base, status: denied ? 'fail' : 'warn', detail: `Azure SQL probe failed: ${msg}${probeCauseNote(e)}`, remediation: denied ? 'Grant the Console UAMI "Reader" on the subscription/RG for ARM reads (+ an AAD login with db_owner on target servers for mirroring change-feed DDL).' : 'Verify LOOM_SUBSCRIPTION_ID / LOOM_AZURE_SQL_DEFAULT_SERVER and reachability.', redeploy: true, portalSteps: denied ? grantPortalSteps(h, 'the subscription or SQL resource group', 'Reader') : undefined, fixScript: denied ? grantScript(h, 'Reader', `/subscriptions/${env('LOOM_SUBSCRIPTION_ID')}`) : undefined };
   }
 }
 
@@ -778,8 +856,8 @@ async function probePostgres(h: ProbeHelpers): Promise<CheckResult> {
     const r = await withTimeout(executePostgresQuery(host, 'postgres', 'SELECT 1 AS loom_health'), 8000);
     return { ...base, status: 'pass', detail: `Postgres reachable + AAD-authorized (${host}): SELECT 1 returned ${r.rows?.length ?? 0} row(s).` };
   } catch (e: any) {
-    const msg = e?.message || String(e); const denied = DENIED.test(msg) || /password authentication|no pg_hba|role .* does not exist/i.test(msg);
-    return { ...base, status: denied ? 'fail' : 'warn', detail: `Postgres SELECT 1 failed: ${msg}`, remediation: denied ? 'Register the Console UAMI as a PG Entra principal: connect as the PG Entra admin and run SELECT * FROM pgaadauth_create_principal(\'<console-uami-name>\', false, false); then GRANT it privileges.' : 'Verify LOOM_POSTGRES_HOST, the server firewall / private endpoint from the Console subnet, and LOOM_POSTGRES_AAD_USER.', redeploy: true };
+    const msg = e?.message || String(e); const denied = probeDenied(e) || /password authentication|no pg_hba|role .* does not exist/i.test(msg);
+    return { ...base, status: denied ? 'fail' : 'warn', detail: `Postgres SELECT 1 failed: ${msg}${probeCauseNote(e)}`, remediation: denied ? 'Register the Console UAMI as a PG Entra principal: connect as the PG Entra admin and run SELECT * FROM pgaadauth_create_principal(\'<console-uami-name>\', false, false); then GRANT it privileges.' : 'Verify LOOM_POSTGRES_HOST, the server firewall / private endpoint from the Console subnet, and LOOM_POSTGRES_AAD_USER.', redeploy: true };
   }
 }
 
@@ -794,8 +872,8 @@ async function probeStreamAnalytics(h: ProbeHelpers): Promise<CheckResult> {
     const jobs = await withTimeout(listJobs(), 6000);
     return { ...base, status: 'pass', detail: `Stream Analytics ARM readable as the Console UAMI: ${jobs.length} streaming job(s) in ${env('LOOM_ASA_RG') || h.ctx.dlzRg}${jobs.length ? ` — ${jobs.slice(0, 5).map((j: any) => j.name).join(', ')}` : ' (jobs are created on demand by the eventstream provisioner)'}.` };
   } catch (e: any) {
-    const msg = e?.message || String(e); const denied = DENIED.test(msg);
-    return { ...base, status: denied ? 'fail' : 'warn', detail: `Stream Analytics probe failed: ${msg}`, remediation: denied ? 'Grant the Console UAMI "Contributor" on the Stream Analytics resource group.' : 'Verify LOOM_ASA_RG / LOOM_ASA_SUB and reachability.', redeploy: true, portalSteps: denied ? grantPortalSteps(h, 'the Stream Analytics resource group', 'Contributor') : undefined, fixScript: denied ? grantScript(h, 'Contributor', `/subscriptions/${env('LOOM_ASA_SUB') || env('LOOM_SUBSCRIPTION_ID')}/resourceGroups/${env('LOOM_ASA_RG') || h.ctx.dlzRg}`) : undefined };
+    const msg = e?.message || String(e); const denied = probeDenied(e);
+    return { ...base, status: denied ? 'fail' : 'warn', detail: `Stream Analytics probe failed: ${msg}${probeCauseNote(e)}`, remediation: denied ? 'Grant the Console UAMI "Contributor" on the Stream Analytics resource group.' : 'Verify LOOM_ASA_RG / LOOM_ASA_SUB and reachability.', redeploy: true, portalSteps: denied ? grantPortalSteps(h, 'the Stream Analytics resource group', 'Contributor') : undefined, fixScript: denied ? grantScript(h, 'Contributor', `/subscriptions/${env('LOOM_ASA_SUB') || env('LOOM_SUBSCRIPTION_ID')}/resourceGroups/${env('LOOM_ASA_RG') || h.ctx.dlzRg}`) : undefined };
   }
 }
 
@@ -809,8 +887,8 @@ async function probeEventGrid(h: ProbeHelpers): Promise<CheckResult> {
     const topics = await withTimeout(listEventGridTopics(), 6000);
     return { ...base, status: 'pass', detail: `Event Grid ARM readable as the Console UAMI: ${topics.length} custom topic(s)${topics.length ? ` — ${topics.slice(0, 5).map((t: any) => t.name).join(', ')}` : ''}.` };
   } catch (e: any) {
-    const msg = e?.message || String(e); const denied = DENIED.test(msg);
-    return { ...base, status: denied ? 'fail' : 'warn', detail: `Event Grid probe failed: ${msg}`, remediation: denied ? 'Grant the Console UAMI "EventGrid Contributor" on the RG (+ "EventGrid Data Sender" on the topic to publish).' : 'Verify LOOM_EVENTGRID_RG / LOOM_EVENTGRID_BUSINESS_TOPIC and reachability.', redeploy: true, portalSteps: denied ? grantPortalSteps(h, 'the Event Grid resource group', 'EventGrid Contributor') : undefined, fixScript: denied ? grantScript(h, 'EventGrid Contributor', `/subscriptions/${env('LOOM_EVENTGRID_SUB') || env('LOOM_SUBSCRIPTION_ID')}/resourceGroups/${env('LOOM_EVENTGRID_RG') || h.ctx.dlzRg}`) : undefined };
+    const msg = e?.message || String(e); const denied = probeDenied(e);
+    return { ...base, status: denied ? 'fail' : 'warn', detail: `Event Grid probe failed: ${msg}${probeCauseNote(e)}`, remediation: denied ? 'Grant the Console UAMI "EventGrid Contributor" on the RG (+ "EventGrid Data Sender" on the topic to publish).' : 'Verify LOOM_EVENTGRID_RG / LOOM_EVENTGRID_BUSINESS_TOPIC and reachability.', redeploy: true, portalSteps: denied ? grantPortalSteps(h, 'the Event Grid resource group', 'EventGrid Contributor') : undefined, fixScript: denied ? grantScript(h, 'EventGrid Contributor', `/subscriptions/${env('LOOM_EVENTGRID_SUB') || env('LOOM_SUBSCRIPTION_ID')}/resourceGroups/${env('LOOM_EVENTGRID_RG') || h.ctx.dlzRg}`) : undefined };
   }
 }
 
@@ -824,8 +902,8 @@ async function probeBatch(h: ProbeHelpers): Promise<CheckResult> {
     const acct: any = await withTimeout(getBatchAccount(), 6000);
     return { ...base, status: 'pass', detail: `Azure Batch reachable + authorized (${acct?.name || env('LOOM_BATCH_ACCOUNT')}, ${acct?.properties?.provisioningState || acct?.provisioningState || 'state n/a'}).` };
   } catch (e: any) {
-    const msg = e?.message || String(e); const denied = DENIED.test(msg);
-    return { ...base, status: denied ? 'fail' : 'warn', detail: `Azure Batch probe failed: ${msg}`, remediation: denied ? 'Grant the Console UAMI "Contributor" on the Batch account.' : 'Verify LOOM_BATCH_ACCOUNT / LOOM_BATCH_RG and reachability.', redeploy: true, portalSteps: denied ? grantPortalSteps(h, 'the Azure Batch account', 'Contributor') : undefined, fixScript: denied ? grantScript(h, 'Contributor', `/subscriptions/${env('LOOM_SUBSCRIPTION_ID')}/resourceGroups/${env('LOOM_BATCH_RG') || h.ctx.dlzRg}/providers/Microsoft.Batch/batchAccounts/${env('LOOM_BATCH_ACCOUNT') || '<batch-account>'}`) : undefined };
+    const msg = e?.message || String(e); const denied = probeDenied(e);
+    return { ...base, status: denied ? 'fail' : 'warn', detail: `Azure Batch probe failed: ${msg}${probeCauseNote(e)}`, remediation: denied ? 'Grant the Console UAMI "Contributor" on the Batch account.' : 'Verify LOOM_BATCH_ACCOUNT / LOOM_BATCH_RG and reachability.', redeploy: true, portalSteps: denied ? grantPortalSteps(h, 'the Azure Batch account', 'Contributor') : undefined, fixScript: denied ? grantScript(h, 'Contributor', `/subscriptions/${env('LOOM_SUBSCRIPTION_ID')}/resourceGroups/${env('LOOM_BATCH_RG') || h.ctx.dlzRg}/providers/Microsoft.Batch/batchAccounts/${env('LOOM_BATCH_ACCOUNT') || '<batch-account>'}`) : undefined };
   }
 }
 
@@ -880,7 +958,7 @@ async function probeSearchIndexers(h: ProbeHelpers): Promise<CheckResult> {
     }
     return { ...base, status: 'pass', detail: `All ${rows.length} AI Search indexer(s) healthy — newest retained run succeeded on each. ${rows.map(line).join(' | ').slice(0, 400)}` };
   } catch (e: any) {
-    const msg = e?.message || String(e); const denied = DENIED.test(msg);
+    const msg = e?.message || String(e); const denied = probeDenied(e);
     return {
       ...base, status: denied ? 'fail' : 'warn',
       detail: `AI Search indexer sweep failed: ${msg}. No indexer was classified, so NOTHING is being claimed about pipeline health.`,
@@ -976,7 +1054,7 @@ async function probeDrRestorePosture(h: ProbeHelpers): Promise<CheckResult> {
     }
   } catch (e: any) {
     probed = true;
-    bad.push(`Cosmos backup-policy read failed: ${e?.message || String(e)}${DENIED.test(e?.message || '') ? ' — grant the Console UAMI "DocumentDB Account Contributor" (or Reader) on the account.' : ''}`);
+    bad.push(`Cosmos backup-policy read failed: ${e?.message || String(e)}${probeDenied(e) ? ' — grant the Console UAMI "DocumentDB Account Contributor" (or Reader) on the account.' : ''}`);
   }
   // (c) Lake — soft delete + change feed on the DLZ ADLS account (blobServices).
   try {
@@ -998,7 +1076,7 @@ async function probeDrRestorePosture(h: ProbeHelpers): Promise<CheckResult> {
     }
   } catch (e: any) {
     probed = true;
-    bad.push(`Lake blob-service read failed: ${e?.message || String(e)}${DENIED.test(e?.message || '') ? ' — grant the Console UAMI "Reader" on the DLZ storage account.' : ''}`);
+    bad.push(`Lake blob-service read failed: ${e?.message || String(e)}${probeDenied(e) ? ' — grant the Console UAMI "Reader" on the DLZ storage account.' : ''}`);
   }
   if (!probed) {
     return {

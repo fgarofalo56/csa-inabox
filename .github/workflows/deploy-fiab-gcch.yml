@@ -189,7 +189,7 @@ jobs:
       REQUESTED_LOOM_WRANGLER_TAG: ${{ vars.LOOM_WRANGLER_TAG }}
 
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@v7.0.1
 
       - name: Azure login (Gov sub) — limitlessdata_deploy SP
         uses: Azure/login@v2

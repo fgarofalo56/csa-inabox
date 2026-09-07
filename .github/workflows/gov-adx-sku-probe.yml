@@ -67,7 +67,7 @@ jobs:
     timeout-minutes: 20
 
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@v7.0.1
 
       # Auth block copied VERBATIM from .github/workflows/gov-verify-facts.yml
       # (the repo's existing read-only Gov fact-finder), which carries the same

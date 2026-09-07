@@ -258,6 +258,40 @@ const TOUCH_EXEMPT = new Map([
   // through this same PATCH.
   ['apps/fiab-console/app/api/items/[type]/[id]/route.ts',
    "#3611: adds the write-side server-owned-state guard to PATCH + a withSession migration, both RESTRICTIONS. loadItem's baselined owner-only point read is untouched (0 of 97 changed lines match either detector predicate, and both predicates still match 1 line each elsewhere in the file — a live negative, not a dead check), and migrating it would WIDEN GET/PATCH/DELETE to admins + ACL members for every item type with no dedicated route — separate PR"],
+  // 2026-09-07 · #3878/#4183: this PR touched the route for TWO things, neither
+  // of which is an authorization decision — (a) the create response now reports
+  // `ok:false, created:true` with a `gateId` when the Unity-Catalog → Synapse
+  // pairing fails, instead of a silent config-doc-only `ok:true`, and (b) GET
+  // and POST moved onto the `withSession` route-toolkit wrapper. `withSession`
+  // (lib/api/route-toolkit.ts:89-100) runs the SAME `getSession()` + 401
+  // prologue the hand-rolled handlers ran and adds a try/catch →
+  // `apiServerError`; it is auth-neutral plus one restriction, and admits
+  // nobody the old code refused.
+  //
+  // THE SINGLE BASELINED OCCURRENCE IS NOT IN THIS PR'S DIFF. Measured, not
+  // assumed: of the 127 changed lines in this file (85 added / 42 removed in
+  // `git diff --numstat origin/main...HEAD`), ZERO match either of this guard's
+  // own two predicates (`POINT_READ_RE`, `OWNER_CMP_RE`). That zero is a LIVE
+  // negative rather than a dead check — run both REs over the file as it stands
+  // and they match exactly one line each, `:49` and `:50`, which is the
+  // baselined pair itself. Stated by FUNCTION and not by line number for the
+  // reason the item-crud entry above records: it is `loadWs`, the
+  // `c.item(id, tenantId).read<Workspace>()` + `resource?.tenantId === tenantId`
+  // pair, and the one hunk whose header names `loadWs` carries its closing two
+  // lines as unchanged CONTEXT only.
+  //
+  // Migrating it WIDENS access, which is why this is an exemption and not a
+  // fix. `loadWs` is called from GET `:88` and POST `:127`. The GET could take
+  // `authorizeItemWorkspace(..., { allowReadRoles: true })`, but the POST could
+  // not: it CREATES a mirrored-databricks item AND a paired
+  // synapse-serverless-sql-pool item, so `authorizeWorkspace` would newly admit
+  // tenant admins and shared-ACL write members to mount a Unity Catalog into a
+  // workspace they did not create. Widening who may create a mirror is a real
+  // access change needing its own review and its own tests — not a drive-by
+  // inside a PR whose subject is the create response ENVELOPE. The current
+  // check fails CLOSED, so deferring it leaks nothing.
+  ['apps/fiab-console/app/api/items/mirrored-databricks/route.ts',
+   '2026-09-07 · #3878/#4183: pairing-failure envelope + an auth-neutral withSession migration; loadWs’s baselined owner-only point read is untouched (0 of 127 changed lines match either detector predicate, and both predicates still match exactly 1 line each in the file — a live negative, not a dead check), and migrating it would WIDEN who may CREATE a mirror to admins + shared-ACL members — separate PR'],
 ]);
 
 /** Owner-partition point read: `.item(<x>, <oid-ish>)` on a workspaces handle. */

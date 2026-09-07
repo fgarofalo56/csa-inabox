@@ -243,7 +243,7 @@ jobs:
       sha_tag: ${{ steps.r.outputs.sha_tag }}
       matrix: ${{ steps.r.outputs.matrix }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@v7.0.1
       - name: Azure login (Gov sub) — deploy SP
         uses: Azure/login@v2
         with:
@@ -345,7 +345,7 @@ jobs:
       TAG: ${{ needs.resolve.outputs.tag }}
       SHA_TAG: ${{ needs.resolve.outputs.sha_tag }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@v7.0.1
       - name: Azure login (Gov sub) — deploy SP
         uses: Azure/login@v2
         with:

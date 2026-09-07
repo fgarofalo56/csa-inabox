@@ -48,7 +48,7 @@ jobs:
   synapse-spark-fix:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@v7.0.1
 
       - name: Azure login (deploy SP — workspace Synapse admin)
         uses: azure/login@v2
