@@ -304,6 +304,19 @@ The run stops there on purpose. It does not prune and it does not assert the
 ceiling — a rotation deliberately *adds* a credential, and a ceiling failure at
 that moment would read as "the rotation did not work".
 
+**`CONSOLE_APP_NAME` + `CONSOLE_RG` are what make step 1 a rotation rather than
+half of one.** Both are optional, and the console re-wire and revision roll are
+gated on both being set. Without them the run still mints in Entra and still
+records the new credential in Key Vault — but it re-wires nothing, rolls no
+revision, and **nothing is serving the new credential**; the console keeps
+presenting the compromised one. The receipt says which of the two happened, in
+those words:
+
+| Receipt line | What is true |
+|---|---|
+| `CONSOLE ROLLED:` | The update returned success, so the console is *configured* to serve the new credential. Still **not** verified: whether that revision reached Healthy, or whether sign-in works. Go to step 2. |
+| `CONSOLE NOT ROLLED:` | No Container App was supplied. Nothing was re-wired, no revision exists, the compromised credential is still in service. **Do not go to step 3** — it will refuse anyway (R4 cannot be established), and revoking what is still being served is the outage. Re-run step 1 with the console named. |
+
 ```bash
 # ── STEP 2 — VERIFY before deleting anything. All three:
 #  * interactive browser sign-in on the live URL,
@@ -323,15 +336,23 @@ CONSOLE_APP_NAME=loom-console CONSOLE_RG="$RG" \
 ```
 
 **What `--revoke` proves before it deletes.** It refuses, loudly and without
-deleting, unless all five hold:
+deleting, unless all of these hold:
 
 | # | Precondition | Refusal reads |
 |---|---|---|
+| R0 | A key id was actually **given**. A revoke *requested* with no target — bare `--revoke`, `--revoke "$KID"` with `KID` unset, `--revoke=`, a whitespace-only value, or `LOOM_MSAL_REVOKE_KEY_ID` defined as an empty string — exits 1 **before any Entra or Key Vault call**. | `a revoke was requested but NO credential key id was given` — and it names the likely cause plus how to say "no revoke" (leave the variable UNSET, not empty). |
 | R1 | The key id is on the app **right now**. | `has no password credential with key id …` — and it does **not** claim the id was "already removed"; the inventory cannot distinguish that from "never existed". |
 | R2 | It is **not** the credential the Key Vault `msalKeyId` tag records as in use. | `… IS the credential loom-msal-client-secret records as in use` + the `--rotate` route that does work. |
 | R3 | The in-use credential is **strictly newer** than the target. R2 alone would allow revoking a *successor*. | `is NOT older than the in-use credential …` |
 | R4 | The console binding is **proven** — the same P3/P3b evidence §2.2's prune requires (unversioned `keyvaultref`, every active revision post-dating the Key Vault write). | `what the console actually serves is NOT proven this run` |
 | R5 | After the delete, the inventory is **re-read** and the key id is confirmed absent. A zero exit from `az ad app credential delete` is not evidence. | `is STILL present … after a delete that reported success` |
+
+R0 exists because the failure it prevents is the quietest one on this page: with
+the revoke path gated on a *non-empty* key id, an empty one skipped the block
+entirely, ran the ordinary bootstrap to the end and printed the normal `==>
+Done.` banner with **exit 0**. Mid-incident that reads as "the leaked credential
+is gone" while it is still live — a false receipt on the one procedure whose
+whole purpose is to be trustworthy.
 
 **What it deliberately does NOT honour, and says so in the output:** the
 `LOOM_MSAL_PRUNE_MIN_AGE_DAYS` grace and the `LOOM_MSAL_PRUNE_KEEP` window.
@@ -365,9 +386,28 @@ workflow callers that cannot pass arguments):
 
 | Flag | Environment | Effect |
 |---|---|---|
-| `--rotate` | `LOOM_MSAL_ROTATE=1` | Skip the reuse gate unconditionally, mint, record, roll, stop. |
-| `--rotate-reason <text>` | `LOOM_MSAL_ROTATE_REASON=<text>` | Recorded as the `msalRotateReason` tag. Defaults to `unspecified`. |
-| `--revoke <key-id>` | `LOOM_MSAL_REVOKE_KEY_ID=<key-id>` | Delete exactly that credential, after R1–R5. |
+| `--rotate` | `LOOM_MSAL_ROTATE` → `1` | Skip the reuse gate unconditionally, mint, record, roll **if a console was supplied**, stop. The receipt says `CONSOLE ROLLED:` or `CONSOLE NOT ROLLED:`. |
+| `--rotate-reason <text>` | `LOOM_MSAL_ROTATE_REASON` → `<text>` | Recorded as the `msalRotateReason` tag. Defaults to `unspecified`. |
+| `--revoke <key-id>` | `LOOM_MSAL_REVOKE_KEY_ID` → `<key-id>` | Delete exactly that credential, after R0–R5. |
+
+These are **inputs read by the script**, not state stamped onto the Container
+App — the opposite of the `LOOM_MSAL_SECRET_ROTATED` marker step 3 removed in
+#3025. They are written here as *name* → *value* rather than as a literal
+`NAME=value` assignment for exactly that reason: in this file the assignment
+form is the shape `check-msal-rotation-consistency.mjs` R2 reads as "tell the
+operator to stamp a rotation marker", and it cannot tell the two apart from
+syntax alone. Nothing about the rotation's durable record changes — that is
+still the Entra credential list (§2.1).
+
+For a workflow wiring `--revoke` to an optional input: to mean **no revoke**,
+leave `LOOM_MSAL_REVOKE_KEY_ID` **unset** — omit the `env:` entry rather than
+setting it to an empty string. An empty value is read as a revoke whose target
+went missing and exits 1 (R0), because that is overwhelmingly the more likely
+intent and the alternative is a destructive flag that silently does nothing.
+
+`--revoke` followed by another flag (`--revoke --prune`) is read as a **missing
+value**, not as a key id of `--prune`: key ids are GUIDs and can never begin with
+`--`. The following flag is parsed normally.
 
 `--rotate` together with `--revoke` is **refused** before anything is minted or
 deleted: the rotation's revision is not Healthy when the script exits, so the
@@ -376,8 +416,10 @@ credential you asked to revoke may still be the one in service.
 **Verification:** the `ROTATE-*` and `REVOKE-*` cases in
 `scripts/ci/__tests__/msal-credential-lifecycle.test.mjs` drive the real script
 against a stub `az` — including the counterfactuals (the same inputs REUSE
-without `--rotate`; no prune setting removes the leaked credential) and the R5
-case where the delete reports success and removes nothing.
+without `--rotate`; no prune setting removes the leaked credential; the same
+rotation reports `CONSOLE ROLLED` with a console supplied and `CONSOLE NOT
+ROLLED` without one), the R0 no-target refusals with the call log asserted
+EMPTY, and the R5 case where the delete reports success and removes nothing.
 
 ## 3. Rotate the synthetic-login secret (V1 automation account)
 

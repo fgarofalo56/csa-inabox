@@ -53,6 +53,12 @@
 #                       grace, but ONLY after this run proves a NEWER credential
 #                       is what the console serves — then asserts it is gone.
 #                       (env: LOOM_MSAL_REVOKE_KEY_ID)
+#                       A revoke REQUESTED with no key id (bare `--revoke`,
+#                       `--revoke "$UNSET"`, `--revoke=`, or
+#                       LOOM_MSAL_REVOKE_KEY_ID defined as an empty string)
+#                       exits 1 before any Entra or Key Vault call. To run the
+#                       ordinary bootstrap with no revoke, leave the variable
+#                       UNSET rather than empty.
 # The two flags together are REFUSED: the revision --rotate rolls is not Healthy
 # when this script exits, so the credential named for revocation may still be
 # the one in service. Verify sign-in between the runs.
@@ -148,10 +154,13 @@ SECRET=''
 #   --rotate            Skip the reuse gate UNCONDITIONALLY and say so. Mints
 #                       through the same validated `--append` path, records
 #                       msalRotateReason on the Key Vault secret, re-wires and
-#                       rolls the console, then STOPS. It deletes NOTHING: the
-#                       rolling revision is still serving the old credential
-#                       until it goes Healthy, so removing it here is the
-#                       stranding failure the whole design avoids.
+#                       rolls the console IF one was supplied, then STOPS. It
+#                       deletes NOTHING: the rolling revision is still serving
+#                       the old credential until it goes Healthy, so removing it
+#                       here is the stranding failure the whole design avoids.
+#                       The receipt states which of the two it did — a rotation
+#                       with no CONSOLE_APP_NAME/CONSOLE_RG rolls nothing, and
+#                       says so rather than implying a revision exists.
 #   --revoke <key-id>   Delete exactly that credential, bypassing the hygiene
 #                       grace, but ONLY after this run has proven a NEWER
 #                       credential is what the console serves. Then re-reads the
@@ -171,8 +180,32 @@ SECRET=''
 # deleted password credential's value, so there is no undo.
 # ---------------------------------------------------------------------
 ROTATE="${LOOM_MSAL_ROTATE:-0}"
-REVOKE_KEY_ID="${LOOM_MSAL_REVOKE_KEY_ID:-}"
 ROTATE_REASON="${LOOM_MSAL_ROTATE_REASON:-unspecified}"
+
+# REQUESTED and TARGETED are two different facts, and collapsing them into one
+# empty string is how a destructive flag comes to succeed at nothing.
+#
+# The first cut keyed the whole revoke path on `[ -n "${REVOKE_KEY_ID}" ]`. So
+# `--revoke` with no value — or the far more likely `--revoke "$KID"` with KID
+# unset — parsed to an EMPTY id, skipped the revoke block entirely, ran the
+# ordinary bootstrap to the end and printed the normal "==> Done." banner with
+# exit 0. An operator mid-incident reads that as "the leaked credential is
+# gone". It is still live. The symmetric guard already existed for --rotate
+# (REUSED=1 refuses rather than printing a success banner over a no-op); the
+# destructive half had none.
+#
+# So intent is tracked separately from the target, and a requested revoke with
+# no target REFUSES. `+x` rather than `:-`: an env var DEFINED but empty is a
+# caller that meant to name a credential and passed nothing, which is exactly
+# the silent case. Leaving LOOM_MSAL_REVOKE_KEY_ID UNSET is how you say "no
+# revoke" — the refusal message says so, because a workflow author wiring an
+# optional input needs that answer at the moment it fires.
+REVOKE_REQUESTED=0
+REVOKE_KEY_ID=''
+if [ -n "${LOOM_MSAL_REVOKE_KEY_ID+x}" ]; then
+  REVOKE_REQUESTED=1
+  REVOKE_KEY_ID="${LOOM_MSAL_REVOKE_KEY_ID}"
+fi
 
 # ---------------------------------------------------------------------
 # OPT-IN: Power BI remote MCP (preview). OFF unless --enable-powerbi-mcp (or
@@ -195,8 +228,18 @@ while [ "$#" -gt 0 ]; do
     --rotate=*)           ROTATE=1; ROTATE_REASON="${1#--rotate=}" ;;
     --rotate-reason)      shift; ROTATE_REASON="${1:-}" ;;
     --rotate-reason=*)    ROTATE_REASON="${1#--rotate-reason=}" ;;
-    --revoke)             shift; REVOKE_KEY_ID="${1:-}" ;;
-    --revoke=*)           REVOKE_KEY_ID="${1#--revoke=}" ;;
+    --revoke)
+      # Consume the next token ONLY when it is a real value. `--revoke --prune`
+      # used to shift --prune into the key id, which both lost the --prune the
+      # operator asked for and turned a missing target into a bogus one; a key
+      # id is a GUID and can never begin with `--`, so a flag-shaped follower is
+      # an absent value, and it is left in place for the loop to parse normally.
+      REVOKE_REQUESTED=1
+      case "${2:-}" in
+        ''|--*) : ;;
+        *)      REVOKE_KEY_ID="$2"; shift ;;
+      esac ;;
+    --revoke=*)           REVOKE_REQUESTED=1; REVOKE_KEY_ID="${1#--revoke=}" ;;
   esac
   shift || break
 done
@@ -222,13 +265,29 @@ case "$(printf '%s' "${ROTATE}" | tr '[:upper:]' '[:lower:]')" in
   *)             ROTATE=0 ;;
 esac
 
+# CONFIG INVARIANT — a requested revoke with no target REFUSES.
+# This must precede the rotate/revoke combination check below: "you named no
+# credential" is the more specific and more useful answer than "these two flags
+# conflict", and it has to fire before any Entra or Key Vault call so the run
+# has provably done nothing when it exits.
+if [ "${REVOKE_REQUESTED}" -eq 1 ] && [ -z "${REVOKE_KEY_ID}" ]; then
+  echo "ERROR: a revoke was requested but NO credential key id was given, so NOTHING was revoked and nothing else was done — this run exits before any Entra or Key Vault call. Do not read this as a completed revocation: whatever credential you meant to remove is still live." >&2
+  echo "       Cause, one of: \`--revoke\` with no following value; \`--revoke \"\$KID\"\` where KID is unset or empty; \`--revoke=\`; a value that was only whitespace; or LOOM_MSAL_REVOKE_KEY_ID defined as an empty string." >&2
+  echo "       To revoke, name the key id explicitly:" >&2
+  echo "         bash scripts/csa-loom/bootstrap-msal-app-reg.sh --revoke <key-id>" >&2
+  echo "       List the candidates (metadata only, no values):" >&2
+  echo "         az ad app credential list --id <app-id> --query \"[].{keyId:keyId,start:startDateTime,end:endDateTime,label:displayName}\" -o table" >&2
+  echo "       To run the ordinary bootstrap with NO revoke, leave LOOM_MSAL_REVOKE_KEY_ID UNSET (omit the variable entirely — an empty value is read as a revoke whose target went missing, not as 'no revoke')." >&2
+  exit 1
+fi
+
 # CONFIG INVARIANT — rotate and revoke are two RUNS, never one.
 # --rotate mints a replacement and rolls the console onto it; that revision is
 # not Healthy when this process exits, so the credential named by --revoke may
 # still be the one in service. Deleting it in the same pass is the stranding
 # failure every other rule in this file exists to prevent. Refuse rather than
 # pick an order.
-if [ "${ROTATE}" -eq 1 ] && [ -n "${REVOKE_KEY_ID}" ]; then
+if [ "${ROTATE}" -eq 1 ] && [ "${REVOKE_REQUESTED}" -eq 1 ]; then
   echo "ERROR: --rotate and --revoke cannot be combined. --rotate mints a replacement and rolls the console onto it, but that revision is not yet Healthy when this script exits — so the credential you asked to revoke may still be the one being served. Run --rotate, VERIFY sign-in on the new credential (docs/fiab/runbooks/secret-rotation.md §2.2b), then run --revoke ${REVOKE_KEY_ID}." >&2
   exit 1
 fi
@@ -714,6 +773,12 @@ fi
 
 # Optionally wire the Console Container App so LOOM_MSAL_CLIENT_ID + secretRefs
 # take effect without a full redeploy.
+#
+# "Optionally" is load-bearing for the receipt below. CONSOLE_APP_NAME/CONSOLE_RG
+# are documented optional, so this whole block is skippable — and when it is
+# skipped NOTHING was re-wired and NO revision was rolled. The --rotate receipt
+# used to assert the roll unconditionally, so it has to be able to tell.
+CONSOLE_ROLLED=0
 if [ -n "${CONSOLE_APP_NAME:-}" ] && [ -n "${CONSOLE_RG:-}" ]; then
   echo "==> Wiring Container App ${CONSOLE_APP_NAME} (${CONSOLE_RG})"
   KV_URI="${KEYVAULT_URI:-https://${KEYVAULT_NAME}.vault.azure.net/}"
@@ -791,6 +856,10 @@ if [ -n "${CONSOLE_APP_NAME:-}" ] && [ -n "${CONSOLE_RG:-}" ]; then
   # never have happened (deploy-integrity.md R7).
   if az containerapp update -n "${CONSOLE_APP_NAME}" -g "${CONSOLE_RG}" \
     --set-env-vars "LOOM_MSAL_CLIENT_ID=${APP_ID}" "LOOM_MSAL_CLIENT_SECRET=secretref:${MSAL_SECRET_NAME}" -o none; then
+    # Set ONLY here: the sole point at which this script has a zero exit from the
+    # command that creates the new revision. Every other path either skipped the
+    # block or exits 1 below.
+    CONSOLE_ROLLED=1
     echo "    wired LOOM_MSAL_CLIENT_ID=${APP_ID} + LOOM_MSAL_CLIENT_SECRET=secretref:${MSAL_SECRET_NAME} (kvref=${KVREF_OK})"
   else
     echo "    ERROR: the env-var update on ${CONSOLE_APP_NAME} (${CONSOLE_RG}) FAILED."
@@ -827,6 +896,15 @@ fi
 # What this run did NOT establish, said plainly (R7): whether the rolled
 # revision has reached Healthy, and whether interactive sign-in works on the new
 # credential. Neither is observable from here — verify before revoking.
+#
+# And the receipt BRANCHES on whether a revision was rolled AT ALL. The wiring
+# block above is gated on CONSOLE_APP_NAME + CONSOLE_RG, both documented
+# optional; the receipt below was not, so a rotate run without them printed
+# "whether the rolled revision is Healthy" — naming a roll that never happened
+# and asserting as fact something this run did not establish (deploy-integrity
+# R7). That is the worse half of the two states, because the honest reading of
+# "not verified Healthy" is "it was rolled, go check it", when the truth is that
+# the new credential is sitting in Key Vault with nothing serving it.
 if [ "${ROTATE}" -eq 1 ]; then
   echo "==> ROTATE COMPLETE for ${APP_ID}"
   if [ "${REUSED}" -eq 1 ]; then
@@ -838,11 +916,34 @@ if [ "${ROTATE}" -eq 1 ]; then
   fi
   echo "    new credential ${IN_USE_KEY_ID:-<key id unresolved>} is recorded in ${MSAL_SECRET_NAME} (msalRotateReason=${ROTATE_REASON})."
   echo "    NOTHING was deleted. Every previously-issued credential is still live and still valid."
-  echo "    NOT VERIFIED BY THIS RUN: whether the rolled revision is Healthy, and whether"
-  echo "    interactive sign-in succeeds on the new credential. This process cannot observe either."
-  echo "    NEXT: verify sign-in (docs/fiab/runbooks/secret-rotation.md §2.2b), then revoke the"
-  echo "    disclosed credential explicitly — deletion is IRREVERSIBLE, Entra never returns the value:"
-  echo "      bash scripts/csa-loom/bootstrap-msal-app-reg.sh --revoke <key-id>"
+  if [ "${CONSOLE_ROLLED}" -eq 1 ]; then
+    echo "    CONSOLE ROLLED: a new revision of ${CONSOLE_APP_NAME} (${CONSOLE_RG}) was requested and the"
+    echo "    update returned success, so the console is configured to serve the new credential."
+    echo "    NOT VERIFIED BY THIS RUN: whether that rolled revision is Healthy, and whether"
+    echo "    interactive sign-in succeeds on the new credential. This process cannot observe either."
+    echo "    NEXT: verify sign-in (docs/fiab/runbooks/secret-rotation.md §2.2b), then revoke the"
+    echo "    disclosed credential explicitly — deletion is IRREVERSIBLE, Entra never returns the value:"
+    echo "      bash scripts/csa-loom/bootstrap-msal-app-reg.sh --revoke <key-id>"
+  else
+    # Reaching here with CONSOLE_ROLLED=0 can mean ONE thing only: the wiring
+    # block was never entered, because it is gated on both names and every path
+    # INSIDE it either sets CONSOLE_ROLLED=1 or exits 1. So "no Container App
+    # was supplied" is established, not inferred — but which of the two is
+    # missing is not, so it is reported rather than assumed (R7).
+    echo "    CONSOLE NOT ROLLED: no Container App was supplied (CONSOLE_APP_NAME=${CONSOLE_APP_NAME:-<unset>},"
+    echo "    CONSOLE_RG=${CONSOLE_RG:-<unset>}; the re-wire needs BOTH), so this run re-wired NOTHING and"
+    echo "    rolled NO revision. NOTHING IS SERVING THE NEW CREDENTIAL YET — it exists in Entra and is"
+    echo "    recorded in ${MSAL_SECRET_NAME}, and that is all."
+    echo "    The console is still presenting whatever it was presenting before this run, which after a"
+    echo "    disclosure means it is still presenting the COMPROMISED credential."
+    echo "    Do NOT proceed to --revoke on this state: it will refuse anyway (the console-binding"
+    echo "    proof cannot be established), and revoking what is still in service is the outage."
+    echo "    NEXT, to make the rotation take effect — either re-run with the console named:"
+    echo "      CONSOLE_APP_NAME=<app> CONSOLE_RG=<rg> bash scripts/csa-loom/bootstrap-msal-app-reg.sh --rotate --rotate-reason ${ROTATE_REASON}"
+    echo "    or roll it out of band, which requires the app's loom-msal-client-secret to be an"
+    echo "    unversioned Key Vault reference (otherwise it re-serves the stale literal):"
+    echo "      az containerapp update -n <app> -g <rg> --set-env-vars LOOM_MSAL_CLIENT_ID=${APP_ID} LOOM_MSAL_CLIENT_SECRET=secretref:${MSAL_SECRET_NAME}"
+  fi
   echo "    Credential inventory (metadata only, no values):"
   echo "      az ad app credential list --id ${APP_ID} --query \"[].{keyId:keyId,start:startDateTime,end:endDateTime,label:displayName}\" -o table"
   exit 0
@@ -1185,7 +1286,12 @@ fi
 # everyone. And the delete is IRREVERSIBLE — Entra never returns a deleted
 # password credential's value, so there is no restore, only another rotation.
 # ---------------------------------------------------------------------
-if [ -n "${REVOKE_KEY_ID}" ]; then
+# Keyed on the REQUEST, not on the id being non-empty. By here an empty id has
+# already exited 1 above, so the two are equivalent today — but keying on intent
+# means a future edit that lets an empty id through lands in this block and hits
+# R1's explicit refusal, instead of silently falling through to the ordinary
+# bootstrap and its success banner. That fall-through was the defect.
+if [ "${REVOKE_REQUESTED}" -eq 1 ]; then
   echo "==> REVOKE requested for credential ${REVOKE_KEY_ID} on ${APP_ID}"
   REVOKE_LINE="$(cred_line "${REVOKE_KEY_ID}" "${CRED_TSV}")"
   if [ -z "${REVOKE_LINE}" ]; then

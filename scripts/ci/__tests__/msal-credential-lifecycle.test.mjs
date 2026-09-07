@@ -69,6 +69,7 @@ const cred = (keyId, startDays, endDays, label = '-') =>
  * @param {number}  [o.kvUpdatedDays] age of the KV secret's `updated` attribute
  * @param {boolean} [o.labelLookupFails] make the post-mint key-id lookup return nothing
  * @param {boolean} [o.deleteIsNoop] make `credential delete` exit 0 without removing anything
+ * @param {boolean} [o.consoleUpdateFails] make `containerapp update` exit non-zero (the roll the CLI refused)
  * @param {string[]} [o.args]       CLI arguments passed to the script itself
  * @param {object}  [o.env]         extra environment for the run
  */
@@ -81,6 +82,7 @@ function run({
   kvUpdatedDays = -1,
   labelLookupFails = false,
   deleteIsNoop = false,
+  consoleUpdateFails = false,
   args = [],
   env = {},
 }) {
@@ -179,6 +181,9 @@ esac
 case "$*" in
   "containerapp secret list"*) printf '%s\\n' ${q(caSecretUrl)}; exit 0 ;;
   "containerapp revision list"*) cat "$REV"; exit 0 ;;
+  "containerapp update"*) ${consoleUpdateFails
+    ? 'echo \'ERROR: (AuthorizationFailed) does not have authorization to perform action\' >&2; exit 1'
+    : 'exit 0'} ;;
   "containerapp show"*) exit 1 ;;
 esac
 exit 0
@@ -581,6 +586,69 @@ test('ROTATE-5: the receipt names what the run could NOT establish, and the next
   assert.match(r.out, /--revoke <key-id>/);
 });
 
+test('ROTATE-5b: with NO Container App supplied the receipt says NOT ROLLED, and claims no revision', () => {
+  // R7 again, on the half the first cut got wrong. CONSOLE_APP_NAME/CONSOLE_RG
+  // are documented OPTIONAL and the wiring block is gated on both, but the
+  // receipt below it was not — so a rotate without them printed "whether the
+  // rolled revision is Healthy", naming a revision that was never created. The
+  // honest reading of that line is "it rolled, go check it"; the truth is the
+  // new credential is sitting in Key Vault with nothing serving it, and the
+  // console is still presenting the compromised one.
+  const r = run({
+    creds: HEALTHY,
+    kvTag: 'leaked-key',
+    args: ['--rotate'],
+    env: { CONSOLE_APP_NAME: '', CONSOLE_RG: '' },
+  });
+  assert.equal(r.rc, 0, r.out);
+  assert.equal(mintCalls(r.calls).length, 1, 'the mint half genuinely happened — that is why the receipt must be precise about the other half');
+  assert.match(r.out, /CONSOLE NOT ROLLED/);
+  assert.match(r.out, /NOTHING IS SERVING THE NEW\s+CREDENTIAL YET/);
+  assert.match(r.out, /still presenting the COMPROMISED credential/);
+  // The specific false assertion, gone:
+  assert.doesNotMatch(r.out, /the rolled revision/, 'must not name a revision that was never rolled');
+  assert.doesNotMatch(r.out, /CONSOLE ROLLED:/);
+  // And it must not send the operator on to the revoke, which would refuse anyway.
+  assert.match(r.out, /Do NOT proceed to --revoke/);
+  assert.equal(
+    r.calls.split('\n').filter((l) => l.startsWith('containerapp update')).length,
+    0,
+    'no revision roll may have been attempted',
+  );
+});
+
+test('ROTATE-5c: with a Container App supplied the receipt says ROLLED — the counterfactual', () => {
+  // Same inputs, console named. This is what makes 5b a measurement of the
+  // BRANCH rather than of a string that is simply always absent.
+  const r = run({ creds: HEALTHY, kvTag: 'leaked-key', args: ['--rotate'] });
+  assert.equal(r.rc, 0, r.out);
+  assert.match(r.out, /CONSOLE ROLLED:/);
+  assert.match(r.out, /NOT VERIFIED BY THIS RUN: whether that rolled revision is Healthy/);
+  assert.doesNotMatch(r.out, /CONSOLE NOT ROLLED/);
+  assert.equal(
+    r.calls.split('\n').filter((l) => l.startsWith('containerapp update')).length,
+    1,
+    'exactly one revision roll',
+  );
+});
+
+test('ROTATE-5d: a roll the CLI refused is never reported as rolled', () => {
+  // The third state, and the one that must not collapse into either branch:
+  // the console WAS supplied but `az containerapp update` failed. The run
+  // already exits 1 there; what this pins is that it does so without printing
+  // a ROLLED receipt over a roll that did not happen.
+  const r = run({
+    creds: HEALTHY,
+    kvTag: 'leaked-key',
+    args: ['--rotate'],
+    consoleUpdateFails: true,
+  });
+  assert.equal(r.rc, 1, r.out);
+  assert.match(r.out, /the env-var update on .* FAILED/);
+  assert.doesNotMatch(r.out, /CONSOLE ROLLED:/);
+  assert.doesNotMatch(r.out, /ROTATE COMPLETE/, 'a failed roll must not reach the rotate success receipt');
+});
+
 test('ROTATE-6: --rotate and --revoke in one invocation are REFUSED', () => {
   const r = run({
     creds: HEALTHY,
@@ -727,6 +795,73 @@ test('REVOKE-10: neither rotate nor revoke prints a secret value', () => {
   assert.doesNotMatch(rot.out, /STUB-PASSWORD-NEVER-LOGGED/);
   const rev = run({ creds: AFTER_ROTATION, kvTag: 'fresh-key', args: ['--revoke', 'leaked-key'] });
   assert.doesNotMatch(rev.out, /STUB-PASSWORD-NEVER-LOGGED/);
+});
+
+// ── 6b. A REQUESTED revoke with NO TARGET must refuse ───────────────────────
+//
+// The destructive half had no equivalent of ROTATE's REUSED=1 belt-and-braces
+// guard. Every REVOKE case above names a key id, so all of them entered the
+// revoke block and none could see what happens when the id is EMPTY: the block
+// was gated on `[ -n "${REVOKE_KEY_ID}" ]`, so an empty id skipped it entirely,
+// ran the ordinary bootstrap to completion and printed the normal "==> Done."
+// success banner with exit 0. Mid-incident that reads as "the leaked credential
+// is gone" when it is still live — the worst possible false receipt, and the
+// exact failure mode the whole R1–R5 chain exists to prevent.
+//
+// The shared assertions are the load-bearing ones: rc=1, zero deletes, and the
+// ABSENCE of the success banner. A refusal that still printed "==> Done." would
+// satisfy an rc check alone.
+const NO_TARGET_CASES = [
+  ['a bare --revoke with no following value', { args: ['--revoke'] }],
+  ['--revoke "$KID" where KID is unset or empty', { args: ['--revoke', ''] }],
+  ['--revoke= with nothing after the equals', { args: ['--revoke='] }],
+  ['a value that was only whitespace', { args: ['--revoke', '   '] }],
+  ['LOOM_MSAL_REVOKE_KEY_ID defined as an empty string', { env: { LOOM_MSAL_REVOKE_KEY_ID: '' } }],
+];
+
+for (const [label, extra] of NO_TARGET_CASES) {
+  test(`REVOKE-11 (${label}): refuses, deletes nothing, and never prints the success banner`, () => {
+    const r = run({ creds: AFTER_ROTATION, kvTag: 'fresh-key', ...extra });
+    assert.equal(r.rc, 1, `a revoke with no target must exit non-zero.\n${r.out}`);
+    assert.match(r.out, /a revoke was requested but NO credential key id was given/);
+    assert.match(r.out, /NOTHING was revoked/);
+    assert.equal(deleteCalls(r.calls).length, 0, 'nothing may be deleted');
+    assert.equal(mintCalls(r.calls).length, 0, 'and nothing minted');
+    assert.doesNotMatch(r.out, /==> Done\./, 'the ordinary success banner must NOT appear over a revoke that did nothing');
+    assert.equal(r.finalCreds.length, AFTER_ROTATION.length, 'the inventory must be untouched');
+  });
+}
+
+test('REVOKE-12: the refusal happens before ANY Entra or Key Vault call', () => {
+  // "Exits 1" is not enough on a destructive path: it must exit before the run
+  // can have had a side effect. The stub logs every az invocation, so an empty
+  // call log is the measurement.
+  const r = run({ creds: AFTER_ROTATION, kvTag: 'fresh-key', args: ['--revoke'] });
+  assert.equal(r.calls.trim(), '', `no az call may be made at all, got:\n${r.calls}`);
+});
+
+test('REVOKE-13: --revoke --prune does not swallow the flag as a key id', () => {
+  // A key id is a GUID and can never start with `--`, so a flag-shaped follower
+  // is an ABSENT value. Before this, `--prune` was shifted into REVOKE_KEY_ID:
+  // the operator lost the prune they asked for AND a missing target became a
+  // bogus one, so the run failed with "no password credential with key id
+  // --prune" — an accurate-sounding message about the wrong problem.
+  const r = run({ creds: AFTER_ROTATION, kvTag: 'fresh-key', args: ['--revoke', '--prune'] });
+  assert.equal(r.rc, 1);
+  assert.match(r.out, /a revoke was requested but NO credential key id was given/);
+  assert.doesNotMatch(r.out, /key id --prune/, 'the flag must not be reported as the target');
+});
+
+test('REVOKE-14: an UNSET LOOM_MSAL_REVOKE_KEY_ID is still "no revoke", not a refusal', () => {
+  // The counterfactual for REVOKE-11's env case, and the regression guard for
+  // the deploy path: csa-loom-post-deploy-bootstrap.yml runs this script bare,
+  // so if "unset" were also read as a requested revoke, every bootstrap in every
+  // boundary would exit 1.
+  const r = run({ creds: AFTER_ROTATION, kvTag: 'fresh-key' });
+  assert.equal(r.rc, 0, r.out);
+  assert.match(r.out, /==> Done\./);
+  assert.doesNotMatch(r.out, /revoke was requested/);
+  assert.equal(deleteCalls(r.calls).length, 0);
 });
 
 test('DEFAULT-1: with no new flag the behaviour is byte-for-byte the old behaviour', () => {
