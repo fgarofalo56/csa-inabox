@@ -6903,9 +6903,41 @@ module dbtRunner '../integration/dbt-runner.bicep' = if (dbtRunnerActive) {
 // categorization, and column-level model diff.
 //
 // Additive to the dbt-runner above (which keeps serving the existing dbt-job
-// item). Reuses the Console UAMI — identity-based auth only, no keys/secrets —
-// and is granted Storage Blob Data Contributor on the deployment's ADLS account
-// so run artifacts + plan snapshots outlive the ephemeral container.
+// item). Reuses the Console UAMI — identity-based auth only, no keys/secrets.
+//
+// WHAT THE ARTIFACT BINDING BELOW DOES AND DOES NOT DO (#3338 — corrected
+// 2026-09-07 after MEASURING the runner instead of inferring from this block).
+//
+// This comment used to say the runner "is granted Storage Blob Data Contributor
+// on the deployment's ADLS account so run artifacts + plan snapshots outlive the
+// ephemeral container". The second half was never true, and #3338 ("artifact
+// writes will 403") was filed off it. Measured at head in apps/loom-transform-runner:
+//
+//   * `LOOM_TRANSFORM_ARTIFACTS_ACCOUNT` (the env var `artifactsStorageAccountName`
+//     feeds, integration/transform-runner-aca.bicep:117) has NO reader anywhere in
+//     this repo — `git grep LOOM_TRANSFORM_ARTIFACTS_ACCOUNT` returns only the
+//     bicep that emits it and the compiled ARM copy of that bicep.
+//   * `requirements.txt` pulls no `azure-storage-*` package at all, so the image
+//     has no ADLS/blob client to write with.
+//   * every endpoint in `app/main.py` (/plan /apply /run /environments /diff)
+//     runs inside `tempfile.TemporaryDirectory(prefix="loom-transform-")` and
+//     `app/project.py::read_dbt_artifacts` returns target/manifest.json,
+//     catalog.json and run_results.json INLINE in the response.
+//
+// So artifacts do NOT outlive the container, with or without the grant, and no
+// 403 is reachable: there is no write to 403 on. `transformRunnerLakeRbac` below
+// is a grant with no consumer yet. Making #3338's acceptance criterion true
+// ("a real dbt run whose target/manifest.json lands in the lake") is a change to
+// apps/loom-transform-runner — an artifact-persistence path that does not exist —
+// NOT a change to this binding or to that grant.
+//
+// DO NOT "fix" this by adding `loomStorageWillBeGranted` to
+// `transformRunnerActive` (:819) in the shape `s3GatewayActive` uses at :1490.
+// That flag means "SOME pass owns my lake grant", and the only cross-sub pass
+// (modules/data-plane/dlz-lake-grant-pass.bicep) grants the S3 gateway's
+// dedicated identity and nothing else. Borrowing it here would gate this deploy
+// on an ownership claim that is false for this module. The invariant is now
+// enforced: scripts/ci/__tests__/module-existing-scope.test.mjs.
 // =====================================================================
 module transformRunner '../integration/transform-runner-aca.bicep' = if (transformRunnerActive) {
   name: 'transform-runner'
@@ -6933,6 +6965,29 @@ module transformRunner '../integration/transform-runner-aca.bicep' = if (transfo
 // looking for the DLZ lake in the admin resource group. Moving the grant out to
 // a scoped module closes the last instance of a defect this repo had already
 // diagnosed, documented and fixed six times over.
+//
+// TWO THINGS THIS GRANT IS NOT (#3338, 2026-09-07).
+//
+// 1. It is not load-bearing yet. Nothing in apps/loom-transform-runner writes to
+//    ADLS (see the measurement in the block above), so today this grant has no
+//    consumer. It is kept — a grant that precedes its consumer is cheap and the
+//    consumer is the tracked work — but it must not be cited as evidence that
+//    artifact persistence works.
+// 2. It is NOT proven safe on an estate that already holds the tuple.
+//    data-plane/transform-runner-lake-rbac.bicep:56-60 claims its deterministic
+//    guid "also collapses onto an equivalent grant already made for this pair
+//    elsewhere rather than erroring on a duplicate". This repo's own measured
+//    history says the opposite three times over: main.bicep:2288 (the
+//    app-resources leaf "failed RoleAssignmentExists on EVERY deploy in BOTH
+//    topologies; it only ever 'worked' because the grant was created
+//    imperatively"), main.bicep:3113, and :9095 below — a second assignment for
+//    the same principal+role+scope under a different guid() salt FAILS the
+//    deployment. guid() idempotency needs the NAME to match, and an out-of-band
+//    `az role assignment create` names its assignment randomly. Which of the two
+//    comments is right has not been re-measured against live ARM here, so this
+//    one asserts only what the repo has observed. Cross-sub estates do not hit
+//    it (loomStorageGrantable is false there); a same-sub estate carrying an
+//    out-of-band Console-UAMI grant on the lake would.
 module transformRunnerLakeRbac '../data-plane/transform-runner-lake-rbac.bicep' = if (transformRunnerActive && !skipRoleGrants && loomStorageGrantable) {
   name: 'loom-transform-runner-lake-rbac'
   scope: resourceGroup(loomDlzRg)

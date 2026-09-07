@@ -10,9 +10,13 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import path from 'node:path';
 
 import {
   analyze,
+  BICEP_ROOT,
+  blankComments,
   blockAt,
   CONTROL_TREE,
   CROSS_RG_TYPES,
@@ -342,4 +346,189 @@ test('every KNOWN_DORMANT entry records why it is dormant and where it is tracke
     assert.ok(r.dormantBecause && r.dormantBecause.length > 20, `${r.module} needs a measured reason`);
     assert.match(r.issue, /^#\d+$/);
   }
+});
+
+// ── #3338 — the cross-subscription lake grant pass's OWNERSHIP invariant ─────
+//
+// WHY THESE LIVE HERE. `modules/data-plane/dlz-lake-grant-pass.bicep` is the
+// only owner of lake role assignments that `modules/admin-plane/main.bicep`
+// cannot make itself (the lake is in another subscription). Two ways to break
+// it are one keystroke apart, both read GREEN on every existing gate, and both
+// are what #3338 asks for:
+//
+//   1. THREAD THE PARAM, FORGET THE ASSIGNMENT. Add a principal to the pass and
+//      to main.bicep's call, and stop. Bicep compiles, deployment validate
+//      passes, the pass still reports the ONE grant it already had, and the new
+//      capability is bound with no grant — the exact defect #3338 names.
+//   2. GRANT A LONG-LIVED SHARED IDENTITY. The pass may only grant identities
+//      the deployment itself mints, because a pre-existing (scope, principal,
+//      role) tuple makes ARM reject a second assignment under a different
+//      guid() name and FAILS THE WHOLE DEPLOYMENT. Not a guess: this repo has
+//      paid for it three times (main.bicep:2288 — the app-resources leaf
+//      "failed RoleAssignmentExists on EVERY deploy in BOTH topologies";
+//      main.bicep:3113; admin-plane/main.bicep:9095), and the Console UAMI
+//      already holds Storage Blob Data Contributor on the live Commercial lake
+//      from an out-of-band grant (measured 2026-08-13, recorded in the pass's
+//      own header). #3338 asked for exactly that principal at exactly that role.
+//
+// WHAT THESE TESTS ARE AND ARE NOT. They are GREEN at head — head carries
+// neither break. They are trap guards, not the fix for a red, and each carries
+// a MUTATION control that applies the break to an in-memory copy of the REAL
+// source and asserts the checker turns red on it. Without that control a green
+// here would be indistinguishable from a checker that looks at nothing.
+
+const GRANT_PASS_REL = 'modules/data-plane/dlz-lake-grant-pass.bicep';
+const ADMIN_PLANE_REL = 'modules/admin-plane/main.bicep';
+
+const readBicep = (rel) => fs.readFileSync(path.join(BICEP_ROOT, ...rel.split('/')), 'utf8');
+
+/**
+ * Principals that ACTUALLY receive a role assignment in a bicep source: the
+ * `properties.principalId` expression of every
+ * `Microsoft.Authorization/roleAssignments` declaration.
+ *
+ * Comments are blanked first, so a commented-out assignment does not count as a
+ * grant — the same discipline `parseBicep` applies to `scope:`.
+ */
+function grantedPrincipalExprs(source) {
+  const lines = blankComments(source).split(/\r?\n/);
+  const out = [];
+  for (let i = 0; i < lines.length; i += 1) {
+    if (!/^resource\s+\w+\s+'Microsoft\.Authorization\/roleAssignments@/.test(lines[i].trimStart())) continue;
+    const pid = fieldAt(blockAt(lines, i), 'principalId', 4);
+    if (pid) out.push(pid.value);
+  }
+  return out;
+}
+
+/** `param …PrincipalId string` names declared by a source. */
+function principalParams(source) {
+  return [...parseBicep(source).params].filter((p) => /PrincipalId$/.test(p)).sort();
+}
+
+/** Declared principal params that no role assignment in the same file consumes. */
+function ungrantedPrincipalParams(source) {
+  const granted = grantedPrincipalExprs(source);
+  return principalParams(source).filter(
+    (p) => !granted.some((expr) => new RegExp(`\\b${p}\\b`).test(expr)),
+  );
+}
+
+/**
+ * Every principal the cross-sub pass is allowed to grant, and why it is safe.
+ *
+ * The entry bar is STRUCTURAL, not "we have not seen a collision": the identity
+ * must be minted by the same deployment run, so it cannot carry a pre-existing
+ * assignment. Adding a row for a long-lived identity (the Console UAMI, a
+ * customer-supplied SP, anything created out-of-band) is the #3338 trap and is
+ * refused in the module header with the measurement behind it.
+ */
+const SELF_MINTED_PASS_PRINCIPALS = [
+  {
+    param: 's3GatewayPrincipalId',
+    mintedBy: 'modules/data-plane/s3-gateway-aca.bicep — uami-loom-s3gw-<location>, created by this same deployment run',
+    why: 'An identity minted on this run cannot already hold a role assignment, so a duplicate-tuple RoleAssignmentExists is structurally impossible rather than merely unobserved. Verified on the live Commercial estate 2026-08-13: no uami-loom-s3gw-* identity exists at all.',
+  },
+];
+
+/**
+ * Activation vars in admin-plane that gate their DEPLOY on
+ * `loomStorageWillBeGranted` — i.e. that assert "some pass owns my lake grant"
+ * — mapped to the pass param that actually owns it.
+ *
+ * `loomStorageWillBeGranted` is `loomStorageGrantable || loomStorageGrantedElsewhere`,
+ * and `loomStorageGrantedElsewhere` is main.bicep:1604's `crossSubLakeGrantsActive`
+ * — a statement about the PASS, not about the caller. Borrowing it for a module
+ * whose principal the pass does not grant makes the flag assert an ownership
+ * that does not exist. That is what #3338's suggested one-liner ("make
+ * transformRunnerActive include loomStorageWillBeGranted, mirror :1490") does:
+ * the pass grants the S3 gateway's dedicated identity and nothing else, so the
+ * transform runner would gate on someone else's grant.
+ */
+const CROSS_SUB_GRANT_CONSUMERS = {
+  s3GatewayActive: 's3GatewayPrincipalId',
+};
+
+/** Activation vars whose expression references `loomStorageWillBeGranted`. */
+function willBeGrantedConsumers(adminSource) {
+  const { vars } = parseBicep(adminSource);
+  return [...vars.entries()]
+    .filter(([, expr]) => /\bloomStorageWillBeGranted\b/.test(expr))
+    .map(([name]) => name)
+    .sort();
+}
+
+/**
+ * Consumers of `loomStorageWillBeGranted` whose lake grant NOBODY owns —
+ * either unregistered, or registered against a param the pass does not grant.
+ */
+function unownedWillBeGrantedConsumers(adminSource, passSource) {
+  const granted = grantedPrincipalExprs(passSource);
+  return willBeGrantedConsumers(adminSource).filter((v) => {
+    const owner = CROSS_SUB_GRANT_CONSUMERS[v];
+    return !owner || !granted.some((expr) => new RegExp(`\\b${owner}\\b`).test(expr));
+  });
+}
+
+test('#3338 GUARD 1: every principal param the cross-sub pass declares actually carries a role assignment', () => {
+  const source = readBicep(GRANT_PASS_REL);
+  // Non-vacuity first: a checker that found no principals at all would satisfy
+  // the assertion below while measuring nothing.
+  assert.ok(principalParams(source).length > 0, 'the pass must declare at least one principal param');
+  assert.ok(grantedPrincipalExprs(source).length > 0, 'the pass must contain at least one role assignment');
+  assert.deepEqual(
+    ungrantedPrincipalParams(source),
+    [],
+    'a principal threaded into the cross-sub pass with no roleAssignments resource consuming it is bound-and-ungranted — the #3338 defect, re-created',
+  );
+});
+
+test('#3338 GUARD 1 — MUTATION control: threading a principal without its assignment goes RED', () => {
+  const head = readBicep(GRANT_PASS_REL);
+  const mutated = head.replace(
+    "param s3GatewayPrincipalId string = ''",
+    "param s3GatewayPrincipalId string = ''\n\nparam consolePrincipalId string = ''",
+  );
+  assert.notEqual(mutated, head, 'the mutation must actually apply');
+  assert.deepEqual(ungrantedPrincipalParams(mutated), ['consolePrincipalId']);
+});
+
+test('#3338 GUARD 2: the cross-sub pass grants ONLY identities the deployment itself mints', () => {
+  const declared = principalParams(readBicep(GRANT_PASS_REL));
+  assert.deepEqual(
+    declared,
+    SELF_MINTED_PASS_PRINCIPALS.map((p) => p.param).sort(),
+    'a principal param was added to dlz-lake-grant-pass.bicep without a self-minted justification. A long-lived identity (the Console UAMI above all) may already hold the tuple, and ARM then fails the deployment with RoleAssignmentExists — see the module header and main.bicep:2288.',
+  );
+  for (const p of SELF_MINTED_PASS_PRINCIPALS) {
+    assert.ok(p.mintedBy && p.mintedBy.length > 20, `${p.param} must name what mints it`);
+    assert.ok(p.why && p.why.length > 40, `${p.param} needs a measured reason, not an assertion`);
+  }
+});
+
+test('#3338 GUARD 3: only modules whose grant the pass OWNS may gate their deploy on loomStorageWillBeGranted', () => {
+  const admin = readBicep(ADMIN_PLANE_REL);
+  assert.ok(
+    willBeGrantedConsumers(admin).length > 0,
+    'loomStorageWillBeGranted must still have at least one consumer — otherwise this guard measures nothing',
+  );
+  assert.deepEqual(
+    unownedWillBeGrantedConsumers(admin, readBicep(GRANT_PASS_REL)),
+    [],
+    'a module gates its deploy on loomStorageWillBeGranted ("a pass owns my lake grant") whose principal dlz-lake-grant-pass.bicep does not grant',
+  );
+});
+
+test('#3338 GUARD 3 — MUTATION control: borrowing the flag for the transform runner goes RED', () => {
+  // The literal one-liner #3338 proposed. It must not read green.
+  const head = readBicep(ADMIN_PLANE_REL);
+  const mutated = head.replace(
+    'var transformRunnerActive = dbtRunnerActive\n',
+    'var transformRunnerActive = dbtRunnerActive && loomStorageWillBeGranted\n',
+  );
+  assert.notEqual(mutated, head, 'the mutation must actually apply');
+  assert.deepEqual(
+    unownedWillBeGrantedConsumers(mutated, readBicep(GRANT_PASS_REL)),
+    ['transformRunnerActive'],
+  );
 });

@@ -79,6 +79,35 @@
 // failure, not a no-op. Grants for LONG-LIVED shared identities (the Console
 // UAMI above all) belong in a child story of #3336 that deals with reconciliation
 // explicitly; they are deliberately NOT in this pass.
+//
+// ── #3338 ASKED FOR EXACTLY THAT, AND IT IS REFUSED HERE (2026-09-07) ────────
+//
+// #3338 ("transform-runner is bound but not granted — artifact writes will
+// 403") proposes threading `adminPlane.outputs.uamiConsolePrincipalId` in and
+// adding a Storage Blob Data Contributor (ba92f5b4-…) assignment for it. That is
+// the Console UAMI — precisely the long-lived shared identity the paragraph
+// above excludes, at precisely the role and scope the 2026-08-13 measurement
+// recorded above as ALREADY ASSIGNED out-of-band on the live Commercial lake.
+// Taking it would trade an unreachable 403 for a RoleAssignmentExists that fails
+// the whole deployment: the #3329 / #3333 P0 class this file exists to avoid.
+// The repo has paid for that shape three times already — main.bicep:2288 (the
+// app-resources leaf "failed RoleAssignmentExists on EVERY deploy in BOTH
+// topologies"), main.bicep:3113, admin-plane/main.bicep:9095.
+//
+// It is refused on a second, independent ground: the 403 is not reachable at
+// head, so the grant would enable nothing while risking the estate. Measured
+// 2026-09-07 in apps/loom-transform-runner — `requirements.txt` pulls no
+// `azure-storage-*` package, `LOOM_TRANSFORM_ARTIFACTS_ACCOUNT` has no reader
+// anywhere in the repo, and every endpoint in `app/main.py` runs inside a
+// `tempfile.TemporaryDirectory` and returns target/manifest.json inline. There
+// is no write to 403 on. #3338's real acceptance criterion is an
+// artifact-persistence path in that app, which does not exist yet.
+//
+// Two guards in scripts/ci/__tests__/module-existing-scope.test.mjs hold the
+// line: every principal param declared in this file must actually carry a role
+// assignment (so the half-applied form of that fix — param threaded, assignment
+// forgotten — cannot merge reading green), and any principal param added here
+// must be declared self-minted with a reason.
 
 targetScope = 'resourceGroup'
 
