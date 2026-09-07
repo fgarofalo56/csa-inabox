@@ -11,7 +11,8 @@ import json
 import urllib.error
 import urllib.parse
 import urllib.request
-from typing import Any
+from http.client import HTTPMessage
+from typing import IO, Any
 
 
 class APIError(Exception):
@@ -84,7 +85,19 @@ class _SameOriginRedirectHandler(urllib.request.HTTPRedirectHandler):
     (path changes, trailing-slash normalisation) still work.
     """
 
-    def redirect_request(self, req, fp, code, msg, headers, newurl):  # type: ignore[no-untyped-def]
+    def redirect_request(
+        self,
+        req: urllib.request.Request,
+        fp: IO[bytes],
+        code: int,
+        msg: str,
+        headers: HTTPMessage,
+        newurl: str,
+    ) -> urllib.request.Request | None:
+        # ANNOTATED RATHER THAN IGNORED (#4184) — see the note in
+        # `apps/loom-migrate/app/connectors.py`. An untyped def is `Any` in both
+        # directions, so a drifted override would type-check clean and fail only
+        # on a real 3xx. This is typeshed's signature for the overridden method.
         target = urllib.parse.urljoin(req.full_url, newurl)
         if _origin(target) != _origin(req.full_url):
             raise urllib.error.HTTPError(

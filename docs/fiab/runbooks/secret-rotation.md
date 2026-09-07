@@ -268,6 +268,117 @@ that deploys less often than the renewal window.
 drives the real script against a stub `az` and pins every rule above;
 `scripts/ci/check-msal-credential-hygiene.mjs` is the merge-blocking static half.
 
+### 2.2b Rotate after a COMPROMISE — `--rotate`, then `--revoke` (#3637)
+
+**Use this section when a credential is disclosed** — pasted into a log, a
+ticket, a chat, a screen share; committed; or held by someone who should no
+longer have it. Not for expiry (§2.2 rule 1 renews) and not for tidying up
+(§2.2's prune).
+
+**Why the routine path could not do it.** Every rule in §2.2 is tuned to *avoid*
+minting and *avoid* deleting, and a disclosed credential defeats both:
+
+- A credential leaked this morning is perfectly **healthy** — ~300 days left —
+  so the reuse gate printed `REUSE` and kept serving it, run after run. No
+  environment variable changed that answer.
+- It is also **recent** and among the **newest**, so `LOOM_MSAL_PRUNE_KEEP` and
+  `LOOM_MSAL_PRUNE_MIN_AGE_DAYS` protected it at *every* setting. No prune
+  configuration could remove it.
+
+So the operator's only route was hand-running `az ad app credential
+reset`/`delete` during an incident — the untested path, at the worst moment.
+
+**Two runs, in this order. Never one.**
+
+```bash
+# ── STEP 1 — rotate. Mints a replacement, records WHY, rolls the console.
+#            Deletes NOTHING: the revision rolling right now is still serving
+#            the old credential until it goes Healthy.
+KEYVAULT_NAME="$KV" EXISTING_CLIENT_ID="$APP_ID" \
+CONSOLE_APP_NAME=loom-console CONSOLE_RG="$RG" UAMI_RESOURCE_ID="$UAMI" \
+  bash scripts/csa-loom/bootstrap-msal-app-reg.sh \
+    --rotate --rotate-reason "disclosed-in-<where>-<date>"
+```
+
+The run stops there on purpose. It does not prune and it does not assert the
+ceiling — a rotation deliberately *adds* a credential, and a ceiling failure at
+that moment would read as "the rotation did not work".
+
+```bash
+# ── STEP 2 — VERIFY before deleting anything. All three:
+#  * interactive browser sign-in on the live URL,
+#  * the loom-ui-verify login-health job (catches AADSTS7000215),
+#  * every active revision post-dates the Key Vault write:
+az containerapp revision list -n loom-console -g "$RG" \
+  --query "[?properties.active].{rev:name,created:properties.createdTime}" -o table
+az rest --method GET --url "https://management.azure.com${KV_ID}/secrets/loom-msal-client-secret?api-version=2023-07-01" \
+  --query "properties.attributes.updated" -o tsv
+```
+
+```bash
+# ── STEP 3 — revoke the disclosed credential, by key id, explicitly.
+KEYVAULT_NAME="$KV" EXISTING_CLIENT_ID="$APP_ID" \
+CONSOLE_APP_NAME=loom-console CONSOLE_RG="$RG" \
+  bash scripts/csa-loom/bootstrap-msal-app-reg.sh --revoke "<leaked-key-id>"
+```
+
+**What `--revoke` proves before it deletes.** It refuses, loudly and without
+deleting, unless all five hold:
+
+| # | Precondition | Refusal reads |
+|---|---|---|
+| R1 | The key id is on the app **right now**. | `has no password credential with key id …` — and it does **not** claim the id was "already removed"; the inventory cannot distinguish that from "never existed". |
+| R2 | It is **not** the credential the Key Vault `msalKeyId` tag records as in use. | `… IS the credential loom-msal-client-secret records as in use` + the `--rotate` route that does work. |
+| R3 | The in-use credential is **strictly newer** than the target. R2 alone would allow revoking a *successor*. | `is NOT older than the in-use credential …` |
+| R4 | The console binding is **proven** — the same P3/P3b evidence §2.2's prune requires (unversioned `keyvaultref`, every active revision post-dating the Key Vault write). | `what the console actually serves is NOT proven this run` |
+| R5 | After the delete, the inventory is **re-read** and the key id is confirmed absent. A zero exit from `az ad app credential delete` is not evidence. | `is STILL present … after a delete that reported success` |
+
+**What it deliberately does NOT honour, and says so in the output:** the
+`LOOM_MSAL_PRUNE_MIN_AGE_DAYS` grace and the `LOOM_MSAL_PRUNE_KEEP` window.
+Those exist for consumers this script cannot see; a disclosed credential is
+worth breaking them for. That is the trade, made explicitly, not silently.
+
+**What no part of this establishes** (`deploy-integrity.md` R7): whether
+anything *outside* the console holds the raw value. Nothing that does will
+survive the revoke — it starts failing the moment the delete lands. If Dataverse
+S2S or any other consumer reads this credential from somewhere other than the
+Key Vault secret, roll it in the same window.
+
+**The revoke is irreversible.** Entra never returns a deleted password
+credential's value; there is no restore, only another rotation. That is why
+step 2 is a separate run and not a flag.
+
+**Provenance survives the redeploy.** `--rotate` writes `msalProvenance=rotated`,
+`msalRotateReason`, `msalRotatedAt` and `msalRotatedFrom` as **tags on the Key
+Vault secret**, not as Container App environment variables — for the same reason
+`LOOM_MSAL_SECRET_ROTATED` was removed in #3025: an env var is re-rendered away
+by the next `az deployment sub create`, and a rotation marker that vanishes
+reads during triage as "never rotated". Read them back with:
+
+```bash
+az rest --method GET --url "https://management.azure.com${KV_ID}/secrets/loom-msal-client-secret?api-version=2023-07-01" \
+  --query "tags" -o json     # metadata only — ARM never returns the value
+```
+
+**Flags and environment equivalents** (both work; the env forms exist for
+workflow callers that cannot pass arguments):
+
+| Flag | Environment | Effect |
+|---|---|---|
+| `--rotate` | `LOOM_MSAL_ROTATE=1` | Skip the reuse gate unconditionally, mint, record, roll, stop. |
+| `--rotate-reason <text>` | `LOOM_MSAL_ROTATE_REASON=<text>` | Recorded as the `msalRotateReason` tag. Defaults to `unspecified`. |
+| `--revoke <key-id>` | `LOOM_MSAL_REVOKE_KEY_ID=<key-id>` | Delete exactly that credential, after R1–R5. |
+
+`--rotate` together with `--revoke` is **refused** before anything is minted or
+deleted: the rotation's revision is not Healthy when the script exits, so the
+credential you asked to revoke may still be the one in service.
+
+**Verification:** the `ROTATE-*` and `REVOKE-*` cases in
+`scripts/ci/__tests__/msal-credential-lifecycle.test.mjs` drive the real script
+against a stub `az` — including the counterfactuals (the same inputs REUSE
+without `--rotate`; no prune setting removes the leaked credential) and the R5
+case where the delete reports success and removes nothing.
+
 ## 3. Rotate the synthetic-login secret (V1 automation account)
 
 ```bash

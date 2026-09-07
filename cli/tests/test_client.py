@@ -17,6 +17,7 @@ import json
 import threading
 import urllib.error
 import urllib.request
+from http.client import HTTPMessage
 from io import BytesIO
 from unittest.mock import MagicMock, patch
 
@@ -290,7 +291,7 @@ class TestCredentialSafeOpener:
             headers={"Authorization": "Bearer SUPER_SECRET"},
         )
         with pytest.raises(urllib.error.HTTPError) as excinfo:
-            handler.redirect_request(req, BytesIO(b""), 302, "Found", {}, "http://attacker.invalid/loot")
+            handler.redirect_request(req, BytesIO(b""), 302, "Found", HTTPMessage(), "http://attacker.invalid/loot")
         assert "refusing cross-origin redirect" in str(excinfo.value)
 
     def test_the_handler_refuses_a_scheme_downgrade_and_a_port_change(self):
@@ -298,7 +299,7 @@ class TestCredentialSafeOpener:
         base = urllib.request.Request("https://loom.example/api/v1/sources")
         for target in ("http://loom.example/api/v1/sources", "https://loom.example:8443/api/v1/sources"):
             with pytest.raises(urllib.error.HTTPError, match="refusing cross-origin redirect"):
-                handler.redirect_request(base, BytesIO(b""), 302, "Found", {}, target)
+                handler.redirect_request(base, BytesIO(b""), 302, "Found", HTTPMessage(), target)
 
     def test_a_same_origin_redirect_is_still_followed(self):
         # Without this the guard is indistinguishable from a client that cannot
@@ -310,7 +311,7 @@ class TestCredentialSafeOpener:
         handler = _client._SameOriginRedirectHandler()
         req = urllib.request.Request("http://loom.example/api/v1/sources")
         redirected = handler.redirect_request(
-            req, BytesIO(b""), 302, "Found", {}, "http://loom.example/api/v1/sources/"
+            req, BytesIO(b""), 302, "Found", HTTPMessage(), "http://loom.example/api/v1/sources/"
         )
         assert redirected is not None
         assert redirected.full_url == "http://loom.example/api/v1/sources/"
@@ -325,7 +326,7 @@ class TestCredentialSafeOpener:
             headers={"Authorization": "Bearer SUPER_SECRET"},
         )
         leaked = urllib.request.HTTPRedirectHandler().redirect_request(
-            req, BytesIO(b""), 302, "Found", {}, "http://attacker.invalid/loot"
+            req, BytesIO(b""), 302, "Found", HTTPMessage(), "http://attacker.invalid/loot"
         )
         assert leaked is not None
         assert leaked.full_url.startswith("http://attacker.invalid/")

@@ -40,6 +40,23 @@
 #   UAMI_RESOURCE_ID    Console UAMI resource id for KV-backed secretRef identity
 #                       (optional; falls back to inline secret wiring)
 #
+# INCIDENT PATH — rotate after a compromise, then revoke (#3637). Full runbook:
+# docs/fiab/runbooks/secret-rotation.md §2.2b. Two RUNS, never one:
+#   --rotate            Mint a replacement even though the recorded credential
+#                       is healthy — the reuse gate below is skipped
+#                       UNCONDITIONALLY. Records msalRotateReason on the Key
+#                       Vault secret, re-wires + rolls the console, then STOPS.
+#                       Deletes nothing. (env: LOOM_MSAL_ROTATE=1)
+#   --rotate-reason <s> Recorded as the msalRotateReason tag; default
+#                       "unspecified". (env: LOOM_MSAL_ROTATE_REASON)
+#   --revoke <key-id>   Delete exactly that credential, bypassing the hygiene
+#                       grace, but ONLY after this run proves a NEWER credential
+#                       is what the console serves — then asserts it is gone.
+#                       (env: LOOM_MSAL_REVOKE_KEY_ID)
+# The two flags together are REFUSED: the revision --rotate rolls is not Healthy
+# when this script exits, so the credential named for revocation may still be
+# the one in service. Verify sign-in between the runs.
+#
 # OPT-IN — Power BI remote MCP (preview). Default-OFF; never on a default path:
 #   --enable-powerbi-mcp   flag (or LOOM_ENABLE_POWERBI_MCP=1). When set, ALSO
 #                       grants the SAME Loom Console app registration the three
@@ -115,21 +132,79 @@ ADOPT_INFERRED="${LOOM_MSAL_ADOPT_INFERRED:-0}"
 SECRET=''
 
 # ---------------------------------------------------------------------
+# INCIDENT PATH (#3637) — rotate-after-compromise, and the revoke that follows.
+#
+# THE GAP THIS CLOSES. Everything above optimises for NOT minting: the reuse
+# gate deliberately does nothing while the recorded credential has more than
+# LOOM_MSAL_SECRET_MIN_REMAINING_DAYS left, and the prune deliberately protects
+# anything inside the grace window. Both are correct for hygiene and both are
+# EXACTLY WRONG after a disclosure. A credential that leaked at 09:00 has ~300
+# days left, so every re-run of this script printed REUSE and kept serving it,
+# and the prune's 7-day grace protected it from removal. There was no argument
+# and no flag that changed either answer — the operator's only route was to
+# hand-run `az ad app credential reset`/`delete`, i.e. the untested path, during
+# an incident.
+#
+#   --rotate            Skip the reuse gate UNCONDITIONALLY and say so. Mints
+#                       through the same validated `--append` path, records
+#                       msalRotateReason on the Key Vault secret, re-wires and
+#                       rolls the console, then STOPS. It deletes NOTHING: the
+#                       rolling revision is still serving the old credential
+#                       until it goes Healthy, so removing it here is the
+#                       stranding failure the whole design avoids.
+#   --revoke <key-id>   Delete exactly that credential, bypassing the hygiene
+#                       grace, but ONLY after this run has proven a NEWER
+#                       credential is what the console serves. Then re-reads the
+#                       inventory and asserts the key id is gone.
+#
+# THE TWO ARE DELIBERATELY SEPARATE INVOCATIONS. Between them the operator
+# verifies sign-in on the new credential (docs/fiab/runbooks/secret-rotation.md
+# §2.2b). A single flag that rotated and revoked in one pass would delete the
+# credential the console is still serving during the revision roll.
+#
+# WHAT --revoke DOES NOT ESTABLISH, stated rather than implied (R7): it proves
+# what the CONSOLE serves — the Key Vault msalKeyId tag, an unversioned Key
+# Vault reference, and every active revision post-dating the Key Vault write. A
+# consumer that captured the raw value out of band is invisible to this script
+# and WILL start failing the moment the delete lands. That is the intended trade
+# for a disclosed credential, and it is irreversible: Entra does not return a
+# deleted password credential's value, so there is no undo.
+# ---------------------------------------------------------------------
+ROTATE="${LOOM_MSAL_ROTATE:-0}"
+REVOKE_KEY_ID="${LOOM_MSAL_REVOKE_KEY_ID:-}"
+ROTATE_REASON="${LOOM_MSAL_ROTATE_REASON:-unspecified}"
+
+# ---------------------------------------------------------------------
 # OPT-IN: Power BI remote MCP (preview). OFF unless --enable-powerbi-mcp (or
 # LOOM_ENABLE_POWERBI_MCP truthy). no-fabric-dependency: this is the ONLY place
 # the bootstrap touches Power BI, and only when explicitly opted in. The
 # Azure-native authoring path stays the day-one default with this OFF.
 # ---------------------------------------------------------------------
 ENABLE_POWERBI_MCP="${LOOM_ENABLE_POWERBI_MCP:-0}"
-for arg in "$@"; do
-  case "$arg" in
+# A `while … shift` loop, not the previous `for arg in "$@"`: `--revoke` takes a
+# VALUE, and a value-taking flag cannot be parsed by a loop that never advances.
+# Unknown arguments are still ignored, as they were before.
+while [ "$#" -gt 0 ]; do
+  case "$1" in
     --enable-powerbi-mcp) ENABLE_POWERBI_MCP=1 ;;
     --no-powerbi-mcp)     ENABLE_POWERBI_MCP=0 ;;
     --prune)              PRUNE_ENABLED=1 ;;
     --dry-run-prune)      PRUNE_ENABLED=0 ;;
     --adopt-inferred)     ADOPT_INFERRED=1 ;;
+    --rotate)             ROTATE=1 ;;
+    --rotate=*)           ROTATE=1; ROTATE_REASON="${1#--rotate=}" ;;
+    --rotate-reason)      shift; ROTATE_REASON="${1:-}" ;;
+    --rotate-reason=*)    ROTATE_REASON="${1#--rotate-reason=}" ;;
+    --revoke)             shift; REVOKE_KEY_ID="${1:-}" ;;
+    --revoke=*)           REVOKE_KEY_ID="${1#--revoke=}" ;;
   esac
+  shift || break
 done
+# Tag values land inside a hand-built JSON body, so anything that could close a
+# string or escape it is removed here rather than trusted.
+ROTATE_REASON="$(printf '%s' "${ROTATE_REASON}" | tr -d '"\\\r\n' | cut -c1-200)"
+REVOKE_KEY_ID="$(printf '%s' "${REVOKE_KEY_ID}" | tr -d ' \r')"
+
 case "$(printf '%s' "${ENABLE_POWERBI_MCP}" | tr '[:upper:]' '[:lower:]')" in
   1|true|yes|on) ENABLE_POWERBI_MCP=1 ;;
   *)             ENABLE_POWERBI_MCP=0 ;;
@@ -142,6 +217,21 @@ case "$(printf '%s' "${ADOPT_INFERRED}" | tr '[:upper:]' '[:lower:]')" in
   1|true|yes|on) ADOPT_INFERRED=1 ;;
   *)             ADOPT_INFERRED=0 ;;
 esac
+case "$(printf '%s' "${ROTATE}" | tr '[:upper:]' '[:lower:]')" in
+  1|true|yes|on) ROTATE=1 ;;
+  *)             ROTATE=0 ;;
+esac
+
+# CONFIG INVARIANT — rotate and revoke are two RUNS, never one.
+# --rotate mints a replacement and rolls the console onto it; that revision is
+# not Healthy when this process exits, so the credential named by --revoke may
+# still be the one in service. Deleting it in the same pass is the stranding
+# failure every other rule in this file exists to prevent. Refuse rather than
+# pick an order.
+if [ "${ROTATE}" -eq 1 ] && [ -n "${REVOKE_KEY_ID}" ]; then
+  echo "ERROR: --rotate and --revoke cannot be combined. --rotate mints a replacement and rolls the console onto it, but that revision is not yet Healthy when this script exits — so the credential you asked to revoke may still be the one being served. Run --rotate, VERIFY sign-in on the new credential (docs/fiab/runbooks/secret-rotation.md §2.2b), then run --revoke ${REVOKE_KEY_ID}." >&2
+  exit 1
+fi
 
 # CONFIG INVARIANT — a renewal threshold at or beyond the credential's own
 # lifetime means EVERY run finds the credential "too close to expiry" and mints
@@ -485,7 +575,16 @@ if [ -n "${IN_USE_KEY_ID}" ]; then
     IFS='|' read -r _kid _start _end _label <<< "${IN_USE_LINE}"
     if END_EPOCH="$(iso_epoch "${_end}")"; then
       REMAIN_DAYS=$(( (END_EPOCH - NOW_EPOCH) / 86400 ))
-      if [ "${REMAIN_DAYS}" -gt "${MIN_REMAINING_DAYS}" ]; then
+      # THE REUSE GATE IS SKIPPED UNCONDITIONALLY UNDER --rotate (#3637), and
+      # the health of the outgoing credential is REPORTED rather than consulted.
+      # That is the whole point: a disclosed credential is perfectly healthy by
+      # every measure this gate applies, so consulting them is what kept serving
+      # it. Deliberately BEFORE the remaining-days test so the ordering cannot
+      # drift into "rotate unless it still looks fine".
+      if [ "${ROTATE}" -eq 1 ]; then
+        echo "    ROTATE — --rotate given, so the reuse gate is SKIPPED for credential ${_kid} (label ${_label}, minted ${_start}) even though it is healthy: expires ${_end}, ${REMAIN_DAYS} days away, threshold ${MIN_REMAINING_DAYS}. Minting a replacement. Reason recorded: ${ROTATE_REASON}."
+        echo "           NOTHING is deleted by this run. ${_kid} stays live and valid until you revoke it explicitly:  --revoke ${_kid}"
+      elif [ "${REMAIN_DAYS}" -gt "${MIN_REMAINING_DAYS}" ]; then
         REUSED=1
         IN_USE_KNOWN=1
         echo "    REUSE — ${MSAL_SECRET_NAME} holds credential ${_kid} (label ${_label}, minted ${_start}), which is still on the app and expires ${_end} in ${REMAIN_DAYS} days (threshold ${MIN_REMAINING_DAYS}). NOTHING minted; Key Vault untouched."
@@ -496,6 +595,11 @@ if [ -n "${IN_USE_KEY_ID}" ]; then
       echo "    RENEW — could not parse the expiry '${_end}' of credential ${_kid}, so its health is UNKNOWN. Minting a replacement rather than assuming it is fine."
     fi
   fi
+elif [ "${ROTATE}" -eq 1 ]; then
+  # No recorded in-use credential, so nothing was going to be reused anyway —
+  # this run mints regardless. Said out loud so a --rotate receipt never leaves
+  # the reader guessing whether the flag took effect.
+  echo "    ROTATE — --rotate given; there is no recorded in-use credential to skip, so this run mints for the ordinary reason. Reason recorded: ${ROTATE_REASON}."
 fi
 
 # --- 2. MINT --------------------------------------------------------------
@@ -559,8 +663,17 @@ if [ "${REUSED}" -ne 1 ]; then
     --query "[?displayName=='${CRED_LABEL}'].keyId | [0]" -o tsv)" || NEW_KEY_ID=''
   NEW_KEY_ID="$(printf '%s' "${NEW_KEY_ID}" | tr -d ' \r' | sed 's/^None$//')"
   if [ -n "${NEW_KEY_ID}" ]; then
-    kv_secret_put "${MSAL_SECRET_NAME}" "${SECRET}" \
-      "{\"msalKeyId\":\"${NEW_KEY_ID}\",\"msalAppId\":\"${APP_ID}\",\"msalCredentialLabel\":\"${CRED_LABEL}\",\"msalProvenance\":\"minted\"}" || exit 1
+    # PROVENANCE, and under --rotate the REASON with it (#3637). msalRotateReason
+    # is written on the Key Vault secret rather than as a Container App env var
+    # for the reason recorded at the LOOM_MSAL_SECRET_ROTATED removal below: an
+    # env var is re-rendered away by the next `az deployment sub create`, and a
+    # rotation marker that vanishes reads during triage as "never rotated". A
+    # Key Vault tag survives every redeploy.
+    _prov_tags="{\"msalKeyId\":\"${NEW_KEY_ID}\",\"msalAppId\":\"${APP_ID}\",\"msalCredentialLabel\":\"${CRED_LABEL}\",\"msalProvenance\":\"minted\"}"
+    if [ "${ROTATE}" -eq 1 ]; then
+      _prov_tags="{\"msalKeyId\":\"${NEW_KEY_ID}\",\"msalAppId\":\"${APP_ID}\",\"msalCredentialLabel\":\"${CRED_LABEL}\",\"msalProvenance\":\"rotated\",\"msalRotateReason\":\"${ROTATE_REASON}\",\"msalRotatedAt\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\",\"msalRotatedFrom\":\"${IN_USE_KEY_ID:-unknown}\"}"
+    fi
+    kv_secret_put "${MSAL_SECRET_NAME}" "${SECRET}" "${_prov_tags}" || exit 1
     IN_USE_KEY_ID="${NEW_KEY_ID}"
     IN_USE_KNOWN=1
     echo "    wrote ${MSAL_SECRET_NAME} (validated: Entra issued a token with it; provenance tag msalKeyId=${NEW_KEY_ID})"
@@ -693,6 +806,46 @@ if [ -n "${CONSOLE_APP_NAME:-}" ] && [ -n "${CONSOLE_RG:-}" ]; then
     echo "               --set-env-vars LOOM_MSAL_CLIENT_ID=${APP_ID} LOOM_MSAL_CLIENT_SECRET=secretref:${MSAL_SECRET_NAME}"
     exit 1
   fi
+fi
+
+# --- ROTATE STOPS HERE (#3637) -------------------------------------------
+# A rotation run does the mint, the Key Vault write and the console roll — and
+# then NOTHING else. Three reasons, none of them stylistic:
+#
+#   1. It must not delete. The revision rolled above is not Healthy yet, so the
+#      OLD credential is still what live replicas present. The prune below would
+#      never pick it (it is inside the grace and is one of the newest), but
+#      "the rule happens not to fire" is not a safety property — not reaching
+#      the delete path at all is.
+#   2. The ceiling below EXITS 1 on a count over the limit. A rotation
+#      deliberately ADDS a credential, so during an incident the ceiling would
+#      fail a run whose rotation actually succeeded, and the operator would read
+#      a non-zero exit as "the rotation did not work". Wrong answer at the worst
+#      moment.
+#   3. The receipt stays unambiguous: one run, one thing done, one next step.
+#
+# What this run did NOT establish, said plainly (R7): whether the rolled
+# revision has reached Healthy, and whether interactive sign-in works on the new
+# credential. Neither is observable from here — verify before revoking.
+if [ "${ROTATE}" -eq 1 ]; then
+  echo "==> ROTATE COMPLETE for ${APP_ID}"
+  if [ "${REUSED}" -eq 1 ]; then
+    # Belt and braces. Reaching here with REUSED=1 would mean the gate skip
+    # above did not take effect, i.e. --rotate silently did nothing — the exact
+    # defect #3637 records. Fail rather than print a success banner over it.
+    echo "    ERROR: --rotate was given but this run REUSED the existing credential and minted nothing. That is the #3637 defect, not a rotation. Refusing to report success." >&2
+    exit 1
+  fi
+  echo "    new credential ${IN_USE_KEY_ID:-<key id unresolved>} is recorded in ${MSAL_SECRET_NAME} (msalRotateReason=${ROTATE_REASON})."
+  echo "    NOTHING was deleted. Every previously-issued credential is still live and still valid."
+  echo "    NOT VERIFIED BY THIS RUN: whether the rolled revision is Healthy, and whether"
+  echo "    interactive sign-in succeeds on the new credential. This process cannot observe either."
+  echo "    NEXT: verify sign-in (docs/fiab/runbooks/secret-rotation.md §2.2b), then revoke the"
+  echo "    disclosed credential explicitly — deletion is IRREVERSIBLE, Entra never returns the value:"
+  echo "      bash scripts/csa-loom/bootstrap-msal-app-reg.sh --revoke <key-id>"
+  echo "    Credential inventory (metadata only, no values):"
+  echo "      az ad app credential list --id ${APP_ID} --query \"[].{keyId:keyId,start:startDateTime,end:endDateTime,label:displayName}\" -o table"
+  exit 0
 fi
 
 # ---------------------------------------------------------------------
@@ -990,6 +1143,119 @@ if [ "${PRUNE_ARMED}" -eq 1 ] && [ -n "${CONSOLE_APP_NAME:-}" ] && [ -n "${CONSO
 elif [ "${PRUNE_ARMED}" -eq 1 ]; then
   PRUNE_EXPIRED_ONLY=1
   echo "    prune limited to ALREADY-EXPIRED credentials: no Container App was supplied, so no consumer binding could be proven (P3)."
+fi
+
+# ---------------------------------------------------------------------
+# REVOKE (#3637) — delete ONE named credential, now, because it is burnt.
+#
+# HOW THIS DIFFERS FROM THE PRUNE, and why it is not just "prune with a
+# narrower filter": the prune answers "what is provably superseded and safe to
+# tidy", so it deliberately KEEPS the newest N and holds anything inside
+# LOOM_MSAL_PRUNE_MIN_AGE_DAYS. A disclosed credential is usually BOTH recent
+# and among the newest, which is exactly why no prune configuration could ever
+# remove it — the operator's only route was hand-running `az`.
+#
+# THE SAFETY CHAIN, link by link, and which links are DESIGNED vs INCIDENTAL —
+# because "prune would not have picked it anyway" is an accident, not a control:
+#
+#   DESIGNED  R1  The key id must exist on the app right now. A revoke against
+#                 an id that is not there is reported as already-absent, never
+#                 as a successful deletion.
+#   DESIGNED  R2  It must NOT be the credential Key Vault records as in use.
+#                 This is the direct stranding guard and it refuses outright.
+#   DESIGNED  R3  The in-use credential must be STRICTLY NEWER than the one
+#                 being revoked. "A newer credential is what the console serves"
+#                 is the actual precondition; R2 alone would allow revoking a
+#                 credential minted AFTER the one in service.
+#   DESIGNED  R4  The console binding must be PROVEN — the same P3/P3b evidence
+#                 the prune requires (unversioned Key Vault reference to this
+#                 secret, and every active revision post-dating the Key Vault
+#                 write). Reusing that computation rather than re-deriving it is
+#                 deliberate: two spellings of one proof drift apart.
+#   DESIGNED  R5  The deletion is ASSERTED afterwards by re-reading the
+#                 inventory. `az ad app credential delete` exiting 0 is not
+#                 evidence the credential is gone.
+#   NOT A CONTROL The age grace (LOOM_MSAL_PRUNE_MIN_AGE_DAYS) and the keep
+#                 window are BYPASSED here on purpose, and that is stated in the
+#                 output rather than hidden. They protect consumers this script
+#                 cannot see; a disclosed credential is worth breaking them for.
+#
+# WHAT THIS CANNOT ESTABLISH (R7): whether some other consumer holds the raw
+# value. It cannot, so it says so instead of implying the delete is safe for
+# everyone. And the delete is IRREVERSIBLE — Entra never returns a deleted
+# password credential's value, so there is no restore, only another rotation.
+# ---------------------------------------------------------------------
+if [ -n "${REVOKE_KEY_ID}" ]; then
+  echo "==> REVOKE requested for credential ${REVOKE_KEY_ID} on ${APP_ID}"
+  REVOKE_LINE="$(cred_line "${REVOKE_KEY_ID}" "${CRED_TSV}")"
+  if [ -z "${REVOKE_LINE}" ]; then
+    echo "    ERROR: ${APP_ID} has no password credential with key id ${REVOKE_KEY_ID}. This run did NOT delete anything, and it cannot tell you whether that id was already removed or never existed — the inventory read at the top of this run shows only what is present NOW. Current inventory (metadata only):" >&2
+    printf '%s\n' "${CRED_TSV}" | sed 's/^/      /' >&2
+    exit 1
+  fi
+  IFS='|' read -r _rk _rs _re _rd <<< "${REVOKE_LINE}"
+  echo "    target: ${_rk}  start ${_rs}  end ${_re}  label ${_rd}"
+
+  # R2 — never the credential Key Vault records as in use.
+  if [ "${IN_USE_KNOWN}" -ne 1 ] || [ -z "${IN_USE_KEY_ID}" ]; then
+    echo "    REFUSING to revoke: this run could not establish which credential the estate is configured to present (the ${MSAL_SECRET_NAME} msalKeyId tag is absent or unreadable — see above). Deleting a credential without knowing what is in service is the stranding failure, and 'probably not this one' is not a proof. Re-run without --revoke first so provenance is recorded, then revoke." >&2
+    exit 1
+  fi
+  if [ "${REVOKE_KEY_ID}" = "${IN_USE_KEY_ID}" ]; then
+    echo "    REFUSING to revoke: ${REVOKE_KEY_ID} IS the credential ${MSAL_SECRET_NAME} records as in use, so deleting it takes sign-in down immediately (AADSTS7000215). Rotate first — that mints a replacement and rolls the console onto it — then revoke this one:" >&2
+    echo "      bash scripts/csa-loom/bootstrap-msal-app-reg.sh --rotate --rotate-reason <why>" >&2
+    echo "      # verify sign-in, then:" >&2
+    echo "      bash scripts/csa-loom/bootstrap-msal-app-reg.sh --revoke ${REVOKE_KEY_ID}" >&2
+    exit 1
+  fi
+
+  # R3 — the in-use credential must be strictly NEWER than the target.
+  REVOKE_START_EPOCH=''
+  if ! REVOKE_START_EPOCH="$(iso_epoch "${_rs}")"; then
+    echo "    REFUSING to revoke: the start time '${_rs}' of ${REVOKE_KEY_ID} could not be parsed, so 'the credential in service is newer than this one' cannot be evaluated. Never delete what cannot be evaluated." >&2
+    exit 1
+  fi
+  if [ -z "${IN_USE_START_EPOCH}" ]; then
+    echo "    REFUSING to revoke: the start time of the in-use credential ${IN_USE_KEY_ID} could not be established this run (see the DISARMED note above), so 'a newer credential is what the console serves' is unproven." >&2
+    exit 1
+  fi
+  if [ "${IN_USE_START_EPOCH}" -le "${REVOKE_START_EPOCH}" ]; then
+    echo "    REFUSING to revoke: ${REVOKE_KEY_ID} (minted ${_rs}) is NOT older than the in-use credential ${IN_USE_KEY_ID}. The precondition is that a NEWER credential is already what the console serves; here the target is the same age or newer, so removing it may be removing the successor rather than the superseded one." >&2
+    exit 1
+  fi
+
+  # R4 — the console binding proof, reused verbatim from P3/P3b above.
+  if [ "${PRUNE_ARMED}" -ne 1 ] || [ "${PRUNE_EXPIRED_ONLY}" -eq 1 ]; then
+    echo "    REFUSING to revoke: what the console actually serves is NOT proven this run (the P3/P3b lines above say why — an unreadable binding, an inline or version-pinned secret, or an active revision that predates the current Key Vault version). The Key Vault tag records what the estate is CONFIGURED to present; without the binding proof it does not establish what running replicas are presenting. Fix the binding, or roll the console onto the current secret, then revoke." >&2
+    exit 1
+  fi
+
+  echo "    PROCEEDING. ${IN_USE_KEY_ID} (minted after ${_rs}) is proven to be what the console serves; ${REVOKE_KEY_ID} is older and is not it."
+  echo "    This BYPASSES the ${PRUNE_MIN_AGE_DAYS}-day hygiene grace and the keep window ON PURPOSE — they exist"
+  echo "    for consumers this script cannot see, and a disclosed credential is worth breaking them for."
+  echo "    NOT ESTABLISHED by this run: whether anything outside the console holds this credential's raw"
+  echo "    value. Anything that does will start failing the moment the delete lands."
+  echo "    IRREVERSIBLE: Entra does not return a deleted password credential's value. There is no undo,"
+  echo "    only another rotation."
+  if ! az ad app credential delete --id "${APP_ID}" --key-id "${REVOKE_KEY_ID}"; then
+    echo "    ERROR: the delete of ${REVOKE_KEY_ID} on ${APP_ID} FAILED (the signed-in principal may lack Application Administrator, or Application.ReadWrite.OwnedBy plus ownership). The credential is presumed STILL LIVE — this run cannot confirm otherwise. Sign-in is unaffected." >&2
+    exit 1
+  fi
+
+  # R5 — assert it is GONE. A zero exit from `credential delete` is not evidence.
+  if ! REVOKE_AFTER_TSV="$(az ad app credential list --id "${APP_ID}" --query "[].keyId" -o tsv)"; then
+    echo "    ERROR: the delete command succeeded but the inventory could NOT be re-read, so this run cannot confirm ${REVOKE_KEY_ID} is gone. Unconfirmed is not done. Verify manually: az ad app credential list --id ${APP_ID} --query \"[].keyId\" -o tsv" >&2
+    exit 1
+  fi
+  REVOKE_AFTER_TSV="$(printf '%s' "${REVOKE_AFTER_TSV}" | tr -d ' \r')"
+  if printf '%s\n' "${REVOKE_AFTER_TSV}" | grep -qx -- "${REVOKE_KEY_ID}"; then
+    echo "    ERROR: ${REVOKE_KEY_ID} is STILL present on ${APP_ID} after a delete that reported success. Do not treat this credential as revoked." >&2
+    exit 1
+  fi
+  echo "    REVOKED — ${REVOKE_KEY_ID} is confirmed absent from ${APP_ID} (re-read after the delete)."
+  echo "    $(printf '%s\n' "${REVOKE_AFTER_TSV}" | count_nonempty) credential(s) remain, including the in-use ${IN_USE_KEY_ID}."
+  echo "==> Done (revoke). App (client) id: ${APP_ID}"
+  exit 0
 fi
 
 # P4 — build the candidate set. Newest first, so the index IS the keep rank.
