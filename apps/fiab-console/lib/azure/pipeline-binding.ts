@@ -360,9 +360,12 @@ export function pipelineDefinitionFromContent(
  * The keys ADF/Synapse read at an ACTIVITY ROOT, used to decide what belongs
  * under `typeProperties` when an activity arrives in the CANVAS shape.
  *
- * Grounded in the published ADF ARM schema
- * (`https://schema.management.azure.com/schemas/2018-06-01/Microsoft.DataFactory.json`,
- * fetched 2026-09-07, HTTP 200, 693244 bytes): `definitions.Activity.properties`
+ * Grounded in the published ADF ARM schema — cloud-endpoint-literal-ok: a CITED
+ * document, not an endpoint this module calls, and the activity JSON it
+ * describes is identical in every sovereign cloud, so there is no per-cloud
+ * form for `cloud-endpoints.ts` to resolve.
+ * (`https://schema.management.azure.com/schemas/2018-06-01/Microsoft.DataFactory.json`, cloud-endpoint-literal-ok)
+ * Fetched 2026-09-07, HTTP 200, 693244 bytes: `definitions.Activity.properties`
  * is exactly `{name, type, description, dependsOn, userProperties}` and
  * `definitions.ExecutionActivity` adds `{linkedServiceName, policy}`;
  * `typeProperties` is the per-activity-type body (`notebookPath`,

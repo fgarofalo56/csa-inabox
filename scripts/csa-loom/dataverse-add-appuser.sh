@@ -72,10 +72,19 @@ fi
 # `-sS` keeps curl quiet on success but still reports transport errors, which are
 # captured and printed rather than discarded (a discarded stderr is how a
 # permission denial became "no environments" in the first place).
+#
+# `|| true` — NOT `|| HTTP_CODE=""`, and NOT `|| echo`. Under `set -e` the bare
+# assignment would abort the script AT THIS LINE on a connection failure, before
+# the `case` below that exists to report exactly that. `|| true` fixes only the
+# exit STATUS and leaves stdout alone, so a transport failure keeps curl's
+# printed `000` and falls to `*)` with the curl stderr attached — strictly more
+# honest than the `<no response>` an emptied variable would have produced.
+# (`|| echo X` would CONCATENATE onto what curl already printed; see
+# scripts/ci/check-curl-httpcode-fallback.mjs.)
 HTTP_CODE=$(curl -sS -o "$TMPD/envs.json" -w '%{http_code}' \
   -H "Authorization: Bearer $BAP_TOKEN" \
   'https://api.bap.microsoft.com/providers/Microsoft.BusinessAppPlatform/scopes/admin/environments?api-version=2020-10-01&$expand=properties/linkedEnvironmentMetadata' \
-  2>"$TMPD/curl.err") || HTTP_CODE=""
+  2>"$TMPD/curl.err") || true
 
 case "${HTTP_CODE:-}" in
   2??) ;;
@@ -200,10 +209,14 @@ while IFS=$'\t' read -r ENV_ID DV_URL; do
     FAILED=$((FAILED + 1))
     continue
   fi
+  # `|| true` for the same reason as the BAP probe above: under `set -e` an
+  # unguarded capture dies HERE on a transport failure, skipping the `*)` branch
+  # that counts the failure. With it, curl's `000` reaches that branch and the
+  # env is recorded as failed rather than the whole run vanishing mid-loop.
   STATUS=$(curl -s -o /dev/null -w "%{http_code}" -X POST \
     -H "Authorization: Bearer $TOKEN" -H "OData-Version: 4.0" -H "Content-Type: application/json" \
     -d "{\"@odata.id\": \"$DV_URL/api/data/v9.2/roles($ROLE_ID)\"}" \
-    "$DV_URL/api/data/v9.2/systemusers($APP_USER_ID)/systemuserroles_association/\$ref")
+    "$DV_URL/api/data/v9.2/systemusers($APP_USER_ID)/systemuserroles_association/\$ref") || true
   case "$STATUS" in
     204|200)
       echo "  + registered $APP_CLIENT_ID on $ENV_ID: role '$ROLE_NAME' assigned"

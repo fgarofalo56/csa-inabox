@@ -51,7 +51,6 @@
   "lib/components/powerbi/dq-source-panel.tsx": 1,
   "lib/components/powerbi/powerbi-governance.tsx": 2,
   "lib/components/powerbi/powerbi-tree.tsx": 1,
-  "lib/components/powerplatform/powerplatform-tree.tsx": 1,
   "lib/components/realtime-hub/connect-source-dialog.tsx": 1,
   "lib/components/realtime-hub/stream-preview-drawer.tsx": 1,
   "lib/components/sqldb/sqldb-tree.tsx": 1,
