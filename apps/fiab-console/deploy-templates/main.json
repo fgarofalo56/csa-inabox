@@ -6,7 +6,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.45.15.27210",
-      "templateHash": "2055707126131071493"
+      "templateHash": "14159405359391950749"
     }
   },
   "definitions": {
@@ -2366,11 +2366,13 @@
               "deDatabricks": "[parameters('loomDatabricksEnabled')]",
               "deAdf": "[parameters('loomDataFactoryEnabled')]",
               "deShir": "[parameters('loomSelfHostedIrEnabled')]",
-              "serviceBusNamespace": "[if(and(variables('useSingleDlz'), parameters('deployServiceBus')), format('sbns-loom-default-{0}', parameters('location')), '')]",
+              "serviceBusNamespace": "[if(not(empty(__bicep.adoptName(parameters('adopt'), 'servicebus'))), __bicep.adoptName(parameters('adopt'), 'servicebus'), if(and(variables('useSingleDlz'), parameters('deployServiceBus')), format('sbns-loom-default-{0}', parameters('location')), ''))]",
+              "serviceBusRg": "[__bicep.adoptRg(parameters('adopt'), 'servicebus')]",
+              "serviceBusSub": "[__bicep.adoptSub(parameters('adopt'), 'servicebus')]",
               "amlDefaultCompute": "[if(and(variables('useSingleDlz'), variables('provisionAml')), take(format('ci-loom-{0}', uniqueString(subscriptionResourceId('Microsoft.Resources/resourceGroups', format('rg-csa-loom-dlz-single-{0}', parameters('location'))))), 24), '')]",
               "amlComputeIdleTtl": "[parameters('mlComputeIdleTtl')]",
-              "batchAccount": "[if(and(variables('useSingleDlz'), parameters('batchEnabled')), take(format('batchloom{0}', uniqueString(subscriptionResourceId('Microsoft.Resources/resourceGroups', format('rg-csa-loom-dlz-single-{0}', parameters('location'))))), 24), '')]",
-              "batchRg": "[if(and(variables('useSingleDlz'), parameters('batchEnabled')), format('rg-csa-loom-dlz-single-{0}', parameters('location')), '')]",
+              "batchAccount": "[if(not(empty(__bicep.adoptName(parameters('adopt'), 'batch'))), __bicep.adoptName(parameters('adopt'), 'batch'), if(and(variables('useSingleDlz'), parameters('batchEnabled')), take(format('batchloom{0}', uniqueString(subscriptionResourceId('Microsoft.Resources/resourceGroups', format('rg-csa-loom-dlz-single-{0}', parameters('location'))))), 24), ''))]",
+              "batchRg": "[if(not(empty(__bicep.adoptName(parameters('adopt'), 'batch'))), __bicep.adoptRg(parameters('adopt'), 'batch'), if(and(variables('useSingleDlz'), parameters('batchEnabled')), format('rg-csa-loom-dlz-single-{0}', parameters('location')), ''))]",
               "swaResourceGroup": "[parameters('loomSwaResourceGroup')]",
               "udfFunctionBase": "[parameters('loomUdfFunctionBase')]",
               "udfRuntimeEnabled": "[parameters('udfRuntimeEnabled')]",
@@ -2598,7 +2600,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.45.15.27210",
-              "templateHash": "5719509515415722856"
+              "templateHash": "8547995738849936960"
             }
           },
           "definitions": {
@@ -5179,6 +5181,8 @@
             "deAdfEnabled": "[coalesce(tryGet(parameters('byoExisting'), 'deAdf'), true())]",
             "deShirEnabled": "[coalesce(tryGet(parameters('byoExisting'), 'deShir'), true())]",
             "loomServiceBusNamespace": "[coalesce(tryGet(parameters('byoExisting'), 'serviceBusNamespace'), '')]",
+            "loomServiceBusRgIn": "[coalesce(tryGet(parameters('byoExisting'), 'serviceBusRg'), '')]",
+            "loomServiceBusSubIn": "[coalesce(tryGet(parameters('byoExisting'), 'serviceBusSub'), '')]",
             "loomAmlDefaultCompute": "[coalesce(tryGet(parameters('byoExisting'), 'amlDefaultCompute'), '')]",
             "loomAmlComputeIdleTtl": "[coalesce(tryGet(parameters('byoExisting'), 'amlComputeIdleTtl'), 'PT30M')]",
             "loomBatchAccount": "[coalesce(tryGet(parameters('byoExisting'), 'batchAccount'), '')]",
@@ -5232,8 +5236,8 @@
             "byoEventHubSub": "[if(not(empty(coalesce(tryGet(parameters('byoExisting'), 'eventHubSub'), ''))), parameters('byoExisting').eventHubSub, if(not(empty(variables('loomEventHubSub'))), variables('loomEventHubSub'), subscription().subscriptionId))]",
             "effEventGridRg": "[if(not(empty(variables('loomEventGridRg'))), variables('loomEventGridRg'), parameters('loomDlzRg'))]",
             "effEventGridSub": "[if(not(empty(variables('loomEventGridSub'))), variables('loomEventGridSub'), subscription().subscriptionId)]",
-            "effServiceBusRg": "[parameters('loomDlzRg')]",
-            "effServiceBusSub": "[subscription().subscriptionId]",
+            "effServiceBusRg": "[if(not(empty(variables('loomServiceBusRgIn'))), variables('loomServiceBusRgIn'), parameters('loomDlzRg'))]",
+            "effServiceBusSub": "[if(not(empty(variables('loomServiceBusSubIn'))), variables('loomServiceBusSubIn'), subscription().subscriptionId)]",
             "existingDatabricksHostname": "[coalesce(tryGet(parameters('byoExisting'), 'databricksHostname'), '')]",
             "effDatabricksHostname": "[if(not(empty(variables('existingDatabricksHostname'))), variables('existingDatabricksHostname'), if(variables('deDatabricksEnabled'), parameters('loomDatabricksHostname'), ''))]",
             "kustoSuffix": "[if(or(equals(parameters('boundary'), 'GCC-High'), equals(parameters('boundary'), 'IL5')), 'kusto.usgovcloudapi.net', 'kusto.windows.net')]",
