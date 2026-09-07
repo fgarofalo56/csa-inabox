@@ -182,7 +182,7 @@ jobs:
     # bound turns "silently stuck" into a failed run someone can act on.
     timeout-minutes: 90
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@v7.0.1
 
       # ── #3730: REFUSE TO ROLL A GOV CONSOLE THAT IS NOT CURRENT WITH MAIN ──
       #

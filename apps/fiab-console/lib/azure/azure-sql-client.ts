@@ -350,11 +350,30 @@ const pools: Map<string, sql.ConnectionPool> = new Map();
  * connection — SQL Server acknowledges (error 3617 / SYS_ATTN) and the in-flight
  * `.query()` promise rejects with `RequestError('Canceled.', 'ECANCEL')`.
  *
- * This is in-process Node.js state scoped to ONE Container App replica. For a
- * scaled-out console the cancel POST must reach the SAME replica that started
- * the query — enable ingress sticky sessions
- * (`ingress.stickySessions.affinity: 'sticky'`) or run a single replica. There
- * is no cross-replica cancel because the mssql connection itself is per-replica.
+ * This is in-process Node.js state scoped to ONE Container App replica, so a
+ * cancel POST only lands when it reaches the replica that started the query.
+ *
+ * #3400/#3399 — DO NOT "FIX" THIS WITH SESSION AFFINITY. This comment used to
+ * instruct the reader to set `ingress.stickySessions.affinity: 'sticky'` or run
+ * a single replica. Both are false for this estate and one of them is actively
+ * forbidden:
+ *
+ *   - `loom-console` is declared `multiRevision: true` with `minReplicas: 2`
+ *     (admin-plane/main.bicep), and ACA REQUIRES `affinity:'none'` in
+ *     multiple-revision mode. app-deployments.bicep now asserts that value on
+ *     every deploy precisely so a sticky value set out-of-band cannot wedge
+ *     blue-green rolls again — so a reader who followed this advice would have
+ *     it reverted by the next deploy, after breaking the roll.
+ *   - `lib/auth/msal.ts` documents the console as deliberately scaled out with
+ *     affinity OFF: the MSAL token cache is Cosmos-persisted so a round-robin
+ *     request finds a warm cache.
+ *
+ * The correct fix is a CROSS-REPLICA cancel signal — a TTL'd cancel-intent
+ * record keyed by requestId that each replica polls for its own live keys —
+ * NOT affinity. That store is not implemented yet: it needs a Cosmos container
+ * (`lib/azure/cosmos-client.ts` + the cosmos bicep `loomContainers` list). Until
+ * it lands, a cancel that reaches the wrong replica is a NO-OP, and the cancel
+ * route reports exactly that rather than claiming a cancellation.
  *
  * Entries are removed on completion, error, or explicit cancel (in the `finally`
  * of `executeQuery` and in the cancel route after `.cancel()`).

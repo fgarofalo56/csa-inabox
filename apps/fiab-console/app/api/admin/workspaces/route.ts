@@ -58,7 +58,7 @@ export async function GET() {
     // NOT `tenantScopeId(s)`: the latter falls back to the caller's `oid` when
     // the tid claim is absent, which would silently scope this to a value that
     // is not a tenant id at all.
-    const { workspaces, degraded, degradedReasons, legacyUnstampedExcluded, legacyRemediation } =
+    const { workspaces, degraded, degradedReasons, legacyUnstampedExcluded, legacyCountUnavailable, legacyRemediation } =
       await listAllWorkspacesAdmin({ callerTid: s.claims.tid });
     return NextResponse.json({
       ok: true,
@@ -71,6 +71,9 @@ export async function GET() {
       // #3826: a legacy estate must not read as a SHORTER inventory with no
       // explanation. Excluded records are reported with their remediation.
       ...(legacyUnstampedExcluded ? { legacyUnstampedExcluded, legacyRemediation } : {}),
+      // #4316 review: and an exclusion count that could NOT be read is reported
+      // as unread — omitting it would let 0 stand in for "I could not count".
+      ...(legacyCountUnavailable ? { legacyCountUnavailable: true, legacyRemediation } : {}),
     });
   } catch (e: any) {
     return apiServerError(e);

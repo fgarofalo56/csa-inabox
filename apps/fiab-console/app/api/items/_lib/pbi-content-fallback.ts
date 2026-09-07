@@ -108,10 +108,25 @@ export async function listContentBackedItems(
  * `outcome` is `'not-found'` only when the query genuinely resolved no owned
  * item; a throw is `'read-failed'` and carries the error so the caller can say
  * what it does not know instead of asserting emptiness.
+ *
+ * #3801 — a FOURTH outcome, `'parent-unresolved'`. The item EXISTS and the
+ * caller asked for it by id, but its parent workspace read yields nothing (the
+ * creating principal was purged, or the workspace was deleted out of band). On
+ * the live Commercial estate 24 of 32 content-bearing semantic models were in
+ * that state. Collapsing it onto `'not-found'` is what pushed a Loom-native
+ * model down the Power BI branch and rendered "Select a Power BI workspace" —
+ * a Fabric-flavoured gate on the Azure-native default path
+ * (no-fabric-dependency.md) for a model that needs no Power BI at all.
+ *
+ * NOT A LEAK. `/api/items` already serves the item's existence to this same
+ * caller by this same id; what is withheld is the foreign workspace's contents,
+ * and this outcome carries only the workspace ID the caller already supplied
+ * through the item they opened — no name, no tenant, no membership.
  */
 export type ContentBackedItemResult =
   | { outcome: 'ok'; item: WorkspaceItem }
   | { outcome: 'not-found' }
+  | { outcome: 'parent-unresolved'; item: WorkspaceItem; workspaceId: string }
   | { outcome: 'read-failed'; error: string; cause: unknown };
 
 export async function readContentBackedItem(
@@ -134,9 +149,12 @@ export async function readContentBackedItem(
     if (!item) return { outcome: 'not-found' };
     const ws = await workspacesContainer();
     const { resource } = await ws.item(item.workspaceId, tenantId).read<Workspace>();
-    // A workspace the caller does not own is NOT-FOUND on purpose: surfacing
-    // "read failed" there would leak that the id exists in another tenant.
-    if (!resource || resource.tenantId !== tenantId) return { outcome: 'not-found' };
+    // The item exists but its parent workspace does not resolve for this caller
+    // (#3801). Report that precisely rather than as "no such item": the two
+    // states need different remediations and only one of them is about Power BI.
+    if (!resource || resource.tenantId !== tenantId) {
+      return { outcome: 'parent-unresolved', item, workspaceId: item.workspaceId };
+    }
     return { outcome: 'ok', item };
   } catch (e: any) {
     return { outcome: 'read-failed', error: e?.message || String(e), cause: e };
@@ -146,10 +164,16 @@ export async function readContentBackedItem(
 /**
  * Load one tenant-owned item by id, verifying parent-workspace ownership.
  *
- * Collapses {@link readContentBackedItem}'s three outcomes onto `null`. Kept as
+ * Collapses {@link readContentBackedItem}'s outcomes onto `null`. Kept as
  * the compatible shape for the ~dozen list/detail callers that only ask "is
  * there a Loom item to serve"; a caller that must not mistake a failed read for
  * an absent item should use `readContentBackedItem` directly.
+ *
+ * `parent-unresolved` collapses to `null` here DELIBERATELY (#3801): these
+ * callers serve workspace-scoped content, and an item whose parent workspace
+ * the caller cannot read has no workspace-scoped content to serve. Only the
+ * callers that address an item by its own id — `loadModelContext` — need to
+ * tell that state apart, and they call `readContentBackedItem` directly.
  */
 export async function loadContentBackedItem(
   cosmosItemId: string,

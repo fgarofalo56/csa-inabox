@@ -221,7 +221,10 @@ export function MirroredDatabricksEditor({ item, id }: Props) {
         }),
       });
       const j = await r.json();
-      if (!j.ok) { setCErr(j.error || 'create failed'); return; }
+      // A failed PAIRING now answers ok:false with created:true (#4183): the
+      // mirror exists, it is just not queryable yet. That is not a create
+      // failure — fall through so the operator reads the honest gate below.
+      if (!j.ok && !j.created) { setCErr(j.error || 'create failed'); return; }
       // Surface the real pairing outcome (endpoint paired vs honest gate). Keep
       // the dialog open so the operator sees whether the catalog is queryable.
       setCPairing((j.pairing as PairingResult) || null);

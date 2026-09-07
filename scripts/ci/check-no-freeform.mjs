@@ -1983,6 +1983,67 @@ export const TOUCH_EXEMPT = new Map([
     'apps/fiab-console/lib/editors/foundry-hub-editor.tsx',
     '#3565 fixed the account picker here; the 2 sites are Key Vault secret identifiers needing a new keyvault-secret picker kind',
   ],
+  // ── console-api-1 drain (#3878) ────────────────────────────────────────────
+  // Both files were touched ONLY to fix the cosmos-items response-envelope
+  // reads — a dead `j.ok` on a route that returns a bare body, which made a
+  // failed save look successful. 7 changed lines in one, 34 in the other, none
+  // of them near a free-text box.
+  //
+  // The three baselined sites are pre-existing. Clearing them here would be
+  // product work smuggled into an envelope bug-fix, and reviewing the two
+  // halves together is strictly harder. What each one actually is — corrected
+  // 2026-09-07 after review, because the first revision of this block asserted
+  // two things the code does not show (deploy-integrity R7):
+  //   data-product-editor.tsx:945   a Purview businessDomainId GUID. The
+  //                                 enumerable case is ALREADY a Dropdown:
+  //                                 useGovernanceDomains() (apim-editors/
+  //                                 data-product/hooks.ts:29-47) calls
+  //                                 GET /api/catalog/domains and the editor
+  //                                 renders it at :936-943. This Input is the
+  //                                 `else` branch, reached only when that list
+  //                                 is empty — Purview unprovisioned answers
+  //                                 501, which the hook maps to
+  //                                 `notConfigured` and the field's own hint at
+  //                                 :933 states. It is kept so an unprovisioned
+  //                                 estate gets a working form instead of a
+  //                                 dead-end gate (ux-baseline G2), NOT because
+  //                                 a discovery call is missing. There is
+  //                                 therefore no picker for it to wait on.
+  //   data-product-editor.tsx:1024  an Atlas qualified name. Its blocker is a
+  //                                 per-`dsType` asset enumeration — the Type
+  //                                 Dropdown at :1015-1021 offers five, and the
+  //                                 placeholder at :1027-1032 spells a
+  //                                 different address shape for each; the
+  //                                 `azure_datalake_gen2_path` case is the same
+  //                                 #3511 lakehouse-table enumeration as :1355.
+  //                                 It is NOT gated on the domain above:
+  //                                 registerDataset (:468-469) gates submit on
+  //                                 `dsName` + `dsQName` only, and forwards
+  //                                 `state.domain` at :485 as an OPTIONAL
+  //                                 parameter (`GUID_RE.test(...) ? ... :
+  //                                 undefined`), so the field is usable and
+  //                                 submittable with no domain set at all.
+  //   graph-editors.tsx:1355        a source Delta table URI, hand-composed
+  //                                 abfss://; the picker needs the same
+  //                                 lakehouse-table enumeration #3511 (OPEN) is
+  //                                 building for mirrored-database.
+  //
+  // NOT amnesty and NOT --update-baseline: that flag does not clear the
+  // boy-scout rule at all (measured 2026-09-06 — it reports "baseline updated"
+  // and writes a byte-identical file, RC=0, while the guard stays RC=1). This
+  // is the documented escape hatch. Named acceptance, per entry: delete the
+  // graph-editors entry when #3511's lakehouse-table enumeration lands. The
+  // data-product entry has NO picker-landing condition — :945 already has its
+  // picker, and :1024 clears on a per-dsType asset enumeration that no issue
+  // yet tracks for the four non-ADLS types.
+  [
+    'apps/fiab-console/lib/editors/apim-editors/data-product-editor.tsx',
+    '#3878 fixed the envelope reads here (7 lines). :945 is the `else` branch of a Purview-domain picker that ALREADY ships (useGovernanceDomains → GET /api/catalog/domains, Dropdown at :936-943), kept so an unprovisioned estate is not a dead-end gate; :1024 is an Atlas qualified name needing a per-dsType asset enumeration (not the domain — registerDataset gates only on dsName + dsQName)',
+  ],
+  [
+    'apps/fiab-console/lib/editors/graph-editors.tsx',
+    '#3878 fixed the envelope reads here (34 lines); :1355 is a source Delta table URI needing the lakehouse-table enumeration #3511 is building',
+  ],
 ]);
 
 // ═══════════════════════════════════════════════════════════════════════════

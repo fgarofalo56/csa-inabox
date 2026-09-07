@@ -33,9 +33,15 @@ describe('GeoPipelineEditor', () => {
 
   it('triggers an ADF run and renders the runId', async () => {
     installFetchMock({
+      // #3878 — the real `/api/cosmos-items/<type>/<id>` GET answers the item
+      // DOC bare (`NextResponse.json(access.item)`). This fixture used to wrap
+      // it in `{ok:true, item}`, which is the LIST route's envelope, so it
+      // agreed with the editor's broken `j.ok && j.item.state` read and could
+      // not have caught the defect.
       '/api/cosmos-items/geo-pipeline/': () => ({
-        ok: true,
-        item: { state: { adfPipelineName: 'loom-geo-enrich', enrichH3: true, reverseGeocode: false, bufferMeters: 500 }, updatedAt: new Date().toISOString() },
+        id: 'gp-1', workspaceId: 'ws-1', itemType: 'geo-pipeline',
+        state: { adfPipelineName: 'loom-geo-enrich', enrichH3: true, reverseGeocode: false, bufferMeters: 500 },
+        updatedAt: new Date().toISOString(),
       }),
       '/api/items/adf-pipeline': () => ({ ok: true, pipelines: [{ name: 'loom-geo-enrich' }] }),
       '/api/items/geo-pipeline/gp-1/run': () => ({

@@ -159,7 +159,7 @@ jobs:
       region: ${{ steps.bootstrap_coords.outputs.region }}
 
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@v7.0.1
 
       - name: Azure login (GCC sub)
         uses: Azure/login@v2
