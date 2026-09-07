@@ -141,7 +141,7 @@ jobs:
     steps:
       # loom-verify.js is read off the checked-out tree and base64-embedded into
       # the job, so the checked-out commit IS the verifier.
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@v7.0.1
 
       - name: Azure login
         uses: Azure/login@v2

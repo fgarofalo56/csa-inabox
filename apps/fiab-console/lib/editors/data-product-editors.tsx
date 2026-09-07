@@ -364,7 +364,13 @@ export function DataProductInstanceEditor({ item, id }: { item: FabricItemType; 
         const r = await clientFetch(`/api/cosmos-items/${encodeURIComponent(c.slug)}/${encodeURIComponent(c.itemId)}`);
         if (r.status === 404) { next[c.itemId] = { status: 'missing', detail: 'item not found in Cosmos' }; return; }
         const j = await r.json();
-        next[c.itemId] = j.ok ? classifyHealth(j.item?.updatedAt) : { status: 'unknown', detail: j.error };
+        // #3878 — the cosmos-items GET answers the item DOC bare, so `j.ok` was
+        // undefined for every component and `classifyHealth` was unreachable:
+        // every healthy component rendered 'unknown' with an undefined detail.
+        const doc = (j && typeof j === 'object' && 'item' in j ? (j as any).item : j) as any;
+        next[c.itemId] = (r.ok && j?.ok !== false)
+          ? classifyHealth(doc?.updatedAt)
+          : { status: 'unknown', detail: j?.error || `HTTP ${r.status}` };
       } catch (e: any) { next[c.itemId] = { status: 'unknown', detail: e?.message || String(e) }; }
     }));
     setHealth(next);

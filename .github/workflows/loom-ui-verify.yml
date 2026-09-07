@@ -173,7 +173,7 @@ jobs:
       # 1. Checkout
       # -----------------------------------------------------------------------
       - name: Checkout repository
-        uses: actions/checkout@v7
+        uses: actions/checkout@v7.0.1
 
       # -----------------------------------------------------------------------
       # 1b. NORMALIZE + VALIDATE `target_route` UP FRONT (FINISHLINE C13).
@@ -427,7 +427,7 @@ jobs:
         run: node scripts/ci/resolve-automation-oid.mjs
 
       - name: Setup pnpm
-        uses: pnpm/action-setup@v4
+        uses: pnpm/action-setup@v6
         with:
           version: 9
 

@@ -87,7 +87,7 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v7
+        uses: actions/checkout@v7.0.1
 
       - name: Azure login (OIDC)
         uses: azure/login@v2
@@ -146,7 +146,7 @@ jobs:
         run: node scripts/ci/resolve-automation-oid.mjs
 
       - name: Setup pnpm
-        uses: pnpm/action-setup@v4
+        uses: pnpm/action-setup@v6
         with:
           version: 9
 

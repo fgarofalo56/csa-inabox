@@ -506,7 +506,14 @@ export function GqlGraphEditor({ item, id }: { item: FabricItemType; id: string 
           body: JSON.stringify({ state: { query, backend } }),
         });
         const j = await r.json();
-        setResult(j.ok ? { ok: true, persisted: true, message: 'Query persisted to item state. No backend dispatched (backend=persist-only).' } : j);
+        // #3878 — the cosmos-items PATCH answers the resource BARE, so `j.ok`
+        // was undefined and a successful persist rendered as the raw document
+        // in the result pane instead of the "persisted" confirmation.
+        setResult(
+          r.ok && j?.ok !== false
+            ? { ok: true, persisted: true, message: 'Query persisted to item state. No backend dispatched (backend=persist-only).' }
+            : { ok: false, error: j?.error || `HTTP ${r.status}` },
+        );
       }
     } catch (e: any) { setResult({ ok: false, error: e?.message || String(e) }); }
     finally { setLoading(false); }
@@ -906,14 +913,18 @@ export function VectorStoreEditor({ item, id }: { item: FabricItemType; id: stri
           setSpecLoadStatus('error');
           return;
         }
-        if (j?.ok && j.item?.state) {
-          const st = j.item.state;
+        // #3878 — the cosmos-items GET answers the item DOC bare, so `j.ok` was
+        // always undefined and a saved vector-store spec read as 'absent': the
+        // editor showed defaults over a real stored configuration.
+        const doc = (j && typeof j === 'object' && 'item' in j ? (j as any).item : j) as any;
+        if (doc?.state) {
+          const st = doc.state;
           if (st.backend) setBackend(st.backend);
           if (st.indexName) setIndexName(st.indexName);
           if (typeof st.dim === 'number') setDim(st.dim);
           if (st.metric) setMetric(st.metric);
           if (st.algorithm) setAlgorithm(st.algorithm);
-          setSavedAt(j.item.updatedAt || null);
+          setSavedAt(doc.updatedAt || null);
           setSpecLoadStatus('loaded');
         } else {
           // Read succeeded, record carries no spec yet.
@@ -951,12 +962,21 @@ export function VectorStoreEditor({ item, id }: { item: FabricItemType; id: stri
             body: JSON.stringify({ state: { backend, indexName, dim, metric, algorithm } }),
           });
       const j = await r.json();
-      if (j?.ok) {
+      // #3878 — this call has TWO envelopes: the create path POSTs
+      // `/api/items/vector-store` (wraps as `{ok, item}`) and the update path
+      // PATCHes `/api/cosmos-items/<type>/<id>` (answers the resource BARE).
+      // `j?.ok` was therefore true only on create; on every update it was
+      // undefined, so the editor stayed dirty and fired no `loom:item-saved`
+      // over a write that had landed.
+      const ok = r.ok && j?.ok !== false;
+      if (ok) {
+        const saved = (j && typeof j === 'object' && 'item' in j ? (j as any).item : j) as any;
         setDirty(false);
-        setSavedAt(j.item?.updatedAt || new Date().toISOString());
+        setSavedAt(saved?.updatedAt || new Date().toISOString());
         try { window.dispatchEvent(new CustomEvent('loom:item-saved', { detail: { label: indexName } })); } catch {}
+        return { ok: true, item: saved };
       }
-      return j;
+      return { ok: false, error: j?.error || `HTTP ${r.status}` };
     } catch (e: any) { return { ok: false, error: e?.message || String(e) }; }
     finally { setSaving(false); }
   }, [id, backend, indexName, dim, metric, algorithm]);

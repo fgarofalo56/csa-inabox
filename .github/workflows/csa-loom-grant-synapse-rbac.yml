@@ -54,7 +54,7 @@ jobs:
   grant:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@v7.0.1
 
       - name: Azure login (limitlessdata_deploy SP)
         uses: azure/login@v2

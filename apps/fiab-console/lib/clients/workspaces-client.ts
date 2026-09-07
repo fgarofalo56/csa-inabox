@@ -98,7 +98,21 @@ export interface AdminWorkspacesResult {
    * module's `degraded` flag already exists to prevent (rel-T108).
    */
   legacyUnstampedExcluded: number;
-  /** The remediation for a non-zero {@link legacyUnstampedExcluded}. */
+  /**
+   * TRUE when the disclosure aggregate itself did not run, so
+   * {@link legacyUnstampedExcluded} is 0 because nothing was COUNTED — never
+   * because nothing was excluded. STRUCTURAL, for the same reason
+   * {@link TenantWorkspaceTagsResult.scopeUnconfirmed} is: a consumer must be
+   * able to tell "the count is zero" from "I could not count" without matching
+   * a `degradedReasons` spelling.
+   */
+  legacyCountUnavailable: boolean;
+  /**
+   * The disclosure text for whichever legacy-count state is set: the backfill
+   * remediation for a non-zero {@link legacyUnstampedExcluded}, or the
+   * could-not-be-read notice when {@link legacyCountUnavailable} is true. Read
+   * the two booleans FIRST — this string does not discriminate them.
+   */
   legacyRemediation?: string;
 }
 
@@ -116,6 +130,198 @@ export interface AdminWorkspacesResult {
 export interface AdminWorkspaceScope {
   /** The caller's Entra tenant id. `undefined` is accepted and FAILS CLOSED. */
   callerTid: string | undefined;
+}
+
+/** One tenant-wide workspace row, id + domain tag only. */
+export interface TenantWorkspaceTag {
+  id: string;
+  domain?: string;
+}
+
+export interface TenantWorkspaceTagsResult {
+  workspaces: TenantWorkspaceTag[];
+  /**
+   * TRUE when the caller's tenancy could not be established, so NO read ran and
+   * `workspaces` is empty by REFUSAL rather than because the tenant is empty.
+   *
+   * This is a STRUCTURAL discriminator on purpose. Consumers that must fail
+   * closed (the mesh panel zeroes its rollup and shows a gate) previously had to
+   * branch on `degraded`, which now also goes true for a merely INCOMPLETE
+   * answer — a legacy estate with unstamped rows. Keying that branch on the
+   * spelling of a `degradedReasons` entry would put the fail-closed path one
+   * string rename away from silently reading a partial rollup as authoritative.
+   */
+  scopeUnconfirmed: boolean;
+  degraded: boolean;
+  degradedReasons: string[];
+  /**
+   * How many workspace records carry NO `tid` and are therefore excluded from
+   * this tenant-scoped answer. Mirrors {@link AdminWorkspacesResult}; see
+   * {@link countUnstampedWorkspaces} for why it must travel with the count.
+   */
+  legacyUnstampedExcluded: number;
+  /**
+   * TRUE when the disclosure aggregate itself did not run. Mirrors
+   * {@link AdminWorkspacesResult.legacyCountUnavailable}: 0 then means NOT
+   * COUNTED, not "nothing excluded".
+   */
+  legacyCountUnavailable: boolean;
+  /**
+   * The disclosure text for whichever legacy-count state is set — the backfill
+   * remediation, or the could-not-be-read notice. Mirrors
+   * {@link AdminWorkspacesResult.legacyRemediation}.
+   */
+  legacyRemediation?: string;
+}
+
+/**
+ * How many workspace records exist that NO tenant can claim.
+ *
+ * Every tenant-scoped read in this file uses `WHERE c.tid = @tid`, and Cosmos
+ * `=` does not match a property that is not defined — so a workspace created
+ * before rel-T11 (which stamps `tid`) is silently absent from the result. A
+ * count that excludes rows it cannot attribute is HONEST only if it says so;
+ * without this disclosure a caller reports a shorter number as complete.
+ *
+ * IT RETURNS WHETHER IT ESTABLISHED THE NUMBER, NOT JUST THE NUMBER. This is a
+ * disclosure ABOUT the answer and must never fail the inventory it annotates —
+ * but the earlier version of this helper discharged that by returning a bare
+ * `0` from its `catch`, which every caller then reported as "nothing was
+ * excluded, the answer is COMPLETE". Measured in review of PR #4316: with only
+ * this aggregate rejecting (`Request rate is large (429)`) while the scoped
+ * read succeeded, `listTenantWorkspaceTags` answered
+ * `{degraded:false, legacyUnstampedExcluded:0}` — the exact
+ * assert-completeness-you-did-not-establish state (R7) that the disclosure
+ * exists to prevent, reached through the swallow instead of through a missing
+ * predicate. `established:false` makes "I could not count" a state a caller
+ * cannot render as a count.
+ *
+ * A cross-partition `COUNT(1)` runs on every `/admin/domains` load and every
+ * mesh load, so RU-pressure rejection here is an ordinary condition, not a
+ * corner.
+ */
+async function countUnstampedWorkspaces(
+  wsC: Awaited<ReturnType<typeof workspacesContainer>>,
+): Promise<{ count: number; established: boolean }> {
+  try {
+    const { resources } = await wsC.items
+      .query<{ n: number }>({ query: 'SELECT VALUE COUNT(1) FROM c WHERE NOT IS_DEFINED(c.tid)' })
+      .fetchAll();
+    return { count: Number(resources?.[0] ?? 0) || 0, established: true };
+  } catch {
+    return { count: 0, established: false };
+  }
+}
+
+/**
+ * The disclosure for a count that could not be read at all.
+ *
+ * It says only what the code established — the aggregate did not answer — and
+ * NOT how many records are excluded, which is precisely what is unknown here.
+ */
+const UNSTAMPED_COUNT_UNAVAILABLE =
+  'Loom could not read how many workspace records carry no Entra tenant, so the count above may ' +
+  'exclude records it cannot attribute to your tenant — that number is UNKNOWN, not zero. The ' +
+  'disclosure query (`SELECT VALUE COUNT(1) FROM c WHERE NOT IS_DEFINED(c.tid)`) is a ' +
+  'cross-partition aggregate and is the first thing Cosmos rejects under RU pressure; retry the ' +
+  'page. Run `node scripts/csa-loom/backfill-workspace-tid.mjs` (DRY-RUN by default) to see ' +
+  'whether any unstamped records exist.';
+
+/** The one remediation text for a non-zero unstamped count. */
+function unstampedRemediation(n: number): string | undefined {
+  return n
+    ? `${n} workspace record(s) record no Entra tenant (workspaces created ` +
+      'before rel-T11 were not stamped) and are therefore excluded from every tenant-scoped ' +
+      'inventory — Loom will not show a record it cannot positively attribute to your tenant. ' +
+      'Run `node scripts/csa-loom/backfill-workspace-tid.mjs` to see what it would change (it is ' +
+      'DRY-RUN by default), then re-run it with `--apply`.'
+    : undefined;
+}
+
+/**
+ * Every workspace IN THE CALLER'S TENANT, id + domain tag only (#3747).
+ *
+ * THE ONE counter behind both Domains panels. Before this existed the
+ * "Federated data-mesh" summary and the domain List each computed their own
+ * workspace count from a DIFFERENT wrong scope, and disagreed on screen:
+ *
+ *   - `domain-mesh.readWorkspaceTags` queried `WHERE c.tenantId = @t` with
+ *     `{ partitionKey: ownerOid }` — `Workspace.tenantId` holds the CREATOR's
+ *     oid, so that is one creator's workspaces, not the tenant's.
+ *   - `/api/admin/domains workspaceCounts` did the same with
+ *     `tenantScopeId(session)`, which is the real Entra tid when the claim is
+ *     present — and no workspace doc is partitioned by a tid, so it read an
+ *     empty partition and reported 0 for every domain.
+ *
+ * The correct tenant-wide shape is `WHERE c.tid = @tid` with NO `partitionKey`
+ * option (cross-partition fan-out), exactly as `listAllWorkspacesAdmin` does:
+ * `tid` is the stamped Entra tenant, `tenantId` is the partition key holding a
+ * creator oid. Passing a `partitionKey` here is the bug, not an optimisation.
+ *
+ * Fails CLOSED on an unconfirmed tenancy, mirroring `listAllWorkspacesAdmin`:
+ * with no caller tid there is no positive match to make, so the result is empty
+ * with a named reason rather than an unscoped read.
+ *
+ * CARRIES THE LEGACY DISCLOSURE. `WHERE c.tid = @tid` cannot match a record
+ * that has no `tid`, and workspaces created before rel-T11 have none — so this
+ * counter, like `listAllWorkspacesAdmin`, answers a SHORTER list than the
+ * container holds. `/admin/workspaces` already discloses that; when this
+ * function did not, the two Domains panels reported the shorter number with no
+ * notice and disagreed with the workspace inventory — the same cross-surface
+ * disagreement this shared counter exists to remove, one surface over. The
+ * count travels WITH the result so no consumer can report it as complete.
+ */
+export async function listTenantWorkspaceTags(
+  scope: AdminWorkspaceScope,
+): Promise<TenantWorkspaceTagsResult> {
+  if (!scope.callerTid) {
+    return {
+      workspaces: [],
+      scopeUnconfirmed: true,
+      degraded: true,
+      degradedReasons: ['tenant-scope-unconfirmed'],
+      // No read ran, so nothing was EXCLUDED by a tenant predicate — reporting a
+      // legacy count here would assert something this call did not establish.
+      legacyUnstampedExcluded: 0,
+      legacyCountUnavailable: false,
+    };
+  }
+  const wsC = await workspacesContainer();
+  const [tagged, unstamped] = await Promise.all([
+    wsC.items
+      .query<TenantWorkspaceTag>({
+        query: 'SELECT c.id, c.domain FROM c WHERE c.tid = @tid',
+        parameters: [{ name: '@tid', value: scope.callerTid }],
+      })
+      .fetchAll(),
+    countUnstampedWorkspaces(wsC),
+  ]);
+  // The count is only a count when it was ESTABLISHED. When the aggregate did
+  // not answer, this stays 0 AND `legacyCountUnavailable` says why — the two
+  // together are what stop a caller reading 0 as "nothing excluded".
+  const legacyUnstampedExcluded = unstamped.established ? unstamped.count : 0;
+  const legacyCountUnavailable = !unstamped.established;
+  const legacyRemediation = legacyCountUnavailable
+    ? UNSTAMPED_COUNT_UNAVAILABLE
+    : unstampedRemediation(legacyUnstampedExcluded);
+  // TWO distinct non-complete states, each named. Collapsing them would put an
+  // unreadable disclosure back on the "complete" path, which is the #4316
+  // review's blocker 1.
+  const degradedReasons: string[] = [];
+  if (legacyCountUnavailable) degradedReasons.push('legacy-count-unavailable');
+  else if (legacyUnstampedExcluded > 0) degradedReasons.push('legacy-unstamped-excluded');
+  return {
+    workspaces: (tagged.resources || []).filter((w) => !!w?.id),
+    scopeUnconfirmed: false,
+    // An answer that excludes records it cannot attribute is INCOMPLETE, and so
+    // is one whose exclusion count could not be read at all. Every consumer must
+    // be able to see that without knowing this query's text.
+    degraded: degradedReasons.length > 0,
+    degradedReasons,
+    legacyUnstampedExcluded,
+    legacyCountUnavailable,
+    ...(legacyRemediation ? { legacyRemediation } : {}),
+  };
 }
 
 /**
@@ -155,6 +361,7 @@ export async function listAllWorkspacesAdmin(scope: AdminWorkspaceScope): Promis
       degraded: true,
       degradedReasons: ['tenant-scope-unconfirmed'],
       legacyUnstampedExcluded: 0,
+      legacyCountUnavailable: false,
       legacyRemediation:
         'Your sign-in session carries no Entra tenant (`tid`) claim, so Loom cannot scope the ' +
         'tenant-wide workspace inventory to your tenant and will not run it unscoped. Sign out ' +
@@ -177,32 +384,33 @@ export async function listAllWorkspacesAdmin(scope: AdminWorkspaceScope): Promis
     })
     .fetchAll();
 
+  // The reasons this inventory is not authoritative, accumulated in the order
+  // they are established. Declared HERE, above the legacy count, so the
+  // empty-tenant early return below reports the same degradations the full path
+  // does — an unreadable disclosure must not read as clean just because the
+  // tenant happens to hold no workspaces.
+  const degradedReasons: string[] = [];
+
   // How many records exist that NO tenant can claim, so a legacy estate does not
-  // silently read as a shorter list. Best-effort and admin-gated; a failure here
-  // must not fail the inventory.
-  let legacyUnstampedExcluded = 0;
-  try {
-    const { resources: legacy } = await wsC.items
-      .query<{ n: number }>({ query: 'SELECT VALUE COUNT(1) FROM c WHERE NOT IS_DEFINED(c.tid)' })
-      .fetchAll();
-    legacyUnstampedExcluded = Number(legacy?.[0] ?? 0) || 0;
-  } catch {
-    legacyUnstampedExcluded = 0;
-  }
-  const legacyRemediation = legacyUnstampedExcluded
-    ? `${legacyUnstampedExcluded} workspace record(s) record no Entra tenant (workspaces created ` +
-      'before rel-T11 were not stamped) and are therefore excluded from every tenant-scoped ' +
-      'inventory — Loom will not show a record it cannot positively attribute to your tenant. ' +
-      'Run `node scripts/csa-loom/backfill-workspace-tid.mjs` to see what it would change (it is ' +
-      'DRY-RUN by default), then re-run it with `--apply`.'
-    : undefined;
+  // silently read as a shorter list. Shared with `listTenantWorkspaceTags` so
+  // the two surfaces cannot disclose different numbers for the same container.
+  // `established:false` is a DEGRADATION, not a zero: see
+  // `countUnstampedWorkspaces`.
+  const unstamped = await countUnstampedWorkspaces(wsC);
+  const legacyUnstampedExcluded = unstamped.established ? unstamped.count : 0;
+  const legacyCountUnavailable = !unstamped.established;
+  if (legacyCountUnavailable) degradedReasons.push('legacy-count-unavailable');
+  const legacyRemediation = legacyCountUnavailable
+    ? UNSTAMPED_COUNT_UNAVAILABLE
+    : unstampedRemediation(legacyUnstampedExcluded);
 
   if (docs.length === 0) {
     return {
       workspaces: [],
-      degraded: false,
-      degradedReasons: [],
+      degraded: degradedReasons.length > 0,
+      degradedReasons,
       legacyUnstampedExcluded,
+      legacyCountUnavailable,
       ...(legacyRemediation ? { legacyRemediation } : {}),
     };
   }
@@ -210,8 +418,6 @@ export async function listAllWorkspacesAdmin(scope: AdminWorkspaceScope): Promis
   const ids = docs.map((w) => w.id);
   const inParams = ids.map((id, i) => ({ name: `@w${i}`, value: id }));
   const inExpr = inParams.map((p) => p.name).join(',');
-
-  const degradedReasons: string[] = [];
 
   // 2) Batch item-count + last-activity for ALL workspaces in one cross-partition
   //    GROUP BY (same proven pattern as GET /api/workspaces?count=true). Degrades
@@ -290,6 +496,7 @@ export async function listAllWorkspacesAdmin(scope: AdminWorkspaceScope): Promis
     degraded: degradedReasons.length > 0,
     degradedReasons,
     legacyUnstampedExcluded,
+    legacyCountUnavailable,
     ...(legacyRemediation ? { legacyRemediation } : {}),
   };
 }
