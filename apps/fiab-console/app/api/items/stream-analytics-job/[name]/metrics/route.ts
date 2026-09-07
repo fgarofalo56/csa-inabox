@@ -12,12 +12,22 @@
  */
 import { NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
-import { getJob, AsaNotConfiguredError } from '@/lib/azure/stream-analytics-client';
+import { getJob, AsaNotConfiguredError, AsaJobNotFoundError } from '@/lib/azure/stream-analytics-client';
 import { fetchMetrics, type MetricResult } from '@/lib/azure/monitor-client';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
+/**
+ * Applies to the NOT-CONFIGURED condition only — the one case where the env
+ * vars really are the remediation.
+ *
+ * #3573 / `deploy-integrity.md` R7: this hint used to ride the generic 502 as
+ * well, so a 403, a throttle or a DNS failure on a deployment where LOOM_ASA_RG
+ * was set correctly told the operator to go set LOOM_ASA_RG — a cause the code
+ * had established nothing about. The 502s below now carry the ARM error and
+ * nothing else, and a missing job gets its own 404.
+ */
 const HINT =
   'Provision an ASA job (bicep: platform/fiab/bicep/modules/landing-zone/stream-analytics.bicep, ' +
   'flag enableStreamAnalytics=true) and set LOOM_ASA_RG (and LOOM_ASA_SUB if different). ' +
@@ -37,8 +47,10 @@ export async function GET(_req: Request, ctx: { params: { name: string } }) {
   try {
     const job = await getJob(name);
     if (!job.id) {
+      // ARM answered with a job carrying no resource id. That is not a
+      // provisioning/env condition, so it does not get the provisioning hint.
       return NextResponse.json(
-        { ok: false, error: 'ASA job has no ARM resource id', hint: HINT },
+        { ok: false, error: 'ASA job has no ARM resource id' },
         { status: 502 },
       );
     }
@@ -69,8 +81,16 @@ export async function GET(_req: Request, ctx: { params: { name: string } }) {
     if (e instanceof AsaNotConfiguredError) {
       return NextResponse.json({ ok: false, error: e.message, hint: HINT }, { status: 501 });
     }
+    if (e instanceof AsaJobNotFoundError) {
+      // ASA is configured and ARM answered: the job is simply not there. Say
+      // only that — the absence is established, a remediation is not.
+      return NextResponse.json(
+        { ok: false, error: e.message, code: 'asa-job-not-provisioned' },
+        { status: 404 },
+      );
+    }
     return NextResponse.json(
-      { ok: false, error: e?.message || String(e), hint: HINT },
+      { ok: false, error: e?.message || String(e) },
       { status: 502 },
     );
   }

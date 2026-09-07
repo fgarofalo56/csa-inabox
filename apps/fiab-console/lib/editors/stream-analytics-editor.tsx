@@ -229,7 +229,8 @@ export function StreamAnalyticsJobEditor({ item, id }: { item: FabricItemType; i
     } catch (e: any) { setError(e?.message || String(e)); }
   }, []);
 
-  useEffect(() => { loadList(); }, [loadList]);  // When switching jobs, force-load (user expects buffer to reset to that
+  useEffect(() => { loadList(); }, [loadList]);
+  // When switching jobs, force-load (user expects buffer to reset to that
   // job's persisted query). On other refreshes we respect dirty edits.
   useEffect(() => { if (selected) loadDetail(selected, { force: true }); }, [selected, loadDetail]);
 
