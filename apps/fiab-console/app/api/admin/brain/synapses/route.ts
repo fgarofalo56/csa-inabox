@@ -2,11 +2,13 @@
  * BFF — GET /api/admin/brain/synapses
  *
  * The SYNAPSE layers that do not come from the estate: the RISK lane
- * (`lib/brain/security/**`, nine detectors over a graph of the source) and the
- * EDGE HISTORY lane (W9, #3935). The prune and hot-path lanes are computed on the
- * client from the estate snapshot `/api/admin/brain/graph` already returns —
- * re-fetching the estate here would be a second Resource Graph pull seconds apart
- * from the first, which is precisely what `../_lib/wire.ts` argues against.
+ * (`lib/brain/security/**`, nine detectors over the build-time source graph in
+ * `lib/brain/security/extract/__generated__`) and the EDGE HISTORY lane (the
+ * retained graph versions W9/#3935 persists). The prune and hot-path lanes are
+ * computed on the client from the estate snapshot `/api/admin/brain/graph`
+ * already returns — re-fetching the estate here would be a second Resource Graph
+ * pull seconds apart from the first, which is precisely what `../_lib/wire.ts`
+ * argues against.
  *
  * ── AUTHORIZATION ──────────────────────────────────────────────────────────
  * `withTenantAdmin` from `@/lib/api/route-toolkit`, never an inline check. The
@@ -28,11 +30,18 @@
  * mock, survive the mutation, and prove nothing.
  *
  * ── WHY THIS ROUTE IS SAFE TO EXPOSE ───────────────────────────────────────
- * It performs no network call at all. The security sweep is pure analysis over
- * data, every remediation it can produce is `DraftedRemediation` — a string, with
- * no callable member and `requiresHumanApproval: true` pinned as a literal — and
- * `assertAllInert` rejects a non-inert one at runtime inside the sweep before it
- * could reach this handler.
+ * It makes exactly ONE network call, and that call is a READ: the edge-history
+ * lane point-reads this estate's own graph-version documents from Cosmos. It
+ * writes nothing — `POST /api/admin/brain/history` is the only writer — and it
+ * touches no Azure control plane. (This paragraph previously claimed the route
+ * "performs no network call at all", which was true while the history lane was a
+ * stub and became false the moment it read a store. R7 applies to comments too.)
+ *
+ * The security sweep itself is pure analysis over data, every remediation it can
+ * produce is `DraftedRemediation` — a string, with no callable member and
+ * `requiresHumanApproval: true` pinned as a literal — and `assertAllInert`
+ * rejects a non-inert one at runtime inside the sweep before it could reach this
+ * handler.
  *
  * ── R7 ─────────────────────────────────────────────────────────────────────
  * A sweep that throws is reported as a FAILED sweep, never as a clean one. The
@@ -56,7 +65,11 @@ export const revalidate = 0;
 export const GET = withTenantAdmin(async (_req: NextRequest) => {
   try {
     const risk = buildRiskLayer(loadSecurityGraph());
-    const history = loadEdgeHistory();
+    // AWAITED, and its failures are its own. `loadEdgeHistory` reads Cosmos and
+    // never throws: an unconfigured endpoint, a store error and a history too
+    // thin to carry a baseline each come back as `available: false` with their
+    // own reason, so none of them can be flattened into the sweep failure below.
+    const history = await loadEdgeHistory();
     return apiOk({ risk, history });
   } catch (e) {
     return apiHonestError(

@@ -405,6 +405,47 @@ export function nodeUnreachableForConsecutiveVersions(
     };
   }
 
+  // COMPLETENESS. A version captured from a PARTIAL Resource Graph pull records
+  // a partial estate: every resource in the unread remainder is simply ABSENT
+  // from it. A node present in the complete versions and missing from the
+  // partial one is not "unreachable" there — it was never looked at — and this
+  // predicate's output is a DELETION PROPOSAL. Same class as the two refusals
+  // below and above, so it gets the same answer: REFUSE (#4016).
+  //
+  // Only an EXPLICIT `complete === false` triggers this. `collection`
+  // `undefined` means NOT RECORDED (a version written before the field existed),
+  // and refusing on absent evidence would retroactively blind the predicate over
+  // every historical version.
+  const partial = window.filter((v) => v.collection?.complete === false);
+  if (partial.length > 0) {
+    return {
+      provenance,
+      required: n,
+      minSpanMs,
+      spanMs,
+      nodes: [],
+      population: population(
+        history,
+        window,
+        true,
+        `${partial.length} of the ${n} examined version(s) were captured from an INCOMPLETE ` +
+          'Resource Graph pull, so they do not describe the whole estate',
+      ),
+      notes: [
+        `${partial.length} of the ${n} examined version(s) were captured from an INCOMPLETE ` +
+          `Resource Graph pull (${partial
+            .map(
+              (v) =>
+                `${v.id}: ${v.collection!.rowsFetched} of ` +
+                `${v.collection!.totalRecords ?? 'an unreported number of'} row(s)`,
+            )
+            .join(', ')}). Every resource in the unread remainder is ABSENT from those versions ` +
+          'rather than unreachable in them, so a streak spanning one cannot be established. ' +
+          'REFUSING to answer.',
+      ],
+    };
+  }
+
   // Coverage. A version that did not COLLECT this provenance has zero inbound
   // edges of it for every node, vacuously — `blind` does not fire, because the
   // node set was not empty. This is the check that stops a screen of confident

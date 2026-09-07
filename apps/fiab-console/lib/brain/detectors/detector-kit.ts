@@ -261,6 +261,26 @@ export function inbound(
 }
 
 /**
+ * The operator-facing clause describing a node's inbound `configured` edges,
+ * for a node the reachability walk did NOT reach.
+ *
+ * R7 (deploy-integrity.md): the second arm is not rhetoric, it is what the walk
+ * established. `nodesNotReachableFrom` BFSes across EVERY node in the graph —
+ * its `filter` narrows only the reported candidates, never the traversal — so
+ * if this node was not reached, then no node holding a resolved `configured`
+ * edge into it was reached either. Emitting the literal `0` here (the proxy
+ * #4258 retired) would assert an absence the graph itself disproves on a
+ * mutually-referencing island, which is the exact shape the widened predicate
+ * exists to catch.
+ */
+export function inboundReachabilityClause(configuredIn: number): string {
+  return configuredIn === 0
+    ? "no inbound resolved 'configured' edge at all"
+    : `${configuredIn} inbound resolved 'configured' edge(s), every one of them from a node ` +
+        'that is itself unreachable';
+}
+
+/**
  * Severity from the derived monthly cost.
  *
  * The thresholds are a judgement, stated in one place so it can be argued with

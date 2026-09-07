@@ -49,10 +49,12 @@ export {
   danglingEdges,
   hasInboundOnly,
   makePopulation,
+  nodesNotReachableFrom,
   nodesWithNoInboundEdge,
   scaleUnknownCount,
   type BrainGraph,
   type ReachabilityFilter,
+  type ReachabilityRoots,
 } from './graph';
 
 export {
