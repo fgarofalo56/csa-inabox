@@ -494,6 +494,17 @@ jobs:
             echo "::error::run $RUN_ID is the newest successful run on main, but its copilot-quality-eval-run artifact could not be downloaded. This does NOT establish which of the two causes applies — the artifact expired / was never uploaded (that run's Function probe found nothing), or the download itself failed. Either way the delta half of this gate cannot run, and it is not established that there is no baseline, so this run is not reported as a pass. If the baseline run legitimately produced no artifact, re-run this job once a run WITH an artifact is the newest success on main."
             exit 1
           fi
+          # A SUCCESSFUL download is not a baseline. The upload step below lists
+          # two paths under the action's default `if-no-files-found: warn`, so an
+          # artifact can exist, download cleanly, and contain no `eval-run.json`
+          # at all. Writing delta_status=evaluated on the download's exit code
+          # alone asserted a comparison from the wrong evidence: the gate step
+          # tests `[ -f prev/eval-run.json ]` and would then omit --previous
+          # while still passing --delta-status evaluated. Assert on the FILE.
+          if [ ! -f prev/eval-run.json ]; then
+            echo "::error::run $RUN_ID's copilot-quality-eval-run artifact downloaded successfully but contains no eval-run.json, so there is no baseline to compare against. This is the same unestablished state as a failed download — it is NOT established that there is no prior run — so it is not reported as a pass. Contents: $(ls -A prev/ 2>&1 | tr '\n' ' ')"
+            exit 1
+          fi
           echo "delta_status=evaluated" >> "$GITHUB_OUTPUT"
           echo "delta baseline: run $RUN_ID"
 

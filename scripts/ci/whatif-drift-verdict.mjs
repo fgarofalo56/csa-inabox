@@ -60,6 +60,16 @@
  *      and warned about. A delta whose `after` is a concrete value — a
  *      different GUID, say — is untouched and stays real drift.
  *
+ *      UNRESOLVED is a COVERAGE statement about a PROPERTY, not a verdict about
+ *      a resource, and the two are independent. A resource whose only
+ *      non-suppressed delta is unresolved leaves the drift verdict; a resource
+ *      that ALSO has a genuinely conflicting property stays in drift on that
+ *      property — but its unresolved property is still listed and counted. The
+ *      real Gov delta is exactly the second shape (`properties.principalId`
+ *      unevaluated, `properties.principalType` NoEffect and not allowlisted),
+ *      and an earlier revision of this bucket dropped principalId from every
+ *      output because it bucketed by resource alone.
+ *
  *   3. COVERAGE — what-if silently gives up on nested deployments whose
  *      parameters it cannot evaluate (module outputs / reference()), emitting a
  *      `NestedDeploymentShortCircuited` diagnostic and marking the whole
@@ -272,6 +282,8 @@ function isUnevaluatedArmExpression(value) {
 // ---------------------------------------------------------------- classify
 const realDrift = [];
 const suppressed = [];
+// EVERY resource carrying at least one not-compared property, whether or not
+// that resource is ALSO in drift. See the note at the push site below.
 const unresolvedChanges = [];
 const counts = {};
 
@@ -313,9 +325,27 @@ for (const change of doc.changes) {
 
   // One genuinely conflicting property keeps the whole resource in the drift
   // verdict, exactly as before — an unresolved sibling never rescues it.
-  if (unmatched.length > 0) realDrift.push({ change, type, unmatched });
-  else if (unresolved.length > 0) unresolvedChanges.push({ change, type, unresolved, matched });
-  else suppressed.push({ change, type, matched });
+  if (unmatched.length > 0) realDrift.push({ change, type, unmatched, unresolved });
+  else if (unresolved.length === 0) suppressed.push({ change, type, matched });
+  // else: no real conflict, but a property what-if never compared. Not drift,
+  // and not "suppressed as known noise" either — it lands in unresolvedChanges
+  // below and nowhere else.
+
+  // MEASURED FAILURE (reviewer, run 33406666389): bucketing by RESOURCE alone
+  // DROPPED the unresolved property of a resource that also had one real
+  // conflicting sibling. The Gov roleAssignment delta has TWO entries —
+  // `properties.principalId` (Modify, unevaluated `reference()`) and
+  // `properties.principalType` (NoEffect, not allowlisted for
+  // Microsoft.Authorization). principalType is unmatched, so the resource
+  // correctly stayed in drift; but principalId then appeared in NEITHER the
+  // drift line NOR unresolved-list.txt, and the string "principalId" vanished
+  // from summary.md entirely. That is strictly LESS information than before
+  // this bucket existed. The not-compared set is a COVERAGE statement about
+  // properties, so it is collected per-property across every resource and is
+  // independent of the resource's drift verdict.
+  if (unresolved.length > 0) {
+    unresolvedChanges.push({ change, type, unresolved, matched, alsoDrift: unmatched.length > 0 });
+  }
 }
 
 // ---------------------------------------------------------------- coverage
@@ -325,19 +355,25 @@ const evaluated = (counts.NoChange || 0) + (counts.Create || 0) + (counts.Delete
 const ignored = counts.Ignore || 0;
 
 // ---------------------------------------------------------------- render
-const driftLines = realDrift.map(({ change, unmatched }) => {
+const driftLines = realDrift.map(({ change, unmatched, unresolved }) => {
   const paths = unmatched.slice(0, 6).map((u) => `${u.propertyChangeType}:${u.path}`).join(', ');
-  return `${change.changeType}\t${change.resourceId}${paths ? `\t[${paths}]` : ''}`;
+  // A drifting resource may ALSO carry a property what-if never evaluated. Name
+  // it here too: dropping it silently was the exact information loss this
+  // bucket was supposed to prevent, and the drift line is where a triager
+  // looks first. It is explicitly labelled so it is not read as a conflict.
+  const notCompared = (unresolved || []).slice(0, 6).map((u) => u.path).join(', ');
+  return `${change.changeType}\t${change.resourceId}${paths ? `\t[${paths}]` : ''}`
+    + (notCompared ? `\t(not compared by what-if: ${notCompared})` : '');
 });
 const suppressedLines = suppressed.map(({ change, type, matched }) =>
   `${change.resourceId}\t${type}\t${matched.map((m) => m.entry.path).join(', ')}`);
 // #2874 — printed with the resourceId so an unresolved property is auditable at
 // the same grain as a real delta. NEVER an empty bucket that quietly absorbs.
-const unresolvedLines = unresolvedChanges.map(({ change, type, unresolved }) =>
+const unresolvedLines = unresolvedChanges.map(({ change, type, unresolved, alsoDrift }) =>
   `${change.resourceId}\t${type}\tnot compared by what-if: ${unresolved
     .slice(0, 6)
     .map((u) => u.path)
-    .join(', ')}`);
+    .join(', ')}${alsoDrift ? '\t(this resource ALSO has real drift — see drift-list.txt)' : ''}`);
 const shortCircuitLines = shortCircuited.map((d) => String(d.target || '').split('/deployments/').pop());
 
 const status = realDrift.length > 0 ? 'Drift' : 'Clean';
@@ -375,7 +411,7 @@ if (suppressedLines.length > 0) {
   md.push('');
 }
 if (unresolvedLines.length > 0) {
-  md.push(`> **NOT COMPARED — ${unresolvedChanges.length} resource(s) carry a property what-if never evaluated (#2874).** For these the TEMPLATE side came back as raw ARM source (e.g. \`[reference(...).identity.principalId]\`), so what-if never compared it against the live value. This is neither drift nor suppressed noise — it is a property the tool did not look at, and a clean verdict does not cover it. See docs/fiab/runbooks/bicep-drift.md#unresolved.`);
+  md.push(`> **NOT COMPARED — ${unresolvedChanges.length} resource(s) carry a property what-if never evaluated (#2874).** For these the TEMPLATE side came back as raw ARM source (e.g. \`[reference(...).identity.principalId]\`), so what-if never compared it against the live value. This is neither drift nor suppressed noise — it is a property the tool did not look at, and NO verdict on this run covers it, clean or otherwise. A resource marked "ALSO has real drift" below failed on a DIFFERENT property; the one named here is still uncompared. See docs/fiab/runbooks/bicep-drift.md#unresolved.`);
   md.push('');
   md.push('<details><summary>Not compared by what-if (unevaluated ARM expression)</summary>');
   md.push('');

@@ -133,6 +133,37 @@ test('#4277 an unknown --delta-status is rejected rather than silently treated a
   assert.match(r.stderr, /--delta-status must be one of/);
 });
 
+/* ── 1b. `evaluated` may never come from the caller's word alone ──────────── */
+
+test('#4277 --delta-status evaluated with NO baseline is REFUSED, never rendered as a comparison', () => {
+  // The regression this pins: `previous ? 'evaluated' : (arg ?? 'unstated')`
+  // made --previous SUFFICIENT but not NECESSARY, so this exact invocation
+  // exited 0 and wrote "**Delta: evaluated** against the previous run." while
+  // the delta half had not run — the same R7 shape #4277 exists to remove.
+  const r = gate(['--delta-status', 'evaluated']);
+  assert.equal(r.code, 2, 'a claim the process cannot corroborate is a refusal, not a render');
+  assert.match(r.stderr, /no baseline was loaded/);
+  assert.match(r.stderr, /did NOT run/);
+  assert.doesNotMatch(r.md, /Delta: evaluated/, 'the false claim must not reach the summary at all');
+});
+
+test('#4277 --delta-status evaluated WITH a real baseline is still accepted', () => {
+  // The refusal above must be narrow: it fires on the contradiction, not on the
+  // word. The workflow passes `evaluated` alongside `--previous` on every
+  // healthy run, and that path must stay green.
+  const r = gate(['--delta-status', 'evaluated'], { withPrevious: true });
+  assert.equal(r.code, 0);
+  assert.match(r.md, /Delta: evaluated/);
+});
+
+test('#4277 the refusal names which of the two evidence gaps applies', () => {
+  // R7 in the refusal itself: "no --previous was given" and "--previous yielded
+  // nothing" are different operator actions and must not share a sentence.
+  const r = gate(['--delta-status', 'evaluated']);
+  assert.match(r.stderr, /no --previous argument was given/);
+  assert.doesNotMatch(r.stderr, /yielded nothing/);
+});
+
 /* ── 2. the workflow shape that made the above reachable ─────────────────── */
 
 /** Extract one `- name: …` step block from the workflow YAML, verbatim. */
@@ -205,4 +236,45 @@ test('#4277 the ABSENT case is the only one that passes, and it is stated downst
   const gateStep = stepBlock(yaml, 'check-eval-regression');
   assert.match(gateStep, /--delta-status/);
   assert.match(gateStep, /steps\.baseline\.outputs\.delta_status/);
+});
+
+test('#4277 delta_status=evaluated is written on the FILE, not on the download exit code', () => {
+  // The download exit code is the wrong evidence. The run artifact is uploaded
+  // with two `path:` entries and no `if-no-files-found:`, so the action default
+  // `warn` applies: an artifact can exist, download cleanly, and carry only
+  // eval-summary.md. The gate step then finds no prev/eval-run.json, omits
+  // --previous, and used to still forward --delta-status evaluated.
+  const yaml = readFileSync(WORKFLOW, 'utf8');
+  const step = stepBlock(yaml, 'Fetch the previous run artifact');
+  // Ordering is a claim about EXECUTABLE lines. Comments in this step quote the
+  // very strings being searched for, and a predicate that matches its own
+  // rationale prose measures the comment, not the code — which is how the first
+  // draft of this test located the "claim" nine lines above the guard.
+  const lines = step.split('\n').filter((l) => !/^\s*#/.test(l));
+  const guard = lines.findIndex((l) => /\[\s*!\s*-f\s+prev\/eval-run\.json\s*\]/.test(l));
+  assert.ok(guard >= 0, 'the step must test for the baseline FILE before claiming a baseline');
+  const claim = lines.findIndex((l) => /delta_status=evaluated"?\s*>>/.test(l));
+  assert.ok(claim >= 0, 'expected the evaluated claim to still be written on the healthy path');
+  assert.ok(
+    guard < claim,
+    'the file guard must precede the claim — after it, the claim is already in $GITHUB_OUTPUT',
+  );
+  // and the guard must FAIL the step, not warn
+  const guardBlock = lines.slice(guard, claim).join('\n');
+  assert.match(guardBlock, /::error::/);
+  assert.match(guardBlock, /exit 1/);
+  // R7 — it must not assert that there is no prior run, which it did not establish
+  assert.match(guardBlock, /NOT established that there is no prior run/);
+});
+
+test('#4277 the upload that makes the empty-artifact case reachable is still unconstrained', () => {
+  // A premise check, not a requirement: if someone later adds
+  // `if-no-files-found: error` to this upload the guard above becomes belt-and-
+  // braces rather than load-bearing, and this test says so out loud instead of
+  // leaving the rationale stale. It asserts the CURRENT shape.
+  const yaml = readFileSync(WORKFLOW, 'utf8');
+  const step = stepBlock(yaml, 'Upload the run artifact');
+  assert.match(step, /name: copilot-quality-eval-run/);
+  assert.match(step, /eval-run\.json/);
+  assert.match(step, /eval-summary\.md/);
 });

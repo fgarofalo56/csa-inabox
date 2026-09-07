@@ -459,11 +459,15 @@ test('ALLOWLIST HYGIENE (rule 6) HAS TEETH: the detector rejects a value claim w
 
 /* ── #2874 — UNRESOLVED: a value what-if never evaluated is not a conflict ─── */
 
-// Verbatim shape from the Gov (GCC-High) lane of run 33406666389: the sole
-// delta was the Sentinel Responder assignment on the Log Analytics workspace,
-// whose template-side principalId came back as raw ARM source because what-if
-// could not resolve `reference(<the conditional playbook>).identity.principalId`
+// Verbatim shape from the Gov (GCC-High) lane of run 33406666389: the Sentinel
+// Responder assignment on the Log Analytics workspace, whose template-side
+// principalId came back as raw ARM source because what-if could not resolve
+// `reference(<the conditional playbook>).identity.principalId`
 // (platform/fiab/bicep/modules/admin-plane/ai-defense.bicep:251-261).
+//
+// That resource's delta has TWO entries, not one — see REAL_GOV_DELTA below.
+// The single-entry helper here isolates the classifier; the two-entry case is
+// the one the lane actually runs on.
 const LAW_ROLE_ASSIGNMENT_ID =
   '/subscriptions/S/resourceGroups/rg-csa-loom-admin-usgovvirginia/providers/Microsoft.OperationalInsights/workspaces/law-csa-loom-usgovvirginia/providers/Microsoft.Authorization/roleAssignments/0912013f-1f0e-5c39-9a5d-2c7c2b6a3f41';
 const LIVE_PRINCIPAL_ID = '1feb8cae-6b6a-4a0e-9f2f-3a1c9d7e5b42';
@@ -554,7 +558,80 @@ test('#2874 one REAL conflicting property keeps the whole resource in the drift 
   ]);
   const r = verdict({ changes: [change] });
   assert.equal(r.outputs.drift_count, '1');
-  assert.equal(r.outputs.unresolved_count, '0');
   assert.equal(r.code, 1);
   assert.match(r.driftList, /principalType/);
+  // …and the unresolved sibling is still REPORTED. Staying in drift is a
+  // verdict about the resource; "not compared" is a fact about the property.
+  // An earlier revision returned unresolved_count '0' here and dropped
+  // principalId from every output — see the real-input test below.
+  assert.equal(r.outputs.unresolved_count, '1');
+  assert.match(r.unresolvedList, /properties\.principalId/);
+});
+
+/* ── the REAL two-entry delta, byte-for-byte from the downloaded artifact ──── */
+
+// This is the shape the lane actually produced, not a reduction of it. It is
+// the input the whole bucket was built from, and the first revision of that
+// bucket FAILED on it: `properties.principalType` is a concrete NoEffect on
+// Microsoft.Authorization/roleAssignments, which whatif-noise-allowlist.json
+// does not cover, so it stays unmatched and keeps the resource in drift —
+// and because the bucket keyed on the RESOURCE, `properties.principalId` then
+// appeared in neither drift-list.txt nor unresolved-list.txt, and the string
+// "principalId" was absent from summary.md entirely. Strictly LESS information
+// than before the bucket existed.
+const REAL_GOV_DELTA = [
+  {
+    path: 'properties.principalId',
+    propertyChangeType: 'Modify',
+    before: '1feb8cae-15de-4f0f-9085-8863128949c9',
+    after:
+      "[reference(resourceId('Microsoft.Logic/workflows', format('la-csa-loom-ai-alert-{0}', parameters('location'))), '2019-05-01', 'full').identity.principalId]",
+  },
+  {
+    path: 'properties.principalType',
+    propertyChangeType: 'NoEffect',
+    before: null,
+    after: 'ServicePrincipal',
+  },
+];
+
+test('#2874 the REAL Gov delta: still drift on principalType, and principalId is still REPORTED', () => {
+  const r = verdict({
+    changes: [modify('Microsoft.Authorization/roleAssignments', LAW_ROLE_ASSIGNMENT_ID, REAL_GOV_DELTA)],
+  });
+
+  // The verdict is unchanged from before this bucket existed, and must be:
+  // principalType is a genuine unmatched property on a type the allowlist does
+  // not cover. This bucket was never meant to turn this run green.
+  assert.equal(r.code, 1);
+  assert.equal(r.outputs.drift_count, '1');
+  assert.match(r.driftList, /NoEffect:properties\.principalType/);
+
+  // What DID have to change: the uncompared property must reach the reader.
+  assert.equal(r.outputs.unresolved_count, '1', 'the resource carries a property what-if never evaluated');
+  assert.match(r.unresolvedList, /properties\.principalId/);
+  assert.match(r.unresolvedList, /ALSO has real drift/, 'the reader must not read this as a clean resource');
+  assert.match(r.outputs.coverage_note, /1 resource\(s\) with property NOT COMPARED/);
+  assert.match(r.stdout, /::warning::\[test\].*did NOT evaluate/);
+
+  // The regression, stated as the reviewer measured it: `principalId` must not
+  // vanish from the summary a human opens.
+  assert.match(r.summary, /principalId/, 'principalId was ABSENT from summary.md in the first revision');
+  assert.match(r.driftList, /not compared by what-if: properties\.principalId/,
+    'the drift line is where a triager looks first — the uncompared property is named there too');
+});
+
+test('#2874 CONTROL: unresolved reporting does not fabricate a coverage gap on a clean resource', () => {
+  // The opposite failure: if every property is concrete, unresolved_count must
+  // be 0 and nothing may claim a property went uncompared.
+  const r = verdict({
+    changes: [modify('Microsoft.Authorization/roleAssignments', LAW_ROLE_ASSIGNMENT_ID, [
+      { path: 'properties.principalType', propertyChangeType: 'NoEffect', before: null, after: 'ServicePrincipal' },
+    ])],
+  });
+  assert.equal(r.outputs.drift_count, '1');
+  assert.equal(r.outputs.unresolved_count, '0');
+  assert.equal(r.unresolvedList.trim(), '');
+  assert.doesNotMatch(r.driftList, /not compared by what-if/);
+  assert.doesNotMatch(r.stdout, /did NOT evaluate/);
 });

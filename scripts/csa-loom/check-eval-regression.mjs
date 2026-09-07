@@ -87,9 +87,23 @@ const floorsPath = opt('--floors') ?? path.join(repo, 'content', 'evals', 'eval-
 // could not be fetched. The second is a broken pipeline; the first is not. So
 // the caller now STATES it, and the markdown carries it.
 //
-//   evaluated  a baseline was supplied (implied by --previous)
+//   evaluated  NOT accepted from the caller — see below. Derived ONLY from a
+//              baseline this process actually loaded.
 //   absent     the caller established there is no prior run to compare against
 //   unstated   nobody said — the honest default, never rendered as "absent"
+//
+// `evaluated` is deliberately NOT a value the caller may assert. Whether the
+// delta half RAN is a fact about THIS process, and the only evidence for it is
+// a baseline that was loaded — i.e. `--previous`. Accepting the word from the
+// caller reintroduces the exact R7 shape this flag exists to remove: an earlier
+// revision computed `previous ? 'evaluated' : (arg ?? 'unstated')`, which made
+// `--previous` sufficient but not NECESSARY, so `--delta-status evaluated`
+// with no `--previous` printed "Delta: evaluated against the previous run"
+// while the delta half had not run at all. That is reachable from the
+// workflow, whose baseline step writes `evaluated` on a successful
+// `gh run download` — a download can succeed and still yield no
+// `eval-run.json`, after which `[ -f prev/eval-run.json ]` is false and
+// `--previous` is never passed. So the combination is a REFUSAL, not a render.
 const DELTA_STATUS = new Set(['evaluated', 'absent', 'unstated']);
 const deltaStatusArg = opt('--delta-status');
 if (deltaStatusArg !== undefined && !DELTA_STATUS.has(deltaStatusArg)) {
@@ -270,8 +284,25 @@ const report = attachQuestions(
 
 const provisional = Object.values(floorsDoc.floors ?? {}).some((f) => f?.provisional);
 // #4277 — the delta half of the gate reports whether it RAN, in the artifact
-// the reader actually opens. `previous` is the ground truth for "it ran";
-// --delta-status only explains the NO case.
+// the reader actually opens. A loaded `previous` is the ONLY evidence that it
+// ran, so it is the only thing that can produce "evaluated".
+//
+// A caller that ASSERTS `evaluated` while this process holds no baseline is
+// stating a fact it did not establish, in the summary an operator reads. That
+// is refused rather than rendered, and it is refused loudly enough to name the
+// discrepancy — the same treatment `--previous <missing file>` already gets,
+// and for the same reason: a caller mistake must not silently disable half the
+// gate while the markdown claims both halves ran.
+if (deltaStatusArg === 'evaluated' && !previous) {
+  console.error(
+    'check-eval-regression: --delta-status evaluated was passed, but no baseline was loaded '
+    + `(${opt('--previous') ? `--previous ${opt('--previous')} yielded nothing` : 'no --previous argument was given'}). `
+    + 'The delta half of this gate did NOT run, so it will not be reported as evaluated. '
+    + 'Refusing rather than printing a comparison that did not happen. '
+    + 'If the baseline genuinely does not exist, pass --delta-status absent; if it should exist, fix the fetch.',
+  );
+  process.exit(2);
+}
 const deltaStatus = previous ? 'evaluated' : (deltaStatusArg ?? 'unstated');
 const md = renderMarkdown(report, {
   title: 'Copilot quality evals — floor gate',
