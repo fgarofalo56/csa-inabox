@@ -21,10 +21,24 @@
     "  4. Adding an entry requires a `reason` grounded in the resource's ARM",
     "     schema (read-only / server-defaulted / service-managed). Do not add a",
     "     property you merely find inconvenient — encode it in bicep instead.",
+    "  5. A `path` may carry `*` in place of an ARM array index. `*` matches ONLY",
+    "     digits, in either shape what-if emits (`.0` or `[0]`) — never a property",
+    "     name — so it cannot blanket a subtree. Add the element form only when a",
+    "     real what-if run has actually emitted it.",
     "",
     "Seeded 2026-07-28 from run 30259654971 (issue #2540): 11/11 Modify deltas",
     "were this class — 9 identical UAMI deltas plus Grafana + the UDF Container",
-    "App. See docs/fiab/runbooks/bicep-drift.md."
+    "App. See docs/fiab/runbooks/bicep-drift.md.",
+    "",
+    "Extended 2026-09-07 from run 33406666389 (issue #3191). That run's 128 real",
+    "resources carried 357 unmatched property deltas; a per-property census of the",
+    "raw what-if document (not the 6-per-resource truncated list) showed the",
+    "largest families were all server-defaulted or read-only, each confirmed",
+    "against its recorded `before` value. The entries added below cover 138 of",
+    "those 357 deltas. The rest — AAS asAdministrators, APIM policy bodies,",
+    "diagnosticSettings whole log categories, ACR networkRuleSet, KV createMode,",
+    "the managedEnvironments block — are REAL template-vs-live conflicts and are",
+    "deliberately left in the verdict for a reconciling bicep change."
   ],
   "resourceTypes": {
     "Microsoft.ManagedIdentity/userAssignedIdentities": [
@@ -104,6 +118,86 @@
       {
         "path": "properties.customDomainVerificationId",
         "reason": "Read-only — RP-assigned domain-verification token."
+      }
+    ],
+    "Microsoft.Network/privateDnsZones/virtualNetworkLinks": [
+      {
+        "path": "properties.resolutionPolicy",
+        "reason": "Server-defaulted. `resolutionPolicy` was added in the 2024-06-01 privateDnsZones schema as a Default|NxDomainRedirect enum; the RP stamps 'Default' on every link, including the ~27 links private-dns.bicep creates without expressing an opinion. Measured before='Default' on every occurrence in run 33406666389 — a redeploy that omits it re-applies the same value. If Loom ever needs NxDomainRedirect, set it in bicep and DELETE this entry."
+      }
+    ],
+    "Microsoft.Network/privateEndpoints": [
+      {
+        "path": "properties.isIPv6EnabledPrivateEndpoint",
+        "reason": "Server-defaulted to false. A dual-stack flag the RP stamps on every private endpoint under the newer network API versions; private-endpoint.bicep declares only IPv4 subnets, so what-if reports the RP's own false as a deletion. Measured before=false on every occurrence in run 33406666389."
+      }
+    ],
+    "Microsoft.Network/privateEndpoints/privateDnsZoneGroups": [
+      {
+        "path": "properties.privateDnsZoneConfigs.*.id",
+        "reason": "Read-only — the ARM resource ID the RP assigns to each generated privateDnsZoneConfigs child. The template declares each config by name + privateDnsZoneId only; the full child ID is never settable."
+      },
+      {
+        "path": "properties.privateDnsZoneConfigs.*.etag",
+        "reason": "Read-only — RP-assigned concurrency tag on each generated config."
+      },
+      {
+        "path": "properties.privateDnsZoneConfigs.*.type",
+        "reason": "Read-only — the ARM type discriminator ('Microsoft.Network/privateEndpoints/privateDnsZoneGroups/privateDnsZoneConfigs') the RP stamps on each generated config."
+      },
+      {
+        "path": "properties.privateDnsZoneConfigs.*.properties.provisioningState",
+        "reason": "Read-only lifecycle state ('Succeeded'), never settable in a template."
+      }
+    ],
+    "Microsoft.Insights/diagnosticSettings": [
+      {
+        "path": "properties.logs.*.retentionPolicy.days",
+        "reason": "Server-defaulted remnant of a RETIRED feature. Diagnostic-setting-level retention was retired in favour of Log Analytics workspace / storage lifecycle retention; the RP still materializes `retentionPolicy:{enabled:false,days:0}` on every category. Measured before=0 on every occurrence in run 33406666389, so a redeploy that omits it re-applies the same zero. NOTE: this suppresses ONLY the retention leaf — a Delete of a whole `properties.logs.N` category (the template declaring fewer categories than live) stays real drift and keeps the resource in the verdict."
+      },
+      {
+        "path": "properties.metrics.*.retentionPolicy.days",
+        "reason": "Server-defaulted remnant of the same retired retention feature, on the metrics side: the RP materializes `retentionPolicy:{enabled:false,days:0}` on every metric category. Measured before=0 on every occurrence in run 33406666389."
+      }
+    ],
+    "Microsoft.DocumentDB/databaseAccounts/sqlDatabases/containers": [
+      {
+        "path": "properties.resource.indexingPolicy.includedPaths",
+        "reason": "Cosmos DB's documented default indexing policy. A container created without an explicit indexingPolicy is stamped with includedPaths=[{path:'/*'}] — measured verbatim as the before value in run 33406666389. Because only a Delete is ever suppressible (rule 1), this can only fire when the template declares no indexing policy for that container, in which case live IS the server default by construction."
+      },
+      {
+        "path": "properties.resource.indexingPolicy.excludedPaths",
+        "reason": "The other half of Cosmos DB's default indexing policy: excludedPaths=[{path:'/\"_etag\"/?'}], the system-managed _etag exclusion. Measured verbatim as the before value in run 33406666389."
+      },
+      {
+        "path": "properties.resource.indexingPolicy.excludedPaths.*",
+        "reason": "Same default _etag exclusion, for the containers where what-if reported the array ELEMENT rather than the whole array. Both granularities occur in run 33406666389 and which one ARM emits is not stable."
+      },
+      {
+        "path": "properties.resource.backupPolicy",
+        "reason": "Read-only projection of the ACCOUNT-level backup policy onto the container. backupPolicy is settable on Microsoft.DocumentDB/databaseAccounts, not on a container; the RP echoes the account's policy ({type:1} = Continuous, measured in run 33406666389) into every container's resource body. cosmos.bicep sets it once on the account, which is the correct place."
+      },
+      {
+        "path": "properties.resource.conflictResolutionPolicy.conflictResolutionPath",
+        "reason": "Server-defaulted. Under the default LastWriterWins conflict-resolution mode Cosmos stamps conflictResolutionPath='/_ts' — measured verbatim in run 33406666389. The templates declare no conflict-resolution policy, so the RP default is re-applied on redeploy."
+      }
+    ],
+    "Microsoft.ApiManagement/service": [
+      {
+        "path": "properties.customProperties.Microsoft.WindowsAzure.ApiManagement.Gateway.Security.Protocols.Ssl30",
+        "reason": "Server-defaulted, and defaulted to the SECURE value. APIM stamps the legacy-protocol toggles as 'False' (disabled) when the template does not mention them — measured before='False' in run 33406666389 — so omitting it neither enables SSL 3.0 nor changes anything on redeploy. Suppressing it does NOT drop the APIM service from the verdict: that resource also carries Modify deltas (developerPortalStatus, legacyPortalStatus, natGatewayState) which rule 1 never suppresses."
+      },
+      {
+        "path": "properties.customProperties.Microsoft.WindowsAzure.ApiManagement.Gateway.Security.Backend.Protocols.Ssl30",
+        "reason": "Same legacy-protocol toggle on the backend (gateway-to-backend) side. Measured before='False' — the secure default — in run 33406666389."
+      },
+      {
+        "path": "properties.customProperties.Microsoft.WindowsAzure.ApiManagement.Gateway.Security.Backend.Protocols.Tls10",
+        "reason": "Same legacy-protocol toggle on the backend side. Measured before='False' — the secure default — in run 33406666389."
+      },
+      {
+        "path": "properties.customProperties.Microsoft.WindowsAzure.ApiManagement.Gateway.Security.Backend.Protocols.Tls11",
+        "reason": "Same legacy-protocol toggle on the backend side. Measured before='False' — the secure default — in run 33406666389."
       }
     ]
   }

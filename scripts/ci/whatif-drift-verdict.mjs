@@ -20,6 +20,9 @@
  *          a Create or Modify on a property is a real template-vs-live conflict
  *        - a resource is only dropped from the verdict when EVERY one of its
  *          property deltas is allowlisted
+ *        - a rule path may carry `*` for an ARM array index; `*` matches ONLY
+ *          digits (`.0` or `[0]`), never a property name, so it cannot be used
+ *          to blanket a subtree
  *        - every suppressed delta is still printed, so it is auditable
  *
  *   2. COVERAGE — what-if silently gives up on nested deployments whose
@@ -125,13 +128,40 @@ function flattenDelta(delta, prefix = '') {
   return out;
 }
 
+/**
+ * A rule path may carry `*` in place of an ARM array index, because what-if
+ * emits one delta per element: `properties.logs.0.retentionPolicy.days`,
+ * `properties.logs.1.…`, and so on. Without this a per-element server default
+ * would need one allowlist entry per index, which is unmaintainable and would
+ * silently stop matching the day the estate grows an extra log category.
+ *
+ * The wildcard is deliberately NARROW: `*` matches ONLY a numeric index, in
+ * either shape ARM emits — a dotted segment (`.0`) or a bracket (`[0]`). It
+ * never matches a property NAME, so `properties.*` cannot be used to blanket a
+ * resource type. Everything else in the path is literal. A rule path that
+ * needs a literal `*` is therefore not expressible; none of the ARM property
+ * names in this estate contain one.
+ */
+const wildcardRuleCache = new Map();
+function ruleMatchesPath(rulePath, entryPath) {
+  if (!rulePath.includes('*')) return rulePath === entryPath;
+  let re = wildcardRuleCache.get(rulePath);
+  if (!re) {
+    // Escape every regex metacharacter, then re-open the escaped `*` as \d+.
+    const escaped = rulePath.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    re = new RegExp(`^${escaped.split('\\*').join('\\d+')}$`);
+    wildcardRuleCache.set(rulePath, re);
+  }
+  return re.test(entryPath);
+}
+
 /** @returns {{suppressed: boolean, reason?: string}} */
 function classifyDelta(resourceType, entry) {
   if (!SUPPRESSIBLE_PROPERTY_CHANGE_TYPES.has(entry.propertyChangeType)) return { suppressed: false };
   const rules = allowlistByType.get(resourceType.toLowerCase());
   if (!rules) return { suppressed: false };
   for (const rule of rules) {
-    if (rule.path !== entry.path) continue;
+    if (!ruleMatchesPath(rule.path, entry.path)) continue;
     if (Array.isArray(rule.whenBeforeKeysSubsetOf)) {
       const before = entry.before;
       if (!before || typeof before !== 'object' || Array.isArray(before)) continue;

@@ -17,7 +17,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -294,3 +294,151 @@ test('the embedded controls cover the review cases, and still all pass', () => {
   assert.deepEqual(failures, [], failures.join('\n'));
   assert.ok(total >= 10, `expected the fixture set to have grown past 8, got ${total}`);
 });
+
+// ── #3317: the SAME adopt-plan binding shape, for Service Bus and Batch ──────
+//
+// The lake defect above (#3701/#3327) was one instance of a class: a console
+// coordinate derived from the single-sub NAMING CONVENTION alone, on an estate
+// where `useSingleDlz` is false. Service Bus and Azure Batch were two more.
+// These cases model main.bicep's composition for both and tie the model to the
+// template, so the mirror cannot drift away from what actually deploys.
+
+const MAIN_BICEP = readFileSync(path.join(REPO_ROOT, 'platform', 'fiab', 'bicep', 'main.bicep'), 'utf8');
+const ADMIN_PLANE_BICEP = readFileSync(
+  path.join(REPO_ROOT, 'platform', 'fiab', 'bicep', 'modules', 'admin-plane', 'main.bicep'),
+  'utf8',
+);
+const DISCOVER_SH = readFileSync(
+  path.join(REPO_ROOT, 'scripts', 'csa-loom', 'discover-dlz-adopt-plan.sh'),
+  'utf8',
+);
+
+/** Every params file Loom actually ships, with the topology it pins. */
+function shippedTopologies() {
+  const dir = path.join(REPO_ROOT, 'platform', 'fiab', 'bicep', 'params');
+  return readdirSync(dir)
+    .filter((f) => f.endsWith('.bicepparam'))
+    .map((f) => {
+      const text = readFileSync(path.join(dir, f), 'utf8');
+      return {
+        file: f,
+        topology: effectiveTopology({
+          topology: '',
+          paramTopology: paramValue(text, 'topology'),
+          deploymentMode: '',
+          paramDeploymentMode: paramValue(text, 'deploymentMode'),
+        }),
+      };
+    });
+}
+
+/**
+ * What `byoExisting.serviceBusNamespace` composes to (main.bicep).
+ *
+ * Adopt-first, convention as fallback. The convention branch produces a literal
+ * this side CAN compute (`sbns-loom-default-<region>`), unlike the lake's
+ * uniqueString, so it is returned rather than reported as unknown.
+ */
+function composeServiceBusBinding({ adoptPlan, topology, deployServiceBus = true, location = 'centralus' }) {
+  const adopted = adoptName(adoptPlan, 'servicebus');
+  if (adopted) return { bound: true, name: adopted, source: 'adopt-plan' };
+  if (useSingleDlz(topology) && deployServiceBus) {
+    return { bound: true, name: `sbns-loom-default-${location}`, source: 'single-dlz-convention' };
+  }
+  return { bound: false, name: '', source: 'none' };
+}
+
+/** What `byoExisting.batchAccount` composes to (main.bicep). */
+function composeBatchBinding({ adoptPlan, topology, batchEnabled = true }) {
+  const adopted = adoptName(adoptPlan, 'batch');
+  if (adopted) return { bound: true, name: adopted, source: 'adopt-plan' };
+  if (useSingleDlz(topology) && batchEnabled) {
+    return { bound: true, name: null, source: 'single-dlz-convention' };
+  }
+  return { bound: false, name: '', source: 'none' };
+}
+
+/** A DLZ the discovery script would emit — same rg/sub for every key, as it does. */
+const SVC_PLAN = {
+  servicebus: { mode: 'adopt', target: { name: 'sb-loom-tr4nm4dcgsq', rg: 'rg-csa-loom-dlz-default-centralus', sub: 'SUB-DLZ' } },
+  batch: { mode: 'adopt', target: { name: 'batchloomtr4nm4dcgsq', rg: 'rg-csa-loom-dlz-default-centralus', sub: 'SUB-DLZ' } },
+};
+
+test('#3317 THE DEFECT: with no adopt plan, BOTH bind empty on every shipped params file', () => {
+  const shipped = shippedTopologies();
+  assert.ok(shipped.length >= 5, `expected the shipped params set, found ${shipped.length}`);
+  const bindable = shipped.filter((s) => useSingleDlz(s.topology));
+  assert.deepEqual(
+    bindable.map((s) => s.file),
+    [],
+    'precondition: NO shipped params file is single-sub, so the convention branch never fires',
+  );
+  for (const { file, topology } of shipped) {
+    assert.equal(composeServiceBusBinding({ adoptPlan: {}, topology }).name, '', `${file}: LOOM_SERVICEBUS_NAMESPACE`);
+    assert.equal(composeBatchBinding({ adoptPlan: {}, topology }).name, '', `${file}: LOOM_BATCH_ACCOUNT`);
+  }
+});
+
+test('#3317 THE FIX: an adopt plan binds both on every shipped params file', () => {
+  for (const { file, topology } of shippedTopologies()) {
+    const sb = composeServiceBusBinding({ adoptPlan: SVC_PLAN, topology });
+    const batch = composeBatchBinding({ adoptPlan: SVC_PLAN, topology });
+    assert.equal(sb.name, 'sb-loom-tr4nm4dcgsq', `${file}: Service Bus`);
+    assert.equal(sb.source, 'adopt-plan', `${file}: must come from the plan, not a convention`);
+    assert.equal(batch.name, 'batchloomtr4nm4dcgsq', `${file}: Batch`);
+    assert.equal(batch.source, 'adopt-plan', `${file}: must come from the plan, not a convention`);
+  }
+});
+
+test('#3317 mode=create is still create — an adopt plan cannot be faked by a legacy target', () => {
+  const created = { servicebus: { mode: 'create', target: { name: 'sb-x' } }, batch: { target: { name: 'b-x' } } };
+  assert.equal(composeServiceBusBinding({ adoptPlan: created, topology: 'tenant' }).name, '');
+  assert.equal(composeBatchBinding({ adoptPlan: created, topology: 'tenant' }).name, '');
+});
+
+test('#3317 single-sub keeps its convention fallback — the fix is additive, not a replacement', () => {
+  assert.equal(
+    composeServiceBusBinding({ adoptPlan: {}, topology: 'single-sub' }).source,
+    'single-dlz-convention',
+  );
+  assert.equal(composeBatchBinding({ adoptPlan: {}, topology: 'single-sub' }).source, 'single-dlz-convention');
+});
+
+// ── ties: the model above must describe the template that actually deploys ───
+
+test('#3317 TIE: main.bicep composes both coordinates adopt-first', () => {
+  for (const key of ['servicebus', 'batch']) {
+    assert.match(
+      MAIN_BICEP,
+      new RegExp(`adoptName\\(adopt, '${key}'\\)`),
+      `main.bicep must read the adopt plan for '${key}' — without it the binding is convention-only and renders '' on every shipped boundary`,
+    );
+  }
+  // The RG must travel with the name, or the console names a real resource in
+  // the wrong resource group.
+  assert.match(MAIN_BICEP, /adoptRg\(adopt, 'servicebus'\)/);
+  assert.match(MAIN_BICEP, /adoptSub\(adopt, 'servicebus'\)/);
+  assert.match(MAIN_BICEP, /adoptRg\(adopt, 'batch'\)/);
+});
+
+test('#3317 TIE: admin-plane honours the adopted Service Bus RG/sub instead of assuming the DLZ', () => {
+  assert.doesNotMatch(
+    ADMIN_PLANE_BICEP,
+    /^var effServiceBusRg\s+= loomDlzRg$/m,
+    'effServiceBusRg must not be an unconditional loomDlzRg — an adopted namespace lives where the plan says',
+  );
+  assert.match(ADMIN_PLANE_BICEP, /var effServiceBusRg\s+= !empty\(loomServiceBusRgIn\)/);
+  assert.match(ADMIN_PLANE_BICEP, /var effServiceBusSub\s+= !empty\(loomServiceBusSubIn\)/);
+  // Batch already honoured byoExisting.batchRg; pin that it still does.
+  assert.match(ADMIN_PLANE_BICEP, /var loomBatchRg\s+= !empty\(byoExisting\.\?batchRg \?\? ''\)/);
+});
+
+test('#3317 TIE: the discovery script emits both keys, read BY RESOURCE TYPE', () => {
+  assert.match(DISCOVER_SH, /add "servicebus"/, 'the plan must carry a servicebus key');
+  assert.match(DISCOVER_SH, /add "batch"/, 'the plan must carry a batch key');
+  // By type, never by a derived name: the live namespace is sb-loom-<hash>,
+  // which the sbns-loom-default-<region> convention would never have matched.
+  assert.match(DISCOVER_SH, /--resource-type Microsoft\.ServiceBus\/namespaces/);
+  assert.match(DISCOVER_SH, /--resource-type Microsoft\.Batch\/batchAccounts/);
+});
+
