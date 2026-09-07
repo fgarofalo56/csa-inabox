@@ -44,6 +44,18 @@ APP_ID="<LOOM_MSAL_CLIENT_ID>"                  # /admin/env-config or az contai
 KV="<hub-key-vault-name>"                        # kv-loom-*
 RG="<admin-resource-group>"                      # rg-csa-loom-admin*
 
+# The ARM host and the vault's ARM id, DERIVED — not typed, and not hardcoded.
+# `az ad` and `az containerapp` resolve their host from the active cloud, so
+# `az cloud set` is enough for them. `az rest` given an ABSOLUTE url does NOT:
+# the host in the url is the host it calls. Measured 2026-09-07,
+# `az cloud list --query "[].{n:name,rm:endpoints.resourceManager}" -o tsv`:
+#   AzureCloud        https://management.azure.com/
+#   AzureUSGovernment https://management.usgovcloudapi.net/
+# So run these two lines AFTER `az cloud set` and every `az rest` below is
+# correct in whichever boundary you are in.
+ARM="$(az cloud show --query endpoints.resourceManager -o tsv)"; ARM="${ARM%/}"
+KV_ID="$(az keyvault show --name "$KV" --query id -o tsv)"
+
 # 1. Mint a NEW secret WITHOUT dropping the old one (zero-downtime overlap).
 NEW_SECRET=$(az ad app credential reset --id "$APP_ID" --append --years 2 \
   --display-name "rotation-$(date +%Y%m%d)" --query password -o tsv)
@@ -144,13 +156,43 @@ Read them together: newest Entra credential ↔ newest Key Vault version ↔ a
 revision created after both. Any gap in that chain is the rotation that did not
 finish, and the fix is to re-run step 3 (secret set + roll), not to re-mint.
 
-**Every boundary, same procedure.** These commands are identical in Commercial,
-GCC, GCC-High, IL5 and DoD — only the cloud endpoint differs (`az cloud set
---name AzureUSGovernment` per the §2 prereq; Graph is `graph.microsoft.us` /
-`dod-graph.microsoft.us`). The post-deploy bootstrap that performs the same
-wiring, `.github/workflows/csa-loom-post-deploy-bootstrap.yml`, is one
-cloud-agnostic workflow selected by its `boundary` input, so there is no
-per-cloud variant of this runbook to keep in sync.
+**Every boundary, same procedure — with ONE thing you must actually do.** These
+commands are identical in Commercial, GCC, GCC-High, IL5 and DoD, and
+`az cloud set --name AzureUSGovernment` (per the §2 prereq; Graph is
+`graph.microsoft.us` / `dod-graph.microsoft.us`) is enough for **`az ad`,
+`az keyvault` and `az containerapp`** — they resolve their host from the active
+cloud.
+
+It is **not** enough for `az rest` given an **absolute** url: the host written
+in the url is the host it calls, regardless of `az cloud set`. Measured
+2026-09-07, `az cloud list --query "[].{n:name,rm:endpoints.resourceManager}" -o tsv`:
+
+| Cloud | `endpoints.resourceManager` |
+|---|---|
+| `AzureCloud` | `https://management.azure.com/` |
+| `AzureUSGovernment` | `https://management.usgovcloudapi.net/` |
+
+Different hosts, so a hardcoded `management.azure.com` cannot reach a Gov vault
+at all. That is why §2 derives `ARM` from `az cloud show` and every `az rest`
+below uses `"${ARM}${KV_ID}/..."`. Run the §2 prereq block after `az cloud set`
+and this runbook is correct in every boundary as written.
+
+`scripts/csa-loom/bootstrap-msal-app-reg.sh` does the same derivation
+internally (`kv_arm_host`), and **refuses rather than falling back** to a
+hardcoded host if the active cloud's ARM endpoint cannot be resolved — a write
+that "succeeded" against Commercial ARM while your Gov vault is untouched is
+worse than a refusal. Pinned by `PARITY-1/2/3` in
+`scripts/ci/__tests__/msal-credential-lifecycle.test.mjs`.
+
+The post-deploy bootstrap that performs the same wiring,
+`.github/workflows/csa-loom-post-deploy-bootstrap.yml`, is one cloud-agnostic
+workflow selected by its `boundary` input, so there is no per-cloud variant of
+this runbook to keep in sync.
+
+**What is NOT verified per boundary.** `--rotate` and `--revoke` have been
+exercised only against a stub `az` (the harness above), never against a live
+Entra app registration in any cloud. Commercial, GCC, GCC-High, IL5 and DoD are
+all **untested live** for these two flags.
 
 ### 2.2 Credential sprawl — reuse, prune, and the ceiling (#3335)
 
@@ -324,7 +366,7 @@ those words:
 #  * every active revision post-dates the Key Vault write:
 az containerapp revision list -n loom-console -g "$RG" \
   --query "[?properties.active].{rev:name,created:properties.createdTime}" -o table
-az rest --method GET --url "https://management.azure.com${KV_ID}/secrets/loom-msal-client-secret?api-version=2023-07-01" \
+az rest --method GET --url "${ARM}${KV_ID}/secrets/loom-msal-client-secret?api-version=2023-07-01" \
   --query "properties.attributes.updated" -o tsv
 ```
 
@@ -377,9 +419,30 @@ by the next `az deployment sub create`, and a rotation marker that vanishes
 reads during triage as "never rotated". Read them back with:
 
 ```bash
-az rest --method GET --url "https://management.azure.com${KV_ID}/secrets/loom-msal-client-secret?api-version=2023-07-01" \
+az rest --method GET --url "${ARM}${KV_ID}/secrets/loom-msal-client-secret?api-version=2023-07-01" \
   --query "tags" -o json     # metadata only — ARM never returns the value
 ```
+
+**…except on one branch, and the receipt now says so.** The tag block is gated
+on the run resolving the new credential's key id by its unique label. When that
+lookup returns nothing the secret's **value** is still written (a working secret
+with no provenance beats neither), but **no tags are written at all** — the ARM
+body carries `properties.value` and no `tags` key. The `ROTATE COMPLETE` summary
+used to print `(msalRotateReason=…)` unconditionally on that branch, three lines
+after the same run had said "provenance is not recorded": a receipt claiming a
+marker that does not exist, which is the inverse of the failure mode the Key
+Vault tag was chosen to avoid. It now branches, and on that path reads:
+
+```
+    new credential <key id unresolved>: its VALUE is in loom-msal-client-secret and sign-in is correct, but
+    NO provenance tag was written. …
+    The reason you gave this run — '<reason>' — exists in THIS TRANSCRIPT ONLY, not in the vault …
+```
+
+If you see that, **record the reason out of band** — the incident has no audit
+trail in the vault — and expect a later `--revoke` to refuse at R2, because with
+no `msalKeyId` tag it cannot prove which credential is live. Pinned by
+`ROTATE-4b`.
 
 **Flags and environment equivalents** (both work; the env forms exist for
 workflow callers that cannot pass arguments):

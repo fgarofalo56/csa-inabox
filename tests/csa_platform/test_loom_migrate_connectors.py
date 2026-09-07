@@ -32,6 +32,7 @@ import importlib.util
 import io
 import subprocess
 import sys
+import textwrap
 import threading
 import urllib.error
 import urllib.request
@@ -308,14 +309,23 @@ _HTTPMESSAGE_HANDLER_BASE = "HTTPRedirectHandler"
 #: typeshed's signature for `HTTPRedirectHandler.redirect_request`, which is
 #: what every override must repeat. Checked by NAME so this stays readable when
 #: a site spells it `urllib.request.Request` vs a bare `Request`.
-_EXPECTED_ARG_TYPES = {
-    "req": "urllib.request.Request",
-    "fp": "IO[bytes]",
-    "code": "int",
-    "msg": "str",
-    "headers": "HTTPMessage",
-    "newurl": "str",
-}
+#:
+#: An ORDERED list of (name, type) pairs, not a dict, and the order is
+#: load-bearing. The first cut compared a dict, and dict equality is
+#: order-insensitive: swapping the `code: int` and `msg: str` lines — each
+#: still annotated correctly, just in the wrong positions — left this guard
+#: green. `urllib.request.HTTPRedirectHandler.http_error_302` calls
+#: `redirect_request` POSITIONALLY, so that swap is a real `TypeError` on the
+#: exact 3xx path this guard exists to cover, and the one drift shape #4184
+#: names by name was the shape it could not see.
+_EXPECTED_ARG_ORDER = [
+    ("req", "urllib.request.Request"),
+    ("fp", "IO[bytes]"),
+    ("code", "int"),
+    ("msg", "str"),
+    ("headers", "HTTPMessage"),
+    ("newurl", "str"),
+]
 _EXPECTED_RETURN = "urllib.request.Request | None"
 
 #: Sites known at the time #4184 was fixed. Asserted as a FLOOR, not an exact
@@ -325,14 +335,28 @@ _KNOWN_REDIRECT_HANDLER_SITES = 7
 
 
 def _repo_root() -> Path:
-    return Path(
-        subprocess.run(
-            ["git", "rev-parse", "--show-toplevel"],
-            capture_output=True,
-            text=True,
-            check=True,
-        ).stdout.strip()
+    """The tree CONTAINING THIS FILE — not whatever tree pytest was launched in.
+
+    This was `git rev-parse --show-toplevel` with no `cwd=`, so the population
+    came from the process's working directory. MEASURED 2026-09-07: running
+    this exact file with a different checkout as cwd reported six offenders
+    that do not exist in the tree containing it (untyped overrides + three
+    type-ignores, all from the OTHER checkout). CI happens to run from the repo
+    root so it was green there, but the failure mode is symmetric and the other
+    direction is a FALSE GREEN — a worktree whose overrides had regressed would
+    be measured against a clean sibling checkout and pass.
+
+    `parents[2]` because this file is `<root>/tests/csa_platform/<this>.py`.
+    Derived from `__file__` rather than a subprocess so it cannot depend on the
+    ambient cwd at all.
+    """
+    root = Path(__file__).resolve().parents[2]
+    assert (root / "tests" / "csa_platform").is_dir(), (
+        f"the derived repo root {root} does not contain tests/csa_platform, so "
+        "this file moved and the parents[2] hop is wrong — fail rather than "
+        "scan the wrong tree"
     )
+    return root
 
 
 def _tracked_python_files(root: Path) -> list[str]:
@@ -392,6 +416,17 @@ def _arg_type(arg: ast.arg) -> str | None:
     return arg.type_comment
 
 
+def _arg_signature(fn: ast.FunctionDef) -> list[tuple[str, str | None]]:
+    """The override's ordered (name, type) pairs, `self` dropped.
+
+    Ordered, because `HTTPRedirectHandler.http_error_302` calls
+    `redirect_request` POSITIONALLY — so two correctly-annotated parameters in
+    the wrong positions is a runtime `TypeError` on the 3xx path, not a
+    cosmetic difference.
+    """
+    return [(a.arg, _arg_type(a)) for a in fn.args.args if a.arg != "self"]
+
+
 def _return_type(fn: ast.FunctionDef) -> str | None:
     if fn.returns is not None:
         rendered = ast.unparse(fn.returns)
@@ -417,15 +452,78 @@ class TestEveryRedirectHandlerOverrideIsTyped:
         )
 
     def test_every_override_repeats_typeshed_argument_types(self) -> None:
+        # ORDER-SENSITIVE, deliberately: see _EXPECTED_ARG_ORDER. Comparing an
+        # ordered list of (name, type) pairs is what makes a positional swap
+        # visible; a dict comparison here was green on it. The case below is
+        # this assertion's positive control.
         offenders = []
         for rel, fn in _redirect_request_overrides(_repo_root()):
-            args = [a for a in fn.args.args if a.arg != "self"]
-            actual = {a.arg: _arg_type(a) for a in args}
-            if actual != _EXPECTED_ARG_TYPES:
+            actual = _arg_signature(fn)
+            if actual != _EXPECTED_ARG_ORDER:
                 offenders.append((rel, actual))
         assert not offenders, (
-            "redirect_request overrides that do not carry typeshed's argument "
-            f"types {_EXPECTED_ARG_TYPES}: {offenders}"
+            "redirect_request overrides that do not repeat typeshed's argument "
+            f"names and types IN ORDER {_EXPECTED_ARG_ORDER}: {offenders}"
+        )
+
+    def test_the_argument_check_is_red_on_a_positional_swap(self) -> None:
+        # POSITIVE CONTROL for the assertion above, on the ONE drift shape #4184
+        # names by name: "a swapped `code`/`msg`".
+        #
+        # MEASURED, 2026-09-07, on the real tree: swapping the `code: int` and
+        # `msg: str` LINES in `apps/loom-migrate/app/connectors.py` — both
+        # annotations untouched, only their order — left the dict comparison
+        # this replaced at `pytest -k Typed` RC=0 while
+        # `mypy apps/loom-migrate/app/connectors.py` was RC=1 with two
+        # `[override]` errors. mypy over these seven copies is invoked by
+        # nothing in CI (`pyproject.toml`'s `[tool.mypy] files` is
+        # `csa_platform/governance` + `tests`; `copilot-evals.yml` scopes to
+        # `apps/copilot/**` and is `continue-on-error`), so that swap would have
+        # merged green everywhere. This case pins the guard itself rather than
+        # its subject, so a future simplification back to an order-insensitive
+        # comparison goes red HERE instead of silently re-opening the hole.
+        good = textwrap.dedent(
+            """
+            class H(urllib.request.HTTPRedirectHandler):
+                def redirect_request(
+                    self,
+                    req: urllib.request.Request,
+                    fp: IO[bytes],
+                    code: int,
+                    msg: str,
+                    headers: HTTPMessage,
+                    newurl: str,
+                ) -> urllib.request.Request | None: ...
+            """
+        )
+        swapped = good.replace(
+            "        code: int,\n        msg: str,\n",
+            "        msg: str,\n        code: int,\n",
+        )
+        assert swapped != good, "the mutation must actually change the source"
+
+        def signature_of(src: str) -> list[tuple[str, str | None]]:
+            fn = next(
+                n
+                for n in ast.walk(ast.parse(src))
+                if isinstance(n, ast.FunctionDef) and n.name == "redirect_request"
+            )
+            return _arg_signature(fn)
+
+        assert signature_of(good) == _EXPECTED_ARG_ORDER, (
+            "precondition: the unmutated signature must be accepted, or this "
+            "control proves nothing"
+        )
+        assert signature_of(swapped) != _EXPECTED_ARG_ORDER, (
+            "a positional code/msg swap must be REJECTED — http_error_302 calls "
+            "redirect_request positionally, so it is a 302-time TypeError"
+        )
+        # And name the failure mode precisely: the swap is invisible to a
+        # name-keyed dict, which is exactly why the comparison is a list.
+        assert dict(signature_of(swapped)) == dict(signature_of(good)), (
+            "the swap is by construction invisible to an order-insensitive "
+            "comparison; if this ever fails the mutation stopped being the one "
+            "the guard was hardened against"
         )
 
     def test_every_override_declares_its_return_type(self) -> None:

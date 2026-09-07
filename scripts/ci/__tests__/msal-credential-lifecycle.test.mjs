@@ -70,6 +70,8 @@ const cred = (keyId, startDays, endDays, label = '-') =>
  * @param {boolean} [o.labelLookupFails] make the post-mint key-id lookup return nothing
  * @param {boolean} [o.deleteIsNoop] make `credential delete` exit 0 without removing anything
  * @param {boolean} [o.consoleUpdateFails] make `containerapp update` exit non-zero (the roll the CLI refused)
+ * @param {string}  [o.armEndpoint] what `az cloud show --query endpoints.resourceManager` answers
+ * @param {string}  [o.adEndpoint]  what `az cloud show --query endpoints.activeDirectory` answers
  * @param {string[]} [o.args]       CLI arguments passed to the script itself
  * @param {object}  [o.env]         extra environment for the run
  */
@@ -83,6 +85,11 @@ function run({
   labelLookupFails = false,
   deleteIsNoop = false,
   consoleUpdateFails = false,
+  // Commercial by default. MEASURED 2026-09-07 from `az cloud list`: these are
+  // the literal endpoint values the CLI reports, and the Gov ones a parity
+  // case overrides them with are different HOSTS, not a different path.
+  armEndpoint = 'https://management.azure.com/',
+  adEndpoint = 'https://login.microsoftonline.com/',
   args = [],
   env = {},
 }) {
@@ -109,7 +116,16 @@ echo "$*" >> ${q(calls)}
 CREDS=${q(credFile)}; TAG=${q(tagFile)}; UPD=${q(updFile)}; REV=${q(revFile)}; TAGBODY=${q(tagBodyFile)}
 case "$*" in
   "account show"*)  echo "11111111-2222-3333-4444-555555555555"; exit 0 ;;
-  "cloud show"*)    echo "https://login.microsoftonline.com/"; exit 0 ;;
+  "cloud show"*)
+    # Answered PER QUERY, because the script asks this two different things:
+    # endpoints.activeDirectory (the token host) and endpoints.resourceManager
+    # (the ARM host every Key Vault call is built on). One canned answer for
+    # both would be a fixture that models the code rather than az.
+    case "$*" in
+      *resourceManager*) echo ${q(armEndpoint)} ;;
+      *)                 echo ${q(adEndpoint)} ;;
+    esac
+    exit 0 ;;
   "keyvault show"*) echo "/subscriptions/sub/resourceGroups/rg/providers/Microsoft.KeyVault/vaults/kv-loom-test"; exit 0 ;;
 esac
 case "$*" in
@@ -577,6 +593,43 @@ test('ROTATE-4: the reason is recorded as a Key Vault TAG (an env var would be r
   assert.match(r.out, /msalRotateReason=disclosed-in-ci-log/);
 });
 
+test('ROTATE-4b: with NO provenance tag written, the receipt must not claim one', () => {
+  // R7, and the inverse of ROTATE-4 — which pins only the happy path.
+  //
+  // The whole tag block is gated on the post-mint label lookup resolving
+  // NEW_KEY_ID. When it does not, the else branch calls the TWO-argument
+  // `kv_secret_put "$MSAL_SECRET_NAME" "$SECRET"`, and per kv_secret_put an
+  // empty third argument means the ARM body carries `properties.value` and no
+  // `tags` key AT ALL — so msalProvenance/msalRotateReason/msalRotatedAt/
+  // msalRotatedFrom are never written. The ROTATE COMPLETE line printed
+  // "(msalRotateReason=…)" unconditionally, so three lines after the run said
+  // out loud "provenance is not recorded", the summary an operator reads
+  // mid-incident asserted the tag exists. That defeats the stated rationale for
+  // choosing a Key Vault tag ("a marker that vanishes reads during triage as
+  // never rotated") by producing the inverse: no marker, and a receipt saying
+  // there is one.
+  //
+  // The assertion is the IMPLICATION, not a string: an empty kvTagBody must
+  // imply the receipt does not name a tag.
+  const r = run({
+    creds: HEALTHY,
+    kvTag: 'leaked-key',
+    labelLookupFails: true,
+    args: ['--rotate', '--rotate-reason', 'disclosed-in-ci-log'],
+  });
+  assert.equal(r.rc, 0, 'this path still succeeds — a working secret with no provenance beats neither');
+  assert.equal(r.kvTagBody, '', 'precondition: this path writes NO tag body at all');
+  assert.match(r.out, /ROTATE COMPLETE/, 'precondition: the receipt under test was printed');
+  assert.doesNotMatch(
+    r.out,
+    /msalRotateReason=/,
+    'the receipt must not name a provenance tag this run did not write (R7)',
+  );
+  // ...and must say so plainly, rather than merely omitting it.
+  assert.match(r.out, /NO provenance tag/i);
+  assert.match(r.out, /disclosed-in-ci-log/, 'the reason is still reported — as this run\'s input, not as a stored tag');
+});
+
 test('ROTATE-5: the receipt names what the run could NOT establish, and the next step', () => {
   // R7. This process cannot see whether the rolled revision reached Healthy or
   // whether interactive sign-in works, so it must not imply either.
@@ -874,4 +927,78 @@ test('DEFAULT-1: with no new flag the behaviour is byte-for-byte the old behavio
   const dry = run({ creds: SPRAWL, kvTag: 'in-use', args: ['--dry-run-prune'] });
   assert.equal(deleteCalls(dry.calls).length, 0);
   assert.match(dry.out, /DRY RUN — \d+ credential\(s\) above are marked PRUNE/);
+});
+
+// ── 5. CLOUD PARITY — the ARM host is the ACTIVE cloud's, never a literal ────
+
+const armCallsIn = (calls) => calls.split('\n').filter((l) => l.startsWith('rest --method'));
+
+test('PARITY-1: in a sovereign boundary every Key Vault ARM call uses THAT cloud host', () => {
+  // cloud-parity.md. `az rest` given an ABSOLUTE url does NOT resolve its host
+  // from `az cloud set` — unlike `az ad` and `az containerapp`, which do. So the
+  // `https://management.azure.com` literal kv_arm_base used to carry made every
+  // Key Vault call in this script (the secret write, the msalKeyId read the
+  // reuse gate turns on, and the whole provenance record --rotate/--revoke
+  // depend on) a Commercial-only code path inside a script Gov, GCC-High, IL5
+  // and DoD all run through csa-loom-post-deploy-bootstrap.
+  //
+  // MEASURED 2026-09-07, `az cloud list --query "[].{n:name,rm:endpoints.resourceManager}" -o tsv`:
+  //   AzureCloud        https://management.azure.com/
+  //   AzureUSGovernment https://management.usgovcloudapi.net/
+  // Different HOSTS, so the literal cannot reach a sovereign vault at all.
+  const r = run({
+    creds: HEALTHY,
+    kvTag: 'leaked-key',
+    args: ['--rotate', '--rotate-reason', 'gov-parity-check'],
+    armEndpoint: 'https://management.usgovcloudapi.net/',
+    adEndpoint: 'https://login.microsoftonline.us/',
+  });
+  assert.equal(r.rc, 0, r.out);
+  const armCalls = armCallsIn(r.calls);
+  assert.ok(armCalls.length > 0, 'precondition: the run must have made ARM calls to judge');
+  assert.ok(
+    armCalls.every((l) => l.includes('https://management.usgovcloudapi.net/subscriptions/')),
+    `every ARM call must address the Gov host: ${armCalls.join(' | ')}`,
+  );
+  assert.ok(
+    !armCalls.some((l) => l.includes('management.azure.com')),
+    `no ARM call may address Commercial ARM in a Gov boundary: ${armCalls.join(' | ')}`,
+  );
+  // The trailing slash az reports must not survive into the url.
+  assert.ok(!armCalls.some((l) => l.includes('net//')), 'the endpoint trailing slash must be trimmed');
+});
+
+test('PARITY-2: an unresolvable ARM endpoint REFUSES rather than defaulting to Commercial', () => {
+  // Fail closed. Silently falling back to a hardcoded host would address the
+  // WRONG CLOUD, which is the defect PARITY-1 exists to end — a write that
+  // "succeeded" against Commercial ARM while the operator's Gov vault is
+  // untouched is worse than a refusal (R7: never report an unverified outcome).
+  // `az cloud show` reads local CLI config and makes no network call, so it
+  // failing means the CLI is broken, not that the cloud is unreachable.
+  const r = run({
+    creds: HEALTHY,
+    kvTag: 'leaked-key',
+    args: ['--rotate'],
+    armEndpoint: '',
+  });
+  assert.notEqual(r.rc, 0, `an unknown ARM endpoint must not be a successful run: ${r.out}`);
+  assert.match(r.out, /could not resolve the ARM endpoint of the active cloud/);
+  assert.match(r.out, /REFUSING to fall back to a hardcoded host/);
+  assert.ok(
+    !armCallsIn(r.calls).some((l) => l.includes('management.azure.com')),
+    'it must not have addressed Commercial ARM on the way to refusing',
+  );
+});
+
+test('PARITY-3: the Commercial default is unchanged — the counterfactual for PARITY-1', () => {
+  // Without this, PARITY-1 could pass on a script that simply broke the
+  // Commercial path. Same run, default endpoints.
+  const r = run({ creds: HEALTHY, kvTag: 'leaked-key', args: ['--rotate'] });
+  assert.equal(r.rc, 0, r.out);
+  const armCalls = armCallsIn(r.calls);
+  assert.ok(armCalls.length > 0);
+  assert.ok(
+    armCalls.every((l) => l.includes('https://management.azure.com/subscriptions/')),
+    `Commercial must still address Commercial ARM: ${armCalls.join(' | ')}`,
+  );
 });

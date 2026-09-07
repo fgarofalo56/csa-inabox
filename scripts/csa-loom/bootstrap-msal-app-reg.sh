@@ -449,7 +449,41 @@ kv_arm_base() {
       return 1
     fi
   fi
-  echo "https://management.azure.com${KV_ARM_ID}/secrets"
+  local _host
+  _host="$(kv_arm_host)" || return 1
+  echo "${_host}${KV_ARM_ID}/secrets"
+}
+
+# kv_arm_host — the ARM endpoint of the ACTIVE CLOUD, never a literal.
+#
+# CLOUD PARITY. `az rest` given an ABSOLUTE url does NOT resolve its host from
+# `az cloud set`, unlike `az ad` and `az containerapp` which do. So the
+# `https://management.azure.com` literal this used to carry made every Key
+# Vault call in this script — the secret write, the tag read-back, the whole
+# provenance record `--rotate` and `--revoke` depend on — a Commercial-only
+# code path inside a script Gov, GCC-High, IL5 and DoD all run.
+#
+# MEASURED 2026-09-07, `az cloud list --query "[].{n:name,rm:endpoints.resourceManager}" -o tsv`:
+#   AzureCloud        https://management.azure.com/
+#   AzureUSGovernment https://management.usgovcloudapi.net/
+#   AzureChinaCloud   https://management.chinacloudapi.cn
+# — different hosts, so the literal cannot reach a sovereign vault at all.
+#
+# It FAILS CLOSED rather than defaulting to Commercial. `az cloud show` reads
+# local CLI config and makes no network call, so it failing means the CLI is
+# broken; falling back to a hardcoded host from there would silently address
+# the WRONG CLOUD, which is the failure this function exists to end.
+kv_arm_host() {
+  if [ -z "${KV_ARM_HOST:-}" ]; then
+    KV_ARM_HOST="$(az cloud show --query endpoints.resourceManager -o tsv 2>&1)" || KV_ARM_HOST=''
+    case "${KV_ARM_HOST}" in
+      https://*) KV_ARM_HOST="${KV_ARM_HOST%/}" ;;
+      *) echo "    ERROR: could not resolve the ARM endpoint of the active cloud from 'az cloud show --query endpoints.resourceManager' (got: '${KV_ARM_HOST}'). REFUSING to fall back to a hardcoded host — in a sovereign boundary that would address Commercial ARM instead of yours. Run 'az cloud set --name <AzureCloud|AzureUSGovernment>' and retry." >&2
+         KV_ARM_HOST=''
+         return 1 ;;
+    esac
+  fi
+  printf '%s' "${KV_ARM_HOST}"
 }
 
 # kv_secret_put <name> <value> [tagsJson] — write via ARM. Fails loudly; never prints the value.
@@ -548,6 +582,22 @@ cred_line() {
 kv_secret_exists() {
   az rest --method GET --url "$(kv_arm_base)/$1?api-version=2023-07-01" -o none >/dev/null 2>&1
 }
+
+# Resolve the ARM host ONCE, UP FRONT, and fail the run here if it cannot be.
+#
+# Doing it lazily inside kv_arm_base is not enough on its own: every call site
+# interpolates `$(kv_arm_base)` as a command-substitution ARGUMENT, and a
+# non-zero exit status there is DISCARDED by the shell — `set -e` does not fire
+# for a substitution in argument position, so the refusal is present but
+# UNREACHABLE.
+#
+# MEASURED 2026-09-07 against the harness (scripts/ci/__tests__/msal-credential-lifecycle.test.mjs,
+# PARITY-2) with the endpoint unresolvable: the run printed
+# "wrote loom-msal-client-secret (validated: … provenance tag msalKeyId=…)",
+# then a full "==> ROTATE COMPLETE", and exited 0 — having addressed a URL with
+# no host at all. A success receipt over writes that did not happen is exactly
+# deploy-integrity R7. This line is what makes the refusal reachable.
+kv_arm_host >/dev/null || exit 1
 
 echo "==> Reconciling the client secret (reuse -> mint -> Key Vault ${KEYVAULT_NAME})"
 NOW_EPOCH="$(date -u +%s)"
@@ -914,7 +964,30 @@ if [ "${ROTATE}" -eq 1 ]; then
     echo "    ERROR: --rotate was given but this run REUSED the existing credential and minted nothing. That is the #3637 defect, not a rotation. Refusing to report success." >&2
     exit 1
   fi
-  echo "    new credential ${IN_USE_KEY_ID:-<key id unresolved>} is recorded in ${MSAL_SECRET_NAME} (msalRotateReason=${ROTATE_REASON})."
+  # And it branches on whether a PROVENANCE TAG was actually written, for the
+  # same R7 reason as the roll below. The whole tag block above is gated on the
+  # post-mint label lookup resolving NEW_KEY_ID; when it does not, the else
+  # branch calls the TWO-argument kv_secret_put, whose empty third argument
+  # means the ARM body carries properties.value and NO `tags` key at all. So
+  # msalRotateReason is not written on that path — and this line used to print
+  # "(msalRotateReason=…)" unconditionally, three lines after the run had said
+  # out loud that provenance is not recorded. That inverts the whole rationale
+  # for choosing a Key Vault tag over an env var: instead of a marker that
+  # survives every redeploy, no marker at all plus a receipt claiming one.
+  # IN_USE_KNOWN is the exact discriminator, not a proxy: on the --rotate path
+  # REUSED=1 exits above, so the mint block always ran, and IN_USE_KNOWN is 1
+  # if and only if the tagged kv_secret_put was the call that ran.
+  if [ "${IN_USE_KNOWN}" -eq 1 ]; then
+    echo "    new credential ${IN_USE_KEY_ID} is recorded in ${MSAL_SECRET_NAME} (msalRotateReason=${ROTATE_REASON})."
+  else
+    echo "    new credential <key id unresolved>: its VALUE is in ${MSAL_SECRET_NAME} and sign-in is correct, but"
+    echo "    NO provenance tag was written. The post-mint lookup of the credential by its label returned"
+    echo "    nothing, so msalKeyId, msalProvenance, msalRotateReason, msalRotatedAt and msalRotatedFrom are"
+    echo "    ABSENT from the secret. The reason you gave this run — '${ROTATE_REASON}' — exists in THIS"
+    echo "    TRANSCRIPT ONLY, not in the vault; record it out of band or the incident has no audit trail."
+    echo "    A later --revoke on this state will REFUSE: with no msalKeyId tag it cannot prove which"
+    echo "    credential is live, and revoking what is still in service is the outage."
+  fi
   echo "    NOTHING was deleted. Every previously-issued credential is still live and still valid."
   if [ "${CONSOLE_ROLLED}" -eq 1 ]; then
     echo "    CONSOLE ROLLED: a new revision of ${CONSOLE_APP_NAME} (${CONSOLE_RG}) was requested and the"
