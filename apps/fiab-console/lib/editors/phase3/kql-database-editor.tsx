@@ -39,6 +39,11 @@ import {
 } from '@fluentui/react-icons';
 import { AdxDatabaseTree } from '@/lib/components/adx/adx-database-tree';
 import { AzureBackedField } from '@/lib/components/azure/azure-backed-field';
+import { ingestionMappingOptions, type IngestionMappingRef } from './kql-ingestion-mappings';
+import {
+  SAMPLE_KQL_DB, DEFAULT_TABLE_COLUMNS, DC_FORMATS, FN_PARAM_TYPES, parseFnParams, serializeFnParams,
+  type KqlDbInfo, type KqlWizardKind, type DcSourceRow, type DcConnectionRow, type FnParam,
+} from './kql-database-model';
 import { AdxRbacPanel } from '@/lib/components/adx/adx-rbac-panel';
 import { AdxClusterEditor } from '@/lib/components/adx/adx-cluster-editor';
 import { IngestionMappingWizardDialog } from '@/lib/components/adx/ingestion-mapping-wizard';
@@ -77,121 +82,6 @@ import { QueryErrorBar } from '@/lib/components/ui/query-error-bar';
 // cluster env (LOOM_KUSTO_CLUSTER_URI) is unset, the info fetch returns ok:false
 // and the editor shows the "Database unavailable" MessageBar — no fake data.
 
-interface KqlDbInfo {
-  ok: boolean;
-  cluster?: string;
-  database?: string;
-  details?: Record<string, unknown> | null;
-  tables?: Array<{ name: string; fromContent?: boolean }>;
-  tableCount?: number;
-  functions?: Array<{ name: string; parameters?: string; fromContent?: boolean }>;
-  functionCount?: number;
-  materializedViews?: Array<{ name: string; sourceTable?: string }>;
-  materializedViewCount?: number;
-  // Content-derived projections surfaced when the live ADX object is absent
-  // (bundle-installed KQL database not yet provisioned to the cluster). Lets
-  // the editor open FULLY BUILT-OUT — schema + starter queries.
-  schema?: Array<{ name: string; columns: Array<{ name: string; type: string }>; sample?: unknown[][]; live?: boolean }>;
-  starterQueries?: Array<{ name: string; kql: string }>;
-  contentFallback?: boolean;
-  // Follower (database-shortcut) state — read-only replica of a leader cluster.
-  isFollower?: boolean;
-  followerLeaderCluster?: string | null;
-  followerConfigName?: string | null;
-  followerDatabaseName?: string | null;
-  error?: string;
-}
-
-const SAMPLE_KQL_DB = `// Welcome to KQL. Try a sample:
-print smoke = "ok", server_time = now(), current_user = current_principal()`;
-
-// Functions are authored through the structured stored-function editor below
-// (params grid + KQL body), so 'function' is intentionally NOT a generic
-// wizard kind — it has its own dialog (openFnEditor / submitFnEditor).
-type KqlWizardKind = 'table' | 'mv' | 'update-policy' | 'ingest' | 'data-connection' | 'alter-table' | 'drop-table' | 'follower';
-
-const DEFAULT_TABLE_COLUMNS: ColumnDef[] = [
-  { name: 'ts', type: 'datetime' },
-  { name: 'tenant', type: 'string' },
-  { name: 'value', type: 'long' },
-];
-
-/** A row from /api/azure/resources (IoT Hub / Event Hub namespace picker). */
-interface DcSourceRow { id: string; name: string; resourceGroup?: string; subscriptionId?: string; location?: string }
-/** A row from GET /api/items/kql-database/[id]/data-connections. */
-interface DcConnectionRow { name?: string; kind?: string; tableName?: string; consumerGroup?: string; dataFormat?: string; provisioningState?: string; source?: string }
-
-// ADX-supported data formats offered by the wizard. RAW is intentionally
-// excluded — IoT Hub data connections do not support it (per ADX docs).
-const DC_FORMATS = ['MULTIJSON', 'JSON', 'CSV', 'TSV', 'PSV', 'SCSV', 'SOHSV', 'TXT', 'TSVE', 'AVRO', 'APACHEAVRO', 'PARQUET', 'ORC', 'W3CLOGFILE'];
-
-/**
- * Scalar parameter data types accepted in a KQL stored-function signature
- * (`paramName:paramType`). Mirrors the scalar types valid in `let` / function
- * signatures per the .create-or-alter function reference. Surfaced as a real
- * dropdown so the params grid never relies on free-typed type strings.
- */
-const FN_PARAM_TYPES = [
-  'string', 'long', 'int', 'real', 'double', 'decimal',
-  'bool', 'datetime', 'timespan', 'dynamic', 'guid',
-] as const;
-
-type FnParam = { name: string; type: string };
-
-/**
- * Parse a KQL function parameters string as returned by `.show functions`
- * (e.g. "(days:int, tenant:string)") into structured rows for the params grid.
- * A no-arg signature ("" or "()") yields [].
- */
-function parseFnParams(raw: string | undefined): FnParam[] {
-  if (!raw) return [];
-  const inner = raw.replace(/^\(/, '').replace(/\)$/, '').trim();
-  if (!inner) return [];
-  return inner
-    .split(',')
-    .map((p) => {
-      const [n, t] = p.split(':');
-      return { name: (n || '').trim(), type: (t || 'string').trim() };
-    })
-    .filter((p) => p.name);
-}
-
-/** Serialize the params grid back into the `name:type, …` argument list. */
-function serializeFnParams(params: FnParam[]): string {
-  return params
-    .filter((p) => p.name.trim())
-    .map((p) => `${p.name.trim()}:${p.type || 'string'}`)
-    .join(', ');
-}
-
-/** One row of `.show database ingestion mappings` (GET /api/adx/ingestion-mappings). */
-export type IngestionMappingRef = { name: string; kind?: string; table?: string };
-
-/**
- * The mapping names offerable for a given target table.
- *
- * Kusto scopes an ingestion mapping to a table, so a mapping built for `Events`
- * is not a legal `ingestionMappingReference` when ingesting into `Alerts`. A
- * mapping whose `table` is empty came back database-scoped and stays offered
- * for every table. With NO table picked yet (the data connection's per-event
- * routing case) every mapping is in scope, because the routing decides the
- * table per event.
- *
- * Names are deduped: `.show` returns one row per (table, mapping) pair, and a
- * duplicated <option value> is indistinguishable in the picked result.
- */
-export function ingestionMappingOptions(mappings: IngestionMappingRef[], table: string): string[] {
-  const t = (table || '').trim().toLowerCase();
-  const names = mappings
-    .filter((m) => {
-      if (!m?.name) return false;
-      if (!t) return true;
-      const mt = (m.table || '').trim().toLowerCase();
-      return !mt || mt === t;
-    })
-    .map((m) => m.name);
-  return Array.from(new Set(names));
-}
 
 export function KqlDatabaseEditor({ item, id }: { item: FabricItemType; id: string }) {
   const s = useStyles();
