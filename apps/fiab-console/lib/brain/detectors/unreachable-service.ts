@@ -1,9 +1,17 @@
 /**
  * LOOM BRAIN — detector: UNREACHABLE SERVICE.
  *
- * An always-on resource (`scale.minReplicas > 0`) with ZERO inbound `configured`
- * edges. It is billing continuously and the running deployment wires nothing to
- * it.
+ * An always-on resource (`scale.minReplicas > 0`) that is NOT REACHABLE from
+ * the graph's ingress roots. It is billing continuously and no chain of
+ * resolved `configured` edges reaches it from outside.
+ *
+ * #4258 widened this from the LOCAL question (does anything point at it) to the
+ * GLOBAL one (can anything outside reach it). The two come apart on a mutually-
+ * referencing island: two internal apps naming each other in their env vars each
+ * hold an inbound `configured` edge, so the retired zero-inbound proxy cleared
+ * both while nothing outside could call either. Every operator-facing string in
+ * this file states what the WALK established, never the retired proxy
+ * (deploy-integrity.md R7).
  *
  * ── THIS DETECTOR IS THE ACCEPTANCE TEST (PRP §5) ──────────────────────────
  * `loom-capacity-broker` runs `minReplicas: 2` at 0.5 vCPU + 1 GiB per replica,
@@ -75,8 +83,10 @@
 
 import {
   formatCostFigure,
+  nodesNotReachableFrom,
   type AzureResourceNode,
   type BrainGraphView,
+  type BrainNode,
   type CostFigure,
   type Detector,
   type DetectorResult,
@@ -92,6 +102,7 @@ import {
   finalizeResult,
   findingId,
   inbound,
+  inboundReachabilityClause,
   makeLedger,
   ownership,
   reachabilityConfidence,
@@ -104,9 +115,33 @@ import {
 
 export const UNREACHABLE_SERVICE = 'unreachable-service';
 
+/** The ARM type whose env vars are the only source of `configured` edges. */
+const CONTAINER_APPS = 'Microsoft.App/containerApps';
+
+/**
+ * The entry points a `configured` walk starts from (#4258).
+ *
+ * `configured` edges are minted from Container App environment variables and
+ * from nothing else, so a caller that is not a Container App is invisible to
+ * this graph in exactly the way an internet caller is. Both are therefore roots
+ * rather than subjects, and the direction that costs is the safe one: a root can
+ * only CLEAR a node, never flag one, and this detector's output is a deletion
+ * proposal.
+ */
+const REACHABILITY_ROOTS = {
+  where: (n: BrainNode) =>
+    n.kind !== 'azure-resource' ||
+    n.ingress?.external === true ||
+    n.resourceType.toLowerCase() !== CONTAINER_APPS.toLowerCase(),
+  describe:
+    'nodes with EXTERNAL ingress, plus every non-Container-App node — the callers this graph ' +
+    'cannot see through',
+} as const;
+
 /** The query, as text, for the evidence chain. Must be re-runnable by hand. */
 const QUERY =
-  "alwaysOnNodes(graph) INTERSECT nodesWithNoInboundEdge(graph, 'configured') " +
+  'alwaysOnNodes(graph) INTERSECT ' +
+  "nodesNotReachableFrom(graph, roots={external ingress OR non-Container-App}, 'configured') " +
   '— over azure-resource nodes carrying measured ScaleFacts';
 
 /** Options this detector accepts. Every one is DATA — nothing is read from I/O. */
@@ -156,7 +191,7 @@ export function unreachableService(
   //
   // An app with `external: true` is reachable from the internet. Its callers are
   // OUTSIDE the graph by construction — no extractor models browser traffic — so
-  // "zero inbound configured edges" says nothing about whether it is used. Left
+  // unreachability in this graph says nothing about whether it is used. Left
   // in, `loom-console` (minReplicas 2, public FQDN, the busiest thing on the
   // estate) is reported as unreachable with a real cost figure attached, and one
   // finding like that is enough for an operator to stop trusting the surface.
@@ -183,13 +218,27 @@ export function unreachableService(
   // The population is every node whose scale IS measured and whose callers could
   // be visible: the set over which the question can actually be asked.
   const candidates = scaleMeasured.filter((n) => n.ingress?.external !== true);
+
+  // ── REACHABILITY, NOT INBOUND-EDGE COUNT (#4258) ─────────────────────────
+  //
+  // The predicate used to be `inbound(graph, id, 'configured').length === 0`,
+  // which answers a LOCAL question — does anything point at this node? The
+  // finding is the GLOBAL one, and the two come apart on a mutually-referencing
+  // island: two internal always-on apps whose env vars name each other each have
+  // an inbound `configured` edge, so the local test CLEARS both while nothing
+  // outside them can call either. Computed ONCE, up front, because a BFS per
+  // candidate would be quadratic over a 900-node estate.
+  const reachability = nodesNotReachableFrom(graph, REACHABILITY_ROOTS, 'configured');
+  const unreachableIds = new Set(reachability.result.map((n) => n.id as string));
+
   const population = detectorPopulation(
     graph,
     candidates,
     `${candidates.length} azure-resource node(s) with MEASURED scale and non-external ingress ` +
       `(of ${azure.length} azure resources, ${graph.nodes.length} nodes total); ` +
       `${scaleUnknown.length} skipped as scale-not-measured, ${externallyIngressed.length} skipped as ` +
-      `externally ingressed; tested for minReplicas > 0 AND zero inbound RESOLVED 'configured' edges. ` +
+      'externally ingressed; tested for minReplicas > 0 AND NOT REACHABLE over resolved ' +
+      `'configured' edges from ${REACHABILITY_ROOTS.describe}. ` +
       `Resolved 'configured' edges in graph: ${resolvedEdgeCount(graph, 'configured')}.`,
   );
 
@@ -215,21 +264,29 @@ export function unreachableService(
   const findings: Finding[] = [];
 
   for (const node of candidates) {
-    // THE PREDICATE. Always-on, and nothing in the live deployment points at it.
+    // THE PREDICATE. Always-on, and nothing OUTSIDE can reach it — see the
+    // reachability walk above for why this is not an inbound-edge count.
     const isUnreachableAlwaysOn =
-      node.scale!.minReplicas > 0 && inbound(graph, node.id, 'configured').length === 0;
+      node.scale!.minReplicas > 0 && unreachableIds.has(node.id as string);
     if (!isUnreachableAlwaysOn) {
       ledger.cleared(
         node.id,
-        'scales to zero, or a resolved `configured` edge in the live deployment points at it',
+        'scales to zero, or a chain of resolved `configured` edges reaches it from outside ' +
+          '(an externally-ingressed app, or a caller this graph cannot see through)',
       );
       continue;
     }
     ledger.finding(node.id);
 
+    // Bound HERE, above the by-design `continue`, because BOTH arms report it.
+    // R7: the operator-facing text must carry the count the graph holds, not
+    // the literal 0 the retired predicate implied.
+    const configuredIn = inbound(graph, node.id, 'configured').length;
+    const reachClause = inboundReachabilityClause(configuredIn);
+
     // ── #4257 — ALWAYS-ON BY DESIGN. Reported, never proposed as a saving. ──
     //
-    // The subject is genuinely always-on and genuinely has no inbound wire, so
+    // The subject is genuinely always-on and genuinely unreachable from outside, so
     // the finding stands. What must NOT stand is the COST recommendation: this
     // floor is what the deploy declared, and "scale it to zero" against a
     // runtime that holds its state in one process is unrecoverable loss dressed
@@ -251,11 +308,11 @@ export function unreachableService(
         id: findingId(UNREACHABLE_SERVICE, node.id),
         detector: UNREACHABLE_SERVICE,
         severity: 'info',
-        title: `${node.displayName} is always-on BY DESIGN (declared non-scalable) and nothing wires to it`,
+        title: `${node.displayName} is always-on BY DESIGN (declared non-scalable) and nothing reaches it`,
         summary:
           `'${node.displayName}' runs ${node.scale!.minReplicas} replica(s) that never scale to zero and ` +
-          "the graph resolves ZERO inbound 'configured' edges for it — but its always-on floor is " +
-          'DECLARED by the deploy, so this is an observation, NOT a cost recommendation. ' +
+          `is NOT REACHABLE from the graph's ingress roots — ${reachClause} — but its always-on ` +
+          'floor is DECLARED by the deploy, so this is an observation, NOT a cost recommendation. ' +
           byDesign,
         subjects: [node.id],
         evidence: evidence({
@@ -321,10 +378,11 @@ export function unreachableService(
       node.ingress
         ? `ingress: external=${node.ingress.external}, fqdn=${node.ingress.fqdn ?? 'none'}` +
           (node.ingress.external === false && node.ingress.fqdn
-            ? ' — addressable from inside the environment, and wired to nothing.'
+            ? ' — addressable from inside the environment, and nothing outside can reach it.'
             : '')
         : 'ingress NOT MEASURED',
-      `inbound resolved edges: configured=0, declared=${declared.length}, imports=${imports.length}, observed=${observed.length}`,
+      `inbound resolved edges: configured=${configuredIn}, declared=${declared.length}, imports=${imports.length}, observed=${observed.length}`,
+      `NOT REACHABLE from the graph's ingress roots — ${reachClause}.`,
     ];
 
     if (dangling.length > 0) {
@@ -340,11 +398,17 @@ export function unreachableService(
             ` (${d.danglingReason})`,
         );
       }
-    } else {
+    } else if (configuredIn === 0) {
       notes.push(
         'no dangling wire names this node as its intended target, so no INTENT to reach it is ' +
           'documented in the graph. The absence of an inbound edge is therefore weaker evidence here ' +
           'than it is for a node with an empty wire pointing at it.',
+      );
+    } else {
+      notes.push(
+        `no DANGLING wire names this node, and the ${configuredIn} inbound 'configured' edge(s) it ` +
+          'does hold all start at nodes the walk could not reach either — an unreachable ISLAND, ' +
+          'not an unwired service. The retired zero-inbound proxy cleared exactly this shape.',
       );
     }
 
@@ -369,10 +433,10 @@ export function unreachableService(
       id: findingId(UNREACHABLE_SERVICE, node.id),
       detector: UNREACHABLE_SERVICE,
       severity: severityForMonthlyUsd(monthlyUsd),
-      title: `${node.displayName} is always-on (minReplicas ${node.scale!.minReplicas}) and nothing in the deployment wires to it`,
+      title: `${node.displayName} is always-on (minReplicas ${node.scale!.minReplicas}) and nothing in the deployment can reach it`,
       summary:
-        `'${node.displayName}' runs ${node.scale!.minReplicas} replica(s) that never scale to zero, and the ` +
-        `graph resolves ZERO inbound 'configured' edges for it` +
+        `'${node.displayName}' runs ${node.scale!.minReplicas} replica(s) that never scale to zero, and it ` +
+        `is NOT REACHABLE from the graph's ingress roots — ${reachClause}` +
         (dangling.length ? `, while ${dangling.length} wire(s) that were meant to reach it are empty or unresolvable` : '') +
         `. It is ${node.provisioningState ?? 'of unmeasured provisioning state'} and healthy, which is why a ` +
         'liveness check does not find it.',

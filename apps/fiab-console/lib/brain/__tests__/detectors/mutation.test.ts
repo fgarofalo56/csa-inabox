@@ -142,7 +142,13 @@ const MUTATED_NEEDLES: readonly { readonly id: string; readonly file: string; re
   {
     id: 'M1/M2 unreachable-service predicate',
     file: 'unreachable-service.ts',
-    needle: "      node.scale!.minReplicas > 0 && inbound(graph, node.id, 'configured').length === 0;",
+    // #4258 moved this predicate from an inbound-edge COUNT to a REACHABILITY
+    // membership test. The needle follows the code, which is the whole point of
+    // this file: it went RED on the refactor rather than letting the recorded
+    // mutation quietly stop describing the thing it was measured against. M1/M2
+    // were re-applied against the new line and re-measured; the RCs are in the
+    // PR body.
+    needle: '      node.scale!.minReplicas > 0 && unreachableIds.has(node.id as string);',
   },
   {
     id: 'M3 unreachable-service vacuity gate',

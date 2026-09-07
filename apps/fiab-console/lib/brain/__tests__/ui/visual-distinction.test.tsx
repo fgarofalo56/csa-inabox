@@ -27,7 +27,19 @@ import { FluentProvider, webLightTheme } from '@fluentui/react-components';
 import { ReactFlowProvider } from '@xyflow/react';
 import type { ComponentProps, ReactElement } from 'react';
 import { BrainCanvasNode } from '@/app/admin/brain/brain-canvas-node';
-import { edgeVisual, nodeVisual, layoutNodes, type NodeVisualState } from '@/app/admin/brain/model';
+import { allocateTerminusPositions } from '@/app/admin/brain/brain-canvas';
+import {
+  DANGLING_TERMINUS_HEIGHT,
+  DANGLING_TERMINUS_WIDTH,
+  edgeVisual,
+  layoutNodes,
+  layoutSpread,
+  MIN_LEGIBLE_ZOOM,
+  NODE_HEIGHT,
+  NODE_WIDTH,
+  nodeVisual,
+  type NodeVisualState,
+} from '@/app/admin/brain/model';
 import { snapshotFromCollection } from '@/app/api/admin/brain/_lib/snapshot';
 import type { WireEdge, WireNode } from '@/app/api/admin/brain/_lib/wire';
 import { BROKER_ID, CONSOLE_ID, DIRECTLAKE_ID, MIGRATE_ID, collection } from './estate-fixture';
@@ -270,5 +282,187 @@ describe('LAYOUT groups the problem states into their own columns', () => {
     const a = layoutNodes(snapshot.nodes, COVERED);
     const b = layoutNodes(snapshot.nodes, COVERED);
     expect(a).toEqual(b);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// #4251 — LEGIBILITY AT ESTATE SCALE
+// ---------------------------------------------------------------------------
+
+/**
+ * 112 nodes in three visual states, cloned from the real fixture nodes so
+ * `nodeVisual` classifies them the same way production does.
+ *
+ * The count is the measured one: the live default view rendered 112 nodes, and a
+ * layout that is fine at nine and illegible at 112 is exactly the failure this
+ * suite exists to catch.
+ */
+function estateScaleNodes(): WireNode[] {
+  const out: WireNode[] = [];
+  const templates = [broker, healthy, idleUnreachable];
+  for (let i = 0; i < 112; i += 1) {
+    const t = templates[i % templates.length];
+    out.push({
+      ...t,
+      id: `${t.id}-clone-${String(i).padStart(3, '0')}`,
+      displayName: `${t.displayName}-${String(i).padStart(3, '0')}`,
+    } as WireNode);
+  }
+  return out;
+}
+
+describe('#4251 — the default view is LEGIBLE at estate scale', () => {
+  // The measured viewport of the live canvas at the default window size.
+  const CONTAINER = { width: 894, height: 512 };
+
+  it('EMBEDDED CONTROL: the fixture really is 112 nodes across 3 states', () => {
+    const nodes = estateScaleNodes();
+    expect(nodes.length).toBe(112);
+    const states = new Set(nodes.map((n) => nodeVisual(n, COVERED).state));
+    expect(states.size).toBe(3);
+  });
+
+  it('THE DEFECT: one column per state fits at scale 0.2 — unreadable', () => {
+    // The pre-fix behaviour, still reachable by omitting the container. Asserted
+    // rather than described so the improvement below is measured against a
+    // number this file computes, not against a number in a commit message.
+    const spread = layoutSpread(layoutNodes(estateScaleNodes(), COVERED));
+    const fit = Math.min(CONTAINER.width / spread.width, CONTAINER.height / spread.height);
+    expect(fit).toBeLessThan(0.25);
+  });
+
+  it('THE FIX: the spread APPROXIMATES the container aspect, and the fit improves', () => {
+    // ── WHY THE TARGET IS NOT "fit >= 0.5" ─────────────────────────────────
+    //
+    // #4251 proposed asserting `min(W/spreadW, H/spreadH) >= 0.5`. That is
+    // arithmetically unreachable and the arithmetic is worth recording rather
+    // than quietly weakening the number: 112 nodes at 180x76 is 1,532,160 px² of
+    // NODE AREA alone, against an 894x512 = 457,728 px² viewport. Even a perfect
+    // zero-gutter packing tops out at sqrt(457728 / 1532160) = 0.55, and any
+    // gutter at all puts it below 0.5. A layout that met the number would have
+    // to make the boxes smaller, which is the defect, not the fix.
+    //
+    // So the fix is the one the issue's own layout item describes — wrap each
+    // bucket so the SPREAD approximates the container's aspect — plus the
+    // legibility FLOOR asserted below, which stops `fitView` shrinking past
+    // readable and lets the operator pan. Measured: 0.20 -> 0.33.
+    const spread = layoutSpread(
+      layoutNodes(estateScaleNodes(), COVERED, { container: CONTAINER }),
+    );
+    const fit = Math.min(CONTAINER.width / spread.width, CONTAINER.height / spread.height);
+    expect(fit).toBeGreaterThan(0.3);
+
+    const containerAspect = CONTAINER.width / CONTAINER.height;
+    const spreadAspect = spread.width / spread.height;
+    // Within a factor of two of the viewport's shape — the 7x60 tower the fixed
+    // grid produced is a factor of TWELVE out, which is where the 0.2 came from.
+    expect(spreadAspect).toBeGreaterThan(containerAspect / 2);
+    expect(spreadAspect).toBeLessThan(containerAspect * 2);
+  });
+
+  it('THE FLOOR: at MIN_LEGIBLE_ZOOM a node renders far above the measured 36x15', () => {
+    // The operator-visible outcome. `fitView` chose 0.2 live, so the node box
+    // came out 36x15 css px — label unreadable, status dot sub-pixel. The floor
+    // is what makes the initial view readable; the layout above is what makes
+    // the panning sane.
+    expect(NODE_WIDTH * MIN_LEGIBLE_ZOOM).toBeGreaterThan(90);
+    expect(NODE_HEIGHT * MIN_LEGIBLE_ZOOM).toBeGreaterThan(38);
+    // …and the manual floor is still lower, so zooming out to see the whole
+    // shape remains possible. Collapsing the two would remove a working control.
+    expect(MIN_LEGIBLE_ZOOM).toBeGreaterThan(0.2);
+  });
+
+  it('still DETERMINISTIC — two runs at the same container size are identical', () => {
+    const a = layoutNodes(estateScaleNodes(), COVERED, { container: CONTAINER });
+    const b = layoutNodes(estateScaleNodes(), COVERED, { container: CONTAINER });
+    expect(a).toEqual(b);
+  });
+
+  it('the problem state is STILL leftmost — wrapping did not reorder the states', () => {
+    const positions = new Map(
+      layoutNodes(estateScaleNodes(), COVERED, { container: CONTAINER }).map((p) => [p.id, p]),
+    );
+    const unreachableXs = estateScaleNodes()
+      .filter((n) => nodeVisual(n, COVERED).state === 'unreachable-always-on')
+      .map((n) => positions.get(n.id)!.x);
+    const reachableXs = estateScaleNodes()
+      .filter((n) => nodeVisual(n, COVERED).state === 'reachable')
+      .map((n) => positions.get(n.id)!.x);
+    expect(Math.max(...unreachableXs)).toBeLessThan(Math.min(...reachableXs));
+  });
+
+  it('no two node boxes overlap', () => {
+    const positions = layoutNodes(estateScaleNodes(), COVERED, { container: CONTAINER });
+    expect(overlappingPairs(positions.map((p) => box(p, NODE_WIDTH, NODE_HEIGHT)))).toEqual([]);
+  });
+});
+
+/** An axis-aligned box, for the overlap assertions. */
+function box(
+  p: { readonly id?: string; readonly x: number; readonly y: number },
+  w: number,
+  h: number,
+) {
+  return { id: p.id ?? '', x: p.x, y: p.y, w, h };
+}
+
+/** Every pair of boxes that share area. Empty is the only acceptable answer. */
+function overlappingPairs(
+  boxes: readonly { id: string; x: number; y: number; w: number; h: number }[],
+): string[] {
+  const hits: string[] = [];
+  for (let i = 0; i < boxes.length; i += 1) {
+    for (let j = i + 1; j < boxes.length; j += 1) {
+      const a = boxes[i];
+      const b = boxes[j];
+      const overlapX = a.x < b.x + b.w && b.x < a.x + a.w;
+      const overlapY = a.y < b.y + b.h && b.y < a.y + a.h;
+      if (overlapX && overlapY) hits.push(`${a.id} ∩ ${b.id}`);
+    }
+  }
+  return hits;
+}
+
+describe('#4251 — dangling termini do not overlap anything', () => {
+  /** N dangling edges out of ONE source — the fan-out the old 4px step stacked. */
+  function danglingFrom(sourceId: string, n: number): WireEdge[] {
+    const template = snapshot.edges.find((e): e is WireEdge => e.resolution === 'dangling')!;
+    return Array.from({ length: n }, (_, i) => ({
+      ...template,
+      id: `${template.id}-fan-${i}`,
+      from: sourceId,
+    })) as WireEdge[];
+  }
+
+  it('EMBEDDED CONTROL: the fixture really produces N dangling edges from one source', () => {
+    const edges = danglingFrom(BROKER_ID, 8);
+    expect(edges).toHaveLength(8);
+    expect(edges.every((e) => e.resolution === 'dangling' && e.from === BROKER_ID)).toBe(true);
+  });
+
+  it('8 termini from one source occupy 8 non-overlapping boxes', () => {
+    const positions = new Map(
+      layoutNodes(snapshot.nodes, COVERED).map((p) => [p.id, { x: p.x, y: p.y }]),
+    );
+    const placed = allocateTerminusPositions(danglingFrom(BROKER_ID, 8), positions);
+    expect(placed.size).toBe(8);
+    const boxes = [...placed.entries()].map(([id, p]) =>
+      box({ id, ...p }, DANGLING_TERMINUS_WIDTH, DANGLING_TERMINUS_HEIGHT),
+    );
+    expect(overlappingPairs(boxes)).toEqual([]);
+  });
+
+  it('no terminus box intersects a NODE box', () => {
+    const laid = layoutNodes(snapshot.nodes, COVERED);
+    const positions = new Map(laid.map((p) => [p.id, { x: p.x, y: p.y }]));
+    // Every source in the graph fans out, so the lanes are as crowded as they
+    // can get — the case a per-source counter alone would not survive.
+    const edges = snapshot.nodes.flatMap((n) => danglingFrom(n.id, 4));
+    const placed = allocateTerminusPositions(edges, positions);
+    const nodeBoxes = laid.map((p) => box(p, NODE_WIDTH, NODE_HEIGHT));
+    const terminusBoxes = [...placed.entries()].map(([id, p]) =>
+      box({ id, ...p }, DANGLING_TERMINUS_WIDTH, DANGLING_TERMINUS_HEIGHT),
+    );
+    expect(overlappingPairs([...nodeBoxes, ...terminusBoxes])).toEqual([]);
   });
 });

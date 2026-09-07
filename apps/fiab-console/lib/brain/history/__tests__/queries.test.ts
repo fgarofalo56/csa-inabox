@@ -367,3 +367,79 @@ describe('the population is reported even when nothing is found', () => {
     expect(RUNTIME_PROVENANCES).toContain(r.provenance);
   });
 });
+
+// ---------------------------------------------------------------------------
+// #4016 — a version captured from an INCOMPLETE pull cannot support a streak
+// ---------------------------------------------------------------------------
+
+describe('nodeUnreachableForConsecutiveVersions — completeness (#4016)', () => {
+  /** The same history, with one version marked as a partial pull. */
+  function withPartial(which: 1 | 2 | 3) {
+    const mark = (v: typeof v1) => ({
+      ...v,
+      collection: { complete: false, rowsFetched: 3, totalRecords: 9 },
+    });
+    const vs = [v1, v2, v3].map((v, i) => (i + 1 === which ? mark(v) : v));
+    return buildHistory(ESTATE, vs, 3);
+  }
+
+  it('EMBEDDED CONTROL: the unmarked history still ANSWERS', () => {
+    // Without this the refusals below are indistinguishable from a predicate
+    // that has stopped answering for some other reason.
+    expect(nodeUnreachableForConsecutiveVersions(history(), 3).nodes.length).toBeGreaterThan(0);
+  });
+
+  it('REFUSES when any version in the window was an incomplete pull', () => {
+    for (const which of [1, 2, 3] as const) {
+      const r = nodeUnreachableForConsecutiveVersions(withPartial(which), 3);
+      expect(r.nodes, `version ${which}`).toEqual([]);
+      expect(r.population.blind, `version ${which}`).toBe(true);
+      expect(r.notes.join(' ')).toContain('REFUSING to answer');
+      expect(r.notes.join(' ')).toContain('INCOMPLETE');
+    }
+  });
+
+  it('the refusal QUOTES the shortfall, not just the fact of it', () => {
+    const r = nodeUnreachableForConsecutiveVersions(withPartial(2), 3);
+    expect(r.notes.join(' ')).toContain('3 of 9 row(s)');
+    expect(r.population.scope).toContain('INCOMPLETE');
+  });
+
+  it('an UNRECORDED completeness is NOT treated as incomplete', () => {
+    // Versions written before the field existed carry `undefined`. Refusing on
+    // absent evidence would retroactively blind the predicate over the whole
+    // retained history — an unknown reported as a negative.
+    expect(v1.collection).toBeUndefined();
+    const r = nodeUnreachableForConsecutiveVersions(history(), 3);
+    expect(r.nodes.length).toBeGreaterThan(0);
+  });
+
+  it('a version marked COMPLETE does not trip the refusal', () => {
+    const vs = [v1, v2, v3].map((v) => ({
+      ...v,
+      collection: { complete: true, rowsFetched: 9, totalRecords: 9 },
+    }));
+    const r = nodeUnreachableForConsecutiveVersions(buildHistory(ESTATE, vs, 3), 3);
+    expect(r.nodes.length).toBeGreaterThan(0);
+  });
+});
+
+describe('nodeUnreachableForConsecutiveVersions — an UNREPORTED total is not zero', () => {
+  it('says so in words rather than printing "null" or "0"', () => {
+    // Azure Resource Graph omits `totalRecords` on some responses. Coercing
+    // that to 0 would make "the estate is empty and I read all of it" read the
+    // same as "I never learned how much there was" — an unknown rendered as a
+    // measurement, which is the substitution this whole field exists to stop.
+    const vs = [v1, v2, v3].map((v, i) =>
+      i === 1
+        ? { ...v, collection: { complete: false, rowsFetched: 3, totalRecords: null } }
+        : v,
+    );
+    const r = nodeUnreachableForConsecutiveVersions(buildHistory(ESTATE, vs, 3), 3);
+    const notes = r.notes.join(' ');
+    expect(r.nodes).toEqual([]);
+    expect(notes).toContain('an unreported number of row(s)');
+    expect(notes).not.toContain('of null row(s)');
+    expect(notes).not.toContain('of 0 row(s)');
+  });
+});

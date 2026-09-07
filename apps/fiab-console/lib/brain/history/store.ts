@@ -72,6 +72,10 @@ export function toSummary(v: GraphVersion): GraphVersionSummary {
     source: v.source,
     observedCount: v.observedCount,
     lastObservedAt: v.lastObservedAt,
+    // Projected explicitly like every other field. A summary that dropped it
+    // would make the completeness refusal in `./queries` unreachable from the
+    // list path (#4016) — the read that the prune predicate actually uses.
+    ...(v.collection ? { collection: v.collection } : {}),
   };
 }
 
