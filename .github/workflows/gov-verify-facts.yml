@@ -69,8 +69,30 @@ jobs:
           set +e -uo pipefail
           ACCT=$(az containerapp show -n "$APP" -g "$RG" \
             --query "properties.template.containers[0].env[?name=='LOOM_ADLS_ACCOUNT'].value | [0]" -o tsv 2>/dev/null)
+          # #3344 — PRESENCE COMES FROM THE NAME QUERY, NOT FROM THE VALUE. This
+          # step's whole contract is that a 403 is a DIFFERENT ANSWER from
+          # "absent"; the same distinction applies one line earlier. `.value`
+          # returns the same empty string whether the binding is missing, present
+          # and empty, or unreadable, and the verdict below asserted the first
+          # ("no LOOM_ADLS_ACCOUNT on the app") from an oracle that cannot tell
+          # them apart (deploy-integrity R7).
+          ACCT_ERR=$(mktemp)
+          ACCT_BOUND=$(az containerapp show -n "$APP" -g "$RG" \
+            --query "properties.template.containers[0].env[?name=='LOOM_ADLS_ACCOUNT'].name | [0]" -o tsv 2>"$ACCT_ERR")
+          ACCT_BOUND_RC=$?
+          ACCT_BOUND=$(printf '%s' "$ACCT_BOUND" | tr -d '\r')
           echo "lake account: ${ACCT:-<unset>}"
-          if [ -z "${ACCT:-}" ]; then echo "Q1: UNKNOWN — no LOOM_ADLS_ACCOUNT on the app"; exit 0; fi
+          if [ -z "${ACCT:-}" ]; then
+            if [ $ACCT_BOUND_RC -ne 0 ]; then
+              echo "Q1: INDETERMINATE — the app's env bindings could not be read, so LOOM_ADLS_ACCOUNT was NOT established as absent:"
+              tr '\n' ' ' < "$ACCT_ERR" | head -c 300; echo
+            elif [ -z "${ACCT_BOUND:-}" ] || [ "$ACCT_BOUND" = "None" ]; then
+              echo "Q1: UNKNOWN — LOOM_ADLS_ACCOUNT is NOT BOUND on the app at all"
+            else
+              echo "Q1: UNKNOWN — LOOM_ADLS_ACCOUNT is bound on the app but its VALUE is empty (the env entry exists; it was wired with nothing in it)"
+            fi
+            exit 0
+          fi
           # Data-plane list with the SP identity. A 403 is a DIFFERENT answer from
           # "container absent" and must not be reported as absence.
           OUT=$(az storage fs list --account-name "$ACCT" --auth-mode login -o tsv --query "[].name" 2>&1)
