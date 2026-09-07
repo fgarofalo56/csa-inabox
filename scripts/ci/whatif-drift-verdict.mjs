@@ -268,13 +268,19 @@ function classifyDelta(resourceType, entry) {
  *     is NOT swallowed;
  *   - `[[` is ARM's escape for a LITERAL leading bracket, i.e. a real string
  *     value the deployment would write verbatim. That is a genuine value and
- *     must never be treated as unevaluated.
+ *     must never be treated as unevaluated. NOTE: the explicit `[[` check below
+ *     is REDUNDANT, not load-bearing — the regex already rejects that form,
+ *     because its second character class requires `[A-Za-z_]` and `[` is not in
+ *     it. Deleting the check leaves the suite green, so nothing here proves it
+ *     works; it is kept as a cheap, readable statement of intent in case the
+ *     regex is ever loosened. Do not cite it as the mechanism.
  */
 const ARM_EXPRESSION_RE =
   /^\[[A-Za-z_][A-Za-z0-9_]*\([\s\S]*\)(?:\.[A-Za-z_][A-Za-z0-9_]*|\[[^[\]]*\])*\]$/;
 function isUnevaluatedArmExpression(value) {
   if (typeof value !== 'string') return false;
   const s = value.trim();
+  // Redundant with ARM_EXPRESSION_RE — see the note above. Intent, not a guard.
   if (s.startsWith('[[')) return false;
   return ARM_EXPRESSION_RE.test(s);
 }
