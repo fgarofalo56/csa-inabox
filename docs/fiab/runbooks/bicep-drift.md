@@ -33,6 +33,59 @@ through `scripts/ci/whatif-drift-verdict.mjs`** (both lanes share it):
   [Coverage](#coverage)).
 - What-if **errors** also fail the run (verdict UNKNOWN) — an un-runnable
   what-if is itself a red state, not a pass.
+- A `Modify` whose property `after` is an **unevaluated ARM expression** is
+  neither drift nor noise — see [Unresolved](#unresolved).
+
+<a id="unresolved"></a>
+### Unresolved — a property what-if never evaluated (#2874)
+
+what-if does not always evaluate the **template** side of a property. When the
+template value is an ARM expression it cannot resolve — typically a
+`reference()` into a resource this deployment is not re-evaluating — what-if
+emits the expression *itself*, verbatim, as the delta's `after`. Measured on
+the Gov (GCC-High) lane of run 33406666389, whose sole delta was:
+
+```
+Modify  .../workspaces/law-csa-loom-usgovvirginia/providers/Microsoft.Authorization/roleAssignments/0912013f-…
+  properties.principalId
+    before "1feb8cae-…"                                        (the live principal GUID)
+    after  "[reference(resourceId('Microsoft.Logic/workflows',
+            'la-csa-loom-ai-alert-…')).identity.principalId]"   (never evaluated)
+```
+
+Source: `platform/fiab/bicep/modules/admin-plane/ai-defense.bicep`
+(`playbookSentinelResponder`, `principalId: playbook.identity.principalId`) —
+**not** `azure-connections-rbac.bicep`, despite what the ledger note on the
+issue said.
+
+A GUID and an unevaluated expression are not two values that differ. They are
+one value and a placeholder for it. Counting that as "the template and the live
+estate disagree" asserts a conflict what-if never established — a
+`deploy-integrity.md` R7 violation inside the verdict itself.
+
+So the verdict script classifies it **UNRESOLVED**: a third bucket alongside
+real drift and suppressed noise.
+
+- **Never real drift** — it does not fail the run and is not in `drift-list.txt`.
+- **Never silent** — every unresolved resource is listed by resourceId in
+  `unresolved-list.txt` and in the summary block as *"not compared by what-if"*,
+  counted on the coverage line
+  (`… ; N resource(s) with properties NOT COMPARED by what-if`), exposed as the
+  `unresolved_count` / `unresolved_list` step outputs, and annotated with a
+  `::warning::`. It is a **coverage gap**, in the same family as a
+  short-circuited module.
+- **Narrow by construction** — only a string of the form
+  `[<function>(…)]` (optionally with a trailing `.property` / `[index]` chain)
+  qualifies. `[[…]` (ARM's escape for a literal bracket), `["a","b"]`, `[0]`
+  and any concrete value stay **real drift**. One genuinely conflicting
+  property keeps the whole resource in the drift verdict regardless of an
+  unresolved sibling.
+
+**Do not** "fix" this delta by reseeding the GUID in `ai-defense.bicep`: the
+principal is correct, and what-if still could not evaluate
+`playbook.identity.principalId` afterwards. The only way to make the property
+genuinely comparable is to stop deriving it from a `reference()` into a
+conditionally-deployed resource, which is not worth doing for this assignment.
 
 ### The raw `changeType` is NOT a verdict — what-if noise
 
