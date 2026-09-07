@@ -27,12 +27,15 @@
  * live behind a `deploying` phase only reachable through a live deploy POST, so
  * they are guarded by a source scan instead; that scan also requires every
  * `aria-labelledby={X}` to have a matching `id={X}` in the same file, because a
- * mere attribute-presence check cannot see a dangling reference.
+ * mere attribute-presence check cannot see a dangling reference. The scan
+ * rejects an empty/whitespace `aria-label` literal too — present but naming
+ * nothing. What it CANNOT see: an expression value (`aria-label={stage}`) that
+ * evaluates to '' at runtime. Only a browser/axe pass settles those four.
  */
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { render, screen } from '@testing-library/react';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { CHIP_COLORS, CHIP_FOREGROUND, WorkspaceAvatar } from '../workspace-avatar';
 import { SetupWizardPane } from '../../panes/setup-wizard';
 
@@ -61,6 +64,44 @@ const WIZARD_FILES = [
   'lib/panes/setup-wizard.tsx',
   'lib/panes/add-landing-zone-wizard.tsx',
 ];
+
+/**
+ * Escape EVERY regex metacharacter — including the backslash — so a captured
+ * id is matched literally when it is spliced into a `new RegExp`. Without this
+ * the dot in `IDS.rail` is a wildcard and a decoy `id={IDSXrail}` resolves the
+ * reference, which is the same class of blindness this file exists to close.
+ */
+function escapeRegExp(literal: string): string {
+  return literal.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+/** The string-literal value of `attr` on a tag; null when absent or an expression. */
+function literalAttrValue(tag: string, attr: 'aria-label' | 'aria-labelledby'): string | null {
+  const m = (attr === 'aria-label' ? ARIA_LABEL_LITERAL : ARIA_LABELLEDBY_LITERAL).exec(tag);
+  if (!m) return null;
+  return m[1] ?? m[2] ?? null;
+}
+
+const ARIA_LABEL_LITERAL = /aria-label\s*=\s*(?:"([^"]*)"|'([^']*)')/;
+const ARIA_LABELLEDBY_LITERAL = /aria-labelledby\s*=\s*(?:"([^"]*)"|'([^']*)')/;
+const ARIA_LABEL_PRESENT = /aria-label\b/;
+const ARIA_LABELLEDBY_PRESENT = /aria-labelledby\b/;
+
+/**
+ * True when `attr` is present AND could actually produce an accessible name.
+ * `aria-label=""` / `aria-label="   "` is present but names NOTHING — the exact
+ * `aria-progressbar-name` failure — so it is false here.
+ *
+ * LIMIT, stated (R7): an expression value (`aria-label={deployStage}`) cannot
+ * be evaluated by a source scan, so it is taken at face value. This filter
+ * catches the empty LITERAL, not an expression that evaluates to ''.
+ */
+function carriesName(tag: string, attr: 'aria-label' | 'aria-labelledby'): boolean {
+  const present = attr === 'aria-label' ? ARIA_LABEL_PRESENT : ARIA_LABELLEDBY_PRESENT;
+  if (!present.test(tag)) return false;
+  const lit = literalAttrValue(tag, attr);
+  return lit === null ? true : lit.trim().length > 0;
+}
 
 /** Every `<ProgressBar …>` element (opening tag only) in a source file. */
 function progressBarTags(source: string): string[] {
@@ -107,6 +148,12 @@ describe('#3169 — WorkspaceAvatar chip contrast (WCAG AA on the /workspaces ch
 });
 
 describe('#3169 — every setup/attach ProgressBar carries an accessible name', () => {
+  // The mount below stubs `fetch`; neither `unstubGlobals` nor `restoreMocks`
+  // is set in vitest.config.ts, so the stub would otherwise outlive the test.
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
   it('the /setup step rail bar resolves a real accessible NAME (mounted)', () => {
     // The wizard fires config/scan reads on mount; a benign 200 keeps them from
     // throwing. Nothing here asserts on fetched data — only on the rail, which
@@ -127,8 +174,11 @@ describe('#3169 — every setup/attach ProgressBar carries an accessible name', 
     // Guard the guard: if the JSX is refactored away this test must not go
     // silently green on an empty set.
     expect(tags.length).toBeGreaterThan(0);
-    const unnamed = tags.filter((t) => !/aria-label\b/.test(t) && !/aria-labelledby\b/.test(t));
+    const unnamed = tags.filter(
+      (t) => !carriesName(t, 'aria-label') && !carriesName(t, 'aria-labelledby'),
+    );
     // RED before the fix: 3 unnamed in setup-wizard, 2 in add-landing-zone.
+    // Also RED for a bar whose aria-label is an empty/whitespace literal.
     expect(unnamed).toEqual([]);
   });
 
@@ -142,9 +192,9 @@ describe('#3169 — every setup/attach ProgressBar carries an accessible name', 
     // file; for a literal `aria-labelledby="x"` require `id="x"`.
     const dangling = tags.filter((tag) => {
       const expr = /aria-labelledby=\{([A-Za-z0-9_$.]+)\}/.exec(tag);
-      if (expr) return !new RegExp(`\\bid=\\{${expr[1].replace(/\$/g, '\\$')}\\}`).test(source);
+      if (expr) return !new RegExp(`\\bid=\\{${escapeRegExp(expr[1])}\\}`).test(source);
       const lit = /aria-labelledby="([^"]+)"/.exec(tag);
-      if (lit) return !new RegExp(`\\bid="${lit[1]}"`).test(source);
+      if (lit) return !new RegExp(`\\bid="${escapeRegExp(lit[1])}"`).test(source);
       return false; // no aria-labelledby on this tag — the scan above covers it
     });
     expect(dangling).toEqual([]);
