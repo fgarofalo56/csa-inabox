@@ -133,6 +133,36 @@ jobs:
             echo "configured=true" >> $GITHUB_OUTPUT
           fi
 
+  # The DECLARATION half of the estate-pause verdict, computed with NO Azure.
+  #
+  # `deploy-validate`'s `estate_paused` output is declaration AND observed-
+  # stopped, and reading the second half costs a Gov login inside a job that sits
+  # behind the `gcc-high-deploy` approval gate. The image phase below runs BEFORE
+  # all of that and still MUTATES the sovereign estate — it acquires the ACR
+  # firewall lease (publicNetworkAccess=Enabled) and `az acr build`s two images
+  # into the GCC-High registry. Measured on the declared-paused schedule, runs
+  # 34138038567 (2026-09-07) and 33111419147 (2026-08-27): `Build both images on
+  # the Gov ACR` = success, `Release the ACR firewall lease (always)` = success.
+  #
+  # So this job exists to give the image phase a verdict it can compute from a
+  # checked-in file alone. scripts/ci/_estate-pause-declaration.mjs is pure — no
+  # az, no fetch, no child_process.
+  #
+  # FAIL-CLOSED ON THIS SIDE, deliberately. If this job fails, `build-gov-images`
+  # is skipped (an un-`always()` dependant of a failed need), so an unknown
+  # verdict does NOT open a sovereign registry. `deploy-validate` runs on
+  # `always()` and does not need this job, so the deploy path is unaffected — and
+  # its own image preflight still refuses if a referenced tag is missing.
+  pause-declaration:
+    name: Is the GCC-High estate DECLARED paused?
+    runs-on: ubuntu-latest
+    outputs:
+      declared: ${{ steps.read.outputs.declared_paused }}
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - id: read
+        run: node scripts/ci/estate-pause-declared.mjs --boundary "$CSA_LOOM_BOUNDARY"
+
   # IMAGE PHASE (no-vaporware.md two-phase contract). admin-plane/main.bicep
   # deploys loom-migrate + loom-risingwave DEFAULT-ON in every Container Apps
   # boundary, GCC-High included, and params/gcc-high.bicepparam sets
@@ -145,8 +175,13 @@ jobs:
   # why deploy-validate below runs with `always()` rather than on success.
   build-gov-images:
     name: Build the DEFAULT-ON data-plane images (GCC-High ACR)
-    needs: precheck
-    if: needs.precheck.outputs.configured == 'true' && (github.event_name == 'schedule' || inputs.run_mode == 'full')
+    needs: [precheck, pause-declaration]
+    # STAND DOWN on a DECLARED-paused estate (#4233 round 2). Without the middle
+    # clause this job opened the sovereign ACR's firewall and pushed two images
+    # on every scheduled run, INCLUDING the runs whose own step summary says the
+    # estate was not touched. The clause reads the declaration only — see the
+    # `pause-declaration` job above for why the broader predicate is the safe one.
+    if: needs.precheck.outputs.configured == 'true' && needs.pause-declaration.outputs.declared != 'true' && (github.event_name == 'schedule' || inputs.run_mode == 'full')
     uses: ./.github/workflows/gov-provision-streaming-migrate.yml
     secrets: inherit
     with:
@@ -769,14 +804,20 @@ jobs:
             echo ""
             echo "\`${CSA_LOOM_BOUNDARY}\` has an owned, unexpired entry in"
             echo "\`scripts/ci/estate-pause-declaration.json\`, and the ADX preflight observed"
-            echo "its cluster stopped. SKIPPED: the what-if, the image preflight (which would"
-            echo "have opened this boundary's ACR firewall), the image-tag revert gate, the"
-            echo "re-pin, the apply, the Front Door private-endpoint approval, the DLZ template"
-            echo "publish and the post-deploy bootstrap — a stopped Kusto engine refuses"
-            echo "\`principalAssignments\`, so none of them could have produced a real answer,"
-            echo "and none of them should touch an estate this run has declared it will not"
-            echo "measure. A teardown dispatched against a declared-paused estate REFUSES"
-            echo "rather than skipping, so it can never happen silently behind this notice."
+            echo "its cluster stopped."
+            echo ""
+            echo "SKIPPED IN THIS JOB: the what-if, the deploy-verification evidence receipt"
+            echo "and its artifact upload, the image preflight (which leases this boundary's"
+            echo "ACR firewall open), the image-tag revert gate, the re-pin, the apply, the"
+            echo "Front Door private-endpoint approval and the DLZ template publish. SKIPPED"
+            echo "ELSEWHERE IN THIS RUN: the \`build-gov-images\` image phase — the same"
+            echo "declaration skips it, so this run neither opened the sovereign ACR's firewall"
+            echo "nor pushed \`loom-migrate\`/\`loom-risingwave\` — and the chained post-deploy"
+            echo "bootstrap. A stopped Kusto engine refuses \`principalAssignments\`, so none"
+            echo "of them could have produced a real answer, and none of them should touch an"
+            echo "estate this run has declared it will not measure. A teardown dispatched"
+            echo "against a declared-paused estate REFUSES rather than skipping, so it can"
+            echo "never happen silently behind this notice."
             echo ""
             echo "**This run is UNMEASURED, not clean.** It is not evidence the template applies,"
             echo "and it does not refresh this estate's drift position against \`main\`."
