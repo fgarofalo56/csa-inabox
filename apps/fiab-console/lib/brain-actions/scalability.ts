@@ -96,7 +96,11 @@
  * ── THE RESIDUAL, STATED PLAINLY (R7) ──────────────────────────────────────
  * SHAPE-UNRESOLVED means the replica shape could NOT be established, and this
  * module says so rather than inventing one — such an app is NOT reported as
- * non-scalable. UNNAMED means the app could not even be identified; a subject
+ * non-scalable, and since #4293 it is NOT permitted either: the durability
+ * question was not answered, and an unanswered destructive question is REFUSED
+ * (`why: 'shape-unresolved'`). Until #4293 this was the last path in
+ * {@link refuseScaleToZero} that ran from "could not establish" to `null`, i.e.
+ * to allow. UNNAMED means the app could not even be identified; a subject
  * missing from the map is REFUSED rather than permitted whenever an unnamed
  * resource could have produced that name, because "absent from an incomplete
  * population" establishes nothing.
@@ -1106,9 +1110,13 @@ export type ScaleToZeroRefusal =
       /**
        * WHICH failure. `unreadable` may be transient; `absent` is a property of
        * the image; `name-unresolved` means the artifact parsed but its
-       * population has a hole, so this subject's absence proves nothing.
+       * population has a hole, so this subject's absence proves nothing;
+       * `shape-unresolved` (#4293) means the declaration IS in the map and its
+       * replica shape is a deploy-time expression this reader does not
+       * evaluate, so the durability question was never answered for a subject
+       * that is otherwise fully identified.
        */
-      readonly why: 'unreadable' | 'absent' | 'empty' | 'name-unresolved';
+      readonly why: 'unreadable' | 'absent' | 'empty' | 'name-unresolved' | 'shape-unresolved';
       /** The path(s) the answer was sought at — so the refusal NAMES its unreadable source. */
       readonly from: string;
       readonly detail: string;
@@ -1289,6 +1297,34 @@ export function refuseScaleToZero(
   if (decl.declaredConsumers.length > 0) {
     return { kind: 'declared-consumer', declaration: decl };
   }
+  // ── THE LAST "COULD NOT ESTABLISH → ALLOW" PATH (#4293) ───────────────────
+  // `declarationFor` emits an unresolvable replica shape as `declared: null`
+  // WITH `scalableToZero: true` — not because it established elasticity, but
+  // because the durability predicate was withheld. That combination skipped the
+  // pinned arm above, and with no declared consumer it reached `return null`,
+  // which is ALLOW. So the one subject the module says nothing about was the one
+  // subject it permitted a destructive scale-to-zero on. Same class as the
+  // empty-map fail-open closed in #4261, one layer further in.
+  //
+  // WHY THIS ARM SITS *AFTER* THE CONSUMER CHECK, not before it. Both apps that
+  // carry this shape on the committed template (`loom-trino`, `loom-unity`) also
+  // have declared consumers, so ordering decides which fact the operator is
+  // told. `declared-consumer` is an ESTABLISHED fact — the deploy's own template
+  // names a wire into the service — while this arm is the absence of one, and a
+  // refusal that can state a fact should state the fact. Putting this first
+  // would also have made the #4261 availability regression spec
+  // ("loom-unity is ELASTIC and still refused") unable to observe its own
+  // subject: it would have been refused here before the availability arm ran,
+  // and the guard would have quietly stopped watching what that spec exists to
+  // watch. Placed here it closes the hole and changes no existing verdict.
+  if (decl.declared === null) {
+    return {
+      kind: 'declaration-unavailable',
+      why: 'shape-unresolved',
+      from: resolved.from,
+      detail: decl.reason,
+    };
+  }
   return null;
 }
 
@@ -1315,12 +1351,15 @@ export function scaleToZeroRefusalReason(refusal: ScaleToZeroRefusal): string {
 }
 
 /**
- * The refusal text for a source that could not be established.
+ * The refusal text for a question that could not be answered.
  *
- * The three reasons say DIFFERENT things, because they are different facts and
- * they have different remediations. R7: none of them asserts that the subject is
- * or is not scalable — that was never established, and saying otherwise is the
- * error this whole arm exists to prevent.
+ * The five reasons say DIFFERENT things, because they are different facts and
+ * they have different remediations. Four of them are about the SOURCE (it could
+ * not be read, it is not in the image, it parsed to nothing, its population has
+ * an unkeyable hole); `shape-unresolved` is about ONE SUBJECT inside a source
+ * that read perfectly. R7: none of them asserts that the subject is or is not
+ * scalable — that was never established, and saying otherwise is the error this
+ * whole arm exists to prevent.
  */
 export function declarationUnavailableExplanation(
   refusal: Extract<ScaleToZeroRefusal, { kind: 'declaration-unavailable' }>,
@@ -1355,6 +1394,25 @@ export function declarationUnavailableExplanation(
         'reader, not in the estate — the module(s) named above declare their app name with an ' +
         'expression this static resolver does not evaluate. Until it does, an unlisted subject is ' +
         `refused rather than performed blind.${tail}`
+      );
+    case 'shape-unresolved':
+      // A DIFFERENT HEAD ON PURPOSE (#4293). The shared one above says the
+      // template "could not be consulted", and here it was — completely. What
+      // could not be evaluated is this app's replica EXPRESSION, so borrowing
+      // that sentence would assert a source failure that did not happen (R7).
+      return (
+        'REFUSED because the durability question was never ANSWERED for this app, NOT because ' +
+        'this resource was judged unsafe — and not because it was judged safe either. The ' +
+        `deploy template at '${refusal.from}' was read and parsed, and this app IS declared in ` +
+        `it; what could not be evaluated is its replica shape. ${refusal.detail} Withholding a ` +
+        'verdict is not the same as returning a permissive one, so a destructive ' +
+        'scale-to-zero is refused rather than performed against a shape nobody established. ' +
+        'Remediation: this is a gap in the READER, not in the estate — model the module\'s ' +
+        'replica expression in resolveDeclaredInt so the shape resolves statically, or pin the ' +
+        'replicas in the module so there is a static answer to read.' +
+        ' This refusal is fail-CLOSED on purpose: until #4293 an unevaluated shape reached the ' +
+        'same `null` return as "elastic and unwired", so the one app the module had nothing to ' +
+        'say about was the one app it permitted a destructive action on (deploy-integrity.md R7).'
       );
   }
 }

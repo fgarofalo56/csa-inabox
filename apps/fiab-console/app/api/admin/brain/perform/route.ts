@@ -48,6 +48,7 @@ import {
   apiOk,
   apiServerError,
 } from '@/lib/api/respond';
+import { apiHonestGateError } from '@/lib/api/gate-envelope';
 import { emitAuditEvent } from '@/lib/admin/audit-stream';
 import { performRecommendation, type PerformOutcome } from '@/lib/brain-actions/perform';
 import { performRegistryEntries, resolvePerformEntryForSubject } from '@/lib/brain-actions/registry';
@@ -58,6 +59,7 @@ import {
 import type { PerformRequest } from '@/lib/brain-actions/types';
 import { AcaNotConfiguredError } from '@/lib/azure/container-apps-arm-client';
 import { ResourceGraphCollectionError } from '../_lib/arg-collect';
+import { configGateFor } from '../_lib/config-gate';
 import { loadSnapshot } from '../_lib/snapshot';
 
 export const dynamic = 'force-dynamic';
@@ -99,6 +101,32 @@ function mutatedAzureFor(outcome: PerformOutcome): boolean | string {
   }
   return false;
 }
+
+/**
+ * WHICH 503 IS THIS? (#4283)
+ *
+ * The catch below answers 503 for three error classes, and until #4283 it
+ * answered all three with a bare `apiHonestError`, whose body is
+ * `{ok:false, error}`. That body carries NOTHING a client can discriminate on,
+ * so the surface could only print the server's sentence and say — correctly, and
+ * uselessly — that it does not know which cause it is looking at. `ux-baseline.md`
+ * G2 asks for an inline Fix-it on a gate; the client could not honestly render one
+ * because rendering "<surface> needs <gate> wired" over an ARG throttle asserts a
+ * cause nobody established (`deploy-integrity.md` R7).
+ *
+ * The fix is to DISCRIMINATE here, where the class is known, not to guess there.
+ * The classifier lives in `../_lib/config-gate` — moved out of this file by the
+ * #4342 review so its MEMBERSHIP RULE ("a gap may name a gate only when the
+ * gate reaching `configured` implies that gap is closed") is asserted by a spec
+ * against the real registry rather than argued for in a comment here. Read that
+ * module's doc-block before adding a mapping; the rule is narrower than it looks,
+ * and the shipped whitelist violated it.
+ *
+ * `ResourceGraphCollectionError` is deliberately never classified: `arg-collect.ts`
+ * throws it on a token-acquisition failure and on ANY non-OK ARG response — a
+ * throttle, a 403, a 500. None of those is a value the deploy did not set, so it
+ * keeps the bare honest 503 whose only claim is the server's own message.
+ */
 
 export const POST = withTenantAdmin(async (req: NextRequest, { session }) => {
   // Held outside the try so the infra-gate catch below can still name the
@@ -231,6 +259,20 @@ export const POST = withTenantAdmin(async (req: NextRequest, { session }) => {
       } catch {
         /* the 503 below is the signal that matters */
       }
+      // #4283 — a CONFIGURATION-shaped class carries the normalized gate
+      // envelope, but only when `configGateFor` can establish that the named
+      // gate's Fix-it closes the gap the error reported; #4342 narrowed that
+      // test after the ACA resource-group gap was found to name a gate the
+      // registry can evaluate as `configured` while the caller still throws.
+      // Anything it cannot establish — including the whole ARG-collection class,
+      // an estate READ that failed rather than a value the deploy did not set —
+      // keeps the bare honest 503 whose only claim is the server's own message.
+      // `message` is overridden with the error's own text so the envelope never
+      // replaces what happened with the registry's generic remediation.
+      const gate = configGateFor(e);
+      if (gate) {
+        return apiHonestGateError(gate.id, { missing: gate.missing, message: e.message });
+      }
       return apiHonestError(e, 503);
     }
     return apiServerError(e);
@@ -266,7 +308,16 @@ export const GET = withTenantAdmin(async (req: NextRequest) => {
         : {}),
     });
   } catch (e) {
-    if (e instanceof BrainActionsNotConfiguredError) return apiHonestError(e, 503);
+    if (e instanceof BrainActionsNotConfiguredError) {
+      // #4283 — same discrimination on the read-back leg. The GET only ever
+      // raises the Cosmos-store class here, so the envelope is the whole 503
+      // population of this arm; there is no ARG collection on this path.
+      const gate = configGateFor(e);
+      if (gate) {
+        return apiHonestGateError(gate.id, { missing: gate.missing, message: e.message });
+      }
+      return apiHonestError(e, 503);
+    }
     return apiServerError(e);
   }
 });
