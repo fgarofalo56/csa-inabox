@@ -94,10 +94,47 @@ permissions:
 # a twelve-day-old cron run that is waiting for an approval nobody intends to
 # give, which is a worse failure than the one being fixed.
 #
-# RESIDUAL, stated rather than implied: with `false` the group's occupant is the
-# OLDEST waiting scheduled run, so the pile caps at two rather than one and the
-# stale occupant has to be cancelled by hand ONCE. Approving that stale run
-# would deploy the SHA it was triggered on, not head.
+# THE PRECEDENT REACHES THE OPPOSITE DECISION, AND THAT IS QUOTED HERE RATHER
+# THAN ELIDED. deploy-fiab-commercial.yml:2197 uses the same mechanism to
+# DECLINE a concurrency group: "GitHub keeps only ONE pending run per group and
+# CANCELS the previously pending one, even with cancel-in-progress: false. That
+# converts a visible, ~6-minute, self-healing revert into a SILENTLY DROPPED
+# roll at a specific SHA — strictly worse than the bug." The same cancellation
+# is what collapses the pile here, so the divergence is in what is being
+# cancelled, not in how GitHub behaves: there, a pending ROLL that would have
+# healed the estate on its own; here, a pending run whose only next act is to
+# ask for an approval that is already outstanding eleven times over.
+#
+# The analogous exposure on THIS lane is real and is not dismissed: a silently
+# cancelled pending run never reaches `Notify on failure`, so the lane can go
+# DARK rather than red — deploy-integrity R3, a lane silently trailing `main`.
+# What bounds it here is that the newest scheduled run is the one that survives,
+# so the lane's position is never older than one cron interval, and the
+# staleness surface (check-deploy-staleness.mjs) reports the estate's drift
+# independently of whether any run reported it. On the commercial lane neither
+# of those holds, which is why the same mechanism gets the opposite answer.
+#
+# RESIDUAL, stated rather than implied, and NOT asserted as fact — whether an
+# environment-`waiting` run counts as PENDING (cancellable) or IN-PROGRESS
+# (not) for the group is UNOBSERVED, and it decides the shape:
+#   - if `waiting` is PENDING: the pile caps at one and no hand-cancel is
+#     needed; each new cron run replaces the previous waiting one.
+#   - if `waiting` is IN-PROGRESS: the group's occupant is the oldest waiting
+#     scheduled run, the pile caps at two, and the stale occupant has to be
+#     cancelled by hand EACH cycle — not once — because the promoted run hits
+#     the same `gcc-high-deploy` gate and re-occupies the group. Every
+#     intervening scheduled run is then silently cancelled.
+# Either way this is strictly better than eleven, and either way approving a
+# stale occupant deploys the SHA it was triggered on, not head. The measurement
+# that settles it is tracked in #4233.
+#
+# THE ELEVEN EXISTING `waiting` RUNS DO NOT OCCUPY THIS GROUP. A run executes
+# the workflow definition it was CREATED from, and all eleven were created from
+# a SHA that has no `concurrency:` block, so the first occupant will be the
+# first NEW scheduled run — not the oldest of the eleven. (Derived from how a
+# run is created, not observed on this lane.) Those eleven still need
+# cancelling by hand once, as a one-off cleanup of the backlog this block
+# prevents recurring.
 concurrency:
   group: deploy-fiab-gcch-${{ github.event_name }}
   cancel-in-progress: false

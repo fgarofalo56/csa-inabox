@@ -27,8 +27,10 @@
  * gates (`stepGates.length >= 3`). A COUNT cannot see the defect: at the head
  * this file was written against, three gates existed and three steps were
  * unguarded, and the count was satisfied. Population accounting is the fix —
- * EVERY step after the declaration is named below with a disposition, and an
- * unlisted step FAILS. A new step cannot slip past by being new.
+ * every step after the declaration IN `deploy-validate` is named below with a
+ * disposition, every top-level JOB is named in JOB_DISPOSITIONS, and an
+ * unlisted member of either population FAILS. A new step or job cannot slip
+ * past by being new.
  *
  * ── ROUND 2: THE POPULATION WAS THE WRONG POPULATION ───────────────────────
  * The first version of this file accounted for every STEP of `deploy-validate`
@@ -49,6 +51,31 @@
  * from the `pause-declaration` job. The lesson is the one this repo keeps
  * relearning: a complete enumeration of the wrong set reads exactly like a
  * complete enumeration.
+ *
+ * ── SCOPE, AND WHAT IS STILL OUTSIDE IT ────────────────────────────────────
+ * Stated because the round-1 header said "EVERY step after the declaration",
+ * and that was only ever true of ONE job. Precisely what this file frames:
+ *
+ *   IN FRAME  every top-level job of deploy-fiab-gcch (judgeJobs), and every
+ *             step of `deploy-validate` that follows the declaration step
+ *             (judge). `parseSteps` anchors on `^  deploy-validate:` and sees
+ *             no other job's steps.
+ *   IN FRAME  an `exempt` disposition with no reason, and an `exempt` step or
+ *             job whose body makes a MUTATING `az` call (see MUTATING_AZ) —
+ *             added in round 3, because before it `exempt` asserted nothing at
+ *             all and rewriting `Note dry-run completion` to `az group delete`
+ *             kept the suite green.
+ *   OUT OF FRAME  the steps of `precheck` and `pause-declaration`. Both are
+ *             `exempt` JOBS, so the mutating-`az` scan runs over their whole
+ *             body — but they are not step-dispositioned individually.
+ *   OUT OF FRAME  the reusable workflow `build-gov-images` calls. Its contents
+ *             are gov-provision-streaming-migrate.yml's business; what this
+ *             file pins is that the CALL does not happen on a declared pause.
+ *   OUT OF FRAME, INHERENTLY  a step inserted BEFORE the declaration step. The
+ *             estate_paused verdict does not exist yet at that point, so there
+ *             is nothing for it to stand down on; the ADX preflight itself is
+ *             the first thing that touches the estate and it is what produces
+ *             the verdict.
  *
  * ── SEAM ───────────────────────────────────────────────────────────────────
  * LOOM_GCCH_WORKFLOW_PATH overrides the workflow read, so the RED half of this
@@ -83,6 +110,53 @@ function workflowText() {
   // against it — a guard that reads as "compliant" because it found no lines
   // at all is the shape this repo keeps re-finding.
   return readFileSync(process.env.LOOM_GCCH_WORKFLOW_PATH || DEFAULT_WF, 'utf8').replace(/\r\n/g, '\n');
+}
+
+/**
+ * A MUTATING `az` invocation: `az <group…> <verb>` where <verb> writes.
+ *
+ * Round 3, on a review finding. `exempt` previously asserted NOTHING — not the
+ * reason, not the behaviour — and the reviewer proved it by rewriting
+ * `Note dry-run completion` to `az group delete -n rg-csa-loom-admin-usgovvirginia
+ * --yes` and watching the suite stay green. An exemption that cannot be
+ * falsified is an allowlist entry with a paragraph attached.
+ *
+ * DELIBERATELY `az`-SHAPED, not a bare verb list. The intermediate tokens must
+ * start with a letter so the match stops at the first flag: `az account show
+ * --query id -o tsv` reads `account` then `show`, which is not a write, and
+ * does not run on into `--query`. A bare `/delete|create/` scan would flag the
+ * `github.rest.issues.create` in the failure notifier — a GitHub write, not an
+ * estate write — and the exemption there is correct.
+ *
+ * KNOWN LIMIT: this sees `az`. A mutation reached through a script file, an
+ * `actions/*` step, or a REST call is not visible to it. That is why the
+ * reason string is asserted too — the reason is the part a human reads.
+ */
+const MUTATING_AZ =
+  /\baz\s+(?:[a-z][a-z0-9-]*\s+)*(create|delete|update|set|start|stop|restart|purge|upload|import|assign|add|remove|patch|deploy|invoke|replace|publish|enable|disable|revoke|regenerate|reset|attach|detach|move|renew|rotate)\b/;
+
+/**
+ * @param {{mode:string, why?:string}} d
+ * @param {{name:string, body?:string}} member
+ * @param {'step'|'job'} kind
+ * @returns {string[]}
+ */
+function judgeExemption(d, member, kind) {
+  const problems = [];
+  if (typeof d.why !== 'string' || d.why.trim().length === 0) {
+    problems.push(
+      `${kind} '${member.name}' is dispositioned 'exempt' with no reason. The reason IS the disposition: ` +
+        'an exemption with no reason is how this table rots into an allowlist.',
+    );
+  }
+  const m = MUTATING_AZ.exec(String(member.body || ''));
+  if (m) {
+    problems.push(
+      `${kind} '${member.name}' is dispositioned 'exempt' — "touches no estate resource" — but its body runs ` +
+        `\`${m[0]}\`, which WRITES. Either it is not exempt, or the exemption's reason is now false.`,
+    );
+  }
+  return problems;
 }
 
 /**
@@ -175,7 +249,8 @@ export function parseJobs(src) {
  *   'job-guard'  — must carry JOB_GUARD (the declaration-only clause) in `if:`.
  *   'out-guard'  — must carry the `deploy-validate` estate_paused OUTPUT clause.
  *   'internal'   — stands down step-by-step; DISPOSITIONS below is its census.
- *   'exempt'     — reaches no estate resource, with the reason recorded.
+ *   'exempt'     — reaches no estate resource, with the reason recorded and
+ *                  ASSERTED (judgeExemption): non-empty `why`, no mutating `az`.
  */
 const JOB_DISPOSITIONS = new Map([
   [
@@ -239,6 +314,13 @@ export function judgeJobs(jobs) {
           `found \`${job.if || '(none)'}\``,
       );
     }
+    if (d.mode === 'exempt') problems.push(...judgeExemption(d, job, 'job'));
+    if (d.mode === 'internal' && (typeof d.why !== 'string' || d.why.trim().length === 0)) {
+      // No mutating-`az` scan here: `internal` means the job DOES reach the
+      // estate and stands down step by step, so its body is full of writes by
+      // design. DISPOSITIONS below is its census; the reason is what says which.
+      problems.push(`job '${job.name}' is dispositioned 'internal' with no reason naming the census that covers it`);
+    }
   }
   return problems;
 }
@@ -253,8 +335,12 @@ export function judgeJobs(jobs) {
  *                      was destroyed when it was not.
  *   'via-provision'  — cannot run when `Provision` skipped, because its own
  *                      condition reads a Provision result. Transitively guarded.
- *   'exempt'         — touches no estate resource. Reason recorded, and the
- *                      reason is the point: an exemption with no reason is how
+ *   'exempt'         — touches no estate resource. The reason is ASSERTED, not
+ *                      decorative (judgeExemption): an exempt member must carry
+ *                      a non-empty `why`, and its body must make no mutating
+ *                      `az` call. Before round 3 this mode asserted nothing and
+ *                      an exempt step rewritten to `az group delete` stayed
+ *                      green — an exemption with no reason and no teeth is how
  *                      this table would rot into an allowlist.
  */
 const DISPOSITIONS = new Map([
@@ -336,6 +422,7 @@ export function judge(steps) {
         );
       }
     }
+    if (d.mode === 'exempt') problems.push(...judgeExemption(d, step, 'step'));
   }
   return problems;
 }
@@ -405,6 +492,60 @@ test('MUTATION: turning Teardown into a silent skip is caught', () => {
   assert.ok(
     problems.some((p) => /must REFUSE on a paused estate, not skip/.test(p)),
     `expected the silent-skip refusal, got: ${problems.join(' | ')}`,
+  );
+});
+
+test('MUTATION: an EXEMPT step rewritten to mutate the estate is caught', () => {
+  // The reviewer's silence probe S3, verbatim: `Note dry-run completion` is
+  // dispositioned exempt ("echoes a line; no az call, no network"), and before
+  // round 3 rewriting it to a subscription-scoped delete left the suite GREEN,
+  // because `judge` had no `exempt` branch at all.
+  const mutated = parseSteps(workflowText()).map((s) =>
+    s.name === 'Note dry-run completion'
+      ? { ...s, body: `${s.body}\n          az group delete -n rg-csa-loom-admin-usgovvirginia --yes` }
+      : s,
+  );
+  const problems = judge(mutated);
+  assert.equal(problems.length, 1, `expected exactly one problem, got: ${problems.join(' | ')}`);
+  assert.match(problems[0], /Note dry-run completion/);
+  assert.match(problems[0], /az group delete/);
+});
+
+test('MUTATION: an exemption whose reason is deleted is caught, for steps and for jobs', () => {
+  // `why` is the whole content of an exemption, so an empty or whitespace-only
+  // one has to be a failure rather than a shrug. Both populations, so the two
+  // cannot drift apart.
+  const blankStep = judgeExemption(
+    { mode: 'exempt', why: '   ' },
+    { name: 'Note dry-run completion', body: 'run: |\n  echo hi' },
+    'step',
+  );
+  assert.equal(blankStep.length, 1, `expected the missing-reason problem, got: ${blankStep.join(' | ')}`);
+  assert.match(blankStep[0], /step 'Note dry-run completion' is dispositioned 'exempt' with no reason/);
+
+  const missingJob = judgeExemption({ mode: 'exempt' }, { name: 'precheck', body: '' }, 'job');
+  assert.equal(missingJob.length, 1, `expected the missing-reason problem, got: ${missingJob.join(' | ')}`);
+  assert.match(missingJob[0], /job 'precheck' is dispositioned 'exempt' with no reason/);
+});
+
+test('the exempt scan does NOT flag a read, or a GitHub-side write', () => {
+  // A negative control. `az account show` is a read of the SUBSCRIPTION and
+  // `github.rest.issues.create` is a GitHub write, not an estate write — both
+  // are correctly exempt, and a scan that flagged them would be pressure to
+  // delete the scan rather than fix the workflow.
+  assert.deepEqual(
+    judgeExemption({ mode: 'exempt', why: 'reads the subscription' }, {
+      name: 'Export bootstrap coordinates (for the chained Gov bootstrap)',
+      body: 'run: |\n  ADMIN_SUB=$(az account show --query id -o tsv)',
+    }, 'step'),
+    [],
+  );
+  assert.deepEqual(
+    judgeExemption({ mode: 'exempt', why: 'the failure notifier' }, {
+      name: 'Notify on failure',
+      body: 'run: |\n  await github.rest.issues.create({ owner, repo })',
+    }, 'step'),
+    [],
   );
 });
 
