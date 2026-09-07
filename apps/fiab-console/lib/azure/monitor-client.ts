@@ -27,6 +27,7 @@
 import { fetchWithTimeout } from '@/lib/azure/fetch-with-timeout';
 import { getLogAnalyticsHost, logAnalyticsTokenScope } from './cloud-endpoints';
 import { PagingBudget, PAGE_DEADLINE, walkPagedListResult, type PagingTruncation } from './paging-budget';
+import { ACTION_GROUP_RECEIVER_KINDS, emptyReceiverMap, type ActionGroupReceiverKind, type ActionGroupReceiverRead } from './action-group-receivers';
 import {
   loomResourceGroupScopes,
   loomSubscriptionScope,
@@ -1418,58 +1419,12 @@ export interface ActionGroupInput {
 }
 
 /**
- * EVERY receiver array `Microsoft.Insights/actionGroups` carries on the
- * 2023-01-01 API surface. An action-group PUT is a FULL REPLACE of
- * `properties`, so any array missing from the body is DELETED from the live
- * resource — which is why this list has to be exhaustive rather than "the ones
- * we happen to use".
+ * The receiver taxonomy lives in `./action-group-receivers` (dependency-free,
+ * so the two modules are not circular) and is re-exported here — every
+ * importer of `monitor-client` keeps working unchanged.
  */
-export const ACTION_GROUP_RECEIVER_KINDS = [
-  'emailReceivers',
-  'smsReceivers',
-  'webhookReceivers',
-  'logicAppReceivers',
-  'armRoleReceivers',
-  'azureFunctionReceivers',
-  'automationRunbookReceivers',
-  'voiceReceivers',
-  'azureAppPushReceivers',
-  'eventHubReceivers',
-  'itsmReceivers',
-] as const;
-
-export type ActionGroupReceiverKind = (typeof ACTION_GROUP_RECEIVER_KINDS)[number];
-
-/**
- * The four kinds `upsertActionGroup` COMPOSES from its input. Everything else
- * in {@link ACTION_GROUP_RECEIVER_KINDS} is owned by somebody other than the
- * Loom activator (a bicep module, an operator, `alert-dispatch`'s armRole
- * escalation) and is carried through untouched.
- */
-export const LOOM_MANAGED_RECEIVER_KINDS: readonly ActionGroupReceiverKind[] = [
-  'emailReceivers',
-  'smsReceivers',
-  'webhookReceivers',
-  'logicAppReceivers',
-];
-
-export interface ActionGroupReceiverRead {
-  /** Whether the action group exists at all (a 404 read is not an error here). */
-  exists: boolean;
-  /** ARM id, when the group exists. */
-  id?: string;
-  shortName?: string;
-  /** Every kind, always present — an absent array reads as empty, not missing. */
-  byKind: Record<ActionGroupReceiverKind, any[]>;
-  /** Sum across ALL kinds. Zero means the group genuinely reaches nobody. */
-  total: number;
-}
-
-function emptyReceiverMap(): Record<ActionGroupReceiverKind, any[]> {
-  const out = {} as Record<ActionGroupReceiverKind, any[]>;
-  for (const k of ACTION_GROUP_RECEIVER_KINDS) out[k] = [];
-  return out;
-}
+export { ACTION_GROUP_RECEIVER_KINDS, LOOM_MANAGED_RECEIVER_KINDS, emptyReceiverMap } from './action-group-receivers';
+export type { ActionGroupReceiverKind, ActionGroupReceiverRead } from './action-group-receivers';
 
 /** `name` or a full ARM id → { sub, rg, name }. */
 function actionGroupCoordinates(nameOrId: string): { sub: string; rg: string; name: string } {
