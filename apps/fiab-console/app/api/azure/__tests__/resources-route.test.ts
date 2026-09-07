@@ -114,8 +114,9 @@ describe('query construction', () => {
    *   functionapp,linux             FALSE                true
    *   functionapp,linux,container   FALSE                true
    *
-   * Loom's own bicep declares 8 of its 11 `Microsoft.Web/sites` as
-   * `functionapp,linux`, so the equality form returned nothing for them.
+   * Loom's own bicep declares 15 function-app `Microsoft.Web/sites` repo-wide
+   * and 14 of them carry a comma list (only `scc-labels-function.bicep` is bare
+   * `functionapp`), so the equality form returned nothing for them.
    */
   it('kindMatch=contains emits KQL `contains`; equality remains the default', () => {
     const contains = buildQuery('Microsoft.Web/sites', 'functionapp', undefined, undefined, 'contains');

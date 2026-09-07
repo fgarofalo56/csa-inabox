@@ -51,16 +51,83 @@ export const CONNECTION_CATEGORIES: {
    * derived where the boundary is actually known.
    */
   kind?: string;
+  /**
+   * TRUE when the target this row declares is CONTAINER-scoped, i.e. the
+   * account endpoint alone is not the whole value.
+   *
+   * This exists because the row and its picker disagreed (blocking review,
+   * 2026-09-07). `AzureBlob`'s `targetPlaceholder` has always been
+   * `https://<account>.blob.core.windows.net/<container>`, but
+   * `storage-blob-endpoint` projects `properties.primaryEndpoints.blob` — the
+   * ACCOUNT endpoint, no container — so the default path (pick from the list,
+   * create) emitted a target missing the segment this same file says is part
+   * of it. Every other storage surface in this wave cascades a
+   * `BlobContainerPicker` off the picked account; this one did not.
+   *
+   * Declaring it here rather than special-casing the category in the editor
+   * keeps "does this target need a container" in the one place the target
+   * shape is defined, and lets the composition be unit-tested with no live
+   * workspace ({@link composeBlobTarget}).
+   */
+  containerScoped?: boolean;
   /** Auth modes valid for this category (first is the default). */
   authModes: ConnectionAuthMode[];
 }[] = [
   { value: 'AzureOpenAI', label: 'Azure OpenAI', targetPlaceholder: 'https://<name>.openai.azure.com', kind: 'aoaiEndpoint', authModes: ['AAD', 'ApiKey'] },
   { value: 'CognitiveSearch', label: 'Azure AI Search', targetPlaceholder: 'https://<name>.search.windows.net', authModes: ['AAD', 'ApiKey'] },
   { value: 'AIServices', label: 'Azure AI Services', targetPlaceholder: 'https://<name>.cognitiveservices.azure.com', kind: 'aoaiEndpoint', authModes: ['AAD', 'ApiKey'] },
-  { value: 'AzureBlob', label: 'Azure Blob storage', targetPlaceholder: 'https://<account>.blob.core.windows.net/<container>', kind: 'storage-blob-endpoint', authModes: ['AAD'] },
+  { value: 'AzureBlob', label: 'Azure Blob storage', targetPlaceholder: 'https://<account>.blob.core.windows.net/<container>', kind: 'storage-blob-endpoint', containerScoped: true, authModes: ['AAD'] },
   { value: 'ApiKey', label: 'Custom (API key)', targetPlaceholder: 'https://<endpoint>', authModes: ['ApiKey'] },
   { value: 'CustomKeys', label: 'Custom (multiple keys)', targetPlaceholder: 'https://<endpoint>', authModes: ['CustomKeys'] },
 ];
+
+/**
+ * ── THE CONTAINER-SCOPED TARGET, COMPOSED NOT TYPED ─────────────────────────
+ * `storage-blob-endpoint` returns the ACCOUNT endpoint from ARM — which is what
+ * makes the sovereign host right in every boundary, since the suffix comes back
+ * WITH the row rather than being composed in a browser that cannot read
+ * `LOOM_CLOUD`. The container half is then chosen from a `BlobContainerPicker`
+ * and joined here.
+ *
+ * Split out as a pure function on purpose: the defect this fixes was a
+ * contradiction INSIDE the repo (the row's declared `targetPlaceholder` versus
+ * what its `kind` could emit), so the receipt for it is a unit test over these
+ * two functions, not a live Foundry workspace.
+ *
+ * Exactly one slash between the two halves, no trailing slash, and an empty
+ * container yields the endpoint unchanged so a half-filled form does not
+ * produce `https://acct.blob…net/`.
+ */
+export function composeBlobTarget(accountEndpoint: string, container: string): string {
+  const base = (accountEndpoint || '').trim().replace(/\/+$/, '');
+  const c = (container || '').trim().replace(/^\/+|\/+$/g, '');
+  if (!base) return '';
+  return c ? `${base}/${c}` : base;
+}
+
+/**
+ * The inverse, for prefilling the EDIT dialog from a stored target. Anything
+ * after the host is the container path; a target with no path yields an empty
+ * container (which the picker then renders as "choose one"), never a guess.
+ */
+export function splitBlobTarget(target: string): { accountEndpoint: string; container: string } {
+  const raw = (target || '').trim();
+  const m = /^(https?:\/\/[^/]+)(?:\/(.*))?$/i.exec(raw);
+  if (!m) return { accountEndpoint: raw, container: '' };
+  return { accountEndpoint: m[1], container: (m[2] || '').replace(/\/+$/, '') };
+}
+
+/**
+ * The storage ACCOUNT name out of a blob endpoint —
+ * `https://acct.blob.core.windows.net/` → `acct`. `BlobContainerPicker` takes
+ * an ARM id or a bare account name, and neither is what the edit dialog holds
+ * when it is prefilled from a stored target, so this bridges the two.
+ * Returns '' when the host is not a blob endpoint.
+ */
+export function blobAccountFromEndpoint(accountEndpoint: string): string {
+  const m = /^https?:\/\/([a-z0-9]+)\.blob\./i.exec((accountEndpoint || '').trim());
+  return (m?.[1] || '').toLowerCase();
+}
 
 export interface CreateConnectionInput {
   name: string;

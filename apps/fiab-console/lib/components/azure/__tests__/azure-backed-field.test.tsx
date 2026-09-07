@@ -100,8 +100,9 @@ describe('ARM `kind` is a comma LIST, not an enum', () => {
    * REGRESSION GUARD (review 2026-09-07). `function-app-id` shipped as a bare
    * `kind: 'functionapp'`, which `/api/azure/resources` renders as
    * `| where kind =~ 'functionapp'` — case-insensitive EQUALITY. Loom's own
-   * bicep declares 8 of its 11 `Microsoft.Web/sites` as `functionapp,linux`, so
-   * that predicate matched none of them and the Event Grid destination picker —
+   * bicep declares 15 function-app `Microsoft.Web/sites` repo-wide and 14 of
+   * them carry a comma list (`functionapp,linux`), so that predicate matched
+   * almost none of them and the Event Grid destination picker —
    * which DEFAULTS to `AzureFunction` — opened on a list that could never
    * return a row.
    */

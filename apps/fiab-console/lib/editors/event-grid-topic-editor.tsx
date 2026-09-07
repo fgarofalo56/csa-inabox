@@ -595,7 +595,22 @@ export function EventGridTopicEditor({ item, id }: Props) {
                     <Dropdown
                       value={DESTINATIONS.find((d) => d.key === destType)?.label || ''}
                       selectedOptions={[destType]}
-                      onOptionSelect={(_, d) => setDestType((d.optionValue as DestType) || 'AzureFunction')}
+                      onOptionSelect={(_, d) => {
+                        // CLEAR THE CASCADE. `destParentId` and `destChildName`
+                        // belong to the OLD handler type, and the composed
+                        // `destResourceId` below splices whatever survives into
+                        // the new type's segment — e.g. a Function App id plus
+                        // `/eventhubs/<hub>`, which the monospace receipt then
+                        // renders as though it were a real resource and submit
+                        // would send. The old single typed box was equally
+                        // sticky, but the stale value was one the user had
+                        // typed and could recognise; a picker showing a
+                        // resource it would never have offered is worse.
+                        setDestType((d.optionValue as DestType) || 'AzureFunction');
+                        setDestParentId('');
+                        setDestChildName('');
+                        setDestQueueName('');
+                      }}
                     >
                       {DESTINATIONS.map((d) => <Option key={d.key} value={d.key} text={d.label}>{d.label}</Option>)}
                     </Dropdown>

@@ -19,7 +19,11 @@
  * `kindMatch=contains` swaps that `=~` for KQL `contains`. It exists because
  * ARM `kind` is a COMMA LIST for several types, not an enum: an Azure Function
  * App is `functionapp` on Windows and `functionapp,linux` on Linux, and Loom's
- * own bicep declares 8 of its 11 `Microsoft.Web/sites` as `functionapp,linux`.
+ * own bicep declares 15 function-app `Microsoft.Web/sites` and 14 of them carry
+ * a comma list (`functionapp,linux`) — only `scc-labels-function.bicep` is bare
+ * `functionapp`. (Re-counted repo-wide 2026-09-07 after the first version of
+ * this comment said "8 of its 11", which was a `platform/fiab/bicep`-shaped
+ * count stated as a repo-wide one and was wrong either way.)
  * `=~` is case-insensitive EQUALITY, so `kind=functionapp` alone matches none
  * of them. See the `kindMatch` block on `buildQuery` below.
  *

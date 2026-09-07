@@ -52,17 +52,35 @@
  *             — the ACCEPTED count no longer describes the file, so the guard
  *             annotates all three of its sites as `[accepted-file drift]`.
  *   PARTIAL   the forbidden SHAPE reappears in the report for that file, which
- *             the per-case `not.toMatch(/\[shape:arm-id\]/)` assertions read.
+ *             the per-case `hasShape(l, 'arm-id')` / `hasShape(l,
+ *             'password-field')` filters read. MEASURED for #3540 on
+ *             `uc-dialogs.tsx:1741`: the Access-Connector `AzureBackedField` ->
+ *             `<Field label="Access connector ARM id" hint="e.g. abfss://…">
+ *             <Input …/></Field>`. Guard RC=1, annotated
+ *             `[shape:adls-uri,azure-host,arm-id]`; this case FAILS on that
+ *             annotation. It did NOT fail while those filters were
+ *             `l.includes('[shape:arm-id]')` — see THE TAG LIST IS ALSO A LIST.
  *
  * ── THE DEFECT THIS RECEIPT USED TO HIDE (blocking review, 2026-09-07) ──────
- * The DRAINED line above previously read "the DRAINED file reappears as an
- * un-accepted line", and it was FALSE: measured at `8c94f9c`, that exact
- * mutation left the guard at RC=1 and this spec at 7/7 GREEN. The helpers
- * matched only the BASELINED listing shape, never the annotation shape a NEW
- * over-baseline site is emitted in, so the one verdict these assertions exist
- * for was the one they could not see — a `deploy-integrity.md` R7 assertion
- * this file's own code disproved. Fixed in `siteRe`, and the numbers above are
- * the post-fix re-measurement, not the pre-fix claim restated.
+ * TWICE, one level apart, and both are recorded because a corrected claim that
+ * hides its predecessor is the same over-assertion again:
+ *
+ *   1. The DRAINED line above once read "the DRAINED file reappears as an
+ *      un-accepted line", and it was FALSE: measured at `8c94f9c`, that exact
+ *      mutation left the guard at RC=1 and this spec at 7/7 GREEN. The helpers
+ *      matched only the BASELINED listing shape, never the annotation shape a
+ *      NEW over-baseline site is emitted in, so the one verdict these
+ *      assertions exist for was the one they could not see. Fixed in `siteRe`.
+ *   2. The PARTIAL line above then claimed the per-case assertions read the
+ *      SHAPE, and for #3540 they did not: measured at `45e01b8`, the
+ *      multi-tag mutation quoted above put the guard at RC=1 and this spec at
+ *      8/8 GREEN, because `includes('[shape:arm-id]')` only matches when
+ *      `arm-id` is the SOLE tag and multi-tag is the ordinary case in that
+ *      dialog. Fixed in `hasShape`.
+ *
+ * Both were `deploy-integrity.md` R7 assertions this file's own subject
+ * disproved, and the numbers above are post-fix re-measurements rather than
+ * either claim restated.
  *
  * ── WHAT THIS DOES NOT GUARD (measured, review 2026-09-07) ──────────────────
  * The claim above is deliberately narrower than "the picker stays". The
@@ -91,7 +109,7 @@
  * files at once can hide the second one's site. Pre-existing guard behaviour,
  * not something these helpers can repair.
  */
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, beforeAll } from 'vitest';
 import { spawnSync } from 'node:child_process';
 import path from 'node:path';
 
@@ -117,8 +135,30 @@ const REPO = path.resolve(process.cwd(), '../..');
  * The exit code is deliberately ignored: the ratchet can fail for reasons that
  * have nothing to do with these files. What must NOT be ignored is the guard
  * failing to run, so that is asserted.
+ *
+ * ── SPAWNED ONCE, NOT ONCE PER CASE ────────────────────────────────────────
+ * `spawnSync` BLOCKS the vitest worker's event loop, and the guard takes ~4s
+ * over the whole tree. Seven cases meant seven serial blocking spawns, which
+ * starved vitest's `onTaskUpdate` RPC heartbeat: measured 2026-09-07 on this
+ * workstation, 3 of 5 consecutive runs of an otherwise-passing file ended
+ * RC=1 — twice on `[vitest-worker]: Timeout calling "onTaskUpdate"` with all
+ * 9 tests reported PASSED, and once on three cases hitting the 30s
+ * `testTimeout` outright. A spec that reds on machine load is not measuring
+ * its subject, which is the same class of defect as one that greens over a
+ * regression.
+ *
+ * The report is a pure function of the working tree and the tree does not
+ * change during a run, so one spawn serves every case, and it happens in a
+ * `beforeAll` with its own generous timeout rather than inside whichever case
+ * happens to run first. That matters: on a loaded machine a SINGLE guard run
+ * was measured at 144s, so leaving the spawn under the 30s per-test
+ * `testTimeout` would just move the same load-dependent red onto one case.
+ * This is a scheduling change only — the command, its arguments and the two
+ * streams read are unchanged.
  */
-function guardReport(): string {
+let CACHED: string | null = null;
+
+function runGuard(): string {
   const r = spawnSync(process.execPath, ['scripts/ci/check-no-freeform.mjs', '--report'], {
     cwd: REPO, encoding: 'utf8', maxBuffer: 32 * 1024 * 1024,
   });
@@ -126,6 +166,16 @@ function guardReport(): string {
   const out = `${r.stdout || ''}\n${r.stderr || ''}`;
   expect(out, 'guard produced no report').toMatch(/asking for an infrastructure value/);
   return out;
+}
+
+/** The one spawn, off the per-test clock. */
+beforeAll(() => { CACHED = runGuard(); }, 600_000);
+
+function guardReport(): string {
+  // Lazy fallback, so the helper is still correct if a future case runs
+  // outside this file's `beforeAll`.
+  if (CACHED === null) CACHED = runGuard();
+  return CACHED;
 }
 
 const esc = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -176,6 +226,34 @@ function allSites(report: string, rel: string): string[] {
   return report.split('\n').filter((l) => siteRe(rel, false).test(l));
 }
 
+/**
+ * ── THE TAG LIST INSIDE THE BRACKET IS ALSO A LIST ─────────────────────────
+ * `siteRe` above taught the helpers the two BRACKET syntaxes; this teaches them
+ * the list INSIDE the bracket, which was the same defect one level down.
+ *
+ * The guard tags a site with EVERY shape it matched, comma-joined:
+ * `[shape:arm-id]` when one pattern fired, `[shape:adls-uri,azure-host,arm-id]`
+ * when three did. Multi-tag is the ordinary case in these files, not the exotic
+ * one — the baselined listing is full of `[shape:connection-string,secret-
+ * descriptor]` and `[shape:azure-host,templated-host]`.
+ *
+ * MEASURED at `45e01b8`, which is why this exists: the #3540 case filtered with
+ * `l.includes('[shape:arm-id]')`, so reverting the uc-dialogs Access-Connector
+ * picker to a hand-typed ARM-id `<Input>` whose hint ALSO named an abfss host
+ * (four of its neighbours are abfss locations, so this is an ordinary shape
+ * there) put the guard at RC=1 —
+ * `uc-dialogs.tsx,line=1741::no-freeform [shape:adls-uri,azure-host,arm-id]` —
+ * and left this spec at 8/8 GREEN. The case stayed green over the precise
+ * regression it exists to catch, because `arm-id` was no longer the SOLE tag.
+ *
+ * So the tag is matched bounded by `[shape:` or a comma on the left and a comma
+ * or `]` on the right. `[shape:non-arm-id]` is NOT a hit for `arm-id`, and
+ * `[shape:arm-id-ish]` is not either — the bounds are what make that true.
+ */
+function hasShape(line: string, tag: string): boolean {
+  return new RegExp(`\\[shape:(?:[^\\]]*,)?${esc(tag)}(?:,[^\\]]*)?\\]`).test(line);
+}
+
 describe('console-ui-w2 — the converted surfaces stay converted', () => {
   /**
    * THE CLASS GUARD for the blocking defect above, and it runs FIRST because
@@ -210,6 +288,38 @@ describe('console-ui-w2 — the converted surfaces stay converted', () => {
     expect(liveSites(banner, rel)).toEqual([]);
   });
 
+  /**
+   * THE SECOND CLASS GUARD, for the level below: the tag list INSIDE the
+   * bracket. `siteRe` finds the LINE; `hasShape` decides whether the shape a
+   * case names is on it, and matching that by substring made the #3540 case
+   * blind to its own target the moment the site carried more than one tag
+   * (measured at `45e01b8` — see the `hasShape` header). The third fixture
+   * below is the exact annotation that mutation produced.
+   */
+  it('the tag test reads a MULTI-TAG shape list, not just a sole tag', () => {
+    const rel = 'apps/fiab-console/lib/editors/databricks/uc-dialogs.tsx';
+    const sole = `  ${rel}:1741 [shape:arm-id] Evidence: Access connector ARM id`;
+    // Verbatim from `node scripts/ci/check-no-freeform.mjs` (stderr) with the
+    // Access-Connector picker reverted to an ARM-id Input whose hint names an
+    // abfss host — RC=1, and this spec was 8/8 GREEN before `hasShape` existed.
+    const multi = `::error file=${rel},line=1741::no-freeform [shape:adls-uri,azure-host,arm-id]: this free-text Input asks the user for an ARM resource id.`;
+
+    expect(hasShape(sole, 'arm-id'), 'sole tag').toBe(true);
+    expect(hasShape(multi, 'arm-id'), 'LAST tag of three — the blocking defect').toBe(true);
+    expect(hasShape(multi, 'adls-uri'), 'FIRST tag of three').toBe(true);
+    expect(hasShape(multi, 'azure-host'), 'MIDDLE tag of three').toBe(true);
+    // …and it must not fire on a tag that merely CONTAINS or is contained by
+    // the one asked for, which is what a substring test would do.
+    expect(hasShape(multi, 'password-field')).toBe(false);
+    expect(hasShape('  x.tsx:1 [shape:non-arm-id] Evidence: y', 'arm-id')).toBe(false);
+    expect(hasShape('  x.tsx:1 [shape:arm-id-ish] Evidence: y', 'arm-id')).toBe(false);
+    expect(hasShape('  x.tsx:1 [shape:arm] Evidence: y', 'arm-id')).toBe(false);
+
+    // The helpers and the tag test compose: the multi-tag ANNOTATION is both a
+    // site line for this file and an arm-id site.
+    expect(allSites(multi, rel).filter((l) => hasShape(l, 'arm-id'))).toHaveLength(1);
+  });
+
   it('#4201 spark-job-definition-editor is fully DRAINED — no site, accepted or otherwise', () => {
     const rel = 'apps/fiab-console/lib/editors/spark-job-definition-editor.tsx';
     expect(allSites(guardReport(), rel)).toEqual([]);
@@ -228,10 +338,10 @@ describe('console-ui-w2 — the converted surfaces stay converted', () => {
     const rel = 'apps/fiab-console/lib/editors/event-grid-topic-editor.tsx';
     const report = guardReport();
     expect(liveSites(report, rel)).toEqual([]);
-    // Neither the handler ARM id nor the dead-letter storage id may come back.
-    expect(report).not.toMatch(
-      new RegExp(`${rel.replace(/[.*+?^${}()|[\\]\\\\]/g, '\\\\$&')}:\\d+ \\[shape:arm-id\\]`),
-    );
+    // Neither the handler ARM id nor the dead-letter storage id may come back —
+    // in EITHER emission shape, and whether or not `arm-id` is the only tag the
+    // site matched.
+    expect(allSites(report, rel).filter((l) => hasShape(l, 'arm-id'))).toEqual([]);
     expect(allSites(report, rel)).toHaveLength(2);
   });
 
@@ -243,7 +353,7 @@ describe('console-ui-w2 — the converted surfaces stay converted', () => {
     expect(sites).toHaveLength(2);
     // Both survivors are credentials. The ADX cluster URL and the storage
     // account — the two addresses this wave pickerized — are gone.
-    for (const s of sites) expect(s).toMatch(/\[shape:password-field\]/);
+    for (const s of sites) expect(hasShape(s, 'password-field'), s).toBe(true);
   });
 
   it('#3540 the Unity Catalog credential surfaces no longer ask for an ARM id', () => {
@@ -252,7 +362,7 @@ describe('console-ui-w2 — the converted surfaces stay converted', () => {
       'apps/fiab-console/lib/editors/databricks/uc-dialogs.tsx',
       'apps/fiab-console/app/catalog/unity/page.tsx',
     ]) {
-      const armIdSites = allSites(report, rel).filter((l) => l.includes('[shape:arm-id]'));
+      const armIdSites = allSites(report, rel).filter((l) => hasShape(l, 'arm-id'));
       expect(armIdSites, `${rel} regained a hand-typed ARM id`).toEqual([]);
     }
   });
@@ -260,7 +370,7 @@ describe('console-ui-w2 — the converted surfaces stay converted', () => {
   it('#3626 unified-sql-database-editor no longer asks for a password', () => {
     const rel = 'apps/fiab-console/lib/editors/unified-sql-database-editor.tsx';
     const report = guardReport();
-    const pw = allSites(report, rel).filter((l) => l.includes('[shape:password-field]'));
+    const pw = allSites(report, rel).filter((l) => hasShape(l, 'password-field'));
     expect(pw, 'the PostgreSQL admin password box came back — it is minted server-side').toEqual([]);
   });
 

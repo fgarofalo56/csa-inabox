@@ -413,8 +413,10 @@ const MIN_FREETEXT_SITES = 1800;
  *  acceptance is a judgement about a site the detector correctly found, so
  *  netting it off here would let the ACCEPTED table walk the floor down without
  *  anything having been fixed — the floor would then be measuring the table
- *  rather than the detector. That is why this wave's 13 newly-ACCEPTED sites do
- *  NOT move it: only the 24 that were deleted do.
+ *  rather than the detector. That is why this wave's 14 newly-ACCEPTED sites do
+ *  NOT move it: only the 24 that were deleted do. (14, not the 13 an earlier
+ *  revision of this comment claimed — the ACCEPTED table's declared totals go
+ *  40 sites across 21 entries at the merge-base to 54 across 26 here.)
  *
  *  Deliberately NOT zero — a ratchet only fails on a RISE. Lower it in the SAME
  *  PR that actually removes the sites. Kept at roughly the same proportional

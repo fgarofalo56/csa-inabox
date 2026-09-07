@@ -23,10 +23,31 @@
  * ORDER MATTERS, and it is deliberate. The secret is written BEFORE the ARM
  * call. If the write fails the server is never created, which is recoverable;
  * the other order would create a server whose admin password exists nowhere,
- * which is not. When the ARM create fails after a successful write, the
- * response says so in those words rather than implying the secret is unused —
- * a stale secret under a server that does not exist is harmless and is
- * overwritten by the next attempt with the same name.
+ * which is not.
+ *
+ * ── BUT THE WRITE IS NOT UNCONDITIONAL (blocking review, 2026-09-07) ────────
+ * That ordering is sound for a genuinely NEW server and wrong for a reused
+ * name, and this route used to make no distinction. Flexible-server names are
+ * globally unique — the server answers on `<name>.<pg-suffix>` — so a POST
+ * naming a server this estate already created ALWAYS fails at ARM. It failed
+ * AFTER `putKeyVaultSecret` had already overwritten `pg-admin-<name>` with a
+ * fresh password the live server does not have, and the response then asserted
+ * that the secret "belongs to no server", which the code had established
+ * nothing about. That is a `deploy-integrity.md` R7 claim and, for the
+ * operator, the loss of the working credential of a running server (Key Vault
+ * versioning is the only reason it was recoverable at all).
+ *
+ * So the server is RESOLVED FIRST, and there are exactly three outcomes:
+ *   - a server of that name exists in this subscription → 409, nothing is
+ *     minted and nothing is written. The existing secret is untouched.
+ *   - the lookup itself fails → 503, nothing is minted and nothing is written.
+ *     Absence was NOT established, so it is not assumed.
+ *   - the lookup returns and the name is free → mint, write, create.
+ * The failure text after a create failure now says only what the lookup
+ * established, in the scope it established it (this subscription, at the
+ * moment the request began) — a name in use in ANOTHER subscription or tenant
+ * is invisible to `listServers()` and the message says so rather than
+ * asserting the secret belongs to nothing.
  *
  * NO KEY VAULT MEANS NO PROVISION. `kvSecretsConfigGate()` is checked first and
  * returned as an honest gate naming the exact env var and role
@@ -116,6 +137,51 @@ export async function POST(req: NextRequest) {
     );
   }
 
+  /**
+   * RESOLVE BEFORE MINTING. `listServers()` is the same call the GET above
+   * makes, over `LOOM_SUBSCRIPTION_ID`. A hit means the ARM create is going to
+   * fail on a name collision, so nothing may be minted and nothing written —
+   * the secret already under that name is the LIVE server's credential.
+   */
+  let existing: Awaited<ReturnType<typeof listServers>>;
+  try {
+    existing = await listServers();
+  } catch (e: any) {
+    // Fail CLOSED. Not finding out is not the same as finding nothing, and the
+    // cost of assuming absence here is overwriting a live credential.
+    const status = e instanceof PostgresError ? e.status : 502;
+    return NextResponse.json(
+      {
+        ok: false,
+        code: 'existence_check_failed',
+        error:
+          `Could not determine whether a PostgreSQL flexible server named '${name}' already exists in this ` +
+          'subscription, so nothing was minted, nothing was written to Key Vault, and no server was created. ' +
+          'Creating one blind would overwrite the admin password of an existing server of the same name. ' +
+          `The lookup failed with: ${e?.message || String(e)}`,
+      },
+      { status: status === 401 || status === 403 ? status : 503 },
+    );
+  }
+  const hit = existing.find((s) => s.name.toLowerCase() === name.toLowerCase());
+  if (hit) {
+    return NextResponse.json(
+      {
+        ok: false,
+        code: 'server_exists',
+        error:
+          `A PostgreSQL flexible server named '${name}' already exists in this subscription ` +
+          `(${hit.id}). Flexible-server names are globally unique, so the create would have failed at ARM — ` +
+          `and the attempt would have overwritten '${adminSecretNameFor(name)}', which holds that server's ` +
+          'live admin password. Nothing was minted, written or created. Choose a different name, or manage ' +
+          'the existing server from its item page.',
+        existingId: hit.id,
+        adminSecretName: adminSecretNameFor(name),
+      },
+      { status: 409 },
+    );
+  }
+
   const administratorLoginPassword = mintAdminPassword();
   let adminSecretName: string;
   try {
@@ -145,8 +211,11 @@ export async function POST(req: NextRequest) {
       {
         ok: false,
         error:
-          `${result.error} — the admin password had already been written to Key Vault as '${adminSecretName}'; ` +
-          'it belongs to no server and the next attempt with this name overwrites it.',
+          `${result.error} — the admin password had already been written to Key Vault as '${adminSecretName}'. ` +
+          `No PostgreSQL flexible server named '${name}' existed in THIS subscription when the request began, ` +
+          'so that secret is not the credential of any server Loom can see here; the next attempt with this ' +
+          'name overwrites it. Flexible-server names are globally unique, so if the name is taken in another ' +
+          'subscription or tenant that server is invisible to this check and may be why the create failed.',
         adminSecretName,
       },
       { status: result.status },

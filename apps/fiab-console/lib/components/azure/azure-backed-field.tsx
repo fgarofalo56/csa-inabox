@@ -284,11 +284,15 @@ const EXTRA_FIELDS: Record<string, AzureBackedFieldDef> = {
    * every row whose list has more than one token: `functionapp` → both true;
    * `functionapp,linux` → equality FALSE, substring true;
    * `functionapp,linux,container` → equality FALSE, substring true. Loom's own
-   * bicep declares 8 of its 11 `Microsoft.Web/sites` as `functionapp,linux`
-   * (only `scc-labels-function.bicep` is bare `functionapp`), and Event Grid's
-   * destination picker DEFAULTS to `AzureFunction` — so the equality form gave
-   * a first-open dead end on the platform's own Function Apps, which is an
-   * `auto-bind-by-default.md` violation as well as a false comment.
+   * bicep declares 15 function-app `Microsoft.Web/sites` repo-wide and 14 of
+   * them carry a comma list — only `scc-labels-function.bicep` is bare
+   * `functionapp`. (Re-counted 2026-09-07: the first version of this comment
+   * said "8 of its 11", which no scope of the tree produces. Within
+   * `platform/fiab/bicep` alone it is 6 function apps of 7 sites, 5 of them
+   * comma-list.) Event Grid's destination picker DEFAULTS to `AzureFunction`
+   * — so the equality form gave a first-open dead end on the platform's own
+   * Function Apps, which is an `auto-bind-by-default.md` violation as well as
+   * a false comment.
    *
    * `kindMatch: 'contains'` emits `| where kind contains 'functionapp'`, KQL's
    * case-insensitive substring operator, which is the same predicate the
