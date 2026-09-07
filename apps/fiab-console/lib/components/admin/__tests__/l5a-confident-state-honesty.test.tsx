@@ -268,26 +268,44 @@ describe('#3742 TokenBudgetPanel — the budget scope is picked from real data, 
   };
 
   /**
-   * The shape `/api/workspaces` ACTUALLY returns: `listAccessibleWorkspaces()`
-   * verbatim, typed `Workspace[]`, whose display field is `name` — there is no
-   * `displayName` on `Workspace` (lib/types/workspace.ts; `displayName` lives on
-   * `WorkspaceItem`, a different type). The first cut of this spec fed the
-   * picker `displayName`, so `label: w.displayName || w.name || w.id` could have
-   * its `w.name` operand — the ONLY one production ever evaluates — deleted and
+   * The shape `/api/admin/workspaces` ACTUALLY returns: `{ ok, total,
+   * workspaces }` where each row is a `WorkspaceAdminRecord`, whose display
+   * field is `name` (lib/clients/workspaces-client.ts:45) — there is no
+   * `displayName` on it. The first cut of this spec fed the picker
+   * `displayName`, so `label: w.displayName || w.name || w.id` could have its
+   * `w.name` operand — the ONLY one production ever evaluates — deleted and
    * every assertion still passed, while every workspace rendered as a raw GUID
    * live. That is the exact defect #3742 is about, so the fixture models the
    * route, not the test. `ws-3` pins the `w.id` tail of the same chain.
+   *
+   * ROUND 2 — the route MOVED from `/api/workspaces` to `/api/admin/workspaces`.
+   * The owner-scoped one resolves through `listAccessibleWorkspaces`, which is
+   * owner-only without LOOM_MULTIUSER_ACL, so on this tenant-admin-only surface
+   * it offered an admin only the workspaces they personally created. Keying the
+   * fixture to the ADMIN path is what makes this spec fail if the source is
+   * reverted.
    */
-  const WORKSPACES = [
+  const WORKSPACES = { ok: true, total: 3, workspaces: [
     { id: 'ws-1', name: 'Sales analytics' },
     { id: 'ws-2', name: 'Finance' },
     { id: 'ws-3' },
-  ];
+  ] };
+
+  /**
+   * `/api/admin/agent-quality` → `listAgents(projectId)`. `agent-new` EXISTS in
+   * the Foundry project and has never spent a token, so it is absent from the
+   * budgets ledger above — which is precisely the agent a budget is for.
+   */
+  const AGENT_QUALITY = {
+    ok: true,
+    agents: { configured: true, list: [{ name: 'agent-new', description: 'newly registered' }] },
+  };
 
   it('offers the real workspaces instead of a free-text Scope id box', async () => {
     routeMock({
       '/api/admin/copilot-quality/budgets': { status: 200, body: DASHBOARD },
-      '/api/workspaces': { status: 200, body: WORKSPACES },
+      '/api/admin/workspaces': { status: 200, body: WORKSPACES },
+      '/api/admin/agent-quality': { status: 200, body: AGENT_QUALITY },
     });
     mount(<TokenBudgetPanel />);
 
@@ -306,10 +324,15 @@ describe('#3742 TokenBudgetPanel — the budget scope is picked from real data, 
     expect(screen.getByRole('option', { name: 'ws-3' })).toBeInTheDocument();
   });
 
-  it('switching scope to "agent" offers the agents the ledger has actually attributed', async () => {
+  it('switching scope to "agent" offers the ledger agents UNIONED with the Foundry registry', async () => {
+    // ROUND 2 (#3742 refutation, AC#2). `budgetDashboard()` rows are configured
+    // budgets ∪ scopes that have ALREADY SPENT, so a ledger-only picker can
+    // never offer the agent a prospective budget is for. `agent-new` is in the
+    // registry and NOT in `rows`; at the pre-fix shape it is unreachable.
     routeMock({
       '/api/admin/copilot-quality/budgets': { status: 200, body: DASHBOARD },
-      '/api/workspaces': { status: 200, body: [{ id: 'ws-1', name: 'Sales analytics' }] },
+      '/api/admin/workspaces': { status: 200, body: WORKSPACES },
+      '/api/admin/agent-quality': { status: 200, body: AGENT_QUALITY },
     });
     mount(<TokenBudgetPanel />);
 
@@ -321,7 +344,40 @@ describe('#3742 TokenBudgetPanel — the budget scope is picked from real data, 
 
     const picker = await within(dialog).findByRole('combobox', { name: /Agent/i });
     await userEvent.click(picker);
+    // The ledger half still shows...
     expect(await screen.findByRole('option', { name: 'SQL helper' })).toBeInTheDocument();
+    // ...and the registry half, the one that was missing, now does too.
+    expect(await screen.findByRole('option', { name: 'agent-new' })).toBeInTheDocument();
+  });
+
+  it('a not-yet-seen id stays reachable even when the list is NON-EMPTY', async () => {
+    // ROUND 2 (#3742 refutation, "NEW DEAD END"). The previous fix rendered the
+    // typed-id <Input> only when the list was ENTIRELY empty, so with one
+    // attributed agent an admin could neither pick nor type an agent that was
+    // absent from both sources. auto-bind-by-default forbids "no items found"
+    // over a control with no way forward, and this is that shape with one row.
+    routeMock({
+      '/api/admin/copilot-quality/budgets': { status: 200, body: DASHBOARD },
+      '/api/admin/workspaces': { status: 200, body: WORKSPACES },
+      '/api/admin/agent-quality': { status: 200, body: AGENT_QUALITY },
+    });
+    mount(<TokenBudgetPanel />);
+
+    await userEvent.click(await screen.findByRole('button', { name: 'New budget' }));
+    const dialog = await screen.findByRole('dialog');
+
+    // The list IS populated (three workspaces), so the old `mustTypeId` is false
+    // and no <Input> exists at the pre-fix shape.
+    const picker = await within(dialog).findByRole('combobox', { name: /Workspace/i });
+    await userEvent.click(picker);
+    await userEvent.click(await screen.findByRole('option', { name: 'Enter an id…' }));
+
+    const typed = await within(dialog).findByRole('textbox', { name: /Workspace/i });
+    expect(typed).toBeEnabled();
+    await userEvent.type(typed, 'ws-not-yet-seen');
+    await waitFor(() => expect(within(dialog).getByRole('button', { name: 'Save' })).toBeEnabled());
+    // ...and it is not a one-way door: the real list is one click away again.
+    expect(within(dialog).getByRole('button', { name: /Pick from the list instead/i })).toBeInTheDocument();
   });
 
   it('switching scope DISCARDS the id picked under the previous scope', async () => {
@@ -332,7 +388,8 @@ describe('#3742 TokenBudgetPanel — the budget scope is picked from real data, 
     // asserted it, so dropping the `setScopeId('')` statement shipped green.
     routeMock({
       '/api/admin/copilot-quality/budgets': { status: 200, body: DASHBOARD },
-      '/api/workspaces': { status: 200, body: [{ id: 'ws-1', name: 'Sales analytics' }] },
+      '/api/admin/workspaces': { status: 200, body: { ok: true, workspaces: [{ id: 'ws-1', name: 'Sales analytics' }] } },
+      '/api/admin/agent-quality': { status: 200, body: AGENT_QUALITY },
     });
     mount(<TokenBudgetPanel />);
 
@@ -359,7 +416,8 @@ describe('#3742 TokenBudgetPanel — the budget scope is picked from real data, 
   it('HONEST FALLBACK — when the workspace list cannot be read the dialog is not a dead end', async () => {
     routeMock({
       '/api/admin/copilot-quality/budgets': { status: 200, body: DASHBOARD },
-      '/api/workspaces': { status: 200, body: { workspaces: [] } },
+      '/api/admin/workspaces': { status: 200, body: { ok: true, workspaces: [] } },
+      '/api/admin/agent-quality': { status: 200, body: AGENT_QUALITY },
     });
     mount(<TokenBudgetPanel />);
 

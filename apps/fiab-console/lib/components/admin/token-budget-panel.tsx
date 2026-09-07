@@ -350,9 +350,11 @@ export function TokenBudgetPanel() {
       {editing && (
         <BudgetDialog
           row={editing === 'new' ? null : editing}
-          // #3742 — the agents a budget can meaningfully cap are the ones the
-          // attribution ledger has actually seen. They are already in `rows`;
-          // the dialog no longer makes the operator remember their ids.
+          // #3742 — the agents the attribution ledger has ALREADY seen. They are
+          // already in `rows`, so offering them costs no round-trip. This is
+          // half the population: the dialog unions it with the Foundry agent
+          // REGISTRY, because a budget's job is to cap an agent before it spends
+          // and the ledger by construction only knows agents that already have.
           knownAgents={data.rows
             .filter((r) => r.scope === 'agent')
             .map((r) => ({ id: r.scopeId, label: r.label || r.scopeId }))}
@@ -366,6 +368,15 @@ export function TokenBudgetPanel() {
 }
 
 interface ScopeOption { id: string; label: string }
+
+/**
+ * The Dropdown value that means "none of these — let me type one". A sentinel
+ * rather than an empty string: `''` is what a cleared Dropdown already reports,
+ * so the two would be indistinguishable and a stray clear would silently drop
+ * the operator into typed-id mode. The `__loom:` prefix cannot collide with a
+ * workspace GUID or a Foundry agent name.
+ */
+const ENTER_ID_OPTION = '__loom:enter-id__';
 
 function BudgetDialog({
   row, knownAgents, onClose, onDone, onError,
@@ -385,20 +396,33 @@ function BudgetDialog({
    * enforcement joins on the exact scope id. It fails silently and looks fine.
    * Per loom-no-freeform-config and auto-bind-by-default §"no user-performed
    * plumbing", the platform knows these ids and now offers them.
+   *
+   * #3742 round 2 — THE ADMIN ROUTE, NOT THE OWNER-SCOPED ONE. This dialog only
+   * mounts on /admin/copilot-quality, which is already tenant-admin gated, and a
+   * budget it writes is enforced tenant-wide. `/api/workspaces` resolves through
+   * `listAccessibleWorkspaces`, which is OWNER-ONLY unless LOOM_MULTIUSER_ACL is
+   * on (lib/auth/workspace-access.ts) — so on a real estate the admin was
+   * offered only the workspaces they personally created and could not budget
+   * anyone else's. `/api/admin/workspaces` → `listAllWorkspacesAdmin` is the
+   * tenant-wide inventory the sibling /admin/workspaces page already renders,
+   * and it enforces its own tenant-admin check plus a `tid` scope, so this is
+   * not a widening: a non-admin reaching this code gets its 403 and falls to the
+   * typed-id path below.
    */
   const wsQ = useQuery({
     queryKey: ['budget-scope-workspaces'],
     queryFn: async (): Promise<ScopeOption[]> => {
-      const r = await clientFetch('/api/workspaces');
+      const r = await clientFetch('/api/admin/workspaces');
       const d: unknown = await r.json();
       const raw = Array.isArray(d) ? d : ((d as { workspaces?: unknown[] })?.workspaces || []);
       return (raw as Record<string, string>[])
-        // `/api/workspaces` returns `Workspace[]`, whose display field is
-        // `name` (lib/types/workspace.ts) — so `w.name` is the operand that
-        // actually runs here, and `w.id` is the tail for a nameless doc.
-        // `displayName` is a defensive alias only: this route does not emit it
-        // today, so a test fixture that supplies it exercises none of the live
-        // path and would let `w.name` be deleted with every assertion green.
+        // `/api/admin/workspaces` returns `WorkspaceAdminRecord[]`, whose display
+        // field is `name` (lib/clients/workspaces-client.ts:45) — so `w.name` is
+        // the operand that actually runs here, and `w.id` is the tail for a
+        // nameless doc. `displayName` is a defensive alias only: this route does
+        // not emit it today, so a test fixture that supplies it exercises none of
+        // the live path and would let `w.name` be deleted with every assertion
+        // green.
         .map((w) => ({ id: w.id, label: w.displayName || w.name || w.id }))
         .filter((w) => !!w.id);
     },
@@ -407,16 +431,82 @@ function BudgetDialog({
     enabled: !row,
   });
 
-  const options: ScopeOption[] = scope === 'workspace' ? (wsQ.data ?? []) : knownAgents;
-  const optionsLoading = scope === 'workspace' && wsQ.isLoading;
-  const optionsError = scope === 'workspace' && wsQ.isError
-    ? ((wsQ.error as Error)?.message || 'Could not list workspaces.')
-    : null;
+  /**
+   * #3742 round 2 — THE AGENT REGISTRY, unioned with the ledger.
+   *
+   * `knownAgents` comes from `budgetDashboard()`, which is configured budgets ∪
+   * scopes that have ALREADY SPENT in the current period. So the picker could
+   * only offer an agent that had already burned tokens — and a budget's whole
+   * purpose is to cap an agent BEFORE it spends. The Foundry agent registry
+   * (`/api/admin/agent-quality` → `listAgents(projectId)`) is the set of agents
+   * that exist, and `FoundryAgent.name` is the identity Loom's own deploy routes
+   * write as `agentId` (items/data-agent/[id]/deploy/route.ts:130,
+   * items/aip-logic/[id]/deploy/route.ts:129), which is the value
+   * `scopesOf(attribution)` charges spend against. Same key, so the union is
+   * joinable rather than decorative.
+   *
+   * A NOT-CONFIGURED FOUNDRY IS NOT AN ERROR (deploy-integrity R7). That route
+   * answers 200 with `agents.configured:false` and a `gate`; this reports the
+   * registry as unavailable and keeps the ledger agents, rather than claiming
+   * the read failed or that no agents exist.
+   */
+  const agentQ = useQuery({
+    queryKey: ['budget-scope-agents'],
+    queryFn: async (): Promise<{ agents: ScopeOption[]; gate: string | null }> => {
+      const r = await clientFetch('/api/admin/agent-quality');
+      const d = (await r.json()) as {
+        ok?: boolean;
+        error?: string;
+        agents?: { configured?: boolean; list?: Array<{ name?: string; description?: string }>; gate?: { error?: string } };
+      };
+      if (d?.ok === false) throw new Error(d?.error || `agent registry read failed (${r.status})`);
+      const reg = d?.agents;
+      const list = Array.isArray(reg?.list) ? reg.list : [];
+      return {
+        agents: list
+          .map((a) => ({ id: (a?.name || '').trim(), label: (a?.name || '').trim() }))
+          .filter((a) => !!a.id),
+        gate: reg?.configured === false ? (reg?.gate?.error || 'The Foundry agent registry is not configured.') : null,
+      };
+    },
+    enabled: !row,
+  });
+
+  /**
+   * Registry ∪ ledger, deduped by id, ledger label preferred (it carries the
+   * friendly `label` the attribution table already shows). Order: registry
+   * first, then any ledger-only agent, so an agent that exists but has not spent
+   * is reachable rather than buried.
+   */
+  const agentOptions: ScopeOption[] = (() => {
+    const byId = new Map<string, ScopeOption>();
+    for (const a of agentQ.data?.agents ?? []) byId.set(a.id, a);
+    for (const a of knownAgents) if (a.id) byId.set(a.id, a);
+    return [...byId.values()];
+  })();
+
+  const options: ScopeOption[] = scope === 'workspace' ? (wsQ.data ?? []) : agentOptions;
+  const optionsLoading = scope === 'workspace' ? wsQ.isLoading : agentQ.isLoading;
+  const optionsError = scope === 'workspace'
+    ? (wsQ.isError ? ((wsQ.error as Error)?.message || 'Could not list workspaces.') : null)
+    : (agentQ.isError ? ((agentQ.error as Error)?.message || 'Could not list agents.') : null);
+  /** Non-blocking: the registry is gated, so the list is ledger-only. Not an error. */
+  const registryGate = scope === 'agent' && !agentQ.isError ? (agentQ.data?.gate ?? null) : null;
   // The honest fallback, exactly as EntraGroupPicker documents it: a picker that
   // cannot populate must not become a dead end (auto-bind-by-default forbids
-  // "no items found" + a disabled control). A typed id is allowed ONLY when the
-  // real list is unavailable or genuinely empty — never as the default path.
-  const mustTypeId = !row && !optionsLoading && (!!optionsError || options.length === 0);
+  // "no items found" + a disabled control).
+  const listUnavailable = !row && !optionsLoading && (!!optionsError || options.length === 0);
+  /**
+   * #3742 round 2 — A TYPED ID STAYS REACHABLE WHEN THE LIST IS NON-EMPTY.
+   * The previous revision rendered the <Input> ONLY when the list was entirely
+   * empty, so with one attributed agent an admin could neither pick nor type an
+   * agent the ledger had not seen — a budget capping a newly configured agent
+   * before it spends became impossible, which is the same dead end this fix
+   * exists to remove. The list is still the DEFAULT path; "Enter an id…" is an
+   * explicit option on it, so nothing is typed by accident.
+   */
+  const [typedIdMode, setTypedIdMode] = useState(false);
+  const mustTypeId = listUnavailable || typedIdMode;
   const selectedLabel = options.find((o) => o.id === scopeId)?.label ?? scopeId;
 
   const save = useMutation({
@@ -446,8 +536,10 @@ function BudgetDialog({
                     const next = String(d.optionValue) as BudgetScope;
                     // Switching scope invalidates the chosen id — a workspace id
                     // is never a valid agent id. Clearing it stops a budget from
-                    // being saved against the other scope's identifier.
-                    if (next !== scope) { setScope(next); setScopeId(''); }
+                    // being saved against the other scope's identifier. The
+                    // typed-id mode is reset too: the other scope has its own
+                    // list, and it may well be populated.
+                    if (next !== scope) { setScope(next); setScopeId(''); setTypedIdMode(false); }
                   }}>
                   <Option value="workspace">workspace</Option>
                   <Option value="agent">agent</Option>
@@ -456,16 +548,32 @@ function BudgetDialog({
               <Field
                 label={scope === 'workspace' ? 'Workspace' : 'Agent'}
                 hint={
-                  mustTypeId
+                  listUnavailable
                     ? (optionsError
                       ? `${optionsError} Enter the ${scope} id directly — it must match the id the attribution ledger records, exactly.`
-                      : `No ${scope === 'workspace' ? 'workspace is available' : 'agent has been attributed any spend yet'}. Enter the id directly — it must match the id the attribution ledger records, exactly.`)
-                    : 'Enforcement joins on this exact id, so it is picked, never typed.'
+                      : `No ${scope === 'workspace' ? 'workspace is available' : 'agent is registered or has been attributed any spend yet'}. Enter the id directly — it must match the id the attribution ledger records, exactly.`)
+                    : typedIdMode
+                      ? `Entering the ${scope} id by hand — it must match the id the attribution ledger records, exactly.`
+                      : registryGate
+                        ? `${registryGate} Only agents the ledger has already attributed are listed; pick "Enter an id…" for any other.`
+                        : 'Enforcement joins on this exact id, so it is picked, never typed.'
                 }
                 validationState={optionsError ? 'warning' : 'none'}
               >
                 {mustTypeId || row ? (
-                  <Input value={scopeId} disabled={!!row} onChange={(_, d) => setScopeId(d.value)} />
+                  <>
+                    <Input value={scopeId} disabled={!!row} onChange={(_, d) => setScopeId(d.value)} />
+                    {typedIdMode && !row && (
+                      // A one-way door back into a typed id is the same dead end
+                      // in the other direction, so the list stays one click away.
+                      <Button
+                        appearance="transparent"
+                        onClick={() => { setTypedIdMode(false); setScopeId(''); }}
+                      >
+                        Pick from the list instead
+                      </Button>
+                    )}
+                  </>
                 ) : (
                   /* Kept MOUNTED across loading — a Dropdown swapped for a
                      Spinner is the shape that produced the click-dead pickers
@@ -478,6 +586,14 @@ function BudgetDialog({
                     placeholder={optionsLoading ? `Loading ${scope}s…` : `Select a ${scope}`}
                     onOptionSelect={(_, d) => {
                       const id = String(d.optionValue ?? '');
+                      if (id === ENTER_ID_OPTION) {
+                        // Not a scope id — the explicit escape hatch. Clear any
+                        // previously picked id so a half-typed value can never
+                        // be saved against a stale selection.
+                        setTypedIdMode(true);
+                        setScopeId('');
+                        return;
+                      }
                       setScopeId(id);
                       // Carry the friendly name across so the attribution table
                       // shows a name, not the raw id, for the new budget.
@@ -488,6 +604,9 @@ function BudgetDialog({
                     {options.map((o) => (
                       <Option key={o.id} value={o.id} text={o.label}>{o.label}</Option>
                     ))}
+                    <Option key={ENTER_ID_OPTION} value={ENTER_ID_OPTION} text="Enter an id…">
+                      Enter an id…
+                    </Option>
                   </Dropdown>
                 )}
               </Field>
