@@ -58,6 +58,32 @@ export class AsaNotConfiguredError extends Error {
 }
 
 /**
+ * Thrown when ASA *is* configured (LOOM_ASA_RG / LOOM_ASA_SUB are set and the
+ * ARM call was authorized) but the named streaming job does not exist in that
+ * scope — an ARM 404 on the streamingjobs GET.
+ *
+ * #3573 — this is a DIFFERENT condition from `AsaNotConfiguredError`, and
+ * conflating the two is a `deploy-integrity.md` R7 violation: the route used to
+ * hand every non-configured failure the same hint ("provision an ASA job and
+ * set LOOM_ASA_RG"), so a plain missing-job 404 was reported to the user as
+ * "Stream Analytics not configured" over a deployment where it was configured
+ * perfectly well. The job's absence is a fact the code CAN establish; the
+ * cause of an arbitrary 502 is not.
+ */
+export class AsaJobNotFoundError extends Error {
+  constructor(
+    public jobName: string,
+    public resourceGroup: string,
+    public subscriptionId: string,
+  ) {
+    super(
+      `Stream Analytics job '${jobName}' does not exist in resource group '${resourceGroup}' (subscription ${subscriptionId}).`,
+    );
+    this.name = 'AsaJobNotFoundError';
+  }
+}
+
+/**
  * Thrown when the sample-data Test Query path can't run because no result
  * storage write URI is configured. Compile-query (validation) still works
  * without it; only the "return sample output rows" path needs a place for
@@ -161,6 +187,12 @@ export async function getJob(name: string): Promise<AsaJobDetail> {
   const cfg = readAsaConfig();
   const url = `${rgBase(cfg)}/${encodeURIComponent(name)}?api-version=${API}&$expand=inputs,outputs,transformation,functions`;
   const r = await call(url);
+  // #3573 — a 404 here means exactly one thing: ASA is configured and reachable,
+  // and this job is not in the scope. Type it so the route can say that instead
+  // of folding it into the generic 502 with a "not configured" hint (R7).
+  if (r.status === 404) {
+    throw new AsaJobNotFoundError(name, cfg.resourceGroup, cfg.subscriptionId);
+  }
   const body = await jsonOrThrow<any>(r, 'ASA get');
   const base = mapJob(body);
   const inputs: AsaInput[] = (body.properties?.inputs || []).map((i: any) => ({

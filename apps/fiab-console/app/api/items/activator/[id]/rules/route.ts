@@ -35,8 +35,10 @@ import {
   enableMonitorRule, disableMonitorRule, deleteMonitorActivatorRule,
   isOnDemandAdxRule, appendRunHistory,
   loomRuleNameFromDescription, ruleBelongsToItem,
+  repairActionGroupIfUnreachable,
   type MonitorRuleRecord, type OnDemandRunRecord,
 } from '@/lib/azure/activator-monitor';
+import { resolveFallbackAlertEmails } from '@/lib/install/provisioners/_activator-receivers';
 import { MonitorNotConfiguredError, MonitorError, listScheduledQueryRulesPaged, type ScheduledQueryRule } from '@/lib/azure/monitor-client';
 import { monitorGate, type MonitorGateBodies } from '@/lib/azure/monitor-gate';
 import { KustoError } from '@/lib/azure/kusto-client';
@@ -269,6 +271,7 @@ async function reconcileFromAzureMonitor(
   item: WorkspaceItem,
   bundleRule: any | null,
   canPersist: () => Promise<boolean>,
+  fallbackEmails: string[] = [],
 ): Promise<{ rules: MonitorRuleRecord[]; healed: boolean; partial: boolean; note?: string } | null> {
   try {
     const evidence = reconcileEvidence(item, bundleRule);
@@ -300,6 +303,38 @@ async function reconcileFromAzureMonitor(
       const match = bundleRule && (bundleRule.name === named || bundleRule.name === r.name) ? bundleRule : undefined;
       return recordFromLiveRule(r, match);
     });
+
+    // #4113 — REPAIR ON OPEN (`auto-bind-by-default.md` §3, "the binding is
+    // self-healing"). `createMonitorActivatorRule` only runs on create/edit, so
+    // fixing the bind there leaves every ALREADY-DEPLOYED rule as broken as it
+    // was: on 2026-08-27 eleven of thirteen live Commercial action groups
+    // carried zero receivers, and nothing in the product would ever have
+    // touched them again. Opening the activator is the moment Loom is looking
+    // at the rule, so it is the moment to fix it.
+    //
+    // Write-scoped for the same reason the record write-back is: repairing is a
+    // real ARM mutation, so a read-only Viewer gets the honest counts and no
+    // repair. Best-effort per rule — a failure records the reason on the record
+    // (R7: it does not claim the group was fixed) and never sinks the GET.
+    for (const rec of records) {
+      if (!rec.actionGroupId) continue;
+      try {
+        if (!(await canPersist())) continue;
+        const bound = await repairActionGroupIfUnreachable(
+          item.displayName,
+          rec.actionGroupId,
+          (rec as any).action ?? bundleRule?.action,
+          fallbackEmails,
+        );
+        if (bound.receivers) rec.actionGroupReceivers = bound.receivers;
+        if (bound.note) rec.note = `${rec.note ? `${rec.note} ` : ''}${bound.note}`;
+      } catch (e: any) {
+        rec.note =
+          `${rec.note ? `${rec.note} ` : ''}` +
+          `The action group's receivers could not be read or repaired on this open (${e?.message || String(e)}), ` +
+          'so whether this rule reaches anyone was not established.';
+      }
+    }
 
     if (listed.truncatedBy) {
       // The listing stopped at its paging ceiling, so this set is what fit — not
@@ -452,7 +487,7 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string 
         }
         return writeScoped;
       };
-      const reconciled = await reconcileFromAzureMonitor(item, bundleRule, canPersist);
+      const reconciled = await reconcileFromAzureMonitor(item, bundleRule, canPersist, resolveFallbackAlertEmails(session));
       if (reconciled) {
         return NextResponse.json({
           ok: true,
@@ -578,6 +613,10 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
       rangeMax: typeof body?.rangeMax === 'number' ? body.rangeMax : undefined,
       noDataMinutes: typeof body?.noDataMinutes === 'number' ? body.noDataMinutes : undefined,
       timestampColumn: typeof body?.timestampColumn === 'string' ? body.timestampColumn : undefined,
+      // #4113 — the address the platform ALWAYS has for an interactive caller.
+      // Without it a rule whose action names no deliverable destination got NO
+      // action group at all and notified nobody, reported as a clean create.
+      fallbackEmails: resolveFallbackAlertEmails(session),
     });
     // Persist onto the Cosmos item so the rule list survives reload. Re-creating
     // a previously deleted rule lifts its tombstone, so a later reconcile is not
@@ -839,6 +878,9 @@ export async function PUT(req: NextRequest, ctx: { params: Promise<{ id: string 
       rangeMax: typeof body?.rangeMax === 'number' ? body.rangeMax : old.rangeMax,
       noDataMinutes: typeof body?.noDataMinutes === 'number' ? body.noDataMinutes : old.noDataMinutes,
       timestampColumn: typeof body?.timestampColumn === 'string' ? body.timestampColumn : old.timestampColumn,
+      // #4113 — an EDIT re-derives the action group, so it is also the moment a
+      // zero-receiver group gets repaired rather than re-written empty.
+      fallbackEmails: resolveFallbackAlertEmails(session),
     });
     // Rename → drop the orphan ARM rule left behind under the old name.
     let renamedFrom: string | undefined;

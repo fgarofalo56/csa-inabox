@@ -25,13 +25,33 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 
 // ── the ARM boundary — the ONLY thing mocked ────────────────────────────────
+const ACTION_GROUP_RECEIVER_KINDS = [
+  'emailReceivers', 'smsReceivers', 'webhookReceivers', 'logicAppReceivers',
+  'armRoleReceivers', 'azureFunctionReceivers', 'automationRunbookReceivers',
+  'voiceReceivers', 'azureAppPushReceivers', 'eventHubReceivers', 'itsmReceivers',
+] as const;
+const LOOM_MANAGED_RECEIVER_KINDS = ['emailReceivers', 'smsReceivers', 'webhookReceivers', 'logicAppReceivers'] as const;
+/** An empty ARM read — the group does not exist yet. */
+function emptyRead(exists = false) {
+  const byKind: any = {};
+  for (const k of ACTION_GROUP_RECEIVER_KINDS) byKind[k] = [];
+  return { exists, byKind, total: 0 };
+}
 const upsertActionGroup = vi.fn(async (_i: any) => '/subscriptions/s/resourceGroups/rg/providers/microsoft.insights/actionGroups/ag');
+const readActionGroupReceivers = vi.fn(async (_n: string) => emptyRead());
 const upsertScheduledQueryRule = vi.fn(async (_i: any) => ({}));
 const patchScheduledQueryRule = vi.fn(async (_n: string, _e: boolean) => undefined);
 vi.mock('@/lib/azure/monitor-client', () => ({
   MonitorNotConfiguredError: class extends Error { missing: string[]; constructor(m: string[]) { super('not configured'); this.missing = m; } },
   MonitorError: class extends Error { status: number; constructor(m: string, s = 500) { super(m); this.status = s; } },
+  ACTION_GROUP_RECEIVER_KINDS: [
+    'emailReceivers', 'smsReceivers', 'webhookReceivers', 'logicAppReceivers',
+    'armRoleReceivers', 'azureFunctionReceivers', 'automationRunbookReceivers',
+    'voiceReceivers', 'azureAppPushReceivers', 'eventHubReceivers', 'itsmReceivers',
+  ],
+  LOOM_MANAGED_RECEIVER_KINDS: ['emailReceivers', 'smsReceivers', 'webhookReceivers', 'logicAppReceivers'],
   upsertActionGroup: (i: any) => upsertActionGroup(i),
+  readActionGroupReceivers: (n: string) => readActionGroupReceivers(n),
   upsertScheduledQueryRule: (i: any) => upsertScheduledQueryRule(i),
   patchScheduledQueryRule: (n: string, e: boolean) => patchScheduledQueryRule(n, e),
   deleteScheduledQueryRule: vi.fn(async () => undefined),
@@ -98,6 +118,7 @@ beforeEach(() => {
   read.mockResolvedValue({ resource: { id: 'act-1', workspaceId: 'w', state: {} } } as any);
   replace.mockResolvedValue({} as any);
   upsertActionGroup.mockResolvedValue('/subscriptions/s/resourceGroups/rg/providers/microsoft.insights/actionGroups/ag');
+  readActionGroupReceivers.mockResolvedValue(emptyRead());
   upsertScheduledQueryRule.mockResolvedValue({} as any);
   patchScheduledQueryRule.mockResolvedValue(undefined as any);
   saved = {};
@@ -369,5 +390,241 @@ describe('#4097 the fallback address resolves without any configuration', () => 
     // A tenant whose upn sits on a reserved documentation domain would otherwise
     // produce an email receiver that silently discards every alert.
     expect(resolveFallbackAlertEmails(session({ oid: 'o', upn: 'admin@example.com' }))).toEqual([]);
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// #4113 — the receivers that were being DELETED, and the ones nobody counted
+// ═══════════════════════════════════════════════════════════════════════════
+
+describe('#4113 receiverTotal counts EVERY receiver kind, not the four Loom composes', () => {
+  it('a group reachable only by ARM role is NOT reported as reaching nobody', () => {
+    // The live `loom-default-alerts` shape: one armRoleReceiver, nothing else.
+    // Summing four arrays made it read as zero, which would have licensed
+    // "repairing" a group that was already fine — and called it broken.
+    const rec = { actionGroupId: 'ag', actionGroupReceivers: { emails: 0, sms: 0, webhooks: 0, logicApps: 0, other: 1 } };
+    expect(receiverTotal(rec)).toBe(1);
+    expect(isUnreachable(rec)).toBe(false);
+  });
+
+  it('still reports a genuinely empty group as unreachable', () => {
+    const rec = { actionGroupId: 'ag', actionGroupReceivers: { emails: 0, sms: 0, webhooks: 0, logicApps: 0, other: 0 } };
+    expect(receiverTotal(rec)).toBe(0);
+    expect(isUnreachable(rec)).toBe(true);
+    expect(unreachableReason(rec)).toContain('no receivers of any kind');
+  });
+});
+
+describe('#4113 bindActionGroup — no rule is left wired to nobody in silence', () => {
+  it('SKIP A is gone: an attached existing group is READ, and its receivers recorded', async () => {
+    // At head `existingActionGroupId` was attached as-is with no read at all, so
+    // `actionGroupReceivers` was undefined and receiverTotal answered UNKNOWN.
+    const byKind: any = {};
+    for (const k of ACTION_GROUP_RECEIVER_KINDS) byKind[k] = [];
+    byKind.armRoleReceivers = [{ name: 'oncall', roleId: 'r' }];
+    readActionGroupReceivers.mockResolvedValue({ exists: true, id: 'AG-ID', byKind, total: 1 } as any);
+    const { bindActionGroup } = await import('@/lib/azure/activator-monitor');
+    const res = await bindActionGroup({
+      activatorDisplayName: 'High-Roller Alert', existingActionGroupId: 'AG-ID',
+      emails: [], smsReceivers: [], webhookReceivers: [], logicAppReceivers: [], fallbackEmails: [],
+    });
+    expect(readActionGroupReceivers).toHaveBeenCalledWith('AG-ID');
+    expect(res.outcome).toBe('attached');
+    expect(receiverTotal({ actionGroupId: 'AG-ID', actionGroupReceivers: res.receivers })).toBe(1);
+    // Already reachable => nothing is written. A repair over a healthy group is
+    // a mutation nobody asked for.
+    expect(upsertActionGroup).not.toHaveBeenCalled();
+  });
+
+  it('REPAIRS an attached group that carries ZERO receivers of any kind', async () => {
+    readActionGroupReceivers.mockResolvedValue({ ...emptyRead(true), id: 'AG-ID' } as any);
+    const { bindActionGroup } = await import('@/lib/azure/activator-monitor');
+    const res = await bindActionGroup({
+      activatorDisplayName: 'High-Roller Alert', existingActionGroupId: 'AG-ID',
+      emails: [], smsReceivers: [], webhookReceivers: [], logicAppReceivers: [],
+      fallbackEmails: ['operator@contoso.com'],
+    });
+    expect(res.outcome).toBe('repaired');
+    // Written back to the group's OWN id, so the repair cannot mint a duplicate
+    // in the Loom alert RG.
+    expect(upsertActionGroup.mock.calls.at(-1)?.[0]).toMatchObject({ name: 'AG-ID', emails: ['operator@contoso.com'] });
+    expect(receiverTotal({ actionGroupId: 'AG-ID', actionGroupReceivers: res.receivers })).toBe(1);
+  });
+
+  it('SKIP B is gone: no derived destination still binds the platform fallback', async () => {
+    const { bindActionGroup } = await import('@/lib/azure/activator-monitor');
+    const res = await bindActionGroup({
+      activatorDisplayName: 'High-Roller Alert',
+      emails: [], smsReceivers: [], webhookReceivers: [], logicAppReceivers: [],
+      fallbackEmails: ['operator@contoso.com'],
+    });
+    expect(res.outcome).toBe('created');
+    expect(upsertActionGroup).toHaveBeenCalledTimes(1);
+    expect(res.actionGroupId).toBeTruthy();
+  });
+
+  it('an UNREADABLE group is reported as unknown — never as attached, never as empty', async () => {
+    readActionGroupReceivers.mockRejectedValue(Object.assign(new Error('AuthorizationFailed'), { status: 403 }));
+    const { bindActionGroup } = await import('@/lib/azure/activator-monitor');
+    const res = await bindActionGroup({
+      activatorDisplayName: 'High-Roller Alert', existingActionGroupId: 'AG-ID',
+      emails: [], smsReceivers: [], webhookReceivers: [], logicAppReceivers: [], fallbackEmails: ['op@contoso.com'],
+    });
+    expect(res.outcome).toBe('unreadable');
+    expect(res.receivers).toBeUndefined();
+    // R7 — an unread group must NOT be written back from a state never observed.
+    expect(upsertActionGroup).not.toHaveBeenCalled();
+    expect(receiverTotal({ actionGroupId: 'AG-ID', actionGroupReceivers: res.receivers })).toBeNull();
+  });
+
+  it('invents nothing when there is neither a destination nor a fallback', async () => {
+    const { bindActionGroup } = await import('@/lib/azure/activator-monitor');
+    const res = await bindActionGroup({
+      activatorDisplayName: 'High-Roller Alert',
+      emails: [], smsReceivers: [], webhookReceivers: [], logicAppReceivers: [], fallbackEmails: [],
+    });
+    expect(res.outcome).toBe('none');
+    expect(upsertActionGroup).not.toHaveBeenCalled();
+    expect(res.note).toContain('notify nobody');
+  });
+});
+
+/**
+ * The REAL `lib/azure/monitor-client.ts` runs in this block — only its ARM
+ * transport (`monitor-arm`) is replaced — because the defect lives in the PUT
+ * BODY that function builds, and a mock of the function itself can never see
+ * one. Runs LAST in the file: `vi.resetModules()` invalidates the module
+ * registry for anything imported after it.
+ */
+describe('#4113 upsertActionGroup is READ-MODIFY-WRITE (the destructive defect)', () => {
+  class ArmError extends Error {
+    status: number;
+    constructor(m: string, s = 500) { super(m); this.status = s; }
+  }
+
+  function armModule(armGet: any, armPut: any) {
+    return {
+      MonitorError: ArmError,
+      MonitorNotConfiguredError: class extends Error { missing: string[] = []; },
+      token: vi.fn(async () => 'tok'),
+      armGet,
+      armPut,
+      armPagedList: vi.fn(async () => []),
+      armPost: vi.fn(async () => ({ status: 200, json: {} })),
+      armPatch: vi.fn(async () => ({})),
+      armDelete: vi.fn(async () => undefined),
+      cached: (_k: string, _t: number, fn: () => any) => fn(),
+      clearMonitorCache: vi.fn(),
+    };
+  }
+
+  /** `existing === null` ⇒ the group does not exist (a clean ARM 404). */
+  async function withArm(existing: any | null) {
+    vi.resetModules();
+    const armGet = vi.fn(async (_p: string) => {
+      if (existing === null) throw new ArmError('ResourceNotFound', 404);
+      return existing;
+    });
+    const armPut = vi.fn(async (_p: string, _b: any) => ({
+      id: '/subscriptions/sub-1/resourceGroups/rg/providers/microsoft.insights/actionGroups/ag',
+    }));
+    vi.doMock('@/lib/azure/monitor-arm', () => armModule(armGet, armPut));
+    const mod = await vi.importActual<typeof import('@/lib/azure/monitor-client')>('@/lib/azure/monitor-client');
+    return { mod, armGet, armPut };
+  }
+
+  let savedSub: string | undefined;
+  let savedRg: string | undefined;
+  beforeEach(() => {
+    savedSub = process.env.LOOM_SUBSCRIPTION_ID; process.env.LOOM_SUBSCRIPTION_ID = 'sub-1';
+    savedRg = process.env.LOOM_ALERT_RG; process.env.LOOM_ALERT_RG = 'rg';
+  });
+  afterEach(() => {
+    vi.doUnmock('@/lib/azure/monitor-arm');
+    if (savedSub === undefined) delete process.env.LOOM_SUBSCRIPTION_ID; else process.env.LOOM_SUBSCRIPTION_ID = savedSub;
+    if (savedRg === undefined) delete process.env.LOOM_ALERT_RG; else process.env.LOOM_ALERT_RG = savedRg;
+  });
+
+  it('PRESERVES an armRoleReceiver the platform put on the group', async () => {
+    // At head the PUT body contained exactly four receiver arrays, so this
+    // receiver was DELETED by an "idempotent upsert" every time an activator
+    // composed over the group. An action-group PUT replaces `properties`.
+    const { mod, armPut } = await withArm({
+      id: '/subscriptions/sub-1/resourceGroups/rg/providers/microsoft.insights/actionGroups/ag',
+      properties: {
+        groupShortName: 'loomdefault',
+        armRoleReceivers: [{ name: 'oncall', roleId: '8e3af657', useCommonAlertSchema: true }],
+        azureFunctionReceivers: [{ name: 'fn', functionAppResourceId: '/f' }],
+        emailReceivers: [],
+      },
+    });
+    await mod.upsertActionGroup({ name: 'ag', shortName: 'ag', emails: ['ops@contoso.com'] });
+    const body: any = armPut.mock.calls.at(-1)?.[1];
+    expect(body.properties.armRoleReceivers).toEqual([{ name: 'oncall', roleId: '8e3af657', useCommonAlertSchema: true }]);
+    expect(body.properties.azureFunctionReceivers).toHaveLength(1);
+    expect(body.properties.emailReceivers).toEqual([{ name: 'email0', emailAddress: 'ops@contoso.com', useCommonAlertSchema: true }]);
+    // Every kind is present in the body — an ABSENT array is a deletion.
+    for (const k of ACTION_GROUP_RECEIVER_KINDS) expect(body.properties[k], k).toBeDefined();
+  });
+
+  it('preserves a managed kind the caller did not supply, and clears one supplied EMPTY', async () => {
+    const { mod, armPut } = await withArm({
+      id: '/x',
+      properties: {
+        groupShortName: 'sn',
+        emailReceivers: [{ name: 'email0', emailAddress: 'keep@contoso.com' }],
+        smsReceivers: [{ name: 'sms0', countryCode: '1', phoneNumber: '5550000' }],
+      },
+    });
+    await mod.upsertActionGroup({ name: 'ag', shortName: 'ag', smsReceivers: [] });
+    const body: any = armPut.mock.calls.at(-1)?.[1];
+    expect(body.properties.emailReceivers).toHaveLength(1);   // not supplied => preserved
+    expect(body.properties.smsReceivers).toEqual([]);          // supplied empty => cleared
+  });
+
+  it('does not rename an existing group short name', async () => {
+    const { mod, armPut } = await withArm({ id: '/x', properties: { groupShortName: 'keepme' } });
+    await mod.upsertActionGroup({ name: 'ag', shortName: 'something-else', emails: ['a@b.com'] });
+    expect((armPut.mock.calls.at(-1)?.[1] as any).properties.groupShortName).toBe('keepme');
+  });
+
+  it('creates cleanly when the group does not exist (a 404 read is not an error)', async () => {
+    const { mod, armPut } = await withArm(null);
+    const id = await mod.upsertActionGroup({ name: 'ag', shortName: 'ag', emails: ['a@b.com'] });
+    expect(id).toBeTruthy();
+    const body: any = armPut.mock.calls.at(-1)?.[1];
+    expect(body.properties.groupShortName).toBe('ag');
+    expect(body.properties.armRoleReceivers).toEqual([]);
+  });
+
+  it('writes back to the ARM ID it was handed, not a same-named copy in the alert RG', async () => {
+    const AG = '/subscriptions/other-sub/resourceGroups/other-rg/providers/microsoft.insights/actionGroups/AG-ID';
+    const { mod, armGet, armPut } = await withArm({ id: AG, properties: { groupShortName: 'sn' } });
+    await mod.upsertActionGroup({ name: AG, shortName: 'sn', emails: ['a@b.com'] });
+    expect(String(armGet.mock.calls.at(-1)?.[0])).toContain('other-rg');
+    expect(String(armPut.mock.calls.at(-1)?.[0])).toContain('/subscriptions/other-sub/resourceGroups/other-rg/');
+  });
+
+  it('REFUSES to write when the read failed for any reason other than 404', async () => {
+    vi.resetModules();
+    const armGet = vi.fn(async () => { throw new ArmError('AuthorizationFailed', 403); });
+    const armPut = vi.fn(async () => ({ id: '/x' }));
+    vi.doMock('@/lib/azure/monitor-arm', () => armModule(armGet, armPut));
+    const mod = await vi.importActual<typeof import('@/lib/azure/monitor-client')>('@/lib/azure/monitor-client');
+    // A 403 that degraded into "the group has no receivers" would be written
+    // straight back as a DELETION of every receiver on it — R7 with data loss.
+    await expect(mod.upsertActionGroup({ name: 'ag', shortName: 'ag', emails: ['a@b.com'] })).rejects.toThrow(/AuthorizationFailed/);
+    expect(armPut).not.toHaveBeenCalled();
+  });
+
+  it('readActionGroupReceivers reports ALL eleven kinds and a real total', async () => {
+    const { mod } = await withArm({
+      id: '/x',
+      properties: { groupShortName: 'sn', armRoleReceivers: [{ name: 'a' }], voiceReceivers: [{ name: 'v' }] },
+    });
+    const read = await mod.readActionGroupReceivers('ag');
+    expect(read.exists).toBe(true);
+    expect(read.total).toBe(2);
+    expect(Object.keys(read.byKind).sort()).toEqual([...mod.ACTION_GROUP_RECEIVER_KINDS].sort());
   });
 });

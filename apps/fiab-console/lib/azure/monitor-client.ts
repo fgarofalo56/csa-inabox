@@ -1402,7 +1402,8 @@ export interface LogicAppReceiverInput {
 }
 
 export interface ActionGroupInput {
-  /** Resource name e.g. 'loom-activator-ag'. */
+  /** Resource name e.g. 'loom-activator-ag', OR a full action-group ARM id (the
+   *  repair path, which must write back to the group it read). */
   name: string;
   /** 1-12 char short name shown in notifications. */
   shortName: string;
@@ -1416,11 +1417,136 @@ export interface ActionGroupInput {
   logicAppReceivers?: LogicAppReceiverInput[];
 }
 
-/** Create/update an action group (Global). Returns its ARM id. Idempotent PUT. */
-export async function upsertActionGroup(input: ActionGroupInput): Promise<string> {
+/**
+ * EVERY receiver array `Microsoft.Insights/actionGroups` carries on the
+ * 2023-01-01 API surface. An action-group PUT is a FULL REPLACE of
+ * `properties`, so any array missing from the body is DELETED from the live
+ * resource — which is why this list has to be exhaustive rather than "the ones
+ * we happen to use".
+ */
+export const ACTION_GROUP_RECEIVER_KINDS = [
+  'emailReceivers',
+  'smsReceivers',
+  'webhookReceivers',
+  'logicAppReceivers',
+  'armRoleReceivers',
+  'azureFunctionReceivers',
+  'automationRunbookReceivers',
+  'voiceReceivers',
+  'azureAppPushReceivers',
+  'eventHubReceivers',
+  'itsmReceivers',
+] as const;
+
+export type ActionGroupReceiverKind = (typeof ACTION_GROUP_RECEIVER_KINDS)[number];
+
+/**
+ * The four kinds `upsertActionGroup` COMPOSES from its input. Everything else
+ * in {@link ACTION_GROUP_RECEIVER_KINDS} is owned by somebody other than the
+ * Loom activator (a bicep module, an operator, `alert-dispatch`'s armRole
+ * escalation) and is carried through untouched.
+ */
+export const LOOM_MANAGED_RECEIVER_KINDS: readonly ActionGroupReceiverKind[] = [
+  'emailReceivers',
+  'smsReceivers',
+  'webhookReceivers',
+  'logicAppReceivers',
+];
+
+export interface ActionGroupReceiverRead {
+  /** Whether the action group exists at all (a 404 read is not an error here). */
+  exists: boolean;
+  /** ARM id, when the group exists. */
+  id?: string;
+  shortName?: string;
+  /** Every kind, always present — an absent array reads as empty, not missing. */
+  byKind: Record<ActionGroupReceiverKind, any[]>;
+  /** Sum across ALL kinds. Zero means the group genuinely reaches nobody. */
+  total: number;
+}
+
+function emptyReceiverMap(): Record<ActionGroupReceiverKind, any[]> {
+  const out = {} as Record<ActionGroupReceiverKind, any[]>;
+  for (const k of ACTION_GROUP_RECEIVER_KINDS) out[k] = [];
+  return out;
+}
+
+/** `name` or a full ARM id → { sub, rg, name }. */
+function actionGroupCoordinates(nameOrId: string): { sub: string; rg: string; name: string } {
+  const m = /\/subscriptions\/([^/]+)\/resourceGroups\/([^/]+)\/providers\/[Mm]icrosoft\.[Ii]nsights\/actionGroups\/([^/?]+)/.exec(nameOrId || '');
+  if (m) return { sub: m[1], rg: m[2], name: decodeURIComponent(m[3]) };
   const subscriptionId = process.env.LOOM_SUBSCRIPTION_ID || '';
   if (!subscriptionId) throw new MonitorNotConfiguredError(['LOOM_SUBSCRIPTION_ID']);
-  const rg = alertResourceGroup();
+  return { sub: subscriptionId, rg: alertResourceGroup(), name: nameOrId };
+}
+
+function actionGroupPath(c: { sub: string; rg: string; name: string }): string {
+  return `/subscriptions/${c.sub}/resourceGroups/${c.rg}/providers/Microsoft.Insights/actionGroups/${encodeURIComponent(c.name)}?api-version=${ACTION_GROUPS_API}`;
+}
+
+/**
+ * Read an action group's receivers — ALL of them.
+ *
+ * #4113. `listActionGroups` and `sendActionGroupTestNotification` each read the
+ * same FOUR arrays, so a group whose only receiver was an `armRoleReceiver`
+ * (the shape `alert-dispatch.ts` and the platform bicep use) reported as having
+ * zero receivers everywhere in the product. "Reaches nobody" and "reaches
+ * somebody by a mechanism this function does not look at" are different facts,
+ * and only one of them was expressible.
+ *
+ * A 404 returns `exists:false` with every array empty. Any OTHER failure
+ * THROWS: an unread group is not an empty group, and the caller below turns
+ * "empty" into a destructive PUT body.
+ */
+export async function readActionGroupReceivers(nameOrId: string): Promise<ActionGroupReceiverRead> {
+  const c = actionGroupCoordinates(nameOrId);
+  let ag: any;
+  try {
+    ag = await armGet(actionGroupPath(c));
+  } catch (e: any) {
+    if (e instanceof MonitorError && e.status === 404) {
+      return { exists: false, byKind: emptyReceiverMap(), total: 0 };
+    }
+    throw e;
+  }
+  const p = ag?.properties || {};
+  const byKind = emptyReceiverMap();
+  let total = 0;
+  for (const kind of ACTION_GROUP_RECEIVER_KINDS) {
+    const arr = Array.isArray(p[kind]) ? p[kind] : [];
+    byKind[kind] = arr;
+    total += arr.length;
+  }
+  return { exists: true, id: ag?.id, shortName: p.groupShortName, byKind, total };
+}
+
+/**
+ * Create/update an action group (Global). Returns its ARM id.
+ *
+ * READ-MODIFY-WRITE, deliberately (#4113). The ARM action-group PUT replaces
+ * `properties` wholesale, and this function used to send a body containing
+ * exactly four receiver arrays. Every OTHER kind on a pre-existing group —
+ * `armRoleReceivers`, `azureFunctionReceivers`, `automationRunbookReceivers`,
+ * `voiceReceivers`, `azureAppPushReceivers`, `eventHubReceivers`,
+ * `itsmReceivers` — was therefore DELETED, silently, by an "idempotent upsert"
+ * whose comment said it was idempotent. The estate's `loom-default-alerts`
+ * group carries an armRole receiver; any activator that happened to compose
+ * over it destroyed the platform's own escalation path.
+ *
+ * Two invariants:
+ *   1. A kind Loom does not manage is written back EXACTLY as it was read.
+ *   2. A managed kind the caller did not supply (`undefined`, as opposed to an
+ *      explicitly empty array) is ALSO preserved. Passing `emails: []` still
+ *      clears the email receivers — an explicit empty is an instruction; an
+ *      absent field is not.
+ *
+ * The read is allowed to 404 (the group is new) and NOTHING ELSE. A 403 or a
+ * throttle must not degrade into "it had no receivers", because that reading
+ * would be written straight back as a deletion — the `deploy-integrity.md` R7
+ * failure where an unestablished fact becomes an assertion, with data loss
+ * attached.
+ */
+export async function upsertActionGroup(input: ActionGroupInput): Promise<string> {
   const emailReceivers = (input.emails || [])
     .filter((e) => e && e.includes('@'))
     .map((e, i) => ({ name: `email${i}`, emailAddress: e.trim(), useCommonAlertSchema: true }));
@@ -1446,21 +1572,38 @@ export async function upsertActionGroup(input: ActionGroupInput): Promise<string
       callbackUrl: r.callbackUrl.trim(),
       useCommonAlertSchema: r.useCommonAlertSchema ?? true,
     }));
-  const path =
-    `/subscriptions/${subscriptionId}/resourceGroups/${rg}/providers/Microsoft.Insights/actionGroups/${encodeURIComponent(input.name)}?api-version=${ACTION_GROUPS_API}`;
+
+  // ── the READ half. Throws on anything that is not a clean 404. ──
+  // Coordinates come from `input.name`, so a full ARM id writes back to the
+  // group it was read from rather than minting a same-named copy in the Loom
+  // alert RG — the repair path depends on that.
+  const coords = actionGroupCoordinates(input.name);
+  const existing = await readActionGroupReceivers(input.name);
+
+  const supplied: Partial<Record<ActionGroupReceiverKind, any[]>> = {
+    ...(input.emails !== undefined ? { emailReceivers } : {}),
+    ...(input.smsReceivers !== undefined ? { smsReceivers } : {}),
+    ...(input.webhookReceivers !== undefined ? { webhookReceivers } : {}),
+    ...(input.logicAppReceivers !== undefined ? { logicAppReceivers } : {}),
+  };
+  const receivers = emptyReceiverMap();
+  for (const kind of ACTION_GROUP_RECEIVER_KINDS) {
+    receivers[kind] = supplied[kind] ?? existing.byKind[kind];
+  }
+
+  const path = actionGroupPath(coords);
   const body = {
     location: 'Global',
     properties: {
-      groupShortName: input.shortName.slice(0, 12),
+      // An EXISTING group's short name is its own — renaming it is a mutation
+      // nobody asked for, and it is what notifications actually display.
+      groupShortName: existing.shortName || input.shortName.slice(0, 12),
       enabled: true,
-      emailReceivers,
-      smsReceivers,
-      webhookReceivers,
-      logicAppReceivers,
+      ...receivers,
     },
   };
   const res = await armPut(path, body);
-  return res?.id || `/subscriptions/${subscriptionId}/resourceGroups/${rg}/providers/microsoft.insights/actionGroups/${input.name}`;
+  return res?.id || `/subscriptions/${coords.sub}/resourceGroups/${coords.rg}/providers/microsoft.insights/actionGroups/${coords.name}`;
 }
 
 export interface ActionGroupSummary {
@@ -1473,6 +1616,13 @@ export interface ActionGroupSummary {
   smsCount: number;
   webhookCount: number;
   logicAppCount: number;
+  /**
+   * Receivers of every kind in {@link ACTION_GROUP_RECEIVER_KINDS}, not just
+   * the four Loom composes (#4113). A group whose only receiver is an
+   * `armRoleReceiver` reaches an on-call human; summing four arrays reported it
+   * as reaching nobody.
+   */
+  receiverTotal: number;
 }
 
 /** List the action groups in the Loom alert resource group (for the pick-existing flow). */
@@ -1494,6 +1644,10 @@ export async function listActionGroups(): Promise<ActionGroupSummary[]> {
       smsCount: (p.smsReceivers || []).length,
       webhookCount: (p.webhookReceivers || []).length,
       logicAppCount: (p.logicAppReceivers || []).length,
+      receiverTotal: ACTION_GROUP_RECEIVER_KINDS.reduce(
+        (n, kind) => n + (Array.isArray(p[kind]) ? p[kind].length : 0),
+        0,
+      ),
     };
   });
 }

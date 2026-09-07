@@ -426,6 +426,14 @@ export function resolveFallbackAlertEmails(session: unknown): string[] {
  * off the record `createMonitorActivatorRule` returned — the same record the
  * provisioner persists, so this cannot drift from what shipped.
  *
+ * #4113 — this used to sum FOUR kinds, the ones `upsertActionGroup` composes.
+ * `Microsoft.Insights/actionGroups` carries eleven (see
+ * `monitor-client.ACTION_GROUP_RECEIVER_KINDS`), and the platform's own
+ * escalation uses `armRoleReceivers`. A group reachable only by ARM role
+ * therefore summed to zero and was reported as notifying nobody — a false
+ * negative that would have licensed "repairing" a group that was already fine.
+ * `other` carries every non-composed kind, so the total is a total.
+ *
  * Returns `null`, never a number, when the answer is UNKNOWN (an action group
  * is attached but its receiver counts were not reported). Per
  * `deploy-integrity.md` R7 an unknown is not a zero and is not a pass — the
@@ -434,7 +442,7 @@ export function resolveFallbackAlertEmails(session: unknown): string[] {
 export function receiverTotal(rec: Pick<MonitorRuleRecord, 'actionGroupId' | 'actionGroupReceivers'>): number | null {
   const r = rec?.actionGroupReceivers;
   if (r) {
-    return (r.emails || 0) + (r.sms || 0) + (r.webhooks || 0) + (r.logicApps || 0);
+    return (r.emails || 0) + (r.sms || 0) + (r.webhooks || 0) + (r.logicApps || 0) + (r.other || 0);
   }
   // No receiver summary. An attached action group whose contents we never saw is
   // UNKNOWN; no action group at all is demonstrably nobody.

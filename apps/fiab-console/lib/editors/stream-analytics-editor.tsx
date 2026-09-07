@@ -27,7 +27,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Subtitle2, Caption1, Badge, Button, Spinner, Field, Input, Divider,
   Tab, TabList, Table, TableHeader, TableRow, TableHeaderCell, TableBody, TableCell,
-  MessageBar, MessageBarBody, MessageBarTitle,
+  MessageBar, MessageBarBody, MessageBarTitle, MessageBarActions,
   Dialog, DialogSurface, DialogBody, DialogTitle, DialogContent, DialogActions,
   Select,
   makeStyles, tokens,
@@ -166,6 +166,13 @@ export function StreamAnalyticsJobEditor({ item, id }: { item: FabricItemType; i
   const [error, setError] = useState<string | null>(null);
   const [hint, setHint] = useState<string | null>(null);
   const [status, setStatus] = useState<string | null>(null);
+  // #3573 — the MessageBar's TITLE is an assertion about the cause, so it is
+  // keyed on the status code that establishes it, never on "a hint came back".
+  // 501 = ASA genuinely not configured. 404 = configured, this item's job has
+  // not been created — which the platform can fix itself, so it offers to.
+  const [errStatus, setErrStatus] = useState<number | null>(null);
+  const [fixIt, setFixIt] = useState<{ label: string; method: string; href: string } | null>(null);
+  const [fixItBusy, setFixItBusy] = useState(false);
 
   // ── Transform builder (guided) state ──────────────────────────────
   const [builderSource, setBuilderSource] = useState('input');
@@ -192,11 +199,11 @@ export function StreamAnalyticsJobEditor({ item, id }: { item: FabricItemType; i
   const dirtyRef = useRef(false);
 
   const loadList = useCallback(async () => {
-    setError(null); setHint(null);
+    setError(null); setHint(null); setErrStatus(null); setFixIt(null);
     try {
       const r = await fetch('/api/items/stream-analytics-job');
       const j = await r.json();
-      if (!j.ok) { setError(j.error || 'Failed to list'); setHint(j.hint); setJobs([]); return; }
+      if (!j.ok) { setError(j.error || 'Failed to list'); setHint(j.hint); setErrStatus(r.status); setJobs([]); return; }
       setJobs(j.jobs || []);
       if ((j.jobs || []).length && !selected) setSelected(j.jobs[0].name);
     } catch (e: any) { setError(e?.message || String(e)); setJobs([]); }
@@ -204,11 +211,11 @@ export function StreamAnalyticsJobEditor({ item, id }: { item: FabricItemType; i
 
   const loadDetail = useCallback(async (name: string, opts?: { force?: boolean }) => {
     if (!name) return;
-    setError(null);
+    setError(null); setErrStatus(null); setFixIt(null);
     try {
       const r = await fetch(`/api/items/stream-analytics-job/${encodeURIComponent(name)}`);
       const j = await r.json();
-      if (!j.ok) { setError(j.error); setHint(j.hint); return; }
+      if (!j.ok) { setError(j.error); setHint(j.hint); setErrStatus(r.status); setFixIt(j.fixIt || null); return; }
       setJob(j.job);
       const q = j.job?.query || STARTER_QUERY;
       // Only overwrite the editor buffer when the user has no unsaved
@@ -222,10 +229,39 @@ export function StreamAnalyticsJobEditor({ item, id }: { item: FabricItemType; i
     } catch (e: any) { setError(e?.message || String(e)); }
   }, []);
 
-  useEffect(() => { loadList(); }, [loadList]);
-  // When switching jobs, force-load (user expects buffer to reset to that
+  useEffect(() => { loadList(); }, [loadList]);  // When switching jobs, force-load (user expects buffer to reset to that
   // job's persisted query). On other refreshes we respect dirty edits.
   useEffect(() => { if (selected) loadDetail(selected, { force: true }); }, [selected, loadDetail]);
+
+  /**
+   * #3573 / `ux-baseline.md` G2 — the 404's inline Fix it. Calls the route's
+   * POST, which runs the SAME Phase-2 provisioner an app install runs, then
+   * re-reads the job. No env var to set, no wizard to find: the platform
+   * creates the resource it was always supposed to create
+   * (`auto-bind-by-default.md` §1).
+   */
+  const runFixIt = useCallback(async () => {
+    if (!fixIt) return;
+    setFixItBusy(true); setStatus(null);
+    try {
+      const r = await fetch(fixIt.href, { method: fixIt.method || 'POST' });
+      const j = await r.json();
+      if (!j.ok) {
+        setError(j.error || 'Could not create the streaming job');
+        setHint(j.hint || null);
+        setErrStatus(r.status);
+        return;
+      }
+      setStatus(`Created Stream Analytics job '${j.jobName || ''}'.`);
+      setFixIt(null); setErrStatus(null); setError(null);
+      await loadList();
+      await loadDetail(selected, { force: true });
+    } catch (e: any) {
+      setError(e?.message || String(e));
+    } finally {
+      setFixItBusy(false);
+    }
+  }, [fixIt, loadList, loadDetail, selected]);
 
   const save = useCallback(async () => {
     if (!selected) return;
@@ -563,12 +599,25 @@ export function StreamAnalyticsJobEditor({ item, id }: { item: FabricItemType; i
           </div>
 
           {error && (
-            <MessageBar intent={hint ? 'warning' : 'error'}>
+            <MessageBar intent={errStatus === 501 || errStatus === 404 ? 'warning' : 'error'}>
               <MessageBarBody>
-                <MessageBarTitle>{hint ? 'Stream Analytics not configured' : 'Error'}</MessageBarTitle>
+                <MessageBarTitle>
+                  {errStatus === 501
+                    ? 'Stream Analytics not configured'
+                    : errStatus === 404
+                      ? 'Streaming job not created yet'
+                      : 'Error'}
+                </MessageBarTitle>
                 {error}
-                {hint && <><br /><Caption1>{hint}</Caption1></>}
+                {errStatus === 501 && hint && <><br /><Caption1>{hint}</Caption1></>}
               </MessageBarBody>
+              {fixIt && errStatus === 404 && (
+                <MessageBarActions>
+                  <Button appearance="primary" disabled={fixItBusy} onClick={runFixIt}>
+                    {fixItBusy ? 'Creating…' : (fixIt.label || 'Fix it')}
+                  </Button>
+                </MessageBarActions>
+              )}
             </MessageBar>
           )}
           {status && <MessageBar intent="success"><MessageBarBody>{status}</MessageBarBody></MessageBar>}
