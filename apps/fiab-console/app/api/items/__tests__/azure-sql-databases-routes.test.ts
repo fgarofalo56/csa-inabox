@@ -43,6 +43,22 @@ vi.mock('@/lib/azure/postgres-flex-client', async () => {
   };
 });
 
+// The flexible-server CREATE mints its admin password into Key Vault, so the
+// route runs `kvSecretsConfigGate()` before anything else. Unmocked, that gate
+// reads the (absent) vault env in the test process and returns a 503
+// `kv_not_configured` — the happy path here could never reach 201. Mocked to
+// "configured" so this file keeps testing DELEGATION; the vault contract itself
+// (mint, KV-before-ARM ordering, no secret in any response body) is asserted in
+// `postgres-flexible-server/__tests__/provision-credentials.test.ts`.
+vi.mock('@/lib/azure/kv-secrets-client', async () => {
+  const actual: any = await vi.importActual('@/lib/azure/kv-secrets-client');
+  return {
+    ...actual,
+    kvSecretsConfigGate: () => null,
+    putKeyVaultSecret: vi.fn(async (secretName: string) => ({ name: secretName })),
+  };
+});
+
 // `loadOwnedItem` is what `withWorkspaceOwner` (route-toolkit) runs to enforce
 // owner/workspace access on the `[id]` routes — #2723 moved /connect and /query
 // onto that wrapper, so it must be mocked here too or the wrapper throws (500)
@@ -290,8 +306,17 @@ describe('PostgreSQL flexible server routes', () => {
     expect(res.status).toBe(400);
   });
 
+  // The create POST now RESOLVES THE NAME FIRST (blocking review, 2026-09-07):
+  // flexible-server names are globally unique, so reusing one this estate
+  // already created used to overwrite the LIVE server's admin password in Key
+  // Vault before ARM refused. `listServers()` is therefore on the create path
+  // and this happy-path case has to arrange "the name is free" — an unmocked
+  // lookup is now a 503 `existence_check_failed`, which is the fix working, not
+  // a regression. The 409 / 503 / nothing-minted assertions live in
+  // `postgres-flexible-server/__tests__/provision-credentials.test.ts`.
   it('POST create — delegates and returns 201', async () => {
     (getSession as any).mockReturnValue(session);
+    (listPgServers as any).mockResolvedValue([]);
     (createPgServer as any).mockResolvedValue({ ok: true, id: '/subs/.../pg', provisioningState: 'Creating' });
     const res = await pgCreatePOST(bodyReq('http://x/', {
       name: 'pg', resourceGroup: 'rg', location: 'eastus2',

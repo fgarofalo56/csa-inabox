@@ -63,9 +63,9 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 import { randomBytes, randomInt } from 'node:crypto';
-import { getSession } from '@/lib/auth/session';
 import { listServers, createServer, PostgresError } from '@/lib/azure/postgres-flex-client';
 import { kvSecretsConfigGate, putKeyVaultSecret, KeyVaultError } from '@/lib/azure/kv-secrets-client';
+import { withSession } from '@/lib/api/route-toolkit';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -93,9 +93,7 @@ export function adminSecretNameFor(serverName: string): string {
   return `pg-admin-${serverName}`;
 }
 
-export async function GET() {
-  const session = getSession();
-  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+export const GET = withSession(async () => {
   try {
     const servers = await listServers();
     return NextResponse.json({ ok: true, servers });
@@ -103,11 +101,9 @@ export async function GET() {
     const status = e instanceof PostgresError ? e.status : 502;
     return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status });
   }
-}
+});
 
-export async function POST(req: NextRequest) {
-  const session = getSession();
-  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+export const POST = withSession(async (req: NextRequest, { session }) => {
   const body = await req.json().catch(() => ({}));
   const name = String(body?.name || '').trim();
   const resourceGroup = String(body?.resourceGroup || '').trim();
@@ -231,4 +227,4 @@ export async function POST(req: NextRequest) {
     },
     { status: 201 },
   );
-}
+});

@@ -19,7 +19,7 @@ verdict is DERIVED, not name-matched — see "How the owner column is decided".
 | Owner-scoped | 674 |
 | Admin | 310 |
 | Unknown (generator fails) | 0 |
-| Gated (backend config) | 498 |
+| Gated (backend config) | 499 |
 | Areas | 122 |
 
 **Auth scope** — `public`: no session check; `session-only`: signed-in but

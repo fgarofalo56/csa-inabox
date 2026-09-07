@@ -12,6 +12,8 @@
  *   https://learn.microsoft.com/azure/templates/microsoft.machinelearningservices/workspaces/connections
  */
 
+import { trimSlashes, trimTrailingSlashes } from '@/lib/util/trim';
+
 /** Connection categories the typed create-dialog offers (portal parity subset). */
 export type ConnectionCategory =
   | 'AzureOpenAI'
@@ -43,7 +45,9 @@ export const CONNECTION_CATEGORIES: {
    * `CognitiveSearch` deliberately has NO kind. An Azure AI Search service does
    * not carry its endpoint as an ARM property — the URL is
    * `https://<name>.<search-suffix>` — and the suffix is boundary-dependent
-   * (`getSearchSuffix()`: `search.windows.net` vs `search.azure.us`). That
+   * (`getSearchSuffix()`: `search.windows.net` vs `search.azure.us`)  cloud-endpoint-literal-ok:
+   * naming BOTH suffixes side by side IS the note; there is no composed
+   * endpoint on this line to make boundary-aware. That
    * helper resolves `LOOM_CLOUD`, which is not a `NEXT_PUBLIC_` variable and so
    * reads as `undefined` in the browser, meaning a client-side composition
    * would emit the COMMERCIAL host on a Gov estate. A wrong endpoint is worse
@@ -57,7 +61,9 @@ export const CONNECTION_CATEGORIES: {
    *
    * This exists because the row and its picker disagreed (blocking review,
    * 2026-09-07). `AzureBlob`'s `targetPlaceholder` has always been
-   * `https://<account>.blob.core.windows.net/<container>`, but
+   * `https://<account>.blob.core.windows.net/<container>`, but  cloud-endpoint-literal-ok:
+   * this quotes the row's own declared placeholder verbatim (line below), which
+   * is the contradiction being described — rewriting it would erase the defect.
    * `storage-blob-endpoint` projects `properties.primaryEndpoints.blob` — the
    * ACCOUNT endpoint, no container — so the default path (pick from the list,
    * create) emitted a target missing the segment this same file says is part
@@ -99,8 +105,8 @@ export const CONNECTION_CATEGORIES: {
  * produce `https://acct.blob…net/`.
  */
 export function composeBlobTarget(accountEndpoint: string, container: string): string {
-  const base = (accountEndpoint || '').trim().replace(/\/+$/, '');
-  const c = (container || '').trim().replace(/^\/+|\/+$/g, '');
+  const base = trimTrailingSlashes((accountEndpoint || '').trim());
+  const c = trimSlashes((container || '').trim());
   if (!base) return '';
   return c ? `${base}/${c}` : base;
 }
@@ -114,12 +120,12 @@ export function splitBlobTarget(target: string): { accountEndpoint: string; cont
   const raw = (target || '').trim();
   const m = /^(https?:\/\/[^/]+)(?:\/(.*))?$/i.exec(raw);
   if (!m) return { accountEndpoint: raw, container: '' };
-  return { accountEndpoint: m[1], container: (m[2] || '').replace(/\/+$/, '') };
+  return { accountEndpoint: m[1], container: trimTrailingSlashes(m[2] || '') };
 }
 
 /**
  * The storage ACCOUNT name out of a blob endpoint —
- * `https://acct.blob.core.windows.net/` → `acct`. `BlobContainerPicker` takes
+ * `https://acct.blob.<storage-suffix>/` → `acct`. `BlobContainerPicker` takes
  * an ARM id or a bare account name, and neither is what the edit dialog holds
  * when it is prefilled from a stored target, so this bridges the two.
  * Returns '' when the host is not a blob endpoint.
