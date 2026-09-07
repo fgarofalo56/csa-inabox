@@ -43,6 +43,14 @@ import {
 const MIN_HEARTBEAT_MS = 5_000;
 const DEFAULT_TTL_MS = 45_000;
 
+/**
+ * Stream refusals that a faster retry cannot fix. Each settles the push loop
+ * onto the 60s re-probe instead of the 5s→60s ramp (#3697): the flag being off
+ * (503), the caller not being authorized (401/403), and the route/item not
+ * being reachable for this caller (404). The always-on poll is unaffected.
+ */
+const NON_RETRYABLE_STREAM_STATUS: ReadonlySet<number> = new Set([401, 403, 404, 503]);
+
 export interface PresenceTransportOptions {
   itemType: string;
   itemId: string;
@@ -126,7 +134,7 @@ export function createPresenceTransport(opts: PresenceTransportOptions): Presenc
     // proxy that swallows the server close can't leave a zombie reader.
     const lifetimeCap = setTimeout(() => streamAbort?.abort(), STREAM_MAX_LIFETIME_MS + 10_000);
     let sawReconnect = false;
-    let flagDisabled = false;
+    let settled = false;
     try {
       const res = await doFetch(streamUrl(itemType, itemId, canvasKey), {
         headers: { accept: 'text/event-stream' },
@@ -135,9 +143,14 @@ export function createPresenceTransport(opts: PresenceTransportOptions): Presenc
         cache: 'no-store',
       });
       if (!res.ok || !res.body) {
-        // 503 = the a14-collab-push kill-switch is OFF server-side — settle
-        // into the slow re-probe; the poll path carries presence meanwhile.
-        flagDisabled = res.status === 503;
+        // A refusal the client cannot fix by retrying sooner settles into the
+        // slow (60s) re-probe; the poll path carries presence meanwhile.
+        //   503 — the a14-collab-push kill-switch is OFF server-side.
+        //   401/403 — no session / not authorized for this item.
+        //   404 — the route or the item is not reachable for this caller.
+        // Retrying any of those on the 5s ramp is a request storm that cannot
+        // succeed (#3697); the 60s re-probe still recovers once it is fixed.
+        settled = NON_RETRYABLE_STREAM_STATUS.has(res.status);
         throw new Error(`stream HTTP ${res.status}`);
       }
       const reader = res.body.getReader();
@@ -180,7 +193,7 @@ export function createPresenceTransport(opts: PresenceTransportOptions): Presenc
       void openStream();
       return;
     }
-    const delay = flagDisabled ? PUSH_RETRY_MAX_MS : nextPushRetryMs(pushAttempt++);
+    const delay = settled ? PUSH_RETRY_MAX_MS : nextPushRetryMs(pushAttempt++);
     retryTimer = setTimeout(() => { void openStream(); }, delay);
   };
 
