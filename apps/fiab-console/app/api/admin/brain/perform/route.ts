@@ -48,6 +48,7 @@ import {
   apiOk,
   apiServerError,
 } from '@/lib/api/respond';
+import { apiHonestGateError } from '@/lib/api/gate-envelope';
 import { emitAuditEvent } from '@/lib/admin/audit-stream';
 import { performRecommendation, type PerformOutcome } from '@/lib/brain-actions/perform';
 import { performRegistryEntries, resolvePerformEntryForSubject } from '@/lib/brain-actions/registry';
@@ -98,6 +99,59 @@ function mutatedAzureFor(outcome: PerformOutcome): boolean | string {
     return 'unconfirmed — the write was attempted and its outcome was not confirmed';
   }
   return false;
+}
+
+/**
+ * WHICH 503 IS THIS? (#4283)
+ *
+ * The catch below answers 503 for three error classes, and until #4283 it
+ * answered all three with a bare `apiHonestError`, whose body is
+ * `{ok:false, error}`. That body carries NOTHING a client can discriminate on,
+ * so the surface could only print the server's sentence and say — correctly, and
+ * uselessly — that it does not know which cause it is looking at. `ux-baseline.md`
+ * G2 asks for an inline Fix-it on a gate; the client could not honestly render one
+ * because rendering "<surface> needs <gate> wired" over an ARG throttle asserts a
+ * cause nobody established (`deploy-integrity.md` R7).
+ *
+ * The fix is to DISCRIMINATE here, where the class is known, not to guess there.
+ * This function returns a registry gate id ONLY for an error that IS a
+ * configuration gap AND whose reported gap that gate's Fix-it can actually
+ * resolve. Everything else returns null and keeps the bare honest 503.
+ *
+ *   BrainActionsNotConfiguredError → 'cosmos-config'. The store throws it from
+ *     exactly one place (`state-store.ts`, on `!process.env.LOOM_COSMOS_ENDPOINT`),
+ *     and that var is the 'cosmos-config' gate's own anyOf member with a real ARM
+ *     resource-picker Fix-it.
+ *   AcaNotConfiguredError → 'subscription', but ONLY for the gaps
+ *     `readAcaConfig()` reports. That gate sets LOOM_SUBSCRIPTION_ID and
+ *     LOOM_DLZ_RG/LOOM_ADMIN_RG, and `readAcaConfig` accepts LOOM_ADMIN_RG for its
+ *     resource group — so resolving that gate genuinely clears this error. The
+ *     SAME class is also thrown for a missing LOOM_ACA_ENVIRONMENT, which the
+ *     'subscription' gate does NOT set; attaching it there would print a
+ *     remediation that cannot fix the stated gap, so that shape falls through to
+ *     the bare honest 503 rather than to a Fix-it that would not work.
+ *   ResourceGraphCollectionError → null, always. `arg-collect.ts` throws it on a
+ *     token-acquisition failure and on ANY non-OK ARG response — a throttle, a
+ *     403, a 500. None of those is a value the deploy did not set.
+ */
+const ACA_GAPS_THE_SUBSCRIPTION_GATE_RESOLVES: ReadonlySet<string> = new Set([
+  'LOOM_SUBSCRIPTION_ID',
+  'LOOM_ACA_RG (or LOOM_ADMIN_RG)',
+]);
+
+function configGateFor(e: unknown): { id: string; missing: string[] } | null {
+  if (e instanceof BrainActionsNotConfiguredError) {
+    return { id: 'cosmos-config', missing: ['LOOM_COSMOS_ENDPOINT'] };
+  }
+  if (e instanceof AcaNotConfiguredError) {
+    const missing = Array.isArray(e.missing) ? e.missing : [];
+    // An empty list would mean the error established no gap at all; naming a
+    // gate over it would be an assertion the code cannot support.
+    if (missing.length === 0) return null;
+    if (!missing.every((m) => ACA_GAPS_THE_SUBSCRIPTION_GATE_RESOLVES.has(m))) return null;
+    return { id: 'subscription', missing };
+  }
+  return null;
 }
 
 export const POST = withTenantAdmin(async (req: NextRequest, { session }) => {
@@ -231,6 +285,17 @@ export const POST = withTenantAdmin(async (req: NextRequest, { session }) => {
       } catch {
         /* the 503 below is the signal that matters */
       }
+      // #4283 — the two CONFIGURATION-shaped classes carry the normalized gate
+      // envelope so the surface can render an inline Fix-it for a gap the
+      // platform can actually close. The ARG-collection class does not: it is
+      // an estate READ that failed, not a value the deploy did not set, and it
+      // keeps the bare honest 503 whose only claim is the server's own message.
+      // `message` is overridden with the error's own text so the envelope never
+      // replaces what happened with the registry's generic remediation.
+      const gate = configGateFor(e);
+      if (gate) {
+        return apiHonestGateError(gate.id, { missing: gate.missing, message: e.message });
+      }
       return apiHonestError(e, 503);
     }
     return apiServerError(e);
@@ -266,7 +331,16 @@ export const GET = withTenantAdmin(async (req: NextRequest) => {
         : {}),
     });
   } catch (e) {
-    if (e instanceof BrainActionsNotConfiguredError) return apiHonestError(e, 503);
+    if (e instanceof BrainActionsNotConfiguredError) {
+      // #4283 — same discrimination on the read-back leg. The GET only ever
+      // raises the Cosmos-store class here, so the envelope is the whole 503
+      // population of this arm; there is no ARG collection on this path.
+      const gate = configGateFor(e);
+      if (gate) {
+        return apiHonestGateError(gate.id, { missing: gate.missing, message: e.message });
+      }
+      return apiHonestError(e, 503);
+    }
     return apiServerError(e);
   }
 });
