@@ -94,6 +94,13 @@ function getReq(url: string) {
   return { url, nextUrl: new URL(url), json: async () => ({}) } as any;
 }
 const ctx = (id: string) => ({ params: Promise.resolve({ id }) });
+/**
+ * Collection routes have no `[id]` segment, but a `withSession`-wrapped handler
+ * is still a `RouteHandler` — `(req, ctx)`, both required — so a call with no
+ * arguments is a type error even though it happens to run. Passing this keeps
+ * the call sites honest about the signature they are exercising.
+ */
+const noParamsCtx = { params: Promise.resolve({}) } as any;
 const session = { claims: { oid: 't1', upn: 'u@x.com' } };
 
 beforeEach(() => { vi.resetAllMocks(); });
@@ -287,14 +294,14 @@ describe('POST /azure-sql-database/[id]/connect', () => {
 describe('PostgreSQL flexible server routes', () => {
   it('GET list — 401 without session', async () => {
     (getSession as any).mockReturnValue(null);
-    const res = await pgListGET();
+    const res = await pgListGET(getReq('http://x/'), noParamsCtx);
     expect(res.status).toBe(401);
   });
 
   it('GET list — returns servers from the client', async () => {
     (getSession as any).mockReturnValue(session);
     (listPgServers as any).mockResolvedValue([{ id: 'p1', name: 'pg', location: 'eastus', fqdn: 'pg.postgres.database.azure.com' }]);
-    const res = await pgListGET();
+    const res = await pgListGET(getReq('http://x/'), noParamsCtx);
     const j = await res.json();
     expect(j.ok).toBe(true);
     expect(j.servers[0].name).toBe('pg');
@@ -302,7 +309,7 @@ describe('PostgreSQL flexible server routes', () => {
 
   it('POST create — 400 when required fields missing', async () => {
     (getSession as any).mockReturnValue(session);
-    const res = await pgCreatePOST(bodyReq('http://x/', { name: 'pg' }));
+    const res = await pgCreatePOST(bodyReq('http://x/', { name: 'pg' }), noParamsCtx);
     expect(res.status).toBe(400);
   });
 
@@ -321,7 +328,7 @@ describe('PostgreSQL flexible server routes', () => {
     const res = await pgCreatePOST(bodyReq('http://x/', {
       name: 'pg', resourceGroup: 'rg', location: 'eastus2',
       administratorLogin: 'a', administratorLoginPassword: 'Secret1!', skuName: 'Standard_B1ms', tier: 'Burstable',
-    }));
+    }), noParamsCtx);
     const j = await res.json();
     expect(res.status).toBe(201);
     expect(j.ok).toBe(true);

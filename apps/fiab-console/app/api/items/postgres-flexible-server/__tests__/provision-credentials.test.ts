@@ -50,8 +50,8 @@ class KeyVaultError extends Error {
   constructor(m: string, s: number) { super(m); this.status = s; }
 }
 
-const listServersMock = vi.fn(async () => [] as any[]);
-const createServerMock = vi.fn(async () => ({ ok: true, id: '/subscriptions/s/…/flexibleServers/pg1', provisioningState: 'Ready' }) as any);
+const listServersMock = vi.fn(async (..._a: any[]) => [] as any[]);
+const createServerMock = vi.fn(async (..._a: any[]) => ({ ok: true, id: '/subscriptions/s/…/flexibleServers/pg1', provisioningState: 'Ready' }) as any);
 vi.mock('@/lib/azure/postgres-flex-client', () => ({
   listServers: (...a: any[]) => listServersMock(...a),
   createServer: (...a: any[]) => createServerMock(...a),
@@ -59,7 +59,7 @@ vi.mock('@/lib/azure/postgres-flex-client', () => ({
 }));
 
 const kvGateMock = vi.fn(() => null as { missing: string; detail: string } | null);
-const putKeyVaultSecretMock = vi.fn(async (name: string) => ({ name }));
+const putKeyVaultSecretMock = vi.fn(async (name: string, _value?: string) => ({ name }));
 vi.mock('@/lib/azure/kv-secrets-client', () => ({
   kvSecretsConfigGate: () => kvGateMock(),
   putKeyVaultSecret: (...a: any[]) => putKeyVaultSecretMock(...(a as [string, string])),
@@ -74,6 +74,13 @@ const VALID = {
 const postReq = (body: unknown) => new NextRequest(BASE, {
   method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body),
 });
+/**
+ * The route now goes through `withSession`, whose exported handler is a
+ * `RouteHandler` — `(req, ctx)`, both required. This collection route has no
+ * `[id]` segment, so its params resolve empty; passing it keeps every call site
+ * typed against the signature it actually exercises.
+ */
+const NO_PARAMS = { params: Promise.resolve({}) } as any;
 
 /** Every string this response could carry, so a leak anywhere is caught. */
 const bodyText = async (r: Response) => JSON.stringify(await r.json());
@@ -119,7 +126,7 @@ describe('POST — nothing is provisioned behind a gate', () => {
   it('401s unauthenticated: no lookup, no secret, no server', async () => {
     getSessionMock.mockReturnValue(null as any);
     const { POST } = await import('../route');
-    const r = await POST(postReq(VALID));
+    const r = await POST(postReq(VALID), NO_PARAMS);
     expect(r.status).toBe(401);
     expect(listServersMock).not.toHaveBeenCalled();
     expect(putKeyVaultSecretMock).not.toHaveBeenCalled();
@@ -128,7 +135,7 @@ describe('POST — nothing is provisioned behind a gate', () => {
 
   it('400s a body missing a required field, before anything is minted', async () => {
     const { POST } = await import('../route');
-    const r = await POST(postReq({ ...VALID, tier: '' }));
+    const r = await POST(postReq({ ...VALID, tier: '' }), NO_PARAMS);
     expect(r.status).toBe(400);
     expect(putKeyVaultSecretMock).not.toHaveBeenCalled();
     expect(createServerMock).not.toHaveBeenCalled();
@@ -137,7 +144,7 @@ describe('POST — nothing is provisioned behind a gate', () => {
   it('503s with kv_not_configured and provisions NOTHING', async () => {
     kvGateMock.mockReturnValue({ missing: 'LOOM_KEY_VAULT_URI', detail: 'set it' });
     const { POST } = await import('../route');
-    const r = await POST(postReq(VALID));
+    const r = await POST(postReq(VALID), NO_PARAMS);
     expect(r.status).toBe(503);
     expect((await r.json()).code).toBe('kv_not_configured');
     expect(putKeyVaultSecretMock).not.toHaveBeenCalled();
@@ -147,7 +154,7 @@ describe('POST — nothing is provisioned behind a gate', () => {
   it('does not create the server when the Key Vault write fails', async () => {
     putKeyVaultSecretMock.mockRejectedValue(new KeyVaultError('forbidden', 403));
     const { POST } = await import('../route');
-    const r = await POST(postReq(VALID));
+    const r = await POST(postReq(VALID), NO_PARAMS);
     expect(r.status).toBe(403);
     expect((await r.json()).code).toBe('secret_write_failed');
     expect(createServerMock).not.toHaveBeenCalled();
@@ -160,7 +167,7 @@ describe('POST — the name is RESOLVED before the password is written (blocking
       { id: '/subscriptions/s/resourceGroups/rg-loom/providers/Microsoft.DBforPostgreSQL/flexibleServers/pg1', name: 'pg1', location: 'eastus', fqdn: 'pg1.postgres.database.azure.com' },
     ]);
     const { POST } = await import('../route');
-    const r = await POST(postReq(VALID));
+    const r = await POST(postReq(VALID), NO_PARAMS);
     expect(r.status).toBe(409);
     const j = JSON.parse(await bodyText(r));
     expect(j.code).toBe('server_exists');
@@ -172,7 +179,7 @@ describe('POST — the name is RESOLVED before the password is written (blocking
   it('matches the existing name case-insensitively — ARM names are not case-sensitive', async () => {
     listServersMock.mockResolvedValue([{ id: '/subscriptions/s/x/PG1', name: 'PG1', location: 'eastus', fqdn: 'pg1.x' }]);
     const { POST } = await import('../route');
-    const r = await POST(postReq(VALID));
+    const r = await POST(postReq(VALID), NO_PARAMS);
     expect(r.status).toBe(409);
     expect(putKeyVaultSecretMock).not.toHaveBeenCalled();
   });
@@ -180,7 +187,7 @@ describe('POST — the name is RESOLVED before the password is written (blocking
   it('FAILS CLOSED when the lookup itself fails — absence was never established', async () => {
     listServersMock.mockRejectedValue(new PostgresError('Resource Graph unavailable', 500));
     const { POST } = await import('../route');
-    const r = await POST(postReq(VALID));
+    const r = await POST(postReq(VALID), NO_PARAMS);
     expect(r.status).toBe(503);
     const j = JSON.parse(await bodyText(r));
     expect(j.code).toBe('existence_check_failed');
@@ -192,7 +199,7 @@ describe('POST — the name is RESOLVED before the password is written (blocking
   it('propagates an AUTHORIZATION failure of the lookup as 403, still writing nothing', async () => {
     listServersMock.mockRejectedValue(new PostgresError('forbidden', 403));
     const { POST } = await import('../route');
-    const r = await POST(postReq(VALID));
+    const r = await POST(postReq(VALID), NO_PARAMS);
     expect(r.status).toBe(403);
     expect(putKeyVaultSecretMock).not.toHaveBeenCalled();
   });
@@ -202,7 +209,7 @@ describe('POST — the name is RESOLVED before the password is written (blocking
     putKeyVaultSecretMock.mockImplementation(async (name: string) => { order.push('kv'); return { name }; });
     createServerMock.mockImplementation(async () => { order.push('arm'); return { ok: true, id: '/x/pg1', provisioningState: 'Ready' }; });
     const { POST } = await import('../route');
-    const r = await POST(postReq(VALID));
+    const r = await POST(postReq(VALID), NO_PARAMS);
     expect(r.status).toBe(201);
     expect(order).toEqual(['kv', 'arm']);
     expect(putKeyVaultSecretMock.mock.calls[0][0]).toBe('pg-admin-pg1');
@@ -215,7 +222,7 @@ describe('POST — the name is RESOLVED before the password is written (blocking
 describe('POST — the password never leaves the function, and the error text is true', () => {
   it('returns the secret NAME on success and never the value', async () => {
     const { POST } = await import('../route');
-    const r = await POST(postReq(VALID));
+    const r = await POST(postReq(VALID), NO_PARAMS);
     expect(r.status).toBe(201);
     const text = await bodyText(r);
     const written = putKeyVaultSecretMock.mock.calls[0][1] as string;
@@ -226,7 +233,7 @@ describe('POST — the password never leaves the function, and the error text is
   it('never leaks the value on an ARM failure either', async () => {
     createServerMock.mockResolvedValue({ ok: false, error: 'NameAlreadyInUse', status: 409 });
     const { POST } = await import('../route');
-    const r = await POST(postReq(VALID));
+    const r = await POST(postReq(VALID), NO_PARAMS);
     const text = await bodyText(r);
     const written = putKeyVaultSecretMock.mock.calls[0][1] as string;
     expect(text).not.toContain(written);
@@ -240,7 +247,7 @@ describe('POST — the password never leaves the function, and the error text is
   it('scopes the post-failure claim to what the lookup actually established', async () => {
     createServerMock.mockResolvedValue({ ok: false, error: 'NameAlreadyInUse', status: 409 });
     const { POST } = await import('../route');
-    const r = await POST(postReq(VALID));
+    const r = await POST(postReq(VALID), NO_PARAMS);
     const j = JSON.parse(await bodyText(r));
     expect(j.error).not.toContain('belongs to no server');
     expect(j.error).toMatch(/THIS subscription/);
