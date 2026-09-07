@@ -1427,13 +1427,23 @@ function AiSearchBindPicker({ id, onBound }: { id: string; onBound: () => void }
         {state.data?.service ? <> (<code>{state.data.service}</code>)</> : null}. Pick an existing
         index or create a new one — every tab below then manages that real index.
       </Caption1>
+      {/* G2 — was a BARE remediation bar naming LOOM_AI_SEARCH_SERVICE with no
+          in-product action. `svc-aisearch` is a registered gate carrying
+          `fixit:{kind:'resource-picker'}` and already lists this surface
+          (gates/registry/azure-services.ts:79), so it renders through the shared
+          HonestGate: same env var, plus the bicep module + both role names from
+          ENV_CHECKS, plus the Fix-it wizard and a Recheck that re-reads the bind
+          route. `detail` keeps the route's listError and falls through to the
+          registry remediation when there is none — what the `||` here did.
+          Precedent: components/ai-search/ai-search-tree.tsx:772. */}
       {state.data?.notDeployed && (
-        <MessageBar intent="warning">
-          <MessageBarBody>
-            <MessageBarTitle>Azure AI Search not provisioned</MessageBarTitle>
-            {state.data.listError || 'Set LOOM_AI_SEARCH_SERVICE to a deployed Microsoft.Search/searchServices name and grant the Loom UAMI the "Search Index Data Contributor" + "Search Service Contributor" roles (bicep: platform/fiab/bicep/modules/admin-plane/ai-search.bicep).'}
-          </MessageBarBody>
-        </MessageBar>
+        <HonestGate
+          gateId="svc-aisearch"
+          surface="AI Search index binding"
+          missing={['LOOM_AI_SEARCH_SERVICE']}
+          detail={state.data.listError || undefined}
+          onResolved={reload}
+        />
       )}
       {state.data?.listError && !state.data?.notDeployed && <ErrorBar msg={state.data.listError} />}
       <div className={s.toolbar} style={{ marginTop: tokens.spacingVerticalS }}>
@@ -3653,6 +3663,12 @@ export function DatasetEditor({ item, id }: { item: FabricItemType; id: string }
               ) : <EmptyState icon={<Database20Regular />} title="No lineage yet" body={`Scanned ${lineage.data?.jobsScanned ?? 0} AML jobs; none reference this asset's URI as input or output. Run a job consuming/producing this dataset to populate lineage.`} />
             )
           )}
+          {/* KNOWN-BARE G2 bar, disclosed not masked (#4359). LOOM_DRIFT_MONITOR
+              has no gate-registry entry, so there is no Fix-it wizard to route
+              it through yet. It reads as covered only because
+              check-honest-gate-coverage's `honestGate > 0` short-circuit zeroes
+              this whole file once ANY <HonestGate> mounts — see #4359. Do not
+              treat this file's empty bare-gate count as evidence about this bar. */}
           {tab === 'quality' && (
             <MessageBar intent="warning"><MessageBarBody>
               <MessageBarTitle>Data quality / drift requires a Data Drift monitor</MessageBarTitle>

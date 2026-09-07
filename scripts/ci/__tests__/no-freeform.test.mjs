@@ -90,7 +90,7 @@ for (const c of CONTROLS.filter((x) => x.name.startsWith('OPERATOR'))) {
   });
 }
 
-test('the six operator-filed surfaces are flagged in the LIVE tree, not only as fixtures', () => {
+test('all seven operator-filed surfaces are accounted for in the LIVE tree — five still flagged, two remediated and asserted clean', () => {
   // A control set can pass on a synthetic copy of a defect while the real file
   // has drifted out of reach — the fixture-models-the-code failure. These
   // assertions read the actual files.
