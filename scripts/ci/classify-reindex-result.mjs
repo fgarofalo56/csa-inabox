@@ -254,12 +254,15 @@ export function classifyReindexResult({ code, body }) {
  *                     the same reason the POST's 000 is: the eval reaches the
  *                     console over the CAE-internal network, not Front Door.
  *   - 'trigger_refused' — every POST attempt was answered by the EDGE (gateway
- *                     5xx, no application body) and the polls since read
+ *                     5xx, no application body) and the TRAILING polls read
  *                     `stale`/`idle` with an unchanged chunk count. FAIL, and
  *                     named separately from 'timeout' because the next step is
  *                     different: this points at the request PATH, not at the
- *                     rebuild's duration. See the branch for exactly what it
- *                     does and does not establish (#3472).
+ *                     rebuild's duration. It is a RENAME of 'timeout' produced
+ *                     after the same ceiling, never an early exit — the shell
+ *                     evaluates it once the loop has ended, because no durable
+ *                     "a rebuild is in flight" signal exists to end a wait on
+ *                     (#3472; see the header note in reindex-loom-docs.sh).
  *
  * @param {{ outcome: string, body?: string, waitedSeconds?: number|string, attempts?: number|string, postCode?: number|string, postAttempts?: number|string }} input
  * @returns {{ verdict: 'ok'|'tolerate'|'fail', level: 'notice'|'warning'|'error', message: string }}
@@ -349,17 +352,25 @@ export function classifyReindexPoll({ outcome, body, waitedSeconds, attempts, po
     //
     // EVERY CLAUSE BELOW IS SCOPED TO WHAT WAS OBSERVED (deploy-integrity R7).
     // Established: N POST attempts each answered by the edge with no application
-    // body, and every poll since reading freshness=stale job=idle with an
+    // body, and the trailing polls reading freshness=stale job=idle with an
     // unchanged indexedChunkCount. NOT established, and therefore not asserted:
     // that no job ran anywhere (`job.state` is the answering REPLICA's view and
     // loom-console runs 2-6 replicas), or that no work progressed (the corpus
     // manifest is only written at the END of a rebuild, so the chunk count would
-    // not move mid-run either way).
+    // not move mid-run either way), or that the wait was shortened — it was not.
     case 'trigger_refused': {
-      const tries = Number.isFinite(Number(postAttempts)) && Number(postAttempts) > 0
-        ? Number(postAttempts)
-        : 2;
-      const edge = postCode ? `HTTP ${postCode}` : 'a gateway 5xx';
+      // NEVER INVENT THE ATTEMPT COUNT. This used to default to 2 when
+      // `postAttempts` was absent, so a caller that did not pass it got the
+      // sentence "All 2 POST attempt(s) were answered by the EDGE" over a run
+      // that may have made one (POST_RETRIES=0, or the shell's pre-retry probe
+      // skipped the retry). That is a number stated as measured and not
+      // measured — deploy-integrity R7. With no count, say "Every".
+      const n = Number(postAttempts);
+      const tries = Number.isFinite(n) && n > 0 ? `All ${n}` : 'Every';
+      // Same rule for the status: `trigger_refused` is only produced after a
+      // gateway 5xx, but this function is pure and a caller that passes no code
+      // has not established one. Name it only when it was handed over.
+      const edge = postCode ? ` (HTTP ${postCode}, no application body)` : ' (no application body)';
       const polls = Number.isFinite(Number(attempts)) && Number(attempts) > 0
         ? `${Number(attempts)} poll(s) over ${waited}`
         : `the polls over ${waited}`;
@@ -367,8 +378,8 @@ export function classifyReindexPoll({ outcome, body, waitedSeconds, attempts, po
         verdict: 'fail',
         level: 'error',
         message:
-          `loom-docs reindex TRIGGER REFUSED — ${detail}. All ${tries} POST attempt(s) were answered by ` +
-          `the EDGE (${edge}, no application body), and ${polls} since then read freshness=stale ` +
+          `loom-docs reindex TRIGGER REFUSED — ${detail}. ${tries} POST attempt(s) were answered by ` +
+          `the EDGE${edge}, and ${polls} since then read freshness=stale ` +
           'job=idle with the indexed chunk count unchanged. So the rebuild was never OBSERVED to be ' +
           'accepted or running, and the evals would measure the same STALE index they started with. ' +
           'This is a REQUEST-PATH problem, not a slow rebuild: look at the origin response timeout on ' +
@@ -377,8 +388,9 @@ export function classifyReindexPoll({ outcome, body, waitedSeconds, attempts, po
           'CAVEATS, because this verdict is stated from what was seen and nothing more: `job.state` is ' +
           "only the ANSWERING replica's view and the console runs several replicas, so `idle` does not " +
           'prove no job started anywhere; and the corpus manifest is written only at the END of a ' +
-          'rebuild, so an unchanged chunk count is not evidence that no work progressed. Failing loud — ' +
-          'exiting early shortens the wait, it does not soften the verdict.',
+          'rebuild, so an unchanged chunk count is not evidence that no work progressed. Failing loud. ' +
+          'This verdict is a RENAME, not a shortcut: the wait ran to the same ceiling a `timeout` would ' +
+          'have, and the exit code is identical — only the diagnosis differs.',
       };
     }
     default:

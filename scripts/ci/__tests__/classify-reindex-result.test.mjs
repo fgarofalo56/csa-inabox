@@ -313,6 +313,12 @@ test('CLI exit code for the indeterminate verdict is 75, distinct from 0 and 1',
 // fresh state within 904s". That message is true and useless — it describes the
 // rebuild's duration when the rebuild was never accepted. The poll loop now
 // recognises that shape and hands the classifier its own outcome.
+//
+// It is a RENAME of `timeout` applied after the same ceiling, not an early
+// exit: the first revision of this change DID end the wait on the streak, and a
+// real-server counterfactual showed that turning a run which exits 0 at head
+// (fresh at poll 9) into exit 1 at poll 8. Nothing here may imply the wait was
+// shortened.
 
 /** The body every one of those 57 polls returned. */
 const POLL_STALE_IDLE = JSON.stringify({
@@ -370,7 +376,8 @@ test('poll: trigger_refused states its CAVEATS and never claims "no job ran"', (
   assert.match(r.message, /never OBSERVED/i, 'the positive claim must be scoped to observation');
 });
 
-/** Early exit shortens the WAIT. It must never soften the EXIT CODE. */
+/** A RENAME of `timeout`, produced after the same ceiling. It must never soften
+ *  the EXIT CODE, and it must not claim it shortened anything. */
 test('poll CLI: trigger_refused exits 1 (fail-closed intact)', () => {
   const res = spawnSync(process.execPath, [SCRIPT], {
     encoding: 'utf8',
@@ -388,14 +395,44 @@ test('poll CLI: trigger_refused exits 1 (fail-closed intact)', () => {
   assert.equal(res.status, 1);
   assert.match(res.stdout, /::error::/);
   assert.match(res.stdout, /TRIGGER REFUSED/);
+  assert.match(res.stdout, /RENAME, not a shortcut/);
 });
 
 /**
- * R7 on the message's own inputs. With no POST_CODE plumbed through, the
- * message may not invent one — "a gateway 5xx" is what was established.
+ * R7 on the message's own inputs. With no POST_CODE plumbed through, the message
+ * may not invent one.
  */
 test('poll: trigger_refused with no postCode does not invent a status code', () => {
   const r = classifyReindexPoll({ outcome: 'trigger_refused', body: POLL_STALE_IDLE, attempts: 8 });
-  assert.match(r.message, /a gateway 5xx/);
+  assert.match(r.message, /no application body/);
   assert.doesNotMatch(r.message, /HTTP \d/);
+});
+
+/**
+ * R7 on the message's own inputs, second half — and a defect the reviewer of
+ * PR #4373 MEASURED at the first revision of this file: with no POST_ATTEMPTS
+ * the message read "All 2 POST attempt(s) were answered by the EDGE" over a run
+ * whose attempt count was never handed over. Two is not a floor either — the
+ * shell makes ONE attempt when POST_RETRIES=0 or when its pre-retry probe skips
+ * the retry. An invented count is a measurement claim that was not measured.
+ *
+ * MUTATION-PROOF: restore the `: 2` fallback and this goes RED.
+ */
+test('poll: trigger_refused with no postAttempts does not invent an attempt COUNT', () => {
+  const r = classifyReindexPoll({ outcome: 'trigger_refused', body: POLL_STALE_IDLE, attempts: 8 });
+  assert.doesNotMatch(r.message, /All \d+ POST attempt/);
+  assert.match(r.message, /Every POST attempt\(s\) were answered by the EDGE/);
+});
+
+/** A ONE-attempt run says one. The count is evidence, so it must be the real one. */
+test('poll: trigger_refused reports a SINGLE POST attempt as 1, not 2', () => {
+  const r = classifyReindexPoll({
+    outcome: 'trigger_refused',
+    body: POLL_STALE_IDLE,
+    attempts: 8,
+    postCode: 504,
+    postAttempts: 1,
+  });
+  assert.match(r.message, /All 1 POST attempt\(s\)/);
+  assert.doesNotMatch(r.message, /All 2 POST attempt/);
 });
