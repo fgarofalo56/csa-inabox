@@ -28421,7 +28421,7 @@
             "declaredSinkCount": 23,
             "sinks": [
               {
-                "id": "console:member:2567",
+                "id": "console:member:2600",
                 "surface": "console",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -28431,7 +28431,7 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "console:member:2575",
+                "id": "console:member:2608",
                 "surface": "console",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -28441,7 +28441,7 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "console:member:2588",
+                "id": "console:member:2621",
                 "surface": "console",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -28451,7 +28451,7 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "console:member:2607",
+                "id": "console:member:2640",
                 "surface": "console",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -28461,7 +28461,7 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "console:member:2612",
+                "id": "console:member:2645",
                 "surface": "console",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -28471,7 +28471,7 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "console:member:2619",
+                "id": "console:member:2652",
                 "surface": "console",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -28481,7 +28481,7 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "console:member:2626",
+                "id": "console:member:2659",
                 "surface": "console",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -28491,7 +28491,7 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "console:member:2630",
+                "id": "console:member:2663",
                 "surface": "console",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -28501,7 +28501,7 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "console:member:2636",
+                "id": "console:member:2669",
                 "surface": "console",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -28511,7 +28511,7 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "console:member:2641",
+                "id": "console:member:2674",
                 "surface": "console",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -28521,47 +28521,7 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "console:member:2654",
-                "surface": "console",
-                "accessPath": "member",
-                "wholeExpressionBounded": false,
-                "boundary": null,
-                "unredactedByDesign": false,
-                "carriesSensitive": false,
-                "childProvenRedacting": null
-              },
-              {
-                "id": "console:member:2681",
-                "surface": "console",
-                "accessPath": "member",
-                "wholeExpressionBounded": false,
-                "boundary": null,
-                "unredactedByDesign": false,
-                "carriesSensitive": false,
-                "childProvenRedacting": null
-              },
-              {
-                "id": "console:member:2682",
-                "surface": "console",
-                "accessPath": "member",
-                "wholeExpressionBounded": false,
-                "boundary": null,
-                "unredactedByDesign": false,
-                "carriesSensitive": false,
-                "childProvenRedacting": null
-              },
-              {
-                "id": "console:member:2685",
-                "surface": "console",
-                "accessPath": "member",
-                "wholeExpressionBounded": false,
-                "boundary": null,
-                "unredactedByDesign": false,
-                "carriesSensitive": false,
-                "childProvenRedacting": null
-              },
-              {
-                "id": "console:member:2713",
+                "id": "console:member:2687",
                 "surface": "console",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -28581,7 +28541,7 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "console:member:2723",
+                "id": "console:member:2715",
                 "surface": "console",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -28591,7 +28551,7 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "console:member:2725",
+                "id": "console:member:2718",
                 "surface": "console",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -28601,7 +28561,7 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "console:member:2726",
+                "id": "console:member:2746",
                 "surface": "console",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -28611,7 +28571,7 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "console:member:2727",
+                "id": "console:member:2747",
                 "surface": "console",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -28621,7 +28581,7 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "console:member:2728",
+                "id": "console:member:2756",
                 "surface": "console",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -28631,7 +28591,7 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "console:member:2729",
+                "id": "console:member:2758",
                 "surface": "console",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -28641,7 +28601,47 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "console:member:2730",
+                "id": "console:member:2759",
+                "surface": "console",
+                "accessPath": "member",
+                "wholeExpressionBounded": false,
+                "boundary": null,
+                "unredactedByDesign": false,
+                "carriesSensitive": false,
+                "childProvenRedacting": null
+              },
+              {
+                "id": "console:member:2760",
+                "surface": "console",
+                "accessPath": "member",
+                "wholeExpressionBounded": false,
+                "boundary": null,
+                "unredactedByDesign": false,
+                "carriesSensitive": false,
+                "childProvenRedacting": null
+              },
+              {
+                "id": "console:member:2761",
+                "surface": "console",
+                "accessPath": "member",
+                "wholeExpressionBounded": false,
+                "boundary": null,
+                "unredactedByDesign": false,
+                "carriesSensitive": false,
+                "childProvenRedacting": null
+              },
+              {
+                "id": "console:member:2762",
+                "surface": "console",
+                "accessPath": "member",
+                "wholeExpressionBounded": false,
+                "boundary": null,
+                "unredactedByDesign": false,
+                "carriesSensitive": false,
+                "childProvenRedacting": null
+              },
+              {
+                "id": "console:member:2763",
                 "surface": "console",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -49233,9 +49233,9 @@
     },
     "meta": {
       "generatorVersion": 1,
-      "generatedAt": "2026-09-07T21:18:35.176Z",
-      "commit": "d7729655fa0235c5f71e3cd3bfc9c1dd8215752e",
-      "inputsDigest": "77840daabc6c9441",
+      "generatedAt": "2026-09-07T22:25:07.900Z",
+      "commit": "a91ace8692953eee59bfafee3f0f4edd5af554f9",
+      "inputsDigest": "b6e2a1523cc59b76",
       "filesScanned": 2094,
       "scanScopes": [
         {
