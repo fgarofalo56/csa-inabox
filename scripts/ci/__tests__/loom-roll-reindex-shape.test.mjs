@@ -77,7 +77,18 @@ const DRIVER = 'scripts/ci/reindex-loom-docs.sh';
 /** The job whose conclusion downstream gates read, per the shipping table. */
 const CONTRACT_JOB_NAME = CONSOLE_ROLL_SOURCES.find((s) => s.workflow === WORKFLOW)?.jobPattern;
 
-const SHIPPING = readFileSync(WORKFLOW_PATH, 'utf8');
+/**
+ * Read ONCE and normalise to LF, because every fixture below is string surgery
+ * and its anchors would otherwise mean different things on different machines.
+ * The committed blob is LF-only (117186 bytes, 0 CRLF); a Windows checkout with
+ * `core.autocrlf=true` materialises it as CRLF (119018 bytes, 1832 CRLF). A
+ * fixture anchor carrying a literal `\r\n` therefore matches on Windows and
+ * silently misses on the ubuntu-latest runner that actually gates this repo —
+ * an anchor that cannot be found makes `swap()` abort the control, so the guard
+ * fails RED for a line-ending reason rather than for the defect it guards.
+ * Normalising here makes the anchors mean the same thing everywhere.
+ */
+const SHIPPING = readFileSync(WORKFLOW_PATH, 'utf8').replace(/\r\n/g, '\n');
 
 /* ── the analyzer ─────────────────────────────────────────────────────────── */
 
@@ -183,14 +194,12 @@ export function analyzeReindexWiring(text) {
 
 /** Everything from the reindex job header to EOF — the whole added job. */
 const JOB_HEADER = '\n  reindex-loom-docs:\n';
-const jobStart = () => {
-  const i = SHIPPING.indexOf(JOB_HEADER.replace(/\n/g, '\r\n'));
-  return i >= 0 ? { i, nl: '\r\n' } : { i: SHIPPING.indexOf(JOB_HEADER), nl: '\n' };
-};
+/** SHIPPING is LF-normalised above, so one lookup answers on every platform. */
+const jobStart = () => SHIPPING.indexOf(JOB_HEADER);
 
 /** The pre-fix head shape: the lane with no reindex job at all. */
 function withoutReindexJob() {
-  const { i } = jobStart();
+  const i = jobStart();
   assert.ok(i > 0, 'the shipping lane must contain the reindex job for this fixture to mean anything');
   // Cut back to the start of its leading comment block so the fixture is a
   // clean workflow rather than a job body with orphaned comments.
@@ -201,7 +210,6 @@ function withoutReindexJob() {
 
 /** Move the reindex step into the roll job, the console-bluegreen-roll shape. */
 function reindexInsideRollJob() {
-  const { nl } = jobStart();
   const stepBlock = [
     '      - name: Reindex loom-docs + wait for cross-replica freshness',
     '        env:',
@@ -210,7 +218,7 @@ function reindexInsideRollJob() {
     '          POLL_TIMEOUT_S: \'900\'',
     '        run: bash scripts/ci/reindex-loom-docs.sh',
     '',
-  ].join(nl);
+  ].join('\n');
   const anchor = `      - name: Rollback on validation failure`;
   const idx = withoutReindexJob().indexOf(anchor);
   assert.ok(idx > 0, 'the Rollback step is the splice anchor');
@@ -267,7 +275,7 @@ test('MUTATION: the reindex inside the roll job is caught', () => {
 
 test('MUTATION: an ungated reindex job is caught', () => {
   const text = swap(
-    "    if: ${{ needs.roll-and-validate.result == 'success' }}\r\n",
+    "    if: ${{ needs.roll-and-validate.result == 'success' }}\n",
     '',
   );
   const { problems } = analyzeReindexWiring(text);
@@ -294,7 +302,7 @@ test('MUTATION: a CONSOLE_URL reference whose job output was deleted is caught',
 test('MUTATION: FATAL downgraded to false is caught', () => {
   const text = swap(
     "          POLL_TIMEOUT_S: '900'",
-    "          FATAL: 'false'\r\n          POLL_TIMEOUT_S: '900'",
+    "          FATAL: 'false'\n          POLL_TIMEOUT_S: '900'",
   );
   const { problems } = analyzeReindexWiring(text);
   assert.ok(problems.includes('fatal-downgraded'), problems.join(','));
@@ -303,7 +311,7 @@ test('MUTATION: FATAL downgraded to false is caught', () => {
 test('MUTATION: a rollback that keys on the reindex is caught', () => {
   const text = swap(
     "steps.validate.outcome == 'failure' || steps.uat.outcome == 'failure' ||",
-    "steps.validate.outcome == 'failure' || steps.uat.outcome == 'failure' ||\r\n           needs.reindex-loom-docs.result == 'failure' ||",
+    "steps.validate.outcome == 'failure' || steps.uat.outcome == 'failure' ||\n           needs.reindex-loom-docs.result == 'failure' ||",
   );
   const { problems } = analyzeReindexWiring(text);
   assert.ok(problems.includes('rollback-keys-on-reindex'), problems.join(','));
