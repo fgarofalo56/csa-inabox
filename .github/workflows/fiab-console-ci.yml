@@ -150,7 +150,18 @@ jobs:
           fi
           # FAIL OPEN. If the range cannot be resolved we must BUILD, never skip:
           # skipping reports a required check green on an unexamined tree.
-          if ! changed=$(git diff --name-only "$range" 2>&1); then
+          # `-c core.quotePath=false` (#3819). Without it git C-QUOTES any path
+          # carrying a byte outside ASCII: a file under `platform/é…/` arrives as
+          #     "platform/\303\251…"
+          # — leading double quote and all — which matches NEITHER the console ERE
+          # below NOR the infra ERE the deriver produces, because the deriver's own
+          # `ls-tree` already sets this flag (derive-infra-reading-suites.mjs:341)
+          # and so emits raw bytes. The two halves disagreed about what a path
+          # looks like, and the disagreement is silent: the file reads as
+          # "unchanged", the suite is skipped, and the required check goes green
+          # on an unexamined tree — the exact outcome the fail-open below exists
+          # to prevent, reached by a route the fail-open cannot see.
+          if ! changed=$(git -c core.quotePath=false diff --name-only "$range" 2>&1); then
             echo "::warning::could not resolve '$range' ($changed) — building anyway rather than reporting this required check green on an unexamined tree."
             echo "console=true" >> "$GITHUB_OUTPUT"
             echo "portal=true" >> "$GITHUB_OUTPUT"
@@ -388,7 +399,18 @@ jobs:
           fi
           # FAIL OPEN. If the range cannot be resolved we must BUILD, never skip:
           # skipping reports a required check green on an unexamined tree.
-          if ! changed=$(git diff --name-only "$range" 2>&1); then
+          # `-c core.quotePath=false` (#3819). Without it git C-QUOTES any path
+          # carrying a byte outside ASCII: a file under `platform/é…/` arrives as
+          #     "platform/\303\251…"
+          # — leading double quote and all — which matches NEITHER the console ERE
+          # below NOR the infra ERE the deriver produces, because the deriver's own
+          # `ls-tree` already sets this flag (derive-infra-reading-suites.mjs:341)
+          # and so emits raw bytes. The two halves disagreed about what a path
+          # looks like, and the disagreement is silent: the file reads as
+          # "unchanged", the suite is skipped, and the required check goes green
+          # on an unexamined tree — the exact outcome the fail-open below exists
+          # to prevent, reached by a route the fail-open cannot see.
+          if ! changed=$(git -c core.quotePath=false diff --name-only "$range" 2>&1); then
             echo "::warning::could not resolve '$range' ($changed) — building anyway rather than reporting this required check green on an unexamined tree."
             echo "console=true" >> "$GITHUB_OUTPUT"
             echo "infra=false" >> "$GITHUB_OUTPUT"

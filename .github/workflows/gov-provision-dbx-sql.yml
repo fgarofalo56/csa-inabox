@@ -47,7 +47,20 @@ jobs:
         run: |
           set -euo pipefail
           HOST=$(az containerapp show -n "$APP" -g "$RG" --query "properties.template.containers[0].env[?name=='LOOM_DATABRICKS_HOSTNAME'].value | [0]" -o tsv | tr -d '\r')
-          [ -n "$HOST" ] || { echo "::error::LOOM_DATABRICKS_HOSTNAME not set on the console — no bound workspace."; exit 1; }
+          # #3344 — PRESENCE COMES FROM THE NAME QUERY, NOT FROM THE VALUE.
+          # `.value` returns the same empty string for "there is no such binding"
+          # and "the binding is there and empty", and the refusal below asserted
+          # the first ("no bound workspace") from an oracle that cannot establish
+          # it (deploy-integrity R7). Ask for `.name`, keep az's stderr, and
+          # refuse honestly when the query itself could not be answered.
+          HOST_ERR=$(mktemp)
+          if ! HOST_BOUND=$(az containerapp show -n "$APP" -g "$RG" --query "properties.template.containers[0].env[?name=='LOOM_DATABRICKS_HOSTNAME'].name | [0]" -o tsv 2>"$HOST_ERR"); then
+            echo "::error::could not read $APP's env bindings, so this step cannot say whether LOOM_DATABRICKS_HOSTNAME is set. Refusing rather than reporting an unreadable console as an unbound one. az said: $(tr '\n' ' ' < "$HOST_ERR" | head -c 300)"
+            exit 1
+          fi
+          HOST_BOUND=$(printf '%s' "$HOST_BOUND" | tr -d '\r')
+          [ -n "$HOST_BOUND" ] && [ "$HOST_BOUND" != "None" ] || { echo "::error::LOOM_DATABRICKS_HOSTNAME is NOT BOUND on the console at all — no bound workspace."; exit 1; }
+          [ -n "$HOST" ] || { echo "::error::LOOM_DATABRICKS_HOSTNAME is bound on the console but its VALUE is empty — the env entry exists, so a workspace was wired with an empty hostname rather than none being bound."; exit 1; }
           HOST="${HOST#https://}"; HOST="${HOST%%/*}"
           echo "::notice::Databricks host: $HOST"
           TOKEN=$(az account get-access-token --resource "$DBX_RESOURCE" --query accessToken -o tsv | tr -d '\r')

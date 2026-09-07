@@ -202,15 +202,40 @@ const CONSOLE_DIR = 'apps/fiab-console';
  *
  * That was NOT cosmetic, and an earlier review that called it harmless was
  * wrong: `lib/__tests__/api-route-typing.test.ts` IS selected once it is
- * visible (the derived set goes 41 -> 42). It is the COMPILE-TIME half of the
- * typed client-route map, deliberately paired with
- * `scripts/ci/generate-client-route-map.mjs` and
- * `scripts/ci/__tests__/client-route-map.test.mjs`. So a PR editing that
- * generator set `infra=true`, ran the derived subset, went green — with the
- * suite that type-checks the generated map missing from the subset. #3783's
- * shape, one level down, inside its own fix. The other two are genuinely not
- * selected, hand-checked: `client-fetch.test.ts` makes no `fs` call at all, and
- * `route-boundaries.test.ts` reads only `app/**` inside the console.
+ * visible (the derived set goes 58 -> 59, confirmed by reverting only `INCLUDE`
+ * and diffing — the single lost line is exactly that file).
+ *
+ * The delta and the named file are right. The ABSOLUTES were not: an earlier
+ * revision of this paragraph said "41 -> 42", and review round 2 of #4349
+ * (2026-09-07) measured 59. Re-derived here on this tip, rc=0 and stderr 0 B:
+ * `node scripts/ci/derive-infra-reading-suites.mjs --suites` emits 59 unique
+ * sorted suites, and with only `INCLUDE` reverted it emits 58, the one lost
+ * line being exactly the file named above. That 59 was measured WITH
+ * `apps/fiab-console/node_modules` present and round 2 measured 59 WITHOUT it,
+ * so the old figure was simply stale rather than environment-dependent. The
+ * consequence worth stating: `MIN_SUITES = 38` sits 21 suites below what the
+ * deriver actually selects, not 4 — the floor is further from its subject than
+ * the number it used to be quoted with implied.
+ *
+ * WHAT THAT SUITE ACTUALLY COVERS, stated precisely because the first version of
+ * this paragraph overstated it (#3819 nit 1). It type-checks fixtures against
+ * the COMMITTED artifact `apps/fiab-console/lib/api-routes.generated.d.ts` and
+ * `lib/client-fetch.ts`. It never invokes `scripts/ci/generate-client-route-map.mjs`,
+ * so editing that generator alone changes neither of its inputs and the suite
+ * passes either way. The generator's real coverage is in a different lane:
+ * `.github/workflows/loom-guardrails.yml:183` runs it with `--check` (the drift
+ * gate) and `scripts/ci/__tests__/client-route-map.test.mjs` imports it. And a
+ * PR that edits the generator AND regenerates touches the committed artifact,
+ * which sets `console=true` and runs the full suite regardless. Note too that
+ * this suite is selected here only because two COMMENTS in it name
+ * `scripts/ci/…` — an over-inclusion artifact, not a coverage relationship.
+ *
+ * So the earlier claim that this was "#3783's shape, one level down, inside its
+ * own fix" was wrong and is withdrawn. NONE OF WHICH WEAKENS THE FIX: the
+ * deriver must see the same population vitest runs, full stop, or its selection
+ * is a claim about a set it cannot enumerate. The other two files are genuinely
+ * not selected, hand-checked: `client-fetch.test.ts` makes no `fs` call at all,
+ * and `route-boundaries.test.ts` reads only `app/**` inside the console.
  *
  * `(?:.*\/)?` is the fix: zero-or-more segments, matching `**\/` as vitest
  * defines it.
@@ -239,8 +264,22 @@ const INCLUDE = [
  *    gate, and the false red arrives with instructions.
  *
  * 2. THE REGEXES THEMSELVES BREAK. A floor on how many files they match. It
- *    catches an arm being dropped or a regex being mangled (measured: dropping
- *    the console-root `__tests__/` arm alone loses 16 files).
+ *    catches an arm being dropped OR a regex being mangled — but not every arm,
+ *    and the earlier parenthetical here ("dropping the console-root `__tests__/`
+ *    arm alone loses 16 files") read as if this floor caught that case. IT DOES
+ *    NOT (#3819 nit 3a). Measured arm sensitivity: `lib` 1179 · `app` 356 ·
+ *    console-root 16. Dropping the root arm leaves 1535 matches, which is ABOVE
+ *    the floor of 1400, so this control stays green.
+ *
+ *    Which stage DOES catch it was re-measured on 2026-09-07 by dropping the
+ *    root arm and re-running: the deriver exits 1 on `REQUIRED_TRIGGER_DIRS`
+ *    ("the emitted trigger is MISSING required directory/ies: azure-functions",
+ *    stderr 620 B) over 52 derived suites. `MIN_SUITES` is silent there — 52 is
+ *    well above 38. An earlier revision of this paragraph credited `MIN_SUITES`
+ *    with the catch ("36 < 38"); that was true of a smaller console and is not
+ *    true at this tip, so the credit moves to the control that actually fires.
+ *    The match-count floor's real subject is a LARGE arm: with `lib` or `app`
+ *    dropped the count falls to 372 or 1195, both far below 1400.
  *
  * NEITHER CATCHES A SMALL SEMANTIC DRIFT, and that is worth saying plainly
  * because it is the exact bug that got here: the config never moved (so part 1
@@ -274,6 +313,17 @@ const MIN_VITEST_INCLUDED = 1400;
  * Pull `test.include` out of vitest.config.ts. Takes the FIRST `include: [`
  * (the config has a second one under `coverage:`), and fails closed if it finds
  * no array at all rather than treating "found nothing" as "found a match".
+ *
+ * THE `found no include: [ ... ]` BRANCH IS CURRENTLY UNREACHABLE, and saying so
+ * is cheaper than the next reader discovering it (#3819 nit 3b). The regex is
+ * unanchored and `vitest.config.ts` carries a SECOND `include: [` —
+ * `coverage.include`. So making `test.include` non-literal does not fall into
+ * that branch; it falls through to comparing the COVERAGE globs against
+ * `EXPECTED_VITEST_INCLUDE`, which mismatches and fails loudly anyway. The
+ * outcome is still correct and still red, just not by the route the message was
+ * written for. The branch is kept because it is the right answer the day the
+ * coverage block moves or is removed — an unreachable fail-closed arm is not the
+ * same defect as a missing one.
  */
 function configuredVitestInclude() {
   const configPath = `${CONSOLE_DIR}/vitest.config.ts`;
@@ -476,6 +526,27 @@ const MIN_SUITES = 38;
  * detection. With the entry present, that same mutation exits 1 in both modes
  * with zero bytes on stdout. Listing it makes this list double as the live
  * control on signal 2. Since the list is explicitly a floor, it costs nothing.
+ *
+ * THE SHADOW THIS FLOOR LEAVES, recorded so the next reader does not re-run the
+ * sweep to find out (#3819 nit 2). All 28 non-`apps` top-level directories were
+ * dropped from `OUTSIDE` one at a time and the deriver re-run:
+ *
+ *     dropped                            suites  rc  caught by
+ *     .claude                            35      1   MIN_SUITES (35 < 38)
+ *     .github / azure-functions          —       1   REQUIRED_TRIGGER_DIRS
+ *     platform                           37      1   MIN_SUITES
+ *     scripts                            32      1   MIN_SUITES
+ *     docs                               40      0   NOTHING
+ *     content / notebooks / packages     41      0   NOTHING
+ *
+ * So four directories can leave the emitted trigger with every control green.
+ * The residual risk is LOW and is stated rather than papered over: `OUTSIDE` is
+ * derived from `git ls-tree`, so a directory can only leave the list by leaving
+ * the TREE, and a PR cannot touch a directory that does not exist. The realistic
+ * case is "the last suite reading `docs/` is deleted" — where dropping `docs`
+ * from the trigger is the CORRECT outcome, not a defect. This list is therefore
+ * a deliberately narrow floor over the directories that gate the deploy chain,
+ * not an attempt to cover the whole tree.
  */
 const REQUIRED_TRIGGER_DIRS = ['.github', 'azure-functions', 'platform', 'scripts'];
 
