@@ -85,7 +85,9 @@ real drift and suppressed noise.
 - **Never silent** — every resource carrying an unresolved property is listed
   by resourceId in `unresolved-list.txt` and in the summary block as *"not
   compared by what-if"*, counted on the coverage line
-  (`… ; N resource(s) with properties NOT COMPARED by what-if`), exposed as the
+  (`… ; N resource(s) with properties NOT COMPARED by what-if` — the code
+  pluralises, so at N=1 it reads `1 resource(s) with property NOT COMPARED by
+  what-if`), exposed as the
   `unresolved_count` / `unresolved_list` step outputs, and annotated with a
   `::warning::`. It is a **coverage gap**, in the same family as a
   short-circuited module.

@@ -491,7 +491,7 @@ jobs:
             exit 0
           fi
           if ! gh run download "$RUN_ID" -n copilot-quality-eval-run -D prev/; then
-            echo "::error::run $RUN_ID is the newest successful run on main, but its copilot-quality-eval-run artifact could not be downloaded. This does NOT establish which of the two causes applies — the artifact expired / was never uploaded (that run's Function probe found nothing), or the download itself failed. Either way the delta half of this gate cannot run, and it is not established that there is no baseline, so this run is not reported as a pass. If the baseline run legitimately produced no artifact, re-run this job once a run WITH an artifact is the newest success on main."
+            echo "::error::run $RUN_ID is the newest successful run on main, but its copilot-quality-eval-run artifact could not be downloaded. This does NOT establish which of the two causes applies — the artifact expired / was never uploaded (that run's Function probe found nothing), or the download itself failed. Either way the delta half of this gate cannot run, and it is not established that there is no baseline, so this run is not reported as a pass. NOTE: while the newest successful main run carries no baseline artifact this step fails every run, so no new run can become a success and displace it — the state does not clear on its own. Tracked, with the bounded-walk-back fix, at #4376."
             exit 1
           fi
           # A SUCCESSFUL download is not a baseline. The upload step below lists
