@@ -12,18 +12,25 @@ Routes: `app/api/items/slate-app/route.ts`, `app/api/items/slate-app/[id]/route.
 Codegen: `apps/fiab-console/lib/editors/_palantir-codegen.ts` → `generateSlateBundle`
 Catalog: `slate-app` / restType `SlateApp` / category **Fabric IQ** (preview)
 
-**Last verified: 2026-07-01 against current code.** A `slate-app-builder.tsx`
-now provides a real drag-resize canvas + a multi-type query engine
-(`/query/run` → ADX / Synapse / DAB REST) driving a live in-editor preview — the
-"~3 of 32, no canvas/no live data" grade is stale; rows 1/5/12/24 flip ❌→✅ and
-3/10/13 flip ❌→⚠️.
+**Last verified: 2026-09-07 against current code** (previous pass 2026-07-01).
+Since the 2026-07-01 pass the builder gained a **variables + events/actions
+reactivity layer** (`SlateVariable` / `SlateEventTrigger` / `SlateEventEffect`,
+`slate-app-builder.tsx:71-99`, executed by `runInteractions` at `:1091-1129`),
+**table row-selection** (`QueryResultTable` `selectable`/`onSelectRow`,
+`:420-491`) and a **real Publish to Azure Static Web Apps** with version history
+(`app/api/items/slate-app/[id]/publish/route.ts:75-96` — ARM `publishStaticSite`
+→ `deployZipToStaticSite` → `waitForContentLive` → `state.versions[]`). Rows
+18/21 flip ❌→✅ and rows 4/14/16/22/23/29 flip ❌→⚠️. Every row still MISSING is
+now tracked (see **Tracked gaps** below) — this doc carries **one** grade, at the
+end of the Loom coverage table.
 
 Slate is Foundry's **pro-code application builder**: a drag-and-drop widget grid, a first-class
 Queries panel (Ontology / Function / SQL / HTTP-JSON), a Variables + Events/Actions reactivity
-engine, per-widget HTML/CSS/JS customization, and publish/versioning. Loom's current editor is a
-**single-page widget list + static-code generator** — roughly 10% of the real surface. This doc
-inventories the full product and maps every gap to an Azure-native build (no Microsoft Fabric on
-the default path, per `.claude/rules/no-fabric-dependency.md`).
+engine, per-widget HTML/CSS/JS customization, and publish/versioning. Loom's editor now covers the
+canvas, the query engine, the reactivity core and real publish; it is still a **single-page** app
+builder with a five-kind widget set and no pro-code surface. This doc inventories the full product
+and maps every gap to an Azure-native build (no Microsoft Fabric on the default path, per
+`.claude/rules/no-fabric-dependency.md`).
 
 ## Real feature inventory
 
@@ -64,54 +71,99 @@ the default path, per `.claude/rules/no-fabric-dependency.md`).
 
 ## Loom coverage
 
-| # | Status | Notes |
-|---|---|---|
-| 1 | ✅ BUILT | Real drag-resize `CanvasWidget` (pointer-drag `startDrag` + corner `startResize`, snap-to-grid, persisted `{x,y,w,h}`) — `slate-app-builder.tsx:406-447`. Add is click-from-palette; move/resize are real drag. |
-| 2 | ❌ MISSING | Only `mode:'design'\|'preview'`; single canvas, no page model/nav. |
-| 3 | ⚠️ partial | `WidgetPalette` exists (5 kinds as buttons, `:454-465`) but is a flat list, not category-grouped. |
-| 4 | ⚠️ partial | `QueryResultTable` real client sort + Prev/Next paging + columns (`:303-353`); no row-select. Now renders live query rows. |
-| 5 | ✅ BUILT | `LoomChart` real SVG renderer (column/bar/line/area/pie/donut/scatter) bound to live results (`:388`). |
-| 6 | ❌ MISSING | No Map widget (`SlateWidgetKind` has no map). |
-| 7 | ❌ MISSING | No graph/tree/image widgets. |
-| 8 | ❌ MISSING | No input/control widgets. |
-| 9 | ❌ MISSING | No button/action/tabs/toast widgets. |
-| 10 | ⚠️ partial | `text` kind renders sanitized markdown-lite (`renderMarkdownLite :190`); no iframe/PDF/video. |
-| 11 | ❌ MISSING | `container` kind is a decorative dashed frame only; does not nest child widgets. |
-| 12 | ✅ BUILT | `QueriesPanel` — add/edit/remove named queries, type dropdown (datasource picker), per-query **Run** executes the real route (`:541-589`). |
-| 13 | ⚠️ 3 of 5 | `rest-dab` (HTTP-JSON), `kql`, `sql` wired (`/query/run` dispatch); ontology/function not first-class. |
-| 14 | ❌ MISSING | No `{{var}}` templating / security helpers. |
-| 15 | ❌ MISSING | No query partials. |
-| 16 | ❌ MISSING | Queries run on button click / "Run all" only; no conditional triggers. |
-| 17 | ❌ MISSING | Paging/sort are in-memory client only; no `$top/$skip/OFFSET` pushed to backend. |
-| 18 | ❌ MISSING | No variables system. |
-| 19 | ❌ MISSING | No transformations / filter vars. |
-| 20 | ❌ MISSING | Persistence is owner-scoped item state, not per-viewer storage. |
-| 21 | ❌ MISSING | Widgets have no event handlers. |
-| 22 | ❌ MISSING | No actions/effects. |
-| 23 | ❌ MISSING | Queries are read-only; no write-back widget/action. |
-| 24 | ✅ BUILT | `runPreview` executes each bound widget's query against the real backend; `WidgetView` renders live rows (`:360-392`, `:761-772`). |
-| 25 | ❌ MISSING | Inspector exposes title/query/chartType/agg/text only; no style controls. |
-| 26 | ❌ MISSING | No custom HTML/CSS/JS authoring surface. |
-| 27 | ❌ MISSING | Only an `apiBaseUrl` data-base field; no app parameters / module interface. |
-| 28 | ❌ MISSING | No public-app / upload support. |
-| 29 | ⚠️ partial | "Generate bundle" emits a real deployable SWA bundle as **copyable text** (`generate` route) — no ARM/SWA deploy, no versions. |
-| 30 | n/a | Out of scope for this editor (Loom Marketplace is separate). |
-| 31 | ❌ MISSING | Only a property inspector; no debug/dependency/perf surface. |
-| 32 | ❌ MISSING | `state.lastGeneratedAt` set, but no usage/edit-history UI. |
+| # | Status | Notes | Tracked |
+|---|---|---|---|
+| 1 | ✅ BUILT | Real drag-resize `CanvasWidget` (pointer-drag `startDrag` `:546`, corner `startResize` `:555`, snap-to-grid, persisted `{x,y,w,h}`) — `slate-app-builder.tsx:535-591`. Add is click-from-palette; move/resize are real drag. | — |
+| 2 | ❌ MISSING | Only `mode:'design'\|'preview'`; single canvas, no page model/nav. The `navigate` effect goes to a URL, not a page. | #4363 |
+| 3 | ⚠️ partial | `WidgetPalette` `:597-608` renders `KIND_META`'s 5 kinds as buttons — a flat list, not Slate's 8 categories. Widens with #4360/#4361/#4362. | #4360 |
+| 4 | ⚠️ partial | Real client sort + Prev/Next paging + columns, **single-row selection** (`selectable`/`selectedRow`/`onSelectRow`, `:420-491`) feeding `onSelect` interactions, and widget-level click events. No column order/width/align, no per-cell tooltips, no transpose, no multi/checkbox selection. Server-side paging is #4364. | #4360 |
+| 5 | ✅ BUILT | `LoomChart` real SVG renderer (column/bar/line/area/pie/donut/scatter) bound to live results (`:526`). | — |
+| 6 | ❌ MISSING | No Map widget (`SlateWidgetKind` `:65` has no map). | #4361 |
+| 7 | ❌ MISSING | No graph/tree/image widgets. | #4362 |
+| 8 | ❌ MISSING | No input/control widgets. Variables can only be driven from the Variables panel or a table row-select. | #4360 |
+| 9 | ❌ MISSING | No button/action/tabs/toast widgets. | #4360 |
+| 10 | ⚠️ partial | `text` kind renders sanitized markdown-lite (`renderMarkdownLite :281`) with `{{var}}` interpolation; no iframe/PDF/video. | #4360 |
+| 11 | ❌ MISSING | `container` kind is a decorative dashed frame only (`:503-505`); does not nest child widgets. | #4363 |
+| 12 | ✅ BUILT | `QueriesPanel :843` — add/edit/remove named queries, type dropdown (datasource picker), per-query **Run** executes the real route. | — |
+| 13 | ⚠️ 3 of 5 | `rest-dab` (HTTP-JSON), `kql`, `sql` wired (`/query/run` dispatch); ontology/function not first-class. | #4364 |
+| 14 | ⚠️ partial | `applyVarsToQuery :189-231` substitutes `{{var}}` **injection-safely per type** — bound `@parameters` for SQL, encoded path segments for REST, escaped literals for KQL. No Slate security helpers (`schema`/`table`/`column`/`alias`/`param`), no server-fetched user vars. | #4364 |
+| 15 | ❌ MISSING | No query partials. | #4364 |
+| 16 | ⚠️ partial | Auto-runs on entering Preview and re-runs on any variable change (`setRuntimeScalar :1148`); manual **Run** in Design. No conditional trigger ("deps non-null" / handlebar) and no per-query auto-vs-manual switch. | #4364 |
+| 17 | ❌ MISSING | Paging/sort are in-memory client only; no `$top/$skip/OFFSET` pushed to backend. | #4364 |
+| 18 | ✅ BUILT | `VariablesPanel :785-836` — add/rename/remove typed variables (`string\|number\|boolean\|date`) with defaults, a live runtime editor in Run mode, and `{{name}}` consumption in every query type. App-scope only (page scope needs #4363); no struct/object-set type (#4365). | — |
+| 19 | ❌ MISSING | No transformations / filter vars. | #4365 |
+| 20 | ❌ MISSING | Runtime is in-memory, re-seeded from defaults on each Preview entry (`runtimeFromDefaults :412`); nothing persists per viewer. | #4365 |
+| 21 | ✅ BUILT | Per-widget event triggers wired live: `onClick`, `onSelect` (table row-select) and `onChange` (load / variable change) — `SlateEventTrigger :81`, dispatched by `runInteractions :1091`, authored in `InteractionsDialog :688`. `didOpen`/`didClose` have no analog until containers/dialogs land (#4363). | — |
+| 22 | ⚠️ 4 of 6 | `setVariable` (literal or selected-row column), `runQuery` (refresh preview), `navigate` (interpolated URL) and `writeBack` (POST) all execute for real in Preview — `:1097-1128`. No toast effect and no run-Function effect. | #4360 |
+| 23 | ⚠️ partial | The `writeBack` effect POSTs the chosen variables as JSON to the app's DAB/APIM REST base and surfaces the real HTTP status (`:1110-1126`). No ontology object create/update/delete, no column-derived action form. | #4367 |
+| 24 | ✅ BUILT | `runPreview :1074` executes each bound widget's query against the real backend; `WidgetView :493-531` renders live rows with Spinner / honest-gate / error / empty states. | — |
+| 25 | ❌ MISSING | Inspector exposes title / bound query / chart type / aggregation / text / interactions only (`:613-686`); no per-widget CSS, no app stylesheet. | #4366 |
+| 26 | ❌ MISSING | No custom HTML/CSS/JS authoring surface, no custom widget sets. | #4366 |
+| 27 | ❌ MISSING | Only an `apiBaseUrl` data-base field; no app parameters / module interface. | #4367 |
+| 28 | ❌ MISSING | No public-app / upload support. | #4367 |
+| 29 | ⚠️ partial | **Real** publish: `publish/route.ts:75-96` provisions/updates `Microsoft.Web/staticSites` via ARM, zip-deploys the generated bundle, polls `waitForContentLive`, and appends a version record to Cosmos `state.versions[]`; the editor renders the version table + "Open live app" (`palantir/slate-app-editor.tsx:195-231`). No import/export/duplicate, no kiosk/redact mode. | #4367 |
+| 30 | n/a | Out of scope for this editor (Loom Marketplace is separate). | — |
+| 31 | ❌ MISSING | Only a property inspector; no debug/dependency/perf surface. | #4368 |
+| 32 | ❌ MISSING | `state.lastGeneratedAt` / `state.lastPublishedAt` are written, but there is no usage/edit-history UI. | #4368 |
 
-Honest summary (refreshed 2026-07-01): the stale "D (~3 of 32), no canvas / no
-live data / no query engine / no reactivity" verdict is now wrong. There is a
-**real drag-resize canvas** and a genuine **multi-type query engine**
-(`/query/run` → `kusto-client` ADX / `synapse-sql-client` / DAB-APIM REST)
-driving a **live in-editor preview** — rows 1, 5, 12, 24 are solid BUILT ✅, rows
-4 & 13 partial ⚠️. Grade today **~C**. The Slate reactivity depth (variables,
-events/actions, write-back, templating, multi-page, control/action/map/graph
-widgets, per-user storage, real deploy) remains entirely MISSING, so it is
-nowhere near full 32-row parity.
+## Grade
+
+**Grade today: ~C+.** Counting the 31 in-scope rows (30 is n/a): **6 ✅ BUILT**
+(1, 5, 12, 18, 21, 24), **9 ⚠️ partial** (3, 4, 10, 13, 14, 16, 22, 23, 29),
+**16 ❌ MISSING** (2, 6, 7, 8, 9, 11, 15, 17, 19, 20, 25, 26, 27, 28, 31, 32).
+`ui-parity.md` grades a surface **A only at zero ❌**, so slate-app cannot be A
+until the sixteen rows below land.
+
+What is genuinely real today, verified against code on 2026-09-07: a drag-resize
+canvas; a multi-type query engine (`/query/run` → `kusto-client` ADX /
+`synapse-sql-client` Synapse serverless / DAB-APIM REST) with injection-safe
+`{{var}}` binding; typed app variables with a live runtime; per-widget
+click/row-select/load interactions driving setVariable / runQuery / navigate /
+writeBack; and a real ARM Static Web Apps publish with version history. What is
+absent is the breadth: one page, five widget kinds, no pro-code surface, no
+debug/usage surface.
+
+**This is the only grade in this document.** An earlier revision carried a
+second, contradictory grade (a flat **D**) at the end of the build plan; it was
+stale on both counts and has been removed (#3720). The invariant this file must
+hold: exactly one grade line, in this section. A second one anywhere else is the
+defect recurring.
+
+## Tracked gaps
+
+Every ❌ / ⚠️ row above is tracked. No row is left as an untracked aspiration.
+
+| Issue | Rows | Size | Gap |
+|---|---|---|---|
+| #4360 | 8, 9 (+3, 4, 10, 22) | M | Control / input and action widgets — text, numeric, date, dropdown, button, tabs, toast |
+| #4361 | 6 | M | Map widget on Azure Maps (location / heatmap / shape / choropleth) |
+| #4362 | 7 | M | Graph / tree / image-gallery widgets |
+| #4363 | 2, 11 | M | Multi-page apps and real container nesting |
+| #4364 | 14, 15, 16, 17 (+13) | M | Handlebars query helpers, partials, conditional triggers, server-side paging/sort |
+| #4365 | 19, 20 | M | Variable transformations, object-set filter variables, per-user persisted storage |
+| #4366 | 25, 26 | M | Per-widget styles, global stylesheet, custom HTML/Handlebars widget |
+| #4367 | 27, 28, 29 (+23) | M | App parameters / module interface, public apps, import-export-duplicate, kiosk mode |
+| #4368 | 31, 32 | M | Dependency/debug inspector and usage metrics / edit history |
 
 ## Build plan
 
 Azure-native backends only on the default path. Fabric/Power BI strictly opt-in (none needed here).
+
+Status as of 2026-09-07 — the plan below is the original design; items are
+annotated with what has actually landed:
+
+| Item | Status |
+|---|---|
+| P0-1 live preview · P0-2 query engine · P0-3 drag-resize canvas | **LANDED** (rows 1, 12, 24) |
+| P0-4 typed widget set | **PARTIAL** — table / chart / metric / text / container only; controls, buttons, iframe and tabs are #4360 |
+| P1-5 variables + events/actions | **LANDED for the scalar/effect core** (rows 18, 21, 22) — helpers, partials and conditional triggers are #4364; transformations and per-user storage are #4365 |
+| P1-6 write-back | **PARTIAL** — generic REST POST effect only; ontology object CRUD is #4367 |
+| P1-7 multi-page | **NOT STARTED** — #4363 |
+| P1-8 publish → Azure Static Web Apps | **LANDED** (real ARM provision + zip deploy + versions); import/export/duplicate and kiosk are #4367 |
+| P2-9 custom CSS/HTML | **NOT STARTED** — #4366 |
+| P2-10 partials + app parameters | **NOT STARTED** — #4364 / #4367 |
+| P2-11 Map on Azure Maps | **NOT STARTED** — #4361 |
+| P2-12 debug / dependency inspector | **NOT STARTED** — #4368 |
 
 ### P0 — make it an actual app builder (visible parity uplift)
 
@@ -209,5 +261,8 @@ Azure-native backends only on the default path. Fabric/Power BI strictly opt-in 
 None of the above touches `api.fabric.microsoft.com` / `api.powerbi.com` / OneLake on the default
 path. A Fabric backend is not required for any row.
 
-Grade today: **D**. Target: **A** once P0+P1 land (canvas + live query engine + reactivity +
-real deploy), with P2 closing the pro-code (custom HTML/CSS, partials, Map, debug) rows.
+Boundaries: this doc is a code-vs-Slate comparison and is boundary-independent —
+every backend named above (ADX, Synapse serverless, DAB/APIM, Cosmos, ARM Static
+Web Apps, Azure Maps) exists in Commercial and Azure Government. It carries **no
+per-cloud runtime receipt**; per `cloud-parity.md` the sub-issues above must each
+state which boundaries they were verified against.
