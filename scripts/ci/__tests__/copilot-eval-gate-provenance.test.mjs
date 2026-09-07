@@ -233,3 +233,39 @@ test('#3857 — no ::error:: is emitted on a branch that ends in success', () =>
     'the gate run block ends on a bare `exit 0`, hard-coding success over every verdict above it',
   );
 });
+
+test('#3857 — the fold step cannot claim a prepend it did not perform', () => {
+  // Measured on review of this PR (2026-09-07): the fold step ran `set -uo
+  // pipefail` — no `-e` — with `cat a b > tmp` and `mv tmp b` on SEPARATE lines,
+  // then unconditionally echoed "prepended ... (N bytes)". A failing `cat` still
+  // reached the `mv`, which clobbered eval-summary.md with the partial or empty
+  // tmp; the step exited 0 and asserted a prepend that never happened. That is
+  // the deploy-integrity R7 shape this suite exists to keep out, introduced in
+  // the step this PR added. Both halves of the fix are pinned, so removing
+  // either one alone fails HERE by name.
+  const fold = steps[indexOfStep('Fold the provenance banner')];
+  assert.ok(fold, 'the fold step is gone — the sticky comment lost the provenance banner');
+
+  assert.match(
+    fold.body,
+    /set -euo pipefail/,
+    'the fold step no longer runs under `set -e`, so a failed `cat` continues into the `mv` and the ' +
+      'success message below it',
+  );
+  assert.match(
+    fold.body,
+    /cat corpus-provenance\.md eval-summary\.md > eval-summary\.tmp && mv eval-summary\.tmp eval-summary\.md/,
+    'the `&&` between the cat and the mv is gone: a failed cat would still let the mv overwrite ' +
+      'eval-summary.md with the partial tmp',
+  );
+
+  // And the message must sit AFTER the write it describes, not before it.
+  const wroteAt = fold.body.indexOf('mv eval-summary.tmp eval-summary.md');
+  const claimedAt = fold.body.indexOf('echo "prepended corpus-provenance.md');
+  assert.ok(wroteAt >= 0, 'the fold step no longer moves the merged file into place');
+  assert.ok(claimedAt >= 0, 'the fold step no longer reports what it did');
+  assert.ok(
+    wroteAt < claimedAt,
+    'the fold step announces the prepend before performing it',
+  );
+});

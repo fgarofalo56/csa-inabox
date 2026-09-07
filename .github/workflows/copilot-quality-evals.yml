@@ -714,14 +714,18 @@ jobs:
         # summary still carries the "whose corpus was this?" header.
         if: always() && steps.func.outputs.found == 'true' && hashFiles('corpus-provenance.md') != ''
         run: |
-          set -uo pipefail
+          # `-e` matters here: without it a failed `cat` would still be followed
+          # by the `mv`, which would clobber eval-summary.md with the partial or
+          # empty tmp, the step would exit 0, and the line below would assert a
+          # prepend that never happened (deploy-integrity R7). The `&&` says the
+          # same thing a second way, so neither can be removed alone.
+          set -euo pipefail
           if [ ! -f eval-summary.md ]; then
             # R7 — say what was established: there is no summary to fold into.
             echo "::notice::no eval-summary.md was produced, so there is nothing to prepend the corpus-provenance banner to. The banner is already in the job summary."
             exit 0
           fi
-          cat corpus-provenance.md eval-summary.md > eval-summary.tmp
-          mv eval-summary.tmp eval-summary.md
+          cat corpus-provenance.md eval-summary.md > eval-summary.tmp && mv eval-summary.tmp eval-summary.md
           echo "prepended corpus-provenance.md to eval-summary.md ($(wc -c < eval-summary.md) bytes)"
 
       - name: Upload the run artifact (next run's delta baseline)

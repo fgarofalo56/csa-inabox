@@ -40,6 +40,8 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
 
 import {
   collectReads,
@@ -586,6 +588,54 @@ test('LAYER 6: the two LIVE Gov sites the step window could not see are FIXED, n
     new Map(),
   );
   assert.deepEqual(failures, [], 'a Gov site is flagged with an EMPTY ratchet — it is not fixed');
+});
+
+const BRAIN_SCAN = path.resolve(
+  import.meta.dirname,
+  '..',
+  '..',
+  '..',
+  '.github',
+  'workflows',
+  'loom-brain-scan.yml',
+);
+
+test('LAYER 6: the stderr the #3344 conversion KEPT is READ in BOTH twins, not just Commercial', () => {
+  // Measured on review of this PR (2026-09-07): loom-brain-scan.yml's Gov job
+  // captured az's stderr to ../../temp/uami-name.err and then never opened it.
+  // Its `UBRC -ne 0` arm set UAMI_STATE to "could not be established (the NAME
+  // query failed, az exit N)" and moved on — and that is the ONE arm with no
+  // other information about WHY, because the other two arms describe a state az
+  // actually returned. The reason was sitting in a file nobody read. The
+  // Commercial twin `cat`s it.
+  //
+  // Not discarding az's stderr is the entire point of the #3344 conversion:
+  // `2>/dev/null` was replaced with a capture so a failure could say what
+  // happened. A capture nobody reads is the same blindness with more steps. And
+  // under cloud-parity a diagnostic that works in Commercial and not in Gov is
+  // INCOMPLETE, not a Commercial-first tradeoff — so both twins are asserted,
+  // and the count is asserted first so a drifted locator cannot pass by
+  // matching nothing.
+  const src = readFileSync(BRAIN_SCAN, 'utf8').replace(/\r\n/g, '\n');
+  const arms = [...src.matchAll(/if \[ \$UBRC -ne 0 \]; then\n([\s\S]*?)\n\s*elif /g)].map(
+    (m) => m[1],
+  );
+  assert.equal(
+    arms.length,
+    2,
+    `expected the Commercial and the Gov \`UBRC -ne 0\` arm in loom-brain-scan.yml, found ` +
+      `${arms.length} — the locator drifted, and a zero-length match set would otherwise read as ` +
+      'clean',
+  );
+  arms.forEach((arm, i) => {
+    assert.match(
+      arm,
+      /cat \.\.\/\.\.\/temp\/uami-name\.err/,
+      `\`UBRC -ne 0\` arm ${i + 1} of 2 in loom-brain-scan.yml captures az's stderr to ` +
+        'temp/uami-name.err and never reads it. That arm reports only that the NAME query failed; ' +
+        "az's own stderr is the only thing that says why (#3344).",
+    );
+  });
 });
 
 // ══════════════════════════════════════════════════════════════════════════════

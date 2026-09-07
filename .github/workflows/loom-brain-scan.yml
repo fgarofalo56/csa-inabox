@@ -700,6 +700,13 @@ jobs:
             UBRC=$?
             if [ $UBRC -ne 0 ]; then
               UAMI_STATE="could not be established (the NAME query failed, az exit $UBRC)"
+              # #3344 — this is the ONE arm that has no other information: the
+              # state above says only that the query failed, so az's own stderr
+              # is the only thing that says WHY. Capturing that stderr instead
+              # of discarding it is the whole point of the conversion, and a
+              # capture nobody reads loses it just the same. Printed before the
+              # warning below, matching the Commercial twin's read in this arm.
+              cat ../../temp/uami-name.err
             elif [ -z "${UAMI_BOUND:-}" ] || [ "$UAMI_BOUND" = "None" ]; then
               UAMI_STATE="carries no LOOM_UAMI_CLIENT_ID env entry at all"
             else
