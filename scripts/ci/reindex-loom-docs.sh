@@ -39,6 +39,28 @@
 # reached a replica. The fix does not need that answer — it converts the
 # unknown into a measurement by polling the durable freshness signal.
 #
+# ── …AND WHEN THE TRIGGER IS SIMPLY NEVER ACCEPTED, SAY SO IN 2 MIN (#3472) ─
+# Polling settled the AMBIGUITY but not the COST or the DIAGNOSIS. Run
+# 33472611043 (2026-09-01) got a gateway 504 on the POST, then spent 904s over
+# 57 polls reading `freshness=stale job=idle` on every single one before the
+# wall clock refused — a 15-minute red whose message was "did not reach a fresh
+# state", which reads as "the rebuild was slow". It was not: no rebuild was ever
+# visible. Two things follow, and only these two are claimed here:
+#   1. ONE RETRY of the POST. Two independent attempts are much better evidence
+#      than one, and the retry is FREE when the first POST did reach a replica:
+#      the route is idempotent-by-restart and answers 202 `alreadyRunning:true`
+#      (lib/azure/reindex-job.ts::startReindexJob), so a retry cannot start a
+#      second concurrent rebuild.
+#   2. An EARLY, DIFFERENTLY-NAMED refusal (`trigger_refused`) when BOTH POSTs
+#      were refused at the edge AND no poll has yet seen a job running. See the
+#      long note on that branch in the loop for what that does and does NOT
+#      establish — `job.state` is the ANSWERING REPLICA's view and loom-console
+#      runs minReplicas 2 / maxReplicas 6 (admin-plane/main.bicep:4221), so this
+#      is deliberately conservative and latches OFF the moment any poll reports
+#      a running job.
+# Both verdicts still fail closed. This shortens and RENAMES a failure; it never
+# creates a pass.
+#
 # ── WHAT COUNTS AS DONE ─────────────────────────────────────────────────────
 # `freshness.state === 'fresh'` — the DURABLE, cross-replica signal (the
 # persisted corpus manifest). `job.state` is only the answering REPLICA's view:
@@ -56,6 +78,15 @@
 #   POLL_INTERVAL_S  default 15
 #   POLL_MAX_ATTEMPTS default 0 (unbounded) — cap on the NUMBER OF POLLS. See
 #                    "A WALL CLOCK IS NOT A BUDGET A TEST CAN RELY ON" below.
+#   POST_RETRIES     default 1 — extra POST attempts after an INDETERMINATE
+#                    gateway 5xx only (#3472). 0 disables the retry.
+#   POST_RETRY_DELAY_S default 5 — pause before that retry.
+#   REFUSED_IDLE_POLLS default 8 — consecutive polls reading `freshness=stale
+#                    job=idle` with an unchanged indexedChunkCount that, WHEN
+#                    EVERY POST WAS REFUSED AT THE EDGE and no poll has seen a
+#                    running job, end the wait early with `trigger_refused`.
+#                    0 disables the early exit (the wall clock then governs, as
+#                    it did before #3472).
 #   FATAL            default true — set 'false' ONLY where the caller is
 #                    documented non-blocking (the post-deploy bootstrap). A
 #                    downgrade is always announced as a ::warning::, never
@@ -76,6 +107,11 @@ POLL_INTERVAL_S="${POLL_INTERVAL_S:-15}"
 # 0 = unbounded, i.e. the wall clock alone governs (production behaviour, and
 # the default so no caller changes meaning by upgrading).
 POLL_MAX_ATTEMPTS="${POLL_MAX_ATTEMPTS:-0}"
+# #3472. Both knobs default to the behaviour argued for in the header note; both
+# can be set to 0 to get exactly the pre-#3472 script back.
+POST_RETRIES="${POST_RETRIES:-1}"
+POST_RETRY_DELAY_S="${POST_RETRY_DELAY_S:-5}"
+REFUSED_IDLE_POLLS="${REFUSED_IDLE_POLLS:-8}"
 FATAL="${FATAL:-true}"
 
 POST_BODY_FILE="$(mktemp)"
@@ -119,27 +155,59 @@ fi
 # already PRINTS `000` from `-w` on a connect failure, so the fallback would
 # concatenate to "000000" and the classifier would be handed a string that is
 # not a status code (#3414).
-CODE=$(curl -sS -o "$POST_BODY_FILE" -w '%{http_code}' -X POST \
-  -H "Authorization: Bearer $INTERNAL_TOKEN" \
-  -H 'Content-Type: application/json' \
-  --max-time 120 \
-  "$ENDPOINT") || true
-[ -n "$CODE" ] || CODE=000
-echo "reindex POST $ENDPOINT -> HTTP $CODE"
-head -c 800 "$POST_BODY_FILE" || true
-echo ""
-emit "reindex_post=$CODE"
+do_post() {
+  CODE=$(curl -sS -o "$POST_BODY_FILE" -w '%{http_code}' -X POST \
+    -H "Authorization: Bearer $INTERNAL_TOKEN" \
+    -H 'Content-Type: application/json' \
+    --max-time 120 \
+    "$ENDPOINT") || true
+  [ -n "$CODE" ] || CODE=000
+  echo "reindex POST $ENDPOINT -> HTTP $CODE"
+  head -c 800 "$POST_BODY_FILE" || true
+  echo ""
+}
 
 # The verdict is the classifier's, never a `case` statement beside it.
 # Exit 75 is its INDETERMINATE answer (a gateway 5xx with no application body,
 # #3394): the edge replied for the console, so whether the POST reached a replica
 # is unknown. Do not guess — fall through to the poll and let the durable
 # freshness signal settle it. Every OTHER non-zero stays a failure.
+do_post
+POST_ATTEMPTS=1
 HTTP_CODE="$CODE" RESP_BODY="$(cat "$POST_BODY_FILE")" node "$CLASSIFIER"
 CRC=$?
+
+# ── ONE RETRY, AND ONLY ON THE INDETERMINATE ANSWER (#3472) ─────────────────
+# Scoped to CRC 75 on purpose. A 401, a 502 with an application body, or an
+# empty-corpus 502 are ANSWERS from the console — retrying them would only
+# delay a verdict the console already gave. A gateway 5xx is not an answer, so a
+# second sample is the cheapest way to tell "the edge blipped once" from "POSTs
+# are not getting through". Safe to repeat: startReindexJob() returns the
+# in-flight handle with `alreadyRunning:true` rather than racing a second
+# rebuild, so if attempt 1 DID reach a replica this retry converts the unknown
+# into a 202 and the normal poll path resumes.
+while [ "$CRC" -eq 75 ] && [ "$POST_ATTEMPTS" -le "$POST_RETRIES" ]; do
+  echo "::notice::reindex POST was answered by the gateway (HTTP $CODE) with no application body — re-sampling in ${POST_RETRY_DELAY_S}s (attempt $(( POST_ATTEMPTS + 1 )) of $(( POST_RETRIES + 1 ))). The route is idempotent-by-restart, so this cannot start a second concurrent rebuild."
+  sleep "$POST_RETRY_DELAY_S"
+  do_post
+  POST_ATTEMPTS=$(( POST_ATTEMPTS + 1 ))
+  HTTP_CODE="$CODE" RESP_BODY="$(cat "$POST_BODY_FILE")" node "$CLASSIFIER"
+  CRC=$?
+done
+
+# Emitted ONCE, after the final attempt: GITHUB_OUTPUT is append-only, so
+# emitting per attempt would leave two `reindex_post=` lines and the consumer
+# would read whichever the runner's parser happened to keep.
+emit "reindex_post=$CODE"
+
 POLL_ANYWAY=false
+# True only when EVERY POST attempt was refused at the edge. This is the
+# precondition for the `trigger_refused` early exit below — one refused POST is
+# not enough evidence to stop waiting.
+POST_REFUSED=false
 if [ "$CRC" -eq 75 ]; then
   POLL_ANYWAY=true
+  POST_REFUSED=true
 elif [ "$CRC" -ne 0 ]; then
   emit 'reindex_poll=not-started'
   fail
@@ -184,6 +252,13 @@ DEADLINE=$(( STARTED + POLL_TIMEOUT_S ))
 OUTCOME=timeout
 REACHED=false
 ATTEMPTS=0
+# #3472 early-exit state. IDLE_STREAK counts CONSECUTIVE polls that saw nothing
+# happening; SAW_RUNNING is a LATCH — once any poll reports a job in flight the
+# early exit is off for the rest of the run, permanently, because at that point
+# "no rebuild was ever visible" is false and only the full wait can settle it.
+IDLE_STREAK=0
+SAW_RUNNING=false
+BASE_CHUNKS=''
 
 while [ "$(date +%s)" -lt "$DEADLINE" ]; do
   if [ "$POLL_MAX_ATTEMPTS" -gt 0 ] && [ "$ATTEMPTS" -ge "$POLL_MAX_ATTEMPTS" ]; then
@@ -214,13 +289,72 @@ while [ "$(date +%s)" -lt "$DEADLINE" ]; do
     try { j = JSON.parse(fs.readFileSync(process.argv[1], "utf8")); } catch { j = {}; }
     const f = (j.freshness && j.freshness.state) || "unknown";
     const s = (j.job && j.job.state) || "unknown";
-    process.stdout.write(f + "|" + s);
+    const c = j.freshness && Number.isFinite(j.freshness.indexedChunkCount)
+      ? String(j.freshness.indexedChunkCount)
+      : "";
+    process.stdout.write(f + "|" + s + "|" + c);
   ' "$POLL_BODY_FILE")
-  FRESH="${STATES%%|*}"
-  JOB="${STATES##*|}"
-  echo "  poll: HTTP $GCODE freshness=$FRESH job=$JOB"
+  # Three fields now, so `${STATES%%|*}` / `${STATES##*|}` no longer suffice —
+  # the old suffix form would have handed JOB the chunk count.
+  IFS='|' read -r FRESH JOB CHUNKS <<< "$STATES"
+  FRESH="${FRESH:-unknown}"
+  JOB="${JOB:-unknown}"
+  echo "  poll: HTTP $GCODE freshness=$FRESH job=$JOB indexedChunks=${CHUNKS:-unknown}"
   if [ "$FRESH" = "fresh" ]; then OUTCOME=fresh; break; fi
   if [ "$JOB" = "failed" ]; then OUTCOME=failed; break; fi
+
+  # ── EARLY EXIT: THE TRIGGER WAS NEVER ACCEPTED (#3472) ────────────────────
+  # Fires ONLY when all three hold:
+  #   a) every POST attempt was refused at the edge (POST_REFUSED),
+  #   b) no poll has EVER reported a job in flight (the SAW_RUNNING latch), and
+  #   c) REFUSED_IDLE_POLLS consecutive polls read exactly `stale`/`idle` with
+  #      an unchanged indexedChunkCount.
+  #
+  # WHAT EACH LINK IS WORTH — stated because the message the classifier prints
+  # is an assertion (deploy-integrity R7), and two of these are weaker than they
+  # look:
+  #   * (a) is the DESIGNED evidence. Two independent POSTs, both answered by the
+  #     edge with no application body, is a fact about the request path.
+  #   * (b) is a real safety latch but only ONE-WAY: `job.state` is the ANSWERING
+  #     REPLICA's in-memory view (lib/azure/reindex-job.ts, "REPLICA SCOPE"), and
+  #     loom-console runs 2-6 replicas, so seeing `running` PROVES a rebuild
+  #     exists while never seeing it proves nothing. Missing a live worker for k
+  #     consecutive polls has probability ((r-1)/r)^k — at the 6-replica ceiling
+  #     that is 48% for k=4 and 23% for k=8. Hence the default of 8 rather than
+  #     the 4 originally proposed, and hence the classifier's message says
+  #     "no rebuild was OBSERVED", never "no rebuild ran".
+  #   * (c) is the WEAKEST link and is corroboration only: the corpus manifest is
+  #     written at the END of a rebuild (loom-docs-index.ts writes the shards then
+  #     the head), so indexedChunkCount does not move DURING one. Unchanged
+  #     chunks therefore means "nothing converged", not "no progress was made".
+  # The verdict this shortens is a FAILURE either way, so the cost of firing it
+  # wrongly is bounded: a red at ~2min instead of a red at 15min, with a message
+  # that names the request path instead of the rebuild's duration.
+  if [ "$JOB" = "running" ] || [ "$JOB" = "succeeded" ]; then SAW_RUNNING=true; fi
+  # `-n "$CHUNKS"` is not a formality: the classifier's verdict SAYS "with the
+  # indexed chunk count unchanged", and a body that never reported a count
+  # cannot support that sentence. With no count the streak never starts and the
+  # wall clock governs — exactly the pre-#3472 behaviour, which is the safe
+  # fallback (R7: do not fire a verdict whose stated evidence you do not have).
+  if [ "$POST_REFUSED" = "true" ] && [ "$SAW_RUNNING" = "false" ] && \
+     [ "$REFUSED_IDLE_POLLS" -gt 0 ] && [ "$FRESH" = "stale" ] && [ "$JOB" = "idle" ] && \
+     [ -n "$CHUNKS" ]; then
+    if [ -z "$BASE_CHUNKS" ]; then BASE_CHUNKS="$CHUNKS"; fi
+    if [ "$CHUNKS" = "$BASE_CHUNKS" ]; then
+      IDLE_STREAK=$(( IDLE_STREAK + 1 ))
+    else
+      # The count moved: something IS writing. Restart the streak from this
+      # observation rather than counting it toward "nothing is happening".
+      IDLE_STREAK=1
+      BASE_CHUNKS="$CHUNKS"
+    fi
+    if [ "$IDLE_STREAK" -ge "$REFUSED_IDLE_POLLS" ]; then
+      OUTCOME=trigger_refused
+      break
+    fi
+  else
+    IDLE_STREAK=0
+  fi
 done
 
 # Never reaching the console at all is the transient case (the eval run talks to
@@ -232,7 +366,11 @@ fi
 WAITED=$(( $(date +%s) - STARTED ))
 emit "reindex_poll=$OUTCOME"
 
+# POST_CODE / POST_ATTEMPTS are handed over so the `trigger_refused` message can
+# NAME the status the edge actually returned and how many attempts got it,
+# instead of describing a gateway failure it did not observe (R7).
 if ! MODE=poll POLL_OUTCOME="$OUTCOME" POLL_WAITED_S="$WAITED" POLL_ATTEMPTS="$ATTEMPTS" \
+  POST_CODE="$CODE" POST_ATTEMPTS="$POST_ATTEMPTS" \
   POLL_BODY="$(cat "$POLL_BODY_FILE")" node "$CLASSIFIER"; then
   fail
 fi

@@ -304,3 +304,98 @@ test('CLI exit code for the indeterminate verdict is 75, distinct from 0 and 1',
   assert.equal(gw.status, 75);
   assert.match(gw.stdout, /::warning::/);
 });
+
+// ── trigger_refused: a REFUSED trigger is not a SLOW rebuild (#3472) ─────────
+//
+// Measured on copilot-quality-evals run 33472611043 (2026-09-01): a gateway 504
+// on the POST, then 57 polls over 904s every one of which read
+// `freshness=stale job=idle`, then a red whose message was "did not reach a
+// fresh state within 904s". That message is true and useless — it describes the
+// rebuild's duration when the rebuild was never accepted. The poll loop now
+// recognises that shape and hands the classifier its own outcome.
+
+/** The body every one of those 57 polls returned. */
+const POLL_STALE_IDLE = JSON.stringify({
+  ok: true,
+  backend: 'ai-search',
+  job: { state: 'idle', jobId: null, error: null },
+  freshness: { state: 'stale', indexedChunkCount: 49593 },
+});
+
+test('poll: trigger_refused is a FAIL, and names the request path — not the rebuild', () => {
+  const r = classifyReindexPoll({
+    outcome: 'trigger_refused',
+    body: POLL_STALE_IDLE,
+    waitedSeconds: 128,
+    attempts: 8,
+    postCode: 504,
+    postAttempts: 2,
+  });
+  assert.equal(r.verdict, 'fail');
+  assert.equal(r.level, 'error');
+  assert.match(r.message, /TRIGGER REFUSED/);
+  // The whole point of the separate verdict: a reader must be pointed at the
+  // edge/origin path, not told the rebuild was slow.
+  assert.match(r.message, /REQUEST-PATH problem, not a slow rebuild/i);
+  assert.match(r.message, /originResponseTimeoutSeconds/);
+  // It must report the evidence it actually had.
+  assert.match(r.message, /2 POST attempt\(s\)/);
+  assert.match(r.message, /HTTP 504/);
+  assert.match(r.message, /8 poll\(s\) over 128s/);
+});
+
+/**
+ * MUTATION-PROOF, and the reason this verdict is allowed to exist at all
+ * (deploy-integrity R7). `job.state` is the ANSWERING REPLICA's view and the
+ * corpus manifest is written only at the END of a rebuild, so neither "idle"
+ * nor "chunk count unchanged" proves that nothing ran. Delete either caveat
+ * from the message and this goes RED: the verdict would then be asserting two
+ * things the poll loop cannot observe.
+ */
+test('poll: trigger_refused states its CAVEATS and never claims "no job ran"', () => {
+  const r = classifyReindexPoll({
+    outcome: 'trigger_refused',
+    body: POLL_STALE_IDLE,
+    waitedSeconds: 128,
+    attempts: 8,
+    postCode: 504,
+    postAttempts: 2,
+  });
+  assert.match(r.message, /ANSWERING replica/i, 'must disclose the replica-scope caveat');
+  assert.match(r.message, /does not prove no job started anywhere/i);
+  assert.match(r.message, /written only at the END of a rebuild/i, 'must disclose the manifest caveat');
+  // The claims it may NOT make.
+  assert.doesNotMatch(r.message, /no (job|rebuild) (ran|started)\b(?! anywhere)/i);
+  assert.doesNotMatch(r.message, /nothing ran/i);
+  assert.match(r.message, /never OBSERVED/i, 'the positive claim must be scoped to observation');
+});
+
+/** Early exit shortens the WAIT. It must never soften the EXIT CODE. */
+test('poll CLI: trigger_refused exits 1 (fail-closed intact)', () => {
+  const res = spawnSync(process.execPath, [SCRIPT], {
+    encoding: 'utf8',
+    env: {
+      ...process.env,
+      MODE: 'poll',
+      POLL_OUTCOME: 'trigger_refused',
+      POLL_BODY: POLL_STALE_IDLE,
+      POLL_WAITED_S: '128',
+      POLL_ATTEMPTS: '8',
+      POST_CODE: '504',
+      POST_ATTEMPTS: '2',
+    },
+  });
+  assert.equal(res.status, 1);
+  assert.match(res.stdout, /::error::/);
+  assert.match(res.stdout, /TRIGGER REFUSED/);
+});
+
+/**
+ * R7 on the message's own inputs. With no POST_CODE plumbed through, the
+ * message may not invent one — "a gateway 5xx" is what was established.
+ */
+test('poll: trigger_refused with no postCode does not invent a status code', () => {
+  const r = classifyReindexPoll({ outcome: 'trigger_refused', body: POLL_STALE_IDLE, attempts: 8 });
+  assert.match(r.message, /a gateway 5xx/);
+  assert.doesNotMatch(r.message, /HTTP \d/);
+});

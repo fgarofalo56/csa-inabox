@@ -32,12 +32,12 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 const SCRIPT = resolve(HERE, '..', 'reindex-loom-docs.sh');
 
 /** A body the route would actually return for a GET poll. */
-function pollBody({ freshness, job = 'running' }) {
+function pollBody({ freshness, job = 'running', chunks = 49593 }) {
   return {
     ok: true,
     backend: 'ai-search',
     job: { state: job, jobId: 'j-1', error: job === 'failed' ? 'AI Search upload failed: 403' : null },
-    freshness: { state: freshness, indexedChunkCount: 49593 },
+    freshness: { state: freshness, indexedChunkCount: chunks },
     sourceFiles: 2453,
   };
 }
@@ -108,6 +108,9 @@ function runScript(url, env = {}) {
         POLL_TIMEOUT_S: '600',
         POLL_INTERVAL_S: '1',
         POLL_MAX_ATTEMPTS: '4',
+        // #3472 — the POST retry's backoff is production pacing, not behaviour
+        // under test. Every 504 case here would otherwise pay it verbatim.
+        POST_RETRY_DELAY_S: '0',
         GITHUB_OUTPUT: '', // never write to the real step output from a test
         ...env,
       },
@@ -367,6 +370,175 @@ test('504 gateway on POST → polls → never fresh → exit 1 (tolerance is not
       const res = await runScript(url);
       assert.equal(res.status, 1);
       assert.ok(counts().gets > 0, 'expected it to poll before failing');
+    },
+  );
+});
+
+// ── #3472 — THE 904-SECOND RED THAT DESCRIBED THE WRONG THING ────────────────
+//
+// copilot-quality-evals run 33472611043 (2026-09-01, main): the POST got a
+// gateway 504, then 57 polls over 904s each read `freshness=stale job=idle`,
+// then the wall clock refused with "did not reach a fresh state within 904s".
+// Two defects in one run: the trigger was never retried, and the verdict named
+// the rebuild's DURATION for a rebuild that was never accepted.
+//
+// The fixture below replays exactly that server behaviour. Both new properties
+// are asserted on the PROCESS, which is the only thing the workflow reads.
+
+/** The GET body all 57 of that run's polls returned. */
+const STALE_IDLE = { status: 200, body: pollBody({ freshness: 'stale', job: 'idle' }) };
+
+test('#3472 replay of run 33472611043: retries the POST once, then exits by poll 4 with trigger_refused', async () => {
+  await withServer(
+    () => EDGE_504,
+    () => STALE_IDLE,
+    async (url, counts) => {
+      const res = await runScript(url, { REFUSED_IDLE_POLLS: '4', POLL_MAX_ATTEMPTS: '12' });
+      // Fail-closed is the invariant the early exit may NOT touch.
+      assert.equal(res.status, 1, res.stdout + res.stderr);
+      // (a) ONE retry — not zero (the head behaviour), not a loop.
+      assert.equal(counts().posts, 2, 'the indeterminate POST must be retried exactly once');
+      // (b) the wait ends at the streak, not at the 12-attempt cap (or the clock).
+      assert.equal(counts().gets, 4, 'must stop once REFUSED_IDLE_POLLS consecutive idle polls are seen');
+      assert.match(res.stdout, /TRIGGER REFUSED/);
+      assert.match(res.stdout, /REQUEST-PATH problem, not a slow rebuild/i);
+      assert.match(res.stdout, /2 POST attempt\(s\)/);
+    },
+  );
+});
+
+/**
+ * MUTATION-PROOF (the latch). `job.state` is the ANSWERING replica's view, so
+ * seeing `running` proves a rebuild exists while never seeing it proves nothing
+ * — the early exit must therefore be permanently disabled by a single sighting.
+ * Delete the SAW_RUNNING latch and this goes RED: with REFUSED_IDLE_POLLS=2 the
+ * loop would cut out at poll 2 instead of running the cap out.
+ */
+test('#3472 one sighting of job=running disables the early exit for the whole run', async () => {
+  await withServer(
+    () => EDGE_504,
+    (n) => ({ status: 200, body: pollBody({ freshness: 'stale', job: n === 1 ? 'running' : 'idle' }) }),
+    async (url, counts) => {
+      const res = await runScript(url, { REFUSED_IDLE_POLLS: '2', POLL_MAX_ATTEMPTS: '4' });
+      assert.equal(res.status, 1, res.stdout + res.stderr);
+      assert.equal(counts().gets, 4, 'a rebuild WAS observed in flight — only the full wait can settle it');
+      assert.match(res.stdout, /REFUSAL/i);
+      assert.doesNotMatch(res.stdout, /TRIGGER REFUSED/);
+    },
+  );
+});
+
+/**
+ * MUTATION-PROOF (the precondition, and the regression this fix could most
+ * easily cause). A NORMAL 202 followed by slow polls is the healthy long
+ * rebuild. Drop the POST_REFUSED precondition and this goes RED — every slow
+ * reindex would start failing at ~2 minutes.
+ */
+test('#3472 an ACCEPTED (202) POST never early-exits, however idle the polls look', async () => {
+  await withServer(
+    () => ACCEPTED,
+    () => STALE_IDLE,
+    async (url, counts) => {
+      const res = await runScript(url, { REFUSED_IDLE_POLLS: '2', POLL_MAX_ATTEMPTS: '4' });
+      assert.equal(res.status, 1, res.stdout + res.stderr);
+      assert.equal(counts().gets, 4, 'an accepted trigger must be given the whole budget');
+      assert.doesNotMatch(res.stdout, /TRIGGER REFUSED/);
+    },
+  );
+});
+
+/**
+ * The retry's PAYOFF, and the reason it is worth doing at all: when the first
+ * POST was an edge blip the second one is answered by the console, the run
+ * rejoins the normal path and PASSES. RED at head, where there is no attempt 2.
+ */
+test('#3472 the retry recovers a one-off edge blip: 504 then 202 → fresh → exit 0', async () => {
+  await withServer(
+    (n) => (n === 1 ? EDGE_504 : ACCEPTED),
+    (n) => ({ status: 200, body: pollBody({ freshness: n >= 2 ? 'fresh' : 'stale' }) }),
+    async (url, counts) => {
+      const res = await runScript(url);
+      assert.equal(res.status, 0, res.stdout + res.stderr);
+      assert.equal(counts().posts, 2, 'the second attempt is what turned the unknown into a 202');
+      assert.match(res.stdout, /FRESH index/i);
+    },
+  );
+});
+
+/**
+ * The DEFAULT must not be trigger-happy. `job.state` misses a live worker with
+ * probability ((r-1)/r)^k and loom-console runs up to 6 replicas, so a 4-poll
+ * default would cut a genuinely-running rebuild roughly half the time. This
+ * pins the shipped default above 4 without hard-coding it: with the attempt cap
+ * at 4 the streak must NOT have been reached.
+ */
+test('#3472 the DEFAULT REFUSED_IDLE_POLLS does not fire within 4 polls', async () => {
+  await withServer(
+    () => EDGE_504,
+    () => STALE_IDLE,
+    async (url, counts) => {
+      const res = await runScript(url, { POLL_MAX_ATTEMPTS: '4' }); // no REFUSED_IDLE_POLLS
+      assert.equal(res.status, 1, res.stdout + res.stderr);
+      assert.equal(counts().gets, 4);
+      assert.doesNotMatch(res.stdout, /TRIGGER REFUSED/);
+    },
+  );
+});
+
+/**
+ * The chunk-count clause. It is the weakest of the three conditions (the corpus
+ * manifest is written only at the END of a rebuild, so the count does not move
+ * mid-run either way) — but a count that DOES move means something is writing,
+ * and that must restart the streak. Delete the comparison and this goes RED.
+ */
+test('#3472 a MOVING indexedChunkCount restarts the streak', async () => {
+  await withServer(
+    () => EDGE_504,
+    (n) => ({ status: 200, body: pollBody({ freshness: 'stale', job: 'idle', chunks: 49593 + n }) }),
+    async (url, counts) => {
+      const res = await runScript(url, { REFUSED_IDLE_POLLS: '2', POLL_MAX_ATTEMPTS: '4' });
+      assert.equal(res.status, 1, res.stdout + res.stderr);
+      assert.equal(counts().gets, 4, 'the count moved every poll, so no streak of 2 can ever complete');
+      assert.doesNotMatch(res.stdout, /TRIGGER REFUSED/);
+    },
+  );
+});
+
+/**
+ * The retry is scoped to the INDETERMINATE answer only. A 401 is the console
+ * ANSWERING; retrying it would only delay a verdict already given.
+ */
+test('#3472 a console ANSWER (401) is not retried', async () => {
+  await withServer(
+    () => ({ status: 401, body: { ok: false, error: 'unauthenticated' } }),
+    () => STALE_IDLE,
+    async (url, counts) => {
+      const res = await runScript(url);
+      assert.equal(res.status, 1, res.stdout + res.stderr);
+      assert.equal(counts().posts, 1, 'only a gateway 5xx is indeterminate enough to re-sample');
+    },
+  );
+});
+
+/**
+ * The verdict's own wording is an assertion: it says "with the indexed chunk
+ * count unchanged". A console body that reports no count cannot support that
+ * sentence, so the early exit must not fire on one — the wall clock governs
+ * instead, which is the pre-#3472 behaviour and the safe fallback. Drop the
+ * `-n "$CHUNKS"` guard and this goes RED at poll 2.
+ */
+test('#3472 no indexedChunkCount reported → no early exit (the verdict would be claiming evidence it lacks)', async () => {
+  await withServer(
+    () => EDGE_504,
+    () => ({
+      status: 200,
+      body: { ok: true, backend: 'ai-search', job: { state: 'idle', jobId: null, error: null }, freshness: { state: 'stale' } },
+    }),
+    async (url, counts) => {
+      const res = await runScript(url, { REFUSED_IDLE_POLLS: '2', POLL_MAX_ATTEMPTS: '4' });
+      assert.equal(res.status, 1, res.stdout + res.stderr);
+      assert.equal(counts().gets, 4);
+      assert.doesNotMatch(res.stdout, /TRIGGER REFUSED/);
     },
   );
 });

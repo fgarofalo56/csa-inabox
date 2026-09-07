@@ -55,8 +55,9 @@
  *   # the POST
  *   HTTP_CODE=$CODE RESP_BODY="$(cat body)" node scripts/ci/classify-reindex-result.mjs
  *   # the poll verdict (after polling GET to a terminal state)
- *   MODE=poll POLL_OUTCOME=fresh|failed|timeout|unreachable POLL_BODY="$(cat get.json)" \
- *     POLL_WAITED_S=$SECS node scripts/ci/classify-reindex-result.mjs
+ *   MODE=poll POLL_OUTCOME=fresh|failed|timeout|unreachable|trigger_refused \
+ *     POLL_BODY="$(cat get.json)" POLL_WAITED_S=$SECS POLL_ATTEMPTS=$N \
+ *     POST_CODE=$CODE POST_ATTEMPTS=$N node scripts/ci/classify-reindex-result.mjs
  */
 import { pathToFileURL } from 'node:url';
 
@@ -252,11 +253,18 @@ export function classifyReindexResult({ code, body }) {
  *   - 'unreachable' — every poll failed to connect (curl 000). Tolerated for
  *                     the same reason the POST's 000 is: the eval reaches the
  *                     console over the CAE-internal network, not Front Door.
+ *   - 'trigger_refused' — every POST attempt was answered by the EDGE (gateway
+ *                     5xx, no application body) and the polls since read
+ *                     `stale`/`idle` with an unchanged chunk count. FAIL, and
+ *                     named separately from 'timeout' because the next step is
+ *                     different: this points at the request PATH, not at the
+ *                     rebuild's duration. See the branch for exactly what it
+ *                     does and does not establish (#3472).
  *
- * @param {{ outcome: string, body?: string, waitedSeconds?: number|string, attempts?: number|string }} input
+ * @param {{ outcome: string, body?: string, waitedSeconds?: number|string, attempts?: number|string, postCode?: number|string, postAttempts?: number|string }} input
  * @returns {{ verdict: 'ok'|'tolerate'|'fail', level: 'notice'|'warning'|'error', message: string }}
  */
-export function classifyReindexPoll({ outcome, body, waitedSeconds, attempts }) {
+export function classifyReindexPoll({ outcome, body, waitedSeconds, attempts, postCode, postAttempts }) {
   const raw = typeof body === 'string' ? body : '';
   let parsed = null;
   try {
@@ -333,6 +341,46 @@ export function classifyReindexPoll({ outcome, body, waitedSeconds, attempts }) 
           'TRANSIENT — the eval run reaches the console over the CAE-internal network (LOOM_EVAL_PROBE_URL), ' +
           'not Front Door, so it proceeds against the last-indexed corpus.',
       };
+    // #3472 — A REFUSED TRIGGER IS NOT A SLOW REBUILD, AND THE OLD MESSAGE SAID
+    // IT WAS. Run 33472611043 burned 904s over 57 polls and then reported "did
+    // not reach a fresh state within 904s", which sent the reader at the
+    // rebuild's duration. The rebuild was never accepted: the POST was answered
+    // by the gateway, twice, and no poll ever saw a job.
+    //
+    // EVERY CLAUSE BELOW IS SCOPED TO WHAT WAS OBSERVED (deploy-integrity R7).
+    // Established: N POST attempts each answered by the edge with no application
+    // body, and every poll since reading freshness=stale job=idle with an
+    // unchanged indexedChunkCount. NOT established, and therefore not asserted:
+    // that no job ran anywhere (`job.state` is the answering REPLICA's view and
+    // loom-console runs 2-6 replicas), or that no work progressed (the corpus
+    // manifest is only written at the END of a rebuild, so the chunk count would
+    // not move mid-run either way).
+    case 'trigger_refused': {
+      const tries = Number.isFinite(Number(postAttempts)) && Number(postAttempts) > 0
+        ? Number(postAttempts)
+        : 2;
+      const edge = postCode ? `HTTP ${postCode}` : 'a gateway 5xx';
+      const polls = Number.isFinite(Number(attempts)) && Number(attempts) > 0
+        ? `${Number(attempts)} poll(s) over ${waited}`
+        : `the polls over ${waited}`;
+      return {
+        verdict: 'fail',
+        level: 'error',
+        message:
+          `loom-docs reindex TRIGGER REFUSED — ${detail}. All ${tries} POST attempt(s) were answered by ` +
+          `the EDGE (${edge}, no application body), and ${polls} since then read freshness=stale ` +
+          'job=idle with the indexed chunk count unchanged. So the rebuild was never OBSERVED to be ' +
+          'accepted or running, and the evals would measure the same STALE index they started with. ' +
+          'This is a REQUEST-PATH problem, not a slow rebuild: look at the origin response timeout on ' +
+          'POST /api/help-copilot/reindex (front-door.bicep originResponseTimeoutSeconds) and at whether ' +
+          'the POST reached a replica at all — not at how long a corpus rebuild takes. ' +
+          'CAVEATS, because this verdict is stated from what was seen and nothing more: `job.state` is ' +
+          "only the ANSWERING replica's view and the console runs several replicas, so `idle` does not " +
+          'prove no job started anywhere; and the corpus manifest is written only at the END of a ' +
+          'rebuild, so an unchanged chunk count is not evidence that no work progressed. Failing loud — ' +
+          'exiting early shortens the wait, it does not soften the verdict.',
+      };
+    }
     default:
       return {
         verdict: 'fail',
@@ -367,6 +415,8 @@ function main() {
           body: process.env.POLL_BODY ?? '',
           waitedSeconds: process.env.POLL_WAITED_S ?? '',
           attempts: process.env.POLL_ATTEMPTS ?? '',
+          postCode: process.env.POST_CODE ?? '',
+          postAttempts: process.env.POST_ATTEMPTS ?? '',
         })
       : classifyReindexResult({
           code: process.env.HTTP_CODE ?? process.argv[2] ?? '',

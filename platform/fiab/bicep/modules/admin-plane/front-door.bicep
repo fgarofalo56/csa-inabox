@@ -40,6 +40,52 @@ param scriptLocation string = location
 @description('Cache-busting tag so the approval script re-runs on each deploy (idempotent — approve is a no-op once Approved).')
 param forceUpdateTag string = utcNow()
 
+// ── ORIGIN RESPONSE TIMEOUT: PINNED, NOT INHERITED (#3472) ──────────────────
+//
+// This template never set `originResponseTimeoutSeconds`, so the edge used
+// whatever the AFD default (60s) or an out-of-band portal change left it — and
+// three separate places in this repo cite that absence in prose while nothing
+// enforces it (apps/fiab-console/app/api/help-copilot/reindex/route.ts,
+// apps/fiab-console/lib/azure/reindex-job.ts, scripts/ci/reindex-loom-docs.sh).
+//
+// WHAT IS MEASURED, in this tree, today:
+//   * 71 console API routes declare `maxDuration`, and 30 of them declare MORE
+//     THAN 60 SECONDS — 11 at 90s, 7 at 120s, 12 at 300s:
+//       git grep -h "export const maxDuration" -- 'apps/fiab-console/app/api/**/*.ts'
+//     Every one of those 30 is, by its own declaration, allowed to run longer
+//     than the un-set edge default would wait for it. That is a template gap
+//     regardless of any single incident.
+//   * copilot-quality-evals has repeatedly gone red on an EDGE `HTTP 504` for
+//     `POST /api/help-copilot/reindex` (runs 33472611043 2026-09-01 and
+//     33347903080 2026-08-31; 4 of 12 runs on 2026-08-13) — a handler that
+//     returns 202 without awaiting the rebuild.
+//
+// WHAT IS *NOT* MEASURED, and is therefore NOT asserted here (deploy-integrity
+// R7). This value was chosen from the route declarations above, not from a
+// reading of the live edge:
+//   * the LIVE profile's effective value. No `az cdn profile show` receipt
+//     exists for either boundary from this change — the estate is paused and
+//     Gov is only reachable from an in-boundary runner.
+//   * WHY the edge gave up at ~30s when the default is 60s, or whether the POST
+//     ever reached a replica.
+//   * whether pinning this changes the reindex 504 rate AT ALL. This is not
+//     offered as the fix for that; it removes an unpinned variable. The CI half
+//     of #3472 (scripts/ci/reindex-loom-docs.sh) is what converts the remaining
+//     unknown into a measurement, and it still fails closed either way.
+//
+// RESIDUAL GAP, stated rather than hidden: the AFD portal exposes 16–240s, so
+// the 12 routes declaring `maxDuration = 300` exceed ANY value settable here.
+// Those must stay async-and-pollable the way the reindex route already is; this
+// pin does not cover them and must not be read as covering them.
+//
+// Pinning it in the template also closes the re-render hazard: an operator's
+// portal change to this field was invisible to this module and would be dropped
+// by the next apply (the class that blanked the bootstrap admin OID and
+// LOOM_ADLS_ACCOUNT). One module, so Commercial and Gov get the same value.
+@description('Seconds Front Door waits on the origin before giving up. AFD defaults to 60 when unset; 30 of the console\'s API routes declare a maxDuration above that. Portal range is 16-240.')
+@minValue(16)
+param originResponseTimeoutSeconds int = 120
+
 resource wafPolicy 'Microsoft.Network/FrontDoorWebApplicationFirewallPolicies@2024-02-01' = {
   name: 'wafloomfd${uniqueString(resourceGroup().id)}'
   location: 'global'
@@ -202,6 +248,10 @@ resource fdProfile 'Microsoft.Cdn/profiles@2024-02-01' = {
   location: 'global'
   tags: complianceTags
   sku: { name: 'Premium_AzureFrontDoor' }
+  properties: {
+    // See the #3472 note above the parameter: template-owned, not inherited.
+    originResponseTimeoutSeconds: originResponseTimeoutSeconds
+  }
 }
 
 // AFD Standard/Premium derives the endpoint's public hostname deterministically
