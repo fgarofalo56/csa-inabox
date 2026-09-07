@@ -41,7 +41,7 @@ import { BrainPane } from '@/app/admin/brain/brain-pane';
 import { SynapseView } from '@/app/admin/brain/synapse-view';
 import { snapshotFromCollection } from '@/app/api/admin/brain/_lib/snapshot';
 import { buildRiskLayer } from '@/app/api/admin/brain/_lib/risk-layer';
-import { loadEdgeHistory } from '@/app/api/admin/brain/_lib/edge-history';
+import { NO_EDGE_HISTORY_REASON } from '@/app/api/admin/brain/_lib/edge-history';
 import { NO_SECURITY_GRAPH_REASON } from '@/app/api/admin/brain/_lib/security-source';
 import { costByNode } from '@/app/admin/brain/model';
 import type { SecurityGraph, SecurityNode } from '@/lib/brain/security';
@@ -97,12 +97,17 @@ function graphWithASubject(): SecurityGraph {
 
 const EVALUATED_LAYERS = {
   risk: buildRiskLayer({ available: true, graph: graphWithASubject() }),
-  history: loadEdgeHistory(),
+  // The UNAVAILABLE branch as a LITERAL rather than a call. `loadEdgeHistory` is
+  // async and reads a store (#3934), and these two constants are module-scope.
+  // What this file asserts is that SynapseView mutates nothing it is handed, so
+  // it needs a value of the right shape, not a live read; `synapse-risk.test.ts`
+  // exercises the real loader including every refusal branch.
+  history: { available: false, reason: NO_EDGE_HISTORY_REASON } as const,
 };
 
 const UNEVALUATED_LAYERS = {
   risk: buildRiskLayer({ available: false, reason: NO_SECURITY_GRAPH_REASON }),
-  history: loadEdgeHistory(),
+  history: { available: false, reason: NO_EDGE_HISTORY_REASON } as const,
 };
 
 function viewWith(layers: typeof EVALUATED_LAYERS) {
@@ -344,10 +349,18 @@ describe('a lane that could not be evaluated says so on screen', () => {
     expect(bar.textContent).toMatch(/0 examined/);
   });
 
-  it('the growth lane says no history exists and names the work item', async () => {
+  it('the growth lane says WHY there is no baseline, and refuses both directions', async () => {
+    // It used to assert the reason named the work item (#3935). That item
+    // LANDED, so the honest reason is no longer "the feature does not exist" but
+    // "this estate has captured fewer than two versions" — and the assertion has
+    // to move with the fact, or it pins the surface to a claim that stopped
+    // being true (deploy-integrity R7).
     wrap(viewWith(UNEVALUATED_LAYERS));
     const bar = await screen.findByTestId('new-not-available');
-    expect(bar.textContent).toMatch(/#3935/);
+    expect(bar.textContent).toMatch(/fewer than two graph versions/i);
+    // Neither direction may be invented: nothing is NEW and nothing is UNCHANGED.
+    expect(bar.textContent).toMatch(/marked NEW/);
+    expect(bar.textContent).toMatch(/marked UNCHANGED/);
   });
 
   it('the hot lane distinguishes "no telemetry" from "no traffic"', async () => {

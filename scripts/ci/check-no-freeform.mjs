@@ -1943,6 +1943,46 @@ export const TOUCH_EXEMPT = new Map([
     'apps/fiab-console/lib/editors/spark-job-definition-editor.tsx',
     '#3731 threaded the Spark runs completeness envelope here; the free-text sites need pickers, tracked in #4201',
   ],
+  // ── console-ui-1 drain (#3541 / #3544 / #3565) ─────────────────────────────
+  // Three editors were touched to REMOVE a free-text infrastructure value or to
+  // wire a gate, and each still carries sites that this diff deliberately does
+  // not clear. Same shape as the #3626 / #4201 entries above: dated exceptions
+  // with named acceptance, not amnesty.
+  //
+  // health-check-editor.tsx — #3541 CLEARED its Logic App ARM-id box (the
+  // baseline ratcheted 3→2 in the same PR). The two that remain are different in
+  // kind: :772 is a BYO customer webhook receiver (`https://hooks.example.com/…`)
+  // that no discovery call can enumerate, and :788 is an Azure Function HTTPS
+  // trigger URL, which needs a picker kind that does not exist yet
+  // (Microsoft.Web/sites + listKeys, so the platform mints the URL instead of
+  // asking for it). Adding that kind touches lib/components/azure/azure-backed-field.tsx
+  // and belongs in its own diff.
+  [
+    'apps/fiab-console/lib/editors/palantir/health-check-editor.tsx',
+    '#3541 cleared the Logic App ARM-id box here (baseline 3→2); :772 is a BYO webhook receiver and :788 needs a new function-app picker kind',
+  ],
+  // copilot-studio-editors.tsx — #3544 wired the Power Platform admission gate
+  // (isPowerPlatformAdmissionError → HonestGate) and went nowhere near :723,
+  // a knowledge-source "URI / location" that accepts a web URL, a file URI, a
+  // SharePoint site URL OR a Dataverse table logical name. Four namespaces
+  // behind one box: the fix is a type-switched picker per branch, which is
+  // product work on a different surface.
+  [
+    'apps/fiab-console/lib/editors/copilot-studio-editors.tsx',
+    '#3544 wired the admission gate here; :723 is a 4-namespace knowledge-source locator needing a type-switched picker',
+  ],
+  // foundry-hub-editor.tsx — #3565 fixed the ACCOUNT picker (no accounts[0]
+  // fallback, a restore control, the cross-sub pickers demoted). Its two sites
+  // are in the connection-auth panel: Key Vault SECRET IDENTIFIERS. They are
+  // already the correct-by-construction shape — the panel refuses raw key
+  // values and takes only a KV reference — but the identifier itself should be
+  // picked from a vault+secret discovery call rather than typed. That needs a
+  // new `keyvault-secret` picker kind (a KV child resource, so Resource Graph
+  // cannot serve it), i.e. the same out-of-scope work as :788 above.
+  [
+    'apps/fiab-console/lib/editors/foundry-hub-editor.tsx',
+    '#3565 fixed the account picker here; the 2 sites are Key Vault secret identifiers needing a new keyvault-secret picker kind',
+  ],
 ]);
 
 // ═══════════════════════════════════════════════════════════════════════════

@@ -41,6 +41,7 @@ import { useRegisterRibbonCommands } from '@/lib/components/shared/ribbon-comman
 import { KeyValueGrid } from '@/lib/components/ui/key-value-grid';
 import { CopilotTopicCanvas } from './copilot-topic-canvas';
 import { EmptyState } from '@/lib/components/empty-state';
+import { HonestGate } from '@/lib/components/shared/honest-gate';
 import { useSharedEditorStyles } from './shared-styles';
 
 const useLocalStyles = makeStyles({
@@ -210,8 +211,54 @@ interface Template {
 // Shared helpers
 // ============================================================
 
-function ErrorBar({ error, hint }: { error: string | null; hint?: string }) {
+/**
+ * The gate every Copilot Studio surface resolves an ADMISSION refusal to.
+ * `svc-powerplatform`, not `svc-dataverse`: both name the SAME remediation
+ * (scripts/csa-loom/grant-powerplatform-sp.sh) but only this one carries
+ * `fixit: { kind: 'role-grant' }`, and the refusal is a missing TENANT grant —
+ * an env-writing wizard would resolve nothing.
+ */
+export const COPILOT_STUDIO_ADMISSION_GATE_ID = 'svc-powerplatform';
+
+/**
+ * #3544 — classify a Power Platform / Dataverse ADMISSION refusal.
+ *
+ * BAP and Dataverse return no Loom error CODE for these, only prose — which is
+ * why `svc-powerplatform` deliberately carries no `legacyCodes` (see
+ * lib/gates/registry/azure-services.ts) and why the classification must happen
+ * HERE, where the prose arrives. The three phrases are the ones the registry's
+ * own `grantNote` names; case-insensitive because the two services capitalize
+ * the same message differently.
+ *
+ * DELIBERATELY NARROW. A 404 on an agent, a 400 on a bad payload and a 429 are
+ * NOT admission refusals, and a role-grant Fix-it over one would send the
+ * operator at a grant that was never the problem — the false-remediation class
+ * `deploy-integrity.md` R7 forbids.
+ */
+export function isPowerPlatformAdmissionError(message: string | null | undefined): boolean {
+  if (!message) return false;
+  const m = String(message).toLowerCase();
+  return (
+    m.includes('not a member of the organization')
+    || m.includes('tenant isolation')
+    || m.includes('principal not found')
+  );
+}
+
+/**
+ * Exported for the #3544 contract test: the admission→gate decision is the
+ * whole point of this component, and asserting it through one of the nine
+ * editors would test the editor's fetch plumbing instead of the decision.
+ */
+export function ErrorBar({ error, hint, surface = 'Copilot Studio' }: { error: string | null; hint?: string; surface?: string }) {
   if (!error) return null;
+  // G2 (ux-baseline.md): an admission refusal is a GATE with a real remediation,
+  // so it renders through the shared HonestGate — Fix-it wizard, gate-registry
+  // link and /admin/gates presence included. Anything else stays a plain error
+  // bar: no Fix-it exists for it, and a button that resolves nothing is worse.
+  if (isPowerPlatformAdmissionError(error)) {
+    return <HonestGate gateId={COPILOT_STUDIO_ADMISSION_GATE_ID} surface={surface} detail={error} />;
+  }
   return (
     <MessageBar intent="error">
       <MessageBarBody>
@@ -250,7 +297,7 @@ function EnvironmentPicker({
   }, []);
   return (
     <Field label={label}>
-      {error && <ErrorBar error={error} hint={TENANT_HINT} />}
+      {error && <ErrorBar error={error} hint={TENANT_HINT} surface="Copilot Studio environments" />}
       <Dropdown
         value={envs?.find((e) => e.id === value)?.displayName || ''}
         selectedOptions={value ? [value] : []}
@@ -288,7 +335,7 @@ function AgentPicker({
   }, [envId]);
   return (
     <Field label="Agent">
-      {error && <ErrorBar error={error} hint={TENANT_HINT} />}
+      {error && <ErrorBar error={error} hint={TENANT_HINT} surface="Copilot Studio agents" />}
       <Dropdown
         value={agents?.find((a) => a.id === value)?.name || ''}
         selectedOptions={value ? [value] : []}
@@ -536,7 +583,7 @@ export function CopilotStudioAgentEditor({ item, id }: { item: FabricItemType; i
             <Button appearance="subtle" icon={<ArrowSync20Regular />} disabled={busy} onClick={refreshAgents}>Refresh</Button>
           </div>
           <EnvironmentPicker value={envId} onChange={setEnvId} />
-          <ErrorBar error={error} hint={TENANT_HINT} />
+          <ErrorBar error={error} hint={TENANT_HINT} surface="Copilot Studio agent editor" />
           {success && (
             <MessageBar intent="success"><MessageBarBody><MessageBarTitle>OK</MessageBarTitle>{success}</MessageBarBody></MessageBar>
           )}
@@ -655,7 +702,7 @@ function KnowledgePanel({ envId, agentId }: { envId: string; agentId: string }) 
   );
   return (
     <div className={s.formCol}>
-      <ErrorBar error={error} hint={TENANT_HINT} />
+      <ErrorBar error={error} hint={TENANT_HINT} surface="Copilot Studio knowledge sources" />
       <div className={s.form}>
         <Field label="Type">
           <Dropdown
@@ -864,7 +911,7 @@ function TopicsPanel({ envId, agentId }: { envId: string; agentId: string }) {
   );
   return (
     <div className={s.formCol}>
-      <ErrorBar error={error} hint={TENANT_HINT} />
+      <ErrorBar error={error} hint={TENANT_HINT} surface="Copilot Studio topics" />
       <div className={s.toolbar}>
         <Button icon={<Add20Regular />} appearance="outline" onClick={() => {
           if (dirty && !window.confirm('Discard unsaved changes to the current topic?')) return;
@@ -1125,7 +1172,7 @@ function ActionsPanel({ envId, agentId }: { envId: string; agentId: string }) {
   );
   return (
     <div className={s.formCol}>
-      <ErrorBar error={error} hint={TENANT_HINT} />
+      <ErrorBar error={error} hint={TENANT_HINT} surface="Copilot Studio actions" />
       <div className={s.form}>
         <Field label="Action name" required>
           <Input id="action-name-input" value={form.name} onChange={(_, d) => setForm((f) => ({ ...f, name: d.value }))} />
@@ -1474,7 +1521,7 @@ function ChannelsPanel({ envId, agentId, refreshSignal }: { envId: string; agent
   const byType = new Map((items || []).map((c) => [c.type, c]));
   return (
     <div className={s.formCol}>
-      <ErrorBar error={error} hint={TENANT_HINT} />
+      <ErrorBar error={error} hint={TENANT_HINT} surface="Copilot Studio channels" />
       <div className={s.cardGrid}>
         {CHANNEL_TYPES.map((ct) => {
           const existing = byType.get(ct.type);
@@ -1739,7 +1786,7 @@ function AnalyticsPanel({
         ))}
         <Button appearance="subtle" icon={<ArrowSync20Regular />} onClick={refresh} disabled={loading}>Refresh</Button>
       </div>
-      <ErrorBar error={error} hint={TENANT_HINT} />
+      <ErrorBar error={error} hint={TENANT_HINT} surface="Copilot Studio analytics" />
       {loading && <Spinner size="small" label="Loading analytics…" labelPosition="after" />}
       {/* H3 — when no real analytics backend produced data, show an honest
           gate instead of fabricated all-zero KPI tiles. */}
@@ -1900,7 +1947,7 @@ export function CopilotTemplateLibraryEditor({ item, id }: { item: FabricItemTyp
             <Button appearance="subtle" icon={<ArrowSync20Regular />} onClick={refresh}>Refresh</Button>
           </div>
           <EnvironmentPicker value={envId} onChange={setEnvId} label="Target environment" />
-          <ErrorBar error={error} hint={TENANT_HINT} />
+          <ErrorBar error={error} hint={TENANT_HINT} surface="Copilot Studio template library" />
           {result && <MessageBar intent="success"><MessageBarBody><MessageBarTitle>Template instantiated</MessageBarTitle>{result.msg}</MessageBarBody></MessageBar>}
           {templates === null ? <Spinner size="small" label="Loading templates…" labelPosition="after" /> : templates.length === 0 ? (
             <EmptyState

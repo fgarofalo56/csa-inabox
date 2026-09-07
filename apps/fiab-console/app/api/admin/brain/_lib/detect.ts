@@ -46,17 +46,19 @@ import {
   formatCostFigure,
   hasInboundOnly,
   makePopulation,
-  nodesWithNoInboundEdge,
+  nodesNotReachableFrom,
   proposal,
   scaleUnknownCount,
   type AzureResourceNode,
   type BrainGraphView,
+  type BrainNode,
   type DetectorResult,
   type EdgeProvenance,
   type Finding,
   type NodeId,
   type SkippedSubject,
 } from '@/lib/brain/graph';
+import { inboundReachabilityClause } from '@/lib/brain/detectors/detector-kit';
 import { idleAlwaysOnCost } from './cost-model';
 import {
   refuseScaleToZero,
@@ -190,11 +192,19 @@ function refuseIfUncollected(
 // ---------------------------------------------------------------------------
 
 /**
- * Always-on Container Apps with ZERO inbound resolved `configured` edges.
+ * Always-on Container Apps NOT REACHABLE from the graph's ingress roots.
+ *
+ * The predicate was widened in #4258 from the LOCAL question (does anything
+ * point at this node) to the GLOBAL one (can anything outside reach it). The
+ * two come apart on a mutually-referencing island: two internal apps whose env
+ * vars name each other each hold an inbound `configured` edge, so the local
+ * query clears both while nothing outside can call either. Every operator-
+ * facing string below therefore states what the WALK established — never the
+ * retired zero-inbound proxy (deploy-integrity.md R7).
  *
  * This is the `loom-capacity-broker` shape and, more importantly, its CLASS:
- * minReplicas > 0 (so it bills every second) and nothing in the running
- * deployment points at it (so nothing can call it). PRP §2 explains why a
+ * minReplicas > 0 (so it bills every second) and nothing outside can reach it
+ * (so nothing can call it). PRP §2 explains why a
  * liveness check finds none of these — 0 of 63 apps are in a non-Succeeded
  * state. The waste is healthy services nobody uses, and reachability is the
  * only query that sees it.
@@ -215,12 +225,41 @@ export function unreachableAlwaysOn(ctx: DetectContext): DetectorRun {
     describe: 'Container Apps',
   } as const;
 
-  const unreachable = nodesWithNoInboundEdge(ctx.graph, 'configured', filter);
+  // ── REACHABILITY, NOT INBOUND-EDGE COUNT (#4258) ─────────────────────────
+  //
+  // This used to be `nodesWithNoInboundEdge(graph, 'configured', filter)`, which
+  // answers a LOCAL question: does anything point at this node? The finding this
+  // detector exists to make is the GLOBAL one — can anything OUTSIDE reach it —
+  // and the two come apart on a mutually-referencing island. Two internal
+  // always-on apps whose env vars name each other each have an inbound
+  // `configured` edge, so the local query CLEARS both, while nothing outside
+  // them can call either. That is waste billing every second and the old shape
+  // could not see it.
+  //
+  // The roots are the entry points this graph cannot see through, so a walk
+  // from them is the honest boundary of what `configured` edges can establish:
+  //   - EXTERNAL INGRESS. Addressable from the internet — a browser, Front Door,
+  //     a partner, a webhook. None of those is an edge here.
+  //   - ANY NON-CONTAINER-APP NODE. The estate holds Function Apps, Logic Apps,
+  //     Data Factories, deploy artifacts and code modules whose outbound calls
+  //     no extractor models. Treating them as roots is the conservative
+  //     direction: it can only CLEAR a node, never flag one, and this
+  //     detector's output is a deletion proposal.
+  const roots = {
+    where: (n: BrainNode) =>
+      n.kind !== 'azure-resource' ||
+      n.ingress?.external === true ||
+      n.resourceType.toLowerCase() !== CONTAINER_APPS.toLowerCase(),
+    describe:
+      'nodes with EXTERNAL ingress, plus every non-Container-App node — the callers this graph ' +
+      'cannot see through',
+  } as const;
+  const unreachable = nodesNotReachableFrom(ctx.graph, roots, 'configured', filter);
   const alwaysOn = alwaysOnNodes(ctx.graph, filter);
   const unknownScale = scaleUnknownCount(ctx.graph, filter);
 
   const alwaysOnIds = new Set(alwaysOn.result.map((n) => n.id as string));
-  const candidates = unreachable.result.filter(
+  const subjects = unreachable.result.filter(
     (n): n is AzureResourceNode => n.kind === 'azure-resource' && alwaysOnIds.has(n.id as string),
   );
 
@@ -229,27 +268,32 @@ export function unreachableAlwaysOn(ctx: DetectContext): DetectorRun {
   // ── EXTERNAL INGRESS IS A REACHABILITY PATH THIS GRAPH CANNOT SEE ────────
   // An app with `external: true` is addressable from the public internet — by a
   // browser, Front Door, a partner, a webhook. NONE of those are edges in this
-  // graph, which only observes intra-estate `configured` wires. So "zero inbound
-  // configured edges" says nothing about whether an externally-ingressed app is
-  // used, and reporting one as unreachable is a FALSE POSITIVE by construction.
+  // graph, which only observes intra-estate `configured` wires. So no query over
+  // those wires says anything about whether an externally-ingressed app is used,
+  // and reporting one as unreachable is a FALSE POSITIVE by construction.
   //
   // Found by the acceptance suite rather than by review: `loom-console` came
   // out flagged, and it is the surface the operator was reading the finding on.
   // A rule that indicts the console is a rule nobody will trust about anything
   // else.
   //
-  // These are SKIPPED, not silently dropped — the population says how many and
-  // why, because "not evaluated" must never look like "evaluated and clean".
-  const subjects = candidates.filter((n) => n.ingress?.external !== true);
-  const externallyReachable = candidates.filter((n) => n.ingress?.external === true);
+  // They are now ROOTS of the walk rather than a post-filter on its output
+  // (#4258), which is strictly stronger: an app they reach is cleared too. The
+  // disclosure is therefore computed from the ALWAYS-ON set rather than from the
+  // walk's leftovers — the walk no longer returns them, and a skip list derived
+  // from it would silently empty. "Not evaluated" must never look like
+  // "evaluated and clean".
+  const externallyReachable = alwaysOn.result.filter((n) => n.ingress?.external === true);
   if (externallyReachable.length > 0) {
     skipped.push({
       subject: externallyReachable.map((n) => n.displayName).join(', '),
       reason:
         `${externallyReachable.length} always-on app(s) have EXTERNAL ingress, so they are ` +
         'addressable from outside this graph (browser, Front Door, partner, webhook). None of ' +
-        'those callers is an edge here, so zero inbound configured edges establishes NOTHING ' +
-        'about whether they are used. Not evaluated — neither cleared nor flagged.',
+        'those callers is an edge here, so no configured-edge query establishes ANYTHING ' +
+        'about whether they are used. They are entry points for the reachability walk, so a ' +
+        'node they reach is CLEARED — but they themselves are not evaluated, neither cleared ' +
+        'nor flagged.',
     });
   }
   if (unknownScale > 0) {
@@ -267,6 +311,8 @@ export function unreachableAlwaysOn(ctx: DetectContext): DetectorRun {
     const why = ctx.graph.danglingEdgesIntendedFor(node.id);
     const inbound = ctx.graph.inboundEdgesByProvenance(node.id);
     const cost = idleAlwaysOnCost(node.scale, { displayName: node.displayName });
+    const configuredIn = inbound.result.configured.length;
+    const reachClause = inboundReachabilityClause(configuredIn);
 
     // ── #4257 item 2 — ALWAYS-ON BY DESIGN. Reported, never priced. ────────
     //
@@ -288,7 +334,7 @@ export function unreachableAlwaysOn(ctx: DetectContext): DetectorRun {
       const consumerCount = byDesign.reason.match(/wires (\d+) consumer\(s\)/)?.[1];
       const wording = {
         'pinned-singleton': {
-          title: `${node.displayName} is always-on BY DESIGN and nothing wires to it`,
+          title: `${node.displayName} is always-on BY DESIGN and nothing reaches it`,
           claim:
             'its always-on floor is DECLARED by the deploy, so this is an OBSERVATION, not a ' +
             'cost recommendation.',
@@ -304,11 +350,11 @@ export function unreachableAlwaysOn(ctx: DetectContext): DetectorRun {
             `${consumerCount ?? 'at least one'} consumer(s) to it`,
           claim:
             "the deployment template itself names a consumer of this service, so the finding's " +
-            'central claim — that nothing points at it — is contradicted at its source. The ' +
-            'missing edge is a graph gap, not an idle service.',
+            'central claim — that nothing outside can reach it — is contradicted at its source. ' +
+            'The missing edge is a graph gap, not an idle service.',
           note:
             'NOT "by design": this is an AVAILABILITY refusal. The deploy declares a consumer, ' +
-            'so the zero-inbound-edge measurement is contradicted by the template.',
+            'so the not-reachable-from-roots measurement is contradicted by the template.',
           action: `NO ACTION — the deploy wires ${consumerCount ?? 'a'} consumer(s) to '${node.displayName}'.`,
           headline: `'${node.displayName}' has a consumer the deploy declares.`,
         },
@@ -316,8 +362,8 @@ export function unreachableAlwaysOn(ctx: DetectContext): DetectorRun {
           title: `${node.displayName} is THIS CONSOLE — it cannot be scaled to zero from here`,
           claim:
             'this is the console serving the page the recommendation is read from, and it is ' +
-            'reached by EXTERNAL ingress, which is not an edge in this graph — so zero inbound ' +
-            'edges establishes nothing about whether it is used.',
+            'reached by EXTERNAL ingress, which is not an edge in this graph — so its ' +
+            'unreachability in this graph establishes nothing about whether it is used.',
           note:
             'NOT "by design": this is the console itself. Its replica floor was not read from ' +
             'the deploy template at all.',
@@ -338,8 +384,8 @@ export function unreachableAlwaysOn(ctx: DetectContext): DetectorRun {
         severity: 'info',
         title: wording.title,
         summary:
-          `'${node.displayName}' runs ${node.scale?.minReplicas ?? '?'} always-on replica(s) and the ` +
-          "graph resolves ZERO inbound 'configured' edges for it — but " +
+          `'${node.displayName}' runs ${node.scale?.minReplicas ?? '?'} always-on replica(s) and ` +
+          `is NOT REACHABLE from the graph's ingress roots — ${reachClause} — but ` +
           `${wording.claim} ` +
           byDesign.reason,
         subjects: [node.id],
@@ -372,9 +418,10 @@ export function unreachableAlwaysOn(ctx: DetectContext): DetectorRun {
     }
 
     const notes: string[] = [
-      `zero inbound RESOLVED edges of provenance 'configured' (dangling edges are excluded ` +
-        `by construction — their target is null, which is what keeps a broken wire from ` +
-        `counting as reachability)`,
+      `NOT REACHABLE from the graph's ingress roots (nodes with EXTERNAL ingress, plus every ` +
+        `node outside '${CONTAINER_APPS}' — the callers this graph cannot see through): ` +
+        `${reachClause}. Dangling edges are excluded from the walk by construction — their ` +
+        `target is null, which is what keeps a broken wire from counting as reachability.`,
       `minReplicas=${node.scale?.minReplicas ?? 'NOT MEASURED'}` +
         (node.scale?.cpu !== undefined ? `, cpu=${node.scale.cpu}` : '') +
         (node.scale?.memory !== undefined ? `, memory=${node.scale.memory}` : '') +
@@ -382,7 +429,7 @@ export function unreachableAlwaysOn(ctx: DetectContext): DetectorRun {
       node.ingress
         ? `ingress: external=${node.ingress.external}, fqdn=${node.ingress.fqdn ?? 'none'}` +
           (node.ingress.external === false && node.ingress.fqdn
-            ? ' — an INTERNAL endpoint: addressable from inside the environment, and wired to nothing'
+            ? ' — an INTERNAL endpoint: addressable from inside the environment, and nothing outside can reach it'
             : '')
         : 'ingress: NOT MEASURED',
       `provisioningState=${node.provisioningState ?? 'NOT MEASURED'}` +
@@ -403,10 +450,16 @@ export function unreachableAlwaysOn(ctx: DetectContext): DetectorRun {
             `(${d.danglingReason})`,
         );
       }
-    } else {
+    } else if (configuredIn === 0) {
       notes.push(
         'no dangling wire names this node: nothing in the collected artifacts even ATTEMPTED ' +
           'to wire it. That is a weaker evidence chain than an empty wire, not a stronger one.',
+      );
+    } else {
+      notes.push(
+        `no DANGLING wire names this node, and the ${configuredIn} inbound 'configured' edge(s) ` +
+          'it does hold all originate at nodes the walk could not reach either — an unreachable ' +
+          'ISLAND, not an unwired service. The retired zero-inbound proxy cleared this shape.',
       );
     }
     if (cost.kind === 'unknown') notes.push(`cost NOT DERIVED: ${cost.reason}`);
@@ -421,11 +474,13 @@ export function unreachableAlwaysOn(ctx: DetectContext): DetectorRun {
       summary:
         `'${node.displayName}' runs ${node.scale?.minReplicas ?? '?'} always-on replica(s) and is ` +
         `${node.provisioningState === 'Succeeded' ? 'healthy' : `in state '${node.provisioningState ?? 'unknown'}'`}, ` +
-        `but NOTHING in the live deployment points at it: zero inbound resolved 'configured' ` +
-        `edges across ${unreachable.population.examined} Container App(s) examined. ` +
+        `but NOTHING outside can reach it: NOT REACHABLE from the graph's ingress roots, with ` +
+        `${reachClause}, across ${unreachable.population.examined} Container App(s) examined. ` +
         (why.result.length > 0
           ? `${why.result.length} wire(s) were MEANT to reach it and resolve to nothing.`
-          : 'No wire in the collected artifacts names it at all.') +
+          : configuredIn === 0
+            ? 'No wire in the collected artifacts names it at all.'
+            : 'Every wire that names it starts somewhere equally unreachable.') +
         (ownershipConfirmed
           ? ''
           : ' Ownership is NOT established for this resource, so no remediation is offered for approval.'),
@@ -433,12 +488,12 @@ export function unreachableAlwaysOn(ctx: DetectContext): DetectorRun {
       evidence: {
         nodes: [node.id],
         edges: why.result.map((d) => d.id),
-        query: `nodesWithNoInboundEdge(graph, 'configured', { resourceType: '${CONTAINER_APPS}' }) INTERSECT alwaysOnNodes(graph, same filter)`,
+        query: `nodesNotReachableFrom(graph, roots={external ingress OR non-'${CONTAINER_APPS}'}, 'configured', { resourceType: '${CONTAINER_APPS}' }) INTERSECT alwaysOnNodes(graph, same filter)`,
         notes,
       },
       population: unreachable.population,
       // 'medium', never 'high': `observed` is not collected, so this establishes
-      // "nothing in the live CONFIG points at it", not "nothing calls it". A
+      // "nothing in the live CONFIG can reach it", not "nothing calls it". A
       // caller reaching it by a hardcoded FQDN would be invisible here.
       confidence: 'medium',
       ...(cost.kind === 'derived' ? { cost: cost.figure } : {}),

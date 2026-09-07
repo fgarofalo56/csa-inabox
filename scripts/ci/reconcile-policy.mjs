@@ -951,6 +951,56 @@ export const CONSOLE_IMAGE_KEY = (() => {
 })();
 
 /**
+ * The Container App the CONSOLE_ROLL_SOURCES population is about.
+ *
+ * It is a literal because it is a literal in the lane it describes:
+ * loom-roll-and-validate.yml hard-codes `env.APP_NAME: loom-console` and takes
+ * no app input, so that workflow can only ever roll this one app. A contract
+ * test in roll-race.test.mjs re-reads that line, so the literal cannot outlive
+ * the fact it restates.
+ */
+export const CONSOLE_APP_NAME = 'loom-console';
+
+/**
+ * Which workflow can roll a given Container App FORWARD, and with what inputs.
+ *
+ * ── WHY THIS TABLE EXISTS (#3676) ──────────────────────────────────────────
+ *
+ * The auto-heal step (#3799) dispatched loom-roll-and-validate.yml
+ * unconditionally, which is correct for exactly one app and wrong for every
+ * other: that lane hard-codes `APP_NAME: loom-console`, so dispatching it to
+ * repair an overwritten `loom-unity` would roll the CONSOLE and report a
+ * successful heal of an app it never touched. A heal that names the wrong app
+ * is worse than no heal, so the lane is looked up rather than assumed.
+ *
+ * ── WHAT IS DELIBERATELY ABSENT ────────────────────────────────────────────
+ *
+ * Most `APP_IMAGE_TAGS` repositories have NO automated roll lane in this repo
+ * (measured 2026-09-03: the only workflows that run `az containerapp update`
+ * against an admin-plane app are loom-roll-and-validate.yml — console only —
+ * full-app-deploy-commercial.yml, and loom-dataplane-roll.yml). An app that is
+ * not in this table therefore gets a REGRESSION REPORT and an explicit "no
+ * automated roll lane exists for this app" — never a dispatch at a lane that
+ * would roll something else. Detection without repair is a stated gap; a
+ * mis-aimed repair is a new defect.
+ *
+ * full-app-deploy-commercial.yml is not offered as a heal lane even for the six
+ * apps it rolls: it BUILDS from its own checkout, so dispatching it does not
+ * roll the estate to the overwritten SHA — it rolls to whatever it builds.
+ *
+ * @type {Readonly<Record<string, {workflow:string, kind:'console'|'dataplane'}>>}
+ */
+export const ESTATE_ROLL_LANES = Object.freeze({
+  [CONSOLE_APP_NAME]: Object.freeze({ workflow: 'loom-roll-and-validate.yml', kind: 'console' }),
+  // loom-dataplane-roll.yml takes `apps` (a comma list of loom-unity,
+  // iceberg-catalog, loom-trino), `tag`, `boundary` and `location`. Either
+  // unity-pair member pulls in the other by design — they share one image.
+  'loom-unity': Object.freeze({ workflow: 'loom-dataplane-roll.yml', kind: 'dataplane' }),
+  'iceberg-catalog': Object.freeze({ workflow: 'loom-dataplane-roll.yml', kind: 'dataplane' }),
+  'loom-trino': Object.freeze({ workflow: 'loom-dataplane-roll.yml', kind: 'dataplane' }),
+});
+
+/**
  * Pull the rolled SHA out of loom-roll-and-validate's `run-name`.
  *
  * The contract is that workflow's `run-name:` literal:
@@ -1127,10 +1177,14 @@ export function selectLastConsoleRoll(runs) {
  * image is genuinely not a single comparable value.
  *
  * @param {Array<{name?:string, image?:string, trafficWeight?:(number|string|null)}>|null} revisions
+ * @param {{app?:string}} [opts] `app` names the Container App this payload came
+ *        from, so the reason cannot say "loom-console" about loom-unity
+ *        (deploy-integrity R7). Defaults to the console for the single-app
+ *        callers that predate #3676's estate-wide generalisation.
  * @returns {{status:'found'|'unweighted'|'unknown', tag?:string, name?:string,
  *            weight?:number, reason:string}}
  */
-export function selectServingRevision(revisions) {
+export function selectServingRevision(revisions, { app = CONSOLE_APP_NAME } = {}) {
   if (revisions === null || revisions === undefined || !Array.isArray(revisions)) {
     return {
       status: 'unknown',
@@ -1194,7 +1248,7 @@ export function selectServingRevision(revisions) {
     name: String(top.raw?.name ?? ''),
     weight: top.w,
     reason:
-      `revision ${String(top.raw?.name ?? '')} is serving loom-console:${[...tags][0]} (${top.w}% of traffic` +
+      `revision ${String(top.raw?.name ?? '')} is serving ${app}:${[...tags][0]} (${top.w}% of traffic` +
       `${serving.length > 1 ? `, across ${serving.length} revisions of the same image` : ''}).`,
   };
 }
@@ -1278,13 +1332,15 @@ export function selectServingRevision(revisions) {
  *        FAILED, which is deliberately NOT an empty history. `trafficWeight` is
  *        what makes "live" mean SERVING rather than NEWEST; a payload without it
  *        is UNKNOWN, never a silent fall back to recency.
- * @param {{measuredAt?:string, appliedTag?:string}} opts
+ * @param {{measuredAt?:string, appliedTag?:string, app?:string}} opts
+ *        `app` names the Container App the payload came from, so every sentence
+ *        below is about the app it was actually read from (deploy-integrity R7).
  * @returns {{status:'none'|'ahead'|'overwritten'|'drifted'|'unknown', reason:string,
  *            overwrittenTag?:string, liveTag?:string, liveRevision?:string,
  *            liveFrom?:'traffic',
  *            window?:Array<{name:string,createdTime:string,tag:string}>}}
  */
-export function selectRevisionOverwrite(revisions, { measuredAt = '', appliedTag = '' } = {}) {
+export function selectRevisionOverwrite(revisions, { measuredAt = '', appliedTag = '', app = CONSOLE_APP_NAME } = {}) {
   const applied = String(appliedTag || '').trim();
   if (revisions === null || revisions === undefined) {
     return {
@@ -1332,7 +1388,7 @@ export function selectRevisionOverwrite(revisions, { measuredAt = '', appliedTag
     return {
       status: 'none',
       reason:
-        `no loom-console revision was created at or after ${measuredAt}, so nothing wrote this field during the ` +
+        `no ${app} revision was created at or after ${measuredAt}, so nothing wrote this field during the ` +
         'apply — neither this deploy nor anyone else — and there is nothing that could have been overwritten.',
     };
   }
@@ -1366,7 +1422,7 @@ export function selectRevisionOverwrite(revisions, { measuredAt = '', appliedTag
   // from recency instead: the one production caller projects `trafficWeight`
   // (contract-tested), so an unweighted payload means the projection changed
   // under us, which is UNKNOWN and fails closed.
-  const servingSel = selectServingRevision(revisions);
+  const servingSel = selectServingRevision(revisions, { app });
   if (servingSel.status !== 'found') {
     return {
       status: 'unknown',
@@ -1388,7 +1444,7 @@ export function selectRevisionOverwrite(revisions, { measuredAt = '', appliedTag
       liveRevision: live.name,
       liveFrom: 'traffic',
       reason:
-        `the live loom-console image is loom-console:${live.tag} (${live.how}), which is not the tag this deploy ` +
+        `the live ${app} image is ${app}:${live.tag} (${live.how}), which is not the tag this deploy ` +
         `applied${applied ? ` ('${applied}')` : ' (this deploy applied none)'} — so the image the estate is serving ` +
         `is not the one this apply wrote, and this apply did not leave the estate behind. Window: ${render(tagged)}.`,
     };
@@ -1427,7 +1483,7 @@ export function selectRevisionOverwrite(revisions, { measuredAt = '', appliedTag
       liveRevision: live.name,
       liveFrom: 'traffic',
       reason:
-        `every loom-console revision created since ${measuredAt} runs the tag this deploy applied ` +
+        `every ${app} revision created since ${measuredAt} runs the tag this deploy applied ` +
         `('${applied}'), and that is also the live image (${live.how}), so no other writer's image was ` +
         `overwritten. Window: ${render(tagged)}.`,
     };
@@ -1443,7 +1499,7 @@ export function selectRevisionOverwrite(revisions, { measuredAt = '', appliedTag
       reason:
         `THE ESTATE IS SERVING THE TAG THIS DEPLOY APPLIED ('${applied}', ${live.how}) WHILE A DIFFERENT IMAGE SITS ` +
         `IN THIS WINDOW UNSERVED: revision ${other.name} was created at ${other.createdTime} running ` +
-        `loom-console:${other.tag}` +
+        `${app}:${other.tag}` +
         (oursIdx === -1
           ? ', and NO revision carrying this deploy\'s tag was created in this window at all — so this apply did ' +
             'not write the live image and cannot have displaced anything.'
@@ -1464,7 +1520,7 @@ export function selectRevisionOverwrite(revisions, { measuredAt = '', appliedTag
     liveRevision: live.name,
     liveFrom: 'traffic',
     reason:
-      `revision ${other.name} was created at ${other.createdTime} running loom-console:${other.tag} — after this ` +
+      `revision ${other.name} was created at ${other.createdTime} running ${app}:${other.tag} — after this ` +
       `deploy measured the tags it would write (${measuredAt}) — and this deploy's own revision ` +
       `${tagged[oursIdx].name} then followed it at ${tagged[oursIdx].createdTime}; the estate is SERVING ` +
       `'${live.tag}', the tag THIS DEPLOY applied (${live.how}). Window: ${render(tagged)}.`,
@@ -1483,13 +1539,14 @@ export function selectRevisionOverwrite(revisions, { measuredAt = '', appliedTag
  *
  * @param {string|null} estateTag        from `az containerapp show`
  * @param {ReturnType<typeof selectRevisionOverwrite>|null} revisionSelection
+ * @param {string} [app] the Container App both reads are about.
  */
-function describeLive(estateTag, revisionSelection) {
+function describeLive(estateTag, revisionSelection, app = CONSOLE_APP_NAME) {
   const template = String(estateTag ?? '').trim();
   const live = String(revisionSelection?.liveTag ?? '').trim();
-  if (!live || live === template) return `loom-console is now running '${template}'.`;
+  if (!live || live === template) return `${app} is now running '${template}'.`;
   return (
-    `loom-console is SERVING '${live}' (revision ${revisionSelection?.liveRevision || 'unnamed'}), while the ` +
+    `${app} is SERVING '${live}' (revision ${revisionSelection?.liveRevision || 'unnamed'}), while the ` +
     `container app's template names '${template}'. The template is the last WRITE; the traffic split is what the ` +
     'estate actually serves, and on this run they disagree.'
   );
@@ -1520,10 +1577,17 @@ function describeLive(estateTag, revisionSelection) {
  * direction and names no rollback target.
  *
  * @param {object} a
- * @param {string} a.appliedTag   the console tag this deploy applied ('' = none)
- * @param {string|null} a.estateTag the console tag running NOW (null = unreadable)
+ * @param {string} a.appliedTag   the tag this deploy applied to `app` ('' = none)
+ * @param {string|null} a.estateTag the tag `app` is running NOW (null = unreadable)
  * @param {string} [a.estateReadError]
  * @param {ReturnType<typeof selectLastConsoleRoll>} a.rollSelection
+ * @param {string} [a.app] the Container App every sentence below is about.
+ *        Defaults to the console so the single-app callers that predate #3676's
+ *        estate-wide generalisation are unchanged. A `rollSelection.status` of
+ *        'not-applicable' is how a NON-console app declares that no Actions-API
+ *        writer table exists for it (see decideEstateRegressionAll) — the
+ *        estate's own revision history is then the sole witness, which is the
+ *        witness that caught the 2026-08-19 miss in the first place.
  * @param {ReturnType<typeof selectRevisionOverwrite>} [a.revisionSelection]
  *        The ESTATE's own account of the window, which does not depend on the
  *        Actions API. Consulted BEFORE rollSelection because it is the source
@@ -1534,13 +1598,13 @@ function describeLive(estateTag, revisionSelection) {
  *        Actions-API verdict green.
  * @returns {{verdict:'ok'|'regression'|'drifted'|'unknown', reason:string}}
  */
-export function decideEstateRegression({ appliedTag = '', estateTag = null, estateReadError = '', rollSelection = null, revisionSelection = null } = {}) {
+export function decideEstateRegression({ appliedTag = '', estateTag = null, estateReadError = '', rollSelection = null, revisionSelection = null, app = CONSOLE_APP_NAME } = {}) {
   const applied = String(appliedTag || '').trim();
   if (!applied) {
     return {
       verdict: 'ok',
       reason:
-        'this run applied no loom-console image tag (app-deployments.bicep did not render the Container Apps), ' +
+        `this run applied no ${app} image tag (app-deployments.bicep did not render the Container Apps), ` +
         'so it cannot have moved the estate backwards.',
     };
   }
@@ -1548,7 +1612,7 @@ export function decideEstateRegression({ appliedTag = '', estateTag = null, esta
     return {
       verdict: 'unknown',
       reason:
-        'the image loom-console is running could not be read after the apply, so it is NOT established that this ' +
+        `the image ${app} is running could not be read after the apply, so it is NOT established that this ` +
         'deploy left the estate where the last roll put it. It is equally not established that it did not' +
         (estateReadError ? `. Detail: ${String(estateReadError).slice(0, 400)}` : '.'),
     };
@@ -1564,7 +1628,7 @@ export function decideEstateRegression({ appliedTag = '', estateTag = null, esta
       verdict: 'regression',
       reason:
         'THE ESTATE WENT BACKWARDS, AND ITS OWN REVISION HISTORY RECORDS IT. ' +
-        `${revisionSelection.reason} ${describeLive(estateTag, revisionSelection)} This run overwrote that image. ` +
+        `${revisionSelection.reason} ${describeLive(estateTag, revisionSelection, app)} This run overwrote that image. ` +
         'Every merge in that window is inert on the live estate until it is rolled again (deploy-integrity R2/R3).',
       rollForwardTo: revisionSelection.overwrittenTag,
     };
@@ -1582,7 +1646,7 @@ export function decideEstateRegression({ appliedTag = '', estateTag = null, esta
   if (revisionSelection && revisionSelection.status === 'drifted') {
     return {
       verdict: 'drifted',
-      reason: `${revisionSelection.reason} ${describeLive(estateTag, revisionSelection)}`,
+      reason: `${revisionSelection.reason} ${describeLive(estateTag, revisionSelection, app)}`,
     };
   }
   if (revisionSelection && revisionSelection.status === 'unknown') {
@@ -1604,6 +1668,7 @@ export function decideEstateRegression({ appliedTag = '', estateTag = null, esta
       estateReadError,
       rollSelection,
       revisionSelection: null,
+      app,
     });
     if (actionsOnly.verdict === 'regression') {
       return {
@@ -1617,21 +1682,45 @@ export function decideEstateRegression({ appliedTag = '', estateTag = null, esta
     }
     return {
       verdict: 'unknown',
-      reason: `estate is running loom-console:${estateTag}, but ${revisionSelection.reason}`,
+      reason: `estate is running ${app}:${estateTag}, but ${revisionSelection.reason}`,
+    };
+  }
+
+  // ── A NON-CONSOLE APP HAS NO ACTIONS-API WRITER TABLE (#3676) ─────────────
+  // CONSOLE_ROLL_SOURCES matches runs by EXACT job name, and the only lane that
+  // rolls a data-plane app names its job dynamically
+  // (`Roll ${{ inputs.apps }} on ${{ inputs.boundary }}` in
+  // loom-dataplane-roll.yml), so that population cannot be built for these apps
+  // without inventing a matcher this file has never measured. It is therefore
+  // declared ABSENT rather than faked: `not-applicable` means "there is no
+  // second witness for this app", and the estate's own revision history above —
+  // the witness that caught the 2026-08-19 miss, and the only one that can tell
+  // "never moved" from "moved and was moved back" — is the whole verdict.
+  //
+  // This can only be reached when the revision witness returned `none` or
+  // `ahead`; every failing revision status is handled above and returns first.
+  // So it cannot launder a regression green.
+  if (rollSelection && rollSelection.status === 'not-applicable') {
+    return {
+      verdict: 'ok',
+      reason:
+        `estate is running ${app}:${estateTag}, and its own revision history shows nothing this apply ` +
+        `overwrote: ${revisionSelection ? revisionSelection.reason : '(no revision evidence was supplied)'} ` +
+        `${rollSelection.reason}`,
     };
   }
 
   if (!rollSelection || rollSelection.status === 'unknown') {
     return {
       verdict: 'unknown',
-      reason: `estate is running loom-console:${estateTag}, but ${rollSelection ? rollSelection.reason : 'no roll selection was supplied'}`,
+      reason: `estate is running ${app}:${estateTag}, but ${rollSelection ? rollSelection.reason : 'no roll selection was supplied'}`,
     };
   }
   if (rollSelection.status === 'none') {
     return {
       verdict: 'ok',
       reason:
-        `estate is running loom-console:${estateTag}; ${rollSelection.reason}` +
+        `estate is running ${app}:${estateTag}; ${rollSelection.reason}` +
         `${revisionSelection ? ` And the estate's own revision history agrees: ${revisionSelection.reason}` : ''}`,
     };
   }
@@ -1640,7 +1729,7 @@ export function decideEstateRegression({ appliedTag = '', estateTag = null, esta
     return {
       verdict: 'ok',
       reason:
-        `estate is running loom-console:${sha}, which is exactly what ${workflow} run ${id} shipped at ` +
+        `estate is running ${app}:${sha}, which is exactly what ${workflow} run ${id} shipped at ` +
         `${completedAt}. This deploy did not overwrite it.`,
     };
   }
@@ -1648,8 +1737,8 @@ export function decideEstateRegression({ appliedTag = '', estateTag = null, esta
     return {
       verdict: 'regression',
       reason:
-        `THE ESTATE WENT BACKWARDS. ${workflow} run ${id} shipped loom-console:${sha} at ${completedAt} — after this ` +
-        `deploy measured the tags it was going to write — and loom-console is now running '${estateTag}', which is ` +
+        `THE ESTATE WENT BACKWARDS. ${workflow} run ${id} shipped ${app}:${sha} at ${completedAt} — after this ` +
+        `deploy measured the tags it was going to write — and ${app} is now running '${estateTag}', which is ` +
         'the tag THIS DEPLOY applied. This run overwrote that roll. Every merge in that window is inert on the ' +
         'live estate until it is rolled again (deploy-integrity R2/R3).',
       rollForwardTo: sha,
@@ -1658,13 +1747,336 @@ export function decideEstateRegression({ appliedTag = '', estateTag = null, esta
   return {
     verdict: 'drifted',
     reason:
-      `THE ESTATE IS ON AN IMAGE NOBODY IN THIS COMPARISON PUT THERE. loom-console is running '${estateTag}', which ` +
-      `is neither the last shipped roll (${workflow} run ${id} shipped loom-console:${sha} at ${completedAt}) nor ` +
+      `THE ESTATE IS ON AN IMAGE NOBODY IN THIS COMPARISON PUT THERE. ${app} is running '${estateTag}', which ` +
+      `is neither the last shipped roll (${workflow} run ${id} shipped ${app}:${sha} at ${completedAt}) nor ` +
       `the tag this deploy applied ('${applied}'). The most likely benign explanation is a roll whose image write ` +
       'has landed but whose RUN has not completed, so it is not yet in the population — in which case the estate is ' +
       'AHEAD, not behind. NO DIRECTION IS BEING CLAIMED and no rollback target is named, because rolling to the SHA ' +
       'above could move a healthy estate backwards. Read the container app and the in-flight runs before acting.',
   };
+}
+
+// ===========================================================================
+// #3676 — ESTATE-WIDE. ONE WATCHED APP WAS NINETEEN TOO FEW.
+// ===========================================================================
+//
+// Everything above is a per-app decision, and until now exactly ONE app was
+// ever fed into it: deploy-fiab-commercial.yml hard-coded `-n loom-console` at
+// every witness (measured at head 2026-09-03: lines 2235, 2269, 2275, 2348,
+// 2350 in the gate and 2507 in the auto-heal). APP_IMAGE_TAGS carries TWENTY
+// entries, so nineteen image writers were unwatched: a roll of any of them
+// landing inside the apply's ~11-minute window was overwritten with BOTH lanes
+// green and no heal — which is this issue's original shape, verbatim, still
+// live for 95% of the estate.
+//
+// The three functions below are what makes the gate estate-wide. They are pure
+// and file-fed like everything else here, so the states a live run cannot
+// cheaply reproduce (an unreadable app list, an app with no roll lane, two
+// apps regressed to the same SHA) are all reachable from a test.
+
+/**
+ * WHICH Container Apps did this apply write an image tag for?
+ *
+ * Iteration is over the PINNED KEYS, not over the container list, and that
+ * direction is the load-bearing choice: the pins are exactly the set of images
+ * `az deployment sub create` was about to write, so an app outside them cannot
+ * have been overwritten BY THIS RUN no matter what else is running in the
+ * resource group. Walking the container list instead would put every unrelated
+ * app (jobs, portal, anything a human deployed by hand) into the population and
+ * make the gate answer a question it was not asked.
+ *
+ * A key whose repository is running on SEVERAL apps yields several watched apps
+ * — the unity pair (`loom-unity` + `iceberg-catalog`) is exactly this, and both
+ * genuinely receive the key's tag on the apply, so both are watched.
+ *
+ * @param {object} a
+ * @param {Array<{name?:string, image?:string}>|null} a.containers
+ *        `az containerapp list` projection taken AFTER the apply. null = the
+ *        query FAILED, which is UNKNOWN and deliberately NOT an empty estate.
+ * @param {Record<string,string>} a.pinned  key -> tag this run applied.
+ * @param {ReadonlyArray<{key:string, repo:string}>} [a.table]
+ * @returns {{status:'ok'|'unknown', reason:string,
+ *            apps:Array<{app:string, key:string, repo:string, appliedTag:string}>,
+ *            created:Array<{key:string, repo:string, appliedTag:string}>,
+ *            unwatched:Array<{app:string, why:string}>}}
+ */
+export function selectWatchedApps({ containers = null, pinned = {}, table = APP_IMAGE_TAGS } = {}) {
+  if (containers === null || containers === undefined || !Array.isArray(containers)) {
+    return {
+      status: 'unknown',
+      apps: [],
+      created: [],
+      unwatched: [],
+      reason:
+        'the post-apply container-app list could not be read as a JSON array, so WHICH apps this run wrote an ' +
+        'image to is unestablished — and therefore so is whether any of them went backwards. "I could not look" ' +
+        'is not "nothing happened".',
+    };
+  }
+
+  /** repo -> the apps running it, from the post-apply read. */
+  const byRepo = new Map();
+  /** Apps whose image names no repository this run pins — reported, not watched. */
+  const unwatched = [];
+  for (const c of containers) {
+    const name = String(c?.name ?? '');
+    const raw = String(c?.image ?? '');
+    const ref = parseImageRef(raw);
+    if (!ref) {
+      unwatched.push({
+        app: name,
+        why: `its image reference ${JSON.stringify(raw)} could not be parsed, so it cannot be matched to an appImageTags key`,
+      });
+      continue;
+    }
+    const list = byRepo.get(ref.repo) || [];
+    list.push(name);
+    byRepo.set(ref.repo, list);
+  }
+
+  const apps = [];
+  const created = [];
+  const pinnedRepos = new Set();
+  for (const entry of table) {
+    const tag = pinned?.[entry.key];
+    if (!tag) continue;
+    pinnedRepos.add(entry.repo);
+    const hits = byRepo.get(entry.repo) || [];
+    if (!hits.length) {
+      // The apply wrote this tag but nothing is running the repository. Writing
+      // it CREATES the app; a creation cannot have overwritten another writer.
+      created.push({ key: entry.key, repo: entry.repo, appliedTag: tag });
+      continue;
+    }
+    for (const app of hits) apps.push({ app, key: entry.key, repo: entry.repo, appliedTag: tag });
+  }
+
+  // Anything running a repository this run did NOT pin is out of scope, and
+  // says so with the repo it runs rather than being dropped silently.
+  for (const [repo, names] of byRepo) {
+    if (pinnedRepos.has(repo)) continue;
+    for (const app of names) {
+      unwatched.push({ app, why: `it runs '${repo}', which this run applied no appImageTags pin for` });
+    }
+  }
+  apps.sort((a, b) => a.app.localeCompare(b.app));
+  unwatched.sort((a, b) => a.app.localeCompare(b.app));
+
+  return {
+    status: 'ok',
+    apps,
+    created,
+    unwatched,
+    reason:
+      `this apply wrote an image tag to ${apps.length} running Container App(s) ` +
+      `(${apps.map((a) => a.app).join(', ') || 'none'})` +
+      `${created.length ? `; ${created.length} pinned key(s) name a repository nothing is running yet, so the apply CREATES them (${created.map((c) => c.repo).join(', ')})` : ''}` +
+      `${unwatched.length ? `; ${unwatched.length} running app(s) are out of scope (${unwatched.map((u) => u.app).join(', ')})` : ''}.`,
+  };
+}
+
+/**
+ * Say — precisely — WHY an app's revision history did not become a usable
+ * array, without asserting anything the caller did not establish.
+ *
+ * WHY THIS IS A FUNCTION AND NOT A TERNARY (deploy-integrity R7)
+ * -------------------------------------------------------------
+ * The first cut of this branch had two arms: "az wrote a reason" and, for
+ * everything else, "neither file exists, so the history was never read". The
+ * gate step that feeds it writes
+ *   az containerapp revision list ... > "$REVDIR/$APP.json" 2> "$REVDIR/$APP.err"
+ * so whenever az RUNS, BOTH files exist. An az that exits 0 having written
+ * empty, truncated or non-JSON stdout therefore landed on the second arm and
+ * the run log said "this step never asked" about a step that asked and got an
+ * answer it could not read. That is the 2026-08-05 collapse again — an
+ * UNREADABLE answer rendered as an ABSENT question — and it points any reader
+ * at the wrong half of the system.
+ *
+ * The states are kept apart because their next actions differ: unparseable
+ * stdout is an az/query defect to inspect, a non-empty stderr is az's own
+ * refusal to quote, and a genuinely absent pair is the DNS-label `continue`
+ * branch upstream, which never invoked az at all.
+ *
+ * Every arm still yields an UNKNOWN verdict and exit 1 — this changes what the
+ * log SAYS, never whether the gate fails closed.
+ *
+ * @param {object}  o
+ * @param {string}  o.revDir     directory the two files live in
+ * @param {string}  o.app        Container App name
+ * @param {'absent'|'unreadable'|'unparseable'} o.jsonState  what `<app>.json` was
+ * @param {number}  [o.jsonBytes]   size of `<app>.json` when it was read
+ * @param {string}  [o.jsonDetail]  the parse / read error text
+ * @param {'absent'|'unreadable'|'empty'|'text'} o.errState  what `<app>.err` was
+ * @param {string}  [o.errText]     `<app>.err` contents when non-empty
+ * @param {string}  [o.errDetail]   the read error text when `<app>.err` is unreadable
+ * @returns {string} one sentence-group stating only established facts
+ */
+export function describeRevisionReadFailure({
+  revDir = '',
+  app = '',
+  jsonState = 'absent',
+  jsonBytes = 0,
+  jsonDetail = '',
+  errState = 'absent',
+  errText = '',
+  errDetail = '',
+} = {}) {
+  const jsonName = `${app}.json`;
+  const errName = `${app}.err`;
+  const detail = String(jsonDetail || '').slice(0, 120);
+  // The discriminating clause is placed FIRST in every arm on purpose: the
+  // composed verdict truncates this detail at 400 characters, and a sentence
+  // whose distinguishing half can be cut off is a sentence that can still be
+  // misread. Paths and supporting notes come after it.
+  const stderrNote =
+    errState === 'text'
+      ? `az also wrote to stderr: ${String(errText).slice(0, 200)}.`
+      : errState === 'empty'
+        ? `${errName} is present and EMPTY.`
+        : errState === 'unreadable'
+          ? `${errName} could not be read (${String(errDetail || '').slice(0, 120)}).`
+          : `${errName} is absent.`;
+
+  if (jsonState === 'unparseable') {
+    return (
+      `${jsonName} EXISTS (${jsonBytes} byte(s)) and is not parseable JSON (${detail}) — the history WAS read ` +
+      `and the answer was unusable, which is NOT "never asked". ${stderrNote} Directory: ${revDir}. Nothing ` +
+      `about which image ${app} runs is established.`
+    );
+  }
+  if (jsonState === 'unreadable') {
+    return (
+      `${jsonName} EXISTS but could not be read (${detail}) — the history was requested and could not be ` +
+      `retrieved, which is NOT "never asked". ${stderrNote} Directory: ${revDir}. Nothing was established about ` +
+      `this app.`
+    );
+  }
+  // From here `<app>.json` is genuinely absent — either az failed and the gate
+  // step removed the partial stdout, or az was never invoked for this app.
+  if (errState === 'text') {
+    return `az containerapp revision list for ${app} did not produce a readable history: ${String(errText).slice(0, 400)}`;
+  }
+  if (errState === 'empty') {
+    return (
+      `${jsonName} is ABSENT and ${errName} is present but EMPTY — neither a history nor a failure reason was ` +
+      `recorded for ${app}. Directory: ${revDir}. Nothing was established about this app.`
+    );
+  }
+  if (errState === 'unreadable') {
+    return (
+      `${jsonName} is ABSENT and ${errName} could not be read (${String(errDetail || '').slice(0, 120)}) — ` +
+      `whether az was asked about ${app} at all is unestablished. Directory: ${revDir}.`
+    );
+  }
+  return (
+    `neither ${jsonName} nor ${errName} exists, so the revision history for ${app} was never read — this step ` +
+    `never asked az about it. Directory: ${revDir}. Nothing was established about this app.`
+  );
+}
+
+/**
+ * The verdict for the WHOLE estate, from one per-app verdict each.
+ *
+ * PRECEDENCE IS regression > drifted > unknown > ok, and the reason it is not
+ * "worst exit code wins" is that all four failing states exit 1 identically —
+ * what differs is the NEXT ACTION. A `regression` carries a roll-forward SHA
+ * that the heal step can act on; letting an unrelated app's `unknown` outrank
+ * it would throw that away, which is exactly the defect #3797 fixed inside the
+ * single-app decision. Every app's own verdict is carried out regardless, so
+ * nothing is hidden by the headline.
+ *
+ * @param {Array<{app:string, verdict:string, reason:string, rollForwardTo?:string}>} perApp
+ * @returns {{verdict:'ok'|'regression'|'drifted'|'unknown', reason:string,
+ *            apps:Array<object>, failing:Array<object>}}
+ */
+export function decideEstateRegressionAll(perApp = []) {
+  const apps = Array.isArray(perApp) ? perApp : [];
+  if (!apps.length) {
+    return {
+      verdict: 'ok',
+      apps: [],
+      failing: [],
+      reason:
+        'no running Container App received an image tag from this apply, so this run cannot have moved any image ' +
+        'backwards.',
+    };
+  }
+  const order = ['regression', 'drifted', 'unknown', 'ok'];
+  let worst = 'ok';
+  for (const a of apps) {
+    if (order.indexOf(a.verdict) !== -1 && order.indexOf(a.verdict) < order.indexOf(worst)) worst = a.verdict;
+  }
+  const failing = apps.filter((a) => a.verdict !== 'ok');
+  const tally = order
+    .map((v) => [v, apps.filter((a) => a.verdict === v).length])
+    .filter(([, n]) => n > 0)
+    .map(([v, n]) => `${n} ${v}`)
+    .join(', ');
+  return {
+    verdict: worst,
+    apps,
+    failing,
+    reason:
+      `${apps.length} Container App(s) were compared against their own revision history: ${tally}.` +
+      `${failing.length ? ` Failing: ${failing.map((f) => `${f.app} (${f.verdict})`).join(', ')}.` : ''}`,
+  };
+}
+
+/**
+ * Turn per-app regressions into the DISPATCHES that would repair them.
+ *
+ * ── WHY GROUPING (#3676) ────────────────────────────────────────────────────
+ * loom-unity and iceberg-catalog run ONE image by design, so a single apply
+ * overwrites both with the same tag and both regress to the same SHA. Two
+ * separate `loom-dataplane-roll` dispatches would queue behind each other on
+ * that lane's own `loom-dataplane-roll-<boundary>` concurrency group and roll
+ * the pair twice; one dispatch carrying `apps=loom-unity,iceberg-catalog` is
+ * what the lane is built to take ("Either unity-pair member pulls in the other
+ * — they share one image").
+ *
+ * ── WHY AN APP WITH NO LANE PRODUCES A REQUEST ANYWAY ───────────────────────
+ * It carries `workflow: null` and a reason, so the heal step reports the app,
+ * the SHA and the absence of a lane. Emitting nothing would make an
+ * unrepairable regression indistinguishable from a repaired one, which is the
+ * silence this whole issue is about. A wrong dispatch is worse than none:
+ * loom-roll-and-validate.yml hard-codes `APP_NAME: loom-console`, so aiming it
+ * at loom-unity would roll the CONSOLE and then report a healed estate.
+ *
+ * @param {Array<{app:string, verdict:string, rollForwardTo?:string}>} perApp
+ * @param {{boundary?:string, lanes?:Record<string,{workflow:string, kind:string}>}} [opts]
+ * @returns {Array<{workflow:string|null, kind:string|null, sha:string, apps:string[], why:string}>}
+ */
+export function buildHealRequests(perApp = [], { boundary = 'commercial', lanes = ESTATE_ROLL_LANES } = {}) {
+  /** @type {Map<string, {workflow:string|null, kind:string|null, sha:string, apps:string[], why:string}>} */
+  const grouped = new Map();
+  for (const a of Array.isArray(perApp) ? perApp : []) {
+    if (!a || a.verdict !== 'regression') continue;
+    const sha = String(a.rollForwardTo || '').trim();
+    // Only a 40-hex commit SHA may ever reach a dispatch: the roll lanes
+    // validate against a build marker and cannot check a floating tag (#2963).
+    if (!SHA_TAG_RE.test(sha)) continue;
+    const lane = lanes[a.app] || null;
+    const key = `${lane ? lane.workflow : '(none)'}|${sha}|${boundary}`;
+    const existing = grouped.get(key);
+    if (existing) {
+      if (!existing.apps.includes(a.app)) existing.apps.push(a.app);
+      continue;
+    }
+    grouped.set(key, {
+      workflow: lane ? lane.workflow : null,
+      kind: lane ? lane.kind : null,
+      sha,
+      boundary,
+      apps: [a.app],
+      why: lane
+        ? `${lane.workflow} rolls this app, and ${sha} is the image the apply overwrote — read off the app's own revision history.`
+        : `NO automated roll lane exists in this repository for this app, so no dispatch is made. Only loom-roll-and-validate.yml (loom-console only) and loom-dataplane-roll.yml (loom-unity, iceberg-catalog, loom-trino) can roll an admin-plane app FORWARD to a named SHA; full-app-deploy-commercial.yml builds from its own checkout, so it rolls to what it builds, not to ${sha}.`,
+    });
+  }
+  const out = [...grouped.values()];
+  for (const g of out) g.apps.sort();
+  out.sort((a, b) => String(a.workflow).localeCompare(String(b.workflow)) || a.sha.localeCompare(b.sha));
+  return out;
 }
 
 // ===========================================================================
@@ -1693,6 +2105,32 @@ export function decideEstateRegression({ appliedTag = '', estateTag = null, esta
 //                                  than a step output, so the hand-off does not
 //                                  depend on how the runner treats the outputs
 //                                  of a step that (by design) exits non-zero.
+//   node scripts/ci/reconcile-policy.mjs assert-estate-not-behind-roll-all
+//        --measured-at <rfc3339>
+//        (--containers <file>  | --containers-error <text>)   POST-apply
+//        --app-revisions <dir>       <dir>/<app>.json on success,
+//                                    <dir>/<app>.err  when az failed. NEITHER
+//                                    present is UNKNOWN for that app, never
+//                                    "no revisions".
+//        (--rolls <file>       | --rolls-error <text>)  loom-console only
+//        [--heal-request <file>]     NDJSON, one dispatch per line (#3676).
+//        [--boundary commercial]
+//        The ESTATE-WIDE form. The applied tags are read from the ENVIRONMENT
+//        (`pinsFromEnv`) — the same $GITHUB_ENV record commercial.bicepparam
+//        resolves at bicep-compile time, so it IS what the apply wrote, not a
+//        second copy of it.
+//   node scripts/ci/reconcile-policy.mjs applied-tags --out <file>
+//        Writes `<key>\t<tag>` for every pin in the environment, exit 0. The
+//        gate step uses an EMPTY result to skip ~20 az calls on a run that
+//        rendered no Container App — the same short-circuit the single-app
+//        form has, expressed without restating the 20 env-var names in shell.
+//   node scripts/ci/reconcile-policy.mjs watched-apps
+//        (--containers <file> | --containers-error <text>) --out <file>
+//        Writes one Container App NAME per line: the apps this apply wrote an
+//        image tag to. Exit 0 even when the list was unreadable (the file is
+//        left EMPTY and the assert above turns the same unreadable list into
+//        UNKNOWN) — a read failure must be spent once, by the verdict, not
+//        twice.
 //   node scripts/ci/reconcile-policy.mjs serving-tag
 //        --revisions <file> --out <file>
 //        Writes the tag the estate is SERVING (traffic-derived, #3798) to
@@ -1887,6 +2325,285 @@ export function cliMain(argv, io) {
     }));
   }
 
+  if (cmd === 'applied-tags') {
+    const outFile = cliArg(argv, 'out');
+    if (!outFile) {
+      log('::error::reconcile-policy applied-tags: --out <file> is required.');
+      return 2;
+    }
+    const pinned = pinsFromEnv(env);
+    const keys = Object.keys(pinned);
+    writeFile(outFile, keys.map((k) => `${k}\t${pinned[k]}`).join('\n') + (keys.length ? '\n' : ''));
+    log(
+      `[applied-tags] this run exported ${keys.length} appImageTags pin(s) to the environment` +
+        `${keys.length ? `: ${keys.join(', ')}` : ', so it rendered no Container App image and nothing it wrote can have gone backwards'}.`,
+    );
+    return 0;
+  }
+
+  if (cmd === 'watched-apps') {
+    const containersFile = cliArg(argv, 'containers');
+    const containersError = cliArg(argv, 'containers-error');
+    const outFile = cliArg(argv, 'out');
+    if (!outFile) {
+      log('::error::reconcile-policy watched-apps: --out <file> is required.');
+      return 2;
+    }
+    if (!containersFile && !cliHas(argv, 'containers-error')) {
+      log('::error::reconcile-policy watched-apps: exactly one of --containers <file> or --containers-error <text> is required.');
+      return 2;
+    }
+    let containers = null;
+    let parseDetail = '';
+    if (containersFile) {
+      try {
+        containers = readJson(containersFile);
+      } catch (e) {
+        parseDetail = ` --containers ${containersFile} could not be read or parsed (${String(e?.message || e).slice(0, 200)}).`;
+        containers = null;
+      }
+    }
+    const sel = selectWatchedApps({ containers, pinned: pinsFromEnv(env) });
+    // The file is ALWAYS written, so a caller that does not check anything gets
+    // an empty list rather than a stale one from a previous step.
+    writeFile(outFile, sel.apps.map((a) => a.app).join('\n') + (sel.apps.length ? '\n' : ''));
+    if (sel.status !== 'ok') {
+      // NOT an exit 1. The same unreadable list is handed to the assert below,
+      // which spends it ONCE as UNKNOWN. Failing here too would report one
+      // read failure as two defects and hide which verdict actually fired.
+      log(`::warning::watched-apps: ${sel.reason}${parseDetail}${containersError ? ` Detail: ${containersError.slice(0, 400)}` : ''}`);
+      return 0;
+    }
+    log(`[watched-apps] ${sel.reason}`);
+    for (const c of sel.created) {
+      log(`::notice::watched-apps: ${c.repo} is pinned to ${c.appliedTag} but nothing is running it — the apply CREATES it, which cannot overwrite another writer.`);
+    }
+    for (const u of sel.unwatched) {
+      log(`::notice::watched-apps: ${u.app} is NOT watched by the estate-regression gate because ${u.why}.`);
+    }
+    return 0;
+  }
+
+  if (cmd === 'assert-estate-not-behind-roll-all') {
+    const measuredAt = cliArg(argv, 'measured-at');
+    const containersFile = cliArg(argv, 'containers');
+    const containersError = cliArg(argv, 'containers-error');
+    const revDir = cliArg(argv, 'app-revisions');
+    const rollsFile = cliArg(argv, 'rolls');
+    const rollsError = cliArg(argv, 'rolls-error');
+    const healRequestFile = cliArg(argv, 'heal-request');
+    const boundary = cliArg(argv, 'boundary') || 'commercial';
+
+    if (!containersFile && !cliHas(argv, 'containers-error')) {
+      log('::error::reconcile-policy assert-estate-not-behind-roll-all: exactly one of --containers <file> or --containers-error <text> is required. Neither was supplied, and defaulting either way would invent a fact about which apps this run wrote.');
+      return 2;
+    }
+    if (!revDir) {
+      log('::error::reconcile-policy assert-estate-not-behind-roll-all: --app-revisions <dir> is required. Without it there is no estate witness at all, and the Actions-API-only comparison it would fall back to is the one that reported OK across the #3676 revert.');
+      return 2;
+    }
+    if (!rollsFile && !cliHas(argv, 'rolls-error')) {
+      log('::error::reconcile-policy assert-estate-not-behind-roll-all: exactly one of --rolls <file> or --rolls-error <text> is required.');
+      return 2;
+    }
+
+    // The heal request is truncated BEFORE any verdict, so a request can only
+    // ever describe THIS run and the heal step's "nothing to do" branch is
+    // reached by an empty file rather than by a missing one (#3799).
+    if (healRequestFile) writeFile(healRequestFile, '');
+
+    const pinned = pinsFromEnv(env);
+    if (!Object.keys(pinned).length) {
+      log('::notice::estate-vs-roll (all apps): OK — this run exported no appImageTags pin at all, so app-deployments.bicep rendered no Container App image and nothing it wrote can have moved backwards.');
+      writeOutput('verdict=ok');
+      writeOutput('apps_compared=0');
+      return 0;
+    }
+
+    let containers = null;
+    let containersDetail = containersError ? ` Detail: ${containersError.slice(0, 400)}` : '';
+    if (containersFile) {
+      try {
+        containers = readJson(containersFile);
+      } catch (e) {
+        containersDetail = ` Detail: --containers ${containersFile} could not be read or parsed (${String(e?.message || e).slice(0, 200)}).`;
+        containers = null;
+      }
+    }
+    const watched = selectWatchedApps({ containers, pinned });
+    if (watched.status !== 'ok') {
+      log(`::error::estate-vs-roll (all apps): UNKNOWN, which fails closed — ${watched.reason}${containersDetail}`);
+      writeOutput('verdict=unknown');
+      writeOutput('apps_compared=0');
+      return 1;
+    }
+    for (const c of watched.created) {
+      log(`::notice::estate-vs-roll: ${c.repo} is pinned to ${c.appliedTag} and nothing is running it; the apply CREATES it, which cannot overwrite another writer.`);
+    }
+    for (const u of watched.unwatched) {
+      log(`::notice::estate-vs-roll: ${u.app} is out of scope because ${u.why}.`);
+    }
+
+    // The Actions-API population is about loom-roll-and-validate.yml and
+    // full-app-deploy-commercial.yml, both of which write loom-console. It is
+    // therefore resolved ONCE and given to the console app alone.
+    let consoleRollSelection;
+    if (!rollsFile) {
+      consoleRollSelection = selectLastConsoleRoll(null);
+      if (rollsError) consoleRollSelection = { ...consoleRollSelection, reason: `${consoleRollSelection.reason} Detail: ${rollsError.slice(0, 400)}` };
+    } else {
+      let runs;
+      try {
+        runs = readJson(rollsFile);
+      } catch (e) {
+        consoleRollSelection = selectLastConsoleRoll(null);
+        consoleRollSelection = { ...consoleRollSelection, reason: `${consoleRollSelection.reason} Detail: --rolls ${rollsFile} could not be parsed (${String(e?.message || e).slice(0, 200)}).` };
+        runs = undefined;
+      }
+      if (Array.isArray(runs)) consoleRollSelection = selectLastConsoleRoll(runs);
+      else if (runs !== undefined) consoleRollSelection = selectLastConsoleRoll(null);
+    }
+
+    const perApp = [];
+    for (const w of watched.apps) {
+      // Two files, two meanings, and their ABSENCE is a third: `<app>.json` is
+      // a history az returned, `<app>.err` is az saying why it could not, and
+      // neither present means this step never asked — which establishes
+      // nothing and must not read as an empty history.
+      //
+      // The read is spelled out rather than routed through readJson() because
+      // the DISTINCTION between "absent" (ENOENT), "present but unreadable"
+      // and "present but unparseable" is the whole point: the gate step's own
+      // redirection creates BOTH files whenever az runs, so collapsing them
+      // would report an unreadable ANSWER as an unasked QUESTION
+      // (deploy-integrity R7). See describeRevisionReadFailure().
+      let revisions = null;
+      let revisionsError = '';
+      // 'ok' | 'absent' | 'unreadable' | 'unparseable'
+      let jsonState = 'ok';
+      let jsonBytes = 0;
+      let jsonDetail = '';
+      try {
+        const raw = String(readFile(`${revDir}/${w.app}.json`) ?? '');
+        jsonBytes = Buffer.byteLength(raw, 'utf8');
+        try {
+          revisions = JSON.parse(raw);
+        } catch (e) {
+          revisions = null;
+          jsonState = 'unparseable';
+          jsonDetail = String(e?.message || e);
+        }
+      } catch (e) {
+        revisions = null;
+        jsonState = e?.code === 'ENOENT' ? 'absent' : 'unreadable';
+        jsonDetail = String(e?.message || e);
+      }
+
+      if (jsonState !== 'ok') {
+        let errState = 'absent';
+        let errText = '';
+        let errDetail = '';
+        try {
+          errText = String(readFile(`${revDir}/${w.app}.err`) ?? '').trim();
+          errState = errText ? 'text' : 'empty';
+        } catch (e) {
+          if (e?.code === 'ENOENT') {
+            errState = 'absent';
+          } else {
+            errState = 'unreadable';
+            errDetail = String(e?.message || e);
+          }
+        }
+        revisionsError = describeRevisionReadFailure({
+          revDir,
+          app: w.app,
+          jsonState,
+          jsonBytes,
+          jsonDetail,
+          errState,
+          errText,
+          errDetail,
+        });
+      }
+      let revisionSelection = selectRevisionOverwrite(revisions, {
+        measuredAt,
+        appliedTag: w.appliedTag,
+        app: w.app,
+      });
+      if (revisionsError) {
+        revisionSelection = { ...revisionSelection, reason: `${revisionSelection.reason} Detail: ${revisionsError}` };
+      }
+
+      // What the app is running NOW comes from the SERVING revision rather than
+      // a second `az containerapp show` per app: the traffic split is already
+      // in the payload that was fetched, and adding a second read per app would
+      // both double the az calls and reintroduce the template-vs-serving
+      // disagreement #3798 exists to resolve.
+      const serving = selectServingRevision(revisions, { app: w.app });
+      const estateTag = serving.status === 'found' ? serving.tag : null;
+      const estateReadError =
+        serving.status === 'found'
+          ? ''
+          : `the image ${w.app} is SERVING was not established from its revision history: ${serving.reason}${revisionsError ? ` ${revisionsError}` : ''}`;
+
+      const isConsole = w.app === CONSOLE_APP_NAME;
+      const rollSelection = isConsole
+        ? consoleRollSelection
+        : {
+            status: 'not-applicable',
+            reason:
+              `No Actions-API writer table exists for ${w.app}: CONSOLE_ROLL_SOURCES matches roll runs by EXACT job ` +
+              'name, and the only lane that rolls a data-plane app names its job dynamically ' +
+              '(loom-dataplane-roll.yml: "Roll ${{ inputs.apps }} on ${{ inputs.boundary }}"), so that population is ' +
+              'DECLARED ABSENT rather than faked. The verdict for this app rests entirely on its own revision ' +
+              'history — the witness that caught the 2026-08-19 miss, and the only one that can tell "never moved" ' +
+              'from "moved forward and was moved back".',
+          };
+
+      const verdict = decideEstateRegression({
+        appliedTag: w.appliedTag,
+        estateTag,
+        estateReadError,
+        rollSelection,
+        revisionSelection,
+        app: w.app,
+      });
+      perApp.push({ app: w.app, key: w.key, ...verdict });
+    }
+
+    const all = decideEstateRegressionAll(perApp);
+    for (const a of perApp) {
+      const level = a.verdict === 'ok' ? '::notice::' : '::error::';
+      log(`${level}estate-vs-roll [${a.app}] ${a.verdict.toUpperCase()} — ${a.reason}`);
+    }
+    writeOutput(`verdict=${all.verdict}`);
+    writeOutput(`apps_compared=${perApp.length}`);
+    writeOutput(`apps_failing=${all.failing.map((f) => f.app).join(',')}`);
+
+    const requests = buildHealRequests(perApp, { boundary });
+    if (healRequestFile && requests.length) {
+      writeFile(healRequestFile, requests.map((r) => JSON.stringify(r)).join('\n') + '\n');
+      for (const r of requests) {
+        if (r.workflow) {
+          log(`::notice::estate-vs-roll: roll-forward requested — ${r.workflow} for ${r.apps.join(',')} at ${r.sha}; the auto-heal step (#3799) dispatches it.`);
+        } else {
+          log(`::error::estate-vs-roll: ${r.apps.join(',')} regressed to ${r.sha} and CANNOT be auto-healed. ${r.why}`);
+        }
+      }
+    }
+
+    if (all.verdict === 'ok') {
+      log(`::notice::estate-vs-roll (all apps): OK — ${all.reason}`);
+      return 0;
+    }
+    log(
+      `::error::ESTATE ${all.verdict === 'regression' ? 'REGRESSION' : all.verdict.toUpperCase()} (#3676) — ${all.reason} ` +
+        'Each app\'s own verdict is printed above; the roll-forward targets, where one is established, are read off ' +
+        "that app's revision history and NOT inferred from a run listing.",
+    );
+    return 1;
+  }
+
   if (cmd === 'serving-tag') {
     const revisionsFile = cliArg(argv, 'revisions');
     const outFile = cliArg(argv, 'out');
@@ -1902,7 +2619,7 @@ export function cliMain(argv, io) {
       parseDetail = ` --revisions ${revisionsFile} could not be read or parsed (${String(e?.message || e).slice(0, 200)}).`;
       revs = null;
     }
-    const sel = selectServingRevision(revs);
+    const sel = selectServingRevision(revs, { app: cliArg(argv, 'app') || CONSOLE_APP_NAME });
     if (sel.status !== 'found') {
       // The file is ALWAYS written, and written EMPTY here, so a caller that
       // reads it without checking the exit code gets nothing rather than a
@@ -1916,7 +2633,7 @@ export function cliMain(argv, io) {
     return 0;
   }
 
-  log(`::error::reconcile-policy: unknown subcommand ${JSON.stringify(cmd)}. Expected 'pin-refresh', 'assert-estate-not-behind-roll' or 'serving-tag'.`);
+  log(`::error::reconcile-policy: unknown subcommand ${JSON.stringify(cmd)}. Expected 'pin-refresh', 'assert-estate-not-behind-roll', 'assert-estate-not-behind-roll-all', 'applied-tags', 'watched-apps' or 'serving-tag'.`);
   return 2;
 }
 

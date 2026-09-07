@@ -166,3 +166,15 @@ overrides:
   # override would pin a resolution vite already makes — and would silently
   # widen into a break the day vite's declared range and the override disagree.
   vite: '^7.3.6'
+  # GHSA-73wf-gq98-2v4g and GHSA-c83g-rgw3-j3cx (both HIGH), patched in 4.28.7.
+  # Transitive only: browserslist arrives under @babel/helper-compilation-targets
+  # (`browserslist: 4.28.2` in the lockfile) and under update-browserslist-db,
+  # so nothing here can bump it by changing a direct dependency.
+  #
+  # WHY AN OVERRIDE AND NOT `pnpm update`. Measured 2026-09-03: `pnpm update
+  # browserslist --lockfile-only` exits 0, resolves 944 packages and leaves
+  # browserslist@4.28.2 exactly where it was — `pnpm update <pkg>` acts on
+  # direct dependencies, and this is not one. A green command that changes
+  # nothing is the worst shape available here, because it reads as "bumped".
+  # The floor below is the mechanism that actually moves a transitive.
+  browserslist: '>=4.28.7'
