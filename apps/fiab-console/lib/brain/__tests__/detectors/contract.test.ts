@@ -31,7 +31,7 @@ import { describe, it, expect } from 'vitest';
 import { ALL_DETECTORS, runDetectors } from '../../detectors';
 import { estimateAlwaysOnMonthlyCost } from '../../detectors/cost-model';
 import { subjectCount } from '../../detectors/detector-kit';
-import type { BrainGraphView, Finding } from '../../graph';
+import type { AzureResourceNode, BrainGraphView, DanglingEdge, Finding } from '../../graph';
 import {
   CONSOLE_ID,
   DIRECTLAKE_FQDN,
@@ -40,7 +40,9 @@ import {
   appRow,
   buildEdgelessGraph,
   buildEstateScaleGraph,
+  buildEstateScaleTelemetryGraph,
   buildFixtureGraph,
+  inertPaddingExtraction,
 } from './fixtures';
 
 const WAREHOUSE_ARM = `/subscriptions/${SUB}/resourceGroups/${RG}/providers/Microsoft.App/containerApps/loom-warehouse`;
@@ -322,5 +324,312 @@ describe('CONTRACT — the suite actually reaches production cardinality', () =>
       expect(f.remediation.proposedChange).toContain('OWNERSHIP NOT ESTABLISHED');
       expect(f.remediation.proposedChange).not.toContain('carries the `loom-estate-id` tag');
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// #3964 — a bypass inside a CLEARED branch still balances the ledger
+// ---------------------------------------------------------------------------
+
+/**
+ * THE DEFECT THIS SECTION EXISTS FOR.
+ *
+ * `assertLedgerBalances` proves every declared candidate got exactly one
+ * disposition. It cannot prove the dispositions are the RIGHT ones, because a
+ * bypass that moves every candidate from `finding` to `cleared` balances the
+ * ledger perfectly. Two such bypasses were measured against the suite at head:
+ *
+ *   N3  `always-on-unused.ts` — `if (observed.length !== 0 || graph.nodes.length > 20)`
+ *       i.e. clear every always-on app once the graph passes 20 nodes.
+ *   N4  `dangling-wire.ts` — `REPORTED_REASONS.includes(r) && graph.edges.length < 50`
+ *       i.e. report no dangling wire once the graph passes 50 edges.
+ *
+ * Both left the whole brain suite green. Two independent things close them, and
+ * neither is a restatement of the detector:
+ *
+ *   1. A GRAPH-DERIVED UNIVERSE AND DISPOSITION. The counts are re-derived here
+ *      from the graph, by a second implementation the detector cannot influence.
+ *      N3 shows up as `finding: 0` against a derived count; so does N4.
+ *   2. A DIFFERENTIAL RUN. The same estate, padded with INERT nodes and edges
+ *      past every threshold either bypass keys on. A detector whose verdict
+ *      depends on graph SIZE rather than graph CONTENT answers differently
+ *      across the pair — which is the definition of the whole class, not just
+ *      of the two mutations that were measured.
+ */
+
+/** Azure resources, re-derived here rather than read from the detector kit. */
+function azureNodesOf(graph: BrainGraphView): AzureResourceNode[] {
+  return graph.nodes.filter((n): n is AzureResourceNode => n.kind === 'azure-resource');
+}
+
+function danglingOf(graph: BrainGraphView): DanglingEdge[] {
+  return graph.edges.filter((e): e is DanglingEdge => e.resolution === 'dangling');
+}
+
+/**
+ * The joinable (from, symbol) pairs `config-drift` ranges over, re-derived: a
+ * declared edge whose (from, symbol) has a live `configured` counterpart.
+ */
+function configDriftPairCount(graph: BrainGraphView): number {
+  const live = new Set<string>();
+  for (const e of graph.edges) {
+    if (e.provenance !== 'configured' || !e.evidence.symbol) continue;
+    live.add(`${e.from}|${e.evidence.symbol}`);
+  }
+  let n = 0;
+  for (const e of graph.edges) {
+    if (e.provenance !== 'declared' || !e.evidence.symbol) continue;
+    if (live.has(`${e.from}|${e.evidence.symbol}`)) n += 1;
+  }
+  return n;
+}
+
+/**
+ * What each detector's candidate universe MUST be, stated as a function of the
+ * graph. This is the oracle: it is computed from the graph, never read off the
+ * result, so no filter written inside a detector can move it.
+ */
+const UNIVERSE_OF: Readonly<Record<string, (g: BrainGraphView) => number>> = {
+  'always-on-unused': (g) => azureNodesOf(g).length,
+  'unreachable-service': (g) => azureNodesOf(g).length,
+  'dangling-wire': (g) => danglingOf(g).length,
+  'config-drift': (g) => configDriftPairCount(g),
+  'declared-but-dead': (g) => g.nodes.length,
+  orphan: (g) => g.nodes.length,
+};
+
+describe('CONTRACT — every detector reports DISPOSITIONS over a graph-derived universe (#3964)', () => {
+  const graphs = [
+    { name: 'estate-scale', graph: buildEstateScaleGraph() },
+    { name: 'estate-scale + telemetry', graph: buildEstateScaleTelemetryGraph() },
+    {
+      name: 'estate-scale + telemetry + inert padding',
+      graph: buildEstateScaleTelemetryGraph({ extraExtractions: [inertPaddingExtraction(60)] }),
+    },
+  ];
+
+  it('POPULATION: the oracle covers every detector that runs, by name', () => {
+    // A universe table missing a detector would silently exempt it. Assert the
+    // table and the detector list are the SAME set — not that the table is a
+    // superset, which is how an exemption hides.
+    const running = runDetectors(buildEstateScaleGraph())
+      .results.map((r) => r.detector)
+      .sort();
+    expect(running.length).toBe(ALL_DETECTORS.length);
+    expect(Object.keys(UNIVERSE_OF).sort()).toEqual(running);
+  });
+
+  describe.each(graphs)('over the $name graph', ({ graph }) => {
+    it('every result CARRIES `dispositions` and `clearedReasons`', () => {
+      // The fields are optional on DetectorResult (the security detectors build
+      // results by another path). "Optional in the type" must not become
+      // "absent in practice" for the estate detectors, so it is asserted here.
+      for (const r of runDetectors(graph).results) {
+        expect(r.dispositions, `${r.detector} carries no dispositions`).toBeDefined();
+        expect(r.clearedReasons, `${r.detector} carries no clearedReasons`).toBeDefined();
+      }
+    });
+
+    it('the ledger universe equals a count derived from the GRAPH, not from the detector', () => {
+      for (const r of runDetectors(graph).results) {
+        const derive = UNIVERSE_OF[r.detector]!;
+        expect(
+          r.dispositions!.universe,
+          `${r.detector}: ledger universe disagrees with the graph-derived candidate count`,
+        ).toBe(derive(graph));
+      }
+    });
+
+    it('finding + cleared + skipped === universe, for every detector', () => {
+      for (const r of runDetectors(graph).results) {
+        const d = r.dispositions!;
+        expect(d.finding + d.cleared + d.skipped, `${r.detector} ledger does not balance`).toBe(
+          d.universe,
+        );
+      }
+    });
+  });
+});
+
+describe("CONTRACT — always-on-unused's DISPOSITIONS are derived from the graph (kills N3)", () => {
+  const graph = buildEstateScaleTelemetryGraph();
+  const azure = azureNodesOf(graph);
+  const noScale = azure.filter((n) => n.scale === undefined);
+  const alwaysOn = azure.filter((n) => n.scale !== undefined && n.scale.minReplicas > 0);
+  const scalesToZero = azure.filter((n) => n.scale !== undefined && n.scale.minReplicas === 0);
+  const withTraffic = alwaysOn.filter((n) => graph.inboundEdges(n.id, 'observed').result.length > 0);
+
+  it('POPULATION: this graph reaches the predicate — telemetry exists, on BOTH arms', () => {
+    // Without observed edges the detector stops at its vacuity gate and every
+    // candidate is skipped, so the branch N3 sits on never executes. Without
+    // BOTH arms populated, "cleared" and "finding" cannot be told apart.
+    expect(graph.nodes.length).toBeGreaterThan(20);
+    expect(
+      graph.edges.filter((e) => e.provenance === 'observed' && e.resolution === 'resolved').length,
+    ).toBeGreaterThan(0);
+    expect(withTraffic.length).toBeGreaterThan(0);
+    expect(alwaysOn.length - withTraffic.length).toBeGreaterThan(0);
+    expect(noScale.length).toBeGreaterThan(0);
+    expect(scalesToZero.length).toBeGreaterThan(0);
+  });
+
+  it('finding === always-on apps with ZERO inbound observed edges', () => {
+    // N3 (`|| graph.nodes.length > 20` on the clearing branch) drives this to 0
+    // while the ledger still balances and every other assertion in this suite
+    // stays green.
+    const r = runDetectors(graph).results.find((x) => x.detector === 'always-on-unused')!;
+    expect(r.dispositions!.finding).toBe(alwaysOn.length - withTraffic.length);
+    expect(r.findings.length).toBe(alwaysOn.length - withTraffic.length);
+  });
+
+  it('cleared === scale-to-zero apps PLUS always-on apps that DO have traffic', () => {
+    const r = runDetectors(graph).results.find((x) => x.detector === 'always-on-unused')!;
+    expect(r.dispositions!.cleared).toBe(scalesToZero.length + withTraffic.length);
+  });
+
+  it('skipped === apps whose scale was NEVER MEASURED — and nothing else', () => {
+    // NOT MEASURED is not minReplicas 0. A bypass that quietly moves candidates
+    // into `skipped` reads as "we looked and could not tell", which is a lie of
+    // a different shape but the same size.
+    const r = runDetectors(graph).results.find((x) => x.detector === 'always-on-unused')!;
+    expect(r.dispositions!.skipped).toBe(noScale.length);
+  });
+});
+
+describe("CONTRACT — dangling-wire's DISPOSITIONS are derived from the graph (kills N4)", () => {
+  const REPORTED = ['empty-value', 'missing-resource'];
+  const graph = buildEstateScaleGraph({ extraExtractions: [inertPaddingExtraction(60)] });
+  const dangling = danglingOf(graph);
+  const inScope = dangling.filter((e) => REPORTED.includes(e.danglingReason));
+
+  it('POPULATION: this graph passes the 50-edge threshold AND has reportable dangling wires', () => {
+    expect(graph.edges.length).toBeGreaterThan(50);
+    expect(inScope.length).toBeGreaterThan(0);
+  });
+
+  it('finding === dangling edges whose reason names a real defect', () => {
+    // N4 (`&& graph.edges.length < 50` inside the reason filter) drives this to
+    // 0 and moves all of them into `skipped`, and the ledger still balances.
+    const r = runDetectors(graph).results.find((x) => x.detector === 'dangling-wire')!;
+    expect(r.dispositions!.finding).toBe(inScope.length);
+    expect(r.dispositions!.skipped).toBe(dangling.length - inScope.length);
+  });
+});
+
+describe('CONTRACT — the DIFFERENTIAL: verdicts follow graph CONTENT, never graph SIZE (#3964)', () => {
+  /**
+   * Detectors whose candidate universe is INVARIANT under inert padding, so
+   * their whole disposition triple must be identical across the pair. The two
+   * that are missing (`declared-but-dead`, `orphan`) range over every node by
+   * design, so their universes legitimately grow — stated here rather than left
+   * as an unexplained omission, and asserted below on the terms that DO hold.
+   */
+  const UNIVERSE_INVARIANT = [
+    'always-on-unused',
+    'unreachable-service',
+    'dangling-wire',
+    'config-drift',
+  ];
+
+  const base = buildEstateScaleTelemetryGraph();
+  const padded = buildEstateScaleTelemetryGraph({ extraExtractions: [inertPaddingExtraction(60)] });
+  const baseRun = runDetectors(base);
+  const paddedRun = runDetectors(padded);
+  const originalIds = new Set(base.nodes.map((n) => String(n.id)));
+  const originalEdgeIds = new Set(base.edges.map((e) => e.id as string));
+
+  it('POPULATION: the padding really does cross every threshold the measured bypasses key on', () => {
+    // A "differential" whose two graphs are the same size proves nothing. The
+    // 50-edge threshold must have the two graphs on OPPOSITE sides, and the
+    // padding must be inert or a changed verdict would be legitimate.
+    expect(base.edges.length).toBeLessThan(50);
+    expect(padded.edges.length).toBeGreaterThan(50);
+    expect(padded.nodes.length).toBeGreaterThan(base.nodes.length + 50);
+    // INERT: no azure resource, no dangling edge, no joinable declared/configured
+    // pair was added, so nothing a detector decides about the original estate
+    // can legitimately change.
+    expect(azureNodesOf(padded).length).toBe(azureNodesOf(base).length);
+    expect(danglingOf(padded).length).toBe(danglingOf(base).length);
+    expect(configDriftPairCount(padded)).toBe(configDriftPairCount(base));
+    // …and the padded run is not vacuous, or "identical" would be trivially true.
+    expect(paddedRun.findings.length).toBeGreaterThan(0);
+  });
+
+  it('the universe-invariant detectors report IDENTICAL dispositions on both graphs', () => {
+    for (const name of UNIVERSE_INVARIANT) {
+      const a = baseRun.results.find((r) => r.detector === name)!;
+      const b = paddedRun.results.find((r) => r.detector === name)!;
+      expect(b.dispositions, `${name} changed its verdict with graph SIZE`).toEqual(a.dispositions);
+    }
+  });
+
+  it('EVERY detector clears for the same REASONS on both graphs', () => {
+    // A size-conditioned branch that reuses an existing reason string is not
+    // caught by this alone — the counts above are what catch that. This catches
+    // the other half: a branch that only exists at scale and says something new.
+    for (const a of baseRun.results) {
+      const b = paddedRun.results.find((r) => r.detector === a.detector)!;
+      expect([...b.clearedReasons!].sort(), `${a.detector} cleared for different reasons`).toEqual(
+        [...a.clearedReasons!].sort(),
+      );
+    }
+  });
+
+  it('EVERY detector flags the SAME original subjects on both graphs', () => {
+    // The per-candidate half. Restricted to subjects that exist in BOTH graphs,
+    // because the padding legitimately adds new ones to the node-wide detectors.
+    const subjectsOf = (fs: readonly Finding[]): string[] =>
+      [...new Set(fs.flatMap((f) => f.subjects.map(String)))]
+        .filter((s) => originalIds.has(s) || originalEdgeIds.has(s))
+        .sort();
+    for (const a of baseRun.results) {
+      const b = paddedRun.results.find((r) => r.detector === a.detector)!;
+      expect(subjectsOf(b.findings), `${a.detector} flagged a different set at scale`).toEqual(
+        subjectsOf(a.findings),
+      );
+    }
+  });
+
+  it('EVERY detector SKIPS the same original subjects, for the same reasons', () => {
+    // A bypass can also hide by moving candidates into `skipped` — "we looked
+    // and could not tell" rather than "we looked and it is fine". Same class,
+    // different door, so it is asserted on the same terms.
+    const skipsOf = (r: { skipped: readonly { subject: string; reason: string }[] }): string[] =>
+      r.skipped
+        .filter((s) => originalIds.has(s.subject) || originalEdgeIds.has(s.subject))
+        .map((s) => `${s.subject} :: ${s.reason}`)
+        .sort();
+    for (const a of baseRun.results) {
+      const b = paddedRun.results.find((r) => r.detector === a.detector)!;
+      expect(skipsOf(b), `${a.detector} skipped a different set at scale`).toEqual(skipsOf(a));
+    }
+  });
+
+  it('CONTROL: the differential CAN fail — a graph with different CONTENT differs', () => {
+    // Without this, the four assertions above pass just as well against two
+    // identical runs or a comparison that compares nothing. Adding a REAL
+    // always-on azure resource (not inert padding) must move the dispositions.
+    const withExtraApp = buildEstateScaleTelemetryGraph({
+      extraExtractions: [inertPaddingExtraction(60)],
+    });
+    const a = runDetectors(withExtraApp).results.find((r) => r.detector === 'unreachable-service')!;
+    const b = runDetectors(
+      buildFixtureGraph({
+        withoutOwnershipTag: true,
+        extraRows: [
+          appRow({
+            armId: `/subscriptions/${SUB}/resourceGroups/${RG}/providers/Microsoft.App/containerApps/loom-new-idle`,
+            name: 'loom-new-idle',
+            minReplicas: 3,
+            maxReplicas: 5,
+            cpu: 0.5,
+            memory: '1Gi',
+            fqdn: 'loom-new-idle.internal.examplegreenfield-00000000.centralus.azurecontainerapps.io',
+            tags: {},
+          }),
+        ],
+      }),
+    ).results.find((r) => r.detector === 'unreachable-service')!;
+    expect(b.dispositions).not.toEqual(a.dispositions);
   });
 });

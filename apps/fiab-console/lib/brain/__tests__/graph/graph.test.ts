@@ -374,6 +374,60 @@ describe('buildGraph — node de-duplication', () => {
     expect(g.report.danglingNodeRefs).toContain(ghost);
   });
 
+  it('…and a PHANTOM SOURCE confers no inbound reachability on its target', () => {
+    // THE DEFECT THIS PINS. `danglingNodeRefs` recorded the ghost id and the
+    // graph then indexed the edge anyway, so `nodesWithNoInboundEdge` cleared
+    // the target: the founding finding is "nothing points at this app", and a
+    // caller that is not in the graph is not something pointing at it. The
+    // output of these detectors is a DELETION PROPOSAL, so a false negative
+    // here is an app that keeps billing forever with no finding against it.
+    const target = appNode('target');
+    const ghost = azureResourceNodeId(arm('ghost'));
+    const g = buildGraph([
+      extraction([target], [wire(ghost, 'target', 'configured', 'GHOST_CALLER_URL')]),
+    ]);
+
+    // The edge RESOLVED — evidence is never destroyed, and this is what makes
+    // the assertion below a real one rather than a vacuous truth about a
+    // dangling edge.
+    const resolvedToTarget = g.edges.filter((e) => e.resolution === 'resolved' && e.to === target.id);
+    expect(resolvedToTarget).toHaveLength(1);
+    expect(resolvedToTarget[0]!.from).toBe(ghost);
+    expect(g.report.edgesByResolution.resolved).toBe(1);
+
+    // …and it is NOT reachability.
+    expect(g.inboundEdges(target.id, 'configured').result).toEqual([]);
+    const unreachable = nodesWithNoInboundEdge(g, 'configured', {
+      resourceType: 'Microsoft.App/containerApps',
+    });
+    expect(unreachable.result.map((n) => n.id)).toContain(target.id);
+
+    // The refusal is STATED, not silent — same contract as the self-edge rule.
+    const note = g.report.skipped.find((s) => s.subject.includes('SOURCE node is not in the graph'));
+    expect(note, 'buildGraph must report that it declined to index the phantom-source edge').toBeDefined();
+    expect(note!.subject).toContain('1 resolved edge(s)');
+    expect(note!.reason).toContain('danglingNodeRefs');
+  });
+
+  it('CONTROL: the SAME wire from a source that DOES exist still clears the target', () => {
+    // Without this, the assertion above passes just as well against a graph
+    // that indexes nothing at all, and the fix could have been "stop indexing
+    // inbound edges" — which would silently invert every detector in the kit.
+    const target = appNode('target');
+    const caller = appNode('caller');
+    const g = buildGraph([
+      extraction([target, caller], [wire(caller.id, 'target', 'configured', 'CALLER_URL')]),
+    ]);
+    expect(g.inboundEdges(target.id, 'configured').result).toHaveLength(1);
+    const unreachable = nodesWithNoInboundEdge(g, 'configured', {
+      resourceType: 'Microsoft.App/containerApps',
+    });
+    expect(unreachable.result.map((n) => n.id)).not.toContain(target.id);
+    expect(g.report.skipped.some((s) => s.subject.includes('SOURCE node is not in the graph'))).toBe(
+      false,
+    );
+  });
+
   it('two identical wires from the same file/line do not collapse into one edge', () => {
     const caller = appNode('caller');
     const w = emptyWire(caller.id, caller.id, 'declared', 'DUP');
@@ -566,5 +620,78 @@ describe('#3963 — the detectors hold at PRODUCTION cardinality, not only in fi
     expect(emptyEdges.some((e) => e.evidence.symbol === 'CSA_TARGET_1_ENDPOINT')).toBe(true);
     expect(ex.population.edgesExamined).toBe(ex.edges.length);
     expect(ex.population.byProvenance.configured).toBe(ex.edges.length);
+  });
+});
+
+/**
+ * TYPE-LEVEL, and enforced by a COMPILER, not by this runner.
+ *
+ * Vitest transpiles without type-checking, so nothing in this block can turn
+ * red under `vitest run` — it is red under the `tsc --noEmit` step that
+ * `fiab-console-ci.yml` runs over `lib/brain/**\/__tests__`. That step exists
+ * because `tsconfig.build.json` EXCLUDES `__tests__`, so until it was added no
+ * compiler ever read these files and a `@ts-expect-error` here was decoration.
+ * Stated rather than implied: if that CI step is removed, this block proves
+ * nothing.
+ */
+describe('ReachabilityFilter — an anonymous predicate must name itself', () => {
+  it('a `where` WITH `describe` compiles, and its label reaches the population scope', () => {
+    const g = buildGraph([extraction([appNode('a'), codeNode('lib/x.ts')], [])]);
+    const r = nodesWithNoInboundEdge(g, 'configured', {
+      where: (n) => n.kind === 'azure-resource',
+      describe: 'azure-resource nodes',
+    });
+    expect(r.population.scope).toContain('azure-resource nodes');
+    expect(r.population.examined).toBe(1);
+  });
+
+  it('a `where` WITHOUT `describe` is a COMPILE error', () => {
+    const g = buildGraph([extraction([appNode('a')], [])]);
+    const r = nodesWithNoInboundEdge(
+      g,
+      'configured',
+      // @ts-expect-error — `describe` is REQUIRED whenever `where` is supplied:
+      // an arbitrary closure is invisible in `population.scope`, so a finding
+      // filtered by one would report a scope nobody can re-run or check. If
+      // this directive ever becomes "unused", the union in graph.ts has
+      // collapsed back to two optional fields and tsc says so.
+      { where: (n: BrainNode) => n.kind === 'azure-resource' },
+    );
+    // The runtime half still holds: the filter is applied either way.
+    expect(r.population.examined).toBe(1);
+  });
+
+  it('the DECLARATIVE fields need no `describe` — they name themselves in the scope', () => {
+    const g = buildGraph([extraction([appNode('a'), codeNode('lib/x.ts')], [])]);
+    const r = nodesWithNoInboundEdge(g, 'configured', {
+      resourceType: 'Microsoft.App/containerApps',
+    });
+    expect(r.population.scope).toContain("of type 'Microsoft.App/containerApps'");
+    expect(r.population.examined).toBe(1);
+  });
+});
+
+describe('Population.byProvenance is GRAPH-WIDE, not scope-wide (the doc corrected in #3963)', () => {
+  it('a node filter narrows `examined` but NOT `edgesExamined` / `byProvenance`', () => {
+    // types.ts used to document this field as "within scope". It is not, and a
+    // detector author who believed the old wording would read a graph-wide
+    // total as a statement about their filtered subset. This test is the
+    // executable form of the corrected sentence.
+    const a = appNode('a');
+    const b = appNode('b');
+    const code = codeNode('lib/x.ts');
+    const g = buildGraph([
+      extraction([a, b, code], [wire(a.id, 'b', 'configured', 'B_URL'), wire(b.id, 'a', 'declared', 'A_URL')]),
+    ]);
+
+    const filtered = nodesWithNoInboundEdge(g, 'configured', { kind: 'code-module' });
+    expect(filtered.population.examined).toBe(1); // the filter DID narrow the nodes
+    expect(filtered.population.edgesExamined).toBe(g.edges.length); // …and not the edges
+    expect(filtered.population.byProvenance.configured).toBe(1);
+    expect(filtered.population.byProvenance.declared).toBe(1);
+
+    const unfiltered = nodesWithNoInboundEdge(g, 'configured');
+    expect(unfiltered.population.byProvenance).toEqual(filtered.population.byProvenance);
+    expect(unfiltered.population.edgesExamined).toBe(filtered.population.edgesExamined);
   });
 });

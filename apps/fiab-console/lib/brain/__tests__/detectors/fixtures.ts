@@ -26,11 +26,13 @@
 import {
   buildGraph,
   azureResourceNodeId,
+  codeModuleNodeId,
   extractFromBicep,
   extractFromContainerAppEnv,
   extractFromResourceGraph,
   makePopulation,
   type BrainGraph,
+  type CodeModuleNode,
   type ExtractionResult,
   type NodeId,
   type PendingEdge,
@@ -141,6 +143,11 @@ export interface FixtureOptions {
   readonly extraBicepBindings?: Readonly<Record<string, NodeId>>;
   /** Extra bicep module symbol -> target ref mappings. */
   readonly extraModuleTargets?: Readonly<Record<string, string>>;
+  /**
+   * Extra extractions appended verbatim. The escape hatch for a shape the
+   * options above cannot express — see {@link inertPaddingExtraction}.
+   */
+  readonly extraExtractions?: readonly ExtractionResult[];
 }
 
 /**
@@ -238,7 +245,68 @@ export function buildFixtureGraph(options: FixtureOptions = {}): BrainGraph {
 
   const extractions = [rg, bicep, live];
   if (options.observedCalls?.length) extractions.push(telemetryExtraction(options.observedCalls));
+  for (const ex of options.extraExtractions ?? []) extractions.push(ex);
   return buildGraph(extractions);
+}
+
+/**
+ * INERT PADDING — nodes and edges that grow `graph.nodes.length` and
+ * `graph.edges.length` past any cardinality threshold WITHOUT changing what any
+ * detector should decide about the subjects that were already there (#3964).
+ *
+ * ── WHY IT IS SHAPED THIS WAY ──────────────────────────────────────────────
+ * The padding is `code-module` nodes wired to each other with `imports` edges,
+ * and that choice is load-bearing rather than arbitrary:
+ *
+ *   - NOT azure-resource nodes, so the candidate universes of
+ *     `always-on-unused` and `unreachable-service` (both `azureResources(...)`)
+ *     are UNCHANGED. A differential whose two runs have different universes
+ *     cannot assert dispositions are identical, which is the whole assertion.
+ *   - `imports` provenance and every edge RESOLVING, so `dangling-wire`'s
+ *     universe (the dangling edges) and `config-drift`'s (the declared/configured
+ *     (from, symbol) pairs) are unchanged too.
+ *   - every edge is between two PADDING nodes, so no original node gains or
+ *     loses an inbound edge and no reachability walk crosses into the padding.
+ *
+ * `declared-but-dead` and `orphan` DO range over every node, so their universes
+ * legitimately grow — the differential in `contract.test.ts` states that
+ * exception rather than hiding it.
+ */
+export function inertPaddingExtraction(moduleCount = 60): ExtractionResult {
+  const paths = Array.from({ length: moduleCount }, (_, i) => `lib/inert/pad-${String(i).padStart(3, '0')}.ts`);
+  const nodes: CodeModuleNode[] = paths.map((path) => ({
+    id: codeModuleNodeId(path),
+    kind: 'code-module',
+    displayName: path.split('/').pop()!,
+    source: 'source-imports',
+    path,
+  }));
+  // module i imports module i+1 — a chain entirely inside the padding.
+  const edges: PendingEdge[] = paths.slice(0, -1).map((path, i) => ({
+    provenance: 'imports',
+    from: codeModuleNodeId(path),
+    targetRef: paths[i + 1]!,
+    emptyValue: false,
+    intendedTo: null,
+    evidence: {
+      artifact: path,
+      symbol: `import ${paths[i + 1]!}`,
+      rawValue: paths[i + 1]!,
+      extractor: 'source-imports',
+    },
+  }));
+  return {
+    source: 'source-imports',
+    nodes,
+    edges,
+    population: makePopulation({
+      subject: 'nodes',
+      nodes,
+      edges,
+      scope: `${nodes.length} INERT padding module(s) and ${edges.length} imports edge(s) (#3964 differential)`,
+    }),
+    skipped: [],
+  };
 }
 
 /** A graph with NO edges of any provenance except `owns`. For vacuity arms. */
@@ -501,7 +569,9 @@ export function buildTransitiveChainGraph(): BrainGraph {
  *   - a spread of always-on / scale-to-zero / scale-not-measured / externally
  *     ingressed apps, so each disposition branch has a real population.
  */
-export function buildEstateScaleGraph(): BrainGraph {
+export function buildEstateScaleGraph(
+  options: Pick<FixtureOptions, 'observedCalls' | 'extraExtractions'> = {},
+): BrainGraph {
   const filler: ResourceGraphRow[] = [];
   // 58 filler apps + the 5 named ones above = 63, the measured container-app count.
   for (let i = 0; i < 58; i += 1) {
@@ -526,5 +596,36 @@ export function buildEstateScaleGraph(): BrainGraph {
       }),
     );
   }
-  return buildFixtureGraph({ withoutOwnershipTag: true, extraRows: filler });
+  return buildFixtureGraph({ withoutOwnershipTag: true, extraRows: filler, ...options });
+}
+
+/**
+ * The estate-scale graph WITH telemetry, so `always-on-unused` reaches its
+ * predicate instead of stopping at the vacuity gate (#3964).
+ *
+ * WITHOUT this arm the detector's real branch is unreachable at production
+ * cardinality: with no `observed` edges anywhere, `vacuityReason` fires and all
+ * 47 always-on candidates are SKIPPED before the predicate runs. That is
+ * correct behaviour, and it is also why a bypass planted at the predicate
+ * (mutation N3: clear every candidate once the graph exceeds 20 nodes) was
+ * invisible to the whole suite — the line it sat on never executed at scale.
+ *
+ * `observedOf` names which of the 63 apps have inbound telemetry. Everything
+ * else that is always-on becomes a finding, which is what makes a bypass that
+ * clears them all visible as a count.
+ */
+export function buildEstateScaleTelemetryGraph(
+  extra: Pick<FixtureOptions, 'extraExtractions'> = {},
+): BrainGraph {
+  // Every 4th filler app is `mode === 0` — always-on and unwired. Give inbound
+  // telemetry to a KNOWN SUBSET of them so both arms of the predicate have a
+  // real population: some cleared by telemetry, the rest flagged.
+  const observedCalls: { from: NodeId; to: string }[] = [];
+  for (let i = 0; i < 58; i += 1) {
+    if (i % 4 !== 0) continue;
+    if (i % 8 !== 0) continue; // half of the always-on set gets traffic
+    const name = `loom-app-${String(i).padStart(2, '0')}`;
+    observedCalls.push({ from: CONSOLE_ID, to: `${name}.internal.${ENV_DOMAIN}` });
+  }
+  return buildEstateScaleGraph({ observedCalls, ...extra });
 }
