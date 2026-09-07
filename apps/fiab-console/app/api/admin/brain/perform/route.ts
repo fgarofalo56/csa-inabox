@@ -59,6 +59,7 @@ import {
 import type { PerformRequest } from '@/lib/brain-actions/types';
 import { AcaNotConfiguredError } from '@/lib/azure/container-apps-arm-client';
 import { ResourceGraphCollectionError } from '../_lib/arg-collect';
+import { configGateFor } from '../_lib/config-gate';
 import { loadSnapshot } from '../_lib/snapshot';
 
 export const dynamic = 'force-dynamic';
@@ -114,45 +115,18 @@ function mutatedAzureFor(outcome: PerformOutcome): boolean | string {
  * cause nobody established (`deploy-integrity.md` R7).
  *
  * The fix is to DISCRIMINATE here, where the class is known, not to guess there.
- * This function returns a registry gate id ONLY for an error that IS a
- * configuration gap AND whose reported gap that gate's Fix-it can actually
- * resolve. Everything else returns null and keeps the bare honest 503.
+ * The classifier lives in `../_lib/config-gate` — moved out of this file by the
+ * #4342 review so its MEMBERSHIP RULE ("a gap may name a gate only when the
+ * gate reaching `configured` implies that gap is closed") is asserted by a spec
+ * against the real registry rather than argued for in a comment here. Read that
+ * module's doc-block before adding a mapping; the rule is narrower than it looks,
+ * and the shipped whitelist violated it.
  *
- *   BrainActionsNotConfiguredError → 'cosmos-config'. The store throws it from
- *     exactly one place (`state-store.ts`, on `!process.env.LOOM_COSMOS_ENDPOINT`),
- *     and that var is the 'cosmos-config' gate's own anyOf member with a real ARM
- *     resource-picker Fix-it.
- *   AcaNotConfiguredError → 'subscription', but ONLY for the gaps
- *     `readAcaConfig()` reports. That gate sets LOOM_SUBSCRIPTION_ID and
- *     LOOM_DLZ_RG/LOOM_ADMIN_RG, and `readAcaConfig` accepts LOOM_ADMIN_RG for its
- *     resource group — so resolving that gate genuinely clears this error. The
- *     SAME class is also thrown for a missing LOOM_ACA_ENVIRONMENT, which the
- *     'subscription' gate does NOT set; attaching it there would print a
- *     remediation that cannot fix the stated gap, so that shape falls through to
- *     the bare honest 503 rather than to a Fix-it that would not work.
- *   ResourceGraphCollectionError → null, always. `arg-collect.ts` throws it on a
- *     token-acquisition failure and on ANY non-OK ARG response — a throttle, a
- *     403, a 500. None of those is a value the deploy did not set.
+ * `ResourceGraphCollectionError` is deliberately never classified: `arg-collect.ts`
+ * throws it on a token-acquisition failure and on ANY non-OK ARG response — a
+ * throttle, a 403, a 500. None of those is a value the deploy did not set, so it
+ * keeps the bare honest 503 whose only claim is the server's own message.
  */
-const ACA_GAPS_THE_SUBSCRIPTION_GATE_RESOLVES: ReadonlySet<string> = new Set([
-  'LOOM_SUBSCRIPTION_ID',
-  'LOOM_ACA_RG (or LOOM_ADMIN_RG)',
-]);
-
-function configGateFor(e: unknown): { id: string; missing: string[] } | null {
-  if (e instanceof BrainActionsNotConfiguredError) {
-    return { id: 'cosmos-config', missing: ['LOOM_COSMOS_ENDPOINT'] };
-  }
-  if (e instanceof AcaNotConfiguredError) {
-    const missing = Array.isArray(e.missing) ? e.missing : [];
-    // An empty list would mean the error established no gap at all; naming a
-    // gate over it would be an assertion the code cannot support.
-    if (missing.length === 0) return null;
-    if (!missing.every((m) => ACA_GAPS_THE_SUBSCRIPTION_GATE_RESOLVES.has(m))) return null;
-    return { id: 'subscription', missing };
-  }
-  return null;
-}
 
 export const POST = withTenantAdmin(async (req: NextRequest, { session }) => {
   // Held outside the try so the infra-gate catch below can still name the
@@ -285,10 +259,13 @@ export const POST = withTenantAdmin(async (req: NextRequest, { session }) => {
       } catch {
         /* the 503 below is the signal that matters */
       }
-      // #4283 — the two CONFIGURATION-shaped classes carry the normalized gate
-      // envelope so the surface can render an inline Fix-it for a gap the
-      // platform can actually close. The ARG-collection class does not: it is
-      // an estate READ that failed, not a value the deploy did not set, and it
+      // #4283 — a CONFIGURATION-shaped class carries the normalized gate
+      // envelope, but only when `configGateFor` can establish that the named
+      // gate's Fix-it closes the gap the error reported; #4342 narrowed that
+      // test after the ACA resource-group gap was found to name a gate the
+      // registry can evaluate as `configured` while the caller still throws.
+      // Anything it cannot establish — including the whole ARG-collection class,
+      // an estate READ that failed rather than a value the deploy did not set —
       // keeps the bare honest 503 whose only claim is the server's own message.
       // `message` is overridden with the error's own text so the envelope never
       // replaces what happened with the registry's generic remediation.

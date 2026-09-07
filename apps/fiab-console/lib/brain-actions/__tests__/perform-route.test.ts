@@ -794,18 +794,41 @@ describe('the 503 body names its gate when — and only when — the class IS on
     expect(body.error).toContain('LOOM_COSMOS_ENDPOINT');
   });
 
-  it('the ACA class carries the subscription envelope for the gaps that gate resolves', async () => {
+  it('the ACA class carries the subscription envelope for the gap that gate resolves', async () => {
     const { AcaNotConfiguredError } = await import('@/lib/azure/container-apps-arm-client');
-    snap.loadSnapshot.mockRejectedValue(
-      new AcaNotConfiguredError(['LOOM_SUBSCRIPTION_ID', 'LOOM_ACA_RG (or LOOM_ADMIN_RG)']),
-    );
+    snap.loadSnapshot.mockRejectedValue(new AcaNotConfiguredError(['LOOM_SUBSCRIPTION_ID']));
     const res = await POST(postReq(BODY), { params: Promise.resolve({}) } as never);
     expect(res.status).toBe(503);
     const body = (await res.json()) as { gated?: boolean; gate?: { id: string; missing: string[] } };
     expect(body.gated).toBe(true);
     expect(body.gate?.id).toBe('subscription');
     // The reported gaps travel verbatim — the error's own list, not the gate's.
-    expect(body.gate?.missing).toEqual(['LOOM_SUBSCRIPTION_ID', 'LOOM_ACA_RG (or LOOM_ADMIN_RG)']);
+    expect(body.gate?.missing).toEqual(['LOOM_SUBSCRIPTION_ID']);
+  });
+
+  it('the ACA RESOURCE-GROUP gap gets NO envelope — that gate does not close it (#4342)', async () => {
+    // Measured in the #4342 review: the 'subscription' gate is
+    // `required:['LOOM_SUBSCRIPTION_ID']` + `anyOf:[['LOOM_DLZ_RG','LOOM_ADMIN_RG']]`
+    // and never mentions LOOM_ACA_RG, while `readAcaConfig` reads
+    // `LOOM_ACA_RG || LOOM_ADMIN_RG` and never reads LOOM_DLZ_RG. On an estate
+    // with LOOM_SUBSCRIPTION_ID + LOOM_DLZ_RG the gate evaluates 'configured'
+    // with `missing:[]` while readAcaConfig still throws — so the Fix-it poll
+    // (honest-gate.tsx) would fire onResolved() and this route would 503 again
+    // with an identical envelope. The bare 503 is the honest answer.
+    // The registry-level proof lives in
+    // app/api/admin/brain/_lib/__tests__/config-gate.test.ts.
+    const { AcaNotConfiguredError } = await import('@/lib/azure/container-apps-arm-client');
+    snap.loadSnapshot.mockRejectedValue(
+      new AcaNotConfiguredError(['LOOM_SUBSCRIPTION_ID', 'LOOM_ACA_RG (or LOOM_ADMIN_RG)']),
+    );
+    const res = await POST(postReq(BODY), { params: Promise.resolve({}) } as never);
+    expect(res.status).toBe(503);
+    const body = (await res.json()) as { ok: boolean; gated?: boolean; gate?: unknown; error: string };
+    expect(body.ok).toBe(false);
+    expect(body.gated).toBeUndefined();
+    expect(body.gate).toBeUndefined();
+    // R7 — the message still states exactly what the error established.
+    expect(body.error).toContain('LOOM_ACA_RG (or LOOM_ADMIN_RG)');
   });
 
   it('an ACA gap that gate CANNOT resolve gets no envelope, not a Fix-it that would not work', async () => {
