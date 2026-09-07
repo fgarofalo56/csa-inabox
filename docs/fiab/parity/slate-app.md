@@ -19,10 +19,15 @@ reactivity layer** (`SlateVariable` / `SlateEventTrigger` / `SlateEventEffect`,
 **table row-selection** (`QueryResultTable` `selectable`/`onSelectRow`,
 `:420-491`) and a **real Publish to Azure Static Web Apps** with version history
 (`app/api/items/slate-app/[id]/publish/route.ts:75-96` — ARM `publishStaticSite`
-→ `deployZipToStaticSite` → `waitForContentLive` → `state.versions[]`). Rows
-18/21 flip ❌→✅ and rows 4/14/16/22/23/29 flip ❌→⚠️. Every row still MISSING is
-now tracked (see **Tracked gaps** below) — this doc carries **one** grade, at the
-end of the Loom coverage table.
+→ `deployZipToStaticSite` → `waitForContentLive` → `state.versions[]`).
+
+Measured against the previous revision of this file, the delta of this pass is:
+rows **18 and 21 flip ❌ MISSING → ✅ BUILT**, and rows **14, 16, 22, 23 flip
+❌ MISSING → ⚠️ partial**. Rows **4 and 29 were already ⚠️ partial** and are
+**re-described, not flipped** — 4 gains real row-selection, 29 goes copy-only
+bundle → real ARM deploy. Every row still MISSING is now tracked (see **Tracked
+gaps** below) — this doc carries **one** grade, at the end of the Loom coverage
+table.
 
 Slate is Foundry's **pro-code application builder**: a drag-and-drop widget grid, a first-class
 Queries panel (Ontology / Function / SQL / HTTP-JSON), a Variables + Events/Actions reactivity
@@ -78,11 +83,11 @@ and maps every gap to an Azure-native build (no Microsoft Fabric on the default 
 | 3 | ⚠️ partial | `WidgetPalette` `:597-608` renders `KIND_META`'s 5 kinds as buttons — a flat list, not Slate's 8 categories. Widens with #4360/#4361/#4362. | #4360 |
 | 4 | ⚠️ partial | Real client sort + Prev/Next paging + columns, **single-row selection** (`selectable`/`selectedRow`/`onSelectRow`, `:420-491`) feeding `onSelect` interactions, and widget-level click events. No column order/width/align, no per-cell tooltips, no transpose, no multi/checkbox selection. Server-side paging is #4364. | #4360 |
 | 5 | ✅ BUILT | `LoomChart` real SVG renderer (column/bar/line/area/pie/donut/scatter) bound to live results (`:526`). | — |
-| 6 | ❌ MISSING | No Map widget (`SlateWidgetKind` `:65` has no map). | #4361 |
+| 6 | ❌ MISSING | No Map widget (`SlateWidgetKind` `:65` has no map). Must land on **both** map backends (`resolveMapsBackend`: Azure Maps **and** OSS MapLibre) — see **Boundaries** below. | #4361 |
 | 7 | ❌ MISSING | No graph/tree/image widgets. | #4362 |
 | 8 | ❌ MISSING | No input/control widgets. Variables can only be driven from the Variables panel or a table row-select. | #4360 |
 | 9 | ❌ MISSING | No button/action/tabs/toast widgets. | #4360 |
-| 10 | ⚠️ partial | `text` kind renders sanitized markdown-lite (`renderMarkdownLite :281`) with `{{var}}` interpolation; no iframe/PDF/video. | #4360 |
+| 10 | ⚠️ partial | `text` kind renders sanitized markdown-lite (`renderMarkdownLite :281`); no iframe/PDF/video. **`{{var}}` is NOT interpolated in widget text**: `interpolate()` is called at exactly two sites in the builder — `:1098` (setVariable literal) and `:1108` (navigate URL) — and `WidgetView :501` hands `widget.text` straight to `renderMarkdownLite(text: string) :281`, which takes no variables. The inspector hint at `:670` ("Use {{variable}} to show a live value") promises behaviour the renderer does not implement; filed as **#4374**. | #4360, #4374 |
 | 11 | ❌ MISSING | `container` kind is a decorative dashed frame only (`:503-505`); does not nest child widgets. | #4363 |
 | 12 | ✅ BUILT | `QueriesPanel :843` — add/edit/remove named queries, type dropdown (datasource picker), per-query **Run** executes the real route. | — |
 | 13 | ⚠️ 3 of 5 | `rest-dab` (HTTP-JSON), `kql`, `sql` wired (`/query/run` dispatch); ontology/function not first-class. | #4364 |
@@ -93,7 +98,7 @@ and maps every gap to an Azure-native build (no Microsoft Fabric on the default 
 | 18 | ✅ BUILT | `VariablesPanel :785-836` — add/rename/remove typed variables (`string\|number\|boolean\|date`) with defaults, a live runtime editor in Run mode, and `{{name}}` consumption in every query type. App-scope only (page scope needs #4363); no struct/object-set type (#4365). | — |
 | 19 | ❌ MISSING | No transformations / filter vars. | #4365 |
 | 20 | ❌ MISSING | Runtime is in-memory, re-seeded from defaults on each Preview entry (`runtimeFromDefaults :412`); nothing persists per viewer. | #4365 |
-| 21 | ✅ BUILT | Per-widget event triggers wired live: `onClick`, `onSelect` (table row-select) and `onChange` (load / variable change) — `SlateEventTrigger :81`, dispatched by `runInteractions :1091`, authored in `InteractionsDialog :688`. `didOpen`/`didClose` have no analog until containers/dialogs land (#4363). | — |
+| 21 | ✅ BUILT | Per-widget event triggers wired live: `onClick`, `onSelect` (table row-select) and `onChange` — `SlateEventTrigger :81`, dispatched by `runInteractions :1091`, authored in `InteractionsDialog :688`. Narrower than Slate on one axis: **`onChange` fires on Preview entry only** (`:1143`); editing a variable re-runs the bound queries (`setRuntimeScalar :1148` → `runPreview`) but does **not** dispatch `onChange` interactions — tracked in #4360 alongside the control widgets that would drive it. `didOpen`/`didClose` have no analog until containers/dialogs land (#4363). | — |
 | 22 | ⚠️ 4 of 6 | `setVariable` (literal or selected-row column), `runQuery` (refresh preview), `navigate` (interpolated URL) and `writeBack` (POST) all execute for real in Preview — `:1097-1128`. No toast effect and no run-Function effect. | #4360 |
 | 23 | ⚠️ partial | The `writeBack` effect POSTs the chosen variables as JSON to the app's DAB/APIM REST base and surfaces the real HTTP status (`:1110-1126`). No ontology object create/update/delete, no column-derived action form. | #4367 |
 | 24 | ✅ BUILT | `runPreview :1074` executes each bound widget's query against the real backend; `WidgetView :493-531` renders live rows with Spinner / honest-gate / error / empty states. | — |
@@ -136,7 +141,7 @@ Every ❌ / ⚠️ row above is tracked. No row is left as an untracked aspirati
 | Issue | Rows | Size | Gap |
 |---|---|---|---|
 | #4360 | 8, 9 (+3, 4, 10, 22) | M | Control / input and action widgets — text, numeric, date, dropdown, button, tabs, toast |
-| #4361 | 6 | M | Map widget on Azure Maps (location / heatmap / shape / choropleth) |
+| #4361 | 6 | M | Map widget — Azure Maps **and** OSS MapLibre backends (location / heatmap / shape / choropleth). Azure-Maps-only would be Commercial-only |
 | #4362 | 7 | M | Graph / tree / image-gallery widgets |
 | #4363 | 2, 11 | M | Multi-page apps and real container nesting |
 | #4364 | 14, 15, 16, 17 (+13) | M | Handlebars query helpers, partials, conditional triggers, server-side paging/sort |
@@ -144,6 +149,7 @@ Every ❌ / ⚠️ row above is tracked. No row is left as an untracked aspirati
 | #4366 | 25, 26 | M | Per-widget styles, global stylesheet, custom HTML/Handlebars widget |
 | #4367 | 27, 28, 29 (+23) | M | App parameters / module interface, public apps, import-export-duplicate, kiosk mode |
 | #4368 | 31, 32 | M | Dependency/debug inspector and usage metrics / edit history |
+| #4374 | 10 | S | **Defect, not a gap:** the inspector hint at `:670` promises `{{variable}}` interpolation in text widgets that `renderMarkdownLite` never performs — implement it, or delete the sentence |
 
 ## Build plan
 
@@ -233,10 +239,15 @@ annotated with what has actually landed:
     (querystring binding in Preview + SWA). UI: Partials list + Parameters panel. Backend:
     substitution in `/query/run`; params in `state`.
 
-11. **Map widget on Azure Maps.** Location / heatmap / shape (GeoJSON) / choropleth layers via the
-    **Azure Maps Web SDK** (`azure-maps-control`). Backend: new `GET /api/items/slate-app/[id]/maps-token`
-    issuing an Azure Maps token from an Azure Maps account (`AZURE_MAPS_*`); honest gate if unset.
-    (Parity for the Map page in Fabric IQ; no Fabric dependency.)
+11. **Map widget — two backends, not one.** Location / heatmap / shape (GeoJSON) / choropleth layers.
+    Backend selection goes through the existing `resolveMapsBackend`
+    (`lib/azure/maps-client.ts:152`): **Azure Maps Web SDK** (`azure-maps-control`, `mode:'aad'|'key'`)
+    via a new `GET /api/items/slate-app/[id]/maps-token`, **and** the OSS **MapLibre** path
+    (`LOOM_MAPS_BACKEND=maplibre`, `mode:'maplibre'`) over the in-VNet `tileserver-gl` proxied at
+    `/api/maps/tiles/*`. Azure Maps has limited Gov availability (`maps-client.ts:96`), so the
+    MapLibre path is what makes this row shippable in GCC-High / sovereign boundaries —
+    Azure-Maps-only would be Commercial-only, which `cloud-parity.md` calls INCOMPLETE.
+    Honest gate if neither backend is wired. (No Fabric dependency.)
 
 12. **Debug / dependency inspector + usage.** A Dependencies panel rendering the widget→query→variable
     graph (reuse `canvas-node-kit`) plus per-widget load timing/errors from the Preview run, and
@@ -254,15 +265,54 @@ annotated with what has actually landed:
 | Write-back action | `synapse-sql-client` → Synapse SQL pool (shared with WorkshopApp `/run-action`) |
 | Variable substitution | server-side parameterized binding (injection-safe helpers) |
 | Publish | ARM `Microsoft.Web/staticSites` + SWA deployment token (ACA static fallback) |
-| Map | Azure Maps Web SDK + Azure Maps token route |
+| Map | `resolveMapsBackend` → Azure Maps Web SDK + token route (Commercial) **or** OSS MapLibre / `tileserver-gl` proxy (sovereign — Azure Maps has limited Gov availability) |
 | Usage/debug | Azure Monitor (optional) + Preview run telemetry |
 | Persistence | Cosmos (existing item PATCH/GET) |
 
 None of the above touches `api.fabric.microsoft.com` / `api.powerbi.com` / OneLake on the default
 path. A Fabric backend is not required for any row.
 
-Boundaries: this doc is a code-vs-Slate comparison and is boundary-independent —
-every backend named above (ADX, Synapse serverless, DAB/APIM, Cosmos, ARM Static
-Web Apps, Azure Maps) exists in Commercial and Azure Government. It carries **no
-per-cloud runtime receipt**; per `cloud-parity.md` the sub-issues above must each
-state which boundaries they were verified against.
+## Boundaries (cloud parity)
+
+This doc is a code-vs-Slate comparison **read from source**. **No cloud was
+exercised for it — neither Commercial nor Azure Government.** It therefore
+carries **no per-cloud runtime receipt**, and nothing here should be read as a
+claim that a path has been observed running in a given boundary.
+
+Availability of the backends named above, taken from the repo's own records
+rather than assumed. Column labels are the source's own — `GOV_SERVICE_MATRIX.md`
+scores **Commercial / Gov FedRAMP High / Gov IL4 / Gov IL5 (/ Gov IL6)**, which
+is not the same vocabulary the bicep uses (`Commercial / GCC / GCC-High / IL5`):
+
+| Backend | Boundary availability | Source in this repo |
+|---|---|---|
+| Azure Synapse Analytics | GA in Commercial, Gov FedRAMP High, IL4, IL5; **N/A at IL6 (Secret)** | `docs/GOV_SERVICE_MATRIX.md:52` |
+| Azure Data Explorer (ADX) | GA in Commercial, Gov FedRAMP High, IL4, IL5; **N/A at IL6 (Secret)** | `docs/GOV_SERVICE_MATRIX.md:55` |
+| API Management (APIM) | GA in Commercial, Gov FedRAMP High, IL4, IL5; **N/A at IL6 (Secret)** | `docs/GOV_SERVICE_MATRIX.md:62` |
+| Static Web Apps (publish) | GA in Commercial, Gov FedRAMP High, IL4, IL5 (that table scores no IL6) | `docs/GOV_SERVICE_MATRIX.md:78` |
+| Cosmos DB (persistence) | GA in Commercial, Gov FedRAMP High, IL4, IL5 (that table scores no IL6) | `docs/GOV_SERVICE_MATRIX.md:99` |
+| Data API Builder (DAB) | OSS, container-hosted by Loom — boundary-independent | — |
+| **Azure Maps** | **NOT parity-clean.** `maps-client.ts:96` records "Azure Maps has limited Gov availability", and `GOV_SERVICE_MATRIX.md` does not score it at all (zero matches for "maps"; positive control: 36 matches for "GA" in the same file). | `maps-client.ts:96` |
+
+The publish path's role grant is already boundary-aware in bicep:
+`platform/fiab/bicep/modules/admin-plane/swa-publish-rbac.bicep:82-105` takes a
+`boundary` param and swaps Website Contributor → Contributor for `GCC-High`/`IL5`
+because Website Contributor does not resolve in Azure Government. That is a
+**code** receipt, not a deploy receipt — no Gov deploy was run for this doc.
+
+Loom's sovereign answer for maps already exists and is **not** Azure Maps:
+`LOOM_MAPS_BACKEND=maplibre` routes every map surface to a self-hosted OSS
+`tileserver-gl` Container App on internal ingress, fronted by the
+session-guarded proxy `/api/maps/tiles/*` (`maps-client.ts:47-93`,
+`isMapLibreConfigured :89`, returned as `mode:'maplibre'` by
+`resolveMapsBackend :152`).
+
+**Consequence for row 6:** the Map widget must resolve its backend through
+`resolveMapsBackend` — Azure Maps (`aad`/`key`) **and** MapLibre — not Azure
+Maps alone. An Azure-Maps-only Map widget would be Commercial-only by
+construction, which `cloud-parity.md` calls INCOMPLETE, not "Commercial-first".
+#4361's original body specified only the Azure Maps Web SDK; that requirement
+is recorded as a comment on the issue.
+
+Per `cloud-parity.md`, each sub-issue above must state which boundaries it was
+verified against when it lands. Commercial green proves nothing about Gov.
