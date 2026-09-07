@@ -295,8 +295,9 @@
  *   - A FLUENT `<Combobox freeform>`, which accepts typed text while looking
  *     like a picker. NO COUNT IS GIVEN HERE, deliberately — this note has
  *     carried three different wrong numbers (Zero, then ONE, then SIX) across
- *     three review rounds, each one measured with a LINE-ANCHORED grep. That is
- *     the bug: every `<Combobox>` in this tree opens multi-line, so
+ *     three review rounds. The one revision that published a command used a
+ *     LINE-ANCHORED grep, and that is why its number was wrong: every
+ *     `<Combobox>` in this tree opens multi-line, so
  *     `grep -rn "<Combobox"` sees the prop only when `freeform` happens to land
  *     on the same physical line as the tag. A whole-opening-tag scan finds
  *     roughly twice as many. Reproduce it rather than trusting a number that
@@ -325,10 +326,10 @@
  *     `<Combobox>` at all, so the count staying at baseline says nothing about
  *     these sites either way.
  *
- *     Each of the three earlier revisions published a LINE-ANCHORED grep to
- *     support its number, and each number was wrong for that reason. The command
- *     above scans the whole opening tag instead. No count is asserted here on
- *     purpose — run it.
+ *     Of the three earlier revisions, exactly ONE published a command and it
+ *     was a line-anchored grep; the other two published none. Verified against
+ *     the blobs, not remembered. The command above scans the whole opening tag
+ *     instead. No count is asserted here on purpose — run it.
  *   - A LABEL THAT LIVES SOMEWHERE ELSE — a `<Label htmlFor>` earlier in the
  *     file, a label from a translation table, or a column header above a grid
  *     of inputs. Only the enclosing `<Field>` and an immediately-adjacent
