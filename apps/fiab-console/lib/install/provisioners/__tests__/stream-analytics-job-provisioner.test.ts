@@ -18,16 +18,47 @@ const createOrUpdateJob = vi.fn(async (s: any) => ({
   name: s.name,
 }));
 const readAsaConfig = vi.fn(() => ({ subscriptionId: 'sub1', resourceGroup: 'rgAsa' }));
+/**
+ * The 404 the client really throws. Built by importing the class OUT of the
+ * mocked module rather than declaring one here: the provisioner's read-before-
+ * write branch narrows on `instanceof AsaJobNotFoundError`, so a look-alike
+ * declared in this file would take the wrong branch and the test would prove
+ * nothing. It is resolved lazily because the `vi.mock` factory below is hoisted
+ * above every top-level binding in this file.
+ */
+async function asaNotFound(name: string): Promise<Error> {
+  const { AsaJobNotFoundError } = await import('@/lib/azure/stream-analytics-client');
+  return new (AsaJobNotFoundError as any)(name, 'rgAsa', 'sub1');
+}
+
+/**
+ * Default: the job is NOT there yet, which is what authorises the PUT.
+ *
+ * The return type is annotated because a factory that only ever throws infers
+ * `Promise<never>`, and `never` makes every `mockResolvedValue` in the
+ * finding-7 block a compile error rather than a stub.
+ */
+const getJob = vi.fn(async (name: string): Promise<Record<string, any>> => {
+  throw await asaNotFound(name);
+});
 
 vi.mock('@/lib/azure/stream-analytics-client', () => {
   class AsaNotConfiguredError extends Error {
     missing: string[];
     constructor(m: string[]) { super(`Stream Analytics is not configured. Missing env: ${m.join(', ')}`); this.missing = m; }
   }
+  class AsaJobNotFoundError extends Error {
+    constructor(public jobName: string, public resourceGroup: string, public subscriptionId: string) {
+      super(`Stream Analytics job '${jobName}' does not exist in resource group '${resourceGroup}' (subscription ${subscriptionId}).`);
+      this.name = 'AsaJobNotFoundError';
+    }
+  }
   return {
     AsaNotConfiguredError,
+    AsaJobNotFoundError,
     readAsaConfig: () => readAsaConfig(),
     createOrUpdateJob: (s: any) => createOrUpdateJob(s),
+    getJob: (n: string) => getJob(n),
   };
 });
 
@@ -59,6 +90,9 @@ beforeEach(() => {
     id: `/subscriptions/sub1/resourceGroups/rgAsa/providers/Microsoft.StreamAnalytics/streamingjobs/${s.name}`,
     name: s.name,
   }));
+  getJob.mockImplementation(async (name: string) => {
+    throw await asaNotFound(name);
+  });
 });
 
 describe('#3573 — the item type has a provisioner at all', () => {
@@ -133,5 +167,53 @@ describe('#3573 — honest outcomes, never an unverified success', () => {
     expect(res.status).toBe('remediation');
     expect(res.gate?.remediation).toContain('Stream Analytics Contributor');
     expect(replace).not.toHaveBeenCalled();
+  });
+});
+
+describe('#4354 review finding 7 — the provisioner READS before it writes', () => {
+  it('does NOT re-PUT a job that already exists, and reports `exists`', async () => {
+    // `PUT …/streamingjobs/{name}` is create-OR-REPLACE on `properties`, and
+    // the body this provisioner sends carries no inputs, outputs or
+    // transformation — the same "idempotent upsert that silently replaces
+    // state it did not compose" shape as the action-group defect #4113 fixes
+    // in this very PR. This provisioner runs on app install, on the
+    // deployment-pipeline promote path AND on the editor's Fix-it, so a second
+    // run over a configured job would have reset it.
+    getJob.mockResolvedValue({
+      id: '/subscriptions/sub1/resourceGroups/rgAsa/providers/Microsoft.StreamAnalytics/streamingjobs/rides',
+      name: 'rides',
+      // A job the operator has configured: the state the PUT would have lost.
+      inputs: [{ name: 'in1', type: 'Stream' }],
+      outputs: [{ name: 'out1', type: 'Microsoft.Kusto/clusters/databases' }],
+    } as any);
+    const res = await streamAnalyticsJobProvisioner(input('rides'));
+    expect(getJob).toHaveBeenCalledWith('rides');
+    expect(createOrUpdateJob).not.toHaveBeenCalled();
+    expect(res.status).toBe('exists');
+    expect(res.resourceId).toContain('/streamingjobs/rides');
+    expect((res.steps || []).join(' ')).toContain('already exists');
+    // Still RECORDED on the item — the mapping stays inspectable whether the
+    // job was created now or found (`auto-bind-by-default.md` §2).
+    expect(replace).toHaveBeenCalledTimes(1);
+    expect(res.secondaryIds?.jobName).toBe('rides');
+  });
+
+  it('creates the job when the read is a clean 404 — absence is the ONLY thing that authorises the PUT', async () => {
+    const res = await streamAnalyticsJobProvisioner(input('rides'));
+    expect(getJob).toHaveBeenCalledTimes(1);
+    expect(createOrUpdateJob).toHaveBeenCalledTimes(1);
+    expect(res.status).toBe('created');
+  });
+
+  it('does NOT treat a 403 on the read as absence (R7)', async () => {
+    // The failure mode this guards: swallowing every read error would turn
+    // "I could not look" into "it is not there" and then PUT over a job that
+    // exists — a false claim AND a destructive write, from one catch block.
+    getJob.mockRejectedValue(new Error('ASA get failed 403: AuthorizationFailed'));
+    const res = await streamAnalyticsJobProvisioner(input('rides'));
+    expect(createOrUpdateJob).not.toHaveBeenCalled();
+    expect(replace).not.toHaveBeenCalled();
+    expect(res.status).not.toBe('created');
+    expect(res.status).not.toBe('exists');
   });
 });

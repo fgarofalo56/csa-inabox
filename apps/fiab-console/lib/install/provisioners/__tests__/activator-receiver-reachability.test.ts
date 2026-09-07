@@ -490,6 +490,106 @@ describe('#4113 bindActionGroup — no rule is left wired to nobody in silence',
 });
 
 /**
+ * #4354 review, finding 5. The CREATE path — no `existingActionGroupId`, so
+ * `target` is the name of the group Loom WOULD create. #4113 introduced a read
+ * there and let a non-404 failure `throw`, which turned a 403 on the
+ * action-group read into a failure of the whole rule creation. Before #4113
+ * there was no read at all and the rule was created wired to nobody, silently.
+ * Neither extreme is right: refusing to WRITE from a state never observed
+ * stays, but the rule is still created and the record says why nothing was
+ * bound.
+ */
+describe('#4354 finding 5 — an unreadable group on the CREATE path is reported, not thrown', () => {
+  const unreadable = () => readActionGroupReceivers.mockRejectedValue(
+    Object.assign(new Error('AuthorizationFailed'), { status: 403 }),
+  );
+
+  it('returns `unreadable` instead of throwing, and writes NOTHING', async () => {
+    unreadable();
+    const { bindActionGroup } = await import('@/lib/azure/activator-monitor');
+    const res = await bindActionGroup({
+      activatorDisplayName: 'High-Roller Alert',
+      emails: [], smsReceivers: [], webhookReceivers: [], logicAppReceivers: [],
+      fallbackEmails: ['operator@contoso.com'],
+    });
+    expect(res.outcome).toBe('unreadable');
+    // The #4113 half that must survive: no PUT from an unobserved state.
+    expect(upsertActionGroup).not.toHaveBeenCalled();
+    // …and no id is claimed, because none was created or confirmed.
+    expect(res.actionGroupId).toBeUndefined();
+    expect(res.receivers).toBeUndefined();
+  });
+
+  it('the note states only what was established, and names the role (R7)', async () => {
+    unreadable();
+    const { bindActionGroup } = await import('@/lib/azure/activator-monitor');
+    const res = await bindActionGroup({
+      activatorDisplayName: 'High-Roller Alert',
+      emails: [], smsReceivers: [], webhookReceivers: [], logicAppReceivers: [],
+      fallbackEmails: ['operator@contoso.com'],
+    });
+    const note = res.note || '';
+    expect(note).toMatch(/neither\s+created nor confirmed/i);
+    expect(note).toContain('AuthorizationFailed');
+    expect(note).toContain('Monitoring Contributor');
+    // It must not claim the group is EMPTY — the read established no such thing.
+    expect(note).not.toMatch(/has no receivers|carried ZERO/i);
+  });
+
+  it('a clean 404 is still a 404 — absence binds the fallback rather than reporting unknown', async () => {
+    // The counterfactual for the branch above: `readActionGroupReceivers` turns
+    // a real ARM 404 into `exists:false` rather than a throw, so absence never
+    // reaches the catch and the fallback still binds.
+    readActionGroupReceivers.mockResolvedValue(emptyRead(false));
+    const { bindActionGroup } = await import('@/lib/azure/activator-monitor');
+    const res = await bindActionGroup({
+      activatorDisplayName: 'High-Roller Alert',
+      emails: [], smsReceivers: [], webhookReceivers: [], logicAppReceivers: [],
+      fallbackEmails: ['operator@contoso.com'],
+    });
+    expect(res.outcome).toBe('created');
+    expect(upsertActionGroup).toHaveBeenCalledTimes(1);
+  });
+
+  it('the rule is still CREATED, and the reason reaches the record the user sees', async () => {
+    // The behaviour regression #4354's reviewer caught: #4113 added this read
+    // and let a non-404 `throw`, so a 403 on ONE action-group read failed the
+    // whole rule creation. Before #4113 there was no read here and the rule was
+    // created wired to nobody, silently. This pins the middle.
+    //
+    // Reached through `createMonitorActivatorRule` rather than the provisioner
+    // on purpose: the provisioner substitutes the fallback address INTO the
+    // rule's action first (`norm.usedFallback`), so `derived > 0` and it never
+    // takes this branch. The editor/API rule path passes `fallbackEmails`
+    // alongside an action that derives nothing, which does.
+    unreadable();
+    const { createMonitorActivatorRule } = await import('@/lib/azure/activator-monitor');
+    const rec = await createMonitorActivatorRule('High-Roller Alert', {
+      name: 'High roller net',
+      sourceKind: 'log-analytics',
+      query: 'AzureDiagnostics | count',
+      condition: { metric: 'net', op: '>', threshold: 1 },
+      // A Teams action naming a channel + a KV secret NAME — no destination the
+      // Azure Monitor derivation can turn into a receiver.
+      action: { kind: 'teams', config: { channel: 'Floor Ops', webhookSecretName: 'teams-hook' } },
+      fallbackEmails: ['operator@contoso.com'],
+    } as any);
+
+    // The scheduled rule was still PUT — the pre-#4113 behaviour, restored.
+    expect(upsertScheduledQueryRule).toHaveBeenCalledTimes(1);
+    // …with no action group, because none was created or confirmed.
+    expect(upsertActionGroup).not.toHaveBeenCalled();
+    expect(upsertScheduledQueryRule.mock.calls[0][0].actionGroupIds).toBeUndefined();
+    expect(rec.actionGroupId).toBeUndefined();
+    // …and the record says so, so the rule reads as unreachable downstream
+    // rather than ordinary (`receiverTotal` = 0 ⇒ `isUnreachable`).
+    expect(rec.note || '').toContain('No action group was bound');
+    expect(receiverTotal(rec as any)).toBe(0);
+    expect(isUnreachable(rec as any)).toBe(true);
+  });
+});
+
+/**
  * The REAL `lib/azure/monitor-client.ts` runs in this block — only its ARM
  * transport (`monitor-arm`) is replaced — because the defect lives in the PUT
  * BODY that function builds, and a mock of the function itself can never see

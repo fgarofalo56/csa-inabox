@@ -316,23 +316,48 @@ async function reconcileFromAzureMonitor(
     // real ARM mutation, so a read-only Viewer gets the honest counts and no
     // repair. Best-effort per rule — a failure records the reason on the record
     // (R7: it does not claim the group was fixed) and never sinks the GET.
+    // ONE repair per action GROUP, not per rule (#4354 review, finding 6).
+    // Several rules on one activator routinely share a single action group, and
+    // `repairActionGroupIfUnreachable` does an uncached ARM GET every time it is
+    // called — so a workspace with 30 rules on one group spent 30 reads against
+    // ARM's read throttle on EVERY open of the editor. Memoizing is not merely
+    // cheaper, it is also the more accurate answer: the first call is what makes
+    // the group reachable, so calls 2..N would report `attached` with the counts
+    // the first call just produced. The map lives inside this request, so it
+    // never serves a stale reading across opens.
+    const repairs = new Map<string, { bound?: Awaited<ReturnType<typeof repairActionGroupIfUnreachable>>; error?: string }>();
     for (const rec of records) {
       if (!rec.actionGroupId) continue;
+      const key = rec.actionGroupId.toLowerCase();
       try {
         if (!(await canPersist())) continue;
-        const bound = await repairActionGroupIfUnreachable(
-          item.displayName,
-          rec.actionGroupId,
-          (rec as any).action ?? bundleRule?.action,
-          fallbackEmails,
-        );
+        if (!repairs.has(key)) {
+          repairs.set(key, {
+            bound: await repairActionGroupIfUnreachable(
+              item.displayName,
+              rec.actionGroupId,
+              (rec as any).action ?? bundleRule?.action,
+              fallbackEmails,
+            ),
+          });
+        }
+        const memo = repairs.get(key)!;
+        if (memo.error) {
+          rec.note = `${rec.note ? `${rec.note} ` : ''}${memo.error}`;
+          continue;
+        }
+        const bound = memo.bound!;
         if (bound.receivers) rec.actionGroupReceivers = bound.receivers;
         if (bound.note) rec.note = `${rec.note ? `${rec.note} ` : ''}${bound.note}`;
       } catch (e: any) {
-        rec.note =
-          `${rec.note ? `${rec.note} ` : ''}` +
+        const msg =
           `The action group's receivers could not be read or repaired on this open (${e?.message || String(e)}), ` +
           'so whether this rule reaches anyone was not established.';
+        // Remember the FAILURE too. Retrying the same denied group once per
+        // rule is the same throttle problem with a worse payload, and every
+        // rule on that group gets the identical honest note either way.
+        repairs.set(key, { error: msg });
+        rec.note = `${rec.note ? `${rec.note} ` : ''}${msg}`;
       }
     }
 

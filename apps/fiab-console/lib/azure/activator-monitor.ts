@@ -555,7 +555,28 @@ export async function bindActionGroup(input: ActionGroupBindInput): Promise<Acti
           'so whether this rule reaches anyone was NOT established. Grant the Console UAMI "Monitoring Reader" on the alert resource group to confirm it.',
       };
     }
-    throw e;
+    // NO group was handed in, so `target` is the name of the group LOOM would
+    // create for this activator, and the read failed for something other than
+    // "it is not there" (`readActionGroupReceivers` turns a clean 404 into
+    // `exists:false`, not a throw).
+    //
+    // #4354 review, finding 5. This used to `throw`, which made a 403 on the
+    // action-group READ fail the whole rule creation — a behaviour change
+    // nothing asked for: before #4113 there was no read here at all, so the
+    // rule was created (wired to nobody, silently). Neither extreme is right.
+    // Refusing to WRITE on an unreadable group stays — writing a body derived
+    // from a state we never saw is exactly the deletion #4113 fixed — but the
+    // rule itself is still created, and the outcome says, in the record the
+    // user sees, that no action group was bound and why. That is the honest
+    // middle: the pre-#4113 behaviour, no longer silent.
+    return {
+      outcome: 'unreadable',
+      note:
+        `No action group was bound: reading '${target}' — the group Loom would create for this activator — failed ` +
+        `(${e?.message || String(e)}), and it is not a "does not exist" answer, so this rule's group was neither ` +
+        'created nor confirmed and the rule notifies nobody until it is. Grant the Console UAMI "Monitoring Contributor" ' +
+        'on the alert resource group (LOOM_ALERT_RG) and re-open this activator to bind it.',
+    };
   }
 
   // The group already reaches someone. Attach it and record what it carries —
@@ -702,6 +723,10 @@ export async function createMonitorActivatorRule(
   // when it reaches nobody, and reports what it actually found.
   let actionGroupId: string | undefined = input.existingActionGroupId?.trim() || undefined;
   let receivers: MonitorRuleRecord['actionGroupReceivers'];
+  // What the bind actually established, carried onto the record. Discarding it
+  // was how `outcome:'none'` and `outcome:'unreadable'` became invisible: the
+  // rule came back looking ordinary while nothing had been bound (R7).
+  let bindNote: string | undefined;
   {
     const emails = ruleEmails(input);
     const webhooks = ruleWebhooks(input);
@@ -719,6 +744,7 @@ export async function createMonitorActivatorRule(
     });
     actionGroupId = bound.actionGroupId;
     receivers = bound.receivers;
+    bindNote = bound.note;
   }
   const ruleSuffix = ruleNameSuffix(input.name);
   const azureRuleName = safeRuleName(activatorDisplayName, ruleSuffix);
@@ -785,7 +811,7 @@ export async function createMonitorActivatorRule(
       ...triggerModelFields,
       scheduled,
       createdAt: new Date().toISOString(),
-      note: [note, scheduleNote].filter(Boolean).join(' '),
+      note: [note, bindNote, scheduleNote].filter(Boolean).join(' '),
     };
   }
 
@@ -800,6 +826,7 @@ export async function createMonitorActivatorRule(
     ...(loomTags ? { tags: loomTags } : {}),
     actionGroupIds: actionGroupId ? [actionGroupId] : undefined,
   });
+  const laNote = [note, bindNote].filter(Boolean).join(' ');
   return {
     id: azureRuleName,
     name: input.name || azureRuleName,
@@ -818,7 +845,7 @@ export async function createMonitorActivatorRule(
     ...triggerModelFields,
     scheduled: true,
     createdAt: new Date().toISOString(),
-    ...(note ? { note } : {}),
+    ...(laNote ? { note: laNote } : {}),
   };
 }
 

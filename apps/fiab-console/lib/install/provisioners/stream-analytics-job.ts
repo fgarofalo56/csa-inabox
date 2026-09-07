@@ -24,8 +24,10 @@
  */
 import {
   createOrUpdateJob,
+  getJob,
   readAsaConfig,
   AsaNotConfiguredError,
+  AsaJobNotFoundError,
 } from '@/lib/azure/stream-analytics-client';
 import { sanitizeBackingName, type BackingNameRules } from '@/lib/azure/backing-name';
 import { itemsContainer } from '@/lib/azure/cosmos-client';
@@ -174,11 +176,37 @@ export const streamAnalyticsJobProvisioner: Provisioner = async (input): Promise
   }
 
   try {
-    const job = await createOrUpdateJob({ name: jobName, location });
+    // READ BEFORE WRITE (#4354 review, finding 7). `PUT
+    // Microsoft.StreamAnalytics/streamingjobs/{name}` is create-OR-REPLACE on
+    // `properties`, and the body above sends a fixed shape — SKU, compatibility
+    // level, the out-of-order/late-arrival policies, `contentStoragePolicy` —
+    // with no inputs, outputs or transformation. That is the IDENTICAL shape as
+    // the action-group defect this same PR fixes on the other side: an "upsert"
+    // that silently replaces state it did not compose. This provisioner runs on
+    // app install, on the deployment-pipeline promote path AND on the new
+    // Fix-it, so a second run over a job the operator had configured would have
+    // reset its compatibility level and its policies.
+    //
+    // A 404 is the only outcome that authorises the PUT. Any other failure
+    // (403, throttle, DNS) falls to the outer catch and is classified there —
+    // it is NOT treated as absence, because absence was not established (R7).
+    let existing: { id: string; name: string } | null = null;
+    try {
+      const found = await getJob(jobName);
+      existing = { id: found.id || '', name: found.name || jobName };
+    } catch (e) {
+      if (!(e instanceof AsaJobNotFoundError)) throw e;
+    }
+
+    const job = existing ?? (await createOrUpdateJob({ name: jobName, location }));
     steps.push(
-      `Created (or updated) Stream Analytics job '${jobName}' in ${location}` +
-        (sanitized ? ` (sanitized from display name '${input.displayName}' — ARM allows only letters, digits, '-' and '_')` : '') +
-        '.',
+      existing
+        ? `Stream Analytics job '${jobName}' already exists; left its configuration untouched` +
+            (sanitized ? ` (name sanitized from display name '${input.displayName}')` : '') +
+            '.'
+        : `Created Stream Analytics job '${jobName}' in ${location}` +
+            (sanitized ? ` (sanitized from display name '${input.displayName}' — ARM allows only letters, digits, '-' and '_')` : '') +
+            '.',
     );
     const provisionedAt = new Date().toISOString();
     const persisted = await persistJobRef(
@@ -190,17 +218,17 @@ export const streamAnalyticsJobProvisioner: Provisioner = async (input): Promise
       // Only what was ESTABLISHED (R7): the job exists, the record did not land.
       return resolveInfraResidual(
         persisted.cause ?? persisted.error,
-        'Retry this install step. The retry is idempotent — the streaming job is upserted by name, so it will not create a duplicate. ' +
+        'Retry this install step. The retry is idempotent — the streaming job is READ before anything is written, so a retry re-uses the job that already exists rather than replacing its configuration. ' +
           `Until the reference is recorded the editor cannot resolve this item to its job '${jobName}'. ` +
           'If the retry keeps failing, verify the Console UAMI holds the Cosmos DB Built-in Data Contributor role on the Loom Cosmos account.',
         {
           reason:
-            `Created the Stream Analytics job '${jobName}' but could not record it on the item: ` +
+            `${existing ? 'Found the existing' : 'Created the'} Stream Analytics job '${jobName}' but could not record it on the item: ` +
             (persisted.reason === 'item-not-found'
               ? `reading item '${input.cosmosItemId}' in workspace '${input.workspaceId}' returned no document.`
               : 'the Cosmos write did not complete.'),
           link: 'https://learn.microsoft.com/azure/cosmos-db/nosql/security/how-to-grant-data-plane-role-based-access',
-          errorPrefix: 'Created the ASA job but failed to persist its reference: ',
+          errorPrefix: `${existing ? 'Found the existing' : 'Created the'} ASA job but failed to persist its reference: `,
           resourceId: job.id || jobName,
           secondaryIds: { backend: 'stream-analytics', jobName, location, refsPersisted: 'false' },
           steps,
@@ -208,7 +236,7 @@ export const streamAnalyticsJobProvisioner: Provisioner = async (input): Promise
       );
     }
     return {
-      status: 'created',
+      status: existing ? 'exists' : 'created',
       resourceId: job.id || jobName,
       secondaryIds: { backend: 'stream-analytics', jobName, location, provisionedAt, refsPersisted: 'true' },
       steps,
@@ -216,8 +244,8 @@ export const streamAnalyticsJobProvisioner: Provisioner = async (input): Promise
   } catch (e: any) {
     return resolveInfraResidual(
       e,
-      'Grant the Console UAMI (LOOM_UAMI_CLIENT_ID) the "Stream Analytics Contributor" role on the resource group named by LOOM_ASA_RG so it can create streaming jobs, ' +
-        `and confirm LOOM_ASA_LOCATION ('${location}') is a region where Azure Stream Analytics is offered in this cloud.`,
+      'Grant the Console UAMI (LOOM_UAMI_CLIENT_ID) the "Stream Analytics Contributor" role on the resource group named by LOOM_ASA_RG so it can read and create streaming jobs, ' +
+        `and — if the failure came from the create rather than the read — confirm LOOM_ASA_LOCATION ('${location}') is a region where Azure Stream Analytics is offered in this cloud.`,
       { link: 'https://learn.microsoft.com/azure/stream-analytics/stream-analytics-quick-create-portal', steps },
     );
   }

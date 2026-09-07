@@ -97,20 +97,36 @@ export async function GET(_req: NextRequest, ctx: { params: { name: string } }) 
       }
       if (item) {
         const expected = recorded || asaJobNameFor(item.displayName).name;
+        // The Fix-it is offered ONLY to a caller the POST below would accept.
+        // The read above deliberately allows read roles (a Viewer must still be
+        // able to open the editor and be told the job is missing), but the
+        // provision POST is write-scoped — so rendering the button for a Viewer
+        // would be a control that refuses itself. This uses the SAME predicate
+        // the POST uses (`loadOwnedItem` without `allowReadRoles`), so the two
+        // cannot drift apart. It costs one extra Cosmos read, on the 404 path
+        // only.
+        const writable = await loadOwnedItem(name, ITEM_TYPE, s.claims.oid).catch(() => null);
         return NextResponse.json(
           {
             ok: false,
             error:
               `This job's Azure Stream Analytics resource has not been created yet — ` +
               `no streaming job named '${expected}' exists in ${e.resourceGroup}. ` +
-              'Stream Analytics itself is configured and reachable.',
+              'Stream Analytics itself is configured and reachable.' +
+              (writable
+                ? ''
+                : ' Creating it needs write access to this workspace; ask an owner or member to open this item.'),
             code: 'asa-job-not-provisioned',
             expectedJobName: expected,
-            fixIt: {
-              label: 'Create the streaming job',
-              method: 'POST',
-              href: `/api/items/${ITEM_TYPE}/${encodeURIComponent(name)}?provision=1&workspaceId=${encodeURIComponent(item.workspaceId)}`,
-            },
+            ...(writable
+              ? {
+                  fixIt: {
+                    label: 'Create the streaming job',
+                    method: 'POST',
+                    href: `/api/items/${ITEM_TYPE}/${encodeURIComponent(name)}?provision=1&workspaceId=${encodeURIComponent(item.workspaceId)}`,
+                  },
+                }
+              : {}),
           },
           { status: 404 },
         );

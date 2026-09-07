@@ -143,6 +143,7 @@ vi.mock('@/lib/azure/monitor-client', async (importOriginal) => ({
 
 import { GET, POST, DELETE } from '../route';
 import { safeRuleName, expectedAzureRuleName } from '@/lib/azure/activator-monitor';
+import { authorizeItemWorkspace } from '@/lib/auth/workspace-guard';
 
 const PARAMS = { params: Promise.resolve({ id: 'act-1' }) };
 const req = () => new NextRequest('http://localhost/api/items/activator/act-1/rules?workspaceId=ws-1');
@@ -200,6 +201,12 @@ function makeLiveRule(over: Partial<any> = {}) {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  // `clearAllMocks` clears CALLS, not implementations, so a `mockImplementation`
+  // set by one test (the read-only-caller case below denies the write-scoped
+  // probe) silently leaks into every test after it and turns off the repair
+  // pass. Restore the default here rather than leaving order-dependence in the
+  // file.
+  (authorizeItemWorkspace as any).mockImplementation(async () => null);
   replaced.length = 0;
   replaceOptions.length = 0;
   state.itemDoc = makeItem();
@@ -617,5 +624,92 @@ describe('#4113 GET reconcile repairs an action group that reaches nobody', () =
     const j = await (await GET(req(), PARAMS)).json();
     expect(state.actionGroupUpserts).toHaveLength(0);
     expect(j.rules).toHaveLength(1);
+  });
+});
+
+/**
+ * #4354 review, finding 6. The repair pass above ran once PER RULE, and
+ * `repairActionGroupIfUnreachable` does an uncached ARM GET every call. Several
+ * rules on one activator routinely share ONE action group (the group is named
+ * after the activator, not the rule), so an activator with N rules spent N ARM
+ * reads on every open — against ARM's read throttle, on the editor's hot path.
+ *
+ * Memoizing per group is also the more ACCURATE answer: the first call is what
+ * makes the group reachable, so calls 2..N reported `attached` with the counts
+ * the first call had just produced.
+ */
+describe('#4354 finding 6 — ONE action-group repair per GROUP, not per rule', () => {
+  /** Two ARM rules on this item, both routed to the SAME action group. */
+  function twoRulesOneGroup(agId = '/subscriptions/s/resourceGroups/rg/providers/microsoft.insights/actionGroups/Model-Drift-Alert-ag') {
+    const second = expectedAzureRuleName('Model Drift Alert', 'latency');
+    expect(second).not.toBe(MY_ARM_NAME);
+    return [
+      makeLiveRule({ actionGroupIds: [agId], tags: { 'loom-item-id': 'act-1', 'loom-item-type': 'activator' } }),
+      makeLiveRule({
+        id: `/subscriptions/s/resourceGroups/rg/providers/Microsoft.Insights/scheduledQueryRules/${second}`,
+        name: second,
+        description: "Loom Activator rule 'latency'",
+        actionGroupIds: [agId],
+        tags: { 'loom-item-id': 'act-1', 'loom-item-type': 'activator' },
+      }),
+    ];
+  }
+
+  it('reads the shared group ONCE for two rules, and repairs it once', async () => {
+    const { readActionGroupReceivers } = await import('@/lib/azure/monitor-client');
+    state.liveRules = twoRulesOneGroup();
+    state.actionGroupRead = agRead();          // exists, every kind empty
+
+    const j = await (await GET(req(), PARAMS)).json();
+
+    expect(j.rules).toHaveLength(2);
+    // The measurement the finding is about. Per-rule, this is 2.
+    expect((readActionGroupReceivers as any).mock.calls).toHaveLength(1);
+    expect(state.actionGroupUpserts).toHaveLength(1);
+  });
+
+  it('BOTH rules still carry the repaired counts and the note — the memo is shared, not skipped', async () => {
+    state.liveRules = twoRulesOneGroup();
+    state.actionGroupRead = agRead();
+
+    const j = await (await GET(req(), PARAMS)).json();
+
+    for (const rule of j.rules) {
+      expect(rule.actionGroupReceivers.emails).toBe(1);
+      expect(rule.note).toContain('carried ZERO receivers');
+    }
+  });
+
+  it('two rules on DIFFERENT groups are still read separately', async () => {
+    // The counterfactual: memoizing on the wrong key would collapse these too,
+    // and a second group would silently never be repaired.
+    const { readActionGroupReceivers } = await import('@/lib/azure/monitor-client');
+    const [a, b] = twoRulesOneGroup();
+    b.actionGroupIds = ['/subscriptions/s/resourceGroups/rg/providers/microsoft.insights/actionGroups/Other-ag'];
+    state.liveRules = [a, b];
+    state.actionGroupRead = agRead();
+
+    await GET(req(), PARAMS);
+
+    expect((readActionGroupReceivers as any).mock.calls).toHaveLength(2);
+    expect(state.actionGroupUpserts).toHaveLength(2);
+  });
+
+  it('a DENIED read is remembered too — the second rule does not retry it', async () => {
+    const { readActionGroupReceivers } = await import('@/lib/azure/monitor-client');
+    state.liveRules = twoRulesOneGroup();
+    state.actionGroupRead = Object.assign(new Error('AuthorizationFailed'), { status: 403 });
+
+    const j = await (await GET(req(), PARAMS)).json();
+
+    expect((readActionGroupReceivers as any).mock.calls).toHaveLength(1);
+    expect(state.actionGroupUpserts).toHaveLength(0);
+    // Every rule on the group still gets the identical honest note (R7) — the
+    // memo suppresses the retry, never the disclosure.
+    expect(j.rules).toHaveLength(2);
+    for (const rule of j.rules) {
+      expect(rule.note).toContain('was NOT established');
+      expect(rule.actionGroupReceivers).toBeUndefined();
+    }
   });
 });
