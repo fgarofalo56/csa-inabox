@@ -57,6 +57,8 @@ import {
   type SeedTable,
   type ModelInfo,
 } from '@/lib/install/report-binding';
+import { decodeIdList } from '@/lib/install/secondary-id-list';
+import { withRequiredLibraryBootstrap } from '@/lib/install/provisioners/notebook'; // #3530
 import { apiServerError } from '@/lib/api/respond';
 
 export const runtime = 'nodejs';
@@ -256,7 +258,16 @@ async function runInstallJob(
       // `{{ADLS_ACCOUNT}}` deployment placeholder to the real Azure-native ADLS
       // account (LOOM_ADLS_ACCOUNT) so the persisted cells carry a valid abfss
       // host — never the raw token that would 404 at read time.
-      const nbc = bundle?.content as { kind?: string; cells?: unknown[]; defaultLang?: string } | undefined;
+      //
+      // #3530 — and apply the `%pip install` bootstrap here too, not only in
+      // the provisioner. The provisioner's copy lands in the Synapse/Databricks
+      // ARTIFACT; this one lands in `state.content` + `state.cells`, which is
+      // what the Loom notebook editor opens and what its Run-all executes. Both
+      // are needed, and `withRequiredLibraryBootstrap` is idempotent so running
+      // it on both paths (and on a re-install) adds exactly one cell.
+      const nbc0 = bundle?.content as { kind?: string } | undefined;
+      if (nbc0?.kind === 'notebook') state.content = withRequiredLibraryBootstrap(bundle!.content);
+      const nbc = state.content as { kind?: string; cells?: unknown[]; defaultLang?: string } | undefined;
       if (nbc?.kind === 'notebook' && Array.isArray(nbc.cells) && nbc.cells.length > 0) {
         state.cells = substituteCellsPlaceholders(nbc.cells as Array<{ source?: unknown }>);
         state.defaultLang = nbc.defaultLang || 'pyspark';
@@ -285,7 +296,7 @@ async function runInstallJob(
             if (cur && !cur.state?.content) {
               await items.item(cur.id, cur.workspaceId).replace({
                 ...cur,
-                state: { ...(cur.state || {}), content: bundle.content, sourceApp: app.id },
+                state: { ...(cur.state || {}), content: state.content, sourceApp: app.id },
                 updatedAt: new Date().toISOString(),
               });
             }
@@ -534,12 +545,13 @@ async function bindInstalledReports(
   for (const lh of installed.filter((it) => it.itemType === 'lakehouse' && it.id)) {
     const sec = secById.get(lh.id!) || {};
     if (!sec.container || !sec.rootPath) continue;
-    const seededNames = new Set(
-      String(sec.seededTables || '')
-        .split(',')
-        .map((x) => x.trim())
-        .filter(Boolean),
-    );
+    // #3920 — decode via the shared codec, never `split(',')`: `seededTables`
+    // carries Loom table names that pass through a STRUCTURAL sanitizer, so a
+    // comma inside a name (a lakehouse table called `Sales, EMEA`) survived
+    // into the recorded value and a comma-split produced two names that do not
+    // exist. `decodeIdList` reads the JSON form the provisioner now writes and
+    // still reads the legacy `a,b` values already persisted in Cosmos.
+    const seededNames = new Set(decodeIdList(sec.seededTables));
     if (!seededNames.size) continue;
     const content = lh.content as any;
     const deltaTables: Array<{ name: string; ddl?: string; schema?: string; sampleRows?: any[][] }> = Array.isArray(content?.deltaTables)

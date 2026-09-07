@@ -55,6 +55,13 @@ permissions:
   # actions:read. Without it the guard 404s/403s and reports UNREADABLE rather
   # than "nothing disabled", which is the correct failure but a useless one.
   actions: read
+  # merged-prs-had-check-runs reads GET /repos/{owner}/{repo}/commits/{sha}/check-runs,
+  # which is the Checks API and needs checks:read. Without it the guard would
+  # 403 — and because its entire verdict is "this number was not zero", a 403
+  # read as an empty answer would be the #4046 defect measuring itself. It
+  # refuses on a read failure instead, but the permission is what keeps it from
+  # having to (#4046).
+  checks: read
 
 concurrency:
   # #3426 — this was `group: loom-guardrails-${{ github.ref }}` +
@@ -1430,6 +1437,29 @@ jobs:
       - name: coverage-summary (published thresholds vs the ones CI enforces — WS-F1)
         if: ${{ !cancelled() }}
         run: node scripts/ci/generate-coverage-summary.mjs --check
+      # POST-MERGE AUDIT (#4046). 78 PRs reached main with ZERO check runs on
+      # their head — nothing graded them at all. The class stopped on its own in
+      # August 2026 (#3678 merged blind, #3679 merged covered the same
+      # afternoon) and NOTHING in this repo asserted that it stayed shut, so the
+      # only evidence was that nobody had looked.
+      #
+      # It cannot be a pull_request-event check: a job running on the
+      # pull_request event IS a check run, so by the time it could ask the
+      # question the answer is never zero, and in the case that matters most —
+      # a bot-authored PR whose workflows are held at `action_required` — there
+      # is no job to ask at all. So the audit is asked on the PUSH, about the PR
+      # the pushed commit came from.
+      #
+      # On a pull_request event the script still runs its two embedded controls
+      # against fixed SHAs (a known-blind head that must read 0, a known-covered
+      # head that must read its full count), then says plainly that there is no
+      # merge to audit. It is therefore never a hollow green, and a broken query
+      # path fails the controls instead of being reported as a clean audit.
+      - name: merged-prs-had-check-runs (nothing reaches main ungraded — #4046)
+        if: ${{ !cancelled() }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node scripts/ci/check-merged-prs-had-check-runs.mjs
       # The scripts/ci self-tests. These existed but NOTHING RAN THEM: the
       # roll-gate suite is new (#2819) and the insecure-randomness suite has been
       # sitting in the tree with a "Run: node --test …" comment and no CI lane

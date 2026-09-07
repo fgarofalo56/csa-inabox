@@ -207,7 +207,7 @@ dispatch is invisible to it. Full limits: `scripts/ci/_route-backends.mjs`.
 | `admin/brain/graph/route.ts` | GET | admin |  | ARM, Container Apps, Resource Graph, Retail Prices API |
 | `admin/brain/history/route.ts` | GET POST | admin |  | ARM, Container Apps, Resource Graph |
 | `admin/brain/ownership-backfill/route.ts` | GET POST | admin |  | AAS, ADX, ARM, Azure Monitor, Compute, Cosmos, Synapse |
-| `admin/brain/perform/route.ts` | GET POST | admin |  | ARM, Azure Monitor, Container Apps, Cosmos, Resource Graph, Retail Prices API |
+| `admin/brain/perform/route.ts` | GET POST | admin | ● | ADX, ARM, Azure Monitor, Azure Networking, Container Apps, Cosmos, Cost Management, Log Analytics, Resource Graph, Retail Prices API |
 | `admin/brain/proposals/route.ts` | POST | admin |  | Azure Monitor, Cosmos |
 | `admin/brain/synapses/route.ts` | GET | admin |  | — |
 | `admin/capacity/chargeback/route.ts` | GET | admin |  | ARM, Azure Cache for Redis, Cosmos, Cost Management |

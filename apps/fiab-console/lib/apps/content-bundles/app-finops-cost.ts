@@ -555,6 +555,81 @@ const bundle: AppBundle = {
         ],
       },
     },
+    // ─── KQL: the ADX database the FinOps dashboard's tiles query (#3537) ──
+    //
+    // This bundle shipped a kql-dashboard whose four tiles all read
+    // `billing_events`, and NO kql-database item to create it. The dashboard
+    // provisioner therefore had nothing to bind to, fell back to
+    // LOOM_KUSTO_DEFAULT_DB (or to a slug of the dashboard's own name that
+    // nothing creates), and every tile failed with "table not resolved" — while
+    // the install reported 'created'. The item below is the missing half: it
+    // provisions the real ADX database + table with the exact column names the
+    // tiles project, seeded so the dashboard renders on a fresh install rather
+    // than showing four empty cards.
+    {
+      itemType: 'kql-database',
+      displayName: 'FinOps Cost Analytics',
+      description:
+        'ADX database backing the FinOps Live Spend dashboard: the billing_events '
+        + 'table (Cost Management / FOCUS export facts streamed via Event Grid), a '
+        + 'daily-rollup function, and starter spend queries. Seeded with sample rows.',
+      learnDoc: 'best-practices/cloud-cost-management',
+      content: {
+        kind: 'kql-database',
+        tables: [
+          {
+            // Column names are the ones the dashboard tiles project — a schema
+            // that does not match the tiles would resolve the TABLE and then
+            // fail on the columns, which is the same dead dashboard one layer in.
+            name: 'billing_events',
+            columns: [
+              { name: 'billing_time',      type: 'datetime' },
+              { name: 'billing_date',      type: 'datetime' },
+              { name: 'subscription_id',   type: 'string'   },
+              { name: 'subscription_name', type: 'string'   },
+              { name: 'resource_group',    type: 'string'   },
+              { name: 'service_name',      type: 'string'   },
+              { name: 'meter_category',    type: 'string'   },
+              { name: 'billed_cost',       type: 'real'     },
+              { name: 'currency',          type: 'string'   },
+            ],
+            sample: [
+              ['2026-06-01T09:00:00Z', '2026-06-01T00:00:00Z', 'a1b2c3d4-0000-0000-0000-000000000001', 'prod-data-platform', 'rg-adls-prod',   'Azure Data Lake Storage', 'Storage',       412.55, 'USD'],
+              ['2026-06-01T10:00:00Z', '2026-06-01T00:00:00Z', 'a1b2c3d4-0000-0000-0000-000000000001', 'prod-data-platform', 'rg-synapse-prod', 'Azure Synapse Analytics', 'Compute',      1189.20, 'USD'],
+              ['2026-06-01T11:00:00Z', '2026-06-01T00:00:00Z', 'a1b2c3d4-0000-0000-0000-000000000002', 'prod-analytics',     'rg-adx-prod',     'Azure Data Explorer',     'Compute',       733.10, 'USD'],
+              ['2026-05-31T10:00:00Z', '2026-05-31T00:00:00Z', 'a1b2c3d4-0000-0000-0000-000000000002', 'prod-analytics',     'rg-adx-prod',     'Azure Data Explorer',     'Compute',       401.44, 'USD'],
+              ['2026-05-31T12:00:00Z', '2026-05-31T00:00:00Z', 'a1b2c3d4-0000-0000-0000-000000000001', 'prod-data-platform', 'rg-adls-prod',    'Azure Data Lake Storage', 'Storage',       398.02, 'USD'],
+            ],
+          },
+        ],
+        functions: [
+          {
+            name: 'DailySpendByService',
+            body:
+              '(lookback:timespan) {\n'
+              + '    billing_events\n'
+              + '    | where billing_time > ago(lookback)\n'
+              + '    | summarize Spend = sum(billed_cost) by service_name, bin(billing_date, 1d)\n'
+              + '    | order by billing_date asc, Spend desc\n'
+              + '}',
+          },
+        ],
+        starterQueries: [
+          {
+            name: 'Month-to-date spend by subscription',
+            kql:
+              'billing_events\n'
+              + '| where billing_date >= startofmonth(now())\n'
+              + '| summarize MtdSpend = round(sum(billed_cost), 2) by subscription_name\n'
+              + '| order by MtdSpend desc',
+          },
+          {
+            name: 'Daily spend by service (last 7 days)',
+            kql: 'DailySpendByService(7d)',
+          },
+        ],
+      },
+    },
     {
       itemType: 'kql-dashboard',
       displayName: 'FinOps Live Spend',

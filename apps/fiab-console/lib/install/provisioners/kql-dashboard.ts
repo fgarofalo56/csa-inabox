@@ -238,32 +238,83 @@ export const kqlDashboardProvisioner: Provisioner = async (input): Promise<Provi
       steps,
     };
   }
-  // Resolve the Kusto database the tiles query.  The dashboard's data
-  // source is the database the sibling `kql-database` item in the same app
-  // bundle provisions — kql-db.ts derives that DB name from its item's
-  // displayName via displayName.replace(/[^A-Za-z0-9_]/g,'_').slice(0,50).
+  // Resolve the Kusto database the tiles query (#3537).
   //
-  // Resolution order (app-agnostic — no hard-coded per-app DB name):
-  //   1. content.database — explicit sibling DB name carried on the bundle
-  //      content (set by app bundles whose dashboard + kql-database items
-  //      live in the same install).
-  //   2. input.target.kustoDatabase — the install's resolved target DB
-  //      (LOOM_KUSTO_DEFAULT_DB), passed by the provisioning engine.
-  //   3. Slug of the dashboard's own displayName, stripped of a trailing
-  //      " Dashboard" suffix and re-suffixed to match the conventional
-  //      "<App> KQL Database" item naming — a best-effort last resort that
-  //      keeps every app's dashboard pointed at a real DB rather than one
-  //      app's hard-coded name.
+  // THE DEFECT THIS CLOSES. The tiles are real KQL against real tables, and the
+  // same query pasted into a KQL queryset ran fine — but every tile on an
+  // app-installed dashboard failed with "table not resolved", because the
+  // dashboard was pointed at a DATABASE the tables do not live in. The old
+  // order ended in two fallbacks that cannot be right:
+  //   - `input.target.kustoDatabase` (LOOM_KUSTO_DEFAULT_DB) — the operator's
+  //     default DB, which is not where the app's kql-database item seeded its
+  //     tables; and
+  //   - a SLUG of the dashboard's own displayName, re-suffixed to guess the
+  //     conventional "<App> KQL Database" item name. That one is the worst of
+  //     the two: it invents a database name that NOTHING creates, so it cannot
+  //     resolve for any app whose DB item is not named to that convention —
+  //     and it never fails loudly, it just silently produces a dead dashboard.
+  //
+  // The new order is grounded in what the install ACTUALLY provisions:
+  //   1. `content.siblingKqlDatabases` — the deterministic backing names of the
+  //      kql-database items in THIS install, computed by provisioning-engine.ts
+  //      from `safeAdxDatabaseName(displayName)`, which is the same mapping
+  //      kql-db.ts creates the ARM database with. Exactly one sibling is the
+  //      unambiguous case and it wins outright — including over a declared
+  //      `content.database`, because a hand-declared name that disagrees with
+  //      the provisioned one is precisely the bug (app-federal-data-mesh
+  //      declared `FederationAudit`; the item provisions `FederationAudit__ADX_`).
+  //   2. `content.database` — an explicitly declared DB, for a dashboard whose
+  //      database is provisioned by something other than a sibling item in the
+  //      same bundle (app-workspace-monitoring's MONITOR_DB is the case).
+  //   3. Otherwise: an honest gate. The platform cannot bind a dashboard to a
+  //      database nobody provisioned, and pointing it at a default DB or an
+  //      invented slug is a dead dashboard reported as 'created'.
+  const siblings: string[] = Array.isArray((input.content as any)?.siblingKqlDatabases)
+    ? (input.content as any).siblingKqlDatabases.map((s: unknown) => String(s)).filter(Boolean)
+    : [];
   const contentDb = typeof (input.content as any)?.database === 'string'
     ? String((input.content as any).database).replace(/[^A-Za-z0-9_]/g, '_').slice(0, 50)
     : undefined;
-  const database =
-    contentDb ||
-    input.target.kustoDatabase ||
-    `${input.displayName.replace(/\s+Dashboard$/i, '')} KQL Database`
-      .replace(/[^A-Za-z0-9_]/g, '_')
-      .slice(0, 50) ||
-    'loomdb';
+
+  let database: string;
+  if (siblings.length === 1) {
+    database = siblings[0];
+    if (contentDb && contentDb !== database) {
+      // Stated, not silently overridden — the bundle's declaration is wrong and
+      // the receipt has to say which name won and why.
+      steps.push(`Bundle declared database '${contentDb}', but the kql-database item this install provisions is '${database}'. Binding the tiles to the provisioned database.`);
+    } else {
+      steps.push(`Bound to the sibling kql-database this install provisions: '${database}'.`);
+    }
+  } else if (contentDb) {
+    database = contentDb;
+    steps.push(
+      siblings.length > 1
+        ? `Bundle declares database '${database}'; this install provisions ${siblings.length} kql-database items (${siblings.join(', ')}), so the declaration is used.`
+        : `Bound to the database declared on the bundle content: '${database}'.`,
+    );
+  } else if (siblings.length > 1) {
+    return {
+      status: 'remediation',
+      gate: {
+        reason: `This install provisions ${siblings.length} KQL databases (${siblings.join(', ')}) and the dashboard does not say which one its tiles query.`,
+        remediation: `Set 'database' on the kql-dashboard item's content to one of: ${siblings.join(', ')}. Then re-run the install.`,
+        link: 'https://learn.microsoft.com/azure/data-explorer/azure-data-explorer-dashboards',
+      },
+      steps,
+    };
+  } else {
+    return {
+      status: 'remediation',
+      gate: {
+        reason: 'No KQL database is provisioned for this dashboard: the app bundle contains no kql-database item, and the dashboard content declares no database name.',
+        remediation:
+          `Add a kql-database item to this app bundle (its tables are what the tiles query), or set 'database' on the kql-dashboard item's content to a database that already exists on ${clusterUri}. Then re-run the install. Loom does not point the tiles at a default database, because a dashboard bound to a database that does not hold its tables reports 'created' and then fails every tile with "table not resolved".`,
+        link: 'https://learn.microsoft.com/azure/data-explorer/create-cluster-database',
+      },
+      steps,
+    };
+  }
   const dataSource = { id: stableId(`${input.displayName}::ds::${database}`), clusterUri, database };
   steps.push(`Dashboard data source: ${clusterUri} / ${database}`);
 

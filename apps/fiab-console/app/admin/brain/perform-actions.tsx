@@ -30,11 +30,15 @@
  *     that headline over "No executor is registered for detector kind x" — a
  *     guard that never ran. `interpretPerformResponse` now reads the
  *     discriminator the route already sends (`performable:false` vs `guard`).
- *     The 503 arm has no such discriminator — `apiHonestError` emits only
- *     `{ok:false, error}` and the route answers 503 for a Resource Graph
- *     collection failure as well as for a missing deploy value — so that title
- *     states only what the status established and defers to the server's own
- *     message, rather than asserting "not configured".
+ *     The 503 arm had no such discriminator until #4283 — `apiHonestError`
+ *     emits only `{ok:false, error}` and the route answers 503 for a Resource
+ *     Graph collection failure as well as for a missing deploy value. The route
+ *     now sends the normalized `gate` envelope for the two CONFIGURATION
+ *     classes and deliberately none for the ARG class, so this client renders
+ *     the shared HonestGate + inline Fix-it when the SERVER named a gate, and
+ *     otherwise keeps the title that states only what the status established
+ *     and defers to the server's own message. It never derives the gate from
+ *     the message text.
  *   - It NEVER re-arms a destructive control under its own success receipt.
  *     `performDisposition` is the SINGLE predicate for "does this render offer
  *     a Perform control", and the header banner counts the same function. Two
@@ -70,6 +74,7 @@ import {
   tokens,
 } from '@fluentui/react-components';
 import { CheckmarkCircle20Regular, PlayCircle20Regular } from '@fluentui/react-icons';
+import { HonestGate } from '@/lib/components/shared/honest-gate';
 import type {
   PerformExecutorKind,
   PerformReceipt,
@@ -82,6 +87,58 @@ import type {
 // Wire results — every arm of them is a state this UI actually renders
 // ---------------------------------------------------------------------------
 
+/**
+ * The normalized gate block a route sends with `buildGateEnvelope` (#4283).
+ *
+ * Structurally the `gate` prop of the shared {@link HonestGate} renderer, and
+ * declared here rather than imported from `lib/api/gate-envelope` because that
+ * module is server-side (it pulls `next/server`). Its presence on a 503 is the
+ * SERVER stating which gate it hit; its absence means the server did not
+ * establish one, and this client renders no Fix-it rather than picking the
+ * likeliest cause.
+ */
+export interface PerformGate {
+  readonly id: string;
+  readonly title?: string;
+  readonly remediation?: string;
+  readonly fixItHref?: string;
+  readonly missing?: string[];
+  readonly state?: 'blocked' | 'cloud-unavailable';
+  readonly fallbackNote?: string;
+}
+
+/**
+ * Read the gate block off a response body, or null.
+ *
+ * `gated:true` is the envelope's single discriminant and `gate.id` is the only
+ * field the renderer strictly needs, so both are REQUIRED here: a body carrying
+ * a half-built block must read as "no gate stated", never as a gate with an
+ * empty id (which would deep-link the operator to a registry row that is not
+ * there).
+ */
+export function readGateEnvelope(json: Record<string, unknown> | null): PerformGate | null {
+  if (json?.gated !== true) return null;
+  const g = json.gate;
+  if (typeof g !== 'object' || g === null) return null;
+  const block = g as Record<string, unknown>;
+  const id = typeof block.id === 'string' ? block.id.trim() : '';
+  if (id === '') return null;
+  const missing = Array.isArray(block.missing)
+    ? block.missing.filter((m): m is string => typeof m === 'string')
+    : undefined;
+  return {
+    id,
+    ...(typeof block.title === 'string' ? { title: block.title } : {}),
+    ...(typeof block.remediation === 'string' ? { remediation: block.remediation } : {}),
+    ...(typeof block.fixItHref === 'string' ? { fixItHref: block.fixItHref } : {}),
+    ...(missing ? { missing } : {}),
+    ...(block.state === 'blocked' || block.state === 'cloud-unavailable'
+      ? { state: block.state }
+      : {}),
+    ...(typeof block.fallbackNote === 'string' ? { fallbackNote: block.fallbackNote } : {}),
+  };
+}
+
 /** The GET read-back: recorded states + the server's performability registry. */
 export type PerformStateResult =
   | {
@@ -93,8 +150,12 @@ export type PerformStateResult =
    * The read did not succeed. `reason` is the server's own message when there
    * was one. This is NEVER collapsed into "nothing is performable": an
    * unreadable registry establishes nothing about what the platform can do.
+   *
+   * `gate` is present ONLY when the route sent a gate envelope (#4283) — i.e.
+   * when the server itself established that the cause is a named configuration
+   * gate. Absent, this client says it does not know which cause it is.
    */
-  | { readonly kind: 'unavailable'; readonly reason: string };
+  | { readonly kind: 'unavailable'; readonly reason: string; readonly gate?: PerformGate };
 
 /** The POST result, one arm per outcome the route can return. */
 export type PerformOutcomeResult =
@@ -157,12 +218,15 @@ export type PerformOutcomeResult =
    * `AcaNotConfiguredError` (genuine configuration gaps) AND for
    * `ResourceGraphCollectionError`, which `arg-collect.ts` throws on a token
    * acquisition failure and on ANY non-OK ARG response — a throttle, a 403, a
-   * 500. Those are not configuration gaps. `apiHonestError` emits only
-   * `{ok:false, error}`, so the body carries NO field that separates them: the
-   * server's own message is the only discriminator, and this client renders it
-   * rather than inventing a cause.
+   * 500. Those are not configuration gaps.
+   *
+   * Since #4283 the route DISCRIMINATES: the two configuration classes carry a
+   * `gate` envelope naming the registry gate whose Fix-it resolves them, and
+   * the ARG class deliberately carries none. So `gate` present is the server
+   * stating the cause; `gate` absent leaves this client exactly where it was —
+   * rendering the server's message and refusing to guess between the two.
    */
-  | { readonly kind: 'gate'; readonly reason: string }
+  | { readonly kind: 'gate'; readonly reason: string; readonly gate?: PerformGate }
   /** The write was ATTEMPTED and reported an error. */
   | {
       readonly kind: 'failed';
@@ -202,15 +266,20 @@ export async function fetchPerformState(): Promise<PerformStateResult> {
     };
   }
   const json = (await res.json().catch(() => null)) as
-    | {
+    | ({
         ok?: boolean;
         error?: string;
         states?: readonly RecommendationStateRecord[];
         performability?: readonly PerformRegistryEntry[];
-      }
+      } & Record<string, unknown>)
     | null;
   if (!res.ok || !json?.ok) {
-    return { kind: 'unavailable', reason: json?.error ?? `the read-back answered HTTP ${res.status}` };
+    const gate = readGateEnvelope(json);
+    return {
+      kind: 'unavailable',
+      reason: json?.error ?? `the read-back answered HTTP ${res.status}`,
+      ...(gate ? { gate } : {}),
+    };
   }
   return {
     kind: 'ready',
@@ -300,7 +369,13 @@ export function interpretPerformResponse(
       ...(typeof json?.guard === 'string' ? { guard: json.guard } : {}),
     };
   }
-  if (status === 503) return { kind: 'gate', reason: error };
+  if (status === 503) {
+    // The gate block is the SERVER's discrimination (#4283). Read it; never
+    // synthesize one from the message text, which would be the guess this arm
+    // was written to stop making.
+    const gate = readGateEnvelope(json);
+    return { kind: 'gate', reason: error, ...(gate ? { gate } : {}) };
+  }
   // 400 / 401 / 403 resolve BEFORE `performRecommendation` runs, so "nothing was
   // attempted" is ESTABLISHED, not assumed — see the `rejected` arm's doc-block.
   // These must never reach the indeterminate fallback below: doing so told an
@@ -801,23 +876,36 @@ export function PerformControls({
               `ux-baseline.md` G2 asks for an inline Fix-it on a gate. This one
               does not get one, and the reason is measured rather than stylistic.
 
-              Until #4261's `guardScalableToZero` merges, the ownership guard is
-              — by accident, not by design — the ONLY thing standing between a
-              click and an unrecoverable scale-to-zero on a stateful singleton
-              (#4261 measured three on the committed template). A one-click
-              button that stamps the tag would remove that protection in a
-              single gesture, from the surface that ranks findings by saving.
+              RE-KEYED (#4283). The previous justification was "until #4261's
+              `guardScalableToZero` merges, the ownership guard is — by accident,
+              not by design — the ONLY thing standing between a click and an
+              unrecoverable scale-to-zero on a stateful singleton". #4261 MERGED
+              (5454ae7f46), #4279's second unguarded door closed with #4295, and
+              #4293 closed the guard's last "could not establish -> allow" path.
+              So that stated expiry condition is now SATISFIED, and a developer
+              reading it would correctly conclude the spec had lapsed — while the
+              reason to keep it has not lapsed at all. Leaving a precondition in
+              place after it comes true is how a spec gets relaxed for a reason
+              nobody re-checked, so it is replaced here with one that does not
+              expire.
 
-              So this bar names the SEQUENCE instead of offering the shortcut.
-              The previous copy — "Stamp the estate ownership tag in the deploy
-              and this becomes available" — read as an instruction to do exactly
-              that, with nothing saying what it unlocks. */}
+              THE DURABLE REASON: ownership is not a console setting. The
+              `loom-estate-id` tag is stamped by the DEPLOY (#4274) and
+              backfilled from the manifest (#4267) — per
+              `auto-bind-by-default.md` the platform already performs it, so
+              there is nothing here for a Fix-it to fix. A button that stamped
+              the tag from this page would be the console asserting ownership of
+              an estate it only observes, in one gesture, from a list ranked by
+              cost saving. That is a different act from resolving a config gate,
+              and it is the one act this surface must not offer. */}
           <br />
           This is a data condition, not a configuration gate: the tag is stamped by the deploy
-          (#4274) and backfilled onto existing resources (#4267). Both are sequenced BEHIND the
-          statefulness guard in #4261 on purpose — while that guard is unmerged, ownership is
-          the last check between this control and a scale-to-zero on a runtime that holds state
-          in-process. Nothing here offers to stamp it for you.
+          (#4274) and backfilled onto existing resources (#4267), so the platform already performs
+          it and there is nothing here for a Fix-it to fix. The statefulness guard this bar was
+          once sequenced ahead of has since landed in full (#4261, plus #4295 for the scaling
+          route and #4293 for the guard&apos;s last unestablished-shape path), so ownership is no
+          longer the last check — it is simply not this console&apos;s to stamp. Nothing here
+          offers to stamp it for you.
         </MessageBarBody>
       </MessageBar>
     );
@@ -1174,38 +1262,49 @@ export function PerformOutcomeView({ outcome }: { outcome: PerformOutcomeResult 
         </MessageBar>
       );
     case 'gate':
+      // ── THE SERVER SAID WHICH GATE (#4283) ──────────────────────────────
+      // `gate` is present only when the route classified the 503 as a named
+      // configuration gap, so rendering the shared HonestGate here asserts
+      // nothing this page inferred: the id, the title, the remediation and the
+      // Fix-it href all came off the wire. `ux-baseline.md` G2 is satisfied by
+      // the SAME renderer every other gated surface uses — one Fix-it wizard,
+      // one registry, no bespoke bar.
+      if (outcome.gate) {
+        return (
+          <div data-testid="perform-gate" data-gate-id={outcome.gate.id}>
+            <HonestGate
+              gate={outcome.gate}
+              surface="Brain — recommendations"
+              detail={outcome.reason}
+            />
+          </div>
+        );
+      }
       return (
         <MessageBar intent="warning" data-testid="perform-gate">
           <MessageBarBody>
             {/* NOT "Not configured in this deployment." That titled every 503 as
                 a configuration gap, and the route also answers 503 for a
                 Resource Graph collection failure — a token acquisition failure,
-                a throttle, a 403, a 500. `apiHonestError` sends only
-                `{ok:false, error}`, so nothing in the body separates the two.
-                The status establishes that the attempt stopped before running;
-                the server's own message is the only thing that says why. */}
+                a throttle, a 403, a 500. Since #4283 the route sends a `gate`
+                envelope for the two CONFIGURATION classes and deliberately
+                none for the ARG class, so reaching THIS branch means the server
+                itself did not classify the cause. The status establishes that
+                the attempt stopped before running; the server's own message is
+                the only thing that says why. */}
             <MessageBarTitle>Stopped at a precondition — nothing was performed.</MessageBarTitle>
             {outcome.reason} This status covers BOTH a value the deploy did not set AND an estate
             read that did not succeed (token acquisition, throttling, or a non-OK Resource Graph
-            answer). The response carries no field separating them, so the server&apos;s message
-            above is the only discriminator and this page does not guess between them.
+            answer). This response named no gate, so the server&apos;s message above is the only
+            discriminator and this page does not guess between them.
           </MessageBarBody>
-          {/* G2, as far as this lane can honestly take it. The ONE day-one
-              configuration gate behind this status is `cosmos-config`, which is
-              already in the registry (`lib/gates/registry/data-plane.ts`) with a
-              real ARM resource-picker Fix-it for LOOM_COSMOS_ENDPOINT and a
-              wildcard surface that covers this page — so it is discoverable and
-              resolvable at /admin/gates today.
-
-              What is NOT shipped here is an INLINE `<HonestGate>`: its bar reads
-              "<surface> needs <gate> wired in this deployment", and rendering
-              that over a 503 which may equally be an ARG throttle would assert
-              the very cause this arm was just fixed to stop guessing at
-              (`deploy-integrity.md` R7). The honest inline Fix-it needs the
-              route to send a `gate` envelope (`lib/api/gate-envelope.ts`) so the
-              client can tell the two apart — a change to
-              `app/api/admin/brain/perform/route.ts`, which is the backend
-              lane's file. Tracked; see the PR body. */}
+          {/* No inline Fix-it on THIS branch, and the reason is measured rather
+              than stylistic: HonestGate's bar reads "<surface> needs <gate>
+              wired in this deployment", and rendering that over a 503 which may
+              equally be an ARG throttle would assert the very cause this arm
+              exists to stop guessing at (`deploy-integrity.md` R7). The gate
+              registry link is offered instead — every gate behind this status is
+              discoverable and resolvable there. */}
           <MessageBarActions>
             <Button
               as="a"
@@ -1266,6 +1365,28 @@ export function PerformStateDisclosure({
   onRetry: () => void;
 }) {
   if (!performStateNoticeShown(state) || state === null || state.kind === 'ready') return null;
+  // #4283 — when the read-back's 503 named its gate, render the SAME Fix-it the
+  // rest of the console renders. The Retry stays, because a gate that was just
+  // resolved needs a re-read and the wizard's own poll only watches the gate.
+  if (state.gate) {
+    return (
+      <div data-testid="perform-state-disclosure" data-gate-id={state.gate.id}>
+        <HonestGate
+          gate={state.gate}
+          surface="Brain — recommendation state"
+          detail={
+            `${state.reason} Recorded decisions, receipts and performability are therefore not ` +
+            'shown, and no Perform action is offered until this read succeeds — an unreadable ' +
+            'registry is not evidence that the platform cannot act.'
+          }
+          onResolved={onRetry}
+        />
+        <Button size="small" appearance="secondary" onClick={onRetry} data-testid="perform-state-retry">
+          Retry
+        </Button>
+      </div>
+    );
+  }
   return (
     <MessageBar intent="warning" data-testid="perform-state-disclosure">
       <MessageBarBody>

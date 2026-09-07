@@ -167,7 +167,10 @@ describe('DELETE — drops the engine object, never the source bytes', () => {
     const id = (await c.json()).shortcut.id;
     const res = await DELETE(delReq(`workspaceId=ws1&id=${id}`));
     expect((await res.json()).ok).toBe(true);
-    expect(dropShortcutObject).toHaveBeenCalledWith({ engine: 'synapse', engineObject: 'loom_lakehouse.shortcuts.sc_x' });
+    // The scope is part of the call shape, not decoration: the route passes the
+    // item id so the drop is attributable to THIS shortcut. Asserting it here is
+    // what keeps a future caller from dropping an engine object it cannot name.
+    expect(dropShortcutObject).toHaveBeenCalledWith({ engine: 'synapse', engineObject: 'loom_lakehouse.shortcuts.sc_x', scope: { itemId: id } });
     expect(store.has(id)).toBe(false);
   });
 });

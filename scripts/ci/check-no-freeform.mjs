@@ -2159,6 +2159,28 @@ export const TOUCH_EXEMPT = new Map([
     'apps/fiab-console/lib/editors/graph-editors.tsx',
     '#3878 fixed the envelope reads here (34 lines); :1355 is a source Delta table URI needing the lakehouse-table enumeration #3511 is building',
   ],
+  // #3530 made the platform INSTALL the packages an app-installed notebook
+  // imports, instead of leaving the user to read `ModuleNotFoundError` off a
+  // failed Run and hand-attach an environment. That is the auto-bind-by-default
+  // §5 answer this guard asks for, and the change here is its VISIBLE half: the
+  // header badge and Packages tab now state which session packages Loom already
+  // arranged, where the panel used to say only "No environment attached".
+  //
+  // The one baselined site is :442, `Library path or filename` — the .jar/.whl
+  // custom-library box, which this file's own docblock already calls "the one
+  // allowed free-text field — a filename, not a config blob". It is NOT the
+  // package ask #3530 removed, and clearing it is real product work: a picker
+  // needs a route that enumerates the workspace's uploaded .jar/.whl artifacts,
+  // which does not exist yet. Landing that inside a provisioner bug-fix PR would
+  // make both halves harder to review.
+  //
+  // Dated exception in the shape #3626 established, not amnesty: acceptance in
+  // #3530's follow-up includes DELETING this entry once the artifact picker
+  // lands.
+  [
+    'apps/fiab-console/lib/components/notebook/environment-panel.tsx',
+    '#3530 surfaced the auto-installed session packages here; the remaining .jar/.whl path site needs an artifact picker',
+  ],
 ]);
 
 // ═══════════════════════════════════════════════════════════════════════════
