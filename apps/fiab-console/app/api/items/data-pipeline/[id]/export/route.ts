@@ -93,8 +93,16 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string 
     // #3700 — the SERIALIZE boundary. `target: 'adf'` above fixes branch 3 only;
     // branch 2 (`state.definition`) is whatever the editor last saved, i.e. the
     // CANVAS shape, and it is the branch most exports actually take. Normalizing
-    // here covers every branch. Idempotent, so a definition read live FROM ADF
-    // (branch 1) round-trips unchanged.
+    // here covers every branch.
+    //
+    // Branch 1 is a definition read LIVE FROM ADF, and it round-trips because
+    // `normalizeActivity` treats an activity that already carries a
+    // `typeProperties` object as wire-shaped and preserves EVERY root key on it,
+    // including ones this repo does not enumerate (`state`, `onInactiveMarkAs`,
+    // and whatever ADF adds next). An earlier cut of this decided root-vs-body
+    // from a closed allowlist alone and MOVED a deactivated activity's `state`
+    // into `typeProperties`, so this comment asserted a round-trip that did not
+    // hold; `pipeline-binding.test.ts` now pins it with a live-ADF fixture.
     const wireDefinition = toAdfWireShape(definition);
 
     const zipBuf = writeZip([

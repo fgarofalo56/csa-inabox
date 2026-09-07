@@ -1,15 +1,41 @@
 /**
  * THE ONE data-product discovery decision (GHSA-hf73-rp4q-66pf addendum, #3580).
  *
- * WHY THIS FILE EXISTS. The addendum fix landed on ONE of the two routes that
- * perform an unscoped cross-partition `SELECT * FROM c WHERE c.id = @id AND
- * c.itemType = @t` on a data product: `[id]/ports`. Its sibling
- * `GET /api/data-products/[id]` runs the SAME query, returns the SAME record —
- * the whole `WorkspaceItem`, `state.ports` included, i.e. the same `abfss://`
- * container paths / Synapse `schema.table` names / ADX database names the ports
- * route was fixed for — and its docblock still said, in as many words, "GET is
- * NOT ownership gated". The posture sentence was identical on both routes; the
- * implementation existed on one.
+ * WHY THIS FILE EXISTS. The addendum fix landed on `[id]/ports` — ONE route
+ * performing an unscoped cross-partition `SELECT * FROM c WHERE c.id = @id AND
+ * c.itemType = @t` on a data product. Its sibling `GET /api/data-products/[id]`
+ * runs the SAME query, returns the SAME record — the whole `WorkspaceItem`,
+ * `state.ports` included, i.e. the same `abfss://` container paths / Synapse
+ * `schema.table` names / ADX database names the ports route was fixed for — and
+ * its docblock still said, in as many words, "GET is NOT ownership gated". The
+ * posture sentence was identical on both routes; the implementation existed on
+ * one. THIS module fixes that second route.
+ *
+ * THE POPULATION IS NOT TWO — SAY SO PLAINLY. An earlier draft of this comment
+ * called them "the two routes", which was wrong and is exactly the kind of
+ * false scope claim R7 forbids. Measured at this head, in this worktree:
+ *
+ *     grep -rln --include=route.ts "FROM c WHERE c.id = @id AND c.itemType" app/api
+ *     -> 23 route.ts files repo-wide, 9 of them under app/api/data-products/[id]/
+ *
+ * Of those 9, THREE carry any authorization symbol at all — counted with
+ * `grep -cE "authorizeWorkspace|callerMayDiscover|resolveDiscoveryAccess|
+ * resolveDataProductDataAccess|authorizeItemWorkspace"`:
+ *
+ *     14  [id]/ports/route.ts     — the addendum fix, its own private copy
+ *      5  [id]/route.ts           — THIS module, the route being fixed here
+ *      2  [id]/preview/route.ts   — resolveDataProductDataAccess (a DIFFERENT
+ *                                   decision: approved data access, and it
+ *                                   answers 403, see NOT_FOUND below)
+ *      0  access-requests · analytics · certification · policies · sla-check ·
+ *         subscribers
+ *
+ * So the six zero-hit routes run the same unscoped query with no
+ * workspace/ownership token whatsoever and are NOT audited by this change.
+ * Three of them (analytics, sla-check, certification) return derived values
+ * rather than the raw item, which lowers the disclosure severity but does not
+ * remove it. That is a disclosed gap and a follow-up, NOT a claim that the class
+ * is closed: "the decision moves here, once" is 1-of-9, not 1-of-2.
  *
  * That is the shape this repo keeps re-finding: a fix keyed to a LAYER (one
  * route file) rather than to the DECISION, so the next caller of the same
@@ -71,13 +97,20 @@ import { resolveLifecycleState, type LifecycleState } from '@/lib/dataproducts/l
  *  discover this one". Distinguishing them is what made this an existence
  *  oracle; 404-not-403 is the same choice `authorizeItemWorkspace` makes.
  *
- *  QUALIFIED CLAIM: the two refusals are byte-identical in CONTENT, not in
- *  TIMING. "No such product" returns after one Cosmos query; "exists but not
- *  discoverable" returns after that plus `authorizeWorkspace` plus a
- *  `workspaceTid` query. A timing side-channel therefore remains. It is low
- *  value to an attacker who already holds the Cosmos GUID (neither route is an
- *  enumeration surface — that is why the finding is P2), but "the oracle is
- *  closed" would be an overclaim, so it is stated instead. */
+ *  QUALIFIED CLAIM, AND IT IS ROUTE-LOCAL. The two refusals are byte-identical
+ *  in CONTENT, not in TIMING: "no such product" returns after one Cosmos query;
+ *  "exists but not discoverable" returns after that plus `authorizeWorkspace`
+ *  plus a `workspaceTid` query. A timing side-channel therefore remains. It is
+ *  low value to an attacker who already holds the Cosmos GUID (neither route is
+ *  an enumeration surface — that is why the finding is P2), but "the oracle is
+ *  closed" would be an overclaim, so it is stated instead.
+ *
+ *  AND the oracle is closed ON THIS ROUTE ONLY. `POST [id]/preview` still
+ *  answers `403 {code:'access_required'}` for a product that EXISTS but is not
+ *  readable by the caller, versus `404` for a miss (`preview/route.ts:68,83`) —
+ *  a status-code oracle over the same id space, one path over. That is
+ *  pre-existing and untouched here; it is named so this constant's promise is
+ *  not read as a property of the data-product API. */
 export const NOT_FOUND = 'Data product not found';
 
 /**
@@ -207,17 +240,19 @@ export async function resolveDiscoveryAccess(
   return 'discoverable';
 }
 
-/** Boolean form for callers that return the same body to both admitted
- *  populations. Callers that return MORE to a member than to a catalog reader
- *  must use `resolveDiscoveryAccess` instead — collapsing the two here is how
- *  `[id]` came to hand a non-member the raw item.
+/*
+ * `callerMayDiscover` USED TO BE HERE, AND IS DELETED RATHER THAN KEPT.
  *
- *  Currently unused inside the app: `[id]/ports`, the route whose shape this
- *  mirrors, still runs its own copy for the reason in the file header. Kept so
- *  the two forms of the decision live together when that consolidation lands. */
-export async function callerMayDiscover(
-  session: SessionPayload,
-  item: WorkspaceItem,
-): Promise<boolean> {
-  return (await resolveDiscoveryAccess(session, item)) !== 'denied';
-}
+ * It was a boolean wrapper over `resolveDiscoveryAccess`, exported, with ZERO
+ * callers — measured: `grep -rn callerMayDiscover` finds only `ports/route.ts`'s
+ * own module-private copy (`:227`, called at `:254` and `:280`) and its spec.
+ * The rationale for keeping it was "so the two forms live together when the
+ * consolidation lands", which is a second copy of a SECURITY decision with no
+ * caller and no test pinning it: nothing would have gone red if a future edit
+ * relaxed it, and the next reader would have found two similar-looking discovery
+ * functions and had to work out which one enforces. When `ports/route.ts` can
+ * finally delegate (see the file header — it needs `resolveDiscoveryAccess`
+ * registered in `check-route-guards.mjs`'s `GUARD_SIGNAL_RE` + `GUARD_WRAPPERS`),
+ * it will call `resolveDiscoveryAccess(...) !== 'denied'` directly, which is the
+ * whole body this deleted function had.
+ */

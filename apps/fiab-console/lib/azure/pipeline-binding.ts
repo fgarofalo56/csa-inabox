@@ -357,23 +357,28 @@ export function pipelineDefinitionFromContent(
 }
 
 /**
- * The keys ADF/Synapse read at an ACTIVITY ROOT. Everything else an activity
- * carries belongs under `typeProperties`, and the service IGNORES it where it
- * sits.
+ * The keys ADF/Synapse read at an ACTIVITY ROOT, used to decide what belongs
+ * under `typeProperties` when an activity arrives in the CANVAS shape.
  *
- * Grounded in the Microsoft ADF activity schema (Activity / ExecutionActivity /
- * ControlActivity): `name` and `type` identify it, `dependsOn`, `policy`,
- * `linkedServiceName`, `inputs`, `outputs`, `description` and `userProperties`
- * are the well-known siblings, and `typeProperties` is the per-activity-type
- * body (`notebookPath`, `source`/`sink`, `expression`, `items`, nested
- * `activities`, …).
+ * Grounded in the published ADF ARM schema
+ * (`https://schema.management.azure.com/schemas/2018-06-01/Microsoft.DataFactory.json`,
+ * fetched 2026-09-07, HTTP 200, 693244 bytes): `definitions.Activity.properties`
+ * is exactly `{name, type, description, dependsOn, userProperties}` and
+ * `definitions.ExecutionActivity` adds `{linkedServiceName, policy}`;
+ * `typeProperties` is the per-activity-type body (`notebookPath`,
+ * `source`/`sink`, `expression`, `items`, nested `activities`, …). `inputs` and
+ * `outputs` are the legacy v1-style dataset siblings, kept because live
+ * definitions still carry them.
  *
- * `state` and `onInactiveMarkAs` are NOT in this set on purpose: they are newer
- * root-level fields and a wrong guess here MOVES a real root key into
- * `typeProperties`, which is the same class of silent breakage this function
- * exists to fix. They are absent from the canvas shape (nothing in Loom writes
- * them), so leaving them out costs nothing today; add them WITH a fixture when
- * something starts producing them.
+ * THIS SET IS NOT — AND CANNOT BE — COMPLETE, which is why it is no longer the
+ * sole decision. That same fetched schema contains ZERO occurrences of `state`
+ * and `onInactiveMarkAs` (the Deactivate-activity fields), so the published
+ * schema does not even describe every root key ADF accepts today, and
+ * `Activity` declares `additionalProperties` precisely because the service
+ * tolerates root keys this document does not enumerate. Any closed allowlist
+ * used as "move everything else" is therefore destructive-by-default over
+ * definitions it did not author. See `normalizeActivity` for the discriminator
+ * that replaced that default.
  */
 const ADF_ACTIVITY_ROOT_KEYS: ReadonlySet<string> = new Set([
   'name', 'type', 'dependsOn', 'policy', 'linkedServiceName',
@@ -384,23 +389,64 @@ const ADF_ACTIVITY_ROOT_KEYS: ReadonlySet<string> = new Set([
  *  child is itself an activity and needs the same normalization. */
 const NESTED_ACTIVITY_KEYS = ['activities', 'ifTrueActivities', 'ifFalseActivities', 'defaultActivities'];
 
+/**
+ * Normalize ONE activity to the wire shape.
+ *
+ * THE DISCRIMINATOR IS THE PRESENCE OF `typeProperties`, NOT THE ALLOWLIST.
+ *
+ * The first cut of this function moved every root key absent from
+ * `ADF_ACTIVITY_ROOT_KEYS` into `typeProperties`. Review falsified that with a
+ * live-ADF fixture: a Copy activity deactivated in ADF Studio arrives as
+ * `{name, type, state:'Inactive', onInactiveMarkAs:'Skipped', policy,
+ * typeProperties:{source,sink}}`, and the allowlist MOVED `state` and
+ * `onInactiveMarkAs` under `typeProperties` — so a re-import silently
+ * RE-ACTIVATED a deliberately disabled activity and shipped ADF two keys it
+ * does not expect there. That is the very class of silent breakage #3700 exists
+ * to fix, inflicted by the fix itself, and it reaches three write boundaries:
+ * export branch 1 and the detail GET both read definitions LIVE FROM ADF and
+ * hand them to the editor, which PUTs them back.
+ *
+ * The allowlist could not be repaired by adding those two keys: I could not
+ * establish a complete root-key set from any source available here (the
+ * published ARM schema above omits both), and the next field ADF adds would
+ * break it again the same way. So the destructive default is gone:
+ *
+ *   - Activity HAS a `typeProperties` object  -> it is ALREADY wire-shaped.
+ *     Every root key stays at the root, untouched, whether or not this file
+ *     knows the key. Recursion still descends into control-flow children.
+ *   - Activity has NO `typeProperties`        -> it is the CANVAS shape (the
+ *     bundle install path spreads control-flow config onto the root). The
+ *     allowlist collects the body, exactly as before.
+ *
+ * That matches every authoring path in the app: the editors build activities
+ * with `typeProperties` already nested (see `azure-services-editors.tsx`
+ * activity builders), and only `pipelineDefinitionFromContent(target:'canvas')`
+ * produces the flat form. It makes the function idempotent for ANY definition
+ * ADF can return, not merely for the ones whose root keys were enumerated here
+ * — which is what the export route's round-trip comment actually promises.
+ */
 function normalizeActivity(raw: unknown): unknown {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return raw;
   const a = raw as Record<string, unknown>;
+  const existing = (a.typeProperties && typeof a.typeProperties === 'object' && !Array.isArray(a.typeProperties))
+    ? (a.typeProperties as Record<string, unknown>)
+    : undefined;
+  const alreadyWireShaped = existing !== undefined;
+
   const root: Record<string, unknown> = {};
   const moved: Record<string, unknown> = {};
   for (const [k, v] of Object.entries(a)) {
     if (k === 'typeProperties') continue;
-    if (ADF_ACTIVITY_ROOT_KEYS.has(k)) root[k] = v;
+    // Already wire-shaped: PRESERVE every root key, known or not. Only the
+    // canvas shape gets its unknown keys collected into the type body.
+    if (alreadyWireShaped || ADF_ACTIVITY_ROOT_KEYS.has(k)) root[k] = v;
     else moved[k] = v;
   }
-  const existing = (a.typeProperties && typeof a.typeProperties === 'object' && !Array.isArray(a.typeProperties))
-    ? (a.typeProperties as Record<string, unknown>)
-    : undefined;
   // ON CONFLICT THE EXISTING `typeProperties` WINS. A definition that already
   // carries one is already wire-shaped for that key, and letting a stray root
   // key overwrite it would let a half-migrated document silently downgrade.
   const typeProperties: Record<string, unknown> = { ...moved, ...(existing ?? {}) };
+
 
   for (const key of NESTED_ACTIVITY_KEYS) {
     const nested = typeProperties[key];

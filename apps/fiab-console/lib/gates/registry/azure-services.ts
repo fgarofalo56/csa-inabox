@@ -475,7 +475,7 @@ export const AZURE_SERVICES_GATE_META: Record<string, GateMeta> = {
       { path: '/items/power-automate-flow', label: 'Power Automate flow editor' },
       { path: '/items/power-page', label: 'Power Pages editor' },
       { path: '/items/ai-builder-model', label: 'AI Builder model editor' },
-      { path: '/items/power-platform-environment', label: 'Power Platform environment editor' },
+      { path: '/items/powerplatform-environment', label: 'Power Platform environment editor' },
       // #3544 — Copilot Studio agents, knowledge, topics and templates are
       // Dataverse rows. The "Use template" action that surfaced the admission
       // refusal live on 2026-08-15 writes one.

@@ -165,4 +165,36 @@ describe('ontologySqlRefViolation — the pure policy, exercised directly', () =
     // a binding that simply omitted `database`.
     expect(ontologySqlRefViolation('master.dbo.orders', undefined)).toBeTruthy();
   });
+
+  it('refuses ALL NINE fixed-role schemas, not the two the first cut listed', () => {
+    // Review: `FORBIDDEN_SQL_SCHEMAS` held `db_owner` and `db_accessadmin` and
+    // omitted the other seven — "a half-done enumeration reads as complete".
+    // SQL Server creates a schema per fixed database role in every database, so
+    // the set is closed and this asserts the whole of it. Written as data rather
+    // than nine `it`s so a future edit that drops one goes red by name.
+    for (const schema of [
+      'db_owner', 'db_accessadmin', 'db_securityadmin', 'db_ddladmin',
+      'db_backupoperator', 'db_datareader', 'db_datawriter',
+      'db_denydatareader', 'db_denydatawriter',
+    ]) {
+      expect(ontologySqlRefViolation(`${schema}.t`, 'db'), `${schema} is not refused`)
+        .toContain('SQL engine metadata');
+      // …and case does not launder it, the same way `sys` cannot be cased past.
+      expect(ontologySqlRefViolation(`${schema.toUpperCase()}.t`, 'db'), `${schema} upper-cased is not refused`)
+        .toBeTruthy();
+    }
+    expect(ontologySqlRefViolation('sys.sql_logins', 'db')).toBeTruthy();
+    expect(ontologySqlRefViolation('INFORMATION_SCHEMA.TABLES', 'db')).toBeTruthy();
+  });
+
+  it('CONTROL — the guard is SILENT on a one-part ref, which the docblock now says', () => {
+    // NOT an endorsement: this pins the DISCLOSED gap so it cannot quietly
+    // become a claim of coverage. The schema test sits behind `parts.length>=2`
+    // because a one-part ref carries no schema to test; whether the engine
+    // resolves `sysobjects` out of `sys` for an unqualified name was NOT
+    // measured here (no Synapse endpoint was reached), so this asserts what the
+    // CODE does, not what the server would do.
+    expect(ontologySqlRefViolation('sysobjects', 'db')).toBeNull();
+    expect(ontologySqlRefViolation('sysdatabases', 'db')).toBeNull();
+  });
 });

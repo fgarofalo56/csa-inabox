@@ -303,12 +303,22 @@ const SQL_REF_RE = /^[A-Za-z0-9_.$#[\]]+$/;
  * caller was never meant to read is still resolved.
  */
 
-/** SQL schemas that are ENGINE METADATA, never user data. Refused on every
- *  ontology SQL binding regardless of what the enumerator says, because a
- *  Serverless/Dedicated catalog scan does not list them and their absence would
- *  otherwise read as "not found yet" rather than "not allowed". */
+/** SQL schemas that are ENGINE METADATA or a fixed-role schema, never user data.
+ *  Refused on every ontology SQL binding regardless of what the enumerator says,
+ *  because a Serverless/Dedicated catalog scan does not list them and their
+ *  absence would otherwise read as "not found yet" rather than "not allowed".
+ *
+ *  COMPLETE, not a sample. Review flagged the first cut for listing 2 of the 9
+ *  fixed database-role schemas (`db_owner`, `db_accessadmin`) — a half-done
+ *  enumeration that reads as complete is worse than none, because the next
+ *  reader assumes the list was thought through. SQL Server creates a schema per
+ *  fixed database role in every database, so the set is closed and all nine are
+ *  here, alongside `sys`, `INFORMATION_SCHEMA` and `guest`. */
 const FORBIDDEN_SQL_SCHEMAS: ReadonlySet<string> = new Set([
-  'sys', 'information_schema', 'guest', 'db_owner', 'db_accessadmin',
+  'sys', 'information_schema', 'guest',
+  'db_owner', 'db_accessadmin', 'db_securityadmin', 'db_ddladmin',
+  'db_backupoperator', 'db_datareader', 'db_datawriter',
+  'db_denydatareader', 'db_denydatawriter',
 ]);
 
 /** Split a SQL ref into its dotted parts with brackets stripped. Naive on
@@ -329,6 +339,19 @@ function sqlRefParts(ref: string): string[] {
  * STATES ONLY WHAT IT ESTABLISHED (R7). "Outside the name-space this binding may
  * address" — not "does not exist", not "you lack permission", neither of which
  * is knowable from a string.
+ *
+ * WHERE THIS GUARD IS SILENT, SAID OUT LOUD. The schema test sits behind
+ * `parts.length >= 2`, so a ONE-PART ref (`sysobjects`, `sysdatabases`,
+ * `syslogins`) gets no schema test at all — there is no schema in the string to
+ * test, and which schema the engine resolves it against is a server-side
+ * decision this pure function cannot see. Whether Synapse Serverless or a
+ * Dedicated pool actually resolves those legacy compatibility names out of `sys`
+ * for an unqualified ref was NOT measured here — no Synapse endpoint was
+ * reached by this change — so this is not a claim that it is exploitable. It IS
+ * a claim that the guard does not cover it, which the residual paragraph above
+ * did not say. Closing it needs the deferred AUTHORIZATION half (live catalog
+ * enumeration answers "is this one of the objects the binding exposes?" for a
+ * one-part ref, which no string test can).
  */
 export function ontologySqlRefViolation(ref: string, ownDatabase?: string): string | null {
   const parts = sqlRefParts(ref);

@@ -21,11 +21,19 @@
  *       had touched anything. `ux-baseline.md`: "no error banners on a freshly
  *       created item; unconfigured states are guided, never red."
  *
- * WHY THIS ASSERTS THE COMPONENT, NOT AN EDITOR. All 21 `<ErrorBar>` call sites
- * share this ONE component, so rendering an editor would exercise its fetch
- * plumbing and mount-time gates instead of the decision under test, and a
- * failure would not name which half broke. Same reasoning as the #3544 sibling
- * spec next to this file.
+ * WHY THIS ASSERTS THE COMPONENT, NOT AN EDITOR. The 20 `<ErrorBar>` call sites
+ * in `powerplatform-editors.tsx` share this ONE component, so rendering an
+ * editor would exercise its fetch plumbing and mount-time gates instead of the
+ * decision under test, and a failure would not name which half broke. Same
+ * reasoning as the #3544 sibling spec next to this file.
+ *
+ * SCOPE OF (b), STATED HONESTLY. `firstOpen` is computed once
+ * (`id === 'new' && !touched`) and passed at exactly TWO of those 20 call sites,
+ * both in the dataverse-table editor. The admission→gate decision in (a) IS
+ * family-wide, because every call site shares this component; the clean-first-open
+ * behaviour is NOT — the other Power Platform editors still render a mount-time
+ * failure through the error branch. Widening it is a separate change with its own
+ * receipt, and neither this spec nor the PR claims it.
  *
  * THE NEGATIVE CASES ARE THE LOAD-BEARING ONES. A classifier that returned true
  * for everything, or a `firstOpen` that swallowed every error, would each pass
@@ -36,6 +44,7 @@ import { describe, it, expect } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import { ErrorBar } from '../powerplatform-editors';
 import { getGate } from '@/lib/gates/registry';
+import { findItemType } from '@/lib/catalog/fabric-item-types';
 
 /** The exact prose Dataverse/BAP return for the missing Application User. */
 const ADMISSION_PROSE = [
@@ -59,6 +68,28 @@ const NON_ADMISSION = [
  *  the same string the pre-fix component rendered for every message. */
 const hasPlainErrorBar = () => screen.queryByText('Power Platform error') !== null;
 
+/**
+ * PRESENCE, not absence. Review falsified the first cut of this file: the
+ * admission cases asserted only `hasPlainErrorBar() === false`, and replacing
+ * the gate branch with `return null` — rendering NOTHING AT ALL — left the
+ * suite at 15/15 green. A blank space where the Fix-it should be was
+ * indistinguishable from the fix, so the "renders the gate" receipt was
+ * measuring the other branch's absence.
+ *
+ * These are the three controls the #3544 sibling asserts, and they are chosen
+ * because each fails for a DIFFERENT wrong outcome:
+ *   - the Fix-it BUTTON is absent when nothing renders AND when HonestGate
+ *     falls through to its "gate is not in the registry" generic bar (which
+ *     has no Fix-it), i.e. it catches a typo'd gate id as well as a dead branch;
+ *   - the GATE REGISTRY link is the G2 discoverability requirement;
+ *   - the verbatim FAILURE PROSE proves the gate did not swallow the cause (R7).
+ */
+const expectGateRendered = (msg: string) => {
+  expect(screen.getByRole('button', { name: /fix it/i })).toBeTruthy();
+  expect(screen.getByRole('link', { name: /gate registry/i })).toBeTruthy();
+  expect(screen.getByText(new RegExp(msg.slice(0, 30).replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i'))).toBeTruthy();
+};
+
 describe('svc-dataverse is a REGISTERED gate, so the Fix-it it renders exists', () => {
   it('resolves from the gate registry', () => {
     const gate = getGate('svc-dataverse');
@@ -73,6 +104,22 @@ describe('svc-dataverse is a REGISTERED gate, so the Fix-it it renders exists', 
     const note = getGate('svc-dataverse')!.fixit.grantNote ?? '';
     expect(note).toContain('dataverse-add-appuser.sh');
   });
+
+  it('names the Power Platform editor surfaces it actually fires on', () => {
+    // A registry surface row is a CLAIM about where the gate fires, and a path
+    // the console does not serve makes that claim false. Review caught exactly
+    // that: this list carried `/items/power-platform-environment`, but the item
+    // slug is `powerplatform-environment` (lib/catalog/item-types/power-platform.ts).
+    // Asserted against the ITEM-TYPE REGISTRY rather than a hand-copied literal
+    // list, so a future rename cannot leave a stale row here looking correct.
+    const paths = (getGate('svc-dataverse')!.surfaces || []).map((s: { path: string }) => s.path);
+    const ppPaths = paths.filter((p) => /^\/items\/(power-?platform|dataverse)/.test(p));
+    expect(ppPaths.length).toBeGreaterThan(0);
+    for (const p of ppPaths) {
+      const slug = p.replace(/^\/items\//, '');
+      expect(findItemType(slug), `gate surface '${p}' names a slug no item type serves`).toBeTruthy();
+    }
+  });
 });
 
 describe('an ADMISSION refusal renders the gate, not a red bar', () => {
@@ -81,6 +128,8 @@ describe('an ADMISSION refusal renders the gate, not a red bar', () => {
       const { unmount } = render(<ErrorBar msg={msg} surface="Dataverse table editor" />);
       // At head this rendered "Power Platform error" with no Fix-it anywhere.
       expect(hasPlainErrorBar()).toBe(false);
+      // …and the gate is actually THERE, not merely the error bar gone.
+      expectGateRendered(msg);
       unmount();
     });
   }
@@ -120,9 +169,11 @@ describe('first open of a NEW item is guided, never red', () => {
   it('an ADMISSION refusal gates on the first-open path too', () => {
     // The guided-warning branch must not out-rank the gate: the gate IS the
     // guided state for this failure, and it is the one with a Fix-it.
-    render(<ErrorBar msg="The user is not a member of the organization." firstOpen />);
+    const msg = 'The user is not a member of the organization.';
+    render(<ErrorBar msg={msg} firstOpen />);
     expect(screen.queryByText('Not connected yet')).toBeNull();
     expect(hasPlainErrorBar()).toBe(false);
+    expectGateRendered(msg);
   });
 });
 

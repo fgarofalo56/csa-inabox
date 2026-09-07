@@ -375,13 +375,72 @@ function itemToProduct(item: WithEtag, tenantId: string | null): DataProductDoc 
  * to be edited every time `state` grows a field; this excludes new fields by
  * default and its omissions are visible in one screen.
  *
- * `state.displayName` is the ONLY state key that survives, because
- * `ConsumerDataProductDetail` reads it (`state.displayName || item.displayName`)
- * and it is the same name the marketplace list already shows this caller.
+ * WHY IT IS NOT JUST `displayName`. The first cut kept ONLY `state.displayName`,
+ * and review measured what that does to the surface it was meant to protect:
+ * `ConsumerDataProductDetail` (`lib/editors/data-product-detail.tsx`) reads
+ * `state.description/domain/owner/sla/certified/purviewDataProductId` for its
+ * Overview grid and `state.contract` / `state.datasets` / `state.glossaryLinks`
+ * for three whole tabs. With `{displayName}` a discoverable non-member got an
+ * Overview of em-dashes and an empty Contract tab — "a tab that exists and
+ * renders empty", which `ux-baseline.md` forbids — so the redaction traded a
+ * disclosure for the broken surface it claimed to be avoiding.
+ *
+ * EVERY KEY BELOW, AND WHY IT IS SAFE TO SHOW THIS CALLER:
+ *
+ *   displayName, description, domain, owner, certified, contract
+ *     ALREADY DISCLOSED ON THIS SAME RESPONSE via `product`
+ *     (`itemToProduct` returns description, governanceDomainName, owners,
+ *     endorsed and contract to this exact branch). Adding them to `state` moves
+ *     no new byte to the caller; it only stops the component reading the copy
+ *     that was blanked.
+ *   sla
+ *     NEW here, and named as new: a service-level string the catalog exists to
+ *     publish. No address, no identifier, no credential.
+ *   datasets, glossaryLinks
+ *     REDACTED, not passed through. `DataProductDataset` carries
+ *     `qualifiedName` — for an ADLS asset that IS the `abfss://` address #3580
+ *     is about — and a `guid`. The table renders only name / typeName /
+ *     classifications (`qualifiedName` and `guid` are React keys), and the
+ *     glossary renders only `name`, so only those fields are projected.
+ *
+ * DELIBERATELY STILL WITHHELD, WITH ITS COST NAMED: `purviewDataProductId`.
+ * The spec next to this route asserts it in as many words
+ * (`expect(raw).not.toContain('purview-guid-do-not-leak')`), so withholding it
+ * is a standing decision of this codebase, not an oversight, and this change
+ * does not quietly reverse it. The cost is real and is recorded rather than
+ * hidden: `ConsumerDataProductDetail`'s Overview then prints "Not registered
+ * with the unified catalog" for a product that IS registered — an R7 false
+ * assertion on a surface, whose fix (render "—" / "not shown at catalog scope"
+ * when the key is absent rather than asserting non-registration) lives in
+ * `lib/editors/data-product-detail.tsx`, outside this change's ownership.
+ *
+ * STILL EXCLUDED, and this is the point of the file: `state.ports` (and its
+ * `ref`s), `state.content`, `state.bundle`, `state.lastRegisteredAt`,
+ * `state.purviewDataProductId`, and every key `state` grows after today.
  */
 function catalogItemProjection(item: WithEtag): Partial<WorkspaceItem> {
   const st = (item.state ?? {}) as Record<string, unknown>;
-  const displayName = typeof st.displayName === 'string' ? st.displayName : undefined;
+  const str = (k: string): string | undefined => (typeof st[k] === 'string' ? (st[k] as string) : undefined);
+  const state: Record<string, unknown> = {};
+  for (const k of ['displayName', 'description', 'domain', 'owner', 'sla']) {
+    const v = str(k);
+    if (v !== undefined) state[k] = v;
+  }
+  if (typeof st.certified === 'boolean') state.certified = st.certified;
+  if (st.contract && typeof st.contract === 'object' && !Array.isArray(st.contract)) state.contract = st.contract;
+  if (Array.isArray(st.datasets)) {
+    state.datasets = (st.datasets as Record<string, unknown>[]).map((d) => ({
+      name: typeof d?.name === 'string' ? d.name : '',
+      ...(typeof d?.typeName === 'string' ? { typeName: d.typeName } : {}),
+      ...(Array.isArray(d?.classifications)
+        ? { classifications: (d.classifications as unknown[]).filter((c): c is string => typeof c === 'string') }
+        : {}),
+    }));
+  }
+  if (Array.isArray(st.glossaryLinks)) {
+    state.glossaryLinks = (st.glossaryLinks as Record<string, unknown>[])
+      .map((g) => ({ name: typeof g?.name === 'string' ? g.name : '' }));
+  }
   return {
     id: item.id,
     itemType: item.itemType,
@@ -390,7 +449,7 @@ function catalogItemProjection(item: WithEtag): Partial<WorkspaceItem> {
     description: item.description,
     createdAt: item.createdAt,
     updatedAt: item.updatedAt,
-    state: displayName ? { displayName } : {},
+    state,
   } as Partial<WorkspaceItem>;
 }
 

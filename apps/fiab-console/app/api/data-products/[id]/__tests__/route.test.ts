@@ -85,6 +85,10 @@ const req = {} as any;
 const MEMBER = { workspace: { id: 'ws-1' }, role: 'Viewer' as AccessRole, via: 'acl', canWrite: false };
 
 const SECRET_REF = 'abfss://gold@acct.dfs.core.windows.net/customers';
+/** A dataset's Purview `qualifiedName` is the SAME class of secret as a port
+ *  `ref` — for an ADLS asset it IS the abfss address — and the catalog
+ *  projection must redact it while still populating the Datasets tab. */
+const DATASET_REF = 'abfss://silver@acct.dfs.core.windows.net/customers';
 
 function product(id: string, opts: { workspaceId: string; lifecycle?: string }) {
   return {
@@ -96,6 +100,18 @@ function product(id: string, opts: { workspaceId: string; lifecycle?: string }) 
     state: {
       ...(opts.lifecycle ? { lifecycleState: opts.lifecycle } : {}),
       contract: { version: '2.1.0', schema: [{ name: 'a' }, { name: 'b' }] },
+      // The catalog-metadata half of the record — what ConsumerDataProductDetail
+      // renders on Overview / Contract / Datasets / Glossary.
+      domain: 'Finance',
+      owner: 'Ada Lovelace',
+      sla: '99.9% availability, daily refresh',
+      certified: true,
+      datasets: [{
+        name: 'customers', typeName: 'azure_datalake_gen2_path',
+        qualifiedName: DATASET_REF, guid: 'dataset-guid-do-not-leak',
+        classifications: ['PII'],
+      }],
+      glossaryLinks: [{ name: 'Customer', guid: 'glossary-guid-do-not-leak' }],
       ports: {
         input: [],
         output: [{ id: 'o1', name: 'Gold Delta', kind: 'delta', ref: SECRET_REF }],
@@ -185,6 +201,58 @@ describe('the documented Purview-UC discovery model still works, at catalog scop
     const base = product('dp-legacy', { workspaceId: 'ws-1' });
     items['dp-legacy'] = { ...base, state: { ...base.state, lifecycleStatus: 'PUBLISHED' } };
     expect((await GET(req, ctx('dp-legacy'))).status).toBe(200);
+  });
+
+  // ---------------------------------------------------------------------------
+  // REVIEW REGRESSION — the redaction traded a disclosure for a broken surface.
+  //
+  // The first cut projected `state` down to `{displayName}`. Review measured
+  // what ConsumerDataProductDetail then renders: an Overview of em-dashes
+  // (domain / owner / SLA / endorsement all read `state.*`), an empty Contract
+  // tab and an empty Datasets tab — "a tab that exists and renders empty",
+  // which ux-baseline.md forbids. These pin BOTH halves at once: the catalog
+  // metadata is present AND the addresses are still gone. Asserting only the
+  // second half is what let the broken surface through.
+  // ---------------------------------------------------------------------------
+  it('the catalog projection POPULATES the consumer surface — not a page of em-dashes', async () => {
+    const body = await (await GET(req, ctx('dp-published'))).json();
+    const st = body.item.state;
+    expect(st.domain).toBe('Finance');
+    expect(st.owner).toBe('Ada Lovelace');
+    expect(st.sla).toBe('99.9% availability, daily refresh');
+    expect(st.certified).toBe(true);
+    // The Contract tab reads state.contract; {displayName} left it undefined.
+    expect(st.contract?.version).toBe('2.1.0');
+    // The Datasets and Glossary tabs read these; both rendered EmptyState before.
+    expect(st.datasets).toHaveLength(1);
+    expect(st.datasets[0].name).toBe('customers');
+    expect(st.datasets[0].classifications).toEqual(['PII']);
+    expect(st.glossaryLinks).toEqual([{ name: 'Customer' }]);
+  });
+
+  it('and it REDACTS the dataset qualifiedName, which is the same secret as a port ref', async () => {
+    const body = await (await GET(req, ctx('dp-published'))).json();
+    const raw = JSON.stringify(body);
+    // The whole point: the tab is populated WITHOUT the address behind it.
+    expect(raw).not.toContain('abfss://');
+    expect(raw).not.toContain(DATASET_REF);
+    expect(body.item.state.datasets[0].qualifiedName).toBeUndefined();
+    expect(raw).not.toContain('dataset-guid-do-not-leak');
+    expect(raw).not.toContain('glossary-guid-do-not-leak');
+  });
+
+  it('a state key nobody allowlisted is still excluded BY DEFAULT', async () => {
+    // The allowlist property itself — a field `state` grows tomorrow must not
+    // ride along. Without this the projection could regress to a denylist and
+    // every assertion above would still pass.
+    const base = product('dp-new-field', { workspaceId: 'ws-1', lifecycle: 'published' });
+    items['dp-new-field'] = {
+      ...base,
+      state: { ...base.state, someFieldAddedNextQuarter: 'https://internal.example/secret' },
+    };
+    const body = await (await GET(req, ctx('dp-new-field'))).json();
+    expect(body.item.state.someFieldAddedNextQuarter).toBeUndefined();
+    expect(JSON.stringify(body)).not.toContain('internal.example');
   });
 });
 
