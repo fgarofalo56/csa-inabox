@@ -38,7 +38,7 @@ a writer.
 
 | Layer | Change |
 |-------|--------|
-| Session | `UserClaims.tid` added; populated in `app/auth/callback` + `app/api/auth/cli-session` from `idTokenClaims.tid → account.tenantId → homeAccountId[1]`. `tenantScopeId(session)` = `tid ?? oid`. |
+| Session | `UserClaims.tid` added. Two chains, one per sign-in shape: the **device-code / browser** path (`app/auth/callback` and `app/api/auth/cli-session`'s `flow:"device-code"`) reads `idTokenClaims.tid → account.tenantId → homeAccountId[1]`; the **service-principal** path (`app/api/auth/cli-session` with `flow:"service-principal"`) has no id token and no MSAL account, so it reads the access token's own `tid → ` the request's `tenantId`. `tenantScopeId(session)` = `tid ?? oid`. The SP branch stamped NO `tid` until #3845 — it was the live generator of tid-less sessions, and describing only the device-code chain here is part of what kept that invisible. |
 | Workspace guard | `authorizeWorkspace` / `requireWorkspace` now allow owner **or** tenant-admin **or** ACL member (write-capable by default; `allowReadRoles` opt-in). |
 | Item guard | `loadOwnedItem` delegates ownership to `resolveWorkspaceAccessByOid` (write-capable by default). This one helper reaches every item route. |
 | Item listing | `listOwnedItems` / `listAllOwnedItems` / `GET /api/workspaces` include ACL-shared resources (read-safe, any role). |
