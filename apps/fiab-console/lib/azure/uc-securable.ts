@@ -53,15 +53,16 @@
  *      "who was refused permission to mint storage access".
  *   2. **check 8 (SECURABLE IMPORT CHOKE POINT)** — no module except this one
  *      may import a UC-mutating symbol from `shortcut-credentials.ts` by a
- *      specifier that RESOLVES to it (alias or relative, at any depth, in
- *      quotes). It is an
+ *      specifier that RESOLVES to it (alias or relative, at any depth, written
+ *      in the conventional spelling). It is an
  *      ALLOWLIST of the two non-catalog exports (`getKeyVaultSecret`,
  *      `keyVaultConfigGate`), not a denylist of today's five, so a NEW export
  *      added to that file cannot be consumed anywhere without failing the build.
  *      The spellings it does NOT reach are stated in the guard's LIMITS block.
  *   3. **check 9 (SUPPRESSOR CHOKE POINT)** — no module except this one may
  *      import `withSecurableRecordedByCaller` by a specifier that RESOLVES to
- *      `securable-audit-context.ts` (alias or relative, at any depth). A module
+ *      `securable-audit-context.ts` (alias or relative, at any depth, written
+ *      in the conventional spelling). A module
  *      that re-implements the suppressor instead of importing it issues no
  *      import and is not seen; that limit is stated in the guard's LIMITS block.
  *      De-duplicating two audit layers

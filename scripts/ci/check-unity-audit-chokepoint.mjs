@@ -278,21 +278,38 @@
  *     two arms do not spell — a tsconfig path alias other than `@/`, or a
  *     re-export barrel that launders it. Those are SPELLINGS, and keying a
  *     control to a spelling is what this bullet exists to disclose;
- *   - and it is not only ROUTES that escape: the QUOTE FORM does too. Every arm
- *     matches `'…'` or `"…"`, so a template-literal specifier is invisible —
- *     measured 2026-09-05, ``await import(`../../../azure/securable-audit-context`)``
- *     and the check-8 equivalent both pass, while the byte-identical lines in
- *     single quotes both fail. An extension-bearing specifier (`…/x.js`) is the
- *     same class. Mitigation, stated so the risk is sized rather than implied:
- *     the tree writes NEITHER — 0 backtick `import(`/`require(` specifiers and
- *     0 `.js`-suffixed relative imports across `apps/fiab-console/{lib,app,scripts}`
- *     (grep RC=1 both). Unlike the 334-occurrence cross-directory idiom that
- *     motivated the widening above, this is not what the repo writes.
- *     DELIBERATELY NOT FIXED BY A FOURTH REGEX: each round of narrowing in this
- *     repo has been a narrower enumeration, and three of one round's fixes were
- *     regressions. The ratchet that makes the CURRENT vocabulary hold is the
- *     ROUND 6 / ROUND 7 fixtures in `lib/azure/__tests__/unity-audit-guard.test.ts`,
- *     which fail if the pattern is narrowed back;
+ *   - and it is not only ROUTES that escape: the SPELLING does too, on two
+ *     measured axes. (i) THE QUOTE FORM — every arm matches `'…'` or `"…"`, so
+ *     a template-literal specifier is invisible; measured 2026-09-05,
+ *     ``await import(`../../../azure/securable-audit-context`)`` and the
+ *     check-8 equivalent both pass, while the byte-identical lines in single
+ *     quotes both fail. An extension-bearing specifier (`…/x.js`) is the same
+ *     class. (ii) THE WHITESPACE — every arm spells `\s+` between `import` and
+ *     the clause (`\s+*\s+as` for a namespace), so the no-space spelling is
+ *     invisible; measured 2026-09-06 against this file's own exported reader,
+ *     `import{deleteUcStorageCredential}from'../../azure/shortcut-credentials';`
+ *     and `import*as m from'../../../azure/securable-audit-context';` both
+ *     return `[]`, while the same lines with conventional spacing return the
+ *     symbol — and both are valid ES module syntax (`node --check` RC=0). The
+ *     universal these bullets replace was asserted twice and was false twice;
+ *     the arms are matched SPELLINGS, never a semantic property of the module
+ *     system. Mitigation, stated so the risk is sized rather than implied: the
+ *     tree writes NONE of them — 0 backtick `import(`/`require(` specifiers,
+ *     0 `.js`-suffixed relative imports, and 0 occurrences of `import{` /
+ *     `import*` / `}from'` / `}from"` across
+ *     `apps/fiab-console/{lib,app,scripts}` (grep RC=1 for each). Unlike the
+ *     334-occurrence cross-directory idiom that motivated the widening above,
+ *     none of this is what the repo writes.
+ *     DELIBERATELY NOT FIXED BY MORE REGEXES: each round of narrowing in this
+ *     repo has been a narrower enumeration — round 2 found the route, round 3
+ *     the quote, round 4 the whitespace — and three of one round's fixes were
+ *     regressions. So the disclosure is the control for the SPELLING axis, and
+ *     the ratchet is scoped to what it actually holds: the ROUND 6 and ROUND 7
+ *     fixtures in `lib/azure/__tests__/unity-audit-guard.test.ts` hold the
+ *     ROUTE vocabulary, and BOTH go red if the relative arm is narrowed back to
+ *     the sibling-only form — measured 2026-09-06, that revert gives
+ *     `2 failed | 55 passed (57)`. They say nothing about the spelling axis;
+ *     these bullets are what covers that;
  *
  * The un-bypassable half of this control is the transport itself: there is one
  * credential resolver (uc-backend.ts) and two audited transports, and code that
@@ -335,8 +352,11 @@
  *   9. SUPPRESSOR CHOKE POINT — the off switch history #14 created gets the same
  *      treatment as the surface: each export of {@link SECURABLE_CONTEXT} has
  *      exactly ONE permitted importer ({@link SECURABLE_CONTEXT_IMPORTERS}), a
- *      namespace / dynamic / star re-export written with a QUOTED specifier is
- *      `*` and is never permitted, and
+ *      namespace / dynamic / star re-export collapses to `*` and is never
+ *      permitted — matched only when written in the conventional spellings
+ *      {@link specifierPatterns} spells: quoted, and with the whitespace
+ *      TypeScript is normally written with. Anything else is invisible; the
+ *      shapes measured to escape are enumerated in LIMITS above. And
  *      {@link SECURABLE_RAW} must still take its suppression signal from that
  *      module. It establishes WHERE the signal comes from, never that the
  *      transport honours it — that half is pinned by
@@ -977,13 +997,25 @@ function specifierPatterns(rel) {
  * the allowlist exists to deny — any of them would otherwise be a one-token
  * bypass of the named scan.
  *
- * All of those arms match a QUOTED specifier — `'…'` or `"…"`. A specifier
- * written as a template literal is NOT matched: measured 2026-09-05,
- * ``await import(`../../../azure/securable-audit-context`)`` returns nothing
- * here while the byte-identical line in single quotes returns `['*']`. That is
- * a property of this parser, not of the module system, and it is disclosed in
- * the LIMITS block rather than papered over — see the note there on why the
- * answer is a fixture and not a fourth regex.
+ * NO ARM HERE IS A UNIVERSAL. Every one matches only a specifier written in the
+ * conventional spellings {@link specifierPatterns} spells — QUOTED (`'…'` or
+ * `"…"`), and with the WHITESPACE TypeScript is normally written with (`\s+`
+ * between `import` and the clause, `\s+*\s+as` for a namespace). Anything else
+ * is invisible to this parser. Two shapes are measured, not supposed:
+ *
+ *   - template-literal specifier — 2026-09-05,
+ *     ``await import(`../../../azure/securable-audit-context`)`` returns `[]`
+ *     here while the byte-identical line in single quotes returns `['*']`;
+ *   - no-whitespace spelling — 2026-09-06,
+ *     `import*as m from'../../../azure/securable-audit-context';` and
+ *     `import{withSecurableRecordedByCaller}from'…';` both return `[]` while
+ *     the same lines with conventional spacing return the symbol. Both are
+ *     valid ES module syntax (`node --check` RC=0), so this is a property of
+ *     this parser, not of the module system.
+ *
+ * Neither is papered over and neither is chased with another regex — the reason
+ * the answer is a fixture rather than an Nth pattern, and the occurrence counts
+ * that size both gaps, are in the LIMITS block above.
  *
  * `export { x } from '…'` is counted with `import { x } from '…'` deliberately:
  * a re-export is the laundering form of the same act. Without that arm, a

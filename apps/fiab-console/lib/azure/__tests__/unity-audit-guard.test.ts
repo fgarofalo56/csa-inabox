@@ -1002,11 +1002,21 @@ describe('ROUND 6 — the securable IMPORT choke point (check 8)', () => {
     //     was the one shape the choke point could not see.
     //
     //     This arm is what makes the widened pattern a RATCHET rather than an
-    //     edit: revert specifierPatterns' relative arm to the sibling-only form
-    //     and THIS assertion goes red. Without it the revert is silent — the
-    //     round-3 review demonstrated exactly that, running the guard's own
-    //     exported readers over all six pre-existing fixtures under both
-    //     patterns and getting IDENTICAL output.
+    //     edit — but ONLY because of the expectation on `rogue-sec-e` at the
+    //     bottom of this block. A fixture nobody asserts on is not a ratchet:
+    //     when this `s.set` landed on 2026-09-05 without that expectation, the
+    //     round-4 review reverted specifierPatterns' relative arm to the
+    //     sibling-only form and measured `1 failed | 56 passed (57)` — only
+    //     ROUND 7 went red, this block stayed GREEN — then DELETED these three
+    //     lines outright and measured `57 passed (57)`. Presence and absence
+    //     gave the same result, which is the "assertion that cannot fail" class
+    //     the `escapeRegExp` docblock above names.
+    //
+    //     Measured after the expectation was added, 2026-09-06: the same revert
+    //     gives `2 failed | 55 passed (57)` with BOTH this block and ROUND 7
+    //     red, and deleting these three lines alone gives `1 failed | 56 passed`
+    //     instead of a clean pass. The fixture is now load-bearing in both
+    //     directions.
     s.set('lib/install/provisioners/rogue-sec-e.ts',
       "import { deleteUcStorageCredential } from '../../azure/shortcut-credentials';\n"
       + 'export const go = deleteUcStorageCredential;\n');
@@ -1032,6 +1042,8 @@ describe('ROUND 6 — the securable IMPORT choke point (check 8)', () => {
     expect(found, 'a dynamic import walked past').toMatch(/rogue-sec-c\.ts: imports `\*`/);
     expect(found, 'a NEW un-audited export walked past')
       .toMatch(/rogue-sec\/route\.ts: imports `rotateUcStorageCredential`/);
+    expect(found, 'a cross-directory relative import of a UC-mutating export was invisible')
+      .toMatch(/rogue-sec-e\.ts: imports `deleteUcStorageCredential`/);
   });
 
   it('does NOT fire on the legitimate importers that ship today', () => {
