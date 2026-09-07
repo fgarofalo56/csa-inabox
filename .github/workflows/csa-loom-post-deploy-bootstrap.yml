@@ -2350,8 +2350,25 @@ jobs:
           echo "  report-subscriptions delivery job: $JOB  image=$IMAGE  cron=$CRON"
           WIRED=$(az containerapp show -g "$ADMIN_RG" --subscription "$ADMIN_SUB" -n loom-console \
                     --query "properties.template.containers[0].env[?name=='LOOM_REPORT_SUBSCRIPTIONS_FUNCTION'].value | [0]" -o tsv || true)
+          # #3344 — PRESENCE COMES FROM THE NAME QUERY, NOT FROM THE VALUE.
+          # `.value` returns the same empty string for "there is no such binding"
+          # and "the binding is there and empty", and this step FAILS on it — so
+          # the refusal below stated a cause it had not established
+          # (deploy-integrity R7). Ask for `.name`, keep az's stderr, and refuse
+          # honestly when the query itself could not be answered.
+          WIRED_ERR=$(mktemp)
+          if ! WIRED_BOUND=$(az containerapp show -g "$ADMIN_RG" --subscription "$ADMIN_SUB" -n loom-console \
+                    --query "properties.template.containers[0].env[?name=='LOOM_REPORT_SUBSCRIPTIONS_FUNCTION'].name | [0]" -o tsv 2>"$WIRED_ERR"); then
+            echo "::error::could not read loom-console's env bindings, so this step cannot say whether LOOM_REPORT_SUBSCRIPTIONS_FUNCTION is set. Refusing rather than reporting an unreadable console as an unwired one. az said: $(tr '\n' ' ' < "$WIRED_ERR" | head -c 300)"
+            exit 1
+          fi
+          WIRED_BOUND=$(printf '%s' "$WIRED_BOUND" | tr -d '\r')
+          if [ -z "$WIRED_BOUND" ] || [ "$WIRED_BOUND" = "None" ]; then
+            echo "::error::LOOM_REPORT_SUBSCRIPTIONS_FUNCTION is NOT BOUND on loom-console at all, so the subscriptions editor shows an honest delivery gate even though the job exists. Re-run the admin-plane deploy (bicep sets it from the job name)."
+            exit 1
+          fi
           if [ -z "$WIRED" ] || [ "$WIRED" = "None" ]; then
-            echo "::error::LOOM_REPORT_SUBSCRIPTIONS_FUNCTION is empty on loom-console, so the subscriptions editor shows an honest delivery gate even though the job exists. Re-run the admin-plane deploy (bicep sets it from the job name)."
+            echo "::error::LOOM_REPORT_SUBSCRIPTIONS_FUNCTION is bound on loom-console but its VALUE is empty, so the subscriptions editor shows an honest delivery gate even though the job exists. The env entry exists, so the admin-plane deploy supplied an empty job name rather than omitting the binding — check the reportSubscriptions job name it resolves."
             exit 1
           fi
           echo "  loom-console delivery gate reads: $WIRED"
