@@ -53,6 +53,7 @@ import {
   classifyPresenceSites,
   computeEnvQueryPresence,
   runEnvQueryControl,
+  settlesPresenceOf,
   KNOWN_VALUE_ONLY_PRESENCE_TESTS,
   KNOWN_VALUE_ONLY_VALUE_USES,
   ENV_QUERY_CENSUS_FLOOR,
@@ -174,6 +175,39 @@ test('LAYER 6: settling presence off the NAMES first clears the site', () => {
   const c = classifyEnvQuerySite(src, at(src));
   assert.ok(c.presenceTest);
   assert.equal(c.hasNameQuery, true, 'a companion `env[].name` query BEFORE the read must count');
+});
+
+test('LAYER 6: a NAME query for a DIFFERENT variable settles NOTHING about this one', () => {
+  // The third accounting bucket ("settled by a companion NAME query") was
+  // originally credited by a regex that matched any `env[…].name` in the window
+  // without reading WHICH variable it named. Measured 2026-09-06: stripping the
+  // companion name query off gov-provision-trino's LOOM_MSAL_CLIENT_ID probe
+  // left the guard at rc=0, because a neighbouring probe for a different
+  // variable stood in for it — a bucket that excuses a site it never examined.
+  const src = `          OTHER=$(az containerapp show -n "$APP" -g "$RG" \\
+            --query "properties.template.containers[0].env[?name=='LOOM_UAMI_CLIENT_ID'].name | [0]" -o tsv)
+          ACCT=$(az containerapp show -n "$APP" -g "$RG" \\
+            --query "properties.template.containers[0].env[?name=='LOOM_ADLS_ACCOUNT'].value | [0]" -o tsv)
+          if [ -z "$ACCT" ]; then echo "the app carries no LOOM_ADLS_ACCOUNT"; exit 1; fi
+`;
+  // NOT `at(src)`: the shared helper takes the FIRST `env[?name=='` in the text,
+  // which here is the foreign NAME query. The site under examination is the
+  // `.value` read below it.
+  const c = classifyEnvQuerySite(src, src.indexOf("env[?name=='LOOM_ADLS_ACCOUNT'].value"));
+  assert.ok(c.presenceTest, 'the emptiness test was not seen at all');
+  assert.equal(
+    c.hasNameQuery,
+    false,
+    'a foreign variable’s NAME query was accepted as settling this site',
+  );
+
+  // And the predicate itself, directly, in both directions.
+  assert.equal(settlesPresenceOf("env[?name=='LOOM_ADLS_ACCOUNT'].name", 'LOOM_ADLS_ACCOUNT'), true);
+  assert.equal(settlesPresenceOf("env[?name=='LOOM_ADLS_ACCOUNT'].name", 'LOOM_OTHER'), false);
+  // A bare listing returns EVERY name, so it genuinely settles any variable —
+  // the shell greps the result for the one it cares about.
+  assert.equal(settlesPresenceOf('env[].name', 'LOOM_ANYTHING'), true);
+  assert.equal(settlesPresenceOf('env[*].name', 'LOOM_ANYTHING'), true);
 });
 
 test('LAYER 6: a LAUNDERED capture is still tracked to the variable that is tested', () => {
@@ -301,15 +335,29 @@ test('LAYER 6: the census sees the real tree and the ratchet describes it exactl
     sites.length >= ENV_QUERY_CENSUS_FLOOR,
     `census collapsed to ${sites.length}, below the floor ${ENV_QUERY_CENSUS_FLOOR}`,
   );
-  const { failures, flagged, stale } = computeEnvQueryPresence();
+  const { failures, flagged, valueUses, nameGuarded, stale } = computeEnvQueryPresence();
   // Nothing unratcheted, nothing stale: the ratchet is attached to reality.
   assert.deepEqual(failures, []);
   assert.deepEqual(stale, []);
   const ratcheted = [...KNOWN_VALUE_ONLY_PRESENCE_TESTS.values()].reduce((a, b) => a + b, 0);
   assert.equal(flagged, ratcheted, 'the flagged count and the ratchet total must agree exactly');
-  // And the layer is NOT policing an empty set: some sites are fine and some
-  // are not, which is what makes the verdict informative.
-  assert.ok(flagged > 0 && flagged < sites.length);
+  // #3344 — the ratchet is now EMPTY, and that is the fixed state, not an
+  // un-measured one. The old form of this test asserted `flagged > 0` to prove
+  // the layer was not policing an empty set; once every site was converted that
+  // assertion would have demanded a defect exist in order to pass, which is a
+  // ratchet pointed the wrong way. What must stay true instead is that the
+  // census is real and its OTHER buckets are non-degenerate: the classifier is
+  // still resolving live sites into named states, it has simply stopped finding
+  // the bad one.
+  assert.equal(flagged, 0, 'a presence-from-value site is back — fix the site, do not re-ratchet it');
+  assert.equal(
+    KNOWN_VALUE_ONLY_PRESENCE_TESTS.size,
+    0,
+    'the presence ratchet must stay empty (#3344): it shrinks, it never grows',
+  );
+  assert.ok(nameGuarded > 0, 'no site settles presence off the NAMES — the fix has been undone');
+  assert.ok(valueUses > 0, 'no declared value-only site — the OTHER live bucket went to zero too');
+  assert.ok(nameGuarded < sites.length, 'every site name-guarded would mean the value bucket is dead');
 });
 
 test('LAYER 6: a NEW presence-from-value site is RED (the 18th, not the 17 ratcheted)', () => {
@@ -332,28 +380,67 @@ test('LAYER 6: a NEW presence-from-value site is RED (the 18th, not the 17 ratch
   assert.deepEqual(unratcheted, [[novel, 1]]);
 
   // …and a SECOND site under an already-ratcheted key is also caught, because
-  // the ratchet stores a COUNT, not a boolean.
-  const existing = [...KNOWN_VALUE_ONLY_PRESENCE_TESTS.keys()][0];
-  const bumped = new Map(counted);
-  bumped.set(existing, (KNOWN_VALUE_ONLY_PRESENCE_TESTS.get(existing) || 0) + 1);
-  assert.ok(
-    [...bumped].some(([k, n]) => k === existing && n > (KNOWN_VALUE_ONLY_PRESENCE_TESTS.get(k) || 0)),
+  // the ratchet stores a COUNT, not a boolean. Driven through the real predicate
+  // with a SYNTHETIC ratchet: the live one is empty now (#3344), and reaching for
+  // `[...keys()][0]` on an empty map yields `undefined`, which makes the check
+  // below pass while comparing nothing.
+  const site = (key) => ({
+    key, file: key.split('::')[0], line: 1, env: key.split('::')[1],
+    variable: 'V', presenceTest: '-z "$V"', hasNameQuery: false, exportedToJobScope: false,
+  });
+  const existing = '.github/workflows/already-ratcheted.yml::LOOM_KNOWN';
+  const synthetic = new Map([[existing, 1]]);
+  assert.equal(
+    classifyPresenceSites([site(existing)], synthetic, new Map()).failures.length,
+    0,
+    'a site at its allowance must not fail',
+  );
+  assert.equal(
+    classifyPresenceSites([site(existing), site(existing)], synthetic, new Map()).failures.length,
+    1,
+    'a SECOND site under a ratcheted key must fail — the ratchet is a count, not a boolean',
   );
 });
 
 test('LAYER 6: a FIXED site makes the ratchet stale, which is itself reported', () => {
   // The ratchet must shrink. A key that no longer matches a flagged site is
   // describing a tree that no longer exists.
-  const counted = new Set();
-  for (const s of collectEnvValueQuerySites()) {
-    if (!s.presenceTest || s.hasNameQuery || s.variable === null) continue;
-    counted.add(s.key);
-  }
-  const fixed = new Set(counted);
-  const victim = [...KNOWN_VALUE_ONLY_PRESENCE_TESTS.keys()][0];
-  fixed.delete(victim);
-  const stale = [...KNOWN_VALUE_ONLY_PRESENCE_TESTS.keys()].filter((k) => !fixed.has(k));
-  assert.deepEqual(stale, [victim]);
+  //
+  // #3344 — driven through the REAL classifier with a SYNTHETIC ratchet. The
+  // live presence ratchet is empty now, so the old form (take `[...keys()][0]`
+  // off the live map, delete it from the counted set, assert it comes back
+  // stale) compared `[undefined]` against `[undefined]` and asserted nothing.
+  // The staleness rule is a property of the comparison, not of the current
+  // population, so it is now exercised on sites this test constructs.
+  const site = (key, opts = {}) => ({
+    key, file: key.split('::')[0], line: 1, env: key.split('::')[1],
+    variable: 'V', presenceTest: '-z "$V"', hasNameQuery: false, exportedToJobScope: false,
+    ...opts,
+  });
+  const live = '.github/workflows/still-broken.yml::LOOM_A';
+  const victim = '.github/workflows/since-fixed.yml::LOOM_B';
+  const ratchet = new Map([[live, 1], [victim, 1]]);
+
+  // Only the live site is present in the tree; the victim was fixed.
+  const { failures, counted } = classifyPresenceSites([site(live)], ratchet, new Map());
+  assert.deepEqual(failures, [], 'the still-ratcheted live site must not fail');
+  const stale = [...ratchet.keys()].filter((k) => !counted.has(k));
+  assert.deepEqual(stale, [victim], 'a fixed site must leave its ratchet entry reported as stale');
+
+  // And a site fixed by ADDING a companion NAME query — the exact shape every
+  // one of the 17 conversions took — goes stale the same way, because a
+  // name-guarded site is counted in neither ratchet.
+  const guarded = classifyPresenceSites(
+    [site(live, { hasNameQuery: true })],
+    ratchet,
+    new Map(),
+  );
+  assert.deepEqual(guarded.failures, []);
+  assert.deepEqual(
+    [...ratchet.keys()].filter((k) => !guarded.counted.has(k)).sort(),
+    [victim, live].sort(),
+    'converting a site to a NAME query must make its ratchet entry stale',
+  );
 });
 
 test('POSITIVE CONTROL: the embedded layer-6 control holds', () => {
@@ -452,12 +539,21 @@ test('LAYER 6: a widened window still STOPS at the next job', () => {
   assert.equal(r.presenceTest, null, 'the widened window ran past the job boundary');
 });
 
-test('LAYER 6: the two LIVE Gov sites the step window could not see are now flagged', () => {
+test('LAYER 6: the two LIVE Gov sites the step window could not see are FIXED, not re-ratcheted', () => {
   // Not synthetic. These are the misses, and both are Gov — under cloud-parity
   // a guard blind exactly where the sovereign boundary needs it is incomplete,
   // not a Commercial-first tradeoff. gov-provision-trino is the worse of the
-  // two: it prints the R7 assertion verbatim, and it is a STRONGER instance
+  // two: it printed the R7 assertion verbatim, and it is a STRONGER instance
   // than loom-brain-scan.yml, the example this layer was written for.
+  //
+  // #3344 — both are now FIXED at the source: each capture is preceded by a
+  // companion `.name` query that settles presence, so the value is only ever
+  // USED. The test keeps both halves of its teeth. It still asserts F1's
+  // widened window resolves the capture and finds the downstream test several
+  // steps later — remove the window and these go back to `variable`/
+  // `presenceTest` null and this fails. And it now asserts the FIX rather than
+  // the defect: `hasNameQuery` true, and NOT present in the ratchet. Re-ratchet
+  // either one instead of fixing it and this goes red.
   const sites = collectEnvValueQuerySites();
   for (const [file, env, variable] of [
     ['.github/workflows/gov-provision-trino.yml', 'LOOM_MSAL_CLIENT_ID', 'MSAL_CLIENT_ID'],
@@ -469,14 +565,27 @@ test('LAYER 6: the two LIVE Gov sites the step window could not see are now flag
     assert.ok(s.exportedToJobScope, `${file}::${env} is exported to $GITHUB_ENV and must widen`);
     assert.ok(
       s.presenceTest,
-      `${file}::${env} still reads as clean — it derives presence from a value, several steps ` +
-        'after the capture, and that is the miss F1 exists to close',
+      `${file}::${env}'s downstream test is no longer visible — F1's widened window has been ` +
+        'narrowed back, and with it the only reason this site is classified at all',
     );
     assert.ok(
-      KNOWN_VALUE_ONLY_PRESENCE_TESTS.has(`${file}::${env}`),
-      `${file}::${env} is flagged but not ratcheted — re-baseline the ratchet`,
+      s.hasNameQuery,
+      `${file}::${env} derives presence from a value again — the companion \`.name\` query that ` +
+        'settles it has been removed (#3344)',
+    );
+    assert.ok(
+      !KNOWN_VALUE_ONLY_PRESENCE_TESTS.has(`${file}::${env}`),
+      `${file}::${env} was re-ratcheted instead of fixed`,
     );
   }
+  // The classifier agrees: neither lands in the flagged bucket.
+  const { failures } = classifyPresenceSites(
+    sites.filter((x) => x.file.includes('gov-provision-trino')
+      || x.file.includes('gov-provision-streaming-migrate')),
+    new Map(),
+    new Map(),
+  );
+  assert.deepEqual(failures, [], 'a Gov site is flagged with an EMPTY ratchet — it is not fixed');
 });
 
 // ══════════════════════════════════════════════════════════════════════════════
@@ -520,20 +629,32 @@ test('LAYER 6: a RESOLVED capture with no presence test anywhere is FLAGGED, not
 
 test('LAYER 6: the census is FULLY accounted for — no site is silently clean', () => {
   // The printed accounting used to read as complete while two sites sat in
-  // neither column. Every site is now in exactly one bucket, and the two
-  // ratchets sum to the census.
-  const { census, flagged, valueUses, failures, stale } = computeEnvQueryPresence();
+  // neither column. Every site is now in exactly one bucket.
+  //
+  // #3344 — there are THREE buckets, and the identity is now stated over all
+  // three. `flagged + valueUses === census` held before only because the third
+  // term happened to be zero: every site either derived presence from a value
+  // (flagged) or was a declared value-use. Converting the 17 moved them all into
+  // the name-guarded bucket, and a two-term identity over a three-bucket
+  // partition is exactly the accounting that reads complete while a set goes
+  // unwatched.
+  const { census, flagged, valueUses, nameGuarded, failures, stale } = computeEnvQueryPresence();
   assert.deepEqual(failures, []);
   assert.deepEqual(stale, []);
   assert.equal(
-    flagged + valueUses,
+    flagged + valueUses + nameGuarded,
     census,
-    `${census} sites but only ${flagged + valueUses} accounted for — the residual is the set ` +
-      'nobody is looking at',
+    `${census} sites but only ${flagged + valueUses + nameGuarded} accounted for — the residual ` +
+      'is the set nobody is looking at',
   );
   assert.equal(flagged, [...KNOWN_VALUE_ONLY_PRESENCE_TESTS.values()].reduce((a, b) => a + b, 0));
   assert.equal(valueUses, [...KNOWN_VALUE_ONLY_VALUE_USES.values()].reduce((a, b) => a + b, 0));
   assert.ok(census >= ENV_QUERY_CENSUS_FLOOR);
+  // Each term is measured, not inferred by subtraction: a bucket computed as
+  // `census - theOthers` can never disagree with the identity it is checked by.
+  const sites = collectEnvValueQuerySites();
+  assert.equal(nameGuarded, sites.filter((s) => s.hasNameQuery).length);
+  assert.ok(nameGuarded > 0 && nameGuarded < census, 'the third bucket is degenerate');
 });
 
 test('LAYER 6: a NEW value-only site is RED until it is READ and declared', () => {

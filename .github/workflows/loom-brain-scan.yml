@@ -339,7 +339,23 @@ jobs:
             exit 1
           fi
           if [ -z "${ENDPOINT:-}" ]; then
-            echo "::error::az succeeded but $CONSOLE_APP in $ADMIN_RG carries no LOOM_COSMOS_ENDPOINT env entry. That is a mis-deployed console, not a missing setting: the platform bicep emits this value for every boundary."
+            # #3344 — WHICH of the two states is it? `.value` is empty both when
+            # the binding is absent and when it is present and empty, and the
+            # message below asserts the first ("carries no … env entry") on the
+            # strength of an oracle that cannot see the difference
+            # (deploy-integrity R7). Settle it with a NAME query.
+            EP_BOUND=$(az containerapp show -n "$CONSOLE_APP" -g "$ADMIN_RG" \
+              --query "properties.template.containers[0].env[?name=='LOOM_COSMOS_ENDPOINT'].name | [0]" \
+              -o tsv 2>../../temp/cosmos-endpoint-name.err)
+            EPRC=$?
+            if [ $EPRC -ne 0 ]; then
+              echo "::error::az returned an empty LOOM_COSMOS_ENDPOINT for $CONSOLE_APP in $ADMIN_RG, and the follow-up NAME query failed (az exit $EPRC) — so whether the binding exists was NOT established. The scan is NOT being run."
+              cat ../../temp/cosmos-endpoint-name.err
+            elif [ -z "${EP_BOUND:-}" ] || [ "$EP_BOUND" = "None" ]; then
+              echo "::error::az succeeded but $CONSOLE_APP in $ADMIN_RG carries no LOOM_COSMOS_ENDPOINT env entry AT ALL. That is a mis-deployed console, not a missing setting: the platform bicep emits this value for every boundary."
+            else
+              echo "::error::$CONSOLE_APP in $ADMIN_RG DOES carry a LOOM_COSMOS_ENDPOINT env entry, but its value is EMPTY. The binding exists, so this is not a missing bicep emission — something wired it with nothing in it. Re-run the admin-plane deploy and check what it resolved for the Cosmos endpoint."
+            fi
             exit 1
           fi
           # The endpoint is an account HOST, not a credential. It is masked
@@ -375,7 +391,22 @@ jobs:
             # This is a mis-deployed console rather than a missing setting: the
             # platform bicep emits LOOM_UAMI_CLIENT_ID onto this app for every
             # boundary (auto-bind-by-default.md §5).
-            echo "::error::$CONSOLE_APP in $ADMIN_RG carries no LOOM_UAMI_CLIENT_ID env entry. The scan is NOT being run. This runner reaches the Cosmos data plane ONLY as the console UAMI — the account sets disableLocalAuth, so AAD-RBAC is the only path, and the deploy service principal holds no sqlRoleAssignment anywhere in the platform bicep. Without the client id the credential chain cannot select that identity. The platform bicep emits this value onto the console container app for every boundary, so its absence is a mis-deployed console: re-run the admin-plane deploy, or read the value from identity.outputs.uamiConsoleClientId and confirm it reached the app."
+            # #3344 — and WHICH of the two states it is decides the remedy.
+            # "carries no LOOM_UAMI_CLIENT_ID env entry" points at the bicep
+            # emission; a bound-but-empty entry points at whatever wired it. An
+            # empty `.value` cannot tell them apart (deploy-integrity R7).
+            UAMI_BOUND=$(az containerapp show -n "$CONSOLE_APP" -g "$ADMIN_RG" \
+              --query "properties.template.containers[0].env[?name=='LOOM_UAMI_CLIENT_ID'].name | [0]" \
+              -o tsv 2>../../temp/uami-name.err)
+            UBRC=$?
+            if [ $UBRC -ne 0 ]; then
+              echo "::error::az returned an empty LOOM_UAMI_CLIENT_ID for $CONSOLE_APP in $ADMIN_RG, and the follow-up NAME query failed (az exit $UBRC) — so whether the binding exists was NOT established. The scan is NOT being run: this runner reaches the Cosmos data plane ONLY as the console UAMI (the account sets disableLocalAuth, and the deploy service principal holds no sqlRoleAssignment anywhere in the platform bicep), so it cannot proceed on an unresolved credential."
+              cat ../../temp/uami-name.err
+            elif [ -z "${UAMI_BOUND:-}" ] || [ "$UAMI_BOUND" = "None" ]; then
+              echo "::error::$CONSOLE_APP in $ADMIN_RG carries no LOOM_UAMI_CLIENT_ID env entry AT ALL. The scan is NOT being run. This runner reaches the Cosmos data plane ONLY as the console UAMI — the account sets disableLocalAuth, so AAD-RBAC is the only path, and the deploy service principal holds no sqlRoleAssignment anywhere in the platform bicep. Without the client id the credential chain cannot select that identity. The platform bicep emits this value onto the console container app for every boundary, so its absence is a mis-deployed console: re-run the admin-plane deploy, or read the value from identity.outputs.uamiConsoleClientId and confirm it reached the app."
+            else
+              echo "::error::$CONSOLE_APP in $ADMIN_RG DOES carry a LOOM_UAMI_CLIENT_ID env entry, but its value is EMPTY. The scan is NOT being run — without the client id the credential chain cannot select the console UAMI, which is this runner's only route to the Cosmos data plane. The binding EXISTS, so the bicep emission is not what is missing: read identity.outputs.uamiConsoleClientId and find what wired the app with an empty one."
+            fi
             exit 1
           fi
           echo "::add-mask::$UAMI"
@@ -622,7 +653,21 @@ jobs:
             exit 1
           fi
           if [ -z "${ENDPOINT:-}" ]; then
-            echo "::error::az succeeded but $CONSOLE_APP in $ADMIN_RG carries no LOOM_COSMOS_ENDPOINT env entry. That is a mis-deployed console, not a missing setting."
+            # #3344 — same NAME query as the Commercial job, for the same reason
+            # and by `cloud-parity.md` in the same words: an empty `.value` does
+            # not establish an absent binding.
+            EP_BOUND=$(az containerapp show -n "$CONSOLE_APP" -g "$ADMIN_RG" \
+              --query "properties.template.containers[0].env[?name=='LOOM_COSMOS_ENDPOINT'].name | [0]" \
+              -o tsv 2>../../temp/cosmos-endpoint-name.err)
+            EPRC=$?
+            if [ $EPRC -ne 0 ]; then
+              echo "::error::az returned an empty LOOM_COSMOS_ENDPOINT for $CONSOLE_APP in $ADMIN_RG, and the follow-up NAME query failed (az exit $EPRC) — so whether the binding exists was NOT established. The scan is NOT being run."
+              cat ../../temp/cosmos-endpoint-name.err
+            elif [ -z "${EP_BOUND:-}" ] || [ "$EP_BOUND" = "None" ]; then
+              echo "::error::az succeeded but $CONSOLE_APP in $ADMIN_RG carries no LOOM_COSMOS_ENDPOINT env entry AT ALL. That is a mis-deployed console, not a missing setting."
+            else
+              echo "::error::$CONSOLE_APP in $ADMIN_RG DOES carry a LOOM_COSMOS_ENDPOINT env entry, but its value is EMPTY. The binding exists, so this is not a missing bicep emission — something wired it with nothing in it."
+            fi
             exit 1
           fi
           echo "::add-mask::$ENDPOINT"
@@ -645,7 +690,22 @@ jobs:
             # changes nothing about which identity this job can use: it will be
             # the service principal either way, and the scan says so by decoding
             # its own token rather than by inferring it from this variable.
-            echo "::warning::$CONSOLE_APP in $ADMIN_RG carries no LOOM_UAMI_CLIENT_ID. On this boundary that is NOT what blocks the run: ubuntu-latest has no managed identity to select, so the scan authenticates as the service principal regardless. #4051 tracks the in-boundary Gov runner that would carry the console UAMI."
+            # #3344 — the warning below is REPORTING, not gating, but it still
+            # states a fact about the console, so it must state the one that was
+            # established. An empty `.value` does not distinguish an absent
+            # binding from a bound-but-empty one (deploy-integrity R7).
+            UAMI_BOUND=$(az containerapp show -n "$CONSOLE_APP" -g "$ADMIN_RG" \
+              --query "properties.template.containers[0].env[?name=='LOOM_UAMI_CLIENT_ID'].name | [0]" \
+              -o tsv 2>../../temp/uami-name.err)
+            UBRC=$?
+            if [ $UBRC -ne 0 ]; then
+              UAMI_STATE="could not be established (the NAME query failed, az exit $UBRC)"
+            elif [ -z "${UAMI_BOUND:-}" ] || [ "$UAMI_BOUND" = "None" ]; then
+              UAMI_STATE="carries no LOOM_UAMI_CLIENT_ID env entry at all"
+            else
+              UAMI_STATE="carries a LOOM_UAMI_CLIENT_ID env entry whose value is EMPTY"
+            fi
+            echo "::warning::$CONSOLE_APP in $ADMIN_RG $UAMI_STATE. On this boundary that is NOT what blocks the run: ubuntu-latest has no managed identity to select, so the scan authenticates as the service principal regardless. #4051 tracks the in-boundary Gov runner that would carry the console UAMI."
           else
             echo "::add-mask::$UAMI"
             echo "LOOM_UAMI_CLIENT_ID=$UAMI" >> "$GITHUB_ENV"

@@ -479,44 +479,17 @@ jobs:
           fi
           exit 0
 
-      - name: Gate — check-eval-regression (floors + delta)
-        id: gate
-        if: steps.func.outputs.found == 'true'
-        env:
-          EVAL_REGRESSION_DELTA: '5'
-        run: |
-          set -euo pipefail
-          ARGS=(--artifact eval-run.json --summary eval-summary.md)
-          [ -f prev/eval-run.json ] && ARGS+=(--previous prev/eval-run.json)
-          # --strict-missing: a floored surface with NO scores is a failure, not
-          # a warning.
-          #
-          # This used to be scoped to `schedule` only, on the reasoning that a
-          # push/PR run may legitimately be partial. Run 31115406603 showed what
-          # that costs: EVERY surface came back `401` from the eval-probe, all
-          # ten rolled up `questions: 0`, the gate emitted ten "NOT measured"
-          # warnings — and CONCLUDED SUCCESS. A run that measured nothing at all
-          # is not a partial run, it is a broken pipeline, and a quality gate
-          # that goes green on it is a gate that cannot fail.
-          #
-          # So: strict on the nightly full run as before, AND strict whenever the
-          # run measured NOTHING. A genuinely partial run (some surfaces scored)
-          # still warns.
-          MEASURED=$(jq '[.surfaces[]? | select((.questions // 0) > 0)] | length' eval-run.json)
-          TOTAL=$(jq '.surfaces | length' eval-run.json)
-          echo "surfaces present: $TOTAL, surfaces actually measured: $MEASURED"
-          if [ "${{ github.event_name }}" = 'schedule' ]; then
-            ARGS+=(--strict-missing)
-          elif [ "$MEASURED" -eq 0 ]; then
-            echo "::error::the eval run scored ZERO questions across all $TOTAL surface(s) — nothing was measured, so this gate has no result to report. Failing rather than passing on an empty measurement."
-            ARGS+=(--strict-missing)
-          fi
-          node scripts/csa-loom/check-eval-regression.mjs "${ARGS[@]}"
-
       - name: Corpus provenance — what was TESTED vs what the console SERVED (#3085)
-        # Runs even when the gate failed: a red verdict on a corpus PR is
-        # exactly the case where the reader most needs to know the verdict was
-        # not about their diff.
+        id: prov
+        # #3857 — RUNS BEFORE THE GATE. It used to run after, which meant the
+        # gate had already failed a PR before anything had established whose
+        # corpus was measured; the very next step would then print "this eval did
+        # NOT measure this diff" over an already-red check. Establish provenance
+        # first, hand it to the gate, and let the gate say what it is a verdict
+        # about (deploy-integrity R7).
+        #
+        # `always()` is kept: the staging step above can fail and the reader still
+        # needs to know which corpus the console holds.
         if: always() && steps.func.outputs.found == 'true'
         env:
           CONSOLE_URL: ${{ env.LOOM_CONSOLE_URL }}
@@ -565,6 +538,7 @@ jobs:
           PROV_BODY=$(mktemp)
           PROV_WHY=""
           SERVED=""
+          STATE=unresolved
           HTTP=$(curl -sS -m 30 -o "$PROV_BODY" -w '%{http_code}' \
             -H "authorization: Bearer $INTERNAL_TOKEN" \
             "${CONSOLE_URL%/}/api/internal/copilot/eval-probe" 2>"$PROV_ERR") || true
@@ -596,26 +570,159 @@ jobs:
             echo ""
           } > corpus-provenance.md
           if [ -z "$SERVED" ]; then
+            STATE=unresolved
             MSG="could not read the SERVED corpus commit from the console's eval-probe manifest${PROV_MSG:+ ($PROV_MSG)}, so this run cannot say whether it measured the corpus in this checkout. Read the verdict below as being about the deployed estate, not about this diff."
             echo "::warning::corpus provenance: $MSG"
             echo "> WARNING: $MSG" >> corpus-provenance.md
           elif [ "$SERVED" != "${CHECKOUT_COMMIT:-unknown}" ]; then
+            STATE=differs
             MSG="the console served corpus \`$SERVED\` but this checkout carries \`${CHECKOUT_COMMIT:-unknown}\`. The scores below were produced against the DEPLOYED corpus and are NOT evidence for or against the corpus change in this diff (#3085). A green verdict does not validate it and a red one does not refute it."
             echo "::warning::corpus provenance: $MSG"
             echo "> **This eval did NOT measure this diff.** $MSG" >> corpus-provenance.md
           else
+            STATE=match
             echo "::notice::corpus provenance: the console served the same corpus commit this checkout carries ($SERVED) — the verdict below IS about this corpus."
             echo "> The console served the same corpus commit as this checkout (\`$SERVED\`), so the verdict below IS about this corpus." >> corpus-provenance.md
           fi
           echo "" >> corpus-provenance.md
-          # Prepend to the gate summary so the PR comment and the step summary
-          # both carry it, and to the step summary directly when the gate never
-          # produced one.
-          if [ -f eval-summary.md ]; then
-            cat corpus-provenance.md eval-summary.md > eval-summary.tmp && mv eval-summary.tmp eval-summary.md
-          fi
+          # #3857 — HAND THE VERDICT TO THE GATE, which now runs AFTER this step.
+          # Until #3857 this block ran after the gate, so the gate had already
+          # decided (and on a PR, already gone red) before anyone had established
+          # WHOSE corpus it had measured. The state travels as a step output and
+          # the gate reads it; `served`/`why` travel too so the gate's own message
+          # can say what was established rather than restating it.
+          {
+            echo "state=$STATE"
+            echo "served=${SERVED:-}"
+            echo "checkout=${CHECKOUT_COMMIT:-unknown}"
+            echo "why=${PROV_WHY:-}"
+          } >> "$GITHUB_OUTPUT"
           [ -n "${GITHUB_STEP_SUMMARY:-}" ] && cat corpus-provenance.md >> "$GITHUB_STEP_SUMMARY"
           exit 0
+
+      - name: Gate — check-eval-regression (floors + delta)
+        id: gate
+        if: steps.func.outputs.found == 'true'
+        env:
+          EVAL_REGRESSION_DELTA: '5'
+          PROV_STATE: ${{ steps.prov.outputs.state }}
+          PROV_SERVED: ${{ steps.prov.outputs.served }}
+          PROV_CHECKOUT: ${{ steps.prov.outputs.checkout }}
+          PROV_WHY: ${{ steps.prov.outputs.why }}
+        run: |
+          set -euo pipefail
+          ARGS=(--artifact eval-run.json --summary eval-summary.md)
+          [ -f prev/eval-run.json ] && ARGS+=(--previous prev/eval-run.json)
+
+          # ── #3857 — DO NOT FAIL A PR ON A MEASUREMENT THIS WORKFLOW DISCLAIMS ─
+          #
+          # The console indexes the corpus BAKED INTO ITS IMAGE, so on a PR the
+          # scores below are produced against the DEPLOYED corpus, not the one in
+          # the diff (#3085). The provenance step above already says so, in those
+          # words. Failing the PR on it anyway asserts the verdict is about the
+          # diff at the same moment the run states it is not — the exact R7 shape
+          # (an error must not assert what the code did not establish).
+          #
+          # Measured 2026-09-06: the eval-probe answers HTTP 403 on every current
+          # run (33670827038:435, 33696595668:640), so provenance is UNRESOLVED
+          # on every run and EVERY PR-attached verdict is an estate verdict.
+          #
+          # So on `pull_request`, when provenance is anything other than a
+          # confirmed MATCH, the gate still RUNS and still publishes its full
+          # summary and sticky comment — it simply does not convert an estate
+          # verdict into a red X on someone's diff. push/schedule keep the hard
+          # fail, and so does a PR whose provenance MATCHED: there the verdict IS
+          # about the diff.
+          #
+          # This is decided BEFORE any annotation is emitted, deliberately: an
+          # ::error:: printed on a branch that ends in success is the shape
+          # check-annotation-teeth exists to refuse (#2837/#2787). On the
+          # report-only branch the same finding is stated as a ::warning:: that
+          # says, in words, that it is reported and not enforced.
+          REPORT_ONLY=0
+          if [ "${{ github.event_name }}" = 'pull_request' ] && [ "${PROV_STATE:-unresolved}" != 'match' ]; then
+            REPORT_ONLY=1
+          fi
+
+          # --strict-missing: a floored surface with NO scores is a failure, not
+          # a warning.
+          #
+          # This used to be scoped to `schedule` only, on the reasoning that a
+          # push/PR run may legitimately be partial. Run 31115406603 showed what
+          # that costs: EVERY surface came back `401` from the eval-probe, all
+          # ten rolled up `questions: 0`, the gate emitted ten "NOT measured"
+          # warnings — and CONCLUDED SUCCESS. A run that measured nothing at all
+          # is not a partial run, it is a broken pipeline, and a quality gate
+          # that goes green on it is a gate that cannot fail.
+          #
+          # So: strict on the nightly full run as before, AND strict whenever the
+          # run measured NOTHING. A genuinely partial run (some surfaces scored)
+          # still warns.
+          MEASURED=$(jq '[.surfaces[]? | select((.questions // 0) > 0)] | length' eval-run.json)
+          TOTAL=$(jq '.surfaces | length' eval-run.json)
+          echo "surfaces present: $TOTAL, surfaces actually measured: $MEASURED"
+          if [ "${{ github.event_name }}" = 'schedule' ]; then
+            ARGS+=(--strict-missing)
+          elif [ "$MEASURED" -eq 0 ]; then
+            ZERO="the eval run scored ZERO questions across all $TOTAL surface(s) — nothing was measured, so this gate has no result to report."
+            if [ "$REPORT_ONLY" -eq 0 ]; then
+              echo "::error::$ZERO Failing rather than passing on an empty measurement."
+            else
+              echo "::warning::$ZERO Provenance is '${PROV_STATE:-unresolved}', so this PR-attached run is REPORTED, NOT ENFORCED (#3857); the same condition is a hard failure on push and on the nightly schedule."
+            fi
+            ARGS+=(--strict-missing)
+          fi
+
+          if [ "$REPORT_ONLY" -eq 0 ]; then
+            # No suppression anywhere on this branch: `set -e` carries the gate's
+            # exit status straight to the job conclusion.
+            node scripts/csa-loom/check-eval-regression.mjs "${ARGS[@]}"
+            {
+              echo "gate_rc=0"
+              echo "gate_reported_only=false"
+            } >> "$GITHUB_OUTPUT"
+          else
+            # The result is DOWNGRADED, never discarded: it is captured on the
+            # very next line, reported to the reader, and recorded as a step
+            # output. A suppressing suffix would leave nothing to report.
+            set +e
+            node scripts/csa-loom/check-eval-regression.mjs "${ARGS[@]}"
+            GATE_RC=$?
+            set -e
+            {
+              echo "gate_rc=$GATE_RC"
+              echo "gate_reported_only=true"
+            } >> "$GITHUB_OUTPUT"
+            if [ "$GATE_RC" -eq 0 ]; then
+              echo "::notice::eval gate passed (rc=0). Provenance is '${PROV_STATE:-unresolved}', so this is a verdict about the DEPLOYED corpus, not about this diff (#3085)."
+            else
+              MSG="the eval gate would have failed (rc=$GATE_RC), but provenance is '${PROV_STATE:-unresolved}' — the console served corpus '${PROV_SERVED:-unresolved}' against a checkout carrying '${PROV_CHECKOUT:-unknown}'${PROV_WHY:+ ($PROV_WHY)}. That is an ESTATE VERDICT, not a verdict on this diff, so it is reported here and on the sticky comment rather than failing the PR (#3857/#3085). It is still a hard failure on push and on the nightly schedule."
+              echo "::warning::$MSG"
+              {
+                echo ""
+                echo "> **Eval gate: reported, not enforced.** $MSG"
+                echo ""
+              } >> eval-summary.md
+            fi
+          fi
+
+      - name: Fold the provenance banner into the eval summary (#3085/#3857)
+        # The banner used to be prepended by the provenance step itself, which
+        # only worked because that step ran AFTER the gate. Now that provenance
+        # runs FIRST, eval-summary.md does not exist yet when it writes — so the
+        # merge is its own step, after the gate, and `always()` so a failed gate's
+        # summary still carries the "whose corpus was this?" header.
+        if: always() && steps.func.outputs.found == 'true' && hashFiles('corpus-provenance.md') != ''
+        run: |
+          set -uo pipefail
+          if [ ! -f eval-summary.md ]; then
+            # R7 — say what was established: there is no summary to fold into.
+            echo "::notice::no eval-summary.md was produced, so there is nothing to prepend the corpus-provenance banner to. The banner is already in the job summary."
+            exit 0
+          fi
+          cat corpus-provenance.md eval-summary.md > eval-summary.tmp
+          mv eval-summary.tmp eval-summary.md
+          echo "prepended corpus-provenance.md to eval-summary.md ($(wc -c < eval-summary.md) bytes)"
 
       - name: Upload the run artifact (next run's delta baseline)
         if: always() && steps.func.outputs.found == 'true'

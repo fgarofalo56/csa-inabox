@@ -1586,6 +1586,48 @@ export const TRIAGED_INERT_BINDINGS = new Map([
         'the original defect. This is a compliance control, so both are regressions.',
     },
   ],
+  [
+    'LOOM_IQ_MCP_ENABLED',
+    {
+      issue: '#3320 (pinned by #3344)',
+      param: 'loomIqMcpEnabled',
+      // Bicep cannot put a `bool` in an env `value:`, so the emission is the
+      // param through `string()`. Pinning `string(loomIqMcpEnabled)` exactly is
+      // what makes `value: 'true'` — the shape that would hard-code the flag on
+      // for every boundary — a failure rather than a silent re-point.
+      emitted: 'string(loomIqMcpEnabled)',
+      rootExpr: 'loomIqMcpEnabled',
+      compiledValue: "[parameters('loomIqMcpEnabled')]",
+      why:
+        'Gates the EXTERNAL Bearer-token path onto the unified Fabric IQ MCP tool surface ' +
+        '(/api/iq/mcp) for Microsoft Agent 365, Azure AI Foundry and Copilot Studio. It must ' +
+        'follow the PARAM: a literal would either expose the external token path on boundaries ' +
+        'that did not ask for it, or seal it on the ones that did, and admin-plane/main.bicep ' +
+        'records that this env var was once passed TRUE and reached the console as ABSENT ' +
+        'across all 435 console env vars — the failure mode this entry exists to catch.',
+    },
+  ],
+  [
+    'LOOM_MIP_ENABLED',
+    {
+      issue: '#3319 (pinned by #3344)',
+      param: 'loomMipEnabled',
+      // A LITERAL, and deliberately so: the param decides whether the entry is
+      // emitted at all rather than what it says. That makes T2 a constant
+      // compared against itself, so `conditionalOn` carries the real assertion
+      // (T2b) — see checkConditionalEmission().
+      emitted: "'true'",
+      conditionalOn: 'loomMipEnabled',
+      rootExpr: 'loomMipEnabled',
+      compiledValue: "[parameters('loomMipEnabled')]",
+      why:
+        'Delivers the MIP sensitivity-label GUIDs the /admin/batch-labeling surface reads. The ' +
+        'console treats the env var as present-or-absent, so the param gates the EMISSION and ' +
+        'the value is the literal `true`. Losing the conditional would advertise MIP labelling ' +
+        'on every boundary including the ones with no label set provisioned; losing the param ' +
+        'pass-through would silently fall back to the module default on all of them.',
+    },
+  ],
 ]);
 
 /**
@@ -1593,8 +1635,12 @@ export const TRIAGED_INERT_BINDINGS = new Map([
  * entry is added. Lowering it is how an entry is legitimately retired, and it
  * must be a deliberate, reviewed line in the same diff — never a silent side
  * effect of deleting the entry.
+ *
+ * 1 -> 3 on 2026-09-07 (#3344): LOOM_IQ_MCP_ENABLED (#3320) and
+ * LOOM_MIP_ENABLED (#3319) were triaged out of the always-empty ratchet with
+ * nothing pinning the bindings that triaged them.
  */
-export const TRIAGED_BINDINGS_FLOOR = 1;
+export const TRIAGED_BINDINGS_FLOOR = 3;
 
 /**
  * PARAMS-FILE ENV BRIDGES — every boundary reads every spelling (#3446).
@@ -1869,6 +1915,7 @@ export function computeTriagedBindings() {
   const args = collectAdminPlaneArgs();
   const compiledText = fs.readFileSync(COMPILED_TEMPLATE, 'utf8');
   const rootSrc = fs.readFileSync(ROOT_ORCHESTRATOR, 'utf8');
+  const consoleSrc = fs.readFileSync(CONSOLE_APP_FILE, 'utf8');
 
   for (const [envName, spec] of TRIAGED_INERT_BINDINGS) {
     const tag = `${envName} (${spec.issue})`;
@@ -1885,6 +1932,15 @@ export function computeTriagedBindings() {
     }
 
     // T2 — the console is still fed from that param.
+    //
+    // #3344 — `emitted` names the EXACT expression when it is not the bare
+    // param. Bicep cannot put a `bool` in an env `value:`, so a bool-backed
+    // binding is emitted as `string(<param>)`; requiring the bare param would
+    // have made every bool flag unpinnable and left them all outside this
+    // registry, which is how LOOM_IQ_MCP_ENABLED and LOOM_MIP_ENABLED came to
+    // have no binding assertion at all. Defaulting to `spec.param` keeps the
+    // existing entries exact.
+    const wantEmitted = spec.emitted ?? spec.param;
     const emitted = exprs.get(envName);
     if (emitted === undefined) {
       failures.push(
@@ -1892,13 +1948,21 @@ export function computeTriagedBindings() {
           'The env var stopped being delivered; the binding below cannot reach the console.',
       );
     } else if (emitted === null) {
-      failures.push(`${tag}: now delivered via secretRef, not \`value: ${spec.param}\`.`);
-    } else if (emitted !== spec.param) {
+      failures.push(`${tag}: now delivered via secretRef, not \`value: ${wantEmitted}\`.`);
+    } else if (emitted !== wantEmitted) {
       failures.push(
-        `${tag}: admin-plane emits it as \`${emitted}\`, expected the param \`${spec.param}\`. ` +
+        `${tag}: admin-plane emits it as \`${emitted}\`, expected \`${wantEmitted}\`. ` +
           'Re-pointing the emission bypasses the value assertion below.',
       );
     }
+
+    // T2b — the PARAM STILL DECIDES (#3344). When the emission is a literal, T2
+    // above pins a constant and says nothing about the param at all: the whole
+    // binding lives in the `<param> ? [ … ] : []` arm that decides whether the
+    // entry is emitted. Deleting that conditional — making the var
+    // unconditionally present — or re-pointing it at a different param leaves
+    // every other tooth green, because the literal never moved.
+    failures.push(...checkConditionalEmission(tag, spec, envName, consoleSrc));
 
     // T3 — the caller's argument is the EXPRESSION the fix installed.
     const actual = args.get(spec.param);
@@ -1949,6 +2013,64 @@ export function computeTriagedBindings() {
     failures.push(...checkAllowedInvariant(tag, spec, rootSrc));
   }
   return { failures, checked: TRIAGED_INERT_BINDINGS.size, args };
+}
+
+/**
+ * T2b — the CONDITIONAL that decides whether a literal-valued binding is
+ * emitted at all (#3344).
+ *
+ * WHY THIS IS NOT COVERED BY T2. `LOOM_MIP_ENABLED` is emitted as
+ * `{ name: 'LOOM_MIP_ENABLED', value: 'true' }` inside a
+ * `loomMipEnabled ? [ … ] : []` arm. T2 compares the VALUE expression, so for a
+ * binding like this it compares `'true'` against `'true'` — a constant against
+ * itself, forever true and blind to the only thing that varies. Delete the
+ * conditional and the var is emitted unconditionally on every boundary; point
+ * it at a different param and it follows an unrelated flag. Both leave T1..T5
+ * green, because the literal never moves.
+ *
+ * So a spec whose `emitted` is a literal declares `conditionalOn` and this
+ * tooth asserts the `<param> ?` arm is still the thing that gates it. The
+ * search is BACKWARD from the emission and bounded, because the arms in
+ * admin-plane/main.bicep are short and a wide window would let a neighbouring
+ * conditional satisfy it — the same "found A test, assumed it was THE test"
+ * error the presence-from-value layer exists for.
+ *
+ * Pure and exported for the reason every classifier in this file is: a tooth
+ * that can only be exercised by mutating the real tree is a tooth nobody
+ * re-measures.
+ *
+ * @param {string} tag display prefix
+ * @param {{param: string, emitted?: string, conditionalOn?: string}} spec
+ * @param {string} envName
+ * @param {string} consoleSrc source of admin-plane/main.bicep
+ * @returns {string[]}
+ */
+export function checkConditionalEmission(tag, spec, envName, consoleSrc) {
+  if (!spec.conditionalOn) return [];
+  const needle = `name: '${envName}'`;
+  const at = consoleSrc.indexOf(needle);
+  if (at === -1) {
+    return [
+      `${tag}: could not find \`${needle}\` in admin-plane/main.bicep, so the conditional ` +
+        'that gates it could not be located either. T2 reports the emission separately; this ' +
+        'tooth is reporting that it has no subject, which is not the same as a clean result.',
+    ];
+  }
+  // Bounded backward window. 600 chars covers the arm's opening plus a comment
+  // block; more would let an adjacent conditional stand in for this one.
+  const win = consoleSrc.slice(Math.max(0, at - 600), at);
+  const arm = new RegExp(`(?<![A-Za-z0-9_])${spec.conditionalOn.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s*\\?\\s*\\[`);
+  if (!arm.test(win)) {
+    return [
+      `${tag}: \`${envName}\` is emitted with a LITERAL value, and the \`${spec.conditionalOn} ? [\` ` +
+        'arm that decides whether it is emitted at all is no longer above it in ' +
+        'admin-plane/main.bicep. Every other assertion for this binding compares a constant ' +
+        'against itself and stays green, so this is the only one that can see it: either the ' +
+        'var is now emitted unconditionally on every boundary, or a different flag gates it. ' +
+        'Restore the conditional, or change this entry to describe what actually decides it.',
+    ];
+  }
+  return [];
 }
 
 /**
@@ -2796,7 +2918,38 @@ const SHELL_SCRIPTS_ROOT = path.join(REPO_ROOT, 'scripts');
 /** `env[?name=='NAME'].value` — the JMESPath shape that cannot see absence. */
 const ENV_VALUE_QUERY_RE = /env\[\?name==\s*(?:'|")([A-Za-z_][A-Za-z0-9_]*)(?:'|")\s*\]\.value/g;
 /** `env[].name` / `env[?name=='X'].name` — the shape that CAN. */
-const ENV_NAME_QUERY_RE = /env\[[^\]]*\]\.name\b/;
+const ENV_NAME_QUERY_RE = /env\[([^\]]*)\]\.name\b/g;
+/**
+ * Does a NAME query in `win` actually settle the presence of `envName`?
+ *
+ * This predicate used to be `ENV_NAME_QUERY_RE.test(win)` — any name query at
+ * all. That is not the same question. A `env[?name=='LOOM_OTHER'].name` sitting
+ * two lines above a `LOOM_THIS` value read says nothing whatever about
+ * LOOM_THIS, yet it credited LOOM_THIS to the NAME-guarded bucket and took it
+ * out of the flagged one. Measured on 2026-09-06: stripping the companion name
+ * query off gov-provision-trino's LOOM_MSAL_CLIENT_ID probe left the guard at
+ * rc=0, because a neighbouring name query for a different variable stood in for
+ * it. A third bucket credited by a regex that does not read WHICH variable is
+ * the same "reads complete while a set goes unwatched" shape this layer exists
+ * to refuse.
+ *
+ * A bare `env[]` (or `env[*]`) listing DOES settle any variable, because it
+ * returns every name — the shell then greps for the one it cares about. Only
+ * the filtered form has to match.
+ *
+ * @param {string} win shell text to search
+ * @param {string|null} envName the env var whose presence is in question
+ * @returns {boolean}
+ */
+export function settlesPresenceOf(win, envName) {
+  for (const m of win.matchAll(ENV_NAME_QUERY_RE)) {
+    const selector = m[1].trim();
+    if (selector === '' || selector === '*') return true;
+    const named = /^\?name==\s*(?:'|")([A-Za-z_][A-Za-z0-9_]*)(?:'|")$/.exec(selector);
+    if (named && envName !== null && named[1] === envName) return true;
+  }
+  return false;
+}
 /**
  * The start of the next YAML step — where one read's window ends. Anchored at
  * the start of a LOGICAL line, so a step that follows a folded command is still
@@ -3047,12 +3200,18 @@ export function classifyEnvQuerySite(src, at) {
     if (YAML_STEP_BOUNDARY.test(beforeLines[i])) backAt = i;
   }
   const backWin = beforeLines.slice(backAt).join('\n');
+  // Which variable this site is asking about — the NAME query that excuses it
+  // has to be about the SAME one.
+  const siteEnv = /^env\[\?name==\s*(?:'|")([A-Za-z_][A-Za-z0-9_]*)(?:'|")\s*\]\.value/.exec(
+    src.slice(at),
+  );
+  const envName = siteEnv ? siteEnv[1] : null;
   return {
     variable,
     presenceTest,
     // Searched over the SAME window the presence test was: if this variable's
     // scope is the job, then so is the scope of the remedy that would excuse it.
-    hasNameQuery: ENV_NAME_QUERY_RE.test(searchWin) || ENV_NAME_QUERY_RE.test(backWin),
+    hasNameQuery: settlesPresenceOf(searchWin, envName) || settlesPresenceOf(backWin, envName),
     exportedToJobScope,
   };
 }
@@ -3095,49 +3254,30 @@ export function collectEnvValueQuerySites() {
  * `<path>::<ENV_NAME>` (stable under line shifts) with the COUNT of sites, so a
  * second one in the same file for the same var is still caught.
  *
- * MEASURED at 5f1ee0d1, and every one of them was opened and read: 23
- * `env[?name==…].value` sites in total, 17 of which drive a presence verdict off
- * an oracle that cannot distinguish "absent" from "emitted empty". They are NOT
- * fixed here: the fix is in .github/workflows/** and scripts/csa-loom/**, which
- * this change does not own, and a guard whose only effect is to block unrelated
- * work is not a fix. They are ENUMERATED so they are visible, and so the 18th is
- * red on the day it lands — which is the state #3344 asked for and the tree did
- * not have.
+ * **IT IS NOW EMPTY, AND THAT IS THE POINT (#3344, 2026-09-07).** The 17 sites
+ * enumerated here were converted: each asks `env[?name=='X'].name` BEFORE any
+ * `-z`/`-n` test and the message that follows now names which of the three
+ * states it observed — the binding is absent, the binding is present and empty,
+ * or the query could not be answered. `.value` alone returns the same empty
+ * string for all three, and a dozen of these sites asserted the first of them
+ * as established fact (deploy-integrity R7). Two were load-bearing rather than
+ * cosmetic: an empty LOOM_ADLS_ACCOUNT silently skipped the RisingWave sink's
+ * Storage Blob Data Contributor grant with the explanation stranded in an inner
+ * `else`, and an empty LOOM_MSAL_CLIENT_ID printed "the live console has no
+ * LOOM_MSAL_CLIENT_ID" on the path that leaves loom-trino accepting no caller.
  *
- * The count was 15 until the window was corrected to job scope. It was never 15
- * in the tree — two Gov sites were being MISSED, which is why "re-baseline the
- * ratchet" is part of the F1 fix and not a separate bookkeeping chore: freezing
- * a number the measurement could not see cements the undercount, and the `stale`
- * check can never surface a site that was never counted in the first place.
+ * The count was 15 until the window was corrected to job scope, and it was
+ * never 15 in the tree — two Gov sites were being MISSED. That history is kept
+ * because it is the argument for measuring the population before freezing a
+ * number about it: the `stale` check below can never surface a site that was
+ * never counted.
  *
- * Adding a key here is NOT a fix. The fix is to query `env[].name` for presence
- * and read `.value` only afterwards.
+ * KEEP IT EMPTY. An entry here is not a fix and never was; it is a record that
+ * a site was left unfixed. The fix is to query `env[].name` for presence and
+ * read `.value` only afterwards. If a genuinely un-fixable site ever appears,
+ * it belongs in KNOWN_VALUE_ONLY_VALUE_USES with a written reason, not here.
  */
-export const KNOWN_VALUE_ONLY_PRESENCE_TESTS = new Map([
-  ['.github/workflows/csa-loom-post-deploy-bootstrap.yml::LOOM_REPORT_SUBSCRIPTIONS_FUNCTION', 1],
-  ['.github/workflows/deploy-copilot-evaluator.yml::LOOM_COSMOS_ENDPOINT', 1],
-  ['.github/workflows/deploy-lineage-extractor.yml::LOOM_COSMOS_ENDPOINT', 1],
-  ['.github/workflows/deploy-loom-uat.yml::LOOM_URL', 1],
-  ['.github/workflows/deploy-report-subscriptions.yml::LOOM_COSMOS_ENDPOINT', 1],
-  ['.github/workflows/deploy-secret-expiry.yml::LOOM_KEY_VAULT_URI', 1],
-  ['.github/workflows/gov-provision-dbx-sql.yml::LOOM_DATABRICKS_HOSTNAME', 1],
-  // JOB-SCOPED, invisible until the window was widened. The `.value` read is at
-  // :178, the `>> "$GITHUB_ENV"` at :189, the `[ -n "${LAKE:-}" ]` at :335 — and
-  // an empty emission silently skips the RisingWave sink's Storage Blob Data
-  // Contributor grant, because the warning at :343 sits in the inner else.
-  ['.github/workflows/gov-provision-streaming-migrate.yml::LOOM_ADLS_ACCOUNT', 1],
-  ['.github/workflows/gov-provision-trino.yml::LOOM_ADLS_ACCOUNT', 1],
-  // JOB-SCOPED, and the worst instance in the tree: capture :175, export :194,
-  // test :389, and then :395 prints "the live console has no LOOM_MSAL_CLIENT_ID,
-  // so loom-trino was deployed SEALED" — a cause the oracle cannot establish
-  // (deploy-integrity R7), on a path that leaves the engine accepting no caller.
-  ['.github/workflows/gov-provision-trino.yml::LOOM_MSAL_CLIENT_ID', 1],
-  ['.github/workflows/gov-uc-purview-wire.yml::LOOM_MSAL_CLIENT_ID', 1],
-  ['.github/workflows/gov-verify-facts.yml::LOOM_ADLS_ACCOUNT', 1],
-  ['.github/workflows/loom-brain-scan.yml::LOOM_COSMOS_ENDPOINT', 2],
-  ['.github/workflows/loom-brain-scan.yml::LOOM_UAMI_CLIENT_ID', 2],
-  ['scripts/csa-loom/resolve-msal-client-id.sh::LOOM_MSAL_CLIENT_ID', 1],
-]);
+export const KNOWN_VALUE_ONLY_PRESENCE_TESTS = new Map([]);
 
 /**
  * DECLARED VALUE-ONLY USES — the CEILING on the other half of the census.
@@ -3151,8 +3291,9 @@ export const KNOWN_VALUE_ONLY_PRESENCE_TESTS = new Map([
  * reviewed exemption and a silent pass.
  *
  * Together with KNOWN_VALUE_ONLY_PRESENCE_TESTS this accounts for the WHOLE
- * population: 17 presence verdicts + 6 declared value-uses = 23 = the census.
- * No site in this layer is silently clean any more.
+ * population. At 2026-09-07: 23 census sites = 6 declared value-uses here + 17
+ * that now settle presence with a NAME query, and 0 left deriving presence from
+ * a value. No site in this layer is silently clean any more.
  */
 export const KNOWN_VALUE_ONLY_VALUE_USES = new Map([
   // `$CURRENT` is compared against `$CID`, a specific value — not emptiness.
@@ -3182,7 +3323,7 @@ export const ENV_QUERY_CENSUS_FLOOR = 23;
 
 /**
  * @returns {{failures: string[], census: number, flagged: number, valueUses: number,
- *            stale: string[]}}
+ *            nameGuarded: number, stale: string[]}}
  */
 export function computeEnvQueryPresence() {
   const sites = collectEnvValueQuerySites();
@@ -3201,6 +3342,13 @@ export function computeEnvQueryPresence() {
     census: sites.length,
     flagged: [...counted.values()].reduce((a, b) => a + b, 0),
     valueUses: [...countedValueUses.values()].reduce((a, b) => a + b, 0),
+    // #3344 — THE THIRD BUCKET, and the one this layer exists to grow. A site
+    // that settles presence with a NAME query is neither flagged nor a declared
+    // value-use, so while the ratchet was full the accounting identity
+    // `flagged + valueUses === census` happened to hold with this term at zero.
+    // It is 17 now. Reporting it keeps "every site is in exactly one bucket" a
+    // MEASUREMENT rather than a coincidence of the old population.
+    nameGuarded: sites.filter((s) => s.hasNameQuery).length,
     stale,
   };
 }
@@ -3343,6 +3491,33 @@ export function runEnvQueryControl() {
   const okn = classifyEnvQuerySite(OK_NAMES, at(OK_NAMES));
   if (!okn.presenceTest) failures.push('control: lost the emptiness test in the has-NAME-query fixture');
   if (!okn.hasNameQuery) failures.push('control: did NOT see the companion `env[].name` query that makes a `.value` read sound');
+
+  // A name query for a DIFFERENT variable settles nothing about this one. This
+  // control exists because the predicate originally asked "is there a name query
+  // nearby", and a neighbour's probe silently excused a real presence-from-value
+  // site (measured against gov-provision-trino, 2026-09-06).
+  const FOREIGN_NAME = `          OTHER=$(az containerapp show -n "$APP" -g "$RG" \\
+            --query "properties.template.containers[0].env[?name=='LOOM_UAMI_CLIENT_ID'].name | [0]" -o tsv)
+          ACCT=$(az containerapp show -n "$APP" -g "$RG" \\
+            --query "properties.template.containers[0].env[?name=='LOOM_ADLS_ACCOUNT'].value | [0]" -o tsv)
+          if [ -z "$ACCT" ]; then echo "the app carries no LOOM_ADLS_ACCOUNT"; exit 1; fi
+`;
+  const foreign = classifyEnvQuerySite(FOREIGN_NAME, at(FOREIGN_NAME));
+  if (!foreign.presenceTest) failures.push('control: lost the emptiness test in the foreign-NAME-query fixture');
+  if (foreign.hasNameQuery) {
+    failures.push(
+      'control: a NAME query for a DIFFERENT variable was accepted as settling this one — the third bucket is being credited by a regex that does not read which variable it matched',
+    );
+  }
+  if (!settlesPresenceOf("env[?name=='LOOM_ADLS_ACCOUNT'].name", 'LOOM_ADLS_ACCOUNT')) {
+    failures.push('control: the matching NAME query was not accepted');
+  }
+  if (settlesPresenceOf("env[?name=='LOOM_ADLS_ACCOUNT'].name", 'LOOM_OTHER')) {
+    failures.push('control: settlesPresenceOf ignored the variable it was asked about');
+  }
+  if (!settlesPresenceOf('env[].name', 'LOOM_ANYTHING')) {
+    failures.push('control: a bare `env[].name` listing must settle any variable — it returns every name');
+  }
 
   // The QUOTED assignment form. Missing it returned variable=null, which made a
   // site unclassifiable and therefore silently unflagged.
@@ -3775,6 +3950,7 @@ function main() {
     census: envQueryCensus,
     flagged: envQueryFlagged,
     valueUses: envQueryValueUses,
+    nameGuarded: envQueryNameGuarded,
     stale: envQueryStale,
   } = computeEnvQueryPresence();
   const envQuerySum = envQueryFlagged + envQueryValueUses;
@@ -3790,8 +3966,24 @@ function main() {
   console.log(
     `[env-sync] declared VALUE-ONLY uses: ${envQueryValueUses} ` +
       `(ceiling ${[...KNOWN_VALUE_ONLY_VALUE_USES.values()].reduce((a, b) => a + b, 0)}); ` +
-      `settled by a companion NAME query: ${envQueryCensus - envQuerySum}`,
+      `settled by a companion NAME query: ${envQueryNameGuarded}`,
   );
+  // …and the three buckets are ASSERTED to sum, not printed and hoped over
+  // (#3344). While the presence ratchet was full this identity held with the
+  // NAME-query term at zero, so it proved nothing about the term that has since
+  // grown to hold most of the census. A site in no bucket is a site nobody is
+  // looking at, which is the state the whole layer exists to refuse.
+  if (envQueryFlagged + envQueryValueUses + envQueryNameGuarded !== envQueryCensus) {
+    console.error(
+      `\n::error::check-env-sync's layer-6 accounting does not add up: ${envQueryCensus} census ` +
+        `site(s), but ${envQueryFlagged} presence-from-value + ${envQueryValueUses} declared ` +
+        `value-only + ${envQueryNameGuarded} NAME-guarded = ` +
+        `${envQueryFlagged + envQueryValueUses + envQueryNameGuarded}. The residual is the set ` +
+        'nobody is looking at, and a printed accounting that does not sum reads as complete ' +
+        'exactly the way the 15-of-17 one did.',
+    );
+    process.exit(1);
+  }
   // SELF-CHECK: a census that collapses is a layer reporting on a tree it never
   // read — the same failure shape as `delivered.size < 100` above.
   if (envQueryCensus < ENV_QUERY_CENSUS_FLOOR) {

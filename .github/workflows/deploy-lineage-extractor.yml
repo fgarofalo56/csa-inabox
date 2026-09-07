@@ -302,6 +302,19 @@ jobs:
             --query "properties.provisioningState" -o tsv 2>/dev/null | tr -d '\r' || true)
           COSMOS=$(az containerapp job show -g "$ADMIN_RG" -n "$JOB_NAME" \
             --query "properties.template.containers[0].env[?name=='LOOM_COSMOS_ENDPOINT'].value | [0]" -o tsv 2>/dev/null | tr -d '\r' || true)
+          # #3344 — PRESENCE COMES FROM THE NAME QUERY, NOT FROM THE VALUE.
+          # `.value` returns the same empty string for "there is no such binding"
+          # and "the binding is there and empty", and this step FAILS on it — so
+          # the refusal below stated a cause it had not established
+          # (deploy-integrity R7). Ask for `.name`, keep az's stderr, and refuse
+          # honestly when the query itself could not be answered.
+          COSMOS_ERR=$(mktemp)
+          if ! COSMOS_BOUND=$(az containerapp job show -g "$ADMIN_RG" -n "$JOB_NAME" \
+            --query "properties.template.containers[0].env[?name=='LOOM_COSMOS_ENDPOINT'].name | [0]" -o tsv 2>"$COSMOS_ERR"); then
+            echo "::error::could not read $JOB_NAME's env bindings, so this step cannot say whether LOOM_COSMOS_ENDPOINT is set. Refusing rather than reporting an unreadable job as an unbound one. az said: $(tr '\n' ' ' < "$COSMOS_ERR" | head -c 300)"
+            exit 1
+          fi
+          COSMOS_BOUND=$(printf '%s' "$COSMOS_BOUND" | tr -d '\r')
           echo "image=$IMAGE container=$CONTAINER provisioningState=$STATE"
           if [ -z "$IMAGE" ]; then
             echo "::error::$JOB_NAME is not readable after the deploy — cannot confirm the image rolled."
@@ -317,8 +330,12 @@ jobs:
           if [ "$CONTAINER" != "extractor" ]; then
             echo "::warning::container name is '$CONTAINER', not 'extractor'. The log query in the script header (ContainerAppConsoleLogs_CL | where ContainerName_s == 'extractor') will return NOTHING for this job. Deploy the bicep module (modules/admin-plane/lineage-extractor-job.bicep) to get the canonical name."
           fi
+          if [ -z "$COSMOS_BOUND" ] || [ "$COSMOS_BOUND" = "None" ]; then
+            echo "::error::LOOM_COSMOS_ENDPOINT is NOT BOUND on the job at all after the deploy — the extractor will honest-gate and write zero lineage edges while its executions still report Succeeded. This is the exact blanking this workflow is built to prevent; the binding comes from modules/admin-plane/lineage-extractor-job.bicep. Investigate before the next scheduled run."
+            exit 1
+          fi
           if [ -z "$COSMOS" ] || [ "$COSMOS" = "None" ]; then
-            echo "::error::LOOM_COSMOS_ENDPOINT is empty on the job after the deploy — the extractor will honest-gate and write zero lineage edges while its executions still report Succeeded. This is the exact blanking this workflow is built to prevent; investigate before the next scheduled run."
+            echo "::error::LOOM_COSMOS_ENDPOINT is bound on the job but its VALUE is empty after the deploy — the extractor will honest-gate and write zero lineage edges while its executions still report Succeeded. The env entry exists, so this is a wrong value being supplied to it, not a missing binding. Investigate before the next scheduled run."
             exit 1
           fi
           echo "::notice::$JOB_NAME rolled to $IMAGE (built from ${GITHUB_SHA}). The next scheduled execution picks it up."
