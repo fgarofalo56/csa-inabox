@@ -62,6 +62,46 @@ permissions:
   contents: read
   issues: write
 
+# ── STOP THE DAILY CRON STACKING AT THE APPROVAL GATE (#4233) ───────────────
+# `environment: gcc-high-deploy` on deploy-validate below requires a manual
+# approval, and this workflow had NO `concurrency:` block at all. Measured
+# 2026-09-07 (`gh run list --workflow deploy-fiab-gcch --limit 12`): ELEVEN
+# scheduled runs sat in `waiting` — 33111419147, 33210760783, 33258539150,
+# 33317217630, 33418795086, 33638903756, 33764198346, 33880466694, 33967908574,
+# 34035634353, 34138038567 — one per day since 2026-08-27, each holding its own
+# approval request. Only 33519232492 (2026-09-01) was ever approved, and it is
+# the failure this issue is about.
+#
+# `cancel-in-progress` is FALSE, DELIBERATELY, and that is the whole design
+# decision here. GitHub keeps only ONE PENDING run per concurrency group and
+# cancels the previously pending one *even when cancel-in-progress is false*
+# (the behaviour deploy-fiab-commercial.yml:2197 records), so `false` already
+# collapses the pile — while `true` would additionally cancel a run that is
+# genuinely EXECUTING. On this lane that is not a saved minute, it is a hazard
+# with a measured blast radius: the image-preflight step below holds an ACR
+# FIREWALL LEASE (`publicNetworkAccess=Enabled` on the sovereign registry) for
+# the duration of its probe, and a cancel inside that window kills the holder
+# before `release_lease` re-locks it. The estate then relies on the lease TTL
+# (75 min) plus acr-firewall-sweeper.yml to re-lock — and the sweeper's OBSERVED
+# cadence is ~5h, not the 15-minute cron it declares (see its own header note).
+# So a blanket `true` trades a stacked queue for hours of a publicly reachable
+# GCC-High registry, and for a `az deployment sub create` killed mid-apply.
+# loom-roll-and-validate.yml:156 made the same call for the same reason.
+#
+# The group is keyed by `github.event_name` so the two trigger paths never
+# queue behind each other. Without that key an operator's `workflow_dispatch`
+# — the path used to actually FIX a sovereign estate — would sit pending behind
+# a twelve-day-old cron run that is waiting for an approval nobody intends to
+# give, which is a worse failure than the one being fixed.
+#
+# RESIDUAL, stated rather than implied: with `false` the group's occupant is the
+# OLDEST waiting scheduled run, so the pile caps at two rather than one and the
+# stale occupant has to be cancelled by hand ONCE. Approving that stale run
+# would deploy the SHA it was triggered on, not head.
+concurrency:
+  group: deploy-fiab-gcch-${{ github.event_name }}
+  cancel-in-progress: false
+
 env:
   AZURE_CLOUD: AzureUSGovernment
   AZURE_LOCATION: usgovvirginia
@@ -729,9 +769,14 @@ jobs:
             echo ""
             echo "\`${CSA_LOOM_BOUNDARY}\` has an owned, unexpired entry in"
             echo "\`scripts/ci/estate-pause-declaration.json\`, and the ADX preflight observed"
-            echo "its cluster stopped. The what-if, the apply and the post-deploy bootstrap were"
-            echo "SKIPPED — a stopped Kusto engine refuses \`principalAssignments\`, so none of"
-            echo "them could have produced a real answer."
+            echo "its cluster stopped. SKIPPED: the what-if, the image preflight (which would"
+            echo "have opened this boundary's ACR firewall), the image-tag revert gate, the"
+            echo "re-pin, the apply, the Front Door private-endpoint approval, the DLZ template"
+            echo "publish and the post-deploy bootstrap — a stopped Kusto engine refuses"
+            echo "\`principalAssignments\`, so none of them could have produced a real answer,"
+            echo "and none of them should touch an estate this run has declared it will not"
+            echo "measure. A teardown dispatched against a declared-paused estate REFUSES"
+            echo "rather than skipping, so it can never happen silently behind this notice."
             echo ""
             echo "**This run is UNMEASURED, not clean.** It is not evidence the template applies,"
             echo "and it does not refresh this estate's drift position against \`main\`."
@@ -770,6 +815,16 @@ jobs:
             ${CSA_LOOM_TARGET_SUBSCRIPTION:+--parameters targetSubscriptionId="$CSA_LOOM_TARGET_SUBSCRIPTION"}
 
       - name: Deploy-verification evidence receipt (§7)
+        # STAND DOWN on a DECLARED-paused estate (#4233). This runs a LIVE
+        # what-if against the Gov subscription and uploads the result as the
+        # "deploy-verification acceptance receipt". On a paused estate that
+        # what-if hits the same ClusterNotValidForPrincipals refusal the step
+        # above stood down from, `|| true` swallows it, and the run still
+        # publishes an artifact whose NAME asserts a verification that did not
+        # happen — the summary two steps up says "This run is UNMEASURED", and
+        # an artifact contradicting it is deploy-integrity R7 applied to the
+        # thing people actually download.
+        if: steps.adx_preflight.outputs.estate_paused != 'true'
         # Captures the GCC-High deploy-verification acceptance receipt as an
         # artifact: deterministic ARM tests + sovereign-endpoint sweep + the §4
         # host matrix, plus a live what-if line (already on the Gov sub + bicep).
@@ -781,6 +836,10 @@ jobs:
             --out "$RUNNER_TEMP/gov-verify-receipt-gcch-${{ github.run_id }}.txt" || true
 
       - name: Upload GCC-High verification receipt
+        # Paired with the step above: no receipt was produced on a stood-down
+        # run, so there is nothing to upload and `if-no-files-found: warn` would
+        # otherwise print a warning about an absence that is expected (#4233).
+        if: steps.adx_preflight.outputs.estate_paused != 'true'
         uses: actions/upload-artifact@v7
         with:
           name: gov-verify-receipt-gcch-${{ github.run_id }}
@@ -802,7 +861,18 @@ jobs:
       # no ACR yet means nothing live to adopt, and the two-phase image path
       # (no-vaporware.md) builds the registry contents in the next phase.
       - name: Image preflight — Gov ACR must already hold every referenced tag
-        if: github.event_name == 'schedule' || inputs.run_mode == 'full'
+        # STAND DOWN on a DECLARED-paused estate (#4233). Two independent
+        # reasons, either sufficient:
+        #   1. This step MUTATES the estate. `assert-acr-image-tags.sh --lease`
+        #      opens the sovereign registry's firewall
+        #      (publicNetworkAccess=Enabled, defaultAction=Allow) and re-locks
+        #      it. Run 33519232492 did exactly that on an estate the run had
+        #      already declared it would not measure:
+        #        [acr-lease] HELD the ACR firewall lease on 'acrloomdcmt6cqoezlgs'
+        #        [acr-lease] opening ACR ... (publicNetworkAccess=Enabled)
+        #   2. Its whole purpose is to prove the tags the APPLY is about to
+        #      write already exist, and on a stood-down run there is no apply.
+        if: (github.event_name == 'schedule' || inputs.run_mode == 'full') && steps.adx_preflight.outputs.estate_paused != 'true'
         # The two LOOM_*_TAG values this step reads come from `Adopt the image
         # tags…` (#3449) — the same $GITHUB_ENV the what-if and the apply read.
         # They were once declared here, on this step only, so a pinned repo
@@ -916,7 +986,26 @@ jobs:
       # life of this lane because nothing ever stated which tags a deploy was
       # about to write.
       - name: Image-tag revert gate — never flatten a pinned app to the default
-        if: github.event_name == 'schedule' || inputs.run_mode == 'full'
+        # STAND DOWN on a DECLARED-paused estate (#4233). THIS IS THE STEP THAT
+        # TURNED THE STAND-DOWN RED. Run 33519232492: ADX preflight succeeded,
+        # `Estate is DECLARED paused` printed "This run is UNMEASURED, not
+        # clean", `Bicep what-if` and `Provision` skipped — and then this gate
+        # failed the job on LOOM_UNITY_TAG (loom-unity runs digest
+        # sha256:2aac7d64…, 'v0.1' resolves to sha256:db7a7cb5…).
+        #
+        # THE GATE IS NOT WRONG AND IS NOT BEING WEAKENED. It refuses a write
+        # this deploy would genuinely have made — but only when the deploy
+        # HAPPENS. `Provision` above already carries the same clause, so on a
+        # declared-paused run there is no write for the gate to guard, and its
+        # verdict is about a deploy that will not occur. A guard that fails a
+        # run which applies nothing is not protecting the estate; it is turning
+        # a deliberate stand-down into an alert nobody can act on.
+        #
+        # The underlying defect it found is REAL and is NOT fixed here: adoption
+        # does not resolve LOOM_UNITY_TAG for the digest-pinned loom-unity on
+        # Gov (the #4064 class). It is filed separately; the moment the
+        # declaration is deleted this gate runs again and refuses again.
+        if: (github.event_name == 'schedule' || inputs.run_mode == 'full') && steps.adx_preflight.outputs.estate_paused != 'true'
         run: |
           set -euo pipefail
           # dlz-attach provisions a landing zone into a DIFFERENT subscription
@@ -989,7 +1078,15 @@ jobs:
       # own. Tracked as the remaining half of #3683.
       - name: Re-pin appImageTags to the RUNNING images (narrows the roll race — #3683)
         id: repin
-        if: github.event_name == 'schedule' || inputs.run_mode == 'full'
+        # STAND DOWN on a DECLARED-paused estate (#4233). This pin exists only
+        # to keep the value the APPLY writes fresh, and the apply below carries
+        # the same clause — so on a stood-down run it re-measures an estate
+        # nobody is about to deploy to, and `pin-refresh --read-error` can
+        # REFUSE (exit non-zero) on a control plane a paused estate is entitled
+        # to answer oddly for. The adjacency invariant in the note above is
+        # preserved: this is still the last step before `Provision`, and both
+        # now skip together.
+        if: (github.event_name == 'schedule' || inputs.run_mode == 'full') && steps.adx_preflight.outputs.estate_paused != 'true'
         env:
           AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_GOV_SUBSCRIPTION_ID }}
         run: |
@@ -1316,7 +1413,15 @@ jobs:
       # publish-dlz-template job for the rationale). Sovereign endpoints are
       # resolved from the account (primaryEndpoints.blob). Idempotent + best-effort.
       - name: Publish DLZ template + wire deploy env (Gov)
-        if: (github.event_name == 'schedule' || inputs.run_mode == 'full') && inputs.keep_resources
+        # STAND DOWN on a DECLARED-paused estate (#4233). Not covered by the
+        # `inputs.keep_resources` clause: a `schedule` event carries no inputs
+        # so this is already skipped on the cron, but a
+        # `workflow_dispatch run_mode=full keep_resources=true` against a
+        # declared-paused estate would reach it — and it MUTATES, twice
+        # (`az storage blob upload` and `az containerapp update --set-env-vars`
+        # on loom-console). A run that has declared it measures nothing must
+        # not write env vars onto the estate's Console.
+        if: (github.event_name == 'schedule' || inputs.run_mode == 'full') && inputs.keep_resources && steps.adx_preflight.outputs.estate_paused != 'true'
         run: |
           set -e
           RG="rg-csa-loom-admin-${AZURE_LOCATION}"
@@ -1371,11 +1476,34 @@ jobs:
       # blocked capabilities are merged fixes waiting on this lane to run, so
       # "just re-enable it" was a genuinely tempting and genuinely destructive
       # move. Fixed here FIRST, so enabling the lane is a safe act.
+      # THE DECLARED PAUSE REACHES THIS STEP AS A REFUSAL, NOT AS A SKIP (#4233).
+      # Every other stand-down on this lane is an `if:` that skips. This one is
+      # not, and the difference is deliberate. A declared-paused estate reaching
+      # here means an operator dispatched `run_mode=full` with
+      # `keep_resources=false` — i.e. asked, explicitly, for a TEARDOWN. Two
+      # things are unacceptable and skipping only avoids one of them:
+      #   - DESTROYING an estate whose own run summary, printed minutes earlier,
+      #     says "This run is UNMEASURED, not clean". The stand-down notice is an
+      #     assertion about what the run did, and it is written BEFORE this step,
+      #     so it cannot retract itself (deploy-integrity R7).
+      #   - SILENTLY not tearing down when a teardown was explicitly requested,
+      #     leaving the operator believing a sovereign estate is gone when it is
+      #     not. That is the failure a bare `if:` would introduce here.
+      # So it fails loudly and names the one-line, reviewable action that
+      # authorises the destruction: delete the boundary's entry from
+      # scripts/ci/estate-pause-declaration.json and dispatch again.
       - name: Teardown
         if: success() && github.event_name != 'schedule' && inputs.run_mode == 'full' && !inputs.keep_resources
-        run: bash .github/scripts/fiab-teardown.sh
         env:
           RG_NAME: rg-csa-loom-admin-${{ env.AZURE_LOCATION }}
+          ESTATE_PAUSED: ${{ steps.adx_preflight.outputs.estate_paused }}
+        run: |
+          set -euo pipefail
+          if [ "${ESTATE_PAUSED:-}" = "true" ]; then
+            echo "::error::REFUSING to tear down the GCC-High estate: it is DECLARED PAUSED in scripts/ci/estate-pause-declaration.json, and this run already stood down without measuring it (the apply, the what-if and the image gates were all skipped). Tearing down an estate a run has declared UNMEASURED is not something this lane will do implicitly. To proceed: delete the GCC-High entry from that file, merge, and dispatch again with keep_resources=false."
+            exit 1
+          fi
+          bash .github/scripts/fiab-teardown.sh
 
       - name: Note dry-run completion
         if: success() && inputs.run_mode == 'whatif-only'
