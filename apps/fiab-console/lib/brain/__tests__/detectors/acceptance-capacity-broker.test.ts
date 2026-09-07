@@ -93,7 +93,11 @@ describe('ACCEPTANCE — unreachable-service finds loom-capacity-broker', () => 
       expect(graph.edges.some((e) => e.id === id)).toBe(true);
     }
     // The query, re-runnable by hand.
-    expect(f.evidence.query).toContain('nodesWithNoInboundEdge');
+    // #4258: the detector now cites the REACHABILITY query. Pinning the old
+    // name would leave the evidence chain naming a query the detector no longer
+    // runs — the chain has to be re-runnable by hand to be evidence at all.
+    expect(f.evidence.query).toContain('nodesNotReachableFrom');
+    expect(f.evidence.query).toContain('roots=');
   });
 
   it('the finding states minReplicas, cpu, memory and that it is HEALTHY', () => {

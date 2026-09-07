@@ -405,6 +405,13 @@ describe('a declared non-scalable subject is never proposed as a saving (#4257 i
 
   it('B2 — THE CONTROL: a PINNED-SINGLETON subject keeps the by-design wording', () => {
     // The arm that would otherwise let "rewrite every title" pass the two above.
+    //
+    // The tail moved from "nothing wires to it" to "nothing reaches it" when the
+    // #4258 predicate widening was carried into the prose: the detector no longer
+    // establishes that nothing WIRES to the node (an island's peers are wired),
+    // only that nothing can REACH it. The control's discriminating power is
+    // unchanged — `BY DESIGN` still separates this arm from declared-consumer
+    // and self, which assert its absence.
     const base = ctxFromRows(rowsWithRisingwave());
     const f = findingFor({
       ...base,
@@ -413,7 +420,7 @@ describe('a declared non-scalable subject is never proposed as a saving (#4257 i
         reason: "the deploy PINS 'loom-risingwave' to exactly 1 replica(s).",
       }),
     })!;
-    expect(f.title).toMatch(/is always-on BY DESIGN and nothing wires to it/);
+    expect(f.title).toMatch(/is always-on BY DESIGN and nothing reaches it/);
     expect(f.summary).toMatch(/its always-on floor is DECLARED by the deploy/);
     expect(f.remediation.summary).toMatch(/always-on by design/);
   });

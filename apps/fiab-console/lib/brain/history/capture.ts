@@ -46,6 +46,7 @@ import { diffVersions, isSemanticallyEmpty } from './diff';
 import {
   GraphVersionTooLargeError,
   HISTORY_FORMAT_VERSION,
+  type CollectionCompleteness,
   type GraphDiff,
   type GraphVersion,
   type HistoryPopulation,
@@ -94,6 +95,15 @@ export interface CaptureArgs {
   readonly collectedProvenances: readonly EdgeProvenance[];
   /** What triggered this capture. Stored verbatim on the version. */
   readonly source: string;
+  /**
+   * How complete the pull behind `graph` was (#4016).
+   *
+   * OPTIONAL because callers that do not read Azure Resource Graph — the tests,
+   * and any future capture from an already-built graph — have nothing to report,
+   * and inventing `complete: true` for them would be an R7 violation: it asserts
+   * a completeness nobody measured. Omitted means NOT RECORDED.
+   */
+  readonly collection?: CollectionCompleteness;
   readonly now?: () => Date;
 }
 
@@ -115,6 +125,7 @@ export function buildVersionRecord(args: {
   readonly capturedAt: string;
   readonly collectedProvenances: readonly EdgeProvenance[];
   readonly source: string;
+  readonly collection?: CollectionCompleteness;
 }): GraphVersion {
   const content = projectGraph(args.graph);
   const digest = computeContentDigest(content);
@@ -131,6 +142,9 @@ export function buildVersionRecord(args: {
     source: args.source,
     observedCount: 1,
     lastObservedAt: args.capturedAt,
+    // NOT folded into `digest` — see `CollectionCompleteness`'s doc-block. The
+    // digest addresses the CONTENT; this describes the read that produced it.
+    ...(args.collection ? { collection: args.collection } : {}),
     content,
   };
 }
@@ -180,6 +194,7 @@ export async function captureGraphVersion(args: CaptureArgs): Promise<CaptureRes
     capturedAt,
     collectedProvenances: args.collectedProvenances,
     source: args.source,
+    ...(args.collection ? { collection: args.collection } : {}),
   });
   const digest = candidate.digest;
   const counts = candidate.counts;

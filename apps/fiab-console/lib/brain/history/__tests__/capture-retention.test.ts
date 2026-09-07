@@ -339,3 +339,57 @@ describe('capture fails closed on a corrupt head', () => {
     );
   });
 });
+
+// ---------------------------------------------------------------------------
+// #4016 — completeness rides ON the version, and OUT of the digest
+// ---------------------------------------------------------------------------
+
+describe('captureGraphVersion — collection completeness (#4016)', () => {
+  const args = (store: InMemoryGraphHistoryStore, collection?: {
+    complete: boolean;
+    rowsFetched: number;
+    totalRecords: number;
+  }) => ({
+    graph: buildEstate(BASELINE, { estateId: ESTATE }),
+    store,
+    estateId: ESTATE,
+    collectedProvenances: RUNTIME_PROVENANCES,
+    source: 'test',
+    ...(collection ? { collection } : {}),
+  });
+
+  it('is PERSISTED on the stored version', async () => {
+    const store = new InMemoryGraphHistoryStore();
+    await captureGraphVersion(args(store, { complete: false, rowsFetched: 3, totalRecords: 9 }));
+    const [summary] = await store.listSummaries(ESTATE);
+    expect(summary.collection).toEqual({ complete: false, rowsFetched: 3, totalRecords: 9 });
+  });
+
+  it('is OMITTED, not invented, when the caller did not measure it', async () => {
+    // Defaulting to `complete: true` would assert a completeness nobody read —
+    // R7 in its cheapest form. `undefined` is NOT RECORDED and reads that way.
+    const store = new InMemoryGraphHistoryStore();
+    await captureGraphVersion(args(store));
+    const [summary] = await store.listSummaries(ESTATE);
+    expect(summary.collection).toBeUndefined();
+  });
+
+  it('is NOT part of the digest — the dedupe still sees an unchanged estate', async () => {
+    // THE INVARIANT. Fold completeness into the content address and an
+    // incomplete pull followed by a COMPLETE pull of the same estate hashes
+    // differently, minting a version that records no change at all — which is
+    // precisely what the two-stage dedupe exists to prevent.
+    const a = new InMemoryGraphHistoryStore();
+    const first = await captureGraphVersion(
+      args(a, { complete: false, rowsFetched: 3, totalRecords: 9 }),
+    );
+    const second = await captureGraphVersion(
+      args(a, { complete: true, rowsFetched: 9, totalRecords: 9 }),
+    );
+    expect(first.status).toBe('created');
+    expect(second.status).toBe('unchanged');
+    expect(second.unchangedReason).toBe('identical-digest');
+    expect(second.version.digest).toBe(first.version.digest);
+    expect((await a.listSummaries(ESTATE)).length).toBe(1);
+  });
+});
