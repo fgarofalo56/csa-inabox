@@ -53,12 +53,62 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string 
     // previously-saved state.definition takes precedence over the bundle content.
     if (!definition) {
       if (state?.definition?.properties) {
-        definition = state.definition as AdfPipeline;
+        definition = toAdfWireShape(state.definition as AdfPipeline);
       } else {
-        const fromContent = pipelineDefinitionFromContent(state?.content, adfName);
-        if (fromContent) definition = fromContent as AdfPipeline;
+        // #3700 — `target: 'adf'`, matching `export/route.ts`. The default
+        // 'canvas' target spreads activity config onto the activity ROOT, and
+        // this route would then have to repair it; using the install-path
+        // translator that PR #3696 verified against a real bundle means the
+        // editor is handed the shape it actually reads in the first place.
+        const fromContent = pipelineDefinitionFromContent(state?.content, adfName, { target: 'adf' });
+        if (fromContent) definition = toAdfWireShape(fromContent) as AdfPipeline;
       }
     }
+    // ONE SHAPE OUT OF THIS ROUTE — the MIXED-SHAPE class, closed at its source.
+    //
+    // WHAT WAS MEASURED. `toAdfWireShape` treats "has a `typeProperties` object"
+    // as "already wire-shaped" and then preserves every root key, which is what
+    // keeps a live-ADF `state`/`onInactiveMarkAs` at the root where ADF reads
+    // it. That discriminator is right for a PURE shape and blind on a MIXED one.
+    // This route used to hand the editor a CANVAS-shaped activity (config on the
+    // root, no `typeProperties`); the inspector patches with
+    // `onPatch({ typeProperties: setPath(activity.typeProperties || {}, ...) })`
+    // (`activity-forms.tsx:545`) and `patchActivity` is a shallow merge
+    // (`data-pipeline-editor.tsx:582`), so ONE inspector edit produced
+    // `{ name, type, notebookPath, baseParameters, typeProperties:{...} }`.
+    // `toAdfWireShape` then saw `typeProperties`, took the preserve-everything
+    // branch, and left `notebookPath` at the root — #3700's own "publishes green
+    // and does nothing" symptom, surviving the fix for it. Probed directly:
+    //   root keys      : ['name','type','notebookPath','baseParameters','typeProperties']
+    //   typeProperties : {"libraries":[...]}
+    //
+    // WHY THE REPAIR IS NOT IN `normalizeActivity`. On a mixed activity a stray
+    // root key is structurally indistinguishable from a root key ADF added and
+    // this codebase does not know: `{name,type,foo,typeProperties}` is the same
+    // document whether `foo` is leaked canvas config or a future ADF field.
+    // Measured against the published ARM schema (fetched 2026-09-08, HTTP 200,
+    // 693244 bytes): `definitions.Activity.properties` is
+    // `{additionalProperties, dependsOn, description, name, userProperties}` and
+    // the document contains ZERO occurrences of `onInactiveMarkAs` or `"state"`,
+    // so no allowlist built from it can be complete and neither default is safe.
+    // The decidable place is the two branches above, where the provenance of the
+    // shape is still known.
+    //
+    // WHY ONLY THOSE TWO AND NOT THE LIVE-ADF BRANCH. A definition read from ADF
+    // IS the wire shape, so normalizing it is a no-op — the idempotence pinned by
+    // `lib/azure/__tests__/pipeline-binding.test.ts` and by the byte-identical
+    // control in `publish/__tests__/publish-shape.test.ts`. Leaving that branch
+    // alone keeps this route's only behaviour change on the shapes that were
+    // actually wrong.
+    //
+    // SAFE FOR THE EDITOR, measured rather than assumed: `extractActivities`
+    // reads `parsed?.properties?.activities` and nothing deeper
+    // (`pipeline-dag-view.tsx:602`), so the canvas is shape-agnostic; and the
+    // inspector reads `getPath(tp, ...)` for every field except the `rootPath`
+    // ones, whose single site is `linkedServiceName.referenceName` — a genuine
+    // ADF root key this translation keeps at the root. A canvas-shaped activity
+    // actually rendered those fields EMPTY, because `activity.typeProperties`
+    // was `{}`.
     return NextResponse.json({
       ok: true,
       pipeline: { id: resource.id, displayName: resource.displayName, description: resource.description, adfPipelineName: adfName },

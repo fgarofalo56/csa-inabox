@@ -81,6 +81,7 @@ vi.mock('@/lib/azure/cosmos-client', () => ({
 import { POST } from '../route';
 import { PUT } from '../../route';
 import { GET as EXPORT_GET } from '../../export/route';
+import { GET as DETAIL_GET } from '../../route';
 
 const req = (body: any) => ({
   nextUrl: { searchParams: new URLSearchParams({ workspaceId: 'ws-1' }) },
@@ -312,5 +313,91 @@ describe('boundary 3 — GET [id]/export (the archive handed to the customer)', 
     const res = await EXPORT_GET(req({}), ctx);
     expect(res.status).toBe(404);
     expect(zipEntries).toEqual([]);
+  });
+});
+
+/**
+ * boundary 0 — `GET /api/items/data-pipeline/[id]`, the READ that decides which
+ * shape the editor holds. This is where the MIXED shape was born.
+ *
+ * WHY A READ IS PINNED IN A FILE ABOUT WRITE BOUNDARIES. `toAdfWireShape` uses
+ * "has a `typeProperties` object" to mean "already wire-shaped, preserve every
+ * root key" — the rule that keeps a live-ADF `state`/`onInactiveMarkAs` at the
+ * root. When this route handed the editor a CANVAS-shaped activity, one
+ * inspector edit added a `typeProperties` beside the root config
+ * (`activity-forms.tsx:545` through the shallow merge in
+ * `data-pipeline-editor.tsx:582`), and every write boundary below then took the
+ * preserve branch and shipped ADF `{ name, type, notebookPath, typeProperties }`
+ * — `notebookPath` where the service does not look. Green suite, dead activity:
+ * #3700's own symptom surviving #3700's fix.
+ *
+ * These cases FAIL on the pre-fix route (they assert the root key is GONE, and
+ * the pre-fix route returned it at the root for both non-ADF branches), and
+ * they are DISJOINT-KEY cases on purpose: the pre-existing mixed-shape test
+ * only covers a same-key collision, which the preserve branch happens to get
+ * right, so it could not see this.
+ */
+describe('boundary 0 — GET [id] (the shape the editor is handed)', () => {
+  it('hands the editor the WIRE shape for a bundle-installed pipeline', async () => {
+    itemDoc.state = {
+      content: {
+        kind: 'adf-pipeline',
+        activities: [{
+          name: 'nb1',
+          type: 'DatabricksNotebook',
+          config: { notebookPath: '/Shared/loom/ingest', baseParameters: { env: 'dev' } },
+        }],
+      },
+    };
+    const res = await DETAIL_GET(req({}), ctx);
+    expect(res.status).toBe(200);
+    const act = (await res.json()).definition.properties.activities[0];
+    expect(act.typeProperties.notebookPath).toBe('/Shared/loom/ingest');
+    expect(act.typeProperties.baseParameters).toEqual({ env: 'dev' });
+    expect(act.notebookPath).toBeUndefined();
+    expect(act.baseParameters).toBeUndefined();
+  });
+
+  it('repairs a LEGACY canvas-shaped state.definition on the way out', async () => {
+    // The ~13 items persisted in the root shape before #3700. Without this the
+    // editor still receives the flat form and can still mint the mixed shape.
+    itemDoc.state = {
+      definition: {
+        properties: {
+          activities: [{ name: 'nb1', type: 'DatabricksNotebook', notebookPath: '/legacy' }],
+        },
+      },
+    };
+    const res = await DETAIL_GET(req({}), ctx);
+    const act = (await res.json()).definition.properties.activities[0];
+    expect(act.typeProperties).toEqual({ notebookPath: '/legacy' });
+    expect(act.notebookPath).toBeUndefined();
+  });
+
+  it('leaves a definition read LIVE from ADF byte-identical, unknown root keys and all', async () => {
+    // CONTROL for the two above: the repair must not become "rewrite everything
+    // the editor is shown", or it re-introduces the defect the discriminator
+    // exists to prevent — a deactivated ADF activity silently re-activated.
+    const live = {
+      name: 'My_Pipeline_item1',
+      properties: {
+        activities: [{
+          name: 'copy1', type: 'Copy',
+          state: 'Inactive', onInactiveMarkAs: 'Skipped',
+          policy: { timeout: '7.00:00:00' },
+          typeProperties: { source: { type: 'DelimitedTextSource' }, sink: { type: 'ParquetSink' } },
+        }],
+      },
+    };
+    getPipeline.mockResolvedValue(structuredClone(live));
+    const res = await DETAIL_GET(req({}), ctx);
+    expect((await res.json()).definition).toEqual(live);
+  });
+
+  it('CONTROL — an item with no content and no definition still yields null, not a fabricated one', async () => {
+    itemDoc.state = { adfPipelineName: 'My_Pipeline_item1' };
+    const res = await DETAIL_GET(req({}), ctx);
+    expect(res.status).toBe(200);
+    expect((await res.json()).definition).toBeNull();
   });
 });

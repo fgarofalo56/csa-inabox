@@ -427,6 +427,46 @@ const NESTED_ACTIVITY_KEYS = ['activities', 'ifTrueActivities', 'ifFalseActiviti
  * produces the flat form. It makes the function idempotent for ANY definition
  * ADF can return, not merely for the ones whose root keys were enumerated here
  * — which is what the export route's round-trip comment actually promises.
+ *
+ * WHERE THIS DISCRIMINATOR IS BLIND, SAID OUT LOUD: THE MIXED SHAPE.
+ *
+ * "Only `target:'canvas'` produces the flat form" was true of this module and
+ * FALSE of the round trip through the editor, and review measured the gap. A
+ * canvas-shaped activity reaching the editor gets patched with
+ * `onPatch({ typeProperties: setPath(activity.typeProperties || {}, ...) })`
+ * (`lib/components/pipeline/activity-forms.tsx:545`) through the shallow merge
+ * in `patchActivity` (`lib/editors/data-pipeline-editor.tsx:582`), so ONE
+ * inspector edit yields `{ name, type, notebookPath, baseParameters,
+ * typeProperties: {...} }` — bundle config still at the root, a NEW
+ * `typeProperties` beside it. This function then sees `typeProperties`, takes
+ * the preserve-everything branch and leaves `notebookPath` where ADF does not
+ * look: #3700's own "publishes green and does nothing", surviving the fix for
+ * it. Probed, not reasoned:
+ *
+ *   root keys      : ['name','type','notebookPath','baseParameters','typeProperties']
+ *   typeProperties : {"libraries":[{"jar":"dbfs:/x.jar"}]}
+ *
+ * THIS FUNCTION CANNOT DECIDE IT, and that is why the repair is not here. On a
+ * mixed activity `{name,type,foo,typeProperties}` is byte-identical whether
+ * `foo` is leaked canvas config or a root key ADF added that this codebase does
+ * not know, so moving and preserving are both wrong for some real input. The
+ * published ARM schema cannot break the tie either — re-fetched 2026-09-08,
+ * HTTP 200, 693244 bytes: `definitions.Activity.properties` is
+ * `{additionalProperties, dependsOn, description, name, userProperties}` and the
+ * whole document contains ZERO occurrences of `onInactiveMarkAs` or `"state"`.
+ *
+ * SO THE CLASS IS CLOSED AT ITS SOURCE INSTEAD:
+ * `GET /api/items/data-pipeline/[id]` now wire-shapes the definition it hands
+ * the editor (all three of its branches), so the editor holds a PURE wire shape
+ * and an inspector patch can no longer manufacture a mixed one. See the comment
+ * at that call site for the measurements that it is safe for the canvas and the
+ * inspector.
+ *
+ * RESIDUAL, not fixed and not hidden: a client that POSTs a hand-built mixed
+ * activity straight to `publish` / `PUT [id]` still reaches the preserve branch.
+ * That document was authored by neither this editor nor ADF, and ADF ignoring
+ * or rejecting the stray key is the honest outcome; repairing it here would
+ * require the guess the paragraph above shows is not available.
  */
 function normalizeActivity(raw: unknown): unknown {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return raw;

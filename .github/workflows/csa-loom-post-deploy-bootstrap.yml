@@ -2009,6 +2009,25 @@ jobs:
           fi
 
       - name: Grant MIP+DLP Graph AppRoles (Information Protection + DLP for /admin/security)
+        # DECOUPLED FROM THE STEP ABOVE, WHICH THIS SAME CHANGE MADE FATAL.
+        #
+        # The Dataverse step now `exit 1`s on discovery-refused (exit 3). In
+        # GitHub Actions a failed step fails the JOB, and every later step
+        # without an explicit `if:` is then SKIPPED — so making exit 3 fatal
+        # silently took three unrelated grants down with it. Measured over the
+        # `bootstrap` job: of the 12 steps after the Dataverse step, 9 already
+        # carry `if: always()` and 3 did not — this one, "Verify the
+        # report-subscriptions delivery job" and "Grant Identity Picker Graph
+        # AppRoles". Exit 3 is the OBSERVED live state this workflow cites
+        # (run 31572941870), so that cascade is the path a real bootstrap takes,
+        # and /admin/security would have stayed on its 503 gate for a reason
+        # that has nothing to do with Dataverse.
+        #
+        # `if: always()` restores the decoupling; `continue-on-error: true`
+        # encodes the non-fatality this step's own comment declares below, and
+        # matches its four `if: always()` + `continue-on-error: true` neighbours.
+        if: always()
+        continue-on-error: true
         # THE PLATFORM RUNS THE SHIPPED SCRIPT (#3374, auto-bind-by-default.md §5).
         #
         # WHAT WAS HERE, AND WHY IT WAS A DEFECT. This step carried ~75 lines of
@@ -2336,6 +2355,12 @@ jobs:
           fi
 
       - name: Verify the report-subscriptions delivery job (WS-C2)
+        # `if: always()` ONLY — see the MIP+DLP step above for the cascade this
+        # decouples from. Deliberately NOT `continue-on-error`: this step exits 1
+        # on purpose (a missing delivery runtime means scheduled report delivery
+        # is dead), and neutering a verification to un-skip it would replace one
+        # silent failure with another.
+        if: always()
         run: |
           set -uo pipefail
           # B-FN C3 (2026-08-06): report-subscriptions is a scheduled Container
@@ -2394,6 +2419,11 @@ jobs:
           echo "  loom-console delivery gate reads: $WIRED"
 
       - name: Grant Identity Picker Graph AppRoles (User/Group/Application Read.All for the reusable picker)
+        # `if: always()` ONLY — see the MIP+DLP step above for the cascade this
+        # decouples from. No `continue-on-error`: both script invocations below
+        # are already `|| echo`-guarded, so this step does not fail on a refused
+        # grant; adding it would assert a non-fatality that is not this step's.
+        if: always()
         run: |
           # Grant the Console UAMI the three Microsoft Graph application
           # permissions required by the reusable Identity Picker
