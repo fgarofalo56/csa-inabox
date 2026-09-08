@@ -24,8 +24,12 @@ import { clientFetch } from '@/lib/client-fetch';
 
 const clientFetchMock = clientFetch as unknown as Mock;
 
-function jsonResponse(body: unknown, ok = true): { ok: boolean; json: () => Promise<unknown> } {
-  return { ok, json: () => Promise.resolve(body) };
+function jsonResponse(
+  body: unknown,
+  ok = true,
+  status = ok ? 200 : 500,
+): { ok: boolean; status: number; json: () => Promise<unknown> } {
+  return { ok, status, json: () => Promise.resolve(body) };
 }
 
 /** A stream fetch stub that emits the given SSE chunks then stays open. */
@@ -143,6 +147,39 @@ describe('createPresenceTransport', () => {
       // Settled is slow, not dead — the 60s re-probe still recovers.
       await vi.advanceTimersByTimeAsync(PUSH_RETRY_MAX_MS);
       expect(streamFetch).toHaveBeenCalledTimes(2);
+    } finally {
+      transport?.stop();
+      transport = undefined;
+      vi.useRealTimers();
+    }
+  });
+
+  it('a 404 heartbeat backs the poll off to the slow re-probe, then recovers on the next accepted beat', async () => {
+    vi.useFakeTimers();
+    try {
+      clientFetchMock.mockResolvedValue(jsonResponse({ ok: false, error: 'item not found' }, false, 404));
+      const onPeers = vi.fn();
+      transport = createPresenceTransport({
+        itemType: 'notebook', itemId: 'item-404', canvasKey: 'default',
+        pushEnabled: false, onPeers, getCursor: () => undefined,
+      });
+      const posts = () => clientFetchMock.mock.calls.filter(([, init]) => init?.method === 'POST').length;
+      await vi.advanceTimersByTimeAsync(0);
+      expect(posts()).toBe(1);
+      // TTL/3 (15s) would have re-POSTed by now; the settled latch must not.
+      await vi.advanceTimersByTimeAsync(20_000);
+      expect(posts()).toBe(1);
+      // The 60s re-probe fires — and once it is accepted the normal cadence
+      // returns without a reload. (Advance just past the 60s mark so this
+      // assertion counts the re-probe alone, not the beat it schedules.)
+      clientFetchMock.mockResolvedValue(
+        jsonResponse({ ok: true, peers: [{ oid: 'poll-peer', name: 'Poll Peer', lastSeen: 't', color: 'blue' }], ttlMs: 45_000 }),
+      );
+      await vi.advanceTimersByTimeAsync(PUSH_RETRY_MAX_MS - 19_000);
+      expect(posts()).toBe(2);
+      expect(onPeers).toHaveBeenCalledWith([expect.objectContaining({ oid: 'poll-peer' })]);
+      await vi.advanceTimersByTimeAsync(16_000);
+      expect(posts()).toBe(3);
     } finally {
       transport?.stop();
       transport = undefined;
