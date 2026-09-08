@@ -548,6 +548,46 @@ jobs:
       # the artifact an operator reads before approving a full run, and it
       # resolved `appImageTags` from a different source than the apply. Both now
       # read the $GITHUB_ENV `Adopt the image tags…` writes above (#3449).
+      # ── THE PROGRAM BUDGET'S IMMUTABLE START DATE (#4253) ─────────────────
+      # `timePeriod.startDate` on Microsoft.Consumption/budgets CANNOT be updated
+      # after creation, and program-budget.bicep defaulted it to
+      # `utcNow('yyyy-MM-01')` — a value that moves on the 1st of every month.
+      # Once it moves past the month the budget was created in, EVERY apply dies
+      # on that one leaf and takes the whole subscription deployment with it:
+      #   400 on 'loom-program-budget' → "Start date of budgets cannot be
+      #   updated. Please delete and create a new budget."
+      #
+      # MEASURED ON COMMERCIAL (green 2026-08-29/30/31, then 8 for 8 red from
+      # 09-01). This lane carries the SAME bomb on its OWN month boundary —
+      # programBudgetEnabled defaults true and no param file overrode it — so the
+      # fix is wired on every boundary, not only the one that has fired
+      # (cloud-parity.md: a capability that works in Commercial and not in Gov is
+      # incomplete). Whether it has already fired here is UNKNOWN: this lane has
+      # no recorded deploy receipt, so nothing has been measured in IL5.
+      #
+      # The value is DISCOVERED, never computed: the live budget's own start when
+      # one exists, the first of the current month only on a genuine create, and
+      # a REFUSAL when the read did not complete (deploy-integrity.md R7). Same
+      # shape as the ADX/DNS preflights — read the estate, never assume.
+      # Runs before the what-if so the preview and the apply describe the same
+      # deployment; il5.bicepparam reads LOOM_PROGRAM_BUDGET_START_DATE.
+      - name: Resolve the program budget's IMMUTABLE start date (#4253)
+        env:
+          AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_GOV_SUBSCRIPTION_ID }}
+        run: |
+          set -euo pipefail
+          if [ "${CSA_LOOM_TOPOLOGY:-}" = "dlz-attach" ]; then
+            echo "::notice::topology=dlz-attach deploys no admin plane and targets another subscription; the program budget is not managed there."
+            exit 0
+          fi
+          DEPLOY_SUB="${CSA_LOOM_TARGET_SUBSCRIPTION:-$AZURE_SUBSCRIPTION_ID}"
+          if [ -z "$DEPLOY_SUB" ]; then
+            echo "::error::No target subscription, so the live program budget cannot be read. It comes from the AZURE_GOV_SUBSCRIPTION_ID repository secret; it is empty."
+            exit 1
+          fi
+          node scripts/ci/resolve-program-budget-start-date.mjs \
+            --subscription "$DEPLOY_SUB"
+
       - name: Bicep what-if (IL5 params)
         run: |
           az deployment sub what-if \

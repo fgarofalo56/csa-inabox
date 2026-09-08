@@ -473,7 +473,7 @@ param aasEnabled bool = true
 @description('Deploy the report-subscription delivery Logic App (integration/report-subscription-logicapp.bicep) so report subscriptions deliver day one. Day-one default ON; set false to opt out. Passed through to admin-plane/main.bicep reportSubscriptionsEnabled.')
 param reportSubscriptionsEnabled bool = true
 
-@description('Observability settings bag (loom-next-level R0/V1/COST0) — passed through to admin-plane/main.bicep observabilityConfig. {} (default) = the V1 synthetic-journey monitor deploys default-ON on its defaults (cron */15, uat-results container, MSAL login probe honest-skipped until syntheticLoginUpn + syntheticLoginSecretUri are supplied) AND the COST0 program run-rate budget deploys default-ON (loom-next-level-program, $1000/mo ceiling on the loom-next-level tag; programBudgetEnabled / programBudgetAmount / programBudgetContactEmails override — the COST0 props are consumed by THIS orchestrator at subscription scope, see the programBudget module below). Also carries `backendOverrides` — an object unioned over the loomBackends selector bag so an operator can opt OUT of a default-ON backend that has no dedicated root param, e.g. { backendOverrides: { risingwave: \'disabled\' } } to skip the always-on RisingWave streaming tier, or { loomMigrate: \'disabled\' } for the estate-assessment reader. Future observability items (V5 bicep-drift, O1 alert-dispatch, RUM1) ride THIS bag — never a new top-level param.')
+@description('Observability settings bag (loom-next-level R0/V1/COST0) — passed through to admin-plane/main.bicep observabilityConfig. {} (default) = the V1 synthetic-journey monitor deploys default-ON on its defaults (cron */15, uat-results container, MSAL login probe honest-skipped until syntheticLoginUpn + syntheticLoginSecretUri are supplied) AND the COST0 program run-rate budget deploys default-ON (loom-next-level-program, $1000/mo ceiling on the loom-next-level tag; programBudgetEnabled / programBudgetAmount / programBudgetContactEmails override — the COST0 props are consumed by THIS orchestrator at subscription scope, see the programBudget module below) PROVIDED programBudgetStartDate is supplied: that value is DISCOVERED from the live estate by scripts/ci/resolve-program-budget-start-date.mjs because timePeriod.startDate is IMMUTABLE (#4253), and when it is empty the budget module is not declared at all, which leaves any live budget untouched rather than proposing a start it cannot change. Also carries `backendOverrides` — an object unioned over the loomBackends selector bag so an operator can opt OUT of a default-ON backend that has no dedicated root param, e.g. { backendOverrides: { risingwave: \'disabled\' } } to skip the always-on RisingWave streaming tier, or { loomMigrate: \'disabled\' } for the estate-assessment reader. Future observability items (V5 bicep-drift, O1 alert-dispatch, RUM1) ride THIS bag — never a new top-level param.')
 param observabilityConfig object = {}
 
 @description('Deploy ADX shared cluster (admin-plane) + per-DLZ ADX databases. Backs the RTI editor family — Eventhouse, KQL Database, KQL Queryset, KQL Dashboard, Eventstream. Default on as of 2026-05-27 (sweep-rti). Set false to skip ~$140/mo Dev SKU cluster.')
@@ -3159,12 +3159,34 @@ module consoleCostReaderRbac 'modules/admin-plane/cost-management-reader-rbac.bi
 // (programBudgetEnabled=false) on offer types without budgets API support.
 // =====================================================================
 var programBudgetEnabled = bool(observabilityConfig.?programBudgetEnabled ?? true)
-module programBudget 'modules/admin-plane/program-budget.bicep' = if (programBudgetEnabled) {
+// #4253 — the budget's start date is DISCOVERED FROM THE ESTATE, never minted
+// here. `timePeriod.startDate` is IMMUTABLE on Microsoft.Consumption/budgets,
+// and program-budget.bicep used to default it to `utcNow('yyyy-MM-01')`, which
+// moved on the 1st of every month and then failed every apply for the rest of
+// that month ("Start date of budgets cannot be updated"), taking the whole
+// subscription deployment with it.
+//
+// The value comes from scripts/ci/resolve-program-budget-start-date.mjs, which
+// each deploy lane runs BEFORE the apply: it emits the live budget's existing
+// start unchanged, or the first of the current month when there is genuinely no
+// budget yet (the only start Azure accepts on a create), or refuses the run when
+// the read did not complete.
+//
+// EMPTY MEANS DO NOT DECLARE THE BUDGET — it does NOT mean "pick something".
+// A lane that has not resolved a start date (the what-if / validate / drift
+// lanes, which only compile this template) simply omits the resource. The
+// deployment is INCREMENTAL, so a live budget is left in place and still
+// alerting; nothing is deleted and nothing is overwritten with a guess. That is
+// the same safe state as programBudgetEnabled=false, reached automatically
+// rather than by remembering to set a flag.
+var programBudgetStartDate = string(observabilityConfig.?programBudgetStartDate ?? '')
+module programBudget 'modules/admin-plane/program-budget.bicep' = if (programBudgetEnabled && !empty(programBudgetStartDate)) {
   name: 'loom-program-budget'
   scope: subscription()
   params: {
     amount: int(observabilityConfig.?programBudgetAmount ?? 1000)
     contactEmails: observabilityConfig.?programBudgetContactEmails ?? []
+    startDate: programBudgetStartDate
     // The shared loom-default-alerts action group (rev-2 alert standard).
     // Empty outside deployAdminPlane topologies (dlz-attach) → the budget
     // still notifies subscription Owners via the contact role.
