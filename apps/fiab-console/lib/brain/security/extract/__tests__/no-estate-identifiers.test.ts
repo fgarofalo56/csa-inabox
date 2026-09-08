@@ -17,6 +17,7 @@ import type { SecurityGraph, SecurityNode, VerdictCallFacet } from '../../substr
 import { pathOfNodeId } from '../join';
 import { ADMIN_CLAIM_SPELLINGS } from '../route-nodes';
 import { extractedArtifact } from '../runtime';
+import { canonicalRepoPath } from '../source-facts';
 
 const artifact = extractedArtifact()!;
 const serialized = JSON.stringify(artifact);
@@ -372,5 +373,105 @@ describe('the committed scan scopes match a census taken from the filesystem', (
     }
     expect(census).toBeGreaterThan(0);
     expect(publication.filesMatched).toBe(census);
+  });
+
+  /**
+   * THE COUNT IS INVARIANT UNDER A RENAME — SO THE NAMES ARE COMPARED TOO (#4282).
+   *
+   * The three assertions above compare INTEGERS. Renaming a scanned file leaves
+   * every one of them identical: `filesMatched` does not move, `filesScanned`
+   * does not move, and the census recomputed here does not move either. So a PR
+   * that renames `app/api/foo/route.ts` and does not regenerate the artifact
+   * merges a graph whose node ids point at a path that no longer exists, with
+   * this REQUIRED lane green. Only `brain security graph — committed artifact
+   * matches the tree` would have caught it, and that job is not one of `main`'s
+   * 15 required contexts (measured 2026-09-08 via
+   * `gh api repos/.../branches/main/protection`).
+   *
+   * The artifact does not enumerate every file it read — 1,499 of the 2,095
+   * scanned files emit neither a node nor a ledger entry — so a full set
+   * EQUALITY is not available from the committed bytes. What IS available is the
+   * ~600-path subset the artifact NAMES, in node ids and in file-shaped
+   * `meta.skipped` subjects, and every one of those must still be a file the
+   * tree carries. That direction is exactly the one a rename breaks.
+   *
+   * Comparison is on `canonicalRepoPath`, which LOWERCASES — node ids embed it,
+   * so `app/api/admin/copilot-quality/prompts/[promptId]/route.ts` is carried as
+   * `[promptid]`. Measured: 7 of the artifact's named paths differ from the
+   * on-disk spelling by the case of a bracketed dynamic segment alone. A rename
+   * that changes only letter CASE is therefore NOT caught here; every other
+   * rename, move or deletion is.
+   */
+  describe('every source path the committed artifact NAMES is still a file in the tree', () => {
+    /** `readdirSync` with types, treating an absent directory as empty. */
+    function entriesOf(dir: string) {
+      try {
+        return readdirSync(dir, { withFileTypes: true });
+      } catch (e) {
+        if ((e as NodeJS.ErrnoException).code === 'ENOENT') return [];
+        throw e;
+      }
+    }
+
+    /** Repo-relative, canonicalised paths of every file under the scan roots. */
+    function listFiles(dir: string, out: string[] = []): string[] {
+      for (const entry of entriesOf(dir)) {
+        const full = join(dir, entry.name);
+        if (entry.isDirectory()) {
+          if (entry.name === 'node_modules' || entry.name === '.next' || entry.name === '.git') continue;
+          listFiles(full, out);
+          continue;
+        }
+        out.push(canonicalRepoPath(relative(REPO_ROOT, full).split(sep).join('/')));
+      }
+      return out;
+    }
+
+    const onDisk = new Set([
+      ...listFiles(join(REPO_ROOT, 'apps', 'fiab-console', 'app')),
+      ...listFiles(join(REPO_ROOT, 'scripts')),
+      ...listFiles(join(REPO_ROOT, '.github')),
+    ]);
+
+    /** A `meta.skipped` subject that names one file rather than a pattern or a rule. */
+    const fileShaped = (subject: string) => /^[^\s()]+\.(?:tsx?|mjs|cjs|js)$/.test(subject);
+
+    const namedPaths = [
+      ...new Set([
+        ...artifact.graph.nodes
+          .map((n) => pathOfNodeId(n.id))
+          .filter((p): p is string => p !== null)
+          .map(canonicalRepoPath),
+        ...artifact.meta.skipped
+          .map((s) => s.subject)
+          .filter(fileShaped)
+          .map(canonicalRepoPath),
+      ]),
+    ];
+
+    it('names a real population of paths (floor — an empty set asserts nothing below)', () => {
+      // Without this, an extractor change that stopped embedding paths in node
+      // ids would empty `namedPaths` and turn the assertion below into a loop
+      // over nothing, reporting green having compared no name at all.
+      expect(namedPaths.length).toBeGreaterThan(300);
+      expect(onDisk.size).toBeGreaterThan(namedPaths.length);
+    });
+
+    it('every named path still exists — a rename without a regenerate reddens HERE', () => {
+      const missing = namedPaths.filter((p) => !onDisk.has(p));
+      expect(missing).toEqual([]);
+    });
+
+    it('control: a path the tree does not carry IS reported missing', () => {
+      // Proves the assertion above is watching the NAMES and not passing because
+      // `onDisk` happens to contain everything — a walk that over-collected, or a
+      // canonicaliser that mapped everything onto a value present in the set,
+      // would pass it silently. Measured RELATIVE to the current baseline so this
+      // control still means something on a tree that is genuinely drifted.
+      const baseline = namedPaths.filter((p) => !onDisk.has(p)).length;
+      const injected = canonicalRepoPath('apps/fiab-console/app/api/__renamed__/route.ts');
+      expect(onDisk.has(injected)).toBe(false);
+      expect([...namedPaths, injected].filter((p) => !onDisk.has(p))).toHaveLength(baseline + 1);
+    });
   });
 });
