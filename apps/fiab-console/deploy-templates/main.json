@@ -6,7 +6,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.45.15.27210",
-      "templateHash": "14159405359391950749"
+      "templateHash": "6761831504111777107"
     }
   },
   "definitions": {
@@ -2600,7 +2600,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.45.15.27210",
-              "templateHash": "8547995738849936960"
+              "templateHash": "16940406414311410786"
             }
           },
           "definitions": {
@@ -29089,7 +29089,7 @@
                     "_generator": {
                       "name": "bicep",
                       "version": "0.45.15.27210",
-                      "templateHash": "6102562982605094537"
+                      "templateHash": "15744691244170917632"
                     }
                   },
                   "parameters": {
@@ -29143,6 +29143,15 @@
                       "defaultValue": "[utcNow()]",
                       "metadata": {
                         "description": "Cache-busting tag so the approval script re-runs on each deploy (idempotent — approve is a no-op once Approved)."
+                      }
+                    },
+                    "originResponseTimeoutSeconds": {
+                      "type": "int",
+                      "defaultValue": 120,
+                      "minValue": 16,
+                      "maxValue": 240,
+                      "metadata": {
+                        "description": "Seconds Front Door waits on the origin before giving up. AFD defaults to 60 when unset; 30 of the console's API routes declare a maxDuration above that. Portal range is 16-240."
                       }
                     },
                     "vanityDomain": {
@@ -29265,6 +29274,9 @@
                       "tags": "[parameters('complianceTags')]",
                       "sku": {
                         "name": "Premium_AzureFrontDoor"
+                      },
+                      "properties": {
+                        "originResponseTimeoutSeconds": "[parameters('originResponseTimeoutSeconds')]"
                       }
                     },
                     {
