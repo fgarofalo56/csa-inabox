@@ -1,6 +1,7 @@
 'use client';
 
 import { clientFetch } from '@/lib/client-fetch';
+import { HonestGate } from '@/lib/components/shared/honest-gate';
 /**
  * MirroredDatabricksEditor — Fabric MirroredAzureDatabricksCatalog focused
  * editor. Lets a user mount a Databricks Unity Catalog as a read-only
@@ -12,8 +13,11 @@ import { clientFetch } from '@/lib/client-fetch';
  * Per .claude/rules/no-vaporware.md every action either:
  *   - calls a real Cosmos or Databricks REST endpoint (Overview list/create,
  *     UC schemas/tables listing), or
- *   - surfaces an honest MessageBar with the env var the operator must set
- *     (LOOM_DATABRICKS_HOSTNAME / Console UAMI as workspace user).
+ *   - surfaces an honest gate naming the measured reason. Where the create
+ *     route attaches a gate-registry id (#4183) that gate renders the shared
+ *     inline Fix-it wizard rather than telling the operator to set a value by
+ *     hand (ux-baseline G2); where it does not, the MessageBar carries the
+ *     reason alone and claims no Fix-it that would not resolve.
  */
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
@@ -122,6 +126,17 @@ export function MirroredDatabricksEditor({ item, id }: Props) {
   const [cBusy, setCBusy] = useState(false);
   const [cErr, setCErr] = useState<string | null>(null);
   const [cPairing, setCPairing] = useState<PairingResult | null>(null);
+  /**
+   * The gate-registry id the create route attaches for a failed pairing
+   * (#4183). Held separately from `cPairing` because it is a top-level field of
+   * the envelope, not part of the pairing block. When set, the warning bar
+   * below renders the shared Fix-it wizard instead of prose the operator would
+   * otherwise have to act on by hand (ux-baseline G2, auto-bind-by-default §5).
+   * A pairing failure with no registry entry (e.g. PAIR_CREATE_FAILED) leaves
+   * this null and keeps the honest MessageBar — naming a gate that does not
+   * resolve would assert a Fix-it that cannot exist (deploy-integrity R7).
+   */
+  const [cGateId, setCGateId] = useState<string | null>(null);
 
   // SQL endpoint tab (the paired Synapse Serverless endpoint over UC Delta tables)
   const [sqlInfo, setSqlInfo] = useState<SqlEndpointInfo | null>(null);
@@ -209,7 +224,7 @@ export function MirroredDatabricksEditor({ item, id }: Props) {
 
   const create = useCallback(async () => {
     if (!workspaceId || !cName.trim() || !cCatalog.trim()) return;
-    setCBusy(true); setCErr(null); setCPairing(null);
+    setCBusy(true); setCErr(null); setCPairing(null); setCGateId(null);
     try {
       const r = await clientFetch(`/api/items/mirrored-databricks?workspaceId=${encodeURIComponent(workspaceId)}`, {
         method: 'POST', headers: { 'content-type': 'application/json' },
@@ -228,6 +243,9 @@ export function MirroredDatabricksEditor({ item, id }: Props) {
       // Surface the real pairing outcome (endpoint paired vs honest gate). Keep
       // the dialog open so the operator sees whether the catalog is queryable.
       setCPairing((j.pairing as PairingResult) || null);
+      // Only carry a gate id the route actually attached; absent means "no
+      // registry entry for this failure", not "no gate".
+      setCGateId(typeof j.gateId === 'string' && j.gateId ? j.gateId : null);
       await loadList(workspaceId);
       if (j.mirror?.id) {
         setMirrorId(j.mirror.id);
@@ -237,7 +255,7 @@ export function MirroredDatabricksEditor({ item, id }: Props) {
       // Only auto-close + reset when the pairing fully succeeded; otherwise the
       // operator reads the gate and decides what to fix.
       if (j.pairing?.ok) {
-        setCreateOpen(false); setCName(''); setCCatalog(''); setCHostname(''); setCDesc(''); setCPairing(null);
+        setCreateOpen(false); setCName(''); setCCatalog(''); setCHostname(''); setCDesc(''); setCPairing(null); setCGateId(null);
       }
     } finally { setCBusy(false); }
   }, [workspaceId, cName, cCatalog, cHostname, cDesc, loadList, loadSqlEndpoint]);
@@ -422,9 +440,24 @@ export function MirroredDatabricksEditor({ item, id }: Props) {
                           </MessageBarBody>
                         </MessageBar>
                       )}
+                      {/*
+                        The Fix-it for a failed pairing (#4183). Rendered only
+                        when the route named a gate-registry entry, so the
+                        operator resolves the gate in-product rather than being
+                        told to go set a value by hand. Sits below the honest
+                        bar so the measured reason stays visible next to it.
+                      */}
+                      {cPairing && !cPairing.ok && cGateId && (
+                        <HonestGate
+                          gateId={cGateId}
+                          surface="Mirrored Databricks catalog"
+                          detail={cPairing.gate || cPairing.error || undefined}
+                          onResolved={() => { if (workspaceId) void loadList(workspaceId); }}
+                        />
+                      )}
                     </DialogContent>
                     <DialogActions>
-                      <Button appearance="secondary" onClick={() => { setCreateOpen(false); setCPairing(null); }}>{cPairing ? 'Close' : 'Cancel'}</Button>
+                      <Button appearance="secondary" onClick={() => { setCreateOpen(false); setCPairing(null); setCGateId(null); }}>{cPairing ? 'Close' : 'Cancel'}</Button>
                       <Button appearance="primary" disabled={cBusy || !cName.trim() || !cCatalog.trim()} onClick={create}>{cBusy ? 'Creating & pairing…' : 'Create mirror'}</Button>
                     </DialogActions>
                   </DialogBody>
