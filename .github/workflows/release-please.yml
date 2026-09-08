@@ -885,18 +885,44 @@ jobs:
               req_json="$(printf '%s\n' "${REQUIRED_CHECKS[@]}" | cut -d'|' -f1 \
                 | jq -R -s -c 'split("\n") | map(select(length > 0))')"
               rollup=$(gh pr view "${num}" --repo "${REPO}" --json statusCheckRollup --jq '.statusCheckRollup')
-              # #4038 / R7: FAILURE and ERROR are verdicts. CANCELLED,
-              # TIMED_OUT, SKIPPED and ACTION_REQUIRED are NOT — they mean the
-              # run did not measure the context. Lumping them together made this
-              # job report "BLOCKED with FAILING required contexts" over a
-              # superseded run, asserting a red result nothing produced.
+              # #4038 / R7: FAILURE and ERROR are verdicts. CANCELLED and
+              # TIMED_OUT are NOT — they mean the run did not measure the
+              # context. Lumping them together made this job report "BLOCKED
+              # with FAILING required contexts" over a superseded run, asserting
+              # a red result nothing produced.
+              #
+              # THE FATAL SET IS UNCHANGED BY THIS EDIT. `failing` + `unmeasured`
+              # together are exactly the four conclusions the single pre-#4038
+              # `failing` expression matched (FAILURE, ERROR, CANCELLED,
+              # TIMED_OUT), and both arms below still exit 1. Only the sentence
+              # printed for CANCELLED/TIMED_OUT changed. That restraint is
+              # deliberate and was MEASURED: an earlier revision of this edit
+              # also moved SKIPPED / ACTION_REQUIRED / STALE into the fatal set,
+              # which flipped this job from exit 0 to exit 1 on a fixture where
+              # all 14 required contexts were measured GREEN by the check-run
+              # read above and bridged — because statusCheckRollup ALSO carried a
+              # duplicate SKIPPED entry under the same context name. The
+              # authoritative measurement is the check-run read in the bridge
+              # loop, which already fails closed on every non-`completed/success`
+              # verdict including skipped; re-deciding it from a second, coarser
+              # view here only manufactures false reds. They are NAMED below
+              # instead, without blocking on them.
               failing=$(printf '%s' "$rollup" | jq -r --argjson req "$req_json" \
                 '[.[]? | select((.name // .context) as $n | ($req | index($n)) != null)
                        | select(((.conclusion // .state) == "FAILURE") or ((.conclusion // .state) == "ERROR"))
                        | .name // .context] | unique | join(", ")')
               unmeasured=$(printf '%s' "$rollup" | jq -r --argjson req "$req_json" \
                 '[.[]? | select((.name // .context) as $n | ($req | index($n)) != null)
-                       | select(((.conclusion // .state) == "CANCELLED") or ((.conclusion // .state) == "TIMED_OUT") or ((.conclusion // .state) == "SKIPPED") or ((.conclusion // .state) == "ACTION_REQUIRED") or ((.conclusion // .state) == "STALE"))
+                       | select(((.conclusion // .state) == "CANCELLED") or ((.conclusion // .state) == "TIMED_OUT"))
+                       | .name // .context] | unique | join(", ")')
+              # NOT fatal here, and deliberately so (see above). A required
+              # context can appear in the rollup as SKIPPED / ACTION_REQUIRED /
+              # STALE while its real check run concluded success — a parked or
+              # superseded duplicate under the same name. Reported so the state
+              # is visible; the gate stays where the real measurement is.
+              parked=$(printf '%s' "$rollup" | jq -r --argjson req "$req_json" \
+                '[.[]? | select((.name // .context) as $n | ($req | index($n)) != null)
+                       | select(((.conclusion // .state) == "SKIPPED") or ((.conclusion // .state) == "ACTION_REQUIRED") or ((.conclusion // .state) == "STALE"))
                        | .name // .context] | unique | join(", ")')
               inflight=$(printf '%s' "$rollup" | jq -r --argjson req "$req_json" \
                 '[.[]? | select((.name // .context) as $n | ($req | index($n)) != null)
@@ -921,6 +947,18 @@ jobs:
               # REQUIRED_CHECKS drift for a missing approval would be exactly the
               # R7 violation this post-verify exists to prevent.
               review=$(gh pr view "${num}" --repo "${REPO}" --json reviewDecision --jq '.reviewDecision // ""')
+              # Printed before the decision chain, and OUTSIDE it, so it cannot
+              # change which arm is taken. Says only what it observed.
+              if [ -n "$parked" ]; then
+                echo "::warning::Required context(s) present in PR #${num}'s statusCheckRollup with a"
+                echo "::warning::conclusion that measured nothing (SKIPPED / ACTION_REQUIRED / STALE):"
+                echo "::warning::${parked}. This job does NOT block on that, because the rollup can"
+                echo "::warning::carry a parked or superseded entry alongside the real check run, and"
+                echo "::warning::the check-run read in the bridge loop above is the authoritative"
+                echo "::warning::measurement — it fails closed on every non-success verdict including"
+                echo "::warning::skipped. What this line does NOT establish: whether these entries are"
+                echo "::warning::duplicates of a context that did conclude, or the only entry there is."
+              fi
               if [ -n "$failing" ]; then
                 echo "::error::Release PR #${num} is BLOCKED with FAILING required contexts: ${failing}."
                 echo "::error::Every status this workflow posts is bridged from a real run that"
@@ -930,10 +968,11 @@ jobs:
               elif [ -n "$unmeasured" ]; then
                 echo "::error::Release PR #${num} is BLOCKED and required context(s) ended WITHOUT a"
                 echo "::error::verdict: ${unmeasured}."
-                echo "::error::CANCELLED / TIMED_OUT / SKIPPED / ACTION_REQUIRED / STALE mean the run"
-                echo "::error::did not measure the context. This job does NOT call that a failing"
-                echo "::error::check — but it cannot call it a pass either, so the release stays"
-                echo "::error::blocked. Re-run the producing workflow against this commit."
+                echo "::error::CANCELLED / TIMED_OUT mean the run did not measure the context. This"
+                echo "::error::job does NOT call that a failing check — but it cannot call it a pass"
+                echo "::error::either, so the release stays blocked, exactly as it did before this"
+                echo "::error::message was split out. Re-run the producing workflow against this"
+                echo "::error::commit."
                 exit 1
               elif [ -n "$inflight" ]; then
                 echo "::notice::Release PR #${num} is BLOCKED because required contexts are still pending: ${inflight}. Nothing was bridged for them, which is correct — they will be picked up by the next run of this workflow once their real runs conclude."
