@@ -25,6 +25,21 @@ This file is maintained automatically by
 [Conventional Commits](https://www.conventionalcommits.org/). See
 [RELEASE.md](RELEASE.md) for the release process.
 
+## [0.105.3](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.105.2...csa-inabox-v0.105.3) (2026-09-08)
+
+
+### Bug Fixes
+
+* **ci:** IL5's deploy-failure notice is inert when the repo variable is unset and a time bomb when it is set ([#3844](https://github.com/fgarofalo56/csa-inabox/issues/3844)) ([#4370](https://github.com/fgarofalo56/csa-inabox/issues/4370)) ([2a94906](https://github.com/fgarofalo56/csa-inabox/commit/2a94906febfd048c9af15a11ff911f8e5873a097))
+* **ci:** three CI verdicts asserted things they never established — unevaluated ARM expression counted as drift, a baseline fetch that failed open, and a tag literal derived from nothing ([#2874](https://github.com/fgarofalo56/csa-inabox/issues/2874), [#4277](https://github.com/fgarofalo56/csa-inabox/issues/4277), [#4290](https://github.com/fgarofalo56/csa-inabox/issues/4290)) ([#4351](https://github.com/fgarofalo56/csa-inabox/issues/4351)) ([9dd05a0](https://github.com/fgarofalo56/csa-inabox/commit/9dd05a0f06a5062672e60bbad002984462988d9a))
+* **console:** a11y guard that could not see a dangling aria-labelledby; settle the collab push loop on 404 (partial [#3697](https://github.com/fgarofalo56/csa-inabox/issues/3697), does NOT clear [#3169](https://github.com/fgarofalo56/csa-inabox/issues/3169)) ([#4350](https://github.com/fgarofalo56/csa-inabox/issues/4350)) ([99815bf](https://github.com/fgarofalo56/csa-inabox/commit/99815bfadfcdb0585501d22d1f41d85945012b08))
+* **msal,typing:** rotate-after-compromise for the MSAL provisioner, and typed redirect_request overrides (Refs [#3637](https://github.com/fgarofalo56/csa-inabox/issues/3637), [#4184](https://github.com/fgarofalo56/csa-inabox/issues/4184)) ([#4353](https://github.com/fgarofalo56/csa-inabox/issues/4353)) ([a0f7c0f](https://github.com/fgarofalo56/csa-inabox/commit/a0f7c0f23f29b99935e3519bd993f4c395949dea))
+
+
+### Tests
+
+* **brain:** close four measured guard holes and one wiring hole ([#3963](https://github.com/fgarofalo56/csa-inabox/issues/3963), [#3964](https://github.com/fgarofalo56/csa-inabox/issues/3964), [#4251](https://github.com/fgarofalo56/csa-inabox/issues/4251)) ([#4355](https://github.com/fgarofalo56/csa-inabox/issues/4355)) ([d7ca194](https://github.com/fgarofalo56/csa-inabox/commit/d7ca1940da30bcd956d50f233ecd218ca41fb270))
+
 ## [0.105.2](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.105.1...csa-inabox-v0.105.2) (2026-09-07)
 
 

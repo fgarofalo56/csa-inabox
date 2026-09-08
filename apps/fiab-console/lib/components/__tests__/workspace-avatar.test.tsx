@@ -145,6 +145,19 @@ describe('#3169 — WorkspaceAvatar chip contrast (WCAG AA on the /workspaces ch
     // RED before the fix: '#bd7800' measures 3.59:1.
     expect(Number(ratio.toFixed(2))).toBeGreaterThanOrEqual(4.5);
   });
+
+  // CALIBRATION (negative control). The assertion above is only worth anything
+  // if this arithmetic can still produce a FAILING number — a helper that
+  // returned, say, 21 for every input would pass the whole palette vacuously.
+  // Pin the entry the fix REMOVED at the value it actually measured, so the
+  // guard is proven able to see a violation and not merely able to go green.
+  it('is calibrated: the removed #bd7800 really was below the AA floor', () => {
+    const ratio = contrastRatio(expandHex('#bd7800'), expandHex(CHIP_FOREGROUND));
+    expect(Number(ratio.toFixed(2))).toBe(3.59);
+    expect(ratio).toBeLessThan(4.5);
+    // …and it is genuinely gone, not merely out-measured by its replacement.
+    expect(CHIP_COLORS).not.toContain('#bd7800');
+  });
 });
 
 describe('#3169 — every setup/attach ProgressBar carries an accessible name', () => {
