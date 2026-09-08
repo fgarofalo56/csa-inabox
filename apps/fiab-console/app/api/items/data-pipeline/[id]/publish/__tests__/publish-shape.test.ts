@@ -1,6 +1,18 @@
 /**
- * #3700 — `POST /api/items/data-pipeline/[id]/publish` must PUT the ADF WIRE
- * shape, on EVERY branch of its definition-resolution chain.
+ * #3700 — EVERY write boundary that hands a pipeline definition to ADF must hand
+ * over the ADF WIRE shape. There are three, and all three are pinned here:
+ *
+ *   - `POST /api/items/data-pipeline/[id]/publish`  (the Publish button)
+ *   - `PUT  /api/items/data-pipeline/[id]`          ("Save = publish")
+ *   - `GET  /api/items/data-pipeline/[id]/export`   (the SERIALIZE step)
+ *
+ * WHY ALL THREE AND NOT JUST PUBLISH. An independent review reverted the PUT
+ * boundary by hand — `properties: props` instead of `properties: toAdfWireShape(props)`
+ * — and measured `RC=0, 47 passed` across the whole data-pipeline suite plus
+ * `pipeline-binding.test.ts`. The "Save = publish" path, which this change calls
+ * a first-class defect, could be silently un-fixed with everything green, and no
+ * test file imported the export route at all. A fix whose boundary has no test
+ * is a fix that lasts until the next refactor.
  *
  * THE DEFECT THESE PIN. The editor's canvas holds each activity's config spread
  * onto the activity ROOT — that is what `extractActivities()` and the node
@@ -14,27 +26,45 @@
  *
  * WHAT IS NOT MOCKED. `toAdfWireShape` and the whole resolution chain RUN FOR
  * REAL — the assertion is on the ARGUMENT `upsertPipeline` was actually called
- * with, which is the byte that reaches ARM. Only Cosmos, auth, the ADF client
- * and the deploy-target resolver are stubbed.
+ * with (and, for export, on the bytes handed to the archiver), which is what
+ * reaches ARM and the customer's disk. Only Cosmos, auth, the ADF client, the
+ * rate limiter, the zip writer and the deploy-target resolver are stubbed.
  *
- * WHAT THESE DO **NOT** ESTABLISH. That ADF then executes the pipeline. That is
- * a live-estate receipt (publish from the editor, `GET` the ADF pipeline, read
- * back `typeProperties`) and is called out as unverified in the PR body rather
- * than implied by a green suite here.
+ * WHAT THESE DO **NOT** ESTABLISH. That ADF then executes the pipeline, or that
+ * ADF Studio imports the archive. Those are live-estate receipts (publish from
+ * the editor, `GET` the ADF pipeline, read back `typeProperties`) and are called
+ * out as unverified in the PR body rather than implied by a green suite here.
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 
 const upsertPipeline = vi.fn();
+const getPipeline = vi.fn();
 vi.mock('@/lib/azure/adf-client', () => ({
   upsertPipeline: (...a: any[]) => upsertPipeline(...a),
+  getPipeline: (...a: any[]) => getPipeline(...a),
+  deletePipeline: vi.fn(),
   adfConfigGate: () => null,
 }));
 
 vi.mock('@/lib/auth/session', () => ({ getSession: () => ({ claims: { oid: 'oid-1' } }) }));
-vi.mock('@/lib/auth/workspace-guard', () => ({ authorizeItemWorkspace: async () => null }));
+vi.mock('@/lib/auth/workspace-guard', () => ({
+  authorizeItemWorkspace: async () => null,
+  authorizeWorkspace: async () => null,
+}));
+vi.mock('@/lib/azure/rate-limiter', () => ({ enforceRateLimit: async () => null }));
 vi.mock('@/lib/azure/topology', () => ({
   prepareItemCreate: async () => ({ subscriptionId: 'sub', resourceGroup: 'rg' }),
   isDeployTargetGate: () => false,
+}));
+
+/** The entries the export handed to the archiver — asserting on these is
+ *  asserting on the file the customer receives, without unzipping in a test. */
+let zipEntries: { name: string; data: Buffer }[] = [];
+vi.mock('@/lib/azure/zip', () => ({
+  writeZip: (entries: { name: string; data: Buffer }[]) => {
+    zipEntries = entries;
+    return Buffer.from('PKfake');
+  },
 }));
 
 let itemDoc: any = null;
@@ -49,6 +79,8 @@ vi.mock('@/lib/azure/cosmos-client', () => ({
 }));
 
 import { POST } from '../route';
+import { PUT } from '../../route';
+import { GET as EXPORT_GET } from '../../export/route';
 
 const req = (body: any) => ({
   nextUrl: { searchParams: new URLSearchParams({ workspaceId: 'ws-1' }) },
@@ -58,10 +90,15 @@ const ctx = { params: Promise.resolve({ id: 'item-1' }) } as any;
 
 /** The properties object the ARM PUT actually carried. */
 const putProperties = () => upsertPipeline.mock.calls[0][1].properties;
+/** The pipeline spec inside the archive the export streamed. */
+const exportedDefinition = () =>
+  JSON.parse(zipEntries.find((e) => e.name === 'pipeline-content.json')!.data.toString('utf-8'));
 
 beforeEach(() => {
   vi.clearAllMocks();
   replaced = null;
+  zipEntries = [];
+  getPipeline.mockRejectedValue(Object.assign(new Error('not found'), { code: 404 }));
   itemDoc = {
     id: 'item-1',
     itemType: 'data-pipeline',
@@ -160,5 +197,120 @@ describe('the honest refusals are unchanged', () => {
       ctx,
     );
     expect(replaced?.state?.adfPipelineName).toBe('My_Pipeline_item1');
+  });
+});
+
+/**
+ * BOUNDARY 2 — `PUT /api/items/data-pipeline/[id]`, the "Save = publish" path.
+ *
+ * This is the boundary review reverted by hand with the entire suite still
+ * green. It is a SEPARATE `upsertPipeline` call site from publish: the editor's
+ * Save writes here, so a canvas-shaped PUT authors the same do-nothing ADF
+ * pipeline even if Publish is never pressed.
+ */
+describe('boundary 2 — PUT [id] ("Save = publish")', () => {
+  it('nests the activity body under typeProperties before the ARM PUT', async () => {
+    const res = await PUT(
+      req({
+        definition: {
+          properties: {
+            activities: [{ name: 'a', type: 'DatabricksNotebook', notebookPath: '/saved-via-put' }],
+          },
+        },
+      }),
+      ctx,
+    );
+    expect(res.status).toBe(200);
+    expect(upsertPipeline).toHaveBeenCalledTimes(1);
+    const act = putProperties().activities[0];
+    expect(act.typeProperties.notebookPath).toBe('/saved-via-put');
+    expect(act.notebookPath).toBeUndefined();
+  });
+
+  it('keeps the CANVAS shape in state.definition — that is what the editor reloads', async () => {
+    // The translation is a WIRE concern. Persisting the wire shape would break
+    // `extractActivities()` and empty the designer, so the two shapes must
+    // diverge here on purpose — asserted so a later "just normalize everything"
+    // cannot quietly take the canvas with it.
+    await PUT(
+      req({
+        definition: {
+          properties: {
+            activities: [{ name: 'a', type: 'DatabricksNotebook', notebookPath: '/saved-via-put' }],
+          },
+        },
+      }),
+      ctx,
+    );
+    expect(replaced.state.definition.properties.activities[0].notebookPath).toBe('/saved-via-put');
+    expect(replaced.state.definition.properties.activities[0].typeProperties).toBeUndefined();
+  });
+
+  it('mints the ADF name and still wire-shapes it on the FIRST save of an unbound pipeline', async () => {
+    // The branch that creates the ADF backing. It builds `adfName` itself, so it
+    // is a distinct code path from the re-save above and had no coverage at all.
+    delete itemDoc.state.adfPipelineName;
+    await PUT(
+      req({
+        definition: { properties: { activities: [{ name: 'a', type: 'DatabricksNotebook', notebookPath: '/first' }] } },
+      }),
+      ctx,
+    );
+    expect(upsertPipeline).toHaveBeenCalledTimes(1);
+    expect(upsertPipeline.mock.calls[0][0]).toBe('My Pipeline_item1');
+    expect(putProperties().activities[0].typeProperties.notebookPath).toBe('/first');
+  });
+});
+
+/**
+ * BOUNDARY 3 — `GET /api/items/data-pipeline/[id]/export`, the SERIALIZE step.
+ *
+ * No test file imported this route before. Its docblock promises the archive is
+ * "importable … directly into ADF Studio", and branch 2 (`state.definition`,
+ * i.e. whatever the editor last saved — the canvas shape) is the branch most
+ * exports actually take, so the promise was false for the common case.
+ */
+describe('boundary 3 — GET [id]/export (the archive handed to the customer)', () => {
+  it('serializes the ADF wire shape, not the canvas shape, from state.definition', async () => {
+    itemDoc.state.definition = {
+      name: 'My_Pipeline_item1',
+      properties: { activities: [{ name: 'a', type: 'DatabricksNotebook', notebookPath: '/exported' }] },
+    };
+    const res = await EXPORT_GET(req({}), ctx);
+    expect(res.status).toBe(200);
+    const act = exportedDefinition().properties.activities[0];
+    expect(act.typeProperties.notebookPath).toBe('/exported');
+    expect(act.notebookPath).toBeUndefined();
+  });
+
+  it('round-trips a definition read LIVE from ADF without moving its root keys', async () => {
+    // The idempotence claim, on the branch where it matters most: a live ADF
+    // activity already carries `typeProperties`, plus root keys this repo does
+    // not enumerate (`state`, `onInactiveMarkAs`). Moving one of those into
+    // `typeProperties` would corrupt an archive built from a WORKING pipeline.
+    getPipeline.mockResolvedValue({
+      name: 'My_Pipeline_item1',
+      properties: {
+        activities: [{
+          name: 'a', type: 'DatabricksNotebook',
+          state: 'Inactive', onInactiveMarkAs: 'Succeeded',
+          typeProperties: { notebookPath: '/live' },
+        }],
+      },
+    });
+    const res = await EXPORT_GET(req({}), ctx);
+    expect(res.status).toBe(200);
+    const act = exportedDefinition().properties.activities[0];
+    expect(act.typeProperties).toEqual({ notebookPath: '/live' });
+    expect(act.state).toBe('Inactive');
+    expect(act.onInactiveMarkAs).toBe('Succeeded');
+  });
+
+  it('404s rather than shipping an empty archive when nothing is recoverable', async () => {
+    // CONTROL — without it the assertions above would also be satisfied by an
+    // export that always produced a file, regardless of what it found.
+    const res = await EXPORT_GET(req({}), ctx);
+    expect(res.status).toBe(404);
+    expect(zipEntries).toEqual([]);
   });
 });

@@ -323,9 +323,21 @@ const FORBIDDEN_SQL_SCHEMAS: ReadonlySet<string> = new Set([
 
 /** Split a SQL ref into its dotted parts with brackets stripped. Naive on
  *  purpose: `SQL_REF_RE` has already excluded quotes, spaces and escapes, so a
- *  dot here is always a separator. */
+ *  dot here is always a separator.
+ *
+ *  EVERY BRACKET PER PART, NOT THE OUTERMOST PAIR. This was
+ *  `p.replace(/^\[|\]$/g, '')`, which strips one leading `[` and one trailing
+ *  `]` — so `[[sys]]` normalised to `[sys]`, missed `FORBIDDEN_SQL_SCHEMAS`, and
+ *  `[[sys]].[sql_logins]` reached `buildSqlSelect` ungated (measured through
+ *  `resolveBindingInstances`: `gated=false`, one `synapseExecute` call). Whether
+ *  T-SQL then resolves that token as `sys` was NOT established — it does not
+ *  look like a terminating delimited identifier and no Synapse endpoint was
+ *  reached — so this is "the guard was silent there", not "there was a hole".
+ *  Stripping every bracket costs nothing and removes the question: `SQL_REF_RE`
+ *  already admits `[` and `]` anywhere in the string, so any bracket count is
+ *  reachable and an outermost-pair rule can always be spelled around. */
 function sqlRefParts(ref: string): string[] {
-  return (ref || '').trim().split('.').map((p) => p.replace(/^\[|\]$/g, ''));
+  return (ref || '').trim().split('.').map((p) => p.replace(/[[\]]/g, ''));
 }
 
 /**

@@ -89,6 +89,10 @@ const SECRET_REF = 'abfss://gold@acct.dfs.core.windows.net/customers';
  *  `ref` — for an ADLS asset it IS the abfss address — and the catalog
  *  projection must redact it while still populating the Datasets tab. */
 const DATASET_REF = 'abfss://silver@acct.dfs.core.windows.net/customers';
+/** The Purview Unified Catalog data-product GUID. NOT in the class above: it is
+ *  an opaque catalog identifier, not an address, and the Overview grid renders a
+ *  FALSE sentence when it is missing (see the projection test below). */
+const PURVIEW_ID = 'purview-dp-guid-0001';
 
 function product(id: string, opts: { workspaceId: string; lifecycle?: string }) {
   return {
@@ -117,7 +121,7 @@ function product(id: string, opts: { workspaceId: string; lifecycle?: string }) 
         output: [{ id: 'o1', name: 'Gold Delta', kind: 'delta', ref: SECRET_REF }],
         management: [],
       },
-      purviewDataProductId: 'purview-guid-do-not-leak',
+      purviewDataProductId: PURVIEW_ID,
     },
   };
 }
@@ -185,7 +189,6 @@ describe('the documented Purview-UC discovery model still works, at catalog scop
     // …and the record's internals are not.
     const raw = JSON.stringify(body);
     expect(raw).not.toContain('abfss://');
-    expect(raw).not.toContain('purview-guid-do-not-leak');
     expect(body.doc).toBeUndefined();
     expect(body.preconditions).toBeUndefined();
     expect(body.isOwner).toBe(false);
@@ -228,6 +231,21 @@ describe('the documented Purview-UC discovery model still works, at catalog scop
     expect(st.datasets[0].name).toBe('customers');
     expect(st.datasets[0].classifications).toEqual(['PII']);
     expect(st.glossaryLinks).toEqual([{ name: 'Customer' }]);
+  });
+
+  it('projects purviewDataProductId, because withholding it made the Overview LIE', async () => {
+    // R7 on a SURFACE, not on a log line. `ConsumerDataProductDetail` renders
+    //   state.purviewDataProductId ? 'Registered <guid>' : 'Not registered with
+    //   the unified catalog'
+    // so the first cut of this projection made a REGISTERED product tell every
+    // catalog reader it was not registered — a new false assertion shipped in the
+    // name of redaction. The guid is an opaque catalog identifier for a product
+    // this caller may already discover, in their own tenant; it is not an address
+    // and it is not a credential, which is exactly why the two real addresses in
+    // this fixture (the port `ref` and the dataset `qualifiedName`) stay redacted
+    // in the very next test.
+    const body = await (await GET(req, ctx('dp-published'))).json();
+    expect(body.item.state.purviewDataProductId).toBe(PURVIEW_ID);
   });
 
   it('and it REDACTS the dataset qualifiedName, which is the same secret as a port ref', async () => {

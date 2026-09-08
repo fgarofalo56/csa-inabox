@@ -187,6 +187,22 @@ describe('ontologySqlRefViolation — the pure policy, exercised directly', () =
     expect(ontologySqlRefViolation('INFORMATION_SCHEMA.TABLES', 'db')).toBeTruthy();
   });
 
+  it('refuses a BRACKET SPELLING the outermost-pair strip was silent on', () => {
+    // Review measured this one: `sqlRefParts` stripped `^\[` and `\]$` only, so
+    // `[[sys]]` normalised to `[sys]`, missed the schema set, and
+    // `[[sys]].[sql_logins]` reached the sink ungated (`gated=false`, one
+    // `synapseExecute` call). Whether T-SQL resolves that token as `sys` was
+    // never established, so this is closing a SILENCE rather than a proven hole —
+    // but `SQL_REF_RE` admits brackets anywhere, so any bracket count is
+    // reachable and an outermost-pair rule can always be spelled around.
+    expect(ontologySqlRefViolation('[[sys]].[sql_logins]', 'db')).toContain('SQL engine metadata');
+    expect(ontologySqlRefViolation('[[[sys]]].[t]', 'db')).toContain('SQL engine metadata');
+    expect(ontologySqlRefViolation('[mas[ter].[sys].[t]', 'db')).toBeTruthy();
+    // …and an ordinary bracketed user table is still permitted, so the widened
+    // strip did not simply refuse everything.
+    expect(ontologySqlRefViolation('[dbo].[orders]', 'db')).toBeNull();
+  });
+
   it('CONTROL — the guard is SILENT on a one-part ref, which the docblock now says', () => {
     // NOT an endorsement: this pins the DISCLOSED gap so it cannot quietly
     // become a claim of coverage. The schema test sits behind `parts.length>=2`

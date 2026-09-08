@@ -112,11 +112,23 @@ describe('svc-dataverse is a REGISTERED gate, so the Fix-it it renders exists', 
     // slug is `powerplatform-environment` (lib/catalog/item-types/power-platform.ts).
     // Asserted against the ITEM-TYPE REGISTRY rather than a hand-copied literal
     // list, so a future rename cannot leave a stale row here looking correct.
+    //
+    // EVERY `/items/` ROW, NOT A NAME-MATCHED SUBSET. This filtered on
+    // `/^\/items\/(power-?platform|dataverse)/`, which reached 2 of the 8
+    // `/items/` rows — `power-app`, `power-automate-flow`, `power-page`,
+    // `ai-builder-model`, `copilot-studio-agent` and `copilot-template-library`
+    // were all unchecked, i.e. exactly the rows a rename is most likely to break,
+    // because the filter keyed on the very spelling under test. The only
+    // exclusion now is the `/api/...` wildcard row, which names BFF routes rather
+    // than an item slug and has no item type to resolve.
     const paths = (getGate('svc-dataverse')!.surfaces || []).map((s: { path: string }) => s.path);
-    const ppPaths = paths.filter((p) => /^\/items\/(power-?platform|dataverse)/.test(p));
-    expect(ppPaths.length).toBeGreaterThan(0);
-    for (const p of ppPaths) {
+    const itemPaths = paths.filter((p) => p.startsWith('/items/'));
+    // Guard-the-guard: the loop below proves nothing if the population is empty,
+    // and 8 is the count this registry entry claims today.
+    expect(itemPaths.length).toBe(8);
+    for (const p of itemPaths) {
       const slug = p.replace(/^\/items\//, '');
+      expect(slug).not.toContain('*');
       expect(findItemType(slug), `gate surface '${p}' names a slug no item type serves`).toBeTruthy();
     }
   });

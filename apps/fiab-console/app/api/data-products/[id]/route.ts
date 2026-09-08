@@ -52,11 +52,11 @@
  *       - 'discoverable' (not a member; the product is published/deprecated AND
  *                        positively confirmed to be in the caller's own Entra
  *                        tenant) → the CATALOG projection: `product`, plus a
- *                        redacted `item` carrying only the identity/description
- *                        fields the read-only consumer view renders. No `doc`
- *                        (the owner edit-dialog projection), no `state` (so no
- *                        port `ref`s, no bound-contract internals, no
- *                        `purviewDataProductId`), no delete preconditions.
+ *                        field-ALLOWLISTED `item`. No `doc` (the owner
+ *                        edit-dialog projection), no raw `state` (so no port
+ *                        `ref`s, no dataset `qualifiedName`s, no bound-contract
+ *                        internals), no delete preconditions. The exact key set
+ *                        and the reason for each is on `catalogItemProjection`.
  *       - 'denied'       → 404, worded identically to "no such product".
  *
  *     WHY A REDACTED `item` AND NOT NO `item`. `ConsumerDataProductDetail`
@@ -403,26 +403,53 @@ function itemToProduct(item: WithEtag, tenantId: string | null): DataProductDoc 
  *     classifications (`qualifiedName` and `guid` are React keys), and the
  *     glossary renders only `name`, so only those fields are projected.
  *
- * DELIBERATELY STILL WITHHELD, WITH ITS COST NAMED: `purviewDataProductId`.
- * The spec next to this route asserts it in as many words
- * (`expect(raw).not.toContain('purview-guid-do-not-leak')`), so withholding it
- * is a standing decision of this codebase, not an oversight, and this change
- * does not quietly reverse it. The cost is real and is recorded rather than
- * hidden: `ConsumerDataProductDetail`'s Overview then prints "Not registered
- * with the unified catalog" for a product that IS registered — an R7 false
- * assertion on a surface, whose fix (render "—" / "not shown at catalog scope"
- * when the key is absent rather than asserting non-registration) lives in
- * `lib/editors/data-product-detail.tsx`, outside this change's ownership.
+ *   purviewDataProductId
+ *     PROJECTED, and this REVERSES an earlier cut of this same change — the
+ *     reversal is the point, so it is recorded rather than quietly applied.
+ *
+ *     It was withheld, and the justification written here was that "the spec
+ *     next to this route asserts it, so withholding it is a standing decision of
+ *     this codebase". That was FALSE, and it was false in the specific way R7
+ *     forbids: the only assertion in the console was the one THIS change had
+ *     just written (`[id]/__tests__/route.test.ts`), so the comment cited its own
+ *     new test back as pre-existing precedent. Measured across every spec in the
+ *     console, the field is RETURNED to callers elsewhere —
+ *     `app/api/items/__tests__/data-product-register-purview.test.ts` asserts
+ *     `j.purviewDataProductId === 'pv-9999'` on the register response.
+ *
+ *     What withholding it actually bought was a NEW user-facing false sentence:
+ *     `ConsumerDataProductDetail` renders `state.purviewDataProductId ?
+ *     'Registered <guid>' : 'Not registered with the unified catalog'`
+ *     (data-product-detail.tsx, Overview grid), so a REGISTERED product told
+ *     every catalog reader it was not registered. Trading one R7 violation for
+ *     another is not a redaction.
+ *
+ *     WHY IT IS SAFE HERE, NARROWLY. It is a Purview Unified Catalog data-product
+ *     GUID — an opaque identifier for the catalog entry of a product this caller
+ *     is already permitted to discover, in this caller's OWN Entra tenant, and
+ *     only when it is published or deprecated. It is not an address: no host, no
+ *     container, no schema, no database. Reading anything through it still
+ *     requires Purview data-plane authorization the console never delegates. That
+ *     is the whole difference between it and a port `ref` or a dataset
+ *     `qualifiedName`, both of which stay redacted above.
+ *
+ *     THE ALTERNATIVE WAS CONSIDERED AND IS WORSE FROM HERE. Projecting a boolean
+ *     marker instead only removes the false sentence if the COMPONENT reads the
+ *     marker, and `lib/editors/data-product-detail.tsx` is outside this change's
+ *     ownership — so that option ships the false sentence anyway and calls it a
+ *     fix. Rendering "not shown at catalog scope" in the component remains the
+ *     nicer end state and is a follow-up in that file, not a precondition for
+ *     this one being honest.
  *
  * STILL EXCLUDED, and this is the point of the file: `state.ports` (and its
- * `ref`s), `state.content`, `state.bundle`, `state.lastRegisteredAt`,
- * `state.purviewDataProductId`, and every key `state` grows after today.
+ * `ref`s), `state.content`, `state.bundle`, `state.lastRegisteredAt`, and every
+ * key `state` grows after today.
  */
 function catalogItemProjection(item: WithEtag): Partial<WorkspaceItem> {
   const st = (item.state ?? {}) as Record<string, unknown>;
   const str = (k: string): string | undefined => (typeof st[k] === 'string' ? (st[k] as string) : undefined);
   const state: Record<string, unknown> = {};
-  for (const k of ['displayName', 'description', 'domain', 'owner', 'sla']) {
+  for (const k of ['displayName', 'description', 'domain', 'owner', 'sla', 'purviewDataProductId']) {
     const v = str(k);
     if (v !== undefined) state[k] = v;
   }
