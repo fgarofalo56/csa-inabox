@@ -66,9 +66,9 @@ import type { SessionPayload } from '@/lib/auth/session';
 import { tenantScopeId } from '@/lib/auth/session';
 import {
   itemsContainer,
-  workspacesContainer,
   auditLogContainer,
 } from '@/lib/azure/cosmos-client';
+import { loadAuthorizedItem } from '../_lib/load-item';
 import {
   isPurviewConfigured,
   getAssetDetail,
@@ -84,7 +84,7 @@ import {
 import { isGovCloud } from '@/lib/azure/cloud-endpoints';
 import { safeRecord, toSafeStringMap, safeGet } from '@/lib/security/safe-object';
 import { withSession } from '@/lib/api/route-toolkit';
-import type { Workspace, WorkspaceItem } from '@/lib/types/workspace';
+import type { WorkspaceItem } from '@/lib/types/workspace';
 import { safeRecordFrom, UnsafeKeyError } from '@/lib/util/safe-keys';
 
 export const runtime = 'nodejs';
@@ -107,31 +107,6 @@ function assetGuidOf(item: WorkspaceItem): string | null {
     ((s as any).purviewGuid as string | undefined) ||
     null
   );
-}
-
-/** Find an item by id (cross-partition) + verify the caller's tenant owns its workspace. */
-async function loadItem(itemId: string, type: string, tenantId: string): Promise<WorkspaceItem | null> {
-  const items = await itemsContainer();
-  const { resources } = await items.items
-    .query<WorkspaceItem>({
-      query: 'SELECT * FROM c WHERE c.id = @id AND c.itemType = @t',
-      parameters: [
-        { name: '@id', value: itemId },
-        { name: '@t', value: type },
-      ],
-    })
-    .fetchAll();
-  const item = resources[0];
-  if (!item) return null;
-  const ws = await workspacesContainer();
-  try {
-    const { resource } = await ws.item(item.workspaceId, tenantId).read<Workspace>();
-    if (!resource || resource.tenantId !== tenantId) return null;
-  } catch (e: any) {
-    if (e?.code === 404) return null;
-    throw e;
-  }
-  return item;
 }
 
 /**
@@ -165,7 +140,10 @@ function tagsFromDetail(detail: any, bmName: AtlasBusinessMetadataName): Record<
 export const GET = withSession<{ type: string; id: string }>(async (_req, { session, params }) => {
   const bmName = loomTenantBusinessMetadataName(tenantScopeId(session));
   try {
-    const item = await loadItem(params.id, params.type, session.claims.oid);
+    const { item, denied } = await loadAuthorizedItem(session, {
+      itemId: params.id, itemType: params.type, write: false, notFound: 'Item not found',
+    });
+    if (denied) return denied;
     if (!item) return err('Item not found', 404, 'not_found');
 
     const gov = isGovCloud();
@@ -260,7 +238,10 @@ export const POST = withSession<{ type: string; id: string }>(async (req, { sess
 
   const bmName = loomTenantBusinessMetadataName(tenantScopeId(session));
   try {
-    const item = await loadItem(params.id, params.type, session.claims.oid);
+    const { item, denied } = await loadAuthorizedItem(session, {
+      itemId: params.id, itemType: params.type, write: true, notFound: 'Item not found',
+    });
+    if (denied) return denied;
     if (!item) return err('Item not found', 404, 'not_found');
 
     if (!isPurviewConfigured()) {

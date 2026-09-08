@@ -18,14 +18,15 @@
  */
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
-import { itemsContainer, workspacesContainer } from '@/lib/azure/cosmos-client';
+import { itemsContainer } from '@/lib/azure/cosmos-client';
+import { loadAuthorizedItem } from '../_lib/load-item';
 import { resolveWorkspaceRole, canEditWorkspaceConfig } from '@/lib/auth/workspace-role';
 import {
   isUserAccessModeItemType,
   USER_ACCESS_MODE_ITEM_TYPES,
   normalizeAccessMode,
 } from '@/lib/azure/sql-access-mode';
-import type { Workspace, WorkspaceItem } from '@/lib/types/workspace';
+import type { WorkspaceItem } from '@/lib/types/workspace';
 import { apiError } from '@/lib/api/respond';
 
 export const runtime = 'nodejs';
@@ -33,31 +34,6 @@ export const dynamic = 'force-dynamic';
 
 function err(error: string, status: number, code?: string) {
   return apiError(error, status, code === undefined ? undefined : { code });
-}
-
-/** Find an item by id (cross-partition) + verify the caller's tenant owns its workspace. */
-async function loadItem(itemId: string, type: string, tenantId: string): Promise<WorkspaceItem | null> {
-  const items = await itemsContainer();
-  const { resources } = await items.items
-    .query<WorkspaceItem>({
-      query: 'SELECT * FROM c WHERE c.id = @id AND c.itemType = @t',
-      parameters: [
-        { name: '@id', value: itemId },
-        { name: '@t', value: type },
-      ],
-    })
-    .fetchAll();
-  const item = resources[0];
-  if (!item) return null;
-  const ws = await workspacesContainer();
-  try {
-    const { resource } = await ws.item(item.workspaceId, tenantId).read<Workspace>();
-    if (!resource || resource.tenantId !== tenantId) return null;
-  } catch (e: any) {
-    if (e?.code === 404) return null;
-    throw e;
-  }
-  return item;
 }
 
 export async function PATCH(req: NextRequest, props: { params: Promise<{ type: string; id: string }> }) {
@@ -87,7 +63,10 @@ export async function PATCH(req: NextRequest, props: { params: Promise<{ type: s
   const accessMode = normalizeAccessMode(body.accessMode);
 
   try {
-    const item = await loadItem(params.id, params.type, session.claims.oid);
+    const { item, denied } = await loadAuthorizedItem(session, {
+      itemId: params.id, itemType: params.type, write: true, notFound: 'Item not found',
+    });
+    if (denied) return denied;
     if (!item) return err('Item not found', 404, 'not_found');
 
     // Only workspace owners/contributors may change the data-access mode.

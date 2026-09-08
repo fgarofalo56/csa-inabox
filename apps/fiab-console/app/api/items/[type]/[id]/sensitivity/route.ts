@@ -39,9 +39,9 @@ import crypto from 'node:crypto';
 import { getSession } from '@/lib/auth/session';
 import {
   itemsContainer,
-  workspacesContainer,
   auditLogContainer,
 } from '@/lib/azure/cosmos-client';
+import { loadAuthorizedItem } from '../_lib/load-item';
 import {
   isPurviewConfigured,
   listSensitivityLabels,
@@ -53,38 +53,13 @@ import {
 } from '@/lib/azure/purview-client';
 import { loomSensitivityLabelTypedefName } from '@/lib/azure/purview-typedef-namespace';
 import { isGovCloud } from '@/lib/azure/cloud-endpoints';
-import type { Workspace, WorkspaceItem } from '@/lib/types/workspace';
+import type { WorkspaceItem } from '@/lib/types/workspace';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
 function err(error: string, status: number, code?: string, extra?: Record<string, unknown>) {
   return NextResponse.json({ ok: false, error, code, ...(extra || {}) }, { status });
-}
-
-/** Find an item by id (cross-partition) + verify the caller's tenant owns its workspace. */
-async function loadItem(itemId: string, type: string, tenantId: string): Promise<WorkspaceItem | null> {
-  const items = await itemsContainer();
-  const { resources } = await items.items
-    .query<WorkspaceItem>({
-      query: 'SELECT * FROM c WHERE c.id = @id AND c.itemType = @t',
-      parameters: [
-        { name: '@id', value: itemId },
-        { name: '@t', value: type },
-      ],
-    })
-    .fetchAll();
-  const item = resources[0];
-  if (!item) return null;
-  const ws = await workspacesContainer();
-  try {
-    const { resource } = await ws.item(item.workspaceId, tenantId).read<Workspace>();
-    if (!resource || resource.tenantId !== tenantId) return null;
-  } catch (e: any) {
-    if (e?.code === 404) return null;
-    throw e;
-  }
-  return item;
 }
 
 /**
@@ -123,7 +98,10 @@ export async function GET(
   const session = getSession();
   if (!session) return err('Unauthorized', 401, 'unauthorized');
   try {
-    const item = await loadItem(params.id, params.type, session.claims.oid);
+    const { item, denied } = await loadAuthorizedItem(session, {
+      itemId: params.id, itemType: params.type, write: false, notFound: 'Item not found',
+    });
+    if (denied) return denied;
     if (!item) return err('Item not found', 404, 'not_found');
 
     if (!isPurviewConfigured()) {
@@ -173,7 +151,10 @@ export async function PUT(req: NextRequest, props: { params: Promise<{ type: str
   const labelId = typeof body?.labelId === 'string' ? body.labelId.trim() : '';
 
   try {
-    const item = await loadItem(params.id, params.type, session.claims.oid);
+    const { item, denied } = await loadAuthorizedItem(session, {
+      itemId: params.id, itemType: params.type, write: true, notFound: 'Item not found',
+    });
+    if (denied) return denied;
     if (!item) return err('Item not found', 404, 'not_found');
 
     const items = await itemsContainer();

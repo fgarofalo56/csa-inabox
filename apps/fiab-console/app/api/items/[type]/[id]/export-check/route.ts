@@ -21,8 +21,9 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { apiError, apiServerError } from '@/lib/api/respond';
 import { getSession } from '@/lib/auth/session';
-import { itemsContainer, workspacesContainer } from '@/lib/azure/cosmos-client';
-import type { Workspace, WorkspaceItem } from '@/lib/types/workspace';
+import { itemsContainer } from '@/lib/azure/cosmos-client';
+import { loadAuthorizedItem } from '../_lib/load-item';
+import type { WorkspaceItem } from '@/lib/types/workspace';
 import { getSensitivityLabel, getSensitivityLabelWithRights } from '@/lib/azure/mip-graph-client';
 import { checkExportProtection } from '@/lib/azure/label-protection';
 
@@ -30,27 +31,6 @@ export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
 
-
-async function loadItem(itemId: string, type: string, tenantId: string): Promise<WorkspaceItem | null> {
-  const items = await itemsContainer();
-  const { resources } = await items.items
-    .query<WorkspaceItem>({
-      query: 'SELECT * FROM c WHERE c.id = @id AND c.itemType = @t',
-      parameters: [{ name: '@id', value: itemId }, { name: '@t', value: type }],
-    })
-    .fetchAll();
-  const item = resources[0];
-  if (!item) return null;
-  const ws = await workspacesContainer();
-  try {
-    const { resource } = await ws.item(item.workspaceId, tenantId).read<Workspace>();
-    if (!resource || resource.tenantId !== tenantId) return null;
-  } catch (e: any) {
-    if (e?.code === 404) return null;
-    throw e;
-  }
-  return item;
-}
 
 export async function POST(req: NextRequest, props: { params: Promise<{ type: string; id: string }> }) {
   const params = await props.params;
@@ -63,7 +43,10 @@ export async function POST(req: NextRequest, props: { params: Promise<{ type: st
   if (!format) return apiError('format is required', 400);
 
   try {
-    const item = await loadItem(params.id, params.type, session.claims.oid);
+    const { item, denied } = await loadAuthorizedItem(session, {
+      itemId: params.id, itemType: params.type, write: true, notFound: 'Item not found',
+    });
+    if (denied) return denied;
     if (!item) return apiError('Item not found', 404);
 
     const state = (item.state || {}) as Record<string, unknown>;

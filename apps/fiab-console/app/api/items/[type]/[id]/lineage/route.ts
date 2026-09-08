@@ -45,9 +45,10 @@ import {
   type PurviewLineageGraph,
 } from '@/lib/azure/purview-client';
 import { getUnifiedLineage } from '@/lib/azure/unified-lineage';
-import { itemsContainer, workspacesContainer } from '@/lib/azure/cosmos-client';
+import { itemsContainer } from '@/lib/azure/cosmos-client';
 import { AcaManagedIdentityCredential } from '@/lib/azure/aca-managed-identity';
-import type { Workspace, WorkspaceItem } from '@/lib/types/workspace';
+import type { WorkspaceItem } from '@/lib/types/workspace';
+import { loadAuthorizedItem } from '../_lib/load-item';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -145,35 +146,6 @@ async function atlasAksFetch(guid: string, depth: number): Promise<AtlasLineageR
 // Item + lineage-key resolution
 // ------------------------------------------------------------------
 
-/** Load an item by id (cross-partition) and verify the caller's tenant owns it. */
-async function loadItem(
-  itemId: string,
-  type: string,
-  tenantId: string,
-): Promise<WorkspaceItem | null> {
-  const items = await itemsContainer();
-  const { resources } = await items.items
-    .query<WorkspaceItem>({
-      query: 'SELECT * FROM c WHERE c.id = @id AND c.itemType = @t',
-      parameters: [
-        { name: '@id', value: itemId },
-        { name: '@t', value: type },
-      ],
-    })
-    .fetchAll();
-  const item = resources[0];
-  if (!item) return null;
-  const ws = await workspacesContainer();
-  try {
-    const { resource } = await ws.item(item.workspaceId, tenantId).read<Workspace>();
-    if (!resource || resource.tenantId !== tenantId) return null;
-  } catch (e: any) {
-    if (e?.code === 404) return null;
-    throw e;
-  }
-  return item;
-}
-
 /** Resolve the Unity Catalog `catalog.schema.table` lineage key from item state. */
 function ucKeyFromItem(item: WorkspaceItem | null): string | null {
   const s: any = item?.state || {};
@@ -264,11 +236,22 @@ export async function GET(
   // state, and the focus node's deep-link. Never fatal — when the id is a raw
   // lineage key (UC full_name / Atlas GUID) there is no Cosmos row.
   let item: WorkspaceItem | null = null;
+  let denied: Awaited<ReturnType<typeof loadAuthorizedItem>>['denied'] = null;
   try {
-    item = await loadItem(id, type, session.claims.oid);
+    const r = await loadAuthorizedItem(session, {
+      itemId: id, itemType: type, write: false, notFound: 'Item not found',
+    });
+    denied = r.denied;
+    item = r.item;
   } catch {
     item = null;
   }
+  // #3941 — A REFUSAL IS NOT A MISS. See the identical note on ../impact: the
+  // owner-only read this replaces collapsed "not yours" and "not there" into one
+  // `null`, so a caller with no access to a REAL item still got a best-effort
+  // lineage graph keyed off the raw id. The raw-lineage-key case is untouched —
+  // no Cosmos row means no denial.
+  if (denied) return denied;
 
   // Resolve the focus keys for every source from item state. The cloud boundary
   // still chooses the PRIMARY backend (badge), but the unified service overlays

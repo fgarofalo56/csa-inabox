@@ -32,41 +32,13 @@ import { getSession } from '@/lib/auth/session';
 import { detectLoomCloud, type LoomCloud } from '@/lib/azure/cloud-endpoints';
 import { getUnifiedLineage } from '@/lib/azure/unified-lineage';
 import { buildImpactResult } from '@/lib/azure/impact-analysis';
-import { itemsContainer, workspacesContainer } from '@/lib/azure/cosmos-client';
+import { itemsContainer } from '@/lib/azure/cosmos-client';
 import { apiOk, apiServerError, apiUnauthorized } from '@/lib/api/respond';
-import type { Workspace, WorkspaceItem } from '@/lib/types/workspace';
+import type { WorkspaceItem } from '@/lib/types/workspace';
+import { loadAuthorizedItem } from '../_lib/load-item';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
-
-/** Load an item by id (cross-partition) and verify the caller's tenant owns it. */
-async function loadItem(
-  itemId: string,
-  type: string,
-  tenantId: string,
-): Promise<WorkspaceItem | null> {
-  const items = await itemsContainer();
-  const { resources } = await items.items
-    .query<WorkspaceItem>({
-      query: 'SELECT * FROM c WHERE c.id = @id AND c.itemType = @t',
-      parameters: [
-        { name: '@id', value: itemId },
-        { name: '@t', value: type },
-      ],
-    })
-    .fetchAll();
-  const item = resources[0];
-  if (!item) return null;
-  const ws = await workspacesContainer();
-  try {
-    const { resource } = await ws.item(item.workspaceId, tenantId).read<Workspace>();
-    if (!resource || resource.tenantId !== tenantId) return null;
-  } catch (e: any) {
-    if (e?.code === 404) return null;
-    throw e;
-  }
-  return item;
-}
 
 /** Resolve the Unity Catalog `catalog.schema.table` lineage key from item state. */
 function ucKeyFromItem(item: WorkspaceItem | null): string | undefined {
@@ -112,11 +84,23 @@ export async function GET(
   // focus deep-link. Never fatal — a raw lineage key ([id] = UC full_name /
   // Atlas GUID) has no Cosmos row.
   let item: WorkspaceItem | null = null;
+  let denied: Awaited<ReturnType<typeof loadAuthorizedItem>>['denied'] = null;
   try {
-    item = await loadItem(id, type, session.claims.oid);
+    const r = await loadAuthorizedItem(session, {
+      itemId: id, itemType: type, write: false, notFound: 'Item not found',
+    });
+    denied = r.denied;
+    item = r.item;
   } catch {
     item = null;
   }
+  // #3941 — A REFUSAL IS NOT A MISS. The owner-only read this replaces rendered
+  // "you may not see this item" and "there is no such item" as the same `null`,
+  // so a caller with no access to a REAL item still got a best-effort impact
+  // answer computed from the raw id. The denial is returned instead. The
+  // raw-lineage-key case (a UC full_name / Atlas GUID that names no Cosmos row)
+  // is untouched: no item means no denial, and the lookup stays best-effort.
+  if (denied) return denied;
   // Note: an unresolved id (no Cosmos row and not a raw UC full_name / GUID) is
   // NOT fatal — the Weave/Thread-edge source is tenant-scoped inside
   // getUnifiedLineage, so a freshly-created item with no lineage-key state still

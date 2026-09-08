@@ -41,10 +41,10 @@ import crypto from 'node:crypto';
 import { getSession } from '@/lib/auth/session';
 import {
   itemsContainer,
-  workspacesContainer,
   auditLogContainer,
   tenantSettingsContainer,
 } from '@/lib/azure/cosmos-client';
+import { loadAuthorizedItem } from '../_lib/load-item';
 import {
   isPurviewConfigured,
   ensureClassificationDefs,
@@ -52,7 +52,7 @@ import {
 } from '@/lib/azure/purview-client';
 import { loomClassificationTypedefName } from '@/lib/azure/purview-typedef-namespace';
 import { isGovCloud } from '@/lib/azure/cloud-endpoints';
-import type { Workspace, WorkspaceItem } from '@/lib/types/workspace';
+import type { WorkspaceItem } from '@/lib/types/workspace';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -65,39 +65,29 @@ export const dynamic = 'force-dynamic';
  * while a Loom tenant is only a Cosmos partition — so tenant A's `PII` and
  * tenant B's `PII` were the SAME permanent typedef. Delegates to the single
  * namespace authority so `purview-autoonboard` stamps the identical name.
+ *
+ * DECLARED, not aliased. This was `const classificationTypedefName =
+ * loomClassificationTypedefName`, and the caller's oid flows into it as the
+ * namespace discriminator. `_route-auth-scope.mjs` resolves a callee through an
+ * import binding or a local *declaration*; a `const` alias is neither, so once
+ * the inline `loadItem` above was replaced by `loadAuthorizedItem` this call
+ * became the one identity-consuming site the analyzer could not read, and it
+ * reported the route's auth scope as UNKNOWN rather than guess (#3625). A real
+ * declaration puts the body back inside the module the analyzer walks, where it
+ * is visibly a string builder and not an authorization decision.
  */
-export const classificationTypedefName = loomClassificationTypedefName;
+export function classificationTypedefName(
+  tenantId: string,
+  classification: string,
+) {
+  return loomClassificationTypedefName(tenantId, classification);
+}
 
 interface TaxonomyEntry { name: string; sensitivity?: string; color?: string; description?: string; }
 interface TypesDoc { items?: Array<{ name: string; sensitivity?: string; color?: string; description?: string }>; }
 
 function err(error: string, status: number, code?: string, extra?: Record<string, unknown>) {
   return NextResponse.json({ ok: false, error, code, ...(extra || {}) }, { status });
-}
-
-/** Find an item by id (cross-partition) + verify the caller's tenant owns its workspace. */
-async function loadItem(itemId: string, type: string, tenantId: string): Promise<WorkspaceItem | null> {
-  const items = await itemsContainer();
-  const { resources } = await items.items
-    .query<WorkspaceItem>({
-      query: 'SELECT * FROM c WHERE c.id = @id AND c.itemType = @t',
-      parameters: [
-        { name: '@id', value: itemId },
-        { name: '@t', value: type },
-      ],
-    })
-    .fetchAll();
-  const item = resources[0];
-  if (!item) return null;
-  const ws = await workspacesContainer();
-  try {
-    const { resource } = await ws.item(item.workspaceId, tenantId).read<Workspace>();
-    if (!resource || resource.tenantId !== tenantId) return null;
-  } catch (e: any) {
-    if (e?.code === 404) return null;
-    throw e;
-  }
-  return item;
 }
 
 /**
@@ -128,7 +118,10 @@ export async function GET(
   const session = getSession();
   if (!session) return err('Unauthorized', 401, 'unauthorized');
   try {
-    const item = await loadItem(params.id, params.type, session.claims.oid);
+    const { item, denied } = await loadAuthorizedItem(session, {
+      itemId: params.id, itemType: params.type, write: false, notFound: 'Item not found',
+    });
+    if (denied) return denied;
     if (!item) return err('Item not found', 404, 'not_found');
 
     const taxonomy = await loadTaxonomy(session.claims.oid);
@@ -168,7 +161,10 @@ export async function PUT(req: NextRequest, props: { params: Promise<{ type: str
   ];
 
   try {
-    const item = await loadItem(params.id, params.type, session.claims.oid);
+    const { item, denied } = await loadAuthorizedItem(session, {
+      itemId: params.id, itemType: params.type, write: true, notFound: 'Item not found',
+    });
+    if (denied) return denied;
     if (!item) return err('Item not found', 404, 'not_found');
 
     // --- Enforce "not free-text": every value must be in the tenant taxonomy.

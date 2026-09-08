@@ -25,8 +25,9 @@
 
 import { trimEdges } from '@/lib/util/trim';
 import { NextRequest, NextResponse } from 'next/server';
-import { itemsContainer, workspacesContainer } from '@/lib/azure/cosmos-client';
-import type { Workspace, WorkspaceItem } from '@/lib/types/workspace';
+import { itemsContainer } from '@/lib/azure/cosmos-client';
+import type { WorkspaceItem } from '@/lib/types/workspace';
+import { loadAuthorizedItem } from '../_lib/load-item';
 import {
   buildPbids,
   serializePbids,
@@ -58,31 +59,6 @@ const SUPPORTED: Record<string, PbidsItemKind> = {
 
 function gate(missing: string, error: string) {
   return NextResponse.json({ ok: false, code: 'endpoint_not_resolvable', missing, error }, { status: 412 });
-}
-
-/** Find an item by id (cross-partition) + verify the caller's tenant owns its workspace. */
-async function loadItem(itemId: string, type: string, tenantId: string): Promise<WorkspaceItem | null> {
-  const items = await itemsContainer();
-  const { resources } = await items.items
-    .query<WorkspaceItem>({
-      query: 'SELECT * FROM c WHERE c.id = @id AND c.itemType = @t',
-      parameters: [
-        { name: '@id', value: itemId },
-        { name: '@t', value: type },
-      ],
-    })
-    .fetchAll();
-  const item = resources[0];
-  if (!item) return null;
-  const ws = await workspacesContainer();
-  try {
-    const { resource } = await ws.item(item.workspaceId, tenantId).read<Workspace>();
-    if (!resource || resource.tenantId !== tenantId) return null;
-  } catch (e: any) {
-    if (e?.code === 404) return null;
-    throw e;
-  }
-  return item;
 }
 
 function pick(state: any, keys: string[]): string {
@@ -190,7 +166,11 @@ export const GET = withSession<{ type: string; id: string }>(async (req: NextReq
 
   let item: WorkspaceItem | null;
   try {
-    item = await loadItem(id, type, session.claims.oid);
+    const r = await loadAuthorizedItem(session, {
+      itemId: id, itemType: type, write: false, notFound: 'Item not found',
+    });
+    if (r.denied) return r.denied;
+    item = r.item;
   } catch (e: any) {
     return apiServerError(e, 'Failed to load item');
   }
