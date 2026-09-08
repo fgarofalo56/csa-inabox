@@ -445,3 +445,28 @@ param loomSharepointShortcutsEnabled = true
 // Built-in Loom tool surface exposed to external agents via Bearer auth; no
 // external resource required.
 param loomIqMcpEnabled = true
+
+// COST0 PROGRAM BUDGET — THE IMMUTABLE START DATE (#4253). `timePeriod.startDate`
+// on Microsoft.Consumption/budgets cannot be updated after creation, so the
+// template must name the value the LIVE budget already holds. It used to default
+// to `utcNow('yyyy-MM-01')` inside the module, which moved on the 1st of every
+// month and then failed EVERY apply for the rest of that month — taking the whole
+// subscription deployment down with it on one leaf:
+//   400 on 'loom-program-budget' -> "Start date of budgets cannot be updated."
+// Measured on deploy-fiab-commercial (green 2026-08-29/30/31, 8 for 8 red from
+// 09-01). EVERY boundary carries the same bomb on its OWN month boundary, which
+// is why this is wired here and not only on Commercial (cloud-parity.md).
+//
+// The lane's `Resolve the program budget's IMMUTABLE start date` step runs
+// scripts/ci/resolve-program-budget-start-date.mjs before the what-if and the
+// apply, and exports LOOM_PROGRAM_BUDGET_START_DATE: the live budget's existing
+// start when there is one, the first of the current month when there genuinely is
+// no budget (the only start Azure accepts on a create), and it REFUSES the run
+// when the read did not complete rather than guessing.
+//
+// EMPTY is meaningful and safe: main.bicep does not declare the budget at all,
+// and because the deployment is incremental a live budget is left untouched and
+// still alerting. Without this line that export is INERT.
+param observabilityConfig = {
+  programBudgetStartDate: readEnvironmentVariable('LOOM_PROGRAM_BUDGET_START_DATE', '')
+}
