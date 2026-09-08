@@ -141,6 +141,63 @@ function childPath(path, key) {
   return path === '' ? String(key) : `${path}.${key}`;
 }
 
+/**
+ * An id→element map when EVERY element of `arr` is an object carrying a unique
+ * string `id`, and `null` otherwise.
+ *
+ * The uniqueness requirement is not pedantry: with a duplicate id there is no
+ * single element the key names, so any pairing this function chose would be a
+ * guess. It returns null in that case and the caller falls back to the index
+ * walk, which is at least an honest one.
+ */
+function idMap(arr) {
+  if (arr.length === 0) return null;
+  const map = new Map();
+  for (const element of arr) {
+    if (element === null || typeof element !== 'object' || Array.isArray(element)) return null;
+    const { id } = element;
+    if (typeof id !== 'string' || id === '') return null;
+    if (map.has(id)) return null;
+    map.set(id, element);
+  }
+  return map;
+}
+
+/**
+ * ARRAYS OF IDENTIFIED THINGS ARE MATCHED BY ID, NOT BY POSITION (#4275).
+ *
+ * `graph.nodes` and `graph.edges` are ordered lists of objects with unique ids.
+ * Walking them by index pairs element i of one side against element i of the
+ * other, so INSERTING one node at the front reports every subsequent node as a
+ * modified `id`/`kind`/`label`/… — the cap (20) fills with index-shift noise and
+ * the actual change, the added node, may not even appear in the printed list.
+ * Measured on a 5-node fixture: one insertion at index 0 produced 5+ differing
+ * fields naming nodes that did not change.
+ *
+ * So when both sides are id-bearing, the union of ids is walked instead: an id
+ * on one side only is ONE entry naming that id, and only genuinely matched pairs
+ * are recursed into. Order is not compared — an id-keyed collection has no
+ * meaningful positional identity, and the length entry above still reports that
+ * the population moved.
+ */
+function collectByIdCap(mapA, mapB, path, out, cap) {
+  const ids = [...new Set([...mapA.keys(), ...mapB.keys()])];
+  for (const id of ids) {
+    if (out.length >= cap) return;
+    const inA = mapA.has(id);
+    const inB = mapB.has(id);
+    if (!inA || !inB) {
+      out.push({
+        path: `${path}[id=${id}]`,
+        committed: inA ? summarize(mapA.get(id)) : '<absent>',
+        current: inB ? summarize(mapB.get(id)) : '<absent>',
+      });
+      continue;
+    }
+    collect(mapA.get(id), mapB.get(id), `${path}[id=${id}]`, out, cap);
+  }
+}
+
 function collect(a, b, path, out, cap) {
   if (out.length >= cap) return;
   if (a === b) return;
@@ -156,6 +213,13 @@ function collect(a, b, path, out, cap) {
     if (a.length !== b.length) {
       out.push({ path: `${path}.length`, committed: a.length, current: b.length });
     }
+    const mapA = idMap(a);
+    const mapB = idMap(b);
+    if (mapA !== null && mapB !== null) {
+      collectByIdCap(mapA, mapB, path, out, cap);
+      return;
+    }
+
     const n = Math.min(a.length, b.length);
     for (let i = 0; i < n && out.length < cap; i += 1) {
       collect(a[i], b[i], `${path}[${i}]`, out, cap);

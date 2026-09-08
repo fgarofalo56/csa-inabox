@@ -177,6 +177,164 @@ test('TIP arm: the post-fix comparison DOES see drift on the same pair', () => {
   );
 });
 
+// ── ARRAYS OF IDENTIFIED THINGS ARE MATCHED BY ID (#4275) ──────────────────
+//
+// `graph.nodes` and `graph.edges` are ordered lists of objects with unique ids,
+// and the reporter used to walk them by INDEX. So inserting one node at the
+// front paired node 0 against node 1, node 1 against node 2, and so on: one
+// added node reported as a wall of modified `id`/`kind`/`label`/… fields naming
+// nodes nobody touched. With cap=20 that noise can crowd out the added node
+// entirely, so the printed list points a triager at the wrong rows.
+//
+// Both arms again, one fixture: the pre-fix index pairing and the post-fix id
+// pairing over the SAME pair.
+
+/** A 5-node graph whose ids are stable and distinguishable. */
+function fiveNodeArtifact() {
+  const artifact = baseArtifact();
+  artifact.graph.nodes = [1, 2, 3, 4, 5].map((i) => ({
+    id: `sec:publication:scripts/ci/n${i}.mjs#console:member:${i}`,
+    kind: 'publication-surface',
+    provenance: 'declared',
+    label: `scripts/ci/n${i}.mjs`,
+    facet: { kind: 'publication-surface', declaredSinkCount: 1, sinks: [] },
+  }));
+  return artifact;
+}
+
+const ADDED_NODE_ID = 'sec:publication:scripts/ci/inserted.mjs#console:member:0';
+
+/** The same 5 nodes, with one NEW node inserted at index 0. Nothing else moves. */
+function insertedNodePair() {
+  const committed = fiveNodeArtifact();
+  const current = fiveNodeArtifact();
+  current.graph.nodes.unshift({
+    id: ADDED_NODE_ID,
+    kind: 'publication-surface',
+    provenance: 'declared',
+    label: 'scripts/ci/inserted.mjs',
+    facet: { kind: 'publication-surface', declaredSinkCount: 1, sinks: [] },
+  });
+  return { committed, current };
+}
+
+/**
+ * THE PRE-FIX ARRAY WALK, in the shape `collect()` carried before this change:
+ * `Math.min` of the two lengths, element i against element i, no id matching
+ * anywhere. Reproduced here so the counterfactual runs in one process rather
+ * than asking a reader to trust a transcript.
+ */
+function parentIndexDiff(a, b, path = '', out = [], cap = 20) {
+  if (out.length >= cap || a === b) return out;
+  const ka = a === null ? 'null' : Array.isArray(a) ? 'array' : typeof a;
+  const kb = b === null ? 'null' : Array.isArray(b) ? 'array' : typeof b;
+  if (ka !== kb) {
+    out.push({ path });
+    return out;
+  }
+  if (ka === 'array') {
+    if (a.length !== b.length) out.push({ path: `${path}.length` });
+    const n = Math.min(a.length, b.length);
+    for (let i = 0; i < n && out.length < cap; i += 1) parentIndexDiff(a[i], b[i], `${path}[${i}]`, out, cap);
+    return out;
+  }
+  if (ka === 'object') {
+    for (const key of [...new Set([...Object.keys(a), ...Object.keys(b)])].sort()) {
+      if (out.length >= cap) return out;
+      const inA = Object.prototype.hasOwnProperty.call(a, key);
+      const inB = Object.prototype.hasOwnProperty.call(b, key);
+      const next = path === '' ? key : `${path}.${key}`;
+      if (!inA || !inB) {
+        out.push({ path: next });
+        continue;
+      }
+      parentIndexDiff(a[key], b[key], next, out, cap);
+    }
+    return out;
+  }
+  out.push({ path });
+  return out;
+}
+
+test('the fixture really is the #4275 shape — one node added, none of the others touched', () => {
+  const { committed, current } = insertedNodePair();
+  assert.equal(committed.graph.nodes.length, 5);
+  assert.equal(current.graph.nodes.length, 6);
+  const byId = new Map(current.graph.nodes.map((n) => [n.id, n]));
+  for (const node of committed.graph.nodes) {
+    assert.deepEqual(byId.get(node.id), node, `${node.id} must be byte-identical across the pair`);
+  }
+});
+
+test('PARENT arm: the index walk reports the untouched nodes as modified', () => {
+  const { committed, current } = insertedNodePair();
+  const paths = parentIndexDiff(comparableArtifact(committed), comparableArtifact(current)).map((d) => d.path);
+
+  const fieldNoise = paths.filter((p) => /^graph\.nodes\[\d+\]\./.test(p));
+  assert.ok(
+    fieldNoise.length >= 5,
+    `the pre-fix walk should smear this insertion across untouched nodes — if it does not, the ` +
+      `premise of #4275 is wrong. Got: ${paths.join(', ')}`,
+  );
+});
+
+test('TIP arm: one inserted node is ONE difference naming that id, and no modified fields', () => {
+  const { committed, current } = insertedNodePair();
+  const differences = driftDifferences(committed, current);
+  const paths = differences.map((d) => d.path);
+
+  const nodeEntries = paths.filter((p) => p.startsWith('graph.nodes[id='));
+  assert.deepEqual(
+    nodeEntries,
+    [`graph.nodes[id=${ADDED_NODE_ID}]`],
+    `exactly one entry, naming the added id. Got: ${paths.join(', ')}`,
+  );
+  assert.equal(
+    differences.find((d) => d.path === `graph.nodes[id=${ADDED_NODE_ID}]`).committed,
+    '<absent>',
+    'the added node must read as absent on the committed side, not as a modified one',
+  );
+  assert.deepEqual(
+    paths.filter((p) => /\[id=.*\]\./.test(p)),
+    [],
+    `no field of a matched node changed, so none may be reported. Got: ${paths.join(', ')}`,
+  );
+  assert.deepEqual(
+    paths.sort(),
+    [`graph.nodes[id=${ADDED_NODE_ID}]`, 'graph.nodes.length'].sort(),
+    `the population entry and the added id, and nothing else. Got: ${paths.join(', ')}`,
+  );
+});
+
+test('an id-less array is still walked by index, so the fallback did not go missing', () => {
+  // `meta.scanScopes` elements carry no `id`. Losing the index walk would make
+  // this pair compare equal, which is the regression the id matching could cause.
+  const committed = baseArtifact();
+  const current = baseArtifact();
+  current.meta.scanScopes[1].nodesEmitted += 1;
+
+  assert.deepEqual(
+    driftDifferences(committed, current).map((d) => d.path),
+    ['meta.scanScopes[1].nodesEmitted'],
+  );
+});
+
+test('duplicate ids fall back to the index walk rather than guessing a pairing', () => {
+  // With a repeated id there is no single element the key names, so any pairing
+  // would be a guess — and a guess printed as a difference is an R7 assertion
+  // the comparator did not establish.
+  const committed = fiveNodeArtifact();
+  const current = fiveNodeArtifact();
+  committed.graph.nodes[1].id = committed.graph.nodes[0].id;
+  current.graph.nodes[1].id = current.graph.nodes[0].id;
+  current.graph.nodes[3].label = 'scripts/ci/renamed.mjs';
+
+  assert.deepEqual(
+    driftDifferences(committed, current).map((d) => d.path),
+    ['graph.nodes[3].label'],
+  );
+});
+
 // ── THE ANTI-ENUMERATION ARM ───────────────────────────────────────────────
 
 test('a meta field invented later is compared without being named anywhere', () => {
@@ -444,4 +602,164 @@ test('the scan enumeration DROPS a gitignored file and KEEPS an unadded one (#42
   } finally {
     rmSync(repo, { recursive: true, force: true });
   }
+});
+
+// ── THE RENAME CASE, ON A REQUIRED LANE (#4282) ────────────────────────────
+//
+// `security-graph.json` is guarded twice and until now NEITHER guard was both
+// REQUIRED and name-aware:
+//
+//   - `extract-security-graph.mjs --check` re-derives the artifact and compares
+//     it, so it sees a rename. It runs in the job `brain security graph —
+//     committed artifact matches the tree`, which is ADVISORY. Measured
+//     2026-09-08: `gh api repos/fgarofalo56/csa-inabox/branches/main/protection`
+//     lists 15 required contexts and that job is not among them.
+//   - the census in `apps/fiab-console/lib/brain/security/extract/__tests__/
+//     no-estate-identifiers.test.ts` runs on `vitest (node 20)`, which IS
+//     required — but it compared three INTEGERS. Every one of them is invariant
+//     under a rename: move `app/api/foo/route.ts` to `app/api/bar/route.ts` and
+//     `filesMatched`, `filesScanned` and the recomputed census all hold. The
+//     artifact then merges naming a path the tree no longer carries, green.
+//
+// THIS suite runs on `guardrails` — a required context — via
+// `node --test scripts/ci/__tests__/*.test.mjs` in loom-guardrails.yml, with no
+// install of any kind. So the check lands here as well as in the vitest census:
+// two required lanes, two independent enumerations (git below, `readdirSync`
+// there), which is the only way agreement between them means anything.
+//
+// WHAT THIS DOES **NOT** ESTABLISH. `--check` re-derives everything; this
+// compares NAMES only. It cannot tell you the artifact is current — a content
+// edit that moves the graph is invisible to it. Promoting the advisory job to
+// required is still the right end state and is left recorded on #4282, not
+// claimed here.
+//
+// The comparison is on the canonical path form node ids embed
+// (`extract/source-facts.ts#canonicalRepoPath`), which LOWERCASES: measured, 7
+// named paths differ from their on-disk spelling only by the case of a bracketed
+// dynamic segment (`[promptId]` -> `[promptid]`). A rename that changes letter
+// case alone is therefore NOT caught. Every other rename, move or deletion is.
+
+/** The scan roots `extract-security-graph.mjs#main()` walks. */
+const SCAN_ROOTS = ['apps/fiab-console/app', 'scripts', '.github'];
+
+/** `canonicalRepoPath` from `extract/source-facts.ts` — the form node ids embed. */
+function canonicalRepoPath(p) {
+  return p.trim().replace(/\\/g, '/').replace(/^\.\//, '').replace(/\/+$/, '').toLowerCase();
+}
+
+/** The source path a node id embeds, per `extract/join.ts#pathOfNodeId`. */
+function pathOfNodeId(nodeId) {
+  const firstColon = nodeId.indexOf(':');
+  if (firstColon < 0) return null;
+  const secondColon = nodeId.indexOf(':', firstColon + 1);
+  if (secondColon < 0) return null;
+  const hash = nodeId.lastIndexOf('#');
+  const path = nodeId.slice(secondColon + 1, hash < 0 ? undefined : hash);
+  return path.length > 0 ? path : null;
+}
+
+/**
+ * Every path git carries under the scan roots, INTERSECTED with the worktree.
+ *
+ * `git ls-files --cached --others --exclude-standard` is the extractor's own
+ * enumeration (`gitVisibleFiles`), so a gitignored file cannot satisfy this
+ * check while being invisible to the generator — that divergence is #4216.
+ *
+ * The worktree intersection is what makes a rename visible at all: `--cached`
+ * still lists a path deleted from disk, so without it a `mv` that has not been
+ * `git add`ed reads as present and this check passes over the exact change it
+ * exists to catch. `scanFiles` intersects for the same reason.
+ *
+ * No fallback. Without git this cannot establish what the tree contains, and
+ * guessing would reintroduce #4216, so the `execFileSync` throw stands.
+ */
+function gitVisiblePaths() {
+  const raw = execFileSync(
+    'git',
+    ['ls-files', '-z', '--cached', '--others', '--exclude-standard', '--', ...SCAN_ROOTS],
+    { cwd: REPO_ROOT, encoding: 'utf8', maxBuffer: 256 * 1024 * 1024 },
+  );
+  return new Set(
+    raw
+      .split('\0')
+      .filter(Boolean)
+      .filter((rel) => existsSync(resolve(REPO_ROOT, rel)))
+      .map(canonicalRepoPath),
+  );
+}
+
+/** A `meta.skipped` subject naming one file rather than a pattern or a rule. */
+const fileShaped = (subject) => /^[^\s()]+\.(?:tsx?|mjs|cjs|js)$/.test(subject);
+
+/** Every source path the committed artifact NAMES, in node ids and in the ledger. */
+function namedPaths() {
+  const artifact = JSON.parse(readFileSync(ARTIFACT, 'utf8')).artifact;
+  return [
+    ...new Set([
+      ...artifact.graph.nodes
+        .map((n) => pathOfNodeId(String(n.id)))
+        .filter((p) => p !== null)
+        .map(canonicalRepoPath),
+      ...artifact.meta.skipped
+        .map((s) => String(s.subject))
+        .filter(fileShaped)
+        .map(canonicalRepoPath),
+    ]),
+  ];
+}
+
+test('the artifact and the census are both real populations (floor)', () => {
+  // Two empty sets compare equal. A pass because BOTH sides measured nothing is
+  // the shape the guards-that-do-not-watch index exists to name, so the floor is
+  // asserted on both sides before anything is compared.
+  const named = namedPaths();
+  assert.ok(named.length > 300, `the artifact names only ${named.length} path(s)`);
+  const onDisk = gitVisiblePaths();
+  assert.ok(onDisk.size > named.length, `git listed only ${onDisk.size} file(s) under ${SCAN_ROOTS}`);
+});
+
+test('every source path the committed artifact NAMES is still a file in the tree', () => {
+  const onDisk = gitVisiblePaths();
+  assert.deepEqual(
+    namedPaths().filter((p) => !onDisk.has(p)),
+    [],
+    'the committed security graph names path(s) the tree no longer carries, so it was generated ' +
+      'against a different tree. Run: node scripts/brain/extract-security-graph.mjs',
+  );
+});
+
+test('control: a path the tree does not carry IS reported missing', () => {
+  // Proves the assertion above watches the NAMES rather than passing because the
+  // census over-collected — a walk that returned everything, or a canonicaliser
+  // that mapped every input onto a member of the set, would pass it in silence.
+  // Measured RELATIVE to the current baseline so this control still means
+  // something on a tree that is genuinely drifted.
+  const onDisk = gitVisiblePaths();
+  const named = namedPaths();
+  const baseline = named.filter((p) => !onDisk.has(p)).length;
+  const injected = canonicalRepoPath('apps/fiab-console/app/api/__renamed__/route.ts');
+  assert.ok(!onDisk.has(injected), 'the injected path must genuinely be absent for this to prove anything');
+  assert.equal([...named, injected].filter((p) => !onDisk.has(p)).length, baseline + 1);
+});
+
+test('the scan roots this suite watches are the roots the extractor walks', () => {
+  // `ROUTE_ROOT` and `PUBLICATION_ROOTS` are `const`s local to that module's
+  // `main()`, so there is nothing to import and SCAN_ROOTS is a duplicate. The
+  // duplicate is checked against the extractor's SOURCE rather than assumed: a
+  // root added there and not here would make this suite silently narrower.
+  const source = readFileSync(resolve(REPO_ROOT, 'scripts/brain/extract-security-graph.mjs'), 'utf8');
+  const declared = /const PUBLICATION_ROOTS = \[([^\]]*)\]/.exec(source);
+  assert.ok(declared, 'PUBLICATION_ROOTS is no longer declared in the shape this check reads');
+  const upstream = [...declared[1].matchAll(/'([^']+)'/g)].map((m) => m[1]);
+  assert.ok(upstream.length > 0, 'PUBLICATION_ROOTS parsed to nothing, so this control is vacuous');
+  assert.deepEqual(
+    upstream.filter((r) => !SCAN_ROOTS.includes(r)),
+    [],
+    'the extractor walks a publication root this suite does not, so its census is narrower than ' +
+      'the artifact it checks',
+  );
+
+  const routeRoot = /const ROUTE_ROOT = '([^']+)'/.exec(source);
+  assert.ok(routeRoot, 'ROUTE_ROOT is no longer declared in the shape this check reads');
+  assert.ok(SCAN_ROOTS.includes(routeRoot[1]), `the extractor walks '${routeRoot[1]}' and this suite does not`);
 });
