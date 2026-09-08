@@ -176,9 +176,17 @@ export function createPresenceTransport(opts: PresenceTransportOptions): Presenc
         cache: 'no-store',
       });
       if (!res.ok || !res.body) {
-        // A settled refusal (kill-switch OFF, or the item is not readable by
-        // this caller) — drop to the slow re-probe; the poll carries presence
-        // meanwhile. Anything else keeps the fast ramp.
+        // A refusal the client cannot fix by retrying sooner settles into the
+        // slow (60s) re-probe; the poll path carries presence meanwhile.
+        //   503 — the a14-collab-push kill-switch is OFF server-side.
+        //   401/403 — no session / not authorized for this item.
+        //   404 — the route or the item is not reachable for this caller.
+        // Retrying any of those on the 5s ramp is a request storm that cannot
+        // succeed (#3697). This makes the storm QUIET, not absent: the request
+        // is still issued and still 404s, once per open and then once per 60s.
+        // Where the 404 is a route that does not exist at all, the re-probe
+        // will not recover it — clearing #3697 needs the route implemented or
+        // the call removed, neither of which happens here.
         settled = isSettledRefusal(res.status);
         throw new Error(`stream HTTP ${res.status}`);
       }

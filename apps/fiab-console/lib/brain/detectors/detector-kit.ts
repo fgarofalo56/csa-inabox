@@ -512,10 +512,24 @@ export function finalizeResult(args: {
   assertLedgerBalances(args.detector, args.ledger);
   assertNotGreenAndBlind(args.detector, args.findings, args.population);
   assertNotVacuous(args.detector, args.graph, args.findings, args.requiresResolved ?? []);
+  const counts = args.ledger.counts();
   return {
     detector: args.detector,
     findings: [...args.findings].sort(bySeverity),
     population: args.population,
     skipped: args.skipped,
+    // #3964 — the ledger's verdict, carried OUT of the detector so a caller can
+    // check it against a count derived from the graph. `assertLedgerBalances`
+    // proves the totals add up; it cannot prove they are the RIGHT totals,
+    // because a bypass that moves every candidate from `finding` to `cleared`
+    // balances just as well. Nothing outside this function could see the
+    // difference until these two fields existed.
+    dispositions: {
+      finding: counts.finding,
+      cleared: counts.cleared,
+      skipped: counts.skipped,
+      universe: counts.universe,
+    },
+    clearedReasons: args.ledger.clearedReasons(),
   };
 }
