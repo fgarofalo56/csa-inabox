@@ -29,6 +29,13 @@
  *   c) Delete the `PIP_SAFE.test(s)` filter in `pipPackagesFor` -> RED:
  *      "a package name carrying a shell metacharacter is dropped, not escaped"
  *      — the string goes to a kernel magic, so this is not cosmetic.
+ *   d) In `databricks-notebook.ts` pass `input.content` to `importAndRunNotebook`
+ *      instead of the bootstrapped content -> RED:
+ *        "a databricks-notebook item gets the bootstrap too"
+ *      — the FAIL-GREEN arm: the undeclared-import sweep enumerates
+ *      `NOTEBOOK_ITEM_TYPES`, which includes `databricks-notebook`, so without
+ *      this an author follows the sweep's own remediation message, watches the
+ *      sweep go green, and still gets `ModuleNotFoundError` on Run-all.
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 
@@ -37,6 +44,22 @@ const h = {
   synapseConfigGate: vi.fn(() => null as any),
   databricksConfigGate: vi.fn(() => ({ missing: 'LOOM_DATABRICKS_HOSTNAME' } as any)),
 };
+
+/** What `databricks-notebook.ts` actually hands the Databricks importer. */
+const dbx = { lastContent: undefined as any };
+
+vi.mock('../_seed-databricks', async (importOriginal) => {
+  // Partial mock: `buildDatabricksSource` stays REAL so the assertion below is
+  // over the source Databricks would actually receive, not over a stand-in.
+  const actual = await importOriginal<typeof import('../_seed-databricks')>();
+  return {
+    ...actual,
+    importAndRunNotebook: vi.fn(async (_appId: string, _name: string, content: any) => {
+      dbx.lastContent = content;
+      return { triggered: true, settled: true, resultState: 'SUCCESS', runId: 7, notebookPath: '/Shared/x', steps: [] };
+    }),
+  };
+});
 
 vi.mock('@/lib/azure/synapse-artifacts-client', () => ({
   synapseConfigGate: () => h.synapseConfigGate(),
@@ -61,6 +84,8 @@ import {
   pipPackagesFor,
   PIP_BOOTSTRAP_MARKER,
 } from '../notebook';
+import { databricksNotebookProvisioner } from '../databricks-notebook';
+import { buildDatabricksSource } from '../_seed-databricks';
 import ragBuilderBundle from '@/lib/apps/content-bundles/app-rag-builder';
 
 /** The rag-builder bundle's notebook item, read from the SHIPPED bundle. */
@@ -75,6 +100,7 @@ const sourceOf = (cell: any): string =>
 
 beforeEach(() => {
   vi.clearAllMocks();
+  dbx.lastContent = undefined;
   h.synapseConfigGate.mockReturnValue(null);
   h.databricksConfigGate.mockReturnValue({ missing: 'LOOM_DATABRICKS_HOSTNAME' });
   h.upsertSynapseNotebook.mockImplementation(async () => ({ id: 'syn-1' }));
@@ -165,5 +191,76 @@ describe('notebook install — declared libraries become a %pip bootstrap cell (
       .toEqual(['openai==1.2.3', 'pkg[all]', 'a-b_c.d']);
     // Duplicates collapse, so the magic line names each package once.
     expect(pipPackagesFor({ requiredLibraries: ['openai', 'openai'] })).toEqual(['openai']);
+  });
+
+  it('a databricks-notebook item gets the bootstrap too, and it survives into the Databricks source', async () => {
+    // THE FAIL-GREEN ARM. `NOTEBOOK_ITEM_TYPES` — the population the #3530
+    // undeclared-import sweep enumerates — is
+    // `['notebook','databricks-notebook','synapse-notebook']`, but until this
+    // change only the `notebook` provisioner applied the bootstrap. For a
+    // `databricks-notebook` item the sweep would fail, the author would follow
+    // its remediation message ("add '<x>' to that notebook's
+    // requiredLibraries"), the sweep would go GREEN, and Run-all would still
+    // throw `ModuleNotFoundError` — a guard that steers you into the defect.
+    //
+    // Latent rather than live today: `app-direct-lake-replacement` is the only
+    // bundle with `databricks-notebook` items and its cells carry no Python
+    // imports. Reachable the moment one gains one, which is exactly what the
+    // sweep exists to make happen.
+    const content = {
+      kind: 'notebook',
+      defaultLang: 'pyspark',
+      requiredLibraries: ['delta-sharing'],
+      cells: [{ id: 'c', type: 'code', lang: 'pyspark', source: 'import delta_sharing\n' }],
+    };
+    const r = await databricksNotebookProvisioner({
+      session: { claims: { oid: 'o' } },
+      target: { mode: 'shared' },
+      cosmosItemId: 'dbnb-1',
+      workspaceId: 'w',
+      displayName: 'Silver Transform',
+      appId: 'app-direct-lake-replacement',
+      content,
+    } as any);
+    expect(r.status).toBe('created');
+
+    // 1. The importer really received the bootstrapped content, not the raw one.
+    expect(dbx.lastContent).toBeTruthy();
+    expect(sourceOf(dbx.lastContent.cells[0])).toContain('%pip install delta-sharing');
+    expect(dbx.lastContent.cells).toHaveLength(content.cells.length + 1);
+
+    // 2. …and the REAL serializer keeps it a runnable command rather than
+    //    burying it in a `# MAGIC` block or dropping it. The bootstrap cell is
+    //    `lang:'pyspark'`, i.e. the notebook default, so it is emitted natively
+    //    — byte-identical to how the `notebook` itemType's Databricks arm has
+    //    shipped this cell since #3530. NOT verified against a live Databricks
+    //    workspace; this asserts the source, not the execution.
+    const source = buildDatabricksSource(dbx.lastContent);
+    expect(source.split('\n')).toContain('%pip install delta-sharing');
+    // It is the FIRST command, before the import that needs it.
+    expect(source.indexOf('%pip install')).toBeLessThan(source.indexOf('import delta_sharing'));
+
+    // 3. The receipt names what was arranged, so the outcome is inspectable.
+    expect(r.steps?.[0]).toContain("%pip install delta-sharing");
+  });
+
+  it('a databricks-notebook that declares nothing is handed its content untouched', async () => {
+    // The control: the bootstrap must be a no-op for every bundle shipping
+    // today, so this change cannot alter any current install.
+    const content = {
+      kind: 'notebook',
+      defaultLang: 'pyspark',
+      cells: [{ id: 'c', type: 'code', lang: 'pyspark', source: 'print(1)\n' }],
+    };
+    await databricksNotebookProvisioner({
+      session: { claims: { oid: 'o' } },
+      target: { mode: 'shared' },
+      cosmosItemId: 'dbnb-2',
+      workspaceId: 'w',
+      displayName: 'Gold Transform',
+      appId: 'app-direct-lake-replacement',
+      content,
+    } as any);
+    expect(dbx.lastContent).toBe(content);
   });
 });

@@ -24,15 +24,25 @@
  * a new bundle therefore surfaces as a red test, not as a customer's stack
  * trace on the golden path.
  *
- * What it does NOT see, stated rather than implied: a dynamic
- * `importlib.import_module(...)`, an import nested under an `if`/`try` at an
- * indent it still matches but whose module name is computed, a `;`-chained or
- * backslash-continued second statement, and a `%pip install` the cell performs
- * itself. Those are un-analysable from the cell text, not oversights — but they
- * are holes, and this list is the honest boundary of the claim above. The
- * comma form was in this list until it was measured to be hiding a real
- * shipped defect (`app-supercharge-guide`'s `import struct, pyodbc`); it is now
- * parsed.
+ * What it does NOT see, stated rather than implied. Fail-OPEN holes (a real
+ * import the sweep misses): a dynamic `importlib.import_module(...)`, an import
+ * nested under an `if`/`try` at an indent it still matches but whose module name
+ * is computed, a `;`-chained or backslash-continued second statement, and a
+ * `%pip install` the cell performs itself. Those are un-analysable from the cell
+ * text, not oversights — but they are holes, and this list is the honest
+ * boundary of the claim above. The comma form was in this list until it was
+ * measured to be hiding a real shipped defect (`app-supercharge-guide`'s
+ * `import struct, pyodbc`); it is now parsed.
+ *
+ * And one fail-CLOSED hole, which belongs in the same list because a spurious
+ * red costs the next author just as much time: `IMPORT_RE` is line-anchored and
+ * STRING-UNAWARE, so an `import x` line inside a triple-quoted block — a
+ * docstring, a `spark.sql("""…""")` heredoc, a generated-code template — is read
+ * as a real import and manufactures a finding. No shipped bundle currently
+ * trips it (measured: the sweep's findings are all genuine import lines), and
+ * the remedy when one does is to declare the package or classify the module,
+ * both of which are harmless. A full Python tokenizer is the only real fix and
+ * is not worth it here.
  */
 
 /**
@@ -59,22 +69,86 @@ const STDLIB_ROOTS = new Set([
  *
  * This is a REVIEWED list, not a machine-read manifest: the console cannot
  * introspect the pool image from here. Entries are matched as dotted-path
- * prefixes (`azure.identity` covers `azure.identity.aio`). Adding one is a
- * claim that the package ships in the Synapse Spark / Databricks stock image —
- * make it deliberately, because a wrong entry re-opens #3530 for that bundle.
+ * prefixes (`azure.identity` covers `azure.identity.aio`).
+ *
+ * THE ASYMMETRY THAT MATTERS, STATED RATHER THAN IMPLIED. An `UNVERIFIED_AT_HEAD`
+ * baseline entry in the guard suite is LOUD: it is enumerated, it must still be
+ * a real finding or the suite reds, and it can only shrink. A wrong entry HERE
+ * is SILENT — no finding, no baseline line, no red test, just a
+ * `ModuleNotFoundError` on the customer's Run-all, which is exactly the #3530
+ * defect. So this list is split by what backs each entry, and the asserted half
+ * is tracked on #3530 alongside the baseline rather than treated as settled.
+ *
+ * Measured against this repo, not assumed: `platform/fiab/bicep/modules/
+ * landing-zone/synapse-spark-pools.bicep` sets `sparkVersion: '3.4'` and
+ * declares NO `libraryRequirements`, so the pools run the STOCK Synapse Spark
+ * 3.4 image. Every claim below is therefore a claim about that stock image (and
+ * about the Databricks runtime, for the bundles that target it).
  */
-const RUNTIME_PROVIDED_PREFIXES = [
-  // Spark itself and the Delta/Arrow stack the pools are built on.
-  'pyspark', 'py4j', 'delta', 'pyarrow',
-  // Synapse / Databricks notebook helper namespaces.
+
+/**
+ * Backed by something other than belief: the module is the runtime itself, is
+ * injected by the notebook host, or has in-repo evidence.
+ *
+ *   pyspark / py4j / delta   a Spark pool that lacks these is not a Spark pool;
+ *                            `delta` is the Delta Lake Python API the pools are
+ *                            built on and every shipped bundle already uses.
+ *   notebookutils /          host-injected helper namespaces — Synapse
+ *   mssparkutils / dbutils   (`notebookutils`, `mssparkutils`) and Databricks
+ *                            (`dbutils`). They exist only INSIDE a notebook
+ *                            session and are not pip-installable at all, so
+ *                            "declare it" is not even an available answer.
+ *   azure.identity           documented in-repo: `app-rag-builder.ts`
+ *                            deliberately omits it from `requiredLibraries`
+ *                            while importing it.
+ *   azure.core               a hard install-requires of `azure-identity`, so it
+ *                            is present wherever the line above is.
+ */
+const RUNTIME_PROVIDED_EVIDENCED = [
+  'pyspark', 'py4j', 'delta',
   'notebookutils', 'mssparkutils', 'dbutils',
-  // The data-science baseline every Spark image carries.
-  'numpy', 'pandas', 'scipy', 'sklearn', 'matplotlib', 'seaborn', 'mlflow',
-  // HTTP + AAD: `requests` is a base package in the Spark images, and
-  // `azure-identity` is documented in-repo as runtime-provided
-  // (app-rag-builder.ts deliberately omits it from `requiredLibraries`).
-  'requests', 'azure.identity', 'azure.core',
+  'azure.identity', 'azure.core',
 ];
+
+/**
+ * ASSERTED — the data-science baseline these images are commonly built with,
+ * believed present but NOT established from this repo or from a running pool.
+ * Same class of unverifiable fact as `UNVERIFIED_AT_HEAD` in the guard suite,
+ * and tracked on #3530 with it: each one needs a `pip list` on a live Synapse
+ * 3.4 pool and a live Databricks runtime before it can move to the list above.
+ *
+ * The failure mode if one is wrong: a bundle importing it sweeps GREEN and dies
+ * on Run-all with `ModuleNotFoundError`. Removing an entry is the safe
+ * direction (it costs a pip round-trip); adding one is the dangerous direction.
+ *
+ * `pyarrow` sits here rather than above deliberately — pyspark declares it as
+ * an EXTRA (`pyspark[sql]`), not an install-requires, so "Spark is present"
+ * does not imply it.
+ */
+const RUNTIME_PROVIDED_ASSERTED = [
+  'pyarrow',
+  'numpy', 'pandas', 'scipy', 'sklearn', 'matplotlib', 'seaborn', 'mlflow',
+  'requests',
+];
+
+/**
+ * The matched set. Split above only so the evidence behind each half is
+ * inspectable; `isProvidedByRuntime` treats them identically.
+ *
+ * Adding an entry is a claim that the package ships in the Synapse Spark /
+ * Databricks stock image — make it deliberately, and put it in the half whose
+ * evidence you actually have, because a wrong entry re-opens #3530 for that
+ * bundle and does so SILENTLY.
+ */
+export const RUNTIME_PROVIDED_PREFIXES = [
+  ...RUNTIME_PROVIDED_EVIDENCED,
+  ...RUNTIME_PROVIDED_ASSERTED,
+];
+
+/** The unverifiable half, exported so the guard suite can enumerate it. */
+export const RUNTIME_PROVIDED_ASSERTED_PREFIXES: readonly string[] = RUNTIME_PROVIDED_ASSERTED;
+/** The half with evidence behind it, exported for the same reason. */
+export const RUNTIME_PROVIDED_EVIDENCED_PREFIXES: readonly string[] = RUNTIME_PROVIDED_EVIDENCED;
 
 /** Cell languages whose source is Python (and therefore has Python imports). */
 const PYTHON_LANGS = new Set(['pyspark', 'python']);

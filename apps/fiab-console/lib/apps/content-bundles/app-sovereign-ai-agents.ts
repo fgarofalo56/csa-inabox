@@ -849,6 +849,22 @@ You get five runnable surfaces from the first install:
         // runtime-provided (app-rag-builder.ts omits it for the same reason),
         // and pip-installing over the runtime copy costs a minute on every
         // Run-all.
+        //
+        // UNPINNED, deliberately, and the tradeoff is real either way. These
+        // two SDKs have had breaking API churn, so a future major could break
+        // the `AIProjectClient` / `ConnectedAgentTool` usage in the setup cell
+        // below — at which point the bootstrap cell is what breaks the
+        // notebook. Against that: a pin is a claim that THAT version resolves
+        // and works on the pool, which is the same live-pool fact this change
+        // is careful not to assert anywhere else, and a wrong pin fails
+        // immediately and unconditionally rather than eventually. Measured
+        // across the registry, every one of the 6 `requiredLibraries`
+        // declarations is unpinned, including the two that landed with the
+        // original #3530 fix; the only pinned packages in the repo
+        // (`app-pipeline-designer.ts`, `dbt-databricks==1.8.7`) are a
+        // Databricks JOB `libraries[].pypi` spec, a different field on a
+        // different item type. Pinning is tracked on #3530 and wants a live
+        // Run-all receipt before it is applied, not a version picked here.
         requiredLibraries: ['azure-ai-projects', 'azure-ai-agents'],
         cells: [
           { id: 'cell-md-intro', type: 'markdown', source: NB_INTRO },

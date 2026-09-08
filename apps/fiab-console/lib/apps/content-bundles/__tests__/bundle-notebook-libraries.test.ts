@@ -61,6 +61,29 @@
  * It is NOT a statement that the baselined bundles are fine. They are not;
  * they are unverified, and the list is the tracked backlog.
  *
+ * THE OTHER HALF OF THE SAME UNVERIFIABLE FACT, TRACKED HERE TOO.
+ * `RUNTIME_PROVIDED_PREFIXES` in `notebook-imports.ts` is a claim about the
+ * same pool image, in the opposite direction — and a wrong entry there is
+ * strictly WORSE than a wrong baseline line, because it is SILENT: no finding,
+ * no enumerated entry, no red test, just a `ModuleNotFoundError` on the
+ * customer's Run-all. That list is therefore split into an EVIDENCED half (the
+ * runtime itself, the host-injected `*utils` namespaces, and the two entries
+ * with in-repo evidence) and an ASSERTED half, and the asserted half is tracked
+ * on #3530 next to the baseline below:
+ *
+ *   pyarrow numpy pandas scipy sklearn matplotlib seaborn mlflow requests
+ *
+ * Each needs a `pip list` on a live Synapse 3.4 pool and on the Databricks
+ * runtime before it can move. `it('the runtime-provided list declares its own
+ * evidence')` keeps the split honest — it cannot check the CLAIMS (nothing
+ * here can), only that every entry is classified and that the asserted half is
+ * still what this docblock says it is.
+ *
+ * MEASURED CONTEXT for those claims, from this repo rather than from belief:
+ * `platform/fiab/bicep/modules/landing-zone/synapse-spark-pools.bicep` sets
+ * `sparkVersion: '3.4'` and declares NO `libraryRequirements`, so the pools run
+ * the STOCK image.
+ *
  * MUTATION PROOF (break the subject, watch these go red, restore):
  *   a) Delete `requiredLibraries` from `app-federal-data-mesh.ts` -> RED:
  *      "no bundle notebook has an undeclared import outside the baseline".
@@ -77,6 +100,10 @@
  *      (`import[ \t]+([A-Za-z_][\w.]*)`) -> RED: "a comma-separated import
  *      clause names every module" AND "every baseline entry is still a real
  *      finding" (`app-supercharge-guide::pyodbc` goes invisible).
+ *   f) Move `seaborn` from `RUNTIME_PROVIDED_ASSERTED` to
+ *      `RUNTIME_PROVIDED_EVIDENCED` -> RED: "the runtime-provided list declares
+ *      its own evidence" — an unverifiable claim cannot be quietly promoted to
+ *      an evidenced one.
  */
 import { describe, it, expect } from 'vitest';
 import { listBundleIds, getBundle, NOTEBOOK_ITEM_TYPES } from '../index';
@@ -86,7 +113,21 @@ import {
   distributionCovers,
   undeclaredImports,
   normalizeDistName,
+  RUNTIME_PROVIDED_PREFIXES,
+  RUNTIME_PROVIDED_ASSERTED_PREFIXES,
+  RUNTIME_PROVIDED_EVIDENCED_PREFIXES,
 } from '../notebook-imports';
+
+/**
+ * The unverifiable half of `RUNTIME_PROVIDED_PREFIXES`, restated here so a
+ * silent promotion out of it reds. Kept in the SAME file as the baseline
+ * because it is the same class of debt pointing the other way.
+ */
+const ASSERTED_AT_HEAD: readonly string[] = [
+  'pyarrow',
+  'numpy', 'pandas', 'scipy', 'sklearn', 'matplotlib', 'seaborn', 'mlflow',
+  'requests',
+];
 
 /**
  * Undeclared imports measured at head, keyed `<appId>::<dotted module>`.
@@ -320,5 +361,34 @@ describe('bundle notebooks declare the packages they import (#3530)', () => {
   it('normalizes distribution names per PEP 503', () => {
     expect(normalizeDistName('Delta_Sharing')).toBe('delta-sharing');
     expect(normalizeDistName('azure.ai.projects')).toBe('azure-ai-projects');
+  });
+
+  it('the runtime-provided list declares its own evidence', () => {
+    // A wrong `RUNTIME_PROVIDED_PREFIXES` entry is the SILENT failure: unlike a
+    // baseline line it produces no finding and no red test, only a customer's
+    // `ModuleNotFoundError`. This arm cannot verify the CLAIMS — no code in this
+    // repo can reach a pool image, which is the whole premise of the baseline —
+    // so it asserts the only thing that IS checkable from here: that every entry
+    // is classified, that the two halves are disjoint and exhaustive, and that
+    // the asserted half is still exactly the list the docblock tracks on #3530.
+    // Promoting an entry to "evidenced" then becomes a deliberate edit in two
+    // places rather than a quiet one-line move.
+    const evidenced = [...RUNTIME_PROVIDED_EVIDENCED_PREFIXES];
+    const asserted = [...RUNTIME_PROVIDED_ASSERTED_PREFIXES];
+
+    // Exhaustive and disjoint: no entry escapes classification, none is counted
+    // twice, and nothing reaches the matcher that is in neither half.
+    expect([...evidenced, ...asserted].sort()).toEqual([...RUNTIME_PROVIDED_PREFIXES].sort());
+    expect(evidenced.filter((p) => asserted.includes(p))).toEqual([]);
+    expect(new Set(RUNTIME_PROVIDED_PREFIXES).size).toBe(RUNTIME_PROVIDED_PREFIXES.length);
+
+    // …and the tracked debt is what it says it is.
+    expect(asserted.sort()).toEqual([...ASSERTED_AT_HEAD].sort());
+
+    // The evidenced half is not empty and really does carry the two entries
+    // whose evidence is named in `notebook-imports.ts` — `app-rag-builder`
+    // imports `azure.identity` and deliberately does NOT declare it.
+    expect(evidenced).toContain('azure.identity');
+    expect(evidenced).toContain('pyspark');
   });
 });

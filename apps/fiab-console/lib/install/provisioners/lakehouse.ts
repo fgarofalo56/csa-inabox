@@ -743,13 +743,31 @@ async function provisionAzureNative(
     // (so the 4-part name workspace.lakehouse.schema.table resolves);
     // otherwise the classic single `lakehouse` schema.
     const viewSchema = schemasEnabled ? t.schema : 'lakehouse';
+    // The reported identity — plain `<schema>.<table>`, which is what
+    // `secondaryIds.externalViews` and the step lines carry.
     const obj = `${viewSchema}.${viewLeaf}`;
+    // …and the DDL identity, BRACKET-DELIMITED. Both segments are already
+    // restricted to `[A-Za-z0-9_]` (the seeder sanitizes the schema, `viewLeaf`
+    // above sanitizes the name), so no bracket or quote can appear inside them
+    // — but that character set still admits a LEADING DIGIT, and a bundle
+    // schema of `2024-q1` sanitizes to `2024_q1`, for which the unbracketed
+    // `CREATE SCHEMA 2024_q1` is a T-SQL syntax error. The whole per-table
+    // registration then lands in the catch below as a step string and the
+    // table is silently unqueryable. Brackets are the delimited-identifier form
+    // Learn prescribes and cost nothing for the ordinary names.
+    // Learn: https://learn.microsoft.com/sql/relational-databases/databases/database-identifiers
+    const objDdl = `[${viewSchema}].[${viewLeaf}]`;
+    // NOTE the asymmetry, and it is deliberate: `SCHEMA_ID()` / `OBJECT_ID()`
+    // take a NAME as a string. `SCHEMA_ID('2024_q1')` is the correct call —
+    // bracketing there would look up a schema literally called `[2024_q1]` —
+    // whereas `OBJECT_ID()` parses a multi-part name and therefore wants the
+    // delimited form.
     // Doubled single-quotes for the inner EXEC string literal.
     const urlLiteral = escapeSqlLiteral(httpsUrl);
     const ddl =
-      `IF SCHEMA_ID('${viewSchema}') IS NULL EXEC('CREATE SCHEMA ${viewSchema}');\n` +
-      `IF OBJECT_ID('${obj}','V') IS NOT NULL DROP VIEW ${obj};\n` +
-      `EXEC('CREATE VIEW ${obj} AS SELECT * FROM OPENROWSET(BULK ''${urlLiteral}'', ` +
+      `IF SCHEMA_ID('${viewSchema}') IS NULL EXEC('CREATE SCHEMA [${viewSchema}]');\n` +
+      `IF OBJECT_ID('${objDdl}','V') IS NOT NULL DROP VIEW ${objDdl};\n` +
+      `EXEC('CREATE VIEW ${objDdl} AS SELECT * FROM OPENROWSET(BULK ''${urlLiteral}'', ` +
       `FORMAT = ''DELTA'') AS r');`;
     try {
       await synapseExec(synapse, ddl);
