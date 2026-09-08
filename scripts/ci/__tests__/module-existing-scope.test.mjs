@@ -348,6 +348,7 @@ test('every KNOWN_DORMANT entry records why it is dormant and where it is tracke
   }
 });
 
+
 // ── #3338 — the cross-subscription lake grant pass's OWNERSHIP invariant ─────
 //
 // WHY THESE LIVE HERE. `modules/data-plane/dlz-lake-grant-pass.bicep` is the
@@ -376,20 +377,56 @@ test('every KNOWN_DORMANT entry records why it is dormant and where it is tracke
 //      in the pass's own header). #3338 asked for exactly that principal at
 //      exactly that role.
 //
-// HOW EACH GUARD IS KEYED. GUARD 2 is keyed to the ROLE ASSIGNMENT — the
-// principalId expression of every `Microsoft.Authorization/roleAssignments`
-// declaration — never to the set of param names. An earlier revision keyed it to
-// `principalParams()` (the regex /PrincipalId$/) and the whole refusal could be
-// bypassed by naming the param `consoleUamiObjectId`; that bypass is now itself a
-// mutation control below. GUARD 1 keeps the name check (it is the precise
-// signal for "threaded and ungranted") but adds a spelling-independent
-// unreferenced-param check alongside it.
+// HOW THESE GUARDS ARE KEYED, AND WHY IT IS AN INVENTORY AND NOT A PATTERN.
 //
-// WHAT THESE TESTS ARE AND ARE NOT. They are GREEN at head — head carries
-// neither break. They are trap guards, not the fix for a red, and each carries
-// a MUTATION control that applies the break to an in-memory copy of the REAL
-// source and asserts the checker turns red on it. Without that control a green
-// here would be indistinguishable from a checker that looks at nothing.
+// Two earlier revisions of this block each lost to one edit, and the pattern is
+// the lesson, not the individual escapes:
+//
+//   * revision 1 keyed GUARD 2 to param NAMES (`/PrincipalId$/`), so the
+//     identical Console-UAMI grant under `consoleUamiObjectId` read green;
+//   * revision 2 moved GUARD 2 to the `principalId:` expression but read it via
+//     `fieldAt(body, 'principalId', 4)` — exactly four leading spaces, top-level
+//     `resource` declarations only. An inline `properties: { … principalId: x }`
+//     was invisible, and so was a grant delegated to a child `module` (which is
+//     this repo's own convention for lake RBAC). GUARD 1 meanwhile still keyed
+//     on `/PrincipalId$/` plus "referenced by nothing", so a param that IS
+//     referenced (by a grant-gate `var` and an `output`) under a name without
+//     that suffix went green while carrying no assignment at all.
+//
+// Both were reviewer-built counterexamples, reproduced on disk against the real
+// pass. Enumerating one more syntax would just move the next escape. So the
+// primary key is now an INVENTORY of the pass, taken from the three bicep
+// KEYWORDS that no layout can hide — `param`, `resource`, `module`, each of
+// which must begin a statement:
+//
+//   GUARD 1  every `param` the pass declares is in PASS_PARAM_REGISTER, with a
+//            `kind` and a reason. A `principal` param must reach the
+//            `principalId` of a real role assignment; a `config` param must not.
+//            Adding ANY param under ANY name, referenced or not, is red until
+//            registered — which is where a reviewer has to look at it.
+//   GUARD 2  every `resource` and `module` the pass declares is in
+//            PASS_BODY_REGISTER, and every principal that actually reaches a
+//            `principalId` is on the self-minted allowlist. The first half is
+//            what closes the inline-object and delegated-module forms: they add
+//            a declaration, whatever their layout.
+//   GUARD 3  only modules whose grant the pass OWNS may gate their deploy on
+//            `loomStorageWillBeGranted`.
+//
+// WHAT THIS STILL IS NOT. It is source analysis, not the compiled ARM. It is
+// keyed to declarations in ONE small file (167 lines) whose entire job is to
+// make role assignments, so an inventory is a proportionate key there and would
+// not be on a 9,000-line orchestrator. It does not prove that the emitted ARM
+// contains exactly one role assignment; only `az bicep build` over the pass
+// could, and that is not run from node:test here. What it does establish is
+// that no NEW param, resource or module can enter this file without a reviewer
+// registering it — which is the property both #3338 half-fixes needed to
+// bypass, and the property the module header may therefore claim.
+//
+// These tests are GREEN at head — head carries neither break. They are trap
+// guards, not the fix for a red, and each carries a MUTATION control that
+// applies the break to an in-memory copy of the REAL source and asserts the
+// checker turns red on it. Without that control a green here would be
+// indistinguishable from a checker that looks at nothing.
 
 const GRANT_PASS_REL = 'modules/data-plane/dlz-lake-grant-pass.bicep';
 const ADMIN_PLANE_REL = 'modules/admin-plane/main.bicep';
@@ -397,9 +434,60 @@ const ADMIN_PLANE_REL = 'modules/admin-plane/main.bicep';
 const readBicep = (rel) => fs.readFileSync(path.join(BICEP_ROOT, ...rel.split('/')), 'utf8');
 
 /**
- * Principals that ACTUALLY receive a role assignment in a bicep source: the
- * `properties.principalId` expression of every
+ * Every `param` the pass declares, keyed to the `param` KEYWORD at statement
+ * start rather than to any naming convention.
+ *
+ * `parseBicep().params` would do the same job; this reads the lines directly so
+ * the two halves of GUARD 1 do not share one reader, and so the key is visibly
+ * the keyword. Bicep requires `param` to begin the statement, so unlike an
+ * indent or a suffix there is no spelling of a parameter declaration that this
+ * misses.
+ */
+function declaredParamNames(source) {
+  return blankComments(source)
+    .split(/\r?\n/)
+    .map((l) => /^\s*param\s+([A-Za-z_]\w*)\b/.exec(l))
+    .filter(Boolean)
+    .map((m) => m[1])
+    .sort();
+}
+
+/**
+ * Every `resource` and `module` DECLARATION in the pass, as
+ * `<keyword> <symbol> <type-or-target>`.
+ *
+ * This is the layout-independent half of GUARD 2. A role assignment can be
+ * written with `properties:` on its own line, as an inline object, as a `[for
+ * …]` loop, or handed to a child module — and every one of those still starts
+ * with `resource` or `module`, because bicep has no other way to declare one.
+ * Comments are blanked first, so a commented-out declaration is not inventory.
+ */
+function declaredBodies(source) {
+  const out = [];
+  for (const line of blankComments(source).split(/\r?\n/)) {
+    const t = line.trimStart();
+    const r = /^resource\s+([A-Za-z_]\w*)\s+'([^'@]+)@[^']*'/.exec(t);
+    if (r) {
+      out.push(`resource ${r[1]} ${r[2]}`);
+      continue;
+    }
+    const m = /^module\s+([A-Za-z_]\w*)\s+'([^']+)'/.exec(t);
+    if (m) out.push(`module ${m[1]} ${m[2]}`);
+  }
+  return out.sort();
+}
+
+/**
+ * Principals that ACTUALLY receive a role assignment in a bicep source: every
+ * `principalId:` expression inside the brace-balanced body of every
  * `Microsoft.Authorization/roleAssignments` declaration.
+ *
+ * Indent-agnostic and inline-object-aware on purpose — the earlier
+ * `fieldAt(body, 'principalId', 4)` form required exactly four leading spaces,
+ * and a one-line `properties: { … }` slipped past it while compiling to the
+ * identical ARM. The capture stops at the first `,`, `}` or newline, so a
+ * multi-line compound expression yields a partial string; that is fail-CLOSED
+ * (it will not match an allowlist row and lands in the unjustified list).
  *
  * Comments are blanked first, so a commented-out assignment does not count as a
  * grant — the same discipline `parseBicep` applies to `scope:`.
@@ -409,8 +497,10 @@ function grantedPrincipalExprs(source) {
   const out = [];
   for (let i = 0; i < lines.length; i += 1) {
     if (!/^resource\s+\w+\s+'Microsoft\.Authorization\/roleAssignments@/.test(lines[i].trimStart())) continue;
-    const pid = fieldAt(blockAt(lines, i), 'principalId', 4);
-    if (pid) out.push(pid.value);
+    const body = blockAt(lines, i)
+      .map((b) => b.text)
+      .join('\n');
+    for (const m of body.matchAll(/\bprincipalId\s*:\s*([^\n,}]+)/g)) out.push(m[1].trim());
   }
   return out;
 }
@@ -422,42 +512,93 @@ function grantedPrincipals(source) {
     .sort();
 }
 
-/** `param …PrincipalId string` names declared by a source. */
-function principalParams(source) {
-  return [...parseBicep(source).params].filter((p) => /PrincipalId$/.test(p)).sort();
-}
-
-/** Declared principal params that no role assignment in the same file consumes. */
-function ungrantedPrincipalParams(source) {
-  const granted = grantedPrincipalExprs(source);
-  return principalParams(source).filter(
-    (p) => !granted.some((expr) => new RegExp(`\\b${p}\\b`).test(expr)),
-  );
+/** True when `name` appears inside any granted `principalId` expression. */
+function reachesAGrant(source, name) {
+  return grantedPrincipalExprs(source).some((expr) => new RegExp(`\\b${name}\\b`).test(expr));
 }
 
 /**
- * Params the file declares that NOTHING else in the file references — neither a
- * var, a resource, nor an output.
+ * Every param the cross-sub pass is allowed to declare, and what it is for.
  *
- * This is the SPELLING-INDEPENDENT half of GUARD 1. `ungrantedPrincipalParams`
- * only sees names ending `PrincipalId`, so on its own it would miss a threaded-
- * and-forgotten `consoleUamiObjectId`. A param nothing reads is dead weight
- * regardless of what it is called, and threading a principal in without wiring
- * it produces exactly that shape.
+ * `kind: 'principal'` — an identity this pass grants. It MUST reach the
+ * `principalId` of a real role assignment, and it must also be justified as
+ * self-minted in SELF_MINTED_PASS_PRINCIPALS.
+ * `kind: 'config'` — everything else. It must NOT reach a `principalId`; a
+ * config param that does is a mislabel hiding a grant.
+ *
+ * The register is the guard's primary key BECAUSE both known bypasses were
+ * name-shaped. #3338's half-fix is "declare a principal param and stop"; under
+ * a suffix check it needs only a rename, and under a "referenced by nothing"
+ * check it needs only one `!empty(...)` gate var. Neither survives an inventory:
+ * a new param is red until someone writes down what it is, and writing down
+ * "principal" then demands the assignment this pass refuses to make.
  */
-function unreferencedParams(source) {
-  const declared = [...parseBicep(source).params];
-  const lines = blankComments(source).split(/\r?\n/);
-  return declared
-    .filter((p) => {
-      const ref = new RegExp(`\\b${p}\\b`);
-      const decl = new RegExp(`^param\\s+${p}\\b`);
-      return !lines.some((l) => {
-        const t = l.trimStart();
-        if (t.startsWith('@') || decl.test(t)) return false; // its own declaration / decorator
-        return ref.test(t);
-      });
-    })
+const PASS_PARAM_REGISTER = {
+  storageAccountName: {
+    kind: 'config',
+    why: 'Names the ADLS lake this pass scopes its assignments to. Not an identity; it is dereferenced by the `lake` existing resource and used in the guid() salt.',
+  },
+  s3GatewayPrincipalId: {
+    kind: 'principal',
+    why: "The S3 gateway's DEDICATED uami-loom-s3gw-<location>, minted by this same deployment run. The only identity this pass grants; see SELF_MINTED_PASS_PRINCIPALS for why that is structurally safe.",
+  },
+  assignRoles: {
+    kind: 'config',
+    why: 'Fail-closed switch for estates that assign lake roles out-of-band (a PIM-managed process). A bool, not an identity.',
+  },
+};
+
+/**
+ * Every `resource` and `module` the cross-sub pass is allowed to declare.
+ *
+ * A grant cannot be added to this file without adding one of these, in any
+ * syntax, so this is the entry that closes the inline-`properties` and
+ * delegated-`module` forms together rather than one at a time.
+ */
+const PASS_BODY_REGISTER = {
+  'resource lake Microsoft.Storage/storageAccounts': 'The `existing` lake handle. Read-only, and gated on `anyGrant` so it is never dereferenced on a run that grants nothing.',
+  'resource s3GatewayLakeRead Microsoft.Authorization/roleAssignments': 'The ONE grant this pass makes: Storage Blob Data Reader for the S3 gateway UAMI, deterministic guid over (scope, principal, role).',
+};
+
+/** Params the pass declares that PASS_PARAM_REGISTER does not account for. */
+function unregisteredParams(source) {
+  return declaredParamNames(source).filter((p) => !Object.hasOwn(PASS_PARAM_REGISTER, p));
+}
+
+/** Registered params the pass no longer declares — the register must not rot. */
+function staleParamRegistrations(source) {
+  const declared = new Set(declaredParamNames(source));
+  return Object.keys(PASS_PARAM_REGISTER)
+    .filter((p) => !declared.has(p))
+    .sort();
+}
+
+/** `resource` / `module` declarations PASS_BODY_REGISTER does not account for. */
+function unregisteredBodies(source) {
+  return declaredBodies(source).filter((d) => !Object.hasOwn(PASS_BODY_REGISTER, d));
+}
+
+/** Registered declarations the pass no longer contains. */
+function staleBodyRegistrations(source) {
+  const declared = new Set(declaredBodies(source));
+  return Object.keys(PASS_BODY_REGISTER)
+    .filter((d) => !declared.has(d))
+    .sort();
+}
+
+/** Registered `principal` params that no role assignment in the file consumes. */
+function ungrantedPrincipalParams(source) {
+  return declaredParamNames(source)
+    .filter((p) => PASS_PARAM_REGISTER[p]?.kind === 'principal')
+    .filter((p) => !reachesAGrant(source, p))
+    .sort();
+}
+
+/** Registered `config` params that nevertheless reach a `principalId`. */
+function grantingConfigParams(source) {
+  return declaredParamNames(source)
+    .filter((p) => PASS_PARAM_REGISTER[p]?.kind === 'config')
+    .filter((p) => reachesAGrant(source, p))
     .sort();
 }
 
@@ -498,9 +639,9 @@ function unjustifiedGrantedPrincipals(source) {
 }
 
 /**
- * Activation vars in admin-plane that gate their DEPLOY on
- * `loomStorageWillBeGranted` — i.e. that assert "some pass owns my lake grant"
- * — mapped to the pass param that actually owns it.
+ * Activation vars and module conditions in admin-plane that gate their DEPLOY
+ * on `loomStorageWillBeGranted` — i.e. that assert "some pass owns my lake
+ * grant" — mapped to the pass param that actually owns it.
  *
  * `loomStorageWillBeGranted` is `loomStorageGrantable || loomStorageGrantedElsewhere`,
  * and `loomStorageGrantedElsewhere` is main.bicep:1604's `crossSubLakeGrantsActive`
@@ -515,13 +656,29 @@ const CROSS_SUB_GRANT_CONSUMERS = {
   s3GatewayActive: 's3GatewayPrincipalId',
 };
 
-/** Activation vars whose expression references `loomStorageWillBeGranted`. */
+/**
+ * Activation vars — AND module conditions — whose expression references
+ * `loomStorageWillBeGranted`.
+ *
+ * Module conditions are read ON PURPOSE. An earlier revision filtered
+ * `parseBicep(...).vars` only, so `module x '…' = if (foo && loomStorageWillBeGranted)`
+ * was outside its reach; it went red on that shape anyway, but for the wrong
+ * reason — a `blankComments` that blanked the `//` inside
+ * `'https://management.usgovcloudapi.net'` left `parseBicep`'s continuation
+ * joiner running to EOF, so `effectiveArmEndpoint` was a 121,678-character var
+ * that "referenced" the flag. Both halves are fixed: `blankComments` is
+ * string-literal aware, and the module form is measured deliberately.
+ */
 function willBeGrantedConsumers(adminSource) {
-  const { vars } = parseBicep(adminSource);
-  return [...vars.entries()]
-    .filter(([, expr]) => /\bloomStorageWillBeGranted\b/.test(expr))
-    .map(([name]) => name)
-    .sort();
+  const { vars, modules } = parseBicep(adminSource);
+  const names = new Set();
+  for (const [name, expr] of vars.entries()) {
+    if (/\bloomStorageWillBeGranted\b/.test(expr)) names.add(name);
+  }
+  for (const m of modules) {
+    if (m.condition && /\bloomStorageWillBeGranted\b/.test(m.condition)) names.add(m.symbol);
+  }
+  return [...names].sort();
 }
 
 /**
@@ -529,58 +686,100 @@ function willBeGrantedConsumers(adminSource) {
  * either unregistered, or registered against a param the pass does not grant.
  */
 function unownedWillBeGrantedConsumers(adminSource, passSource) {
-  const granted = grantedPrincipalExprs(passSource);
   return willBeGrantedConsumers(adminSource).filter((v) => {
     const owner = CROSS_SUB_GRANT_CONSUMERS[v];
-    return !owner || !granted.some((expr) => new RegExp(`\\b${owner}\\b`).test(expr));
+    return !owner || !reachesAGrant(passSource, owner);
   });
 }
 
-test('#3338 GUARD 1: every principal param the cross-sub pass declares actually carries a role assignment', () => {
+test('#3338 GUARD 1: every param the cross-sub pass declares is registered, and every principal param carries a role assignment', () => {
   const source = readBicep(GRANT_PASS_REL);
-  // Non-vacuity first: a checker that found no principals at all would satisfy
-  // the assertion below while measuring nothing.
-  assert.ok(principalParams(source).length > 0, 'the pass must declare at least one principal param');
+  // Non-vacuity first: a reader that found no params or no assignments at all
+  // would satisfy every assertion below while measuring nothing.
+  assert.ok(declaredParamNames(source).length > 0, 'the pass must declare at least one param');
   assert.ok(grantedPrincipalExprs(source).length > 0, 'the pass must contain at least one role assignment');
+  assert.ok(
+    Object.values(PASS_PARAM_REGISTER).some((e) => e.kind === 'principal'),
+    'the register must classify at least one param as a principal',
+  );
+
+  assert.deepEqual(
+    unregisteredParams(source),
+    [],
+    'dlz-lake-grant-pass.bicep declares a param PASS_PARAM_REGISTER does not account for. Threading a principal in and stopping is the #3338 defect; register it with a kind and a reason, and if it is a principal, grant it or do not add it.',
+  );
+  assert.deepEqual(
+    staleParamRegistrations(source),
+    [],
+    'PASS_PARAM_REGISTER lists a param the pass no longer declares — a register nobody prunes is how a ratchet becomes a mute button',
+  );
   assert.deepEqual(
     ungrantedPrincipalParams(source),
     [],
-    'a principal threaded into the cross-sub pass with no roleAssignments resource consuming it is bound-and-ungranted — the #3338 defect, re-created',
+    'a principal registered in the cross-sub pass reaches no roleAssignments principalId — bound-and-ungranted, the #3338 defect re-created',
   );
-  // Same defect, spelling-independent: a param nothing in the file reads was
-  // threaded in and forgotten, whatever it is called.
   assert.deepEqual(
-    unreferencedParams(source),
+    grantingConfigParams(source),
     [],
-    'a param is declared by the cross-sub pass and referenced by nothing in it — threaded in and never wired, the #3338 defect under a name the PrincipalId check cannot see',
+    'a param registered as `config` reaches a roleAssignments principalId — it is a principal wearing a config label, and it has bypassed the self-minted justification',
   );
 });
 
-test('#3338 GUARD 1 — MUTATION control: threading a principal without its assignment goes RED', () => {
+test('#3338 GUARD 1 — MUTATION control: a threaded, ungranted principal goes RED under any param name and any wiring', () => {
   const head = readBicep(GRANT_PASS_REL);
-  // BOTH spellings: the `PrincipalId` one the name check sees, and one it does
-  // not. The unreferenced-param half must catch the second on its own.
-  for (const [name, expectedUngranted] of [
-    ['consolePrincipalId', ['consolePrincipalId']],
-    ['consoleUamiObjectId', []],
-  ]) {
-    const mutated = head.replace(
+  // Every spelling the two previous revisions of this guard lost to:
+  //   consolePrincipalId  — the /PrincipalId$/ suffix the name check saw;
+  //   consoleUamiObjectId — a name it did not, referenced only by a grant-gate
+  //                         var and an output, so "unreferenced" missed it too.
+  //                         This is the reviewer's counterexample verbatim.
+  for (const name of ['consolePrincipalId', 'consoleUamiObjectId']) {
+    const bare = head.replace(
       "param s3GatewayPrincipalId string = ''",
       `param s3GatewayPrincipalId string = ''\n\nparam ${name} string = ''`,
     );
-    assert.notEqual(mutated, head, 'the mutation must actually apply');
-    assert.deepEqual(ungrantedPrincipalParams(mutated), expectedUngranted);
-    assert.deepEqual(unreferencedParams(mutated), [name]);
+    assert.notEqual(bare, head, 'the bare mutation must actually apply');
+    assert.deepEqual(unregisteredParams(bare), [name]);
+
+    // …and the same param made to look busy: a grant-gate var, a folded
+    // `anyGrant`, and a counted output. Nothing is unreferenced; still no grant.
+    const wired = bare
+      .replace(
+        'var anyGrant = grantS3Gateway',
+        `var grantConsole = assignRoles && !empty(${name})\nvar anyGrant = grantS3Gateway || grantConsole`,
+      )
+      .replace(
+        'output grantsApplied int = grantS3Gateway ? 1 : 0',
+        'output grantsApplied int = (grantS3Gateway ? 1 : 0) + (grantConsole ? 1 : 0)',
+      );
+    assert.notEqual(wired, bare, 'the wired mutation must actually apply');
+    assert.ok(/var grantConsole =/.test(wired), 'the grant-gate var must be present');
+    assert.ok(/\(grantConsole \? 1 : 0\)/.test(wired), 'the counted output must be present');
+    assert.deepEqual(unregisteredParams(wired), [name]);
+    // And it is still ungranted once registered as a principal — the register
+    // is not a way to wave it through.
+    assert.equal(reachesAGrant(wired, name), false);
   }
 });
 
-test('#3338 GUARD 2: the cross-sub pass grants ONLY identities the deployment itself mints', () => {
+test('#3338 GUARD 2: the cross-sub pass declares only registered resources/modules, and grants ONLY identities the deployment itself mints', () => {
   const source = readBicep(GRANT_PASS_REL);
-  // Non-vacuity: this guard reads role assignments, so zero of them would make
-  // the assertion below trivially true while measuring nothing.
+  // Non-vacuity: this guard reads declarations and role assignments, so zero of
+  // either would make the assertions below trivially true.
+  assert.ok(declaredBodies(source).length > 0, 'the pass must declare at least one resource or module');
   assert.ok(
     grantedPrincipals(source).length > 0,
     'the pass must contain at least one role assignment for this guard to measure',
+  );
+
+  assert.deepEqual(
+    unregisteredBodies(source),
+    [],
+    'dlz-lake-grant-pass.bicep declares a resource or module PASS_BODY_REGISTER does not account for. Every added grant starts with one of those two keywords — inline `properties`, a `[for]` loop, or a delegated child module alike — so this is where a new grant has to be justified.',
+  );
+  assert.deepEqual(
+    staleBodyRegistrations(source),
+    [],
+    'PASS_BODY_REGISTER lists a resource or module the pass no longer declares',
   );
   assert.deepEqual(
     unjustifiedGrantedPrincipals(source),
@@ -589,53 +788,102 @@ test('#3338 GUARD 2: the cross-sub pass grants ONLY identities the deployment it
   );
   // The allowlist must not rot in the other direction either: a row for a
   // principal the pass no longer declares is stale and must be removed.
-  const declared = new Set(parseBicep(source).params);
+  const declared = new Set(declaredParamNames(source));
   for (const p of SELF_MINTED_PASS_PRINCIPALS) {
     assert.ok(declared.has(p.param), `${p.param} is allowlisted but the pass no longer declares it`);
+    assert.ok(PASS_PARAM_REGISTER[p.param]?.kind === 'principal', `${p.param} must be registered as a principal`);
     assert.ok(p.mintedBy && p.mintedBy.length > 20, `${p.param} must name what mints it`);
     assert.ok(p.why && p.why.length > 40, `${p.param} needs a measured reason, not an assertion`);
   }
 });
 
+const SBDC_ROLE_ID = 'ba92f5b4-2d11-453d-a403-e96b0029c9fe';
+
 /**
- * Applies the FULL fix #3338 asks for to an in-memory copy of the real pass: the
- * Console UAMI param AND a real Storage Blob Data Contributor
- * (ba92f5b4-2d11-453d-a403-e96b0029c9fe) roleAssignments resource for it. The
- * param name is a parameter of the mutation because the name is exactly what a
- * spelling-keyed guard would be fooled by.
+ * Applies the FULL fix #3338 asks for to an in-memory copy of the real pass —
+ * the Console UAMI param AND a real Storage Blob Data Contributor grant for it
+ * — in each of the three syntaxes a previous revision of these guards missed.
+ *
+ * `blockForm`:
+ *   'block'  — `properties:` on its own line, four-space `principalId:`. The
+ *              only shape the `fieldAt(…, 4)` reader could see.
+ *   'inline' — the identical grant with `properties: { … }` on one line. Bicep
+ *              has no formatter wired in this repo (`grep -rn "bicep format"
+ *              .github/workflows/ dev-loop/ Makefile` finds nothing), so layout
+ *              is unconstrained and this is a legal, reviewable diff.
+ *   'module' — the grant delegated to a scoped child module, which is this
+ *              repo's OWN documented convention for lake RBAC
+ *              (s3-gateway-lake-rbac.bicep, transform-runner-lake-rbac.bicep,
+ *              serving-tier-lake-rbac.bicep all exist for that stated reason),
+ *              so it is the most likely form a real change would take.
  */
-function withConsoleUamiGrant(head, paramName) {
-  const roleId = 'ba92f5b4-2d11-453d-a403-e96b0029c9fe';
+function withConsoleUamiGrant(head, paramName, blockForm) {
   const withParam = head.replace(
     "param s3GatewayPrincipalId string = ''",
     `param s3GatewayPrincipalId string = ''\n\nparam ${paramName} string = ''`,
   );
   assert.notEqual(withParam, head, 'the param half of the mutation must actually apply');
+
+  if (blockForm === 'module') {
+    return (
+      `${withParam}\n` +
+      `module consoleLakeWrite 'transform-runner-lake-rbac.bicep' = if (!empty(${paramName})) {\n` +
+      `  name: 'console-lake-write'\n` +
+      `  params: {\n` +
+      `    storageAccountName: storageAccountName\n` +
+      `    principalId: ${paramName}\n` +
+      `  }\n` +
+      `}\n`
+    );
+  }
+
+  const properties =
+    blockForm === 'inline'
+      ? `  properties: { roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '${SBDC_ROLE_ID}'), principalId: ${paramName}, principalType: 'ServicePrincipal' }\n`
+      : `  properties: {\n` +
+        `    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '${SBDC_ROLE_ID}')\n` +
+        `    principalId: ${paramName}\n` +
+        `    principalType: 'ServicePrincipal'\n` +
+        `  }\n`;
+
   return (
     `${withParam}\n` +
     `resource consoleLakeWrite 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (!empty(${paramName})) {\n` +
-    `  name: guid(lake.id, ${paramName}, '${roleId}')\n` +
+    `  name: guid(lake.id, ${paramName}, '${SBDC_ROLE_ID}')\n` +
     `  scope: lake\n` +
-    `  properties: {\n` +
-    `    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '${roleId}')\n` +
-    `    principalId: ${paramName}\n` +
-    `    principalType: 'ServicePrincipal'\n` +
-    `  }\n` +
+    properties +
     `}\n`
   );
 }
 
-test('#3338 GUARD 2 — MUTATION control: the full Console-UAMI grant goes RED under EITHER param name', () => {
+test('#3338 GUARD 2 — MUTATION control: the full Console-UAMI grant goes RED under either param name AND all three syntaxes', () => {
   const head = readBicep(GRANT_PASS_REL);
   for (const paramName of ['consolePrincipalId', 'consoleUamiObjectId']) {
-    const mutated = withConsoleUamiGrant(head, paramName);
-    // The mutation is the COMPLETE #3338 change, so GUARD 1 is correctly silent:
-    // the param is granted and referenced. Only GUARD 2 owns this shape, and it
-    // must not care what the param is called.
-    assert.deepEqual(ungrantedPrincipalParams(mutated), []);
-    assert.deepEqual(unreferencedParams(mutated), []);
-    assert.deepEqual(grantedPrincipals(mutated), [paramName, 's3GatewayPrincipalId'].sort());
-    assert.deepEqual(unjustifiedGrantedPrincipals(mutated), [paramName]);
+    for (const blockForm of ['block', 'inline', 'module']) {
+      const mutated = withConsoleUamiGrant(head, paramName, blockForm);
+
+      // The param inventory catches every one of them on its own…
+      assert.deepEqual(unregisteredParams(mutated), [paramName], `${paramName}/${blockForm}: param inventory`);
+      // …and so does the body inventory, which is the half that does not care
+      // how the grant is written.
+      assert.deepEqual(
+        unregisteredBodies(mutated),
+        [
+          blockForm === 'module'
+            ? 'module consoleLakeWrite transform-runner-lake-rbac.bicep'
+            : 'resource consoleLakeWrite Microsoft.Authorization/roleAssignments',
+        ],
+        `${paramName}/${blockForm}: body inventory`,
+      );
+
+      // For the two `resource` forms the principalId reader must ALSO see it —
+      // that is the specific diagnostic, and it is what makes the message name
+      // the identity rather than just the declaration.
+      if (blockForm !== 'module') {
+        assert.deepEqual(grantedPrincipals(mutated), [paramName, 's3GatewayPrincipalId'].sort());
+        assert.deepEqual(unjustifiedGrantedPrincipals(mutated), [paramName]);
+      }
+    }
   }
 });
 
@@ -652,16 +900,68 @@ test('#3338 GUARD 3: only modules whose grant the pass OWNS may gate their deplo
   );
 });
 
-test('#3338 GUARD 3 — MUTATION control: borrowing the flag for the transform runner goes RED', () => {
-  // The literal one-liner #3338 proposed. It must not read green.
-  const head = readBicep(ADMIN_PLANE_REL);
-  const mutated = head.replace(
+test('#3338 GUARD 3 — MUTATION control: borrowing the flag for the transform runner goes RED, named correctly, in BOTH shapes', () => {
+  const head = readBicep(GRANT_PASS_REL);
+  const admin = readBicep(ADMIN_PLANE_REL);
+
+  // (a) the literal one-liner #3338 proposed — the activation var.
+  const viaVar = admin.replace(
     'var transformRunnerActive = dbtRunnerActive\n',
     'var transformRunnerActive = dbtRunnerActive && loomStorageWillBeGranted\n',
   );
-  assert.notEqual(mutated, head, 'the mutation must actually apply');
-  assert.deepEqual(
-    unownedWillBeGrantedConsumers(mutated, readBicep(GRANT_PASS_REL)),
-    ['transformRunnerActive'],
+  assert.notEqual(viaVar, admin, 'the var mutation must actually apply');
+  assert.deepEqual(unownedWillBeGrantedConsumers(viaVar, head), ['transformRunnerActive']);
+
+  // (b) the same intent expressed on the module condition instead. An earlier
+  // revision read `vars` only and went red on this shape by ACCIDENT, naming
+  // `effectiveArmEndpoint` — a string var that never mentions the flag. It must
+  // now go red on purpose, naming the module.
+  const viaModule = admin.replace(
+    "module transformRunner '../integration/transform-runner-aca.bicep' = if (transformRunnerActive) {",
+    "module transformRunner '../integration/transform-runner-aca.bicep' = if (transformRunnerActive && loomStorageWillBeGranted) {",
   );
+  assert.notEqual(viaModule, admin, 'the module mutation must actually apply');
+  assert.deepEqual(unownedWillBeGrantedConsumers(viaModule, head), ['transformRunner']);
+});
+
+test('#3338 GUARD 3 — the admin-plane parse is not a runaway: no var swallows the file', () => {
+  // The regression control for the `blankComments` string-literal fix. Before
+  // it, `effectiveArmEndpoint` parsed as 121,678 characters because the `//` in
+  // 'https://management.usgovcloudapi.net' was blanked, unbalancing a paren and
+  // letting the var-continuation joiner run to EOF. Every "which var mentions
+  // X" question in this file — GUARD 3 included — silently answered
+  // `effectiveArmEndpoint` for any X below that line.
+  const { vars } = parseBicep(readBicep(ADMIN_PLANE_REL));
+  const armEndpoint = vars.get('effectiveArmEndpoint');
+  assert.ok(armEndpoint, 'effectiveArmEndpoint must still parse');
+  assert.ok(
+    armEndpoint.length < 1000,
+    `effectiveArmEndpoint parsed as ${armEndpoint.length} chars — blankComments is eating a string literal again`,
+  );
+  const longest = Math.max(...[...vars.values()].map((v) => v.length));
+  assert.ok(longest < 2000, `a var parsed as ${longest} chars — the continuation joiner is running away`);
+  assert.equal(
+    /\bloomStorageWillBeGranted\b/.test(armEndpoint),
+    false,
+    'effectiveArmEndpoint must not appear to reference the grant flag',
+  );
+});
+
+test('blankComments preserves length and does not blank a `//` inside a string literal', () => {
+  const src = [
+    "var url = 'https://management.usgovcloudapi.net' // trailing comment",
+    "// whole-line comment",
+    "var esc = 'it\\'s // not a comment' // but this is",
+    "var multi = '''",
+    "https://example.invalid",
+    "'''",
+  ].join('\n');
+  const out = blankComments(src);
+  assert.equal(out.length, src.length, 'length must be preserved so line/column numbers stay true');
+  assert.match(out, /'https:\/\/management\.usgovcloudapi\.net'/);
+  assert.equal(out.includes('trailing comment'), false);
+  assert.equal(out.includes('whole-line comment'), false);
+  assert.equal(out.includes('but this is'), false);
+  assert.match(out, /'it\\'s \/\/ not a comment'/);
+  assert.match(out, /https:\/\/example\.invalid/);
 });

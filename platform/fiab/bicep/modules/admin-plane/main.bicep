@@ -6936,8 +6936,12 @@ module dbtRunner '../integration/dbt-runner.bicep' = if (dbtRunnerActive) {
 // That flag means "SOME pass owns my lake grant", and the only cross-sub pass
 // (modules/data-plane/dlz-lake-grant-pass.bicep) grants the S3 gateway's
 // dedicated identity and nothing else. Borrowing it here would gate this deploy
-// on an ownership claim that is false for this module. The invariant is now
-// enforced: scripts/ci/__tests__/module-existing-scope.test.mjs.
+// on an ownership claim that is false for this module. GUARD 3 in
+// scripts/ci/__tests__/module-existing-scope.test.mjs reads both shapes of that
+// edit — the activation var above and this module's own `if (...)` condition —
+// and goes red naming whichever one took it. It is source analysis, so it holds
+// for THIS file's vars and module conditions; it is not a claim about every way
+// a module could come to depend on the flag indirectly.
 // =====================================================================
 module transformRunner '../integration/transform-runner-aca.bicep' = if (transformRunnerActive) {
   name: 'transform-runner'
@@ -6974,20 +6978,27 @@ module transformRunner '../integration/transform-runner-aca.bicep' = if (transfo
 //    consumer is the tracked work — but it must not be cited as evidence that
 //    artifact persistence works.
 // 2. It is NOT proven safe on an estate that already holds the tuple.
-//    data-plane/transform-runner-lake-rbac.bicep:56-60 claims its deterministic
-//    guid "also collapses onto an equivalent grant already made for this pair
-//    elsewhere rather than erroring on a duplicate". This repo's own measured
-//    history says the opposite three times over: main.bicep:2288 (the
-//    app-resources leaf "failed RoleAssignmentExists on EVERY deploy in BOTH
-//    topologies; it only ever 'worked' because the grant was created
-//    imperatively"), main.bicep:3113, and :9095 below — a second assignment for
-//    the same principal+role+scope under a different guid() salt FAILS the
-//    deployment. guid() idempotency needs the NAME to match, and an out-of-band
-//    `az role assignment create` names its assignment randomly. Which of the two
-//    comments is right has not been re-measured against live ARM here, so this
-//    one asserts only what the repo has observed. Cross-sub estates do not hit
-//    it (loomStorageGrantable is false there); a same-sub estate carrying an
-//    out-of-band Console-UAMI grant on the lake would.
+//    data-plane/transform-runner-lake-rbac.bicep's note above its
+//    `lakeWriteRole` resource claims its deterministic guid "also collapses
+//    onto an equivalent grant already made for this pair elsewhere rather than
+//    erroring on a duplicate". This repo's own measured history says the
+//    opposite three times over. Cited by SYMBOL, not by line — the first
+//    revision of this very block cited ":9095 below" and its own diff pushed
+//    that note to :9145:
+//      * main.bicep's `adminAppResourcesRbac` gating note — the app-resources
+//        leaf "failed RoleAssignmentExists on EVERY deploy in BOTH topologies;
+//        it only ever 'worked' because the grant was created imperatively";
+//      * main.bicep's monitoring-reader-rbac `digestPrincipalId: ''` note;
+//      * this file's own note on the REMOVED `reportSubscriptionsPrincipalId`
+//        output, below.
+//    A second assignment for the same principal+role+scope under a different
+//    guid() salt FAILS the deployment. guid() idempotency needs the NAME to
+//    match, and an out-of-band `az role assignment create` names its assignment
+//    randomly. Which of the two comments is right has not been re-measured
+//    against live ARM here, so this one asserts only what the repo has
+//    observed; the contradiction is tracked in #4387. Cross-sub estates do not
+//    hit it (loomStorageGrantable is false there); a same-sub estate carrying
+//    an out-of-band Console-UAMI grant on the lake would.
 module transformRunnerLakeRbac '../data-plane/transform-runner-lake-rbac.bicep' = if (transformRunnerActive && !skipRoleGrants && loomStorageGrantable) {
   name: 'loom-transform-runner-lake-rbac'
   scope: resourceGroup(loomDlzRg)

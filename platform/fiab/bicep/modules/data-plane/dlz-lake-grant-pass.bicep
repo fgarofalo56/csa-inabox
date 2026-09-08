@@ -108,17 +108,39 @@
 // is no write to 403 on. #3338's real acceptance criterion is an
 // artifact-persistence path in that app, which does not exist yet.
 //
-// Two guards in scripts/ci/__tests__/module-existing-scope.test.mjs hold the
-// line. GUARD 1: every principal param declared in this file must actually carry
-// a role assignment, AND no param declared here may go unreferenced — so the
-// half-applied form of that fix (param threaded, assignment forgotten) cannot
-// merge reading green under any param name. GUARD 2: every principal that
-// ACTUALLY RECEIVES a role assignment here must be on a self-minted allowlist
-// with a measured reason. GUARD 2 is keyed to the `principalId` expression of
-// the roleAssignments declaration, NOT to the param's name — an earlier revision
-// keyed it to a /PrincipalId$/ name match, and the identical Console-UAMI grant
-// under a param called `consoleUamiObjectId` read green. Both spellings are now
-// mutation controls in that file.
+// Three guards in scripts/ci/__tests__/module-existing-scope.test.mjs hold the
+// line, and they are keyed to an INVENTORY of this file rather than to a
+// pattern. Two earlier revisions each lost to one edit — revision 1 keyed the
+// refusal to param NAMES (`/PrincipalId$/`), so the identical Console-UAMI grant
+// under `consoleUamiObjectId` read green; revision 2 keyed it to a
+// `principalId:` at exactly four spaces inside a top-level `resource`, so an
+// inline `properties: { … }` and a grant delegated to a child module both read
+// green while compiling to the same ARM. Enumerating one more syntax would only
+// move the next escape, so the key is now the three bicep KEYWORDS that must
+// begin a statement and that no layout can hide:
+//
+//   GUARD 1 — every `param` this file declares is in PASS_PARAM_REGISTER with a
+//     `kind` and a reason. A `principal` param must reach the `principalId` of a
+//     real role assignment; a `config` param must not. Adding ANY param under
+//     ANY name, referenced or not, is RED until a reviewer registers it — which
+//     is the half-applied form of #3338's fix (param threaded, assignment
+//     forgotten), including the form that is referenced by a `!empty(...)`
+//     grant-gate var and a counted output.
+//   GUARD 2 — every `resource` and `module` this file declares is in
+//     PASS_BODY_REGISTER, AND every principal that actually reaches a
+//     `principalId` is on a self-minted allowlist with a measured reason. The
+//     inventory half is what closes the inline-object, `[for]`-loop and
+//     delegated-module forms together instead of one at a time.
+//   GUARD 3 — only modules whose grant this pass OWNS may gate their deploy on
+//     `loomStorageWillBeGranted`.
+//
+// WHAT THAT DOES NOT CLAIM. It is source analysis over this one 167-line file,
+// not an assertion about the compiled ARM — only `az bicep build` over this pass
+// could make that one, and it is not run from node:test. The claim is narrower
+// and checkable: no new param, resource or module can enter this file without a
+// reviewer registering it, which is the property both halves of #3338's fix need
+// in order to merge. Each guard carries a mutation control that applies the
+// break to a copy of this real source and asserts the checker turns red.
 
 targetScope = 'resourceGroup'
 

@@ -206,9 +206,81 @@ export function staleRegistrations(findings, register = KNOWN_DORMANT) {
 
 // ── tiny bicep reader ───────────────────────────────────────────────────────
 
-/** Strip `//` line comments while PRESERVING length, so line numbers stay true. */
+/**
+ * Strip `//` line comments while PRESERVING length, so line numbers stay true.
+ *
+ * STRING-LITERAL AWARE, and that is not a nicety. A naive regex that blanks
+ * every `//` to end-of-line also blanks the `//` inside a quoted URL. On
+ * `modules/admin-plane/main.bicep` that truncated
+ *
+ *     var effectiveArmEndpoint = … ? 'https://management.usgovcloudapi.net' : …
+ *
+ * mid-literal, leaving one unbalanced `(`, so `parseBicep`'s var-continuation
+ * joiner ran on to EOF and `vars.get('effectiveArmEndpoint')` came back 121,678
+ * characters long — swallowing every declaration below it. Any guard that asks
+ * "which var mentions X" then answers `effectiveArmEndpoint` for any X appearing
+ * anywhere further down the file: an R7 message naming a var that never mentions
+ * the flag, pointing an investigation at the wrong line.
+ *
+ * Bicep string rules honoured here: single-quoted literals do not span a
+ * newline and escape with a backslash; `'''…'''` multi-line literals do span
+ * newlines and take no escapes. An unterminated quote is treated as an ordinary
+ * character so a malformed file degrades to the old behaviour instead of
+ * consuming the rest of the source.
+ */
 export function blankComments(src) {
-  return src.replace(/\/\/[^\n]*/g, (m) => ' '.repeat(m.length));
+  let out = '';
+  let i = 0;
+  while (i < src.length) {
+    const ch = src[i];
+
+    if (ch === "'" && src.startsWith("'''", i)) {
+      const end = src.indexOf("'''", i + 3);
+      const stop = end === -1 ? src.length : end + 3;
+      out += src.slice(i, stop);
+      i = stop;
+      continue;
+    }
+
+    if (ch === "'") {
+      let j = i + 1;
+      let closed = false;
+      while (j < src.length) {
+        const c = src[j];
+        if (c === '\n') break; // a single-quoted bicep literal cannot span lines
+        if (c === '\\') {
+          j += src[j + 1] === '\n' ? 1 : 2;
+          continue;
+        }
+        if (c === "'") {
+          closed = true;
+          j += 1;
+          break;
+        }
+        j += 1;
+      }
+      if (closed) {
+        out += src.slice(i, j);
+        i = j;
+        continue;
+      }
+      out += ch;
+      i += 1;
+      continue;
+    }
+
+    if (ch === '/' && src[i + 1] === '/') {
+      let j = i;
+      while (j < src.length && src[j] !== '\n') j += 1;
+      out += ' '.repeat(j - i);
+      i = j;
+      continue;
+    }
+
+    out += ch;
+    i += 1;
+  }
+  return out;
 }
 
 /** Net unclosed `{ [ (` in a line. */
