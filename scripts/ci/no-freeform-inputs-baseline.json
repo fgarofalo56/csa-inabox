@@ -47,7 +47,6 @@
     "apps/fiab-console/lib/editors/event-grid-topic-editor.tsx": 10,
     "apps/fiab-console/lib/editors/foundry-hub-editor.tsx": 2,
     "apps/fiab-console/lib/editors/foundry-playground.tsx": 1,
-    "apps/fiab-console/lib/editors/foundry-sub-editors.tsx": 3,
     "apps/fiab-console/lib/editors/graph-editors.tsx": 1,
     "apps/fiab-console/lib/editors/lakehouse-shortcut-editor.tsx": 7,
     "apps/fiab-console/lib/editors/lakehouse/dialogs/shortcut-wizard-dialog.tsx": 8,
