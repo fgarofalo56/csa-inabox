@@ -1970,6 +1970,13 @@ function newStepCtx() {
   const fixDir = join(dir, 'fixtures');
   const runnerTemp = join(dir, 'runner-temp');
   for (const d of [binDir, fixDir, runnerTemp]) mkdirSync(d, { recursive: true });
+  // The lease tag store starts EMPTY-BUT-PRESENT. `az tag list` must always have
+  // something to read: an absent file would make the stub fail, and a stub
+  // failure is indistinguishable in the step from ARM refusing the read — the
+  // harness would then be exercising the unknown path while claiming to test the
+  // free one.
+  writeFileSync(join(dir, 'az-tags.json'), JSON.stringify({ properties: { tags: {} } }));
+  writeFileSync(join(dir, 'az-tag-writes.log'), '');
   return { dir, binDir, fixDir, runnerTemp, dispose: () => rmSync(dir, { recursive: true, force: true }) };
 }
 
@@ -2031,12 +2038,17 @@ function runStep(namePrefix, { env = {}, fixtures = {}, azList = null, azRevisio
     // The lease's tag store, SHARED across steps in one ctx so an acquire and
     // the release that follows it read the same document — the hand-off that
     // makes "did the mutex actually hold" answerable at all.
+    //
+    // SEEDED BY newStepCtx(), WRITTEN HERE ONLY WHEN A TEST SUPPLIES A STATE.
+    // The first draft was `if (!existsSync(f)) writeFileSync(f, ...)`, which
+    // CodeQL correctly flagged as check-then-write (js/file-system-race): the
+    // condition and the write are two operations over one path. Owning the
+    // creation at the one place that creates the directory removes the window
+    // instead of narrowing it, and it reads better besides — a reused ctx keeps
+    // whatever the previous step left, which is the property these tests need.
     const tagFile = join(dir, 'az-tags.json');
     const tagWriteLog = join(dir, 'az-tag-writes.log');
-    if (leaseTags || !existsSync(tagFile)) {
-      writeFileSync(tagFile, JSON.stringify(leaseTags ?? { properties: { tags: {} } }));
-    }
-    if (!existsSync(tagWriteLog)) writeFileSync(tagWriteLog, '');
+    if (leaseTags) writeFileSync(tagFile, JSON.stringify(leaseTags));
 
     const script = join(dir, 'step.sh');
     writeFileSync(script, body, 'utf8');
