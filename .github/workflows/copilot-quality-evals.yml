@@ -463,21 +463,55 @@ jobs:
             exit 1
           fi
 
-      - name: Fetch the previous run artifact (delta baseline, best-effort)
+      # #4277 — this step used to be `set +e … exit 0`. Three different outcomes
+      # collapsed into one green step that emitted, at most, a ::notice:
+      #   (a) there IS no prior successful main run          — legitimately no delta
+      #   (b) `gh run list` itself FAILED (token/API/rate)   — we do not KNOW (a)
+      #   (c) a prior run exists but the artifact would not download — broken
+      # In (b) and (c) the gate silently degraded to FLOORS ONLY while reporting
+      # success, which is the "guard that measures half of itself" shape. Only
+      # (a) is a pass, and it now says so IN THE SUMMARY, via --delta-status.
+      - name: Fetch the previous run artifact (delta baseline)
+        id: baseline
         if: steps.func.outputs.found == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          set +e
+          set -uo pipefail
           RUN_ID=$(gh run list --workflow copilot-quality-evals.yml --branch main --status success --limit 1 --json databaseId -q '.[0].databaseId')
-          if [ -n "$RUN_ID" ]; then
-            gh run download "$RUN_ID" -n copilot-quality-eval-run -D prev/ \
-              && echo "delta baseline: run $RUN_ID" \
-              || echo "::notice::no previous artifact downloadable — delta check will be skipped"
-          else
-            echo "::notice::no previous successful run — delta check will be skipped"
+          RC=$?
+          if [ "$RC" -ne 0 ]; then
+            echo "::error::could not LIST previous runs of copilot-quality-evals.yml (gh exit $RC). This is an OBSERVATION failure, not a finding: it is NOT established that there is no baseline. Refusing to run a floor-only gate and report it as a pass."
+            exit 1
           fi
-          exit 0
+          if [ -z "$RUN_ID" ]; then
+            echo "delta_status=absent" >> "$GITHUB_OUTPUT"
+            echo "::notice::no prior successful run of this workflow on main — the delta half of the gate has nothing to compare against. Reported in the summary."
+            echo 'Delta: NOT evaluated — no prior successful main run' >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          if ! gh run download "$RUN_ID" -n copilot-quality-eval-run -D prev/; then
+            echo "::error::run $RUN_ID is the newest successful run on main, but its copilot-quality-eval-run artifact could not be downloaded. This does NOT establish which of the two causes applies — the artifact expired / was never uploaded (that run's Function probe found nothing), or the download itself failed. Either way the delta half of this gate cannot run, and it is not established that there is no baseline, so this run is not reported as a pass. NOTE: while the newest successful main run carries no baseline artifact this step fails every run, so no new run can become a success and displace it — the state does not clear on its own. Tracked, with the bounded-walk-back fix, at #4376."
+            exit 1
+          fi
+          # A SUCCESSFUL download is not a baseline. The upload step below lists
+          # two paths under the action's default `if-no-files-found: warn`, so an
+          # artifact can exist, download cleanly, and contain no `eval-run.json`
+          # at all. Writing delta_status=evaluated on the download's exit code
+          # alone asserted a comparison from the wrong evidence: the gate step
+          # tests `[ -f prev/eval-run.json ]` and would then omit --previous
+          # while still passing --delta-status evaluated. Assert on the FILE.
+          # The listing is `find`, not `ls -A`: SC2012, and it is a diagnostic
+          # string, so a name `ls` would mangle is exactly the case worth seeing.
+          # stderr is folded in deliberately — if the listing itself fails, the
+          # message shows that rather than an empty string standing in for
+          # "the directory is empty" (deploy-integrity R7).
+          if [ ! -f prev/eval-run.json ]; then
+            echo "::error::run $RUN_ID's copilot-quality-eval-run artifact downloaded successfully but contains no eval-run.json, so there is no baseline to compare against. This is the same unestablished state as a failed download — it is NOT established that there is no prior run — so it is not reported as a pass. Contents: $(find prev/ -mindepth 1 -maxdepth 1 -printf '%f ' 2>&1 | tr '\n' ' ')"
+            exit 1
+          fi
+          echo "delta_status=evaluated" >> "$GITHUB_OUTPUT"
+          echo "delta baseline: run $RUN_ID"
 
       - name: Corpus provenance — what was TESTED vs what the console SERVED (#3085)
         id: prov
@@ -605,6 +639,7 @@ jobs:
         if: steps.func.outputs.found == 'true'
         env:
           EVAL_REGRESSION_DELTA: '5'
+          DELTA_STATUS: ${{ steps.baseline.outputs.delta_status }}
           PROV_STATE: ${{ steps.prov.outputs.state }}
           PROV_SERVED: ${{ steps.prov.outputs.served }}
           PROV_CHECKOUT: ${{ steps.prov.outputs.checkout }}
@@ -612,6 +647,11 @@ jobs:
         run: |
           set -euo pipefail
           ARGS=(--artifact eval-run.json --summary eval-summary.md)
+          # #4277 — the baseline step is the only thing that KNOWS why there is
+          # no `prev/`, so it says so and the gate carries it into the summary.
+          # `[ -f … ]` alone cannot distinguish "no prior run" from "the fetch
+          # broke", and it used to be the whole story.
+          ARGS+=(--delta-status "${DELTA_STATUS:-unstated}")
           [ -f prev/eval-run.json ] && ARGS+=(--previous prev/eval-run.json)
 
           # ── #3857 — DO NOT FAIL A PR ON A MEASUREMENT THIS WORKFLOW DISCLAIMS ─
