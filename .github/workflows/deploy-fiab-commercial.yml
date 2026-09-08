@@ -1493,6 +1493,54 @@ jobs:
             --subscription "$TARGET_SUB" \
             --rg "rg-csa-loom-admin-${AZURE_LOCATION}"
 
+      # ── THE PROGRAM BUDGET'S IMMUTABLE START DATE (#4253) ─────────────────
+      # `timePeriod.startDate` on Microsoft.Consumption/budgets CANNOT be updated
+      # after creation. program-budget.bicep defaulted it to
+      # `utcNow('yyyy-MM-01')`, so on the 1st of each month the template began
+      # asking for a start the live budget could never accept, and every apply
+      # for the rest of that month died on that one leaf:
+      #   400 on 'loom-program-budget' → "Start date of budgets cannot be
+      #   updated. Please delete and create a new budget."
+      # This lane was green on 2026-08-29/30/31 and failed 8 for 8 from 09-01
+      # with no change to the module in between — the calendar was the only
+      # input that moved. Because the budget is a leaf of the subscription-scope
+      # deployment, it took every unrelated change in the same apply with it.
+      #
+      # The value is therefore DISCOVERED, never computed: the resolver echoes
+      # back the start the live budget already holds, computes the first of the
+      # current month ONLY when there is genuinely no budget (the only start
+      # Azure accepts on a create), and REFUSES the run when the read did not
+      # complete — "I could not look" must never render as "it is not there"
+      # (deploy-integrity.md R7). Same shape as the DNS-resolver preflight above
+      # (#3754), which fixed the identical immutable-field class.
+      #
+      # RUNS BEFORE THE WHAT-IF ON PURPOSE, per this lane's stated principle
+      # that the preview an operator approves and the apply that follows must
+      # describe the same deployment. commercial.bicepparam reads the exported
+      # LOOM_PROGRAM_BUDGET_START_DATE, so one resolved value feeds both.
+      #
+      # dlz-attach stamps a landing zone into a DIFFERENT subscription and
+      # deploys no admin plane; it is skipped here, and dlz-attach.bicepparam
+      # sets no start date, so main.bicep simply does not declare the budget.
+      # An incremental deploy leaves any budget already in that subscription
+      # untouched rather than re-writing a customer's.
+      - name: Resolve the program budget's IMMUTABLE start date (#4253)
+        env:
+          TARGET_SUB: ${{ steps.topology_guard.outputs.target_sub }}
+          RESOLVED_TOPOLOGY: ${{ steps.topology_guard.outputs.topology }}
+        run: |
+          set -euo pipefail
+          if [ "${RESOLVED_TOPOLOGY:-}" = "dlz-attach" ]; then
+            echo "::notice::topology=dlz-attach deploys no admin plane and targets another subscription; the program budget is not managed there."
+            exit 0
+          fi
+          if [ -z "${TARGET_SUB:-}" ]; then
+            echo "::error::No target subscription, so the live program budget cannot be read. It comes from the topology guard's target_sub output, which the guard refuses to leave empty."
+            exit 1
+          fi
+          node scripts/ci/resolve-program-budget-start-date.mjs \
+            --subscription "$TARGET_SUB"
+
       - name: Bicep what-if (preview)
         id: whatif
         env:
