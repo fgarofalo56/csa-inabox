@@ -155,11 +155,44 @@ export function deniedBy(stderr) {
 }
 
 /**
+ * The escape hatches that apply to EVERY refusal, whatever its cause. Kept
+ * separate from the cause-specific remediation so the two are never conflated.
+ */
+export const OVERRIDE_HINT =
+  'To override deliberately, set observabilityConfig.programBudgetStartDate to the live budget\'s start ' +
+  '(`az consumption budget show --budget-name <name> --query timePeriod.startDate -o tsv`); to stop ' +
+  'managing the budget entirely, set observabilityConfig.programBudgetEnabled=false.';
+
+/**
+ * PURE. Compose the operator-facing refusal.
+ *
+ * EXISTS BECAUSE THE PRINTED STRING IS ALSO AN ASSERTION. An earlier revision
+ * appended "confirm the deploy service principal can read budgets … (Cost
+ * Management Reader or broader)" UNCONDITIONALLY, so a 429 throttle printed a
+ * role name — naming a permission cause the code had not established. That is
+ * exactly the R7 defect the classifier above is careful to avoid, leaking back
+ * in one layer out, where no test was looking. The remediation now travels ON
+ * the verdict, so only the branch that established a cause can state one.
+ *
+ * @param {{reason: string, remediation?: string}} verdict
+ * @returns {string}
+ */
+export function composeRefusal(verdict) {
+  const cause = verdict?.reason ?? 'no reason was recorded.';
+  const remediation = verdict?.remediation ?? OVERRIDE_HINT;
+  return (
+    `::error::Could not establish the program budget's start date — ${cause} ` +
+    'timePeriod.startDate on Microsoft.Consumption/budgets is IMMUTABLE, so deploying on a guess fails ' +
+    `the WHOLE subscription deployment on a single leaf (#4253). REMEDIATION: ${remediation}`
+  );
+}
+
+/**
  * PURE. Decide what an `az consumption budget list` attempt established.
  *
  * @param {{ok: boolean, stdout: string, stderr: string}} attempt
  * @param {{budgetName: string, now: Date}} ctx
- * @returns {{decision: 'discovered'|'greenfield'|'refuse', value: string|null, reason: string}}
+ * @returns {{decision: 'discovered'|'greenfield'|'refuse', value: string|null, reason: string, remediation?: string}}
  */
 export function classifyBudgetStartDateRead(attempt, ctx) {
   const budgetName = ctx?.budgetName ?? BUDGET_NAME;
@@ -179,6 +212,9 @@ export function classifyBudgetStartDateRead(attempt, ctx) {
         reason:
           `az failed with ${hit}. That is a definite absence of the SCOPE, not of the budget — there is ` +
           'no subscription here to hold one, so nothing can be established about the budget itself.',
+        remediation:
+          'check the --subscription this lane passed: the scope itself could not be found, so the apply ' +
+          `that follows would fail too. ${OVERRIDE_HINT}`,
       };
     }
     // NAME THE PERMISSION CASE SPECIFICALLY. It is the single most likely
@@ -195,8 +231,10 @@ export function classifyBudgetStartDateRead(attempt, ctx) {
         reason:
           'the read was DENIED — the deploy identity is not permitted to read Microsoft.Consumption/budgets ' +
           'on this subscription. This is NOT "the budget does not exist": a denial establishes nothing ' +
-          'about whether one is there. GRANT one of Cost Management Reader, Cost Management Contributor, ' +
-          'Reader or Contributor at SUBSCRIPTION scope to the deploy service principal and re-run.',
+          'about whether one is there.',
+        remediation:
+          'GRANT the deploy service principal one of Cost Management Reader, Cost Management Contributor, ' +
+          `Reader or Contributor at SUBSCRIPTION scope, then re-run. ${OVERRIDE_HINT}`,
       };
     }
     return {
@@ -205,6 +243,11 @@ export function classifyBudgetStartDateRead(attempt, ctx) {
       reason:
         'the read did NOT complete, so whether a budget exists — and what start date it holds — is ' +
         'UNKNOWN, not absent. Refusing rather than proposing a change to an immutable property on a guess.',
+      // NO ROLE NAME HERE. Nothing established a permission cause; a throttle, a
+      // DNS failure and an az crash all land on this branch.
+      remediation:
+        'read the raw az stderr printed below — it carries what actually failed — and re-run once the ' +
+        `read completes. ${OVERRIDE_HINT}`,
     };
   }
 
@@ -216,6 +259,7 @@ export function classifyBudgetStartDateRead(attempt, ctx) {
       decision: 'refuse',
       value: null,
       reason: 'az exited 0 but its output was not JSON, so nothing about the live budget was established.',
+      remediation: `re-run with the raw output captured; az may have emitted a warning banner. ${OVERRIDE_HINT}`,
     };
   }
 
@@ -226,6 +270,9 @@ export function classifyBudgetStartDateRead(attempt, ctx) {
       reason:
         'az exited 0 but did not return a LIST of budgets, so "the budget is not in the results" cannot be ' +
         'read as absence. The shape of the response is not what this resolver knows how to interpret.',
+      remediation:
+        'the az CLI may have changed the shape of `consumption budget list`; check it and update ' +
+        `classifyBudgetStartDateRead. ${OVERRIDE_HINT}`,
     };
   }
 
@@ -252,6 +299,9 @@ export function classifyBudgetStartDateRead(attempt, ctx) {
         `budget '${budgetName}' EXISTS but its timePeriod.startDate could not be read as a first-of-month ` +
         `date (got ${JSON.stringify(raw)}). Sending anything else would propose a change to an IMMUTABLE ` +
         'property on a resource whose current value was never established.',
+      remediation:
+        `read what the live budget actually holds — \`az consumption budget show --budget-name ${budgetName} ` +
+        `--query timePeriod.startDate -o tsv\` — and pass it through. ${OVERRIDE_HINT}`,
     };
   }
 
@@ -316,16 +366,7 @@ function main() {
   const verdict = classifyBudgetStartDateRead(attempt, { budgetName, now: new Date() });
 
   if (verdict.decision === 'refuse') {
-    console.log(
-      `::error::Could not establish the program budget's start date — ${verdict.reason} ` +
-        'timePeriod.startDate on Microsoft.Consumption/budgets is IMMUTABLE, so deploying on a guess fails ' +
-        'the WHOLE subscription deployment on a single leaf (#4253). ' +
-        `REMEDIATION: confirm the deploy service principal can read budgets on subscription ` +
-        `${args.subscription} (Cost Management Reader or broader), then re-run. To override deliberately, ` +
-        `set observabilityConfig.programBudgetStartDate to the value of ` +
-        `\`az consumption budget show --budget-name ${budgetName} --query timePeriod.startDate -o tsv\`; ` +
-        'to stop managing the budget entirely, set observabilityConfig.programBudgetEnabled=false.',
-    );
+    console.log(composeRefusal(verdict));
     if (attempt.stderr) {
       console.log('--- raw az stderr (first 20 lines) ---');
       console.log(attempt.stderr.split('\n').slice(0, 20).join('\n'));

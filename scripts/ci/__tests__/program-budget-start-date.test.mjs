@@ -48,6 +48,7 @@ import {
   normalizeStartDate,
   firstOfMonthUtc,
   deniedBy,
+  composeRefusal,
   BUDGET_NAME,
   OUTPUT_VAR,
 } from '../resolve-program-budget-start-date.mjs';
@@ -97,10 +98,12 @@ test('A FAILED READ IS NOT AN ABSENT BUDGET — an RBAC denial refuses', () => {
   // …and it must say WHICH refusal this is. Nobody has confirmed the deploy SP
   // can read budgets in ANY boundary, so this is the most likely refusal on the
   // first real run, and its remediation (grant a role) shares nothing with the
-  // generic "the read did not complete" case.
+  // generic "the read did not complete" case. The CAUSE lives on `reason`; the
+  // ROLE lives on `remediation`, so a branch that established no permission
+  // cause cannot print one.
   assert.match(v.reason, /DENIED/);
-  assert.match(v.reason, /Cost Management Reader/);
   assert.match(v.reason, /NOT "the budget does not exist"/);
+  assert.match(v.remediation, /Cost Management Reader/);
 });
 
 test('deniedBy separates a denial from an ordinary failure', () => {
@@ -122,6 +125,62 @@ test('a throttle refuses WITHOUT claiming a permission problem', () => {
   assert.equal(v.decision, 'refuse');
   assert.doesNotMatch(v.reason, /DENIED|Cost Management Reader/);
   assert.match(v.reason, /UNKNOWN, not absent/);
+});
+
+// ── 1b. THE PRINTED STRING IS ALSO AN ASSERTION ─────────────────────────────
+//
+// The verdict `reason` was covered; the string the operator actually SEES was
+// not. main() used to append "confirm the deploy service principal can read
+// budgets … (Cost Management Reader or broader)" unconditionally, so a 429
+// printed a role name — asserting a permission cause nothing had established.
+// That is the same R7 defect the classifier is careful to avoid, one layer out,
+// in the layer no test was reading.
+
+test('COMPOSED OUTPUT: a throttle never prints a role name', () => {
+  const v = classifyBudgetStartDateRead(
+    { ok: false, stdout: '', stderr: 'ERROR: (429) Too many requests. Please retry after 600 seconds.' },
+    CTX,
+  );
+  const printed = composeRefusal(v);
+  assert.match(printed, /^::error::/);
+  assert.doesNotMatch(printed, /Cost Management Reader/);
+  assert.doesNotMatch(printed, /GRANT/);
+  assert.match(printed, /read the raw az stderr/);
+  // The escape hatches apply to every refusal and must still be offered.
+  assert.match(printed, /programBudgetEnabled=false/);
+});
+
+test('COMPOSED OUTPUT: a denial DOES print the role to grant', () => {
+  const v = classifyBudgetStartDateRead(
+    { ok: false, stdout: '', stderr: 'ERROR: (AuthorizationFailed) ...' },
+    CTX,
+  );
+  const printed = composeRefusal(v);
+  assert.match(printed, /GRANT/);
+  assert.match(printed, /Cost Management Reader/);
+  assert.match(printed, /SUBSCRIPTION scope/);
+});
+
+test('COMPOSED OUTPUT: every refusal branch carries its own remediation', () => {
+  // A branch that forgets one silently falls back to the generic hint, which
+  // would be honest but would lose the specific cause — so it is pinned.
+  const branches = [
+    { ok: false, stdout: '', stderr: 'ERROR: (SubscriptionNotFound) ...' },
+    { ok: false, stdout: '', stderr: 'ERROR: (AuthorizationFailed) ...' },
+    { ok: false, stdout: '', stderr: 'ERROR: (429) throttled' },
+    { ok: true, stdout: 'not json', stderr: '' },
+    { ok: true, stdout: '{"value":[]}', stderr: '' },
+    { ok: true, stdout: JSON.stringify([{ name: BUDGET_NAME, timePeriod: {} }]), stderr: '' },
+  ];
+  for (const attempt of branches) {
+    const v = classifyBudgetStartDateRead(attempt, CTX);
+    assert.equal(v.decision, 'refuse');
+    assert.ok(
+      typeof v.remediation === 'string' && v.remediation.length > 30,
+      `refusal branch has no remediation: ${v.reason}`,
+    );
+    assert.match(composeRefusal(v), /REMEDIATION: /);
+  }
 });
 
 test('a definite absence of the SUBSCRIPTION refuses — it is not a greenfield budget', () => {
@@ -242,18 +301,23 @@ const ROTATORS = ['utcNow', 'newGuid'];
 /**
  * ARM fields this repo KNOWS to be immutable, and the bicep that assigns them.
  * This is the direct encoding of the property: a rotator must never reach one
- * of these. Both entries are fields that have ALREADY broken a deploy lane —
- * the budget start (#4253) and the DNS resolver's addressing (#3754) — so the
- * registry is a record of measured immutability, not a guess about ARM.
+ * of these. Every entry is a field that has ALREADY broken a deploy lane, or
+ * carried the identical armed defect — so the registry records measured
+ * immutability, not a guess about ARM.
  */
 const IMMUTABLE_FIELDS = [
   {
-    file: 'modules/admin-plane/program-budget.bicep',
+    file: 'platform/fiab/bicep/modules/admin-plane/program-budget.bicep',
     field: 'startDate',
     why: 'Microsoft.Consumption/budgets — "Start date of budgets cannot be updated. Please delete and create a new budget." (#4253)',
   },
   {
-    file: 'modules/admin-plane/network.bicep',
+    file: 'monitoring/alerts/budget-alerts.bicep',
+    field: 'startDate',
+    why: 'The SAME Consumption-budget field, found by widening this sweep past platform/fiab/bicep. It carried the identical `utcNow(\'yyyy-MM-01\')` default; no workflow deploys this file, so it was armed rather than firing (#4253).',
+  },
+  {
+    file: 'platform/fiab/bicep/modules/admin-plane/network.bicep',
     field: 'privateIpAllocationMethod',
     why: 'Microsoft.Network/dnsResolvers/inboundEndpoints — ARM rejects a deployment naming a method differing from the live one (#3754)',
   },
@@ -266,41 +330,50 @@ const IMMUTABLE_FIELDS = [
  * here.
  *
  * PROSE IS NOT CODE. Several @description strings discuss newGuid()/utcNow() at
- * length, and the header of this file and of cost-export.bicep discuss the
- * defect itself. Those are stripped before matching (see stripProse), so the
- * population below is REAL CODE ONLY — five uses across the whole tree.
+ * length, and this file's header and cost-export.bicep's discuss the defect
+ * itself. Those are stripped before matching (see stripProse), so the population
+ * below is REAL CODE ONLY — seven uses across all 357 .bicep files in the repo.
  */
 const ROTATOR_ALLOWLIST = [
   {
-    file: 'modules/admin-plane/entra-app-registration.bicep',
+    file: 'platform/fiab/bicep/modules/admin-plane/entra-app-registration.bicep',
     match: 'param forceUpdateTag string = utcNow()',
     why: 'forceUpdateTag on a deploymentScript is DESIGNED to change every run — that is how the script is made to re-execute. It is not persisted as a resource property, so it reaches no immutable field.',
   },
   {
-    file: 'modules/admin-plane/front-door.bicep',
+    file: 'platform/fiab/bicep/modules/admin-plane/front-door.bicep',
     match: 'param forceUpdateTag string = utcNow()',
     why: 'Same deploymentScript re-execution tag as above.',
   },
   {
-    file: 'modules/admin-plane/main.bicep',
+    file: 'deploy/bicep/DMLZ/modules/Network/privateDnsZones/privateDnsZones.bicep',
+    match: 'param utcValue string = utcNow()',
+    why: 'Two uses, both safe: a deploymentScript forceUpdateTag (:102), and a nested DEPLOYMENT name (:126). A deployment name is per-run by design and is not a resource property at all, so neither reaches an immutable field.',
+  },
+  {
+    file: 'platform/fiab/bicep/modules/admin-plane/main.bicep',
     match: 'param loomGeneratedSecretSeed string = newGuid()',
     why: 'A deliberately UNPREDICTABLE secret seed. Rotating is the security property, not a defect (a stable guid(rg.id, <public-const>) would be offline-derivable). It reaches Key Vault secret VALUES, which are mutable by design.',
   },
   {
-    file: 'modules/admin-plane/pbi-vm-data-gateway.bicep',
+    file: 'platform/fiab/bicep/modules/admin-plane/pbi-vm-data-gateway.bicep',
     match: 'param adminPassword string = newGuid()',
     why: 'VM admin password — a mutable secret value, unpredictable on purpose.',
   },
   {
-    file: 'modules/admin-plane/pbi-vm-data-gateway.bicep',
+    file: 'platform/fiab/bicep/modules/admin-plane/pbi-vm-data-gateway.bicep',
     match: 'param recoveryKey string = newGuid()',
     why: 'Gateway recovery key — a mutable secret value, unpredictable on purpose.',
   },
 ];
 
+/** Directories with no deployable bicep of ours. */
+const SKIP_DIRS = new Set(['node_modules', '.git', 'temp', 'dist', 'build', '.next', 'out']);
+
 function bicepFiles(dir) {
   const out = [];
   for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+    if (SKIP_DIRS.has(entry.name)) continue;
     const full = path.join(dir, entry.name);
     if (entry.isDirectory()) out.push(...bicepFiles(full));
     else if (entry.name.endsWith('.bicep')) out.push(full);
@@ -323,10 +396,21 @@ function bicepFiles(dir) {
  * is where a string literal can still CALL something.
  */
 function stripProse(line) {
-  return line.replace(/\/\/.*$/, '').replace(/'[^']*'/g, (span) => {
-    const interpolations = span.match(/\$\{[^}]*\}/g);
-    return interpolations ? interpolations.join(' ') : "''";
-  });
+  // STRIP THE CARRIAGE RETURN FIRST. In JavaScript regex `.` does not match
+  // `\r`, so on a CRLF line `/\/\/.*$/` cannot reach the end-anchor and fails
+  // to match AT ALL — comment-stripping silently no-ops. platform/fiab/bicep is
+  // LF so this was invisible there; monitoring/alerts/budget-alerts.bicep is
+  // CRLF, and the moment the sweep was widened to reach it, this file's own
+  // explanatory comments were reported as live rotators. Noise rather than
+  // blindness (failing to strip only ADDS matches), but a guard that cries wolf
+  // gets its allowlist padded until it constrains nothing.
+  return line
+    .replace(/\r$/, '')
+    .replace(/\/\/.*$/, '')
+    .replace(/'[^']*'/g, (span) => {
+      const interpolations = span.match(/\$\{[^}]*\}/g);
+      return interpolations ? interpolations.join(' ') : "''";
+    });
 }
 
 test('THE PROPERTY: no rotator reaches a field ARM treats as IMMUTABLE', () => {
@@ -334,7 +418,7 @@ test('THE PROPERTY: no rotator reaches a field ARM treats as IMMUTABLE', () => {
   // field, find what bicep assigns to it, and if that is a parameter, check the
   // parameter cannot default to a deploy-time value.
   for (const entry of IMMUTABLE_FIELDS) {
-    const src = fs.readFileSync(path.join(BICEP_ROOT, entry.file), 'utf8');
+    const src = fs.readFileSync(path.join(REPO_ROOT, entry.file), 'utf8');
     const assign = new RegExp(`^\\s*${entry.field}:\\s*(.+)$`, 'm').exec(src);
     assert.ok(assign, `${entry.file} no longer assigns ${entry.field} — update IMMUTABLE_FIELDS`);
     const expr = assign[1].trim();
@@ -368,9 +452,16 @@ test('no bicep rotator (utcNow/newGuid) outside the reasoned allowlist', () => {
   // The broader net behind the registry above: the next immutable field to bite
   // will not be in IMMUTABLE_FIELDS yet, so every NEW rotator has to be looked
   // at and justified when it is introduced.
+  //
+  // SWEPT FROM THE REPO ROOT, not from platform/fiab/bicep. Rooting it at the
+  // Loom tree was a real blind spot, not a theoretical one: it hid an IDENTICAL
+  // armed `utcNow('yyyy-MM-01')` on a Consumption budget's startDate in
+  // monitoring/alerts/budget-alerts.bicep, in a guard whose whole subject is
+  // that defect. A guard that cannot see a live instance of the exact bug it
+  // was written for is the shape this repo keeps producing.
   const offenders = [];
-  for (const file of bicepFiles(BICEP_ROOT)) {
-    const rel = path.relative(BICEP_ROOT, file).split(path.sep).join('/');
+  for (const file of bicepFiles(REPO_ROOT)) {
+    const rel = path.relative(REPO_ROOT, file).split(path.sep).join('/');
     fs.readFileSync(file, 'utf8')
       .split('\n')
       .forEach((line, i) => {
@@ -394,11 +485,23 @@ test('no bicep rotator (utcNow/newGuid) outside the reasoned allowlist', () => {
   );
 });
 
+test('CONTROL: the sweep actually covers the whole repo, not one subtree', () => {
+  // The docstring used to claim "the whole bicep tree" while BICEP_ROOT was
+  // platform/fiab/bicep. Asserting the real population size stops that drifting
+  // back silently — and stops the sweep quietly finding nothing.
+  const files = bicepFiles(REPO_ROOT);
+  assert.ok(files.length > 300, `expected the repo-wide bicep population, found ${files.length}`);
+  const rels = files.map((f) => path.relative(REPO_ROOT, f).split(path.sep).join('/'));
+  for (const outside of ['monitoring/alerts/budget-alerts.bicep', 'csa_platform/governance/finops/budgetAlerts.bicep']) {
+    assert.ok(rels.includes(outside), `the sweep must reach ${outside}, which is outside platform/fiab/bicep`);
+  }
+});
+
 test('CONTROL: the allowlist has no dead entries', () => {
   // An allowlist that outlives its target silently stops constraining anything,
   // and the next reader trusts it. Every entry must still match real source.
   for (const a of ROTATOR_ALLOWLIST) {
-    const full = path.join(BICEP_ROOT, a.file);
+    const full = path.join(REPO_ROOT, a.file);
     assert.ok(fs.existsSync(full), `allowlist names a file that no longer exists: ${a.file}`);
     assert.ok(
       fs.readFileSync(full, 'utf8').includes(a.match),
@@ -406,6 +509,21 @@ test('CONTROL: the allowlist has no dead entries', () => {
     );
     assert.ok(a.why && a.why.length > 30, `allowlist entry for ${a.file} needs a real reason`);
   }
+});
+
+test('KNOWN GAP, stated rather than implied: a PINNED literal is invisible to this sweep', () => {
+  // csa_platform/governance/finops/budgetAlerts.bicep pins
+  // `param startDate string = '2026-04-01'` into the same immutable field. That
+  // is the OTHER half of the #4253 failure — it does not rotate, so no rotator
+  // sweep can see it, but Azure accepts only the current month's first on a
+  // CREATE, so it goes stale and breaks a fresh deploy instead of an existing
+  // one. Nothing deploys that file today. Recording it here keeps the guard's
+  // claimed coverage honest: this sweep catches ROTATORS, not stale constants.
+  const src = fs.readFileSync(
+    path.join(REPO_ROOT, 'csa_platform/governance/finops/budgetAlerts.bicep'),
+    'utf8',
+  );
+  assert.match(src, /param startDate string = '\d{4}-\d{2}-\d{2}'/);
 });
 
 test('CONTROL: stripProse removes prose without blinding the sweep to code', () => {
@@ -424,6 +542,14 @@ test('CONTROL: stripProse removes prose without blinding the sweep to code', () 
   assert.equal(stripProse("when: '@utcNow()'").includes('utcNow('), false);
   assert.equal(stripProse("param zzMutation string = '${newGuid()}'").includes('newGuid('), true);
   assert.equal(stripProse("var x = 'prefix-${utcNow()}'").includes('utcNow('), true);
+
+  // CRLF. `.` does not match `\r` in JS, so without the explicit CR strip the
+  // comment regex fails to match at all and the whole line survives. This is
+  // not hypothetical: it made the widened sweep report budget-alerts.bicep's own
+  // documentation as live rotators.
+  assert.equal(stripProse('// param x = utcNow()\r').includes('utcNow('), false);
+  assert.equal(stripProse("// `utcNow('yyyy-MM-01')` broke the lane\r").includes('utcNow('), false);
+  assert.equal(stripProse('param forceUpdateTag string = utcNow()\r').includes('utcNow('), true);
 });
 
 // ── 4. CONTROLS — the wiring the classifier depends on ──────────────────────
