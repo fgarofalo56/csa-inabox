@@ -17,6 +17,16 @@
  * nothing here fails — that direction is a usability regression, not a security
  * one, and is deliberately not ratcheted.
  *
+ * WHAT A DERIVED POPULATION CANNOT SEE, stated because it was measured and not
+ * anticipated (#4357 review finding 2). Everything above pins SCOPE over a
+ * population this file derives by scanning, and every count is a LOWER BOUND.
+ * Deleting the authorize call from a route does not trip a lower bound — it
+ * SHRINKS the population the bound is taken over, so the suite goes green over a
+ * route with no authorization left. The `MIGRATED` declaration below is the
+ * complementary instrument: a hardcoded membership list, which cannot see a NEW
+ * migrated route but is exactly the right shape for a REMOVED one. Both are
+ * kept; neither replaces the other.
+ *
  * It also pins the two invariants the migration established:
  *   - `assertOwner` no longer exists anywhere (the symbol was deleted, so tsc is
  *     the primary ratchet; this catches a re-inlined local copy by name).
@@ -371,6 +381,165 @@ function callsIn(abs: string): Call[] {
 
 const ALL_ROUTES = routeFiles(API_ROOT);
 const ALL_CALLS = ALL_ROUTES.flatMap(callsIn);
+
+/**
+ * #3941's TEN MIGRATED ROUTES, DECLARED BY NAME — the instrument for a REMOVAL.
+ *
+ * WHY THIS BLOCK EXISTS (#4357 review finding 2). Every other assertion in this
+ * file is a LOWER BOUND over a population the scan DERIVES: `ALL_ROUTES.length >
+ * 500`, `ALL_CALLS.length > 60`, `families.size > 10`, read-scoped GETs `> 25`,
+ * grants `> 25`. That shape cannot see a deletion, because a deletion shrinks
+ * the population being counted.
+ *
+ * MEASURED, not argued. Removing the `authorizeItemWorkspace` call and its
+ * `if (denied)` line from `sensitivity-label/route.ts`'s `loadItem` makes that
+ * route stop being a recognized module-local guard helper, so its FOUR call
+ * sites vanish from `ALL_CALLS` entirely. `vitest run` on this file with that
+ * mutation applied: **1 failed / 18 passed** — and the one failure is the
+ * assertion below. Every pre-existing assertion in this file stayed green over
+ * a route whose authorization had been deleted.
+ *
+ * A HARDCODED POPULATION IS THE WRONG INSTRUMENT FOR GROWTH AND THE RIGHT ONE
+ * FOR SHRINKAGE, and both halves are true here. It cannot see a NEW migrated
+ * route — the `> N` thresholds above stay, and they are what watches growth.
+ * What it CAN see is one of these eighteen handlers losing its call, or having
+ * its scope flipped.
+ *
+ * THE MUTATION IT IS BUILT FOR, so it can be re-run: in any listed file, delete
+ * the `const denied = await authorizeItemWorkspace(session, {…})` call and the
+ * `if (denied)` line from `loadItem`, returning `{ item, denied: null }`
+ * unconditionally. This block then fails naming the file and verb. The runtime
+ * counterpart lives in `app/api/items/[type]/[id]/__tests__/workspace-authz.test.ts`,
+ * which executes the real ladder and watches it REFUSE; this one is static and
+ * covers all eighteen handlers, that one is behavioural and covers three.
+ *
+ * `true` = `allowReadRoles` granted (read-only workspace roles admitted, correct
+ * for a strictly read-only GET). `false` = write-scoped (Owner/Admin/Member).
+ */
+const MIGRATED: Array<{ file: string; handlers: Array<{ verb: string; allowReadRoles: boolean }> }> = [
+  {
+    // The BASE route — backs GET/PATCH/DELETE for every item type that has no
+    // dedicated `[id]/route.ts`, so it is the widest blast radius of the ten.
+    file: 'app/api/items/[type]/[id]/route.ts',
+    handlers: [
+      { verb: 'GET', allowReadRoles: true },
+      { verb: 'PATCH', allowReadRoles: false },
+      { verb: 'DELETE', allowReadRoles: false },
+    ],
+  },
+  {
+    file: 'app/api/items/[type]/[id]/access-mode/route.ts',
+    handlers: [{ verb: 'PATCH', allowReadRoles: false }],
+  },
+  {
+    file: 'app/api/items/[type]/[id]/business-metadata/route.ts',
+    handlers: [
+      { verb: 'GET', allowReadRoles: true },
+      { verb: 'POST', allowReadRoles: false },
+    ],
+  },
+  {
+    file: 'app/api/items/[type]/[id]/classifications/route.ts',
+    handlers: [
+      { verb: 'GET', allowReadRoles: true },
+      { verb: 'PUT', allowReadRoles: false },
+    ],
+  },
+  {
+    file: 'app/api/items/[type]/[id]/export-check/route.ts',
+    handlers: [{ verb: 'POST', allowReadRoles: false }],
+  },
+  {
+    file: 'app/api/items/[type]/[id]/impact/route.ts',
+    handlers: [{ verb: 'GET', allowReadRoles: true }],
+  },
+  {
+    file: 'app/api/items/[type]/[id]/lineage/route.ts',
+    handlers: [{ verb: 'GET', allowReadRoles: true }],
+  },
+  {
+    file: 'app/api/items/[type]/[id]/pbids/route.ts',
+    handlers: [{ verb: 'GET', allowReadRoles: true }],
+  },
+  {
+    file: 'app/api/items/[type]/[id]/sensitivity/route.ts',
+    handlers: [
+      { verb: 'GET', allowReadRoles: true },
+      { verb: 'PUT', allowReadRoles: false },
+    ],
+  },
+  {
+    file: 'app/api/items/[type]/[id]/sensitivity-label/route.ts',
+    handlers: [
+      { verb: 'GET', allowReadRoles: true },
+      { verb: 'PUT', allowReadRoles: false },
+      { verb: 'PATCH', allowReadRoles: false },
+      { verb: 'DELETE', allowReadRoles: false },
+    ],
+  },
+];
+
+describe('#3941 the ten migrated routes are STILL guarded (declared membership)', () => {
+  it('every declared handler still reaches the ladder — a deleted call is named, not absorbed', () => {
+    const missing: string[] = [];
+    for (const { file, handlers } of MIGRATED) {
+      for (const { verb } of handlers) {
+        const calls = ALL_CALLS.filter((c) => c.file === file && c.verb === verb);
+        if (calls.length === 0) missing.push(`${file}:${verb}`);
+      }
+    }
+    expect(
+      missing.sort(),
+      'These handlers no longer reach authorizeItemWorkspace/authorizeWorkspace.\n' +
+        'Either the authorization was deleted, or `loadItem` stopped being a\n' +
+        'recognized module-local guard helper (which has the same effect):\n' +
+        missing.join('\n'),
+    ).toEqual([]);
+  });
+
+  it('every declared handler still carries the SCOPE it was migrated with', () => {
+    const wrong: string[] = [];
+    for (const { file, handlers } of MIGRATED) {
+      for (const { verb, allowReadRoles } of handlers) {
+        for (const c of ALL_CALLS.filter((x) => x.file === file && x.verb === verb)) {
+          if (c.allowReadRoles !== allowReadRoles) {
+            wrong.push(
+              `${file}:${verb} → allowReadRoles=${c.allowReadRoles}, declared ${allowReadRoles}` +
+                (allowReadRoles === false ? ' (a read-only Viewer would reach this MUTATION)' : ''),
+            );
+          }
+        }
+      }
+    }
+    expect(wrong.sort(), 'Scope drift on a migrated handler:\n' + wrong.join('\n')).toEqual([]);
+  });
+
+  it('the declaration itself is the shape #3941 landed — 10 files, 18 handlers', () => {
+    // Guards the declaration against being quietly emptied to make the two
+    // assertions above vacuous. A NEW migrated route is invisible here by
+    // construction (see the block comment); the `> N` thresholds watch growth.
+    //
+    // EIGHTEEN, NOT SEVENTEEN. The #4357 review's per-route table says "All 17
+    // handlers across the 10 files"; summing its own rows gives 3+1+2+2+1+1+1+
+    // 1+2+4 = 18, and the same count comes out of the tree:
+    //   grep -cE "^export (async function|const) (GET|POST|PUT|PATCH|DELETE)\b"
+    // over the ten files returns 3 1 2 2 1 1 1 1 2 4. Every one of the 18 is
+    // present in `ALL_CALLS` (the two assertions above), so the review's figure
+    // was an arithmetic slip in the summary line, not a missing handler.
+    expect(MIGRATED).toHaveLength(10);
+    expect(MIGRATED.reduce((n, m) => n + m.handlers.length, 0)).toBe(18);
+    // Every mutating verb in the declaration is write-scoped, and every GET is
+    // read-scoped. If a future edit flips a declared value to match a regressed
+    // route, this fails instead of ratifying it.
+    for (const { file, handlers } of MIGRATED) {
+      for (const { verb, allowReadRoles } of handlers) {
+        expect(allowReadRoles, `${file}:${verb} declared with the wrong scope`).toBe(
+          !MUTATING.has(verb),
+        );
+      }
+    }
+  });
+});
 
 describe('#2947 the migration actually happened', () => {
   it('finds authorize*Workspace calls across many route families (the scan is not vacuous)', () => {

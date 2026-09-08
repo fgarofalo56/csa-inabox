@@ -128,17 +128,24 @@ function err(error: string, status: number, code?: string, extra?: Record<string
  * workspaceId the admitted set GROWS: tenant admins and shared-ACL members with
  * the right role now pass.
  *
- * ONE DIRECTION IS NOT MONOTONE, named because "strictly GROWS" was the wrong
- * word for it (#4357 review item 2). When an item row's `workspaceId` is FALSY,
+ * THE ONE NON-MONOTONE DIRECTION IS CLOSED IN THIS FILE (#4357 review item 4;
+ * disclosed as an accepted widening in review item 2, now fixed rather than
+ * disclosed). When an item row's `workspaceId` is FALSY,
  * `authorizeItemWorkspace` resolves no workspace and returns null — an ALLOW the
  * role resolver never sees (workspace-guard.ts, the `if (!workspaceId) return
- * null` prologue). The owner-only point read this replaced did
+ * null` prologue), and one intended for an id that names NO item anywhere. The
+ * owner-only point read this replaced did
  * `ws.item(item.workspaceId, tenantId).read()`, which on a falsy id 404s or
- * throws, so the helper REFUSED. That one row shape therefore moves from refuse
- * to proceed. `items` is partitioned on `/workspaceId` (cosmos-client.ts), so a
- * row with a falsy one is close to unreachable, and the ALLOW is the shared
- * helper's own pre-existing, cross-cutting behaviour — not introduced here. It
- * is disclosed rather than smoothed over (deploy-integrity.md R7).
+ * throws, so the helper REFUSED. That row shape would therefore have moved from
+ * refuse to proceed, so `loadItem` below refuses it EXPLICITLY before the ladder
+ * runs and this route's access change is a widening in one direction only.
+ * `items` is partitioned on `/workspaceId` (cosmos-client.ts) so such a row is
+ * close to unreachable — but that is a durability argument, not an
+ * authorization one, which is why it is fixed here rather than argued away.
+ * The shared helper's ALLOW is UNCHANGED and still applies to its other
+ * importers; only these ten routes are covered. Pinned by
+ * `app/api/items/[type]/[id]/__tests__/workspace-authz.test.ts`, which reds if
+ * the line is removed.
  */
 async function loadItem(
   itemId: string,
@@ -164,6 +171,13 @@ async function loadItem(
     .fetchAll();
   const item = resources[0];
   if (!item) return { item: null, denied: null };
+  // #4357 review 4 — the item EXISTS but names no workspace, so there is nothing
+  // to authorize against. Refuse here: handing it to `authorizeItemWorkspace`
+  // would hit that helper's `if (!workspaceId) return null` prologue, and `null`
+  // is the ALLOW. Collapsing to the route's own not-found keeps the wording its
+  // clients already render, and matches what the replaced owner-only point read
+  // did on a falsy partition key. See the docblock above.
+  if (!item.workspaceId) return { item: null, denied: null };
   // #3941 - the canonical ladder, replacing the owner-only partition point read
   // this helper used to do. `workspaces` is partitioned on `/tenantId`, which
   // holds the workspace CREATOR's oid, so `ws.item(workspaceId, callerOid)`

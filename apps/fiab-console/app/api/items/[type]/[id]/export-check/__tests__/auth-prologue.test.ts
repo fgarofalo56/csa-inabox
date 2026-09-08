@@ -22,6 +22,20 @@
  * still pass if the handler authenticated AFTER reading Cosmos — so this
  * asserts the item container was never reached, i.e. nothing about the item
  * leaked before the caller was identified.
+ *
+ * WHAT THIS FILE DOES NOT TEST, stated plainly (#4357 review finding 3). It
+ * `vi.mock`s `@/lib/auth/workspace-guard` so `authorizeItemWorkspace` always
+ * returns `null` — and `null` is the ALLOW. So this spec measures the SESSION
+ * check, which is not what #3941 changed; it can never observe a REFUSAL, and it
+ * would stay green if the resolver's ACL branch regressed to admit a read-only
+ * Viewer to a PUT. That is deliberate here (mocking the guard is what keeps this
+ * an isolated prologue test), but it means this file is NOT evidence that the
+ * authorization ladder works. That evidence lives in
+ * `app/api/items/[type]/[id]/__tests__/workspace-authz.test.ts`, which runs the
+ * REAL guard, resolver and tenant boundary against mocked Cosmos containers and
+ * asserts the refusals: non-member → 404, Viewer on GET → 200, Viewer on
+ * PATCH/DELETE → 404 with nothing written, tid-less workspace doc as tenant
+ * admin → 409 `tenant_unconfirmed`.
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 
