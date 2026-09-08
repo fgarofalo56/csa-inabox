@@ -283,12 +283,45 @@ describe('#3519 KQL ingestion mapping — picked from the live database, never t
     // over the text we just wrote and resetting React's input value-tracker —
     // so the change event is deduped away and `onChange` is never called. That
     // is a real flake, and I hit it: this file passed 13/13 alone but the same
-    // arm failed "Number of calls: 0" in a 4-file run on this machine. Settling
-    // on the post-read hint removes the race instead of retrying around it.
+    // arm failed "Number of calls: 0" in a 4-file run on this machine.
+    //
+    // Settling on the post-read hint NARROWS that window; it does not close it.
+    // Measured in the #4348 round-5 review: with the settle in place this same
+    // arm still lost the race once in a contended 4-file run, same signature.
+    // What stays uncontrolled is any commit landing between the settle and
+    // React's processing of the dispatch, and a test cannot fence those off.
+    //
+    // So the INTERACTION is re-driven, not the assertion retried. A `waitFor`
+    // around a bare `expect(onChange)` cannot help: a change event that was
+    // swallowed is never re-dispatched by waiting. Measured on a standalone
+    // jsdom probe of exactly this shape — a controlled parent that refuses the
+    // first commit — `SINGLE-SHOT: calls=0 assertionFailed=true domValue=""`
+    // (the flake, reproduced deterministically) against `RE-FIRE: attempts=2
+    // calls=1 timedOut=false`: the swallow leaves the input reset to "", so a
+    // second dispatch is a real transition and lands.
+    //
+    // The retry is a BOUNDED loop and deliberately NOT a `fireEvent` inside a
+    // `waitFor`. Measured: with `onChange` in the picker mutated to a no-op —
+    // the defect this arm exists to catch — the waitFor form did not go red, it
+    // HUNG (killed at 420s, rc=124, twice), because a callback that mutates the
+    // DOM on every attempt keeps RTL's mutation-driven retry alive and the
+    // timeout never lands. A required check that hangs is worse than the flake
+    // it was fixing. The loop below terminates and fails on the same assertion.
+    //
+    // It is a NARROWING, not a proof of absence: a failure that swallows EVERY
+    // dispatch exhausts the attempts and this arm goes red — the correct
+    // outcome, and the same red as before. What is gone is the one-shot
+    // dependency on the FIRST dispatch being the one that lands.
     await screen.findByText(/No ingestion mapping is defined for T1/i);
     const box = await screen.findByRole('combobox', { name: /Ingestion mapping/i });
     expect((box as HTMLInputElement).disabled).toBe(false);
-    fireEvent.change(box, { target: { value: 'NotYetDiscovered' } });
+    for (let attempt = 0; attempt < 5 && onChange.mock.calls.length === 0; attempt++) {
+      const input = screen.getByRole('combobox', { name: /Ingestion mapping/i });
+      fireEvent.change(input, { target: { value: 'NotYetDiscovered' } });
+      if (onChange.mock.calls.length === 0) {
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      }
+    }
     expect(onChange).toHaveBeenCalledWith('NotYetDiscovered');
     // The committed value, not just the keystroke: this is what the wizard holds
     // and what a Save would write.

@@ -111,7 +111,17 @@ const WORKSPACES_ENRICHMENT_DEGRADED = {
   degradedReasons: ['item-counts', 'owner-roles'],
 };
 
-/** VERBATIM shape from app/api/admin/agent-quality/route.ts, Foundry unconfigured. */
+/**
+ * VERBATIM from app/api/admin/agent-quality/route.ts, Foundry unconfigured.
+ *
+ * The envelope is the route's (`gate.code = 'not_configured'`, `gate.missing`
+ * hard-coded to LOOM_FOUNDRY_PROJECT_ENDPOINT); `error` and `hint` are the
+ * route's `e.message` / `e.hint`, i.e. `FoundryAgentNotConfiguredError` as
+ * thrown by `getProjectId()` in lib/azure/foundry-agent-client.ts — copied
+ * string-for-string, because the #4348 round-5 review found this fixture was
+ * the one of the four that paraphrased, and the PR body quoted the paraphrase
+ * as the text a Gov boundary without Foundry Agent Service displays.
+ */
 const AGENT_QUALITY_GATED = {
   ok: true,
   agents: {
@@ -119,8 +129,12 @@ const AGENT_QUALITY_GATED = {
     list: [],
     gate: {
       code: 'not_configured',
-      error: 'Microsoft Foundry agents are not configured for this deployment.',
-      hint: 'Set LOOM_FOUNDRY_PROJECT_ENDPOINT.',
+      error: 'Azure AI Foundry Agent Service is not configured: missing LOOM_FOUNDRY_PROJECT_ENDPOINT',
+      hint:
+        'Set LOOM_FOUNDRY_PROJECT_ENDPOINT to a Microsoft Foundry project endpoint shaped ' +
+        '"https://<ai-services-account>.services.ai.azure.com/api/projects/<project>". ' +
+        'Provision the project via platform/fiab/bicep/modules/ai/foundry-project.bicep ' +
+        'and wire the resulting endpoint into the admin-plane app env list.',
       missing: 'LOOM_FOUNDRY_PROJECT_ENDPOINT',
     },
   },
@@ -275,7 +289,7 @@ describe('budget scope picker — a failed list is reported, never rendered as a
     await selectAgentScope();
 
     await waitFor(() =>
-      expect(screen.getByText(/Microsoft Foundry agents are not configured for this deployment/i)).toBeInTheDocument());
+      expect(screen.getByText(/Azure AI Foundry Agent Service is not configured: missing LOOM_FOUNDRY_PROJECT_ENDPOINT/i)).toBeInTheDocument());
     expect(screen.queryByText(/No agent is registered or has been attributed any spend yet/i)).toBeNull();
   });
 

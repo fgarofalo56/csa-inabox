@@ -8,11 +8,11 @@ Run date: 2026-09-07 (rev.6 — source re-measure; rev.5 walk was 2026-06-09)
 Loom surfaces:
 
 - Folders BFF: `app/api/workspaces/[id]/folders/route.ts` (GET/POST/PATCH/DELETE, 200 lines)
-- Folders pane: `lib/panes/folders.tsx` (1029 lines)
+- Folders pane: `lib/panes/folders.tsx` (1028 lines)
 - Task-flows BFF: `app/api/workspaces/[id]/task-flows/route.ts` (GET/POST),
   `.../[flowId]/route.ts` (GET/PUT/DELETE), `.../[flowId]/run/route.ts` (POST/GET),
   plus the admin twins under `app/api/admin/workspaces/[id]/task-flows/`
-- Task-flows canvas: `lib/panes/task-flows.tsx` (870 lines, `@xyflow/react`),
+- Task-flows canvas: `lib/panes/task-flows.tsx` (869 lines, `@xyflow/react`),
   mounted at `app/workspaces/[id]/page.tsx` under the `task-flows` tab
 - Clients: `lib/clients/taskflow-client.ts`, `lib/clients/taskflow-run-client.ts`
 - Run engine: `lib/taskflow/step-runner.ts`, `lib/taskflow/launch-item.ts`
@@ -58,7 +58,7 @@ Folders and task flows are both **Loom-native** constructs in Cosmos. There is
 | Rename folder | ✅ Built | `PATCH` body `{id, name}` |
 | Delete folder (children reparent to root) | ✅ Built | `DELETE ?id=` → Cosmos delete; child folders reparented (`parent: null`) and member items cleared (`folderId: null`), so both surface at the workspace root |
 | Assign item to folder (`folderId` on item) | ✅ Built | item update carries `folderId`; tree groups by it |
-| Task flows (visual workflow canvas) | ✅ Built | `TaskFlowsPane` (870 lines, `@xyflow/react`) on the workspace `task-flows` tab; Cosmos `task-flows` container via `lib/clients/taskflow-client.ts` |
+| Task flows (visual workflow canvas) | ✅ Built | `TaskFlowsPane` (869 lines, `@xyflow/react`) on the workspace `task-flows` tab; Cosmos `task-flows` container via `lib/clients/taskflow-client.ts` |
 | Create / open / delete a task flow | ✅ Built | `GET`+`POST /api/workspaces/[id]/task-flows`, `GET`+`DELETE .../[flowId]` → real Cosmos |
 | Drag to reposition a task | ✅ Built | `useNodesState` + `onNodesChange` → debounced `PUT .../[flowId]` |
 | Connect tasks with edges | ✅ Built | `onConnect` → `addEdge` (typed `taskflow` edge, `Handle`/`Position` ports from `canvas-node-kit`) |

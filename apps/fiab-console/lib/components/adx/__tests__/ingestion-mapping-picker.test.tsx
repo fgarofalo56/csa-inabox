@@ -35,9 +35,14 @@ const MAPPINGS_OK = {
   ],
 };
 
+// The stub declares fetch's own parameters even though it ignores them: a
+// `vi.fn(async () => …)` has an EMPTY-tuple call signature, so the positive
+// control's `fetchMock.mock.calls[0][0]` — the URL assertion — is a type error
+// (TS2493) under `tsc --noEmit`. Typing it here keeps that assertion legal
+// rather than leaving an error this PR would be adding to the tree.
 function installFetch(body: unknown, status = 200) {
   return vi.fn(
-    async () =>
+    async (_input: RequestInfo | URL, _init?: RequestInit) =>
       new Response(JSON.stringify(body), {
         status,
         headers: { 'content-type': 'application/json' },
