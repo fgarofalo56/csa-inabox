@@ -46,7 +46,7 @@
  *     written over a list that was never whole. The paging walk itself is
  *     measured in `lib/azure/__tests__/postgres-flex-paging.test.ts`.
  */
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { describe, it, expect, beforeAll, beforeEach, afterEach, vi } from 'vitest';
 import { NextRequest } from 'next/server';
 
 const UPN = 'owner@loom.test';
@@ -107,6 +107,31 @@ const NO_PARAMS = { params: Promise.resolve({}) } as any;
 
 /** Every string this response could carry, so a leak anywhere is caught. */
 const bodyText = async (r: Response) => JSON.stringify(await r.json());
+
+/**
+ * WARM THE MODULE GRAPH OFF THE PER-TEST CLOCK.
+ *
+ * Every case here does `await import('../route')`. The FIRST one pays for
+ * transforming the route and everything it pulls in (`next/server`, the session
+ * middleware, the ARM clients behind the `vi.mock` factories); the rest hit the
+ * ESM cache and cost ~1ms. Charging that one-time cost to a case's 30s
+ * `testTimeout` makes the case's result a function of machine load rather than
+ * of its subject.
+ *
+ * MEASURED 2026-09-07 at this branch's head, before this hook: with another
+ * full vitest run occupying the box, `satisfies the four Azure PostgreSQL
+ * complexity classes` — 200 draws of a function that is `randomBytes(24)` plus
+ * four `randomInt` calls — timed out at 30000ms twice, at 32.7s and 33.3s, RC=1
+ * with the other 19 cases passing. `does not repeat — 500 draws` sat right
+ * behind it at 13.9s, which is the same import cost bleeding into the second
+ * case, not 500 draws being slow. Same failure mode as the one fixed in
+ * `console-ui-w2-drained-surfaces.test.tsx`: a required-context red produced by
+ * scheduling, on a file whose assertions never ran into trouble.
+ *
+ * The import is not otherwise moved — each case still imports what it needs, so
+ * nothing here depends on hook ordering.
+ */
+beforeAll(async () => { await import('../route'); }, 300_000);
 
 beforeEach(() => {
   vi.clearAllMocks();
