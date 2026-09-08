@@ -7,24 +7,40 @@
  * answers on agentic retrieval — query decomposition + semantic rerank across
  * one or more knowledge sources — instead of a flat single-shot vector search.
  *
- * ── TWO first-class RAG backends, selected automatically (#3351) ────────────
+ * ── A SECOND RAG backend, selected automatically (#3351) ────────────────────
  * Azure AI Search agentic retrieval is the PREFERRED backend: it decomposes the
  * question and semantically reranks. But it is not deployed in every estate and
  * its agentic-retrieval api-version is not confirmed GA in every sovereign
  * boundary, and `cloud-parity.md` makes "Commercial-only" incomplete rather
  * than acceptable. So Cosmos DB for MongoDB (vCore) vector search is registered
- * as a SECOND first-class backend (`vector_store_retrieve`), and the AI Search
- * preflight ROUTES to it automatically when AI Search cannot answer.
+ * as a second backend (`vector_store_retrieve`), and the AI Search preflight
+ * ROUTES to it automatically when AI Search cannot answer.
  *
- * Both are registered by default and neither is a user-visible configuration
- * choice (`loom_default_on_opt_out`): the model picks the tool, and when the
- * preferred backend is unavailable the honest message names the one that IS.
+ * WHAT THIS DOES NOT YET CLOSE (R7 + cloud-parity, measured 2026-09-08). The
+ * vCore backend reaches the official `mongodb` npm driver through
+ * cosmos-vcore-vector-client.ts's `loadMongo()`, and that driver is NOT a
+ * dependency of this app: `apps/fiab-console/package.json` does not list it,
+ * `next.config.mjs` does not carry it in `serverExternalPackages`, and it is
+ * absent from node_modules. So in the image that ships today
+ * `vector_store_retrieve` can only return CosmosVcoreDriverError's honest
+ * dependency gate — it cannot ground an answer in ANY boundary. The parity gap
+ * AI Search leaves in the sovereign clouds is therefore NOT closed here, and
+ * nothing in this file may say otherwise. Adding the driver (package.json +
+ * serverExternalPackages + redeploy) is tracked separately; until then the
+ * routing hint below states only what it can establish.
  *
- * Every tool hits a REAL backend (per no-vaporware.md) — the AI Search
- * agentic-retrieval REST API via `aisearch-knowledge.ts`, or a genuine
- * `cosmosSearch` kNN aggregation via `cosmos-vcore-vector-client.ts`. When
- * neither is configured the tool returns an honest message string (never a fake
- * answer). No Fabric / Power BI dependency — both backends are Azure-native.
+ * Both tools are registered by default and neither is a user-visible
+ * configuration choice (`loom_default_on_opt_out`): the model picks the tool,
+ * and each tool's own answer is the honest gate.
+ *
+ * No tool here fabricates an answer (per no-vaporware.md): each either calls a
+ * REAL backend — the AI Search agentic-retrieval REST API via
+ * `aisearch-knowledge.ts`, or a genuine `cosmosSearch` kNN aggregation via
+ * `cosmos-vcore-vector-client.ts` — or returns an honest message string naming
+ * what is missing. Per the note above, the vCore path reaches its real
+ * aggregation only in an image that carries the `mongodb` driver; in this one it
+ * returns the dependency gate. No Fabric / Power BI dependency — both backends
+ * are Azure-native.
  */
 
 import type { LoomToolRegistry } from '../azure/copilot-orchestrator';
@@ -43,35 +59,84 @@ function obj(props: Record<string, unknown>, required: string[] = []) {
   return { type: 'object', properties: props, required, additionalProperties: false };
 }
 
-/** True when the Cosmos vector backend is wired and can answer instead. */
-function vectorFallbackAvailable(): boolean {
-  return cosmosVcoreGate() === null;
+/**
+ * Does the `mongodb` driver actually RESOLVE in this image?
+ *
+ * This evaluates the SAME expression `loadMongo()` evaluates in
+ * cosmos-vcore-vector-client.ts (`import('mongo' + 'db')`, runtime-computed and
+ * webpack-ignored so `next build` never hard-resolves it). Keep the two
+ * spellings identical: if they diverge, this probe stops describing the code
+ * path it exists to predict.
+ *
+ * Only a SUCCESS is memoised. A failure is deliberately NOT cached — module
+ * resolution is cheap, it is reached only on an already-degraded path, and a
+ * permanently-remembered "no" is the failure shape this repo keeps re-learning.
+ */
+let _mongoDriverResolves = false;
+async function vcoreDriverResolves(): Promise<boolean> {
+  if (_mongoDriverResolves) return true;
+  const pkg = ['mongo', 'db'].join('');
+  try {
+    await import(/* webpackIgnore: true */ /* @vite-ignore */ pkg);
+    _mongoDriverResolves = true;
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+type VectorFallbackState = 'ready' | 'unconfigured' | 'driver-missing';
+
+/**
+ * What the Cosmos vector backend can actually do right now.
+ *
+ * R7 — `cosmosVcoreGate()` establishes ONE fact: that
+ * LOOM_COSMOS_VCORE_CONNECTION_STRING is non-empty. That is not enough to claim
+ * the backend can ground an answer, because `vcoreVectorSearch` still has to
+ * resolve the `mongodb` driver and will throw CosmosVcoreDriverError when it
+ * cannot. 'ready' is returned only when BOTH facts hold.
+ */
+async function vectorFallbackState(): Promise<VectorFallbackState> {
+  if (cosmosVcoreGate() !== null) return 'unconfigured';
+  return (await vcoreDriverResolves()) ? 'ready' : 'driver-missing';
 }
 
 /**
- * The sentence appended to an AI-Search-unavailable message so the model is
- * ROUTED to the working backend rather than told retrieval is impossible
- * (#3351: backend selection is automatic, not a user-visible choice).
+ * The sentence appended to an AI-Search-unavailable message. It ROUTES the
+ * model to the second backend only when that backend has been shown to be able
+ * to run (#3351: backend selection is automatic, not a user-visible choice) —
+ * and otherwise names the specific reason it cannot, so the model is never sent
+ * to a tool whose only reachable answer is a dependency error.
  */
-function fallbackHint(): string {
-  return vectorFallbackAvailable()
-    ? ' Cosmos DB vector search IS configured in this deployment — call vector_store_retrieve instead to ground this answer.'
-    : ' The Cosmos DB vector backend (LOOM_COSMOS_VCORE_CONNECTION_STRING) is not configured either, so no retrieval backend can ground this answer — say so honestly rather than guessing.';
+async function fallbackHint(): Promise<string> {
+  switch (await vectorFallbackState()) {
+    case 'ready':
+      return ' Cosmos DB vector search is configured in this deployment AND its driver loads in this image'
+        + ' — call vector_store_retrieve instead to ground this answer.';
+    case 'driver-missing':
+      return ' The Cosmos DB vector backend is configured (LOOM_COSMOS_VCORE_CONNECTION_STRING is set) but the'
+        + ' `mongodb` driver is not installed in this Console image, so vector_store_retrieve cannot ground an'
+        + ' answer either — it would only return that dependency error. No retrieval backend can ground this'
+        + ' answer: say so honestly rather than guessing.';
+    default:
+      return ' The Cosmos DB vector backend (LOOM_COSMOS_VCORE_CONNECTION_STRING) is not configured either, so no'
+        + ' retrieval backend can ground this answer — say so honestly rather than guessing.';
+  }
 }
 
 /**
  * Honest pre-flight shared by both AI Search tools: returns a message string
  * when agentic retrieval can't run in this deployment/cloud, or null when it
  * can. The message always names the missing AI Search setting AND, per #3351,
- * points at the Cosmos vector backend when that one can answer.
+ * points at the Cosmos vector backend when that one can genuinely answer.
  */
-function knowledgePreflight(): string | null {
+async function knowledgePreflight(): Promise<string | null> {
   if (!isSearchConfigured()) {
     return 'Azure AI Search is not configured in this deployment (set LOOM_AI_SEARCH_SERVICE). Agentic retrieval is unavailable.'
-      + fallbackHint();
+      + await fallbackHint();
   }
   const gov = knowledgeGovGate();
-  if (gov) return gov.reason + fallbackHint();
+  if (gov) return gov.reason + await fallbackHint();
   return null;
 }
 
@@ -84,7 +149,7 @@ export function registerKnowledgeTools(r: LoomToolRegistry): void {
     whenToUse: 'Discover which knowledge bases exist before grounding an answer with agentic retrieval.',
     parameters: obj({}),
     handler: async () => {
-      const pre = knowledgePreflight();
+      const pre = await knowledgePreflight();
       if (pre) return { available: false, message: pre };
       const bases = await listKnowledgeBases();
       return {
@@ -109,7 +174,7 @@ export function registerKnowledgeTools(r: LoomToolRegistry): void {
       ['knowledgeBase', 'query'],
     ),
     handler: async ({ knowledgeBase, query }) => {
-      const pre = knowledgePreflight();
+      const pre = await knowledgePreflight();
       if (pre) return { grounded: false, message: pre };
       const kb = String(knowledgeBase || '').trim();
       const q = String(query || '').trim();
@@ -127,14 +192,20 @@ export function registerKnowledgeTools(r: LoomToolRegistry): void {
     },
   });
 
-  // ── Second first-class RAG backend: Cosmos DB vector search (#3351) ───────
+  // ── Second RAG backend: Cosmos DB vector search (#3351) ──────────────────
   //
   // Registered UNCONDITIONALLY so the model can always reach it and the honest
-  // gate is the tool's own answer, not a missing tool. That matters for the
+  // gate is the tool's own answer, not a missing tool. The INTENT is the
   // sovereign boundaries, where AI Search agentic retrieval is the piece whose
   // GA status varies: `cloud-parity.md` treats a Commercial-only capability as
   // incomplete, and a Cosmos vCore cluster is available in every boundary Loom
   // supports.
+  //
+  // The intent is not the achievement. Until the `mongodb` driver is a
+  // dependency of this app (see the header note), this tool's only reachable
+  // answer is CosmosVcoreDriverError's dependency gate, in every boundary. It
+  // is registered so the gate is discoverable and so the backend goes live the
+  // moment the driver ships — not because the parity gap is closed.
   //
   // The heavy modules are imported INSIDE the handler on purpose: the vCore
   // client resolves the `mongodb` driver through a webpack-ignored dynamic

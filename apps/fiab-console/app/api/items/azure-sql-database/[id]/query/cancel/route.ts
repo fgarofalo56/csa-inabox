@@ -42,7 +42,7 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
-import { liveRequests, recordCancelIntent } from '@/lib/azure/azure-sql-client';
+import { liveRequests, recordCancelIntent, cancelIntentUnavailableReason } from '@/lib/azure/azure-sql-client';
 import { withSession } from '@/lib/api/route-toolkit';
 
 export const runtime = 'nodejs';
@@ -78,8 +78,11 @@ export const POST = withSession(async (req: NextRequest) => {
       });
     }
     // R7 — state ONLY what was established. This replica holds no live request
-    // under that id, and the intent store is not available to carry the signal
-    // anywhere else, so nothing was cancelled and nothing was requested.
+    // under that id, and no intent could be published to carry the signal
+    // anywhere else, so nothing was cancelled and nothing was requested. The
+    // cause comes from `cancelIntentUnavailableReason()`, which reports which
+    // branch was actually taken (opt-out / no Cosmos endpoint / init failed and
+    // backing off / write threw) rather than asserting one of them.
     // `ok:true` because the call itself was handled and is idempotent (the UI
     // may cancel while the query is completing); `cancelled:false` because
     // nothing was cancelled.
@@ -89,8 +92,8 @@ export const POST = withSession(async (req: NextRequest) => {
       reason:
         'No in-flight request with that id is registered on the replica that received this call. '
         + 'It has either already completed, or it is running on a different console replica — this '
-        + 'endpoint cannot distinguish the two, and the cross-replica cancel-intent store could not be '
-        + 'reached to carry the signal (no Cosmos endpoint configured, or the write failed).',
+        + 'endpoint cannot distinguish the two, and no cross-replica cancel intent could be published: '
+        + `${cancelIntentUnavailableReason()}.`,
       crossReplica: false,
       requestId,
     });

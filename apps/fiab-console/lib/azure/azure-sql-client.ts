@@ -442,7 +442,24 @@ export function cancelIntentStoreConfigured(): boolean {
 
 let _injectedIntentStore: CancelIntentStore | null = null;
 let _cosmosIntentStore: CancelIntentStore | null = null;
-let _cosmosIntentInitTried = false;
+/** Epoch ms of the last FAILED store init; 0 when the last attempt succeeded. */
+let _cosmosIntentInitFailedAt = 0;
+/** Message from the last FAILED store init; null when the last attempt succeeded. */
+let _lastIntentInitError: string | null = null;
+/** Message from the last `record()` that threw, cleared at the start of each attempt. */
+let _lastIntentWriteError: string | null = null;
+
+/**
+ * How long a FAILED store init is remembered before it is retried.
+ *
+ * Not a one-shot memo. Memoising a failure for the lifetime of the process
+ * would turn a single 429 / cold start / DNS blip on the first call into a
+ * replica that never publishes and never consumes an intent again — i.e. the
+ * permanent cross-replica no-op #3400 exists to remove, re-introduced through a
+ * different door and invisible from the outside. Bounded backoff instead: don't
+ * hammer a failing endpoint, but always re-arm.
+ */
+const CANCEL_INTENT_INIT_RETRY_MS = 30_000;
 
 /**
  * TEST HOOK — swap the intent store, reset the watcher, and drop the memoised
@@ -453,7 +470,9 @@ let _cosmosIntentInitTried = false;
 export function _setCancelIntentStore(store: CancelIntentStore | null): void {
   _injectedIntentStore = store;
   _cosmosIntentStore = null;
-  _cosmosIntentInitTried = false;
+  _cosmosIntentInitFailedAt = 0;
+  _lastIntentInitError = null;
+  _lastIntentWriteError = null;
   stopCancelWatcher();
 }
 
@@ -461,8 +480,10 @@ async function cancelIntentStore(): Promise<CancelIntentStore | null> {
   if (_injectedIntentStore) return _injectedIntentStore;
   if (!cancelIntentStoreConfigured()) return null;
   if (_cosmosIntentStore) return _cosmosIntentStore;
-  if (_cosmosIntentInitTried) return _cosmosIntentStore; // one-shot; don't hammer a failure
-  _cosmosIntentInitTried = true;
+  // Back off from a recent failure, but never permanently (see the constant).
+  if (_cosmosIntentInitFailedAt && Date.now() - _cosmosIntentInitFailedAt < CANCEL_INTENT_INIT_RETRY_MS) {
+    return null;
+  }
   try {
     const { CosmosClient } = await import('@azure/cosmos');
     const client = new CosmosClient({
@@ -500,28 +521,71 @@ async function cancelIntentStore(): Promise<CancelIntentStore | null> {
         }
       },
     };
+    _cosmosIntentInitFailedAt = 0;
     return _cosmosIntentStore;
-  } catch {
+  } catch (e: any) {
     // R7 — the caller must not read this as "no intent"; `recordCancelIntent`
     // returns false so the route reports that it could not persist the signal,
-    // rather than claiming a cancellation was requested.
+    // rather than claiming a cancellation was requested. Record WHY, both so the
+    // route's reason string can name it and so the failure is not silent
+    // (deploy-integrity R3 — it was observable nowhere before).
+    _cosmosIntentInitFailedAt = Date.now();
+    _lastIntentInitError = e?.message || String(e);
+    console.warn(
+      `[azure-sql-client] cross-replica cancel-intent store init failed; retrying in ${CANCEL_INTENT_INIT_RETRY_MS}ms: ${_lastIntentInitError}`,
+    );
     return null;
   }
+}
+
+/**
+ * Why the intent could not be published, in terms the cancel route is allowed to
+ * state as fact (R7).
+ *
+ * Call ONLY after `recordCancelIntent` returned false. The previous wording
+ * asserted "no Cosmos endpoint configured, or the write failed" — but two other
+ * paths reach that branch (a deliberate opt-out, and a store init that failed
+ * and is backing off), so that sentence named a cause the code had not
+ * established. This enumerates the branches that actually exist and says so
+ * explicitly when none of them can be distinguished.
+ */
+export function cancelIntentUnavailableReason(): string {
+  if (!_injectedIntentStore && process.env.LOOM_SQL_CANCEL_INTENTS_DISABLED === '1') {
+    return 'the cross-replica cancel-intent store is switched off in this deployment '
+      + '(LOOM_SQL_CANCEL_INTENTS_DISABLED=1), so the signal was not carried to any other replica';
+  }
+  if (!_injectedIntentStore && !process.env.LOOM_COSMOS_ENDPOINT) {
+    return 'no Cosmos endpoint is configured (LOOM_COSMOS_ENDPOINT), so this deployment has no '
+      + 'cross-replica cancel-intent store to carry the signal';
+  }
+  if (_lastIntentWriteError) {
+    return `the cross-replica cancel-intent write failed: ${_lastIntentWriteError}`;
+  }
+  if (_cosmosIntentInitFailedAt) {
+    return 'the cross-replica cancel-intent store could not be opened on this replica'
+      + (_lastIntentInitError ? ` (${_lastIntentInitError})` : '')
+      + `, and this replica is backing off for up to ${Math.round(CANCEL_INTENT_INIT_RETRY_MS / 1000)}s before retrying`;
+  }
+  return 'the cross-replica cancel-intent store was not available on this replica, and the specific '
+    + 'cause was not recorded';
 }
 
 /**
  * Persist a cross-replica cancel intent.
  *
  * Returns TRUE only when the intent was actually stored — the cancel route keys
- * its response off this so it never claims a request it did not make.
+ * its response off this so it never claims a request it did not make. On FALSE,
+ * `cancelIntentUnavailableReason()` names which branch was taken.
  */
 export async function recordCancelIntent(requestId: string): Promise<boolean> {
+  _lastIntentWriteError = null;
   const store = await cancelIntentStore();
   if (!store) return false;
   try {
     await store.record(requestId);
     return true;
-  } catch {
+  } catch (e: any) {
+    _lastIntentWriteError = e?.message || String(e);
     return false;
   }
 }

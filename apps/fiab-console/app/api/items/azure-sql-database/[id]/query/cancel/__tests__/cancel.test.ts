@@ -25,13 +25,18 @@ import { join } from 'node:path';
 
 // vi.mock factories are hoisted above module-scope consts, so the shared map
 // must itself be hoisted (vi.hoisted) to be referenceable inside the factory.
-const { liveRequests, recordCancelIntent } = vi.hoisted(() => ({
+const { liveRequests, recordCancelIntent, cancelIntentUnavailableReason } = vi.hoisted(() => ({
   liveRequests: new Map<string, { cancel: () => void }>(),
   recordCancelIntent: vi.fn(async (_requestId: string) => false),
+  cancelIntentUnavailableReason: vi.fn(() => 'no Cosmos endpoint is configured (LOOM_COSMOS_ENDPOINT)'),
 }));
 
 vi.mock('@/lib/auth/session', () => ({ getSession: vi.fn() }));
-vi.mock('@/lib/azure/azure-sql-client', () => ({ liveRequests, recordCancelIntent }));
+vi.mock('@/lib/azure/azure-sql-client', () => ({
+  liveRequests,
+  recordCancelIntent,
+  cancelIntentUnavailableReason,
+}));
 
 /**
  * A fake Cosmos SDK, so the REAL `cancelIntentStore()` init path — the client,
@@ -42,6 +47,8 @@ vi.mock('@/lib/azure/azure-sql-client', () => ({ liveRequests, recordCancelInten
  */
 const cosmos = vi.hoisted(() => ({
   failInit: false,
+  /** How many times the CosmosClient constructor ran — the "am I hammering it?" counter. */
+  constructs: 0,
   clientOpts: null as any,
   databases: [] as any[],
   containers: [] as any[],
@@ -51,6 +58,7 @@ const cosmos = vi.hoisted(() => ({
   docs: new Map<string, any>(),
   reset() {
     this.failInit = false;
+    this.constructs = 0;
     this.clientOpts = null;
     this.databases.length = 0;
     this.containers.length = 0;
@@ -80,6 +88,7 @@ vi.mock('@azure/cosmos', () => {
         },
       };
       constructor(opts: any) {
+        cosmos.constructs += 1;
         if (cosmos.failInit) throw new Error('Cosmos endpoint unreachable');
         cosmos.clientOpts = opts;
       }
@@ -118,6 +127,7 @@ beforeEach(() => {
   liveRequests.clear();
   // Default: no intent store reachable (local dev / no Cosmos endpoint).
   recordCancelIntent.mockResolvedValue(false);
+  cancelIntentUnavailableReason.mockReturnValue('no Cosmos endpoint is configured (LOOM_COSMOS_ENDPOINT)');
 });
 
 describe('POST /api/items/azure-sql-database/[id]/query/cancel', () => {
@@ -242,6 +252,43 @@ describe('cancel route honesty (#3400)', () => {
   });
 
   /**
+   * R7, review finding 4. The reason used to assert "(no Cosmos endpoint
+   * configured, or the write failed)" as the cause. TWO other branches reach
+   * here: the documented `LOOM_SQL_CANCEL_INTENTS_DISABLED=1` opt-out, where the
+   * store was deliberately switched off rather than unreachable, and an init
+   * that failed earlier and is still backing off, where nothing was attempted on
+   * this call at all. The route must report the branch the client actually took,
+   * not a guess.
+   *   MUTATION: inline a fixed sentence instead of calling
+   *   `cancelIntentUnavailableReason()` → this spec goes red.
+   */
+  it('reports the REASON the client actually recorded, not a guessed cause', async () => {
+    (getSession as any).mockReturnValue({ claims: { oid: 'u' } });
+    recordCancelIntent.mockResolvedValue(false);
+    cancelIntentUnavailableReason.mockReturnValue(
+      'the cross-replica cancel-intent store is switched off in this deployment '
+      + '(LOOM_SQL_CANCEL_INTENTS_DISABLED=1), so the signal was not carried to any other replica',
+    );
+
+    const res = await POST(postReq({ requestId: 'elsewhere' }));
+    const j = await res.json();
+
+    expect(cancelIntentUnavailableReason).toHaveBeenCalled();
+    expect(j.cancelled).toBe(false);
+    expect(j.reason).toContain('LOOM_SQL_CANCEL_INTENTS_DISABLED=1');
+    // The old wording named a cause that does not hold on this branch.
+    expect(j.reason).not.toMatch(/no Cosmos endpoint configured, or the write failed/);
+  });
+
+  /** The reason function is consulted only when there was nothing to report. */
+  it('does not ask for an unavailability reason when the intent WAS published', async () => {
+    (getSession as any).mockReturnValue({ claims: { oid: 'u' } });
+    recordCancelIntent.mockResolvedValue(true);
+    await POST(postReq({ requestId: 'on-another-replica' }));
+    expect(cancelIntentUnavailableReason).not.toHaveBeenCalled();
+  });
+
+  /**
    * RED before the fix: the route had no intent store at all, so a requestId
    * owned by another replica returned `cancelled:false` and the signal died
    * there. GREEN now: the intent is persisted and the response says exactly
@@ -313,6 +360,64 @@ describe('azure-sql-client cancel-intent watcher (#3400)', () => {
     expect(cancel).not.toHaveBeenCalled();
     expect(client.liveRequests.has('mine')).toBe(true);
     client.liveRequests.clear();
+  });
+
+  /**
+   * R7, review finding 3. A FAILED store read is UNKNOWN, never "an intent
+   * exists". The branch had no guard, so inverting `catch { continue; }` to
+   * `catch { wanted = true; }` — the store read failed, therefore cancel — left
+   * the suite fully green while silently killing users' running queries on the
+   * next transient Cosmos error. That inversion is exactly the R7 shape this
+   * repo keeps getting bitten by.
+   *   MUTATION: `catch { wanted = true; }` in `_pollCancelIntentsOnce` → red here.
+   */
+  it('a store read that THROWS is unknown, not a cancel — the request stays registered', async () => {
+    const client = await realClient();
+    const cancel = vi.fn();
+    let reads = 0;
+    client._setCancelIntentStore({
+      record: async () => {},
+      has: async () => { reads += 1; throw new Error('Cosmos 429 TooManyRequests'); },
+      clear: async () => { throw new Error('clear must not be called for an unknown intent'); },
+    });
+    client.liveRequests.set('mine', { cancel } as any);
+
+    await expect(client._pollCancelIntentsOnce()).resolves.toBeUndefined();
+
+    expect(reads).toBe(1);
+    expect(cancel).not.toHaveBeenCalled();
+    // Still ours: the next tick must get another chance to read the intent.
+    expect(client.liveRequests.has('mine')).toBe(true);
+
+    client.liveRequests.clear();
+    client._setCancelIntentStore(null);
+  });
+
+  /** One id failing its read must not stop the loop reaching the others. */
+  it('a throwing read for one id does not prevent a real intent cancelling another', async () => {
+    const client = await realClient();
+    const bad = vi.fn();
+    const good = vi.fn();
+    client._setCancelIntentStore({
+      record: async () => {},
+      has: async (id: string) => {
+        if (id === 'bad') throw new Error('read failed');
+        return id === 'good';
+      },
+      clear: async () => {},
+    });
+    client.liveRequests.set('bad', { cancel: bad } as any);
+    client.liveRequests.set('good', { cancel: good } as any);
+
+    await client._pollCancelIntentsOnce();
+
+    expect(bad).not.toHaveBeenCalled();
+    expect(good).toHaveBeenCalledOnce();
+    expect(client.liveRequests.has('bad')).toBe(true);
+    expect(client.liveRequests.has('good')).toBe(false);
+
+    client.liveRequests.clear();
+    client._setCancelIntentStore(null);
   });
 });
 
@@ -619,5 +724,160 @@ describe('the Cosmos-backed intent store (#3400, M4)', () => {
     await expect(client.recordCancelIntent('nope')).resolves.toBe(false);
     expect(cosmos.databases).toEqual([]);
     expect(cosmos.clientOpts).toBeNull();
+  });
+
+  /**
+   * Review finding 2. The init used to be a ONE-SHOT memo (`_cosmosIntentInitTried`
+   * set before the try, never reset outside the test hook). One 429 / cold start
+   * / DNS blip on the very first call therefore left that replica unable to
+   * publish OR consume an intent for its entire lifetime — the permanent
+   * cross-replica no-op #3400 exists to remove, re-introduced through a
+   * different door and observable nowhere.
+   *
+   * Bounded backoff is the contract: don't hammer a failing endpoint...
+   *   MUTATION: drop the `Date.now() - _cosmosIntentInitFailedAt < ...` guard →
+   *   red here (a second construct inside the window).
+   */
+  it('backs off after a failed init instead of hammering the endpoint', async () => {
+    cosmos.failInit = true;
+    await expect(client.recordCancelIntent('a')).resolves.toBe(false);
+    expect(cosmos.constructs).toBe(1);
+
+    // Immediately again, inside the backoff window: no second attempt.
+    await expect(client.recordCancelIntent('b')).resolves.toBe(false);
+    expect(cosmos.constructs).toBe(1);
+  });
+
+  /**
+   * ...but ALWAYS re-arm. This is the half the one-shot memo got wrong.
+   *   MUTATION: restore `if (_cosmosIntentInitTried) return _cosmosIntentStore;`
+   *   with the flag set before the try → red here, permanently false.
+   */
+  it('RECOVERS on its own once the backoff window has passed — the failure is not permanent', async () => {
+    vi.useFakeTimers();
+    try {
+      cosmos.failInit = true;
+      await expect(client.recordCancelIntent('during-outage')).resolves.toBe(false);
+      expect(cosmos.constructs).toBe(1);
+      expect(cosmos.upserts).toEqual([]);
+
+      // The blip passes. Nothing resets anything — no redeploy, no test hook.
+      cosmos.failInit = false;
+      await vi.advanceTimersByTimeAsync(31_000);
+
+      await expect(client.recordCancelIntent('after-recovery')).resolves.toBe(true);
+      expect(cosmos.constructs).toBe(2);
+      expect(cosmos.upserts.at(-1)?.id).toBe('after-recovery');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  /** A successful init is still memoised — one client per replica, not one per call. */
+  it('memoises a SUCCESSFUL init', async () => {
+    await expect(client.recordCancelIntent('one')).resolves.toBe(true);
+    await expect(client.recordCancelIntent('two')).resolves.toBe(true);
+    expect(cosmos.constructs).toBe(1);
+  });
+});
+
+/**
+ * Review finding 4 — the cancel route's `cancelled:false` copy asserted "(no
+ * Cosmos endpoint configured, or the write failed)". FOUR branches reach that
+ * response, and on two of them neither named cause holds. R7: the message must
+ * report the branch that was actually taken.
+ */
+describe('cancelIntentUnavailableReason — the cancel route\'s R7 copy (#3400)', () => {
+  let client: SqlClient;
+  let savedEndpoint: string | undefined;
+  let savedDisabled: string | undefined;
+
+  beforeEach(async () => {
+    client = await realClient();
+    savedEndpoint = process.env.LOOM_COSMOS_ENDPOINT;
+    savedDisabled = process.env.LOOM_SQL_CANCEL_INTENTS_DISABLED;
+    cosmos.reset();
+    client.liveRequests.clear();
+    client._setCancelIntentStore(null);
+  });
+
+  afterEach(() => {
+    client.liveRequests.clear();
+    client._setCancelIntentStore(null);
+    cosmos.reset();
+    for (const [k, v] of [
+      ['LOOM_COSMOS_ENDPOINT', savedEndpoint],
+      ['LOOM_SQL_CANCEL_INTENTS_DISABLED', savedDisabled],
+    ] as const) {
+      if (v === undefined) delete process.env[k];
+      else process.env[k] = v;
+    }
+  });
+
+  it('names the deliberate opt-out as an opt-out, not as an unreachable store', async () => {
+    process.env.LOOM_COSMOS_ENDPOINT = 'https://cosmos.invalid/';
+    process.env.LOOM_SQL_CANCEL_INTENTS_DISABLED = '1';
+    client._setCancelIntentStore(null);
+
+    expect(await client.recordCancelIntent('x')).toBe(false);
+    const why = client.cancelIntentUnavailableReason();
+    expect(why).toContain('LOOM_SQL_CANCEL_INTENTS_DISABLED=1');
+    expect(why).toMatch(/switched off/i);
+    // It must NOT claim the endpoint is missing — it is set.
+    expect(why).not.toMatch(/no Cosmos endpoint/i);
+  });
+
+  it('names the missing endpoint when there is genuinely no store to reach', async () => {
+    delete process.env.LOOM_COSMOS_ENDPOINT;
+    delete process.env.LOOM_SQL_CANCEL_INTENTS_DISABLED;
+    client._setCancelIntentStore(null);
+
+    expect(await client.recordCancelIntent('x')).toBe(false);
+    expect(client.cancelIntentUnavailableReason()).toContain('LOOM_COSMOS_ENDPOINT');
+  });
+
+  it('names the INIT failure — including that nothing was attempted on this call', async () => {
+    process.env.LOOM_COSMOS_ENDPOINT = 'https://cosmos.invalid/';
+    delete process.env.LOOM_SQL_CANCEL_INTENTS_DISABLED;
+    client._setCancelIntentStore(null);
+    cosmos.failInit = true;
+
+    expect(await client.recordCancelIntent('x')).toBe(false);
+    const why = client.cancelIntentUnavailableReason();
+    expect(why).toMatch(/could not be opened/i);
+    expect(why).toContain('Cosmos endpoint unreachable'); // the real error text
+    expect(why).toMatch(/backing off/i);
+  });
+
+  it('names the WRITE failure, and reports the real driver message', async () => {
+    client._setCancelIntentStore({
+      record: async () => { throw new Error('Cosmos 429 TooManyRequests'); },
+      has: async () => false,
+      clear: async () => {},
+    });
+
+    expect(await client.recordCancelIntent('x')).toBe(false);
+    const why = client.cancelIntentUnavailableReason();
+    expect(why).toMatch(/write failed/i);
+    expect(why).toContain('429 TooManyRequests');
+  });
+
+  /** A stale write error must not be reported for a later, different failure. */
+  it('does not carry a previous write error into a later attempt', async () => {
+    client._setCancelIntentStore({
+      record: async () => { throw new Error('Cosmos 429 TooManyRequests'); },
+      has: async () => false,
+      clear: async () => {},
+    });
+    expect(await client.recordCancelIntent('x')).toBe(false);
+    expect(client.cancelIntentUnavailableReason()).toContain('429');
+
+    // Now the store goes away entirely — the reason must follow the new branch.
+    client._setCancelIntentStore(null);
+    delete process.env.LOOM_COSMOS_ENDPOINT;
+    expect(await client.recordCancelIntent('x')).toBe(false);
+    const why = client.cancelIntentUnavailableReason();
+    expect(why).not.toContain('429');
+    expect(why).toContain('LOOM_COSMOS_ENDPOINT');
   });
 });
