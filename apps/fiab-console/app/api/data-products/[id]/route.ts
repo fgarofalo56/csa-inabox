@@ -51,12 +51,15 @@
  *                        full payload above, byte-for-byte as before.
  *       - 'discoverable' (not a member; the product is published/deprecated AND
  *                        positively confirmed to be in the caller's own Entra
- *                        tenant) → the CATALOG projection: `product`, plus a
- *                        field-ALLOWLISTED `item`. No `doc` (the owner
- *                        edit-dialog projection), no raw `state` (so no port
- *                        `ref`s, no dataset `qualifiedName`s, no bound-contract
- *                        internals), no delete preconditions. The exact key set
- *                        and the reason for each is on `catalogItemProjection`.
+ *                        tenant) → the CATALOG projection: BOTH a
+ *                        field-ALLOWLISTED `item` AND an asset-redacted
+ *                        `product`. No `doc` (the owner edit-dialog projection),
+ *                        no raw `state` (so no port `ref`s, no dataset
+ *                        `qualifiedName`s, no bound-contract internals), no
+ *                        `product.dataAssets[].qualifiedName`/`guid`, no delete
+ *                        preconditions. The exact key set and the reason for
+ *                        each is on `catalogItemProjection` and
+ *                        `catalogProductProjection`.
  *       - 'denied'       → 404, worded identically to "no such product".
  *
  *     WHY A REDACTED `item` AND NOT NO `item`. `ConsumerDataProductDetail`
@@ -445,6 +448,54 @@ function itemToProduct(item: WithEtag, tenantId: string | null): DataProductDoc 
  * `ref`s), `state.content`, `state.bundle`, `state.lastRegisteredAt`, and every
  * key `state` grows after today.
  */
+/**
+ * The CATALOG projection of the MARKETPLACE doc — the second half of the same
+ * decision, and the one the first cut missed.
+ *
+ * WHY THIS EXISTS. `item` was projected and `product` was not, on a response
+ * that returns BOTH. `itemToProduct` reads `state.dataAssets` and hands it
+ * straight out (`st.dataAssets as DataProductAsset[]`), and that cast does not
+ * describe what is actually stored: `[id]/assets/route.ts` persists
+ * `{ guid, name, qualifiedName, entityType, addedAt }` (see `DataAssetRef` in
+ * `[id]/assets/asset-helpers.ts`), so the excess keys survive the cast and the
+ * serializer. For an ADLS asset `qualifiedName` IS the `abfss://` address — the
+ * exact class of value #3580 is about — so the redaction on `item.state.datasets`
+ * was being undone one field over on the same JSON body. Measured before the
+ * fix: adding `state.dataAssets` to the spec fixture turned THREE assertions red,
+ * including the two pre-existing `not.toContain('abfss://')` ones, which is the
+ * tell that the assertions were right and the FIXTURE could not reach the lie.
+ *
+ * WHAT IS KEPT. `name` and the type name — what the marketplace/Assets count and
+ * list render — so this does not repeat the earlier mistake of trading a
+ * disclosure for a blank surface. No console component reads
+ * `product.dataAssets[].guid` or `.qualifiedName` (the create wizard reads
+ * `.length`; the owner editor reads `state.dataAssets`, which this branch never
+ * returns).
+ *
+ * WHAT IS NOT REDACTED HERE, AND WHY. Every other `state`-sourced field on the
+ * doc — `governanceDomainName`, `useCase`, `audience`, `owners`,
+ * `customAttributes`, `termsOfUse`/`documentation` links, `contract` — is
+ * operator-authored catalog metadata that the marketplace list already publishes
+ * to the same readers. `dataAssets[].qualifiedName` is the only field on the doc
+ * the PLATFORM writes from an infrastructure address.
+ */
+type CatalogAsset = { name: string; typeName?: string; entityType?: string };
+function catalogProductProjection(doc: DataProductDoc): Omit<DataProductDoc, 'dataAssets'> & { dataAssets?: CatalogAsset[] } {
+  const { dataAssets, ...rest } = doc;
+  if (!Array.isArray(dataAssets)) return rest;
+  return {
+    ...rest,
+    dataAssets: dataAssets.map((a) => {
+      const raw = a as unknown as Record<string, unknown>;
+      return {
+        name: typeof raw.name === 'string' ? raw.name : '',
+        ...(typeof raw.typeName === 'string' ? { typeName: raw.typeName } : {}),
+        ...(typeof raw.entityType === 'string' ? { entityType: raw.entityType } : {}),
+      };
+    }),
+  };
+}
+
 function catalogItemProjection(item: WithEtag): Partial<WorkspaceItem> {
   const st = (item.state ?? {}) as Record<string, unknown>;
   const str = (k: string): string | undefined => (typeof st[k] === 'string' ? (st[k] as string) : undefined);
@@ -636,14 +687,17 @@ export const GET = withSession<{ id: string }>(async (_req: NextRequest, { sessi
     if (access === 'discoverable') {
       // CATALOG READER. Not a member of the owning workspace; admitted only
       // because the product is published/deprecated in this caller's own tenant.
-      // The marketplace projection + a redacted item — no `doc`, no raw `state`
-      // (so no port `ref`s), no destructive-delete preconditions, and no
-      // subscriber/DQ internals. `isOwner` is false by construction here: a
-      // 'member' would not be on this branch.
+      // BOTH projections, not one: `item` is field-allowlisted AND `product` has
+      // its `dataAssets[].qualifiedName`/`guid` removed. Returning a projected
+      // `item` next to a raw `product` is how the first cut of this branch left
+      // the same `abfss://` address on the response it was redacting.
+      // No `doc`, no destructive-delete preconditions, no subscriber/DQ
+      // internals. `isOwner` is false by construction here: a 'member' would not
+      // be on this branch.
       return NextResponse.json({
         ok: true,
         item: catalogItemProjection(item),
-        product: itemToProduct(item, ownerTenantId),
+        product: catalogProductProjection(itemToProduct(item, ownerTenantId)),
         ownerTenantId,
         isOwner: false,
         displayName: item.displayName,

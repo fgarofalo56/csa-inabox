@@ -89,6 +89,13 @@ const SECRET_REF = 'abfss://gold@acct.dfs.core.windows.net/customers';
  *  `ref` — for an ADLS asset it IS the abfss address — and the catalog
  *  projection must redact it while still populating the Datasets tab. */
 const DATASET_REF = 'abfss://silver@acct.dfs.core.windows.net/customers';
+/** `state.dataAssets[]` is the OTHER address-bearing collection on this record —
+ *  written by `[id]/assets/route.ts` with the Purview `qualifiedName` and `guid`
+ *  of every attached asset — and it reaches the caller through `product`, not
+ *  through `item`. Redacting only `item` left this one whole, which is why the
+ *  fixture below carries it: an assertion whose fixture cannot reach the lie is
+ *  green over the leak. */
+const ASSET_REF = 'abfss://bronze@acct.dfs.core.windows.net/orders';
 /** The Purview Unified Catalog data-product GUID. NOT in the class above: it is
  *  an opaque catalog identifier, not an address, and the Overview grid renders a
  *  FALSE sentence when it is missing (see the projection test below). */
@@ -116,6 +123,11 @@ function product(id: string, opts: { workspaceId: string; lifecycle?: string }) 
         classifications: ['PII'],
       }],
       glossaryLinks: [{ name: 'Customer', guid: 'glossary-guid-do-not-leak' }],
+      dataAssets: [{
+        guid: 'asset-guid-do-not-leak', name: 'orders',
+        qualifiedName: ASSET_REF, entityType: 'azure_datalake_gen2_path',
+        addedAt: '2026-01-01T00:00:00.000Z',
+      }],
       ports: {
         input: [],
         output: [{ id: 'o1', name: 'Gold Delta', kind: 'delta', ref: SECRET_REF }],
@@ -259,8 +271,37 @@ describe('the documented Purview-UC discovery model still works, at catalog scop
     expect(raw).not.toContain('glossary-guid-do-not-leak');
   });
 
-  it('a state key nobody allowlisted is still excluded BY DEFAULT', async () => {
-    // The allowlist property itself — a field `state` grows tomorrow must not
+  it('REDACTS product.dataAssets — the SECOND response field carrying the same address', async () => {
+    // The redaction was written for `item` and measured on `item`. `product` is
+    // built by `itemToProduct`, which passes `state.dataAssets` straight through
+    // (`existingAssets as DataProductAsset[]` — a cast the persisted shape does
+    // not satisfy: `[id]/assets/route.ts` writes `qualifiedName`, `guid` and
+    // `addedAt` too). So the same `abfss://` address left by the other door on
+    // the very branch #3580 adds.
+    const body = await (await GET(req, ctx('dp-published'))).json();
+    const raw = JSON.stringify(body);
+    expect(raw).not.toContain('abfss://');
+    expect(raw).not.toContain(ASSET_REF);
+    expect(raw).not.toContain('asset-guid-do-not-leak');
+    // And the surface is NOT traded away to get there: the Assets count and the
+    // names the marketplace renders survive the projection.
+    expect(body.product.dataAssets).toHaveLength(1);
+    expect(body.product.dataAssets[0].name).toBe('orders');
+    expect(body.product.dataAssets[0].qualifiedName).toBeUndefined();
+    expect(body.product.dataAssets[0].guid).toBeUndefined();
+  });
+
+  it('a MEMBER still gets the raw dataAssets, so the redaction is scoped to the catalog branch', async () => {
+    // CONTROL. Without it, "no abfss:// in the body" would be equally explained
+    // by the field being dropped for everyone — which would break the owner
+    // editor that round-trips `state.dataAssets` back to Cosmos.
+    resolveWorkspaceAccessByOid.mockResolvedValue(MEMBER);
+    const body = await (await GET(req, ctx('dp-published'))).json();
+    expect(body.product.dataAssets[0].qualifiedName).toBe(ASSET_REF);
+    expect(body.item.state.dataAssets[0].guid).toBe('asset-guid-do-not-leak');
+  });
+
+  it('a state key nobody allowlisted is still excluded BY DEFAULT', async () => {    // The allowlist property itself — a field `state` grows tomorrow must not
     // ride along. Without this the projection could regress to a denylist and
     // every assertion above would still pass.
     const base = product('dp-new-field', { workspaceId: 'ws-1', lifecycle: 'published' });
