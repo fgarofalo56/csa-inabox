@@ -79,6 +79,45 @@
  * reads is actually PUBLISHED by a job that actually computes it
  * (judgeGuardProducer, derived from JOB_GUARD so the two cannot drift).
  *
+ * ── ROUND 5: THE OUT-OF-FRAME JUSTIFICATION WAS FALSE, AND THE HOLE WAS
+ *    OCCUPIED ──────────────────────────────────────────────────────────────
+ * Rounds 1-4 framed the step census as "every step AFTER the declaration", and
+ * justified the exclusion of everything before it like this: "the ADX preflight
+ * itself is the first thing that touches the estate and it is what produces the
+ * verdict." A reviewer MEASURED that premise false. On this PR's own receipt run
+ * 33519232492 (job 99896393942) the sovereign registry was opened THREE times
+ * inside `deploy-validate`, and the FIRST of them was step 10 —
+ * `Image preflight — never adopt a live app onto a missing tag` — which sat six
+ * steps ABOVE the declaration with no `if:` at all and calls
+ * scripts/csa-loom/preflight-image-tags.sh, which takes the ACR firewall lease
+ * unconditionally:
+ *
+ *   step 10  Image preflight — never adopt …   success   ← NOT guarded, and it
+ *     [acr-lease] HELD the ACR firewall lease on 'acrloomdcmt6cqoezlgs' … 75m
+ *     [acr-lease] opening ACR … (publicNetworkAccess=Enabled, defaultAction=Allow)
+ *     [acr-lease] ACR … VERIFIED locked        (~64s later)
+ *   step 14  ADX preflight                     success   estate_paused=true
+ *   step 15  Estate is DECLARED paused                   ← the verdict starts here
+ *
+ * So the summary's "this run neither opened the sovereign ACR's firewall" was
+ * false for the same reason round 2's was — a complete enumeration of the wrong
+ * set. And a probe inserting `az group delete -n rg-csa-loom-admin-usgovvirginia`
+ * BEFORE the declaration passed 22/22, because the frame excluded it by
+ * construction.
+ *
+ * THREE CHANGES, and only two are in this file. The step was MOVED below the
+ * declaration and given the same verdict clause `Provision` carries (it is
+ * gateable only there — `adx_preflight` is what produces the verdict), so it is
+ * now inside the existing census. `leaseTakingSteps` DERIVES the set of steps
+ * that reach the ACR firewall lease from the scripts each step actually
+ * invokes, and asserts every one carries a binding guard — wherever in the job
+ * it sits; that is the check the summary's run-scope claim now rests on,
+ * replacing a substring match that could not tell a true enumeration from a
+ * false one. And `PRE_DISPOSITIONS` ends the "inherently out of frame" clause
+ * altogether: every step ABOVE the declaration is now named with a written
+ * reason it is safe to run against an unmeasured estate, its body is scanned
+ * for estate-mutating `az`, and the reviewer's `az group delete` probe FAILS.
+ *
  * ── SCOPE, AND WHAT IS STILL OUTSIDE IT ────────────────────────────────────
  * Stated because the round-1 header said "EVERY step after the declaration",
  * and that was only ever true of ONE job. Precisely what this file frames:
@@ -96,6 +135,16 @@
  *             whether a refusal actually REFUSES (refusalBlock), and whether
  *             the job-level guard's value is PUBLISHED at all
  *             (judgeGuardProducer) — round 4.
+ *   IN FRAME  every step of `deploy-validate` that reaches the ACR firewall
+ *             lease, wherever it sits relative to the declaration
+ *             (leaseTakingSteps) — round 5. The set is DERIVED from the scripts
+ *             each step invokes, so a new lease taker is in frame the day it is
+ *             added, and a step that stops taking the lease leaves on its own.
+ *   IN FRAME  every step BEFORE the declaration (PRE_DISPOSITIONS) — round 5.
+ *             It cannot be gated, because the verdict does not exist yet, so
+ *             what is asserted is accounting: a named entry with a written
+ *             reason, and no estate-mutating `az` in the body. A new step
+ *             inserted up there FAILS until someone writes that reason down.
  *   OUT OF FRAME  whether the guard is CORRECT — that the ADX preflight really
  *             sets `estate_paused`, and that the register really says what the
  *             operator meant. That is estate-preflight.test.mjs's population,
@@ -107,11 +156,12 @@
  *   OUT OF FRAME  the reusable workflow `build-gov-images` calls. Its contents
  *             are gov-provision-streaming-migrate.yml's business; what this
  *             file pins is that the CALL does not happen on a declared pause.
- *   OUT OF FRAME, INHERENTLY  a step inserted BEFORE the declaration step. The
- *             estate_paused verdict does not exist yet at that point, so there
- *             is nothing for it to stand down on; the ADX preflight itself is
- *             the first thing that touches the estate and it is what produces
- *             the verdict.
+ *   OUT OF FRAME  a mutation reached through a SCRIPT FILE, an `actions/*` step
+ *             or a REST call, from a pre-declaration step — the lease census is
+ *             the one script-following exception, and it follows one script for
+ *             one mutation. NOT "inherently": round 5 deleted that word, having
+ *             measured it false. This is a real residual, and the written reason
+ *             each pre-declaration entry carries is what a human reads instead.
  *
  * ── SEAM ───────────────────────────────────────────────────────────────────
  * LOOM_GCCH_WORKFLOW_PATH overrides the workflow read, so the RED half of this
@@ -311,6 +361,30 @@ const MUTATING_AZ =
   /\baz\s+(?:[a-z][a-z0-9-]*\s+)*(create|delete|update|set|start|stop|restart|purge|upload|import|assign|add|remove|patch|deploy|invoke|replace|publish|enable|disable|revoke|regenerate|reset|attach|detach|move|renew|rotate)\b/;
 
 /**
+ * `az` command groups that configure the CLI ON THE RUNNER and can reach no
+ * Azure resource at all: `az cloud set` (which endpoint list to use),
+ * `az extension add` (install a CLI extension), `az config set`.
+ *
+ * A PROPERTY of the command namespace, deliberately, not a list of steps. The
+ * alternative — exempting the two steps that happen to run them today — is the
+ * allowlist this whole file exists to avoid, and it would have to grow every
+ * time a lane adds a login. `az group delete` in the same step still fails.
+ */
+const RUNNER_LOCAL_AZ = /^az\s+(?:cloud|extension|config|version)\b/;
+
+/**
+ * The first `az` call in `body` that WRITES to the estate, or null.
+ *
+ * @param {string} body
+ * @returns {string|null}
+ */
+export function estateMutatingAz(body) {
+  const m = MUTATING_AZ.exec(String(body || ''));
+  if (!m) return null;
+  return RUNNER_LOCAL_AZ.test(m[0]) ? null : m[0];
+}
+
+/**
  * @param {{mode:string, why?:string}} d
  * @param {{name:string, body?:string}} member
  * @param {'step'|'job'} kind
@@ -324,11 +398,11 @@ function judgeExemption(d, member, kind) {
         'an exemption with no reason is how this table rots into an allowlist.',
     );
   }
-  const m = MUTATING_AZ.exec(String(member.body || ''));
+  const m = estateMutatingAz(member.body);
   if (m) {
     problems.push(
       `${kind} '${member.name}' is dispositioned 'exempt' — "touches no estate resource" — but its body runs ` +
-        `\`${m[0]}\`, which WRITES. Either it is not exempt, or the exemption's reason is now false.`,
+        `\`${m}\`, which WRITES. Either it is not exempt, or the exemption's reason is now false.`,
     );
   }
   return problems;
@@ -375,6 +449,105 @@ export function parseSteps(src) {
   }
   if (cur) steps.push(cur);
   return steps;
+}
+
+/** The one script in this repo that flips `publicNetworkAccess` on an ACR. */
+const LEASE_SCRIPT = 'acr-firewall-lease.sh';
+
+/**
+ * Strip whole-line comments so a MENTION of the lease is not read as a CALL.
+ *
+ * scripts/csa-loom/apply-acr-compliance-tags.sh names `acr-firewall-lease.sh`
+ * twice, both times in a comment explaining why the template must not own the
+ * ACR's tag dictionary. It takes no lease. A `grep -l` derivation would put it
+ * in the census and the census would then be wrong in the harmless direction —
+ * which is still wrong, because a census nobody trusts gets deleted.
+ *
+ * @param {string} src
+ * @returns {string}
+ */
+function stripLineComments(src) {
+  return String(src)
+    .split('\n')
+    .filter((l) => !/^\s*(#|\/\/|\*|\/\*)/.test(l))
+    .join('\n');
+}
+
+const leaseCache = new Map();
+
+/**
+ * Does this repo script REACH the ACR firewall lease?
+ *
+ * @param {string} rel repo-relative path, as written in a step body
+ * @returns {boolean}
+ */
+export function scriptTakesLease(rel) {
+  if (leaseCache.has(rel)) return leaseCache.get(rel);
+  let verdict = false;
+  if (rel.endsWith(LEASE_SCRIPT)) {
+    verdict = true;
+  } else {
+    try {
+      verdict = stripLineComments(readFileSync(path.join(REPO_ROOT, rel), 'utf8')).includes(LEASE_SCRIPT);
+    } catch {
+      // A path this file cannot read is NOT evidence of anything (R7). Say so
+      // rather than recording a false negative: the caller asserts on it.
+      verdict = null;
+    }
+  }
+  leaseCache.set(rel, verdict);
+  return verdict;
+}
+
+/**
+ * Every step of `deploy-validate` that reaches the ACR firewall lease, DERIVED
+ * rather than listed.
+ *
+ * ROUND 5, on a review finding, and the reason it is a derivation. The summary
+ * this workflow prints on a stood-down run makes a claim about the whole RUN —
+ * "the sovereign ACR firewall was not opened". The check standing behind that
+ * claim used to be `summary.body.includes('artifact upload')`: a substring test
+ * over the sentence, which by construction cannot tell a true enumeration from
+ * a false one. It was green while step 10 of the same job held the lease.
+ *
+ * So the population is computed from what the steps DO: the repo scripts each
+ * `run:` block invokes, and whether those scripts reach acr-firewall-lease.sh.
+ * A new lease-taking step joins the census the day it is added, with no list to
+ * update — and a step that stops taking the lease leaves it the same way.
+ *
+ * @param {{name:string, if:string, body:string}[]} steps
+ * @returns {{name:string, if:string, via:string[]}[]}
+ */
+export function leaseTakingSteps(steps) {
+  const out = [];
+  for (const step of steps) {
+    // parseSteps has already dropped every comment line, so what remains of a
+    // `run:` block is the shell that actually executes. Tokenise rather than
+    // scan: a substring match reads `.github/scripts/fiab-smoke-test.sh` as
+    // `scripts/fiab-smoke-test.sh`, a path that does not exist, and the whole
+    // census then turns on a file the test cannot open.
+    const refs = [
+      ...new Set(
+        String(step.body)
+          .split(/[\s'"`;|&()<>]+/)
+          .map((t) => t.replace(/^\.\//, ''))
+          .filter((t) => /^(?:\.github\/)?scripts\/[\w./-]+\.(?:sh|mjs)$/.test(t)),
+      ),
+    ];
+    const via = [];
+    for (const rel of refs) {
+      const verdict = scriptTakesLease(rel);
+      assert.notEqual(
+        verdict,
+        null,
+        `step '${step.name}' invokes ${rel}, which this test could not READ. Whether it takes the ACR ` +
+          'firewall lease is UNKNOWN, and an unknown must not be recorded as a no.',
+      );
+      if (verdict) via.push(rel);
+    }
+    if (via.length > 0) out.push({ name: step.name, if: step.if, via });
+  }
+  return out;
 }
 
 /**
@@ -592,6 +765,10 @@ const DISPOSITIONS = new Map([
   ['Bicep what-if', { mode: 'guard' }],
   ['Deploy-verification evidence receipt (§7)', { mode: 'guard' }],
   ['Upload GCC-High verification receipt', { mode: 'guard' }],
+  // Round 5: this one MOVED here from six steps above the declaration, where it
+  // had no `if:` at all and opened the sovereign ACR firewall on every
+  // declared-paused run. See the header, and leaseTakingSteps.
+  ['Image preflight — never adopt a live app onto a missing tag', { mode: 'guard' }],
   ['Image preflight — Gov ACR must already hold every referenced tag', { mode: 'guard' }],
   ['Image-tag revert gate — never flatten a pinned app to the default', { mode: 'guard' }],
   ['Re-pin appImageTags to the RUNNING images (narrows the roll race — #3683)', { mode: 'guard' }],
@@ -628,6 +805,98 @@ const DISPOSITIONS = new Map([
 ]);
 
 /**
+ * Every step that runs BEFORE the declaration, with the reason it is allowed to.
+ *
+ * ROUND 5. Rounds 1-4 declared this half of the job out of frame "inherently",
+ * on the premise that nothing touches the estate before the verdict exists. A
+ * reviewer measured that false — `Image preflight — never adopt a live app onto
+ * a missing tag` sat here and opened the sovereign ACR firewall on every
+ * declared-paused run — and demonstrated the cost by inserting
+ * `az group delete -n rg-csa-loom-admin-usgovvirginia` above the declaration and
+ * watching all 22 tests pass.
+ *
+ * The verdict genuinely does not exist yet up here, so there is nothing to gate
+ * ON: `steps.adx_preflight.outputs.estate_paused` is empty until step 11. What
+ * IS available is accounting. Every step above the declaration is named, with a
+ * written reason it is safe to run against an estate this job has not yet
+ * measured — and a NEW one fails this suite until someone writes that reason
+ * down. The reason is the part a human reads, and it is the sentence whose
+ * absence let round 5's defect sit here for the whole life of the lane. Where a
+ * step CANNOT honestly claim it is safe, the remedy is the one applied in this
+ * PR: move it below the declaration and guard it.
+ */
+const PRE_DISPOSITIONS = new Map([
+  ['(unnamed)', 'actions/checkout. Reads this repository; reaches no Azure endpoint.'],
+  [
+    'Azure login (Gov sub) — limitlessdata_deploy SP',
+    'azure/login. Mints a token for the runner. It grants this job nothing it did not already have and writes no resource.',
+  ],
+  [
+    'Set Azure cloud to Gov',
+    '`az cloud set` selects which ENDPOINT LIST the CLI on this runner uses. Runner-local configuration; it cannot reach a resource (see RUNNER_LOCAL_AZ).',
+  ],
+  ['Setup Bicep', 'Installs the bicep CLI on the runner. No Azure call at all.'],
+  [
+    'Pre-install the resource-graph CLI extension',
+    '`az extension add` installs a CLI extension on the runner. Runner-local; it cannot reach a resource (see RUNNER_LOCAL_AZ).',
+  ],
+  [
+    'Topology guard',
+    'Reads the hub RG to decide the topology and REFUSES on a conflict. A read plus a refusal; it writes nothing, and it must run before the verdict because the verdict step needs the topology.',
+  ],
+  [
+    'Resolve the existing MSAL client id (sign-in durability)',
+    'Reads the live app registration / Container App to adopt the client id rather than re-minting it, and exports it. A read whose whole purpose is to NOT write.',
+  ],
+  [
+    'Adopt the image tags this estate is running (no repo variable required)',
+    'Reads the running Container Apps and exports LOOM_*_TAG. Read-only, and it is the PRODUCER those later steps interpolate bare under `set -u` — skipping it aborts them instead of relaxing them (#3449).',
+  ],
+  [
+    "Adopt the estate's live internal trust token (never re-mint it)",
+    'Reads the estate\'s live token and exports it, precisely so bicep does not re-mint and strand every holder (#3056). A read; the alternative to running it is a rotation.',
+  ],
+  [
+    'Adopt the DLZ (discover what the estate already owns — #3380)',
+    'Multi-subscription DISCOVERY (deploy-integrity R5): enumerates what the estate already owns and builds LOOM_ADOPT_JSON. Reads only — adopting is what stops the deploy duplicating a resource.',
+  ],
+  [
+    "Resolve the hub DNS resolver's IMMUTABLE IP allocation method",
+    'Reads the existing resolver inbound endpoint so the template proposes the allocation method it already has. Read-only.',
+  ],
+  [
+    'ADX preflight — a stopped cluster cannot take its principal assignments',
+    'THE VERDICT PRODUCER. It is the one step that cannot be gated on the verdict, because it computes it. Its own mutation — starting a stopped cluster — is exactly what the register suppresses: on a declared pause it publishes estate_paused=true and starts nothing (scripts/ci/ensure-adx-cluster-running.mjs, covered by estate-preflight.test.mjs).',
+  ],
+]);
+
+/**
+ * @param {{name:string, body:string}} step
+ * @returns {string[]}
+ */
+function judgePreVerdict(step) {
+  const problems = [];
+  const why = PRE_DISPOSITIONS.get(step.name);
+  if (typeof why !== 'string' || why.trim().length === 0) {
+    problems.push(
+      `step '${step.name}' runs BEFORE the declaration and has no entry in PRE_DISPOSITIONS. ` +
+        'The estate_paused verdict does not exist yet up there, so it cannot be gated — which is exactly ' +
+        'why it has to be ACCOUNTED FOR instead. Write down why it is safe to run against an estate this ' +
+        'job has not measured, or move it below the declaration and gate it.',
+    );
+    return problems;
+  }
+  const m = estateMutatingAz(step.body);
+  if (m) {
+    problems.push(
+      `step '${step.name}' runs BEFORE the declaration — where nothing can be gated — and its body runs ` +
+        `\`${m}\`, which WRITES to the estate. Move it below the declaration and carry \`${GUARD}\`.`,
+    );
+  }
+  return problems;
+}
+
+/**
  * @param {{name:string, if:string, body:string}[]} steps
  * @returns {string[]} one problem string per violation; empty means compliant.
  */
@@ -635,6 +904,7 @@ export function judge(steps) {
   const at = steps.findIndex((s) => s.name === DECLARATION_STEP);
   if (at < 0) return [`the declaration step '${DECLARATION_STEP}' is gone — the stand-down has no anchor at all`];
   const problems = [];
+  for (const step of steps.slice(0, at)) problems.push(...judgePreVerdict(step));
   for (const step of steps.slice(at + 1)) {
     const d = DISPOSITIONS.get(step.name);
     if (!d) {
@@ -696,6 +966,49 @@ export function judge(steps) {
   }
   return problems;
 }
+
+test('MUTATION: the reviewer probe — a mutating step inserted BEFORE the declaration', () => {
+  // The exact probe that passed 22/22 against the parent, quoted verbatim from
+  // the review: a subscription-scoped delete of the GCC-High admin RG, inserted
+  // immediately above the declaration, where rounds 1-4 declared everything
+  // "OUT OF FRAME, INHERENTLY".
+  const steps = parseSteps(workflowText());
+  const at = steps.findIndex((s) => s.name === DECLARATION_STEP);
+  assert.ok(at > 0);
+  const mutant = {
+    name: 'Reconcile the sovereign estate',
+    if: '',
+    body: '      - name: Reconcile the sovereign estate\n        run: az group delete -n rg-csa-loom-admin-usgovvirginia --yes',
+  };
+  const problems = judge([...steps.slice(0, at), mutant, ...steps.slice(at)]);
+  assert.equal(problems.length, 1, `expected exactly one problem, got: ${problems.join(' | ')}`);
+  assert.match(problems[0], /runs BEFORE the declaration and has no entry in PRE_DISPOSITIONS/);
+});
+
+test('MUTATION: a DISPOSITIONED pre-declaration step rewritten to mutate is caught', () => {
+  // The narrower bypass: keep the name, keep the reason, change what it does.
+  // Reading the estate is what these steps are FOR, so the reason alone cannot
+  // carry this — the body has to be scanned too.
+  const target = 'Adopt the image tags this estate is running (no repo variable required)';
+  const mutated = parseSteps(workflowText()).map((s) =>
+    s.name === target ? { ...s, body: `${s.body}\n          az group delete -n rg-csa-loom-admin-usgovvirginia --yes` } : s,
+  );
+  const problems = judge(mutated);
+  assert.equal(problems.length, 1, `expected exactly one problem, got: ${problems.join(' | ')}`);
+  assert.match(problems[0], /WRITES to the estate/);
+});
+
+test('the runner-local carve-out is a namespace, not an allowlist', () => {
+  // `az cloud set` and `az extension add` configure the CLI on the runner and
+  // cannot reach a resource; two real pre-declaration steps run them. The
+  // carve-out has to be exactly that wide and no wider.
+  assert.equal(estateMutatingAz('az cloud set --name AzureUSGovernment'), null);
+  assert.equal(estateMutatingAz('az extension add --name resource-graph -y'), null);
+  assert.equal(estateMutatingAz('az config set core.only_show_errors=true'), null);
+  assert.equal(estateMutatingAz('az group delete -n rg-csa-loom-admin-usgovvirginia --yes'), 'az group delete');
+  assert.equal(estateMutatingAz('az containerapp update --set-env-vars X=1'), 'az containerapp update');
+  assert.equal(estateMutatingAz('az account show --query id -o tsv'), null);
+});
 
 test('every step after the declaration stands down, refuses, or is dispositioned', () => {
   const problems = judge(parseSteps(workflowText()));
@@ -948,6 +1261,61 @@ test('MUTATION: deleting the producer job leaves the guard present and inert', (
   );
 });
 
+test('every step that reaches the ACR firewall lease stands down, wherever it sits', () => {
+  const takers = leaseTakingSteps(parseSteps(workflowText()));
+  // A green assertion over an empty population is the shape this repo keeps
+  // re-finding, so the census has to be non-empty and it has to name the steps
+  // the run log named. Run 33519232492 opened the registry three times inside
+  // this job; those three are exactly what this must find.
+  assert.equal(
+    takers.length,
+    3,
+    `expected the three known lease takers in deploy-validate, found ${takers.length}: ${takers
+      .map((t) => `${t.name} [${t.via.join(',')}]`)
+      .join(' | ')}`,
+  );
+  const unguarded = takers
+    .filter((t) => !t.if.includes(GUARD) || !guardIsBinding(t.if, GUARD))
+    .map((t) => `${t.name} (reaches the lease via ${t.via.join(', ')}) if=\`${t.if || '(none)'}\``);
+  assert.deepEqual(
+    unguarded,
+    [],
+    'a step of deploy-validate opens the sovereign ACR firewall on a run that has declared it measures ' +
+      `nothing, which makes the stand-down summary's run-scope claim false (deploy-integrity R7):\n  - ${unguarded.join(
+        '\n  - ',
+      )}`,
+  );
+});
+
+test('MUTATION: the round-5 head shape — an UNGUARDED lease taker — is caught', () => {
+  // The exact shape measured at the parent: the adoption preflight sitting
+  // before the declaration with no `if:` at all, while the summary said the
+  // firewall was not opened. Position is irrelevant to this census, so the
+  // mutant only has to drop the clause.
+  const target = 'Image preflight — never adopt a live app onto a missing tag';
+  const mutated = parseSteps(workflowText()).map((s) => (s.name === target ? { ...s, if: '' } : s));
+  const takers = leaseTakingSteps(mutated);
+  const hit = takers.find((t) => t.name === target);
+  assert.ok(hit, 'the mutant must still be recognised as a lease taker — that is what makes it a defect');
+  assert.equal(hit.if, '');
+  assert.ok(!hit.if.includes(GUARD), 'the mutant has no guard, which is the whole point');
+});
+
+test('the lease census DERIVES its population and does not just pattern-match a name', () => {
+  // Negative control. `apply-acr-compliance-tags.sh` MENTIONS acr-firewall-lease.sh
+  // twice, in comments, and takes no lease; a `grep -l` derivation would put it
+  // in the census. And the lease script itself must resolve true, or the whole
+  // derivation is vacuous.
+  assert.equal(scriptTakesLease('scripts/csa-loom/acr-firewall-lease.sh'), true);
+  assert.equal(scriptTakesLease('scripts/csa-loom/preflight-image-tags.sh'), true);
+  assert.equal(scriptTakesLease('scripts/ci/assert-acr-image-tags.sh'), true);
+  assert.equal(scriptTakesLease('scripts/ci/assert-no-silent-image-tag-revert.mjs'), true);
+  assert.equal(scriptTakesLease('scripts/csa-loom/apply-acr-compliance-tags.sh'), false);
+  assert.equal(scriptTakesLease('scripts/ci/adopt-image-tags.mjs'), false);
+  // An unreadable path is an UNKNOWN, never a no (R7).
+  assert.equal(scriptTakesLease('scripts/ci/this-script-does-not-exist.mjs'), null);
+});
+
 test('the stand-down summary claims only what the run established (R7)', () => {
   const summary = parseSteps(workflowText()).find((s) => s.name === DECLARATION_STEP);
   assert.ok(summary, 'the declaration summary step is gone');
@@ -965,6 +1333,34 @@ test('the stand-down summary claims only what the run established (R7)', () => {
     assert.ok(
       summary.body.toLowerCase().includes(skipped),
       `the summary enumerates what was skipped and omits the ${skipped} — an incomplete enumeration reads as a complete one`,
+    );
+  }
+  // ROUND 5 — the part a substring test could never do. The summary makes a
+  // claim about the whole RUN, not this job: that the sovereign ACR firewall was
+  // not opened. Two things have to hold for that sentence to be TRUE, and both
+  // are checked here rather than read:
+  //   1. every lease taker INSIDE this job stands down on the same verdict that
+  //      makes this summary print (`leaseTakingSteps`, asserted above and
+  //      re-asserted here so deleting that test cannot quietly re-open this one);
+  //   2. the lease taker OUTSIDE this job — the `build-gov-images` image phase —
+  //      is named, so the claim is checkable against the run's job list.
+  // The parent's copy failed 1 while passing the old substring form of 2.
+  const claimsTheFirewall = /firewall/i.test(summary.body);
+  if (claimsTheFirewall) {
+    const takers = leaseTakingSteps(parseSteps(workflowText()));
+    const unguarded = takers.filter((t) => !t.if.includes(GUARD) || !guardIsBinding(t.if, GUARD));
+    assert.deepEqual(
+      unguarded.map((t) => t.name),
+      [],
+      'the stand-down summary tells the operator the sovereign ACR firewall was not opened, and a step of ' +
+        'this same job takes the lease on exactly the runs that print it. Correct the copy or gate the step ' +
+        '(deploy-integrity R7).',
+    );
+    assert.match(
+      summary.body,
+      /build-gov-images/,
+      'a run-scope claim about the ACR firewall must name the image-phase JOB, which is the lease taker this ' +
+        'step census cannot see',
     );
   }
 });
@@ -986,6 +1382,13 @@ test('CLOUD PARITY: no sibling deploy lane has an UNGATED image phase on a cron'
   // So ONE lane is actually examined today. The negative control that says the
   // predicate discriminates rather than passing vacuously: run this same check
   // against the pre-fix deploy-fiab-gcch and it reports cron=true, guarded=false.
+  //
+  // IL5 IS A REAL, TRACKED GAP, not a clean skip (#4391). It has the image
+  // phase, no cron, and `grep -c estate_paused` = 0 — so the day an IL5 entry
+  // is added to the register, a `run_mode=full` dispatch opens the IL5 registry
+  // on a declared-paused estate. cloud-parity.md calls a fix landed in one
+  // boundary and left in another INCOMPLETE, and this comment is the disclosure,
+  // not the excuse.
   const lanes = ['deploy-fiab-gcch', 'deploy-fiab-gcc', 'deploy-fiab-il5', 'deploy-fiab-commercial'];
   const unguarded = [];
   for (const lane of lanes) {

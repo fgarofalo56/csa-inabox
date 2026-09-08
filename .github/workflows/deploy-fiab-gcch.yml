@@ -185,11 +185,22 @@ jobs:
   # checked-in file alone. scripts/ci/_estate-pause-declaration.mjs is pure — no
   # az, no fetch, no child_process.
   #
-  # FAIL-CLOSED ON THIS SIDE, deliberately. If this job fails, `build-gov-images`
-  # is skipped (an un-`always()` dependant of a failed need), so an unknown
-  # verdict does NOT open a sovereign registry. `deploy-validate` runs on
-  # `always()` and does not need this job, so the deploy path is unaffected — and
-  # its own image preflight still refuses if a referenced tag is missing.
+  # WHAT IS FAIL-CLOSED HERE, AND WHAT IS NOT. Precisely, because an earlier
+  # revision of this comment said "an unknown verdict does NOT open a sovereign
+  # registry" and the script it describes says the opposite.
+  #   FAIL-CLOSED: this JOB. If it fails — checkout, node, an unhandled throw —
+  #     `build-gov-images` is skipped, being an un-`always()` dependant of a
+  #     failed need. A job that could not RUN never opens the registry.
+  #   FAIL-OPEN, DELIBERATELY: the SCRIPT. An absent register, an unreadable
+  #     file (EACCES), unparseable JSON, a boundary that is not named, and an
+  #     expired `reviewBy` ALL resolve to `declared_paused=false` with a
+  #     warning — the pre-register behaviour, in which the image phase runs
+  #     (scripts/ci/estate-pause-declared.mjs:48-55, codified by
+  #     scripts/ci/__tests__/gcch-standdown-completeness.test.mjs). Suppression
+  #     needs POSITIVE evidence: a JSON parse error must not be able to stand a
+  #     P0 sovereign deploy lane down silently.
+  # `deploy-validate` runs on `always()` and does not need this job, so the
+  # deploy path is unaffected either way.
   pause-declaration:
     name: Is the GCC-High estate DECLARED paused?
     runs-on: ubuntu-latest
@@ -514,38 +525,6 @@ jobs:
             --param-file platform/fiab/bicep/params/gcc-high.bicepparam \
             --rg "rg-csa-loom-admin-${AZURE_LOCATION}"
 
-      # ADOPTED-IMAGE PREFLIGHT. This deploy ADOPTS the Container Apps that are
-      # already running in rg-csa-loom-admin-<loc> and rewrites their image
-      # references to the tags the .bicepparam pulls. An ARM PUT naming a tag that
-      # is not in the registry SUCCEEDS, and the new revision then fails its image
-      # pull — i.e. the deploy takes a live federal app down. Verify first.
-      # Greenfield (no such Container App yet) passes: a missing tag is the
-      # expected state of the documented two-phase image path.
-      #
-      # `loom-unity` IS in the require list as of #2681: admin-plane/main.bicep
-      # now deploys the Unity-Catalog-compatible OSS metastore DEFAULT-ON on
-      # every boundary, so this deploy ADOPTS the live GCC-High `loom-unity`
-      # Container App and rewrites its image reference. That app is the sovereign
-      # catalog — Databricks Unity Catalog has no Gov endpoint — so repointing it
-      # at a tag the Gov ACR does not hold takes the catalog down. The producer
-      # is .github/workflows/gov-build-images.yml (apps=loom-unity), which pushes
-      # `:v0.1` by default; export LOOM_UNITY_TAG to pin something else and this
-      # check follows it.
-      - name: Image preflight — never adopt a live app onto a missing tag
-        run: |
-          set -euo pipefail
-          # dlz-attach deploys only a landing zone into a DIFFERENT subscription
-          # and never touches the hub's admin-plane apps, so nothing is adopted —
-          # checking the hub's registry would be a false stop.
-          if [ "${CSA_LOOM_TOPOLOGY:-}" = "dlz-attach" ]; then
-            echo "::notice::topology=dlz-attach — no admin-plane Container App is adopted; skipping the image preflight."
-            exit 0
-          fi
-          bash scripts/csa-loom/preflight-image-tags.sh \
-            --rg "rg-csa-loom-admin-${AZURE_LOCATION}" \
-            --require "loom-console:${LOOM_CONSOLE_TAG:-v0.1}" \
-            --require "loom-unity:${LOOM_UNITY_TAG:-v0.1}"
-
       # #3056 — adopt the estate's LIVE internal trust token instead of letting
       # bicep re-mint it (`loomGeneratedSecretSeed` defaults to `newGuid()`, so
       # every deploy rotated it and stranded every holder outside the
@@ -844,13 +823,24 @@ jobs:
             echo "its cluster stopped."
             echo ""
             echo "SKIPPED IN THIS JOB: the what-if, the deploy-verification evidence receipt"
-            echo "and its artifact upload, the image preflight (which leases this boundary's"
-            echo "ACR firewall open), the image-tag revert gate, the re-pin, the apply, the"
-            echo "Front Door private-endpoint approval and the DLZ template publish. SKIPPED"
-            echo "ELSEWHERE IN THIS RUN: the \`build-gov-images\` image phase — the same"
-            echo "declaration skips it, so this run neither opened the sovereign ACR's firewall"
-            echo "nor pushed \`loom-migrate\`/\`loom-risingwave\` — and the chained post-deploy"
-            echo "bootstrap. A stopped Kusto engine refuses \`principalAssignments\`, so none"
+            echo "and its artifact upload, BOTH image preflights — the adoption preflight"
+            echo "(\`preflight-image-tags.sh\`) and the Gov ACR tag assertion"
+            echo "(\`assert-acr-image-tags.sh\`) — the image-tag revert gate, the re-pin, the"
+            echo "apply, the Front Door private-endpoint approval and the DLZ template"
+            echo "publish. SKIPPED ELSEWHERE IN THIS RUN: the \`build-gov-images\` image phase"
+            echo "and the chained post-deploy bootstrap."
+            echo ""
+            echo "THE SOVEREIGN ACR FIREWALL WAS NOT OPENED BY THIS RUN. Four things on this"
+            echo "lane take the owned ACR firewall lease (\`publicNetworkAccess=Enabled\`):"
+            echo "\`build-gov-images\`, the two image preflights and the revert gate. All four"
+            echo "are named above and all four stood down — the job on the declaration, the"
+            echo "three steps on this same verdict. The suite"
+            echo "\`scripts/ci/__tests__/gcch-standdown-completeness.test.mjs\` derives that set"
+            echo "of lease takers from the scripts each step invokes, and fails if any one of"
+            echo "them is reachable on a stood-down run, so this sentence is checked rather"
+            echo "than asserted (deploy-integrity R7)."
+            echo ""
+            echo "A stopped Kusto engine refuses \`principalAssignments\`, so none"
             echo "of them could have produced a real answer, and none of them should touch an"
             echo "estate this run has declared it will not measure. A teardown dispatched"
             echo "against a declared-paused estate REFUSES rather than skipping, so it can"
@@ -923,6 +913,70 @@ jobs:
           name: gov-verify-receipt-gcch-${{ github.run_id }}
           path: ${{ runner.temp }}/gov-verify-receipt-gcch-${{ github.run_id }}.txt
           if-no-files-found: warn
+
+      # ADOPTED-IMAGE PREFLIGHT. This deploy ADOPTS the Container Apps that are
+      # already running in rg-csa-loom-admin-<loc> and rewrites their image
+      # references to the tags the .bicepparam pulls. An ARM PUT naming a tag that
+      # is not in the registry SUCCEEDS, and the new revision then fails its image
+      # pull — i.e. the deploy takes a live federal app down. Verify first.
+      # Greenfield (no such Container App yet) passes: a missing tag is the
+      # expected state of the documented two-phase image path.
+      #
+      # `loom-unity` IS in the require list as of #2681: admin-plane/main.bicep
+      # now deploys the Unity-Catalog-compatible OSS metastore DEFAULT-ON on
+      # every boundary, so this deploy ADOPTS the live GCC-High `loom-unity`
+      # Container App and rewrites its image reference. That app is the sovereign
+      # catalog — Databricks Unity Catalog has no Gov endpoint — so repointing it
+      # at a tag the Gov ACR does not hold takes the catalog down. The producer
+      # is .github/workflows/gov-build-images.yml (apps=loom-unity), which pushes
+      # `:v0.1` by default; export LOOM_UNITY_TAG to pin something else and this
+      # check follows it.
+      - name: Image preflight — never adopt a live app onto a missing tag
+        # STAND DOWN on a DECLARED-paused estate (#4233 round 5). This step is
+        # a MUTATION of the sovereign estate, not a read: preflight-image-tags.sh
+        # takes the OWNED ACR firewall lease whenever it intends to read tags
+        # ("Leasing unconditionally costs an ACR firewall update on the happy
+        # path. That is the correct trade…", scripts/csa-loom/preflight-image-
+        # tags.sh:168 and :222-242), which sets publicNetworkAccess=Enabled on
+        # the GCC-High registry and re-locks it. This workflow passes no
+        # --no-lease, and --no-lease against a firewalled data plane REFUSES
+        # rather than reading, so skipping the lease is not an option here.
+        # MEASURED on run 33519232492, job 99896393942, while this step still sat
+        # BEFORE the declaration with no if: at all:
+        #   [acr-lease] HELD the ACR firewall lease on 'acrloomdcmt6cqoezlgs' ... 75m
+        #   [acr-lease] opening ACR ... (publicNetworkAccess=Enabled, defaultAction=Allow)
+        #   [acr-lease] ACR ... VERIFIED locked            (~64s later)
+        # So the run that printed "this run measures nothing" had already opened
+        # the sovereign registry, before the sentence that said it had not.
+        #
+        # THE FIX IS THE MOVE, not only the clause. The verdict this reads is
+        # produced by `adx_preflight`, so the step had to come AFTER it to be
+        # gateable at all. It sits next to the sibling Gov ACR preflight and still
+        # ahead of the only step that rewrites an image reference (`Provision`),
+        # which is the whole reason it exists. Nothing between its old position
+        # and this one consumes it: it publishes no output and refuses in place.
+        #
+        # WHY NOT the job-level declaration clause instead. `declared` is BROADER
+        # than `estate_paused`: declared-but-Running resolves to declared=true and
+        # estate_paused=false, and on that run `Provision` DOES apply. Gating this
+        # step on the declaration alone would have skipped the adoption preflight
+        # while the apply proceeded — trading an open firewall for a live federal
+        # app adopted onto a tag nobody proved exists. It carries the SAME verdict
+        # as `Provision`, so the two can never diverge.
+        if: (github.event_name == 'schedule' || inputs.run_mode == 'full') && steps.adx_preflight.outputs.estate_paused != 'true'
+        run: |
+          set -euo pipefail
+          # dlz-attach deploys only a landing zone into a DIFFERENT subscription
+          # and never touches the hub's admin-plane apps, so nothing is adopted —
+          # checking the hub's registry would be a false stop.
+          if [ "${CSA_LOOM_TOPOLOGY:-}" = "dlz-attach" ]; then
+            echo "::notice::topology=dlz-attach — no admin-plane Container App is adopted; skipping the image preflight."
+            exit 0
+          fi
+          bash scripts/csa-loom/preflight-image-tags.sh \
+            --rg "rg-csa-loom-admin-${AZURE_LOCATION}" \
+            --require "loom-console:${LOOM_CONSOLE_TAG:-v0.1}" \
+            --require "loom-unity:${LOOM_UNITY_TAG:-v0.1}"
 
       # ── IMAGE PREFLIGHT (round-3, PR #2640) ───────────────────────────────
       # This deploy is subscription-scoped and ADOPTS every app already running
