@@ -28,14 +28,20 @@
  *
  * The correct fix is a cross-replica cancel signal: a TTL'd cancel-intent
  * record keyed by requestId that every replica polls for its OWN live keys.
- * That store is NOT implemented yet — it needs a Cosmos container registered in
- * `lib/azure/cosmos-client.ts` and in the cosmos bicep `loomContainers` list.
- * Until it lands, a cancel that reaches the wrong replica is a no-op, and this
- * route says so instead of reporting a cancellation it did not perform.
+ * That store IS the mechanism now (`recordCancelIntent` in azure-sql-client),
+ * so a cancel that lands on the wrong replica is no longer a no-op — it is
+ * persisted, and the replica that owns the request acts on it.
+ *
+ * WHAT THE RESPONSE PROMISES (R7). `cancelled:true` is returned ONLY when this
+ * replica held the request and called `.cancel()` itself. Otherwise the honest
+ * answer is `cancelled:'requested'` — the signal was persisted, which is not the
+ * same as a query having stopped. Only the /query response's `code: 'ECANCEL'`
+ * establishes that, and the client should treat that as the receipt. When the
+ * intent store is unavailable the route says so and claims nothing.
  */
 
 import { NextRequest, NextResponse } from 'next/server';
-import { liveRequests } from '@/lib/azure/azure-sql-client';
+import { liveRequests, recordCancelIntent } from '@/lib/azure/azure-sql-client';
 import { withSession } from '@/lib/api/route-toolkit';
 
 export const runtime = 'nodejs';
@@ -49,18 +55,41 @@ export const POST = withSession(async (req: NextRequest) => {
   }
   const request = liveRequests.get(requestId);
   if (!request) {
+    // Not this replica's request. Publish a cross-replica cancel intent; the
+    // replica that owns it picks the intent up on its next poll and sends the
+    // TDS ATTENTION packet (#3400).
+    const persisted = await recordCancelIntent(requestId);
+    if (persisted) {
+      // R7 — 'requested', NOT 'cancelled'. What was established is that the
+      // signal is stored, not that a query stopped. The /query response
+      // (code ECANCEL) is the receipt for the cancellation itself.
+      return NextResponse.json({
+        ok: true,
+        cancelled: 'requested',
+        reason:
+          'No in-flight request with that id is registered on the replica that received this call, so a '
+          + 'cross-replica cancel intent was recorded instead. If the query is still running on another '
+          + 'replica it will be cancelled within one poll interval and its /query call returns code ECANCEL; '
+          + 'if it had already completed the intent simply expires. This endpoint cannot distinguish those '
+          + 'two cases and does not claim to.',
+        crossReplica: true,
+        requestId,
+      });
+    }
     // R7 — state ONLY what was established. This replica holds no live request
-    // under that id; the code cannot tell "already completed" from "started on
-    // another replica", so it must not assert either. `ok:true` because the
-    // call itself was handled and is idempotent (the UI may cancel while the
-    // query is completing); `cancelled:false` because nothing was cancelled.
+    // under that id, and the intent store is not available to carry the signal
+    // anywhere else, so nothing was cancelled and nothing was requested.
+    // `ok:true` because the call itself was handled and is idempotent (the UI
+    // may cancel while the query is completing); `cancelled:false` because
+    // nothing was cancelled.
     return NextResponse.json({
       ok: true,
       cancelled: false,
       reason:
         'No in-flight request with that id is registered on the replica that received this call. '
         + 'It has either already completed, or it is running on a different console replica — this '
-        + 'endpoint cannot distinguish the two, and no cross-replica cancel signal exists yet (#3400).',
+        + 'endpoint cannot distinguish the two, and the cross-replica cancel-intent store could not be '
+        + 'reached to carry the signal (no Cosmos endpoint configured, or the write failed).',
       crossReplica: false,
       requestId,
     });

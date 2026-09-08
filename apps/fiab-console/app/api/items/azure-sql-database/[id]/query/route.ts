@@ -94,6 +94,23 @@ export const POST = withSession<{ id: string }>(async (req, { session, params })
     });
   } catch (e: any) {
     const status = e instanceof AzureSqlError ? e.status : 502;
+    // #3400 — a cancellation is not a backend fault. tedious rejects a
+    // cancelled request with RequestError('Canceled.', 'ECANCEL'), and THIS
+    // response is the only thing that establishes that the query actually
+    // stopped (the cancel route can only establish that the signal was sent —
+    // for a cross-replica cancel it never observes the request at all).
+    // `cancelled: true` is ADDITIVE: jobs-store already keys off the body's
+    // `code === 'ECANCEL'`, and the status is deliberately left as it was so no
+    // existing consumer changes behaviour.
+    if (e?.code === 'ECANCEL') {
+      return NextResponse.json({
+        ok: false,
+        cancelled: true,
+        error: e?.message || 'Canceled.',
+        code: 'ECANCEL',
+        sqlNumber: e?.number,
+      }, { status });
+    }
     return NextResponse.json({
       ok: false,
       error: e?.message || String(e),

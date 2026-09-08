@@ -368,17 +368,223 @@ const pools: Map<string, sql.ConnectionPool> = new Map();
  *     affinity OFF: the MSAL token cache is Cosmos-persisted so a round-robin
  *     request finds a warm cache.
  *
- * The correct fix is a CROSS-REPLICA cancel signal — a TTL'd cancel-intent
- * record keyed by requestId that each replica polls for its own live keys —
- * NOT affinity. That store is not implemented yet: it needs a Cosmos container
- * (`lib/azure/cosmos-client.ts` + the cosmos bicep `loomContainers` list). Until
- * it lands, a cancel that reaches the wrong replica is a NO-OP, and the cancel
- * route reports exactly that rather than claiming a cancellation.
+ * The fix is a CROSS-REPLICA cancel signal — a TTL'd cancel-intent record keyed
+ * by requestId that each replica polls for its OWN live keys — NOT affinity.
+ * That store is implemented below ({@link recordCancelIntent} + the watcher);
+ * the cancel route writes an intent when the id is not local, and the replica
+ * that actually owns the request picks it up and calls `.cancel()`.
  *
  * Entries are removed on completion, error, or explicit cancel (in the `finally`
  * of `executeQuery` and in the cancel route after `.cancel()`).
  */
 export const liveRequests: Map<string, sql.Request> = new Map();
+
+// ============================================================
+// Cross-replica cancel intents (#3400)
+// ============================================================
+
+/**
+ * The cross-replica cancel signal.
+ *
+ * `liveRequests` is per-replica, and `loom-console` runs `multiRevision: true`
+ * with `minReplicas: 2`, so a cancel POST routinely lands on a replica that
+ * never started the query. Session affinity cannot be the answer — ACA REQUIRES
+ * `affinity:'none'` in multiple-revision mode and app-deployments.bicep asserts
+ * it on every deploy (#3399).
+ *
+ * So the cancel route writes a short-lived INTENT keyed by requestId, and every
+ * replica polls for the intents matching the ids IT owns. The replica holding
+ * the `sql.Request` sends the TDS ATTENTION packet; the requesting replica never
+ * needs to reach it directly.
+ *
+ * WHAT THIS DOES NOT PROMISE. The intent is a request, not a receipt: writing it
+ * establishes that the signal was persisted, NOT that a query was cancelled.
+ * Only the `/query` response (`code: 'ECANCEL'`) establishes that, and the
+ * cancel route's wording is chosen to say exactly that much and no more (R7).
+ */
+export interface CancelIntentStore {
+  /** Persist a cancel intent for `requestId`. Throws if it could not be stored. */
+  record(requestId: string): Promise<void>;
+  /** True when an unexpired cancel intent exists for `requestId`. */
+  has(requestId: string): Promise<boolean>;
+  /** Best-effort removal once the intent has been acted on. */
+  clear(requestId: string): Promise<void>;
+}
+
+/** Cosmos container backing the intent store. Created lazily (createIfNotExists). */
+export const CANCEL_INTENT_CONTAINER = 'sql-cancel-intents';
+
+/**
+ * Intent lifetime (seconds). Long enough to outlive the poll interval and a
+ * slow replica, short enough that a stale intent can never cancel a LATER query
+ * — ids are client-minted `crypto.randomUUID()`, so reuse is not a real risk,
+ * but a bounded TTL keeps the container self-evicting with no sweeper.
+ */
+export const CANCEL_INTENT_TTL_SECONDS = 120;
+
+/** How often a replica with live requests checks for intents on its own keys. */
+function cancelPollMs(): number {
+  const n = Number(process.env.LOOM_SQL_CANCEL_POLL_MS);
+  return Number.isFinite(n) && n >= 250 ? n : 1_000;
+}
+
+/**
+ * Default-ON wherever Cosmos is configured (auto-bind-by-default: the platform
+ * wires its own backing store, the operator sets nothing). Off with no Cosmos
+ * endpoint (local dev / unit tests) so the in-process path still works with zero
+ * infra, and opt-out with `LOOM_SQL_CANCEL_INTENTS_DISABLED=1`.
+ */
+export function cancelIntentStoreConfigured(): boolean {
+  if (_injectedIntentStore) return true;
+  if (process.env.LOOM_SQL_CANCEL_INTENTS_DISABLED === '1') return false;
+  return !!process.env.LOOM_COSMOS_ENDPOINT;
+}
+
+let _injectedIntentStore: CancelIntentStore | null = null;
+let _cosmosIntentStore: CancelIntentStore | null = null;
+let _cosmosIntentInitTried = false;
+
+/**
+ * TEST HOOK — swap the intent store (and reset the watcher). Not part of the
+ * runtime contract; the production path always resolves the Cosmos-backed store.
+ */
+export function _setCancelIntentStore(store: CancelIntentStore | null): void {
+  _injectedIntentStore = store;
+  stopCancelWatcher();
+}
+
+async function cancelIntentStore(): Promise<CancelIntentStore | null> {
+  if (_injectedIntentStore) return _injectedIntentStore;
+  if (!cancelIntentStoreConfigured()) return null;
+  if (_cosmosIntentStore) return _cosmosIntentStore;
+  if (_cosmosIntentInitTried) return _cosmosIntentStore; // one-shot; don't hammer a failure
+  _cosmosIntentInitTried = true;
+  try {
+    const { CosmosClient } = await import('@azure/cosmos');
+    const client = new CosmosClient({
+      endpoint: process.env.LOOM_COSMOS_ENDPOINT!,
+      aadCredentials: credential as any,
+    });
+    const { database } = await client.databases.createIfNotExists({
+      id: process.env.LOOM_COSMOS_DATABASE || 'loom',
+    });
+    // createIfNotExists so a fresh estate needs no extra ARM step
+    // (no-vaporware.md bicep-sync #4 permits the lazy-create path).
+    const { container } = await database.containers.createIfNotExists({
+      id: CANCEL_INTENT_CONTAINER,
+      partitionKey: { paths: ['/requestId'] },
+      defaultTtl: CANCEL_INTENT_TTL_SECONDS,
+    });
+    _cosmosIntentStore = {
+      async record(requestId: string) {
+        await container.items.upsert({
+          id: requestId,
+          requestId,
+          requestedAt: Date.now(),
+          ttl: CANCEL_INTENT_TTL_SECONDS,
+        });
+      },
+      async has(requestId: string) {
+        const { resource } = await container.item(requestId, requestId).read<any>();
+        return !!resource;
+      },
+      async clear(requestId: string) {
+        try {
+          await container.item(requestId, requestId).delete();
+        } catch {
+          /* already gone or TTL'd — the intent is spent either way */
+        }
+      },
+    };
+    return _cosmosIntentStore;
+  } catch {
+    // R7 — the caller must not read this as "no intent"; `recordCancelIntent`
+    // returns false so the route reports that it could not persist the signal,
+    // rather than claiming a cancellation was requested.
+    return null;
+  }
+}
+
+/**
+ * Persist a cross-replica cancel intent.
+ *
+ * Returns TRUE only when the intent was actually stored — the cancel route keys
+ * its response off this so it never claims a request it did not make.
+ */
+export async function recordCancelIntent(requestId: string): Promise<boolean> {
+  const store = await cancelIntentStore();
+  if (!store) return false;
+  try {
+    await store.record(requestId);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+let _cancelWatcher: ReturnType<typeof setInterval> | null = null;
+
+/**
+ * Poll ONCE for intents on this replica's own live keys.
+ *
+ * Reads are point-reads bounded by `liveRequests.size` (normally 0–2 per
+ * replica: a human runs one query at a time), so the watcher costs nothing when
+ * idle and next to nothing when busy. Exported for tests.
+ */
+export async function _pollCancelIntentsOnce(): Promise<void> {
+  if (liveRequests.size === 0) return;
+  const store = await cancelIntentStore();
+  if (!store) return;
+  for (const [requestId, request] of [...liveRequests]) {
+    let wanted = false;
+    try {
+      wanted = await store.has(requestId);
+    } catch {
+      continue; // unknown, not "no" — try again next tick
+    }
+    if (!wanted) continue;
+    try {
+      request.cancel(); // tedious: TDS ATTENTION → the /query promise rejects ECANCEL
+    } catch {
+      /* the request may have completed between the read and here */
+    }
+    liveRequests.delete(requestId);
+    void store.clear(requestId);
+  }
+}
+
+/** Start the watcher only while this replica actually holds live requests. */
+function startCancelWatcher(): void {
+  if (_cancelWatcher || !cancelIntentStoreConfigured()) return;
+  _cancelWatcher = setInterval(() => {
+    void _pollCancelIntentsOnce().finally(stopCancelWatcherIfIdle);
+  }, cancelPollMs());
+  // Never hold the event loop open (tests, graceful shutdown).
+  (_cancelWatcher as any)?.unref?.();
+}
+
+function stopCancelWatcher(): void {
+  if (_cancelWatcher) {
+    clearInterval(_cancelWatcher);
+    _cancelWatcher = null;
+  }
+}
+
+function stopCancelWatcherIfIdle(): void {
+  if (liveRequests.size === 0) stopCancelWatcher();
+}
+
+/** Register an in-flight request and make sure this replica is watching for intents. */
+export function registerLiveRequest(requestId: string, request: sql.Request): void {
+  liveRequests.set(requestId, request);
+  startCancelWatcher();
+}
+
+/** Drop an in-flight request; stops the watcher once the replica goes idle. */
+export function unregisterLiveRequest(requestId: string): void {
+  liveRequests.delete(requestId);
+  stopCancelWatcherIfIdle();
+}
 
 export interface QueryResult {
   columns: string[];
@@ -426,8 +632,10 @@ export async function executeQuery(
   const request = pool.request();
   // Register the live Request so the cancel route can send a TDS ATTENTION
   // packet for this exact in-flight query. Registered BEFORE .query() so a
-  // cancel that races the start still lands on the right Request.
-  if (opts?.requestId) liveRequests.set(opts.requestId, request);
+  // cancel that races the start still lands on the right Request. Registering
+  // also starts this replica's cancel-intent watcher (#3400), so a cancel that
+  // landed on a DIFFERENT replica still reaches this Request.
+  if (opts?.requestId) registerLiveRequest(opts.requestId, request);
   try {
     const result = await request.query(sqlText);
     const recordset = result.recordset || [];
@@ -441,7 +649,7 @@ export async function executeQuery(
       truncated: recordset.length > MAX_ROWS,
     };
   } finally {
-    if (opts?.requestId) liveRequests.delete(opts.requestId);
+    if (opts?.requestId) unregisterLiveRequest(opts.requestId);
   }
 }
 
@@ -503,8 +711,10 @@ export async function executeQueryBatch(
   const request = pool.request();
   // Register the live Request so the cancel route can send a TDS ATTENTION
   // packet for this exact in-flight query. Registered BEFORE .query() so a
-  // cancel that races the start still lands on the right Request.
-  if (opts?.requestId) liveRequests.set(opts.requestId, request);
+  // cancel that races the start still lands on the right Request. Registering
+  // also starts this replica's cancel-intent watcher (#3400), so a cancel that
+  // landed on a DIFFERENT replica still reaches this Request.
+  if (opts?.requestId) registerLiveRequest(opts.requestId, request);
   const messages: InfoMessage[] = [];
   // Attach the info listener BEFORE .query() — tedious emits 'info' events
   // during result-set processing, before the Promise resolves.
@@ -522,7 +732,7 @@ export async function executeQueryBatch(
   try {
     result = await request.query(sqlText);
   } finally {
-    if (opts?.requestId) liveRequests.delete(opts.requestId);
+    if (opts?.requestId) unregisterLiveRequest(opts.requestId);
   }
   // result.recordsets is an array of arrays: one element per SELECT in the batch.
   const rawSets: any[][] = Array.isArray(result.recordsets) && result.recordsets.length
