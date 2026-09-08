@@ -117,6 +117,20 @@
  *   - A claim whose data arrives by PROP from a fetching ancestor is NOT judged
  *     at all — the component holds no read of its own. That population is
  *     counted and reported separately on every run, never folded into "OK".
+ *   - A read held in a CUSTOM HOOK's return value can never be classified SAFE,
+ *     however honestly it is gated. `states` is collected by `stRe` (§5) which
+ *     matches `= useState` only, so a root bound as `const [stores, reload] =
+ *     useApi(url)` is not in `info.states` and `verdictFor()` skips every
+ *     literal rooted at it. Measured on 2026-09-05 in
+ *     `foundry-sub-editors.tsx#DatastoreBrowsePanel`: after adding the
+ *     dominating `if (!stores.data) return <TableSkeleton/>` the required
+ *     literals became `[!stores.loading, !stores.error, stores.data,
+ *     rows.length]` — the evidence IS required and IS visible in the literal
+ *     list — and the verdict stayed `unguarded`. That claim is baselined for
+ *     this reason, not because the read is unproven. Admitting custom-hook
+ *     roots would reclassify a large share of the existing `unguarded`
+ *     population at once and strand the baseline as stale everywhere, so it is
+ *     a deliberate deferral rather than an oversight.
  *
  * ---------------------------------------------------------------------------
  * EMBEDDED CONTROLS (run on EVERY invocation, not behind a flag)
