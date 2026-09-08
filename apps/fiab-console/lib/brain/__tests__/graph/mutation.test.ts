@@ -73,41 +73,112 @@ import * as brainGraph from '../../graph';
 const GRAPH_DIR = join(__dirname, '..', '..', 'graph');
 const TYPES_FILE = join(__dirname, '..', '..', 'types.ts');
 
-function sourceFiles(dir: string): string[] {
+/**
+ * EVERY regular file under `dir`, whatever its extension.
+ *
+ * This used to filter to `.ts` INSIDE the predicate, and that filter was the
+ * hole: the guard's population was defined by the same expression that read it,
+ * so a `graph/shell.mjs` (or `.js`, or `.cjs`) dropped into the substrate was
+ * not a violation the guard reported — it was a file the guard could not see.
+ * A filter inside the predicate cannot go red; it can only shrink what is
+ * watched. The extension is now asserted as its OWN test over this full list.
+ */
+function allEntries(dir: string): string[] {
   const out: string[] = [];
   for (const entry of readdirSync(dir)) {
     const full = join(dir, entry);
-    if (statSync(full).isDirectory()) out.push(...sourceFiles(full));
-    else if (entry.endsWith('.ts')) out.push(full);
+    if (statSync(full).isDirectory()) out.push(...allEntries(full));
+    else out.push(full);
   }
   return out;
 }
 
 /**
- * Patterns that would mean the substrate can reach outside itself. Each is
- * exercised against the embedded control below, so a regex that matches nothing
- * anywhere is caught rather than mistaken for a clean result.
+ * Every way a module can be named in this codebase — static `from`, bare
+ * `import 'x'` for side effects, dynamic `import('x')`, and CJS `require('x')`.
+ *
+ * WHY THIS HELPER EXISTS. Each pattern below used to be hand-written as
+ * `from\s+['"]node:fs['"]`, which matched exactly ONE of those four forms and
+ * only the `node:`-prefixed spelling. `const fs = await import('node:fs')`,
+ * `require('fs')` and `from 'fs'` all sailed through — see the four spelling
+ * controls in the CONTROL test. Keying a guard to a SPELLING rather than to the
+ * shape is how the same bypass keeps arriving under a new name.
  */
-const FORBIDDEN: readonly { readonly name: string; readonly re: RegExp; readonly control: string }[] = [
+function specifierRe(spec: string): string {
+  return `(?:\\bfrom|\\bimport|\\brequire)\\s*\\(?\\s*['"]${spec}['"]`;
+}
+
+/** A node builtin, bare or `node:`-prefixed, with optional subpath. */
+function builtinRe(name: string): string {
+  return specifierRe(`(?:node:)?${name}(?:/[A-Za-z0-9_-]+)?`);
+}
+
+/**
+ * Patterns that would mean the substrate can reach outside itself. Each is
+ * exercised against EVERY control below, so a regex that matches nothing
+ * anywhere is caught rather than mistaken for a clean result — and every
+ * pattern is additionally run against the benign corpus, so a pattern
+ * broadened until it matches everything is caught too.
+ */
+const FORBIDDEN: readonly {
+  readonly name: string;
+  readonly re: RegExp;
+  readonly controls: readonly string[];
+}[] = [
   {
     name: 'Azure SDK import',
-    re: /from\s+['"]@azure\//,
-    control: "import { DefaultAzureCredential } from '@azure/identity';",
+    re: new RegExp(specifierRe('@azure/[^\'"]+')),
+    controls: [
+      "import { DefaultAzureCredential } from '@azure/identity';",
+      "import '@azure/identity';",
+      "const cred = await import('@azure/identity');",
+      "const cred = require('@azure/arm-appcontainers');",
+    ],
   },
   {
     name: 'network call',
-    re: /\bfetch\s*\(|\baxios\b|from\s+['"]node:https?['"]/,
-    control: 'const r = await fetch(url);',
+    re: new RegExp(
+      [
+        '\\bfetch\\s*\\(',
+        '\\baxios\\b',
+        builtinRe('https?'),
+        specifierRe('undici'),
+        specifierRe('node-fetch'),
+      ].join('|'),
+    ),
+    controls: [
+      'const r = await fetch(url);',
+      "import https from 'node:https';",
+      "import http from 'http';",
+      "const { request } = await import('node:https');",
+      "const undici = require('undici');",
+      "import fetchPolyfill from 'node-fetch';",
+    ],
   },
   {
     name: 'filesystem access',
-    re: /from\s+['"]node:fs['"]|require\(['"]fs['"]\)/,
-    control: "import { readFileSync } from 'node:fs';",
+    re: new RegExp(builtinRe('fs')),
+    controls: [
+      "import { readFileSync } from 'node:fs';",
+      "import { readFile } from 'node:fs/promises';",
+      "import { readFileSync } from 'fs';",
+      "const fs = await import('node:fs');",
+      "const fs = require('fs');",
+    ],
   },
   {
     name: 'process spawn',
-    re: /from\s+['"]node:child_process['"]|\bexecSync\s*\(/,
-    control: "import { execSync } from 'node:child_process';",
+    re: new RegExp(
+      [builtinRe('child_process'), '\\b(?:execSync|execFileSync|spawnSync)\\s*\\('].join('|'),
+    ),
+    controls: [
+      "import { execSync } from 'node:child_process';",
+      "import { spawn } from 'child_process';",
+      "const cp = await import('node:child_process');",
+      "const cp = require('child_process');",
+      'const out = execFileSync(bin, args);',
+      'const out = spawnSync(bin, args);',
+    ],
   },
   {
     // The precise form of "cannot mutate Azure". A name heuristic was tried
@@ -117,12 +188,45 @@ const FORBIDDEN: readonly { readonly name: string; readonly re: RegExp; readonly
     // true of a healthy sibling is how a guard gets talked down to nothing.
     name: 'ARM write verb',
     re: /\bmethod\s*:\s*['"](PUT|POST|PATCH|DELETE)['"]/i,
-    control: "await http({ method: 'DELETE', url });",
+    controls: ["await http({ method: 'DELETE', url });", 'await http({ method: "put", url });'],
   },
 ];
 
+/**
+ * NEGATIVE controls. Broadening a pattern until it matches everything is the
+ * mirror-image failure of a pattern that matches nothing: both make the guard
+ * useless, and only one of them is visible as a red test. Every line here is
+ * legitimate substrate code (or something structurally like it) and NO pattern
+ * may match any of it.
+ */
+const BENIGN: readonly string[] = [
+  "import type { BrainNode } from '../types';",
+  "import { canonicalPath } from './node-id';",
+  'const m = NAME_RE.exec(line);',
+  'while ((match = re.exec(text)) !== null) out.push(match[1]!);',
+  'const scaleUnknownCount = nodes.filter((n) => n.scale === undefined).length;',
+  "const method = 'GET';",
+  "if (n.resourceType.toLowerCase() === 'microsoft.app/containerapps') return true;",
+  'export function fetchPlanFromGraph(graph: BrainGraphView) { return graph.nodes; }',
+];
+
 describe('the graph substrate is PURE — it has no client to mutate with', () => {
-  const files = [...sourceFiles(GRAPH_DIR), TYPES_FILE];
+  const graphEntries = allEntries(GRAPH_DIR);
+  const files = [...graphEntries, TYPES_FILE];
+
+  it('EXTENSION: every file under lib/brain/graph is TypeScript, so none escapes the scan', () => {
+    // The population contract, stated as its own assertion rather than hidden
+    // in the collector's predicate. Drop `graph/shell.mjs` into the substrate
+    // and this goes red naming it; under the old `endsWith('.ts')` filter the
+    // file was simply never read and every pattern check below stayed green.
+    const nonTs = graphEntries.filter((f) => !f.endsWith('.ts')).map((f) => f.replace(/\\/g, '/'));
+    expect(
+      nonTs,
+      'a non-.ts file under lib/brain/graph is not covered by the purity patterns below. ' +
+        'Either it does not belong in the substrate, or this guard must be taught to read it — ' +
+        'silently skipping it is the one option that is not available.',
+    ).toEqual([]);
+  });
 
   it('POPULATION: the guard actually read the modules it claims to watch', () => {
     // A guard over an empty file set is green and blind. Assert the count AND
@@ -145,13 +249,30 @@ describe('the graph substrate is PURE — it has no client to mutate with', () =
     for (const f of files) expect(readFileSync(f, 'utf8').length).toBeGreaterThan(0);
   });
 
-  it('CONTROL: every forbidden-pattern matcher can actually fire', () => {
+  it('CONTROL: every forbidden-pattern matcher can actually fire, in every module form', () => {
     // Without this, a broken regex and a clean codebase produce identical
     // results — zero hits — and the guard would pass forever while watching
-    // nothing.
+    // nothing. Each category now carries a control per SPELLING (static
+    // `from`, bare side-effect `import`, dynamic `import(`, CJS `require(`,
+    // bare and `node:`-prefixed), because the previous single control only
+    // ever proved the one form it was written in.
     for (const p of FORBIDDEN) {
-      expect(p.re.test(p.control), `${p.name} matcher failed its own control`).toBe(true);
+      expect(p.controls.length, `${p.name} has no controls`).toBeGreaterThan(0);
+      for (const c of p.controls) {
+        expect(p.re.test(c), `${p.name} matcher failed its control: ${c}`).toBe(true);
+      }
     }
+  });
+
+  it('NEGATIVE CONTROL: no matcher fires on legitimate substrate code', () => {
+    // The mirror of the control above. A pattern broadened to `/fs/` would pass
+    // every positive control and flag the whole codebase; only a benign corpus
+    // catches that, and a guard nobody can keep green gets deleted.
+    const hits: string[] = [];
+    for (const line of BENIGN) {
+      for (const p of FORBIDDEN) if (p.re.test(line)) hits.push(`${p.name} <- ${line}`);
+    }
+    expect(hits).toEqual([]);
   });
 
   it('no module imports an Azure SDK, calls the network, or touches fs/child_process', () => {

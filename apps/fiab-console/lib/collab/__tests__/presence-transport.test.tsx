@@ -11,7 +11,12 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Mock } from 'vitest';
-import { COLLAB_COMMENTS_EVENT, encodeSseEvent } from '../collab-stream-model';
+import {
+  COLLAB_COMMENTS_EVENT,
+  encodeSseEvent,
+  PUSH_RETRY_MAX_MS,
+  PUSH_RETRY_MIN_MS,
+} from '../collab-stream-model';
 import { createPresenceTransport, type PresenceTransport } from '../presence-transport';
 
 vi.mock('@/lib/client-fetch', () => ({ clientFetch: vi.fn() }));
@@ -111,6 +116,58 @@ describe('createPresenceTransport', () => {
     await flush();
     // Poll delivered peers despite the stream refusing.
     expect(onPeers).toHaveBeenCalledWith([expect.objectContaining({ oid: 'poll-peer' })]);
+  });
+
+  /**
+   * #3697 — a 404 from the collab stream route (the item/route is not
+   * reachable for this caller) is not fixable by retrying sooner. Before the
+   * fix only 503 settled, so a 404 re-opened on the 5s→60s ramp: a request
+   * storm on every canvas open. These two cases are a matched pair — the 404
+   * must settle, the 500 must NOT — so the assertion cannot pass by simply
+   * never retrying.
+   */
+  it('a 404 stream refusal settles into the slow re-probe instead of the 5s ramp', async () => {
+    vi.useFakeTimers();
+    try {
+      const streamFetch = sseFetch([], { ok: false, status: 404 }) as unknown as Mock;
+      transport = createPresenceTransport({
+        itemType: 'notebook', itemId: 'item-1', canvasKey: 'default',
+        pushEnabled: true, onPeers: () => undefined, getCursor: () => undefined,
+        streamFetch: streamFetch as unknown as typeof fetch,
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(streamFetch).toHaveBeenCalledTimes(1);
+      // RED before the fix: the ramp re-opened at PUSH_RETRY_MIN_MS.
+      await vi.advanceTimersByTimeAsync(PUSH_RETRY_MIN_MS + 1_000);
+      expect(streamFetch).toHaveBeenCalledTimes(1);
+      // Settled is slow, not dead — the 60s re-probe still recovers.
+      await vi.advanceTimersByTimeAsync(PUSH_RETRY_MAX_MS);
+      expect(streamFetch).toHaveBeenCalledTimes(2);
+    } finally {
+      transport?.stop();
+      transport = undefined;
+      vi.useRealTimers();
+    }
+  });
+
+  it('a 500 stream failure still retries on the fast ramp', async () => {
+    vi.useFakeTimers();
+    try {
+      const streamFetch = sseFetch([], { ok: false, status: 500 }) as unknown as Mock;
+      transport = createPresenceTransport({
+        itemType: 'notebook', itemId: 'item-1', canvasKey: 'default',
+        pushEnabled: true, onPeers: () => undefined, getCursor: () => undefined,
+        streamFetch: streamFetch as unknown as typeof fetch,
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(streamFetch).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(PUSH_RETRY_MIN_MS + 1_000);
+      expect(streamFetch).toHaveBeenCalledTimes(2);
+    } finally {
+      transport?.stop();
+      transport = undefined;
+      vi.useRealTimers();
+    }
   });
 
   it('stop() sends the best-effort DELETE beacon', async () => {

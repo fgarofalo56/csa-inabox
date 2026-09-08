@@ -12,6 +12,7 @@ import io
 import threading
 import urllib.error
 import urllib.request
+from http.client import HTTPMessage
 from unittest.mock import patch
 
 import content_safety  # type: ignore[import-not-found]
@@ -185,14 +186,14 @@ def test_a_cross_host_redirect_is_refused():
         headers={"Authorization": "Bearer CS_TOKEN"},
     )
     with pytest.raises(urllib.error.HTTPError, match="refusing cross-origin redirect"):
-        handler.redirect_request(req, io.BytesIO(b""), 302, "Found", {}, "https://attacker.invalid/loot")
+        handler.redirect_request(req, io.BytesIO(b""), 302, "Found", HTTPMessage(), "https://attacker.invalid/loot")
 
 
 def test_a_same_origin_redirect_is_still_followed():
     handler = content_safety._SameOriginRedirectHandler()
     req = urllib.request.Request("https://cs.example.com/contentsafety/text:analyze")
     redirected = handler.redirect_request(
-        req, io.BytesIO(b""), 302, "Found", {}, "https://cs.example.com/contentsafety/text:analyze/"
+        req, io.BytesIO(b""), 302, "Found", HTTPMessage(), "https://cs.example.com/contentsafety/text:analyze/"
     )
     assert redirected is not None
 
@@ -205,7 +206,7 @@ def test_the_stdlib_handler_would_have_leaked_the_token():
         headers={"Authorization": "Bearer CS_TOKEN"},
     )
     leaked = urllib.request.HTTPRedirectHandler().redirect_request(
-        req, io.BytesIO(b""), 302, "Found", {}, "https://attacker.invalid/loot"
+        req, io.BytesIO(b""), 302, "Found", HTTPMessage(), "https://attacker.invalid/loot"
     )
     assert leaked is not None
     assert leaked.get_header("Authorization") == "Bearer CS_TOKEN"

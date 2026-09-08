@@ -147,29 +147,42 @@ const REPO = path.resolve(process.cwd(), '../..');
  * failing to run, so that is asserted.
  *
  * ── SPAWNED ONCE, AND ASYNCHRONOUSLY ───────────────────────────────────────
- * The guard takes ~4s over the whole tree unloaded and was measured at 144s on
- * this workstation under agent load. Two consequences follow, and the first
- * fix addressed only one of them.
+ * The guard walks the whole tree: measured 14s standalone on this workstation
+ * on 2026-09-07 idle, and it was reported at 144s under agent load. Two
+ * consequences follow, and the first fix addressed only one of them.
  *
  * (a) PER-CASE spawns starve the run. Seven cases meant seven serial spawns:
- * measured 2026-09-07, 3 of 5 consecutive runs of an otherwise-passing file
+ * observed 2026-09-07, 3 of 5 consecutive runs of an otherwise-passing file
  * ended RC=1 — twice on `[vitest-worker]: Timeout calling "onTaskUpdate"` with
  * all 9 tests reported PASSED, once on three cases hitting the 30s
- * `testTimeout`. The report is a pure function of the working tree and the
+ * `testTimeout`. (Load-dependent, like (b) below — see HOW FAR THAT IS
+ * ESTABLISHED.) The report is a pure function of the working tree and the
  * tree does not change during a run, so ONE spawn in `beforeAll` serves every
  * case.
  *
- * (b) A SYNCHRONOUS spawn starves it even when there is only one, which (a)
+ * (b) A SYNCHRONOUS spawn can starve it even when there is only one, which (a)
  * did not fix. `beforeAll(…, 600_000)` bought a longer clock, but `spawnSync`
  * still BLOCKS the worker's event loop for the child's entire lifetime, so
- * vitest's `onTaskUpdate` RPC heartbeat cannot be serviced and times out
- * regardless of the timeout. MEASURED 2026-09-07 at the tip of this branch,
- * before this change: two consecutive runs of this file alone, each
- * `12 passed (12)` with `1 error` and **RC=1**, the error being exactly
- * `Error: [vitest-worker]: Timeout calling "onTaskUpdate"`. A file that
- * reports every case green and still exits non-zero reds the required
+ * vitest's `onTaskUpdate` RPC heartbeat cannot be serviced while the guard
+ * runs, no matter how generous the timeout is. The failure that shape produces
+ * is `12 passed (12)` with `1 error` and **RC=1**, the error being
+ * `Error: [vitest-worker]: Timeout calling "onTaskUpdate"` — a file that
+ * reports every case green and still exits non-zero, reddening the required
  * `vitest (node 20)` context for a reason that has nothing to do with its
- * subject — the same class of defect as one that greens over a regression.
+ * subject.
+ *
+ * HOW FAR THAT IS ESTABLISHED, stated exactly (2026-09-07). The RC=1 shape was
+ * observed on this workstation during the fan-out that produced this branch,
+ * under whatever agent load was running at the time; it is NOT reproducible on
+ * demand, and the re-verification pass for the re-review failed to reproduce
+ * it: `spawnSync` at HEAD idle finished in 27.8s → `12 passed`, **RC=0**, and
+ * under 40 concurrent CPU-burner processes on a 32-thread box the same file
+ * took 42.3s inside the blocking spawn and still exited **RC=0**. So the
+ * threshold was not reached in either attempt, and the change below is
+ * defended on the MECHANISM — a synchronous child blocks the loop the RPC
+ * heartbeat is answered on — not on a reproduction. `execFile` also passes on
+ * both of those runs (34.2s idle, `12 passed`, RC=0), so it is strictly the
+ * safer of two shapes that are otherwise indistinguishable here.
  *
  * So the spawn is `execFile` awaited as a promise. The child still runs to
  * completion before any case executes, but the worker's loop stays free to

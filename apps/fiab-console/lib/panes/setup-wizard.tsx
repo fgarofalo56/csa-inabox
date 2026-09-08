@@ -202,6 +202,14 @@ const RAIL_STEPS: { key: Step; label: string; hint: string }[] = [
 
 const STEP_ORDER: Step[] = RAIL_STEPS.map((s) => s.key);
 
+/**
+ * Id of the "{n} of {N} steps complete" caption, reused as the step-rail
+ * ProgressBar's `aria-labelledby` (#3169 — axe `aria-progressbar-name`). The
+ * rail renders once per wizard, so a module constant is stable and lets the
+ * test assert the association without guessing a generated id.
+ */
+const RAIL_PROGRESS_LABEL_ID = 'setup-wizard-rail-progress-label';
+
 /** Boundary option cards. */
 const BOUNDARY_OPTIONS: { value: Boundary; title: string; desc: string; icon: FluentIcon; gov: boolean }[] = [
   { value: 'Commercial', title: 'Commercial', desc: 'Azure Public cloud', icon: Globe24Regular, gov: false },
@@ -959,8 +967,11 @@ export function SetupWizardPane() {
             className={styles.railProgress}
             value={completedCount / STEP_ORDER.length}
             thickness="medium"
+            // a11y (#3169): axe `aria-progressbar-name` — the visible caption
+            // below IS the name; point at it rather than duplicating the text.
+            aria-labelledby={RAIL_PROGRESS_LABEL_ID}
           />
-          <Caption1 className={styles.railHint}>{completedCount} of {STEP_ORDER.length} steps complete</Caption1>
+          <Caption1 id={RAIL_PROGRESS_LABEL_ID} className={styles.railHint}>{completedCount} of {STEP_ORDER.length} steps complete</Caption1>
         </div>
 
         {RAIL_STEPS.map((rs, i) => {
@@ -1713,7 +1724,13 @@ export function SetupWizardPane() {
             </div>
             {!state.deployError && (
               <>
-                <ProgressBar value={state.deployProgress ?? 0} thickness="large" />
+                <ProgressBar
+                  value={state.deployProgress ?? 0}
+                  thickness="large"
+                  // a11y (#3169): name the bar from the live stage text so a
+                  // screen reader hears WHAT is progressing, not just a number.
+                  aria-label={state.deployStage ? `Deployment progress: ${state.deployStage}` : 'Deployment progress'}
+                />
                 <div className={styles.inlineLoad}><Spinner size="tiny" /><Body1>{state.deployStage}</Body1></div>
               </>
             )}
@@ -1764,7 +1781,11 @@ export function SetupWizardPane() {
                       <Badge appearance="filled" color={rs.color}>{rs.label}</Badge>
                       <Caption1 className={styles.summaryLabel}>workflow: <code>{state.workflowFile}</code></Caption1>
                     </div>
-                    <ProgressBar value={state.deployProgress ?? 0.3} thickness="large" />
+                    <ProgressBar
+                      value={state.deployProgress ?? 0.3}
+                      thickness="large"
+                      aria-label={state.deployStage ? `Deployment progress: ${state.deployStage}` : 'Deployment progress'}
+                    />
                     <Body1>
                       {rs.done
                         ? 'The deployment workflow has finished. Open the run on GitHub for the full log.'

@@ -25,6 +25,13 @@ This file is maintained automatically by
 [Conventional Commits](https://www.conventionalcommits.org/). See
 [RELEASE.md](RELEASE.md) for the release process.
 
+## [0.105.2](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.105.1...csa-inabox-v0.105.2) (2026-09-07)
+
+
+### Bug Fixes
+
+* **ci:** guards that credited a neighbour's probe, floors that never measured, and publication sinks reachable by a spelling the walk never tried ([#3344](https://github.com/fgarofalo56/csa-inabox/issues/3344), [#3819](https://github.com/fgarofalo56/csa-inabox/issues/3819), [#3850](https://github.com/fgarofalo56/csa-inabox/issues/3850), [#3857](https://github.com/fgarofalo56/csa-inabox/issues/3857), [#3876](https://github.com/fgarofalo56/csa-inabox/issues/3876)) ([#4349](https://github.com/fgarofalo56/csa-inabox/issues/4349)) ([a594101](https://github.com/fgarofalo56/csa-inabox/commit/a5941018599d0e8b7b5a0ab181c6436ab5f93fbf))
+
 ## [0.105.1](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.105.0...csa-inabox-v0.105.1) (2026-09-07)
 
 

@@ -18,3 +18,8 @@ coverage-*/
 # Playwright auth state — contains minted session cookies; never commit.
 e2e/.auth/
 .vitest-reports/
+# Written by the "Type-check the brain specs" step in fiab-console-ci.yml — a
+# tsconfig generated at run time so the spec globs live next to the controls
+# that read them. Ephemeral on a runner; ignored here so reproducing the step
+# locally does not dirty the tree.
+tsconfig.brain-specs.generated.json
