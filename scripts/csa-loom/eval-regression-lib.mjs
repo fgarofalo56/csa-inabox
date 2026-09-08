@@ -666,6 +666,20 @@ export function renderMarkdown(report, meta = {}) {
   lines.push('');
   lines.push(bits.join(' · '));
   lines.push('');
+  // #4277 — the DELTA half of this gate states whether it ran, here, where the
+  // reader is. It used to switch itself off on the absence of `--previous` and
+  // say nothing at all in the markdown, so a baseline that could not be FETCHED
+  // and a baseline that does not YET EXIST produced an identical, silent,
+  // floor-only verdict. Never rendered as an assertion the caller did not make:
+  // "unstated" says unstated.
+  if (meta.deltaStatus) {
+    lines.push(
+      meta.deltaStatus === 'evaluated'
+        ? '**Delta: evaluated** against the previous run.'
+        : `**Delta: ${meta.deltaStatusDetail ?? 'NOT evaluated'}.** Only the FLOOR half of this gate ran — a one-run drop that stays above the floor cannot be detected in this run.`,
+    );
+    lines.push('');
+  }
   lines.push('| Surface | Q | Hit-rate (Δpts) | Grounding (Δpts) | Pass-rate (Δpts) | Pass predicate | Floor check |');
   lines.push('|---|---:|---|---|---|---|---|');
   for (const row of report.rows) {

@@ -34,8 +34,16 @@
  * Usage (artifact mode — the E4 workflow path; dependency-free):
  *   node scripts/csa-loom/check-eval-regression.mjs \
  *     --artifact eval-run.json [--previous prev-run.json] \
+ *     [--delta-status evaluated|absent|unstated] \
  *     [--floors content/evals/eval-floors.json] [--summary summary.md] \
  *     [--strict-missing]
+ *
+ * `--delta-status` (#4277): what the CALLER established about the delta
+ * baseline. Without `--previous` the delta half of this gate does not run, and
+ * before #4277 nothing in the summary said so — so a baseline that could not be
+ * FETCHED (a broken pipeline) looked exactly like a baseline that does not YET
+ * EXIST (fine). The markdown now carries a `Delta:` line either way, and
+ * `unstated` is never rendered as `absent`.
  *
  * Usage (Cosmos mode — reads the latest 2 eval-runs per surface via AAD;
  * requires @azure/cosmos + @azure/identity resolvable and a data-plane role):
@@ -70,6 +78,43 @@ const opt = (name) => {
 const has = (name) => args.includes(name);
 
 const floorsPath = opt('--floors') ?? path.join(repo, 'content', 'evals', 'eval-floors.json');
+
+// ── #4277 — what the CALLER knows about the delta baseline ──────────────────
+// The gate has two halves: FLOORS (absolute) and DELTA (vs the previous run).
+// Before #4277 the delta half switched itself off on the mere absence of
+// `--previous`, and nothing the reader could see said which of the two reasons
+// applied — a baseline that genuinely does not exist yet, or a baseline that
+// could not be fetched. The second is a broken pipeline; the first is not. So
+// the caller now STATES it, and the markdown carries it.
+//
+//   evaluated  NOT accepted from the caller — see below. Derived ONLY from a
+//              baseline this process actually loaded.
+//   absent     the caller established there is no prior run to compare against
+//   unstated   nobody said — the honest default, never rendered as "absent"
+//
+// `evaluated` is deliberately NOT a value the caller may assert. Whether the
+// delta half RAN is a fact about THIS process, and the only evidence for it is
+// a baseline that was loaded — i.e. `--previous`. Accepting the word from the
+// caller reintroduces the exact R7 shape this flag exists to remove: an earlier
+// revision computed `previous ? 'evaluated' : (arg ?? 'unstated')`, which made
+// `--previous` sufficient but not NECESSARY, so `--delta-status evaluated`
+// with no `--previous` printed "Delta: evaluated against the previous run"
+// while the delta half had not run at all. That is reachable from the
+// workflow, whose baseline step writes `evaluated` on a successful
+// `gh run download` — a download can succeed and still yield no
+// `eval-run.json`, after which `[ -f prev/eval-run.json ]` is false and
+// `--previous` is never passed. So the combination is a REFUSAL, not a render.
+const DELTA_STATUS = new Set(['evaluated', 'absent', 'unstated']);
+const deltaStatusArg = opt('--delta-status');
+if (deltaStatusArg !== undefined && !DELTA_STATUS.has(deltaStatusArg)) {
+  console.error(`check-eval-regression: --delta-status must be one of ${[...DELTA_STATUS].join('|')} (got "${deltaStatusArg}")`);
+  process.exit(2);
+}
+function describeDeltaStatus(status) {
+  if (status === 'absent') return 'NOT evaluated — no prior successful main run';
+  return 'NOT evaluated — the caller did not state whether a baseline exists';
+}
+
 const deltaPoints = Number(process.env.EVAL_REGRESSION_DELTA ?? '5');
 if (!Number.isFinite(deltaPoints) || deltaPoints <= 0) {
   console.error(`check-eval-regression: EVAL_REGRESSION_DELTA must be a positive number (got "${process.env.EVAL_REGRESSION_DELTA}")`);
@@ -127,11 +172,26 @@ async function loadRuns() {
   }
   const current = normalizeRuns(readJson(artifactPath));
   const prevPath = opt('--previous');
-  const previous = prevPath && fs.existsSync(prevPath) ? normalizeRuns(readJson(prevPath)) : null;
+  if (prevPath && !fs.existsSync(prevPath)) {
+    // #4277 — a --previous that is not there means the caller BELIEVES it has a
+    // baseline and does not. Falling through to a floor-only gate here would
+    // disable half the gate on a caller mistake, silently.
+    console.error(`check-eval-regression: --previous ${prevPath} does not exist. Refusing to run a FLOOR-ONLY gate while reporting a delta comparison was requested.`);
+    process.exit(2);
+  }
+  const previous = prevPath ? normalizeRuns(readJson(prevPath)) : null;
   return {
     current,
     previous,
-    source: `artifact ${artifactPath}${prevPath ? ` vs ${prevPath}` : ' (no previous run — delta check skipped)'}`,
+    // #4277 — this string used to assert "no previous run" whenever --previous
+    // was absent. It could not know that: the workflow also omitted --previous
+    // when the baseline fetch FAILED. Two different states, one sentence, and
+    // the failing one was the one the reader most needed to see. What the
+    // caller knows about the baseline now arrives as --delta-status; without
+    // it, say that it is unstated rather than asserting an absence.
+    source: prevPath
+      ? `artifact ${artifactPath} vs ${prevPath}`
+      : `artifact ${artifactPath} (delta ${describeDeltaStatus(deltaStatusArg)})`,
   };
 }
 
@@ -223,10 +283,33 @@ const report = attachQuestions(
 );
 
 const provisional = Object.values(floorsDoc.floors ?? {}).some((f) => f?.provisional);
+// #4277 — the delta half of the gate reports whether it RAN, in the artifact
+// the reader actually opens. A loaded `previous` is the ONLY evidence that it
+// ran, so it is the only thing that can produce "evaluated".
+//
+// A caller that ASSERTS `evaluated` while this process holds no baseline is
+// stating a fact it did not establish, in the summary an operator reads. That
+// is refused rather than rendered, and it is refused loudly enough to name the
+// discrepancy — the same treatment `--previous <missing file>` already gets,
+// and for the same reason: a caller mistake must not silently disable half the
+// gate while the markdown claims both halves ran.
+if (deltaStatusArg === 'evaluated' && !previous) {
+  console.error(
+    'check-eval-regression: --delta-status evaluated was passed, but no baseline was loaded '
+    + `(${opt('--previous') ? `--previous ${opt('--previous')} yielded nothing` : 'no --previous argument was given'}). `
+    + 'The delta half of this gate did NOT run, so it will not be reported as evaluated. '
+    + 'Refusing rather than printing a comparison that did not happen. '
+    + 'If the baseline genuinely does not exist, pass --delta-status absent; if it should exist, fix the fetch.',
+  );
+  process.exit(2);
+}
+const deltaStatus = previous ? 'evaluated' : (deltaStatusArg ?? 'unstated');
 const md = renderMarkdown(report, {
   title: 'Copilot quality evals — floor gate',
   deltaPoints,
   floorsProvisional: provisional,
+  deltaStatus,
+  deltaStatusDetail: previous ? null : describeDeltaStatus(deltaStatusArg),
 });
 
 const summaryPath = opt('--summary');
