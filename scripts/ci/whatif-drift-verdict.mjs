@@ -36,7 +36,41 @@
  *          the code never established.
  *        - every suppressed delta is still printed, so it is auditable
  *
- *   2. COVERAGE — what-if silently gives up on nested deployments whose
+ *   2. UNRESOLVED — a THIRD bucket, neither drift nor noise (#2874). what-if
+ *      does not always EVALUATE the template side of a property. When the
+ *      template value is an ARM expression it cannot resolve — typically a
+ *      `reference(...)` into a resource this deployment is not re-evaluating —
+ *      what-if emits the expression itself, verbatim, as the delta's `after`:
+ *
+ *        before: "1feb8cae-…"                       (the live principal GUID)
+ *        after:  "[reference(resourceId('Microsoft.Logic/workflows',
+ *                 'la-csa-loom-ai-alert-…')).identity.principalId]"
+ *
+ *      Measured on the Gov (GCC-High) lane of run 33406666389, from
+ *      admin-plane/ai-defense.bicep's `playbookSentinelResponder` assignment
+ *      (`principalId: playbook.identity.principalId`). A GUID and an
+ *      unevaluated expression are not two values that differ — they are ONE
+ *      value and a placeholder for it. Counting that as "the template and the
+ *      live estate disagree" asserts a conflict the tool never established,
+ *      which is a deploy-integrity R7 violation in the verdict itself.
+ *
+ *      So a property delta whose `after` is an unevaluated ARM expression is
+ *      classified UNRESOLVED: never real drift, never silent. It is listed by
+ *      resourceId as "not compared by what-if", carried on the coverage line,
+ *      and warned about. A delta whose `after` is a concrete value — a
+ *      different GUID, say — is untouched and stays real drift.
+ *
+ *      UNRESOLVED is a COVERAGE statement about a PROPERTY, not a verdict about
+ *      a resource, and the two are independent. A resource whose only
+ *      non-suppressed delta is unresolved leaves the drift verdict; a resource
+ *      that ALSO has a genuinely conflicting property stays in drift on that
+ *      property — but its unresolved property is still listed and counted. The
+ *      real Gov delta is exactly the second shape (`properties.principalId`
+ *      unevaluated, `properties.principalType` NoEffect and not allowlisted),
+ *      and an earlier revision of this bucket dropped principalId from every
+ *      output because it bucketed by resource alone.
+ *
+ *   3. COVERAGE — what-if silently gives up on nested deployments whose
  *      parameters it cannot evaluate (module outputs / reference()), emitting a
  *      `NestedDeploymentShortCircuited` diagnostic and marking the whole
  *      module's resources `Ignore`. A lane that only counts Create/Delete/
@@ -50,10 +84,12 @@
  * OUTPUTS (in --out-dir, default alongside the input)
  *   drift-list.txt        real drift  — "changeType<TAB>resourceId"
  *   suppressed-list.txt   filtered noise, with the matched reason
+ *   unresolved-list.txt   property deltas what-if never evaluated (#2874)
  *   summary.md            the markdown block written to $GITHUB_STEP_SUMMARY
  * Also appends to $GITHUB_OUTPUT (counts, drift_count, suppressed_count,
- * shortcircuit_count, evaluated_count, status, drift_list, suppressed_list,
- * shortcircuit_list, coverage_note) and $GITHUB_STEP_SUMMARY when set.
+ * unresolved_count, shortcircuit_count, evaluated_count, status, drift_list,
+ * suppressed_list, unresolved_list, shortcircuit_list, coverage_note) and
+ * $GITHUB_STEP_SUMMARY when set.
  *
  * EXIT CODES
  *   0  clean (zero REAL deltas — noise may have been suppressed)
@@ -214,9 +250,47 @@ function classifyDelta(resourceType, entry) {
   return { suppressed: false };
 }
 
+/**
+ * Is this value an ARM template expression that what-if never EVALUATED?
+ *
+ * ARM serialises an unevaluated expression as the literal source text wrapped
+ * in square brackets, always starting with a function call —
+ * `[reference(...)]`, `[parameters('x')]`, `[concat(...)]`. Deliberately NARROW
+ * on both edges, because the failure direction matters: anything this does not
+ * recognise stays REAL DRIFT (visible), and a value it wrongly recognised would
+ * hide a genuine conflict.
+ *
+ *   - the string must open with `[<identifier>(` and close with the matching
+ *     `)` — optionally followed by a property/index accessor chain, because
+ *     that is exactly the shape this was measured on
+ *     (`[reference(...).identity.principalId]`). A plain value that merely
+ *     happens to contain brackets (a JSON-ish `["a","b"]`, an IP list, `[0]`)
+ *     is NOT swallowed;
+ *   - `[[` is ARM's escape for a LITERAL leading bracket, i.e. a real string
+ *     value the deployment would write verbatim. That is a genuine value and
+ *     must never be treated as unevaluated. NOTE: the explicit `[[` check below
+ *     is REDUNDANT, not load-bearing — the regex already rejects that form,
+ *     because its second character class requires `[A-Za-z_]` and `[` is not in
+ *     it. Deleting the check leaves the suite green, so nothing here proves it
+ *     works; it is kept as a cheap, readable statement of intent in case the
+ *     regex is ever loosened. Do not cite it as the mechanism.
+ */
+const ARM_EXPRESSION_RE =
+  /^\[[A-Za-z_][A-Za-z0-9_]*\([\s\S]*\)(?:\.[A-Za-z_][A-Za-z0-9_]*|\[[^[\]]*\])*\]$/;
+function isUnevaluatedArmExpression(value) {
+  if (typeof value !== 'string') return false;
+  const s = value.trim();
+  // Redundant with ARM_EXPRESSION_RE — see the note above. Intent, not a guard.
+  if (s.startsWith('[[')) return false;
+  return ARM_EXPRESSION_RE.test(s);
+}
+
 // ---------------------------------------------------------------- classify
 const realDrift = [];
 const suppressed = [];
+// EVERY resource carrying at least one not-compared property, whether or not
+// that resource is ALSO in drift. See the note at the push site below.
+const unresolvedChanges = [];
 const counts = {};
 
 for (const change of doc.changes) {
@@ -241,14 +315,43 @@ for (const change of doc.changes) {
 
   const unmatched = [];
   const matched = [];
+  const unresolved = [];
   for (const entry of entries) {
     const verdict = classifyDelta(type, entry);
-    if (verdict.suppressed) matched.push({ entry, reason: verdict.reason });
-    else unmatched.push(entry);
+    if (verdict.suppressed) {
+      matched.push({ entry, reason: verdict.reason });
+    } else if (isUnevaluatedArmExpression(entry.after)) {
+      // #2874 — what-if did not evaluate the template side of this property, so
+      // it did not COMPARE it. Neither drift nor noise.
+      unresolved.push(entry);
+    } else {
+      unmatched.push(entry);
+    }
   }
 
-  if (unmatched.length === 0) suppressed.push({ change, type, matched });
-  else realDrift.push({ change, type, unmatched });
+  // One genuinely conflicting property keeps the whole resource in the drift
+  // verdict, exactly as before — an unresolved sibling never rescues it.
+  if (unmatched.length > 0) realDrift.push({ change, type, unmatched, unresolved });
+  else if (unresolved.length === 0) suppressed.push({ change, type, matched });
+  // else: no real conflict, but a property what-if never compared. Not drift,
+  // and not "suppressed as known noise" either — it lands in unresolvedChanges
+  // below and nowhere else.
+
+  // MEASURED FAILURE (reviewer, run 33406666389): bucketing by RESOURCE alone
+  // DROPPED the unresolved property of a resource that also had one real
+  // conflicting sibling. The Gov roleAssignment delta has TWO entries —
+  // `properties.principalId` (Modify, unevaluated `reference()`) and
+  // `properties.principalType` (NoEffect, not allowlisted for
+  // Microsoft.Authorization). principalType is unmatched, so the resource
+  // correctly stayed in drift; but principalId then appeared in NEITHER the
+  // drift line NOR unresolved-list.txt, and the string "principalId" vanished
+  // from summary.md entirely. That is strictly LESS information than before
+  // this bucket existed. The not-compared set is a COVERAGE statement about
+  // properties, so it is collected per-property across every resource and is
+  // independent of the resource's drift verdict.
+  if (unresolved.length > 0) {
+    unresolvedChanges.push({ change, type, unresolved, matched, alsoDrift: unmatched.length > 0 });
+  }
 }
 
 // ---------------------------------------------------------------- coverage
@@ -258,24 +361,39 @@ const evaluated = (counts.NoChange || 0) + (counts.Create || 0) + (counts.Delete
 const ignored = counts.Ignore || 0;
 
 // ---------------------------------------------------------------- render
-const driftLines = realDrift.map(({ change, unmatched }) => {
+const driftLines = realDrift.map(({ change, unmatched, unresolved }) => {
   const paths = unmatched.slice(0, 6).map((u) => `${u.propertyChangeType}:${u.path}`).join(', ');
-  return `${change.changeType}\t${change.resourceId}${paths ? `\t[${paths}]` : ''}`;
+  // A drifting resource may ALSO carry a property what-if never evaluated. Name
+  // it here too: dropping it silently was the exact information loss this
+  // bucket was supposed to prevent, and the drift line is where a triager
+  // looks first. It is explicitly labelled so it is not read as a conflict.
+  const notCompared = (unresolved || []).slice(0, 6).map((u) => u.path).join(', ');
+  return `${change.changeType}\t${change.resourceId}${paths ? `\t[${paths}]` : ''}`
+    + (notCompared ? `\t(not compared by what-if: ${notCompared})` : '');
 });
 const suppressedLines = suppressed.map(({ change, type, matched }) =>
   `${change.resourceId}\t${type}\t${matched.map((m) => m.entry.path).join(', ')}`);
+// #2874 — printed with the resourceId so an unresolved property is auditable at
+// the same grain as a real delta. NEVER an empty bucket that quietly absorbs.
+const unresolvedLines = unresolvedChanges.map(({ change, type, unresolved, alsoDrift }) =>
+  `${change.resourceId}\t${type}\tnot compared by what-if: ${unresolved
+    .slice(0, 6)
+    .map((u) => u.path)
+    .join(', ')}${alsoDrift ? '\t(this resource ALSO has real drift — see drift-list.txt)' : ''}`);
 const shortCircuitLines = shortCircuited.map((d) => String(d.target || '').split('/deployments/').pop());
 
 const status = realDrift.length > 0 ? 'Drift' : 'Clean';
 const coverageNote =
-  `evaluated ${evaluated} resource(s); ${ignored} Ignore; ${shortCircuited.length} nested deployment(s) short-circuited`;
+  `evaluated ${evaluated} resource(s); ${ignored} Ignore; ${shortCircuited.length} nested deployment(s) short-circuited`
+  + `; ${unresolvedChanges.length} resource(s) with propert${unresolvedChanges.length === 1 ? 'y' : 'ies'} NOT COMPARED by what-if (unevaluated ARM expression)`;
 
 fs.mkdirSync(outDir, { recursive: true });
 fs.writeFileSync(path.join(outDir, 'drift-list.txt'), `${driftLines.slice(0, MAX_LIST_LINES).join('\n')}\n`);
 fs.writeFileSync(path.join(outDir, 'suppressed-list.txt'), `${suppressedLines.slice(0, MAX_LIST_LINES).join('\n')}\n`);
+fs.writeFileSync(path.join(outDir, 'unresolved-list.txt'), `${unresolvedLines.slice(0, MAX_LIST_LINES).join('\n')}\n`);
 
 const md = [];
-md.push(`### [${label}] bicep-drift — ${realDrift.length} real delta(s), ${suppressed.length} what-if noise suppressed`);
+md.push(`### [${label}] bicep-drift — ${realDrift.length} real delta(s), ${suppressed.length} what-if noise suppressed, ${unresolvedChanges.length} not compared by what-if`);
 md.push('');
 md.push(`Change counts: \`${JSON.stringify(counts)}\``);
 md.push(`Coverage: ${coverageNote}`);
@@ -294,6 +412,17 @@ if (suppressedLines.length > 0) {
   md.push('');
   md.push('```');
   md.push(suppressedLines.slice(0, MAX_LIST_LINES).join('\n'));
+  md.push('```');
+  md.push('</details>');
+  md.push('');
+}
+if (unresolvedLines.length > 0) {
+  md.push(`> **NOT COMPARED — ${unresolvedChanges.length} resource(s) carry a property what-if never evaluated (#2874).** For these the TEMPLATE side came back as raw ARM source (e.g. \`[reference(...).identity.principalId]\`), so what-if never compared it against the live value. This is neither drift nor suppressed noise — it is a property the tool did not look at, and NO verdict on this run covers it, clean or otherwise. A resource marked "ALSO has real drift" below failed on a DIFFERENT property; the one named here is still uncompared. See docs/fiab/runbooks/bicep-drift.md#unresolved.`);
+  md.push('');
+  md.push('<details><summary>Not compared by what-if (unevaluated ARM expression)</summary>');
+  md.push('');
+  md.push('```');
+  md.push(unresolvedLines.slice(0, MAX_LIST_LINES).join('\n'));
   md.push('```');
   md.push('</details>');
   md.push('');
@@ -321,11 +450,13 @@ appendOutput('status', status);
 appendOutput('counts', JSON.stringify(counts));
 appendOutput('drift_count', String(realDrift.length));
 appendOutput('suppressed_count', String(suppressed.length));
+appendOutput('unresolved_count', String(unresolvedChanges.length));
 appendOutput('shortcircuit_count', String(shortCircuited.length));
 appendOutput('evaluated_count', String(evaluated));
 appendOutput('coverage_note', coverageNote);
 appendOutput('drift_list', driftLines.slice(0, MAX_LIST_LINES).join('\n'));
 appendOutput('suppressed_list', suppressedLines.slice(0, MAX_LIST_LINES).join('\n'));
+appendOutput('unresolved_list', unresolvedLines.slice(0, MAX_LIST_LINES).join('\n'));
 appendOutput('shortcircuit_list', shortCircuitLines.slice(0, MAX_LIST_LINES).join('\n'));
 
 if (process.env.GITHUB_STEP_SUMMARY) {
@@ -339,6 +470,13 @@ if (shortCircuited.length > 0) {
 }
 if (suppressed.length > 0) {
   console.log(`::notice::[${label}] ${suppressed.length} Modify delta(s) suppressed as documented ARM what-if noise (read-only / server-defaulted properties). See suppressed-list.txt.`);
+}
+if (unresolvedChanges.length > 0) {
+  // #2874 — NOT silent, and NOT a failure. Stating "the template and the estate
+  // disagree" about a value what-if never evaluated is the R7 violation this
+  // bucket exists to stop; stating nothing at all would just move the lie into
+  // the clean verdict.
+  console.log(`::warning::[${label}] ${unresolvedChanges.length} resource(s) have a property what-if did NOT evaluate (the template side came back as raw ARM source, e.g. an unresolved reference().identity.principalId). Those properties were NOT compared in either direction — see unresolved-list.txt. This is not drift and not noise; it is a coverage gap.`);
 }
 if (realDrift.length > 0) {
   console.log(`::error::[${label}] UNMANAGED DRIFT — ${realDrift.length} real Create/Delete/Modify delta(s) between platform/fiab/bicep and the live estate. Runbook: docs/fiab/runbooks/bicep-drift.md`);
