@@ -960,30 +960,45 @@ jobs:
         if: success() && inputs.run_mode == 'whatif-only'
         run: echo "✅ whatif-only run complete. IL5 Bicep + auth validated; no resources provisioned."
 
-      - name: Notify on failure
+      # #3844 — this notice used to be a `actions/github-script` step whose
+      # target came from `vars.FIAB_GOV_DEPLOY_TRACKING_ISSUE`, with a
+      # `core.warning(...)` fallback when the variable was unset. Two properties
+      # made it inert, and both were measured rather than argued:
+      #
+      #   * THE VARIABLE WAS THE WHOLE NOTIFICATION. Unset -> `core.warning`,
+      #     which colours a line in the log of a run that already failed and
+      #     reaches nobody. `if: failure()` still marks the job red, so every
+      #     structural check on this file stayed green while an IL5 deploy
+      #     failure was recorded exactly nowhere.
+      #   * IT WAS ALSO A TIME BOMB WHEN SET. The variable held #3844 itself
+      #     (measured 2026-08-23); the moment that issue closes, the notifier
+      #     starts commenting on a CLOSED issue — the #279 failure this
+      #     repository already lived through, re-created one variable later.
+      #
+      # deploy-notify-failure.mjs is the chokepoint the other five deploy lanes
+      # already use: it finds-or-creates ONE dedicated OPEN issue per workflow,
+      # renders the classified failure from deploy-failure.json (which THIS
+      # workflow does produce, at $GITHUB_WORKSPACE/deploy-failure.json via
+      # scripts/ci/deploy-retry.mjs above), states plainly when no
+      # classification was captured rather than implying a cause (R7), and
+      # exits non-zero if it cannot notify.
+      #
+      # GH_TOKEN is not optional and not ambient: without it the script takes
+      # its `!token` branch, prints "Refusing to run" and exits 2 — the step is
+      # present, every structural check passes, and the lane files NOTHING.
+      # `issues: write` at the top of this file is inert without this binding.
+      # Both properties are ratcheted mechanically over every caller in
+      # .github/scripts/__tests__/gov-deploy-lanes.test.mjs.
+      - name: Notify on failure (#3844)
         if: failure()
-        uses: actions/github-script@v9
         env:
-          # Parameterized: set the repo/org variable FIAB_GOV_DEPLOY_TRACKING_ISSUE
-          # to an OPEN tracking issue. Previously hard-coded to #279 ("CSA Loom — v1
-          # build roadmap"), which is CLOSED and generic — comments there were lost.
-          # When unset, the step logs a warning instead of posting (the job is still
-          # marked failed by `if: failure()`).
-          TRACKING_ISSUE: ${{ vars.FIAB_GOV_DEPLOY_TRACKING_ISSUE }}
-        with:
-          script: |
-            const issue = parseInt(process.env.TRACKING_ISSUE || '', 10);
-            const body = `❌ deploy-fiab-il5 failed in run ${context.runId}. Federal CSU should investigate.`;
-            if (Number.isInteger(issue) && issue > 0) {
-              await github.rest.issues.createComment({
-                issue_number: issue,
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                body,
-              });
-            } else {
-              core.warning('FIAB_GOV_DEPLOY_TRACKING_ISSUE repo variable not set — skipping issue comment. ' + body);
-            }
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          node .github/scripts/deploy-notify-failure.mjs \
+            --workflow deploy-fiab-il5 \
+            --result "${{ job.status }}" \
+            --failure-json "$GITHUB_WORKSPACE/deploy-failure.json"
 
   # rel-T32 (B8): IL5 post-deploy bootstrap — the SAME reusable bootstrap the
   # Commercial + GCC-High workflows call, boundary=IL5 (az cloud set
