@@ -44,6 +44,18 @@ APP_ID="<LOOM_MSAL_CLIENT_ID>"                  # /admin/env-config or az contai
 KV="<hub-key-vault-name>"                        # kv-loom-*
 RG="<admin-resource-group>"                      # rg-csa-loom-admin*
 
+# The ARM host and the vault's ARM id, DERIVED — not typed, and not hardcoded.
+# `az ad` and `az containerapp` resolve their host from the active cloud, so
+# `az cloud set` is enough for them. `az rest` given an ABSOLUTE url does NOT:
+# the host in the url is the host it calls. Measured 2026-09-07,
+# `az cloud list --query "[].{n:name,rm:endpoints.resourceManager}" -o tsv`:
+#   AzureCloud        https://management.azure.com/
+#   AzureUSGovernment https://management.usgovcloudapi.net/
+# So run these two lines AFTER `az cloud set` and every `az rest` below is
+# correct in whichever boundary you are in.
+ARM="$(az cloud show --query endpoints.resourceManager -o tsv)"; ARM="${ARM%/}"
+KV_ID="$(az keyvault show --name "$KV" --query id -o tsv)"
+
 # 1. Mint a NEW secret WITHOUT dropping the old one (zero-downtime overlap).
 NEW_SECRET=$(az ad app credential reset --id "$APP_ID" --append --years 2 \
   --display-name "rotation-$(date +%Y%m%d)" --query password -o tsv)
@@ -144,13 +156,43 @@ Read them together: newest Entra credential ↔ newest Key Vault version ↔ a
 revision created after both. Any gap in that chain is the rotation that did not
 finish, and the fix is to re-run step 3 (secret set + roll), not to re-mint.
 
-**Every boundary, same procedure.** These commands are identical in Commercial,
-GCC, GCC-High, IL5 and DoD — only the cloud endpoint differs (`az cloud set
---name AzureUSGovernment` per the §2 prereq; Graph is `graph.microsoft.us` /
-`dod-graph.microsoft.us`). The post-deploy bootstrap that performs the same
-wiring, `.github/workflows/csa-loom-post-deploy-bootstrap.yml`, is one
-cloud-agnostic workflow selected by its `boundary` input, so there is no
-per-cloud variant of this runbook to keep in sync.
+**Every boundary, same procedure — with ONE thing you must actually do.** These
+commands are identical in Commercial, GCC, GCC-High, IL5 and DoD, and
+`az cloud set --name AzureUSGovernment` (per the §2 prereq; Graph is
+`graph.microsoft.us` / `dod-graph.microsoft.us`) is enough for **`az ad`,
+`az keyvault` and `az containerapp`** — they resolve their host from the active
+cloud.
+
+It is **not** enough for `az rest` given an **absolute** url: the host written
+in the url is the host it calls, regardless of `az cloud set`. Measured
+2026-09-07, `az cloud list --query "[].{n:name,rm:endpoints.resourceManager}" -o tsv`:
+
+| Cloud | `endpoints.resourceManager` |
+|---|---|
+| `AzureCloud` | `https://management.azure.com/` |
+| `AzureUSGovernment` | `https://management.usgovcloudapi.net/` |
+
+Different hosts, so a hardcoded `management.azure.com` cannot reach a Gov vault
+at all. That is why §2 derives `ARM` from `az cloud show` and every `az rest`
+below uses `"${ARM}${KV_ID}/..."`. Run the §2 prereq block after `az cloud set`
+and this runbook is correct in every boundary as written.
+
+`scripts/csa-loom/bootstrap-msal-app-reg.sh` does the same derivation
+internally (`kv_arm_host`), and **refuses rather than falling back** to a
+hardcoded host if the active cloud's ARM endpoint cannot be resolved — a write
+that "succeeded" against Commercial ARM while your Gov vault is untouched is
+worse than a refusal. Pinned by `PARITY-1/2/3` in
+`scripts/ci/__tests__/msal-credential-lifecycle.test.mjs`.
+
+The post-deploy bootstrap that performs the same wiring,
+`.github/workflows/csa-loom-post-deploy-bootstrap.yml`, is one cloud-agnostic
+workflow selected by its `boundary` input, so there is no per-cloud variant of
+this runbook to keep in sync.
+
+**What is NOT verified per boundary.** `--rotate` and `--revoke` have been
+exercised only against a stub `az` (the harness above), never against a live
+Entra app registration in any cloud. Commercial, GCC, GCC-High, IL5 and DoD are
+all **untested live** for these two flags.
 
 ### 2.2 Credential sprawl — reuse, prune, and the ceiling (#3335)
 
@@ -267,6 +309,180 @@ that deploys less often than the renewal window.
 **Verification:** `node --test scripts/ci/__tests__/msal-credential-lifecycle.test.mjs`
 drives the real script against a stub `az` and pins every rule above;
 `scripts/ci/check-msal-credential-hygiene.mjs` is the merge-blocking static half.
+
+### 2.2b Rotate after a COMPROMISE — `--rotate`, then `--revoke` (#3637)
+
+**Use this section when a credential is disclosed** — pasted into a log, a
+ticket, a chat, a screen share; committed; or held by someone who should no
+longer have it. Not for expiry (§2.2 rule 1 renews) and not for tidying up
+(§2.2's prune).
+
+**Why the routine path could not do it.** Every rule in §2.2 is tuned to *avoid*
+minting and *avoid* deleting, and a disclosed credential defeats both:
+
+- A credential leaked this morning is perfectly **healthy** — ~300 days left —
+  so the reuse gate printed `REUSE` and kept serving it, run after run. No
+  environment variable changed that answer.
+- It is also **recent** and among the **newest**, so `LOOM_MSAL_PRUNE_KEEP` and
+  `LOOM_MSAL_PRUNE_MIN_AGE_DAYS` protected it at *every* setting. No prune
+  configuration could remove it.
+
+So the operator's only route was hand-running `az ad app credential
+reset`/`delete` during an incident — the untested path, at the worst moment.
+
+**Two runs, in this order. Never one.**
+
+```bash
+# ── STEP 1 — rotate. Mints a replacement, records WHY, rolls the console.
+#            Deletes NOTHING: the revision rolling right now is still serving
+#            the old credential until it goes Healthy.
+KEYVAULT_NAME="$KV" EXISTING_CLIENT_ID="$APP_ID" \
+CONSOLE_APP_NAME=loom-console CONSOLE_RG="$RG" UAMI_RESOURCE_ID="$UAMI" \
+  bash scripts/csa-loom/bootstrap-msal-app-reg.sh \
+    --rotate --rotate-reason "disclosed-in-<where>-<date>"
+```
+
+The run stops there on purpose. It does not prune and it does not assert the
+ceiling — a rotation deliberately *adds* a credential, and a ceiling failure at
+that moment would read as "the rotation did not work".
+
+**`CONSOLE_APP_NAME` + `CONSOLE_RG` are what make step 1 a rotation rather than
+half of one.** Both are optional, and the console re-wire and revision roll are
+gated on both being set. Without them the run still mints in Entra and still
+records the new credential in Key Vault — but it re-wires nothing, rolls no
+revision, and **nothing is serving the new credential**; the console keeps
+presenting the compromised one. The receipt says which of the two happened, in
+those words:
+
+| Receipt line | What is true |
+|---|---|
+| `CONSOLE ROLLED:` | The update returned success, so the console is *configured* to serve the new credential. Still **not** verified: whether that revision reached Healthy, or whether sign-in works. Go to step 2. |
+| `CONSOLE NOT ROLLED:` | No Container App was supplied. Nothing was re-wired, no revision exists, the compromised credential is still in service. **Do not go to step 3** — it will refuse anyway (R4 cannot be established), and revoking what is still being served is the outage. Re-run step 1 with the console named. |
+
+```bash
+# ── STEP 2 — VERIFY before deleting anything. All three:
+#  * interactive browser sign-in on the live URL,
+#  * the loom-ui-verify login-health job (catches AADSTS7000215),
+#  * every active revision post-dates the Key Vault write:
+az containerapp revision list -n loom-console -g "$RG" \
+  --query "[?properties.active].{rev:name,created:properties.createdTime}" -o table
+az rest --method GET --url "${ARM}${KV_ID}/secrets/loom-msal-client-secret?api-version=2023-07-01" \
+  --query "properties.attributes.updated" -o tsv
+```
+
+```bash
+# ── STEP 3 — revoke the disclosed credential, by key id, explicitly.
+KEYVAULT_NAME="$KV" EXISTING_CLIENT_ID="$APP_ID" \
+CONSOLE_APP_NAME=loom-console CONSOLE_RG="$RG" \
+  bash scripts/csa-loom/bootstrap-msal-app-reg.sh --revoke "<leaked-key-id>"
+```
+
+**What `--revoke` proves before it deletes.** It refuses, loudly and without
+deleting, unless all of these hold:
+
+| # | Precondition | Refusal reads |
+|---|---|---|
+| R0 | A key id was actually **given**. A revoke *requested* with no target — bare `--revoke`, `--revoke "$KID"` with `KID` unset, `--revoke=`, a whitespace-only value, or `LOOM_MSAL_REVOKE_KEY_ID` defined as an empty string — exits 1 **before any Entra or Key Vault call**. | `a revoke was requested but NO credential key id was given` — and it names the likely cause plus how to say "no revoke" (leave the variable UNSET, not empty). |
+| R1 | The key id is on the app **right now**. | `has no password credential with key id …` — and it does **not** claim the id was "already removed"; the inventory cannot distinguish that from "never existed". |
+| R2 | It is **not** the credential the Key Vault `msalKeyId` tag records as in use. | `… IS the credential loom-msal-client-secret records as in use` + the `--rotate` route that does work. |
+| R3 | The in-use credential is **strictly newer** than the target. R2 alone would allow revoking a *successor*. | `is NOT older than the in-use credential …` |
+| R4 | The console binding is **proven** — the same P3/P3b evidence §2.2's prune requires (unversioned `keyvaultref`, every active revision post-dating the Key Vault write). | `what the console actually serves is NOT proven this run` |
+| R5 | After the delete, the inventory is **re-read** and the key id is confirmed absent. A zero exit from `az ad app credential delete` is not evidence. | `is STILL present … after a delete that reported success` |
+
+R0 exists because the failure it prevents is the quietest one on this page: with
+the revoke path gated on a *non-empty* key id, an empty one skipped the block
+entirely, ran the ordinary bootstrap to the end and printed the normal `==>
+Done.` banner with **exit 0**. Mid-incident that reads as "the leaked credential
+is gone" while it is still live — a false receipt on the one procedure whose
+whole purpose is to be trustworthy.
+
+**What it deliberately does NOT honour, and says so in the output:** the
+`LOOM_MSAL_PRUNE_MIN_AGE_DAYS` grace and the `LOOM_MSAL_PRUNE_KEEP` window.
+Those exist for consumers this script cannot see; a disclosed credential is
+worth breaking them for. That is the trade, made explicitly, not silently.
+
+**What no part of this establishes** (`deploy-integrity.md` R7): whether
+anything *outside* the console holds the raw value. Nothing that does will
+survive the revoke — it starts failing the moment the delete lands. If Dataverse
+S2S or any other consumer reads this credential from somewhere other than the
+Key Vault secret, roll it in the same window.
+
+**The revoke is irreversible.** Entra never returns a deleted password
+credential's value; there is no restore, only another rotation. That is why
+step 2 is a separate run and not a flag.
+
+**Provenance survives the redeploy.** `--rotate` writes `msalProvenance=rotated`,
+`msalRotateReason`, `msalRotatedAt` and `msalRotatedFrom` as **tags on the Key
+Vault secret**, not as Container App environment variables — for the same reason
+`LOOM_MSAL_SECRET_ROTATED` was removed in #3025: an env var is re-rendered away
+by the next `az deployment sub create`, and a rotation marker that vanishes
+reads during triage as "never rotated". Read them back with:
+
+```bash
+az rest --method GET --url "${ARM}${KV_ID}/secrets/loom-msal-client-secret?api-version=2023-07-01" \
+  --query "tags" -o json     # metadata only — ARM never returns the value
+```
+
+**…except on one branch, and the receipt now says so.** The tag block is gated
+on the run resolving the new credential's key id by its unique label. When that
+lookup returns nothing the secret's **value** is still written (a working secret
+with no provenance beats neither), but **no tags are written at all** — the ARM
+body carries `properties.value` and no `tags` key. The `ROTATE COMPLETE` summary
+used to print `(msalRotateReason=…)` unconditionally on that branch, three lines
+after the same run had said "provenance is not recorded": a receipt claiming a
+marker that does not exist, which is the inverse of the failure mode the Key
+Vault tag was chosen to avoid. It now branches, and on that path reads:
+
+```
+    new credential <key id unresolved>: its VALUE is in loom-msal-client-secret and sign-in is correct, but
+    NO provenance tag was written. …
+    The reason you gave this run — '<reason>' — exists in THIS TRANSCRIPT ONLY, not in the vault …
+```
+
+If you see that, **record the reason out of band** — the incident has no audit
+trail in the vault — and expect a later `--revoke` to refuse at R2, because with
+no `msalKeyId` tag it cannot prove which credential is live. Pinned by
+`ROTATE-4b`.
+
+**Flags and environment equivalents** (both work; the env forms exist for
+workflow callers that cannot pass arguments):
+
+| Flag | Environment | Effect |
+|---|---|---|
+| `--rotate` | `LOOM_MSAL_ROTATE` → `1` | Skip the reuse gate unconditionally, mint, record, roll **if a console was supplied**, stop. The receipt says `CONSOLE ROLLED:` or `CONSOLE NOT ROLLED:`. |
+| `--rotate-reason <text>` | `LOOM_MSAL_ROTATE_REASON` → `<text>` | Recorded as the `msalRotateReason` tag. Defaults to `unspecified`. |
+| `--revoke <key-id>` | `LOOM_MSAL_REVOKE_KEY_ID` → `<key-id>` | Delete exactly that credential, after R0–R5. |
+
+These are **inputs read by the script**, not state stamped onto the Container
+App — the opposite of the `LOOM_MSAL_SECRET_ROTATED` marker step 3 removed in
+#3025. They are written here as *name* → *value* rather than as a literal
+`NAME=value` assignment for exactly that reason: in this file the assignment
+form is the shape `check-msal-rotation-consistency.mjs` R2 reads as "tell the
+operator to stamp a rotation marker", and it cannot tell the two apart from
+syntax alone. Nothing about the rotation's durable record changes — that is
+still the Entra credential list (§2.1).
+
+For a workflow wiring `--revoke` to an optional input: to mean **no revoke**,
+leave `LOOM_MSAL_REVOKE_KEY_ID` **unset** — omit the `env:` entry rather than
+setting it to an empty string. An empty value is read as a revoke whose target
+went missing and exits 1 (R0), because that is overwhelmingly the more likely
+intent and the alternative is a destructive flag that silently does nothing.
+
+`--revoke` followed by another flag (`--revoke --prune`) is read as a **missing
+value**, not as a key id of `--prune`: key ids are GUIDs and can never begin with
+`--`. The following flag is parsed normally.
+
+`--rotate` together with `--revoke` is **refused** before anything is minted or
+deleted: the rotation's revision is not Healthy when the script exits, so the
+credential you asked to revoke may still be the one in service.
+
+**Verification:** the `ROTATE-*` and `REVOKE-*` cases in
+`scripts/ci/__tests__/msal-credential-lifecycle.test.mjs` drive the real script
+against a stub `az` — including the counterfactuals (the same inputs REUSE
+without `--rotate`; no prune setting removes the leaked credential; the same
+rotation reports `CONSOLE ROLLED` with a console supplied and `CONSOLE NOT
+ROLLED` without one), the R0 no-target refusals with the call log asserted
+EMPTY, and the R5 case where the delete reports success and removes nothing.
 
 ## 3. Rotate the synthetic-login secret (V1 automation account)
 

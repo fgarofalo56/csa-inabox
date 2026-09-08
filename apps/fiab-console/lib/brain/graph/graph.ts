@@ -279,6 +279,25 @@ class BrainGraph implements BrainGraphView {
         // `buildGraph` records the drop in `report.skipped` rather than letting
         // it be silent.
         if (e.from === e.to) continue;
+        // A PHANTOM SOURCE IS NEVER INDEXED EITHER, by the same shape rule.
+        //
+        // `buildGraph` already RECORDS an edge whose `from` names a node no
+        // extractor defined (`report.danglingNodeRefs`) — but recording it and
+        // then indexing it are different things, and only the first was
+        // happening. Indexed, such an edge CLEARS its target from
+        // `nodesWithNoInboundEdge`: the founding finding is "nothing points at
+        // this app", and a caller that does not exist in the graph is not
+        // something pointing at it. That is the same false NEGATIVE the
+        // self-edge rule above exists to prevent, arriving through a different
+        // door — and it is strictly worse, because a phantom `from` means an
+        // extractor minted an id that disagrees with the one that DEFINED the
+        // node (see node-id.ts), so the real caller is unknown rather than
+        // merely self-referential.
+        //
+        // The edge stays in `this.edges` and in every provenance count —
+        // evidence is never destroyed — and `buildGraph` states the refusal in
+        // `report.skipped` rather than letting it be silent.
+        if (!byId.has(e.from)) continue;
         // `to` is NodeId here by the discriminated union — a dangling edge
         // cannot reach this branch, which is precisely the reachability
         // property that finds `loom-capacity-broker`.
@@ -443,10 +462,16 @@ export function buildGraph(extractions: readonly ExtractionResult[]): BrainGraph
   let resolved = 0;
   let dangling = 0;
   let selfEdges = 0;
+  /**
+   * Resolved, non-self edges whose SOURCE node no extractor defined. Counted
+   * here so the constructor's refusal to index them is STATED, not silent.
+   */
+  let phantomSourceEdges = 0;
   for (const e of edges) {
     if (e.resolution === 'resolved') {
       resolved += 1;
       if (e.from === e.to) selfEdges += 1;
+      else if (!nodeIndex.has(e.from)) phantomSourceEdges += 1;
     } else dangling += 1;
   }
 
@@ -464,6 +489,24 @@ export function buildGraph(extractions: readonly ExtractionResult[]): BrainGraph
         'present in `graph.edges` and in `edgesByProvenance`; only the reachability index excludes them. ' +
         'A non-zero count here means an extractor admitted a self-advertised address (e.g. ' +
         'RW_ADVERTISE_ADDR / KAFKA_ADVERTISED_LISTENERS) and should decline it at the source.',
+    });
+  }
+
+  // Same refusal, different door: a resolved edge whose SOURCE node no
+  // extractor defined. `danglingNodeRefs` already names the ids; this states
+  // what the graph DID about them, because "recorded" and "not counted as
+  // reachability" are separate properties and only the first used to hold.
+  if (phantomSourceEdges > 0) {
+    skipped.push({
+      subject: `${phantomSourceEdges} resolved edge(s) whose SOURCE node is not in the graph`,
+      reason:
+        'Not indexed as inbound reachability: a caller this graph does not contain is not something ' +
+        'REACHING the target. Indexing it would let `unreachable-service` and `always-on-unused` clear ' +
+        'a node on the strength of a pointer from a node that does not exist — a false NEGATIVE on a ' +
+        'deletion proposal. The edges are still present in `graph.edges` and in `edgesByProvenance`, ' +
+        'and every source id is listed in `report.danglingNodeRefs`. A non-zero count here is an ' +
+        'EXTRACTOR defect: some extractor minted a node id that disagrees with the id that defined ' +
+        'the node (see node-id.ts), and it should be fixed at the source rather than tolerated here.',
     });
   }
 
@@ -570,16 +613,37 @@ function mergeNodes(existing: BrainNode, incoming: BrainNode): BrainNode {
 // Reachability queries — PRP §0: a detector is a QUERY, not a bespoke rule
 // ---------------------------------------------------------------------------
 
-/** Restrict a reachability query to a subset of nodes. */
-export interface ReachabilityFilter {
+/** The declarative half of a filter — self-describing, so `describe` is optional. */
+interface ReachabilityFilterFields {
   readonly kind?: NodeKind;
   /** ARM type, compared case-insensitively. */
   readonly resourceType?: string;
-  /** Free-form predicate for anything the fields above cannot express. */
-  readonly where?: (n: BrainNode) => boolean;
-  /** Describes the filter for the population's `scope`. Supply it. */
-  readonly describe?: string;
 }
+
+/**
+ * Restrict a reachability query to a subset of nodes.
+ *
+ * `kind` and `resourceType` NAME THEMSELVES in the population's `scope`, so
+ * `describe` adds nothing there and stays optional. `where` does not: an
+ * arbitrary predicate is invisible in the output, and a population whose scope
+ * reads "29 node(s), tested for inbound edges" over a set some closure narrowed
+ * is a verdict nobody can check or re-run. So the type is a UNION, not an
+ * interface with two optional fields: supplying `where` REQUIRES `describe`,
+ * and forgetting it is a compile error rather than a silently unlabelled
+ * finding.
+ */
+export type ReachabilityFilter =
+  | (ReachabilityFilterFields & {
+      readonly where?: undefined;
+      /** Describes the filter for the population's `scope`. */
+      readonly describe?: string;
+    })
+  | (ReachabilityFilterFields & {
+      /** Free-form predicate for anything the fields above cannot express. */
+      readonly where: (n: BrainNode) => boolean;
+      /** REQUIRED alongside `where` — the predicate is otherwise unreadable in the scope. */
+      readonly describe: string;
+    });
 
 function applyFilter(nodes: readonly BrainNode[], f?: ReachabilityFilter): BrainNode[] {
   if (!f) return [...nodes];
