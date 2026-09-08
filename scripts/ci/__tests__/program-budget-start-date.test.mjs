@@ -151,6 +151,32 @@ test('a preview-feature WARNING on stderr does not make a successful read fail',
 
 // ── 2. DATE HANDLING ────────────────────────────────────────────────────────
 
+test('PRODUCTION FIXTURE: the live Commercial budget, measured 2026-09-08', () => {
+  // Not a hypothetical. Read from subscription e093f4fd ("Limitlessdata - DMLZ",
+  // which is where the Loom estate lives — the DEFAULT subscription returns
+  // seven budgets and none of them is ours, which looks exactly like "never
+  // created" and is not):
+  //   name=loom-next-level-program  startDate=2026-08-01T00:00:00Z
+  //   endDate=2036-07-29T00:00:00Z  amount=1000.0  timeGrain=Monthly
+  // This is path (b) — the one that is broken in production right now. The
+  // template renders 2026-09-01 today, the stored value is 2026-08-01, the field
+  // is immutable, ARM 400s. The resolver must pass 2026-08-01 straight through.
+  const live = ok([
+    {
+      name: BUDGET_NAME,
+      amount: 1000.0,
+      timeGrain: 'Monthly',
+      category: 'Cost',
+      timePeriod: { startDate: '2026-08-01T00:00:00Z', endDate: '2036-07-29T00:00:00Z' },
+    },
+  ]);
+  const v = classifyBudgetStartDateRead(live, { budgetName: BUDGET_NAME, now: new Date(Date.UTC(2026, 8, 8)) });
+  assert.equal(v.decision, 'discovered');
+  assert.equal(v.value, '2026-08-01');
+  // The value the OLD code would have sent, and the whole reason it 400s.
+  assert.notEqual(v.value, '2026-09-01');
+});
+
 test('normalizeStartDate accepts the timestamp ARM actually returns', () => {
   assert.equal(normalizeStartDate('2026-08-01T00:00:00+00:00'), '2026-08-01');
   assert.equal(normalizeStartDate('2026-08-01'), '2026-08-01');
