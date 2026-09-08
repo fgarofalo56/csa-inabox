@@ -543,11 +543,6 @@ jobs:
             --subscription "$DEPLOY_SUB" \
             --rg "rg-csa-loom-admin-${AZURE_LOCATION}"
 
-      # #3161 round 2 — THE PREVIEW MUST RESOLVE THE SAME TAGS AS THE APPLY.
-      # `whatif-only` is this lane's DEFAULT run_mode, so this step's output IS
-      # the artifact an operator reads before approving a full run, and it
-      # resolved `appImageTags` from a different source than the apply. Both now
-      # read the $GITHUB_ENV `Adopt the image tags…` writes above (#3449).
       # ── THE PROGRAM BUDGET'S IMMUTABLE START DATE (#4253) ─────────────────
       # `timePeriod.startDate` on Microsoft.Consumption/budgets CANNOT be updated
       # after creation, and program-budget.bicep defaulted it to
@@ -588,6 +583,11 @@ jobs:
           node scripts/ci/resolve-program-budget-start-date.mjs \
             --subscription "$DEPLOY_SUB"
 
+      # #3161 round 2 — THE PREVIEW MUST RESOLVE THE SAME TAGS AS THE APPLY.
+      # `whatif-only` is this lane's DEFAULT run_mode, so this step's output IS
+      # the artifact an operator reads before approving a full run, and it
+      # resolved `appImageTags` from a different source than the apply. Both now
+      # read the $GITHUB_ENV `Adopt the image tags…` writes above (#3449).
       - name: Bicep what-if (IL5 params)
         run: |
           az deployment sub what-if \

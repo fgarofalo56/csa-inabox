@@ -767,6 +767,15 @@ jobs:
       # what-if so the preview and the apply describe the same deployment;
       # gcc-high.bicepparam reads LOOM_PROGRAM_BUDGET_START_DATE.
       - name: Resolve the program budget's IMMUTABLE start date (#4253)
+        # STAND DOWN on a DECLARED-paused estate, exactly as the what-if below
+        # does. GCC-High is the one live entry in estate-pause-declaration.json,
+        # and this step calls `az consumption budget list` and REFUSES (exit 1)
+        # when that read does not complete. Against a paused estate that would
+        # turn a clean, deliberate stand-down into a red job — reporting a
+        # failure it never established, which is the same false signal #3980
+        # removed from the What-If lane. Keyed to the preflight's DECLARATION
+        # verdict, never to cluster state, for the reasons spelled out below.
+        if: steps.adx_preflight.outputs.estate_paused != 'true'
         env:
           AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_GOV_SUBSCRIPTION_ID }}
         run: |

@@ -3179,6 +3179,16 @@ var programBudgetEnabled = bool(observabilityConfig.?programBudgetEnabled ?? tru
 // alerting; nothing is deleted and nothing is overwritten with a guess. That is
 // the same safe state as programBudgetEnabled=false, reached automatically
 // rather than by remembering to set a flag.
+//
+// DISCLOSED CONSEQUENCE (#4253 review): those compile-only lanes now render the
+// estate WITHOUT the budget, so the budget drops out of their drift comparison —
+// a change to it would not be reported there. That is a real reduction in drift
+// coverage and is stated rather than left to be discovered. It is not
+// destructive: ARM Incremental never deletes a resource merely absent from a
+// template, and no deploy path in this repo deletes a budget. The alternative —
+// keeping a utcNow() fallback so those lanes always render one — is what put an
+// unresolvable value into an immutable field in the first place, and it would
+// ALSO have made every what-if permanently dirty on this resource.
 var programBudgetStartDate = string(observabilityConfig.?programBudgetStartDate ?? '')
 module programBudget 'modules/admin-plane/program-budget.bicep' = if (programBudgetEnabled && !empty(programBudgetStartDate)) {
   name: 'loom-program-budget'

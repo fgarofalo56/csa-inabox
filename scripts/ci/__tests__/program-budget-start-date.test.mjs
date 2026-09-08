@@ -47,6 +47,7 @@ import {
   classifyBudgetStartDateRead,
   normalizeStartDate,
   firstOfMonthUtc,
+  deniedBy,
   BUDGET_NAME,
   OUTPUT_VAR,
 } from '../resolve-program-budget-start-date.mjs';
@@ -93,15 +94,34 @@ test('A FAILED READ IS NOT AN ABSENT BUDGET — an RBAC denial refuses', () => {
   );
   assert.equal(v.decision, 'refuse');
   assert.equal(v.value, null);
-  assert.match(v.reason, /UNKNOWN, not absent/);
+  // …and it must say WHICH refusal this is. Nobody has confirmed the deploy SP
+  // can read budgets in ANY boundary, so this is the most likely refusal on the
+  // first real run, and its remediation (grant a role) shares nothing with the
+  // generic "the read did not complete" case.
+  assert.match(v.reason, /DENIED/);
+  assert.match(v.reason, /Cost Management Reader/);
+  assert.match(v.reason, /NOT "the budget does not exist"/);
 });
 
-test('a throttle refuses rather than guessing', () => {
+test('deniedBy separates a denial from an ordinary failure', () => {
+  // Narrow on purpose. Matching the bare word "denied" would turn an outage into
+  // a confident "grant a role" instruction — the same R7 error one message over.
+  assert.equal(deniedBy('ERROR: (AuthorizationFailed) ...'), true);
+  assert.equal(deniedBy('ERROR: (LinkedAuthorizationFailed) ...'), true);
+  assert.equal(deniedBy("The client 'x' does not have authorization to perform action 'y'"), true);
+  assert.equal(deniedBy('ERROR: (429) Too many requests. Please retry after 600 seconds.'), false);
+  assert.equal(deniedBy('ERROR: Could not connect to the endpoint URL'), false);
+  assert.equal(deniedBy(''), false);
+});
+
+test('a throttle refuses WITHOUT claiming a permission problem', () => {
   const v = classifyBudgetStartDateRead(
     { ok: false, stdout: '', stderr: 'ERROR: (429) Too many requests. Please retry after 600 seconds.' },
     CTX,
   );
   assert.equal(v.decision, 'refuse');
+  assert.doesNotMatch(v.reason, /DENIED|Cost Management Reader/);
+  assert.match(v.reason, /UNKNOWN, not absent/);
 });
 
 test('a definite absence of the SUBSCRIPTION refuses — it is not a greenfield budget', () => {
@@ -289,13 +309,24 @@ function bicepFiles(dir) {
 }
 
 /**
- * Remove line comments and single-quoted string contents, so a rotator NAMED in
+ * Remove line comments and PROSE inside string literals, so a rotator NAMED in
  * prose is not mistaken for one CALLED in code. Without this the sweep flags 25
  * lines, 20 of them @description text — and a guard that cries wolf twenty
  * times gets its allowlist padded until it constrains nothing.
+ *
+ * INTERPOLATIONS ARE PRESERVED. An earlier revision blanked every single-quoted
+ * span outright, and in Bicep `'${newGuid()}'` IS one — so appending
+ * `param zzMutation string = '${newGuid()}'` left the whole suite green. That
+ * is a live rotator the sweep could not see, and the control below asserted the
+ * blindness was correct, which would have made it look deliberate to whoever
+ * found it later. Quoted text is dropped; `${…}` contents survive, because that
+ * is where a string literal can still CALL something.
  */
 function stripProse(line) {
-  return line.replace(/\/\/.*$/, '').replace(/'[^']*'/g, "''");
+  return line.replace(/\/\/.*$/, '').replace(/'[^']*'/g, (span) => {
+    const interpolations = span.match(/\$\{[^}]*\}/g);
+    return interpolations ? interpolations.join(' ') : "''";
+  });
 }
 
 test('THE PROPERTY: no rotator reaches a field ARM treats as IMMUTABLE', () => {
@@ -381,10 +412,18 @@ test('CONTROL: stripProse removes prose without blinding the sweep to code', () 
   // The sweep's correctness rests entirely on this. If it over-strips, the
   // guard silently stops seeing real calls — the failure mode that matters.
   assert.equal(stripProse("@description('derived from newGuid()')").includes('newGuid('), false);
-  assert.equal(stripProse("  // param x = utcNow()").includes('utcNow('), false);
-  assert.equal(stripProse("when: '@utcNow()'").includes('utcNow('), false);
+  assert.equal(stripProse('  // param x = utcNow()').includes('utcNow('), false);
   assert.equal(stripProse('param forceUpdateTag string = utcNow()').includes('utcNow('), true);
   assert.equal(stripProse("param startDate string = utcNow('yyyy-MM-01')").includes('utcNow('), true);
+
+  // AN INTERPOLATION IS CODE, NOT PROSE. These two lines look almost identical
+  // and differ completely: the first is a Logic App workflow string the Logic
+  // Apps runtime evaluates at trigger time (ARM never calls it), the second is a
+  // bicep call that runs at deploy time and rotates. Blanking both is what let a
+  // live rotator through.
+  assert.equal(stripProse("when: '@utcNow()'").includes('utcNow('), false);
+  assert.equal(stripProse("param zzMutation string = '${newGuid()}'").includes('newGuid('), true);
+  assert.equal(stripProse("var x = 'prefix-${utcNow()}'").includes('utcNow('), true);
 });
 
 // ── 4. CONTROLS — the wiring the classifier depends on ──────────────────────
@@ -435,30 +474,96 @@ test('CONTROL: the resolver uses the SHARED definition of "definitely absent"', 
   assert.match(src, /from '\.\/_arm-absence\.mjs'/);
 });
 
-test('CONTROL: every deploy lane that APPLIES main.bicep resolves the start date first', () => {
-  // The counterpart to "empty means do not declare": if a lane forgets the
-  // resolver it stops managing the budget SILENTLY. That is safe for the estate
-  // but it is not what anyone intended, so it is pinned here rather than left to
-  // be noticed.
-  const lanes = [
-    'deploy-fiab-commercial.yml',
-    'deploy-fiab-gcc.yml',
-    'deploy-fiab-gcch.yml',
-    'deploy-fiab-il5.yml',
-  ];
-  for (const lane of lanes) {
-    const src = fs.readFileSync(path.join(REPO_ROOT, '.github/workflows', lane), 'utf8');
+// ── 5. THE WIRE, END TO END ─────────────────────────────────────────────────
+//
+// The resolver writes an env var; a .bicepparam reads it; main.bicep gates on
+// it. Break ANY link and the budget silently stops being managed — no error,
+// just a resource that quietly drops out of the deployment. Each link below is
+// asserted separately, because an earlier revision of this file asserted only
+// the workflow end and stayed green when the .bicepparam block was deleted
+// outright.
+
+const WF_DIR = path.join(REPO_ROOT, '.github/workflows');
+const PARAMS_DIR = path.join(BICEP_ROOT, 'params');
+
+/** Drop `#` comment lines and ::notice::/echo prose, so a mention of a command
+ *  in documentation is never mistaken for the command itself. Without this the
+ *  lane assertions below pass on a COMMENTED-OUT step: in all four lanes the
+ *  only literal occurrences of the env var are in `#` comments. */
+function workflowCode(src) {
+  return src
+    .split('\n')
+    .filter((l) => !/^\s*#/.test(l) && !/::(notice|error|warning)::|^\s*echo\b/.test(l))
+    .join('\n');
+}
+
+/**
+ * DERIVED, never hardcoded. A hardcoded population cannot see a fifth lane —
+ * and there nearly was one: `csa-loom-post-deploy-bootstrap.yml` matches a
+ * naive "mentions az deployment sub create" test, purely from an ::notice::
+ * string and a comment. An apply lane is one that hands
+ * platform/fiab/bicep/main.bicep to `az deployment sub create` in real code.
+ */
+function applyLanes() {
+  return fs
+    .readdirSync(WF_DIR)
+    .filter((f) => f.endsWith('.yml') || f.endsWith('.yaml'))
+    .filter((f) => {
+      const code = workflowCode(fs.readFileSync(path.join(WF_DIR, f), 'utf8'));
+      return (
+        /--template-file\s+\S*platform\/fiab\/bicep\/main\.bicep/.test(code) &&
+        /az deployment sub create/.test(code)
+      );
+    });
+}
+
+/** The .bicepparam files those lanes actually pass. */
+function paramFilesOf(laneSrc) {
+  const code = workflowCode(laneSrc);
+  return [...new Set([...code.matchAll(/params\/([A-Za-z0-9._-]+)\.bicepparam/g)].map((m) => m[1]))];
+}
+
+test('CONTROL: the apply-lane population is derived and NON-EMPTY', () => {
+  // A guard over zero lanes proves nothing while reading green.
+  const lanes = applyLanes();
+  assert.ok(lanes.length >= 4, `expected at least the four boundary lanes, derived: ${lanes.join(', ')}`);
+});
+
+test('every deploy lane that APPLIES main.bicep resolves the start date first', () => {
+  for (const lane of applyLanes()) {
+    const code = workflowCode(fs.readFileSync(path.join(WF_DIR, lane), 'utf8'));
     assert.match(
-      src,
+      code,
       /resolve-program-budget-start-date\.mjs/,
       `${lane} applies platform/fiab/bicep/main.bicep, so it must resolve the program budget's immutable ` +
         'start date from the estate before the apply (#4253) — every boundary carries the same bomb on its ' +
-        'own month boundary (cloud-parity.md).',
-    );
-    assert.match(
-      src,
-      new RegExp(`programBudgetStartDate|${OUTPUT_VAR}`),
-      `${lane} resolves the start date but never passes it through to observabilityConfig.`,
+        'own month boundary (cloud-parity.md). Asserted against COMMENT-STRIPPED source: a commented-out ' +
+        'step is not a step.',
     );
   }
+});
+
+test('THE MISSING LINK: every param file an apply lane uses reads the resolved value', () => {
+  // Deleting the `param observabilityConfig` block from a .bicepparam severs
+  // the ONLY wire between the $GITHUB_ENV export and the deployment, and the
+  // deploy still succeeds — it just stops managing the budget. Nothing else in
+  // this suite notices, which is why this assertion exists.
+  const lanes = applyLanes();
+  let checked = 0;
+  for (const lane of lanes) {
+    for (const name of paramFilesOf(fs.readFileSync(path.join(WF_DIR, lane), 'utf8'))) {
+      const file = path.join(PARAMS_DIR, `${name}.bicepparam`);
+      assert.ok(fs.existsSync(file), `${lane} passes params/${name}.bicepparam, which does not exist`);
+      const src = fs.readFileSync(file, 'utf8');
+      assert.match(
+        src,
+        new RegExp(`programBudgetStartDate:\\s*readEnvironmentVariable\\(\\s*'${OUTPUT_VAR}'`),
+        `params/${name}.bicepparam is used by ${lane} but never reads ${OUTPUT_VAR}. The resolver would ` +
+          'export the start date and NOTHING would consume it: main.bicep gates the budget on a non-empty ' +
+          'value, so the budget would silently stop being deployed (#4253).',
+      );
+      checked += 1;
+    }
+  }
+  assert.ok(checked >= 4, `expected to check at least 4 param files, checked ${checked}`);
 });

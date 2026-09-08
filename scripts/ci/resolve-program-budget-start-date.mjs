@@ -132,6 +132,29 @@ export function normalizeStartDate(raw) {
 }
 
 /**
+ * PURE. Did this failure establish that the read was DENIED, as opposed to
+ * simply not completing?
+ *
+ * Kept NARROW and keyed on ARM error CODES plus the two verbatim prose forms az
+ * emits, never on the bare word "denied" — a widened match here would turn an
+ * ordinary outage into a confident "grant a role" instruction, which is the R7
+ * failure this whole resolver exists to avoid, one message over.
+ *
+ * @param {string} stderr raw stderr from a FAILED `az` invocation
+ * @returns {boolean}
+ */
+export function deniedBy(stderr) {
+  const haystack = String(stderr ?? '').toLowerCase();
+  return [
+    'authorizationfailed',
+    'linkedauthorizationfailed',
+    'insufficientprivileges',
+    'does not have authorization to perform action',
+    'authorization_requestdenied',
+  ].some((needle) => haystack.includes(needle));
+}
+
+/**
  * PURE. Decide what an `az consumption budget list` attempt established.
  *
  * @param {{ok: boolean, stdout: string, stderr: string}} attempt
@@ -149,14 +172,39 @@ export function classifyBudgetStartDateRead(attempt, ctx) {
     // that follows would fail anyway. Reported as a refusal with the code named,
     // rather than silently becoming "create a budget".
     const hit = definiteAbsenceCode(stderr);
+    if (hit) {
+      return {
+        decision: 'refuse',
+        value: null,
+        reason:
+          `az failed with ${hit}. That is a definite absence of the SCOPE, not of the budget — there is ` +
+          'no subscription here to hold one, so nothing can be established about the budget itself.',
+      };
+    }
+    // NAME THE PERMISSION CASE SPECIFICALLY. It is the single most likely
+    // refusal on a first real run — nobody has confirmed the deploy service
+    // principal can read Microsoft.Consumption/budgets in ANY boundary — and it
+    // is the one whose remediation is completely different from every other
+    // refusal (grant a role, rather than investigate an outage). Saying only
+    // "the read did not complete" would be true but useless, and would send the
+    // first person to hit it looking for the wrong thing.
+    if (deniedBy(stderr)) {
+      return {
+        decision: 'refuse',
+        value: null,
+        reason:
+          'the read was DENIED — the deploy identity is not permitted to read Microsoft.Consumption/budgets ' +
+          'on this subscription. This is NOT "the budget does not exist": a denial establishes nothing ' +
+          'about whether one is there. GRANT one of Cost Management Reader, Cost Management Contributor, ' +
+          'Reader or Contributor at SUBSCRIPTION scope to the deploy service principal and re-run.',
+      };
+    }
     return {
       decision: 'refuse',
       value: null,
-      reason: hit
-        ? `az failed with ${hit}. That is a definite absence of the SCOPE, not of the budget — there is ` +
-          'no subscription here to hold one, so nothing can be established about the budget itself.'
-        : 'the read did NOT complete, so whether a budget exists — and what start date it holds — is ' +
-          'UNKNOWN, not absent. Refusing rather than proposing a change to an immutable property on a guess.',
+      reason:
+        'the read did NOT complete, so whether a budget exists — and what start date it holds — is ' +
+        'UNKNOWN, not absent. Refusing rather than proposing a change to an immutable property on a guess.',
     };
   }
 
