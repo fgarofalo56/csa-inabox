@@ -16903,7 +16903,7 @@
             "declaredSinkCount": 1,
             "sinks": [
               {
-                "id": "console:member:431",
+                "id": "console:member:662",
                 "surface": "console",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -31351,7 +31351,7 @@
             "declaredSinkCount": 15,
             "sinks": [
               {
-                "id": "stdout:member:1395",
+                "id": "stdout:member:1719",
                 "surface": "stdout",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -31361,7 +31361,7 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "stdout:member:1398",
+                "id": "stdout:member:1722",
                 "surface": "stdout",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -31371,7 +31371,7 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "stdout:member:1399",
+                "id": "stdout:member:1723",
                 "surface": "stdout",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -31381,7 +31381,7 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "stdout:member:1401",
+                "id": "stdout:member:1725",
                 "surface": "stdout",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -31391,7 +31391,7 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "stdout:member:1404",
+                "id": "stdout:member:1728",
                 "surface": "stdout",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -31401,7 +31401,7 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "stdout:member:1405",
+                "id": "stdout:member:1729",
                 "surface": "stdout",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -31411,7 +31411,7 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "stdout:member:1410",
+                "id": "stdout:member:1735",
                 "surface": "stdout",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -31421,7 +31421,7 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "stdout:member:1412",
+                "id": "stdout:member:1737",
                 "surface": "stdout",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -31431,7 +31431,7 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "stdout:member:1452",
+                "id": "stdout:member:1769",
                 "surface": "stdout",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -31441,17 +31441,7 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "stdout:member:1459",
-                "surface": "stdout",
-                "accessPath": "member",
-                "wholeExpressionBounded": false,
-                "boundary": null,
-                "unredactedByDesign": false,
-                "carriesSensitive": false,
-                "childProvenRedacting": null
-              },
-              {
-                "id": "stderr:member:1365",
+                "id": "stderr:member:1671",
                 "surface": "stderr",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -31461,7 +31451,7 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "stderr:member:1369",
+                "id": "stderr:member:1675",
                 "surface": "stderr",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -31471,7 +31461,7 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "stderr:member:1375",
+                "id": "stderr:member:1681",
                 "surface": "stderr",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -31481,7 +31471,7 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "stderr:member:1387",
+                "id": "stderr:member:1693",
                 "surface": "stderr",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -31491,7 +31481,17 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "stderr:member:1414",
+                "id": "stderr:member:1708",
+                "surface": "stderr",
+                "accessPath": "member",
+                "wholeExpressionBounded": false,
+                "boundary": null,
+                "unredactedByDesign": false,
+                "carriesSensitive": false,
+                "childProvenRedacting": null
+              },
+              {
+                "id": "stderr:member:1739",
                 "surface": "stderr",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -49273,9 +49273,9 @@
     },
     "meta": {
       "generatorVersion": 1,
-      "generatedAt": "2026-09-08T05:48:56.820Z",
-      "commit": "43284fde0831d661c610b355a12f13d47ef2b85c",
-      "inputsDigest": "8a26a8899301799d",
+      "generatedAt": "2026-09-08T14:14:25.564Z",
+      "commit": "3731f841f71f47c81c7307df96c9b1e50893b04e",
+      "inputsDigest": "5a4beb3592f75fee",
       "filesScanned": 2096,
       "scanScopes": [
         {
@@ -50340,7 +50340,7 @@
         },
         {
           "subject": "scripts/** (*.ps1, *.py, *.sh, *.yaml)",
-          "reason": "187 file(s) under a SCANNED root were seen and NOT read: this extractor lexes JavaScript/TypeScript only, so a workflow YAML `run:` block, a shell step or a Python script is outside the examined population even though it publishes to the same PUBLIC Actions log. C4 output therefore says nothing about these files. Recorded with a count so the narrowing is countable rather than inferred from a scope string — which is how the `.github/**` gap survived until 2026-08-24."
+          "reason": "182 file(s) under a SCANNED root were seen and NOT read: this extractor lexes JavaScript/TypeScript only, so a workflow YAML `run:` block, a shell step or a Python script is outside the examined population even though it publishes to the same PUBLIC Actions log. C4 output therefore says nothing about these files. Recorded with a count so the narrowing is countable rather than inferred from a scope string — which is how the `.github/**` gap survived until 2026-08-24."
         },
         {
           "subject": ".github/** (*.py, *.sh, *.yaml, *.yml)",
