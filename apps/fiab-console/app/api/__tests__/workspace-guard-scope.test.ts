@@ -212,8 +212,10 @@ interface Call {
  *   two option objects, one `false` one `true` → grant
  *   a value surviving only in a COMMENT or string → not read at all (the strip)
  *
- * MEASURED over the whole population before rule 1 was added — 1692 `route.ts`
- * under `app/api`, 159 authorize call sites (`temp/4357-spread-pop.mjs`):
+ * MEASURED over the whole population before rule 1 was added — every `route.ts`
+ * under `app/api` (1692 of them) run through the same `callsIn` scan this file
+ * uses, 159 authorize call sites, classified by whether the stripped args carry
+ * a spread; the output is in the PR #4357 review thread:
  *   - exactly ONE call site carries a spread at all
  *     (`items/report/[id]/embed-token:POST`), and it already resolved to a grant
  *     via `allowReadRoles: true`. So rule 1 changed no verdict in-tree; it is a
