@@ -293,8 +293,66 @@
  *     definition, and never at its ~9 call sites. Cross-file resolution is not
  *     attempted.
  *   - A FLUENT `<Combobox freeform>`, which accepts typed text while looking
- *     like a picker. Zero in the tree today; recorded because it is the one
- *     way a compliant-looking element is not one.
+ *     like a picker. NO COUNT IS GIVEN HERE, deliberately — this note has
+ *     carried three different wrong numbers (Zero, then ONE, then SIX) across
+ *     three review rounds. The one revision that published a command used a
+ *     LINE-ANCHORED grep, and that is why its number was wrong: every
+ *     `<Combobox>` in this tree opens multi-line, so
+ *     `grep -rn "<Combobox"` sees the prop only when `freeform` happens to land
+ *     on the same physical line as the tag. A whole-opening-tag scan finds
+ *     roughly twice as many. Reproduce it rather than trusting a number that
+ *     rots:
+ *
+ *         rg -U '<Combobox[^>]*\bfreeform\b' apps/fiab-console --glob '*.tsx'
+ *
+ *     That command is a LOWER BOUND, not an exact count, and it can only
+ *     UNDER-report. `[^>]*` stops at the first `>`, so any prop carrying one —
+ *     an arrow handler `onChange={(e) => …}`, a nested `<Spinner />` in
+ *     `expandIcon` — hides the site when it sits BEFORE `freeform` in the
+ *     opening tag. Measured with a paired control, same component and same
+ *     props, order the only difference: `freeform` first → 1 match; the arrow
+ *     handler first → 0 matches. So treat a hit list as "at least these".
+ *
+ *     Three of the hits are INFRASTRUCTURE ADDRESSES in the sense
+ *     `auto-bind-by-default.md` §5 means, and are called out because they are
+ *     the ones this rule would otherwise be expected to cover. TWO of the three
+ *     are in the SAME file — an earlier revision of this note listed only the
+ *     first and so read as though foundry-sub-editors.tsx contributed one site:
+ *       lib/editors/foundry-sub-editors.tsx  the Azure OpenAI vectorizer ENDPOINT
+ *       lib/editors/foundry-sub-editors.tsx  the evaluation MODEL DEPLOYMENT name
+ *       lib/components/shared/honest-gate.tsx  an arbitrary `LOOM_*` value, typed
+ *                                            into the G2 Fix-it wizard itself
+ *     A deployment NAME is an address by the criterion that site applies to
+ *     itself — "Loom enumerates both, so it asks the backend" — so it belongs
+ *     in THIS list, not in the user's-own-data clause below.
+ *     The rest name something that lives in the USER's own data, directory or
+ *     repo rather than an address the platform could have bound — read at head
+ *     as: a source/sink column and its type (pipeline copy mapping-tab), a git
+ *     branch (git-integration), a language code and a skillset document path
+ *     (ai-search-tree), a notebook widget value (dbx-widgets-bar), a Unity
+ *     Catalog PRINCIPAL (uc-dialogs), and a share SCHEMA ALIAS as the recipient
+ *     sees it (data-shares). The last two are named explicitly because an
+ *     earlier revision of this note wrote the clause as "a column, a type, a
+ *     branch or a language", which did not cover them. That split is a
+ *     JUDGEMENT per site, not a property the scan can compute, which is the
+ *     second reason a single number here was always going to mislead — and it
+ *     is why this enumeration is dated to head rather than asserted as durable.
+ *
+ *     BOTH foundry sites render ONLY on the branch where their discovery call is
+ *     still loading, FAILED, or genuinely returned zero rows —
+ *     `/api/foundry/accounts` for the vectorizer endpoint,
+ *     `/api/foundry/model-deployments` for the deployment name. On the
+ *     discovered-rows branch each is a plain `<Dropdown>`. They are the
+ *     ux-baseline G2 escape hatch (the alternative measured there was a DISABLED
+ *     control asserting "No accounts found" over a failed call), not config
+ *     surfaces that ask for an address by default. All three are recorded here
+ *     because this guard cannot see any `<Combobox>` at all, so the count
+ *     staying at baseline says nothing about these sites either way.
+ *
+ *     Of the three earlier revisions, exactly ONE published a command and it
+ *     was a line-anchored grep; the other two published none. Verified against
+ *     the blobs, not remembered. The command above scans the whole opening tag
+ *     instead. No count is asserted here on purpose — run it.
  *   - A LABEL THAT LIVES SOMEWHERE ELSE — a `<Label htmlFor>` earlier in the
  *     file, a label from a translation table, or a column header above a grid
  *     of inputs. Only the enclosing `<Field>` and an immediately-adjacent
@@ -398,7 +456,7 @@ const MIN_TRACKED_FILES = 1000;
  */
 const MIN_FREETEXT_SITES = 1800;
 /** Classified violations the guard must still find; 250 when this ratchet was
- *  bootstrapped, 211 before the console-ui-w2 wave, 187 today. Movements, in
+ *  bootstrapped, 211 before the console-ui-w2 wave, 184 today. Movements, in
  *  order: -7 from the two WAVE-1B classifier narrowings (`domKeyless`, the
  *  descriptor display-row rule), +3 from closing the `disabled`/`readOnly`
  *  brace hole in the site extractor (which had made 52 free-text sites
@@ -407,7 +465,9 @@ const MIN_FREETEXT_SITES = 1800;
  *  cluster URI, storage accounts and containers, Event Grid destination and
  *  dead-letter ARM ids, Unity Catalog access-connector ids, `abfss://` Spark
  *  and shortcut paths, and one PostgreSQL admin password that is now minted
- *  server-side into Key Vault instead of being asked for at all.
+ *  server-side into Key Vault instead of being asked for at all — and a further
+ *  -3 that arrived with main (#4313's foundry-sub-editors drain), which is why
+ *  this reads 184 and not the 187 the branch measured before that merge.
  *
  *  WHAT THAT -24 DOES AND DOES NOT SAY (re-review 2026-09-08, finding 3). It
  *  says 24 sites are no longer CLASSIFIER-VISIBLE. It does not say 24 hand-
@@ -420,9 +480,9 @@ const MIN_FREETEXT_SITES = 1800;
  *  or `azure-backed-field.tsx`, and neither file is in the baseline or in
  *  ACCEPTED. The cause is that the placeholder there is
  *  `MANUAL_PLACEHOLDER[matchBy]`, a dynamic lookup, and the classifier reads
- *  site-local literals; inlining the `id` literal takes the population to 188
- *  across 83 files and fails the gate on a new key. The BEHAVIOUR is the hybrid
- *  this table already blesses three times over (api-marketplace,
+ *  site-local literals; inlining the `id` literal raises the population by
+ *  exactly one site in one new file and fails the gate on a new key. The
+ *  BEHAVIOUR is the hybrid this table already blesses three times over (api-marketplace,
  *  workspace-egress-pane, mirror-source-wizard) and `ux-baseline.md` G2 forbids
  *  the dead-end alternative — so this is a disclosure about what the number
  *  measures, not a defect in the design. Whether the picker's manual arm should

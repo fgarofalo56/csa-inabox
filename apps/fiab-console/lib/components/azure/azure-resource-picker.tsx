@@ -56,10 +56,13 @@ import { clientFetch } from '@/lib/client-fetch';
  * An earlier revision of this comment claimed the opposite ("check-no-freeform
  * SHOULD see it") — that claim was never true. The classifier keys on a
  * site-local placeholder LITERAL, and the Input below passes
- * `MANUAL_PLACEHOLDER[matchBy]`, a dynamic table lookup. Counterfactual:
- * inlining that literal at the call site moves the classifier from 187 sites /
- * 82 files to 188 / 83 and turns the gate RED with this file as a NEW baseline
- * key. So when a surface swaps a hand-typed Input for this picker, the honest
+ * `MANUAL_PLACEHOLDER[matchBy]`, a dynamic table lookup. Counterfactual, run
+ * and reverted: inlining that literal at the call site moves the classified
+ * population by exactly +1 site across +1 file and turns the gate RED with this
+ * file as a NEW baseline key. (Absolutes are deliberately not quoted here —
+ * they move whenever main does. At the merge that produced this comment it was
+ * 184 sites / 81 files -> 185 / 82, baseline 130 across 55 keys -> 131 across
+ * 56.) So when a surface swaps a hand-typed Input for this picker, the honest
  * reading of the ratchet delta is "N sites are no longer classifier-VISIBLE",
  * not "N hand-typing paths were removed": `allowManualEntry` defaults to true,
  * so every adopting call site retains a typing path the ratchet cannot count.
@@ -248,10 +251,10 @@ const MANUAL_LABEL: Record<MatchBy, string> = {
  * sites in this file. The classifier reads a placeholder LITERAL at the call
  * site, and line ~593 passes `MANUAL_PLACEHOLDER[matchBy]` — a table lookup it
  * cannot resolve. Inlining the `id` literal there is the counterfactual: the
- * population goes 187 -> 188 and the gate fails on a new key. The table stays
- * a table because four value kinds need four shapes; the consequence for the
- * ratchet is disclosed in the file header and tracked in #4404 rather than
- * asserted away here.
+ * classified population rises by exactly one site in one new file and the gate
+ * fails on a new key. The table stays a table because four value kinds need
+ * four shapes; the consequence for the ratchet is disclosed in the file header
+ * and tracked in #4404 rather than asserted away here.
  */
 const MANUAL_PLACEHOLDER: Record<MatchBy, string> = {
   id: '/subscriptions/<sub>/resourceGroups/<rg>/providers/<provider>/<type>/<name>',

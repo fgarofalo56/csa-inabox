@@ -3143,7 +3143,7 @@ caps the NUMBER of cuts at three; it does not bound what one cut can hide.
 | `apps/fiab-console/lib/editors/foundry-account-picker-bar.tsx` | AML, Azure AI Services |
 | `apps/fiab-console/lib/editors/foundry-hub-editor.tsx` | Key Vault |
 | `apps/fiab-console/lib/editors/foundry-playground.tsx` | AI Foundry, AI Search |
-| `apps/fiab-console/lib/editors/foundry-sub-editors.tsx` | ADLS, AI Foundry, AI Search, Azure AI Services |
+| `apps/fiab-console/lib/editors/foundry-sub-editors.tsx` | ADLS, AI Foundry, Azure AI Services |
 | `apps/fiab-console/lib/editors/geo-editors.tsx` | Azure Maps |
 | `apps/fiab-console/lib/editors/graph-editors.tsx` | ADLS |
 | `apps/fiab-console/lib/editors/lakebase-editor.tsx` | ARM |
