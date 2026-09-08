@@ -24,10 +24,20 @@ export const dynamic = 'force-dynamic';
  * declare a bound; not one of these ten did, so the widening landed on the
  * routes with no ceiling at all.
  *
- * WHAT THIS DOES AND DOES NOT ESTABLISH (deploy-integrity.md R7): it bounds the
- * REQUEST. It does NOT bound the walk - #3834 is still open, and a slow walk
- * still consumes the whole budget before the request is cut off. This turns an
- * unbounded hang into a bounded failure; it is not a fix for #3834.
+ * WHAT THIS DOES AND DOES NOT ESTABLISH (deploy-integrity.md R7): it DECLARES a
+ * bound - it does not, on this deployment, enforce one, and the earlier wording
+ * here ("it bounds the REQUEST") asserted an effect that was not established
+ * (#4357 review item 3). `maxDuration` is a build-time segment config: measured
+ * in next@15.5.21, every reference under `node_modules/next/dist` sits in
+ * `build/` (segment-config collection, the build manifest, the types plugin) or
+ * in typegen - nothing under `next/dist/server` reads it on the request path, so
+ * the standalone server this console ships as does not cut the request off at
+ * 60s. Enforcement belongs to the hosting platform, and that the console's
+ * Container Apps runtime performs it was NOT established. What the line does buy
+ * is the declared bound the house convention expects - 71 other console routes
+ * carry one and not one of these ten did - so any platform that does read it
+ * bounds these routes like the rest. It does not bound the group walk either
+ * way: #3834 is still open.
  */
 export const maxDuration = 60;
 
@@ -51,8 +61,21 @@ function err(error: string, status: number, code?: string) {
  * (`allowReadRoles: true`) and PATCH/DELETE admit WRITE-capable roles
  * (Owner/Admin/Member) plus a tenant admin, exactly as `authorizeWorkspace`
  * defines them. The owner fast path inside the resolver is the same point read
- * this function used to do, so no caller who could reach an item before loses
- * access — the set strictly GROWS, and DELETE grows with it.
+ * this function used to do, so for any item row carrying a workspaceId no caller
+ * who could reach an item before loses access — the set GROWS, and DELETE grows
+ * with it.
+ *
+ * ONE DIRECTION IS NOT MONOTONE, named because "strictly GROWS" was the wrong
+ * word for it (#4357 review item 2). When an item row's `workspaceId` is FALSY,
+ * `authorizeItemWorkspace` resolves no workspace and returns null — an ALLOW the
+ * role resolver never sees (workspace-guard.ts, the `if (!workspaceId) return
+ * null` prologue). The owner-only point read this replaced did
+ * `ws.item(item.workspaceId, tenantId).read()`, which on a falsy id 404s or
+ * throws, so the helper REFUSED. That one row shape therefore moves from refuse
+ * to proceed. `items` is partitioned on `/workspaceId` (cosmos-client.ts), so a
+ * row with a falsy one is close to unreachable, and the ALLOW is the shared
+ * helper's own pre-existing, cross-cutting behaviour — not introduced here. It
+ * is disclosed rather than smoothed over (deploy-integrity.md R7).
  *
  * The refusal wording is deliberately split; see the comment on the `denied`
  * branch below.

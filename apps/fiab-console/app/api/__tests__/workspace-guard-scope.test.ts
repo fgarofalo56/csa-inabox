@@ -179,27 +179,64 @@ interface Call {
  * spelling teaches people to write the unauditable one, which is the opposite
  * of what this file is for.
  *
- * So: read the VALUE, and FAIL CLOSED on anything that is not a literal `false`.
+ * THE DECISION, in order:
  *
- *   absent                                → false, no grant
- *   `allowReadRoles: false`               → false, explicitly refused
- *   `allowReadRoles: true`                → TRUE
- *   `allowReadRoles: someVar` / `o.flag`  → TRUE — statically unknowable, assume the worst
- *   `{ allowReadRoles }` shorthand        → TRUE — a forwarded value, same reason
- *   `...(opts?.allowReadRoles ? … : …)`   → TRUE — the GHSA-hf73-rp4q-66pf helper idiom
+ *   1. a SPREAD anywhere in the stripped call args → GRANT, whatever else the
+ *      text resolves to. A spread can reinstate the key at runtime: in
+ *      `{ allowReadRoles: false, ...widen }` the spread wins and the literal
+ *      `false` beside it is dead. This scan cannot evaluate it, so it assumes
+ *      the worst.
+ *   2. no `allowReadRoles` mention and no spread → no grant.
+ *   3. a mention with NO resolvable `key: value` (shorthand, a forwarded value)
+ *      → GRANT — statically unknowable, assume the worst.
+ *   4. otherwise → GRANT unless EVERY resolved value is the literal `false`.
+ *
+ * WHAT IS ASSERTED — the enumeration, and deliberately nothing beyond it. Two
+ * earlier revisions of this comment each claimed an exhaustiveness the code did
+ * not have ("fail closed on anything that is not a literal `false`"; "every shape
+ * that actually passes a value stays a grant"), and a reviewer defeated each by
+ * constructing a shape it had not considered — the second time with
+ * `{ allowReadRoles: false, ...widen }`, which admitted a read-only Viewer to a
+ * POST with this suite green. Under `deploy-integrity.md` R7 an assertion the
+ * code did not establish is a defect on its own, so this comment now lists the
+ * shapes pinned by the `grantsReadRoles` describe block below and stops:
+ *
+ *   absent                                 → no grant
+ *   `allowReadRoles: false`                → no grant, explicitly refused
+ *   `allowReadRoles: true`                 → grant
+ *   `: someVar` / `: o.flag` / `: o?.flag` → grant  (rule 3/4, unknowable)
+ *   `{ allowReadRoles }` shorthand         → grant  (rule 3)
+ *   `...(opts?.allowReadRoles ? … : {})`   → grant  (rule 1)
+ *   `{ allowReadRoles: false, ...widen }`  → grant  (rule 1)
+ *   `{ ...base, itemId }`, no mention      → grant  (rule 1)
+ *   two option objects, one `false` one `true` → grant
+ *   a value surviving only in a COMMENT or string → not read at all (the strip)
+ *
+ * MEASURED over the whole population before rule 1 was added — 1692 `route.ts`
+ * under `app/api`, 159 authorize call sites (`temp/4357-spread-pop.mjs`):
+ *   - exactly ONE call site carries a spread at all
+ *     (`items/report/[id]/embed-token:POST`), and it already resolved to a grant
+ *     via `allowReadRoles: true`. So rule 1 changed no verdict in-tree; it is a
+ *     ratchet against the NEXT one. The precondition is real: this PR made
+ *     `{ allowReadRoles: false }` the spelling at ten MUTATING handlers, so a
+ *     later `...opts` added beside one of them is now the cheap way through.
+ *   - ZERO call sites carry a spread with no `allowReadRoles` mention.
+ *
+ * RESIDUAL CLASS, named rather than claimed away: an options object referenced
+ * by IDENTIFIER — `loadItem(id, t, s, o)` where `o` is built above the call —
+ * mentions nothing and spreads nothing, so it reads as "no grant" and is NOT
+ * ratcheted. Measured: 24 call sites pass no object literal at all; all 24 were
+ * read and every one passes only positional non-options arguments, so the
+ * population of this shape is currently zero. A future call site of that shape
+ * would be invisible here.
  *
  * Two behaviours changed versus the substring test, and NEITHER is a grant that
  * stopped being reported:
  *
- *   1. a resolvable literal `false` — provably write-scoped, the false positive
- *      this replaced;
+ *   1. a resolvable literal `false` with no spread beside it — provably
+ *      write-scoped, the false positive this replaced;
  *   2. a mention that survives only inside a COMMENT or a string literal — that
  *      is prose about the flag, not an argument passed to the guard.
- *
- * Every shape that actually passes a value stays a grant. The claim is therefore
- * "no weaker on anything that reaches the callee", not "strictly no weaker on
- * every byte of the call text" — the substring form did flag comment-only
- * mentions, and this does not.
  *
  * The stripping in (2) is load-bearing in the OTHER direction too, and that is
  * why it exists: matching the RAW argument text let a comment reading
@@ -226,13 +263,21 @@ function stripCommentsAndStrings(args: string): string {
 
 function grantsReadRoles(rawArgs: string): boolean {
   const args = stripCommentsAndStrings(rawArgs);
+  // RULE 1 — a SPREAD wins at runtime over anything written beside it, and this
+  // static scan cannot evaluate what it carries. `{ allowReadRoles: false,
+  // ...widen }` passes `true` when `widen` says so; before this line the literal
+  // `false` was the only resolvable value and `.some()` fell through to "no
+  // grant", admitting a read-only Viewer to a POST with this suite green.
+  // Measured over 159 call sites: exactly one carries a spread and it already
+  // granted, so this is a ratchet on the next one, not a reclassification.
+  if (/\.\.\./.test(args)) return true;
   if (!/allowReadRoles/.test(args)) return false;
   const values = Array.from(
     args.matchAll(/allowReadRoles\s*:\s*([A-Za-z0-9_$.?![\]]+)/g),
     (m) => m[1],
   );
-  // A mention with no resolvable `key: value` — shorthand, or the conditional
-  // spread — is a forwarded value this static scan cannot evaluate. Grant.
+  // A mention with no resolvable `key: value` — ES shorthand — is a forwarded
+  // value this static scan cannot evaluate. Grant.
   if (values.length === 0) return true;
   return values.some((v) => v !== 'false');
 }
@@ -491,6 +536,37 @@ describe('grantsReadRoles — the value is read, and everything unresolvable FAI
     expect(
       grantsReadRoles('guard(s, { allowReadRoles: false }, { allowReadRoles: true })'),
     ).toBe(true);
+  });
+
+  it('a SPREAD is a grant even beside a literal false (#4357 review 4)', () => {
+    // The hole this closes, constructed by a reviewer on `export-check:POST`:
+    //   const widen = { allowReadRoles: true } as const;
+    //   loadItem(id, type, session, { allowReadRoles: false, ...widen });
+    // At runtime the spread wins, so a read-only Viewer is admitted to a POST.
+    // The scan captured only the literal `false`, so `.some()` fell through to
+    // "no grant" and the suite stayed green — the same masking shape the comment
+    // strip fixed, with a real `false` instead of a commented one.
+    expect(
+      grantsReadRoles('loadItem(id, type, session, { allowReadRoles: false, ...widen })'),
+    ).toBe(true);
+    expect(
+      grantsReadRoles('loadItem(id, type, session, { ...widen, allowReadRoles: false })'),
+    ).toBe(true);
+    // A spread that never names the flag is equally unevaluable — it can carry
+    // the key without the call text ever saying so.
+    expect(grantsReadRoles('authorizeItemWorkspace(s, { ...base, itemId })')).toBe(true);
+  });
+
+  it('the spread rule did NOT swallow the false-positive fix it sits on top of', () => {
+    // Guards the direction that matters in the other direction: the ten
+    // MUTATING handlers this PR wrote `{ allowReadRoles: false }` into carry no
+    // spread, and must stay unreported. If rule 1 ever widened to "any object
+    // literal", these would go red and the ten explicit refusals would be
+    // punished again for being auditable.
+    expect(grantsReadRoles('loadItem(id, type, session, { allowReadRoles: false })')).toBe(false);
+    expect(
+      grantsReadRoles('authorizeItemWorkspace(s, {\n  workspaceId,\n  itemId,\n  allowReadRoles: false,\n  notFound: x,\n})'),
+    ).toBe(false);
   });
 
   it('POSITIVE CONTROL — the real repo scan still finds grants, so the fix did not empty it', () => {
