@@ -33,6 +33,8 @@ if not getattr(sys, "_loom_semantic_link_v1", False):
     import urllib.request
     import urllib.parse
     import urllib.error
+    from http.client import HTTPMessage
+    from typing import IO
 
     # ── Credential-safe opener (#3717) ───────────────────────────────────────
     #
@@ -83,7 +85,31 @@ if not getattr(sys, "_loom_semantic_link_v1", False):
         somewhere else entirely. Same-origin redirects still work.
         """
 
-        def redirect_request(self, req, fp, code, msg, headers, newurl):
+        def redirect_request(
+            self,
+            req,  # type: urllib.request.Request
+            fp,  # type: IO[bytes]
+            code,  # type: int
+            msg,  # type: str
+            headers,  # type: HTTPMessage
+            newurl,  # type: str
+        ):
+            # type: (...) -> urllib.request.Request | None
+            #
+            # ANNOTATED (#4184) — see `apps/loom-migrate/app/connectors.py` for
+            # the argument. An untyped override is `Any` in both directions, so
+            # a drifted signature would type-check clean and fail only on a real
+            # 3xx — the path this guard exists for.
+            #
+            # TYPE COMMENTS rather than inline annotations, and that is
+            # deliberate for THIS file: it is embedded VERBATIM as a notebook
+            # session preamble (see the header) and executed by whatever
+            # interpreter the Spark/AML pool ships. A type comment is a comment
+            # at runtime on every Python 3, so the annotation cannot become an
+            # import-time failure in a pool we do not control, while mypy still
+            # reads it as the full signature. The rest of this file is written
+            # the same way — `.format()` instead of f-strings, no
+            # `from __future__` — for the same reason.
             target = urllib.parse.urljoin(req.full_url, newurl)
             if _origin(target) != _origin(req.full_url):
                 raise urllib.error.HTTPError(

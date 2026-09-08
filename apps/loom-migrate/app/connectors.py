@@ -28,7 +28,8 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from dataclasses import dataclass, field
-from typing import Any
+from http.client import HTTPMessage
+from typing import IO, Any
 
 # ── canonical output shapes (mirror lib/migrate/assessment.ts) ────────────────
 
@@ -139,7 +140,25 @@ class _SameOriginRedirectHandler(urllib.request.HTTPRedirectHandler):
     the Databricks/Snowflake API's own 307s) still work.
     """
 
-    def redirect_request(self, req, fp, code, msg, headers, newurl):  # type: ignore[no-untyped-def]
+    def redirect_request(
+        self,
+        req: urllib.request.Request,
+        fp: IO[bytes],
+        code: int,
+        msg: str,
+        headers: HTTPMessage,
+        newurl: str,
+    ) -> urllib.request.Request | None:
+        # ANNOTATED RATHER THAN IGNORED (#4184). The first cut carried
+        # `# type: ignore[no-untyped-def]`, which suppressed the report without
+        # answering it: an untyped def is `Any`-typed in both directions, so a
+        # signature that no longer matches `HTTPRedirectHandler.redirect_request`
+        # — the wrong arity, a swapped `code`/`msg`, a `str` where urllib passes
+        # an `HTTPMessage` — would type-check clean and only fail at runtime, on
+        # a redirect, which is the path this guard exists for and the one least
+        # likely to be exercised in a test. The signature below is typeshed's for
+        # the method being overridden, so an incompatible override is now a
+        # `override` error here instead of a 302-time `TypeError`.
         target = urllib.parse.urljoin(req.full_url, newurl)
         if _origin(target) != _origin(req.full_url):
             raise urllib.error.HTTPError(

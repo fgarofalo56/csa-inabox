@@ -455,7 +455,10 @@ export interface Population {
   readonly subject: 'nodes' | 'edges';
   /** Nodes in scope BEFORE the predicate ran. */
   readonly examined: number;
-  /** Edges in scope. */
+  /**
+   * Edges this population was built from. For the graph-level queries that is
+   * the WHOLE graph, not the subset `scope` names — see `byProvenance` below.
+   */
   readonly edgesExamined: number;
   /** Plain-English scope, e.g. "29 azure-resource nodes of type Microsoft.App/containerApps". */
   readonly scope: string;
@@ -467,9 +470,24 @@ export interface Population {
    */
   readonly blind: boolean;
   /**
-   * Edge counts by provenance within scope. Present on EVERY population, so
-   * even a caller that asked for "all edges" cannot read an undifferentiated
-   * total — a graph with zero `declared` edges is visible at a glance.
+   * Edge counts by provenance over the edges this population was BUILT FROM —
+   * which, for every graph-level query in `graph.ts`, is the WHOLE GRAPH, not
+   * the subset `scope` describes.
+   *
+   * READ THAT AGAIN, because the previous wording ("within scope") said the
+   * opposite and a caller who believed it would draw a false conclusion.
+   * `nodesWithNoInboundEdge(g, 'configured', { resourceType: 'x' })` narrows the
+   * NODE set and reports that narrowing in `scope` and `examined`, but it hands
+   * `makePopulation` the graph's entire edge list — so `byProvenance` and
+   * `edgesExamined` are graph-wide totals. They answer "did the extractor for
+   * this provenance produce anything at all", NOT "how many such edges touch
+   * the filtered nodes". The detector kit's edge-subject populations
+   * (`edgeDetectorPopulation`, `detectors/detector-kit.ts:236`) are the
+   * exception: there the edges ARE the candidates.
+   *
+   * Present on EVERY population, so even a caller that asked for "all edges"
+   * cannot read an undifferentiated total — a graph with zero `declared` edges
+   * is visible at a glance.
    *
    * THIS IS ALSO THE VACUOUS-TRUTH CHECK. `nodesWithNoInboundEdge(g,
    * 'configured')` over a graph containing zero `configured` edges returns EVERY
@@ -689,6 +707,68 @@ export interface DetectorResult {
    * for lack of data is NOT a subject that passed.
    */
   readonly skipped: readonly SkippedSubject[];
+  /**
+   * The disposition ledger's totals — how many of the detector's declared
+   * candidates ended as a finding, cleared, or skipped, and how big the
+   * candidate universe was (#3964).
+   *
+   * WHY THIS IS ON THE RESULT AND NOT ONLY INSIDE THE DETECTOR. `population`
+   * describes what the detector RANGED OVER; the ledger describes what it
+   * DECIDED. Those differ, and the gap is where a cardinality-conditioned
+   * bypass lives: `assertLedgerBalances` proves every candidate got exactly one
+   * disposition, but a bypass that flips every candidate from `finding` to
+   * `cleared` balances the ledger perfectly. Only a caller comparing these
+   * totals against a count derived from the GRAPH can see that — and until this
+   * field existed, no caller could, because the ledger was a local.
+   *
+   * OPTIONAL, and the reason is MEASURED rather than asserted. Making both
+   * fields required and running `tsc --noEmit -p tsconfig.build.json` exits 2
+   * with exactly five errors, all in ONE file:
+   * `app/api/admin/brain/_lib/detect.ts` at 146,3 / 510,5 / 653,5 / 715,5 /
+   * 764,5 (TS2739, "missing the following properties: dispositions,
+   * clearedReasons"). That file is a SECOND, parallel detector implementation —
+   * the four detectors behind the `/admin/brain` API route — and a
+   * `grep -c 'makeLedger|finalizeResult|ledger\.'` over it returns 0. It has no
+   * ledger, so four of those five sites emit real findings with no disposition
+   * counts in existence; a required field there could only be filled with a
+   * fabricated `cleared: 0, skipped: 0`, which is the untrue value this
+   * optionality exists to avoid. Giving that path a real ledger is follow-up
+   * work in that file, tracked as #4379, not a type change here.
+   *
+   * NOT the reason, though an earlier revision of this comment said so: the
+   * `lib/brain/security` detectors are unaffected. `lib/brain/security/
+   * population.ts:128` declares its OWN `DetectorResult` (`findings` +
+   * `population` only) and does not import this one, so it produced zero of
+   * those five errors and cannot be constrained by this type at all.
+   *
+   * WHAT IS AND IS NOT COVERED. The cross-detector contract suite asserts both
+   * fields are PRESENT for every detector in `ALL_DETECTORS` (the six in
+   * `lib/brain/detectors`, which `lib/brain/run/scan.ts` runs), so "optional" is
+   * not "absent in practice" THERE. The route's four detectors in `detect.ts`
+   * are outside that population and outside the #3964 guard entirely: a
+   * cardinality-conditioned bypass planted in `detect.ts` is still invisible.
+   * Tracked as #4379.
+   */
+  readonly dispositions?: DispositionTotals;
+  /**
+   * The distinct reasons the detector cleared a candidate, verbatim (#3964).
+   *
+   * A cleared candidate is an assertion that the detector LOOKED and found
+   * nothing wrong. The reason set is how that assertion is checked: a bypass
+   * that clears the estate reuses an existing reason string, so the reasons
+   * alone do not catch it — but a run whose reason SET changes with graph size
+   * has a size-conditioned branch by definition.
+   */
+  readonly clearedReasons?: readonly string[];
+}
+
+/** {@link DetectorResult.dispositions}. Every candidate lands in exactly one bucket. */
+export interface DispositionTotals {
+  readonly finding: number;
+  readonly cleared: number;
+  readonly skipped: number;
+  /** `finding + cleared + skipped` — enforced by `assertLedgerBalances`. */
+  readonly universe: number;
 }
 
 /** A thing an extractor or detector deliberately did not process, and why. */
