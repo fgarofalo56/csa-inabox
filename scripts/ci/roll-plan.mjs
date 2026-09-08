@@ -53,8 +53,10 @@
  * (1) blocks the scheduled reconcile from applying ANY env/config change to the
  * whole estate, not just to the split apps, and (2) on an operator dispatch
  * forcing `deploy_apps_enabled=true`, exports no pin at all, so the bicep
- * `readEnvironmentVariable(<var>,'v0.1')` default rewrites every app on that
- * repository DOWN to `v0.1`.
+ * `readEnvironmentVariable(<var>, <that param file's default>)` fallback
+ * rewrites every app on that repository DOWN to the deployment's configured
+ * default (#4290 — that default is per-key and per-param-file; no single
+ * version literal describes it).
  *
  * FOR THE UNITY PAIR THAT IS NO LONGER THE CONSEQUENCE (#4064, PR #4237). The
  * `unity` entry now declares `canonicalApp: 'loom-unity'`, so the key's pin
@@ -350,6 +352,42 @@ function arg(argv, name, fallback = undefined) {
   return v;
 }
 
+/**
+ * What a HALF-ROLL of `repo` actually costs, derived from the reconcile's own
+ * key table. PURE, and exported so the notice can be asserted without spawning
+ * the CLI.
+ *
+ * #4240 established the shape: DERIVE the consequence, never state it as a
+ * conditional the reader has to resolve against their own repository.
+ *
+ * #4290 removes the last thing in it that was neither derived nor checked — a
+ * hard-coded `'v0.1'`. The tag a bicep apply falls back to is
+ * `readEnvironmentVariable(<envVar>, <default>)`, and that default is written
+ * per key, per param file: `platform/fiab/bicep/params/commercial-full.bicepparam`
+ * alone carries `v2.1` (console), `v0.7` (mcp, orchestrator, activator,
+ * mirroring, directLake) and `v0.1` (the rest), and a param file that omits the
+ * key entirely falls through to a THIRD default inlined in
+ * `admin-plane/main.bicep` (`appImageTags.?trino ?? 'v0.1'`). There is no single
+ * literal that is correct for every repository, and a lookup table here would be
+ * a second source of truth for a value bicep already owns — the exact defect
+ * class #4240 was fixing. So the sentence names the mechanism and the variable,
+ * both derived, and states the OUTCOME without inventing the number.
+ *
+ * @param {string} repo image repository name
+ * @param {ReadonlyArray<{key:string, repo:string, envVar:string, canonicalApp?:string}>} [table]
+ * @returns {string}
+ */
+export function reconcileSplitConsequence(repo, table = APP_IMAGE_TAGS) {
+  const entry = table.find((e) => e.repo === repo);
+  if (!entry) {
+    return `Repository '${repo}' has NO appImageTags entry (scripts/ci/reconcile-policy.mjs), so the reconcile does not track it in either direction: a split is invisible to it, and the next admin-plane apply resets every app on the repository to that param file's bicep default.`;
+  }
+  if (entry.canonicalApp) {
+    return `Repository '${repo}' pins appImageTags.${entry.key} from canonical app '${entry.canonicalApp}', so a split does NOT freeze the estate-wide reconcile: the skipped app serves a DIFFERENT build of the same image until a later admin-plane apply converges it onto the pinned tag, and since #4240 the divergence is logged by both pin-refresh and reconcile-resolve rather than converged away in silence.`;
+  }
+  return `Repository '${repo}' names no canonicalApp on appImageTags.${entry.key}, so a split marks that key UNKNOWN — one key cannot hold two tags — which disables the estate-wide config reconcile; and an operator dispatch forcing deploy_apps_enabled=true exports no pin at all, so bicep's readEnvironmentVariable(${entry.envVar}, <its per-param-file default>) rewrites the whole repository DOWN to the deployment's configured default. That is a revert, not a convergence.`;
+}
+
 function main(argv) {
   if (argv.includes('--list')) {
     console.log('[roll-plan] data-plane roll registry:');
@@ -435,21 +473,12 @@ function main(argv) {
     // canonicalApp…" made the reader go look up whether THEIR repository does,
     // which is precisely the lookup this notice exists to spare them. It also
     // said a later apply "converges the stragglers", which is true only WITH a
-    // canonicalApp — without one the apply exports no pin at all and rewrites
-    // the repository DOWN to v0.1, which is a revert, not a convergence.
+    // canonicalApp. #4290 removed the last un-derived thing left in it, a
+    // hard-coded 'v0.1' — see reconcileSplitConsequence().
     const addedRepos = [
       ...new Set(plan.rows.filter((r) => plan.added.includes(r.app)).map((r) => r.repo)),
     ];
-    const consequences = addedRepos.map((repo) => {
-      const entry = APP_IMAGE_TAGS.find((e) => e.repo === repo);
-      if (!entry) {
-        return `Repository '${repo}' has NO appImageTags entry (scripts/ci/reconcile-policy.mjs), so the reconcile does not track it in either direction: a split is invisible to it, and the next admin-plane apply resets every app on the repository to the bicep 'v0.1' default.`;
-      }
-      if (entry.canonicalApp) {
-        return `Repository '${repo}' pins appImageTags.${entry.key} from canonical app '${entry.canonicalApp}', so a split does NOT freeze the estate-wide reconcile: the skipped app serves a DIFFERENT build of the same image until a later admin-plane apply converges it onto the pinned tag, and since #4240 the divergence is logged by both pin-refresh and reconcile-resolve rather than converged away in silence.`;
-      }
-      return `Repository '${repo}' names no canonicalApp on appImageTags.${entry.key}, so a split marks that key UNKNOWN — one key cannot hold two tags — which disables the estate-wide config reconcile; and an operator dispatch forcing deploy_apps_enabled=true exports no pin at all, so bicep's readEnvironmentVariable(${entry.envVar}, 'v0.1') rewrites the whole repository DOWN to v0.1. That is a revert, not a convergence.`;
-    });
+    const consequences = addedRepos.map((repo) => reconcileSplitConsequence(repo));
     console.error(
       `::notice::roll-plan pulled in ${plan.added.join(', ')} because they share an image `
       + 'repository with an app you asked for. Apps sharing a repository MUST roll together: a '
