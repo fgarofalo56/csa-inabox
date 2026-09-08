@@ -14,23 +14,43 @@
  * asserts app-rag-builder BY NAME, which is exactly why it stayed green while
  * other bundles were broken — a hardcoded population cannot see a new member.
  *
- * WHAT THE SWEEP FOUND (first run, at head):
- *   - 25 undeclared imports across 8 bundles, i.e. the SAME systemic gap the
- *     issue suspected, not a one-bundle defect.
+ * WHAT THE SWEEP FOUND
+ *   - 22 undeclared imports across 8 bundles are baselined below, i.e. the SAME
+ *     systemic gap the issue suspected, not a one-bundle defect.
  *   - `app-rag-builder` — the issue's OWN subject — still had an undeclared
  *     `langchain_text_splitters`. Its Run-all cleared the reported cell-2
  *     failure and then stopped on the identical error two cells later, so the
  *     issue's primary acceptance criterion was not actually met at head.
+ *   - The FIRST version of the detector read one module per line, so Python's
+ *     `import a, b` form was truncated to `a`. That made the sweep fail OPEN on
+ *     a real shipped bundle: `app-supercharge-guide` has `import struct, pyodbc`
+ *     and `pyodbc` was invisible. Measured on the same tree, before/after the
+ *     comma fix: 24 findings -> 25, the one addition being
+ *     `app-supercharge-guide::pyodbc`. `it('a comma-separated import clause
+ *     names every module')` below is the regression arm.
+ *   - Three baselined entries were then RESOLVED rather than deferred, because
+ *     the "the pool image is unknowable from here" rationale did not survive
+ *     this repo's own evidence: `app-rag-builder` declares `openai` and
+ *     `azure-search-documents` in this same change, on the ground that the
+ *     image does not ship them. `app-azure-realtime-analytics::openai`,
+ *     `app-supercharge-gold::openai` and
+ *     `app-change-feed-processor::azure.search.documents` are the identical
+ *     import, so they now declare it too. 25 -> 22.
  *
  * WHY THERE IS A BASELINE, AND WHAT IT IS NOT
  * Closing the remaining entries requires knowing what the Synapse Spark /
  * Databricks pool images actually ship (is `xgboost` preinstalled? `flaml`?
- * `msal` transitively via azure-identity?). That is a fact about a running
- * pool image, and it cannot be established from this repo. Guessing in either
- * direction is harmful: a wrong "declare it" costs a pip round-trip on every
- * Run-all, a wrong "it's provided" re-opens #3530 for that bundle. Per
+ * `pyodbc`? `msal` transitively via azure-identity?). That is a fact about a
+ * running pool image, and it cannot be established from this repo. Guessing in
+ * either direction is harmful: a wrong "declare it" costs a pip round-trip on
+ * every Run-all, a wrong "it's provided" re-opens #3530 for that bundle. Per
  * `deploy-integrity.md` R7 the honest move is to record what was MEASURED and
  * not assert what was not established.
+ *
+ * That rationale only covers a package this repo says NOTHING about. Where the
+ * repo already takes a position — as it does for `openai` and
+ * `azure-search-documents`, which `app-rag-builder` declares — the baseline may
+ * not hide behind it; those entries were resolved, not deferred (see above).
  *
  * So the baseline is an explicit, enumerated debt list, and the assertions are
  * a RATCHET:
@@ -53,6 +73,10 @@
  *   d) In `isProvidedByRuntime` match the NORMALISED name instead of the
  *      dotted path -> RED: "runtime and stdlib modules are not demanded",
  *      because the `delta` prefix then swallows `delta_sharing`.
+ *   e) In `IMPORT_RE` restore the one-module-per-line capture
+ *      (`import[ \t]+([A-Za-z_][\w.]*)`) -> RED: "a comma-separated import
+ *      clause names every module" AND "every baseline entry is still a real
+ *      finding" (`app-supercharge-guide::pyodbc` goes invisible).
  */
 import { describe, it, expect } from 'vitest';
 import { listBundleIds, getBundle, NOTEBOOK_ITEM_TYPES } from '../index';
@@ -83,7 +107,6 @@ const UNVERIFIED_AT_HEAD: ReadonlySet<string> = new Set([
   'app-ml-pipeline::azure.keyvault.secrets',
   'app-change-feed-processor::azure.cosmos.aio',
   'app-change-feed-processor::azure.functions',
-  'app-change-feed-processor::azure.search.documents',
   'app-change-feed-processor::redis.asyncio',
   'app-supercharge-streaming::azure.eventhub',
   'app-supercharge-streaming::azure.eventhub.exceptions',
@@ -102,12 +125,14 @@ const UNVERIFIED_AT_HEAD: ReadonlySet<string> = new Set([
   'app-supercharge-ml::sentence_transformers',
   'app-supercharge-ml::shap',
   'app-supercharge-gold::rapidfuzz',
-  // Auth helpers — likely present transitively via azure-identity.
+  // Auth / driver helpers — `jwt` and `msal` are likely present transitively via
+  // azure-identity; `pyodbc` needs a system ODBC driver as well as the wheel, so
+  // whether the pool image carries it is exactly the per-image fact this repo
+  // cannot answer. `pyodbc` became visible only once the detector learned the
+  // `import struct, pyodbc` comma form.
   'app-supercharge-guide::jwt',
   'app-supercharge-guide::msal',
-  // openai in bundles other than rag-builder (where it IS declared).
-  'app-azure-realtime-analytics::openai',
-  'app-supercharge-gold::openai',
+  'app-supercharge-guide::pyodbc',
 ]);
 
 type NotebookRow = { appId: string; displayName: string; content: any };
@@ -197,6 +222,40 @@ describe('bundle notebooks declare the packages they import (#3530)', () => {
     for (const r of [rag!, mesh!, agents!]) {
       expect(r.content.requiredLibraries).not.toContain('azure-identity');
     }
+  });
+
+  it('a comma-separated import clause names every module', () => {
+    // REGRESSION ARM. The first detector captured one module per line, so
+    // `import a, b` read as `[a]` and the sweep reported the bundle clean —
+    // failing OPEN, which is the shape this guard exists to prevent. A real
+    // shipped bundle (`app-supercharge-guide`) carries `import struct, pyodbc`.
+    const nb = (source: string, requiredLibraries: string[] = []) => ({
+      kind: 'notebook',
+      defaultLang: 'pyspark',
+      requiredLibraries,
+      cells: [{ id: 'c', type: 'code', lang: 'pyspark', source }],
+    });
+
+    // The exact line that ships, and the module the truncating regex lost.
+    expect(extractPythonImports(nb('import struct, pyodbc'))).toEqual(['pyodbc', 'struct']);
+    expect(undeclaredImports(nb('import struct, pyodbc')).map((u) => u.module)).toEqual(['pyodbc']);
+
+    // An `as` alias does not hide the module that follows it on the same line.
+    expect(extractPythonImports(nb('import numpy as np, xgboost'))).toEqual(['numpy', 'xgboost']);
+    // …and a leading stdlib module does not shield a later third-party one.
+    expect(undeclaredImports(nb('import os, polars')).map((u) => u.module)).toEqual(['polars']);
+    // Declaring it still clears the finding through the comma path.
+    expect(undeclaredImports(nb('import os, polars', ['polars']))).toEqual([]);
+
+    // `from X import a, b` names ONE module, X — the comma split must not turn
+    // the imported NAMES into modules.
+    expect(extractPythonImports(nb('from delta_sharing import SharingClient, load_as_pandas')))
+      .toEqual(['delta_sharing']);
+
+    // A trailing comment is not a module source: `import os  # see also, sys`
+    // must not manufacture a `sys` finding.
+    expect(extractPythonImports(nb('import os  # see also, polars'))).toEqual(['os']);
+    expect(undeclaredImports(nb('import os  # see also, polars'))).toEqual([]);
   });
 
   it('the detector reports an undeclared package', () => {

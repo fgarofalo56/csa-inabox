@@ -841,10 +841,14 @@ You get five runnable surfaces from the first install:
         // since the Foundry Agent Service SDK runs as plain Python.
         defaultLang: 'pyspark',
         // #3530 — the setup cell imports `azure.ai.projects` and
-        // `azure.ai.agents.models`; neither is in the Spark stock image, so
-        // Run-all stopped on ModuleNotFoundError before any agent was created.
-        // `azure-identity` is deliberately absent: it IS runtime-provided, and
-        // pip-installing over the runtime copy costs a minute on every Run-all.
+        // `azure.ai.agents.models`, and nothing here declared either, so unless
+        // the Spark image ships them Run-all fails on ModuleNotFoundError
+        // before any agent is created. Deduced from the cells and the
+        // declarations; NOT verified against a live pool image.
+        // `azure-identity` is deliberately absent: it is documented in-repo as
+        // runtime-provided (app-rag-builder.ts omits it for the same reason),
+        // and pip-installing over the runtime copy costs a minute on every
+        // Run-all.
         requiredLibraries: ['azure-ai-projects', 'azure-ai-agents'],
         cells: [
           { id: 'cell-md-intro', type: 'markdown', source: NB_INTRO },

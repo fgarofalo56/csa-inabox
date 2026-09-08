@@ -721,9 +721,11 @@ const bundle: AppBundle = {
       content: {
         kind: 'notebook',
         defaultLang: 'pyspark',
-        // #3530 — the consumer cell does `import delta_sharing`, which is NOT in
-        // the Spark stock image. Without this the golden path (install → open →
-        // Run all) stops on ModuleNotFoundError before the adapter runs.
+        // #3530 — the consumer cell does `import delta_sharing`, and nothing
+        // here declared it. Unless the Spark image ships it, the golden path
+        // (install → open → Run all) fails on ModuleNotFoundError before the
+        // adapter runs. Deduced from the cells and the declarations; NOT
+        // verified against a live pool image.
         requiredLibraries: ['delta-sharing'],
         cells: [
           { id: 'fdm-nb-0', type: 'markdown', source: NB_MD_INTRO },

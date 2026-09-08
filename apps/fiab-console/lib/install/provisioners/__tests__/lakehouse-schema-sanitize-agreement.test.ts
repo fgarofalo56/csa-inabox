@@ -15,12 +15,26 @@
  * than three that agree — derive once and pass the value, rather than share a
  * function three callers may each stop calling.
  *
- * WHY THIS TEST EXISTS ANYWAY. Nothing asserted that it STAYS one call site.
- * The structural fix was a side effect of three other issues, so a
- * re-introduced re-derivation would restore the divergence silently — which is
- * precisely the failure the issue filed ("a rule implemented more than once
- * with nothing asserting the copies agree"). The issue asked for exactly this:
- * an assertion over a HOSTILE input, not three unit tests of the same regex.
+ * WHY THIS TEST EXISTS ANYWAY. Nothing asserted that the seeder keeps deriving
+ * the schema ONCE and passing the value, rather than re-deriving it per consumer.
+ * The structural fix was a side effect of three other issues, so a re-introduced
+ * re-derivation would restore the divergence — which is precisely the failure the
+ * issue filed ("a rule implemented more than once with nothing asserting the
+ * copies agree"). The issue asked for exactly this: an assertion over a HOSTILE
+ * input, not three unit tests of the same regex.
+ *
+ * WHAT THIS SUITE DOES AND DOES NOT SEE, STATED EXACTLY. It imports
+ * `_seed-lakehouse-adls` and `report-binding`. It pins (a) the seeder's single
+ * derivation — the schema in the table PATH is the same string handed to the
+ * per-table hook — and (b) that the reader BOTH consumers use,
+ * `seedCsvPathLookup`, resolves the seeder's recorded path for a hostile schema,
+ * and returns `undefined` — never a rebuilt path — when keyed with the DELETED
+ * sanitizer's form. It does NOT import `app/api/apps/[id]/install/route.ts` or
+ * `lakehouse-editor-shell.tsx`, so it CANNOT prove those two modules keep
+ * CALLING that reader. A consumer that re-introduced its own re-derivation would
+ * pass this suite unchanged; what arm (b) buys is that such a consumer ends up
+ * with an UNBINDABLE table rather than a stored path the data is not at. Holding
+ * the consumers to the reader is a separate assertion this suite does not make.
  *
  * WHY A HOSTILE INPUT IS REQUIRED. The one pre-existing `schemasEnabled` test
  * (`lib/azure/__tests__/auto-bind-seed-siblings.test.ts`) uses schema `sales`,
@@ -28,10 +42,11 @@
  * reach this bug at all. `ops-eu` is the input that separates them:
  * `ops_eu` (seeder) vs `opseu` (route).
  *
- * REACHABILITY, STATED HONESTLY. Re-measured at head: 0 of 36 shipped bundles
- * set `schemasEnabled: true`, so this branch is author-reachable, not
- * user-reachable — the same conclusion the issue drew. It is also why the
- * branch had no hostile-input coverage: nothing exercises it in production.
+ * REACHABILITY, STATED HONESTLY. Re-measured at head: `listBundleIds()` returns
+ * 29 bundles and 0 of them set `schemasEnabled: true`, so this branch is
+ * author-reachable, not user-reachable — the same conclusion the issue drew. It
+ * is also why the branch had no hostile-input coverage: nothing exercises it in
+ * production.
  *
  * MUTATION PROOF (break the subject, watch these go red, restore):
  *   a) In `_seed-lakehouse-adls.ts` pass the RAW schema to the hook
@@ -42,6 +57,9 @@
  *      `replace(/[^A-Za-z0-9_]/g, '')` -> RED: "a hostile schema sanitizes to
  *      the underscore form, not the deleted form" (the agreement arm alone
  *      would stay green, which is why both arms are here).
+ *   c) In `report-binding.ts` make `seedCsvPathLookup` rebuild the path from a
+ *      naming convention instead of reading the recorded map -> RED: "the
+ *      recorded CSV path round-trips through the reader both consumers use".
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 
@@ -68,6 +86,7 @@ vi.mock('@/lib/azure/synapse-sql-client', () => ({
 }));
 
 import { seedLakehouseAdls, type SeededTable } from '../_seed-lakehouse-adls';
+import { seedCsvPathLookup } from '@/lib/install/report-binding';
 
 /** The schema name that separated the two historical sanitizers. */
 const HOSTILE = 'ops-eu';
@@ -133,6 +152,45 @@ describe('lakehouse schema sanitize — one rule, one answer (#3920)', () => {
     const prefix = `lakehouses/sales/Tables/${seen[0].schema}/orders/`;
     expect(written.files.filter((f) => f.startsWith(prefix)).length).toBeGreaterThan(0);
     expect(seen[0].dataPath.startsWith(prefix)).toBe(true);
+  });
+
+  it('the recorded CSV path round-trips through the reader both consumers use', async () => {
+    // The writer→reader half of the invariant. `lakehouse.ts` stamps
+    // `secondaryIds.seedCsvPaths` keyed `<schema>.<table>` from the SeededTable
+    // this seeder hands back; `app/api/apps/[id]/install/route.ts` and
+    // `lakehouse-editor-shell.tsx` both read it back through `seedCsvPathLookup`.
+    // Building the map here from what the seeder ACTUALLY produced — not from
+    // the fixture — is what makes this an agreement test rather than two
+    // restatements of the same literal.
+    const seen = await seedAndCapture();
+    const t = seen[0];
+    expect(t.csvPath, 'the seeder must record a CSV path to bind against').toBeTruthy();
+
+    const secondaryIds = {
+      seedCsvPaths: JSON.stringify({ [t.schema ? `${t.schema}.${t.name}` : t.name]: t.csvPath }),
+    };
+    const lookup = seedCsvPathLookup(secondaryIds);
+
+    // Keyed the way the writer wrote it.
+    expect(lookup(`${UNDERSCORE_FORM}.orders`)).toBe(t.csvPath);
+
+    // Keyed by the bare leaf — the documented recovery path, which is exact
+    // because it never reproduces either sanitizer.
+    expect(lookup('orders')).toBe(t.csvPath);
+
+    // …and keyed the way a consumer that re-derived the schema with the DELETED
+    // sanitizer would ask: ABSENT, not a rebuilt path. Measured, not assumed —
+    // the leaf recovery is keyed on the bare leaf, so `opseu.orders` matches
+    // neither the recorded key nor the leaf map. That is the no-vaporware
+    // outcome this module documents ("Absent is the honest answer; wrong is
+    // not"): a re-introduced re-derivation makes the table unbindable, it does
+    // NOT persist an OPENROWSET over a URL that 404s.
+    expect(lookup(`${DELETED_FORM}.orders`)).toBeUndefined();
+
+    // A table nobody recorded is `undefined` too. Without this arm a lookup that
+    // returned a convention-built path for EVERYTHING would satisfy the first
+    // two assertions.
+    expect(lookup('never_seeded')).toBeUndefined();
   });
 
   it('schemasEnabled:false yields no schema segment at all', async () => {

@@ -16,11 +16,23 @@
  * the live bundle registry: this module reads the cells, and the guard test
  * enumerates every bundle from `listBundleIds()` rather than a literal list.
  *
- * It FAILS CLOSED. An import whose module is in neither the stdlib set nor the
- * reviewed runtime set must be declared; a module nobody has classified is
+ * It FAILS CLOSED over the import forms it parses: `import a`, `import a.b`,
+ * `import a as b`, `import a, b as c, d` and `from a.b import …`, in Python code
+ * cells, at line start. An import whose module is in neither the stdlib set nor
+ * the reviewed runtime set must be declared; a module nobody has classified is
  * reported as undeclared rather than silently assumed present. A new import in
  * a new bundle therefore surfaces as a red test, not as a customer's stack
  * trace on the golden path.
+ *
+ * What it does NOT see, stated rather than implied: a dynamic
+ * `importlib.import_module(...)`, an import nested under an `if`/`try` at an
+ * indent it still matches but whose module name is computed, a `;`-chained or
+ * backslash-continued second statement, and a `%pip install` the cell performs
+ * itself. Those are un-analysable from the cell text, not oversights — but they
+ * are holes, and this list is the honest boundary of the claim above. The
+ * comma form was in this list until it was measured to be hiding a real
+ * shipped defect (`app-supercharge-guide`'s `import struct, pyodbc`); it is now
+ * parsed.
  */
 
 /**
@@ -68,10 +80,39 @@ const RUNTIME_PROVIDED_PREFIXES = [
 const PYTHON_LANGS = new Set(['pyspark', 'python']);
 
 /**
- * `^import a.b` / `^from a.b import c`, anchored at line start so a commented
- * or prose mention (`# import delta_sharing`) is not read as a real import.
+ * `^import <clause>` / `^from a.b import c`, anchored at line start so a
+ * commented or prose mention (`# import delta_sharing`) is not read as a real
+ * import.
+ *
+ * For the `from` form the module is the single dotted path before `import`, so
+ * group 1 is the answer outright — `from X import a, b` names one module, X.
+ *
+ * For the plain form the whole clause is captured (group 2) and split by
+ * `importClauseModules`, because `import a, b, c` names THREE modules on one
+ * line. Capturing only the first dotted path there made the sweep fail OPEN:
+ * `import struct, pyodbc` read as `["struct"]` and reported clean, which is
+ * precisely the undeclared-package defect #3530 is about.
  */
-const IMPORT_RE = /^[ \t]*(?:from[ \t]+([A-Za-z_][\w.]*)[ \t]+import[ \t]|import[ \t]+([A-Za-z_][\w.]*))/gm;
+const IMPORT_RE = /^[ \t]*(?:from[ \t]+([A-Za-z_][\w.]*)[ \t]+import[ \t]|import[ \t]+([A-Za-z_].*))/gm;
+
+/**
+ * The modules named by a plain `import` clause — `a, b.c, d as e` -> `[a, b.c, d]`.
+ *
+ * A trailing comment is dropped first so `import os  # see also, sys` does not
+ * manufacture a `sys` finding, then each comma-separated item contributes its
+ * LEADING dotted path, which discards an `as <alias>` tail without needing to
+ * match the alias grammar. An item that does not start with a dotted name (a
+ * `;`-chained statement, a line continuation) contributes nothing rather than
+ * a guess.
+ */
+function importClauseModules(clause: string): string[] {
+  const mods: string[] = [];
+  for (const part of clause.split('#')[0].split(',')) {
+    const m = /^[ \t]*([A-Za-z_][\w.]*)/.exec(part);
+    if (m) mods.push(m[1]);
+  }
+  return mods;
+}
 
 /**
  * PEP 503 name normalisation: lowercase, and any run of `-`, `_` or `.`
@@ -112,8 +153,12 @@ export function extractPythonImports(content: unknown): string[] {
     IMPORT_RE.lastIndex = 0;
     let m: RegExpExecArray | null;
     while ((m = IMPORT_RE.exec(src)) !== null) {
-      const mod = m[1] || m[2];
-      if (mod) found.add(mod);
+      if (m[1]) {
+        // `from X import …` — one module, X, however many names follow.
+        found.add(m[1]);
+      } else if (m[2]) {
+        for (const mod of importClauseModules(m[2])) found.add(mod);
+      }
     }
   }
   return [...found].sort();
